@@ -540,7 +540,9 @@ each ceremony:
 Rules that hold across its files:
 
 - **One dialer.** Every request the crate makes goes through a `Dialer`:
-  the one a `Board` holds, or the one `resolve.rs`'s transport wraps.
+  the one a `Board` holds, or the one `resolve.rs`'s transport wraps — and
+  a dialer behind a reference, a box or an `Arc` is itself one, so a shell's
+  one `Arc<dyn Dialer>` serves both.
   Every token-bearing request but the close rides `Board::authed`, which
   answers the death signal as `Authed::Closed` (P28); `Board::session_close`
   reads it on its own `204` as the token already dead (AUTH-4.47). A

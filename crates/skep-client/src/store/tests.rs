@@ -153,7 +153,7 @@ fn a_stored_key_signs_through_the_store_and_an_anchor_never_does() {
     let facts = store.select(&bound, Purpose::Sign).unwrap();
     assert_eq!((facts.fingerprint, facts.label.as_deref(), facts.path.clone()), (id.0, Some("notebook"), store.key_path(&id.0)));
     let signer = store.signer(&bound).unwrap();
-    assert_eq!((signer.fingerprint(), signer.public_key()), (facts.fingerprint, facts.public.clone()));
+    assert_eq!((signer.fingerprint(), signer.public_key()), (facts.fingerprint, &facts.public));
     let blob = signer.sign(b"bytes the library framed");
     assert!(skep_signature::verify(signer.tag(), &facts.public, b"bytes the library framed", &blob).is_ok());
     let anchor = KeyFile::new(Seed::new([6u8; 32]), true, Some(Label::new("paper-b").unwrap()), None);
@@ -188,12 +188,13 @@ fn the_bindings_file_has_two_line_forms() {
     let signed = Origin::parse("https://board.example").unwrap();
     let fp = Fingerprint::parse_hex(&"ab".repeat(32)).unwrap();
     let enroll = Binding::Enrollment { origin: dialed.clone(), principal: 7, account: "1.0.1".into(), fingerprint: fp };
-    assert_eq!(enroll.line(), format!("http://127.0.0.1:8642 7 1.0.1 {}", "ab".repeat(32)));
-    assert_eq!(Binding::parse_line(&enroll.line()), Some(enroll.clone()));
+    assert_eq!(enroll.to_string(), format!("http://127.0.0.1:8642 7 1.0.1 {}", "ab".repeat(32)));
+    assert_eq!(enroll.to_string().parse::<Binding>(), Ok(enroll.clone()));
     let sline = Binding::Signed { dialed: dialed.clone(), signed: signed.clone() };
-    assert_eq!(sline.line(), "signed http://127.0.0.1:8642 https://board.example");
-    assert_eq!(Binding::parse_line(&sline.line()), Some(sline.clone()));
-    assert_eq!(Binding::parse_line("retired abab"), None, "no third form");
+    assert_eq!(sline.to_string(), "signed http://127.0.0.1:8642 https://board.example");
+    assert_eq!(sline.to_string().parse::<Binding>(), Ok(sline.clone()));
+    assert_eq!("retired abab".parse::<Binding>(), Err(NotABinding), "no third form");
+    assert_eq!("http://127.0.0.1:8642 x 1.0.1 ab".parse::<Binding>(), Err(NotABinding), "a field outside its form");
     store.bind(&enroll).unwrap();
     store.bind(&sline).unwrap();
     assert_eq!(store.bindings(&dialed).unwrap().len(), 2);
@@ -226,8 +227,8 @@ fn a_read_only_store_warns_with_the_line() {
     let b = Binding::Enrollment { origin, principal: 1, account: "1.0.1".into(), fingerprint: fp };
     let warning = store.bind(&b).unwrap_err();
     fs::set_permissions(store.root(), fs::Permissions::from_mode(0o700)).unwrap();
-    assert_eq!(warning.line, b.line());
-    assert!(warning.to_string().ends_with(&format!("record this binding line yourself: {}", b.line())), "{warning}");
+    assert_eq!(warning.line, b.to_string());
+    assert!(warning.to_string().ends_with(&format!("record this binding line yourself: {b}")), "{warning}");
 }
 
 /// §3.5 as RULED (2026-10-04) — THE ONE-BINDING TEST ignores the agent

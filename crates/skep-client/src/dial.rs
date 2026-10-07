@@ -30,6 +30,7 @@
 use std::fmt;
 use std::io::{self, Read, Write};
 use std::net::{SocketAddr, TcpStream, ToSocketAddrs};
+use std::sync::Arc;
 use std::time::Duration;
 
 use crate::origin::Origin;
@@ -233,6 +234,59 @@ pub trait Dialer: Send + Sync {
     ) -> Result<StreamedResponse, DialError>;
 }
 
+/// A dialer behind a reference is the dialer it refers to.
+impl<D: Dialer + ?Sized> Dialer for &D {
+    fn exchange(&self, origin: &Origin, req: &Request) -> Result<Response, DialError> {
+        (**self).exchange(origin, req)
+    }
+
+    fn stream(
+        &self,
+        origin: &Origin,
+        head: &RequestHead,
+        body: &mut dyn Read,
+        on_interim: &mut dyn FnMut(&Headers),
+    ) -> Result<StreamedResponse, DialError> {
+        (**self).stream(origin, head, body, on_interim)
+    }
+}
+
+/// A dialer behind a box is the dialer it holds.
+impl<D: Dialer + ?Sized> Dialer for Box<D> {
+    fn exchange(&self, origin: &Origin, req: &Request) -> Result<Response, DialError> {
+        (**self).exchange(origin, req)
+    }
+
+    fn stream(
+        &self,
+        origin: &Origin,
+        head: &RequestHead,
+        body: &mut dyn Read,
+        on_interim: &mut dyn FnMut(&Headers),
+    ) -> Result<StreamedResponse, DialError> {
+        (**self).stream(origin, head, body, on_interim)
+    }
+}
+
+/// A dialer behind an `Arc` is the dialer it shares — the ONE dialer a shell
+/// holds, handed to a [`Board`](crate::board::Board) and to `resolve`'s
+/// transport alike (§7: no second dialer).
+impl<D: Dialer + ?Sized> Dialer for Arc<D> {
+    fn exchange(&self, origin: &Origin, req: &Request) -> Result<Response, DialError> {
+        (**self).exchange(origin, req)
+    }
+
+    fn stream(
+        &self,
+        origin: &Origin,
+        head: &RequestHead,
+        body: &mut dyn Read,
+        on_interim: &mut dyn FnMut(&Headers),
+    ) -> Result<StreamedResponse, DialError> {
+        (**self).stream(origin, head, body, on_interim)
+    }
+}
+
 /// The plaintext non-loopback WARNING (§9 item 23, RULED: a warning citing
 /// AUTH-4.53, never a refusal — the bind-override tailnet path is exactly a
 /// plaintext non-loopback origin the tunnel encrypts): the text, where a
@@ -267,11 +321,6 @@ impl PlainHttp {
     /// The arm with the pinned timeouts.
     pub fn new() -> PlainHttp {
         PlainHttp::default()
-    }
-
-    /// The arm with timeouts of the caller's — a suite's shorter ones.
-    pub fn with_timeouts(connect_timeout: Duration, io_timeout: Duration) -> PlainHttp {
-        PlainHttp { connect_timeout, io_timeout }
     }
 
     fn fail(origin: &Origin, what: &str, e: impl fmt::Display) -> String {

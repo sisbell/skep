@@ -79,7 +79,7 @@ pub fn origin_of(port: u16) -> Origin {
 
 /// A board over the plain dialer.
 pub fn board(port: u16) -> Board {
-    Board::new(origin_of(port), Box::new(PlainHttp::new()))
+    Board::new(origin_of(port), PlainHttp::new())
 }
 
 /// THE RECORDING DIALER: every exchange logged as `METHOD path[ op]`, the
@@ -113,7 +113,7 @@ impl Dialer for Recording {
 /// A board over the recording dialer, and its log.
 pub fn recording_board(origin: Origin) -> (Board, Arc<Mutex<Vec<String>>>) {
     let log = Arc::new(Mutex::new(Vec::new()));
-    let board = Board::new(origin, Box::new(Recording { inner: PlainHttp::new(), log: log.clone() }));
+    let board = Board::new(origin, Recording { inner: PlainHttp::new(), log: log.clone() });
     (board, log)
 }
 
@@ -168,7 +168,7 @@ use skep_client::board::{acked_addr, frames, Answer, Opened, Scope, SessionBody,
 use skep_client::ceremony::deposit::next_content_ordinal;
 use skep_client::person::{Abandoned, Confirmation, Consent, Destination, HandedPath, Import, Imported, KeptOrPlaced, LabelBox, Person, Public, Question, Retype, Retyped, Secret, Sheet, Statement};
 use skep_client::sheet::KeyFile;
-use skep_client::sign::{record_frame, session_payload, sig_hex, Signer};
+use skep_client::sign::{session_payload, sig_hex, RecordFrame, Signer};
 use skep_identity::{canonical_record, Enrollment, RecordEntry};
 use skep_signature::HybridSigner;
 
@@ -177,7 +177,7 @@ use skep_signature::HybridSigner;
 /// the body posted.
 pub fn wire_session(board: &Board, principal: u64, signer: &HybridSigner) -> Token {
     let challenge = board.challenge(principal).expect("challenge");
-    let payload = session_payload(&board.signed, &challenge.nonce, principal, Scope::Full);
+    let payload = session_payload(board.signed(), &challenge.nonce, principal, Scope::Full);
     let sig = sig_hex(&HybridSigner::sign(signer, &payload));
     match board.session_open(SessionBody::Signed { principal, nonce: &challenge.nonce, sig_hex: &sig, scope: Scope::Full }).expect("session") {
         Opened::Token(t) => t,
@@ -193,8 +193,8 @@ fn wire_deposit<T: RecordEntry>(board: &Board, token: &Token, hand: &HybridSigne
     let term = board.board_term().expect("term").expect("H.1");
     let home_account = board.effective_owner(home).expect("owner").expect("owned").prefix;
     let sigless = canonical_record(entries, None);
-    let alg = HybridSigner::public_key(hand).alg().to_string();
-    let frame = record_frame(&alg, term, &home_account, home, ty, &[subject], sigless.as_bytes()).expect("frame");
+    let alg = HybridSigner::public_key(hand).alg();
+    let frame = RecordFrame { alg, board: term, home_account: &home_account, home, ty, to: &[subject], sigless: sigless.as_bytes() }.compose().expect("frame");
     let text = canonical_record(entries, Some(&sig_hex(&HybridSigner::sign(hand, &frame))));
     let ordinal = next_content_ordinal(board, Some(token), home).expect("ordinal");
     let Answer::Document(v) = board.op(Some(token), &frames::insert_atom(home, ordinal, &text, ty, None)).expect("insert") else { return Err("closed".into()) };

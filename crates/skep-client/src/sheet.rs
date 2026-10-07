@@ -31,6 +31,16 @@ pub fn group_hex(hex64: &str) -> String {
         .join("\n")
 }
 
+/// Whether `typed` — a fingerprint prefix read off a print and typed — names
+/// `fp`: trimmed and ASCII-lowercased, at least one R42 group (8 hex; §9
+/// item 35; AUTH-5.1), and a prefix of the fingerprint's hex. ONE rule for
+/// every place a person types a prefix beside a seed (AUTH-5.39: the
+/// fingerprint FIRST, "this is not the key on this paper — re-scan").
+pub(crate) fn typed_prefix_matches(typed: &str, fp: &Fingerprint) -> bool {
+    let typed = typed.trim().to_ascii_lowercase();
+    typed.len() >= 8 && fp.to_hex().starts_with(&typed)
+}
+
 /// AUTH-5.2 — a label rendered INERT: every C0 control, DEL and every bidi
 /// control (U+202A–U+202E, U+2066–U+2069, U+200E, U+200F, U+061C) shown as
 /// its code point, never interpreted. The domain admits them (AUTH-1.24)
@@ -138,6 +148,8 @@ impl fmt::Display for LabelFault {
     }
 }
 
+impl std::error::Error for LabelFault {}
+
 impl Label {
     /// The domain test (AUTH-1.24), the newline read before the length as
     /// `Enrollment::new` reads it (AUTH-1.25).
@@ -215,9 +227,12 @@ impl fmt::Debug for KeyFile {
 
 /// A KEY FILE'S REFUSALS (§3.2) — the store's own faces and never wire
 /// tokens, each read off the FILE's own contents: a state, rendered as
-/// AUTH-5.67's halt naming the path and the state
-/// ([`store_halt`](crate::store::store_halt)); all exit 3 (§1.1's `halt` row).
+/// AUTH-5.67's halt naming the path and the state (the store's
+/// `From<StoreError> for Halt`); all exit 3 (§1.1's `halt` row).
+/// Non-exhaustive: the next format version's members bring refusals of
+/// their own (§3.2's `custody`).
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum KeyFileError {
     /// Not JSON, or `type` is not `skep-key`.
     NotKeyFile,
@@ -533,6 +548,23 @@ mod tests {
         assert_eq!(Label::new("Paper A / 2026").unwrap().slug(), "paper-a-2026");
         // Bytes, not characters: 43 three-byte characters are 129 bytes.
         assert_eq!(Label::new(&"€".repeat(43)).unwrap_err(), LabelFault::TooLong { bytes: 129 });
+        let fault: &dyn std::error::Error = &LabelFault::Empty;
+        assert!(fault.to_string().contains("a name is required"));
+    }
+
+    /// §9 item 35's typed prefix, one rule: at least one R42 group, a prefix
+    /// of the fingerprint, read trimmed and in either case — and a short
+    /// group padded with spaces is no group.
+    #[test]
+    fn a_typed_prefix_is_one_r42_group_or_more_in_either_case() {
+        let fp = KeyFile::new(Seed::new([8u8; 32]), true, None, None).fingerprint;
+        let hex = fp.to_hex();
+        assert!(typed_prefix_matches(&hex[..8], &fp) && typed_prefix_matches(&hex, &fp));
+        assert!(typed_prefix_matches(&format!("  {}\n", hex[..16].to_ascii_uppercase()), &fp));
+        assert!(!typed_prefix_matches(&hex[..7], &fp), "under one group");
+        assert!(!typed_prefix_matches(&format!("       {}", &hex[..1]), &fp), "padding is no group");
+        let other = if hex.starts_with('0') { "1" } else { "0" };
+        assert!(!typed_prefix_matches(&format!("{other}{}", &hex[1..8]), &fp), "another key's group");
     }
 
     /// A seed is born in its zeroing value: drawn fresh, or decoded from its

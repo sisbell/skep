@@ -10,16 +10,18 @@
 //! only as the signer [`KeyStore::signer`] derives from it — so a later
 //! custody rung is a different signer behind that one method, never a
 //! rewrite of a walk (§1.4). The refusals are the store's own faces
-//! ([`StoreError`], [`KeyFileError`]), never wire tokens, each rendered by
-//! [`store_halt`] as AUTH-5.67's halt naming the path and the state; a
-//! lookup that selects no key is §3.5 arm 4's fork, [`arm4_face`]. A binding
-//! line that cannot be appended is no refusal at all: [`Unappended`], the
-//! warning carrying the line (§3.7).
+//! ([`StoreError`], [`KeyFileError`]), never wire tokens, each converted
+//! into AUTH-5.67's halt naming the path and the state by
+//! `From<StoreError> for Halt`, so a walk's `?` carries it; a lookup that
+//! selects no key is §3.5 arm 4's fork, [`arm4_face`]. A binding line that
+//! cannot be appended is no refusal at all: [`Unappended`], the warning
+//! carrying the line (§3.7).
 
 use std::fmt;
 use std::fs::{self, OpenOptions};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
+use std::str::FromStr;
 
 use skep_identity::{Fingerprint, PublicKey};
 
@@ -78,48 +80,63 @@ pub enum Purpose {
 /// (AUTH-5.76's retention), and the `signed <dialed-origin> <signed-origin>`
 /// line a frontend at its own bind-override node writes (AUTH-4.57 (a)'s
 /// client half). The two are told apart by the first field — a canonical
-/// origin carries `://`.
+/// origin carries `://`. Its `Display` is the line without its newline, and
+/// [`FromStr`] reads one back.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Binding {
     Enrollment { origin: Origin, principal: u64, account: String, fingerprint: Fingerprint },
     Signed { dialed: Origin, signed: Origin },
 }
 
-impl Binding {
-    /// The line, without its newline.
-    pub fn line(&self) -> String {
+/// The line, without its newline.
+impl fmt::Display for Binding {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Binding::Enrollment { origin, principal, account, fingerprint } => {
-                format!("{origin} {principal} {account} {fingerprint}")
-            }
-            Binding::Signed { dialed, signed } => format!("signed {dialed} {signed}"),
+            Binding::Enrollment { origin, principal, account, fingerprint } => write!(f, "{origin} {principal} {account} {fingerprint}"),
+            Binding::Signed { dialed, signed } => write!(f, "signed {dialed} {signed}"),
         }
     }
+}
 
-    /// One line parsed, `None` for a line of neither form (a hand-edited
-    /// stray, ignored as a torn final line is).
-    pub fn parse_line(line: &str) -> Option<Binding> {
-        let fields: Vec<&str> = line.split_whitespace().collect();
-        match fields.as_slice() {
-            ["signed", dialed, signed] => Some(Binding::Signed { dialed: Origin::parse(dialed)?, signed: Origin::parse(signed)? }),
-            [origin, principal, account, fingerprint] if origin.contains("://") => Some(Binding::Enrollment {
-                origin: Origin::parse(origin)?,
-                principal: principal.parse().ok()?,
+/// A line of neither form — a hand-edited stray, which the bindings file's
+/// reader ignores as it ignores a torn final line (§3.7).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct NotABinding;
+
+impl fmt::Display for NotABinding {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("not a bindings-file line: neither `origin principal account fingerprint` nor `signed <dialed-origin> <signed-origin>`")
+    }
+}
+
+impl std::error::Error for NotABinding {}
+
+/// One line read back, in either of its two forms.
+impl FromStr for Binding {
+    type Err = NotABinding;
+
+    fn from_str(line: &str) -> Result<Binding, NotABinding> {
+        let origin = |text: &str| Origin::parse(text).ok_or(NotABinding);
+        match line.split_whitespace().collect::<Vec<_>>().as_slice() {
+            ["signed", dialed, signed] => Ok(Binding::Signed { dialed: origin(dialed)?, signed: origin(signed)? }),
+            [first, principal, account, fingerprint] if first.contains("://") => Ok(Binding::Enrollment {
+                origin: origin(first)?,
+                principal: principal.parse().map_err(|_| NotABinding)?,
                 account: account.to_string(),
-                fingerprint: Fingerprint::parse_hex(fingerprint)?,
+                fingerprint: Fingerprint::parse_hex(fingerprint).ok_or(NotABinding)?,
             }),
-            _ => None,
+            _ => Err(NotABinding),
         }
     }
 }
 
 /// The public facts of one key in the store — what a lookup answers, what
 /// `fingerprint --dir` lists and what a lookup's halt names. No seed: a key
-/// signs through [`KeyStore::signer`].
+/// signs through [`KeyStore::signer`]. The key's `ALGS` token is
+/// `public.alg()`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct KeyFacts {
     pub path: PathBuf,
-    pub alg: String,
     pub fingerprint: Fingerprint,
     pub public: PublicKey,
     pub label: Option<String>,
@@ -129,19 +146,14 @@ pub struct KeyFacts {
 impl KeyFacts {
     /// A loaded file's public facts, at `path`.
     fn of(path: PathBuf, file: &KeyFile) -> KeyFacts {
-        KeyFacts {
-            path,
-            alg: file.alg.clone(),
-            fingerprint: file.fingerprint,
-            public: file.public.clone(),
-            label: file.label.clone(),
-            anchor: file.anchor,
-        }
+        KeyFacts { path, fingerprint: file.fingerprint, public: file.public.clone(), label: file.label.clone(), anchor: file.anchor }
     }
 }
 
-/// What the store could not do.
+/// What the store could not do. Non-exhaustive: a later custody rung's
+/// refusals join it (§1.4).
 #[derive(Debug)]
+#[non_exhaustive]
 pub enum StoreError {
     /// A key file refused by its own contents (AUTH-5.67's halt names the
     /// path and the state).
@@ -204,29 +216,32 @@ impl fmt::Display for Unappended {
 
 impl std::error::Error for Unappended {}
 
-/// A store refusal as AUTH-5.67's halt naming the path and the state.
-pub fn store_halt(e: StoreError) -> Halt {
-    match e {
-        StoreError::KeyFile { path, error } => Halt::face(
-            format!("the key file {} is refused: {error}", path.display()),
-            "the file's own contents decide this (client.md §3.2)",
-            match error {
-                KeyFileError::AnchorAtSigningCommand => "select a device key; the one walk that imports an anchor is `skep recover`",
-                KeyFileError::Newer { .. } => "upgrade skep, or select a key this version wrote",
-                _ => "point `--key` at a key file `skep keygen` wrote, or run `skep keygen`",
-            },
-        ),
-        StoreError::Io { path, error } => Halt::face(
-            format!("the key file {} is missing, unreadable or mis-pathed: {error}", path.display()),
-            "AUTH-5.67: a key file missing, unreadable or mis-pathed is HALT AND SURFACE, never a fallback to a bare bind",
-            "check the path (`--key`, `SKEP_KEY`, `--dir`)",
-        ),
-        StoreError::MissingKey { path, fingerprint } => Halt::face(
-            format!("the bindings name key {fingerprint} and the store holds no file at {}", path.display()),
-            "the key file was removed from the store after the binding was written",
-            "restore the file, or re-run the hop that binds another key",
-        ),
-        other => Halt::face("the key store refused", other.to_string(), "see the store's state above"),
+/// A store refusal as AUTH-5.67's halt naming the path and the state — the
+/// conversion a walk's `?` makes.
+impl From<StoreError> for Halt {
+    fn from(e: StoreError) -> Halt {
+        match e {
+            StoreError::KeyFile { path, error } => Halt::face(
+                format!("the key file {} is refused: {error}", path.display()),
+                "the file's own contents decide this (client.md §3.2)",
+                match error {
+                    KeyFileError::AnchorAtSigningCommand => "select a device key; the one walk that imports an anchor is `skep recover`",
+                    KeyFileError::Newer { .. } => "upgrade skep, or select a key this version wrote",
+                    _ => "point `--key` at a key file `skep keygen` wrote, or run `skep keygen`",
+                },
+            ),
+            StoreError::Io { path, error } => Halt::face(
+                format!("the key file {} is missing, unreadable or mis-pathed: {error}", path.display()),
+                "AUTH-5.67: a key file missing, unreadable or mis-pathed is HALT AND SURFACE, never a fallback to a bare bind",
+                "check the path (`--key`, `SKEP_KEY`, `--dir`)",
+            ),
+            StoreError::MissingKey { path, fingerprint } => Halt::face(
+                format!("the bindings name key {fingerprint} and the store holds no file at {}", path.display()),
+                "the key file was removed from the store after the binding was written",
+                "restore the file, or re-run the hop that binds another key",
+            ),
+            other => Halt::face("the key store refused", other.to_string(), "see the store's state above"),
+        }
     }
 }
 
@@ -434,7 +449,7 @@ impl FileStore {
             Some(i) => &text[..=i],
             None => "",
         };
-        Ok(complete.lines().filter_map(Binding::parse_line).collect())
+        Ok(complete.lines().filter_map(|line| line.parse().ok()).collect())
     }
 
     /// The LAST enrollment line for (`origin`, `principal`) — the newest
@@ -628,6 +643,6 @@ impl KeyStore for FileStore {
     }
 
     fn bind(&self, b: &Binding) -> Result<(), Unappended> {
-        self.append_line(&b.line())
+        self.append_line(&b.to_string())
     }
 }

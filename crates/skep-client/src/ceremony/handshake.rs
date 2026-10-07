@@ -1,8 +1,9 @@
 //! THE ONE SESSION-OPEN COMPOSITION (`client.md` §1.1's `handshake`; P28):
 //! AUTH-5.65's pre-check ahead of the `/challenge` — the origin arm first
 //! (AUTH-5.24), then the key-set compare at the set AUTH-5.21's walk reaches
-//! — the challenge with its `ttl_ms` read off the body and never assumed,
-//! the framing under `SESSION_TAG` or `SESSION_TAG_V2` as `scope` says
+//! — the challenge with its `ttl_ms` read off the body and never assumed
+//! (`Board::challenge` refuses a body without one), the framing under
+//! `SESSION_TAG` or `SESSION_TAG_V2` as `scope` says
 //! (AUTH-6.4), the signature, the body (AUTH-6.2), the ONE re-challenge on
 //! `session_rejected` (AUTH-5.25), and the three answers with their faces:
 //! AUTH-5.25's TERMINAL BUSY arm in the rule's own words; `403
@@ -14,11 +15,11 @@
 //! signs with it. The SCOPE is the walk's, passed once. The [`Session`] it
 //! answers owns its own END.
 
-use skep_identity::Fingerprint;
+use skep_identity::{Fingerprint, PublicKey};
 
 use crate::board::{answers, frames, Answer, Board, CloseAnswer, Opened, Scope, SessionBody, Token};
 use crate::derive::records::{credential_records, Hand};
-use crate::derive::{precheck, KeyDiagnosis, PreCheck};
+use crate::derive::{precheck, KeyDiagnosis, PreCheck, Walk};
 use crate::halt::{Blocked, Halt};
 use crate::sign::{session_payload, sig_hex, Signer};
 
@@ -32,21 +33,48 @@ use crate::sign::{session_payload, sig_hex, Signer};
 /// session dropped by none of them — every halt a walk takes after its
 /// handshake — sends the close on the drop, best effort, so no exit leaves
 /// a session standing at the daemon until its restart (§4a.3's residue).
+/// What it was opened as is read through its getters and set only by the
+/// handshake: the token its drop closes is the token it opened.
 #[derive(Debug)]
 pub struct Session<'b> {
     board: &'b Board,
     /// One of the three ends ran: the drop sends nothing.
     ended: bool,
-    pub token: Token,
-    pub principal: u64,
-    pub scope: Scope,
+    token: Token,
+    principal: u64,
+    scope: Scope,
     /// `principal_prefix(principal)` — the account the session acts as.
-    pub account: String,
+    account: String,
     /// The key that opened it.
-    pub fingerprint: Fingerprint,
+    fingerprint: Fingerprint,
 }
 
 impl Session<'_> {
+    /// The session's token — what every frame under it presents.
+    pub fn token(&self) -> &Token {
+        &self.token
+    }
+
+    /// The principal it was opened as.
+    pub fn principal(&self) -> u64 {
+        self.principal
+    }
+
+    /// The scope it was opened under (AUTH RES-63).
+    pub fn scope(&self) -> Scope {
+        self.scope
+    }
+
+    /// `principal_prefix(principal)` — the account the session acts as.
+    pub fn account(&self) -> &str {
+        &self.account
+    }
+
+    /// The fingerprint of the key that opened it.
+    pub fn fingerprint(&self) -> Fingerprint {
+        self.fingerprint
+    }
+
     /// One frame under this session's token, at the board it stands at.
     pub fn op(&self, frame: &serde_json::Value) -> Result<Answer, Halt> {
         self.board.op(Some(&self.token), frame)
@@ -114,14 +142,16 @@ pub enum Site {
 /// permanent bar (AUTH-2.98), the hand named from the records where it can be
 /// read (AUTH-5.28's chrome where this store's own, AUTH-5.77's where
 /// another's), neither asserted below the floor (§9 item 50); in NEITHER list
-/// ⇒ AUTH-5.25 (iii) with the act by site.
-pub fn key_face(board: &Board, pre: &PreCheck, fp: &Fingerprint, own: &[(Fingerprint, skep_identity::PublicKey)], site: Site) -> Result<(), Halt> {
-    match pre.diagnosis {
+/// ⇒ AUTH-5.25 (iii) with the act by site. The diagnosis is made HERE, of
+/// `fp` against the set `walk` reached, so the face judges no key but the
+/// one it names.
+pub fn key_face(board: &Board, walk: &Walk, fp: &Fingerprint, own: &[(Fingerprint, PublicKey)], site: Site) -> Result<(), Halt> {
+    match KeyDiagnosis::of(&walk.set, fp) {
         KeyDiagnosis::Enrolled { .. } => Ok(()),
         KeyDiagnosis::Retired { .. } => {
             // The hand and the position, from the admitted read (RULED, owner
             // 2026-09-22 "i"); the read made only on this failing path.
-            let records = credential_records(board, &pre.walk.set_account, own).ok();
+            let records = credential_records(board, &walk.set_account, own).ok();
             let label = records.as_ref().and_then(|r| r.label_of(fp));
             let named = match &label {
                 Some(l) => format!("{fp} ({})", crate::sheet::render_inert(l)),
@@ -141,7 +171,7 @@ pub fn key_face(board: &Board, pre: &PreCheck, fp: &Fingerprint, own: &[(Fingerp
                 Some((_, _, _)) | None => "this fingerprint stands RETIRED; who wrote the retirement, and when, was not readable at this board (below its retention floor, or the record unfetchable) — no hand is asserted".to_string(),
             };
             Err(Halt::face(
-                format!("key {named} is retired at account {} — it is never accepted again", pre.walk.set_account),
+                format!("key {named} is retired at account {} — it is never accepted again", walk.set_account),
                 format!("{cause}; I4 (AUTH-2.98): a retired fingerprint never re-enters the set, and no act on this key changes it"),
                 "the one act is a fresh keypair under a new byline (`skep keygen`), enrolled by a key still in the set — never 'check your key path'",
             ))
@@ -153,17 +183,17 @@ pub fn key_face(board: &Board, pre: &PreCheck, fp: &Fingerprint, own: &[(Fingerp
                      AUTH-5.25 (i)/(iii)); at a board this store is keyless for, either enroll this key from a device of yours \
                      still signed in (`skep keygen --payload` here, `skep enroll` there, `skep bind` back here) or recover \
                      from a paper anchor (`skep keygen` here, then `skep recover`); the set the walk reached is {}'s",
-                    pre.walk.set_account
+                    walk.set_account
                 ),
                 Site::Recover => format!(
                     "THE WRONG SHEET (AUTH-5.25 (iii)): the key on this paper is not a key of the set at {} — another account's \
                      or another board's paper; check the three facts it carries against the board and the principal you named",
-                    pre.walk.set_account
+                    walk.set_account
                 ),
                 Site::Giver => format!(
                     "the giver's key stands in neither list of the set that opens the giving account ({}); a handoff is made \
                      by a key of the set that opens the account above the subdivision (AUTH-5.90)",
-                    pre.walk.set_account
+                    walk.set_account
                 ),
                 Site::Claim => "the genesis recorded a pubkey this key does not match; AUTH-5.25 (iii)'s act is a pinned order — \
                      import a paper anchor and sign the claim with it, the device key enrolled as the resume's next act — and NO \
@@ -177,10 +207,10 @@ pub fn key_face(board: &Board, pre: &PreCheck, fp: &Fingerprint, own: &[(Fingerp
                     .to_string(),
             };
             Err(Halt::face(
-                format!("this account's records do not list this key: {fp} is in neither list of the set at {}", pre.walk.set_account),
+                format!("this account's records do not list this key: {fp} is in neither list of the set at {}", walk.set_account),
                 format!(
                     "AUTH-5.25 cell (iii): `key_set` at {} (reached by AUTH-5.21's walk from {}) holds the key neither enrolled nor retired",
-                    pre.walk.set_account, pre.account
+                    walk.set_account, walk.account
                 ),
                 act,
             ))
@@ -192,26 +222,22 @@ pub fn key_face(board: &Board, pre: &PreCheck, fp: &Fingerprint, own: &[(Fingerp
 pub fn handshake<'b>(board: &'b Board, scope: Scope, signer: &dyn Signer, principal: u64, site: Site) -> Result<Session<'b>, Halt> {
     let fp = signer.fingerprint();
     let pre = precheck(board, principal, &fp)?;
-    handshake_prechecked(board, scope, signer, principal, &pre, site)
+    handshake_prechecked(board, scope, signer, &pre, site)
 }
 
 /// The handshake over reads the caller already made (the claim's S5, whose
-/// `principal_prefix` and `key_set` reads are live).
-pub fn handshake_prechecked<'b>(board: &'b Board, scope: Scope, signer: &dyn Signer, principal: u64, pre: &PreCheck, site: Site) -> Result<Session<'b>, Halt> {
+/// `principal_prefix` and `key_set` reads are live): the session opens as
+/// the principal those reads were made for, and the face judges `signer`'s
+/// own key against the set they reached.
+pub fn handshake_prechecked<'b>(board: &'b Board, scope: Scope, signer: &dyn Signer, pre: &PreCheck, site: Site) -> Result<Session<'b>, Halt> {
     let fp = signer.fingerprint();
-    let own = [(fp, signer.public_key())];
-    key_face(board, pre, &fp, &own, site)?;
+    let own = [(fp, signer.public_key().clone())];
+    key_face(board, &pre.walk, &fp, &own, site)?;
+    let principal = pre.principal;
     let mut rejected_once = false;
     loop {
         let challenge = board.challenge(principal)?;
-        if challenge.ttl_ms == 0 {
-            return Err(Halt::face(
-                "the challenge carried no ttl_ms",
-                "`GET /challenge` answered a body without the TTL the wire pins (wire.md §Sessions)",
-                "this board is not speaking the wire this client expects; nothing was written",
-            ));
-        }
-        let payload = session_payload(&board.signed, &challenge.nonce, principal, scope);
+        let payload = session_payload(board.signed(), &challenge.nonce, principal, scope);
         let sig = sig_hex(&signer.sign(&payload));
         match board.session_open(SessionBody::Signed { principal, nonce: &challenge.nonce, sig_hex: &sig, scope })? {
             Opened::Token(token) => {
@@ -236,7 +262,7 @@ pub fn handshake_prechecked<'b>(board: &'b Board, scope: Scope, signer: &dyn Sig
             }
             Opened::Blocked { record } => {
                 let ground = read_ground(board, &record);
-                return Err(Halt::Blocked(Blocked { record, named_by: board.dialed.as_str().to_string(), ground }));
+                return Err(Halt::Blocked(Blocked { record, named_by: board.dialed().as_str().to_string(), ground }));
             }
         }
     }

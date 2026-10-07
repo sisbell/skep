@@ -7,7 +7,7 @@
 
 use skep_client::board::{frames, Answer, KeySetAnswer, T_SUPERSEDES};
 use skep_client::ceremony::recover::{recover, RecoverOptions};
-use skep_client::ceremony::trail::trail_present;
+use skep_client::ceremony::trail::Trail;
 use skep_client::derive::records::{credential_records, Kind};
 use skep_client::person::scripted::{Script, Scripted};
 use skep_client::person::KeptOrPlaced;
@@ -78,7 +78,7 @@ fn the_loss_arm_enrolls_a_fresh_pair_as_one_record_writes_the_trail_and_retires_
     // L5: each re-imported, probed and wiped.
     assert_eq!(person.transcript.iter().filter(|l| l.contains("a probe session opened and closed")).count(), 2, "{t}");
     // The trail: readable as a link from the lost anchor's enroll link.
-    let claim = trail_present(&board, &lost_link, &pair.link).unwrap().expect("the trail");
+    let claim = Trail { home: &pair.home, old: &lost_link, new: &pair.link }.present(&board).unwrap().expect("the trail");
     let Answer::Document(lv) = board.op(None, &frames::read_link(&claim)).unwrap() else { panic!() };
     assert!(lv["link"]["slots"].as_array().is_some(), "{lv}");
     assert!(lv["link"]["slots"][2][0]["start"].as_str() == Some(T_SUPERSEDES), "the supersedes class: {lv}");

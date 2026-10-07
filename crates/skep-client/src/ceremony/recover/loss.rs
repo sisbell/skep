@@ -21,21 +21,21 @@ use crate::ceremony::first_session::{first_session, FirstSessionReads};
 use crate::ceremony::handshake::{handshake, Site};
 use crate::ceremony::import::{import_anchor, no_artifact_face, whose_account, ImportContext, ImportOutcome, ImportedAnchor, Whose};
 use crate::ceremony::preview::PreviewSite;
-use crate::ceremony::reads::r0;
+use crate::ceremony::reads::{r0, Act};
 use crate::ceremony::say;
-use crate::ceremony::trail::{trail_present, write_trail};
-use crate::derive::records::{credential_records, Hand, Kind};
+use crate::ceremony::trail::Trail;
+use crate::derive::records::{credential_records, Hand};
 use crate::halt::Halt;
 use crate::person::{LabelBox, Person, Public, Question};
 use crate::sheet::{render_inert, Facts, KeyFile, Label};
-use crate::store::{store_halt, FileStore};
+use crate::store::{FileStore};
 
 /// THE LOSS ARM, L0–L7 (`client.md` §4a.6; AUTH-5.59's LOSS arm; AUTH-5.47).
 pub(super) fn loss_arm(board: &Board, store: &FileStore, person: &mut dyn Person, opts: &RecoverOptions) -> Result<Recovered, Halt> {
-    let own: Vec<(Fingerprint, PublicKey)> = store.device_keys().map_err(store_halt)?.iter().map(|k| (k.fingerprint, k.public.clone())).collect();
+    let own: Vec<(Fingerprint, PublicKey)> = store.device_keys()?.iter().map(|k| (k.fingerprint, k.public.clone())).collect();
     let held: Vec<Fingerprint> = own.iter().map(|(f, _)| *f).collect();
     // L0: R0, and the arm's precondition off the flags.
-    let reads = r0(board, person, opts.principal, true, &own)?;
+    let reads = r0(board, person, opts.principal, Act::Enrollment, &own)?;
     let account = reads.account.clone();
     let anchors: Vec<Fingerprint> = reads.walk.set.enrolled.iter().filter(|e| e.anchor).map(|e| e.fingerprint).collect();
     if anchors.is_empty() {
@@ -46,7 +46,7 @@ pub(super) fn loss_arm(board: &Board, store: &FileStore, person: &mut dyn Person
     let shown: Vec<String> = anchors
         .iter()
         .map(|fp| {
-            let rec = reads.records.records.iter().find(|r| r.kind == Kind::Enroll && r.enrolled.iter().any(|e| Fingerprint::of(&e.key) == *fp));
+            let rec = reads.records.enrollment_of(fp);
             let by = match rec {
                 Some(r) => match (&r.hand, r.position) {
                     (Hand::Key(h), Some(at)) => format!("enrolled at position {at} by {h} ({})", reads.records.label_of(h).map(|l| render_inert(&l)).unwrap_or_default()),
@@ -146,7 +146,7 @@ pub(super) fn loss_arm(board: &Board, store: &FileStore, person: &mut dyn Person
         return Err(Halt::face("the loss arm at an agent's account is the owner's custody rotation", "AUTH-5.62: the custody pair is the owner's; this arm enrolls a fresh pair for a PERSON's own account", "run the walk at your own account; the agent's custody rotation lands with the attendant campaign"));
     }
     let session = handshake(board, Scope::Full, &surviving.signer, opts.principal, Site::Recover)?;
-    let facts = Facts { account: account.clone(), principal: opts.principal, origin: board.dialed.clone() };
+    let facts = Facts { account: account.clone(), principal: opts.principal, origin: board.dialed().clone() };
     let mut retired: Vec<Fingerprint> = Vec::new();
     let mut enrolled_pair: Vec<Fingerprint> = Vec::new();
     let result = (|| -> Result<(String, Vec<AnchorArtifact>), Halt> {
@@ -163,11 +163,11 @@ pub(super) fn loss_arm(board: &Board, store: &FileStore, person: &mut dyn Person
             first_session(board, &fs_reads, &session, &surviving.signer, Some(store))?;
             let entries: Vec<Enrollment> = backup.anchors.iter().map(|a| Enrollment::new(a.public.clone(), true, Some(a.label.as_str().to_string())).expect("a label the box admitted")).collect();
             let id = format!("recover.loss.enroll.{}", &backup.anchors[0].fingerprint.to_hex()[..8]);
-            let link = match deposit(board, &session.token, &Deposit { home: &fs_reads.home, subject: &account, kind: DepositKind::Enroll(entries), hand: Some(&surviving.signer), id: &id })? {
+            let link = match deposit(board, session.token(), &Deposit { home: &fs_reads.home, subject: &account, kind: DepositKind::Enroll(entries), hand: Some(&surviving.signer), id: &id })? {
                 DepositOutcome::Deposited { link, .. } => link,
                 DepositOutcome::Committed { .. } => {
                     let records = credential_records(board, &account, &own)?;
-                    records.records.iter().find(|r| r.kind == Kind::Enroll && r.enrolled.iter().any(|e| Fingerprint::of(&e.key) == backup.anchors[0].fingerprint)).map(|r| r.link.clone()).ok_or_else(|| Halt::face("the fresh pair's enroll link was not found", "the read after a reconciled enrollment names none", "re-run"))?
+                    records.enrollment_of(&backup.anchors[0].fingerprint).map(|r| r.link.clone()).ok_or_else(|| Halt::face("the fresh pair's enroll link was not found", "the read after a reconciled enrollment names none", "re-run"))?
                 }
             };
             say(person, "AUTH-5.59 step 1", format!("BOTH fresh anchors enrolled as ONE anchor-flagged record under the surviving paper's session: {} and {}", backup.anchors[0].fingerprint, backup.anchors[1].fingerprint));
@@ -195,7 +195,7 @@ pub(super) fn loss_arm(board: &Board, store: &FileStore, person: &mut dyn Person
                 let set = reread(board, &account)?;
                 let records = credential_records(board, &account, &own)?;
                 for a in &backup.anchors {
-                    retire_one(board, person, &session, &surviving.signer, &reads, &set, &records, &a.fingerprint, &held, true, PreviewSite::LossArm)?;
+                    retire_one(board, person, &session, &surviving.signer, &reads, &set, &records, &a.fingerprint, &held, PreviewSite::LossArm)?;
                     retired.push(a.fingerprint);
                 }
                 for a in &backup.anchors {
@@ -215,14 +215,15 @@ pub(super) fn loss_arm(board: &Board, store: &FileStore, person: &mut dyn Person
         };
         // THE TRAIL between L5 and L6: from the LOST anchor's enroll link to
         // the new pair's, signed by the surviving anchor.
-        let old_link = reads.records.records.iter().find(|r| r.kind == Kind::Enroll && r.enrolled.iter().any(|e| Fingerprint::of(&e.key) == lost_fp)).map(|r| r.link.clone()).ok_or_else(|| Halt::face("the lost anchor's enroll link was not found", "the trail's `old` is the address the admitted read returns", "re-run"))?;
-        let trail = match trail_present(board, &old_link, &new_link)? {
+        let old_link = reads.records.enrollment_of(&lost_fp).map(|r| r.link.clone()).ok_or_else(|| Halt::face("the lost anchor's enroll link was not found", "the trail's `old` is the address the admitted read returns", "re-run"))?;
+        let supersession = Trail { home: &fs_reads.home, old: &old_link, new: &new_link };
+        let trail = match supersession.present(board)? {
             Some(claim) => {
                 say(person, "AUTH-5.59 step 3", format!("the trail already stands at {claim}: resumed by reading"));
                 claim
             }
             None => {
-                let claim = write_trail(board, &session, &surviving.signer, &fs_reads.home, &old_link, &new_link, "recover.loss.trail")?;
+                let claim = supersession.write(board, &session, &surviving.signer, "recover.loss.trail")?;
                 say(person, "AUTH-5.59 step 2", format!("the supersession trail is written at {claim}: from the lost anchor's enroll link {old_link} to the new pair's {new_link}, attested by the surviving anchor"));
                 claim
             }
@@ -231,7 +232,7 @@ pub(super) fn loss_arm(board: &Board, store: &FileStore, person: &mut dyn Person
         let mut set = reread(board, &account)?;
         let mut records = credential_records(board, &account, &own)?;
         if set.enrolled(&lost_fp).is_some() {
-            retire_one(board, person, &session, &surviving.signer, &reads, &set, &records, &lost_fp, &held, false, PreviewSite::LossArm)?;
+            retire_one(board, person, &session, &surviving.signer, &reads, &set, &records, &lost_fp, &held, PreviewSite::LossArm)?;
             retired.push(lost_fp);
             set = reread(board, &account)?;
         } else {
@@ -246,7 +247,7 @@ pub(super) fn loss_arm(board: &Board, store: &FileStore, person: &mut dyn Person
                 records = credential_records(board, &account, &own)?;
                 say(person, "AUTH-5.64", format!("race round {}: {} fingerprint(s) enrolled since L0 — a finder's device key as much as an anchor", round + 1, unaccounted.len()));
                 for fp in unaccounted {
-                    retire_one(board, person, &session, &surviving.signer, &reads, &set, &records, &fp, &held, true, PreviewSite::LossArm)?;
+                    retire_one(board, person, &session, &surviving.signer, &reads, &set, &records, &fp, &held, PreviewSite::LossArm)?;
                     retired.push(fp);
                     set = reread(board, &account)?;
                 }

@@ -179,7 +179,7 @@ pub struct FirstSessionDone {
 /// store whose bindings cannot be read answers none, and the delegate goes
 /// out under a fresh `new_id`.
 pub(crate) fn persisted(board: &Board, store: Option<&FileStore>, account: &str) -> Option<u64> {
-    store.and_then(|s| s.persisted_new_id(&board.dialed, account).ok().flatten())
+    store.and_then(|s| s.persisted_new_id(board.dialed(), account).ok().flatten())
 }
 
 /// THE COMPOSITION over `reads` the caller took ahead of `session`; `key`
@@ -357,7 +357,7 @@ pub(crate) fn delegate_persisted(
 ) -> Result<Delegated, Halt> {
     let mut persist = |principal: u64| {
         let Some(store) = store else { return };
-        let line = Binding::Enrollment { origin: board.dialed.clone(), principal, account: address.to_string(), fingerprint: *key };
+        let line = Binding::Enrollment { origin: board.dialed().clone(), principal, account: address.to_string(), fingerprint: *key };
         if let Err(w) = store.bind(&line) {
             warnings.push(w.to_string());
         }

@@ -20,7 +20,7 @@ use crate::halt::Halt;
 use crate::person::{Person, Public, Question};
 use crate::sheet::Facts;
 use crate::sign::Signer;
-use crate::store::{arm4_face, store_halt, Binding, FileStore, KeyFacts, KeySelector, KeyStore, Purpose, StoreError};
+use crate::store::{arm4_face, Binding, FileStore, KeyFacts, KeySelector, KeyStore, Purpose, StoreError};
 
 mod hosted;
 
@@ -120,13 +120,13 @@ fn statements_s0(person: &mut dyn Person, local_trust: bool) {
 /// device key, else arm 4's fork — its public facts, and its signer from the
 /// store that holds its seed (§3a).
 fn device_key(store: &FileStore, board: &Board, principal: u64, mode: Mode) -> Result<(KeyFacts, Box<dyn Signer>), Halt> {
-    match store.select(&KeySelector::Board { origin: &board.dialed, principal: Some(principal) }, Purpose::Sign) {
+    match store.select(&KeySelector::Board { origin: board.dialed(), principal: Some(principal) }, Purpose::Sign) {
         Ok(key) => {
-            let signer = store.signer(&KeySelector::Path(&key.path)).map_err(store_halt)?;
+            let signer = store.signer(&KeySelector::Path(&key.path))?;
             Ok((key, signer))
         }
         Err(StoreError::NoSelection { keys }) => Err(arm4_face(store, &keys, mode)),
-        Err(e) => Err(store_halt(e)),
+        Err(e) => Err(e.into()),
     }
 }
 
@@ -178,7 +178,7 @@ pub fn notebook(board: &Board, store: &FileStore, person: &mut dyn Person, opts:
         let _ = board.session_close(&boot);
         principal
     };
-    let facts = Facts { account: account.clone(), principal, origin: board.signed.clone() };
+    let facts = Facts { account: account.clone(), principal, origin: board.signed().clone() };
 
     // S2 OWNER-BARE → MINT, idempotent by reading (boundary 2).
     let owner_bare = bare_session(board, principal, &health)?;
@@ -254,7 +254,7 @@ pub fn notebook(board: &Board, store: &FileStore, person: &mut dyn Person, opts:
     // S5 CLAIM (SIGNED, FULL): the pre-check first (both reads live), the
     // challenge, the claim link.
     let pre = precheck(board, principal, &device_fp)?;
-    let signed = handshake_prechecked(board, Scope::Full, &*device, principal, &pre, Site::Claim)?;
+    let signed = handshake_prechecked(board, Scope::Full, &*device, &pre, Site::Claim)?;
     let claim_frame = frames::make_link(&home, &[&account], &[], T_CLAIM, Some("claim.claim"));
     let v = match signed.op(&claim_frame)? {
         Answer::Closed => return Err(Halt::face("the signed session ended at the claim", "closed", "re-run `skep claim`")),
@@ -301,7 +301,7 @@ pub fn notebook(board: &Board, store: &FileStore, person: &mut dyn Person, opts:
     // S9 NAME: collected and held; the write deferred.
     let display_name = s9_name(person, opts)?;
     // S10 RETAIN: the binding, the close, the three facts.
-    let line = Binding::Enrollment { origin: board.dialed.clone(), principal, account: account.clone(), fingerprint: device_fp };
+    let line = Binding::Enrollment { origin: board.dialed().clone(), principal, account: account.clone(), fingerprint: device_fp };
     if let Err(w) = store.bind(&line) {
         warnings.push(w.to_string());
     }
@@ -311,7 +311,7 @@ pub fn notebook(board: &Board, store: &FileStore, person: &mut dyn Person, opts:
         principal,
         fingerprint: device_fp,
         agent_space: done.agent_space_principal.map(|_| reads.agent_space.clone()),
-        binding_line: line.line(),
+        binding_line: line.to_string(),
         warnings,
         display_name,
     }))
@@ -375,7 +375,7 @@ fn bare_session(board: &Board, principal: u64, health: &crate::board::Health) ->
             ),
             "run `skep claim` where the daemon's loopback is reachable — natively, or as the sidecar in its network namespace",
         )),
-        Opened::Blocked { record } => Err(Halt::Blocked(crate::halt::Blocked { record, named_by: board.dialed.as_str().to_string(), ground: None })),
+        Opened::Blocked { record } => Err(Halt::Blocked(crate::halt::Blocked { record, named_by: board.dialed().as_str().to_string(), ground: None })),
     }
 }
 
@@ -387,7 +387,7 @@ fn tail_or_stranger(board: &Board, store: &FileStore, person: &mut dyn Person, o
         KeySetAnswer::Set(s) => s,
         KeySetAnswer::NotAnAccount => return Ok(ClaimOutcome::Stranger { claimant }),
     };
-    let keys = store.device_keys().map_err(store_halt)?;
+    let keys = store.device_keys()?;
     let Some(ours) = keys.iter().find(|k| set.enrolled(&k.fingerprint).is_some()) else {
         return Ok(ClaimOutcome::Stranger { claimant });
     };
@@ -395,7 +395,7 @@ fn tail_or_stranger(board: &Board, store: &FileStore, person: &mut dyn Person, o
         return Err(Halt::face(format!("{claimant} has no seat"), "`effective_owner` answered no allocated seat for the claimant", "this is a board fault"));
     };
     let fingerprint = ours.fingerprint;
-    let device = store.signer(&KeySelector::Path(&ours.path)).map_err(store_halt)?;
+    let device = store.signer(&KeySelector::Path(&ours.path))?;
     say(person, "§4.3", format!("this board is already yours (claimant {claimant}, principal {principal}); finishing whatever of the tail is unfinished"));
     let session = handshake(board, Scope::Content, &*device, principal, Site::Tail)?;
     say(person, "AUTH-5.87", "creating your account also creates a space for your agents beneath it, and its home");
@@ -410,8 +410,8 @@ fn tail_or_stranger(board: &Board, store: &FileStore, person: &mut dyn Person, o
         warnings.push("the board is CLAIMED-PERMISSIVE: any loopback party may still write drafts as any principal".into());
     }
     let display_name = s9_name(person, opts)?;
-    let line = Binding::Enrollment { origin: board.dialed.clone(), principal, account: claimant.clone(), fingerprint };
-    let bound = store.enrollment_for(&board.dialed, principal).map_err(store_halt)?.is_some_and(|(_, fp)| fp == fingerprint);
+    let line = Binding::Enrollment { origin: board.dialed().clone(), principal, account: claimant.clone(), fingerprint };
+    let bound = store.enrollment_for(board.dialed(), principal)?.is_some_and(|(_, fp)| fp == fingerprint);
     if !bound {
         if let Err(w) = store.bind(&line) {
             warnings.push(w.to_string());
@@ -423,7 +423,7 @@ fn tail_or_stranger(board: &Board, store: &FileStore, person: &mut dyn Person, o
         principal,
         fingerprint,
         agent_space: done.agent_space_principal.map(|_| reads.agent_space.clone()),
-        binding_line: line.line(),
+        binding_line: line.to_string(),
         warnings,
         display_name,
     }))

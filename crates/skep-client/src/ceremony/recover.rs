@@ -44,12 +44,12 @@ use crate::ceremony::first_session::{first_session, mint_home, FirstSessionReads
 use crate::ceremony::handshake::{handshake, Session, Site};
 use crate::ceremony::import::{import_anchor, no_artifact_face, whose_account, ImportContext, ImportOutcome, ImportedAnchor, Whose};
 use crate::ceremony::preview::{declined, preview, Preview, PreviewSite, Previewed, Row};
-use crate::ceremony::reads::{r0, A4Cell, Reads};
+use crate::ceremony::reads::{r0, A4Cell, Act, Reads};
 use crate::derive::records::{credential_records, Hand, Records};
 use crate::halt::Halt;
 use crate::person::{Confirmation, Consent, Person, Public, Question};
 use crate::sheet::{group_hex, render_inert, Facts};
-use crate::store::{store_halt, Binding, FileStore, KeyFacts, KeyStore};
+use crate::store::{Binding, FileStore, KeyFacts, KeyStore};
 
 mod loss;
 
@@ -103,7 +103,7 @@ fn abandoned() -> Halt {
 /// never `--key`), their public facts — the walk enrolls one by its public
 /// key and signs with none; the KEYLESS face where the store holds none.
 fn device_key_for(store: &FileStore) -> Result<Vec<KeyFacts>, Halt> {
-    let devices = store.device_keys().map_err(store_halt)?;
+    let devices = store.device_keys()?;
     if devices.is_empty() {
         return Err(Halt::face(
             format!("the key store {} holds no device key for this walk", store.root().display()),
@@ -220,10 +220,13 @@ fn targets(person: &mut dyn Person, set: &KeySet, records: &Records, held: &[Fin
 }
 
 /// ONE retirement under the anchor session: `preview(removed)`, the typed
-/// answer, `DepositKind::Retire` under the anchor's hand.
+/// answer, `DepositKind::Retire` under the anchor's hand. A key R0's set did
+/// not hold was ENROLLED SINCE the walk began, and its row says so — read
+/// off the walk's own reads, never passed in.
 #[allow(clippy::too_many_arguments)]
-fn retire_one(board: &Board, person: &mut dyn Person, session: &Session<'_>, hand: &HybridSigner, reads: &Reads, set: &KeySet, records: &Records, fp: &Fingerprint, held: &[Fingerprint], since: bool, site: PreviewSite) -> Result<(), Halt> {
+fn retire_one(board: &Board, person: &mut dyn Person, session: &Session<'_>, hand: &HybridSigner, reads: &Reads, set: &KeySet, records: &Records, fp: &Fingerprint, held: &[Fingerprint], site: PreviewSite) -> Result<(), Halt> {
     let closure = head_closure(board, person, &reads.walk.set_account, fp)?;
+    let since = reads.walk.set.enrolled(fp).is_none();
     let rows = [Row::of(fp, set, Some(records), held, None, since)];
     match preview(person, &Preview { account: &reads.walk.set_account, set, rows: &rows, closure: &closure, held, site, own_board: reads.cell.own_board() })? {
         Previewed::Confirmed => {}
@@ -231,13 +234,13 @@ fn retire_one(board: &Board, person: &mut dyn Person, session: &Session<'_>, han
         Previewed::Unwritable => return Err(Halt::face("the retirement would empty the set", "`would_empty` armed: unreachable under an anchor session, the anchor standing enrolled", "this is this client's frame")),
     }
     let id = format!("recover.retire.{}", &fp.to_hex()[..8]);
-    match deposit(board, &session.token, &Deposit { home: &reads.home, subject: &reads.walk.set_account, kind: DepositKind::Retire(vec![*fp]), hand: Some(hand), id: &id }) {
+    match deposit(board, session.token(), &Deposit { home: &reads.home, subject: &reads.walk.set_account, kind: DepositKind::Retire(vec![*fp]), hand: Some(hand), id: &id }) {
         Ok(DepositOutcome::Deposited { .. }) => Ok(()),
         Ok(DepositOutcome::Committed { reason }) => {
             say(person, "AUTH-5.17", format!("reconciled: {reason}"));
             Ok(())
         }
-        Err(DepositHalt::SessionClosed(_)) => Err(closed_arm(board, reads, &session.fingerprint)),
+        Err(DepositHalt::SessionClosed(_)) => Err(closed_arm(board, reads, &session.fingerprint())),
         Err(other) => Err(other.into()),
     }
 }
@@ -294,7 +297,7 @@ fn recovery_read(board: &Board, person: &mut dyn Person, reads: &Reads, stolen: 
             }
         }
     }
-    let cone = by_reference_cone(board, person, &walked.clone())?;
+    let cone = by_reference_cone(board, person, &walked)?;
     for node in &cone.nodes {
         if !node.seeded && !walked.contains(&node.account) {
             walked.push(node.account.clone());
@@ -403,7 +406,7 @@ pub fn recover(board: &Board, store: &FileStore, person: &mut dyn Person, opts: 
         say(person, "AUTH-5.60 step 1", "STOLEN: what the thief holds — the machine, the loopback board and the key store, so the enrolled device key and sessions as you on the thief's own copy, and every draft ever written at a venue whose only confidentiality is locality; a retirement written here reaches the thief's copy not at all; R4 runs AHEAD of R3 and repeats against a re-read `key_set`");
     }
     // R0.
-    let reads = r0(board, person, opts.principal, true, &own)?;
+    let reads = r0(board, person, opts.principal, Act::Enrollment, &own)?;
     let account = reads.account.clone();
     // NO anchor flagged ⇒ AUTH-5.16's second arm.
     if !reads.walk.set.has_anchor() {
@@ -453,13 +456,13 @@ pub fn recover(board: &Board, store: &FileStore, person: &mut dyn Person, opts: 
             let mut records = reads.records.clone();
             for _ in 0..8 {
                 let Some(fp) = set.enrolled.iter().find(|e| !e.anchor && !retired.contains(&e.fingerprint)).map(|e| e.fingerprint) else { break };
-                retire_one(board, person, &session, &anchor.signer, &reads, &set, &records, &fp, &held, false, PreviewSite::RecoverDevice)?;
+                retire_one(board, person, &session, &anchor.signer, &reads, &set, &records, &fp, &held, PreviewSite::RecoverDevice)?;
                 retired.push(fp);
                 set = reread(board, &reads.walk.set_account)?;
                 records = credential_records(board, &reads.walk.set_account, &own)?;
             }
             say(person, "AUTH-5.64", format!("contained: {} non-anchor key(s) retired, nothing enrolled; `inc(A, 1)` was not delegated", retired.len()));
-            return Ok(Recovered { facts: Facts { account: account.clone(), principal: opts.principal, origin: board.dialed.clone() }, enrolled: Vec::new(), retired: retired.clone(), binding_line: None, containment: true, recovery_read: Vec::new(), warnings: Vec::new() });
+            return Ok(Recovered { facts: Facts { account: account.clone(), principal: opts.principal, origin: board.dialed().clone() }, enrolled: Vec::new(), retired: retired.clone(), binding_line: None, containment: true, recovery_read: Vec::new(), warnings: Vec::new() });
         }
         // The R4 rounds (a closure over the shared state).
         let mut set = reads.walk.set.clone();
@@ -472,8 +475,7 @@ pub fn recover(board: &Board, store: &FileStore, person: &mut dyn Person, opts: 
             let mut rounds = 0usize;
             loop {
                 for fp in &round_targets {
-                    let since = !reads.walk.set.enrolled.iter().any(|e| e.fingerprint == *fp);
-                    retire_one(board, person, &session, &anchor.signer, &reads, set, records, fp, &held, since, if stolen { PreviewSite::RecoverStolen } else { PreviewSite::RecoverDevice })?;
+                    retire_one(board, person, &session, &anchor.signer, &reads, set, records, fp, &held, if stolen { PreviewSite::RecoverStolen } else { PreviewSite::RecoverDevice })?;
                     retired.push(*fp);
                     *set = reread(board, &reads.walk.set_account)?;
                 }
@@ -535,7 +537,7 @@ pub fn recover(board: &Board, store: &FileStore, person: &mut dyn Person, opts: 
             }
             let id = format!("recover.enroll.{}", &device.fingerprint.to_hex()[..8]);
             let entry = Enrollment::new(device.public.clone(), false, device.label.clone()).expect("a stored label");
-            let outcome = deposit(board, &session.token, &Deposit { home: &fs_reads.home, subject: &account, kind: DepositKind::Enroll(vec![entry]), hand: Some(&anchor.signer), id: &id });
+            let outcome = deposit(board, session.token(), &Deposit { home: &fs_reads.home, subject: &account, kind: DepositKind::Enroll(vec![entry]), hand: Some(&anchor.signer), id: &id });
             match outcome {
                 Ok(DepositOutcome::Deposited { .. }) => say(person, "AUTH-5.59 step 1", format!("the device key {} is enrolled from the anchor's session", device.fingerprint)),
                 Ok(DepositOutcome::Committed { reason }) => say(person, "AUTH-5.17", format!("R3 stands: {reason}")),
@@ -543,12 +545,12 @@ pub fn recover(board: &Board, store: &FileStore, person: &mut dyn Person, opts: 
                     // The PERSON-CLASS inversion: R4 first, then R3.
                     say(person, "AUTH-5.13", "the set is full: retire a key you no longer hold first, then this device is enrolled — R4 runs ahead of R3 under this same session");
                     r4(person, &mut set, &mut records, picked.clone(), &mut retired)?;
-                    let outcome = deposit(board, &session.token, &Deposit { home: &fs_reads.home, subject: &account, kind: DepositKind::Enroll(vec![Enrollment::new(device.public.clone(), false, device.label.clone()).expect("a stored label")]), hand: Some(&anchor.signer), id: &id })?;
+                    let outcome = deposit(board, session.token(), &Deposit { home: &fs_reads.home, subject: &account, kind: DepositKind::Enroll(vec![Enrollment::new(device.public.clone(), false, device.label.clone()).expect("a stored label")]), hand: Some(&anchor.signer), id: &id })?;
                     if let DepositOutcome::Committed { reason } = outcome {
                         say(person, "AUTH-5.17", format!("R3 stands: {reason}"));
                     }
                 }
-                Err(DepositHalt::SessionClosed(_)) => return Err(closed_arm(board, &reads, &session.fingerprint)),
+                Err(DepositHalt::SessionClosed(_)) => return Err(closed_arm(board, &reads, &session.fingerprint())),
                 Err(other) => return Err(other.into()),
             }
         }
@@ -559,7 +561,7 @@ pub fn recover(board: &Board, store: &FileStore, person: &mut dyn Person, opts: 
             // COMPLETION IS THE READ MADE AFTER R3's ENROLL COMMITS.
             r4(person, &mut set, &mut records, Vec::new(), &mut retired)?;
         }
-        Ok(Recovered { facts: Facts { account: account.clone(), principal: opts.principal, origin: board.dialed.clone() }, enrolled: vec![device.fingerprint], retired: retired.clone(), binding_line: None, containment: false, recovery_read: Vec::new(), warnings: warnings.clone() })
+        Ok(Recovered { facts: Facts { account: account.clone(), principal: opts.principal, origin: board.dialed().clone() }, enrolled: vec![device.fingerprint], retired: retired.clone(), binding_line: None, containment: false, recovery_read: Vec::new(), warnings: warnings.clone() })
     })();
     // R5: the mirror's close — the session, and the placed copy destroyed.
     let _ = session.close();
@@ -570,14 +572,13 @@ pub fn recover(board: &Board, store: &FileStore, person: &mut dyn Person, opts: 
         return Ok(done);
     }
     // R6: the binding, the three facts, the stolen arm's recovery read.
-    let line = Binding::Enrollment { origin: board.dialed.clone(), principal: opts.principal, account: account.clone(), fingerprint: device.fingerprint };
+    let line = Binding::Enrollment { origin: board.dialed().clone(), principal: opts.principal, account: account.clone(), fingerprint: device.fingerprint };
     if let Err(w) = store.bind(&line) {
         done.warnings.push(w.to_string());
     }
-    done.binding_line = Some(line.line());
+    done.binding_line = Some(line.to_string());
     if stolen {
-        let stolen_fps: Vec<Fingerprint> = if done.retired.is_empty() { Vec::new() } else { done.retired.clone() };
-        done.recovery_read = recovery_read(board, person, &reads, &stolen_fps, &own)?;
+        done.recovery_read = recovery_read(board, person, &reads, &done.retired, &own)?;
     }
     say(person, "AUTH-5.28", "THE EXPECTED END: sign in with the new key — `skep session` — never an anchor import");
     Ok(done)
@@ -594,7 +595,7 @@ mod tests {
         for (b, anchor) in fps {
             let signer = crate::sign::signer_from_seed(&[*b; 32]);
             let key = HybridSigner::public_key(&signer).clone();
-            s.enrolled.push(EnrolledKey { alg: key.alg().into(), fingerprint: Fingerprint::of(&key), key, anchor: *anchor });
+            s.enrolled.push(EnrolledKey { fingerprint: Fingerprint::of(&key), key, anchor: *anchor });
         }
         s
     }
@@ -602,7 +603,7 @@ mod tests {
     /// A device key's public facts, as the store's lookup answers them.
     fn facts(seed: u8) -> KeyFacts {
         let file = KeyFile::new(Seed::new([seed; 32]), false, Label::new(&format!("device {seed}")).ok(), None);
-        KeyFacts { path: format!("{seed}.key").into(), alg: file.alg.clone(), fingerprint: file.fingerprint, public: file.public.clone(), label: file.label.clone(), anchor: false }
+        KeyFacts { path: format!("{seed}.key").into(), fingerprint: file.fingerprint, public: file.public.clone(), label: file.label.clone(), anchor: false }
     }
 
     /// The store's device key for the walk, picked off its public facts: the

@@ -27,6 +27,7 @@
 //! top-level `--account` HALTS: no door at the bootstrap tier (AUTH-5.90's
 //! last clause).
 
+use std::fmt;
 use std::path::PathBuf;
 
 use skep_identity::{Fingerprint, PublicKey};
@@ -47,7 +48,7 @@ use crate::halt::Halt;
 use crate::person::{Confirmation, Consent, Person};
 use crate::sheet::Facts;
 use crate::sign::Signer;
-use crate::store::{arm4_face, store_halt, FileStore, KeyFacts, KeySelector, KeyStore, Purpose, StoreError};
+use crate::store::{arm4_face, FileStore, KeyFacts, KeySelector, KeyStore, Purpose, StoreError};
 
 /// The command's inputs.
 #[derive(Debug, Clone)]
@@ -70,6 +71,16 @@ pub struct HandoffOptions {
 pub enum Grade {
     Device,
     Anchor,
+}
+
+/// The grade as a person reads it: `device` or `anchor`.
+impl fmt::Display for Grade {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Grade::Device => "device",
+            Grade::Anchor => "anchor",
+        })
+    }
 }
 
 /// What the walk did.
@@ -109,15 +120,15 @@ fn g0(board: &Board, store: &FileStore, person: &mut dyn Person, opts: &HandoffO
             "hand off a SUBDIVISION of your own account (`<your account>.2` and beyond)",
         ));
     };
-    let key = match store.select(&KeySelector::Board { origin: &board.dialed, principal: Some(opts.principal) }, Purpose::Sign) {
+    let key = match store.select(&KeySelector::Board { origin: board.dialed(), principal: Some(opts.principal) }, Purpose::Sign) {
         Ok(key) => key,
         Err(StoreError::NoSelection { keys }) => {
             return Err(arm4_face(store, &keys, Mode::of(&board.health()?)));
         }
-        Err(e) => return Err(store_halt(e)),
+        Err(e) => return Err(e.into()),
     };
     let pre = precheck(board, opts.principal, &key.fingerprint)?;
-    key_face(board, &pre, &key.fingerprint, &[(key.fingerprint, key.public.clone())], Site::Giver)?;
+    key_face(board, &pre.walk, &key.fingerprint, &[(key.fingerprint, key.public.clone())], Site::Giver)?;
     let giver_account = pre.account.clone();
     if !account.starts_with(&format!("{giver_account}.")) {
         return Err(Halt::face(format!("{account} is not in your subtree"), format!("your account is {giver_account}; a handoff gives away a subdivision beneath it"), "name an address beneath your account"));
@@ -178,7 +189,7 @@ fn g2(board: &Board, store: &FileStore, person: &mut dyn Person, g: &G0, session
     }
     match outcome? {
         Delegated::Committed { principal, sent: true } => {
-            say(person, "AUTH-5.90 (a)", format!("beat (a): {account} delegated (principal {principal}); hand this ADDRESS to the recipient over the out-of-band channel the keys come back on — they run `skep accept --board {} --account {account}`", board.dialed));
+            say(person, "AUTH-5.90 (a)", format!("beat (a): {account} delegated (principal {principal}); hand this ADDRESS to the recipient over the out-of-band channel the keys come back on — they run `skep accept --board {} --account {account}`", board.dialed()));
             Ok((principal, false))
         }
         Delegated::Committed { principal, sent: false } => Ok((principal, true)),
@@ -195,7 +206,7 @@ fn g2(board: &Board, store: &FileStore, person: &mut dyn Person, g: &G0, session
 pub fn handoff(board: &Board, store: &FileStore, person: &mut dyn Person, opts: &HandoffOptions) -> Result<HandoffOutcome, Halt> {
     let account = opts.account.trim().to_string();
     let g = g0(board, store, person, opts)?;
-    let device = store.signer(&KeySelector::Path(&g.giver_key.path)).map_err(store_halt)?;
+    let device = store.signer(&KeySelector::Path(&g.giver_key.path))?;
     // The session acts AS the giving account: the giver's own at depth 1,
     // BY REFERENCE below it (AUTH-4.30 (i)) — for beat (a)'s delegate (only
     // the owner of the parent delegates under it) and for beat (c)'s
@@ -217,7 +228,7 @@ pub fn handoff(board: &Board, store: &FileStore, person: &mut dyn Person, opts: 
         return Err(Halt::face(
             format!("{account} is not yet delegated: beat (a) is still owed"),
             "`effective_owner` answers the seat above, not this address (AUTH-6.37's allocation test)",
-            format!("run `skep handoff --board {} --account {account}` without `--payload` first, and hand the recipient the address", board.dialed),
+            format!("run `skep handoff --board {} --account {account}` without `--payload` first, and hand the recipient the address", board.dialed()),
         ));
     };
     let text = payload_text(payload)?;
@@ -282,7 +293,7 @@ pub fn handoff(board: &Board, store: &FileStore, person: &mut dyn Person, opts: 
         return Err(Halt::face("the handoff was declined: nothing was written", "the typed answer was not the address", "re-run when ready"));
     }
     // The hand: the giver's ANCHOR where the act is anchor-grade.
-    let own: Vec<(Fingerprint, PublicKey)> = store.device_keys().map_err(store_halt)?.iter().map(|k| (k.fingerprint, k.public.clone())).collect();
+    let own: Vec<(Fingerprint, PublicKey)> = store.device_keys()?.iter().map(|k| (k.fingerprint, k.public.clone())).collect();
     let anchor: Option<ImportedAnchor> = if g.grade == Grade::Anchor {
         say(person, "AUTH-3.21", "the set that opens this account holds an anchor, so the handoff is ANCHOR-GRADE: your paper anchor is imported for this act alone");
         let records = credential_records(board, &g.set_account, &own)?;
@@ -315,7 +326,7 @@ pub fn handoff(board: &Board, store: &FileStore, person: &mut dyn Person, opts: 
         // G4 = beat (c): THE GENESIS, verbatim, homed in the giving account's
         // doc 1, at the grade G0 read.
         let id = format!("handoff.genesis.{account}");
-        let outcome = deposit(board, &session.token, &Deposit { home: &giving_home, subject: &account, kind: DepositKind::EnrollVerbatim(text.clone()), hand: Some(hand), id: &id });
+        let outcome = deposit(board, session.token(), &Deposit { home: &giving_home, subject: &account, kind: DepositKind::EnrollVerbatim(text.clone()), hand: Some(hand), id: &id });
         let reconciled = match outcome {
             Ok(DepositOutcome::Deposited { .. }) => false,
             Ok(DepositOutcome::Committed { reason }) => {
@@ -331,7 +342,7 @@ pub fn handoff(board: &Board, store: &FileStore, person: &mut dyn Person, opts: 
             }
             Err(other) => return Err(other.into()),
         };
-        Ok(HandoffOutcome::Seeded { facts: Facts { account: account.clone(), principal, origin: board.dialed.clone() }, grade: g.grade, reconciled, warnings: Vec::new() })
+        Ok(HandoffOutcome::Seeded { facts: Facts { account: account.clone(), principal, origin: board.dialed().clone() }, grade: g.grade, reconciled, warnings: Vec::new() })
     })();
     // G6: the mirror's close.
     let _ = session.close();
@@ -344,7 +355,7 @@ pub fn handoff(board: &Board, store: &FileStore, person: &mut dyn Person, opts: 
         "AUTH-5.90 (vii)",
         format!(
             "THE REPLY for the recipient's string (vii): account {account}, principal {principal}, origin {} — they land it with `skep bind`; your own sessions AS {account} and anything beneath it are dead from the genesis's commit (AUTH-4.63), and the act is complete only when the reply stands with them",
-            board.dialed
+            board.dialed()
         ),
     );
     Ok(out)

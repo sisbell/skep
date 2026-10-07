@@ -28,6 +28,7 @@
 
 use std::fmt;
 use std::sync::OnceLock;
+use std::time::Duration;
 
 use serde_json::{json, Value};
 use skep_identity::{BoardTerm, Fingerprint, PublicKey};
@@ -126,11 +127,14 @@ impl Health {
 
 /// `GET /challenge`'s answer: the nonce and the TTL read off the body —
 /// 60 000 ms as built — never assumed (`client.md` §2.2).
+/// [`Board::challenge`] refuses a body that carries either absent, so the
+/// nonce and the TTL it answers are the board's own and never a sentinel
+/// standing in for one.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Challenge {
     pub nonce: String,
     pub principal: u64,
-    pub ttl_ms: u64,
+    pub ttl: Duration,
 }
 
 /// A signed session's scope (AUTH RES-63): FULL, the body without `scope`,
@@ -202,8 +206,10 @@ pub enum Answer {
 
 /// `POST /op-at`'s answers (wire.md §Reading history): the position's own
 /// document, the three position faults, the reconstruction bound, and —
-/// under a token alone — the death signal.
+/// under a token alone — the death signal. Non-exhaustive: the set is the
+/// wire's, which this crate does not own.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum AtAnswer {
     Document(Value),
     /// The death signal on a token-bearing read; a token-free read halts on
@@ -222,8 +228,9 @@ pub enum AtAnswer {
 
 /// The ONE `/changes` point query this crate makes (`client.md` §1.1): the
 /// `key` of the row at one position, for an UNSIGNED record alone
-/// (AUTH-6.15).
+/// (AUTH-6.15). Non-exhaustive: the testimony's forms are the wire's.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum ChangeKey {
     /// The enrolled key whose signed session committed the row.
     Key(Fingerprint),
@@ -243,10 +250,13 @@ pub enum ChangeKey {
     HistoryReclaimed { floor: Option<u64> },
 }
 
-/// One enrolled entry of a `key_set` answer (AUTH-6.18).
+/// One enrolled entry of a `key_set` answer (AUTH-6.18): the key, the
+/// fingerprint it hashes to — the decode refuses an answer whose two
+/// disagree (AUTH-1.7), so every lookup by fingerprint finds the key it
+/// names — and the flag it was enrolled under. The key's `ALGS` token is
+/// `key.alg()`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EnrolledKey {
-    pub alg: String,
     pub fingerprint: Fingerprint,
     pub key: PublicKey,
     pub anchor: bool,
@@ -308,17 +318,22 @@ pub struct Owner {
     pub principal: u64,
 }
 
-/// One board, as this client addresses it.
+/// One board, as this client addresses it. Its two origins are read through
+/// [`Board::dialed`] and [`Board::signed`] and fixed where it is made — by
+/// [`Board::new`] and [`Board::signing_for`] — so no caller moves the dialed
+/// origin under `H.1`'s pair, which is cached for the board at that origin:
+/// a term carried to another board would sign every record frame wrong.
 pub struct Board {
     /// The origin this client DIALS.
-    pub dialed: Origin,
+    dialed: Origin,
     /// The origin this client SIGNS for this board (AUTH-4.8) — the dialed
     /// one for every direct client; the configured override at a frontend's
     /// own dual-bound node.
-    pub signed: Origin,
+    signed: Origin,
     dialer: Box<dyn Dialer>,
-    /// `H.1`'s pair, read ONCE per board and cached for good (cs6-2).
-    term: OnceLock<Option<BoardTerm>>,
+    /// `H.1`'s pair, read ONCE per board and cached for good (cs6-2) — set
+    /// only once the board answers one.
+    term: OnceLock<BoardTerm>,
 }
 
 impl fmt::Debug for Board {
@@ -417,16 +432,32 @@ pub fn acked_addr(v: &Value) -> Option<&str> {
 
 impl Board {
     /// A board dialed and signed at ONE origin — the `skep` command's shape
-    /// (t1): `signed_open` frames `dialed` and the dialer dials it, one value,
-    /// two readers, no copy.
-    pub fn new(dialed: Origin, dialer: Box<dyn Dialer>) -> Board {
-        Board { signed: dialed.clone(), dialed, dialer, term: OnceLock::new() }
+    /// (t1): `session_open` frames the origin the dialer dials. The dialer
+    /// is any [`Dialer`] — an `Arc<dyn Dialer>` a shell shares with
+    /// `resolve`'s transport is one, so one dialer serves both.
+    pub fn new(dialed: Origin, dialer: impl Dialer + 'static) -> Board {
+        Board { signed: dialed.clone(), dialed, dialer: Box::new(dialer), term: OnceLock::new() }
     }
 
-    /// A board DIALED at one origin and SIGNED for another — the frontend's
-    /// shell at its own dual-bound node (AUTH-4.57 (a)'s client half; §7).
-    pub fn with_signed(dialed: Origin, signed: Origin, dialer: Box<dyn Dialer>) -> Board {
-        Board { dialed, signed, dialer, term: OnceLock::new() }
+    /// The board SIGNED for `signed` and still dialed at its own origin — the
+    /// frontend's shell at its own dual-bound node (AUTH-4.57 (a)'s client
+    /// half; §7): `Board::new(dialed, dialer).signing_for(signed)`, each
+    /// origin named by the call that sets it, so the two cannot trade places.
+    pub fn signing_for(mut self, signed: Origin) -> Board {
+        self.signed = signed;
+        self
+    }
+
+    /// The origin this client DIALS.
+    pub fn dialed(&self) -> &Origin {
+        &self.dialed
+    }
+
+    /// The origin this client SIGNS for this board (AUTH-4.8) — the dialed
+    /// one for every direct client; the configured override at a frontend's
+    /// own dual-bound node.
+    pub fn signed(&self) -> &Origin {
+        &self.signed
     }
 
     /// The one dialer, for an embedder's own calls over the same transport.
@@ -462,18 +493,25 @@ impl Board {
     }
 
     /// `GET /challenge?principal=n` — the nonce and `ttl_ms` read off the
-    /// body (wire.md §Sessions).
+    /// body (wire.md §Sessions). A body missing either — or carrying a TTL of
+    /// zero — is no challenge this client signs: the face names which member
+    /// is missing, and no nonce is spent on it.
     pub fn challenge(&self, principal: u64) -> Result<Challenge, Halt> {
         let resp = self.exchange(&Request::get(format!("/challenge?principal={principal}")))?;
         if resp.status != 200 {
             return Err(transport_refused(&resp));
         }
         let v = json_of(&resp)?;
-        Ok(Challenge {
-            nonce: v["nonce"].as_str().unwrap_or("").to_string(),
-            principal: v["principal"].as_u64().unwrap_or(principal),
-            ttl_ms: v["ttl_ms"].as_u64().unwrap_or(0),
-        })
+        let missing = |member: &str| {
+            Halt::face(
+                format!("the challenge carried no {member}"),
+                format!("`GET /challenge` answered a body without the {member} the wire pins (wire.md §Sessions)"),
+                "this board is not speaking the wire this client expects; nothing was written",
+            )
+        };
+        let nonce = v["nonce"].as_str().filter(|n| !n.is_empty()).ok_or_else(|| missing("nonce"))?;
+        let ttl_ms = v["ttl_ms"].as_u64().filter(|t| *t > 0).ok_or_else(|| missing("ttl_ms"))?;
+        Ok(Challenge { nonce: nonce.to_string(), principal: v["principal"].as_u64().unwrap_or(principal), ttl: Duration::from_millis(ttl_ms) })
     }
 
     /// `POST /session` (AUTH-6.2): the bare body, or the signed body over
@@ -481,20 +519,17 @@ impl Board {
     /// caller supplies (AUTH-4.8). A `400 malformed_session_request` is this
     /// client's own framing, surfaced as the board's refusal (§2.3's exit 1).
     pub fn session_open(&self, body: SessionBody<'_>) -> Result<Opened, Halt> {
-        let text = match body {
-            SessionBody::Bare { principal } => format!("{{\"principal\":{principal}}}"),
+        let body = match body {
+            SessionBody::Bare { principal } => json!({"principal": principal}),
             SessionBody::Signed { principal, nonce, sig_hex, scope } => {
-                let scope = match scope.wire() {
-                    Some(s) => format!(",\"scope\":\"{s}\""),
-                    None => String::new(),
-                };
-                format!(
-                    "{{\"principal\":{principal},\"nonce\":\"{nonce}\",\"origin\":\"{}\"{scope},\"sig\":\"{sig_hex}\"}}",
-                    self.signed.as_str()
-                )
+                let mut body = json!({"principal": principal, "nonce": nonce, "origin": self.signed.as_str(), "sig": sig_hex});
+                if let Some(s) = scope.wire() {
+                    body["scope"] = Value::from(s);
+                }
+                body
             }
         };
-        let resp = self.exchange(&Request::post("/session", text.into_bytes()))?;
+        let resp = self.exchange(&Request::post("/session", body.to_string().into_bytes()))?;
         match resp.status {
             200 => {
                 let v = json_of(&resp)?;
@@ -671,10 +706,10 @@ impl Board {
     /// read the fence admits (RULED, owner 2026-10-04, cs6-2).
     pub fn board_term(&self) -> Result<Option<BoardTerm>, Halt> {
         if let Some(term) = self.term.get() {
-            return Ok(*term);
+            return Ok(Some(*term));
         }
         let term = self.read_board_term()?;
-        if term.is_some() {
+        if let Some(term) = term {
             let _ = self.term.set(term);
         }
         Ok(term)
@@ -726,7 +761,10 @@ fn key_set_of(v: &Value) -> Result<KeySetAnswer, Halt> {
         let alg = e["alg"].as_str().ok_or_else(shape)?;
         let key = PublicKey::parse(alg, e["key"].as_str().ok_or_else(shape)?).map_err(|_| shape())?;
         let fingerprint = e["fingerprint"].as_str().and_then(Fingerprint::parse_hex).ok_or_else(shape)?;
-        set.enrolled.push(EnrolledKey { alg: alg.to_string(), fingerprint, key, anchor: e["anchor"].as_bool().unwrap_or(false) });
+        if Fingerprint::of(&key) != fingerprint {
+            return Err(shape());
+        }
+        set.enrolled.push(EnrolledKey { fingerprint, key, anchor: e["anchor"].as_bool().unwrap_or(false) });
     }
     for e in v["retired"].as_array().ok_or_else(shape)? {
         let fingerprint = e["fingerprint"].as_str().and_then(Fingerprint::parse_hex).ok_or_else(shape)?;
@@ -737,6 +775,8 @@ fn key_set_of(v: &Value) -> Result<KeySetAnswer, Halt> {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::{Arc, Mutex};
+
     use super::*;
 
     #[test]
@@ -758,6 +798,22 @@ mod tests {
         }
         let rej = json!({"code": "not_an_account", "disposition": "reorder", "op": "key_set", "resp": "rejected"});
         assert_eq!(key_set_of(&rej).unwrap(), KeySetAnswer::NotAnAccount);
+    }
+
+    /// AUTH-1.7 at the decode: an enrolled entry is admitted only where its
+    /// fingerprint is its key's hash, so a lookup by fingerprint finds the
+    /// key it names; an entry whose two disagree is no `key_set` answer.
+    #[test]
+    fn an_enrolled_entry_is_admitted_only_where_its_fingerprint_is_its_keys() {
+        let key = skep_signature::HybridSigner::from_seed(skep_signature::TAG_MLDSA65_ED25519, &[7; 32]).expect("tag 1").public_key().clone();
+        let answer = |fingerprint: String| json!({"as_of": 9, "resp": "key_set", "retired": [], "enrolled": [{"alg": key.alg(), "key": key.to_hex(), "fingerprint": fingerprint, "anchor": true}]});
+        let fp = Fingerprint::of(&key);
+        match key_set_of(&answer(fp.to_hex())).unwrap() {
+            KeySetAnswer::Set(set) => assert!(set.enrolled(&fp).is_some_and(|e| e.anchor && e.key == key)),
+            KeySetAnswer::NotAnAccount => panic!(),
+        }
+        let err = key_set_of(&answer("ab".repeat(32))).expect_err("a fingerprint its key does not hash to");
+        assert!(err.to_string().contains("not a key_set answer"), "{err}");
     }
 
     #[test]
@@ -785,13 +841,26 @@ mod tests {
         assert!(Rejection::of(&json!({"resp":"ack","at":3})).is_none());
     }
 
-    /// A board that answers every request with the death signal.
-    struct AlwaysClosed;
+    /// A board that answers every request with one body, `200` — the death
+    /// signal on its head where `closed` — keeping each request it serves
+    /// beside the origin it was dialed at.
+    struct Answering {
+        body: Vec<u8>,
+        closed: bool,
+        sent: Mutex<Vec<(Origin, Request)>>,
+    }
 
-    impl Dialer for AlwaysClosed {
-        fn exchange(&self, _origin: &Origin, _req: &Request) -> Result<Response, crate::dial::DialError> {
-            let headers = crate::dial::Headers(vec![("Skepd-Session".into(), "closed".into())]);
-            Ok(Response { status: 200, headers, body: br#"{"resp":"key_set","as_of":1,"enrolled":[],"retired":[]}"#.to_vec() })
+    impl Answering {
+        fn new(body: &str, closed: bool) -> Answering {
+            Answering { body: body.as_bytes().to_vec(), closed, sent: Mutex::new(Vec::new()) }
+        }
+    }
+
+    impl Dialer for Answering {
+        fn exchange(&self, origin: &Origin, req: &Request) -> Result<Response, crate::dial::DialError> {
+            self.sent.lock().unwrap().push((origin.clone(), req.clone()));
+            let headers = crate::dial::Headers(if self.closed { vec![("Skepd-Session".into(), "closed".into())] } else { Vec::new() });
+            Ok(Response { status: 200, headers, body: self.body.clone() })
         }
 
         fn stream(
@@ -805,12 +874,18 @@ mod tests {
         }
     }
 
+    fn origin() -> Origin {
+        Origin::parse("http://127.0.0.1:8642").unwrap()
+    }
+
     /// The death signal is the board's to settle: under a token it is the
     /// session's answer; on a token-free read it is a fault, halted at the
-    /// door — never an empty set, an absent row or a missing head.
+    /// door — never an empty set, an absent row or a missing head. One
+    /// dialer, shared through an `Arc`, serves every board that holds it.
     #[test]
     fn a_guest_read_halts_on_the_death_signal_and_a_session_reads_it() {
-        let board = Board::new(Origin::parse("http://127.0.0.1:8642").unwrap(), Box::new(AlwaysClosed));
+        let dialer = Arc::new(Answering::new(r#"{"resp":"key_set","as_of":1,"enrolled":[],"retired":[]}"#, true));
+        let board = Board::new(origin(), dialer.clone());
         let token = Token::parse("9f3a6c21d4b8e07a5c1b2d4e6f708192").unwrap();
         let fault = |h: Halt| assert!(h.to_string().contains("a token-free read met the death signal"), "{h}");
         fault(board.guest(&frames::key_set("1.0.1")).unwrap_err());
@@ -820,5 +895,53 @@ mod tests {
         fault(board.changes_key(3).unwrap_err());
         assert_eq!(board.op(Some(&token), &frames::key_set("1.0.1")).unwrap(), Answer::Closed);
         assert_eq!(board.op_at(Some(&token), 3, &frames::key_set("1.0.1")).unwrap(), AtAnswer::Closed);
+        let shared: Arc<dyn Dialer> = dialer.clone();
+        fault(Board::new(origin(), shared).key_set("1.0.1").unwrap_err());
+        assert_eq!(dialer.sent.lock().unwrap().len(), 8, "both boards rode the one dialer");
+    }
+
+    /// A board signed for another origin than it dials (AUTH-4.57 (a)'s
+    /// client half): every request goes to the dialed origin, and a signed
+    /// session body names the SIGNED one (AUTH-4.8) — its scope where the
+    /// session is scoped (AUTH-6.2) — while a bare body names the principal
+    /// alone.
+    #[test]
+    fn a_board_signing_for_another_origin_dials_its_own_and_frames_the_signed_one() {
+        let signed = Origin::parse("https://board.example").unwrap();
+        let dialer = Arc::new(Answering::new("{}", false));
+        let board = Board::new(origin(), dialer.clone()).signing_for(signed.clone());
+        assert_eq!((board.dialed(), board.signed()), (&origin(), &signed));
+        let nonce = "ab".repeat(32);
+        for scope in [Scope::Content, Scope::Full] {
+            let _ = board.session_open(SessionBody::Signed { principal: 7, nonce: &nonce, sig_hex: "cd", scope });
+        }
+        let _ = board.session_open(SessionBody::Bare { principal: 0 });
+        let sent = dialer.sent.lock().unwrap();
+        assert!(sent.iter().all(|(dialed, req)| *dialed == origin() && req.path == "/session"), "every request dials the dialed origin");
+        let body = |i: usize| serde_json::from_slice::<Value>(&sent[i].1.body).unwrap();
+        assert_eq!(body(0), json!({"principal": 7, "nonce": nonce, "origin": "https://board.example", "scope": "content", "sig": "cd"}));
+        assert_eq!(body(1), json!({"principal": 7, "nonce": nonce, "origin": "https://board.example", "sig": "cd"}));
+        assert_eq!(body(2), json!({"principal": 0}));
+    }
+
+    /// A challenge is the board's nonce and TTL, never a sentinel: a body
+    /// missing either, or naming a TTL of zero, halts naming the member, and
+    /// a whole one answers the TTL as a duration.
+    #[test]
+    fn a_challenge_missing_its_nonce_or_its_ttl_is_refused_by_name() {
+        let nonce = "ab".repeat(32);
+        let challenge = |body: String| Board::new(origin(), Answering::new(&body, false)).challenge(7);
+        let whole = challenge(format!(r#"{{"nonce":"{nonce}","principal":7,"ttl_ms":60000}}"#)).expect("a whole challenge");
+        assert_eq!((whole.nonce.as_str(), whole.principal, whole.ttl), (nonce.as_str(), 7, Duration::from_secs(60)));
+        for (body, member) in [
+            (r#"{"principal":7,"ttl_ms":60000}"#.to_string(), "nonce"),
+            (r#"{"nonce":"","principal":7,"ttl_ms":60000}"#.to_string(), "nonce"),
+            (format!(r#"{{"nonce":"{nonce}","principal":7}}"#), "ttl_ms"),
+            (format!(r#"{{"nonce":"{nonce}","principal":7,"ttl_ms":0}}"#), "ttl_ms"),
+        ] {
+            let halt = challenge(body).expect_err("no challenge");
+            assert!(halt.to_string().contains(&format!("the challenge carried no {member}")), "{halt}");
+            assert_eq!(halt.exit_code(), 3);
+        }
     }
 }

@@ -24,11 +24,11 @@ use skep_client::person::{Person, Public, Question};
 use skep_client::ceremony::first_session::{first_session, FirstSessionReads};
 use skep_client::ceremony::handshake::{handshake, key_face, Site};
 use skep_client::derive::records::{compare_whole_set, credential_records, Difference, Held};
-use skep_client::derive::{origin_arm, precheck, principal_of, walk_to_set, KeyDiagnosis, Mode};
+use skep_client::derive::{origin_arm, precheck, principal_of, walk_to_set, Mode};
 use skep_client::dial::{plaintext_non_loopback_warning, PlainHttp};
 use skep_client::halt::Halt;
 use skep_client::sheet::{group_hex, render_inert, Label};
-use skep_client::store::{arm4_face, store_halt, Binding, FileStore, KeyFacts, KeySelector, KeyStore, Purpose, StoreError};
+use skep_client::store::{arm4_face, Binding, FileStore, KeyFacts, KeySelector, KeyStore, Purpose, StoreError};
 use skep_identity::{encode_enroll, Enrollment, Fingerprint};
 
 use crate::args::{Command, Usage};
@@ -67,7 +67,7 @@ fn no_terminal(door: &str) -> i32 {
 
 fn board_of(c: &Command) -> Result<Board, Usage> {
     let origin = c.board()?;
-    Ok(Board::new(origin, Box::new(PlainHttp::new())))
+    Ok(Board::new(origin, PlainHttp::new()))
 }
 
 fn store_of(c: &Command) -> Result<FileStore, Usage> {
@@ -179,12 +179,12 @@ pub fn keygen(c: &Command) -> i32 {
     };
     let id = match store.generate(Some(label.clone())) {
         Ok(id) => id,
-        Err(e) => return halt(store_halt(e)),
+        Err(e) => return halt(e.into()),
     };
     let path = store.key_path(&id.0);
     let key = match store.select(&KeySelector::Path(&path), Purpose::Read) {
         Ok(k) => k,
-        Err(e) => return halt(store_halt(e)),
+        Err(e) => return halt(e.into()),
     };
     talk(custody_line(&path));
     let mut entries = Vec::new();
@@ -295,7 +295,7 @@ pub fn claim(c: &Command) -> i32 {
         Ok(s) => s,
         Err(u) => return usage(u),
     };
-    if let Some(w) = plaintext_non_loopback_warning(&board.dialed) {
+    if let Some(w) = plaintext_non_loopback_warning(board.dialed()) {
         talk(w);
     }
     let (host_name, date) = host_name_and_date();
@@ -321,7 +321,7 @@ pub fn claim(c: &Command) -> i32 {
             talk(format!("this board is yours — account {}, principal {}, key {}", done.account, done.principal, done.fingerprint));
             data(format!("account {}", done.account));
             data(format!("principal {}", done.principal));
-            data(format!("origin {}", board.dialed));
+            data(format!("origin {}", board.dialed()));
             if let Some(space) = &done.agent_space {
                 data(format!("agent space {space}"));
             }
@@ -338,12 +338,12 @@ pub fn claim(c: &Command) -> i32 {
 fn select_key(c: &Command, store: &FileStore, board: &Board, principal: Option<u64>) -> Result<KeyFacts, Halt> {
     let sel = match c.key() {
         Some(path) => store.select(&KeySelector::Path(&path), Purpose::Sign),
-        None => store.select(&KeySelector::Board { origin: &board.dialed, principal }, Purpose::Sign),
+        None => store.select(&KeySelector::Board { origin: board.dialed(), principal }, Purpose::Sign),
     };
     match sel {
         Ok(key) => Ok(key),
         Err(StoreError::NoSelection { keys }) => Err(arm4_face(store, &keys, Mode::of(&board.health()?))),
-        Err(e) => Err(store_halt(e)),
+        Err(e) => Err(e.into()),
     }
 }
 
@@ -352,7 +352,7 @@ fn principal_or_bound(c: &Command, store: &FileStore, board: &Board) -> Result<u
     if let Ok(Some(p)) = c.principal() {
         return Ok(p);
     }
-    let ps = store.principals_at(&board.dialed).map_err(store_halt)?;
+    let ps = store.principals_at(board.dialed())?;
     match ps.as_slice() {
         [one] => Ok(*one),
         [] => Err(Halt::face("no principal", "--principal (or SKEP_PRINCIPAL) is absent and the store holds no binding for this board", "pass --principal")),
@@ -393,7 +393,7 @@ pub fn session(c: &Command) -> i32 {
     }
     // The plaintext non-loopback WARNING, ahead of everything a signed
     // session needs (AUTH-4.53; §9 item 23: a warning, never a refusal).
-    if let Some(w) = plaintext_non_loopback_warning(&board.dialed) {
+    if let Some(w) = plaintext_non_loopback_warning(board.dialed()) {
         talk(w);
     }
     let store = match store_of(c) {
@@ -410,7 +410,7 @@ pub fn session(c: &Command) -> i32 {
     };
     let signer = match store.signer(&KeySelector::Path(&key.path)) {
         Ok(s) => s,
-        Err(e) => return halt(store_halt(e)),
+        Err(e) => return halt(e.into()),
     };
     // CONTENT scope only (§9 item 45; RES-63); the token handed out LIVE.
     let session = match handshake(&board, Scope::Content, &*signer, principal, Site::Session) {
@@ -433,7 +433,7 @@ pub fn fingerprint(c: &Command) -> i32 {
     let keys: Vec<KeyFacts> = if let Some(path) = c.key() {
         match store.select(&KeySelector::Path(&path), Purpose::Read) {
             Ok(k) => vec![k],
-            Err(e) => return halt(store_halt(e)),
+            Err(e) => return halt(e.into()),
         }
     } else if let Some(select) = c.value("--select", None) {
         match store.select(&KeySelector::select(&select), Purpose::Read) {
@@ -443,12 +443,12 @@ pub fn fingerprint(c: &Command) -> i32 {
                 return halt(Halt::face(format!("`{select}` matches more than one key"), format!("neither a fingerprint prefix nor a label is unique by rule (AUTH-5.3):\n  {}", list.join("\n  ")), "give a longer prefix; never a pick"));
             }
             Err(StoreError::NotFound { select }) => return halt(Halt::face(format!("no key in the store matches `{select}`"), "the store's keys are listed by `skep fingerprint --dir`", "check the selector")),
-            Err(e) => return halt(store_halt(e)),
+            Err(e) => return halt(e.into()),
         }
     } else {
         match store.list() {
             Ok(keys) => keys,
-            Err(e) => return halt(store_halt(e)),
+            Err(e) => return halt(e.into()),
         }
     };
     let any_binding = bindings.iter().any(|b| matches!(b, Binding::Enrollment { .. }));
@@ -465,7 +465,7 @@ pub fn fingerprint(c: &Command) -> i32 {
         let unbound = bound.is_empty();
         if c.switch("--json") {
             json_rows.push(serde_json::json!({
-                "alg": key.alg,
+                "alg": key.public.alg(),
                 "fingerprint": fp.to_hex(),
                 "label": key.label,
                 "anchor": key.anchor,
@@ -476,7 +476,7 @@ pub fn fingerprint(c: &Command) -> i32 {
             }));
             continue;
         }
-        data(format!("{} {}", key.alg, key.public.to_hex()));
+        data(format!("{} {}", key.public.alg(), key.public.to_hex()));
         data(fp.to_hex());
         data(group_hex(&fp.to_hex()));
         data(format!("label {}", key.label.as_deref().map(render_inert).unwrap_or_else(|| "(none)".into())));
@@ -529,7 +529,7 @@ fn held_set(c: &Command, store: &FileStore, device: Option<&KeyFacts>, payload_i
         for path in anchors {
             // The file's PUBLIC facts and nothing else — the lookup hands out
             // no seed; no session, nothing written.
-            let artifact = store.select(&KeySelector::Path(Path::new(&path)), Purpose::Read).map_err(store_halt)?;
+            let artifact = store.select(&KeySelector::Path(Path::new(&path)), Purpose::Read)?;
             held.push(Held { fingerprint: artifact.fingerprint, anchor: artifact.anchor, label: artifact.label.clone() });
         }
         if let Some(d) = device {
@@ -575,7 +575,7 @@ pub fn verify(c: &Command) -> i32 {
         Ok(h) => h,
         Err(h) => return halt(h),
     };
-    if let Err(h) = origin_arm(&board.signed, &health) {
+    if let Err(h) = origin_arm(board.signed(), &health) {
         return halt(h);
     }
     checks.push("origin");
@@ -588,7 +588,7 @@ pub fn verify(c: &Command) -> i32 {
     let key = match c.key() {
         Some(path) => match store.select(&KeySelector::Path(&path), Purpose::Read) {
             Ok(k) => k,
-            Err(e) => return halt(store_halt(e)),
+            Err(e) => return halt(e.into()),
         },
         None => match select_key(c, &store, &board, Some(principal)) {
             Ok(k) => k,
@@ -601,7 +601,7 @@ pub fn verify(c: &Command) -> i32 {
     };
     checks.push("key_set");
     let own = [(key.fingerprint, key.public.clone())];
-    if let Err(h) = key_face(&board, &pre, &key.fingerprint, &own, Site::Session) {
+    if let Err(h) = key_face(&board, &pre.walk, &key.fingerprint, &own, Site::Session) {
         return halt(h);
     }
     // THE WHOLE-SET COMPARE, where the person holds what this device
@@ -703,8 +703,8 @@ fn facts_of(c: &Command, board: &Board) -> Result<(String, u64), Halt> {
                 (Some("account"), Some(a)) => account = Some(a.to_string()),
                 (Some("principal"), Some(p)) => principal = p.parse().ok(),
                 (Some("origin"), Some(o)) => {
-                    if o != board.dialed.as_str() {
-                        return Err(Halt::face(format!("the reply names origin {o} and this command dials {}", board.dialed), "the reply came from another board", "dial the board the reply names"));
+                    if o != board.dialed().as_str() {
+                        return Err(Halt::face(format!("the reply names origin {o} and this command dials {}", board.dialed()), "the reply came from another board", "dial the board the reply names"));
                     }
                 }
                 _ => {}
@@ -748,7 +748,7 @@ pub fn bind(c: &Command) -> i32 {
         Ok(h) => h,
         Err(h) => return halt(h),
     };
-    if let Err(h) = origin_arm(&board.signed, &health) {
+    if let Err(h) = origin_arm(board.signed(), &health) {
         return halt(h);
     }
     match principal_of(&board, &account) {
@@ -782,8 +782,7 @@ pub fn bind(c: &Command) -> i32 {
         Err(h) => return halt(h),
     };
     let own = [(key.fingerprint, key.public.clone())];
-    let pre = skep_client::derive::PreCheck { health: health.clone(), mode: Mode::of(&health), account: account.clone(), walk: walk.clone(), diagnosis: KeyDiagnosis::of(&walk.set, &key.fingerprint) };
-    if let Err(h) = key_face(&board, &pre, &key.fingerprint, &own, Site::Tail) {
+    if let Err(h) = key_face(&board, &walk, &key.fingerprint, &own, Site::Tail) {
         return halt(h);
     }
     // At a HANDOFF LANDING the set is compared WHOLE, ahead of
@@ -820,12 +819,12 @@ pub fn bind(c: &Command) -> i32 {
     };
     let mut agent_space = None;
     if reads.anything_owed() {
-        if let Some(w) = plaintext_non_loopback_warning(&board.dialed) {
+        if let Some(w) = plaintext_non_loopback_warning(board.dialed()) {
             talk(w);
         }
         let signer = match store.signer(&KeySelector::Path(&key.path)) {
             Ok(s) => s,
-            Err(e) => return halt(store_halt(e)),
+            Err(e) => return halt(e.into()),
         };
         let session = match handshake(&board, Scope::Content, &*signer, principal, Site::Tail) {
             Ok(s) => s,
@@ -845,7 +844,7 @@ pub fn bind(c: &Command) -> i32 {
                 if done.setup_stopped_seeded {
                     talk(format!("{} already holds a set of its own: the setup act stops and no agents' home is created (AUTH-5.90 (iii)'s permanent fact)", reads.agent_space));
                 } else if let Some(d) = done.setup_skipped {
-                    talk(format!("the setup act was not sent: this key stands {d:?} in the set that opens {}", reads.agent_space));
+                    talk(format!("the setup act was not sent: this key stands {d} in the set that opens {}", reads.agent_space));
                 } else if done.agent_space_principal.is_some() {
                     agent_space = Some(reads.agent_space.clone());
                 }
@@ -854,13 +853,13 @@ pub fn bind(c: &Command) -> i32 {
     } else {
         talk("nothing is owed at this account's first signed session: no session is opened and no record is written");
     }
-    let line = Binding::Enrollment { origin: board.dialed.clone(), principal, account: account.clone(), fingerprint: key.fingerprint };
+    let line = Binding::Enrollment { origin: board.dialed().clone(), principal, account: account.clone(), fingerprint: key.fingerprint };
     if let Err(w) = store.bind(&line) {
         talk(w.to_string());
     }
     data(format!("account {account}"));
     data(format!("principal {principal}"));
-    data(format!("origin {}", board.dialed));
+    data(format!("origin {}", board.dialed()));
     if let Some(s) = agent_space {
         data(format!("agent space {s}"));
     }
@@ -917,7 +916,7 @@ pub fn enroll(c: &Command) -> i32 {
         Ok(p) => p,
         Err(h) => return halt(h),
     };
-    if let Some(w) = plaintext_non_loopback_warning(&board.dialed) {
+    if let Some(w) = plaintext_non_loopback_warning(board.dialed()) {
         talk(w);
     }
     let mut person = Terminal::new();
@@ -954,7 +953,7 @@ pub fn recover(c: &Command) -> i32 {
         Ok(p) => p,
         Err(h) => return halt(h),
     };
-    if let Some(w) = plaintext_non_loopback_warning(&board.dialed) {
+    if let Some(w) = plaintext_non_loopback_warning(board.dialed()) {
         talk(w);
     }
     // `--key`/`SKEP_KEY` is NOT consulted here: the new device key is the
@@ -1015,7 +1014,7 @@ pub fn retire(c: &Command) -> i32 {
         Ok(p) => p,
         Err(h) => return halt(h),
     };
-    if let Some(w) = plaintext_non_loopback_warning(&board.dialed) {
+    if let Some(w) = plaintext_non_loopback_warning(board.dialed()) {
         talk(w);
     }
     let mut person = Terminal::new();
@@ -1056,7 +1055,7 @@ pub fn rotate(c: &Command) -> i32 {
         },
         None => None,
     };
-    if let Some(w) = plaintext_non_loopback_warning(&board.dialed) {
+    if let Some(w) = plaintext_non_loopback_warning(board.dialed()) {
         talk(w);
     }
     let mut person = Terminal::new();
@@ -1106,7 +1105,7 @@ pub fn handoff(c: &Command) -> i32 {
         Ok(p) => p,
         Err(h) => return halt(h),
     };
-    if let Some(w) = plaintext_non_loopback_warning(&board.dialed) {
+    if let Some(w) = plaintext_non_loopback_warning(board.dialed()) {
         talk(w);
     }
     let mut person = Terminal::new();
@@ -1117,14 +1116,14 @@ pub fn handoff(c: &Command) -> i32 {
             talk(if already { "beat (a) stands done: the address is printed again" } else { "beat (a) done: hand the address to the recipient; they run `skep accept --board <origin> --account <address>` and return their record for `skep handoff --payload`" });
             data(format!("account {account}"));
             data(format!("principal {principal}"));
-            data(format!("origin {}", board.dialed));
+            data(format!("origin {}", board.dialed()));
             0
         }
         Ok(HandoffOutcome::Seeded { facts: f, grade, reconciled, warnings }) => {
             for w in &warnings {
                 talk(w);
             }
-            talk(format!("the genesis is written at the {grade:?} grade{}; return the three facts below to the recipient for `skep bind`", if reconciled { " (reconciled from the records)" } else { "" }));
+            talk(format!("the genesis is written at the {grade} grade{}; return the three facts below to the recipient for `skep bind`", if reconciled { " (reconciled from the records)" } else { "" }));
             facts(&f);
             0
         }
@@ -1158,11 +1157,11 @@ pub fn accept(c: &Command) -> i32 {
     // `--board` and `--account` REQUIRED: a run missing either ASKS and
     // generates nothing (AUTH RES-162).
     let board = match c.board() {
-        Ok(o) => Board::new(o, Box::new(PlainHttp::new())),
+        Ok(o) => Board::new(o, PlainHttp::new()),
         Err(_) => {
             let Ok(text) = person.ask(Public(Question { text: "the board the account is on (a canonical origin, from the giver): ".into() })) else { return halt(Halt::face("no board was named", "the beat asks and generates nothing", "re-run with --board")) };
             match text.trim().parse::<skep_client::Origin>() {
-                Ok(o) => Board::new(o, Box::new(PlainHttp::new())),
+                Ok(o) => Board::new(o, PlainHttp::new()),
                 Err(e) => return usage(Usage(format!("--board: '{}' is {e}", text.trim()))),
             }
         }
@@ -1174,7 +1173,7 @@ pub fn accept(c: &Command) -> i32 {
             _ => return halt(Halt::face("no address was named", "AUTH RES-162: the beat holds the address before the keys are made, and generates nothing without it", "ask the giver for the address and re-run with --account")),
         },
     };
-    if let Some(w) = plaintext_non_loopback_warning(&board.dialed) {
+    if let Some(w) = plaintext_non_loopback_warning(board.dialed()) {
         talk(w);
     }
     let (host_name, date) = host_name_and_date();

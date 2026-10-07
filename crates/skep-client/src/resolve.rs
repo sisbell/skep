@@ -12,7 +12,7 @@ use skep_address::Address;
 use skep_resolve::{BoardError, GuestCost, Method, Resolution, SystemResolver, Transport, TransportError, Transports};
 
 use crate::dial::{Dialer, Request};
-use crate::origin::Origin;
+use crate::origin::{NotCanonical, Origin};
 
 /// `skep_resolve::Transport` over one `Dialer` at one origin.
 pub struct DialerTransport {
@@ -52,17 +52,22 @@ impl Transport for DialerTransport {
     }
 }
 
-/// The resolver's `Origin` as this crate's, where the two grammars agree
-/// (both reproduce the daemon's; a divergence is `None`).
-pub fn origin_of(o: &skep_resolve::Origin) -> Option<Origin> {
-    Origin::parse(o.as_str())
+/// The resolver's `Origin` as this crate's, where the two grammars agree —
+/// both reproduce the daemon's (AUTH-4.2) — and [`NotCanonical`] where they
+/// diverge.
+impl TryFrom<&skep_resolve::Origin> for Origin {
+    type Error = NotCanonical;
+
+    fn try_from(o: &skep_resolve::Origin) -> Result<Origin, NotCanonical> {
+        o.as_str().parse()
+    }
 }
 
 /// A `Dial` for `skep_resolve::Mirror` over `dialer`: the shipped dial's
 /// shape, this crate's transport behind it.
 pub fn dial(dialer: Arc<dyn Dialer>) -> impl Fn(&skep_resolve::Origin) -> Result<Box<dyn Transport>, TransportError> {
     move |o: &skep_resolve::Origin| {
-        let origin = origin_of(o).ok_or_else(|| TransportError::Response(format!("{o} is not a canonical origin here")))?;
+        let origin = Origin::try_from(o).map_err(|_| TransportError::Response(format!("{o} is not a canonical origin here")))?;
         Ok(Box::new(DialerTransport::new(dialer.clone(), origin)) as Box<dyn Transport>)
     }
 }
@@ -73,4 +78,19 @@ pub fn dial(dialer: Arc<dyn Dialer>) -> impl Fn(&skep_resolve::Origin) -> Result
 pub fn guest_resolve(dialer: Arc<dyn Dialer>, registry: &Origin, prefix: &Address) -> Result<(Resolution, GuestCost), BoardError> {
     let board = skep_resolve::Board::new(Box::new(DialerTransport::new(dialer, registry.clone())));
     skep_resolve::guest_resolve(&board, prefix, &SystemResolver, &Transports::default())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The resolver's origin converts where the two grammars agree, its text
+    /// kept byte for byte.
+    #[test]
+    fn a_resolver_origin_converts_to_this_crates() {
+        for text in ["http://127.0.0.1:8642", "https://board.example", "http://[::1]:8642"] {
+            let theirs = skep_resolve::Origin::parse(text).expect("canonical to the resolver");
+            assert_eq!(Origin::try_from(&theirs).map(|o| o.as_str().to_string()), Ok(text.to_string()));
+        }
+    }
 }

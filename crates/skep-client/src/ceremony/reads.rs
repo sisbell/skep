@@ -59,7 +59,7 @@ impl A4Cell {
     /// non-loopback origin is the bind-override notebook; any other dial is a
     /// served board.
     pub fn venue(board: &Board, health: &Health) -> A4Cell {
-        if board.dialed.names_loopback_host() {
+        if board.dialed().names_loopback_host() {
             let overridden = health.origins().iter().any(|o| crate::origin::Origin::parse(o).is_some_and(|x| !x.names_loopback_host()));
             return if overridden { A4Cell::BindOverrideNotebook } else { A4Cell::LoopbackNotebook };
         }
@@ -91,13 +91,25 @@ pub struct Reads {
     pub cell: A4Cell,
 }
 
-/// R0, in its order. `enrolls` names a walk whose act is an ENROLLMENT
-/// (recover's device arm, rotate), which halts at an account that opens by
-/// reference; a retirement is REDIRECTED to the set account instead.
-pub fn r0(board: &Board, person: &mut dyn Person, principal: u64, enrolls: bool, own: &[(Fingerprint, PublicKey)]) -> Result<Reads, Halt> {
+/// The credential act the walk over R0's reads makes at the account it
+/// read — what R0 decides by at an account that opens BY REFERENCE.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Act {
+    /// An ENROLLMENT (`recover`'s two arms, `rotate`): no key is enrolled AT
+    /// an account that opens by reference, so R0 halts there naming where
+    /// the act is made (AUTH-6.37).
+    Enrollment,
+    /// A RETIREMENT (`retire`): REDIRECTED to the set account, where the key
+    /// stands as that account's own (`not_holder_retirement`'s redirect,
+    /// AUTH-3.56).
+    Retirement,
+}
+
+/// R0, in its order, for a walk whose act is `act`.
+pub fn r0(board: &Board, person: &mut dyn Person, principal: u64, act: Act, own: &[(Fingerprint, PublicKey)]) -> Result<Reads, Halt> {
     let health = board.health()?;
     // The ORIGIN ARM first (AUTH-5.24; AUTH-5.65).
-    origin_arm(&board.signed, &health)?;
+    origin_arm(board.signed(), &health)?;
     let mode = Mode::of(&health);
     if mode == Mode::Unclaimed {
         // AUTH-5.60 step 1's LOST-with-no-volume arm; AUTH-5.72's notebook arm.
@@ -127,7 +139,7 @@ pub fn r0(board: &Board, person: &mut dyn Person, principal: u64, enrolls: bool,
         Some(p) => p,
         None => principal,
     };
-    if walk.by_reference() && enrolls {
+    if walk.by_reference() && act == Act::Enrollment {
         // AUTH-6.37; the enrollment-side twin of `not_holder_retirement`'s
         // redirect (AUTH-3.56).
         return Err(Halt::face(

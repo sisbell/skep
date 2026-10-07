@@ -186,6 +186,8 @@ impl fmt::Display for Abandoned {
     }
 }
 
+impl std::error::Error for Abandoned {}
+
 /// THE SEAM.
 pub trait Person {
     /// A statement, said (PUBLIC).
@@ -235,6 +237,8 @@ mod tests {
         assert_eq!(p.ask(Public(Question { text: "name".into() })), Err(Abandoned));
         assert!(p.said("PUBLIC say [AUTH-5.74]"));
         assert!(p.said("ABANDON at ask"));
+        let left: Box<dyn std::error::Error> = Box::new(Abandoned);
+        assert_eq!(left.to_string(), "the person abandoned the walk", "an embedder's `?` carries it");
     }
 
     /// The SECRET class prints no key material: the marker prints as

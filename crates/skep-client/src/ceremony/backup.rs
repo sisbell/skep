@@ -27,7 +27,7 @@ use skep_signature::HybridSigner;
 use super::say;
 use crate::halt::Halt;
 use crate::person::{Abandoned, Destination, LabelBox, Person, Public, Question, Retype, Retyped, Secret, Sheet};
-use crate::sheet::{Facts, KeyFile, Label, Seed};
+use crate::sheet::{typed_prefix_matches, Facts, KeyFile, Label, Seed};
 use crate::sign::{fresh_bytes, Signer};
 use crate::store::FileStore;
 
@@ -78,10 +78,19 @@ pub struct AnchorArtifact {
     pub label: Label,
     /// The file, where it stands (destroyed under AUTH-5.41's offer: `None`).
     pub file: Option<PathBuf>,
+    /// The print, under `--paper` — `None` on the file form, which prints
+    /// nothing.
+    pub print: Option<Print>,
+}
+
+/// What a printed anchor's re-type made of its print (AUTH-5.41).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Print {
     /// The print passed its re-type — the KEPT artifact is the print.
-    pub print_verified: bool,
-    /// A print exists (under `--paper`) and was NOT verified — labelled so.
-    pub print_unverified: bool,
+    Verified,
+    /// The print was NOT verified — labelled so, and the file stays the
+    /// verified artifact.
+    Unverified,
 }
 
 /// The moment's outcome: two anchors, public facts alone.
@@ -278,7 +287,7 @@ pub fn backup_moment(person: &mut dyn Person, venue: &Venue, opts: &BackupOption
 pub(crate) fn export_pair(person: &mut dyn Person, opts: &BackupOptions, labels: &[Label], facts: Option<&Facts>) -> Result<BackupOutcome, Halt> {
     // Step 3: generate the pair, each seed born in its file's own zeroing
     // value — no copy of it outlives step 5's DROP.
-    let mut files: Vec<KeyFile> = labels.iter().map(|l| KeyFile::new(Seed::fresh(), true, Some(l.clone()), facts)).collect();
+    let files: Vec<KeyFile> = labels.iter().map(|l| KeyFile::new(Seed::fresh(), true, Some(l.clone()), facts)).collect();
     let publics: Vec<(PublicKey, Fingerprint)> = files.iter().map(|f| (f.public.clone(), f.fingerprint)).collect();
     // Step 4: EXPORT — the file, each to its own destination.
     let mut paths: Vec<PathBuf> = Vec::new();
@@ -311,7 +320,7 @@ pub(crate) fn export_pair(person: &mut dyn Person, opts: &BackupOptions, labels:
     }
     // Step 5: DROP — the seeds zeroed, the signers released, before anything
     // is read back.
-    drop(std::mem::take(&mut files));
+    drop(files);
     // Step 6: DISMISS, the paper path alone.
     if opts.paper {
         person.dismiss();
@@ -325,8 +334,7 @@ pub(crate) fn export_pair(person: &mut dyn Person, opts: &BackupOptions, labels:
             fingerprint,
             label: label.clone(),
             file: Some(path),
-            print_verified: false,
-            print_unverified: opts.paper,
+            print: opts.paper.then_some(Print::Unverified),
         })
         .collect();
     Ok(BackupOutcome { anchors, one_place })
@@ -343,10 +351,9 @@ fn run_once(person: &mut dyn Person, venue: &Venue, opts: &BackupOptions, labels
         let path = artifact.file.clone().expect("an exported anchor's file stands");
         if opts.paper {
             let passed = retype_from_print(person, &artifact.label, i, &artifact.fingerprint)?.is_some();
-            artifact.print_verified = passed;
-            artifact.print_unverified = !passed;
+            artifact.print = Some(if passed { Print::Verified } else { Print::Unverified });
         }
-        if !artifact.print_verified {
+        if artifact.print != Some(Print::Verified) {
             // The file read back from the path it wrote — the disk channel.
             if read_back_from_file(&path, &artifact.public, &artifact.fingerprint).is_none() {
                 say(person, "§4.1 S3", format!("the anchor file {} did not read back as the key it names; it is destroyed (never a verified artifact) and the moment re-runs (attempt {})", path.display(), attempt + 1));
@@ -358,7 +365,7 @@ fn run_once(person: &mut dyn Person, venue: &Venue, opts: &BackupOptions, labels
         }
         // Step 9: AUTH-5.41 where BOTH exist and the print passed — offer to
         // destroy the file, never the act unasked.
-        if artifact.print_verified {
+        if artifact.print == Some(Print::Verified) {
             let destroy = person
                 .yes_no(Public(Question { text: format!("the print of anchor {} passed its re-type and is the KEPT artifact; destroy the file {} and keep the print? (AUTH-5.40)", artifact.label, path.display()) }))
                 .map_err(abandoned)?;
@@ -367,7 +374,7 @@ fn run_once(person: &mut dyn Person, venue: &Venue, opts: &BackupOptions, labels
                 artifact.file = None;
             }
         }
-        if artifact.print_unverified {
+        if artifact.print == Some(Print::Unverified) {
             say(person, "AUTH-5.41", format!("anchor {}: the print is UNVERIFIED and the file {} is the verified artifact; a verified artifact is never destroyed in favor of an unverified one", artifact.label, path.display()));
         }
         anchors.push(artifact);
@@ -431,16 +438,13 @@ fn retype_from_print(person: &mut dyn Person, label: &Label, i: usize, fp: &Fing
         match typed {
             Retyped::Declined => return Ok(None),
             Retyped::Typed { seed_hex, fingerprint_prefix } => {
-                let seed = Seed::from_hex(seed_hex.trim());
-                let signer = seed.as_ref().map(|s| crate::sign::signer_from_seed(s.bytes()));
-                let derived = signer.as_ref().map(Signer::fingerprint);
-                let prefix_ok = fingerprint_prefix.len() >= 8 && fp.to_hex().starts_with(fingerprint_prefix.trim());
-                if derived == Some(*fp) && prefix_ok {
-                    let signer = signer.expect("derived");
-                    if !local_verify(&signer) {
-                        return Err(Halt::face("the typed seed derives the right key and still does not sign", "the client-local sign-and-verify failed", "this is this client's fault"));
+                if let Some(signer) = Seed::from_hex(seed_hex.trim()).map(|seed| crate::sign::signer_from_seed(seed.bytes())) {
+                    if Signer::fingerprint(&signer) == *fp && typed_prefix_matches(&fingerprint_prefix, fp) {
+                        if !local_verify(&signer) {
+                            return Err(Halt::face("the typed seed derives the right key and still does not sign", "the client-local sign-and-verify failed", "this is this client's fault"));
+                        }
+                        return Ok(Some(signer));
                     }
-                    return Ok(Some(signer));
                 }
                 say(person, "AUTH-5.39", "this is not the key on this paper — re-scan");
             }

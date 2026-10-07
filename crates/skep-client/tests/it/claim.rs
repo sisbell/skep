@@ -70,7 +70,7 @@ fn the_loop_claims_the_board_and_a_second_run_is_the_ours_tail() {
         assert!(name.starts_with("anchor-testhost-2026-10-04-") && name.ends_with(".skep-key"), "{name}");
         let file = KeyFile::parse(&std::fs::read(&files[0]).unwrap()).expect("a key file");
         assert!(file.anchor);
-        assert_eq!((file.account.as_deref(), file.principal, file.origin.as_ref().map(|o| o.as_str().to_string())), (Some("1.0.1"), Some(1), Some(board.dialed.as_str().to_string())));
+        assert_eq!((file.account.as_deref(), file.principal, file.origin.as_ref().map(|o| o.as_str().to_string())), (Some("1.0.1"), Some(1), Some(board.dialed().as_str().to_string())));
     }
     // The set: two anchors and the device key.
     let KeySetAnswer::Set(set) = board.key_set("1.0.1").unwrap() else { panic!("not an account") };
@@ -103,11 +103,11 @@ fn the_loop_claims_the_board_and_a_second_run_is_the_ours_tail() {
     let file = store.load(&store.key_path(&fp)).unwrap();
     let device = file.signer();
     let session = handshake(&board, Scope::Content, &device, 1, Site::Session).expect("a content session");
-    assert_eq!(session.scope, Scope::Content);
+    assert_eq!(session.scope(), Scope::Content);
     let extra = signer_from_seed(&[9; 32]);
     let err = deposit(
         &board,
-        &session.token,
+        session.token(),
         &Deposit {
             home: "1.0.1.0.1",
             subject: "1.0.1",
@@ -120,8 +120,13 @@ fn the_loop_claims_the_board_and_a_second_run_is_the_ours_tail() {
     assert!(err.to_string().contains("content_session"), "{err}");
     // The pre-check and the key face pass for the enrolled key.
     let pre = precheck(&board, 1, &fp).expect("pre-check");
-    assert_eq!(pre.diagnosis, KeyDiagnosis::Enrolled { anchor: false });
-    key_face(&board, &pre, &fp, &[(fp, file.public.clone())], Site::Session).expect("enrolled");
+    assert_eq!((pre.principal, pre.diagnosis), (1, KeyDiagnosis::Enrolled { anchor: false }));
+    key_face(&board, &pre.walk, &fp, &[(fp, file.public.clone())], Site::Session).expect("enrolled");
+    // The face judges the key it names: over the same reads, a key the set
+    // does not list is faced as one, whoever's pre-check made the reads.
+    let stranger = skep_client::sign::Signer::fingerprint(&extra);
+    let err = key_face(&board, &pre.walk, &stranger, &[], Site::Session).expect_err("in neither list");
+    assert!(err.to_string().contains(&format!("{stranger} is in neither list")), "{err}");
     session.close().expect("close");
 }
 
@@ -194,7 +199,7 @@ fn a_claim_interrupted_after_s4_resumes_at_s5_off_key_set() {
     assert_eq!(acked_addr(&v), Some("1.0.1.0.1"), "{v}");
     let anchors = dir.path().join("anchors");
     let mut p = Scripted::new(vec![Script::LabelDefault, Script::LabelDefault]);
-    let facts = Facts { account: "1.0.1".into(), principal: 1, origin: board.dialed.clone() };
+    let facts = Facts { account: "1.0.1".into(), principal: 1, origin: board.dialed().clone() };
     let backup = backup_moment(
         &mut p,
         &Venue::Notebook { facts },
@@ -262,7 +267,7 @@ fn the_persisted_new_id_is_read_back_and_the_space_is_delegated_under_it() {
     // The persisted line, as an interrupted run leaves it: the id chosen,
     // the frame never sent.
     let chosen: u64 = 424_242;
-    store.bind(&Binding::Enrollment { origin: board.dialed.clone(), principal: chosen, account: "1.0.1.1".into(), fingerprint: fp }).unwrap();
+    store.bind(&Binding::Enrollment { origin: board.dialed().clone(), principal: chosen, account: "1.0.1.1".into(), fingerprint: fp }).unwrap();
     assert_eq!(board.principal_prefix(chosen).unwrap(), None, "not yet delegated");
     // The tail resumes and delegates UNDER THE PERSISTED ID.
     let mut person = Scripted::new(vec![]);
@@ -287,7 +292,7 @@ fn a_persisted_new_id_spent_on_another_address_is_replaced_by_a_fresh_one() {
     let dir = tempfile::tempdir().expect("tempdir");
     let (_sd, board, store, fp) = claimed_without_its_tail(dir.path());
     // The cached line names principal 1 — registered, at 1.0.1.
-    store.bind(&Binding::Enrollment { origin: board.dialed.clone(), principal: 1, account: "1.0.1.1".into(), fingerprint: fp }).unwrap();
+    store.bind(&Binding::Enrollment { origin: board.dialed().clone(), principal: 1, account: "1.0.1.1".into(), fingerprint: fp }).unwrap();
     let mut person = Scripted::new(vec![]);
     let outcome = claim::notebook(&board, &store, &mut person, &opts(&dir.path().join("anchors"))).unwrap_or_else(|h| panic!("{h}"));
     let ClaimOutcome::Ours(done) = outcome else { panic!("{outcome:?}") };
@@ -295,7 +300,7 @@ fn a_persisted_new_id_spent_on_another_address_is_replaced_by_a_fresh_one() {
     let principal = principal_of(&board, "1.0.1.1").unwrap().expect("the space is seated");
     assert_ne!(principal, 1, "never the spent new_id");
     assert_eq!(board.principal_prefix(1).unwrap().as_deref(), Some("1.0.1"), "the spent id's own account is untouched");
-    assert_eq!(store.persisted_new_id(&board.dialed, "1.0.1.1").unwrap(), Some(principal), "the fresh new_id persisted, the newest line");
+    assert_eq!(store.persisted_new_id(board.dialed(), "1.0.1.1").unwrap(), Some(principal), "the fresh new_id persisted, the newest line");
 }
 
 /// wire.md §Rejections: a walk keys on the token `credential_refused`

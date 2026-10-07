@@ -43,7 +43,7 @@ fn the_hop_enrolls_another_devices_payload_from_a_full_session_and_appends_no_bi
 
     let mut person = Scripted::new(vec![Script::Confirm(true)]);
     let done = enroll(&board, &store_a, &mut person, &opts(&payload)).unwrap_or_else(|h| panic!("{h}\n{}", person.transcript.join("\n")));
-    assert_eq!((done.facts.account.as_str(), done.facts.principal, done.facts.origin.as_str()), ("1.0.1", 1, board.dialed.as_str()));
+    assert_eq!((done.facts.account.as_str(), done.facts.principal, done.facts.origin.as_str()), ("1.0.1", 1, board.dialed().as_str()));
     assert_eq!(done.fingerprints, vec![fp_b]);
     assert!(!done.reconciled);
     assert!(person.said("key to enroll — fingerprint re-derived") && person.said("phone") && person.said("PUBLIC, PERMANENT and UNCORRECTABLE"), "the comparison beat:\n{}", person.transcript.join("\n"));
@@ -89,7 +89,7 @@ fn the_hop_enrolls_another_devices_payload_from_a_full_session_and_appends_no_bi
     // A retired key's payload: I4's halt, exit 3.
     let a = key_file(&store_a, &fp_a).signer();
     let full = handshake(&board, Scope::Full, &a, 1, Site::Session).unwrap();
-    deposit(&board, &full.token, &Deposit { home: "1.0.1.0.1", subject: "1.0.1", kind: DepositKind::Retire(vec![fp_b]), hand: Some(&a), id: "test.retire-b" }).expect("retired");
+    deposit(&board, full.token(), &Deposit { home: "1.0.1.0.1", subject: "1.0.1", kind: DepositKind::Retire(vec![fp_b]), hand: Some(&a), id: "test.retire-b" }).expect("retired");
     full.close().unwrap();
     let mut person = Scripted::new(vec![Script::Confirm(true)]);
     let err = enroll(&board, &store_a, &mut person, &opts(&payload)).expect_err("I4");
@@ -131,15 +131,15 @@ fn the_cap_names_the_act_and_a_by_reference_account_halts_in_the_reads() {
     let mut k = 20u8;
     while n < 16 {
         let s = signer_from_seed(&[k; 32]);
-        deposit(&board, &full.token, &Deposit { home: "1.0.1.0.1", subject: "1.0.1", kind: DepositKind::Enroll(vec![Enrollment::new(HybridSigner::public_key(&s).clone(), false, Some(format!("filler {k}"))).unwrap()]), hand: Some(&a), id: &format!("test.fill.{k}") }).expect("filler");
+        deposit(&board, full.token(), &Deposit { home: "1.0.1.0.1", subject: "1.0.1", kind: DepositKind::Enroll(vec![Enrollment::new(HybridSigner::public_key(&s).clone(), false, Some(format!("filler {k}"))).unwrap()]), hand: Some(&a), id: &format!("test.fill.{k}") }).expect("filler");
         n += 1;
         k += 1;
     }
     let extra = signer_from_seed(&[99; 32]);
     let over = || DepositKind::Enroll(vec![Enrollment::new(HybridSigner::public_key(&extra).clone(), false, Some("one too many".into())).unwrap()]);
-    let at_cap = deposit(&board, &full.token, &Deposit { home: "1.0.1.0.1", subject: "1.0.1", kind: over(), hand: Some(&a), id: "test.over-cap" });
+    let at_cap = deposit(&board, full.token(), &Deposit { home: "1.0.1.0.1", subject: "1.0.1", kind: over(), hand: Some(&a), id: "test.over-cap" });
     assert!(matches!(at_cap, Err(DepositHalt::SetFull(_))), "{at_cap:?}");
-    let dead = full.token.clone();
+    let dead = full.token().clone();
     full.close().unwrap();
     let after = deposit(&board, &dead, &Deposit { home: "1.0.1.0.1", subject: "1.0.1", kind: over(), hand: Some(&a), id: "test.dead" });
     assert!(matches!(after, Err(DepositHalt::SessionClosed(_))), "{after:?}");

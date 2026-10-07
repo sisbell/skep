@@ -30,7 +30,7 @@ fn s(p: &Path) -> &str {
 /// the binary refuses without a terminal): the store holds the device key,
 /// the account's line and the agent space's persist-first line.
 fn claim_board(board_origin: &str, store: &Path, anchors: &Path) {
-    let board = Board::new(Origin::parse(board_origin).unwrap(), Box::new(PlainHttp::new()));
+    let board = Board::new(Origin::parse(board_origin).unwrap(), PlainHttp::new());
     let store = FileStore::open(store);
     store.generate(Some(Label::new("notebook").unwrap())).unwrap();
     let mut person = Scripted::new(vec![Script::LabelDefault, Script::LabelDefault]);
@@ -126,7 +126,7 @@ fn the_hop_through_the_binary_and_the_one_binding_test_after_a_claim() {
     assert_eq!(parse_enroll(payload.as_bytes()).unwrap().len(), 1);
     // A's enrollment: the walk under the scripted person (the binary's door
     // needs a terminal, §2.4).
-    let a_board = Board::new(Origin::parse(&board).unwrap(), Box::new(PlainHttp::new()));
+    let a_board = Board::new(Origin::parse(&board).unwrap(), PlainHttp::new());
     let mut person = Scripted::new(vec![Script::Confirm(true)]);
     let done = enroll(&a_board, &FileStore::open(&store_a), &mut person, &EnrollOptions { principal: 1, payload: format!("{payload}\n").into_bytes() }).unwrap_or_else(|h| panic!("{h}"));
     assert_eq!(done.facts.account, "1.0.1");

@@ -28,11 +28,11 @@ use crate::ceremony::enumerate::head_closure;
 use crate::ceremony::first_session::{first_session, FirstSessionReads};
 use crate::ceremony::handshake::{handshake, Site};
 use crate::ceremony::preview::{declined, preview, Preview, PreviewSite, Previewed, Row};
-use crate::ceremony::reads::r0;
+use crate::ceremony::reads::{r0, Act};
 use crate::halt::Halt;
 use crate::person::Person;
 use crate::sheet::render_inert;
-use crate::store::{store_halt, FileStore, KeySelector, KeyStore, Purpose, StoreError};
+use crate::store::{FileStore, KeySelector, KeyStore, Purpose, StoreError};
 
 /// The command's inputs.
 #[derive(Debug, Clone)]
@@ -70,21 +70,21 @@ pub struct Retired {
 pub fn retire(board: &Board, store: &FileStore, person: &mut dyn Person, opts: &RetireOptions) -> Result<Retired, Halt> {
     // The store's key for (board, n); the NOTEBOOK-AT-LOSS face where none
     // opens a session here (§4a.1).
-    let key = match store.select(&KeySelector::Board { origin: &board.dialed, principal: Some(opts.principal) }, Purpose::Sign) {
+    let key = match store.select(&KeySelector::Board { origin: board.dialed(), principal: Some(opts.principal) }, Purpose::Sign) {
         Ok(key) => key,
         Err(StoreError::NoSelection { keys }) => {
             return Err(Halt::face(
-                format!("this store holds no key that opens a session at {} ({} key(s) in it, none bound to principal {})", board.dialed, keys.len(), opts.principal),
+                format!("this store holds no key that opens a session at {} ({} key(s) in it, none bound to principal {})", board.dialed(), keys.len(), opts.principal),
                 "on the notebook DEVICE LOSS IS BOARD LOSS: there is no session to retire from at the moment of a loss (AUTH-5.60 step 1)",
                 "the acts at that moment are the VOLUME BACKUP already taken and `skep recover` on a restored board (a paper import); where another device of yours is signed in, retire from it",
             ))
         }
-        Err(e) => return Err(store_halt(e)),
+        Err(e) => return Err(e.into()),
     };
-    let signer = store.signer(&KeySelector::Path(&key.path)).map_err(store_halt)?;
-    let own: Vec<(Fingerprint, skep_identity::PublicKey)> = store.device_keys().map_err(store_halt)?.iter().map(|k| (k.fingerprint, k.public.clone())).collect();
+    let signer = store.signer(&KeySelector::Path(&key.path))?;
+    let own: Vec<(Fingerprint, skep_identity::PublicKey)> = store.device_keys()?.iter().map(|k| (k.fingerprint, k.public.clone())).collect();
     // R0's reads; a retirement at a by-reference account is redirected.
-    let reads = r0(board, person, opts.principal, false, &own)?;
+    let reads = r0(board, person, opts.principal, Act::Retirement, &own)?;
     if reads.walk.by_reference() {
         say(
             person,
@@ -150,7 +150,7 @@ pub fn retire(board: &Board, store: &FileStore, person: &mut dyn Person, opts: &
     let id = format!("retire.{}", &target.fingerprint.to_hex()[..8]);
     // A retirement that did not commit leaves the session live, and its drop
     // closes it — the own key's included.
-    let outcome = deposit(board, &session.token, &Deposit { home: &fs_reads.home, subject: &set_account, kind: DepositKind::Retire(vec![target.fingerprint]), hand: Some(&*signer), id: &id })?;
+    let outcome = deposit(board, session.token(), &Deposit { home: &fs_reads.home, subject: &set_account, kind: DepositKind::Retire(vec![target.fingerprint]), hand: Some(&*signer), id: &id })?;
     let reconciled = matches!(outcome, DepositOutcome::Committed { .. });
     if let DepositOutcome::Committed { reason } = &outcome {
         say(person, "AUTH-5.17", format!("reconciled: {reason}"));

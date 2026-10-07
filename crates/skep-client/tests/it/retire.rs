@@ -37,7 +37,7 @@ fn retire_another_devices_key_then_the_sessions_own_without_a_close() {
     let store_b = FileStore::open(dir.path().join("b"));
     let fp_b = keygen(&store_b, "phone");
     let full = handshake(&plain, Scope::Full, &a, 1, Site::Session).unwrap();
-    deposit(&plain, &full.token, &Deposit { home: "1.0.1.0.1", subject: "1.0.1", kind: DepositKind::Enroll(vec![entry_of(&key_file(&store_b, &fp_b), "phone")]), hand: Some(&a), id: "test.enroll-b" }).unwrap();
+    deposit(&plain, full.token(), &Deposit { home: "1.0.1.0.1", subject: "1.0.1", kind: DepositKind::Enroll(vec![entry_of(&key_file(&store_b, &fp_b), "phone")]), hand: Some(&a), id: "test.enroll-b" }).unwrap();
     full.close().unwrap();
     let snapshot = store_snapshot(&store);
 
@@ -46,7 +46,7 @@ fn retire_another_devices_key_then_the_sessions_own_without_a_close() {
     let err = retire(&plain, &store, &mut person, &opts("")).expect_err("ambiguous");
     assert!(err.to_string().contains("matches more than one enrolled key") && err.to_string().contains("phone") && err.to_string().contains("notebook"), "{err}");
     // An anchor prefix: refused ahead of any frame.
-    let (rb, log) = recording_board(plain.dialed.clone());
+    let (rb, log) = recording_board(plain.dialed().clone());
     let KeySetAnswer::Set(set) = plain.key_set("1.0.1").unwrap() else { panic!() };
     let anchor_fp = set.enrolled.iter().find(|e| e.anchor).unwrap().fingerprint;
     let mut person = Scripted::new(vec![]);
@@ -62,7 +62,7 @@ fn retire_another_devices_key_then_the_sessions_own_without_a_close() {
     assert!(set.enrolled(&fp_b).is_some(), "nothing written");
 
     // Another device's key retired from this one's session, its label shown.
-    let (rb, log) = recording_board(plain.dialed.clone());
+    let (rb, log) = recording_board(plain.dialed().clone());
     let mut person = Scripted::new(vec![Script::Confirm(true)]);
     let done = retire(&rb, &store, &mut person, &opts(&fp_b.to_hex()[..8])).unwrap_or_else(|h| panic!("{h}\n{}", person.transcript.join("\n")));
     assert_eq!((done.fingerprint, done.label.as_deref(), done.end.clone()), (fp_b, Some("phone"), RetireEnd::CloseSent));
@@ -79,7 +79,7 @@ fn retire_another_devices_key_then_the_sessions_own_without_a_close() {
 
     // The session's OWN key — the last device key: the last-device line in
     // the preview, no close sent, the keyless face named.
-    let (rb, log) = recording_board(plain.dialed.clone());
+    let (rb, log) = recording_board(plain.dialed().clone());
     let mut person = Scripted::new(vec![Script::Confirm(true)]);
     let done = retire(&rb, &store, &mut person, &opts(&fp.to_hex()[..8])).unwrap_or_else(|h| panic!("{h}\n{}", person.transcript.join("\n")));
     assert_eq!(done.end, RetireEnd::EndedByCommit { another_held: false });
@@ -111,7 +111,7 @@ fn the_own_key_fork_names_session_where_another_key_is_held_and_an_anchorless_ac
     let a = key_file(&store, &fp).signer();
     let fp2 = keygen(&store, "second laptop");
     let full = handshake(&board, Scope::Full, &a, 1, Site::Session).unwrap();
-    deposit(&board, &full.token, &Deposit { home: "1.0.1.0.1", subject: "1.0.1", kind: DepositKind::Enroll(vec![entry_of(&key_file(&store, &fp2), "second laptop")]), hand: Some(&a), id: "test.enroll-2" }).unwrap();
+    deposit(&board, full.token(), &Deposit { home: "1.0.1.0.1", subject: "1.0.1", kind: DepositKind::Enroll(vec![entry_of(&key_file(&store, &fp2), "second laptop")]), hand: Some(&a), id: "test.enroll-2" }).unwrap();
     full.close().unwrap();
     let mut person = Scripted::new(vec![Script::Confirm(true)]);
     let done = retire(&board, &store, &mut person, &opts(&fp.to_hex()[..8])).unwrap_or_else(|h| panic!("{h}\n{}", person.transcript.join("\n")));
@@ -127,7 +127,7 @@ fn the_own_key_fork_names_session_where_another_key_is_held_and_an_anchorless_ac
     let lone = keygen(&store2, "lone");
     let payload = encode_enroll(&[Enrollment::new(key_file(&store2, &lone).public.clone(), false, Some("lone".into())).unwrap()]);
     let HostedOutcome::Claimed(_) = hosted(&board2, payload.as_bytes(), 1).unwrap() else { panic!() };
-    store2.bind(&Binding::Enrollment { origin: board2.dialed.clone(), principal: 1, account: "1.0.1".into(), fingerprint: lone }).unwrap();
+    store2.bind(&Binding::Enrollment { origin: board2.dialed().clone(), principal: 1, account: "1.0.1".into(), fingerprint: lone }).unwrap();
     let mut person = Scripted::new(vec![]);
     let err = retire(&board2, &store2, &mut person, &opts(&lone.to_hex()[..8])).expect_err("unwritable");
     let t = person.transcript.join("\n");

@@ -7,7 +7,7 @@
 //! versioned layouts under `SESSION_TAG` and `SESSION_TAG_V2` — the
 //! REFERENCE layout for every signer, REPRODUCIBLE FROM THE RULE WITH NO
 //! DAEMON CRATE LINKED (AUTH-5.67; AUTH RES-61), the daemon's
-//! `session_payload` the arbiter (P5); and `record_frame`, the bytes a
+//! `session_payload` the arbiter (P5); and [`RecordFrame`], the bytes a
 //! credential record's `sig` is made over at the record grade, which a
 //! deposit signs and the admitted read's trial verifies.
 //!
@@ -32,10 +32,15 @@ use crate::origin::Origin;
 pub const PRODUCTION_TAG: u8 = skep_signature::TAG_MLDSA65_ED25519;
 
 /// THE SIGNER SEAM (§1.4): a custody rung is an implementation of this
-/// trait and never a rewrite of the ceremony.
-pub trait Signer {
-    /// The HYBRID public key — one `ALGS` token over both halves.
-    fn public_key(&self) -> PublicKey;
+/// trait and never a rewrite of the ceremony. `Send + Sync`, so a shell
+/// signs on whichever thread holds its board: the signer [`KeyStore::signer`]
+/// hands out crosses threads as the board does.
+///
+/// [`KeyStore::signer`]: crate::store::KeyStore::signer
+pub trait Signer: Send + Sync {
+    /// The HYBRID public key — one `ALGS` token over both halves — borrowed
+    /// from the signer that holds it.
+    fn public_key(&self) -> &PublicKey;
 
     /// The kind's BLOB — the post-quantum signature then the Ed25519
     /// signature, 3,373 bytes at tag 1 — over bytes the library framed
@@ -44,7 +49,7 @@ pub trait Signer {
 
     /// The key's fingerprint (AUTH-1.7), the value every compare reads.
     fn fingerprint(&self) -> Fingerprint {
-        Fingerprint::of(&self.public_key())
+        Fingerprint::of(self.public_key())
     }
 
     /// The marker tag the blob is made under — the key's own row's.
@@ -54,8 +59,8 @@ pub trait Signer {
 }
 
 impl Signer for HybridSigner {
-    fn public_key(&self) -> PublicKey {
-        HybridSigner::public_key(self).clone()
+    fn public_key(&self) -> &PublicKey {
+        HybridSigner::public_key(self)
     }
 
     fn sign(&self, payload: &[u8]) -> Vec<u8> {
@@ -63,14 +68,43 @@ impl Signer for HybridSigner {
     }
 }
 
-/// A signer behind a box is the signer it holds.
-impl Signer for Box<dyn Signer> {
-    fn public_key(&self) -> PublicKey {
+/// A signer behind a box is the signer it holds — every method forwarded, so
+/// a rung that overrides one keeps its override behind the pointer.
+impl<S: Signer + ?Sized> Signer for Box<S> {
+    fn public_key(&self) -> &PublicKey {
         (**self).public_key()
     }
 
     fn sign(&self, payload: &[u8]) -> Vec<u8> {
         (**self).sign(payload)
+    }
+
+    fn fingerprint(&self) -> Fingerprint {
+        (**self).fingerprint()
+    }
+
+    fn tag(&self) -> u8 {
+        (**self).tag()
+    }
+}
+
+/// A signer behind a reference is the signer it refers to, every method
+/// forwarded.
+impl<S: Signer + ?Sized> Signer for &S {
+    fn public_key(&self) -> &PublicKey {
+        (**self).public_key()
+    }
+
+    fn sign(&self, payload: &[u8]) -> Vec<u8> {
+        (**self).sign(payload)
+    }
+
+    fn fingerprint(&self) -> Fingerprint {
+        (**self).fingerprint()
+    }
+
+    fn tag(&self) -> u8 {
+        (**self).tag()
     }
 }
 
@@ -126,15 +160,38 @@ pub fn session_payload(origin: &Origin, nonce: &str, principal: u64, scope: Scop
 /// grade; wire.md §The claim ceremony and credentials): `framed("skep-entry-v1",
 /// [alg, board, account, doc, "record", body])` — `alg` the signing key's
 /// token, `board` `H.1`'s pair, `account` the HOME's account, `doc` the home,
-/// the body the five rows over the sig-less canonical record. Composed by
+/// the body the five rows over the sig-less canonical record. Its rows are
+/// NAMED, so no two of its addresses trade places in a call: a frame with
+/// the home and its account swapped signs and never verifies. Composed by
 /// `skep_identity::entry_frame`, spelled by nobody here.
-pub fn record_frame(alg: &str, board: BoardTerm, home_account: &str, home: &str, ty: &str, to: &[&str], sigless: &[u8]) -> Option<Vec<u8>> {
-    let account = parse_address(home_account)?;
-    let home = parse_address(home)?;
-    let ty = parse_address(ty)?;
-    let to: Vec<Address> = to.iter().map(|a| parse_address(a)).collect::<Option<_>>()?;
-    let body = entry_body_record(RecordRows { ty: &ty, to: &to, replaces: None, lineage_fork_point: None, sigless_canonical_record: sigless });
-    Some(entry_frame(alg, board, &account, DocTerm::One(&home), &body))
+#[derive(Debug, Clone, Copy)]
+pub struct RecordFrame<'a> {
+    /// The signing key's `ALGS` token.
+    pub alg: &'a str,
+    /// `H.1`'s pair (D13).
+    pub board: BoardTerm,
+    /// The HOME's account — ω over the home.
+    pub home_account: &'a str,
+    /// The home — the doc 1 the record is deposited into (AUTH-2.127).
+    pub home: &'a str,
+    /// The record class's type address (AUTH-5.4; PUB-2.63).
+    pub ty: &'a str,
+    /// The subject accounts — the link's `to`.
+    pub to: &'a [&'a str],
+    /// The SIG-LESS canonical record (AUTH-4.58: the record's identity).
+    pub sigless: &'a [u8],
+}
+
+impl RecordFrame<'_> {
+    /// The frame's bytes, `None` where an address of it does not parse.
+    pub fn compose(&self) -> Option<Vec<u8>> {
+        let account = parse_address(self.home_account)?;
+        let home = parse_address(self.home)?;
+        let ty = parse_address(self.ty)?;
+        let to: Vec<Address> = self.to.iter().map(|a| parse_address(a)).collect::<Option<_>>()?;
+        let body = entry_body_record(RecordRows { ty: &ty, to: &to, replaces: None, lineage_fork_point: None, sigless_canonical_record: self.sigless });
+        Some(entry_frame(self.alg, self.board, &account, DocTerm::One(&home), &body))
+    }
 }
 
 /// The blob as the wire carries it — lowercase hex (6,746 characters at
@@ -177,9 +234,22 @@ mod tests {
         let blob = Signer::sign(&signer, b"bytes the library framed");
         assert_eq!(blob.len(), 3373);
         assert_eq!(Signer::tag(&signer), PRODUCTION_TAG);
-        assert_eq!(skep_signature::verify(PRODUCTION_TAG, &Signer::public_key(&signer), b"bytes the library framed", &blob), Ok(()));
+        assert_eq!(skep_signature::verify(PRODUCTION_TAG, Signer::public_key(&signer), b"bytes the library framed", &blob), Ok(()));
         assert_eq!(Signer::fingerprint(&signer), Fingerprint::of(HybridSigner::public_key(&signer)));
         let id = fresh_principal_id();
         assert!(id >= 2 && id < (1 << 53));
+    }
+
+    /// A signer behind a box or a reference is the signer it holds: the key
+    /// it lends is that signer's own, never a copy, and the blob verifies.
+    #[test]
+    fn a_signer_behind_a_pointer_lends_its_own_key() {
+        let signer = signer_from_seed(&[10u8; 32]);
+        let boxed: Box<dyn Signer> = Box::new(signer_from_seed(&[10u8; 32]));
+        let by_ref: &dyn Signer = &signer;
+        assert!(std::ptr::eq(Signer::public_key(&by_ref), HybridSigner::public_key(&signer)), "a borrow, never a copy");
+        assert_eq!((boxed.fingerprint(), boxed.tag()), (by_ref.fingerprint(), PRODUCTION_TAG));
+        let blob = Signer::sign(&boxed, b"framed");
+        assert_eq!(skep_signature::verify(boxed.tag(), boxed.public_key(), b"framed", &blob), Ok(()));
     }
 }

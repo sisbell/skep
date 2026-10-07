@@ -101,7 +101,7 @@ fn the_device_recovery_enrolls_the_new_key_retires_the_lost_one_and_resumes_at_r
     assert!(kept.is_file(), "the KEPT artifact is retained");
     assert!(person.said("the imported seed dropped"), "{t}");
     // R6: the binding appended, the newest line for the pair.
-    assert_eq!(l.store.enrollment_for(&board.dialed, 1).unwrap().map(|(_, fp)| fp), Some(l.new_fp));
+    assert_eq!(l.store.enrollment_for(board.dialed(), 1).unwrap().map(|(_, fp)| fp), Some(l.new_fp));
     assert!(person.said("THE EXPECTED END: sign in with the new key"), "{t}");
     // The new key signs in.
     handshake(&board, Scope::Content, &key_file(&l.store, &l.new_fp).signer(), 1, Site::Session).expect("the new key").close().unwrap();
@@ -249,7 +249,7 @@ fn an_agents_account_takes_the_containment_act_and_enrolls_nothing() {
     assert!(set.enrolled.iter().all(|e| e.anchor), "the non-anchor set is retired");
     assert!(set.enrolled(&own_fp).is_none() && set.retired(&own_fp).is_none(), "the owner's key never enters the agent's set");
     assert_eq!(principal_of(&board, "1.0.1.1").unwrap(), None, "inc(A, 1) is NOT delegated: the setup state never ran");
-    assert!(store.enrollment_for(&board.dialed, 1).unwrap().is_none(), "no binding appended");
+    assert!(store.enrollment_for(board.dialed(), 1).unwrap().is_none(), "no binding appended");
     // Declined: nothing written.
     let mut person = Scripted::new(vec![Script::YesNo(false), Script::KeptOrPlaced(KeptOrPlaced::Kept), Script::YesNo(true), Script::YesNo(false)]);
     let sheet_b = dir.path().join("custody-b.skep-key");
@@ -350,7 +350,7 @@ fn the_stolen_arm_mints_the_recipients_doc_one_ahead_of_its_first_retirement() {
     std::fs::remove_file(recipient.key_path(&taken.device)).unwrap();
     let fresh = keygen(&recipient, "phone again");
     let (paper, _) = anchor_file(&papers, "ra");
-    let (rb, log) = recording_board(board.dialed.clone());
+    let (rb, log) = recording_board(board.dialed().clone());
     let dialed_at_the_choice = Arc::new(Mutex::new(None));
     let (seen, dialed) = (dialed_at_the_choice.clone(), log.clone());
     let script = vec![Script::YesNo(true), Script::YesNo(true), Script::KeptOrPlaced(KeptOrPlaced::Kept), Script::YesNo(true), Script::Confirm(true), Script::Confirm(true)];

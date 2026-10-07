@@ -32,7 +32,7 @@ fn the_pre_check_runs_ahead_of_every_challenge_and_a_failing_arm_spends_no_nonce
     let device = store.load(&store.key_path(&fp)).unwrap().signer();
 
     // The enrolled key: health, principal_prefix, key_set, THEN the challenge.
-    let (rb, log) = recording_board(plain.dialed.clone());
+    let (rb, log) = recording_board(plain.dialed().clone());
     let session = handshake(&rb, Scope::Content, &device, 1, Site::Session).expect("a session");
     let lines = log.lock().unwrap().clone();
     let at = |needle: &str| lines.iter().position(|l| l.starts_with(needle)).unwrap_or_else(|| panic!("{needle} missing from {lines:?}"));
@@ -45,7 +45,7 @@ fn the_pre_check_runs_ahead_of_every_challenge_and_a_failing_arm_spends_no_nonce
 
     // The key arm's third state: a key in neither list — no challenge.
     let stranger = signer_from_seed(&[77; 32]);
-    let (rb, log) = recording_board(plain.dialed.clone());
+    let (rb, log) = recording_board(plain.dialed().clone());
     let err = handshake(&rb, Scope::Content, &stranger, 1, Site::Session).expect_err("neither list");
     let text = err.to_string();
     assert!(text.contains("records do not list this key") && text.contains("AUTH-5.25 cell (iii)"), "{text}");
@@ -90,7 +90,7 @@ fn a_retired_key_is_diagnosed_with_its_hand_read_from_the_records() {
     // ENROLL the second key, device grade, the device key's hand.
     let out = deposit(
         &board,
-        &full.token,
+        full.token(),
         &Deposit {
             home: "1.0.1.0.1",
             subject: "1.0.1",
@@ -107,7 +107,7 @@ fn a_retired_key_is_diagnosed_with_its_hand_read_from_the_records() {
     let as_second = handshake(&board, Scope::Content, &second, 1, Site::Session).expect("the second key signs in");
     as_second.close().unwrap();
     // RETIRE it.
-    let out = deposit(&board, &full.token, &Deposit { home: "1.0.1.0.1", subject: "1.0.1", kind: DepositKind::Retire(vec![second_fp]), hand: Some(&device), id: "test.retire" }).expect("the retirement");
+    let out = deposit(&board, full.token(), &Deposit { home: "1.0.1.0.1", subject: "1.0.1", kind: DepositKind::Retire(vec![second_fp]), hand: Some(&device), id: "test.retire" }).expect("the retirement");
     let DepositOutcome::Deposited { at: retired_at, .. } = out else { panic!("{out:?}") };
     assert!(retired_at > enrolled_at);
     let KeySetAnswer::Set(set) = board.key_set("1.0.1").unwrap() else { panic!() };
@@ -117,7 +117,7 @@ fn a_retired_key_is_diagnosed_with_its_hand_read_from_the_records() {
     // The pre-check's diagnosis and the face.
     let pre = precheck(&board, 1, &second_fp).unwrap();
     assert_eq!(pre.diagnosis, KeyDiagnosis::Retired { anchor: false });
-    let err = key_face(&board, &pre, &second_fp, &[(fp, file.public.clone())], Site::Session).expect_err("retired");
+    let err = key_face(&board, &pre.walk, &second_fp, &[(fp, file.public.clone())], Site::Session).expect_err("retired");
     let text = err.to_string();
     assert!(text.contains("is retired at account 1.0.1"), "{text}");
     assert!(text.contains(&format!("retired at position {retired_at} by {fp} (notebook)")), "the hand and the position from the records: {text}");
@@ -159,11 +159,11 @@ fn a_session_closes_on_its_drop_and_never_where_it_was_handed_out_or_ended_by_it
     let fp = keygen(&store, "notebook");
     claim(&plain, &store, &dir.path().join("anchors"));
     let device = store.load(&store.key_path(&fp)).unwrap().signer();
-    let (rb, log) = recording_board(plain.dialed.clone());
+    let (rb, log) = recording_board(plain.dialed().clone());
     let closes = || log.lock().unwrap().iter().filter(|l| *l == "POST /session/close").count();
     // Dropped: closed, its token dead.
     let dropped = handshake(&rb, Scope::Content, &device, 1, Site::Session).expect("a session");
-    let token = dropped.token.clone();
+    let token = dropped.token().clone();
     drop(dropped);
     assert_eq!(closes(), 1, "the drop sends the close");
     assert!(token_dead(&plain, &token), "the dropped session's token is dead");

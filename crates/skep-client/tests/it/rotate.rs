@@ -10,7 +10,7 @@ use skep_client::board::{frames, Answer, KeySetAnswer, Scope, T_SUPERSEDES};
 use skep_client::ceremony::deposit::{deposit, Deposit, DepositKind, DepositOutcome};
 use skep_client::ceremony::handshake::{handshake, Site};
 use skep_client::ceremony::rotate::{rotate, RotateOptions};
-use skep_client::ceremony::trail::write_trail;
+use skep_client::ceremony::trail::Trail;
 use skep_client::derive::records::credential_records;
 use skep_client::person::scripted::{Script, Scripted};
 use skep_client::sheet::Label;
@@ -39,7 +39,7 @@ fn rotate_runs_t0_to_t5_and_a_re_run_after_t3_writes_no_second_trail() {
     let old_fp = keygen(&store, "notebook");
     claim(&plain, &store, &dir.path().join("anchors"));
     let genesis_link = credential_records(&plain, "1.0.1", &[]).unwrap().genesis().unwrap().link.clone();
-    let (rb, log) = recording_board(plain.dialed.clone());
+    let (rb, log) = recording_board(plain.dialed().clone());
     let mut person = Scripted::new(vec![Script::LabelDefault, Script::Confirm(true)]);
     let done = rotate(&rb, &store, &mut person, &opts(None, None)).unwrap_or_else(|h| panic!("{h}\n{}", person.transcript.join("\n")));
     let t = person.transcript.join("\n");
@@ -66,7 +66,7 @@ fn rotate_runs_t0_to_t5_and_a_re_run_after_t3_writes_no_second_trail() {
     assert!(lines.iter().any(|l| l == "POST /op assert_sup"), "{lines:?}");
     assert!(!lines.iter().any(|l| l == "POST /session/close"), "no close sent: {lines:?}");
     assert!(person.said("ROTATION'S EXPECTED END"), "{t}");
-    assert_eq!(store.enrollment_for(&plain.dialed, 1).unwrap().map(|(_, fp)| fp), Some(done.new), "the binding appended for the new key");
+    assert_eq!(store.enrollment_for(plain.dialed(), 1).unwrap().map(|(_, fp)| fp), Some(done.new), "the binding appended for the new key");
     assert!(store.key_path(&old_fp).is_file(), "the retired key's file left in place");
     handshake(&plain, Scope::Content, &key_file(&store, &done.new).signer(), 1, Site::Session).expect("the new key signs in").close().unwrap();
 
@@ -84,8 +84,8 @@ fn rotate_runs_t0_to_t5_and_a_re_run_after_t3_writes_no_second_trail() {
     let genesis2 = credential_records(&board2, "1.0.1", &[]).unwrap().genesis().unwrap().link.clone();
     let new2 = store2.generate(Some(Label::new("desk").unwrap())).unwrap().0;
     let full = handshake(&board2, Scope::Full, &old_signer, 1, Site::Session).unwrap();
-    let DepositOutcome::Deposited { link: new_link2, .. } = deposit(&board2, &full.token, &Deposit { home: "1.0.1.0.1", subject: "1.0.1", kind: DepositKind::Enroll(vec![entry_of(&key_file(&store2, &new2), "desk")]), hand: Some(&old_signer), id: "test.t2" }).unwrap() else { panic!() };
-    let trail2 = write_trail(&board2, &full, &old_signer, "1.0.1.0.1", &genesis2, &new_link2, "test.t3").expect("T3 by hand");
+    let DepositOutcome::Deposited { link: new_link2, .. } = deposit(&board2, full.token(), &Deposit { home: "1.0.1.0.1", subject: "1.0.1", kind: DepositKind::Enroll(vec![entry_of(&key_file(&store2, &new2), "desk")]), hand: Some(&old_signer), id: "test.t2" }).unwrap() else { panic!() };
+    let trail2 = Trail { home: "1.0.1.0.1", old: &genesis2, new: &new_link2 }.write(&board2, &full, &old_signer, "test.t3").expect("T3 by hand");
     full.close().unwrap();
     let mut person = Scripted::new(vec![Script::Confirm(true)]);
     let done2 = rotate(&board2, &store2, &mut person, &opts(None, None)).unwrap_or_else(|h| panic!("{h}\n{}", person.transcript.join("\n")));
@@ -142,7 +142,7 @@ fn the_payload_arm_appends_no_binding_and_the_reach_names_an_admitted_account() 
     assert!(person.said("uncorrectable once enrolled"), "{t}");
     assert!(person.said("THE REACH: this gesture will NOT close 1.0.1.2") && person.said("retire the key THERE"), "the admitted account named:\n{t}");
     // B binds and signs in.
-    store_b.bind(&Binding::Enrollment { origin: board.dialed.clone(), principal: 1, account: "1.0.1".into(), fingerprint: fp_b }).unwrap();
+    store_b.bind(&Binding::Enrollment { origin: board.dialed().clone(), principal: 1, account: "1.0.1".into(), fingerprint: fp_b }).unwrap();
     handshake(&board, Scope::Content, &key_file(&store_b, &fp_b).signer(), 1, Site::Session).expect("B signs in").close().unwrap();
     let KeySetAnswer::Set(set) = board.key_set("1.0.1").unwrap() else { panic!() };
     assert!(set.retired(&old_fp).is_some() && set.enrolled(&fp_b).is_some());
@@ -163,7 +163,7 @@ fn a_closed_before_t4_names_the_other_hand() {
     let other = HybridSigner::from_seed(1, &[77; 32]).unwrap();
     let other_fp = fp_of(&other);
     let full = handshake(&board, Scope::Full, &old, 1, Site::Session).unwrap();
-    deposit(&board, &full.token, &Deposit { home: "1.0.1.0.1", subject: "1.0.1", kind: DepositKind::Enroll(vec![Enrollment::new(HybridSigner::public_key(&other).clone(), false, Some("tablet".into())).unwrap()]), hand: Some(&old), id: "test.other" }).unwrap();
+    deposit(&board, full.token(), &Deposit { home: "1.0.1.0.1", subject: "1.0.1", kind: DepositKind::Enroll(vec![Enrollment::new(HybridSigner::public_key(&other).clone(), false, Some("tablet".into())).unwrap()]), hand: Some(&old), id: "test.other" }).unwrap();
     full.close().unwrap();
     // Under the walk — the OLD key's session open, the new key's file just
     // written, T2's insert not yet sent — the other hand retires the old key.

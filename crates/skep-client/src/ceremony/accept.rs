@@ -37,7 +37,7 @@ use crate::derive::{principal_of, walk_to_set, Mode};
 use crate::halt::Halt;
 use crate::person::{Confirmation, Consent, LabelBox, Person, Public, Question};
 use crate::sheet::{render_inert, Facts, Label};
-use crate::store::{store_halt, Binding, FileStore, KeyFacts, KeySelector, KeyStore, Purpose};
+use crate::store::{Binding, FileStore, KeyFacts, KeySelector, KeyStore, Purpose};
 
 /// The beat's inputs.
 #[derive(Debug, Clone)]
@@ -163,10 +163,10 @@ pub fn accept(board: &Board, store: &FileStore, person: &mut dyn Person, opts: &
             }
         },
     };
-    let key_id = store.generate(Some(label.clone())).map_err(store_halt)?;
-    let device = store.select(&KeySelector::Path(&store.key_path(&key_id.0)), Purpose::Read).map_err(store_halt)?;
+    let key_id = store.generate(Some(label.clone()))?;
+    let device = store.select(&KeySelector::Path(&store.key_path(&key_id.0)), Purpose::Read)?;
     say(person, "§3a", format!("key file written: {} — the seed rests in this file and the filesystem's modes are its whole protection (0600 under 0700); your anchors are what its loss recovers from", store.key_path(&key_id.0).display()));
-    let facts = Facts { account: account.clone(), principal, origin: board.dialed.clone() };
+    let facts = Facts { account: account.clone(), principal, origin: board.dialed().clone() };
     let operator = operator_sentence(&cell, &giver, hosted);
     // The pair, or the DECLINE at its site.
     let (anchors, declined_pair) = if opts.no_anchors {
@@ -225,8 +225,8 @@ pub fn accept(board: &Board, store: &FileStore, person: &mut dyn Person, opts: &
         "AUTH-5.90 (vii)",
         format!(
             "(vii) the giver will return: \"{keep}: {account}, principal {principal}, {}. Nothing else on this board tells you which account is yours.\" — land it with `skep bind --board {} --dir <store> --account {account} --principal {principal}{}`, which runs this account's FIRST SIGNED SESSION in its pinned order: the doc-1 mint, then the setup act. Until it runs this account has NO DOC 1: the first note written here becomes a DRAFT doc 1 and answers `unpublished` at every later credential act with no clearing act, and every credential write homes its atom in a document the board does not hold — the papers just printed reaching a recovery, a rotation and an enrollment that all land there (AUTH-5.90 (iii)).",
-            board.dialed,
-            board.dialed,
+            board.dialed(),
+            board.dialed(),
             if declined_pair { String::new() } else { " --anchor <a> --anchor <b>".into() }
         ),
     );
@@ -254,25 +254,24 @@ pub fn reprint(store: &FileStore, key: Option<&Path>, anchors: &[PathBuf], board
                 "re-run `skep accept` under a fresh pair, the dead one disposed of as the abandonment exit says",
             ));
         }
-        let artifact = store.select(&KeySelector::Path(path), Purpose::Read).map_err(store_halt)?;
+        let artifact = store.select(&KeySelector::Path(path), Purpose::Read)?;
         if !artifact.anchor {
             return Err(Halt::face(format!("{} is a device key's file", path.display()), "`--anchor` names an anchor file", "pass the anchor files the beat wrote"));
         }
         entries.push(Enrollment::new(artifact.public.clone(), true, artifact.label.clone()).expect("a stored label"));
     }
     let device: KeyFacts = match key {
-        Some(path) => store.select(&KeySelector::Path(path), Purpose::Read).map_err(store_halt)?,
+        Some(path) => store.select(&KeySelector::Path(path), Purpose::Read)?,
         None => {
             let bound: Vec<Fingerprint> = store
-                .all_bindings()
-                .map_err(store_halt)?
+                .all_bindings()?
                 .into_iter()
                 .filter_map(|b| match b {
                     Binding::Enrollment { origin, fingerprint, .. } if board.is_none_or(|o| *o == origin) => Some(fingerprint),
                     _ => None,
                 })
                 .collect();
-            let devices = store.device_keys().map_err(store_halt)?;
+            let devices = store.device_keys()?;
             let unbound: Vec<_> = devices.iter().filter(|k| !bound.contains(&k.fingerprint)).collect();
             match unbound.as_slice() {
                 [one] => (*one).clone(),

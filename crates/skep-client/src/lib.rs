@@ -22,7 +22,8 @@
 //!   one `TcpStream` per request, `Connection: close`, `Content-Length`
 //!   checked, no redirects, no proxy environment (wire.md §Transport); the
 //!   streamed form for the blob routes and `/events`; `https://` behind the
-//!   `tls` feature.
+//!   `tls` feature. A dialer behind a reference, a box or an `Arc` is one,
+//!   so a shell shares ONE between its boards and the resolver.
 //! * [`halt`] — the one error family: `Halt`, `Refused`, `Blocked`, `Dial`,
 //!   with §2.3's exit codes as the binary's mapping (AUTH-5.66).
 //! * [`board`] — `Board { dialed, signed, dialer }`: the wire's endpoints,
@@ -46,7 +47,8 @@
 //!
 //! * [`sign`] — the `Signer` seam over `skep_signature::HybridSigner`, and
 //!   the bytes a signer signs: the session payload under `SESSION_TAG` /
-//!   `SESSION_TAG_V2` (AUTH-6.4) and a credential record's `record` frame.
+//!   `SESSION_TAG_V2` (AUTH-6.4) and a credential record's `record` frame,
+//!   `RecordFrame`, its rows named.
 //! * [`sheet`] — the key file's one JSON spelling and its refusals,
 //!   `KeyFileError` (§3.2), the byline `Label` and its domain (AUTH-1.24),
 //!   the `Seed` every secret is born into, the R42 grouping (AUTH-5.1) and
@@ -117,4 +119,15 @@ const _: fn() = || {
     assert_send_sync::<Halt>();
     assert_send_sync::<PlainHttp>();
     assert_send_sync::<Origin>();
+};
+
+/// The acting half's promises of the same kind: a shell signs on whichever
+/// thread holds its board, so the signer a stored key yields, the store that
+/// yields it and the session it opens cross threads as the board does.
+#[cfg(feature = "acting")]
+const _: fn() = || {
+    fn assert_send_sync<T: Send + Sync>() {}
+    assert_send_sync::<Box<dyn sign::Signer>>();
+    assert_send_sync::<store::FileStore>();
+    assert_send_sync::<ceremony::handshake::Session<'static>>();
 };

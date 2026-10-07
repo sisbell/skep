@@ -242,14 +242,14 @@ mod tests {
     use crate::board::EnrolledKey;
     use crate::ceremony::enumerate::Admitted;
     use crate::person::scripted::{Script, Scripted};
-    use crate::sign::{signer_from_seed, Signer};
+    use crate::sign::signer_from_seed;
 
     /// One account's set of ONE device key and no anchor, and the preview of
     /// retiring that key at `site`.
     fn lone_key_preview(site: PreviewSite) -> (Previewed, Scripted) {
-        let key = Signer::public_key(&signer_from_seed(&[12; 32]));
+        let key = signer_from_seed(&[12; 32]).public_key().clone();
         let fp = Fingerprint::of(&key);
-        let set = KeySet { enrolled: vec![EnrolledKey { alg: key.alg().into(), fingerprint: fp, key, anchor: false }], ..KeySet::default() };
+        let set = KeySet { enrolled: vec![EnrolledKey { fingerprint: fp, key, anchor: false }], ..KeySet::default() };
         let closure = Closure { accounts: vec![Admitted { account: "1.0.1".into(), set: set.clone(), genesis_home: "1.0.1.0.1".into() }], reads: 1 };
         let rows = [Row::of(&fp, &set, None, &[fp], Some(&fp), false)];
         let mut person = Scripted::new(vec![Script::Confirm(true)]);

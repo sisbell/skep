@@ -21,7 +21,7 @@
 //!
 //! `H.1`'s pair is the record frame's `board` term and every entry frame's
 //! (cs6-2), read once per board by [`Board::board_term`]; the frame itself is
-//! [`record_frame`]'s, the bytes the writing hand signed.
+//! [`RecordFrame`]'s, the bytes the writing hand signed.
 
 use std::collections::HashMap;
 use std::thread;
@@ -33,7 +33,7 @@ use skep_identity::{canonical_record, parse_record_value, BoardTerm, Enrollment,
 use crate::address::{document_of, parent_account};
 use crate::board::{answers, frames, AtAnswer, Board, ChangeKey, KeySet, KeySetAnswer, T_CLAIM, T_ENROLL, T_RETIRE};
 use crate::halt::Halt;
-use crate::sign::record_frame;
+use crate::sign::RecordFrame;
 
 /// A credential record's kind.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -133,15 +133,18 @@ impl Records {
         self.records.iter().find(|r| r.kind == Kind::Enroll)
     }
 
+    /// The record that FIRST enrolled `fp` (AUTH-5.69), where one stands —
+    /// the one whose label the key carries, and whose link a supersession
+    /// trail names as its `old` (AUTH-5.59 step 2).
+    pub fn enrollment_of(&self, fp: &Fingerprint) -> Option<&Record> {
+        self.records.iter().find(|r| r.kind == Kind::Enroll && r.enrolled.iter().any(|e| Fingerprint::of(&e.key) == *fp))
+    }
+
     /// AUTH-5.69 — the label carried by the record that FIRST enrolled
     /// `fp`, `None` where that record carried none (a label is never empty,
     /// AUTH-1.24); every later mention is informational.
     pub fn label_of(&self, fp: &Fingerprint) -> Option<String> {
-        self.records
-            .iter()
-            .filter(|r| r.kind == Kind::Enroll)
-            .find_map(|r| r.enrolled.iter().find(|e| Fingerprint::of(&e.key) == *fp))
-            .and_then(|e| e.label().map(str::to_string))
+        self.enrollment_of(fp)?.enrolled.iter().find(|e| Fingerprint::of(&e.key) == *fp)?.label().map(str::to_string)
     }
 
     /// The retirement record naming `fp`, where one stands.
@@ -237,7 +240,16 @@ impl Record {
         let to = [self.subject.as_str()];
         for (fp, key) in candidates {
             let row = key.sig_alg_row();
-            let frame = record_frame(row.token, term, &self.home_account, &self.home, self.kind.type_address(), &to, self.sigless.as_bytes())?;
+            let frame = RecordFrame {
+                alg: row.token,
+                board: term,
+                home_account: &self.home_account,
+                home: &self.home,
+                ty: self.kind.type_address(),
+                to: &to,
+                sigless: self.sigless.as_bytes(),
+            }
+            .compose()?;
             if skep_signature::verify(row.tag, key, &frame, blob).is_ok() {
                 return Some(*fp);
             }
@@ -381,15 +393,14 @@ fn atom_bytes(board: &Board, home: &str, inv: &HashMap<String, u64>, atom: &str)
 fn links_of(board: &Board, ty: &str, account: &str) -> Result<Vec<String>, Halt> {
     let v = board.guest(&frames::find_links_ftt(ty, account))?;
     let mut links: Vec<String> = answers::addrs(&v).into_iter().map(str::to_string).collect();
-    links.sort_by(address_order);
+    links.sort_by_cached_key(|l| components(l));
     Ok(links)
 }
 
-/// Address order over dotted-decimal spellings: component by component.
-fn address_order(a: &String, b: &String) -> std::cmp::Ordering {
-    let ca: Vec<u128> = a.split('.').filter_map(|c| c.parse().ok()).collect();
-    let cb: Vec<u128> = b.split('.').filter_map(|c| c.parse().ok()).collect();
-    ca.cmp(&cb)
+/// A dotted-decimal spelling's components — the key address order sorts
+/// by, component by component.
+fn components(address: &str) -> Vec<u128> {
+    address.split('.').filter_map(|c| c.parse().ok()).collect()
 }
 
 /// THE READ, once per walk: the account's credential records with their
@@ -448,12 +459,16 @@ pub fn credential_records(board: &Board, account: &str, own: &[(Fingerprint, Pub
                 Kind::Enroll => match parse_record_value::<Enrollment>(&bytes) {
                     Ok(v) => {
                         let grade = v.entries.iter().any(|e| e.anchor);
-                        (v.entries.clone(), Vec::new(), v.sig.clone(), canonical_record(&v.entries, None), grade)
+                        let sigless = canonical_record(&v.entries, None);
+                        (v.entries, Vec::new(), v.sig, sigless, grade)
                     }
                     Err(_) => continue,
                 },
                 Kind::Retire => match parse_record_value::<Fingerprint>(&bytes) {
-                    Ok(v) => (Vec::new(), v.entries.clone(), v.sig.clone(), canonical_record(&v.entries, None), false),
+                    Ok(v) => {
+                        let sigless = canonical_record(&v.entries, None);
+                        (Vec::new(), v.entries, v.sig, sigless, false)
+                    }
                     Err(_) => continue,
                 },
             };
@@ -504,7 +519,7 @@ pub fn credential_records(board: &Board, account: &str, own: &[(Fingerprint, Pub
             (Some(x), Some(y)) => x.cmp(&y),
             (Some(_), None) => std::cmp::Ordering::Greater,
             (None, Some(_)) => std::cmp::Ordering::Less,
-            (None, None) => address_order(&a.home, &b.home).then_with(|| address_order(&a.link, &b.link)),
+            (None, None) => components(&a.home).cmp(&components(&b.home)).then_with(|| components(&a.link).cmp(&components(&b.link))),
         })
     });
     Ok(Records { account: account.to_string(), records, head, floor, claim_entry, claimed })
@@ -525,8 +540,7 @@ fn hand_of(board: &Board, record: &Record, term: Option<BoardTerm>, own: &[(Fing
             let Some(set) = set_opening_at(board, &record.home_account, base)? else {
                 return Ok(Hand::Unreadable("the set as of the record's base is not readable at this board".into()));
             };
-            let candidates: Vec<(&Fingerprint, &PublicKey)> =
-                set.enrolled.iter().filter(|e| !record.anchor_grade || e.anchor).map(|e| (&e.fingerprint, &e.key)).collect();
+            let candidates = set.enrolled.iter().filter(|e| !record.anchor_grade || e.anchor).map(|e| (&e.fingerprint, &e.key));
             Ok(match record.signed_by(term, &blob, candidates) {
                 Some(fp) => Hand::Key(fp),
                 None => Hand::NoKeyVerifies,
@@ -556,7 +570,7 @@ mod tests {
     #[test]
     fn addresses_order_by_component() {
         let mut v = vec!["1.0.1.0.1.0.2.10".to_string(), "1.0.1.0.1.0.2.2".to_string()];
-        v.sort_by(address_order);
+        v.sort_by_cached_key(|a| components(a));
         assert_eq!(v, ["1.0.1.0.1.0.2.2", "1.0.1.0.1.0.2.10"]);
     }
 
@@ -601,6 +615,8 @@ mod tests {
             claimed: false,
         };
         assert_eq!(records.label_of(&Fingerprint::of(&labelled)).as_deref(), Some("paper"));
+        assert_eq!(records.enrollment_of(&Fingerprint::of(&bare)).map(|r| r.link.as_str()), Some("1.0.1.0.1.0.2.1"), "the record that FIRST enrolled it");
+        assert!(records.enrollment_of(&Fingerprint::of(&key(3))).is_none());
         assert_eq!(records.label_of(&Fingerprint::of(&bare)), None);
         assert_eq!(records.label_of_hand(&Hand::Key(Fingerprint::of(&bare))), None);
         assert_eq!(records.label_of(&Fingerprint::of(&key(3))), None, "a key no record enrolled");

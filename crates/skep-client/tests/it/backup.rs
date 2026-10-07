@@ -6,7 +6,7 @@
 
 use std::path::{Path, PathBuf};
 
-use skep_client::ceremony::backup::{anchor_file_name, backup_moment, BackupOptions, Venue};
+use skep_client::ceremony::backup::{anchor_file_name, backup_moment, BackupOptions, Print, Venue};
 use skep_client::person::scripted::{Script, Scripted};
 use skep_client::person::{Abandoned, Confirmation, Consent, Destination, HandedPath, Import, Imported, KeptOrPlaced, LabelBox, Person, Public, Question, Retype, Retyped, Secret, Sheet, Statement};
 use skep_client::sheet::{Facts, KeyFile, Label};
@@ -44,7 +44,7 @@ fn the_file_path_reads_each_anchor_back_from_its_file() {
         assert_eq!((file.account, file.principal, file.origin), (None, None, None), "the door-side artifact lacks the three facts (AUTH-5.38)");
         let suffix = if i == 0 { "-a" } else { "-b" };
         assert!(anchor.label.as_str().starts_with("testhost-2026-10-04-") && anchor.label.as_str().ends_with(suffix), "{}", anchor.label);
-        assert!(!anchor.print_verified && !anchor.print_unverified);
+        assert_eq!(anchor.print, None, "the file form prints nothing");
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
@@ -188,8 +188,8 @@ fn the_paper_path_retypes_from_the_sheet_between_a_dismissal_and_the_offer() {
     assert!(person.said("this is not the key on this paper — re-scan"));
     assert!(person.said("PRINT TWO, KEEP THEM APART"), "(b) keyed to the paper path");
     assert!(person.said("or destroy it and keep the print"), "the ladder's print clause under --paper");
-    assert!(out.anchors[0].print_verified && out.anchors[0].file.as_ref().is_some_and(|p| p.is_file()), "a: verified, the file kept");
-    assert!(out.anchors[1].print_verified && out.anchors[1].file.is_none(), "b: verified, the file destroyed on the offer");
+    assert!(out.anchors[0].print == Some(Print::Verified) && out.anchors[0].file.as_ref().is_some_and(|p| p.is_file()), "a: verified, the file kept");
+    assert!(out.anchors[1].print == Some(Print::Verified) && out.anchors[1].file.is_none(), "b: verified, the file destroyed on the offer");
     assert_eq!(files_in(&b).len(), 0);
     assert!(person.said("AUTH-5.44 (notebook)") && person.said("keep the papers apart"), "the notebook form, 'papers'");
     for sheet in &person.sheets {
@@ -204,7 +204,7 @@ fn the_paper_path_retypes_from_the_sheet_between_a_dismissal_and_the_offer() {
     let (a, b) = (dir.path().join("a"), dir.path().join("b"));
     let mut person = Scripted::new(vec![Script::LabelDefault, Script::LabelDefault, Script::RetypeDeclined, Script::RetypeDeclined]);
     let out = backup_moment(&mut person, &notebook_venue(), &options(vec![a, b], true, None)).expect("the moment");
-    assert!(out.anchors.iter().all(|x| x.print_unverified && !x.print_verified && x.file.as_ref().is_some_and(|p| p.is_file())));
+    assert!(out.anchors.iter().all(|x| x.print == Some(Print::Unverified) && x.file.as_ref().is_some_and(|p| p.is_file())));
     assert!(person.said("the print is UNVERIFIED") && person.said("never destroyed in favor of an unverified one"));
 }
 

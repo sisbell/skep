@@ -145,7 +145,7 @@ pub fn hosted(board: &Board, payload: &[u8], principal: u64) -> Result<HostedOut
         let _ = board.session_close(&boot);
         let _ = board.session_close(&owner);
     }
-    Ok(HostedOutcome::Claimed(HostedReply { claimant: account.clone(), facts: Facts { account, principal, origin: board.dialed.clone() }, log, anchorless }))
+    Ok(HostedOutcome::Claimed(HostedReply { claimant: account.clone(), facts: Facts { account, principal, origin: board.dialed().clone() }, log, anchorless }))
 }
 
 fn payload_face(why: &str) -> Halt {
@@ -164,6 +164,6 @@ fn hosted_bare(board: &Board, principal: u64) -> Result<Token, Halt> {
             "a Remote peer — the sidecar is not in the daemon's network namespace — or a claimed board",
             "run the sidecar with `--network container:<daemon>`",
         )),
-        Opened::Blocked { record } => Err(Halt::Blocked(crate::halt::Blocked { record, named_by: board.dialed.as_str().to_string(), ground: None })),
+        Opened::Blocked { record } => Err(Halt::Blocked(crate::halt::Blocked { record, named_by: board.dialed().as_str().to_string(), ground: None })),
     }
 }

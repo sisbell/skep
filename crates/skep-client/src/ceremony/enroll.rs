@@ -35,7 +35,7 @@ use crate::derive::{precheck, principal_of, walk_to_set, Mode};
 use crate::halt::Halt;
 use crate::person::Person;
 use crate::sheet::Facts;
-use crate::store::{arm4_face, store_halt, FileStore, KeySelector, KeyStore, Purpose, StoreError};
+use crate::store::{arm4_face, FileStore, KeySelector, KeyStore, Purpose, StoreError};
 
 /// The command's inputs.
 #[derive(Debug, Clone)]
@@ -63,14 +63,14 @@ pub fn enroll(board: &Board, store: &FileStore, person: &mut dyn Person, opts: &
     refuse_anchor_flagged(&entries, "skep enroll")?;
     let fps: Vec<Fingerprint> = entries.iter().map(|e| Fingerprint::of(&e.key)).collect();
     // The store's ENROLLED device key for (board, n) — §3.5's lookup.
-    let key = match store.select(&KeySelector::Board { origin: &board.dialed, principal: Some(opts.principal) }, Purpose::Sign) {
+    let key = match store.select(&KeySelector::Board { origin: board.dialed(), principal: Some(opts.principal) }, Purpose::Sign) {
         Ok(key) => key,
         Err(StoreError::NoSelection { keys }) => {
             return Err(arm4_face(store, &keys, Mode::of(&board.health()?)));
         }
-        Err(e) => return Err(store_halt(e)),
+        Err(e) => return Err(e.into()),
     };
-    let signer = store.signer(&KeySelector::Path(&key.path)).map_err(store_halt)?;
+    let signer = store.signer(&KeySelector::Path(&key.path))?;
     // The reads: the pre-check (the origin arm, `principal_prefix`, the walk).
     let pre = precheck(board, opts.principal, &key.fingerprint)?;
     if pre.walk.by_reference() {
@@ -81,7 +81,7 @@ pub fn enroll(board: &Board, store: &FileStore, person: &mut dyn Person, opts: &
             format!("make the act at {} — principal {at} — where the set that opens it stands (AUTH-6.37; the enrollment-side twin of `not_holder_retirement`'s redirect)", pre.walk.set_account),
         ));
     }
-    crate::ceremony::handshake::key_face(board, &pre, &key.fingerprint, &[(key.fingerprint, key.public.clone())], Site::Session)?;
+    crate::ceremony::handshake::key_face(board, &pre.walk, &key.fingerprint, &[(key.fingerprint, key.public.clone())], Site::Session)?;
     let account = pre.account.clone();
     // THE COMPARISON — a CONSENT moment.
     if !compare_payload(person, &entries, "skep enroll")? {
@@ -98,7 +98,7 @@ pub fn enroll(board: &Board, store: &FileStore, person: &mut dyn Person, opts: &
     }
     // THE DEPOSIT: the pasted bytes VERBATIM as the sig-less body.
     let id = format!("enroll.{}", &fps[0].to_hex()[..8]);
-    let outcome = deposit(board, &session.token, &Deposit { home: &reads.home, subject: &account, kind: DepositKind::EnrollVerbatim(text.clone()), hand: Some(&*signer), id: &id });
+    let outcome = deposit(board, session.token(), &Deposit { home: &reads.home, subject: &account, kind: DepositKind::EnrollVerbatim(text.clone()), hand: Some(&*signer), id: &id });
     let _ = session.close();
     let outcome = outcome?;
     let reconciled = match &outcome {
@@ -113,7 +113,7 @@ pub fn enroll(board: &Board, store: &FileStore, person: &mut dyn Person, opts: &
         "AUTH-5.32",
         "THE RETURN LEG: hand the three facts below to the device that generated the key — `skep bind` lands them there; this device appends no binding line, every fact being a read, and offers the reply again with `skep enroll --reply <fp-prefix>`",
     );
-    Ok(Enrolled { facts: Facts { account, principal: opts.principal, origin: board.dialed.clone() }, fingerprints: fps, reconciled, warnings })
+    Ok(Enrolled { facts: Facts { account, principal: opts.principal, origin: board.dialed().clone() }, fingerprints: fps, reconciled, warnings })
 }
 
 /// `--reply <fp-prefix>`: the three facts re-derived from reads, the
@@ -132,7 +132,7 @@ pub fn reply(board: &Board, principal: u64, prefix: &str) -> Result<Enrolled, Ha
             "the reply is offered again only for a fingerprint ENROLLED in the set the walk reaches (AUTH-5.32)",
             "run the hop first: `skep enroll --payload`",
         )),
-        [_] => Ok(Enrolled { facts: Facts { account, principal, origin: board.dialed.clone() }, fingerprints: matches, reconciled: true, warnings: Vec::new() }),
+        [_] => Ok(Enrolled { facts: Facts { account, principal, origin: board.dialed().clone() }, fingerprints: matches, reconciled: true, warnings: Vec::new() }),
         many => Err(Halt::face(
             format!("`{prefix}` matches more than one enrolled key"),
             many.iter().map(|f| f.to_string()).collect::<Vec<_>>().join("\n  "),

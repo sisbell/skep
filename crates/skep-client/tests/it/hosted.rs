@@ -61,7 +61,7 @@ fn the_hosted_arm_claims_from_the_payload_verbatim_and_is_idempotent() {
     // THE CLAIM.
     let out = hosted(&board, payload.as_bytes(), 1).expect("the hosted claim");
     let HostedOutcome::Claimed(reply) = out else { panic!("{out:?}") };
-    assert_eq!((reply.claimant.as_str(), reply.facts.account.as_str(), reply.facts.principal, &reply.facts.origin), ("1.0.1", "1.0.1", 1, &board.dialed));
+    assert_eq!((reply.claimant.as_str(), reply.facts.account.as_str(), reply.facts.principal, &reply.facts.origin), ("1.0.1", "1.0.1", 1, board.dialed()));
     assert!(!reply.anchorless);
     assert_eq!(reply.log.iter().filter(|l| l.starts_with("payload entry:")).count(), 3);
     assert_eq!(board.health().unwrap().claimant(), Some("1.0.1"));
@@ -75,7 +75,7 @@ fn the_hosted_arm_claims_from_the_payload_verbatim_and_is_idempotent() {
     assert_eq!(hosted(&board, payload.as_bytes(), 1).unwrap(), HostedOutcome::AlreadyClaimed { claimant: "1.0.1".into() });
     // The customer signs in from their own device.
     let session = handshake(&board, Scope::Content, &device.signer(), 1, Site::Hosted).expect("the customer's session");
-    assert_eq!(session.fingerprint, fp);
+    assert_eq!(session.fingerprint(), fp);
     session.close().unwrap();
 
     // ANCHORLESS: a device-only payload founds an anchorless account, said.

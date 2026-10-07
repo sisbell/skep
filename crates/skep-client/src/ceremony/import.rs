@@ -7,13 +7,15 @@
 //! neither" an ANSWER, the no-artifact face (AUTH-5.16's first arm with its
 //! DESTROYED / FINDABLE fork and the three acts that exist elsewhere, forked
 //! by cell). FINGERPRINT FIRST (AUTH-5.39): re-derived from the seed and
-//! compared against the artifact's, then against the set R0's walk reached
-//! (the RETIRED-SHEET face from the admitted read — the position and the
-//! retiring hand's label, AUTH-5.22, AUTH-5.77, neither asserted below the
-//! retention floor; a device key's material; the WRONG SHEET, AUTH-5.25
-//! (iii)), then the client-local sign/verify against the `key` `key_set`
-//! publishes (AUTH-5.54 step 5's pattern). AUTH-5.22's facts — the file's
-//! `account`, `principal` and `origin` — are compared BEFORE any
+//! compared against the artifact's — the typed arm's fingerprint prefix off
+//! the print, the file arm's `KeyFile::parse`, which refuses a file whose
+//! members do not re-derive from its seed — then against the set R0's walk
+//! reached (the RETIRED-SHEET face from the admitted read — the position
+//! and the retiring hand's label, AUTH-5.22, AUTH-5.77, neither asserted
+//! below the retention floor; a device key's material; the WRONG SHEET,
+//! AUTH-5.25 (iii)), then the client-local sign/verify against the `key`
+//! `key_set` publishes (AUTH-5.54 step 5's pattern). AUTH-5.22's facts —
+//! the file's `account`, `principal` and `origin` — are compared BEFORE any
 //! `/challenge`, a disagreement a halt naming both. R1's TWO QUESTIONS: WHOSE
 //! ACCOUNT THIS IS (asked ONCE per walk at R1's head, on every arm; the
 //! address is NOT the key) and, where the set holds a second enrolled
@@ -35,7 +37,7 @@ use crate::derive::records::{Hand, Records};
 use crate::derive::KeyDiagnosis;
 use crate::halt::Halt;
 use crate::person::{HandedPath, Import, Imported, KeptOrPlaced, Person, Public, Question, Secret};
-use crate::sheet::{render_inert, KeyFile, Seed};
+use crate::sheet::{render_inert, typed_prefix_matches, KeyFile, Seed};
 use crate::sign::Signer;
 use crate::store::FileStore;
 
@@ -109,9 +111,16 @@ pub enum ImportOutcome {
     Neither,
 }
 
-/// The FILE arm's answer: the signer, the label, the path, the kept-or-placed
-/// answer, the artifact's own fingerprint.
-type FileImport = (HybridSigner, Option<String>, Option<PathBuf>, KeptOrPlaced, Option<Fingerprint>);
+/// What the artifact handed in yields, its fingerprint already checked
+/// against the artifact's own: the signer (the SEED, held to §4a.3's bound),
+/// its label, its file where it was one, and the kept-or-placed answer for
+/// that file (`Kept` on paper).
+struct Handed {
+    signer: HybridSigner,
+    label: Option<String>,
+    file: Option<PathBuf>,
+    kept_or_placed: KeptOrPlaced,
+}
 
 /// What the import is checked against.
 pub struct ImportContext<'a> {
@@ -167,8 +176,8 @@ fn compare_facts(file: &KeyFile, cx: &ImportContext<'_>) -> Result<(), Halt> {
         }
     }
     if let Some(o) = &file.origin {
-        if o != &cx.board.dialed {
-            faults.push(format!("the artifact names origin {o}; this walk dials {}", cx.board.dialed));
+        if o != cx.board.dialed() {
+            faults.push(format!("the artifact names origin {o}; this walk dials {}", cx.board.dialed()));
         }
     }
     if faults.is_empty() {
@@ -267,14 +276,14 @@ pub fn no_artifact_face(person: &mut dyn Person, cx: &ImportContext<'_>) -> Halt
 /// THE IMPORT.
 pub fn import_anchor(person: &mut dyn Person, cx: &ImportContext<'_>) -> Result<ImportOutcome, Halt> {
     // The file arm by flag, else the prompt's three answers.
-    let (signer, label, file, kept_or_placed, artifact_fp): FileImport = match cx.anchor_path {
+    let handed = match cx.anchor_path {
         Some(path) => import_file(person, cx, path)?,
         None => loop {
             let answer = person
                 .import(Secret(Import {
                     prompt: format!(
                         "IMPORT ONE ANCHOR of account {} (principal {}) at {}: the kept FILE, or the 64 hex typed from the PRINT and then its fingerprint's first group (at least 8 hex), or `neither` where both papers are gone",
-                        cx.account, cx.principal, cx.board.dialed
+                        cx.account, cx.principal, cx.board.dialed()
                     ),
                 }))
                 .map_err(|_| abandoned())?;
@@ -288,8 +297,7 @@ pub fn import_anchor(person: &mut dyn Person, cx: &ImportContext<'_>) -> Result<
                     };
                     let signer = crate::sign::signer_from_seed(seed.bytes());
                     let fp = Signer::fingerprint(&signer);
-                    let prefix = fingerprint_prefix.trim().to_ascii_lowercase();
-                    if prefix.len() < 8 || !fp.to_hex().starts_with(&prefix) {
+                    if !typed_prefix_matches(&fingerprint_prefix, &fp) {
                         // AUTH-5.39: "this is not the key on this paper — re-scan".
                         say(person, "AUTH-5.39", "this is not the key on this paper — re-scan: the fingerprint on the print does not match the key the typed seed derives");
                         continue;
@@ -298,7 +306,7 @@ pub fn import_anchor(person: &mut dyn Person, cx: &ImportContext<'_>) -> Result<
                     // are shown and confirmed against the paper (AUTH-5.22).
                     let ok = person
                         .yes_no(Public(Question {
-                            text: format!("the paper should name account {}, principal {} and origin {} — does it?", cx.account, cx.principal, cx.board.dialed),
+                            text: format!("the paper should name account {}, principal {} and origin {} — does it?", cx.account, cx.principal, cx.board.dialed()),
                         }))
                         .map_err(|_| abandoned())?;
                     if !ok {
@@ -308,17 +316,13 @@ pub fn import_anchor(person: &mut dyn Person, cx: &ImportContext<'_>) -> Result<
                             "name the board and principal the paper carries",
                         ));
                     }
-                    break (signer, cx.records.label_of(&fp), None, KeptOrPlaced::Kept, Some(fp));
+                    break Handed { label: cx.records.label_of(&fp), signer, file: None, kept_or_placed: KeptOrPlaced::Kept };
                 }
             }
         },
     };
+    let Handed { signer, label, file, kept_or_placed } = handed;
     let fp = Signer::fingerprint(&signer);
-    if let Some(artifact) = artifact_fp {
-        if artifact != fp {
-            return Err(Halt::face("this is not the key on this paper — re-scan", "AUTH-5.39: the fingerprint re-derived from the seed is not the artifact's", "hand in the artifact again"));
-        }
-    }
     // Then against the set R0's walk reached.
     match KeyDiagnosis::of(cx.set, &fp) {
         KeyDiagnosis::Retired { .. } => return Err(retired_sheet(cx, &fp)),
@@ -334,7 +338,7 @@ pub fn import_anchor(person: &mut dyn Person, cx: &ImportContext<'_>) -> Result<
                 format!("THE WRONG SHEET: this account's records do not list this key ({fp})"),
                 format!(
                     "AUTH-5.25 (iii): `key_set` at {} holds it in neither list — another account's or another board's paper; this walk is at {} (principal {}) on {}",
-                    cx.set_account, cx.account, cx.principal, cx.board.dialed
+                    cx.set_account, cx.account, cx.principal, cx.board.dialed()
                 ),
                 "hand in the paper of THIS account, or name the board and principal that paper carries",
             ))
@@ -342,7 +346,7 @@ pub fn import_anchor(person: &mut dyn Person, cx: &ImportContext<'_>) -> Result<
         KeyDiagnosis::Enrolled { anchor: true } => {}
     }
     // The client-local sign/verify against the key `key_set` publishes.
-    let published = cx.set.enrolled(&fp).map(|e| e.key.clone()).expect("enrolled");
+    let published = &cx.set.enrolled(&fp).expect("the diagnosis above found it enrolled").key;
     if published != Signer::public_key(&signer) || !local_verify(&signer) {
         return Err(Halt::face(
             "this paper's key does not sign as the key the board publishes",
@@ -371,7 +375,7 @@ pub fn import_anchor(person: &mut dyn Person, cx: &ImportContext<'_>) -> Result<
 /// The FILE arm: the path inside the store refused ahead of the question;
 /// the destroy-at-end stated; KEPT-OR-PLACED asked (SECRET); the file
 /// parsed, its `anchor` member true; AUTH-5.22's facts compared.
-fn import_file(person: &mut dyn Person, cx: &ImportContext<'_>, path: &Path) -> Result<FileImport, Halt> {
+fn import_file(person: &mut dyn Person, cx: &ImportContext<'_>, path: &Path) -> Result<Handed, Halt> {
     if cx.store.contains_path(path) {
         return Err(Halt::face(
             format!("{} lies inside the key store", path.display()),
@@ -403,6 +407,5 @@ fn import_file(person: &mut dyn Person, cx: &ImportContext<'_>, path: &Path) -> 
     }
     compare_facts(&file, cx)?;
     say(person, "AUTH-5.38", format!("the artifact: anchor {} label {}", file.fingerprint, file.label.as_deref().map(render_inert).unwrap_or_else(|| "(none)".into())));
-    let signer = file.signer();
-    Ok((signer, file.label.clone(), Some(path.to_path_buf()), kept_or_placed, Some(file.fingerprint)))
+    Ok(Handed { signer: file.signer(), label: file.label.clone(), file: Some(path.to_path_buf()), kept_or_placed })
 }

@@ -21,71 +21,89 @@ use crate::ceremony::handshake::Session;
 use crate::halt::Halt;
 use crate::sign::{sig_hex, Signer};
 
-/// THE RESUME READ: a supersession claim FROM `old` TO `new` already stands —
-/// `find_links_ftt` over the supersedes type and `old`'s unit span, each
-/// claim's `to` read off `read_link` — its address, else `None`.
-pub fn trail_present(board: &Board, old: &str, new: &str) -> Result<Option<String>, Halt> {
-    let v = board.guest(&frames::find_links_ftt_from(T_SUPERSEDES, old))?;
-    for claim in answers::addrs(&v) {
-        if link_subject(board, claim)?.as_deref() == Some(new) {
-            return Ok(Some(claim.to_string()));
-        }
-    }
-    Ok(None)
+/// ONE SUPERSESSION TRAIL, named by its three addresses: `home` the subject
+/// account's own doc 1 it is homed in, `old` the OLD enroll link and `new`
+/// the NEW one. The addresses are NAMED so `old` and `new` cannot trade
+/// places in a call — a claim written backwards is permanent and public,
+/// and the resume read, which looks FROM `old`, would miss it and write a
+/// second.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Trail<'a> {
+    pub home: &'a str,
+    pub old: &'a str,
+    pub new: &'a str,
 }
 
-/// THE WRITE: `assert_sup` homed in `home`, with its `attest` — the entry
-/// frame's `alg` the signing key's token, `board` `H.1`'s pair, `account`
-/// the session's account, `doc` the home, the body `entry_body_assert_sup`'s
-/// four rows (the supersedes class's unit span, `old`'s, `new`'s, the
-/// `replaces` row empty) — signed by `signer`. Answers the claim's address.
-pub fn write_trail(board: &Board, session: &Session<'_>, signer: &dyn Signer, home: &str, old: &str, new: &str, id: &str) -> Result<String, Halt> {
-    let Some(term) = board.board_term()? else {
-        return Err(Halt::face("this board has no H.1 yet", "the trail's `attest` names `H.1`'s pair as its board term and the board answers no head", "retry once the board has written its head; nothing was written"));
-    };
-    let frame_fault = || Halt::face("the trail's frame could not be composed", "an address of the trail did not parse", "this is this client's frame; nothing was written");
-    let account = parse_address(&session.account).ok_or_else(frame_fault)?;
-    let home_addr = parse_address(home).ok_or_else(frame_fault)?;
-    let old_addr = parse_address(old).ok_or_else(frame_fault)?;
-    let new_addr = parse_address(new).ok_or_else(frame_fault)?;
-    let ty_addr = parse_address(T_SUPERSEDES).ok_or_else(frame_fault)?;
-    let (from, to, ty) = ([unit_span(&old_addr)], [unit_span(&new_addr)], [unit_span(&ty_addr)]);
-    let body = entry_body_assert_sup(LinkSlots { from: EntrySlot(&from), to: EntrySlot(&to), ty: EntrySlot(&ty) });
-    let alg = signer.public_key().alg().to_string();
-    let bytes = entry_frame(&alg, term, &account, DocTerm::One(&home_addr), &body);
-    let attest = json!({"alg": alg, "sig": sig_hex(&signer.sign(&bytes))});
-    let v = match session.op(&frames::assert_sup(home, old, new, Some(attest), Some(id)))? {
-        Answer::Closed => {
-            return Err(Halt::face(
-                "the session ended while writing the supersession trail",
-                "the board answered `Skepd-Session: closed`",
-                "re-run: the trail resumes by reading its presence (AUTH-5.59 step 3)",
-            ))
+impl Trail<'_> {
+    /// THE RESUME READ: a supersession claim FROM `old` TO `new` already
+    /// stands — `find_links_ftt` over the supersedes type and `old`'s unit
+    /// span, each claim's `to` read off `read_link` — its address, else
+    /// `None`.
+    pub fn present(&self, board: &Board) -> Result<Option<String>, Halt> {
+        let v = board.guest(&frames::find_links_ftt_from(T_SUPERSEDES, self.old))?;
+        for claim in answers::addrs(&v) {
+            if link_subject(board, claim)?.as_deref() == Some(self.new) {
+                return Ok(Some(claim.to_string()));
+            }
         }
-        Answer::Document(v) => v,
-    };
-    if let Some(claim) = acked_addr(&v) {
-        return Ok(claim.to_string());
+        Ok(None)
     }
-    let Some(r) = Rejection::of(&v) else {
-        return Err(Halt::face("the trail answered a shape this client does not know", v.to_string(), "this is a fault in this client or the board"));
-    };
-    Err(match r.key() {
-        "endpoint_not_resident" | "original_not_resident" => Halt::face(
-            "an endpoint of the trail is not a resident link",
-            format!("{}: `old` {old} or `new` {new} is no link this session may read (wire.md §Links (writes))", r.token()),
-            "this is this client's frame — the old enroll link is the admitted read's and the new one T2's ack; re-run, the walk resumes by reading",
-        ),
-        k if k.starts_with("attestation_") => Halt::face(
-            "the board judged the trail's attest and refused",
-            format!("{}: the frame this client composed did not verify under the set that opens the account as of the base, or the board had no head", r.token()),
-            "this is this client's frame and never your act; `board_unavailable` is a reorder — retry once the head is written",
-        ),
-        "not_owner" => Halt::face(
-            "this session does not own the trail's home",
-            format!("{}: the trail is homed in the subject account's own doc 1 and ω admits the write from that account's session alone", r.token()),
-            "this is this client's frame and never your act",
-        ),
-        _ => r.refused(&v),
-    })
+
+    /// THE WRITE: `assert_sup` homed in `home`, with its `attest` — the entry
+    /// frame's `alg` the signing key's token, `board` `H.1`'s pair, `account`
+    /// the session's account, `doc` the home, the body
+    /// `entry_body_assert_sup`'s four rows (the supersedes class's unit
+    /// span, `old`'s, `new`'s, the `replaces` row empty) — signed by
+    /// `signer`. Answers the claim's address.
+    pub fn write(&self, board: &Board, session: &Session<'_>, signer: &dyn Signer, id: &str) -> Result<String, Halt> {
+        let Trail { home, old, new } = *self;
+        let Some(term) = board.board_term()? else {
+            return Err(Halt::face("this board has no H.1 yet", "the trail's `attest` names `H.1`'s pair as its board term and the board answers no head", "retry once the board has written its head; nothing was written"));
+        };
+        let frame_fault = || Halt::face("the trail's frame could not be composed", "an address of the trail did not parse", "this is this client's frame; nothing was written");
+        let account = parse_address(session.account()).ok_or_else(frame_fault)?;
+        let home_addr = parse_address(home).ok_or_else(frame_fault)?;
+        let old_addr = parse_address(old).ok_or_else(frame_fault)?;
+        let new_addr = parse_address(new).ok_or_else(frame_fault)?;
+        let ty_addr = parse_address(T_SUPERSEDES).ok_or_else(frame_fault)?;
+        let (from, to, ty) = ([unit_span(&old_addr)], [unit_span(&new_addr)], [unit_span(&ty_addr)]);
+        let body = entry_body_assert_sup(LinkSlots { from: EntrySlot(&from), to: EntrySlot(&to), ty: EntrySlot(&ty) });
+        let alg = signer.public_key().alg().to_string();
+        let bytes = entry_frame(&alg, term, &account, DocTerm::One(&home_addr), &body);
+        let attest = json!({"alg": alg, "sig": sig_hex(&signer.sign(&bytes))});
+        let v = match session.op(&frames::assert_sup(home, old, new, Some(attest), Some(id)))? {
+            Answer::Closed => {
+                return Err(Halt::face(
+                    "the session ended while writing the supersession trail",
+                    "the board answered `Skepd-Session: closed`",
+                    "re-run: the trail resumes by reading its presence (AUTH-5.59 step 3)",
+                ))
+            }
+            Answer::Document(v) => v,
+        };
+        if let Some(claim) = acked_addr(&v) {
+            return Ok(claim.to_string());
+        }
+        let Some(r) = Rejection::of(&v) else {
+            return Err(Halt::face("the trail answered a shape this client does not know", v.to_string(), "this is a fault in this client or the board"));
+        };
+        Err(match r.key() {
+            "endpoint_not_resident" | "original_not_resident" => Halt::face(
+                "an endpoint of the trail is not a resident link",
+                format!("{}: `old` {old} or `new` {new} is no link this session may read (wire.md §Links (writes))", r.token()),
+                "this is this client's frame — the old enroll link is the admitted read's and the new one T2's ack; re-run, the walk resumes by reading",
+            ),
+            k if k.starts_with("attestation_") => Halt::face(
+                "the board judged the trail's attest and refused",
+                format!("{}: the frame this client composed did not verify under the set that opens the account as of the base, or the board had no head", r.token()),
+                "this is this client's frame and never your act; `board_unavailable` is a reorder — retry once the head is written",
+            ),
+            "not_owner" => Halt::face(
+                "this session does not own the trail's home",
+                format!("{}: the trail is homed in the subject account's own doc 1 and ω admits the write from that account's session alone", r.token()),
+                "this is this client's frame and never your act",
+            ),
+            _ => r.refused(&v),
+        })
+    }
 }

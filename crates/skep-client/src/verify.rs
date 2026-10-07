@@ -41,17 +41,37 @@ pub struct Admission {
     pub label: Option<String>,
     /// The admitting record's position; `None` position-free.
     pub since: Option<u64>,
-    /// The retiring record's position; `None` while enrolled, `Some(None)`
-    /// retired position-free.
-    pub until: Option<Option<u64>>,
+    /// Where the admission's lifecycle stands.
+    pub until: Until,
+}
+
+/// Where an admission's lifecycle stands — one lifecycle per fingerprint
+/// and set (I4, AUTH-2.98).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Until {
+    /// No admitted retirement names it: it stands enrolled.
+    Enrolled,
+    /// Retired by an admitted record at this position.
+    RetiredAt(u64),
+    /// Retired by an admitted record read position-free, below the
+    /// retention floor: no base reads it as enrolled.
+    RetiredPositionFree,
+}
+
+/// One record the filter refused, and why — inert to the table.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Inert {
+    /// The record's link address.
+    pub link: String,
+    pub why: String,
 }
 
 /// THE FILTERED TABLE and the records it left inert.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct FilteredTable {
     pub admissions: Vec<Admission>,
-    /// The links of the records the filter refused, with why.
-    pub inert: Vec<(String, String)>,
+    /// The records the filter refused.
+    pub inert: Vec<Inert>,
 }
 
 impl FilteredTable {
@@ -72,34 +92,33 @@ impl FilteredTable {
                         anchor: e.anchor,
                         label: e.label().map(str::to_string),
                         since: r.position,
-                        until: None,
+                        until: Until::Enrolled,
                     });
                 }
                 continue;
             }
+            let inert = |why: &str| Inert { link: r.link.clone(), why: why.to_string() };
             let Some(sig) = &r.sig else {
-                table.inert.push((r.link.clone(), "no `sig` above the claim".into()));
+                table.inert.push(inert("no `sig` above the claim"));
                 continue;
             };
             let Some(board) = board else {
-                table.inert.push((r.link.clone(), "no H.1: the record frame cannot be composed".into()));
+                table.inert.push(inert("no H.1: the record frame cannot be composed"));
                 continue;
             };
             let Some(blob) = crate::hex::decode(sig) else {
-                table.inert.push((r.link.clone(), "the `sig` is no hybrid blob's hex".into()));
+                table.inert.push(inert("the `sig` is no hybrid blob's hex"));
                 continue;
             };
             // The table as it stands at this record's base — record order
             // being position order where positions are known.
-            let candidates: Vec<(Fingerprint, PublicKey)> = table
+            let candidates = table
                 .admissions
                 .iter()
-                .filter(|a| a.until.is_none() && (!r.anchor_grade || a.anchor))
-                .map(|a| (a.fingerprint, a.key.clone()))
-                .collect();
-            let hand = r.signed_by(board, &blob, candidates.iter().map(|(f, k)| (f, k)));
-            match hand {
-                None => table.inert.push((r.link.clone(), "signed by no key of this account's filtered set".into())),
+                .filter(|a| a.until == Until::Enrolled && (!r.anchor_grade || a.anchor))
+                .map(|a| (&a.fingerprint, &a.key));
+            match r.signed_by(board, &blob, candidates) {
+                None => table.inert.push(inert("signed by no key of this account's filtered set")),
                 Some(_) => match r.kind {
                     Kind::Enroll => {
                         for e in &r.enrolled {
@@ -113,14 +132,14 @@ impl FilteredTable {
                                 anchor: e.anchor,
                                 label: e.label().map(str::to_string),
                                 since: r.position,
-                                until: None,
+                                until: Until::Enrolled,
                             });
                         }
                     }
                     Kind::Retire => {
                         for fp in &r.retired {
-                            if let Some(a) = table.admissions.iter_mut().find(|a| a.fingerprint == *fp && a.until.is_none()) {
-                                a.until = Some(r.position);
+                            if let Some(a) = table.admissions.iter_mut().find(|a| a.fingerprint == *fp && a.until == Until::Enrolled) {
+                                a.until = r.position.map_or(Until::RetiredPositionFree, Until::RetiredAt);
                             }
                         }
                     }
@@ -133,21 +152,17 @@ impl FilteredTable {
     /// The admissions ENROLLED as of the base of an entry at `position`
     /// (P12): admitted at a position below it (or position-free), not yet
     /// retired at one below it.
-    pub fn as_of(&self, position: u64) -> Vec<&Admission> {
-        self.admissions
-            .iter()
-            .filter(|a| a.since.is_none_or(|s| s < position))
-            .filter(|a| match a.until {
-                None => true,
-                Some(Some(r)) => r >= position,
-                Some(None) => false,
-            })
-            .collect()
+    pub fn as_of(&self, position: u64) -> impl Iterator<Item = &Admission> + '_ {
+        self.admissions.iter().filter(move |a| a.since.is_none_or(|s| s < position)).filter(move |a| match a.until {
+            Until::Enrolled => true,
+            Until::RetiredAt(r) => r >= position,
+            Until::RetiredPositionFree => false,
+        })
     }
 
     /// The table's CURRENT members — every admission not retired.
-    pub fn current(&self) -> Vec<&Admission> {
-        self.admissions.iter().filter(|a| a.until.is_none()).collect()
+    pub fn current(&self) -> impl Iterator<Item = &Admission> + '_ {
+        self.admissions.iter().filter(|a| a.until == Until::Enrolled)
     }
 }
 
@@ -164,8 +179,10 @@ pub struct Entry<'a> {
 }
 
 /// The five verdicts' shape (the signed-ops record §3.5), the three a reader
-/// of one entry reaches and the one a missing input forces.
+/// of one entry reaches and the one a missing input forces. Non-exhaustive:
+/// the record's shape names more verdicts than a reader of one entry meets.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum Verdict {
     /// The entry's `attest` verifies under a member of the filtered set as
     /// of its base.
@@ -179,14 +196,34 @@ pub enum Verdict {
     Undeterminable(&'static str),
 }
 
-/// THE VERDICT of `entry` under `table`, `boundary` the claim entry's
-/// position — `None` where the caller could not derive it.
-pub fn verdict(entry: &Entry<'_>, table: &FilteredTable, boundary: Option<u64>, floor: Option<u64>) -> Verdict {
-    let Some(boundary) = boundary else { return Verdict::Undeterminable("the attestation boundary could not be derived here") };
+/// The two positions a verdict is judged at beside the table, each `None`
+/// where the caller could not derive it — named, so neither can stand in the
+/// other's place: THE ATTESTATION BOUNDARY, the board's claim entry
+/// (SIGNED-OPS §5.5 as RULED), at or below which an entry reads BEFORE
+/// ATTESTATION, its absence UNDETERMINABLE HERE and never a fallback; and
+/// the RETENTION FLOOR, below which an entry and its base are lost.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct Bounds {
+    /// The board's claim entry.
+    pub boundary: Option<u64>,
+    /// The retention floor, where a position-addressed read met it.
+    pub floor: Option<u64>,
+}
+
+/// The bounds the admitted read derived: its claim entry and its floor.
+impl From<&Records> for Bounds {
+    fn from(records: &Records) -> Bounds {
+        Bounds { boundary: records.claim_entry, floor: records.floor }
+    }
+}
+
+/// THE VERDICT of `entry` under `table`, at `bounds`.
+pub fn verdict(entry: &Entry<'_>, table: &FilteredTable, bounds: Bounds) -> Verdict {
+    let Some(boundary) = bounds.boundary else { return Verdict::Undeterminable("the attestation boundary could not be derived here") };
     if entry.position <= boundary {
         return Verdict::BeforeAttestation;
     }
-    if floor.is_some_and(|f| entry.position < f) {
+    if bounds.floor.is_some_and(|f| entry.position < f) {
         return Verdict::Undeterminable("the entry lies below this board's retention floor");
     }
     let Some((alg, blob)) = entry.attest else { return Verdict::Unsigned };
@@ -207,7 +244,7 @@ mod tests {
     use super::*;
     use crate::address::parse_address;
     use crate::derive::records::{Hand, Record};
-    use crate::sign::record_frame;
+    use crate::sign::RecordFrame;
     use skep_identity::{canonical_record, entry_body_make_link, entry_frame, unit_span, DocTerm, Enrollment, EntrySlot, LinkSlots};
     use skep_signature::HybridSigner;
 
@@ -248,15 +285,16 @@ mod tests {
     }
 
     fn sign_record(signer: &HybridSigner, ty: &str, sigless: &str) -> String {
-        let frame = record_frame(
-            HybridSigner::public_key(signer).alg(),
-            board(),
-            "1.0.1",
-            "1.0.1.0.1",
+        let frame = RecordFrame {
+            alg: HybridSigner::public_key(signer).alg(),
+            board: board(),
+            home_account: "1.0.1",
+            home: "1.0.1.0.1",
             ty,
-            &["1.0.1"],
-            sigless.as_bytes(),
-        )
+            to: &["1.0.1"],
+            sigless: sigless.as_bytes(),
+        }
+        .compose()
         .unwrap();
         crate::hex::encode(&HybridSigner::sign(signer, &frame))
     }
@@ -301,11 +339,11 @@ mod tests {
             claimed: true,
         };
         let table = FilteredTable::build(&records, Some(board()));
-        let current: Vec<Fingerprint> = table.current().iter().map(|a| a.fingerprint).collect();
+        let current: Vec<Fingerprint> = table.current().map(|a| a.fingerprint).collect();
         assert!(current.contains(&Fingerprint::of(HybridSigner::public_key(&device))));
         assert!(current.contains(&Fingerprint::of(HybridSigner::public_key(&second))), "the signed second device is admitted");
         assert!(!current.contains(&Fingerprint::of(HybridSigner::public_key(&plant))), "the plant is inert to the table");
-        assert_eq!(table.inert.len(), 1);
+        assert_eq!(table.inert, [Inert { link: "1.0.1.0.1.0.2.3".into(), why: "signed by no key of this account's filtered set".into() }]);
 
         // An entry at 28, signed by the plant: UNSIGNED here.
         let home = parse_address("1.0.1.0.1").unwrap();
@@ -321,16 +359,20 @@ mod tests {
             &body,
         );
         let plant_blob = HybridSigner::sign(&plant, &frame);
+        let bounds = Bounds { boundary: Some(12), floor: None };
         let entry = Entry { position: 28, frame: &frame, attest: Some(("mldsa65-ed25519", &plant_blob)) };
-        assert_eq!(verdict(&entry, &table, Some(12), None), Verdict::Unsigned);
+        assert_eq!(verdict(&entry, &table, bounds), Verdict::Unsigned);
         // The same entry signed by the device key: SIGNED, by that key.
         let device_blob = HybridSigner::sign(&device, &frame);
         let entry = Entry { position: 28, frame: &frame, attest: Some(("mldsa65-ed25519", &device_blob)) };
-        assert_eq!(verdict(&entry, &table, Some(12), None), Verdict::Signed(Fingerprint::of(HybridSigner::public_key(&device))));
+        assert_eq!(verdict(&entry, &table, bounds), Verdict::Signed(Fingerprint::of(HybridSigner::public_key(&device))));
+        // Below the floor: UNDETERMINABLE, never judged.
+        assert!(matches!(verdict(&entry, &table, Bounds { boundary: Some(12), floor: Some(29) }), Verdict::Undeterminable(_)));
         // Before the boundary, and with no boundary.
         let entry = Entry { position: 9, frame: &frame, attest: None };
-        assert_eq!(verdict(&entry, &table, Some(12), None), Verdict::BeforeAttestation);
-        assert!(matches!(verdict(&entry, &table, None, None), Verdict::Undeterminable(_)));
+        assert_eq!(verdict(&entry, &table, bounds), Verdict::BeforeAttestation);
+        assert!(matches!(verdict(&entry, &table, Bounds::default()), Verdict::Undeterminable(_)));
+        assert_eq!(Bounds::from(&records), bounds, "the admitted read's claim entry and floor");
         // A retired key is out of the set at the base of a later entry, in it
         // at the base of an earlier one (P12).
         let retire_entries = [Fingerprint::of(HybridSigner::public_key(&second))];
@@ -340,7 +382,9 @@ mod tests {
         let mut with_retire = records.clone();
         with_retire.records.push(retirement);
         let table = FilteredTable::build(&with_retire, Some(board()));
-        assert!(table.as_of(25).iter().any(|a| a.fingerprint == retire_entries[0]));
-        assert!(!table.as_of(27).iter().any(|a| a.fingerprint == retire_entries[0]));
+        assert!(table.as_of(25).any(|a| a.fingerprint == retire_entries[0]));
+        assert!(!table.as_of(27).any(|a| a.fingerprint == retire_entries[0]));
+        let retired = table.admissions.iter().find(|a| a.fingerprint == retire_entries[0]).expect("admitted at 24");
+        assert_eq!(retired.until, Until::RetiredAt(26));
     }
 }

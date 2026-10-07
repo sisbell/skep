@@ -26,6 +26,7 @@
 //! and never on a face's words. Each site states only what it ADDS or rules
 //! unreachable.
 
+use std::borrow::Cow;
 use std::fmt;
 
 use serde_json::Value;
@@ -33,7 +34,7 @@ use skep_identity::{canonical_record, parse_enroll, Enrollment, Fingerprint};
 
 use crate::board::{acked_addr, answers, frames, Answer, Board, KeySetAnswer, Rejection, Token, T_ENROLL, T_RETIRE};
 use crate::halt::Halt;
-use crate::sign::{record_frame, sig_hex, Signer};
+use crate::sign::{sig_hex, RecordFrame, Signer};
 
 /// What the deposit records.
 #[derive(Debug, Clone)]
@@ -79,7 +80,9 @@ pub enum DepositOutcome {
 /// carrying the face this composition composed for it. The arms a walk acts
 /// on are named; every other halt is [`DepositHalt::Other`]. A walk that
 /// only surfaces the face takes it with `?` (`From<DepositHalt> for Halt`).
+/// Non-exhaustive: an arm a walk comes to act on is named here in its turn.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum DepositHalt {
     /// The death signal met under the deposit's own token — at the ordinal
     /// read, the insert, the read-back or the link (wire.md §Sessions): the
@@ -128,6 +131,44 @@ impl fmt::Display for DepositHalt {
 }
 
 impl std::error::Error for DepositHalt {}
+
+/// What the deposit writes, decided ONCE from its [`DepositKind`]: an
+/// enrollment's entries — composed by the walk, or parsed off a verbatim
+/// paste — or a retirement's fingerprints. The record's class, its canonical
+/// spelling and the fingerprints the reconcile reads are each answered by the
+/// kind, so no later step re-derives which kind it is.
+enum Written<'k> {
+    Enrollment(Cow<'k, [Enrollment]>),
+    Retirement(&'k [Fingerprint]),
+}
+
+impl Written<'_> {
+    /// The record class's type address — the insert's declaration and the
+    /// link's type alike (AUTH-5.4; PUB-2.63).
+    fn ty(&self) -> &'static str {
+        match self {
+            Written::Enrollment(_) => T_ENROLL,
+            Written::Retirement(_) => T_RETIRE,
+        }
+    }
+
+    /// The canonical record (AUTH-2.130), its `sig` appended last where one
+    /// is given.
+    fn record(&self, sig: Option<&str>) -> String {
+        match self {
+            Written::Enrollment(entries) => canonical_record(&entries[..], sig),
+            Written::Retirement(fps) => canonical_record(fps, sig),
+        }
+    }
+
+    /// The fingerprints the record names.
+    fn fingerprints(&self) -> Vec<Fingerprint> {
+        match self {
+            Written::Enrollment(entries) => entries.iter().map(|e| Fingerprint::of(&e.key)).collect(),
+            Written::Retirement(fps) => fps.to_vec(),
+        }
+    }
+}
 
 /// THE NEXT FREE CONTENT ORDINAL of `doc` — one past its arranged content
 /// extent, off `retrieve_doc_v_span_set` (PUB-2.59: where a declared deposit
@@ -180,10 +221,15 @@ fn read_back(board: &Board, token: Option<&Token>, home: &str, atom: &str, expec
 
 /// THE COMPOSITION.
 pub fn deposit(board: &Board, token: &Token, d: &Deposit<'_>) -> Result<DepositOutcome, DepositHalt> {
-    // The record: the sig-less canonical body, then — above the claim —
-    // the hand's `sig` at the act's grade, appended canonically last.
-    let (ty, sigless, enrolled, retired): (&str, String, Vec<Enrollment>, Vec<Fingerprint>) = match &d.kind {
-        DepositKind::Enroll(entries) => (T_ENROLL, canonical_record(entries, None), entries.clone(), Vec::new()),
+    // The record: the sig-less canonical body — a verbatim paste's own
+    // bytes, AUTH-4.58 — then, above the claim, the hand's `sig` at the
+    // act's grade, appended canonically last.
+    let (written, sigless) = match &d.kind {
+        DepositKind::Enroll(entries) => {
+            let written = Written::Enrollment(Cow::Borrowed(entries.as_slice()));
+            let sigless = written.record(None);
+            (written, sigless)
+        }
         DepositKind::EnrollVerbatim(text) => {
             let entries = parse_enroll(text.as_bytes()).map_err(|e| {
                 Halt::face(
@@ -192,10 +238,15 @@ pub fn deposit(board: &Board, token: &Token, d: &Deposit<'_>) -> Result<DepositO
                     "re-take the payload from the device that generated it; never edit it here (AUTH-5.57 step 3's echo-back)",
                 )
             })?;
-            (T_ENROLL, text.clone(), entries, Vec::new())
+            (Written::Enrollment(Cow::Owned(entries)), text.clone())
         }
-        DepositKind::Retire(fps) => (T_RETIRE, canonical_record(fps, None), Vec::new(), fps.clone()),
+        DepositKind::Retire(fps) => {
+            let written = Written::Retirement(fps.as_slice());
+            let sigless = written.record(None);
+            (written, sigless)
+        }
     };
+    let ty = written.ty();
     let record_text = match d.hand {
         None => sigless.clone(),
         Some(hand) => {
@@ -212,15 +263,10 @@ pub fn deposit(board: &Board, token: &Token, d: &Deposit<'_>) -> Result<DepositO
                 .effective_owner(d.home)?
                 .map(|o| o.prefix)
                 .ok_or_else(|| Halt::face("the home has no owner", format!("`effective_owner({})` answered null", d.home), "this is this client's frame and never your act; nothing was written"))?;
-            let alg = hand.public_key().alg().to_string();
-            let frame = record_frame(&alg, term, &home_account, d.home, ty, &[d.subject], sigless.as_bytes()).ok_or_else(|| {
-                Halt::face("the record frame could not be composed", "an address of the deposit did not parse", "this is this client's frame; nothing was written")
-            })?;
-            let sig = sig_hex(&hand.sign(&frame));
-            match &d.kind {
-                DepositKind::Retire(fps) => canonical_record(fps, Some(&sig)),
-                _ => canonical_record(&enrolled, Some(&sig)),
-            }
+            let frame = RecordFrame { alg: hand.public_key().alg(), board: term, home_account: &home_account, home: d.home, ty, to: &[d.subject], sigless: sigless.as_bytes() }
+                .compose()
+                .ok_or_else(|| Halt::face("the record frame could not be composed", "an address of the deposit did not parse", "this is this client's frame; nothing was written"))?;
+            written.record(Some(&sig_hex(&hand.sign(&frame))))
         }
     };
 
@@ -275,7 +321,7 @@ pub fn deposit(board: &Board, token: &Token, d: &Deposit<'_>) -> Result<DepositO
         return Ok(DepositOutcome::Deposited { atom, link: link.to_string(), at });
     }
     let Some(r) = Rejection::of(&v) else { return Err(shape_face(&v).into()) };
-    reconcile_or_face(board, d, &r, &v, &enrolled, &retired)
+    reconcile_or_face(board, d, &r, &v, &written)
 }
 
 fn shape_face(v: &Value) -> Halt {
@@ -315,10 +361,10 @@ fn insert_face(r: &Rejection, v: &Value) -> Halt {
 /// the records; everything outside it the residue, HALT AND SURFACE. The
 /// arms a walk acts on answer by name — `SetFull`, `NotGenesisRegistry` —
 /// and every other face rides [`DepositHalt::Other`].
-fn reconcile_or_face(board: &Board, d: &Deposit<'_>, r: &Rejection, v: &Value, enrolled: &[Enrollment], retired: &[Fingerprint]) -> Result<DepositOutcome, DepositHalt> {
+fn reconcile_or_face(board: &Board, d: &Deposit<'_>, r: &Rejection, v: &Value, written: &Written<'_>) -> Result<DepositOutcome, DepositHalt> {
     let other = |h: Halt| -> Result<DepositOutcome, DepositHalt> { Err(DepositHalt::Other(h)) };
     let token = r.token();
-    let record_fps: Vec<Fingerprint> = if enrolled.is_empty() { retired.to_vec() } else { enrolled.iter().map(|e| Fingerprint::of(&e.key)).collect() };
+    let record_fps = written.fingerprints();
     match r.key() {
         "nothing_changed" => {
             // AUTH-5.17: TWO STATES, read from the records (`key_set`).
@@ -326,19 +372,24 @@ fn reconcile_or_face(board: &Board, d: &Deposit<'_>, r: &Rejection, v: &Value, e
                 KeySetAnswer::Set(s) => s,
                 KeySetAnswer::NotAnAccount => return other(r.refused(v)),
             };
-            if !enrolled.is_empty() {
-                if record_fps.iter().all(|fp| set.enrolled(fp).is_some()) {
-                    return Ok(DepositOutcome::Committed { reason: "nothing_changed: every key of the record stands enrolled — the act committed and its ack was lost".into() });
+            match written {
+                Written::Enrollment(_) => {
+                    if record_fps.iter().all(|fp| set.enrolled(fp).is_some()) {
+                        return Ok(DepositOutcome::Committed { reason: "nothing_changed: every key of the record stands enrolled — the act committed and its ack was lost".into() });
+                    }
+                    if let Some(fp) = record_fps.iter().find(|fp| set.retired(fp).is_some()) {
+                        return other(Halt::face(
+                            format!("key {fp} is RETIRED at {} and nothing was written", d.subject),
+                            "nothing_changed over a retired fingerprint is PERMANENT: I4 (AUTH-2.98) bars its re-entry forever",
+                            "the one act is a fresh keypair under a new byline (`skep keygen`), enrolled by a key still in the set",
+                        ));
+                    }
                 }
-                if let Some(fp) = record_fps.iter().find(|fp| set.retired(fp).is_some()) {
-                    return other(Halt::face(
-                        format!("key {fp} is RETIRED at {} and nothing was written", d.subject),
-                        "nothing_changed over a retired fingerprint is PERMANENT: I4 (AUTH-2.98) bars its re-entry forever",
-                        "the one act is a fresh keypair under a new byline (`skep keygen`), enrolled by a key still in the set",
-                    ));
+                Written::Retirement(_) => {
+                    if record_fps.iter().all(|fp| set.retired(fp).is_some()) {
+                        return Ok(DepositOutcome::Committed { reason: "nothing_changed: the fingerprints stand retired — committed, or another hand's earlier retirement".into() });
+                    }
                 }
-            } else if record_fps.iter().all(|fp| set.retired(fp).is_some()) {
-                return Ok(DepositOutcome::Committed { reason: "nothing_changed: the fingerprints stand retired — committed, or another hand's earlier retirement".into() });
             }
             other(r.refused(v))
         }

@@ -12,7 +12,7 @@ use skep_client::ceremony::handshake::{handshake, Site};
 use skep_client::derive::records::credential_records;
 use skep_client::dial::Request;
 use skep_client::store::FileStore;
-use skep_client::verify::{Entry, FilteredTable, Verdict};
+use skep_client::verify::{Bounds, Entry, FilteredTable, Verdict};
 use skep_identity::{entry_body_empty, entry_frame, ContentFreeOp, DocTerm};
 
 use crate::common::{board, claim, keygen, spawn};
@@ -71,13 +71,13 @@ fn the_verdict_follows_the_daemons_admission_and_an_unattested_entry_reads_unsig
     // The feed's rows, read as the owner: the attested one carries `attest`
     // and no `key`; the draft's carries `key` (the fingerprint) and no
     // `attest`.
-    let row = row_at(&board, &full.token, attested_at);
+    let row = row_at(&board, full.token(), attested_at);
     assert!(row.get("key").is_none(), "ABSENT on a signed row: {row}");
     let attest = row["attest"].clone();
     assert_eq!(attest["alg"].as_str(), Some(device.public_key().alg()));
     assert_eq!(attest["sig"].as_str(), Some(hex(&sig).as_str()), "byte-equal to the attest presented");
     assert!(row["docs"].as_array().is_some_and(|d| d.iter().any(|x| x.as_str() == Some(minted.as_str()))));
-    let draft_row = row_at(&board, &full.token, draft_at);
+    let draft_row = row_at(&board, full.token(), draft_at);
     assert_eq!(draft_row["key"].as_str(), Some(fp.to_hex().as_str()), "{draft_row}");
     assert!(draft_row.get("attest").is_none());
     full.close().unwrap();
@@ -88,23 +88,23 @@ fn the_verdict_follows_the_daemons_admission_and_an_unattested_entry_reads_unsig
     let boundary = records.claim_entry.expect("the claim entry");
     assert!(boundary < attested_at);
     let table = FilteredTable::build(&records, Some(term));
-    assert_eq!(table.current().len(), 3, "two anchors and the device key, host-trusted at the genesis");
+    assert_eq!(table.current().count(), 3, "two anchors and the device key, host-trusted at the genesis");
     assert!(table.inert.is_empty());
     let blob = unhex(attest["sig"].as_str().unwrap());
     let entry = Entry { position: attested_at, frame: &frame, attest: Some((attest["alg"].as_str().unwrap(), &blob)) };
-    assert_eq!(Verdict::Signed(fp), skep_client::verify::verdict(&entry, &table, Some(boundary), records.floor), "the reader's verdict equals the daemon's admission");
+    assert_eq!(Verdict::Signed(fp), skep_client::verify::verdict(&entry, &table, Bounds::from(&records)), "the reader's verdict equals the daemon's admission");
     // The draft: no attest ⇒ UNSIGNED above the claim.
     let entry = Entry { position: draft_at, frame: &frame, attest: None };
-    assert_eq!(Verdict::Unsigned, skep_client::verify::verdict(&entry, &table, Some(boundary), records.floor));
+    assert_eq!(Verdict::Unsigned, skep_client::verify::verdict(&entry, &table, Bounds::from(&records)));
     // At and below the claim: BEFORE ATTESTATION.
     let entry = Entry { position: boundary, frame: &frame, attest: None };
-    assert_eq!(Verdict::BeforeAttestation, skep_client::verify::verdict(&entry, &table, Some(boundary), records.floor));
+    assert_eq!(Verdict::BeforeAttestation, skep_client::verify::verdict(&entry, &table, Bounds::from(&records)));
     // A key outside the filtered set signing the same frame: UNSIGNED — the
     // verifier judges against the FILTERED set, never the served `key_set`.
     let stranger = skep_client::sign::signer_from_seed(&[8; 32]);
     let forged = stranger.sign(&frame);
     let entry = Entry { position: attested_at, frame: &frame, attest: Some((stranger.public_key().alg(), &forged)) };
-    assert_eq!(Verdict::Unsigned, skep_client::verify::verdict(&entry, &table, Some(boundary), records.floor));
+    assert_eq!(Verdict::Unsigned, skep_client::verify::verdict(&entry, &table, Bounds::from(&records)));
     // No boundary derivable: UNDETERMINABLE, never judged.
-    assert!(matches!(skep_client::verify::verdict(&entry, &table, None, None), Verdict::Undeterminable(_)));
+    assert!(matches!(skep_client::verify::verdict(&entry, &table, Bounds::default()), Verdict::Undeterminable(_)));
 }

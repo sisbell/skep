@@ -101,6 +101,7 @@ fn the_door_delegates_idempotently_the_recipient_accepts_the_giver_seeds_and_bin
     let HandoffOutcome::Seeded { facts, grade, reconciled, .. } = handoff(&board, &giver, &mut p, &give("1.0.1.2", Some(taken.record.clone()), Some(kept.clone()))).unwrap_or_else(|h| panic!("{h}\n{}", p.transcript.join("\n"))) else { panic!() };
     let t = p.transcript.join("\n");
     assert_eq!((facts.account.as_str(), facts.principal, grade, reconciled), ("1.0.1.2", principal, Grade::Anchor, false));
+    assert_eq!(grade.to_string(), "anchor", "the grade as the reply names it");
     assert!(p.said("AUTH RES-187") && p.said("LOOPBACK-BOUND notebook"), "{t}");
     assert!(p.said("CONSENT confirm: `skep handoff`"), "G0's comparison:\n{t}");
     for s in ["AUTH-5.90 (i)", "AUTH-5.90 (ii)", "AUTH-5.90 (iii)", "AUTH-5.90 (iv)"] {
@@ -142,7 +143,7 @@ fn the_door_delegates_idempotently_the_recipient_accepts_the_giver_seeds_and_bin
     // THE RECIPIENT's `bind`: the first signed session's doc-1 mint and the
     // setup act, `inc(1.0.1.2, 1)` seated.
     let device = key_file(&recipient, &taken.device);
-    recipient.bind(&Binding::Enrollment { origin: board.dialed.clone(), principal, account: "1.0.1.2".into(), fingerprint: taken.device }).unwrap();
+    recipient.bind(&Binding::Enrollment { origin: board.dialed().clone(), principal, account: "1.0.1.2".into(), fingerprint: taken.device }).unwrap();
     let reads = FirstSessionReads::take(&board, "1.0.1.2", &taken.device, Some(&recipient)).unwrap();
     assert!(reads.mint_owed() && reads.setup_owed());
     let session = handshake(&board, Scope::Content, &device.signer(), principal, Site::Tail).unwrap();
@@ -220,7 +221,7 @@ fn a_depth_two_genesis_is_homed_in_the_giving_accounts_doc_one_and_the_decline_a
     let fp2 = keygen(&giver2, "lone");
     let payload2 = encode_enroll(&[Enrollment::new(key_file(&giver2, &fp2).public.clone(), false, Some("lone".into())).unwrap()]);
     let skep_client::ceremony::claim::HostedOutcome::Claimed(_) = skep_client::ceremony::claim::hosted(&board2, payload2.as_bytes(), 1).unwrap() else { panic!() };
-    giver2.bind(&Binding::Enrollment { origin: board2.dialed.clone(), principal: 1, account: "1.0.1".into(), fingerprint: fp2 }).unwrap();
+    giver2.bind(&Binding::Enrollment { origin: board2.dialed().clone(), principal: 1, account: "1.0.1".into(), fingerprint: fp2 }).unwrap();
     // The hosted cascade runs no agent space: the setup act first (`bind`'s
     // arm), so the next delegable address is the giver's own `1.0.1.2`.
     let lone = key_file(&giver2, &fp2).signer();
@@ -236,5 +237,6 @@ fn a_depth_two_genesis_is_homed_in_the_giving_accounts_doc_one_and_the_decline_a
     let mut p = Scripted::new(vec![Script::Confirm(true), Script::Typed("1.0.1.2".into())]);
     let HandoffOutcome::Seeded { grade, facts, .. } = handoff(&board2, &giver2, &mut p, &give("1.0.1.2", Some(taken2.record.clone()), None)).unwrap_or_else(|h| panic!("{h}\n{}", p.transcript.join("\n"))) else { panic!() };
     assert_eq!((grade, facts.principal), (Grade::Device, principal2));
+    assert_eq!(grade.to_string(), "device");
     assert!(!p.said("Handing this off is an anchor act") && !p.said("SECRET kept-or-placed"), "no import at the device grade");
 }

@@ -36,14 +36,14 @@ use crate::ceremony::first_session::{first_session, FirstSessionReads};
 use crate::ceremony::handshake::{handshake, Site};
 use crate::ceremony::payload::{compare_payload, parse_payload, payload_text, refuse_anchor_flagged};
 use crate::ceremony::preview::{declined, preview, Preview, PreviewSite, Previewed, Row};
-use crate::ceremony::reads::{r0, Reads};
-use crate::ceremony::trail::{trail_present, write_trail};
-use crate::derive::records::{credential_records, Hand, Kind, Records};
+use crate::ceremony::reads::{r0, Act, Reads};
+use crate::ceremony::trail::Trail;
+use crate::derive::records::{credential_records, Hand};
 use crate::derive::Mode;
 use crate::halt::Halt;
 use crate::person::{LabelBox, Person, Public};
 use crate::sheet::{render_inert, Facts, Label};
-use crate::store::{arm4_face, store_halt, Binding, FileStore, KeyFacts, KeySelector, KeyStore, Purpose, StoreError};
+use crate::store::{arm4_face, Binding, FileStore, KeyFacts, KeySelector, KeyStore, Purpose, StoreError};
 
 /// The command's inputs.
 #[derive(Debug, Clone)]
@@ -69,10 +69,15 @@ pub struct Rotated {
     pub warnings: Vec<String>,
 }
 
-/// The OLD key's enroll link — at the notebook the genesis link's — from
-/// the admitted read.
-fn enroll_link_of(records: &Records, fp: &Fingerprint) -> Option<String> {
-    records.records.iter().find(|r| r.kind == Kind::Enroll && r.enrolled.iter().any(|e| Fingerprint::of(&e.key) == *fp)).map(|r| r.link.clone())
+/// The NEW key T2 enrolls, as T1 settles it — exactly one of three: carried
+/// in as `--payload`, its record kept VERBATIM as the sig-less body
+/// (AUTH-4.58); an unbound key of this store already enrolled, T2 standing
+/// done (the resume, read off `key_set`); or a fresh key generated at T2
+/// under the label the box fixed.
+enum NewKey {
+    Payload { text: String, entries: Vec<Enrollment> },
+    Resumed(KeyFacts),
+    Fresh(Label),
 }
 
 /// AUTH-5.77's face for a `closed` met BEFORE T4: the old key retired by
@@ -94,16 +99,16 @@ fn closed_before_t4(board: &Board, reads: &Reads, old: &Fingerprint, own: &[(Fin
 /// THE WALK.
 pub fn rotate(board: &Board, store: &FileStore, person: &mut dyn Person, opts: &RotateOptions) -> Result<Rotated, Halt> {
     // The OLD key: the store's binding for (board, n).
-    let old_key: KeyFacts = match store.select(&KeySelector::Board { origin: &board.dialed, principal: Some(opts.principal) }, Purpose::Sign) {
+    let old_key: KeyFacts = match store.select(&KeySelector::Board { origin: board.dialed(), principal: Some(opts.principal) }, Purpose::Sign) {
         Ok(key) => key,
         Err(StoreError::NoSelection { keys }) => {
             return Err(arm4_face(store, &keys, Mode::of(&board.health()?)));
         }
-        Err(e) => return Err(store_halt(e)),
+        Err(e) => return Err(e.into()),
     };
-    let old = store.signer(&KeySelector::Path(&old_key.path)).map_err(store_halt)?;
+    let old = store.signer(&KeySelector::Path(&old_key.path))?;
     let old_fp = old_key.fingerprint;
-    let devices = store.device_keys().map_err(store_halt)?;
+    let devices = store.device_keys()?;
     let own: Vec<(Fingerprint, PublicKey)> = devices.iter().map(|k| (k.fingerprint, k.public.clone())).collect();
     // The payload arm's parse, at the door.
     let payload = match &opts.payload {
@@ -116,12 +121,13 @@ pub fn rotate(board: &Board, store: &FileStore, person: &mut dyn Person, opts: &
         None => None,
     };
     // T0: R0's reads (this walk ENROLLS), the old enroll link, the closure.
-    let reads = r0(board, person, opts.principal, true, &own)?;
+    let reads = r0(board, person, opts.principal, Act::Enrollment, &own)?;
     let account = reads.account.clone();
     if reads.walk.set.retired(&old_fp).is_some() {
         return Err(Halt::face(format!("the old key {old_fp} is already retired at {account}"), "I4 (AUTH-2.98): a retired fingerprint never re-enters the set; this rotation already ended, or another hand ended it", "sign in with a key you still hold (`skep session`)"));
     }
-    let Some(old_link) = enroll_link_of(&reads.records, &old_fp) else {
+    // The OLD key's enroll link — at the notebook the genesis link's.
+    let Some(old_link) = reads.records.enrollment_of(&old_fp).map(|r| r.link.clone()) else {
         return Err(Halt::face(
             format!("the enroll link of {old_fp} was not found at {account}"),
             "the trail's `old` is the address the admitted read returns (AUTH-5.59 step 2); the read found no enrollment naming this key",
@@ -132,8 +138,8 @@ pub fn rotate(board: &Board, store: &FileStore, person: &mut dyn Person, opts: &
     // The NEW key's resume read (T2 by `key_set`): on the payload arm its
     // fingerprint enrolled (`payload_enrolled`); on the generate arm an
     // UNBOUND device key of this store enrolled beside the old one.
-    let bound: Vec<Fingerprint> = store.all_bindings().map_err(store_halt)?.into_iter().filter_map(|b| match b {
-        Binding::Enrollment { origin, fingerprint, .. } if origin == board.dialed => Some(fingerprint),
+    let bound: Vec<Fingerprint> = store.all_bindings()?.into_iter().filter_map(|b| match b {
+        Binding::Enrollment { origin, fingerprint, .. } if origin == *board.dialed() => Some(fingerprint),
         _ => None,
     }).collect();
     let resumed_new: Option<KeyFacts> = match &payload {
@@ -147,17 +153,17 @@ pub fn rotate(board: &Board, store: &FileStore, person: &mut dyn Person, opts: &
     // T1: the box, PREFILLED from the retiring key's label — or the payload's
     // label shown uncorrectable beside the comparison.
     let old_label = reads.records.label_of(&old_fp).or_else(|| old_key.label.clone());
-    let new_label: Option<Label> = match (&payload, &resumed_new) {
-        (Some((_, entries)), _) => {
+    let new_key = match (payload, resumed_new) {
+        (Some((text, entries)), _) => {
             say(person, "AUTH-5.42", format!("on the payload arm the label rides inside the record — `{}` — uncorrectable once enrolled", entries[0].label().map(render_inert).unwrap_or_else(|| "(none)".into())));
-            if !payload_enrolled && !compare_payload(person, entries, "skep rotate --payload")? {
+            if !payload_enrolled && !compare_payload(person, &entries, "skep rotate --payload")? {
                 return Err(Halt::face("the comparison was declined: nothing was written", "the typed answer was `no`", "re-take the payload from the new device and compare again"));
             }
-            None
+            NewKey::Payload { text, entries }
         }
         (None, Some(resumed)) => {
             say(person, "AUTH-5.59 step 1", format!("resumed: the new key {} ({}) is already enrolled — T2 stands done, read off `key_set`", resumed.fingerprint, resumed.label.as_deref().map(render_inert).unwrap_or_default()));
-            None
+            NewKey::Resumed(resumed)
         }
         (None, None) => {
             let label = match &opts.label {
@@ -181,7 +187,7 @@ pub fn rotate(board: &Board, store: &FileStore, person: &mut dyn Person, opts: &
                     }
                 },
             };
-            Some(label)
+            NewKey::Fresh(label)
         }
     };
     // THE PREVIEW over T0's enumeration (no enrollment preview beside it).
@@ -201,27 +207,34 @@ pub fn rotate(board: &Board, store: &FileStore, person: &mut dyn Person, opts: &
     }
     let home = fs_reads.home.clone();
     let mut warnings = Vec::new();
-    let (new_fp, new_key, new_link): (Fingerprint, Option<KeyFacts>, String) = {
-        let kind_and_key: (DepositKind, Option<KeyFacts>, Fingerprint) = match (&payload, &resumed_new, &new_label) {
-            (Some((text, entries)), _, _) => (DepositKind::EnrollVerbatim(text.clone()), None, Fingerprint::of(&entries[0].key)),
-            (None, Some(resumed), _) => (DepositKind::Enroll(vec![Enrollment::new(resumed.public.clone(), false, resumed.label.clone()).expect("a stored label")]), Some(resumed.clone()), resumed.fingerprint),
-            (None, None, Some(label)) => {
-                let key_id = store.generate(Some(label.clone())).map_err(store_halt)?;
-                let key = store.select(&KeySelector::Path(&store.key_path(&key_id.0)), Purpose::Read).map_err(store_halt)?;
-                say(person, "§3a", format!("key file written: {} — the seed rests in this file and the filesystem's modes are its whole protection", key.path.display()));
-                (DepositKind::Enroll(vec![Enrollment::new(key.public.clone(), false, Some(label.as_str().to_string())).expect("a label the box admitted")]), Some(key), key_id.0)
+    // `new_stored`: the new key where it is THIS store's — the one T5 binds.
+    let (new_fp, new_stored, new_link): (Fingerprint, Option<KeyFacts>, String) = {
+        let (kind, key, fp) = match new_key {
+            NewKey::Payload { text, entries } => {
+                let fp = Fingerprint::of(&entries[0].key);
+                (DepositKind::EnrollVerbatim(text), None, fp)
             }
-            (None, None, None) => unreachable!("a label stands where no payload and no resumed key do"),
+            NewKey::Resumed(key) => {
+                let entry = Enrollment::new(key.public.clone(), false, key.label.clone()).expect("a stored label is in the domain");
+                let fp = key.fingerprint;
+                (DepositKind::Enroll(vec![entry]), Some(key), fp)
+            }
+            NewKey::Fresh(label) => {
+                let key_id = store.generate(Some(label.clone()))?;
+                let key = store.select(&KeySelector::Path(&store.key_path(&key_id.0)), Purpose::Read)?;
+                say(person, "§3a", format!("key file written: {} — the seed rests in this file and the filesystem's modes are its whole protection", key.path.display()));
+                let entry = Enrollment::new(key.public.clone(), false, Some(label.as_str().to_string())).expect("a label the box admitted");
+                (DepositKind::Enroll(vec![entry]), Some(key), key_id.0)
+            }
         };
-        let (kind, key, fp) = kind_and_key;
         let id = format!("rotate.enroll.{}", &fp.to_hex()[..8]);
-        let outcome = deposit(board, &session.token, &Deposit { home: &home, subject: &account, kind, hand: Some(&*old), id: &id });
+        let outcome = deposit(board, session.token(), &Deposit { home: &home, subject: &account, kind, hand: Some(&*old), id: &id });
         let link = match outcome {
             Ok(DepositOutcome::Deposited { link, .. }) => link,
             Ok(DepositOutcome::Committed { reason }) => {
                 say(person, "AUTH-5.17", format!("T2 stands: {reason}"));
                 let records = credential_records(board, &account, &own)?;
-                enroll_link_of(&records, &fp).ok_or_else(|| Halt::face("the new key's enroll link was not found", "the record read after a reconciled enrollment names no link for it", "re-run; the walk resumes by reading"))?
+                records.enrollment_of(&fp).map(|r| r.link.clone()).ok_or_else(|| Halt::face("the new key's enroll link was not found", "the record read after a reconciled enrollment names no link for it", "re-run; the walk resumes by reading"))?
             }
             Err(DepositHalt::SetFull(_)) => {
                 return Err(Halt::face(
@@ -236,12 +249,13 @@ pub fn rotate(board: &Board, store: &FileStore, person: &mut dyn Person, opts: &
         (fp, key, link)
     };
     // T3: THE TRAIL, resumed by reading its presence.
-    let trail = match trail_present(board, &old_link, &new_link)? {
+    let supersession = Trail { home: &home, old: &old_link, new: &new_link };
+    let trail = match supersession.present(board)? {
         Some(claim) => {
             say(person, "AUTH-5.59 step 3", format!("the trail already stands at {claim} (from {old_link} to {new_link}): resumed by reading, no second trail is written"));
             claim
         }
-        None => match write_trail(board, &session, &*old, &home, &old_link, &new_link, "rotate.trail") {
+        None => match supersession.write(board, &session, &*old, "rotate.trail") {
             Ok(claim) => {
                 say(person, "AUTH-5.59 step 2", format!("the supersession trail is written at {claim}: `assert_sup` from the old enroll link {old_link} to the new {new_link}, homed in {home}, attested by the old key"));
                 claim
@@ -251,7 +265,7 @@ pub fn rotate(board: &Board, store: &FileStore, person: &mut dyn Person, opts: &
     };
     // T4: the retire-old — THE LAST WRITE; no close sent.
     let id = format!("rotate.retire.{}", &old_fp.to_hex()[..8]);
-    match deposit(board, &session.token, &Deposit { home: &home, subject: &account, kind: DepositKind::Retire(vec![old_fp]), hand: Some(&*old), id: &id }) {
+    match deposit(board, session.token(), &Deposit { home: &home, subject: &account, kind: DepositKind::Retire(vec![old_fp]), hand: Some(&*old), id: &id }) {
         Ok(DepositOutcome::Deposited { .. }) => {}
         Ok(DepositOutcome::Committed { reason }) => say(person, "AUTH-5.17", format!("T4 stands: {reason}")),
         Err(DepositHalt::SessionClosed(h)) => return Err(closed_before_t4(board, &reads, &old_fp, &own, h)),
@@ -261,13 +275,13 @@ pub fn rotate(board: &Board, store: &FileStore, person: &mut dyn Person, opts: &
     session.ended_by_commit();
     say(person, "AUTH-5.28", "ROTATION'S EXPECTED END: the commit ended the old key's session (AUTH-4.63) and no close is sent; the `closed` any later request would meet is this end and never a death face — the last step is a sign-in with the new key");
     // T5: the binding for the new key where it is THIS store's.
-    let binding_line = match &new_key {
+    let binding_line = match &new_stored {
         Some(key) => {
-            let line = Binding::Enrollment { origin: board.dialed.clone(), principal: opts.principal, account: account.clone(), fingerprint: key.fingerprint };
+            let line = Binding::Enrollment { origin: board.dialed().clone(), principal: opts.principal, account: account.clone(), fingerprint: key.fingerprint };
             if let Err(w) = store.bind(&line) {
                 warnings.push(w.to_string());
             }
-            Some(line.line())
+            Some(line.to_string())
         }
         None => {
             say(person, "AUTH-5.32", "the `--payload` arm appends no binding: the three facts below are for `skep bind` on the new device; this device's own line meets `verify`'s I4 face at its next pre-check");
@@ -275,5 +289,5 @@ pub fn rotate(board: &Board, store: &FileStore, person: &mut dyn Person, opts: &
         }
     };
     say(person, "§9 item 36", format!("the retired key's file {} is left in place; its deletion is your act", store.key_path(&old_fp).display()));
-    Ok(Rotated { facts: Facts { account, principal: opts.principal, origin: board.dialed.clone() }, old: old_fp, new: new_fp, trail, binding_line, warnings })
+    Ok(Rotated { facts: Facts { account, principal: opts.principal, origin: board.dialed().clone() }, old: old_fp, new: new_fp, trail, binding_line, warnings })
 }

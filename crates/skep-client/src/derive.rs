@@ -7,6 +7,8 @@
 //! The one admitted READ — the account's credential records — is
 //! [`records`], behind `acting`.
 
+use std::fmt;
+
 use skep_identity::Fingerprint;
 
 use crate::address::parent_account;
@@ -46,6 +48,13 @@ impl Mode {
             Mode::ClaimedPermissive => "CLAIMED-PERMISSIVE",
             Mode::Enforcing => "ENFORCING",
         }
+    }
+}
+
+/// The mode as a person reads it: its name as the design spells it.
+impl fmt::Display for Mode {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.name())
     }
 }
 
@@ -134,6 +143,19 @@ impl KeyDiagnosis {
     }
 }
 
+/// Where the key stands, as a person reads it — the phrase a face completes
+/// after "this key stands".
+impl fmt::Display for KeyDiagnosis {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            KeyDiagnosis::Enrolled { anchor: true } => "enrolled as an anchor",
+            KeyDiagnosis::Enrolled { anchor: false } => "enrolled as a device key",
+            KeyDiagnosis::Retired { .. } => "retired",
+            KeyDiagnosis::Neither => "in neither list",
+        })
+    }
+}
+
 /// THE ORIGIN ARM (AUTH-5.24, FIRST; AUTH-5.65): the origin this client
 /// SIGNS for the board ∈ `/health.auth.signed_origins`, else the ORIGIN
 /// STATE (AUTH-5.36 arm (1)'s content) with its clearing acts by cell —
@@ -163,11 +185,15 @@ pub fn origin_arm(signed: &Origin, health: &Health) -> Result<(), Halt> {
 /// DERIVED by `principal_prefix` (AUTH-5.67 (2); `None` the
 /// delegation-never-committed cell), then the key-set compare at the set
 /// AUTH-5.21's walk reaches. The diagnosis is answered, not faced: the
-/// caller renders the three-state face for its own site.
+/// caller renders the three-state face for its own site. The principal the
+/// reads were made for rides with them, so a handshake over them opens as
+/// that principal and no other.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PreCheck {
     pub health: Health,
     pub mode: Mode,
+    /// The principal `n` the pre-check was made for.
+    pub principal: u64,
     /// `principal_prefix(n)`.
     pub account: String,
     pub walk: Walk,
@@ -177,7 +203,7 @@ pub struct PreCheck {
 /// Run the pre-check for `principal` holding the key `fp`.
 pub fn precheck(board: &Board, principal: u64, fp: &Fingerprint) -> Result<PreCheck, Halt> {
     let health = board.health()?;
-    origin_arm(&board.signed, &health)?;
+    origin_arm(board.signed(), &health)?;
     let mode = Mode::of(&health);
     let Some(account) = board.principal_prefix(principal)? else {
         return Err(Halt::face(
@@ -190,7 +216,7 @@ pub fn precheck(board: &Board, principal: u64, fp: &Fingerprint) -> Result<PreCh
     };
     let walk = walk_to_set(board, &account)?;
     let diagnosis = KeyDiagnosis::of(&walk.set, fp);
-    Ok(PreCheck { health, mode, account, walk, diagnosis })
+    Ok(PreCheck { health, mode, principal, account, walk, diagnosis })
 }
 
 /// The principal seated at `addr` — `effective_owner(addr).principal` taken
@@ -245,6 +271,7 @@ mod tests {
         assert_eq!(Mode::of(&health(None, false, &[])), Mode::Unclaimed);
         assert_eq!(Mode::of(&health(Some("1.0.1"), true, &[])), Mode::ClaimedPermissive);
         assert_eq!(Mode::of(&health(Some("1.0.1"), false, &[])), Mode::Enforcing);
+        assert_eq!(Mode::ClaimedPermissive.to_string(), "CLAIMED-PERMISSIVE", "a mode displays as its name");
     }
 
     /// AUTH-5.24/5.36 — the origin arm names the ORIGIN STATE, never a
@@ -261,5 +288,9 @@ mod tests {
         assert_eq!(on_closed(&fp, &signed, &health(Some("1.0.1"), true, &[]), &empty), ClosedArm::OriginState);
         assert_eq!(on_closed(&fp, &signed, &health(Some("1.0.1"), true, &["http://127.0.0.1:8642"]), &empty), ClosedArm::KeyBurned);
         assert_eq!(KeyDiagnosis::of(&KeySet::default(), &fp), KeyDiagnosis::Neither);
+        let stands = |d: KeyDiagnosis| format!("this key stands {d}");
+        assert_eq!(stands(KeyDiagnosis::Neither), "this key stands in neither list");
+        assert_eq!(stands(KeyDiagnosis::Retired { anchor: true }), "this key stands retired");
+        assert_eq!(stands(KeyDiagnosis::Enrolled { anchor: false }), "this key stands enrolled as a device key");
     }
 }

@@ -1,7 +1,9 @@
 //! Shared field-bag parsing: the one place golden JSON fields, decorated
-//! descriptions, and recorded span shapes are interpreted. Both the grounding
-//! pre-pass and the live translator read through these helpers, so the two
-//! passes cannot drift on what a field means.
+//! descriptions, recorded span shapes, and an op's own arguments are
+//! interpreted. Both the grounding pre-pass and the live translator read
+//! through these helpers, so the two passes cannot drift on what a field
+//! means. What a scenario's recorded evidence says an op DID — where an
+//! insert landed, what a delete removed — is `evidence`'s.
 //!
 //! Decoration grammar (each form calibrated against named golden files):
 //! * `"end"` / `"start"` / `"position 6"` / `"after First"` — positions
@@ -29,7 +31,7 @@
 use serde_json::Value;
 
 use crate::shadow::Shadow;
-use crate::tum::{parse_dotted, parse_vpos, parse_width};
+use crate::tum::{link_home_docid, parse_dotted, parse_vpos, parse_width};
 
 // ───────────────────────────── raw field access ────────────────────────────
 
@@ -378,6 +380,140 @@ pub fn is_python_repr(s: &str) -> bool {
     s.starts_with('<') && s.ends_with('>')
 }
 
+// ────────────────────────────── op arguments ───────────────────────────────
+
+/// The inserted text: field, strings array, or label-borne
+/// (`insert_1_AAA` = ordinal 1 text AAA; `insert_A` = text A).
+pub fn insert_text(op: &Value) -> Option<String> {
+    if let Some(t) = str_field(op, &["text", "content", "string"]) {
+        return Some(t.to_string());
+    }
+    if let Some(a) = field(op, &["strings", "texts"]).and_then(Value::as_array) {
+        return Some(a.iter().filter_map(Value::as_str).collect::<Vec<_>>().join(""));
+    }
+    let label = label_of(op);
+    let rest = label.strip_prefix("insert_")?;
+    if let Some((ordtok, text)) = rest.split_once('_') {
+        if ordtok.parse::<u64>().is_ok() {
+            return Some(text.to_string());
+        }
+        return None; // insert_after_delete etc.: descriptive, not text
+    }
+    // Single trailing token: the text itself (insert_A, insert_1), unless a
+    // known descriptive word.
+    if rest.is_empty() || matches!(rest, "loop" | "text" | "attempt" | "all") {
+        return None;
+    }
+    Some(rest.to_string())
+}
+
+/// `insert_all`-style distribution: a texts array of ≥ 2 entries under a
+/// label that names no single position — one text per document, never one
+/// concatenated insert.
+pub fn distributed_insert_texts(op: &Value) -> Option<Vec<String>> {
+    let label = label_of(op).to_ascii_lowercase();
+    if !(label == "insert_all" || label == "insert_each") {
+        return None;
+    }
+    let texts: Vec<String> = field(op, &["texts", "strings"])
+        .and_then(Value::as_array)?
+        .iter()
+        .filter_map(|v| v.as_str().map(str::to_string))
+        .collect();
+    (texts.len() >= 2).then_some(texts)
+}
+
+/// The n most recently created docs, creation order — the targets an
+/// `insert_all` distributes over (its creates immediately precede it).
+pub fn distribution_targets(shadow: &Shadow, n: usize) -> Vec<String> {
+    let created = shadow.all_docs();
+    let start = created.len().saturating_sub(n);
+    created[start..].to_vec()
+}
+
+/// Rearrange cut ordinals from `cuts` array or cut1..cut4 / v1..v3 /
+/// starta..endb keyed fields.
+pub fn cuts_of(op: &Value) -> Vec<u64> {
+    let parse_cut = |v: &Value| -> Option<u64> {
+        if let Some(n) = v.as_u64() {
+            return Some(n);
+        }
+        match crate::tum::parse_vpos(v.as_str()?) {
+            Some((1, o)) => Some(o),
+            _ => None,
+        }
+    };
+    if let Some(arr) = field(op, &["cuts"]).and_then(Value::as_array) {
+        return arr.iter().filter_map(parse_cut).collect();
+    }
+    let mut cuts = Vec::new();
+    for keys in [
+        &["cut1", "v1", "starta"][..],
+        &["cut2", "v2", "enda"][..],
+        &["cut3", "v3", "startb"][..],
+        &["cut4", "endb"][..],
+    ] {
+        match field(op, keys).and_then(parse_cut) {
+            Some(c) => cuts.push(c),
+            None => break,
+        }
+    }
+    cuts
+}
+
+/// A `to`/`dest` value that is a position marker, not a document reference:
+/// "end", "start", "end of doc" (edgecases/vcopy_to_same_document).
+pub fn is_position_marker(s: &str) -> bool {
+    let t = s.trim().to_ascii_lowercase();
+    t == "end" || t == "start" || t.starts_with("end of") || t.starts_with("start of")
+}
+
+/// Is this key a `<role><n>` docid holder (`doc1`, `source2`, `target3`)?
+pub fn keyed_role(k: &str) -> bool {
+    ["doc", "source", "target"].iter().any(|stem| {
+        k.strip_prefix(stem)
+            .is_some_and(|rest| !rest.is_empty() && rest.chars().all(|c| c.is_ascii_digit()))
+    })
+}
+
+/// The group word a plural create names its members with: an explicit
+/// type/doc field ("peripherals" — links/star_hub_outgoing), else the role
+/// the label itself carries ("create_multiple_targets" → "target").
+pub fn group_word(op: &Value) -> Option<String> {
+    if let Some(s) = str_field(op, &["type", "doc"]) {
+        if parse_dotted(s).is_none() {
+            return Some(s.to_string());
+        }
+    }
+    let label = label_of(op).to_ascii_lowercase();
+    if label.starts_with("create_") {
+        for word in ["target", "source", "peripheral"] {
+            if label.contains(word) {
+                return Some(word.to_string());
+            }
+        }
+    }
+    None
+}
+
+/// `"A->B": "<link id>"` arrow-keyed create_link results
+/// (links/multi_hop_reverse_traversal).
+pub fn arrow_results(op: &Value) -> Vec<(String, String, String)> {
+    let mut out = Vec::new();
+    if let Some(o) = op.as_object() {
+        for (k, v) in o {
+            if let Some((f, t)) = k.split_once("->") {
+                if let Some(r) = v.as_str() {
+                    if link_home_docid(r).is_some() {
+                        out.push((f.trim().to_string(), t.trim().to_string(), r.to_string()));
+                    }
+                }
+            }
+        }
+    }
+    out
+}
+
 // ───────────────────────────── decorated forms ─────────────────────────────
 
 /// A located region: golden doc + 1-based content ordinal + width.
@@ -710,23 +846,4 @@ pub fn note_arrow(op: &Value) -> Option<(String, String)> {
         }
     }
     None
-}
-
-/// The document address a link address lives under, textually: strip the
-/// final `0.2.n` local part ("1.1.0.1.0.1.0.2.1" → "1.1.0.1.0.1").
-pub fn link_home_docid(link: &str) -> Option<String> {
-    let comps = parse_dotted(link)?;
-    if comps.len() >= 4 {
-        let n = comps.len();
-        if comps[n - 3] == 0 && comps[n - 2] == 2 && comps[n - 1] > 0 {
-            let head: Vec<String> = comps[..n - 3].iter().map(|c| c.to_string()).collect();
-            return Some(head.join("."));
-        }
-    }
-    None
-}
-
-/// A link address in golden terms: `…·0·2·n` (a document's link subspace).
-pub fn is_link_address(s: &str) -> bool {
-    link_home_docid(s).is_some()
 }

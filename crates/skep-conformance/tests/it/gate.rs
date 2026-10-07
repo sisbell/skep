@@ -1,10 +1,16 @@
-//! The gate — HARNESS INTEGRITY ONLY.
+//! The gate: three tests over the golden sweep.
 //!
-//! This test asserts that the instrument works: the goldens all load, every
-//! op is translated or classified, no scenario panics, and the report and
-//! summary are written. It does NOT assert conformance: divergent scenarios
-//! are the run's *product*, not its failure, and they reach the operators
-//! through target/conformance/report.jsonl and summary.md.
+//! * `harness_integrity` — the instrument works: the goldens all load, every
+//!   op yields exactly one outcome, no scenario panics the harness, and the
+//!   report and summary are written. It judges no verdict: the verdicts are
+//!   the sweep's *product*, and they reach the operators through
+//!   target/conformance/report.jsonl and summary.md.
+//! * `report_is_deterministic` — a slice of the scenarios replays to
+//!   byte-identical report records, so a re-run is the archive.
+//! * `conformance_ratchet` — conformance, enforced: a `divergent` or `error`
+//!   verdict fails it, as does an `allowlisted` or `inexpressible` verdict on
+//!   a scenario `conformance/ratchet.toml` does not freeze in that section;
+//!   a `[pending]` scenario is exempt, and reported while it does not pass.
 
 use skep_conformance::outcome::Verdict;
 use skep_conformance::runner::run_all;
@@ -98,8 +104,8 @@ fn report_is_deterministic() {
     use skep_conformance::report::render_jsonl;
     use skep_conformance::runner::run_scenarios;
 
-    let golden = skep_conformance::conformance_dir().join("golden");
-    let allow_path = skep_conformance::conformance_dir().join("allowlist.toml");
+    let golden = skep_conformance::loader::conformance_dir().join("golden");
+    let allow_path = skep_conformance::loader::conformance_dir().join("allowlist.toml");
     let scenarios = load_all(&golden).expect("goldens load");
     let allow = allowlist::load(&allow_path).expect("allowlist loads");
 

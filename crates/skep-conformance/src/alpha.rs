@@ -47,10 +47,6 @@ impl Alpha {
         self.fwd.len()
     }
 
-    pub fn is_empty(&self) -> bool {
-        self.fwd.is_empty()
-    }
-
     /// Bind golden→skep. Re-binding the same pair is a no-op (open_document
     /// legitimately re-yields an already-bound address); a conflicting bind
     /// on either side is recorded as a finding and the FIRST binding wins
@@ -178,11 +174,4 @@ impl Alpha {
         }
         format!("skep:{s}")
     }
-}
-
-
-/// Convenience: parse-or-None used by doc-reference resolution — an address
-/// string is anything that parses fully as dotted decimal.
-pub fn looks_like_address(s: &str) -> bool {
-    parse_dotted(s).is_some()
 }

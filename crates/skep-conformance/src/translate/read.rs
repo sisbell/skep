@@ -1,0 +1,765 @@
+//! Content reads: `retrieve_contents` in each recorded shape (docs maps,
+//! per-target lists, per-doc keyed replies, positions, spec sets, spans, the
+//! whole document), the vspan/vspanset probes, and the observation
+//! bundles.
+
+use serde_json::Value;
+
+use skep_febe::{Op, Response};
+use skep_retrieval::{DeliveryItem, Spec};
+
+use super::{
+    has_observation_fields, inexpressible, joint_absence, probe_state, rejection_code, settle_ack,
+    Cx, Grants, Probe,
+};
+use crate::compare::{
+    collapsed_subspace_shape, compare_content, compare_count, compare_spansets,
+    COLLAPSED_SUBSPACE_ANALYSIS, VERSION_LINK_CARRYOVER_ANALYSIS,
+};
+use crate::fields::{
+    expect_spans_raw, expect_strings, expected_failure, field, harvest_spanset, label_of, locate,
+    position_from_label, span_dict, str_field, vspec_dict,
+};
+use crate::outcome::{OpOutcome, Status};
+use crate::tum::{is_link_address, link_home_docid, parse_dotted, parse_vpos, vspan};
+
+const CONTENT_EXPECT_KEYS: &[&str] = &[
+    "result", "before", "after", "content", "contents", "sample", "remaining", "empty",
+    "expected", "value", "text",
+];
+
+/// The retrieve specs for a doc-less retrieve that follows a follow op whose
+/// recorded result is a vspec — the landing the script read (policy
+/// `retrieve-follow-landing`). `None` when the shape does not apply.
+fn follow_landing_specs(cx: &mut Cx, index: usize, op: &Value) -> Option<Vec<Spec>> {
+    if str_field(op, &["doc", "docid"]).is_some() {
+        return None;
+    }
+    let prev = cx.ops.get(index.checked_sub(1)?)?;
+    let prev_label = label_of(prev).to_ascii_lowercase();
+    if !(prev_label.starts_with("follow") || prev_label.starts_with("traverse")) {
+        return None;
+    }
+    let (docid, spans) = expect_spans_raw(field(prev, &["result"])?)?;
+    let docid = docid?;
+    if spans.is_empty() {
+        return None;
+    }
+    let d = cx.alpha.translate(&docid)?;
+    let mut specs = Vec::new();
+    for (start, w) in &spans {
+        let (sub, ord) = crate::tum::parse_vpos(start)?;
+        let w = crate::tum::parse_width(w)?;
+        if let Some(span) = vspan(sub, ord, w) {
+            specs.push(Spec { doc: d.clone(), span });
+        }
+    }
+    (!specs.is_empty()).then_some(specs)
+}
+
+/// A `{start, width}` dict whose components parse as dotted decimal but NOT
+/// as a depth-2 V-position — the boundary corpus's nested local addresses
+/// ("1.1.1" width "0.0.1"). Returns the raw component vectors for
+/// [`crate::tum::deep_span`].
+fn deep_span_dict(v: &Value) -> Option<(Vec<u64>, Vec<u64>)> {
+    let o = v.as_object()?;
+    let start = parse_dotted(o.get("start").and_then(Value::as_str)?)?;
+    let width = parse_dotted(o.get("width").and_then(Value::as_str)?)?;
+    (start.len() > 2 || width.len() > 2).then_some((start, width))
+}
+
+pub(super) fn h_contents(cx: &mut Cx, index: usize, op: &Value, out: &mut OpOutcome, label: &str) {
+    let xf = expected_failure(op);
+
+    // Multi-doc probe: `docs` map of name → expected strings.
+    if let Some(map) = op.get("docs").and_then(Value::as_object) {
+        let mut fails: Vec<(String, String)> = Vec::new();
+        for (name, exp) in map {
+            let (Some(doc), Some(strings)) =
+                (cx.shadow.resolve_doc(name), expect_strings(exp))
+            else {
+                continue;
+            };
+            // An id map (create_documents-shaped), not a content probe.
+            if strings.iter().any(|s| s.contains('.') && parse_dotted(s).is_some()) {
+                continue;
+            }
+            match cx.read_content(&doc) {
+                Ok(items) => {
+                    if let Err((e, a)) = compare_content(&strings, &items, cx.alpha) {
+                        fails.push((format!("{name}: {e}"), format!("{name}: {a}")));
+                    }
+                }
+                Err(code) => fails.push((format!("{name}: contents"), format!("{name}: {code}"))),
+            }
+        }
+        out.adaptations.push("contents:content-subspace".into());
+        out.comparator = Some("content".into());
+        if fails.is_empty() {
+            out.status = Status::Agreed;
+        } else {
+            out.status = Status::Disagreed;
+            out.expected = Some(fails.iter().map(|f| f.0.clone()).collect::<Vec<_>>().join(" | "));
+            out.actual = Some(fails.iter().map(|f| f.1.clone()).collect::<Vec<_>>().join(" | "));
+        }
+        return;
+    }
+
+    // Per-target probe list: `targets: [{doc|docid, contents}]` —
+    // identity/identity_multi_document_sharing records every created
+    // target's content only here.
+    if let Some(entries) = op.get("targets").and_then(Value::as_array) {
+        let mut fails: Vec<(String, String)> = Vec::new();
+        let mut compared = false;
+        for e in entries {
+            let docid = e
+                .get("docid")
+                .and_then(Value::as_str)
+                .map(str::to_string)
+                .or_else(|| {
+                    e.get("doc").and_then(Value::as_str).and_then(|n| cx.shadow.resolve_doc(n))
+                });
+            let (Some(docid), Some(strings)) =
+                (docid, e.get("contents").or_else(|| e.get("content")).and_then(expect_strings))
+            else {
+                continue;
+            };
+            compared = true;
+            match cx.read_content(&docid) {
+                Ok(items) => {
+                    if let Err((exp, act)) = compare_content(&strings, &items, cx.alpha) {
+                        fails.push((format!("{docid}: {exp}"), format!("{docid}: {act}")));
+                    }
+                }
+                Err(code) => fails.push((format!("{docid}: contents"), format!("{docid}: {code}"))),
+            }
+        }
+        if compared {
+            out.adaptations.push("contents:content-subspace".into());
+            out.comparator = Some("content".into());
+            if fails.is_empty() {
+                out.status = Status::Agreed;
+            } else {
+                out.status = Status::Disagreed;
+                out.expected =
+                    Some(fails.iter().map(|f| f.0.clone()).collect::<Vec<_>>().join(" | "));
+                out.actual =
+                    Some(fails.iter().map(|f| f.1.clone()).collect::<Vec<_>>().join(" | "));
+            }
+            return;
+        }
+    }
+
+    // Per-doc keyed probe: two or more fields whose KEY resolves as a doc
+    // reference and whose VALUE is a string array are the recorded
+    // per-document replies of one retrieve (policy `contents:per-doc-keyed`;
+    // internal/ispan_partial_overlap op 4 records `source: ["CDEFG"],
+    // dest: ["CDEFG"], expected: "CDEFG in both"` — the arrays are the data,
+    // `expected` is prose, and reading it as the expectation while dropping
+    // the arrays is what this branch replaces). The script's unrecorded
+    // specset is reconstructed GOLDEN-side: a single recorded string that is
+    // a proper substring of the doc's shadow content locates in the SHADOW
+    // and that span is read from skep (policy
+    // `read-span-from-recorded-strings` — the query derives from golden data
+    // only, so skep still has to deliver the right bytes at those
+    // positions); everything else reads the whole document and any mismatch
+    // surfaces loudly.
+    if str_field(op, &["doc", "docid"]).is_none()
+        && field(op, &["result", "specset", "specs", "contents", "content"]).is_none()
+    {
+        const NOT_DOC_KEYS: &[&str] = &[
+            "op", "comment", "note", "label", "description", "interpretation", "expected",
+            "error", "status", "before", "after", "sample", "remaining", "empty", "value",
+            "text", "texts", "strings", "cuts", "spans", "targets", "docs", "positions",
+        ];
+        let keyed: Vec<(String, String, Vec<String>)> = op
+            .as_object()
+            .map(|o| {
+                o.iter()
+                    .filter(|(k, v)| !NOT_DOC_KEYS.contains(&k.as_str()) && v.is_array())
+                    .filter_map(|(k, v)| {
+                        let strings = expect_strings(v)?;
+                        let doc = cx.shadow.resolve_doc(k)?;
+                        Some((k.clone(), doc, strings))
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        if keyed.len() >= 2 {
+            let mut fails: Vec<(String, String)> = Vec::new();
+            for (name, doc, strings) in &keyed {
+                let Some(d) = cx.skep_doc(doc) else {
+                    fails.push((
+                        format!("{name}: contents"),
+                        format!("{name}: {doc} unresolvable"),
+                    ));
+                    continue;
+                };
+                // Reconstructed narrowing: exactly one recorded string,
+                // strictly inside the shadow's content, located there.
+                let narrowed = match strings.as_slice() {
+                    [s] if !s.is_empty()
+                        && !is_link_address(s)
+                        && *s != cx.shadow.text_string(doc) =>
+                    {
+                        cx.shadow
+                            .find_text(Some(doc.as_str()), s)
+                            .map(|(_, ord)| (ord, s.len() as u64))
+                    }
+                    _ => None,
+                };
+                let items = if let Some((ord, w)) = narrowed {
+                    out.adaptations.push("read-span-from-recorded-strings".into());
+                    match vspan(1, ord, w).map(|span| {
+                        cx.rig.exec(Op::RetrieveV { specs: vec![Spec { doc: d, span }] })
+                    }) {
+                        Some(Response::Delivery { items, .. }) => Ok(items.0),
+                        Some(r) => Err(rejection_code(&r)
+                            .unwrap_or_else(|| "unexpected response".into())),
+                        None => Ok(Vec::new()),
+                    }
+                } else {
+                    cx.read_content(doc)
+                };
+                match items {
+                    Ok(items) => {
+                        if let Err((e, a)) = compare_content(strings, &items, cx.alpha) {
+                            fails.push((format!("{name}: {e}"), format!("{name}: {a}")));
+                        }
+                    }
+                    Err(code) => {
+                        fails.push((format!("{name}: contents"), format!("{name}: {code}")))
+                    }
+                }
+            }
+            out.adaptations.push("contents:per-doc-keyed".into());
+            out.comparator = Some("content".into());
+            if fails.is_empty() {
+                out.status = Status::Agreed;
+            } else {
+                out.status = Status::Disagreed;
+                out.expected =
+                    Some(fails.iter().map(|f| f.0.clone()).collect::<Vec<_>>().join(" | "));
+                out.actual =
+                    Some(fails.iter().map(|f| f.1.clone()).collect::<Vec<_>>().join(" | "));
+            }
+            return;
+        }
+    }
+
+    // Per-position probe: `positions` map of "1.3" → "C".
+    if let Some(map) = op.get("positions").and_then(Value::as_object) {
+        let Some(doc) = cx.doc_arg(op, out, &["doc", "docid"]) else {
+            inexpressible(out, "positions probe with no document in scope".into());
+            return;
+        };
+        let Some(d) = cx.skep_doc(&doc) else {
+            out.status = Status::Disagreed;
+            out.comparator = Some("alpha".into());
+            out.note = Some(format!("positions probe doc {doc} unresolvable"));
+            return;
+        };
+        let mut fails: Vec<(String, String)> = Vec::new();
+        for (pos, exp) in map {
+            let (Some((sub, ord)), Some(want)) = (parse_vpos(pos), exp.as_str()) else { continue };
+            let Some(span) = vspan(sub, ord, 1) else { continue };
+            match cx.rig.exec(Op::RetrieveV { specs: vec![Spec { doc: d.clone(), span }] }) {
+                Response::Delivery { items, .. } => {
+                    // One-position comparison through the shared content
+                    // comparator, so an address value goes through α
+                    // (bind + element lift) like every delivered address —
+                    // never compared as a rendered string.
+                    if want.is_empty() && items.0.is_empty() {
+                        continue;
+                    }
+                    if let Err((e, a)) =
+                        compare_content(&[want.to_string()], &items.0, cx.alpha)
+                    {
+                        fails.push((format!("{pos}={e}"), format!("{pos}={a}")));
+                    }
+                }
+                r => fails.push((
+                    format!("{pos}={want:?}"),
+                    format!("{pos}: {}", rejection_code(&r).unwrap_or_else(|| "?".into())),
+                )),
+            }
+        }
+        out.comparator = Some("content-positions".into());
+        if fails.is_empty() {
+            out.status = Status::Agreed;
+        } else {
+            out.status = Status::Disagreed;
+            out.expected = Some(fails.iter().map(|f| f.0.clone()).collect::<Vec<_>>().join(" | "));
+            out.actual = Some(fails.iter().map(|f| f.1.clone()).collect::<Vec<_>>().join(" | "));
+        }
+        return;
+    }
+
+    let expected = field(op, CONTENT_EXPECT_KEYS);
+    let strings: Option<Vec<String>> = expected.and_then(expect_strings);
+
+    // The expectation itself may name the doc (a link-address probe's home).
+    let doc_from_exp: Option<String> = strings.as_ref().and_then(|ss| {
+        ss.iter().find_map(|s| link_home_docid(s)).filter(|h| cx.shadow.knows(h))
+    });
+    if let Some(h) = &doc_from_exp {
+        cx.shadow.set_current(h);
+    }
+
+    let mut specs: Vec<Spec> = Vec::new();
+    // Link-subspace reads issued as a SECOND RetrieveV so a link-side
+    // absence localizes to the missing segment instead of rejecting the
+    // whole delivery (policy `contents:both-subspaces`). The golden doc the
+    // link read targets is kept so an empty answer can be classified (a
+    // VERSION missing its source's links is the carryover family).
+    let mut link_specs: Vec<Spec> = Vec::new();
+    let mut link_read_doc: Option<String> = None;
+    if let Some(arr) = field(op, &["specset", "specs"]).and_then(Value::as_array) {
+        for v in arr {
+            let Some((docid, spans)) = vspec_dict(v) else {
+                inexpressible(out, "retrieve spec list holds a non-vspec entry".into());
+                return;
+            };
+            let Some(d) = cx.alpha.translate(&docid) else {
+                out.status = Status::Disagreed;
+                out.comparator = Some("alpha".into());
+                out.note = Some(format!("retrieve doc {docid} unresolvable"));
+                return;
+            };
+            for (s, o, w) in spans {
+                if let Some(span) = vspan(s, o, w) {
+                    specs.push(Spec { doc: d.clone(), span });
+                }
+            }
+        }
+    } else if let Some(s) = str_field(op, &["specset"]) {
+        if s.contains("NOSPECS") || s == "empty" {
+            out.adaptations.push("empty-specset".into());
+        } else if let Some(rest) = s.strip_prefix("First ") {
+            // "First N chars from each document"
+            // (content/retrieve_multiple_documents).
+            let n: Option<u64> =
+                rest.split_whitespace().next().and_then(|t| t.parse().ok());
+            if let Some(n) = n {
+                out.adaptations.push("specset-from-description".into());
+                for docid in cx.shadow.all_docs() {
+                    if let (Some(d), Some(span)) = (cx.alpha.peek(&docid), vspan(1, 1, n)) {
+                        specs.push(Spec { doc: d, span });
+                    }
+                }
+            } else {
+                inexpressible(out, format!("retrieve specset {s:?} not groundable"));
+                return;
+            }
+        } else {
+            inexpressible(out, format!("retrieve specset {s:?} not groundable"));
+            return;
+        }
+    } else if let Some(v) = field(op, &["span", "spans", "vspan"]) {
+        // Narrowing argument: dict span(s) or located/decorated text — the
+        // partial-retrieve path (content/partial_retrieve,
+        // retrieve_noncontiguous_spans).
+        let Some(doc) = cx.doc_arg(op, out, &["doc", "docid"]) else {
+            inexpressible(out, "retrieve with no document in scope".into());
+            return;
+        };
+        let Some(d) = cx.skep_doc(&doc) else {
+            out.status = Status::Disagreed;
+            out.comparator = Some("alpha".into());
+            out.note = Some(format!("retrieve doc {doc} unresolvable"));
+            return;
+        };
+        let items: Vec<&Value> = match v {
+            Value::Array(a) => a.iter().collect(),
+            other => vec![other],
+        };
+        for item in items {
+            if let Some((s, o, w)) = span_dict(item) {
+                if let Some(span) = vspan(s, o, w) {
+                    specs.push(Spec { doc: d.clone(), span });
+                }
+            } else if let Some((start, width)) = deep_span_dict(item) {
+                // A NESTED local V-address ("1.1.1" width "0.0.1" —
+                // boundary_deep_vaddress_reads): built as an arbitrary-depth
+                // tumbler span and asked of skep raw; M6's answer (empty
+                // delivery or a depth/absence rejection) is compared as
+                // recorded (policy `deep-vaddress-span`).
+                out.adaptations.push("deep-vaddress-span".into());
+                match crate::tum::deep_span(&start, &width) {
+                    Some(span) => specs.push(Spec { doc: d.clone(), span }),
+                    None => {
+                        inexpressible(
+                            out,
+                            format!("deep span start {start:?} width {width:?} not constructible"),
+                        );
+                        return;
+                    }
+                }
+            } else if let Some(t) = item.as_str() {
+                match locate(cx.shadow, Some(&doc), t) {
+                    Some(l) => {
+                        out.adaptations.push(l.how.into());
+                        if let Some(span) = vspan(1, l.ord, l.width) {
+                            specs.push(Spec { doc: d.clone(), span });
+                        }
+                    }
+                    None => {
+                        inexpressible(out, format!("retrieve span {t:?} not groundable"));
+                        return;
+                    }
+                }
+            }
+        }
+    } else if let Some(landing) = (!label.to_ascii_lowercase().starts_with("full_"))
+        .then(|| follow_landing_specs(cx, index, op))
+        .flatten()
+    {
+        // Policy `retrieve-follow-landing`: a doc-less retrieve right after
+        // a follow whose recorded result names a vspec reads THOSE spans —
+        // the script retrieved the link destination it had just followed
+        // (links/follow_link op8), never the register. A `full_*` label is
+        // by its own words a whole-document read, never a landing read
+        // (round-5 item 4: insert_text_check_both_link_positions op7).
+        out.adaptations.push("retrieve-follow-landing".into());
+        specs = landing;
+    } else {
+        // Full probes aim at the doc the last CONTENT write touched, not
+        // whatever the register drifted to (policy
+        // `full-probe-targets-last-write`).
+        let full_probe = label.to_ascii_lowercase().starts_with("full_");
+        let doc = if full_probe && str_field(op, &["doc", "docid"]).is_none() {
+            match cx.shadow.last_written.clone().filter(|d| cx.shadow.knows(d)) {
+                Some(d) => {
+                    out.adaptations.push("full-probe-targets-last-write".into());
+                    cx.shadow.set_current(&d);
+                    Some(d)
+                }
+                None => cx.doc_arg(op, out, &["doc", "docid"]),
+            }
+        } else {
+            cx.doc_arg(op, out, &["doc", "docid"])
+        };
+        let Some(doc) = doc else {
+            inexpressible(out, "retrieve with no document in scope".into());
+            return;
+        };
+        let Some(d) = cx.skep_doc(&doc) else {
+            out.status = Status::Disagreed;
+            out.comparator = Some("alpha".into());
+            out.note = Some(format!("retrieve doc {doc} unresolvable"));
+            return;
+        };
+        let pos = str_field(op, &["address", "at", "position"]).and_then(parse_vpos).or_else(
+            || {
+                position_from_label(label).inspect(|_| {
+                    out.adaptations.push("position-from-label".into());
+                })
+            },
+        );
+        if let Some((sub, ord)) = pos {
+            if let Some(span) = vspan(sub, ord, 1) {
+                specs.push(Spec { doc: d, span });
+            }
+        } else {
+            // Whole document. The reply's SHAPE follows the golden (round-5
+            // item 5): text-only recorded contents read the CONTENT
+            // subspace only (policy `contents:content-subspace` — udanax's
+            // plain retrieve_contents never lists link items); a recorded
+            // reply that includes a link address read BOTH subspaces —
+            // content plus the link positions — and the link addresses
+            // compare through α (policy `contents:both-subspaces`). One
+            // evidence-driven narrowing: when the recorded TEXT is a strict
+            // prefix of the shadow's (recorded-reality) content, the
+            // script's specset was that much narrower — read only that many
+            // positions (policy `read-scoped-to-recorded-extent`).
+            let n = cx.shadow.text_len(&doc);
+            let mut read_n = n;
+            let has_addr = strings
+                .as_ref()
+                .is_some_and(|ss| ss.iter().any(|s| is_link_address(s)));
+            if let Some(ss) = &strings {
+                let text_len: usize =
+                    ss.iter().filter(|s| !is_link_address(s)).map(String::len).sum();
+                let shadow_text = cx.shadow.text_string(&doc);
+                // Bounded at 2 elements: a larger shortfall is a
+                // world-construction failure that must diverge loudly, not
+                // a narrower script read.
+                if (text_len as u64) < n
+                    && n - text_len as u64 <= 2
+                    && text_len > 0
+                    && shadow_text.len() >= text_len
+                    && ss
+                        .iter()
+                        .find(|s| !is_link_address(s))
+                        .is_some_and(|first| shadow_text.starts_with(first.as_str()))
+                {
+                    out.adaptations.push("read-scoped-to-recorded-extent".into());
+                    read_n = text_len as u64;
+                }
+            }
+            out.adaptations.push(
+                if has_addr { "contents:both-subspaces" } else { "contents:content-subspace" }
+                    .to_string(),
+            );
+            if let Some(span) = vspan(1, 1, read_n) {
+                specs.push(Spec { doc: d.clone(), span });
+            }
+            if has_addr {
+                let n_addr = strings
+                    .as_ref()
+                    .map(|ss| ss.iter().filter(|s| is_link_address(s)).count() as u64)
+                    .unwrap_or(0);
+                let links = cx.shadow.link_count(&doc).max(n_addr);
+                if let Some(span) = vspan(2, 1, links) {
+                    link_specs.push(Spec { doc: d, span });
+                    link_read_doc = Some(doc.clone());
+                }
+            }
+        }
+    }
+    let items: Vec<DeliveryItem> = if specs.is_empty() {
+        Vec::new() // empty document / empty specset: nothing to ask for
+    } else {
+        match cx.rig.exec(Op::RetrieveV { specs }) {
+            Response::Delivery { items, .. } => {
+                if !settle_ack(out, xf, None) {
+                    return;
+                }
+                items.0
+            }
+            other => {
+                // Absence encodings (policy `empty-as-absent`): an
+                // expected-EMPTY probe and a skep absence-class rejection
+                // both say "nothing there" (link_at_2_3_after probes a
+                // vacant link position; udanax answered [], skep answers
+                // RangeNotPresent).
+                // DepthIncompatible joins the absence classes for the
+                // deep-vaddress reads: a nested local address holds nothing
+                // addressable on skep, and green's nested reads answered []
+                // — the same observable (boundary_deep_vaddress_reads).
+                let absence = matches!(
+                    rejection_code(&other).as_deref(),
+                    Some("RangeNotPresent")
+                        | Some("EmptySubspace")
+                        | Some("NoSuchSubspace")
+                        | Some("EmptyResult")
+                        | Some("DepthIncompatible")
+                );
+                if absence && xf.is_none() && strings.as_ref().is_some_and(Vec::is_empty) {
+                    out.adaptations.push("empty-as-absent".into());
+                    Vec::new()
+                } else {
+                    settle_ack(out, xf, rejection_code(&other));
+                    return;
+                }
+            }
+        }
+    };
+    // The link-subspace read, as its own call: a link-side rejection
+    // localizes to the missing segment — the comparison below then shows
+    // the expected @addr undelivered — instead of voiding the content read.
+    let mut items = items;
+    if !link_specs.is_empty() {
+        match cx.rig.exec(Op::RetrieveV { specs: link_specs }) {
+            Response::Delivery { items: more, .. } => {
+                if more.0.is_empty() {
+                    // The read FIRED and came back silent-empty (M6 R6: an
+                    // unoccupied subspace degrades to an empty contribution,
+                    // never an error). Say so — a note-less miss is
+                    // indistinguishable from the policy not firing, which is
+                    // exactly the ambiguity round 6 was misdiagnosed on. A
+                    // version doc missing its source's links is the
+                    // adjudication-ready carryover family.
+                    let versioned = link_read_doc
+                        .as_deref()
+                        .is_some_and(|g| cx.shadow.version_of.contains_key(g));
+                    let msg = if versioned {
+                        VERSION_LINK_CARRYOVER_ANALYSIS.to_string()
+                    } else {
+                        "link-subspace read fired and delivered no items (subspace \
+                         unoccupied on the skep side)"
+                            .to_string()
+                    };
+                    out.note = Some(match out.note.take() {
+                        Some(n) => format!("{n}; {msg}"),
+                        None => msg,
+                    });
+                }
+                items.extend(more.0);
+            }
+            r => {
+                let code = rejection_code(&r).unwrap_or_else(|| "unexpected response".into());
+                out.note = Some(match out.note.take() {
+                    Some(n) => format!("{n}; link-subspace read: {code}"),
+                    None => format!("link-subspace read: {code}"),
+                });
+            }
+        }
+    }
+    let Some(strings) = strings else {
+        out.status = Status::NotCompared;
+        return;
+    };
+    out.comparator = Some("content".into());
+    match compare_content(&strings, &items, cx.alpha) {
+        Ok(()) => out.status = Status::Agreed,
+        Err((e, a)) => {
+            out.status = Status::Disagreed;
+            out.expected = Some(e);
+            out.actual = Some(a);
+        }
+    }
+}
+
+pub(super) fn h_vspanset(
+    cx: &mut Cx,
+    op: &Value,
+    out: &mut OpOutcome,
+    grants: &Grants,
+    full_set: bool,
+) {
+    let harvested = harvest_spanset(op);
+    // The expectation's own docid names the document when the op omits it.
+    let doc = harvested
+        .as_ref()
+        .and_then(|(_, d, _)| d.clone())
+        .and_then(|d| cx.shadow.resolve_doc(&d))
+        .or_else(|| cx.doc_arg(op, out, &["doc", "docid"]));
+    let Some(doc) = doc else {
+        inexpressible(out, "vspanset probe with no document in scope".into());
+        return;
+    };
+    cx.shadow.set_current(&doc);
+    let Some(d) = cx.skep_doc(&doc) else {
+        out.status = Status::Disagreed;
+        out.comparator = Some("alpha".into());
+        out.note = Some(format!("vspanset of unresolvable doc {doc}"));
+        return;
+    };
+    let xf = expected_failure(op);
+    let r = if full_set {
+        cx.rig.exec(Op::RetrieveDocVSpanSet { doc: d })
+    } else {
+        cx.rig.exec(Op::RetrieveDocVSpan { doc: d })
+    };
+    let set = match r {
+        Response::SpanSet { set, .. } => {
+            if !settle_ack(out, xf, None) {
+                return;
+            }
+            set
+        }
+        other => {
+            // Policy `empty-as-absent`, spanset form: udanax renders an
+            // empty document's extent as a zero span (cleaned to the empty
+            // set — see expect_spans_raw); a skep absence-class rejection
+            // encodes the same observable (documents/retrieve_vspan_empty).
+            let absence = matches!(
+                rejection_code(&other).as_deref(),
+                Some("RangeNotPresent")
+                    | Some("EmptySubspace")
+                    | Some("NoSuchSubspace")
+                    | Some("EmptyResult")
+                    | Some("NotArranged")
+            );
+            let expected_empty =
+                harvested.as_ref().is_some_and(|(_, _, spans)| spans.is_empty());
+            if absence && xf.is_none() && expected_empty {
+                out.adaptations.push("empty-as-absent".into());
+                out.status = Status::Agreed;
+                out.comparator = Some("vspanset".into());
+                return;
+            }
+            settle_ack(out, xf, rejection_code(&other));
+            return;
+        }
+    };
+    if let Some(n) = field(op, &["span_count"]).and_then(Value::as_u64) {
+        out.comparator = Some("count".into());
+        let actual = set.iter().count();
+        match compare_count(n, grants.count_delta, actual) {
+            Ok(()) => out.status = Status::Agreed,
+            Err((e, a)) => {
+                out.status = Status::Disagreed;
+                out.expected = Some(e);
+                out.actual = Some(a);
+            }
+        }
+        return;
+    }
+    let Some((_, _, spans)) = harvested else {
+        out.status = Status::NotCompared;
+        out.note = Some("vspanset probe with no comparable expectation".into());
+        return;
+    };
+    out.comparator = Some("vspanset".into());
+    match compare_spansets(&spans, &set, grants.width_tolerance) {
+        Ok(()) => out.status = Status::Agreed,
+        Err((e, a)) => {
+            out.status = Status::Disagreed;
+            out.expected = Some(e);
+            out.actual = Some(a);
+            if collapsed_subspace_shape(&spans) {
+                out.note = Some(COLLAPSED_SUBSPACE_ANALYSIS.to_string());
+            } else if cx.shadow.version_of.contains_key(&doc)
+                && cx.shadow.link_count(&doc) > 0
+                && spans.iter().all(|(s, _)| s == "1" || s.starts_with("1."))
+            {
+                // A VERSION's recorded content-subspace extent disagreeing
+                // with skep's while the shadow (udanax's recorded reality)
+                // says the version carries links is the carryover family —
+                // the recorded width folds the copied links onto the tail.
+                out.note = Some(VERSION_LINK_CARRYOVER_ANALYSIS.to_string());
+            }
+        }
+    }
+}
+
+/// Observation-bundle ops (`initial_state`, `after_first_insert`,
+/// `verify_empty`, …): pure probes over the doc in scope.
+pub(super) fn h_observe(
+    cx: &mut Cx,
+    index: usize,
+    op: &Value,
+    out: &mut OpOutcome,
+    grants: &Grants,
+) {
+    // docs-map / targets-list / positions bundles compare several documents.
+    if op.get("docs").and_then(Value::as_object).is_some()
+        || op.get("targets").and_then(Value::as_array).is_some()
+        || op.get("positions").and_then(Value::as_object).is_some()
+    {
+        h_contents(cx, index, op, out, label_of(op));
+        return;
+    }
+    // A probe green FAILED with no observation data recorded
+    // (boundary_foreign_and_malformed_opens: probes of never-created docs
+    // through validation-free opens). Never-created target → joint absence;
+    // a real bound target → issue the vspanset read and reconcile the
+    // recorded failure against skep's own verdict.
+    let xf = expected_failure(op);
+    if xf.is_some() && !has_observation_fields(op) {
+        if let Some(docref) = str_field(op, &["doc", "docid"]) {
+            if joint_absence(cx, out, &xf, docref) {
+                return;
+            }
+            if let Some(d) = cx.alpha.peek_translate(docref) {
+                let r = cx.rig.exec(Op::RetrieveDocVSpanSet { doc: d });
+                let rejected = match &r {
+                    Response::SpanSet { .. } => None,
+                    other => rejection_code(other)
+                        .or_else(|| Some("unexpected response shape".into())),
+                };
+                settle_ack(out, xf, rejected);
+                return;
+            }
+        }
+        inexpressible(out, "failed probe with no resolvable document".into());
+        return;
+    }
+    let Some(doc) = cx.doc_arg(op, out, &["doc", "docid"]) else {
+        inexpressible(out, "observation bundle with no document in scope".into());
+        return;
+    };
+    probe_state(cx, op, out, grants, &doc, Probe::Bundle);
+}

@@ -1,8 +1,9 @@
 //! Dotted-decimal tumbler helpers — the one place golden address/offset
 //! strings ("1.1.0.1.0.1", "0.13") become skep `Tumbler`/`Address`/`Span`
-//! values and skep values are rendered back for the report. The golden
-//! encoding is client.py's `Tumbler.__str__`: period-separated components,
-//! zeros explicit.
+//! values, skep values are rendered back for the report, and a golden
+//! address string's shape is read (a link address, and the document it
+//! lives under). The golden encoding is client.py's `Tumbler.__str__`:
+//! period-separated components, zeros explicit.
 
 use skep_address::{validate, Address, Nat, Span, Tumbler};
 
@@ -59,6 +60,25 @@ pub fn parse_width(s: &str) -> Option<u64> {
         [0, w] => Some(*w),
         _ => None,
     }
+}
+
+/// The document address a link address lives under, textually: strip the
+/// final `0.2.n` local part ("1.1.0.1.0.1.0.2.1" → "1.1.0.1.0.1").
+pub fn link_home_docid(link: &str) -> Option<String> {
+    let comps = parse_dotted(link)?;
+    if comps.len() >= 4 {
+        let n = comps.len();
+        if comps[n - 3] == 0 && comps[n - 2] == 2 && comps[n - 1] > 0 {
+            let head: Vec<String> = comps[..n - 3].iter().map(|c| c.to_string()).collect();
+            return Some(head.join("."));
+        }
+    }
+    None
+}
+
+/// A link address in golden terms: `…·0·2·n` (a document's link subspace).
+pub fn is_link_address(s: &str) -> bool {
+    link_home_docid(s).is_some()
 }
 
 /// Build a depth-2 ordinal-level V-span — the shape every content/link

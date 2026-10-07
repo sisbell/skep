@@ -15,11 +15,11 @@ use std::collections::BTreeMap;
 
 /// Per-document shadow state, keyed by GOLDEN docid string.
 #[derive(Default, Clone)]
-pub struct DocShadow {
+struct DocShadow {
     /// Content-subspace bytes, ordinal i ↦ text[i-1].
-    pub text: Vec<u8>,
+    text: Vec<u8>,
     /// Link-subspace occupancy count (links homed here, in creation order).
-    pub links: u64,
+    links: u64,
 }
 
 /// One created link as the harness grounded it: golden id plus both endsets
@@ -110,7 +110,7 @@ impl Shadow {
     /// the last version created, "same doc"/"current" → the register.
     /// `None` when nothing fits — the caller records it.
     pub fn resolve_doc(&self, r: &str) -> Option<String> {
-        if crate::fields::is_link_address(r) {
+        if crate::tum::is_link_address(r) {
             return None; // a link id is never a document reference
         }
         if crate::tum::parse_dotted(r).is_some() {
@@ -168,10 +168,6 @@ impl Shadow {
             .iter()
             .find(|(n, _)| n.contains(t) || t.contains(n.as_str()))
             .map(|(_, g)| g.clone())
-    }
-
-    pub fn doc(&self, golden: &str) -> Option<&DocShadow> {
-        self.docs.get(golden)
     }
 
     pub fn knows(&self, golden: &str) -> bool {

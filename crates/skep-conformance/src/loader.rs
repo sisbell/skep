@@ -2,12 +2,19 @@
 //! each file as dynamic JSON (`{ name, description, operations: [...] }`
 //! where every operation is a loose field-bag). Parse failures are hard
 //! loader errors — the goldens are vendored data; a file that does not parse
-//! means the vendoring broke, not the systems.
+//! means the vendoring broke, not the systems. [`conformance_dir`] locates
+//! the vendored tree the goldens and the allowlist live in.
 
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use serde_json::Value;
+
+/// `skep/conformance/` located from this crate — the golden tree and the
+/// allowlist live here.
+pub fn conformance_dir() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../conformance")
+}
 
 pub struct Scenario {
     pub category: String,

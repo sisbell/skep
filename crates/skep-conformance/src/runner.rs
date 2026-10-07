@@ -11,9 +11,9 @@ use crate::allowlist::{load as load_allowlist, Allowlist};
 use crate::alpha::Alpha;
 use crate::ground::{ground, SetupStep};
 use crate::harness::Rig;
-use crate::loader::{load_all, Scenario};
+use crate::loader::{conformance_dir, load_all, Scenario};
 use crate::outcome::{OpOutcome, ScenarioRecord, Status, Verdict};
-use crate::report::{render_table, write_reports};
+use crate::report::{output_dir, render_table, write_reports};
 use crate::shadow::Shadow;
 use crate::translate::{run_op, Cx, Grants};
 
@@ -33,8 +33,8 @@ pub struct RunOutput {
 
 /// Load, play, report. The library entry the gate test drives.
 pub fn run_all() -> Result<RunOutput, String> {
-    let golden = crate::conformance_dir().join("golden");
-    let allow_path = crate::conformance_dir().join("allowlist.toml");
+    let golden = conformance_dir().join("golden");
+    let allow_path = conformance_dir().join("allowlist.toml");
     let scenarios = load_all(&golden)?;
     let allow = load_allowlist(&allow_path)?;
     let loaded_op_counts: Vec<(String, usize)> =
@@ -42,7 +42,7 @@ pub fn run_all() -> Result<RunOutput, String> {
 
     let records = run_scenarios(&scenarios, &allow);
 
-    let (jsonl, summary) = write_reports(&records, &crate::output_dir())?;
+    let (jsonl, summary) = write_reports(&records, &output_dir())?;
     eprintln!("\nskep conformance — category × verdict\n");
     eprintln!("{}", render_table(&records));
     eprintln!("report:  {}", jsonl.display());
@@ -115,13 +115,7 @@ fn run_scenario(scn: &Scenario, allow: &Allowlist) -> ScenarioRecord {
             if cx.alpha.peek(docid).is_some() {
                 continue; // already bound (defensive; should not happen)
             }
-            // PUB-8.16 `Some(false)`: the harness mints private first
-            // documents at the engine (no daemon door), so the goldens stay
-            // byte-identical (PUB lane 0's promise).
-            match cx.rig.exec(skep_febe::Op::CreateNewDocument {
-                account: cx.rig.current_account.clone(),
-                published: Some(false),
-            }) {
+            match cx.rig.create_private_document() {
                 skep_febe::Response::AckAddr { addr, .. } => {
                     cx.alpha.bind(docid, &addr);
                     cx.shadow.create_doc(docid, None);
@@ -139,10 +133,7 @@ fn run_scenario(scn: &Scenario, allow: &Allowlist) -> ScenarioRecord {
             // match stays total.)
             if let SetupStep::Insert { doc, .. } | SetupStep::Copy { doc, .. } = step {
                 if !cx.shadow.knows(doc) {
-                    match cx.rig.exec(skep_febe::Op::CreateNewDocument {
-                        account: cx.rig.current_account.clone(),
-                        published: Some(false), // private first mint (lane 0)
-                    }) {
+                    match cx.rig.create_private_document() {
                         skep_febe::Response::AckAddr { addr, .. } => {
                             cx.alpha.bind(doc, &addr);
                             cx.shadow.create_doc(doc, None);

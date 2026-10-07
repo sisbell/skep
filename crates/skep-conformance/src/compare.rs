@@ -14,8 +14,9 @@ use crate::alpha::Alpha;
 use crate::fields::RawSpan;
 use crate::tum::span_strings;
 
-/// Disagreement payload: (expected, actual), both rendered.
-pub type Verdict = Result<(), (String, String)>;
+/// A comparator's answer: agreement, or the disagreement as (expected,
+/// actual), both rendered.
+pub type Comparison = Result<(), (String, String)>;
 
 // ── text content: literal equality ─────────────────────────────────────────
 
@@ -59,11 +60,11 @@ pub fn compare_content(
     expected: &[String],
     items: &[DeliveryItem],
     alpha: &mut Alpha,
-) -> Verdict {
+) -> Comparison {
     // Segment the golden side.
     let mut want: Vec<Segment> = Vec::new();
     for s in expected {
-        if crate::fields::is_link_address(s) {
+        if crate::tum::is_link_address(s) {
             want.push(Segment::Addr(s.clone()));
         } else {
             push_text(&mut want, s);
@@ -163,7 +164,7 @@ pub fn compare_addr_sets(
     alpha: &mut Alpha,
     exclude: impl Fn(&Address) -> bool,
     adaptations: &mut Vec<String>,
-) -> Verdict {
+) -> Comparison {
     let mut got: Vec<Address> = actual.iter().filter(|a| !exclude(a)).cloned().collect();
     got.sort_by_key(crate::tum::addr_str);
     got.dedup_by_key(|a| crate::tum::addr_str(a));
@@ -233,7 +234,11 @@ pub fn compare_addr_sets(
 /// and diverges honestly. Width tolerance applies ONLY where the caller
 /// passes a granted allowlist tolerance and both widths parse; start
 /// positions are always exact.
-pub fn compare_spansets(expected: &[RawSpan], actual: &SpanSet, width_tolerance: u64) -> Verdict {
+pub fn compare_spansets(
+    expected: &[RawSpan],
+    actual: &SpanSet,
+    width_tolerance: u64,
+) -> Comparison {
     let mut want: Vec<RawSpan> = expected.to_vec();
     let mut got: Vec<RawSpan> = actual.iter().map(span_strings).collect();
     want.sort();
@@ -312,7 +317,7 @@ pub const VERSION_LINK_CARRYOVER_ANALYSIS: &str =
 
 // ── counts: exact modulo declared delta ────────────────────────────────────
 
-pub fn compare_count(expected: u64, delta: i64, actual: usize) -> Verdict {
+pub fn compare_count(expected: u64, delta: i64, actual: usize) -> Comparison {
     let adjusted = expected as i128 + delta as i128;
     if adjusted == actual as i128 {
         Ok(())
@@ -333,7 +338,7 @@ pub fn compare_count(expected: u64, delta: i64, actual: usize) -> Verdict {
 /// The golden recorded a non-null `error` for this op: udanax (or its
 /// client) failed it. Agreement means skep also rejected; a skep success is
 /// a divergence for the operators.
-pub fn compare_expected_failure(golden_error: &str, skep_rejected: Option<&str>) -> Verdict {
+pub fn compare_expected_failure(golden_error: &str, skep_rejected: Option<&str>) -> Comparison {
     match skep_rejected {
         Some(_) => Ok(()),
         None => Err((

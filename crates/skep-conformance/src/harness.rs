@@ -27,10 +27,10 @@ use crate::tum::{addr, span_elem_width, subspan, vspan};
 /// runs those bytes occupied — imaged through `Op::Image` in the same commit
 /// window, while the arrangement still spoke for them. Deleted content stays
 /// findable through these spans (I-history), never by loosening V-queries.
-pub struct DeletedRegion {
-    pub doc: String,
-    pub bytes: Vec<u8>,
-    pub ispans: Vec<Span>,
+struct DeletedRegion {
+    doc: String,
+    bytes: Vec<u8>,
+    ispans: Vec<Span>,
 }
 
 pub struct Rig {
@@ -48,24 +48,28 @@ pub struct Rig {
     /// `sessions` key). Bound by `account` ops carrying a `session` field;
     /// ops carrying `session` route through the label's account session.
     labels: BTreeMap<String, String>,
-    /// The session scenario ops execute under (switched by `account`).
-    pub current_session: SessionId,
-    /// The account new documents mint under.
-    pub current_account: Address,
+    /// The session scenario ops execute under (switched by `account`) —
+    /// always the session of `current_account`: only `Rig::new`,
+    /// `switch_account`, `route_session` and `delegate_under` move the two,
+    /// and always together.
+    current_session: SessionId,
+    /// The account new documents mint under (see
+    /// [`Rig::create_private_document`]).
+    current_account: Address,
     next_principal: u64,
     /// The harness type-registry document: one content position per link
     /// type name (adaptation policy `type_registry`). Its address is harness
     /// infrastructure — never bound in the α-map.
-    pub types_doc: Address,
+    types_doc: Address,
     type_ordinals: BTreeMap<String, u64>,
     types_capacity: u64,
     /// Every rig account's HOME — its flagless first mint, born published
     /// (PUB-8.21), holding that account's setup grant (ruling 21). Harness
     /// infrastructure, like the types document: never bound in the α-map,
     /// excluded from every comparison through [`Rig::is_infra_addr`].
-    pub homes: Vec<Address>,
+    homes: Vec<Address>,
     /// Content deletions in execution order (see [`DeletedRegion`]).
-    pub deleted: Vec<DeletedRegion>,
+    deleted: Vec<DeletedRegion>,
 }
 
 /// Rig construction failure — an environment/engine problem, surfaced as the
@@ -73,9 +77,8 @@ pub struct Rig {
 pub type RigError = String;
 
 /// The GRANTS class type address (COMMONS DECISION 5 — `1.1.0.1.0.1.0.3.90`),
-/// named here as a client names it: the engine's constant is crate-private,
-/// and the fold keys on the VALUE.
-pub fn t_grant() -> Address {
+/// named here as a client names it, by value: the fold keys on the VALUE.
+fn t_grant() -> Address {
     addr(&[1, 1, 0, 1, 0, 1, 0, 3, 90]).expect("the grants type address validates")
 }
 
@@ -205,6 +208,20 @@ impl Rig {
     /// the harness replays a linear script.
     pub fn exec(&self, o: Op) -> Response {
         self.febe.execute(self.current_session, Request::from(o))
+    }
+
+    /// Create one scenario document: CREATENEWDOCUMENT in the current
+    /// account, under the current session — its owner's — minted PRIVATE
+    /// (PUB-8.16 `Some(false)`). The harness drives M10 directly, with no
+    /// daemon door, so a private first mint keeps the goldens byte-identical
+    /// (PUB lane 0's promise). Every scenario document is created here;
+    /// `tests/it/tidy.rs` holds every other file to building no
+    /// CREATENEWDOCUMENT request itself.
+    pub fn create_private_document(&self) -> Response {
+        self.exec(Op::CreateNewDocument {
+            account: self.current_account.clone(),
+            published: Some(false),
+        })
     }
 
     /// The initially delegated account (α seed target).
@@ -343,7 +360,7 @@ impl Rig {
     /// policy — the types doc encodes type NAMES, which the golden encodes
     /// as unresolvable link-subspace specs; comparing the two rendered forms
     /// would compare encodings, not behavior).
-    pub fn is_types_addr(&self, a: &Address) -> bool {
+    fn is_types_addr(&self, a: &Address) -> bool {
         skep_address::is_prefix(self.types_doc.tumbler(), a.tumbler())
     }
 
@@ -459,5 +476,45 @@ pub fn brief(r: &Response) -> String {
         Response::AckEdit { .. } => "AckEdit".into(),
         Response::MaybeAddr { .. } => "MaybeAddr".into(),
         _ => "Response".into(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Create a scenario document as every caller does. M3 refuses a mint
+    /// whose session does not own the account it names (`NotOwner`), so this
+    /// succeeds exactly when the session and the account are in step.
+    fn mints(rig: &Rig) -> bool {
+        matches!(rig.create_private_document(), Response::AckAddr { .. })
+    }
+
+    /// The session `exec` runs under and the account a mint names move
+    /// together — through a delegation, a switch back, and a route by
+    /// session label — and a pair out of step is refused, so the check
+    /// discriminates.
+    #[test]
+    fn the_session_and_the_account_move_together() {
+        let mut rig = Rig::new().expect("the rig bootstraps");
+        let first = rig.current_account.clone();
+        assert!(mints(&rig));
+
+        let second = rig.switch_account(None).expect("a fresh account is delegated");
+        assert_ne!(second, first);
+        assert_eq!(rig.current_account, second);
+        assert!(mints(&rig));
+
+        rig.bind_session_label("B", &second);
+        rig.switch_account(Some(first.clone())).expect("the first account has a session");
+        assert_eq!(rig.current_account, first);
+        assert!(mints(&rig));
+
+        assert!(!rig.route_session("B").expect("label B is bound"), "an explicit bind");
+        assert_eq!(rig.current_account, second);
+        assert!(mints(&rig));
+
+        rig.current_account = first;
+        assert!(!mints(&rig), "a mint naming another principal's account is refused");
     }
 }

@@ -1,7 +1,7 @@
 //! Report emission: one JSONL record per scenario
 //! (`target/conformance/report.jsonl`) plus the human summary
 //! (`target/conformance/summary.md`), whose table is also printed to stderr
-//! when the run completes.
+//! when the run completes. [`output_dir`] locates `target/conformance/`.
 
 use std::collections::BTreeMap;
 use std::fs;
@@ -12,6 +12,11 @@ use serde_json::json;
 
 use crate::compare::{COLLAPSED_SUBSPACE_ANALYSIS, VERSION_LINK_CARRYOVER_ANALYSIS};
 use crate::outcome::{ScenarioRecord, Status, Verdict};
+
+/// `skep/target/conformance/` — where the report and summary are written.
+pub fn output_dir() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/conformance")
+}
 
 fn status_str(s: &Status) -> &'static str {
     match s {

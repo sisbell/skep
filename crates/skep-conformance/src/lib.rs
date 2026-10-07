@@ -13,55 +13,95 @@
 //!
 //! One discipline governs everything: **the harness never negotiates with
 //! the goldens and never negotiates with skep.** A divergence is a finding
-//! to record, not a failure to fix. The five mechanisms:
+//! to record, not a failure to fix.
 //!
-//! * [`loader`] — dynamic-JSON scenario loading; every op label is either
-//!   normalized to a canonical verb or classified `inexpressible` with the
-//!   label recorded, never silently skipped.
-//! * [`ground`] — the shadow-only pre-pass that reconstructs the recording
-//!   scripts' UNRECORDED setup (implied creates, derived initial content,
-//!   macro-op expansion plans) from the scenario's own recorded evidence;
-//!   every inference is tagged into the report's `groundings` list.
-//! * [`translate`] — the canonical-verb catalogue: one boring arm per verb,
-//!   with every adaptation policy named and recorded per-op ([`fields`]
-//!   holds the shared field-bag / decorated-description grammar both passes
-//!   read through).
-//! * [`alpha`] — the per-scenario golden↔skep address bijection; the three
-//!   α-failure classes are findings with their own report classes.
-//! * [`compare`] — one comparator per result type; a failed comparison
-//!   carries expected, actual (with bijection state), and the comparator
-//!   that judged it.
-//! * [`allowlist`] — `skep/conformance/allowlist.toml`; a divergence with a
-//!   matching entry is verdict `allowlisted`, without one `divergent`.
+//! ## How a scenario runs
 //!
-//! The gate (`tests/gate.rs`) asserts **harness integrity only** — goldens
-//! load, every op is classified, no scenario panics, the report and summary
-//! are written. Divergent scenarios are the run's *product*, not its
-//! failure.
+//! `loader::load_all` reads every scenario. `ground::ground` walks one in
+//! shadow space alone and rebuilds the setup its recording script performed
+//! but never recorded — implied creates, initial content, expansion plans —
+//! each inference tagged into the report's `groundings`. A fresh
+//! `harness::Rig` opens an in-memory engine and its operation surface, and
+//! the α-bijection is seeded with udanax's default account, `1.1.0.1`,
+//! bound to the rig's own; the implied creates and the lead-in execute
+//! through the rig. `translate::run_op` then plays each op in order:
+//! normalized to a canonical verb (or classified inexpressible, the reason
+//! recorded), executed, and judged by `compare`'s comparator for its result
+//! type. `runner` folds each op's α-findings and allowlist entries into its
+//! outcome — a disagreement an adjudicated entry matches is `allowlisted`,
+//! one no entry matches stays `divergent` — and the outcomes into one
+//! verdict per scenario; `report` writes `report.jsonl` and `summary.md`.
+//!
+//! ## What holds across files
+//!
+//! * **One door to skep.** The engine and its operation surface are private
+//!   fields of `harness::Rig`: every request the harness makes goes through
+//!   `OperationSurface::execute` inside a `Rig` method, and nothing else in
+//!   the crate holds either.
+//! * **The shadow is golden-side.** `shadow` holds what the recorded ops and
+//!   the pre-pass's inferred setup put there, never anything skep answered,
+//!   so a skep divergence cannot bend a later translation.
+//! * **Both passes read an op the same way.** The pre-pass and the
+//!   translator share one grammar for an op's fields (`fields`) and one set
+//!   of policies for what its recorded evidence says it did (`evidence`).
+//!   Where `ground`'s simulation restates a handler's effect on the shadow,
+//!   nothing but review keeps the two alike: change them together.
+//! * **Harness infrastructure never reaches a comparison.** The types
+//!   document, each rig account's home and the setup grant it holds, the rig
+//!   accounts, and the grants class address are told apart by one
+//!   predicate, `Rig::is_infra_addr`; an answer that can carry them is
+//!   filtered through it before it is compared or bound into α.
+//! * **One outcome per op; one place judges.** `translate::run_op` returns
+//!   exactly one `OpOutcome` per recorded op, whatever happens; only
+//!   `runner` drains α's findings and applies the allowlist.
+//! * **Scenario documents are minted private** — `published: Some(false)`
+//!   (PUB-8.16) — by the one method that creates them,
+//!   `Rig::create_private_document`, in the current session's own account.
+//! * **Names have one home.** Every adaptation policy is named in
+//!   `translate`'s module doc and recorded per op when applied; the standing
+//!   divergence analyses are `compare`'s constants, which `report` finds in
+//!   the op notes by containment.
+//!
+//! ## The gate
+//!
+//! The integration binary under `tests/it/` holds the gate, `gate.rs`, and
+//! this map's check, `tidy.rs`. The gate's three tests:
+//! `harness_integrity` — the instrument works: every golden loads, every op
+//! yields one outcome, no scenario panics the harness, the report is
+//! written; `report_is_deterministic` — a replay renders byte-identical
+//! records; and `conformance_ratchet`, where conformance is enforced — a
+//! `divergent` or `error` verdict fails it, as does an `allowlisted` or
+//! `inexpressible` verdict on a scenario `conformance/ratchet.toml` does not
+//! freeze there. `tidy.rs` holds the module map below to the code — every
+//! file declared, every declaration with its line, every module naming only
+//! itself and the modules above it — and holds every file but `harness.rs`
+//! to building no CREATENEWDOCUMENT request of its own.
 
-pub mod allowlist;
-pub mod alpha;
-pub mod compare;
-pub mod fields;
-pub mod ground;
-pub mod harness;
-pub mod loader;
+// Golden dotted strings ⇄ skep tumblers, addresses and spans; golden address shapes.
+mod tum;
+// The record shapes the report serializes: op outcomes, scenario verdicts.
 pub mod outcome;
+// The vendored conformance tree, and its golden scenarios loaded as dynamic JSON.
+pub mod loader;
+// allowlist.toml: adjudicated divergences, in a TOML subset parsed here.
+pub mod allowlist;
+// The per-scenario golden ↔ skep address bijection and its findings.
+mod alpha;
+// The golden-side shadow: bytes, names, the current-document register.
+mod shadow;
+// The field-bag grammar both passes read an op through.
+mod fields;
+// The recorded-evidence policies both passes apply.
+mod evidence;
+// One comparator per result type; the standing divergence analyses.
+mod compare;
+// The rig: engine, operation surface, sessions, type registry — the one door to skep.
+mod harness;
+// The grounding pre-pass: unrecorded setup rebuilt from recorded evidence.
+mod ground;
+// The play pass: each op normalized to a verb, executed, compared.
+mod translate;
+// report.jsonl and summary.md: rendered, and published under target/conformance/.
 pub mod report;
+// The per-scenario loop: pre-pass, rig, lead-in, ops, verdict.
 pub mod runner;
-pub mod shadow;
-pub mod translate;
-pub mod tum;
-
-use std::path::PathBuf;
-
-/// `skep/conformance/` located from this crate — the golden tree and the
-/// allowlist live here.
-pub fn conformance_dir() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../conformance")
-}
-
-/// `skep/target/conformance/` — where the report and summary are written.
-pub fn output_dir() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/conformance")
-}

@@ -712,7 +712,7 @@ impl CommitsLog {
         // the feed's memory that does not depend on the journal, and
         // discarding it over a floor nobody can locate would lose the only
         // record of those commits that still exists.
-        let floor_fence = retention_floor(engine).map(|floor| floor.saturating_sub(1));
+        let floor_fence = reclaim_floor(engine).map(|floor| floor.saturating_sub(1));
         let mut log = CommitsLog {
             file,
             dir: dir.to_path_buf(),
@@ -1010,9 +1010,11 @@ impl CommitsLog {
     }
 }
 
-/// The oldest position the journal can still answer, or `None` when it can
-/// still answer genesis (nothing has been reclaimed) — the bound the feed's
-/// retention follows, at open and after each checkpoint alike.
+/// THE RECLAIM FLOOR — the oldest position the journal can still answer, or
+/// `None` when it can still answer genesis (nothing has been reclaimed): the
+/// bound the feed's retention follows, at open and after each checkpoint
+/// alike. A floor and never a fence: the feed compacts to the fence one
+/// below it, `CommitsLog`'s `min_since`.
 ///
 /// Asked by probing position 0 through the same public replay everything
 /// else here uses. The probe is free either way: genesis IS the base a
@@ -1021,7 +1023,7 @@ impl CommitsLog {
 /// before touching a segment. Every other refusal — corrupt, I/O,
 /// unjournaled — reports no floor, so the feed keeps what it has rather
 /// than discarding entries over a fault that may be transient.
-pub(super) fn retention_floor(engine: &Engine) -> Option<u64> {
+pub(super) fn reclaim_floor(engine: &Engine) -> Option<u64> {
     match engine.world_at(Seq(0)) {
         Err(HistoryError::Reclaimed { floor, .. }) => Some(floor.map(|f| f.0).unwrap_or(0)),
         _ => None,

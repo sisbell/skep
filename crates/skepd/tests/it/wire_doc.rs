@@ -1011,16 +1011,16 @@ fn doc_states_the_durability_faces_words_and_the_compaction_at_the_checkpoint() 
     }
 }
 
-/// THE UPLOAD SETTING, THE DEFAULT LIMIT, THE CREATION's GATE, THE WINDOW,
-/// THE PRUNER's RENAME-ASIDE AND COMPACTION, AND THE OPERATOR's TOOLS (the
-/// owner's ruling on the default limit; sweep 6's rows s6-lam-a, b, c, e,
-/// f, s6-op-a, b, d, g, h; the register M-I5 (b), (c), (d), (e), (f), M-I6
-/// (b), (d), (f), (h), M-I7 (e)): §Media states the setting with its flag,
-/// its variable and its `/health` echo; the default per-account limit's
-/// figure, its floor, its echo as `per_account` and the record that
+/// THE UPLOAD SETTING, THE DEFAULT LIMIT, THE CREATION's GATE, THE REBUILD
+/// WINDOW, THE PRUNER's RENAME-ASIDE AND COMPACTION, AND THE OPERATOR's
+/// TOOLS (the owner's ruling on the default limit; sweep 6's rows s6-lam-a,
+/// b, c, e, f, s6-op-a, b, d, g, h; the register M-I5 (b), (c), (d), (e),
+/// (f), M-I6 (b), (d), (f), (h), M-I7 (e)): §Media states the setting with
+/// its flag, its variable and its `/health` echo; the default per-account
+/// limit's figure, its floor, its echo as `per_account` and the record that
 /// overrides it; the creation's two new refusals, `floor` on no length and
-/// `standing` with its face; the window's retry-class answer with its
-/// code; the past-cap classification; the pruner's rename aside under the
+/// `standing` with its face; the rebuild window's retry-class answer with
+/// its code; the past-cap classification; the pruner's rename aside under the
 /// arm and the compaction on its trigger; the empty resume; the H1 timing
 /// rows and the K2 residue by name; the INTERIM pins each; and a subsection
 /// of its own for the two tools, naming what neither writes. §The other
@@ -1084,7 +1084,7 @@ fn doc_states_the_upload_setting_the_default_limit_the_creations_gate_and_the_to
     }
     let refusals = prose("\n### Credential refusals", &["\n## Operations"]);
     assert!(refusals.contains("**The media door's four tokens**"), "§Credential refusals names the four");
-    assert!(refusals.contains("`index_rebuilding`"), "§Credential refusals names the window's token");
+    assert!(refusals.contains("`index_rebuilding`"), "§Credential refusals names the rebuild window's token");
     let codes = prose("\n### Rejection codes", &["\n### The version-chain refusals"]);
     assert!(codes.contains("four tokens"), "§Rejection codes counts four");
     let fixture: Value = serde_json::from_str(

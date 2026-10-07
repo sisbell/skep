@@ -198,19 +198,20 @@ pub(super) enum ComposeFault {
     SuccessorRefused,
 }
 
-/// The `doc` term as the composer holds it, owned: one document, or an
-/// `edit_link`'s two homes — [`DocTerm`]'s owning twin, spelled by
-/// [`EntryFrame::to_bytes`] through [`skep_identity::entry_frame`].
-enum FrameDoc {
+/// The entry frame's `doc` TERM (the design record §2.5) as the composer
+/// holds it, owned: one document, or an `edit_link`'s pair of homes —
+/// [`DocTerm`]'s owning twin, spelled by [`EntryFrame::to_bytes`] through
+/// [`skep_identity::entry_frame`].
+enum FrameDocTerm {
     One(Address),
     Pair { d_s: Address, d_a: Address },
 }
 
-impl FrameDoc {
+impl FrameDocTerm {
     fn term(&self) -> DocTerm<'_> {
         match self {
-            FrameDoc::One(a) => DocTerm::One(a),
-            FrameDoc::Pair { d_s, d_a } => DocTerm::Pair { d_s, d_a },
+            FrameDocTerm::One(a) => DocTerm::One(a),
+            FrameDocTerm::Pair { d_s, d_a } => DocTerm::Pair { d_s, d_a },
         }
     }
 }
@@ -279,18 +280,22 @@ pub(super) fn compose(
         // principal's own at `fork` and `version` (d24-3). No minted address
         // enters: the frame stays position-free.
         Op::CreateNewDocument { account: parent, .. } => (
-            FrameDoc::One(parent.clone()),
+            FrameDocTerm::One(parent.clone()),
             entry_body_empty(ContentFreeOp::CreateNewDocument),
         ),
-        Op::Fork { .. } => (FrameDoc::One(account.clone()), entry_body_empty(ContentFreeOp::Fork)),
-        Op::Version { .. } => (FrameDoc::One(account.clone()), entry_body_empty(ContentFreeOp::Version)),
+        Op::Fork { .. } => {
+            (FrameDocTerm::One(account.clone()), entry_body_empty(ContentFreeOp::Fork))
+        }
+        Op::Version { .. } => {
+            (FrameDocTerm::One(account.clone()), entry_body_empty(ContentFreeOp::Version))
+        }
         Op::Insert { doc, values, deposit, .. } => {
             let declared = match deposit {
                 Deposit::Declared(ty) => Some(ty),
                 Deposit::Undeclared => None,
             };
             let values = values.iter().map(|v| v.as_bytes());
-            (FrameDoc::One(trunk_of(doc)), entry_body_insert(declared, values))
+            (FrameDocTerm::One(trunk_of(doc)), entry_body_insert(declared, values))
         }
         Op::MakeLink { home, from, to, ty, replaces } => {
             // Every slot AS STORED: M7's own resolution over this snapshot,
@@ -308,7 +313,7 @@ pub(super) fn compose(
                 None => entry_body_make_link(slots),
                 Some(named) => entry_body_make_link_replacing(slots, named),
             };
-            (FrameDoc::One(home.clone()), body)
+            (FrameDocTerm::One(home.clone()), body)
         }
         // THE OTHER LINK WRITES (D24's cells (4)–(6)): the stored tuple's
         // rows, as M7's own `emit_tuple`, `retraction_tuple` and
@@ -320,17 +325,17 @@ pub(super) fn compose(
             let tuple = emit_tuple(ty, from, to).ok_or(ComposeFault::SlotTooLarge)?;
             let (from, to, ty) = slot_rows(&tuple);
             let slots = LinkSlots { from: EntrySlot(&from), to: EntrySlot(&to), ty: EntrySlot(&ty) };
-            (FrameDoc::One(home.clone()), entry_body_emit(slots))
+            (FrameDocTerm::One(home.clone()), entry_body_emit(slots))
         }
         Op::Nullify { home, target } => {
             let (from, to, ty) = slot_rows(&retraction_tuple(home, target));
             let slots = LinkSlots { from: EntrySlot(&from), to: EntrySlot(&to), ty: EntrySlot(&ty) };
-            (FrameDoc::One(home.clone()), entry_body_nullify(slots))
+            (FrameDocTerm::One(home.clone()), entry_body_nullify(slots))
         }
         Op::AssertSup { home, old, new } => {
             let (from, to, ty) = slot_rows(&supersession_claim(old, new));
             let slots = LinkSlots { from: EntrySlot(&from), to: EntrySlot(&to), ty: EntrySlot(&ty) };
-            (FrameDoc::One(home.clone()), entry_body_assert_sup(slots))
+            (FrameDocTerm::One(home.clone()), entry_body_assert_sup(slots))
         }
         // THE EDIT (D24's cell (7)): the successor as M10's own build makes
         // it over this snapshot — the door judges every write that reaches
@@ -351,7 +356,7 @@ pub(super) fn compose(
             let (from, to, ty) = slot_rows(&link);
             let slots = LinkSlots { from: EntrySlot(&from), to: EntrySlot(&to), ty: EntrySlot(&ty) };
             (
-                FrameDoc::Pair { d_s: d_s.clone(), d_a: d_a.clone() },
+                FrameDocTerm::Pair { d_s: d_s.clone(), d_a: d_a.clone() },
                 entry_body_edit_link(slots, &unit_span(original)),
             )
         }
@@ -367,7 +372,7 @@ pub(super) fn compose(
             if !every_copied_run_origin_readable(world, &trunk, &segments, principal) {
                 return Err(ComposeFault::UnreadableCopiedRunOrigin);
             }
-            (FrameDoc::One(trunk), publish_body(world, shot, &segments)?)
+            (FrameDocTerm::One(trunk), publish_body(world, shot, &segments)?)
         }
         _ => unreachable!(
             "compose's precondition: {:?} is outside the checked set, or the set was \
@@ -529,7 +534,12 @@ pub(super) fn compose_record(
         lineage_fork_point: None,
         sigless_canonical_record: canonical,
     });
-    Some(EntryFrame { board, account: home_account.clone(), doc: FrameDoc::One(home.clone()), body })
+    Some(EntryFrame {
+        board,
+        account: home_account.clone(),
+        doc: FrameDocTerm::One(home.clone()),
+        body,
+    })
 }
 
 /// An ENTRY frame composed but for its `alg` member — [`compose`]'s answer,
@@ -539,7 +549,7 @@ pub(super) fn compose_record(
 pub(super) struct EntryFrame {
     board: BoardTerm,
     account: Address,
-    doc: FrameDoc,
+    doc: FrameDocTerm,
     body: EntryBody,
 }
 

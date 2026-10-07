@@ -19,9 +19,9 @@
 //!
 //! AND THE CELL INDEX (`media.md` Op inventory 1; the register M-I5 (b),
 //! M-I6 (a); the ruling ms5-R): the readiness refusal at exactly its three
-//! readers and nothing else, the binding's window while the walk runs, the
-//! composition clause, the base as one record-derived number, and the
-//! rebuild's open cost, reported.
+//! readers and nothing else, the binding's rebuild window while the walk
+//! runs, the composition clause, the base as one record-derived number, and
+//! the rebuild's open cost, reported.
 
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -144,14 +144,14 @@ fn assert_token(v: &Value, op: &str, token: &str) {
     );
 }
 
-/// THE WINDOW's whole shape: `credential_refused`, `index_rebuilding` as
-/// `detail`, RETRY — the one retry-class token of the door's armed set —
-/// the op, no `site`, and nothing else.
+/// THE REBUILD WINDOW's whole shape: `credential_refused`,
+/// `index_rebuilding` as `detail`, RETRY — the one retry-class token of the
+/// door's armed set — the op, no `site`, and nothing else.
 fn assert_rebuilding(v: &Value, op: &str) {
     assert_eq!(
         v,
         &json!({"code": "credential_refused", "detail": "index_rebuilding", "disposition": "retry", "op": op, "resp": "rejected"}),
-        "the window's whole shape"
+        "the rebuild window's whole shape"
     );
 }
 
@@ -329,7 +329,7 @@ fn a_cell_whose_hash_the_caller_deposited_under_its_own_lease_is_admitted() {
     assert_eq!(delivery(port, None, &m, 1, 1), json!([{"atom": cell}]), "the member holds the cell");
     // The base: one hash, counted once across the two drafts' cells and the
     // member's re-inserted one; the live lease on a named hash pends nothing.
-    let usage = json(&blob_read(port, Some(&bare)).2);
+    let usage = json(&blob_deposit_read(port, Some(&bare)).2);
     assert_eq!(usage["base"].as_u64(), Some(bytes.len() as u64), "{usage}");
     assert_eq!(usage["pending"].as_u64(), Some(0), "{usage}");
     assert_eq!(sd.daemon().index_counts(), (3, 1, 0), "three cells over one hash, no halt mark");
@@ -356,9 +356,9 @@ fn a_cell_whose_hash_the_caller_deposited_under_its_own_lease_is_admitted() {
 /// the termination are served (no upload: `404 no_upload`), every text
 /// read and write is served, `/changes` is served, and the door's own
 /// binding arm answers off the lease arm alone — a cell no lease covers
-/// answered the window's retry-class `index_rebuilding`, never a permanent
-/// token, the index arm unread (s6-lam-b). The walk released, the creation
-/// is admitted and the deposit read answers.
+/// answered the rebuild window's retry-class `index_rebuilding`, never a
+/// permanent token, the index arm unread (s6-lam-b). The walk released, the
+/// creation is admitted and the deposit read answers.
 #[test]
 fn the_three_readers_refuse_index_rebuilding_and_nothing_else_does() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -389,14 +389,14 @@ fn the_three_readers_refuse_index_rebuilding_and_nothing_else_does() {
     assert!(!sd.daemon().index_is_ready(), "nothing above readied the index");
     release_the_walk(&sd);
     assert!(sd.daemon().index_is_ready());
-    let (st, _, body) = blob_read(port, Some(&bare));
+    let (st, _, body) = blob_deposit_read(port, Some(&bare));
     assert_eq!(st, 200, "{}", String::from_utf8_lossy(&body));
     assert_eq!(json(&body)["base"].as_u64(), Some(0));
     put_whole(port, &bare, b"hello");
     sd.shutdown();
 }
 
-/// ms5-R, THE DOOR NEVER WAITS — THE WINDOW's ANSWER (s6-lam-b; the
+/// ms5-R, THE DOOR NEVER WAITS — THE REBUILD WINDOW's ANSWER (s6-lam-b; the
 /// register M-I5 (b)): a cell whose lease lapsed, named by the owner's own
 /// cell already, its file whole, is answered `index_rebuilding` RETRY-CLASS
 /// while the walk runs — the index arm skipped, the lease arm alone would
@@ -431,8 +431,8 @@ fn the_binding_reads_the_lease_arm_alone_until_the_walk_completes() {
     let v = op(port, Some(&signed), &publish_frame(&edition, None, Some(&d1), &[run(&d1, &format!("{d1}.0.1.1"), 1)]));
     assert_rebuilding(&v, "publish");
     // A cell no lease covers and none of the owner's cells names: the same
-    // state in the window, the permanent `unbound_cell` once the walk is
-    // done.
+    // state in the rebuild window, the permanent `unbound_cell` once the walk
+    // is done.
     let never = cell_of(b"never deposited here", 20);
     assert_rebuilding(&op(port, Some(&bare), &cell_frame(&d2, 1, &never, None)), "insert");
     assert_eq!(content_extent(port, Some(&bare), &d2), 0, "nothing permanent landed");
@@ -582,7 +582,7 @@ fn a_cell_inserted_during_the_walk_joins_the_one_copy_and_keeps_its_file() {
     assert_eq!(sd.daemon().index_counts(), (1, 1, 0), "the commit entered its own cell into the one copy");
     release_the_walk(&sd);
     assert_eq!(sd.daemon().index_counts(), (2, 2, 0), "the walk's entry joined it, nothing installed in its place");
-    let usage = json(&blob_read(port, Some(&bare)).2);
+    let usage = json(&blob_deposit_read(port, Some(&bare)).2);
     assert_eq!(usage["base"].as_u64(), Some((walked.len() + during.len()) as u64), "{usage}");
     sd.daemon().advance_media_clock_ms(LEASE_MS);
     let pass = sd.daemon().prune_now().expect("ready");
@@ -626,7 +626,7 @@ fn the_base_is_one_number_across_opens_and_equals_the_journals_own_count() {
         // A transclusion of the member's cell into a draft mints no cell.
         let d4 = owner_draft(port, &bare);
         expect_resp(&copy_span(port, &bare, &d4, 1, &m, 1, 1), "ack");
-        let usage = json(&blob_read(port, Some(&bare)).2);
+        let usage = json(&blob_deposit_read(port, Some(&bare)).2);
         let first = usage["base"].as_u64().expect("base");
         assert_eq!(first, 1_001 + 2_002, "{usage}");
         assert_eq!(usage["pending"].as_u64(), Some(3_003), "{usage}");
@@ -671,7 +671,7 @@ fn the_base_is_one_number_across_opens_and_equals_the_journals_own_count() {
     let sd = spawn(dir.path());
     let port = sd.port();
     let bare = open_session(port, CLAIMANT_PRINCIPAL);
-    let usage = json(&blob_read(port, Some(&bare)).2);
+    let usage = json(&blob_deposit_read(port, Some(&bare)).2);
     assert_eq!(usage["base"].as_u64(), Some(first), "the second open's walk answers the first open's number: {usage}");
     assert_eq!(sd.daemon().index_counts(), (4, 2, 0), "four cells — three inserts and the shot's — over two hashes");
     assert_eq!(usage["pending"].as_u64(), Some(3_003), "{usage}");
@@ -995,7 +995,7 @@ fn a_readers_shot_naming_a_draft_holding_a_cell_is_refused_not_owner_and_the_own
     let v = op(port, Some(&signed), &publish_frame(&edition, None, Some(&d_unknown), &cell_run(&d_unknown)));
     assert_token(&v, "publish", "unknown_cell_schema");
     assert_eq!(sd.daemon().index_counts(), (2, 1, 1), "the two pre-fence cells over one hash, one halt mark");
-    let usage = json(&blob_read(port, Some(&bare)).2);
+    let usage = json(&blob_deposit_read(port, Some(&bare)).2);
     assert_eq!(usage["base"].as_u64(), Some(5), "the pre-fence cell counts at its size; the halt mark counts nothing: {usage}");
 
     // Ahead of the door — the unreadable draft: the store's `withheld`

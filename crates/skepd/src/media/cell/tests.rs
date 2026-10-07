@@ -121,17 +121,17 @@ fn past_the_cap_the_canonical_opening_names_the_kind_and_nothing_else_does() {
     let pad = "x".repeat(MAX_CELL_BYTES);
     let picture = format!(r#"{{"type":"{KIND}","hash":"{}","size":5,"pad":"{pad}"}}"#, "ab".repeat(32));
     assert!(picture.len() > MAX_CELL_BYTES);
-    assert_eq!(classify(picture.as_bytes()), Class::Picture(Err(Refusal::UnknownSchema)));
-    assert_eq!(parse(picture.as_bytes()), Err(Refusal::UnknownSchema), "the picture's parser halts on it");
+    assert_eq!(classify(picture.as_bytes()), Class::Picture(Err(CellRefusal::UnknownSchema)));
+    assert_eq!(parse(picture.as_bytes()), Err(CellRefusal::UnknownSchema), "the picture's parser halts on it");
     let blind_past = format!(r#"{{"type":"{}","commitment":"{}","pad":"{pad}"}}"#, blind::KIND, "cd".repeat(32));
-    assert_eq!(classify(blind_past.as_bytes()), Class::Blind(Err(Refusal::UnknownSchema)));
-    assert_eq!(parse(blind_past.as_bytes()), Err(Refusal::NotTheKind), "not the picture's: no halt mark");
+    assert_eq!(classify(blind_past.as_bytes()), Class::Blind(Err(CellRefusal::UnknownSchema)));
+    assert_eq!(parse(blind_past.as_bytes()), Err(CellRefusal::NotTheKind), "not the picture's: no halt mark");
     let later = format!(r#"{{"pad":"{pad}","type":"{KIND}"}}"#);
-    assert_eq!(classify(later.as_bytes()), Class::None(Refusal::PastCap), "the kind named past the opening");
-    assert_eq!(parse(later.as_bytes()), Err(Refusal::PastCap));
+    assert_eq!(classify(later.as_bytes()), Class::None(CellRefusal::PastCap), "the kind named past the opening");
+    assert_eq!(parse(later.as_bytes()), Err(CellRefusal::PastCap));
     let spaced = format!(r#"{{ "type":"{KIND}","pad":"{pad}"}}"#);
-    assert_eq!(classify(spaced.as_bytes()), Class::None(Refusal::PastCap), "a spelling no schema produces");
-    assert!(!Refusal::PastCap.names_kind());
+    assert_eq!(classify(spaced.as_bytes()), Class::None(CellRefusal::PastCap), "a spelling no schema produces");
+    assert!(!CellRefusal::PastCap.names_kind());
 }
 
 /// THE ONE CLASSIFICATION (`media.md` item 4; the investigation §5 (i)):
@@ -151,26 +151,26 @@ fn the_classification_reads_either_kind_once_and_each_parser_refuses_the_other()
     assert!(matches!(classify(blind_cell.as_bytes()), Class::Blind(Ok(_))));
     let sized =
         format!(r#"{{"type":"{}","commitment":"{}","size":5}}"#, blind::KIND, "cd".repeat(32));
-    assert_eq!(classify(sized.as_bytes()), Class::Blind(Err(Refusal::UnknownSchema)));
+    assert_eq!(classify(sized.as_bytes()), Class::Blind(Err(CellRefusal::UnknownSchema)));
     let two_hash =
         format!(r#"{{"type":"{KIND}","hash":"{0}","hash":"{0}","size":5}}"#, "ab".repeat(32));
-    assert_eq!(classify(two_hash.as_bytes()), Class::Picture(Err(Refusal::UnknownSchema)));
-    assert_eq!(classify(b"prose"), Class::None(Refusal::NotTheKind));
-    assert_eq!(classify(br#"{"type":"1.1.0.1.0.1.0.3.1"}"#), Class::None(Refusal::NotTheKind));
+    assert_eq!(classify(two_hash.as_bytes()), Class::Picture(Err(CellRefusal::UnknownSchema)));
+    assert_eq!(classify(b"prose"), Class::None(CellRefusal::NotTheKind));
+    assert_eq!(classify(br#"{"type":"1.1.0.1.0.1.0.3.1"}"#), Class::None(CellRefusal::NotTheKind));
     let mut past = b"{\"type\":\"".to_vec();
     past.resize(MAX_CELL_BYTES + 1, b' ');
-    assert_eq!(classify(&past), Class::None(Refusal::PastCap));
+    assert_eq!(classify(&past), Class::None(CellRefusal::PastCap));
     assert_eq!(
         parse(blind_cell.as_bytes()),
-        Err(Refusal::NotTheKind),
+        Err(CellRefusal::NotTheKind),
         "the picture parser: not its kind"
     );
     assert_eq!(
         blind::parse(picture.as_bytes()),
-        Err(Refusal::NotTheKind),
+        Err(CellRefusal::NotTheKind),
         "the blind parser: not its kind"
     );
-    assert!(!Refusal::NotTheKind.names_kind() && Refusal::UnknownSchema.names_kind());
+    assert!(!CellRefusal::NotTheKind.names_kind() && CellRefusal::UnknownSchema.names_kind());
 }
 
 /// The kind's interim address is a T4-valid address under the ghost
@@ -199,8 +199,8 @@ fn the_cap_bounds_the_parse_and_never_a_cell() {
     assert_eq!(MAX_CELL_BYTES, 1024);
     let mut past = b"{".to_vec();
     past.resize(MAX_CELL_BYTES + 1, b' ');
-    assert_eq!(parse(&past), Err(Refusal::PastCap));
+    assert_eq!(parse(&past), Err(CellRefusal::PastCap));
     past.truncate(MAX_CELL_BYTES);
-    assert_eq!(parse(&past), Err(Refusal::NotTheKind), "at the cap: parsed, and no JSON");
-    assert_eq!(parse(b"x"), Err(Refusal::NotTheKind), "a text value costs no parse");
+    assert_eq!(parse(&past), Err(CellRefusal::NotTheKind), "at the cap: parsed, and no JSON");
+    assert_eq!(parse(b"x"), Err(CellRefusal::NotTheKind), "a text value costs no parse");
 }

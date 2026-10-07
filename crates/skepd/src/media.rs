@@ -1,5 +1,5 @@
-//! THE MEDIA DOOR, THE GATE and the cell beneath them, THE CELL INDEX and
-//! THE PRUNER beside them (the media record `media.md` item 4, §The
+//! THE MEDIA DOOR, THE MEDIA GATE and the cell beneath them, THE CELL INDEX
+//! and THE PRUNER beside them (the media record `media.md` item 4, §The
 //! publication seam, Op inventory 1 and 2, §The media stores; the register
 //! M-I1 (a), (f), M-I2 (e), M-I3 (a), M-I5 (a)–(c), (f), M-I6 (a)–(c),
 //! (e); the owner's rulings sm-Q1, STOP-2 "take i", mb-crate, ms5-R,
@@ -13,7 +13,7 @@
 //! at a published target whatever the declaration, the shot's owner test,
 //! and THE BINDING: a cell is admitted where its hash is one the requester's
 //! own cells already name, or one this principal deposited under its own
-//! live lease; [`gate`], the daemon's media resource — the blob store
+//! live lease; [`gate`], the media gate, the daemon's media resource — the blob store
 //! (`skep-blobs`, the four stores under `blobs/`), the limits in force with
 //! their daemon default and install hook, the hold a stream has on its
 //! upload, the three scopes a PUT is refused on, and the binding's read;
@@ -40,18 +40,19 @@
 //! permit the PUT's creation and resume hold for a body's whole stream,
 //! counted into the worker budget beside the three other pools.
 //!
-//! The gate, the door, the index, the pruner and the serve sit at the write
-//! path's layer (`ARCHITECTURE.md` §The daemon), the daemon's second
+//! The media gate, the door, the index, the pruner and the serve sit at the
+//! write path's layer (`ARCHITECTURE.md` §The daemon), the daemon's second
 //! resource beside it: the door reads the lease store, `blobs/` and the
-//! index through the gate, which no producer of the session layer's
+//! index through the media gate, which no producer of the session layer's
 //! admission may, so it is a step of its own; the write path enters the
 //! index at commit, a sideways step at its own layer; the PUT's routes
-//! (`server/blob_routes.rs`) reach the gate as `op.rs` reaches the write
-//! path, and the PUT commits nothing to the journal and takes no `Serial` —
-//! the finish runs under the credential lock's READ arm from the rename
-//! through the lease's sync, the pruner's rename-aside under its WRITE arm;
-//! the serve reads a file through the gate's store and consults nothing
-//! itself — its gate is M10's `execute`. The two cells are leaves.
+//! (`server/blob_routes.rs`) reach the media gate as `op.rs` reaches the
+//! write path, and the PUT commits nothing to the journal and takes no
+//! `Serial` — the finish runs under the credential lock's READ arm from the
+//! rename through the lease's sync, the pruner's rename-aside under its
+//! WRITE arm; the serve reads a file through the media gate's store and
+//! consults nothing itself — the fetch's gate is M10's `execute`. The two
+//! cells are leaves.
 //!
 //! THE UPLOAD SETTING ([`MediaOptions`]; `media.md` Op inventory 1, "ONLY
 //! ON A BOARD WHOSE UPLOADS ARE OPEN"; the register M-I7 (e)): a boundary
@@ -143,7 +144,7 @@ pub(crate) mod blind;
 pub(crate) mod deposit_read;
 // The door: the one step, its armed set.
 pub(crate) mod door;
-// The gate: the store, the limits, the hold, the scopes, the binding.
+// The media gate: the store, the limits, the hold, the scopes, the binding.
 pub(crate) mod gate;
 // The index: per hash the cells, per account the base; the walk at open.
 pub(crate) mod index;

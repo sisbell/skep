@@ -36,7 +36,7 @@ fn blobs_dir(dir: &Path) -> std::path::PathBuf {
 
 /// The deposit read's two figures, `(base, pending)`.
 fn usage_of(port: u16, token: &str) -> (u64, u64) {
-    let (st, _, body) = blob_read(port, Some(token));
+    let (st, _, body) = blob_deposit_read(port, Some(token));
     assert_eq!(st, 200, "{}", String::from_utf8_lossy(&body));
     let v = json(&body);
     (v["base"].as_u64().expect("base"), v["pending"].as_u64().expect("pending"))
@@ -149,7 +149,7 @@ fn a_pass_removes_the_expired_partials_and_keeps_the_standing_ones() {
     assert_eq!(json(&resp)["offset"].as_u64(), Some(5));
     let (st, _, _) = blob_progress(port, Some(&token), &expiring);
     assert_eq!(st, 404, "the expired identifier answers no upload");
-    let (st, _, resp) = blob_append(port, Some(&token), &standing, 5, b"world");
+    let (st, _, resp) = blob_resume(port, Some(&token), &standing, 5, b"world");
     assert_eq!(st, 200, "{}", String::from_utf8_lossy(&resp));
     sd.shutdown();
 }
@@ -381,7 +381,7 @@ fn a_pass_compacts_a_log_past_its_trigger_and_leaves_a_small_one_alone() {
     let sd = spawn(dir.path());
     let port = sd.port();
     let token = open_session(port, CLAIMANT_PRINCIPAL);
-    let (st, _, body) = blob_read(port, Some(&token));
+    let (st, _, body) = blob_deposit_read(port, Some(&token));
     assert_eq!(st, 200);
     let listed: Vec<String> = json(&body)["uploads"].as_array().unwrap().iter().map(|u| u["upload"].as_str().unwrap().to_string()).collect();
     let mut want = standing.clone();

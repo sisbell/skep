@@ -611,7 +611,7 @@ impl WritePath {
             post.world(),
         );
         if recorded.is_err() {
-            // The store has said it, once: the line's file and position.
+            // The attest store has said it, once: the line's file and position.
             self.halted.store(true, Ordering::Relaxed);
         }
         Some(at)

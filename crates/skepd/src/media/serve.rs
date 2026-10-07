@@ -53,10 +53,10 @@
 //! it is held in the [`Admitted`] the transport streams from, and returns
 //! when that value drops, on every exit.
 //!
-//! Sits at the write path's layer beside the gate and the door
-//! (`ARCHITECTURE.md` §The daemon): it reads the store through the gate and
-//! M10 through its front door, and names nothing of the transport or the
-//! routes. Every pin here is INTERIM (sm-Q8).
+//! Sits at the write path's layer beside the media gate and the door
+//! (`ARCHITECTURE.md` §The daemon): it reads the store through the media
+//! gate and M10 through its front door, and names nothing of the transport
+//! or the routes. Every pin here is INTERIM (sm-Q8).
 
 use std::fs::File;
 use std::io::{self, Read};
@@ -128,12 +128,15 @@ impl Admitted<'_> {
     }
 }
 
-/// What the cell names, carried on the two refusals that say the store did
-/// not have it: the hash as the cell spells it and the size — the cell's
-/// own members, which the requester could read at the address already, so
-/// the refusal discloses nothing the gate did not admit.
+/// The blob the cell NAMES — its hash as the cell spells it, and its size:
+/// the cell's own members, carried on the two refusals that say the store
+/// did not have it (`blob_missing`, `blob_damaged`). Data, never prose: the
+/// face a person reads is the CLIENT's, composed from these (PUB-6.7; the
+/// media record's "the missing-blob face"). The requester could read both
+/// members at the address already, so the refusal discloses nothing the
+/// gate did not admit.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct CellFace {
+pub(crate) struct NamedBlob {
     pub(crate) hash: String,
     pub(crate) size: u64,
 }
@@ -142,7 +145,7 @@ pub(crate) struct CellFace {
 /// refuse, in the order's own sequence; the mapping onto the wire's status
 /// and token is `server/reply.rs`'s (`refuse_fetch`), not this module's.
 #[derive(Debug)]
-pub(crate) enum Refusal {
+pub(crate) enum FetchRefusal {
     /// Step 0: `i` is not an element position of a document.
     Shape(String),
     /// Steps 1–3: M10's own rejection of the read by identity — `withheld`
@@ -160,10 +163,10 @@ pub(crate) enum Refusal {
     /// picture, and no store is asked.
     BlindCell,
     /// Step 6: the store has no file under the cell's hash.
-    BlobMissing(CellFace),
+    BlobMissing(NamedBlob),
     /// Step 6: the store's file is not the deposit the cell names — the
     /// wrong length, or the wrong bytes under the right name.
-    BlobDamaged(CellFace),
+    BlobDamaged(NamedBlob),
     /// Step 6: the store refused I/O.
     BlobIo(io::Error),
     /// Step 5: every fetch permit is in use.
@@ -172,42 +175,44 @@ pub(crate) enum Refusal {
 
 /// THE FETCH, steps 0 through 6 — the module's order, run once. `febe` is
 /// M10's front door and `session` the presented session the read runs as
-/// ([`SessionId::GUEST`] where none was presented); `gate` is the daemon's
-/// media resource the file is read through; `pool` the fetch pool the
-/// answer's permit comes from, which the [`Admitted`] holds for as long as
-/// it lives.
+/// ([`SessionId::GUEST`] where none was presented); `media_gate` is the
+/// media gate, the daemon's media resource the file is read through; `pool`
+/// the fetch pool the answer's permit comes from, which the [`Admitted`]
+/// holds for as long as it lives.
 pub(crate) fn fetch<'a>(
     febe: &OperationSurface<World>,
     session: SessionId,
-    gate: &MediaGate,
+    media_gate: &MediaGate,
     pool: &'a FetchPool,
     i: &Address,
-) -> Result<Admitted<'a>, Refusal> {
+) -> Result<Admitted<'a>, FetchRefusal> {
     // 0 — the shape: an element position of some document, or nothing is
     // asked of any store.
     if i.level() != Level::Element || document_of(i).is_none() {
-        return Err(Refusal::Shape(format!(
+        return Err(FetchRefusal::Shape(format!(
             "i: '{}' names no element position of a document",
             i.tumbler()
         )));
     }
     // 1–3 — the gate: M10's read by identity, as the presented session.
-    let value = read_by_identity(febe, session, i).map_err(Refusal::Rejected)?;
+    let value = read_by_identity(febe, session, i).map_err(FetchRefusal::Rejected)?;
     let Some(value) = value else {
-        return Err(Refusal::NoValue);
+        return Err(FetchRefusal::NoValue);
     };
     // 4 — the classification, one parse for both kinds.
     let cell = match cell::classify(value.as_bytes()) {
         Class::Picture(Ok(cell)) => cell,
-        Class::Picture(Err(_)) | Class::Blind(Err(_)) => return Err(Refusal::UnknownCellSchema),
-        Class::Blind(Ok(_)) => return Err(Refusal::BlindCell),
-        Class::None(_) => return Err(Refusal::NotACell),
+        Class::Picture(Err(_)) | Class::Blind(Err(_)) => {
+            return Err(FetchRefusal::UnknownCellSchema)
+        }
+        Class::Blind(Ok(_)) => return Err(FetchRefusal::BlindCell),
+        Class::None(_) => return Err(FetchRefusal::NotACell),
     };
     // 5 — the permit, for the whole answer.
-    let permit = pool.admit().ok_or(Refusal::Busy)?;
+    let permit = pool.admit().ok_or(FetchRefusal::Busy)?;
     // 6 — the whole file, checked against the cell before any byte of it
     // is answered.
-    let bytes = read_whole(gate, &cell)?;
+    let bytes = read_whole(media_gate, &cell)?;
     Ok(Admitted { i: i.clone(), bytes, _permit: permit })
 }
 
@@ -243,37 +248,39 @@ fn read_by_identity(
 }
 
 /// Step 6: the store's file under the cell's hash, whole, held to the
-/// cell's `size` and `hash` — [`Refusal::BlobMissing`] where there is none,
-/// [`Refusal::BlobDamaged`] where what is there is not the deposit the cell
-/// names. The length is read first and held to the cell's before a byte is
-/// read, so no cell can command an allocation past [`MAX_BLOB_BYTES`]; one
-/// byte past that length is asked for, so a file grown under the open reads
-/// as not the deposit either.
-fn read_whole(gate: &MediaGate, cell: &cell::Cell) -> Result<Vec<u8>, Refusal> {
+/// cell's `size` and `hash` — [`FetchRefusal::BlobMissing`] where there is
+/// none, [`FetchRefusal::BlobDamaged`] where what is there is not the
+/// deposit the cell names. The length is read first and held to the cell's
+/// before a byte is read, so no cell can command an allocation past
+/// [`MAX_BLOB_BYTES`]; one byte past that length is asked for, so a file
+/// grown under the open reads as not the deposit either.
+fn read_whole(media_gate: &MediaGate, cell: &cell::Cell) -> Result<Vec<u8>, FetchRefusal> {
     let hex = hex_of(&cell.hash);
-    let face = || CellFace { hash: hex.clone(), size: cell.size };
-    let Some(path) = gate.store().blob_path(DESIGNATION, &hex) else {
-        return Err(Refusal::BlobMissing(face()));
+    let named = || NamedBlob { hash: hex.clone(), size: cell.size };
+    let Some(path) = media_gate.store().blob_path(DESIGNATION, &hex) else {
+        return Err(FetchRefusal::BlobMissing(named()));
     };
     let mut file = match File::open(&path) {
         Ok(file) => file,
-        Err(e) if e.kind() == io::ErrorKind::NotFound => return Err(Refusal::BlobMissing(face())),
-        Err(e) => return Err(Refusal::BlobIo(e)),
+        Err(e) if e.kind() == io::ErrorKind::NotFound => {
+            return Err(FetchRefusal::BlobMissing(named()))
+        }
+        Err(e) => return Err(FetchRefusal::BlobIo(e)),
     };
-    let len = file.metadata().map_err(Refusal::BlobIo)?.len();
+    let len = file.metadata().map_err(FetchRefusal::BlobIo)?.len();
     if len != cell.size || len > MAX_BLOB_BYTES {
-        return Err(Refusal::BlobDamaged(face()));
+        return Err(FetchRefusal::BlobDamaged(named()));
     }
     let mut bytes = Vec::with_capacity(len as usize);
-    file.by_ref().take(len + 1).read_to_end(&mut bytes).map_err(Refusal::BlobIo)?;
+    file.by_ref().take(len + 1).read_to_end(&mut bytes).map_err(FetchRefusal::BlobIo)?;
     if bytes.len() as u64 != len || *blake3::hash(&bytes).as_bytes() != cell.hash {
-        return Err(Refusal::BlobDamaged(face()));
+        return Err(FetchRefusal::BlobDamaged(named()));
     }
     Ok(bytes)
 }
 
 /// THE STREAM's INTERVAL ARITHMETIC (M-I2 (g); s6-E1 (a); s6-leak-b): the
-/// bytes written since the last re-check and the gate's clock at it. The
+/// bytes written since the last re-check and the media gate's clock at it. The
 /// re-check is DUE at whichever of the two bounds comes first — the byte
 /// interval [`FETCH_RECHECK_BYTES`], or the time interval
 /// [`FETCH_RECHECK_INTERVAL`] on the media gate's clock, so a suite drives
@@ -286,7 +293,7 @@ pub(crate) struct Progress {
 }
 
 impl Progress {
-    /// At the stream's open, `now_ms` the gate's clock: nothing written
+    /// At the stream's open, `now_ms` the media gate's clock: nothing written
     /// since the gate's own answer, which stands as the first check.
     pub(crate) fn new(now_ms: u64) -> Progress {
         Progress { since_check: 0, checked_ms: now_ms }
@@ -298,7 +305,7 @@ impl Progress {
     }
 
     /// Whether a re-check is due at `now_ms`: the byte interval reached, or
-    /// the time interval elapsed on the gate's clock.
+    /// the time interval elapsed on the media gate's clock.
     pub(crate) fn due(&self, now_ms: u64) -> bool {
         self.since_check >= FETCH_RECHECK_BYTES
             || now_ms.saturating_sub(self.checked_ms) >= FETCH_RECHECK_INTERVAL.as_millis() as u64
@@ -373,8 +380,8 @@ mod tests {
 
     /// The interval arithmetic: not due under both bounds; due at exactly
     /// the byte interval, whatever the clock; due at exactly the time
-    /// interval on the gate's clock, whatever the bytes; a reset starts
-    /// both over.
+    /// interval on the media gate's clock, whatever the bytes; a reset
+    /// starts both over.
     #[test]
     fn a_recheck_is_due_at_whichever_interval_comes_first() {
         let interval_ms = FETCH_RECHECK_INTERVAL.as_millis() as u64;
@@ -404,28 +411,40 @@ mod tests {
     #[test]
     fn the_whole_file_is_held_to_the_cell_before_its_first_byte() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let gate = MediaGate::open(dir.path()).expect("the store opens");
+        let media_gate = MediaGate::open(dir.path()).expect("the store opens");
         let bytes = b"the picture's bytes";
         let cell = cell::Cell { hash: *blake3::hash(bytes).as_bytes(), size: bytes.len() as u64 };
-        let face = CellFace { hash: hex_of(&cell.hash), size: cell.size };
-        assert!(matches!(read_whole(&gate, &cell), Err(Refusal::BlobMissing(f)) if f == face));
-        let path = gate.store().blob_path(DESIGNATION, &face.hash).expect("a path");
+        let named = NamedBlob { hash: hex_of(&cell.hash), size: cell.size };
+        assert!(
+            matches!(
+                read_whole(&media_gate, &cell),
+                Err(FetchRefusal::BlobMissing(f)) if f == named
+            ),
+            "no file under the cell's hash"
+        );
+        let path = media_gate.store().blob_path(DESIGNATION, &named.hash).expect("a path");
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(&path, b"the picture's bytez").unwrap();
         assert!(
-            matches!(read_whole(&gate, &cell), Err(Refusal::BlobDamaged(f)) if f == face),
+            matches!(
+                read_whole(&media_gate, &cell),
+                Err(FetchRefusal::BlobDamaged(f)) if f == named
+            ),
             "other bytes, the right length"
         );
         std::fs::write(&path, b"short").unwrap();
         assert!(
-            matches!(read_whole(&gate, &cell), Err(Refusal::BlobDamaged(f)) if f == face),
+            matches!(
+                read_whole(&media_gate, &cell),
+                Err(FetchRefusal::BlobDamaged(f)) if f == named
+            ),
             "the wrong length"
         );
         std::fs::write(&path, bytes).unwrap();
-        assert_eq!(read_whole(&gate, &cell).expect("the deposit as written"), bytes);
+        assert_eq!(read_whole(&media_gate, &cell).expect("the deposit as written"), bytes);
         let past = cell::Cell { hash: cell.hash, size: MAX_BLOB_BYTES + 1 };
         assert!(
-            matches!(read_whole(&gate, &past), Err(Refusal::BlobDamaged(_))),
+            matches!(read_whole(&media_gate, &past), Err(FetchRefusal::BlobDamaged(_))),
             "a size past the cap names no deposit"
         );
     }

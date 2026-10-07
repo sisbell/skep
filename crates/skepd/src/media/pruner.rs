@@ -4,17 +4,20 @@
 //! naming the cell's kind that parses under no schema this build knows
 //! HALTING THE PRUNER's UNLINK OF AN UNREFERENCED FILE"; Op inventory 2 —
 //! "the PRUNER TAKES A FILE's NAME ONLY UNDER THE GATE's EXCLUSIVE ARM,
-//! `gate.write()`, re-reading the cell index and the lease there, ONE FILE
-//! PER ACQUISITION — re-read, rename aside, release, the aside unlinked
-//! after under no arm"; §The media stores — "the pruner's pass rewrites
-//! either store the same way once its log has passed a size trigger"; the
-//! register M-I5 (b), (f); the rulings ms5-R, ms5-T4 — D13's carve-out):
-//! THE PASS, run once the index is ready and then on a cadence
+//! `gate.write()` [the record's `gate` here is the credential write lock,
+//! AUTH-3.1–3.3's write gate, whose write arm this pass is handed as
+//! `exclusive` — never the media gate whose store and index it reads],
+//! re-reading the cell index and the lease there, ONE FILE PER ACQUISITION
+//! — re-read, rename aside, release, the aside unlinked after under no
+//! arm"; §The media stores — "the pruner's pass rewrites either store the
+//! same way once its log has passed a size trigger"; the register M-I5 (b),
+//! (f); the rulings ms5-R, ms5-T4 — D13's carve-out): THE PASS, run once
+//! the index is ready and then on a cadence
 //! ([`crate::limits::PRUNE_INTERVAL`]).
 //!
 //! Each pass, in order: (a) THE EXPIRED PARTIALS — every upload record past
 //! its expiry and held by no stream is retired and its partial removed,
-//! off the store's own read of expiry and the gate's hold, reading no
+//! off the store's own read of expiry and the media gate's hold, reading no
 //! reference; (b) THE HALTS — a designation directory under `blobs/`
 //! outside the pinned set, or a halt mark standing in the index, halts the
 //! unlink pass before its first unlink, with one operator line naming the
@@ -123,18 +126,21 @@ impl PrunePass {
 /// unlink pass.
 pub(crate) const PINNED_DESIGNATIONS: &[&str] = &[DESIGNATION];
 
-/// ONE PASS over `gate`'s store and index, `exclusive` the acquisition of
-/// the credential lock's write arm — called once per file, its guard held
-/// across that file's re-read and rename aside and dropped before the
-/// aside's unlink and before the next. `None` where the index is not
-/// ready: the pass does not start (ms5-R).
-pub(crate) fn pass<G>(gate: &MediaGate, exclusive: impl Fn() -> G) -> io::Result<Option<PrunePass>> {
-    let index = gate.index();
+/// ONE PASS over the media gate's store and index (`media_gate`),
+/// `exclusive` the acquisition of the credential lock's write arm — called
+/// once per file, its guard held across that file's re-read and rename
+/// aside and dropped before the aside's unlink and before the next. `None`
+/// where the index is not ready: the pass does not start (ms5-R).
+pub(crate) fn pass<G>(
+    media_gate: &MediaGate,
+    exclusive: impl Fn() -> G,
+) -> io::Result<Option<PrunePass>> {
+    let index = media_gate.index();
     if !index.is_ready() {
         return Ok(None);
     }
-    let store = gate.store();
-    let now = gate.now_ms();
+    let store = media_gate.store();
+    let now = media_gate.now_ms();
     let mut report = PrunePass {
         expired_partials: 0,
         unlinked: 0,
@@ -147,11 +153,11 @@ pub(crate) fn pass<G>(gate: &MediaGate, exclusive: impl Fn() -> G) -> io::Result
         stopped: (false, false),
     };
 
-    // (a) THE EXPIRED PARTIALS — the store's own read of expiry, the gate's
-    // hold; no reference read, no arm.
+    // (a) THE EXPIRED PARTIALS — the store's own read of expiry, the media
+    // gate's hold; no reference read, no arm.
     for record in store.expired_uploads(now) {
         // A stream holds it: left to that stream's end.
-        let Some(_hold) = gate.claim(record.id) else { continue };
+        let Some(_hold) = media_gate.claim(record.id) else { continue };
         if store.expire_upload(&record.id, now)? {
             report.expired_partials += 1;
         }
@@ -183,7 +189,7 @@ pub(crate) fn pass<G>(gate: &MediaGate, exclusive: impl Fn() -> G) -> io::Result
         report.halted = Some(reason);
         compact_logs(store, &mut report);
         #[cfg(any(test, feature = "test-hooks"))]
-        gate.note_pass_completed();
+        media_gate.note_pass_completed();
         return Ok(Some(report));
     }
 
@@ -197,7 +203,7 @@ pub(crate) fn pass<G>(gate: &MediaGate, exclusive: impl Fn() -> G) -> io::Result
                 // listing, a halt mark entered since, a lease taken since.
                 let referenced = index.referenced(designation, &hex)
                     || index.first_halt().is_some()
-                    || store.any_live_lease(designation, &hex, gate.now_ms());
+                    || store.any_live_lease(designation, &hex, media_gate.now_ms());
                 if referenced {
                     report.kept += 1;
                     None
@@ -212,7 +218,7 @@ pub(crate) fn pass<G>(gate: &MediaGate, exclusive: impl Fn() -> G) -> io::Result
             // The arm released, the aside not yet unlinked: the dirty-crash
             // harness's seam — a crash here leaves an aside open removes.
             #[cfg(any(test, feature = "test-hooks"))]
-            gate.hold_after_rename_if_armed();
+            media_gate.hold_after_rename_if_armed();
             // THE UNLINK AFTER, under no arm: the freeing's cost lands on
             // this thread alone.
             store.remove_aside(designation, &aside)?;
@@ -227,7 +233,7 @@ pub(crate) fn pass<G>(gate: &MediaGate, exclusive: impl Fn() -> G) -> io::Result
     // (d) THE LOGS' COMPACTION, under no arm.
     compact_logs(store, &mut report);
     #[cfg(any(test, feature = "test-hooks"))]
-    gate.note_pass_completed();
+    media_gate.note_pass_completed();
     Ok(Some(report))
 }
 

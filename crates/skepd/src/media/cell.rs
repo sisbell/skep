@@ -34,7 +34,7 @@
 //! whatever the rest of it holds (m-Q3, owner 2026-09-26: "the write path
 //! RECOGNIZES A CELL BY PARSING the composite value's own `type`"). A value
 //! naming the kind that parses under no pinned schema — a second schema's
-//! form, a malformed body, the two-hash body — is [`Refusal::UnknownSchema`],
+//! form, a malformed body, the two-hash body — is [`CellRefusal::UnknownSchema`],
 //! told apart from a value that does not name the kind at all, because a
 //! reader whose null permits a PERMANENT act halts on a schema it does not
 //! know (DOCTRINE D13's carve-out; the record's H1: admitted as absent, such
@@ -50,7 +50,7 @@
 //! cap, the `{` test, the JSON tree built once, the `type` member read once,
 //! then the kind's own canonical check — so two kinds cost one JSON tree.
 //! [`parse`] keeps its contract as the PICTURE kind's parser: a value of any
-//! other `type`, the blind kind's included, is [`Refusal::NotTheKind`] to
+//! other `type`, the blind kind's included, is [`CellRefusal::NotTheKind`] to
 //! it, which is what keeps the cell index's one entry path reading the
 //! picture's opening alone; the door and the fetch route read
 //! [`classify`].
@@ -65,10 +65,10 @@
 //! OPENING every schema's canonical form writes first,
 //! `{"type":"<the kind's address>"` ([`names_kind_by_prefix`], [`opens_as`];
 //! D13: the carrier goes first in JSON) — so a past-cap value that opens as
-//! a kind is [`Refusal::UnknownSchema`] of that kind, refused
+//! a kind is [`CellRefusal::UnknownSchema`] of that kind, refused
 //! `unknown_cell_schema` at the door and, for the picture's kind, entered a
 //! halt mark by the index, whatever cap a later build pins; and one that
-//! opens as neither is [`Refusal::PastCap`], no cell of any schema and no
+//! opens as neither is [`CellRefusal::PastCap`], no cell of any schema and no
 //! entry. The cap is the KIND's, every schema's under it — a schema never
 //! raises it. Every pin here is INTERIM (the board's sm-Q8), confirmed at
 //! the media round; the kind's address is TEST-ONLY under the commons media
@@ -123,11 +123,11 @@ pub(crate) struct Cell {
 /// differently and a halting reader acts on one of them. The classes are
 /// every media kind's: a blind cell's parser answers the same three.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum Refusal {
+pub(crate) enum CellRefusal {
     /// Past [`MAX_CELL_BYTES`] and opening as no kind: parsed by no reader
     /// of a cell, naming nothing. A past-cap body that opens as a kind is
     /// never this: it names the kind by its canonical opening and is
-    /// [`Refusal::UnknownSchema`] of that kind.
+    /// [`CellRefusal::UnknownSchema`] of that kind.
     PastCap,
     /// Not a JSON object whose `type` member is the parser's kind: prose, a
     /// predicate def, a record of another kind — the other media kind among
@@ -139,26 +139,26 @@ pub(crate) enum Refusal {
     UnknownSchema,
 }
 
-impl Refusal {
+impl CellRefusal {
     /// Whether the refused bytes NAME THE KIND — the one fact a reader whose
     /// null permits a permanent act halts on.
     pub(crate) fn names_kind(self) -> bool {
-        matches!(self, Refusal::UnknownSchema)
+        matches!(self, CellRefusal::UnknownSchema)
     }
 }
 
 /// What a value is to the media kinds — [`classify`]'s answer: one kind
 /// named, with that kind's own verdict under its schema (`Err` is always
-/// [`Refusal::UnknownSchema`] there: the value named the kind and parsed
+/// [`CellRefusal::UnknownSchema`] there: the value named the kind and parsed
 /// under no schema this build reads), or neither kind named, with why.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum Class {
     /// The `type` member is the picture kind's: a cell, or the halt.
-    Picture(Result<Cell, Refusal>),
+    Picture(Result<Cell, CellRefusal>),
     /// The `type` member is the blind kind's: a blind cell, or the halt.
-    Blind(Result<BlindCell, Refusal>),
+    Blind(Result<BlindCell, CellRefusal>),
     /// No media kind named: past the cap, or not a kind.
-    None(Refusal),
+    None(CellRefusal),
 }
 
 /// THE ONE CLASSIFICATION, ahead of both parsers (`media.md` item 4; the
@@ -176,12 +176,12 @@ pub(crate) enum Class {
 pub(crate) fn classify(bytes: &[u8]) -> Class {
     if bytes.len() > MAX_CELL_BYTES {
         if opens_as(KIND, bytes) {
-            return Class::Picture(Err(Refusal::UnknownSchema));
+            return Class::Picture(Err(CellRefusal::UnknownSchema));
         }
         if opens_as(blind::KIND, bytes) {
-            return Class::Blind(Err(Refusal::UnknownSchema));
+            return Class::Blind(Err(CellRefusal::UnknownSchema));
         }
-        return Class::None(Refusal::PastCap);
+        return Class::None(CellRefusal::PastCap);
     }
     // A JSON object opens with `{` past any leading whitespace (RFC 8259's
     // four), and nothing else can name a kind: the one-byte test that keeps
@@ -192,33 +192,33 @@ pub(crate) fn classify(bytes: &[u8]) -> Class {
         .find(|b| !matches!(b, b' ' | b'\t' | b'\n' | b'\r'))
         .is_some_and(|b| *b == b'{');
     if !opens_an_object {
-        return Class::None(Refusal::NotTheKind);
+        return Class::None(CellRefusal::NotTheKind);
     }
     // A GENERIC value, bounded by the cap above; a body that is no JSON names
     // nothing, every schema being JSON.
     let Ok(value) = serde_json::from_slice::<Value>(bytes) else {
-        return Class::None(Refusal::NotTheKind);
+        return Class::None(CellRefusal::NotTheKind);
     };
     let Some(object) = value.as_object() else {
-        return Class::None(Refusal::NotTheKind);
+        return Class::None(CellRefusal::NotTheKind);
     };
     match object.get("type").and_then(Value::as_str) {
         Some(KIND) => Class::Picture(parse_picture(object, bytes)),
         Some(kind) if kind == blind::KIND => Class::Blind(blind::parse_object(object, bytes)),
-        _ => Class::None(Refusal::NotTheKind),
+        _ => Class::None(CellRefusal::NotTheKind),
     }
 }
 
 /// THE ONE PARSER of the PICTURE kind: the cell `bytes` spell, under the
 /// canonical rule — a cell is answered only where
 /// `bytes == encode(parse(bytes))` — or why they are no cell. The
-/// classification's picture arm, and [`Refusal::NotTheKind`] for a value of
+/// classification's picture arm, and [`CellRefusal::NotTheKind`] for a value of
 /// any other `type`, the blind kind's included: this parser's contract is the
 /// picture's, and the cell index's one entry path reads it so.
-pub(crate) fn parse(bytes: &[u8]) -> Result<Cell, Refusal> {
+pub(crate) fn parse(bytes: &[u8]) -> Result<Cell, CellRefusal> {
     match classify(bytes) {
         Class::Picture(verdict) => verdict,
-        Class::Blind(_) => Err(Refusal::NotTheKind),
+        Class::Blind(_) => Err(CellRefusal::NotTheKind),
         Class::None(refusal) => Err(refusal),
     }
 }
@@ -226,8 +226,8 @@ pub(crate) fn parse(bytes: &[u8]) -> Result<Cell, Refusal> {
 /// The picture kind's own canonical check, past the classification: the
 /// value `object` NAMES THE KIND, and every departure from the v1 schema is
 /// a schema this parser does not know.
-fn parse_picture(object: &Map<String, Value>, bytes: &[u8]) -> Result<Cell, Refusal> {
-    let unknown = Refusal::UnknownSchema;
+fn parse_picture(object: &Map<String, Value>, bytes: &[u8]) -> Result<Cell, CellRefusal> {
+    let unknown = CellRefusal::UnknownSchema;
     if object.len() != 3 {
         return Err(unknown);
     }

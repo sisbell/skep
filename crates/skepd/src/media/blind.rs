@@ -30,12 +30,12 @@
 //!
 //! NAMING THE KIND, and the classification: a value whose `type` member is
 //! [`KIND`] names this kind whatever the rest of it holds, and one naming it
-//! under no schema this build reads is [`Refusal::UnknownSchema`] — the
+//! under no schema this build reads is [`CellRefusal::UnknownSchema`] — the
 //! door's `unknown_cell_schema`, the fetch route's halt face — never admitted
 //! as ordinary bytes (D13's carve-out, one strictness at every parser). The
 //! `type` is read ONCE, by [`cell::classify`], which hands this parser the
 //! object it built; [`parse_object`] is that classification's blind arm, and
-//! [`Refusal::NotTheKind`] for the picture kind's `type` as the picture's
+//! [`CellRefusal::NotTheKind`] for the picture kind's `type` as the picture's
 //! parser is for this kind's. A malformed blind body makes NO HALT MARK at
 //! the cell index: the index's prefix test reads the picture kind's opening
 //! alone, and the halt exists because the pruner's null is a permission to
@@ -48,7 +48,7 @@ use std::fmt::Write as _;
 
 use serde_json::{Map, Value};
 
-use super::cell::{self, Refusal, HASH_BYTES};
+use super::cell::{self, CellRefusal, HASH_BYTES};
 
 /// The blind kind's address — INTERIM, TEST-ONLY: the commons media range's
 /// allocation beside the picture's `3.89` under the ghost document's type
@@ -71,7 +71,7 @@ pub(crate) struct BlindCell {
 
 /// THE BLIND KIND's PARSER ALONE: the cell `bytes` spell under the canonical
 /// rule, or why they are no blind cell — the classification's blind arm,
-/// [`Refusal::NotTheKind`] for a value of any other `type`, the picture's
+/// [`CellRefusal::NotTheKind`] for a value of any other `type`, the picture's
 /// included, and the cap's and no-JSON's refusals as [`cell::parse`] gives
 /// them. Total over any bytes. Compiled for the tests alone: every shipped
 /// reader of a value — the door, the fetch — classifies, and no shipped
@@ -79,10 +79,10 @@ pub(crate) struct BlindCell {
 /// picture's opening alone); the vector set runs against the kind's own
 /// verdict through this, as the picture's runs against [`cell::parse`].
 #[cfg(test)]
-pub(super) fn parse(bytes: &[u8]) -> Result<BlindCell, Refusal> {
+pub(super) fn parse(bytes: &[u8]) -> Result<BlindCell, CellRefusal> {
     match cell::classify(bytes) {
         cell::Class::Blind(verdict) => verdict,
-        cell::Class::Picture(_) => Err(Refusal::NotTheKind),
+        cell::Class::Picture(_) => Err(CellRefusal::NotTheKind),
         cell::Class::None(refusal) => Err(refusal),
     }
 }
@@ -96,8 +96,8 @@ pub(super) fn parse(bytes: &[u8]) -> Result<BlindCell, Refusal> {
 pub(super) fn parse_object(
     object: &Map<String, Value>,
     bytes: &[u8],
-) -> Result<BlindCell, Refusal> {
-    let unknown = Refusal::UnknownSchema;
+) -> Result<BlindCell, CellRefusal> {
+    let unknown = CellRefusal::UnknownSchema;
     if object.len() != 2 {
         return Err(unknown);
     }
@@ -243,9 +243,9 @@ mod tests {
         println!("the canonical blind cell is {} bytes", canonical.len());
         let mut past = b"{".to_vec();
         past.resize(MAX_CELL_BYTES + 1, b' ');
-        assert_eq!(parse(&past), Err(Refusal::PastCap));
+        assert_eq!(parse(&past), Err(CellRefusal::PastCap));
         past.truncate(MAX_CELL_BYTES);
-        assert_eq!(parse(&past), Err(Refusal::NotTheKind), "at the cap: parsed, and no JSON");
-        assert_eq!(parse(b"x"), Err(Refusal::NotTheKind), "a text value costs no parse");
+        assert_eq!(parse(&past), Err(CellRefusal::NotTheKind), "at the cap: parsed, and no JSON");
+        assert_eq!(parse(b"x"), Err(CellRefusal::NotTheKind), "a text value costs no parse");
     }
 }

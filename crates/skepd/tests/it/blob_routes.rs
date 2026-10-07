@@ -290,7 +290,7 @@ fn run_vector(vector: &Value) {
             let id = scene.id(s["upload"].as_str().expect("upload"));
             let body = body_of(&s["body"]);
             let offset = s["offset"].as_u64().expect("offset");
-            let (st, _, resp) = blob_append(port, token, &id, offset, &body);
+            let (st, _, resp) = blob_resume(port, token, &id, offset, &body);
             // The bytes count as the upload's where the answer took them:
             // a 200, or a finish that failed past them (`blob_io`, the
             // seam's injection), the upload standing over the partial.
@@ -315,7 +315,7 @@ fn run_vector(vector: &Value) {
             judge(step, &at, &mut scene, st, &resp, &[]);
         } else if let Some(s) = step.get("read") {
             let token = cast.token(s["as"].as_str().expect("as"));
-            let (st, _, resp) = blob_read(port, token);
+            let (st, _, resp) = blob_deposit_read(port, token);
             judge(step, &at, &mut scene, st, &resp, &[]);
         } else if let Some(s) = step.get("end") {
             let token = cast.token(s["as"].as_str().expect("as"));
@@ -576,10 +576,10 @@ fn a_closed_board_keeps_a_standing_upload_and_serves_its_reads() {
     let token = open_session(port, CLAIMANT_PRINCIPAL);
     let (st, _, resp) = blob_progress(port, Some(&token), &standing);
     assert_eq!((st, json(&resp)["offset"].as_u64()), (200, Some(5)), "the progress read is served");
-    let (st, _, resp) = blob_read(port, Some(&token));
+    let (st, _, resp) = blob_deposit_read(port, Some(&token));
     assert_eq!(st, 200, "{}", String::from_utf8_lossy(&resp));
     assert_eq!(json(&resp)["uploads"].as_array().map(Vec::len), Some(1), "the deposit read lists it");
-    let (st, _, resp) = blob_append(port, Some(&token), &standing, 5, b"world");
+    let (st, _, resp) = blob_resume(port, Some(&token), &standing, 5, b"world");
     let v = json(&resp);
     assert_eq!((st, v["error"].as_str(), v["detail"].as_str()), (403, Some("upload_refused"), Some("uploads_closed")), "{}", String::from_utf8_lossy(&resp));
     let (st, _, resp) = blob_progress(port, Some(&token), &standing);
@@ -662,9 +662,9 @@ fn the_upload_familys_log_names_no_principal_no_token_and_no_upload() {
     let (st, _, resp) = blob_create(port, Some(&signed), 10, b"hello");
     assert_eq!(st, 200, "{}", String::from_utf8_lossy(&resp));
     let created = json(&resp)["upload"].as_str().expect("upload").to_string();
-    let (st, _, _) = blob_append(port, Some(&signed), &created, 5, b"world");
+    let (st, _, _) = blob_resume(port, Some(&signed), &created, 5, b"world");
     assert_eq!(st, 200);
-    let (st, _, _) = blob_read(port, Some(&signed));
+    let (st, _, _) = blob_deposit_read(port, Some(&signed));
     assert_eq!(st, 200);
     let (st, _, resp) = blob_create(port, Some(&signed), 10, b"");
     assert_eq!(st, 200);
@@ -775,10 +775,10 @@ fn a_dropped_connection_keeps_its_upload_and_a_resume_continues_it() {
         thread::sleep(Duration::from_millis(50));
     };
     assert_eq!(offset, 3, "the bytes received before the drop are kept");
-    let (st, _, resp) = blob_append(port, Some(&token), &id, 0, b"hello");
+    let (st, _, resp) = blob_resume(port, Some(&token), &id, 0, b"hello");
     assert_eq!(st, 409, "{}", String::from_utf8_lossy(&resp));
     assert_eq!(json(&resp)["offset"].as_u64(), Some(3));
-    let (st, _, resp) = blob_append(port, Some(&token), &id, 3, b"loworld");
+    let (st, _, resp) = blob_resume(port, Some(&token), &id, 3, b"loworld");
     assert_eq!(st, 200, "{}", String::from_utf8_lossy(&resp));
     assert_eq!(json(&resp)["hash"].as_str(), Some(blob_hex(b"helloworld").as_str()));
     sd.shutdown();
@@ -798,9 +798,9 @@ fn every_act_of_the_upload_answers_claim_first_before_the_claim() {
     let claimant = open_session(port, CLAIMANT_PRINCIPAL);
     for (st, _, resp) in [
         blob_create(port, Some(&claimant), 5, b"hello"),
-        blob_read(port, Some(&claimant)),
+        blob_deposit_read(port, Some(&claimant)),
         blob_progress(port, Some(&claimant), "0123456789abcdef0123456789abcdef"),
-        blob_append(port, Some(&claimant), "0123456789abcdef0123456789abcdef", 0, b"x"),
+        blob_resume(port, Some(&claimant), "0123456789abcdef0123456789abcdef", 0, b"x"),
         blob_end(port, Some(&claimant), "0123456789abcdef0123456789abcdef"),
     ] {
         assert_eq!(st, 403, "{}", String::from_utf8_lossy(&resp));
@@ -861,7 +861,7 @@ fn the_upload_pool_bounds_the_family() {
     // A creation-with-upload past the pool: the same, before any body byte.
     let (st, _, resp) = blob_create(port, Some(&token), 5, b"hello");
     assert_eq!((st, json(&resp)["error"].as_str()), (503, Some("upload_busy")), "{}", String::from_utf8_lossy(&resp));
-    let (st, _, resp) = blob_read(port, Some(&token));
+    let (st, _, resp) = blob_deposit_read(port, Some(&token));
     assert_eq!(st, 200, "the deposit read takes no permit: {}", String::from_utf8_lossy(&resp));
     let listed: BTreeSet<String> = json(&resp)["uploads"]
         .as_array()
@@ -871,7 +871,7 @@ fn the_upload_pool_bounds_the_family() {
         .collect();
     assert_eq!(listed, [standing.clone(), ending.clone()].into_iter().collect(), "no upload was made past the pool");
     // The resume past the pool: refused, the upload KEPT where it stood.
-    let (st, _, resp) = blob_append(port, Some(&token), &standing, 5, b"world");
+    let (st, _, resp) = blob_resume(port, Some(&token), &standing, 5, b"world");
     let v = json(&resp);
     assert_eq!((st, v["error"].as_str()), (503, Some("upload_busy")), "{}", String::from_utf8_lossy(&resp));
     assert!(v["detail"].as_str().is_some_and(|d| d.contains("retry")));
@@ -886,7 +886,7 @@ fn the_upload_pool_bounds_the_family() {
     drop(held);
     let (st, _, resp) = blob_create(port, Some(&token), 10, b"");
     assert_eq!(st, 200, "a released permit serves the creation: {}", String::from_utf8_lossy(&resp));
-    let (st, _, resp) = blob_append(port, Some(&token), &standing, 5, b"world");
+    let (st, _, resp) = blob_resume(port, Some(&token), &standing, 5, b"world");
     assert_eq!(st, 200, "a released permit serves the resume: {}", String::from_utf8_lossy(&resp));
     assert_eq!(json(&resp)["hash"].as_str(), Some(blob_hex(b"helloworld").as_str()));
     sd.shutdown();
@@ -1205,7 +1205,7 @@ fn an_expired_uploads_partial_goes_at_the_next_open_and_a_standing_one_survives_
         thread::sleep(Duration::from_millis(700));
         let (st, _, _) = blob_progress(port, Some(&token), &expired);
         assert_eq!(st, 404, "expired: no upload");
-        assert_eq!(json(&blob_read(port, Some(&token)).2)["pending"].as_u64(), Some(0), "counts nothing");
+        assert_eq!(json(&blob_deposit_read(port, Some(&token)).2)["pending"].as_u64(), Some(0), "counts nothing");
         sd.daemon().install_media_limits(None, None, None, None);
         let (st, _, resp) = blob_create(port, Some(&token), 10, b"hello");
         assert_eq!(st, 200);
@@ -1222,7 +1222,7 @@ fn an_expired_uploads_partial_goes_at_the_next_open_and_a_standing_one_survives_
     let (st, _, resp) = blob_progress(port, Some(&token), &standing);
     assert_eq!(st, 200, "{}", String::from_utf8_lossy(&resp));
     assert_eq!(json(&resp)["offset"].as_u64(), Some(5), "the standing upload's offset survives the reopen");
-    let (st, _, resp) = blob_append(port, Some(&token), &standing, 5, b"world");
+    let (st, _, resp) = blob_resume(port, Some(&token), &standing, 5, b"world");
     assert_eq!(st, 200, "{}", String::from_utf8_lossy(&resp));
     assert_eq!(json(&resp)["hash"].as_str(), Some(blob_hex(b"helloworld").as_str()), "the hash covers the bytes received before the reopen");
     sd.shutdown();

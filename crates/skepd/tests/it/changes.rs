@@ -1397,7 +1397,7 @@ fn pre_feature_positions_answer_bare_entries() {
 /// Reclaim everything below the head WITHOUT committing anything: one
 /// checkpoint at the current head, retaining one, drops the segments wholly
 /// below it. No new position appears, so the sidecar's coverage stays
-/// complete, and the retention floor lands AT the head.
+/// complete, and the reclaim floor lands AT the head.
 fn reclaim_below_the_head(dir: &Path, head: u64) {
     use skep_engine::{Engine, KernelConfig};
     use skep_kernel::{BurnedSeqPolicy, CheckpointPolicy, Durability, SaltSource};

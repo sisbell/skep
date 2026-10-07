@@ -30,9 +30,10 @@
 //! only from a board another build wrote.
 //!
 //! THE LOCK IS THE INDEX's OWN: the commit enters under the serialization
-//! guard, the gate reads under the credential lock's read arm, the pruner
-//! under its write arm, the walk under neither — so the index sits behind
-//! a `parking_lot::RwLock` taken innermost and held across no other lock.
+//! guard, the media gate reads under the credential lock's read arm, the
+//! pruner under its write arm, the walk under neither — so the index sits
+//! behind a `parking_lot::RwLock` taken innermost and held across no other
+//! lock.
 //! The cheap PREFIX TEST (`cell::names_kind_by_prefix`, the picture kind's
 //! canonical opening) stands before every parse, so a walk over a prose
 //! board's million one-byte values costs a byte compare apiece and a parse
@@ -134,7 +135,8 @@ struct Entries {
 
 /// THE REBUILD's REPORT: what the walk at open found and what it cost —
 /// the record's measure (its §Costs: "the time from open to the first PUT
-/// the gate admits") read off the daemon rather than guessed.
+/// the gate [the media gate] admits") read off the daemon rather than
+/// guessed.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Rebuild {
     /// The values the walk read — every value the world held at open.

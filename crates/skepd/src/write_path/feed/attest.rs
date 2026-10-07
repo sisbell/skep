@@ -50,7 +50,7 @@
 //! next open re-derives. A write or a sync that FAILS stops this file as a
 //! failed append stops theirs, and — the file being primary where theirs are
 //! projections — it HALTS the write path: the record answers
-//! [`super::StoreFailed`], and the daemon refuses every later write until a
+//! [`super::AttestStoreFailed`], and the daemon refuses every later write until a
 //! restart, since any commit could trigger the checkpoint that deletes the
 //! journal copy the lost line depends on. The restart's open rebuilds the
 //! line from the journal, which the halt kept.
@@ -71,7 +71,7 @@ use skep_kernel::{Attestation, Seq};
 
 use super::derived::LineFile;
 use super::super::sidecar::CommitsLog;
-use super::StoreFailed;
+use super::AttestStoreFailed;
 use crate::codec::{hex_string, parse_lower_hex_bytes};
 
 // The file is named BESIDE the fields its records carry, and both beside the
@@ -158,10 +158,10 @@ impl AttestStore {
     /// SYNCED before this returns, and into the served window (SO-I5 (d)).
     /// A failed write or sync stops the file for the uptime, is said ONCE
     /// on the operator stream — this file and the position — and is
-    /// answered [`StoreFailed`], on which the write path halts, so no later
+    /// answered [`AttestStoreFailed`], on which the write path halts, so no later
     /// commit runs to say it twice. This uptime still serves the slot, and
     /// the restart's open rebuilds the line from the journal.
-    pub(super) fn record(&mut self, at: u64, slot: Attestation) -> Result<(), StoreFailed> {
+    pub(super) fn record(&mut self, at: u64, slot: Attestation) -> Result<(), AttestStoreFailed> {
         let durable = self.file.append_synced(at, attest_fields(&slot));
         self.served.insert(at, Arc::new(slot));
         durable.map_err(|e| {
@@ -169,7 +169,7 @@ impl AttestStore {
                 "{ATTEST_FILE}: position {at}'s line is not durable ({e}); every later write is \
                  refused until a restart, whose open rebuilds the line from the journal"
             ));
-            StoreFailed
+            AttestStoreFailed
         })
     }
 

@@ -74,8 +74,8 @@ fn the_insert_arms_and_the_owners_shot_over_the_genesis_world() {
     let h = head_document();
     let door = |op: Op, p: PrincipalId| media_door(world, &op, p, &gate);
 
-    // THE WINDOW: the walk not done, the lease arm alone would refuse —
-    // the state, retry-class, and never the permanent token.
+    // THE REBUILD WINDOW: the walk not done, the lease arm alone would
+    // refuse — the state, retry-class, and never the permanent token.
     assert!(!gate.index_ready());
     assert_eq!(
         door(insert(&draft, canonical()), SYSTEM_PRINCIPAL),

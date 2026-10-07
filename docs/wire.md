@@ -810,7 +810,7 @@ Non-200 statuses are transport-level failures with a body of the shape
 | 409    | `upload_held`               | another stream holds the upload; retry once that connection ends (§Media) |
 | 409    | `upload_offset`             | a resume stated an offset other than the record's; carries `offset`, the record's (§Media) |
 | 400    | `upload_length`             | the request's bytes would pass the upload's declared length; nothing taken (§Media) |
-| 507    | `deposit_refused`           | the gate refused the deposit: `scope` names `own`, `venue` or `floor`, `ended` whether the upload was ended (refused as the body was written) or kept (refused before it), `offset` the bytes received (§Media) |
+| 507    | `deposit_refused`           | the media gate refused the deposit: `scope` names `own`, `venue`, `floor` or `standing`, `ended` whether the upload was ended (refused as the body was written) or kept (refused before it), `offset` the bytes received (§Media) |
 | 500    | `blob_io`                   | the blob store refused I/O; the upload stands at its last durable point (§Media) |
 | 503    | `index_rebuilding`          | the cell index is being rebuilt from the board after an open, and this request is one of its three readers — the blob upload's creation or resume, or the deposit read; retry shortly (§Media) |
 | 404    | `no_value`                  | the blob fetch's `i` names an element position the document never minted (§Media, THE FETCH) |
@@ -1420,7 +1420,7 @@ answers `not_owner` naming the draft; in a draft, and at the owner's own
 shot, a cell is ADMITTED where its hash is one this principal deposited
 under its own live lease and otherwise answers `credential_refused` with
 one of the media door's four tokens — unbound cell, unknown cell schema,
-and lease lapsed, `permanent` all three, and the window's index
+and lease lapsed, `permanent` all three, and the rebuild window's index
 rebuilding, retry-class — spelled and tabled in §Media under §Operations.
 
 The registry: registry refused — the registry sequence's one code, the
@@ -1880,7 +1880,7 @@ like the family's, each naming the act that exists):
 
 **The media door's four tokens** (media lanes A and B; §Media under
 §Operations): `unbound_cell`, `unknown_cell_schema` and `lease_lapsed`,
-PERMANENT like the family's, and `index_rebuilding`, RETRY — the window's
+PERMANENT like the family's, and `index_rebuilding`, RETRY — the rebuild window's
 answer while the cell index is rebuilt at open, in the binding's position
 alone — answered at the write path's media step — behind every gate above
 and ahead of the store — to a value naming the picture cell's kind in a
@@ -2670,7 +2670,7 @@ every value naming the kind, in this order:
 | `credential_refused`, `detail` `unbound_cell` | `insert` into a draft; the owner's own `publish` | permanent | the value is a cell naming a hash this principal did not deposit under its own lease — THE BINDING's refusal (lane B), read off this principal's own lease record first and never off the file's presence: never deposited, lapsed past the horizon, another account's deposit of the same bytes, or a deposit whole on disk whose length the cell's `size` contradicts (the size check, at the same door); permanent for the request as sent — the act that exists is a PUT of the bytes, then the cell the PUT's answer spells |
 | `credential_refused`, `detail` `unknown_cell_schema` | `insert` into a draft; the owner's own `publish` | permanent | the value names the kind and parses under no schema this board reads — D13's halt at a permanent act, so no second schema ever finds an unbound cell planted under this one; the same bytes are never admitted, and the act that exists is a cell in the form above |
 | `credential_refused`, `detail` `lease_lapsed` | `insert` into a draft; the owner's own `publish` | permanent | the value is a cell naming a hash this principal DID deposit, and the deposit is gone: the lease lapsed within the horizon, or is live over a file that is not there or not whole — the binding's LAPSED arm, told apart from `unbound_cell` so a resume can be written against it; the act is a re-PUT of the bytes, which re-takes the lease |
-| `credential_refused`, `detail` `index_rebuilding` | `insert` into a draft; the owner's own `publish` | retry | THE WINDOW: the cell index's rebuild at open has not completed, and the lease arm alone would have answered `unbound_cell` or `lease_lapsed` — a verdict the index arm, unread, may overturn; the readiness token re-used in the binding's position, during the walk alone, retry-class as the readiness refusal is: the same request may be admitted once the walk completes. A cell the lease arm admits in the window is admitted |
+| `credential_refused`, `detail` `index_rebuilding` | `insert` into a draft; the owner's own `publish` | retry | THE REBUILD WINDOW: the cell index's rebuild at open has not completed, and the lease arm alone would have answered `unbound_cell` or `lease_lapsed` — a verdict the index arm, unread, may overturn; the readiness token re-used in the binding's position, during the walk alone, retry-class as the readiness refusal is: the same request may be admitted once the walk completes. A cell the lease arm admits in the rebuild window is admitted |
 
 A cell naming a hash this principal holds a LIVE lease on, over a whole
 file whose length the cell's `size` names, is ADMITTED: the insert commits
@@ -2689,7 +2689,7 @@ standing, and a re-PUT of a file the account's cells name is charged
 nothing at its own scope. Until the index's rebuild at open completes
 (THE READINESS REFUSAL, below) the index arm is skipped and the lease arm
 alone ADMITS: the door is not one of the index's readers and never waits;
-where that arm alone would refuse, the door answers THE WINDOW's state —
+where that arm alone would refuse, the door answers THE REBUILD WINDOW's state —
 `credential_refused` with `detail` `index_rebuilding`, `disposition`
 `retry` — never a permanent token, so the owner's shot of a draft whose
 lease lapsed, its file whole, made during the walk, is answered
@@ -3098,7 +3098,7 @@ confirmed at the media round (the board's sm-Q8):
   `upload_refused` with `detail` `uploads_closed`;
 * the readiness token, `index_rebuilding`, 503, retry-class — the one
   refusal of the cell index's three readers — re-used at the door for the
-  window's answer;
+  rebuild window's answer;
 * the pruner's cadence, one hour between passes, the first once the index
   is ready; the pinned designation set, `blake3` alone; the compaction
   trigger, four times a log's current records, and its minimum, 1,024
@@ -4126,7 +4126,7 @@ or ABSENT query is `400 {"error": "malformed_at", "detail": …}`. What it
 is for: any `(position, chain)` pair a client holds — a `/health` reading
 it saved, a published head's own members, a pair another peer relayed —
 is checkable against the board's recomputation while the position is
-above the retention floor. A journal re-chained after the fact — a
+above the reclaim floor. A journal re-chained after the fact — a
 signature stripped and every later link re-chained included — answers
 the forged value here, which the saved pair contradicts, where a stored
 head record the forger left untouched still re-reads byte-equal; a tail

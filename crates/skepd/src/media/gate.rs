@@ -224,9 +224,11 @@ impl Limits {
 }
 
 /// The scope a deposit was refused on — what the refusal names, and
-/// nothing of the headroom (M-I6 (h)).
+/// nothing of the headroom (M-I6 (h)). Named for the deposit it refuses,
+/// apart from the session's own scope (AUTH-4.39, `auth::session::Scope`),
+/// which limits what a session may deposit at all.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum Scope {
+pub(crate) enum DepositScope {
     /// The principal's own scope: its pending bytes against the per-account
     /// limit.
     Own,
@@ -239,14 +241,14 @@ pub(crate) enum Scope {
     Standing,
 }
 
-impl Scope {
+impl DepositScope {
     /// The wire's token.
     pub(crate) fn token(self) -> &'static str {
         match self {
-            Scope::Own => "own",
-            Scope::Venue => "venue",
-            Scope::Floor => "floor",
-            Scope::Standing => "standing",
+            DepositScope::Own => "own",
+            DepositScope::Venue => "venue",
+            DepositScope::Floor => "floor",
+            DepositScope::Standing => "standing",
         }
     }
 }
@@ -271,12 +273,13 @@ pub(crate) enum Binding {
     /// one whose size the cell contradicts: no deposit of this principal's
     /// is the cell as written.
     Unbound,
-    /// THE WINDOW's ANSWER: the index's walk at open has not completed, and
-    /// the lease arm alone would answer [`Binding::Lapsed`] or
+    /// THE REBUILD WINDOW's ANSWER (ms5-R): the index's walk at open has not
+    /// completed, and the lease arm alone would answer [`Binding::Lapsed`] or
     /// [`Binding::Unbound`] — the index arm it has not read may admit the
     /// cell (a hash the principal's own cells name, its file whole), so the
     /// state is answered retry-class and never a permanent token. A cell the
-    /// lease arm admits in the window is admitted as it is at any time.
+    /// lease arm admits in the rebuild window is admitted as it is at any
+    /// time.
     Rebuilding,
 }
 
@@ -556,10 +559,10 @@ impl MediaGate {
         principal: PrincipalId,
         declared: u64,
         now_ms: u64,
-    ) -> Result<(), Scope> {
+    ) -> Result<(), DepositScope> {
         let Some(limit) = self.limits.read().per_account else { return Ok(()) };
         if self.own_scope(principal, now_ms).saturating_add(declared) > limit {
-            return Err(Scope::Own);
+            return Err(DepositScope::Own);
         }
         Ok(())
     }
@@ -572,13 +575,17 @@ impl MediaGate {
     /// already below the floor in force ([`MediaGate::floor`], never the
     /// constant alone) refuses the creation that would append a record no
     /// scope counts. The resume reads neither: it creates nothing.
-    pub(crate) fn admit_creation(&self, principal: PrincipalId, now_ms: u64) -> Result<(), Scope> {
+    pub(crate) fn admit_creation(
+        &self,
+        principal: PrincipalId,
+        now_ms: u64,
+    ) -> Result<(), DepositScope> {
         let key = Self::key(principal);
         if self.store.uploads_of(&key, now_ms).len() >= MAX_STANDING_UPLOADS {
-            return Err(Scope::Standing);
+            return Err(DepositScope::Standing);
         }
         if self.free_space() < self.floor() {
-            return Err(Scope::Floor);
+            return Err(DepositScope::Floor);
         }
         Ok(())
     }
@@ -595,24 +602,24 @@ impl MediaGate {
         written: u64,
         n: u64,
         now_ms: u64,
-    ) -> Result<(), Scope> {
+    ) -> Result<(), DepositScope> {
         let limits = self.limits.read().clone();
         let key = Self::key(principal);
         let durable = self.store.upload(&key, id, now_ms).map_or(0, |r| r.offset);
         if let Some(limit) = limits.per_account {
             let own = self.own_scope(principal, now_ms).saturating_sub(durable).saturating_add(written);
             if own.saturating_add(n) > limit {
-                return Err(Scope::Own);
+                return Err(DepositScope::Own);
             }
         }
         if let Some(limit) = limits.venue_total {
             let total = self.venue_total(now_ms).saturating_sub(durable).saturating_add(written);
             if total.saturating_add(n) > limit {
-                return Err(Scope::Venue);
+                return Err(DepositScope::Venue);
             }
         }
         if self.free_space().saturating_sub(n) < self.floor() {
-            return Err(Scope::Floor);
+            return Err(DepositScope::Floor);
         }
         Ok(())
     }
@@ -677,8 +684,8 @@ impl MediaGate {
         };
         match lease_arm {
             Binding::Admitted => Binding::Admitted,
-            // THE WINDOW (ms5-R; the door never waits): a refusal off the
-            // lease arm alone, the index arm unread, is the state and no
+            // THE REBUILD WINDOW (ms5-R; the door never waits): a refusal off
+            // the lease arm alone, the index arm unread, is the state and no
             // permanent verdict.
             _ if !ready => Binding::Rebuilding,
             refused => refused,

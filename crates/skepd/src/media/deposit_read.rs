@@ -33,12 +33,13 @@ use skep_namespace::PrincipalId;
 use super::gate::MediaGate;
 use crate::codec::obj;
 
-/// The read, as its JSON object. The caller has read the index's
-/// readiness: the base here is the index's number.
-pub(crate) fn deposit_read(gate: &MediaGate, principal: PrincipalId) -> Value {
+/// The read, as its JSON object, off `media_gate`, the media gate whose store
+/// holds the records. The caller has read the index's readiness: the base
+/// here is the index's number.
+pub(crate) fn deposit_read(media_gate: &MediaGate, principal: PrincipalId) -> Value {
     let key = MediaGate::key(principal);
-    let now = gate.now_ms();
-    let store = gate.store();
+    let now = media_gate.now_ms();
+    let store = media_gate.store();
     let deposits: Vec<Value> = store
         .live_leases_of(&key, now)
         .into_iter()
@@ -68,13 +69,13 @@ pub(crate) fn deposit_read(gate: &MediaGate, principal: PrincipalId) -> Value {
             ])
         })
         .collect();
-    let limits = gate.limits();
+    let limits = media_gate.limits();
     obj(vec![
         // Record-derived: the index's one number for the account.
-        ("base", Value::Number(gate.index().base(principal).into())),
+        ("base", Value::Number(media_gate.index().base(principal).into())),
         ("deposits", Value::Array(deposits)),
         ("limits", limits.address.map_or(Value::Null, Value::String)),
-        ("pending", Value::Number(gate.own_pending(principal, now).into())),
+        ("pending", Value::Number(media_gate.own_pending(principal, now).into())),
         // The limit in force, the default or the record's — the echo R68's
         // read keys on.
         ("per_account", limits.per_account.map_or(Value::Null, |n| Value::Number(n.into()))),

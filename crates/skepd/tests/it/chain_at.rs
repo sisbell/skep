@@ -229,8 +229,11 @@ fn chain_at_serves_the_value_alone_no_salt_and_no_marker_byte() {
 /// `history_reclaimed`, reached honestly: bulk inserts rotate the journal's
 /// segment, a checkpoint at the head retaining one drops the segments wholly
 /// below it (the recipe `changes.rs` compacts the sidecar with), and a
-/// position below the floor answers `410 history_reclaimed` — `floor` named
-/// when known — while the head still answers the pair it was saved as.
+/// position below the journal's reclaim floor answers `410
+/// history_reclaimed` — `floor` named when known — while the head still
+/// answers the pair it was saved as. The name says "retention floor" for the
+/// reclaim floor because AUTH's session interface (`interface-sessions.md`)
+/// cites this test by that name.
 #[test]
 fn chain_at_below_the_retention_floor_is_history_reclaimed() {
     use skep_engine::{Engine, KernelConfig};

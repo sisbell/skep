@@ -124,11 +124,12 @@ use crate::auth::policy::{upload_admission, UploadRefusal};
 use crate::auth::session::Actor;
 use crate::codec::{obj, wire_address};
 use crate::media::deposit_read::deposit_read;
-use crate::media::gate::{MediaGate, Scope};
+use crate::media::gate::{DepositScope, MediaGate};
 use crate::media::pruner::{self, PrunePass};
 use crate::media::serve;
 
-/// The family's one path.
+/// The family's own path — the creation's and the deposit read's; one
+/// upload's paths lie beneath it.
 const FAMILY: &str = "/blob/upload";
 
 /// THE FETCH's one path — beside the family, never of it: `/blob/upload`
@@ -143,8 +144,9 @@ pub(super) fn is_fetch_path(path: &str) -> bool {
 
 /// What a path of the family names.
 pub(super) enum BlobPath {
-    /// `/blob/upload` — the creation and the deposit read.
-    Create,
+    /// `/blob/upload` — the family's own path: the creation and the deposit
+    /// read.
+    Family,
     /// `/blob/upload/<id>` — one upload: the resume, the progress, the end.
     Upload(UploadId),
     /// `/blob/upload/<not an identifier>` — known, and malformed.
@@ -154,7 +156,7 @@ pub(super) enum BlobPath {
 /// The family's parse: `None` for a path outside it.
 pub(super) fn blob_path(path: &str) -> Option<BlobPath> {
     if path == FAMILY {
-        return Some(BlobPath::Create);
+        return Some(BlobPath::Family);
     }
     let rest = path.strip_prefix("/blob/upload/")?;
     Some(match UploadId::parse(rest) {
@@ -173,7 +175,7 @@ pub(super) fn is_blob_path(path: &str) -> bool {
 pub(super) fn streams_body(method: &str, path: &str) -> bool {
     matches!(
         (method, blob_path(path)),
-        ("POST", Some(BlobPath::Create)) | ("PATCH", Some(BlobPath::Upload(_)))
+        ("POST", Some(BlobPath::Family)) | ("PATCH", Some(BlobPath::Upload(_)))
     )
 }
 
@@ -268,14 +270,14 @@ impl Daemon {
         // any body byte on a closed board; the reads and the end served.
         let takes_bytes = matches!(
             (req.method.as_str(), &target),
-            ("POST", BlobPath::Create) | ("PATCH", BlobPath::Upload(_))
+            ("POST", BlobPath::Family) | ("PATCH", BlobPath::Upload(_))
         );
         if takes_bytes && !self.media.uploads_open() {
             return refuse_upload("uploads_closed");
         }
         let reads_the_index = matches!(
             (req.method.as_str(), &target),
-            ("POST", BlobPath::Create) | ("GET", BlobPath::Create) | ("PATCH", BlobPath::Upload(_))
+            ("POST", BlobPath::Family) | ("GET", BlobPath::Family) | ("PATCH", BlobPath::Upload(_))
         );
         if reads_the_index && !self.media.index_ready() {
             return refuse_rebuilding();
@@ -300,9 +302,9 @@ impl Daemon {
             None
         };
         match (req.method.as_str(), target) {
-            ("POST", BlobPath::Create) => self.blob_create(principal, req, body),
-            ("GET", BlobPath::Create) => Reply::json(200, deposit_read(&self.media, principal)),
-            ("PATCH", BlobPath::Upload(id)) => self.blob_append(principal, id, req, body),
+            ("POST", BlobPath::Family) => self.blob_create(principal, req, body),
+            ("GET", BlobPath::Family) => Reply::json(200, deposit_read(&self.media, principal)),
+            ("PATCH", BlobPath::Upload(id)) => self.blob_resume(principal, id, req, body),
             ("GET", BlobPath::Upload(id)) => self.blob_progress(principal, id),
             ("DELETE", BlobPath::Upload(id)) => self.blob_end(principal, id),
             (_, BlobPath::Malformed) => refuse(
@@ -386,14 +388,14 @@ impl Daemon {
     /// request's bytes against the length, the own scope on what the upload
     /// leaves past the offset BEFORE the body — refused there, the upload
     /// is kept — then the body.
-    fn blob_append(
+    fn blob_resume(
         &self,
         principal: PrincipalId,
         id: UploadId,
         req: &HttpRequest,
         body: &mut BodySource<'_>,
     ) -> Reply {
-        let offset = match append_query(req.query.as_deref()) {
+        let offset = match resume_query(req.query.as_deref()) {
             Ok(n) => n,
             Err(detail) => return refuse(TransportError::MalformedBlob, Some(&detail)),
         };
@@ -404,13 +406,13 @@ impl Daemon {
         let Some(_hold) = self.media.claim(id) else {
             return refuse(TransportError::UploadHeld, Some("another stream holds this upload"));
         };
-        self.append_held(principal, record, offset, req, body)
+        self.resume_held(principal, record, offset, req, body)
     }
 
     /// The resume under its hold: the stated `offset` held to the record's
     /// own — the one offset [`Daemon::stream_body`] resumes at — then the
     /// request's bytes against the length and the own scope, then the body.
-    fn append_held(
+    fn resume_held(
         &self,
         principal: PrincipalId,
         record: UploadRecord,
@@ -612,7 +614,7 @@ fn create_query(query: Option<&str>) -> Result<u64, String> {
 }
 
 /// The resume's query: exactly `offset=<bytes>` ([`sole_param`]).
-fn append_query(query: Option<&str>) -> Result<u64, String> {
+fn resume_query(query: Option<&str>) -> Result<u64, String> {
     let offset = sole_param(query, "offset")?.ok_or("the required parameter is offset=<bytes>")?;
     count(offset, "offset")
 }
@@ -680,13 +682,13 @@ fn refuse_upload_busy() -> Reply {
 /// standing-uploads bound, a `detail` naming the end of one of them as the
 /// act the person holds (M-I7 (e)) — the count the bound pins, which the
 /// same principal's deposit read lists upload by upload.
-fn refuse_deposit(scope: Scope, ended: bool, offset: u64) -> Reply {
+fn refuse_deposit(scope: DepositScope, ended: bool, offset: u64) -> Reply {
     let mut fields = vec![
         ("ended", Value::Bool(ended)),
         ("offset", Value::Number(offset.into())),
         ("scope", Value::String(scope.token().into())),
     ];
-    if scope == Scope::Standing {
+    if scope == DepositScope::Standing {
         fields.push((
             "detail",
             Value::String(format!(
@@ -724,7 +726,7 @@ mod tests {
     /// outside it; and which method/path pairs stream.
     #[test]
     fn the_path_family_and_the_streaming_pairs() {
-        assert!(matches!(blob_path("/blob/upload"), Some(BlobPath::Create)));
+        assert!(matches!(blob_path("/blob/upload"), Some(BlobPath::Family)));
         let id = "0123456789abcdef0123456789abcdef";
         assert!(matches!(blob_path(&format!("/blob/upload/{id}")), Some(BlobPath::Upload(_))));
         assert!(matches!(blob_path("/blob/upload/"), Some(BlobPath::Malformed)));
@@ -752,8 +754,8 @@ mod tests {
         assert!(create_query(Some("length=+1")).is_err());
         assert!(create_query(Some("size=1")).is_err());
         assert!(create_query(None).is_err());
-        assert_eq!(append_query(Some("offset=0")), Ok(0));
-        assert!(append_query(Some("offset=")).is_err());
+        assert_eq!(resume_query(Some("offset=0")), Ok(0));
+        assert!(resume_query(Some("offset=")).is_err());
         let r = refuse_rebuilding();
         assert_eq!(r.status, 503);
         assert!(String::from_utf8_lossy(r.bytes()).contains("\"error\":\"index_rebuilding\""));

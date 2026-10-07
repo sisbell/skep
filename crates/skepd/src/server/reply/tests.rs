@@ -149,8 +149,8 @@ fn the_blob_preflight_names_the_familys_methods_and_the_common_one_is_unmoved() 
 /// The fetch's preflight names its two methods and keeps the other two
 /// headers the common preflight carries; the fetch's refusals: M10's
 /// rejection in M10's envelope under the code's status, the store's
-/// two carrying the cell's members, the halt's face, every other step's
-/// token under its status.
+/// two carrying the blob the cell names, the halt's face, every other
+/// step's token under its status.
 #[test]
 fn the_fetch_preflight_and_each_refusals_status_and_body() {
     let fetch = Reply::preflight_fetch();
@@ -174,14 +174,14 @@ fn the_fetch_preflight_and_each_refusals_status_and_body() {
     assert_eq!(refuse_fetch(FetchRefusal::Rejected(unregistered)).status, 404);
     let shape = Rejection::classified(OpKind::RetrieveI, RejectCode::TooManyItems, None);
     assert_eq!(refuse_fetch(FetchRefusal::Rejected(shape)).status, 400);
-    let face = CellFace { hash: "ab".repeat(32), size: 5 };
-    let r = refuse_fetch(FetchRefusal::BlobMissing(face.clone()));
+    let named = NamedBlob { hash: "ab".repeat(32), size: 5 };
+    let r = refuse_fetch(FetchRefusal::BlobMissing(named.clone()));
     assert_eq!(r.status, 404);
     assert_eq!(
         String::from_utf8(r.bytes().to_vec()).expect("json"),
         format!(r#"{{"error":"blob_missing","hash":"{}","size":5}}"#, "ab".repeat(32))
     );
-    let r = refuse_fetch(FetchRefusal::BlobDamaged(face));
+    let r = refuse_fetch(FetchRefusal::BlobDamaged(named));
     assert_eq!(r.status, 404);
     assert!(String::from_utf8_lossy(r.bytes()).contains(r#""error":"blob_damaged""#));
     let r = refuse_fetch(FetchRefusal::UnknownCellSchema);

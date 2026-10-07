@@ -13,7 +13,7 @@ use crate::codec::{
 };
 use crate::history::Unavailable;
 use crate::media::door::MediaRefusal;
-use crate::media::serve::{Admitted, CellFace, Refusal as FetchRefusal};
+use crate::media::serve::{Admitted, FetchRefusal, NamedBlob};
 
 /// Preflight cache lifetime advertised on `OPTIONS` (wire v4).
 const CORS_MAX_AGE_SECS: &str = "86400";
@@ -678,7 +678,7 @@ pub(super) fn registry_refused(kind: OpKind, r: &RegistryRefusal) -> Reply {
 /// tokens ride `credential_refused` as every daemon-side refusal does
 /// ([`credential_refused`]'s row), the token and the class the refusal's
 /// own ([`MediaRefusal::token`], [`MediaRefusal::disposition`]) — the
-/// window's `index_rebuilding` the one retry-class token among them.
+/// rebuild window's `index_rebuilding` the one retry-class token among them.
 pub(super) fn media_door_refused(kind: OpKind, refusal: MediaRefusal) -> Reply {
     if let Some(token) = refusal.token() {
         return op_answer(credential_refused_reply(kind, token.to_string(), refusal.disposition()));
@@ -704,22 +704,24 @@ pub(super) fn media_door_refused(kind: OpKind, refusal: MediaRefusal) -> Reply {
 }
 
 /// THE FETCH's REFUSALS (wire.md §Media, THE FETCH), each step's as its
-/// reply — the ONE home of the route's statuses and bodies. The gate's own
-/// rejection — M10's read by identity refused — is answered in M10's own
-/// envelope, the bytes `/op` would answer for the same read (`withheld`
-/// naming the derived home with its `reorder` class, and every other code
-/// as M10 classifies it), under the STATUS the code's class gives it on this
-/// transport route: `403` for `withheld`, `404` for `doc_not_registered`,
-/// `400` for the rest (a malformed span, a width past the budget). A
-/// status chosen HERE and not through [`refuse`], because the body is not
-/// the transport's `{"error"}` shape: no transport error names an M10 code,
-/// and inventing seven would make the store's own vocabulary a second
-/// time. Every other step's refusal is a transport error of this table's,
-/// through [`refuse`] and [`refuse_with`]: the shape `malformed_blob`, the
-/// two "the store did not have it" refusals carrying the cell's `hash` and
-/// `size`, the halt's detail the client's face. A `HEAD`'s refusal is this
-/// same reply: the transport writes its head — the content pair included —
-/// and no byte of its body (`http::write_reply`).
+/// reply — the ONE home of the route's statuses and bodies. The fetch's
+/// gate's own rejection — M10's read by identity refused — is answered in
+/// M10's own envelope, the bytes `/op` would answer for the same read
+/// (`withheld` naming the derived home with its `reorder` class, and every
+/// other code as M10 classifies it), under the STATUS the code's class gives
+/// it on this transport route: `403` for `withheld`, `404` for
+/// `doc_not_registered`, `400` for the rest (a malformed span, a width past
+/// the budget). A status chosen HERE and not through [`refuse`], because the
+/// body is not the transport's `{"error"}` shape: no transport error names
+/// an M10 code, and inventing seven would make the store's own vocabulary a
+/// second time. Every other step's refusal is a transport error of this
+/// table's, through [`refuse`] and [`refuse_with`]: the shape
+/// `malformed_blob`, the two "the store did not have it" refusals carrying
+/// the blob the cell names ([`NamedBlob`]: its `hash` and `size`, data the
+/// client composes its face from, PUB-6.7), the halt's detail the client's
+/// face. A `HEAD`'s refusal is this same reply: the transport writes its
+/// head — the content pair included — and no byte of its body
+/// (`http::write_reply`).
 pub(super) fn refuse_fetch(refusal: FetchRefusal) -> Reply {
     match refusal {
         FetchRefusal::Shape(detail) => refuse(TransportError::MalformedBlob, Some(&detail)),
@@ -745,11 +747,11 @@ pub(super) fn refuse_fetch(refusal: FetchRefusal) -> Reply {
             refuse(TransportError::UnknownCellSchema, Some(UNKNOWN_CELL_SCHEMA_FACE))
         }
         FetchRefusal::BlindCell => refuse(TransportError::BlindCell, Some(BLIND_CELL_FACE)),
-        FetchRefusal::BlobMissing(face) => {
-            refuse_with(TransportError::BlobMissing, cell_fields(face))
+        FetchRefusal::BlobMissing(named) => {
+            refuse_with(TransportError::BlobMissing, cell_fields(named))
         }
-        FetchRefusal::BlobDamaged(face) => {
-            refuse_with(TransportError::BlobDamaged, cell_fields(face))
+        FetchRefusal::BlobDamaged(named) => {
+            refuse_with(TransportError::BlobDamaged, cell_fields(named))
         }
         FetchRefusal::BlobIo(e) => refuse(TransportError::BlobIo, Some(&e.to_string())),
         FetchRefusal::Busy => {
@@ -773,8 +775,8 @@ const BLIND_CELL_FACE: &str =
 
 /// The cell's own two members on the refusals that name what the store did
 /// not have.
-fn cell_fields(face: CellFace) -> Vec<(&'static str, Value)> {
-    vec![("hash", Value::String(face.hash)), ("size", Value::Number(face.size.into()))]
+fn cell_fields(named: NamedBlob) -> Vec<(&'static str, Value)> {
+    vec![("hash", Value::String(named.hash)), ("size", Value::Number(named.size.into()))]
 }
 
 /// The `410 history_reclaimed` refusal: the position asked for is older

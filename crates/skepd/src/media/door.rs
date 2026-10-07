@@ -36,8 +36,8 @@
 //! 3. `unbound_cell` (`credential_refused`, PERMANENT) — a cell in a draft
 //!    `insert`, or at the owner's own shot, naming a hash THIS PRINCIPAL
 //!    DID NOT DEPOSIT UNDER ITS OWN LEASE: THE BINDING's refusal, real from
-//!    lane B — the gate reads the principal's own lease record first and the
-//!    file only where that record names the hash under a live lease
+//!    lane B — the media gate reads the principal's own lease record first
+//!    and the file only where that record names the hash under a live lease
 //!    ([`MediaGate::binding`]); a cell whose hash the principal holds a live
 //!    lease on, over a whole file whose length the cell's `size` names, is
 //!    ADMITTED and goes on to the store. A deposit whole on disk whose size
@@ -72,16 +72,16 @@
 //!    presence beyond that record's live lease (Op inventory 1, "a client
 //!    meeting a LAPSED lease meets its OWN refusal"). Past the horizon the
 //!    record answers no lease and the binding's refusal stands.
-//! 6. `index_rebuilding` (`credential_refused`, RETRY) — THE WINDOW's
-//!    answer, in the binding's position and during the walk alone: the
-//!    index's rebuild at open has not completed, and the lease arm alone
+//! 6. `index_rebuilding` (`credential_refused`, RETRY) — THE REBUILD
+//!    WINDOW's answer, in the binding's position and during the walk alone:
+//!    the index's rebuild at open has not completed, and the lease arm alone
 //!    would have answered `unbound_cell` or `lease_lapsed` — a verdict the
 //!    index arm, unread, may overturn (a hash the principal's own cells
 //!    name, its file whole). The readiness token re-used, its class the
 //!    readiness refusal's: the request as sent may be perfectly good, and
 //!    the walk momentarily unfinished (ms5-R: the door never waits; P22; the
-//!    register M-I5 (b)). A cell the lease arm ADMITS in the window is
-//!    admitted. The one arm of the armed set that is not PERMANENT.
+//!    register M-I5 (b)). A cell the lease arm ADMITS in the rebuild window
+//!    is admitted. The one arm of the armed set that is not PERMANENT.
 //!
 //! THE KIND COLUMN (`media.md` item 4; the blind-document investigation §5
 //! (i); s6-D3): the arms above are read PER KIND. The picture's cell meets
@@ -102,9 +102,9 @@
 //! whole at the cell's size, and `lease_lapsed` where it is not. Until the
 //! index's walk at open completes the index arm is skipped and the lease
 //! arm alone ADMITS, so a lease lapsed between the insert and the shot
-//! answers `index_rebuilding` in that window — retry-class — and the shot
-//! is admitted after the walk with no re-PUT: the door never waits on the
-//! index.
+//! answers `index_rebuilding` in the rebuild window — retry-class — and the
+//! shot is admitted after the walk with no re-PUT: the door never waits on
+//! the index.
 //!
 //! WHAT STANDS AHEAD. The plain sequence's producers — the mint class, the
 //! `replaces` fence, the board-state gate with the write-path check behind
@@ -156,9 +156,9 @@ pub(crate) enum MediaRefusal {
     /// Arm 5: the binding's LAPSED arm — token `lease_lapsed`: the deposit
     /// is gone, re-PUT the bytes. INTERIM in spelling (the board's sm-Q8).
     LeaseLapsed,
-    /// Arm 6: THE WINDOW — token `index_rebuilding`, the readiness token
-    /// re-used, RETRY-CLASS: the index's walk at open is not done and the
-    /// lease arm alone would have refused. INTERIM in spelling (sm-Q8).
+    /// Arm 6: THE REBUILD WINDOW — token `index_rebuilding`, the readiness
+    /// token re-used, RETRY-CLASS: the index's walk at open is not done and
+    /// the lease arm alone would have refused. INTERIM in spelling (sm-Q8).
     IndexRebuilding,
 }
 
@@ -180,10 +180,11 @@ impl MediaRefusal {
     /// SENT no act admits it: a value under an unknown schema is never
     /// admitted, and an unbound or lapsed cell is admitted only after a
     /// PUT, which is another act (the lease re-taken by it), never a retry
-    /// of this one — and RETRY for the window's answer alone, the class the
-    /// reply layer gives the readiness refusal: the same request may be
-    /// admitted once the walk completes. The two M10 codes take M10's own
-    /// classification, `RejectCode::disposition`, where the reply is built.
+    /// of this one — and RETRY for the rebuild window's answer alone, the
+    /// class the reply layer gives the readiness refusal: the same request
+    /// may be admitted once the walk completes. The two M10 codes take M10's
+    /// own classification, `RejectCode::disposition`, where the reply is
+    /// built.
     pub(crate) fn disposition(&self) -> Disposition {
         match self {
             MediaRefusal::IndexRebuilding => Disposition::Retry,
@@ -197,8 +198,9 @@ impl MediaRefusal {
 /// cell, which the binding is asked about; the BLIND document's cell, which
 /// the target's and the owner's arms judge as the picture's and the
 /// binding never sees — the board holds no byte of its picture, so there is
-/// no deposit to bind and no gate to ask (`media/blind.rs`); a value naming
-/// either kind under no pinned schema; or — `None` — nothing it answers.
+/// no deposit to bind and no media gate to ask (`media/blind.rs`); a value
+/// naming either kind under no pinned schema; or — `None` — nothing it
+/// answers.
 #[derive(Debug, Clone)]
 enum Named {
     Cell(cell::Cell),
@@ -218,12 +220,16 @@ fn names_the_kind(value: &Val) -> Option<Named> {
 
 /// Arms 3, 4, 5 and 6 — the value's own verdict once the target's and the
 /// owner's arms have passed: a picture's cell is asked of THE BINDING at
-/// the gate, `None` where it is admitted, the window's state retry-class; a
-/// blind cell is ADMITTED with no store consulted — the kind's whole
-/// deposit story is its owner's, off this board.
-fn value_arm(named: Named, gate: &MediaGate, principal: PrincipalId) -> Option<MediaRefusal> {
+/// the media gate, `None` where it is admitted, the rebuild window's state
+/// retry-class; a blind cell is ADMITTED with no store consulted — the
+/// kind's whole deposit story is its owner's, off this board.
+fn value_arm(
+    named: Named,
+    media_gate: &MediaGate,
+    principal: PrincipalId,
+) -> Option<MediaRefusal> {
     match named {
-        Named::Cell(c) => match gate.binding(principal, &c) {
+        Named::Cell(c) => match media_gate.binding(principal, &c) {
             Binding::Admitted => None,
             Binding::Lapsed => Some(MediaRefusal::LeaseLapsed),
             Binding::Unbound => Some(MediaRefusal::UnboundCell),
@@ -235,12 +241,12 @@ fn value_arm(named: Named, gate: &MediaGate, principal: PrincipalId) -> Option<M
 }
 
 /// THE STEP: the door's answer to `op` by `principal` on `world`, the
-/// locked snapshot, with `gate` the daemon's media resource the binding is
-/// asked of — `Some` where an arm fires, `None` where the write goes on to
-/// the store. `world` MUST be the snapshot taken under the serialization
-/// guard for this request, the one the commit will run against; the plain
-/// sequence is its one caller, which holds the credential lock's read arm
-/// across this step and the commit.
+/// locked snapshot, with `media_gate` the media gate, the daemon's media
+/// resource the binding is asked of — `Some` where an arm fires, `None`
+/// where the write goes on to the store. `world` MUST be the snapshot taken
+/// under the serialization guard for this request, the one the commit will
+/// run against; the plain sequence is its one caller, which holds the
+/// credential lock's read arm across this step and the commit.
 ///
 /// EXHAUSTIVE with no `_` arm, the treatment `deposits_credential_link`
 /// gives the route: a new `Op` fails to compile here until someone decides
@@ -252,11 +258,11 @@ pub(crate) fn media_door(
     world: &World,
     op: &Op,
     principal: PrincipalId,
-    gate: &MediaGate,
+    media_gate: &MediaGate,
 ) -> Option<MediaRefusal> {
     match op {
-        Op::Insert { doc, values, .. } => insert_arm(world, doc, values, principal, gate),
-        Op::Publish { doc, shot } => publish_arm(world, doc, shot, principal, gate),
+        Op::Insert { doc, values, .. } => insert_arm(world, doc, values, principal, media_gate),
+        Op::Publish { doc, shot } => publish_arm(world, doc, shot, principal, media_gate),
         Op::CreateNewDocument { .. }
         | Op::Delegate { .. }
         | Op::RegisterNode { .. }
@@ -315,7 +321,7 @@ fn insert_arm(
     doc: &Address,
     values: &[Val],
     principal: PrincipalId,
-    gate: &MediaGate,
+    media_gate: &MediaGate,
 ) -> Option<MediaRefusal> {
     let m3 = world.m3();
     if !(m3.is_registered_document(doc) && Caller::Principal(principal).is_owner(m3, doc)) {
@@ -328,7 +334,7 @@ fn insert_arm(
     if published_target(m3, doc) {
         return Some(MediaRefusal::PublishedTarget);
     }
-    value_arm(named, gate, principal)
+    value_arm(named, media_gate, principal)
 }
 
 /// The `publish` arms (2, 3, 4): read only where M5's own admission of the
@@ -345,13 +351,13 @@ fn publish_arm(
     doc: &Address,
     shot: &Shot,
     principal: PrincipalId,
-    gate: &MediaGate,
+    media_gate: &MediaGate,
 ) -> Option<MediaRefusal> {
     let caller = Caller::Principal(principal);
     // Slots 1 through 6 — registration and ω of `doc`, the arguments'
     // registration and shape, the document's publication, the base's shape,
     // the source gate — asked of the snapshot the transaction will open on.
-    // The predicate handed the gate is the one M10 lends the real shot:
+    // The predicate handed the source gate is the one M10 lends the real shot:
     // `World::readable` at the principal (the write-path check's premise,
     // `policy/attestation.rs`).
     if shot_admission(world, caller, doc, shot, &World::visible_to(caller)).is_err() {
@@ -398,7 +404,7 @@ fn publish_arm(
     if !caller.is_owner(world.m3(), &draft) {
         return Some(MediaRefusal::NotOwner { draft });
     }
-    value_arm(named, gate, principal)
+    value_arm(named, media_gate, principal)
 }
 
 #[cfg(test)]

@@ -50,7 +50,7 @@ fn the_default_limit_is_a_share_of_the_capacity_and_an_install_overrides_it_whol
     assert!(line.contains("one eighth of the volume's capacity") && line.contains(&limit.to_string()), "{line}");
     let now = gate.now_ms();
     let p = PrincipalId(1);
-    assert_eq!(gate.admit_declared(p, limit + 1, now), Err(Scope::Own), "the default binds");
+    assert_eq!(gate.admit_declared(p, limit + 1, now), Err(DepositScope::Own), "the default binds");
     assert_eq!(gate.admit_declared(p, limit, now), Ok(()));
     assert!(gate.uploads_open());
     assert_eq!(gate.health_object(), serde_json::json!({"uploads": true}));
@@ -62,7 +62,7 @@ fn the_default_limit_is_a_share_of_the_capacity_and_an_install_overrides_it_whol
         address: Some("1.0.1.0.3.1".into()),
     });
     assert_eq!(gate.limits().per_file_cap, MAX_BLOB_BYTES, "held at the route's cap");
-    assert_eq!(gate.admit_declared(p, 11, now), Err(Scope::Own));
+    assert_eq!(gate.admit_declared(p, 11, now), Err(DepositScope::Own));
     assert_eq!(gate.admit_declared(p, 10, now), Ok(()));
     assert!(!gate.index_ready(), "an opened gate's index is not ready until the walk");
     assert_eq!(MediaGate::principal_of_key(&MediaGate::key(p)), Some(p));
@@ -118,19 +118,19 @@ fn the_creation_is_refused_at_the_standing_bound_and_at_the_floor_before_any_rec
         assert_eq!(gate.admit_creation(p, now), Ok(()));
         standing.push(store.create_upload(&MediaGate::key(p), HashFunction::Blake3, 10, Duration::from_secs(60), now).unwrap().id);
     }
-    assert_eq!(gate.admit_creation(p, now), Err(Scope::Standing), "the bound, off the principal's own records");
+    assert_eq!(gate.admit_creation(p, now), Err(DepositScope::Standing), "the bound, off the principal's own records");
     assert_eq!(gate.admit_creation(q, now), Ok(()), "another principal's uploads count in nothing here");
     store.end_upload(&MediaGate::key(p), &standing[0], now).unwrap();
     assert_eq!(gate.admit_creation(p, now), Ok(()), "an end makes room");
     gate.set_free_space(Some(FLOOR_BYTES - 1));
-    assert_eq!(gate.admit_creation(p, now), Err(Scope::Floor), "the floor, on no declared length");
+    assert_eq!(gate.admit_creation(p, now), Err(DepositScope::Floor), "the floor, on no declared length");
     assert_eq!(gate.admit_declared(p, 0, now), Ok(()), "the declared total's read is the own scope's alone");
     gate.set_free_space(Some(FLOOR_BYTES));
     assert_eq!(gate.admit_creation(p, now), Ok(()));
     store.create_upload(&MediaGate::key(p), HashFunction::Blake3, 10, Duration::from_secs(60), now).unwrap();
     gate.set_free_space(Some(0));
-    assert_eq!(gate.admit_creation(p, now), Err(Scope::Standing), "the bound is read first, the own record before the host's state");
-    assert_eq!(Scope::Standing.token(), "standing");
+    assert_eq!(gate.admit_creation(p, now), Err(DepositScope::Standing), "the bound is read first, the own record before the host's state");
+    assert_eq!(DepositScope::Standing.token(), "standing");
 }
 
 /// THE FLOOR IN FORCE (M-I5 (f), the floor sized to keep the journal
@@ -175,13 +175,13 @@ fn the_floor_in_force_scales_with_the_newest_checkpoint_and_never_below_the_cons
     assert_eq!(gate.admit_bytes(p, &id, 0, 64 * 1024, now), Ok(()));
     gate.set_floor(MediaGate::floor_in_force(Some(300 * mib)));
     assert_eq!(gate.floor(), 600 * mib + MAX_SEGMENT_LEN);
-    assert_eq!(gate.admit_creation(p, now), Err(Scope::Floor), "the floor in force refuses it");
-    assert_eq!(gate.admit_bytes(p, &id, 0, 64 * 1024, now), Err(Scope::Floor), "…and a chunk");
-    assert_eq!(Scope::Floor.token(), "floor", "the scope, and no figure");
+    assert_eq!(gate.admit_creation(p, now), Err(DepositScope::Floor), "the floor in force refuses it");
+    assert_eq!(gate.admit_bytes(p, &id, 0, 64 * 1024, now), Err(DepositScope::Floor), "…and a chunk");
+    assert_eq!(DepositScope::Floor.token(), "floor", "the scope, and no figure");
     gate.set_free_space(Some(600 * mib + MAX_SEGMENT_LEN + 64 * 1024));
     assert_eq!(gate.admit_creation(p, now), Ok(()), "room above the floor in force admits");
     assert_eq!(gate.admit_bytes(p, &id, 0, 64 * 1024, now), Ok(()), "a chunk that leaves it at the floor");
-    assert_eq!(gate.admit_bytes(p, &id, 0, 64 * 1024 + 1, now), Err(Scope::Floor), "one byte more");
+    assert_eq!(gate.admit_bytes(p, &id, 0, 64 * 1024 + 1, now), Err(DepositScope::Floor), "one byte more");
     gate.set_floor(MediaGate::floor_in_force(Some(1 * mib)));
     assert_eq!(gate.floor(), FLOOR_BYTES, "a small checkpoint landed: the constant again");
     gate.set_free_space(Some(400 * mib));
@@ -194,7 +194,7 @@ fn the_floor_in_force_scales_with_the_newest_checkpoint_and_never_below_the_cons
     assert!(line.contains("one eighth of the volume's capacity"), "…beside the default: {line}");
 }
 
-/// THE WINDOW (ms5-R; the register M-I5 (b)): while the index is not
+/// THE REBUILD WINDOW (ms5-R; the register M-I5 (b)): while the index is not
 /// ready, a cell no lease covers, one whose lease lapsed, and one whose
 /// live lease stands over no file each answer REBUILDING — the index
 /// arm unread may admit them — while a live lease over a whole file
@@ -202,7 +202,7 @@ fn the_floor_in_force_scales_with_the_newest_checkpoint_and_never_below_the_cons
 /// permanent verdicts, and a cell the principal's own cells name is
 /// admitted off the index arm.
 #[test]
-fn the_window_answers_rebuilding_where_the_lease_arm_alone_would_refuse() {
+fn the_rebuild_window_answers_rebuilding_where_the_lease_arm_alone_would_refuse() {
     let dir = tempfile::tempdir().expect("tempdir");
     let gate = MediaGate::open_with(dir.path(), MediaOptions::default()).expect("the store opens");
     let p = PrincipalId(5);
@@ -221,7 +221,7 @@ fn the_window_answers_rebuilding_where_the_lease_arm_alone_would_refuse() {
         stream.finish(Duration::from_millis(interval), now).unwrap();
     };
     deposit(10_000);
-    assert_eq!(gate.binding(p, &cell), Binding::Admitted, "a live lease over a whole file admits in the window");
+    assert_eq!(gate.binding(p, &cell), Binding::Admitted, "a live lease over a whole file admits in the rebuild window");
     assert_eq!(gate.binding(p, &Cell { hash, size: 1 }), Binding::Rebuilding, "the size contradicted: the state, not unbound");
     gate.advance_clock_ms(10_000);
     assert_eq!(gate.binding(p, &cell), Binding::Rebuilding, "lapsed: the state, not lease_lapsed");

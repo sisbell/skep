@@ -1465,7 +1465,7 @@ pub fn blob_create(
 }
 
 /// THE RESUME: `PATCH /blob/upload/<id>?offset=<offset>` with `body`.
-pub fn blob_append(
+pub fn blob_resume(
     port: u16,
     token: Option<&str>,
     id: &str,
@@ -1485,7 +1485,7 @@ pub fn blob_progress(
 }
 
 /// THE DEPOSIT READ: `GET /blob/upload`.
-pub fn blob_read(port: u16, token: Option<&str>) -> (u16, Vec<(String, String)>, Vec<u8>) {
+pub fn blob_deposit_read(port: u16, token: Option<&str>) -> (u16, Vec<(String, String)>, Vec<u8>) {
     blob_exchange(port, "GET", BLOB_UPLOAD, token, b"")
 }
 
@@ -1513,7 +1513,7 @@ pub fn put_whole(port: u16, token: &str, bytes: &[u8]) -> Value {
 
 /// The deposits a principal's read lists, as `(hash, size, lapsed)`.
 pub fn deposits_of(port: u16, token: &str) -> Vec<(String, u64, bool)> {
-    let (st, _, body) = blob_read(port, Some(token));
+    let (st, _, body) = blob_deposit_read(port, Some(token));
     assert_eq!(st, 200, "the deposit read: {}", String::from_utf8_lossy(&body));
     json(&body)["deposits"]
         .as_array()

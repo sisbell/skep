@@ -117,7 +117,7 @@ use self::derived::{
     STREAMS_OWNERS,
 };
 use super::sidecar::{
-    report_malformed_names, retention_floor, Carrier, CommitMeta, CommitsLog, LineOffset,
+    reclaim_floor, report_malformed_names, Carrier, CommitMeta, CommitsLog, LineOffset,
     OpTerms, RewriteFail,
 };
 use super::classify::{classify, derived_docs, parse_dotted, Doc};
@@ -321,9 +321,11 @@ pub(super) struct Feed {
 /// THE ATTEST STORE'S FAILURE (SO-I5 (d)): a line [`AttestStore::record`]
 /// could not make durable — its write or its sync failed, said once on the
 /// operator stream there — answered through [`Feed::record`] to the write
-/// path, which refuses every later write for the uptime on it.
+/// path, which refuses every later write for the uptime on it. The attest
+/// store's alone: a derived file's failed append is reported and fails no
+/// op (P22), so it is never answered as this.
 #[derive(Debug)]
-pub(super) struct StoreFailed;
+pub(super) struct AttestStoreFailed;
 
 struct Inner {
     log: CommitsLog,
@@ -639,7 +641,7 @@ impl Feed {
     /// what the daemon's checkpoint thread runs after each checkpoint lands,
     /// under this feed's lock, which is the one lock the record step and the
     /// page take: the same rewrite [`Feed::open`] runs, the fence found by
-    /// the same probe ([`retention_floor`]). `commits.log` drops every entry
+    /// the same probe ([`reclaim_floor`]). `commits.log` drops every entry
     /// at or below the fence just under the floor and rewrites itself around
     /// the survivors ([`CommitsLog::compact_to`]); the four twins drop the
     /// same positions and the four derived files are rewritten from them
@@ -657,7 +659,7 @@ impl Feed {
     /// and is said by the file itself, once — the resident twins are trimmed
     /// either way and serve this uptime, and the next open re-derives (P22).
     pub(super) fn compact_below_reclaim_floor(&self, engine: &Engine) -> Option<u64> {
-        let fence = retention_floor(engine)?.saturating_sub(1);
+        let fence = reclaim_floor(engine)?.saturating_sub(1);
         let mut inner = self.inner.lock();
         let dropped = match inner.log.compact_to(fence) {
             Ok(dropped) => dropped,
@@ -739,7 +741,7 @@ impl Feed {
     /// the next open's tail check re-derives what the file missed. The attest
     /// store's line is the exception (SO-I5 (d)): synced before this
     /// returns, and where its write or its sync fails, answered
-    /// [`StoreFailed`], on which the write path halts — the slot still served
+    /// [`AttestStoreFailed`], on which the write path halts — the slot still served
     /// this uptime, the line rebuilt from the journal by the restart's open.
     ///
     /// `docs` arrives as ADDRESSES and is rendered once, here, for the
@@ -759,7 +761,7 @@ impl Feed {
         signed: Option<Signed>,
         terms: Option<OpTerms>,
         world: &World,
-    ) -> Result<(), StoreFailed> {
+    ) -> Result<(), AttestStoreFailed> {
         let mut inner = self.inner.lock();
         let rendered: Vec<String> = docs.iter().map(|a| a.tumbler().to_string()).collect();
         let (carrier, attest) = match signed {
@@ -994,7 +996,7 @@ impl Inner {
     /// check closes. (The attest store owes its own two, on its own card, and
     /// by its class no third.)
     ///
-    /// Answers the attest store's [`StoreFailed`] where its line failed
+    /// Answers the attest store's [`AttestStoreFailed`] where its line failed
     /// (SO-I5 (d)); the four twins and their files are folded whatever it
     /// answers.
     fn fold_position(
@@ -1003,7 +1005,7 @@ impl Inner {
         offset: LineOffset,
         docs: Vec<Doc>,
         attest: Option<Attestation>,
-    ) -> Result<(), StoreFailed> {
+    ) -> Result<(), AttestStoreFailed> {
         let stored = match attest {
             Some(slot) => self.attest.record(at, slot),
             None => Ok(()),

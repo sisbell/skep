@@ -9,7 +9,7 @@ use skep_febe::Response;
 
 use super::{
     create_one, inexpressible, joint_absence, plan_failed, refusal, run_plan, settle_accepted,
-    settle_refused, settle_rejected, Cx,
+    settle_unaccepted, settle_rejected, Cx,
 };
 use crate::evidence::took_effect;
 use crate::fields::{create_name_of, expected_failure, field, group_word, roster, str_field};
@@ -26,7 +26,7 @@ pub(super) fn h_create_document(cx: &mut Cx, op: &Value, out: &mut OpOutcome) {
     let recorded = took_effect(op);
     for (i, golden) in goldens.iter().enumerate() {
         if cx.shadow.knows(golden) {
-            // Implied-created earlier (grounding); bind name and move on.
+            // The pre-pass's implied create; bind name and move on.
             if let (0, Some(n)) = (i, &name) {
                 cx.shadow.bind_name(n, golden);
             }
@@ -35,7 +35,7 @@ pub(super) fn h_create_document(cx: &mut Cx, op: &Value, out: &mut OpOutcome) {
         }
         let r = cx.create_document(golden, if i == 0 { name.as_deref() } else { None }, recorded);
         if !matches!(r, Response::AckAddr { .. }) {
-            settle_refused(out, xf, &r);
+            settle_unaccepted(out, xf, &r);
             return;
         }
     }
@@ -47,8 +47,9 @@ pub(super) fn h_create_document(cx: &mut Cx, op: &Value, out: &mut OpOutcome) {
 pub(super) fn h_create_documents(cx: &mut Cx, index: usize, op: &Value, out: &mut OpOutcome) {
     let xf = expected_failure(op);
     let recorded = took_effect(op);
-    // The first creation skep refuses settles the op against the golden's
-    // verdict once, after every creation the op records was asked for.
+    // The first creation skep refuses settles the op against the failure
+    // the golden recorded, once, after every creation the op records was
+    // asked for.
     let mut refused: Option<Box<Response>> = None;
     let mut create = |cx: &mut Cx, id: &str, name: Option<&str>| {
         if let Err(r) = create_one(cx, id, name, recorded) {
@@ -133,7 +134,7 @@ pub(super) fn h_create_documents(cx: &mut Cx, index: usize, op: &Value, out: &mu
         }
     }
     if let Some(r) = refused {
-        settle_refused(out, xf, &r);
+        settle_unaccepted(out, xf, &r);
         return;
     }
     if out.status == Status::Disagreed {
@@ -200,14 +201,14 @@ pub(super) fn h_open_document(cx: &mut Cx, op: &Value, out: &mut OpOutcome) {
         out.adaptations.push("open_document:conflict_copy→version".into());
         match cx.create_version(&doc, result.as_deref(), &[], took_effect(op)) {
             Err(_) => {
-                out.unresolvable(format!("open_document(conflict=copy) of unresolvable doc {doc}"))
+                out.never_bound(format!("open_document(conflict=copy) of never-bound doc {doc}"))
             }
             Ok(Response::AckAddr { .. }) => {
                 if settle_accepted(out, xf) {
                     out.agree("address-binding");
                 }
             }
-            Ok(other) => settle_refused(out, xf, &other),
+            Ok(other) => settle_unaccepted(out, xf, &other),
         }
         return;
     }
@@ -255,7 +256,7 @@ pub(super) fn h_create_version(cx: &mut Cx, op: &Value, out: &mut OpOutcome) {
     let via_doc_field = str_field(op, &["doc"]).and_then(|s| cx.shadow.resolve_doc(s));
     let src = explicit.or(via_doc_field).or_else(|| {
         out.adaptations.push("doc-from-register".into());
-        cx.shadow.scoped()
+        cx.shadow.current()
     });
     let Some(src) = src else {
         inexpressible(out, "create_version with no source document".into());
@@ -274,7 +275,7 @@ pub(super) fn h_create_version(cx: &mut Cx, op: &Value, out: &mut OpOutcome) {
     let names: Vec<&str> =
         ["doc", "name", "label"].iter().filter_map(|k| str_field(op, &[k])).collect();
     match cx.create_version(&src, golden.as_deref(), &names, took_effect(op)) {
-        Err(_) => out.unresolvable(format!("version of unresolvable doc {src}")),
+        Err(_) => out.never_bound(format!("version of never-bound doc {src}")),
         Ok(Response::AckAddr { .. }) => {
             if !settle_accepted(out, xf) {
                 return;
@@ -286,7 +287,7 @@ pub(super) fn h_create_version(cx: &mut Cx, op: &Value, out: &mut OpOutcome) {
                 out.note = Some("create_version with no recorded result to bind".into());
             }
         }
-        Ok(other) => settle_refused(out, xf, &other),
+        Ok(other) => settle_unaccepted(out, xf, &other),
     }
 }
 
@@ -321,7 +322,7 @@ pub(super) fn h_create_node(cx: &mut Cx, op: &Value, out: &mut OpOutcome) {
         return;
     };
     let Some(parent) = cx.alpha.translate(parent_golden) else {
-        out.unresolvable(format!("create_node under unresolvable account {parent_golden}"));
+        out.never_bound(format!("create_node under never-bound account {parent_golden}"));
         return;
     };
     let xf = expected_failure(op);

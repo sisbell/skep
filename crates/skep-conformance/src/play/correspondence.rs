@@ -202,7 +202,7 @@ fn run_compare_pair(
     recorded: RecordedShared,
 ) {
     let (Some(da), Some(db)) = (cx.alpha.translate(a.doc), cx.alpha.translate(b.doc)) else {
-        out.unresolvable("compare over unresolvable documents".into());
+        out.never_bound("compare over never-bound documents".into());
         return;
     };
     // An operand window (compare_partial's "shared (13-18)"; the corpus
@@ -327,7 +327,7 @@ pub(super) fn h_compare(cx: &mut Cx, op: &Value, out: &mut OpOutcome) {
             let dest = cx
                 .shadow
                 .resolve_doc("target")
-                .or_else(|| cx.shadow.scoped());
+                .or_else(|| cx.shadow.current());
             let Some(dest) = dest else {
                 inexpressible(out, "comparisons with no destination doc in scope".into());
                 return;
@@ -344,7 +344,7 @@ pub(super) fn h_compare(cx: &mut Cx, op: &Value, out: &mut OpOutcome) {
                 };
                 let shared: &[Value] =
                     e.get("shared").and_then(Value::as_array).map_or(&[], Vec::as_slice);
-                let mut sub = OpOutcome::new(out.index, &out.label);
+                let mut sub = OpOutcome::new(out.index, &out.op_name);
                 let a = CompareSide { doc: &dest, reference: "target", window: None };
                 let b = CompareSide { doc: &src, reference: "source", window: None };
                 run_compare_pair(cx, &mut sub, a, b, RecordedShared::Pairs(shared));
@@ -379,7 +379,7 @@ pub(super) fn h_compare(cx: &mut Cx, op: &Value, out: &mut OpOutcome) {
     }
 
     // The two documents, as referenced by the golden (names or addresses):
-    // explicit fields, then the op's own label when it is a "<x>_vs_<y>"
+    // explicit fields, then the op's `label` field when it is a "<x>_vs_<y>"
     // pair (identity_mixed_sources's "target_vs_source1"), then the
     // original/version convention — the one pair of references the op
     // itself does not name.
@@ -460,7 +460,7 @@ pub(super) fn h_compare(cx: &mut Cx, op: &Value, out: &mut OpOutcome) {
             (b.clone(), b)
         }
         _ => {
-            inexpressible(out, format!("compare documents `{ref_a}`/`{ref_b}` unresolvable"));
+            inexpressible(out, format!("compare documents `{ref_a}`/`{ref_b}` resolve to nothing"));
             return;
         }
     };
@@ -519,7 +519,7 @@ fn identity_pairs(
         return;
     };
     let Some(d) = cx.skep_doc(&doc) else {
-        out.unresolvable(format!("position identity compare of unresolvable doc {doc}"));
+        out.never_bound(format!("position identity compare of never-bound doc {doc}"));
         return;
     };
     let image = |pos: &str| -> Option<String> {

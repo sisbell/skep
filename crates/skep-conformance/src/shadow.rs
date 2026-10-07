@@ -1,6 +1,6 @@
 //! The golden-side shadow: per golden document, the byte sequence its
-//! content subspace holds after each recorded edit, plus the symbolic-name
-//! registry ("source", "target", "doc1"…) and the CURRENT-DOCUMENT REGISTER
+//! content subspace holds after each recorded edit, plus the symbolic names
+//! bound to them ("source", "target", "doc1"…) and the CURRENT-DOCUMENT REGISTER
 //! the recording scripts kept implicitly (ops without a `doc` field target
 //! the most recently *named* document — named by a create/open/version
 //! result, an explicit doc field, or an expectation's docid).
@@ -10,8 +10,8 @@
 //! inferred setup) whatever skep answers, so a skep divergence cannot bend
 //! a later translation; a created document, version or link enters it only
 //! when skep made it too, so every name it resolves has an α-image. In the
-//! play pass it changes only through `translate`'s `Cx` world-change
-//! methods, which state that rule.
+//! play pass it changes only through `play`'s `Cx` world-change methods,
+//! which state that rule.
 
 use std::collections::BTreeMap;
 
@@ -93,8 +93,9 @@ impl Shadow {
         self.names.entry(name.to_string()).or_insert_with(|| golden.to_string());
     }
 
-    /// The current-document register.
-    pub fn scoped(&self) -> Option<String> {
+    /// The current-document register: the document it points at, else the
+    /// last document created.
+    pub fn current(&self) -> Option<String> {
         self.current.clone().or_else(|| self.created.last().cloned())
     }
 
@@ -106,19 +107,19 @@ impl Shadow {
     }
 
     /// Resolve a doc reference: a dotted address passes through (a link
-    /// address never does); a symbolic name resolves via the registry, then
-    /// via the recording scripts' standing conventions: "source"/"doc1"/
-    /// "doc"/"original"/A → first created ("source" and "original" prefer a
-    /// registered name containing the word), "target"/"doc2"/B → second
-    /// ("target" and "dest" likewise), "doc3"/C → third, "doc4"/D → fourth,
-    /// "version" → the last version created, "same doc"/"current" → the
-    /// register. Any other string of two or more characters resolves to the
-    /// first registered name, in name order, that it contains or is
-    /// contained in ([`Shadow::find_named_containing`]): "Bank account"
+    /// address never does); a symbolic name resolves to the document it is
+    /// bound to, then via the recording scripts' standing conventions:
+    /// "source"/"doc1"/"doc"/"original"/A → first created ("source" and
+    /// "original" prefer a bound name containing the word), "target"/"doc2"/
+    /// B → second ("target" and "dest" likewise), "doc3"/C → third,
+    /// "doc4"/D → fourth, "version" → the last version created, "same doc"/
+    /// "current" → the register. Any other string of two or more characters
+    /// resolves to the first bound name, in name order, that it contains or
+    /// is contained in ([`Shadow::find_named_containing`]): "Bank account"
     /// resolves to a document named "B". A caller asking whether a string
     /// names a document at all, rather than a text to locate, therefore hears
-    /// yes for prose that merely shares a registered name's letters. `None`
-    /// when nothing fits — the caller records it.
+    /// yes for prose that merely shares a bound name's letters. `None` when
+    /// nothing fits — the caller records it.
     pub fn resolve_doc(&self, r: &str) -> Option<String> {
         if crate::tum::is_link_address(r) {
             return None; // a link id is never a document reference
@@ -130,7 +131,7 @@ impl Shadow {
             return Some(g.clone());
         }
         let nth = |i: usize| self.created.get(i).cloned();
-        // Role names prefer a REGISTERED name containing the role over the
+        // Role names prefer a BOUND name containing the role over the
         // positional convention: a scenario naming its fourth doc
         // "shared_target" means THAT doc by "target", not doc #2
         // (links/search_multiple_links_selective_removal).
@@ -143,7 +144,7 @@ impl Shadow {
             }
             "doc3" | "third" | "C" | "c" => nth(2),
             "doc4" | "fourth" | "D" | "d" => nth(3),
-            "same doc" | "current" | "this" | "self" => self.scoped(),
+            "same doc" | "current" | "this" | "self" => self.current(),
             "version" | "copy" => self.version_of.keys().last().cloned().or_else(|| nth(1)),
             _ => {
                 // "sourceN"/"peripheralN" positional group names bound at
@@ -166,7 +167,7 @@ impl Shadow {
             .map(|(_, g)| g.clone())
     }
 
-    /// A doc whose registered name equals, contains, or is contained in `t`.
+    /// A doc whose bound name equals, contains, or is contained in `t`.
     pub fn find_named_containing(&self, t: &str) -> Option<String> {
         if t.len() < 2 {
             return None;
@@ -264,8 +265,8 @@ impl Shadow {
         None
     }
 
-    /// Case-insensitive locate in ONE doc, returning the matched width (the
-    /// label grammar says "after first" for content "First ").
+    /// Case-insensitive locate in ONE doc, returning the matched width (a
+    /// description says "after first" for content "First ").
     pub fn find_text_ci(&self, doc: &str, needle: &str) -> Option<(String, u64, u64)> {
         let d = self.docs.get(doc)?;
         let hay = String::from_utf8_lossy(&d.text).to_ascii_lowercase();
@@ -350,7 +351,7 @@ impl Shadow {
 
     /// Version: the new doc mirrors the source's text AND link count —
     /// udanax's CREATENEWVERSION copies both subspaces. The Nth version
-    /// created in a scenario binds the labels `vN`/`versionN` (the recording
+    /// created in a scenario binds the names `vN`/`versionN` (the recording
     /// scripts' role names — versions/multiple_versions_same_source refers
     /// to its two unbound version results as "v1"/"v2"); `version` always
     /// names the LATEST version.
@@ -375,7 +376,7 @@ impl Shadow {
         self.docs.entry(home_golden.to_string()).or_default().links += 1;
     }
 
-    /// Register a created link's grounded endsets (play pass and setup steps
+    /// Record a created link's grounded endsets (play pass and setup steps
     /// call this on MakeLink success) — the traversal macros' hop-resolution
     /// world knowledge.
     pub fn record_link(
@@ -385,7 +386,7 @@ impl Shadow {
         to: Vec<(String, u64, u64)>,
     ) {
         if self.links.iter().any(|l| l.golden == golden) {
-            return; // create_links:repeat re-registering the same id
+            return; // create_links:repeat re-recording the same id
         }
         self.links.push(ShadowLink { golden: golden.to_string(), from, to });
     }

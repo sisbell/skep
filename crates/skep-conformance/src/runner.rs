@@ -11,12 +11,12 @@ use crate::allowlist::{load as load_allowlist, Allowlist};
 use crate::alpha::Alpha;
 use crate::deletions::Deletions;
 use crate::ground::{ground, SetupStep};
-use crate::harness::Rig;
 use crate::loader::{conformance_dir, load_all, Scenario};
 use crate::outcome::{OpOutcome, ScenarioRecord, Status, Verdict};
+use crate::play::{run_op, Cx};
 use crate::report::{output_dir, render_table, write_reports};
+use crate::rig::Rig;
 use crate::shadow::Shadow;
-use crate::translate::{run_op, Cx};
 
 /// udanax-green's default account in the golden address space; every
 /// scenario's document addresses live under it. Seeded into α at scenario
@@ -71,7 +71,7 @@ pub fn run_scenarios(scenarios: &[Scenario], allow: &Allowlist) -> Vec<ScenarioR
                     verdict: Verdict::Error,
                     bijection_size: 0,
                     ops: Vec::new(),
-                    first_failure: None,
+                    first_finding: None,
                     error: Some(msg),
                     groundings: Vec::new(),
                 }
@@ -91,7 +91,7 @@ fn run_scenario(scn: &Scenario, allow: &Allowlist) -> ScenarioRecord {
                 verdict: Verdict::Error,
                 bijection_size: 0,
                 ops: Vec::new(),
-                first_failure: None,
+                first_finding: None,
                 error: Some(format!("rig bootstrap: {e}")),
                 groundings: Vec::new(),
             }
@@ -104,8 +104,8 @@ fn run_scenario(scn: &Scenario, allow: &Allowlist) -> ScenarioRecord {
 
     // The grounding pre-pass: shadow-only, derives implied setup from the
     // scenario's own recorded evidence (see ground.rs module docs).
-    let grounding = ground(&scn.operations);
-    let mut groundings = grounding.tags.clone();
+    let setup = ground(&scn.operations);
+    let mut groundings = setup.tags.clone();
 
     // Implied creates + lead-in, executed through the same op surface the
     // scenario uses. A failure here is recorded and the run continues — the
@@ -117,9 +117,9 @@ fn run_scenario(scn: &Scenario, allow: &Allowlist) -> ScenarioRecord {
             shadow: &mut shadow,
             deletions: &mut deletions,
             ops: &scn.operations,
-            plans: &grounding.plans,
+            plans: &setup.plans,
         };
-        for docid in &grounding.implied_creates {
+        for docid in &setup.implied_creates {
             if cx.alpha.peek(docid).is_some() {
                 continue; // already bound (defensive; should not happen)
             }
@@ -127,11 +127,11 @@ fn run_scenario(scn: &Scenario, allow: &Allowlist) -> ScenarioRecord {
             if !matches!(r, skep_febe::Response::AckAddr { .. }) {
                 groundings.push(format!(
                     "implied-create FAILED for {docid}: {}",
-                    crate::harness::brief(&r)
+                    crate::rig::brief(&r)
                 ));
             }
         }
-        'lead_in: for step in &grounding.lead_in {
+        'lead_in: for step in &setup.lead_in {
             // Lead-in inserts may target docs the scenario creates itself
             // later only via implied paths; ensure existence first. (Link
             // steps live in expansion plans, never the lead-in, but the
@@ -142,7 +142,7 @@ fn run_scenario(scn: &Scenario, allow: &Allowlist) -> ScenarioRecord {
                     if !matches!(r, skep_febe::Response::AckAddr { .. }) {
                         groundings.push(format!(
                             "lead-in create FAILED for {doc}: {}",
-                            crate::harness::brief(&r)
+                            crate::rig::brief(&r)
                         ));
                         continue 'lead_in;
                     }
@@ -162,7 +162,7 @@ fn run_scenario(scn: &Scenario, allow: &Allowlist) -> ScenarioRecord {
     let key = scn.key();
     let mut ops: Vec<OpOutcome> = Vec::with_capacity(scn.operations.len());
     for (i, op) in scn.operations.iter().enumerate() {
-        let grants = allow.grants(&key, i);
+        let adjustments = allow.adjustments(&key, i);
         let mut out = {
             let mut cx = Cx {
                 rig: &mut rig,
@@ -170,14 +170,14 @@ fn run_scenario(scn: &Scenario, allow: &Allowlist) -> ScenarioRecord {
                 shadow: &mut shadow,
                 deletions: &mut deletions,
                 ops: &scn.operations,
-                plans: &grounding.plans,
+                plans: &setup.plans,
             };
-            run_op(&mut cx, i, op, &grants)
+            run_op(&mut cx, i, op, &adjustments)
         };
         // Fold α-findings into the op they arose on: they are divergence
         // evidence, not harness failures.
         let findings: Vec<String> =
-            alpha.findings.drain(..).map(|f| format!("{}: {}", f.class, f.detail)).collect();
+            alpha.findings.drain(..).map(|f| format!("{}: {}", f.kind, f.detail)).collect();
         if !findings.is_empty() {
             if !matches!(out.status, Status::Disagreed | Status::Inexpressible) {
                 out.status = Status::Disagreed;
@@ -187,7 +187,7 @@ fn run_scenario(scn: &Scenario, allow: &Allowlist) -> ScenarioRecord {
         }
         // The allowlist judges the outcome α's findings left: which
         // adjudicated classes, if any, cover it.
-        out.allowlisted = allow.grant(&key, i, &out);
+        out.allowlisted = allow.classify(&key, i, &out);
         ops.push(out);
     }
 
@@ -204,24 +204,25 @@ fn run_scenario(scn: &Scenario, allow: &Allowlist) -> ScenarioRecord {
         Verdict::Pass
     };
     // The summary's divergent list leads with the first UNADJUDICATED
-    // disagreement — a first-failure line showing an allowlisted op reads as
-    // the scenario's finding and misdirects (round 6's item 1 was diagnosed
-    // off exactly that). Allowlisted disagreements are the fallback only
-    // when nothing unadjudicated exists (allowlisted/inexpressible verdicts).
-    let first_failure = ops
+    // disagreement — a first-finding line showing an allowlisted op reads as
+    // the scenario's open finding and misdirects (round 6's item 1 was
+    // diagnosed off exactly that). Allowlisted disagreements are the
+    // fallback only when nothing unadjudicated exists (allowlisted/
+    // inexpressible verdicts).
+    let first_finding = ops
         .iter()
         .find(|o| o.status == Status::Inexpressible || o.is_unadjudicated())
         .or_else(|| {
             ops.iter().find(|o| matches!(o.status, Status::Disagreed | Status::Inexpressible))
         })
-        .map(|o| (o.index, o.label.clone(), o.detail()));
+        .map(|o| (o.index, o.op_name.clone(), o.detail()));
     ScenarioRecord {
         category: scn.category.clone(),
         name: scn.name.clone(),
         verdict,
         bijection_size: alpha.len(),
         ops,
-        first_failure,
+        first_finding,
         error: None,
         groundings,
     }

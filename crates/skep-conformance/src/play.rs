@@ -1,23 +1,24 @@
-//! The translator: canonical verb + fields → skep `Op`, executed and
+//! The play pass: canonical verb + fields → skep `Op`, executed and
 //! compared in place. The catalogue is deliberately boring — one arm per
 //! verb, exhaustive; a reader auditing "what does the harness do with
 //! `vcopy`" finds one function that says so. Every adaptation policy is
-//! named and recorded per-op; a label or field shape that cannot be
-//! translated is classified `inexpressible` with the reason recorded —
-//! never silently skipped — and so is a read whose recorded answer no
+//! named and recorded per-op; an op name or field shape with no expression
+//! on skep's surface is classified `inexpressible` with the reason recorded
+//! — never silently skipped — and so is a read whose recorded answer no
 //! reader reaches (`compared_nothing`, the unread keys named): a read ends
 //! `NotCompared` only when its recording kept no answer.
 //!
 //! Layout: this file is the dispatch — `run_op`, over the verbs
-//! `fields::normalize` reads a label as — and what more than one verb family
-//! calls: the `Cx` context with its reads over the rig and its world-change
-//! methods (the shadow's one owner in the play pass), the outcome helpers —
-//! skep's answer settled against the golden's verdict (`settle_accepted`,
-//! `settle_refused`), the `Tally` an op judged part by part settles
-//! through, and the end of a read that compared nothing — document creation
-//! and plan execution, endset sides, and the state probe. Each family's
-//! handlers are a child module holding the helpers no other family uses; a
-//! child sees this file's private items and none of its siblings'.
+//! `fields::normalize` reads an op's name as — and what more than one verb
+//! family calls: the `Cx` context with its reads over the rig and its
+//! world-change methods (the shadow's one owner in the play pass), the
+//! outcome helpers — skep's answer settled against the failure the golden
+//! recorded (`settle_accepted`, `settle_unaccepted`), the `Tally` an op
+//! judged part by part settles through, and the end of a read that compared
+//! nothing — document creation and plan execution, endset sides, and the
+//! state probe. Each family's handlers are a child module holding the
+//! helpers no other family uses; a child sees this file's private items and
+//! none of its siblings'.
 //!
 //! ## Adaptation policies (each recorded per-op when applied)
 //!
@@ -31,7 +32,7 @@
 //!   "OPERATION_FAILED: …", a "FAILED: …" result naming a missing session
 //!   attribute, or an error naming one); udanax never executed the op, so
 //!   neither does the harness, and the shadow does not change.
-//! * `type_registry` — link-type names denote positions in a
+//! * `types_document` — link-type names denote positions in a
 //!   harness-created types document; udanax encoded them as vspecs into an
 //!   unoccupied link subspace (unresolvable I-space). Type-slot data inside
 //!   the types doc is harness infrastructure, excluded from comparisons.
@@ -48,10 +49,12 @@
 //! * `text-located:*` / `span-from-description` / `range-from-description`
 //!   / `whole-extent` — decorated-description grounding (fields::locate).
 //! * `position-end` / `position-from-description` / `position-after-text` /
-//!   `position-from-label` — position grounding.
-//! * `doc-from-label` / `doc-from-register` — document scope grounding
+//!   `position-from-op-name` — position grounding.
+//! * `doc-from-op-name` / `doc-from-register` — document scope grounding
 //!   (the current-document register mirrors the recording scripts' implicit
 //!   scope).
+//! * `doc-from-source-role` — a bare find_links/find_documents searches from
+//!   the source-role document when the scenario names one.
 //! * `implied-create:first-touch` — an op needed a document before any
 //!   create; one is created, exactly as the recording script must have.
 //! * `expansion-plan` — the op executed a pre-pass reconstruction plan
@@ -84,7 +87,7 @@
 //! * `endset-evidence` (extended) — also refines whole-extent doc-ref
 //!   endsets from later follow results (vspec-shaped or content strings),
 //!   so stored links carry the extents the scripts actually made.
-//! * `allowlist-grant:width` / `allowlist-grant:count` — a comparator agreed
+//! * `allowlist-adjusted:width` / `allowlist-adjusted:count` — a comparator agreed
 //!   only because an allowlist entry's declared width tolerance or count
 //!   delta covered the difference; the runner allowlists such an agreement
 //!   (the entry's existence is the adjudicated divergence).
@@ -93,13 +96,11 @@
 //!   default, keying no recorded pair) compares that document with itself,
 //!   as internal/insert_only_baseline's script did. A second reference the
 //!   recording does use — a `docs` pair, `doc_a`/`doc_b`, a `<x>_vs_<y>`
-//!   label, or a shared-pair key — that the shadow cannot ground leaves the
-//!   op inexpressible instead.
+//!   `label` field, or a shared-pair key — that the shadow cannot ground
+//!   leaves the op inexpressible instead.
 //! * `golden-duplicate-result` — the golden's expected list names one
 //!   address twice (a recording defect); compared as a set, the dedup
 //!   tagged so the defect stays visible.
-//! * `empty-as-absent` — an expected-empty position probe agreeing with a
-//!   skep absence rejection (both encode "nothing there").
 //! * `account_as_delegate` / `create_node_as_delegate` — udanax account
 //!   selection / sub-account minting map onto M3 delegation.
 //! * `create_links:repeat` — a plural create repeats one MakeLink per
@@ -113,9 +114,10 @@
 //!   skep's own extent reports it, never sized from the recording.
 //! * `contents:both-subspaces` — a retrieve whose recorded result lists a
 //!   link address alongside text read the link subspace too, as a second
-//!   RetrieveV so a link-side absence localizes; the link addresses compare
-//!   through α (the version scenarios' whole-document retrieves surfaced
-//!   the copied link). The reply's shape follows the golden.
+//!   RetrieveV, so a refusal of the link side cannot void the content read;
+//!   the link addresses compare through α (the version scenarios'
+//!   whole-document retrieves surfaced the copied link). The reply's shape
+//!   follows the golden.
 //! * `full-probe-targets-last-write` — a `full_text_*`/`full_content_*`
 //!   probe reads the doc the last CONTENT write touched, never a follow
 //!   landing and never the drifted register
@@ -124,8 +126,8 @@
 //!   explicit from-doc into the TO slot: the field named the doc searched
 //!   FROM, `by` named the endset constrained
 //!   (interactions/link_both_endpoints_transcluded op11).
-//! * `delete-text-from-label` — a bare `delete_A` op's removed text comes
-//!   from its label, post-state-diff first
+//! * `delete-text-from-op-name` — a bare `delete_A` op's removed text comes
+//!   from its name, post-state-diff first
 //!   (iaddress_allocation/delete_does_not_affect_next_insert).
 //! * `read-scoped-to-recorded-extent` — a whole-document retrieve read only
 //!   as many content positions as the golden's reply carries, when the
@@ -143,7 +145,7 @@
 //!   I-coverage against skep's recorded endset spans — coverage equality,
 //!   not coordinate equality (udanax resolved into the query doc's V-space).
 //! * `traverse-hops-from-world` — traversal hop links resolve from the
-//!   harness's link registry (every created link's endsets), never by text
+//!   shadow's links (every created link's endsets), never by text
 //!   re-search; `links_found` lists compare against a real FindLinksFtt.
 //! * `insert-all:distributed` — an `insert_all` texts array fills one
 //!   created document per text, in creation order.
@@ -179,7 +181,8 @@
 //!   transcluded content grounds the endset to the home document's
 //!   foreign-origin (copied-in) regions, read from the live V→I image.
 //! * `transcluded-region-search` — a find_links `via_transcluded_content`
-//!   query searches exactly the scoped doc's foreign-origin regions.
+//!   query searches exactly the register's document's foreign-origin
+//!   regions.
 //! * `vcopy-cover-from-comparisons` / `vcopy-embed-plan` /
 //!   `vcopy-span-from-comparison` / `vcopy-prefix-from-comparison` —
 //!   grounding-pre-pass reconstructions of append-shaped vcopys from the
@@ -225,10 +228,11 @@
 //! * `explicit-empty-endset` — a create_link `fromset`/`toset`/`threeset`
 //!   recorded as an EMPTY list is passed to MakeLink empty (green accepts
 //!   all three, A11); the default-endset conventions never substitute.
-//! * `threeset-marker→registry` — a threeset span at the udanax type-marker
-//!   local address `1.0.2.X` (client.py's LINK_TYPES encoding) denotes the
-//!   registry type name (2.2 jump / 2.3 quote / 2.6 footnote / 2.6.2
-//!   margin) — the same `type_registry` mapping the name-based path uses.
+//! * `threeset-marker→types-document` — a threeset span at the udanax
+//!   type-marker local address `1.0.2.X` (client.py's LINK_TYPES encoding)
+//!   denotes the type name (2.2 jump / 2.3 quote / 2.6 footnote / 2.6.2
+//!   margin) the types document holds — the same `types_document` mapping
+//!   the name-based path uses.
 //! * `threeset-content-type` — a threeset carrying real content spans
 //!   becomes the link's TYPE endset via α (green's content-span third
 //!   endsets are first-class, A8).
@@ -240,8 +244,9 @@
 //!   `original`), never from the original/version convention.
 //! * `deep-vaddress-span` — a span dict at a NESTED local address ("1.1.1")
 //!   is built as an arbitrary-depth tumbler span and asked of skep raw;
-//!   M6's answer (empty, or a depth/absence rejection) is compared as
-//!   recorded (boundary_deep_vaddress_reads).
+//!   M6's answer — empty (a well-formed nested span resolves to nothing,
+//!   R6) or `MalformedSpan` (ruling 17) — is compared as recorded
+//!   (boundary_deep_vaddress_reads).
 //! * `raw wire request codes` are inexpressible by construction: skep's
 //!   surface is typed `Op`s; unknown-code handling lives in the transport's
 //!   `OpKind::Unparseable`, which a library harness cannot reach.
@@ -253,11 +258,11 @@ use serde_json::Value;
 use skep_address::{Nat, Span};
 use skep_arrangement::{Run, VPos, VSpec};
 use skep_content::Val;
-use skep_febe::{Deposit, Op, RejectCode, Response, SlotArg};
+use skep_febe::{Deposit, Op, Response, SlotArg};
 use skep_links::Endset;
 use skep_retrieval::{DeliveryItem, Spec};
 
-use crate::allowlist::Grants;
+use crate::allowlist::Adjustments;
 use crate::alpha::Alpha;
 use crate::compare::{
     collapsed_subspace_shape, compare_content, compare_spansets, Comparison,
@@ -266,11 +271,11 @@ use crate::compare::{
 use crate::deletions::Deletions;
 use crate::fields::{
     aim_doc, as_text, client_side_failure, cuts_of, expect_spans_raw, expect_strings, field,
-    harvest_spanset, label_of, locate, normalize, recorded_content, span_dict, str_field,
+    harvest_spanset, locate, normalize, op_name, recorded_content, span_dict, str_field,
     vspec_dict, CopySource, DocAim, DocSpans, Verb, ANNOTATION_KEYS, POST_WRITE_KEYS,
 };
 use crate::ground::SetupStep;
-use crate::harness::Rig;
+use crate::rig::Rig;
 use crate::outcome::{OpOutcome, Status};
 use crate::shadow::{Shadow, ShadowLink};
 use crate::tum::{link_home_docid, parse_dotted, vspan};
@@ -317,8 +322,8 @@ pub struct Cx<'a> {
 
 fn inexpressible(out: &mut OpOutcome, reason: String) {
     out.status = Status::Inexpressible;
-    // Keep any resolution note already attached (doc_arg's unresolvable-
-    // reference detail) alongside the classification reason.
+    // Keep any resolution note already attached (doc_arg's resolves-to-
+    // nothing detail) alongside the classification reason.
     out.note = Some(match out.note.take() {
         Some(n) => format!("{reason}; {n}"),
         None => reason,
@@ -334,22 +339,6 @@ fn refusal(r: &Response) -> String {
         _ => "unexpected response shape".to_string(),
     }
 }
-
-/// Is skep's answer a refusal with one of `codes`?
-fn refused_with(r: &Response, codes: &[RejectCode]) -> bool {
-    matches!(r, Response::Rejected(rej) if codes.contains(&rej.code))
-}
-
-/// The refusals a document's extent read (RETRIEVEDOCVSPAN, …VSPANSET)
-/// answers an empty document with — skep's encoding of "nothing there", as
-/// udanax's zero span is its own (documents/retrieve_vspan_empty).
-const EXTENT_ABSENT: &[RejectCode] = &[
-    RejectCode::RangeNotPresent,
-    RejectCode::EmptySubspace,
-    RejectCode::NoSuchSubspace,
-    RejectCode::EmptyResult,
-    RejectCode::NotArranged,
-];
 
 /// The end of a READ that compared nothing. A read exists to observe, so
 /// each non-null field it carries is one its handler reads (`reads`: its
@@ -400,10 +389,10 @@ fn vpos(sub: u64, ord: u64) -> VPos {
     VPos { subspace: Nat::from(sub), ordinal: Nat::from(ord) }
 }
 
-/// skep gave the op's success answer, reconciled with the golden's verdict
-/// (`xf`: the failure the recording marks, if any). `true` when the golden
-/// recorded success too and the caller goes on to compare; `false` when it
-/// recorded a failure, which is then the op's disagreement.
+/// skep gave the op's success answer, reconciled with the failure the golden
+/// recorded (`xf`, if any). `true` when the golden recorded success too and
+/// the caller goes on to compare; `false` when it recorded a failure, which
+/// is then the op's disagreement.
 fn settle_accepted(out: &mut OpOutcome, xf: Option<String>) -> bool {
     match xf {
         None => true,
@@ -416,8 +405,8 @@ fn settle_accepted(out: &mut OpOutcome, xf: Option<String>) -> bool {
 }
 
 /// skep refused the op — `refused`, the refusal as the report renders it —
-/// reconciled with the golden's verdict: agreement when the golden recorded
-/// a failure too, else the op's disagreement.
+/// reconciled with the failure the golden recorded (`xf`): agreement when
+/// the golden recorded a failure too, else the op's disagreement.
 fn settle_rejected(out: &mut OpOutcome, xf: Option<String>, refused: String) {
     match xf {
         Some(_) => {
@@ -428,10 +417,11 @@ fn settle_rejected(out: &mut OpOutcome, xf: Option<String>, refused: String) {
     }
 }
 
-/// skep's answer was not the op's success answer. A refusal is reconciled
-/// with the golden's verdict ([`settle_rejected`]); any other answer lies
-/// outside skep's contract and disagrees whatever the golden recorded.
-fn settle_refused(out: &mut OpOutcome, xf: Option<String>, r: &Response) {
+/// skep's answer was not the op's success answer — the counterpart of
+/// [`settle_accepted`]. A refusal is reconciled with the failure the golden
+/// recorded ([`settle_rejected`]); any other answer lies outside skep's
+/// contract and disagrees whatever the golden recorded.
+fn settle_unaccepted(out: &mut OpOutcome, xf: Option<String>, r: &Response) {
     match r {
         Response::Rejected(_) => settle_rejected(out, xf, refusal(r)),
         _ => out.disagree("response", "the op's success answer".into(), refusal(r)),
@@ -518,17 +508,17 @@ impl Tally {
 
 impl Cx<'_> {
     /// The op's document argument, read by `fields::aim_doc` — the one
-    /// reading the grounding pre-pass shares — and tagged here: a label
-    /// token is `doc-from-label`, the register `doc-from-register`. An
-    /// explicit reference that resolves to nothing is surfaced in the op's
-    /// note, never silently re-aimed at whatever the register held; a
-    /// scenario with no document yet gets a first-touch document, created
-    /// through skep.
+    /// reading the grounding pre-pass shares — and tagged here: a token of
+    /// the op's name is `doc-from-op-name`, the register
+    /// `doc-from-register`. An explicit reference that resolves to nothing
+    /// is surfaced in the op's note, never silently re-aimed at whatever the
+    /// register held; a scenario with no document yet gets a first-touch
+    /// document, created through skep.
     fn doc_arg(&mut self, op: &Value, out: &mut OpOutcome, keys: &[&str]) -> Option<String> {
         match aim_doc(self.shadow, op, keys) {
             DocAim::Named(d) => Some(d),
-            DocAim::FromLabel(d) => {
-                out.adaptations.push("doc-from-label".into());
+            DocAim::FromOpName(d) => {
+                out.adaptations.push("doc-from-op-name".into());
                 Some(d)
             }
             DocAim::Register(d) => {
@@ -606,7 +596,7 @@ impl Cx<'_> {
                 let ty = self
                     .rig
                     .type_vspec("jump")
-                    .ok_or_else(|| "setup link: type registry exhausted".to_string())?;
+                    .ok_or_else(|| "setup link: types document capacity exhausted".to_string())?;
                 let link = golden
                     .as_ref()
                     .map(|g| ShadowLink { golden: g.clone(), from: from.clone(), to: to.clone() });
@@ -624,7 +614,7 @@ impl Cx<'_> {
     /// one RetrieveV (policy `contents:content-subspace`: udanax's
     /// retrieve_contents results never include link-subspace items).
     fn read_content(&mut self, doc: &str) -> Result<Vec<DeliveryItem>, String> {
-        let d = self.skep_doc(doc).ok_or_else(|| format!("{doc} unresolvable"))?;
+        let d = self.skep_doc(doc).ok_or_else(|| format!("{doc} never bound"))?;
         let specs: Vec<Spec> = self
             .skep_content_spans(&d)
             .map_err(|r| refusal(&r))?
@@ -644,9 +634,10 @@ impl Cx<'_> {
     /// extent (`Op::RetrieveDocVSpanSet`): what a whole-document read asks
     /// skep for. Never sized from the shadow — a whole-document read must
     /// see what skep holds beyond the recording, and must ask even when the
-    /// recording says the document is empty. An absence-class answer
-    /// ([`EXTENT_ABSENT`]) is no spans; any other answer that is not a span
-    /// set is returned for the caller to settle.
+    /// recording says the document is empty. skep answers a registered
+    /// document's extent with ⟨⟩ when it is empty (M6, ASN-0113), never a
+    /// refusal; any answer that is not a span set is returned for the caller
+    /// to settle.
     fn skep_content_spans(
         &mut self,
         d: &skep_address::Address,
@@ -656,7 +647,6 @@ impl Cx<'_> {
             Response::SpanSet { set, .. } => {
                 Ok(set.iter().filter(|s| s.start().get(1) == Some(&content)).cloned().collect())
             }
-            r if refused_with(&r, EXTENT_ABSENT) => Ok(Vec::new()),
             r => Err(Box::new(r)),
         }
     }
@@ -677,7 +667,7 @@ impl Cx<'_> {
         let mut notes = Vec::new();
         let mut clamped = false;
         let Some(d) = self.alpha.translate(docid) else {
-            notes.push(format!("{docid}: unresolvable"));
+            notes.push(format!("{docid}: never bound"));
             return (Endset::from_spans(std::iter::empty()), notes, clamped);
         };
         let text_len = self.shadow.text_len(docid);
@@ -741,7 +731,7 @@ impl Cx<'_> {
         rows
     }
 
-    /// The scoped doc's foreign-origin (transcluded) content regions, as
+    /// A golden doc's foreign-origin (transcluded) content regions, as
     /// golden (ordinal, width) V-ranges — a run whose I-prefix does not lie
     /// under the doc's own skep address arrived by COPY.
     fn transcluded_regions_golden(&mut self, docid: &str) -> Vec<(u64, u64)> {
@@ -784,9 +774,9 @@ fn elem_range(s: &skep_address::Span) -> Option<(String, u64, u64)> {
 // first — when the recording says udanax made it (`recorded`: callers pass
 // `evidence::took_effect`, or `true` for the pre-pass's inferred setup) and
 // the shadow holds the document — and then skep is asked through α, so
-// neither skep's verdict nor an α miss bends what the shadow holds. A
+// neither skep's answer nor an α miss bends what the shadow holds. A
 // CREATION's golden name enters the shadow, bound in α, only when skep made
-// it and udanax did too: every name the translator resolves has an
+// it and udanax did too: every name the play pass resolves has an
 // α-image. A creation skep refuses — a version of a private source,
 // PUB-2.9 — therefore leaves its later name-references ungroundable, the
 // class rulings 20 and 20a freeze. `tests/it/tidy.rs` holds every other
@@ -947,7 +937,7 @@ impl Cx<'_> {
     /// through α, in M7's slot order: FROM, TO, TYPE. When skep made the
     /// link and `recorded`, it enters the shadow: seated in its home, the
     /// register moved there; with the recorded `link`, its golden id bound
-    /// in α, made the last link and registered for traversal with the
+    /// in α, made the last link and recorded for traversal with the
     /// golden content endsets it was grounded with; and the recorded arrow
     /// edge, `(from-name, to-name, link id)`. `Err` names a home with no
     /// α-image; skep was asked nothing.
@@ -1160,7 +1150,14 @@ const BUNDLE_READS: &[&str] = &["doc", "docid", "doc_label"];
 
 /// A state probe: compare whatever vspanset/contents data the op (or one
 /// interior-typing step) carries against the doc's live state.
-fn probe_state(cx: &mut Cx, op: &Value, out: &mut OpOutcome, grants: &Grants, doc: &str, kind: Probe) {
+fn probe_state(
+    cx: &mut Cx,
+    op: &Value,
+    out: &mut OpOutcome,
+    adjustments: &Adjustments,
+    doc: &str,
+    kind: Probe,
+) {
     let mut tally = Tally::default();
 
     // Vspanset-shaped expectation.
@@ -1177,7 +1174,7 @@ fn probe_state(cx: &mut Cx, op: &Value, out: &mut OpOutcome, grants: &Grants, do
         match cx.skep_doc(&target) {
             Some(d) => match cx.rig.exec(Op::RetrieveDocVSpanSet { doc: d }) {
                 Response::SpanSet { set, .. } => {
-                    let c = compare_spansets(&spans, &set, grants, &mut out.adaptations);
+                    let c = compare_spansets(&spans, &set, adjustments, &mut out.adaptations);
                     if c.is_err() && collapsed_subspace_shape(&spans) {
                         out.note = Some(COLLAPSED_SUBSPACE_ANALYSIS.to_string());
                     }
@@ -1185,7 +1182,7 @@ fn probe_state(cx: &mut Cx, op: &Value, out: &mut OpOutcome, grants: &Grants, do
                 }
                 r => tally.differ("vspanset".into(), refusal(&r)),
             },
-            None => tally.differ(format!("{key} of {target}"), format!("{target} unresolvable")),
+            None => tally.differ(format!("{key} of {target}"), format!("{target} never bound")),
         }
     }
 
@@ -1226,15 +1223,15 @@ fn probe_state(cx: &mut Cx, op: &Value, out: &mut OpOutcome, grants: &Grants, do
 
 // ────────────────────────────── the catalogue ──────────────────────────────
 
-/// Translate, execute, and compare one golden operation. Exactly one
-/// `OpOutcome` per op, whatever happens.
-pub fn run_op(cx: &mut Cx, index: usize, op: &Value, grants: &Grants) -> OpOutcome {
-    let label = label_of(op).to_string();
-    let mut out = OpOutcome::new(index, &label);
-    if label.is_empty() {
+/// Play one golden operation: its name normalized to a verb, executed on
+/// skep, compared. Exactly one `OpOutcome` per op, whatever happens.
+pub fn run_op(cx: &mut Cx, index: usize, op: &Value, adjustments: &Adjustments) -> OpOutcome {
+    let name = op_name(op).to_string();
+    let mut out = OpOutcome::new(index, &name);
+    if name.is_empty() {
         // A recorder ANNOTATION entry ({note: "…"} with no op at all,
         // ms_create_race) is commentary, not an operation — meta. Anything
-        // else without a label stays inexpressible.
+        // else without an `op` field stays inexpressible.
         let annotation_only = op.as_object().is_some_and(|o| {
             !o.is_empty()
                 && o.keys().all(|k| matches!(k.as_str(), "note" | "comment" | "description"))
@@ -1245,14 +1242,14 @@ pub fn run_op(cx: &mut Cx, index: usize, op: &Value, grants: &Grants) -> OpOutco
             out.note = str_field(op, &["note", "comment", "description"]).map(str::to_string);
             return out;
         }
-        inexpressible(&mut out, "operation has no `op` label".into());
+        inexpressible(&mut out, "operation has no `op` field".into());
         return out;
     }
     // Raw wire request codes (prov_request_surface): green's dispatch-table
     // probe. skep's surface is typed `Op`s — an unknown code is the
     // TRANSPORT's `OpKind::Unparseable`, unreachable from the library
     // harness — so the op is inexpressible by construction, code recorded.
-    if label == "raw_request" {
+    if name == "raw_request" {
         let code = field(op, &["code"]).and_then(Value::as_u64);
         inexpressible(
             &mut out,
@@ -1271,10 +1268,10 @@ pub fn run_op(cx: &mut Cx, index: usize, op: &Value, grants: &Grants) -> OpOutco
         out.note = Some(format!("recording client failed before reaching udanax: {msg}"));
         return out;
     }
-    let Some(verb) = normalize(&label, op) else {
+    let Some(verb) = normalize(&name, op) else {
         let keys: Vec<&str> =
             op.as_object().map(|o| o.keys().map(String::as_str).collect()).unwrap_or_default();
-        inexpressible(&mut out, format!("label `{label}` (fields {keys:?}) has no canonical verb"));
+        inexpressible(&mut out, format!("op `{name}` (fields {keys:?}) has no canonical verb"));
         return out;
     };
     out.verb = verb.name().to_string();
@@ -1301,7 +1298,7 @@ pub fn run_op(cx: &mut Cx, index: usize, op: &Value, grants: &Grants) -> OpOutco
     }
     match verb {
         Verb::Meta => out.status = Status::Meta,
-        Verb::Observe => h_observe(cx, index, op, &mut out, grants),
+        Verb::Observe => h_observe(cx, index, op, &mut out, adjustments),
         Verb::Setup => h_setup(cx, index, &mut out),
         Verb::CreateDocument => h_create_document(cx, op, &mut out),
         Verb::CreateDocuments => h_create_documents(cx, index, op, &mut out),
@@ -1311,12 +1308,12 @@ pub fn run_op(cx: &mut Cx, index: usize, op: &Value, grants: &Grants) -> OpOutco
             out.adaptations.push("close_document:noop".into());
             out.status = Status::NotCompared;
         }
-        Verb::Insert => h_insert(cx, index, op, &mut out, grants),
-        Verb::InsertLoop => h_insert_loop(cx, op, &mut out, grants),
-        Verb::InteriorTyping => h_interior_typing(cx, op, &mut out, grants),
-        Verb::Delete => h_delete(cx, index, op, &mut out, grants, false),
-        Verb::DeleteAll => h_delete(cx, index, op, &mut out, grants, true),
-        Verb::Vcopy => h_vcopy(cx, index, op, &mut out, grants),
+        Verb::Insert => h_insert(cx, index, op, &mut out, adjustments),
+        Verb::InsertLoop => h_insert_loop(cx, op, &mut out, adjustments),
+        Verb::InteriorTyping => h_interior_typing(cx, op, &mut out, adjustments),
+        Verb::Delete => h_delete(cx, index, op, &mut out, adjustments, false),
+        Verb::DeleteAll => h_delete(cx, index, op, &mut out, adjustments, true),
+        Verb::Vcopy => h_vcopy(cx, index, op, &mut out, adjustments),
         Verb::Pivot => h_pivot_swap(cx, op, &mut out, true),
         Verb::Swap => h_pivot_swap(cx, op, &mut out, false),
         Verb::Rearrange => {
@@ -1329,15 +1326,15 @@ pub fn run_op(cx: &mut Cx, index: usize, op: &Value, grants: &Grants) -> OpOutco
         }
         Verb::CreateVersion => h_create_version(cx, op, &mut out),
         Verb::CreateLink => h_create_link(cx, index, op, &mut out),
-        Verb::FollowLink => h_follow_link(cx, op, &mut out, grants),
-        Verb::Traverse => h_traverse(cx, op, &mut out, grants),
-        Verb::FindLinks => h_find_links(cx, op, &mut out, grants),
+        Verb::FollowLink => h_follow_link(cx, op, &mut out, adjustments),
+        Verb::Traverse => h_traverse(cx, op, &mut out, adjustments),
+        Verb::FindLinks => h_find_links(cx, op, &mut out, adjustments),
         Verb::FindDocuments => h_find_documents(cx, op, &mut out),
-        Verb::Contents => h_contents(cx, index, op, &mut out, &label),
-        Verb::Vspan => h_vspanset(cx, op, &mut out, grants, false),
-        Verb::Vspanset => h_vspanset(cx, op, &mut out, grants, true),
-        Verb::Endsets => h_endsets(cx, op, &mut out),
-        Verb::Compare => h_compare(cx, op, &mut out),
+        Verb::RetrieveContents => h_contents(cx, index, op, &mut out, &name),
+        Verb::RetrieveVspan => h_vspanset(cx, op, &mut out, adjustments, false),
+        Verb::RetrieveVspanset => h_vspanset(cx, op, &mut out, adjustments, true),
+        Verb::RetrieveEndsets => h_endsets(cx, op, &mut out),
+        Verb::CompareVersions => h_compare(cx, op, &mut out),
         Verb::Account => h_account(cx, op, &mut out),
         Verb::CreateNode => h_create_node(cx, op, &mut out),
         Verb::Connect => {
@@ -1353,7 +1350,7 @@ pub fn run_op(cx: &mut Cx, index: usize, op: &Value, grants: &Grants) -> OpOutco
 #[cfg(test)]
 mod tests {
     use serde_json::json;
-    use skep_febe::{OpKind, Rejection};
+    use skep_febe::{OpKind, RejectCode, Rejection};
     use skep_kernel::Seq;
 
     use super::*;
@@ -1420,7 +1417,7 @@ mod tests {
     fn only_a_refusal_can_meet_a_recorded_failure() {
         let failed = || Some("request failed (?)".to_string());
         let mut out = OpOutcome::new(0, "insert");
-        settle_refused(&mut out, failed(), &Response::Ack { at: Seq(1) });
+        settle_unaccepted(&mut out, failed(), &Response::Ack { at: Seq(1) });
         assert_eq!(out.status, Status::Disagreed);
         assert_eq!(out.actual.as_deref(), Some("unexpected response shape"));
 
@@ -1430,10 +1427,10 @@ mod tests {
             None,
         ));
         let mut out = OpOutcome::new(0, "insert");
-        settle_refused(&mut out, failed(), &rejected);
+        settle_unaccepted(&mut out, failed(), &rejected);
         assert_eq!(out.status, Status::Agreed);
         let mut out = OpOutcome::new(0, "insert");
-        settle_refused(&mut out, None, &rejected);
+        settle_unaccepted(&mut out, None, &rejected);
         assert_eq!(out.status, Status::Disagreed);
         assert_eq!(out.actual.as_deref(), Some("Rejected(OutOfBounds)"));
     }

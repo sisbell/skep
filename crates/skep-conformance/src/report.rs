@@ -40,7 +40,7 @@ pub fn render_jsonl(records: &[ScenarioRecord]) -> String {
             .map(|o| {
                 json!({
                     "index": o.index,
-                    "label": o.label,
+                    "op": o.op_name,
                     "verb": o.verb,
                     "status": status_str(&o.status),
                     "comparator": o.comparator,
@@ -58,8 +58,8 @@ pub fn render_jsonl(records: &[ScenarioRecord]) -> String {
             "verdict": r.verdict.as_str(),
             "bijection_size": r.bijection_size,
             "groundings": r.groundings,
-            "first_failure": r.first_failure.as_ref().map(|(i, l, d)| json!({
-                "op_index": i, "label": l, "detail": d,
+            "first_finding": r.first_finding.as_ref().map(|(i, name, d)| json!({
+                "op_index": i, "op": name, "detail": d,
             })),
             "error": r.error,
             "ops": ops,
@@ -174,9 +174,9 @@ fn render_summary(records: &[ScenarioRecord]) -> String {
             continue;
         }
         any = true;
-        match &r.first_failure {
-            Some((i, label, detail)) => s.push_str(&format!(
-                "- `{}/{}` — op {i} `{label}`: {}\n",
+        match &r.first_finding {
+            Some((i, op_name, detail)) => s.push_str(&format!(
+                "- `{}/{}` — op {i} `{op_name}`: {}\n",
                 r.category,
                 r.name,
                 trunc(detail, 300)
@@ -210,7 +210,7 @@ fn render_summary(records: &[ScenarioRecord]) -> String {
             r.category,
             r.name,
             first.index,
-            first.label,
+            first.op_name,
             trunc(&first.detail(), 300)
         ));
     }
@@ -219,9 +219,9 @@ fn render_summary(records: &[ScenarioRecord]) -> String {
     }
 
     // The standing cluster analyses: each surfaced once, with the affected
-    // scenarios listed, so the operators adjudicate a family in one sitting.
-    // Notes may carry the analysis alongside other evidence, so the match is
-    // containment, not equality.
+    // scenarios listed, so each family's ruling reads beside the scenarios
+    // it covers. Notes may carry the analysis alongside other evidence, so
+    // the match is containment, not equality.
     for (title, analysis) in [
         ("udanax two-subspace vspanset shape", COLLAPSED_SUBSPACE_ANALYSIS),
         (
@@ -247,7 +247,7 @@ fn render_summary(records: &[ScenarioRecord]) -> String {
         }
     }
 
-    s.push_str("\n## Inexpressible scenarios (first untranslatable op)\n\n");
+    s.push_str("\n## Inexpressible scenarios (first inexpressible op)\n\n");
     let mut any = false;
     for r in records {
         if r.verdict != Verdict::Inexpressible {
@@ -262,7 +262,7 @@ fn render_summary(records: &[ScenarioRecord]) -> String {
                 format!(
                     "op {} `{}`: {}",
                     o.index,
-                    o.label,
+                    o.op_name,
                     trunc(o.note.as_deref().unwrap_or("-"), 200)
                 )
             })
@@ -313,7 +313,7 @@ mod tests {
             verdict,
             bijection_size: 0,
             ops,
-            first_failure: None,
+            first_finding: None,
             error: None,
             groundings: Vec::new(),
         }

@@ -19,9 +19,9 @@
 //!
 //! Two rules no compiler error reports are held the same way. Every scenario
 //! document is created by `Rig::create_private_document`, so no code line
-//! under `src/` but `harness.rs` builds a CREATENEWDOCUMENT request. And the
+//! under `src/` but `rig.rs` builds a CREATENEWDOCUMENT request. And the
 //! play pass changes the golden-side world only through the `Cx`
-//! world-change methods, so no code line in `translate/` or `runner.rs`
+//! world-change methods, so no code line in `play/` or `runner.rs`
 //! mutates the shadow's documents or links. Each scan asserts it found the
 //! owner's own lines, so a scan that matches nothing fails rather than
 //! passing a clean tree.
@@ -120,16 +120,16 @@ fn every_module_names_only_itself_and_modules_declared_above_it() {
 /// session's own account, and `Rig::create_private_document` is the one
 /// place that says so. A file that built the request itself could name
 /// another account or another publication flag, and nothing would refuse it
-/// but the goldens drifting: so no file under `src/` but `harness.rs` names
+/// but the goldens drifting: so no file under `src/` but `rig.rs` names
 /// `CreateNewDocument`.
 #[test]
 fn only_the_rig_builds_a_create_new_document() {
     let (rig, elsewhere): (Vec<_>, Vec<_>) = scan(|code| code.contains("CreateNewDocument"))
         .into_iter()
-        .partition(|(file, _)| file == Path::new("harness.rs"));
+        .partition(|(file, _)| file == Path::new("rig.rs"));
     assert!(
         elsewhere.is_empty(),
-        "only `harness.rs` builds a CREATENEWDOCUMENT request; a scenario document is \
+        "only `rig.rs` builds a CREATENEWDOCUMENT request; a scenario document is \
          created through `Rig::create_private_document`:\n{}",
         render(&elsewhere)
     );
@@ -141,10 +141,10 @@ fn only_the_rig_builds_a_create_new_document() {
 
 /// One rule decides whether a recorded op reaches the shadow — the
 /// recording for content, both worlds for a creation — and it lives in the
-/// `Cx` world-change methods in `translate.rs`. A handler or the runner that
-/// edited the shadow's documents or links itself could follow skep's verdict
+/// `Cx` world-change methods in `play.rs`. A handler or the runner that
+/// edited the shadow's documents or links itself could follow skep's answer
 /// instead, and nothing would refuse it but the goldens drifting: so no code
-/// line in `translate/` or `runner.rs` names a shadow mutation.
+/// line in `play/` or `runner.rs` names a shadow mutation.
 #[test]
 fn only_the_world_change_methods_change_the_shadow() {
     const MUTATIONS: &[&str] = &[
@@ -160,18 +160,17 @@ fn only_the_world_change_methods_change_the_shadow() {
         "shadow.arrow_links.insert",
     ];
     let play_pass = |file: &Path| {
-        file.starts_with("translate")
-            || ["translate.rs", "runner.rs"].iter().any(|f| file == Path::new(f))
+        file.starts_with("play") || ["play.rs", "runner.rs"].iter().any(|f| file == Path::new(f))
     };
     let (owner, elsewhere): (Vec<_>, Vec<_>) =
         scan(|code| MUTATIONS.iter().any(|m| code.contains(m)))
             .into_iter()
             .filter(|(file, _)| play_pass(file))
-            .partition(|(file, _)| file == Path::new("translate.rs"));
+            .partition(|(file, _)| file == Path::new("play.rs"));
     assert!(
         elsewhere.is_empty(),
         "the play pass changes the shadow's documents and links through the `Cx` \
-         world-change methods in `translate.rs` alone:\n{}",
+         world-change methods in `play.rs` alone:\n{}",
         render(&elsewhere)
     );
     assert!(
@@ -235,8 +234,7 @@ fn undeclared_files(crate_dir: &Path, tree: &str, root: &str) -> Vec<String> {
 /// stem: `lib.rs` declares `loader` for `src/loader.rs`, and `main.rs`
 /// declares `gate` for `tests/it/gate.rs`. A file in a subdirectory is
 /// declared by the module that directory is named for, `x.rs` beside it or
-/// `x/mod.rs` inside it: `src/translate/find.rs` is `find` to
-/// `src/translate.rs`.
+/// `x/mod.rs` inside it: `src/play/find.rs` is `find` to `src/play.rs`.
 fn declared_by(dir: &Path, root: &str, file: &Path) -> Option<(PathBuf, String)> {
     let relative = file.strip_prefix(dir).ok()?;
     let mut parts: Vec<String> = relative

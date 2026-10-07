@@ -9,13 +9,13 @@ use skep_arrangement::VSpec;
 use skep_febe::Response;
 
 use super::{
-    inexpressible, marker_type_name, parse_set_spans, settle_accepted, settle_refused,
+    inexpressible, marker_type_name, parse_set_spans, settle_accepted, settle_unaccepted,
     side_specs, Cx, SetSpan,
 };
 use crate::evidence::took_effect;
 use crate::fields::{
-    arrow_results, as_text, expect_strings, expected_failure, field, label_of, locate,
-    note_arrow, parse_python_spec, str_field, verb_of, vspec_dict, DocSpans, Verb,
+    arrow_results, as_text, expect_strings, expected_failure, field, locate, note_arrow,
+    op_name, parse_python_spec, str_field, verb_of, vspec_dict, DocSpans, Verb,
 };
 use crate::outcome::{OpOutcome, Status};
 use crate::shadow::ShadowLink;
@@ -25,7 +25,7 @@ fn to_vspecs(cx: &mut Cx, sides: &[DocSpans]) -> Result<Vec<VSpec>, String> {
     let mut specs = Vec::new();
     for (docid, spans) in sides {
         let Some(sd) = cx.alpha.translate(docid) else {
-            return Err(format!("endset doc {docid} unresolvable"));
+            return Err(format!("endset doc {docid} never bound"));
         };
         for (sub, ord, w) in spans {
             if let Some(span) = vspan(*sub, *ord, *w) {
@@ -155,7 +155,7 @@ fn endset_evidence(
             // Plain follow with (or without — the bare-follow convention) a
             // link field.
             let mentions = str_field(op, &["link", "link_id", "id"]).map(|l| l == link_golden);
-            if label_of(op).to_ascii_lowercase().starts_with("follow") && mentions.unwrap_or(true) {
+            if op_name(op).to_ascii_lowercase().starts_with("follow") && mentions.unwrap_or(true) {
                 let slot_matches = match str_field(op, &["end", "direction", "linkend", "which"]) {
                     Some(e) if e.contains("->") => !want_source,
                     Some(e) => {
@@ -171,7 +171,7 @@ fn endset_evidence(
                 }
             }
         }
-        if verb == Some(Verb::Endsets) {
+        if verb == Some(Verb::RetrieveEndsets) {
             let keys: &[&str] = if want_source { &["source", "from"] } else { &["target", "to"] };
             if let Some(arr) = field(op, keys).and_then(Value::as_array) {
                 let vspecs: Option<Vec<_>> = arr.iter().map(vspec_dict).collect();
@@ -189,9 +189,10 @@ fn endset_evidence(
 /// machine-groundable. None of the legacy default-endset conventions apply:
 /// an explicitly EMPTY list goes to MakeLink empty (policy
 /// `explicit-empty-endset` — green accepts all three empty, A11, and skep's
-/// verdict is recorded raw), and the third endset is either the udanax
-/// type-marker (→ the registry name, policy `threeset-marker→registry`) or
-/// real content spans (→ the TYPE endset via α, policy
+/// answer is recorded raw), and the third endset is either the udanax
+/// type-marker (→ the type name the types document holds, policy
+/// `threeset-marker→types-document`) or real content spans (→ the TYPE
+/// endset via α, policy
 /// `threeset-content-type`; green's content-span third endsets are
 /// first-class, A8).
 fn h_create_link_explicit(cx: &mut Cx, op: &Value, out: &mut OpOutcome, xf: Option<String>) {
@@ -214,7 +215,7 @@ fn h_create_link_explicit(cx: &mut Cx, op: &Value, out: &mut OpOutcome, xf: Opti
         let mut specs = Vec::new();
         for (docid, spans) in &sides {
             let Some(d) = cx.alpha.translate(docid) else {
-                out.unresolvable(format!("create_link {key}: doc {docid} unresolvable"));
+                out.never_bound(format!("create_link {key}: doc {docid} never bound"));
                 return Err(());
             };
             for sp in spans {
@@ -248,16 +249,16 @@ fn h_create_link_explicit(cx: &mut Cx, op: &Value, out: &mut OpOutcome, xf: Opti
         Err(()) => return,
     };
 
-    // THREE: empty stays empty; markers map through the registry; content
-    // spans translate through α as the real TYPE endset.
+    // THREE: empty stays empty; markers map through the types document;
+    // content spans translate through α as the real TYPE endset.
     let ty: Vec<VSpec> = match op.get("threeset") {
         None => {
             out.adaptations.push("default_type_jump".into());
-            out.adaptations.push("type_registry".into());
+            out.adaptations.push("types_document".into());
             match cx.rig.type_vspec("jump") {
                 Some(t) => vec![t],
                 None => {
-                    inexpressible(out, "type registry capacity exhausted".into());
+                    inexpressible(out, "types document capacity exhausted".into());
                     return;
                 }
             }
@@ -280,15 +281,16 @@ fn h_create_link_explicit(cx: &mut Cx, op: &Value, out: &mut OpOutcome, xf: Opti
                         match sp {
                             SetSpan::Marker(comps) => match marker_type_name(comps) {
                                 Some(name) => {
-                                    out.adaptations.push("threeset-marker→registry".into());
-                                    out.adaptations.push("type_registry".into());
+                                    out.adaptations
+                                        .push("threeset-marker→types-document".into());
+                                    out.adaptations.push("types_document".into());
                                     match cx.rig.type_vspec(name) {
                                         Some(t) => specs.push(t),
                                         None => {
                                             inexpressible(
                                                 out,
                                                 format!(
-                                                    "type registry capacity exhausted for \
+                                                    "types document capacity exhausted for \
                                                      `{name}`"
                                                 ),
                                             );
@@ -309,8 +311,8 @@ fn h_create_link_explicit(cx: &mut Cx, op: &Value, out: &mut OpOutcome, xf: Opti
                             },
                             SetSpan::Plain(s, ord, w) => {
                                 let Some(d) = cx.alpha.translate(docid) else {
-                                    out.unresolvable(format!(
-                                        "create_link threeset: doc {docid} unresolvable"
+                                    out.never_bound(format!(
+                                        "create_link threeset: doc {docid} never bound"
                                     ));
                                     return;
                                 };
@@ -336,7 +338,8 @@ fn h_create_link_explicit(cx: &mut Cx, op: &Value, out: &mut OpOutcome, xf: Opti
         return;
     };
 
-    // Shadow endset triples (content subspace) for the traversal registry.
+    // Shadow endset triples (content subspace) for the shadow's links, which
+    // traversal hops resolve from.
     let triples = |v: &Value| -> Vec<(String, u64, u64)> {
         parse_set_spans(v)
             .unwrap_or_default()
@@ -359,7 +362,7 @@ fn h_create_link_explicit(cx: &mut Cx, op: &Value, out: &mut OpOutcome, xf: Opti
     });
 
     match cx.make_link(&home_golden, [from, to, ty], link, None, took_effect(op)) {
-        Err(_) => out.unresolvable(format!("create_link home {home_golden} unresolvable")),
+        Err(_) => out.never_bound(format!("create_link home {home_golden} never bound")),
         Ok(Response::AckAddr { .. }) => {
             if !settle_accepted(out, xf) {
                 return;
@@ -370,7 +373,7 @@ fn h_create_link_explicit(cx: &mut Cx, op: &Value, out: &mut OpOutcome, xf: Opti
                 out.status = Status::NotCompared;
             }
         }
-        Ok(other) => settle_refused(out, xf, &other),
+        Ok(other) => settle_unaccepted(out, xf, &other),
     }
 }
 
@@ -515,7 +518,7 @@ pub(super) fn h_create_link(cx: &mut Cx, index: usize, op: &Value, out: &mut OpO
             .or_else(|| from_doc_hint.clone())
             .or_else(|| from_sides.first().map(|(d, _)| d.clone()))
             .or_else(|| cx.shadow.resolve_doc("source"))
-            .or_else(|| cx.shadow.scoped());
+            .or_else(|| cx.shadow.current());
         let Some(home_golden) = home_golden else {
             inexpressible(out, "create_link with no home document in scope".into());
             return;
@@ -548,7 +551,7 @@ pub(super) fn h_create_link(cx: &mut Cx, index: usize, op: &Value, out: &mut OpO
                     let doc = golden
                         .as_ref()
                         .and_then(|g| link_home_docid(g))
-                        .or_else(|| cx.shadow.scoped());
+                        .or_else(|| cx.shadow.current());
                     if let Some(doc) = doc {
                         let regions = cx.transcluded_regions_golden(&doc);
                         if !regions.is_empty() {
@@ -691,27 +694,27 @@ pub(super) fn h_create_link(cx: &mut Cx, index: usize, op: &Value, out: &mut OpO
             out.adaptations.push("default_type_jump".into());
             "jump".to_string()
         });
-        out.adaptations.push("type_registry".into());
+        out.adaptations.push("types_document".into());
         let Some(ty) = cx.rig.type_vspec(&ty_name) else {
-            inexpressible(out, format!("type registry capacity exhausted for `{ty_name}`"));
+            inexpressible(out, format!("types document capacity exhausted for `{ty_name}`"));
             return;
         };
 
         let from = match to_vspecs(cx, &from_sides) {
             Ok(v) => v,
             Err(e) => {
-                out.unresolvable(e);
+                out.never_bound(e);
                 return;
             }
         };
         let to = match to_vspecs(cx, &to_sides) {
             Ok(v) => v,
             Err(e) => {
-                out.unresolvable(e);
+                out.never_bound(e);
                 return;
             }
         };
-        // The traversal registry: this link's grounded endsets (content
+        // The shadow's links: this link's grounded endsets (content
         // subspace), for hop resolution from the world.
         let flat = |sides: &[DocSpans]| -> Vec<(String, u64, u64)> {
             sides
@@ -732,12 +735,12 @@ pub(super) fn h_create_link(cx: &mut Cx, index: usize, op: &Value, out: &mut OpO
         });
         match cx.make_link(&home_golden, [from, to, vec![ty]], link, arrow, took_effect(op)) {
             Err(_) => {
-                out.unresolvable(format!("create_link home {home_golden} unresolvable"));
+                out.never_bound(format!("create_link home {home_golden} never bound"));
                 return;
             }
             Ok(Response::AckAddr { .. }) => bound += 1,
             Ok(other) => {
-                settle_refused(out, xf, &other);
+                settle_unaccepted(out, xf, &other);
                 return;
             }
         }
@@ -754,8 +757,8 @@ pub(super) fn h_create_link(cx: &mut Cx, index: usize, op: &Value, out: &mut OpO
 }
 
 /// The link type name: a `type`/`link_type` string, or a golden type vspec
-/// into udanax's registry doc (client.py: local 2.2=jump, 2.3=quote,
-/// 2.6=footnote, 2.6.2=margin).
+/// into udanax's link types document (client.py's LINK_TYPES_DOC: local
+/// 2.2=jump, 2.3=quote, 2.6=footnote, 2.6.2=margin).
 fn link_type_name(op: &Value) -> Option<String> {
     if let Some(s) = str_field(op, &["type", "link_type"]) {
         if !matches!(s, "" | "none" | "all") {

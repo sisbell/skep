@@ -8,21 +8,21 @@
 
 use serde_json::Value;
 
-use skep_febe::{Op, RejectCode, Response};
+use skep_febe::{Op, Response};
 use skep_retrieval::{DeliveryItem, Spec};
 
 use super::{
-    compared_nothing, inexpressible, joint_absence, probe_state, refusal, refused_with,
-    settle_accepted, settle_refused, Cx, Probe, Tally, EXTENT_ABSENT,
+    compared_nothing, inexpressible, joint_absence, probe_state, refusal, settle_accepted,
+    settle_unaccepted, Cx, Probe, Tally,
 };
-use crate::allowlist::Grants;
+use crate::allowlist::Adjustments;
 use crate::compare::{
     collapsed_subspace_shape, compare_content, compare_count, compare_spansets,
     COLLAPSED_SUBSPACE_ANALYSIS, VERSION_LINK_CARRYOVER_ANALYSIS,
 };
 use crate::fields::{
     as_text, expect_spans_raw, expect_strings, expected_failure, field, harvest_spanset,
-    has_observation_fields, label_of, locate, per_doc_replies, position_from_label,
+    has_observation_fields, locate, op_name, per_doc_replies, position_from_op_name,
     recorded_content, span_dict, str_field, verb_of, vspec_dict, Verb,
 };
 use crate::outcome::OpOutcome;
@@ -37,20 +37,6 @@ const CONTENT_READS: &[&str] = &[
 
 /// The arguments a vspan/vspanset probe carries: the document it reads.
 const EXTENT_READS: &[&str] = &["doc", "docid", "doc_label"];
-
-/// The refusals a content read answers an empty region with: a vacant
-/// position (link_at_2_3_after probes a vacant link position — udanax
-/// answered [], skep answers `RangeNotPresent`), an unoccupied or absent
-/// subspace, an empty result, and a NESTED local address, which holds
-/// nothing addressable on skep (green's nested reads answered [] —
-/// boundary_deep_vaddress_reads).
-const CONTENT_ABSENT: &[RejectCode] = &[
-    RejectCode::RangeNotPresent,
-    RejectCode::EmptySubspace,
-    RejectCode::NoSuchSubspace,
-    RejectCode::EmptyResult,
-    RejectCode::DepthIncompatible,
-];
 
 /// The retrieve specs for a doc-less retrieve that follows a follow op whose
 /// recorded result is a vspec — the landing the script read (policy
@@ -91,7 +77,13 @@ fn deep_span_dict(v: &Value) -> Option<(Vec<u64>, Vec<u64>)> {
     (start.len() > 2 || width.len() > 2).then_some((start, width))
 }
 
-pub(super) fn h_contents(cx: &mut Cx, index: usize, op: &Value, out: &mut OpOutcome, label: &str) {
+pub(super) fn h_contents(
+    cx: &mut Cx,
+    index: usize,
+    op: &Value,
+    out: &mut OpOutcome,
+    op_name: &str,
+) {
     let xf = expected_failure(op);
 
     // Multi-doc probe: `docs` map of name → expected strings. An id map
@@ -172,7 +164,7 @@ pub(super) fn h_contents(cx: &mut Cx, index: usize, op: &Value, out: &mut OpOutc
         let mut tally = Tally::default();
         for (name, doc, strings) in &replies {
             let Some(d) = cx.skep_doc(doc) else {
-                tally.differ(format!("{name}: contents"), format!("{name}: {doc} unresolvable"));
+                tally.differ(format!("{name}: contents"), format!("{name}: {doc} never bound"));
                 continue;
             };
             // Reconstructed narrowing: exactly one recorded string,
@@ -220,7 +212,7 @@ pub(super) fn h_contents(cx: &mut Cx, index: usize, op: &Value, out: &mut OpOutc
             return;
         };
         let Some(d) = cx.skep_doc(&doc) else {
-            out.unresolvable(format!("positions probe doc {doc} unresolvable"));
+            out.never_bound(format!("positions probe doc {doc} never bound"));
             return;
         };
         let mut tally = Tally::default();
@@ -265,11 +257,13 @@ pub(super) fn h_contents(cx: &mut Cx, index: usize, op: &Value, out: &mut OpOutc
     }
 
     let mut specs: Vec<Spec> = Vec::new();
-    // Link-subspace reads issued as a SECOND RetrieveV so a link-side
-    // absence localizes to the missing segment instead of rejecting the
-    // whole delivery (policy `contents:both-subspaces`). The golden doc the
-    // link read targets is kept so an empty answer can be classified (a
-    // VERSION missing its source's links is the carryover family).
+    // Link-subspace reads issued as a SECOND RetrieveV, so a refusal of the
+    // link side cannot void the content read (policy
+    // `contents:both-subspaces`); an unoccupied link subspace delivers
+    // nothing (M6 R6), and the comparison shows the expected @addr
+    // undelivered. The golden doc the link read targets is kept so an empty
+    // answer can be classified (a VERSION missing its source's links is the
+    // carryover family).
     let mut link_specs: Vec<Spec> = Vec::new();
     let mut link_read_doc: Option<String> = None;
     if let Some(arr) = field(op, &["specset", "specs"]).and_then(Value::as_array) {
@@ -279,7 +273,7 @@ pub(super) fn h_contents(cx: &mut Cx, index: usize, op: &Value, out: &mut OpOutc
                 return;
             };
             let Some(d) = cx.alpha.translate(&docid) else {
-                out.unresolvable(format!("retrieve doc {docid} unresolvable"));
+                out.never_bound(format!("retrieve doc {docid} never bound"));
                 return;
             };
             for (s, o, w) in spans {
@@ -320,7 +314,7 @@ pub(super) fn h_contents(cx: &mut Cx, index: usize, op: &Value, out: &mut OpOutc
             return;
         };
         let Some(d) = cx.skep_doc(&doc) else {
-            out.unresolvable(format!("retrieve doc {doc} unresolvable"));
+            out.never_bound(format!("retrieve doc {doc} never bound"));
             return;
         };
         let items: Vec<&Value> = match v {
@@ -335,9 +329,10 @@ pub(super) fn h_contents(cx: &mut Cx, index: usize, op: &Value, out: &mut OpOutc
             } else if let Some((start, width)) = deep_span_dict(item) {
                 // A NESTED local V-address ("1.1.1" width "0.0.1" —
                 // boundary_deep_vaddress_reads): built as an arbitrary-depth
-                // tumbler span and asked of skep raw; M6's answer (empty
-                // delivery or a depth/absence rejection) is compared as
-                // recorded (policy `deep-vaddress-span`).
+                // tumbler span and asked of skep raw; M6's answer — empty (a
+                // well-formed nested span resolves to nothing, R6) or
+                // `MalformedSpan` (ruling 17) — is compared as recorded
+                // (policy `deep-vaddress-span`).
                 out.adaptations.push("deep-vaddress-span".into());
                 match crate::tum::deep_span(&start, &width) {
                     Some(span) => specs.push(Spec { doc: d.clone(), span }),
@@ -364,15 +359,15 @@ pub(super) fn h_contents(cx: &mut Cx, index: usize, op: &Value, out: &mut OpOutc
                 }
             }
         }
-    } else if let Some(landing) = (!label.to_ascii_lowercase().starts_with("full_"))
+    } else if let Some(landing) = (!op_name.to_ascii_lowercase().starts_with("full_"))
         .then(|| follow_landing_specs(cx, index, op))
         .flatten()
     {
         // Policy `retrieve-follow-landing`: a doc-less retrieve right after
         // a follow whose recorded result names a vspec reads THOSE spans —
         // the script retrieved the link destination it had just followed
-        // (links/follow_link op8), never the register. A `full_*` label is
-        // by its own words a whole-document read, never a landing read
+        // (links/follow_link op8), never the register. A `full_*` op is by
+        // its own name a whole-document read, never a landing read
         // (round-5 item 4: insert_text_check_both_link_positions op7).
         out.adaptations.push("retrieve-follow-landing".into());
         specs = landing;
@@ -380,7 +375,7 @@ pub(super) fn h_contents(cx: &mut Cx, index: usize, op: &Value, out: &mut OpOutc
         // Full probes aim at the doc the last CONTENT write touched, not
         // whatever the register drifted to (policy
         // `full-probe-targets-last-write`).
-        let full_probe = label.to_ascii_lowercase().starts_with("full_");
+        let full_probe = op_name.to_ascii_lowercase().starts_with("full_");
         let doc = if full_probe && str_field(op, &["doc", "docid"]).is_none() {
             match cx.shadow.last_written.clone().filter(|d| cx.shadow.knows(d)) {
                 Some(d) => {
@@ -398,13 +393,13 @@ pub(super) fn h_contents(cx: &mut Cx, index: usize, op: &Value, out: &mut OpOutc
             return;
         };
         let Some(d) = cx.skep_doc(&doc) else {
-            out.unresolvable(format!("retrieve doc {doc} unresolvable"));
+            out.never_bound(format!("retrieve doc {doc} never bound"));
             return;
         };
         let pos = str_field(op, &["address", "at", "position"]).and_then(parse_vpos).or_else(
             || {
-                position_from_label(label).inspect(|_| {
-                    out.adaptations.push("position-from-label".into());
+                position_from_op_name(op_name).inspect(|_| {
+                    out.adaptations.push("position-from-op-name".into());
                 })
             },
         );
@@ -465,7 +460,7 @@ pub(super) fn h_contents(cx: &mut Cx, index: usize, op: &Value, out: &mut OpOutc
                         specs.extend(spans.into_iter().map(|span| Spec { doc: d.clone(), span }))
                     }
                     Err(r) => {
-                        settle_refused(out, xf, &r);
+                        settle_unaccepted(out, xf, &r);
                         return;
                     }
                 },
@@ -496,17 +491,8 @@ pub(super) fn h_contents(cx: &mut Cx, index: usize, op: &Value, out: &mut OpOutc
                 items.0
             }
             other => {
-                // Absence encodings (policy `empty-as-absent`): an
-                // expected-EMPTY probe and a skep absence-class rejection
-                // both say "nothing there".
-                let expected_empty = strings.as_ref().is_some_and(Vec::is_empty);
-                if refused_with(&other, CONTENT_ABSENT) && xf.is_none() && expected_empty {
-                    out.adaptations.push("empty-as-absent".into());
-                    Vec::new()
-                } else {
-                    settle_refused(out, xf, &other);
-                    return;
-                }
+                settle_unaccepted(out, xf, &other);
+                return;
             }
         }
     };
@@ -524,7 +510,7 @@ pub(super) fn h_contents(cx: &mut Cx, index: usize, op: &Value, out: &mut OpOutc
                     // indistinguishable from the policy not firing, which is
                     // exactly the ambiguity round 6 was misdiagnosed on. A
                     // version doc missing its source's links is the
-                    // adjudication-ready carryover family.
+                    // carryover family ruling 15 decided.
                     let versioned = link_read_doc
                         .as_deref()
                         .is_some_and(|g| cx.shadow.version_of.contains_key(g));
@@ -555,7 +541,7 @@ pub(super) fn h_vspanset(
     cx: &mut Cx,
     op: &Value,
     out: &mut OpOutcome,
-    grants: &Grants,
+    adjustments: &Adjustments,
     full_set: bool,
 ) {
     let harvested = harvest_spanset(op);
@@ -591,7 +577,7 @@ pub(super) fn h_vspanset(
     };
     cx.shadow.set_current(&doc);
     let Some(d) = cx.skep_doc(&doc) else {
-        out.unresolvable(format!("vspanset of unresolvable doc {doc}"));
+        out.never_bound(format!("vspanset of never-bound doc {doc}"));
         return;
     };
     // `poom_empty` records whether udanax's POOM — its V-space arrangement
@@ -611,24 +597,13 @@ pub(super) fn h_vspanset(
             set
         }
         other => {
-            // Policy `empty-as-absent`, spanset form: udanax renders an
-            // empty document's extent as a zero span (cleaned to the empty
-            // set — see expect_spans_raw); a skep absence-class rejection
-            // encodes the same observable (documents/retrieve_vspan_empty).
-            let expected_empty = poom_empty == Some(true)
-                || harvested.as_ref().is_some_and(|(_, _, spans)| spans.is_empty());
-            if refused_with(&other, EXTENT_ABSENT) && xf.is_none() && expected_empty {
-                out.adaptations.push("empty-as-absent".into());
-                out.agree("vspanset");
-                return;
-            }
-            settle_refused(out, xf, &other);
+            settle_unaccepted(out, xf, &other);
             return;
         }
     };
     let count = field(op, &["span_count"]).and_then(Value::as_u64).or(role_count.map(|(_, n)| n));
     if let Some(n) = count {
-        match compare_count(n, set.iter().count(), grants, &mut out.adaptations) {
+        match compare_count(n, set.iter().count(), adjustments, &mut out.adaptations) {
             Ok(()) => out.agree("count"),
             Err((e, a)) => out.disagree("count", e, a),
         }
@@ -649,7 +624,7 @@ pub(super) fn h_vspanset(
         compared_nothing(out, op, EXTENT_READS);
         return;
     };
-    match compare_spansets(&spans, &set, grants, &mut out.adaptations) {
+    match compare_spansets(&spans, &set, adjustments, &mut out.adaptations) {
         Ok(()) => out.agree("vspanset"),
         Err((e, a)) => {
             out.disagree("vspanset", e, a);
@@ -676,7 +651,7 @@ pub(super) fn h_observe(
     index: usize,
     op: &Value,
     out: &mut OpOutcome,
-    grants: &Grants,
+    adjustments: &Adjustments,
 ) {
     // docs-map / targets-list / positions bundles, and per-document
     // replies, compare several documents.
@@ -685,14 +660,14 @@ pub(super) fn h_observe(
         || op.get("positions").and_then(Value::as_object).is_some()
         || !per_doc_replies(op, cx.shadow).is_empty()
     {
-        h_contents(cx, index, op, out, label_of(op));
+        h_contents(cx, index, op, out, op_name(op));
         return;
     }
     // A probe green FAILED with no observation data recorded
     // (boundary_foreign_and_malformed_opens: probes of never-created docs
     // through validation-free opens). Never-created target → joint absence;
     // a real bound target → issue the vspanset read and reconcile the
-    // recorded failure against skep's own verdict.
+    // recorded failure against skep's own answer.
     let xf = expected_failure(op);
     if xf.is_some() && !has_observation_fields(op) {
         if let Some(docref) = str_field(op, &["doc", "docid"]) {
@@ -704,7 +679,7 @@ pub(super) fn h_observe(
                     Response::SpanSet { .. } => {
                         settle_accepted(out, xf);
                     }
-                    other => settle_refused(out, xf, &other),
+                    other => settle_unaccepted(out, xf, &other),
                 }
                 return;
             }
@@ -716,5 +691,5 @@ pub(super) fn h_observe(
         inexpressible(out, "observation bundle with no document in scope".into());
         return;
     };
-    probe_state(cx, op, out, grants, &doc, Probe::Bundle);
+    probe_state(cx, op, out, adjustments, &doc, Probe::Bundle);
 }

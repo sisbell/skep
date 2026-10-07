@@ -3,15 +3,15 @@
 //! probe of its document — to decide what the op did: whether udanax made
 //! the change at all, which document a doc-less insert aimed at, where an
 //! insert landed and how wide it was, whether a delete removed anything and
-//! exactly what. The grounding pre-pass and the translator call the same
+//! exactly what. The grounding pre-pass and the play pass call the same
 //! function, so the two cannot disagree about what the evidence says; the
 //! field grammar both read the evidence through is `fields`'s.
 
 use serde_json::Value;
 
 use crate::fields::{
-    as_text, client_side_failure, doc_from_label, expect_strings, expected_failure, field,
-    insert_text, label_of, locate, reads_whole_content, resolve_position, span_dict, str_field,
+    as_text, client_side_failure, doc_from_op_name, expect_strings, expected_failure, field,
+    insert_text, locate, op_name, reads_whole_content, resolve_position, span_dict, str_field,
     verb_of, Grounding, Verb, POST_WRITE_KEYS,
 };
 use crate::shadow::Shadow;
@@ -231,8 +231,8 @@ pub struct InsertLanding {
 }
 
 /// An insert op aimed at golden `doc`, read as both passes read it: its
-/// text (a field, a strings array, or its label — policy `args-from-
-/// label`); a re-aim, when it names no document and the next recorded
+/// text (a field, a strings array, or its name — policy `args-from-
+/// op-name`); a re-aim, when it names no document and the next recorded
 /// vspanset shows another document grew by exactly its text
 /// ([`insert_aim_from_probe`], `insert-aim-from-recorded-vspanset`); its
 /// position — recorded ([`resolve_position`], the grounding policy
@@ -252,11 +252,11 @@ pub fn resolve_insert(
     tags: &mut Vec<String>,
 ) -> Result<InsertLanding, String> {
     let mut text = insert_text(op).ok_or("insert without text")?;
-    if str_field(op, &["text"]).is_none() && label_of(op).starts_with("insert_") {
-        tags.push("args-from-label".into());
+    if str_field(op, &["text"]).is_none() && op_name(op).starts_with("insert_") {
+        tags.push("args-from-op-name".into());
     }
     let mut doc = doc.to_string();
-    if str_field(op, &["doc", "docid"]).is_none() && doc_from_label(label_of(op)).is_none() {
+    if str_field(op, &["doc", "docid"]).is_none() && doc_from_op_name(op_name(op)).is_none() {
         if let Some(d2) = insert_aim_from_probe(all, i, shadow, &doc, &text) {
             tags.push("insert-aim-from-recorded-vspanset".into());
             doc = d2;
@@ -293,7 +293,7 @@ pub fn resolve_insert(
 /// Was this delete a no-op in udanax? The doc's recorded post-delete content
 /// equals its pre-delete content byte-for-byte (delete_all/delete_all_with_
 /// links: `remove "entire document"` followed by a retrieve recording the
-/// FULL text — udanax removed nothing, whatever the label claims). The
+/// FULL text — udanax removed nothing, whatever the op's name claims). The
 /// harness then also executes nothing, same family as `client-error:no-op`.
 pub fn delete_is_noop(shadow: &Shadow, all: &[Value], i: usize, doc: &str) -> bool {
     let pre = shadow.text_string(doc);
@@ -319,8 +319,8 @@ pub enum DeleteGrounding {
     /// A located text widened by the boundary space the scripts' deletes
     /// took with it.
     WidenedBoundary,
-    /// The text a `delete_A` label names, located in the shadow.
-    FromLabel,
+    /// The text a `delete_A` op's name carries, located in the shadow.
+    FromOpName,
 }
 
 impl DeleteGrounding {
@@ -332,7 +332,7 @@ impl DeleteGrounding {
             DeleteGrounding::Located(g) => Some(g.tag()),
             DeleteGrounding::FromPostState => Some("delete-span-from-post-state"),
             DeleteGrounding::WidenedBoundary => Some("delete-span-widened-boundary"),
-            DeleteGrounding::FromLabel => Some("delete-text-from-label"),
+            DeleteGrounding::FromOpName => Some("delete-text-from-op-name"),
         }
     }
 
@@ -364,7 +364,7 @@ pub fn resolve_delete_span(
     doc: &str,
     op: &Value,
 ) -> Option<(u64, u64, DeleteGrounding)> {
-    use DeleteGrounding::{FromLabel, FromPostState, Located, Sent, WidenedBoundary};
+    use DeleteGrounding::{FromOpName, FromPostState, Located, Sent, WidenedBoundary};
     if let Some((sub, ord, w)) = field(op, &["span", "vspan"]).and_then(span_dict) {
         return if sub == 1 { Some((ord, w, Sent)) } else { None };
     }
@@ -425,8 +425,8 @@ pub fn resolve_delete_span(
     }
     // No groundable description at all: the recorded post-state is the
     // first authority (delete_A carries only its result.content), then a
-    // label-borne text ("delete_A" removed "A") — round-5 item 9's
-    // restored grounding order.
+    // text the op's name carries ("delete_A" removed "A") — round-5 item
+    // 9's restored grounding order.
     if !pre.is_empty() {
         if let Some(post) = &post {
             if let Some((ord, w)) = single_gap_diff(pre.as_bytes(), post.as_bytes()) {
@@ -434,9 +434,9 @@ pub fn resolve_delete_span(
             }
         }
     }
-    if let Some(t) = delete_text_from_label(op) {
+    if let Some(t) = delete_text_from_op_name(op) {
         if let Some((_, ord)) = shadow.find_text(Some(doc), &t) {
-            return Some((ord, t.len() as u64, FromLabel));
+            return Some((ord, t.len() as u64, FromOpName));
         }
     }
     None
@@ -455,12 +455,13 @@ fn removed_range(s: &str) -> Option<(u64, u64)> {
     }
 }
 
-/// Label-borne deleted text, mirroring `insert_text`'s label grammar:
-/// `delete_A` → "A" (iaddress_allocation/delete_does_not_affect_next_
-/// insert). Descriptive tails (delete_all, delete_vspan…) carry no text.
-fn delete_text_from_label(op: &Value) -> Option<String> {
-    let label = label_of(op);
-    let rest = label.strip_prefix("delete_").or_else(|| label.strip_prefix("remove_"))?;
+/// Deleted text carried by the op's name, mirroring `insert_text`'s
+/// grammar: `delete_A` → "A" (iaddress_allocation/delete_does_not_affect_
+/// next_insert). Descriptive tails (delete_all, delete_vspan…) carry no
+/// text.
+fn delete_text_from_op_name(op: &Value) -> Option<String> {
+    let name = op_name(op);
+    let rest = name.strip_prefix("delete_").or_else(|| name.strip_prefix("remove_"))?;
     if rest.is_empty()
         || rest.contains('_')
         || matches!(rest, "all" | "vspan" | "text" | "attempt" | "loop")
@@ -481,7 +482,7 @@ fn post_state_of(
 ) -> Option<String> {
     let content = |v: &Value| expect_strings(v).as_deref().and_then(as_text);
     // Own keys; "after" only in structured form — a bare string under
-    // "after" is a phase label ("link1"), never content.
+    // "after" is a phase name ("link1"), never content.
     let own =
         field(op, POST_WRITE_KEYS).or_else(|| field(op, &["after"]).filter(|v| !v.is_string()));
     if let Some(v) = own {

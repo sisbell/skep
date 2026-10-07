@@ -12,9 +12,9 @@ use skep_retrieval::RegionSpec;
 
 use super::{
     compared_nothing, elem_range, inexpressible, marker_type_name, parse_set_spans, refusal,
-    settle_accepted, settle_refused, side_specs, Cx, SetSpan, Tally,
+    settle_accepted, settle_unaccepted, side_specs, Cx, SetSpan, Tally,
 };
-use crate::allowlist::Grants;
+use crate::allowlist::Adjustments;
 use crate::compare::{compare_addr_sets, compare_count};
 use crate::fields::{
     expected_failure, field, locate, parse_python_spec, str_field, vspec_dict, DocSpans,
@@ -56,7 +56,12 @@ enum SideSpec {
     I(Endset),
 }
 
-pub(super) fn h_find_links(cx: &mut Cx, op: &Value, out: &mut OpOutcome, grants: &Grants) {
+pub(super) fn h_find_links(
+    cx: &mut Cx,
+    op: &Value,
+    out: &mut OpOutcome,
+    adjustments: &Adjustments,
+) {
     let mut notes: Vec<String> = Vec::new();
 
     // `by` routing (find_links_by_target, search_by_both_endpoints…):
@@ -99,7 +104,7 @@ pub(super) fn h_find_links(cx: &mut Cx, op: &Value, out: &mut OpOutcome, grants:
                     return Some(SideSpec::V(Vec::new()));
                 }
                 if s == "full document" || s.starts_with("entire") {
-                    let d = cx.shadow.scoped()?;
+                    let d = cx.shadow.current()?;
                     let n = cx.shadow.text_len(&d);
                     return Some(SideSpec::V(vec![(d, vec![(1, 1, n.max(1))])]));
                 }
@@ -116,7 +121,7 @@ pub(super) fn h_find_links(cx: &mut Cx, op: &Value, out: &mut OpOutcome, grants:
         }
         if let Some(t) = str_field(op, &["search_text", "query"]) {
             if t == "full document" || t.starts_with("entire") {
-                let d = cx.shadow.scoped()?;
+                let d = cx.shadow.current()?;
                 let n = cx.shadow.text_len(&d);
                 return Some(SideSpec::V(vec![(d, vec![(1, 1, n.max(1))])]));
             }
@@ -229,14 +234,14 @@ pub(super) fn h_find_links(cx: &mut Cx, op: &Value, out: &mut OpOutcome, grants:
         }
     }
     // `via_transcluded_content: true` — the search covers exactly the
-    // scoped doc's foreign-origin (copied-in) regions (policy
+    // register's document's foreign-origin (copied-in) regions (policy
     // `transcluded-region-search`; links/link_chain_with_transclusion's
     // final probe searches B's transcluded portion, not its own anchors).
     if from_sides.is_none()
         && to_sides.is_none()
         && field(op, &["via_transcluded_content"]).and_then(Value::as_bool) == Some(true)
     {
-        if let Some(d) = cx.shadow.scoped() {
+        if let Some(d) = cx.shadow.current() {
             out.adaptations.push("transcluded-region-search".into());
             let regions = cx.transcluded_regions_golden(&d);
             let spans: Vec<(u64, u64, u64)> = regions.iter().map(|(o, w)| (1, *o, *w)).collect();
@@ -244,20 +249,21 @@ pub(super) fn h_find_links(cx: &mut Cx, op: &Value, out: &mut OpOutcome, grants:
         }
     }
     // An op that carried ANY explicit set field (even empty — NOSPECS) was a
-    // fully specified client call; the bare-register aim never applies.
+    // fully specified client call; the bare aim never applies.
     let ext_sets_present =
         ["fromset", "toset", "threeset", "homespans"].iter().any(|k| op.get(*k).is_some());
     if from_sides.is_none() && to_sides.is_none() && !ext_sets_present {
-        // Bare find_links: the recording client searched by the source-role
+        // The bare aim: the recording client searched by the source-role
         // document when one is named (link scenarios probe "can the link be
         // found from source" — links/link_home_document_content_deleted),
-        // else by the scoped document's whole current extent.
-        let aim = cx
-            .shadow
-            .find_named_containing("source")
-            .or_else(|| cx.shadow.scoped());
-        if let Some(d) = aim {
-            out.adaptations.push("doc-from-register".into());
+        // else by the register's document's whole current extent. Each aim
+        // is tagged as what it is.
+        let aim = match cx.shadow.find_named_containing("source") {
+            Some(d) => Some((d, "doc-from-source-role")),
+            None => cx.shadow.current().map(|d| (d, "doc-from-register")),
+        };
+        if let Some((d, tag)) = aim {
+            out.adaptations.push(tag.into());
             from_sides = Some(SideSpec::V(whole_of(cx, &d)));
         }
     }
@@ -322,8 +328,8 @@ pub(super) fn h_find_links(cx: &mut Cx, op: &Value, out: &mut OpOutcome, grants:
     }
 
     // The type slot: `threeset` (corpus extension) first — content spans
-    // image to their I-coverage, markers map through the registry, empty is
-    // NOSPECS (unconstrained) — then the legacy name-based filter.
+    // image to their I-coverage, markers map through the types document,
+    // empty is NOSPECS (unconstrained) — then the legacy name-based filter.
     let ty = if let Some(v) = field(op, &["threeset"]) {
         match v.as_array() {
             Some(arr) if arr.is_empty() => {
@@ -340,12 +346,13 @@ pub(super) fn h_find_links(cx: &mut Cx, op: &Value, out: &mut OpOutcome, grants:
                                 SetSpan::Plain(s, o, w) => plain.push((*s, *o, *w)),
                                 SetSpan::Marker(comps) => match marker_type_name(comps) {
                                     Some(name) => {
-                                        out.adaptations.push("threeset-marker→registry".into());
-                                        out.adaptations.push("type_registry".into());
+                                        out.adaptations
+                                            .push("threeset-marker→types-document".into());
+                                        out.adaptations.push("types_document".into());
                                         match cx.rig.type_endset(name) {
                                             Some(e) => all.extend(e.spans().cloned()),
                                             None => notes.push(format!(
-                                                "type `{name}` has no registry endset"
+                                                "type `{name}` has no types-document endset"
                                             )),
                                         }
                                     }
@@ -385,11 +392,11 @@ pub(super) fn h_find_links(cx: &mut Cx, op: &Value, out: &mut OpOutcome, grants:
         match str_field(op, &["filter", "type", "link_type"]) {
             None | Some("none") | Some("all") | Some("") => SlotSpec::Any,
             Some(name) => {
-                out.adaptations.push("type_registry".into());
+                out.adaptations.push("types_document".into());
                 match cx.rig.type_endset(name) {
                     Some(e) => SlotSpec::Spans(e),
                     None => {
-                        notes.push(format!("type `{name}` has no registry endset"));
+                        notes.push(format!("type `{name}` has no types-document endset"));
                         SlotSpec::Empty
                     }
                 }
@@ -421,9 +428,13 @@ pub(super) fn h_find_links(cx: &mut Cx, op: &Value, out: &mut OpOutcome, grants:
             };
             let mut addrs = Vec::new();
             for r in refs {
-                match cx.shadow.resolve_doc(&r).and_then(|g| cx.alpha.translate(&g)) {
+                let Some(g) = cx.shadow.resolve_doc(&r) else {
+                    notes.push(format!("home doc `{r}` resolves to nothing"));
+                    continue;
+                };
+                match cx.alpha.translate(&g) {
                     Some(a) => addrs.push(a),
-                    None => notes.push(format!("home doc {r} unresolvable")),
+                    None => notes.push(format!("home doc {g} never bound")),
                 }
             }
             if addrs.is_empty() {
@@ -448,7 +459,7 @@ pub(super) fn h_find_links(cx: &mut Cx, op: &Value, out: &mut OpOutcome, grants:
             addrs.into_iter().filter(|a| !cx.rig.is_infra_addr(a)).collect()
         }
         other => {
-            settle_refused(out, xf, &other);
+            settle_unaccepted(out, xf, &other);
             return;
         }
     };
@@ -481,7 +492,7 @@ pub(super) fn h_find_links(cx: &mut Cx, op: &Value, out: &mut OpOutcome, grants:
                 .and_then(Value::as_u64)
         });
         if let Some(n) = n {
-            match compare_count(n, addrs.len(), grants, &mut out.adaptations) {
+            match compare_count(n, addrs.len(), adjustments, &mut out.adaptations) {
                 Ok(()) => out.agree("count"),
                 Err((e, a)) => out.disagree("count", e, a),
             }
@@ -494,10 +505,10 @@ pub(super) fn h_find_links(cx: &mut Cx, op: &Value, out: &mut OpOutcome, grants:
         expected.iter().filter_map(|v| v.as_str().map(str::to_string)).collect();
     let rig = &*cx.rig;
     let mut adaptations = std::mem::take(&mut out.adaptations);
-    let verdict =
+    let comparison =
         compare_addr_sets(&want, &addrs, cx.alpha, |a| rig.is_infra_addr(a), &mut adaptations);
     out.adaptations = adaptations;
-    match verdict {
+    match comparison {
         Ok(()) => out.agree("address-set"),
         Err((e, a)) => out.disagree("address-set", e, a),
     }
@@ -512,7 +523,7 @@ fn bare_find_documents_aim(cx: &mut Cx, op: &Value, out: &mut OpOutcome) -> Opti
         return cx.doc_arg(op, out, &["doc", "docid"]);
     }
     if let Some(d) = cx.shadow.find_named_containing("source") {
-        out.adaptations.push("doc-from-register".into());
+        out.adaptations.push("doc-from-source-role".into());
         cx.shadow.set_current(&d);
         return Some(d);
     }
@@ -541,7 +552,7 @@ pub(super) fn h_find_documents(cx: &mut Cx, op: &Value, out: &mut OpOutcome) {
                     return;
                 };
                 let Some(d) = cx.alpha.translate(&docid) else {
-                    out.unresolvable(format!("find_documents doc {docid} unresolvable"));
+                    out.never_bound(format!("find_documents doc {docid} never bound"));
                     return;
                 };
                 // Clamp query spans to the live extent (policy
@@ -597,7 +608,7 @@ pub(super) fn h_find_documents(cx: &mut Cx, op: &Value, out: &mut OpOutcome) {
             Some(l) => {
                 out.adaptations.push(l.how.tag().into());
                 let Some(d) = cx.alpha.translate(&l.doc) else {
-                    out.unresolvable(format!("find_documents doc {} unresolvable", l.doc));
+                    out.never_bound(format!("find_documents doc {} never bound", l.doc));
                     return;
                 };
                 let spans = vspan(1, l.ord, l.width).into_iter().collect();
@@ -664,7 +675,7 @@ pub(super) fn h_find_documents(cx: &mut Cx, op: &Value, out: &mut OpOutcome) {
             addrs
         }
         other => {
-            settle_refused(out, xf, &other);
+            settle_unaccepted(out, xf, &other);
             return;
         }
     };
@@ -677,10 +688,10 @@ pub(super) fn h_find_documents(cx: &mut Cx, op: &Value, out: &mut OpOutcome) {
         expected.iter().filter_map(|v| v.as_str().map(str::to_string)).collect();
     let rig = &*cx.rig;
     let mut adaptations = std::mem::take(&mut out.adaptations);
-    let verdict =
+    let comparison =
         compare_addr_sets(&want, &addrs, cx.alpha, |a| rig.is_infra_addr(a), &mut adaptations);
     out.adaptations = adaptations;
-    match verdict {
+    match comparison {
         Ok(()) => out.agree("address-set"),
         Err((e, a)) => out.disagree("address-set", e, a),
     }
@@ -718,7 +729,7 @@ pub(super) fn h_endsets(cx: &mut Cx, op: &Value, out: &mut OpOutcome) {
             return;
         };
         let Some(link) = cx.alpha.translate(&link_golden) else {
-            out.unresolvable(format!("endsets of unresolvable link {link_golden}"));
+            out.never_bound(format!("endsets of never-bound link {link_golden}"));
             return;
         };
         out.adaptations.push("endsets-as-followlink".into());
@@ -782,7 +793,7 @@ pub(super) fn h_endsets(cx: &mut Cx, op: &Value, out: &mut OpOutcome) {
         };
     cx.shadow.set_current(&doc);
     let Some(d) = cx.skep_doc(&doc) else {
-        out.unresolvable(format!("retrieve_endsets doc {doc} unresolvable"));
+        out.never_bound(format!("retrieve_endsets doc {doc} never bound"));
         return;
     };
     let xf = expected_failure(op);
@@ -794,7 +805,7 @@ pub(super) fn h_endsets(cx: &mut Cx, op: &Value, out: &mut OpOutcome) {
             pairs
         }
         other => {
-            settle_refused(out, xf, &other);
+            settle_unaccepted(out, xf, &other);
             return;
         }
     };
@@ -806,15 +817,15 @@ pub(super) fn h_endsets(cx: &mut Cx, op: &Value, out: &mut OpOutcome) {
     // (endsets/endsets_transcluded_source: the transcluder's V-span and the
     // source-homed I-span cover the same identity). The TYPE slot keeps the
     // (origin doc, width) shape — type names live in the harness types
-    // document (policy type_registry), which coverage cannot speak.
-    out.adaptations.push("type_registry".into());
+    // document (policy `types_document`), which coverage cannot speak.
+    out.adaptations.push("types_document".into());
     out.adaptations.push("endset-coverage-translated".into());
     // A `result` object keyed by slot nests the slot expectations — the
     // corpus extension's {from, to, three}, the recording client's {source,
     // target, type} (links/link_on_discontiguous_transcluded_content); the
     // legacy shape keys them top-level. Nested, every slot — `type` with
     // the rest — compares through the coverage comparator: the recorded
-    // spans are content spans (A8), and skep-side registry spans are
+    // spans are content spans (A8), and skep-side types-document spans are
     // already excluded as harness infrastructure.
     const SLOT_KEYS: &[&str] = &["from", "to", "three", "source", "target", "type"];
     let nested = op

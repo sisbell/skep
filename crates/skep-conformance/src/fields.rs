@@ -1,11 +1,11 @@
 //! Shared field-bag parsing: the one place golden JSON fields, decorated
 //! descriptions, recorded span shapes, recorded replies, and an op's own
-//! arguments are interpreted — the verb a label names (`normalize`), the
-//! document an op aims at (`aim_doc`), the content a read's recording
-//! answers with (`recorded_content`) and the regions a vcopy copies
-//! (`vcopy_sources`) included. Both the grounding pre-pass and the live
-//! translator read through these helpers, so the two passes cannot drift on
-//! what a field means. What a scenario's recorded evidence says an op DID —
+//! arguments are interpreted — the verb an op's name reads as
+//! (`normalize`), the document an op aims at (`aim_doc`), the content a
+//! read's recording answers with (`recorded_content`) and the regions a
+//! vcopy copies (`vcopy_sources`) included. Both the grounding pre-pass and
+//! the play pass read through these helpers, so the two passes cannot drift
+//! on what a field means. What a scenario's recorded evidence says an op DID —
 //! whether it happened at all, where an insert landed, what a delete
 //! removed — is `evidence`'s.
 //!
@@ -49,15 +49,22 @@ pub fn str_field<'v>(op: &'v Value, keys: &[&str]) -> Option<&'v str> {
     field(op, keys).and_then(Value::as_str)
 }
 
-pub fn label_of(op: &Value) -> &str {
+/// The golden's `op` field — the recording's name for the operation, which
+/// `normalize` reads a verb from and some names carry arguments in; never
+/// its `label` field (a create's role, a probe's phase, a compare's
+/// `<x>_vs_<y>` pair).
+pub fn op_name(op: &Value) -> &str {
     op.get("op").and_then(Value::as_str).unwrap_or("")
 }
 
-/// Keys that annotate an op for a reader — never an argument, never a
-/// recorded answer: the label and prose, the session an op runs under, an
-/// open's mode, a verification's own verdict on itself (`match`), and the
-/// failure verdict [`expected_failure`] reads (`error`, `status`). Checked
-/// against the corpus: none of these keys carries data an op is judged by.
+/// Keys never an answer a read leaves unread, and never a document's name
+/// in a roster: the op's name (`op`), which dispatch reads; its `label` — a
+/// create's role, a probe's phase, a compare's `<x>_vs_<y>` pair — which
+/// naming and compare pairing read; the `session` it runs under, which
+/// routing reads; the recorded failure (`error`, `status`) every handler
+/// settles against ([`expected_failure`]); prose (`comment`, `note`,
+/// `description`, `interpretation`, `message`, `claim`, `assertion`); an
+/// open's `mode`; and a verification's own judgement of itself (`match`).
 pub const ANNOTATION_KEYS: &[&str] = &[
     "op", "label", "comment", "note", "description", "interpretation", "message", "claim",
     "assertion", "match", "session", "mode", "error", "status",
@@ -87,7 +94,7 @@ pub fn span_dict(v: &Value) -> Option<(u64, u64, u64)> {
 
 /// One document side of a spec: golden docid + `(subspace, ordinal, width)`
 /// span triples — the parsed shape of a vspec dict, shared by every
-/// endset/search builder in the translator.
+/// endset/search builder in the play pass.
 pub type DocSpans = (String, Vec<(u64, u64, u64)>);
 
 /// A golden vspec dict `{docid, spans|span}` → (docid, [(sub, ord, w)]).
@@ -268,7 +275,7 @@ fn vspec_raw(v: &Value) -> Option<(String, Vec<RawSpan>)> {
 /// Harvest a vspanset expectation from ANY plausible field (the goldens key
 /// them result/before/after/empty_state/after_insert/…): first the standard
 /// keys, then a scan of remaining fields for span-set-shaped values. Shared
-/// by the translator's probes and the grounding pre-pass (whose insert-width
+/// by the play pass's probes and the grounding pre-pass (whose insert-width
 /// authority reads the same recorded vspansets).
 pub fn harvest_spanset(op: &Value) -> Option<(String, Option<String>, Vec<RawSpan>)> {
     const ARG_KEYS: &[&str] = &[
@@ -522,7 +529,7 @@ pub fn client_side_failure(op: &Value) -> Option<&str> {
 
 // ────────────────────────────── op arguments ───────────────────────────────
 
-/// The inserted text: field, strings array, or label-borne
+/// The inserted text: field, strings array, or carried by the op's name
 /// (`insert_1_AAA` = ordinal 1 text AAA; `insert_A` = text A).
 pub fn insert_text(op: &Value) -> Option<String> {
     if let Some(t) = str_field(op, &["text", "content", "string"]) {
@@ -531,8 +538,8 @@ pub fn insert_text(op: &Value) -> Option<String> {
     if let Some(a) = field(op, &["strings", "texts"]).and_then(Value::as_array) {
         return Some(a.iter().filter_map(Value::as_str).collect::<Vec<_>>().join(""));
     }
-    let label = label_of(op);
-    let rest = label.strip_prefix("insert_")?;
+    let name = op_name(op);
+    let rest = name.strip_prefix("insert_")?;
     if let Some((ordtok, text)) = rest.split_once('_') {
         if ordtok.parse::<u64>().is_ok() {
             return Some(text.to_string());
@@ -547,12 +554,12 @@ pub fn insert_text(op: &Value) -> Option<String> {
     Some(rest.to_string())
 }
 
-/// `insert_all`-style distribution: a texts array of ≥ 2 entries under a
-/// label that names no single position — one text per document, never one
+/// `insert_all`-style distribution: a texts array of ≥ 2 entries under an
+/// op name that names no single position — one text per document, never one
 /// concatenated insert.
 pub fn distributed_insert_texts(op: &Value) -> Option<Vec<String>> {
-    let label = label_of(op).to_ascii_lowercase();
-    if !(label == "insert_all" || label == "insert_each") {
+    let name = op_name(op).to_ascii_lowercase();
+    if !(name == "insert_all" || name == "insert_each") {
         return None;
     }
     let texts: Vec<String> = field(op, &["texts", "strings"])
@@ -639,8 +646,8 @@ pub fn roster(op: &Value) -> Vec<(String, String)> {
 pub enum DocAim {
     /// An explicit document field that resolves.
     Named(String),
-    /// A `…_doc<n>` label token ("insert_text_doc1").
-    FromLabel(String),
+    /// A `…_doc<n>` token in the op's name ("insert_text_doc1").
+    FromOpName(String),
     /// The current-document register, for an op that names no document.
     Register(String),
     /// An explicit document field that resolves to nothing: the reference,
@@ -651,10 +658,11 @@ pub enum DocAim {
 }
 
 /// The document an op aims at, as both passes read it: its explicit field
-/// (`keys`), then its label token, then the current-document register — the
-/// register only for a genuinely bare op, never in place of an explicit
-/// reference that resolves to nothing. A named or label-borne document
-/// becomes the register, mirroring the recording scripts' scope.
+/// (`keys`), then a token of its name, then the current-document register —
+/// the register only for a genuinely bare op, never in place of an explicit
+/// reference that resolves to nothing. A document named by a field or by
+/// the op's name becomes the register, mirroring the recording scripts'
+/// scope.
 pub fn aim_doc(shadow: &mut Shadow, op: &Value, keys: &[&str]) -> DocAim {
     if let Some(s) = str_field(op, keys) {
         return match shadow.resolve_doc(s) {
@@ -665,11 +673,11 @@ pub fn aim_doc(shadow: &mut Shadow, op: &Value, keys: &[&str]) -> DocAim {
             None => DocAim::Unresolved(s.to_string()),
         };
     }
-    if let Some(d) = doc_from_label(label_of(op)).and_then(|name| shadow.resolve_doc(&name)) {
+    if let Some(d) = doc_from_op_name(op_name(op)).and_then(|name| shadow.resolve_doc(&name)) {
         shadow.set_current(&d);
-        return DocAim::FromLabel(d);
+        return DocAim::FromOpName(d);
     }
-    match shadow.scoped() {
+    match shadow.current() {
         Some(d) => DocAim::Register(d),
         None => DocAim::FirstTouch,
     }
@@ -677,17 +685,17 @@ pub fn aim_doc(shadow: &mut Shadow, op: &Value, keys: &[&str]) -> DocAim {
 
 /// The group word a plural create names its members with: an explicit
 /// type/doc field ("peripherals" — links/star_hub_outgoing), else the role
-/// the label itself carries ("create_multiple_targets" → "target").
+/// the op's name carries ("create_multiple_targets" → "target").
 pub fn group_word(op: &Value) -> Option<String> {
     if let Some(s) = str_field(op, &["type", "doc"]) {
         if parse_dotted(s).is_none() {
             return Some(s.to_string());
         }
     }
-    let label = label_of(op).to_ascii_lowercase();
-    if label.starts_with("create_") {
+    let name = op_name(op).to_ascii_lowercase();
+    if name.starts_with("create_") {
         for word in ["target", "source", "peripheral"] {
-            if label.contains(word) {
+            if name.contains(word) {
                 return Some(word.to_string());
             }
         }
@@ -715,7 +723,7 @@ pub fn arrow_results(op: &Value) -> Vec<(String, String, String)> {
 
 // ────────────────────────────────── verbs ──────────────────────────────────
 
-/// The canonical verb an op's label names — the one reading of "what kind
+/// The canonical verb an op's name reads as — the one reading of "what kind
 /// of op is this" both passes dispatch on.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Verb {
@@ -740,11 +748,11 @@ pub enum Verb {
     Traverse,
     FindLinks,
     FindDocuments,
-    Contents,
-    Vspan,
-    Vspanset,
-    Endsets,
-    Compare,
+    RetrieveContents,
+    RetrieveVspan,
+    RetrieveVspanset,
+    RetrieveEndsets,
+    CompareVersions,
     Account,
     CreateNode,
     Connect,
@@ -776,11 +784,11 @@ impl Verb {
             Verb::Traverse => "traverse",
             Verb::FindLinks => "find_links",
             Verb::FindDocuments => "find_documents",
-            Verb::Contents => "retrieve_contents",
-            Verb::Vspan => "retrieve_vspan",
-            Verb::Vspanset => "retrieve_vspanset",
-            Verb::Endsets => "retrieve_endsets",
-            Verb::Compare => "compare_versions",
+            Verb::RetrieveContents => "retrieve_contents",
+            Verb::RetrieveVspan => "retrieve_vspan",
+            Verb::RetrieveVspanset => "retrieve_vspanset",
+            Verb::RetrieveEndsets => "retrieve_endsets",
+            Verb::CompareVersions => "compare_versions",
             Verb::Account => "account",
             Verb::CreateNode => "create_node",
             Verb::Connect => "connect",
@@ -806,25 +814,26 @@ impl Verb {
     }
 }
 
-/// The verb an op's own label names — [`normalize`] over the op, the one
+/// The verb an op's own name reads as — [`normalize`] over the op, the one
 /// reading every forward scan asks "what kind of op is this" through.
 pub fn verb_of(op: &Value) -> Option<Verb> {
-    normalize(label_of(op), op)
+    normalize(op_name(op), op)
 }
 
-/// Does this op read a document's whole content: a [`Verb::Contents`] read
-/// that no span, spec set or position narrows — by a field, or by the
-/// label's own position tokens ("text_at_1_3", "pos_1_4", "link_at_2_1")?
-/// Only such a read testifies to everything a document holds.
+/// Does this op read a document's whole content: a
+/// [`Verb::RetrieveContents`] read that no span, spec set or position
+/// narrows — by a field, or by its name's own position tokens
+/// ("text_at_1_3", "pos_1_4", "link_at_2_1")? Only such a read testifies to
+/// everything a document holds.
 pub fn reads_whole_content(op: &Value) -> bool {
     const NARROWING: &[&str] =
         &["span", "spans", "vspan", "specs", "specset", "positions", "address", "at", "position"];
-    verb_of(op) == Some(Verb::Contents)
+    verb_of(op) == Some(Verb::RetrieveContents)
         && field(op, NARROWING).is_none()
-        && position_from_label(label_of(op)).is_none()
+        && position_from_op_name(op_name(op)).is_none()
 }
 
-/// The meta/diagnostic labels (per the brief): executed nothing, compared
+/// The meta/diagnostic op names (per the brief): executed nothing, compared
 /// nothing, counted separately — UNLESS the op carries observation data
 /// (a vspanset/contents bundle), in which case it is an [`Verb::Observe`]
 /// probe (internal/interior_typing_two_characters's `initial_state`).
@@ -877,23 +886,23 @@ const STEMS: &[(&str, Verb)] = &[
     // A roster of the documents a setup made, `{op: "docs", A: id, …}`
     // (isolation/cross_document_transclusion_isolation) — see `roster`.
     ("docs", Verb::CreateDocuments),
-    ("retrieve_vspanset", Verb::Vspanset),
-    ("vspanset", Verb::Vspanset),
-    ("retrieve_vspan", Verb::Vspan),
-    ("vspan", Verb::Vspan),
-    ("retrieve_endsets", Verb::Endsets),
-    ("endsets", Verb::Endsets),
-    ("retrieve_contents", Verb::Contents),
-    ("retrieve", Verb::Contents),
-    ("contents", Verb::Contents),
-    ("content", Verb::Contents),
-    ("text_at", Verb::Contents),
-    ("pos_", Verb::Contents),
-    ("link_at", Verb::Contents),
-    ("full_text", Verb::Contents),
-    ("full_content", Verb::Contents),
-    ("compare", Verb::Compare),
-    ("comparisons", Verb::Compare),
+    ("retrieve_vspanset", Verb::RetrieveVspanset),
+    ("vspanset", Verb::RetrieveVspanset),
+    ("retrieve_vspan", Verb::RetrieveVspan),
+    ("vspan", Verb::RetrieveVspan),
+    ("retrieve_endsets", Verb::RetrieveEndsets),
+    ("endsets", Verb::RetrieveEndsets),
+    ("retrieve_contents", Verb::RetrieveContents),
+    ("retrieve", Verb::RetrieveContents),
+    ("contents", Verb::RetrieveContents),
+    ("content", Verb::RetrieveContents),
+    ("text_at", Verb::RetrieveContents),
+    ("pos_", Verb::RetrieveContents),
+    ("link_at", Verb::RetrieveContents),
+    ("full_text", Verb::RetrieveContents),
+    ("full_content", Verb::RetrieveContents),
+    ("compare", Verb::CompareVersions),
+    ("comparisons", Verb::CompareVersions),
     ("account", Verb::Account),
     ("connect", Verb::Connect),
     // The new-corpus checkpoint op: vspanset+contents bundle, or a bare
@@ -930,11 +939,11 @@ pub fn has_observation_fields(op: &Value) -> bool {
     false
 }
 
-/// Normalize a label to a canonical verb: meta list (with the
+/// Normalize an op's name to a canonical verb: meta list (with the
 /// observation-bundle escape), then the stem table, then a field-shape
-/// fallback for pure state-probe labels. `None` ⇒ inexpressible.
-pub fn normalize(label: &str, op: &Value) -> Option<Verb> {
-    let l = label.to_ascii_lowercase();
+/// fallback for pure state-probe names. `None` ⇒ inexpressible.
+pub fn normalize(op_name: &str, op: &Value) -> Option<Verb> {
+    let l = op_name.to_ascii_lowercase();
     if l == "setup" {
         return Some(Verb::Setup);
     }
@@ -949,10 +958,10 @@ pub fn normalize(label: &str, op: &Value) -> Option<Verb> {
     if !arrow_results(op).is_empty() {
         return Some(Verb::CreateLink);
     }
-    // Shape fallback for unknown probe labels.
+    // Shape fallback for unknown probe names.
     if let Some(res) = op.get("result") {
         if looks_like_spanset(res) {
-            return Some(Verb::Vspanset);
+            return Some(Verb::RetrieveVspanset);
         }
         if let Some(arr) = res.as_array() {
             if !arr.is_empty() && arr.iter().all(|v| v.as_str().is_some_and(is_link_address))
@@ -960,7 +969,7 @@ pub fn normalize(label: &str, op: &Value) -> Option<Verb> {
                 return Some(Verb::FindLinks);
             }
             if arr.iter().all(|v| v.as_str().is_some()) {
-                return Some(Verb::Contents);
+                return Some(Verb::RetrieveContents);
             }
         }
     }
@@ -1034,7 +1043,7 @@ pub fn locate(shadow: &Shadow, doc_hint: Option<&str>, desc: &str) -> Option<Loc
     // "S.O length N" (delete_first_char).
     if let Some((pos, len)) = desc.split_once(" length ") {
         if let (Some((1, ord)), Ok(w)) = (parse_vpos(pos.trim()), len.trim().parse::<u64>()) {
-            let doc = doc_hint.map(str::to_string).or_else(|| shadow.scoped())?;
+            let doc = doc_hint.map(str::to_string).or_else(|| shadow.current())?;
             return Some(Located { doc, ord, width: w, how: Grounding::Span });
         }
     }
@@ -1047,7 +1056,7 @@ pub fn locate(shadow: &Shadow, doc_hint: Option<&str>, desc: &str) -> Option<Loc
         if let Some((pos, w)) = core.split_once(" for ") {
             if let (Some((1, ord)), Some(w)) = (parse_vpos(pos.trim()), parse_width(w.trim())) {
                 if w > 0 {
-                    let doc = doc_hint.map(str::to_string).or_else(|| shadow.scoped())?;
+                    let doc = doc_hint.map(str::to_string).or_else(|| shadow.current())?;
                     return Some(Located { doc, ord, width: w, how: Grounding::Span });
                 }
             }
@@ -1057,7 +1066,7 @@ pub fn locate(shadow: &Shadow, doc_hint: Option<&str>, desc: &str) -> Option<Loc
     // "1.16-1.20" — a bare inclusive ordinal range (links/delete_at_root_
     // origin_height_1's create_link `source` and `target`).
     if let Some((ord, w)) = ordinal_range(desc) {
-        let doc = doc_hint.map(str::to_string).or_else(|| shadow.scoped())?;
+        let doc = doc_hint.map(str::to_string).or_else(|| shadow.current())?;
         return Some(Located { doc, ord, width: w, how: Grounding::Range });
     }
 
@@ -1069,7 +1078,7 @@ pub fn locate(shadow: &Shadow, doc_hint: Option<&str>, desc: &str) -> Option<Loc
             core.strip_prefix("positions ").or_else(|| core.strip_prefix("position "))
         {
             if let Some((ord, w)) = ordinal_range(r.trim()) {
-                let doc = doc_hint.map(str::to_string).or_else(|| shadow.scoped())?;
+                let doc = doc_hint.map(str::to_string).or_else(|| shadow.current())?;
                 return Some(Located { doc, ord, width: w, how: Grounding::Range });
             }
         }
@@ -1079,7 +1088,7 @@ pub fn locate(shadow: &Shadow, doc_hint: Option<&str>, desc: &str) -> Option<Loc
     if let Some(idx) = desc.find("-char span at ") {
         let n = desc[..idx].trim().parse::<u64>().ok()?;
         let (_, ord) = parse_vpos(desc[idx + "-char span at ".len()..].trim())?;
-        let doc = doc_hint.map(str::to_string).or_else(|| shadow.scoped())?;
+        let doc = doc_hint.map(str::to_string).or_else(|| shadow.current())?;
         return Some(Located { doc, ord, width: n.max(1), how: Grounding::Span });
     }
 
@@ -1123,7 +1132,7 @@ pub fn locate(shadow: &Shadow, doc_hint: Option<&str>, desc: &str) -> Option<Loc
         }
     }
     if desc == "all" || desc == "full document" || desc.starts_with("entire") {
-        let doc = doc_hint.map(str::to_string).or_else(|| shadow.scoped())?;
+        let doc = doc_hint.map(str::to_string).or_else(|| shadow.current())?;
         return whole(doc);
     }
 
@@ -1138,7 +1147,7 @@ pub fn locate(shadow: &Shadow, doc_hint: Option<&str>, desc: &str) -> Option<Loc
                 let doc = doc_hint
                     .map(str::to_string)
                     .or_else(|| shadow.find_text(None, head).map(|(d, _)| d))
-                    .or_else(|| shadow.scoped())?;
+                    .or_else(|| shadow.current())?;
                 // The explicit range is authoritative; the head text is a
                 // reminder (retrieve_noncontiguous_spans "quick (5-9)").
                 return Some(Located { doc, ord, width: w, how: Grounding::Range });
@@ -1269,7 +1278,7 @@ pub fn resolve_position(
         if let Some((_, ord)) = shadow.find_text(Some(doc), t) {
             return Some((1, ord + t.len() as u64, Some("position-after-text")));
         }
-        // Case-insensitive fallback: labels say "after first" for "First ".
+        // Case-insensitive fallback: descriptions say "after first" for "First ".
         if let Some((_, ord, w)) = shadow.find_text_ci(doc, t) {
             return Some((1, ord + w, Some("position-after-text")));
         }
@@ -1283,9 +1292,9 @@ pub fn resolve_position(
 }
 
 /// Positional probes: the first two consecutive numeric `_`-tokens in the
-/// label ("text_at_1_3_before" → (1,3); "pos_1_4_after" → (1,4)).
-pub fn position_from_label(label: &str) -> Option<(u64, u64)> {
-    let toks: Vec<&str> = label.split('_').collect();
+/// op's name ("text_at_1_3_before" → (1,3); "pos_1_4_after" → (1,4)).
+pub fn position_from_op_name(op_name: &str) -> Option<(u64, u64)> {
+    let toks: Vec<&str> = op_name.split('_').collect();
     for w in toks.windows(2) {
         if let (Ok(a), Ok(b)) = (w[0].parse::<u64>(), w[1].parse::<u64>()) {
             return Some((a, b));
@@ -1294,10 +1303,10 @@ pub fn position_from_label(label: &str) -> Option<(u64, u64)> {
     None
 }
 
-/// Label-token doc reference: `…_doc1` / `…_doc2` (subspace/
-/// insert_text_check_link_positions "insert_text_doc1").
-pub fn doc_from_label(label: &str) -> Option<String> {
-    label
+/// A doc reference carried by the op's name: `…_doc1` / `…_doc2`
+/// (subspace/insert_text_check_link_positions "insert_text_doc1").
+pub fn doc_from_op_name(op_name: &str) -> Option<String> {
+    op_name
         .rsplit('_')
         .next()
         .filter(|t| t.starts_with("doc") && t[3..].parse::<u64>().is_ok())
@@ -1305,10 +1314,10 @@ pub fn doc_from_label(label: &str) -> Option<String> {
 }
 
 /// The symbolic name a create op binds: an explicit doc/name/label field, or
-/// the role carried by the label itself — `create_target` names its doc
-/// "target" (identity/identity_mixed_sources probes `doc: "target"` though
-/// no field ever bound it), `create_doc2_and_copy` names "doc2". Generic
-/// create labels (create_document, create_documents…) carry no role.
+/// the role the op's name carries — `create_target` names its doc "target"
+/// (identity/identity_mixed_sources probes `doc: "target"` though no field
+/// ever bound it), `create_doc2_and_copy` names "doc2". Generic create op
+/// names (create_document, create_documents…) carry no role.
 pub fn create_name_of(op: &Value) -> Option<String> {
     // `doc_label` is the corpus-extension recorder's explicit role name
     // (new-corpus files only; verified absent from the original 263).
@@ -1317,8 +1326,8 @@ pub fn create_name_of(op: &Value) -> Option<String> {
             return Some(s.to_string());
         }
     }
-    let label = label_of(op).to_ascii_lowercase();
-    let role = label.strip_prefix("create_")?;
+    let name = op_name(op).to_ascii_lowercase();
+    let role = name.strip_prefix("create_")?;
     let role = role.split("_and_").next().unwrap_or(role);
     const GENERIC: &[&str] = &[
         "document", "documents", "doc", "docs", "version", "node", "link", "links", "chain",
@@ -1430,7 +1439,7 @@ pub fn vcopy_sources(
     } else if let Some(items) = field(op, &["spans"]).and_then(Value::as_array) {
         for v in items {
             if let Some((sub, ord, w)) = span_dict(v) {
-                if let Some(docid) = named_source.clone().or_else(|| shadow.scoped()) {
+                if let Some(docid) = named_source.clone().or_else(|| shadow.current()) {
                     push(&docid, sub, ord, w);
                 }
             } else if let Some(t) = v.as_str() {

@@ -14,7 +14,7 @@
 //! * `class`     (required) — a short divergence class;
 //! * `rationale` (required) — one sentence citing the adjudication source;
 //! * `count_delta`     (optional) — declared count adjustment (golden+delta);
-//! * `width_tolerance` (optional) — span-width tolerance granted;
+//! * `width_tolerance` (optional) — declared span-width tolerance;
 //! * `expected_matches` (optional) — a substring of the op's rendered
 //!   EXPECTED value. When present the entry applies to any DISAGREED op of
 //!   the scenario whose expected value contains it (op_index, if also
@@ -23,33 +23,33 @@
 //!   `count_delta`/`width_tolerance` never apply (adjustments run before
 //!   comparison, when the expected value is not yet known).
 //!
-//! An entry applies twice. Before an op runs, [`Allowlist::grants`] hands
-//! its comparators the adjustments the op's entries declare; after, a
+//! An entry applies twice. Before an op runs, [`Allowlist::adjustments`]
+//! hands its comparators the adjustments the op's entries declare; after, a
 //! comparator that agreed only because it used one records so
-//! ([`GRANT_WIDTH`], [`GRANT_COUNT`]), and [`Allowlist::grant`] names the
-//! classes covering the outcome.
+//! ([`WIDTH_ADJUSTED`], [`COUNT_ADJUSTED`]), and [`Allowlist::classify`]
+//! names the classes covering the outcome.
 
 use std::fs;
 use std::path::Path;
 
 use crate::outcome::{OpOutcome, Status};
 
-/// The adjustments the allowlist grants one op's comparators, resolved
-/// before the op runs from its non-signature entries: the widest width
-/// tolerance any of them declares, and the first count delta.
+/// The adjustments the allowlist declares for one op's comparators,
+/// resolved before the op runs from its non-signature entries: the widest
+/// width tolerance any of them declares, and the first count delta.
 #[derive(Clone, Copy, Debug, Default)]
-pub struct Grants {
+pub struct Adjustments {
     pub width_tolerance: u64,
     pub count_delta: i64,
 }
 
-/// The adaptation a span comparator records when a granted width tolerance,
-/// not the raw widths, made its agreement.
-pub const GRANT_WIDTH: &str = "allowlist-grant:width";
+/// The adaptation a span comparator records when a declared width
+/// tolerance, not the raw widths, made its agreement.
+pub const WIDTH_ADJUSTED: &str = "allowlist-adjusted:width";
 
-/// The adaptation a count comparator records when a granted count delta,
+/// The adaptation a count comparator records when a declared count delta,
 /// not the raw count, made its agreement.
-pub const GRANT_COUNT: &str = "allowlist-grant:count";
+pub const COUNT_ADJUSTED: &str = "allowlist-adjusted:count";
 
 #[derive(Clone, Debug, Default)]
 pub struct Entry {
@@ -68,10 +68,10 @@ pub struct Allowlist {
 }
 
 impl Allowlist {
-    /// The adjustments granted to the comparators of (scenario, op index).
-    pub fn grants(&self, scenario: &str, op_index: usize) -> Grants {
+    /// The adjustments declared for the comparators of (scenario, op index).
+    pub fn adjustments(&self, scenario: &str, op_index: usize) -> Adjustments {
         let entries = self.matching(scenario, op_index);
-        Grants {
+        Adjustments {
             width_tolerance: entries.iter().filter_map(|e| e.width_tolerance).max().unwrap_or(0),
             count_delta: entries.iter().filter_map(|e| e.count_delta).next().unwrap_or(0),
         }
@@ -81,35 +81,35 @@ impl Allowlist {
     /// when no entry covers it. A disagreement is covered by every entry
     /// matching its op, then by every signature entry its rendered expected
     /// value matches. An agreement is covered only when one of its
-    /// comparators recorded that a granted adjustment made it — the entry's
+    /// comparators recorded that a declared adjustment made it — the entry's
     /// existence IS the adjudicated divergence. Every covering class is
     /// surfaced, so the ruling behind a verdict is auditable from the report
     /// alone.
-    pub fn grant(&self, scenario: &str, op_index: usize, out: &OpOutcome) -> Option<String> {
+    pub fn classify(&self, scenario: &str, op_index: usize, out: &OpOutcome) -> Option<String> {
         let disagreed = out.status == Status::Disagreed;
         let adjusted = out.status == Status::Agreed
-            && out.adaptations.iter().any(|a| a == GRANT_WIDTH || a == GRANT_COUNT);
-        let mut granted: Option<String> = None;
+            && out.adaptations.iter().any(|a| a == WIDTH_ADJUSTED || a == COUNT_ADJUSTED);
+        let mut covering: Option<String> = None;
         if disagreed || adjusted {
             let mut classes: Vec<String> =
                 self.matching(scenario, op_index).iter().map(|e| e.class.clone()).collect();
             classes.dedup();
             if !classes.is_empty() {
-                granted = Some(classes.join("+"));
+                covering = Some(classes.join("+"));
             }
         }
         if disagreed {
             let sig = self.matching_expected(scenario, op_index, out.expected.as_deref());
             if !sig.is_empty() {
                 let mut classes: Vec<String> = sig.iter().map(|e| e.class.clone()).collect();
-                if let Some(prev) = granted.take() {
+                if let Some(prev) = covering.take() {
                     classes.insert(0, prev);
                 }
                 classes.dedup();
-                granted = Some(classes.join("+"));
+                covering = Some(classes.join("+"));
             }
         }
-        granted
+        covering
     }
 
     /// Entries applying to (scenario, op index) BEFORE execution — the
@@ -247,9 +247,9 @@ mod tests {
 
     /// A disagreement is covered by the entries matching its op and the
     /// signature entries its expected value matches; an agreement only when
-    /// a comparator recorded that a granted adjustment made it.
+    /// a comparator recorded that a declared adjustment made it.
     #[test]
-    fn a_grant_covers_disagreements_and_only_the_agreements_an_adjustment_made() {
+    fn an_entry_classifies_disagreements_and_only_the_agreements_an_adjustment_made() {
         let allow = Allowlist {
             entries: vec![
                 Entry {
@@ -269,21 +269,22 @@ mod tests {
                 },
             ],
         };
-        assert_eq!(allow.grants("s", 1).width_tolerance, 1);
-        assert_eq!(allow.grants("s", 2).width_tolerance, 0, "a signature entry adjusts nothing");
+        assert_eq!(allow.adjustments("s", 1).width_tolerance, 1);
+        let unadjusted = allow.adjustments("s", 2).width_tolerance;
+        assert_eq!(unadjusted, 0, "a signature entry adjusts nothing");
 
         let mut agreed = outcome(1, Status::Agreed, None);
-        assert_eq!(allow.grant("s", 1, &agreed), None, "no grant made this agreement");
-        agreed.adaptations.push(GRANT_WIDTH.into());
-        assert_eq!(allow.grant("s", 1, &agreed).as_deref(), Some("tolerated"));
+        assert_eq!(allow.classify("s", 1, &agreed), None, "no adjustment made this agreement");
+        agreed.adaptations.push(WIDTH_ADJUSTED.into());
+        assert_eq!(allow.classify("s", 1, &agreed).as_deref(), Some("tolerated"));
 
         let shaped = outcome(2, Status::Disagreed, Some("[(\"0\", \"0.1\")]"));
-        assert_eq!(allow.grant("s", 2, &shaped).as_deref(), Some("shape"));
+        assert_eq!(allow.classify("s", 2, &shaped).as_deref(), Some("shape"));
         let other = outcome(2, Status::Disagreed, Some("[(\"1.1\", \"0.3\")]"));
-        assert_eq!(allow.grant("s", 2, &other), None);
+        assert_eq!(allow.classify("s", 2, &other), None);
         let both = outcome(1, Status::Disagreed, Some("(\"0\""));
-        assert_eq!(allow.grant("s", 1, &both).as_deref(), Some("tolerated+shape"));
-        assert_eq!(allow.grant("t", 1, &both), None, "entries are per scenario");
+        assert_eq!(allow.classify("s", 1, &both).as_deref(), Some("tolerated+shape"));
+        assert_eq!(allow.classify("t", 1, &both), None, "entries are per scenario");
     }
 
     /// An entry names its scenario by key: a bare name — which two goldens

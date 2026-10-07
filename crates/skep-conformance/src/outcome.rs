@@ -19,10 +19,11 @@ pub enum Status {
     /// read whose recording holds no answer. A read whose recording holds an
     /// answer it cannot reach is `Inexpressible` instead, never this.
     NotCompared,
-    /// Meta/diagnostic label — executed nothing, compared nothing.
+    /// Meta/diagnostic op — executed nothing, compared nothing.
     Meta,
-    /// Could not be translated to skep's surface; the label and reason are
-    /// recorded. Never silently skipped.
+    /// Part of what the golden records has no expression on skep's surface
+    /// — the op itself, a part it names, or the answer its recording keeps.
+    /// The reason is recorded; never silently skipped.
     Inexpressible,
     /// Executed and at least one comparison disagreed (or an α-finding
     /// surfaced on this op).
@@ -32,30 +33,32 @@ pub enum Status {
 #[derive(Clone, Debug)]
 pub struct OpOutcome {
     pub index: usize,
-    pub label: String,
-    /// Canonical verb the label normalized to ("?" when none).
+    /// The op's name: the golden's `op` field (`fields::op_name`).
+    pub op_name: String,
+    /// Canonical verb the op's name normalized to ("?" when none).
     pub verb: String,
     pub status: Status,
     /// Which comparator judged this op, when one ran.
     pub comparator: Option<String>,
-    /// Named adaptation policies applied during translation, in order.
+    /// Named adaptation policies applied while the op played, in order.
     pub adaptations: Vec<String>,
     /// Rendered expected value (golden side) on disagreement.
     pub expected: Option<String>,
     /// Rendered actual value (skep side, through the bijection) on
     /// disagreement.
     pub actual: Option<String>,
-    /// Inexpressibility reason / α-finding classes / free-form evidence.
+    /// Inexpressibility reason / α-finding kinds / free-form evidence.
     pub note: Option<String>,
-    /// Allowlist class granted to this disagreement, if any.
+    /// The allowlist class or classes covering this outcome
+    /// (`Allowlist::classify`), if any.
     pub allowlisted: Option<String>,
 }
 
 impl OpOutcome {
-    pub fn new(index: usize, label: &str) -> OpOutcome {
+    pub fn new(index: usize, op_name: &str) -> OpOutcome {
         OpOutcome {
             index,
-            label: label.to_string(),
+            op_name: op_name.to_string(),
             verb: "?".to_string(),
             status: Status::NotCompared,
             comparator: None,
@@ -89,10 +92,11 @@ impl OpOutcome {
         self.actual = Some(actual);
     }
 
-    /// The op names a golden address with no α-image, so nothing reached
-    /// skep: a disagreement the α comparator owns, `note` its evidence
-    /// beside the never-bound finding the runner folds in.
-    pub fn unresolvable(&mut self, note: String) {
+    /// The op names a golden address α never bound — skep never made it, or
+    /// nothing the recording did bound it — so nothing reached skep: a
+    /// disagreement the α comparator owns, `note` its evidence beside the
+    /// `alpha-never-bound` finding the runner folds in.
+    pub fn never_bound(&mut self, note: String) {
         self.status = Status::Disagreed;
         self.comparator = Some("alpha".to_string());
         self.add_note(note);
@@ -124,8 +128,8 @@ pub enum Verdict {
     Allowlisted,
     Divergent,
     Inexpressible,
-    /// The HARNESS itself failed (panic / translation crash) — a harness
-    /// bug, not a finding.
+    /// The HARNESS itself failed (a panic, or a rig that would not
+    /// bootstrap) — a harness bug, not a finding.
     Error,
 }
 
@@ -147,8 +151,10 @@ pub struct ScenarioRecord {
     pub verdict: Verdict,
     pub bijection_size: usize,
     pub ops: Vec<OpOutcome>,
-    /// First failing op (index, label, detail), if any.
-    pub first_failure: Option<(usize, String, String)>,
+    /// The first inexpressible op or unadjudicated disagreement, else the
+    /// first adjudicated disagreement — (index, op name, detail); `None`
+    /// when no op disagreed or was inexpressible.
+    pub first_finding: Option<(usize, String, String)>,
     /// Populated only on `Verdict::Error` — the panic payload.
     pub error: Option<String>,
     /// Grounding-pre-pass inferences applied before op 0 (implied creates,

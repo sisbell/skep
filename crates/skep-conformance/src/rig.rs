@@ -1,5 +1,5 @@
 //! The rig: one fresh engine + operation surface per scenario, the session
-//! and account plumbing, and the harness-owned type-registry document.
+//! and account plumbing, and the harness-owned types document.
 //!
 //! Durability choice: `Durability::InMemory`. This instrument compares
 //! OPERATION SEMANTICS, not durability — every scenario runs start-to-finish
@@ -48,8 +48,8 @@ pub struct Rig {
     /// The account `Rig::new` delegated (see [`Rig::default_account`]).
     default_account: Address,
     next_principal: u64,
-    /// The harness type-registry document: one content position per link
-    /// type name (adaptation policy `type_registry`). Its address is harness
+    /// The harness's types document: one content position per link type
+    /// name (adaptation policy `types_document`). Its address is harness
     /// infrastructure — never bound in the α-map.
     types_doc: Address,
     type_ordinals: BTreeMap<String, u64>,
@@ -166,7 +166,7 @@ impl Rig {
         rig.sessions
             .insert(crate::tum::addr_str(&account), (session, PrincipalId(1)));
 
-        // The type-registry document: `types_capacity` content positions,
+        // The types document: `types_capacity` content positions,
         // each the identity of one link-type name (names are assigned to
         // ordinals on first use). Created through the same op surface the
         // scenarios use — the harness holds no back door.
@@ -320,7 +320,7 @@ impl Rig {
     }
 
     /// The content V-spec denoting one link-type name (policy
-    /// `type_registry`): position k of the types document, where k is the
+    /// `types_document`): position k of the types document, where k is the
     /// name's assigned ordinal (assigned on first use, stable thereafter).
     /// `None` when the fixed capacity is exhausted — surfaced as
     /// inexpressible by the caller.
@@ -346,7 +346,7 @@ impl Rig {
     }
 
     /// Is `a` inside the harness's own types document? Used to exclude
-    /// harness infrastructure from comparisons (part of the `type_registry`
+    /// harness infrastructure from comparisons (part of the `types_document`
     /// policy — the types doc encodes type NAMES, which the golden encodes
     /// as unresolvable link-subspace specs; comparing the two rendered forms
     /// would compare encodings, not behavior).
@@ -356,7 +356,7 @@ impl Rig {
 
     /// Is `a` harness INFRASTRUCTURE — inside the types document, inside a
     /// rig account's home (the setup grant's residence, ruling 21), a rig
-    /// account itself, or the grants class address? The `type_registry`
+    /// account itself, or the grants class address? The `types_document`
     /// exclusion, widened to the setup grant: the grant's FROM endset is the
     /// account's subtree span, which M7's overlap (pure tumbler order, no
     /// level gate) counts as touching every content address under the

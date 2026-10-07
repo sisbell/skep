@@ -37,17 +37,17 @@
 //! * **Keyed setup expansion** (round 3) — `<name>_text` fields plus a
 //!   `link: "doc1[…] -> doc2[…]"` spec expand to creates, inserts, and a
 //!   [`SetupStep::Link`], with later follow results overriding the
-//!   label-derived link extents.
+//!   spec-derived link extents.
 //!
 //! Everything inferred is tagged into the report's `groundings` list. A doc
 //! whose probes stay inconsistent after inference is left alone — the play
 //! pass then reports the disagreement honestly.
 //!
-//! The walk reads each op through the grammar the translator reads it
+//! The walk reads each op through the grammar the play pass reads it
 //! through (`fields`: the verb `normalize` names, which it dispatches on,
 //! and the vcopy sources `vcopy_sources` reads), skips every op udanax
 //! never carried out (`evidence::took_effect`), and decides what an edit did
-//! by the recorded-evidence policies the translator applies (`evidence`);
+//! by the recorded-evidence policies the play pass applies (`evidence`);
 //! what this module holds is the reconstruction alone. The corpus
 //! extension records its own setup (MANIFEST-NEW): its `probe` checkpoints
 //! carry no docs map, the one shape of them this walk reads, so nothing is
@@ -63,7 +63,7 @@ use crate::evidence::{
 };
 use crate::fields::{
     aim_doc, arrow_results, as_text, cuts_of, distributed_insert_texts, distribution_targets,
-    expect_strings, field, group_word, is_position_marker, label_of, locate, normalize,
+    expect_strings, field, group_word, is_position_marker, locate, normalize, op_name,
     per_doc_replies, quoted, recorded_content, resolve_position, roster, span_dict, str_field,
     vcopy_sources, verb_of, vspec_dict, DocAim, Verb, POST_WRITE_KEYS,
 };
@@ -78,7 +78,7 @@ use cover::{
     later_copy_into,
 };
 
-/// One step of reconstructed setup, fully concrete: executed against skep by
+/// One step of the implied setup, fully concrete: executed against skep by
 /// the runner (lead-in) or by the macro-op handlers (plans). Inserts append
 /// at the doc's then-current end; copies append the source region
 /// `[ord, ord+width)` (content subspace); links carry located content
@@ -92,8 +92,12 @@ pub enum SetupStep {
     Link { from: Vec<(String, u64, u64)>, to: Vec<(String, u64, u64)>, golden: Option<String> },
 }
 
+/// The setup the scenario's recording performed but never recorded as ops,
+/// implied by its own evidence: the documents the runner creates and the
+/// content it inserts before op 0, the plans the macro ops execute, and the
+/// inferences behind them all, which the report lists as `groundings`.
 #[derive(Default)]
-pub struct Grounding {
+pub struct ImpliedSetup {
     /// Docs referenced but never created, in golden-id order.
     pub implied_creates: Vec<String>,
     /// Setup executed before op 0 (after implied creates): the inferred
@@ -133,8 +137,8 @@ enum Edit {
     Opaque,
 }
 
-pub fn ground(ops: &[Value]) -> Grounding {
-    let mut g = Grounding { implied_creates: implied_creates(ops), ..Grounding::default() };
+pub fn ground(ops: &[Value]) -> ImpliedSetup {
+    let mut g = ImpliedSetup { implied_creates: implied_creates(ops), ..ImpliedSetup::default() };
     if !g.implied_creates.is_empty() {
         g.tags.push(format!("implied-create: {}", g.implied_creates.join(", ")));
     }
@@ -265,7 +269,7 @@ pub fn ground(ops: &[Value]) -> Grounding {
         let strategy = sim.plan_notes.get(i).map(|s| format!(" [{s}]")).unwrap_or_default();
         g.tags.push(format!(
             "expansion-plan: op {i} `{}` → {} concrete steps{strategy}",
-            label_of(&ops[*i]),
+            op_name(&ops[*i]),
             plan.len()
         ));
     }
@@ -303,7 +307,7 @@ fn implied_creates(ops: &[Value]) -> Vec<String> {
             ) => true,
             // A vcopy form that mints its targets first.
             Some(Verb::Vcopy) => {
-                label_of(op).to_ascii_lowercase().starts_with("create_and_transclude")
+                op_name(op).to_ascii_lowercase().starts_with("create_and_transclude")
             }
             _ => false,
         };
@@ -546,7 +550,7 @@ impl Sim {
     /// op changes nothing here, as it executes nothing there.
     fn doc_ref(&mut self, op: &Value, keys: &[&str]) -> Option<String> {
         match aim_doc(&mut self.shadow, op, keys) {
-            DocAim::Named(d) | DocAim::FromLabel(d) | DocAim::Register(d) => Some(d),
+            DocAim::Named(d) | DocAim::FromOpName(d) | DocAim::Register(d) => Some(d),
             DocAim::Unresolved(_) => None,
             DocAim::FirstTouch => {
                 // A scenario whose opening op needs a document before any
@@ -560,11 +564,11 @@ impl Sim {
     }
 
     /// Mirror of the play-pass shadow effects, content only. Any drift
-    /// between this and the translator surfaces as an honest divergence.
+    /// between this and the play pass surfaces as an honest divergence.
     /// An op udanax never carried out (`evidence::took_effect`) changes
-    /// nothing; the rest dispatch on the verb the translator dispatches on
+    /// nothing; the rest dispatch on the verb the play pass dispatches on
     /// (`fields::normalize`), so the two passes cannot disagree about what
-    /// kind of op a label names. Probes run AFTER an op's own edit (write
+    /// kind of op a name reads as. Probes run AFTER an op's own edit (write
     /// branches call check_probes themselves) or in the read fall-through —
     /// never before, or a write's own result expectation would be compared
     /// against the pre-edit state and forge a false seed.
@@ -572,8 +576,8 @@ impl Sim {
         if !took_effect(op) {
             return;
         }
-        let label = label_of(op).to_ascii_lowercase();
-        match normalize(&label, op) {
+        let name = op_name(op).to_ascii_lowercase();
+        match normalize(&name, op) {
             Some(Verb::CreateChain) => self.sim_create_chain(i, op, all),
             Some(Verb::CreateDocuments) => self.sim_create_documents(i, op, all),
             Some(Verb::Setup) => {
@@ -593,13 +597,13 @@ impl Sim {
             Some(Verb::Insert) => self.sim_insert(i, op, all),
             Some(Verb::DeleteAll) => self.sim_delete_all(i, op, all),
             Some(Verb::Delete) => self.sim_delete(i, op, all),
-            Some(Verb::Vcopy) if label.starts_with("vcopy_to_multiple") => {
+            Some(Verb::Vcopy) if name.starts_with("vcopy_to_multiple") => {
                 self.sim_vcopy_to_multiple(i, op)
             }
-            Some(Verb::Vcopy) if label.starts_with("create_and_transclude") => {
+            Some(Verb::Vcopy) if name.starts_with("create_and_transclude") => {
                 self.sim_create_and_transclude(i, op)
             }
-            Some(Verb::Vcopy) => self.sim_vcopy(i, op, all, &label),
+            Some(Verb::Vcopy) => self.sim_vcopy(i, op, all, &name),
             Some(verb @ (Verb::Pivot | Verb::Swap | Verb::Rearrange)) => {
                 self.sim_rearrange(op, verb)
             }
@@ -646,7 +650,7 @@ impl Sim {
         let src = str_field(op, &["from", "source", "of", "original"])
             .and_then(|s| self.shadow.resolve_doc(s))
             .or_else(|| str_field(op, &["doc"]).and_then(|s| self.shadow.resolve_doc(s)))
-            .or_else(|| self.shadow.scoped());
+            .or_else(|| self.shadow.current());
         let (Some(src), Some(res)) = (src, result_str(op)) else { return };
         self.shadow.version(&src, &res);
         for key in ["doc", "name", "label"] {
@@ -702,7 +706,7 @@ impl Sim {
             return;
         }
         // Where the insert lands — re-aim, position, recorded-vspanset pad
-        // — is the one reading the translator applies
+        // — is the one reading the play pass applies
         // (`evidence::resolve_insert`). An insert that reading cannot place
         // changes nothing, as it executes nothing in the play pass.
         let Some(doc) = self.doc_ref(op, &["doc", "docid"]) else { return };
@@ -767,7 +771,7 @@ impl Sim {
     }
 
     fn sim_create_and_transclude(&mut self, i: usize, op: &Value) {
-        let src = self.shadow.resolve_doc("source").or_else(|| self.shadow.scoped());
+        let src = self.shadow.resolve_doc("source").or_else(|| self.shadow.current());
         let Some(src) = src else { return };
         let n = self.shadow.text_len(&src);
         if let Some(targets) = field(op, &["targets"]).and_then(Value::as_array) {
@@ -1027,7 +1031,7 @@ impl Sim {
     /// bound to `<name>` and inserts its text; the `link` spec grounds both
     /// endsets against the just-built content, then a later recorded follow
     /// result for the same link id (the golden's own evidence of the exact
-    /// endset extent) overrides the label-derived spans. `None` when the op
+    /// endset extent) overrides the spec-derived spans. `None` when the op
     /// carries no `<name>_text` keys (the clause grammar then gets its turn).
     fn parse_keyed_setup(&mut self, op: &Value, i: usize, all: &[Value]) -> Option<Vec<SetupStep>> {
         let o = op.as_object()?;
@@ -1162,7 +1166,7 @@ impl Sim {
         let src_span = field(op, &["source_span"]).and_then(span_dict);
         let src = self
             .shadow
-            .scoped()
+            .current()
             .filter(|d| self.shadow.text_len(d) > 0)
             .or_else(|| self.shadow.content_docs_except("").first().cloned());
         let (Some((1, ord, w)), Some(src)) = (src_span, src) else { return };
@@ -1192,14 +1196,14 @@ impl Sim {
         self.plans.insert(i, steps);
     }
 
-    fn sim_vcopy(&mut self, i: usize, op: &Value, all: &[Value], label: &str) {
+    fn sim_vcopy(&mut self, i: usize, op: &Value, all: &[Value], op_name: &str) {
         let to_raw = str_field(op, &["to", "dest", "target", "target_doc"]);
         // Explicit destination only — the register fallback waits until the
         // copied bytes are known, so forward evidence can aim first.
         // "end"/"start"/"end of doc" are position markers, not doc refs
         // (edgecases/vcopy_to_same_document).
         let explicit_dest: Option<String> = match to_raw {
-            Some(s) if is_position_marker(s) => self.shadow.scoped(),
+            Some(s) if is_position_marker(s) => self.shadow.current(),
             Some(s) => self.shadow.resolve_doc(s),
             None => str_field(op, &["doc", "docid"]).and_then(|s| self.shadow.resolve_doc(s)),
         };
@@ -1209,9 +1213,9 @@ impl Sim {
             |a| a.iter().filter_map(|v| v.as_str().map(str::to_string)).collect::<Vec<_>>(),
         );
         let is_macro = from_list.is_some()
-            || label.starts_with("vcopy_multiple")
-            || label.starts_with("vcopy_all")
-            || label.starts_with("vcopy_from_both");
+            || op_name.starts_with("vcopy_multiple")
+            || op_name.starts_with("vcopy_all")
+            || op_name.starts_with("vcopy_from_both");
         if is_macro {
             let Some(dest) = explicit_dest.or_else(|| self.doc_ref(op, &["doc", "docid"]))
             else {
@@ -1232,10 +1236,10 @@ impl Sim {
             return;
         }
 
-        // Ordinary vcopy: the source regions the translator reads, through
+        // Ordinary vcopy: the source regions the play pass reads, through
         // the same reading (`fields::vcopy_sources`), each contiguous
         // content-subspace region kept as a (doc, ord, width) spec. An op
-        // the translator cannot ground copies nothing here either.
+        // the play pass cannot ground copies nothing here either.
         let Ok(sources) = vcopy_sources(op, &self.shadow, &mut Vec::new()) else { return };
         let spec_list: Vec<(String, u64, u64)> = sources
             .into_iter()
@@ -1337,7 +1341,7 @@ impl Sim {
 
         // 2. Recorded pair landing exactly at the append position overrides
         //    the located source span (versions/cross_version_vcopy: the
-        //    compare records source ordinal 15 width 12 where the label
+        //    compare records source ordinal 15 width 12 where the described
         //    text located ordinal 20).
         if spec_list.len() == 1 {
             if let Some((_, s2, o2, w2)) = pairs.iter().find(|(t, _, _, _)| *t == o) {
@@ -1435,7 +1439,7 @@ impl Sim {
 
     /// Compare any full-content expectations this op carries against the
     /// shadow; record the first mismatch for inference. Recorded content is
-    /// read as the translator reads it (`fields::as_text`, `recorded_content`,
+    /// read as the play pass reads it (`fields::as_text`, `recorded_content`,
     /// `per_doc_replies`).
     fn check_probes(&mut self, op: &Value) {
         if let Some(map) = op.get("docs").and_then(Value::as_object) {
@@ -1459,26 +1463,26 @@ impl Sim {
         {
             return;
         }
-        let label = label_of(op).to_ascii_lowercase();
+        let name = op_name(op).to_ascii_lowercase();
         let recorded = if verb_of(op).is_some_and(Verb::writes_content) {
-            // The translator's post-write keys: a write's text is its argument.
+            // The play pass's post-write keys: a write's text is its argument.
             field(op, POST_WRITE_KEYS).and_then(expect_strings)
-        } else if matches!(verb_of(op), Some(Verb::Contents | Verb::Observe))
-            && (label.starts_with("content")
-                || label.starts_with("retrieve")
-                || label.starts_with("full_")
-                || label.contains("state")
-                || label.starts_with("after_")
-                || label.starts_with("verify")
+        } else if matches!(verb_of(op), Some(Verb::RetrieveContents | Verb::Observe))
+            && (name.starts_with("content")
+                || name.starts_with("retrieve")
+                || name.starts_with("full_")
+                || name.contains("state")
+                || name.starts_with("after_")
+                || name.starts_with("verify")
                 // A snapshot op WITH a content expectation is a contents
-                // probe of the named/scoped doc (isolation/delete_does_not_
-                // affect_other_documents seeds doc B only through its
-                // snapshots); content-less snapshots stay meta.
-                || label.starts_with("snapshot"))
+                // probe of the named doc, or the register's (isolation/
+                // delete_does_not_affect_other_documents seeds doc B only
+                // through its snapshots); content-less snapshots stay meta.
+                || name.starts_with("snapshot"))
         {
             // Per-document replies probe each document they name — save a
             // reply strictly inside its document's content, which is the
-            // translator's narrowed read, not the whole document
+            // play pass's narrowed read, not the whole document
             // (ispan_partial_overlap's `source: ["CDEFG"]`).
             let replies = per_doc_replies(op, &self.shadow);
             if !replies.is_empty() {
@@ -1501,8 +1505,8 @@ impl Sim {
         // "<VSpan …>" out of the seeds.
         let Some(text) = recorded.as_deref().and_then(as_text) else { return };
         // A full_* probe reads the doc the last CONTENT write touched
-        // (mirror of the translator's `full-probe-targets-last-write`).
-        if label.starts_with("full_") && str_field(op, &["doc", "docid"]).is_none() {
+        // (mirror of the play pass's `full-probe-targets-last-write`).
+        if name.starts_with("full_") && str_field(op, &["doc", "docid"]).is_none() {
             if let Some(d) = self.shadow.last_written.clone().filter(|d| self.shadow.knows(d)) {
                 self.probe(&d, &text);
                 return;
@@ -1564,7 +1568,7 @@ fn follow_landing_text(ops: &[Value], shadow: &Shadow, doc: &str) -> Option<Stri
 fn endset_anchored_seed(ops: &[Value], shadow: &Shadow, doc: &str) -> Option<Vec<u8>> {
     let mut spans: Vec<(u64, u64)> = Vec::new();
     for op in ops {
-        if verb_of(op) != Some(Verb::Endsets) {
+        if verb_of(op) != Some(Verb::RetrieveEndsets) {
             continue;
         }
         for key in ["source", "from", "target", "to"] {

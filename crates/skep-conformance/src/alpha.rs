@@ -3,7 +3,7 @@
 //! order, and granfilade gaps differ from skep's genesis and gap-free
 //! frontier by design.
 //!
-//! Three α-failures are findings, each with its own report class:
+//! Three α-failures are findings, each of its own kind:
 //! * `alpha-double-bind-golden` — a golden address that would bind to two
 //!   different skep addresses;
 //! * `alpha-never-bound` — a reference to a never-bound address;
@@ -19,7 +19,7 @@ use crate::tum::{addr_str, parse_dotted};
 #[derive(Clone, Debug)]
 pub struct AlphaFinding {
     /// `alpha-double-bind-golden` | `alpha-never-bound` | `alpha-double-bind-skep`.
-    pub class: &'static str,
+    pub kind: &'static str,
     pub detail: String,
 }
 
@@ -56,7 +56,7 @@ impl Alpha {
         if let Some(prev) = self.fwd.get(golden) {
             if addr_str(prev) != sk {
                 self.findings.push(AlphaFinding {
-                    class: "alpha-double-bind-golden",
+                    kind: "alpha-double-bind-golden",
                     detail: format!(
                         "golden {golden} already ↦ {}, now offered {sk}",
                         addr_str(prev)
@@ -68,7 +68,7 @@ impl Alpha {
         if let Some(prev_golden) = self.rev.get(&sk) {
             if prev_golden != golden {
                 self.findings.push(AlphaFinding {
-                    class: "alpha-double-bind-skep",
+                    kind: "alpha-double-bind-skep",
                     detail: format!("skep {sk} already ↦ golden {prev_golden}, now offered {golden}"),
                 });
                 return;
@@ -90,7 +90,7 @@ impl Alpha {
         }
         if parse_dotted(golden).is_some() {
             self.findings.push(AlphaFinding {
-                class: "alpha-never-bound",
+                kind: "alpha-never-bound",
                 detail: format!("reference to never-bound golden address {golden}"),
             });
         }
@@ -142,12 +142,12 @@ impl Alpha {
         self.fwd.get(golden).cloned()
     }
 
-    /// Is this skep address already bound to some golden name?
+    /// Is this skep address already bound to some golden address?
     pub fn is_bound_skep(&self, a: &Address) -> bool {
         self.rev.contains_key(&addr_str(a))
     }
 
-    /// Render a skep address for the report: its golden name when bound,
+    /// Render a skep address for the report: its golden address when bound,
     /// else the REVERSE of the element lift — a skep ELEMENT `docid·0·local`
     /// whose docid is rev-bound renders as `golden(docid)·0·local` (round-5
     /// item: a skep-side address must reverse-translate through the
@@ -209,7 +209,7 @@ mod tests {
         assert!(alpha.findings.is_empty());
         assert_eq!(alpha.translate("1.1.0.1.0.1.1"), None, "a never-minted version");
         assert_eq!(alpha.findings.len(), 1);
-        assert_eq!(alpha.findings[0].class, "alpha-never-bound");
+        assert_eq!(alpha.findings[0].kind, "alpha-never-bound");
 
         assert_eq!(alpha.render_skep(&a(&[1, 0, 1, 0, 3, 0, 2, 1])), "1.1.0.1.0.1.0.2.1");
         assert_eq!(alpha.render_skep(&a(&[1, 0, 1, 0, 1, 1])), "skep:1.0.1.0.1.1");

@@ -1,7 +1,7 @@
 //! Following links: `follow_link` — a slot projected into the document the
 //! golden names, or the recorded endset rendered by identity (operator
 //! ruling 11) — and the traversal macros, whose hops resolve from the
-//! harness's link registry rather than by text re-search.
+//! shadow's links rather than by text re-search.
 
 use serde_json::Value;
 
@@ -10,12 +10,12 @@ use skep_febe::{Op, Response};
 use skep_retrieval::{DeliveryItem, Spec};
 
 use super::{
-    compared_nothing, elem_range, inexpressible, refusal, settle_refused, Cx, ImageRow, Tally,
+    compared_nothing, elem_range, inexpressible, refusal, settle_unaccepted, Cx, ImageRow, Tally,
 };
-use crate::allowlist::Grants;
+use crate::allowlist::Adjustments;
 use crate::compare::{compare_addr_sets, compare_spansets};
 use crate::fields::{
-    expect_spans_raw, expect_strings, expected_failure, field, label_of, parse_python_spec,
+    expect_spans_raw, expect_strings, expected_failure, field, op_name, parse_python_spec,
     str_field, vspec_dict, DocSpans, RawSpan,
 };
 use crate::outcome::{OpOutcome, Status};
@@ -46,9 +46,14 @@ fn slot_of(name: &str) -> Option<usize> {
     None
 }
 
-pub(super) fn h_follow_link(cx: &mut Cx, op: &Value, out: &mut OpOutcome, grants: &Grants) {
+pub(super) fn h_follow_link(
+    cx: &mut Cx,
+    op: &Value,
+    out: &mut OpOutcome,
+    adjustments: &Adjustments,
+) {
     out.adaptations.push("follow_as_projection".into());
-    let label = label_of(op);
+    let name = op_name(op);
     let explicit_slot = str_field(op, &["end", "direction", "linkend", "which"])
         .and_then(|e| {
             if e.contains("->") {
@@ -59,11 +64,11 @@ pub(super) fn h_follow_link(cx: &mut Cx, op: &Value, out: &mut OpOutcome, grants
             }
         })
         .or_else(|| {
-            if label.contains("source") {
+            if name.contains("source") {
                 Some(1)
-            } else if label.contains("target") {
+            } else if name.contains("target") {
                 Some(2)
-            } else if label.contains("type") {
+            } else if name.contains("type") {
                 Some(3)
             } else {
                 None
@@ -91,7 +96,7 @@ pub(super) fn h_follow_link(cx: &mut Cx, op: &Value, out: &mut OpOutcome, grants
         return;
     };
     let Some(link) = cx.alpha.translate(&link_golden) else {
-        out.unresolvable(format!("follow of unresolvable link {link_golden}"));
+        out.never_bound(format!("follow of never-bound link {link_golden}"));
         return;
     };
     let Some(expected) = field(op, &["result", "content", "contents", "expected", "spans"]) else {
@@ -108,9 +113,9 @@ pub(super) fn h_follow_link(cx: &mut Cx, op: &Value, out: &mut OpOutcome, grants
                 }
                 Response::Follow { result: Ok(set), .. } => {
                     // Types-doc spans are harness infrastructure (policy
-                    // `type_registry`) — a marker-typed link's slot 3 holds
-                    // only the registry position, which the golden cannot
-                    // speak; excluded before judging.
+                    // `types_document`) — a marker-typed link's slot 3 holds
+                    // only the types-document position, which the golden
+                    // cannot speak; excluded before judging.
                     let real = set
                         .iter()
                         .filter(|sp| {
@@ -120,11 +125,11 @@ pub(super) fn h_follow_link(cx: &mut Cx, op: &Value, out: &mut OpOutcome, grants
                         })
                         .count();
                     if real == 0 {
-                        out.adaptations.push("type_registry".into());
+                        out.adaptations.push("types_document".into());
                         out.agree("expected-failure");
                         out.add_note(
                             "both sides surface nothing followable (green: ?, skep: empty or \
-                             registry-only endset)"
+                             types-document-only endset)"
                                 .into(),
                         );
                     } else {
@@ -135,7 +140,7 @@ pub(super) fn h_follow_link(cx: &mut Cx, op: &Value, out: &mut OpOutcome, grants
                         );
                     }
                 }
-                other => settle_refused(out, Some(err), &other),
+                other => settle_unaccepted(out, Some(err), &other),
             }
             return;
         }
@@ -164,7 +169,7 @@ pub(super) fn h_follow_link(cx: &mut Cx, op: &Value, out: &mut OpOutcome, grants
             }
         }
     }
-    follow_compare(cx, out, grants, &link, slot, expected);
+    follow_compare(cx, out, adjustments, &link, slot, expected);
 }
 
 /// Project a link slot and compare against a recorded expectation (vspec
@@ -172,7 +177,7 @@ pub(super) fn h_follow_link(cx: &mut Cx, op: &Value, out: &mut OpOutcome, grants
 fn follow_compare(
     cx: &mut Cx,
     out: &mut OpOutcome,
-    grants: &Grants,
+    adjustments: &Adjustments,
     link: &skep_address::Address,
     slot: usize,
     expected: &Value,
@@ -192,7 +197,7 @@ fn follow_compare(
             let mut tally = Tally::default();
             for (docid, spans) in vspecs {
                 let Some(d) = cx.alpha.translate(&docid) else {
-                    tally.differ(format!("{docid}: spans"), format!("{docid}: unresolvable"));
+                    tally.differ(format!("{docid}: spans"), format!("{docid}: never bound"));
                     continue;
                 };
                 let want: Vec<RawSpan> = spans
@@ -202,7 +207,7 @@ fn follow_compare(
                 let label = format!("{docid}: ");
                 match project(cx, &d) {
                     Ok(set) => tally.judge(
-                        compare_spansets(&want, &set, grants, &mut out.adaptations),
+                        compare_spansets(&want, &set, adjustments, &mut out.adaptations),
                         &label,
                         &label,
                     ),
@@ -221,10 +226,10 @@ fn follow_compare(
             let target = cx.alpha.translate(&docid);
             let projected = match target {
                 Some(d) => project(cx, &d),
-                None => Err("unresolvable".to_string()),
+                None => Err("never bound".to_string()),
             };
             match projected {
-                Ok(set) => match compare_spansets(&spans, &set, grants, &mut out.adaptations) {
+                Ok(set) => match compare_spansets(&spans, &set, adjustments, &mut out.adaptations) {
                     Ok(()) => out.agree("projection"),
                     Err((e, a)) => out.disagree("projection", e, a),
                 },
@@ -379,11 +384,11 @@ impl Cx<'_> {
 /// this family without a step list is a single follow (follow_links_target).
 ///
 /// Hop links resolve from the WORLD (policy `traverse-hops-from-world`):
-/// arrow-keyed edges first, then the shadow's link registry — the link
+/// arrow-keyed edges first, then the shadow's links — the link
 /// whose FROM endset lives in the hop's from-doc (narrowed by the to-doc
 /// when the entry names one). Text is never re-searched to find a link.
-pub(super) fn h_traverse(cx: &mut Cx, op: &Value, out: &mut OpOutcome, grants: &Grants) {
-    let label = label_of(op).to_ascii_lowercase();
+pub(super) fn h_traverse(cx: &mut Cx, op: &Value, out: &mut OpOutcome, adjustments: &Adjustments) {
+    let name = op_name(op).to_ascii_lowercase();
     let entries = field(op, &["path", "traversal", "results", "steps"])
         .and_then(Value::as_array)
         .or_else(|| {
@@ -394,11 +399,11 @@ pub(super) fn h_traverse(cx: &mut Cx, op: &Value, out: &mut OpOutcome, grants: &
                 .filter(|a| a.iter().all(|v| v.is_object() && vspec_dict(v).is_none()))
         });
     let Some(entries) = entries else {
-        h_follow_link(cx, op, out, grants);
+        h_follow_link(cx, op, out, adjustments);
         return;
     };
-    let reverse = label.contains("reverse");
-    let default_slot = if label.contains("source") || reverse { 1 } else { 2 };
+    let reverse = name.contains("reverse");
+    let default_slot = if name.contains("source") || reverse { 1 } else { 2 };
     out.adaptations.push("traverse-hops-from-world".into());
     let mut tally = Tally::default();
     // The traversal's current position (a golden doc) and the last link
@@ -461,7 +466,7 @@ pub(super) fn h_traverse(cx: &mut Cx, op: &Value, out: &mut OpOutcome, grants: &
                         arr.iter().filter_map(|x| x.as_str().map(str::to_string)).collect();
                     let rig = &*cx.rig;
                     let mut adaptations = std::mem::take(&mut out.adaptations);
-                    let verdict = compare_addr_sets(
+                    let comparison = compare_addr_sets(
                         &want,
                         &found,
                         cx.alpha,
@@ -470,7 +475,7 @@ pub(super) fn h_traverse(cx: &mut Cx, op: &Value, out: &mut OpOutcome, grants: &
                     );
                     out.adaptations = adaptations;
                     let label = format!("{atdoc}: ");
-                    tally.judge(verdict, &label, &label);
+                    tally.judge(comparison, &label, &label);
                 }
             }
             // A links_found entry may still carry landing content below.
@@ -479,8 +484,8 @@ pub(super) fn h_traverse(cx: &mut Cx, op: &Value, out: &mut OpOutcome, grants: &
             }
         }
 
-        // The link this hop follows: recorded arrows first, then the world
-        // registry (links FROM the hop's doc, narrowed by its to-doc).
+        // The link this hop follows: recorded arrows first, then the
+        // shadow's links (links FROM the hop's doc, narrowed by its to-doc).
         let link_golden: Option<String> = e
             .get("link")
             .and_then(Value::as_str)
@@ -541,11 +546,11 @@ pub(super) fn h_traverse(cx: &mut Cx, op: &Value, out: &mut OpOutcome, grants: &
             continue;
         };
         let Some(link) = cx.alpha.translate(&link_golden) else {
-            tally.differ(link_golden.clone(), "unresolvable link".into());
+            tally.differ(link_golden.clone(), "never-bound link".into());
             continue;
         };
-        let mut hop = OpOutcome::new(out.index, &out.label);
-        follow_compare(cx, &mut hop, &Grants::default(), &link, slot, expected);
+        let mut hop = OpOutcome::new(out.index, &out.op_name);
+        follow_compare(cx, &mut hop, &Adjustments::default(), &link, slot, expected);
         match hop.status {
             Status::Disagreed => tally.differ(
                 format!("{link_golden}: {}", hop.expected.unwrap_or_default()),

@@ -142,17 +142,17 @@ pub(super) type SharedPair = (String, u64, String, u64, u64);
 /// Harvest every recorded comparison pair in the scenario, both shapes:
 /// entries `{source: "A", shared: [{target: {…}, source: {…}}]}` inside a
 /// results/comparisons array (content/vcopy_from_multiple_documents — the
-/// dest is the scenario's target-role doc), and compare ops labeled
-/// `"<x>_vs_<y>"` whose top-level `shared` items key the sides `a`/`b`
-/// positionally (identity/identity_mixed_sources).
+/// dest is the scenario's target-role doc), and compare ops whose `label`
+/// field is `"<x>_vs_<y>"` and whose top-level `shared` items key the sides
+/// `a`/`b` positionally (identity/identity_mixed_sources).
 pub(super) fn comparison_pairs(all: &[Value], shadow: &Shadow) -> Vec<SharedPair> {
     let mut out: Vec<SharedPair> = Vec::new();
     for op in all {
-        if verb_of(op) != Some(Verb::Compare) {
+        if verb_of(op) != Some(Verb::CompareVersions) {
             continue;
         }
         if let Some(entries) = field(op, &["results", "comparisons"]).and_then(Value::as_array) {
-            let dest = shadow.resolve_doc("target").or_else(|| shadow.scoped());
+            let dest = shadow.resolve_doc("target").or_else(|| shadow.current());
             for entry in entries {
                 let (Some(dest), Some(src)) = (
                     dest.clone(),
@@ -173,7 +173,7 @@ pub(super) fn comparison_pairs(all: &[Value], shadow: &Shadow) -> Vec<SharedPair
             }
             continue;
         }
-        // "<x>_vs_<y>" label + top-level shared, sides keyed a/b.
+        // A "<x>_vs_<y>" `label` field + top-level shared, sides keyed a/b.
         if let Some((dx, dy)) = str_field(op, &["label"])
             .and_then(|l| l.split_once("_vs_"))
             .and_then(|(x, y)| Some((shadow.resolve_doc(x)?, shadow.resolve_doc(y)?)))

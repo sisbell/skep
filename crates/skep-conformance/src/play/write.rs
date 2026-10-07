@@ -1,7 +1,7 @@
 //! Content writes: insert (with its distributed, looped and interior-typing
 //! forms), delete, vcopy, and the rearranges (pivot, swap). Each is carried
 //! out through the `Cx` world-change methods, so the shadow follows the
-//! recorded reality, never skep's verdict; the inserts, deletes and vcopys
+//! recorded reality, never skep's answer; the inserts, deletes and vcopys
 //! then compare the post-write state the golden recorded, where it recorded
 //! one. A write that issues several requests issues every one of them
 //! whatever skep answers an earlier one; the first failure is the op's.
@@ -15,9 +15,9 @@ use skep_febe::Response;
 
 use super::{
     create_one, inexpressible, plan_failed, probe_state, refusal, run_plan, settle_accepted,
-    settle_refused, Cx, Probe, Tally,
+    settle_unaccepted, Cx, Probe, Tally,
 };
-use crate::allowlist::Grants;
+use crate::allowlist::Adjustments;
 use crate::compare::compare_content;
 use crate::evidence::{
     delete_is_noop, next_content_probe, resolve_delete_span, resolve_insert, took_effect,
@@ -34,7 +34,7 @@ pub(super) fn h_insert(
     index: usize,
     op: &Value,
     out: &mut OpOutcome,
-    grants: &Grants,
+    adjustments: &Adjustments,
 ) {
     let recorded = took_effect(op);
     // insert_all + texts: one text per created doc, creation order (policy
@@ -51,7 +51,7 @@ pub(super) fn h_insert(
                 _ if failed => {}
                 Err(_) => {
                     failed = true;
-                    out.unresolvable(format!("insert_all target {docid} unresolvable"));
+                    out.never_bound(format!("insert_all target {docid} never bound"));
                 }
                 Ok(Response::AckAddr { .. }) => {}
                 Ok(r) => {
@@ -85,20 +85,25 @@ pub(super) fn h_insert(
     }
     let xf = expected_failure(op);
     let Ok(r) = cx.insert(&landing.doc, landing.sub, landing.ord, &landing.bytes, recorded) else {
-        out.unresolvable(format!("insert into unresolvable doc {}", landing.doc));
+        out.never_bound(format!("insert into never-bound doc {}", landing.doc));
         return;
     };
     match r {
         Response::AckAddr { .. } => {
             if settle_accepted(out, xf) {
-                probe_state(cx, op, out, grants, &landing.doc, Probe::PostWrite);
+                probe_state(cx, op, out, adjustments, &landing.doc, Probe::PostWrite);
             }
         }
-        r => settle_refused(out, xf, &r),
+        r => settle_unaccepted(out, xf, &r),
     }
 }
 
-pub(super) fn h_insert_loop(cx: &mut Cx, op: &Value, out: &mut OpOutcome, grants: &Grants) {
+pub(super) fn h_insert_loop(
+    cx: &mut Cx,
+    op: &Value,
+    out: &mut OpOutcome,
+    adjustments: &Adjustments,
+) {
     let Some(doc) = cx.doc_arg(op, out, &["doc", "docid"]) else {
         inexpressible(out, "insert_loop with no document in scope".into());
         return;
@@ -118,7 +123,7 @@ pub(super) fn h_insert_loop(cx: &mut Cx, op: &Value, out: &mut OpOutcome, grants
         match cx.insert(&doc, 1, at, &[b], recorded) {
             Err(_) => {
                 // No α-image: nothing further reaches skep or the shadow.
-                out.unresolvable(format!("insert_loop into unresolvable doc {doc}"));
+                out.never_bound(format!("insert_loop into never-bound doc {doc}"));
                 return;
             }
             Ok(Response::AckAddr { .. }) => {}
@@ -134,10 +139,15 @@ pub(super) fn h_insert_loop(cx: &mut Cx, op: &Value, out: &mut OpOutcome, grants
     if failed {
         return;
     }
-    probe_state(cx, op, out, grants, &doc, Probe::PostWrite);
+    probe_state(cx, op, out, adjustments, &doc, Probe::PostWrite);
 }
 
-pub(super) fn h_interior_typing(cx: &mut Cx, op: &Value, out: &mut OpOutcome, grants: &Grants) {
+pub(super) fn h_interior_typing(
+    cx: &mut Cx,
+    op: &Value,
+    out: &mut OpOutcome,
+    adjustments: &Adjustments,
+) {
     let Some(doc) = cx.doc_arg(op, out, &["doc", "docid"]) else {
         inexpressible(out, "interior_typing with no document in scope".into());
         return;
@@ -164,7 +174,7 @@ pub(super) fn h_interior_typing(cx: &mut Cx, op: &Value, out: &mut OpOutcome, gr
         let resp = match cx.insert(&doc, 1, ord, ch.as_bytes(), recorded) {
             Ok(resp) => resp,
             Err(_) => {
-                out.unresolvable(format!("interior_typing into unresolvable doc {doc}"));
+                out.never_bound(format!("interior_typing into never-bound doc {doc}"));
                 return;
             }
         };
@@ -173,8 +183,8 @@ pub(super) fn h_interior_typing(cx: &mut Cx, op: &Value, out: &mut OpOutcome, gr
             continue;
         }
         // Per-step probes: vspanset + contents recorded per character.
-        let mut step = OpOutcome::new(out.index, &out.label);
-        probe_state(cx, r, &mut step, grants, &doc, Probe::Step);
+        let mut step = OpOutcome::new(out.index, &out.op_name);
+        probe_state(cx, r, &mut step, adjustments, &doc, Probe::Step);
         match step.status {
             Status::Disagreed => tally.differ(
                 format!("step '{ch}': {}", step.expected.unwrap_or_default()),
@@ -192,7 +202,7 @@ pub(super) fn h_delete(
     index: usize,
     op: &Value,
     out: &mut OpOutcome,
-    grants: &Grants,
+    adjustments: &Adjustments,
     all: bool,
 ) {
     let Some(doc) = cx.doc_arg(op, out, &["doc", "docid"]) else {
@@ -218,8 +228,9 @@ pub(super) fn h_delete(
         // Skep cannot reproduce that split without violating the ruled
         // subspace-confinement invariant (udanax-no-subspace-confinement,
         // adjudication/decisions.md ruling 2), so the harness keeps the
-        // content no-op and leaves the later link-findability divergence
-        // raw for adjudication.
+        // content no-op, and the later link-findability divergence stands as
+        // recorded — ruled ruling-10-i-coverage-findability (decisions.md
+        // ruling 10).
         let links_vanish = cx.shadow.link_count(&doc) > 0
             && cx.ops[index + 1..].iter().any(|later| {
                 if verb_of(later) != Some(Verb::FindLinks) {
@@ -240,8 +251,8 @@ pub(super) fn h_delete(
                  unfindable (count 0) while the content probe still reads the full text — \
                  udanax's remove deleted link-subspace occupancy only; skep cannot reproduce \
                  the split without violating the ruled subspace-confinement invariant \
-                 (decisions.md ruling 2), so the link-findability divergence downstream is \
-                 left raw for adjudication",
+                 (decisions.md ruling 2), so the link-findability divergence downstream \
+                 stands — ruled ruling-10-i-coverage-findability (decisions.md ruling 10)",
             );
         }
         out.note = Some(note);
@@ -282,20 +293,26 @@ pub(super) fn h_delete(
         return;
     };
     let Ok(r) = cx.delete(&doc, sub, ord, width, took_effect(op)) else {
-        out.unresolvable(format!("delete in unresolvable doc {doc}"));
+        out.never_bound(format!("delete in never-bound doc {doc}"));
         return;
     };
     match r {
         Response::Ack { .. } => {
             if settle_accepted(out, xf) {
-                probe_state(cx, op, out, grants, &doc, Probe::PostWrite);
+                probe_state(cx, op, out, adjustments, &doc, Probe::PostWrite);
             }
         }
-        r => settle_refused(out, xf, &r),
+        r => settle_unaccepted(out, xf, &r),
     }
 }
 
-pub(super) fn h_vcopy(cx: &mut Cx, index: usize, op: &Value, out: &mut OpOutcome, grants: &Grants) {
+pub(super) fn h_vcopy(
+    cx: &mut Cx,
+    index: usize,
+    op: &Value,
+    out: &mut OpOutcome,
+    adjustments: &Adjustments,
+) {
     let recorded = took_effect(op);
     // Pre-pass expansion plans cover the macro forms (vcopy_multiple /
     // vcopy_all / vcopy_from_both / vcopy_to_multiple / create_and_
@@ -427,21 +444,21 @@ pub(super) fn h_vcopy(cx: &mut Cx, index: usize, op: &Value, out: &mut OpOutcome
     let r = match cx.copy(&dest, ord, &sources, recorded) {
         Ok(r) => r,
         Err(g) if g == dest && sources.iter().all(|s| s.doc != g) => {
-            out.unresolvable(format!("vcopy destination {dest} unresolvable"));
+            out.never_bound(format!("vcopy destination {dest} never bound"));
             return;
         }
         Err(g) => {
-            out.unresolvable(format!("vcopy source doc {g} unresolvable"));
+            out.never_bound(format!("vcopy source doc {g} never bound"));
             return;
         }
     };
     match r {
         Response::Ack { .. } => {
             if settle_accepted(out, xf) {
-                probe_state(cx, op, out, grants, &dest, Probe::PostWrite);
+                probe_state(cx, op, out, adjustments, &dest, Probe::PostWrite);
             }
         }
-        r => settle_refused(out, xf, &r),
+        r => settle_unaccepted(out, xf, &r),
     }
 }
 
@@ -478,7 +495,7 @@ pub(super) fn h_pivot_swap(cx: &mut Cx, op: &Value, out: &mut OpOutcome, pivot: 
     }
     let xf = expected_failure(op);
     let Ok(r) = cx.rearrange(&doc, &cuts, took_effect(op)) else {
-        out.unresolvable(format!("rearrange in unresolvable doc {doc}"));
+        out.never_bound(format!("rearrange in never-bound doc {doc}"));
         return;
     };
     match r {
@@ -487,6 +504,6 @@ pub(super) fn h_pivot_swap(cx: &mut Cx, op: &Value, out: &mut OpOutcome, pivot: 
                 out.status = Status::NotCompared;
             }
         }
-        r => settle_refused(out, xf, &r),
+        r => settle_unaccepted(out, xf, &r),
     }
 }

@@ -4,16 +4,20 @@
 //! `vcopy`" finds one function that says so. Every adaptation policy is
 //! named and recorded per-op; a label or field shape that cannot be
 //! translated is classified `inexpressible` with the reason recorded —
-//! never silently skipped.
+//! never silently skipped — and so is a read whose recorded answer no
+//! reader reaches (`compared_nothing`, the unread keys named): a read ends
+//! `NotCompared` only when its recording kept no answer.
 //!
 //! Layout: this file is the dispatch — `run_op`, over the verbs
 //! `fields::normalize` reads a label as — and what more than one verb family
 //! calls: the `Cx` context with its reads over the rig and its world-change
-//! methods (the shadow's one owner in the play pass), the outcome helpers
-//! and the `Tally` an op judged part by part settles through, document
-//! creation and plan execution, endset sides, and the state probe. Each
-//! family's handlers are a child module holding the helpers no other family
-//! uses; a child sees this file's private items and none of its siblings'.
+//! methods (the shadow's one owner in the play pass), the outcome helpers —
+//! skep's answer settled against the golden's verdict (`settle_accepted`,
+//! `settle_refused`), the `Tally` an op judged part by part settles
+//! through, and the end of a read that compared nothing — document creation
+//! and plan execution, endset sides, and the state probe. Each family's
+//! handlers are a child module holding the helpers no other family uses; a
+//! child sees this file's private items and none of its siblings'.
 //!
 //! ## Adaptation policies (each recorded per-op when applied)
 //!
@@ -105,7 +109,8 @@
 //!   move; a wrong pairing surfaces later as a double-bind finding).
 //! * `contents:content-subspace` — whole-document retrieves read the
 //!   CONTENT subspace only, matching udanax's retrieve_contents (its
-//!   recorded results never include link-subspace items).
+//!   recorded results never include link-subspace items) — all of it, as
+//!   skep's own extent reports it, never sized from the recording.
 //! * `contents:both-subspaces` — a retrieve whose recorded result lists a
 //!   link address alongside text read the link subspace too, as a second
 //!   RetrieveV so a link-side absence localizes; the link addresses compare
@@ -158,9 +163,11 @@
 //!   destination) re-grounds against the content-holding docs excluding the
 //!   destination; the recorded post-state confirms the span
 //!   (internal/ispan_partial_overlap's "positions 3-7 (CDEFG)").
-//! * `contents:per-doc-keyed` — `<docname>: [strings]` fields are the
-//!   recorded per-document replies of one retrieve (ispan_partial_overlap's
-//!   `source:/dest:` arrays; the `expected` string alongside is prose).
+//! * `contents:per-doc-keyed` — `<docname>: [strings]` fields, or
+//!   `<docname>_content: [strings]`, are the recorded per-document replies
+//!   of one retrieve or snapshot (ispan_partial_overlap's `source:/dest:`
+//!   arrays, the `expected` string alongside being prose;
+//!   cross_document_transclusion_isolation's `A_content`/`C_content`).
 //! * `read-span-from-recorded-strings` — a per-doc-keyed reply that is a
 //!   proper substring of the doc's shadow content locates in the SHADOW
 //!   (golden-side data only) and that span is read from skep — the script's
@@ -179,6 +186,22 @@
 //!   scenario's own probes and recorded comparison pairs (the round-4
 //!   unrecorded-prefix cluster); surfaced in the groundings list and
 //!   executed as expansion plans.
+//! * `endsets-bare-result-as-from` — a retrieve_endsets whose `result` is a
+//!   bare vspec list, naming no slot, recorded the FROM endset: each of the
+//!   three recordings of this shape (links/delete_at_root_origin_height_1,
+//!   delete_from_middle_affects_later_links, delete_width_larger_than_
+//!   content) lists its link's source span, never its target.
+//! * `vspan-count-by-role` — a `<role>_vspan_count` field counts the spans
+//!   of the role document's vspanset (internal/ispan_consolidation_bulk's
+//!   `source_vspan_count`, `dest_vspan_count`).
+//! * `poom-empty` — `poom_empty: true` (false) records that the document's
+//!   POOM — udanax's V-space arrangement — is (is not) empty: compared as
+//!   skep's vspanset being empty (bert/bert_failure_leaves_ispace_
+//!   corruption).
+//! * `identity-pairs-by-position` — a compare over `positions` with a
+//!   `results` map `{"i_j": bool}` records whether positions i and j (1-based
+//!   into the list) share their I-address: each pair compared through the
+//!   positions' live images (internal/internal_transclusion_multiple_copies).
 //!
 //! ## Round-7 policies (the 34-scenario corpus extension)
 //!
@@ -227,24 +250,24 @@ use std::collections::BTreeMap;
 
 use serde_json::Value;
 
-use skep_address::Nat;
+use skep_address::{Nat, Span};
 use skep_arrangement::{Run, VPos, VSpec};
 use skep_content::Val;
-use skep_febe::{Deposit, Op, Response, SlotArg};
+use skep_febe::{Deposit, Op, RejectCode, Response, SlotArg};
 use skep_links::Endset;
 use skep_retrieval::{DeliveryItem, Spec};
 
 use crate::allowlist::Grants;
 use crate::alpha::Alpha;
 use crate::compare::{
-    collapsed_subspace_shape, compare_content, compare_expected_failure, compare_spansets,
-    Comparison, COLLAPSED_SUBSPACE_ANALYSIS,
+    collapsed_subspace_shape, compare_content, compare_spansets, Comparison,
+    COLLAPSED_SUBSPACE_ANALYSIS,
 };
 use crate::deletions::Deletions;
 use crate::fields::{
-    self, client_side_failure, cuts_of, doc_from_label, expect_spans_raw, expect_strings, field,
-    harvest_spanset, label_of, locate, normalize, span_dict, str_field, vspec_dict, CopySource,
-    DocSpans, Verb,
+    aim_doc, as_text, client_side_failure, cuts_of, expect_spans_raw, expect_strings, field,
+    harvest_spanset, label_of, locate, normalize, recorded_content, span_dict, str_field,
+    vspec_dict, CopySource, DocAim, DocSpans, Verb, ANNOTATION_KEYS, POST_WRITE_KEYS,
 };
 use crate::ground::SetupStep;
 use crate::harness::Rig;
@@ -292,16 +315,6 @@ pub struct Cx<'a> {
 
 // ──────────────────────────── small shared bits ────────────────────────────
 
-fn fail_response(out: &mut OpOutcome, comparator: &str, expected: &str, r: &Response) {
-    out.status = Status::Disagreed;
-    out.comparator = Some(comparator.to_string());
-    out.expected = Some(expected.to_string());
-    out.actual = Some(match r {
-        Response::Rejected(rej) => format!("Rejected({:?})", rej.code),
-        _ => "unexpected response shape".to_string(),
-    });
-}
-
 fn inexpressible(out: &mut OpOutcome, reason: String) {
     out.status = Status::Inexpressible;
     // Keep any resolution note already attached (doc_arg's unresolvable-
@@ -312,10 +325,53 @@ fn inexpressible(out: &mut OpOutcome, reason: String) {
     });
 }
 
-fn rejection_code(r: &Response) -> Option<String> {
+/// An answer that is not the op's success answer, as the report renders
+/// it: `Rejected(code)` for a refusal, else that the answer's shape lies
+/// outside the op's contract.
+fn refusal(r: &Response) -> String {
     match r {
-        Response::Rejected(rej) => Some(format!("{:?}", rej.code)),
-        _ => None,
+        Response::Rejected(rej) => format!("Rejected({:?})", rej.code),
+        _ => "unexpected response shape".to_string(),
+    }
+}
+
+/// Is skep's answer a refusal with one of `codes`?
+fn refused_with(r: &Response, codes: &[RejectCode]) -> bool {
+    matches!(r, Response::Rejected(rej) if codes.contains(&rej.code))
+}
+
+/// The refusals a document's extent read (RETRIEVEDOCVSPAN, …VSPANSET)
+/// answers an empty document with — skep's encoding of "nothing there", as
+/// udanax's zero span is its own (documents/retrieve_vspan_empty).
+const EXTENT_ABSENT: &[RejectCode] = &[
+    RejectCode::RangeNotPresent,
+    RejectCode::EmptySubspace,
+    RejectCode::NoSuchSubspace,
+    RejectCode::EmptyResult,
+    RejectCode::NotArranged,
+];
+
+/// The end of a READ that compared nothing. A read exists to observe, so
+/// each non-null field it carries is one its handler reads (`reads`: its
+/// arguments, plus any expectation key it deliberately set aside — an id
+/// map, an address list), an annotation ([`ANNOTATION_KEYS`]), or an answer
+/// the handler cannot read. Any of the last leaves the op inexpressible,
+/// the keys named ("not read: `result`"); `NotCompared`, which no verdict
+/// fails on, is left only for a read whose recording kept no answer.
+fn compared_nothing(out: &mut OpOutcome, op: &Value, reads: &[&str]) {
+    let unread: Vec<String> = op
+        .as_object()
+        .into_iter()
+        .flatten()
+        .filter(|(k, v)| {
+            !v.is_null() && !reads.contains(&k.as_str()) && !ANNOTATION_KEYS.contains(&k.as_str())
+        })
+        .map(|(k, _)| format!("`{k}`"))
+        .collect();
+    if unread.is_empty() {
+        out.status = Status::NotCompared;
+    } else {
+        inexpressible(out, format!("not read: {}", unread.join(", ")));
     }
 }
 
@@ -332,9 +388,8 @@ fn joint_absence(cx: &Cx, out: &mut OpOutcome, xf: &Option<String>, docref: &str
         return false;
     }
     out.adaptations.push("joint-absence".into());
-    out.status = Status::Agreed;
-    out.comparator = Some("expected-failure".into());
-    out.note = Some(format!(
+    out.agree("expected-failure");
+    out.add_note(format!(
         "golden recorded failure and `{docref}` was never created — no α-image, nothing to \
          address on skep; both systems refuse the object"
     ));
@@ -345,36 +400,41 @@ fn vpos(sub: u64, ord: u64) -> VPos {
     VPos { subspace: Nat::from(sub), ordinal: Nat::from(ord) }
 }
 
-/// Shared post-execution verdict for ops whose only comparable aspect is
-/// success/failure: reconcile skep's accept/reject with the golden's
-/// recorded expectation.
-fn settle_ack(out: &mut OpOutcome, xf: Option<String>, rejected: Option<String>) -> bool {
-    match (xf, rejected) {
-        (None, None) => true, // both succeeded — caller continues
-        (Some(_), Some(code)) => {
-            out.status = Status::Agreed;
-            out.comparator = Some("expected-failure".into());
-            out.note = Some(format!("both sides failed (skep: {code})"));
+/// skep gave the op's success answer, reconciled with the golden's verdict
+/// (`xf`: the failure the recording marks, if any). `true` when the golden
+/// recorded success too and the caller goes on to compare; `false` when it
+/// recorded a failure, which is then the op's disagreement.
+fn settle_accepted(out: &mut OpOutcome, xf: Option<String>) -> bool {
+    match xf {
+        None => true,
+        Some(err) => {
+            let expected = format!("failure: {err:?}");
+            out.disagree("expected-failure", expected, "skep accepted the operation".into());
             false
         }
-        (None, Some(code)) => {
-            out.status = Status::Disagreed;
-            out.comparator = Some("rejection".into());
-            out.expected = Some("success (golden recorded no error)".into());
-            out.actual = Some(format!("Rejected({code})"));
-            false
+    }
+}
+
+/// skep refused the op — `refused`, the refusal as the report renders it —
+/// reconciled with the golden's verdict: agreement when the golden recorded
+/// a failure too, else the op's disagreement.
+fn settle_rejected(out: &mut OpOutcome, xf: Option<String>, refused: String) {
+    match xf {
+        Some(_) => {
+            out.agree("expected-failure");
+            out.add_note(format!("both sides failed (skep: {refused})"));
         }
-        (Some(err), None) => {
-            out.status = Status::Disagreed;
-            out.comparator = Some("expected-failure".into());
-            let (e, a) = match compare_expected_failure(&err, None) {
-                Err(pair) => pair,
-                Ok(()) => unreachable!("None rejection with recorded error always disagrees"),
-            };
-            out.expected = Some(e);
-            out.actual = Some(a);
-            false
-        }
+        None => out.disagree("rejection", "success (golden recorded no error)".into(), refused),
+    }
+}
+
+/// skep's answer was not the op's success answer. A refusal is reconciled
+/// with the golden's verdict ([`settle_rejected`]); any other answer lies
+/// outside skep's contract and disagrees whatever the golden recorded.
+fn settle_refused(out: &mut OpOutcome, xf: Option<String>, r: &Response) {
+    match r {
+        Response::Rejected(_) => settle_rejected(out, xf, refusal(r)),
+        _ => out.disagree("response", "the op's success answer".into(), refusal(r)),
     }
 }
 
@@ -429,61 +489,66 @@ impl Tally {
         let unaimed =
             (!self.unaimed.is_empty()).then(|| format!("not aimed: {}", self.unaimed.join("; ")));
         if !self.differ.is_empty() {
-            out.status = Status::Disagreed;
-            out.comparator = Some(comparator.to_string());
-            out.expected =
-                Some(self.differ.iter().map(|d| d.0.clone()).collect::<Vec<_>>().join(" | "));
-            out.actual =
-                Some(self.differ.iter().map(|d| d.1.clone()).collect::<Vec<_>>().join(" | "));
+            let (expected, actual): (Vec<String>, Vec<String>) = self.differ.into_iter().unzip();
+            out.disagree(comparator, expected.join(" | "), actual.join(" | "));
             if let Some(u) = unaimed {
                 out.add_note(u);
             }
         } else if let Some(u) = unaimed {
             inexpressible(out, u);
         } else if self.compared > 0 {
-            out.status = Status::Agreed;
-            out.comparator = Some(comparator.to_string());
+            out.agree(comparator);
         } else {
             out.status = Status::NotCompared;
+        }
+    }
+
+    /// [`Tally::settle`] for a READ (`reads`: its handler's arguments):
+    /// where nothing was compared and nothing failed to aim, the end is
+    /// [`compared_nothing`]'s — a recorded answer the read could not reach
+    /// leaves the op inexpressible.
+    fn settle_read(self, out: &mut OpOutcome, comparator: &str, op: &Value, reads: &[&str]) {
+        if self.compared == 0 && self.unaimed.is_empty() {
+            compared_nothing(out, op, reads);
+        } else {
+            self.settle(out, comparator);
         }
     }
 }
 
 impl Cx<'_> {
-    /// The op's document argument: explicit field, label token, then the
-    /// current-document register — the register ONLY for genuinely bare ops
-    /// (round-3 discipline): an explicit reference that resolves also aims
-    /// the register (mirroring the recording scripts' scope), and one that
-    /// does NOT resolve is surfaced instead of silently mis-aiming a probe
-    /// at whatever the register held. Creates a first-touch document when
-    /// the scenario has none yet (mirrored by the grounding pre-pass).
+    /// The op's document argument, read by `fields::aim_doc` — the one
+    /// reading the grounding pre-pass shares — and tagged here: a label
+    /// token is `doc-from-label`, the register `doc-from-register`. An
+    /// explicit reference that resolves to nothing is surfaced in the op's
+    /// note, never silently re-aimed at whatever the register held; a
+    /// scenario with no document yet gets a first-touch document, created
+    /// through skep.
     fn doc_arg(&mut self, op: &Value, out: &mut OpOutcome, keys: &[&str]) -> Option<String> {
-        if let Some(s) = str_field(op, keys) {
-            if let Some(d) = self.shadow.resolve_doc(s) {
-                self.shadow.set_current(&d);
-                return Some(d);
-            }
-            out.note = Some(format!("document reference `{s}` resolves to nothing"));
-            return None;
-        }
-        if let Some(name) = doc_from_label(label_of(op)) {
-            if let Some(d) = self.shadow.resolve_doc(&name) {
+        match aim_doc(self.shadow, op, keys) {
+            DocAim::Named(d) => Some(d),
+            DocAim::FromLabel(d) => {
                 out.adaptations.push("doc-from-label".into());
-                self.shadow.set_current(&d);
-                return Some(d);
+                Some(d)
             }
-        }
-        if let Some(d) = self.shadow.scoped() {
-            out.adaptations.push("doc-from-register".into());
-            return Some(d);
-        }
-        let id = self.shadow.synthesize_docid();
-        match self.create_document(&id, None, true) {
-            Response::AckAddr { .. } => {
-                out.adaptations.push("implied-create:first-touch".into());
-                Some(id)
+            DocAim::Register(d) => {
+                out.adaptations.push("doc-from-register".into());
+                Some(d)
             }
-            _ => None,
+            DocAim::Unresolved(s) => {
+                out.add_note(format!("document reference `{s}` resolves to nothing"));
+                None
+            }
+            DocAim::FirstTouch => {
+                let id = self.shadow.synthesize_docid();
+                match self.create_document(&id, None, true) {
+                    Response::AckAddr { .. } => {
+                        out.adaptations.push("implied-create:first-touch".into());
+                        Some(id)
+                    }
+                    _ => None,
+                }
+            }
         }
     }
 
@@ -495,9 +560,7 @@ impl Cx<'_> {
     /// the world-change methods: inferred setup is golden-side by
     /// construction, so it is mirrored whatever skep answers.
     pub fn exec_setup_step(&mut self, s: &SetupStep) -> Result<(), String> {
-        let refused = |what: String, r: &Response| {
-            format!("{what}: {}", rejection_code(r).unwrap_or_else(|| "?".into()))
-        };
+        let refused = |what: String, r: &Response| format!("{what}: {}", refusal(r));
         match s {
             SetupStep::Insert { doc, bytes } => {
                 let at = self.shadow.text_len(doc) + 1;
@@ -556,16 +619,45 @@ impl Cx<'_> {
         }
     }
 
-    /// Whole-document CONTENT-subspace delivery (policy
-    /// `contents:content-subspace` — udanax's retrieve_contents results
-    /// never include link-subspace items).
+    /// Golden `doc`'s CONTENT subspace as skep delivers it — every content
+    /// span skep's own extent reports ([`Cx::skep_content_spans`]), read in
+    /// one RetrieveV (policy `contents:content-subspace`: udanax's
+    /// retrieve_contents results never include link-subspace items).
     fn read_content(&mut self, doc: &str) -> Result<Vec<DeliveryItem>, String> {
-        let n = self.shadow.text_len(doc);
-        let Some(span) = vspan(1, 1, n) else { return Ok(Vec::new()) };
         let d = self.skep_doc(doc).ok_or_else(|| format!("{doc} unresolvable"))?;
-        match self.rig.exec(Op::RetrieveV { specs: vec![Spec { doc: d, span }] }) {
+        let specs: Vec<Spec> = self
+            .skep_content_spans(&d)
+            .map_err(|r| refusal(&r))?
+            .into_iter()
+            .map(|span| Spec { doc: d.clone(), span })
+            .collect();
+        if specs.is_empty() {
+            return Ok(Vec::new());
+        }
+        match self.rig.exec(Op::RetrieveV { specs }) {
             Response::Delivery { items, .. } => Ok(items.0),
-            r => Err(rejection_code(&r).unwrap_or_else(|| "unexpected response".into())),
+            r => Err(refusal(&r)),
+        }
+    }
+
+    /// The content-subspace spans skep's document `d` holds, from skep's own
+    /// extent (`Op::RetrieveDocVSpanSet`): what a whole-document read asks
+    /// skep for. Never sized from the shadow — a whole-document read must
+    /// see what skep holds beyond the recording, and must ask even when the
+    /// recording says the document is empty. An absence-class answer
+    /// ([`EXTENT_ABSENT`]) is no spans; any other answer that is not a span
+    /// set is returned for the caller to settle.
+    fn skep_content_spans(
+        &mut self,
+        d: &skep_address::Address,
+    ) -> Result<Vec<Span>, Box<Response>> {
+        let content = Nat::from(1u64);
+        match self.rig.exec(Op::RetrieveDocVSpanSet { doc: d.clone() }) {
+            Response::SpanSet { set, .. } => {
+                Ok(set.iter().filter(|s| s.start().get(1) == Some(&content)).cloned().collect())
+            }
+            r if refused_with(&r, EXTENT_ABSENT) => Ok(Vec::new()),
+            r => Err(Box::new(r)),
         }
     }
 
@@ -619,10 +711,7 @@ impl Cx<'_> {
                 (Endset::from_spans(runs.iter().map(Run::iextent)), notes, clamped)
             }
             r => {
-                notes.push(format!(
-                    "{docid}: image {}",
-                    rejection_code(&r).unwrap_or_else(|| "?".into())
-                ));
+                notes.push(format!("{docid}: image {}", refusal(&r)));
                 (Endset::from_spans(std::iter::empty()), notes, clamped)
             }
         }
@@ -899,54 +988,55 @@ impl Cx<'_> {
 
 /// Create golden document `id` for an op that records it, unless the shadow
 /// already holds it (an implied create, or a plan's earlier step): then the
-/// name binds and the register moves to it. A refused creation is the op's
-/// disagreement.
-fn create_one(cx: &mut Cx, out: &mut OpOutcome, id: &str, name: Option<&str>, recorded: bool) {
+/// name binds and the register moves to it. `Err` is skep's answer to a
+/// creation it did not acknowledge, for the caller to settle.
+fn create_one(
+    cx: &mut Cx,
+    id: &str,
+    name: Option<&str>,
+    recorded: bool,
+) -> Result<(), Box<Response>> {
     if cx.shadow.knows(id) {
         if let Some(n) = name {
             cx.shadow.bind_name(n, id);
         }
         cx.shadow.set_current(id);
-        return;
+        return Ok(());
     }
-    let r = cx.create_document(id, name, recorded);
-    if !matches!(r, Response::AckAddr { .. }) {
-        fail_response(out, "rejection", "document creation", &r);
+    match cx.create_document(id, name, recorded) {
+        Response::AckAddr { .. } => Ok(()),
+        r => Err(Box::new(r)),
     }
 }
 
-/// Execute the pre-pass expansion plan attached to this op — every step of
-/// it. A step skep refuses, or one naming a document with no α-image, does
-/// not stop the rest: the shadow keeps following the reconstruction, and
-/// the op reports the first failure.
-fn run_plan(cx: &mut Cx, index: usize, out: &mut OpOutcome) {
-    let Some(plan) = cx.plans.get(&index).cloned() else {
-        out.status = Status::NotCompared;
-        out.note = Some("no expansion plan derived; nothing executed".into());
-        return;
-    };
+/// Execute the pre-pass expansion plan attached to op `index` — every step
+/// of it — and tag the op `expansion-plan:N`. A step skep refuses, or one
+/// naming a document with no α-image, does not stop the rest: the shadow
+/// keeps following the reconstruction. Returns the first failure for the
+/// caller to report ([`plan_failed`]); `None` when every step executed.
+fn run_plan(cx: &mut Cx, index: usize, out: &mut OpOutcome) -> Option<String> {
+    let plan = cx.plans.get(&index).cloned().unwrap_or_default();
     out.adaptations.push(format!("expansion-plan:{}", plan.len()));
     let mut first_failure: Option<String> = None;
     for step in &plan {
         // Copies/inserts target docs the plan may create implicitly.
         if let SetupStep::Copy { doc, .. } | SetupStep::Insert { doc, .. } = step {
             if !cx.shadow.knows(doc) {
-                create_one(cx, out, doc, None, true);
+                if let Err(r) = create_one(cx, doc, None, true) {
+                    first_failure.get_or_insert(format!("create {doc}: {}", refusal(&r)));
+                }
             }
         }
         if let Err(e) = cx.exec_setup_step(step) {
             first_failure.get_or_insert(e);
         }
     }
-    match first_failure {
-        Some(e) => {
-            out.status = Status::Disagreed;
-            out.comparator = Some("expansion-plan".into());
-            out.expected = Some("reconstructed setup executes".into());
-            out.actual = Some(e);
-        }
-        None => out.status = Status::NotCompared,
-    }
+    first_failure
+}
+
+/// A reconstructed plan that did not execute is the op's disagreement.
+fn plan_failed(out: &mut OpOutcome, failure: String) {
+    out.disagree("expansion-plan", "reconstructed setup executes".into(), failure);
 }
 
 // ────────────────────────────── endset sides ───────────────────────────────
@@ -980,7 +1070,7 @@ fn side_specs(cx: &mut Cx, out: &mut OpOutcome, v: &Value) -> Result<Vec<DocSpan
     }
     match locate(cx.shadow, None, s) {
         Some(l) => {
-            out.adaptations.push(l.how.into());
+            out.adaptations.push(l.how.tag().into());
             Ok(vec![(l.doc, vec![(1, l.ord, l.width)])])
         }
         None => Err(format!("endset text {s:?} not found")),
@@ -1054,15 +1144,19 @@ fn marker_type_name(comps: &[u64]) -> Option<&'static str> {
 /// post-state expectation.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Probe {
-    /// Observation bundle (initial_state, after_first_insert…): full
-    /// harvest.
+    /// Observation bundle (initial_state, after_first_insert…): the reply
+    /// a read's recording answers with (`fields::recorded_content`). A
+    /// bundle is a read, and settles as one (`Tally::settle_read`).
     Bundle,
-    /// After a write (insert/delete/vcopy): only result/remaining-style
-    /// keys are expectations.
+    /// After a write (insert/delete/vcopy): only the post-write keys
+    /// (`fields::POST_WRITE_KEYS`) are expectations.
     PostWrite,
     /// One interior-typing step entry: its own vspanset/contents fields.
     Step,
 }
+
+/// The arguments an observation bundle carries: the document it observes.
+const BUNDLE_READS: &[&str] = &["doc", "docid", "doc_label"];
 
 /// A state probe: compare whatever vspanset/contents data the op (or one
 /// interior-typing step) carries against the doc's live state.
@@ -1077,11 +1171,11 @@ fn probe_state(cx: &mut Cx, op: &Value, out: &mut OpOutcome, grants: &Grants, do
             .map(|(d, s)| ("vspanset".to_string(), d, s)),
         _ => harvest_spanset(op),
     };
-    if let Some((_, docid, spans)) = harvested {
+    if let Some((key, docid, spans)) = harvested {
         let target =
             docid.and_then(|d| cx.shadow.resolve_doc(&d)).unwrap_or_else(|| doc.to_string());
-        if let Some(d) = cx.skep_doc(&target) {
-            match cx.rig.exec(Op::RetrieveDocVSpanSet { doc: d }) {
+        match cx.skep_doc(&target) {
+            Some(d) => match cx.rig.exec(Op::RetrieveDocVSpanSet { doc: d }) {
                 Response::SpanSet { set, .. } => {
                     let c = compare_spansets(&spans, &set, grants, &mut out.adaptations);
                     if c.is_err() && collapsed_subspace_shape(&spans) {
@@ -1089,38 +1183,45 @@ fn probe_state(cx: &mut Cx, op: &Value, out: &mut OpOutcome, grants: &Grants, do
                     }
                     tally.judge(c, "vspanset ", "");
                 }
-                r => tally
-                    .differ("vspanset".into(), rejection_code(&r).unwrap_or_else(|| "?".into())),
-            }
+                r => tally.differ("vspanset".into(), refusal(&r)),
+            },
+            None => tally.differ(format!("{key} of {target}"), format!("{target} unresolvable")),
         }
     }
 
-    // Contents expectation.
-    let content_keys: &[&str] = match kind {
-        Probe::Step => &["contents", "content"],
-        Probe::PostWrite => &["remaining", "result", "expected_contents"],
-        Probe::Bundle => &[
-            "result", "before", "after", "content", "contents", "sample", "remaining", "empty",
-            "expected_contents",
-        ],
+    // Contents expectation: the reply, and for a bundle the key it lives
+    // under — an address list or a client repr there is set aside, not
+    // compared, and not an unread answer either.
+    let (reply_key, strings) = match kind {
+        Probe::Step => (None, field(op, &["contents", "content"]).and_then(expect_strings)),
+        Probe::PostWrite => (None, field(op, POST_WRITE_KEYS).and_then(expect_strings)),
+        Probe::Bundle => match recorded_content(op, BUNDLE_READS) {
+            Some((k, strings)) => (Some(k), Some(strings)),
+            None => (None, None),
+        },
     };
-    if let Some(strings) = field(op, content_keys).and_then(expect_strings) {
-        // Address strings and recording-client python reprs are never
-        // content-subspace bytes; skip rather than fabricate a comparison.
-        let addr_like = strings.iter().any(|s| {
-            (s.contains('.') && parse_dotted(s).is_some()) || fields::is_python_repr(s)
-        });
-        if !addr_like {
+    let mut set_aside: Vec<String> = Vec::new();
+    if let Some(strings) = strings {
+        if as_text(&strings).is_some() {
             match cx.read_content(doc) {
                 Ok(items) => {
                     tally.judge(compare_content(&strings, &items, cx.alpha), "content ", "")
                 }
                 Err(code) => tally.differ("content".into(), code),
             }
+        } else {
+            set_aside.extend(reply_key);
         }
     }
 
-    tally.settle(out, "state-probe");
+    match kind {
+        Probe::Bundle => {
+            let mut reads = BUNDLE_READS.to_vec();
+            reads.extend(set_aside.iter().map(String::as_str));
+            tally.settle_read(out, "state-probe", op, &reads);
+        }
+        Probe::PostWrite | Probe::Step => tally.settle(out, "state-probe"),
+    }
 }
 
 // ────────────────────────────── the catalogue ──────────────────────────────
@@ -1192,10 +1293,7 @@ pub fn run_op(cx: &mut Cx, index: usize, op: &Value, grants: &Grants) -> OpOutco
                     }
                 }
                 Err(e) => {
-                    out.status = Status::Disagreed;
-                    out.comparator = Some("session".into());
-                    out.expected = Some(format!("op executes under session {sess}"));
-                    out.actual = Some(e);
+                    out.disagree("session", format!("op executes under session {sess}"), e);
                     return out;
                 }
             }
@@ -1254,6 +1352,10 @@ pub fn run_op(cx: &mut Cx, index: usize, op: &Value, grants: &Grants) -> OpOutco
 
 #[cfg(test)]
 mod tests {
+    use serde_json::json;
+    use skep_febe::{OpKind, Rejection};
+    use skep_kernel::Seq;
+
     use super::*;
 
     fn settled(tally: Tally) -> OpOutcome {
@@ -1287,5 +1389,52 @@ mod tests {
         assert_eq!(out.expected.as_deref(), Some("e: want"));
         assert_eq!(out.actual.as_deref(), Some("a: got"));
         assert_eq!(out.note.as_deref(), Some("not aimed: a part"));
+    }
+
+    /// A read that compared nothing is `NotCompared` only when its recording
+    /// kept no answer: a field that is neither one of its arguments nor an
+    /// annotation is an answer it could not read, named.
+    #[test]
+    fn a_read_that_compared_nothing_names_the_answer_it_left_unread() {
+        let reads = ["doc", "docid"];
+        let mut out = OpOutcome::new(0, "retrieve");
+        Tally::default().settle_read(
+            &mut out,
+            "content",
+            &json!({"op": "retrieve", "doc": "d", "after_first": ["X"], "comment": "prose"}),
+            &reads,
+        );
+        assert_eq!(out.status, Status::Inexpressible);
+        assert_eq!(out.note.as_deref(), Some("not read: `after_first`"));
+
+        let mut out = OpOutcome::new(0, "retrieve");
+        let bare = json!({"op": "retrieve", "doc": "d", "label": "x", "session": "A"});
+        Tally::default().settle_read(&mut out, "content", &bare, &reads);
+        assert_eq!(out.status, Status::NotCompared);
+    }
+
+    /// An answer that is not the op's success answer disagrees whatever the
+    /// golden recorded unless it is a refusal, which the golden's own
+    /// recorded failure meets as agreement.
+    #[test]
+    fn only_a_refusal_can_meet_a_recorded_failure() {
+        let failed = || Some("request failed (?)".to_string());
+        let mut out = OpOutcome::new(0, "insert");
+        settle_refused(&mut out, failed(), &Response::Ack { at: Seq(1) });
+        assert_eq!(out.status, Status::Disagreed);
+        assert_eq!(out.actual.as_deref(), Some("unexpected response shape"));
+
+        let rejected = Response::Rejected(Rejection::classified(
+            OpKind::Insert,
+            RejectCode::OutOfBounds,
+            None,
+        ));
+        let mut out = OpOutcome::new(0, "insert");
+        settle_refused(&mut out, failed(), &rejected);
+        assert_eq!(out.status, Status::Agreed);
+        let mut out = OpOutcome::new(0, "insert");
+        settle_refused(&mut out, None, &rejected);
+        assert_eq!(out.status, Status::Disagreed);
+        assert_eq!(out.actual.as_deref(), Some("Rejected(OutOfBounds)"));
     }
 }

@@ -27,8 +27,8 @@ pub struct RunOutput {
     pub records: Vec<ScenarioRecord>,
     pub jsonl: PathBuf,
     pub summary: PathBuf,
-    /// Scenario op counts as loaded — for the gate's every-op-classified
-    /// integrity assertion.
+    /// Scenario op counts as loaded, by scenario key — for the gate's
+    /// every-op-classified integrity assertion.
     pub loaded_op_counts: Vec<(String, usize)>,
 }
 
@@ -39,7 +39,7 @@ pub fn run_all() -> Result<RunOutput, String> {
     let scenarios = load_all(&golden)?;
     let allow = load_allowlist(&allow_path)?;
     let loaded_op_counts: Vec<(String, usize)> =
-        scenarios.iter().map(|s| (s.name.clone(), s.operations.len())).collect();
+        scenarios.iter().map(|s| (s.key(), s.operations.len())).collect();
 
     let records = run_scenarios(&scenarios, &allow);
 
@@ -100,7 +100,7 @@ fn run_scenario(scn: &Scenario, allow: &Allowlist) -> ScenarioRecord {
     let mut alpha = Alpha::new();
     let mut shadow = Shadow::new();
     let mut deletions = Deletions::default();
-    alpha.bind(GOLDEN_DEFAULT_ACCOUNT, &rig.default_account());
+    alpha.bind(GOLDEN_DEFAULT_ACCOUNT, rig.default_account());
 
     // The grounding pre-pass: shadow-only, derives implied setup from the
     // scenario's own recorded evidence (see ground.rs module docs).
@@ -159,9 +159,10 @@ fn run_scenario(scn: &Scenario, allow: &Allowlist) -> ScenarioRecord {
         }
     }
 
+    let key = scn.key();
     let mut ops: Vec<OpOutcome> = Vec::with_capacity(scn.operations.len());
     for (i, op) in scn.operations.iter().enumerate() {
-        let grants = allow.grants(&scn.name, i);
+        let grants = allow.grants(&key, i);
         let mut out = {
             let mut cx = Cx {
                 rig: &mut rig,
@@ -178,19 +179,15 @@ fn run_scenario(scn: &Scenario, allow: &Allowlist) -> ScenarioRecord {
         let findings: Vec<String> =
             alpha.findings.drain(..).map(|f| format!("{}: {}", f.class, f.detail)).collect();
         if !findings.is_empty() {
-            let joined = findings.join("; ");
-            match out.status {
-                Status::Disagreed | Status::Inexpressible => out.add_note(joined),
-                _ => {
-                    out.status = Status::Disagreed;
-                    out.comparator = Some("alpha".into());
-                    out.note = Some(joined);
-                }
+            if !matches!(out.status, Status::Disagreed | Status::Inexpressible) {
+                out.status = Status::Disagreed;
+                out.comparator = Some("alpha".into());
             }
+            out.add_note(findings.join("; "));
         }
         // The allowlist judges the outcome α's findings left: which
         // adjudicated classes, if any, cover it.
-        out.allowlisted = allow.grant(&scn.name, i, &out);
+        out.allowlisted = allow.grant(&key, i, &out);
         ops.push(out);
     }
 

@@ -361,21 +361,6 @@ pub fn compare_count(
     }
 }
 
-// ── expected-failure ───────────────────────────────────────────────────────
-
-/// The golden recorded a non-null `error` for this op: udanax (or its
-/// client) failed it. Agreement means skep also rejected; a skep success is
-/// a divergence for the operators.
-pub fn compare_expected_failure(golden_error: &str, skep_rejected: Option<&str>) -> Comparison {
-    match skep_rejected {
-        Some(_) => Ok(()),
-        None => Err((
-            format!("failure: {golden_error:?}"),
-            "skep accepted the operation".to_string(),
-        )),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

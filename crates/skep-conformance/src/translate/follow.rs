@@ -9,7 +9,9 @@ use skep_discovery::{FourSet, SlotSpec};
 use skep_febe::{Op, Response};
 use skep_retrieval::{DeliveryItem, Spec};
 
-use super::{elem_range, inexpressible, rejection_code, Cx, ImageRow, Tally};
+use super::{
+    compared_nothing, elem_range, inexpressible, refusal, settle_refused, Cx, ImageRow, Tally,
+};
 use crate::allowlist::Grants;
 use crate::compare::{compare_addr_sets, compare_spansets};
 use crate::fields::{
@@ -18,6 +20,16 @@ use crate::fields::{
 };
 use crate::outcome::{OpOutcome, Status};
 use crate::tum::{is_link_address, vspan};
+
+/// The arguments a follow_link carries: the link, and the end it follows.
+const FOLLOW_READS: &[&str] =
+    &["end", "direction", "linkend", "which", "link", "link_id", "id", "doc", "docid"];
+
+/// The arguments a traversal carries beside a follow's: where it starts and
+/// ends.
+const TRAVERSE_READS: &[&str] = &[
+    "end", "direction", "linkend", "which", "link", "link_id", "id", "doc", "docid", "start",
+];
 
 /// Resolve a link-slot name to M7's positional index (FROM=1, TO=2, TYPE=3).
 /// "three" is the new corpus's name for the third endset (`end: "three"`).
@@ -79,9 +91,7 @@ pub(super) fn h_follow_link(cx: &mut Cx, op: &Value, out: &mut OpOutcome, grants
         return;
     };
     let Some(link) = cx.alpha.translate(&link_golden) else {
-        out.status = Status::Disagreed;
-        out.comparator = Some("alpha".into());
-        out.note = Some(format!("follow of unresolvable link {link_golden}"));
+        out.unresolvable(format!("follow of unresolvable link {link_golden}"));
         return;
     };
     let Some(expected) = field(op, &["result", "content", "contents", "expected", "spans"]) else {
@@ -93,9 +103,8 @@ pub(super) fn h_follow_link(cx: &mut Cx, op: &Value, out: &mut OpOutcome, grants
         if let Some(err) = expected_failure(op) {
             match cx.rig.exec(Op::FollowLink { a: link.clone(), slot }) {
                 Response::Follow { result: Err(_), .. } => {
-                    out.status = Status::Agreed;
-                    out.comparator = Some("expected-failure".into());
-                    out.note = Some("both sides refuse the slot (skep: invalid slot)".into());
+                    out.agree("expected-failure");
+                    out.add_note("both sides refuse the slot (skep: invalid slot)".into());
                 }
                 Response::Follow { result: Ok(set), .. } => {
                     // Types-doc spans are harness infrastructure (policy
@@ -112,34 +121,25 @@ pub(super) fn h_follow_link(cx: &mut Cx, op: &Value, out: &mut OpOutcome, grants
                         .count();
                     if real == 0 {
                         out.adaptations.push("type_registry".into());
-                        out.status = Status::Agreed;
-                        out.comparator = Some("expected-failure".into());
-                        out.note = Some(
+                        out.agree("expected-failure");
+                        out.add_note(
                             "both sides surface nothing followable (green: ?, skep: empty or \
                              registry-only endset)"
                                 .into(),
                         );
                     } else {
-                        out.status = Status::Disagreed;
-                        out.comparator = Some("expected-failure".into());
-                        out.expected = Some(format!("failure: {err:?}"));
-                        out.actual =
-                            Some(format!("skep followed the slot to {real} span(s)"));
+                        out.disagree(
+                            "expected-failure",
+                            format!("failure: {err:?}"),
+                            format!("skep followed the slot to {real} span(s)"),
+                        );
                     }
                 }
-                other => {
-                    out.status = Status::Agreed;
-                    out.comparator = Some("expected-failure".into());
-                    out.note = Some(format!(
-                        "both sides failed (skep: {})",
-                        rejection_code(&other).unwrap_or_else(|| "?".into())
-                    ));
-                }
+                other => settle_refused(out, Some(err), &other),
             }
             return;
         }
-        out.status = Status::NotCompared;
-        out.note = Some("follow_link with nothing recorded to compare".into());
+        compared_nothing(out, op, FOLLOW_READS);
         return;
     };
     // A defaulted slot yields to the recorded result's own document: the
@@ -180,7 +180,7 @@ fn follow_compare(
     let project = |cx: &mut Cx, d: &skep_address::Address| -> Result<skep_address::SpanSet, String> {
         match cx.rig.exec(Op::Project { a: link.clone(), slot, d: d.clone() }) {
             Response::SpanSet { set, .. } => Ok(set),
-            r => Err(rejection_code(&r).unwrap_or_else(|| "unexpected response".into())),
+            r => Err(refusal(&r)),
         }
     };
 
@@ -218,7 +218,6 @@ fn follow_compare(
     // Shape 2: python VSpec string.
     if let Some(s) = expected.as_str() {
         if let Some((Some(docid), spans)) = parse_python_spec(s) {
-            out.comparator = Some("projection".into());
             let target = cx.alpha.translate(&docid);
             let projected = match target {
                 Some(d) => project(cx, &d),
@@ -226,18 +225,14 @@ fn follow_compare(
             };
             match projected {
                 Ok(set) => match compare_spansets(&spans, &set, grants, &mut out.adaptations) {
-                    Ok(()) => out.status = Status::Agreed,
-                    Err((e, a)) => {
-                        out.status = Status::Disagreed;
-                        out.expected = Some(e);
-                        out.actual = Some(a);
-                    }
+                    Ok(()) => out.agree("projection"),
+                    Err((e, a)) => out.disagree("projection", e, a),
                 },
-                Err(code) => {
-                    out.status = Status::Disagreed;
-                    out.expected = Some(format!("{docid}: spans"));
-                    out.actual = Some(format!("{docid}: {code}"));
-                }
+                Err(code) => out.disagree(
+                    "projection",
+                    format!("{docid}: spans"),
+                    format!("{docid}: {code}"),
+                ),
             }
             return;
         }
@@ -250,26 +245,24 @@ fn follow_compare(
         return;
     };
     out.adaptations.push("render-by-identity".into());
-    out.comparator = Some("follow-recorded-endset".into());
+    let want = strings.join("");
     match cx.render_recorded_endset(link, slot) {
         Ok((rendered, notes)) => {
-            let want = strings.join("");
             if !notes.is_empty() {
-                out.note = Some(notes.join("; "));
+                out.add_note(notes.join("; "));
             }
             if rendered == want {
-                out.status = Status::Agreed;
+                out.agree("follow-recorded-endset");
             } else {
-                out.status = Status::Disagreed;
-                out.expected = Some(format!("{want:?}"));
-                out.actual = Some(format!("{rendered:?}"));
+                let (expected, actual) = (format!("{want:?}"), format!("{rendered:?}"));
+                out.disagree("follow-recorded-endset", expected, actual);
             }
         }
-        Err(code) => {
-            out.status = Status::Disagreed;
-            out.expected = Some(format!("{:?}", strings.join("")));
-            out.actual = Some(format!("followlink: {code}"));
-        }
+        Err(code) => out.disagree(
+            "follow-recorded-endset",
+            format!("{want:?}"),
+            format!("followlink: {code}"),
+        ),
     }
 }
 
@@ -290,7 +283,7 @@ impl Cx<'_> {
             Response::Follow { result: Err(_), .. } => {
                 return Ok((String::new(), vec!["followlink: invalid slot".into()]))
             }
-            r => return Err(rejection_code(&r).unwrap_or_else(|| "unexpected response".into())),
+            r => return Err(refusal(&r)),
         };
         // Index every doc's live V→I rows once.
         let docs = self.shadow.all_docs();
@@ -339,10 +332,7 @@ impl Cx<'_> {
                     {
                         Response::Delivery { items, .. } => items.0,
                         r => {
-                            notes.push(format!(
-                                "{docid}: retrieve {}",
-                                rejection_code(&r).unwrap_or_else(|| "?".into())
-                            ));
+                            notes.push(format!("{docid}: retrieve {}", refusal(&r)));
                             continue;
                         }
                     };
@@ -578,11 +568,9 @@ pub(super) fn h_traverse(cx: &mut Cx, op: &Value, out: &mut OpOutcome, grants: &
             }
         }
     }
-    tally.settle(out, "traversal");
-    if out.status == Status::NotCompared {
-        out.comparator = Some("traversal".into());
-        out.note = Some("traversal entries carried nothing comparable".into());
-    }
+    // The entry list is the traversal's recorded answer: entries that
+    // carried nothing comparable leave it unread.
+    tally.settle_read(out, "traversal", op, TRAVERSE_READS);
 }
 
 /// Links whose TO (reverse) / FROM (forward) endset touches `doc`'s extent

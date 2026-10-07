@@ -105,12 +105,20 @@ impl Shadow {
         }
     }
 
-    /// Resolve a doc reference: a dotted address passes through; a symbolic
-    /// name resolves via the registry, then via the recording scripts'
-    /// standing conventions: "source"/"doc1"/"doc"/"original"/A → first
-    /// created, "target"/"doc2"/B → second, "doc3"/C → third, "version" →
-    /// the last version created, "same doc"/"current" → the register.
-    /// `None` when nothing fits — the caller records it.
+    /// Resolve a doc reference: a dotted address passes through (a link
+    /// address never does); a symbolic name resolves via the registry, then
+    /// via the recording scripts' standing conventions: "source"/"doc1"/
+    /// "doc"/"original"/A → first created ("source" and "original" prefer a
+    /// registered name containing the word), "target"/"doc2"/B → second
+    /// ("target" and "dest" likewise), "doc3"/C → third, "doc4"/D → fourth,
+    /// "version" → the last version created, "same doc"/"current" → the
+    /// register. Any other string of two or more characters resolves to the
+    /// first registered name, in name order, that it contains or is
+    /// contained in ([`Shadow::find_named_containing`]): "Bank account"
+    /// resolves to a document named "B". A caller asking whether a string
+    /// names a document at all, rather than a text to locate, therefore hears
+    /// yes for prose that merely shares a registered name's letters. `None`
+    /// when nothing fits — the caller records it.
     pub fn resolve_doc(&self, r: &str) -> Option<String> {
         if crate::tum::is_link_address(r) {
             return None; // a link id is never a document reference

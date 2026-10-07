@@ -1,11 +1,13 @@
 //! Shared field-bag parsing: the one place golden JSON fields, decorated
-//! descriptions, recorded span shapes, and an op's own arguments are
-//! interpreted — the verb a label names (`normalize`) and the regions a
-//! vcopy copies (`vcopy_sources`) included. Both the grounding pre-pass and
-//! the live translator read through these helpers, so the two passes cannot
-//! drift on what a field means. What a scenario's recorded evidence says an
-//! op DID — whether it happened at all, where an insert landed, what a
-//! delete removed — is `evidence`'s.
+//! descriptions, recorded span shapes, recorded replies, and an op's own
+//! arguments are interpreted — the verb a label names (`normalize`), the
+//! document an op aims at (`aim_doc`), the content a read's recording
+//! answers with (`recorded_content`) and the regions a vcopy copies
+//! (`vcopy_sources`) included. Both the grounding pre-pass and the live
+//! translator read through these helpers, so the two passes cannot drift on
+//! what a field means. What a scenario's recorded evidence says an op DID —
+//! whether it happened at all, where an insert landed, what a delete
+//! removed — is `evidence`'s.
 //!
 //! Decoration grammar (each form calibrated against named golden files):
 //! * `"end"` / `"start"` / `"position 6"` / `"after First"` — positions
@@ -13,6 +15,8 @@
 //!   discovery/insert_multiple_times_accumulates_docispan).
 //! * `"1.1 length 3"` — span (edgecases/delete_first_char,
 //!   delete_all/delete_all_incrementally).
+//! * `"1.16-1.20"` — a bare inclusive ordinal range (links/delete_at_root_
+//!   origin_height_1).
 //! * `"quick (5-9)"` / `"ABCD (1-4)"` — text with inclusive ordinal range
 //!   (content/retrieve_noncontiguous_spans, edgecases/overlapping_vcopy).
 //! * `"1-char span at 1.1"` — width + position (edgecases/
@@ -48,6 +52,16 @@ pub fn str_field<'v>(op: &'v Value, keys: &[&str]) -> Option<&'v str> {
 pub fn label_of(op: &Value) -> &str {
     op.get("op").and_then(Value::as_str).unwrap_or("")
 }
+
+/// Keys that annotate an op for a reader — never an argument, never a
+/// recorded answer: the label and prose, the session an op runs under, an
+/// open's mode, a verification's own verdict on itself (`match`), and the
+/// failure verdict [`expected_failure`] reads (`error`, `status`). Checked
+/// against the corpus: none of these keys carries data an op is judged by.
+pub const ANNOTATION_KEYS: &[&str] = &[
+    "op", "label", "comment", "note", "description", "interpretation", "message", "claim",
+    "assertion", "match", "session", "mode", "error", "status",
+];
 
 // ─────────────────────────── span / vspec shapes ───────────────────────────
 
@@ -310,15 +324,20 @@ pub fn looks_like_spanset(v: &Value) -> bool {
 /// `"empty"` under an `expected` key means no content
 /// (delete_all/empty_document_never_filled).
 ///
-/// An array is a content list only when EVERY entry is a string; an array
-/// holding span dicts is a different result shape and returns `None` — the
-/// old filtering read a recorded post-insert vspanset (`result:
-/// [{start,width}]`, allocation_independence/all_operations_interleaved
-/// op 1) as the EMPTY content expectation and fabricated a `content []`
-/// disagreement against the delivered text.
+/// An array is a content list only when EVERY entry is a string or a link
+/// item as the recording client renders one, `{link_id: X}`, which reads as
+/// the link address X (links/orphaned_link_source_all_deleted's retrieve of
+/// an emptied document delivers its link). An array holding span dicts is
+/// a different result shape and returns `None` — reading a recorded
+/// post-insert vspanset (`result: [{start,width}]`, allocation_
+/// independence/all_operations_interleaved op 1) as the EMPTY content
+/// expectation would fabricate a `content []` disagreement.
 pub fn expect_strings(v: &Value) -> Option<Vec<String>> {
     if let Some(arr) = v.as_array() {
-        return arr.iter().map(|x| x.as_str().map(str::to_string)).collect();
+        return arr
+            .iter()
+            .map(|x| x.as_str().map(str::to_string).or_else(|| link_item(x)))
+            .collect();
     }
     if let Some(o) = v.as_object() {
         for k in ["contents", "content", "strings"] {
@@ -346,6 +365,124 @@ pub fn expect_strings(v: &Value) -> Option<Vec<String>> {
         );
     }
     Some(vec![s.to_string()])
+}
+
+/// A delivered link item as the recording client renders it — an object
+/// whose one field is `link_id`, a link address — read as that address.
+fn link_item(v: &Value) -> Option<String> {
+    let o = v.as_object()?;
+    let id = o.get("link_id").and_then(Value::as_str)?;
+    (o.len() == 1 && is_link_address(id)).then(|| id.to_string())
+}
+
+/// The bytes a recorded content reply names, its strings joined — `None`
+/// when any string is a golden address or a recording-client python repr
+/// ("<VSpan in … at 0 for 0>", "<SpecSet […]>"), neither of which is ever
+/// content-subspace bytes. Every reader of recorded content as document
+/// text goes through here: round 3 seeded documents/retrieve_vspan_empty's
+/// doc with the 33-byte repr of its own empty vspan when one reader took
+/// the string at face value.
+pub fn as_text(strings: &[String]) -> Option<String> {
+    let addressed = |s: &String| s.contains('.') && parse_dotted(s).is_some();
+    if strings.iter().any(|s| addressed(s) || is_python_repr(s)) {
+        return None;
+    }
+    Some(strings.concat())
+}
+
+/// A recording-client python `repr` captured verbatim.
+fn is_python_repr(s: &str) -> bool {
+    s.starts_with('<') && s.ends_with('>')
+}
+
+/// The keys a content read's recorded answer lives under, in the order they
+/// are consulted. `expected_contents` precedes `expected`, which usually
+/// holds prose.
+pub const REPLY_KEYS: &[&str] = &[
+    "result", "before", "after", "content", "contents", "sample", "remaining", "empty",
+    "expected_contents", "expected", "value", "text",
+];
+
+/// The keys a write's recorded post-state lives under — a write's `text`
+/// and `content` fields are its ARGUMENTS, never an answer.
+pub const POST_WRITE_KEYS: &[&str] = &["remaining", "result", "expected_contents"];
+
+/// The content a read's recording answers with, and the key it lives
+/// under: the first [`REPLY_KEYS`] key holding a recorded array (or a
+/// `{contents}` wrapper around one); else the op's one string array under a
+/// key outside `reads` and [`ANNOTATION_KEYS`] (rearrange/double_pivot's
+/// `original`, `after_first`); else the first reply key holding a bare
+/// string, in [`expect_strings`]' forms. A bare string never outranks a
+/// recorded array: `expected` usually holds prose ("Should match original
+/// (ABCDE)") beside the array that is the data. Two or more such unlisted
+/// arrays name no single answer, so the op has none here, and the read that
+/// compares nothing names them.
+pub fn recorded_content(op: &Value, reads: &[&str]) -> Option<(String, Vec<String>)> {
+    for k in REPLY_KEYS {
+        if let Some(v) = field(op, &[k]).filter(|v| !v.is_string()) {
+            if let Some(strings) = expect_strings(v) {
+                return Some((k.to_string(), strings));
+            }
+        }
+    }
+    let o = op.as_object()?;
+    let unlisted: Vec<(&String, Vec<String>)> = o
+        .iter()
+        .filter(|(k, v)| {
+            v.is_array()
+                && !REPLY_KEYS.contains(&k.as_str())
+                && !reads.contains(&k.as_str())
+                && !ANNOTATION_KEYS.contains(&k.as_str())
+        })
+        .filter_map(|(k, v)| Some((k, expect_strings(v)?)))
+        .collect();
+    match unlisted.as_slice() {
+        [(k, strings)] => return Some((k.to_string(), strings.clone())),
+        [] => {}
+        _ => return None,
+    }
+    REPLY_KEYS.iter().find_map(|k| {
+        let v = field(op, &[k]).filter(|v| v.is_string())?;
+        Some((k.to_string(), expect_strings(v)?))
+    })
+}
+
+/// The per-document replies of one read: two or more fields whose KEY
+/// names a document — directly ("source", "dest") or before a `_content`
+/// suffix ("A_content") — and whose VALUE is a string array, each the
+/// recorded content of that document (internal/ispan_partial_overlap's
+/// `source: ["CDEFG"], dest: ["CDEFG"]`, beside an `expected` that is
+/// prose; isolation/cross_document_transclusion_isolation's snapshots). An
+/// op that names its document, or records a reply under a reply key, is no
+/// such read. Returned as (key, golden doc, strings) in key order; empty
+/// when fewer than two fields qualify.
+pub fn per_doc_replies(op: &Value, shadow: &Shadow) -> Vec<(String, String, Vec<String>)> {
+    const NOT_DOCS: &[&str] =
+        &["texts", "strings", "cuts", "spans", "targets", "docs", "positions"];
+    if field(op, &["doc", "docid", "result", "specset", "specs", "contents", "content"]).is_some() {
+        return Vec::new();
+    }
+    let Some(o) = op.as_object() else { return Vec::new() };
+    let replies: Vec<(String, String, Vec<String>)> = o
+        .iter()
+        .filter(|(k, v)| {
+            let k = k.as_str();
+            v.is_array()
+                && !ANNOTATION_KEYS.contains(&k)
+                && !REPLY_KEYS.contains(&k)
+                && !NOT_DOCS.contains(&k)
+        })
+        .filter_map(|(k, v)| {
+            let strings = expect_strings(v)?;
+            let named = k.strip_suffix("_contents").or_else(|| k.strip_suffix("_content"));
+            let doc = named.and_then(|n| shadow.resolve_doc(n)).or_else(|| shadow.resolve_doc(k))?;
+            Some((k.clone(), doc, strings))
+        })
+        .collect();
+    if replies.len() < 2 {
+        return Vec::new();
+    }
+    replies
 }
 
 /// Did the golden record this op as a failure? (`error` non-null and not the
@@ -381,15 +518,6 @@ pub fn client_side_failure(op: &Value) -> Option<&str> {
             s.starts_with("OPERATION_FAILED:") || (s.starts_with("FAILED:") && missing_attribute(s))
         })
         .or_else(|| str_field(op, &["error"]).filter(missing_attribute))
-}
-
-/// A recording-client python `repr` captured verbatim ("<VSpan in … at 0 for
-/// 0>", "<SpecSet […]>"). Such a string is NEVER document content — round 3
-/// seeded documents/retrieve_vspan_empty's doc with the 33-byte repr of its
-/// own empty vspan because the content-probe path took the string at face
-/// value. Every content-string consumer filters through this.
-pub fn is_python_repr(s: &str) -> bool {
-    s.starts_with('<') && s.ends_with('>')
 }
 
 // ────────────────────────────── op arguments ───────────────────────────────
@@ -480,12 +608,71 @@ pub fn is_position_marker(s: &str) -> bool {
     t == "end" || t == "start" || t.starts_with("end of") || t.starts_with("start of")
 }
 
-/// Is this key a `<role><n>` docid holder (`doc1`, `source2`, `target3`)?
-pub fn keyed_role(k: &str) -> bool {
-    ["doc", "source", "target"].iter().any(|stem| {
-        k.strip_prefix(stem)
-            .is_some_and(|rest| !rest.is_empty() && rest.chars().all(|c| c.is_ascii_digit()))
-    })
+/// A document roster: the op's `<name>: <golden docid>` fields, each binding
+/// a name the scenario uses to a document the recording created —
+/// create_sources' `source1`/`source2` (identity/identity_mixed_sources),
+/// create_documents' `doc1`/`doc2` (subspace/insert_text_check_link_
+/// positions), the `docs` op's `A`/`B`/`C` (isolation/cross_document_
+/// transclusion_isolation). A create's own argument and result keys are no
+/// names. Sorted by name.
+pub fn roster(op: &Value) -> Vec<(String, String)> {
+    const NOT_NAMES: &[&str] = &[
+        "result", "results", "docs", "count", "texts", "type", "doc", "name", "doc_label",
+        "chain",
+    ];
+    let Some(o) = op.as_object() else { return Vec::new() };
+    let mut pairs: Vec<(String, String)> = o
+        .iter()
+        .filter(|(k, _)| !ANNOTATION_KEYS.contains(&k.as_str()) && !NOT_NAMES.contains(&k.as_str()))
+        .filter_map(|(k, v)| {
+            let id = v.as_str()?;
+            let named = parse_dotted(id).is_some() && !is_link_address(id);
+            named.then(|| (k.clone(), id.to_string()))
+        })
+        .collect();
+    pairs.sort();
+    pairs
+}
+
+/// Where an op's document argument points.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum DocAim {
+    /// An explicit document field that resolves.
+    Named(String),
+    /// A `…_doc<n>` label token ("insert_text_doc1").
+    FromLabel(String),
+    /// The current-document register, for an op that names no document.
+    Register(String),
+    /// An explicit document field that resolves to nothing: the reference,
+    /// as recorded.
+    Unresolved(String),
+    /// The op names no document, and no document exists yet.
+    FirstTouch,
+}
+
+/// The document an op aims at, as both passes read it: its explicit field
+/// (`keys`), then its label token, then the current-document register — the
+/// register only for a genuinely bare op, never in place of an explicit
+/// reference that resolves to nothing. A named or label-borne document
+/// becomes the register, mirroring the recording scripts' scope.
+pub fn aim_doc(shadow: &mut Shadow, op: &Value, keys: &[&str]) -> DocAim {
+    if let Some(s) = str_field(op, keys) {
+        return match shadow.resolve_doc(s) {
+            Some(d) => {
+                shadow.set_current(&d);
+                DocAim::Named(d)
+            }
+            None => DocAim::Unresolved(s.to_string()),
+        };
+    }
+    if let Some(d) = doc_from_label(label_of(op)).and_then(|name| shadow.resolve_doc(&name)) {
+        shadow.set_current(&d);
+        return DocAim::FromLabel(d);
+    }
+    match shadow.scoped() {
+        Some(d) => DocAim::Register(d),
+        None => DocAim::FirstTouch,
+    }
 }
 
 /// The group word a plural create names its members with: an explicit
@@ -601,6 +788,40 @@ impl Verb {
             Verb::Meta => "meta",
         }
     }
+
+    /// Does an op of this verb change a document's content subspace?
+    pub fn writes_content(self) -> bool {
+        matches!(
+            self,
+            Verb::Insert
+                | Verb::InsertLoop
+                | Verb::InteriorTyping
+                | Verb::Delete
+                | Verb::DeleteAll
+                | Verb::Vcopy
+                | Verb::Pivot
+                | Verb::Swap
+                | Verb::Rearrange
+        )
+    }
+}
+
+/// The verb an op's own label names — [`normalize`] over the op, the one
+/// reading every forward scan asks "what kind of op is this" through.
+pub fn verb_of(op: &Value) -> Option<Verb> {
+    normalize(label_of(op), op)
+}
+
+/// Does this op read a document's whole content: a [`Verb::Contents`] read
+/// that no span, spec set or position narrows — by a field, or by the
+/// label's own position tokens ("text_at_1_3", "pos_1_4", "link_at_2_1")?
+/// Only such a read testifies to everything a document holds.
+pub fn reads_whole_content(op: &Value) -> bool {
+    const NARROWING: &[&str] =
+        &["span", "spans", "vspan", "specs", "specset", "positions", "address", "at", "position"];
+    verb_of(op) == Some(Verb::Contents)
+        && field(op, NARROWING).is_none()
+        && position_from_label(label_of(op)).is_none()
 }
 
 /// The meta/diagnostic labels (per the brief): executed nothing, compared
@@ -653,7 +874,9 @@ const STEMS: &[(&str, Verb)] = &[
     ("links", Verb::FindLinks),
     ("find_documents", Verb::FindDocuments),
     ("find_docs", Verb::FindDocuments),
-    ("docs", Verb::FindDocuments),
+    // A roster of the documents a setup made, `{op: "docs", A: id, …}`
+    // (isolation/cross_document_transclusion_isolation) — see `roster`.
+    ("docs", Verb::CreateDocuments),
     ("retrieve_vspanset", Verb::Vspanset),
     ("vspanset", Verb::Vspanset),
     ("retrieve_vspan", Verb::Vspan),
@@ -678,7 +901,12 @@ const STEMS: &[(&str, Verb)] = &[
     ("probe", Verb::Observe),
 ];
 
-/// Does the op carry observation data (a probe bundle)?
+/// Does the op carry observation data (a probe bundle)? A vspanset or
+/// contents field, a docs map, a targets list or a positions map does; so
+/// does a reply-shaped `result`/`before`/`after`/`empty`, and a string array
+/// under any key that is no annotation — a snapshot's `A_content`
+/// (isolation/cross_document_transclusion_isolation) is an observation of
+/// document A, not commentary.
 pub fn has_observation_fields(op: &Value) -> bool {
     let Some(o) = op.as_object() else { return false };
     for (k, v) in o {
@@ -688,6 +916,11 @@ pub fn has_observation_fields(op: &Value) -> bool {
             }
             "result" | "before" | "after" | "empty"
                 if expect_strings(v).is_some() || looks_like_spanset(v) =>
+            {
+                return true;
+            }
+            k if !ANNOTATION_KEYS.contains(&k)
+                && v.as_array().is_some_and(|a| a.iter().all(Value::is_string)) =>
             {
                 return true;
             }
@@ -739,14 +972,51 @@ pub fn normalize(label: &str, op: &Value) -> Option<Verb> {
 
 // ───────────────────────────── decorated forms ─────────────────────────────
 
+/// How a description grounded to a region. A TEXT grounding found the
+/// described bytes by searching the shadow — a reconstruction, which
+/// recorded evidence may correct (a delete's post-state diff); every other
+/// grounding is numbers the recording client sent, which stand as sent.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Grounding {
+    /// The described text, found verbatim, doc-qualified, or quoted.
+    Text,
+    /// The Nth occurrence of the described text ("bank (second)").
+    NthText,
+    /// A numeric span: "1.1 length 3", "1.3 for 0.5", "1-char span at 1.1".
+    Span,
+    /// An inclusive ordinal range: "1.16-1.20", "positions 1-4",
+    /// "doc1[1.2-1.4]", "quick (5-9)".
+    Range,
+    /// A document's whole current extent: "all", "all of B", "entire …".
+    WholeExtent,
+}
+
+impl Grounding {
+    /// The adaptation tag the report records for this grounding.
+    pub fn tag(self) -> &'static str {
+        match self {
+            Grounding::Text => "text-located",
+            Grounding::NthText => "text-located:nth-occurrence",
+            Grounding::Span => "span-from-description",
+            Grounding::Range => "range-from-description",
+            Grounding::WholeExtent => "whole-extent",
+        }
+    }
+
+    /// Is the region a text reconstruction rather than numbers sent?
+    pub fn is_text(self) -> bool {
+        matches!(self, Grounding::Text | Grounding::NthText)
+    }
+}
+
 /// A located region: golden doc + 1-based content ordinal + width.
 #[derive(Clone, Debug)]
 pub struct Located {
     pub doc: String,
     pub ord: u64,
     pub width: u64,
-    /// The grounding policy that produced it (report tag).
-    pub how: &'static str,
+    /// How the description grounded.
+    pub how: Grounding,
 }
 
 /// Resolve a decorated span/text description against the shadow. `doc_hint`
@@ -758,14 +1028,14 @@ pub fn locate(shadow: &Shadow, doc_hint: Option<&str>, desc: &str) -> Option<Loc
 
     // Plain text, found verbatim — the common case; try before any grammar.
     if let Some((doc, ord)) = shadow.find_text(doc_hint, desc) {
-        return Some(Located { doc, ord, width: desc.len() as u64, how: "text-located" });
+        return Some(Located { doc, ord, width: desc.len() as u64, how: Grounding::Text });
     }
 
     // "S.O length N" (delete_first_char).
     if let Some((pos, len)) = desc.split_once(" length ") {
         if let (Some((1, ord)), Ok(w)) = (parse_vpos(pos.trim()), len.trim().parse::<u64>()) {
             let doc = doc_hint.map(str::to_string).or_else(|| shadow.scoped())?;
-            return Some(Located { doc, ord, width: w, how: "span-from-description" });
+            return Some(Located { doc, ord, width: w, how: Grounding::Span });
         }
     }
 
@@ -778,10 +1048,17 @@ pub fn locate(shadow: &Shadow, doc_hint: Option<&str>, desc: &str) -> Option<Loc
             if let (Some((1, ord)), Some(w)) = (parse_vpos(pos.trim()), parse_width(w.trim())) {
                 if w > 0 {
                     let doc = doc_hint.map(str::to_string).or_else(|| shadow.scoped())?;
-                    return Some(Located { doc, ord, width: w, how: "span-from-description" });
+                    return Some(Located { doc, ord, width: w, how: Grounding::Span });
                 }
             }
         }
+    }
+
+    // "1.16-1.20" — a bare inclusive ordinal range (links/delete_at_root_
+    // origin_height_1's create_link `source` and `target`).
+    if let Some((ord, w)) = ordinal_range(desc) {
+        let doc = doc_hint.map(str::to_string).or_else(|| shadow.scoped())?;
+        return Some(Located { doc, ord, width: w, how: Grounding::Range });
     }
 
     // "positions 1-4 (Orig)" — explicit ordinal range with a reminder
@@ -793,7 +1070,7 @@ pub fn locate(shadow: &Shadow, doc_hint: Option<&str>, desc: &str) -> Option<Loc
         {
             if let Some((ord, w)) = ordinal_range(r.trim()) {
                 let doc = doc_hint.map(str::to_string).or_else(|| shadow.scoped())?;
-                return Some(Located { doc, ord, width: w, how: "range-from-description" });
+                return Some(Located { doc, ord, width: w, how: Grounding::Range });
             }
         }
     }
@@ -803,7 +1080,7 @@ pub fn locate(shadow: &Shadow, doc_hint: Option<&str>, desc: &str) -> Option<Loc
         let n = desc[..idx].trim().parse::<u64>().ok()?;
         let (_, ord) = parse_vpos(desc[idx + "-char span at ".len()..].trim())?;
         let doc = doc_hint.map(str::to_string).or_else(|| shadow.scoped())?;
-        return Some(Located { doc, ord, width: n.max(1), how: "span-from-description" });
+        return Some(Located { doc, ord, width: n.max(1), how: Grounding::Span });
     }
 
     // "doc[A-B]" bracket range (insert_text_check_link_positions) and the
@@ -813,10 +1090,10 @@ pub fn locate(shadow: &Shadow, doc_hint: Option<&str>, desc: &str) -> Option<Loc
         if let Some(range) = rest.strip_suffix(']') {
             if let Some(doc) = shadow.resolve_doc(docref.trim()) {
                 if let Some((ord, w)) = ordinal_range(range) {
-                    return Some(Located { doc, ord, width: w, how: "range-from-description" });
+                    return Some(Located { doc, ord, width: w, how: Grounding::Range });
                 }
                 if let Some((1, ord)) = parse_vpos(range.trim()) {
-                    return Some(Located { doc, ord, width: 1, how: "range-from-description" });
+                    return Some(Located { doc, ord, width: 1, how: Grounding::Range });
                 }
             }
         }
@@ -827,7 +1104,7 @@ pub fn locate(shadow: &Shadow, doc_hint: Option<&str>, desc: &str) -> Option<Loc
         if let Some(doc) = shadow.resolve_doc(docref.trim()) {
             let t = text.trim();
             if let Some((d, ord)) = shadow.find_text(Some(&doc), t) {
-                return Some(Located { doc: d, ord, width: t.len() as u64, how: "text-located" });
+                return Some(Located { doc: d, ord, width: t.len() as u64, how: Grounding::Text });
             }
         }
     }
@@ -838,7 +1115,7 @@ pub fn locate(shadow: &Shadow, doc_hint: Option<&str>, desc: &str) -> Option<Loc
         if n == 0 {
             return None;
         }
-        Some(Located { doc, ord: 1, width: n, how: "whole-extent" })
+        Some(Located { doc, ord: 1, width: n, how: Grounding::WholeExtent })
     };
     if let Some(rest) = desc.strip_prefix("all of ") {
         if let Some(doc) = shadow.resolve_doc(rest.trim()) {
@@ -864,7 +1141,7 @@ pub fn locate(shadow: &Shadow, doc_hint: Option<&str>, desc: &str) -> Option<Loc
                     .or_else(|| shadow.scoped())?;
                 // The explicit range is authoritative; the head text is a
                 // reminder (retrieve_noncontiguous_spans "quick (5-9)").
-                return Some(Located { doc, ord, width: w, how: "range-from-description" });
+                return Some(Located { doc, ord, width: w, how: Grounding::Range });
             }
             if let Some(docref) = inner.strip_prefix("from ") {
                 if let Some(doc) = shadow.resolve_doc(docref.trim()) {
@@ -873,7 +1150,7 @@ pub fn locate(shadow: &Shadow, doc_hint: Option<&str>, desc: &str) -> Option<Loc
                             doc: d,
                             ord,
                             width: head.len() as u64,
-                            how: "text-located",
+                            how: Grounding::Text,
                         });
                     }
                 }
@@ -889,7 +1166,7 @@ pub fn locate(shadow: &Shadow, doc_hint: Option<&str>, desc: &str) -> Option<Loc
                             doc: d,
                             ord,
                             width: head.len() as u64,
-                            how: "text-located:nth-occurrence",
+                            how: Grounding::NthText,
                         });
                     }
                     return None; // selector present but unsatisfiable
@@ -901,7 +1178,7 @@ pub fn locate(shadow: &Shadow, doc_hint: Option<&str>, desc: &str) -> Option<Loc
                         doc: d,
                         ord,
                         width: head.len() as u64,
-                        how: "text-located",
+                        how: Grounding::Text,
                     });
                 }
             }
@@ -911,7 +1188,7 @@ pub fn locate(shadow: &Shadow, doc_hint: Option<&str>, desc: &str) -> Option<Loc
     // Quoted text anywhere: "just 'S'", "first occurrence of 'text' (…)".
     if let Some(q) = quoted(desc) {
         if let Some((d, ord)) = shadow.find_text(doc_hint, &q) {
-            return Some(Located { doc: d, ord, width: q.len() as u64, how: "text-located" });
+            return Some(Located { doc: d, ord, width: q.len() as u64, how: Grounding::Text });
         }
     }
 
@@ -952,7 +1229,7 @@ pub fn ordinal_range(s: &str) -> Option<(u64, u64)> {
 }
 
 /// First 'single'- or "double"-quoted segment.
-fn quoted(s: &str) -> Option<String> {
+pub fn quoted(s: &str) -> Option<String> {
     for q in ['\'', '"'] {
         if let Some(i) = s.find(q) {
             if let Some(j) = s[i + 1..].find(q) {
@@ -966,34 +1243,40 @@ fn quoted(s: &str) -> Option<String> {
     None
 }
 
-/// A position description → 1-based content ordinal (grounded against the
-/// shadow when relative). `None` = not a position this grammar speaks.
-pub fn resolve_position(shadow: &Shadow, doc: &str, desc: &str) -> Option<(u64, u64, &'static str)> {
+/// A position description → (subspace, 1-based ordinal, grounding tag),
+/// grounded against the shadow when relative. The tag names the policy
+/// that read a described position; an explicit V-position carries none,
+/// being what the client sent. `None` = not a position this grammar speaks.
+pub fn resolve_position(
+    shadow: &Shadow,
+    doc: &str,
+    desc: &str,
+) -> Option<(u64, u64, Option<&'static str>)> {
     let desc = desc.trim();
     if let Some((sub, ord)) = parse_vpos(desc) {
-        return Some((sub, ord, "explicit-position"));
+        return Some((sub, ord, None));
     }
     match desc {
-        "end" | "append" => return Some((1, shadow.text_len(doc) + 1, "position-end")),
-        "start" | "beginning" => return Some((1, 1, "position-start")),
+        "end" | "append" => return Some((1, shadow.text_len(doc) + 1, Some("position-end"))),
+        "start" | "beginning" => return Some((1, 1, Some("position-start"))),
         _ => {}
     }
     if let Some(n) = desc.strip_prefix("position ").and_then(|x| x.trim().parse::<u64>().ok()) {
-        return Some((1, n, "position-from-description"));
+        return Some((1, n, Some("position-from-description")));
     }
     if let Some(t) = desc.strip_prefix("after ") {
         let t = t.trim();
         if let Some((_, ord)) = shadow.find_text(Some(doc), t) {
-            return Some((1, ord + t.len() as u64, "position-after-text"));
+            return Some((1, ord + t.len() as u64, Some("position-after-text")));
         }
         // Case-insensitive fallback: labels say "after first" for "First ".
         if let Some((_, ord, w)) = shadow.find_text_ci(doc, t) {
-            return Some((1, ord + w, "position-after-text"));
+            return Some((1, ord + w, Some("position-after-text")));
         }
     }
     if let Some(t) = desc.strip_prefix("before ") {
         if let Some((_, ord)) = shadow.find_text(Some(doc), t.trim()) {
-            return Some((1, ord, "position-before-text"));
+            return Some((1, ord, Some("position-before-text")));
         }
     }
     None
@@ -1138,7 +1421,7 @@ pub fn vcopy_sources(
                 }
             } else if let Some(t) = v.as_str() {
                 let l = locate(shadow, None, t).ok_or(format!("vcopy span {t:?} not groundable"))?;
-                adaptations.push(l.how.into());
+                adaptations.push(l.how.tag().into());
                 push(&l.doc, 1, l.ord, l.width);
             } else {
                 return Err("vcopy spec list holds an unrecognized entry".into());
@@ -1152,7 +1435,7 @@ pub fn vcopy_sources(
                 }
             } else if let Some(t) = v.as_str() {
                 let l = locate(shadow, None, t).ok_or(format!("vcopy span {t:?} not groundable"))?;
-                adaptations.push(l.how.into());
+                adaptations.push(l.how.tag().into());
                 push(&l.doc, 1, l.ord, l.width);
             }
         }
@@ -1164,7 +1447,7 @@ pub fn vcopy_sources(
     } else if let Some(t) = str_field(op, &["text", "span"]) {
         let l = locate(shadow, named_source.as_deref(), t)
             .ok_or(format!("vcopy text {t:?} not groundable"))?;
-        adaptations.push(l.how.into());
+        adaptations.push(l.how.tag().into());
         push(&l.doc, 1, l.ord, l.width);
     } else if let Some(s) = str_field(op, &["from", "source"]) {
         if let Some(from) = shadow.resolve_doc(s) {
@@ -1189,7 +1472,7 @@ pub fn vcopy_sources(
             } else {
                 l
             };
-            adaptations.push(l.how.into());
+            adaptations.push(l.how.tag().into());
             push(&l.doc, 1, l.ord, l.width);
         } else {
             return Err(format!("vcopy from {s:?}: neither a doc nor a groundable region"));
@@ -1226,6 +1509,30 @@ mod tests {
         assert_eq!(client_side_failure(&refused), None);
         let failed = json!({"op": "x", "result": "FAILED: out of range"});
         assert_eq!(client_side_failure(&failed), None);
+    }
+
+    /// A recorded array outranks prose: rearrange/double_pivot's three
+    /// probes read their arrays — the op's one unlisted array included —
+    /// never `expected`'s sentence; prose alone is still read; two unlisted
+    /// arrays name no single answer.
+    #[test]
+    fn a_recorded_array_outranks_prose() {
+        let read = |op: Value| recorded_content(&op, &["doc", "docid"]);
+        let answer = |key: &str, text: &str| Some((key.to_string(), vec![text.to_string()]));
+        let original = json!({"op": "retrieve", "original": ["ABCDE"]});
+        assert_eq!(read(original), answer("original", "ABCDE"));
+        let first = json!({"op": "retrieve", "after_first": ["ADEBC"]});
+        assert_eq!(read(first), answer("after_first", "ADEBC"));
+        let second = json!({
+            "op": "retrieve",
+            "after_second": ["ABCDE"],
+            "expected": "Should match original (ABCDE)",
+        });
+        assert_eq!(read(second), answer("after_second", "ABCDE"));
+        let prose = json!({"op": "retrieve", "expected": "ABCDE"});
+        assert_eq!(read(prose), answer("expected", "ABCDE"));
+        let two = json!({"op": "retrieve", "source": ["CDEFG"], "dest": ["CDEFG"]});
+        assert_eq!(read(two), None);
     }
 
     /// The one reading of a vcopy's sources, the corpus extension's single

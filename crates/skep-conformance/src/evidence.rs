@@ -10,8 +10,9 @@
 use serde_json::Value;
 
 use crate::fields::{
-    client_side_failure, expect_strings, expected_failure, field, label_of, locate,
-    resolve_position, span_dict, str_field,
+    as_text, client_side_failure, doc_from_label, expect_strings, expected_failure, field,
+    insert_text, label_of, locate, reads_whole_content, resolve_position, span_dict, str_field,
+    verb_of, Grounding, Verb, POST_WRITE_KEYS,
 };
 use crate::shadow::Shadow;
 use crate::tum::parse_dotted;
@@ -27,25 +28,17 @@ pub fn took_effect(op: &Value) -> bool {
     client_side_failure(op).is_none() && expected_failure(op).is_none()
 }
 
-/// The next full-content probe of `doc` after op `i` (doc-field probes,
-/// docs-map probes, and per-target `targets` entries — identity/
-/// identity_multi_document_sharing records each created target's content
-/// only inside a `targets` array).
+/// The next full-content probe of `doc` after op `i` (doc-field reads of
+/// the whole document, docs-map probes, and per-target `targets` entries —
+/// identity/identity_multi_document_sharing records each created target's
+/// content only inside a `targets` array).
 pub fn next_content_probe(all: &[Value], i: usize, doc: &str, shadow: &Shadow) -> Option<String> {
-    let content = |s: Vec<String>| -> Option<String> {
-        if s.iter().any(|x| {
-            (x.contains('.') && parse_dotted(x).is_some()) || crate::fields::is_python_repr(x)
-        }) {
-            None // an address string / client repr is not content
-        } else {
-            Some(s.join(""))
-        }
-    };
+    let text = |v: &Value| expect_strings(v).as_deref().and_then(as_text);
     for op in &all[i + 1..] {
         if let Some(map) = op.get("docs").and_then(Value::as_object) {
             for (name, exp) in map {
                 if shadow.resolve_doc(name).as_deref() == Some(doc) {
-                    if let Some(s) = expect_strings(exp).and_then(content) {
+                    if let Some(s) = text(exp) {
                         return Some(s);
                     }
                 }
@@ -63,26 +56,21 @@ pub fn next_content_probe(all: &[Value], i: usize, doc: &str, shadow: &Shadow) -
                             .and_then(|n| shadow.resolve_doc(n))
                     });
                 if named.as_deref() == Some(doc) {
-                    if let Some(s) =
-                        e.get("contents").and_then(expect_strings).and_then(content)
-                    {
+                    if let Some(s) = e.get("contents").and_then(text) {
                         return Some(s);
                     }
                 }
             }
         }
-        let label = label_of(op).to_ascii_lowercase();
-        if !(label.starts_with("content") || label.starts_with("retrieve")) {
+        if !reads_whole_content(op) {
             continue;
         }
         let target = str_field(op, &["doc", "docid"]).and_then(|s| shadow.resolve_doc(s));
         if target.as_deref() != Some(doc) {
             continue;
         }
-        if let Some(v) = field(op, &["result", "content", "contents"]) {
-            if let Some(s) = expect_strings(v).and_then(content) {
-                return Some(s);
-            }
+        if let Some(s) = field(op, &["result", "content", "contents"]).and_then(text) {
+            return Some(s);
         }
     }
     None
@@ -101,11 +89,8 @@ pub fn insert_aim_from_probe(
     current: &str,
     text: &str,
 ) -> Option<String> {
-    let writes = ["insert", "append", "delete", "remove", "vcopy", "copy", "pivot", "swap",
-        "rearrange"];
     for op in &all[i + 1..] {
-        let label = label_of(op).to_ascii_lowercase();
-        if writes.iter().any(|w| label.starts_with(w)) {
+        if verb_of(op).is_some_and(Verb::writes_content) {
             return None; // another write intervenes — probe no longer pins this insert
         }
         let Some((_, docid, spans)) = crate::fields::harvest_spanset(op) else { continue };
@@ -147,20 +132,18 @@ pub fn insert_pad_width(
     doc: &str,
     new_len: u64,
 ) -> Option<u64> {
-    let writes = ["insert", "append", "delete", "remove", "vcopy", "copy", "pivot", "swap",
-        "rearrange"];
     let mut aliases: Vec<String> = vec![doc.to_string()];
     let mut links_seen = 0u64;
     for op in &all[i + 1..] {
-        let label = label_of(op).to_ascii_lowercase();
-        if label.starts_with("create_link") || label.starts_with("makelink") {
+        let verb = verb_of(op);
+        if verb == Some(Verb::CreateLink) {
             links_seen += match field(op, &["result", "results"]) {
                 Some(Value::Array(a)) => a.len() as u64,
                 _ => 1,
             };
             continue;
         }
-        if writes.iter().any(|w| label.starts_with(w)) {
+        if verb.is_some_and(Verb::writes_content) {
             // A write into the doc ends the probe's authority over THIS
             // insert. A NAMED target that resolves elsewhere — or resolves
             // nowhere YET because it names a doc created between here and
@@ -175,7 +158,7 @@ pub fn insert_pad_width(
                 _ => return None,
             }
         }
-        if label.starts_with("create_version") || label.starts_with("version") {
+        if verb == Some(Verb::CreateVersion) {
             let src = str_field(op, &["from", "source", "of", "original"])
                 .and_then(|s| shadow.resolve_doc(s));
             if src.as_deref() == Some(doc) || src.is_some_and(|s| aliases.contains(&s)) {
@@ -218,14 +201,7 @@ pub fn insert_pad_width(
 /// insert_2 "BBB" turns "AA" into "ABBBA"). Returns the 1-based ordinal
 /// only when the append shape does NOT already reproduce the post-state.
 pub fn insert_pos_from_post_state(op: &Value, shadow: &Shadow, doc: &str, text: &str) -> Option<u64> {
-    let v = field(op, &["result", "remaining", "expected_contents"])?;
-    let strings = expect_strings(v)?;
-    if strings.iter().any(|s| {
-        (s.contains('.') && parse_dotted(s).is_some()) || crate::fields::is_python_repr(s)
-    }) {
-        return None;
-    }
-    let post = strings.join("");
+    let post = as_text(&expect_strings(field(op, POST_WRITE_KEYS)?)?)?;
     let pre = shadow.text_string(doc);
     if post.len() != pre.len() + text.len() || text.is_empty() {
         return None;
@@ -238,6 +214,80 @@ pub fn insert_pos_from_post_state(op: &Value, shadow: &Shadow, doc: &str, text: 
     (0..=q.len())
         .find(|&k| p[..k] == q[..k] && p[k..k + t.len()] == *t && p[k + t.len()..] == q[k..])
         .map(|k| k as u64 + 1)
+}
+
+/// Where an insert lands: the document — the op's own, or the one its next
+/// recorded vspanset re-aims it at — the (subspace, ordinal) it lands at,
+/// and the bytes it places. `appended` = it lands at the document's end
+/// because nothing positions it: no recorded position, and none its own
+/// post-state pins.
+#[derive(Debug, PartialEq, Eq)]
+pub struct InsertLanding {
+    pub doc: String,
+    pub sub: u64,
+    pub ord: u64,
+    pub bytes: Vec<u8>,
+    pub appended: bool,
+}
+
+/// An insert op aimed at golden `doc`, read as both passes read it: its
+/// text (a field, a strings array, or its label — policy `args-from-
+/// label`); a re-aim, when it names no document and the next recorded
+/// vspanset shows another document grew by exactly its text
+/// ([`insert_aim_from_probe`], `insert-aim-from-recorded-vspanset`); its
+/// position — recorded ([`resolve_position`], the grounding policy
+/// tagged), pinned by its own post-state ([`insert_pos_from_post_state`],
+/// `insert-position-from-post-state`), else the end (`position-end`); and,
+/// when it appends or lands in an empty document, the pad
+/// [`insert_pad_width`] reads off the recorded vspanset
+/// (`insert-padded-to-recorded-vspanset:+N`). Every policy applied is
+/// pushed to `tags`. `Err` names what cannot be read: a missing text, or a
+/// recorded position this grammar cannot ground.
+pub fn resolve_insert(
+    all: &[Value],
+    i: usize,
+    shadow: &Shadow,
+    doc: &str,
+    op: &Value,
+    tags: &mut Vec<String>,
+) -> Result<InsertLanding, String> {
+    let mut text = insert_text(op).ok_or("insert without text")?;
+    if str_field(op, &["text"]).is_none() && label_of(op).starts_with("insert_") {
+        tags.push("args-from-label".into());
+    }
+    let mut doc = doc.to_string();
+    if str_field(op, &["doc", "docid"]).is_none() && doc_from_label(label_of(op)).is_none() {
+        if let Some(d2) = insert_aim_from_probe(all, i, shadow, &doc, &text) {
+            tags.push("insert-aim-from-recorded-vspanset".into());
+            doc = d2;
+        }
+    }
+    let (sub, ord, appended) = match str_field(op, &["address", "at", "position", "vaddr"]) {
+        Some(p) => {
+            let (sub, ord, how) = resolve_position(shadow, &doc, p)
+                .ok_or_else(|| format!("insert position `{p}` is not groundable"))?;
+            tags.extend(how.map(str::to_string));
+            (sub, ord, false)
+        }
+        None => match insert_pos_from_post_state(op, shadow, &doc, &text) {
+            Some(ord) => {
+                tags.push("insert-position-from-post-state".into());
+                (1, ord, false)
+            }
+            None => {
+                tags.push("position-end".into());
+                (1, shadow.text_len(&doc) + 1, true)
+            }
+        },
+    };
+    if sub == 1 && (appended || shadow.text_len(&doc) == 0) {
+        let new_len = shadow.text_len(&doc) + text.len() as u64;
+        if let Some(pad) = insert_pad_width(all, i, shadow, &doc, new_len) {
+            tags.push(format!("insert-padded-to-recorded-vspanset:+{pad}"));
+            text.push_str(&" ".repeat(pad as usize));
+        }
+    }
+    Ok(InsertLanding { doc, sub, ord, bytes: text.into_bytes(), appended })
 }
 
 /// Was this delete a no-op in udanax? The doc's recorded post-delete content
@@ -253,6 +303,50 @@ pub fn delete_is_noop(shadow: &Shadow, all: &[Value], i: usize, doc: &str) -> bo
     post_state_of(all, i, doc, shadow, &all[i]) == Some(pre)
 }
 
+/// How a delete's region was read, and so what authority its position
+/// carries.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DeleteGrounding {
+    /// Numbers the recording client sent: a span dict, start + width / end
+    /// / count, a `removed` range, or a numeric description.
+    Sent,
+    /// A text description located in the shadow (a reconstruction); the
+    /// recorded post-state, where there is one, agrees with it.
+    Located(Grounding),
+    /// The recorded post-state's single-gap diff: exactly what udanax
+    /// removed.
+    FromPostState,
+    /// A located text widened by the boundary space the scripts' deletes
+    /// took with it.
+    WidenedBoundary,
+    /// The text a `delete_A` label names, located in the shadow.
+    FromLabel,
+}
+
+impl DeleteGrounding {
+    /// The adaptation tag the report records; a region sent as numbers
+    /// carries none.
+    pub fn tag(self) -> Option<&'static str> {
+        match self {
+            DeleteGrounding::Sent => None,
+            DeleteGrounding::Located(g) => Some(g.tag()),
+            DeleteGrounding::FromPostState => Some("delete-span-from-post-state"),
+            DeleteGrounding::WidenedBoundary => Some("delete-span-widened-boundary"),
+            DeleteGrounding::FromLabel => Some("delete-text-from-label"),
+        }
+    }
+
+    /// Is the region's position pinned — sent, or read off the recorded
+    /// post-state — rather than found by searching the shadow for text? An
+    /// undo reinserts a pinned delete's bytes at its recorded ordinal
+    /// first; a text-found one at the end first (a seed prefix shifts an
+    /// append-built document's text rightward).
+    pub fn position_pinned(self) -> bool {
+        use DeleteGrounding::{FromPostState, Sent, WidenedBoundary};
+        matches!(self, Sent | FromPostState | WidenedBoundary)
+    }
+}
+
 /// The delete region in any of the goldens' shapes (dict span, decorated
 /// span string, text, start+width/end/count), with the round-3 boundary
 /// discipline: a numeric span (dict, start+width, positional description)
@@ -262,16 +356,17 @@ pub fn delete_is_noop(shadow: &Shadow, all: &[Value], i: usize, doc: &str) -> bo
 /// deletes took a boundary space the located text missed) — so the
 /// post-state diff overrides it, and absent post-state the flanked-by-
 /// spaces configuration widens by the trailing space. Returns
-/// (ord, width, grounding tag).
+/// (ord, width, how the region was read).
 pub fn resolve_delete_span(
     shadow: &Shadow,
     all: &[Value],
     i: usize,
     doc: &str,
     op: &Value,
-) -> Option<(u64, u64, &'static str)> {
+) -> Option<(u64, u64, DeleteGrounding)> {
+    use DeleteGrounding::{FromLabel, FromPostState, Located, Sent, WidenedBoundary};
     if let Some((sub, ord, w)) = field(op, &["span", "vspan"]).and_then(span_dict) {
-        return if sub == 1 { Some((ord, w, "explicit")) } else { None };
+        return if sub == 1 { Some((ord, w, Sent)) } else { None };
     }
     if let Some(start) = str_field(op, &["start", "address", "at"]) {
         if let Some((sub, ord, _)) = resolve_position(shadow, doc, start) {
@@ -279,17 +374,17 @@ pub fn resolve_delete_span(
                 return None;
             }
             if let Some(w) = str_field(op, &["width"]).and_then(crate::tum::parse_width) {
-                return Some((ord, w, "explicit"));
+                return Some((ord, w, Sent));
             }
             if let Some(e) = str_field(op, &["end"]) {
                 return match parse_dotted(e)?.as_slice() {
-                    [0, w] => Some((ord, *w, "explicit")),
-                    [1, eord] if *eord >= ord => Some((ord, eord - ord, "explicit")),
+                    [0, w] => Some((ord, *w, Sent)),
+                    [1, eord] if *eord >= ord => Some((ord, eord - ord, Sent)),
                     _ => None,
                 };
             }
             if let Some(n) = field(op, &["count"]).and_then(Value::as_u64) {
-                return Some((ord, n, "explicit"));
+                return Some((ord, n, Sent));
             }
         }
     }
@@ -298,37 +393,34 @@ pub fn resolve_delete_span(
     // (iaddress_allocation/interleaved_insert_delete).
     if let Some(r) = str_field(op, &["removed", "deleted"]) {
         if let Some((ord, w)) = removed_range(r) {
-            return Some((ord, w, "explicit"));
+            return Some((ord, w, Sent));
         }
     }
     let pre = shadow.text_string(doc);
     let post = post_state_of(all, i, doc, shadow, op);
     if let Some(desc) = str_field(op, &["span", "vspan", "text"]) {
         if let Some(l) = locate(shadow, Some(doc), desc) {
-            if l.how != "text-located" {
+            if !l.how.is_text() {
                 // Numeric-precise description ("1.1 length 3", "1.3 for
                 // 0.5", ranges): keep as sent.
-                return Some((l.ord, l.width, "explicit"));
+                return Some((l.ord, l.width, Sent));
             }
             // A text-located span is a reconstruction; the recorded
             // post-state, where present, tells exactly what udanax removed.
             if let Some(post) = &post {
                 if let Some((ord, w)) = single_gap_diff(pre.as_bytes(), post.as_bytes()) {
-                    let tag = if (ord, w) == (l.ord, l.width) {
-                        "text-located"
-                    } else {
-                        "delete-span-from-post-state"
-                    };
-                    return Some((ord, w, tag));
+                    let how =
+                        if (ord, w) == (l.ord, l.width) { Located(l.how) } else { FromPostState };
+                    return Some((ord, w, how));
                 }
             }
             let b = pre.as_bytes();
             let after = b.get((l.ord - 1 + l.width) as usize);
             let before = if l.ord >= 2 { b.get(l.ord as usize - 2) } else { None };
             if after == Some(&b' ') && (l.ord == 1 || before == Some(&b' ')) {
-                return Some((l.ord, l.width + 1, "delete-span-widened-boundary"));
+                return Some((l.ord, l.width + 1, WidenedBoundary));
             }
-            return Some((l.ord, l.width, "text-located"));
+            return Some((l.ord, l.width, Located(l.how)));
         }
     }
     // No groundable description at all: the recorded post-state is the
@@ -338,13 +430,13 @@ pub fn resolve_delete_span(
     if !pre.is_empty() {
         if let Some(post) = &post {
             if let Some((ord, w)) = single_gap_diff(pre.as_bytes(), post.as_bytes()) {
-                return Some((ord, w, "delete-span-from-post-state"));
+                return Some((ord, w, FromPostState));
             }
         }
     }
     if let Some(t) = delete_text_from_label(op) {
         if let Some((_, ord)) = shadow.find_text(Some(doc), &t) {
-            return Some((ord, t.len() as u64, "delete-text-from-label"));
+            return Some((ord, t.len() as u64, FromLabel));
         }
     }
     None
@@ -387,28 +479,18 @@ fn post_state_of(
     shadow: &Shadow,
     op: &Value,
 ) -> Option<String> {
-    let content = |v: &Value| -> Option<String> {
-        let s = expect_strings(v)?;
-        if s.iter().any(|x| {
-            (x.contains('.') && parse_dotted(x).is_some()) || crate::fields::is_python_repr(x)
-        }) {
-            return None;
-        }
-        Some(s.join(""))
-    };
+    let content = |v: &Value| expect_strings(v).as_deref().and_then(as_text);
     // Own keys; "after" only in structured form — a bare string under
     // "after" is a phase label ("link1"), never content.
-    let own = field(op, &["remaining", "result", "expected_contents"])
-        .or_else(|| field(op, &["after"]).filter(|v| !v.is_string()));
+    let own =
+        field(op, POST_WRITE_KEYS).or_else(|| field(op, &["after"]).filter(|v| !v.is_string()));
     if let Some(v) = own {
         if let Some(s) = content(v) {
             return Some(s);
         }
     }
-    let writes = ["insert", "delete", "remove", "vcopy", "copy", "pivot", "swap", "rearrange"];
     for later in &all[i + 1..] {
-        let label = label_of(later).to_ascii_lowercase();
-        if writes.iter().any(|w| label.starts_with(w)) {
+        if verb_of(later).is_some_and(Verb::writes_content) {
             return None;
         }
         if let Some(map) = later.get("docs").and_then(Value::as_object) {
@@ -420,7 +502,8 @@ fn post_state_of(
                 }
             }
         }
-        if !(label.starts_with("content") || label.starts_with("retrieve")) {
+        // A narrowed read is not a whole-document post-state.
+        if !reads_whole_content(later) {
             continue;
         }
         // A doc-less content probe targets the register — the same doc the
@@ -428,12 +511,6 @@ fn post_state_of(
         // links' post-remove retrieve carries no doc field).
         let probe_doc = str_field(later, &["doc", "docid"]).and_then(|s| shadow.resolve_doc(s));
         if probe_doc.is_some() && probe_doc.as_deref() != Some(doc) {
-            continue;
-        }
-        // A narrowed read is not a whole-document post-state.
-        if field(later, &["span", "spans", "specs", "specset", "positions", "address", "at"])
-            .is_some()
-        {
             continue;
         }
         // "after"-keyed replies count too (delete_all/delete_all_with_links
@@ -487,5 +564,43 @@ mod tests {
             "op": "rearrange",
             "result": "FAILED: 'XuSession' object has no attribute 'rearrange'",
         })));
+    }
+
+    /// The recorded vspanset pads an insert that appends, never one its own
+    /// post-state lands mid-document: there the recorded content, not the
+    /// width, is the authority.
+    #[test]
+    fn only_an_appended_insert_is_padded_to_the_recorded_vspanset() {
+        const DOC: &str = "1.1.0.1.0.1";
+        let mut shadow = Shadow::new();
+        shadow.create_doc(DOC, None);
+        shadow.insert(DOC, 1, b"AA");
+        let probe =
+            json!({"op": "vspanset", "doc": DOC, "result": [{"start": "1.1", "width": "0.6"}]});
+        let landing = |ord: u64, bytes: &[u8], appended: bool| InsertLanding {
+            doc: DOC.into(),
+            sub: 1,
+            ord,
+            bytes: bytes.to_vec(),
+            appended,
+        };
+
+        let append = [json!({"op": "insert", "doc": DOC, "text": "BBB"}), probe.clone()];
+        let mut tags = Vec::new();
+        let landed = resolve_insert(&append, 0, &shadow, DOC, &append[0], &mut tags);
+        assert_eq!(landed, Ok(landing(3, b"BBB ", true)));
+        assert_eq!(tags, ["position-end", "insert-padded-to-recorded-vspanset:+1"]);
+
+        let pinned =
+            [json!({"op": "insert", "doc": DOC, "text": "BBB", "result": ["ABBBA"]}), probe];
+        let mut tags = Vec::new();
+        let landed = resolve_insert(&pinned, 0, &shadow, DOC, &pinned[0], &mut tags);
+        assert_eq!(landed, Ok(landing(2, b"BBB", false)));
+        assert_eq!(tags, ["insert-position-from-post-state"]);
+
+        let lost = json!({"op": "insert", "doc": DOC, "text": "C", "position": "somewhere"});
+        let lone = std::slice::from_ref(&lost);
+        let err = resolve_insert(lone, 0, &shadow, DOC, &lost, &mut Vec::new());
+        assert_eq!(err, Err("insert position `somewhere` is not groundable".into()));
     }
 }

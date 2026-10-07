@@ -49,11 +49,12 @@
 //!   name-references ungroundable — the class rulings 20 and 20a freeze.
 //! * **Both passes read an op the same way.** The pre-pass and the
 //!   translator share one grammar for an op's fields (`fields`: the verb a
-//!   label names, an op's arguments, a vcopy's sources) and one set of
-//!   policies for what its recorded evidence says it did (`evidence`).
-//!   `ground`'s simulation still restates each verb's effect on the shadow
-//!   and reads probes its own way; nothing but review keeps those alike:
-//!   change them together.
+//!   label names, the document an op aims at, an op's arguments, a vcopy's
+//!   sources, the content a read's recording answers with) and one set of
+//!   policies for what its recorded evidence says it did (`evidence`: where
+//!   an insert lands, what a delete removed). `ground`'s simulation still
+//!   restates each verb's effect on the shadow and decides which ops probe
+//!   it; nothing but review keeps those alike: change them together.
 //! * **Harness infrastructure never reaches a comparison.** The types
 //!   document, each rig account's home and the setup grant it holds, the rig
 //!   accounts, and the grants class address are told apart by one
@@ -62,8 +63,13 @@
 //! * **One outcome per op; one place judges.** `translate::run_op` returns
 //!   exactly one `OpOutcome` per recorded op, whatever happens, and an op
 //!   judged part by part settles through one `Tally`, so `agreed` always
-//!   means compared and matched; only `runner` drains α's findings and asks
-//!   the allowlist, `Allowlist::grant`, which classes cover an outcome.
+//!   means compared and matched. A read ends `not-compared` only when its
+//!   recording kept no answer: one whose recorded answer no reader reaches
+//!   is `inexpressible`, the unread keys named (`translate`'s
+//!   `compared_nothing`). Only `runner` drains α's findings and asks the
+//!   allowlist, `Allowlist::grant`, which classes cover an outcome — for a
+//!   scenario named by its key, `category/name` (`outcome::scenario_key`),
+//!   the identity every adjudication uses.
 //! * **Scenario documents are minted private** — `published: Some(false)`
 //!   (PUB-8.16) — by the one method that creates them,
 //!   `Rig::create_private_document`, in the current session's own account.
@@ -82,7 +88,7 @@
 //! records; and `conformance_ratchet`, where conformance is enforced — a
 //! `divergent` or `error` verdict fails it, as does an `allowlisted` or
 //! `inexpressible` verdict on a scenario `conformance/ratchet.toml` does not
-//! freeze there, and a frozen name no golden carries. `tidy.rs` holds the
+//! freeze there, and a frozen key no golden carries. `tidy.rs` holds the
 //! module map below to the code — every file declared, every declaration
 //! with its line, every module naming only itself and the modules above it
 //! — holds every file but `harness.rs` to building no CREATENEWDOCUMENT
@@ -91,7 +97,7 @@
 
 // Golden dotted strings ⇄ skep tumblers, addresses and spans; golden address shapes.
 mod tum;
-// The record shapes the report serializes: op outcomes, scenario verdicts.
+// The record shapes the report serializes — op outcomes, scenario verdicts — and a scenario's key.
 pub mod outcome;
 // The vendored conformance tree, and its golden scenarios loaded as dynamic JSON.
 pub mod loader;

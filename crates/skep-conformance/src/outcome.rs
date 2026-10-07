@@ -1,12 +1,23 @@
 //! Per-op outcomes and per-scenario verdicts — the record shapes the report
-//! serializes.
+//! serializes — and a scenario's identity, the key every adjudication names
+//! it by.
+
+/// A scenario's identity: `category/name`, its golden's directory and its
+/// name. The key the allowlist and the ratchet name a scenario by, and the
+/// one the report prints; a bare name is no identity — the corpus carries
+/// two `find_documents_basic`, one under discovery/ and one under identity/.
+pub fn scenario_key(category: &str, name: &str) -> String {
+    format!("{category}/{name}")
+}
 
 /// What happened to one golden operation.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Status {
     /// Executed, compared, and every comparison agreed.
     Agreed,
-    /// Executed; the op carries no expected value to compare (pure writes).
+    /// Executed; the recording kept nothing to compare — a pure write, or a
+    /// read whose recording holds no answer. A read whose recording holds an
+    /// answer it cannot reach is `Inexpressible` instead, never this.
     NotCompared,
     /// Meta/diagnostic label — executed nothing, compared nothing.
     Meta,
@@ -61,6 +72,30 @@ impl OpOutcome {
     /// would otherwise hide.
     pub fn is_unadjudicated(&self) -> bool {
         self.status == Status::Disagreed && self.allowlisted.is_none()
+    }
+
+    /// The op compared, and `comparator` matched every comparison.
+    pub fn agree(&mut self, comparator: &str) {
+        self.status = Status::Agreed;
+        self.comparator = Some(comparator.to_string());
+    }
+
+    /// The op compared, and `comparator` found `actual` where the golden
+    /// recorded `expected`.
+    pub fn disagree(&mut self, comparator: &str, expected: String, actual: String) {
+        self.status = Status::Disagreed;
+        self.comparator = Some(comparator.to_string());
+        self.expected = Some(expected);
+        self.actual = Some(actual);
+    }
+
+    /// The op names a golden address with no α-image, so nothing reached
+    /// skep: a disagreement the α comparator owns, `note` its evidence
+    /// beside the never-bound finding the runner folds in.
+    pub fn unresolvable(&mut self, note: String) {
+        self.status = Status::Disagreed;
+        self.comparator = Some("alpha".to_string());
+        self.add_note(note);
     }
 
     /// Append evidence to the op's note, after what it already says.
@@ -119,4 +154,11 @@ pub struct ScenarioRecord {
     /// Grounding-pre-pass inferences applied before op 0 (implied creates,
     /// derived initial content, expansion plans) — auditable per scenario.
     pub groundings: Vec<String>,
+}
+
+impl ScenarioRecord {
+    /// The scenario's identity ([`scenario_key`]).
+    pub fn key(&self) -> String {
+        scenario_key(&self.category, &self.name)
+    }
 }

@@ -9,17 +9,17 @@ use skep_arrangement::VSpec;
 use skep_febe::Response;
 
 use super::{
-    inexpressible, marker_type_name, parse_set_spans, rejection_code, settle_ack, side_specs, Cx,
-    SetSpan,
+    inexpressible, marker_type_name, parse_set_spans, settle_accepted, settle_refused,
+    side_specs, Cx, SetSpan,
 };
 use crate::evidence::took_effect;
 use crate::fields::{
-    arrow_results, expect_strings, expected_failure, field, label_of, locate, note_arrow,
-    parse_python_spec, str_field, vspec_dict, DocSpans,
+    arrow_results, as_text, expect_strings, expected_failure, field, label_of, locate,
+    note_arrow, parse_python_spec, str_field, verb_of, vspec_dict, DocSpans, Verb,
 };
 use crate::outcome::{OpOutcome, Status};
 use crate::shadow::ShadowLink;
-use crate::tum::{link_home_docid, parse_dotted, parse_vpos, vspan};
+use crate::tum::{link_home_docid, parse_vpos, vspan};
 
 fn to_vspecs(cx: &mut Cx, sides: &[DocSpans]) -> Result<Vec<VSpec>, String> {
     let mut specs = Vec::new();
@@ -59,7 +59,6 @@ fn endset_evidence(
     arrows: &[(String, String, String)],
     roles: Option<(&str, &str)>,
 ) -> Option<Vec<DocSpans>> {
-    let writes = ["insert", "delete", "remove", "vcopy", "copy", "pivot", "swap", "rearrange"];
     let ground = |v: &Value| -> Option<Vec<DocSpans>> {
         if let Some(arr) = v.as_array() {
             if let Some(vs) = arr.iter().map(vspec_dict).collect::<Option<Vec<_>>>() {
@@ -84,7 +83,7 @@ fn endset_evidence(
         let ss = expect_strings(v)?;
         let mut sides: Vec<DocSpans> = Vec::new();
         for s in &ss {
-            if s.is_empty() || (s.contains('.') && parse_dotted(s).is_some()) {
+            if s.is_empty() || as_text(std::slice::from_ref(s)).is_none() {
                 return None;
             }
             let l = locate(cx.shadow, hint, s).or_else(|| locate(cx.shadow, None, s))?;
@@ -93,14 +92,11 @@ fn endset_evidence(
         (!sides.is_empty()).then_some(sides)
     };
     for op in &cx.ops[from_index + 1..] {
-        let label = label_of(op).to_ascii_lowercase();
-        if writes.iter().any(|w| label.starts_with(w)) {
+        let verb = verb_of(op);
+        if verb.is_some_and(Verb::writes_content) {
             return None;
         }
-        let follow_like = label.starts_with("follow")
-            || label.starts_with("traverse")
-            || label.contains("traversal");
-        if follow_like {
+        if matches!(verb, Some(Verb::FollowLink | Verb::Traverse)) {
             // Entry lists ({link|step, target_text|source_text|text}).
             for key in ["results", "path", "traversal", "steps", "result"] {
                 let Some(entries) = field(op, &[key]).and_then(Value::as_array) else { continue };
@@ -159,7 +155,7 @@ fn endset_evidence(
             // Plain follow with (or without — the bare-follow convention) a
             // link field.
             let mentions = str_field(op, &["link", "link_id", "id"]).map(|l| l == link_golden);
-            if label.starts_with("follow") && mentions.unwrap_or(true) {
+            if label_of(op).to_ascii_lowercase().starts_with("follow") && mentions.unwrap_or(true) {
                 let slot_matches = match str_field(op, &["end", "direction", "linkend", "which"]) {
                     Some(e) if e.contains("->") => !want_source,
                     Some(e) => {
@@ -175,7 +171,7 @@ fn endset_evidence(
                 }
             }
         }
-        if label.starts_with("retrieve_endsets") || label.starts_with("endsets") {
+        if verb == Some(Verb::Endsets) {
             let keys: &[&str] = if want_source { &["source", "from"] } else { &["target", "to"] };
             if let Some(arr) = field(op, keys).and_then(Value::as_array) {
                 let vspecs: Option<Vec<_>> = arr.iter().map(vspec_dict).collect();
@@ -218,9 +214,7 @@ fn h_create_link_explicit(cx: &mut Cx, op: &Value, out: &mut OpOutcome, xf: Opti
         let mut specs = Vec::new();
         for (docid, spans) in &sides {
             let Some(d) = cx.alpha.translate(docid) else {
-                out.status = Status::Disagreed;
-                out.comparator = Some("alpha".into());
-                out.note = Some(format!("create_link {key}: doc {docid} unresolvable"));
+                out.unresolvable(format!("create_link {key}: doc {docid} unresolvable"));
                 return Err(());
             };
             for sp in spans {
@@ -315,9 +309,7 @@ fn h_create_link_explicit(cx: &mut Cx, op: &Value, out: &mut OpOutcome, xf: Opti
                             },
                             SetSpan::Plain(s, ord, w) => {
                                 let Some(d) = cx.alpha.translate(docid) else {
-                                    out.status = Status::Disagreed;
-                                    out.comparator = Some("alpha".into());
-                                    out.note = Some(format!(
+                                    out.unresolvable(format!(
                                         "create_link threeset: doc {docid} unresolvable"
                                     ));
                                     return;
@@ -367,25 +359,18 @@ fn h_create_link_explicit(cx: &mut Cx, op: &Value, out: &mut OpOutcome, xf: Opti
     });
 
     match cx.make_link(&home_golden, [from, to, ty], link, None, took_effect(op)) {
-        Err(_) => {
-            out.status = Status::Disagreed;
-            out.comparator = Some("alpha".into());
-            out.note = Some(format!("create_link home {home_golden} unresolvable"));
-        }
+        Err(_) => out.unresolvable(format!("create_link home {home_golden} unresolvable")),
         Ok(Response::AckAddr { .. }) => {
-            if !settle_ack(out, xf, None) {
+            if !settle_accepted(out, xf) {
                 return;
             }
             if golden.is_some() {
-                out.status = Status::Agreed;
-                out.comparator = Some("address-binding".into());
+                out.agree("address-binding");
             } else {
                 out.status = Status::NotCompared;
             }
         }
-        Ok(other) => {
-            settle_ack(out, xf, rejection_code(&other));
-        }
+        Ok(other) => settle_refused(out, xf, &other),
     }
 }
 
@@ -499,7 +484,7 @@ pub(super) fn h_create_link(cx: &mut Cx, index: usize, op: &Value, out: &mut OpO
                     .or_else(|| locate(cx.shadow, None, t))
                 {
                     Some(l) => {
-                        out.adaptations.push(format!("text-located:source_text ({})", l.how));
+                        out.adaptations.push(format!("text-located:source_text ({})", l.how.tag()));
                         from_sides.push((l.doc, vec![(1, l.ord, l.width)]));
                     }
                     None => {
@@ -516,7 +501,7 @@ pub(super) fn h_create_link(cx: &mut Cx, index: usize, op: &Value, out: &mut OpO
                 // doc-hint containment match.
                 if from_doc_hint.is_none() || s.contains('[') {
                     if let Some(l) = locate(cx.shadow, None, s) {
-                        out.adaptations.push(l.how.into());
+                        out.adaptations.push(l.how.tag().into());
                         from_sides.push((l.doc, vec![(1, l.ord, l.width)]));
                     }
                 }
@@ -578,7 +563,7 @@ pub(super) fn h_create_link(cx: &mut Cx, index: usize, op: &Value, out: &mut OpO
                     locate(cx.shadow, from_doc_hint.as_deref(), anchor)
                         .or_else(|| locate(cx.shadow, None, anchor))
                 {
-                    out.adaptations.push(format!("text-located:on ({})", l.how));
+                    out.adaptations.push(format!("text-located:on ({})", l.how.tag()));
                     from_sides.push((l.doc, vec![(1, l.ord, l.width)]));
                 }
             }
@@ -627,7 +612,7 @@ pub(super) fn h_create_link(cx: &mut Cx, index: usize, op: &Value, out: &mut OpO
                     .or_else(|| locate(cx.shadow, None, t))
                 {
                     Some(l) => {
-                        out.adaptations.push(format!("text-located:target_text ({})", l.how));
+                        out.adaptations.push(format!("text-located:target_text ({})", l.how.tag()));
                         to_sides.push((l.doc, vec![(1, l.ord, l.width)]));
                     }
                     None => {
@@ -642,7 +627,7 @@ pub(super) fn h_create_link(cx: &mut Cx, index: usize, op: &Value, out: &mut OpO
                 // Same bracket-range-over-doc-hint rule as the FROM side.
                 if to_doc_hint.is_none() || s.contains('[') {
                     if let Some(l) = locate(cx.shadow, None, s) {
-                        out.adaptations.push(l.how.into());
+                        out.adaptations.push(l.how.tag().into());
                         to_sides.push((l.doc, vec![(1, l.ord, l.width)]));
                     }
                 }
@@ -715,18 +700,14 @@ pub(super) fn h_create_link(cx: &mut Cx, index: usize, op: &Value, out: &mut OpO
         let from = match to_vspecs(cx, &from_sides) {
             Ok(v) => v,
             Err(e) => {
-                out.status = Status::Disagreed;
-                out.comparator = Some("alpha".into());
-                out.note = Some(e);
+                out.unresolvable(e);
                 return;
             }
         };
         let to = match to_vspecs(cx, &to_sides) {
             Ok(v) => v,
             Err(e) => {
-                out.status = Status::Disagreed;
-                out.comparator = Some("alpha".into());
-                out.note = Some(e);
+                out.unresolvable(e);
                 return;
             }
         };
@@ -751,27 +732,24 @@ pub(super) fn h_create_link(cx: &mut Cx, index: usize, op: &Value, out: &mut OpO
         });
         match cx.make_link(&home_golden, [from, to, vec![ty]], link, arrow, took_effect(op)) {
             Err(_) => {
-                out.status = Status::Disagreed;
-                out.comparator = Some("alpha".into());
-                out.note = Some(format!("create_link home {home_golden} unresolvable"));
+                out.unresolvable(format!("create_link home {home_golden} unresolvable"));
                 return;
             }
             Ok(Response::AckAddr { .. }) => bound += 1,
             Ok(other) => {
-                settle_ack(out, xf, rejection_code(&other));
+                settle_refused(out, xf, &other);
                 return;
             }
         }
     }
-    if !settle_ack(out, xf, None) {
+    if !settle_accepted(out, xf) {
         return;
     }
     if bound == 0 || goldens.is_empty() {
         out.status = Status::NotCompared;
         out.note = Some("create_link with no recorded result to bind".into());
     } else {
-        out.status = Status::Agreed;
-        out.comparator = Some("address-binding".into());
+        out.agree("address-binding");
     }
 }
 

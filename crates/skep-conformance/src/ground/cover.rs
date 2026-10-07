@@ -8,7 +8,7 @@
 use serde_json::Value;
 
 use super::SetupStep;
-use crate::fields::{field, insert_text, label_of, span_dict, str_field};
+use crate::fields::{field, insert_text, reads_whole_content, span_dict, str_field, verb_of, Verb};
 use crate::shadow::Shadow;
 
 /// Greedy cover of `expected` by substrings of the sources (copies, ≥ 4
@@ -85,8 +85,7 @@ pub(super) fn cover_with_sources(
 /// build `dest`? Guard for the full pair-cover strategy.
 pub(super) fn later_copy_into(all: &[Value], i: usize, dest: &str, shadow: &Shadow) -> bool {
     for op in &all[i + 1..] {
-        let label = label_of(op).to_ascii_lowercase();
-        if !(label.starts_with("vcopy") || label.starts_with("copy")) {
+        if verb_of(op) != Some(Verb::Vcopy) {
             continue;
         }
         let target = str_field(op, &["to", "dest", "target", "target_doc", "doc", "docid"])
@@ -111,17 +110,14 @@ pub(super) fn later_appends_text(
 ) -> Option<String> {
     let mut out = String::new();
     for op in &all[i + 1..] {
-        let label = label_of(op).to_ascii_lowercase();
-        let is_probe = label.starts_with("content") || label.starts_with("retrieve");
-        if is_probe {
+        if reads_whole_content(op) {
             let target = str_field(op, &["doc", "docid"]).and_then(|s| shadow.resolve_doc(s));
             if target.as_deref() == Some(dest) {
                 return Some(out); // reached the probe
             }
         }
-        let writes = ["insert", "append", "delete", "remove", "vcopy", "copy", "pivot", "swap",
-            "rearrange"];
-        if !writes.iter().any(|w| label.starts_with(w)) {
+        let verb = verb_of(op);
+        if !verb.is_some_and(Verb::writes_content) {
             continue;
         }
         let target = str_field(op, &["to", "dest", "target", "target_doc", "doc", "docid"])
@@ -130,7 +126,7 @@ pub(super) fn later_appends_text(
             continue; // a write to another doc
         }
         let positioned = str_field(op, &["address", "at", "position", "vaddr"]).is_some();
-        if positioned || !(label.starts_with("insert") || label == "append") {
+        if positioned || verb != Some(Verb::Insert) {
             return None; // not a derivable append into dest
         }
         out.push_str(&insert_text(op)?);
@@ -152,8 +148,7 @@ pub(super) type SharedPair = (String, u64, String, u64, u64);
 pub(super) fn comparison_pairs(all: &[Value], shadow: &Shadow) -> Vec<SharedPair> {
     let mut out: Vec<SharedPair> = Vec::new();
     for op in all {
-        let label = label_of(op).to_ascii_lowercase();
-        if !label.starts_with("compar") {
+        if verb_of(op) != Some(Verb::Compare) {
             continue;
         }
         if let Some(entries) = field(op, &["results", "comparisons"]).and_then(Value::as_array) {

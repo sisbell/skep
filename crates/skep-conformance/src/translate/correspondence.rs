@@ -1,17 +1,48 @@
 //! Correspondence: `compare_versions` — skep's COMPARE report normalized to
 //! (ordinal A, ordinal B, width) triples, coalesced as the recording client
-//! coalesced its own, and matched against the recorded shared-span pairs.
+//! coalesced its own, and judged against what the recording says the
+//! compare found: the shared-span pairs it listed, or only how many there
+//! were. A compare over `positions` records identity among one document's
+//! positions instead, judged through their live images.
 
-use serde_json::Value;
+use serde_json::{Map, Value};
 
 use skep_address::Nat;
 use skep_febe::{Op, Response};
 use skep_retrieval::RegionSpec;
 
-use super::{fail_response, inexpressible, Cx, Tally};
+use super::{compared_nothing, inexpressible, refusal, Cx, Tally};
 use crate::fields::{field, locate, span_dict, str_field, vspec_dict};
 use crate::outcome::{OpOutcome, Status};
-use crate::tum::vspan;
+use crate::tum::{parse_vpos, vspan};
+
+/// The keys a compare names its documents by, beside its operand fields
+/// and `<ref>_span` windows.
+const COMPARE_READS: &[&str] = &[
+    "docs", "documents", "comparing", "doc_a", "doc1", "a", "doc_b", "doc2", "b", "doc", "docid",
+];
+
+/// What the recording says a compare found: the shared-span pairs it
+/// listed, or only how many there were.
+#[derive(Clone, Copy)]
+enum RecordedShared<'v> {
+    Pairs(&'v [Value]),
+    Count(u64),
+}
+
+impl<'v> RecordedShared<'v> {
+    /// The recorded answer: a pair list, unless it is empty or absent and a
+    /// count (`pair_count`, `shared_span_pairs`) stands beside it. `None`
+    /// when the recording kept neither.
+    fn of(pairs: Option<&'v [Value]>, count: Option<u64>) -> Option<RecordedShared<'v>> {
+        match (pairs, count) {
+            (Some(items), _) if !items.is_empty() => Some(RecordedShared::Pairs(items)),
+            (_, Some(n)) => Some(RecordedShared::Count(n)),
+            (Some(items), None) => Some(RecordedShared::Pairs(items)),
+            (None, None) => None,
+        }
+    }
+}
 
 /// One side of a recorded shared-span pair: (optional docid, ord, width).
 type PairSide = (Option<String>, u64, u64);
@@ -111,27 +142,77 @@ struct CompareSide<'a> {
     window: Option<Vec<(u64, u64)>>,
 }
 
+/// skep's coalesced (ordinal A, ordinal B, width) triples, and any pair it
+/// reported between documents other than the two compared, judged against
+/// the recording. A recorded pair that names no two content-subspace sides
+/// is a part the comparison cannot aim at, never dropped; skep's foreign
+/// pairs are a disagreement either way.
+fn judge_shared(
+    recorded: RecordedShared,
+    a: &CompareSide,
+    b: &CompareSide,
+    merged: &[(u64, u64, u64)],
+    foreign: &[String],
+) -> Tally {
+    let mut tally = Tally::default();
+    let with_foreign = |mut actual: String| {
+        if !foreign.is_empty() {
+            actual.push_str(&format!(" + foreign docs {foreign:?}"));
+        }
+        actual
+    };
+    match recorded {
+        RecordedShared::Pairs(items) => {
+            let mut want: Vec<(u64, u64, u64)> = Vec::new();
+            for item in items {
+                match orient_pair(item, a.doc, b.doc, a.reference, b.reference) {
+                    Some(((oa, wa), (ob, _))) => want.push((oa, ob, wa)),
+                    None => tally.unaimed(format!(
+                        "shared pair {item} names no two content-subspace sides"
+                    )),
+                }
+            }
+            want.sort();
+            if want == merged && foreign.is_empty() {
+                tally.agree();
+            } else {
+                tally.differ(format!("{want:?}"), with_foreign(format!("{merged:?}")));
+            }
+        }
+        RecordedShared::Count(n) => {
+            let found = merged.len() as u64;
+            if found == n && foreign.is_empty() {
+                tally.agree();
+            } else {
+                tally.differ(
+                    format!("{n} shared pairs"),
+                    with_foreign(format!("{found} shared pairs")),
+                );
+            }
+        }
+    }
+    tally
+}
+
 fn run_compare_pair(
     cx: &mut Cx,
     out: &mut OpOutcome,
     a: CompareSide,
     b: CompareSide,
-    shared: &[Value],
-) -> Option<()> {
+    recorded: RecordedShared,
+) {
     let (Some(da), Some(db)) = (cx.alpha.translate(a.doc), cx.alpha.translate(b.doc)) else {
-        out.status = Status::Disagreed;
-        out.comparator = Some("alpha".into());
-        out.note = Some("compare over unresolvable documents".into());
-        return None;
+        out.unresolvable("compare over unresolvable documents".into());
+        return;
     };
     // An operand window (compare_partial's "shared (13-18)"; the corpus
     // extension's operand vspec spans) narrows that side's ρ; without one
     // the side is the whole extent.
     let region_of =
-        |cx: &Cx, g: &str, d: &skep_address::Address, win: Option<Vec<(u64, u64)>>| -> RegionSpec {
+        |cx: &Cx, g: &str, d: &skep_address::Address, win: &Option<Vec<(u64, u64)>>| -> RegionSpec {
             let spans = match win {
                 Some(list) => {
-                    list.into_iter().filter_map(|(ord, w)| vspan(1, ord, w)).collect()
+                    list.iter().filter_map(|&(ord, w)| vspan(1, ord, w)).collect()
                 }
                 None => {
                     let n = cx.shadow.text_len(g);
@@ -140,13 +221,13 @@ fn run_compare_pair(
             };
             RegionSpec { doc: d.clone(), spans }
         };
-    let rho1 = vec![region_of(cx, a.doc, &da, a.window)];
-    let rho2 = vec![region_of(cx, b.doc, &db, b.window)];
+    let rho1 = vec![region_of(cx, a.doc, &da, &a.window)];
+    let rho2 = vec![region_of(cx, b.doc, &db, &b.window)];
     let rep = match cx.rig.exec(Op::Compare { rho1, rho2 }) {
         Response::Compare { rep, .. } => rep,
         other => {
-            fail_response(out, "correspondence", "a compare report", &other);
-            return None;
+            out.disagree("correspondence", "a compare report".into(), refusal(&other));
+            return;
         }
     };
     // Normalize skep's pairs to (ordA, ordB, width) triples, then coalesce
@@ -182,27 +263,11 @@ fn run_compare_pair(
         }
         merged.push(t);
     }
-    let mut want: Vec<(u64, u64, u64)> = Vec::new();
-    for item in shared {
-        if let Some(((oa, wa), (ob, _))) = orient_pair(item, a.doc, b.doc, a.reference, b.reference)
-        {
-            want.push((oa, ob, wa));
-        }
-    }
-    want.sort();
-    out.comparator = Some("correspondence".into());
-    if want == merged && foreign.is_empty() {
-        out.status = Status::Agreed;
-    } else {
-        out.status = Status::Disagreed;
-        out.expected = Some(format!("{want:?}"));
-        let mut act = format!("{merged:?}");
-        if !foreign.is_empty() {
-            act.push_str(&format!(" + foreign docs {foreign:?}"));
-        }
-        out.actual = Some(act);
-    }
-    Some(())
+    let comparator = match recorded {
+        RecordedShared::Pairs(_) => "correspondence",
+        RecordedShared::Count(_) => "count",
+    };
+    judge_shared(recorded, &a, &b, &merged, &foreign).settle(out, comparator);
 }
 
 /// A compare operand named by a top-level vspec-dict field: (field key,
@@ -238,34 +303,19 @@ pub(super) fn h_compare(cx: &mut Cx, op: &Value, out: &mut OpOutcome) {
         .unwrap_or_default();
     if operands.len() == 2 {
         out.adaptations.push("compare-operands-explicit".into());
+        let pairs = field(op, &["result", "shared", "pairs"]).and_then(Value::as_array);
+        let count = field(op, &["pair_count"]).and_then(Value::as_u64);
+        let Some(recorded) = RecordedShared::of(pairs.map(Vec::as_slice), count) else {
+            let mut reads: Vec<&str> = COMPARE_READS.to_vec();
+            reads.extend(operands.iter().map(|(k, _, _)| k.as_str()));
+            compared_nothing(out, op, &reads);
+            return;
+        };
         let (ka, da, wa) = operands[0].clone();
         let (kb, db, wb) = operands[1].clone();
-        let shared: Vec<Value> = field(op, &["result", "shared", "pairs"])
-            .and_then(Value::as_array)
-            .cloned()
-            .unwrap_or_default();
         let a = CompareSide { doc: &da, reference: &ka, window: (!wa.is_empty()).then_some(wa) };
         let b = CompareSide { doc: &db, reference: &kb, window: (!wb.is_empty()).then_some(wb) };
-        if run_compare_pair(cx, out, a, b, &shared).is_none() {
-            return;
-        }
-        // A bare pair_count (no recorded pair list) re-judges as a count.
-        if let (Some(n), true) =
-            (field(op, &["pair_count"]).and_then(Value::as_u64), shared.is_empty())
-        {
-            if out.status == Status::Disagreed && out.expected.as_deref() == Some("[]") {
-                let actual = out.actual.as_deref().unwrap_or("").matches('(').count();
-                out.comparator = Some("count".into());
-                if actual as u64 == n {
-                    out.status = Status::Agreed;
-                    out.expected = None;
-                    out.actual = None;
-                } else {
-                    out.expected = Some(format!("{n} shared pairs"));
-                    out.actual = Some(format!("{actual} shared pairs"));
-                }
-            }
-        }
+        run_compare_pair(cx, out, a, b, recorded);
         return;
     }
 
@@ -292,24 +342,40 @@ pub(super) fn h_compare(cx: &mut Cx, op: &Value, out: &mut OpOutcome) {
                     tally.unaimed(format!("comparison source `{srcname}` resolves to nothing"));
                     continue;
                 };
-                let shared: Vec<Value> =
-                    e.get("shared").and_then(Value::as_array).cloned().unwrap_or_default();
+                let shared: &[Value] =
+                    e.get("shared").and_then(Value::as_array).map_or(&[], Vec::as_slice);
                 let mut sub = OpOutcome::new(out.index, &out.label);
                 let a = CompareSide { doc: &dest, reference: "target", window: None };
                 let b = CompareSide { doc: &src, reference: "source", window: None };
-                run_compare_pair(cx, &mut sub, a, b, &shared);
+                run_compare_pair(cx, &mut sub, a, b, RecordedShared::Pairs(shared));
                 match sub.status {
                     Status::Disagreed => tally.differ(
                         format!("{srcname}: {}", sub.expected.unwrap_or_default()),
                         sub.actual.unwrap_or_else(|| sub.note.unwrap_or_default()),
                     ),
                     Status::Agreed => tally.agree(),
+                    Status::Inexpressible => tally.unaimed(format!(
+                        "{srcname}: {}",
+                        sub.note.unwrap_or_default()
+                    )),
                     _ => {}
                 }
             }
             tally.settle(out, "correspondence");
             return;
         }
+    }
+
+    // Identity among one document's positions (policy
+    // `identity-pairs-by-position`): `positions` lists V-positions, and a
+    // `results` map records, per "i_j" (1-based into the list), whether
+    // positions i and j share their I-address.
+    if let (Some(positions), Some(pairs)) = (
+        field(op, &["positions"]).and_then(Value::as_array),
+        field(op, &["results"]).and_then(Value::as_object),
+    ) {
+        identity_pairs(cx, op, out, positions, pairs);
+        return;
     }
 
     // The two documents, as referenced by the golden (names or addresses):
@@ -354,14 +420,12 @@ pub(super) fn h_compare(cx: &mut Cx, op: &Value, out: &mut OpOutcome) {
     // (`result: {shared_span_pairs, shared: […]}` —
     // iaddress_allocation/delete_does_not_affect_next_insert's
     // compare_via_transclusion).
-    let shared: Vec<Value> = field(op, &["shared", "result", "pairs", "shared_spans"])
-        .and_then(|v| {
-            v.as_array().cloned().or_else(|| v.get("shared").and_then(Value::as_array).cloned())
-        })
-        .unwrap_or_default();
+    let shared: Option<&Vec<Value>> = field(op, &["shared", "result", "pairs", "shared_spans"])
+        .and_then(|v| v.as_array().or_else(|| v.get("shared").and_then(Value::as_array)));
+    let shared_items: &[Value] = shared.map_or(&[], Vec::as_slice);
     // Resolve refs; fall back to the docids carried inside the shared items
     // (identity_through_rearrange_pivot's "rearranged"/"original_version").
-    let docids_in_items: Vec<String> = shared
+    let docids_in_items: Vec<String> = shared_items
         .iter()
         .filter_map(Value::as_object)
         .flat_map(|o| o.values())
@@ -377,7 +441,7 @@ pub(super) fn h_compare(cx: &mut Cx, op: &Value, out: &mut OpOutcome) {
     // its pairs `original`/`version` without naming the documents).
     let recorded_ref = |r: &str| {
         named_by_op
-            || shared.iter().any(|item| item.as_object().is_some_and(|o| o.contains_key(r)))
+            || shared_items.iter().any(|item| item.as_object().is_some_and(|o| o.contains_key(r)))
     };
     let (ga, gb) = match (resolve_side(cx, &ref_a, 0), resolve_side(cx, &ref_b, 1)) {
         (Some(a), Some(b)) => (a, b),
@@ -400,22 +464,16 @@ pub(super) fn h_compare(cx: &mut Cx, op: &Value, out: &mut OpOutcome) {
             return;
         }
     };
-    if shared.is_empty() && field(op, &["shared", "result", "pairs"]).is_none() {
-        // Count-only expectation (insert_only_baseline `shared_span_pairs`)
-        // or nothing to compare.
-        if field(op, &["shared_span_pairs"]).and_then(Value::as_u64).is_none() {
-            out.status = Status::NotCompared;
-            return;
-        }
-    }
     // Operand windows: top-level `<ref>_span` keys narrow that side's ρ —
     // compare ops honor their windows (compare_partial's descriptive
     // "shared (13-18)" grounds to doc1[13..19]; round 2 ran whole-document).
+    let mut reads: Vec<&str> = COMPARE_READS.to_vec();
     let mut win_a: Option<Vec<(u64, u64)>> = None;
     let mut win_b: Option<Vec<(u64, u64)>> = None;
     if let Some(o) = op.as_object() {
         for (k, v) in o {
             let Some(stem) = k.strip_suffix("_span") else { continue };
+            reads.push(k);
             let Some(side_doc) = cx.shadow.resolve_doc(stem) else { continue };
             let win = if let Some((sub, ord, w)) = span_dict(v) {
                 (sub == 1).then_some((ord, w))
@@ -434,28 +492,99 @@ pub(super) fn h_compare(cx: &mut Cx, op: &Value, out: &mut OpOutcome) {
             }
         }
     }
+    let count = field(op, &["shared_span_pairs"]).and_then(Value::as_u64);
+    let Some(recorded) = RecordedShared::of(shared.map(Vec::as_slice), count) else {
+        compared_nothing(out, op, &reads);
+        return;
+    };
     let a = CompareSide { doc: &ga, reference: &ref_a, window: win_a };
     let b = CompareSide { doc: &gb, reference: &ref_b, window: win_b };
-    if run_compare_pair(cx, out, a, b, &shared).is_none() {
+    run_compare_pair(cx, out, a, b, recorded);
+}
+
+/// Policy `identity-pairs-by-position` (internal/internal_transclusion_
+/// multiple_copies): each recorded pair "i_j" of `positions` — 1-based —
+/// judged by whether skep's live images of the two positions start at one
+/// I-address, against the recorded bool.
+fn identity_pairs(
+    cx: &mut Cx,
+    op: &Value,
+    out: &mut OpOutcome,
+    positions: &[Value],
+    pairs: &Map<String, Value>,
+) {
+    out.adaptations.push("identity-pairs-by-position".into());
+    let Some(doc) = cx.doc_arg(op, out, &["doc", "docid"]) else {
+        inexpressible(out, "position identity compare with no document in scope".into());
         return;
-    }
-    // shared_span_pairs count check rides on top when present and the span
-    // list was absent.
-    if let (Some(n), true) =
-        (field(op, &["shared_span_pairs"]).and_then(Value::as_u64), shared.is_empty())
-    {
-        if out.status == Status::Disagreed && out.expected.as_deref() == Some("[]") {
-            // Re-judge as a count comparison.
-            let actual = out.actual.as_deref().unwrap_or("").matches('(').count();
-            out.comparator = Some("count".into());
-            if actual as u64 == n {
-                out.status = Status::Agreed;
-                out.expected = None;
-                out.actual = None;
-            } else {
-                out.expected = Some(format!("{n} shared pairs"));
-                out.actual = Some(format!("{actual} shared pairs"));
-            }
+    };
+    let Some(d) = cx.skep_doc(&doc) else {
+        out.unresolvable(format!("position identity compare of unresolvable doc {doc}"));
+        return;
+    };
+    let image = |pos: &str| -> Option<String> {
+        let (sub, ord) = parse_vpos(pos)?;
+        let span = vspan(sub, ord, 1)?;
+        match cx.rig.exec(Op::Image { d: d.clone(), region: vec![span] }) {
+            Response::Runs { runs, .. } => runs.first().map(|r| crate::tum::addr_str(r.i_start())),
+            _ => None,
         }
+    };
+    let position = |n: Option<usize>| n?.checked_sub(1).and_then(|i| positions.get(i)?.as_str());
+    let mut tally = Tally::default();
+    for (key, want) in pairs {
+        let (i, j) = key
+            .split_once('_')
+            .map_or((None, None), |(i, j)| (i.parse().ok(), j.parse().ok()));
+        let (Some(pi), Some(pj), Some(want)) = (position(i), position(j), want.as_bool()) else {
+            tally.unaimed(format!("pair `{key}` names no two recorded positions"));
+            continue;
+        };
+        let label = format!("{pi}~{pj} share an I-address: ");
+        match (image(pi), image(pj)) {
+            (Some(a), Some(b)) if (a == b) == want => tally.agree(),
+            (Some(a), Some(b)) => {
+                tally.differ(format!("{label}{want}"), format!("{label}{}", a == b))
+            }
+            _ => tally.differ(format!("{label}{want}"), "a position has no live image".into()),
+        }
+    }
+    tally.settle(out, "identity-pairs");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn side<'a>(doc: &'a str, reference: &'a str) -> CompareSide<'a> {
+        CompareSide { doc, reference, window: None }
+    }
+
+    /// A count-only recording is judged as a count: two recorded pairs
+    /// against none found disagree, where a pair list read as empty would
+    /// have agreed with skep's empty report.
+    #[test]
+    fn a_recorded_count_is_judged_as_a_count() {
+        let (a, b) = (side("1.1.0.1.0.1", "original"), side("1.1.0.1.0.2", "version"));
+        let mut out = OpOutcome::new(0, "compare");
+        judge_shared(RecordedShared::Count(2), &a, &b, &[], &[]).settle(&mut out, "count");
+        assert_eq!(out.status, Status::Disagreed);
+        assert_eq!(out.expected.as_deref(), Some("2 shared pairs"));
+        assert_eq!(out.actual.as_deref(), Some("0 shared pairs"));
+
+        let mut out = OpOutcome::new(0, "compare");
+        judge_shared(RecordedShared::Count(1), &a, &b, &[(1, 1, 5)], &[]).settle(&mut out, "count");
+        assert_eq!(out.status, Status::Agreed);
+    }
+
+    /// A recorded pair the comparison cannot orient is never dropped: it
+    /// leaves the op short of a full comparison.
+    #[test]
+    fn an_unreadable_recorded_pair_is_not_dropped() {
+        let (a, b) = (side("1.1.0.1.0.1", "original"), side("1.1.0.1.0.2", "version"));
+        let pairs = [serde_json::json!({"original": {"start": "2.1", "width": "0.1"}})];
+        let mut out = OpOutcome::new(0, "compare");
+        judge_shared(RecordedShared::Pairs(&pairs), &a, &b, &[], &[]).settle(&mut out, "pairs");
+        assert_eq!(out.status, Status::Inexpressible);
     }
 }

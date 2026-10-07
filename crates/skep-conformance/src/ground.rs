@@ -13,7 +13,8 @@
 //!   by a recorded create.
 //! * **Seeds** — initial content per doc, obtained by BACKWARD-UNDOING the
 //!   recorded edits from the doc's first full-content probe (each undo step
-//!   verifies the removed bytes equal the recorded insert/copy, so a wrong
+//!   verifies the removed bytes equal the recorded insert/copy, and undoes
+//!   a delete only with the bytes it is known to have removed, so a wrong
 //!   inference aborts instead of guessing).
 //! * **Expansion plans** — macro ops (`create_chain`, parseable `setup`
 //!   descriptions, `vcopy_multiple`/`vcopy_all`/`vcopy_from_both`,
@@ -58,16 +59,16 @@ use std::collections::BTreeMap;
 use serde_json::Value;
 
 use crate::evidence::{
-    delete_is_noop, insert_aim_from_probe, insert_pad_width, insert_pos_from_post_state,
-    next_content_probe, resolve_delete_span, took_effect,
+    delete_is_noop, next_content_probe, resolve_delete_span, resolve_insert, took_effect,
 };
 use crate::fields::{
-    arrow_results, cuts_of, distributed_insert_texts, distribution_targets, doc_from_label,
-    expect_strings, field, group_word, insert_text, is_position_marker, keyed_role, label_of,
-    locate, normalize, resolve_position, span_dict, str_field, vcopy_sources, vspec_dict, Verb,
+    aim_doc, arrow_results, as_text, cuts_of, distributed_insert_texts, distribution_targets,
+    expect_strings, field, group_word, is_position_marker, label_of, locate, normalize,
+    per_doc_replies, quoted, recorded_content, resolve_position, roster, span_dict, str_field,
+    vcopy_sources, verb_of, vspec_dict, DocAim, Verb, POST_WRITE_KEYS,
 };
 use crate::shadow::Shadow;
-use crate::tum::{link_home_docid, parse_dotted};
+use crate::tum::{link_home_docid, parse_dotted, parse_vpos};
 
 // Expansion-plan covers built from recorded comparison pairs or source text.
 mod cover;
@@ -115,12 +116,21 @@ pub struct Grounding {
 #[derive(Clone)]
 enum Edit {
     Ins { at: Option<u64>, bytes: Vec<u8> },
-    /// `explicit` = the position was numerically recorded (client-sent), so
-    /// the undo reinserts there FIRST; a text-located position tries the end
-    /// first (the seed-shift shape).
-    Del { at: u64, bytes: Vec<u8>, explicit: bool },
+    /// `bytes` = what the delete removed, when the walk knew all of it —
+    /// from its own state, or from the op's description of the removed
+    /// text; `None` when it knew less than the delete's width, and then the
+    /// delete cannot be undone. `explicit` = the position is pinned (sent
+    /// numerically, or read off the recorded post-state), so the undo
+    /// reinserts there FIRST; a text-located position tries the end first
+    /// (the seed-shift shape).
+    Del { at: u64, bytes: Option<Vec<u8>>, explicit: bool },
     Pivot { a: u64, b: u64, c: u64 },
     Swap { s1: u64, e1: u64, s2: u64, e2: u64 },
+    /// A content write udanax made that the walk could not reproduce — a
+    /// position, region or cut set its grammar does not ground (the play
+    /// pass finds the op inexpressible). Its effect is unknown, so no undo
+    /// crosses it: undoing past it would credit its bytes to the seed.
+    Opaque,
 }
 
 pub fn ground(ops: &[Value]) -> Grounding {
@@ -283,16 +293,20 @@ fn implied_creates(ops: &[Value]) -> Vec<String> {
     let mut created_count: u64 = 0;
     let mut referenced: Vec<String> = Vec::new();
     for op in ops {
-        let label = label_of(op).to_ascii_lowercase();
-        let creates = label.starts_with("create_doc")
-            || label.starts_with("create_version")
-            || label.starts_with("version")
-            || label.starts_with("open_document")
-            || label.starts_with("create_and_transclude")
-            || label.starts_with("create_chain")
-            || label.starts_with("create_sources")
-            || label.starts_with("create_target")
-            || label.starts_with("create_multiple");
+        let creates = match verb_of(op) {
+            Some(
+                Verb::CreateDocument
+                | Verb::CreateDocuments
+                | Verb::CreateChain
+                | Verb::CreateVersion
+                | Verb::OpenDocument,
+            ) => true,
+            // A vcopy form that mints its targets first.
+            Some(Verb::Vcopy) => {
+                label_of(op).to_ascii_lowercase().starts_with("create_and_transclude")
+            }
+            _ => false,
+        };
         if creates {
             walk(op, &mut |s| {
                 if s.contains('.') && parse_dotted(s).is_some() && link_home_docid(s).is_none() {
@@ -368,7 +382,12 @@ fn undo_edits(cur: Vec<u8>, edits: &[Edit]) -> Option<Vec<u8>> {
             next.drain(start..start + n);
             undo_edits(next, rest)
         }
-        Edit::Del { at, bytes, explicit } => {
+        // A delete whose removed bytes the walk never knew cannot be
+        // undone: reinserting nothing would hand back the post-delete
+        // content as the seed, a world no recorded op built. Nor can a
+        // write the walk could not reproduce at all.
+        Edit::Del { bytes: None, .. } | Edit::Opaque => None,
+        Edit::Del { at, bytes: Some(bytes), explicit } => {
             // Candidate reinsertion points. Explicit (client-sent) position:
             // the recorded ordinal first — it is authoritative (isolation/
             // delete_does_not_affect_other_documents "1.3 for 0.5 (CDEFG)"
@@ -522,26 +541,22 @@ impl Sim {
         self.logs.entry(doc.to_string()).or_default().push(e);
     }
 
+    /// The op's document, read as the play pass reads it (`fields::aim_doc`).
+    /// An explicit reference that resolves to nothing aims at nothing: the
+    /// op changes nothing here, as it executes nothing there.
     fn doc_ref(&mut self, op: &Value, keys: &[&str]) -> Option<String> {
-        if let Some(s) = str_field(op, keys) {
-            if let Some(d) = self.shadow.resolve_doc(s) {
-                return Some(d);
+        match aim_doc(&mut self.shadow, op, keys) {
+            DocAim::Named(d) | DocAim::FromLabel(d) | DocAim::Register(d) => Some(d),
+            DocAim::Unresolved(_) => None,
+            DocAim::FirstTouch => {
+                // A scenario whose opening op needs a document before any
+                // create (endsets/endsets_after_pivot) — create one, exactly
+                // as the play pass will.
+                let id = self.shadow.synthesize_docid();
+                self.shadow.create_doc(&id, None);
+                Some(id)
             }
         }
-        if let Some(name) = doc_from_label(label_of(op)) {
-            if let Some(d) = self.shadow.resolve_doc(&name) {
-                return Some(d);
-            }
-        }
-        if let Some(d) = self.shadow.scoped() {
-            return Some(d);
-        }
-        // First-touch: a scenario whose opening op needs a document before
-        // any create (endsets/endsets_after_pivot) — create one, exactly as
-        // the play pass will.
-        let id = self.shadow.synthesize_docid();
-        self.shadow.create_doc(&id, None);
-        Some(id)
     }
 
     /// Mirror of the play-pass shadow effects, content only. Any drift
@@ -656,6 +671,8 @@ impl Sim {
                 if let Some((1, ord, _)) = resolve_position(&self.shadow, &doc, pos) {
                     self.shadow.insert(&doc, ord, ch.as_bytes());
                     self.record(&doc, Edit::Ins { at: Some(ord), bytes: ch.as_bytes().to_vec() });
+                } else {
+                    self.record(&doc, Edit::Opaque);
                 }
                 self.check_probes(r);
             }
@@ -684,41 +701,24 @@ impl Sim {
             }
             return;
         }
-        let Some(mut doc) = self.doc_ref(op, &["doc", "docid"]) else { return };
-        let Some(mut text) = insert_text(op) else { return };
-        // Doc-less insert aim: the next recorded vspanset probe names the
-        // doc the script observed changed (content/insert_vspace_mapping:
-        // register held the version, the probe pins the original) — mirror
-        // of the translator's policy.
-        if str_field(op, &["doc", "docid"]).is_none() && doc_from_label(label_of(op)).is_none() {
-            if let Some(d2) = insert_aim_from_probe(all, i, &self.shadow, &doc, &text) {
-                self.shadow.set_current(&d2);
-                doc = d2;
-            }
-        }
-        let pos = str_field(op, &["address", "at", "position", "vaddr"]);
-        let (at, ord) = match pos.and_then(|p| resolve_position(&self.shadow, &doc, p)) {
-            Some((1, o, _)) => (Some(o), o),
-            Some(_) => return, // link-subspace insert: no content effect
-            None => match insert_pos_from_post_state(op, &self.shadow, &doc, &text) {
-                // Post-state-pinned position (mirror of the translator's
-                // `insert-position-from-post-state`).
-                Some(o) => (Some(o), o),
-                None => (None, self.shadow.text_len(&doc) + 1),
-            },
+        // Where the insert lands — re-aim, position, recorded-vspanset pad
+        // — is the one reading the translator applies
+        // (`evidence::resolve_insert`). An insert that reading cannot place
+        // changes nothing, as it executes nothing in the play pass.
+        let Some(doc) = self.doc_ref(op, &["doc", "docid"]) else { return };
+        let Ok(landing) = resolve_insert(all, i, &self.shadow, &doc, op, &mut Vec::new()) else {
+            self.record(&doc, Edit::Opaque);
+            return;
         };
-        // Recorded-vspanset width authority: pad an append-shaped insert
-        // whose doc's next clean vspanset probe records more than the field
-        // text supplies (provenance/createnewversion_text_vs_links 0.34 over
-        // a 33-char text) — mirror of the translator's policy.
-        if at.is_none() || self.shadow.text_len(&doc) == 0 {
-            let new_len = self.shadow.text_len(&doc) + text.len() as u64;
-            if let Some(pad) = insert_pad_width(all, i, &self.shadow, &doc, new_len) {
-                text.push_str(&" ".repeat(pad as usize));
-            }
+        if landing.doc != doc {
+            self.shadow.set_current(&landing.doc);
         }
-        self.shadow.insert(&doc, ord, text.as_bytes());
-        self.record(&doc, Edit::Ins { at, bytes: text.into_bytes() });
+        if landing.sub != 1 {
+            return; // a link-subspace insert: no content effect
+        }
+        self.shadow.insert(&landing.doc, landing.ord, &landing.bytes);
+        let at = (!landing.appended).then_some(landing.ord);
+        self.record(&landing.doc, Edit::Ins { at, bytes: landing.bytes });
         self.check_probes(op);
     }
 
@@ -730,7 +730,7 @@ impl Sim {
             let n = self.shadow.text_len(&doc);
             let bytes = self.shadow.slice(&doc, 1, n);
             self.shadow.delete(&doc, 1, n);
-            self.record(&doc, Edit::Del { at: 1, bytes, explicit: true });
+            self.record(&doc, Edit::Del { at: 1, bytes: Some(bytes), explicit: true });
         }
     }
 
@@ -741,19 +741,27 @@ impl Sim {
             return; // recorded post-state shows udanax removed nothing
         }
         if let Some((ord, w, how)) = resolve_delete_span(&self.shadow, all, i, &doc, op) {
-            // Bytes removed: the sim slice — unless the op DESCRIBES the
-            // removed text (the "(CDEFG)" parenthetical) and the sim's state
-            // cannot yet cover the width (seed not in place); the
-            // description then feeds the undo the true bytes.
-            let mut bytes = self.shadow.slice(&doc, ord, w);
-            if bytes.len() as u64 != w {
-                if let Some(d) = delete_described_bytes(op, w) {
-                    bytes = d;
-                }
-            }
-            let explicit = !matches!(how, "text-located" | "delete-text-from-label");
+            // Bytes removed: the sim slice when it covers the whole width,
+            // else the op's own DESCRIPTION of the removed text (the
+            // "(CDEFG)" parenthetical, a quoted 'Shared ') at exactly that
+            // width — the sim's state cannot cover it until a seed is in
+            // place. Knowing neither, the delete is recorded as removing
+            // bytes the walk never knew, and no undo crosses it.
+            let slice = self.shadow.slice(&doc, ord, w);
+            let bytes = if slice.len() as u64 == w {
+                Some(slice)
+            } else {
+                delete_described_bytes(op, w)
+            };
             self.shadow.delete(&doc, ord, w);
-            self.record(&doc, Edit::Del { at: ord, bytes, explicit });
+            self.record(&doc, Edit::Del { at: ord, bytes, explicit: how.position_pinned() });
+        } else {
+            // A content delete this grammar cannot place; a link-subspace
+            // delete has no content effect.
+            let start = str_field(op, &["start", "address", "at"]).and_then(parse_vpos);
+            if start.is_none_or(|(sub, _)| sub == 1) {
+                self.record(&doc, Edit::Opaque);
+            }
         }
         self.check_probes(op);
     }
@@ -791,7 +799,7 @@ impl Sim {
                 self.shadow.swap(&doc, s1, e1, s2, e2);
                 self.record(&doc, Edit::Swap { s1, e1, s2, e2 });
             }
-            _ => {}
+            _ => self.record(&doc, Edit::Opaque),
         }
     }
 
@@ -902,27 +910,19 @@ impl Sim {
                 return;
             }
         }
-        // Role-keyed fields: doc1/doc2 (subspace/insert_text_check_link_
-        // positions), source1/source2 (identity/identity_mixed_sources),
-        // targetN — any `<role><n>` key holding a dotted docid.
-        let mut keyed = false;
-        if let Some(o) = op.as_object() {
-            let mut pairs: Vec<(String, String)> = o
-                .iter()
-                .filter(|(k, _)| keyed_role(k))
-                .filter_map(|(k, v)| {
-                    let id = v.as_str()?;
-                    parse_dotted(id)?;
-                    Some((k.clone(), id.to_string()))
-                })
-                .collect();
-            pairs.sort();
-            for (k, id) in pairs {
-                self.shadow.create_doc(&id, Some(&k));
-                keyed = true;
+        // A roster of `<name>: <docid>` fields (`fields::roster`): each
+        // names a document, created here unless an implied create already
+        // made it.
+        let named = roster(op);
+        if !named.is_empty() {
+            for (name, id) in named {
+                if self.shadow.knows(&id) {
+                    self.shadow.bind_name(&name, &id);
+                    self.shadow.set_current(&id);
+                } else {
+                    self.shadow.create_doc(&id, Some(&name));
+                }
             }
-        }
-        if keyed {
             return;
         }
         let results: Vec<String> = field(op, &["results"])
@@ -1434,20 +1434,20 @@ impl Sim {
     }
 
     /// Compare any full-content expectations this op carries against the
-    /// shadow; record the first mismatch for inference.
+    /// shadow; record the first mismatch for inference. Recorded content is
+    /// read as the translator reads it (`fields::as_text`, `recorded_content`,
+    /// `per_doc_replies`).
     fn check_probes(&mut self, op: &Value) {
         if let Some(map) = op.get("docs").and_then(Value::as_object) {
             for (name, exp) in map {
-                let (Some(doc), Some(strings)) =
-                    (self.shadow.resolve_doc(name), expect_strings(exp))
-                else {
+                // create_documents docs-maps hold ID strings, not content.
+                let (Some(doc), Some(text)) = (
+                    self.shadow.resolve_doc(name),
+                    expect_strings(exp).as_deref().and_then(as_text),
+                ) else {
                     continue;
                 };
-                // create_documents docs-maps hold ID strings, not content.
-                if strings.iter().any(|s| s.contains('.') && parse_dotted(s).is_some()) {
-                    continue;
-                }
-                self.probe(&doc, &strings.join(""));
+                self.probe(&doc, &text);
             }
             return;
         }
@@ -1460,52 +1460,56 @@ impl Sim {
             return;
         }
         let label = label_of(op).to_ascii_lowercase();
-        let content_keys: &[&str] = if label.starts_with("insert")
-            || label.starts_with("delete")
-            || label.starts_with("remove")
-            || label.starts_with("vcopy")
+        let recorded = if verb_of(op).is_some_and(Verb::writes_content) {
+            // The translator's post-write keys: a write's text is its argument.
+            field(op, POST_WRITE_KEYS).and_then(expect_strings)
+        } else if matches!(verb_of(op), Some(Verb::Contents | Verb::Observe))
+            && (label.starts_with("content")
+                || label.starts_with("retrieve")
+                || label.starts_with("full_")
+                || label.contains("state")
+                || label.starts_with("after_")
+                || label.starts_with("verify")
+                // A snapshot op WITH a content expectation is a contents
+                // probe of the named/scoped doc (isolation/delete_does_not_
+                // affect_other_documents seeds doc B only through its
+                // snapshots); content-less snapshots stay meta.
+                || label.starts_with("snapshot"))
         {
-            // Mirrors the translator's Probe::PostWrite key set.
-            &["remaining", "result", "expected_contents"]
-        } else if label.starts_with("content")
-            || label.starts_with("retrieve")
-            || label.starts_with("full_")
-            || label.contains("state")
-            || label.starts_with("after_")
-            || label.starts_with("verify")
-            // A snapshot op WITH a content expectation is a contents probe
-            // of the named/scoped doc (isolation/delete_does_not_affect_
-            // other_documents seeds doc B only through its snapshots);
-            // content-less snapshots stay meta.
-            || label.starts_with("snapshot")
-        {
-            &[
-                "result", "before", "after", "content", "contents", "sample", "remaining",
-                "empty", "expected_contents",
-            ]
+            // Per-document replies probe each document they name — save a
+            // reply strictly inside its document's content, which is the
+            // translator's narrowed read, not the whole document
+            // (ispan_partial_overlap's `source: ["CDEFG"]`).
+            let replies = per_doc_replies(op, &self.shadow);
+            if !replies.is_empty() {
+                for (_, doc, strings) in replies {
+                    let Some(text) = as_text(&strings) else { continue };
+                    let held = self.shadow.text_string(&doc);
+                    if text != held && held.contains(&text) {
+                        continue;
+                    }
+                    self.probe(&doc, &text);
+                }
+                return;
+            }
+            recorded_content(op, &["doc", "docid"]).map(|(_, strings)| strings)
         } else {
             return;
         };
-        let Some(v) = field(op, content_keys) else { return };
-        let Some(strings) = expect_strings(v) else { return };
         // Address strings and recording-client python reprs are never
-        // content bytes (mirrors the translator; the repr guard is what
-        // keeps retrieve_vspan_empty's "<VSpan …>" out of the seeds).
-        if strings.iter().any(|s| {
-            (s.contains('.') && parse_dotted(s).is_some()) || crate::fields::is_python_repr(s)
-        }) {
-            return;
-        }
+        // content bytes: the repr guard is what keeps retrieve_vspan_empty's
+        // "<VSpan …>" out of the seeds.
+        let Some(text) = recorded.as_deref().and_then(as_text) else { return };
         // A full_* probe reads the doc the last CONTENT write touched
         // (mirror of the translator's `full-probe-targets-last-write`).
         if label.starts_with("full_") && str_field(op, &["doc", "docid"]).is_none() {
             if let Some(d) = self.shadow.last_written.clone().filter(|d| self.shadow.knows(d)) {
-                self.probe(&d, &strings.join(""));
+                self.probe(&d, &text);
                 return;
             }
         }
         let Some(doc) = self.doc_ref(op, &["doc", "docid"]) else { return };
-        self.probe(&doc, &strings.join(""));
+        self.probe(&doc, &text);
     }
 
     fn probe(&mut self, doc: &str, expected: &str) {
@@ -1522,9 +1526,7 @@ impl Sim {
 /// recorded only in the traverse entries).
 fn follow_landing_text(ops: &[Value], shadow: &Shadow, doc: &str) -> Option<String> {
     for op in ops {
-        let label = label_of(op).to_ascii_lowercase();
-        if !(label.starts_with("follow") || label.starts_with("traverse") || label.contains("traversal"))
-        {
+        if !matches!(verb_of(op), Some(Verb::FollowLink | Verb::Traverse)) {
             continue;
         }
         for key in ["results", "path", "traversal", "steps", "result"] {
@@ -1542,14 +1544,9 @@ fn follow_landing_text(ops: &[Value], shadow: &Shadow, doc: &str) -> Option<Stri
                     continue;
                 }
                 for k in ["text", "target_text", "content"] {
-                    if let Some(ss) = eo.get(k).and_then(expect_strings) {
-                        let text = ss.join("");
-                        if !text.is_empty()
-                            && !(text.contains('.') && parse_dotted(&text).is_some())
-                            && !crate::fields::is_python_repr(&text)
-                        {
-                            return Some(text);
-                        }
+                    let text = eo.get(k).and_then(expect_strings).as_deref().and_then(as_text);
+                    if let Some(text) = text.filter(|t| !t.is_empty()) {
+                        return Some(text);
                     }
                 }
             }
@@ -1567,8 +1564,7 @@ fn follow_landing_text(ops: &[Value], shadow: &Shadow, doc: &str) -> Option<Stri
 fn endset_anchored_seed(ops: &[Value], shadow: &Shadow, doc: &str) -> Option<Vec<u8>> {
     let mut spans: Vec<(u64, u64)> = Vec::new();
     for op in ops {
-        let label = label_of(op).to_ascii_lowercase();
-        if !(label.starts_with("retrieve_endsets") || label.starts_with("endsets")) {
+        if verb_of(op) != Some(Verb::Endsets) {
             continue;
         }
         for key in ["source", "from", "target", "to"] {
@@ -1593,8 +1589,7 @@ fn endset_anchored_seed(ops: &[Value], shadow: &Shadow, doc: &str) -> Option<Vec
     }
     let mut texts: Vec<String> = Vec::new();
     for op in ops {
-        let label = label_of(op).to_ascii_lowercase();
-        if !(label.starts_with("create_link") || label.starts_with("makelink")) {
+        if verb_of(op) != Some(Verb::CreateLink) {
             continue;
         }
         for key in ["source_text", "target_text"] {
@@ -1625,21 +1620,14 @@ fn endset_anchored_seed(ops: &[Value], shadow: &Shadow, doc: &str) -> Option<Vec
 fn uniform_follow_text(ops: &[Value]) -> Option<String> {
     let mut texts: Vec<String> = Vec::new();
     let mut collect = |v: &Value| {
-        if let Some(ss) = expect_strings(v) {
-            for s in ss {
-                if !s.is_empty()
-                    && !(s.contains('.') && parse_dotted(&s).is_some())
-                    && !crate::fields::is_python_repr(&s)
-                {
-                    texts.push(s);
-                }
+        for s in expect_strings(v).unwrap_or_default() {
+            if !s.is_empty() && as_text(std::slice::from_ref(&s)).is_some() {
+                texts.push(s);
             }
         }
     };
     for op in ops {
-        let label = label_of(op).to_ascii_lowercase();
-        if !(label.starts_with("follow") || label.starts_with("traverse") || label.contains("traversal"))
-        {
+        if !matches!(verb_of(op), Some(Verb::FollowLink | Verb::Traverse)) {
             continue;
         }
         if let Some(v) = field(op, &["result"]) {
@@ -1671,13 +1659,9 @@ fn uniform_follow_text(ops: &[Value]) -> Option<String> {
 fn next_docs_map_probe(all: &[Value], i: usize, name: &str) -> Option<String> {
     for op in &all[i + 1..] {
         if let Some(map) = op.get("docs").and_then(Value::as_object) {
-            if let Some(exp) = map.get(name) {
-                if let Some(s) = expect_strings(exp) {
-                    if s.iter().any(|x| x.contains('.') && parse_dotted(x).is_some()) {
-                        continue; // an id map, not content
-                    }
-                    return Some(s.join(""));
-                }
+            // An id map holds addresses, never content: as_text refuses it.
+            if let Some(s) = map.get(name).and_then(expect_strings).as_deref().and_then(as_text) {
+                return Some(s);
             }
         }
     }
@@ -1685,18 +1669,21 @@ fn next_docs_map_probe(all: &[Value], i: usize, name: &str) -> Option<String> {
 }
 
 /// The deleted bytes as the recording DESCRIBES them: the trailing
-/// parenthetical of a span/text field ("1.3 for 0.5 (CDEFG)") or a quoted
-/// segment — accepted only at exactly the resolved width, so a reminder
-/// word never masquerades as the removed bytes.
+/// parenthetical of a span/text field ("1.3 for 0.5 (CDEFG)"), else its
+/// first quoted segment ("1.11 for 0.7 (delete 'Shared ')" — isolation/
+/// cross_document_transclusion_isolation) — each accepted only at exactly
+/// the resolved width, so a reminder word never masquerades as the removed
+/// bytes.
 fn delete_described_bytes(op: &Value, w: u64) -> Option<Vec<u8>> {
+    let at_width = |s: &str| (s.len() as u64 == w).then(|| s.as_bytes().to_vec());
     for key in ["span", "vspan", "text", "removed"] {
         let Some(s) = str_field(op, &[key]) else { continue };
-        if let Some(open) = s.rfind('(') {
-            if let Some(inner) = s[open + 1..].strip_suffix(')') {
-                if inner.len() as u64 == w {
-                    return Some(inner.as_bytes().to_vec());
-                }
-            }
+        let parenthetical = s.rfind('(').and_then(|open| s[open + 1..].strip_suffix(')'));
+        if let Some(bytes) = parenthetical.and_then(at_width) {
+            return Some(bytes);
+        }
+        if let Some(bytes) = quoted(s).as_deref().and_then(at_width) {
+            return Some(bytes);
         }
     }
     None
@@ -1707,5 +1694,36 @@ fn result_str(op: &Value) -> Option<String> {
         Some(Value::String(s)) => Some(s.clone()),
         Some(Value::Object(o)) => o.get("version").and_then(Value::as_str).map(str::to_string),
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::*;
+
+    /// A delete is undone only with the bytes it is known to have removed,
+    /// reinserted at its pinned ordinal; one whose bytes the walk never
+    /// knew stops the undo instead of handing back the post-delete content
+    /// as the seed.
+    #[test]
+    fn a_delete_is_undone_only_with_the_bytes_it_removed() {
+        let known = [Edit::Del { at: 11, bytes: Some(b"Shared ".to_vec()), explicit: true }];
+        let seed = undo_to_initial("B prefix: content", &known);
+        assert_eq!(seed.as_deref(), Some(&b"B prefix: Shared content"[..]));
+        let unknown = [Edit::Del { at: 11, bytes: None, explicit: true }];
+        assert_eq!(undo_to_initial("B prefix: content", &unknown), None);
+    }
+
+    /// A delete's own description names its removed bytes — a trailing
+    /// parenthetical, else a quoted segment — only at exactly its width.
+    #[test]
+    fn a_described_delete_names_its_bytes_at_its_width() {
+        let quoted = json!({"op": "remove", "span": "1.11 for 0.7 (delete 'Shared ')"});
+        assert_eq!(delete_described_bytes(&quoted, 7), Some(b"Shared ".to_vec()));
+        assert_eq!(delete_described_bytes(&quoted, 8), None);
+        let parenthetical = json!({"op": "delete", "span": "1.3 for 0.5 (CDEFG)"});
+        assert_eq!(delete_described_bytes(&parenthetical, 5), Some(b"CDEFG".to_vec()));
     }
 }

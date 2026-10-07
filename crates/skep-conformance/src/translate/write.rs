@@ -5,43 +5,29 @@
 //! then compare the post-write state the golden recorded, where it recorded
 //! one. A write that issues several requests issues every one of them
 //! whatever skep answers an earlier one; the first failure is the op's.
+//! Insert answers its success with `AckAddr`; delete, copy and rearrange
+//! with `Ack` — skep-febe's dispatch — and each write tests for exactly its
+//! own.
 
 use serde_json::Value;
 
+use skep_febe::Response;
+
 use super::{
-    create_one, inexpressible, probe_state, rejection_code, run_plan, settle_ack, Cx, Probe,
-    Tally,
+    create_one, inexpressible, plan_failed, probe_state, refusal, run_plan, settle_accepted,
+    settle_refused, Cx, Probe, Tally,
 };
 use crate::allowlist::Grants;
 use crate::compare::compare_content;
 use crate::evidence::{
-    delete_is_noop, insert_aim_from_probe, insert_pad_width, insert_pos_from_post_state,
-    next_content_probe, resolve_delete_span, took_effect,
+    delete_is_noop, next_content_probe, resolve_delete_span, resolve_insert, took_effect,
 };
 use crate::fields::{
-    cuts_of, distributed_insert_texts, distribution_targets, doc_from_label, expect_strings,
-    expected_failure, field, insert_text, is_position_marker, label_of, resolve_position,
-    str_field, vcopy_sources,
+    cuts_of, distributed_insert_texts, distribution_targets, expect_strings, expected_failure,
+    field, is_position_marker, resolve_position, str_field, vcopy_sources, verb_of, Verb,
 };
 use crate::outcome::{OpOutcome, Status};
 use crate::tum::parse_vpos;
-
-/// The op's document has no α-image: the α never-bound finding the runner
-/// folds in carries the evidence.
-fn unresolvable(out: &mut OpOutcome, note: String) {
-    out.status = Status::Disagreed;
-    out.comparator = Some("alpha".into());
-    out.note = Some(note);
-}
-
-/// The first refused request of a write that issues several: what the op
-/// expected to succeed, and skep's refusal.
-fn refused(out: &mut OpOutcome, expected: String, code: String) {
-    out.status = Status::Disagreed;
-    out.comparator = Some("rejection".into());
-    out.expected = Some(expected);
-    out.actual = Some(format!("Rejected({code})"));
-}
 
 pub(super) fn h_insert(
     cx: &mut Cx,
@@ -52,7 +38,8 @@ pub(super) fn h_insert(
 ) {
     let recorded = took_effect(op);
     // insert_all + texts: one text per created doc, creation order (policy
-    // `insert-all:distributed`; mirrors the grounding pre-pass exactly).
+    // `insert-all:distributed`; the grounding pre-pass distributes through
+    // the same `fields::distributed_insert_texts` and `distribution_targets`).
     if let Some(texts) = distributed_insert_texts(op) {
         out.adaptations.push("insert-all:distributed".into());
         let docs = distribution_targets(cx.shadow, texts.len());
@@ -64,13 +51,13 @@ pub(super) fn h_insert(
                 _ if failed => {}
                 Err(_) => {
                     failed = true;
-                    unresolvable(out, format!("insert_all target {docid} unresolvable"));
+                    out.unresolvable(format!("insert_all target {docid} unresolvable"));
                 }
+                Ok(Response::AckAddr { .. }) => {}
                 Ok(r) => {
-                    if let Some(code) = rejection_code(&r) {
-                        failed = true;
-                        refused(out, format!("insert_all into {docid} succeeds"), code);
-                    }
+                    failed = true;
+                    let expected = format!("insert_all into {docid} succeeds");
+                    out.disagree("rejection", expected, refusal(&r));
                 }
             }
         }
@@ -79,79 +66,36 @@ pub(super) fn h_insert(
         }
         return;
     }
-    let Some(mut doc) = cx.doc_arg(op, out, &["doc", "docid"]) else {
+    let Some(doc) = cx.doc_arg(op, out, &["doc", "docid"]) else {
         inexpressible(out, "insert with no document in scope".into());
         return;
     };
-    let Some(mut text) = insert_text(op) else {
-        inexpressible(out, "insert without text".into());
-        return;
-    };
-    if str_field(op, &["text"]).is_none() && label_of(op).starts_with("insert_") {
-        out.adaptations.push("args-from-label".into());
-    }
-    // Doc-less insert re-aim from the next recorded vspanset probe (policy
-    // `insert-aim-from-recorded-vspanset`; mirrors the grounding pre-pass).
-    if str_field(op, &["doc", "docid"]).is_none() && doc_from_label(label_of(op)).is_none() {
-        if let Some(d2) = insert_aim_from_probe(cx.ops, index, cx.shadow, &doc, &text) {
-            out.adaptations.push("insert-aim-from-recorded-vspanset".into());
-            cx.shadow.set_current(&d2);
-            doc = d2;
-        }
-    }
-    let (sub, ord) = match str_field(op, &["address", "at", "position", "vaddr"]) {
-        Some(p) => match resolve_position(cx.shadow, &doc, p) {
-            Some((s, o, how)) => {
-                if how != "explicit-position" {
-                    out.adaptations.push(how.into());
-                }
-                (s, o)
-            }
-            None => {
-                inexpressible(out, format!("insert position `{p}` is not groundable"));
-                return;
-            }
-        },
-        None => {
-            // insert_<n>_<TEXT> labels carry the sequence number, not a
-            // position; those and bare inserts append — unless the op's own
-            // recorded post-state shows the text embedded mid-document,
-            // which pins the position exactly (policy
-            // `insert-position-from-post-state`; interleaved_insert_delete's
-            // insert_2 "BBB" turns "AA" into "ABBBA").
-            match insert_pos_from_post_state(op, cx.shadow, &doc, &text) {
-                Some(o) => {
-                    out.adaptations.push("insert-position-from-post-state".into());
-                    (1, o)
-                }
-                None => {
-                    out.adaptations.push("position-end".into());
-                    (1, cx.shadow.text_len(&doc) + 1)
-                }
-            }
+    // Where the insert lands — its text, any re-aim, its position, the
+    // recorded-vspanset pad — is the one reading the grounding pre-pass
+    // applies too (`evidence::resolve_insert`), each policy it uses tagged.
+    let landing = match resolve_insert(cx.ops, index, cx.shadow, &doc, op, &mut out.adaptations) {
+        Ok(landing) => landing,
+        Err(reason) => {
+            inexpressible(out, reason);
+            return;
         }
     };
-    // Recorded-vspanset width authority (policy `insert-padded-to-recorded-
-    // vspanset`; mirrors the grounding pre-pass byte-for-byte).
-    if sub == 1
-        && (str_field(op, &["address", "at", "position", "vaddr"]).is_none()
-            || cx.shadow.text_len(&doc) == 0)
-    {
-        let new_len = cx.shadow.text_len(&doc) + text.len() as u64;
-        if let Some(pad) = insert_pad_width(cx.ops, index, cx.shadow, &doc, new_len) {
-            out.adaptations.push(format!("insert-padded-to-recorded-vspanset:+{pad}"));
-            text.push_str(&" ".repeat(pad as usize));
-        }
+    if landing.doc != doc {
+        cx.shadow.set_current(&landing.doc);
     }
     let xf = expected_failure(op);
-    let Ok(r) = cx.insert(&doc, sub, ord, text.as_bytes(), recorded) else {
-        unresolvable(out, format!("insert into unresolvable doc {doc}"));
+    let Ok(r) = cx.insert(&landing.doc, landing.sub, landing.ord, &landing.bytes, recorded) else {
+        out.unresolvable(format!("insert into unresolvable doc {}", landing.doc));
         return;
     };
-    if !settle_ack(out, xf, rejection_code(&r)) {
-        return;
+    match r {
+        Response::AckAddr { .. } => {
+            if settle_accepted(out, xf) {
+                probe_state(cx, op, out, grants, &landing.doc, Probe::PostWrite);
+            }
+        }
+        r => settle_refused(out, xf, &r),
     }
-    probe_state(cx, op, out, grants, &doc, Probe::PostWrite);
 }
 
 pub(super) fn h_insert_loop(cx: &mut Cx, op: &Value, out: &mut OpOutcome, grants: &Grants) {
@@ -174,13 +118,15 @@ pub(super) fn h_insert_loop(cx: &mut Cx, op: &Value, out: &mut OpOutcome, grants
         match cx.insert(&doc, 1, at, &[b], recorded) {
             Err(_) => {
                 // No α-image: nothing further reaches skep or the shadow.
-                unresolvable(out, format!("insert_loop into unresolvable doc {doc}"));
+                out.unresolvable(format!("insert_loop into unresolvable doc {doc}"));
                 return;
             }
+            Ok(Response::AckAddr { .. }) => {}
             Ok(r) => {
-                if let (false, Some(code)) = (failed, rejection_code(&r)) {
+                if !failed {
                     failed = true;
-                    refused(out, format!("insert {} of {count} succeeds", k + 1), code);
+                    let expected = format!("insert {} of {count} succeeds", k + 1);
+                    out.disagree("rejection", expected, refusal(&r));
                 }
             }
         }
@@ -218,12 +164,12 @@ pub(super) fn h_interior_typing(cx: &mut Cx, op: &Value, out: &mut OpOutcome, gr
         let resp = match cx.insert(&doc, 1, ord, ch.as_bytes(), recorded) {
             Ok(resp) => resp,
             Err(_) => {
-                unresolvable(out, format!("interior_typing into unresolvable doc {doc}"));
+                out.unresolvable(format!("interior_typing into unresolvable doc {doc}"));
                 return;
             }
         };
-        if let Some(code) = rejection_code(&resp) {
-            tally.differ(format!("insert '{ch}' at {pos}"), format!("Rejected({code})"));
+        if !matches!(resp, Response::AckAddr { .. }) {
+            tally.differ(format!("insert '{ch}' at {pos}"), refusal(&resp));
             continue;
         }
         // Per-step probes: vspanset + contents recorded per character.
@@ -276,8 +222,7 @@ pub(super) fn h_delete(
         // raw for adjudication.
         let links_vanish = cx.shadow.link_count(&doc) > 0
             && cx.ops[index + 1..].iter().any(|later| {
-                let l = label_of(later).to_ascii_lowercase();
-                if !(l.starts_with("find_links") || l.starts_with("links")) {
+                if verb_of(later) != Some(Verb::FindLinks) {
                     return false;
                 }
                 ["result", "links", "expected", "before_delete", "after_delete", "before",
@@ -313,9 +258,7 @@ pub(super) fn h_delete(
         }
         (1, 1, n)
     } else if let Some((ord, w, how)) = resolve_delete_span(cx.shadow, cx.ops, index, &doc, op) {
-        if how != "explicit" {
-            out.adaptations.push(how.into());
-        }
+        out.adaptations.extend(how.tag().map(str::to_string));
         (1, ord, w)
     } else if let Some(start) = str_field(op, &["start", "address", "at"]) {
         // A link-subspace delete (delete_middle_link_check_gap_closure).
@@ -331,22 +274,25 @@ pub(super) fn h_delete(
         }
     } else {
         if xf.is_some() {
-            out.status = Status::Agreed;
-            out.comparator = Some("expected-failure".into());
-            out.note = Some("delete region not groundable; golden also recorded failure".into());
+            out.agree("expected-failure");
+            out.add_note("delete region not groundable; golden also recorded failure".into());
             return;
         }
         inexpressible(out, "delete without a groundable region".into());
         return;
     };
     let Ok(r) = cx.delete(&doc, sub, ord, width, took_effect(op)) else {
-        unresolvable(out, format!("delete in unresolvable doc {doc}"));
+        out.unresolvable(format!("delete in unresolvable doc {doc}"));
         return;
     };
-    if !settle_ack(out, xf, rejection_code(&r)) {
-        return;
+    match r {
+        Response::Ack { .. } => {
+            if settle_accepted(out, xf) {
+                probe_state(cx, op, out, grants, &doc, Probe::PostWrite);
+            }
+        }
+        r => settle_refused(out, xf, &r),
     }
-    probe_state(cx, op, out, grants, &doc, Probe::PostWrite);
 }
 
 pub(super) fn h_vcopy(cx: &mut Cx, index: usize, op: &Value, out: &mut OpOutcome, grants: &Grants) {
@@ -355,19 +301,29 @@ pub(super) fn h_vcopy(cx: &mut Cx, index: usize, op: &Value, out: &mut OpOutcome
     // vcopy_all / vcopy_from_both / vcopy_to_multiple / create_and_
     // transclude): fillers as inserts, shared regions as real copies.
     if cx.plans.contains_key(&index) {
-        // vcopy_to_multiple / create_and_transclude bind their target ids.
+        // vcopy_to_multiple / create_and_transclude bind their target ids;
+        // the first creation skep refuses is the op's disagreement.
+        let mut refused: Option<Box<Response>> = None;
         if let Some(targets) = field(op, &["targets"]).and_then(Value::as_array) {
             for t in targets {
                 let id = t.as_str().or_else(|| t.get("docid").and_then(Value::as_str));
                 if let Some(id) = id {
-                    create_one(cx, out, id, None, recorded);
+                    if let Err(r) = create_one(cx, id, None, recorded) {
+                        refused.get_or_insert(r);
+                    }
                 }
             }
         }
-        run_plan(cx, index, out);
-        if out.status == Status::Disagreed {
+        let failure = run_plan(cx, index, out);
+        if let Some(r) = refused {
+            out.disagree("rejection", "document creation".into(), refusal(&r));
             return;
         }
+        if let Some(failure) = failure {
+            plan_failed(out, failure);
+            return;
+        }
+        out.status = Status::NotCompared;
         // Per-target contents expectations (vcopy_to_multiple) compare here.
         if let Some(targets) = field(op, &["targets"]).and_then(Value::as_array) {
             let mut tally = Tally::default();
@@ -471,18 +427,22 @@ pub(super) fn h_vcopy(cx: &mut Cx, index: usize, op: &Value, out: &mut OpOutcome
     let r = match cx.copy(&dest, ord, &sources, recorded) {
         Ok(r) => r,
         Err(g) if g == dest && sources.iter().all(|s| s.doc != g) => {
-            unresolvable(out, format!("vcopy destination {dest} unresolvable"));
+            out.unresolvable(format!("vcopy destination {dest} unresolvable"));
             return;
         }
         Err(g) => {
-            unresolvable(out, format!("vcopy source doc {g} unresolvable"));
+            out.unresolvable(format!("vcopy source doc {g} unresolvable"));
             return;
         }
     };
-    if !settle_ack(out, xf, rejection_code(&r)) {
-        return;
+    match r {
+        Response::Ack { .. } => {
+            if settle_accepted(out, xf) {
+                probe_state(cx, op, out, grants, &dest, Probe::PostWrite);
+            }
+        }
+        r => settle_refused(out, xf, &r),
     }
-    probe_state(cx, op, out, grants, &dest, Probe::PostWrite);
 }
 
 pub(super) fn h_pivot_swap(cx: &mut Cx, op: &Value, out: &mut OpOutcome, pivot: bool) {
@@ -518,11 +478,15 @@ pub(super) fn h_pivot_swap(cx: &mut Cx, op: &Value, out: &mut OpOutcome, pivot: 
     }
     let xf = expected_failure(op);
     let Ok(r) = cx.rearrange(&doc, &cuts, took_effect(op)) else {
-        unresolvable(out, format!("rearrange in unresolvable doc {doc}"));
+        out.unresolvable(format!("rearrange in unresolvable doc {doc}"));
         return;
     };
-    if !settle_ack(out, xf, rejection_code(&r)) {
-        return;
+    match r {
+        Response::Ack { .. } => {
+            if settle_accepted(out, xf) {
+                out.status = Status::NotCompared;
+            }
+        }
+        r => settle_refused(out, xf, &r),
     }
-    out.status = Status::NotCompared;
 }

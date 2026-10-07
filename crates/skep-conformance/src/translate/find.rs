@@ -11,14 +11,43 @@ use skep_links::{enc, Endset};
 use skep_retrieval::RegionSpec;
 
 use super::{
-    elem_range, inexpressible, marker_type_name, parse_set_spans, rejection_code, settle_ack,
-    side_specs, Cx, SetSpan, Tally,
+    compared_nothing, elem_range, inexpressible, marker_type_name, parse_set_spans, refusal,
+    settle_accepted, settle_refused, side_specs, Cx, SetSpan, Tally,
 };
 use crate::allowlist::Grants;
 use crate::compare::{compare_addr_sets, compare_count};
-use crate::fields::{expected_failure, field, locate, str_field, vspec_dict, DocSpans};
-use crate::outcome::{OpOutcome, Status};
-use crate::tum::{is_link_address, parse_dotted, vspan};
+use crate::fields::{
+    expected_failure, field, locate, parse_python_spec, str_field, vspec_dict, DocSpans,
+};
+use crate::outcome::OpOutcome;
+use crate::tum::{is_link_address, parse_dotted, parse_vpos, parse_width, vspan};
+
+/// The arguments a find_links carries: the query's slots — search region,
+/// endpoint sides, type filter, home documents — and the routing over them.
+const FIND_LINKS_READS: &[&str] = &[
+    "by", "direction", "search", "specs", "specset", "source_specs", "search_text", "query",
+    "search_doc", "search_document", "fromset", "toset", "threeset", "homespans", "from",
+    "source", "sources", "to", "target", "targets", "via_transcluded_content", "doc", "docid",
+    "doc_label", "filter", "type", "link_type", "homedocids", "homedocs", "home_docs", "homedoc",
+    "home_doc", "home",
+];
+
+/// The arguments a find_documents carries: the region it searches.
+const FIND_DOCUMENTS_READS: &[&str] = &[
+    "specset", "specs", "search", "regions", "query", "search_text", "text", "search_from",
+    "search_doc", "search_document", "doc", "docid", "doc_label",
+];
+
+/// The arguments a retrieve_endsets carries: the region it searches, or the
+/// link whose endsets it reads.
+const ENDSETS_READS: &[&str] =
+    &["search", "specs", "specset", "doc", "docid", "doc_label", "link", "link_id"];
+
+/// A recorded address list: a bare array, or the `{success, links}` wrapper
+/// the recording client returns (edgecases/find_links_empty_document).
+fn address_list(v: &Value) -> Option<&Vec<Value>> {
+    v.as_array().or_else(|| v.get("links").and_then(Value::as_array))
+}
 
 /// One query side of a find_links: golden V-space (doc, spans) pairs to be
 /// imaged live, or a pre-resolved I-space endset (deleted-content reach).
@@ -409,7 +438,7 @@ pub(super) fn h_find_links(cx: &mut Cx, op: &Value, out: &mut OpOutcome, grants:
     let r = cx.rig.exec(Op::FindLinksFtt { q });
     let addrs: Vec<skep_address::Address> = match r {
         Response::Addrs { addrs, .. } => {
-            if !settle_ack(out, xf, None) {
+            if !settle_accepted(out, xf) {
                 return;
             }
             // Harness infrastructure out BEFORE either comparator: the
@@ -419,12 +448,12 @@ pub(super) fn h_find_links(cx: &mut Cx, op: &Value, out: &mut OpOutcome, grants:
             addrs.into_iter().filter(|a| !cx.rig.is_infra_addr(a)).collect()
         }
         other => {
-            settle_ack(out, xf, rejection_code(&other));
+            settle_refused(out, xf, &other);
             return;
         }
     };
     if !notes.is_empty() {
-        out.note = Some(notes.join("; "));
+        out.add_note(notes.join("; "));
     }
     // Expected addresses: the standard keys, then the phase-keyed forms the
     // delete scripts use (delete_all_with_links records its results under
@@ -435,7 +464,7 @@ pub(super) fn h_find_links(cx: &mut Cx, op: &Value, out: &mut OpOutcome, grants:
         "found",
     ];
     let expected = field(op, &["result", "links", "expected"])
-        .and_then(Value::as_array)
+        .and_then(address_list)
         .or_else(|| {
             // All-string arrays only — a phase key holding span dicts is
             // observation data for other comparators, not an address list.
@@ -452,35 +481,25 @@ pub(super) fn h_find_links(cx: &mut Cx, op: &Value, out: &mut OpOutcome, grants:
                 .and_then(Value::as_u64)
         });
         if let Some(n) = n {
-            out.comparator = Some("count".into());
             match compare_count(n, addrs.len(), grants, &mut out.adaptations) {
-                Ok(()) => out.status = Status::Agreed,
-                Err((e, a)) => {
-                    out.status = Status::Disagreed;
-                    out.expected = Some(e);
-                    out.actual = Some(a);
-                }
+                Ok(()) => out.agree("count"),
+                Err((e, a)) => out.disagree("count", e, a),
             }
             return;
         }
-        out.status = Status::NotCompared;
+        compared_nothing(out, op, FIND_LINKS_READS);
         return;
     };
     let want: Vec<String> =
         expected.iter().filter_map(|v| v.as_str().map(str::to_string)).collect();
-    out.comparator = Some("address-set".into());
     let rig = &*cx.rig;
     let mut adaptations = std::mem::take(&mut out.adaptations);
     let verdict =
         compare_addr_sets(&want, &addrs, cx.alpha, |a| rig.is_infra_addr(a), &mut adaptations);
     out.adaptations = adaptations;
     match verdict {
-        Ok(()) => out.status = Status::Agreed,
-        Err((e, a)) => {
-            out.status = Status::Disagreed;
-            out.expected = Some(e);
-            out.actual = Some(a);
-        }
+        Ok(()) => out.agree("address-set"),
+        Err((e, a)) => out.disagree("address-set", e, a),
     }
 }
 
@@ -522,9 +541,7 @@ pub(super) fn h_find_documents(cx: &mut Cx, op: &Value, out: &mut OpOutcome) {
                     return;
                 };
                 let Some(d) = cx.alpha.translate(&docid) else {
-                    out.status = Status::Disagreed;
-                    out.comparator = Some("alpha".into());
-                    out.note = Some(format!("find_documents doc {docid} unresolvable"));
+                    out.unresolvable(format!("find_documents doc {docid} unresolvable"));
                     return;
                 };
                 // Clamp query spans to the live extent (policy
@@ -564,7 +581,7 @@ pub(super) fn h_find_documents(cx: &mut Cx, op: &Value, out: &mut OpOutcome) {
             } else {
                 match locate(cx.shadow, None, s) {
                     Some(l) => {
-                        out.adaptations.push(l.how.into());
+                        out.adaptations.push(l.how.tag().into());
                         if let (Some(d), Some(span)) =
                             (cx.alpha.translate(&l.doc), vspan(1, l.ord, l.width))
                         {
@@ -578,11 +595,9 @@ pub(super) fn h_find_documents(cx: &mut Cx, op: &Value, out: &mut OpOutcome) {
     } else if let Some(qt) = str_field(op, &["query", "search_text", "text"]) {
         match locate(cx.shadow, None, qt) {
             Some(l) => {
-                out.adaptations.push(l.how.into());
+                out.adaptations.push(l.how.tag().into());
                 let Some(d) = cx.alpha.translate(&l.doc) else {
-                    out.status = Status::Disagreed;
-                    out.comparator = Some("alpha".into());
-                    out.note = Some(format!("find_documents doc {} unresolvable", l.doc));
+                    out.unresolvable(format!("find_documents doc {} unresolvable", l.doc));
                     return;
                 };
                 let spans = vspan(1, l.ord, l.width).into_iter().collect();
@@ -633,9 +648,8 @@ pub(super) fn h_find_documents(cx: &mut Cx, op: &Value, out: &mut OpOutcome) {
     }
     if let Some(reason) = ground_failed {
         if xf.is_some() {
-            out.status = Status::Agreed;
-            out.comparator = Some("expected-failure".into());
-            out.note = Some(format!("{reason}; golden also recorded failure"));
+            out.agree("expected-failure");
+            out.add_note(format!("{reason}; golden also recorded failure"));
         } else {
             inexpressible(out, format!("find_documents {reason}"));
         }
@@ -644,36 +658,31 @@ pub(super) fn h_find_documents(cx: &mut Cx, op: &Value, out: &mut OpOutcome) {
     let r = cx.rig.exec(Op::FindDocsContaining { regions });
     let addrs = match r {
         Response::Addrs { addrs, .. } => {
-            if !settle_ack(out, xf, None) {
+            if !settle_accepted(out, xf) {
                 return;
             }
             addrs
         }
         other => {
-            settle_ack(out, xf, rejection_code(&other));
+            settle_refused(out, xf, &other);
             return;
         }
     };
     let Some(expected) = field(op, &["result", "docs", "expected"]).and_then(Value::as_array)
     else {
-        out.status = Status::NotCompared;
+        compared_nothing(out, op, FIND_DOCUMENTS_READS);
         return;
     };
     let want: Vec<String> =
         expected.iter().filter_map(|v| v.as_str().map(str::to_string)).collect();
-    out.comparator = Some("address-set".into());
     let rig = &*cx.rig;
     let mut adaptations = std::mem::take(&mut out.adaptations);
     let verdict =
         compare_addr_sets(&want, &addrs, cx.alpha, |a| rig.is_infra_addr(a), &mut adaptations);
     out.adaptations = adaptations;
     match verdict {
-        Ok(()) => out.status = Status::Agreed,
-        Err((e, a)) => {
-            out.status = Status::Disagreed;
-            out.expected = Some(e);
-            out.actual = Some(a);
-        }
+        Ok(()) => out.agree("address-set"),
+        Err((e, a)) => out.disagree("address-set", e, a),
     }
 }
 
@@ -709,9 +718,7 @@ pub(super) fn h_endsets(cx: &mut Cx, op: &Value, out: &mut OpOutcome) {
             return;
         };
         let Some(link) = cx.alpha.translate(&link_golden) else {
-            out.status = Status::Disagreed;
-            out.comparator = Some("alpha".into());
-            out.note = Some(format!("endsets of unresolvable link {link_golden}"));
+            out.unresolvable(format!("endsets of unresolvable link {link_golden}"));
             return;
         };
         out.adaptations.push("endsets-as-followlink".into());
@@ -735,10 +742,7 @@ pub(super) fn h_endsets(cx: &mut Cx, op: &Value, out: &mut OpOutcome) {
                 }
                 Response::Follow { result: Err(_), .. } => {}
                 r => {
-                    tally.differ(
-                        format!("slot{slot} widths"),
-                        rejection_code(&r).unwrap_or_else(|| "?".into()),
-                    );
+                    tally.differ(format!("slot{slot} widths"), refusal(&r));
                     continue;
                 }
             }
@@ -750,7 +754,7 @@ pub(super) fn h_endsets(cx: &mut Cx, op: &Value, out: &mut OpOutcome) {
                 tally.differ(format!("slot{slot}:{want:?}"), format!("slot{slot}:{got:?}"));
             }
         }
-        tally.settle(out, "endsets-follow-widths");
+        tally.settle_read(out, "endsets-follow-widths", op, ENDSETS_READS);
         return;
     }
 
@@ -778,21 +782,19 @@ pub(super) fn h_endsets(cx: &mut Cx, op: &Value, out: &mut OpOutcome) {
         };
     cx.shadow.set_current(&doc);
     let Some(d) = cx.skep_doc(&doc) else {
-        out.status = Status::Disagreed;
-        out.comparator = Some("alpha".into());
-        out.note = Some(format!("retrieve_endsets doc {doc} unresolvable"));
+        out.unresolvable(format!("retrieve_endsets doc {doc} unresolvable"));
         return;
     };
     let xf = expected_failure(op);
     let pairs = match cx.rig.exec(Op::RetrieveEndsets { d, region }) {
         Response::Endsets { pairs, .. } => {
-            if !settle_ack(out, xf, None) {
+            if !settle_accepted(out, xf) {
                 return;
             }
             pairs
         }
         other => {
-            settle_ack(out, xf, rejection_code(&other));
+            settle_refused(out, xf, &other);
             return;
         }
     };
@@ -807,28 +809,36 @@ pub(super) fn h_endsets(cx: &mut Cx, op: &Value, out: &mut OpOutcome) {
     // document (policy type_registry), which coverage cannot speak.
     out.adaptations.push("type_registry".into());
     out.adaptations.push("endset-coverage-translated".into());
-    // The corpus extension nests the slot expectations under a `result`
-    // object ({from, to, three}); the legacy shape keys them top-level. The
-    // `three` slot compares through the same coverage comparator — its
-    // recorded spans are content spans (A8), and skep-side registry spans
-    // are already excluded as harness infrastructure.
-    let exp_root: &Value = match op.get("result") {
-        Some(r)
-            if r.as_object().is_some_and(|o| {
-                ["from", "to", "three"].iter().any(|k| o.contains_key(*k))
-            }) =>
-        {
-            r
-        }
-        _ => op,
+    // A `result` object keyed by slot nests the slot expectations — the
+    // corpus extension's {from, to, three}, the recording client's {source,
+    // target, type} (links/link_on_discontiguous_transcluded_content); the
+    // legacy shape keys them top-level. Nested, every slot — `type` with
+    // the rest — compares through the coverage comparator: the recorded
+    // spans are content spans (A8), and skep-side registry spans are
+    // already excluded as harness infrastructure.
+    const SLOT_KEYS: &[&str] = &["from", "to", "three", "source", "target", "type"];
+    let nested = op
+        .get("result")
+        .filter(|r| r.as_object().is_some_and(|o| SLOT_KEYS.iter().any(|k| o.contains_key(*k))));
+    let (exp_root, third_keys): (&Value, &[&str]) = match nested {
+        Some(r) => (r, &["three", "type"]),
+        None => (op, &["three"]),
     };
+    // A bare vspec list under `result`, naming no slot, recorded the FROM
+    // endset (policy `endsets-bare-result-as-from`).
+    let bare_from = op.get("result").filter(|r| nested.is_none() && r.is_array());
     let mut tally = Tally::default();
-    for (slot_keys, slot) in [
-        (&["from", "source"][..], 1usize),
-        (&["to", "target"][..], 2),
-        (&["three"][..], 3),
-    ] {
-        let Some(exp) = field(exp_root, slot_keys) else { continue };
+    for (slot_keys, slot) in
+        [(&["from", "source"][..], 1usize), (&["to", "target"][..], 2), (third_keys, 3)]
+    {
+        let exp = match (field(exp_root, slot_keys), bare_from) {
+            (Some(exp), _) => exp,
+            (None, Some(exp)) if slot == 1 => {
+                out.adaptations.push("endsets-bare-result-as-from".into());
+                exp
+            }
+            _ => continue,
+        };
         let Some(want_specs) = slot_vspecs(&mut tally, slot, exp) else { continue };
         // Golden side → I-coverage via the live image.
         let mut want_ranges: Vec<(String, u64, u64)> = Vec::new();
@@ -872,8 +882,11 @@ pub(super) fn h_endsets(cx: &mut Cx, op: &Value, out: &mut OpOutcome) {
             );
         }
     }
-    // TYPE slot: (origin doc, width) multiset as before.
-    if let Some(want_specs) = field(op, &["type"]).and_then(|exp| slot_vspecs(&mut tally, 3, exp)) {
+    // The top-level TYPE slot compares as an (origin doc, width) multiset:
+    // type names live in the harness types document, which coverage cannot
+    // speak.
+    let top_type = field(op, &["type"]).filter(|_| nested.is_none());
+    if let Some(want_specs) = top_type.and_then(|exp| slot_vspecs(&mut tally, 3, exp)) {
         let mut want: Vec<(String, u64)> = want_specs
             .iter()
             .flat_map(|(docid, spans)| spans.iter().map(|(_, _, w)| (docid.clone(), *w)))
@@ -905,14 +918,34 @@ pub(super) fn h_endsets(cx: &mut Cx, op: &Value, out: &mut OpOutcome) {
             tally.differ(format!("slot3:{want:?}"), format!("slot3:{got:?}"));
         }
     }
-    tally.settle(out, "endsets-coverage");
+    tally.settle_read(out, "endsets-coverage", op, ENDSETS_READS);
 }
 
-/// One slot's recorded endset, read as vspec dicts. A slot expectation that
-/// is not a list, or an entry that is not a vspec, is a recorded part the
-/// comparison cannot aim at — tallied as such, never dropped; `None` when
-/// nothing of the slot is readable.
+/// One slot's recorded endset, read as vspec dicts — or as the recording
+/// client's own SpecSet repr ("<SpecSet [<VSpec in D, at 1.1 for 0.2>]>",
+/// "<SpecSet []>"). A slot expectation in neither shape, or an entry that is
+/// not a vspec, is a recorded part the comparison cannot aim at — tallied
+/// as such, never dropped; `None` when nothing of the slot is readable.
 fn slot_vspecs(tally: &mut Tally, slot: usize, exp: &Value) -> Option<Vec<DocSpans>> {
+    if let Some(repr) = exp.as_str() {
+        let read = parse_python_spec(repr).and_then(|(doc, spans)| {
+            let spans: Vec<(u64, u64, u64)> = spans
+                .iter()
+                .map(|(start, w)| {
+                    let (sub, ord) = parse_vpos(start)?;
+                    Some((sub, ord, parse_width(w)?))
+                })
+                .collect::<Option<_>>()?;
+            match doc {
+                Some(doc) => Some(vec![(doc, spans)]),
+                None => spans.is_empty().then(Vec::new),
+            }
+        });
+        if read.is_none() {
+            tally.unaimed(format!("slot{slot} expectation {exp} is not a readable SpecSet"));
+        }
+        return read;
+    }
     let Some(entries) = exp.as_array() else {
         tally.unaimed(format!("slot{slot} expectation {exp} is not a vspec list"));
         return None;

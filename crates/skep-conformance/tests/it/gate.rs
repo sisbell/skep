@@ -10,8 +10,9 @@
 //! * `conformance_ratchet` — conformance, enforced: a `divergent` or `error`
 //!   verdict fails it, as does an `allowlisted` or `inexpressible` verdict on
 //!   a scenario `conformance/ratchet.toml` does not freeze in that section,
-//!   and a frozen name no golden scenario carries; a `[pending]` scenario is
-//!   exempt, and reported while it does not pass.
+//!   and a frozen key no golden scenario carries; a `[pending]` scenario is
+//!   exempt, and reported while it does not pass. Every scenario is named
+//!   by its key, `category/name` — two goldens can share a name.
 
 use skep_conformance::outcome::Verdict;
 use skep_conformance::runner::run_all;
@@ -63,14 +64,14 @@ fn harness_integrity() {
     // Every op classified: one outcome per recorded operation, for every
     // scenario the harness itself did not crash on (an `error` verdict is
     // asserted against below, with its own message).
-    for (rec, (name, n_ops)) in out.records.iter().zip(&out.loaded_op_counts) {
-        assert_eq!(&rec.name, name, "record order must match load order");
+    for (rec, (key, n_ops)) in out.records.iter().zip(&out.loaded_op_counts) {
+        assert_eq!(&rec.key(), key, "record order must match load order");
         if rec.verdict != Verdict::Error {
             assert_eq!(
                 rec.ops.len(),
                 *n_ops,
                 "scenario {}: every op must yield exactly one outcome",
-                rec.name
+                rec.key()
             );
         }
     }
@@ -81,9 +82,7 @@ fn harness_integrity() {
         .records
         .iter()
         .filter(|r| r.verdict == Verdict::Error)
-        .map(|r| {
-            format!("{}/{}: {}", r.category, r.name, r.error.as_deref().unwrap_or("?"))
-        })
+        .map(|r| format!("{}: {}", r.key(), r.error.as_deref().unwrap_or("?")))
         .collect();
     assert!(errors.is_empty(), "harness errors (harness bugs, fix them): {errors:#?}");
 
@@ -120,14 +119,15 @@ fn report_is_deterministic() {
 /// The RATCHET — conformance as an enforced property (frozen 2026-08-15,
 /// adjudication complete: decisions.md rulings 1–15, zero divergent).
 ///
-/// `conformance/ratchet.toml` freezes the expected non-pass set. This test
-/// FAILS on any scenario that is `Divergent` or `Error`, on any
-/// `Allowlisted`/`Inexpressible` scenario not in the frozen lists, and on a
-/// frozen name no golden scenario carries (a renamed or removed golden
-/// would otherwise leave a line that guards nothing); it reports (without
-/// failing) frozen entries that improved to `Pass` so the file can be
-/// trimmed. Growing the frozen set requires a human ruling in
-/// adjudication/decisions.md — never an edit made to turn this test green.
+/// `conformance/ratchet.toml` freezes the expected non-pass set, each
+/// scenario named by its key. This test FAILS on any scenario that is
+/// `Divergent` or `Error`, on any `Allowlisted`/`Inexpressible` scenario not
+/// in the frozen lists, and on a frozen key no golden scenario carries (a
+/// renamed or removed golden would otherwise leave a line that guards
+/// nothing); it reports (without failing) frozen entries that improved to
+/// `Pass` so the file can be trimmed. Growing the frozen set requires a
+/// human ruling in adjudication/decisions.md — never an edit made to turn
+/// this test green.
 #[test]
 fn conformance_ratchet() {
     use std::collections::HashSet;
@@ -160,33 +160,33 @@ fn conformance_ratchet() {
     let mut improved = Vec::new();
     let mut pending_seen = Vec::new();
     for r in &out.records {
-        if pending.contains(&r.name) {
+        let key = r.key();
+        if pending.contains(&key) {
             if r.verdict != Verdict::Pass {
-                pending_seen.push(format!("{}/{}: {:?}", r.category, r.name, r.verdict));
+                pending_seen.push(format!("{key}: {:?}", r.verdict));
             }
-            continue; // corpus extension awaiting adjudication — exempt, visible
+            continue; // awaiting adjudication — exempt, visible
         }
         match r.verdict {
             Verdict::Pass => {
-                if allow.contains(&r.name) || inexpr.contains(&r.name) {
-                    improved.push(r.name.clone());
+                if allow.contains(&key) || inexpr.contains(&key) {
+                    improved.push(key);
                 }
             }
-            Verdict::Allowlisted if allow.contains(&r.name) => {}
-            Verdict::Inexpressible if inexpr.contains(&r.name) => {}
-            v => violations.push(format!("{}/{}: {v:?} not permitted by ratchet", r.category, r.name)),
+            Verdict::Allowlisted if allow.contains(&key) => {}
+            Verdict::Inexpressible if inexpr.contains(&key) => {}
+            v => violations.push(format!("{key}: {v:?} not permitted by ratchet")),
         }
     }
-    let names: HashSet<&str> = out.records.iter().map(|r| r.name.as_str()).collect();
+    let keys: HashSet<String> = out.records.iter().map(|r| r.key()).collect();
     for (section, frozen) in
         [("allowlisted", &allow), ("inexpressible", &inexpr), ("pending", &pending)]
     {
-        let mut missing: Vec<&String> =
-            frozen.iter().filter(|n| !names.contains(n.as_str())).collect();
+        let mut missing: Vec<&String> = frozen.iter().filter(|k| !keys.contains(*k)).collect();
         missing.sort();
-        for n in missing {
+        for k in missing {
             violations
-                .push(format!("[{section}] {n}: frozen, but no golden scenario carries the name"));
+                .push(format!("[{section}] {k}: frozen, but no golden scenario carries the key"));
         }
     }
     if !pending_seen.is_empty() {
@@ -200,6 +200,6 @@ fn conformance_ratchet() {
     assert!(violations.is_empty(),
             "CONFORMANCE RATCHET VIOLATED — a new divergence requires a human ruling \
              (adjudication/decisions.md) before the frozen set may grow, and a frozen \
-             name no golden carries guards nothing until it is corrected:\n{}",
+             key no golden carries guards nothing until it is corrected:\n{}",
             violations.join("\n"));
 }

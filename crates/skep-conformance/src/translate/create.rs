@@ -8,13 +8,12 @@ use serde_json::Value;
 use skep_febe::Response;
 
 use super::{
-    create_one, fail_response, inexpressible, joint_absence, rejection_code, run_plan, settle_ack,
-    Cx,
+    create_one, inexpressible, joint_absence, plan_failed, refusal, run_plan, settle_accepted,
+    settle_refused, settle_rejected, Cx,
 };
 use crate::evidence::took_effect;
-use crate::fields::{create_name_of, expected_failure, field, group_word, keyed_role, str_field};
+use crate::fields::{create_name_of, expected_failure, field, group_word, roster, str_field};
 use crate::outcome::{OpOutcome, Status};
-use crate::tum::parse_dotted;
 
 pub(super) fn h_create_document(cx: &mut Cx, op: &Value, out: &mut OpOutcome) {
     let name = create_name_of(op);
@@ -35,124 +34,113 @@ pub(super) fn h_create_document(cx: &mut Cx, op: &Value, out: &mut OpOutcome) {
             continue;
         }
         let r = cx.create_document(golden, if i == 0 { name.as_deref() } else { None }, recorded);
-        if !matches!(r, Response::AckAddr { .. })
-            && !settle_ack(out, xf.clone(), rejection_code(&r))
-        {
+        if !matches!(r, Response::AckAddr { .. }) {
+            settle_refused(out, xf, &r);
             return;
         }
     }
-    if !settle_ack(out, xf, None) {
-        return;
+    if settle_accepted(out, xf) {
+        out.agree("address-binding");
     }
-    out.status = Status::Agreed;
-    out.comparator = Some("address-binding".into());
 }
 
 pub(super) fn h_create_documents(cx: &mut Cx, index: usize, op: &Value, out: &mut OpOutcome) {
     let xf = expected_failure(op);
     let recorded = took_effect(op);
-    // docs map {name: id} — created in id order.
-    if let Some(map) = op.get("docs").and_then(Value::as_object) {
-        let mut by_id: Vec<(String, String)> = map
-            .iter()
-            .filter_map(|(n, id)| id.as_str().map(|i| (i.to_string(), n.clone())))
-            .collect();
-        if !by_id.is_empty() {
-            by_id.sort();
-            for (id, n) in by_id {
-                create_one(cx, out, &id, Some(&n), recorded);
-            }
-            let _ = settle_ack(out, xf, None);
-            if out.status == Status::NotCompared {
-                out.status = Status::Agreed;
-                out.comparator = Some("address-binding".into());
-            }
-            return;
+    // The first creation skep refuses settles the op against the golden's
+    // verdict once, after every creation the op records was asked for.
+    let mut refused: Option<Box<Response>> = None;
+    let mut create = |cx: &mut Cx, id: &str, name: Option<&str>| {
+        if let Err(r) = create_one(cx, id, name, recorded) {
+            refused.get_or_insert(r);
         }
-    }
-    // Role-keyed fields: doc1/doc2, source1/source2, targetN — any
-    // `<role><n>` key holding a dotted docid (identity_mixed_sources).
-    let mut keyed: Vec<(String, String)> = op
-        .as_object()
-        .map(|o| {
-            o.iter()
-                .filter(|(k, _)| keyed_role(k))
-                .filter_map(|(k, v)| {
-                    let id = v.as_str()?;
-                    parse_dotted(id)?;
-                    Some((k.clone(), id.to_string()))
-                })
+    };
+    // docs map {name: id} — created in id order.
+    let mut by_id: Vec<(String, String)> = op
+        .get("docs")
+        .and_then(Value::as_object)
+        .map(|map| {
+            map.iter()
+                .filter_map(|(n, id)| id.as_str().map(|i| (i.to_string(), n.clone())))
                 .collect()
         })
         .unwrap_or_default();
-    if !keyed.is_empty() {
-        keyed.sort();
-        for (k, id) in keyed {
-            create_one(cx, out, &id, Some(&k), recorded);
+    // A roster of `<name>: <docid>` fields (doc1/doc2, source1/source2, the
+    // `docs` op's A/B/C) — created in name order.
+    let named = roster(op);
+    if !by_id.is_empty() {
+        by_id.sort();
+        for (id, n) in &by_id {
+            create(cx, id, Some(n));
         }
-        let _ = settle_ack(out, xf, None);
-        if out.status == Status::NotCompared {
-            out.status = Status::Agreed;
-            out.comparator = Some("address-binding".into());
+    } else if !named.is_empty() {
+        for (n, id) in &named {
+            create(cx, id, Some(n));
         }
-        return;
-    }
-    let results: Vec<String> = field(op, &["results"])
-        .and_then(Value::as_array)
-        .map(|a| a.iter().filter_map(|v| v.as_str().map(str::to_string)).collect())
-        .unwrap_or_default();
-    let names: Vec<String> = field(op, &["docs"])
-        .and_then(Value::as_array)
-        .map(|a| a.iter().filter_map(|v| v.as_str().map(str::to_string)).collect())
-        .unwrap_or_default();
-    let texts: Vec<String> = field(op, &["texts"])
-        .and_then(Value::as_array)
-        .map(|a| a.iter().filter_map(|v| v.as_str().map(str::to_string)).collect())
-        .unwrap_or_default();
-    let group = group_word(op);
-    let count = field(op, &["count"])
-        .and_then(Value::as_u64)
-        .map(|c| c as usize)
-        .unwrap_or_else(|| results.len().max(names.len()).max(1))
-        .max(results.len());
-    for k in 0..count {
-        let id = results.get(k).cloned().unwrap_or_else(|| cx.shadow.synthesize_docid());
-        let name =
-            names.get(k).cloned().or_else(|| group.as_ref().map(|t| format!("{t}{}", k + 1)));
-        create_one(cx, out, &id, name.as_deref(), recorded);
-        if let Some(g) = &group {
-            let singular = g.trim_end_matches('s');
-            cx.shadow.bind_name(&format!("{singular}{}", k + 1), &id);
-            cx.shadow.bind_name(&format!("{singular}_{k}"), &id);
+    } else {
+        let results: Vec<String> = field(op, &["results"])
+            .and_then(Value::as_array)
+            .map(|a| a.iter().filter_map(|v| v.as_str().map(str::to_string)).collect())
+            .unwrap_or_default();
+        let names: Vec<String> = field(op, &["docs"])
+            .and_then(Value::as_array)
+            .map(|a| a.iter().filter_map(|v| v.as_str().map(str::to_string)).collect())
+            .unwrap_or_default();
+        let texts: Vec<String> = field(op, &["texts"])
+            .and_then(Value::as_array)
+            .map(|a| a.iter().filter_map(|v| v.as_str().map(str::to_string)).collect())
+            .unwrap_or_default();
+        let group = group_word(op);
+        let count = field(op, &["count"])
+            .and_then(Value::as_u64)
+            .map(|c| c as usize)
+            .unwrap_or_else(|| results.len().max(names.len()).max(1))
+            .max(results.len());
+        for k in 0..count {
+            let id = results.get(k).cloned().unwrap_or_else(|| cx.shadow.synthesize_docid());
+            let name =
+                names.get(k).cloned().or_else(|| group.as_ref().map(|t| format!("{t}{}", k + 1)));
+            create(cx, &id, name.as_deref());
+            if let Some(g) = &group {
+                let singular = g.trim_end_matches('s');
+                cx.shadow.bind_name(&format!("{singular}{}", k + 1), &id);
+                cx.shadow.bind_name(&format!("{singular}_{k}"), &id);
+            }
+            // The recorded text goes in whatever skep answers; a refusal is
+            // the op's disagreement unless an earlier one already is. A
+            // document with no α-image was refused at creation, which
+            // settles the op below.
+            if let Some(t) = texts.get(k) {
+                if let Ok(r) = cx.insert(&id, 1, 1, t.as_bytes(), recorded) {
+                    let first = out.status != Status::Disagreed;
+                    if first && !matches!(r, Response::AckAddr { .. }) {
+                        let expected = format!("text insert into {id} succeeds");
+                        out.disagree("rejection", expected, refusal(&r));
+                    }
+                }
+            }
         }
-        // The recorded text goes in whatever skep answers; a refusal is the
-        // op's disagreement unless an earlier one already is. A document
-        // with no α-image was refused at creation, which create_one
-        // reported.
-        if let Some(t) = texts.get(k) {
-            if let Ok(r) = cx.insert(&id, 1, 1, t.as_bytes(), recorded) {
-                if let (true, Some(code)) = (out.status != Status::Disagreed, rejection_code(&r)) {
-                    out.status = Status::Disagreed;
-                    out.comparator = Some("rejection".into());
-                    out.expected = Some(format!("text insert into {id} succeeds"));
-                    out.actual = Some(format!("Rejected({code})"));
+        // World-construction plans (create_multiple_targets): the pre-pass
+        // covered each created-empty doc's probed content with real copies.
+        // The plan runs whatever skep answered a text insert; the earlier
+        // failure stays the op's.
+        if cx.plans.contains_key(&index) {
+            if let Some(failure) = run_plan(cx, index, out) {
+                if out.status != Status::Disagreed {
+                    plan_failed(out, failure);
                 }
             }
         }
     }
-    // World-construction plans (create_multiple_targets): the pre-pass
-    // covered each created-empty doc's probed content with real copies.
-    if cx.plans.contains_key(&index) {
-        run_plan(cx, index, out);
-        if out.status == Status::Disagreed {
-            return;
-        }
-        out.status = Status::NotCompared;
+    if let Some(r) = refused {
+        settle_refused(out, xf, &r);
+        return;
     }
-    let _ = settle_ack(out, xf, None);
-    if out.status == Status::NotCompared {
-        out.status = Status::Agreed;
-        out.comparator = Some("address-binding".into());
+    if out.status == Status::Disagreed {
+        return;
+    }
+    if settle_accepted(out, xf) {
+        out.agree("address-binding");
     }
 }
 
@@ -166,21 +154,36 @@ pub(super) fn h_create_chain(cx: &mut Cx, index: usize, op: &Value, out: &mut Op
         .filter_map(|(n, id)| id.as_str().map(|i| (i.to_string(), n.clone())))
         .collect();
     by_id.sort();
+    let mut refused: Option<Box<Response>> = None;
     for (id, n) in &by_id {
-        create_one(cx, out, id, Some(n), took_effect(op));
+        if let Err(r) = create_one(cx, id, Some(n), took_effect(op)) {
+            refused.get_or_insert(r);
+        }
     }
-    if out.status == Status::Disagreed {
+    if let Some(r) = refused {
+        out.disagree("rejection", "document creation".into(), refusal(&r));
         return;
     }
-    run_plan(cx, index, out);
+    if !cx.plans.contains_key(&index) {
+        out.status = Status::NotCompared;
+        out.note = Some("no expansion plan derived; nothing executed".into());
+        return;
+    }
+    match run_plan(cx, index, out) {
+        Some(failure) => plan_failed(out, failure),
+        None => out.status = Status::NotCompared,
+    }
 }
 
 pub(super) fn h_setup(cx: &mut Cx, index: usize, out: &mut OpOutcome) {
-    if cx.plans.contains_key(&index) {
-        run_plan(cx, index, out);
-    } else {
+    if !cx.plans.contains_key(&index) {
         out.status = Status::Meta;
         out.note = Some("setup description not parseable; treated as meta".into());
+        return;
+    }
+    match run_plan(cx, index, out) {
+        Some(failure) => plan_failed(out, failure),
+        None => out.status = Status::NotCompared,
     }
 }
 
@@ -192,19 +195,19 @@ pub(super) fn h_open_document(cx: &mut Cx, op: &Value, out: &mut OpOutcome) {
     let conflict_copy = str_field(op, &["conflict"]).is_some_and(|c| c == "copy")
         || str_field(op, &["copy", "copy_mode"]).is_some_and(|c| c == "conflict_copy");
     let result = str_field(op, &["result"]).map(str::to_string);
+    let xf = expected_failure(op);
     if conflict_copy {
         out.adaptations.push("open_document:conflict_copy→version".into());
         match cx.create_version(&doc, result.as_deref(), &[], took_effect(op)) {
             Err(_) => {
-                out.status = Status::Disagreed;
-                out.comparator = Some("alpha".into());
-                out.note = Some(format!("open_document(conflict=copy) of unresolvable doc {doc}"));
+                out.unresolvable(format!("open_document(conflict=copy) of unresolvable doc {doc}"))
             }
             Ok(Response::AckAddr { .. }) => {
-                out.status = Status::Agreed;
-                out.comparator = Some("address-binding".into());
+                if settle_accepted(out, xf) {
+                    out.agree("address-binding");
+                }
             }
-            Ok(other) => fail_response(out, "rejection", "version address (CONFLICT_COPY)", &other),
+            Ok(other) => settle_refused(out, xf, &other),
         }
         return;
     }
@@ -214,13 +217,13 @@ pub(super) fn h_open_document(cx: &mut Cx, op: &Value, out: &mut OpOutcome) {
     // open layer to refuse with. The divergence is real and surfaces raw
     // (policy `open-noop-vs-recorded-failure`) — never absorbed into the
     // no-op.
-    if let Some(err) = expected_failure(op) {
+    if let Some(err) = xf {
         out.adaptations.push("open-noop-vs-recorded-failure".into());
-        out.status = Status::Disagreed;
-        out.comparator = Some("expected-failure".into());
-        out.expected = Some(format!("failure: {err:?}"));
-        out.actual =
-            Some("skep has no bert/open layer (access control descoped); nothing rejected".into());
+        out.disagree(
+            "expected-failure",
+            format!("failure: {err:?}"),
+            "skep has no bert/open layer (access control descoped); nothing rejected".into(),
+        );
         return;
     }
     // The open result names the same document — bind the alias so both
@@ -232,7 +235,7 @@ pub(super) fn h_open_document(cx: &mut Cx, op: &Value, out: &mut OpOutcome) {
         match cx.alpha.peek_translate(&doc) {
             Some(a) => cx.alpha.bind(g, &a),
             None => {
-                out.note = Some(format!(
+                out.add_note(format!(
                     "open of `{doc}` (never created; green's OPEN validates nothing) — \
                      result not bindable"
                 ));
@@ -271,26 +274,19 @@ pub(super) fn h_create_version(cx: &mut Cx, op: &Value, out: &mut OpOutcome) {
     let names: Vec<&str> =
         ["doc", "name", "label"].iter().filter_map(|k| str_field(op, &[k])).collect();
     match cx.create_version(&src, golden.as_deref(), &names, took_effect(op)) {
-        Err(_) => {
-            out.status = Status::Disagreed;
-            out.comparator = Some("alpha".into());
-            out.note = Some(format!("version of unresolvable doc {src}"));
-        }
+        Err(_) => out.unresolvable(format!("version of unresolvable doc {src}")),
         Ok(Response::AckAddr { .. }) => {
-            if !settle_ack(out, xf, None) {
+            if !settle_accepted(out, xf) {
                 return;
             }
             if golden.is_some() {
-                out.status = Status::Agreed;
-                out.comparator = Some("address-binding".into());
+                out.agree("address-binding");
             } else {
                 out.status = Status::NotCompared;
                 out.note = Some("create_version with no recorded result to bind".into());
             }
         }
-        Ok(other) => {
-            settle_ack(out, xf, rejection_code(&other));
-        }
+        Ok(other) => settle_refused(out, xf, &other),
     }
 }
 
@@ -314,12 +310,7 @@ pub(super) fn h_account(cx: &mut Cx, op: &Value, out: &mut OpOutcome) {
             }
             out.status = Status::NotCompared;
         }
-        Err(e) => {
-            out.status = Status::Disagreed;
-            out.comparator = Some("account".into());
-            out.expected = Some(format!("account context {acct}"));
-            out.actual = Some(e);
-        }
+        Err(e) => out.disagree("account", format!("account context {acct}"), e),
     }
 }
 
@@ -330,27 +321,22 @@ pub(super) fn h_create_node(cx: &mut Cx, op: &Value, out: &mut OpOutcome) {
         return;
     };
     let Some(parent) = cx.alpha.translate(parent_golden) else {
-        out.status = Status::Disagreed;
-        out.comparator = Some("alpha".into());
-        out.note = Some(format!("create_node under unresolvable account {parent_golden}"));
+        out.unresolvable(format!("create_node under unresolvable account {parent_golden}"));
         return;
     };
     let xf = expected_failure(op);
     match cx.rig.delegate_under(&parent, false) {
         Ok(sub) => {
-            if !settle_ack(out, xf, None) {
+            if !settle_accepted(out, xf) {
                 return;
             }
             if let Some(g) = str_field(op, &["result"]) {
                 cx.alpha.bind(g, &sub);
-                out.status = Status::Agreed;
-                out.comparator = Some("address-binding".into());
+                out.agree("address-binding");
             } else {
                 out.status = Status::NotCompared;
             }
         }
-        Err(e) => {
-            settle_ack(out, xf, Some(e));
-        }
+        Err(e) => settle_rejected(out, xf, e),
     }
 }

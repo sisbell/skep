@@ -45,6 +45,8 @@ pub struct Rig {
     /// The account new documents mint under (see
     /// [`Rig::create_private_document`]).
     current_account: Address,
+    /// The account `Rig::new` delegated (see [`Rig::default_account`]).
+    default_account: Address,
     next_principal: u64,
     /// The harness type-registry document: one content position per link
     /// type name (adaptation policy `type_registry`). Its address is harness
@@ -154,6 +156,7 @@ impl Rig {
             labels: BTreeMap::new(),
             current_session: session,
             current_account: account.clone(),
+            default_account: account.clone(),
             next_principal: 2,
             types_doc: addr(&[1]).expect("placeholder, replaced below"),
             type_ordinals: BTreeMap::new(),
@@ -210,10 +213,11 @@ impl Rig {
         })
     }
 
-    /// The initially delegated account (α seed target).
-    pub fn default_account(&self) -> Address {
-        // The first session entry is the bootstrap-delegated account.
-        self.current_account.clone()
+    /// The account `Rig::new` delegated: the image of udanax's default
+    /// account, which the runner seeds into α. Fixed for the rig's life,
+    /// whatever account later ops make current.
+    pub fn default_account(&self) -> &Address {
+        &self.default_account
     }
 
     /// `account` op support (adaptation `account_as_delegate`): make the
@@ -410,6 +414,7 @@ mod tests {
         let second = rig.switch_account(None).expect("a fresh account is delegated");
         assert_ne!(second, first);
         assert_eq!(rig.current_account, second);
+        assert_eq!(rig.default_account(), &first, "the default account stays the first");
         assert!(mints(&rig));
 
         rig.bind_session_label("B", &second);

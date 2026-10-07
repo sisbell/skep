@@ -1,15 +1,19 @@
 //! Content reads: `retrieve_contents` in each recorded shape (docs maps,
 //! per-target lists, per-doc keyed replies, positions, spec sets, spans, the
 //! whole document), the vspan/vspanset probes, and the observation
-//! bundles.
+//! bundles. A whole-document read asks skep for everything its own extent
+//! reports, never only as much as the recording says exists; and a read
+//! whose recording holds an answer no shape here reaches ends inexpressible,
+//! the answer named (`compared_nothing`).
 
 use serde_json::Value;
 
-use skep_febe::{Op, Response};
+use skep_febe::{Op, RejectCode, Response};
 use skep_retrieval::{DeliveryItem, Spec};
 
 use super::{
-    inexpressible, joint_absence, probe_state, rejection_code, settle_ack, Cx, Probe, Tally,
+    compared_nothing, inexpressible, joint_absence, probe_state, refusal, refused_with,
+    settle_accepted, settle_refused, Cx, Probe, Tally, EXTENT_ABSENT,
 };
 use crate::allowlist::Grants;
 use crate::compare::{
@@ -17,16 +21,35 @@ use crate::compare::{
     COLLAPSED_SUBSPACE_ANALYSIS, VERSION_LINK_CARRYOVER_ANALYSIS,
 };
 use crate::fields::{
-    expect_spans_raw, expect_strings, expected_failure, field, harvest_spanset,
-    has_observation_fields, label_of, locate, position_from_label, span_dict, str_field,
-    vspec_dict,
+    as_text, expect_spans_raw, expect_strings, expected_failure, field, harvest_spanset,
+    has_observation_fields, label_of, locate, per_doc_replies, position_from_label,
+    recorded_content, span_dict, str_field, verb_of, vspec_dict, Verb,
 };
-use crate::outcome::{OpOutcome, Status};
+use crate::outcome::OpOutcome;
 use crate::tum::{is_link_address, link_home_docid, parse_dotted, parse_vpos, vspan};
 
-const CONTENT_EXPECT_KEYS: &[&str] = &[
-    "result", "before", "after", "content", "contents", "sample", "remaining", "empty",
-    "expected", "value", "text",
+/// The arguments a content read carries: the document it reads, and the
+/// region, spec set or position that narrows it.
+const CONTENT_READS: &[&str] = &[
+    "doc", "docid", "doc_label", "specset", "specs", "span", "spans", "vspan", "address", "at",
+    "position",
+];
+
+/// The arguments a vspan/vspanset probe carries: the document it reads.
+const EXTENT_READS: &[&str] = &["doc", "docid", "doc_label"];
+
+/// The refusals a content read answers an empty region with: a vacant
+/// position (link_at_2_3_after probes a vacant link position — udanax
+/// answered [], skep answers `RangeNotPresent`), an unoccupied or absent
+/// subspace, an empty result, and a NESTED local address, which holds
+/// nothing addressable on skep (green's nested reads answered [] —
+/// boundary_deep_vaddress_reads).
+const CONTENT_ABSENT: &[RejectCode] = &[
+    RejectCode::RangeNotPresent,
+    RejectCode::EmptySubspace,
+    RejectCode::NoSuchSubspace,
+    RejectCode::EmptyResult,
+    RejectCode::DepthIncompatible,
 ];
 
 /// The retrieve specs for a doc-less retrieve that follows a follow op whose
@@ -37,8 +60,7 @@ fn follow_landing_specs(cx: &mut Cx, index: usize, op: &Value) -> Option<Vec<Spe
         return None;
     }
     let prev = cx.ops.get(index.checked_sub(1)?)?;
-    let prev_label = label_of(prev).to_ascii_lowercase();
-    if !(prev_label.starts_with("follow") || prev_label.starts_with("traverse")) {
+    if !matches!(verb_of(prev), Some(Verb::FollowLink | Verb::Traverse)) {
         return None;
     }
     let (docid, spans) = expect_spans_raw(field(prev, &["result"])?)?;
@@ -72,13 +94,13 @@ fn deep_span_dict(v: &Value) -> Option<(Vec<u64>, Vec<u64>)> {
 pub(super) fn h_contents(cx: &mut Cx, index: usize, op: &Value, out: &mut OpOutcome, label: &str) {
     let xf = expected_failure(op);
 
-    // Multi-doc probe: `docs` map of name → expected strings.
+    // Multi-doc probe: `docs` map of name → expected strings. An id map
+    // (create_documents-shaped) holds addresses, never content: set aside.
     if let Some(map) = op.get("docs").and_then(Value::as_object) {
         let mut tally = Tally::default();
         for (name, exp) in map {
             let Some(strings) = expect_strings(exp) else { continue };
-            // An id map (create_documents-shaped), not a content probe.
-            if strings.iter().any(|s| s.contains('.') && parse_dotted(s).is_some()) {
+            if as_text(&strings).is_none() {
                 continue;
             }
             let Some(doc) = cx.shadow.resolve_doc(name) else {
@@ -94,7 +116,8 @@ pub(super) fn h_contents(cx: &mut Cx, index: usize, op: &Value, out: &mut OpOutc
             }
         }
         out.adaptations.push("contents:content-subspace".into());
-        tally.settle(out, "content");
+        let reads: Vec<&str> = CONTENT_READS.iter().copied().chain(["docs"]).collect();
+        tally.settle_read(out, "content", op, &reads);
         return;
     }
 
@@ -133,91 +156,61 @@ pub(super) fn h_contents(cx: &mut Cx, index: usize, op: &Value, out: &mut OpOutc
         }
     }
 
-    // Per-doc keyed probe: two or more fields whose KEY resolves as a doc
-    // reference and whose VALUE is a string array are the recorded
-    // per-document replies of one retrieve (policy `contents:per-doc-keyed`;
-    // internal/ispan_partial_overlap op 4 records `source: ["CDEFG"],
-    // dest: ["CDEFG"], expected: "CDEFG in both"` — the arrays are the data,
-    // `expected` is prose, and reading it as the expectation while dropping
-    // the arrays is what this branch replaces). The script's unrecorded
-    // specset is reconstructed GOLDEN-side: a single recorded string that is
-    // a proper substring of the doc's shadow content locates in the SHADOW
-    // and that span is read from skep (policy
-    // `read-span-from-recorded-strings` — the query derives from golden data
-    // only, so skep still has to deliver the right bytes at those
-    // positions); everything else reads the whole document and any mismatch
-    // surfaces loudly.
-    if str_field(op, &["doc", "docid"]).is_none()
-        && field(op, &["result", "specset", "specs", "contents", "content"]).is_none()
-    {
-        const NOT_DOC_KEYS: &[&str] = &[
-            "op", "comment", "note", "label", "description", "interpretation", "expected",
-            "error", "status", "before", "after", "sample", "remaining", "empty", "value",
-            "text", "texts", "strings", "cuts", "spans", "targets", "docs", "positions",
-        ];
-        let keyed: Vec<(String, String, Vec<String>)> = op
-            .as_object()
-            .map(|o| {
-                o.iter()
-                    .filter(|(k, v)| !NOT_DOC_KEYS.contains(&k.as_str()) && v.is_array())
-                    .filter_map(|(k, v)| {
-                        let strings = expect_strings(v)?;
-                        let doc = cx.shadow.resolve_doc(k)?;
-                        Some((k.clone(), doc, strings))
-                    })
-                    .collect()
-            })
-            .unwrap_or_default();
-        if keyed.len() >= 2 {
-            let mut tally = Tally::default();
-            for (name, doc, strings) in &keyed {
-                let Some(d) = cx.skep_doc(doc) else {
-                    tally.differ(
-                        format!("{name}: contents"),
-                        format!("{name}: {doc} unresolvable"),
-                    );
-                    continue;
-                };
-                // Reconstructed narrowing: exactly one recorded string,
-                // strictly inside the shadow's content, located there.
-                let narrowed = match strings.as_slice() {
-                    [s] if !s.is_empty()
-                        && !is_link_address(s)
-                        && *s != cx.shadow.text_string(doc) =>
-                    {
-                        cx.shadow
-                            .find_text(Some(doc.as_str()), s)
-                            .map(|(_, ord)| (ord, s.len() as u64))
-                    }
-                    _ => None,
-                };
-                let items = if let Some((ord, w)) = narrowed {
-                    out.adaptations.push("read-span-from-recorded-strings".into());
-                    match vspan(1, ord, w).map(|span| {
-                        cx.rig.exec(Op::RetrieveV { specs: vec![Spec { doc: d, span }] })
-                    }) {
-                        Some(Response::Delivery { items, .. }) => Ok(items.0),
-                        Some(r) => Err(rejection_code(&r)
-                            .unwrap_or_else(|| "unexpected response".into())),
-                        None => Ok(Vec::new()),
-                    }
-                } else {
-                    cx.read_content(doc)
-                };
-                let label = format!("{name}: ");
-                match items {
-                    Ok(items) => {
-                        tally.judge(compare_content(strings, &items, cx.alpha), &label, &label)
-                    }
-                    Err(code) => {
-                        tally.differ(format!("{name}: contents"), format!("{name}: {code}"))
-                    }
+    // Per-doc keyed probe (policy `contents:per-doc-keyed`): the recorded
+    // per-document replies of one read (`fields::per_doc_replies`) —
+    // internal/ispan_partial_overlap op 4's `source: ["CDEFG"], dest:
+    // ["CDEFG"]` beside an `expected` that is prose, a snapshot's
+    // `A_content`. The script's unrecorded specset is reconstructed
+    // GOLDEN-side: a single recorded string that is a proper substring of
+    // the doc's shadow content locates in the SHADOW and that span is read
+    // from skep (policy `read-span-from-recorded-strings` — the query
+    // derives from golden data only, so skep still has to deliver the right
+    // bytes at those positions); everything else reads the whole document
+    // and any mismatch surfaces loudly.
+    let replies = per_doc_replies(op, cx.shadow);
+    if !replies.is_empty() {
+        let mut tally = Tally::default();
+        for (name, doc, strings) in &replies {
+            let Some(d) = cx.skep_doc(doc) else {
+                tally.differ(format!("{name}: contents"), format!("{name}: {doc} unresolvable"));
+                continue;
+            };
+            // Reconstructed narrowing: exactly one recorded string,
+            // strictly inside the shadow's content, located there.
+            let narrowed = match strings.as_slice() {
+                [s] if !s.is_empty()
+                    && !is_link_address(s)
+                    && *s != cx.shadow.text_string(doc) =>
+                {
+                    cx.shadow
+                        .find_text(Some(doc.as_str()), s)
+                        .map(|(_, ord)| (ord, s.len() as u64))
                 }
+                _ => None,
+            };
+            let items = if let Some((ord, w)) = narrowed {
+                out.adaptations.push("read-span-from-recorded-strings".into());
+                match vspan(1, ord, w).map(|span| {
+                    cx.rig.exec(Op::RetrieveV { specs: vec![Spec { doc: d, span }] })
+                }) {
+                    Some(Response::Delivery { items, .. }) => Ok(items.0),
+                    Some(r) => Err(refusal(&r)),
+                    None => Ok(Vec::new()),
+                }
+            } else {
+                cx.read_content(doc)
+            };
+            let label = format!("{name}: ");
+            match items {
+                Ok(items) => {
+                    tally.judge(compare_content(strings, &items, cx.alpha), &label, &label)
+                }
+                Err(code) => tally.differ(format!("{name}: contents"), format!("{name}: {code}")),
             }
-            out.adaptations.push("contents:per-doc-keyed".into());
-            tally.settle(out, "content");
-            return;
         }
+        out.adaptations.push("contents:per-doc-keyed".into());
+        tally.settle(out, "content");
+        return;
     }
 
     // Per-position probe: `positions` map of "1.3" → "C".
@@ -227,9 +220,7 @@ pub(super) fn h_contents(cx: &mut Cx, index: usize, op: &Value, out: &mut OpOutc
             return;
         };
         let Some(d) = cx.skep_doc(&doc) else {
-            out.status = Status::Disagreed;
-            out.comparator = Some("alpha".into());
-            out.note = Some(format!("positions probe doc {doc} unresolvable"));
+            out.unresolvable(format!("positions probe doc {doc} unresolvable"));
             return;
         };
         let mut tally = Tally::default();
@@ -254,18 +245,16 @@ pub(super) fn h_contents(cx: &mut Cx, index: usize, op: &Value, out: &mut OpOutc
                     let c = compare_content(&[want.to_string()], &items.0, cx.alpha);
                     tally.judge(c, &label, &label);
                 }
-                r => tally.differ(
-                    format!("{pos}={want:?}"),
-                    format!("{pos}: {}", rejection_code(&r).unwrap_or_else(|| "?".into())),
-                ),
+                r => tally.differ(format!("{pos}={want:?}"), format!("{pos}: {}", refusal(&r))),
             }
         }
-        tally.settle(out, "content-positions");
+        tally.settle_read(out, "content-positions", op, CONTENT_READS);
         return;
     }
 
-    let expected = field(op, CONTENT_EXPECT_KEYS);
-    let strings: Option<Vec<String>> = expected.and_then(expect_strings);
+    // The recorded reply: an array outranks prose (`fields::recorded_content`).
+    let strings: Option<Vec<String>> =
+        recorded_content(op, CONTENT_READS).map(|(_, strings)| strings);
 
     // The expectation itself may name the doc (a link-address probe's home).
     let doc_from_exp: Option<String> = strings.as_ref().and_then(|ss| {
@@ -290,9 +279,7 @@ pub(super) fn h_contents(cx: &mut Cx, index: usize, op: &Value, out: &mut OpOutc
                 return;
             };
             let Some(d) = cx.alpha.translate(&docid) else {
-                out.status = Status::Disagreed;
-                out.comparator = Some("alpha".into());
-                out.note = Some(format!("retrieve doc {docid} unresolvable"));
+                out.unresolvable(format!("retrieve doc {docid} unresolvable"));
                 return;
             };
             for (s, o, w) in spans {
@@ -333,9 +320,7 @@ pub(super) fn h_contents(cx: &mut Cx, index: usize, op: &Value, out: &mut OpOutc
             return;
         };
         let Some(d) = cx.skep_doc(&doc) else {
-            out.status = Status::Disagreed;
-            out.comparator = Some("alpha".into());
-            out.note = Some(format!("retrieve doc {doc} unresolvable"));
+            out.unresolvable(format!("retrieve doc {doc} unresolvable"));
             return;
         };
         let items: Vec<&Value> = match v {
@@ -367,7 +352,7 @@ pub(super) fn h_contents(cx: &mut Cx, index: usize, op: &Value, out: &mut OpOutc
             } else if let Some(t) = item.as_str() {
                 match locate(cx.shadow, Some(&doc), t) {
                     Some(l) => {
-                        out.adaptations.push(l.how.into());
+                        out.adaptations.push(l.how.tag().into());
                         if let Some(span) = vspan(1, l.ord, l.width) {
                             specs.push(Spec { doc: d.clone(), span });
                         }
@@ -413,9 +398,7 @@ pub(super) fn h_contents(cx: &mut Cx, index: usize, op: &Value, out: &mut OpOutc
             return;
         };
         let Some(d) = cx.skep_doc(&doc) else {
-            out.status = Status::Disagreed;
-            out.comparator = Some("alpha".into());
-            out.note = Some(format!("retrieve doc {doc} unresolvable"));
+            out.unresolvable(format!("retrieve doc {doc} unresolvable"));
             return;
         };
         let pos = str_field(op, &["address", "at", "position"]).and_then(parse_vpos).or_else(
@@ -430,19 +413,22 @@ pub(super) fn h_contents(cx: &mut Cx, index: usize, op: &Value, out: &mut OpOutc
                 specs.push(Spec { doc: d, span });
             }
         } else {
-            // Whole document. The reply's SHAPE follows the golden (round-5
-            // item 5): text-only recorded contents read the CONTENT
-            // subspace only (policy `contents:content-subspace` — udanax's
-            // plain retrieve_contents never lists link items); a recorded
-            // reply that includes a link address read BOTH subspaces —
-            // content plus the link positions — and the link addresses
-            // compare through α (policy `contents:both-subspaces`). One
+            // Whole document: everything skep's own extent reports in the
+            // content subspace (`Cx::skep_content_spans`) — never sized
+            // from the recording, which would hide whatever skep holds past
+            // it. The reply's SHAPE follows the golden (round-5 item 5):
+            // text-only recorded contents read the CONTENT subspace only
+            // (policy `contents:content-subspace` — udanax's plain
+            // retrieve_contents never lists link items); a recorded reply
+            // that includes a link address read BOTH subspaces — content
+            // plus the link positions — and the link addresses compare
+            // through α (policy `contents:both-subspaces`). One
             // evidence-driven narrowing: when the recorded TEXT is a strict
             // prefix of the shadow's (recorded-reality) content, the
             // script's specset was that much narrower — read only that many
             // positions (policy `read-scoped-to-recorded-extent`).
             let n = cx.shadow.text_len(&doc);
-            let mut read_n = n;
+            let mut scoped_to: Option<u64> = None;
             let has_addr = strings
                 .as_ref()
                 .is_some_and(|ss| ss.iter().any(|s| is_link_address(s)));
@@ -463,15 +449,26 @@ pub(super) fn h_contents(cx: &mut Cx, index: usize, op: &Value, out: &mut OpOutc
                         .is_some_and(|first| shadow_text.starts_with(first.as_str()))
                 {
                     out.adaptations.push("read-scoped-to-recorded-extent".into());
-                    read_n = text_len as u64;
+                    scoped_to = Some(text_len as u64);
                 }
             }
             out.adaptations.push(
                 if has_addr { "contents:both-subspaces" } else { "contents:content-subspace" }
                     .to_string(),
             );
-            if let Some(span) = vspan(1, 1, read_n) {
-                specs.push(Spec { doc: d.clone(), span });
+            match scoped_to {
+                Some(read_n) => {
+                    specs.extend(vspan(1, 1, read_n).map(|span| Spec { doc: d.clone(), span }))
+                }
+                None => match cx.skep_content_spans(&d) {
+                    Ok(spans) => {
+                        specs.extend(spans.into_iter().map(|span| Spec { doc: d.clone(), span }))
+                    }
+                    Err(r) => {
+                        settle_refused(out, xf, &r);
+                        return;
+                    }
+                },
             }
             if has_addr {
                 let n_addr = strings
@@ -487,11 +484,13 @@ pub(super) fn h_contents(cx: &mut Cx, index: usize, op: &Value, out: &mut OpOutc
         }
     }
     let items: Vec<DeliveryItem> = if specs.is_empty() {
-        Vec::new() // empty document / empty specset: nothing to ask for
+        // No span to read: an empty spec set, or a document whose content
+        // extent skep reports empty.
+        Vec::new()
     } else {
         match cx.rig.exec(Op::RetrieveV { specs }) {
             Response::Delivery { items, .. } => {
-                if !settle_ack(out, xf, None) {
+                if !settle_accepted(out, xf) {
                     return;
                 }
                 items.0
@@ -499,26 +498,13 @@ pub(super) fn h_contents(cx: &mut Cx, index: usize, op: &Value, out: &mut OpOutc
             other => {
                 // Absence encodings (policy `empty-as-absent`): an
                 // expected-EMPTY probe and a skep absence-class rejection
-                // both say "nothing there" (link_at_2_3_after probes a
-                // vacant link position; udanax answered [], skep answers
-                // RangeNotPresent).
-                // DepthIncompatible joins the absence classes for the
-                // deep-vaddress reads: a nested local address holds nothing
-                // addressable on skep, and green's nested reads answered []
-                // — the same observable (boundary_deep_vaddress_reads).
-                let absence = matches!(
-                    rejection_code(&other).as_deref(),
-                    Some("RangeNotPresent")
-                        | Some("EmptySubspace")
-                        | Some("NoSuchSubspace")
-                        | Some("EmptyResult")
-                        | Some("DepthIncompatible")
-                );
-                if absence && xf.is_none() && strings.as_ref().is_some_and(Vec::is_empty) {
+                // both say "nothing there".
+                let expected_empty = strings.as_ref().is_some_and(Vec::is_empty);
+                if refused_with(&other, CONTENT_ABSENT) && xf.is_none() && expected_empty {
                     out.adaptations.push("empty-as-absent".into());
                     Vec::new()
                 } else {
-                    settle_ack(out, xf, rejection_code(&other));
+                    settle_refused(out, xf, &other);
                     return;
                 }
             }
@@ -542,41 +528,26 @@ pub(super) fn h_contents(cx: &mut Cx, index: usize, op: &Value, out: &mut OpOutc
                     let versioned = link_read_doc
                         .as_deref()
                         .is_some_and(|g| cx.shadow.version_of.contains_key(g));
-                    let msg = if versioned {
+                    out.add_note(if versioned {
                         VERSION_LINK_CARRYOVER_ANALYSIS.to_string()
                     } else {
                         "link-subspace read fired and delivered no items (subspace \
                          unoccupied on the skep side)"
                             .to_string()
-                    };
-                    out.note = Some(match out.note.take() {
-                        Some(n) => format!("{n}; {msg}"),
-                        None => msg,
                     });
                 }
                 items.extend(more.0);
             }
-            r => {
-                let code = rejection_code(&r).unwrap_or_else(|| "unexpected response".into());
-                out.note = Some(match out.note.take() {
-                    Some(n) => format!("{n}; link-subspace read: {code}"),
-                    None => format!("link-subspace read: {code}"),
-                });
-            }
+            r => out.add_note(format!("link-subspace read: {}", refusal(&r))),
         }
     }
     let Some(strings) = strings else {
-        out.status = Status::NotCompared;
+        compared_nothing(out, op, CONTENT_READS);
         return;
     };
-    out.comparator = Some("content".into());
     match compare_content(&strings, &items, cx.alpha) {
-        Ok(()) => out.status = Status::Agreed,
-        Err((e, a)) => {
-            out.status = Status::Disagreed;
-            out.expected = Some(e);
-            out.actual = Some(a);
-        }
+        Ok(()) => out.agree("content"),
+        Err((e, a)) => out.disagree("content", e, a),
     }
 }
 
@@ -588,11 +559,31 @@ pub(super) fn h_vspanset(
     full_set: bool,
 ) {
     let harvested = harvest_spanset(op);
+    // A count of a ROLE document's spans names that document (policy
+    // `vspan-count-by-role`: ispan_consolidation_bulk's
+    // `source_vspan_count`).
+    let role_count: Option<(&str, u64)> = op.as_object().and_then(|o| {
+        o.iter().find_map(|(k, v)| Some((k.strip_suffix("_vspan_count")?, v.as_u64()?)))
+    });
+    let role_doc = match role_count {
+        Some((role, _)) => match cx.shadow.resolve_doc(role) {
+            Some(d) => {
+                out.adaptations.push("vspan-count-by-role".into());
+                Some(d)
+            }
+            None => {
+                inexpressible(out, format!("`{role}_vspan_count` names no document"));
+                return;
+            }
+        },
+        None => None,
+    };
     // The expectation's own docid names the document when the op omits it.
     let doc = harvested
         .as_ref()
         .and_then(|(_, d, _)| d.clone())
         .and_then(|d| cx.shadow.resolve_doc(&d))
+        .or(role_doc)
         .or_else(|| cx.doc_arg(op, out, &["doc", "docid"]));
     let Some(doc) = doc else {
         inexpressible(out, "vspanset probe with no document in scope".into());
@@ -600,11 +591,12 @@ pub(super) fn h_vspanset(
     };
     cx.shadow.set_current(&doc);
     let Some(d) = cx.skep_doc(&doc) else {
-        out.status = Status::Disagreed;
-        out.comparator = Some("alpha".into());
-        out.note = Some(format!("vspanset of unresolvable doc {doc}"));
+        out.unresolvable(format!("vspanset of unresolvable doc {doc}"));
         return;
     };
+    // `poom_empty` records whether udanax's POOM — its V-space arrangement
+    // of the document — held anything (policy `poom-empty`).
+    let poom_empty = field(op, &["poom_empty"]).and_then(Value::as_bool);
     let xf = expected_failure(op);
     let r = if full_set {
         cx.rig.exec(Op::RetrieveDocVSpanSet { doc: d })
@@ -613,7 +605,7 @@ pub(super) fn h_vspanset(
     };
     let set = match r {
         Response::SpanSet { set, .. } => {
-            if !settle_ack(out, xf, None) {
+            if !settle_accepted(out, xf) {
                 return;
             }
             set
@@ -623,51 +615,44 @@ pub(super) fn h_vspanset(
             // empty document's extent as a zero span (cleaned to the empty
             // set — see expect_spans_raw); a skep absence-class rejection
             // encodes the same observable (documents/retrieve_vspan_empty).
-            let absence = matches!(
-                rejection_code(&other).as_deref(),
-                Some("RangeNotPresent")
-                    | Some("EmptySubspace")
-                    | Some("NoSuchSubspace")
-                    | Some("EmptyResult")
-                    | Some("NotArranged")
-            );
-            let expected_empty =
-                harvested.as_ref().is_some_and(|(_, _, spans)| spans.is_empty());
-            if absence && xf.is_none() && expected_empty {
+            let expected_empty = poom_empty == Some(true)
+                || harvested.as_ref().is_some_and(|(_, _, spans)| spans.is_empty());
+            if refused_with(&other, EXTENT_ABSENT) && xf.is_none() && expected_empty {
                 out.adaptations.push("empty-as-absent".into());
-                out.status = Status::Agreed;
-                out.comparator = Some("vspanset".into());
+                out.agree("vspanset");
                 return;
             }
-            settle_ack(out, xf, rejection_code(&other));
+            settle_refused(out, xf, &other);
             return;
         }
     };
-    if let Some(n) = field(op, &["span_count"]).and_then(Value::as_u64) {
-        out.comparator = Some("count".into());
-        let actual = set.iter().count();
-        match compare_count(n, actual, grants, &mut out.adaptations) {
-            Ok(()) => out.status = Status::Agreed,
-            Err((e, a)) => {
-                out.status = Status::Disagreed;
-                out.expected = Some(e);
-                out.actual = Some(a);
-            }
+    let count = field(op, &["span_count"]).and_then(Value::as_u64).or(role_count.map(|(_, n)| n));
+    if let Some(n) = count {
+        match compare_count(n, set.iter().count(), grants, &mut out.adaptations) {
+            Ok(()) => out.agree("count"),
+            Err((e, a)) => out.disagree("count", e, a),
+        }
+        return;
+    }
+    if let Some(empty) = poom_empty {
+        out.adaptations.push("poom-empty".into());
+        let spans = set.iter().count();
+        if (spans == 0) == empty {
+            out.agree("vspanset");
+        } else {
+            let want = if empty { "an empty vspanset" } else { "a nonempty vspanset" };
+            out.disagree("vspanset", want.into(), format!("{spans} span(s)"));
         }
         return;
     }
     let Some((_, _, spans)) = harvested else {
-        out.status = Status::NotCompared;
-        out.note = Some("vspanset probe with no comparable expectation".into());
+        compared_nothing(out, op, EXTENT_READS);
         return;
     };
-    out.comparator = Some("vspanset".into());
     match compare_spansets(&spans, &set, grants, &mut out.adaptations) {
-        Ok(()) => out.status = Status::Agreed,
+        Ok(()) => out.agree("vspanset"),
         Err((e, a)) => {
-            out.status = Status::Disagreed;
-            out.expected = Some(e);
-            out.actual = Some(a);
+            out.disagree("vspanset", e, a);
             if collapsed_subspace_shape(&spans) {
                 out.note = Some(COLLAPSED_SUBSPACE_ANALYSIS.to_string());
             } else if cx.shadow.version_of.contains_key(&doc)
@@ -693,10 +678,12 @@ pub(super) fn h_observe(
     out: &mut OpOutcome,
     grants: &Grants,
 ) {
-    // docs-map / targets-list / positions bundles compare several documents.
+    // docs-map / targets-list / positions bundles, and per-document
+    // replies, compare several documents.
     if op.get("docs").and_then(Value::as_object).is_some()
         || op.get("targets").and_then(Value::as_array).is_some()
         || op.get("positions").and_then(Value::as_object).is_some()
+        || !per_doc_replies(op, cx.shadow).is_empty()
     {
         h_contents(cx, index, op, out, label_of(op));
         return;
@@ -713,13 +700,12 @@ pub(super) fn h_observe(
                 return;
             }
             if let Some(d) = cx.alpha.peek_translate(docref) {
-                let r = cx.rig.exec(Op::RetrieveDocVSpanSet { doc: d });
-                let rejected = match &r {
-                    Response::SpanSet { .. } => None,
-                    other => rejection_code(other)
-                        .or_else(|| Some("unexpected response shape".into())),
-                };
-                settle_ack(out, xf, rejected);
+                match cx.rig.exec(Op::RetrieveDocVSpanSet { doc: d }) {
+                    Response::SpanSet { .. } => {
+                        settle_accepted(out, xf);
+                    }
+                    other => settle_refused(out, xf, &other),
+                }
                 return;
             }
         }

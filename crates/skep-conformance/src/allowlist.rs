@@ -7,7 +7,9 @@
 //! carries no TOML dependency: `[[allow]]` blocks of `key = value` lines
 //! (string / integer values), `#` comments, blank lines. Keys:
 //!
-//! * `scenario`  (required) — the golden scenario name;
+//! * `scenario`  (required) — the golden scenario's key, `category/name`
+//!   (`outcome::scenario_key`) — a bare name is refused, since two goldens
+//!   can share one;
 //! * `op_index`  (optional) — restrict to one op (0-based); absent = all ops;
 //! * `class`     (required) — a short divergence class;
 //! * `rationale` (required) — one sentence citing the adjudication source;
@@ -218,6 +220,16 @@ fn finish(e: Entry, out: &mut Allowlist, ln: usize) -> Result<(), String> {
             ln + 1
         ));
     }
+    let keyed = e.scenario.split_once('/').is_some_and(|(cat, name)| {
+        !cat.is_empty() && !name.is_empty() && !name.contains('/')
+    });
+    if !keyed {
+        return Err(format!(
+            "allowlist entry ending near line {}: scenario `{}` is no `category/name` key",
+            ln + 1,
+            e.scenario
+        ));
+    }
     out.entries.push(e);
     Ok(())
 }
@@ -272,5 +284,24 @@ mod tests {
         let both = outcome(1, Status::Disagreed, Some("(\"0\""));
         assert_eq!(allow.grant("s", 1, &both).as_deref(), Some("tolerated+shape"));
         assert_eq!(allow.grant("t", 1, &both), None, "entries are per scenario");
+    }
+
+    /// An entry names its scenario by key: a bare name — which two goldens
+    /// can share — is refused at load, never left to match nothing.
+    #[test]
+    fn an_entry_names_its_scenario_by_key() {
+        let dir = std::env::temp_dir().join(format!("skep-allowlist-keys-{}", std::process::id()));
+        fs::create_dir_all(&dir).expect("a scratch directory");
+        let entry = |scenario: &str| {
+            format!("[[allow]]\nscenario = \"{scenario}\"\nclass = \"c\"\nrationale = \"r\"\n")
+        };
+        let path = dir.join("allowlist.toml");
+        fs::write(&path, entry("discovery/find_documents_basic")).expect("an allowlist");
+        let keyed = load(&path).map(|a| a.entries[0].scenario.clone());
+        fs::write(&path, entry("find_documents_basic")).expect("an allowlist");
+        let bare = load(&path).err();
+        fs::remove_dir_all(&dir).expect("the scratch directory is removed");
+        assert_eq!(keyed.as_deref(), Ok("discovery/find_documents_basic"));
+        assert!(bare.is_some_and(|e| e.contains("no `category/name` key")));
     }
 }

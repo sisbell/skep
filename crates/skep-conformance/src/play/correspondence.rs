@@ -13,8 +13,8 @@ use skep_retrieval::RegionSpec;
 
 use super::{compared_nothing, inexpressible, refusal, Cx, Tally};
 use crate::fields::{field, locate, span_dict, str_field, vspec_dict};
-use crate::outcome::{OpOutcome, Status};
-use crate::tum::{parse_vpos, vspan};
+use crate::outcome::{Disagreement, OpOutcome};
+use crate::tum::{parse_vpos, VPoint};
 
 /// The keys a compare names its documents by, beside its operand fields
 /// and `<ref>_span` windows.
@@ -24,7 +24,7 @@ const COMPARE_READS: &[&str] = &[
 
 /// What the recording says a compare found: the shared-span pairs it
 /// listed, or only how many there were.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 enum RecordedShared<'v> {
     Pairs(&'v [Value]),
     Count(u64),
@@ -51,28 +51,17 @@ type PairSide = (Option<String>, u64, u64);
 /// `{docid, spans:[…]}` — returns (optional docid, ord, width), content
 /// subspace only.
 fn pair_side(v: &Value) -> Option<PairSide> {
-    if let Some((sub, ord, w)) = span_dict(v) {
-        if sub == 1 {
-            return Some((None, ord, w));
-        }
-        return None;
+    if let Some(r) = span_dict(v) {
+        return (r.sub == 1).then_some((None, r.ord, r.width));
     }
     let o = v.as_object()?;
     let docid = o.get("docid").and_then(Value::as_str).map(str::to_string);
-    if let Some(sp) = o.get("span") {
-        let (sub, ord, w) = span_dict(sp)?;
-        if sub == 1 {
-            return Some((docid, ord, w));
-        }
-        return None;
-    }
-    if let Some(arr) = o.get("spans").and_then(Value::as_array) {
-        let (sub, ord, w) = arr.first().and_then(span_dict)?;
-        if sub == 1 {
-            return Some((docid, ord, w));
-        }
-    }
-    None
+    let r = match (o.get("span"), o.get("spans").and_then(Value::as_array)) {
+        (Some(sp), _) => span_dict(sp)?,
+        (None, Some(arr)) => arr.first().and_then(span_dict)?,
+        (None, None) => return None,
+    };
+    (r.sub == 1).then_some((docid, r.ord, r.width))
 }
 
 /// One recorded shared-span pair → (A-side, B-side), oriented by docid
@@ -136,6 +125,7 @@ fn orient_pair(
 /// One side of a compare: its golden docid, the reference the golden names
 /// it by (which orients the recorded pairs), and the operand window that
 /// narrows its ρ, if any.
+#[derive(Debug)]
 struct CompareSide<'a> {
     doc: &'a str,
     reference: &'a str,
@@ -176,7 +166,8 @@ fn judge_shared(
             if want == merged && foreign.is_empty() {
                 tally.agree();
             } else {
-                tally.differ(format!("{want:?}"), with_foreign(format!("{merged:?}")));
+                let actual = with_foreign(format!("{merged:?}"));
+                tally.differ(Disagreement { expected: format!("{want:?}"), actual });
             }
         }
         RecordedShared::Count(n) => {
@@ -184,10 +175,10 @@ fn judge_shared(
             if found == n && foreign.is_empty() {
                 tally.agree();
             } else {
-                tally.differ(
-                    format!("{n} shared pairs"),
-                    with_foreign(format!("{found} shared pairs")),
-                );
+                tally.differ(Disagreement {
+                    expected: format!("{n} shared pairs"),
+                    actual: with_foreign(format!("{found} shared pairs")),
+                });
             }
         }
     }
@@ -211,12 +202,13 @@ fn run_compare_pair(
     let region_of =
         |cx: &Cx, g: &str, d: &skep_address::Address, win: &Option<Vec<(u64, u64)>>| -> RegionSpec {
             let spans = match win {
-                Some(list) => {
-                    list.iter().filter_map(|&(ord, w)| vspan(1, ord, w)).collect()
-                }
+                Some(list) => list
+                    .iter()
+                    .filter_map(|&(ord, w)| VPoint::content(ord).region(w).span())
+                    .collect(),
                 None => {
-                    let n = cx.shadow.text_len(g);
-                    vspan(1, 1, n).into_iter().collect()
+                    let whole = VPoint::content(1).region(cx.shadow.text_len(g));
+                    whole.span().into_iter().collect()
                 }
             };
             RegionSpec { doc: d.clone(), spans }
@@ -226,30 +218,29 @@ fn run_compare_pair(
     let rep = match cx.rig.exec(Op::Compare { rho1, rho2 }) {
         Response::Compare { rep, .. } => rep,
         other => {
-            out.disagree("correspondence", "a compare report".into(), refusal(&other));
+            let expected = "a compare report".to_string();
+            out.disagree("correspondence", Disagreement { expected, actual: refusal(&other) });
             return;
         }
     };
     // Normalize skep's pairs to (ordA, ordB, width) triples, then coalesce
     // adjacent runs exactly as client.py's collapse_sharedspans did on the
     // recording side (the golden is already collapsed; symmetric treatment).
-    let nat_u64 = |n: &Nat| -> u64 { n.to_string().parse().unwrap_or(u64::MAX) };
-    let a_str = crate::tum::addr_str(&da);
-    let b_str = crate::tum::addr_str(&db);
+    // A number past u64 saturates, and so never matches a recorded one.
+    let nat_u64 = |n: &Nat| -> u64 { u64::try_from(n).unwrap_or(u64::MAX) };
     let mut triples: Vec<(u64, u64, u64)> = Vec::new();
     let mut foreign: Vec<String> = Vec::new();
     for p in rep.0 {
-        let (d1, d2) = (crate::tum::addr_str(&p.d1), crate::tum::addr_str(&p.d2));
         let (o1, o2, w) = (nat_u64(&p.u1.ordinal), nat_u64(&p.u2.ordinal), nat_u64(&p.width));
         if nat_u64(&p.u1.subspace) != 1 || nat_u64(&p.u2.subspace) != 1 {
             continue;
         }
-        if d1 == a_str && d2 == b_str {
+        if p.d1 == da && p.d2 == db {
             triples.push((o1, o2, w));
-        } else if d1 == b_str && d2 == a_str {
+        } else if p.d1 == db && p.d2 == da {
             triples.push((o2, o1, w));
         } else {
-            foreign.push(format!("({d1},{d2})"));
+            foreign.push(format!("({},{})", p.d1, p.d2));
         }
     }
     triples.sort();
@@ -290,29 +281,24 @@ pub(super) fn h_compare(cx: &mut Cx, op: &Value, out: &mut OpOutcome) {
             o.iter()
                 .filter(|(k, _)| !NOT_OPERAND.contains(&k.as_str()))
                 .filter_map(|(k, v)| {
-                    let (docid, spans) = vspec_dict(v)?;
-                    let wins: Vec<(u64, u64)> = spans
-                        .iter()
-                        .filter(|(s, _, _)| *s == 1)
-                        .map(|(_, ord, w)| (*ord, *w))
-                        .collect();
+                    let (docid, regions) = vspec_dict(v)?;
+                    let wins: Vec<(u64, u64)> =
+                        regions.iter().filter(|r| r.sub == 1).map(|r| (r.ord, r.width)).collect();
                     Some((k.clone(), docid, wins))
                 })
                 .collect()
         })
         .unwrap_or_default();
-    if operands.len() == 2 {
+    if let Ok([(ka, da, wa), (kb, db, wb)]) = <[Operand; 2]>::try_from(operands) {
         out.adaptations.push("compare-operands-explicit".into());
         let pairs = field(op, &["result", "shared", "pairs"]).and_then(Value::as_array);
         let count = field(op, &["pair_count"]).and_then(Value::as_u64);
         let Some(recorded) = RecordedShared::of(pairs.map(Vec::as_slice), count) else {
             let mut reads: Vec<&str> = COMPARE_READS.to_vec();
-            reads.extend(operands.iter().map(|(k, _, _)| k.as_str()));
+            reads.extend([ka.as_str(), kb.as_str()]);
             compared_nothing(out, op, &reads);
             return;
         };
-        let (ka, da, wa) = operands[0].clone();
-        let (kb, db, wb) = operands[1].clone();
         let a = CompareSide { doc: &da, reference: &ka, window: (!wa.is_empty()).then_some(wa) };
         let b = CompareSide { doc: &db, reference: &kb, window: (!wb.is_empty()).then_some(wb) };
         run_compare_pair(cx, out, a, b, recorded);
@@ -344,22 +330,13 @@ pub(super) fn h_compare(cx: &mut Cx, op: &Value, out: &mut OpOutcome) {
                 };
                 let shared: &[Value] =
                     e.get("shared").and_then(Value::as_array).map_or(&[], Vec::as_slice);
+                // Each source is compared as an op of its own and folded in
+                // as one part.
                 let mut sub = OpOutcome::new(out.index, &out.op_name);
                 let a = CompareSide { doc: &dest, reference: "target", window: None };
                 let b = CompareSide { doc: &src, reference: "source", window: None };
                 run_compare_pair(cx, &mut sub, a, b, RecordedShared::Pairs(shared));
-                match sub.status {
-                    Status::Disagreed => tally.differ(
-                        format!("{srcname}: {}", sub.expected.unwrap_or_default()),
-                        sub.actual.unwrap_or_else(|| sub.note.unwrap_or_default()),
-                    ),
-                    Status::Agreed => tally.agree(),
-                    Status::Inexpressible => tally.unaimed(format!(
-                        "{srcname}: {}",
-                        sub.note.unwrap_or_default()
-                    )),
-                    _ => {}
-                }
+                tally.absorb(out, sub, &format!("{srcname}: "));
             }
             tally.settle(out, "correspondence");
             return;
@@ -475,8 +452,8 @@ pub(super) fn h_compare(cx: &mut Cx, op: &Value, out: &mut OpOutcome) {
             let Some(stem) = k.strip_suffix("_span") else { continue };
             reads.push(k);
             let Some(side_doc) = cx.shadow.resolve_doc(stem) else { continue };
-            let win = if let Some((sub, ord, w)) = span_dict(v) {
-                (sub == 1).then_some((ord, w))
+            let win = if let Some(r) = span_dict(v) {
+                (r.sub == 1).then_some((r.ord, r.width))
             } else if let Some(s) = v.as_str() {
                 locate(cx.shadow, Some(&side_doc), s).map(|l| (l.ord, l.width))
             } else {
@@ -522,11 +499,10 @@ fn identity_pairs(
         out.never_bound(format!("position identity compare of never-bound doc {doc}"));
         return;
     };
-    let image = |pos: &str| -> Option<String> {
-        let (sub, ord) = parse_vpos(pos)?;
-        let span = vspan(sub, ord, 1)?;
+    let image = |pos: &str| -> Option<skep_address::Address> {
+        let span = parse_vpos(pos)?.region(1).span()?;
         match cx.rig.exec(Op::Image { d: d.clone(), region: vec![span] }) {
-            Response::Runs { runs, .. } => runs.first().map(|r| crate::tum::addr_str(r.i_start())),
+            Response::Runs { runs, .. } => runs.first().map(|r| r.i_start().clone()),
             _ => None,
         }
     };
@@ -541,12 +517,16 @@ fn identity_pairs(
             continue;
         };
         let label = format!("{pi}~{pj} share an I-address: ");
+        let expected = format!("{label}{want}");
         match (image(pi), image(pj)) {
             (Some(a), Some(b)) if (a == b) == want => tally.agree(),
             (Some(a), Some(b)) => {
-                tally.differ(format!("{label}{want}"), format!("{label}{}", a == b))
+                tally.differ(Disagreement { expected, actual: format!("{label}{}", a == b) })
             }
-            _ => tally.differ(format!("{label}{want}"), "a position has no live image".into()),
+            _ => {
+                let actual = "a position has no live image".to_string();
+                tally.differ(Disagreement { expected, actual })
+            }
         }
     }
     tally.settle(out, "identity-pairs");
@@ -555,6 +535,7 @@ fn identity_pairs(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::outcome::Status;
 
     fn side<'a>(doc: &'a str, reference: &'a str) -> CompareSide<'a> {
         CompareSide { doc, reference, window: None }
@@ -569,8 +550,9 @@ mod tests {
         let mut out = OpOutcome::new(0, "compare");
         judge_shared(RecordedShared::Count(2), &a, &b, &[], &[]).settle(&mut out, "count");
         assert_eq!(out.status, Status::Disagreed);
-        assert_eq!(out.expected.as_deref(), Some("2 shared pairs"));
-        assert_eq!(out.actual.as_deref(), Some("0 shared pairs"));
+        let counted =
+            Disagreement { expected: "2 shared pairs".into(), actual: "0 shared pairs".into() };
+        assert_eq!(out.disagreement, Some(counted));
 
         let mut out = OpOutcome::new(0, "compare");
         judge_shared(RecordedShared::Count(1), &a, &b, &[(1, 1, 5)], &[]).settle(&mut out, "count");

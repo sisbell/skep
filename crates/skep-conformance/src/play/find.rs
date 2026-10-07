@@ -5,6 +5,7 @@
 
 use serde_json::Value;
 
+use skep_address::Tumbler;
 use skep_discovery::{FourSet, SlotSpec};
 use skep_febe::{Op, Response};
 use skep_links::{enc, Endset};
@@ -19,8 +20,8 @@ use crate::compare::{compare_addr_sets, compare_count};
 use crate::fields::{
     expected_failure, field, locate, parse_python_spec, str_field, vspec_dict, DocSpans,
 };
-use crate::outcome::OpOutcome;
-use crate::tum::{is_link_address, parse_dotted, parse_vpos, parse_width, vspan};
+use crate::outcome::{Disagreement, OpOutcome};
+use crate::tum::{is_link_address, last_component, parse_vpos, parse_width, VPoint, VRegion};
 
 /// The arguments a find_links carries: the query's slots — search region,
 /// endpoint sides, type filter, home documents — and the routing over them.
@@ -51,6 +52,7 @@ fn address_list(v: &Value) -> Option<&Vec<Value>> {
 
 /// One query side of a find_links: golden V-space (doc, spans) pairs to be
 /// imaged live, or a pre-resolved I-space endset (deleted-content reach).
+#[derive(Debug)]
 enum SideSpec {
     V(Vec<DocSpans>),
     I(Endset),
@@ -106,10 +108,10 @@ pub(super) fn h_find_links(
                 if s == "full document" || s.starts_with("entire") {
                     let d = cx.shadow.current()?;
                     let n = cx.shadow.text_len(&d);
-                    return Some(SideSpec::V(vec![(d, vec![(1, 1, n.max(1))])]));
+                    return Some(SideSpec::V(vec![(d, vec![VPoint::content(1).region(n.max(1))])]));
                 }
                 if let Some(l) = locate(cx.shadow, None, s) {
-                    return Some(SideSpec::V(vec![(l.doc, vec![(1, l.ord, l.width)])]));
+                    return Some(SideSpec::V(vec![l.into_side()]));
                 }
                 let ispans = cx.deletions.locate(s.as_bytes())?;
                 icov_tag = true;
@@ -123,10 +125,10 @@ pub(super) fn h_find_links(
             if t == "full document" || t.starts_with("entire") {
                 let d = cx.shadow.current()?;
                 let n = cx.shadow.text_len(&d);
-                return Some(SideSpec::V(vec![(d, vec![(1, 1, n.max(1))])]));
+                return Some(SideSpec::V(vec![(d, vec![VPoint::content(1).region(n.max(1))])]));
             }
             if let Some(l) = locate(cx.shadow, None, t) {
-                return Some(SideSpec::V(vec![(l.doc, vec![(1, l.ord, l.width)])]));
+                return Some(SideSpec::V(vec![l.into_side()]));
             }
             let ispans = cx.deletions.locate(t.as_bytes())?;
             icov_tag = true;
@@ -137,7 +139,7 @@ pub(super) fn h_find_links(
             str_field(op, &["search_doc", "search_document"]).and_then(|s| cx.shadow.resolve_doc(s))
         {
             let n = cx.shadow.text_len(&d);
-            return Some(SideSpec::V(vec![(d, vec![(1, 1, n.max(1))])]));
+            return Some(SideSpec::V(vec![(d, vec![VPoint::content(1).region(n.max(1))])]));
         }
         None
     })();
@@ -159,7 +161,7 @@ pub(super) fn h_find_links(
         if n == 0 {
             vec![(d.to_string(), Vec::new())]
         } else {
-            vec![(d.to_string(), vec![(1, 1, n)])]
+            vec![(d.to_string(), vec![VPoint::content(1).region(n)])]
         }
     };
 
@@ -244,7 +246,8 @@ pub(super) fn h_find_links(
         if let Some(d) = cx.shadow.current() {
             out.adaptations.push("transcluded-region-search".into());
             let regions = cx.transcluded_regions_golden(&d);
-            let spans: Vec<(u64, u64, u64)> = regions.iter().map(|(o, w)| (1, *o, *w)).collect();
+            let spans: Vec<VRegion> =
+                regions.iter().map(|&(o, w)| VPoint::content(o).region(w)).collect();
             from_sides = Some(SideSpec::V(vec![(d, spans)]));
         }
     }
@@ -340,10 +343,10 @@ pub(super) fn h_find_links(
                 Ok(sides) => {
                     let mut all: Vec<skep_address::Span> = Vec::new();
                     for (docid, spans) in &sides {
-                        let mut plain: Vec<(u64, u64, u64)> = Vec::new();
+                        let mut plain: Vec<VRegion> = Vec::new();
                         for sp in spans {
                             match sp {
-                                SetSpan::Plain(s, o, w) => plain.push((*s, *o, *w)),
+                                SetSpan::Plain(region) => plain.push(*region),
                                 SetSpan::Marker(comps) => match marker_type_name(comps) {
                                     Some(name) => {
                                         out.adaptations
@@ -494,7 +497,7 @@ pub(super) fn h_find_links(
         if let Some(n) = n {
             match compare_count(n, addrs.len(), adjustments, &mut out.adaptations) {
                 Ok(()) => out.agree("count"),
-                Err((e, a)) => out.disagree("count", e, a),
+                Err(d) => out.disagree("count", d),
             }
             return;
         }
@@ -504,13 +507,11 @@ pub(super) fn h_find_links(
     let want: Vec<String> =
         expected.iter().filter_map(|v| v.as_str().map(str::to_string)).collect();
     let rig = &*cx.rig;
-    let mut adaptations = std::mem::take(&mut out.adaptations);
     let comparison =
-        compare_addr_sets(&want, &addrs, cx.alpha, |a| rig.is_infra_addr(a), &mut adaptations);
-    out.adaptations = adaptations;
+        compare_addr_sets(&want, &addrs, cx.alpha, |a| rig.is_infra_addr(a), &mut out.adaptations);
     match comparison {
         Ok(()) => out.agree("address-set"),
-        Err((e, a)) => out.disagree("address-set", e, a),
+        Err(d) => out.disagree("address-set", d),
     }
 }
 
@@ -542,12 +543,12 @@ pub(super) fn h_find_documents(cx: &mut Cx, op: &Value, out: &mut OpOutcome) {
         let l = locate(cx.shadow, None, needle)?;
         out.adaptations.push("i-coverage-search".into());
         let d = cx.alpha.translate(&l.doc)?;
-        Some(RegionSpec { doc: d, spans: vspan(1, l.ord, l.width).into_iter().collect() })
+        Some(RegionSpec { doc: d, spans: l.region().span().into_iter().collect() })
     };
     if let Some(v) = field(op, &["specset", "specs", "search", "regions"]) {
         if let Some(arr) = v.as_array() {
             for item in arr {
-                let Some((docid, spans)) = vspec_dict(item) else {
+                let Some((docid, asked)) = vspec_dict(item) else {
                     inexpressible(out, "find_documents spec list holds a non-vspec entry".into());
                     return;
                 };
@@ -559,24 +560,24 @@ pub(super) fn h_find_documents(cx: &mut Cx, op: &Value, out: &mut OpOutcome) {
                 // `query-clamped-to-extent`; the compared RESULT is untouched).
                 let text_len = cx.shadow.text_len(&docid);
                 let mut clamped = false;
-                let spans: Vec<skep_address::Span> = spans
+                let spans: Vec<skep_address::Span> = asked
                     .iter()
-                    .filter_map(|(s, o, w)| {
-                        if *w == 0 {
+                    .filter_map(|r| {
+                        if r.width == 0 {
                             return None;
                         }
-                        if *s == 1 {
-                            if *o > text_len {
+                        if r.sub == 1 {
+                            if r.ord > text_len {
                                 clamped = true;
                                 return None;
                             }
-                            let end = (*o + *w - 1).min(text_len);
-                            if end < *o + *w - 1 {
+                            let end = (r.ord + r.width - 1).min(text_len);
+                            if end < r.ord + r.width - 1 {
                                 clamped = true;
                             }
-                            vspan(1, *o, end + 1 - *o)
+                            VRegion { width: end + 1 - r.ord, ..*r }.span()
                         } else {
-                            vspan(*s, *o, *w)
+                            r.span()
                         }
                     })
                     .collect();
@@ -594,7 +595,7 @@ pub(super) fn h_find_documents(cx: &mut Cx, op: &Value, out: &mut OpOutcome) {
                     Some(l) => {
                         out.adaptations.push(l.how.tag().into());
                         if let (Some(d), Some(span)) =
-                            (cx.alpha.translate(&l.doc), vspan(1, l.ord, l.width))
+                            (cx.alpha.translate(&l.doc), l.region().span())
                         {
                             regions.push(RegionSpec { doc: d, spans: vec![span] });
                         }
@@ -611,7 +612,7 @@ pub(super) fn h_find_documents(cx: &mut Cx, op: &Value, out: &mut OpOutcome) {
                     out.never_bound(format!("find_documents doc {} never bound", l.doc));
                     return;
                 };
-                let spans = vspan(1, l.ord, l.width).into_iter().collect();
+                let spans = l.region().span().into_iter().collect();
                 regions.push(RegionSpec { doc: d, spans });
             }
             None => {
@@ -629,7 +630,8 @@ pub(super) fn h_find_documents(cx: &mut Cx, op: &Value, out: &mut OpOutcome) {
         // "append").
         cx.shadow.set_current(&sd);
         let n = cx.shadow.text_len(&sd);
-        if let (Some(d), Some(span)) = (cx.alpha.translate(&sd), vspan(1, 1, n)) {
+        let whole = VPoint::content(1).region(n);
+        if let (Some(d), Some(span)) = (cx.alpha.translate(&sd), whole.span()) {
             regions.push(RegionSpec { doc: d, spans: vec![span] });
         }
     } else if let Some(doc) = bare_find_documents_aim(cx, op, out) {
@@ -654,7 +656,8 @@ pub(super) fn h_find_documents(cx: &mut Cx, op: &Value, out: &mut OpOutcome) {
                 }
             }
         } else if let Some(d) = cx.alpha.translate(&doc) {
-            regions.push(RegionSpec { doc: d, spans: vspan(1, 1, n).into_iter().collect() });
+            let spans = VPoint::content(1).region(n).span().into_iter().collect();
+            regions.push(RegionSpec { doc: d, spans });
         }
     }
     if let Some(reason) = ground_failed {
@@ -687,13 +690,11 @@ pub(super) fn h_find_documents(cx: &mut Cx, op: &Value, out: &mut OpOutcome) {
     let want: Vec<String> =
         expected.iter().filter_map(|v| v.as_str().map(str::to_string)).collect();
     let rig = &*cx.rig;
-    let mut adaptations = std::mem::take(&mut out.adaptations);
     let comparison =
-        compare_addr_sets(&want, &addrs, cx.alpha, |a| rig.is_infra_addr(a), &mut adaptations);
-    out.adaptations = adaptations;
+        compare_addr_sets(&want, &addrs, cx.alpha, |a| rig.is_infra_addr(a), &mut out.adaptations);
     match comparison {
         Ok(()) => out.agree("address-set"),
-        Err((e, a)) => out.disagree("address-set", e, a),
+        Err(d) => out.disagree("address-set", d),
     }
 }
 
@@ -739,21 +740,19 @@ pub(super) fn h_endsets(cx: &mut Cx, op: &Value, out: &mut OpOutcome) {
         {
             let Some(exp) = field(op, slot_keys) else { continue };
             let Some(want_specs) = slot_vspecs(&mut tally, slot, exp) else { continue };
-            let mut want: Vec<u64> =
-                want_specs.iter().flat_map(|(_, spans)| spans.iter().map(|(_, _, w)| *w)).collect();
+            let mut want: Vec<u64> = want_specs
+                .iter()
+                .flat_map(|(_, regions)| regions.iter().map(|r| r.width))
+                .collect();
             let mut got: Vec<u64> = Vec::new();
             match cx.rig.exec(Op::FollowLink { a: link.clone(), slot }) {
                 Response::Follow { result: Ok(set), .. } => {
-                    for sp in set.iter() {
-                        let (_, w) = crate::tum::span_strings(sp);
-                        if let Some(n) = parse_dotted(&w).and_then(|c| c.last().copied()) {
-                            got.push(n);
-                        }
-                    }
+                    got.extend(set.iter().filter_map(|sp| last_component(sp.width())));
                 }
                 Response::Follow { result: Err(_), .. } => {}
                 r => {
-                    tally.differ(format!("slot{slot} widths"), refusal(&r));
+                    let expected = format!("slot{slot} widths");
+                    tally.differ(Disagreement { expected, actual: refusal(&r) });
                     continue;
                 }
             }
@@ -762,7 +761,10 @@ pub(super) fn h_endsets(cx: &mut Cx, op: &Value, out: &mut OpOutcome) {
             if want == got {
                 tally.agree();
             } else {
-                tally.differ(format!("slot{slot}:{want:?}"), format!("slot{slot}:{got:?}"));
+                tally.differ(Disagreement {
+                    expected: format!("slot{slot}:{want:?}"),
+                    actual: format!("slot{slot}:{got:?}"),
+                });
             }
         }
         tally.settle_read(out, "endsets-follow-widths", op, ENDSETS_READS);
@@ -778,18 +780,18 @@ pub(super) fn h_endsets(cx: &mut Cx, op: &Value, out: &mut OpOutcome) {
                 inexpressible(out, "retrieve_endsets search holds a non-vspec entry".into());
                 return;
             };
-            let Some((docid, spans)) = vspecs.into_iter().next() else {
+            let Some((docid, regions)) = vspecs.into_iter().next() else {
                 inexpressible(out, "retrieve_endsets with an empty search".into());
                 return;
             };
-            (docid, spans.iter().filter_map(|(s, o, w)| vspan(*s, *o, *w)).collect())
+            (docid, regions.iter().filter_map(|r| r.span()).collect())
         } else {
             let Some(doc) = cx.doc_arg(op, out, &["doc", "docid"]) else {
                 inexpressible(out, "retrieve_endsets with no document in scope".into());
                 return;
             };
             let n = cx.shadow.text_len(&doc);
-            (doc.clone(), vspan(1, 1, n).into_iter().collect())
+            (doc.clone(), VPoint::content(1).region(n).span().into_iter().collect())
         };
     cx.shadow.set_current(&doc);
     let Some(d) = cx.skep_doc(&doc) else {
@@ -852,21 +854,22 @@ pub(super) fn h_endsets(cx: &mut Cx, op: &Value, out: &mut OpOutcome) {
         };
         let Some(want_specs) = slot_vspecs(&mut tally, slot, exp) else { continue };
         // Golden side → I-coverage via the live image.
-        let mut want_ranges: Vec<(String, u64, u64)> = Vec::new();
-        for (docid, spans) in &want_specs {
-            let (e, notes, _) = cx.image_endset(docid, spans);
+        let mut want_ranges: Vec<(Tumbler, u64, u64)> = Vec::new();
+        for (docid, regions) in &want_specs {
+            let (e, notes, _) = cx.image_endset(docid, regions);
             for n in notes {
                 out.add_note(n);
             }
             for sp in e.spans() {
                 if let Some(r) = elem_range(sp) {
-                    want_ranges.push((r.0, r.1, r.1 + r.2));
+                    let hi = r.hi();
+                    want_ranges.push((r.prefix, r.lo, hi));
                 }
             }
         }
         // Skep side: the recorded endset spans, infrastructure spans (the
         // types doc, the rig homes, ruling 21's grant) excluded.
-        let mut got_ranges: Vec<(String, u64, u64)> = Vec::new();
+        let mut got_ranges: Vec<(Tumbler, u64, u64)> = Vec::new();
         for (i, e) in &pairs {
             if *i != slot {
                 continue;
@@ -878,7 +881,8 @@ pub(super) fn h_endsets(cx: &mut Cx, op: &Value, out: &mut OpOutcome) {
                     }
                 }
                 if let Some(r) = elem_range(sp) {
-                    got_ranges.push((r.0, r.1, r.1 + r.2));
+                    let hi = r.hi();
+                    got_ranges.push((r.prefix, r.lo, hi));
                 }
             }
         }
@@ -887,10 +891,10 @@ pub(super) fn h_endsets(cx: &mut Cx, op: &Value, out: &mut OpOutcome) {
         if want == got {
             tally.agree();
         } else {
-            tally.differ(
-                format!("slot{slot}:cov{}", render_ranges(&want)),
-                format!("slot{slot}:cov{}", render_ranges(&got)),
-            );
+            tally.differ(Disagreement {
+                expected: format!("slot{slot}:cov{}", render_ranges(&want)),
+                actual: format!("slot{slot}:cov{}", render_ranges(&got)),
+            });
         }
     }
     // The top-level TYPE slot compares as an (origin doc, width) multiset:
@@ -900,7 +904,7 @@ pub(super) fn h_endsets(cx: &mut Cx, op: &Value, out: &mut OpOutcome) {
     if let Some(want_specs) = top_type.and_then(|exp| slot_vspecs(&mut tally, 3, exp)) {
         let mut want: Vec<(String, u64)> = want_specs
             .iter()
-            .flat_map(|(docid, spans)| spans.iter().map(|(_, _, w)| (docid.clone(), *w)))
+            .flat_map(|(docid, regions)| regions.iter().map(|r| (docid.clone(), r.width)))
             .collect();
         let mut got: Vec<(String, u64)> = Vec::new();
         for (i, e) in &pairs {
@@ -915,10 +919,7 @@ pub(super) fn h_endsets(cx: &mut Cx, op: &Value, out: &mut OpOutcome) {
                 let doc = skep_address::document_of(&a)
                     .map(|d| cx.alpha.render_skep(&d))
                     .unwrap_or_else(|| "?".into());
-                let w = parse_dotted(&crate::tum::tum_str(sp.width()))
-                    .and_then(|c| c.last().copied())
-                    .unwrap_or(0);
-                got.push((doc, w));
+                got.push((doc, last_component(sp.width()).unwrap_or(0)));
             }
         }
         want.sort();
@@ -926,7 +927,10 @@ pub(super) fn h_endsets(cx: &mut Cx, op: &Value, out: &mut OpOutcome) {
         if want == got {
             tally.agree();
         } else {
-            tally.differ(format!("slot3:{want:?}"), format!("slot3:{got:?}"));
+            tally.differ(Disagreement {
+                expected: format!("slot3:{want:?}"),
+                actual: format!("slot3:{got:?}"),
+            });
         }
     }
     tally.settle_read(out, "endsets-coverage", op, ENDSETS_READS);
@@ -940,12 +944,9 @@ pub(super) fn h_endsets(cx: &mut Cx, op: &Value, out: &mut OpOutcome) {
 fn slot_vspecs(tally: &mut Tally, slot: usize, exp: &Value) -> Option<Vec<DocSpans>> {
     if let Some(repr) = exp.as_str() {
         let read = parse_python_spec(repr).and_then(|(doc, spans)| {
-            let spans: Vec<(u64, u64, u64)> = spans
+            let spans: Vec<VRegion> = spans
                 .iter()
-                .map(|(start, w)| {
-                    let (sub, ord) = parse_vpos(start)?;
-                    Some((sub, ord, parse_width(w)?))
-                })
+                .map(|(start, w)| Some(parse_vpos(start)?.region(parse_width(w)?)))
                 .collect::<Option<_>>()?;
             match doc {
                 Some(doc) => Some(vec![(doc, spans)]),
@@ -976,9 +977,9 @@ fn slot_vspecs(tally: &mut Tally, slot: usize, exp: &Value) -> Option<Vec<DocSpa
 
 /// Sort and merge element ranges (prefix, lo, hi-exclusive) — the coverage
 /// normal form both endsets-coverage sides reduce to.
-fn merge_ranges(mut ranges: Vec<(String, u64, u64)>) -> Vec<(String, u64, u64)> {
+fn merge_ranges(mut ranges: Vec<(Tumbler, u64, u64)>) -> Vec<(Tumbler, u64, u64)> {
     ranges.sort();
-    let mut out: Vec<(String, u64, u64)> = Vec::new();
+    let mut out: Vec<(Tumbler, u64, u64)> = Vec::new();
     for (p, lo, hi) in ranges {
         if let Some(last) = out.last_mut() {
             if last.0 == p && lo <= last.2 {
@@ -991,7 +992,7 @@ fn merge_ranges(mut ranges: Vec<(String, u64, u64)>) -> Vec<(String, u64, u64)> 
     out
 }
 
-fn render_ranges(ranges: &[(String, u64, u64)]) -> String {
+fn render_ranges(ranges: &[(Tumbler, u64, u64)]) -> String {
     let parts: Vec<String> =
         ranges.iter().map(|(p, lo, hi)| format!("{p}.{lo}+{}", hi - lo)).collect();
     format!("[{}]", parts.join(", "))

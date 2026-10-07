@@ -14,7 +14,7 @@
 //!   exempt, and reported while it does not pass. Every scenario is named
 //!   by its key, `category/name` — two goldens can share a name.
 
-use skep_conformance::outcome::Verdict;
+use skep_conformance::outcome::{ScenarioKey, Verdict};
 use skep_conformance::runner::run_all;
 
 /// `harness_integrity` and `conformance_ratchet` both drive [`run_all`],
@@ -120,7 +120,8 @@ fn report_is_deterministic() {
 /// adjudication complete: decisions.md rulings 1–15, zero divergent).
 ///
 /// `conformance/ratchet.toml` freezes the expected non-pass set, each
-/// scenario named by its key. This test FAILS on any scenario that is
+/// scenario named by its key — a line naming no key is refused as the file
+/// is read. This test FAILS on any scenario that is
 /// `Divergent` or `Error`, on any `Allowlisted`/`Inexpressible` scenario not
 /// in the frozen lists, and on a frozen key no golden scenario carries (a
 /// renamed or removed golden would otherwise leave a line that guards
@@ -134,8 +135,12 @@ fn conformance_ratchet() {
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../conformance/ratchet.toml");
     let raw = std::fs::read_to_string(&path).expect("ratchet.toml must exist");
-    let (mut section, mut allow, mut inexpr, mut pending) =
-        (String::new(), HashSet::new(), HashSet::new(), HashSet::new());
+    let mut section = String::new();
+    let (mut allow, mut inexpr, mut pending): (
+        HashSet<ScenarioKey>,
+        HashSet<ScenarioKey>,
+        HashSet<ScenarioKey>,
+    ) = Default::default();
     for line in raw.lines() {
         let l = line.trim();
         if l.starts_with('#') || l.is_empty() {
@@ -143,10 +148,11 @@ fn conformance_ratchet() {
         } else if let Some(s) = l.strip_prefix('[').and_then(|x| x.strip_suffix(']')) {
             section = s.to_string();
         } else if let Some(v) = l.strip_prefix("scenario = \"").and_then(|x| x.strip_suffix('"')) {
+            let key: ScenarioKey = v.parse().unwrap_or_else(|e| panic!("ratchet.toml: {e}"));
             match section.as_str() {
-                "allowlisted" => allow.insert(v.to_string()),
-                "inexpressible" => inexpr.insert(v.to_string()),
-                "pending" => pending.insert(v.to_string()),
+                "allowlisted" => allow.insert(key),
+                "inexpressible" => inexpr.insert(key),
+                "pending" => pending.insert(key),
                 other => panic!("ratchet.toml: unknown section [{other}]"),
             };
         } else {
@@ -178,11 +184,12 @@ fn conformance_ratchet() {
             v => violations.push(format!("{key}: {v:?} not permitted by ratchet")),
         }
     }
-    let keys: HashSet<String> = out.records.iter().map(|r| r.key()).collect();
+    let keys: HashSet<ScenarioKey> = out.records.iter().map(|r| r.key()).collect();
     for (section, frozen) in
         [("allowlisted", &allow), ("inexpressible", &inexpr), ("pending", &pending)]
     {
-        let mut missing: Vec<&String> = frozen.iter().filter(|k| !keys.contains(*k)).collect();
+        let mut missing: Vec<&ScenarioKey> =
+            frozen.iter().filter(|k| !keys.contains(*k)).collect();
         missing.sort();
         for k in missing {
             violations

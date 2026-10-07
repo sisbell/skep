@@ -10,6 +10,7 @@ use serde_json::Value;
 use super::SetupStep;
 use crate::fields::{field, insert_text, reads_whole_content, span_dict, str_field, verb_of, Verb};
 use crate::shadow::Shadow;
+use crate::tum::VRegion;
 
 /// Greedy cover of `expected` by substrings of the sources (copies, ≥ 4
 /// chars) with literal fillers between — the reconstruction of an
@@ -134,10 +135,18 @@ pub(super) fn later_appends_text(
     Some(out)
 }
 
-/// One recorded shared-span evidence pair: dest doc, dest ordinal, source
-/// doc, source ordinal, width — the scenario's own testimony of which
-/// region came from where.
-pub(super) type SharedPair = (String, u64, String, u64, u64);
+/// One recorded shared-span evidence pair — the scenario's own testimony
+/// that `width` content positions of `src` from `src_ord` landed in `dest`
+/// at `dest_ord`. Ordered field by field, in declaration order: among the
+/// pairs of one destination, by where each landed.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub(super) struct SharedPair {
+    pub(super) dest: String,
+    pub(super) dest_ord: u64,
+    pub(super) src: String,
+    pub(super) src_ord: u64,
+    pub(super) width: u64,
+}
 
 /// Harvest every recorded comparison pair in the scenario, both shapes:
 /// entries `{source: "A", shared: [{target: {…}, source: {…}}]}` inside a
@@ -164,9 +173,19 @@ pub(super) fn comparison_pairs(all: &[Value], shadow: &Shadow) -> Vec<SharedPair
                 for item in shared {
                     let tgt = item.get("target").and_then(span_dict);
                     let ssp = item.get("source").and_then(span_dict);
-                    if let (Some((1, tord, w)), Some((1, sord, sw))) = (tgt, ssp) {
-                        if w == sw {
-                            out.push((dest.clone(), tord, src.clone(), sord, w));
+                    if let (
+                        Some(VRegion { sub: 1, ord: dest_ord, width }),
+                        Some(VRegion { sub: 1, ord: src_ord, width: src_width }),
+                    ) = (tgt, ssp)
+                    {
+                        if width == src_width {
+                            out.push(SharedPair {
+                                dest: dest.clone(),
+                                dest_ord,
+                                src: src.clone(),
+                                src_ord,
+                                width,
+                            });
                         }
                     }
                 }
@@ -182,9 +201,19 @@ pub(super) fn comparison_pairs(all: &[Value], shadow: &Shadow) -> Vec<SharedPair
             for item in shared {
                 let a = item.get("a").and_then(span_dict);
                 let b = item.get("b").and_then(span_dict);
-                if let (Some((1, aord, w)), Some((1, bord, bw))) = (a, b) {
-                    if w == bw {
-                        out.push((dx.clone(), aord, dy.clone(), bord, w));
+                if let (
+                    Some(VRegion { sub: 1, ord: dest_ord, width }),
+                    Some(VRegion { sub: 1, ord: src_ord, width: src_width }),
+                ) = (a, b)
+                {
+                    if width == src_width {
+                        out.push(SharedPair {
+                            dest: dx.clone(),
+                            dest_ord,
+                            src: dy.clone(),
+                            src_ord,
+                            width,
+                        });
                     }
                 }
             }
@@ -203,31 +232,36 @@ pub(super) fn comparison_pairs(all: &[Value], shadow: &Shadow) -> Vec<SharedPair
         };
         for item in shared {
             let Some(io) = item.as_object() else { continue };
-            let sides: Vec<(String, u64, u64)> = io
+            let sides: Vec<(String, VRegion)> = io
                 .iter()
                 .filter_map(|(k, v)| {
-                    let (docref, sub, ord, w) = if let Some((sub, ord, w)) = span_dict(v) {
-                        (k.as_str(), sub, ord, w)
+                    let (docref, region) = if let Some(region) = span_dict(v) {
+                        (k.as_str(), region)
                     } else {
                         let o = v.as_object()?;
                         let d = o.get("docid").and_then(Value::as_str);
                         let sp = o.get("span").or_else(|| {
                             o.get("spans").and_then(Value::as_array).and_then(|a| a.first())
                         })?;
-                        let (sub, ord, w) = span_dict(sp)?;
-                        (d.unwrap_or(k.as_str()), sub, ord, w)
+                        (d.unwrap_or(k.as_str()), span_dict(sp)?)
                     };
-                    if sub != 1 {
+                    if region.sub != 1 {
                         return None;
                     }
-                    let doc = shadow.resolve_doc(docref)?;
-                    Some((doc, ord, w))
+                    Some((shadow.resolve_doc(docref)?, region))
                 })
                 .collect();
-            if let [(da, oa, wa), (db, ob, wb)] = sides.as_slice() {
-                if wa == wb && da != db {
-                    out.push((da.clone(), *oa, db.clone(), *ob, *wa));
-                    out.push((db.clone(), *ob, da.clone(), *oa, *wa));
+            if let [(da, a), (db, b)] = sides.as_slice() {
+                if a.width == b.width && da != db {
+                    let pair = |dest: &String, d: &VRegion, src: &String, s: &VRegion| SharedPair {
+                        dest: dest.clone(),
+                        dest_ord: d.ord,
+                        src: src.clone(),
+                        src_ord: s.ord,
+                        width: d.width,
+                    };
+                    out.push(pair(da, a, db, b));
+                    out.push(pair(db, b, da, a));
                 }
             }
         }
@@ -247,11 +281,8 @@ pub(super) fn cover_from_comparisons(
     expected: &str,
     all: &[Value],
 ) -> Option<Vec<SetupStep>> {
-    let mut pairs: Vec<(u64, String, u64, u64)> = comparison_pairs(all, shadow)
-        .into_iter()
-        .filter(|(d, _, _, _, _)| d == dest)
-        .map(|(_, tord, src, sord, w)| (tord, src, sord, w))
-        .collect();
+    let mut pairs: Vec<SharedPair> =
+        comparison_pairs(all, shadow).into_iter().filter(|p| p.dest == dest).collect();
     if pairs.is_empty() {
         return None;
     }
@@ -259,19 +290,19 @@ pub(super) fn cover_from_comparisons(
     let e = expected.as_bytes();
     let mut steps: Vec<SetupStep> = Vec::new();
     let mut at = 0usize; // 0-based cursor into expected
-    for (tord, src, sord, w) in pairs {
-        let (t0, w) = ((tord - 1) as usize, w as usize);
+    for SharedPair { dest_ord, src, src_ord, width, .. } in pairs {
+        let (t0, w) = ((dest_ord - 1) as usize, width as usize);
         if t0 < at || t0 + w > e.len() {
             return None; // overlapping or out-of-range evidence
         }
-        let src_bytes = shadow.slice(&src, sord, w as u64);
+        let src_bytes = shadow.slice(&src, src_ord, width);
         if src_bytes != e[t0..t0 + w] {
             return None; // evidence disagrees with the probe text
         }
         if t0 > at {
             steps.push(SetupStep::Insert { doc: dest.to_string(), bytes: e[at..t0].to_vec() });
         }
-        steps.push(SetupStep::Copy { doc: dest.to_string(), src, ord: sord, width: w as u64 });
+        steps.push(SetupStep::Copy { doc: dest.to_string(), src, ord: src_ord, width });
         at = t0 + w;
     }
     if at < e.len() {

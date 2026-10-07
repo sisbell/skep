@@ -11,6 +11,7 @@ use crate::tum::{span_elem_width, subspan};
 
 /// One deletion: the golden doc it left, the bytes removed, and the I-extent
 /// runs those bytes occupied.
+#[derive(Debug)]
 struct DeletedRegion {
     doc: String,
     bytes: Vec<u8>,
@@ -18,7 +19,7 @@ struct DeletedRegion {
 }
 
 /// A scenario's deletions, in execution order.
-#[derive(Default)]
+#[derive(Debug, Default)]
 pub struct Deletions {
     regions: Vec<DeletedRegion>,
 }

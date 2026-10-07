@@ -1,12 +1,14 @@
 //! Comparators, one per result type. Every comparator returns either
-//! agreement or a rendered (expected, actual) pair — the actual side
-//! rendered THROUGH the bijection so the report reads in golden terms with
-//! skep extras visibly tagged. Nothing here mutates state except the
+//! agreement or a rendered [`Disagreement`] — its actual side rendered
+//! THROUGH the bijection so the report reads in golden terms with skep
+//! extras visibly tagged. Nothing here mutates state except the
 //! α-bijection's sanctioned binding move ("when a golden op's result is an
 //! address and skep's response carries one, bind golden→skep" — probe
 //! results included), and nothing adjusts a value except under an
 //! adjustment the allowlist declares, threaded in by the caller — and a
 //! comparator whose agreement the adjustment made records that it did.
+
+use std::collections::BTreeSet;
 
 use skep_address::{Address, SpanSet};
 use skep_retrieval::DeliveryItem;
@@ -14,11 +16,12 @@ use skep_retrieval::DeliveryItem;
 use crate::allowlist::{Adjustments, COUNT_ADJUSTED, WIDTH_ADJUSTED};
 use crate::alpha::Alpha;
 use crate::fields::RawSpan;
+use crate::outcome::Disagreement;
 use crate::tum::{parse_dotted, span_strings};
 
-/// A comparator's answer: agreement, or the disagreement as (expected,
-/// actual), both rendered.
-pub type Comparison = Result<(), (String, String)>;
+/// A comparator's answer: agreement, or the disagreement, both sides
+/// rendered.
+pub type Comparison = Result<(), Disagreement>;
 
 // ── text content: literal equality ─────────────────────────────────────────
 
@@ -92,10 +95,9 @@ pub fn compare_content(
                 }
             }
             DeliveryItem::Ref(a) => raw.push(RawSeg::Addr(a.clone())),
-            DeliveryItem::Withheld { origin, width } => raw.push(RawSeg::Withheld(format!(
-                "«withheld {} w{width}»",
-                crate::tum::addr_str(origin)
-            ))),
+            DeliveryItem::Withheld { origin, width } => {
+                raw.push(RawSeg::Withheld(format!("«withheld {origin} w{width}»")))
+            }
         }
     }
     // Opportunistic index-aligned binding: an unbound golden address paired
@@ -125,9 +127,7 @@ pub fn compare_content(
     let equal = want.len() == raw.len()
         && want.iter().zip(&raw).all(|(w, r)| match (w, r) {
             (Segment::Text(a), RawSeg::Text(b)) => a == b,
-            (Segment::Addr(g), RawSeg::Addr(a)) => {
-                alpha.peek_translate(g).is_some_and(|t| crate::tum::addr_str(&t) == crate::tum::addr_str(a))
-            }
+            (Segment::Addr(g), RawSeg::Addr(a)) => alpha.peek_translate(g).as_ref() == Some(a),
             _ => false,
         });
     if equal {
@@ -143,7 +143,7 @@ pub fn compare_content(
             RawSeg::Withheld(m) => Segment::Text(m),
         })
         .collect();
-    Err((render_segments(&want), render_segments(&got)))
+    Err(Disagreement { expected: render_segments(&want), actual: render_segments(&got) })
 }
 
 // ── address sets: set equality under the bijection ─────────────────────────
@@ -186,7 +186,6 @@ pub fn compare_addr_sets(
     // Peek-translate (no findings yet) to split bound from unbound.
     let bound: Vec<Option<Address>> =
         want_goldens.iter().map(|g| alpha.peek_translate(g)).collect();
-    let bound_strs: Vec<String> = bound.iter().flatten().map(crate::tum::addr_str).collect();
     let unbound: Vec<&String> = want_goldens
         .iter()
         .zip(&bound)
@@ -195,10 +194,7 @@ pub fn compare_addr_sets(
         .collect();
     let unmatched: Vec<&Address> = got
         .iter()
-        .filter(|a| {
-            let s = crate::tum::addr_str(a);
-            !bound_strs.contains(&s) && !alpha.is_bound_skep(a)
-        })
+        .filter(|a| !bound.iter().flatten().any(|b| b == *a) && !alpha.is_bound_skep(a))
         .collect();
     if !unbound.is_empty() && unbound.len() == unmatched.len() {
         for (g, a) in unbound.iter().zip(&unmatched) {
@@ -207,24 +203,17 @@ pub fn compare_addr_sets(
         adaptations.push(format!("alpha-bind-from-result:{}", unbound.len()));
     }
 
-    let mut want: Vec<String> = Vec::new();
-    for g in &want_goldens {
-        match alpha.translate(g) {
-            Some(a) => want.push(crate::tum::addr_str(&a)),
-            None => want.push(format!("unbound:{g}")),
-        }
-    }
-    let mut got_strs: Vec<String> = got.iter().map(crate::tum::addr_str).collect();
-    want.sort();
-    want.dedup();
-    got_strs.sort();
-    got_strs.dedup();
-    if want == got_strs {
+    // Every golden is translated, so each one still unbound records its own
+    // finding; the sets agree only when every golden has an image and the
+    // images are exactly skep's answer.
+    let translated: Vec<Option<Address>> =
+        want_goldens.iter().map(|g| alpha.translate(g)).collect();
+    let want: Option<BTreeSet<&Address>> = translated.iter().map(Option::as_ref).collect();
+    if want.is_some_and(|want| want == got.iter().collect::<BTreeSet<_>>()) {
         Ok(())
     } else {
-        let exp: Vec<String> = want_goldens;
-        let act: Vec<String> = got.iter().map(|a| alpha.render_skep(a)).collect();
-        Err((format!("{exp:?}"), format!("{act:?}")))
+        let actual: Vec<String> = got.iter().map(|a| alpha.render_skep(a)).collect();
+        Err(Disagreement { expected: format!("{want_goldens:?}"), actual: format!("{actual:?}") })
     }
 }
 
@@ -268,7 +257,7 @@ pub fn compare_spansets(
         }
         Ok(())
     } else {
-        Err((format!("{want:?}"), format!("{got:?}")))
+        Err(Disagreement { expected: format!("{want:?}"), actual: format!("{got:?}") })
     }
 }
 
@@ -352,14 +341,14 @@ pub fn compare_count(
         }
         Ok(())
     } else {
-        Err((
-            if delta == 0 {
+        Err(Disagreement {
+            expected: if delta == 0 {
                 format!("{expected}")
             } else {
                 format!("{expected} (+{delta} allowlisted)")
             },
-            format!("{actual}"),
-        ))
+            actual: format!("{actual}"),
+        })
     }
 }
 
@@ -412,7 +401,9 @@ mod tests {
         let delta = Adjustments { width_tolerance: 0, count_delta: 1 };
         let mut adaptations = Vec::new();
         let unadjusted = compare_count(3, 3, &delta, &mut Vec::new());
-        assert_eq!(unadjusted, Err(("3 (+1 allowlisted)".into(), "3".into())));
+        let disagreement =
+            Disagreement { expected: "3 (+1 allowlisted)".into(), actual: "3".into() };
+        assert_eq!(unadjusted, Err(disagreement));
         assert_eq!(compare_count(3, 3, &Adjustments::default(), &mut adaptations), Ok(()));
         assert!(adaptations.is_empty());
         assert_eq!(compare_count(3, 4, &delta, &mut adaptations), Ok(()));

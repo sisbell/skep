@@ -18,8 +18,8 @@ use crate::fields::{
     expect_spans_raw, expect_strings, expected_failure, field, op_name, parse_python_spec,
     str_field, vspec_dict, DocSpans, RawSpan,
 };
-use crate::outcome::{OpOutcome, Status};
-use crate::tum::{is_link_address, vspan};
+use crate::outcome::{Disagreement, OpOutcome};
+use crate::tum::{is_link_address, VPoint};
 
 /// The arguments a follow_link carries: the link, and the end it follows.
 const FOLLOW_READS: &[&str] =
@@ -133,11 +133,9 @@ pub(super) fn h_follow_link(
                                 .into(),
                         );
                     } else {
-                        out.disagree(
-                            "expected-failure",
-                            format!("failure: {err:?}"),
-                            format!("skep followed the slot to {real} span(s)"),
-                        );
+                        let expected = format!("failure: {err:?}");
+                        let actual = format!("skep followed the slot to {real} span(s)");
+                        out.disagree("expected-failure", Disagreement { expected, actual });
                     }
                 }
                 other => settle_unaccepted(out, Some(err), &other),
@@ -195,24 +193,26 @@ fn follow_compare(
     if let Some(vspecs) = as_vspecs {
         if !vspecs.is_empty() {
             let mut tally = Tally::default();
-            for (docid, spans) in vspecs {
+            for (docid, regions) in vspecs {
+                let expected = format!("{docid}: spans");
                 let Some(d) = cx.alpha.translate(&docid) else {
-                    tally.differ(format!("{docid}: spans"), format!("{docid}: never bound"));
+                    let actual = format!("{docid}: never bound");
+                    tally.differ(Disagreement { expected, actual });
                     continue;
                 };
-                let want: Vec<RawSpan> = spans
+                let want: Vec<RawSpan> = regions
                     .iter()
-                    .map(|(s, o, w)| (format!("{s}.{o}"), format!("0.{w}")))
+                    .map(|r| (format!("{}.{}", r.sub, r.ord), format!("0.{}", r.width)))
                     .collect();
                 let label = format!("{docid}: ");
                 match project(cx, &d) {
                     Ok(set) => tally.judge(
                         compare_spansets(&want, &set, adjustments, &mut out.adaptations),
                         &label,
-                        &label,
                     ),
                     Err(code) => {
-                        tally.differ(format!("{docid}: spans"), format!("{docid}: {code}"))
+                        let actual = format!("{docid}: {code}");
+                        tally.differ(Disagreement { expected, actual })
                     }
                 }
             }
@@ -231,13 +231,13 @@ fn follow_compare(
             match projected {
                 Ok(set) => match compare_spansets(&spans, &set, adjustments, &mut out.adaptations) {
                     Ok(()) => out.agree("projection"),
-                    Err((e, a)) => out.disagree("projection", e, a),
+                    Err(d) => out.disagree("projection", d),
                 },
-                Err(code) => out.disagree(
-                    "projection",
-                    format!("{docid}: spans"),
-                    format!("{docid}: {code}"),
-                ),
+                Err(code) => {
+                    let expected = format!("{docid}: spans");
+                    let actual = format!("{docid}: {code}");
+                    out.disagree("projection", Disagreement { expected, actual })
+                }
             }
             return;
         }
@@ -260,14 +260,13 @@ fn follow_compare(
                 out.agree("follow-recorded-endset");
             } else {
                 let (expected, actual) = (format!("{want:?}"), format!("{rendered:?}"));
-                out.disagree("follow-recorded-endset", expected, actual);
+                out.disagree("follow-recorded-endset", Disagreement { expected, actual });
             }
         }
-        Err(code) => out.disagree(
-            "follow-recorded-endset",
-            format!("{want:?}"),
-            format!("followlink: {code}"),
-        ),
+        Err(code) => {
+            let (expected, actual) = (format!("{want:?}"), format!("followlink: {code}"));
+            out.disagree("follow-recorded-endset", Disagreement { expected, actual })
+        }
     }
 }
 
@@ -279,7 +278,7 @@ impl Cx<'_> {
     /// arrangement holds render nothing (udanax's orphan follows recorded
     /// empty; live-only keeps that agreement) and are counted in the note.
     fn render_recorded_endset(
-        &mut self,
+        &self,
         link: &skep_address::Address,
         slot: usize,
     ) -> Result<(String, Vec<String>), String> {
@@ -291,9 +290,8 @@ impl Cx<'_> {
             r => return Err(refusal(&r)),
         };
         // Index every doc's live V→I rows once.
-        let docs = self.shadow.all_docs();
         let mut world: Vec<(String, Vec<ImageRow>)> = Vec::new();
-        for docid in &docs {
+        for docid in &self.shadow.created {
             if self.shadow.text_len(docid) == 0 {
                 continue;
             }
@@ -306,31 +304,32 @@ impl Cx<'_> {
         let mut rendered_bytes: Vec<u8> = Vec::new();
         let mut missing = 0u64;
         for isp in set.iter() {
-            let Some((p, lo, w)) = elem_range(isp) else {
+            let Some(range) = elem_range(isp) else {
                 notes.push("non-element endset span skipped".into());
                 continue;
             };
-            let mut buf: Vec<Option<u8>> = vec![None; w as usize];
+            let mut buf: Vec<Option<u8>> = vec![None; range.width as usize];
             for (docid, rows) in &world {
                 if buf.iter().all(Option::is_some) {
                     break;
                 }
                 let Some(d) = self.alpha.peek(docid) else { continue };
-                for (rp, rlo, rw, v) in rows {
-                    if rp != &p {
+                for row in rows {
+                    if row.i.prefix != range.prefix {
                         continue;
                     }
-                    let a = (*rlo).max(lo);
-                    let b = (rlo + rw).min(lo + w);
+                    let a = row.i.lo.max(range.lo);
+                    let b = row.i.hi().min(range.hi());
                     if a >= b {
                         continue;
                     }
-                    let off = (a - lo) as usize;
+                    let off = (a - range.lo) as usize;
                     let len = (b - a) as usize;
                     if buf[off..off + len].iter().all(Option::is_some) {
                         continue;
                     }
-                    let Some(span) = vspan(1, v + (a - rlo), b - a) else { continue };
+                    let at = VPoint::content(row.v_ord + (a - row.i.lo));
+                    let Some(span) = at.region(b - a).span() else { continue };
                     let items = match self
                         .rig
                         .exec(Op::RetrieveV { specs: vec![Spec { doc: d.clone(), span }] })
@@ -456,26 +455,23 @@ pub(super) fn h_traverse(cx: &mut Cx, op: &Value, out: &mut OpOutcome, adjustmen
                     if found.len() as u64 == n {
                         tally.agree();
                     } else {
-                        tally.differ(
-                            format!("{atdoc}: {n} links"),
-                            format!("{atdoc}: {}", found.len()),
-                        );
+                        tally.differ(Disagreement {
+                            expected: format!("{atdoc}: {n} links"),
+                            actual: format!("{atdoc}: {}", found.len()),
+                        });
                     }
                 } else if let Some(arr) = v.as_array() {
                     let want: Vec<String> =
                         arr.iter().filter_map(|x| x.as_str().map(str::to_string)).collect();
                     let rig = &*cx.rig;
-                    let mut adaptations = std::mem::take(&mut out.adaptations);
                     let comparison = compare_addr_sets(
                         &want,
                         &found,
                         cx.alpha,
                         |a| rig.is_infra_addr(a),
-                        &mut adaptations,
+                        &mut out.adaptations,
                     );
-                    out.adaptations = adaptations;
-                    let label = format!("{atdoc}: ");
-                    tally.judge(comparison, &label, &label);
+                    tally.judge(comparison, &format!("{atdoc}: "));
                 }
             }
             // A links_found entry may still carry landing content below.
@@ -542,27 +538,20 @@ pub(super) fn h_traverse(cx: &mut Cx, op: &Value, out: &mut OpOutcome, adjustmen
 
         let Some((slot, expected)) = expectation else { continue };
         let Some(link_golden) = link_golden else {
-            tally.differ("hop link".into(), "no link resolvable for this hop".into());
+            let actual = "no link resolvable for this hop".to_string();
+            tally.differ(Disagreement { expected: "hop link".into(), actual });
             continue;
         };
         let Some(link) = cx.alpha.translate(&link_golden) else {
-            tally.differ(link_golden.clone(), "never-bound link".into());
+            let actual = "never-bound link".to_string();
+            tally.differ(Disagreement { expected: link_golden.clone(), actual });
             continue;
         };
+        // Each hop is judged as a follow of its own and folded in as one
+        // part of the traversal.
         let mut hop = OpOutcome::new(out.index, &out.op_name);
         follow_compare(cx, &mut hop, &Adjustments::default(), &link, slot, expected);
-        match hop.status {
-            Status::Disagreed => tally.differ(
-                format!("{link_golden}: {}", hop.expected.unwrap_or_default()),
-                hop.actual.unwrap_or_else(|| hop.note.unwrap_or_default()),
-            ),
-            Status::Agreed => tally.agree(),
-            Status::Inexpressible => tally.unaimed(format!(
-                "hop over {link_golden}: {}",
-                hop.note.unwrap_or_default()
-            )),
-            _ => {}
-        }
+        tally.absorb(out, hop, &format!("{link_golden}: "));
         // Land: the followed link's TO doc becomes the current position.
         last_followed = Some(link_golden.clone());
         if slot == 2 {
@@ -582,7 +571,7 @@ pub(super) fn h_traverse(cx: &mut Cx, op: &Value, out: &mut OpOutcome, adjustmen
 /// — the traversal macros' real per-hop FindLinksFtt query.
 fn find_links_at(cx: &mut Cx, doc: &str, reverse: bool) -> Vec<skep_address::Address> {
     let n = cx.shadow.text_len(doc);
-    let (e, _, _) = cx.image_endset(doc, &[(1, 1, n.max(1))]);
+    let (e, _, _) = cx.image_endset(doc, &[VPoint::content(1).region(n.max(1))]);
     let spec = if e.is_empty() { SlotSpec::Empty } else { SlotSpec::Spans(e) };
     let q = if reverse {
         FourSet { home: SlotSpec::Any, from: SlotSpec::Any, to: spec, ty: SlotSpec::Any }

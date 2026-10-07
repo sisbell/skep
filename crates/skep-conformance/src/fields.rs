@@ -37,7 +37,9 @@
 use serde_json::Value;
 
 use crate::shadow::Shadow;
-use crate::tum::{is_link_address, link_home_docid, parse_dotted, parse_vpos, parse_width};
+use crate::tum::{
+    is_link_address, link_home_docid, parse_dotted, parse_vpos, parse_width, VPoint, VRegion,
+};
 
 // ───────────────────────────── raw field access ────────────────────────────
 
@@ -72,32 +74,31 @@ pub const ANNOTATION_KEYS: &[&str] = &[
 
 // ─────────────────────────── span / vspec shapes ───────────────────────────
 
-/// `{start, width}` / `{start, end}` span dict → (subspace, ord, width).
+/// `{start, width}` / `{start, end}` span dict → the region it names.
 /// ARGUMENT use only — starts here are always well-formed `sub.ord` (or bare
 /// ordinal) V-positions. Recorded RESULTS go through [`expect_spans_raw`],
 /// which never reinterprets.
-pub fn span_dict(v: &Value) -> Option<(u64, u64, u64)> {
+pub fn span_dict(v: &Value) -> Option<VRegion> {
     let o = v.as_object()?;
-    let start = o.get("start").and_then(Value::as_str)?;
-    let (sub, ord) = parse_vpos(start)?;
+    let at = parse_vpos(o.get("start").and_then(Value::as_str)?)?;
     if let Some(w) = o.get("width").and_then(Value::as_str) {
-        return Some((sub, ord, parse_width(w)?));
+        return Some(at.region(parse_width(w)?));
     }
     if let Some(e) = o.get("end").and_then(Value::as_str) {
-        let (esub, eord) = parse_vpos(e)?;
-        if esub == sub && eord >= ord {
-            return Some((sub, ord, eord - ord));
+        let end = parse_vpos(e)?;
+        if end.sub == at.sub && end.ord >= at.ord {
+            return Some(at.region(end.ord - at.ord));
         }
     }
     None
 }
 
-/// One document side of a spec: golden docid + `(subspace, ordinal, width)`
-/// span triples — the parsed shape of a vspec dict, shared by every
-/// endset/search builder in the play pass.
-pub type DocSpans = (String, Vec<(u64, u64, u64)>);
+/// One document side of a spec: golden docid + its regions — the parsed
+/// shape of a vspec dict, shared by every endset/search builder in the play
+/// pass.
+pub type DocSpans = (String, Vec<VRegion>);
 
-/// A golden vspec dict `{docid, spans|span}` → (docid, [(sub, ord, w)]).
+/// A golden vspec dict `{docid, spans|span}` → (docid, its regions).
 pub fn vspec_dict(v: &Value) -> Option<DocSpans> {
     let o = v.as_object()?;
     let docid = o.get("docid").and_then(Value::as_str)?.to_string();
@@ -128,11 +129,10 @@ fn raw_from_dict(v: &Value) -> Option<RawSpan> {
         return Some((start, w.to_string()));
     }
     // {start, end} results: convert to width only when both parse cleanly.
-    let e = o.get("end").and_then(Value::as_str)?;
-    let (sub, ord) = parse_vpos(&start)?;
-    let (esub, eord) = parse_vpos(e)?;
-    if esub == sub && eord >= ord {
-        return Some((start, format!("0.{}", eord - ord)));
+    let end = parse_vpos(o.get("end").and_then(Value::as_str)?)?;
+    let at = parse_vpos(&start)?;
+    if end.sub == at.sub && end.ord >= at.ord {
+        return Some((start, format!("0.{}", end.ord - at.ord)));
     }
     None
 }
@@ -573,7 +573,7 @@ pub fn distributed_insert_texts(op: &Value) -> Option<Vec<String>> {
 /// The n most recently created docs, creation order — the targets an
 /// `insert_all` distributes over (its creates immediately precede it).
 pub fn distribution_targets(shadow: &Shadow, n: usize) -> Vec<String> {
-    let created = shadow.all_docs();
+    let created = &shadow.created;
     let start = created.len().saturating_sub(n);
     created[start..].to_vec()
 }
@@ -585,8 +585,8 @@ pub fn cuts_of(op: &Value) -> Vec<u64> {
         if let Some(n) = v.as_u64() {
             return Some(n);
         }
-        match crate::tum::parse_vpos(v.as_str()?) {
-            Some((1, o)) => Some(o),
+        match parse_vpos(v.as_str()?) {
+            Some(VPoint { sub: 1, ord }) => Some(ord),
             _ => None,
         }
     };
@@ -1028,6 +1028,20 @@ pub struct Located {
     pub how: Grounding,
 }
 
+impl Located {
+    /// The located content-subspace region — a description grounds in the
+    /// content subspace only.
+    pub fn region(&self) -> VRegion {
+        VPoint::content(self.ord).region(self.width)
+    }
+
+    /// The located region as one document side of a spec.
+    pub fn into_side(self) -> DocSpans {
+        let region = self.region();
+        (self.doc, vec![region])
+    }
+}
+
 /// Resolve a decorated span/text description against the shadow. `doc_hint`
 /// narrows the search when the caller knows the document. Never guesses: a
 /// description this grammar cannot ground returns `None` and the caller
@@ -1042,7 +1056,9 @@ pub fn locate(shadow: &Shadow, doc_hint: Option<&str>, desc: &str) -> Option<Loc
 
     // "S.O length N" (delete_first_char).
     if let Some((pos, len)) = desc.split_once(" length ") {
-        if let (Some((1, ord)), Ok(w)) = (parse_vpos(pos.trim()), len.trim().parse::<u64>()) {
+        if let (Some(VPoint { sub: 1, ord }), Ok(w)) =
+            (parse_vpos(pos.trim()), len.trim().parse::<u64>())
+        {
             let doc = doc_hint.map(str::to_string).or_else(|| shadow.current())?;
             return Some(Located { doc, ord, width: w, how: Grounding::Span });
         }
@@ -1054,7 +1070,9 @@ pub fn locate(shadow: &Shadow, doc_hint: Option<&str>, desc: &str) -> Option<Loc
     {
         let core = desc.split(" (").next().unwrap_or(desc).trim();
         if let Some((pos, w)) = core.split_once(" for ") {
-            if let (Some((1, ord)), Some(w)) = (parse_vpos(pos.trim()), parse_width(w.trim())) {
+            if let (Some(VPoint { sub: 1, ord }), Some(w)) =
+                (parse_vpos(pos.trim()), parse_width(w.trim()))
+            {
                 if w > 0 {
                     let doc = doc_hint.map(str::to_string).or_else(|| shadow.current())?;
                     return Some(Located { doc, ord, width: w, how: Grounding::Span });
@@ -1087,7 +1105,7 @@ pub fn locate(shadow: &Shadow, doc_hint: Option<&str>, desc: &str) -> Option<Loc
     // "N-char span at S.O" (link_zero_width_endpoints).
     if let Some(idx) = desc.find("-char span at ") {
         let n = desc[..idx].trim().parse::<u64>().ok()?;
-        let (_, ord) = parse_vpos(desc[idx + "-char span at ".len()..].trim())?;
+        let ord = parse_vpos(desc[idx + "-char span at ".len()..].trim())?.ord;
         let doc = doc_hint.map(str::to_string).or_else(|| shadow.current())?;
         return Some(Located { doc, ord, width: n.max(1), how: Grounding::Span });
     }
@@ -1101,7 +1119,7 @@ pub fn locate(shadow: &Shadow, doc_hint: Option<&str>, desc: &str) -> Option<Loc
                 if let Some((ord, w)) = ordinal_range(range) {
                     return Some(Located { doc, ord, width: w, how: Grounding::Range });
                 }
-                if let Some((1, ord)) = parse_vpos(range.trim()) {
+                if let Some(VPoint { sub: 1, ord }) = parse_vpos(range.trim()) {
                     return Some(Located { doc, ord, width: 1, how: Grounding::Range });
                 }
             }
@@ -1252,52 +1270,54 @@ pub fn quoted(s: &str) -> Option<String> {
     None
 }
 
-/// A position description → (subspace, 1-based ordinal, grounding tag),
-/// grounded against the shadow when relative. The tag names the policy
+/// A position description → the V-position it names and the grounding
+/// tag, grounded against the shadow when relative. The tag names the policy
 /// that read a described position; an explicit V-position carries none,
 /// being what the client sent. `None` = not a position this grammar speaks.
 pub fn resolve_position(
     shadow: &Shadow,
     doc: &str,
     desc: &str,
-) -> Option<(u64, u64, Option<&'static str>)> {
+) -> Option<(VPoint, Option<&'static str>)> {
     let desc = desc.trim();
-    if let Some((sub, ord)) = parse_vpos(desc) {
-        return Some((sub, ord, None));
+    if let Some(at) = parse_vpos(desc) {
+        return Some((at, None));
     }
+    let content = |ord: u64, tag: &'static str| Some((VPoint::content(ord), Some(tag)));
     match desc {
-        "end" | "append" => return Some((1, shadow.text_len(doc) + 1, Some("position-end"))),
-        "start" | "beginning" => return Some((1, 1, Some("position-start"))),
+        "end" | "append" => return content(shadow.text_len(doc) + 1, "position-end"),
+        "start" | "beginning" => return content(1, "position-start"),
         _ => {}
     }
     if let Some(n) = desc.strip_prefix("position ").and_then(|x| x.trim().parse::<u64>().ok()) {
-        return Some((1, n, Some("position-from-description")));
+        return content(n, "position-from-description");
     }
     if let Some(t) = desc.strip_prefix("after ") {
         let t = t.trim();
         if let Some((_, ord)) = shadow.find_text(Some(doc), t) {
-            return Some((1, ord + t.len() as u64, Some("position-after-text")));
+            return content(ord + t.len() as u64, "position-after-text");
         }
         // Case-insensitive fallback: descriptions say "after first" for "First ".
         if let Some((_, ord, w)) = shadow.find_text_ci(doc, t) {
-            return Some((1, ord + w, Some("position-after-text")));
+            return content(ord + w, "position-after-text");
         }
     }
     if let Some(t) = desc.strip_prefix("before ") {
         if let Some((_, ord)) = shadow.find_text(Some(doc), t.trim()) {
-            return Some((1, ord, Some("position-before-text")));
+            return content(ord, "position-before-text");
         }
     }
     None
 }
 
 /// Positional probes: the first two consecutive numeric `_`-tokens in the
-/// op's name ("text_at_1_3_before" → (1,3); "pos_1_4_after" → (1,4)).
-pub fn position_from_op_name(op_name: &str) -> Option<(u64, u64)> {
+/// op's name, read as subspace then ordinal ("text_at_1_3_before" → 1.3;
+/// "pos_1_4_after" → 1.4).
+pub fn position_from_op_name(op_name: &str) -> Option<VPoint> {
     let toks: Vec<&str> = op_name.split('_').collect();
     for w in toks.windows(2) {
-        if let (Ok(a), Ok(b)) = (w[0].parse::<u64>(), w[1].parse::<u64>()) {
-            return Some((a, b));
+        if let (Ok(sub), Ok(ord)) = (w[0].parse::<u64>(), w[1].parse::<u64>()) {
+            return Some(VPoint { sub, ord });
         }
     }
     None
@@ -1365,14 +1385,12 @@ pub fn note_arrow(op: &Value) -> Option<(String, String)> {
 
 // ────────────────────────────── vcopy sources ──────────────────────────────
 
-/// One region an ordinary vcopy copies: golden document, subspace, 1-based
-/// ordinal, width.
+/// One region an ordinary vcopy copies: the golden document, and the region
+/// of it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CopySource {
     pub doc: String,
-    pub sub: u64,
-    pub ord: u64,
-    pub width: u64,
+    pub region: VRegion,
 }
 
 /// An ordinary vcopy's source regions, read from the op's own fields
@@ -1406,9 +1424,9 @@ pub fn vcopy_sources(
     adaptations: &mut Vec<String>,
 ) -> Result<Vec<CopySource>, String> {
     let mut sources: Vec<CopySource> = Vec::new();
-    let mut push = |doc: &str, sub: u64, ord: u64, width: u64| {
-        if width > 0 {
-            sources.push(CopySource { doc: doc.to_string(), sub, ord, width });
+    let mut push = |doc: &str, region: VRegion| {
+        if region.width > 0 {
+            sources.push(CopySource { doc: doc.to_string(), region });
         }
     };
     let dest_ref = str_field(op, &["to", "dest", "target", "target_doc"])
@@ -1424,40 +1442,42 @@ pub fn vcopy_sources(
         };
     if let Some(items) = spec_items {
         for v in items {
-            if let Some((docid, spans)) = vspec_dict(v) {
-                for (sub, ord, w) in spans {
-                    push(&docid, sub, ord, w);
+            if let Some((docid, regions)) = vspec_dict(v) {
+                for region in regions {
+                    push(&docid, region);
                 }
             } else if let Some(t) = v.as_str() {
                 let l = locate(shadow, None, t).ok_or(format!("vcopy span {t:?} not groundable"))?;
                 adaptations.push(l.how.tag().into());
-                push(&l.doc, 1, l.ord, l.width);
+                push(&l.doc, l.region());
             } else {
                 return Err("vcopy spec list holds an unrecognized entry".into());
             }
         }
     } else if let Some(items) = field(op, &["spans"]).and_then(Value::as_array) {
         for v in items {
-            if let Some((sub, ord, w)) = span_dict(v) {
+            if let Some(region) = span_dict(v) {
                 if let Some(docid) = named_source.clone().or_else(|| shadow.current()) {
-                    push(&docid, sub, ord, w);
+                    push(&docid, region);
                 }
             } else if let Some(t) = v.as_str() {
                 let l = locate(shadow, None, t).ok_or(format!("vcopy span {t:?} not groundable"))?;
                 adaptations.push(l.how.tag().into());
-                push(&l.doc, 1, l.ord, l.width);
+                push(&l.doc, l.region());
             }
         }
-    } else if let Some((1, ord, w)) = field(op, &["source_span", "span"]).and_then(span_dict) {
+    } else if let Some(region @ VRegion { sub: 1, .. }) =
+        field(op, &["source_span", "span"]).and_then(span_dict)
+    {
         let src = named_source
             .or_else(|| shadow.content_docs_except(&dest_ref).first().cloned())
             .ok_or("vcopy source_span with no source document")?;
-        push(&src, 1, ord, w);
+        push(&src, region);
     } else if let Some(t) = str_field(op, &["text", "span"]) {
         let l = locate(shadow, named_source.as_deref(), t)
             .ok_or(format!("vcopy text {t:?} not groundable"))?;
         adaptations.push(l.how.tag().into());
-        push(&l.doc, 1, l.ord, l.width);
+        push(&l.doc, l.region());
     } else if let Some(s) = str_field(op, &["from", "source"]) {
         if let Some(from) = shadow.resolve_doc(s) {
             let n = shadow.text_len(&from);
@@ -1465,7 +1485,7 @@ pub fn vcopy_sources(
                 return Err("vcopy from an empty document".into());
             }
             adaptations.push("whole-extent".into());
-            push(&from, 1, 1, n);
+            push(&from, VPoint::content(1).region(n));
         } else if let Some(l) = locate(shadow, None, s) {
             let l = if l.ord + l.width > shadow.text_len(&l.doc) + 1 {
                 match shadow.content_docs_except(&dest_ref).iter().find_map(|d| {
@@ -1482,7 +1502,7 @@ pub fn vcopy_sources(
                 l
             };
             adaptations.push(l.how.tag().into());
-            push(&l.doc, 1, l.ord, l.width);
+            push(&l.doc, l.region());
         } else {
             return Err(format!("vcopy from {s:?}: neither a doc nor a groundable region"));
         }
@@ -1555,7 +1575,8 @@ mod tests {
             "op": "vcopy",
             "source": {"docid": "1.1.0.1.0.1", "span": {"start": "1.7", "width": "0.5"}},
         });
-        let source = CopySource { doc: "1.1.0.1.0.1".into(), sub: 1, ord: 7, width: 5 };
+        let region = VRegion { sub: 1, ord: 7, width: 5 };
+        let source = CopySource { doc: "1.1.0.1.0.1".into(), region };
         assert_eq!(vcopy_sources(&op, &shadow, &mut Vec::new()), Ok(vec![source]));
         assert_eq!(
             vcopy_sources(&json!({"op": "vcopy"}), &shadow, &mut Vec::new()),

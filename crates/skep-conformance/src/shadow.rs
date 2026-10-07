@@ -16,7 +16,7 @@
 use std::collections::BTreeMap;
 
 /// Per-document shadow state, keyed by GOLDEN docid string.
-#[derive(Default, Clone)]
+#[derive(Clone, Debug, Default)]
 struct DocShadow {
     /// Content-subspace bytes, ordinal i ↦ text[i-1].
     text: Vec<u8>,
@@ -35,12 +35,13 @@ pub struct ShadowLink {
     pub to: Vec<(String, u64, u64)>,
 }
 
-#[derive(Default, Clone)]
+#[derive(Clone, Debug, Default)]
 pub struct Shadow {
     docs: BTreeMap<String, DocShadow>,
     /// Symbolic name → golden docid ("source" → "1.1.0.1.0.1").
     names: BTreeMap<String, String>,
-    /// Golden docids in creation order (for "doc1"/"first"/"second" fallbacks).
+    /// Every golden docid the shadow holds, in creation order — the
+    /// "doc1"/"first"/"second" fallbacks count in it.
     pub created: Vec<String>,
     /// The current-document register (see module docs).
     current: Option<String>,
@@ -198,11 +199,6 @@ impl Shadow {
 
     pub fn link_count(&self, golden: &str) -> u64 {
         self.docs.get(golden).map(|d| d.links).unwrap_or(0)
-    }
-
-    /// All docids currently shadowed (creation order).
-    pub fn all_docs(&self) -> Vec<String> {
-        self.created.clone()
     }
 
     /// Docs in creation order that hold content, excluding `not` — the

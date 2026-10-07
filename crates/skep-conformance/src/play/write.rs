@@ -15,19 +15,44 @@ use skep_febe::Response;
 
 use super::{
     create_one, inexpressible, plan_failed, probe_state, refusal, run_plan, settle_accepted,
-    settle_unaccepted, Cx, Probe, Tally,
+    settle_unaccepted, CopyNeverBound, Cx, NeverBound, Probe, Tally,
 };
 use crate::allowlist::Adjustments;
 use crate::compare::compare_content;
 use crate::evidence::{
-    delete_is_noop, next_content_probe, resolve_delete_span, resolve_insert, took_effect,
+    delete_is_noop, next_content_probe, resolve_delete_span, resolve_insert, Effect,
 };
 use crate::fields::{
     cuts_of, distributed_insert_texts, distribution_targets, expect_strings, expected_failure,
     field, is_position_marker, resolve_position, str_field, vcopy_sources, verb_of, Verb,
 };
-use crate::outcome::{OpOutcome, Status};
-use crate::tum::parse_vpos;
+use crate::outcome::{Disagreement, OpOutcome, Status};
+use crate::tum::{parse_vpos, VPoint};
+
+/// The two shapes of REARRANGE, named by their cut counts.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Rearrangement {
+    /// Three cuts: the regions between them transpose.
+    Pivot,
+    /// Four cuts: the first and last regions exchange, the middle stays.
+    Swap,
+}
+
+impl Rearrangement {
+    /// How many cuts the shape takes.
+    pub(super) fn cuts(self) -> usize {
+        match self {
+            Rearrangement::Pivot => 3,
+            Rearrangement::Swap => 4,
+        }
+    }
+
+    /// The shape `n` cuts make, if any — a bare `rearrange` takes its
+    /// shape from its cut count.
+    pub(super) fn with_cuts(n: usize) -> Option<Rearrangement> {
+        [Rearrangement::Pivot, Rearrangement::Swap].into_iter().find(|r| r.cuts() == n)
+    }
+}
 
 pub(super) fn h_insert(
     cx: &mut Cx,
@@ -36,7 +61,7 @@ pub(super) fn h_insert(
     out: &mut OpOutcome,
     adjustments: &Adjustments,
 ) {
-    let recorded = took_effect(op);
+    let effect = Effect::of(op);
     // insert_all + texts: one text per created doc, creation order (policy
     // `insert-all:distributed`; the grounding pre-pass distributes through
     // the same `fields::distributed_insert_texts` and `distribution_targets`).
@@ -45,8 +70,8 @@ pub(super) fn h_insert(
         let docs = distribution_targets(cx.shadow, texts.len());
         let mut failed = false;
         for (docid, t) in docs.iter().zip(&texts) {
-            let at = cx.shadow.text_len(docid) + 1;
-            let r = cx.insert(docid, 1, at, t.as_bytes(), recorded);
+            let at = VPoint::content(cx.shadow.text_len(docid) + 1);
+            let r = cx.insert(docid, at, t.as_bytes(), effect);
             match r {
                 _ if failed => {}
                 Err(_) => {
@@ -57,7 +82,7 @@ pub(super) fn h_insert(
                 Ok(r) => {
                     failed = true;
                     let expected = format!("insert_all into {docid} succeeds");
-                    out.disagree("rejection", expected, refusal(&r));
+                    out.disagree("rejection", Disagreement { expected, actual: refusal(&r) });
                 }
             }
         }
@@ -73,7 +98,7 @@ pub(super) fn h_insert(
     // Where the insert lands — its text, any re-aim, its position, the
     // recorded-vspanset pad — is the one reading the grounding pre-pass
     // applies too (`evidence::resolve_insert`), each policy it uses tagged.
-    let landing = match resolve_insert(cx.ops, index, cx.shadow, &doc, op, &mut out.adaptations) {
+    let landing = match resolve_insert(cx.ops, index, cx.shadow, &doc, &mut out.adaptations) {
         Ok(landing) => landing,
         Err(reason) => {
             inexpressible(out, reason);
@@ -84,7 +109,7 @@ pub(super) fn h_insert(
         cx.shadow.set_current(&landing.doc);
     }
     let xf = expected_failure(op);
-    let Ok(r) = cx.insert(&landing.doc, landing.sub, landing.ord, &landing.bytes, recorded) else {
+    let Ok(r) = cx.insert(&landing.doc, landing.at, &landing.bytes, effect) else {
         out.never_bound(format!("insert into never-bound doc {}", landing.doc));
         return;
     };
@@ -115,12 +140,12 @@ pub(super) fn h_insert_loop(
     // The recorded sample (edgecases/many_small_inserts) shows A–Z cycling,
     // one insert per character, appended.
     out.adaptations.push("insert-loop:a-z-cycle".into());
-    let recorded = took_effect(op);
+    let effect = Effect::of(op);
     let mut failed = false;
     for k in 0..count {
         let b = b'A' + (k % 26) as u8;
-        let at = cx.shadow.text_len(&doc) + 1;
-        match cx.insert(&doc, 1, at, &[b], recorded) {
+        let at = VPoint::content(cx.shadow.text_len(&doc) + 1);
+        match cx.insert(&doc, at, &[b], effect) {
             Err(_) => {
                 // No α-image: nothing further reaches skep or the shadow.
                 out.never_bound(format!("insert_loop into never-bound doc {doc}"));
@@ -131,7 +156,7 @@ pub(super) fn h_insert_loop(
                 if !failed {
                     failed = true;
                     let expected = format!("insert {} of {count} succeeds", k + 1);
-                    out.disagree("rejection", expected, refusal(&r));
+                    out.disagree("rejection", Disagreement { expected, actual: refusal(&r) });
                 }
             }
         }
@@ -157,7 +182,7 @@ pub(super) fn h_interior_typing(
         return;
     };
     out.adaptations.push("expansion-plan:interior-typing".into());
-    let recorded = took_effect(op);
+    let effect = Effect::of(op);
     let mut tally = Tally::default();
     for r in results {
         let (Some(ch), Some(pos)) =
@@ -167,11 +192,11 @@ pub(super) fn h_interior_typing(
         };
         // A step whose position does not ground loses both its insert and
         // its check — the op cannot be expressed in full.
-        let Some((1, ord, _)) = resolve_position(cx.shadow, &doc, pos) else {
+        let Some((at @ VPoint { sub: 1, .. }, _)) = resolve_position(cx.shadow, &doc, pos) else {
             tally.unaimed(format!("step '{ch}' at position `{pos}` does not ground"));
             continue;
         };
-        let resp = match cx.insert(&doc, 1, ord, ch.as_bytes(), recorded) {
+        let resp = match cx.insert(&doc, at, ch.as_bytes(), effect) {
             Ok(resp) => resp,
             Err(_) => {
                 out.never_bound(format!("interior_typing into never-bound doc {doc}"));
@@ -179,31 +204,28 @@ pub(super) fn h_interior_typing(
             }
         };
         if !matches!(resp, Response::AckAddr { .. }) {
-            tally.differ(format!("insert '{ch}' at {pos}"), refusal(&resp));
+            let expected = format!("insert '{ch}' at {pos}");
+            tally.differ(Disagreement { expected, actual: refusal(&resp) });
             continue;
         }
-        // Per-step probes: vspanset + contents recorded per character.
+        // Per-step probes: vspanset + contents recorded per character,
+        // each step judged as an op of its own and folded in as one part.
         let mut step = OpOutcome::new(out.index, &out.op_name);
         probe_state(cx, r, &mut step, adjustments, &doc, Probe::Step);
-        match step.status {
-            Status::Disagreed => tally.differ(
-                format!("step '{ch}': {}", step.expected.unwrap_or_default()),
-                step.actual.unwrap_or_default(),
-            ),
-            Status::Agreed => tally.agree(),
-            _ => {}
-        }
+        tally.absorb(out, step, &format!("step '{ch}': "));
     }
     tally.settle(out, "state-probe");
 }
 
+/// A delete — of a region, or of the whole document when `verb` is
+/// [`Verb::DeleteAll`].
 pub(super) fn h_delete(
     cx: &mut Cx,
     index: usize,
     op: &Value,
     out: &mut OpOutcome,
     adjustments: &Adjustments,
-    all: bool,
+    verb: Verb,
 ) {
     let Some(doc) = cx.doc_arg(op, out, &["doc", "docid"]) else {
         inexpressible(out, "delete with no document in scope".into());
@@ -213,7 +235,7 @@ pub(super) fn h_delete(
     // equals the pre-delete content — udanax removed nothing (client-crash
     // family), so the harness executes nothing and later probes compare
     // against the intact document honestly.
-    if delete_is_noop(cx.shadow, cx.ops, index, &doc) {
+    if delete_is_noop(cx.ops, index, cx.shadow, &doc) {
         out.adaptations.push("delete-noop-from-post-state".into());
         out.status = Status::NotCompared;
         let mut note = String::from(
@@ -259,7 +281,7 @@ pub(super) fn h_delete(
         return;
     }
     let xf = expected_failure(op);
-    let (sub, ord, width) = if all {
+    let region = if verb == Verb::DeleteAll {
         let n = cx.shadow.text_len(&doc);
         if n == 0 {
             out.adaptations.push("delete_all:empty-noop".into());
@@ -267,16 +289,16 @@ pub(super) fn h_delete(
             out.note = Some("document already empty; nothing to delete".into());
             return;
         }
-        (1, 1, n)
-    } else if let Some((ord, w, how)) = resolve_delete_span(cx.shadow, cx.ops, index, &doc, op) {
+        VPoint::content(1).region(n)
+    } else if let Some((region, how)) = resolve_delete_span(cx.ops, index, cx.shadow, &doc) {
         out.adaptations.extend(how.tag().map(str::to_string));
-        (1, ord, w)
+        region
     } else if let Some(start) = str_field(op, &["start", "address", "at"]) {
         // A link-subspace delete (delete_middle_link_check_gap_closure).
         match parse_vpos(start) {
-            Some((sub, ord)) if sub != 1 => {
+            Some(at) if at.sub != 1 => {
                 let w = str_field(op, &["width"]).and_then(crate::tum::parse_width).unwrap_or(1);
-                (sub, ord, w)
+                at.region(w)
             }
             _ => {
                 inexpressible(out, format!("delete start `{start}` is not groundable"));
@@ -292,7 +314,7 @@ pub(super) fn h_delete(
         inexpressible(out, "delete without a groundable region".into());
         return;
     };
-    let Ok(r) = cx.delete(&doc, sub, ord, width, took_effect(op)) else {
+    let Ok(r) = cx.delete(&doc, region, Effect::of(op)) else {
         out.never_bound(format!("delete in never-bound doc {doc}"));
         return;
     };
@@ -313,7 +335,7 @@ pub(super) fn h_vcopy(
     out: &mut OpOutcome,
     adjustments: &Adjustments,
 ) {
-    let recorded = took_effect(op);
+    let effect = Effect::of(op);
     // Pre-pass expansion plans cover the macro forms (vcopy_multiple /
     // vcopy_all / vcopy_from_both / vcopy_to_multiple / create_and_
     // transclude): fillers as inserts, shared regions as real copies.
@@ -325,7 +347,7 @@ pub(super) fn h_vcopy(
             for t in targets {
                 let id = t.as_str().or_else(|| t.get("docid").and_then(Value::as_str));
                 if let Some(id) = id {
-                    if let Err(r) = create_one(cx, id, None, recorded) {
+                    if let Err(r) = create_one(cx, id, None, effect) {
                         refused.get_or_insert(r);
                     }
                 }
@@ -333,7 +355,8 @@ pub(super) fn h_vcopy(
         }
         let failure = run_plan(cx, index, out);
         if let Some(r) = refused {
-            out.disagree("rejection", "document creation".into(), refusal(&r));
+            let expected = "document creation".to_string();
+            out.disagree("rejection", Disagreement { expected, actual: refusal(&r) });
             return;
         }
         if let Some(failure) = failure {
@@ -354,9 +377,12 @@ pub(super) fn h_vcopy(
                 match cx.read_content(id) {
                     Ok(items) => {
                         let label = format!("{id}: ");
-                        tally.judge(compare_content(&exp, &items, cx.alpha), &label, &label);
+                        tally.judge(compare_content(&exp, &items, cx.alpha), &label);
                     }
-                    Err(code) => tally.differ(format!("{id}: contents"), format!("{id}: {code}")),
+                    Err(code) => tally.differ(Disagreement {
+                        expected: format!("{id}: contents"),
+                        actual: format!("{id}: {code}"),
+                    }),
                 }
             }
             if tally.compared > 0 {
@@ -378,8 +404,8 @@ pub(super) fn h_vcopy(
     let src_doc = sources.first().map(|s| s.doc.clone());
     let copied: Vec<u8> = sources
         .iter()
-        .filter(|s| s.sub == 1)
-        .flat_map(|s| cx.shadow.slice(&s.doc, s.ord, s.width))
+        .filter(|s| s.region.sub == 1)
+        .flat_map(|s| cx.shadow.slice(&s.doc, s.region.ord, s.region.width))
         .collect();
 
     // Destination doc + position. `to` may be a doc reference or the
@@ -400,12 +426,13 @@ pub(super) fn h_vcopy(
                 let copied_s = String::from_utf8_lossy(&copied).into_owned();
                 let evidenced: Vec<String> = cx
                     .shadow
-                    .all_docs()
-                    .into_iter()
+                    .created
+                    .iter()
                     .filter(|d| {
-                        next_content_probe(cx.ops, index, d, cx.shadow)
+                        next_content_probe(cx.ops, index, cx.shadow, d)
                             .is_some_and(|p| p.contains(&copied_s))
                     })
+                    .cloned()
                     .collect();
                 let pick = evidenced
                     .iter()
@@ -425,7 +452,7 @@ pub(super) fn h_vcopy(
     };
     let ord = match str_field(op, &["address", "at", "position"]) {
         Some(p) => match resolve_position(cx.shadow, &dest, p) {
-            Some((1, o, _)) => o,
+            Some((VPoint { sub: 1, ord }, _)) => ord,
             _ => {
                 inexpressible(out, format!("vcopy position `{p}` is not groundable"));
                 return;
@@ -441,13 +468,13 @@ pub(super) fn h_vcopy(
         }
     };
     let xf = expected_failure(op);
-    let r = match cx.copy(&dest, ord, &sources, recorded) {
+    let r = match cx.copy(&dest, ord, &sources, effect) {
         Ok(r) => r,
-        Err(g) if g == dest && sources.iter().all(|s| s.doc != g) => {
+        Err(CopyNeverBound::Destination(_)) => {
             out.never_bound(format!("vcopy destination {dest} never bound"));
             return;
         }
-        Err(g) => {
+        Err(CopyNeverBound::Source(NeverBound(g))) => {
             out.never_bound(format!("vcopy source doc {g} never bound"));
             return;
         }
@@ -462,22 +489,23 @@ pub(super) fn h_vcopy(
     }
 }
 
-pub(super) fn h_pivot_swap(cx: &mut Cx, op: &Value, out: &mut OpOutcome, pivot: bool) {
+/// A rearrangement of the given `shape`.
+pub(super) fn h_pivot_swap(cx: &mut Cx, op: &Value, out: &mut OpOutcome, shape: Rearrangement) {
     let Some(doc) = cx.doc_arg(op, out, &["doc", "docid"]) else {
         inexpressible(out, "rearrange with no document in scope".into());
         return;
     };
     let mut cuts = cuts_of(op);
-    if cuts.is_empty() && !pivot {
+    if cuts.is_empty() && shape == Rearrangement::Swap {
         // Two texts to exchange, located in the shadow.
         if let Some(regions) = field(op, &["regions"]).and_then(Value::as_array) {
             let texts: Vec<&str> = regions.iter().filter_map(Value::as_str).collect();
-            if texts.len() == 2 {
-                let a = cx.shadow.find_text(Some(&doc), texts[0]);
-                let b = cx.shadow.find_text(Some(&doc), texts[1]);
+            if let [ta, tb] = texts[..] {
+                let a = cx.shadow.find_text(Some(&doc), ta);
+                let b = cx.shadow.find_text(Some(&doc), tb);
                 if let (Some((_, s1)), Some((_, s2))) = (a, b) {
                     out.adaptations.push("text-located:regions".into());
-                    let (w1, w2) = (texts[0].len() as u64, texts[1].len() as u64);
+                    let (w1, w2) = (ta.len() as u64, tb.len() as u64);
                     let (s1, e1, s2, e2) = if s1 <= s2 {
                         (s1, s1 + w1, s2, s2 + w2)
                     } else {
@@ -488,13 +516,13 @@ pub(super) fn h_pivot_swap(cx: &mut Cx, op: &Value, out: &mut OpOutcome, pivot: 
             }
         }
     }
-    let want = if pivot { 3 } else { 4 };
+    let want = shape.cuts();
     if cuts.len() != want {
         inexpressible(out, format!("rearrange needs {want} cuts, could derive {}", cuts.len()));
         return;
     }
     let xf = expected_failure(op);
-    let Ok(r) = cx.rearrange(&doc, &cuts, took_effect(op)) else {
+    let Ok(r) = cx.rearrange(&doc, &cuts, Effect::of(op)) else {
         out.never_bound(format!("rearrange in never-bound doc {doc}"));
         return;
     };

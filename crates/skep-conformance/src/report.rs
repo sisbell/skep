@@ -4,7 +4,10 @@
 //! when the run completes. [`output_dir`] locates `target/conformance/`.
 
 use std::collections::BTreeMap;
+use std::error::Error;
+use std::fmt;
 use std::fs;
+use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -18,13 +21,32 @@ pub fn output_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/conformance")
 }
 
-fn status_str(s: &Status) -> &'static str {
-    match s {
-        Status::Agreed => "agreed",
-        Status::NotCompared => "not-compared",
-        Status::Meta => "meta",
-        Status::Inexpressible => "inexpressible",
-        Status::Disagreed => "disagreed",
+/// Where a sweep's report and summary were published.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ReportPaths {
+    /// `report.jsonl`: one record per scenario.
+    pub jsonl: PathBuf,
+    /// `summary.md`: the human summary.
+    pub summary: PathBuf,
+}
+
+/// A report file that could not be written: the path, and why.
+#[derive(Debug)]
+#[non_exhaustive]
+pub struct ReportError {
+    pub path: PathBuf,
+    pub source: io::Error,
+}
+
+impl fmt::Display for ReportError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "cannot write {}", self.path.display())
+    }
+}
+
+impl Error for ReportError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        Some(&self.source)
     }
 }
 
@@ -42,11 +64,11 @@ pub fn render_jsonl(records: &[ScenarioRecord]) -> String {
                     "index": o.index,
                     "op": o.op_name,
                     "verb": o.verb,
-                    "status": status_str(&o.status),
+                    "status": o.status.as_str(),
                     "comparator": o.comparator,
                     "adaptations": o.adaptations,
-                    "expected": o.expected,
-                    "actual": o.actual,
+                    "expected": o.disagreement.as_ref().map(|d| &d.expected),
+                    "actual": o.disagreement.as_ref().map(|d| &d.actual),
                     "note": o.note,
                     "allowlisted": o.allowlisted,
                 })
@@ -58,8 +80,8 @@ pub fn render_jsonl(records: &[ScenarioRecord]) -> String {
             "verdict": r.verdict.as_str(),
             "bijection_size": r.bijection_size,
             "groundings": r.groundings,
-            "first_finding": r.first_finding.as_ref().map(|(i, name, d)| json!({
-                "op_index": i, "op": name, "detail": d,
+            "first_finding": r.first_finding.as_ref().map(|f| json!({
+                "op_index": f.index, "op": f.op_name, "detail": f.detail,
             })),
             "error": r.error,
             "ops": ops,
@@ -70,17 +92,19 @@ pub fn render_jsonl(records: &[ScenarioRecord]) -> String {
     out
 }
 
+/// Render the records and publish `report.jsonl` and `summary.md` under
+/// `out_dir`, creating it if need be.
 pub fn write_reports(
     records: &[ScenarioRecord],
     out_dir: &Path,
-) -> Result<(PathBuf, PathBuf), String> {
-    fs::create_dir_all(out_dir).map_err(|e| format!("create {}: {e}", out_dir.display()))?;
-    let jsonl_path = out_dir.join("report.jsonl");
-    let summary_path = out_dir.join("summary.md");
-
-    publish(&jsonl_path, &render_jsonl(records))?;
-    publish(&summary_path, &render_summary(records))?;
-    Ok((jsonl_path, summary_path))
+) -> Result<ReportPaths, ReportError> {
+    fs::create_dir_all(out_dir)
+        .map_err(|source| ReportError { path: out_dir.to_path_buf(), source })?;
+    let paths =
+        ReportPaths { jsonl: out_dir.join("report.jsonl"), summary: out_dir.join("summary.md") };
+    publish(&paths.jsonl, &render_jsonl(records))?;
+    publish(&paths.summary, &render_summary(records))?;
+    Ok(paths)
 }
 
 /// Write `body` to `path` so that no concurrent reader ever observes a
@@ -96,17 +120,17 @@ pub fn write_reports(
 /// The temp name carries the pid AND a per-call counter, so no two writers
 /// share it: colliding on the temp would reintroduce the torn read one step
 /// earlier, where a rename would then publish it.
-fn publish(path: &Path, body: &str) -> Result<(), String> {
+fn publish(path: &Path, body: &str) -> Result<(), ReportError> {
     static NEXT: AtomicU64 = AtomicU64::new(0);
     let tmp = path.with_extension(format!(
         "tmp.{}.{}",
         std::process::id(),
         NEXT.fetch_add(1, Ordering::Relaxed)
     ));
-    fs::write(&tmp, body).map_err(|e| format!("write {}: {e}", tmp.display()))?;
-    fs::rename(&tmp, path).map_err(|e| {
+    fs::write(&tmp, body).map_err(|source| ReportError { path: tmp.clone(), source })?;
+    fs::rename(&tmp, path).map_err(|source| {
         let _ = fs::remove_file(&tmp);
-        format!("publish {}: {e}", path.display())
+        ReportError { path: path.to_path_buf(), source }
     })
 }
 
@@ -175,11 +199,13 @@ fn render_summary(records: &[ScenarioRecord]) -> String {
         }
         any = true;
         match &r.first_finding {
-            Some((i, op_name, detail)) => s.push_str(&format!(
-                "- `{}/{}` — op {i} `{op_name}`: {}\n",
+            Some(f) => s.push_str(&format!(
+                "- `{}/{}` — op {} `{}`: {}\n",
                 r.category,
                 r.name,
-                trunc(detail, 300)
+                f.index,
+                f.op_name,
+                trunc(&f.detail, 300)
             )),
             None => s.push_str(&format!("- `{}/{}`\n", r.category, r.name)),
         }
@@ -296,12 +322,13 @@ fn render_summary(records: &[ScenarioRecord]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::outcome::Disagreement;
 
     fn op(index: usize, status: Status, allowlisted: Option<&str>) -> OpOutcome {
         let mut o = OpOutcome::new(index, &format!("op{index}"));
         o.status = status;
-        o.expected = Some(format!("want{index}"));
-        o.actual = Some(format!("got{index}"));
+        let (expected, actual) = (format!("want{index}"), format!("got{index}"));
+        o.disagreement = Some(Disagreement { expected, actual });
         o.allowlisted = allowlisted.map(str::to_string);
         o
     }

@@ -12,14 +12,14 @@ use super::{
     inexpressible, marker_type_name, parse_set_spans, settle_accepted, settle_unaccepted,
     side_specs, Cx, SetSpan,
 };
-use crate::evidence::took_effect;
+use crate::evidence::Effect;
 use crate::fields::{
     arrow_results, as_text, expect_strings, expected_failure, field, locate, note_arrow,
     op_name, parse_python_spec, str_field, verb_of, vspec_dict, DocSpans, Verb,
 };
 use crate::outcome::{OpOutcome, Status};
 use crate::shadow::ShadowLink;
-use crate::tum::{link_home_docid, parse_vpos, vspan};
+use crate::tum::{link_home_docid, parse_vpos, VPoint, VRegion};
 
 fn to_vspecs(cx: &mut Cx, sides: &[DocSpans]) -> Result<Vec<VSpec>, String> {
     let mut specs = Vec::new();
@@ -27,8 +27,8 @@ fn to_vspecs(cx: &mut Cx, sides: &[DocSpans]) -> Result<Vec<VSpec>, String> {
         let Some(sd) = cx.alpha.translate(docid) else {
             return Err(format!("endset doc {docid} never bound"));
         };
-        for (sub, ord, w) in spans {
-            if let Some(span) = vspan(*sub, *ord, *w) {
+        for region in spans {
+            if let Some(span) = region.span() {
                 specs.push(VSpec { source: sd.clone(), span });
             }
         }
@@ -67,12 +67,9 @@ fn endset_evidence(
         }
         if let Some(s) = v.as_str() {
             if let Some((Some(doc), spans)) = parse_python_spec(s) {
-                let parsed: Vec<(u64, u64, u64)> = spans
+                let parsed: Vec<VRegion> = spans
                     .iter()
-                    .filter_map(|(st, w)| {
-                        let (sub, ord) = parse_vpos(st)?;
-                        Some((sub, ord, crate::tum::parse_width(w)?))
-                    })
+                    .filter_map(|(st, w)| Some(parse_vpos(st)?.region(crate::tum::parse_width(w)?)))
                     .collect();
                 if !parsed.is_empty() {
                     return Some(vec![(doc, parsed)]);
@@ -87,7 +84,7 @@ fn endset_evidence(
                 return None;
             }
             let l = locate(cx.shadow, hint, s).or_else(|| locate(cx.shadow, None, s))?;
-            sides.push((l.doc, vec![(1, l.ord, l.width)]));
+            sides.push(l.into_side());
         }
         (!sides.is_empty()).then_some(sides)
     };
@@ -220,8 +217,8 @@ fn h_create_link_explicit(cx: &mut Cx, op: &Value, out: &mut OpOutcome, xf: Opti
             };
             for sp in spans {
                 match sp {
-                    SetSpan::Plain(s, ord, w) => {
-                        if let Some(span) = vspan(*s, *ord, *w) {
+                    SetSpan::Plain(region) => {
+                        if let Some(span) = region.span() {
                             specs.push(VSpec { source: d.clone(), span });
                         }
                     }
@@ -309,7 +306,7 @@ fn h_create_link_explicit(cx: &mut Cx, op: &Value, out: &mut OpOutcome, xf: Opti
                                     return;
                                 }
                             },
-                            SetSpan::Plain(s, ord, w) => {
+                            SetSpan::Plain(region) => {
                                 let Some(d) = cx.alpha.translate(docid) else {
                                     out.never_bound(format!(
                                         "create_link threeset: doc {docid} never bound"
@@ -317,7 +314,7 @@ fn h_create_link_explicit(cx: &mut Cx, op: &Value, out: &mut OpOutcome, xf: Opti
                                     return;
                                 };
                                 out.adaptations.push("threeset-content-type".into());
-                                if let Some(span) = vspan(*s, *ord, *w) {
+                                if let Some(span) = region.span() {
                                     specs.push(VSpec { source: d, span });
                                 }
                             }
@@ -348,7 +345,9 @@ fn h_create_link_explicit(cx: &mut Cx, op: &Value, out: &mut OpOutcome, xf: Opti
                 spans
                     .iter()
                     .filter_map(|sp| match sp {
-                        SetSpan::Plain(1, o, w) => Some((d.clone(), *o, *w)),
+                        SetSpan::Plain(VRegion { sub: 1, ord, width }) => {
+                            Some((d.clone(), *ord, *width))
+                        }
                         _ => None,
                     })
                     .collect::<Vec<_>>()
@@ -361,7 +360,7 @@ fn h_create_link_explicit(cx: &mut Cx, op: &Value, out: &mut OpOutcome, xf: Opti
         to: op.get("toset").map(triples).unwrap_or_default(),
     });
 
-    match cx.make_link(&home_golden, [from, to, ty], link, None, took_effect(op)) {
+    match cx.make_link(&home_golden, [from, to, ty], link, None, Effect::of(op)) {
         Err(_) => out.never_bound(format!("create_link home {home_golden} never bound")),
         Ok(Response::AckAddr { .. }) => {
             if !settle_accepted(out, xf) {
@@ -488,7 +487,7 @@ pub(super) fn h_create_link(cx: &mut Cx, index: usize, op: &Value, out: &mut OpO
                 {
                     Some(l) => {
                         out.adaptations.push(format!("text-located:source_text ({})", l.how.tag()));
-                        from_sides.push((l.doc, vec![(1, l.ord, l.width)]));
+                        from_sides.push(l.into_side());
                     }
                     None => {
                         inexpressible(out, format!("create_link source: text {t:?} not found"));
@@ -505,7 +504,7 @@ pub(super) fn h_create_link(cx: &mut Cx, index: usize, op: &Value, out: &mut OpO
                 if from_doc_hint.is_none() || s.contains('[') {
                     if let Some(l) = locate(cx.shadow, None, s) {
                         out.adaptations.push(l.how.tag().into());
-                        from_sides.push((l.doc, vec![(1, l.ord, l.width)]));
+                        from_sides.push(l.into_side());
                     }
                 }
             }
@@ -556,10 +555,9 @@ pub(super) fn h_create_link(cx: &mut Cx, index: usize, op: &Value, out: &mut OpO
                         let regions = cx.transcluded_regions_golden(&doc);
                         if !regions.is_empty() {
                             out.adaptations.push("endset-from-transcluded-region".into());
-                            from_sides.push((
-                                doc,
-                                regions.iter().map(|(o, w)| (1, *o, *w)).collect(),
-                            ));
+                            let copied_in =
+                                regions.iter().map(|&(o, w)| VPoint::content(o).region(w));
+                            from_sides.push((doc, copied_in.collect()));
                         }
                     }
                 } else if let Some(l) =
@@ -567,7 +565,7 @@ pub(super) fn h_create_link(cx: &mut Cx, index: usize, op: &Value, out: &mut OpO
                         .or_else(|| locate(cx.shadow, None, anchor))
                 {
                     out.adaptations.push(format!("text-located:on ({})", l.how.tag()));
-                    from_sides.push((l.doc, vec![(1, l.ord, l.width)]));
+                    from_sides.push(l.into_side());
                 }
             }
         }
@@ -576,7 +574,7 @@ pub(super) fn h_create_link(cx: &mut Cx, index: usize, op: &Value, out: &mut OpO
                 let n = cx.shadow.text_len(d);
                 if n > 0 {
                     out.adaptations.push("whole-extent".into());
-                    from_sides.push((d.clone(), vec![(1, 1, n)]));
+                    from_sides.push((d.clone(), vec![VPoint::content(1).region(n)]));
                 }
             }
         }
@@ -587,7 +585,8 @@ pub(super) fn h_create_link(cx: &mut Cx, index: usize, op: &Value, out: &mut OpO
             if let Some((d, ord)) = cx.shadow.find_text(Some(&home_golden), &first_word) {
                 if !first_word.is_empty() {
                     out.adaptations.push("default_source_first_word".into());
-                    from_sides.push((d, vec![(1, ord, first_word.len() as u64)]));
+                    let region = VPoint::content(ord).region(first_word.len() as u64);
+                    from_sides.push((d, vec![region]));
                 }
             }
             if from_sides.is_empty() {
@@ -616,7 +615,7 @@ pub(super) fn h_create_link(cx: &mut Cx, index: usize, op: &Value, out: &mut OpO
                 {
                     Some(l) => {
                         out.adaptations.push(format!("text-located:target_text ({})", l.how.tag()));
-                        to_sides.push((l.doc, vec![(1, l.ord, l.width)]));
+                        to_sides.push(l.into_side());
                     }
                     None => {
                         inexpressible(out, format!("create_link target: text {t:?} not found"));
@@ -631,7 +630,7 @@ pub(super) fn h_create_link(cx: &mut Cx, index: usize, op: &Value, out: &mut OpO
                 if to_doc_hint.is_none() || s.contains('[') {
                     if let Some(l) = locate(cx.shadow, None, s) {
                         out.adaptations.push(l.how.tag().into());
-                        to_sides.push((l.doc, vec![(1, l.ord, l.width)]));
+                        to_sides.push(l.into_side());
                     }
                 }
             }
@@ -657,7 +656,7 @@ pub(super) fn h_create_link(cx: &mut Cx, index: usize, op: &Value, out: &mut OpO
                 let n = cx.shadow.text_len(d);
                 if n > 0 {
                     out.adaptations.push("whole-extent".into());
-                    to_sides.push((d.clone(), vec![(1, 1, n)]));
+                    to_sides.push((d.clone(), vec![VPoint::content(1).region(n)]));
                 }
             }
         }
@@ -671,13 +670,13 @@ pub(super) fn h_create_link(cx: &mut Cx, index: usize, op: &Value, out: &mut OpO
                 Some(t) => {
                     out.adaptations.push("default_target_whole_doc".into());
                     let n = cx.shadow.text_len(&t);
-                    to_sides.push((t, vec![(1, 1, n)]));
+                    to_sides.push((t, vec![VPoint::content(1).region(n)]));
                 }
                 None => {
                     let n = cx.shadow.text_len(&home_golden);
                     if n > 0 {
                         out.adaptations.push("default_target_self".into());
-                        to_sides.push((home_golden.clone(), vec![(1, 1, n)]));
+                        to_sides.push((home_golden.clone(), vec![VPoint::content(1).region(n)]));
                     } else {
                         inexpressible(
                             out,
@@ -719,11 +718,11 @@ pub(super) fn h_create_link(cx: &mut Cx, index: usize, op: &Value, out: &mut OpO
         let flat = |sides: &[DocSpans]| -> Vec<(String, u64, u64)> {
             sides
                 .iter()
-                .flat_map(|(d, spans)| {
-                    spans
+                .flat_map(|(d, regions)| {
+                    regions
                         .iter()
-                        .filter(|(s, _, _)| *s == 1)
-                        .map(|(_, o, w)| (d.clone(), *o, *w))
+                        .filter(|r| r.sub == 1)
+                        .map(|r| (d.clone(), r.ord, r.width))
                         .collect::<Vec<_>>()
                 })
                 .collect()
@@ -733,7 +732,7 @@ pub(super) fn h_create_link(cx: &mut Cx, index: usize, op: &Value, out: &mut OpO
             from: flat(&from_sides),
             to: flat(&to_sides),
         });
-        match cx.make_link(&home_golden, [from, to, vec![ty]], link, arrow, took_effect(op)) {
+        match cx.make_link(&home_golden, [from, to, vec![ty]], link, arrow, Effect::of(op)) {
             Err(_) => {
                 out.never_bound(format!("create_link home {home_golden} never bound"));
                 return;
@@ -769,11 +768,11 @@ fn link_type_name(op: &Value) -> Option<String> {
     let v = field(op, &["type", "typespecs"])?;
     let arr = v.as_array()?;
     for item in arr {
-        let (_, spans) = vspec_dict(item)?;
-        for (sub, ord, _) in spans {
-            if sub == 2 {
+        let (_, regions) = vspec_dict(item)?;
+        for r in regions {
+            if r.sub == 2 {
                 return Some(
-                    match ord {
+                    match r.ord {
                         2 => "jump",
                         3 => "quote",
                         6 => "footnote",

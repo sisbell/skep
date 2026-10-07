@@ -25,8 +25,8 @@ use crate::fields::{
     has_observation_fields, locate, op_name, per_doc_replies, position_from_op_name,
     recorded_content, span_dict, str_field, verb_of, vspec_dict, Verb,
 };
-use crate::outcome::OpOutcome;
-use crate::tum::{is_link_address, link_home_docid, parse_dotted, parse_vpos, vspan};
+use crate::outcome::{Disagreement, OpOutcome};
+use crate::tum::{is_link_address, link_home_docid, parse_dotted, parse_vpos, VPoint};
 
 /// The arguments a content read carries: the document it reads, and the
 /// region, spec set or position that narrows it.
@@ -57,9 +57,8 @@ fn follow_landing_specs(cx: &mut Cx, index: usize, op: &Value) -> Option<Vec<Spe
     let d = cx.alpha.translate(&docid)?;
     let mut specs = Vec::new();
     for (start, w) in &spans {
-        let (sub, ord) = crate::tum::parse_vpos(start)?;
-        let w = crate::tum::parse_width(w)?;
-        if let Some(span) = vspan(sub, ord, w) {
+        let region = parse_vpos(start)?.region(crate::tum::parse_width(w)?);
+        if let Some(span) = region.span() {
             specs.push(Spec { doc: d.clone(), span });
         }
     }
@@ -77,13 +76,7 @@ fn deep_span_dict(v: &Value) -> Option<(Vec<u64>, Vec<u64>)> {
     (start.len() > 2 || width.len() > 2).then_some((start, width))
 }
 
-pub(super) fn h_contents(
-    cx: &mut Cx,
-    index: usize,
-    op: &Value,
-    out: &mut OpOutcome,
-    op_name: &str,
-) {
+pub(super) fn h_contents(cx: &mut Cx, index: usize, op: &Value, out: &mut OpOutcome) {
     let xf = expected_failure(op);
 
     // Multi-doc probe: `docs` map of name → expected strings. An id map
@@ -101,10 +94,11 @@ pub(super) fn h_contents(
             };
             let label = format!("{name}: ");
             match cx.read_content(&doc) {
-                Ok(items) => {
-                    tally.judge(compare_content(&strings, &items, cx.alpha), &label, &label)
-                }
-                Err(code) => tally.differ(format!("{name}: contents"), format!("{name}: {code}")),
+                Ok(items) => tally.judge(compare_content(&strings, &items, cx.alpha), &label),
+                Err(code) => tally.differ(Disagreement {
+                    expected: format!("{name}: contents"),
+                    actual: format!("{name}: {code}"),
+                }),
             }
         }
         out.adaptations.push("contents:content-subspace".into());
@@ -133,12 +127,11 @@ pub(super) fn h_contents(
             };
             let label = format!("{docid}: ");
             match cx.read_content(&docid) {
-                Ok(items) => {
-                    tally.judge(compare_content(&strings, &items, cx.alpha), &label, &label)
-                }
-                Err(code) => {
-                    tally.differ(format!("{docid}: contents"), format!("{docid}: {code}"))
-                }
+                Ok(items) => tally.judge(compare_content(&strings, &items, cx.alpha), &label),
+                Err(code) => tally.differ(Disagreement {
+                    expected: format!("{docid}: contents"),
+                    actual: format!("{docid}: {code}"),
+                }),
             }
         }
         if tally.compared > 0 {
@@ -164,7 +157,10 @@ pub(super) fn h_contents(
         let mut tally = Tally::default();
         for (name, doc, strings) in &replies {
             let Some(d) = cx.skep_doc(doc) else {
-                tally.differ(format!("{name}: contents"), format!("{name}: {doc} never bound"));
+                tally.differ(Disagreement {
+                    expected: format!("{name}: contents"),
+                    actual: format!("{name}: {doc} never bound"),
+                });
                 continue;
             };
             // Reconstructed narrowing: exactly one recorded string,
@@ -182,7 +178,7 @@ pub(super) fn h_contents(
             };
             let items = if let Some((ord, w)) = narrowed {
                 out.adaptations.push("read-span-from-recorded-strings".into());
-                match vspan(1, ord, w).map(|span| {
+                match VPoint::content(ord).region(w).span().map(|span| {
                     cx.rig.exec(Op::RetrieveV { specs: vec![Spec { doc: d, span }] })
                 }) {
                     Some(Response::Delivery { items, .. }) => Ok(items.0),
@@ -194,10 +190,11 @@ pub(super) fn h_contents(
             };
             let label = format!("{name}: ");
             match items {
-                Ok(items) => {
-                    tally.judge(compare_content(strings, &items, cx.alpha), &label, &label)
-                }
-                Err(code) => tally.differ(format!("{name}: contents"), format!("{name}: {code}")),
+                Ok(items) => tally.judge(compare_content(strings, &items, cx.alpha), &label),
+                Err(code) => tally.differ(Disagreement {
+                    expected: format!("{name}: contents"),
+                    actual: format!("{name}: {code}"),
+                }),
             }
         }
         out.adaptations.push("contents:per-doc-keyed".into());
@@ -217,12 +214,12 @@ pub(super) fn h_contents(
         };
         let mut tally = Tally::default();
         for (pos, exp) in map {
-            let Some((sub, ord)) = parse_vpos(pos) else {
+            let Some(at) = parse_vpos(pos) else {
                 tally.unaimed(format!("positions key `{pos}` is not a V-position"));
                 continue;
             };
             let Some(want) = exp.as_str() else { continue };
-            let Some(span) = vspan(sub, ord, 1) else { continue };
+            let Some(span) = at.region(1).span() else { continue };
             match cx.rig.exec(Op::RetrieveV { specs: vec![Spec { doc: d.clone(), span }] }) {
                 Response::Delivery { items, .. } => {
                     // One-position comparison through the shared content
@@ -233,11 +230,13 @@ pub(super) fn h_contents(
                         tally.agree();
                         continue;
                     }
-                    let label = format!("{pos}=");
                     let c = compare_content(&[want.to_string()], &items.0, cx.alpha);
-                    tally.judge(c, &label, &label);
+                    tally.judge(c, &format!("{pos}="));
                 }
-                r => tally.differ(format!("{pos}={want:?}"), format!("{pos}: {}", refusal(&r))),
+                r => tally.differ(Disagreement {
+                    expected: format!("{pos}={want:?}"),
+                    actual: format!("{pos}: {}", refusal(&r)),
+                }),
             }
         }
         tally.settle_read(out, "content-positions", op, CONTENT_READS);
@@ -268,7 +267,7 @@ pub(super) fn h_contents(
     let mut link_read_doc: Option<String> = None;
     if let Some(arr) = field(op, &["specset", "specs"]).and_then(Value::as_array) {
         for v in arr {
-            let Some((docid, spans)) = vspec_dict(v) else {
+            let Some((docid, regions)) = vspec_dict(v) else {
                 inexpressible(out, "retrieve spec list holds a non-vspec entry".into());
                 return;
             };
@@ -276,8 +275,8 @@ pub(super) fn h_contents(
                 out.never_bound(format!("retrieve doc {docid} never bound"));
                 return;
             };
-            for (s, o, w) in spans {
-                if let Some(span) = vspan(s, o, w) {
+            for region in regions {
+                if let Some(span) = region.span() {
                     specs.push(Spec { doc: d.clone(), span });
                 }
             }
@@ -292,8 +291,9 @@ pub(super) fn h_contents(
                 rest.split_whitespace().next().and_then(|t| t.parse().ok());
             if let Some(n) = n {
                 out.adaptations.push("specset-from-description".into());
-                for docid in cx.shadow.all_docs() {
-                    if let (Some(d), Some(span)) = (cx.alpha.peek(&docid), vspan(1, 1, n)) {
+                let first = VPoint::content(1).region(n);
+                for docid in &cx.shadow.created {
+                    if let (Some(d), Some(span)) = (cx.alpha.peek(docid), first.span()) {
                         specs.push(Spec { doc: d, span });
                     }
                 }
@@ -322,8 +322,8 @@ pub(super) fn h_contents(
             other => vec![other],
         };
         for item in items {
-            if let Some((s, o, w)) = span_dict(item) {
-                if let Some(span) = vspan(s, o, w) {
+            if let Some(region) = span_dict(item) {
+                if let Some(span) = region.span() {
                     specs.push(Spec { doc: d.clone(), span });
                 }
             } else if let Some((start, width)) = deep_span_dict(item) {
@@ -348,7 +348,7 @@ pub(super) fn h_contents(
                 match locate(cx.shadow, Some(&doc), t) {
                     Some(l) => {
                         out.adaptations.push(l.how.tag().into());
-                        if let Some(span) = vspan(1, l.ord, l.width) {
+                        if let Some(span) = l.region().span() {
                             specs.push(Spec { doc: d.clone(), span });
                         }
                     }
@@ -359,7 +359,7 @@ pub(super) fn h_contents(
                 }
             }
         }
-    } else if let Some(landing) = (!op_name.to_ascii_lowercase().starts_with("full_"))
+    } else if let Some(landing) = (!op_name(op).to_ascii_lowercase().starts_with("full_"))
         .then(|| follow_landing_specs(cx, index, op))
         .flatten()
     {
@@ -375,7 +375,7 @@ pub(super) fn h_contents(
         // Full probes aim at the doc the last CONTENT write touched, not
         // whatever the register drifted to (policy
         // `full-probe-targets-last-write`).
-        let full_probe = op_name.to_ascii_lowercase().starts_with("full_");
+        let full_probe = op_name(op).to_ascii_lowercase().starts_with("full_");
         let doc = if full_probe && str_field(op, &["doc", "docid"]).is_none() {
             match cx.shadow.last_written.clone().filter(|d| cx.shadow.knows(d)) {
                 Some(d) => {
@@ -398,13 +398,13 @@ pub(super) fn h_contents(
         };
         let pos = str_field(op, &["address", "at", "position"]).and_then(parse_vpos).or_else(
             || {
-                position_from_op_name(op_name).inspect(|_| {
+                position_from_op_name(op_name(op)).inspect(|_| {
                     out.adaptations.push("position-from-op-name".into());
                 })
             },
         );
-        if let Some((sub, ord)) = pos {
-            if let Some(span) = vspan(sub, ord, 1) {
+        if let Some(at) = pos {
+            if let Some(span) = at.region(1).span() {
                 specs.push(Spec { doc: d, span });
             }
         } else {
@@ -453,7 +453,8 @@ pub(super) fn h_contents(
             );
             match scoped_to {
                 Some(read_n) => {
-                    specs.extend(vspan(1, 1, read_n).map(|span| Spec { doc: d.clone(), span }))
+                    let read = VPoint::content(1).region(read_n);
+                    specs.extend(read.span().map(|span| Spec { doc: d.clone(), span }))
                 }
                 None => match cx.skep_content_spans(&d) {
                     Ok(spans) => {
@@ -471,7 +472,8 @@ pub(super) fn h_contents(
                     .map(|ss| ss.iter().filter(|s| is_link_address(s)).count() as u64)
                     .unwrap_or(0);
                 let links = cx.shadow.link_count(&doc).max(n_addr);
-                if let Some(span) = vspan(2, 1, links) {
+                let link_positions = VPoint { sub: 2, ord: 1 }.region(links);
+                if let Some(span) = link_positions.span() {
                     link_specs.push(Spec { doc: d, span });
                     link_read_doc = Some(doc.clone());
                 }
@@ -533,16 +535,18 @@ pub(super) fn h_contents(
     };
     match compare_content(&strings, &items, cx.alpha) {
         Ok(()) => out.agree("content"),
-        Err((e, a)) => out.disagree("content", e, a),
+        Err(d) => out.disagree("content", d),
     }
 }
 
+/// A vspan probe, or a vspanset probe when `verb` is
+/// [`Verb::RetrieveVspanset`].
 pub(super) fn h_vspanset(
     cx: &mut Cx,
     op: &Value,
     out: &mut OpOutcome,
     adjustments: &Adjustments,
-    full_set: bool,
+    verb: Verb,
 ) {
     let harvested = harvest_spanset(op);
     // A count of a ROLE document's spans names that document (policy
@@ -584,7 +588,7 @@ pub(super) fn h_vspanset(
     // of the document — held anything (policy `poom-empty`).
     let poom_empty = field(op, &["poom_empty"]).and_then(Value::as_bool);
     let xf = expected_failure(op);
-    let r = if full_set {
+    let r = if verb == Verb::RetrieveVspanset {
         cx.rig.exec(Op::RetrieveDocVSpanSet { doc: d })
     } else {
         cx.rig.exec(Op::RetrieveDocVSpan { doc: d })
@@ -605,7 +609,7 @@ pub(super) fn h_vspanset(
     if let Some(n) = count {
         match compare_count(n, set.iter().count(), adjustments, &mut out.adaptations) {
             Ok(()) => out.agree("count"),
-            Err((e, a)) => out.disagree("count", e, a),
+            Err(d) => out.disagree("count", d),
         }
         return;
     }
@@ -616,7 +620,8 @@ pub(super) fn h_vspanset(
             out.agree("vspanset");
         } else {
             let want = if empty { "an empty vspanset" } else { "a nonempty vspanset" };
-            out.disagree("vspanset", want.into(), format!("{spans} span(s)"));
+            let actual = format!("{spans} span(s)");
+            out.disagree("vspanset", Disagreement { expected: want.into(), actual });
         }
         return;
     }
@@ -626,8 +631,8 @@ pub(super) fn h_vspanset(
     };
     match compare_spansets(&spans, &set, adjustments, &mut out.adaptations) {
         Ok(()) => out.agree("vspanset"),
-        Err((e, a)) => {
-            out.disagree("vspanset", e, a);
+        Err(d) => {
+            out.disagree("vspanset", d);
             if collapsed_subspace_shape(&spans) {
                 out.note = Some(COLLAPSED_SUBSPACE_ANALYSIS.to_string());
             } else if cx.shadow.version_of.contains_key(&doc)
@@ -660,7 +665,7 @@ pub(super) fn h_observe(
         || op.get("positions").and_then(Value::as_object).is_some()
         || !per_doc_replies(op, cx.shadow).is_empty()
     {
-        h_contents(cx, index, op, out, op_name(op));
+        h_contents(cx, index, op, out);
         return;
     }
     // A probe green FAILED with no observation data recorded
@@ -671,7 +676,7 @@ pub(super) fn h_observe(
     let xf = expected_failure(op);
     if xf.is_some() && !has_observation_fields(op) {
         if let Some(docref) = str_field(op, &["doc", "docid"]) {
-            if joint_absence(cx, out, &xf, docref) {
+            if joint_absence(cx, out, xf.as_deref(), docref) {
                 return;
             }
             if let Some(d) = cx.alpha.peek_translate(docref) {

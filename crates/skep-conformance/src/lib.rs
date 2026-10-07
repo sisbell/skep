@@ -41,12 +41,13 @@
 //!   the crate holds either.
 //! * **The shadow is golden-side, and has one owner.** Whether a recorded op
 //!   changed the golden-side world is one answer, `evidence::took_effect`,
-//!   and in the play pass the shadow changes only through the `Cx`
-//!   world-change methods in `play`, which `tests/it/tidy.rs` holds every
-//!   other play-pass file to. Content follows the recording, whatever skep
-//!   answers; a created document, version or link enters the shadow only
-//!   when skep made it too, so a version skep refuses leaves its later
-//!   name-references ungroundable — the class rulings 20 and 20a freeze.
+//!   which an `evidence::Effect` carries into every change, and in the play
+//!   pass the shadow changes only through the `Cx` world-change methods in
+//!   `play`, which `tests/it/tidy.rs` holds every other play-pass file to.
+//!   Content follows the recording, whatever skep answers; a created
+//!   document, version or link enters the shadow only when skep made it
+//!   too, so a version skep refuses leaves its later name-references
+//!   ungroundable — the class rulings 20 and 20a freeze.
 //! * **Both passes read an op the same way.** The pre-pass and the play
 //!   pass share one grammar for an op's fields (`fields`: the verb an op's
 //!   name reads as, the document an op aims at, an op's arguments, a vcopy's
@@ -62,13 +63,14 @@
 //!   filtered through it before it is compared or bound into α.
 //! * **One outcome per op; one place judges.** `play::run_op` returns
 //!   exactly one `OpOutcome` per recorded op, whatever happens, and an op
-//!   judged part by part settles through one `Tally`, so `agreed` always
-//!   means compared and matched. A read ends `not-compared` only when its
+//!   judged part by part settles through one `Tally` — a part judged as an
+//!   op of its own folds in whole, its adaptations and notes included — so
+//!   `agreed` always means compared and matched. A read ends `not-compared` only when its
 //!   recording kept no answer: one whose recorded answer no reader reaches
 //!   is `inexpressible`, the unread keys named (`play`'s
 //!   `compared_nothing`). Only `runner` drains α's findings and asks the
 //!   allowlist, `Allowlist::classify`, which classes cover an outcome — for
-//!   a scenario named by its key, `category/name` (`outcome::scenario_key`),
+//!   a scenario named by its key, `category/name` (`outcome::ScenarioKey`),
 //!   the identity every adjudication uses.
 //! * **Scenario documents are minted private** — `published: Some(false)`
 //!   (PUB-8.16) — by the one method that creates them,

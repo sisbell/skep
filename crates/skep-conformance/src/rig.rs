@@ -9,8 +9,8 @@
 //! also needs no temp directory, removing a whole class of environment
 //! failures from a 263-scenario run.
 
-use skep_address::{Address, Nat};
-use skep_arrangement::{VPos, VSpec};
+use skep_address::Address;
+use skep_arrangement::VSpec;
 use skep_content::Val;
 use skep_engine::{Engine, World};
 use skep_febe::{Deposit, Op, OperationSurface, Request, Response, SessionId};
@@ -20,7 +20,11 @@ use skep_namespace::PrincipalId;
 
 use std::collections::BTreeMap;
 
-use crate::tum::{addr, vspan};
+use crate::tum::{addr, VPoint};
+
+/// The content positions the types document holds: one per link-type name
+/// a scenario names (policy `types_document`).
+const TYPES_CAPACITY: u64 = 8;
 
 pub struct Rig {
     // Held so the engine (and its kernel Arc) outlives the command surface;
@@ -28,19 +32,18 @@ pub struct Rig {
     // makes the ownership story auditable.
     _engine: Engine,
     febe: OperationSurface<World>,
-    /// Bootstrap session — all delegations run under it (π₀'s prefix [1] is
+    /// Bootstrap session — all delegations run under it (π₀'s prefix `[1]` is
     /// an ancestor of every prefix we mint).
     boot: SessionId,
-    /// Per skep-account sessions: dotted account string → (session, id).
-    sessions: BTreeMap<String, (SessionId, PrincipalId)>,
-    /// Golden session labels ("A"/"B"/"C") → skep account addr string (a
-    /// `sessions` key). Bound by `account` ops carrying a `session` field;
-    /// ops carrying `session` route through the label's account session.
-    labels: BTreeMap<String, String>,
-    /// The session scenario ops execute under (switched by `account`) —
-    /// always the session of `current_account`: only `Rig::new`,
-    /// `switch_account`, `route_session` and `delegate_under` move the two,
-    /// and always together.
+    /// Per skep-account sessions: account → (session, principal).
+    sessions: BTreeMap<Address, (SessionId, PrincipalId)>,
+    /// Golden session labels ("A"/"B"/"C") → skep account (a `sessions`
+    /// key). Bound by `account` ops carrying a `session` field; ops carrying
+    /// `session` route through the label's account session.
+    labels: BTreeMap<String, Address>,
+    /// The session scenario ops execute under — always the session of
+    /// `current_account`: after construction, [`Rig::make_current`] is the
+    /// one writer of the pair.
     current_session: SessionId,
     /// The account new documents mint under (see
     /// [`Rig::create_private_document`]).
@@ -53,7 +56,6 @@ pub struct Rig {
     /// infrastructure — never bound in the α-map.
     types_doc: Address,
     type_ordinals: BTreeMap<String, u64>,
-    types_capacity: u64,
     /// Every rig account's HOME — its flagless first mint, born published
     /// (PUB-8.21), holding that account's setup grant (ruling 21). Harness
     /// infrastructure, like the types document: never bound in the α-map,
@@ -69,6 +71,11 @@ pub type RigError = String;
 /// named here as a client names it, by value: the fold keys on the VALUE.
 fn t_grant() -> Address {
     addr(&[1, 1, 0, 1, 0, 1, 0, 3, 90]).expect("the grants type address validates")
+}
+
+/// Node `[1]` — π₀'s node, under which the rig delegates every account.
+fn node_one() -> Address {
+    addr(&[1]).expect("[1] is a T4-valid node address")
 }
 
 impl Rig {
@@ -110,6 +117,39 @@ impl Rig {
         }
     }
 
+    /// The harness's types document (policy `types_document`):
+    /// [`TYPES_CAPACITY`] content positions, each the identity of one
+    /// link-type name, names assigned to ordinals on first use
+    /// ([`Rig::type_vspec`]). Minted PRIVATE (PUB-8.16 `Some(false)`) under
+    /// the account's own session, through the same op surface the scenarios
+    /// use — the harness holds no back door. It is the account's SECOND
+    /// mint, after its home, so every scenario document's ordinal is
+    /// shifted by both; the α-map is a bijection built from the acks, and
+    /// absorbs the shift.
+    fn types_document(
+        febe: &OperationSurface<World>,
+        session: SessionId,
+        account: &Address,
+    ) -> Result<Address, RigError> {
+        let exec = |op: Op| febe.execute(session, Request::from(op));
+        let mint = Op::CreateNewDocument { account: account.clone(), published: Some(false) };
+        let doc = match exec(mint) {
+            Response::AckAddr { addr, .. } => addr,
+            other => return Err(format!("types-doc create failed: {}", brief(&other))),
+        };
+        let values: Vec<Val> =
+            (0..TYPES_CAPACITY).map(|i| Val::new(vec![b'T', i as u8])).collect();
+        match exec(Op::Insert {
+            doc: doc.clone(),
+            at: VPoint::content(1).vpos(),
+            values,
+            deposit: Deposit::Undeclared,
+        }) {
+            Response::AckAddr { .. } => Ok(doc),
+            other => Err(format!("types-doc insert failed: {}", brief(&other))),
+        }
+    }
+
     pub fn new() -> Result<Rig, RigError> {
         let cfg = KernelConfig {
             durability: Durability::InMemory,
@@ -117,19 +157,16 @@ impl Rig {
             // Consulted by nothing: an in-memory kernel frames no marker.
             salt: SaltSource::Os,
         };
-        let engine = Engine::open(cfg)
-            .map_err(|e| format!("engine open: {e}"))?;
+        let engine = Engine::open(cfg).map_err(|e| format!("engine open: {e}"))?;
         let febe = OperationSurface::new(Box::new(engine.stores()));
         let boot = febe.bootstrap_session();
 
         // Delegate the scenario's working account under node [1] — udanax's
         // DEFAULT_ACCOUNT analog. The α seed "1.1.0.1" ↦ this account is
         // installed by the runner.
-        let node = addr(&[1]).ok_or("node [1] must validate")?;
-        let prefix = match febe.execute(
-            boot,
-            Request::from(Op::NextAccountPrefix { parent: node }),
-        ) {
+        let prefix = match febe
+            .execute(boot, Request::from(Op::NextAccountPrefix { parent: node_one() }))
+        {
             Response::MaybeAddr { addr: Some(a), .. } => a,
             other => return Err(format!("next-account-prefix failed: {}", brief(&other))),
         };
@@ -145,52 +182,24 @@ impl Rig {
         };
         let session = febe.open_session(PrincipalId(1));
         // The account's home and its setup grant come FIRST: the home must
-        // be the account's doc 1 (the fold's residence pin, PUB-5.17).
+        // be the account's doc 1 (the fold's residence pin, PUB-5.17). The
+        // types document is its second mint.
         let home = Rig::setup_grant(&febe, session, &account)?;
-
-        let mut rig = Rig {
+        let types_doc = Rig::types_document(&febe, session, &account)?;
+        Ok(Rig {
             _engine: engine,
             febe,
             boot,
-            sessions: BTreeMap::new(),
+            sessions: BTreeMap::from([(account.clone(), (session, PrincipalId(1)))]),
             labels: BTreeMap::new(),
             current_session: session,
             current_account: account.clone(),
-            default_account: account.clone(),
+            default_account: account,
             next_principal: 2,
-            types_doc: addr(&[1]).expect("placeholder, replaced below"),
+            types_doc,
             type_ordinals: BTreeMap::new(),
-            types_capacity: 8,
             homes: vec![home],
-        };
-        rig.sessions
-            .insert(crate::tum::addr_str(&account), (session, PrincipalId(1)));
-
-        // The types document: `types_capacity` content positions,
-        // each the identity of one link-type name (names are assigned to
-        // ordinals on first use). Created through the same op surface the
-        // scenarios use — the harness holds no back door.
-        // Minted PRIVATE (PUB-8.16 `Some(false)`): the harness drives M10
-        // directly, with no daemon door. It is the account's SECOND mint —
-        // the home above is its first — so the scenario documents shift by
-        // one more ordinal than they did; the α-map is a bijection built
-        // from the acks, and absorbs the shift as it absorbed this one.
-        let tdoc = match rig.exec(Op::CreateNewDocument { account: account.clone(), published: Some(false) }) {
-            Response::AckAddr { addr, .. } => addr,
-            other => return Err(format!("types-doc create failed: {}", brief(&other))),
-        };
-        let vals: Vec<Val> = (0..rig.types_capacity).map(|i| Val::new(vec![b'T', i as u8])).collect();
-        match rig.exec(Op::Insert {
-            doc: tdoc.clone(),
-            at: VPos { subspace: Nat::from(1u64), ordinal: Nat::from(1u64) },
-            values: vals,
-            deposit: Deposit::Undeclared,
-        }) {
-            Response::AckAddr { .. } => {}
-            other => return Err(format!("types-doc insert failed: {}", brief(&other))),
-        }
-        rig.types_doc = tdoc;
-        Ok(rig)
+        })
     }
 
     /// Execute one request under the current session. No idempotency key —
@@ -220,24 +229,33 @@ impl Rig {
         &self.default_account
     }
 
-    /// `account` op support (adaptation `account_as_delegate`): make the
-    /// named golden account current, delegating a fresh skep account (and
-    /// principal + session) on first sight. Returns the skep account now
-    /// current.
-    pub fn switch_account(&mut self, existing: Option<Address>) -> Result<Address, String> {
-        if let Some(a) = existing {
-            let key = crate::tum::addr_str(&a);
-            if let Some((s, _)) = self.sessions.get(&key) {
-                self.current_session = *s;
-                self.current_account = a.clone();
-                return Ok(a);
-            }
-            // Bound address without a session — an account we minted via
-            // create_node; open a session for its principal id if we know it.
-            return Err(format!("account {key} has no session (not delegated by this rig)"));
-        }
-        let node = addr(&[1]).ok_or("node [1] must validate")?;
-        self.delegate_under(&node, true)
+    /// Make `account` current, `session` its session — the one writer of
+    /// the pair after construction, so the session `exec` runs under and
+    /// the account a mint names never come apart.
+    fn make_current(&mut self, account: Address, session: SessionId) {
+        self.current_account = account;
+        self.current_session = session;
+    }
+
+    /// `account` op support (adaptation `account_as_delegate`): make an
+    /// account this rig delegated current again, under its own session.
+    pub fn switch_to(&mut self, account: &Address) -> Result<(), String> {
+        let Some(&(session, _)) = self.sessions.get(account) else {
+            // α bound the golden account to an address no delegation of
+            // this rig produced: no principal of the rig owns it.
+            return Err(format!("account {account} has no session (not delegated by this rig)"));
+        };
+        self.make_current(account.clone(), session);
+        Ok(())
+    }
+
+    /// `account` op support on first sight of a golden account: delegate a
+    /// fresh skep account (and principal and session) under node `[1]` and
+    /// make it current. Returns the account.
+    pub fn delegate_account(&mut self) -> Result<Address, String> {
+        let (account, session) = self.delegate(&node_one())?;
+        self.make_current(account.clone(), session);
+        Ok(account)
     }
 
     /// Bind a golden session label to a skep account (the `account` op's
@@ -247,8 +265,7 @@ impl Rig {
     /// binding, so the shared session is observably identical and the map
     /// stays one-session-per-account.
     pub fn bind_session_label(&mut self, label: &str, account: &Address) {
-        self.labels
-            .insert(label.to_string(), crate::tum::addr_str(account));
+        self.labels.insert(label.to_string(), account.clone());
     }
 
     /// Route the working session/account to a golden session label. An
@@ -256,39 +273,37 @@ impl Rig {
     /// it) binds to the CURRENT account — returns `true` so the caller can
     /// tag the implicit bind.
     pub fn route_session(&mut self, label: &str) -> Result<bool, String> {
-        let implicit = if self.labels.contains_key(label) {
-            false
-        } else {
-            let cur = crate::tum::addr_str(&self.current_account);
-            self.labels.insert(label.to_string(), cur);
-            true
+        let implicit = !self.labels.contains_key(label);
+        let account = self
+            .labels
+            .entry(label.to_string())
+            .or_insert_with(|| self.current_account.clone())
+            .clone();
+        let Some(&(session, _)) = self.sessions.get(&account) else {
+            return Err(format!("session label {label}: account {account} has no session"));
         };
-        let key = self.labels[label].clone();
-        let Some((s, _)) = self.sessions.get(&key) else {
-            return Err(format!("session label {label}: account {key} has no session"));
-        };
-        self.current_session = *s;
-        let a = parse_account_addr(&key)
-            .ok_or_else(|| format!("session label {label}: account {key} unparseable"))?;
-        self.current_account = a;
+        self.make_current(account, session);
         Ok(implicit)
     }
 
     /// Delegate the next account-tier prefix under `parent` to a fresh
-    /// principal and open its session. `make_current` switches the working
-    /// session to it (the `account` op does; `create_node` — udanax's
-    /// sub-account mint — does not).
+    /// principal and open its session, leaving the working session where it
+    /// is — `create_node`'s sub-account mint (adaptation
+    /// `create_node_as_delegate`).
+    pub fn delegate_under(&mut self, parent: &Address) -> Result<Address, String> {
+        self.delegate(parent).map(|(account, _)| account)
+    }
+
+    /// Delegate the next account-tier prefix under `parent` to a fresh
+    /// principal; open its session and deposit its setup grant. Returns the
+    /// account and its session.
     ///
     /// The Delegate request runs under the session of the principal that
     /// OWNS `parent` (M3's ω check: only the owner may carve its prefix).
-    /// Node [1] belongs to π₀ (the bootstrap session); a scenario account
+    /// Node `[1]` belongs to π₀ (the bootstrap session); a scenario account
     /// belongs to the principal this rig delegated it to.
-    pub fn delegate_under(&mut self, parent: &Address, make_current: bool) -> Result<Address, String> {
-        let owner_session = self
-            .sessions
-            .get(&crate::tum::addr_str(parent))
-            .map(|(s, _)| *s)
-            .unwrap_or(self.boot);
+    fn delegate(&mut self, parent: &Address) -> Result<(Address, SessionId), String> {
+        let owner_session = self.sessions.get(parent).map(|(s, _)| *s).unwrap_or(self.boot);
         let prefix = match self.febe.execute(
             owner_session,
             Request::from(Op::NextAccountPrefix { parent: parent.clone() }),
@@ -310,13 +325,8 @@ impl Rig {
         // deposited under ITS session — the owner of the home it goes in.
         let home = Rig::setup_grant(&self.febe, session, &account)?;
         self.homes.push(home);
-        self.sessions
-            .insert(crate::tum::addr_str(&account), (session, id));
-        if make_current {
-            self.current_session = session;
-            self.current_account = account.clone();
-        }
-        Ok(account)
+        self.sessions.insert(account.clone(), (session, id));
+        Ok((account, session))
     }
 
     /// The content V-spec denoting one link-type name (policy
@@ -327,10 +337,10 @@ impl Rig {
     pub fn type_vspec(&mut self, name: &str) -> Option<VSpec> {
         let next = self.type_ordinals.len() as u64 + 1;
         let ord = *self.type_ordinals.entry(name.to_string()).or_insert(next);
-        if ord > self.types_capacity {
+        if ord > TYPES_CAPACITY {
             return None;
         }
-        Some(VSpec { source: self.types_doc.clone(), span: vspan(1, ord, 1)? })
+        Some(VSpec { source: self.types_doc.clone(), span: VPoint::content(ord).region(1).span()? })
     }
 
     /// The I-space endset of one type name — for FTT type filters. Resolved
@@ -366,16 +376,9 @@ impl Rig {
     pub fn is_infra_addr(&self, a: &Address) -> bool {
         self.is_types_addr(a)
             || self.homes.iter().any(|h| skep_address::is_prefix(h.tumbler(), a.tumbler()))
-            || self.sessions.contains_key(&crate::tum::addr_str(a))
+            || self.sessions.contains_key(a)
             || *a == t_grant()
     }
-}
-
-/// Re-validate a stored dotted account string back to an `Address` (the
-/// `sessions`/`labels` maps key by string; routing needs the value form).
-fn parse_account_addr(s: &str) -> Option<Address> {
-    let comps = crate::tum::parse_dotted(s)?;
-    crate::tum::addr(&comps)
 }
 
 /// One-line rendering of a response for rig-internal error strings.
@@ -404,21 +407,26 @@ mod tests {
     /// The session `exec` runs under and the account a mint names move
     /// together — through a delegation, a switch back, and a route by
     /// session label — and a pair out of step is refused, so the check
-    /// discriminates.
+    /// discriminates. A sub-account delegation moves neither.
     #[test]
     fn the_session_and_the_account_move_together() {
         let mut rig = Rig::new().expect("the rig bootstraps");
         let first = rig.current_account.clone();
         assert!(mints(&rig));
 
-        let second = rig.switch_account(None).expect("a fresh account is delegated");
+        let second = rig.delegate_account().expect("a fresh account is delegated");
         assert_ne!(second, first);
         assert_eq!(rig.current_account, second);
         assert_eq!(rig.default_account(), &first, "the default account stays the first");
         assert!(mints(&rig));
 
+        let sub = rig.delegate_under(&second).expect("a sub-account is delegated");
+        assert_ne!(sub, second);
+        assert_eq!(rig.current_account, second, "a sub-account delegation switches nothing");
+        assert!(mints(&rig));
+
         rig.bind_session_label("B", &second);
-        rig.switch_account(Some(first.clone())).expect("the first account has a session");
+        rig.switch_to(&first).expect("the first account has a session");
         assert_eq!(rig.current_account, first);
         assert!(mints(&rig));
 

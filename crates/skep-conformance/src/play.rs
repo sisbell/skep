@@ -255,8 +255,8 @@ use std::collections::BTreeMap;
 
 use serde_json::Value;
 
-use skep_address::{Nat, Span};
-use skep_arrangement::{Run, VPos, VSpec};
+use skep_address::{is_prefix, Nat, Span, Tumbler};
+use skep_arrangement::{Run, VSpec};
 use skep_content::Val;
 use skep_febe::{Deposit, Op, Response, SlotArg};
 use skep_links::Endset;
@@ -269,6 +269,7 @@ use crate::compare::{
     COLLAPSED_SUBSPACE_ANALYSIS,
 };
 use crate::deletions::Deletions;
+use crate::evidence::Effect;
 use crate::fields::{
     aim_doc, as_text, client_side_failure, cuts_of, expect_spans_raw, expect_strings, field,
     harvest_spanset, locate, normalize, op_name, recorded_content, span_dict, str_field,
@@ -276,9 +277,9 @@ use crate::fields::{
 };
 use crate::ground::SetupStep;
 use crate::rig::Rig;
-use crate::outcome::{OpOutcome, Status};
+use crate::outcome::{Disagreement, OpOutcome, Status};
 use crate::shadow::{Shadow, ShadowLink};
-use crate::tum::{link_home_docid, parse_dotted, vspan};
+use crate::tum::{last_component, link_home_docid, parse_dotted, span_elem_width, VPoint, VRegion};
 
 // Creation: documents, chains, `setup` plans, open, versions, accounts.
 mod create;
@@ -304,7 +305,9 @@ use find::{h_endsets, h_find_documents, h_find_links};
 use follow::{h_follow_link, h_traverse};
 use link::h_create_link;
 use read::{h_contents, h_observe, h_vspanset};
-use write::{h_delete, h_insert, h_insert_loop, h_interior_typing, h_pivot_swap, h_vcopy};
+use write::{
+    h_delete, h_insert, h_insert_loop, h_interior_typing, h_pivot_swap, h_vcopy, Rearrangement,
+};
 
 pub struct Cx<'a> {
     pub rig: &'a mut Rig,
@@ -364,15 +367,16 @@ fn compared_nothing(out: &mut OpOutcome, op: &Value, reads: &[&str]) {
     }
 }
 
-/// Policy `joint-absence`: the golden recorded a FAILURE against a document
-/// reference that was never created in this scenario (green's OPEN validates
-/// nothing — A7 — so its scripts could aim ops at garbage docids and fail at
-/// first use). The reference has no α-image, so there is nothing to address
-/// on skep either: both systems refuse the object, compared as agreement.
-/// Peek only — α's never-bound finding is deliberately not emitted, because
-/// the absence IS the expected answer here, not a translation the harness
-/// needed and missed. Returns `true` when the outcome was written.
-fn joint_absence(cx: &Cx, out: &mut OpOutcome, xf: &Option<String>, docref: &str) -> bool {
+/// Policy `joint-absence`: the golden recorded a FAILURE (`xf`) against a
+/// document reference that was never created in this scenario (green's OPEN
+/// validates nothing — A7 — so its scripts could aim ops at garbage docids
+/// and fail at first use). The reference has no α-image, so there is
+/// nothing to address on skep either: both systems refuse the object,
+/// compared as agreement. Peek only — α's never-bound finding is
+/// deliberately not emitted, because the absence IS the expected answer
+/// here, not a translation the harness needed and missed. Returns `true`
+/// when the outcome was written.
+fn joint_absence(cx: &Cx, out: &mut OpOutcome, xf: Option<&str>, docref: &str) -> bool {
     if xf.is_none() || cx.shadow.knows(docref) || cx.alpha.peek_translate(docref).is_some() {
         return false;
     }
@@ -385,10 +389,6 @@ fn joint_absence(cx: &Cx, out: &mut OpOutcome, xf: &Option<String>, docref: &str
     true
 }
 
-fn vpos(sub: u64, ord: u64) -> VPos {
-    VPos { subspace: Nat::from(sub), ordinal: Nat::from(ord) }
-}
-
 /// skep gave the op's success answer, reconciled with the failure the golden
 /// recorded (`xf`, if any). `true` when the golden recorded success too and
 /// the caller goes on to compare; `false` when it recorded a failure, which
@@ -398,7 +398,8 @@ fn settle_accepted(out: &mut OpOutcome, xf: Option<String>) -> bool {
         None => true,
         Some(err) => {
             let expected = format!("failure: {err:?}");
-            out.disagree("expected-failure", expected, "skep accepted the operation".into());
+            let actual = "skep accepted the operation".to_string();
+            out.disagree("expected-failure", Disagreement { expected, actual });
             false
         }
     }
@@ -413,7 +414,10 @@ fn settle_rejected(out: &mut OpOutcome, xf: Option<String>, refused: String) {
             out.agree("expected-failure");
             out.add_note(format!("both sides failed (skep: {refused})"));
         }
-        None => out.disagree("rejection", "success (golden recorded no error)".into(), refused),
+        None => {
+            let expected = "success (golden recorded no error)".to_string();
+            out.disagree("rejection", Disagreement { expected, actual: refused });
+        }
     }
 }
 
@@ -424,7 +428,10 @@ fn settle_rejected(out: &mut OpOutcome, xf: Option<String>, refused: String) {
 fn settle_unaccepted(out: &mut OpOutcome, xf: Option<String>, r: &Response) {
     match r {
         Response::Rejected(_) => settle_rejected(out, xf, refusal(r)),
-        _ => out.disagree("response", "the op's success answer".into(), refusal(r)),
+        _ => {
+            let expected = "the op's success answer".to_string();
+            out.disagree("response", Disagreement { expected, actual: refusal(r) });
+        }
     }
 }
 
@@ -433,12 +440,12 @@ fn settle_unaccepted(out: &mut OpOutcome, xf: Option<String>, r: &Response) {
 /// `Agreed` always means "compared, and every comparison matched", and a
 /// part the recording names that could not be aimed at skep is never
 /// silently dropped.
-#[derive(Default)]
+#[derive(Debug, Default)]
 struct Tally {
     /// Parts compared, agreeing or not.
     compared: usize,
-    /// The disagreeing parts, (expected, actual) each.
-    differ: Vec<(String, String)>,
+    /// The disagreeing parts.
+    disagreements: Vec<Disagreement>,
     /// The parts that could not be aimed, each with its reason.
     unaimed: Vec<String>,
 }
@@ -450,18 +457,52 @@ impl Tally {
     }
 
     /// A part compared, and disagreeing.
-    fn differ(&mut self, expected: String, actual: String) {
+    fn differ(&mut self, d: Disagreement) {
         self.compared += 1;
-        self.differ.push((expected, actual));
+        self.disagreements.push(d);
     }
 
-    /// A part a comparator judged, each side of a disagreement labelled.
-    fn judge(&mut self, c: Comparison, expected_label: &str, actual_label: &str) {
+    /// A part a comparator judged, both sides of a disagreement labelled
+    /// with the part's `label`.
+    fn judge(&mut self, c: Comparison, label: &str) {
         match c {
             Ok(()) => self.agree(),
-            Err((e, a)) => {
-                self.differ(format!("{expected_label}{e}"), format!("{actual_label}{a}"))
+            Err(d) => self.differ(Disagreement {
+                expected: format!("{label}{}", d.expected),
+                actual: format!("{label}{}", d.actual),
+            }),
+        }
+    }
+
+    /// A part judged as an op of its own — an interior-typing step, a
+    /// traversal hop, one source of a per-source comparison — folded in as
+    /// one part: its disagreement's expected side labelled, its
+    /// inexpressibility unaimed, and its adaptations and note carried up to
+    /// `parent`, so an adjustment that made the part agree
+    /// ([`WIDTH_ADJUSTED`](crate::allowlist::WIDTH_ADJUSTED)) reaches the op
+    /// `Allowlist::classify` judges. A part that disagreed with no rendered
+    /// disagreement (a never-bound address) offers its note as skep's side.
+    fn absorb(&mut self, parent: &mut OpOutcome, part: OpOutcome, label: &str) {
+        parent.adaptations.extend(part.adaptations);
+        let mut note = part.note;
+        match (part.status, part.disagreement) {
+            (Status::Disagreed, Some(Disagreement { expected, actual })) => {
+                self.differ(Disagreement { expected: format!("{label}{expected}"), actual })
             }
+            (Status::Disagreed, None) => {
+                let actual = note.take().unwrap_or_default();
+                self.differ(Disagreement { expected: label.to_string(), actual })
+            }
+            (Status::Inexpressible, _) => {
+                let reason = note.take().unwrap_or_default();
+                self.unaimed(format!("{label}{reason}"))
+            }
+            (Status::Agreed, _) => self.agree(),
+            (Status::NotCompared | Status::Meta, _) => {}
+        }
+        // Evidence the part noted and the fold did not spend travels with it.
+        if let Some(n) = note {
+            parent.add_note(n);
         }
     }
 
@@ -475,12 +516,14 @@ impl Tally {
     /// part leaves the op inexpressible; else a comparison agrees; else
     /// nothing was compared and `out` is `NotCompared`. Notes already on
     /// `out` are kept.
-    fn settle(self, out: &mut OpOutcome, comparator: &str) {
+    fn settle(self, out: &mut OpOutcome, comparator: &'static str) {
         let unaimed =
             (!self.unaimed.is_empty()).then(|| format!("not aimed: {}", self.unaimed.join("; ")));
-        if !self.differ.is_empty() {
-            let (expected, actual): (Vec<String>, Vec<String>) = self.differ.into_iter().unzip();
-            out.disagree(comparator, expected.join(" | "), actual.join(" | "));
+        if !self.disagreements.is_empty() {
+            let (expected, actual): (Vec<String>, Vec<String>) =
+                self.disagreements.into_iter().map(|d| (d.expected, d.actual)).unzip();
+            let (expected, actual) = (expected.join(" | "), actual.join(" | "));
+            out.disagree(comparator, Disagreement { expected, actual });
             if let Some(u) = unaimed {
                 out.add_note(u);
             }
@@ -497,7 +540,13 @@ impl Tally {
     /// where nothing was compared and nothing failed to aim, the end is
     /// [`compared_nothing`]'s — a recorded answer the read could not reach
     /// leaves the op inexpressible.
-    fn settle_read(self, out: &mut OpOutcome, comparator: &str, op: &Value, reads: &[&str]) {
+    fn settle_read(
+        self,
+        out: &mut OpOutcome,
+        comparator: &'static str,
+        op: &Value,
+        reads: &[&str],
+    ) {
         if self.compared == 0 && self.unaimed.is_empty() {
             compared_nothing(out, op, reads);
         } else {
@@ -531,7 +580,7 @@ impl Cx<'_> {
             }
             DocAim::FirstTouch => {
                 let id = self.shadow.synthesize_docid();
-                match self.create_document(&id, None, true) {
+                match self.create_document(&id, None, Effect::Inferred) {
                     Response::AckAddr { .. } => {
                         out.adaptations.push("implied-create:first-touch".into());
                         Some(id)
@@ -548,14 +597,15 @@ impl Cx<'_> {
 
     /// Execute one reconstruction step (lead-in or expansion plan) through
     /// the world-change methods: inferred setup is golden-side by
-    /// construction, so it is mirrored whatever skep answers.
+    /// construction (`Effect::Inferred`), so it is mirrored whatever skep
+    /// answers.
     pub fn exec_setup_step(&mut self, s: &SetupStep) -> Result<(), String> {
         let refused = |what: String, r: &Response| format!("{what}: {}", refusal(r));
         match s {
             SetupStep::Insert { doc, bytes } => {
-                let at = self.shadow.text_len(doc) + 1;
-                match self.insert(doc, 1, at, bytes, true) {
-                    Err(g) => Err(format!("setup insert: {g} unbound")),
+                let at = VPoint::content(self.shadow.text_len(doc) + 1);
+                match self.insert(doc, at, bytes, Effect::Inferred) {
+                    Err(NeverBound(g)) => Err(format!("setup insert: {g} unbound")),
                     Ok(Response::AckAddr { .. }) => Ok(()),
                     Ok(r) => Err(refused(format!("setup insert into {doc}"), &r)),
                 }
@@ -565,9 +615,13 @@ impl Cx<'_> {
                     return Err("setup copy: empty span".into());
                 }
                 let at = self.shadow.text_len(doc) + 1;
-                let source = CopySource { doc: src.clone(), sub: 1, ord: *ord, width: *width };
-                match self.copy(doc, at, &[source], true) {
-                    Err(g) => Err(format!("setup copy: {g} unbound")),
+                let region = VPoint::content(*ord).region(*width);
+                let source = CopySource { doc: src.clone(), region };
+                match self.copy(doc, at, &[source], Effect::Inferred) {
+                    Err(
+                        CopyNeverBound::Source(NeverBound(g))
+                        | CopyNeverBound::Destination(NeverBound(g)),
+                    ) => Err(format!("setup copy: {g} unbound")),
                     Ok(Response::Ack { .. }) => Ok(()),
                     Ok(r) => Err(refused(format!("setup copy into {doc}"), &r)),
                 }
@@ -579,7 +633,9 @@ impl Cx<'_> {
                         let sd = cx
                             .skep_doc(doc)
                             .ok_or_else(|| format!("setup link: {doc} unbound"))?;
-                        let span = vspan(1, *ord, *w)
+                        let span = VPoint::content(*ord)
+                            .region(*w)
+                            .span()
                             .ok_or_else(|| "setup link: empty span".to_string())?;
                         specs.push(VSpec { source: sd, span });
                     }
@@ -600,8 +656,9 @@ impl Cx<'_> {
                 let link = golden
                     .as_ref()
                     .map(|g| ShadowLink { golden: g.clone(), from: from.clone(), to: to.clone() });
-                match self.make_link(&home_golden, [f, t, vec![ty]], link, None, true) {
-                    Err(h) => Err(format!("setup link: home {h} unbound")),
+                match self.make_link(&home_golden, [f, t, vec![ty]], link, None, Effect::Inferred)
+                {
+                    Err(NeverBound(h)) => Err(format!("setup link: home {h} unbound")),
                     Ok(Response::AckAddr { .. }) => Ok(()),
                     Ok(r) => Err(refused(format!("setup link in {home_golden}"), &r)),
                 }
@@ -638,10 +695,7 @@ impl Cx<'_> {
     /// document's extent with ⟨⟩ when it is empty (M6, ASN-0113), never a
     /// refusal; any answer that is not a span set is returned for the caller
     /// to settle.
-    fn skep_content_spans(
-        &mut self,
-        d: &skep_address::Address,
-    ) -> Result<Vec<Span>, Box<Response>> {
+    fn skep_content_spans(&self, d: &skep_address::Address) -> Result<Vec<Span>, Box<Response>> {
         let content = Nat::from(1u64);
         match self.rig.exec(Op::RetrieveDocVSpanSet { doc: d.clone() }) {
             Response::SpanSet { set, .. } => {
@@ -651,19 +705,15 @@ impl Cx<'_> {
         }
     }
 
-    /// V→I image of a set of golden QUERY spans in one doc (the sanctioned
-    /// V→I surface for building query endsets). Content-subspace spans are
+    /// V→I image of a set of golden QUERY regions in one doc (the sanctioned
+    /// V→I surface for building query endsets). Content-subspace regions are
     /// clamped to the doc's live extent first — udanax's sparse V tolerated
     /// recorded search spans wider than the content
     /// (find_links_homedocids_multiple queries width 25 over a 20-char doc)
     /// while skep's dense Image rejects them; clamping the QUERY (never a
     /// compared result) is policy `query-clamped-to-extent`, reported via
     /// the returned flag.
-    fn image_endset(
-        &mut self,
-        docid: &str,
-        spans: &[(u64, u64, u64)],
-    ) -> (Endset, Vec<String>, bool) {
+    fn image_endset(&mut self, docid: &str, regions: &[VRegion]) -> (Endset, Vec<String>, bool) {
         let mut notes = Vec::new();
         let mut clamped = false;
         let Some(d) = self.alpha.translate(docid) else {
@@ -671,26 +721,26 @@ impl Cx<'_> {
             return (Endset::from_spans(std::iter::empty()), notes, clamped);
         };
         let text_len = self.shadow.text_len(docid);
-        let region: Vec<skep_address::Span> = spans
+        let region: Vec<Span> = regions
             .iter()
-            .filter_map(|(s, o, w)| {
-                if *w == 0 {
+            .filter_map(|r| {
+                if r.width == 0 {
                     return None;
                 }
-                let (o, w) = if *s == 1 {
-                    if *o > text_len {
+                let r = if r.sub == 1 {
+                    if r.ord > text_len {
                         clamped = true;
                         return None;
                     }
-                    let end = (*o + *w - 1).min(text_len);
-                    if end < *o + *w - 1 {
+                    let end = (r.ord + r.width - 1).min(text_len);
+                    if end < r.ord + r.width - 1 {
                         clamped = true;
                     }
-                    (*o, end + 1 - *o)
+                    VRegion { width: end + 1 - r.ord, ..*r }
                 } else {
-                    (*o, *w)
+                    *r
                 };
-                vspan(*s, o, w)
+                r.span()
             })
             .collect();
         if region.is_empty() {
@@ -707,12 +757,12 @@ impl Cx<'_> {
         }
     }
 
-    /// The whole-content V→I image of one golden doc as
-    /// (I-prefix, I-ordinal, width, V-start) rows, V order — the raw
-    /// material for identity rendering and transcluded-region detection.
-    fn image_rows(&mut self, docid: &str) -> Vec<ImageRow> {
-        let n = self.shadow.text_len(docid);
-        let (Some(d), Some(span)) = (self.alpha.peek(docid), vspan(1, 1, n)) else {
+    /// The whole-content V→I image of one golden doc as rows in V order —
+    /// the raw material for identity rendering and transcluded-region
+    /// detection.
+    fn image_rows(&self, docid: &str) -> Vec<ImageRow> {
+        let whole = VPoint::content(1).region(self.shadow.text_len(docid));
+        let (Some(d), Some(span)) = (self.alpha.peek(docid), whole.span()) else {
             return Vec::new();
         };
         let Response::Runs { runs, .. } = self.rig.exec(Op::Image { d, region: vec![span] })
@@ -720,13 +770,12 @@ impl Cx<'_> {
             return Vec::new();
         };
         let mut rows = Vec::new();
-        let mut v = 1u64;
+        let mut v_ord = 1u64;
         for run in &runs {
-            let w: u64 = run.width().to_string().parse().unwrap_or(0);
-            if let Some((p, lo, rw)) = elem_range(&run.iextent()) {
-                rows.push((p, lo, rw, v));
+            if let Some(i) = elem_range(&run.iextent()) {
+                rows.push(ImageRow { i, v_ord });
             }
-            v += w;
+            v_ord += u64::try_from(run.width()).unwrap_or(0);
         }
         rows
     }
@@ -734,36 +783,55 @@ impl Cx<'_> {
     /// A golden doc's foreign-origin (transcluded) content regions, as
     /// golden (ordinal, width) V-ranges — a run whose I-prefix does not lie
     /// under the doc's own skep address arrived by COPY.
-    fn transcluded_regions_golden(&mut self, docid: &str) -> Vec<(u64, u64)> {
+    fn transcluded_regions_golden(&self, docid: &str) -> Vec<(u64, u64)> {
         let Some(own) = self.alpha.peek(docid) else { return Vec::new() };
-        let own_prefix = crate::tum::addr_str(&own);
         self.image_rows(docid)
             .into_iter()
-            .filter(|(p, _, _, _)| {
-                !(p.starts_with(&format!("{own_prefix}.")) || p == &own_prefix)
-            })
-            .map(|(_, _, w, v)| (v, w))
+            .filter(|row| !is_prefix(own.tumbler(), &row.i.prefix))
+            .map(|row| (row.v_ord, row.i.width))
             .collect()
     }
 }
 
-/// One row of a golden doc's V→I image: (I-prefix, I-ordinal, width,
-/// V-start), as `Cx::image_rows` lists them.
-type ImageRow = (String, u64, u64, u64);
+/// A contiguous element-level span as numbers: the I-prefix its elements
+/// share, the first element's final component under it, and how many
+/// elements — the shape `Run::iextent` and recorded content endset spans
+/// carry ([`elem_range`]).
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct ElemRange {
+    prefix: Tumbler,
+    lo: u64,
+    width: u64,
+}
 
-/// A contiguous element-level span as (prefix components, first ordinal,
-/// width) — sound exactly for the single-I-extent shape `Run::iextent` and
-/// recorded content endset spans carry. `None` for coarser spans.
-fn elem_range(s: &skep_address::Span) -> Option<(String, u64, u64)> {
-    let w = crate::tum::span_elem_width(s)?;
-    let st = s.start();
-    let n = st.len();
+impl ElemRange {
+    /// One past the last element's final component.
+    fn hi(&self) -> u64 {
+        self.lo + self.width
+    }
+}
+
+/// One row of a golden doc's V→I image, as `Cx::image_rows` lists them: an
+/// element range, and the V-ordinal its first element sits at.
+#[derive(Clone, Debug)]
+struct ImageRow {
+    i: ElemRange,
+    v_ord: u64,
+}
+
+/// `s` as an element range — sound exactly for the single-I-extent shape
+/// `Run::iextent` and recorded content endset spans carry. `None` for
+/// coarser spans.
+fn elem_range(s: &Span) -> Option<ElemRange> {
+    let width = span_elem_width(s)?;
+    let start = s.start();
+    let n = start.len();
     if n < 2 {
         return None;
     }
-    let last: u64 = st.get(n)?.to_string().parse().ok()?;
-    let prefix: Vec<String> = st.iter().take(n - 1).map(|c| c.to_string()).collect();
-    Some((prefix.join("."), last, w))
+    let lo = last_component(start)?;
+    let prefix = Tumbler::new(start.iter().take(n - 1).cloned()).ok()?;
+    Some(ElemRange { prefix, lo, width })
 }
 
 // ───────────────────── world changes: the shadow's one owner ─────────────────
@@ -771,34 +839,54 @@ fn elem_range(s: &skep_address::Span) -> Option<(String, u64, u64)> {
 // Every change the play pass makes to the golden-side world goes through
 // the methods below, and each follows one rule. The shadow follows the
 // RECORDING; α follows skep. A content write is mirrored into the shadow
-// first — when the recording says udanax made it (`recorded`: callers pass
-// `evidence::took_effect`, or `true` for the pre-pass's inferred setup) and
-// the shadow holds the document — and then skep is asked through α, so
-// neither skep's answer nor an α miss bends what the shadow holds. A
+// first — when its `Effect` reaches the shadow (callers pass `Effect::of`
+// the op, or `Effect::Inferred` for the pre-pass's setup) and the shadow
+// holds the document — and then skep is asked through α, so neither skep's
+// answer nor an α miss bends what the shadow holds; a golden reference with
+// no α-image comes back as `NeverBound`, and skep was asked nothing. A
 // CREATION's golden name enters the shadow, bound in α, only when skep made
-// it and udanax did too: every name the play pass resolves has an
-// α-image. A creation skep refuses — a version of a private source,
+// it and its effect reaches the shadow: every name the play pass resolves
+// has an α-image. A creation skep refuses — a version of a private source,
 // PUB-2.9 — therefore leaves its later name-references ungroundable, the
 // class rulings 20 and 20a freeze. `tests/it/tidy.rs` holds every other
 // play-pass file to changing the shadow's world through these methods.
 
+/// A golden reference α holds no image for: the request naming it was never
+/// sent to skep.
+#[derive(Debug)]
+struct NeverBound(String);
+
+/// Why a COPY was never sent: a source, or the destination, has no α-image.
+/// The sources are translated first, so a destination that is also a
+/// source reports as one.
+#[derive(Debug)]
+enum CopyNeverBound {
+    Source(NeverBound),
+    Destination(NeverBound),
+}
+
 impl Cx<'_> {
     /// Does a write into golden `doc` reach the shadow?
-    fn mirrors(&self, doc: &str, recorded: bool) -> bool {
-        recorded && self.shadow.knows(doc)
+    fn mirrors(&self, doc: &str, effect: Effect) -> bool {
+        effect.reaches_shadow() && self.shadow.knows(doc)
+    }
+
+    /// The skep image of golden `golden`, or the reference as never bound.
+    fn bound(&mut self, golden: &str) -> Result<skep_address::Address, NeverBound> {
+        self.alpha.translate(golden).ok_or_else(|| NeverBound(golden.to_string()))
     }
 
     /// CREATENEWDOCUMENT for golden `golden`, named `name` when the
     /// recording names it. The document enters the shadow, `golden` bound
-    /// in α, when skep made it and `recorded`.
+    /// in α, when skep made it and `effect` reaches the shadow.
     pub fn create_document(
         &mut self,
         golden: &str,
         name: Option<&str>,
-        recorded: bool,
+        effect: Effect,
     ) -> Response {
         let r = self.rig.create_private_document();
-        if let (true, Response::AckAddr { addr, .. }) = (recorded, &r) {
+        if let (true, Response::AckAddr { addr, .. }) = (effect.reaches_shadow(), &r) {
             self.alpha.bind(golden, addr);
             self.shadow.create_doc(golden, name);
         }
@@ -807,20 +895,20 @@ impl Cx<'_> {
 
     /// VERSION of golden `src`, recorded as golden `golden` when the
     /// recording kept the result. The version enters the shadow when skep
-    /// made it and `recorded`: `golden` binds in α, and each of `names` —
-    /// the op's own names for the new version — that is no address and
-    /// names no document yet comes to name it. `Err` names a source with no
-    /// α-image; skep was asked nothing.
+    /// made it and `effect` reaches the shadow: `golden` binds in α, and
+    /// each of `names` — the op's own names for the new version — that is
+    /// no address and names no document yet comes to name it.
     fn create_version(
         &mut self,
         src: &str,
         golden: Option<&str>,
         names: &[&str],
-        recorded: bool,
-    ) -> Result<Response, String> {
-        let d_src = self.alpha.translate(src).ok_or_else(|| src.to_string())?;
+        effect: Effect,
+    ) -> Result<Response, NeverBound> {
+        let d_src = self.bound(src)?;
         let r = self.rig.exec(Op::Version { d_src, published: None });
-        if let (true, Response::AckAddr { addr, .. }, Some(g)) = (recorded, &r, golden) {
+        let made = effect.reaches_shadow();
+        if let (true, Response::AckAddr { addr, .. }, Some(g)) = (made, &r, golden) {
             self.alpha.bind(g, addr);
             self.shadow.version(src, g);
             for n in names {
@@ -832,124 +920,123 @@ impl Cx<'_> {
         Ok(r)
     }
 
-    /// INSERT `bytes` at `(sub, ord)` of golden `doc`, a content-subspace
-    /// insert mirrored first. `Err` names a document with no α-image; skep
-    /// was asked nothing.
+    /// INSERT `bytes` at `at` in golden `doc`, a content-subspace insert
+    /// mirrored first.
     fn insert(
         &mut self,
         doc: &str,
-        sub: u64,
-        ord: u64,
+        at: VPoint,
         bytes: &[u8],
-        recorded: bool,
-    ) -> Result<Response, String> {
-        if sub == 1 && self.mirrors(doc, recorded) {
-            self.shadow.insert(doc, ord, bytes);
+        effect: Effect,
+    ) -> Result<Response, NeverBound> {
+        if at.sub == 1 && self.mirrors(doc, effect) {
+            self.shadow.insert(doc, at.ord, bytes);
         }
-        let d = self.alpha.translate(doc).ok_or_else(|| doc.to_string())?;
+        let d = self.bound(doc)?;
         let values: Vec<Val> = bytes.iter().map(|b| Val::new(vec![*b])).collect();
         Ok(self.rig.exec(Op::Insert {
             doc: d,
-            at: vpos(sub, ord),
+            at: at.vpos(),
             values,
             deposit: Deposit::Undeclared,
         }))
     }
 
     /// COPY the golden `sources` to content ordinal `ord` of golden `doc`,
-    /// the copied content-subspace bytes mirrored first. `Err` names a
-    /// document with no α-image, the sources' ahead of the destination's;
-    /// skep was asked nothing.
+    /// the copied content-subspace bytes mirrored first.
     fn copy(
         &mut self,
         doc: &str,
         ord: u64,
         sources: &[CopySource],
-        recorded: bool,
-    ) -> Result<Response, String> {
-        if self.mirrors(doc, recorded) {
+        effect: Effect,
+    ) -> Result<Response, CopyNeverBound> {
+        if self.mirrors(doc, effect) {
             let bytes: Vec<u8> = sources
                 .iter()
-                .filter(|s| s.sub == 1)
-                .flat_map(|s| self.shadow.slice(&s.doc, s.ord, s.width))
+                .filter(|s| s.region.sub == 1)
+                .flat_map(|s| self.shadow.slice(&s.doc, s.region.ord, s.region.width))
                 .collect();
             self.shadow.insert(doc, ord, &bytes);
         }
         let mut specs = Vec::new();
         for s in sources {
-            let source = self.alpha.translate(&s.doc).ok_or_else(|| s.doc.clone())?;
-            if let Some(span) = vspan(s.sub, s.ord, s.width) {
+            let source = self.bound(&s.doc).map_err(CopyNeverBound::Source)?;
+            if let Some(span) = s.region.span() {
                 specs.push(VSpec { source, span });
             }
         }
-        let d = self.alpha.translate(doc).ok_or_else(|| doc.to_string())?;
-        Ok(self.rig.exec(Op::Copy { doc: d, at: vpos(1, ord), specs }))
+        let d = self.bound(doc).map_err(CopyNeverBound::Destination)?;
+        Ok(self.rig.exec(Op::Copy { doc: d, at: VPoint::content(ord).vpos(), specs }))
     }
 
-    /// DELETE `width` positions at `(sub, ord)` of golden `doc`, a
-    /// content-subspace delete mirrored first. Just before skep is asked,
-    /// the doomed region's I-extents are imaged — while the arrangement
-    /// still speaks for them — into the scenario's deletion history
-    /// (ruling 10); an image failure is swallowed, and a later I-coverage
-    /// search over the missing record fails to ground, surfacing as its own
-    /// honest outcome. `Err` names a document with no α-image; skep was
-    /// asked nothing.
+    /// DELETE `region` of golden `doc`, a content-subspace delete mirrored
+    /// first. Just before skep is asked, the doomed region's I-extents are
+    /// imaged — while the arrangement still speaks for them — into the
+    /// scenario's deletion history (ruling 10); an image failure is
+    /// swallowed, and a later I-coverage search over the missing record
+    /// fails to ground, surfacing as its own honest outcome.
     fn delete(
         &mut self,
         doc: &str,
-        sub: u64,
-        ord: u64,
-        width: u64,
-        recorded: bool,
-    ) -> Result<Response, String> {
-        let removed = if sub == 1 { self.shadow.slice(doc, ord, width) } else { Vec::new() };
-        if sub == 1 && self.mirrors(doc, recorded) {
-            self.shadow.delete(doc, ord, width);
+        region: VRegion,
+        effect: Effect,
+    ) -> Result<Response, NeverBound> {
+        let content = region.sub == 1;
+        let removed =
+            if content { self.shadow.slice(doc, region.ord, region.width) } else { Vec::new() };
+        if content && self.mirrors(doc, effect) {
+            self.shadow.delete(doc, region.ord, region.width);
         }
-        let d = self.alpha.translate(doc).ok_or_else(|| doc.to_string())?;
-        if let Some(span) = vspan(1, ord, removed.len() as u64) {
+        let d = self.bound(doc)?;
+        let imaged = VRegion { width: removed.len() as u64, ..region };
+        if let Some(span) = imaged.span() {
             if let Response::Runs { runs, .. } =
                 self.rig.exec(Op::Image { d: d.clone(), region: vec![span] })
             {
                 self.deletions.record(doc, removed, runs.iter().map(Run::iextent).collect());
             }
         }
-        Ok(self.rig.exec(Op::Delete { doc: d, p: vpos(sub, ord), width: Nat::from(width) }))
+        let p = region.at().vpos();
+        Ok(self.rig.exec(Op::Delete { doc: d, p, width: Nat::from(region.width) }))
     }
 
     /// REARRANGE golden `doc` at content `cuts` — three cuts pivot, four
-    /// swap — mirrored first. `Err` names a document with no α-image; skep
-    /// was asked nothing.
-    fn rearrange(&mut self, doc: &str, cuts: &[u64], recorded: bool) -> Result<Response, String> {
-        if self.mirrors(doc, recorded) {
+    /// swap — mirrored first.
+    fn rearrange(
+        &mut self,
+        doc: &str,
+        cuts: &[u64],
+        effect: Effect,
+    ) -> Result<Response, NeverBound> {
+        if self.mirrors(doc, effect) {
             match *cuts {
                 [a, b, c] => self.shadow.pivot(doc, a, b, c),
                 [s1, e1, s2, e2] => self.shadow.swap(doc, s1, e1, s2, e2),
                 _ => {}
             }
         }
-        let d = self.alpha.translate(doc).ok_or_else(|| doc.to_string())?;
-        let cuts = cuts.iter().map(|&c| vpos(1, c)).collect();
+        let d = self.bound(doc)?;
+        let cuts = cuts.iter().map(|&c| VPoint::content(c).vpos()).collect();
         Ok(self.rig.exec(Op::Rearrange { doc: d, cuts }))
     }
 
     /// MAKELINK homed in golden `home` over endsets already resolved
     /// through α, in M7's slot order: FROM, TO, TYPE. When skep made the
-    /// link and `recorded`, it enters the shadow: seated in its home, the
-    /// register moved there; with the recorded `link`, its golden id bound
-    /// in α, made the last link and recorded for traversal with the
-    /// golden content endsets it was grounded with; and the recorded arrow
-    /// edge, `(from-name, to-name, link id)`. `Err` names a home with no
-    /// α-image; skep was asked nothing.
+    /// link and `effect` reaches the shadow, it enters the shadow: seated
+    /// in its home, the register moved there; with the recorded `link`, its
+    /// golden id bound in α, made the last link and recorded for traversal
+    /// with the golden content endsets it was grounded with; and the
+    /// recorded arrow edge, `(from-name, to-name, link id)`.
     fn make_link(
         &mut self,
         home: &str,
         slots: [Vec<VSpec>; 3],
         link: Option<ShadowLink>,
         arrow: Option<(String, String, String)>,
-        recorded: bool,
-    ) -> Result<Response, String> {
-        let h = self.alpha.translate(home).ok_or_else(|| home.to_string())?;
+        effect: Effect,
+    ) -> Result<Response, NeverBound> {
+        let h = self.bound(home)?;
         let [from, to, ty] = slots;
         let r = self.rig.exec(Op::MakeLink {
             home: h,
@@ -958,7 +1045,7 @@ impl Cx<'_> {
             ty: SlotArg::Resolve(ty),
             replaces: None,
         });
-        if let (true, Response::AckAddr { addr, .. }) = (recorded, &r) {
+        if let (true, Response::AckAddr { addr, .. }) = (effect.reaches_shadow(), &r) {
             self.shadow.seat_link(home);
             self.shadow.set_current(home);
             if let Some(l) = link {
@@ -984,7 +1071,7 @@ fn create_one(
     cx: &mut Cx,
     id: &str,
     name: Option<&str>,
-    recorded: bool,
+    effect: Effect,
 ) -> Result<(), Box<Response>> {
     if cx.shadow.knows(id) {
         if let Some(n) = name {
@@ -993,7 +1080,7 @@ fn create_one(
         cx.shadow.set_current(id);
         return Ok(());
     }
-    match cx.create_document(id, name, recorded) {
+    match cx.create_document(id, name, effect) {
         Response::AckAddr { .. } => Ok(()),
         r => Err(Box::new(r)),
     }
@@ -1005,14 +1092,15 @@ fn create_one(
 /// keeps following the reconstruction. Returns the first failure for the
 /// caller to report ([`plan_failed`]); `None` when every step executed.
 fn run_plan(cx: &mut Cx, index: usize, out: &mut OpOutcome) -> Option<String> {
-    let plan = cx.plans.get(&index).cloned().unwrap_or_default();
+    let plans = cx.plans;
+    let plan = plans.get(&index).map_or(&[][..], Vec::as_slice);
     out.adaptations.push(format!("expansion-plan:{}", plan.len()));
     let mut first_failure: Option<String> = None;
-    for step in &plan {
+    for step in plan {
         // Copies/inserts target docs the plan may create implicitly.
         if let SetupStep::Copy { doc, .. } | SetupStep::Insert { doc, .. } = step {
             if !cx.shadow.knows(doc) {
-                if let Err(r) = create_one(cx, doc, None, true) {
+                if let Err(r) = create_one(cx, doc, None, Effect::Inferred) {
                     first_failure.get_or_insert(format!("create {doc}: {}", refusal(&r)));
                 }
             }
@@ -1026,18 +1114,19 @@ fn run_plan(cx: &mut Cx, index: usize, out: &mut OpOutcome) -> Option<String> {
 
 /// A reconstructed plan that did not execute is the op's disagreement.
 fn plan_failed(out: &mut OpOutcome, failure: String) {
-    out.disagree("expansion-plan", "reconstructed setup executes".into(), failure);
+    let expected = "reconstructed setup executes".to_string();
+    out.disagree("expansion-plan", Disagreement { expected, actual: failure });
 }
 
 // ────────────────────────────── endset sides ───────────────────────────────
 
-/// One endset side resolved to golden (doc, spans) pairs.
+/// One endset side resolved to golden (doc, regions) pairs.
 fn side_specs(cx: &mut Cx, out: &mut OpOutcome, v: &Value) -> Result<Vec<DocSpans>, String> {
     if let Some(arr) = v.as_array() {
         let mut sides = Vec::new();
         for item in arr {
-            if let Some((docid, spans)) = vspec_dict(item) {
-                sides.push((docid, spans));
+            if let Some((docid, regions)) = vspec_dict(item) {
+                sides.push((docid, regions));
             } else if let Some(s) = item.as_str() {
                 sides.extend(side_specs(cx, out, &Value::String(s.to_string()))?);
             } else {
@@ -1056,22 +1145,24 @@ fn side_specs(cx: &mut Cx, out: &mut OpOutcome, v: &Value) -> Result<Vec<DocSpan
             return Err(format!("doc {s} is empty"));
         }
         out.adaptations.push("whole-extent".into());
-        return Ok(vec![(doc, vec![(1, 1, n)])]);
+        return Ok(vec![(doc, vec![VPoint::content(1).region(n)])]);
     }
     match locate(cx.shadow, None, s) {
         Some(l) => {
             out.adaptations.push(l.how.tag().into());
-            Ok(vec![(l.doc, vec![(1, l.ord, l.width)])])
+            let region = l.region();
+            Ok(vec![(l.doc, vec![region])])
         }
         None => Err(format!("endset text {s:?} not found")),
     }
 }
 
-/// One recorded endset span: a normal (subspace, ordinal, width) span, or
-/// the udanax type-marker local address `1.0.2.X…` (client.py's LINK_TYPES
-/// encoding — 4-plus components that are not a V-position).
+/// One recorded endset span: a normal V-region, or the udanax type-marker
+/// local address `1.0.2.X…` (client.py's LINK_TYPES encoding — 4-plus
+/// components that are not a V-position).
+#[derive(Debug)]
 enum SetSpan {
-    Plain(u64, u64, u64),
+    Plain(VRegion),
     Marker(Vec<u64>),
 }
 
@@ -1098,8 +1189,8 @@ fn parse_set_spans(v: &Value) -> Result<Vec<(String, Vec<SetSpan>)>, String> {
         };
         let mut spans = Vec::new();
         for sp in span_values {
-            if let Some((s, ord, w)) = span_dict(sp) {
-                spans.push(SetSpan::Plain(s, ord, w));
+            if let Some(region) = span_dict(sp) {
+                spans.push(SetSpan::Plain(region));
                 continue;
             }
             let start = sp
@@ -1132,7 +1223,7 @@ fn marker_type_name(comps: &[u64]) -> Option<&'static str> {
 /// What kind of probe an op's extra fields represent — the key sets differ
 /// because a WRITE op's `text`/`content` fields are its ARGUMENTS, never a
 /// post-state expectation.
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Probe {
     /// Observation bundle (initial_state, after_first_insert…): the reply
     /// a read's recording answers with (`fields::recorded_content`). A
@@ -1178,11 +1269,17 @@ fn probe_state(
                     if c.is_err() && collapsed_subspace_shape(&spans) {
                         out.note = Some(COLLAPSED_SUBSPACE_ANALYSIS.to_string());
                     }
-                    tally.judge(c, "vspanset ", "");
+                    tally.judge(c, "vspanset ");
                 }
-                r => tally.differ("vspanset".into(), refusal(&r)),
+                r => {
+                    let actual = refusal(&r);
+                    tally.differ(Disagreement { expected: "vspanset".into(), actual })
+                }
             },
-            None => tally.differ(format!("{key} of {target}"), format!("{target} never bound")),
+            None => tally.differ(Disagreement {
+                expected: format!("{key} of {target}"),
+                actual: format!("{target} never bound"),
+            }),
         }
     }
 
@@ -1201,10 +1298,10 @@ fn probe_state(
     if let Some(strings) = strings {
         if as_text(&strings).is_some() {
             match cx.read_content(doc) {
-                Ok(items) => {
-                    tally.judge(compare_content(&strings, &items, cx.alpha), "content ", "")
+                Ok(items) => tally.judge(compare_content(&strings, &items, cx.alpha), "content "),
+                Err(code) => {
+                    tally.differ(Disagreement { expected: "content".into(), actual: code })
                 }
-                Err(code) => tally.differ("content".into(), code),
             }
         } else {
             set_aside.extend(reply_key);
@@ -1237,7 +1334,7 @@ pub fn run_op(cx: &mut Cx, index: usize, op: &Value, adjustments: &Adjustments) 
                 && o.keys().all(|k| matches!(k.as_str(), "note" | "comment" | "description"))
         });
         if annotation_only {
-            out.verb = Verb::Meta.name().to_string();
+            out.verb = Verb::Meta.name();
             out.status = Status::Meta;
             out.note = str_field(op, &["note", "comment", "description"]).map(str::to_string);
             return out;
@@ -1274,7 +1371,7 @@ pub fn run_op(cx: &mut Cx, index: usize, op: &Value, adjustments: &Adjustments) 
         inexpressible(&mut out, format!("op `{name}` (fields {keys:?}) has no canonical verb"));
         return out;
     };
-    out.verb = verb.name().to_string();
+    out.verb = verb.name();
     // Multi-session routing: an op carrying a `session` label executes under
     // that label's account session (policy `session-route`). `account` binds
     // labels itself and `connect`/meta execute nothing, so they skip routing;
@@ -1290,7 +1387,8 @@ pub fn run_op(cx: &mut Cx, index: usize, op: &Value, adjustments: &Adjustments) 
                     }
                 }
                 Err(e) => {
-                    out.disagree("session", format!("op executes under session {sess}"), e);
+                    let expected = format!("op executes under session {sess}");
+                    out.disagree("session", Disagreement { expected, actual: e });
                     return out;
                 }
             }
@@ -1311,17 +1409,18 @@ pub fn run_op(cx: &mut Cx, index: usize, op: &Value, adjustments: &Adjustments) 
         Verb::Insert => h_insert(cx, index, op, &mut out, adjustments),
         Verb::InsertLoop => h_insert_loop(cx, op, &mut out, adjustments),
         Verb::InteriorTyping => h_interior_typing(cx, op, &mut out, adjustments),
-        Verb::Delete => h_delete(cx, index, op, &mut out, adjustments, false),
-        Verb::DeleteAll => h_delete(cx, index, op, &mut out, adjustments, true),
+        Verb::Delete | Verb::DeleteAll => h_delete(cx, index, op, &mut out, adjustments, verb),
         Verb::Vcopy => h_vcopy(cx, index, op, &mut out, adjustments),
-        Verb::Pivot => h_pivot_swap(cx, op, &mut out, true),
-        Verb::Swap => h_pivot_swap(cx, op, &mut out, false),
+        Verb::Pivot => h_pivot_swap(cx, op, &mut out, Rearrangement::Pivot),
+        Verb::Swap => h_pivot_swap(cx, op, &mut out, Rearrangement::Swap),
         Verb::Rearrange => {
             let n = cuts_of(op).len();
-            match n {
-                3 => h_pivot_swap(cx, op, &mut out, true),
-                4 => h_pivot_swap(cx, op, &mut out, false),
-                k => inexpressible(&mut out, format!("rearrange needs 3 or 4 cuts, could derive {k}")),
+            match Rearrangement::with_cuts(n) {
+                Some(shape) => h_pivot_swap(cx, op, &mut out, shape),
+                None => inexpressible(
+                    &mut out,
+                    format!("rearrange needs 3 or 4 cuts, could derive {n}"),
+                ),
             }
         }
         Verb::CreateVersion => h_create_version(cx, op, &mut out),
@@ -1330,9 +1429,10 @@ pub fn run_op(cx: &mut Cx, index: usize, op: &Value, adjustments: &Adjustments) 
         Verb::Traverse => h_traverse(cx, op, &mut out, adjustments),
         Verb::FindLinks => h_find_links(cx, op, &mut out, adjustments),
         Verb::FindDocuments => h_find_documents(cx, op, &mut out),
-        Verb::RetrieveContents => h_contents(cx, index, op, &mut out, &name),
-        Verb::RetrieveVspan => h_vspanset(cx, op, &mut out, adjustments, false),
-        Verb::RetrieveVspanset => h_vspanset(cx, op, &mut out, adjustments, true),
+        Verb::RetrieveContents => h_contents(cx, index, op, &mut out),
+        Verb::RetrieveVspan | Verb::RetrieveVspanset => {
+            h_vspanset(cx, op, &mut out, adjustments, verb)
+        }
         Verb::RetrieveEndsets => h_endsets(cx, op, &mut out),
         Verb::CompareVersions => h_compare(cx, op, &mut out),
         Verb::Account => h_account(cx, op, &mut out),
@@ -1354,6 +1454,7 @@ mod tests {
     use skep_kernel::Seq;
 
     use super::*;
+    use crate::allowlist::WIDTH_ADJUSTED;
 
     fn settled(tally: Tally) -> OpOutcome {
         let mut out = OpOutcome::new(0, "op");
@@ -1363,8 +1464,8 @@ mod tests {
 
     /// `Agreed` means compared, and every comparison matched: nothing
     /// compared is not compared; a part that could not be aimed leaves the
-    /// op inexpressible; a disagreement wins, the unaimed parts noted
-    /// beside it.
+    /// op inexpressible; a disagreement wins, labelled on both sides, the
+    /// unaimed parts noted beside it.
     #[test]
     fn a_tally_agrees_only_over_comparisons() {
         assert_eq!(settled(Tally::default()).status, Status::NotCompared);
@@ -1380,12 +1481,47 @@ mod tests {
 
         let mut differing = Tally::default();
         differing.unaimed("a part".into());
-        differing.judge(Err(("want".into(), "got".into())), "e: ", "a: ");
+        let got = Disagreement { expected: "want".into(), actual: "got".into() };
+        differing.judge(Err(got), "part: ");
         let out = settled(differing);
         assert_eq!(out.status, Status::Disagreed);
-        assert_eq!(out.expected.as_deref(), Some("e: want"));
-        assert_eq!(out.actual.as_deref(), Some("a: got"));
+        let labelled = Disagreement { expected: "part: want".into(), actual: "part: got".into() };
+        assert_eq!(out.disagreement, Some(labelled));
         assert_eq!(out.note.as_deref(), Some("not aimed: a part"));
+    }
+
+    /// A part judged as an op of its own folds in as one part and carries
+    /// what it recorded up to its op: an adjustment that made it agree
+    /// leaves its tag where `Allowlist::classify` looks, and its note
+    /// survives; a disagreeing part's expected side is labelled; an
+    /// inexpressible part is unaimed under its label.
+    #[test]
+    fn an_absorbed_part_carries_its_adjustment_and_note_up() {
+        let mut step = OpOutcome::new(0, "interior_typing");
+        step.agree("state-probe");
+        step.adaptations.push(WIDTH_ADJUSTED.into());
+        step.add_note("step note".into());
+        let mut parent = OpOutcome::new(0, "interior_typing");
+        let mut tally = Tally::default();
+        tally.absorb(&mut parent, step, "step 'X': ");
+        tally.settle(&mut parent, "state-probe");
+        assert_eq!(parent.status, Status::Agreed);
+        assert_eq!(parent.adaptations, [WIDTH_ADJUSTED]);
+        assert_eq!(parent.note.as_deref(), Some("step note"));
+
+        let mut hop = OpOutcome::new(0, "traverse");
+        hop.disagree("projection", Disagreement { expected: "want".into(), actual: "got".into() });
+        let mut lost = OpOutcome::new(0, "traverse");
+        lost.status = Status::Inexpressible;
+        lost.add_note("no shape".into());
+        let mut parent = OpOutcome::new(0, "traverse");
+        let mut tally = Tally::default();
+        tally.absorb(&mut parent, hop, "1.1: ");
+        tally.absorb(&mut parent, lost, "1.2: ");
+        tally.settle(&mut parent, "traversal");
+        let labelled = Disagreement { expected: "1.1: want".into(), actual: "got".into() };
+        assert_eq!(parent.disagreement, Some(labelled));
+        assert_eq!(parent.note.as_deref(), Some("not aimed: 1.2: no shape"));
     }
 
     /// A read that compared nothing is `NotCompared` only when its recording
@@ -1416,10 +1552,11 @@ mod tests {
     #[test]
     fn only_a_refusal_can_meet_a_recorded_failure() {
         let failed = || Some("request failed (?)".to_string());
+        let actual = |out: OpOutcome| out.disagreement.map(|d| d.actual);
         let mut out = OpOutcome::new(0, "insert");
         settle_unaccepted(&mut out, failed(), &Response::Ack { at: Seq(1) });
         assert_eq!(out.status, Status::Disagreed);
-        assert_eq!(out.actual.as_deref(), Some("unexpected response shape"));
+        assert_eq!(actual(out).as_deref(), Some("unexpected response shape"));
 
         let rejected = Response::Rejected(Rejection::classified(
             OpKind::Insert,
@@ -1432,6 +1569,15 @@ mod tests {
         let mut out = OpOutcome::new(0, "insert");
         settle_unaccepted(&mut out, None, &rejected);
         assert_eq!(out.status, Status::Disagreed);
-        assert_eq!(out.actual.as_deref(), Some("Rejected(OutOfBounds)"));
+        assert_eq!(actual(out).as_deref(), Some("Rejected(OutOfBounds)"));
+    }
+
+    /// A rearrangement's shape is its cut count, both ways.
+    #[test]
+    fn a_rearrangement_is_named_by_its_cut_count() {
+        for shape in [Rearrangement::Pivot, Rearrangement::Swap] {
+            assert_eq!(Rearrangement::with_cuts(shape.cuts()), Some(shape));
+        }
+        assert_eq!(Rearrangement::with_cuts(2), None);
     }
 }

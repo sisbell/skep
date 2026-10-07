@@ -47,7 +47,7 @@ fn insert(doc: &Address, bytes: Vec<u8>) -> Op {
 #[test]
 fn the_insert_arms_and_the_owners_shot_over_the_genesis_world() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let gate = MediaGate::open_with(dir.path(), crate::media::MediaOptions::default()).expect("the store opens");
+    let gate = MediaGate::open_with(dir.path(), crate::MediaOptions::default()).expect("the store opens");
     let engine = skep_engine::Engine::open(KernelConfig {
         durability: Durability::InMemory,
         checkpoint: CheckpointPolicy::Manual,
@@ -82,7 +82,7 @@ fn the_insert_arms_and_the_owners_shot_over_the_genesis_world() {
         Some(MediaRefusal::IndexRebuilding)
     );
     assert_eq!(MediaRefusal::IndexRebuilding.disposition(), Disposition::Retry);
-    gate.index().complete(super::super::index::Rebuild {
+    gate.index().complete(crate::index::Rebuild {
         values: 0,
         cells: 0,
         halts: 0,
@@ -110,8 +110,7 @@ fn the_insert_arms_and_the_owners_shot_over_the_genesis_world() {
     // THE BLIND KIND's column: admitted into a draft with no store
     // consulted, `published_target` into H, the halt on its malformed body.
     let blind =
-        super::super::blind::encode(&super::super::blind::BlindCell { commitment: [0xcd; 32] })
-            .into_bytes();
+        crate::blind::encode(&crate::blind::BlindCell { commitment: [0xcd; 32] }).into_bytes();
     let mut blind_sized = blind.clone();
     blind_sized.splice(blind.len() - 1.., br#","size":5}"#.iter().copied());
     assert_eq!(

@@ -15,7 +15,7 @@
 //! own into, never installing a copy in its place — THE COMPOSITION CLAUSE,
 //! which holds by construction because an entry is IDEMPOTENT PER CELL
 //! ADDRESS: a cell is permanent, so an entry made twice is made once.
-//! THE READINESS ([`CellIndex::is_ready`]) flips when that walk completes,
+//! THE READINESS (`CellIndex::is_ready`) flips when that walk completes,
 //! and until then the index's three readers alone — the PUT's creation and
 //! resume, the pruner's pass, the deposit read's base — refuse with one
 //! retry-class token (ms5-R, the narrow reading: every other request is
@@ -60,20 +60,19 @@ use skep_address::{
     Tumbler,
 };
 use skep_arrangement::{trunk_of, MAX_REINSERTED_VALUES};
-use skep_content::HasContent;
-use skep_engine::{Engine, World};
-use skep_kernel::Snapshot;
-use skep_namespace::{HasM3, PrincipalId};
+use skep_febe::FebeWorld;
+use skep_kernel::{Kernel, Snapshot};
+use skep_namespace::PrincipalId;
 use skep_util::json::hex_string;
 use skep_util::notice;
 
-use super::cell::{self, names_kind_by_prefix, Cell, DESIGNATION};
+use crate::cell::{self, names_kind_by_prefix, Cell, DESIGNATION};
 
 /// A hash as every sidecar keys it: its function's designation and its hex.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
-pub(crate) struct HashKey {
-    pub designation: String,
-    pub hex: String,
+struct HashKey {
+    designation: String,
+    hex: String,
 }
 
 impl HashKey {
@@ -96,7 +95,8 @@ struct Account {
 
 /// A HALT MARK: a value at `at` naming the kind under no pinned schema.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct HaltMark {
+pub struct HaltMark {
+    /// The value's address.
     pub at: Address,
     /// The kind the value names.
     pub kind: String,
@@ -109,8 +109,11 @@ pub(crate) struct HaltMark {
 /// counts it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Reference {
+    /// The hash function's designation, as the sidecar key spells it.
     pub designation: String,
+    /// The hash, 64 lowercase hex characters.
     pub hex: String,
+    /// The size the cells name the hash at — the largest any names.
     pub size: u64,
     /// The cells naming the hash, by address, in address order.
     pub cells: Vec<Tumbler>,
@@ -152,7 +155,7 @@ pub struct Rebuild {
 }
 
 /// The index.
-pub(crate) struct CellIndex {
+pub struct CellIndex {
     entries: RwLock<Entries>,
     ready: AtomicBool,
     rebuild: Mutex<Option<Rebuild>>,
@@ -160,7 +163,7 @@ pub(crate) struct CellIndex {
 
 /// What the one entry path did with a value past the prefix test.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum Entered {
+enum Entered {
     Cell,
     Halt,
     Nothing,
@@ -168,7 +171,7 @@ pub(crate) enum Entered {
 
 impl CellIndex {
     /// An empty index, NOT READY: the walk makes it ready.
-    pub(crate) fn new() -> CellIndex {
+    pub fn new() -> CellIndex {
         CellIndex {
             entries: RwLock::new(Entries::default()),
             ready: AtomicBool::new(false),
@@ -185,7 +188,8 @@ impl CellIndex {
     /// The walk's report, once it has completed — the open-cost measure's
     /// read, a suite's.
     #[cfg(any(test, feature = "test-hooks"))]
-    pub(crate) fn rebuild_report(&self) -> Option<Rebuild> {
+    #[doc(hidden)]
+    pub fn rebuild_report(&self) -> Option<Rebuild> {
         self.rebuild.lock().clone()
     }
 
@@ -238,7 +242,7 @@ impl CellIndex {
     }
 
     /// ENTER A HALT MARK at `at`. Idempotent per address. `true` where new.
-    pub(crate) fn halt(&self, at: &Address, fault: &str) -> bool {
+    fn halt(&self, at: &Address, fault: &str) -> bool {
         let mut entries = self.entries.write();
         if entries.halts.contains_key(at.tumbler()) {
             return false;
@@ -267,13 +271,15 @@ impl CellIndex {
     }
 
     /// Whether ANY cell names `<designation>/<hex>` — the pruner's reference
-    /// test, whose null is a permission.
-    pub(crate) fn referenced(&self, designation: &str, hex: &str) -> bool {
+    /// test, whose null is a permission; the pull's test of the file it is
+    /// handed.
+    pub fn referenced(&self, designation: &str, hex: &str) -> bool {
         self.entries.read().by_hash.contains_key(&HashKey::named(designation, hex))
     }
 
-    /// THE BASE of `owner`'s account: the sum of its distinct hashes' sizes.
-    pub(crate) fn base(&self, owner: PrincipalId) -> u64 {
+    /// THE BASE of `owner`'s account: the sum of its distinct hashes' sizes
+    /// — the deposit read's first figure.
+    pub fn base(&self, owner: PrincipalId) -> u64 {
         self.entries.read().by_account.get(&owner).map_or(0, |a| a.base)
     }
 
@@ -291,14 +297,15 @@ impl CellIndex {
 
     /// The counts: cells, distinct hashes, halt marks — a suite's read.
     #[cfg(any(test, feature = "test-hooks"))]
-    pub(crate) fn counts(&self) -> (usize, usize, usize) {
+    #[doc(hidden)]
+    pub fn counts(&self) -> (usize, usize, usize) {
         let e = self.entries.read();
         (e.cells.len(), e.by_hash.len(), e.halts.len())
     }
 
     /// EVERY REFERENCE — the inventory's read: per hash, the cells naming
     /// it and the size they name, in hash order.
-    pub(crate) fn references(&self) -> Vec<Reference> {
+    pub fn references(&self) -> Vec<Reference> {
         let e = self.entries.read();
         e.by_hash
             .iter()
@@ -313,12 +320,12 @@ impl CellIndex {
 
     /// EVERY ACCOUNT's BASE — the inventory's read: the principal seated at
     /// the account and its base, in principal order.
-    pub(crate) fn accounts(&self) -> Vec<(PrincipalId, u64)> {
+    pub fn accounts(&self) -> Vec<(PrincipalId, u64)> {
         self.entries.read().by_account.iter().map(|(p, a)| (*p, a.base)).collect()
     }
 
     /// EVERY HALT MARK standing, by address — the inventory's read.
-    pub(crate) fn halts(&self) -> Vec<HaltMark> {
+    pub fn halts(&self) -> Vec<HaltMark> {
         self.entries.read().halts.values().cloned().collect()
     }
 
@@ -329,8 +336,10 @@ impl CellIndex {
     /// cap that opens as the picture kind among them, since the cap bounds
     /// the parse and never the classification; a value the parser reads as
     /// no cell of the kind — malformed past the prefix, or past the cap and
-    /// opening as no kind — is nothing, as it is to the door.
-    pub(crate) fn enter_value(&self, world: &World, at: &Address, bytes: &[u8]) -> Entered {
+    /// opening as no kind — is nothing, as it is to the door. Generic over
+    /// the world M10 reads ([`FebeWorld`]), as every entry and the walk are:
+    /// the daemon instantiates them at its `World`.
+    fn enter_value<W: FebeWorld>(&self, world: &W, at: &Address, bytes: &[u8]) -> Entered {
         match cell::parse(bytes) {
             Ok(cell) => {
                 let owner = document_of(at)
@@ -351,7 +360,7 @@ impl CellIndex {
     /// (the ack's address, the first minted) and the next ones, I-adjacent
     /// under the named document's content chain — for the value indices
     /// `naming` the prefix test admitted ahead of the commit.
-    pub(crate) fn enter_insert(&self, world: &World, start: &Address, naming: &[usize]) {
+    pub fn enter_insert<W: FebeWorld>(&self, world: &W, start: &Address, naming: &[usize]) {
         let content = world.content();
         for &i in naming {
             let Ok(at) = validate(shift(start.tumbler(), &Nat::from(i as u64))) else { continue };
@@ -369,7 +378,7 @@ impl CellIndex {
     /// read off its frontier (M3's content mint, asked and not staged, is
     /// the chain's peek) — each put through the prefix test and the one
     /// entry path.
-    pub(crate) fn enter_publish(&self, world: &World, member: &Address, reinserted: u64) {
+    pub fn enter_publish<W: FebeWorld>(&self, world: &W, member: &Address, reinserted: u64) {
         let trunk = trunk_of(member);
         let Ok((next, _)) = world.m3().mint_content(&trunk) else { return };
         let next_ordinal = ordinal(next.tumbler()).clone();
@@ -399,7 +408,7 @@ impl CellIndex {
 /// prefix test and then the one entry path, into `index` — the one copy
 /// the commits since the open enter their own into. Reads an immutable
 /// snapshot, so commits proceed on later roots while it walks.
-pub(crate) fn walk(snapshot: &Snapshot<World>, index: &CellIndex) -> Rebuild {
+pub fn walk<W: FebeWorld>(snapshot: &Snapshot<W>, index: &CellIndex) -> Rebuild {
     #[cfg(any(test, feature = "test-hooks"))]
     WALK_HOLD.wait();
     let started = Instant::now();
@@ -427,13 +436,14 @@ pub(crate) fn walk(snapshot: &Snapshot<World>, index: &CellIndex) -> Rebuild {
     Rebuild { values, cells, halts, walk: started.elapsed(), parse }
 }
 
-/// START THE WALK on a thread of its own over the world as `engine` holds it
-/// now, completing `index` when it is done. Where the OS refuses the
+/// START THE WALK on a thread of its own over the world as `kernel` holds it
+/// now — the daemon's engine's kernel, the one thing of the engine the walk
+/// needs — completing `index` when it is done. Where the OS refuses the
 /// thread the walk runs here instead: the daemon then serves later rather
 /// than never readying (P22 — a derived structure's loss is a slower
 /// answer, not an outage).
-pub(crate) fn start_walk(engine: &Engine, index: Arc<CellIndex>) {
-    let snapshot = engine.kernel().snapshot();
+pub fn start_walk<W: FebeWorld>(kernel: &Kernel<W>, index: Arc<CellIndex>) {
+    let snapshot = kernel.snapshot();
     let shared = Arc::clone(&index);
     let spawned = thread::Builder::new().name("skepd-cell-index".into()).spawn(move || {
         let report = walk(&snapshot, &shared);
@@ -441,7 +451,7 @@ pub(crate) fn start_walk(engine: &Engine, index: Arc<CellIndex>) {
     });
     if spawned.is_err() {
         notice::line("cell index: the OS refused the rebuild's thread; the walk runs at open");
-        let snapshot = engine.kernel().snapshot();
+        let snapshot = kernel.snapshot();
         let report = walk(&snapshot, &index);
         index.complete(report);
     }
@@ -451,24 +461,27 @@ pub(crate) fn start_walk(engine: &Engine, index: Arc<CellIndex>) {
 /// can serve requests against a daemon whose index is not ready and release
 /// the walk at its own moment.
 #[cfg(any(test, feature = "test-hooks"))]
-pub(crate) struct WalkHold {
+#[doc(hidden)]
+pub struct WalkHold {
     held: Mutex<bool>,
     released: Condvar,
 }
 
+/// The test seam's one hold on the walk — process-wide, since the walk
+/// starts inside the open.
 #[cfg(any(test, feature = "test-hooks"))]
-pub(crate) static WALK_HOLD: WalkHold =
-    WalkHold { held: Mutex::new(false), released: Condvar::new() };
+#[doc(hidden)]
+pub static WALK_HOLD: WalkHold = WalkHold { held: Mutex::new(false), released: Condvar::new() };
 
 #[cfg(any(test, feature = "test-hooks"))]
 impl WalkHold {
     /// Arm: every walk started from here on parks before its first entry.
-    pub(crate) fn hold(&self) {
+    pub fn hold(&self) {
         *self.held.lock() = true;
     }
 
     /// Release: every parked walk proceeds, and later walks never park.
-    pub(crate) fn release(&self) {
+    pub fn release(&self) {
         *self.held.lock() = false;
         self.released.notify_all();
     }
@@ -485,8 +498,10 @@ impl WalkHold {
 mod tests {
     use super::*;
 
+    /// A test address from its dotted form, T4-validated.
     fn addr(s: &str) -> Address {
-        crate::codec::wire_address(s).expect("a test address")
+        let comps: Vec<Nat> = s.split('.').map(|c| Nat::from(c.parse::<u32>().unwrap())).collect();
+        validate(Tumbler::new(comps).expect("a tumbler")).expect("a test address")
     }
 
     /// The two maps and the base: an entry is idempotent per address; two

@@ -15,16 +15,17 @@ and exported here as they converge.
 
 ## Workspace
 
-Twenty-one crates; the boundaries are the architecture. Fourteen domain
+Twenty-three crates; the boundaries are the architecture. Fourteen domain
 crates realize the spec's converged designs (the M1–M10 modules, the
 AUTH identity layer, signed ops, the registry and the blob store) and
 encode the composition contract's
 layering in the dependency graph itself — the
 compiler enforces what the design ruled (no store depends on the engine,
 type-only edges stay type-only, nothing depends on the engine but a
-binary). Above them, one assembler, the transport adapters, the
-verifying registry resolver, the client library and the `skep`
-command; beside them, the differential-conformance harness.
+binary). Beneath them, one support crate; above them, the daemon's media
+resource, one assembler, the transport adapters, the verifying registry
+resolver, the client library and the `skep` command; beside them, the
+differential-conformance harness.
 
 | crate | role |
 |---|---|
@@ -42,6 +43,8 @@ command; beside them, the differential-conformance harness.
 | `skep-signature` | signed ops — the hybrid signature: key derivation, signing, verify |
 | `skep-registry` | the registry's commons rows and binding/endpoint bodies (pure values) |
 | `skep-blobs` | the blob store: deposited files, partial uploads, upload records, leases |
+| `skep-util` | the support crate below the daemon and the media crate: the counting permit pool, the operator's notice line, the JSON determinism helpers |
+| `skep-media` | the daemon's media resource: the cell's one parser, the media door, the gate over the blob store, the cell index, the pruner, the fetch — generic over the world, no engine |
 | `skep-engine` | the one assembler: `World`, genesis, recovery, `world_at` |
 | `skepd` | the daemon: HTTP/JSON wire v4, sessions, history, SSE |
 | `skep-mcp` | stdio MCP adapter for agent harnesses |

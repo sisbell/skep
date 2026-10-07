@@ -8,7 +8,7 @@
 //! and M4's public ones off the locked snapshot the commit will read (the
 //! serialization guard admits no commit between, so the check that passed
 //! and the commit it guards are one interval); the parse is
-//! [`cell::parse`]'s, the one parser.
+//! `cell::parse`'s, the one parser.
 //!
 //! THE ARMED SET, in answer order (PATTERNS P6 — enumerated here, at the
 //! surface, and in `docs/wire.md` §Media, so no later lane moves one
@@ -38,7 +38,7 @@
 //!    DID NOT DEPOSIT UNDER ITS OWN LEASE: THE BINDING's refusal, real from
 //!    lane B — the media gate reads the principal's own lease record first
 //!    and the file only where that record names the hash under a live lease
-//!    ([`MediaGate::binding`]); a cell whose hash the principal holds a live
+//!    (`MediaGate::binding`); a cell whose hash the principal holds a live
 //!    lease on, over a whole file whose length the cell's `size` names, is
 //!    ADMITTED and goes on to the store. A deposit whole on disk whose size
 //!    the cell contradicts is this refusal too — no deposit of this
@@ -92,7 +92,7 @@
 //!
 //! THE KIND COLUMN (`media.md` item 4; the blind-document investigation §5
 //! (i); s6-D3): the arms above are read PER KIND. The picture's cell meets
-//! every arm. THE BLIND DOCUMENT's cell (`media/blind.rs`) meets arms 1, 2
+//! every arm. THE BLIND DOCUMENT's cell (`blind.rs`) meets arms 1, 2
 //! and 4 as the picture's does — `published_target` at a published target,
 //! `not_owner` at a reader's shot, the halt on a malformed body — and
 //! NEVER arms 3 and 5: it is ADMITTED into a draft and at the owner's shot
@@ -103,7 +103,7 @@
 //! THE SHOT'S BINDING: the owner's own shot re-inserting a draft's cell asks
 //! the binding again, as its `insert` did — the whole armed set lands
 //! together at both positions. The binding reads THE CELL INDEX FIRST
-//! ([`MediaGate::binding`]): a hash the requester's own cells already name
+//! (`MediaGate::binding`): a hash the requester's own cells already name
 //! is a reference, kept by no lease — so the owner's shot of a draft whose
 //! cell was admitted is admitted after the lease lapsed, while the file is
 //! whole at the cell's size, and `lease_lapsed` where it is not. Until the
@@ -135,13 +135,12 @@ use skep_address::{document_of, Address, Nat};
 use skep_arrangement::{
     published_target, shot_admission, trunk_of, Caller, PlacedSegment, Shot, MAX_REINSERTED_VALUES,
 };
-use skep_content::{HasContent, Val};
-use skep_febe::{Disposition, Op};
-use skep_namespace::{HasM3, PrincipalId};
+use skep_content::Val;
+use skep_febe::{Disposition, FebeWorld, Op, ReadableWorld};
+use skep_namespace::PrincipalId;
 
-use super::cell;
-use super::gate::{Binding, MediaGate};
-use crate::World;
+use crate::cell;
+use crate::gate::{Binding, MediaGate};
 
 /// The door's answer — one variant per arm of the armed set, in the
 /// module's order. Two are M10's own codes, raised here on the daemon's
@@ -149,12 +148,15 @@ use crate::World;
 /// `credential_refused` as every daemon-side refusal does (AUTH-3.53's
 /// family; wire.md §Credential refusals).
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum MediaRefusal {
+pub enum MediaRefusal {
     /// Arm 1: `published_target`, M10's code, no site.
     PublishedTarget,
     /// Arm 2: `not_owner`, M10's code, `site.addr` the DRAFT — the document
     /// that failed the ω test, as every `not_owner` names one.
-    NotOwner { draft: Address },
+    NotOwner {
+        /// The staging draft, judged as the document it projects to.
+        draft: Address,
+    },
     /// Arm 3: the binding's refusal — token `unbound_cell`: a hash this
     /// principal did not deposit under its own lease.
     UnboundCell,
@@ -173,7 +175,7 @@ impl MediaRefusal {
     /// The `detail` token of the four refusals that ride
     /// `credential_refused`; `None` for the two that are M10's own codes.
     /// Spelled here and only here.
-    pub(crate) fn token(&self) -> Option<&'static str> {
+    pub fn token(&self) -> Option<&'static str> {
         match self {
             MediaRefusal::PublishedTarget | MediaRefusal::NotOwner { .. } => None,
             MediaRefusal::UnboundCell => Some("unbound_cell"),
@@ -192,7 +194,7 @@ impl MediaRefusal {
     /// may be admitted once the walk completes. The two M10 codes take M10's
     /// own classification, `RejectCode::disposition`, where the reply is
     /// built.
-    pub(crate) fn disposition(&self) -> Disposition {
+    pub fn disposition(&self) -> Disposition {
         match self {
             MediaRefusal::IndexRebuilding => Disposition::Retry,
             _ => Disposition::Permanent,
@@ -205,7 +207,7 @@ impl MediaRefusal {
 /// cell, which the binding is asked about; the BLIND document's cell, which
 /// the target's and the owner's arms judge as the picture's and the
 /// binding never sees — the board holds no byte of its picture, so there is
-/// no deposit to bind and no media gate to ask (`media/blind.rs`); a value
+/// no deposit to bind and no media gate to ask (`blind.rs`); a value
 /// naming either kind under no pinned schema; or — `None` — nothing it
 /// answers.
 #[derive(Debug, Clone)]
@@ -253,7 +255,9 @@ fn value_arm(
 /// where the write goes on to the store. `world` MUST be the snapshot taken
 /// under the serialization guard for this request, the one the commit will
 /// run against; the plain sequence is its one caller, which holds the
-/// credential lock's read arm across this step and the commit.
+/// credential lock's read arm across this step and the commit. Generic over
+/// the world M10 reads ([`FebeWorld`], the one bound): the daemon
+/// instantiates it at its `World`, and this crate names no engine.
 ///
 /// EXHAUSTIVE with no `_` arm, the treatment `deposits_credential_link`
 /// gives the route: a new `Op` fails to compile here until someone decides
@@ -261,8 +265,8 @@ fn value_arm(
 /// `version` share identity and mint no cell (`media.md` §The publication
 /// seam, consequence (b): "a `copy` of a cell shares identity and mints no
 /// baptism"), so they take no arm; every other op carries no content value.
-pub(crate) fn media_door(
-    world: &World,
+pub fn media_door<W: FebeWorld>(
+    world: &W,
     op: &Op,
     principal: PrincipalId,
     media_gate: &MediaGate,
@@ -325,8 +329,8 @@ pub(crate) fn media_door(
 /// that is not binds nothing for it), in V-order, the first refusal
 /// answering; a value that names it not is passed over at the cost of one
 /// byte compare.
-fn insert_arm(
-    world: &World,
+fn insert_arm<W: FebeWorld>(
+    world: &W,
     doc: &Address,
     values: &[Val],
     principal: PrincipalId,
@@ -358,8 +362,8 @@ fn insert_arm(
 /// naming the kind is judged (M-I1 (a)) — the owner test once, at the
 /// first, then each value's own verdict in placement order, the first
 /// refusal answering.
-fn publish_arm(
-    world: &World,
+fn publish_arm<W: FebeWorld>(
+    world: &W,
     doc: &Address,
     shot: &Shot,
     principal: PrincipalId,
@@ -371,8 +375,8 @@ fn publish_arm(
     // the source gate — asked of the snapshot the transaction will open on.
     // The predicate handed the source gate is the one M10 lends the real shot:
     // `World::readable` at the principal (the write-path check's premise,
-    // `policy/attestation.rs`).
-    if shot_admission(world, caller, doc, shot, &World::visible_to(caller)).is_err() {
+    // `policy/attestation.rs`), built here over the trait ([`visible_to`]).
+    if shot_admission(world, caller, doc, shot, &visible_to::<W>(caller)).is_err() {
         return None;
     }
     // The staging draft, judged as the document it projects to (PUB-2.15);
@@ -381,8 +385,10 @@ fn publish_arm(
     // P31: nothing of a draft the caller may not read is read on its behalf.
     // (The admission passes a run the base carries without consulting its
     // origin, PUB-6.24; the write-path check has refused an attested shot
-    // over such a run already, and this door reads nothing either way.)
-    if !world.readable(Some(principal), &draft) {
+    // over such a run already, and this door reads nothing either way.) The
+    // read predicate is `ReadableWorld::readable`'s, the seam M10 reaches
+    // the engine's own through; `Some(principal)` is the principal's class.
+    if !ReadableWorld::readable(world, Some(principal), &draft) {
         return None;
     }
     // M5's re-insert budget — request arithmetic the store refuses
@@ -425,6 +431,20 @@ fn publish_arm(
         }
     }
     None
+}
+
+/// THE VISIBILITY CLASS A CALLER WRITES AT, over the trait: the predicate
+/// M10 lends the real shot's source gate — the engine's `World::visible_to`,
+/// which this crate cannot name — rebuilt on [`ReadableWorld::readable`],
+/// whose contract makes `None` the guest: a principal reads at its own
+/// class, the system caller (M9's automation path) at the guest's, which is
+/// exactly the closure the engine returns. `Copy`-free and borrowing
+/// nothing: it reads the world handed to it per consult and nothing else.
+fn visible_to<W: ReadableWorld>(caller: Caller) -> impl Fn(&W, &Address) -> bool {
+    move |world: &W, doc: &Address| match caller {
+        Caller::Principal(p) => world.readable(Some(p), doc),
+        Caller::System => world.readable(None, doc),
+    }
 }
 
 #[cfg(test)]

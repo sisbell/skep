@@ -14,7 +14,7 @@
 //! committed state, under the exclusion lock the kernel takes, so a
 //! directory a daemon serves is refused at that lock and never read
 //! beside it — walks the replayed world into a FRESH cell index through
-//! the walk the daemon's open runs (`media/index.rs`), and opens the blob
+//! the walk the daemon's open runs (`skep-media`'s `index.rs`), and opens the blob
 //! store READ-ONLY (`skep-blobs`'s `Store::inspect`: the logs read as the
 //! open reads them, their torn tails cut in memory alone, nothing
 //! reconciled, compacted, swept, synced or created). It prints ONE JSON
@@ -28,9 +28,10 @@
 //! bytes received), the UNATTRIBUTED bytes no account's scope holds (a
 //! live lease's or a standing upload's whose key spells no principal of
 //! this build), and THE VENUE TOTAL they all sum to — the gate's own
-//! figure, under the gate's own pending rule
-//! (`MediaGate::counts_as_pending`), which the limits record is written
-//! against; the standing uploads and the expired ones by count; the halt
+//! figure, under the gate's own pending rule and its own reading of a
+//! record's key (`MediaGate::lease_counted`, `MediaGate::upload_counted`,
+//! the inventory's two reads of the media crate), which the limits record
+//! is written against; the standing uploads and the expired ones by count; the halt
 //! marks and any foreign designation directory. It RECORDS NO READ anywhere
 //! (D9) and writes nothing under `blobs/`. What the engine's open writes to
 //! the directory it is run over — the copy the inventory proves — is the
@@ -68,13 +69,12 @@ use serde_json::Value;
 use skep_blobs::{HashFunction, Inspection, Store};
 use skep_engine::{Engine, EngineError};
 use skep_kernel::{BurnedSeqPolicy, CheckpointPolicy, Durability, KernelConfig, SaltSource};
+use skep_media::cell::{DESIGNATION, HASH_BYTES};
+use skep_media::gate::{wall_clock_ms, Counted, MediaGate};
+use skep_media::index::{self, CellIndex};
+use skep_media::pruner::PINNED_DESIGNATIONS;
 use skep_namespace::{HasM3, PrincipalId};
 use skep_util::json::{obj, parse_lower_hex};
-
-use crate::media::cell::{DESIGNATION, HASH_BYTES};
-use crate::media::gate::{wall_clock_ms, MediaGate};
-use crate::media::index::{self, CellIndex};
-use crate::media::pruner::PINNED_DESIGNATIONS;
 
 /// Why a tool refused — each one line to the operator.
 #[derive(Debug)]
@@ -210,23 +210,24 @@ pub fn inventory(data_dir: &Path, check: HoleCheck) -> Result<Value, ToolError> 
     }
 
     // PER ACCOUNT: the base off the index, the pending bytes off the store's
-    // records by the gate's own rule (`MediaGate::counts_as_pending`) — every
-    // principal the index or either log names — and the UNATTRIBUTED bytes, a
-    // live lease's or a standing upload's whose key spells no principal of
-    // this build: in no account's scope, and in the venue's total as the gate
-    // counts it.
+    // records by the gate's own rule (`MediaGate::lease_counted`,
+    // `MediaGate::upload_counted`) — every principal the index or either log
+    // names — and the UNATTRIBUTED bytes, a live lease's or a standing
+    // upload's whose key spells no principal of this build: in no account's
+    // scope, and in the venue's total as the gate counts it.
     let mut accounts: std::collections::BTreeMap<PrincipalId, (u64, u64)> =
         index.accounts().into_iter().map(|(p, base)| (p, (base, 0))).collect();
     let mut unattributed = 0u64;
     let (mut standing_uploads, mut expired_uploads, mut orphan_partials, mut asides) = (0usize, 0usize, 0usize, 0usize);
     if let Some(s) = &store {
         for lease in s.leases() {
-            if now >= lease.expires || !MediaGate::counts_as_pending(&index, lease) {
+            if now >= lease.expires {
                 continue;
             }
-            match MediaGate::principal_of_key(&lease.principal) {
-                Some(p) => accounts.entry(p).or_insert((0, 0)).1 += lease.size,
-                None => unattributed = unattributed.saturating_add(lease.size),
+            match MediaGate::lease_counted(&index, lease) {
+                Counted::Base => {}
+                Counted::Pending(p) => accounts.entry(p).or_insert((0, 0)).1 += lease.size,
+                Counted::Unattributed => unattributed = unattributed.saturating_add(lease.size),
             }
         }
         for record in s.uploads() {
@@ -235,7 +236,7 @@ pub fn inventory(data_dir: &Path, check: HoleCheck) -> Result<Value, ToolError> 
                 continue;
             }
             standing_uploads += 1;
-            match MediaGate::principal_of_key(&record.principal) {
+            match MediaGate::upload_counted(record) {
                 Some(p) => accounts.entry(p).or_insert((0, 0)).1 += record.offset,
                 None => unattributed = unattributed.saturating_add(record.offset),
             }

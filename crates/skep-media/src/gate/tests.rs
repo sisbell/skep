@@ -1,7 +1,14 @@
+use skep_address::{validate, Address, Nat, Tumbler};
 use skep_blobs::HashFunction;
 
 use super::*;
-use crate::media::cell::HASH_BYTES;
+use crate::cell::HASH_BYTES;
+
+/// A test address from its dotted form, T4-validated.
+fn addr(s: &str) -> Address {
+    let comps: Vec<Nat> = s.split('.').map(|c| Nat::from(c.parse::<u32>().unwrap())).collect();
+    validate(Tumbler::new(comps).expect("a tumbler")).expect("a test address")
+}
 
 /// The gate deposits under the cell schema's own designation: the two
 /// spellings — the cell schema's and the store's function's — are one.
@@ -12,7 +19,7 @@ fn the_designation_is_the_cell_schemas() {
 
 /// A ready index, built by hand: the walk's door, with nothing walked.
 fn ready(gate: &MediaGate) {
-    gate.index().complete(super::super::index::Rebuild {
+    gate.index().complete(crate::index::Rebuild {
         values: 0,
         cells: 0,
         halts: 0,
@@ -229,7 +236,7 @@ fn the_rebuild_window_answers_rebuilding_where_the_lease_arm_alone_would_refuse(
     deposit(10_000);
     std::fs::remove_file(store.blob_path(DESIGNATION, &hex_string(&hash)).unwrap()).unwrap();
     assert_eq!(gate.binding(p, &cell), Binding::Rebuilding, "a live lease over no file: the state");
-    let at = crate::codec::wire_address("1.0.1.0.2.0.1.1").unwrap();
+    let at = addr("1.0.1.0.2.0.1.1");
     gate.index().enter(&at, Some(p), &cell);
     ready(&gate);
     assert_eq!(gate.binding(p, &cell), Binding::Lapsed, "named, the file gone: the permanent verdict");
@@ -291,7 +298,7 @@ fn the_binding_reads_the_principals_own_lease_first_and_the_file_only_under_it()
     stream.finish(Duration::from_millis(10_000), now).unwrap();
     assert_eq!(gate.own_pending(p, now), 9, "no cell names it: the lease counts as pending");
     assert_eq!(gate.own_scope(p, now), 9);
-    let at = crate::codec::wire_address("1.0.1.0.2.0.1.1").unwrap();
+    let at = addr("1.0.1.0.2.0.1.1");
     gate.index().enter(&at, Some(p), &cell);
     assert_eq!(gate.own_pending(p, now), 0, "a named hash counts in the base, not the pending");
     assert_eq!(gate.own_scope(p, now), 9, "the own scope is one number either way");

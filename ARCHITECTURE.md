@@ -21,7 +21,7 @@ position in the journal.
 
 ## Code map
 
-The workspace is twenty-two crates under `crates/`. Dependencies point
+The workspace is twenty-three crates under `crates/`. Dependencies point
 downward in the list below: a crate may depend only on crates listed
 above it.
 
@@ -115,6 +115,20 @@ foundation and on the stores above it.
 - `skep-febe` — the operation surface (`OperationSurface`): one front door
   that dispatches every operation to the stores, and the codec seam a
   transport fills. Its modules and rules: §The operation surface.
+- `skep-media` — the daemon's media resource (media lane A and lane B's
+  policy): the reference cell's one parser and the blind cell, the media
+  door, the gate over `skep-blobs` — the limits in force, the hold, the
+  three scopes, the binding — the cell index and its walk at open, the
+  pruner's pass, the fetch's composed order, and the media limits, the
+  four the daemon reads too among them. It transports nothing: the routes,
+  the replies, the deposit read and the operator's tools are the daemon's.
+  Generic over the world M10 reads (`skep_febe::FebeWorld`), it depends on
+  no engine — the daemon instantiates it at its `World` — and so stands
+  here, beside `skep-febe` and above the assembler. One feature, default
+  off: `test-hooks` compiles in its test seam, every item of it
+  `#[doc(hidden)]`, and forwards `skep-blobs`'s; `scripts/gate-full.sh`
+  builds the library and its docs without it. Its modules and rules: §The
+  media resource.
 - `skep-engine` — the one assembler. It defines `World` from the stores'
   slices and the identity slice, genesis, recovery and reads at a past
   position. Nothing depends
@@ -976,11 +990,149 @@ the shared `common` world; `reexports`, which checks from outside the crate
 that a request is built and a response read through `skep_febe` alone; and
 `tidy`, the module order and the check the first rule names.
 
+## The media resource, `skep-media`
+
+`skep-media` holds every decision the daemon makes about a media cell — a
+picture is a document whose content is ONE REFERENCE CELL — in a crate of
+its own beside the daemon's write path: the cell's one parser, the media
+door the plain write sequence takes, the gate over `skep-blobs`, the cell
+index, the pruner's pass and the fetch's composed order. It is GENERIC
+OVER THE WORLD M10 reads (`skep_febe::FebeWorld`, the one bound) and names
+no engine: the daemon instantiates its world-reading signatures at its
+`World`, and the door's read predicate is `ReadableWorld::readable`'s, the
+seam M10 reaches the engine's own through. It transports nothing and takes
+no lock of its caller's: the routes, the replies, the deposit read and the
+operator's tools are `skepd`'s, and the pruner's exclusive arm is handed
+in. Its modules are declared in `src/lib.rs`, each with a line saying what
+it holds, and the crate doc there is the tree's charter; its public
+surface is its `README.md`'s list, which `tests/it/tidy.rs` holds every
+`pub` item to.
+
+`lib.rs` holds `MediaOptions`, the upload setting the daemon's routes read
+and `/health` echoes, and THE UPLOAD POOL, the fetch pool's twin — the
+permit the creation and the resume hold for a body's whole stream, counted
+into the daemon's worker minimum beside its three other pools. `door.rs`
+— THE MEDIA DOOR, the one step the plain write sequence takes between its
+admission and the commit for a value naming a media kind:
+`published_target` at a published target whatever the declaration, the
+shot's owner test (`not_owner` naming the draft), and THE BINDING: a
+picture's cell is admitted where its hash is one the principal's own cells
+already name over a file whole at the cell's size (the index's arm, read
+first once the index is ready), or one this principal deposited under its
+own live lease over a whole file; refused `unbound_cell` otherwise,
+`lease_lapsed` where the deposit is gone, and `index_rebuilding`,
+retry-class, where the lease arm alone would refuse while the index's walk
+at open runs; a blind document's cell is admitted with no store consulted.
+It reads the op's values and, for a shot, the staging draft's own runs off
+the locked snapshot, through M5's and M4's public reads and the
+`ReadableWorld` seam, and the index, the lease and the file through the
+gate. `gate.rs` — THE GATE: the blob store opened under `blobs/` in the
+data dir, the limits in force (the daemon's default — one eighth of the
+volume's capacity read once at the open, never below 256 MiB — and the
+install hook the serving layer's channel will call, compiled under
+`test-hooks` until it does), the hold a stream has on its upload, the three
+scopes a deposit is refused on (the own scope — the base plus the pending
+bytes — the venue total, the floor — in that order, the requester's own
+record first), the creation's gate (the standing-uploads bound, the floor
+on no length), THE FLOOR IN FORCE — the larger of the constant 256 MiB and
+twice the newest checkpoint's size plus one maximal segment, set by the
+daemon at open and as each checkpoint lands — the binding's read with its
+window, and THE INVENTORY's two reads, whose figures the operator's tool
+reports under the gate's own pending rule. `index.rs` — THE CELL INDEX:
+per hash the cells naming it, per account the distinct hashes its cells
+name at their size (the base); entered by the daemon's write path at every
+commit that mints a cell and rebuilt whole at every open on a thread over
+an immutable snapshot of the content store, its entries added into the one
+copy (an entry is idempotent per cell); its readiness flag is what the
+index's three readers consult, and a value naming the kind under no pinned
+schema stands in it as a halt mark. `pruner.rs` — THE PRUNER's PASS: the
+expired partials removed off the record's expiry and the hold; the halts
+on a foreign designation directory or a halt mark; the unreferenced files
+renamed aside under an exclusive arm the caller hands in (the credential
+lock's write arm — named nowhere here), one file per acquisition,
+re-reading the index and the lease log there, each aside unlinked after
+under no arm; the two logs compacted on their trigger under no arm; and
+the cadence the daemon's transport thread waits on. `serve.rs` — THE
+FETCH's composed order: the shape, M10's read by identity as the gate, the
+one classification, the permit of the fetch pool, the whole file checked
+against its cell before its first byte, the stream's two re-check
+intervals; what the daemon's `server/blob_routes.rs` runs for `GET
+/blob?i=` and its transport streams. `limits.rs` — the resource's eleven
+numbers: the per-file cap, the two pools' counts and the standing-uploads
+bound, which the daemon reads too, and the fetch's two intervals, the
+default limit's share and floor, the compaction trigger and the cell's cap.
+Beneath them, the two leaves: `cell.rs` (the picture's reference cell: its
+schema, its one parser under the canonical rule, its encoder, its
+designation, and THE ONE CLASSIFICATION of every media kind) and
+`blind.rs` (the blind document's cell: the second kind, a commitment the
+board holds no byte of a file for).
+
+Its modules form two layers, which `tests/it/tidy.rs` checks as the
+daemon's six are checked: THE RESOURCE — `door`, `gate`, `index`, `pruner`
+and `serve`, which name one another sideways and the leaves below — over
+THE LEAVES, `cell`, `blind` and `limits`, which name nothing of the
+resource.
+
+Rules that hold across its files:
+
+- **Generic over the world; no engine.** Every signature that reads the
+  world takes `W: FebeWorld` — the index's entries and walk over
+  `Snapshot<W>` and `Kernel<W>`, the fetch's gate over
+  `OperationSurface<W>` under the record lift M10's own `execute` requires,
+  the door over `&W` — and the crate's `[dependencies]` name no
+  `skep-engine`; `World::visible_to`, the engine's, is rebuilt here over
+  `ReadableWorld::readable`, whose `None` is the guest. Only the door's
+  unit test opens an engine, through a dev-dependency.
+- **The cell index has one lock of its own, taken innermost.** The write
+  path enters it under the daemon's `Serial`, the gate reads it under the
+  credential lock's read arm, the pruner under its write arm, the walk at
+  open under neither; `index.rs`'s lock is held across no other lock, and
+  no caller holds it while taking one.
+- **The store knows no policy.** `skep-blobs` is handed a root and
+  principals as opaque strings; who a principal is, what bounds its bytes,
+  the interval an upload and a lease are given, and which lock a finish
+  runs under are this crate's (`gate.rs`) and the daemon's, never the
+  store's. The gate's key for a principal is its own spelling: the routes
+  drive the store by it and the inventory reads it back through the gate's
+  two reads, never by a second spelling.
+- **The cell's parser is the one parser; the door is the one media
+  step.** `cell.rs`'s `parse` is the one reading of a picture cell's
+  bytes, under the canonical rule (`parse(b)` answers a cell only where
+  `b == encode(parse(b))`), and the vector set under
+  `crates/skepd/tests/it/fixtures/media/` is what every other parser of
+  the cell — the shell's, the browser page's — is held to. `door.rs` is
+  the one place the daemon acts on that reading: no producer of the
+  session layer's admission reads a value's bytes for the cell, and no
+  route serves one.
+- **The lock arm is handed in.** `pruner::pass` takes the exclusive arm as
+  a closure and holds whatever guard it answers for exactly one file; the
+  crate names no lock of the daemon's.
+- **The surface is the daemon's need.** Every `pub` item is one the
+  daemon takes, listed in `README.md`, or a hook, `#[doc(hidden)]` under
+  `test-hooks`; the parsers, the binding and the gate's rules stay the
+  crate's own. `tests/it/tidy.rs` checks it.
+- **The test seam is a feature.** `test-hooks` (default off) compiles in
+  the walk and stream holds, the prune hold and its notice, the gate's
+  clock, free-space and limits overrides, the index's report and counts
+  and the pools' `try_hold`, and forwards `skep-blobs/test-hooks`; the
+  daemon's hooks (`server/hooks.rs`) are the doors a suite reaches them
+  through, and `scripts/gate-full.sh` builds the library and its docs
+  without it.
+
+Its unit suites sit beside their code: `cell/tests.rs`, `door/tests.rs`
+(which opens a real engine), `gate/tests.rs`, and the inline suites of
+`blind.rs`, `index.rs`, `pruner.rs` and `serve.rs`. Its integration suites
+— the upload, the fetch, the door and the pruner over a served daemon —
+are `skepd`'s (`tests/it`: `blob_routes`, `blob_fetch`, `media`, `pruner`,
+`deposit_class`, and `hazard`'s media share), which spawn the daemon they
+drive; its own `tests/it/` is `tidy` alone.
+
 ## The daemon, `skepd`
 
 `skepd` owns three decisions of its own: the session layer's gates (who
 may act, and what a credential write may do), the cadence of the published
-head, and the media door (whether a value a write carries is a media cell —
+head, and the media door (`skep-media`'s step, which the daemon's plain
+write sequence runs: whether a value a write carries is a media cell —
 a picture's reference cell or a blind document's — by one classification,
 the cap bounding the parse and never the classification, and what a write
 that would mint one is answered: for a picture, whether its hash is one the
@@ -992,7 +1144,8 @@ the pruner read, and the pruner's pass. It also SERVES media bytes: `GET
 by M10's read by identity and checked against the cell before the first
 byte. And it carries the operator's two tools over a board directory, the
 inventory and the pull, run with no server. Everything else it delegates
-to the stores through the engine, and the media bytes to `skep-blobs`.
+to the stores through the engine, and the media bytes to `skep-media` and,
+through its gate, `skep-blobs`.
 
 Its modules form six layers. A module names only modules in its own layer
 or below it, never above; `crates/skepd/tests/it/tidy.rs` checks it. A
@@ -1051,30 +1204,23 @@ write passes down through them in this order:
 │                    │                the attest store    │
 │                    ├── sidecar.rs   commits.log         │
 │                    └── classify.rs  a commit's documents│
-│   MEDIA RESOURCE   media.rs · media/door.rs ·           │
-│                    media/gate.rs · media/index.rs ·     │
-│                    media/pruner.rs · media/serve.rs ·   │
-│                    media/deposit_read.rs                │
-│                    the upload setting · the media door  │
-│                    · the blob store, the limits and     │
-│                    their default, the hold, the scopes  │
-│                    and the bound, the binding and its   │
-│                    window · the cell index: the base,   │
-│                    the walk at open, the readiness ·    │
-│                    the pruner's pass, its halts, its    │
-│                    rename aside and its compaction ·    │
-│                    the deposit read · the fetch's       │
-│                    composed order, its pool and stream  │
-│                    · the upload pool, the fetch's twin  │
+│   SKEP-MEDIA       the media resource, a crate of its   │
+│                    own beside the write path: the media │
+│                    door · the gate over skep-blobs ·    │
+│                    the cell index · the pruner's pass · │
+│                    the fetch's composed order · the     │
+│                    upload setting and the upload pool   │
+│                    (§The media resource)                │
 ├─────────────────────────────────────────────────────────┤
-│ 6 LEAVES           codec · history · serial · limits ·  │
-│                    media/cell · media/blind             │
+│ 6 LEAVES           codec · history · serial · limits    │
 │   SKEP-UTIL        permits · notice · json — the support│
 │                    crate below, shared with skep-media  │
 └─────────────────────────────────────────────────────────┘
        │
        ▼
   skep-engine  →  the stores  →  skep-kernel (journal)
+  skep-media   →  the door, the gate, the index, the pruner, the fetch
+                  →  skep-blobs, and the stores through the world it is handed
   skep-blobs   →  blobs/ (the files, partials, records, leases)
   skep-util    →  the permit pool, the notice line, the JSON helpers
 
@@ -1084,7 +1230,7 @@ write passes down through them in this order:
 A read skips the write path: a read route goes from the routes to
 `history` and the engine. The engine sits below the daemon and knows
 nothing of it. A blob upload skips the write path too: the blob route
-goes from the routes to the media resource and `skep-blobs`, under a
+goes from the routes to the media resource (`skep-media`) and `skep-blobs`, under a
 permit of the upload pool held for the body's whole stream, commits
 nothing to the journal, and takes no `Serial`. THE BLOB FETCH
 (`GET /blob?i=`) skips it the same way: the route resolves the caller,
@@ -1198,79 +1344,39 @@ the store's install — nothing above their own layer.
      which of its op's terms the journal can name for a bare position —
      the one place the feed asks the world anything.
 
-   Beside the write path, at the same layer, THE MEDIA RESOURCE:
-   `media.rs` with `media/door.rs` — THE MEDIA DOOR, the one step the
+   Beside the write path, at the same layer, THE MEDIA RESOURCE is
+   `skep-media`'s (§The media resource): the media door, the one step the
    plain write sequence takes between its admission and the commit for a
-   value naming the picture cell's kind: `published_target` at a
-   published target whatever the declaration, the shot's owner test
-   (`not_owner` naming the draft), and THE BINDING: a cell is admitted
-   where its hash is one the principal's own cells already name over a
-   file whole at the cell's size (the index's arm, read first once the
-   index is ready), or one this principal deposited under its own live
-   lease over a whole file; refused `unbound_cell` otherwise,
-   `lease_lapsed` where the deposit is gone, and `index_rebuilding`,
-   retry-class, where the lease arm alone would refuse while the index's
-   walk at open runs. It reads the op's values and, for a shot, the
-   staging draft's own runs off the locked snapshot, through M5's and
-   M4's public reads, and the index, the lease and the file through the
-   gate — which is why it is a step of its own and never a producer of
-   the session layer's admission. `media.rs` holds `MediaOptions`, the
-   upload setting the routes read and `/health` echoes, and THE UPLOAD
-   POOL, the fetch pool's twin — the permit the creation and the resume
-   hold for a body's whole stream, counted into the worker minimum beside
-   the three other pools. `media/gate.rs` —
-   THE GATE: the blob store (`skep-blobs`) opened under `blobs/` in the
-   data dir, the limits in force (the daemon's default — one eighth of
-   the volume's capacity read once at the open, never below 256 MiB — and
-   the install hook the serving layer's channel will call), the hold a
-   stream has on its upload, the three scopes a deposit is refused on
-   (the own scope — the base plus the pending bytes — the venue total,
-   the floor — in that order, the requester's own record first), the
-   creation's gate (the standing-uploads bound, the floor on no length),
-   THE FLOOR IN FORCE — the larger of the constant 256 MiB and twice the
-   newest checkpoint's size plus one maximal segment, read at open off the
-   newest checkpoint and set by the checkpoint thread as each lands —
-   and the binding's read with its window.
-   `media/index.rs` — THE CELL INDEX: per hash the cells naming it, per
-   account the distinct hashes its cells name at their size (the base);
-   entered by `write_path.rs`'s `record` at every commit that mints a cell
-   — a sideways step at this layer — and rebuilt whole at every open on a
-   thread over an immutable snapshot of the content store, its entries
-   added into the one copy (an entry is idempotent per cell); its
-   readiness flag is what the index's three readers consult, and a value
-   naming the kind under no pinned schema stands in it as a halt mark.
-   `media/pruner.rs` — THE PRUNER's PASS: the expired partials removed off
-   the record's expiry and the hold; the halts on a foreign designation
-   directory or a halt mark; the unreferenced files renamed aside under
-   an exclusive arm the caller hands in (the credential lock's write arm
-   — named nowhere here), one file per acquisition, re-reading the index
-   and the lease log there, each aside unlinked after under no arm; the
-   two logs compacted on their trigger under no arm; and the cadence the
-   transport's thread waits on. `media/deposit_read.rs` — the one read of
-   a principal's own deposits and uploads, its base the index's number
-   and the limit in force echoed beside it, served on the upload's own
-   path. `media/serve.rs` — THE FETCH's composed order: the
-   shape, M10's read by identity as the gate, the one classification, the
-   permit of the fetch pool, the whole file checked against its cell
-   before its first byte, the stream's two re-check intervals; what
-   `server/blob_routes.rs` runs for `GET /blob?i=` and the transport
-   streams.
+   value naming a media kind, which reads the index, the lease and the
+   file through the gate — why it is a step of its own and never a
+   producer of the session layer's admission; the gate the PUT's routes
+   reach as `op.rs` reaches the write path; the cell index, entered by
+   `write_path.rs`'s `record` at every commit that mints a cell — a
+   sideways step at this layer — and read by the resource; the pruner's
+   pass, run from the routes under the credential lock's write arm; and
+   the fetch's composed order, which `server/blob_routes.rs` runs for
+   `GET /blob?i=` and the transport streams. The daemon instantiates the
+   crate at its `World` and composes with it: `MediaOptions`, the upload
+   setting, rides `Daemon::open_configured` and is echoed on `/health`;
+   the deposit read is a route helper of `server/blob_routes.rs` over the
+   gate's reads; the floor is re-read by the checkpoint thread as each
+   checkpoint lands; and the upload and fetch pools are counted into the
+   worker minimum beside the two pools of the daemon's own.
 6. **The leaves** — `codec.rs` with `codec/marshal.rs` (the JSON wire
    format: parse, and marshal — its key-sorting `obj` and the lowercase
    hex pair are `skep-util`'s, taken as every other file takes them),
    `history.rs` (reading the world at an earlier position), `serial.rs`
-   (the write-serialization lock and its guard), `limits.rs` (request body
-   caps, the cell's cap, and the blob route's bounds — the fetch pool's
-   and the upload pool's counts among them), `media/cell.rs` (the
-   picture's reference cell: its schema, its one parser under the
-   canonical rule, its encoder, its designation, and THE ONE
-   CLASSIFICATION of every media kind) and `media/blind.rs` (the blind
-   document's cell: the second kind, a commitment the board holds no byte
-   of a file for). None of these knows anything about the daemon; a leaf
-   imports only leaves — and a leaf in another crate is a leaf: the
-   counting permit the four bounded pools use and the operator's log line
-   are `skep-util`'s `permits` and `notice`, the support crate below this
-   one (§The support crate).
+   (the write-serialization lock and its guard) and `limits.rs` (request
+   body caps, the change feed's page bounds, and the blob route's bounds
+   that are the daemon's — the streaming arm's chunk, its two deadlines,
+   the pruner's cadence; the media resource's own numbers, the two pools'
+   counts among them, are `skep-media`'s `limits`, the daemon taking the
+   four it reads from there). None of these knows anything about the
+   daemon; a leaf imports only leaves — and a leaf in another crate is a
+   leaf: the counting permit the four bounded pools use and the operator's
+   log line are `skep-util`'s `permits` and `notice`, the support crate
+   below this one (§The support crate), and the two cells, once leaves
+   here, are `skep-media`'s (§The media resource).
 
 `lib.rs` declares the daemon's modules in layer order, then the fuzz
 harness and the crate's public surface; `main.rs` is the binary — the
@@ -1286,7 +1392,7 @@ imports it.
 |---|---|---|---|
 | `observe` | on | `GET /dump`, the engine's world dump | every build; OFF in `scripts/gate-full.sh`'s `--no-default-features` checks |
 | `client` | off | `GET /`, the embedded board — an ACTING client, so opted into (`Cargo.toml` carries the ruling) | `scripts/gate-full.sh`'s `--features client` check and `--all-features` run |
-| `test-hooks` | off | `Daemon`'s `#[doc(hidden)]` test hooks, `fuzz_support`, the `Permit` re-export — nothing in another crate | every test build (the crate's self dev-dependency); `scripts/gate-full.sh` checks the library and binary without it |
+| `test-hooks` | off | `Daemon`'s `#[doc(hidden)]` test hooks, `fuzz_support`, the `Permit` re-export — and, forwarded, two seams in other crates: `skep-media`'s `test-hooks` (the holds, the gate's overrides, the index's report and counts, the pools' `try_hold` the daemon's media hooks call) and `skep-blobs`'s (the hazard seam `Daemon::hold_blob_finish_at` is a door to) | every test build (the crate's self dev-dependency); `scripts/gate-full.sh` checks the library and binary without it |
 | `skep-signature`'s `sign` | off — skepd depends with no feature, so the daemon's build holds no signer | the signer's half: the KDF, keygen from a seed, signing, the signer's OS draw | every test build (the suites' dev-dependencies); `scripts/gate-full.sh` checks the crate without it (the verify-only build a daemon links) and with it |
 | `skep-signature`'s `test-hooks` | off | implies `sign`; the fixtures' hooks: the seeded RNG, `sign_with_rng`, the Ed25519 half's signing key, the KDF's half seeds (`derive_half_seeds`), the widths | every test build (its self dev-dependency, and skepd's dev-dependency on it) |
 
@@ -1296,9 +1402,11 @@ imports it.
   order the compiler enforces between libraries; the dev-dependencies
   pointing back up are `skep-kernel`'s, whose integration suites build
   their shared fixture through `skep-engine` and the stores it assembles,
-  and `skepd`'s on `skep-resolve`, whose end-to-end cells and measurements
-  run where boards are spawned — the daemon's library never depends on
-  the resolver.
+  `skep-media`'s on `skep-engine`, whose door's unit test opens a real
+  engine to judge generic code against the concrete `World` — the media
+  crate's library never depends on the engine — and `skepd`'s on
+  `skep-resolve`, whose end-to-end cells and measurements run where boards
+  are spawned — the daemon's library never depends on the resolver.
 - **The client reproduces the daemon's grammars under their rules, never
   its code.** `skep-client` holds its own `Origin::parse`, held to the
   daemon's vector set by a test and never imported from `skepd`; the
@@ -1316,13 +1424,14 @@ imports it.
   leaves, `skep-util`'s among them. Code names an in-crate item by its
   home module, never through
   the crate root's re-exports. `crates/skepd/tests/it/tidy.rs` checks all
-  of it.
+  of it, and `crates/skep-media/tests/it/tidy.rs` the media crate's two
+  layers the same way.
 - **One write path.** Every write to the world goes through
   `write_path`, one at a time. Only the write path records to the feed and
   to `commits.log`.
 - **The PUT takes no `Serial`.** A blob upload commits nothing to the
   journal, so the write-serialization lock has nothing to order for it:
-  `media/` and `server/blob_routes.rs` never name `serial`. What the
+  `skep-media` and `server/blob_routes.rs` never name `serial`. What the
   finish holds — from the rename through the lease's sync — is the
   credential lock's READ arm, the arm the plain write sequence holds
   across the media door, so the door's read of the lease and the finish's
@@ -1330,25 +1439,9 @@ imports it.
   re-resolved under it at the rename. The pruner's rename aside holds
   that lock's WRITE arm, one file per acquisition, so the door's check
   and the commit it guards are one interval no removal of a name enters;
-  the aside's unlink and the logs' compaction hold no arm of it.
-- **The cell index has one lock of its own, taken innermost.** The write
-  path enters it under `Serial`, the gate reads it under the credential
-  lock's read arm, the pruner under its write arm, the walk at open under
-  neither; `media/index.rs`'s lock is held across no other lock, and no
-  caller holds it while taking one.
-- **The store knows no policy.** `skep-blobs` is handed a root and
-  principals as opaque strings; who a principal is, what bounds its bytes,
-  the interval an upload and a lease are given, and which lock a finish
-  runs under are the daemon's (`media/gate.rs`), never the store's.
-- **The cell's parser is the one parser; the door is the one media
-  step.** `media/cell.rs`'s `parse` is the daemon's one reading of a
-  picture cell's bytes, under the canonical rule (`parse(b)` answers a
-  cell only where `b == encode(parse(b))`), and the vector set under
-  `crates/skepd/tests/it/fixtures/media/` is what every other parser of
-  the cell — the shell's, the browser page's — is held to. `media/door.rs`
-  is the one place the daemon acts on that reading: no producer of the
-  session layer's admission reads a value's bytes for the cell, and no
-  route serves one.
+  the aside's unlink and the logs' compaction hold no arm of it. The arm
+  is the daemon's to hand in: `skep-media`'s pass takes it as a closure
+  and names no lock of the daemon's (§The media resource).
 - **The daemon writes only its own files.** The journal and checkpoints
   are the kernel's — its `checkpoint.tmp` included, which the kernel
   removes at open. The daemon's own files are `commits.log` — its

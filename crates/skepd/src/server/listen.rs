@@ -9,6 +9,11 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 use parking_lot::Mutex;
+use skep_media::limits::{MAX_CONCURRENT_FETCHES, MAX_CONCURRENT_UPLOADS};
+use skep_media::pruner::{Cadence, Wake};
+use skep_media::serve::Progress;
+#[cfg(feature = "test-hooks")]
+use skep_media::serve::STREAM_HOLD;
 use skep_util::notice;
 
 use super::blob_routes;
@@ -22,14 +27,7 @@ use super::request::HttpRequest;
 use super::scan::MAX_CONCURRENT_CLASS_SCANS;
 use super::{Daemon, Moment};
 use crate::auth::session::Peer;
-use crate::limits::{
-    BLOB_CHUNK, BLOB_IDLE_BOUND, BLOB_TRANSFER_BOUND, MAX_CONCURRENT_FETCHES,
-    MAX_CONCURRENT_UPLOADS, PRUNE_INTERVAL,
-};
-use crate::media::pruner::{Cadence, Wake};
-use crate::media::serve::Progress;
-#[cfg(feature = "test-hooks")]
-use crate::media::serve::STREAM_HOLD;
+use crate::limits::{BLOB_CHUNK, BLOB_IDLE_BOUND, BLOB_TRANSFER_BOUND, PRUNE_INTERVAL};
 use crate::write_path::{CheckpointSignal, StreamStep, Woken};
 
 /// The request worker count `skepd` serves with when the operator names
@@ -259,7 +257,7 @@ pub fn serve(daemon: Daemon, port: u16, workers: usize) -> io::Result<Skepd> {
             }
         }
     }
-    // THE PRUNER (`media/pruner.rs`), on a thread of its own: the pass once
+    // THE PRUNER (`skep-media`'s `pruner.rs`), on a thread of its own: the pass once
     // the cell index's walk at open completes, then on the cadence. A
     // served daemon's — an embedder routing by hand runs no pass but
     // through the hook. Spawned fallibly like the workers; a refused thread
@@ -513,7 +511,7 @@ fn serve_connection(daemon: &Arc<Daemon>, subscribers: &Subscribers, mut stream:
     // mutated across a point that can unwind — the challenge store's map and
     // queue move together under one lock, the sidecar appends before it
     // inserts, and an upload's hold is a guard its stream drops as it unwinds
-    // (`media::gate::Hold`). What a panic can cost is the tail of one write,
+    // (`skep_media::gate::Hold`). What a panic can cost is the tail of one write,
     // on two cards, and an M10 session, on a third. `WritePath::commit_under`
     // runs `execute` under the serialization lock, so a panic inside M10 after
     // its commit leaves that position unrecorded and unannounced; the reopen

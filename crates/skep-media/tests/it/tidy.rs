@@ -1,12 +1,11 @@
-//! THE LAYERING, CHECKED: `AGENTS.md`'s "skepd is layered; imports point
-//! down", over the six layers `ARCHITECTURE.md` §The daemon draws. Two
-//! leaves of the sixth — the permit pool and the operator's notice line —
-//! and the codec's determinism helpers live in `skep-util`, the support
-//! crate below this one; the media resource, once rows of the fifth, and
-//! its two leaf cells, once rows of the sixth, are `skep-media`'s, the
-//! crate beside the write path, whose own `tests/it/tidy.rs` holds its two
-//! layers. A path into either is a path outside this crate, which this
-//! check reads as it reads any other crate's, and no row names them.
+//! THE LAYERING, CHECKED: `AGENTS.md`'s "imports point down", kept by this
+//! crate for its own two layers, which `ARCHITECTURE.md` §The media
+//! resource draws — THE RESOURCE: the door, the gate, the index, the pruner
+//! and the serve, which name one another sideways and the leaves below; over
+//! THE LEAVES: the two cells and the limits, which name nothing of the
+//! resource. The daemon, the stores, the blob store and `skep-util` are
+//! other crates: a path into one is a path outside this crate, which this
+//! check reads as it reads any other crate's.
 //!
 //! Every in-crate module a `src/` file names in code — the leading module
 //! segments of each `crate::…`, `super::…` and `self::…` path, a brace
@@ -21,47 +20,32 @@
 //! Two consequences meet a reader as failures. A module that fits no row of
 //! [`LAYERS`] fails until it is placed, and placing it is the decision
 //! `ARCHITECTURE.md` records. And code names an in-crate item by its home
-//! module (`crate::codec::JsonCodec`), never through the crate root's
-//! re-export (`crate::JsonCodec`): the root re-exports items of every
-//! layer, so a path through it hides the layer it reaches.
+//! module, never through a re-export of the crate root's: the root
+//! re-exports items of every layer, so a path through it hides the layer it
+//! reaches.
 //!
-//! And THE TEST HOOKS, GATED: every item documented as a test hook — here,
-//! and in `skep-signature` — compiles only under the `test-hooks` feature —
-//! the second test below.
+//! Then THE TEST HOOKS, GATED: every item this crate documents as a test
+//! hook or a test seam compiles only under the `test-hooks` feature — the
+//! second test. And THE SURFACE IS THE DAEMON's NEED: every `pub` item is
+//! named in the crate's `README.md`, or is such a hook, `#[doc(hidden)]`
+//! under the feature — the third.
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
-/// Module → layer, top (0) to bottom (6). A module takes the layer of its
-/// LONGEST matching row, on `::` boundaries: `server::op` is a route by
-/// `server`, `server::http` is transport by its own row.
+/// Module → layer, top (0) to bottom (1). A module takes the layer of its
+/// LONGEST matching row, on `::` boundaries.
 const LAYERS: &[(&str, u8)] = &[
-    // 0 — the fuzz harness, above the daemon it drives.
-    ("fuzz_support", 0),
-    // 1 — the transport.
-    ("server::http", 1),
-    ("server::listen", 1),
-    // 2 — the routes, and beside them the operator's tools, which read the
-    // media resource and the store and nothing above themselves.
-    ("server", 2),
-    ("server::blob_routes", 2),
-    ("tools", 2),
-    // 3 — the daemon's vocabulary.
-    ("server::reply", 3),
-    ("server::request", 3),
-    ("server::scan", 3),
-    // 4 — the session layer, the registry sequence's producers among it.
-    ("auth", 4),
-    ("auth::policy::registry", 4),
-    // 5 — the write path; the media resource beside it — the door, the gate,
-    // the index, the pruner and the serve, once rows here — is `skep-media`'s.
-    ("write_path", 5),
-    // 6 — the leaves; `permits` and `notice`, once rows here, are
-    // `skep-util`'s, and the two cells `skep-media`'s.
-    ("codec", 6),
-    ("history", 6),
-    ("limits", 6),
-    ("serial", 6),
+    // 0 — the resource: the door, the gate, the index, the pruner, the serve.
+    ("door", 0),
+    ("gate", 0),
+    ("index", 0),
+    ("pruner", 0),
+    ("serve", 0),
+    // 1 — the leaves: the two cells, and the limits.
+    ("blind", 1),
+    ("cell", 1),
+    ("limits", 1),
 ];
 
 #[test]
@@ -83,7 +67,7 @@ fn every_module_names_only_its_own_layer_and_below() {
     let mut faults = Vec::new();
     for (file, module) in files.iter().zip(&modules) {
         let name = file.file_name().unwrap().to_str().unwrap();
-        if matches!(name, "lib.rs" | "main.rs" | "tests.rs") {
+        if matches!(name, "lib.rs" | "tests.rs") {
             continue;
         }
         let from = layer(module);
@@ -120,66 +104,141 @@ fn every_module_names_only_its_own_layer_and_below() {
     assert!(faults.is_empty(), "imports point down; these lines do not:\n{}", faults.join("\n"));
 }
 
-/// THE TEST HOOKS, GATED: every item this crate documents as a test hook — a
-/// doc line opening `TEST HOOK` or `The test seam` — compiles only under the
-/// `test-hooks` feature (or `test`), gated on the item itself or on the `mod`
-/// line of the file that holds it; and so does every one `skep-signature`
-/// documents, whose `src` is read too. `Cargo.toml`'s `test-hooks` card
-/// promises "a build that compiles no test compiles none of it"; and the
-/// signature libraries' types appear only on hooks no shipped build carries,
-/// in `skep-signature` — the one crate that links the signature libraries;
-/// skepd calls its verify.
-/// The gate's `--lib --bins` check proves the library COMPILES without the
-/// feature, never that no hook ships in it: a hook whose gate is dropped
-/// still compiles, and ships, with every other test green. Each of the two
-/// roots must yield a marker of its own, so a crate whose markers were
-/// reworded fails here rather than leaving its half of the check unread.
+/// THE TEST HOOKS, GATED: every item this crate documents as a test hook or
+/// a test seam — a doc line opening `TEST HOOK`, `TEST SEAM` or `The test
+/// seam` — compiles only under the `test-hooks` feature (or `test`), gated
+/// on the item itself or on the `mod` line of the file that holds it.
+/// `Cargo.toml`'s `test-hooks` card promises "a build that compiles no test
+/// compiles none of it". The gate's `--lib` check proves the library
+/// COMPILES without the feature, never that no hook ships in it: a hook
+/// whose gate is dropped still compiles, and ships, with every other test
+/// green. The root must yield a marker, so a crate whose markers were
+/// reworded fails here rather than leaving the check unread.
 #[test]
 fn every_test_hook_compiles_only_under_test_hooks() {
     let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let src = manifest.join("src");
+    let mut files = Vec::new();
+    rust_files(&src, &mut files);
+    files.sort();
+    let mut hooks = 0;
     let mut ungated = Vec::new();
-    for src in [manifest.join("src"), manifest.join("../skep-signature/src")] {
-        let mut files = Vec::new();
-        rust_files(&src, &mut files);
-        files.sort();
-        let mut hooks = 0;
-        for file in &files {
-            let text = std::fs::read_to_string(file).unwrap();
-            let lines: Vec<&str> = text.lines().collect();
-            let file_gated = declared_under_the_gate(&src, &module_of(&src, file));
-            let end = lines.iter().position(|l| l.trim() == "mod tests {").unwrap_or(lines.len());
-            for (i, line) in lines[..end].iter().enumerate() {
-                let doc = line.trim_start();
-                if !(doc.starts_with("/// TEST HOOK") || doc.starts_with("/// The test seam")) {
-                    continue;
-                }
-                hooks += 1;
-                let mut j = i;
-                while j < lines.len() && lines[j].trim_start().starts_with("///") {
-                    j += 1;
-                }
-                let (attributes, item) = attributes_from(&lines, j);
-                if !file_gated && !attributes.iter().any(|a| is_gate(a)) {
-                    ungated.push(format!(
-                        "{}:{}: `{}` is documented as a test hook and compiles without \
-                         `test-hooks`",
-                        file.strip_prefix(manifest).unwrap().display(),
-                        item + 1,
-                        lines.get(item).map_or("", |l| l.trim()),
-                    ));
-                }
+    for file in &files {
+        let text = std::fs::read_to_string(file).unwrap();
+        let lines: Vec<&str> = text.lines().collect();
+        let file_gated = declared_under_the_gate(&src, &module_of(&src, file));
+        let end = lines.iter().position(|l| l.trim() == "mod tests {").unwrap_or(lines.len());
+        for (i, line) in lines[..end].iter().enumerate() {
+            let doc = line.trim_start();
+            if !(doc.starts_with("/// TEST HOOK")
+                || doc.starts_with("/// TEST SEAM")
+                || doc.starts_with("/// The test seam"))
+            {
+                continue;
+            }
+            hooks += 1;
+            let mut j = i;
+            while j < lines.len() && lines[j].trim_start().starts_with("///") {
+                j += 1;
+            }
+            let (attributes, item) = attributes_from(&lines, j);
+            if !file_gated && !attributes.iter().any(|a| is_gate(a)) {
+                ungated.push(format!(
+                    "{}:{}: `{}` is documented as a test hook and compiles without `test-hooks`",
+                    file.strip_prefix(manifest).unwrap().display(),
+                    item + 1,
+                    lines.get(item).map_or("", |l| l.trim()),
+                ));
             }
         }
-        assert!(
-            hooks > 0,
-            "no test hook found under {}: the markers this check reads have moved",
-            src.display()
-        );
     }
+    assert!(
+        hooks > 0,
+        "no test hook found under {}: the markers this check reads have moved",
+        src.display()
+    );
     assert!(
         ungated.is_empty(),
         "every test hook compiles only under `test-hooks`; these do not:\n{}",
         ungated.join("\n")
+    );
+}
+
+/// THE SURFACE IS THE DAEMON's NEED (`CONTRIBUTING.md`: "A crate's
+/// `README.md` describes its public surface, and a change to that surface
+/// keeps it true"): every `pub` item of the library — a module, a type, a
+/// function or method, a constant, a static; `pub`, never `pub(crate)` — is
+/// named in `README.md` inside a backtick span (by its own name, or as
+/// `Type::name`), or is a hook: `#[doc(hidden)]` and gated under
+/// `test-hooks` itself, or a method of an `impl` block so gated, whose type
+/// is such a hook. A field is its struct's, a test module is read by
+/// nothing, and a `pub use` names no item of this crate's own.
+#[test]
+fn every_pub_item_is_named_in_the_readme_or_is_a_hidden_hook() {
+    let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let readme = std::fs::read_to_string(manifest.join("README.md")).unwrap();
+    // Every identifier inside a backtick span of the README.
+    let named: HashSet<String> = readme
+        .split('`')
+        .skip(1)
+        .step_by(2)
+        .flat_map(|span| {
+            span.split(|c: char| !(c.is_alphanumeric() || c == '_'))
+                .filter(|t| !t.is_empty())
+                .map(str::to_string)
+                .collect::<Vec<_>>()
+        })
+        .collect();
+    let src = manifest.join("src");
+    let mut files = Vec::new();
+    rust_files(&src, &mut files);
+    files.sort();
+    let (mut items, mut faults) = (0, Vec::new());
+    for file in &files {
+        if file.file_name().is_some_and(|n| n == "tests.rs") {
+            continue;
+        }
+        let text = std::fs::read_to_string(file).unwrap();
+        let lines: Vec<&str> = text.lines().collect();
+        let end = lines.iter().position(|l| l.trim() == "mod tests {").unwrap_or(lines.len());
+        for (i, line) in lines[..end].iter().enumerate() {
+            let Some(rest) = line.trim_start().strip_prefix("pub ") else { continue };
+            let mut words = rest.split_whitespace();
+            let keyword = words.next().unwrap_or("");
+            if !matches!(
+                keyword,
+                "fn" | "struct" | "enum" | "const" | "static" | "mod" | "type" | "trait"
+            ) {
+                continue; // a field, or a `pub use`
+            }
+            let name: String = words
+                .next()
+                .unwrap_or("")
+                .chars()
+                .take_while(|c| c.is_alphanumeric() || *c == '_')
+                .collect();
+            items += 1;
+            if named.contains(&name) {
+                continue;
+            }
+            let attributes = attributes_above(&lines, i);
+            let hidden = attributes.iter().any(|a| a == "#[doc(hidden)]");
+            let gated = attributes.iter().any(|a| is_gate(a));
+            if (hidden && gated) || enclosing_impl_is_gated(&lines, i) {
+                continue;
+            }
+            faults.push(format!(
+                "{}:{}: `{name}` is `pub`, named nowhere in README.md, and no hidden hook",
+                file.strip_prefix(manifest).unwrap().display(),
+                i + 1
+            ));
+        }
+    }
+    assert!(items > 0, "no `pub` item found under {}", src.display());
+    assert!(
+        faults.is_empty(),
+        "every `pub` item is in the README's surface or a hidden hook; these are neither:\n{}",
+        faults.join("\n")
     );
 }
 
@@ -197,7 +256,7 @@ enum Named {
 /// joined to the path before it — resolved: `crate::` starts at the root,
 /// `self::` at `module`, each `super::` one step up; the leading lowercase
 /// segments after that name the module. A lowercase item riding along
-/// (`codec::obj`) is harmless — layers match by prefix.
+/// (`cell::classify`) is harmless — layers match by prefix.
 fn resolve(module: &str, named_path: &str, top: &HashSet<&str>) -> Named {
     let mut segments = named_path.split("::").filter(|s| !s.is_empty()).peekable();
     let mut base: Vec<&str> = match segments.next() {
@@ -229,12 +288,9 @@ fn resolve(module: &str, named_path: &str, top: &HashSet<&str>) -> Named {
 /// Every in-crate path the code names, with the line it starts on: each
 /// `crate::…`, `super::…` and `self::…` token — a maximal run of identifier
 /// characters and `:` — and, where one ends at a brace group (`use
-/// crate::{server::Daemon, codec::obj};`, on one line or across several),
-/// each member of the group joined to it, a nested group's likewise. The
-/// token alone is not enough there: `crate::` names no module and `super::`
-/// only the parent, so a group would hide every module its members name.
+/// crate::{gate::MediaGate, cell};`, on one line or across several), each
+/// member of the group joined to it, a nested group's likewise.
 fn named_paths(code: &[(usize, &str)]) -> Vec<(usize, String)> {
-    // One text, and each byte's line, so a group may span lines.
     let mut text = String::new();
     let mut line_of = Vec::new();
     for &(n, line) in code {
@@ -345,9 +401,43 @@ fn attributes_from(lines: &[&str], mut at: usize) -> (Vec<String>, usize) {
     (attributes, at)
 }
 
+/// The attributes directly above the item at `lines[item]` — the block
+/// walked up to its first `#[` line, a multi-line attribute's continuation
+/// lines (which end in `]` and open no attribute of their own) stepped over.
+fn attributes_above(lines: &[&str], item: usize) -> Vec<String> {
+    let mut start = item;
+    while start > 0 {
+        let above = lines[start - 1].trim();
+        let opens = above.starts_with("#[");
+        let continues = above.ends_with(']') && !above.starts_with("//") && !opens;
+        if opens || continues {
+            start -= 1;
+        } else {
+            break;
+        }
+    }
+    attributes_from(lines, start).0
+}
+
+/// Whether the item at `lines[item]` sits inside an `impl` block whose own
+/// attributes carry the gate: the first column-0 line above it is that
+/// block's `impl` line, and the attributes above that line are read.
+fn enclosing_impl_is_gated(lines: &[&str], item: usize) -> bool {
+    if !lines[item].starts_with(char::is_whitespace) {
+        return false;
+    }
+    let Some(head) = (0..item)
+        .rev()
+        .find(|&k| !lines[k].is_empty() && !lines[k].starts_with(char::is_whitespace))
+    else {
+        return false;
+    };
+    lines[head].starts_with("impl") && attributes_above(lines, head).iter().any(|a| is_gate(a))
+}
+
 /// Whether the `mod` line declaring `module`, in its parent's file, carries
 /// the gate among the attributes directly above it — the whole file then
-/// compiles only under it (`server/hooks.rs`, `fuzz_support.rs`).
+/// compiles only under it.
 fn declared_under_the_gate(src: &Path, module: &str) -> bool {
     let (parent, name) = module.rsplit_once("::").unwrap_or(("", module));
     let parent_file = if parent.is_empty() {
@@ -395,8 +485,7 @@ fn code_lines(text: &str) -> impl Iterator<Item = (usize, &str)> {
 /// The line, numbered from 1, of the first top-level line that follows a
 /// file's inline `mod tests {` — `None` where the module's own closing `}`,
 /// its first line back at column 0, is the last, and `None` for a file with
-/// no inline test module. A column-0 line before that brace is reported
-/// too: the module's contents are indented, so it cannot be the module's.
+/// no inline test module.
 fn after_test_module(text: &str) -> Option<usize> {
     let lines: Vec<&str> = text.lines().collect();
     let start = lines.iter().position(|line| line.trim() == "mod tests {")?;
@@ -408,9 +497,9 @@ fn after_test_module(text: &str) -> Option<usize> {
 }
 
 /// The names the crate root re-exports from its OWN modules (`pub use
-/// server::{Daemon, …}`), which code outside the root reaches by their home
-/// module. The engine and kernel types it re-exports (`crate::World`) are
-/// not among them: those name no layer.
+/// gate::{…}`), which code outside the root reaches by their home module.
+/// The root's own items (`MediaOptions`, `UploadPool`) and another crate's
+/// re-exports are not among them: those name no layer.
 fn root_reexports(lib: &str, top: &HashSet<&str>) -> HashSet<String> {
     let code: String = code_lines(lib).map(|(_, line)| format!("{line}\n")).collect();
     let mut names = HashSet::new();
@@ -442,8 +531,7 @@ fn layer(module: &str) -> u8 {
         })
 }
 
-/// `src/server/op.rs` → `server::op`; `src/write_path/feed.rs` and
-/// `src/write_path/feed/mod.rs` alike → `write_path::feed`.
+/// `src/gate.rs` → `gate`; `src/gate/tests.rs` → `gate::tests`.
 fn module_of(src: &Path, file: &Path) -> String {
     let relative = file.strip_prefix(src).unwrap().with_extension("");
     let mut segments: Vec<String> =

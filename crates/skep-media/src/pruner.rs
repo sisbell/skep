@@ -12,8 +12,8 @@
 //! arm"; §The media stores — "the pruner's pass rewrites either store the
 //! same way once its log has passed a size trigger"; the register M-I5 (b),
 //! (f); the rulings ms5-R, ms5-T4 — D13's carve-out): THE PASS, run once
-//! the index is ready and then on a cadence
-//! ([`crate::limits::PRUNE_INTERVAL`]).
+//! the index is ready and then on a cadence (the daemon's
+//! `PRUNE_INTERVAL`, the transport's thread waiting it out).
 //!
 //! Each pass, in order: (a) THE EXPIRED PARTIALS — every upload record past
 //! its expiry and held by no stream is retired and its partial removed,
@@ -58,8 +58,8 @@ use std::time::Duration;
 use parking_lot::{Condvar, Mutex};
 use skep_util::notice;
 
-use super::cell::DESIGNATION;
-use super::gate::MediaGate;
+use crate::cell::DESIGNATION;
+use crate::gate::MediaGate;
 use crate::limits::{COMPACTION_MIN_LINES, COMPACTION_TRIGGER};
 
 /// What one pass did — the test hook's answer, and, rendered through its
@@ -133,17 +133,14 @@ impl fmt::Display for PrunePass {
 /// — `blake3`, the one cell schema's. A directory under `blobs/` named
 /// otherwise is a sidecar of a build this one is not, and halts the
 /// unlink pass.
-pub(crate) const PINNED_DESIGNATIONS: &[&str] = &[DESIGNATION];
+pub const PINNED_DESIGNATIONS: &[&str] = &[DESIGNATION];
 
 /// ONE PASS over the media gate's store and index (`media_gate`),
 /// `exclusive` the acquisition of the credential lock's write arm — called
 /// once per file, its guard held across that file's re-read and rename
 /// aside and dropped before the aside's unlink and before the next. `None`
 /// where the index is not ready: the pass does not start (ms5-R).
-pub(crate) fn pass<G>(
-    media_gate: &MediaGate,
-    exclusive: impl Fn() -> G,
-) -> io::Result<Option<PrunePass>> {
+pub fn pass<G>(media_gate: &MediaGate, exclusive: impl Fn() -> G) -> io::Result<Option<PrunePass>> {
     let index = media_gate.index();
     if !index.is_ready() {
         return Ok(None);
@@ -264,14 +261,14 @@ fn compact_logs(store: &skep_blobs::Store, report: &mut PrunePass) {
 
 /// THE CADENCE: the pruner thread's clock and stop, one condvar — a wait of
 /// the interval ends early at the stop, so a shutdown never waits on it.
-pub(crate) struct Cadence {
+pub struct Cadence {
     stopped: Mutex<bool>,
     wake: Condvar,
 }
 
 /// What a wait ended with.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum Wake {
+pub enum Wake {
     /// The interval passed.
     Due,
     /// The stop was asked.
@@ -279,12 +276,13 @@ pub(crate) enum Wake {
 }
 
 impl Cadence {
-    pub(crate) fn new() -> Cadence {
+    /// A cadence not yet stopped.
+    pub fn new() -> Cadence {
         Cadence { stopped: Mutex::new(false), wake: Condvar::new() }
     }
 
     /// Wait `interval`, or less where the stop arrives first.
-    pub(crate) fn wait(&self, interval: Duration) -> Wake {
+    pub fn wait(&self, interval: Duration) -> Wake {
         let mut stopped = self.stopped.lock();
         if *stopped {
             return Wake::Stop;
@@ -298,7 +296,7 @@ impl Cadence {
     }
 
     /// Stop: every waiter wakes with [`Wake::Stop`], now and forever.
-    pub(crate) fn stop(&self) {
+    pub fn stop(&self) {
         *self.stopped.lock() = true;
         self.wake.notify_all();
     }
@@ -338,7 +336,7 @@ mod tests {
         use skep_blobs::HashFunction;
         use skep_namespace::PrincipalId;
 
-        use super::super::index::Rebuild;
+        use crate::index::Rebuild;
 
         let dir = tempfile::tempdir().expect("tempdir");
         let gate = MediaGate::open(dir.path()).expect("the store opens");

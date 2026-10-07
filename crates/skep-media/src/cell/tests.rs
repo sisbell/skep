@@ -6,7 +6,8 @@ use super::*;
 
 /// The vector set, as the fixture carries it.
 fn fixture() -> Value {
-    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/it/fixtures/media/cells.json");
+    let path =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../skepd/tests/it/fixtures/media/cells.json");
     let text = std::fs::read_to_string(&path)
         .unwrap_or_else(|e| panic!("cannot read {}: {e}", path.display()));
     serde_json::from_str(&text).expect("the fixture is JSON")

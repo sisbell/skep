@@ -52,6 +52,20 @@ cargo check -p skep-blobs --lib || exit $?
 RUSTDOCFLAGS="-D rustdoc::broken_intra_doc_links" \
     cargo doc -p skep-blobs --lib --no-deps --document-private-items || exit $?
 
+# skep-media's library without `test-hooks` — every test build turns it on
+# (the crate's self dev-dependency, and skepd's forward), so this is the
+# build that shows the media resource compiles without its test seam: the
+# walk and stream holds, the prune hold, the gate's clock, free-space and
+# limits overrides, the index's report and counts, the pools' `try_hold`.
+cargo check -p skep-media --lib || exit $?
+
+# …and its docs as they ship, without `test-hooks`, for skep-blobs' reason:
+# a shipped doc that linked a gated item would resolve under
+# `--all-features` below and break here, so the crate names one by code
+# span, never by link.
+RUSTDOCFLAGS="-D rustdoc::broken_intra_doc_links" \
+    cargo doc -p skep-media --lib --no-deps --document-private-items || exit $?
+
 # skep-util, the support crate below skepd and the media crate: `std` and
 # `serde_json` alone, no feature. The test run below builds it as a member,
 # but only after every check above has passed and inside the one long run;
@@ -87,12 +101,12 @@ cargo nextest run -p skepd --all-features --profile full \
     -E 'test(/^client::/) | test(/^cors::/) | test(/the_death_signal_rides_exactly_the_documented_routes$/) | test(/the_route_set_agrees_across_preflight_dispatch_and_refusal$/)' \
     || exit $?
 
-# Every intra-doc link in skepd, skep-signature, skep-resolve, skep-blobs
-# and skep-util resolves — a private item's too, and a link resolves only
-# where its module could name the target in code, so a narrowing that
-# strands a link fails here rather than in a reader's hands.
+# Every intra-doc link in skepd, skep-media, skep-signature, skep-resolve,
+# skep-blobs and skep-util resolves — a private item's too, and a link
+# resolves only where its module could name the target in code, so a
+# narrowing that strands a link fails here rather than in a reader's hands.
 RUSTDOCFLAGS="-D rustdoc::broken_intra_doc_links" \
-    cargo doc -p skepd -p skep-signature -p skep-resolve -p skep-blobs -p skep-util --lib --no-deps --document-private-items --all-features \
+    cargo doc -p skepd -p skep-media -p skep-signature -p skep-resolve -p skep-blobs -p skep-util --lib --no-deps --document-private-items --all-features \
     || exit $?
 
 # --run-ignored all re-admits the #[ignore] timing partition. One test is

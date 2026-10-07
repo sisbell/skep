@@ -26,7 +26,7 @@ fn each_write_states_which_addresses_may_hold_a_cell() {
     let doc = crate::codec::wire_address("1.0.1.0.1").expect("a test address");
     let cell = format!(
         r#"{{"type":"{}","hash":"af1349b9f5f9a1a6a0404dea36dcc9499bcb25c9adc112b7cc9a93cae41f3262","size":5}}"#,
-        crate::media::cell::KIND
+        skep_media::cell::KIND
     );
     let insert = Op::Insert {
         doc: doc.clone(),

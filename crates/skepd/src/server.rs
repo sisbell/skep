@@ -3,7 +3,7 @@
 //! parse/marshal/dispatch/configure; every decision lives in a store, save
 //! the three the spec gives the daemon — the session layer's gates (`auth/`,
 //! the upload family's among them), the published head's cadence
-//! (`write_path/head.rs`) and the media door (`media/door.rs`).
+//! (`write_path/head.rs`) and the media door (`skep-media`'s `door.rs`).
 //!
 //! Split for testability: [`Daemon`] holds the state and routes
 //! `&HttpRequest → Routed` with no socket anywhere; [`serve`]/[`Skepd`]
@@ -187,6 +187,11 @@ use skep_identity::HasIdentity;
 use skep_kernel::{
     BurnedSeqPolicy, CheckpointError, CheckpointPolicy, Durability, KernelConfig, SaltSource, Seq,
 };
+use skep_media::gate::MediaGate;
+use skep_media::index;
+use skep_media::limits::MAX_BLOB_BYTES;
+use skep_media::serve::FetchPool;
+use skep_media::{MediaOptions, UploadPool};
 #[cfg(feature = "observe")]
 use skep_namespace::PrincipalId;
 use skep_util::notice;
@@ -196,11 +201,7 @@ use std::sync::Arc;
 use crate::auth::{startup_warnings, AuthOptions, AuthState, PortAlreadyBound, Reissue};
 use crate::codec::JsonCodec;
 use crate::history::History;
-use crate::limits::{MAX_BLOB_BYTES, MAX_REQUEST_BODY, MAX_SMALL_BODY};
-use crate::media::gate::MediaGate;
-use crate::media::index;
-use crate::media::serve::FetchPool;
-use crate::media::{MediaOptions, UploadPool};
+use crate::limits::{MAX_REQUEST_BODY, MAX_SMALL_BODY};
 use crate::write_path::WritePath;
 use actor::Resolved;
 use reply::{class_varying, refuse, with_signal, TransportError};
@@ -718,7 +719,7 @@ impl Daemon {
         // the walk adds the world's into the same copy (the composition
         // clause). The daemon serves while it walks; the index's three
         // readers refuse `index_rebuilding` until it completes (ms5-R).
-        index::start_walk(&daemon.engine, Arc::clone(daemon.media.index()));
+        index::start_walk(daemon.engine.kernel(), Arc::clone(daemon.media.index()));
         Ok(daemon)
     }
 

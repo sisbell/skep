@@ -9,6 +9,7 @@ use skep_engine::World;
 use skep_febe::{Codec, Request, Response, SessionId};
 use skep_identity::{HasIdentity, IdentityState};
 use skep_kernel::{Attestation, Snapshot};
+use skep_media::door::media_door;
 #[cfg(any(test, feature = "test-hooks"))]
 use skep_util::notice;
 
@@ -28,7 +29,6 @@ use crate::auth::policy::{
 use crate::auth::session::Actor;
 use crate::auth::LockWrite;
 use crate::codec::{key_set_reply, DaemonOp};
-use crate::media::door::media_door;
 use crate::serial::SerialGuard;
 use crate::write_path::{write_meta, FrameMeta, Signed};
 
@@ -279,7 +279,7 @@ impl Daemon {
     /// the snapshot so the gates' answers and the execute they gate stand on
     /// one committed state; the producers' ORDER is `plain_admission`'s, not
     /// this site's, and the media door's place — after every producer, ahead
-    /// of the store — is [`crate::media::door`]'s to state.
+    /// of the store — is [`skep_media::door`]'s to state.
     fn plain_sequence(
         &self,
         meta: FrameMeta,
@@ -321,7 +321,7 @@ impl Daemon {
                 return with_signal(credential_refused(meta.kind, &r), closed);
             }
         };
-        // THE MEDIA DOOR (media lanes A and B; `media::door`): one step of
+        // THE MEDIA DOOR (media lanes A and B; `skep_media::door`): one step of
         // its own, after every producer above and ahead of the store, on the
         // same locked snapshot the commit will read — so the check that
         // passed and the commit it guards are one interval. A step and never

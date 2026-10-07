@@ -5,6 +5,8 @@ use serde_json::Value;
 use skep_address::Address;
 use skep_engine::HistoryError;
 use skep_febe::{Codec, FaultSite, OpKind, RejectCode, Rejection, Response};
+use skep_media::door::MediaRefusal;
+use skep_media::serve::{Admitted, FetchRefusal, NamedBlob};
 use skep_util::json::obj;
 
 use crate::auth::policy::{CredentialRefusal, RegistryRefusal};
@@ -13,8 +15,6 @@ use crate::codec::{
     credential_refused_reply, op_name, registry_refused_reply, to_bytes, JsonCodec,
 };
 use crate::history::Unavailable;
-use crate::media::door::MediaRefusal;
-use crate::media::serve::{Admitted, FetchRefusal, NamedBlob};
 
 /// Preflight cache lifetime advertised on `OPTIONS` (wire v4).
 const CORS_MAX_AGE_SECS: &str = "86400";

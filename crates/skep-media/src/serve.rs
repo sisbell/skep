@@ -20,11 +20,11 @@
 //!    NOTHING of a value the requester may not read is read on its behalf
 //!    (PATTERNS P31). The route holds no second reading of the predicate
 //!    (M-I2 (a): THE FETCH IS GATED BY THE SAME PREDICATE AS THE READ).
-//! 4. THE CLASSIFICATION — the value answered, read by [`cell::classify`]:
+//! 4. THE CLASSIFICATION — the value answered, read by `cell::classify`:
 //!    no value at the address; a value naming no media kind; a value naming
 //!    a kind under no schema this build reads (D13's halt, the door's
 //!    `unknown_cell_schema` on this surface); a BLIND cell, whose picture
-//!    this board holds no byte of (`media/blind.rs`: nothing the daemon does
+//!    this board holds no byte of (`blind.rs`: nothing the daemon does
 //!    for one reads a file, a lease or an index entry — this arm reaches no
 //!    store); or the picture's cell, whose `hash` and `size` the file is
 //!    held to.
@@ -43,7 +43,7 @@
 //!    the check is complete.
 //!
 //! Then THE STREAM, the transport's: the head with the file's length, the
-//! body one [`BLOB_CHUNK`](crate::limits::BLOB_CHUNK) at a time under the
+//! body one `BLOB_CHUNK` (the daemon's) at a time under the
 //! idle bound and the transfer bound, and BETWEEN CHUNKS the re-resolution
 //! (M-I2 (g): THE ENTITLEMENT IS RE-RESOLVED MID-STREAM) at whichever of
 //! [`Progress`]'s two intervals comes first — the requester against the
@@ -54,22 +54,24 @@
 //! when that value drops, on every exit.
 //!
 //! Sits at the write path's layer beside the media gate and the door
-//! (`ARCHITECTURE.md` §The daemon): it reads the store through the media
-//! gate and M10 through its front door, and names nothing of the transport
-//! or the routes. Every pin here is INTERIM (sm-Q8).
+//! (`ARCHITECTURE.md` §The media resource): it reads the store through the
+//! media gate and M10 through its front door, and names nothing of the
+//! transport or the routes. Every pin here is INTERIM (sm-Q8).
 
 use std::fs::File;
 use std::io::{self, Read};
 
 use skep_address::{document_of, Address, Level, Nat};
-use skep_content::Val;
-use skep_engine::World;
-use skep_febe::{ISpan, Op, OperationSurface, Rejection, Request, Response, SessionId};
+use skep_arrangement::M5Rec;
+use skep_content::{ContentWrite, Val};
+use skep_febe::{FebeWorld, ISpan, Op, OperationSurface, Rejection, Request, Response, SessionId};
+use skep_links::LinkRec;
+use skep_namespace::M3Rec;
 use skep_util::json::hex_string;
 use skep_util::permits::{Permit, Permits};
 
-use super::cell::{self, Class, DESIGNATION};
-use super::gate::MediaGate;
+use crate::cell::{self, Class, DESIGNATION};
+use crate::gate::MediaGate;
 use crate::limits::{
     FETCH_RECHECK_BYTES, FETCH_RECHECK_INTERVAL, MAX_BLOB_BYTES, MAX_CONCURRENT_FETCHES,
 };
@@ -79,10 +81,11 @@ use crate::limits::{
 /// borrow: a [`Permit`] names the pool that issued it, so no fetch spends a
 /// slot of either and neither spends one of these. [`MAX_CONCURRENT_FETCHES`]
 /// slots; a drained pool REFUSES, never queues.
-pub(crate) struct FetchPool(Permits);
+pub struct FetchPool(Permits);
 
 impl FetchPool {
-    pub(crate) fn new() -> FetchPool {
+    /// The pool at its count, [`MAX_CONCURRENT_FETCHES`], every slot free.
+    pub fn new() -> FetchPool {
         FetchPool(Permits::new(MAX_CONCURRENT_FETCHES))
     }
 
@@ -94,8 +97,9 @@ impl FetchPool {
     /// TEST HOOK, reached through `Daemon::try_hold_fetch_permit`: hold one
     /// permit exactly as an in-flight fetch does.
     #[cfg(any(test, feature = "test-hooks"))]
+    #[doc(hidden)]
     #[must_use = "a permit dropped at once holds nothing"]
-    pub(crate) fn try_hold(&self) -> Option<Permit<'_>> {
+    pub fn try_hold(&self) -> Option<Permit<'_>> {
         self.0.try_acquire()
     }
 }
@@ -105,7 +109,7 @@ impl FetchPool {
 /// the transport does after the last byte, or at the reset. The file's
 /// bytes are what the stream writes and nothing else; its length is the
 /// cell's `size`, by the check.
-pub(crate) struct Admitted<'a> {
+pub struct Admitted<'a> {
     i: Address,
     bytes: Vec<u8>,
     _permit: Permit<'a>,
@@ -114,17 +118,17 @@ pub(crate) struct Admitted<'a> {
 impl Admitted<'_> {
     /// The address served — what the mid-stream re-check asks the gate about
     /// again.
-    pub(crate) fn i(&self) -> &Address {
+    pub fn i(&self) -> &Address {
         &self.i
     }
 
     /// The file's length: the cell's `size`, by the check.
-    pub(crate) fn size(&self) -> u64 {
+    pub fn size(&self) -> u64 {
         self.bytes.len() as u64
     }
 
     /// The file, whole.
-    pub(crate) fn bytes(&self) -> &[u8] {
+    pub fn bytes(&self) -> &[u8] {
         &self.bytes
     }
 }
@@ -137,16 +141,18 @@ impl Admitted<'_> {
 /// members at the address already, so the refusal discloses nothing the
 /// gate did not admit.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct NamedBlob {
-    pub(crate) hash: String,
-    pub(crate) size: u64,
+pub struct NamedBlob {
+    /// The cell's `hash`, 64 lowercase hex characters.
+    pub hash: String,
+    /// The cell's `size`.
+    pub size: u64,
 }
 
 /// Why a fetch is refused — one variant per step of the order that can
 /// refuse, in the order's own sequence; the mapping onto the wire's status
 /// and token is `server/reply.rs`'s (`refuse_fetch`), not this module's.
 #[derive(Debug)]
-pub(crate) enum FetchRefusal {
+pub enum FetchRefusal {
     /// Step 0: `i` is not an element position of a document.
     Shape(String),
     /// Steps 1–3: M10's own rejection of the read by identity — `withheld`
@@ -181,13 +187,20 @@ pub(crate) enum FetchRefusal {
 /// the fetch pool the answer's permit comes from, which the [`Admitted`]
 /// holds for as long as it lives; `i` the address asked for, taken by value
 /// because the [`Admitted`] keeps it as the mid-stream re-check's subject.
-pub(crate) fn fetch<'a>(
-    febe: &OperationSurface<World>,
+/// Generic over the world M10 reads ([`FebeWorld`]) under the record lift
+/// M10's own `execute` requires of it — the bound `skep-febe` writes, and
+/// no other; the daemon instantiates it at its `World`.
+pub fn fetch<'a, W>(
+    febe: &OperationSurface<W>,
     session: SessionId,
     media_gate: &MediaGate,
     pool: &'a FetchPool,
     i: Address,
-) -> Result<Admitted<'a>, FetchRefusal> {
+) -> Result<Admitted<'a>, FetchRefusal>
+where
+    W: FebeWorld,
+    W::Record: From<M3Rec> + From<M5Rec> + From<LinkRec> + From<ContentWrite>,
+{
     // 0 — the shape: an element position of some document, or nothing is
     // asked of any store.
     if i.level() != Level::Element || document_of(&i).is_none() {
@@ -223,17 +236,25 @@ pub(crate) fn fetch<'a>(
 /// now withholds or rejects it, or no value is minted there any more. The
 /// requester's own re-resolution against the head is the route's, run
 /// before this.
-pub(crate) fn gate_admits(febe: &OperationSurface<World>, session: SessionId, i: &Address) -> bool {
+pub fn gate_admits<W>(febe: &OperationSurface<W>, session: SessionId, i: &Address) -> bool
+where
+    W: FebeWorld,
+    W::Record: From<M3Rec> + From<M5Rec> + From<LinkRec> + From<ContentWrite>,
+{
     matches!(read_by_identity(febe, session, i), Ok(Some(_)))
 }
 
 /// M10's read by identity of the one span `{i, 1}`, as `session`: the value
 /// minted at `i`, `None` where none is, or M10's rejection.
-fn read_by_identity(
-    febe: &OperationSurface<World>,
+fn read_by_identity<W>(
+    febe: &OperationSurface<W>,
     session: SessionId,
     i: &Address,
-) -> Result<Option<Val>, Rejection> {
+) -> Result<Option<Val>, Rejection>
+where
+    W: FebeWorld,
+    W::Record: From<M3Rec> + From<M5Rec> + From<LinkRec> + From<ContentWrite>,
+{
     let request = Request {
         id: None,
         op: Op::RetrieveI { spans: vec![ISpan { start: i.clone(), width: Nat::from(1u32) }] },
@@ -289,7 +310,7 @@ fn read_whole(media_gate: &MediaGate, cell: &cell::Cell) -> Result<Vec<u8>, Fetc
 /// the time bound through the clock seam and a reader draining at a
 /// trickle holds no interval open past it.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct Progress {
+pub struct Progress {
     since_check: u64,
     checked_ms: u64,
 }
@@ -297,24 +318,24 @@ pub(crate) struct Progress {
 impl Progress {
     /// At the stream's open, `now_ms` the media gate's clock: nothing written
     /// since the gate's own answer, which stands as the first check.
-    pub(crate) fn new(now_ms: u64) -> Progress {
+    pub fn new(now_ms: u64) -> Progress {
         Progress { since_check: 0, checked_ms: now_ms }
     }
 
     /// `n` more bytes written.
-    pub(crate) fn advance(&mut self, n: u64) {
+    pub fn advance(&mut self, n: u64) {
         self.since_check = self.since_check.saturating_add(n);
     }
 
     /// Whether a re-check is due at `now_ms`: the byte interval reached, or
     /// the time interval elapsed on the media gate's clock.
-    pub(crate) fn due(&self, now_ms: u64) -> bool {
+    pub fn due(&self, now_ms: u64) -> bool {
         self.since_check >= FETCH_RECHECK_BYTES
             || now_ms.saturating_sub(self.checked_ms) >= FETCH_RECHECK_INTERVAL.as_millis() as u64
     }
 
     /// A re-check passed at `now_ms`: both intervals start over.
-    pub(crate) fn reset(&mut self, now_ms: u64) {
+    pub fn reset(&mut self, now_ms: u64) {
         self.since_check = 0;
         self.checked_ms = now_ms;
     }
@@ -327,30 +348,34 @@ impl Progress {
 /// race against the transport. Process-wide, as the cell index walk's hold
 /// is; a `wait` while no hold is armed returns at once.
 #[cfg(any(test, feature = "test-hooks"))]
-pub(crate) struct StreamHold {
+#[doc(hidden)]
+pub struct StreamHold {
     held: parking_lot::Mutex<bool>,
     released: parking_lot::Condvar,
 }
 
+/// The test seam's one hold on the stream — process-wide; the transport
+/// waits on it between chunks in a `test-hooks` build.
 #[cfg(any(test, feature = "test-hooks"))]
-pub(crate) static STREAM_HOLD: StreamHold =
+#[doc(hidden)]
+pub static STREAM_HOLD: StreamHold =
     StreamHold { held: parking_lot::Mutex::new(false), released: parking_lot::Condvar::new() };
 
 #[cfg(any(test, feature = "test-hooks"))]
 impl StreamHold {
     /// Arm: every stream parks between its chunks from here on.
-    pub(crate) fn hold(&self) {
+    pub fn hold(&self) {
         *self.held.lock() = true;
     }
 
     /// Release: every parked stream proceeds, and later streams never park.
-    pub(crate) fn release(&self) {
+    pub fn release(&self) {
         *self.held.lock() = false;
         self.released.notify_all();
     }
 
     /// The stream's side: park here while the hold is armed.
-    pub(crate) fn wait(&self) {
+    pub fn wait(&self) {
         let mut held = self.held.lock();
         while *held {
             self.released.wait(&mut held);

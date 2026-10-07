@@ -12,12 +12,12 @@
 //! THE DAEMON DOES FOR A BLIND CELL READS A FILE, A LEASE OR AN INDEX ENTRY
 //! (the investigation §5). What the daemon learns about the bytes: nothing.
 //! It parses one JSON object and stores it, as it stores a sentence. A leaf,
-//! as `media/cell.rs` is.
+//! as `cell.rs` is.
 //!
 //! THE SCHEMA, v1. One JSON object of exactly two members, in this order:
 //! `type`, a string, the kind's address ([`KIND`]); `commitment`, a string,
 //! 32 bytes as 64 LOWERCASE hexadecimal characters. THE CANONICAL RULE is
-//! the picture's (`media/cell.rs`): `parse(b)` answers a blind cell only
+//! the picture's (`cell.rs`): `parse(b)` answers a blind cell only
 //! where `b == encode(parse(b))`, so a `size` member, a `hash` member, a
 //! second `commitment`, the members reordered, uppercase hex, 63 or 65 hex
 //! characters, a space, a trailing byte — each is NO CELL at every parser,
@@ -25,15 +25,16 @@
 //! no reader of a cell at all: THE CAP IS THE KIND's, one for every media
 //! cell kind. The
 //! agreement of the parsers that cannot share this code is held by THE
-//! VECTOR SET, `tests/it/fixtures/media/blind-cells.json`, the mirror of the
-//! picture's `cells.json`, run against this parser by this file's test.
+//! VECTOR SET, `skepd`'s `tests/it/fixtures/media/blind-cells.json`, the
+//! mirror of the picture's `cells.json`, run against this parser by this
+//! file's test.
 //!
 //! NAMING THE KIND, and the classification: a value whose `type` member is
 //! [`KIND`] names this kind whatever the rest of it holds, and one naming it
 //! under no schema this build reads is [`CellRefusal::UnknownSchema`] — the
 //! door's `unknown_cell_schema`, the fetch route's halt face — never admitted
 //! as ordinary bytes (D13's carve-out, one strictness at every parser). The
-//! `type` is read ONCE, by [`cell::classify`](super::cell::classify), which
+//! `type` is read ONCE, by [`cell::classify`](crate::cell::classify), which
 //! hands this parser the object it built; [`parse_object`] is that
 //! classification's blind arm, and [`CellRefusal::NotTheKind`] for the
 //! picture kind's `type` as the picture's parser is for this kind's. A
@@ -49,8 +50,8 @@ use serde_json::{Map, Value};
 use skep_util::json::{hex_string, parse_lower_hex};
 
 #[cfg(test)]
-use super::cell;
-use super::cell::{CellRefusal, HASH_BYTES};
+use crate::cell;
+use crate::cell::{CellRefusal, HASH_BYTES};
 
 /// The blind kind's address — INTERIM, TEST-ONLY: the commons media range's
 /// allocation beside the picture's `3.89` under the ghost document's type
@@ -141,8 +142,8 @@ mod tests {
 
     /// The vector set, as the fixture carries it.
     fn fixture() -> Value {
-        let path =
-            Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/it/fixtures/media/blind-cells.json");
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../skepd/tests/it/fixtures/media/blind-cells.json");
         let text = std::fs::read_to_string(&path)
             .unwrap_or_else(|e| panic!("cannot read {}: {e}", path.display()));
         serde_json::from_str(&text).expect("the fixture is JSON")

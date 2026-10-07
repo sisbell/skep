@@ -7,11 +7,12 @@
 //! made in a store, save three the spec gives the daemon: the session layer's
 //! gates, the PUBLISHED HEAD's cadence (PUB-6.65) — when the board's own
 //! daemon writes the head document `H`, the one write it makes on its own
-//! initiative — and the MEDIA DOOR (media lane A): whether a value a write
-//! carries is a picture's reference cell, parsed by the daemon's one parser,
-//! and what a write that would mint one is answered. This crate is the wire
-//! codec, the session layer, the head writer, the media door, the process,
-//! and the kernel's configuration:
+//! initiative — and the MEDIA DOOR (media lane A; `skep-media`'s, run by
+//! this daemon's plain write sequence): whether a value a write carries is
+//! a picture's reference cell, parsed by the one parser, and what a write
+//! that would mint one is answered. This crate is the wire codec, the
+//! session layer, the head writer, the media door's one caller, the
+//! process, and the kernel's configuration:
 //!
 //! * [`JsonCodec`] — the one concrete `Codec` (M10's seam): JSON frames in,
 //!   deterministic JSON responses out. The byte conventions are the
@@ -33,20 +34,22 @@
 //!   version on the write path's own cadence, as the system account's
 //!   principal with no session, its commits testifying `"system"` on
 //!   `/changes` (wire.md §The other endpoints).
-//! * `media/` — the MEDIA DOOR (lane A) and, beside the write path, the
-//!   daemon's media resource (lane B): the blob store `skep-blobs` opened
-//!   under `blobs/` in the data dir, the limits in force, the hold a stream
-//!   has on its upload, the three scopes a deposit is refused on, and the
+//! * `skep-media` — the MEDIA DOOR (lane A) and, beside the write path, the
+//!   daemon's media resource (lane B), a crate of its own this daemon
+//!   instantiates at its `World`: the blob store `skep-blobs` opened under
+//!   `blobs/` in the data dir, the limits in force, the hold a stream has
+//!   on its upload, the three scopes a deposit is refused on, and the
 //!   binding the door asks — a cell is admitted only where its hash is one
-//!   this principal deposited under its own live lease; the deposit read.
-//!   The PUT's routes (`server/blob_routes.rs`, the family `/blob/upload`)
-//!   stream a body one chunk at a time into the store and commit nothing
-//!   to the journal (wire.md §Media). And THE FETCH (`media/serve.rs`):
-//!   `GET /blob?i=<address>` serves a picture's whole file, gated by M10's
-//!   read by identity, checked against its cell before its first byte,
-//!   under a permit pool, the requester re-resolved mid-stream; the BLIND
-//!   DOCUMENT's cell (`media/blind.rs`) is the second kind the door and the
-//!   fetch classify beside the picture's, of which the board holds no byte.
+//!   this principal deposited under its own live lease. The PUT's routes
+//!   (`server/blob_routes.rs`, the family `/blob/upload`) stream a body one
+//!   chunk at a time into the store, commit nothing to the journal
+//!   (wire.md §Media), and serve the deposit read off the gate's reads. And
+//!   THE FETCH (the crate's `serve.rs`): `GET /blob?i=<address>` serves a
+//!   picture's whole file, gated by M10's read by identity, checked against
+//!   its cell before its first byte, under a permit pool, the requester
+//!   re-resolved mid-stream; the BLIND DOCUMENT's cell (the crate's
+//!   `blind.rs`) is the second kind the door and the fetch classify beside
+//!   the picture's, of which the board holds no byte.
 //! * [`Daemon`] — the state and the socket-free router: `GET /challenge`,
 //!   `POST /session`, `POST /session/close`, `POST /op`, `POST /op-at`
 //!   (any READ frame answered as of a committed
@@ -119,13 +122,12 @@ pub mod tools;
 mod auth;
 
 // The write path: every commit, one at a time, and the published head.
+// Beside it, at its layer, THE MEDIA RESOURCE is `skep-media`'s — the media
+// door, the one step the plain write sequence takes for a value naming the
+// picture cell's kind; the gate the door and the PUT's routes read the blob
+// store through; the index, the pruner and the fetch; and, leaves beneath
+// them, the two cells — a crate below this one, generic over the world.
 mod write_path;
-
-// Beside it, at its layer: the media door — the one step the plain write
-// sequence takes for a value naming the picture cell's kind — the gate the
-// door and the PUT's routes read the blob store through, the deposit read,
-// and, a leaf beneath them, the cell's one parser.
-mod media;
 
 // The leaves: none knows anything of the daemon. Two more leaves — the
 // permit pool the four bounded pools are built on and the operator's notice
@@ -149,7 +151,6 @@ pub mod fuzz_support;
 
 pub use auth::{AuthOptions, NodePrefix, NotANodePrefix, NotCanonical, Origin, PortAlreadyBound};
 pub use codec::JsonCodec;
-pub use media::MediaOptions;
 pub use server::{
     body_cap, serve, Body, Daemon, DaemonError, Fetch, HttpRequest, Peer, Reply, Routed,
     Skepd, DEFAULT_WORKERS, MIN_WORKERS, UNIVERSAL_HEADERS,
@@ -181,6 +182,13 @@ pub use server::{
 /// library's type is among them: `skep-signature` is the one crate that
 /// links the signature libraries; skepd calls its verify.
 pub use skep_engine::{EngineError, HistoryError, OpenError, World};
+
+/// The media resource's configuration — the upload setting
+/// [`Daemon::open_configured`] takes — `skep-media`'s own type, re-exported
+/// so the daemon's callers keep the path they had when the media resource
+/// was a module of this crate: the binary's `main.rs` and the suites name
+/// `skepd::MediaOptions` and depend on no media crate for it.
+pub use skep_media::MediaOptions;
 
 /// The dump [`Daemon::dump_visible_to`] answers with, re-exported for the
 /// reason the four above are and only where that method exists. Without

@@ -26,35 +26,22 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
   served by the I-address of its cell, gated by the read, checked against
   the cell before the first byte, streamed under a permit pool with the
   requester re-resolved mid-stream.
-- **The media door, the gate, the index, the pruner and the fetch** — a
-  media cell is read by ONE classification at every `insert` and `publish`,
-  over two kinds: a picture's reference cell, admitted only where its hash
-  is one the caller's own cells already name over a whole file, or a deposit
-  of the caller's own under a live lease; and a BLIND document's cell, a
-  commitment the board holds no byte of a file for, admitted with no deposit
-  consulted. THE FETCH (`GET /blob?i=`) serves a picture's whole file by the
-  I-address of its cell, gated by M10's read by identity and checked against
-  the cell before the first byte, under a permit pool, the requester
-  re-resolved mid-stream — the upload's creation and resume under a permit
-  pool of their own, the fetch's twin, so a handful of slow uploads never
-  holds every worker; the gate's three scopes (the own scope — the base plus the
-  pending bytes — the venue total, the floor) bound what a deposit may
-  take; the cell index — per hash the cells naming it, per account the
-  base — is entered at every commit that mints a cell and rebuilt at
-  every open on a thread, its three readers (the upload's creation and
-  resume, the deposit read) answered `503 index_rebuilding` until the
-  walk completes and every other request served meanwhile, the door
-  answering the same token retry-class where its lease arm alone would
-  refuse in that window; the pruner's pass removes expired partials,
-  renames aside — under the credential lock's exclusive arm one file at
-  a time — the files no cell names and no live lease holds and unlinks
-  each aside after under no arm, halting on a schema it does not know,
-  and compacts the two logs once past their trigger. A per-account
-  limit is ALWAYS in force: the daemon's default, one eighth of the
-  volume's capacity read once at start and never below 256 MiB, until a
-  limits record is installed, echoed by the deposit read as a written
-  limit is; a principal holds at most eight standing uploads, and the
-  floor is read at the creation on no declared length.
+- **The media resource** is [skep-media](../skep-media)'s, a crate of its
+  own beside the write path, whose README lists its surface: the one
+  classification of a media cell at every `insert` and `publish`, the media
+  door the plain write sequence runs, the gate's three scopes and its
+  binding, the cell index entered at every commit that mints a cell and
+  rebuilt at every open on a thread, the pruner's pass and the fetch's
+  composed order, with a per-account limit ALWAYS in force. The daemon's
+  part is the routes and their refusals — the index's three readers (the
+  upload's creation and resume, the deposit read) answered `503
+  index_rebuilding` until the walk completes and every other request
+  served meanwhile, the door answering the same token retry-class where its
+  lease arm alone would refuse in that window — the deposit read on the
+  upload's own family, the pruner's cadence thread and the credential
+  lock's write arm it hands the pass, the floor re-read as each checkpoint
+  lands, and the upload pool's and the fetch pool's counts in its worker
+  minimum, so a handful of slow uploads never holds every worker.
 - **The upload setting and the operator's tools** — `--no-uploads`
   (`SKEPD_UPLOADS=false`) closes the upload family, the creation and the
   resume refused `uploads_closed` before any body byte, echoed on

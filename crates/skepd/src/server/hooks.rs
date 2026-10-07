@@ -7,21 +7,21 @@ use std::sync::atomic::Ordering;
 
 use skep_engine::{HistoryError, Recovery};
 use skep_kernel::{Attestation, CheckpointHeader, SaltSource, Seq};
+use skep_media::index::{Rebuild, WALK_HOLD};
+use skep_media::pruner::PrunePass;
+use skep_media::serve::STREAM_HOLD;
+use skep_media::MediaOptions;
 #[cfg(feature = "test-hooks")]
 use skep_util::notice;
 use skep_util::permits::Permit;
 
 use super::{Daemon, DaemonError};
 use crate::auth::AuthOptions;
-use crate::media::index::{Rebuild, WALK_HOLD};
-use crate::media::MediaOptions;
-use crate::media::pruner::PrunePass;
-use crate::media::serve::STREAM_HOLD;
 
 impl Daemon {
     /// TEST HOOK (the `fuzz_support` standing: `#[doc(hidden)]`, not a
     /// stable API): hold one FETCH permit exactly as an in-flight fetch
-    /// does, or `None` when all [`MAX_CONCURRENT_FETCHES`](crate::limits::MAX_CONCURRENT_FETCHES)
+    /// does, or `None` when all [`MAX_CONCURRENT_FETCHES`](skep_media::limits::MAX_CONCURRENT_FETCHES)
     /// are taken. A permit from here is a slot of the fetch pool alone:
     /// holding every one leaves `/op-at` and the class scans untouched.
     #[doc(hidden)]
@@ -32,7 +32,7 @@ impl Daemon {
 
     /// TEST HOOK (the same standing): hold one UPLOAD permit exactly as an
     /// in-flight creation or resume of `/blob/upload` does, or `None` when
-    /// all [`MAX_CONCURRENT_UPLOADS`](crate::limits::MAX_CONCURRENT_UPLOADS)
+    /// all [`MAX_CONCURRENT_UPLOADS`](skep_media::limits::MAX_CONCURRENT_UPLOADS)
     /// are taken (M-I5 (f)). A permit from here is a slot of the upload pool
     /// alone: holding every one leaves the fetch, `/op-at` and the class
     /// scans untouched — and holds no worker, so a suite that pins the
@@ -119,7 +119,7 @@ impl Daemon {
     /// parks — what the harness watches the child's stderr for before it
     /// kills.
     #[doc(hidden)]
-    pub const PRUNE_HOLD_NOTICE: &'static str = crate::media::gate::MediaGate::PRUNE_HOLD_NOTICE;
+    pub const PRUNE_HOLD_NOTICE: &'static str = skep_media::gate::MediaGate::PRUNE_HOLD_NOTICE;
 
     /// TEST HOOK (the same standing): HOLD THE PASS after its next rename
     /// aside — the arm released, the aside not yet unlinked, the next file's
@@ -201,7 +201,8 @@ impl Daemon {
     /// serving layer's channel (AUTH-4.70) in a suite's hand until that
     /// channel lands: the per-account limit, the venue's total, the lease
     /// interval (`None` keeps the daemon's default) and the record's
-    /// address the deposit read echoes.
+    /// address the deposit read echoes — the media gate's own hook, the
+    /// per-file cap the route's.
     #[doc(hidden)]
     pub fn install_media_limits(
         &self,
@@ -210,14 +211,7 @@ impl Daemon {
         lease_interval_ms: Option<u64>,
         address: Option<String>,
     ) {
-        use crate::media::gate::{Limits, LEASE_INTERVAL_DEFAULT_MS};
-        self.media.install(Limits {
-            per_account,
-            venue_total,
-            lease_interval_ms: lease_interval_ms.unwrap_or(LEASE_INTERVAL_DEFAULT_MS),
-            per_file_cap: crate::limits::MAX_BLOB_BYTES,
-            address,
-        });
+        self.media.install_limits(per_account, venue_total, lease_interval_ms, address);
     }
 
     /// TEST HOOK (the same standing): advance the media gate's clock by

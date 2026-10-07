@@ -27,14 +27,15 @@
 //! reader check the other — is no cell at every parser. The agreement of the
 //! parsers that cannot share this code (the shell's, the browser page's) is
 //! held as PATTERNS P5 holds a reproduced grammar: by THE VECTOR SET,
-//! `tests/it/fixtures/media/cells.json`, run against each in its own gate —
-//! this module's test (`media/cell/tests.rs`) runs it against this parser.
+//! `skepd`'s `tests/it/fixtures/media/cells.json`, run against each in its
+//! own gate — this module's test (`cell/tests.rs`) runs it against this
+//! parser.
 //!
 //! NAMING THE KIND. A value whose `type` member is [`KIND`] names the kind
 //! whatever the rest of it holds (m-Q3, owner 2026-09-26: "the write path
 //! RECOGNIZES A CELL BY PARSING the composite value's own `type`"). A value
 //! naming the kind that parses under no pinned schema — a second schema's
-//! form, a malformed body, the two-hash body — is [`CellRefusal::UnknownSchema`],
+//! form, a malformed body, the two-hash body — is `CellRefusal::UnknownSchema`,
 //! told apart from a value that does not name the kind at all, because a
 //! reader whose null permits a PERMANENT act halts on a schema it does not
 //! know (DOCTRINE D13's carve-out; the record's H1: admitted as absent, such
@@ -45,15 +46,15 @@
 //! TWO KINDS, ONE CLASSIFICATION (`media.md` item 4, "TWO SCHEMAS, TWO
 //! VECTOR SETS, ONE CLASSIFICATION, ONE CAP"; the blind-document
 //! investigation §5 (i); s6-D3 RULED): the blind document's cell
-//! (`media/blind.rs`) is a second kind beside the picture's, and
-//! [`classify`] reads EITHER kind by its `type` with one generic parse — the
+//! (`blind.rs`) is a second kind beside the picture's, and
+//! `classify` reads EITHER kind by its `type` with one generic parse — the
 //! cap, the `{` test, the JSON tree built once, the `type` member read once,
 //! then the kind's own canonical check — so two kinds cost one JSON tree.
-//! [`parse`] keeps its contract as the PICTURE kind's parser: a value of any
-//! other `type`, the blind kind's included, is [`CellRefusal::NotTheKind`] to
+//! `parse` keeps its contract as the PICTURE kind's parser: a value of any
+//! other `type`, the blind kind's included, is `CellRefusal::NotTheKind` to
 //! it, which is what keeps the cell index's one entry path reading the
 //! picture's opening alone; the door and the fetch route read
-//! [`classify`].
+//! `classify`.
 //!
 //! THE CAP BOUNDS THE PARSE AND NEVER THE CLASSIFICATION (`media.md` item
 //! 4; the register M-I3 (a)). A body past [`MAX_CELL_BYTES`] is parsed by
@@ -63,12 +64,12 @@
 //! hostile body can command. But a value NAMES THE KIND by its `type`
 //! member, read by the parse within the cap and, past it, by THE CANONICAL
 //! OPENING every schema's canonical form writes first,
-//! `{"type":"<the kind's address>"` ([`names_kind_by_prefix`], [`opens_as`];
+//! `{"type":"<the kind's address>"` ([`names_kind_by_prefix`], `opens_as`;
 //! D13: the carrier goes first in JSON) — so a past-cap value that opens as
-//! a kind is [`CellRefusal::UnknownSchema`] of that kind, refused
+//! a kind is `CellRefusal::UnknownSchema` of that kind, refused
 //! `unknown_cell_schema` at the door and, for the picture's kind, entered a
 //! halt mark by the index, whatever cap a later build pins; and one that
-//! opens as neither is [`CellRefusal::PastCap`], no cell of any schema and no
+//! opens as neither is `CellRefusal::PastCap`, no cell of any schema and no
 //! entry. The cap is the KIND's, every schema's under it — a schema never
 //! raises it. Every pin here is INTERIM (the board's sm-Q8), confirmed at
 //! the media round; the kind's address is TEST-ONLY under the commons media
@@ -80,7 +81,7 @@ use std::fmt::Write as _;
 use serde_json::{Map, Value};
 use skep_util::json::{hex_string, parse_lower_hex};
 
-use super::blind::{self, BlindCell};
+use crate::blind::{self, BlindCell};
 use crate::limits::MAX_CELL_BYTES;
 
 /// The cell kind's address — INTERIM, TEST-ONLY: the last ordinal of the
@@ -89,7 +90,7 @@ use crate::limits::MAX_CELL_BYTES;
 /// the grant at `3.90`), the range `media.md` names for media and no
 /// allocation has filled; taken at the range's top so the first natural
 /// allocations — the typing link's media types — meet no squatter.
-pub(crate) const KIND: &str = "1.1.0.1.0.1.0.3.89";
+pub const KIND: &str = "1.1.0.1.0.1.0.3.89";
 
 /// THE DESIGNATION: the name the cell's schema gives its hash function,
 /// which every sidecar key from lane B carries beside the hex —
@@ -101,10 +102,10 @@ pub(crate) const KIND: &str = "1.1.0.1.0.1.0.3.89";
 /// every sidecar key the daemon writes and reads — the blob store's paths,
 /// the lease, the cell index, the pruner, the fetch, the operator's tools —
 /// and held to the fixture's `designation` by the vector test.
-pub(crate) const DESIGNATION: &str = "blake3";
+pub const DESIGNATION: &str = "blake3";
 
 /// The hash's width: BLAKE3's default output, 32 bytes — 64 hex characters.
-pub(crate) const HASH_BYTES: usize = 32;
+pub const HASH_BYTES: usize = 32;
 
 /// The largest `size` a cell carries: 2^53 − 1, the bound every machine
 /// integer of the wire keeps (wire.md §Value encodings) so a
@@ -113,7 +114,7 @@ pub(crate) const MAX_SIZE: u64 = (1 << 53) - 1;
 
 /// A parsed cell: the file's hash and its byte count. Its `type` is no
 /// field — it is the schema's fixed value, which [`encode`] writes and
-/// [`parse`] demands.
+/// `parse` demands.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Cell {
     pub(crate) hash: [u8; HASH_BYTES],
@@ -128,7 +129,7 @@ pub(crate) enum CellRefusal {
     /// Past [`MAX_CELL_BYTES`] and opening as no kind: parsed by no reader
     /// of a cell, naming nothing. A past-cap body that opens as a kind is
     /// never this: it names the kind by its canonical opening and is
-    /// [`CellRefusal::UnknownSchema`] of that kind.
+    /// `CellRefusal::UnknownSchema` of that kind.
     PastCap,
     /// Not a JSON object whose `type` member is the parser's kind: prose, a
     /// predicate def, a record of another kind — the other media kind among
@@ -148,9 +149,9 @@ impl CellRefusal {
     }
 }
 
-/// What a value is to the media kinds — [`classify`]'s answer: one kind
+/// What a value is to the media kinds — `classify`'s answer: one kind
 /// named, with that kind's own verdict under its schema (`Err` is always
-/// [`CellRefusal::UnknownSchema`] there: the value named the kind and parsed
+/// `CellRefusal::UnknownSchema` there: the value named the kind and parsed
 /// under no schema this build reads), or neither kind named, with why.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum Class {
@@ -168,9 +169,9 @@ pub(crate) enum Class {
 /// two kinds cost one JSON tree, and the cap is the KIND's, one for every
 /// media cell kind, since a classification by `type` must parse before it
 /// knows the kind. PAST THE CAP the classification reads the canonical
-/// opening alone, one byte compare per kind ([`opens_as`]): a body opening
+/// opening alone, one byte compare per kind (`opens_as`): a body opening
 /// as a kind names it under no schema this build reads, and one opening as
-/// neither names nothing. Total over any bytes, as [`parse`] is: no panic,
+/// neither names nothing. Total over any bytes, as `parse` is: no panic,
 /// no allocation past the cap's tree, and `serde_json` answers only "is
 /// this JSON, and which" (AUTH-2.1's discipline) — every verdict a schema's
 /// own.
@@ -213,7 +214,7 @@ pub(crate) fn classify(bytes: &[u8]) -> Class {
 /// THE ONE PARSER of the PICTURE kind: the cell `bytes` spell, under the
 /// canonical rule — a cell is answered only where
 /// `bytes == encode(parse(bytes))` — or why they are no cell. The
-/// classification's picture arm, and [`CellRefusal::NotTheKind`] for a value of
+/// classification's picture arm, and `CellRefusal::NotTheKind` for a value of
 /// any other `type`, the blind kind's included: this parser's contract is the
 /// picture's, and the cell index's one entry path reads it so.
 pub(crate) fn parse(bytes: &[u8]) -> Result<Cell, CellRefusal> {
@@ -258,8 +259,9 @@ fn parse_picture(object: &Map<String, Value>, bytes: &[u8]) -> Result<Cell, Cell
 }
 
 /// THE CHEAP PREFIX TEST of the PICTURE kind, ahead of every parse the
-/// cell index makes (`media/index.rs`'s walk and entries, `write_path.rs`'s
-/// prefix test ahead of a commit): past leading JSON whitespace, the bytes
+/// cell index makes (`index.rs`'s walk and entries, the daemon's
+/// `write_path.rs` prefix test ahead of a commit): past leading JSON
+/// whitespace, the bytes
 /// open `{"type":"<the kind's address>"` — the canonical spelling every
 /// pinned schema puts first (D13: one JSON object naming its kind), so a
 /// value that names the kind in that form costs a parse and every other
@@ -267,7 +269,7 @@ fn parse_picture(object: &Map<String, Value>, bytes: &[u8]) -> Result<Cell, Cell
 /// schema produces — the member reordered, a space inside the object — is
 /// read as no cell here, as the door refuses it. The picture's alone: the
 /// blind kind makes no index entry.
-pub(crate) fn names_kind_by_prefix(bytes: &[u8]) -> bool {
+pub fn names_kind_by_prefix(bytes: &[u8]) -> bool {
     opens_as(KIND, bytes)
 }
 
@@ -288,7 +290,7 @@ pub(crate) fn opens_as(kind: &str, bytes: &[u8]) -> bool {
 /// THE CANONICAL FORM — the one byte string a cell has:
 /// `{"type":"<KIND>","hash":"<64 lowercase hex>","size":<count>}`, no
 /// whitespace, the members in that order, nothing after the brace. What a
-/// signer composes, what a verifier re-spells, and what [`parse`] holds its
+/// signer composes, what a verifier re-spells, and what `parse` holds its
 /// input to.
 pub(crate) fn encode(cell: &Cell) -> String {
     let mut out = String::with_capacity(160);

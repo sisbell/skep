@@ -19,6 +19,7 @@ members = [
     "crates/skep-address",
     "crates/skep-blobs",
     "crates/skep-util",
+    "crates/skep-media",
     "crates/skep-registry",
     "crates/skep-resolve",
     "crates/skep-client",

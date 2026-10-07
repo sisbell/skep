@@ -1,0 +1,81 @@
+[package]
+name = "skep-media"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+license.workspace = true
+description = "The daemon's media resource (media lane A and the policy of lane B): the reference cell's one parser and the blind cell beside it, the media door the plain write sequence takes, the media gate over the blob store — the limits in force, the hold, the three scopes, the binding — the cell index with its walk at open, the pruner's pass, and the fetch's composed order. It transports nothing: the routes, the replies and the operator's tools are the daemon's."
+readme = "README.md"
+
+[features]
+# `test-hooks` compiles in the test seam: the walk hold, the stream hold,
+# the prune hold and its notice, the gate's clock and free-space overrides
+# and its limits install, the index's report and counts, the pools'
+# `try_hold` — each `#[doc(hidden)]`, the surface the daemon's own hooks
+# (`skepd`'s `server/hooks.rs`) call — and turns on ONE thing in another
+# crate: skep-blobs's hazard seam, which the daemon's `hold_blob_finish_at`
+# reaches through this crate's gate. DEFAULT-OFF and never enabled by a
+# shipped build: this crate's own tests turn it on through the self
+# dev-dependency below, and skepd's tests through skepd's own `test-hooks`,
+# which forwards it; `scripts/gate-full.sh` checks the library and its docs
+# without it, and `tests/it/tidy.rs` holds every hook to the gate.
+test-hooks = ["skep-blobs/test-hooks"]
+
+[dependencies]
+# THE SUPPORT CRATE below this one and the daemon: the counting permit pool
+# the fetch and upload pools are built on (one `Permit` type, the one the
+# daemon's pool hooks return), the operator's notice line, and the JSON
+# determinism helpers — the key-sorting `obj` of `/health`'s media object,
+# lowercase hex and its exact inverse, by which the cell's canonical rule
+# reads what the encoder wrote.
+skep-util = { path = "../skep-util" }
+# THE BLOB STORE (media lane B): Store, Lease, UploadRecord, UploadId —
+# opened under `blobs/` by the gate, which is what reads principal, lock
+# and limits; the pruner's acts, one method each.
+skep-blobs = { path = "../skep-blobs" }
+# M10 — the world this crate is generic over (`FebeWorld`, the one bound;
+# `ReadableWorld`, the door's read predicate at the principal), the fetch's
+# gate (`OperationSurface::execute`, the read by identity), and `Op`,
+# `Disposition` for the door's answer. NO `skep-engine`: the daemon
+# instantiates every world parameter at its `World`.
+skep-febe = { path = "../skep-febe" }
+# M2 — `Snapshot` (the walk's immutable view), `Kernel` (what the walk at
+# open takes its snapshot from) and MAX_SEGMENT_LEN (the floor's segment).
+skep-kernel = { path = "../skep-kernel" }
+# M1 — addresses: the cell's I-address, document_of, the content subspace.
+skep-address = { path = "../skep-address" }
+# M3 — PrincipalId, HasM3 (the owner pair, mint_content, published_target's
+# state); M3Rec, a name of the record lift the fetch's gate requires.
+skep-namespace = { path = "../skep-namespace" }
+# M4 — HasContent, Val (the value a cell is; the walk over the content
+# store); ContentWrite, a name of the record lift.
+skep-content = { path = "../skep-content" }
+# M5 — published_target, shot_admission, trunk_of, the re-insert cap; M5Rec,
+# a name of the record lift.
+skep-arrangement = { path = "../skep-arrangement" }
+# M7 — LinkRec alone: the fourth name of the record lift
+# `OperationSurface::execute` requires of its world (`W::Record: From<…>`,
+# M10's own bound), which the fetch's three signatures repeat. A type-only
+# edge; nothing of the link store is read here.
+skep-links = { path = "../skep-links" }
+# `/health`'s media object, and the cells' one generic parse.
+serde_json.workspace = true
+# Non-poisoning locks, for the reason skepd's manifest gives: a panic under
+# one releases it with the data as it stands.
+parking_lot.workspace = true
+# BLAKE3 at the fetch's check: the whole file hashed against the cell's
+# `hash` before its first byte is served (Q-sm2).
+blake3.workspace = true
+
+[dev-dependencies]
+# This crate with its seam on, so its unit tests reach the hooks (the house
+# form: skep-blobs, skep-content, skep-arrangement, skep-signature,
+# skep-client each carry the line).
+skep-media = { path = ".", features = ["test-hooks"] }
+tempfile.workspace = true
+# The door's unit test opens a real engine (`door/tests.rs`): generic code
+# tested against the concrete World — the kernel's precedent, whose suites
+# build their fixture through `skep-engine`. Dev-only, so the edge back up
+# is the dev-dependency cycle cargo permits; the lib graph stays a DAG.
+skep-engine = { path = "../skep-engine" }

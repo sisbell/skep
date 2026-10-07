@@ -40,8 +40,8 @@
 //! every text read and write, the door's own binding arm are served
 //! throughout); THE PERMIT — the creation and the resume, the two acts that
 //! take bytes and no other, are admitted at most the UPLOAD POOL at once
-//! ([`UploadPool`](crate::media::UploadPool),
-//! [`MAX_CONCURRENT_UPLOADS`](crate::limits::MAX_CONCURRENT_UPLOADS) slots;
+//! ([`UploadPool`](skep_media::UploadPool),
+//! [`MAX_CONCURRENT_UPLOADS`](skep_media::limits::MAX_CONCURRENT_UPLOADS) slots;
 //! `media.md` Op inventory 1, "AN UPLOAD IS ADMITTED AT MOST AN UPLOAD PERMIT POOL AT
 //! ONCE"; M-I5 (f): bounded by a pool, never a queue; P29, the budget
 //! refuses at the layer whose work the stream multiplies — the worker each
@@ -94,7 +94,7 @@
 //! (`media.md` Op inventory 3; the register M-I2 (a)–(d), (g), M-I3 (b),
 //! M-I5 (f), M-I7 (a), (b); wire.md §Media, THE FETCH): the one path beside the
 //! family, TOKEN-ACCEPTING through [`Daemon::resolve_actor`] like every
-//! method of it, its order THE SERVE's (`media/serve.rs` — the shape, M10's
+//! method of it, its order THE SERVE's (`skep-media`'s `serve.rs` — the shape, M10's
 //! read by identity as the gate, the classification, the permit, the whole
 //! file checked before its first byte) and its answer the transport's to
 //! stream ([`Routed::Fetch`]), the requester re-resolved between chunks
@@ -111,6 +111,10 @@ use std::time::Duration;
 use serde_json::Value;
 use skep_address::Address;
 use skep_blobs::{BlobError, Finished, HashFunction, Stream, UploadId, UploadRecord};
+use skep_media::gate::{DepositScope, MediaGate};
+use skep_media::limits::MAX_STANDING_UPLOADS;
+use skep_media::pruner::{self, PrunePass};
+use skep_media::serve;
 use skep_namespace::PrincipalId;
 use skep_util::json::obj;
 
@@ -124,10 +128,6 @@ use super::Daemon;
 use crate::auth::policy::{upload_admission, UploadRefusal};
 use crate::auth::session::Actor;
 use crate::codec::wire_address;
-use crate::media::deposit_read::deposit_read;
-use crate::media::gate::{DepositScope, MediaGate};
-use crate::media::pruner::{self, PrunePass};
-use crate::media::serve;
 
 /// The family's own path — the creation's and the deposit read's; one
 /// upload's paths lie beneath it.
@@ -195,7 +195,7 @@ impl Daemon {
     /// §Media, THE FETCH): the actor resolved against the head, as every
     /// token-accepting route resolves it — the death arm closing a dead
     /// token's binding and the signal owed on the answer — then the query's
-    /// shape, then THE SERVE's order (`media/serve.rs`) as the resolved
+    /// shape, then THE SERVE's order (`skep-media`'s `serve.rs`) as the resolved
     /// session, the guest where none was. An admitted fetch is the
     /// transport's to stream ([`Routed::Fetch`]), its headers stamped here:
     /// the class-varying pair — the answer is a function of the presented
@@ -582,7 +582,7 @@ impl Daemon {
         }
     }
 
-    /// THE PRUNER's PASS, as the daemon runs it (`media/pruner.rs`): the
+    /// THE PRUNER's PASS, as the daemon runs it (`skep-media`'s `pruner.rs`): the
     /// credential lock's WRITE arm taken for one file at a time. `None`
     /// where the index is not ready — the pass does not start (ms5-R).
     pub(super) fn prune_pass(&self) -> io::Result<Option<PrunePass>> {
@@ -707,11 +707,93 @@ fn refuse_deposit(scope: DepositScope, at: RefusedAt, offset: u64) -> Reply {
             Value::String(format!(
                 "this account holds {} standing uploads, the most this board keeps: end one of them, \
                  then create again",
-                crate::limits::MAX_STANDING_UPLOADS
+                MAX_STANDING_UPLOADS
             )),
         ));
     }
     refuse_with(TransportError::DepositRefused, fields)
+}
+
+/// THE DEPOSIT READ (`media.md` Op inventory 1, "THE DEPOSITOR CAN READ
+/// THEIR OWN DEPOSIT RECORD, AND THE RESUME NAMES ONE ACT PER RESIDUE"; "IT
+/// ANSWERS THE REQUESTER's OWN USAGE BESIDE THEM"; the register M-I5 (c),
+/// M-I2 (e), M-I6 (a), (b)): one read of the asking principal's OWN records
+/// — its standing deposits (hash, size, expiry; a live lease over a file
+/// that is not there marked LAPSED, at this read as at the `insert`), its
+/// standing uploads (identifier, the offset a resume continues from, the
+/// length, the expiry), its usage as two figures — the BASE, the cell
+/// index's number for its account (the distinct hashes its cells name, at
+/// their size), and its PENDING bytes (its live leases on hashes none of
+/// its cells names, and its uploads' bytes received) — the limits
+/// record's address as installed, or `null` where none is — and THE
+/// PER-ACCOUNT LIMIT IN FORCE, `per_account`, whatever its source: the
+/// daemon's default where no record is installed, echoed as a written
+/// limit is, so R68's read-before-refusal holds under the default (P37; the
+/// register M-I6 (b), (d)); `null` only where a written record sets none.
+///
+/// NO SURFACE OF ITS OWN (m-Q10, RULED): it is the resumable PUT's own
+/// state made readable, served on the upload's path family (`GET
+/// /blob/upload`) and priced with the transport delta — a route helper
+/// beside the family's refusals, built off the media gate's reads as the
+/// family's other wire shapes are built here and in `reply.rs`, the one
+/// wire shape of the resource's that the daemon composes. It is keyed to
+/// the asking principal's own record and never to a file's presence beyond
+/// that record's live lease: it lists no deposit of another's, and answers
+/// "this board holds these bytes" of nothing a principal did not deposit
+/// itself. Its base is one of the index's three readers: the route refuses
+/// it `index_rebuilding` until the walk at open completes (ms5-R). The
+/// sweep-3 subtraction of this read was DECLINED (sm-Q10): the records
+/// exist for the resume and the binding, and the listing is this one
+/// function over them.
+///
+/// The read, as its JSON object, off `media_gate`, the media gate whose store
+/// holds the records. The caller has read the index's readiness: the base
+/// here is the index's number.
+fn deposit_read(media_gate: &MediaGate, principal: PrincipalId) -> Value {
+    let key = MediaGate::key(principal);
+    let now = media_gate.now_ms();
+    let store = media_gate.store();
+    let deposits: Vec<Value> = store
+        .live_leases_of(&key, now)
+        .into_iter()
+        .map(|l| {
+            // Exact of what is on disk: a lease over a file that is absent
+            // or not whole reads as LAPSED here as at the insert — and so,
+            // as the binding takes it, does one whose size cannot be read.
+            let whole = store.blob_size(&l.designation, &l.hex).ok().flatten() == Some(l.size);
+            obj(vec![
+                ("designation", Value::String(l.designation)),
+                ("expires", Value::Number(l.expires.into())),
+                ("hash", Value::String(l.hex)),
+                ("lapsed", Value::Bool(!whole)),
+                ("size", Value::Number(l.size.into())),
+            ])
+        })
+        .collect();
+    let uploads: Vec<Value> = store
+        .uploads_of(&key, now)
+        .into_iter()
+        .map(|r| {
+            obj(vec![
+                ("expires", Value::Number(r.expires.into())),
+                ("length", Value::Number(r.length.into())),
+                ("offset", Value::Number(r.offset.into())),
+                ("upload", Value::String(r.id.to_hex())),
+            ])
+        })
+        .collect();
+    let limits = media_gate.limits();
+    obj(vec![
+        // Record-derived: the index's one number for the account.
+        ("base", Value::Number(media_gate.index().base(principal).into())),
+        ("deposits", Value::Array(deposits)),
+        ("limits", limits.address.map_or(Value::Null, Value::String)),
+        ("pending", Value::Number(media_gate.own_pending(principal, now).into())),
+        // The limit in force, the default or the record's — the echo R68's
+        // read keys on.
+        ("per_account", limits.per_account.map_or(Value::Null, |n| Value::Number(n.into()))),
+        ("uploads", Value::Array(uploads)),
+    ])
 }
 
 /// The store's refusal as the wire's.

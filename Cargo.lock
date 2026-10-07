@@ -1434,6 +1434,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "skep-media"
+version = "0.1.0"
+dependencies = [
+ "blake3",
+ "parking_lot",
+ "serde_json",
+ "skep-address",
+ "skep-arrangement",
+ "skep-blobs",
+ "skep-content",
+ "skep-engine",
+ "skep-febe",
+ "skep-kernel",
+ "skep-links",
+ "skep-media",
+ "skep-namespace",
+ "skep-util",
+ "tempfile",
+]
+
+[[package]]
 name = "skep-namespace"
 version = "0.1.0"
 dependencies = [
@@ -1527,6 +1548,7 @@ dependencies = [
  "skep-identity",
  "skep-kernel",
  "skep-links",
+ "skep-media",
  "skep-namespace",
  "skep-registry",
  "skep-resolve",

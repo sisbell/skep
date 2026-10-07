@@ -14,7 +14,9 @@ or more it lives in the module's own `tests.rs` — `foo/tests.rs` beside
 
 skepd is layered; imports point down. The layers are drawn in
 `ARCHITECTURE.md` §The daemon, and `crates/skepd/tests/it/tidy.rs` checks
-them.
+them; the media resource beside its write path is the crate `skep-media`,
+whose two layers — the resource over its two leaf cells — are drawn in
+§The media resource and checked by `crates/skep-media/tests/it/tidy.rs`.
 
 ## Commits and comments
 

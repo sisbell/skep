@@ -102,6 +102,8 @@ use skep_arrangement::HasM5;
 use skep_engine::{Engine, EngineStores, World};
 use skep_febe::{Op, OpKind, RejectCode, Rejection, Response, Stores};
 use skep_kernel::{Attestation, Seq};
+use skep_media::cell::names_kind_by_prefix;
+use skep_media::index::CellIndex;
 
 // The change feed behind `GET /changes`: its authority file, and the one
 // question it asks the world.
@@ -118,8 +120,6 @@ pub(crate) use head::board_term;
 use self::head::HeadWriter;
 use self::sidecar::OpTerms;
 use crate::codec::op_name;
-use crate::media::cell::names_kind_by_prefix;
-use crate::media::index::CellIndex;
 use crate::serial::{Serial, SerialGuard};
 use feed::Feed;
 
@@ -861,7 +861,7 @@ impl RowTerms {
 ///
 /// THIRD OBLIGATION, the cell index's: `minting` is the index's entry at
 /// commit, and the admission side of the same question is the media door's
-/// ([`crate::media::door::media_door`], exhaustive over `Op` for the same
+/// ([`skep_media::door::media_door`], exhaustive over `Op` for the same
 /// reason). An op the door admits a cell through must state its `Minting`
 /// here: a cell this table does not name is entered by nothing until the
 /// next open's walk, so within the uptime it counts in no base, and once its

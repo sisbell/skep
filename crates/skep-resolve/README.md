@@ -45,10 +45,11 @@ parts, each under the design rule it realizes:
   fingerprint is compared at the claim's row — for the board's own
   claimant at the board's own genesis act, never the fetch cache's —
   against the genesis set the source answers (REG-3.42), the mirror
-  honoring one claim, and no line reaches the copy before it is; a copy
-  rebuilt offline is held to the feed's own order; a hint re-pointed to
-  another genesis re-bootstraps afresh (REG-3.17); the refusals are named
-  (`Refusal`: a diverged frontier, a source behind the
+  honoring one claim, and no line reaches the copy before it is; a record
+  is judged at its row's position, in its row's home, never a cache
+  line's; a copy rebuilt offline is held to the feed's own order; a hint
+  re-pointed to another genesis re-bootstraps afresh (REG-3.17); the
+  refusals are named (`Refusal`: a diverged frontier, a source behind the
   mirror, a contradicted head pair, a realm mismatch — REG-3.19). An image
   that omits, re-orders or replays genuinely signed rows fails the check at
   the first position that differs (REG-3.13). An atom un-arranged at the
@@ -116,11 +117,14 @@ The board's typed reads (`Board`) run over any `Transport` — that client,
 or a suite's replay of a recording — and count every read by kind
 (`Reads`), reported in `Stats`; every value the resolver takes on the
 board's word (the head pair, the board term, a link's type and slots, a
-key set, a deposit's standing on the active view, a reclaimed read's
-floor, held past the position asked) is typed there, and an `/op` answer
-past the cap is one no typed read takes. A link's slots are
-read only for a link of a type the reader names, its type slot that
-type's unit span exactly.
+key set, a deposit's standing on the active view, the links a class
+scan's window lists, a reclaimed read's floor, held past the position
+asked) is typed there, every answer held there to the shape the wire
+promises — a page or a window that does not advance refused, a page past
+the byte budget re-asked once at the limit the feed names — and an `/op`
+answer past the cap is one no typed read takes. A link's slots are read
+only for a link of a type the reader names, its type slot that type's unit
+span exactly.
 
 ## 2. The crate's suite and its fixture
 

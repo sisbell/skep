@@ -11,18 +11,22 @@
 //! off `H.1` ([`Board::board_term`]), a stored link's type and slots
 //! ([`Board::link_slots`]), an account's key set live and as of a position
 //! ([`Board::key_set`], [`Board::key_set_at`]), whether a deposit stands on
-//! the board's active view ([`Board::stands_active`]), and the floor a
-//! reclaimed read names ([`BoardError::Reclaimed`]). What each caller makes
-//! of them — the copy's head pair, the verdict's frame, the table a record
-//! is judged under — is the caller's. The feed's rows are checked by
-//! the base's provenance and a record's bytes by the verify, so the reads
-//! that only locate those bytes (the span set, `image`, `retrieve_v`) stay
-//! with their callers.
+//! the board's active view ([`Board::stands_active`]), the links a class
+//! scan lists ([`Board::class_window`]), and the floor a reclaimed read
+//! names ([`BoardError::Reclaimed`]). What each caller makes of them — the
+//! copy's head pair, the verdict's frame, the table a record is judged
+//! under, the candidates a scan reads — is the caller's. The feed's rows are
+//! checked by the base's provenance and a record's bytes by the verify, so
+//! the reads that only locate those bytes (the span set, `image`,
+//! `retrieve_v`) stay with their callers.
 //!
 //! An answer is held to the shape the wire promises before any caller reads
 //! it: a feed page whose entries do not rise past `since` — the feed's own
 //! order ([`rises_past`]) — or whose `last` and `more` do not follow them, is
 //! refused ([`Board::changes`]), so no row is held twice and no page asked
+//! forever; a feed that refuses again the limit it named past its byte
+//! budget is refused ([`Board::changes`]), and so is a class scan's window
+//! that does not move its cursor ([`Board::class_window`]), so no scan pages
 //! forever; a reclaimed read whose floor does not lie past the position
 //! asked is refused ([`Board::op_at`], [`Board::chain_at`]); and an `/op`
 //! answer past the transport's cap ([`TransportError::TooLarge`]) is
@@ -32,11 +36,13 @@
 //! guest-reading resolve — read alike are stated here, once: a unit span;
 //! the span-set, `image` and one-position `retrieve_v` frames; a span-set
 //! answer's content extent; an `image` answer's runs, read whole or not at
-//! all, and an atom's V-ordinal among them; and a content element's ordinal
-//! in its own document, the append-only guess's V-ordinal.
+//! all, and an atom's V-ordinal among them; a one-position delivery's one
+//! atom; and a content element's ordinal in its own document, the
+//! append-only guess's V-ordinal.
 
 use std::cell::Cell;
 use std::fmt;
+use std::num::NonZeroUsize;
 use std::sync::LazyLock;
 use std::thread;
 use std::time::Duration;
@@ -129,9 +135,6 @@ pub enum BoardError {
     Rejected { op: String, code: String, detail: Option<String> },
     /// `history_busy` or `scan_busy` past the retries.
     Busy,
-    /// The feed refused a page past its byte budget, naming the limit that
-    /// fits (wire.md §The change feed, Paging).
-    PageTooLarge { fits: usize },
     /// `history_reclaimed`: the position asked (`/op-at`, `/chain`) or the
     /// `since` fence (`/changes`) predates the history the board retains;
     /// `floor`, where named, the oldest position still answerable — past the
@@ -150,7 +153,6 @@ impl fmt::Display for BoardError {
                 None => write!(f, "{op} rejected {code}"),
             },
             BoardError::Busy => f.write_str("the board stayed busy past the retries"),
-            BoardError::PageTooLarge { fits } => write!(f, "the page passes the byte budget; {fits} rows fit"),
             BoardError::Reclaimed { floor: Some(floor) } => write!(f, "history reclaimed below position {floor}"),
             BoardError::Reclaimed { floor: None } => f.write_str("history reclaimed"),
         }
@@ -200,6 +202,16 @@ pub(crate) struct Page {
     pub(crate) last: u64,
     /// Whether positions remain past `last`.
     pub(crate) more: bool,
+}
+
+/// One window of a class scan (wire.md §Value encodings, Windows): the links
+/// it lists, ascending, and whether it is the last.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Window {
+    /// The links, in ascending address order.
+    pub(crate) batch: Vec<Address>,
+    /// Whether no link lies past them: the scan's last window.
+    pub(crate) exhausted: bool,
 }
 
 /// A board as the resolver reads it: the typed reads over one
@@ -264,31 +276,53 @@ impl Board {
     /// entry's position or `since` echoed on an empty page, and no empty page
     /// announcing more. A page that breaks one re-serves a row or does not
     /// advance, and is refused [`BoardError::Malformed`].
-    pub(crate) fn changes(&self, since: u64, limit: Option<usize>) -> Result<Page, BoardError> {
-        self.bump(|r| r.changes += 1);
-        let path = match limit {
-            Some(l) => format!("/changes?since={since}&limit={l}"),
-            None => format!("/changes?since={since}"),
-        };
-        let (st, body) = self.transport.exchange(Method::Get, &path, b"")?;
-        let text = || String::from_utf8_lossy(&body).into_owned();
-        match st {
-            200 => {}
-            400 => {
-                let v = Board::json(&body)?;
-                if let Some(fits) = v["fits"].as_u64() {
-                    return Err(BoardError::PageTooLarge { fits: fits as usize });
+    ///
+    /// The page is asked at `limit`, the feed's own default where it is
+    /// `None`. Where the feed refuses it past its byte budget, it is re-asked
+    /// ONCE at the limit the feed names ("re-ask with `limit=N` and the page
+    /// is served whole") — never at `limit=0`, which the wire refuses — and
+    /// that limit is kept in `limit` for the pages after it; a feed that
+    /// refuses again the page it was re-asked at its own limit is
+    /// [`BoardError::Malformed`], and is not asked a third time. Every
+    /// request is counted.
+    pub(crate) fn changes(&self, since: u64, limit: &mut Option<usize>) -> Result<Page, BoardError> {
+        let mut re_asked = false;
+        loop {
+            self.bump(|r| r.changes += 1);
+            let path = match *limit {
+                Some(l) => format!("/changes?since={since}&limit={l}"),
+                None => format!("/changes?since={since}"),
+            };
+            let (st, body) = self.transport.exchange(Method::Get, &path, b"")?;
+            let text = || String::from_utf8_lossy(&body).into_owned();
+            match st {
+                200 => return self.page_of(since, &body),
+                400 => {
+                    let v = Board::json(&body)?;
+                    let Some(fits) = v["fits"].as_u64() else {
+                        return Err(BoardError::Status { status: st, body: text() });
+                    };
+                    if re_asked {
+                        let refused = format!("the feed refuses the page from {since} at the limit it named");
+                        return Err(BoardError::Malformed(refused));
+                    }
+                    re_asked = true;
+                    *limit = Some((fits as usize).max(1));
                 }
-                return Err(BoardError::Status { status: st, body: text() });
+                410 => {
+                    let v = Board::json(&body)?;
+                    return Err(BoardError::Reclaimed { floor: v["floor"].as_u64() });
+                }
+                _ => return Err(BoardError::Status { status: st, body: text() }),
             }
-            410 => {
-                let v = Board::json(&body)?;
-                return Err(BoardError::Reclaimed { floor: v["floor"].as_u64() });
-            }
-            _ => return Err(BoardError::Status { status: st, body: text() }),
         }
+    }
+
+    /// A page the feed served from `since`, held to the page's own rules
+    /// ([`Board::changes`]), its bytes counted.
+    fn page_of(&self, since: u64, body: &[u8]) -> Result<Page, BoardError> {
         self.feed_bytes.set(self.feed_bytes.get() + body.len() as u64);
-        let mut v = Board::json(&body)?;
+        let mut v = Board::json(body)?;
         // The rows are moved out of the answer, never copied: the answer is
         // dropped once they are taken.
         let rows = match v.get_mut("changes").map(Value::take) {
@@ -317,7 +351,7 @@ impl Board {
     }
 
     /// [`Board::op`], a `rejected` answer an error.
-    pub(crate) fn op_ok(&self, frame: &Value) -> Result<Value, BoardError> {
+    fn op_ok(&self, frame: &Value) -> Result<Value, BoardError> {
         let v = self.op(frame)?;
         Board::not_rejected(v)
     }
@@ -450,6 +484,48 @@ impl Board {
         Ok(addrs.iter().any(|a| a.as_str() == Some(link.as_str())))
     }
 
+    /// ONE WINDOW OF A CLASS SCAN (`window_ftt`; wire.md §Value encodings,
+    /// Windows): the links typed `ty` — homed in `home` where given — past
+    /// the cursor `cur`, `n` asked. The last window lists the links of its
+    /// batch that read; a window that is not the last holds `n` addresses,
+    /// ascending, every one past the cursor, its `next` the last of them
+    /// (skep-discovery's `Window`) — the one shape that moves a cursor, so
+    /// any other is refused [`BoardError::Malformed`] and no board pages a
+    /// scan forever.
+    pub(crate) fn class_window(
+        &self,
+        ty: &Address,
+        home: Option<&Address>,
+        cur: Option<&Address>,
+        n: NonZeroUsize,
+    ) -> Result<Window, BoardError> {
+        let home_spec = match home {
+            Some(h) => json!([unit_span_json(h)]),
+            None => json!("any"),
+        };
+        let v = self.op_ok(&json!({
+            "op": "window_ftt", "cur": cur.map(ToString::to_string), "n": n.get(),
+            "q": { "home": home_spec, "from": "any", "to": "any", "ty": [unit_span_json(ty)] },
+        }))?;
+        let window = &v["window"];
+        let batch = window["batch"].as_array().map(Vec::as_slice).unwrap_or_default();
+        if window["exhausted"].as_bool().unwrap_or(true) {
+            let batch = batch.iter().filter_map(|a| a.as_str().and_then(parse_address)).collect();
+            return Ok(Window { batch, exhausted: true });
+        }
+        let read: Option<Vec<Address>> = batch.iter().map(|a| a.as_str().and_then(parse_address)).collect();
+        let full = read.filter(|addrs| {
+            addrs.len() == n.get()
+                && addrs.windows(2).all(|pair| pair[0] < pair[1])
+                && cur.is_none_or(|c| addrs[0] > *c)
+                && window["next"].as_str().and_then(parse_address).as_ref() == addrs.last()
+        });
+        let Some(batch) = full else {
+            return Err(BoardError::Malformed("a window that does not advance past its cursor".into()));
+        };
+        Ok(Window { batch, exhausted: false })
+    }
+
     /// `/health`'s live pair (wire.md §The other endpoints): the committed
     /// head's position and its chain, read off one kernel snapshot — the
     /// chain as the board spelled it, where it is sixty-four hex characters;
@@ -465,14 +541,11 @@ impl Board {
     /// THE BOARD TERM (D13): `H.1`'s committed pair, off `retrieve_v` at the
     /// pinned member's V-ordinal 1 — the term, and its chain as the board
     /// spelled it; `None` where this reader reads no term off the board: no
-    /// atom at `H.1`, one that is no record of a position and a chain, or an
-    /// answer past the transport's cap.
+    /// delivery of one atom at `H.1` ([`atom_of`]), an atom that is no record
+    /// of a position and a chain, or an answer past the transport's cap.
     pub(crate) fn board_term(&self) -> Result<Option<(BoardTerm, String)>, BoardError> {
-        let v = self.op(&retrieve_frame(&HEAD_MEMBER_1, 1))?;
-        let Some(text) = v["items"].as_array().and_then(|i| i.first()).and_then(|i| i["atom"].as_str()) else {
-            return Ok(None);
-        };
-        let Ok(record) = serde_json::from_str::<Value>(text) else { return Ok(None) };
+        let Some(text) = atom_of(&self.op(&retrieve_frame(&HEAD_MEMBER_1, 1))?) else { return Ok(None) };
+        let Ok(record) = serde_json::from_str::<Value>(&text) else { return Ok(None) };
         let (Some(position), Some(chain)) = (record["position"].as_u64(), record["chain"].as_str()) else {
             return Ok(None);
         };
@@ -515,6 +588,20 @@ impl Board {
 /// `doc`.
 pub(crate) fn retrieve_frame(doc: &Address, ordinal: u64) -> Value {
     json!({ "op": "retrieve_v", "specs": [{ "doc": doc.to_string(), "span": { "start": format!("1.{ordinal}"), "width": "0.1" } }] })
+}
+
+/// The one atom a one-position `retrieve_v` delivery carries
+/// ([`retrieve_frame`]'s answer): its one item's composite value (wire.md
+/// §The response envelope, `delivery`) — none where the answer is no
+/// delivery of one atom.
+pub(crate) fn atom_of(answer: &Value) -> Option<String> {
+    if answer["resp"].as_str() != Some("delivery") {
+        return None;
+    }
+    match answer["items"].as_array()?.as_slice() {
+        [item] => item["atom"].as_str().map(str::to_string),
+        _ => None,
+    }
 }
 
 /// The `retrieve_doc_v_span_set` frame: `doc`'s V-span set, its content

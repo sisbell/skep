@@ -21,8 +21,8 @@
 //!   pages, `/op`, `/op-at`, `/chain`), with the count of every read made,
 //!   every value the resolver takes on the board's word typed where the
 //!   wire spells it, and every answer held to the shape the wire promises —
-//!   a page that does not advance refused, a deposit's retraction the
-//!   board's own active view.
+//!   a page or a class scan's window that does not advance refused, a
+//!   deposit's retraction the board's own active view.
 //! * `mirror` — THE MIRROR (REG-3.10 to REG-3.13, REG-3.17 to REG-3.19): a
 //!   `/changes` consumer from the floor that fetches every row's bytes it
 //!   needs and keeps a journal copy from genesis; the base from genesis at

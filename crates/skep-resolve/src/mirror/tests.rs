@@ -98,6 +98,38 @@ fn a_binding_typed_record_outside_the_claimants_doc_one_binds_nothing() {
     assert!(mirror.index().suppressed().is_empty(), "and never judged: {:?}", mirror.index().suppressed());
 }
 
+/// A RECORD'S POSITION AND HOME ARE ITS ROW'S (R5 (g); REG-1.10): a cache
+/// line naming the registrar's binding link at another position and in an
+/// org's doc 1, its atom the org's own signed binding, binds nothing — the
+/// record is judged where its row puts it, in the claimant's doc 1 under the
+/// registrar's table, and is UNSIGNED there, kept out at the row's position;
+/// never where the line puts it, SIGNED by the org's key.
+#[test]
+fn a_records_position_and_home_are_its_rows_never_a_cache_lines() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let registrar = HybridSigner::from_seed(TAG_MLDSA65_ED25519, &[1; 32]).expect("tag 1");
+    let org = HybridSigner::from_seed(TAG_MLDSA65_ED25519, &[2; 32]).expect("tag 1");
+    let bound = [a("1.0.2")];
+    let (registry, own) = (a("1.0.1.0.1"), a("1.0.2.0.1"));
+    let mut kept = Fetched::default();
+    let lines: Vec<Value> = [
+        kept.keep_link(stored(1, "1.0.1.0.1.0.2.1", &registry, &commons_type(&[3]), "1.0.1", &[])),
+        kept.keep_link(stored(7, "1.0.1.0.1.0.2.2", &own, t_binding(), "1.0.2.0.1.0.1.1", &bound)),
+        kept.keep_atom(a("1.0.2.0.1.0.1.1"), signed_binding(&org, &own, &a("1.9"), &bound)),
+        kept.keep_board(TERM, &"07".repeat(32)),
+        kept.keep_keys(table("1.0.1", &registrar)),
+        kept.keep_keys(table("1.0.2", &org)),
+    ]
+    .into_iter()
+    .map(|line| line.expect("a value not held writes its line"))
+    .collect();
+    let rows = [(1, "1.0.1.0.1.0.2.1", &registry), (2, "1.0.1.0.1.0.2.2", &registry)];
+    let mirror = rebuilt(dir.path(), &rows, &lines);
+    assert_eq!(mirror.index().standing(&a("1.9")), None, "the org's record binds nothing");
+    let kept_out: Vec<(u64, Cause)> = mirror.index().suppressed().iter().map(|s| (s.position, s.cause.clone())).collect();
+    assert_eq!(kept_out, [(2, Cause::Verdict(Verdict::Unsigned))], "judged at the row's position, in the row's home");
+}
+
 /// AN ADDRESS PAST A MACHINE WORD IS AN ADDRESS (wire.md §Value encodings:
 /// a component is one decimal natural, of any size), and what the canonical
 /// rule admits is not judged again: the registrar's binding of a prefix one

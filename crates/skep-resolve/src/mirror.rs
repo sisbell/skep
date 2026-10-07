@@ -72,8 +72,9 @@
 //!   from a stranger is that stranger's word (REG-3.14's residue): only the
 //!   feed copy is checked against the root, and the realm is never read off
 //!   the cache — neither the claimant, nor its genesis act, nor its genesis
-//!   set. Until the realm is compared, the fold reads every link row off the
-//!   board.
+//!   set — and a record's position and home are its row's, never a cache
+//!   line's. Until the realm is compared, the fold reads every link row off
+//!   the board.
 //!
 //! THE BINDING-WRITING ACCOUNT (R5 (g); REG-2.8): on an unforked lineage the
 //! bindings the walk reads are the CLAIMANT's — the claim the fold honors,
@@ -92,7 +93,7 @@ mod testing;
 use std::collections::BTreeMap;
 use std::fmt;
 use std::fs::{self, File, OpenOptions};
-use std::io::{self, BufRead, BufReader, BufWriter, Read, Seek, SeekFrom, Write};
+use std::io::{self, BufWriter, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
@@ -284,7 +285,11 @@ pub struct Stats {
     pub copy_bytes: u64,
 }
 
-/// A stored link's slots as `read_link` serves them, at its position.
+/// A stored link as the fold reads it: the slots `read_link` served — its
+/// type, its `from` and its `to` — at the position and in the home its feed
+/// row names ([`Mirror::read_link`]). The fetch cache keeps one under the
+/// row it was read at, as its line records it; the fold takes a record's
+/// position and home off the row, never off that line.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct StoredLink {
     at: u64,
@@ -382,27 +387,6 @@ impl Lines {
         out.write_all(text.as_bytes()).and_then(|()| out.write_all(b"\n")).and_then(|()| out.flush()).map_err(failed)?;
         self.bytes += text.len() as u64 + 1;
         Ok(())
-    }
-
-    /// Every line of the file as JSON, in order — read whole: a line that is
-    /// no JSON refuses the file, as a feed copy's every line must read; none
-    /// where the file is absent.
-    fn read(path: &Path) -> Result<Vec<Value>, MirrorError> {
-        if !path.exists() {
-            return Ok(Vec::new());
-        }
-        let file = File::open(path).map_err(|e| MirrorError::Copy(format!("{}: {e}", path.display())))?;
-        let mut lines = Vec::new();
-        for (n, line) in BufReader::new(file).lines().enumerate() {
-            let line = line.map_err(|e| MirrorError::Copy(format!("{}: {e}", path.display())))?;
-            if line.trim().is_empty() {
-                continue;
-            }
-            let v: Value = serde_json::from_str(&line)
-                .map_err(|e| MirrorError::Copy(format!("{}:{}: {e}", path.display(), n + 1)))?;
-            lines.push(v);
-        }
-        Ok(lines)
     }
 }
 
@@ -724,7 +708,7 @@ impl Mirror {
                         .get(first_unasked..)
                         .unwrap_or_default()
                         .iter()
-                        .filter(|d| d.record.honored && !d.record.nullified)
+                        .filter(|d| d.record.stands())
                         .map(|d| d.link.clone())
                         .collect();
                     self.asked.insert(home.clone(), deposits.len());
@@ -859,12 +843,7 @@ impl Mirror {
                     position: stored.at,
                     link: stored.address.clone(),
                     home: stored.home.clone(),
-                    record: BindingRecord {
-                        prefix: b.prefix,
-                        account: stored.to.first().cloned(),
-                        replaces: b.replaces,
-                        honored: false,
-                    },
+                    record: BindingRecord::of(b, &stored.to),
                     verdict,
                 });
             }
@@ -873,12 +852,7 @@ impl Mirror {
                     position: stored.at,
                     link: stored.address.clone(),
                     home: stored.home.clone(),
-                    record: EndpointRecord {
-                        origins: e.origins.into_vec(),
-                        replaces: e.replaces,
-                        honored: false,
-                        nullified: false,
-                    },
+                    record: EndpointRecord::of(e),
                     verdict,
                 });
             }
@@ -888,12 +862,16 @@ impl Mirror {
 
     // ── the fetches a row makes ─────────────────────────────────────────────
 
-    /// The stored link at `link`: the fetch cache's, else the board's
-    /// ([`Mirror::read_link_off_board`]); `None` where no link stands there,
+    /// The stored link at `link`, at the row's position `at` in the row's
+    /// home `home`: its slots the fetch cache's, else the board's
+    /// ([`Mirror::read_link_off_board`]) — its position and its home the
+    /// row's always, never a cache line's; `None` where no link stands there,
     /// or the cache holds none and no board is held to ask.
     fn read_link(&mut self, at: u64, link: &Address, home: &Address) -> Result<Option<StoredLink>, MirrorError> {
         if let Some(s) = self.fetched.links.get(link) {
-            return Ok(Some(s.clone()));
+            // The slots are the cache's; the position and the home are the
+            // row's, checked against the source, never a cache line's.
+            return Ok(Some(StoredLink { at, home: home.clone(), ..s.clone() }));
         }
         self.read_link_off_board(at, link, home)
     }

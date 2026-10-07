@@ -115,6 +115,18 @@ impl Origin {
         &self.host
     }
 
+    /// The host as a socket resolves it: an IPv6 literal's brackets shed.
+    pub(crate) fn dial_host(&self) -> &str {
+        self.host.trim_start_matches('[').trim_end_matches(']')
+    }
+
+    /// `host[:port]` as the origin spells it — the `Host` header's value: the
+    /// canonical text past its scheme.
+    pub(crate) fn authority(&self) -> &str {
+        let scheme = if self.https { "https://" } else { "http://" };
+        &self.canonical[scheme.len()..]
+    }
+
     /// The port the dial would use: the one written, or the scheme's
     /// default.
     pub fn port(&self) -> u16 {
@@ -136,8 +148,7 @@ impl Origin {
 
     /// The host as an IP literal, where it is one.
     pub fn ip_literal(&self) -> Option<IpAddr> {
-        let bare = self.host.trim_start_matches('[').trim_end_matches(']');
-        bare.parse::<IpAddr>().ok()
+        self.dial_host().parse::<IpAddr>().ok()
     }
 }
 
@@ -488,7 +499,9 @@ mod tests {
 
     /// The canonical grammar admits the canonical text alone, as the
     /// daemon's own origin parse does — through `parse` and `str::parse`
-    /// alike, the second refusing by name.
+    /// alike, the second refusing by name; and an origin answers the views a
+    /// dial takes of it: its authority past either scheme, and its host as a
+    /// socket resolves it, an IPv6 literal's brackets shed.
     #[test]
     fn origins_are_canonical_only() {
         for ok in ["https://acme.example", "https://acme.example:8443", "http://x.onion", "https://[2606:2800:220:1:248:1893:25c8:1946]", "http://127.0.0.1:8642"] {
@@ -502,6 +515,10 @@ mod tests {
         }
         assert_eq!(Origin::parse("https://acme.example").unwrap().port(), 443);
         assert_eq!(Origin::parse("http://acme.example").unwrap().port(), 80);
+        let literal = Origin::parse("https://[2606:2800:220:1:248:1893:25c8:1946]:8443").unwrap();
+        assert_eq!(literal.authority(), "[2606:2800:220:1:248:1893:25c8:1946]:8443", "past the https scheme");
+        assert_eq!(literal.dial_host(), "2606:2800:220:1:248:1893:25c8:1946", "the brackets shed");
+        assert_eq!(Origin::parse("http://acme.example:8642").unwrap().authority(), "acme.example:8642", "past the http scheme");
     }
 
     /// The transports held, asked by kind: the default is the frontend's —

@@ -34,7 +34,8 @@
 //! alone. The fold calls one method here, [`Mirror::realm_check`], at the
 //! claim's row.
 
-use std::fs;
+use std::fs::{self, File};
+use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
@@ -43,7 +44,7 @@ use skep_address::Address;
 use skep_identity::Fingerprint;
 
 use super::{position, Lines, Mirror, MirrorError, Opened, Refusal, FEED_COPY, FEED_FORMAT, FETCH_CACHE};
-use crate::board::{parse_chain, rises_past, Board, BoardError, Page};
+use crate::board::{parse_chain, rises_past, Board, BoardError};
 use crate::hint::{RealmId, RootHint};
 use crate::http::Dial;
 use crate::origin::Origin;
@@ -192,15 +193,15 @@ impl Mirror {
     }
 
     /// Pages from `since` to the feed's end, each row appended to the copy
-    /// and folded; the page size the feed's own default, and the limit the
-    /// feed names where a page passes its byte budget ([`page_from`]). Each
-    /// page is held to its own rules ([`Board::changes`]), so the next one is
-    /// asked past its `last`.
+    /// and folded: each page asked at the feed's own default size, or at the
+    /// limit the feed names once a page passes its byte budget, and held to
+    /// its own rules ([`Board::changes`]), so the next one is asked past its
+    /// `last`.
     fn pull(&mut self, mut since: u64) -> Result<(), MirrorError> {
         self.chains.forget_stale();
         let mut limit: Option<usize> = None;
         loop {
-            let page = page_from(self.board_ref()?, since, &mut limit)?;
+            let page = self.board_ref()?.changes(since, &mut limit)?;
             self.stats.pages += 1;
             for row in page.rows {
                 self.append_feed(json!({ "row": row }))?;
@@ -242,7 +243,7 @@ impl Mirror {
         let mut since = 0;
         let mut limit = None;
         loop {
-            let page = page_from(self.board_ref()?, since, &mut limit)?;
+            let page = self.board_ref()?.changes(since, &mut limit)?;
             self.stats.pages += 1;
             source_rows.extend(page.rows);
             since = page.last;
@@ -300,7 +301,7 @@ impl Mirror {
 /// row moved out of its line.
 fn read_copy(dir: &Path) -> Result<Option<HeldCopy>, MirrorError> {
     let path = dir.join(FEED_COPY);
-    let mut lines = Lines::read(&path)?.into_iter();
+    let mut lines = read_lines(&path)?.into_iter();
     let Some(header) = lines.next() else { return Ok(None) };
     let stamped = header["skep-resolve"].as_str() == Some(FEED_FORMAT);
     let Some(genesis) = header["realm"].as_str().and_then(Fingerprint::parse_hex).filter(|_| stamped) else {
@@ -321,27 +322,25 @@ fn read_copy(dir: &Path) -> Result<Option<HeldCopy>, MirrorError> {
     Ok(Some(HeldCopy { genesis, rows, head_pairs }))
 }
 
-/// One page of the feed from `since` at `limit` — re-asked ONCE, at the
-/// limit the feed names, where it refuses the page past its byte budget
-/// (wire.md §The change feed, Paging: "re-ask with `limit=N` and the page is
-/// served whole"), never at `limit=0`, which the wire refuses; the limit is
-/// kept for the pages after it. A feed that refuses again the page it was
-/// re-asked at its own limit is malformed, and is not asked a third time.
-fn page_from(board: &Board, since: u64, limit: &mut Option<usize>) -> Result<Page, MirrorError> {
-    let mut re_asked = false;
-    loop {
-        match board.changes(since, *limit) {
-            Err(BoardError::PageTooLarge { fits }) if !re_asked => {
-                re_asked = true;
-                *limit = Some(fits.max(1));
-            }
-            Err(BoardError::PageTooLarge { .. }) => {
-                let refused = format!("the feed refuses the page from {since} at the limit it named");
-                return Err(BoardError::Malformed(refused).into());
-            }
-            page => return Ok(page?),
-        }
+/// Every line of the feed copy at `path` as JSON, in order — read whole: a
+/// line that is no JSON refuses the copy, as the checked image's every line
+/// must read; none where the file is absent.
+fn read_lines(path: &Path) -> Result<Vec<Value>, MirrorError> {
+    if !path.exists() {
+        return Ok(Vec::new());
     }
+    let file = File::open(path).map_err(|e| MirrorError::Copy(format!("{}: {e}", path.display())))?;
+    let mut lines = Vec::new();
+    for (n, line) in BufReader::new(file).lines().enumerate() {
+        let line = line.map_err(|e| MirrorError::Copy(format!("{}: {e}", path.display())))?;
+        if line.trim().is_empty() {
+            continue;
+        }
+        let v: Value = serde_json::from_str(&line)
+            .map_err(|e| MirrorError::Copy(format!("{}:{}: {e}", path.display(), n + 1)))?;
+        lines.push(v);
+    }
+    Ok(lines)
 }
 
 /// Dial the hint's origins in order; the first that answers `/health` is the

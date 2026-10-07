@@ -441,9 +441,9 @@ Rules that hold across its files:
   rows to the feed's own order; `fetched.jsonl` is this mirror's own
   cache, its format written and read in `mirror/cache.rs` alone, a value
   written once, a line that does not read — a write a crash cut short —
-  held as absent and never run into. A new base begins both files afresh,
-  so a cache that outlived its feed copy is never read as this mirror's
-  own.
+  held as absent and never run into, and a record's position and home its
+  row's, never a cache line's. A new base begins both files afresh, so a
+  cache that outlived its feed copy is never read as this mirror's own.
 - **A retraction is the board's own reading** (`board.rs`). A deposit
   leaves the active view where the board's active links of its home, its
   type and its atom no longer answer it (`Board::stands_active`) — the
@@ -479,8 +479,9 @@ root's failover, the copy's two files, the hint's line), `walk` (the
 faces) and `origin` (the terms and the precedence). The paths no
 recording reaches — the reclaim floor, the page budget, the position
 read, an unclaimed feed, the binding home, a cache naming another
-claimant or hiding the genesis act, a second claim, an address past a
-machine word, the guest-reading resolve's verdicts, a forged retraction,
+claimant or hiding the genesis act, a cache line placing a record at
+another position or home, a second claim, an address past a machine
+word, the guest-reading resolve's verdicts, a forged retraction,
 a page or a window that does not advance, an answer past the cap — run in
 the unit suites over boards they hold fixed, each beside the code it
 pins, the mirror's suites sharing the fixtures in `mirror/testing.rs`.

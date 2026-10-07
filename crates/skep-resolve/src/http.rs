@@ -165,9 +165,7 @@ impl Http {
         if origin.is_https() {
             return Err(TransportError::NotHeld("https".into()));
         }
-        let host = origin.host().trim_start_matches('[').trim_end_matches(']').to_string();
-        let authority = origin.as_str().trim_start_matches("http://").to_string();
-        Ok(Http { host, port: origin.port(), authority })
+        Ok(Http { host: origin.dial_host().to_string(), port: origin.port(), authority: origin.authority().to_string() })
     }
 
     /// The authority dialed — host and port as the origin spells them.

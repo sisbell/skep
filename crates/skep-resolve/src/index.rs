@@ -226,7 +226,7 @@ impl Ledger {
     /// The CURRENT endpoint of `home` (REG-1.10, REG-1.11): the latest
     /// honored deposit still on the active view.
     pub(crate) fn current_endpoint(&self, home: &Address) -> Option<&Judged<EndpointRecord>> {
-        self.endpoints(home).iter().rev().find(|d| d.record.honored && !d.record.nullified)
+        self.endpoints(home).iter().rev().find(|d| d.record.stands())
     }
 
     /// Whether any honored deposit ever stood in `home`.

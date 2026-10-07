@@ -59,7 +59,7 @@ fn every_read_is_counted_once_by_its_kind() {
     board.op(&span_set_frame(&doc)).expect("answered");
     board.op_at(5, &retrieve_frame(&doc, 1)).expect("answered");
     board.health().expect("answered");
-    board.changes(0, None).expect("answered");
+    board.changes(0, &mut None).expect("answered");
     board.chain_at(5).expect("answered");
     let r = board.reads();
     assert_eq!((r.image, r.span_set, r.retrieve, r.op_at, r.busy_retries), (1, 1, 1, 2, 2));
@@ -82,7 +82,8 @@ fn chain_hex_parses_at_sixty_four_characters_alone() {
 
 /// The values taken on the board's word are read where the wire spells
 /// them: the head pair only where its chain is a chain, the board term
-/// off `H.1`'s record with its chain as spelled, and a key set only where
+/// off `H.1`'s record with its chain as spelled, where `H.1` delivers one
+/// atom and never the first of several, and a key set only where
 /// the answer is one this build reads whole — its `as_of` and every entry
 /// beside it; an entry of an algorithm this build holds no row for, an
 /// answer with no list, and an entry with no anchor flag are no table,
@@ -101,6 +102,8 @@ fn the_boards_word_is_typed_where_the_wire_spells_it() {
     let term = canned(json!({ "resp": "delivery", "items": [{ "atom": h1 }] })).board_term().expect("read");
     assert_eq!(term, Some((BoardTerm { log_position: 4, chain: [7; 32] }, chain.clone())));
     assert_eq!(canned(json!({ "resp": "delivery", "items": [] })).board_term(), Ok(None), "no H.1");
+    let two = json!({ "resp": "delivery", "items": [{ "atom": h1 }, { "atom": h1 }] });
+    assert_eq!(canned(two).board_term(), Ok(None), "a delivery of two atoms is no H.1");
     let key = HybridSigner::from_seed(TAG_MLDSA65_ED25519, &[3; 32]).expect("tag 1").public_key().clone();
     let entry = json!({ "alg": key.alg(), "key": key.to_hex(), "anchor": true });
     let answer = canned(json!({ "resp": "key_set", "as_of": 12, "enrolled": [entry] })).key_set(&a("1.0.2"));
@@ -125,7 +128,9 @@ fn the_boards_word_is_typed_where_the_wire_spells_it() {
 /// document's content extent, an image's runs — whole or not at all —
 /// and an atom's V-ordinal among them, the runs taken in V-order, a gap
 /// between two runs no V-ordinal, and widths that overflow no V-ordinal
-/// either; and a content element's ordinal in its own document, never a
+/// either; a one-position delivery's one atom, and no atom of a delivery
+/// of per-byte values, of a delivery of two, or of an answer that is no
+/// delivery; and a content element's ordinal in its own document, never a
 /// link element's nor a member's mint.
 #[test]
 fn the_shared_answers_read_one_way() {
@@ -158,6 +163,11 @@ fn the_shared_answers_read_one_way() {
     ] });
     assert_eq!(runs_of(&torn), None, "a run that does not read would shift every run after it");
     assert_eq!(runs_of(&json!({ "resp": "rejected" })), None);
+    let delivered = |items: Value| json!({ "resp": "delivery", "items": items });
+    assert_eq!(atom_of(&delivered(json!([{ "atom": "a record" }]))), Some("a record".to_string()));
+    assert_eq!(atom_of(&delivered(json!([{ "content": "a" }]))), None, "a run of per-byte values is no atom");
+    assert_eq!(atom_of(&delivered(json!([{ "atom": "a" }, { "atom": "b" }]))), None, "a delivery of two");
+    assert_eq!(atom_of(&json!({ "resp": "rejected", "items": [{ "atom": "a record" }] })), None, "no delivery");
     assert_eq!(content_ordinal_in(&a("1.0.1.0.1"), &a("1.0.1.0.1.0.1.4")), Some(4));
     assert_eq!(content_ordinal_in(&a("1.0.1.0.1"), &a("1.0.1.0.1.0.2.4")), None, "a link element");
     assert_eq!(content_ordinal_in(&a("1.0.1.0.1"), &a("1.0.1.0.1.1.0.1.4")), None, "a member's mint");
@@ -246,7 +256,7 @@ fn a_page_that_does_not_advance_is_refused() {
             Some(at) => json!({ "at": at, "op": "publish", "docs": [] }),
             None => json!({ "op": "publish", "docs": [] }),
         }).collect();
-        canned(json!({ "changes": rows, "last": last, "more": more })).changes(since, None)
+        canned(json!({ "changes": rows, "last": last, "more": more })).changes(since, &mut None)
     };
     assert!(page(4, &[Some(5), Some(7)], 7, true).is_ok(), "rising entries, more beyond them");
     assert!(page(9, &[], 9, false).is_ok(), "the empty page at the head");
@@ -262,6 +272,67 @@ fn a_page_that_does_not_advance_is_refused() {
     ] {
         assert!(matches!(page(since, ats, last, more), Err(BoardError::Malformed(_))), "{case}");
     }
+}
+
+/// A feed whose page from 0 passes its byte budget at every limit but one:
+/// asked at `serves` it serves the page, and asked otherwise it refuses
+/// `400 malformed_changes` naming `fits` 0. Every path asked is kept.
+struct Budget {
+    serves: Option<usize>,
+    asked: RefCell<Vec<String>>,
+}
+
+impl Transport for Budget {
+    fn exchange(&self, _: Method, path: &str, _: &[u8]) -> Result<(u16, Vec<u8>), TransportError> {
+        self.asked.borrow_mut().push(path.to_string());
+        if self.serves.is_some_and(|l| path == format!("/changes?since=0&limit={l}")) {
+            let page = json!({ "changes": [{ "at": 5, "op": "publish", "docs": [] }], "last": 5, "more": true });
+            return Ok((200, page.to_string().into_bytes()));
+        }
+        Ok((400, json!({ "error": "malformed_changes", "budget": 2_097_152, "fits": 0 }).to_string().into_bytes()))
+    }
+}
+
+/// THE PAGE BYTE BUDGET (wire.md §The change feed, Paging), the feed read's
+/// own: a page refused past its budget is asked again ONCE, at the limit the
+/// feed names — `1` where it names `0`, which the wire refuses — and that
+/// limit is kept for the pages after it; a feed that refuses again the
+/// limit it named is malformed, and is not asked a third time. Every
+/// request is counted.
+#[test]
+fn a_page_past_the_byte_budget_is_re_asked_once_at_the_limit_the_feed_names() {
+    let paged = |serves| {
+        let feed = Rc::new(Budget { serves, asked: RefCell::new(Vec::new()) });
+        let board = Board::new(Box::new(feed.clone()));
+        let mut limit = None;
+        let last = board.changes(0, &mut limit).map(|page| page.last);
+        let asked = feed.asked.borrow().clone();
+        (last, limit, asked, board.reads().changes)
+    };
+    let re_asked = ["/changes?since=0", "/changes?since=0&limit=1"];
+    let (last, limit, asked, counted) = paged(Some(1));
+    assert_eq!((last, limit), (Ok(5), Some(1)), "served at the limit the feed named, the limit kept");
+    assert_eq!((asked, counted), (re_asked.map(String::from).to_vec(), 2));
+    let (last, limit, asked, counted) = paged(None);
+    assert!(matches!(last, Err(BoardError::Malformed(_))), "the limit it named refused again");
+    assert_eq!((limit, asked, counted), (Some(1), re_asked.map(String::from).to_vec(), 2), "never asked a third time");
+}
+
+/// ONE WINDOW OF A CLASS SCAN is asked as `window_ftt` reads it — the class
+/// by its type's unit span, the home where one is named, the cursor and the
+/// count — and the last window lists the links of its batch that read.
+#[test]
+fn a_class_window_is_asked_by_its_type_its_home_and_its_cursor() {
+    let (home, cur) = (a("1.0.2.0.1"), a("1.0.2.0.1.0.2.1"));
+    let last = json!({ "resp": "page", "window": { "batch": ["1.0.2.0.1.0.2.2", "not an address"], "exhausted": true } });
+    let board = Rc::new(Asked { answer: last, frame: RefCell::new(None) });
+    let n = NonZeroUsize::new(2).expect("two");
+    let window = Board::new(Box::new(board.clone())).class_window(t_endpoint(), Some(&home), Some(&cur), n).expect("answered");
+    assert_eq!(window, Window { batch: vec![a("1.0.2.0.1.0.2.2")], exhausted: true });
+    let asked = json!({ "op": "window_ftt", "cur": cur.to_string(), "n": 2, "q": {
+        "home": [unit_span_json(&home)], "from": "any", "to": "any", "ty": [unit_span_json(t_endpoint())],
+    }});
+    assert_eq!(board.frame.borrow_mut().take(), Some(asked), "its type, its home, its cursor and its count");
 }
 
 /// A RECLAIMED READ NAMES A FLOOR PAST THE POSITION ASKED (wire.md §Reading
@@ -312,7 +383,7 @@ fn an_answer_past_the_cap_is_no_answer_a_typed_read_takes() {
     assert_eq!(board.board_term(), Ok(None), "no board term");
     assert_eq!(board.stands_active(&link, &a("1.0.2.0.1"), t_endpoint(), &a("1.0.2.0.1.0.1.1")), Ok(true), "a deposit left standing");
     let refused = BoardError::Transport(TransportError::TooLarge { cap: 1 });
-    assert_eq!(board.changes(0, None), Err(refused.clone()), "a page");
+    assert_eq!(board.changes(0, &mut None), Err(refused.clone()), "a page");
     assert_eq!(board.health(), Err(refused.clone()), "/health");
     assert_eq!(board.chain_at(5), Err(refused), "/chain");
 }

@@ -23,6 +23,7 @@
 
 use skep_address::Address;
 use skep_identity::{Enrolled, Fingerprint};
+use skep_registry::{Binding, Endpoint};
 
 use crate::origin::{EndpointDial, MemberKind, MemberOutcome, Term};
 
@@ -101,6 +102,16 @@ pub struct BindingRecord {
     pub honored: bool,
 }
 
+impl BindingRecord {
+    /// The binding a body makes beside its link's target `to` (REG-2.19 to
+    /// REG-2.21): the body's prefix and `replaces`, and the account the target
+    /// names — none at a targetless binding — not yet walked, `honored` the
+    /// ledger's to set.
+    pub(crate) fn of(binding: Binding, to: &[Address]) -> BindingRecord {
+        BindingRecord { prefix: binding.prefix, account: to.first().cloned(), replaces: binding.replaces, honored: false }
+    }
+}
+
 /// An ENDPOINT deposit as the index holds it (REG-1.9, REG-1.10): the org's
 /// ordered origins, the deposit it replaces, whether the currency rule
 /// honors it, and whether the org's own `nullify` took it off the active
@@ -111,6 +122,21 @@ pub struct EndpointRecord {
     pub replaces: Option<Address>,
     pub honored: bool,
     pub nullified: bool,
+}
+
+impl EndpointRecord {
+    /// The deposit an endpoint body makes (REG-1.9): its ordered origins and
+    /// `replaces`, not yet weighed by the currency rule nor taken off the
+    /// view — `honored` and `nullified` the ledger's to set.
+    pub(crate) fn of(endpoint: Endpoint) -> EndpointRecord {
+        EndpointRecord { origins: endpoint.origins.into_vec(), replaces: endpoint.replaces, honored: false, nullified: false }
+    }
+
+    /// Whether the deposit stands on the active view as the ledger holds it:
+    /// honored, and not nullified (REG-1.10, REG-1.11).
+    pub(crate) fn stands(&self) -> bool {
+        self.honored && !self.nullified
+    }
 }
 
 /// A prefix's STANDING: the binding the walk holds current for it, and the
@@ -260,5 +286,40 @@ impl Resolution {
             | Resolution::BoundButDisclaimed { standing, .. }
             | Resolution::LiveEnforcement { standing, .. } => Some(standing),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use skep_registry::Origins;
+
+    use super::*;
+    use crate::parse_address;
+
+    fn a(s: &str) -> Address {
+        parse_address(s).unwrap()
+    }
+
+    /// A RECORD IS MADE AND STANDS BY ITS OWN RULES (REG-2.19 to REG-2.21;
+    /// REG-1.10, REG-1.11): a binding names the account its link's target
+    /// names, and none at a targetless binding, a retirement's one spelling;
+    /// a deposit stands on the active view where the ledger honored it and no
+    /// `nullify` took it off; each is made from its body not yet walked, the
+    /// ledger's flags unset.
+    #[test]
+    fn a_record_is_made_and_stands_by_its_own_rules() {
+        let binding = || Binding { prefix: a("1.5"), replaces: Some(a("1.0.1.0.1.0.2.1")) };
+        let bound = BindingRecord { prefix: a("1.5"), account: Some(a("1.0.2")), replaces: Some(a("1.0.1.0.1.0.2.1")), honored: false };
+        assert_eq!(BindingRecord::of(binding(), &[a("1.0.2")]), bound, "the target's account");
+        assert_eq!(BindingRecord::of(binding(), &[]).account, None, "a targetless binding names no account");
+        let origins = Origins::new(vec!["https://acme.example".to_string()]).expect("one origin");
+        let mut deposit = EndpointRecord::of(Endpoint { origins, replaces: None });
+        let made = EndpointRecord { origins: vec!["https://acme.example".to_string()], replaces: None, honored: false, nullified: false };
+        assert_eq!(deposit, made, "the body's origins, in its order");
+        assert!(!deposit.stands(), "not yet honored");
+        deposit.honored = true;
+        assert!(deposit.stands(), "honored, and on the view");
+        deposit.nullified = true;
+        assert!(!deposit.stands(), "taken off the view");
     }
 }

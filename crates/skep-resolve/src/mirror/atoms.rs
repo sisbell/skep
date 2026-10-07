@@ -20,13 +20,13 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::time::Instant;
 
-use serde_json::Value;
 use skep_address::{document_of, Address, Nat, Tumbler};
 use skep_registry::MAX_REGISTRY_RECORD_BYTES;
 
 use super::{Mirror, MirrorError};
 use crate::board::{
-    content_extent, content_ordinal_in, image_frame, retrieve_frame, runs_of, span_set_frame, v_ordinal_in,
+    atom_of, content_extent, content_ordinal_in, image_frame, retrieve_frame, runs_of, span_set_frame,
+    v_ordinal_in,
 };
 use crate::parse_address;
 
@@ -256,18 +256,6 @@ impl Mirror {
     }
 }
 
-/// The one atom a one-position delivery carries, where it carries one.
-fn atom_of(v: &Value) -> Option<String> {
-    if v["resp"].as_str() != Some("delivery") {
-        return None;
-    }
-    let items = v["items"].as_array()?;
-    if items.len() != 1 {
-        return None;
-    }
-    items[0]["atom"].as_str().map(str::to_string)
-}
-
 /// The TRUNK of a document or a version member: the document address cut
 /// after the document field's first component (`1.0.1.0.1.2` → `1.0.1.0.1`).
 fn trunk_of(doc: &Address) -> Option<Address> {
@@ -280,7 +268,7 @@ fn trunk_of(doc: &Address) -> Option<Address> {
 
 #[cfg(test)]
 mod tests {
-    use serde_json::json;
+    use serde_json::{json, Value};
 
     use super::*;
     use crate::http::{Method, Transport, TransportError};

@@ -280,7 +280,11 @@ fn trunk_of(doc: &Address) -> Option<Address> {
 
 #[cfg(test)]
 mod tests {
+    use serde_json::json;
+
     use super::*;
+    use crate::http::{Method, Transport, TransportError};
+    use crate::mirror::testing::{answer, over};
 
     fn a(s: &str) -> Address {
         parse_address(s).unwrap()
@@ -319,5 +323,94 @@ mod tests {
         assert_eq!(chains.members_of(&version), std::slice::from_ref(&daughter), "under the home its probe was made from");
         let trunk_members = [a("1.0.1.0.1.1"), a("1.0.1.0.1.2"), daughter];
         assert_eq!(chains.members_of(&home), trunk_members, "and under its trunk once a row names it");
+    }
+
+    /// A BOARD WHOSE HOME `1.0.2.0.1` ARRANGES `…0.1.2` NOWHERE AT ITS HEAD: the
+    /// head arranges `…0.1.9` alone and the home's chain has no member; as of
+    /// position 7 the home arranged `…0.1.9` then `…0.1.2` where `places`, and
+    /// is refused otherwise. Any other read — a value read at the head, or one
+    /// at another V-ordinal or another position — is no read this board
+    /// answers.
+    struct Unarranged {
+        places: bool,
+    }
+
+    impl Transport for Unarranged {
+        fn exchange(&self, method: Method, path: &str, body: &[u8]) -> Result<(u16, Vec<u8>), TransportError> {
+            let request: Value = serde_json::from_slice(body).expect("a JSON body");
+            let (frame, at) = if path == "/op-at" { (&request["frame"], request["at"].as_u64()) } else { (&request, None) };
+            let doc = frame["doc"].as_str().or(frame["d"].as_str()).or(frame["specs"][0]["doc"].as_str());
+            let runs = |starts: &[&str]| {
+                json!({ "resp": "runs", "runs": starts.iter().map(|s| json!({ "i_start": s, "width": "1" })).collect::<Vec<_>>() })
+            };
+            let set = |width: &str| json!({ "resp": "span_set", "set": [{ "start": "1.1", "width": width }] });
+            let refused = json!({ "resp": "rejected", "op": frame["op"], "code": "doc_not_registered" });
+            let at_ordinal_2 = frame["specs"][0]["span"]["start"] == "1.2";
+            assert_eq!(method, Method::Post, "{path}");
+            match (frame["op"].as_str(), doc, at) {
+                (Some("image"), Some("1.0.2.0.1"), None) => answer(runs(&["1.0.2.0.1.0.1.9"])),
+                (Some("retrieve_doc_v_span_set"), Some("1.0.2.0.1"), None) => answer(set("0.1")),
+                (Some("retrieve_doc_v_span_set"), Some(_), None) => answer(refused),
+                (Some("retrieve_doc_v_span_set"), Some("1.0.2.0.1"), Some(7)) if self.places => answer(set("0.2")),
+                (Some("retrieve_doc_v_span_set"), Some("1.0.2.0.1"), Some(7)) => answer(refused),
+                (Some("image"), Some("1.0.2.0.1"), Some(7)) => answer(runs(&["1.0.2.0.1.0.1.9", "1.0.2.0.1.0.1.2"])),
+                (Some("retrieve_v"), Some("1.0.2.0.1"), Some(7)) if at_ordinal_2 => {
+                    answer(json!({ "resp": "delivery", "items": [{ "atom": "the bytes as of 7" }] }))
+                }
+                _ => panic!("a read this board does not answer: {path} {request}"),
+            }
+        }
+    }
+
+    /// THE POSITION READ (REG-3.26), the last recourse: an atom its home's head
+    /// does not arrange and no version of the home holds is read as of its
+    /// link's position through `/op-at` — the extent, the image, the value at
+    /// the V-ordinal that image places it — kept, and counted; where the home
+    /// as of that position arranges nothing either, there are no bytes.
+    #[test]
+    fn an_atom_no_version_holds_is_read_as_of_its_links_position() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let (home, atom) = (a("1.0.2.0.1"), a("1.0.2.0.1.0.1.2"));
+        let mut mirror = over(Unarranged { places: true }, dir.path());
+        assert_eq!(mirror.fetch_atom(7, &home, &atom), Ok(Some("the bytes as of 7".to_string())));
+        assert_eq!(mirror.stats.chain_walk.position_reads, 1);
+        assert_eq!(mirror.fetched.atoms.get(&atom).map(String::as_str), Some("the bytes as of 7"), "kept");
+        let mut mirror = over(Unarranged { places: false }, dir.path());
+        assert_eq!(mirror.fetch_atom(7, &home, &atom), Ok(None), "the home as of 7 arranges nothing");
+        assert_eq!(mirror.stats.chain_walk.position_reads, 0);
+    }
+
+    /// A BOARD WHOSE HOME `1.0.2.0.1` ARRANGES ITS ATOM `…0.1.1` AT THE HEAD,
+    /// the bytes there `len` long.
+    struct Lengthy {
+        len: usize,
+    }
+
+    impl Transport for Lengthy {
+        fn exchange(&self, _: Method, _: &str, body: &[u8]) -> Result<(u16, Vec<u8>), TransportError> {
+            let frame: Value = serde_json::from_slice(body).expect("a frame");
+            match frame["op"].as_str() {
+                Some("image") => answer(json!({ "resp": "runs", "runs": [{ "i_start": "1.0.2.0.1.0.1.1", "width": "1" }] })),
+                Some("retrieve_v") => answer(json!({ "resp": "delivery", "items": [{ "atom": "x".repeat(self.len) }] })),
+                _ => panic!("a read this board does not answer: {frame}"),
+            }
+        }
+    }
+
+    /// BYTES PAST ANY RECORD ARE NEVER HELD: an atom longer than the largest
+    /// record the canonical rule admits is handed to the parse, which refuses
+    /// it, and kept neither in the cache nor in its file; a record's own bytes,
+    /// at that length, are kept.
+    #[test]
+    fn bytes_past_any_record_are_handed_to_the_parse_and_never_held() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let (home, atom) = (a("1.0.2.0.1"), a("1.0.2.0.1.0.1.1"));
+        let mut mirror = over(Lengthy { len: MAX_REGISTRY_RECORD_BYTES + 1 }, dir.path());
+        let bytes = mirror.fetch_atom(5, &home, &atom).expect("read").expect("the bytes");
+        assert_eq!(bytes.len(), MAX_REGISTRY_RECORD_BYTES + 1, "handed to the parse");
+        assert!(mirror.fetched.atoms.is_empty() && mirror.pending_cache.is_empty(), "never held");
+        let mut mirror = over(Lengthy { len: MAX_REGISTRY_RECORD_BYTES }, dir.path());
+        mirror.fetch_atom(5, &home, &atom).expect("read").expect("the bytes");
+        assert_eq!((mirror.fetched.atoms.len(), mirror.pending_cache.len()), (1, 1), "a record's bytes, held");
     }
 }

@@ -208,7 +208,7 @@ impl Ledger {
     /// REG-3.82): the longest PROPER prefix of `prefix` with a standing —
     /// held or retired; a prefix whose bindings are all inert has none, and
     /// is no parent.
-    pub(crate) fn parent_prefix(&self, prefix: &Address) -> Option<Address> {
+    fn parent_prefix(&self, prefix: &Address) -> Option<Address> {
         self.prefixes
             .iter()
             .filter(|(parent, bindings)| {
@@ -219,7 +219,7 @@ impl Ledger {
     }
 
     /// Every endpoint deposit in `home`, in journal order.
-    pub(crate) fn endpoints(&self, home: &Address) -> &[Judged<EndpointRecord>] {
+    fn endpoints(&self, home: &Address) -> &[Judged<EndpointRecord>] {
         self.endpoints.get(home).map(|d| d.entries.as_slice()).unwrap_or(&[])
     }
 
@@ -235,17 +235,17 @@ impl Ledger {
     }
 
     /// Every prefix a folded binding names, in address order.
-    pub(crate) fn prefixes(&self) -> impl Iterator<Item = &Address> {
+    fn prefixes(&self) -> impl Iterator<Item = &Address> {
         self.prefixes.keys()
     }
 
     /// Every folded binding of every prefix, in address then journal order.
-    pub(crate) fn bindings(&self) -> impl Iterator<Item = &Judged<BindingRecord>> {
+    fn bindings(&self) -> impl Iterator<Item = &Judged<BindingRecord>> {
         self.prefixes.values().flat_map(|p| p.entries.iter())
     }
 
     /// Every folded endpoint deposit of every home.
-    pub(crate) fn all_endpoints(&self) -> impl Iterator<Item = &Judged<EndpointRecord>> {
+    fn all_endpoints(&self) -> impl Iterator<Item = &Judged<EndpointRecord>> {
         self.endpoints.values().flat_map(|d| d.entries.iter())
     }
 

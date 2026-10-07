@@ -49,22 +49,22 @@ use crate::state::Verdict;
 
 /// THE TRIAL's inputs by name — the frame's members beside the candidates.
 #[derive(Debug, Clone, Copy)]
-pub struct Trial<'a> {
+pub(crate) struct Trial<'a> {
     /// `H.1`'s committed pair, the board term (D13).
-    pub board: BoardTerm,
+    pub(crate) board: BoardTerm,
     /// The deposit's home — the doc 1 the link sits in.
-    pub home: &'a Address,
+    pub(crate) home: &'a Address,
     /// The home's account — the frame's `account`, ω over the home.
-    pub home_account: &'a Address,
+    pub(crate) home_account: &'a Address,
     /// The link's type address — the binding's or the endpoint's row.
-    pub ty: &'a Address,
+    pub(crate) ty: &'a Address,
     /// The link's target as stored: the account bound, or none.
-    pub to: &'a [Address],
+    pub(crate) to: &'a [Address],
     /// The lineage row: the fork point of the lineage the reader's own root
     /// hint names (REG-3.45, REG-3.40), `None` for the EMPTY row.
-    pub lineage: Option<&'a Address>,
+    pub(crate) lineage: Option<&'a Address>,
     /// The set that opens the home's account AS OF the record's position.
-    pub keys: &'a [Enrolled],
+    pub(crate) keys: &'a [Enrolled],
 }
 
 /// THE BLOB: a record's `sig` as the hybrid signature's bytes — hex,
@@ -72,7 +72,7 @@ pub struct Trial<'a> {
 /// (6,746 hex for tag 1's 3,373 bytes, 1,460 for tag 3's 730); `None` for
 /// every other length and for a non-hex byte. The width is checked first, so
 /// no allocation is sized by a stranger's string.
-pub fn hybrid_blob(sig: &str) -> Option<Vec<u8>> {
+fn hybrid_blob(sig: &str) -> Option<Vec<u8>> {
     if !SIG_ALGS.iter().any(|row| row.sig_len() * 2 == sig.len()) {
         return None;
     }
@@ -87,7 +87,7 @@ pub fn hybrid_blob(sig: &str) -> Option<Vec<u8>> {
 /// module doc): SIGNED by the first candidate whose verify passes, else
 /// UNSIGNED — a `sig` absent, of no row's width, or verifying under no key of
 /// the set as of the position earns no word of its own.
-pub fn judge(record: &Record, trial: &Trial<'_>) -> Verdict {
+pub(crate) fn judge(record: &Record, trial: &Trial<'_>) -> Verdict {
     let Some(sig) = record.sig.as_deref() else {
         return Verdict::Unsigned;
     };

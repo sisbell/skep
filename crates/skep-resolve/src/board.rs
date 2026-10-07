@@ -135,8 +135,7 @@ pub enum BoardError {
     /// `history_reclaimed`: the position asked (`/op-at`, `/chain`) or the
     /// `since` fence (`/changes`) predates the history the board retains;
     /// `floor`, where named, the oldest position still answerable — past the
-    /// position asked, which [`Board::op_at`] and [`Board::chain_at`] hold
-    /// it to.
+    /// position asked, which the reads over `/op-at` and `/chain` hold it to.
     Reclaimed { floor: Option<u64> },
 }
 
@@ -194,16 +193,13 @@ pub(crate) struct LinkSlots {
 
 /// One page of the feed (wire.md §The change feed).
 #[derive(Debug, Clone, PartialEq, Eq)]
-#[non_exhaustive]
-pub struct Page {
+pub(crate) struct Page {
     /// The entries, oldest first, each as served.
-    pub rows: Vec<Value>,
+    pub(crate) rows: Vec<Value>,
     /// The final entry's position, or `since` echoed when empty.
-    pub last: u64,
+    pub(crate) last: u64,
     /// Whether positions remain past `last`.
-    pub more: bool,
-    /// The page body's bytes.
-    pub bytes: u64,
+    pub(crate) more: bool,
 }
 
 /// A board as the resolver reads it: the typed reads over one
@@ -237,7 +233,7 @@ impl Board {
     }
 
     /// The bytes of every feed page read so far.
-    pub fn feed_bytes(&self) -> u64 {
+    pub(crate) fn feed_bytes(&self) -> u64 {
         self.feed_bytes.get()
     }
 
@@ -253,7 +249,7 @@ impl Board {
     }
 
     /// `GET /health`: the board's live pair and auth object.
-    pub fn health(&self) -> Result<Value, BoardError> {
+    pub(crate) fn health(&self) -> Result<Value, BoardError> {
         self.bump(|r| r.health += 1);
         let (st, body) = self.transport.exchange(Method::Get, "/health", b"")?;
         if st != 200 {
@@ -268,7 +264,7 @@ impl Board {
     /// entry's position or `since` echoed on an empty page, and no empty page
     /// announcing more. A page that breaks one re-serves a row or does not
     /// advance, and is refused [`BoardError::Malformed`].
-    pub fn changes(&self, since: u64, limit: Option<usize>) -> Result<Page, BoardError> {
+    pub(crate) fn changes(&self, since: u64, limit: Option<usize>) -> Result<Page, BoardError> {
         self.bump(|r| r.changes += 1);
         let path = match limit {
             Some(l) => format!("/changes?since={since}&limit={l}"),
@@ -307,12 +303,11 @@ impl Board {
         if last != reached || (more && rows.is_empty()) {
             return Err(BoardError::Malformed(format!("a page from {since} whose last or more does not follow its entries")));
         }
-        Ok(Page { rows, last, more, bytes: body.len() as u64 })
+        Ok(Page { rows, last, more })
     }
 
-    /// `POST /op` as the guest: the answer as served, a `rejected` included
-    /// (a caller that cannot take one asks [`Board::op_ok`]), and `null`
-    /// where the answer runs past the transport's cap
+    /// `POST /op` as the guest: the answer as served, a `rejected` included,
+    /// and `null` where the answer runs past the transport's cap
     /// ([`TransportError::TooLarge`]) — an answer every typed read takes as
     /// its own cannot-read: no link, no key set, no image, no atom.
     pub fn op(&self, frame: &Value) -> Result<Value, BoardError> {
@@ -322,7 +317,7 @@ impl Board {
     }
 
     /// [`Board::op`], a `rejected` answer an error.
-    pub fn op_ok(&self, frame: &Value) -> Result<Value, BoardError> {
+    pub(crate) fn op_ok(&self, frame: &Value) -> Result<Value, BoardError> {
         let v = self.op(frame)?;
         Board::not_rejected(v)
     }
@@ -330,7 +325,7 @@ impl Board {
     /// `POST /op-at` as the guest: `frame` answered AS OF `at` (wire.md
     /// §Reading history), `history_busy` retried; a position the board has
     /// reclaimed is [`BoardError::Reclaimed`], its floor past `at`.
-    pub fn op_at(&self, at: u64, frame: &Value) -> Result<Value, BoardError> {
+    pub(crate) fn op_at(&self, at: u64, frame: &Value) -> Result<Value, BoardError> {
         let op = frame["op"].as_str().unwrap_or("");
         self.bump(|r| {
             r.count_op(op);
@@ -396,7 +391,7 @@ impl Board {
     /// the board (wire.md §Reading history) — the position the board answers
     /// as of, and the chain; a position the board has reclaimed is
     /// [`BoardError::Reclaimed`], its floor past `at`, as `/op-at`'s is.
-    pub fn chain_at(&self, at: u64) -> Result<(u64, [u8; 32]), BoardError> {
+    pub(crate) fn chain_at(&self, at: u64) -> Result<(u64, [u8; 32]), BoardError> {
         self.bump(|r| r.chain += 1);
         let mut tries = 0;
         loop {

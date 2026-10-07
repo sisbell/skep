@@ -61,16 +61,15 @@ parts, each under the design rule it realizes:
   link of another class overlaps; each standing deposit is asked once a
   pass of the fold. A feed page that re-serves a row or does not advance is
   refused, as is a limit the feed names and refuses again.
-- **The verify** (`judge`, `Trial`) — the record grade for registry
-  records, client-side (rm-2; REG-1.86 (e)): the body parsed under the
-  canonical rule by `skep_registry::parse` — its address members, of any
-  size, the addresses they name, never judged again — the record frame
-  rebuilt from the row's own members, the signer found in the set that
-  opens the home's account as of the position, both halves verified. The
-  verdict is one of the signed-ops record §3.5's five values (`Verdict`)
-  and stands beside every record the index holds; a record not SIGNED is
-  suppressed and counted (`Index::suppressed`), never consulted at a
-  resolve.
+- **The verify** — the record grade for registry records, client-side
+  (rm-2; REG-1.86 (e)): the body parsed under the canonical rule by
+  `skep_registry::parse` — its address members, of any size, the addresses
+  they name, never judged again — the record frame rebuilt from the row's
+  own members, the signer found in the set that opens the home's account as
+  of the position, both halves verified. The verdict is one of the
+  signed-ops record §3.5's five values (`Verdict`) and stands beside every
+  record the index holds; a record not SIGNED is suppressed and counted
+  (`Index::suppressed`), never consulted at a resolve.
 - **The index** (`Index`) — the position-annotated prefix → binding index
   over the verified bindings (REG-3.21 to REG-3.26), its one writer the
   mirror's gate: a binding from the claimant's doc 1 alone — a

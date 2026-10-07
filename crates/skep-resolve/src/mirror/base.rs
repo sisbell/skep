@@ -34,7 +34,6 @@
 //! alone. The fold calls one method here, [`Mirror::realm_check`], at the
 //! claim's row.
 
-use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
@@ -43,14 +42,10 @@ use serde_json::{json, Value};
 use skep_address::Address;
 use skep_identity::Fingerprint;
 
-use super::{
-    position, Chains, Fetched, Lines, Mirror, MirrorError, Opened, Refusal, Row, Stats, Types, FEED_COPY,
-    FEED_FORMAT, FETCH_CACHE,
-};
+use super::{position, Lines, Mirror, MirrorError, Opened, Refusal, FEED_COPY, FEED_FORMAT, FETCH_CACHE};
 use crate::board::{parse_chain, rises_past, Board, BoardError, Page};
 use crate::hint::{RealmId, RootHint};
 use crate::http::Dial;
-use crate::index::Index;
 use crate::origin::Origin;
 
 /// A feed copy as [`read_copy`] reads it back: the genesis fingerprint its
@@ -156,34 +151,6 @@ impl Mirror {
         Ok(mirror)
     }
 
-    fn fresh(hint: &RootHint, root: Option<Origin>, board: Option<Board>, dir: &Path) -> Mirror {
-        Mirror {
-            hint: hint.clone(),
-            root,
-            board,
-            dir: dir.to_path_buf(),
-            feed_copy: Lines::held(dir.join(FEED_COPY)),
-            fetch_cache: Lines::held(dir.join(FETCH_CACHE)),
-            pending_feed: Vec::new(),
-            pending_cache: Vec::new(),
-            fetched: Fetched::default(),
-            index: Index::default(),
-            types: Types::new(),
-            rows: Vec::new(),
-            scanned: 0,
-            folded: 0,
-            head: 0,
-            realm_compared: false,
-            claim: None,
-            geneses: BTreeMap::new(),
-            credential_acts: BTreeMap::new(),
-            asked: BTreeMap::new(),
-            chains: Chains::default(),
-            stats: Stats::default(),
-            opened: Opened::Bootstrapped,
-        }
-    }
-
     /// From genesis: both files of the copy begun — a line either held
     /// before is another base's, never this one's — then a new copy's
     /// header and `since=0` to the head, the realm compared at the claim.
@@ -247,28 +214,6 @@ impl Mirror {
         // Every row held before any is folded: the fold's as-of reads lean
         // on the acts AFTER a record's position (the floor's clause).
         self.fold_pending()
-    }
-
-    /// Fold every held row the fold has not consumed, in two passes: the
-    /// credential pass first ([`Mirror::scan_credential_acts`]), so every act
-    /// among the held rows is recorded before any record is judged; then each
-    /// row folded, in order — read into what the fold takes ([`Row::of`]),
-    /// the held row staying where the copy's positions are read off it. A
-    /// pass begins with no deposit asked of the active view (`asked`).
-    fn fold_pending(&mut self) -> Result<(), MirrorError> {
-        let t = Instant::now();
-        self.asked.clear();
-        self.scan_credential_acts()?;
-        while self.folded < self.rows.len() {
-            let held = &self.rows[self.folded];
-            let (row, at) = (Row::of(held), position(held));
-            self.fold_row(row)?;
-            self.head = at.unwrap_or(self.head);
-            self.stats.rows += 1;
-            self.folded += 1;
-        }
-        self.stats.fold_time += t.elapsed();
-        Ok(())
     }
 
     /// A HEAD PAIR held for the resume's check: `/health`'s live pair

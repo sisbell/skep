@@ -6,6 +6,7 @@
 //! an exchange the recording lacks is a panic naming it.
 
 mod index;
+mod mirror;
 mod origin;
 mod walk;
 

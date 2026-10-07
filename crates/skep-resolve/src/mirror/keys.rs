@@ -227,30 +227,21 @@ impl Mirror {
 
 #[cfg(test)]
 mod tests {
+    use std::cell::RefCell;
     use std::fs;
+    use std::rc::Rc;
 
-    use serde_json::json;
-    use skep_identity::{Fingerprint, PublicKey};
-    use skep_signature::{HybridSigner, TAG_MLDSA65_ED25519};
+    use serde_json::{json, Value};
+    use skep_identity::PublicKey;
 
     use super::super::{Fetched, FEED_COPY, FEED_FORMAT, FETCH_CACHE};
     use super::*;
-    use crate::hint::RootHint;
-    use crate::origin::Origin;
+    use crate::http::{Method, Transport, TransportError};
+    use crate::mirror::testing::{answer, hint, key, over, table};
     use crate::parse_address;
 
     fn a(s: &str) -> Address {
         parse_address(s).unwrap()
-    }
-
-    fn key(seed: u8) -> PublicKey {
-        HybridSigner::from_seed(TAG_MLDSA65_ED25519, &[seed; 32]).expect("tag 1").public_key().clone()
-    }
-
-    /// The hint the copies below are rebuilt under, and its genesis.
-    fn hint() -> RootHint {
-        let genesis = Fingerprint::parse_hex(&"ab".repeat(32)).unwrap();
-        RootHint::new(vec![Origin::parse("http://127.0.0.1:1").unwrap()], genesis, None).unwrap()
     }
 
     /// Writes a copy under `dir` holding `rows` and a fetch cache of `cache`'s
@@ -348,5 +339,80 @@ mod tests {
         assert_eq!(mirror.keys_opening(&account(65), 9), Ok(None), "past the deepest prefix a board mints");
         let opened = mirror.keys_opening(&account(64), 9).expect("no board, no wire error");
         assert_eq!(opened.map(|keys| keys.into_iter().map(|e| e.key).collect::<Vec<_>>()), Some(vec![key(5)]), "at it");
+    }
+
+    /// A BOARD THAT HAS RECLAIMED POSITION 6 (REG-3.15's floor): `1.0.2`'s live
+    /// table is `key(3)` as of 9, past what the mirrors below hold; `/op-at` at
+    /// 6 answers `history_reclaimed`, naming `floor` where one is given, and at
+    /// any other position `key(4)` as of it — every position asked recorded.
+    struct Reclaimed {
+        floor: Option<u64>,
+        asked: RefCell<Vec<u64>>,
+    }
+
+    impl Transport for Reclaimed {
+        fn exchange(&self, method: Method, path: &str, body: &[u8]) -> Result<(u16, Vec<u8>), TransportError> {
+            let request: Value = serde_json::from_slice(body).expect("a JSON body");
+            match (method, path) {
+                (Method::Post, "/op") if request["op"] == "key_set" => answer(table(&key(3), 9)),
+                (Method::Post, "/op-at") if request["frame"]["op"] == "key_set" => {
+                    let at = request["at"].as_u64().expect("a position");
+                    self.asked.borrow_mut().push(at);
+                    if at != 6 {
+                        return answer(table(&key(4), at));
+                    }
+                    let mut refusal = json!({ "error": "history_reclaimed" });
+                    if let Some(floor) = self.floor {
+                        refusal["floor"] = json!(floor);
+                    }
+                    Ok((410, refusal.to_string().into_bytes()))
+                }
+                _ => panic!("a read this board does not answer: {method} {path} {request}"),
+            }
+        }
+    }
+
+    /// THE RECLAIM FLOOR (REG-3.15; the table as of the position): where the
+    /// board has reclaimed a record's position, the table is read at the floor
+    /// only where the floor lies inside the acts the mirror knows and no act of
+    /// the account lies in `(position, floor]` — an act at the floor itself
+    /// between, an act at the position not; a floor the board does not name is
+    /// the mirror's own frontier; elsewhere the table as of the position is gone
+    /// with the journal, UNDETERMINABLE HERE, and counted. The live table, as of
+    /// a position past what the mirror knows, is never the answer.
+    #[test]
+    fn a_reclaimed_position_is_read_at_the_floor_only_where_no_act_lies_between() {
+        /// One read of `1.0.2`'s table as of 6: the account's acts and the floor
+        /// the board names, against the table read, the positions `/op-at` was
+        /// asked, and the reads counted at the floor and undeterminable.
+        struct Case {
+            acts: &'static [u64],
+            floor: Option<u64>,
+            opening: Option<Vec<PublicKey>>,
+            asked: &'static [u64],
+            counted: (u64, u64),
+        }
+        let dir = tempfile::tempdir().expect("tempdir");
+        let cases = [
+            Case { acts: &[5], floor: Some(7), opening: Some(vec![key(4)]), asked: &[6, 7], counted: (1, 0) },
+            Case { acts: &[5, 7], floor: Some(7), opening: None, asked: &[6], counted: (0, 1) },
+            Case { acts: &[5, 6], floor: Some(7), opening: Some(vec![key(4)]), asked: &[6, 7], counted: (1, 0) },
+            Case { acts: &[5], floor: Some(9), opening: None, asked: &[6], counted: (0, 1) },
+            Case { acts: &[5], floor: None, opening: Some(vec![key(4)]), asked: &[6, 8], counted: (1, 0) },
+        ];
+        for Case { acts, floor, opening, asked, counted } in cases {
+            let board = Rc::new(Reclaimed { floor, asked: RefCell::new(Vec::new()) });
+            let mut mirror = over(board.clone(), dir.path());
+            // The acts are known through 8: one row held, the credential pass
+            // through it.
+            mirror.rows = vec![json!({ "at": 8, "op": "publish", "docs": [] })];
+            mirror.scanned = 1;
+            mirror.credential_acts.insert(a("1.0.2"), acts.to_vec());
+            let case = format!("acts {acts:?}, floor {floor:?}");
+            let read = mirror.keys_opening(&a("1.0.2"), 6).expect("read");
+            assert_eq!(read.map(|keys| keys.into_iter().map(|e| e.key).collect::<Vec<_>>()), opening, "{case}");
+            assert_eq!(*board.asked.borrow(), asked, "{case}");
+            assert_eq!((mirror.stats.reads_at_floor, mirror.stats.reclaimed_undeterminable), counted, "{case}");
+        }
     }
 }

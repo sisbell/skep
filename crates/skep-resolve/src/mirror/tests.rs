@@ -1,8 +1,15 @@
+use std::cell::RefCell;
+use std::rc::Rc;
+
+use serde_json::json;
 use skep_identity::{entry_body_record, entry_frame, DocTerm, RecordRows};
 use skep_registry::{encode, Binding};
 use skep_signature::{HybridSigner, TAG_MLDSA65_ED25519};
 
 use super::*;
+use crate::board::unit_span_json;
+use crate::http::{Method, Transport, TransportError};
+use crate::mirror::testing::{answer, hint, over, span};
 
 fn a(s: &str) -> Address {
     parse_address(s).unwrap()
@@ -10,13 +17,6 @@ fn a(s: &str) -> Address {
 
 /// The board term every record below is signed under.
 const TERM: BoardTerm = BoardTerm { log_position: 1, chain: [7; 32] };
-
-/// The genesis fingerprint every copy below names, and the hint it is
-/// rebuilt under.
-fn hint() -> RootHint {
-    let genesis = Fingerprint::parse_hex(&"ab".repeat(32)).unwrap();
-    RootHint::new(vec![Origin::parse("http://127.0.0.1:1").unwrap()], genesis, None).unwrap()
-}
 
 /// A binding of `prefix` naming `to`, deposited in `home` and signed by
 /// `signer` over the record frame the home's account composes under
@@ -181,74 +181,6 @@ fn a_link_row_is_an_unattested_make_link() {
     assert_eq!(Row::of(&publish), Row::Chain { members: vec![a("1.0.2.0.1.1")] });
 }
 
-/// THE FETCH CACHE'S FORMAT has one writer and one reader: every kind of
-/// line `Fetched` keeps reads back into the value it kept; a value it
-/// holds already — a credential table read again for another position
-/// of its epoch among them — writes no second line, and another table
-/// under the same epoch does; and a line one of whose members does not
-/// read — a keys line's entry, a link line's address or its type — holds
-/// nothing at all, never a smaller value.
-#[test]
-fn every_cache_line_reads_back_as_what_was_kept() {
-    let key = |seed: u8| HybridSigner::from_seed(TAG_MLDSA65_ED25519, &[seed; 32]).expect("tag 1").public_key().clone();
-    let mut kept = Fetched::default();
-    let link = StoredLink {
-        at: 5,
-        address: a("1.0.1.0.1.0.2.1"),
-        home: a("1.0.1.0.1"),
-        ty: Some(a("1.1.0.1.0.1.0.3.1")),
-        from: vec![a("1.0.1.0.1.0.1.1")],
-        to: vec![a("1.0.2")],
-    };
-    let keys = KeysAsOf {
-        account: a("1.0.2"),
-        epoch: Epoch(5),
-        at: 9,
-        enrolled: vec![Enrolled { key: key(3), anchor: true }, Enrolled { key: key(4), anchor: false }],
-    };
-    let atom = (a("1.0.1.0.1.0.1.1"), r#"{"type":"binding","prefix":"1.5"}"#.to_string());
-    let (term, chain) = (BoardTerm { log_position: 12, chain: [7; 32] }, "07".repeat(32));
-    let lines: Vec<Value> = [
-        kept.keep_link(link.clone()),
-        kept.keep_atom(atom.0.clone(), atom.1.clone()),
-        kept.keep_keys(keys.clone()),
-        kept.keep_retracted(14, a("1.0.2.0.1.0.2.1")),
-        kept.keep_board(term, &chain),
-        kept.keep_claim(3, a("1.0.1")),
-    ]
-    .into_iter()
-    .map(|line| line.expect("a value not held writes its line"))
-    .collect();
-    let mut recalled = Fetched::default();
-    for line in &lines {
-        recalled.recall(&serde_json::from_str(&line.to_string()).expect("a line is JSON"));
-    }
-    assert_eq!(recalled, kept);
-    let again = [
-        kept.keep_link(link),
-        kept.keep_atom(atom.0, atom.1),
-        kept.keep_keys(KeysAsOf { at: 11, ..keys.clone() }),
-        kept.keep_retracted(14, a("1.0.2.0.1.0.2.1")),
-        kept.keep_board(term, &chain),
-        kept.keep_claim(3, a("1.0.1")),
-    ];
-    assert!(again.iter().all(Option::is_none), "a value held already writes no line: {again:?}");
-    assert_eq!(recalled, kept, "and holds what it held");
-    let rotated = KeysAsOf { enrolled: vec![Enrolled { key: key(4), anchor: false }], ..keys };
-    assert!(kept.keep_keys(rotated).is_some(), "another table under the epoch is a new line");
-    let torn = |line: &Value, tear: &dyn Fn(&mut Value)| {
-        let mut torn = line.clone();
-        tear(&mut torn);
-        let mut held = Fetched::default();
-        held.recall(&torn);
-        held
-    };
-    assert!(torn(&lines[2], &|l| l["keys"]["enrolled"][1]["alg"] = json!("no-such-alg")).keys.is_empty(), "a keys entry");
-    assert!(torn(&lines[0], &|l| l["link"]["to"] = json!(["not an address"])).links.is_empty(), "a link's target");
-    assert!(torn(&lines[0], &|l| l["link"]["from"] = json!(["1.0.1.0.1.0.1.1", 7])).links.is_empty(), "a link's atom");
-    assert!(torn(&lines[0], &|l| l["link"]["ty"] = json!("not an address")).links.is_empty(), "a link's type");
-}
-
 /// A LINE CUT SHORT IS NEVER RUN INTO, AND HOLDS NOTHING: a held cache a
 /// crash left mid-line is appended to on a line of its own, every byte of
 /// it counted; and the cache's reader takes every line that reads and passes
@@ -270,4 +202,125 @@ fn a_line_cut_short_is_never_run_into_and_holds_nothing() {
     fs::write(dir.path().join(FEED_COPY), format!("{header}\n")).expect("the feed copy");
     let mirror = Mirror::rebuild_offline(&hint(), dir.path()).expect("a line that does not read refuses nothing");
     assert_eq!(mirror.fetched.claim, Some((3, a("1.0.1"))), "the line after it reads");
+}
+
+/// A BOARD WHERE A FORGED RETRACTION STANDS: an account's own link in its
+/// own doc 1, typed `1.1.0.1.0.1.0.1` — a prefix of the retraction class's
+/// address, another class `make_link` admits — and naming the node, so it
+/// overlaps every link of the retraction's type and target a query asks
+/// for, and such a query answers it. The board's active view, asked for
+/// the deposit by its home, its type and its atom, answers `active`. Every
+/// query asked is kept.
+struct ActiveView {
+    active: Value,
+    asked: RefCell<Vec<Value>>,
+}
+
+impl Transport for ActiveView {
+    fn exchange(&self, method: Method, path: &str, body: &[u8]) -> Result<(u16, Vec<u8>), TransportError> {
+        assert_eq!((method, path), (Method::Post, "/op"));
+        let frame: Value = serde_json::from_slice(body).expect("a frame");
+        assert_eq!(frame["op"], "find_links_ftt", "a read this board does not answer: {frame}");
+        self.asked.borrow_mut().push(frame["q"].clone());
+        if frame["q"]["ty"][0]["start"] == "1.1.0.1.0.1.0.1.5" {
+            return answer(json!({ "resp": "addrs", "addrs": ["1.0.9.0.1.0.2.1"] }));
+        }
+        answer(self.active.clone())
+    }
+}
+
+/// A RETRACTION IS THE BOARD'S OWN READING (REG-1.11): a deposit leaves the
+/// active view where the board's active links of its home, its type and its
+/// atom answer it no longer — the org's own `nullify` — and never where a
+/// link of the retraction's type is found, which any account's link of
+/// another class overlaps; a refusal takes nothing off the view. A deposit
+/// found off the view is kept at the `nullify`'s row, a standing one never.
+#[test]
+fn a_link_of_another_class_takes_no_deposit_off_the_view() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let (deposit, home, atom) = (a("1.0.2.0.1.0.2.1"), a("1.0.2.0.1"), a("1.0.2.0.1.0.1.1"));
+    let stored = StoredLink { at: 7, address: deposit.clone(), home: home.clone(), ty: Some(t_endpoint().clone()), from: vec![atom.clone()], to: Vec::new() };
+    let asked = |active: Value| {
+        let board = Rc::new(ActiveView { active, asked: RefCell::new(Vec::new()) });
+        let mut mirror = over(board.clone(), dir.path());
+        mirror.fetched.keep_link(stored.clone());
+        let retracted = mirror.retracted(8, &deposit, &home).expect("answered");
+        let queries = board.asked.borrow().clone();
+        (retracted, queries, mirror.fetched.retracted)
+    };
+    let (retracted, queries, kept) = asked(json!({ "resp": "addrs", "addrs": [deposit.to_string()] }));
+    assert!(!retracted, "the forged link takes nothing off the view");
+    let active = json!({ "home": [unit_span_json(&home)], "from": [unit_span_json(&atom)], "to": "any", "ty": [unit_span_json(t_endpoint())] });
+    assert_eq!(queries, [active], "the active view asked, never the retraction's type");
+    assert!(kept.is_empty(), "a standing deposit is kept as no retraction");
+    let (retracted, _, kept) = asked(json!({ "resp": "addrs", "addrs": [] }));
+    assert!(retracted, "the org's own nullify: off the view");
+    assert_eq!(kept.get(&8), Some(&vec![deposit.clone()]), "kept at the nullify's row");
+    let refused = json!({ "resp": "rejected", "op": "find_links_ftt", "code": "unparseable" });
+    assert!(!asked(refused).0, "a refusal takes nothing off the view");
+}
+
+/// A BOARD WHOSE ACTIVE VIEW HOLDS EVERY DEPOSIT of `1.0.2.0.1`.
+struct AllStanding;
+
+impl Transport for AllStanding {
+    fn exchange(&self, _: Method, _: &str, _: &[u8]) -> Result<(u16, Vec<u8>), TransportError> {
+        answer(json!({ "resp": "addrs", "addrs": ["1.0.2.0.1.0.2.1", "1.0.2.0.1.0.2.2", "1.0.2.0.1.0.2.3"] }))
+    }
+}
+
+/// A STANDING DEPOSIT IS ASKED ONCE A PASS: every row a pass folds was
+/// held before it asks, so the active view's answer stands for the pass —
+/// three `nullify` rows naming a home of three standing deposits ask three
+/// times, never nine — and a later pass, its rows past the answer, asks
+/// afresh. The deposits are ones the gate passes: SIGNED, each of an origin.
+#[test]
+fn each_standing_deposit_is_asked_once_a_pass() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let mut mirror = over(AllStanding, dir.path());
+    let home = a("1.0.2.0.1");
+    let deposit = |n: u64| a(&format!("1.0.2.0.1.0.2.{n}"));
+    let signed = Verdict::Signed(Fingerprint::parse_hex(&"ab".repeat(32)).unwrap());
+    for n in 1..=3 {
+        let atom = a(&format!("1.0.2.0.1.0.1.{n}"));
+        mirror.fetched.keep_link(StoredLink { at: n, address: deposit(n), home: home.clone(), ty: Some(t_endpoint().clone()), from: vec![atom], to: Vec::new() });
+        let origins = vec![format!("https://{n}.example")];
+        let record = EndpointRecord { origins, replaces: (n > 1).then(|| deposit(n - 1)), honored: false, nullified: false };
+        let judged = Judged { position: n, link: deposit(n), home: home.clone(), record, verdict: signed.clone() };
+        assert!(mirror.index.fold_endpoint(judged), "deposit {n} honored");
+    }
+    mirror.rows = (10..13).map(|at| json!({ "at": at, "op": "nullify", "docs": ["1.0.2.0.1"] })).collect();
+    mirror.fold_pending().expect("folded");
+    assert_eq!(mirror.stats().reads.find_links, 3, "each standing deposit asked once, never once a row");
+    assert_eq!(mirror.index.current_endpoint(&home).map(|d| d.link.clone()), Some(deposit(3)), "every deposit stands");
+    mirror.rows.push(json!({ "at": 13, "op": "nullify", "docs": ["1.0.2.0.1"] }));
+    mirror.fold_pending().expect("folded");
+    assert_eq!(mirror.stats().reads.find_links, 6, "a later pass asks afresh");
+}
+
+/// A BOARD WHOSE LINK `1.0.2.0.1.0.2.7` IS OF A TYPE THE FOLD DOES NOT
+/// READ: its type slot two spans, its `from` three thousand atoms.
+struct Untyped;
+
+impl Transport for Untyped {
+    fn exchange(&self, _: Method, _: &str, body: &[u8]) -> Result<(u16, Vec<u8>), TransportError> {
+        let frame: Value = serde_json::from_slice(body).expect("a frame");
+        assert_eq!((frame["op"].as_str(), frame["a"].as_str()), (Some("read_link"), Some("1.0.2.0.1.0.2.7")));
+        let from: Vec<Value> = (1..=3_000).map(|n| span(&format!("1.0.2.0.1.0.1.{n}"))).collect();
+        let ty = [unit_span_json(t_endpoint()), unit_span_json(&commons_type(&[1]))];
+        answer(json!({ "resp": "link", "link": { "slots": [from, [span("1.0.2")], ty] } }))
+    }
+}
+
+/// A LINK OF NO TYPE THE FOLD READS is held with no slots: none of its
+/// spans is parsed, and its cache line holds its type as none and nothing
+/// of its `from` or its `to`.
+#[test]
+fn a_link_of_no_type_the_fold_reads_is_held_with_no_slots() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let mut mirror = over(Untyped, dir.path());
+    let stored = mirror.read_link(5, &a("1.0.2.0.1.0.2.7"), &a("1.0.2.0.1")).expect("answered").expect("a link stands");
+    assert_eq!((stored.ty, stored.from.len(), stored.to.len()), (None, 0, 0));
+    let line = json!({ "link": { "at": 5, "address": "1.0.2.0.1.0.2.7", "home": "1.0.2.0.1", "ty": null, "from": [], "to": [] } });
+    assert_eq!(mirror.pending_cache, [line], "its cache line holds no slot");
 }

@@ -54,9 +54,9 @@ RUSTDOCFLAGS="-D rustdoc::broken_intra_doc_links" \
 
 # skep-resolve's library without the signer — every test build turns
 # skep-signature's `sign` on (the crate's own dev-dependency, and in the
-# workspace's builds skep-mcp's dependency and skepd's dev-dependency), so
-# this is the build that shows the verify-only library a client embeds
-# compiles with no signer in it.
+# workspace's builds skep-mcp's dependency, skep-client's default `acting`
+# feature and skepd's dev-dependency), so this is the build that shows the
+# verify-only library a client embeds compiles with no signer in it.
 cargo check -p skep-resolve --lib || exit $?
 
 # skep-client's two halves and the sidecar's binary, none of which the full

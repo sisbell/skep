@@ -5,9 +5,9 @@
 //! again at the next delta and never remembered as absent).
 //!
 //! This file holds the mirror's types and its state, the journal copy's
-//! lines, and the fold with the fetches it makes per row. Beneath it, three
-//! children, each an `impl Mirror` that reads this module's private state
-//! the way a child does, so nothing here is widened for them:
+//! lines, and the fold with the fetches it makes per row. Beneath it, four
+//! children, each an `impl` that reads this module's private state the way
+//! a child does, so nothing here is widened for them:
 //!
 //! * [`base`] — the base: the open, the resume's check and its refusals,
 //!   the realm check, the sync and the pull (REG-3.12, REG-3.13, REG-3.17
@@ -16,18 +16,24 @@
 //!   credential acts that set is read by.
 //! * [`atoms`] — a record's bytes: the head, the chain walk, the position
 //!   read (REG-3.25, REG-3.26), and the walk's memory between two pulls.
+//! * [`cache`] — the fetch cache's format: each kind of line's one writer
+//!   and its one reader, and the file's loader.
+//!
+//! Their tests and this file's share one more child, `testing`, compiled for
+//! the tests alone: the hint, a key, and a mirror over a board a test holds
+//! fixed, with that board's answers.
 //!
 //! One ordering crosses them: every row is held before any is folded (the
-//! pull, in [`base`]), and the fold takes the held rows in two passes —
-//! every credential act among them recorded first, then each row folded —
-//! because the fold's as-of reads lean on the acts AFTER a record's position
-//! (the floor's clause, in [`keys`]). So three positions are read off the
-//! held rows, each for its own use: where the copy ends
-//! ([`Mirror::held_through`], the next pull's start), how far the credential
-//! pass has read ([`Mirror::acts_through`], how far a live table can be
-//! proven), and the head (the last row folded). A sync that fails leaves the
-//! copy's end ahead of the head and the credential pass anywhere between the
-//! two; the next sync takes each up where it stopped.
+//! pull, in [`base`]), and the fold takes the held rows in two passes
+//! ([`Mirror::fold_pending`]) — every credential act among them recorded
+//! first, then each row folded — because the fold's as-of reads lean on the
+//! acts AFTER a record's position (the floor's clause, in [`keys`]). So
+//! three positions are read off the held rows, each for its own use: where
+//! the copy ends ([`Mirror::held_through`], the next pull's start), how far
+//! the credential pass has read ([`Mirror::acts_through`], how far a live
+//! table can be proven), and the head (the last row folded). A sync that
+//! fails leaves the copy's end ahead of the head and the credential pass
+//! anywhere between the two; the next sync takes each up where it stopped.
 //!
 //! FETCH-AND-FOLD. The mirror reads every row of the feed as the GUEST and
 //! fetches the bytes a row's record needs — the stored link (`read_link`),
@@ -58,24 +64,16 @@
 //!   resume compares; every line of it written and read back in [`base`],
 //!   the format stamp checked on every read.
 //! * `fetched.jsonl` — THIS MIRROR'S OWN FETCH CACHE, what the fold read off
-//!   the board: `{"link":{…}}` a stored link's type and slots — its slots
-//!   for a link of a type the fold reads, none for any other —
-//!   `{"atom":{"address","text"}}` a record's bytes, `{"keys":{"account",
-//!   "epoch","at","enrolled":[…]}}` a credential table as of a position,
-//!   `{"retracted":{"at","link"}}` a deposit the fold found off the board's
-//!   active view at a `nullify` row, `{"board":{"position","chain"}}` the
-//!   board term, `{"claim":{"at","claimant"}}` the claim —
-//!   each line written and read back by `Fetched` alone, the format's one
-//!   writer and one reader, which writes a line only for a value it does not
-//!   hold already. The REBUILD of the index is a re-read of the
-//!   feed copy at the deposits' own positions (REG-3.25) with every fetch
-//!   served from this cache, so it reads no wire; where a line is absent, or
-//!   does not read — a write a crash cut short among them — the fold fetches
-//!   afresh. A cache adopted from a stranger is that stranger's word
-//!   (REG-3.14's residue): only the feed copy is checked against the root,
-//!   and the realm is never read off the cache — neither the claimant, nor
-//!   its genesis act, nor its genesis set. Until the realm is compared, the
-//!   fold reads every link row off the board.
+//!   the board, its every line written and read back in [`cache`]. The
+//!   REBUILD of the index is a re-read of the feed copy at the deposits' own
+//!   positions (REG-3.25) with every fetch served from this cache, so it
+//!   reads no wire; where a line is absent, or does not read — a write a
+//!   crash cut short among them — the fold fetches afresh. A cache adopted
+//!   from a stranger is that stranger's word (REG-3.14's residue): only the
+//!   feed copy is checked against the root, and the realm is never read off
+//!   the cache — neither the claimant, nor its genesis act, nor its genesis
+//!   set. Until the realm is compared, the fold reads every link row off the
+//!   board.
 //!
 //! THE BINDING-WRITING ACCOUNT (R5 (g); REG-2.8): on an unforked lineage the
 //! bindings the walk reads are the CLAIMANT's — the claim the fold honors,
@@ -86,7 +84,10 @@
 
 mod atoms;
 mod base;
+mod cache;
 mod keys;
+#[cfg(test)]
+mod testing;
 
 use std::collections::BTreeMap;
 use std::fmt;
@@ -95,13 +96,13 @@ use std::io::{self, BufRead, BufReader, BufWriter, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-use serde_json::{json, Value};
+use serde_json::Value;
 use skep_address::{document_of, Address, Nat, Tumbler};
-use skep_identity::{doc_1_of, BoardTerm, Enrolled, Fingerprint, PublicKey};
+use skep_identity::{doc_1_of, BoardTerm, Enrolled, Fingerprint};
 use skep_registry::{commons_type, parse, t_binding, t_endpoint, Body, BodyKind};
 
 use atoms::Chains;
-use crate::board::{parse_chain, Board, BoardError, Reads};
+use crate::board::{Board, BoardError, Reads};
 use crate::hint::RootHint;
 use crate::index::{Cause, Index, Suppressed};
 use crate::origin::Origin;
@@ -314,13 +315,8 @@ struct KeysAsOf {
     enrolled: Vec<Enrolled>,
 }
 
-/// The fetch cache in memory — what `fetched.jsonl` holds — and THE ONE
-/// WRITER AND READER of that file's format: each kind of line is spelled by
-/// its `keep_*` method, which holds the value and answers the line, and read
-/// back by [`Fetched::recall`]. A `keep_*` answers a line only for a value
-/// it does not hold already — a credential table counting as held where the
-/// same keys stand under its account and epoch — so a value read twice, or
-/// read again by a resume's fold, is written once.
+/// The fetch cache in memory — what `fetched.jsonl` holds — its lines
+/// written and read in [`cache`] alone.
 #[derive(Debug, Default, PartialEq, Eq)]
 struct Fetched {
     links: BTreeMap<Address, StoredLink>,
@@ -332,114 +328,6 @@ struct Fetched {
     /// the claim the fold honors, which it takes off the claim row's own
     /// link ([`Mirror::claim`]).
     claim: Option<(u64, Address)>,
-}
-
-impl Fetched {
-    /// One line of `fetched.jsonl` taken back into memory; a line of no kind
-    /// this format writes, or one that does not read whole, holds nothing —
-    /// the fold then fetches what it would have held afresh.
-    fn recall(&mut self, line: &Value) {
-        if let Some(l) = line.get("link") {
-            if let Some(link) = stored_link_of(l) {
-                self.links.insert(link.address.clone(), link);
-            }
-        } else if let Some(a) = line.get("atom") {
-            if let (Some(addr), Some(text)) = (a["address"].as_str().and_then(parse_address), a["text"].as_str()) {
-                self.atoms.insert(addr, text.to_string());
-            }
-        } else if let Some(k) = line.get("keys") {
-            if let Some(keys) = keys_of(k) {
-                self.keys.insert((keys.account.clone(), keys.epoch), keys);
-            }
-        } else if let Some(r) = line.get("retracted") {
-            if let (Some(at), Some(link)) = (r["at"].as_u64(), r["link"].as_str().and_then(parse_address)) {
-                self.retracted.entry(at).or_default().push(link);
-            }
-        } else if let Some(b) = line.get("board") {
-            if let (Some(p), Some(c)) = (b["position"].as_u64(), b["chain"].as_str().and_then(parse_chain)) {
-                self.board_term = Some(BoardTerm { log_position: p, chain: c });
-            }
-        } else if let Some(c) = line.get("claim") {
-            if let (Some(at), Some(who)) = (c["at"].as_u64(), c["claimant"].as_str().and_then(parse_address)) {
-                self.claim = Some((at, who));
-            }
-        }
-    }
-
-    /// A stored link held; its `{"link":{…}}` line, where it is new.
-    fn keep_link(&mut self, link: StoredLink) -> Option<Value> {
-        if self.links.get(&link.address) == Some(&link) {
-            return None;
-        }
-        let line = json!({ "link": {
-            "at": link.at,
-            "address": link.address.to_string(),
-            "home": link.home.to_string(),
-            "ty": link.ty.as_ref().map(ToString::to_string),
-            "from": link.from.iter().map(ToString::to_string).collect::<Vec<_>>(),
-            "to": link.to.iter().map(ToString::to_string).collect::<Vec<_>>(),
-        }});
-        self.links.insert(link.address.clone(), link);
-        Some(line)
-    }
-
-    /// A record's bytes held; its `{"atom":{…}}` line, where they are new.
-    fn keep_atom(&mut self, address: Address, text: String) -> Option<Value> {
-        if self.atoms.get(&address) == Some(&text) {
-            return None;
-        }
-        let line = json!({ "atom": { "address": address.to_string(), "text": text } });
-        self.atoms.insert(address, text);
-        Some(line)
-    }
-
-    /// A credential table held under its epoch; its `{"keys":{…}}` line, each
-    /// enrolled key spelled as [`enrolled_line_of`] reads it back, where the
-    /// account's table at that epoch is not these keys already.
-    fn keep_keys(&mut self, keys: KeysAsOf) -> Option<Value> {
-        let account_epoch = (keys.account.clone(), keys.epoch);
-        if self.keys.get(&account_epoch).is_some_and(|held| held.enrolled == keys.enrolled) {
-            return None;
-        }
-        let line = json!({ "keys": {
-            "account": keys.account.to_string(),
-            "epoch": keys.epoch.0,
-            "at": keys.at,
-            "enrolled": keys.enrolled.iter().map(|e| json!({ "alg": e.key.alg(), "key": e.key.to_hex(), "anchor": e.anchor })).collect::<Vec<_>>(),
-        }});
-        self.keys.insert(account_epoch, keys);
-        Some(line)
-    }
-
-    /// A retraction held; its `{"retracted":{…}}` line, where it is new.
-    fn keep_retracted(&mut self, at: u64, link: Address) -> Option<Value> {
-        if self.retracted.get(&at).is_some_and(|held| held.contains(&link)) {
-            return None;
-        }
-        let line = json!({ "retracted": { "at": at, "link": link.to_string() } });
-        self.retracted.entry(at).or_default().push(link);
-        Some(line)
-    }
-
-    /// The board term held; its `{"board":{…}}` line, the chain as the board
-    /// spelled it, where the term is new.
-    fn keep_board(&mut self, term: BoardTerm, chain: &str) -> Option<Value> {
-        if self.board_term == Some(term) {
-            return None;
-        }
-        self.board_term = Some(term);
-        Some(json!({ "board": { "position": term.log_position, "chain": chain } }))
-    }
-
-    /// The claim held; its `{"claim":{…}}` line, where it is new.
-    fn keep_claim(&mut self, at: u64, claimant: Address) -> Option<Value> {
-        if self.claim.as_ref().is_some_and(|(held_at, held)| *held_at == at && *held == claimant) {
-            return None;
-        }
-        let line = json!({ "claim": { "at": at, "claimant": claimant.to_string() } });
-        self.claim = Some((at, claimant));
-        Some(line)
-    }
 }
 
 /// One JSON-lines file of the copy, written a line at a time: a file this
@@ -653,6 +541,37 @@ impl fmt::Debug for Mirror {
 }
 
 impl Mirror {
+    /// A mirror under `dir` that has read nothing yet — no row held, the
+    /// realm not compared, both files of the copy held as the directory
+    /// holds them — the one constructor every open builds on.
+    fn fresh(hint: &RootHint, root: Option<Origin>, board: Option<Board>, dir: &Path) -> Mirror {
+        Mirror {
+            hint: hint.clone(),
+            root,
+            board,
+            dir: dir.to_path_buf(),
+            feed_copy: Lines::held(dir.join(FEED_COPY)),
+            fetch_cache: Lines::held(dir.join(FETCH_CACHE)),
+            pending_feed: Vec::new(),
+            pending_cache: Vec::new(),
+            fetched: Fetched::default(),
+            index: Index::default(),
+            types: Types::new(),
+            rows: Vec::new(),
+            scanned: 0,
+            folded: 0,
+            head: 0,
+            realm_compared: false,
+            claim: None,
+            geneses: BTreeMap::new(),
+            credential_acts: BTreeMap::new(),
+            asked: BTreeMap::new(),
+            chains: Chains::default(),
+            stats: Stats::default(),
+            opened: Opened::Bootstrapped,
+        }
+    }
+
     /// THE INDEX as it stands.
     pub fn index(&self) -> &Index {
         &self.index
@@ -766,28 +685,29 @@ impl Mirror {
         Ok(())
     }
 
-    /// The fetch cache read into memory, a line at a time through
-    /// [`Fetched::recall`]: a line that does not read — a write a crash cut
-    /// short among them, or bytes that are no UTF-8 — holds nothing, and the
-    /// fold fetches afresh what it would have held. Refused only where the
-    /// file cannot be read at all; none where it is absent.
-    fn load_cache(&mut self) -> Result<(), MirrorError> {
-        let path = self.dir.join(FETCH_CACHE);
-        let failed = |e: io::Error| MirrorError::Copy(format!("{}: {e}", path.display()));
-        let file = match File::open(&path) {
-            Ok(file) => file,
-            Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(()),
-            Err(e) => return Err(failed(e)),
-        };
-        for line in BufReader::new(file).split(b'\n') {
-            if let Ok(line) = serde_json::from_slice::<Value>(&line.map_err(failed)?) {
-                self.fetched.recall(&line);
-            }
+    // ── the fold ────────────────────────────────────────────────────────────
+
+    /// Fold every held row the fold has not consumed, in two passes: the
+    /// credential pass first ([`Mirror::scan_credential_acts`]), so every act
+    /// among the held rows is recorded before any record is judged; then each
+    /// row folded, in order — read into what the fold takes ([`Row::of`]),
+    /// the held row staying where the copy's positions are read off it. A
+    /// pass begins with no deposit asked of the active view (`asked`).
+    fn fold_pending(&mut self) -> Result<(), MirrorError> {
+        let t = Instant::now();
+        self.asked.clear();
+        self.scan_credential_acts()?;
+        while self.folded < self.rows.len() {
+            let held = &self.rows[self.folded];
+            let (row, at) = (Row::of(held), position(held));
+            self.fold_row(row)?;
+            self.head = at.unwrap_or(self.head);
+            self.stats.rows += 1;
+            self.folded += 1;
         }
+        self.stats.fold_time += t.elapsed();
         Ok(())
     }
-
-    // ── the fold ────────────────────────────────────────────────────────────
 
     /// One feed row, folded (the module doc's fetch-and-fold), as
     /// [`Row::of`] read it.
@@ -1079,48 +999,6 @@ fn docs_of(row: &Value) -> Vec<Address> {
         .as_array()
         .map(|d| d.iter().filter_map(|a| a.as_str().and_then(parse_address)).collect())
         .unwrap_or_default()
-}
-
-/// A stored link line read back — whole, or not at all, as [`keys_of`] reads
-/// a table: a member that does not read refuses the line, so the cache never
-/// holds a link of fewer addresses than the one it kept — an emptied `to`
-/// would read a binding as a retirement, and frame its record under another
-/// target.
-fn stored_link_of(l: &Value) -> Option<StoredLink> {
-    let addrs = |member: &str| -> Option<Vec<Address>> {
-        l[member].as_array()?.iter().map(|a| a.as_str().and_then(parse_address)).collect()
-    };
-    let ty = match l.get("ty")? {
-        Value::Null => None,
-        ty => Some(parse_address(ty.as_str()?)?),
-    };
-    Some(StoredLink {
-        at: l["at"].as_u64()?,
-        address: parse_address(l["address"].as_str()?)?,
-        home: parse_address(l["home"].as_str()?)?,
-        ty,
-        from: addrs("from")?,
-        to: addrs("to")?,
-    })
-}
-
-/// A keys line read back — whole, or not at all: an entry that does not read
-/// refuses the line, so the cache never holds a smaller table than the one
-/// it kept.
-fn keys_of(k: &Value) -> Option<KeysAsOf> {
-    Some(KeysAsOf {
-        account: parse_address(k["account"].as_str()?)?,
-        epoch: Epoch(k["epoch"].as_u64()?),
-        at: k["at"].as_u64()?,
-        enrolled: k["enrolled"].as_array()?.iter().map(enrolled_line_of).collect::<Option<_>>()?,
-    })
-}
-
-/// One enrolled key as a keys line spells it — `alg`, `key` (hex), `anchor`
-/// — the cache's own spelling, as [`Fetched::keep_keys`] writes it.
-fn enrolled_line_of(e: &Value) -> Option<Enrolled> {
-    let key = PublicKey::parse(e["alg"].as_str()?, e["key"].as_str()?).ok()?;
-    Some(Enrolled { key, anchor: e["anchor"].as_bool()? })
 }
 
 /// The ACCOUNT a document belongs to, by address arithmetic (R5 (j)): the

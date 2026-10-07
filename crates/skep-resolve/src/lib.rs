@@ -25,10 +25,10 @@
 //!   board's own active view.
 //! * `mirror` — THE MIRROR (REG-3.10 to REG-3.13, REG-3.17 to REG-3.19): a
 //!   `/changes` consumer from the floor that fetches every row's bytes it
-//!   needs and keeps an append-only journal copy from genesis; the base from
-//!   genesis at the root the hint names or a CHECKED image, the realm
-//!   compared at the claim's row on either (REG-3.42); a root move resumed
-//!   by the byte-identical check; a re-pointed hint re-bootstrapped; the two
+//!   needs and keeps a journal copy from genesis; the base from genesis at
+//!   the root the hint names or a CHECKED image, the realm compared at the
+//!   claim's row on either (REG-3.42); a root move resumed by the
+//!   byte-identical check; a re-pointed hint re-bootstrapped; the two
 //!   refusals; no TTL and no negative cache.
 //! * `verify` — THE VERIFY (rm-2; REG-1.86 (e)): the body parsed under the
 //!   canonical rule by `skep_registry::parse`, the record frame rebuilt from
@@ -69,7 +69,7 @@ mod state;
 mod verify;
 mod walk;
 
-pub use board::{Board, BoardError, Page, Reads};
+pub use board::{Board, BoardError, Reads};
 pub use hint::{HintError, RealmId, RootHint};
 pub use http::{dial_http, Dial, Http, Method, Transport, TransportError};
 pub use index::{Cause, Counts, Index, Suppressed};
@@ -77,13 +77,12 @@ pub use mirror::{
     account_of_document, ChainWalkStats, Mirror, MirrorError, Opened, Refusal, Stats, FEED_COPY, FETCH_CACHE,
 };
 pub use origin::{
-    judge_member, routable, walk_members, EndpointDial, EndpointWalk, MemberKind, MemberOutcome,
+    judge_member, walk_members, EndpointDial, EndpointWalk, MemberKind, MemberOutcome,
     NameResolver, NotCanonical, Origin, SystemResolver, Term, Transports,
 };
 pub use state::{
     BindingRecord, EndpointRecord, Judged, Resolution, Standing, Successor, Unreachable, Verdict,
 };
-pub use verify::{hybrid_blob, judge, Trial};
 pub use walk::{guest_resolve, resolve, GuestCost};
 
 use skep_address::{validate, Address, Nat, Tumbler};

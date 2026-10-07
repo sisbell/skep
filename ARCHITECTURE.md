@@ -376,18 +376,18 @@ socket to an endpoint — the dial is the caller's. Its modules: `hint.rs`
 the root hint (the root's origins and the realm id, `RealmId` — the
 genesis fingerprint and, on a forked lineage, the fork point beside it)
 parsed from one line or built from its parts, never with no origin;
-`http.rs` the written-out
-HTTP/1.1 client behind a `Transport` trait; `board.rs` the typed reads
-over any transport (`Board`), every read counted by kind;
-`mirror.rs` the `/changes` consumer's types and state, the journal copy
-and the fetch cache under the caller's directory, and the fold, with three
-children — `mirror/base.rs` the base's check, its refusals and the sync,
-`mirror/keys.rs` the key set as of a position, `mirror/atoms.rs` a
-record's bytes and the chain walk; `verify.rs` the record grade for
-registry records, client-side; `index.rs` the ledger of the rules (the
-binding walk and the endpoint's currency) and the verified prefix →
-binding index behind the mirror's gate; `walk.rs` the resolve, and its
-child `walk/guest.rs` the guest-reading resolve that scans with no mirror;
+`http.rs` the written-out HTTP/1.1 client behind a `Transport` trait;
+`board.rs` the typed reads over any transport (`Board`), every read
+counted by kind; `mirror.rs` the `/changes` consumer's types and state,
+the journal copy and the fetch cache under the caller's directory, and
+the fold, with four children — `mirror/base.rs` the base's check, its
+refusals and the sync, `mirror/keys.rs` the key set as of a position,
+`mirror/atoms.rs` a record's bytes and the chain walk, `mirror/cache.rs`
+the fetch cache's format; `verify.rs` the record grade for registry
+records, client-side; `index.rs` the ledger of the rules (the binding
+walk and the endpoint's currency) and the verified prefix → binding index
+behind the mirror's gate; `walk.rs` the resolve, and its child
+`walk/guest.rs` the guest-reading resolve that scans with no mirror;
 `origin.rs` the scheme and host terms and the ordered walk's one
 precedence; `state.rs` the verdict and the faces. The modules are
 private: `lib.rs` re-exports the crate's whole surface, one path per name.
@@ -439,10 +439,11 @@ Rules that hold across its files:
   every line of it written and read back in `mirror/base.rs` under its
   format stamp, and an offline rebuild, which no source checks, holds its
   rows to the feed's own order; `fetched.jsonl` is this mirror's own
-  cache, its format written and read by `Fetched` alone, a value written
-  once, a line that does not read — a write a crash cut short — held as
-  absent and never run into. A new base begins both files afresh, so a
-  cache that outlived its feed copy is never read as this mirror's own.
+  cache, its format written and read in `mirror/cache.rs` alone, a value
+  written once, a line that does not read — a write a crash cut short —
+  held as absent and never run into. A new base begins both files afresh,
+  so a cache that outlived its feed copy is never read as this mirror's
+  own.
 - **A retraction is the board's own reading** (`board.rs`). A deposit
   leaves the active view where the board's active links of its home, its
   type and its atom no longer answer it (`Board::stands_active`) — the
@@ -457,9 +458,10 @@ Rules that hold across its files:
   refused, a class scan's window that does not move its cursor is refused,
   and a reclaimed read whose floor does not lie past the position asked is
   refused — so no board sizes the client's memory past a page or pages it
-  forever, and no floor clause counts acts over an empty interval. A link's slots are read only for a link of a type its reader
-  names, its type slot that type's unit span exactly, the daemon's own
-  reading of a registry or credential type.
+  forever, and no floor clause counts acts over an empty interval. A link's
+  slots are read only for a link of a type its reader names, its type slot
+  that type's unit span exactly, the daemon's own reading of a registry or
+  credential type.
 - **The walk reads the index and the board, nothing else.** Every hop is
   the registry board's own journal or the mirror's copy of it; a depth
   address answers its parent prefix's standing — held or retired — and the
@@ -471,15 +473,18 @@ Rules that hold across its files:
 Its integration suite is one binary, `tests/it/`, over a RECORDED feed
 (`tests/fixtures/feed.json`, written by the daemon suite's `resolve.rs` on
 demand): `index` (the index from the fixture, a missing input's verdict,
-the rebuild from the copy and the offline mirror's scope, the realm check,
-the head pairs, the re-bootstrap, the root's failover, the copy's two
-files, the replay matrix), `walk` (the faces) and `origin` (the terms and
-the precedence). The paths no recording reaches — the reclaim floor, the
-page budget, the position read, an unclaimed feed, the binding home, a
-cache naming another claimant or hiding the genesis act, a second claim,
-an address past a machine word, the guest-reading resolve's verdicts, a
-forged retraction, a page or a window that does not advance, an answer
-past the cap — run in the unit suites over boards they hold fixed. The end-to-end cells and the measurements run in
+the replay matrix), `mirror` (the rebuild from the copy and the offline
+mirror's scope, the realm check, the head pairs, the re-bootstrap, the
+root's failover, the copy's two files, the hint's line), `walk` (the
+faces) and `origin` (the terms and the precedence). The paths no
+recording reaches — the reclaim floor, the page budget, the position
+read, an unclaimed feed, the binding home, a cache naming another
+claimant or hiding the genesis act, a second claim, an address past a
+machine word, the guest-reading resolve's verdicts, a forged retraction,
+a page or a window that does not advance, an answer past the cap — run in
+the unit suites over boards they hold fixed, each beside the code it
+pins, the mirror's suites sharing the fixtures in `mirror/testing.rs`.
+The end-to-end cells and the measurements run in
 `crates/skepd/tests/it/resolve.rs`.
 
 ## The name space, `skep-namespace`

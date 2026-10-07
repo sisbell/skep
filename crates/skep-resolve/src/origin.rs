@@ -196,7 +196,7 @@ fn host_is_canonical(host: &str) -> bool {
 /// translation prefix `64:ff9b:1::/48` (RFC 8215) is refused whole: what a
 /// translator there reaches is its operator's choice, the resolver's network
 /// as likely as any.
-pub fn routable(ip: IpAddr) -> bool {
+fn routable(ip: IpAddr) -> bool {
     match ip {
         IpAddr::V4(v4) => routable_v4(v4),
         IpAddr::V6(v6) => match v6.to_ipv4_mapped().or_else(|| nat64_ipv4(v6)) {

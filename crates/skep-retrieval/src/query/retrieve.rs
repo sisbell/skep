@@ -56,8 +56,9 @@ impl<W: RetrievalWorld + HasContent> Query<'_, W> {
     /// walked, so a gate fault always outranks `TooManyItems`.
     ///
     /// COST IS THE ANSWER'S SIZE, AND THE ANSWER'S SIZE IS SET BY STORED STATE
-    /// THE REQUEST DOES NOT SEE. The delivery is `Σᵢ |σᵢ ∩ [1, n_Sᵢ]|` items —
-    /// one `Arc` clone per content item, never a byte copy, but one item
+    /// THE REQUEST DOES NOT SEE. The delivery is at most `Σᵢ |σᵢ ∩ [1, n_Sᵢ]|`
+    /// items, a withheld run being one item for its `width` positions; each
+    /// content item is one `Arc` clone, never a byte copy, but one item
     /// nonetheless — and `n_S` is VIRTUAL: M5 caps the runs a placing request
     /// stores and no position count, so a few COPYs transcluding a document
     /// onto itself make one spec name more positions than the store holds

@@ -19,6 +19,18 @@ impl<W: RetrievalWorld> Query<'_, W> {
     /// special case. The I-arity is de-scoped (see the crate docs); only this
     /// V-arity exists.
     ///
+    /// AN ORIGIN IS ADDRESS ARITHMETIC — the document prefix of a run's
+    /// I-start, read off the address with no registry consulted (ASN-0077
+    /// O0/O3; PUB-6.38) — so it need not be a document registered on this
+    /// node. RES-162's unheld origin, a guest-class mirror's published window
+    /// onto a draft the mirror never held, is reported by its address like any
+    /// other, and a follow-up read naming it is refused `DocNotRegistered`:
+    /// PUB-8.9's probe answer at a mirror, whose reader follows the origin to
+    /// the board that holds it. Such an origin is never dropped from the answer
+    /// and never a reason to refuse the request — one skipped for its
+    /// registration would answer a span with fewer origins than its runs
+    /// have, where PUB-6.15 returns them whole.
+    ///
     /// Projects over `doc`'s READING SURFACE (crate doc, *Which arrangement an
     /// operation answers from*): the registry gate runs on the address named,
     /// the span's own checks read no arrangement, and the two verdicts that
@@ -32,9 +44,9 @@ impl<W: RetrievalWorld> Query<'_, W> {
     /// A success is never empty: an admissible request has an occupied
     /// subspace (`n_s ≥ 1`), a depth-2 span, and a fully resolved width, so at
     /// least one run is projected and `Ok(vec![])` is not an answer this
-    /// operation gives. So a registered-empty document has no empty form
-    /// here: it is `EmptySubspace`, the one exception to the crate doc's
-    /// registered-empty rule.
+    /// operation gives. So a registered document whose reading surface holds
+    /// nothing has no empty form here: it is `EmptySubspace`, the one
+    /// exception to the crate doc's registered-empty rule.
     ///
     /// Inadmissible (Err) — reject, never clip to the surviving sub-span as
     /// RETRIEVEV's R6 would (O13), and the listing below IS the precedence:

@@ -1,10 +1,11 @@
 //! §C SHOWORIGIN, V-arity (ASN-0077): deduplicated origins in tumbler order,
-//! and WF_V's inadmissible cases, each refused distinctly and never clipped.
+//! each reported by its address whether or not this node registers it, and
+//! WF_V's inadmissible cases, each refused distinctly and never clipped.
 
 use skep_address::Span;
 use skep_arrangement::seat_link;
-use skep_namespace::PrincipalId;
-use skep_retrieval::{OriginError, Query, SpanFault};
+use skep_namespace::{HasM3, PrincipalId};
+use skep_retrieval::{ExtentError, OriginError, Query, SpanFault};
 
 use crate::common::*;
 
@@ -66,6 +67,40 @@ fn show_origin_v_projects_an_origin_at_whatever_depth_its_document_sits() {
     assert_eq!(
         ok_of(q.show_origin_v(&fork, &vspan(1, 1, 4))),
         vec![pdoc(), vdoc()]
+    );
+}
+
+#[test]
+fn show_origin_v_reports_an_origin_registered_nowhere_here_by_its_address() {
+    // ASN-0077 O0/O3: an origin is the DOCUMENT PREFIX of a run's I-start,
+    // read off the address with no registry consulted (PUB-6.38), so
+    // SHOWORIGIN reports it whether or not this node registers it — whole, as
+    // PUB-6.15 has every origin come back, and never dropped, which would
+    // answer a span with fewer origins than its runs have. RES-162's unheld
+    // origin is the case: a guest-class mirror's published window onto a
+    // draft it never held. It is the read that names that origin NEXT that is
+    // refused `DocNotRegistered` — PUB-8.9's probe answer at a mirror.
+    let k = mem_kernel();
+    unheld_origin_head(&k); // pdoc's head vdoc = [pca1][two positions under the unheld member]
+    let s = k.snapshot();
+    let q = Query::new(&s);
+    assert!(
+        !s.world().m3().is_registered_document(&unheld_member()),
+        "the premise: the second run's origin is registered nowhere on this node"
+    );
+    // pdoc is a proper prefix of the unheld member, so T1 lists it first.
+    assert_eq!(
+        ok_of(q.show_origin_v(&pdoc(), &vspan(1, 1, 3))),
+        vec![pdoc(), unheld_member()]
+    );
+    // The probe a reader would follow it with is refused, not answered emptily.
+    assert_eq!(
+        err_of(q.doc_vspanset(&unheld_member())),
+        ExtentError::DocNotRegistered
+    );
+    assert_eq!(
+        err_of(q.show_origin_v(&unheld_member(), &vspan(1, 1, 1))),
+        OriginError::DocNotRegistered
     );
 }
 

@@ -163,6 +163,16 @@ pub fn vla(ordinal: u32) -> Address {
     a(&[1, 0, 1, 0, 3, 1, 0, 2, ordinal])
 }
 
+/// pdoc's ninth member, never minted — an origin no registration names.
+pub fn unheld_member() -> Address {
+    a(&[1, 0, 1, 0, 3, 9])
+}
+
+/// [`unheld_member`]'s content element at `ordinal`.
+pub fn unheld_ca(ordinal: u32) -> Address {
+    a(&[1, 0, 1, 0, 3, 9, 0, 1, ordinal])
+}
+
 pub fn vp(subspace: u32, ordinal: u32) -> VPos {
     VPos {
         subspace: n(subspace),
@@ -369,6 +379,36 @@ pub fn fragmented_head(k: &Kernel<World>) -> Vstream<'_, World> {
     let (head, _) = vs
         .publish(P1, &pdoc(), &shot, &|_: &World, _: &Address| true)
         .expect("the birth shot commits");
+    assert_eq!(head, vdoc(), "the shot mints pdoc's birth version");
+    vs
+}
+
+/// pdoc = `[a, b, c]` — [`deposit3`] — and its birth version, the head vdoc,
+/// published by one shot of two runs: pdoc's own pca1, then two positions
+/// `u`, `v` under [`unheld_member`], whose values M4's test-only `write`
+/// stores at addresses no registration names. M5 admits both runs on their
+/// TRUNK's registration, pdoc's; M6 takes a run's origin at its document, so
+/// the second run's origin is registered nowhere here — one node's RES-162
+/// unheld origin, which a guest-class mirror meets at a published window
+/// onto a draft it never held.
+pub fn unheld_origin_head(k: &Kernel<World>) -> Vstream<'_, World> {
+    let vs = deposit3(k);
+    for (ordinal, byte) in [(1, b"u"), (2, b"v")] {
+        skep_content::write(k, &unheld_ca(ordinal), val(byte))
+            .expect("M4's test-only write commits");
+    }
+    let shot_run = |start: Address, width: u32| ShotRun {
+        origin: pdoc(),
+        run: Run::new(start, n(width)).expect("a content run"),
+    };
+    let shot = Shot {
+        base: None,
+        draft: None,
+        runs: vec![shot_run(pca(1), 1), shot_run(unheld_ca(1), 2)],
+    };
+    let (head, _) = vs
+        .publish(P1, &pdoc(), &shot, &|_: &World, _: &Address| true)
+        .expect("the birth shot commits: both runs' trunk is pdoc, which is registered");
     assert_eq!(head, vdoc(), "the shot mints pdoc's birth version");
     vs
 }

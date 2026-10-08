@@ -8,7 +8,7 @@
 use std::cell::RefCell;
 
 use skep_address::{Address, Span};
-use skep_arrangement::{seat_link, Deposit, HasM5, Run, Shot, ShotRun, VSpec, Vstream};
+use skep_arrangement::{seat_link, Deposit, HasM5, VSpec, Vstream};
 use skep_content::HasContent;
 use skep_namespace::{HasM3, PrincipalId};
 use skep_retrieval::{
@@ -383,43 +383,20 @@ fn retrieve_v_withholds_a_run_whose_origin_is_not_registered_without_asking_its_
     // its own position carrying that origin and the run's width, and the
     // predicate, contracted to registered documents, is never asked about it;
     // the all-true door withholds it too. RES-162's case is the unheld origin
-    // at a mirror that never held the draft a published window names. One
-    // node reaches the same arm: M4's test-only `write` stores values under a
-    // member of pdoc that was never minted, and the shot windows them, M5
-    // asking the registration of a run's TRUNK where M6 asks it of the run's
-    // document.
+    // at a mirror that never held the draft a published window names;
+    // `unheld_origin_head` reaches the same arm on one node.
     let k = mem_kernel();
-    let vs = deposit3(&k); // pdoc = [pca1, pca2, pca3]
-    let unheld_member = a(&[1, 0, 1, 0, 3, 9]); // pdoc's ninth member, never minted
-    let unheld_ca = |ordinal: u32| a(&[1, 0, 1, 0, 3, 9, 0, 1, ordinal]);
-    for (ordinal, byte) in [(1, b"u"), (2, b"v")] {
-        skep_content::write(&k, &unheld_ca(ordinal), val(byte))
-            .expect("M4's test-only write commits");
-    }
-    let shot_run = |start: Address, width: u32| ShotRun {
-        origin: pdoc(),
-        run: Run::new(start, n(width)).expect("a content run"),
-    };
-    let shot = Shot {
-        base: None,
-        draft: None,
-        // pdoc's own pca1, then two positions under the unminted member.
-        runs: vec![shot_run(pca(1), 1), shot_run(unheld_ca(1), 2)],
-    };
-    let (head, _) = vs
-        .publish(P1, &pdoc(), &shot, &|_: &World, _: &Address| true)
-        .expect("the birth shot commits: both runs' trunk is pdoc, which is registered");
-    assert_eq!(head, vdoc());
+    unheld_origin_head(&k); // pdoc's head vdoc = [pca1][two positions under the unheld member]
     let s = k.snapshot();
     let q = Query::new(&s);
     assert!(
-        !s.world().m3().is_registered_document(&unheld_member),
+        !s.world().m3().is_registered_document(&unheld_member()),
         "the premise: the second run's origin is registered nowhere on this node"
     );
     let want = Delivery(vec![
         DeliveryItem::Content(val(b"a")),
         DeliveryItem::Withheld {
-            origin: unheld_member,
+            origin: unheld_member(),
             width: n(2),
         },
     ]);

@@ -30,7 +30,8 @@
 /// `Tumbler` comparisons over element addresses, which is order a second of
 /// one worker. The number is also M10's own per-array wire cap, so an operand
 /// that is a FLAT list of 4096 single-run spans — the largest flat span list
-/// the transport admits — is admitted here unchanged.
+/// the transport admits — passes this budget unchanged; the walk budget,
+/// below, decides it only over a surface of more runs than this number.
 ///
 /// ONE NUMBER, THREE BUDGETS. FINDDOCSCONTAINING's coverage budget,
 /// [`MAX_FIND_COVERAGE_SPANS`], is this number by definition, and the walk
@@ -62,8 +63,8 @@
 /// COUNTED ON THE SPANS HANDED TO M5, not on the resolutions M5 performs: a
 /// span M5 folds to nothing at once (wrong depth, foreign subspace) is
 /// counted all the same, so the count is an upper bound on the resolutions —
-/// refusing more, never less — and M5's fold conditions stay M5's, restated
-/// nowhere in this crate.
+/// refusing more, never less — and M5's fold conditions stay M5's: no count
+/// here tests them.
 ///
 /// WHAT THE COUNTS STOP, AND WHAT THEY DO NOT. Both are consulted as M5's lazy
 /// `iter_resolve` produces each run — the block count at COMPARE, the coverage

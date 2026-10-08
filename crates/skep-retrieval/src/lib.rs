@@ -18,9 +18,10 @@
 //! ## The distinction every operation opens with
 //!
 //! M3's `is_registered_document` answers one bool, and M6 reads two answers
-//! out of it: a REGISTERED-but-empty document is an ordinary success that
-//! contributes the operation's empty form (`⟨⟩`, an empty delivery, an empty
-//! half), while a NOT-REGISTERED one is that operation's typed
+//! out of it: a REGISTERED-but-empty document — empty in the arrangement the
+//! operation reads, which the next section names — is an ordinary success
+//! that contributes the operation's empty form (`⟨⟩`, an empty delivery, an
+//! empty half), while a NOT-REGISTERED one is that operation's typed
 //! `*NotRegistered` failure (ASN-0113's W-pre; ASN-0112's precondition, the
 //! `dom(M)` of V0). Registered is the word throughout, and it is narrower
 //! than M3's `is_allocated`, which is true of account and element addresses
@@ -56,6 +57,14 @@
 //! bare published address with a head answers RETRIEVEV from the head and
 //! FINDDOCSCONTAINING from itself — the seam the PUB lane's report records,
 //! and one each card states on its own side.
+//!
+//! REGISTERED-EMPTY FOLLOWS THE FLOAT. The empty form the section above names
+//! is decided of the arrangement an operation READS — for the five that
+//! float, the reading surface, not the address named: a bare published
+//! address whose own arrangement holds nothing answers its head's content
+//! once it has a head, and SHOWORIGIN's `EmptySubspace` is the surface's
+//! subspace unoccupied. SHOWDELETIONS and FINDDOCSCONTAINING read the named
+//! address's own arrangement, so theirs is decided of it.
 //!
 //! ## No state, no fold
 //!
@@ -147,8 +156,8 @@
 //!   shrunk to the deliverable ones (PUB-6.41); SHOWORIGIN's origins,
 //!   SHOWDELETIONS' halves and COMPARE's feet come back whole, material
 //!   originating in an unreadable document INCLUDED — by the specification's
-//!   decision, not by omission. SHOWORIGIN reports origin *documents*, not
-//!   owners;
+//!   decision, not by omission. SHOWORIGIN reports origin *documents* —
+//!   address arithmetic, registered on this node or not — not owners;
 //! * link-side discovery (M8); the request lifecycle, dispatch, and
 //!   marshaling (M10);
 //! * any write path — M6 exposes no `transact`/`Kernel` and has no

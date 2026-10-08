@@ -70,9 +70,9 @@ fn debug_assert_sequential_positions(m5: &M5State, doc: &Address) {
 
 impl<W: RetrievalWorld> Query<'_, W> {
     /// RETRIEVEDOCVSPAN (ASN-0112) — the whole-document bounding span:
-    /// singleton `⟨σ_d⟩`, or `⟨⟩` for a registered-empty document; a document
-    /// that is not registered ⇒ Err. Across subspaces it is a bounding box
-    /// bridging the inter-subspace void.
+    /// singleton `⟨σ_d⟩`, or `⟨⟩` when `doc`'s reading surface holds nothing;
+    /// a document that is not registered ⇒ Err. Across subspaces it is a
+    /// bounding box bridging the inter-subspace void.
     ///
     /// Answers from `doc`'s READING SURFACE (crate doc, *Which arrangement an
     /// operation answers from*), because it is the hull of
@@ -99,7 +99,7 @@ impl<W: RetrievalWorld> Query<'_, W> {
         // highest occupied position.
         let extents = self.doc_vspanset(doc)?;
         let (Some(first), Some(last)) = (extents.iter().next(), extents.iter().next_back()) else {
-            return Ok(SpanSet::empty()); // registered-empty ⇒ ⟨⟩
+            return Ok(SpanSet::empty()); // the surface holds nothing ⇒ ⟨⟩
         };
         // `from_endpoints` is INFALLIBLE on that pair: both endpoints are
         // depth-2 (no `LevelMismatch`) and `first.start ≤ last.start <
@@ -115,8 +115,8 @@ impl<W: RetrievalWorld> Query<'_, W> {
 
     /// RETRIEVEDOCVSPANSET (ASN-0113) — the per-subspace exact extents, one
     /// per occupied subspace (content, then link), already W13-normalized;
-    /// `⟨⟩` for a registered-empty document; a document that is not registered
-    /// ⇒ Err.
+    /// `⟨⟩` when the reading surface holds nothing (below); a document that is
+    /// not registered ⇒ Err.
     ///
     /// The extents are the READING SURFACE's (crate doc, *Which arrangement an
     /// operation answers from*): a bare published address with a head reports

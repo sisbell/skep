@@ -254,12 +254,12 @@ impl<'a> Block<'a> {
 /// [`Query::compare`]'s gate establishes before it calls. THREE clauses of
 /// that gate ride here.
 ///
-/// The REGISTRY clause rides furthest: the crate's other three
-/// `reading_surface` calls gate and float in one body, while this one floats
-/// where [`Query::compare`] gated. `reading_surface` is contracted to
-/// registered documents (PUB-6.37) and is TOTAL rather than panicking, so an
-/// ungated region would not stop here — it would resolve against its own
-/// arrangement and answer.
+/// The REGISTRY clause rides furthest: every other `reading_surface` call in
+/// the crate sits in the body of the operation that gated, while this
+/// function's calls float where [`Query::compare`] gated. `reading_surface`
+/// is contracted to registered documents (PUB-6.37) and is TOTAL rather than
+/// panicking, so an ungated region would not stop here — it would resolve
+/// against its own arrangement and answer.
 ///
 /// The ZERO-FREE start puts `ordinal ≥ 1` at every span, so the cursor M6
 /// opens at the span's own ordinal IS the resolution's `max(ordinal, 1)` and M6

@@ -143,7 +143,9 @@ pub enum Operand {
 ///
 /// The last is the budget refusal, and the only rejection here that names
 /// nothing the gate faults — only the request's size. It names both budgets
-/// it refuses at, so a client learns what to narrow.
+/// it refuses at — the delivery budget and the walk budget — though not which
+/// of them this refusal crossed: a client learns the numbers to size its next
+/// request against.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub enum RetrieveError {
     DocNotRegistered(Address),
@@ -208,8 +210,11 @@ pub enum DeletionsError {
 ///
 /// The last two are the budget refusals COMPARE's superlinear join needs, and
 /// are the only rejections here that name nothing the gate faults — only the
-/// request's size. Both name the budget they exceeded, so a client learns which
-/// dimension to narrow.
+/// request's size. `TooManyBlocks` names the operand it refuses and both
+/// budgets it refuses at — the operand budget, on either of its two counts,
+/// and the walk budget — though not which of them this refusal crossed;
+/// `TooManyPairs` names the pair budget. So a client learns which operand, or
+/// the report, to narrow, and the numbers to size it against.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub enum CompareError {
     DocNotRegistered(Address),
@@ -245,8 +250,10 @@ pub enum CompareError {
 /// (FD-COMPLETE).
 ///
 /// The last is the budget refusal, and the only rejection here that names
-/// nothing the gate faults — only the request's size. It names the budget it
-/// exceeded, so a client learns what to narrow.
+/// nothing the gate faults — only the request's size. It names both budgets
+/// it refuses at — the coverage budget, on either of its two counts, and the
+/// walk budget — though not which of them this refusal crossed: a client
+/// learns the numbers to size its next request against.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub enum FindError {
     DocNotRegistered(Address),

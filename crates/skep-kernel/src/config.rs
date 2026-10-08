@@ -61,7 +61,7 @@ impl KernelConfig {
 /// signed-ops re-base report's R1, the owner's ruling of 2026-09-23). Every
 /// committed transaction's marker carries thirty-two salt bytes, and the
 /// chain's preimage hashes them after the marker's other fields
-/// ([`crate::journal`]'s `ChainLink`), so a reader holding two consecutive
+/// (`crate::journal`'s `ChainLink`), so a reader holding two consecutive
 /// chain values off the wire — `/chain?at=N` serves both `chain(N − 1)` and
 /// `chain(N)` to everyone — cannot CONFIRM a guess at transaction `N`'s bytes
 /// by hashing the guess: the preimage has thirty-two bytes the reader was

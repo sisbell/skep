@@ -16,15 +16,17 @@ use skep_namespace::Namespace;
 
 use crate::world::World;
 
-/// What [`Engine::open`] FOUND in the journal directory (AUTH-2.85,
-/// AUTH-2.86): M2's own account of the open — the start point its derivation
-/// resolved from and every retained checkpoint it passed over, each with why
-/// — and the one fact only this assembler can add to it, whether the start
-/// point's identity slice was RESOLVED to the empty table rather than carried
-/// (AUTH-2.83). The daemon above logs both at startup: a skipped checkpoint
-/// with the start point it resolved from, and a slice-less checkpoint that
-/// resolved empty — the operator's one tell of a build that wrote no slice.
-/// A report and never a verdict: the open succeeded from the start point
+/// What [`Engine::open`] FOUND in the journal directory and DID there
+/// (AUTH-2.85, AUTH-2.86): M2's own account of the open — the start point its
+/// derivation resolved from, every retained checkpoint it passed over, each
+/// with why, the commits it replayed above the start point and the un-acked
+/// tail it cut, in bytes — and the one fact only this assembler can add to
+/// it, whether the start point's identity slice was RESOLVED to the empty
+/// table rather than carried (AUTH-2.83). The daemon above logs them at
+/// startup: a skipped checkpoint with the start point it resolved from, a
+/// slice-less checkpoint that resolved empty — the operator's one tell of a
+/// build that wrote no slice — and the open's own landing in figures. A
+/// report and never a verdict: the open succeeded from the start point
 /// named; the chain's one failure is [`EngineError::Open`]'s. Absent under
 /// `Durability::InMemory`, which loads nothing.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -37,6 +39,14 @@ pub struct Recovery {
     /// base written without the identity slice over credential deposits
     /// among the causes, in M2's slice-agnostic words.
     pub skipped: Vec<SkippedBase>,
+    /// The commits the open replayed above the start point — transactions,
+    /// never the records they carry — as M2 counted them
+    /// (`skep_kernel::Recovery`'s `replayed`); `0` where the start point was
+    /// the committed head.
+    pub replayed: u64,
+    /// The bytes of un-acked tail the open cut, as M2 counted them
+    /// (`skep_kernel::Recovery`'s `tail_cut`); `0` after a clean shutdown.
+    pub tail_cut: u64,
     /// Whether the start point carried no identity slice and its link slice
     /// held no credential deposit, so its table RESOLVED empty (AUTH-2.83) —
     /// the true table, and the one case a slice-less base is a start point.
@@ -213,16 +223,18 @@ impl Engine {
         let recovery = kernel.recovery().map(|found| Recovery {
             start_point: found.start_point,
             skipped: found.skipped.clone(),
+            replayed: found.replayed,
+            tail_cut: found.tail_cut,
             identity_resolved_empty: kernel.snapshot().world().identity_resolved,
         });
         Ok(Engine { stores: EngineStores::new(kernel), recovery })
     }
 
-    /// What this engine's open found in the journal directory
-    /// ([`Recovery`]): the start point, the checkpoints it passed over, and
-    /// whether the start point's identity slice resolved empty — `None` under
-    /// `Durability::InMemory`. Fixed at [`Engine::open`]; a checkpoint taken
-    /// since does not move it.
+    /// What this engine's open found in the journal directory and did there
+    /// ([`Recovery`]): the start point, the checkpoints it passed over, the
+    /// commits it replayed, the tail it cut, and whether the start point's
+    /// identity slice resolved empty — `None` under `Durability::InMemory`.
+    /// Fixed at [`Engine::open`]; a checkpoint taken since does not move it.
     pub fn recovery(&self) -> Option<&Recovery> {
         self.recovery.as_ref()
     }

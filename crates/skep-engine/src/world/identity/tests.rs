@@ -381,7 +381,13 @@ fn the_load_steps_back_from_a_slice_less_checkpoint_and_replays_the_true_table()
         let at = engine.kernel().checkpoint().expect("checkpoint").0;
         assert_eq!(
             engine.recovery(),
-            Some(&Recovery { start_point: Seq(0), skipped: vec![], identity_resolved_empty: false })
+            Some(&Recovery {
+                start_point: Seq(0),
+                skipped: vec![],
+                replayed: 0,
+                tail_cut: 0,
+                identity_resolved_empty: false,
+            })
         );
         (acct, identity_of(&engine), at)
     };
@@ -437,7 +443,13 @@ fn a_slice_less_checkpoint_with_no_credential_deposit_loads_as_the_empty_table_a
     let engine = open_at(dir.path(), 2).expect("a slice-less base over no deposit is a start point");
     assert_eq!(
         engine.recovery(),
-        Some(&Recovery { start_point: Seq(at), skipped: vec![], identity_resolved_empty: true })
+        Some(&Recovery {
+            start_point: Seq(at),
+            skipped: vec![],
+            replayed: 0,
+            tail_cut: 0,
+            identity_resolved_empty: true,
+        })
     );
     assert_eq!(identity_of(&engine), IdentityState::genesis());
     // Equal to the from-genesis replay the same journal answers.

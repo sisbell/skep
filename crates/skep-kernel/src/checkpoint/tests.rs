@@ -135,6 +135,7 @@ fn a_write_that_fails_past_the_temp_files_creation_removes_it() {
     let text = match refused {
         WriteFail::Io(e) => e.to_string(),
         WriteFail::Serialize(_) => unreachable!("the world serializes"),
+        WriteFail::Landed(_) => unreachable!("the rename did not run, so no base landed"),
     };
     assert!(!text.contains("could not be removed"), "the removal succeeded: {text}");
 
@@ -446,12 +447,65 @@ fn checkpoints_list_in_seq_order_across_a_digit_boundary() {
     assert_eq!(seqs_in(dir.path()), vec![1, 9, 10, 99, 100]);
     // …so retention keeps the numerically newest, and names the floor
     // from them.
-    assert_eq!(retain(dir.path(), 2).unwrap(), Some(99));
+    assert_eq!(retain(dir.path(), 2, &[]).unwrap(), Some(99));
     assert_eq!(
         seqs_in(dir.path()),
         vec![99, 100],
         "retention kept other than the newest bases"
     );
+}
+
+/// RETENTION COUNTS THE BASES THAT LOAD: the names an open passed over are
+/// not among the `keep` counted — the newest `keep` of the OTHERS stand, and
+/// every skipped one goes, whatever its age — and the floor answered is the
+/// oldest base kept. With nothing skipped the rule is the one above. A
+/// skipped name no file carries any longer matches nothing and changes
+/// nothing.
+#[test]
+fn retain_passes_over_the_skipped_names_and_keeps_the_newest_bases_that_load() {
+    let seqs_in = |dir: &Path| -> Vec<u64> { list(dir).unwrap().iter().map(|cp| cp.seq).collect() };
+    let dir = tempdir().unwrap();
+    for seq in [1, 9, 10, 99, 100] {
+        write(dir.path(), seq, &world(), &CHAIN_HEAD).expect("fixture checkpoint");
+    }
+    // The newest, 100, and an old one, 9, were passed over by the open: of
+    // the loadable {1, 10, 99} the newest two stand, and the floor is 10 —
+    // where counting by name would keep {99, 100} and reclaim below 99.
+    assert_eq!(retain(dir.path(), 2, &[100, 9]).unwrap(), Some(10));
+    assert_eq!(seqs_in(dir.path()), vec![10, 99], "the loadable newest two, no skipped base");
+    // A skipped name that stands no longer, and a window wider than the
+    // bases: everything loadable stays, and the floor is the oldest of it.
+    assert_eq!(retain(dir.path(), 4, &[100]).unwrap(), Some(10));
+    assert_eq!(seqs_in(dir.path()), vec![10, 99]);
+    // Every base skipped: nothing loadable remains, and the answer says so.
+    assert_eq!(retain(dir.path(), 2, &[10, 99]).unwrap(), None);
+    assert_eq!(seqs_in(dir.path()), Vec::<u64>::new());
+}
+
+/// A header read by seq — [`header_at`] — answers the file of that name
+/// alone, under the checks a header passes without its body, and answers
+/// `None` where no file stands or the header refuses: FAIL-QUIET, as the
+/// newest read is, and never a listing.
+#[test]
+fn header_at_answers_one_base_by_its_seq_and_none_where_no_header_stands() {
+    let dir = tempdir().unwrap();
+    write(dir.path(), 7, &world(), &CHAIN_HEAD).expect("fixture checkpoint");
+    write(dir.path(), 12, &world(), &CHAIN_HEAD).expect("fixture checkpoint");
+    let seven = header_at(dir.path(), 7).expect("the base at 7 answers its header");
+    assert_eq!(seven.seq, Seq(7));
+    assert_eq!(seven.chain_head, CHAIN_HEAD);
+    assert_eq!(seven.len, fs::metadata(checkpoint_path(dir.path(), 7)).unwrap().len());
+    assert_eq!(header_at(dir.path(), 12).map(|h| h.seq), Some(Seq(12)), "not only the newest");
+    assert_eq!(header_at(dir.path(), 8), None, "no file of that name");
+    assert_eq!(header_at(dir.path(), 0), None, "genesis is no checkpoint");
+    // A header that refuses — a directory squatting on the name — is `None`,
+    // not a failure; and a file too short to hold a header likewise.
+    fs::create_dir(checkpoint_path(dir.path(), 5)).unwrap();
+    assert_eq!(header_at(dir.path(), 5), None);
+    fs::write(checkpoint_path(dir.path(), 6), b"SKC4 but short").unwrap();
+    assert_eq!(header_at(dir.path(), 6), None);
+    // The newest read and this one agree on the newest base.
+    assert_eq!(newest_header(dir.path()), header_at(dir.path(), 12));
 }
 
 /// THE SEAM AT THE CHECKPOINT WRITE (`test-hooks`): each of its three steps,
@@ -480,9 +534,14 @@ fn each_checkpoint_step_fires_its_arm_once_and_leaves_what_its_card_says() {
         seam.fail_the_next(step, io::ErrorKind::StorageFull);
         let refused = super::write(dir.path(), 7, &world(), &CHAIN_HEAD, &seam)
             .expect_err("the armed step fails the write");
+        // Before the rename the failure is `Io`; after it, `Landed` — the
+        // one arm says the base is on disk.
         let e = match refused {
-            WriteFail::Io(e) => e,
-            WriteFail::Serialize(_) => unreachable!("the world serializes"),
+            WriteFail::Io(e) if !landed => e,
+            WriteFail::Landed(e) if landed => e,
+            other => {
+                panic!("{step:?}: the failure's arm does not say where the rename stood: {other:?}")
+            }
         };
         assert_eq!(e.kind(), io::ErrorKind::StorageFull, "{step:?}: the kind armed");
         assert!(e.to_string().contains(&format!("{step:?}")), "{step:?}: names the step: {e}");

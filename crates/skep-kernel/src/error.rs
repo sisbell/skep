@@ -82,7 +82,7 @@ pub enum OpenError {
     /// un-acked tail, TRUNCATE the segment to nothing and serve an empty
     /// world — and before any write, so the files are exactly as they were
     /// found. Operator-intervention condition — not auto-retried; the remedy
-    /// is the ruled one ([`NO_MIGRATION_REMEDY`]): no build reads two formats.
+    /// is the ruled one (`NO_MIGRATION_REMEDY`): no build reads two formats.
     ///
     /// A checkpoint under another format is refused the same way but on its
     /// own channel: it is one base among a fallback chain, so it is skipped
@@ -129,7 +129,7 @@ pub enum OpenError {
         /// file, is damage: restore the media. A foreign format stamp is a
         /// checkpoint written under another format, and its account names the
         /// stamp found, the stamp expected and the remedy
-        /// ([`NO_MIGRATION_REMEDY`]), as [`OpenError::ForeignFormat`] does
+        /// (`NO_MIGRATION_REMEDY`), as [`OpenError::ForeignFormat`] does
         /// for the journal. A base that decoded but could not SEED a derived
         /// slice carries [`RebuildError`]'s sentence, which names its own
         /// remedy — a base that carries the slice, or a journal that reaches
@@ -270,18 +270,69 @@ impl From<io::Error> for OpenError {
     }
 }
 
+/// Which step of [`crate::Kernel::checkpoint`] AFTER the rename that
+/// publishes a base failed — [`CheckpointError::Landed`]'s member. Three
+/// steps follow the rename, in this order, each over a base already on
+/// disk: the directory's fsync, which makes the rename durable; retention,
+/// which removes the excess bases; and the journal's reclamation below the
+/// oldest kept base. Each arm's card says what the failure left undone,
+/// which is the one thing that differs between them: the base itself stands
+/// whichever failed. Deliberately not `#[non_exhaustive]`: a fourth step
+/// after the rename would be a change to that order, which a caller naming
+/// these three in its own words should meet as a build break rather than
+/// fall into a wildcard.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum LandedStep {
+    /// The directory's fsync after the rename: whether the base's directory
+    /// entry is durable is what the step would have settled, and retention
+    /// and reclamation did not run — an extra base may stand, and the
+    /// journal is unreclaimed.
+    DirectorySync,
+    /// Retention (`retain_checkpoints`): a base it would have removed stands,
+    /// an extra base and no harm, and reclamation did not run.
+    Retention,
+    /// The journal's reclamation below the oldest kept base: an unreclaimed
+    /// segment is space, and nothing else is left undone.
+    Reclamation,
+}
+
+impl fmt::Display for LandedStep {
+    /// The step in the kernel's own words — the daemon above renders its
+    /// line's words from the arm, never from this text.
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            LandedStep::DirectorySync => "the directory fsync after the rename",
+            LandedStep::Retention => "checkpoint retention",
+            LandedStep::Reclamation => "journal reclamation",
+        })
+    }
+}
+
 /// Failure of [`crate::Kernel::checkpoint`] (§6). A failed checkpoint never
 /// poisons the kernel and never disturbs the write path; each variant states
 /// what it left behind, since that is what decides the caller's next move.
 #[derive(Debug)]
 pub enum CheckpointError {
-    /// I/O failure persisting the checkpoint, applying retention, or
-    /// reclaiming journal segments. What survives is benign in each case: a
-    /// checkpoint written but not yet retained-against is a valid base, an
-    /// unapplied retention leaves extra bases, and an unreclaimed segment is
-    /// space. So the call is safe to retry, and a retry re-does the whole
-    /// sequence from a fresh root.
+    /// I/O failure persisting the checkpoint BEFORE the rename that publishes
+    /// it: no base landed, and no `checkpoint.tmp` survives — the write
+    /// removes its own before this is answered. So the call is safe to retry,
+    /// and a retry re-does the whole sequence from a fresh root. A failure
+    /// AFTER the rename is [`CheckpointError::Landed`], which names the step.
     Io(io::Error),
+    /// A base LANDED — the rename that publishes it ran — and a step after it
+    /// failed: `step` names which of the three, `cause` carries the I/O
+    /// failure. The base stands on disk whatever the step: the next open
+    /// loads it, and [`crate::Kernel::newest_checkpoint`] names it. What is
+    /// left undone is the step's card ([`LandedStep`]), benign in each case —
+    /// an extra base, an unreclaimed segment — so the call is safe to retry,
+    /// and a retry re-does the whole sequence from a fresh root, as after
+    /// [`CheckpointError::Io`].
+    Landed {
+        /// The step after the rename that failed.
+        step: LandedStep,
+        /// The step's own I/O failure.
+        cause: io::Error,
+    },
     /// The world failed to serialize. Carries the serializer's own account of
     /// which part of the world it could not encode — the only thing that
     /// identifies the failure, since M2 never inspects `W`. Nothing was
@@ -299,6 +350,9 @@ impl fmt::Display for CheckpointError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             CheckpointError::Io(e) => write!(f, "checkpoint I/O failure: {e}"),
+            CheckpointError::Landed { step, cause } => {
+                write!(f, "checkpoint landed, then {step} failed: {cause}")
+            }
             CheckpointError::Serialize(e) => {
                 write!(f, "checkpoint world serialization failed: {e}")
             }
@@ -308,9 +362,10 @@ impl fmt::Display for CheckpointError {
 }
 
 impl std::error::Error for CheckpointError {
+    /// Spelled out variant by variant, for the reason [`OpenError`]'s is.
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
-            CheckpointError::Io(e) => Some(e),
+            CheckpointError::Io(e) | CheckpointError::Landed { cause: e, .. } => Some(e),
             CheckpointError::Serialize(e) => Some(&**e),
             CheckpointError::Poisoned => None,
         }

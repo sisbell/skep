@@ -36,9 +36,26 @@
 //! window. [`CheckpointPolicy::EitherOf`] crosses on a commit count or a
 //! byte bound, whichever first, and [`Kernel::set_cadence_bytes`] moves the
 //! byte bound in a running kernel; [`CheckpointHeader::len`] is the figure a
-//! caller sizes it by. The fixed `checkpoint.tmp` is the kernel's to remove:
-//! a failed write removes its own, and [`Kernel::open`] removes one a crash
-//! left, reporting its size as [`Kernel::stray_checkpoint_removed`].
+//! caller sizes it by — the newest base's through [`Kernel::newest_checkpoint`],
+//! or one base's by its seq through [`Kernel::checkpoint_header`], the start
+//! point's after an open that skipped a newer base. The fixed
+//! `checkpoint.tmp` is the kernel's to remove: a failed write removes its
+//! own, and [`Kernel::open`] removes one a crash left, reporting its size as
+//! [`Kernel::stray_checkpoint_removed`].
+//!
+//! The kernel has no logging seam: it answers facts, and the caller above
+//! says them. A journaled open reports what it did as [`Recovery`] — the
+//! start point, the bases it passed over, the commits it replayed and the
+//! tail it cut; a landing answers the journal bytes it reclaimed through
+//! [`Kernel::last_reclaimed_bytes`]; the checkpoints `transact` ran inline on
+//! a committing thread are counted, and the last one's failure kept as text
+//! ([`Kernel::inline_checkpoints`], [`Kernel::last_inline_checkpoint_failure`]);
+//! and a checkpoint that failed AFTER its base landed names which step
+//! failed — the directory's fsync, retention or the journal's reclamation —
+//! as [`CheckpointError::Landed`] carrying a [`LandedStep`]. RETENTION KEEPS
+//! THE BASES THAT LOAD: the names an open passed over are passed over by
+//! the count of bases to keep and removed as excess, so the first landing
+//! after a skip keeps the base the open loaded from beside the new one.
 //!
 //! The `test-hooks` feature compiles in the test seam (`hooks.rs`): the
 //! WRITE-FAULT SEAM, under which a test makes the next checkpoint write —
@@ -156,7 +173,7 @@ mod kernel;
 
 pub use checkpoint::CheckpointHeader;
 pub use config::{BurnedSeqPolicy, CheckpointPolicy, Durability, KernelConfig, SaltSource};
-pub use error::{CheckpointError, HistoryError, OpenError, RebuildError, TxnError};
+pub use error::{CheckpointError, HistoryError, LandedStep, OpenError, RebuildError, TxnError};
 pub use journal::{Attestation, AttestationError, MAX_SEGMENT_LEN, MAX_SIG_BYTES, MAX_TXN_BYTES};
 pub use kernel::{Kernel, Recovery, Snapshot, Staging};
 pub use replay::SkippedBase;
@@ -475,7 +492,8 @@ pub enum Step {
     CheckpointSync,
     /// The directory's fsync after the rename that publishes the
     /// checkpoint: the base is ON DISK, and a failure here answers
-    /// [`CheckpointError::Io`] over it with retention and reclamation not
+    /// [`CheckpointError::Landed`] over it, naming the step
+    /// ([`LandedStep::DirectorySync`]), with retention and reclamation not
     /// run — the landed base that error's card says survives.
     CheckpointDirSync,
     /// The append of a transaction's frames to the active segment, after

@@ -7,6 +7,7 @@ mod finish;
 mod lease;
 mod reopen;
 mod replace;
+mod tidy;
 mod uploads;
 
 use std::any::Any;

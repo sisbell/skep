@@ -114,15 +114,28 @@ pub(crate) fn reaches_genesis(segs: &[SegmentMeta]) -> bool {
 /// `Seq > S_load` filter handles a straddler's leftovers. On return the
 /// directory durably reflects whatever this call removed, with no case split
 /// on whether that was anything.
-pub(crate) fn reclaim_below(dir: &Path, floor: u64) -> io::Result<()> {
+///
+/// Answers the bytes it removed: each qualifying segment's length, read
+/// before its removal, summed — the figure a landing reports as the journal
+/// bytes it reclaimed ([`crate::Kernel::last_reclaimed_bytes`]). `0` where
+/// no segment qualified, so a landing that reclaims nothing says so rather
+/// than nothing. A failure answers the error alone: what it removed before
+/// failing is gone and uncounted, and the next landing's walk starts over.
+pub(crate) fn reclaim_below(dir: &Path, floor: u64) -> io::Result<u64> {
     let segs = list_segments(dir)?;
+    let mut reclaimed = 0u64;
     for (i, seg) in segs.iter().enumerate() {
         match inferred_last_seq(&segs, i) {
-            Some(last) if last <= floor => fs::remove_file(&seg.path)?,
+            Some(last) if last <= floor => {
+                let len = fs::metadata(&seg.path)?.len();
+                fs::remove_file(&seg.path)?;
+                reclaimed = reclaimed.saturating_add(len);
+            }
             _ => break,
         }
     }
-    fsync_dir(dir)
+    fsync_dir(dir)?;
+    Ok(reclaimed)
 }
 
 /// Fsync a directory so entry creations/deletions/renames are durable. On
@@ -178,8 +191,9 @@ mod tests {
         assert_eq!(segs[0].path, segment_path(dir.path(), 1));
         // The active segment is never range-reclaimed, and it is the only one
         // here — so nothing is deleted, where an aliased name would have made
-        // the real `seg-1.wal` a closed segment covering nothing.
-        reclaim_below(dir.path(), 100).unwrap();
+        // the real `seg-1.wal` a closed segment covering nothing — and the
+        // answer says so: zero bytes, not nothing.
+        assert_eq!(reclaim_below(dir.path(), 100).unwrap(), 0, "nothing qualified");
         assert!(segment_path(dir.path(), 1).exists(), "a live segment was reclaimed");
     }
 
@@ -190,8 +204,10 @@ mod tests {
         // order and `firstSeq` order agree while names have one digit — and
         // `seg-10.wal` sorts BEFORE `seg-9.wal` by name.
         let dir = tempdir().unwrap();
-        for first_seq in [10, 1, 100, 9] {
-            fs::write(segment_path(dir.path(), first_seq), b"").unwrap();
+        // Each file a different length, so the bytes reclaimed name WHICH
+        // files went: seg-1 and seg-9 together, and neither of the others.
+        for (first_seq, len) in [(10, 1_000), (1, 10), (100, 10_000), (9, 100)] {
+            fs::write(segment_path(dir.path(), first_seq), vec![0u8; len]).unwrap();
         }
         let segs = list_segments(dir.path()).unwrap();
         let firsts: Vec<u64> = segs.iter().map(|seg| seg.first_seq).collect();
@@ -202,8 +218,8 @@ mod tests {
             "seg-9 ends where seg-10 begins"
         );
         // …and reclamation takes exactly the closed prefix that inference
-        // admits.
-        reclaim_below(dir.path(), 9).unwrap();
+        // admits, answering the lengths of the files it took.
+        assert_eq!(reclaim_below(dir.path(), 9).unwrap(), 10 + 100, "seg-1's and seg-9's bytes");
         let left: Vec<u64> = list_segments(dir.path())
             .unwrap()
             .iter()

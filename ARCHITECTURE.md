@@ -214,6 +214,20 @@ write, each arm firing once, armed through `#[doc(hidden)]` doors on
 `Kernel` and scoped to that kernel; the `Step` the write sites hook before
 is named in every build, and the hook is a no-op without the feature.
 
+The kernel has no logging seam: it answers facts, and the daemon says them.
+A journaled open reports what it found and did as `Recovery` — the start
+point, the bases it passed over, the commits it replayed (`replayed`) and
+the un-acked tail it cut, in bytes (`tail_cut`); a landing answers the
+journal bytes it reclaimed (`Kernel::last_reclaimed_bytes`, `Some(0)` where
+it reclaimed nothing); the checkpoints `transact` ran inline on a committing
+thread are counted and the last one's failure kept as text
+(`Kernel::inline_checkpoints`, `Kernel::last_inline_checkpoint_failure`);
+one checkpoint's header is read by its seq (`Kernel::checkpoint_header`, the
+start point's after an open that skipped a newer base); and a checkpoint
+that failed after its base landed names which step failed — the directory's
+fsync, retention or the journal's reclamation — as `CheckpointError::Landed`
+carrying a `LandedStep`, where a failure before the rename stays `Io`.
+
 Rules that hold across its files:
 
 - **Durable before visible.** `Kernel::transact_attested` hands the
@@ -230,6 +244,12 @@ Rules that hold across its files:
   the applier lock, never the reverse.
 - **A scan and its fold share a base.** Scans are reached through
   `replay::Base::scan`, never by a caller supplying `S_load`.
+- **Retention keeps the bases that load.** `checkpoint::retain` passes over
+  the names the open's `Recovery` lists as skipped when it counts the newest
+  `retain_checkpoints` bases to keep, and removes them as excess, so the
+  first landing after a skip keeps the base the open loaded from beside the
+  new one; the reclamation floor is the oldest base kept, and a base
+  `Kernel::checkpoint` writes over a skipped name is counted again.
 - **One skip rule.** `segment::scanned_above` decides which segments a
   scan reads; the scan walks it and the format probe opens its first.
 - **One codec.** Every byte the kernel writes goes through
@@ -250,9 +270,10 @@ Its integration suites are one binary, `tests/it/`: `kernel` (the public
 surface's claims, the write-fault seam's among them — the full volume at a
 write, at a checkpoint before and past its rename, and at the repair after
 an unwind, and a panic inside the checkpoint write), `hazard` (dirty
-crashes, built through the engine), `golden` (the byte pins) and `chain`
-(the commit chain's tamper matrix), over the shared `fixture` and
-`mutilate`.
+crashes, built through the engine), `golden` (the byte pins), `chain`
+(the commit chain's tamper matrix) and `tidy` (every item documented as a
+test hook or the test seam compiles only under `test-hooks`), over the
+shared `fixture` and `mutilate`.
 
 ## The blob store, `skep-blobs`
 
@@ -357,9 +378,10 @@ aside, the pull's install), `uploads` (an upload's life while the store
 serves, its identifier, and the records' log's runtime compaction),
 `reopen` (what open makes of the records and partials a crash or a
 restore left, the inspection that touches none of it, and the copy order
-a live copy follows) and `lease` (the leases' states, their compaction at
-open and by the trigger, and the pending bytes); each module's doc lists
-its claims. Five unit suites sit beside their code: `store.rs`'s,
+a live copy follows), `lease` (the leases' states, their compaction at
+open and by the trigger, and the pending bytes) and `tidy` (every item
+documented as a test hook or the test seam compiles only under
+`test-hooks`); each module's doc lists its claims. Five unit suites sit beside their code: `store.rs`'s,
 `uploads.rs`'s, `partials/handle.rs`'s, `blobs.rs`'s and `jsonl.rs`'s, the
 last in `jsonl/tests.rs`.
 

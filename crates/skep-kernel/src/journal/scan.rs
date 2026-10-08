@@ -139,6 +139,13 @@ pub(crate) struct ScanOutcome {
     /// recovery's own fold bound, so it names the last committed marker of the
     /// whole scanned region.
     pub committed_head: u64,
+    /// The COMMITTED TRANSACTIONS above the base — every marker
+    /// [`ScanOutcome::collect_commit`] took whose `last_seq` exceeds `s_load`,
+    /// counted: the commits in `(S_load, W]`, which is what a recovery
+    /// replays and reports as such ([`crate::Recovery`]'s `replayed`) — a
+    /// count of transactions, never of the records they carry. Never bounded,
+    /// for the reason the head is not: it counts the whole scanned region's.
+    pub commits_above_base: u64,
     /// The records a fold may apply, unordered and unfiltered as collected.
     /// Written only by [`ScanOutcome::collect_commit`], which is where the
     /// collection bound is applied; read through [`ScanOutcome::records_to`],
@@ -327,6 +334,7 @@ impl ScanOutcome {
                 self.chain_break.get_or_insert(marker.last_seq);
             }
             self.chain_head = marker.chain;
+            self.commits_above_base += 1;
             if self.bound == Some(marker.last_seq) {
                 self.closing_at_bound = Some(ClosingMarker {
                     chain: marker.chain,
@@ -774,6 +782,7 @@ pub(crate) fn scan(
         chain_at_base,
         bound,
         committed_head: s_load,
+        commits_above_base: 0,
         committed_records: Vec::new(),
         nearest_below_bound: s_load,
         runs: Vec::new(),
@@ -1097,17 +1106,29 @@ pub(crate) fn first_sync_word(segs: &[SegmentMeta], s_load: u64) -> io::Result<F
 ///
 /// The files are the scan's own [`TailCut`], so this cuts exactly what was
 /// scanned and nothing else.
-pub(crate) fn truncate_tail(dir: &Path, scan: &ScanOutcome) -> io::Result<()> {
+///
+/// Answers the bytes it removed — the cut segment's length above the cut,
+/// read before the cut, plus each wholly-later segment's length, read before
+/// its removal — which a journaled open reports as the tail it cut
+/// ([`crate::Recovery`]'s `tail_cut`). `0` where the last committed marker
+/// ends the journal, and where nothing was scanned: a cut that took nothing
+/// and no cut leave the same journal, so the two are one answer. The lengths
+/// read are the lengths the scan read — recovery holds the journal's lock, so
+/// nothing appends between the scan and this cut.
+pub(crate) fn truncate_tail(dir: &Path, scan: &ScanOutcome) -> io::Result<u64> {
     let Some(tail) = &scan.tail else {
-        return Ok(());
+        return Ok(0);
     };
     let f = OpenOptions::new().write(true).open(&tail.segment)?;
+    let mut cut = f.metadata()?.len().saturating_sub(tail.offset);
     f.set_len(tail.offset)?;
     f.sync_data()?;
     for path in &tail.discard {
+        cut = cut.saturating_add(fs::metadata(path)?.len());
         fs::remove_file(path)?;
     }
-    fsync_dir(dir)
+    fsync_dir(dir)?;
+    Ok(cut)
 }
 
 #[cfg(test)]

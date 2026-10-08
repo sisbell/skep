@@ -28,11 +28,16 @@ fn recovery_replays_journal_exactly_once() {
     assert_eq!(k.snapshot().world().sum, 6);
     assert_eq!(k.snapshot().world().rebuilds, 1);
     assert_eq!(k.current_seq(), Seq(3));
+    // The open's own report: genesis stood in, so every commit was replayed,
+    // and a clean shutdown left nothing above the last marker to cut.
+    let recovery = k.recovery().expect("journaled");
+    assert_eq!((recovery.start_point, recovery.replayed, recovery.tail_cut), (Seq(0), 3, 0));
     drop(k);
     // Recovery is idempotent.
     let k = Kernel::open(cfg_fsync(dir.path()), genesis()).unwrap();
     assert_eq!(items(&k), vec![1, 2, 3]);
     assert_eq!(k.current_seq(), Seq(3));
+    assert_eq!(k.recovery().unwrap().replayed, 3, "…and so is its report");
 }
 
 #[test]
@@ -56,6 +61,38 @@ fn recovery_with_checkpoint_replays_only_the_tail() {
     assert_eq!(k.snapshot().world().sum, 15);
     assert_eq!(k.snapshot().world().rebuilds, 1);
     assert_eq!(k.current_seq(), Seq(5));
+    // The report counts the tail alone: the two commits above the base.
+    let recovery = k.recovery().expect("journaled");
+    assert_eq!((recovery.start_point, recovery.replayed, recovery.tail_cut), (Seq(3), 2, 0));
+    // A base taken AT the head replays nothing.
+    assert_eq!(k.checkpoint().unwrap(), Seq(5));
+    drop(k);
+    let k = Kernel::open(cfg_fsync(dir.path()), genesis()).unwrap();
+    let recovery = k.recovery().expect("journaled");
+    assert_eq!((recovery.start_point, recovery.replayed), (Seq(5), 0), "the base is the head");
+    assert_eq!(items(&k), vec![1, 2, 3, 4, 5]);
+}
+
+/// `replayed` counts COMMITS, never records: a composite of three records is
+/// one transaction under one marker, and the open reports it as one.
+#[test]
+fn replayed_counts_the_commits_folded_not_their_records() {
+    let dir = tempdir().unwrap();
+    let k = Kernel::open(cfg_fsync(dir.path()), genesis()).unwrap();
+    let (_, composite) = k
+        .transact(&[], |stg| {
+            stg.push(TestRec::Append(1));
+            stg.push(TestRec::Append(2));
+            stg.push(TestRec::Append(3));
+            Ok::<(), ()>(())
+        })
+        .unwrap();
+    assert_eq!(composite, Seq(3), "three records, one boundary");
+    assert_eq!(commit(&k, 4), Seq(4));
+    drop(k);
+    let k = Kernel::open(cfg_fsync(dir.path()), genesis()).unwrap();
+    assert_eq!(items(&k), vec![1, 2, 3, 4], "four records folded");
+    assert_eq!(k.recovery().unwrap().replayed, 2, "…in two commits");
 }
 
 #[test]
@@ -79,6 +116,12 @@ fn torn_tail_is_physically_truncated_and_seqs_reused() {
     // marker) was DURABLY removed before writes were served (§7), cutting at
     // T2's marker frame end.
     assert_eq!(fs::metadata(&seg).unwrap().len(), spans[4].0);
+    // …and the open REPORTS the cut: the bytes from T2's marker's end to the
+    // torn end — T3's whole record frame and three bytes of its marker — and
+    // the two commits the cut left standing, replayed.
+    let recovery = k.recovery().expect("journaled");
+    assert_eq!(recovery.tail_cut, spans[5].0 + 3 - spans[4].0, "the bytes cut, exactly");
+    assert_eq!(recovery.replayed, 2);
     // Under Rollback the next session reuses the discarded coordinates —
     // safe exactly because the stale tail is gone (§1/§7 Txn uniqueness).
     assert_eq!(commit(&k, 30), Seq(3));
@@ -86,6 +129,7 @@ fn torn_tail_is_physically_truncated_and_seqs_reused() {
     let k = Kernel::open(cfg_fsync(dir.path()), genesis()).unwrap();
     assert_eq!(items(&k), vec![10, 20, 30]);
     assert_eq!(k.current_seq(), Seq(3));
+    assert_eq!(k.recovery().unwrap().tail_cut, 0, "a clean journal: nothing to cut");
 }
 
 #[test]
@@ -115,6 +159,9 @@ fn with_no_committed_marker_at_all_everything_scanned_is_tail() {
         0,
         "the torn transaction's record frame survived recovery"
     );
+    // The report: everything scanned was cut, and nothing was replayed.
+    let recovery = k.recovery().expect("journaled");
+    assert_eq!((recovery.replayed, recovery.tail_cut), (0, spans[1].0 + 3));
     // …which is what makes reusing its coordinate, and its `Txn`, safe.
     assert_eq!(commit(&k, 20), Seq(1));
     drop(k);
@@ -458,6 +505,11 @@ fn recovery_deletes_the_wholly_later_segments_the_tail_spans() {
     // reopens the LAST segment on disk, so a survivor is the file the next
     // session appends into (§1/§7).
     assert!(!seg5.exists(), "the tail's later segment survived recovery");
+    // The cut REPORTED counts the discarded segment whole — seg-1 was cut at
+    // its own end, contributing nothing — beside the four commits replayed.
+    let recovery = k.recovery().expect("journaled");
+    assert_eq!(recovery.tail_cut, spans[1].0 + 3, "seg-5's length, discarded whole");
+    assert_eq!(recovery.replayed, 4);
 
     // …which is what makes reusing the discarded coordinate safe: the next
     // commit takes Seq(5) again, and the session after it recovers rather than
@@ -581,6 +633,15 @@ fn in_memory_mode_starts_from_genesis_and_recovers_nothing() {
     assert_eq!(commit(&k, 1), Seq(1));
     assert_eq!(commit(&k, 2), Seq(2));
     assert_eq!(k.checkpoint().unwrap(), Seq(2)); // no-op returning current_seq (§6)
+
+    // The inline arm's runs are counted in this mode too — each the no-op,
+    // each landed — and the journaled reads answer `None`: no journal to
+    // reclaim, no base to name, no open to report.
+    assert_eq!(k.inline_checkpoints(), 2, "EveryN(1): a no-op run per commit");
+    assert_eq!(k.last_inline_checkpoint_failure(), None);
+    assert_eq!(k.last_reclaimed_bytes(), None);
+    assert_eq!(k.checkpoint_header(Seq(2)), None);
+    assert!(k.recovery().is_none());
     k.flush().unwrap();
     drop(k);
     // No journal → no recovery story: a reopen starts from genesis.

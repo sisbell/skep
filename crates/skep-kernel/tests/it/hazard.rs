@@ -241,6 +241,66 @@ fn a_torn_journal_tail_recovers_to_the_exact_boundary() {
     );
 }
 
+/// Scenario A's sibling, the open's REPORT of the cut: a journal truncated
+/// to `prefix_len` reopens with `Recovery.tail_cut` EXACTLY the bytes above
+/// the last committed marker wholly inside the prefix — `prefix_len` less
+/// that boundary's journal length (0 = genesis, the whole prefix cut) — the
+/// segment's length after the open equal to that boundary's, and `replayed`
+/// the commits the prefix holds, genesis being the base; the clean length
+/// reports a cut of zero. Sampled at every boundary's last byte, a
+/// mid-transaction byte, zero and the clean length, where A judges the world
+/// at every length.
+#[test]
+fn a_torn_tails_cut_is_reported_as_the_bytes_above_the_last_committed_marker() {
+    let tmp = tempdir().expect("tempdir");
+    let fixture = Fixture::build(&tmp.path().join("fixture"), &[]);
+    let full_len = fixture.full_len;
+    let mut prefix_lens: Vec<u64> = vec![full_len, 0];
+    for (i, boundary) in fixture.boundaries.iter().enumerate() {
+        let lo = if i == 0 { 0 } else { fixture.boundaries[i - 1].journal_len };
+        prefix_lens.push(boundary.journal_len - 1); // one byte short of the marker's end
+        prefix_lens.push(lo + (boundary.journal_len - lo) / 2); // mid-transaction
+    }
+    prefix_lens.sort_unstable();
+    prefix_lens.dedup();
+
+    let cases = tmp.path().join("cases");
+    for &prefix_len in &prefix_lens {
+        let case = cases.join(format!("cut-{prefix_len}"));
+        copy_dir(&fixture.dir, &case);
+        truncate_file(&seg_file(&case, 1), prefix_len);
+        let ctx = format!("A, the cut's report: prefix {prefix_len} of {full_len}");
+        let engine = timed_open(&case, &ctx);
+        let head = engine.kernel().current_seq().0;
+        let expected = fixture.expected_boundary(prefix_len);
+        assert_eq!(head, expected, "FINDING ({ctx}): boundary rule violated");
+        let kept = match fixture.boundaries.iter().find(|b| b.seq == head) {
+            Some(boundary) => boundary.journal_len,
+            None => 0, // genesis: nothing committed inside the prefix
+        };
+        let recovery = engine.recovery().expect("journaled");
+        assert_eq!(
+            recovery.tail_cut,
+            prefix_len - kept,
+            "FINDING ({ctx}): the cut reported is not the bytes above the last committed marker"
+        );
+        assert_eq!(
+            fs::metadata(seg_file(&case, 1)).expect("segment").len(),
+            kept,
+            "FINDING ({ctx}): the segment was not cut where the report says"
+        );
+        assert_eq!(
+            recovery.replayed,
+            fixture.boundaries.iter().filter(|b| b.seq <= head).count() as u64,
+            "FINDING ({ctx}): the commits replayed are not the boundaries the prefix holds"
+        );
+        assert_eq!(recovery.start_point, Seq(0), "a pure-journal fixture recovers from genesis");
+        drop(engine);
+        fs::remove_dir_all(&case).expect("case cleanup");
+    }
+    println!("A, the cut's report: {} prefixes judged of {full_len} bytes", prefix_lens.len());
+}
+
 // ── B. Torn tail + garbage tail ──────────────────────────────────────────
 
 /// The bytes ACTUALLY PRESENT, as the boundary rule reads them: the length

@@ -27,7 +27,19 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
   inline as the backstop). The header carries the file's length, the
   figure a floor or a byte bound is sized by, and the kernel removes
   its own `checkpoint.tmp`: a failed write before answering, the open
-  one a crash left.
+  one a crash left. Retention keeps the bases that load: a base the
+  open skipped is passed over by the count of bases kept and removed
+  as excess, so the first landing after a skip keeps the base the open
+  loaded from.
+- **Read seams** — the kernel answers facts and says nothing: `Recovery`
+  carries the start point, the bases passed over, the commits
+  `replayed` and the bytes of un-acked tail cut (`tail_cut`);
+  `last_reclaimed_bytes` the journal bytes the last landing reclaimed;
+  `inline_checkpoints` and `last_inline_checkpoint_failure` how many
+  checkpoints `transact` ran on a writer and how the last one failed,
+  as text; `checkpoint_header` one base's header by its seq; and a
+  checkpoint that fails after its base landed is
+  `CheckpointError::Landed`, naming the step (`LandedStep`).
 - **Keyed critical sections** — every write names the `LockKey`s it
   would hold. Under the v1 single applier one lock serializes all writes,
   and the keys are the seam a per-key realization will use without

@@ -611,9 +611,10 @@ fn content_survives_durable_recovery_across_a_checkpoint() {
     let k = Kernel::<World>::open(cfg_fsync(dir.path()), genesis()).expect("reopen");
     assert_eq!(
         k.recovery(),
-        Some(&Recovery { start_point: checkpointed_at, skipped: vec![] }),
-        "the reopen did not start from the checkpoint taken after a1, passing nothing over — \
-         where M2 passed a base over, its `skipped` entry says why"
+        Some(&Recovery { start_point: checkpointed_at, skipped: vec![], replayed: 1, tail_cut: 0 }),
+        "the reopen did not start from the checkpoint taken after a1, passing nothing over and \
+         replaying the one write above it — where M2 passed a base over, its `skipped` entry \
+         says why"
     );
     let s = k.snapshot();
     let c = s.world().content();

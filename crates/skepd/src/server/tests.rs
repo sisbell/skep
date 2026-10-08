@@ -438,8 +438,13 @@ fn the_recovery_warnings_name_the_skipped_checkpoint_the_start_point_and_the_emp
     use skep_engine::{Recovery, SkippedBase};
 
     assert!(recovery_warnings(None).is_empty(), "in memory, nothing to say");
-    let carried =
-        Recovery { start_point: Seq(2048), skipped: vec![], identity_resolved_empty: false };
+    let carried = Recovery {
+        start_point: Seq(2048),
+        skipped: vec![],
+        replayed: 0,
+        tail_cut: 0,
+        identity_resolved_empty: false,
+    };
     assert!(recovery_warnings(Some(&carried)).is_empty(), "a carried start point: nothing to say");
 
     let stepped_back = Recovery {
@@ -448,6 +453,8 @@ fn the_recovery_warnings_name_the_skipped_checkpoint_the_start_point_and_the_emp
             seq: Seq(2048),
             why: "the `identity` slice could not be resolved from this checkpoint".into(),
         }],
+        replayed: 2048,
+        tail_cut: 0,
         identity_resolved_empty: false,
     };
     let lines = recovery_warnings(Some(&stepped_back));
@@ -468,6 +475,8 @@ fn the_recovery_warnings_name_the_skipped_checkpoint_the_start_point_and_the_emp
                 why: "checkpoint body failed its header checksum".into(),
             },
         ],
+        replayed: 2048,
+        tail_cut: 0,
         identity_resolved_empty: false,
     };
     let lines = recovery_warnings(Some(&two_skipped_one_stood));
@@ -483,8 +492,13 @@ fn the_recovery_warnings_name_the_skipped_checkpoint_the_start_point_and_the_emp
         lines[1]
     );
 
-    let resolved_empty =
-        Recovery { start_point: Seq(1024), skipped: vec![], identity_resolved_empty: true };
+    let resolved_empty = Recovery {
+        start_point: Seq(1024),
+        skipped: vec![],
+        replayed: 0,
+        tail_cut: 0,
+        identity_resolved_empty: true,
+    };
     let lines = recovery_warnings(Some(&resolved_empty));
     assert_eq!(lines.len(), 1, "{lines:?}");
     for needle in

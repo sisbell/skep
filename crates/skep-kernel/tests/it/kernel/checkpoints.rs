@@ -13,7 +13,7 @@ use std::time::Duration;
 
 use super::*;
 use crate::mutilate::{ckpt_file, flip_byte, seg_file};
-use skep_kernel::CheckpointError;
+use skep_kernel::{CheckpointError, LandedStep};
 use tempfile::tempdir;
 
 /// The daemon's shape of the deferred policy — a commit count beside a byte
@@ -62,13 +62,20 @@ fn a_deferred_crossing_sets_the_due_flag_and_the_callers_checkpoint_services_it(
 /// deferred one again. So a caller that never services the flag gets a
 /// checkpoint at every SECOND crossing: the journal between checkpoints is
 /// bounded by two windows, never unbounded (M-I5 (f), the grace of one
-/// window).
+/// window). And each such run is COUNTED, with the last one's failure kept
+/// as text (§6, the kernel's read seam for the backstop's line): the count
+/// is 0 before the first and moves at every inline run, landed or failed —
+/// a failed run's commit lands all the same — the text names the failure's
+/// cause while the last inline run failed and is `None` once one lands
+/// after, and a caller's own `checkpoint()` moves neither.
 #[test]
 fn a_second_crossing_with_the_flag_set_runs_inline_as_the_backstop() {
     let dir = tempdir().unwrap();
     let mut cfg = cfg_retain(dir.path(), 8);
     cfg.checkpoint = deferred_every(2);
     let k = Kernel::open(cfg, genesis()).unwrap();
+    assert_eq!(k.inline_checkpoints(), 0, "nothing has run inline");
+    assert_eq!(k.last_inline_checkpoint_failure(), None);
     for x in 1..=8u64 {
         commit(&k, x);
     }
@@ -79,11 +86,63 @@ fn a_second_crossing_with_the_flag_set_runs_inline_as_the_backstop() {
     assert!(!ckpt_file(dir.path(), 6).exists(), "the third was deferred again");
     assert!(ckpt_file(dir.path(), 8).exists(), "the fourth ran inline");
     assert_eq!(checkpoint_count(dir.path()), 2);
+    assert_eq!(k.inline_checkpoints(), 2, "the two backstop runs, counted");
+    assert_eq!(k.last_inline_checkpoint_failure(), None, "the last of them landed");
     assert!(!k.checkpoint_due(), "an inline run clears the flag it was the backstop for");
     commit(&k, 9);
     commit(&k, 10);
     assert!(k.checkpoint_due(), "…and the next crossing is deferred");
     assert_eq!(checkpoint_count(dir.path()), 2);
+    assert_eq!(k.inline_checkpoints(), 2, "a deferred crossing runs nothing inline");
+
+    // THE TEXT: the next backstop run FAILS — the full volume at the temp
+    // file's sync — and the count moves all the same, the failure kept as
+    // text for the caller above to say; the commit that ran it landed.
+    k.fail_the_next(Step::CheckpointSync, io::ErrorKind::StorageFull);
+    commit(&k, 11);
+    assert_eq!(commit(&k, 12), Seq(12), "the backstop's failure never fails the commit");
+    assert_eq!(k.inline_checkpoints(), 3, "a failed inline run counts");
+    let text = k.last_inline_checkpoint_failure().expect("the last inline run failed");
+    assert!(
+        text.contains("StorageFull") && text.contains("CheckpointSync"),
+        "the text names the cause: {text}"
+    );
+    assert!(!ckpt_file(dir.path(), 12).exists(), "…and the run did fail");
+    // A caller's own call is no inline run: it lands, and moves neither the
+    // count nor the text.
+    assert_eq!(k.checkpoint().unwrap(), Seq(12));
+    assert_eq!(k.inline_checkpoints(), 3, "a caller's own checkpoint counts not");
+    assert_eq!(k.last_inline_checkpoint_failure(), Some(text), "…and clears no text");
+    // The next backstop run lands, and the text says so: the answer is the
+    // last run's, not the last failure's.
+    commit(&k, 13);
+    commit(&k, 14);
+    assert!(k.checkpoint_due(), "deferred again");
+    commit(&k, 15);
+    commit(&k, 16);
+    assert!(ckpt_file(dir.path(), 16).exists(), "the backstop ran inline");
+    assert_eq!(k.inline_checkpoints(), 4);
+    assert_eq!(k.last_inline_checkpoint_failure(), None, "the last inline run landed");
+}
+
+/// Under an INLINE arm every crossing's checkpoint runs on the committing
+/// thread, and every one is counted: the count is of the runs `transact`
+/// made inline, whichever arm made them, and a caller's own call is none of
+/// them.
+#[test]
+fn an_inline_arms_crossings_are_counted_as_the_backstops_are() {
+    let dir = tempdir().unwrap();
+    let mut cfg = cfg_retain(dir.path(), 8);
+    cfg.checkpoint = CheckpointPolicy::EveryN(2);
+    let k = Kernel::open(cfg, genesis()).unwrap();
+    for x in 1..=6u64 {
+        commit(&k, x);
+    }
+    assert_eq!(checkpoint_count(dir.path()), 3, "crossings at 2, 4 and 6");
+    assert_eq!(k.inline_checkpoints(), 3, "each ran inline, and each counted");
+    assert_eq!(k.last_inline_checkpoint_failure(), None);
+    assert_eq!(k.checkpoint().unwrap(), Seq(6));
+    assert_eq!(k.inline_checkpoints(), 3, "a caller's own call counts not");
 }
 
 /// A world whose serialize PARKS at a gate, once: the checkpointing thread
@@ -383,11 +442,12 @@ fn a_checkpoint_that_fails_before_its_rename_lands_no_base_and_keeps_no_tmp() {
 }
 
 /// §6: the full volume PAST the rename — `StorageFull` at the directory's
-/// fsync — answers `CheckpointError::Io` of that kind AND leaves the base ON
-/// DISK: `newest_checkpoint` has moved to this call's `Seq`, the file is
-/// there, retention did not run (a third base stands where two are kept),
-/// no `checkpoint.tmp` remains and the kernel is not poisoned — what
-/// `CheckpointError::Io`'s card says survives. The next open loads that
+/// fsync — answers `CheckpointError::Landed` naming the directory sync as
+/// the step, the cause of that kind, AND leaves the base ON DISK:
+/// `newest_checkpoint` has moved to this call's `Seq`, the file is there,
+/// retention did not run (a third base stands where two are kept), no
+/// `checkpoint.tmp` remains and the kernel is not poisoned — what
+/// `CheckpointError::Landed`'s card says survives. The next open loads that
 /// base; the next call lands and applies the retention the failed one did
 /// not.
 #[test]
@@ -401,8 +461,8 @@ fn a_checkpoint_that_fails_past_its_rename_leaves_the_base_on_disk() {
     commit(&k, 3);
     k.fail_the_next(Step::CheckpointDirSync, io::ErrorKind::StorageFull);
     let e = match k.checkpoint() {
-        Err(CheckpointError::Io(e)) => e,
-        other => panic!("expected the directory sync's failure, got {other:?}"),
+        Err(CheckpointError::Landed { step: LandedStep::DirectorySync, cause }) => cause,
+        other => panic!("expected the directory sync's failure over a landed base, got {other:?}"),
     };
     assert_eq!(e.kind(), io::ErrorKind::StorageFull, "the kind, unchanged: {e}");
     assert!(e.to_string().contains("CheckpointDirSync"), "names the step: {e}");
@@ -524,14 +584,24 @@ fn an_auto_triggered_checkpoint_failure_never_fails_the_committed_txn() {
     assert_eq!(k.current_seq(), Seq(2));
 }
 
+/// …and the landing ANSWERS what it reclaimed (§6, the kernel's read seam
+/// for the landing's line): `None` before any landing, `Some(0)` for a
+/// landing that removed no segment — it says so — and the removed segments'
+/// lengths, read before their removal, for one that did.
 #[test]
 fn reclamation_floor_is_the_oldest_retained_checkpoint() {
     let dir = tempdir().unwrap();
     let k = Kernel::open(cfg_fsync(dir.path()), genesis()).unwrap(); // retain 2
+    assert_eq!(k.last_reclaimed_bytes(), None, "no landing yet");
     for _ in 0..4 {
         commit_blob(&k);
     }
     assert_eq!(k.checkpoint().unwrap(), Seq(4));
+    assert_eq!(
+        k.last_reclaimed_bytes(),
+        Some(0),
+        "seg-1 is active and never range-reclaimed: a landing that reclaimed nothing says so"
+    );
     for _ in 0..4 {
         commit_blob(&k); // txn 5 rotates into seg-5 (§1 name-by-firstSeq)
     }
@@ -540,10 +610,16 @@ fn reclamation_floor_is_the_oldest_retained_checkpoint() {
         seg_file(dir.path(), 9).exists(),
         "the fixture must rotate twice"
     );
+    let seg1_len = fs::metadata(seg_file(dir.path(), 1)).unwrap().len();
     assert_eq!(k.checkpoint().unwrap(), Seq(9));
     // Reclamation dropped the closed segment wholly below the OLDEST retained
     // checkpoint (S_old = 4)…
     assert!(!seg_file(dir.path(), 1).exists());
+    assert_eq!(
+        k.last_reclaimed_bytes(),
+        Some(seg1_len),
+        "the removed segment's length, read before its removal"
+    );
     // …and kept the closed one above it, which covers (4, 8]: a floor at the
     // NEWEST checkpoint deletes it (§6).
     assert!(
@@ -564,6 +640,13 @@ fn reclamation_floor_is_the_oldest_retained_checkpoint() {
     assert_eq!(k.current_seq(), Seq(9));
 }
 
+/// Retention keeps the newest `N` — and KEEPS THE BASES THAT LOAD (§6):
+/// after an open that skipped the damaged `B` and loaded from `A`, the first
+/// landing `C` keeps `A` beside `C` and removes `B` as excess, where
+/// counting by name would keep `B` and delete `A`, the one base that
+/// loaded; a second open, `A` and `C` sound, skips nothing; and the landing
+/// after that counts as it always did. The claim with no skip is the first
+/// half, unchanged.
 #[test]
 fn retention_keeps_the_newest_n_checkpoints() {
     let dir = tempdir().unwrap();
@@ -587,6 +670,261 @@ fn retention_keeps_the_newest_n_checkpoints() {
     assert_eq!(items(&k), vec![1, 2, 3]);
     assert_eq!(k.snapshot().world().sum, 6);
     assert_eq!(k.current_seq(), Seq(3));
+
+    // RETENTION KEEPS THE BASES THAT LOAD: A = 2 loaded, B = 3 skipped.
+    let recovery = k.recovery().expect("journaled");
+    assert_eq!(recovery.start_point, Seq(2), "A loaded");
+    let skipped: Vec<Seq> = recovery.skipped.iter().map(|b| b.seq).collect();
+    assert_eq!(skipped, vec![Seq(3)], "B skipped");
+    // The first landing after the skip, C = 4, keeps A and C and removes B.
+    commit(&k, 4);
+    assert_eq!(k.checkpoint().unwrap(), Seq(4));
+    assert_eq!(checkpoint_count(dir.path()), 2);
+    assert!(ckpt_file(dir.path(), 2).exists(), "A, the base the open loaded from, stands");
+    assert!(!ckpt_file(dir.path(), 3).exists(), "B, the skipped base, is removed as excess");
+    assert!(ckpt_file(dir.path(), 4).exists(), "C, the new base");
+    drop(k);
+    // A second open — A and C sound — skips nothing; with B gone, the damage
+    // that refused it can refuse nothing.
+    let k = Kernel::open(cfg_fsync(dir.path()), genesis()).unwrap();
+    let recovery = k.recovery().expect("journaled");
+    assert_eq!(recovery.start_point, Seq(4));
+    assert!(recovery.skipped.is_empty(), "nothing skipped: {recovery:?}");
+    assert_eq!(items(&k), vec![1, 2, 3, 4]);
+    // …and the landing after that counts as it always did: the newest two.
+    commit(&k, 5);
+    assert_eq!(k.checkpoint().unwrap(), Seq(5));
+    assert!(!ckpt_file(dir.path(), 2).exists(), "A, now the oldest of three, goes");
+    assert!(ckpt_file(dir.path(), 4).exists() && ckpt_file(dir.path(), 5).exists());
+}
+
+/// §6, the rule's reason: after an open that skipped the newest base `B` and
+/// loaded from `A`, the first landing's RECLAMATION FLOOR is `A`'s seq — the
+/// oldest base KEPT — so the journal `A` replays through survives the
+/// landing, and a damage to the new base `C` still leaves `A` a base that
+/// carries the whole world. Counting by name would set the floor at `B`,
+/// reclaim the segment below it, and leave the board on `C` alone with
+/// genesis gone: one more damage, and the open refuses.
+#[test]
+fn the_first_landing_after_a_skip_reclaims_below_the_loaded_base_not_the_skipped_one() {
+    let dir = tempdir().unwrap();
+    let k = Kernel::open(cfg_fsync(dir.path()), genesis()).unwrap(); // retain 2
+    for _ in 0..4 {
+        commit_blob(&k); // Seqs 1..=4 fill seg-1 past the threshold
+    }
+    assert_eq!(k.checkpoint().unwrap(), Seq(4)); // A
+    for _ in 0..4 {
+        commit_blob(&k); // 5 rotates into seg-5; 6..=8 fill it
+    }
+    assert_eq!(commit_blob(&k), Seq(9)); // 9 rotates into seg-9, CLOSING seg-5 (5..=8)
+    assert_eq!(k.checkpoint().unwrap(), Seq(9)); // B: keeps {A, B}, reclaims seg-1 below A
+    assert!(!seg_file(dir.path(), 1).exists(), "the fixture must reclaim genesis");
+    assert!(seg_file(dir.path(), 5).exists(), "…and keep the segment above A");
+    drop(k);
+    // B damaged: the open loads A and replays 5..=9 through seg-5 and seg-9.
+    let b = ckpt_file(dir.path(), 9);
+    let len = fs::metadata(&b).unwrap().len();
+    flip_byte(&b, len - 1);
+    let k = Kernel::open(cfg_fsync(dir.path()), genesis()).unwrap();
+    let recovery = k.recovery().expect("journaled");
+    assert_eq!((recovery.start_point, recovery.replayed), (Seq(4), 5), "A loaded, five replayed");
+    let skipped: Vec<Seq> = recovery.skipped.iter().map(|s| s.seq).collect();
+    assert_eq!(skipped, vec![Seq(9)], "B skipped");
+    for _ in 0..3 {
+        commit_blob(&k); // 10..=12 fill seg-9 past the threshold
+    }
+    assert_eq!(commit_blob(&k), Seq(13)); // 13 rotates into seg-13, CLOSING seg-9 (9..=12)
+    assert_eq!(k.checkpoint().unwrap(), Seq(13)); // C
+
+    // The landing kept A and C, removed B, and reclaimed below A — nothing:
+    // seg-5 reaches 8, above A — where a floor at B would have taken seg-5.
+    assert!(ckpt_file(dir.path(), 4).exists() && ckpt_file(dir.path(), 13).exists());
+    assert!(!ckpt_file(dir.path(), 9).exists(), "B removed as excess");
+    assert_eq!(checkpoint_count(dir.path()), 2);
+    assert!(seg_file(dir.path(), 5).exists(), "the journal A replays through survives the landing");
+    assert_eq!(
+        k.last_reclaimed_bytes(),
+        Some(0),
+        "the floor is A's seq; nothing lies wholly below"
+    );
+    drop(k);
+    // What the floor is for: damage C, and the open still lands on the whole
+    // world from A — through the segment the old rule would have reclaimed.
+    let c = ckpt_file(dir.path(), 13);
+    let len = fs::metadata(&c).unwrap().len();
+    flip_byte(&c, len - 1);
+    let k = Kernel::open(cfg_fsync(dir.path()), genesis()).unwrap();
+    assert_eq!(k.recovery().unwrap().start_point, Seq(4), "A carries the world again");
+    assert_eq!(items(&k).len(), 13);
+    assert_eq!(k.current_seq(), Seq(13));
+}
+
+/// A checkpoint written OVER a skipped name is a base again: the open
+/// skipped `B` at the head, the first `checkpoint()` with nothing committed
+/// since writes `B`'s name anew, sound, and retention counts it — kept
+/// beside `A`, not passed over as the skipped file it replaced — and the
+/// landing after it keeps the newest two as ever, the rewritten one among
+/// them; a reopen loads it and skips nothing.
+#[test]
+fn a_checkpoint_written_over_a_skipped_name_is_a_base_again() {
+    let dir = tempdir().unwrap();
+    let k = Kernel::open(cfg_fsync(dir.path()), genesis()).unwrap(); // retain 2
+    commit(&k, 1);
+    assert_eq!(k.checkpoint().unwrap(), Seq(1)); // A
+    commit(&k, 2);
+    assert_eq!(k.checkpoint().unwrap(), Seq(2)); // B, at the head
+    drop(k);
+    let b = ckpt_file(dir.path(), 2);
+    let len = fs::metadata(&b).unwrap().len();
+    flip_byte(&b, len - 1);
+    let k = Kernel::open(cfg_fsync(dir.path()), genesis()).unwrap();
+    assert_eq!(k.recovery().unwrap().start_point, Seq(1), "A loaded, B skipped");
+    assert_eq!(k.current_seq(), Seq(2), "the head is B's seq");
+    // The write at the head lands on B's name, sound, and is counted: kept
+    // beside A, where passing the name over would delete the base just
+    // written.
+    assert_eq!(k.checkpoint().unwrap(), Seq(2));
+    assert!(ckpt_file(dir.path(), 1).exists() && ckpt_file(dir.path(), 2).exists());
+    assert_eq!(checkpoint_count(dir.path()), 2);
+    assert_eq!(k.checkpoint_header(Seq(2)).map(|h| h.chain_head), Some(k.chain_head()));
+    // The landing after it, in the same kernel: the newest two, the
+    // rewritten base among them — its name is passed over no longer.
+    commit(&k, 3);
+    assert_eq!(k.checkpoint().unwrap(), Seq(3));
+    assert!(!ckpt_file(dir.path(), 1).exists(), "A, the oldest of three, goes");
+    assert!(ckpt_file(dir.path(), 2).exists(), "the rewritten base stands");
+    assert!(ckpt_file(dir.path(), 3).exists());
+    drop(k);
+    let k = Kernel::open(cfg_fsync(dir.path()), genesis()).unwrap();
+    let recovery = k.recovery().unwrap();
+    assert_eq!((recovery.start_point, recovery.skipped.len()), (Seq(3), 0));
+    assert_eq!(items(&k), vec![1, 2, 3]);
+}
+
+/// THE STEP IS NAMED (§6): a failure after the base LANDED says which of
+/// the three steps after the rename failed — the directory's fsync,
+/// retention, the journal's reclamation — as `CheckpointError::Landed`'s
+/// `step`, the cause beside it and under `source()`, the `Display` carrying
+/// both; the base stands in every case, and a later call lands. A failure
+/// BEFORE the rename carries no step: it is `Io`, and no base landed.
+#[test]
+fn a_failure_after_the_base_landed_names_its_step() {
+    // The directory's fsync, through the seam.
+    let dir = tempdir().unwrap();
+    let k = Kernel::open(cfg_fsync(dir.path()), genesis()).unwrap(); // retain 2
+    commit(&k, 1);
+    k.fail_the_next(Step::CheckpointDirSync, io::ErrorKind::StorageFull);
+    let e = k.checkpoint().expect_err("the directory sync fails");
+    assert!(
+        matches!(e, CheckpointError::Landed { step: LandedStep::DirectorySync, .. }),
+        "got {e:?}"
+    );
+    let text = e.to_string();
+    assert!(text.contains("landed") && text.contains("StorageFull"), "{text}");
+    let source = std::error::Error::source(&e).expect("the cause travels");
+    assert!(source.to_string().contains("CheckpointDirSync"), "{source}");
+    assert!(ckpt_file(dir.path(), 1).exists(), "the base landed");
+
+    // Retention: a directory squatting on a name retention must remove — a
+    // base by name, the oldest, which `remove_file` refuses.
+    commit(&k, 2);
+    assert_eq!(k.checkpoint().unwrap(), Seq(2));
+    fs::create_dir(ckpt_file(dir.path(), 0)).unwrap();
+    commit(&k, 3);
+    let e = k.checkpoint().expect_err("retention cannot remove a directory");
+    assert!(matches!(e, CheckpointError::Landed { step: LandedStep::Retention, .. }), "got {e:?}");
+    assert!(e.to_string().contains("retention"), "{e}");
+    assert!(std::error::Error::source(&e).is_some());
+    assert!(ckpt_file(dir.path(), 3).exists(), "the base landed");
+    assert!(ckpt_file(dir.path(), 1).exists(), "retention stopped at the name it could not remove");
+    fs::remove_dir(ckpt_file(dir.path(), 0)).unwrap();
+    assert_eq!(k.checkpoint().unwrap(), Seq(3), "the retry lands and applies the retention");
+    assert_eq!(checkpoint_count(dir.path()), 2);
+
+    // The journal's reclamation: a directory squatting on the closed
+    // segment's name below the floor.
+    let dir = tempdir().unwrap();
+    let k = Kernel::open(cfg_retain(dir.path(), 1), genesis()).unwrap();
+    for _ in 0..5 {
+        commit_blob(&k); // four fill seg-1 past the threshold; the fifth rotates
+    }
+    assert_eq!(segment_count(dir.path()), 2, "the fixture must rotate");
+    let seg1 = seg_file(dir.path(), 1);
+    fs::remove_file(&seg1).unwrap();
+    fs::create_dir(&seg1).unwrap();
+    let e = k.checkpoint().expect_err("reclamation cannot remove a directory");
+    assert!(
+        matches!(e, CheckpointError::Landed { step: LandedStep::Reclamation, .. }),
+        "got {e:?}"
+    );
+    assert!(e.to_string().contains("reclamation"), "{e}");
+    assert!(std::error::Error::source(&e).is_some());
+    assert!(ckpt_file(dir.path(), 5).exists(), "the base landed");
+    assert_eq!(k.last_reclaimed_bytes(), None, "a failed call is no landing");
+    fs::remove_dir(&seg1).unwrap();
+    assert_eq!(k.checkpoint().unwrap(), Seq(5), "the retry lands");
+    assert_eq!(k.last_reclaimed_bytes(), Some(0), "…and finds nothing left to reclaim");
+
+    // Before the rename: no step, and no base.
+    let dir = tempdir().unwrap();
+    let k = Kernel::open(cfg_fsync(dir.path()), genesis()).unwrap();
+    commit(&k, 1);
+    k.fail_the_next(Step::CheckpointSync, io::ErrorKind::StorageFull);
+    let e = k.checkpoint().expect_err("the sync fails");
+    assert!(matches!(e, CheckpointError::Io(_)), "no step before the rename: {e:?}");
+    assert!(std::error::Error::source(&e).is_some());
+    assert_eq!(checkpoint_count(dir.path()), 0, "no base landed");
+}
+
+/// THE HEADER BY SEQ: `checkpoint_header` answers the header of the one base
+/// named — the start point's after an open that skipped a newer base, which
+/// is what a caller sizes a floor by where the newest file's header is the
+/// skipped base's claim — equal to the file's by its seq and its length;
+/// `None` for a seq no checkpoint was taken at, for one retention has
+/// removed, for genesis, and in memory; and a damaged BODY still answers its
+/// header, as the newest read does.
+#[test]
+fn checkpoint_header_answers_the_start_points_header_by_its_seq() {
+    let dir = tempdir().unwrap();
+    let k = Kernel::open(cfg_fsync(dir.path()), genesis()).unwrap(); // retain 2
+    assert_eq!(k.checkpoint_header(Seq(1)), None, "no checkpoint yet");
+    for x in 1..=2u64 {
+        commit(&k, x);
+        assert_eq!(k.checkpoint().unwrap(), Seq(x));
+    }
+    let one = k.checkpoint_header(Seq(1)).expect("the base at 1 answers its header");
+    assert_eq!(one.seq, Seq(1));
+    assert_eq!(one.len, fs::metadata(ckpt_file(dir.path(), 1)).unwrap().len());
+    assert_eq!(k.checkpoint_header(Seq(2)), k.newest_checkpoint(), "the newest, by its seq");
+    assert_eq!(k.checkpoint_header(Seq(3)), None, "no checkpoint was taken at 3");
+    assert_eq!(k.checkpoint_header(Seq(0)), None, "genesis is no checkpoint");
+    drop(k);
+    // The newest base's body damaged: the open loads the older, and the
+    // start point's header is the one to size by — the newest file's answers
+    // too, its header being intact, and that claim is the one a caller must
+    // not size by.
+    let two = ckpt_file(dir.path(), 2);
+    let len = fs::metadata(&two).unwrap().len();
+    flip_byte(&two, len - 1);
+    let k = Kernel::open(cfg_fsync(dir.path()), genesis()).unwrap();
+    let start = k.recovery().unwrap().start_point;
+    assert_eq!(start, Seq(1));
+    let header = k.checkpoint_header(start).expect("the start point's header");
+    assert_eq!(header.len, fs::metadata(ckpt_file(dir.path(), 1)).unwrap().len());
+    assert_eq!(k.newest_checkpoint().map(|h| h.seq), Some(Seq(2)), "the newest file still answers");
+    assert!(k.checkpoint_header(Seq(2)).is_some(), "…by its seq too: the body is not verified");
+    // The first landing removes the skipped base and keeps the start point:
+    // the removed one answers `None`, the kept one as before.
+    commit(&k, 3);
+    assert_eq!(k.checkpoint().unwrap(), Seq(3));
+    assert_eq!(k.checkpoint_header(Seq(2)), None, "removed by retention");
+    assert_eq!(k.checkpoint_header(Seq(1)), Some(header));
+    // The landing after that removes the start point as any base.
+    commit(&k, 4);
+    assert_eq!(k.checkpoint().unwrap(), Seq(4));
+    assert_eq!(k.checkpoint_header(Seq(1)), None);
+    let in_memory = Kernel::open(cfg_in_memory(), genesis()).unwrap();
+    assert_eq!(in_memory.checkpoint_header(Seq(0)), None, "no directory, no header");
 }
 
 #[test]

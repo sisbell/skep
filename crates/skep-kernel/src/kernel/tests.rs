@@ -1632,8 +1632,8 @@ fn a_base_whose_seed_refuses_is_passed_over_for_the_next_older_and_reported() {
     picky_commit(&k, b"c");
     assert_eq!(
         k.recovery(),
-        Some(&Recovery { start_point: Seq(0), skipped: vec![] }),
-        "a fresh journal's open: genesis, nothing skipped"
+        Some(&Recovery { start_point: Seq(0), skipped: vec![], replayed: 0, tail_cut: 0 }),
+        "a fresh journal's open: genesis, nothing skipped, nothing replayed, nothing cut"
     );
     drop(k);
 

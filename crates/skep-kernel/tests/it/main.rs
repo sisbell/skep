@@ -11,3 +11,4 @@ mod golden;
 mod hazard;
 mod kernel;
 mod mutilate;
+mod tidy;

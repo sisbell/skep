@@ -13,16 +13,16 @@ use std::io;
 use std::num::NonZeroU64;
 use std::panic::{catch_unwind, resume_unwind, AssertUnwindSafe};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
 
-use arc_swap::ArcSwap;
+use arc_swap::{ArcSwap, ArcSwapOption};
 use parking_lot::Mutex;
 
 use crate::checkpoint::{self, CheckpointHeader};
 use crate::config::{BurnedSeqPolicy, CheckpointPolicy, Durability, KernelConfig, SaltSource};
-use crate::error::{CheckpointError, OpenError, TxnError};
+use crate::error::{CheckpointError, LandedStep, OpenError, TxnError};
 use crate::journal::{
     self, Attestation, CommitFail, FirstSyncWord, Journal, JournalWriter, ScanFail, UnwindRepair,
 };
@@ -32,16 +32,20 @@ use crate::Step;
 use crate::{LockKey, Seam, Seq, WorldState};
 use applier::ApplierLock;
 
-/// What a journaled [`Kernel::open`] FOUND (§7): the start point its
+/// What a journaled [`Kernel::open`] FOUND AND DID (§7): the start point its
 /// derivation resolved from, and every retained checkpoint it passed over on
 /// the way there, each with the refusal that passed it over — the account
 /// `open` owes its caller under the AUTH spec's M2 seam delta ("`open` …
 /// reports the start point it resolved from", AUTH-2.85), so the daemon above
 /// can log at startup which checkpoint it did NOT start from and where it did
-/// (AUTH-2.86). A report and never a verdict: a skipped base is no failure of
-/// the open — the derivation succeeded from an older one — and the chain's
-/// one failure, the exhausted chain, is [`OpenError::BadCheckpoint`]'s.
-/// Absent under [`Durability::InMemory`], which loads nothing.
+/// (AUTH-2.86) — and the two acts of the open itself: how many commits it
+/// replayed above that start point, and how many bytes of un-acked tail it
+/// cut, so the open's own landing can be said in figures rather than left to
+/// the silence between two lines. A report and never a verdict: a skipped
+/// base is no failure of the open — the derivation succeeded from an older
+/// one — and the chain's one failure, the exhausted chain, is
+/// [`OpenError::BadCheckpoint`]'s. Absent under [`Durability::InMemory`],
+/// which loads nothing, replays nothing and cuts nothing.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Recovery {
     /// `S_load` — the coordinate of the base the recovered world was folded
@@ -52,6 +56,21 @@ pub struct Recovery {
     /// checks, a body that would not decode, or a seed
     /// [`WorldState::rebuild_derived`] refused.
     pub skipped: Vec<SkippedBase>,
+    /// The COMMITS the open replayed above the start point — the
+    /// transactions whose markers the scan closed in `(S_load, W]`, counted
+    /// as the scan took them, never the records they carry: a composite of
+    /// `m` records is one. `0` where the start point IS the committed head —
+    /// a base taken at the head with nothing committed since — and the whole
+    /// journal's count where genesis stood in.
+    pub replayed: u64,
+    /// The BYTES the open's tail truncation removed: the active segment's
+    /// length above the last committed marker, plus every wholly-later
+    /// segment it discarded — §7's un-acked / torn tail, physically cut
+    /// before any write is served. `0` where the last committed marker ended
+    /// the journal, as it does after every clean shutdown. A count and not an
+    /// option: a cut that took nothing and no cut leave the same journal, so
+    /// the two are one fact, and every journaled open runs the cut.
+    pub tail_cut: u64,
 }
 
 /// One installed committed state: the root's identity IS the version
@@ -362,7 +381,8 @@ struct Journaled<W> {
     /// the boundary ([`Kernel::world_at`], [`Kernel::chain_at`],
     /// [`Kernel::attestation_at`]).
     genesis: W,
-    /// What the open found: the start point and the bases it passed over
+    /// What the open found and did: the start point, the bases it passed
+    /// over, the commits it replayed and the tail it cut
     /// ([`Kernel::recovery`]).
     recovery: Recovery,
     /// The `checkpoint.tmp` the open REMOVED, by its length in bytes — a
@@ -370,10 +390,28 @@ struct Journaled<W> {
     /// kernel's own directory contract makes the kernel's to delete
     /// ([`Kernel::stray_checkpoint_removed`]); `None` where none stood.
     stray_checkpoint_removed: Option<u64>,
+    /// The names the open passed over that may still stand on disk — the
+    /// seqs of `recovery.skipped`, less any a later checkpoint wrote over —
+    /// which retention passes over when it counts the bases to keep and
+    /// removes as excess (`checkpoint::retain`); emptied once a landing has
+    /// removed them. Taken inside [`Kernel::checkpoint`] alone, under its
+    /// mutex, so the lock is a formality the type asks for.
+    skipped_bases: Mutex<Vec<u64>>,
+    /// The journal bytes the LAST landing reclaimed
+    /// ([`Kernel::last_reclaimed_bytes`]): the lengths of the segments
+    /// `reclaim_below` removed, summed before each removal — or
+    /// [`NO_LANDING`] before the first landing of this uptime. Stored by
+    /// [`Kernel::checkpoint`] after its reclamation step, read lock-free.
+    last_reclaimed: AtomicU64,
     /// The `open()`-held exclusive advisory lock, kept for its `Drop`: the
     /// flock releases when this file closes (Lifecycle).
     _lock: File,
 }
+
+/// [`Journaled::last_reclaimed`]'s value before any landing: a figure no
+/// landing reclaims, since the segments one removes together fit a volume.
+/// A landing that reclaimed nothing stores `0`, which is an answer.
+const NO_LANDING: u64 = u64::MAX;
 
 /// What a journaled recovery hands [`Kernel::open`]: the root it commits
 /// from, the live appender, the exclusion lock, the account of the open, and
@@ -415,6 +453,19 @@ pub struct Kernel<W: WorldState> {
     /// backstop. The `poisoned` flag's shape, and like it never a gate — a
     /// flag read false may be set by the next commit.
     checkpoint_due: AtomicBool,
+    /// THE INLINE COUNT (§6): how many checkpoints [`Kernel::transact`] has
+    /// run on a committing thread this uptime — the inline arms' at every
+    /// crossing, and the backstop's at a crossing that found the due flag
+    /// set — read lock-free by [`Kernel::inline_checkpoints`]. Moved after
+    /// each such run returns, landed or failed; a run that unwinds moves it
+    /// not, the unwind being the caller's.
+    inline_checkpoints: AtomicU64,
+    /// THE LAST INLINE RUN's FAILURE, as text: `None` where that run landed
+    /// (or none has run), the error rendered where it failed — never the
+    /// error value, which does not clone. Stored before the count moves, so
+    /// a reader that sees the count move reads a text at least as new as
+    /// that run's ([`Kernel::last_inline_checkpoint_failure`]).
+    last_inline_failure: ArcSwapOption<String>,
     cfg: KernelConfig,
     /// The write-fault seam this kernel's two write paths hook before
     /// [their steps](crate::Step): under `test-hooks` the state the
@@ -626,6 +677,9 @@ impl<W: WorldState> Kernel<W> {
                 ..
             } => {
                 let recovered = Self::recover(journal_path, &genesis, cfg.salt, seam.clone())?;
+                // The names the open passed over, for retention to pass over
+                // in turn, until the first landing has removed them.
+                let skipped_bases = recovered.recovery.skipped.iter().map(|b| b.seq.0).collect();
                 (
                     recovered.root,
                     recovered.journal,
@@ -635,6 +689,8 @@ impl<W: WorldState> Kernel<W> {
                         genesis,
                         recovery: recovered.recovery,
                         stray_checkpoint_removed: recovered.stray_checkpoint_removed,
+                        skipped_bases: Mutex::new(skipped_bases),
+                        last_reclaimed: AtomicU64::new(NO_LANDING),
                         _lock: recovered.lock,
                     }),
                 )
@@ -680,8 +736,11 @@ impl<W: WorldState> Kernel<W> {
         let base = replay::select_base(&checkpoints, &segs, None, genesis).map_err(|fail| {
             OpenError::BadCheckpoint { cause: fail.cause }
         })?;
-        let recovery =
-            Recovery { start_point: Seq(base.s_load()), skipped: base.skipped().to_vec() };
+        // The report's first two members, read off the base before the fold
+        // consumes it; its other two are the scan's count and the cut's,
+        // known once each has run.
+        let start_point = Seq(base.s_load());
+        let skipped = base.skipped().to_vec();
 
         // THE FIRST-SYNC-WORD PROBE, ahead of the scan (the encoding report's
         // §8; the owner's ruling of 2026-09-23). A segment written under
@@ -765,8 +824,12 @@ impl<W: WorldState> Kernel<W> {
         // while an `open()` that refuses leaves the journal exactly as it
         // found it — which is what an operator images after a halt. It is
         // also before the appender is opened over that segment, whose length
-        // this cut settles and which the appender reads once.
-        journal::truncate_tail(dir, &scan)?;
+        // this cut settles and which the appender reads once. What it cut, in
+        // bytes, is the open's to report, as the commits the fold replayed
+        // are: the scan counted those as it closed their markers.
+        let tail_cut = journal::truncate_tail(dir, &scan)?;
+        let recovery =
+            Recovery { start_point, skipped, replayed: scan.commits_above_base, tail_cut };
 
         let writer =
             JournalWriter::open_active(dir, next_seq, chain_head, salt_source)?.with_seam(seam);
@@ -802,6 +865,8 @@ impl<W: WorldState> Kernel<W> {
             checkpoint_mutex: Mutex::new(()),
             poisoned: AtomicBool::new(false),
             checkpoint_due: AtomicBool::new(false),
+            inline_checkpoints: AtomicU64::new(0),
+            last_inline_failure: ArcSwapOption::empty(),
             cfg,
             seam,
             journaled,
@@ -914,17 +979,22 @@ impl<W: WorldState> Kernel<W> {
     /// [`Kernel::checkpoint`] runs to completion on this thread —
     /// serializing `W`, writing and fsyncing a file, applying retention,
     /// reclaiming segments — after the commit is durable and installed. Its
-    /// failure is DISCARDED: the transaction is already acknowledged, so
-    /// there is no sound path for that error through [`TxnError`], and v1
-    /// has no logging seam. Under [`CheckpointPolicy::Deferred`] the
+    /// failure is NOT THE TRANSACTION's: the transaction is already
+    /// acknowledged, so there is no sound path for that error through
+    /// [`TxnError`], and the kernel has no logging seam — but every such run
+    /// is COUNTED and the last one's failure KEPT AS TEXT
+    /// ([`Kernel::inline_checkpoints`], [`Kernel::last_inline_checkpoint_failure`]),
+    /// the two facts a caller above reads and says. Under
+    /// [`CheckpointPolicy::Deferred`] the
     /// crossing SETS THE DUE FLAG instead ([`Kernel::checkpoint_due`]) and
     /// this thread runs nothing — the caller's own thread runs
     /// [`Kernel::checkpoint`] and reads the result — unless the flag is
     /// ALREADY set, the last crossing unserviced, when the checkpoint runs
-    /// inline here after all, the backstop that keeps the window bounded. A
-    /// caller who needs to know whether checkpointing is succeeding must call
-    /// [`Kernel::checkpoint`] itself and read the result; a kernel that has
-    /// stopped checkpointing inline goes on committing and says nothing.
+    /// inline here after all, the backstop that keeps the window bounded,
+    /// counted as every inline run is. A caller who needs to know whether
+    /// checkpointing is succeeding calls [`Kernel::checkpoint`] itself and
+    /// reads the result, or reads the count and the text; a kernel that has
+    /// stopped checkpointing inline goes on committing.
     ///
     /// A panic out of `f` propagates with nothing of the transaction
     /// surviving, and needs no guard to do so: no `Seq` was drawn and nothing
@@ -1136,19 +1206,31 @@ impl<W: WorldState> Kernel<W> {
                     let run_inline =
                         !deferred || self.checkpoint_due.swap(true, Ordering::AcqRel);
                     if run_inline {
-                        // §3/§6: the auto-triggered checkpoint's error is
-                        // logged-and-dropped, never failing the
-                        // already-committed txn. v1 has no logging seam (the
-                        // design's dependency list), so "dropped" is the whole
-                        // of it; safe by §6's crash argument (at most a .tmp
-                        // the write or the next open removes, and an
-                        // unreclaimed journal).
-                        let _ = self.checkpoint();
+                        // §3/§6: the auto-triggered checkpoint's error never
+                        // fails the already-committed txn, and the kernel has
+                        // no logging seam (the design's dependency list) — so
+                        // the run is COUNTED and its failure kept as text,
+                        // for the caller above to read and say; safe by §6's
+                        // crash argument (at most a .tmp the write or the
+                        // next open removes, and an unreclaimed journal).
+                        let outcome = self.checkpoint();
+                        self.note_inline_run(outcome);
                     }
                 }
                 Ok((value, Seq(last))) // commit-before-acknowledge (A7, MIC-3)
             }
         }
+    }
+
+    /// Record one checkpoint [`Kernel::transact`] ran inline on a committing
+    /// thread: the run's failure as text — `None` where it landed — stored
+    /// FIRST, then the count moved, so a reader that sees the count move
+    /// reads a text at least as new as that run's. The error value itself
+    /// goes no further: it is not `Clone`, and the caller above wants the
+    /// sentence.
+    fn note_inline_run(&self, outcome: Result<Seq, CheckpointError>) {
+        self.last_inline_failure.store(outcome.err().map(|e| Arc::new(e.to_string())));
+        self.inline_checkpoints.fetch_add(1, Ordering::AcqRel);
     }
 
     /// One committed state, pinned (MIC clauses 4 & 6; A3/V0/V2). One
@@ -1160,12 +1242,62 @@ impl<W: WorldState> Kernel<W> {
         Snapshot(self.root.load_full())
     }
 
-    /// What this kernel's [`Kernel::open`] found in its journal directory —
-    /// the start point it resolved from and the retained checkpoints it passed
-    /// over ([`Recovery`]; §7; AUTH-2.85) — or `None` under
+    /// How many checkpoints [`Kernel::transact`] has run INLINE on a
+    /// committing thread this uptime (§6): under an inline arm of the
+    /// policy, every crossing's; under [`CheckpointPolicy::Deferred`], the
+    /// backstop's alone — a crossing that found the due flag still set, the
+    /// last crossing unserviced, and ran the checkpoint on the writer's
+    /// thread, its result read by nobody. A caller's own
+    /// [`Kernel::checkpoint`] moves it not, nor does a run that unwinds; a
+    /// run counts whether it landed or failed, and under
+    /// [`Durability::InMemory`], where the run is the no-op, it counts as
+    /// landed. Lock-free, like [`Kernel::checkpoint_due`]: the caller above
+    /// reads it once per commit beside that flag, and where it moved reads
+    /// [`Kernel::last_inline_checkpoint_failure`] and says so — the kernel
+    /// still has no logging seam; it answers a fact. The count and the text
+    /// are two loads, between which a run may land.
+    pub fn inline_checkpoints(&self) -> u64 {
+        self.inline_checkpoints.load(Ordering::Acquire)
+    }
+
+    /// How the LAST checkpoint [`Kernel::transact`] ran inline FAILED, as
+    /// text — the error rendered, never the error value, which does not
+    /// clone — or `None` where that run landed, or no run has happened.
+    /// Written at each inline run, so a landing after a failure clears it:
+    /// the answer is the last run's and not the last failure's, which is what
+    /// a line saying "the last landed" or "the last failed" needs. Read
+    /// lock-free, with the count's caveat ([`Kernel::inline_checkpoints`]).
+    pub fn last_inline_checkpoint_failure(&self) -> Option<String> {
+        self.last_inline_failure.load_full().map(|text| String::clone(&text))
+    }
+
+    /// The journal bytes the LAST landed [`Kernel::checkpoint`] RECLAIMED:
+    /// the lengths of the closed segments its reclamation removed below the
+    /// oldest kept base, each read before its removal and summed. `Some(0)`
+    /// where the landing removed no segment — a landing that reclaims
+    /// nothing says so — and `None` before any landing of this uptime, and
+    /// under [`Durability::InMemory`], which has no journal to reclaim. A
+    /// failed call stores nothing: the figure is a landing's, and a call
+    /// that failed before or after its base landed is not one, whatever its
+    /// reclamation removed before failing. Lock-free, in
+    /// [`Kernel::stray_checkpoint_removed`]'s shape, read after `Ok`; the
+    /// landing's `Ok` type carries the seq alone, as it did.
+    pub fn last_reclaimed_bytes(&self) -> Option<u64> {
+        let journaled = self.journaled.as_ref()?;
+        match journaled.last_reclaimed.load(Ordering::Acquire) {
+            NO_LANDING => None,
+            bytes => Some(bytes),
+        }
+    }
+
+    /// What this kernel's [`Kernel::open`] found in its journal directory and
+    /// did there — the start point it resolved from, the retained
+    /// checkpoints it passed over, the commits it replayed and the tail it
+    /// cut ([`Recovery`]; §7; AUTH-2.85) — or `None` under
     /// [`Durability::InMemory`], which loaded nothing. Fixed at `open`: a
     /// checkpoint taken since neither adds to it nor retires an entry, since
-    /// the report is of the open and not of the directory as it now stands.
+    /// the report is of the open and not of the directory as it now stands —
+    /// retention removing a skipped base retires nothing here either.
     /// Lock-free, like every other read.
     pub fn recovery(&self) -> Option<&Recovery> {
         self.journaled.as_ref().map(|journaled| &journaled.recovery)
@@ -1310,6 +1442,24 @@ impl<W: WorldState> Kernel<W> {
     /// the error is answered, best-effort, the removal's own failure folded
     /// into the account ([`CheckpointError::Io`]).
     ///
+    /// RETENTION KEEPS THE BASES THAT LOAD: the `retain_checkpoints` kept are
+    /// counted among the bases that loaded — the names this kernel's open
+    /// passed over ([`Kernel::recovery`]'s `skipped`) are passed over by the
+    /// count and removed as excess, whatever their age — so the first
+    /// landing after an open that skipped a base keeps the base the open
+    /// loaded from beside the new one and removes the skipped one; the
+    /// reclamation floor is the oldest base KEPT. A base this call writes
+    /// over a skipped name is a base again and is counted. With nothing
+    /// skipped the rule is the one it was: the newest `retain_checkpoints`
+    /// stand.
+    ///
+    /// A FAILURE AFTER THE BASE LANDED — the rename ran, then the directory's
+    /// fsync, retention or the journal's reclamation failed — is
+    /// [`CheckpointError::Landed`], naming the step ([`LandedStep`]) and
+    /// carrying the cause; a failure before it is [`CheckpointError::Io`]
+    /// and leaves no base. The journal bytes a landing reclaimed are read
+    /// after `Ok` through [`Kernel::last_reclaimed_bytes`].
+    ///
     /// [`current_seq`]: Kernel::current_seq
     pub fn checkpoint(&self) -> Result<Seq, CheckpointError> {
         self.checkpoint_due.store(false, Ordering::Release);
@@ -1328,30 +1478,68 @@ impl<W: WorldState> Kernel<W> {
             |fail| match fail {
                 checkpoint::WriteFail::Serialize(e) => CheckpointError::Serialize(e),
                 checkpoint::WriteFail::Io(e) => CheckpointError::Io(e),
+                checkpoint::WriteFail::Landed(cause) => {
+                    CheckpointError::Landed { step: LandedStep::DirectorySync, cause }
+                }
             },
         )?;
-        // Retention policy — how many bases to keep — applied to the
-        // checkpoint set, which answers with the oldest survivor. This kernel
+        // The name `checkpoint.<s>` now holds the base this call wrote: a
+        // file of that name the open passed over is a base again, and
+        // retention counts it. What the open skipped and still stands is
+        // what retention passes over.
+        let skipped: Vec<u64> = {
+            let mut standing = journaled.skipped_bases.lock();
+            standing.retain(|&seq| seq != s.0);
+            standing.clone()
+        };
+        // Retention policy — how many bases to keep — applied to the bases
+        // that load, which answers with the oldest survivor. This kernel
         // leaves one: `retain_checkpoints ≥ 1` is validated at `open`, and this
         // call has just added to the set the retention is applied to. Another
         // process can still take it between the rename and the listing — the
         // flock excludes other kernels and nothing else (the `journal_path`
         // contract) — and an auto-triggered call runs after its commit is
-        // acknowledged, so that is answered as the I/O failure it is, which
-        // `transact` discards, never as a panic in place of the commit's `Ok`.
-        let s_old = checkpoint::retain(&journaled.dir, journaled.retain_checkpoints)?
+        // acknowledged, so that is answered as the I/O failure it is, over a
+        // base that landed, never as a panic in place of the commit's `Ok`.
+        let landed = |step: LandedStep| move |cause| CheckpointError::Landed { step, cause };
+        let s_old = checkpoint::retain(&journaled.dir, journaled.retain_checkpoints, &skipped)
+            .map_err(landed(LandedStep::Retention))?
             .ok_or_else(|| {
-                io::Error::new(
+                landed(LandedStep::Retention)(io::Error::new(
                     io::ErrorKind::NotFound,
                     "the checkpoint this call wrote was gone before retention listed it: \
                      something other than this kernel removed it from the journal directory",
-                )
+                ))
             })?;
-        // Reclaim the journal below the OLDEST retained checkpoint — that
-        // floor, not the newest, is what keeps the BadCheckpoint fallback
-        // real (§6).
-        journal::reclaim_below(&journaled.dir, s_old)?;
+        // Every file retention passed over is gone, so nothing stands to
+        // pass over at the next landing.
+        journaled.skipped_bases.lock().clear();
+        // Reclaim the journal below the OLDEST kept checkpoint — that floor,
+        // not the newest, is what keeps the BadCheckpoint fallback real (§6)
+        // — and keep what it reclaimed for the landing's reader.
+        let reclaimed = journal::reclaim_below(&journaled.dir, s_old)
+            .map_err(landed(LandedStep::Reclamation))?;
+        journaled.last_reclaimed.store(reclaimed.min(NO_LANDING - 1), Ordering::Release);
         Ok(s)
+    }
+
+    /// What the checkpoint at `seq` claims by its `SKC4` header —
+    /// [`Kernel::newest_checkpoint`]'s read, for ONE base named by its
+    /// coordinate rather than for the newest: the START POINT's, which
+    /// loaded ([`Kernel::recovery`]'s `start_point`), is what a caller sizes
+    /// a floor or a byte bound by after an open that skipped a newer base,
+    /// since the newest file's header is then the skipped base's claim. The
+    /// file is named directly from `seq` — one short read, no listing — and
+    /// held to the checks a header passes without its body. FAIL-QUIET as
+    /// the newest read is: `None` where no file of that name stands — a seq
+    /// no checkpoint was taken at, or one retention has since removed —
+    /// where its header refuses, and under [`Durability::InMemory`]. The body
+    /// is NOT verified, so a base whose body is damaged still answers its
+    /// header, as the newest read answers it; `Seq(0)` names no file, genesis
+    /// being no checkpoint. Lock-free: it consults the directory.
+    pub fn checkpoint_header(&self, seq: Seq) -> Option<CheckpointHeader> {
+        let journaled = self.journaled.as_ref()?;
+        checkpoint::header_at(&journaled.dir, seq.0)
     }
 
     /// What the NEWEST RETAINED checkpoint's `SKC4` header claims — its
@@ -1414,8 +1602,9 @@ impl<W: WorldState> Kernel<W> {
     /// failure leaves and how it is answered is the step's own card
     /// ([`Step`]): the journal's three reach the caller through
     /// [`TxnError::Durability`] — [`TxnError::Poisoned`] for the repair's —
-    /// with the kind unchanged, the checkpoint's three through
-    /// [`CheckpointError::Io`]. On an in-memory kernel the arm stands
+    /// with the kind unchanged, the checkpoint's two before the rename
+    /// through [`CheckpointError::Io`] and the directory's fsync after it
+    /// through [`CheckpointError::Landed`]. On an in-memory kernel the arm stands
     /// unfired: that kernel appends nothing and its [`Kernel::checkpoint`]
     /// is the no-op, so it reaches no step.
     #[doc(hidden)]

@@ -394,36 +394,83 @@ pub(crate) fn list(dir: &Path) -> io::Result<Vec<CheckpointMeta>> {
     Ok(checkpoints)
 }
 
-/// Keep the newest `keep` checkpoints, delete the rest, and fsync the
-/// directory so the unlinks are durable. Answers the oldest retained seq —
-/// the journal-reclamation floor and the `BadCheckpoint` fallback base (§6) —
-/// or `None` when no checkpoint remains.
-pub(crate) fn retain(dir: &Path, keep: usize) -> io::Result<Option<u64>> {
-    let mut checkpoints = list(dir)?;
-    let excess = checkpoints.len().saturating_sub(keep);
-    for cp in checkpoints.drain(..excess) {
-        fs::remove_file(&cp.path)?;
-    }
-    fsync_dir(dir)?;
-    Ok(checkpoints.first().map(|cp| cp.seq))
+/// What the checkpoint at `seq` in `dir` claims, by its header alone
+/// ([`CheckpointMeta::header`]) — or `None` where no file of that name
+/// stands, or its header refuses. FAIL-QUIET, as [`newest_header`] is, for
+/// the same kind of reader: [`crate::Kernel::checkpoint_header`], which a
+/// caller sizes by and must never fail over. The file is named directly from
+/// the seq ([`checkpoint_path`]), with no listing: the name and the header
+/// are then the two sources the header parse cross-checks, as they are for a
+/// listed entry.
+pub(crate) fn header_at(dir: &Path, seq: u64) -> Option<CheckpointHeader> {
+    CheckpointMeta { seq, path: checkpoint_path(dir, seq) }.header().ok()
 }
 
-/// What a checkpoint write refused. The two are different answers for the
-/// caller — a serializer refuses the same way until `W` itself changes, an I/O
-/// failure is retryable — so the distinction travels rather than being
-/// flattened here.
+/// Keep the newest `keep` checkpoints THAT LOAD, delete the rest, and fsync
+/// the directory so the unlinks are durable. Answers the oldest kept seq —
+/// the journal-reclamation floor and the `BadCheckpoint` fallback base (§6) —
+/// or `None` when no checkpoint remains.
+///
+/// RETENTION COUNTS THE BASES THAT LOAD. `skipped` names the checkpoints the
+/// open passed over — the seqs the kernel's [`crate::Recovery`] lists as
+/// skipped, less any a later checkpoint has written over — and none of them
+/// is counted among the `keep`: every one is removed as excess, whatever its
+/// age, and the newest `keep` of the others are kept. So the first landing
+/// after an open that skipped `B` and loaded from `A` keeps `A` beside the
+/// new base and removes `B`, where counting by name alone would keep `B`,
+/// delete `A` — the one base that loaded — and reclaim the journal below the
+/// base that did not, leaving the board on one loadable base with genesis
+/// gone. No rename aside and no new file name: the diagnosis a kept damaged
+/// file would offer is already in the open's report, which carries why each
+/// skipped base refused. A base that loaded is counted as it always was, so
+/// with nothing skipped this is the rule it was.
+pub(crate) fn retain(dir: &Path, keep: usize, skipped: &[u64]) -> io::Result<Option<u64>> {
+    let checkpoints = list(dir)?;
+    let loadable = checkpoints.iter().filter(|cp| !skipped.contains(&cp.seq)).count();
+    let excess = loadable.saturating_sub(keep);
+    let mut passed_over = 0;
+    let mut floor = None;
+    // Ascending by seq, so the loadable bases met first are the oldest: the
+    // first `excess` of them go, every skipped one goes, and the rest stand.
+    for cp in &checkpoints {
+        let remove = if skipped.contains(&cp.seq) {
+            true
+        } else if passed_over < excess {
+            passed_over += 1;
+            true
+        } else {
+            false
+        };
+        if remove {
+            fs::remove_file(&cp.path)?;
+        } else {
+            floor.get_or_insert(cp.seq);
+        }
+    }
+    fsync_dir(dir)?;
+    Ok(floor)
+}
+
+/// What a checkpoint write refused. The three are different answers for the
+/// caller — a serializer refuses the same way until `W` itself changes, an
+/// I/O failure before the rename is retryable and left nothing, one after it
+/// left a base — so the distinction travels rather than being flattened here.
 #[derive(Debug)]
 pub(crate) enum WriteFail {
     /// `W`'s own serializer refused, and carries its own account of what it
     /// could not encode. Nothing was written, not even the temp file: the
     /// encode precedes the first file operation.
     Serialize(Cause),
-    /// A file operation failed. No `checkpoint.tmp` survives it: the rename
-    /// is what publishes a checkpoint, so a failure before it leaves no base
-    /// and the temp file is removed before this is answered — best-effort,
-    /// its own failure folded into the account — and one after it leaves a
-    /// whole one (§6).
+    /// A file operation BEFORE the rename failed. No `checkpoint.tmp`
+    /// survives it: the rename is what publishes a checkpoint, so a failure
+    /// before it leaves no base, and the temp file is removed before this is
+    /// answered — best-effort, its own failure folded into the account (§6).
     Io(io::Error),
+    /// The directory's fsync AFTER the rename failed: the base is on disk,
+    /// whole, under its own name — the rename published it — and what the
+    /// step would have settled is whether its directory entry is durable.
+    /// The caller's step after a landed base ([`crate::LandedStep`]'s first).
+    Landed(io::Error),
 }
 
 impl From<io::Error> for WriteFail {
@@ -484,11 +531,13 @@ impl From<io::Error> for WriteFail {
 /// seam's ([`Step`]) — the temp file's creation, its fsync, and the
 /// directory's fsync after the rename — each hooked through `seam` BEFORE
 /// it runs, after every step before it has completed: an armed failure
-/// answers in the step's place and travels out as [`WriteFail::Io`] of the
-/// kind armed, the removal above running for a failure inside the window
-/// as for any; an armed panic unwinds there, and runs no removal. `seam` is
-/// the kernel's, handed by [`crate::Kernel::checkpoint`]; in a build without
-/// the feature its hook is a no-op.
+/// answers in the step's place and travels out of the kind armed, as
+/// [`WriteFail::Io`] for the two before the rename, the removal above running
+/// for a failure inside the window as for any, and as [`WriteFail::Landed`]
+/// for the directory's fsync, the base on disk; an armed panic unwinds there,
+/// and runs no removal. `seam` is the kernel's, handed by
+/// [`crate::Kernel::checkpoint`]; in a build without the feature its hook is
+/// a no-op.
 pub(crate) fn write<W: Serialize>(
     dir: &Path,
     seq: u64,
@@ -540,10 +589,8 @@ pub(crate) fn write<W: Serialize>(
         }));
     }
     // Past the rename: the base is on disk whatever follows, which is what
-    // a failure from here answers over (`WriteFail::Io`'s card).
-    seam.before(Step::CheckpointDirSync)?;
-    fsync_dir(dir)?;
-    Ok(())
+    // a failure from here answers over (`WriteFail::Landed`'s card).
+    seam.before(Step::CheckpointDirSync).and_then(|()| fsync_dir(dir)).map_err(WriteFail::Landed)
 }
 
 #[cfg(test)]

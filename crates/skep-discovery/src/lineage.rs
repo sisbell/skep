@@ -7,7 +7,7 @@
 
 use skep_address::{validate, Address};
 use skep_kernel::Snapshot;
-use skep_links::{Endset, LinkState, Pattern, ShippedType, Tuple, View};
+use skep_links::{LinkState, Pattern, ShippedType, Tuple, View};
 
 use crate::home::{home_of, home_readable};
 use crate::types::SupClaim;
@@ -21,11 +21,11 @@ use crate::DiscoveryWorld;
 /// (from-side/to-side, F-side/G-side) — is the storage convention's, and
 /// this type is the one place the first is mapped to the second, in both
 /// directions the read asks: [`Endpoint::pattern`] puts a key in the slot
-/// that holds the endpoint, and [`Endpoint::slot`] reads the endpoint out of
-/// a stored tuple. So a probe, a claim's read-out and the equality
-/// [`claims_naming`] asks between them answer from one mapping, and a change
-/// of convention is an edit to this type alone. The convention itself is
-/// M7's, stated on its `assert_sup`.
+/// that holds the endpoint, and [`Endpoint::read_out`] reads the endpoint
+/// out of that slot of a stored claim, where EL4 defines it. So a probe, a
+/// claim's read-out and the equality [`claims_naming`] asks between them
+/// answer from one mapping, and a change of convention is an edit to this
+/// type alone. The convention itself is M7's, stated on its `assert_sup`.
 #[derive(Clone, Copy)]
 enum Endpoint {
     /// `in(y)` — the claims whose `old` is the key, asked of F.
@@ -53,18 +53,23 @@ impl Endpoint {
         }
     }
 
-    /// The slot of a stored `[K_sup]` tuple that holds this endpoint — its F
-    /// for [`Endpoint::Old`], its G for [`Endpoint::New`]: the mapping
+    /// EL4's accessor for this endpoint — `old` for [`Endpoint::Old`], `new`
+    /// for [`Endpoint::New`] — read out of a stored `[K_sup]` claim: the one
+    /// T4-valid address denoted by the slot that holds the endpoint, its F
+    /// for `old` and its G for `new`. That is the mapping
     /// [`Endpoint::pattern`] probes by, read the other way, so a claim's
-    /// endpoints come out of the slots its probe asked about. The destructure
-    /// is exhaustive, so a field M7 adds to [`Tuple`] fails to build here, at
-    /// the one place the mapping lives.
-    fn slot(self, t: &Tuple) -> &Endset {
+    /// endpoints come out of the slots its probe asked about. `None` where
+    /// that slot denotes several addresses, none, or a tumbler that is no
+    /// address: there the accessor is undefined (Df-DISC(ii)). The
+    /// destructure is exhaustive, so a field M7 adds to [`Tuple`] fails to
+    /// build here, at the one place the mapping lives.
+    fn read_out(self, t: &Tuple) -> Option<Address> {
         let Tuple { addr: _, from, to } = t;
-        match self {
+        let slot = match self {
             Endpoint::Old => from,
             Endpoint::New => to,
-        }
+        };
+        validate(slot.single_denoted()?.clone()).ok()
     }
 
     /// The address `c` names at this endpoint — its `old` for
@@ -79,7 +84,7 @@ impl Endpoint {
 }
 
 /// What one `[K_sup]` claim reads out as: its `old` and `new` — ASN-0125
-/// EL4's accessors, each read off the slot [`Endpoint::slot`] names — its home
+/// EL4's accessors, each read out by [`Endpoint::read_out`] — its home
 /// attribution (EL8b), and its own activity; or `None` for a claim on which
 /// `old` or `new` is undefined.
 ///
@@ -120,8 +125,8 @@ impl Endpoint {
 /// key of the supersession class's typed slice, and its slots are the claim's
 /// stored F and G — read once, by `observe`, and not again here.
 fn sup_claim(l: &LinkState, t: Tuple) -> Option<SupClaim> {
-    let old = endpoint(Endpoint::Old.slot(&t))?;
-    let new = endpoint(Endpoint::New.slot(&t))?;
+    let old = Endpoint::Old.read_out(&t)?;
+    let new = Endpoint::New.read_out(&t)?;
     let home = home_of(&t.addr)
         .expect("M7's fold admits no link key without a home, so every claim has one (EL8b)");
     let active = l.is_active(&t.addr);
@@ -132,14 +137,6 @@ fn sup_claim(l: &LinkState, t: Tuple) -> Option<SupClaim> {
         home,
         active,
     })
-}
-
-/// The one T4-valid address an endpoint slot denotes — EL4's `old` or `new`,
-/// read off the slot that holds it — or `None` where it denotes several, none,
-/// or a tumbler that is no address: where that accessor is undefined
-/// (Df-DISC(ii)).
-fn endpoint(e: &Endset) -> Option<Address> {
-    validate(e.single_denoted()?.clone()).ok()
 }
 
 /// The shared claim enumeration: the `[K_sup]` claims whose `endpoint` is

@@ -78,8 +78,8 @@ foundation and on the stores above it.
   compiles in `write`, the test-only twin of `stage_write`, and the
   `skep-kernel` and `skep-namespace` edges only `write` takes. Every debug
   build asserts that each address written is a content element address.
-  `scripts/gate-full.sh` checks the library without the feature and runs
-  its suite in release.
+  `scripts/gate-full.sh` builds the library and its docs without the
+  feature and runs its suite in release.
 - `skep-arrangement` — documents as arrangements of content, versions,
   provenance. Its modules and rules: §The arrangement.
 - `skep-links` — the link store: `LinkState`, the append-only map from a

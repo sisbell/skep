@@ -34,6 +34,19 @@ cargo check -p skep-arrangement --lib || exit $?
 # takes.
 cargo check -p skep-content --lib || exit $?
 
+# …and its docs as they ship, without `test-hooks`, private links denied
+# too. A shipped doc names `write` by code span, never by link: without the
+# feature no `write` exists for a link to reach. A public doc names the
+# private codec functions (`in_tumbler_order`, `entry_by_entry`,
+# `through_address`) by code span too: a link to one resolves here, where
+# private items are documented, and breaks in the docs a dependent's
+# `cargo doc` renders without them. The crate is in no `--all-features` doc
+# build below: the feature adds the `ops` module, whose doc links nothing,
+# and `write`, which is `#[doc(hidden)]`, and rustdoc checks no link in a
+# hidden item's doc.
+RUSTDOCFLAGS="-D rustdoc::broken_intra_doc_links -D rustdoc::private_intra_doc_links" \
+    cargo doc -p skep-content --lib --no-deps --document-private-items || exit $?
+
 # …and its suite in release. Every other run here is a debug build, and two
 # of M4's behaviors exist only in release: the fold keeping a stored value
 # where a debug build panics, and `write` reaching its `.expect` with the

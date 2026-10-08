@@ -363,13 +363,13 @@ fn find_docs_containing_refuses_a_request_whose_coverage_outnumbers_the_budget_t
 #[test]
 fn find_docs_containing_refuses_a_request_whose_spans_outnumber_the_budget_though_they_resolve_to_nothing(
 ) {
-    // The budget's other count. Every span handed to M5 is one resolution walk
-    // of up to #runs(doc) steps whether or not it yields coverage — a span
-    // opening past the arranged extent walks the whole list and yields none —
-    // so a coverage count alone would admit any number of empty-resolving
-    // spans and their walks with them, from a nested region×span request the
-    // body cap alone sizes. The SPAN count refuses it, before phase 1 resolves
-    // past the budget.
+    // The budget's other count. Every span handed to M5 is one resolution
+    // whether or not it yields coverage — a span opening past the arranged
+    // extent yields none — so a coverage count alone would admit any number
+    // of empty-resolving spans, from a nested region×span request the body
+    // cap alone sizes. Over doc1's one run the walk budget prices each such
+    // span at a single step and admits them all, so the SPAN count is what
+    // refuses it, before phase 1 resolves past the budget.
     let k = mem_kernel();
     insert3(&k); // doc1 holds three positions
     let s = k.snapshot();
@@ -390,7 +390,8 @@ fn find_docs_containing_refuses_a_request_whose_spans_outnumber_the_budget_thoug
         FindError::TooMuchCoverage
     );
     // At the budget the same shape still answers — emptily, every span
-    // imaging to nothing — so the walks are done, and bounded at the budget.
+    // imaging to nothing — so the resolutions are made, their number
+    // bounded at the budget.
     let at = vec![region_spec(
         doc1(),
         vec![past_end(); MAX_FIND_COVERAGE_SPANS],

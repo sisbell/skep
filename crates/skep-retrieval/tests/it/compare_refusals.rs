@@ -207,13 +207,13 @@ fn compare_refuses_an_operand_whose_blocks_outnumber_the_budget_though_its_spans
 
 #[test]
 fn compare_refuses_an_operand_whose_spans_outnumber_the_budget_though_they_resolve_to_nothing() {
-    // The budget's other count. Every span handed to M5 is one walk of up to
-    // #runs(doc) steps whether or not it yields a block — a span opening past
-    // the arranged extent walks the whole list and yields none — so a block
-    // count alone would admit any number of empty-resolving spans and their
-    // walks with them, from a nested region×span request the body cap alone
-    // sizes. The SPAN count refuses it, before either operand resolves past
-    // the budget, naming the operand.
+    // The budget's other count. Every span handed to M5 is one resolution
+    // whether or not it yields a block — a span opening past the arranged
+    // extent yields none — so a block count alone would admit any number of
+    // empty-resolving spans, from a nested region×span request the body cap
+    // alone sizes. Over doc1's one run the walk budget prices each such span
+    // at a single step and admits them all, so the SPAN count is what refuses
+    // it, before either operand resolves past the budget, naming the operand.
     let k = mem_kernel();
     insert3(&k); // doc1 holds three positions
     let s = k.snapshot();
@@ -243,7 +243,8 @@ fn compare_refuses_an_operand_whose_spans_outnumber_the_budget_though_they_resol
         }
     );
     // At the budget the same shape still answers — emptily, every span
-    // resolving to nothing — so the walks are done, and bounded at the budget.
+    // resolving to nothing — so the resolutions are made, their number
+    // bounded at the budget.
     let at = vec![region_spec(
         doc1(),
         vec![past_end(); MAX_COMPARE_OPERAND_BLOCKS],
@@ -262,7 +263,7 @@ fn compare_refuses_an_operand_whose_spans_outnumber_the_budget_though_they_resol
     );
     // A span M5's READER declines — well-formed, content-started, depth 3 —
     // is never handed to `resolve` and is counted all the same: the count is
-    // of spans handed to M5, an upper bound on its walks, so M5's fold
+    // of spans handed to M5, an upper bound on its resolutions, so M5's fold
     // conditions are restated nowhere here.
     assert!(
         !is_ordinal_vspan(&deep_span(1)),

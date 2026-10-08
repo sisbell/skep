@@ -80,14 +80,15 @@ impl<W: RetrievalWorld> Query<'_, W> {
     /// request's: a region names a span list and a spec-set names a region
     /// list, so their product is the caller's to choose and squares in it. So
     /// each operand is held to the operand budget,
-    /// [`MAX_COMPARE_OPERAND_BLOCKS`] — on the spans it hands to M5, each a
-    /// walk of up to `#runs(doc)` steps whatever it yields, and on the blocks
-    /// it resolves to (`TooManyBlocks`, refused AS THE OPERAND RESOLVES and
-    /// before the join runs, ρ₁ resolved first) — and its spans' walks to the
-    /// walk budget of `2^24` run-list steps (`TooManyBlocks` too, priced over
-    /// the operand before its first span is walked, a depth-incompatible span
-    /// charged its whole run list; crate doc, *What M6 refuses for size*); and
-    /// the report to the pair budget, [`MAX_COMPARE_PAIRS`] correspondences
+    /// [`MAX_COMPARE_OPERAND_BLOCKS`] — on the spans it hands to M5, one
+    /// resolution apiece whatever it yields, and on the blocks it resolves to
+    /// (`TooManyBlocks`, refused AS THE OPERAND RESOLVES and before the join
+    /// runs, ρ₁ resolved first) — and the walks those resolutions make, each
+    /// up to `#runs(doc)` steps whatever it yields, to the walk budget of
+    /// `2^24` run-list steps (`TooManyBlocks` too, priced over the operand
+    /// before its first span is walked, a depth-incompatible span charged its
+    /// whole run list; crate doc, *What M6 refuses for size*); and the report
+    /// to the pair budget, [`MAX_COMPARE_PAIRS`] correspondences
     /// (`TooManyPairs`, refused AS THE PAIRS ARE PRODUCED, so an over-budget
     /// fan-out stops accumulating rather than being built and then measured).
     ///

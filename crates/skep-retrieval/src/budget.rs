@@ -9,15 +9,19 @@
 //! count against them and the rejections render them, so the numbers, their
 //! argument and the count that enforces them live here, apart from all four.
 //! [`MAX_COMPARE_OPERAND_BLOCKS`]'s card is the one statement of why the
-//! operand budget is counted twice, and of why the coverage budget, which
-//! takes its number by definition, is too; [`MAX_WALK_STEPS`]'s is the one
-//! statement of what a span's walk costs and how it is priced; [`Count`]'s
-//! card is the one statement of where a count's boundary falls.
+//! operand budget is counted twice, of why the coverage budget, which takes
+//! its number by definition, is too, and of which budgets move with that
+//! number; [`MAX_WALK_STEPS`]'s is the one statement of what a span's walk
+//! costs and why a request's walks are budgeted, and `vspan.rs`'s
+//! [`walk_ceiling`]'s of how one span's walk is priced; [`Count`]'s card is
+//! the one statement of where a count's boundary falls.
+//!
+//! [`walk_ceiling`]: crate::vspan::walk_ceiling
 
 /// The most blocks one COMPARE operand may resolve to, and the most spans it
 /// may hand to M5 — ONE budget on an operand's resolution, counted twice, on
 /// the spans handed and on the blocks built — and so the ceiling on the join's
-/// two factors and on the resolution walks behind them.
+/// two factors and on how many resolutions an operand asks of M5.
 ///
 /// The budget: the join is `|P|·|Q|` candidate tests, so an operand budget
 /// SQUARES — `2^12` bounds one query at `2^24` ≈ 1.7×10⁷ tests, each two
@@ -26,22 +30,37 @@
 /// that is a FLAT list of 4096 single-run spans — the largest flat span list
 /// the transport admits — is admitted here unchanged.
 ///
+/// ONE NUMBER, THREE BUDGETS. FINDDOCSCONTAINING's coverage budget,
+/// [`MAX_FIND_COVERAGE_SPANS`], is this number by definition, and the walk
+/// budget that RETRIEVEV, COMPARE and FINDDOCSCONTAINING price their spans
+/// against is its square (crate doc, *What M6 refuses for size*) — RETRIEVEV,
+/// which has no other tie to COMPARE, included. So an edit of this line is an
+/// edit of those two as well, the walk's by the square, and is argued for
+/// them too: the walk budget's own argument — order a second of one worker —
+/// is made at `2^24`, which is this number's square at `2^12`, and a unit
+/// test in this file holds the walk budget at that value, where the walk
+/// tests, which size their boundaries from this constant, would follow an
+/// edit unremarked.
+///
 /// What it refuses is the two shapes no wire cap prices, and the two counts
 /// are what refuse them. The NESTED region×span product, whose region-set
 /// cost model the transport leaves to M6, is refused by the SPAN count: every
-/// span costs one resolution walk, up to `#runs(doc)` steps whether or not it
-/// yields a block — a span opening past the arranged extent is walked to the
-/// end and yields none — so a block count alone would admit any number of
-/// empty-resolving spans and the walks with them, from a request the body cap
-/// alone sizes. The multi-run expansion, where one span over a fragmented
-/// document resolves to many blocks from a single span on the wire, is refused
-/// by the BLOCK count, which a span count cannot see.
+/// span handed to M5 is one resolution whether or not it yields a block — a
+/// span opening past the arranged extent yields none — so a block count alone
+/// would admit any number of empty-resolving spans, from a request the body
+/// cap alone sizes. How far each resolution WALKS is the walk budget's, not
+/// this count's: within the count, the walks of its spans fit the walk budget
+/// over any surface of no more runs than this number, the walk budget being
+/// its square, and over a more fragmented surface the walk budget decides,
+/// ahead of the first walk. The multi-run expansion, where one span over a
+/// fragmented document resolves to many blocks from a single span on the
+/// wire, is refused by the BLOCK count, which a span count cannot see.
 ///
-/// COUNTED ON THE SPANS HANDED TO M5, not on the walks M5 performs: a span
-/// M5's reader declines at once (wrong depth, foreign subspace) is counted
-/// all the same, so the count is an upper bound on the walks — refusing
-/// more, never less — and M5's fold conditions stay M5's, restated nowhere
-/// in this crate.
+/// COUNTED ON THE SPANS HANDED TO M5, not on the resolutions M5 performs: a
+/// span M5 folds to nothing at once (wrong depth, foreign subspace) is
+/// counted all the same, so the count is an upper bound on the resolutions —
+/// refusing more, never less — and M5's fold conditions stay M5's, restated
+/// nowhere in this crate.
 ///
 /// WHAT THE COUNTS STOP, AND WHAT THEY DO NOT. Both are consulted as M5's lazy
 /// `iter_resolve` produces each run — the block count at COMPARE, the coverage
@@ -228,9 +247,13 @@ mod tests {
 
     #[test]
     fn a_count_refuses_a_batch_that_would_exceed_its_budget_whole() {
-        // The form `interval_join`'s successor needs: a guard comparing the
-        // accumulator to the budget before a batch lands admits the batch
-        // that crosses it; a count refuses it before it lands.
+        // Two counts admit batches today — a delivered run's positions, as one
+        // batch, and each span's priced walk — and `interval_join`'s successor
+        // would too: a guard comparing the accumulator to the budget before a
+        // batch lands admits the batch that crosses it; a count refuses it
+        // before it lands. No integration test ends a count on a batch that
+        // crosses its budget from below, so this is the test that tells the
+        // two guards apart.
         let mut count = Count::against(4);
         assert!(count.admit(3).is_ok());
         assert!(count.admit(2).is_err(), "3 + 2 would exceed 4");
@@ -239,5 +262,18 @@ mod tests {
             "the refused batch admitted none of itself"
         );
         assert!(count.admit(1).is_err());
+    }
+
+    #[test]
+    fn the_walk_budget_is_the_number_its_card_argues_for() {
+        // `MAX_WALK_STEPS`' card argues `2^24` run-list steps — order a second
+        // of one worker — and the three operations' cards, their rejections'
+        // cards and the crate doc state that number. It is
+        // `MAX_COMPARE_OPERAND_BLOCKS` squared, so an edit of the operand
+        // number moves the walk budget of all three operations by the square,
+        // RETRIEVEV's among them; every walk test sizes its boundary from that
+        // constant and stays green if it moves, and this is the one assertion
+        // such an edit is discovered at.
+        assert_eq!(MAX_WALK_STEPS, 1 << 24);
     }
 }

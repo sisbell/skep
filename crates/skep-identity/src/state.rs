@@ -798,4 +798,31 @@ mod tests {
             "an account's row opens it"
         );
     }
+
+    /// AUTH-2.71 / AUTH-4.30 (i) — the comparand is "the set of the nearest
+    /// account above the parent whose set is NOT EMPTY". An account row
+    /// holding the EMPTY set — one no fold posts, the standing invariant
+    /// keeping every row keyed, so a row only a slice deserialized from
+    /// elsewhere can carry, its re-check the host's (AUTH-1.33) — opens
+    /// nothing: `key_set` answers that account the empty set either way, and
+    /// the walk climbs past it to the keyed account above. A walk that took
+    /// the first PRESENT row would answer the empty set there, and the latch
+    /// comparing against it would honor a genesis naming the very key that
+    /// opens the account above — where skepd's walk, reading each set through
+    /// `key_set`, climbs past the row as this one does.
+    #[test]
+    fn the_opening_set_walk_passes_over_an_empty_row() {
+        let key = PublicKey::from_halves(ALG_MLDSA65_ED25519, &[0; MLDSA65_KEY_LEN], &[0; 32])
+            .expect("the tag-1 row's widths");
+        let mut keyed = KeySet::default();
+        keyed.insert_enrolled(Enrolled { key, anchor: true });
+        let mut st = IdentityState::genesis();
+        st.sets.insert(addr(&[1, 1, 0, 5]), keyed.clone());
+        st.sets.insert(addr(&[1, 1, 0, 5, 2]), KeySet::default());
+        assert_eq!(
+            st.opening_set_above(&addr(&[1, 1, 0, 5, 2, 5])),
+            Some(&keyed),
+            "an empty row opens nothing: the walk climbs past it"
+        );
+    }
 }

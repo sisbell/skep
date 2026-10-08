@@ -84,20 +84,41 @@ fn no_two_distinct_slot_triples_spell_one_make_link_body() {
     assert_eq!(spelled.len(), 3 * family.len().pow(3), "every input spelled a body of its own");
 }
 
+/// A walk of a slot's spans that CLAIMS NOTHING of its length — its
+/// `size_hint` the default, `(0, None)`, what `std::iter::from_fn` claims,
+/// and no `ExactSizeIterator` — so only the spans it yields say how many
+/// there are.
+struct ClaimsNoLength<'a>(std::slice::Iter<'a, Span>);
+
+impl<'a> Iterator for ClaimsNoLength<'a> {
+    type Item = &'a Span;
+
+    fn next(&mut self) -> Option<&'a Span> {
+        self.0.next()
+    }
+}
+
 /// A link-write body reads each slot as a WALK of its spans as stored, so
 /// the store's own slot frames in place: M7 keeps an endset in an
 /// `im::Vector`, with no slice to borrow, and a composer holding the stored
 /// link hands its `&Endset`s over as they lie. The law, over every slot
 /// triple of the family above and under each link-write builder: the body
-/// over borrowed persistent vectors of the spans IS the body over slices of
-/// them — the container the spans are kept in moves no byte.
+/// over borrowed persistent vectors of the spans, and the body over walks
+/// that claim nothing of their length ([`ClaimsNoLength`]), IS the body over
+/// slices of them — neither the container the spans are kept in nor the
+/// length a walk claims moves a byte, the slot row's count being the spans
+/// walked (`push_slot`'s card: "never a length the walk claims").
 ///
 /// Why a law and not a pin: the row pins, the goldens and every signer in the
 /// workspace frame slices, and the daemon's composer — the verifier at the
 /// commit — frames M7's endsets in place, so the two meet only here: the
 /// signer's preimage and the daemon's are one only if the container moves no
 /// byte. A slot type narrowed back to slices stops this law's build, and the
-/// composer's in-place framing with it.
+/// composer's in-place framing with it. And every walk the workspace frames
+/// knows its length exactly — a slice, an `im::Vector`, M7's `Spans` — so a
+/// slot row that wrote its count from the walk's `size_hint`, or builders
+/// narrowed to `ExactSizeIterator` walks, kept every other pin, the goldens
+/// and skepd's cells green; only a walk that claims nothing tells them apart.
 #[test]
 fn a_link_write_body_is_the_same_over_any_walk_of_its_slots() {
     let span = |start: &[u32], width: &[u32]| Span::new(tum(start), tum(width)).expect("T12-valid");
@@ -116,31 +137,59 @@ fn a_link_write_body_is_the_same_over_any_walk_of_its_slots() {
             for &(to, to_vector) in &family {
                 let over_slices = LinkSlots { from, to, ty };
                 let over_vectors = LinkSlots { from: from_vector, to: to_vector, ty: ty_vector };
-                for (by_vector, by_slice, builder) in [
+                // A fresh walk per body: a `ClaimsNoLength` is spent by the
+                // body it is framed into.
+                let claiming_nothing = || LinkSlots {
+                    from: ClaimsNoLength(from.0.iter()),
+                    to: ClaimsNoLength(to.0.iter()),
+                    ty: ClaimsNoLength(ty.0.iter()),
+                };
+                for (by_vector, by_claiming_nothing, by_slice, builder) in [
                     (
                         entry_body_make_link(over_vectors),
+                        entry_body_make_link(claiming_nothing()),
                         entry_body_make_link(over_slices),
                         "make_link",
                     ),
                     (
                         entry_body_make_link_replacing(over_vectors, &replaces),
+                        entry_body_make_link_replacing(claiming_nothing(), &replaces),
                         entry_body_make_link_replacing(over_slices, &replaces),
                         "make_link replacing",
                     ),
-                    (entry_body_emit(over_vectors), entry_body_emit(over_slices), "emit"),
-                    (entry_body_nullify(over_vectors), entry_body_nullify(over_slices), "nullify"),
+                    (
+                        entry_body_emit(over_vectors),
+                        entry_body_emit(claiming_nothing()),
+                        entry_body_emit(over_slices),
+                        "emit",
+                    ),
+                    (
+                        entry_body_nullify(over_vectors),
+                        entry_body_nullify(claiming_nothing()),
+                        entry_body_nullify(over_slices),
+                        "nullify",
+                    ),
                     (
                         entry_body_assert_sup(over_vectors),
+                        entry_body_assert_sup(claiming_nothing()),
                         entry_body_assert_sup(over_slices),
                         "assert_sup",
                     ),
                     (
                         entry_body_edit_link(over_vectors, &original),
+                        entry_body_edit_link(claiming_nothing(), &original),
                         entry_body_edit_link(over_slices, &original),
                         "edit_link",
                     ),
                 ] {
-                    assert_eq!(by_vector, by_slice, "{builder} over {over_slices:?}");
+                    assert_eq!(
+                        by_vector, by_slice,
+                        "{builder} over {over_slices:?}: persistent vectors"
+                    );
+                    assert_eq!(
+                        by_claiming_nothing, by_slice,
+                        "{builder} over {over_slices:?}: walks that claim no length"
+                    );
                 }
             }
         }

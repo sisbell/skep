@@ -218,16 +218,19 @@ impl ContentStore {
     /// means.
     ///
     /// What a `None` MEANS depends on where `a` came from, which the caller
-    /// knows and M4 does not; M4 promises only that a stored value is in
-    /// every later slice (S0) — of a world's `content()` as well as of the
-    /// fold's own results, by [`HasContent`](crate::HasContent)'s implementor
-    /// obligation. An address an arrangement placed — read off a V→I resolve
-    /// against the same `Snapshot` (S3★, kept on M5's write path) — and a
-    /// registered predicate-def's start (M9's residence gate admitted it)
-    /// always yield `Some`, so a `None` for either is an internal invariant
-    /// violation to report or halt on, never a domain-level "not found". An
-    /// address a request or an endset names verbatim carries no such promise
-    /// — it may be unallocated, a ghost element, or a link — and the caller
+    /// knows and M4 does not. M4 promises only that a stored value is in
+    /// every later slice, unchanged (S0) — of a world's `content()` as well
+    /// as of the fold's own results, by [`HasContent`](crate::HasContent)'s
+    /// implementor obligation — so an address the caller has seen hold a
+    /// value, in this slice or in one it descends from, holds that value
+    /// here. An address an arrangement placed, read off a V→I resolve against
+    /// the same `Snapshot`, holds a value too (S3★, kept on M5's write path).
+    /// A `None` for either is an internal invariant violation to report or
+    /// halt on, never a domain-level "not found". Any other address carries
+    /// no promise from M4: one a request names verbatim, or one a link's
+    /// endset names — a predicate-def registration's start included, since an
+    /// endset can name an address before anything is stored there. Such an
+    /// address may be unallocated, a ghost element, or a link, and the caller
     /// holding it decides what that absence means to it: a refusal of its
     /// own, an absence it reports, or an address it passes over.
     pub fn value_at(&self, a: &Tumbler) -> Option<&Val> {

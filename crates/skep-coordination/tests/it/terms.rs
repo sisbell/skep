@@ -1,8 +1,9 @@
 //! Shared term builders: PL formers spelled as short functions so a test
-//! reads as the claim it states, plus the closed-term verdict helper and the
-//! two rule fixtures every engine test starts from. Each builder is a
-//! one-line constructor over the public AST; a suite module imports the lot
-//! and uses what it needs.
+//! reads as the claim it states, plus the closed-term verdict helper
+//! (`decide_now`) and the rule fixtures the suites start from — three
+//! triggers (`always_addr`, `always_tup`, `not_marked`) and the Marker action
+//! (`marker_action`). Each builder is a one-line constructor over the public
+//! AST; a suite module imports the lot and uses what it needs.
 
 use std::sync::Arc;
 

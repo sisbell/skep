@@ -5,10 +5,12 @@
 //!
 //! The first reads the trees' shape: every file under `src/`, and under the
 //! test target's `tests/it/`, is a module its parent declares — the compiler
-//! never reads a file no `mod` names, and no build says so — and every `src/`
-//! declaration but a `tests` module carries its map line, a `//` comment
-//! directly above it (an attribute between the two is allowed). A test-tree
-//! parent names its children in its `//!` doc instead.
+//! never reads a file no `mod` names, and no build says so — and every
+//! declaration is on its parent's map. In `src/` the map is a line per
+//! declaration, a `//` comment directly above it saying what the module holds
+//! (an attribute between the two is allowed; a `tests` module needs none). In
+//! `tests/it/` the map is the parent's `//!` doc, which names each child the
+//! parent declares.
 //!
 //! The second reads the order: every path a `src/` file's code spells from
 //! the root — every `crate::…` token, and every `super::…` token that climbs
@@ -68,6 +70,25 @@ fn every_file_is_declared_and_every_declaration_says_what_it_holds() {
                     i + 1
                 ));
             }
+        }
+    }
+    // A test-tree parent's map is its `//!` doc, which names each child it
+    // declares — asked from each child file to its parent (`declared_by`), so
+    // a `mod` line spelled inside a string literal is never read as a child.
+    let tests = crate_dir.join("tests/it");
+    let mut test_files = Vec::new();
+    rust_files(&tests, &mut test_files);
+    test_files.sort();
+    for file in &test_files {
+        let Some((parent, name)) = declared_by(&tests, "main", file) else { continue };
+        let text = std::fs::read_to_string(&parent).unwrap_or_default();
+        let named = format!("`{name}`");
+        if !text.lines().filter_map(|l| l.strip_prefix("//!")).any(|l| l.contains(&named)) {
+            let shown = parent.strip_prefix(crate_dir).unwrap().display();
+            faults.push(format!(
+                "{shown}: its `//!` doc does not name `{name}` — a test-tree parent's map names \
+                 each child it declares"
+            ));
         }
     }
     assert!(faults.is_empty(), "the module tree does not hold:\n{}", faults.join("\n"));

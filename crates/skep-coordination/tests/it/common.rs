@@ -5,7 +5,10 @@
 //! pins, and the two op-handle factories). Address fixtures follow
 //! M3's minted shapes; the catalog's population is the shipped five, so
 //! rule/marker fixtures lean on the three Unary idem⊤ classes and TO-bearing
-//! tuples enter cataloged classes through the open surface.
+//! tuples enter cataloged classes through the open surface. Last, the
+//! measuring thread: `on_the_default_stack`, the default 2 MiB stack every
+//! test that measures a walk's depth runs its body on, whatever
+//! `RUST_MIN_STACK` gives the harness.
 
 use std::sync::Arc;
 

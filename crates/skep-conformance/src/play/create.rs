@@ -12,7 +12,7 @@ use serde_json::Value;
 use skep_febe::Response;
 
 use super::{
-    ensure_document, inexpressible, joint_absence, plan_failed, refusal, run_plan, settle_accepted,
+    ensure_document, joint_absence, plan_failed, refusal, run_plan, settle_accepted,
     settle_rejected, settle_unaccepted, Cx,
 };
 use crate::evidence::Effect;
@@ -35,14 +35,14 @@ use crate::tum::VPoint;
 fn settle_creation(out: &mut OpOutcome, recorded: usize, synthesized: usize) {
     if synthesized > 0 {
         out.adaptations.push(format!("docid-synthesized:{synthesized}"));
-        out.status = Status::NotCompared;
+        out.not_compared();
         let created = recorded + synthesized;
         out.add_note(format!(
             "the recording kept no address for {synthesized} of the {created} documents \
              created; no recorded result to bind"
         ));
     } else if recorded == 0 {
-        out.status = Status::NotCompared;
+        out.not_compared();
         out.add_note("no recorded result to bind".into());
     } else {
         out.agree("address-binding");
@@ -81,7 +81,7 @@ pub(super) fn h_create_documents(cx: &mut Cx, index: usize, op: &Value, out: &mu
     let created = match documents_created(op) {
         Ok(created) => created,
         Err(past_budget) => {
-            inexpressible(out, past_budget);
+            out.inexpressible(past_budget);
             return;
         }
     };
@@ -106,14 +106,14 @@ pub(super) fn h_create_documents(cx: &mut Cx, index: usize, op: &Value, out: &mu
             refused.get_or_insert(r);
         }
         for name in names {
-            cx.name_document(&id, name);
+            cx.name_document(&id, name, effect);
         }
         // The recorded text goes in whatever skep answers; a refusal is the
         // op's disagreement unless an earlier one already is. A document
         // with no α-image was refused at creation, a refusal settled below.
         if let Some(t) = &doc.text {
             if let Ok(r) = cx.insert(&id, VPoint::content(1), t.as_bytes(), effect) {
-                let first = out.status != Status::Disagreed;
+                let first = out.status() != Status::Disagreed;
                 if first && !matches!(r, Response::AckAddr { .. }) {
                     let expected = format!("text insert into {id} succeeds");
                     out.disagree("rejection", Disagreement { expected, actual: refusal(&r) });
@@ -127,20 +127,20 @@ pub(super) fn h_create_documents(cx: &mut Cx, index: usize, op: &Value, out: &mu
     // earlier failure stays the op's.
     if created.counted && cx.plans.contains_key(&index) {
         if let Some(failure) = run_plan(cx, index, out) {
-            if out.status != Status::Disagreed {
+            if out.status() != Status::Disagreed {
                 plan_failed(out, failure);
             }
         }
     }
     if let Some(r) = refused {
-        if out.status == Status::Disagreed {
+        if out.status() == Status::Disagreed {
             out.add_note(format!("document creation: {}", refusal(&r)));
         } else {
             settle_unaccepted(out, recorded_failure, &r);
         }
         return;
     }
-    if out.status == Status::Disagreed {
+    if out.status() == Status::Disagreed {
         return;
     }
     if settle_accepted(out, recorded_failure) {
@@ -150,7 +150,7 @@ pub(super) fn h_create_documents(cx: &mut Cx, index: usize, op: &Value, out: &mu
 
 pub(super) fn h_create_chain(cx: &mut Cx, index: usize, op: &Value, out: &mut OpOutcome) {
     let Some(map) = op.get("docs").and_then(Value::as_object) else {
-        inexpressible(out, "create_chain without a docs map".into());
+        out.inexpressible("create_chain without a docs map".into());
         return;
     };
     let mut by_id: Vec<(String, String)> = map
@@ -170,31 +170,31 @@ pub(super) fn h_create_chain(cx: &mut Cx, index: usize, op: &Value, out: &mut Op
         return;
     }
     if !cx.plans.contains_key(&index) {
-        out.status = Status::NotCompared;
+        out.not_compared();
         out.note = Some("no expansion plan derived; nothing executed".into());
         return;
     }
     match run_plan(cx, index, out) {
         Some(failure) => plan_failed(out, failure),
-        None => out.status = Status::NotCompared,
+        None => out.not_compared(),
     }
 }
 
 pub(super) fn h_setup(cx: &mut Cx, index: usize, out: &mut OpOutcome) {
     if !cx.plans.contains_key(&index) {
-        out.status = Status::Meta;
+        out.meta();
         out.note = Some("setup description not parseable; treated as meta".into());
         return;
     }
     match run_plan(cx, index, out) {
         Some(failure) => plan_failed(out, failure),
-        None => out.status = Status::NotCompared,
+        None => out.not_compared(),
     }
 }
 
 pub(super) fn h_open_document(cx: &mut Cx, op: &Value, out: &mut OpOutcome) {
     let Some(doc) = cx.doc_arg(op, out, &["doc", "docid", "document"]) else {
-        inexpressible(out, "open_document without a resolvable doc".into());
+        out.inexpressible("open_document without a resolvable doc".into());
         return;
     };
     let result = str_field(op, &["result"]).map(str::to_string);
@@ -248,7 +248,7 @@ pub(super) fn h_open_document(cx: &mut Cx, op: &Value, out: &mut OpOutcome) {
         }
     }
     cx.shadow.set_current(&doc);
-    out.status = Status::NotCompared;
+    out.not_compared();
 }
 
 pub(super) fn h_create_version(cx: &mut Cx, op: &Value, out: &mut OpOutcome) {
@@ -256,7 +256,7 @@ pub(super) fn h_create_version(cx: &mut Cx, op: &Value, out: &mut OpOutcome) {
     // reading the grounding pre-pass applies too (`fields::version_source`,
     // `fields::version_result`).
     let Some(src) = version_source(op, cx.shadow, &mut out.adaptations) else {
-        inexpressible(out, "create_version with no source document".into());
+        out.inexpressible("create_version with no source document".into());
         return;
     };
     let golden = version_result(op);
@@ -273,7 +273,7 @@ pub(super) fn h_create_version(cx: &mut Cx, op: &Value, out: &mut OpOutcome) {
             if golden.is_some() {
                 out.agree("address-binding");
             } else {
-                out.status = Status::NotCompared;
+                out.not_compared();
                 out.note = Some("create_version with no recorded result to bind".into());
             }
         }
@@ -286,7 +286,7 @@ pub(super) fn h_create_version(cx: &mut Cx, op: &Value, out: &mut OpOutcome) {
 pub(super) fn h_account(cx: &mut Cx, op: &Value, out: &mut OpOutcome) {
     out.adaptations.push("account_as_delegate".into());
     let Some(acct) = str_field(op, &["account", "acctid", "id"]) else {
-        inexpressible(out, "account op without an account field".into());
+        out.inexpressible("account op without an account field".into());
         return;
     };
     // A golden account α already binds is made current again; one seen for
@@ -304,7 +304,7 @@ pub(super) fn h_account(cx: &mut Cx, op: &Value, out: &mut OpOutcome) {
                 cx.rig.bind_session_label(session_label, &a);
                 out.adaptations.push(format!("session-bind:{session_label}"));
             }
-            out.status = Status::NotCompared;
+            out.not_compared();
         }
         Err(e) => {
             let expected = format!("account context {acct}");
@@ -316,7 +316,7 @@ pub(super) fn h_account(cx: &mut Cx, op: &Value, out: &mut OpOutcome) {
 pub(super) fn h_create_node(cx: &mut Cx, op: &Value, out: &mut OpOutcome) {
     out.adaptations.push("create_node_as_delegate".into());
     let Some(parent_golden) = str_field(op, &["account", "acctid", "parent"]) else {
-        inexpressible(out, "create_node without an account field".into());
+        out.inexpressible("create_node without an account field".into());
         return;
     };
     let Some(parent) = cx.alpha.translate(parent_golden) else {
@@ -333,7 +333,7 @@ pub(super) fn h_create_node(cx: &mut Cx, op: &Value, out: &mut OpOutcome) {
                 cx.alpha.bind(g, &sub_account);
                 out.agree("address-binding");
             } else {
-                out.status = Status::NotCompared;
+                out.not_compared();
             }
         }
         Err(e) => settle_rejected(out, recorded_failure, e),

@@ -12,8 +12,8 @@ use skep_febe::{Op, Response};
 use skep_retrieval::{DeliveryItem, Spec};
 
 use super::{
-    compared_nothing, inexpressible, joint_absence, probe_state, refusal, settle_accepted,
-    settle_unaccepted, Cx, Tally,
+    compared_nothing, joint_absence, probe_state, refusal, settle_accepted, settle_unaccepted, Cx,
+    Tally,
 };
 use crate::allowlist::Adjustments;
 use crate::compare::{
@@ -150,7 +150,7 @@ pub(super) fn h_retrieve_contents(cx: &mut Cx, index: usize, op: &Value, out: &m
     // Per-position probe: `positions` map of "1.3" → "C".
     if let Some(map) = op.get("positions").and_then(Value::as_object) {
         let Some(doc) = cx.doc_arg(op, out, &["doc", "docid"]) else {
-            inexpressible(out, "positions probe with no document in scope".into());
+            out.inexpressible("positions probe with no document in scope".into());
             return;
         };
         let Some(d) = cx.skep_doc(&doc) else {
@@ -213,7 +213,7 @@ pub(super) fn h_retrieve_contents(cx: &mut Cx, index: usize, op: &Value, out: &m
     if let Some(arr) = field(op, &["specset", "specs"]).and_then(Value::as_array) {
         for v in arr {
             let Some((docid, regions)) = vspec_dict(v) else {
-                inexpressible(out, "retrieve spec list holds a non-vspec entry".into());
+                out.inexpressible("retrieve spec list holds a non-vspec entry".into());
                 return;
             };
             let Some(d) = cx.alpha.translate(&docid) else {
@@ -243,11 +243,11 @@ pub(super) fn h_retrieve_contents(cx: &mut Cx, index: usize, op: &Value, out: &m
                     }
                 }
             } else {
-                inexpressible(out, format!("retrieve specset {s:?} not groundable"));
+                out.inexpressible(format!("retrieve specset {s:?} not groundable"));
                 return;
             }
         } else {
-            inexpressible(out, format!("retrieve specset {s:?} not groundable"));
+            out.inexpressible(format!("retrieve specset {s:?} not groundable"));
             return;
         }
     } else if let Some(v) = field(op, &["span", "spans", "vspan"]) {
@@ -255,7 +255,7 @@ pub(super) fn h_retrieve_contents(cx: &mut Cx, index: usize, op: &Value, out: &m
         // partial-retrieve path (content/partial_retrieve,
         // retrieve_noncontiguous_spans).
         let Some(doc) = cx.doc_arg(op, out, &["doc", "docid"]) else {
-            inexpressible(out, "retrieve with no document in scope".into());
+            out.inexpressible("retrieve with no document in scope".into());
             return;
         };
         let Some(d) = cx.skep_doc(&doc) else {
@@ -282,10 +282,9 @@ pub(super) fn h_retrieve_contents(cx: &mut Cx, index: usize, op: &Value, out: &m
                 match crate::tum::deep_span(&start, &width) {
                     Some(span) => specs.push(Spec { doc: d.clone(), span }),
                     None => {
-                        inexpressible(
-                            out,
-                            format!("deep span start {start:?} width {width:?} not constructible"),
-                        );
+                        out.inexpressible(format!(
+                            "deep span start {start:?} width {width:?} not constructible"
+                        ));
                         return;
                     }
                 }
@@ -298,7 +297,7 @@ pub(super) fn h_retrieve_contents(cx: &mut Cx, index: usize, op: &Value, out: &m
                         }
                     }
                     None => {
-                        inexpressible(out, format!("retrieve span {t:?} not groundable"));
+                        out.inexpressible(format!("retrieve span {t:?} not groundable"));
                         return;
                     }
                 }
@@ -340,7 +339,7 @@ pub(super) fn h_retrieve_contents(cx: &mut Cx, index: usize, op: &Value, out: &m
             cx.doc_arg(op, out, &["doc", "docid"])
         };
         let Some(doc) = doc else {
-            inexpressible(out, "retrieve with no document in scope".into());
+            out.inexpressible("retrieve with no document in scope".into());
             return;
         };
         let Some(d) = cx.skep_doc(&doc) else {
@@ -493,7 +492,7 @@ pub(super) fn h_retrieve_vspanset(
                 Some(d)
             }
             None => {
-                inexpressible(out, format!("`{role}_vspan_count` names no document"));
+                out.inexpressible(format!("`{role}_vspan_count` names no document"));
                 return;
             }
         },
@@ -507,7 +506,7 @@ pub(super) fn h_retrieve_vspanset(
         .or(role_doc)
         .or_else(|| cx.doc_arg(op, out, &["doc", "docid"]));
     let Some(doc) = doc else {
-        inexpressible(out, "vspanset probe with no document in scope".into());
+        out.inexpressible("vspanset probe with no document in scope".into());
         return;
     };
     cx.shadow.set_current(&doc);
@@ -620,11 +619,11 @@ pub(super) fn h_observe(
                 return;
             }
         }
-        inexpressible(out, "failed probe with no resolvable document".into());
+        out.inexpressible("failed probe with no resolvable document".into());
         return;
     }
     let Some(doc) = cx.doc_arg(op, out, &["doc", "docid"]) else {
-        inexpressible(out, "observation bundle with no document in scope".into());
+        out.inexpressible("observation bundle with no document in scope".into());
         return;
     };
     probe_state(cx, op, out, adjustments, &doc, Probe::Bundle);

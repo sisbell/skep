@@ -59,8 +59,8 @@ use serde_json::Value;
 
 use crate::evidence::next_content_probe;
 use crate::fields::{
-    as_text, field, op_name, recorded_count, str_field, strings_of, verb_of, vspec_dict, Verb,
-    BUILD_BUDGET,
+    as_text, field, op_name, recorded_count, str_field, strings_of, vcopy_form, verb_of,
+    vspec_dict, VcopyForm, Verb, BUILD_BUDGET,
 };
 use crate::shadow::Shadow;
 use crate::tum::{link_home_docid, parse_dotted};
@@ -271,10 +271,12 @@ pub fn ground(ops: &[Value]) -> ImpliedSetup {
     setup
 }
 
-/// Dotted docids referenced anywhere but never bound by a create op —
-/// counting count-only `create_documents` ops as covering the next N root
-/// ordinals (their synthesized ids), so a scenario that creates unnamed
-/// docs is not double-created.
+/// The document roots the ops reference that no creating op names, in id
+/// order, beyond what the scenario's own creating ops make. Every creating
+/// op — a create, a version, an open, a `create_and_transclude` — counts the
+/// documents it makes (its `results`, docs map, `count` or `targets`, else
+/// one), and a referenced root at or below that count is taken to be one of
+/// them, so a scenario that creates unnamed documents is not double-created.
 fn implied_creates(ops: &[Value]) -> Vec<String> {
     fn walk(v: &Value, f: &mut dyn FnMut(&str)) {
         match v {
@@ -297,9 +299,7 @@ fn implied_creates(ops: &[Value]) -> Vec<String> {
                 | Verb::OpenDocument,
             ) => true,
             // A vcopy form that mints its targets first.
-            Some(Verb::Vcopy) => {
-                op_name(op).to_ascii_lowercase().starts_with("create_and_transclude")
-            }
+            Some(Verb::Vcopy) => vcopy_form(op) == VcopyForm::CreateAndTransclude,
             _ => false,
         };
         if creates {
@@ -308,8 +308,9 @@ fn implied_creates(ops: &[Value]) -> Vec<String> {
                     created.push(s.to_string());
                 }
             });
-            // Prospective creations without recorded ids — each amount an
-            // array the golden holds, or a count within the build budget.
+            // The documents the op makes, counted whether or not it recorded
+            // their ids — a `results` array or a docs map the golden holds, a
+            // `count` within the build budget, or a `targets` list; else one.
             let explicit = field(op, &["results"])
                 .and_then(Value::as_array)
                 .map(|a| a.len() as u64)

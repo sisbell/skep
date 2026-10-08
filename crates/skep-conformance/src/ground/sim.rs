@@ -38,12 +38,13 @@ use crate::evidence::{
 };
 use crate::fields::{
     aim_doc, arrow_results, as_text, compare_operands, created_addresses, cuts_of,
-    distributed_insert_texts, distribution_targets, documents_created, endsets_in_link_space,
-    field, is_conflict_copy, is_position_marker, locate, normalize, op_name, per_doc_replies,
-    position_from_op_name, probed_content, quoted, recorded_content, recorded_count,
-    recorded_spanset, resolve_position, role_vspan_count, span_dict, str_field, strings_of,
-    swap_regions, target_replies, vcopy_sources, version_names, version_result, version_source,
-    vspec_dict, DocAim, DocSpans, Probe, Verb, BUILD_BUDGET, CONTENT_READS,
+    distributed_insert_texts, distribution_targets, doc_aim, documents_created,
+    endsets_in_link_space, field, is_conflict_copy, is_position_marker, locate, normalize,
+    op_name, per_doc_replies, position_from_op_name, probed_content, quoted, recorded_content,
+    recorded_count, recorded_links, recorded_spanset, resolve_position, role_vspan_count,
+    span_dict, str_field, strings_of, swap_regions, target_replies, vcopy_form, vcopy_sources,
+    version_names, version_result, version_source, vspec_dict, DocAim, DocSpans, Probe,
+    Rearrangement, VcopyForm, Verb, BUILD_BUDGET, CONTENT_READS,
 };
 use crate::shadow::Shadow;
 use crate::tum::{link_home_docid, parse_vpos, parse_width, VPoint, VRegion};
@@ -212,20 +213,35 @@ impl Sim {
         }
     }
 
+    /// An op the play pass refuses before it aims — an `insert_loop` with no
+    /// count it may build (`h_insert_loop`), a bare `rearrange` whose cuts
+    /// name no shape (`run_op`): the register stays where it was, and the
+    /// write udanax made in the document the op names (`fields::doc_aim`) is
+    /// one the walk never knew, so no undo crosses it.
+    fn refused_before_aiming(&mut self, op: &Value) {
+        if let DocAim::Named(d) | DocAim::FromOpName(d) | DocAim::Register(d) =
+            doc_aim(&self.shadow, op, &["doc", "docid"])
+        {
+            self.record(&d, Edit::Opaque);
+        }
+    }
+
     /// Op `i` restated on the shadow as the play-pass handler `run_op`
     /// dispatches it to plays it: each write's content effect, each
     /// creation, each read's register move, and each whole-document
     /// comparison the handler makes, probed AFTER the op's own edit, never
     /// before — a write's own result expectation compared against the
     /// pre-edit state would forge a false seed. The op dispatches on the
-    /// verb the play pass dispatches on (`fields::normalize`), so the two
-    /// passes cannot disagree about what kind of op a name reads as; one
-    /// udanax never carried out (`evidence::took_effect`) changes nothing,
-    /// and one the play pass plays nothing for — no `op` field, a raw wire
-    /// request — is read as nothing. A drift between this and the play
-    /// pass is never an honest divergence: the lead-in and plans this walk
-    /// builds would run against a world the play pass never aims at, and
-    /// the difference would read as skep's.
+    /// verb the play pass dispatches on (`fields::normalize`), and a copy on
+    /// the form it takes (`fields::vcopy_form`), so the two passes cannot
+    /// disagree about what kind of op a name reads as. One udanax never
+    /// carried out (`evidence::took_effect`) changes nothing — no content, no
+    /// name, no register move: `run_op` puts the play pass's register back
+    /// after such an op — and one the play pass plays nothing for — no `op`
+    /// field, a raw wire request — is read as nothing. A drift between this
+    /// and the play pass is never an honest divergence: the lead-in and
+    /// plans this walk builds would run against a world the play pass never
+    /// aims at, and the difference would read as skep's.
     fn step(&mut self, i: usize, op: &Value, ops: &[Value]) {
         if !took_effect(op) || op_name(op).is_empty() || op_name(op) == "raw_request" {
             return;
@@ -252,13 +268,15 @@ impl Sim {
             Verb::Insert => self.sim_insert(i, op, ops),
             Verb::DeleteAll => self.sim_delete_all(i, op, ops),
             Verb::Delete => self.sim_delete(i, op, ops),
-            Verb::Vcopy if name.starts_with("vcopy_to_multiple") => {
-                self.sim_vcopy_to_multiple(i, op)
+            Verb::Vcopy => match vcopy_form(op) {
+                VcopyForm::Ordinary => self.sim_vcopy(i, op, ops),
+                VcopyForm::Macro => self.sim_vcopy_macro(i, op, ops),
+                VcopyForm::ToMultiple => self.sim_vcopy_to_multiple(i, op),
+                VcopyForm::CreateAndTransclude => self.sim_create_and_transclude(i, op),
+            },
+            Verb::Rearrange if Rearrangement::with_cuts(cuts_of(op).len()).is_none() => {
+                self.refused_before_aiming(op)
             }
-            Verb::Vcopy if name.starts_with("create_and_transclude") => {
-                self.sim_create_and_transclude(i, op)
-            }
-            Verb::Vcopy => self.sim_vcopy(i, op, ops, &name),
             Verb::Pivot | Verb::Swap | Verb::Rearrange => self.sim_rearrange(op, verb),
             Verb::CreateLink => self.sim_create_link(op),
             Verb::RetrieveContents => {
@@ -359,14 +377,14 @@ impl Sim {
     }
 
     fn sim_insert_loop(&mut self, op: &Value) {
-        let Some(doc) = self.doc_arg(op, &["doc", "docid"]) else { return };
         // A count past the build budget, or none at all, is an op the play
-        // pass refuses, so its bytes are never built here either; the write
-        // udanax made is unknown to the walk, and no undo crosses it.
+        // pass refuses before it aims (`h_insert_loop`), so its bytes are
+        // never built here either.
         let Ok(Some(count)) = recorded_count(op) else {
-            self.record(&doc, Edit::Opaque);
+            self.refused_before_aiming(op);
             return;
         };
+        let Some(doc) = self.doc_arg(op, &["doc", "docid"]) else { return };
         let bytes: Vec<u8> = (0..count).map(|k| b'A' + (k % 26) as u8).collect();
         let end = self.shadow.text_len(&doc) + 1;
         self.shadow.insert(&doc, end, &bytes);
@@ -518,16 +536,12 @@ impl Sim {
                 self.empty_link_participants.push(d);
             }
         }
-        let results: Vec<String> = match field(op, &["result", "results", "link_id"]) {
-            Some(Value::String(s)) => vec![s.clone()],
-            Some(Value::Array(a)) => {
-                a.iter().filter_map(|v| v.as_str().map(str::to_string)).collect()
-            }
-            _ => arrow_results(op).into_iter().map(|(_, _, r)| r).collect(),
-        };
-        // Each recorded link enters at the home its id names, as the play
-        // pass's `Cx::make_link` enters it: a home no op made stays unmade,
-        // where the play pass, finding no α-image there, makes no link.
+        // Each recorded link (`fields::recorded_links`) enters at the home its
+        // id names, as the play pass's `Cx::make_link` enters it: a home no op
+        // made stays unmade, where the play pass, finding no α-image there,
+        // makes no link. A link the recording kept no id for moves no register
+        // in either pass (`Shadow::enter_link`), so the walk need not enter it.
+        let results = recorded_links(op);
         for r in &results {
             if let Some(home) = link_home_docid(r) {
                 self.shadow.enter_link(&home, Some(r));
@@ -977,47 +991,58 @@ impl Sim {
         self.plan_vcopy(i, op, steps);
     }
 
-    fn sim_vcopy(&mut self, i: usize, op: &Value, ops: &[Value], op_name: &str) {
-        // Macro forms: grounded by the destination's next content probe.
+    /// A macro vcopy (`VcopyForm::Macro`), grounded by its destination's next
+    /// content probe: that probe's text past what the destination holds,
+    /// covered by copies from the op's source list — else from every other
+    /// document holding content — and fillers between, pinned exactly by
+    /// recorded comparison pairs when the scenario records them. With no
+    /// probe to ground it, no plan is built and nothing changes, and the play
+    /// pass, finding none, refuses the op (`h_vcopy`).
+    fn sim_vcopy_macro(&mut self, i: usize, op: &Value, ops: &[Value]) {
         let from_list = field(op, &["from", "sources", "order"]).and_then(Value::as_array).map(
             |a| a.iter().filter_map(|v| v.as_str().map(str::to_string)).collect::<Vec<_>>(),
         );
-        let is_macro = from_list.is_some()
-            || op_name.starts_with("vcopy_multiple")
-            || op_name.starts_with("vcopy_all")
-            || op_name.starts_with("vcopy_from_both");
-        if is_macro {
-            // A macro's destination is read here alone — the play pass runs
-            // the plan built from it: an explicit reference, else the op's
-            // document. "end"/"start"/"end of doc" are position markers over
-            // the register's document, not references.
-            let explicit_dest = match str_field(op, &["to", "dest", "target", "target_doc"]) {
-                Some(s) if is_position_marker(s) => self.shadow.current(),
-                Some(s) => self.shadow.resolve_doc(s),
-                None => str_field(op, &["doc", "docid"]).and_then(|s| self.shadow.resolve_doc(s)),
-            };
-            let Some(dest) = explicit_dest.or_else(|| self.doc_arg(op, &["doc", "docid"])) else {
-                return;
-            };
-            let sources: Vec<String> = from_list
-                .map(|names| names.iter().filter_map(|n| self.shadow.resolve_doc(n)).collect())
-                .unwrap_or_else(|| self.shadow.content_docs_except(&dest));
-            let Some(expected) = next_content_probe(ops, i, &self.shadow, &dest) else { return };
-            let existing = self.shadow.text_string(&dest);
-            let remainder = expected.strip_prefix(&existing).unwrap_or(&expected).to_string();
-            // Recorded comparison pairs pin the exact cover when present.
-            let steps = cover_from_comparisons(&self.shadow, &dest, &remainder, ops)
-                .unwrap_or_else(|| {
-                    cover_with_sources(&self.shadow, &dest, &sources, &remainder)
-                });
-            self.plan_vcopy(i, op, steps);
-            return;
-        }
+        // A macro's destination is read here alone — the play pass runs the
+        // plan built from it, and never aims the op, so it is read in place,
+        // the register left where the play pass leaves it: an explicit
+        // reference, else the op's document (`fields::doc_aim`).
+        // "end"/"start"/"end of doc" are position markers over the register's
+        // document, not references. With no document yet, the plan's own
+        // steps mint the one it builds, as `play::run_plan` mints it.
+        let explicit_dest = match str_field(op, &["to", "dest", "target", "target_doc"]) {
+            Some(s) if is_position_marker(s) => self.shadow.current(),
+            Some(s) => self.shadow.resolve_doc(s),
+            None => str_field(op, &["doc", "docid"]).and_then(|s| self.shadow.resolve_doc(s)),
+        };
+        let dest = match explicit_dest {
+            Some(dest) => dest,
+            None => match doc_aim(&self.shadow, op, &["doc", "docid"]) {
+                DocAim::Named(d) | DocAim::FromOpName(d) | DocAim::Register(d) => d,
+                DocAim::Unresolved(_) => return,
+                DocAim::FirstTouch => self.shadow.synthesize_docid(),
+            },
+        };
+        let sources: Vec<String> = from_list
+            .map(|names| names.iter().filter_map(|n| self.shadow.resolve_doc(n)).collect())
+            .unwrap_or_else(|| self.shadow.content_docs_except(&dest));
+        let Some(expected) = next_content_probe(ops, i, &self.shadow, &dest) else { return };
+        let existing = self.shadow.text_string(&dest);
+        let remainder = expected.strip_prefix(&existing).unwrap_or(&expected).to_string();
+        // Recorded comparison pairs pin the exact cover when present.
+        let steps = cover_from_comparisons(&self.shadow, &dest, &remainder, ops)
+            .unwrap_or_else(|| cover_with_sources(&self.shadow, &dest, &sources, &remainder));
+        self.plan_vcopy(i, op, steps);
+    }
 
-        // Ordinary vcopy: the source regions the play pass reads, through
-        // the same reading (`fields::vcopy_sources`), each contiguous
-        // content-subspace region kept as a (doc, ord, width) spec. An op
-        // the play pass cannot ground copies nothing here either.
+    /// An ordinary vcopy (`VcopyForm::Ordinary`), carried out where the play
+    /// pass lands it, or reconstructed as a plan when the scenario's own
+    /// evidence shows unrecorded structure around an appended copy
+    /// ([`Sim::vcopy_reconstruction`]).
+    fn sim_vcopy(&mut self, i: usize, op: &Value, ops: &[Value]) {
+        // The source regions the play pass reads, through the same reading
+        // (`fields::vcopy_sources`), each contiguous content-subspace region
+        // kept as a (doc, ord, width) spec. An op the play pass cannot
+        // ground copies nothing here either.
         let Ok(sources) = vcopy_sources(op, &self.shadow, &mut Vec::new()) else { return };
         let spec_list: Vec<(String, u64, u64)> = sources
             .iter()

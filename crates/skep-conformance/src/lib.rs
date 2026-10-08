@@ -46,31 +46,40 @@
 //! * **The shadow is golden-side, and has one owner.** Whether a recorded op
 //!   changed the golden-side world is one answer, `evidence::took_effect`,
 //!   which an `evidence::Effect` carries into every change, and in the play
-//!   pass the shadow changes only through the `Cx` world-change methods in
-//!   `play`, which `tests/it/tidy.rs` holds every other play-pass file to.
-//!   Content follows the recording, whatever skep answers; a created
-//!   document, version or link enters the shadow only when skep made it
-//!   too, so a version skep refuses leaves its later name-references
-//!   ungroundable — the class rulings 20 and 20a freeze. In both passes a
-//!   document is minted once (`Shadow::create_doc` stops a second mint),
-//!   and an edit of a document the shadow does not hold changes nothing.
-//!   Its records are its own: a caller hands it what an op made — a version
-//!   and the names the op gives it (`Shadow::version`), a link and its home
-//!   (`Shadow::enter_link`) — and reads them back through its accessors.
+//!   pass the shadow's documents, names and links change only through the
+//!   `Cx` world-change methods in `play`, which `tests/it/tidy.rs` holds
+//!   every other play-pass file to. The current-document register moves
+//!   where a handler aims an op at a document it names (`fields::aim_doc`,
+//!   and the reads that name one, each restated in the walk): `play::run_op`
+//!   puts it back after an op that did not take effect, which the walk
+//!   skips; an op refused before it aims, or played only as a pre-pass plan,
+//!   reads its document in place (`fields::doc_aim`); and a link the
+//!   recording kept no id for moves it in neither pass
+//!   (`Shadow::enter_link`). Content follows the recording, whatever skep
+//!   answers; a created document, version or link enters the shadow only
+//!   when skep made it too, so a version skep refuses leaves its later
+//!   name-references ungroundable — the class rulings 20 and 20a freeze. In
+//!   both passes a document is minted once (`Shadow::create_doc` stops a
+//!   second mint), and an edit of a document the shadow does not hold
+//!   changes nothing. Its records are its own: a caller hands it what an op
+//!   made — a version and the names the op gives it (`Shadow::version`), a
+//!   link and its home (`Shadow::enter_link`) — and reads them back through
+//!   its accessors.
 //! * **Both passes read an op the same way.** The pre-pass and the play
 //!   pass share one grammar for an op's fields (`fields`: the verb an op's
-//!   name reads as, the document an op aims at, an op's arguments, the
-//!   documents a plural create makes, a vcopy's sources, a version's source
-//!   and names, a swap's regions, the content a read's or a probe's
-//!   recording answers with) and one set of policies for what its recorded
-//!   evidence says it did (`evidence`: where an insert or a vcopy lands,
-//!   what a delete removed, what a read read — a follow's landing, an extent
-//!   narrower than the whole document). The pre-pass's walk, `ground/sim.rs`,
-//!   restates each handler's effect on the shadow — a write's content, a
-//!   creation, a read's register move — and probes the shadow with each
-//!   whole-document comparison the handler makes; nothing but review keeps a
-//!   `Sim::sim_<verb>` method and the play pass's `h_<verb>` handler alike:
-//!   change them together.
+//!   name reads as and the form a vcopy takes, the document an op aims at,
+//!   an op's arguments, the documents a plural create makes, a vcopy's
+//!   sources, a version's source and names, a swap's regions, the ids a
+//!   create_link recorded, the end a follow names, the content a read's or a
+//!   probe's recording answers with) and one set of policies for what its
+//!   recorded evidence says it did (`evidence`: where an insert or a vcopy
+//!   lands, what a delete removed, what a read read — a follow's landing, an
+//!   extent narrower than the whole document). The pre-pass's walk,
+//!   `ground/sim.rs`, restates each handler's effect on the shadow — a
+//!   write's content, a creation, a read's register move — and probes the
+//!   shadow with each whole-document comparison the handler makes; nothing
+//!   but review keeps a `Sim::sim_<verb>` method and the play pass's
+//!   `h_<verb>` handler alike: change them together.
 //! * **Harness infrastructure never reaches a comparison.** The types
 //!   document, each rig account's home and the setup grant it holds, the rig
 //!   accounts, and the grants class address are told apart by one
@@ -83,16 +92,20 @@
 //!   instead stops the scenario at that op, verdict `error` — and an op
 //!   judged part by part settles through one `Tally` — a part judged as an
 //!   op of its own folds in whole, its adaptations and notes included — so
-//!   `agreed` always means compared and matched. A read ends `not-compared`
-//!   only when its recording kept no answer: one whose recorded answer no
-//!   reader reaches is `inexpressible`, the unread keys named (`play`'s
-//!   `compared_nothing`). Only `runner` drains α's findings, each folded into
-//!   the op it arose on (`OpOutcome::add_alpha_findings`), and asks the
-//!   allowlist, `Allowlist::classify`, which classes cover an outcome — for
-//!   a scenario named by its key, `category/name` (`outcome::ScenarioKey`),
-//!   the identity every adjudication uses; the outcomes fold into one
-//!   verdict by the order `outcome::Verdict` states (`Verdict::of`), and
-//!   into the op a reader looks at first (`Finding::first_of`).
+//!   `agreed` always means compared and matched. An outcome's status changes
+//!   only through its transitions (`OpOutcome::agree`, `disagree`,
+//!   `inexpressible`, `not_compared`, …), which stop a harness bug that
+//!   would settle a disagreed op as anything else, or an inexpressible one as
+//!   agreed, not compared or meta. A read ends `not-compared` only when its
+//!   recording kept no answer: one whose recorded answer no reader reaches is
+//!   `inexpressible`, the unread keys named (`play`'s `compared_nothing`).
+//!   Only `runner` drains α's findings, each folded into the op it arose on
+//!   (`OpOutcome::add_alpha_findings`), and asks the allowlist,
+//!   `Allowlist::classify`, which classes cover an outcome — for a scenario
+//!   named by its key, `category/name` (`outcome::ScenarioKey`), the identity
+//!   every adjudication uses; the outcomes fold into one verdict by the order
+//!   `outcome::Verdict` states (`Verdict::of`), and into the op a reader
+//!   looks at first (`Finding::first_of`).
 //! * **Scenario documents are minted private** — `published: Some(false)`
 //!   (PUB-8.16) — by the one method that creates them,
 //!   `Rig::create_private_document`, in the current session's own account.

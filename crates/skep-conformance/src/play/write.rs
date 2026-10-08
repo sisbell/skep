@@ -18,7 +18,7 @@ use serde_json::Value;
 use skep_febe::Response;
 
 use super::{
-    ensure_document, inexpressible, plan_failed, probe_state, refusal, run_plan, settle_accepted,
+    ensure_document, plan_failed, probe_state, refusal, run_plan, settle_accepted,
     settle_unaccepted, CopyNeverBound, Cx, NeverBound, Tally,
 };
 use crate::allowlist::Adjustments;
@@ -28,36 +28,11 @@ use crate::evidence::{
 };
 use crate::fields::{
     cuts_of, distributed_insert_texts, distribution_targets, expected_failure, field,
-    recorded_count, resolve_position, str_field, swap_regions, target_replies, vcopy_sources,
-    verb_of, Probe, Verb,
+    recorded_count, resolve_position, str_field, swap_regions, target_replies, vcopy_form,
+    vcopy_sources, verb_of, Probe, Rearrangement, VcopyForm, Verb,
 };
-use crate::outcome::{Disagreement, OpOutcome, Status};
+use crate::outcome::{Disagreement, OpOutcome};
 use crate::tum::{parse_vpos, VPoint};
-
-/// The two shapes of REARRANGE, named by their cut counts.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum Rearrangement {
-    /// Three cuts: the regions between them transpose.
-    Pivot,
-    /// Four cuts: the first and last regions exchange, the middle stays.
-    Swap,
-}
-
-impl Rearrangement {
-    /// How many cuts the shape takes.
-    pub(super) fn cuts(self) -> usize {
-        match self {
-            Rearrangement::Pivot => 3,
-            Rearrangement::Swap => 4,
-        }
-    }
-
-    /// The shape `n` cuts make, if any — a bare `rearrange` takes its
-    /// shape from its cut count.
-    pub(super) fn with_cuts(n: usize) -> Option<Rearrangement> {
-        [Rearrangement::Pivot, Rearrangement::Swap].into_iter().find(|r| r.cuts() == n)
-    }
-}
 
 pub(super) fn h_insert(
     cx: &mut Cx,
@@ -92,12 +67,12 @@ pub(super) fn h_insert(
             }
         }
         if !failed {
-            out.status = Status::NotCompared;
+            out.not_compared();
         }
         return;
     }
     let Some(doc) = cx.doc_arg(op, out, &["doc", "docid"]) else {
-        inexpressible(out, "insert with no document in scope".into());
+        out.inexpressible("insert with no document in scope".into());
         return;
     };
     // Where the insert lands — its text, any re-aim, its position, the
@@ -106,7 +81,7 @@ pub(super) fn h_insert(
     let landing = match resolve_insert(cx.ops, index, cx.shadow, &doc, &mut out.adaptations) {
         Ok(landing) => landing,
         Err(reason) => {
-            inexpressible(out, reason);
+            out.inexpressible(reason);
             return;
         }
     };
@@ -134,21 +109,23 @@ pub(super) fn h_insert_loop(
     out: &mut OpOutcome,
     adjustments: &Adjustments,
 ) {
-    // The count is recognized before anything acts on the op: one past the
-    // build budget orders work no comparison can read.
+    // The count is recognized before anything acts on the op — before it
+    // aims, so its register stays where it stood; the walk restates this
+    // refusal (`Sim::refused_before_aiming`). One past the build budget
+    // orders work no comparison can read.
     let count = match recorded_count(op) {
         Ok(Some(count)) => count,
         Ok(None) => {
-            inexpressible(out, "insert_loop without a count".into());
+            out.inexpressible("insert_loop without a count".into());
             return;
         }
         Err(past_budget) => {
-            inexpressible(out, past_budget);
+            out.inexpressible(past_budget);
             return;
         }
     };
     let Some(doc) = cx.doc_arg(op, out, &["doc", "docid"]) else {
-        inexpressible(out, "insert_loop with no document in scope".into());
+        out.inexpressible("insert_loop with no document in scope".into());
         return;
     };
     // The recorded sample (edgecases/many_small_inserts) shows A–Z cycling,
@@ -188,11 +165,11 @@ pub(super) fn h_interior_typing(
     adjustments: &Adjustments,
 ) {
     let Some(doc) = cx.doc_arg(op, out, &["doc", "docid"]) else {
-        inexpressible(out, "interior_typing with no document in scope".into());
+        out.inexpressible("interior_typing with no document in scope".into());
         return;
     };
     let Some(results) = field(op, &["results"]).and_then(Value::as_array) else {
-        inexpressible(out, "interior_typing without a results list".into());
+        out.inexpressible("interior_typing without a results list".into());
         return;
     };
     out.adaptations.push("interior-typing:per-step".into());
@@ -244,7 +221,7 @@ pub(super) fn h_delete(
     verb: Verb,
 ) {
     let Some(doc) = cx.doc_arg(op, out, &["doc", "docid"]) else {
-        inexpressible(out, "delete with no document in scope".into());
+        out.inexpressible("delete with no document in scope".into());
         return;
     };
     // Policy `delete-noop-from-post-state`: the recorded post-delete content
@@ -253,7 +230,7 @@ pub(super) fn h_delete(
     // against the intact document honestly.
     if delete_is_noop(cx.ops, index, cx.shadow, &doc) {
         out.adaptations.push("delete-noop-from-post-state".into());
-        out.status = Status::NotCompared;
+        out.not_compared();
         let mut note = String::from(
             "recorded post-delete content equals pre-delete content; udanax removed nothing \
              from the content subspace",
@@ -287,7 +264,7 @@ pub(super) fn h_delete(
         let n = cx.shadow.text_len(&doc);
         if n == 0 {
             out.adaptations.push("delete_all:empty-noop".into());
-            out.status = Status::NotCompared;
+            out.not_compared();
             out.note = Some("document already empty; nothing to delete".into());
             return;
         }
@@ -303,7 +280,7 @@ pub(super) fn h_delete(
                 at.region(w)
             }
             _ => {
-                inexpressible(out, format!("delete start `{start}` is not groundable"));
+                out.inexpressible(format!("delete start `{start}` is not groundable"));
                 return;
             }
         }
@@ -314,7 +291,7 @@ pub(super) fn h_delete(
         if recorded_failure.is_some() {
             reason.push_str("; the golden recorded a failure, but skep was never asked");
         }
-        inexpressible(out, reason);
+        out.inexpressible(reason);
         return;
     };
     let Ok(r) = cx.delete(&doc, region, Effect::of(op)) else {
@@ -339,9 +316,9 @@ pub(super) fn h_vcopy(
     adjustments: &Adjustments,
 ) {
     let effect = Effect::of(op);
-    // Pre-pass expansion plans cover the macro forms (vcopy_multiple /
-    // vcopy_all / vcopy_from_both / vcopy_to_multiple / create_and_
-    // transclude): fillers as inserts, shared regions as real copies.
+    // Every form but `VcopyForm::Ordinary`, and an ordinary copy the
+    // pre-pass reconstructed, runs as the pre-pass's expansion plan:
+    // fillers as inserts, shared regions as real copies.
     if cx.plans.contains_key(&index) {
         // vcopy_to_multiple / create_and_transclude bind their target ids;
         // the first creation skep refuses is the op's disagreement.
@@ -366,7 +343,7 @@ pub(super) fn h_vcopy(
             plan_failed(out, failure);
             return;
         }
-        out.status = Status::NotCompared;
+        out.not_compared();
         // Per-target contents expectations (vcopy_to_multiple) compare here,
         // read as every `targets` list is (`fields::target_replies`).
         let targets = target_replies(op, cx.shadow);
@@ -388,13 +365,23 @@ pub(super) fn h_vcopy(
         }
         return;
     }
+    // Any other form copies only as the plan the pre-pass builds for it: read
+    // as one ordinary copy, it would copy what its recording never asked for.
+    if vcopy_form(op) != VcopyForm::Ordinary {
+        let reason = format!(
+            "`{}` copies only as a pre-pass expansion plan, and none was derived",
+            out.op_name
+        );
+        out.inexpressible(reason);
+        return;
+    }
 
     // Source regions: the one reading both passes share (policy tags such
     // as `vcopy-source-reaimed` and the located texts' grounding included).
     let sources = match vcopy_sources(op, cx.shadow, &mut out.adaptations) {
         Ok(s) => s,
         Err(reason) => {
-            inexpressible(out, reason);
+            out.inexpressible(reason);
             return;
         }
     };
@@ -406,19 +393,19 @@ pub(super) fn h_vcopy(
         Ok(Some(dest)) => Some(dest),
         Ok(None) => cx.doc_arg(op, out, &["doc", "docid"]),
         Err(reason) => {
-            inexpressible(out, reason);
+            out.inexpressible(reason);
             return;
         }
     };
     let Some(dest) = dest else {
-        inexpressible(out, "vcopy without a resolvable destination".into());
+        out.inexpressible("vcopy without a resolvable destination".into());
         return;
     };
     let ord = match vcopy_ordinal(op, cx.shadow, &dest, &mut out.adaptations) {
         Ok(Some(ord)) => ord,
         Ok(None) => cx.shadow.text_len(&dest) + 1,
         Err(reason) => {
-            inexpressible(out, reason);
+            out.inexpressible(reason);
             return;
         }
     };
@@ -447,7 +434,7 @@ pub(super) fn h_vcopy(
 /// A rearrangement of the given `shape`.
 pub(super) fn h_rearrange(cx: &mut Cx, op: &Value, out: &mut OpOutcome, shape: Rearrangement) {
     let Some(doc) = cx.doc_arg(op, out, &["doc", "docid"]) else {
-        inexpressible(out, "rearrange with no document in scope".into());
+        out.inexpressible("rearrange with no document in scope".into());
         return;
     };
     let mut cuts = cuts_of(op);
@@ -458,7 +445,7 @@ pub(super) fn h_rearrange(cx: &mut Cx, op: &Value, out: &mut OpOutcome, shape: R
     }
     let want = shape.cuts();
     if cuts.len() != want {
-        inexpressible(out, format!("rearrange needs {want} cuts, could derive {}", cuts.len()));
+        out.inexpressible(format!("rearrange needs {want} cuts, could derive {}", cuts.len()));
         return;
     }
     let recorded_failure = expected_failure(op);
@@ -469,7 +456,7 @@ pub(super) fn h_rearrange(cx: &mut Cx, op: &Value, out: &mut OpOutcome, shape: R
     match r {
         Response::Ack { .. } => {
             if settle_accepted(out, recorded_failure) {
-                out.status = Status::NotCompared;
+                out.not_compared();
             }
         }
         r => settle_unaccepted(out, recorded_failure, &r),

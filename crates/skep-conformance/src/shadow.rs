@@ -477,15 +477,20 @@ impl Shadow {
     }
 
     /// A link the recording made enters the golden-side world: seated in
-    /// `home`'s link subspace and the register moved there — when the shadow
-    /// holds `home`; an unheld home stays unheld, as every edit's does — and
-    /// its golden id, when the recording kept one, made the last link. Both
-    /// passes enter a link through here; the play pass also records the
-    /// endsets it grounded ([`Shadow::record_link`]).
+    /// `home`'s link subspace — when the shadow holds `home`; an unheld home
+    /// stays unheld, as every edit's does — and, when the recording kept its
+    /// golden id, made the last link with `home` made the register. A link
+    /// the recording kept no id for is seated and moves nothing: the walk
+    /// enters only the links a recording names (`Sim::sim_create_link`), so
+    /// such a link must move the register in neither pass. Both passes enter
+    /// a link through here; the play pass also records the endsets it
+    /// grounded ([`Shadow::record_link`]).
     pub fn enter_link(&mut self, home: &str, golden: Option<&str>) {
         if let Some(d) = self.docs.get_mut(home) {
             d.link_count += 1;
-            self.current = Some(home.to_string());
+            if golden.is_some() {
+                self.current = Some(home.to_string());
+            }
         }
         if let Some(g) = golden {
             self.last_link = Some(g.to_string());
@@ -627,9 +632,10 @@ mod tests {
         assert!(s.is_version(VERSION) && !s.is_version(SOURCE));
     }
 
-    /// A link enters at a home the shadow holds — seated there, the
-    /// register moved there — and its golden id, when kept, is the last
-    /// link; at an unheld home the link seats nowhere and moves nothing.
+    /// A link enters at a home the shadow holds — seated there, and, when its
+    /// golden id is kept, the last link with its home the register; a link
+    /// kept with no id is seated and moves nothing; at an unheld home a link
+    /// seats nowhere and moves nothing.
     #[test]
     fn a_link_seats_only_at_a_home_the_shadow_holds() {
         let mut s = two_docs();
@@ -638,9 +644,11 @@ mod tests {
         assert_eq!(s.last_link(), Some("1.1.0.1.0.1.0.2.1"));
         s.enter_link(OTHER, None);
         assert_eq!(s.last_link(), Some("1.1.0.1.0.1.0.2.1"), "a link with no id leaves it");
+        assert_eq!(s.link_count(OTHER), 1, "a link with no id is seated");
+        assert_eq!(s.current().as_deref(), Some(SOURCE), "a link with no id moves no register");
         s.enter_link("1.1.0.1.0.9", None);
         assert!(!s.knows("1.1.0.1.0.9"));
-        assert_eq!(s.current().as_deref(), Some(OTHER));
+        assert_eq!(s.current().as_deref(), Some(SOURCE));
         s.add_arrow("A", "B", "1.1.0.1.0.1.0.2.1");
         assert_eq!(s.arrow_link("A", "B"), Some("1.1.0.1.0.1.0.2.1"));
         assert_eq!(s.arrow_link("B", "A"), None);

@@ -15,8 +15,8 @@ use serde_json::Value;
 use crate::fields::{
     as_text, client_side_failure, doc_from_op_name, expected_failure, field, insert_text,
     is_position_marker, locate, op_name, raw_spanset_of, reads_whole_content, recorded_content,
-    resolve_position, span_dict, str_field, strings_of, target_replies, verb_of, CopySource,
-    Grounding, PositionGrounding, Verb, CONTENT_READS, POST_WRITE_KEYS,
+    recorded_links, resolve_position, span_dict, str_field, strings_of, target_replies, verb_of,
+    CopySource, Grounding, PositionGrounding, Verb, CONTENT_READS, POST_WRITE_KEYS,
 };
 use crate::shadow::Shadow;
 use crate::tum::{is_link_address, parse_dotted, parse_vpos, parse_width, VPoint, VRegion};
@@ -171,10 +171,8 @@ pub fn insert_pad_width(
     for op in &ops[i + 1..] {
         let verb = verb_of(op);
         if verb == Some(Verb::CreateLink) {
-            links_seen += match field(op, &["result", "results"]) {
-                Some(Value::Array(a)) => a.len() as u64,
-                _ => 1,
-            };
+            // A link made with no recorded id is a link seated all the same.
+            links_seen += recorded_links(op).len().max(1) as u64;
             continue;
         }
         if verb.is_some_and(Verb::writes_content) {

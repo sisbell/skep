@@ -13,15 +13,14 @@ use skep_arrangement::VSpec;
 use skep_febe::Response;
 
 use super::{
-    inexpressible, marker_type_name, parse_set_spans, settle_accepted, settle_unaccepted,
-    side_specs, Cx, SetSpan,
+    marker_type_name, parse_set_spans, settle_accepted, settle_unaccepted, side_specs, Cx, SetSpan,
 };
 use crate::evidence::Effect;
 use crate::fields::{
-    arrow_results, as_text, expected_failure, field, locate, note_arrow, op_name,
-    parse_python_spec, str_field, strings_of, verb_of, vspec_dict, DocSpans, Verb,
+    arrow_results, as_text, expected_failure, field, followed_slot, locate, note_arrow, op_name,
+    parse_python_spec, recorded_links, str_field, strings_of, verb_of, vspec_dict, DocSpans, Verb,
 };
-use crate::outcome::{OpOutcome, Status};
+use crate::outcome::OpOutcome;
 use crate::shadow::ShadowLink;
 use crate::tum::{link_home_docid, parse_vpos, VPoint, VRegion};
 
@@ -157,14 +156,11 @@ fn endset_evidence(
             // link field.
             let mentions = str_field(op, &["link", "link_id", "id"]).map(|l| l == link_golden);
             if op_name(op).to_ascii_lowercase().starts_with("follow") && mentions.unwrap_or(true) {
-                let slot_matches = match str_field(op, &["end", "direction", "linkend", "which"]) {
-                    Some(e) if e.contains("->") => !want_source,
-                    Some(e) => {
-                        (want_source && e.contains("source"))
-                            || (!want_source && e.contains("target"))
-                    }
-                    None => want_source, // bare follow records the SOURCE end
-                };
+                // The end the follow followed, read as the follow reads it
+                // (`fields::followed_slot`); a bare follow records the
+                // SOURCE end.
+                let wanted = if want_source { 1 } else { 2 };
+                let slot_matches = followed_slot(op).unwrap_or(1) == wanted;
                 if slot_matches {
                     if let Some(sides) = field(op, &["result"]).and_then(ground) {
                         return Some(sides);
@@ -202,7 +198,7 @@ fn h_create_link_explicit(
     out: &mut OpOutcome,
     recorded_failure: Option<String>,
 ) {
-    let golden = str_field(op, &["result", "link_id"]).map(str::to_string);
+    let golden = recorded_links(op).into_iter().next();
 
     // FROM / TO: α-translated V-specs; marker spans do not belong here.
     let build_side = |cx: &mut Cx, out: &mut OpOutcome, key: &str| -> Result<Option<Vec<VSpec>>, ()> {
@@ -210,7 +206,7 @@ fn h_create_link_explicit(
         let sides = match parse_set_spans(v) {
             Ok(s) => s,
             Err(e) => {
-                inexpressible(out, format!("create_link {key}: {e}"));
+                out.inexpressible(format!("create_link {key}: {e}"));
                 return Err(());
             }
         };
@@ -232,13 +228,9 @@ fn h_create_link_explicit(
                         }
                     }
                     SetSpan::Marker(comps) => {
-                        inexpressible(
-                            out,
-                            format!(
-                                "create_link {key}: marker-form span {comps:?} outside the \
-                                 type slot"
-                            ),
-                        );
+                        out.inexpressible(format!(
+                            "create_link {key}: marker-form span {comps:?} outside the type slot"
+                        ));
                         return Err(());
                     }
                 }
@@ -264,7 +256,7 @@ fn h_create_link_explicit(
             match cx.rig.type_vspec("jump") {
                 Some(t) => vec![t],
                 None => {
-                    inexpressible(out, "types document capacity exhausted".into());
+                    out.inexpressible("types document capacity exhausted".into());
                     return;
                 }
             }
@@ -273,7 +265,7 @@ fn h_create_link_explicit(
             let sides = match parse_set_spans(v) {
                 Ok(s) => s,
                 Err(e) => {
-                    inexpressible(out, format!("create_link threeset: {e}"));
+                    out.inexpressible(format!("create_link threeset: {e}"));
                     return;
                 }
             };
@@ -293,25 +285,18 @@ fn h_create_link_explicit(
                                     match cx.rig.type_vspec(name) {
                                         Some(t) => specs.push(t),
                                         None => {
-                                            inexpressible(
-                                                out,
-                                                format!(
-                                                    "types document capacity exhausted for \
-                                                     `{name}`"
-                                                ),
-                                            );
+                                            out.inexpressible(format!(
+                                                "types document capacity exhausted for `{name}`"
+                                            ));
                                             return;
                                         }
                                     }
                                 }
                                 None => {
-                                    inexpressible(
-                                        out,
-                                        format!(
-                                            "threeset marker {comps:?} is not a known udanax \
-                                             type address"
-                                        ),
-                                    );
+                                    out.inexpressible(format!(
+                                        "threeset marker {comps:?} is not a known udanax type \
+                                         address"
+                                    ));
                                     return;
                                 }
                             },
@@ -340,7 +325,7 @@ fn h_create_link_explicit(
         .map(str::to_string)
         .or_else(|| golden.as_ref().and_then(|g| link_home_docid(g)));
     let Some(home_golden) = home_golden else {
-        inexpressible(out, "explicit-set create_link with no home".into());
+        out.inexpressible("explicit-set create_link with no home".into());
         return;
     };
 
@@ -378,7 +363,7 @@ fn h_create_link_explicit(
             if golden.is_some() {
                 out.agree("address-binding");
             } else {
-                out.status = Status::NotCompared;
+                out.not_compared();
             }
         }
         Ok(other) => settle_unaccepted(out, recorded_failure, &other),
@@ -393,15 +378,10 @@ pub(super) fn h_create_link(cx: &mut Cx, index: usize, op: &Value, out: &mut OpO
         h_create_link_explicit(cx, op, out, recorded_failure);
         return;
     }
-    // Result ids: result/results/link_id fields, or arrow keys ("A->B": link).
+    // The link ids the recording kept (`fields::recorded_links`), and the
+    // arrow keys ("A->B": link) that name each one's roles.
     let arrows = arrow_results(op);
-    let goldens: Vec<String> = match field(op, &["result", "results", "link_id"]) {
-        Some(Value::String(s)) => vec![s.clone()],
-        Some(Value::Array(a)) => {
-            a.iter().filter_map(|v| v.as_str().map(str::to_string)).collect()
-        }
-        _ => arrows.iter().map(|(_, _, r)| r.clone()).collect(),
-    };
+    let goldens = recorded_links(op);
     if goldens.len() > 1 {
         out.adaptations.push("create_links:repeat".into());
     }
@@ -484,7 +464,7 @@ pub(super) fn h_create_link(cx: &mut Cx, index: usize, op: &Value, out: &mut OpO
             match side_specs(cx, out, v) {
                 Ok(s) => from_sides = s,
                 Err(e) => {
-                    inexpressible(out, format!("create_link source: {e}"));
+                    out.inexpressible(format!("create_link source: {e}"));
                     return;
                 }
             }
@@ -499,7 +479,7 @@ pub(super) fn h_create_link(cx: &mut Cx, index: usize, op: &Value, out: &mut OpO
                         from_sides.push(l.into_side());
                     }
                     None => {
-                        inexpressible(out, format!("create_link source: text {t:?} not found"));
+                        out.inexpressible(format!("create_link source: text {t:?} not found"));
                         return;
                     }
                 }
@@ -528,7 +508,7 @@ pub(super) fn h_create_link(cx: &mut Cx, index: usize, op: &Value, out: &mut OpO
             .or_else(|| cx.shadow.resolve_doc("source"))
             .or_else(|| cx.shadow.current());
         let Some(home_golden) = home_golden else {
-            inexpressible(out, "create_link with no home document in scope".into());
+            out.inexpressible("create_link with no home document in scope".into());
             return;
         };
         if from_sides.is_empty() {
@@ -599,7 +579,7 @@ pub(super) fn h_create_link(cx: &mut Cx, index: usize, op: &Value, out: &mut OpO
                 }
             }
             if from_sides.is_empty() {
-                inexpressible(out, "create_link source: nothing to ground the FROM endset".into());
+                out.inexpressible("create_link source: nothing to ground the FROM endset".into());
                 return;
             }
         }
@@ -612,7 +592,7 @@ pub(super) fn h_create_link(cx: &mut Cx, index: usize, op: &Value, out: &mut OpO
             match side_specs(cx, out, v) {
                 Ok(s) => to_sides = s,
                 Err(e) => {
-                    inexpressible(out, format!("create_link target: {e}"));
+                    out.inexpressible(format!("create_link target: {e}"));
                     return;
                 }
             }
@@ -627,7 +607,7 @@ pub(super) fn h_create_link(cx: &mut Cx, index: usize, op: &Value, out: &mut OpO
                         to_sides.push(l.into_side());
                     }
                     None => {
-                        inexpressible(out, format!("create_link target: text {t:?} not found"));
+                        out.inexpressible(format!("create_link target: text {t:?} not found"));
                         return;
                     }
                 }
@@ -687,10 +667,8 @@ pub(super) fn h_create_link(cx: &mut Cx, index: usize, op: &Value, out: &mut OpO
                         out.adaptations.push("default_target_self".into());
                         to_sides.push((home_golden.clone(), vec![VPoint::content(1).region(n)]));
                     } else {
-                        inexpressible(
-                            out,
-                            "create_link target: nothing to ground the TO endset".into(),
-                        );
+                        let reason = "create_link target: nothing to ground the TO endset";
+                        out.inexpressible(reason.into());
                         return;
                     }
                 }
@@ -704,7 +682,7 @@ pub(super) fn h_create_link(cx: &mut Cx, index: usize, op: &Value, out: &mut OpO
         });
         out.adaptations.push("types_document".into());
         let Some(ty) = cx.rig.type_vspec(&ty_name) else {
-            inexpressible(out, format!("types document capacity exhausted for `{ty_name}`"));
+            out.inexpressible(format!("types document capacity exhausted for `{ty_name}`"));
             return;
         };
 
@@ -757,7 +735,7 @@ pub(super) fn h_create_link(cx: &mut Cx, index: usize, op: &Value, out: &mut OpO
         return;
     }
     if made == 0 || goldens.is_empty() {
-        out.status = Status::NotCompared;
+        out.not_compared();
         out.note = Some("create_link with no recorded result to bind".into());
     } else {
         out.agree("address-binding");

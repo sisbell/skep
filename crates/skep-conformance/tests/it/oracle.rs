@@ -54,7 +54,7 @@ const REFUSED: &str = "request failed (?)";
 
 /// Every op's status, in order.
 fn statuses(record: &ScenarioRecord) -> Vec<Status> {
-    record.ops.iter().map(|o| o.status).collect()
+    record.ops.iter().map(|o| o.status()).collect()
 }
 
 fn create(name: &str, golden: &str) -> Value {
@@ -115,7 +115,7 @@ fn an_inexpressible_op_outranks_every_disagreement() {
     let mut ops = two_disagreements();
     ops.push(json!({"value": 1}));
     let record = play("outranked", ops);
-    assert_eq!(record.ops[4].status, Status::Inexpressible);
+    assert_eq!(record.ops[4].status(), Status::Inexpressible);
     assert_eq!(record.verdict, Verdict::Inexpressible);
 }
 
@@ -131,7 +131,7 @@ fn an_alpha_finding_makes_its_op_disagree() {
     ];
     let record = play("double_bind", ops);
     let open = &record.ops[2];
-    assert_eq!((open.status, open.comparator), (Status::Disagreed, Some("alpha")));
+    assert_eq!((open.status(), open.comparator()), (Status::Disagreed, Some("alpha")));
     let note = open.note.as_deref().unwrap_or_default();
     assert!(note.contains("alpha-double-bind-golden"), "{note}");
     assert_eq!(record.verdict, Verdict::Divergent);
@@ -160,11 +160,12 @@ fn a_refused_version_is_named_by_no_later_op() {
     ];
     let record = play("refused_version", ops);
     let refused = &record.ops[4];
-    assert_eq!(refused.status, Status::Disagreed, "skep refused the version: {:?}", refused);
+    assert_eq!(refused.status(), Status::Disagreed, "skep refused the version: {:?}", refused);
     for op in &record.ops[5..12] {
-        assert_eq!(op.status, Status::Inexpressible, "op {} `{}`: {:?}", op.index, op.op_name, op);
+        let status = op.status();
+        assert_eq!(status, Status::Inexpressible, "op {} `{}`: {:?}", op.index, op.op_name, op);
     }
-    assert_eq!(record.ops[12].status, Status::Agreed, "{:?}", record.ops[12]);
+    assert_eq!(record.ops[12].status(), Status::Agreed, "{:?}", record.ops[12]);
 }
 
 /// A version skep refuses is never seeded with the answer its own probe
@@ -179,9 +180,9 @@ fn a_refused_version_is_never_seeded_with_its_expected_content() {
         retrieve("1.1.0.1.0.1.1", &["XY"]),
     ];
     let record = play("seeded_version", ops);
-    assert_eq!(record.ops[2].status, Status::Disagreed, "skep refused the version");
+    assert_eq!(record.ops[2].status(), Status::Disagreed, "skep refused the version");
     let probe = &record.ops[3];
-    assert_eq!((probe.status, probe.comparator), (Status::Disagreed, Some("alpha")));
+    assert_eq!((probe.status(), probe.comparator()), (Status::Disagreed, Some("alpha")));
     assert!(record.groundings.is_empty(), "{:?}", record.groundings);
 }
 
@@ -201,7 +202,7 @@ fn a_compare_naming_no_document_aims_at_the_version_the_recording_made() {
     ];
     let record = play("unversioned_compare", unversioned);
     let compare = &record.ops[4];
-    assert_eq!(compare.status, Status::Agreed, "{compare:?}");
+    assert_eq!(compare.status(), Status::Agreed, "{compare:?}");
     assert!(compare.adaptations.iter().any(|a| a == "compare-default:second-document"));
 
     let whole = json!({"start": "1.1", "width": "0.5"});
@@ -214,9 +215,9 @@ fn a_compare_naming_no_document_aims_at_the_version_the_recording_made() {
         shares_everything,
     ];
     let record = play("versioned_compare", versioned);
-    assert_eq!(record.ops[2].status, Status::Disagreed, "skep refused the version");
+    assert_eq!(record.ops[2].status(), Status::Disagreed, "skep refused the version");
     let compare = &record.ops[3];
-    assert_eq!(compare.status, Status::Inexpressible, "{compare:?}");
+    assert_eq!(compare.status(), Status::Inexpressible, "{compare:?}");
     assert!(!compare.adaptations.iter().any(|a| a == "compare:self"));
 }
 
@@ -237,7 +238,7 @@ fn a_compare_naming_an_ungroundable_document_is_never_a_self_compare() {
     ];
     let record = play("ghost_compare", ops);
     let compare = &record.ops[2];
-    assert_eq!(compare.status, Status::Inexpressible, "{compare:?}");
+    assert_eq!(compare.status(), Status::Inexpressible, "{compare:?}");
     assert!(!compare.adaptations.iter().any(|a| a == "compare:self"));
 }
 
@@ -287,7 +288,7 @@ fn a_failure_skep_was_never_asked_about_is_never_agreed() {
     ];
     let record = play("unasked_failure", ops);
     let delete = &record.ops[2];
-    assert_eq!(delete.status, Status::Inexpressible, "{delete:?}");
+    assert_eq!(delete.status(), Status::Inexpressible, "{delete:?}");
     let note = delete.note.as_deref().unwrap_or_default();
     assert!(note.contains("skep was never asked"), "{note}");
 }
@@ -301,7 +302,7 @@ fn a_recorded_refusal_of_an_open_is_never_absorbed_into_the_no_op() {
         json!({"op": "open_document", "doc": "d", "mode": "read", "error": REFUSED}),
     ];
     let record = play("refused_open", ops);
-    assert_eq!(record.ops[1].status, Status::Disagreed, "{:?}", record.ops[1]);
+    assert_eq!(record.ops[1].status(), Status::Disagreed, "{:?}", record.ops[1]);
 }
 
 /// A whole-document read asks skep for everything its own extent holds —
@@ -340,9 +341,9 @@ fn a_whole_document_read_narrows_by_at_most_two_positions() {
     ];
     let record = play("narrowed", ops);
     let narrowed = &record.ops[2];
-    assert_eq!(narrowed.status, Status::Agreed, "{narrowed:?}");
+    assert_eq!(narrowed.status(), Status::Agreed, "{narrowed:?}");
     assert!(narrowed.adaptations.iter().any(|a| a == "read-scoped-to-recorded-extent"));
-    assert_eq!(record.ops[3].status, Status::Disagreed, "{:?}", record.ops[3]);
+    assert_eq!(record.ops[3].status(), Status::Disagreed, "{:?}", record.ops[3]);
 }
 
 /// A number past the build budget orders work no comparison could read: a
@@ -360,7 +361,7 @@ fn a_number_past_the_build_budget_is_refused_not_built() {
     ];
     let record = play("past_the_budget", ops);
     for refused in &record.ops[1..3] {
-        assert_eq!(refused.status, Status::Inexpressible, "{refused:?}");
+        assert_eq!(refused.status(), Status::Inexpressible, "{refused:?}");
         let note = refused.note.as_deref().unwrap_or_default();
         assert!(note.contains("build budget"), "{note}");
     }
@@ -398,7 +399,7 @@ fn a_dotted_text_is_compared_like_any_other() {
         json!({"op": "insert", "doc": "d", "text": "2.5", "result": ["9.9"]}),
     ];
     let record = play("dotted_text", ops);
-    assert_eq!(record.ops[1].status, Status::Disagreed, "{:?}", record.ops[1]);
+    assert_eq!(record.ops[1].status(), Status::Disagreed, "{:?}", record.ops[1]);
 }
 
 /// A doc-less opening write lands where the lead-in leaves the register — on
@@ -441,4 +442,61 @@ fn a_follow_landing_read_never_ends_seed_inference() {
     let seeded = "implied-setup: 1.1.0.1.0.3 starts with \"seeded\"";
     assert!(record.groundings.iter().any(|g| g.starts_with(seeded)), "{:?}", record.groundings);
     assert_eq!(record.verdict, Verdict::Pass);
+}
+
+/// A macro copy the scenario gives no evidence to rebuild — no later probe
+/// of its destination — runs no plan, and is never played in its place as
+/// one ordinary copy of its text: it is inexpressible, the missing plan
+/// named, and copies nothing a later search could find.
+#[test]
+fn a_multi_target_copy_with_no_plan_is_never_played_as_one_copy() {
+    let ops = vec![
+        create("source", "1.1.0.1.0.1"),
+        insert("source", "Shared text"),
+        create("dest", "1.1.0.1.0.2"),
+        json!({"op": "vcopy_all", "from": "source", "to": "dest", "text": "Shared"}),
+        json!({"op": "find_documents", "search_text": "Shared", "result": ["1.1.0.1.0.1"]}),
+    ];
+    let record = play("unplanned_macro", ops);
+    let copy = &record.ops[3];
+    assert_eq!(copy.status(), Status::Inexpressible, "{copy:?}");
+    let note = copy.note.as_deref().unwrap_or_default();
+    assert!(note.contains("expansion plan"), "{note}");
+    assert_eq!(record.ops[4].status(), Status::Agreed, "{:?}", record.ops[4]);
+}
+
+/// An op udanax never carried out moves no register: a failed open naming
+/// one document leaves the next doc-less write where the scripts' scope
+/// stood, in the play pass as in the walk, which skips the op.
+#[test]
+fn a_failed_op_moves_no_register() {
+    let ops = vec![
+        create("a", "1.1.0.1.0.1"),
+        create("b", "1.1.0.1.0.2"),
+        json!({"op": "open_document", "doc": "a", "error": REFUSED}),
+        json!({"op": "insert", "text": "XY"}),
+        retrieve("b", &["XY"]),
+        retrieve("a", &[]),
+    ];
+    let record = play("failed_open", ops);
+    use Status::{Agreed, Disagreed, NotCompared};
+    assert_eq!(statuses(&record), [Agreed, Agreed, Disagreed, NotCompared, Agreed, Agreed]);
+}
+
+/// A link the recording kept no id for moves no register: the walk enters
+/// only the links a recording names, so the next doc-less write lands, in
+/// both passes, where the scripts' scope stood.
+#[test]
+fn a_link_with_no_recorded_id_moves_no_register() {
+    let ops = vec![
+        create("a", "1.1.0.1.0.1"),
+        insert("a", "AB"),
+        create("b", "1.1.0.1.0.2"),
+        insert("b", "CD"),
+        json!({"op": "create_link", "from": "a", "to": "b"}),
+        json!({"op": "insert", "text": "XY"}),
+        retrieve("b", &["CDXY"]),
+    ];
+    let record = play("unrecorded_link", ops);
+    assert_eq!(record.ops[6].status(), Status::Agreed, "{:?}", record.ops[6]);
 }

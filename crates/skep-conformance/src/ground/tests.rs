@@ -286,3 +286,66 @@ fn a_link_homed_where_no_op_made_a_document_mints_nothing() {
     assert!(!sim.shadow.knows("1.1.0.1.0.1"));
     assert_eq!(sim.shadow.created(), ["1.1.0.1.0.5"]);
 }
+
+/// An op the play pass refuses before it aims moves no register in the walk
+/// either — an `insert_loop` with no count, a bare `rearrange` whose cuts
+/// name no shape — and the write udanax made in the document it names is
+/// one no undo crosses.
+#[test]
+fn an_op_refused_before_it_aims_moves_no_register() {
+    const A: &str = "1.1.0.1.0.1";
+    const B: &str = "1.1.0.1.0.2";
+    let ops = [
+        json!({"op": "create_document", "doc": "a", "result": A}),
+        json!({"op": "create_document", "doc": "b", "result": B}),
+        json!({"op": "insert_loop", "doc": "a"}),
+        json!({"op": "insert", "text": "XY"}),
+        json!({"op": "rearrange", "doc": "a", "cuts": [1, 2]}),
+        json!({"op": "insert", "text": "Z"}),
+    ];
+    let sim = Sim::replay(&[], &BTreeMap::new(), &ops);
+    assert_eq!(sim.shadow.text_string(B), "XYZ");
+    assert_eq!(sim.shadow.text_string(A), "");
+    assert!(matches!(sim.log_for(A), [Edit::Opaque, Edit::Opaque]), "{:?}", sim.log_for(A));
+}
+
+/// A macro copy the scenario gives no probe to ground builds no plan and
+/// copies nothing, never read as one ordinary copy of its text: the play
+/// pass, finding no plan, refuses it.
+#[test]
+fn a_macro_copy_with_no_probe_copies_nothing() {
+    const SOURCE: &str = "1.1.0.1.0.1";
+    const DEST: &str = "1.1.0.1.0.2";
+    let ops = [
+        json!({"op": "create_document", "doc": "source", "result": SOURCE}),
+        json!({"op": "insert", "doc": "source", "text": "Shared text"}),
+        json!({"op": "create_document", "doc": "dest", "result": DEST}),
+        json!({"op": "vcopy_all", "from": "source", "to": "dest", "text": "Shared"}),
+    ];
+    let setup = ground(&ops);
+    assert!(setup.plans.is_empty(), "{:?}", setup.plans);
+    let sim = Sim::replay(&[], &BTreeMap::new(), &ops);
+    assert_eq!(sim.shadow.text_string(DEST), "");
+}
+
+/// A macro copy's destination is read in place, as the play pass, which
+/// only runs the plan built from it, never aims the op: a macro naming a
+/// document moves no register in the walk, and one with no document yet
+/// mints none it builds no plan for.
+#[test]
+fn a_macro_copy_reads_its_destination_in_place() {
+    const SOURCE: &str = "1.1.0.1.0.1";
+    const OTHER: &str = "1.1.0.1.0.2";
+    let ops = [
+        json!({"op": "create_document", "doc": "source", "result": SOURCE}),
+        json!({"op": "insert", "doc": "source", "text": "Shared text"}),
+        json!({"op": "create_document", "doc": "other", "result": OTHER}),
+        json!({"op": "vcopy_all", "doc": "source", "to": "ghost", "text": "Shared"}),
+        json!({"op": "insert", "text": "XY"}),
+    ];
+    let sim = Sim::replay(&[], &BTreeMap::new(), &ops);
+    assert_eq!(sim.shadow.text_string(OTHER), "XY");
+    let minted = [json!({"op": "vcopy_all", "from": ["a"], "text": "Shared"})];
+    let sim = Sim::replay(&[], &BTreeMap::new(), &minted);
+    assert!(sim.shadow.created().is_empty(), "{:?}", sim.shadow.created());
+}

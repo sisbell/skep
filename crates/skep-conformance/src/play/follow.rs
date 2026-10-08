@@ -9,14 +9,12 @@ use skep_discovery::{FourSet, SlotSpec};
 use skep_febe::{Op, Response};
 use skep_retrieval::{DeliveryItem, Spec};
 
-use super::{
-    compared_nothing, elem_range, inexpressible, refusal, settle_unaccepted, Cx, ImageRow, Tally,
-};
+use super::{compared_nothing, elem_range, refusal, settle_unaccepted, Cx, ImageRow, Tally};
 use crate::allowlist::Adjustments;
 use crate::compare::{compare_addr_sets, compare_spansets};
 use crate::fields::{
-    expected_failure, field, op_name, parse_python_spec, raw_spanset_of, str_field, strings_of,
-    vspec_dict, DocSpans, RawSpan,
+    expected_failure, field, followed_slot, op_name, parse_python_spec, raw_spanset_of, str_field,
+    strings_of, vspec_dict, DocSpans, RawSpan,
 };
 use crate::outcome::{Disagreement, OpOutcome};
 use crate::tum::{is_link_address, VPoint};
@@ -31,21 +29,6 @@ const TRAVERSE_READS: &[&str] = &[
     "end", "direction", "linkend", "which", "link", "link_id", "id", "doc", "docid", "start",
 ];
 
-/// Resolve a link-slot name to M7's positional index (FROM=1, TO=2, TYPE=3).
-/// "three" is the new corpus's name for the third endset (`end: "three"`).
-fn slot_of(name: &str) -> Option<usize> {
-    if name.contains("source") || name == "from" {
-        return Some(1);
-    }
-    if name.contains("target") || name == "to" {
-        return Some(2);
-    }
-    if name.contains("type") || name.contains("three") {
-        return Some(3);
-    }
-    None
-}
-
 pub(super) fn h_follow_link(
     cx: &mut Cx,
     op: &Value,
@@ -53,27 +36,7 @@ pub(super) fn h_follow_link(
     adjustments: &Adjustments,
 ) {
     out.adaptations.push("follow_as_projection".into());
-    let name = op_name(op);
-    let explicit_slot = str_field(op, &["end", "direction", "linkend", "which"])
-        .and_then(|e| {
-            if e.contains("->") {
-                // "direction": "A->B" follows the link forward: TARGET end.
-                Some(2)
-            } else {
-                slot_of(e)
-            }
-        })
-        .or_else(|| {
-            if name.contains("source") {
-                Some(1)
-            } else if name.contains("target") {
-                Some(2)
-            } else if name.contains("type") {
-                Some(3)
-            } else {
-                None
-            }
-        });
+    let explicit_slot = followed_slot(op);
     let (mut slot, defaulted) = match explicit_slot {
         Some(s) => (s, false),
         None => {
@@ -92,7 +55,7 @@ pub(super) fn h_follow_link(
             cx.shadow.last_link().map(str::to_string)
         });
     let Some(link_golden) = link_golden else {
-        inexpressible(out, "follow_link with no link in scope".into());
+        out.inexpressible("follow_link with no link in scope".into());
         return;
     };
     let Some(link) = cx.alpha.translate(&link_golden) else {
@@ -246,7 +209,7 @@ fn follow_compare(
     // 11 (policy `render-by-identity`): render the RECORDED endset's bytes
     // once per I-span, in span order, never once per projected occurrence.
     let Some(strings) = strings_of(expected) else {
-        inexpressible(out, "follow_link expectation in an unrecognized shape".into());
+        out.inexpressible("follow_link expectation in an unrecognized shape".into());
         return;
     };
     out.adaptations.push("render-by-identity".into());

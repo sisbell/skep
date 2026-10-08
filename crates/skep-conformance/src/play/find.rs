@@ -12,8 +12,8 @@ use skep_links::{enc, Endset};
 use skep_retrieval::RegionSpec;
 
 use super::{
-    clamp_query, compared_nothing, elem_range, inexpressible, marker_type_name, parse_set_spans,
-    refusal, settle_accepted, settle_unaccepted, side_specs, Cx, SetSpan, Tally,
+    clamp_query, compared_nothing, elem_range, marker_type_name, parse_set_spans, refusal,
+    settle_accepted, settle_unaccepted, side_specs, Cx, SetSpan, Tally,
 };
 use crate::allowlist::Adjustments;
 use crate::compare::{compare_addr_sets, compare_count};
@@ -81,7 +81,7 @@ fn find_links_query(
     for keys in [&["doc", "docid"][..], &["search_doc", "search_document"][..]] {
         if let Some(s) = str_field(op, keys) {
             if cx.shadow.resolve_doc(s).is_none() {
-                inexpressible(out, format!("find_links document `{s}` resolves to nothing"));
+                out.inexpressible(format!("find_links document `{s}` resolves to nothing"));
                 return None;
             }
         }
@@ -219,7 +219,7 @@ fn find_links_query(
             continue;
         }
         let Some(parsed) = arr.iter().map(vspec_dict).collect::<Option<Vec<DocSpans>>>() else {
-            inexpressible(out, format!("find_links {key} holds a non-vspec entry"));
+            out.inexpressible(format!("find_links {key} holds a non-vspec entry"));
             return None;
         };
         if slot == 0 {
@@ -235,11 +235,11 @@ fn find_links_query(
     ) {
         (Ok(from), Ok(to)) => (from, to),
         (Err(e), _) => {
-            inexpressible(out, format!("find_links from: {e}"));
+            out.inexpressible(format!("find_links from: {e}"));
             return None;
         }
         (_, Err(e)) => {
-            inexpressible(out, format!("find_links to: {e}"));
+            out.inexpressible(format!("find_links to: {e}"));
             return None;
         }
     };
@@ -439,7 +439,7 @@ fn find_links_query(
                     }
                 }
                 Err(e) => {
-                    inexpressible(out, format!("find_links threeset: {e}"));
+                    out.inexpressible(format!("find_links threeset: {e}"));
                     return None;
                 }
             },
@@ -615,7 +615,7 @@ pub(super) fn h_find_documents(cx: &mut Cx, op: &Value, out: &mut OpOutcome) {
         if let Some(arr) = v.as_array() {
             for item in arr {
                 let Some((docid, asked)) = vspec_dict(item) else {
-                    inexpressible(out, "find_documents spec list holds a non-vspec entry".into());
+                    out.inexpressible("find_documents spec list holds a non-vspec entry".into());
                     return;
                 };
                 let Some(d) = cx.alpha.translate(&docid) else {
@@ -681,7 +681,7 @@ pub(super) fn h_find_documents(cx: &mut Cx, op: &Value, out: &mut OpOutcome) {
         // "append"). One that resolves to nothing — a version skep refused
         // to make (rulings 20, 20a) — leaves nothing to search.
         let Some(sd) = cx.shadow.resolve_doc(s) else {
-            inexpressible(out, format!("find_documents search document `{s}` resolves to nothing"));
+            out.inexpressible(format!("find_documents search document `{s}` resolves to nothing"));
             return;
         };
         cx.shadow.set_current(&sd);
@@ -718,7 +718,7 @@ pub(super) fn h_find_documents(cx: &mut Cx, op: &Value, out: &mut OpOutcome) {
     } else {
         // Nothing to search: a `doc` field that resolves to nothing (its
         // note names the reference), never an empty search in its place.
-        inexpressible(out, "find_documents with no document in scope".into());
+        out.inexpressible("find_documents with no document in scope".into());
         return;
     }
     if let Some(reason) = grounding_failure {
@@ -728,7 +728,7 @@ pub(super) fn h_find_documents(cx: &mut Cx, op: &Value, out: &mut OpOutcome) {
             Some(_) => "; the golden recorded a failure, but skep was never asked",
             None => "",
         };
-        inexpressible(out, format!("find_documents {reason}{asked}"));
+        out.inexpressible(format!("find_documents {reason}{asked}"));
         return;
     }
     let r = cx.rig.exec(Op::FindDocsContaining { regions });
@@ -781,7 +781,7 @@ pub(super) fn h_retrieve_endsets(cx: &mut Cx, op: &Value, out: &mut OpOutcome) {
             })
             .or_else(|| cx.shadow.last_link().map(str::to_string));
         let Some(link_golden) = link_golden else {
-            inexpressible(out, "link-space endsets with no link in scope".into());
+            out.inexpressible("link-space endsets with no link in scope".into());
             return;
         };
         let Some(link) = cx.alpha.translate(&link_golden) else {
@@ -832,17 +832,17 @@ pub(super) fn h_retrieve_endsets(cx: &mut Cx, op: &Value, out: &mut OpOutcome) {
         if let Some(arr) = field(op, &["search", "specs", "specset"]).and_then(Value::as_array) {
             let vspecs: Option<Vec<_>> = arr.iter().map(vspec_dict).collect();
             let Some(vspecs) = vspecs else {
-                inexpressible(out, "retrieve_endsets search holds a non-vspec entry".into());
+                out.inexpressible("retrieve_endsets search holds a non-vspec entry".into());
                 return;
             };
             let Some((docid, regions)) = vspecs.into_iter().next() else {
-                inexpressible(out, "retrieve_endsets with an empty search".into());
+                out.inexpressible("retrieve_endsets with an empty search".into());
                 return;
             };
             (docid, regions.iter().filter_map(|r| r.span()).collect())
         } else {
             let Some(doc) = cx.doc_arg(op, out, &["doc", "docid"]) else {
-                inexpressible(out, "retrieve_endsets with no document in scope".into());
+                out.inexpressible("retrieve_endsets with no document in scope".into());
                 return;
             };
             let n = cx.shadow.text_len(&doc);

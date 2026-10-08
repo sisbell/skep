@@ -344,11 +344,11 @@ use crate::compare::{
     COLLAPSED_SUBSPACE_ANALYSIS,
 };
 use crate::deletions::Deletions;
-use crate::evidence::Effect;
+use crate::evidence::{took_effect, Effect};
 use crate::fields::{
     aim_doc, as_text, client_side_failure, cuts_of, field, locate, normalize, op_name,
     probed_content, raw_spanset_of, recorded_spanset, span_dict, str_field, vspec_dict, CopySource,
-    DocAim, DocSpans, Probe, Verb, ANNOTATION_KEYS, BUNDLE_READS,
+    DocAim, DocSpans, Probe, Rearrangement, Verb, ANNOTATION_KEYS, BUNDLE_READS,
 };
 use crate::ground::{ImpliedSetup, SetupStep};
 use crate::rig::{brief, Rig};
@@ -380,9 +380,7 @@ use find::{h_find_documents, h_find_links, h_retrieve_endsets};
 use follow::{h_follow_link, h_traverse};
 use link::h_create_link;
 use read::{h_observe, h_retrieve_contents, h_retrieve_vspanset};
-use write::{
-    h_delete, h_insert, h_insert_loop, h_interior_typing, h_rearrange, h_vcopy, Rearrangement,
-};
+use write::{h_delete, h_insert, h_insert_loop, h_interior_typing, h_rearrange, h_vcopy};
 
 pub struct Cx<'a> {
     pub rig: &'a mut Rig,
@@ -397,26 +395,6 @@ pub struct Cx<'a> {
 }
 
 // ──────────────────────────── small shared bits ────────────────────────────
-
-/// The op, or a part of it, has no expression on skep's surface: `reason`
-/// says why. The caller owes an op not yet disagreed (`OpOutcome`'s
-/// invariant): a part that cannot be aimed beside a disagreement is a
-/// `Tally`'s to settle, which keeps the disagreement and notes the part.
-fn inexpressible(out: &mut OpOutcome, reason: String) {
-    assert!(
-        out.status != Status::Disagreed,
-        "op {} `{}` is disagreed already: a disagreement stands",
-        out.index,
-        out.op_name
-    );
-    out.status = Status::Inexpressible;
-    // Keep any resolution note already attached (doc_arg's resolves-to-
-    // nothing detail) alongside the classification reason.
-    out.note = Some(match out.note.take() {
-        Some(n) => format!("{reason}; {n}"),
-        None => reason,
-    });
-}
 
 /// An answer that is not the op's success answer, as the report renders
 /// it: `Rejected(code)` for a refusal, else that the answer's shape lies
@@ -446,9 +424,9 @@ fn compared_nothing(out: &mut OpOutcome, op: &Value, reads: &[&str]) {
         .map(|(k, _)| format!("`{k}`"))
         .collect();
     if unread.is_empty() {
-        out.status = Status::NotCompared;
+        out.not_compared();
     } else {
-        inexpressible(out, format!("not read: {}", unread.join(", ")));
+        out.inexpressible(format!("not read: {}", unread.join(", ")));
     }
 }
 
@@ -577,9 +555,10 @@ impl Tally {
     /// `Allowlist::classify` judges. A part that disagreed with no rendered
     /// disagreement (a never-bound address) offers its note as skep's side.
     fn absorb(&mut self, parent: &mut OpOutcome, part: OpOutcome, label: &str) {
+        let (status, disagreement) = (part.status(), part.disagreement().cloned());
         parent.adaptations.extend(part.adaptations);
         let mut note = part.note;
-        match (part.status, part.disagreement) {
+        match (status, disagreement) {
             (Status::Disagreed, Some(Disagreement { expected, actual })) => {
                 self.differ(Disagreement { expected: format!("{label}{expected}"), actual })
             }
@@ -622,11 +601,11 @@ impl Tally {
                 out.add_note(u);
             }
         } else if let Some(u) = not_aimed {
-            inexpressible(out, u);
+            out.inexpressible(u);
         } else if self.compared > 0 {
             out.agree(comparator);
         } else {
-            out.status = Status::NotCompared;
+            out.not_compared();
         }
     }
 
@@ -941,24 +920,27 @@ fn elem_range(s: &Span) -> Option<ElemRange> {
 
 // ───────────────────── world changes: the shadow's one owner ─────────────────
 //
-// Every change the play pass makes to the golden-side world goes through
-// the methods below, and each follows one rule. The shadow follows the
-// RECORDING; α follows skep. A content write is mirrored into the shadow
-// first, when its `Effect` reaches the shadow (callers pass `Effect::of` the
-// op, or `Effect::Inferred` for the pre-pass's setup) — the shadow itself
-// changes only a document it holds, an edit of any other changing nothing —
-// and then skep is asked through α, so neither skep's answer nor an α miss
-// bends what the shadow holds; a golden reference with no α-image comes
-// back as `NeverBound`, and skep was asked nothing. A CREATION's golden name
-// enters the shadow, bound in α, only when skep made it and its effect
-// reaches the shadow: every document the play pass resolves, and every name
-// it binds, has an α-image. A document is minted once: a golden id the
-// shadow already holds keeps naming the document it holds, and α's
-// double-bind finding reports the clash. A creation skep refuses — a version
-// of a private source, PUB-2.9 — therefore leaves its later name-references
-// ungroundable, the class rulings 20 and 20a freeze. `tests/it/tidy.rs`
-// holds every other play-pass file to changing the shadow's world through
-// these methods.
+// Every change the play pass makes to the golden-side world's documents,
+// names and links goes through the methods below, and each follows one rule
+// — the current-document register alone moves outside them, where a handler
+// aims an op at a document it names (`fields::aim_doc`, and the reads that
+// name one), and `run_op` puts it back after an op udanax did not carry
+// out. The shadow follows the RECORDING; α follows skep. A content write is
+// mirrored into the shadow first, when its `Effect` reaches the shadow
+// (callers pass `Effect::of` the op, or `Effect::Inferred` for the pre-pass's
+// setup) — the shadow itself changes only a document it holds, an edit of any
+// other changing nothing — and then skep is asked through α, so neither skep's
+// answer nor an α miss bends what the shadow holds; a golden reference with
+// no α-image comes back as `NeverBound`, and skep was asked nothing. A
+// CREATION's golden name enters the shadow, bound in α, only when skep made
+// it and its effect reaches the shadow: every document the play pass
+// resolves, and every name it binds, has an α-image. A document is minted
+// once: a golden id the shadow already holds keeps naming the document it
+// holds, and α's double-bind finding reports the clash. A creation skep
+// refuses — a version of a private source, PUB-2.9 — therefore leaves its
+// later name-references ungroundable, the class rulings 20 and 20a freeze.
+// `tests/it/tidy.rs` holds every other play-pass file to changing the
+// shadow's world through these methods.
 
 /// A golden reference α holds no image for: the request naming it was never
 /// sent to skep.
@@ -1019,13 +1001,15 @@ impl Cx<'_> {
         Ok(r)
     }
 
-    /// Name golden document `golden` `name`, when the shadow holds it; a
-    /// document it does not hold — skep refused it, or the recording says
-    /// udanax never made it — is named nothing, so every name the play pass
-    /// resolves has an α-image. The first binding of a name stands
-    /// (`Shadow::bind_name`).
-    fn name_document(&mut self, golden: &str, name: &str) {
-        if self.shadow.knows(golden) {
+    /// Name golden document `golden` `name`, when `effect` reaches the
+    /// shadow and the shadow holds the document. A document it does not hold
+    /// — skep refused it, or the recording says udanax never made it — is
+    /// named nothing, so every name the play pass resolves has an α-image;
+    /// and an op udanax never carried out names nothing, as the walk, which
+    /// skips such an op whole (`Sim::step`), names nothing for it. The first
+    /// binding of a name stands (`Shadow::bind_name`).
+    fn name_document(&mut self, golden: &str, name: &str, effect: Effect) {
+        if effect.reaches_shadow() && self.shadow.knows(golden) {
             self.shadow.bind_name(name, golden);
         }
     }
@@ -1138,11 +1122,11 @@ impl Cx<'_> {
     /// MAKELINK homed in golden `home` over endsets already resolved
     /// through α, in M7's slot order: FROM, TO, TYPE. When skep made the
     /// link and `effect` reaches the shadow, it enters the shadow
-    /// (`Shadow::enter_link`): seated in its home, the register moved there;
-    /// with the recorded `link`, its golden id bound in α, made the last
-    /// link and recorded for traversal with the golden content endsets it
-    /// was grounded with; and the recorded arrow edge, `(from-name, to-name,
-    /// link id)`.
+    /// (`Shadow::enter_link`): seated in its home; with the recorded `link`,
+    /// the register moved to that home, its golden id bound in α, made the
+    /// last link and recorded for traversal with the golden content endsets
+    /// it was grounded with; and the recorded arrow edge, `(from-name,
+    /// to-name, link id)`.
     fn make_link(
         &mut self,
         home: &str,
@@ -1177,8 +1161,9 @@ impl Cx<'_> {
 // ─────────────────── document creation & expansion plans ───────────────────
 
 /// Golden document `id`, for an op that records it: when the shadow already
-/// holds it (an implied create, or a plan's earlier step), `name` names it
-/// and the register moves to it; else skep is asked to create it
+/// holds it (an implied create, or a plan's earlier step), the register
+/// moves to it and `name` names it — when `effect` reaches the shadow
+/// ([`Cx::name_document`]); else skep is asked to create it
 /// ([`Cx::create_document`]). `Ok` when the shadow held it, or skep made it —
 /// whether or not the creation's effect reaches the shadow: one the
 /// recording says udanax never made stays unheld and unnamed, and the
@@ -1192,7 +1177,7 @@ fn ensure_document(
 ) -> Result<(), Box<Response>> {
     if cx.shadow.knows(id) {
         if let Some(n) = name {
-            cx.name_document(id, n);
+            cx.name_document(id, n, effect);
         }
         cx.shadow.set_current(id);
         return Ok(());
@@ -1473,11 +1458,11 @@ pub fn run_op(cx: &mut Cx, index: usize, op: &Value, adjustments: &Adjustments) 
         });
         if annotation_only {
             out.verb = Verb::Meta.name();
-            out.status = Status::Meta;
+            out.meta();
             out.note = str_field(op, &["note", "comment", "description"]).map(str::to_string);
             return out;
         }
-        inexpressible(&mut out, "operation has no `op` field".into());
+        out.inexpressible("operation has no `op` field".into());
         return out;
     }
     // Raw wire request codes (prov_request_surface): green's dispatch-table
@@ -1486,27 +1471,24 @@ pub fn run_op(cx: &mut Cx, index: usize, op: &Value, adjustments: &Adjustments) 
     // harness — so the op is inexpressible by construction, code recorded.
     if name == "raw_request" {
         let code = field(op, &["code"]).and_then(Value::as_u64);
-        inexpressible(
-            &mut out,
-            format!(
-                "raw wire request code {} has no counterpart on skep's typed Op surface \
-                 (unknown-code handling is the transport's OpKind::Unparseable)",
-                code.map(|c| c.to_string()).unwrap_or_else(|| "?".into())
-            ),
-        );
+        out.inexpressible(format!(
+            "raw wire request code {} has no counterpart on skep's typed Op surface \
+             (unknown-code handling is the transport's OpKind::Unparseable)",
+            code.map(|c| c.to_string()).unwrap_or_else(|| "?".into())
+        ));
         return out;
     }
     // Recording-client crash: udanax never saw the op.
     if let Some(msg) = client_side_failure(op) {
         out.adaptations.push("client-error:no-op".into());
-        out.status = Status::NotCompared;
+        out.not_compared();
         out.note = Some(format!("recording client failed before reaching udanax: {msg}"));
         return out;
     }
     let Some(verb) = normalize(&name, op) else {
         let keys: Vec<&str> =
             op.as_object().map(|o| o.keys().map(String::as_str).collect()).unwrap_or_default();
-        inexpressible(&mut out, format!("op `{name}` (fields {keys:?}) has no canonical verb"));
+        out.inexpressible(format!("op `{name}` (fields {keys:?}) has no canonical verb"));
         return out;
     };
     out.verb = verb.name();
@@ -1532,8 +1514,9 @@ pub fn run_op(cx: &mut Cx, index: usize, op: &Value, adjustments: &Adjustments) 
             }
         }
     }
+    let register = cx.shadow.current();
     match verb {
-        Verb::Meta => out.status = Status::Meta,
+        Verb::Meta => out.meta(),
         Verb::Observe => h_observe(cx, index, op, &mut out, adjustments),
         Verb::Setup => h_setup(cx, index, &mut out),
         Verb::CreateDocument => h_create_document(cx, op, &mut out),
@@ -1542,7 +1525,7 @@ pub fn run_op(cx: &mut Cx, index: usize, op: &Value, adjustments: &Adjustments) 
         Verb::OpenDocument => h_open_document(cx, op, &mut out),
         Verb::CloseDocument => {
             out.adaptations.push("close_document:noop".into());
-            out.status = Status::NotCompared;
+            out.not_compared();
         }
         Verb::Insert => h_insert(cx, index, op, &mut out, adjustments),
         Verb::InsertLoop => h_insert_loop(cx, op, &mut out, adjustments),
@@ -1552,13 +1535,12 @@ pub fn run_op(cx: &mut Cx, index: usize, op: &Value, adjustments: &Adjustments) 
         Verb::Pivot => h_rearrange(cx, op, &mut out, Rearrangement::Pivot),
         Verb::Swap => h_rearrange(cx, op, &mut out, Rearrangement::Swap),
         Verb::Rearrange => {
+            // Refused before it aims: the walk restates this refusal too
+            // (`Sim::refused_before_aiming`).
             let n = cuts_of(op).len();
             match Rearrangement::with_cuts(n) {
                 Some(shape) => h_rearrange(cx, op, &mut out, shape),
-                None => inexpressible(
-                    &mut out,
-                    format!("rearrange needs 3 or 4 cuts, could derive {n}"),
-                ),
+                None => out.inexpressible(format!("rearrange needs 3 or 4 cuts, could derive {n}")),
             }
         }
         Verb::CreateVersion => h_create_version(cx, op, &mut out),
@@ -1579,7 +1561,16 @@ pub fn run_op(cx: &mut Cx, index: usize, op: &Value, adjustments: &Adjustments) 
             // Green's `connect` opens a TCP session; skep sessions open when
             // an `account` op binds the label — nothing to execute here.
             out.adaptations.push("connect:session".into());
-            out.status = Status::NotCompared;
+            out.not_compared();
+        }
+    }
+    // The register goes back where it stood before an op udanax never carried
+    // out (`evidence::took_effect`): such an op is asked of skep only to meet
+    // the failure the golden recorded, and the walk skips it whole
+    // (`Sim::step`).
+    if !took_effect(op) {
+        if let Some(d) = register {
+            cx.shadow.set_current(&d);
         }
     }
     out
@@ -1606,25 +1597,25 @@ mod tests {
     /// unaimed parts noted beside it.
     #[test]
     fn a_tally_agrees_only_over_comparisons() {
-        assert_eq!(settled(Tally::default()).status, Status::NotCompared);
+        assert_eq!(settled(Tally::default()).status(), Status::NotCompared);
 
         let mut agreeing = Tally::default();
         agreeing.agree();
-        assert_eq!(settled(agreeing).status, Status::Agreed);
+        assert_eq!(settled(agreeing).status(), Status::Agreed);
 
         let mut partial = Tally::default();
         partial.agree();
         partial.unaimed("a part".into());
-        assert_eq!(settled(partial).status, Status::Inexpressible);
+        assert_eq!(settled(partial).status(), Status::Inexpressible);
 
         let mut differing = Tally::default();
         differing.unaimed("a part".into());
         let got = Disagreement { expected: "want".into(), actual: "got".into() };
         differing.judge(Err(got), "part: ");
         let out = settled(differing);
-        assert_eq!(out.status, Status::Disagreed);
+        assert_eq!(out.status(), Status::Disagreed);
         let labelled = Disagreement { expected: "part: want".into(), actual: "part: got".into() };
-        assert_eq!(out.disagreement, Some(labelled));
+        assert_eq!(out.disagreement(), Some(&labelled));
         assert_eq!(out.note.as_deref(), Some("not aimed: a part"));
     }
 
@@ -1643,22 +1634,21 @@ mod tests {
         let mut tally = Tally::default();
         tally.absorb(&mut parent, step, "step 'X': ");
         tally.settle(&mut parent, "state-probe");
-        assert_eq!(parent.status, Status::Agreed);
+        assert_eq!(parent.status(), Status::Agreed);
         assert_eq!(parent.adaptations, [WIDTH_ADJUSTED]);
         assert_eq!(parent.note.as_deref(), Some("step note"));
 
         let mut hop = OpOutcome::new(0, "traverse");
         hop.disagree("projection", Disagreement { expected: "want".into(), actual: "got".into() });
         let mut lost = OpOutcome::new(0, "traverse");
-        lost.status = Status::Inexpressible;
-        lost.add_note("no shape".into());
+        lost.inexpressible("no shape".into());
         let mut parent = OpOutcome::new(0, "traverse");
         let mut tally = Tally::default();
         tally.absorb(&mut parent, hop, "1.1: ");
         tally.absorb(&mut parent, lost, "1.2: ");
         tally.settle(&mut parent, "traversal");
         let labelled = Disagreement { expected: "1.1: want".into(), actual: "got".into() };
-        assert_eq!(parent.disagreement, Some(labelled));
+        assert_eq!(parent.disagreement(), Some(&labelled));
         assert_eq!(parent.note.as_deref(), Some("not aimed: 1.2: no shape"));
     }
 
@@ -1675,13 +1665,13 @@ mod tests {
             &json!({"op": "retrieve", "doc": "d", "after_first": ["X"], "comment": "prose"}),
             &reads,
         );
-        assert_eq!(out.status, Status::Inexpressible);
+        assert_eq!(out.status(), Status::Inexpressible);
         assert_eq!(out.note.as_deref(), Some("not read: `after_first`"));
 
         let mut out = OpOutcome::new(0, "retrieve");
         let bare = json!({"op": "retrieve", "doc": "d", "label": "x", "session": "A"});
         Tally::default().settle_read(&mut out, "content", &bare, &reads);
-        assert_eq!(out.status, Status::NotCompared);
+        assert_eq!(out.status(), Status::NotCompared);
     }
 
     /// An answer that is not the op's success answer disagrees whatever the
@@ -1690,10 +1680,10 @@ mod tests {
     #[test]
     fn only_a_refusal_can_meet_a_recorded_failure() {
         let failed = || Some("request failed (?)".to_string());
-        let actual = |out: OpOutcome| out.disagreement.map(|d| d.actual);
+        let actual = |out: OpOutcome| out.disagreement().map(|d| d.actual.clone());
         let mut out = OpOutcome::new(0, "insert");
         settle_unaccepted(&mut out, failed(), &Response::Ack { at: Seq(1) });
-        assert_eq!(out.status, Status::Disagreed);
+        assert_eq!(out.status(), Status::Disagreed);
         assert_eq!(actual(out).as_deref(), Some("unexpected response shape"));
 
         let rejected = Response::Rejected(Rejection::classified(
@@ -1703,10 +1693,10 @@ mod tests {
         ));
         let mut out = OpOutcome::new(0, "insert");
         settle_unaccepted(&mut out, failed(), &rejected);
-        assert_eq!(out.status, Status::Agreed);
+        assert_eq!(out.status(), Status::Agreed);
         let mut out = OpOutcome::new(0, "insert");
         settle_unaccepted(&mut out, None, &rejected);
-        assert_eq!(out.status, Status::Disagreed);
+        assert_eq!(out.status(), Status::Disagreed);
         assert_eq!(actual(out).as_deref(), Some("Rejected(OutOfBounds)"));
     }
 
@@ -1717,24 +1707,15 @@ mod tests {
     fn an_acceptance_meets_a_recorded_failure_as_a_disagreement() {
         let mut out = OpOutcome::new(0, "insert");
         assert!(!settle_accepted(&mut out, Some("request failed (?)".into())));
-        assert_eq!(out.status, Status::Disagreed);
+        assert_eq!(out.status(), Status::Disagreed);
         let accepted = Disagreement {
             expected: "failure: \"request failed (?)\"".into(),
             actual: "skep accepted the operation".into(),
         };
-        assert_eq!(out.disagreement, Some(accepted));
+        assert_eq!(out.disagreement(), Some(&accepted));
         let mut out = OpOutcome::new(0, "insert");
         assert!(settle_accepted(&mut out, None));
-        assert_eq!(out.status, Status::NotCompared);
-    }
-
-    /// A rearrangement's shape is its cut count, both ways.
-    #[test]
-    fn a_rearrangement_is_named_by_its_cut_count() {
-        for shape in [Rearrangement::Pivot, Rearrangement::Swap] {
-            assert_eq!(Rearrangement::with_cuts(shape.cuts()), Some(shape));
-        }
-        assert_eq!(Rearrangement::with_cuts(2), None);
+        assert_eq!(out.status(), Status::NotCompared);
     }
 
     /// A query region clamps to the live extent without overflowing, a

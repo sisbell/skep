@@ -29,7 +29,10 @@ mod description;
 pub use description::{
     locate, ordinal_range, quoted, resolve_position, Grounding, Located, PositionGrounding,
 };
-pub use verb::{has_observation_fields, normalize, reads_whole_content, verb_of, Verb};
+pub use verb::{
+    has_observation_fields, normalize, reads_whole_content, vcopy_form, verb_of, Rearrangement,
+    VcopyForm, Verb,
+};
 
 // ───────────────────────────── raw field access ────────────────────────────
 
@@ -763,6 +766,36 @@ pub fn endsets_in_link_space(op: &Value) -> bool {
         || first_docid.is_some_and(is_link_address)
 }
 
+/// The link end a follow op names, as M7 numbers them (FROM 1, TO 2, TYPE
+/// 3): its `end`/`direction`/`linkend`/`which` — "A->B" follows forward to
+/// the TO end; else "source"/"from", "target"/"to", "type"/"three" (the
+/// corpus extension's name for the third endset) — else the end its op's
+/// name carries; `None` for a bare follow, which every reader takes as the
+/// SOURCE end (isolation/insert_text_does_not_affect_links_in_same_document
+/// records a bare follow's source spans). The one reading of a follow's
+/// end, for the follow and for the link endset its result evidences.
+pub fn followed_slot(op: &Value) -> Option<usize> {
+    // "source", "target" and "type" name an end in a field and in an op's
+    // name alike; the exact words "from" and "to", and "three", only in a
+    // field.
+    let carried = |s: &str| {
+        [("source", 1), ("target", 2), ("type", 3)]
+            .into_iter()
+            .find_map(|(word, slot)| s.contains(word).then_some(slot))
+    };
+    let recorded = str_field(op, &["end", "direction", "linkend", "which"]).and_then(|e| {
+        if e.contains("->") {
+            return Some(2);
+        }
+        carried(e).or(match e {
+            "from" => Some(1),
+            "to" => Some(2),
+            _ => e.contains("three").then_some(3),
+        })
+    });
+    recorded.or_else(|| carried(op_name(op)))
+}
+
 /// A `to`/`dest` value that is a position marker, not a document reference:
 /// "end", "start", "end of doc" (edgecases/vcopy_to_same_document).
 pub fn is_position_marker(s: &str) -> bool {
@@ -903,30 +936,37 @@ pub enum DocAim {
     FirstTouch,
 }
 
-/// The document an op aims at, as both passes read it: its explicit field
-/// (`keys`), then a token of its name, then the current-document register —
-/// the register only for a genuinely bare op, never in place of an explicit
-/// reference that resolves to nothing. A document named by a field or by
-/// the op's name becomes the register, mirroring the recording scripts'
-/// scope.
-pub fn aim_doc(shadow: &mut Shadow, op: &Value, keys: &[&str]) -> DocAim {
+/// The document an op aims at, as both passes read it, without moving the
+/// register: its explicit field (`keys`), then a token of its name, then the
+/// current-document register — the register only for a genuinely bare op,
+/// never in place of an explicit reference that resolves to nothing. For an
+/// op refused before it aims, whose document still takes the write udanax
+/// made; every other op aims through [`aim_doc`].
+pub fn doc_aim(shadow: &Shadow, op: &Value, keys: &[&str]) -> DocAim {
     if let Some(s) = str_field(op, keys) {
         return match shadow.resolve_doc(s) {
-            Some(d) => {
-                shadow.set_current(&d);
-                DocAim::Named(d)
-            }
+            Some(d) => DocAim::Named(d),
             None => DocAim::Unresolved(s.to_string()),
         };
     }
     if let Some(d) = doc_from_op_name(op_name(op)).and_then(|name| shadow.resolve_doc(&name)) {
-        shadow.set_current(&d);
         return DocAim::FromOpName(d);
     }
     match shadow.current() {
         Some(d) => DocAim::Register(d),
         None => DocAim::FirstTouch,
     }
+}
+
+/// The document an op aims at ([`doc_aim`]), the register moved to it: a
+/// document named by a field or by the op's name becomes the register,
+/// mirroring the recording scripts' scope.
+pub fn aim_doc(shadow: &mut Shadow, op: &Value, keys: &[&str]) -> DocAim {
+    let aim = doc_aim(shadow, op, keys);
+    if let DocAim::Named(d) | DocAim::FromOpName(d) = &aim {
+        shadow.set_current(d);
+    }
+    aim
 }
 
 /// The group word a plural create names its members with: an explicit
@@ -1046,6 +1086,30 @@ pub fn version_result(op: &Value) -> Option<String> {
         Some(Value::Object(o)) => o.get("version").and_then(Value::as_str).map(str::to_string),
         _ => None,
     }
+}
+
+/// The golden ids a create_link's recording kept for the links it made: its
+/// `result`, `results` or `link_id` — one id, or a list of them — or a
+/// `result` object holding a link address under `link` or `link_id`
+/// (allocation_independence's `makelink_N` records `{link, links_found,
+/// expected}`; edgecases/link_zero_width_endpoints, `{success, link_id}`);
+/// else the ids its `"A->B": id` keys record ([`arrow_results`]). Empty when
+/// the recording kept none this grammar reads. The one reading both passes
+/// make a link's address by, beside [`created_addresses`] and
+/// [`version_result`].
+pub fn recorded_links(op: &Value) -> Vec<String> {
+    let kept = match field(op, &["result", "results", "link_id"]) {
+        Some(Value::String(s)) => Some(vec![s.clone()]),
+        Some(Value::Array(a)) => {
+            Some(a.iter().filter_map(|v| v.as_str().map(str::to_string)).collect())
+        }
+        Some(Value::Object(o)) => ["link", "link_id"]
+            .iter()
+            .find_map(|k| o.get(*k)?.as_str().filter(|s| is_link_address(s)))
+            .map(|id| vec![id.to_string()]),
+        _ => None,
+    };
+    kept.unwrap_or_else(|| arrow_results(op).into_iter().map(|(_, _, id)| id).collect())
 }
 
 /// The document a `create_version` versions, as both passes read it: a

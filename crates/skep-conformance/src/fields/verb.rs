@@ -1,6 +1,7 @@
 //! The verb an op's name reads as — the canonical verbs, the stem table read
 //! in order, the meta names and their observation escape — the one reading
-//! both passes dispatch on.
+//! both passes dispatch on, and within two verbs the shape an op takes: the
+//! form a vcopy takes, and the rearrangement a cut count names.
 
 use serde_json::Value;
 
@@ -105,6 +106,69 @@ impl Verb {
 /// reading every forward scan asks "what kind of op is this" through.
 pub fn verb_of(op: &Value) -> Option<Verb> {
     normalize(op_name(op), op)
+}
+
+/// The form a [`Verb::Vcopy`] op takes — the one reading both passes
+/// dispatch a copy by. Only an `Ordinary` copy is played as one COPY; every
+/// other form is played as the expansion plan the grounding pre-pass builds
+/// for it, or not at all.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum VcopyForm {
+    /// One copy of the regions `fields::vcopy_sources` reads.
+    Ordinary,
+    /// `vcopy_multiple`, `vcopy_all`, `vcopy_from_both`, or a `from`/
+    /// `sources`/`order` list: the destination's next content probe covered
+    /// by copies.
+    Macro,
+    /// `vcopy_to_multiple`: one source span into each listed target.
+    ToMultiple,
+    /// `create_and_transclude`: the source's whole extent into each listed
+    /// target, each minted first.
+    CreateAndTransclude,
+}
+
+/// The form vcopy-verb `op` takes, from its name and its fields.
+pub fn vcopy_form(op: &Value) -> VcopyForm {
+    const MACRO_NAMES: &[&str] = &["vcopy_multiple", "vcopy_all", "vcopy_from_both"];
+    let name = op_name(op).to_ascii_lowercase();
+    if name.starts_with("vcopy_to_multiple") {
+        VcopyForm::ToMultiple
+    } else if name.starts_with("create_and_transclude") {
+        VcopyForm::CreateAndTransclude
+    } else if field(op, &["from", "sources", "order"]).is_some_and(Value::is_array)
+        || MACRO_NAMES.iter().any(|m| name.starts_with(m))
+    {
+        VcopyForm::Macro
+    } else {
+        VcopyForm::Ordinary
+    }
+}
+
+/// The two shapes of REARRANGE, named by their cut counts — the one reading
+/// of a rearrangement's shape both passes play it by.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Rearrangement {
+    /// Three cuts: the regions between them transpose.
+    Pivot,
+    /// Four cuts: the first and last regions exchange, the middle stays.
+    Swap,
+}
+
+impl Rearrangement {
+    /// How many cuts the shape takes.
+    pub fn cuts(self) -> usize {
+        match self {
+            Rearrangement::Pivot => 3,
+            Rearrangement::Swap => 4,
+        }
+    }
+
+    /// The shape `n` cuts make, if any — a bare `rearrange` takes its
+    /// shape from its cut count, and one whose count names none is refused
+    /// before it aims.
+    pub fn with_cuts(n: usize) -> Option<Rearrangement> {
+        [Rearrangement::Pivot, Rearrangement::Swap].into_iter().find(|r| r.cuts() == n)
+    }
 }
 
 /// Does this op read a document's whole content: a
@@ -295,5 +359,30 @@ mod tests {
             assert_eq!(shadowing, None, "stem `{stem}` is shadowed");
             assert_eq!(normalize(stem, &json!({ "op": stem })), Some(*verb), "stem `{stem}`");
         }
+    }
+
+    /// A vcopy's form is read from its name, then from a source list: a
+    /// macro name, or a `from` list, makes a macro, while a `from` naming one
+    /// document leaves an ordinary copy.
+    #[test]
+    fn a_vcopy_takes_its_form_from_its_name_and_its_source_list() {
+        let form = |op: Value| vcopy_form(&op);
+        assert_eq!(form(json!({"op": "vcopy", "from": "source"})), VcopyForm::Ordinary);
+        assert_eq!(form(json!({"op": "copy", "from": ["a", "b"]})), VcopyForm::Macro);
+        assert_eq!(form(json!({"op": "vcopy_all", "from": "source"})), VcopyForm::Macro);
+        assert_eq!(form(json!({"op": "vcopy_from_both"})), VcopyForm::Macro);
+        let to_many = json!({"op": "vcopy_to_multiple", "from": ["a"]});
+        assert_eq!(form(to_many), VcopyForm::ToMultiple);
+        let minted = json!({"op": "create_and_transclude", "targets": ["1.1.0.1.0.2"]});
+        assert_eq!(form(minted), VcopyForm::CreateAndTransclude);
+    }
+
+    /// A rearrangement's shape is its cut count, both ways.
+    #[test]
+    fn a_rearrangement_is_named_by_its_cut_count() {
+        for shape in [Rearrangement::Pivot, Rearrangement::Swap] {
+            assert_eq!(Rearrangement::with_cuts(shape.cuts()), Some(shape));
+        }
+        assert_eq!(Rearrangement::with_cuts(2), None);
     }
 }

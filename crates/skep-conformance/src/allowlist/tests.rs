@@ -5,11 +5,14 @@ fn key(s: &str) -> ScenarioKey {
     s.parse().expect("a scenario key")
 }
 
-fn outcome(index: usize, status: Status, expected: Option<&str>) -> OpOutcome {
+/// Op `index`'s outcome: one that disagreed with `expected` as the golden's
+/// side, else one that agreed.
+fn outcome(index: usize, expected: Option<&str>) -> OpOutcome {
     let mut o = OpOutcome::new(index, "probe");
-    o.status = status;
-    o.disagreement =
-        expected.map(|e| Disagreement { expected: e.to_string(), actual: "got".into() });
+    match expected {
+        Some(e) => o.disagree("probe", Disagreement { expected: e.into(), actual: "got".into() }),
+        None => o.agree("probe"),
+    }
     o
 }
 
@@ -56,7 +59,7 @@ fn an_entry_classifies_disagreements_and_only_the_agreements_its_adjustment_made
     assert_eq!(allow.adjustments(&s, 2), Adjustments::default());
 
     let adjusted = |index: usize, tags: &[&str]| {
-        let mut o = outcome(index, Status::Agreed, None);
+        let mut o = outcome(index, None);
         o.adaptations.extend(tags.iter().map(|t| t.to_string()));
         allow.classify(&s, index, &o)
     };
@@ -67,11 +70,11 @@ fn an_entry_classifies_disagreements_and_only_the_agreements_its_adjustment_made
     assert_eq!(both.as_deref(), Some("tolerated+counted"));
     assert_eq!(adjusted(3, &[COUNT_ADJUSTED]), None, "no entry over op 3 declares a delta");
 
-    let shaped = outcome(2, Status::Disagreed, Some("[(\"0\", \"0.1\")]"));
+    let shaped = outcome(2, Some("[(\"0\", \"0.1\")]"));
     assert_eq!(allow.classify(&s, 2, &shaped).as_deref(), Some("shape"));
-    let other = outcome(2, Status::Disagreed, Some("[(\"1.1\", \"0.3\")]"));
+    let other = outcome(2, Some("[(\"1.1\", \"0.3\")]"));
     assert_eq!(allow.classify(&s, 2, &other), None);
-    let both = outcome(1, Status::Disagreed, Some("(\"0\""));
+    let both = outcome(1, Some("(\"0\""));
     assert_eq!(allow.classify(&s, 1, &both).as_deref(), Some("tolerated+counted+shape"));
     assert_eq!(allow.classify(&key("cat/t"), 1, &both), None, "entries are per scenario");
 }

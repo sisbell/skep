@@ -111,9 +111,9 @@ impl Allowlist {
         op_index: usize,
         out: &OpOutcome,
     ) -> Option<String> {
-        let disagreed = out.status == Status::Disagreed;
+        let disagreed = out.status() == Status::Disagreed;
         let made = |tag: &str| {
-            out.status == Status::Agreed && out.adaptations.iter().any(|a| a == tag)
+            out.status() == Status::Agreed && out.adaptations.iter().any(|a| a == tag)
         };
         let (width_made, count_made) = (made(WIDTH_ADJUSTED), made(COUNT_ADJUSTED));
         let entries = self.op_entries(scenario, op_index);
@@ -130,7 +130,7 @@ impl Allowlist {
         classes.dedup();
         let mut covering = (!classes.is_empty()).then(|| classes.join("+"));
         if disagreed {
-            let expected = out.disagreement.as_ref().map(|d| d.expected.as_str());
+            let expected = out.disagreement().map(|d| d.expected.as_str());
             let sig = self.signature_entries(scenario, op_index, expected);
             if !sig.is_empty() {
                 let mut classes: Vec<String> = sig.iter().map(|e| e.class.clone()).collect();

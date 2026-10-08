@@ -98,6 +98,61 @@ fn an_explicit_reference_that_resolves_to_nothing_is_never_the_register() {
     assert_eq!(aim(json!({"op": "insert"})), DocAim::Register(OTHER.into()));
 }
 
+/// An op refused before it aims reads the document it names in place: the
+/// same aim, and the register stays where it stood.
+#[test]
+fn a_document_read_in_place_moves_no_register() {
+    const SOURCE: &str = "1.1.0.1.0.1";
+    const OTHER: &str = "1.1.0.1.0.2";
+    let mut shadow = Shadow::new();
+    shadow.create_doc(SOURCE, Some("source"));
+    shadow.create_doc(OTHER, Some("other"));
+    let named = json!({"op": "insert_loop", "doc": "source"});
+    assert_eq!(doc_aim(&shadow, &named, &["doc", "docid"]), DocAim::Named(SOURCE.into()));
+    assert_eq!(shadow.current().as_deref(), Some(OTHER));
+    let by_op_name = json!({"op": "insert_doc1"});
+    let aimed = doc_aim(&shadow, &by_op_name, &["doc", "docid"]);
+    assert_eq!(aimed, DocAim::FromOpName(SOURCE.into()));
+    assert_eq!(shadow.current().as_deref(), Some(OTHER));
+}
+
+/// A create_link's recorded ids, in each shape the corpus records them — an
+/// id, a list, a result object keyed `link` or `link_id`, arrow keys — and
+/// none where the recording kept none this reads.
+#[test]
+fn a_create_link_reads_its_recorded_ids_in_each_shape() {
+    const LINK: &str = "1.1.0.1.0.1.0.2.1";
+    let read = |op: Value| recorded_links(&op);
+    let one = vec![LINK.to_string()];
+    assert_eq!(read(json!({"op": "create_link", "result": LINK})), one);
+    let two = json!({"op": "create_links", "results": [LINK, "1.1.0.1.0.1.0.2.2"]});
+    assert_eq!(read(two).len(), 2);
+    let keyed = json!({"op": "makelink_1", "result": {"link": LINK, "links_found": 1}});
+    assert_eq!(read(keyed), one);
+    let wrapped = json!({"op": "create_link", "result": {"success": true, "link_id": LINK}});
+    assert_eq!(read(wrapped), one);
+    assert_eq!(read(json!({"op": "create_link", "A->B": LINK})), one);
+    let unread = json!({"op": "create_link", "result": {"success": true}});
+    assert!(read(unread).is_empty());
+    assert!(read(json!({"op": "create_link", "from": "a", "to": "b"})).is_empty());
+}
+
+/// A follow's end, read as M7 numbers the ends, in each spelling the corpus
+/// uses — the field's word or arrow, else the op's name — and none for a
+/// bare follow.
+#[test]
+fn a_follow_reads_its_end_in_each_spelling() {
+    let end = |op: Value| followed_slot(&op);
+    assert_eq!(end(json!({"op": "follow_link", "end": "from"})), Some(1));
+    assert_eq!(end(json!({"op": "follow_link", "end": "source"})), Some(1));
+    assert_eq!(end(json!({"op": "follow_link", "end": "to"})), Some(2));
+    assert_eq!(end(json!({"op": "follow_link", "direction": "A->B"})), Some(2));
+    assert_eq!(end(json!({"op": "follow_link", "end": "three"})), Some(3));
+    assert_eq!(end(json!({"op": "follow_link_target"})), Some(2));
+    assert_eq!(end(json!({"op": "follow_link", "end": "elsewhere"})), None);
+    assert_eq!(end(json!({"op": "follow_link"})), None);
+}
+
 /// Only a zero-width recorded span is dropped — udanax's rendering of
 /// emptiness, which contains no address; a span of any width is kept,
 /// however deep its width runs.

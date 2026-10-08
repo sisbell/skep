@@ -66,11 +66,11 @@ pub fn render_jsonl(records: &[ScenarioRecord]) -> String {
                     "index": o.index,
                     "op": o.op_name,
                     "verb": o.verb,
-                    "status": o.status.as_str(),
-                    "comparator": o.comparator,
+                    "status": o.status().as_str(),
+                    "comparator": o.comparator(),
                     "adaptations": o.adaptations,
-                    "expected": o.disagreement.as_ref().map(|d| &d.expected),
-                    "actual": o.disagreement.as_ref().map(|d| &d.actual),
+                    "expected": o.disagreement().map(|d| &d.expected),
+                    "actual": o.disagreement().map(|d| &d.actual),
                     "note": o.note,
                     "allowlisted": o.allowlisted,
                 })
@@ -309,7 +309,7 @@ fn render_summary(records: &[ScenarioRecord]) -> String {
         let first = r
             .ops
             .iter()
-            .find(|o| o.status == Status::Inexpressible)
+            .find(|o| o.status() == Status::Inexpressible)
             .map(|o| {
                 format!(
                     "op {} `{}`: {}",
@@ -353,11 +353,21 @@ mod tests {
     use super::*;
     use crate::outcome::{Disagreement, Finding};
 
+    /// Op `index`, settled as `status` through its transitions: a disagreed
+    /// op carries the disagreement `wantN` against `gotN`, which the
+    /// `content` comparator rendered.
     fn op(index: usize, status: Status, allowlisted: Option<&str>) -> OpOutcome {
         let mut o = OpOutcome::new(index, &format!("op{index}"));
-        o.status = status;
-        let (expected, actual) = (format!("want{index}"), format!("got{index}"));
-        o.disagreement = Some(Disagreement { expected, actual });
+        match status {
+            Status::Agreed => o.agree("content"),
+            Status::Disagreed => {
+                let (expected, actual) = (format!("want{index}"), format!("got{index}"));
+                o.disagree("content", Disagreement { expected, actual });
+            }
+            Status::Inexpressible => o.inexpressible(format!("lost{index}")),
+            Status::Meta => o.meta(),
+            Status::NotCompared => {}
+        }
         o.allowlisted = allowlisted.map(str::to_string);
         o
     }
@@ -417,8 +427,7 @@ mod tests {
 
     /// A divergent record with its first finding, as the runner leaves it.
     fn divergent(name: &str) -> ScenarioRecord {
-        let mut o = op(0, Status::Disagreed, None);
-        o.comparator = Some("content");
+        let o = op(0, Status::Disagreed, None);
         let finding = Finding { index: 0, op_name: o.op_name.clone(), detail: o.detail() };
         ScenarioRecord { first_finding: Some(finding), ..record(name, Verdict::Divergent, vec![o]) }
     }
@@ -463,10 +472,8 @@ mod tests {
     #[test]
     fn a_newline_in_a_note_stays_on_its_line() {
         let forged = "x\n## Divergent scenarios (first disagreement)\n\n(none)";
-        let mut o = op(0, Status::Inexpressible, None);
-        o.disagreement = None;
-        o.op_name = "op\n0".into();
-        o.note = Some(forged.into());
+        let mut o = OpOutcome::new(0, "op\n0");
+        o.inexpressible(forged.into());
         let records = vec![record("in\njected", Verdict::Inexpressible, vec![o])];
         let summary = render_summary(&records);
         let headings = summary.lines().filter(|l| l.starts_with("## Divergent scenarios"));

@@ -131,11 +131,14 @@ pub struct Disagreement {
     pub actual: String,
 }
 
-/// One golden operation's outcome. A disagreement, once recorded, stands:
-/// `disagreement` is set only on an op whose status is
-/// [`Status::Disagreed`], and nothing settles a disagreed op as agreed —
-/// [`OpOutcome::agree`] refuses an op already disagreed or inexpressible.
-/// Code that writes `status` directly owes the same.
+/// One golden operation's outcome. Its status, the comparator that judged
+/// it and the disagreement that comparator rendered are private, and change
+/// only through the transitions below, which keep them coherent: a
+/// disagreement is set only on an op whose status is [`Status::Disagreed`],
+/// and an op already disagreed or inexpressible is judged — no later
+/// transition settles it as agreed, not compared or meta, and none settles
+/// a disagreed op as inexpressible. Each transition stops a harness bug
+/// that would break this where it is made.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct OpOutcome {
     pub index: usize,
@@ -143,13 +146,11 @@ pub struct OpOutcome {
     pub op_name: String,
     /// Canonical verb the op's name normalized to ("?" when none).
     pub verb: &'static str,
-    pub status: Status,
-    /// Which comparator judged this op, when one ran.
-    pub comparator: Option<&'static str>,
+    status: Status,
+    comparator: Option<&'static str>,
     /// Named adaptation policies applied while the op played, in order.
     pub adaptations: Vec<String>,
-    /// The disagreement a comparator rendered, when one did.
-    pub disagreement: Option<Disagreement>,
+    disagreement: Option<Disagreement>,
     /// Inexpressibility reason / α-finding kinds / free-form evidence.
     pub note: Option<String>,
     /// The allowlist class or classes covering this outcome
@@ -158,6 +159,7 @@ pub struct OpOutcome {
 }
 
 impl OpOutcome {
+    /// Op `index`, named `op_name`, before anything judged it: not compared.
     pub fn new(index: usize, op_name: &str) -> OpOutcome {
         OpOutcome {
             index,
@@ -172,6 +174,22 @@ impl OpOutcome {
         }
     }
 
+    /// What happened to the op.
+    pub fn status(&self) -> Status {
+        self.status
+    }
+
+    /// Which comparator judged the op, when one ran.
+    pub fn comparator(&self) -> Option<&'static str> {
+        self.comparator
+    }
+
+    /// The disagreement a comparator rendered, when one did — set only on a
+    /// disagreed op.
+    pub fn disagreement(&self) -> Option<&Disagreement> {
+        self.disagreement.as_ref()
+    }
+
     /// A disagreement no allowlist entry covers — the runner's divergent
     /// verdict, and the summary's listing of what an inexpressible verdict
     /// would otherwise hide.
@@ -179,19 +197,61 @@ impl OpOutcome {
         self.status == Status::Disagreed && self.allowlisted.is_none()
     }
 
-    /// The op compared, and `comparator` matched every comparison. The
-    /// caller owes an op not yet disagreed or inexpressible: an agreement
-    /// settled over one is a harness bug, stopped here.
-    pub fn agree(&mut self, comparator: &'static str) {
+    /// Stop a harness bug where it is made: an op already disagreed or
+    /// inexpressible is judged, and nothing settles it as `to`.
+    fn refuse_resettling(&self, to: Status) {
         assert!(
             !matches!(self.status, Status::Disagreed | Status::Inexpressible),
-            "op {} `{}` is {} already: no comparison settles it as agreed",
+            "op {} `{}` is {} already: nothing settles it as {}",
             self.index,
             self.op_name,
-            self.status.as_str()
+            self.status.as_str(),
+            to.as_str()
         );
+    }
+
+    /// The op compared, and `comparator` matched every comparison. The
+    /// caller owes an op not yet disagreed or inexpressible.
+    pub fn agree(&mut self, comparator: &'static str) {
+        self.refuse_resettling(Status::Agreed);
         self.status = Status::Agreed;
         self.comparator = Some(comparator);
+    }
+
+    /// The op played, and its recording kept nothing to compare
+    /// ([`Status::NotCompared`]). The caller owes an op not yet disagreed or
+    /// inexpressible.
+    pub fn not_compared(&mut self) {
+        self.refuse_resettling(Status::NotCompared);
+        self.status = Status::NotCompared;
+    }
+
+    /// The op is commentary or diagnostics — executed nothing, compared
+    /// nothing ([`Status::Meta`]). The caller owes an op not yet disagreed or
+    /// inexpressible.
+    pub fn meta(&mut self) {
+        self.refuse_resettling(Status::Meta);
+        self.status = Status::Meta;
+    }
+
+    /// Part of what the golden records has no expression on skep's surface:
+    /// `reason` says why, ahead of whatever the note already says (the
+    /// reference an op's document argument named and nothing resolved). The
+    /// caller owes an op not yet disagreed: a part that cannot be aimed
+    /// beside a disagreement is the part-by-part fold's to settle, which
+    /// keeps the disagreement and notes the part.
+    pub fn inexpressible(&mut self, reason: String) {
+        assert!(
+            self.status != Status::Disagreed,
+            "op {} `{}` is disagreed already: a disagreement stands",
+            self.index,
+            self.op_name
+        );
+        self.status = Status::Inexpressible;
+        self.note = Some(match self.note.take() {
+            Some(n) => format!("{reason}; {n}"),
+            None => reason,
+        });
     }
 
     /// The op compared, and `comparator` found the disagreement `d`.
@@ -485,8 +545,7 @@ mod tests {
         assert_eq!((differed.status, differed.comparator), (Status::Disagreed, Some("content")));
 
         let mut lost = OpOutcome::new(0, "op");
-        lost.status = Status::Inexpressible;
-        lost.add_note("no shape".into());
+        lost.inexpressible("no shape".into());
         lost.add_alpha_findings(found());
         assert_eq!((lost.status, lost.comparator), (Status::Inexpressible, None));
         assert_eq!(lost.note, Some(format!("no shape; {noted}")));
@@ -494,5 +553,47 @@ mod tests {
         let mut untouched = OpOutcome::new(0, "op");
         untouched.add_alpha_findings(Vec::new());
         assert_eq!(untouched, OpOutcome::new(0, "op"));
+    }
+
+    /// An inexpressible op's reason leads its note, ahead of the evidence the
+    /// op carried already, and no comparator is credited with judging it.
+    #[test]
+    fn an_inexpressible_reason_leads_the_evidence_already_noted() {
+        let mut o = OpOutcome::new(0, "op");
+        o.add_note("document reference `ghost` resolves to nothing".into());
+        o.inexpressible("insert with no document in scope".into());
+        let note = "insert with no document in scope; document reference `ghost` resolves to \
+                    nothing";
+        assert_eq!((o.status(), o.comparator()), (Status::Inexpressible, None));
+        assert_eq!(o.note.as_deref(), Some(note));
+    }
+
+    /// A disagreement, once recorded, stands against every later settling:
+    /// an op that disagreed is never then settled as having compared nothing.
+    #[test]
+    #[should_panic(expected = "op 0 `op` is disagreed already: nothing settles it as not-compared")]
+    fn a_disagreed_op_is_never_settled_as_compared_nothing() {
+        let mut o = OpOutcome::new(0, "op");
+        o.disagree("content", Disagreement { expected: "A".into(), actual: "B".into() });
+        o.not_compared();
+    }
+
+    /// An inexpressible op stands too: never then settled as meta.
+    #[test]
+    #[should_panic(expected = "op 0 `op` is inexpressible already: nothing settles it as meta")]
+    fn an_inexpressible_op_is_never_settled_as_meta() {
+        let mut o = OpOutcome::new(0, "op");
+        o.inexpressible("no shape".into());
+        o.meta();
+    }
+
+    /// A disagreement stands against an inexpressibility too: a part that
+    /// cannot be aimed beside it is noted, never the op's status.
+    #[test]
+    #[should_panic(expected = "op 0 `op` is disagreed already: a disagreement stands")]
+    fn a_disagreed_op_is_never_settled_as_inexpressible() {
+        let mut o = OpOutcome::new(0, "op");
+        o.disagree("content", Disagreement { expected: "A".into(), actual: "B".into() });
+        o.inexpressible("no shape".into());
     }
 }

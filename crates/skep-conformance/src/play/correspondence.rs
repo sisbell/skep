@@ -11,7 +11,7 @@ use skep_address::Nat;
 use skep_febe::{Op, Response};
 use skep_retrieval::RegionSpec;
 
-use super::{compared_nothing, inexpressible, refusal, Cx, Tally};
+use super::{compared_nothing, refusal, Cx, Tally};
 use crate::evidence::version_made_before;
 use crate::fields::{compare_operands, field, locate, span_dict, str_field, CompareOperand};
 use crate::outcome::{Disagreement, OpOutcome};
@@ -299,7 +299,7 @@ pub(super) fn h_compare_versions(cx: &mut Cx, index: usize, op: &Value, out: &mu
                 .resolve_doc("target")
                 .or_else(|| cx.shadow.current());
             let Some(dest) = dest else {
-                inexpressible(out, "comparisons with no destination doc in scope".into());
+                out.inexpressible("comparisons with no destination doc in scope".into());
                 return;
             };
             let mut tally = Tally::default();
@@ -359,7 +359,7 @@ pub(super) fn h_compare_versions(cx: &mut Cx, index: usize, op: &Value, out: &mu
         match refs.as_slice() {
             [a, b] => (a.clone(), b.clone()),
             _ => {
-                inexpressible(out, "compare needs exactly two documents".into());
+                out.inexpressible("compare needs exactly two documents".into());
                 return;
             }
         }
@@ -440,7 +440,7 @@ pub(super) fn h_compare_versions(cx: &mut Cx, index: usize, op: &Value, out: &mu
             (b.clone(), b)
         }
         _ => {
-            inexpressible(out, format!("compare documents `{ref_a}`/`{ref_b}` resolve to nothing"));
+            out.inexpressible(format!("compare documents `{ref_a}`/`{ref_b}` resolve to nothing"));
             return;
         }
     };
@@ -495,7 +495,7 @@ fn identity_pairs(
 ) {
     out.adaptations.push("identity-pairs-by-position".into());
     let Some(doc) = cx.doc_arg(op, out, &["doc", "docid"]) else {
-        inexpressible(out, "position identity compare with no document in scope".into());
+        out.inexpressible("position identity compare with no document in scope".into());
         return;
     };
     let Some(d) = cx.skep_doc(&doc) else {
@@ -552,14 +552,14 @@ mod tests {
         let (a, b) = (side("1.1.0.1.0.1", "original"), side("1.1.0.1.0.2", "version"));
         let mut out = OpOutcome::new(0, "compare");
         judge_shared(RecordedShared::Count(2), &a, &b, &[], &[]).settle(&mut out, "count");
-        assert_eq!(out.status, Status::Disagreed);
+        assert_eq!(out.status(), Status::Disagreed);
         let counted =
             Disagreement { expected: "2 shared pairs".into(), actual: "0 shared pairs".into() };
-        assert_eq!(out.disagreement, Some(counted));
+        assert_eq!(out.disagreement(), Some(&counted));
 
         let mut out = OpOutcome::new(0, "compare");
         judge_shared(RecordedShared::Count(1), &a, &b, &[(1, 1, 5)], &[]).settle(&mut out, "count");
-        assert_eq!(out.status, Status::Agreed);
+        assert_eq!(out.status(), Status::Agreed);
     }
 
     /// A recorded pair the comparison cannot orient is never dropped: it
@@ -570,7 +570,7 @@ mod tests {
         let pairs = [serde_json::json!({"original": {"start": "2.1", "width": "0.1"}})];
         let mut out = OpOutcome::new(0, "compare");
         judge_shared(RecordedShared::Pairs(&pairs), &a, &b, &[], &[]).settle(&mut out, "pairs");
-        assert_eq!(out.status, Status::Inexpressible);
+        assert_eq!(out.status(), Status::Inexpressible);
     }
 
     /// A pair skep reports between documents other than the two compared
@@ -586,7 +586,7 @@ mod tests {
             let mut out = OpOutcome::new(0, "compare");
             judge_shared(RecordedShared::Pairs(&pairs), &a, &b, &[(1, 3, 5)], foreign)
                 .settle(&mut out, "pairs");
-            out.status
+            out.status()
         };
         assert_eq!(judged(&[]), Status::Agreed);
         assert_eq!(judged(&["(1.0.1.0.7,1.0.1.0.8)".to_string()]), Status::Disagreed);

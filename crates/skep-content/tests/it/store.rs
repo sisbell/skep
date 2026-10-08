@@ -1,20 +1,21 @@
 //! The slice and its write step, with no kernel: what the already-stored
 //! check admits and rejects, and that staging keeps the address it is handed
 //! in the memory it had; that the fold is pure and insert-only, keeps every
-//! stored address in the memory it had, and never replaces a stored value —
-//! it leaves the whole slice as it was, and panics on the attempt in debug
-//! builds; that a point query matches its address exactly, never a prefix or
-//! an extension; that identity is by address, never by value, and `Val`
-//! implements no `Hash` (S4); that a slice's equality is its contents',
+//! stored address and value in the memory it had and puts the written ones
+//! in the memory their record holds them in, and never replaces a stored
+//! value — it leaves the whole slice as it was, and panics on the attempt in
+//! debug builds; that a point query matches its address exactly, never a
+//! prefix or an extension; that identity is by address, never by value, and
+//! `Val` implements no `Hash` (S4); that a slice's equality is its contents',
 //! address and value each counting; that the one enumeration visits every
 //! entry once, through `iter` and through a `for` loop over the slice alike,
 //! as a walk a caller can name, which knows exactly what remains at every
 //! step, shows no entry in its `Debug`, and offers no walk from the far end;
-//! that any byte string is a value, comes back exactly as written, and
-//! renders into `Debug` as its byte length, never a byte; and that
-//! `stage_write` panics on a non-content address in debug builds, before it
-//! looks at what is stored there, and stages every such address as given in
-//! release.
+//! that any byte string is a value, shares its bytes with every clone, comes
+//! back exactly as written, and renders into `Debug` as its byte length,
+//! never a byte; and that `stage_write` panics on a non-content address in
+//! debug builds, before it looks at what is stored there, and stages every
+//! such address as given in release.
 
 use skep_address::{Address, Nat};
 use skep_content::{stage_write, ContentError, ContentStore, ContentWrite, Iter, Val};
@@ -53,6 +54,15 @@ macro_rules! implements {
 /// was; a clone rebuilds the components elsewhere and changes it.
 fn component_memory(addr: &Address) -> *const Nat {
     std::ptr::from_ref(addr.tumbler().iter().next().expect("a tumbler is nonempty"))
+}
+
+/// The memory a value's bytes occupy, named by their first. A clone that
+/// shares the bytes leaves the answer as it was; a copy puts them elsewhere
+/// and changes it — while the original lives, and for a value of at least one
+/// byte: an empty value's bytes can sit at a placeholder address every copy
+/// shares.
+fn value_memory(v: &Val) -> *const u8 {
+    v.as_bytes().as_ptr()
 }
 
 // ---- §C stage_write: the pure step ----
@@ -136,32 +146,104 @@ fn apply_write_is_a_pure_insert_only_fold() {
 fn apply_write_keeps_every_stored_address_in_the_memory_it_had() {
     // store.rs (`Key`): a fold copies the tree nodes on its path, up to 64
     // entries each, and leaves every address where it is in memory, those in
-    // the copied nodes included. A node copy that cloned each of those
-    // addresses component by component would make every write pay for up to
-    // 64 addresses per level of the tree, a cost set by the longest addresses
-    // stored near it, which an INSERT multiplies by its value count under M2's
-    // applier lock and every replay pays again. So each address the old slice
-    // stores keeps, in the new slice, the very memory its components had.
-    // 257 entries put the tree past one node, so the fold copies an inner
-    // node as well as a leaf.
+    // the copied nodes included; and it puts the address its record carries
+    // into the map by the record's own `Arc` — "neither staging a write nor
+    // folding it clones its address component by component", on commit and
+    // on every replay. A node copy that cloned each of those addresses
+    // component by component would make every write pay for up to 64
+    // addresses per level of the tree, a cost set by the longest addresses
+    // stored near it, which an INSERT multiplies by its value count under
+    // M2's applier lock and every replay pays again; a fold that rebuilt the
+    // address its record carries would add one more to every commit and every
+    // replay. So each address the old slice stores keeps, in the new slice,
+    // the very memory its components had, and the written address sits in
+    // the memory its record holds it in. 257 entries put the tree past one
+    // node, so the fold copies an inner node as well as a leaf. The record
+    // lives through the fold, so no rebuilt address can take its memory.
     let mut c0 = ContentStore::default();
     for ordinal in 1..=257u32 {
         c0 = c0.apply_write(&stage_write(&c0, ca(ordinal), val(b"v")).expect("fresh"));
     }
     let stored: std::collections::BTreeMap<&Address, *const Nat> =
         c0.iter().map(|(addr, _)| (addr, component_memory(addr))).collect();
-    let c1 = c0.apply_write(&stage_write(&c0, ca(258), val(b"v")).expect("fresh"));
-    let mut kept = 0;
+    let rec = stage_write(&c0, ca(258), val(b"v")).expect("fresh");
+    let written = component_memory(rec.addr());
+    let c1 = c0.apply_write(&rec);
+    let (mut kept, mut added) = (0, 0);
     for (addr, _) in &c1 {
-        if let Some(&before) = stored.get(addr) {
-            assert!(
-                std::ptr::eq(before, component_memory(addr)),
-                "the fold rebuilt {addr}, an address the slice already stored, in new memory"
-            );
-            kept += 1;
+        match stored.get(addr) {
+            Some(&before) => {
+                assert!(
+                    std::ptr::eq(before, component_memory(addr)),
+                    "the fold rebuilt {addr}, an address the slice already stored, in new memory"
+                );
+                kept += 1;
+            }
+            None => {
+                assert!(
+                    std::ptr::eq(written, component_memory(addr)),
+                    "the fold rebuilt {addr}, the address its record carries, in new memory"
+                );
+                added += 1;
+            }
         }
     }
-    assert_eq!(kept, 257, "the new slice holds every address the old one stored");
+    assert_eq!(
+        (kept, added),
+        (257, 1),
+        "the new slice holds every address the old one stored, and the written one"
+    );
+}
+
+#[test]
+fn apply_write_keeps_every_stored_value_in_the_memory_it_had() {
+    // value.rs and store.rs (`Key`, `ContentStore`): a value's clone shares
+    // its bytes and never copies them — each value's bytes sit behind an
+    // `Arc`, as each address does — so the tree nodes a fold copies clone the
+    // values they hold by that `Arc`, and the value its record carries goes
+    // into the map the same way. A value that owned its bytes would make
+    // every write copy the bytes of up to 64 values per level of the tree —
+    // an atom runs to megabytes — under M2's applier lock, every replay pay
+    // it again, and every M5 re-insert, which hands a draft's value over by a
+    // clone, hold a second copy. So each value the old slice stores keeps, in
+    // the new slice, the very memory its bytes had, and the written value
+    // sits in the memory its record holds it in. 257 entries put the tree
+    // past one node, so the fold copies an inner node as well as a leaf; the
+    // old slice and the record live through the fold, so no copied value can
+    // take their memory.
+    let mut c0 = ContentStore::default();
+    for ordinal in 1..=257u32 {
+        c0 = c0.apply_write(&stage_write(&c0, ca(ordinal), val(b"v")).expect("fresh"));
+    }
+    let stored: std::collections::BTreeMap<&Address, *const u8> =
+        c0.iter().map(|(addr, v)| (addr, value_memory(v))).collect();
+    let rec = stage_write(&c0, ca(258), val(b"v")).expect("fresh");
+    let written = value_memory(rec.val());
+    let c1 = c0.apply_write(&rec);
+    let (mut kept, mut added) = (0, 0);
+    for (addr, v) in &c1 {
+        match stored.get(addr) {
+            Some(&before) => {
+                assert!(
+                    std::ptr::eq(before, value_memory(v)),
+                    "the fold put the value at {addr}, already stored, in new memory"
+                );
+                kept += 1;
+            }
+            None => {
+                assert!(
+                    std::ptr::eq(written, value_memory(v)),
+                    "the fold put the value its record carries, at {addr}, in new memory"
+                );
+                added += 1;
+            }
+        }
+    }
+    assert_eq!(
+        (kept, added),
+        (257, 1),
+        "the new slice holds every value the old one stored, and the written one"
+    );
 }
 
 #[test]
@@ -417,6 +499,25 @@ fn val_wraps_bytes_and_compares_by_content_value() {
     // A zero-length value is legal.
     assert_eq!(Val::new(Vec::<u8>::new()).len(), 0);
     assert!(Val::new(Vec::<u8>::new()).is_empty());
+}
+
+#[test]
+fn val_clones_share_the_bytes_and_never_copy_them() {
+    // value.rs: "a clone shares the bytes and never copies them, so it is
+    // O(1) however long the value" — what a fold's node copies, M5's
+    // re-inserts and M6's delivery, which hands a value out once per position
+    // it is arranged at, all rest on. So a clone's bytes sit in the very
+    // memory its original's do, for one byte — the value INSERT stores per
+    // address — as for a megabyte, an atom's size. Not for zero bytes: an
+    // empty buffer's address can be a placeholder a copy shares, so there
+    // the test could not fail.
+    for len in [1usize, 1 << 20] {
+        let v = Val::new(vec![0x5au8; len]);
+        assert!(
+            std::ptr::eq(value_memory(&v), value_memory(&v.clone())),
+            "a clone of a {len}-byte value copied its bytes"
+        );
+    }
 }
 
 #[test]

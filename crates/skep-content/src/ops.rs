@@ -64,7 +64,7 @@ use crate::HasContent;
 #[doc(hidden)]
 #[track_caller]
 pub fn write<W>(
-    k: &Kernel<W>,
+    kernel: &Kernel<W>,
     addr: &Address,
     val: Val,
 ) -> Result<(Tumbler, Seq), TxnError<ContentError>>
@@ -74,9 +74,9 @@ where
 {
     debug_assert_content_address_routing(addr, "write");
     let home = document_of(addr).expect("content address ⇒ zeros = 3 (trusted-address contract)");
-    k.transact(&[M3State::content_lock_key(&home)], |stg| {
-        let r = stage_write(stg.working().content(), addr, val)?;
-        stg.push(r.into());
+    kernel.transact(&[M3State::content_lock_key(&home)], |stg| {
+        let rec = stage_write(stg.working().content(), addr, val)?;
+        stg.push(rec.into());
         Ok(addr.tumbler().clone())
     })
 }

@@ -186,20 +186,22 @@ fn slices_are_equal_when_they_store_the_same_values_at_the_same_addresses() {
 // ---- §B the one enumeration ----
 
 #[test]
-fn iter_visits_every_entry_exactly_once_and_promises_no_order() {
+fn iter_visits_every_entry_of_a_pinned_slice_exactly_once() {
     // The one enumeration beside the point reads: every pair once, its
     // count the slice's, over a pinned slice while a later slice grows —
     // the cell index's walk reads a snapshot this way while commits
     // proceed — and a `for` loop over `&c` reads the same walk. The order is
-    // no part of its promise (store.rs, `iter`), so the test asserts the SET
-    // and the count, never a sequence.
+    // no part of its promise (store.rs, `iter`) —
+    // `iter_offers_no_walk_from_the_far_end_so_it_promises_no_order` defends
+    // that — so this test asserts the SET and the count, never a sequence.
     let c0 = ContentStore::default();
     assert_eq!(c0.iter().len(), 0);
     assert!(c0.iter().next().is_none());
     let mut c = c0.clone();
     let n = 257u32; // past one B-tree node, so the walk crosses levels
-    for i in 1..=n {
-        let rec = stage_write(&c, &ca(i), val(format!("v{i}").as_bytes())).expect("fresh");
+    for ordinal in 1..=n {
+        let rec =
+            stage_write(&c, &ca(ordinal), val(format!("v{ordinal}").as_bytes())).expect("fresh");
         c = c.apply_write(&rec);
     }
     let later = c.apply_write(&stage_write(&c, &ca(n + 1), val(b"later")).expect("fresh"));
@@ -244,11 +246,11 @@ fn iter_lends_a_named_walk_that_knows_its_length_and_shows_only_its_cursor() {
     }
     let c0 = ContentStore::default();
     let c = c0.apply_write(&stage_write(&c0, &ca(1), val(b"secret")).expect("fresh"));
-    let lent: Iter<'_> = c.iter();
-    assert_eq!(format!("{lent:?}"), "Iter { .. }", "the cursor, not the entries");
-    assert_eq!(lends(lent), 1);
-    let looped: Iter<'_> = IntoIterator::into_iter(&c);
-    assert_eq!(lends(looped), 1, "`&ContentStore` lends the same walk");
+    let walk: Iter<'_> = c.iter();
+    assert_eq!(format!("{walk:?}"), "Iter { .. }", "the cursor, not the entries");
+    assert_eq!(lends(walk), 1);
+    let loop_walk: Iter<'_> = IntoIterator::into_iter(&c);
+    assert_eq!(lends(loop_walk), 1, "`&ContentStore` lends the same walk");
 }
 
 #[test]
@@ -389,15 +391,15 @@ fn a_value_is_stored_and_read_back_exactly_as_written_whatever_its_bytes() {
         bincode::deserialize(&bincode::serialize(&c).expect("slice serializes"))
             .expect("slice decodes");
     for (ordinal, bytes) in (1..).zip(written) {
-        let at = ca(ordinal);
+        let addr = ca(ordinal);
         for (form, slice) in [("folded", &c), ("checkpointed", &checkpointed)] {
             assert!(
-                slice.contains(at.tumbler()),
+                slice.contains(addr.tumbler()),
                 "{form}: a {}-byte value is not stored",
                 bytes.len()
             );
             assert_eq!(
-                slice.value_at(at.tumbler()).map(Val::as_bytes),
+                slice.value_at(addr.tumbler()).map(Val::as_bytes),
                 Some(bytes),
                 "{form}: a {}-byte value came back changed",
                 bytes.len()

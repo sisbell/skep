@@ -16,7 +16,7 @@ use crate::common::*;
 // ---- §C the standalone op over M2 ----
 
 #[test]
-fn standalone_write_commits_and_reads_back_through_a_snapshot() {
+fn write_commits_and_reads_back_through_a_snapshot() {
     let k = mem_kernel();
     let a1 = ca(1);
     let (stored, seq) = write(&k, &a1, val(b"alpha")).expect("fresh write commits");
@@ -32,10 +32,10 @@ fn standalone_write_commits_and_reads_back_through_a_snapshot() {
 }
 
 #[test]
-fn standalone_write_rejects_a_second_write_at_one_address_and_preserves_the_first_value() {
-    // S0(b) through the composite: the second write is a clean typed
-    // rejection (surfaced verbatim per M2), nothing committed, the stored
-    // value untouched.
+fn write_rejects_a_second_write_at_one_address_and_preserves_the_first_value() {
+    // S0(b) through `write`'s own transaction: the second write is a clean
+    // typed rejection (surfaced verbatim per M2), nothing committed, the
+    // stored value untouched.
     let k = mem_kernel();
     let a1 = ca(1);
     write(&k, &a1, val(b"first")).expect("fresh write commits");
@@ -56,11 +56,11 @@ fn stage_write_composes_into_one_transaction_off_the_working_slice() {
     // under one marker; the working slice reflects each push, so a second
     // stage of one address within the composite is rejected.
     let k = mem_kernel();
-    let d = a(&[1, 0, 1, 0, 1]);
+    let home = a(&[1, 0, 1, 0, 1]);
     let a1 = ca(1);
     let a2 = ca(2);
     let (_, seq) = k
-        .transact(&[M3State::content_lock_key(&d)], |stg| {
+        .transact(&[M3State::content_lock_key(&home)], |stg| {
             let r1 = stage_write(stg.working().content(), &a1, val(b"one"))?;
             stg.push(r1.into());
             // working() reflects the push: re-staging a1 here is rejected.
@@ -88,7 +88,7 @@ fn stage_write_composes_into_one_transaction_off_the_working_slice() {
 #[test]
 #[cfg_attr(debug_assertions, should_panic(expected = "content routing: write"))]
 #[cfg_attr(not(debug_assertions), should_panic(expected = "content address ⇒ zeros = 3"))]
-fn write_panics_on_a_non_content_address_routing_first() {
+fn write_panics_on_an_address_with_no_document_routing_first_in_debug() {
     // §C: a zeros = 1 input is an internal invariant violation, never a
     // domain rejection. A debug build's routing assertion fires BEFORE key
     // derivation (its message, not the `.expect`'s); in release it is
@@ -136,7 +136,7 @@ fn panic_file(f: impl FnOnce()) -> String {
 }
 
 #[test]
-fn a_routing_panic_is_located_at_the_line_that_passed_the_address_in() {
+fn a_panic_at_either_door_is_located_at_the_line_that_passed_the_address_in() {
     // §C: both doors are `#[track_caller]`, so a mis-routed address panics
     // at the caller's line — in this file — and not inside M4. A debug
     // build's routing assertion fires through either door; in release it is

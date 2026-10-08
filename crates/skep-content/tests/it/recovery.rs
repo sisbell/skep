@@ -208,9 +208,9 @@ fn the_record_and_the_slice_refuse_a_key_that_is_no_address() {
         (T4Clause::AdjacentZeros, &[1, 0, 0, 1][..]),
         (T4Clause::OverDepth, &[1, 0, 1, 0, 1, 0, 1, 0, 1][..]),
     ] {
-        let door = validate(t(key)).expect_err("each key breaks a T4 clause");
-        assert_eq!(door.clauses(), [clause].as_slice(), "{key:?} breaks {clause} alone");
-        let door = door.to_string();
+        let door_refusal = validate(t(key)).expect_err("each key breaks a T4 clause");
+        assert_eq!(door_refusal.clauses(), [clause].as_slice(), "{key:?} breaks {clause} alone");
+        let door_refusal = door_refusal.to_string();
         for (form, refusal) in [
             (
                 "slice",
@@ -228,7 +228,7 @@ fn the_record_and_the_slice_refuse_a_key_that_is_no_address() {
             ),
         ] {
             assert_eq!(
-                refusal, door,
+                refusal, door_refusal,
                 "the {form} refused a key breaking {clause} for another reason"
             );
         }

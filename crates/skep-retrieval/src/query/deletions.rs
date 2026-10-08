@@ -102,14 +102,18 @@ impl<W: RetrievalWorld> Query<'_, W> {
     /// by level class, with the other's current image — which needs the
     /// level-class discipline M5 owns and has not published as a read.
     ///
-    /// MEMORY IS THE ANSWER'S. The enumeration streams and each half is built
-    /// as the set it denotes — every address inserted as it arrives and a
-    /// duplicate dropped on arrival — so what is held live is the deduped
-    /// halves and the address in hand, never a materialized copy of either
-    /// document's position list, however many times its extent repeats an
-    /// address. The worst case is therefore the honest one: two documents
-    /// where each has deleted what the other still holds, whose answer
-    /// genuinely is that many addresses.
+    /// MEMORY IS THE ANSWER'S AND THE TWO COVERS'. The covers
+    /// `M5State::deletions` hands back are held through both combine passes,
+    /// each at most `|R↾d| + #runs(d)` spans — its document's provenance
+    /// record, cut where the current image falls — and each built through
+    /// M5's own transient of several copies of `R↾d`. Beside them the
+    /// enumeration streams and each half is built as the set it denotes —
+    /// every address inserted as it arrives and a duplicate dropped on arrival
+    /// — so what else is held live is the deduped halves and the address in
+    /// hand, never a materialized copy of either document's position list,
+    /// however many times its extent repeats an address. Past the covers, the
+    /// worst case is the honest one: two documents where each has deleted what
+    /// the other still holds, whose answer genuinely is that many addresses.
     pub fn show_deletions(
         &self,
         d_a: &Address,

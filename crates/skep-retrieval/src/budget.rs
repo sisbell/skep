@@ -29,9 +29,9 @@
 /// What it refuses is the two shapes no wire cap prices, and the two counts
 /// are what refuse them. The NESTED region×span product, whose region-set
 /// cost model the transport leaves to M6, is refused by the SPAN count: every
-/// span costs one resolution walk, `Θ(#runs(doc))` whether or not it yields a
-/// block — a span opening past the arranged extent is walked to the end and
-/// yields none — so a block count alone would admit any number of
+/// span costs one resolution walk, up to `#runs(doc)` steps whether or not it
+/// yields a block — a span opening past the arranged extent is walked to the
+/// end and yields none — so a block count alone would admit any number of
 /// empty-resolving spans and the walks with them, from a request the body cap
 /// alone sizes. The multi-run expansion, where one span over a fragmented
 /// document resolves to many blocks from a single span on the wire, is refused
@@ -118,10 +118,10 @@ pub const MAX_FIND_COVERAGE_SPANS: usize = MAX_COMPARE_OPERAND_BLOCKS;
 /// its value an `Arc` clone and never a byte copy — and a link reference or a
 /// withheld run owns an `Address` besides, order 300 heap bytes. `2^17` items
 /// is therefore 8 MiB of delivery, and about 45 MiB at worst: under
-/// [`MAX_COMPARE_PAIRS`]' 64 MiB report, the most one query here holds. It is
-/// also M5's `MAX_REINSERTED_VALUES`, the substrate's existing ceiling on how
-/// many values one operation may stage live. What the items RENDER to — each
-/// content item's bytes — is the transport's to bound.
+/// [`MAX_COMPARE_PAIRS`]' 64 MiB report, the largest answer any budget here
+/// admits. It is also M5's `MAX_REINSERTED_VALUES`, the substrate's existing
+/// ceiling on how many values one operation may stage live. What the items
+/// RENDER to — each content item's bytes — is the transport's to bound.
 ///
 /// A REFUSAL, never a truncation, counted as the delivery is produced: a
 /// withheld run as one item, a delivered run's positions as ONE batch admitted
@@ -145,16 +145,19 @@ pub const MAX_DELIVERY_ITEMS: usize = 1 << 17;
 /// counts see at most what it yields. A request of spans aimed past the end of
 /// a fragmented document costs `|spans| · #runs(doc)` steps and produces
 /// nothing, and `#runs` is cheap to grow: one COPY places up to M5's
-/// `MAX_PLACED_RUNS` runs. `walk_ceiling` prices each span at the most its walk
-/// can take, read off M5's O(1) run counts.
+/// `MAX_PLACED_RUNS` runs. `walk_ceiling` prices each span at an upper bound
+/// on its walk, read off M5's O(1) run counts — and prices a span M5's reader
+/// declines, or one starting in neither subspace, though either resolves to
+/// nothing: the first at its whole list, the second against both lists.
 ///
 /// The budget is the operand budget's square, `2^24` — the bound
 /// [`MAX_COMPARE_OPERAND_BLOCKS`]' card prices COMPARE's join at, order a
 /// second of one worker — and M8's `MAX_JOIN_STEPS` holds the same walk behind
 /// its region reads to the same number. It bounds the request's MULTIPLE of a
-/// document's fragmentation, never the fragmentation itself: a span reaching
-/// deep into a document of more runs than the budget is refused whatever it
-/// yields, and is asked of a less fragmented surface or nearer its start.
+/// document's fragmentation, not how fragmented a document may be: a span
+/// reaching deep into a document of more runs than the budget is refused
+/// whatever it yields, and is asked of a less fragmented surface or nearer
+/// its start.
 /// Crate-private, as M8's is: no answer here reports the run counts a caller
 /// would size a request against, so the refusal renders the number and nothing
 /// publishes it to compute with.

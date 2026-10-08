@@ -335,7 +335,8 @@ fn retrieve_v_masked_consults_its_predicate_after_the_gate_and_once_per_resolved
         asked.borrow().is_empty(),
         "a rejected request consults the predicate of nothing"
     );
-    // Answered whole: once per run, in run order, of each run's origin.
+    // Answered whole: once per run, in run order, of each run's origin —
+    // doc2, the document named, among them as its own run's origin.
     let _ = ok_of(q.retrieve_v_masked(&[spec(doc2(), vspan(1, 1, 4))], &recording));
     assert_eq!(*asked.borrow(), vec![doc2(), doc1(), doc1()]);
     // A window cutting a run consults it once; a second spec of the same
@@ -349,11 +350,12 @@ fn retrieve_v_masked_consults_its_predicate_after_the_gate_and_once_per_resolved
 }
 
 #[test]
-fn retrieve_v_masked_consults_its_predicate_of_the_origin_and_never_of_the_document_named() {
+fn retrieve_v_masked_consults_its_predicate_of_the_floated_runs_origin_not_of_the_address_named() {
     // The same card: the predicate is asked of ORIGIN documents alone — which
-    // may be a version address — and never of the document named. Named
-    // pdoc, the head's one link run is delivered, and its home, the fork, is
-    // the one document asked about; pdoc is asked about nowhere.
+    // may be a version address — and of the document named only where it is
+    // some run's origin. Named pdoc, the head's one link run is delivered,
+    // and its home, the fork, is the one document asked about; pdoc, the
+    // origin of no run delivered, is asked about nowhere.
     let k = mem_kernel();
     let vs = deposit3(&k);
     let (fork, _) = vs
@@ -532,5 +534,25 @@ fn retrieve_v_refuses_a_spec_set_whose_spans_would_walk_past_the_walk_budget() {
     assert_eq!(
         ok_of(q.retrieve_v(&vec![spec(doc2(), vspan(1, 1, 1)); 4096])).len(),
         4096
+    );
+    // The spec-set is priced WHOLE before its first spec is walked, so a
+    // request refused for its walk consults the predicate of nothing — not
+    // even of a first spec whose run it would have reached
+    // (`retrieve_v_masked`'s card).
+    let asked: RefCell<Vec<Address>> = RefCell::new(Vec::new());
+    let recording = |d: &Address| {
+        asked.borrow_mut().push(d.clone());
+        true
+    };
+    let mut priced = vec![spec(doc2(), vspan(1, 1, 1))];
+    priced.extend(vec![spec(doc2(), vspan(1, 8193, 1)); past_budget]);
+    assert_eq!(
+        err_of(q.retrieve_v_masked(&priced, &recording)),
+        RetrieveError::TooManyItems
+    );
+    assert!(
+        asked.borrow().is_empty(),
+        "priced whole, before any spec is walked: {:?}",
+        asked.borrow()
     );
 }

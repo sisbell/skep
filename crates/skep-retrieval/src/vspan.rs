@@ -157,9 +157,9 @@ impl Subspace {
     }
 }
 
-/// The most run-list steps M5's resolution of `span` against `doc` can take,
-/// read before the walk from M5's O(1) run counts — what each span is charged
-/// against the walk budget (`MAX_WALK_STEPS`).
+/// An upper bound on the run-list steps M5's resolution of `span` against
+/// `doc` can take, read before the walk from M5's O(1) run counts — what each
+/// span is charged against the walk budget (`MAX_WALK_STEPS`).
 ///
 /// M5 reaches a span by walking the selected run list from its first run, and
 /// stops at the first run opening at or past the span's reach ordinal `e`
@@ -172,7 +172,10 @@ impl Subspace {
 /// is priced at both lists, and a span M5's reader declines, or whose reach
 /// does not fit a `usize`, at the whole of its list: read off M6's own
 /// classification and M5's own reader, never off a restatement of which spans
-/// M5 folds to nothing, so the price errs only toward refusing.
+/// M5 folds to nothing, so the price errs only toward refusing. A start in
+/// neither subspace and a span the reader declines both resolve to nothing,
+/// so their request pays for a walk M5 never makes; the crate doc's *What M6
+/// refuses for size* is where a caller is told.
 pub(crate) fn walk_ceiling(m5: &M5State, doc: &Address, span: &Span) -> usize {
     let run_count = match Subspace::of_span(span) {
         Some(sub) => sub.run_count(m5, doc),

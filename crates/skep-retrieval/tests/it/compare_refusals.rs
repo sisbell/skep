@@ -207,13 +207,13 @@ fn compare_refuses_an_operand_whose_blocks_outnumber_the_budget_though_its_spans
 
 #[test]
 fn compare_refuses_an_operand_whose_spans_outnumber_the_budget_though_they_resolve_to_nothing() {
-    // The budget's other count. Every span handed to M5 is one Θ(#runs(doc))
-    // walk whether or not it yields a block — a span opening past the arranged
-    // extent walks the whole list and yields none — so a block count alone
-    // would admit any number of empty-resolving spans and their walks with
-    // them, from a nested region×span request the body cap alone sizes. The
-    // SPAN count refuses it, before either operand resolves past the budget,
-    // naming the operand.
+    // The budget's other count. Every span handed to M5 is one walk of up to
+    // #runs(doc) steps whether or not it yields a block — a span opening past
+    // the arranged extent walks the whole list and yields none — so a block
+    // count alone would admit any number of empty-resolving spans and their
+    // walks with them, from a nested region×span request the body cap alone
+    // sizes. The SPAN count refuses it, before either operand resolves past
+    // the budget, naming the operand.
     let k = mem_kernel();
     insert3(&k); // doc1 holds three positions
     let s = k.snapshot();

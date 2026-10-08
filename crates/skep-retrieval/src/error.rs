@@ -17,7 +17,8 @@
 //! ii/iv, iii, v, vi in sequence with no request-order clause to compose
 //! against.
 //!
-//! THE BUDGET REFUSALS CARRY NO COORDINATE. `TooManyItems`, `TooManyBlocks`,
+//! THE BUDGET REFUSALS LOCATE NO SPAN — `TooManyBlocks` names only the
+//! operand it refuses, the others nothing. `TooManyItems`, `TooManyBlocks`,
 //! `TooManyPairs` and `TooMuchCoverage` can fire only after their operation's
 //! gate has completed over the WHOLE request, so a gate fault always outranks
 //! a budget refusal — which is also their declaration order, the budget
@@ -152,10 +153,12 @@ pub enum RetrieveError {
     },
     /// The delivery exceeds [`MAX_DELIVERY_ITEMS`] items — refused as it is
     /// produced, a delivered run's positions as one batch — or the spec-set's
-    /// resolution would walk more than `2^24` run-list steps, priced before
-    /// its first spec is walked. A document's extent is virtual, so one spec
-    /// may name a delivery no request field prices; a refusal, never a
-    /// truncation, so R3, R5 and R8 hold verbatim for every delivery answered.
+    /// walk is PRICED past `2^24` run-list steps before its first spec is
+    /// walked, each spec at an upper bound that charges a spec resolving to
+    /// nothing as well (crate doc, *What M6 refuses for size*). A document's
+    /// extent is virtual, so one spec may name a delivery no request field
+    /// prices; a refusal, never a truncation, so R3, R5 and R8 hold verbatim
+    /// for every delivery answered.
     TooManyItems,
 }
 
@@ -224,8 +227,9 @@ pub enum CompareError {
     /// The operand's resolution exceeds [`MAX_COMPARE_OPERAND_BLOCKS`] on
     /// either of its two counts: more spans handed to M5 — one walk apiece,
     /// whatever it yields — or more blocks built, than the budget; or its
-    /// spans would walk more than `2^24` run-list steps, priced before the
-    /// operand's first span is walked. The join is `|P|·|Q|`, so a
+    /// spans' walk is PRICED past `2^24` run-list steps before the operand's
+    /// first span is walked, a span resolving to nothing charged as well
+    /// (crate doc, *What M6 refuses for size*). The join is `|P|·|Q|`, so a
     /// per-operand budget is what bounds it; refused as the operand resolves
     /// and before the join runs, with ρ₁ resolved first.
     TooManyBlocks { operand: Operand },
@@ -254,12 +258,13 @@ pub enum FindError {
     /// The request's resolution exceeds [`MAX_FIND_COVERAGE_SPANS`] on either
     /// of its two counts: more spans handed to M5 — one walk apiece, whatever
     /// it yields — or more coverage spans produced, than the budget; or its
-    /// spans would walk more than `2^24` run-list steps, priced before its
-    /// first span is walked. That is the one factor of this operation's cost
-    /// that the request owns, and the multiplier it applies to two
-    /// world-sized scans. Refused BEFORE the candidate scan runs; a refusal,
-    /// never a truncation, so FD-COMPLETE holds verbatim for every request
-    /// answered.
+    /// spans' walk is PRICED past `2^24` run-list steps before its first span
+    /// is walked, a span resolving to nothing charged as well (crate doc,
+    /// *What M6 refuses for size*). That is the one factor of this
+    /// operation's cost that the request owns, and the multiplier it applies
+    /// to two world-sized scans. Refused BEFORE the candidate scan runs; a
+    /// refusal, never a truncation, so FD-COMPLETE holds verbatim for every
+    /// request answered.
     TooMuchCoverage,
 }
 
@@ -296,7 +301,7 @@ impl fmt::Display for RetrieveError {
             RetrieveError::TooManyItems => write!(
                 f,
                 "retrieve_v: the delivery runs past the delivery budget of \
-                 {MAX_DELIVERY_ITEMS} items (MAX_DELIVERY_ITEMS), or its specs walk past \
+                 {MAX_DELIVERY_ITEMS} items (MAX_DELIVERY_ITEMS), or its specs are priced past \
                  {MAX_WALK_STEPS} run-list steps; narrow its spans or split the request"
             ),
         }
@@ -379,8 +384,8 @@ impl fmt::Display for CompareError {
                 f,
                 "compare: {operand} resolves past the operand budget of \
                  {MAX_COMPARE_OPERAND_BLOCKS} spans or {MAX_COMPARE_OPERAND_BLOCKS} blocks \
-                 (MAX_COMPARE_OPERAND_BLOCKS), or its spans walk past {MAX_WALK_STEPS} \
-                 run-list steps; narrow its spans or split the request"
+                 (MAX_COMPARE_OPERAND_BLOCKS), or its spans are priced past \
+                 {MAX_WALK_STEPS} run-list steps; narrow its spans or split the request"
             ),
             CompareError::TooManyPairs => write!(
                 f,
@@ -410,8 +415,8 @@ impl fmt::Display for FindError {
                 f,
                 "find_docs_containing: the request resolves past the coverage budget of \
                  {MAX_FIND_COVERAGE_SPANS} spans or {MAX_FIND_COVERAGE_SPANS} coverage spans \
-                 (MAX_FIND_COVERAGE_SPANS), or its spans walk past {MAX_WALK_STEPS} run-list \
-                 steps; narrow its spans or split the request"
+                 (MAX_FIND_COVERAGE_SPANS), or its spans are priced past {MAX_WALK_STEPS} \
+                 run-list steps; narrow its spans or split the request"
             ),
         }
     }

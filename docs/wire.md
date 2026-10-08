@@ -1521,11 +1521,14 @@ whose extent transclusion has multiplied is refused rather than built).
 Each of the three operations also answers its own code — the compare
 operand's `too_many_blocks`, the find request's `too_much_coverage`, the
 retrieve-v spec-set's `too_many_items` — when the run-list walk its spans
-ask of the arrangement would exceed `MAX_COMPARE_OPERAND_BLOCKS`² =
-16777216 steps: each span is priced, before the first is walked, at the
-most its walk can take — up to the document's whole run count, for a
-span opening past the arranged end, whatever it yields. All permanent —
-no retry shrinks the request.
+may ask of the arrangement is priced past `MAX_COMPARE_OPERAND_BLOCKS`² =
+16777216 steps: each span is priced, before the first is walked, at an
+upper bound on its walk — up to the document's whole run count, for a
+span opening past the arranged end, whatever it yields, and that whole
+count for a span the arrangement's span reader declines (a
+depth-incompatible one), though it resolves to nothing; so a request of
+spans that each degrade to nothing can still be refused for its size.
+All permanent — no retry shrinks the request.
 
 Link-discovery reads: `not_a_link`, `bad_region`, `image_too_large` (a
 read past M8's run budget `MAX_IMAGE_RUNS` = 4096, or past the product

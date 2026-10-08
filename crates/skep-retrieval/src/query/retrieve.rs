@@ -30,10 +30,12 @@ impl<W: RetrievalWorld + HasContent> Query<'_, W> {
     ///
     /// Rejects the WHOLE request on any malformed spec (well-formedness
     /// precondition); gaps / depth-incompatible (`#start ≥ 3`) / foreign or
-    /// empty subspaces degrade to silent empty contributions, never an error
-    /// (R6 — M5's defensive resolution yields fewer-or-zero runs). Empty
-    /// spec-set ⇒ `Ok(empty)`. Delivery is one item per active V-position of
-    /// every DELIVERED run (R3 exactness, R8 no-dedup) — and one
+    /// empty subspaces degrade to silent empty contributions and are never
+    /// refused for what they name (R6 — M5's defensive resolution yields
+    /// fewer-or-zero runs); like every spec they are priced against the walk
+    /// budget below, so a spec-set of them can still be refused for its size.
+    /// Empty spec-set ⇒ `Ok(empty)`. Delivery is one item per active
+    /// V-position of every DELIVERED run (R3 exactness, R8 no-dedup) — and one
     /// [`DeliveryItem::Withheld`] per run whose origin is not a registered
     /// document, occupying that run's `width` positions (PUB-1.57): the one
     /// masking the identity predicate leaves, since the predicate is
@@ -49,6 +51,8 @@ impl<W: RetrievalWorld + HasContent> Query<'_, W> {
     /// promise about the specs before the offending one: a caller may rely on
     /// specs `0..i` being registered documents with well-formed spans, and
     /// repair a batch by walking forward rather than re-checking it whole.
+    /// And it completes over the whole spec-set before any spec is priced or
+    /// walked, so a gate fault always outranks `TooManyItems`.
     ///
     /// COST IS THE ANSWER'S SIZE, AND THE ANSWER'S SIZE IS SET BY STORED STATE
     /// THE REQUEST DOES NOT SEE. The delivery is `Σᵢ |σᵢ ∩ [1, n_Sᵢ]|` items —
@@ -61,12 +65,14 @@ impl<W: RetrievalWorld + HasContent> Query<'_, W> {
     /// PRODUCED: a withheld run as one item, a delivered run's positions as one
     /// batch before the first is expanded), and the spec-set's resolution to
     /// the walk budget of `2^24` run-list steps (`TooManyItems` too, priced
-    /// over the whole spec-set before its first spec is walked, each span at
-    /// the most its walk can take). Both are REFUSALS, never truncations: R3
-    /// forbids delivering fewer, R5 reordering into something cheaper and R8
-    /// collapsing the repeats, and a refused request is delivered nothing at
-    /// all, so all three hold verbatim for every delivery answered. A caller
-    /// wanting more splits the spec-set or narrows its spans.
+    /// over the whole spec-set before its first spec is walked, each spec at
+    /// an upper bound on its walk — one that degrades to nothing under R6
+    /// included; crate doc, *What M6 refuses for size*). Both are REFUSALS,
+    /// never truncations: R3 forbids delivering fewer, R5 reordering into
+    /// something cheaper and R8 collapsing the repeats, and a refused request
+    /// is delivered nothing at all, so all three hold verbatim for every
+    /// delivery answered. A caller wanting more splits the spec-set or narrows
+    /// its spans.
     pub fn retrieve_v(&self, specs: &[Spec]) -> Result<Delivery, RetrieveError> {
         // The masked form under the all-true predicate: its only `Withheld`
         // items are unregistered-origin runs (PUB-6.37; RES-162). M10's
@@ -101,9 +107,13 @@ impl<W: RetrievalWorld + HasContent> Query<'_, W> {
     /// predicate is consulted only after the gate and the walk budget have
     /// passed the whole request — a request refused at either consults it of
     /// nothing, and one refused for the size of its delivery has consulted it
-    /// of the runs resolved up to the one that crossed the budget — once per
-    /// resolved run with a registered origin, of the origin document alone —
-    /// which may be a version address — and never of the document named.
+    /// of every run resolved up to AND INCLUDING the one that crossed the
+    /// budget, each asked before it is counted — once per resolved run with a
+    /// registered origin, of that run's origin document alone, which may be a
+    /// version address. The document NAMED is asked about only where it is
+    /// itself some run's origin — as its own content is, PUB-6.41 testing
+    /// every run against its origin — and never on its own account, its
+    /// readability being M10's doc-argument consult (PUB-6.12).
     pub fn retrieve_v_masked(
         &self,
         specs: &[Spec],
@@ -123,7 +133,7 @@ impl<W: RetrievalWorld + HasContent> Query<'_, W> {
         }
         let over = |OverBudget| RetrieveError::TooManyItems;
         // The walk budget, priced over the whole spec-set before its first
-        // spec is walked: each span at the most its resolution can walk
+        // spec is walked: each span at an upper bound on its walk
         // (MAX_WALK_STEPS' card).
         let mut steps_priced = Count::against(MAX_WALK_STEPS);
         for spec in specs {

@@ -61,10 +61,11 @@ impl<W: RetrievalWorld> Query<'_, W> {
     /// (`MalformedSpan`), every span fault located by an unambiguous
     /// `(operand, region, span-index)`. A well-formed depth-incompatible span
     /// passes and contributes nothing to its operand's region
-    /// (consulting-state — success, X12); overlapping/repeated windows within
-    /// one operand are redundant, not wrong (⟦Γ⟧ is a set-union; duplicates
-    /// collapse denotationally and the stable sort keeps the listed order
-    /// deterministic).
+    /// (consulting-state — success, X12), though it counts toward its
+    /// operand's span count and walk price like any span;
+    /// overlapping/repeated windows within one operand are redundant, not
+    /// wrong (⟦Γ⟧ is a set-union; duplicates collapse denotationally and the
+    /// stable sort keeps the listed order deterministic).
     ///
     /// WHICH REFUSAL SPEAKS. The gate walks ρ₁'s regions and their spans in
     /// submitted order, then ρ₂'s, and reports the FIRST fault whatever its
@@ -79,15 +80,16 @@ impl<W: RetrievalWorld> Query<'_, W> {
     /// request's: a region names a span list and a spec-set names a region
     /// list, so their product is the caller's to choose and squares in it. So
     /// each operand is held to the operand budget,
-    /// [`MAX_COMPARE_OPERAND_BLOCKS`] — on the spans it hands to M5, each one
-    /// `Θ(#runs(doc))` walk whatever it yields, and on the blocks it resolves
-    /// to (`TooManyBlocks`, refused AS THE OPERAND RESOLVES and before the join
-    /// runs, ρ₁ resolved first) — and its spans' walks to the walk budget of
-    /// `2^24` run-list steps (`TooManyBlocks` too, priced over the operand
-    /// before its first span is walked); and the report to the pair budget,
-    /// [`MAX_COMPARE_PAIRS`] correspondences (`TooManyPairs`, refused AS THE
-    /// PAIRS ARE PRODUCED, so an over-budget fan-out stops accumulating rather
-    /// than being built and then measured).
+    /// [`MAX_COMPARE_OPERAND_BLOCKS`] — on the spans it hands to M5, each a
+    /// walk of up to `#runs(doc)` steps whatever it yields, and on the blocks
+    /// it resolves to (`TooManyBlocks`, refused AS THE OPERAND RESOLVES and
+    /// before the join runs, ρ₁ resolved first) — and its spans' walks to the
+    /// walk budget of `2^24` run-list steps (`TooManyBlocks` too, priced over
+    /// the operand before its first span is walked, a depth-incompatible span
+    /// charged its whole run list; crate doc, *What M6 refuses for size*); and
+    /// the report to the pair budget, [`MAX_COMPARE_PAIRS`] correspondences
+    /// (`TooManyPairs`, refused AS THE PAIRS ARE PRODUCED, so an over-budget
+    /// fan-out stops accumulating rather than being built and then measured).
     ///
     /// All are REFUSALS, never truncations: a request past any gets a typed
     /// rejection and no report, so X12 R1–R2 hold verbatim for every request
@@ -244,8 +246,8 @@ impl<'a> Block<'a> {
 /// and the block count, taken as `iter_resolve` produces each run. The
 /// budget's card says why there are two and what they stop within one span;
 /// `Count`'s says where the boundary falls. And `Err(OverBudget)` when its
-/// spans would walk past [`MAX_WALK_STEPS`], priced over the whole operand
-/// before its first span is walked, each span at its [`walk_ceiling`] — a
+/// spans are priced past [`MAX_WALK_STEPS`], over the whole operand before
+/// its first span is walked, each span at its [`walk_ceiling`] — a
 /// declined span too, priced at its whole list, so the price stays an upper
 /// bound whatever this walk hands M5.
 ///

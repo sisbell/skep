@@ -20,9 +20,10 @@ impl<W: RetrievalWorld> Query<'_, W> {
     /// V-arity exists.
     ///
     /// Projects over `doc`'s READING SURFACE (crate doc, *Which arrangement an
-    /// operation answers from*): the gate and the span checks below run on
-    /// the address named, and the surface's runs are the ones whose origins
-    /// are reported.
+    /// operation answers from*): the registry gate runs on the address named,
+    /// the span's own checks read no arrangement, and the two verdicts that
+    /// read one — `EmptySubspace` and `RangeNotPresent` — read the surface's,
+    /// whose runs are the ones whose origins are reported.
     ///
     /// UNFILTERED (PUB-6.15): the origins come back whole for a readable
     /// argument, an unreadable origin's identity included; no predicate is

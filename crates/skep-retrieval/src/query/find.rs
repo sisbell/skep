@@ -28,8 +28,9 @@ impl<W: RetrievalWorld> Query<'_, W> {
     /// does NOT restrict subspace — a link/foreign-subspace span passes and
     /// stays inert downstream (R⁻¹ indexes content provenance only, J-LV),
     /// and a depth-incompatible span resolves to empty coverage
-    /// (consulting-state, like RETRIEVEV's R6). Registered-empty contributes
-    /// nothing.
+    /// (consulting-state, like RETRIEVEV's R6) — and each still counts toward
+    /// the request's span count and walk price below, like any span.
+    /// Registered-empty contributes nothing.
     ///
     /// WHICH REFUSAL SPEAKS. The gate walks the regions in submitted order and
     /// each region's spans in submitted order, reporting the FIRST fault
@@ -43,12 +44,12 @@ impl<W: RetrievalWorld> Query<'_, W> {
     /// COST, IN THREE FACTORS OF WHICH ONE IS THE REQUEST'S. The work is
     /// `|spans| · #runs(doc) + |candidates| · #runs(d) · |coverage|`: the
     /// coverage is the union of the region images, one resolution walk per
-    /// span, each `Θ(#runs(doc))` whether or not it yields coverage; the
-    /// candidate scan runs that coverage against the whole of M5's R⁻¹ index;
-    /// and the filter is one `arranges_any` per candidate, each at worst
-    /// `#runs(d) · |coverage|` pair tests in the CANDIDATE's own fragmentation
-    /// — a factor the request never names and M6 never sees — and each
-    /// holding nothing.
+    /// span, each up to `#runs(doc)` steps whether or not it yields coverage;
+    /// the candidate scan runs that coverage against the whole of M5's R⁻¹
+    /// index; and the filter is one `arranges_any` per candidate, each at
+    /// worst `#runs(d) · |coverage|` pair tests in the CANDIDATE's own
+    /// fragmentation — a factor the request never names and M6 never sees —
+    /// and each holding nothing.
     ///
     /// Only `|spans|` and `|coverage|` are the request's, and both are held to
     /// the coverage budget, [`MAX_FIND_COVERAGE_SPANS`] (`TooMuchCoverage`,
@@ -59,12 +60,13 @@ impl<W: RetrievalWorld> Query<'_, W> {
     /// they do not, are on the budget's card). The walk behind each span — up
     /// to `#runs(doc)` steps, whatever the span covers — is held, summed over
     /// the request, to the walk budget of `2^24` run-list steps
-    /// (`TooMuchCoverage` too, priced before the first span is walked). Each
-    /// is a REFUSAL, never a truncation: a request past either gets a typed
-    /// rejection and no answer, so FD-COMPLETE holds verbatim for every request
-    /// this operation answers — a truncated coverage would silently drop
-    /// containers, which is the hazard the operation names. A caller wanting
-    /// more splits the request.
+    /// (`TooMuchCoverage` too, priced before the first span is walked, a span
+    /// resolving to nothing charged as well; crate doc, *What M6 refuses for
+    /// size*). Each is a REFUSAL, never a truncation: a request past either
+    /// gets a typed rejection and no answer, so FD-COMPLETE holds verbatim for
+    /// every request this operation answers — a truncated coverage would
+    /// silently drop containers, which is the hazard the operation names. A
+    /// caller wanting more splits the request.
     ///
     /// `|R|` and a candidate's `#runs(d)` are the WORLD's and no number here
     /// reaches them: they stay with request rate and concurrency, which are
@@ -80,10 +82,13 @@ impl<W: RetrievalWorld> Query<'_, W> {
     /// §3; PUB-6.13/6.19): the same answer, minus every CONTAINER the reading
     /// principal may not read. The filter is at container IDENTITY — a
     /// candidate document `readable` answers false for is dropped, exactly as a
-    /// result-set link's unreadable home is. The region-spec DOCUMENTS are the
-    /// caller's doc-argument consult (pre-dispatch), not filtered here. M6
-    /// decides no readability here — it applies the predicate M10 threads in,
-    /// at the container, which is the granularity the answer has.
+    /// result-set link's unreadable home is. The region-spec DOCUMENTS' own
+    /// readability is the caller's doc-argument consult (pre-dispatch,
+    /// PUB-6.12); here a region-spec document is filtered only where it is
+    /// itself a candidate container, at its identity like any other (PUB-6.13
+    /// drops every unreadable container). M6 decides no readability here — it
+    /// applies the predicate M10 threads in, at the container, which is the
+    /// granularity the answer has.
     ///
     /// The predicate's registered-only precondition (PUB-6.37) holds at this
     /// door BY CONSTRUCTION — every candidate is a document R records a

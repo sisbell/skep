@@ -95,10 +95,22 @@
 //! built whole before any caller holds it, so it carries a delivery budget,
 //! [`MAX_DELIVERY_ITEMS`]. The operand budget and the coverage budget are each
 //! counted twice, on the spans handed to M5 and on what they produce;
-//! [`MAX_COMPARE_OPERAND_BLOCKS`]'s card says why. And all three operations
-//! hold the run-list walk their spans ask of M5 — up to a document's whole run
-//! list per span, whatever the span yields — to one walk budget of `2^24`
-//! steps, priced before the first span is walked.
+//! [`MAX_COMPARE_OPERAND_BLOCKS`]'s card says why.
+//!
+//! And all three hold the run-list walk their spans may ask of M5 to a walk
+//! budget of `2^24` steps — per COMPARE operand, per FINDDOCSCONTAINING
+//! request, per RETRIEVEV spec-set — priced before the first of those spans is
+//! walked. Each span is charged an upper bound on its walk, read off M5's run
+//! counts: the runs of the list its start's subspace selects — of both lists,
+//! for a start in neither subspace — capped at the span's reach ordinal, so
+//! every run for a span opening past the arranged end; and a span M5's span
+//! reader declines, a depth-incompatible one, is charged that whole list
+//! outright. So the walk refusal answers that PRICE, not the walk M5 would
+//! make: a span that resolves to nothing — R6's silent degradation, X12's
+//! consulting-state window, a foreign-subspace span — is priced like any
+//! other, and enough of them over a fragmented document refuse the request
+//! for its size, though none is ever refused for what it names. A caller so
+//! refused splits the request.
 //!
 //! The four numbers are published, so a caller sizes a request against them
 //! rather than transcribing them; the walk budget is not — as M8's is not, no

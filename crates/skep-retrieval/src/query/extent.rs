@@ -120,9 +120,11 @@ impl<W: RetrievalWorld> Query<'_, W> {
     ///
     /// The extents are the READING SURFACE's (crate doc, *Which arrangement an
     /// operation answers from*): a bare published address with a head reports
-    /// the head's counts, a version address its own member's, and a published
-    /// address whose own arrangement is empty reports `⟨⟩` only while it has
-    /// no head. The registry gate runs on the address named.
+    /// the head's counts, a version address its own member's, and the answer
+    /// is `⟨⟩` exactly when the surface holds nothing — for a published
+    /// address, its own arrangement while it has no head and its head's once
+    /// it has one, whatever the address itself holds. The registry gate runs
+    /// on the address named.
     ///
     /// No predicate is threaded and none belongs: the extents COUNT the
     /// positions a masked-origin run occupies and are never shrunk to the

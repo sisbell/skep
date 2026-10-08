@@ -10,8 +10,9 @@
 //! exactly what remains at every step, shows no entry in its `Debug`, and
 //! offers no walk from the far end; that any byte string is a value, comes
 //! back exactly as written, and renders into `Debug` as its byte length,
-//! never a byte; and, in debug builds, that `stage_write` panics on a
-//! non-content address before it looks at what is stored there.
+//! never a byte; and that `stage_write` panics on a non-content address in
+//! debug builds, before it looks at what is stored there, and stages every
+//! such address as given in release.
 
 use skep_address::Tumbler;
 use skep_content::{stage_write, ContentError, ContentStore, ContentWrite, Iter, Val};
@@ -476,5 +477,41 @@ mod routing {
         let c = ContentStore::default().apply_write(&replayed);
         assert!(c.contains(link_elem.tumbler()), "the replayed record's value is stored");
         let _ = stage_write(&c, &link_elem, val(b"y"));
+    }
+}
+
+// The assertion's other edge: release compiles it out and trusts the
+// caller's routing, so a release build stages every address it stops in a
+// debug build as given — the stage door's twin of the decode admitting every
+// one (recovery.rs).
+#[cfg(not(debug_assertions))]
+#[test]
+fn stage_write_stages_every_mis_routed_address_as_given_in_release() {
+    // store.rs (`stage_write`, and `ContentStore`'s second key invariant): a
+    // content-subspace element address — C1's element LEVEL and L0's content
+    // SUBSPACE — is the caller's to guarantee, and a release build stages a
+    // violator of either half as given. `write`'s release test commits a
+    // document address, the level half through `write`'s door; here each
+    // shape the debug routing tests stop goes through `stage_write`: its
+    // record carries the address it was handed, and the fold stores the
+    // value there.
+    for (shape, key) in [
+        ("a node address", &[1u32][..]),
+        ("an account address", &[1, 0, 1][..]),
+        ("a document address", &[1, 0, 1, 0, 1][..]),
+        ("a link-subspace element address", &[1, 0, 1, 0, 1, 0, 2, 1][..]),
+        ("a subspace-3 element address", &[1, 0, 1, 0, 1, 0, 3, 1][..]),
+    ] {
+        let addr = a(key);
+        let rec =
+            stage_write(&ContentStore::default(), &addr, val(b"x")).unwrap_or_else(|refusal| {
+                panic!("a release build refused to stage {shape}: {refusal}")
+            });
+        assert_eq!(rec.addr(), addr.tumbler(), "a release build staged {shape} at another address");
+        assert_eq!(
+            ContentStore::default().apply_write(&rec).value_at(addr.tumbler()).map(Val::as_bytes),
+            Some(&b"x"[..]),
+            "a release build did not store the value staged at {shape}"
+        );
     }
 }

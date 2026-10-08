@@ -1,18 +1,21 @@
 //! The journaled record and the checkpointed slice: that both survive a
-//! bincode round trip and M2's durable recovery across a checkpoint; that
-//! the slice's serialized form is the format its readers pin; that the
-//! slice's decode takes its entries in every order they can arrive, and
-//! refuses a body naming one address twice, however its digits spell it;
-//! that neither decode trusts a count its bytes do not carry or admits a key
-//! that is no tumbler, or no T4-valid address; that both admit every
-//! T4-valid address, whatever its routing, since a release build stages each
-//! as given; and that a decode holding several faults is refused for the
-//! first it reads.
+//! bincode round trip and M2's durable recovery across a checkpoint, the
+//! reopen starting from that checkpoint; that the slice's serialized form is
+//! the format its readers pin; that the slice's decode takes its entries in
+//! every order they can arrive, and refuses a body naming one address twice,
+//! however its digits spell it and wherever its two namings stand, while
+//! admitting every body that names none twice, the empty one included; that
+//! neither decode trusts a count its bytes do not carry — the slice's
+//! entries, an address's components, a component's digits, a value's bytes —
+//! or admits a key that is no tumbler, or no T4-valid address; that both
+//! admit every T4-valid address, whatever its routing, since a release build
+//! stages each as given; and that a decode holding several faults is refused
+//! for the first it reads, within an entry as across entries.
 
 use serde::de::DeserializeOwned;
 use skep_address::{content_subspace, validate, Level, Nat, T4Clause, Tumbler};
 use skep_content::{stage_write, write, ContentError, ContentStore, ContentWrite, HasContent, Val};
-use skep_kernel::Kernel;
+use skep_kernel::{Kernel, Recovery};
 use tempfile::tempdir;
 
 use crate::common::*;
@@ -126,10 +129,12 @@ fn the_record_and_the_slice_refuse_a_count_their_bytes_do_not_carry() {
     // skipped for an older base, a record is `Corruption`. So a
     // declared count the bytes do not carry (a writer/reader skew reading
     // another slice's bytes as this length, or a crafted file) must decode as
-    // an `Err`, by running out of input. Reserving room for the count first
-    // breaks that: past `isize::MAX` bytes the reservation panics, and short
-    // of it a count the allocator cannot grant aborts the process. A count one
-    // past what the bytes hold is the control, refused the ordinary way.
+    // an `Err`, by running out of input — at each count the form carries: the
+    // slice's entries, an address's components, a component's digits and a
+    // value's bytes. Reserving room for the count first breaks that: past
+    // `isize::MAX` bytes the reservation panics, and short of it a count the
+    // allocator cannot grant aborts the process. A count one past what the
+    // bytes hold is the control, refused the ordinary way.
     let held = ContentStore::default()
         .apply_write(&stage_write(&ContentStore::default(), &ca(1), val(b"held")).expect("fresh"));
     let mut one_past = bincode::serialize(&held).expect("slice serializes");
@@ -149,6 +154,13 @@ fn the_record_and_the_slice_refuse_a_count_their_bytes_do_not_carry() {
     assert_refused::<ContentWrite>(
         "a record whose address counts more components than follow",
         &u64::MAX.to_le_bytes(),
+    );
+    // One component, which counts more `u32` digits than follow.
+    let mut long_digits = 1u64.to_le_bytes().to_vec();
+    long_digits.extend_from_slice(&u64::MAX.to_le_bytes());
+    assert_refused::<ContentWrite>(
+        "a record whose address's one component counts more digits than follow",
+        &long_digits,
     );
 }
 
@@ -274,15 +286,15 @@ fn the_record_and_the_slice_admit_every_address_a_release_build_can_stage() {
     // element address — ASN-0093 C1, the element LEVEL, and L0, the content
     // SUBSPACE — is the stage door's caller to guarantee, checked in debug
     // builds only; a release build stages a violator of either half as given
-    // (`write_trusts_a_document_level_address_in_release_and_panics_on_it_in_debug`
-    // commits one). So both decode paths take it on journal and checkpoint
-    // integrity: a decode that refused one would leave that build unable to
-    // replay its own journal. The decode therefore admits every address T4
-    // admits, whatever its routing — here one of each shape the routing
-    // assertion stops in a debug build: each level short of an element, and
-    // an element in a subspace other than content's, each checked first to
-    // be T4-valid and no content-subspace element address. The bytes are
-    // `raw_slice`'s and `raw_record`'s.
+    // (store.rs's `stage_write_stages_every_mis_routed_address_as_given_in_release`
+    // stages each shape below). So both decode paths take it on journal and
+    // checkpoint integrity: a decode that refused one would leave that build
+    // unable to replay its own journal. The decode therefore admits every
+    // address T4 admits, whatever its routing — here one of each shape the
+    // routing assertion stops in a debug build: each level short of an
+    // element, and an element in a subspace other than content's, each checked
+    // first to be T4-valid and no content-subspace element address. The bytes
+    // are `raw_slice`'s and `raw_record`'s.
     for (shape, key) in [
         ("a node address", &[1u32][..]),
         ("an account address", &[1, 0, 1][..]),
@@ -329,6 +341,23 @@ fn every_order<T: Clone>(items: &[T]) -> Vec<Vec<T>> {
         }
     }
     orders
+}
+
+/// Every sequence of exactly `len` picks from `0..choices`, repeats allowed:
+/// each sequence one shorter, followed by each pick — `choices^len` vectors.
+fn every_sequence(choices: usize, len: usize) -> Vec<Vec<usize>> {
+    if len == 0 {
+        return vec![Vec::new()];
+    }
+    let mut sequences = Vec::new();
+    for shorter in every_sequence(choices, len - 1) {
+        for pick in 0..choices {
+            let mut sequence = shorter.clone();
+            sequence.push(pick);
+            sequences.push(sequence);
+        }
+    }
+    sequences
 }
 
 #[test]
@@ -421,6 +450,67 @@ fn the_slice_refuses_a_body_naming_one_address_twice() {
 }
 
 #[test]
+fn the_slice_admits_a_body_exactly_when_it_names_no_address_twice() {
+    // store.rs (`entry_by_entry`): a body naming one address twice is
+    // refused, and every body the decode admits names one state, whatever
+    // order its entries take. Both are laws over every body, and the test
+    // above names ca(1) twice only side by side — which a check against the
+    // entry just before would refuse as well, while admitting ca(1), ca(2),
+    // ca(1) with the later value standing. Nor does any other test decode
+    // the empty body, the slice a world holds before any content is written.
+    // So every body of up to three entries over ca(1), ca(2) and ca(3) is
+    // laid down — 40, each entry with a value no other entry carries: one
+    // naming an address twice is refused by the decode's own message,
+    // wherever its two namings stand; every other, the empty body included,
+    // decodes to the slice holding its entries.
+    let keys = [ca(1), ca(2), ca(3)];
+    let bodies: Vec<Vec<usize>> = (0..=3).flat_map(|len| every_sequence(keys.len(), len)).collect();
+    assert_eq!(
+        bodies.iter().collect::<std::collections::BTreeSet<_>>().len(),
+        1 + 3 + 9 + 27,
+        "the generator did not yield each body of up to three entries over three addresses once"
+    );
+    for body in &bodies {
+        let named: Vec<usize> = body.iter().map(|&k| k + 1).collect();
+        // Each entry's value is its position in the body, so no two entries
+        // carry one value.
+        let entries: Vec<(Tumbler, Vec<u8>)> = body
+            .iter()
+            .enumerate()
+            .map(|(at, &k)| (keys[k].tumbler().clone(), vec![b'a' + at as u8]))
+            .collect();
+        let bytes = bincode::serialize(&entries).expect("the raw slice serializes");
+        let names_an_address_twice =
+            body.iter().collect::<std::collections::BTreeSet<_>>().len() < body.len();
+        if names_an_address_twice {
+            assert_eq!(
+                assert_refused::<ContentStore>(
+                    &format!("a body naming ordinals {named:?}"),
+                    &bytes
+                ),
+                "a content address named twice in one slice",
+                "a body naming ordinals {named:?} was refused for another reason"
+            );
+        } else {
+            let mut holding = ContentStore::default();
+            for (&k, (_, value)) in body.iter().zip(&entries) {
+                let rec = stage_write(&holding, &keys[k], val(value))
+                    .expect("fresh: the body names no address twice");
+                holding = holding.apply_write(&rec);
+            }
+            let decoded: ContentStore = bincode::deserialize(&bytes).unwrap_or_else(|refusal| {
+                panic!("a body naming ordinals {named:?}, none twice, was refused: {refusal}")
+            });
+            assert_eq!(
+                decoded, holding,
+                "a body naming ordinals {named:?}, none twice, decoded to a slice other than the \
+                 one holding its entries"
+            );
+        }
+    }
+}
+
+#[test]
 fn the_record_and_the_slice_refuse_for_the_first_fault_they_read() {
     // store.rs (`entry_by_entry`'s REFUSAL PRECEDENCE, and `ContentWrite`):
     // where several refusals hold of one body, the first fault in reading
@@ -432,8 +522,10 @@ fn the_record_and_the_slice_refuse_for_the_first_fault_they_read() {
     // because the key is checked against the entries before it only once its
     // value is read; a key breaking T4 under a count no body could carry,
     // refused for the key, because a count is no fault until the body runs
-    // out; and a record whose address breaks T4 and whose value counts more
-    // bytes than follow, refused for the address, which it reads first.
+    // out; and one entry whose key breaks T4 and whose value counts more
+    // bytes than follow, refused for the key in the slice as in the record,
+    // because within an entry the key is read, and refused at M1's door,
+    // before its value is.
     let no_address: &[u32] = &[1, 0, 0, 1];
     let past_its_bytes = u64::MAX.to_le_bytes();
     let door_refusal = validate(t(no_address)).expect_err("the key breaks T4").to_string();
@@ -450,6 +542,13 @@ fn the_record_and_the_slice_refuse_for_the_first_fault_they_read() {
     // ca(1), then a key breaking T4, under a count no body could carry.
     let mut overlong_count = raw_slice(&[CA1, no_address]);
     overlong_count[..8].copy_from_slice(&past_its_bytes);
+    // One entry whose key breaks T4 and whose value counts more bytes than
+    // follow: a record's bytes, and with a count of one before them, a
+    // slice's.
+    let mut both_fail = bincode::serialize(&raw_key(no_address)).expect("the raw key serializes");
+    both_fail.extend_from_slice(&past_its_bytes);
+    let mut one_entry_both_fail = 1u64.to_le_bytes().to_vec();
+    one_entry_both_fail.extend_from_slice(&both_fail);
     for (what, body, speaks) in [
         (
             "a key breaking T4 before a second naming of ca(1)",
@@ -467,6 +566,11 @@ fn the_record_and_the_slice_refuse_for_the_first_fault_they_read() {
             &value_refusal,
         ),
         ("a key breaking T4 under a count no body could carry", overlong_count, &door_refusal),
+        (
+            "one entry whose key breaks T4 and whose value counts more bytes than follow",
+            one_entry_both_fail,
+            &door_refusal,
+        ),
     ] {
         assert_eq!(
             &assert_refused::<ContentStore>(&format!("a slice with {what}"), &body),
@@ -474,10 +578,8 @@ fn the_record_and_the_slice_refuse_for_the_first_fault_they_read() {
             "a slice with {what} was refused for a fault it reads later"
         );
     }
-    let mut record = bincode::serialize(&raw_key(no_address)).expect("the raw address serializes");
-    record.extend_from_slice(&past_its_bytes);
     assert_eq!(
-        assert_refused::<ContentWrite>("a record whose address and value both fail", &record),
+        assert_refused::<ContentWrite>("a record whose address and value both fail", &both_fail),
         door_refusal,
         "a record whose address and value both fail was refused for its value"
     );
@@ -490,20 +592,29 @@ fn content_survives_durable_recovery_across_a_checkpoint() {
     // §Recovery: M4 owns no recovery machinery — M2's open loads the latest
     // checkpoint (deserializing the slice) and replays the tail by folding
     // ContentWrite records through apply → apply_write: a1 is written before
-    // the checkpoint, a2 after it. Which base M2 chose this test cannot see —
-    // with the journal still reaching genesis, a checkpoint that failed to
-    // load would be skipped for a full replay with the same answer — so the
-    // checkpoint form itself is held by the round trip and the pinned bytes.
+    // the checkpoint, a2 after it. The contents alone cannot say which base
+    // M2 chose — with the journal still reaching genesis, a checkpoint passed
+    // over would leave a full replay with the same answer — so the test asks
+    // M2's own report (`Kernel::recovery`): the reopen started from that
+    // checkpoint and passed nothing over, so the slice came back through M2's
+    // codec and load, and not only through the round trip above.
     let dir = tempdir().expect("tempdir");
     let a1 = ca(1);
     let a2 = ca(2);
-    {
+    let checkpointed_at = {
         let k = Kernel::<World>::open(cfg_fsync(dir.path()), genesis()).expect("open");
         write(&k, &a1, val(b"alpha")).expect("first write");
-        k.checkpoint().expect("checkpoint");
+        let at = k.checkpoint().expect("checkpoint");
         write(&k, &a2, val(b"beta")).expect("second write");
-    }
+        at
+    };
     let k = Kernel::<World>::open(cfg_fsync(dir.path()), genesis()).expect("reopen");
+    assert_eq!(
+        k.recovery(),
+        Some(&Recovery { start_point: checkpointed_at, skipped: vec![] }),
+        "the reopen did not start from the checkpoint taken after a1, passing nothing over — \
+         where M2 passed a base over, its `skipped` entry says why"
+    );
     let s = k.snapshot();
     let c = s.world().content();
     assert_eq!(c.len(), 2);

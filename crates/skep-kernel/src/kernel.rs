@@ -27,7 +27,9 @@ use crate::journal::{
     self, Attestation, CommitFail, FirstSyncWord, Journal, JournalWriter, ScanFail, UnwindRepair,
 };
 use crate::replay::{self, SkippedBase};
-use crate::{LockKey, Seq, WorldState};
+#[cfg(feature = "test-hooks")]
+use crate::Step;
+use crate::{LockKey, Seam, Seq, WorldState};
 use applier::ApplierLock;
 
 /// What a journaled [`Kernel::open`] FOUND (§7): the start point its
@@ -414,6 +416,12 @@ pub struct Kernel<W: WorldState> {
     /// flag read false may be set by the next commit.
     checkpoint_due: AtomicBool,
     cfg: KernelConfig,
+    /// The write-fault seam this kernel's two write paths hook before
+    /// [their steps](crate::Step): under `test-hooks` the state the
+    /// `#[doc(hidden)]` doors arm, shared with the journal appender, which
+    /// holds a second handle; without the feature a no-op. One per kernel,
+    /// never the process's.
+    seam: Seam,
     /// The journaled half, or `None` under [`Durability::InMemory`]: every
     /// path that touches files asks here, so the mode question is one question
     /// with one answer. LAST, so the exclusion lock it carries drops after the
@@ -596,6 +604,9 @@ impl<W: WorldState> Kernel<W> {
     /// Closing it amends §7's tail rule.
     pub fn open(cfg: KernelConfig, genesis: W) -> Result<Self, OpenError> {
         cfg.validate().map_err(OpenError::InvalidConfig)?;
+        // The seam is made here, before the appender it is handed to and
+        // the kernel that holds it exist, so one state serves both.
+        let seam = Seam::default();
         let (root, journal, journaled) = match &cfg.durability {
             // "Directly from genesis" (Lifecycle): no journal, no recovery,
             // no rebuild_derived — the caller's live value BECOMES the root,
@@ -614,7 +625,7 @@ impl<W: WorldState> Kernel<W> {
                 retain_checkpoints,
                 ..
             } => {
-                let recovered = Self::recover(journal_path, &genesis, cfg.salt)?;
+                let recovered = Self::recover(journal_path, &genesis, cfg.salt, seam.clone())?;
                 (
                     recovered.root,
                     recovered.journal,
@@ -629,17 +640,25 @@ impl<W: WorldState> Kernel<W> {
                 )
             }
         };
-        Ok(Self::assemble(cfg, root, journal, journaled))
+        Ok(Self::assemble(cfg, root, journal, journaled, seam))
     }
 
     /// Recover the journal at `dir` into the root it commits from, its live
     /// appender — handed `salt_source`, the configured [`SaltSource`] every
     /// transaction it commits draws from (`SKJ4`); recovery itself draws
-    /// nothing, reading each salt off its marker — the exclusion lock the
-    /// kernel holds for its lifetime, the account of the base it stood on
-    /// and the bases it passed over (§7), and the stray `checkpoint.tmp` it
-    /// removed, if one stood ([`Recovered`]).
-    fn recover(dir: &Path, genesis: &W, salt_source: SaltSource) -> Result<Recovered<W>, OpenError> {
+    /// nothing, reading each salt off its marker — and `seam`, the kernel's
+    /// write-fault seam, which the appender's append, barrier and repair
+    /// hook before they run — the exclusion lock the kernel holds for its
+    /// lifetime, the account of the base it stood on and the bases it passed
+    /// over (§7), and the stray `checkpoint.tmp` it removed, if one stood
+    /// ([`Recovered`]). Recovery's own writes — the stray's removal, the
+    /// tail cut, the first segment's creation — run no step of the seam.
+    fn recover(
+        dir: &Path,
+        genesis: &W,
+        salt_source: SaltSource,
+        seam: Seam,
+    ) -> Result<Recovered<W>, OpenError> {
         fs::create_dir_all(dir)?;
         let lock = journal::acquire_journal_lock(dir)?;
         // THE STRAY TEMP FILE, removed under the flock before anything is
@@ -749,7 +768,8 @@ impl<W: WorldState> Kernel<W> {
         // this cut settles and which the appender reads once.
         journal::truncate_tail(dir, &scan)?;
 
-        let writer = JournalWriter::open_active(dir, next_seq, chain_head, salt_source)?;
+        let writer =
+            JournalWriter::open_active(dir, next_seq, chain_head, salt_source)?.with_seam(seam);
         Ok(Recovered {
             root: Committed {
                 seq: Seq(committed_head),
@@ -768,6 +788,7 @@ impl<W: WorldState> Kernel<W> {
         root: Committed<W>,
         journal: Journal,
         journaled: Option<Journaled<W>>,
+        seam: Seam,
     ) -> Self {
         let cadence = Cadence::new(cfg.checkpoint.clone());
         let sequencer = Sequencer::recovered(root.seq, cfg.durability.burned_seq_policy());
@@ -782,6 +803,7 @@ impl<W: WorldState> Kernel<W> {
             poisoned: AtomicBool::new(false),
             checkpoint_due: AtomicBool::new(false),
             cfg,
+            seam,
             journaled,
         }
     }
@@ -1302,12 +1324,12 @@ impl<W: WorldState> Kernel<W> {
         let s = snap.seq;
         // The seq, the world and the chain head off ONE root: a checkpoint
         // names the chain at its own coordinate, never a later root's.
-        checkpoint::write(&journaled.dir, s.0, &snap.world, &snap.chain).map_err(|fail| {
-            match fail {
+        checkpoint::write(&journaled.dir, s.0, &snap.world, &snap.chain, &self.seam).map_err(
+            |fail| match fail {
                 checkpoint::WriteFail::Serialize(e) => CheckpointError::Serialize(e),
                 checkpoint::WriteFail::Io(e) => CheckpointError::Io(e),
-            }
-        })?;
+            },
+        )?;
         // Retention policy — how many bases to keep — applied to the
         // checkpoint set, which answers with the oldest survivor. This kernel
         // leaves one: `retain_checkpoints ≥ 1` is validated at `open`, and this
@@ -1376,6 +1398,51 @@ impl<W: WorldState> Kernel<W> {
     /// build decisions) — the API is invariant across durability modes.
     pub fn flush(&self) -> io::Result<()> {
         Ok(())
+    }
+}
+
+/// THE WRITE-FAULT SEAM's DOORS (`test-hooks` builds only; `hooks.rs` is the
+/// seam): how a test makes the next step of this kernel's write paths fail
+/// or unwind on cue. Each door arms THIS kernel's seam alone.
+#[cfg(feature = "test-hooks")]
+impl<W: WorldState> Kernel<W> {
+    /// TEST HOOK (`test-hooks`): FAIL the next `step` this kernel's write
+    /// paths reach with an `io::Error` of `kind`, in the step's place — a
+    /// full volume is [`io::ErrorKind::StorageFull`] — ONCE: the arm fires
+    /// and disarms, and the next call of the same step runs the real step.
+    /// One arm per step; arming a step again replaces its arm. What each
+    /// failure leaves and how it is answered is the step's own card
+    /// ([`Step`]): the journal's three reach the caller through
+    /// [`TxnError::Durability`] — [`TxnError::Poisoned`] for the repair's —
+    /// with the kind unchanged, the checkpoint's three through
+    /// [`CheckpointError::Io`]. On an in-memory kernel the arm stands
+    /// unfired: that kernel appends nothing and its [`Kernel::checkpoint`]
+    /// is the no-op, so it reaches no step.
+    #[doc(hidden)]
+    pub fn fail_the_next(&self, step: Step, kind: io::ErrorKind) {
+        self.seam.fail_the_next(step, kind);
+    }
+
+    /// TEST HOOK (`test-hooks`): PANIC at the next `step` this kernel's
+    /// write paths reach, in the step's place, ONCE — the checkpoint write's
+    /// three steps, whose unwind the backstop's inline checkpoint carries out
+    /// of [`Kernel::transact`] after the commit landed, and the journal's
+    /// append, the unwind out of the commit region the §3 guard repairs. The
+    /// barrier and the repair take no panic arm (`hooks.rs` says why), and
+    /// naming one here is a caller's bug answered as one. Replaces any arm
+    /// at the step; an in-memory kernel reaches no step, as
+    /// [`Kernel::fail_the_next`] says.
+    #[doc(hidden)]
+    pub fn panic_at_the_next(&self, step: Step) {
+        self.seam.panic_at_the_next(step);
+    }
+
+    /// TEST HOOK (`test-hooks`): the steps an arm still stands at, in arming
+    /// order — empty once every arm has fired, which is how a test reads
+    /// that a step was reached.
+    #[doc(hidden)]
+    pub fn armed_steps(&self) -> Vec<Step> {
+        self.seam.armed_steps()
     }
 }
 

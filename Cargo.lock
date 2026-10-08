@@ -1403,6 +1403,7 @@ dependencies = [
  "skep-arrangement",
  "skep-content",
  "skep-engine",
+ "skep-kernel",
  "skep-links",
  "skep-namespace",
  "tempfile",

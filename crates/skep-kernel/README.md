@@ -41,6 +41,13 @@ A journal written under an older format stamp is refused by name
 no migration path — every board is a development artifact (PUB-1.2):
 delete the data directory and start over.
 
+Under the `test-hooks` feature — default off, and never in a shipped
+build — the kernel carries a write-fault seam: a test makes the next
+checkpoint write, before or past its rename, or the next journal
+append, barrier or repair fail with a named `io::ErrorKind`, or the
+next checkpoint write panic, each arm once, through `#[doc(hidden)]`
+doors on `Kernel`.
+
 ## License
 
 Licensed under either of

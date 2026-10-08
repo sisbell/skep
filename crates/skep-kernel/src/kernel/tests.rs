@@ -567,7 +567,8 @@ fn a_chain_break_halts_the_open_and_the_history_read_and_cuts_nothing() {
     // break — the base embodies the rewrite, so the open succeeds — halts
     // on the same break when asked for a boundary below the base.
     fs::write(&seg, &data[..data.len() - 3]).unwrap();
-    checkpoint::write(dir.path(), 3, &vec![10u64, 20, 30], &chain_at_3).expect("fixture base");
+    checkpoint::write(dir.path(), 3, &vec![10u64, 20, 30], &chain_at_3, &Seam::default())
+        .expect("fixture base");
     let k = Kernel::<Vec<u64>>::open(cfg(dir.path(), BurnedSeqPolicy::Rollback), Vec::new())
         .expect("the base embodies the rewritten transaction");
     assert_eq!(k.current_seq(), Seq(3));
@@ -922,7 +923,7 @@ fn world_at_carries_the_serializers_account_of_a_record_only_history_reaches() {
             })
             .expect("fixture commit");
     }
-    checkpoint::write(dir.path(), 2, &NarrowWorld(Vec::new()), &chain_at_2)
+    checkpoint::write(dir.path(), 2, &NarrowWorld(Vec::new()), &chain_at_2, &Seam::default())
         .expect("fixture base");
 
     let k = Kernel::<NarrowWorld>::open(
@@ -1033,8 +1034,14 @@ fn an_exhausted_fallback_chain_says_why_its_newest_base_refused() {
     // Replace the sole retained base with one whose header checksum is
     // VALID and whose body is not this world: everything the header can
     // prove passes, and the decode still refuses.
-    checkpoint::write(dir.path(), 8, &"not this world".to_string(), &journal::CHAIN_GENESIS)
-        .expect("fixture base");
+    checkpoint::write(
+        dir.path(),
+        8,
+        &"not this world".to_string(),
+        &journal::CHAIN_GENESIS,
+        &Seam::default(),
+    )
+    .expect("fixture base");
 
     let err = Kernel::<Vec<Vec<u8>>>::open(cfg, Vec::new())
         .expect_err("an exhausted fallback chain refuses");
@@ -1301,6 +1308,40 @@ fn a_poisoned_in_memory_kernel_refuses_a_checkpoint_rather_than_answering_the_no
     k.poisoned.store(true, Ordering::Release);
     let out = k.checkpoint();
     assert!(matches!(out, Err(CheckpointError::Poisoned)), "got {out:?}");
+}
+
+/// THE KIND TRAVELS (`test-hooks`): `StorageFull` armed at the append
+/// reaches the caller as `TxnError::Durability` of that kind — through the
+/// writer's `CommitFail::Clean` and `transact`'s one arm for it, the message
+/// naming the step — the channel a full volume at a write is read from
+/// above the kernel; and the kernel is left as any durability failure
+/// leaves it: unpoisoned, the order rolled back, the next commit landing at
+/// the coordinate the refused one drew.
+#[test]
+fn a_storage_full_append_answers_durability_with_the_kind() {
+    let dir = tempfile::tempdir().unwrap();
+    let k =
+        Kernel::<Vec<u64>>::open(cfg(dir.path(), BurnedSeqPolicy::Rollback), Vec::new()).unwrap();
+    k.fail_the_next(Step::JournalAppend, io::ErrorKind::StorageFull);
+    let out = k.transact::<(), ()>(&[], |stg| {
+        stg.push(10);
+        Ok(())
+    });
+    let e = match out {
+        Err(TxnError::Durability(e)) => e,
+        other => panic!("expected the append's failure as Durability, got {other:?}"),
+    };
+    assert_eq!(e.kind(), io::ErrorKind::StorageFull, "the kind, unchanged: {e}");
+    assert_eq!(e.to_string(), "injected StorageFull at JournalAppend");
+    assert!(!k.is_poisoned());
+    assert_eq!(k.current_seq(), Seq(0));
+    let (_, seq) = k
+        .transact::<(), ()>(&[], |stg| {
+            stg.push(10);
+            Ok(())
+        })
+        .expect("the arm fired once; the append runs for real");
+    assert_eq!(seq, Seq(1));
 }
 
 #[test]

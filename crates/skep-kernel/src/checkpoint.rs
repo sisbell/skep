@@ -32,7 +32,7 @@ use sha2::{Digest, Sha256};
 
 use crate::error::{stamp_text, Cause, NO_MIGRATION_REMEDY};
 use crate::journal::{codec, fsync_dir};
-use crate::Seq;
+use crate::{Seam, Seq, Step};
 
 // The trailing numeral is the checkpoint's FORMAT stamp; bumped 1 → 2 at
 // the 2026-08-26 genesis re-baseline (M7's slice no longer carries a sealed
@@ -479,11 +479,22 @@ impl From<io::Error> for WriteFail {
 /// A hint, never a promise: a length the process cannot reserve is dropped,
 /// and the header is built from the finished body — its checksum, its hash,
 /// its length — so the hint is no part of the bytes.
+///
+/// THE SEAM (`test-hooks`): three of the steps below are the write-fault
+/// seam's ([`Step`]) — the temp file's creation, its fsync, and the
+/// directory's fsync after the rename — each hooked through `seam` BEFORE
+/// it runs, after every step before it has completed: an armed failure
+/// answers in the step's place and travels out as [`WriteFail::Io`] of the
+/// kind armed, the removal above running for a failure inside the window
+/// as for any; an armed panic unwinds there, and runs no removal. `seam` is
+/// the kernel's, handed by [`crate::Kernel::checkpoint`]; in a build without
+/// the feature its hook is a no-op.
 pub(crate) fn write<W: Serialize>(
     dir: &Path,
     seq: u64,
     world: &W,
     chain_head: &[u8; 32],
+    seam: &Seam,
 ) -> Result<(), WriteFail> {
     let hint = newest_header(dir).map_or(0, |header| header.len);
     let mut body = Vec::new();
@@ -493,6 +504,7 @@ pub(crate) fn write<W: Serialize>(
     let _ = body.try_reserve_exact(usize::try_from(hint).unwrap_or(usize::MAX));
     codec().serialize_into(&mut body, world).map_err(|e| WriteFail::Serialize(e))?;
     let tmp = tmp_path(dir);
+    seam.before(Step::CheckpointCreate)?;
     let mut f = File::create(&tmp)?;
     let mut header = Vec::with_capacity(HEADER_LEN);
     header.extend_from_slice(&MAGIC);
@@ -508,6 +520,7 @@ pub(crate) fn write<W: Serialize>(
     let published = (|| -> io::Result<()> {
         f.write_all(&header)?;
         f.write_all(&body)?;
+        seam.before(Step::CheckpointSync)?;
         f.sync_all()?;
         drop(f);
         fs::rename(&tmp, checkpoint_path(dir, seq))
@@ -526,6 +539,9 @@ pub(crate) fn write<W: Serialize>(
             ),
         }));
     }
+    // Past the rename: the base is on disk whatever follows, which is what
+    // a failure from here answers over (`WriteFail::Io`'s card).
+    seam.before(Step::CheckpointDirSync)?;
     fsync_dir(dir)?;
     Ok(())
 }

@@ -22,7 +22,7 @@ use std::path::Path;
 use crate::mutilate::FRAME_MAGIC;
 use serde::{Deserialize, Serialize};
 use skep_kernel::{
-    BurnedSeqPolicy, CheckpointPolicy, Durability, Kernel, KernelConfig, SaltSource, Seq,
+    BurnedSeqPolicy, CheckpointPolicy, Durability, Kernel, KernelConfig, SaltSource, Seq, Step,
     WorldState,
 };
 
@@ -228,6 +228,28 @@ fn world_items(w: &TestWorld) -> Vec<u64> {
 fn items(k: &Kernel<TestWorld>) -> Vec<u64> {
     world_items(k.snapshot().world())
 }
+
+/// The panic message of a caught unwind, whichever way the payload was boxed
+/// — what the claims that drive a panic through the seam, and the one that
+/// drives a nested `transact`, read the unwind by.
+fn panic_message(payload: &(dyn std::any::Any + Send)) -> &str {
+    payload
+        .downcast_ref::<String>()
+        .map(String::as_str)
+        .or_else(|| payload.downcast_ref::<&str>().copied())
+        .unwrap_or("<non-string panic payload>")
+}
+
+/// Every step of the write-fault seam, in the order the write paths reach
+/// them — what a claim that arms them all walks.
+const EVERY_STEP: [Step; 6] = [
+    Step::CheckpointCreate,
+    Step::CheckpointSync,
+    Step::CheckpointDirSync,
+    Step::JournalAppend,
+    Step::JournalBarrier,
+    Step::JournalRepair,
+];
 
 /// ~300 KiB per record against the 1 MiB rotation threshold: four commits fill
 /// a segment past the threshold, the fifth rotates.

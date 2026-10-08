@@ -3,7 +3,9 @@
 //! deferred arm — the due flag, the thread's call that clears it first, and
 //! the backstop.
 
+use std::io;
 use std::num::NonZeroU64;
+use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Barrier};
 use std::thread;
@@ -342,6 +344,158 @@ fn a_checkpoint_io_failure_is_retryable_and_never_poisons() {
     let k = Kernel::open(cfg_fsync(dir.path()), genesis()).unwrap();
     assert_eq!(items(&k), vec![10, 20]);
     assert_eq!(k.current_seq(), Seq(2));
+}
+
+/// §6: the full volume BEFORE the rename — `StorageFull` at the temp file's
+/// creation, or at its fsync with the header and body written — answers
+/// `CheckpointError::Io` of that kind, naming the step, with NO base and NO
+/// `checkpoint.tmp` (the sync's removed before the failure is answered, the
+/// creation's never made), the kernel not poisoned, the due flag cleared as
+/// a landed call clears it; and the next call lands, the arm having fired
+/// once (M-I5 (f): a failed checkpoint keeps no room on the volume).
+#[test]
+fn a_checkpoint_that_fails_before_its_rename_lands_no_base_and_keeps_no_tmp() {
+    for step in [Step::CheckpointCreate, Step::CheckpointSync] {
+        let dir = tempdir().unwrap();
+        let tmp = dir.path().join("checkpoint.tmp");
+        let mut cfg = cfg_retain(dir.path(), 4);
+        cfg.checkpoint = deferred_every(1);
+        let k = Kernel::open(cfg, genesis()).unwrap();
+        commit(&k, 10);
+        assert!(k.checkpoint_due(), "{step:?}: the crossing set the flag");
+        k.fail_the_next(step, io::ErrorKind::StorageFull);
+        let e = match k.checkpoint() {
+            Err(CheckpointError::Io(e)) => e,
+            other => panic!("{step:?}: expected the write's I/O failure, got {other:?}"),
+        };
+        assert_eq!(e.kind(), io::ErrorKind::StorageFull, "{step:?}: the kind, unchanged: {e}");
+        assert!(e.to_string().contains(&format!("{step:?}")), "{step:?}: names the step: {e}");
+        assert_eq!(checkpoint_count(dir.path()), 0, "{step:?}: no base landed");
+        assert!(k.newest_checkpoint().is_none());
+        assert!(!tmp.exists(), "{step:?}: no temp file survives");
+        assert!(!k.is_poisoned());
+        assert!(!k.checkpoint_due(), "{step:?}: a failed call clears the flag like a landed one");
+        assert!(k.armed_steps().is_empty(), "{step:?}: the arm fired once");
+        assert_eq!(k.checkpoint().unwrap(), Seq(1), "{step:?}: the next call lands");
+        assert!(ckpt_file(dir.path(), 1).exists());
+        assert!(!tmp.exists());
+    }
+}
+
+/// §6: the full volume PAST the rename — `StorageFull` at the directory's
+/// fsync — answers `CheckpointError::Io` of that kind AND leaves the base ON
+/// DISK: `newest_checkpoint` has moved to this call's `Seq`, the file is
+/// there, retention did not run (a third base stands where two are kept),
+/// no `checkpoint.tmp` remains and the kernel is not poisoned — what
+/// `CheckpointError::Io`'s card says survives. The next open loads that
+/// base; the next call lands and applies the retention the failed one did
+/// not.
+#[test]
+fn a_checkpoint_that_fails_past_its_rename_leaves_the_base_on_disk() {
+    let dir = tempdir().unwrap();
+    let k = Kernel::open(cfg_fsync(dir.path()), genesis()).unwrap(); // retain 2
+    for x in 1..=2u64 {
+        commit(&k, x);
+        assert_eq!(k.checkpoint().unwrap(), Seq(x));
+    }
+    commit(&k, 3);
+    k.fail_the_next(Step::CheckpointDirSync, io::ErrorKind::StorageFull);
+    let e = match k.checkpoint() {
+        Err(CheckpointError::Io(e)) => e,
+        other => panic!("expected the directory sync's failure, got {other:?}"),
+    };
+    assert_eq!(e.kind(), io::ErrorKind::StorageFull, "the kind, unchanged: {e}");
+    assert!(e.to_string().contains("CheckpointDirSync"), "names the step: {e}");
+    // The base LANDED: the rename published it before the failure…
+    let newest = k.newest_checkpoint().expect("a base stands");
+    assert_eq!(newest.seq, Seq(3), "this call's base");
+    assert!(ckpt_file(dir.path(), 3).exists());
+    // …and nothing after the rename ran: a third base where two are kept.
+    assert_eq!(checkpoint_count(dir.path()), 3, "retention did not run");
+    assert!(!dir.path().join("checkpoint.tmp").exists());
+    assert!(!k.is_poisoned());
+    assert!(k.armed_steps().is_empty(), "the arm fired once");
+
+    // The next open loads that base.
+    drop(k);
+    let k = Kernel::open(cfg_fsync(dir.path()), genesis()).unwrap();
+    let recovery = k.recovery().expect("journaled");
+    assert_eq!(recovery.start_point, Seq(3), "the landed base is the start point");
+    assert!(recovery.skipped.is_empty());
+    assert_eq!(items(&k), vec![1, 2, 3]);
+    // …and the next call lands and applies the retention the failed one
+    // did not.
+    commit(&k, 4);
+    assert_eq!(k.checkpoint().unwrap(), Seq(4));
+    assert_eq!(checkpoint_count(dir.path()), 2);
+    assert!(ckpt_file(dir.path(), 3).exists() && ckpt_file(dir.path(), 4).exists());
+}
+
+/// §6: A PANIC IN THE CHECKPOINT WRITE. The arm fires inside `checkpoint()`
+/// and propagates, the kernel not poisoned; and through THE BACKSTOP — the
+/// deferred cadence's second crossing with the flag still set, which runs
+/// the checkpoint inline on the committing thread — it unwinds out of
+/// `transact` AFTER the commit landed: the order advanced, the root
+/// installed, nothing poisoned, the kernel committing on. What the unwind
+/// LEAVES is the step's: a panic before the temp file's creation leaves
+/// nothing; one at the temp file's sync — inside the published window,
+/// where the `Err` arm's removal does not run for an unwind — leaves
+/// `checkpoint.tmp` whole on disk, which the next open removes and reports
+/// by its size (`stray_checkpoint_removed`: "the open one a crash left").
+/// Either way the reopen holds every commit, the one the panic unwound out
+/// of included.
+#[test]
+fn a_panic_in_the_checkpoint_write_unwinds_out_of_transact_after_the_commit_landed() {
+    for (step, leaves_the_tmp) in [(Step::CheckpointCreate, false), (Step::CheckpointSync, true)] {
+        let dir = tempdir().unwrap();
+        let tmp = dir.path().join("checkpoint.tmp");
+        let mut cfg = cfg_retain(dir.path(), 4);
+        cfg.checkpoint = deferred_every(1);
+        let k = Kernel::open(cfg.clone(), genesis()).unwrap();
+        commit(&k, 1);
+        assert!(k.checkpoint_due(), "{step:?}: the first crossing, deferred");
+
+        // Directly: the arm fires inside `checkpoint()` and propagates.
+        k.panic_at_the_next(step);
+        let unwound = catch_unwind(AssertUnwindSafe(|| k.checkpoint()));
+        let payload = unwound.expect_err("the armed step unwinds the call");
+        assert_eq!(panic_message(&*payload), format!("injected panic at {step:?}"));
+        assert!(!k.is_poisoned());
+        assert!(!k.checkpoint_due(), "{step:?}: cleared first, before the run that unwound");
+        assert_eq!(tmp.exists(), leaves_the_tmp, "{step:?}: what the unwind leaves");
+        assert_eq!(checkpoint_count(dir.path()), 0);
+
+        // Through the backstop: a crossing with the flag clear defers; the
+        // next, finding it set, runs inline — and unwinds out of `transact`.
+        assert_eq!(commit(&k, 2), Seq(2));
+        assert!(k.checkpoint_due(), "{step:?}: the second crossing, deferred again");
+        k.panic_at_the_next(step);
+        let unwound = catch_unwind(AssertUnwindSafe(|| commit(&k, 3)));
+        let payload = unwound.expect_err("the backstop's checkpoint unwinds out of transact");
+        assert_eq!(panic_message(&*payload), format!("injected panic at {step:?}"));
+        // …AFTER the commit landed.
+        assert_eq!(k.current_seq(), Seq(3), "{step:?}: the order advanced");
+        assert_eq!(items(&k), vec![1, 2, 3], "{step:?}: the root installed");
+        assert!(!k.is_poisoned());
+        assert!(k.armed_steps().is_empty(), "{step:?}: the arm fired once");
+        assert!(!k.checkpoint_due(), "{step:?}: the backstop's call cleared the flag first");
+        assert_eq!(tmp.exists(), leaves_the_tmp, "{step:?}: what the unwind leaves");
+        assert_eq!(checkpoint_count(dir.path()), 0, "{step:?}: no base landed");
+        // The kernel commits on.
+        assert_eq!(commit(&k, 4), Seq(4));
+
+        // The reopen: the stray reported by its size where one was left —
+        // a whole checkpoint, its header and its body — and every commit
+        // held.
+        let left = leaves_the_tmp.then(|| fs::metadata(&tmp).unwrap().len());
+        assert!(left.is_none_or(|len| len > 88), "{step:?}: a header and a body: {left:?}");
+        drop(k);
+        let k = Kernel::open(cfg, genesis()).unwrap();
+        assert_eq!(k.stray_checkpoint_removed(), left, "{step:?}: the open reports the stray");
+        assert!(!tmp.exists());
+        assert_eq!(items(&k), vec![1, 2, 3, 4]);
+        assert_eq!(k.current_seq(), Seq(4));
+    }
 }
 
 #[test]

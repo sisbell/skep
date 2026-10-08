@@ -2,6 +2,7 @@
 //! closure may see and do, the snapshots readers pin, the lock-key seam, and
 //! one gap-free order under concurrent writers (§2–§5, §8).
 
+use std::io;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 
 use super::*;
@@ -63,15 +64,6 @@ fn a_composites_intermediates_are_invisible_to_external_readers() {
     assert_eq!(items(&k), vec![1, 2, 3]);
     assert_eq!(k.current_seq(), Seq(3));
     assert_eq!(world_items(pinned.world()), vec![1]);
-}
-
-/// The panic message of a caught unwind, whichever way the payload was boxed.
-fn panic_message(payload: &(dyn std::any::Any + Send)) -> &str {
-    payload
-        .downcast_ref::<String>()
-        .map(String::as_str)
-        .or_else(|| payload.downcast_ref::<&str>().copied())
-        .unwrap_or("<non-string panic payload>")
 }
 
 #[test]
@@ -507,6 +499,153 @@ fn a_durability_failure_is_a_true_no_op_the_caller_may_re_invoke() {
     let k = Kernel::open(cfg_fsync(dir.path()), genesis()).unwrap();
     assert_eq!(items(&k).len(), 5);
     assert_eq!(k.current_seq(), Seq(5));
+}
+
+/// The full volume at `step` — `StorageFull`, armed through the seam — is a
+/// TRUE no-op the caller may re-invoke, and the kind travels to the caller
+/// unchanged: `transact` answers `TxnError::Durability` of that kind, its
+/// message naming the step; nothing is installed, the order is unmoved, the
+/// active segment is durably back at its mark; the re-invoke commits at the
+/// SAME `Seq`, the arm having fired once; and the reopen shows nothing of
+/// the failed attempt — `a_durability_failure_is_a_true_no_op…`'s shape,
+/// reached on cue instead of through a squatting directory.
+fn a_storage_full_at_is_a_true_no_op(step: Step) {
+    let dir = tempdir().unwrap();
+    let k = Kernel::open(cfg_fsync(dir.path()), genesis()).unwrap();
+    commit(&k, 10);
+    let seg = seg_file(dir.path(), 1);
+    let mark = fs::metadata(&seg).unwrap().len();
+    k.fail_the_next(step, io::ErrorKind::StorageFull);
+
+    let attempt = || -> Result<((), Seq), TxnError<()>> {
+        k.transact(&[], |stg| {
+            stg.push(TestRec::Append(20));
+            Ok(())
+        })
+    };
+    let e = match attempt() {
+        Err(TxnError::Durability(e)) => e,
+        other => panic!("{step:?}: expected the step's failure as Durability, got {other:?}"),
+    };
+    assert_eq!(e.kind(), io::ErrorKind::StorageFull, "{step:?}: the kind, unchanged: {e}");
+    assert!(e.to_string().contains(&format!("{step:?}")), "{step:?}: names the step: {e}");
+    // Nothing installed, the order unmoved, the segment where the txn found
+    // it: the append's frames never written, the barrier's truncated away.
+    assert_eq!(k.current_seq(), Seq(1));
+    assert_eq!(items(&k), vec![10]);
+    assert_eq!(fs::metadata(&seg).unwrap().len(), mark, "{step:?}: durably back at the mark");
+    assert!(!k.is_poisoned());
+    assert!(k.armed_steps().is_empty(), "{step:?}: the arm fired once and disarmed");
+
+    // Re-invoking lands at the SAME coordinate: the burned one was reused.
+    let (_, seq) = attempt().expect("a true no-op is safe to re-invoke");
+    assert_eq!(seq, Seq(2));
+    assert_eq!(items(&k), vec![10, 20]);
+    drop(k);
+    // Nothing of the failed attempt is on disk to recover.
+    let k = Kernel::open(cfg_fsync(dir.path()), genesis()).unwrap();
+    assert_eq!(items(&k), vec![10, 20]);
+    assert_eq!(k.current_seq(), Seq(2));
+}
+
+/// §1/§3: the full volume at the APPEND — the one step before a byte of
+/// the transaction is on disk — is a true no-op, and `StorageFull` reaches
+/// the caller as the kind of `TxnError::Durability`.
+#[test]
+fn a_storage_full_append_is_a_true_no_op_the_caller_may_re_invoke() {
+    a_storage_full_at_is_a_true_no_op(Step::JournalAppend);
+}
+
+/// §1: the full volume at the BARRIER — the frames appended, the one fsync
+/// refused — is the same no-op: the truncation repairs the segment back to
+/// its mark before the failure is answered, so the answer, the re-invoke at
+/// the same `Seq` and the clean reopen are the append's exactly.
+#[test]
+fn a_storage_full_barrier_is_the_same_no_op() {
+    a_storage_full_at_is_a_true_no_op(Step::JournalBarrier);
+}
+
+/// §1: A REPAIR THAT FAILS POISONS. The append, or the barrier, armed to
+/// fail AND the repair armed to fail answers `TxnError::Poisoned` in place
+/// of `Durability`: the kernel reports the halt, a later `transact` is
+/// refused `Poisoned` before its closure runs, a later `checkpoint` answers
+/// `CheckpointError::Poisoned`, and reads serve the last consistent root.
+/// The reopen says WHY the halt: after the barrier's failure the repair
+/// never ran, so its un-acked marker survived in the file and REPLAYS as
+/// the lost-ack commit it is — the successor a live kernel would have
+/// minted over it is what the poison refuses; after the append's, nothing
+/// reached the file and the reopen is clean. Poison does not persist.
+#[test]
+fn a_repair_that_fails_poisons_the_kernel() {
+    for failing in [Step::JournalAppend, Step::JournalBarrier] {
+        let dir = tempdir().unwrap();
+        let k = Kernel::open(cfg_fsync(dir.path()), genesis()).unwrap();
+        commit(&k, 10);
+        k.fail_the_next(failing, io::ErrorKind::StorageFull);
+        k.fail_the_next(Step::JournalRepair, io::ErrorKind::StorageFull);
+        let out = k.transact::<(), ()>(&[], |stg| {
+            stg.push(TestRec::Append(20));
+            Ok(())
+        });
+        assert!(matches!(out, Err(TxnError::Poisoned)), "{failing:?}: got {out:?}");
+        assert!(k.is_poisoned(), "{failing:?}: the repair's failure halts the kernel");
+        assert!(k.armed_steps().is_empty(), "{failing:?}: both arms fired");
+
+        let ran = std::cell::Cell::new(false);
+        let out = k.transact::<(), ()>(&[], |stg| {
+            ran.set(true);
+            stg.push(TestRec::Append(30));
+            Ok(())
+        });
+        assert!(matches!(out, Err(TxnError::Poisoned)), "{failing:?}: got {out:?}");
+        assert!(!ran.get(), "{failing:?}: the refusal precedes the closure");
+        let err = k.checkpoint().expect_err("a poisoned kernel takes no checkpoint");
+        assert!(matches!(err, CheckpointError::Poisoned), "{failing:?}: got {err:?}");
+        assert_eq!(checkpoint_count(dir.path()), 0);
+        assert_eq!(items(&k), vec![10], "{failing:?}: reads serve the last consistent root");
+        assert_eq!(k.current_seq(), Seq(1));
+
+        drop(k);
+        let k = Kernel::open(cfg_fsync(dir.path()), genesis()).unwrap();
+        assert!(!k.is_poisoned(), "{failing:?}: poison does not persist");
+        let replayed = match failing {
+            Step::JournalBarrier => vec![10, 20],
+            _ => vec![10],
+        };
+        assert_eq!(items(&k), replayed, "{failing:?}: what the un-run repair left replays");
+        assert_eq!(k.current_seq(), Seq(replayed.len() as u64));
+    }
+}
+
+/// An in-memory kernel runs no step: its commit path appends nothing and
+/// its `checkpoint` is the no-op. So the doors arm as on any kernel and
+/// nothing fires — every arm stands, which `armed_steps` shows — while the
+/// kernel commits and checkpoints as if none were armed.
+#[test]
+fn an_in_memory_kernel_reaches_no_step_so_its_arms_never_fire() {
+    let k = Kernel::open(cfg_in_memory(), genesis()).unwrap();
+    for step in EVERY_STEP {
+        k.fail_the_next(step, io::ErrorKind::StorageFull);
+    }
+    // Re-armed with a panic: one arm per step, its place in the order the
+    // re-arming's.
+    k.panic_at_the_next(Step::JournalAppend);
+    assert_eq!(commit(&k, 1), Seq(1));
+    assert_eq!(k.checkpoint().unwrap(), Seq(1));
+    assert_eq!(commit(&k, 2), Seq(2));
+    assert!(!k.is_poisoned());
+    assert_eq!(
+        k.armed_steps(),
+        vec![
+            Step::CheckpointCreate,
+            Step::CheckpointSync,
+            Step::CheckpointDirSync,
+            Step::JournalBarrier,
+            Step::JournalRepair,
+            Step::JournalAppend,
+        ],
+        "every arm stands, unfired"
+    );
 }
 
 #[test]

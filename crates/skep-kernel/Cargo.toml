@@ -8,6 +8,18 @@ license.workspace = true
 description = "M2 — generic transactional substrate: WAL + atomic-install + keyed-serialization + snapshot kernel over an engine-supplied WorldState"
 readme = "README.md"
 
+[features]
+# The test seam, `src/hooks.rs` (its module doc says what it holds): the
+# write-fault seam — the next checkpoint write, before or past its rename,
+# or the next journal append, barrier or repair failing with a named
+# `io::ErrorKind`, or a panic in the checkpoint write, each arm once.
+# DEFAULT-OFF and never enabled by a shipped build: this crate's own tests
+# turn it on through the self dev-dependency below, skepd's tests through
+# its own `test-hooks` forward, and a build that compiles no test compiles
+# none of it — `scripts/gate-full.sh` builds the library and its docs
+# without it.
+test-hooks = []
+
 [dependencies]
 # The design's mandated crates (M2 §Dependencies & seams): lock-free root
 # installs (arc-swap), the applier and checkpoint mutexes (parking_lot — non-
@@ -36,6 +48,10 @@ sha2.workspace = true
 getrandom = "0.3"
 
 [dev-dependencies]
+# This crate with its test seam on, so its integration tests reach the
+# write-fault seam's doors; a build that compiles no test never reads this
+# table.
+skep-kernel = { path = ".", features = ["test-hooks"] }
 # The design names `im` for W's persistent slices; M2 itself is generic over W,
 # so im appears only in tests (a realistic structurally-shared toy World).
 im.workspace = true

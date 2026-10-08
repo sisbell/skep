@@ -1,3 +1,6 @@
+use std::fs;
+use std::panic::{catch_unwind, AssertUnwindSafe};
+
 use super::*;
 use crate::journal::tests::{chain_of_marker_at, fresh_writer, frame_starts, rec};
 use crate::journal::{txn_encoded_len, RECORD_PAYLOAD_OVERHEAD};
@@ -175,4 +178,82 @@ fn an_installed_commit_leaves_nothing_in_flight() {
     assert_eq!(installed, chain_of_marker_at(&segs[0].path, starts[1]));
     let repair = writer.repair_after_unwind();
     assert!(matches!(repair, UnwindRepair::Clean), "got {repair:?}");
+}
+
+/// THE SEAM AT THE JOURNAL (`test-hooks`): the append and the barrier, armed
+/// to fail, answer `CommitFail::Clean` carrying the kind armed and naming
+/// the step, the segment durably back at its mark — the barrier's frames
+/// appended and truncated away, the append's never written — and nothing
+/// installed; each fires ONCE, the same commit then landing at the same
+/// coordinate. The repair, armed to fail beside a failing barrier, answers
+/// `CommitFail::Unrepaired` with the barrier's frames left standing — and
+/// fires once: the repair after an unwind, asked next, truncates for real
+/// and answers `Clean`. The append's panic arm unwinds in the append's
+/// place, the repair after it answers `Clean` with nothing on disk, and the
+/// commit after that lands; the barrier and the repair take no panic arm.
+#[test]
+fn each_journal_step_fires_its_arm_once_and_the_step_then_runs_for_real() {
+    for step in [Step::JournalAppend, Step::JournalBarrier] {
+        let dir = tempdir().unwrap();
+        let seam = Seam::default();
+        let mut writer = fresh_writer(dir.path()).with_seam(seam.clone());
+        writer.commit_txn(1, vec![rec(10)], None, |_| {}).expect("fixture commit");
+        let seg = segment_path(dir.path(), 1);
+        let mark = fs::metadata(&seg).unwrap().len();
+
+        seam.fail_the_next(step, io::ErrorKind::StorageFull);
+        let mut installed = false;
+        let out = writer.commit_txn(2, vec![rec(20)], None, |_| installed = true);
+        let e = match out {
+            Err(CommitFail::Clean(e)) => e,
+            other => panic!("{step:?}: expected a clean failure, got {other:?}"),
+        };
+        assert_eq!(e.kind(), io::ErrorKind::StorageFull, "{step:?}: the kind armed");
+        assert!(e.to_string().contains(&format!("{step:?}")), "{step:?}: names the step: {e}");
+        assert!(!installed, "{step:?}: nothing installed");
+        assert_eq!(fs::metadata(&seg).unwrap().len(), mark, "{step:?}: back at the mark");
+        assert!(seam.armed_steps().is_empty(), "{step:?}: fired and disarmed");
+
+        writer
+            .commit_txn(2, vec![rec(20)], None, |_| installed = true)
+            .expect("the step, unarmed, runs for real");
+        assert!(installed);
+        assert_eq!(frame_starts(&seg).len(), 4, "two transactions, a record and a marker each");
+    }
+
+    // The repair: armed beside a failing barrier, so there is something to
+    // repair, and the failure answered is the repair's own.
+    let dir = tempdir().unwrap();
+    let seam = Seam::default();
+    let mut writer = fresh_writer(dir.path()).with_seam(seam.clone());
+    let seg = segment_path(dir.path(), 1);
+    seam.fail_the_next(Step::JournalBarrier, io::ErrorKind::StorageFull);
+    seam.fail_the_next(Step::JournalRepair, io::ErrorKind::StorageFull);
+    let out = writer.commit_txn(1, vec![rec(10)], None, |_| {});
+    assert!(matches!(out, Err(CommitFail::Unrepaired)), "got {out:?}");
+    assert!(seam.armed_steps().is_empty(), "both arms fired");
+    let left = fs::metadata(&seg).unwrap().len();
+    assert!(left > 0, "the barrier's frames stand: the repair never ran");
+    // Fired once: the repair after an unwind, asked next, truncates them.
+    let repair = writer.repair_after_unwind();
+    assert!(matches!(repair, UnwindRepair::Clean), "got {repair:?}");
+    assert_eq!(fs::metadata(&seg).unwrap().len(), 0, "the real repair ran");
+
+    // The append's panic arm.
+    seam.panic_at_the_next(Step::JournalAppend);
+    let unwound =
+        catch_unwind(AssertUnwindSafe(|| writer.commit_txn(1, vec![rec(10)], None, |_| {})));
+    assert!(unwound.is_err(), "the armed append unwinds the commit");
+    assert_eq!(fs::metadata(&seg).unwrap().len(), 0, "nothing reached the file");
+    let repair = writer.repair_after_unwind();
+    assert!(matches!(repair, UnwindRepair::Clean), "got {repair:?}");
+    writer.commit_txn(1, vec![rec(10)], None, |_| {}).expect("the append, unarmed, lands");
+    assert_eq!(frame_starts(&seg).len(), 2);
+
+    // The two that take none.
+    for step in [Step::JournalBarrier, Step::JournalRepair] {
+        let refused = catch_unwind(AssertUnwindSafe(|| seam.panic_at_the_next(step)));
+        assert!(refused.is_err(), "{step:?} takes no panic arm");
+    }
+    assert!(seam.armed_steps().is_empty());
 }

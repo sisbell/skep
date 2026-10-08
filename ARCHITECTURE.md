@@ -206,7 +206,13 @@ clears it first, then runs — and a second crossing with the flag still set
 runs the checkpoint inline as the backstop. The world is a type parameter:
 the kernel folds records through `WorldState::apply` and never reads them.
 Its modules are declared in `src/lib.rs` in dependency order, each with a
-line saying what it holds.
+line saying what it holds. Under `test-hooks` (default off, never in a
+shipped build) `src/hooks.rs` is the write-fault seam: the next checkpoint
+write, before or past its rename, or the next journal append, barrier or
+repair failing with a named `io::ErrorKind`, or a panic in the checkpoint
+write, each arm firing once, armed through `#[doc(hidden)]` doors on
+`Kernel` and scoped to that kernel; the `Step` the write sites hook before
+is named in every build, and the hook is a no-op without the feature.
 
 Rules that hold across its files:
 
@@ -241,9 +247,12 @@ Rules that hold across its files:
   board exists; dev boards regenerate).
 
 Its integration suites are one binary, `tests/it/`: `kernel` (the public
-surface's claims), `hazard` (dirty crashes, built through the engine),
-`golden` (the byte pins) and `chain` (the commit chain's tamper matrix),
-over the shared `fixture` and `mutilate`.
+surface's claims, the write-fault seam's among them — the full volume at a
+write, at a checkpoint before and past its rename, and at the repair after
+an unwind, and a panic inside the checkpoint write), `hazard` (dirty
+crashes, built through the engine), `golden` (the byte pins) and `chain`
+(the commit chain's tamper matrix), over the shared `fixture` and
+`mutilate`.
 
 ## The blob store, `skep-blobs`
 
@@ -1799,7 +1808,7 @@ imports it.
 |---|---|---|---|
 | `observe` | on | `GET /dump`, the engine's world dump | every build; OFF in `scripts/gate-full.sh`'s `--no-default-features` checks |
 | `client` | off | `GET /`, the embedded board — an ACTING client, so opted into (`Cargo.toml` carries the ruling) | `scripts/gate-full.sh`'s `--features client` check and `--all-features` run |
-| `test-hooks` | off | `Daemon`'s `#[doc(hidden)]` test hooks, `fuzz_support`, the `Permit` re-export — and, forwarded, two seams in other crates: `skep-media`'s `test-hooks` (the holds, the gate's overrides, the index's report and counts, the pools' `try_hold` the daemon's media hooks call) and `skep-blobs`'s (the hazard seam `Daemon::hold_blob_finish_at` is a door to) | every test build (the crate's self dev-dependency); `scripts/gate-full.sh` checks the library and binary without it |
+| `test-hooks` | off | `Daemon`'s `#[doc(hidden)]` test hooks, `fuzz_support`, the `Permit` re-export — and, forwarded, three seams in other crates: `skep-media`'s `test-hooks` (the holds, the gate's overrides, the index's report and counts, the pools' `try_hold` the daemon's media hooks call), `skep-blobs`'s (the hazard seam `Daemon::hold_blob_finish_at` is a door to) and `skep-kernel`'s (the write-fault seam: the next checkpoint write, journal append, barrier or repair failing with a named `io::ErrorKind`, or a panic in the checkpoint write, through the kernel's own `#[doc(hidden)]` doors) | every test build (the crate's self dev-dependency); `scripts/gate-full.sh` checks the library and binary without it |
 | `skep-signature`'s `sign` | off — skepd depends with no feature, so the daemon's build holds no signer | the signer's half: the KDF, keygen from a seed, signing, the signer's OS draw | every test build (the suites' dev-dependencies); `scripts/gate-full.sh` checks the crate without it (the verify-only build a daemon links) and with it |
 | `skep-signature`'s `test-hooks` | off | implies `sign`; the fixtures' hooks: the seeded RNG, `sign_with_rng`, the Ed25519 half's signing key, the KDF's half seeds (`derive_half_seeds`), the widths | every test build (its self dev-dependency, and skepd's dev-dependency on it) |
 

@@ -1,3 +1,5 @@
+use std::panic::{catch_unwind, AssertUnwindSafe};
+
 use super::*;
 use tempfile::tempdir;
 
@@ -10,6 +12,19 @@ fn world() -> Vec<u64> {
 /// A stand-in chain head: a value with a shape, so a header that carried
 /// the wrong thing here would not carry zeros by coincidence.
 const CHAIN_HEAD: [u8; 32] = [0xC4; 32];
+
+/// The module's `write` through a seam nothing has armed — what every
+/// fixture here writes through, the seam's own claims naming `super::write`
+/// with the seam they arm. Shadows the glob import on purpose, so the
+/// fixtures read as the writes they are.
+fn write<W: Serialize>(
+    dir: &Path,
+    seq: u64,
+    world: &W,
+    chain_head: &[u8; 32],
+) -> Result<(), WriteFail> {
+    super::write(dir, seq, world, chain_head, &Seam::default())
+}
 
 #[test]
 fn checkpoint_header_layout_is_magic_seq_crc_body_len_chain_head_and_body_hash() {
@@ -437,4 +452,76 @@ fn checkpoints_list_in_seq_order_across_a_digit_boundary() {
         vec![99, 100],
         "retention kept other than the newest bases"
     );
+}
+
+/// THE SEAM AT THE CHECKPOINT WRITE (`test-hooks`): each of its three steps,
+/// armed to fail, answers `WriteFail::Io` of the kind armed, naming the
+/// step, and leaves what the step's card says — nothing at the creation; no
+/// base and no temp file at the sync, the temp file removed before the
+/// failure is answered; the base ON DISK at the directory's sync after the
+/// rename. Each arm fires ONCE: the same write, re-run with the step
+/// unarmed, lands whole. And each of the three takes a panic arm, which
+/// unwinds in the step's place and leaves what an unwind leaves — the `Err`
+/// arm's removal not run: nothing at the creation, the WHOLE temp file at
+/// the sync (header and body, the size the next open reports), the base at
+/// the directory's sync — and fires once likewise, the write after it
+/// landing over whatever was left.
+#[test]
+fn each_checkpoint_step_fires_its_arm_once_and_leaves_what_its_card_says() {
+    let body_len = codec().serialize(&world()).unwrap().len() as u64;
+    for step in [Step::CheckpointCreate, Step::CheckpointSync, Step::CheckpointDirSync] {
+        let landed = step == Step::CheckpointDirSync;
+        let seam = Seam::default();
+
+        // The failure arm.
+        let dir = tempdir().unwrap();
+        let tmp = dir.path().join("checkpoint.tmp");
+        let base = checkpoint_path(dir.path(), 7);
+        seam.fail_the_next(step, io::ErrorKind::StorageFull);
+        let refused = super::write(dir.path(), 7, &world(), &CHAIN_HEAD, &seam)
+            .expect_err("the armed step fails the write");
+        let e = match refused {
+            WriteFail::Io(e) => e,
+            WriteFail::Serialize(_) => unreachable!("the world serializes"),
+        };
+        assert_eq!(e.kind(), io::ErrorKind::StorageFull, "{step:?}: the kind armed");
+        assert!(e.to_string().contains(&format!("{step:?}")), "{step:?}: names the step: {e}");
+        assert!(!tmp.exists(), "{step:?}: no temp file survives a failure");
+        assert_eq!(base.exists(), landed, "{step:?}: the base is on disk iff the rename ran");
+        assert!(seam.armed_steps().is_empty(), "{step:?}: fired and disarmed");
+        super::write(dir.path(), 7, &world(), &CHAIN_HEAD, &seam)
+            .expect("the step, unarmed, runs for real");
+        assert!(!tmp.exists());
+        assert_eq!(list(dir.path()).unwrap()[0].load::<Vec<u64>>().unwrap().world, world());
+
+        // The panic arm.
+        let dir = tempdir().unwrap();
+        let tmp = dir.path().join("checkpoint.tmp");
+        let base = checkpoint_path(dir.path(), 7);
+        seam.panic_at_the_next(step);
+        let unwound = catch_unwind(AssertUnwindSafe(|| {
+            super::write(dir.path(), 7, &world(), &CHAIN_HEAD, &seam)
+        }));
+        assert!(unwound.is_err(), "{step:?}: the armed step unwinds the write");
+        match step {
+            Step::CheckpointCreate => assert!(!tmp.exists() && !base.exists(), "nothing"),
+            Step::CheckpointSync => {
+                assert!(!base.exists(), "no base");
+                assert_eq!(
+                    fs::metadata(&tmp).expect("the unwind left the temp file").len(),
+                    HEADER_LEN as u64 + body_len,
+                    "…whole: the header and the body, as written"
+                );
+            }
+            Step::CheckpointDirSync => assert!(!tmp.exists() && base.exists(), "the base"),
+            Step::JournalAppend | Step::JournalBarrier | Step::JournalRepair => {
+                unreachable!("not a checkpoint step")
+            }
+        }
+        assert!(seam.armed_steps().is_empty(), "{step:?}: fired and disarmed");
+        super::write(dir.path(), 7, &world(), &CHAIN_HEAD, &seam)
+            .expect("the step, unarmed, runs for real over what the unwind left");
+        assert!(!tmp.exists());
+        assert_eq!(list(dir.path()).unwrap()[0].load::<Vec<u64>>().unwrap().world, world());
+    }
 }

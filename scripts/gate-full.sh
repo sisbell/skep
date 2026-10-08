@@ -22,6 +22,19 @@ cargo check -p skepd --lib --bins || exit $?
 cargo check -p skep-signature || exit $?
 cargo check -p skep-signature --features sign || exit $?
 
+# skep-kernel's library without `test-hooks` — every test build turns it on
+# (the crate's self dev-dependency, and skepd's forward), so this is the
+# build that shows the kernel below every store compiles without its test
+# seam (`src/hooks.rs`).
+cargo check -p skep-kernel --lib || exit $?
+
+# skep-kernel's docs as they ship, without `test-hooks`, for skep-blobs'
+# reason: a shipped doc that linked a gated item would resolve with the
+# feature on and break here, so the crate names one by code span, never by
+# link.
+RUSTDOCFLAGS="-D rustdoc::broken_intra_doc_links" \
+    cargo doc -p skep-kernel --lib --no-deps --document-private-items || exit $?
+
 # skep-arrangement's library without `test-hooks` — every test build turns
 # the feature on (the crate's self dev-dependency, and skep-retrieval's), so
 # this is the build that shows the store compiles without `seat_link`,

@@ -40,6 +40,17 @@
 //! a failed write removes its own, and [`Kernel::open`] removes one a crash
 //! left, reporting its size as [`Kernel::stray_checkpoint_removed`].
 //!
+//! The `test-hooks` feature compiles in the test seam (`hooks.rs`): the
+//! WRITE-FAULT SEAM, under which a test makes the next checkpoint write —
+//! before or past the rename that publishes it — or the next journal
+//! append, barrier or repair fail with a named `io::ErrorKind`
+//! (`StorageFull` for the full volume), or the next checkpoint write
+//! panic, each arm firing once and disarming, through `Kernel`'s
+//! `#[doc(hidden)]` doors `fail_the_next`, `panic_at_the_next` and
+//! `armed_steps`. The seam is one kernel's, never the process's, and a
+//! build without the feature carries none of it: the write sites' hook
+//! before a [`Step`] is a no-op there.
+//!
 //! ## Boundary — deliberately NOT owned here
 //!
 //! * address, frontier, or coverage-class computation (M1/M3/M7 — keys and
@@ -126,6 +137,10 @@ mod config;
 // The four error vocabularies, one per operation, and the stamp renderer both
 // formats share.
 mod error;
+// The test seam — `test-hooks` builds only: the write-fault seam's state,
+// its hook before a step, and the arming the kernel's doors delegate to.
+#[cfg(feature = "test-hooks")]
+mod hooks;
 // The journal: its on-disk format and the crate's one codec, with the writer,
 // the scan, the segment files, the chain link and the signature slot beneath
 // it.
@@ -426,5 +441,85 @@ impl Space {
     /// exists for is a claim about these bytes.
     pub const fn tag(self) -> u8 {
         self as u8
+    }
+}
+
+/// The steps of the kernel's two write paths the test seam hooks before
+/// (`test-hooks`, `hooks.rs`): an arm — a failure of a named
+/// `io::ErrorKind`, or a panic — is placed BEFORE the step it names, after
+/// every step before it has completed, so what each leaves is the step's
+/// own card. Three are the checkpoint write's: its temp file's creation,
+/// the temp file's fsync, and the directory's fsync after the rename that
+/// publishes it. Three are the journal appender's: the append of a
+/// transaction's frames, the barrier that commits them, and the truncation
+/// that repairs a failed or unwound commit. The temp file's creation and
+/// the rename THEMSELVES — the two a directory squatting on their names
+/// already refuses — are no steps. Named in every build, so each write
+/// site's hook before a step is one call whether the seam is compiled in or
+/// not; without the feature nothing reads it.
+///
+/// Deliberately not `#[non_exhaustive]`: the seam says of every step whether
+/// it takes a panic arm (`hooks.rs`), and a suite outside this crate that
+/// lists every step should fail its build when one is added rather than fall
+/// into a wildcard.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Step {
+    /// The checkpoint's temp file's creation, the world already serialized:
+    /// an arm here leaves nothing on disk — the shape a panic in the
+    /// world's own serializer has, which precedes the first file operation.
+    CheckpointCreate,
+    /// The temp file's fsync, its header and body written: a failure here
+    /// lands no base and removes the temp file before it is answered; a
+    /// panic leaves the temp file whole under the fixed name, for the next
+    /// open to remove and report ([`Kernel::stray_checkpoint_removed`]).
+    CheckpointSync,
+    /// The directory's fsync after the rename that publishes the
+    /// checkpoint: the base is ON DISK, and a failure here answers
+    /// [`CheckpointError::Io`] over it with retention and reclamation not
+    /// run — the landed base that error's card says survives.
+    CheckpointDirSync,
+    /// The append of a transaction's frames to the active segment, after
+    /// the rotation and before a byte of the transaction is on disk: a
+    /// failure here is repaired by the truncation and answers
+    /// [`TxnError::Durability`]; a panic here is the unwind out of the
+    /// commit region the §3 guard repairs.
+    JournalAppend,
+    /// The barrier — the one fsync of records and marker — the frames
+    /// appended and none of them durable: a failure here is repaired by the
+    /// truncation and answers [`TxnError::Durability`], as the append's
+    /// does.
+    JournalBarrier,
+    /// The truncation back to the pre-transaction mark that repairs a failed
+    /// append or barrier, or an unwind out of the commit region: a failure
+    /// here is the repair's own, and POISONS the kernel
+    /// ([`TxnError::Poisoned`]).
+    JournalRepair,
+}
+
+/// The write-fault seam as the two write paths hold it — the hook each
+/// calls before a [`Step`]. Under `test-hooks` it is the kernel's seam
+/// state behind an `Arc` (`hooks::Hooks`), so what the kernel's doors arm
+/// its journal appender fires; the checkpoint write takes it by reference.
+#[cfg(feature = "test-hooks")]
+pub(crate) type Seam = std::sync::Arc<hooks::Hooks>;
+/// The write-fault seam as the two write paths hold it — the hook each
+/// calls before a [`Step`]. Without `test-hooks` it is [`NoHooks`], whose
+/// hook is a no-op, so the write paths read the same in either build.
+#[cfg(not(feature = "test-hooks"))]
+pub(crate) type Seam = NoHooks;
+
+/// The seam of a build without `test-hooks`: nothing to arm, and a hook
+/// before a step that is nothing. Zero-sized, so the kernel and its
+/// appender carry nothing of the seam.
+#[cfg(not(feature = "test-hooks"))]
+#[derive(Clone, Default)]
+pub(crate) struct NoHooks;
+
+#[cfg(not(feature = "test-hooks"))]
+impl NoHooks {
+    /// The hook before a step, in a build without the seam: the step runs.
+    #[inline]
+    pub(crate) fn before(&self, _step: Step) -> std::io::Result<()> {
+        Ok(())
     }
 }

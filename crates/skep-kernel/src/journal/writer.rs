@@ -16,6 +16,7 @@ use super::{
 };
 use crate::config::SaltSource;
 use crate::error::Cause;
+use crate::{Seam, Step};
 
 /// How a commit failed (§1). Three of these leave the journal where the
 /// transaction found it, so what separates them is the caller's REMEDY: a
@@ -108,6 +109,13 @@ pub(crate) struct JournalWriter {
     /// transaction follows them. That is what lets the commit path start
     /// against this field rather than resetting it defensively first (§3).
     in_flight: InFlight,
+    /// The write-fault seam ([`Step`]) the three file operations below hook
+    /// before — the append, the barrier and the repair's truncation. The
+    /// kernel's, handed after the open ([`JournalWriter::with_seam`]) and
+    /// carried across a rotation like the chain; an appender nobody hands
+    /// one holds a fresh one nothing has armed. A no-op without
+    /// `test-hooks`.
+    seam: Seam,
 }
 
 impl JournalWriter {
@@ -148,10 +156,22 @@ impl JournalWriter {
                     chain,
                     salt_source,
                     in_flight: InFlight::Idle,
+                    seam: Seam::default(),
                 })
             }
-            None => Self::create_segment(dir, next_seq, chain, salt_source),
+            None => Self::create_segment(dir, next_seq, chain, salt_source, Seam::default()),
         }
+    }
+
+    /// This appender holding the kernel's write-fault seam in place of the
+    /// fresh one [`JournalWriter::open_active`] gave it — so what the
+    /// kernel's doors arm, the append, the barrier and the repair here fire.
+    /// Handed after the open rather than at it because the appender is
+    /// opened by recovery, which has no kernel yet, and by fixtures that
+    /// have none at all.
+    pub(crate) fn with_seam(mut self, seam: Seam) -> Self {
+        self.seam = seam;
+        self
     }
 
     fn create_segment(
@@ -159,6 +179,7 @@ impl JournalWriter {
         first_seq: u64,
         chain: [u8; 32],
         salt_source: SaltSource,
+        seam: Seam,
     ) -> io::Result<Self> {
         let path = segment_path(dir, first_seq);
         let file = OpenOptions::new().create(true).append(true).open(&path)?;
@@ -174,6 +195,7 @@ impl JournalWriter {
             chain,
             salt_source,
             in_flight: InFlight::Idle,
+            seam,
         })
     }
 
@@ -260,8 +282,11 @@ impl JournalWriter {
     /// unwind-guard tail truncation, idempotent and retried harmlessly. `Err`
     /// is a truncation that could not itself complete durably, leaving the
     /// segment where it was; nothing about WHICH write failed changes what
-    /// either caller must do, so both drop it.
+    /// either caller must do, so both drop it. The seam's
+    /// [`Step::JournalRepair`] is hooked before the truncation, so an armed
+    /// failure is exactly that `Err`.
     fn truncate_to(&mut self, mark: u64) -> io::Result<()> {
+        self.seam.before(Step::JournalRepair)?;
         self.file.set_len(mark)?;
         self.file.sync_data()?;
         self.len = mark;
@@ -289,19 +314,32 @@ impl JournalWriter {
         // Under per-commit Fsync the old segment is already durable (the
         // previous txn's barrier fsynced it) — the §1 rotation discipline.
         // The chain rides across: it is over the journal, not the segment;
-        // the salt source with it.
-        *self = Self::create_segment(&self.dir, first_seq, self.chain, self.salt_source)?;
+        // the salt source and the seam with it.
+        *self = Self::create_segment(
+            &self.dir,
+            first_seq,
+            self.chain,
+            self.salt_source,
+            self.seam.clone(),
+        )?;
         Ok(())
     }
 
+    /// Append the transaction's frames, the seam's [`Step::JournalAppend`]
+    /// hooked before the write: an armed failure there is a transaction no
+    /// byte of which reached the file.
     fn append(&mut self, buf: &[u8]) -> io::Result<()> {
+        self.seam.before(Step::JournalAppend)?;
         self.file.write_all(buf)?;
         self.len += buf.len() as u64;
         Ok(())
     }
 
-    /// The durability barrier: ONE fsync of records+marker (§1).
+    /// The durability barrier: ONE fsync of records+marker (§1), the seam's
+    /// [`Step::JournalBarrier`] hooked before it: an armed failure there is
+    /// the frames appended and none of them durable.
     fn barrier(&mut self) -> io::Result<()> {
+        self.seam.before(Step::JournalBarrier)?;
         self.file.sync_data()
     }
 }

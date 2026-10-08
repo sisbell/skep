@@ -400,3 +400,45 @@ fn a_dotted_text_is_compared_like_any_other() {
     let record = play("dotted_text", ops);
     assert_eq!(record.ops[1].status, Status::Disagreed, "{:?}", record.ops[1]);
 }
+
+/// A doc-less opening write lands where the lead-in leaves the register — on
+/// the first document the scenario names — in the pre-pass as in the play
+/// pass, so the pre-pass infers no setup for a document the write never
+/// reached.
+#[test]
+fn a_doc_less_opening_write_lands_where_the_lead_in_leaves_the_register() {
+    let ops = vec![
+        json!({"op": "insert", "text": "AB"}),
+        retrieve("1.1.0.1.0.1", &["AB"]),
+        retrieve("1.1.0.1.0.2", &[]),
+    ];
+    let record = play("opening_write", ops);
+    assert_eq!(statuses(&record), [Status::NotCompared, Status::Agreed, Status::Agreed]);
+    let inferred = record.groundings.iter().filter(|g| g.starts_with("implied-setup")).count();
+    assert_eq!(inferred, 0, "{:?}", record.groundings);
+}
+
+/// A doc-less read right after a follow reads the follow's landing, and the
+/// pre-pass probes no whole document with it: seed inference goes on past
+/// it to the probe that does tell a document's setup, and the lead-in
+/// builds that setup.
+#[test]
+fn a_follow_landing_read_never_ends_seed_inference() {
+    const LINK: &str = "1.1.0.1.0.1.0.2.1";
+    let landing = json!([{"docid": "1.1.0.1.0.2", "spans": [{"start": "1.12", "width": "0.6"}]}]);
+    let ops = vec![
+        create("source", "1.1.0.1.0.1"),
+        insert("source", "See ref"),
+        create("target", "1.1.0.1.0.2"),
+        insert("target", "Reference: detail"),
+        json!({"op": "create_link", "source_text": "See", "target_text": "detail", "result": LINK}),
+        json!({"op": "follow_link", "link": LINK, "end": "target", "result": landing}),
+        json!({"op": "retrieve_contents", "result": ["detail"]}),
+        retrieve("1.1.0.1.0.3", &["seeded"]),
+    ];
+    let record = play("follow_landing", ops);
+    assert_eq!(statuses(&record)[5..], [Status::Agreed, Status::Agreed, Status::Agreed]);
+    let seeded = "implied-setup: 1.1.0.1.0.3 starts with \"seeded\"";
+    assert!(record.groundings.iter().any(|g| g.starts_with(seeded)), "{:?}", record.groundings);
+    assert_eq!(record.verdict, Verdict::Pass);
+}

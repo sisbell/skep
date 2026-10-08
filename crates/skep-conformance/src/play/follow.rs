@@ -89,7 +89,7 @@ pub(super) fn h_follow_link(
         .map(str::to_string)
         .or_else(|| {
             out.adaptations.push("implicit_last_link".into());
-            cx.shadow.last_link.clone()
+            cx.shadow.last_link().map(str::to_string)
         });
     let Some(link_golden) = link_golden else {
         inexpressible(out, "follow_link with no link in scope".into());
@@ -483,14 +483,14 @@ pub(super) fn h_traverse(cx: &mut Cx, op: &Value, out: &mut OpOutcome, adjustmen
             .map(str::to_string)
             .or_else(|| {
                 let (f, t) = (from_tok.as_deref()?, to_tok.as_deref()?);
-                cx.shadow.arrow_links.get(&(f.to_string(), t.to_string())).cloned()
+                cx.shadow.arrow_link(f, t).map(str::to_string)
             })
             .or_else(|| {
                 // reverse_traversal: at X, the link ARRIVING from
                 // found_link_from — the arrow (from, X).
                 let at = e.get("at").and_then(Value::as_str)?.trim();
                 let from = e.get("found_link_from").and_then(Value::as_str)?.trim();
-                cx.shadow.arrow_links.get(&(from.to_string(), at.to_string())).cloned()
+                cx.shadow.arrow_link(from, at).map(str::to_string)
             })
             .or_else(|| {
                 let d = from_doc.as_deref()?;
@@ -549,7 +549,7 @@ pub(super) fn h_traverse(cx: &mut Cx, op: &Value, out: &mut OpOutcome, adjustmen
         // Land: the followed link's TO doc is where the traversal stands.
         last_followed = Some(link_golden.clone());
         if slot == 2 {
-            if let Some(l) = cx.shadow.links.iter().find(|l| l.golden == link_golden) {
+            if let Some(l) = cx.shadow.link(&link_golden) {
                 if let Some((d, _, _)) = l.to.first() {
                     here = Some(d.clone());
                 }

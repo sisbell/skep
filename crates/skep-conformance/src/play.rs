@@ -347,8 +347,8 @@ use crate::deletions::Deletions;
 use crate::evidence::Effect;
 use crate::fields::{
     aim_doc, as_text, client_side_failure, cuts_of, field, locate, normalize, op_name,
-    raw_spanset_of, recorded_content, recorded_spanset, span_dict, str_field, strings_of,
-    vspec_dict, CopySource, DocAim, DocSpans, Verb, ANNOTATION_KEYS, POST_WRITE_KEYS,
+    probed_content, raw_spanset_of, recorded_spanset, span_dict, str_field, vspec_dict, CopySource,
+    DocAim, DocSpans, Probe, Verb, ANNOTATION_KEYS, BUNDLE_READS,
 };
 use crate::ground::{ImpliedSetup, SetupStep};
 use crate::rig::{brief, Rig};
@@ -998,9 +998,8 @@ impl Cx<'_> {
     /// recording kept the result. When skep made it and `effect` reaches the
     /// shadow, `golden` binds in α; and unless the shadow already holds
     /// `golden` — another document, which α's double-bind finding then
-    /// reports — the version enters the shadow, each of `names` (the op's
-    /// own names for the new version) that is no address and names no
-    /// document yet coming to name it.
+    /// reports — the version enters the shadow under the op's own `names`
+    /// for it (`Shadow::version`).
     fn create_version(
         &mut self,
         src: &str,
@@ -1014,12 +1013,7 @@ impl Cx<'_> {
         if let (true, Response::AckAddr { addr, .. }, Some(g)) = (made, &r, golden) {
             self.alpha.bind(g, addr);
             if !self.shadow.knows(g) {
-                self.shadow.version(src, g);
-                for n in names {
-                    if parse_dotted(n).is_none() && self.shadow.resolve_doc(n).is_none() {
-                        self.shadow.bind_name(n, g);
-                    }
-                }
+                self.shadow.version(src, g, names);
             }
         }
         Ok(r)
@@ -1143,11 +1137,12 @@ impl Cx<'_> {
 
     /// MAKELINK homed in golden `home` over endsets already resolved
     /// through α, in M7's slot order: FROM, TO, TYPE. When skep made the
-    /// link and `effect` reaches the shadow, it enters the shadow: seated
-    /// in its home, the register moved there; with the recorded `link`, its
-    /// golden id bound in α, made the last link and recorded for traversal
-    /// with the golden content endsets it was grounded with; and the
-    /// recorded arrow edge, `(from-name, to-name, link id)`.
+    /// link and `effect` reaches the shadow, it enters the shadow
+    /// (`Shadow::enter_link`): seated in its home, the register moved there;
+    /// with the recorded `link`, its golden id bound in α, made the last
+    /// link and recorded for traversal with the golden content endsets it
+    /// was grounded with; and the recorded arrow edge, `(from-name, to-name,
+    /// link id)`.
     fn make_link(
         &mut self,
         home: &str,
@@ -1166,15 +1161,13 @@ impl Cx<'_> {
             replaces: None,
         });
         if let (true, Response::AckAddr { addr, .. }) = (effect.reaches_shadow(), &r) {
-            self.shadow.seat_link(home);
-            self.shadow.set_current(home);
+            self.shadow.enter_link(home, link.as_ref().map(|l| l.golden.as_str()));
             if let Some(l) = link {
                 self.alpha.bind(&l.golden, addr);
-                self.shadow.last_link = Some(l.golden.clone());
                 self.shadow.record_link(&l.golden, l.from, l.to);
             }
             if let Some((f, t, id)) = arrow {
-                self.shadow.arrow_links.insert((f, t), id);
+                self.shadow.add_arrow(&f, &t, &id);
             }
         }
         Ok(r)
@@ -1388,27 +1381,11 @@ fn marker_type_name(comps: &[u64]) -> Option<&'static str> {
 
 // ────────────────────────────── state probes ───────────────────────────────
 
-/// What kind of probe an op's extra fields represent — the key sets differ
-/// because a WRITE op's `text`/`content` fields are its ARGUMENTS, never a
-/// post-state expectation.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Probe {
-    /// Observation bundle (initial_state, after_first_insert…): the reply
-    /// a read's recording answers with (`fields::recorded_content`). A
-    /// bundle is a read, and settles as one (`Tally::settle_read`).
-    Bundle,
-    /// After a write (insert/delete/vcopy): only the post-write keys
-    /// (`fields::POST_WRITE_KEYS`) are expectations.
-    PostWrite,
-    /// One interior-typing step entry: its own vspanset/contents fields.
-    Step,
-}
-
-/// The arguments an observation bundle carries: the document it observes.
-const BUNDLE_READS: &[&str] = &["doc", "docid", "doc_label"];
-
 /// A state probe: compare whatever vspanset/contents data the op (or one
-/// interior-typing step) carries against the doc's live state.
+/// interior-typing step) carries against the doc's live state — its
+/// contents read by `kind` (`fields::probed_content`), the reading the
+/// walk probes the shadow with too. A bundle is a read, and settles as one
+/// (`Tally::settle_read`).
 fn probe_state(
     cx: &mut Cx,
     op: &Value,
@@ -1450,19 +1427,11 @@ fn probe_state(
         }
     }
 
-    // Contents expectation: the reply, and for a bundle the key it lives
-    // under — an address list or a client repr there is set aside, not
+    // Contents expectation: the reply, and the key it lives under — for a
+    // bundle, an address list or a client repr there is set aside, not
     // compared, and not an unread answer either.
-    let (reply_key, strings) = match kind {
-        Probe::Step => (None, field(op, &["contents", "content"]).and_then(strings_of)),
-        Probe::PostWrite => (None, field(op, POST_WRITE_KEYS).and_then(strings_of)),
-        Probe::Bundle => match recorded_content(op, BUNDLE_READS) {
-            Some((k, strings)) => (Some(k), Some(strings)),
-            None => (None, None),
-        },
-    };
     let mut set_aside: Vec<String> = Vec::new();
-    if let Some(strings) = strings {
+    if let Some((key, strings)) = probed_content(op, kind) {
         if as_text(&strings).is_some() {
             match cx.read_content(doc) {
                 Ok(items) => tally.judge(compare_content(&strings, &items, cx.alpha), "content "),
@@ -1471,7 +1440,7 @@ fn probe_state(
                 }
             }
         } else {
-            set_aside.extend(reply_key);
+            set_aside.push(key);
         }
     }
 

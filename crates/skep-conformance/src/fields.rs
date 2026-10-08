@@ -300,6 +300,15 @@ pub fn recorded_spanset(op: &Value) -> Option<(String, Option<String>, Vec<RawSp
     None
 }
 
+/// A `<role>_vspan_count` field — the recorded count of a ROLE document's
+/// vspanset spans (internal/ispan_consolidation_bulk's `source_vspan_count`,
+/// `dest_vspan_count`): the role, and the count (policy
+/// `vspan-count-by-role`). The one reading both passes aim such a probe by.
+pub fn role_vspan_count(op: &Value) -> Option<(&str, u64)> {
+    let o = op.as_object()?;
+    o.iter().find_map(|(k, v)| Some((k.strip_suffix("_vspan_count")?, v.as_u64()?)))
+}
+
 /// Is this value span-set-shaped at all? (Observation-bundle detection.)
 pub fn looks_like_spanset(v: &Value) -> bool {
     match v {
@@ -409,6 +418,14 @@ pub const REPLY_KEYS: &[&str] = &[
 /// and `content` fields are its ARGUMENTS, never an answer.
 pub const POST_WRITE_KEYS: &[&str] = &["remaining", "result", "expected_contents"];
 
+/// The arguments a content read carries: the document it reads, and the
+/// region, spec set or position that narrows it — never where its recorded
+/// answer lives ([`recorded_content`]).
+pub const CONTENT_READS: &[&str] = &[
+    "doc", "docid", "doc_label", "specset", "specs", "span", "spans", "vspan", "address", "at",
+    "position",
+];
+
 /// The content a read's recording answers with, and the key it lives
 /// under: the first [`REPLY_KEYS`] key holding a recorded array (or a
 /// `{contents}` wrapper around one); else the op's one string array under a
@@ -485,6 +502,60 @@ pub fn per_doc_replies(op: &Value, shadow: &Shadow) -> Vec<(String, String, Vec<
         return Vec::new();
     }
     replies
+}
+
+/// What kind of probe an op's recorded content is: the keys it lives under
+/// differ, because a WRITE op's `text`/`content` fields are its ARGUMENTS,
+/// never a post-state expectation.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Probe {
+    /// An observation bundle (initial_state, after_first_insert…): the
+    /// reply a read's recording answers with ([`recorded_content`]).
+    Bundle,
+    /// After a write (insert/delete/vcopy): only the post-write keys
+    /// ([`POST_WRITE_KEYS`]) are expectations.
+    PostWrite,
+    /// One interior-typing step entry: its own `contents`/`content`.
+    Step,
+}
+
+/// The arguments an observation bundle carries: the document it observes.
+pub const BUNDLE_READS: &[&str] = &["doc", "docid", "doc_label"];
+
+/// The content a probe of `kind` records, and the key it lives under — what
+/// the play pass compares a document's whole content against
+/// (`play::probe_state`), and the walk probes the shadow with. `None` when
+/// the recording keeps none.
+pub fn probed_content(op: &Value, kind: Probe) -> Option<(String, Vec<String>)> {
+    let first_present = |keys: &[&str]| -> Option<(String, Vec<String>)> {
+        let key = *keys.iter().find(|k| field(op, &[**k]).is_some())?;
+        Some((key.to_string(), strings_of(field(op, &[key])?)?))
+    };
+    match kind {
+        Probe::Bundle => recorded_content(op, BUNDLE_READS),
+        Probe::PostWrite => first_present(POST_WRITE_KEYS),
+        Probe::Step => first_present(&["contents", "content"]),
+    }
+}
+
+/// The per-target replies of one read: each `targets` entry naming its
+/// document — by `docid`, or a `doc` name that resolves — with the strings
+/// its `contents` (or `content`) records, the content of that document
+/// (identity/identity_multi_document_sharing records each created target's
+/// content only here; content/multiple_vcopy_same_source each copy's).
+/// Entries carrying no such pair are no reply. In entry order.
+pub fn target_replies(op: &Value, shadow: &Shadow) -> Vec<(String, Vec<String>)> {
+    let Some(entries) = op.get("targets").and_then(Value::as_array) else { return Vec::new() };
+    entries
+        .iter()
+        .filter_map(|e| {
+            let doc = e.get("docid").and_then(Value::as_str).map(str::to_string).or_else(|| {
+                e.get("doc").and_then(Value::as_str).and_then(|n| shadow.resolve_doc(n))
+            });
+            let strings = e.get("contents").or_else(|| e.get("content")).and_then(strings_of);
+            Some((doc?, strings?))
+        })
+        .collect()
 }
 
 /// Did the golden record this op as a failure? A `status` of "failed",
@@ -655,6 +726,43 @@ pub fn is_conflict_copy(op: &Value) -> bool {
         || str_field(op, &["copy", "copy_mode"]).is_some_and(|c| c == "conflict_copy")
 }
 
+/// A compare operand named by a top-level vspec-dict field: (field key,
+/// golden docid, content-subspace (ord, width) windows).
+pub type CompareOperand = (String, String, Vec<(u64, u64)>);
+
+/// The operands a compare names by its own role-keyed vspec-dict fields
+/// (policy `compare-operands-explicit`: ms_version_race's `version_a1`/
+/// `original`, fanout's `dest`/`source`), its recorded answer's keys aside.
+/// Exactly two make the compare explicit, its sides read from them alone.
+/// The one reading both passes split a compare by.
+pub fn compare_operands(op: &Value) -> Vec<CompareOperand> {
+    const NOT_OPERAND: &[&str] = &["result", "pairs", "shared", "shared_spans"];
+    let Some(o) = op.as_object() else { return Vec::new() };
+    o.iter()
+        .filter(|(k, _)| !NOT_OPERAND.contains(&k.as_str()))
+        .filter_map(|(k, v)| {
+            let (docid, regions) = vspec_dict(v)?;
+            let windows = regions.iter().filter(|r| r.sub == 1).map(|r| (r.ord, r.width)).collect();
+            Some((k.clone(), docid, windows))
+        })
+        .collect()
+}
+
+/// Does this `retrieve_endsets` address the LINK itself rather than a
+/// document's region — a `search` naming link space, or a first
+/// `from`/`source` vspec whose docid is a link address (links/
+/// link_retrieval_via_endsets)? The one reading both passes split an
+/// endsets query by.
+pub fn endsets_in_link_space(op: &Value) -> bool {
+    let first_docid = field(op, &["from", "source"])
+        .and_then(Value::as_array)
+        .and_then(|a| a.first())
+        .and_then(|v| v.get("docid"))
+        .and_then(Value::as_str);
+    str_field(op, &["search"]).is_some_and(|s| s.contains("link"))
+        || first_docid.is_some_and(is_link_address)
+}
+
 /// A `to`/`dest` value that is a position marker, not a document reference:
 /// "end", "start", "end of doc" (edgecases/vcopy_to_same_document).
 pub fn is_position_marker(s: &str) -> bool {
@@ -686,6 +794,97 @@ pub fn roster(op: &Value) -> Vec<(String, String)> {
         .collect();
     pairs.sort();
     pairs
+}
+
+/// One document a plural create makes, as [`documents_created`] reads it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CreatedDoc {
+    /// The golden id the recording kept; `None` when it kept none, and each
+    /// pass mints the document under the id it synthesizes as it goes
+    /// (`Shadow::synthesize_docid`).
+    pub id: Option<String>,
+    /// The names the recording gives it, the first the one it is created
+    /// under.
+    pub names: Vec<String>,
+    /// The text the op inserts into it at creation (`texts[k]`).
+    pub text: Option<String>,
+}
+
+/// The documents a plural create makes ([`documents_created`]).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CreatedDocuments {
+    /// The documents, in the order they are created.
+    pub docs: Vec<CreatedDoc>,
+    /// The op counts its documents — `results`, `count` — rather than naming
+    /// them in a docs map or a roster: only a counted document carries a
+    /// text, and only a counted document created empty is one an expansion
+    /// plan may build.
+    pub counted: bool,
+}
+
+/// The documents a `create_documents` op makes, in each shape the corpus
+/// records, as both passes read it: a `docs` map of name → id, created in
+/// id order; else a roster of `<name>: <docid>` fields ([`roster`]), in name
+/// order; else counted — `count` documents, or as many as it records
+/// `results` or `docs` names (one at least), each its `results` id, named
+/// by its `docs` name or as the `k`th of its group ([`group_word`]: the
+/// group's `<group>N`, with the singular `<g>N` and 0-based `<g>_k` the
+/// scripts also use — "peripheral2" for group "peripherals", "target_0" in
+/// identity_multi_document_sharing), and filled with its `texts` entry.
+/// `Err` names a count past [`BUILD_BUDGET`]: no document is created then.
+/// The one reading both passes create documents by.
+pub fn documents_created(op: &Value) -> Result<CreatedDocuments, String> {
+    let named = |pairs: Vec<(String, String)>| CreatedDocuments {
+        docs: pairs
+            .into_iter()
+            .map(|(id, name)| CreatedDoc { id: Some(id), names: vec![name], text: None })
+            .collect(),
+        counted: false,
+    };
+    let mut by_id: Vec<(String, String)> = op
+        .get("docs")
+        .and_then(Value::as_object)
+        .map(|map| {
+            map.iter()
+                .filter_map(|(n, id)| id.as_str().map(|i| (i.to_string(), n.clone())))
+                .collect()
+        })
+        .unwrap_or_default();
+    if !by_id.is_empty() {
+        by_id.sort();
+        return Ok(named(by_id));
+    }
+    let rostered = roster(op);
+    if !rostered.is_empty() {
+        return Ok(named(rostered.into_iter().map(|(name, id)| (id, name)).collect()));
+    }
+    let strings = |key: &str| -> Vec<String> {
+        field(op, &[key])
+            .and_then(Value::as_array)
+            .map(|a| a.iter().filter_map(|v| v.as_str().map(str::to_string)).collect())
+            .unwrap_or_default()
+    };
+    let (results, names, texts) = (strings("results"), strings("docs"), strings("texts"));
+    let group = group_word(op);
+    let count = recorded_count(op)?
+        .map(|c| c as usize)
+        .unwrap_or_else(|| results.len().max(names.len()).max(1))
+        .max(results.len());
+    let docs = (0..count)
+        .map(|k| {
+            let primary =
+                names.get(k).cloned().or_else(|| group.as_ref().map(|g| format!("{g}{}", k + 1)));
+            let mut doc_names: Vec<String> = primary.into_iter().collect();
+            if let Some(g) = &group {
+                let singular = g.trim_end_matches('s');
+                doc_names.push(format!("{singular}{}", k + 1));
+                doc_names.push(format!("{singular}_{k}"));
+            }
+            let (id, text) = (results.get(k).cloned(), texts.get(k).cloned());
+            CreatedDoc { id, names: doc_names, text }
+        })
+        .collect();
+    Ok(CreatedDocuments { docs, counted: true })
 }
 
 /// Where an op's document argument points.
@@ -791,15 +990,17 @@ pub fn doc_from_op_name(op_name: &str) -> Option<String> {
         .map(str::to_string)
 }
 
-/// The symbolic name a create op binds: an explicit doc/name/label field, or
-/// the role the op's name carries — `create_target` names its doc "target"
-/// (identity/identity_mixed_sources probes `doc: "target"` though no field
-/// ever bound it), `create_doc2_and_copy` names "doc2". Generic create op
-/// names (create_document, create_documents…) carry no role.
+/// The symbolic name a create op binds: an explicit doc/name/label/role
+/// field — versions/version_copies_what names its documents only by `role`
+/// ("parent", "target") — or the role the op's name carries:
+/// `create_target` names its doc "target" (identity/identity_mixed_sources
+/// probes `doc: "target"` though no field ever bound it),
+/// `create_doc2_and_copy` names "doc2". Generic create op names
+/// (create_document, create_documents…) carry no role.
 pub fn create_name_of(op: &Value) -> Option<String> {
     // `doc_label` is the corpus-extension recorder's explicit role name
     // (new-corpus files only; verified absent from the original 263).
-    if let Some(s) = str_field(op, &["doc", "name", "label", "doc_label"]) {
+    if let Some(s) = str_field(op, &["doc", "name", "label", "doc_label", "role"]) {
         if crate::tum::parse_dotted(s).is_none() {
             return Some(s.to_string());
         }
@@ -865,6 +1066,15 @@ pub fn version_source(
             adaptations.push("doc-from-register".into());
             shadow.current()
         })
+}
+
+/// The names a `create_version` gives the NEW version: its `doc`, `name`
+/// and `label` fields — `doc` usually names the new version, never its
+/// source unless it resolves ([`version_source`]). Each that is no address
+/// and names no document yet comes to name the version (`Shadow::version`).
+/// The one reading both passes name a version by.
+pub fn version_names(op: &Value) -> Vec<&str> {
+    ["doc", "name", "label"].iter().filter_map(|k| str_field(op, &[k])).collect()
 }
 
 /// An arrow spec carried in a note/comment VALUE — `note: "doc1 -> doc4"`

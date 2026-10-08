@@ -21,7 +21,7 @@ use crate::deletions::Deletions;
 use crate::fields::op_name;
 use crate::ground::ground;
 use crate::loader::{conformance_dir, load_all, LoadError, Scenario};
-use crate::outcome::{Finding, OpOutcome, ScenarioKey, ScenarioRecord, Status, Verdict};
+use crate::outcome::{Finding, OpOutcome, ScenarioKey, ScenarioRecord, Verdict};
 use crate::play::{run_lead_in, run_op, Cx};
 use crate::report::{output_dir, render_table, write_reports, ReportError, ReportPaths};
 use crate::rig::{panic_message, EnginePanic, Rig};
@@ -221,20 +221,14 @@ fn run_scenario(scn: &Scenario, allow: &Allowlist) -> ScenarioRecord {
         let judged = catch_unwind(AssertUnwindSafe(|| {
             let adjustments = allow.adjustments(&key, i);
             let mut out = run_op(&mut cx, i, op, &adjustments);
-            // Fold α-findings into the op they arose on: they are divergence
-            // evidence, not harness failures.
-            let findings: Vec<String> = cx
-                .alpha
-                .drain_findings()
-                .map(|f| format!("{}: {}", f.kind.as_str(), f.detail))
-                .collect();
-            if !findings.is_empty() {
-                if !matches!(out.status, Status::Disagreed | Status::Inexpressible) {
-                    out.status = Status::Disagreed;
-                    out.comparator = Some("alpha");
-                }
-                out.add_note(findings.join("; "));
-            }
+            // Fold α-findings into the op they arose on
+            // (`OpOutcome::add_alpha_findings`).
+            out.add_alpha_findings(
+                cx.alpha
+                    .drain_findings()
+                    .map(|f| format!("{}: {}", f.kind.as_str(), f.detail))
+                    .collect(),
+            );
             // The allowlist judges the outcome α's findings left: which
             // adjudicated classes, if any, cover it.
             out.allowlisted = allow.classify(&key, i, &out);
@@ -249,19 +243,7 @@ fn run_scenario(scn: &Scenario, allow: &Allowlist) -> ScenarioRecord {
     }
     let bijection_size = cx.alpha.len();
     let verdict = Verdict::of(&outcomes);
-    // The summary's divergent list leads with the first UNADJUDICATED
-    // disagreement — a first-finding line showing an allowlisted op reads as
-    // the scenario's open finding and misdirects (round 6's item 1 was
-    // diagnosed off exactly that). Allowlisted disagreements are the
-    // fallback only when nothing unadjudicated exists (allowlisted/
-    // inexpressible verdicts).
-    let first_finding = outcomes
-        .iter()
-        .find(|o| o.status == Status::Inexpressible || o.is_unadjudicated())
-        .or_else(|| {
-            outcomes.iter().find(|o| matches!(o.status, Status::Disagreed | Status::Inexpressible))
-        })
-        .map(|o| Finding { index: o.index, op_name: o.op_name.clone(), detail: o.detail() });
+    let first_finding = Finding::first_of(&outcomes);
     ScenarioRecord {
         category: scn.category.clone(),
         name: scn.name.clone(),

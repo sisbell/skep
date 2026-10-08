@@ -87,20 +87,17 @@ pub struct Shadow {
     created: Vec<String>,
     /// The current-document register (see module docs).
     current: Option<String>,
-    /// The last document a CONTENT write touched (insert/delete/pivot/swap,
-    /// setup steps included) — the doc a "full_text_after"-style probe reads
-    /// (round-5 item: the probe targets the document the setup's INSERT
-    /// modified, not whatever the register drifted to).
-    pub last_written: Option<String>,
-    /// The golden id of the most recently created link.
-    pub last_link: Option<String>,
-    /// version source memo: version docid → source docid.
-    pub version_of: BTreeMap<String, String>,
+    /// The last document a CONTENT write touched ([`Shadow::last_written`]).
+    last_written: Option<String>,
+    /// The golden id of the most recently created link ([`Shadow::last_link`]).
+    last_link: Option<String>,
+    /// Every version the shadow holds, in creation order ([`Shadow::version`]).
+    versions: Vec<String>,
     /// "A->B"-style traversal edges: (from-name, to-name) → golden link id.
-    pub arrow_links: BTreeMap<(String, String), String>,
+    arrow_links: BTreeMap<(String, String), String>,
     /// Every link created through the op surface, creation order, with the
     /// endsets it was grounded with (see [`ShadowLink`]).
-    pub links: Vec<ShadowLink>,
+    links: Vec<ShadowLink>,
     /// Root documents created (drives synthetic golden-id generation for
     /// `create_documents` ops that recorded no results).
     root_count: u64,
@@ -198,9 +195,7 @@ impl Shadow {
                 self.find_named_containing_role(r).or_else(|| self.created.get(i).cloned())
             }
             Some(Role::Register) => self.current(),
-            Some(Role::Version) => {
-                self.created.iter().rev().find(|d| self.version_of.contains_key(*d)).cloned()
-            }
+            Some(Role::Version) => self.versions.last().cloned(),
             // "sourceN"/"peripheralN" positional group names bound at group
             // creation; also substring name matches ("target" →
             // "shared_target") for `by`-clause tokens.
@@ -250,6 +245,39 @@ impl Shadow {
     /// Every document the shadow holds, once each, in creation order.
     pub fn created(&self) -> &[String] {
         &self.created
+    }
+
+    /// Is `golden` a version — a document the shadow holds as some source's
+    /// version ([`Shadow::version`])?
+    pub fn is_version(&self, golden: &str) -> bool {
+        self.versions.iter().any(|v| v == golden)
+    }
+
+    /// The last document a CONTENT write touched — an insert, delete, pivot
+    /// or swap, setup steps included — always one the shadow holds, since
+    /// an edit changes only a held document: the document a `full_*` probe
+    /// naming none reads (policy `full-probe-targets-last-write`).
+    pub fn last_written(&self) -> Option<&str> {
+        self.last_written.as_deref()
+    }
+
+    /// The golden id of the most recently created link the recording kept
+    /// one for ([`Shadow::enter_link`]): the link a follow naming none
+    /// follows (policy `implicit_last_link`).
+    pub fn last_link(&self) -> Option<&str> {
+        self.last_link.as_deref()
+    }
+
+    /// The golden link id the recording names the traversal edge `from ->
+    /// to` by ([`Shadow::add_arrow`]).
+    pub fn arrow_link(&self, from: &str, to: &str) -> Option<&str> {
+        self.arrow_links.get(&(from.to_string(), to.to_string())).map(String::as_str)
+    }
+
+    /// The created link recorded under golden id `golden`, with the endsets
+    /// it was grounded with ([`Shadow::record_link`]).
+    pub fn link(&self, golden: &str) -> Option<&ShadowLink> {
+        self.links.iter().find(|l| l.golden == golden)
     }
 
     pub fn text_len(&self, golden: &str) -> u64 {
@@ -412,14 +440,17 @@ impl Shadow {
     }
 
     /// Version: the new doc mirrors the source's text AND link count —
-    /// udanax's CREATENEWVERSION copies both subspaces. The Nth version
-    /// created in a scenario binds the names `vN`/`versionN` (the recording
-    /// scripts' role names — versions/multiple_versions_same_source refers
-    /// to its two unbound version results as "v1"/"v2"); `version` always
-    /// names the LATEST version. A version is a document minted once, as
+    /// udanax's CREATENEWVERSION copies both subspaces — and becomes the
+    /// register. The Nth version created in a scenario binds the names
+    /// `vN`/`versionN` (the recording scripts' role names — versions/
+    /// multiple_versions_same_source refers to its two unbound version
+    /// results as "v1"/"v2"); `version` always names the LATEST version; and
+    /// each of `names` — the op's own names for the new version
+    /// (`fields::version_names`) — that is no address and names no document
+    /// yet comes to name it. A version is a document minted once, as
     /// [`Shadow::create_doc`]'s are: the caller owes that the shadow does not
     /// hold `new_golden` yet.
-    pub fn version(&mut self, src: &str, new_golden: &str) {
+    pub fn version(&mut self, src: &str, new_golden: &str, names: &[&str]) {
         assert!(
             !self.knows(new_golden),
             "a document is minted once: the shadow already holds {new_golden}"
@@ -430,22 +461,41 @@ impl Shadow {
         };
         self.docs.insert(new_golden.to_string(), DocShadow { text, link_count });
         self.created.push(new_golden.to_string());
-        self.version_of.insert(new_golden.to_string(), src.to_string());
-        let n = self.version_of.len();
+        self.versions.push(new_golden.to_string());
+        let n = self.versions.len();
         self.bind_name(&format!("v{n}"), new_golden);
         self.bind_name(&format!("version{n}"), new_golden);
         self.names.insert("version".to_string(), new_golden.to_string());
         let src_owned = src.to_string();
         self.names.entry("original".to_string()).or_insert(src_owned);
         self.current = Some(new_golden.to_string());
+        for name in names {
+            if crate::tum::parse_dotted(name).is_none() && self.resolve_doc(name).is_none() {
+                self.bind_name(name, new_golden);
+            }
+        }
     }
 
-    /// Seat one more link in the link subspace of `home_golden`, when the
-    /// shadow holds it; an unheld home stays unheld.
-    pub fn seat_link(&mut self, home_golden: &str) {
-        if let Some(d) = self.docs.get_mut(home_golden) {
+    /// A link the recording made enters the golden-side world: seated in
+    /// `home`'s link subspace and the register moved there — when the shadow
+    /// holds `home`; an unheld home stays unheld, as every edit's does — and
+    /// its golden id, when the recording kept one, made the last link. Both
+    /// passes enter a link through here; the play pass also records the
+    /// endsets it grounded ([`Shadow::record_link`]).
+    pub fn enter_link(&mut self, home: &str, golden: Option<&str>) {
+        if let Some(d) = self.docs.get_mut(home) {
             d.link_count += 1;
+            self.current = Some(home.to_string());
         }
+        if let Some(g) = golden {
+            self.last_link = Some(g.to_string());
+        }
+    }
+
+    /// Record the traversal edge `from -> to` the recording names link
+    /// `link` by (an `"A->B": id` result key).
+    pub fn add_arrow(&mut self, from: &str, to: &str, link: &str) {
+        self.arrow_links.insert((from.to_string(), to.to_string()), link.to_string());
     }
 
     /// Record a created link's grounded endsets (play pass and setup steps
@@ -505,8 +555,8 @@ mod tests {
         let mut s = two_docs();
         assert_eq!(s.resolve_doc("version"), None, "no version is made yet");
         assert_eq!(s.resolve_doc("copy"), None);
-        s.version(OTHER, "1.1.0.1.0.2.9");
-        s.version(OTHER, "1.1.0.1.0.2.10");
+        s.version(OTHER, "1.1.0.1.0.2.9", &[]);
+        s.version(OTHER, "1.1.0.1.0.2.10", &[]);
         assert_eq!(s.resolve_doc("version").as_deref(), Some("1.1.0.1.0.2.10"));
         assert_eq!(s.resolve_doc("copy").as_deref(), Some("1.1.0.1.0.2.10"));
         assert_eq!(s.resolve_doc("v1").as_deref(), Some("1.1.0.1.0.2.9"));
@@ -559,7 +609,41 @@ mod tests {
     #[test]
     #[should_panic(expected = "a document is minted once: the shadow already holds 1.1.0.1.0.2")]
     fn a_version_is_minted_once() {
-        two_docs().version(SOURCE, OTHER);
+        two_docs().version(SOURCE, OTHER, &[]);
+    }
+
+    /// A version takes the names its op gives it — each that is no address
+    /// and names no document yet — beside the `vN` name it is born with; a
+    /// name already bound stands.
+    #[test]
+    fn a_version_takes_the_names_its_op_gives_it() {
+        const VERSION: &str = "1.1.0.1.0.1.1";
+        let mut s = two_docs();
+        s.version(SOURCE, VERSION, &["draft", "other"]);
+        assert_eq!(s.resolve_doc("draft").as_deref(), Some(VERSION));
+        assert_eq!(s.resolve_doc("other").as_deref(), Some(OTHER), "a bound name stands");
+        assert_eq!(s.resolve_doc("v1").as_deref(), Some(VERSION));
+        assert_eq!(s.current().as_deref(), Some(VERSION));
+        assert!(s.is_version(VERSION) && !s.is_version(SOURCE));
+    }
+
+    /// A link enters at a home the shadow holds — seated there, the
+    /// register moved there — and its golden id, when kept, is the last
+    /// link; at an unheld home the link seats nowhere and moves nothing.
+    #[test]
+    fn a_link_seats_only_at_a_home_the_shadow_holds() {
+        let mut s = two_docs();
+        s.enter_link(SOURCE, Some("1.1.0.1.0.1.0.2.1"));
+        assert_eq!((s.link_count(SOURCE), s.current().as_deref()), (1, Some(SOURCE)));
+        assert_eq!(s.last_link(), Some("1.1.0.1.0.1.0.2.1"));
+        s.enter_link(OTHER, None);
+        assert_eq!(s.last_link(), Some("1.1.0.1.0.1.0.2.1"), "a link with no id leaves it");
+        s.enter_link("1.1.0.1.0.9", None);
+        assert!(!s.knows("1.1.0.1.0.9"));
+        assert_eq!(s.current().as_deref(), Some(OTHER));
+        s.add_arrow("A", "B", "1.1.0.1.0.1.0.2.1");
+        assert_eq!(s.arrow_link("A", "B"), Some("1.1.0.1.0.1.0.2.1"));
+        assert_eq!(s.arrow_link("B", "A"), None);
     }
 
     /// An edit of a document the shadow does not hold changes nothing: the
@@ -571,7 +655,7 @@ mod tests {
         let mut s = two_docs();
         s.insert(SOURCE, 1, b"AB");
         s.insert(UNHELD, 1, b"XY");
-        s.seat_link(UNHELD);
+        s.enter_link(UNHELD, None);
         s.delete(UNHELD, 1, 1);
         s.pivot(UNHELD, 1, 2, 3);
         s.swap(UNHELD, 1, 2, 2, 3);
@@ -580,6 +664,6 @@ mod tests {
         assert_eq!(s.created(), [SOURCE, OTHER]);
         assert_eq!((s.text_len(UNHELD), s.link_count(UNHELD)), (0, 0));
         assert_eq!(s.current().as_deref(), Some(OTHER));
-        assert_eq!(s.last_written.as_deref(), Some(SOURCE));
+        assert_eq!(s.last_written(), Some(SOURCE));
     }
 }

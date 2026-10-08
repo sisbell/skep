@@ -340,6 +340,28 @@ pub const VERSION_LINK_CARRYOVER_ANALYSIS: &str =
      absent, while link discovery from the version agrees on both sides. Real design \
      divergence, compared raw — ruled version-link-carryover (decisions.md ruling 15).";
 
+/// The third standing cluster: a whole-document remove that keeps the
+/// content and drops the link subspace.
+///
+/// The evidence (delete_all/delete_all_with_links): a `remove` of the
+/// "entire document" is followed by a retrieve recording the FULL text —
+/// udanax removed no content (policy `delete-noop-from-post-state`) — while
+/// the same recording's later find_links expects the home link unfindable
+/// (count 0 / empty): udanax's whole-document remove split the subspaces,
+/// content intact, link-subspace occupancy removed. skep cannot reproduce
+/// that split without violating the ruled subspace-confinement invariant
+/// (udanax-no-subspace-confinement, decisions.md ruling 2), so the harness
+/// keeps the content no-op, and the later link-findability divergence
+/// stands as recorded — ruled ruling-10-i-coverage-findability
+/// (decisions.md ruling 10). The play pass attaches it to the no-op delete
+/// whose recording shows the split.
+pub const REMOVE_SPLITS_SUBSPACES_ANALYSIS: &str =
+    "this recording's later find_links expects the home link unfindable (count 0) while the \
+     content probe still reads the full text — udanax's remove deleted link-subspace occupancy \
+     only; skep cannot reproduce the split without violating the ruled subspace-confinement \
+     invariant (decisions.md ruling 2), so the link-findability divergence downstream stands — \
+     ruled ruling-10-i-coverage-findability (decisions.md ruling 10)";
+
 // ── counts: exact modulo declared delta ────────────────────────────────────
 
 /// A recorded count against skep's, exact up to the count delta the

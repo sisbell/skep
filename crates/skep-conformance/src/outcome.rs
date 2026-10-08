@@ -103,7 +103,8 @@ pub enum Status {
     Inexpressible,
     /// At least one comparison disagreed; or the op named a golden address
     /// α never bound, so its request never reached skep
-    /// ([`OpOutcome::never_bound`]); or an α-finding surfaced on it.
+    /// ([`OpOutcome::never_bound`]); or an α-finding surfaced on it
+    /// ([`OpOutcome::add_alpha_findings`]).
     Disagreed,
 }
 
@@ -221,6 +222,21 @@ impl OpOutcome {
         });
     }
 
+    /// The α-findings that arose on this op, each rendered `kind: detail`:
+    /// divergence evidence, never a harness failure. An op not already
+    /// disagreed or inexpressible disagrees, owned by the α comparator, and
+    /// the findings join its note; none leave the op as it is.
+    pub fn add_alpha_findings(&mut self, findings: Vec<String>) {
+        if findings.is_empty() {
+            return;
+        }
+        if !matches!(self.status, Status::Disagreed | Status::Inexpressible) {
+            self.status = Status::Disagreed;
+            self.comparator = Some("alpha");
+        }
+        self.add_note(findings.join("; "));
+    }
+
     /// One line saying what went wrong on this op: expected and actual when
     /// a comparator rendered a disagreement, else the note.
     pub fn detail(&self) -> String {
@@ -304,6 +320,23 @@ pub struct Finding {
     pub detail: String,
 }
 
+impl Finding {
+    /// The first finding of a scenario played to its end, `outcomes` its
+    /// ops' outcomes: the first op no ruling covers — an inexpressible one,
+    /// or a disagreement no allowlist entry covers — else the first
+    /// adjudicated disagreement; `None` when no op disagreed or was
+    /// inexpressible. A covered op leading would read as the scenario's open
+    /// finding and misdirect, so it leads only when nothing else is open.
+    pub fn first_of(outcomes: &[OpOutcome]) -> Option<Finding> {
+        let open = |o: &&OpOutcome| o.status == Status::Inexpressible || o.is_unadjudicated();
+        outcomes
+            .iter()
+            .find(open)
+            .or_else(|| outcomes.iter().find(|o| o.status == Status::Disagreed))
+            .map(|o| Finding { index: o.index, op_name: o.op_name.clone(), detail: o.detail() })
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ScenarioRecord {
     pub category: String,
@@ -311,8 +344,9 @@ pub struct ScenarioRecord {
     pub verdict: Verdict,
     pub bijection_size: usize,
     pub ops: Vec<OpOutcome>,
-    /// The op a panic stopped the scenario at, with who panicked; else the
-    /// first inexpressible op or unadjudicated disagreement, else the first
+    /// The op a panic stopped the scenario at, with who panicked; else its
+    /// outcomes' first finding ([`Finding::first_of`]): the first
+    /// inexpressible op or unadjudicated disagreement, else the first
     /// adjudicated disagreement; `None` when no op disagreed, was
     /// inexpressible, or was stopped.
     pub first_finding: Option<Finding>,
@@ -405,5 +439,60 @@ mod tests {
         let mut o = OpOutcome::new(0, "op");
         o.disagree("content", Disagreement { expected: "A".into(), actual: "B".into() });
         o.agree("content");
+    }
+
+    /// A scenario's first finding is the first op no ruling covers — an
+    /// inexpressible op, or a disagreement no entry covers — and a covered
+    /// disagreement only when nothing is open; an agreement, even one an
+    /// adjustment made, is never one.
+    #[test]
+    fn the_first_finding_leads_with_what_no_ruling_covers() {
+        use Status::{Agreed, Disagreed, Inexpressible, NotCompared};
+        let at = |index: usize, status, allowlisted| {
+            let mut o = outcome(status, allowlisted);
+            o.index = index;
+            o
+        };
+        let first = |ops: &[OpOutcome]| Finding::first_of(ops).map(|f| f.index);
+        let covered = at(1, Disagreed, Some("ruled"));
+        let adjusted = at(0, Agreed, Some("ruled"));
+        assert_eq!(first(&[adjusted.clone(), covered.clone(), at(2, Disagreed, None)]), Some(2));
+        assert_eq!(first(&[adjusted.clone(), covered.clone()]), Some(1));
+        assert_eq!(first(&[adjusted, at(1, NotCompared, None)]), None);
+        let mut lost = at(2, Inexpressible, None);
+        lost.note = Some("no shape".into());
+        let finding = Finding { index: 2, op_name: "op".into(), detail: "no shape".into() };
+        assert_eq!(Finding::first_of(&[covered, lost]), Some(finding));
+    }
+
+    /// An α-finding makes an op that agreed, or compared nothing, disagree,
+    /// owned by the α comparator; an op already disagreed or inexpressible
+    /// keeps its status and its comparator. Either way the findings join
+    /// the note, and none change nothing.
+    #[test]
+    fn an_alpha_finding_disagrees_without_resettling_a_judged_op() {
+        let found = || vec!["alpha-never-bound: x".to_string(), "alpha-double-bind-skep: y".into()];
+        let noted = "alpha-never-bound: x; alpha-double-bind-skep: y";
+        let mut agreed = OpOutcome::new(0, "op");
+        agreed.agree("content");
+        agreed.add_alpha_findings(found());
+        assert_eq!((agreed.status, agreed.comparator), (Status::Disagreed, Some("alpha")));
+        assert_eq!(agreed.note.as_deref(), Some(noted));
+
+        let mut differed = OpOutcome::new(0, "op");
+        differed.disagree("content", Disagreement { expected: "A".into(), actual: "B".into() });
+        differed.add_alpha_findings(found());
+        assert_eq!((differed.status, differed.comparator), (Status::Disagreed, Some("content")));
+
+        let mut lost = OpOutcome::new(0, "op");
+        lost.status = Status::Inexpressible;
+        lost.add_note("no shape".into());
+        lost.add_alpha_findings(found());
+        assert_eq!((lost.status, lost.comparator), (Status::Inexpressible, None));
+        assert_eq!(lost.note, Some(format!("no shape; {noted}")));
+
+        let mut untouched = OpOutcome::new(0, "op");
+        untouched.add_alpha_findings(Vec::new());
+        assert_eq!(untouched, OpOutcome::new(0, "op"));
     }
 }

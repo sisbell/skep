@@ -1,23 +1,25 @@
 //! The recorded-evidence policies both passes apply. Each reads what the
-//! scenario recorded about an op — the op's own post-state, or the next
-//! probe of its document — to decide what the op did: whether udanax made
-//! the change at all; where an insert or a vcopy lands — the document a
-//! doc-less one aimed at, the position, how wide an insert was; whether a
-//! delete removed anything and exactly what. The grounding pre-pass and the
-//! play pass call the same function, so the two cannot disagree about what
-//! the evidence says; the field grammar both read the evidence through is
-//! `fields`'s.
+//! scenario recorded about an op — the op's own post-state, the next probe
+//! of its document, or the follow just before it — to decide what the op
+//! did: whether udanax made the change at all; where an insert or a vcopy
+//! lands — the document a doc-less one aimed at, the position, how wide an
+//! insert was; whether a delete removed anything and exactly what; what a
+//! read read — a follow's landing, an extent narrower than the whole
+//! document, the one place a per-document reply stands. The grounding
+//! pre-pass and the play pass call the same function, so the two cannot
+//! disagree about what the evidence says; the field grammar both read the
+//! evidence through is `fields`'s.
 
 use serde_json::Value;
 
 use crate::fields::{
     as_text, client_side_failure, doc_from_op_name, expected_failure, field, insert_text,
-    is_position_marker, locate, op_name, reads_whole_content, resolve_position, span_dict,
-    str_field, strings_of, verb_of, CopySource, Grounding, PositionGrounding, Verb,
-    POST_WRITE_KEYS,
+    is_position_marker, locate, op_name, raw_spanset_of, reads_whole_content, recorded_content,
+    resolve_position, span_dict, str_field, strings_of, target_replies, verb_of, CopySource,
+    Grounding, PositionGrounding, Verb, CONTENT_READS, POST_WRITE_KEYS,
 };
 use crate::shadow::Shadow;
-use crate::tum::{parse_dotted, parse_vpos, VPoint, VRegion};
+use crate::tum::{is_link_address, parse_dotted, parse_vpos, parse_width, VPoint, VRegion};
 
 /// Did udanax make the change this op records? Not when the recording
 /// client crashed before the op reached udanax ([`client_side_failure`]),
@@ -69,10 +71,11 @@ impl Effect {
     }
 }
 
-/// The next full-content probe of `doc` after op `i` (doc-field reads of
-/// the whole document, docs-map probes, and per-target `targets` entries —
-/// identity/identity_multi_document_sharing records each created target's
-/// content only inside a `targets` array).
+/// The next full-content probe of `doc` after op `i` — a doc-field read of
+/// the whole document, a docs-map probe, or a per-target `targets` entry
+/// (identity/identity_multi_document_sharing records each created target's
+/// content only inside a `targets` array) — its reply read as the play pass
+/// compares it (`fields::recorded_content`, `fields::target_replies`).
 pub fn next_content_probe(ops: &[Value], i: usize, shadow: &Shadow, doc: &str) -> Option<String> {
     let text = |v: &Value| strings_of(v).as_deref().and_then(as_text);
     for op in &ops[i + 1..] {
@@ -85,21 +88,10 @@ pub fn next_content_probe(ops: &[Value], i: usize, shadow: &Shadow, doc: &str) -
                 }
             }
         }
-        if let Some(entries) = op.get("targets").and_then(Value::as_array) {
-            for e in entries {
-                let named = e
-                    .get("docid")
-                    .and_then(Value::as_str)
-                    .map(str::to_string)
-                    .or_else(|| {
-                        e.get("doc")
-                            .and_then(Value::as_str)
-                            .and_then(|n| shadow.resolve_doc(n))
-                    });
-                if named.as_deref() == Some(doc) {
-                    if let Some(s) = e.get("contents").and_then(text) {
-                        return Some(s);
-                    }
+        for (named, strings) in target_replies(op, shadow) {
+            if named == doc {
+                if let Some(s) = as_text(&strings) {
+                    return Some(s);
                 }
             }
         }
@@ -110,7 +102,8 @@ pub fn next_content_probe(ops: &[Value], i: usize, shadow: &Shadow, doc: &str) -
         if target.as_deref() != Some(doc) {
             continue;
         }
-        if let Some(s) = field(op, &["result", "content", "contents"]).and_then(text) {
+        let reply = recorded_content(op, CONTENT_READS).map(|(_, strings)| strings);
+        if let Some(s) = reply.as_deref().and_then(as_text) {
             return Some(s);
         }
     }
@@ -437,6 +430,66 @@ pub fn vcopy_ordinal(
     Ok(None)
 }
 
+/// The landing a doc-less read right after a follow reads (policy
+/// `retrieve-follow-landing`): when op `i` names no document and no
+/// `full_*` name makes it a whole-document read, and the op before it is a
+/// follow or a traversal whose recorded result is a vspec, the document and
+/// the regions that vspec names — the link destination the script had just
+/// followed (links/follow_link op 8), never the register's document. `None`
+/// when the shape does not apply. The one reading both passes aim such a
+/// read by.
+pub fn follow_landing(ops: &[Value], i: usize) -> Option<(String, Vec<VRegion>)> {
+    let op = &ops[i];
+    let full = op_name(op).to_ascii_lowercase().starts_with("full_");
+    if full || str_field(op, &["doc", "docid"]).is_some() {
+        return None;
+    }
+    let prev = ops.get(i.checked_sub(1)?)?;
+    if !matches!(verb_of(prev), Some(Verb::FollowLink | Verb::Traverse)) {
+        return None;
+    }
+    let (docid, spans) = raw_spanset_of(field(prev, &["result"])?)?;
+    let regions: Vec<VRegion> = spans
+        .iter()
+        .map(|(start, w)| Some(parse_vpos(start)?.region(parse_width(w)?)))
+        .collect::<Option<_>>()?;
+    (!regions.is_empty()).then_some((docid?, regions))
+}
+
+/// The narrower extent a whole-document read's recorded reply shows the
+/// script read (policy `read-scoped-to-recorded-extent`): the length of the
+/// reply's text, when it falls one or two positions short of `doc`'s content
+/// in the shadow — the recorded reality — and that content opens with the
+/// reply's first text: the script's specset was that much narrower than the
+/// document (provenance/createnewversion_text_vs_links reads 33 of 34). A
+/// larger shortfall is a world that diverged, never a narrower read. Link
+/// addresses in the reply count no text. `None` when the read is the whole
+/// document.
+pub fn scoped_read(recorded: &[String], shadow: &Shadow, doc: &str) -> Option<u64> {
+    let n = shadow.text_len(doc);
+    let text: Vec<&String> = recorded.iter().filter(|s| !is_link_address(s)).collect();
+    let text_len = text.iter().map(|s| s.len() as u64).sum::<u64>();
+    let held = shadow.text_string(doc);
+    let opens = text.first().is_some_and(|first| held.starts_with(first.as_str()));
+    let short = text_len > 0 && text_len < n && n - text_len <= 2;
+    (short && held.len() as u64 >= text_len && opens).then_some(text_len)
+}
+
+/// The region a per-document reply was read at, when it narrows (policy
+/// `read-span-from-recorded-strings`): its one recorded string — nonempty,
+/// no link address, other than `doc`'s whole content — found in the shadow,
+/// the script's unrecorded specset reconstructed golden-side
+/// (internal/ispan_partial_overlap's `source: ["CDEFG"]`). `None` when the
+/// reply is read against the whole document.
+pub fn reply_narrowing(recorded: &[String], shadow: &Shadow, doc: &str) -> Option<VRegion> {
+    let [s] = recorded else { return None };
+    if s.is_empty() || is_link_address(s) || *s == shadow.text_string(doc) {
+        return None;
+    }
+    let (_, ord) = shadow.find_text(Some(doc), s)?;
+    Some(VPoint::content(ord).region(s.len() as u64))
+}
+
 /// Was this delete a no-op in udanax? The doc's recorded post-delete content
 /// equals its pre-delete content byte-for-byte (delete_all/delete_all_with_
 /// links: `remove "entire document"` followed by a retrieve recording the
@@ -677,14 +730,13 @@ fn post_state_of(ops: &[Value], i: usize, shadow: &Shadow, doc: &str) -> Option<
         if probe_doc.is_some() && probe_doc.as_deref() != Some(doc) {
             continue;
         }
-        // "after"-keyed replies count too (delete_all/delete_all_with_links
-        // records its post-remove retrieve under "after"), structured only.
-        let reply = field(later, &["result", "content", "contents"])
-            .or_else(|| field(later, &["after"]).filter(|v| !v.is_string()));
-        if let Some(v) = reply {
-            if let Some(s) = content(v) {
-                return Some(s);
-            }
+        // The reply, read as the play pass compares it
+        // (`fields::recorded_content`): under "after" (delete_all/
+        // delete_all_with_links' post-remove retrieve), stringified by the
+        // recording client (rearrange_semantics/pivot_v3_*).
+        let reply = recorded_content(later, CONTENT_READS).map(|(_, strings)| strings);
+        if let Some(s) = reply.as_deref().and_then(as_text) {
+            return Some(s);
         }
     }
     None

@@ -176,10 +176,9 @@ fn only_the_world_change_methods_change_the_shadow() {
         "shadow.version(",
         "shadow.create_doc(",
         "shadow.bind_name(",
-        "shadow.seat_link(",
+        "shadow.enter_link(",
         "shadow.record_link(",
-        "shadow.last_link =",
-        "shadow.arrow_links.insert",
+        "shadow.add_arrow(",
     ];
     let play_pass = |file: &Path| {
         file.starts_with("play") || ["play.rs", "runner.rs"].iter().any(|f| file == Path::new(f))

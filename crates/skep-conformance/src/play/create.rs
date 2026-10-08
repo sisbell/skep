@@ -17,8 +17,8 @@ use super::{
 };
 use crate::evidence::Effect;
 use crate::fields::{
-    create_name_of, created_addresses, expected_failure, field, group_word, is_conflict_copy,
-    recorded_count, roster, str_field, version_result, version_source,
+    create_name_of, created_addresses, documents_created, expected_failure, is_conflict_copy,
+    str_field, version_names, version_result, version_source,
 };
 use crate::outcome::{Disagreement, OpOutcome, Status};
 use crate::tum::VPoint;
@@ -74,6 +74,17 @@ pub(super) fn h_create_document(cx: &mut Cx, op: &Value, out: &mut OpOutcome) {
 pub(super) fn h_create_documents(cx: &mut Cx, index: usize, op: &Value, out: &mut OpOutcome) {
     let recorded_failure = expected_failure(op);
     let effect = Effect::of(op);
+    // The documents the op makes are the one reading the grounding pre-pass
+    // creates them by too (`fields::documents_created`). A count past the
+    // build budget orders documents no comparison could read: the op is
+    // refused before any is created.
+    let created = match documents_created(op) {
+        Ok(created) => created,
+        Err(past_budget) => {
+            inexpressible(out, past_budget);
+            return;
+        }
+    };
     // Every creation the op records is asked for. The first one skep refuses
     // is then settled, once, against the failure the golden recorded —
     // unless the op already disagrees (a text insert or a plan step skep
@@ -82,106 +93,45 @@ pub(super) fn h_create_documents(cx: &mut Cx, index: usize, op: &Value, out: &mu
     // How many of the documents the op creates are minted under a
     // synthesized golden id, the recording having kept none.
     let mut synthesized = 0usize;
-    let mut create = |cx: &mut Cx, id: &str, name: Option<&str>| {
-        if let Err(r) = ensure_document(cx, id, name, effect) {
-            refused.get_or_insert(r);
-        }
-    };
-    // docs map {name: id} — created in id order.
-    let mut by_id: Vec<(String, String)> = op
-        .get("docs")
-        .and_then(Value::as_object)
-        .map(|map| {
-            map.iter()
-                .filter_map(|(n, id)| id.as_str().map(|i| (i.to_string(), n.clone())))
-                .collect()
-        })
-        .unwrap_or_default();
-    // A roster of `<name>: <docid>` fields (doc1/doc2, source1/source2, the
-    // `docs` op's A/B/C) — created in name order.
-    let named = roster(op);
-    // How many documents the op creates.
-    let created = if !by_id.is_empty() {
-        by_id.sort();
-        for (id, n) in &by_id {
-            create(cx, id, Some(n));
-        }
-        by_id.len()
-    } else if !named.is_empty() {
-        for (n, id) in &named {
-            create(cx, id, Some(n));
-        }
-        named.len()
-    } else {
-        let results: Vec<String> = field(op, &["results"])
-            .and_then(Value::as_array)
-            .map(|a| a.iter().filter_map(|v| v.as_str().map(str::to_string)).collect())
-            .unwrap_or_default();
-        let names: Vec<String> = field(op, &["docs"])
-            .and_then(Value::as_array)
-            .map(|a| a.iter().filter_map(|v| v.as_str().map(str::to_string)).collect())
-            .unwrap_or_default();
-        let texts: Vec<String> = field(op, &["texts"])
-            .and_then(Value::as_array)
-            .map(|a| a.iter().filter_map(|v| v.as_str().map(str::to_string)).collect())
-            .unwrap_or_default();
-        let group = group_word(op);
-        // A count past the build budget orders documents no comparison
-        // could read: the op is refused before any is created.
-        let count = match recorded_count(op) {
-            Ok(count) => count,
-            Err(past_budget) => {
-                inexpressible(out, past_budget);
-                return;
+    for doc in &created.docs {
+        let id = match &doc.id {
+            Some(id) => id.clone(),
+            None => {
+                synthesized += 1;
+                cx.shadow.synthesize_docid()
             }
         };
-        let count = count
-            .map(|c| c as usize)
-            .unwrap_or_else(|| results.len().max(names.len()).max(1))
-            .max(results.len());
-        for k in 0..count {
-            let id = match results.get(k) {
-                Some(id) => id.clone(),
-                None => {
-                    synthesized += 1;
-                    cx.shadow.synthesize_docid()
-                }
-            };
-            let name =
-                names.get(k).cloned().or_else(|| group.as_ref().map(|t| format!("{t}{}", k + 1)));
-            create(cx, &id, name.as_deref());
-            if let Some(g) = &group {
-                let singular = g.trim_end_matches('s');
-                cx.name_document(&id, &format!("{singular}{}", k + 1));
-                cx.name_document(&id, &format!("{singular}_{k}"));
-            }
-            // The recorded text goes in whatever skep answers; a refusal is
-            // the op's disagreement unless an earlier one already is. A
-            // document with no α-image was refused at creation, a refusal
-            // settled below.
-            if let Some(t) = texts.get(k) {
-                if let Ok(r) = cx.insert(&id, VPoint::content(1), t.as_bytes(), effect) {
-                    let first = out.status != Status::Disagreed;
-                    if first && !matches!(r, Response::AckAddr { .. }) {
-                        let expected = format!("text insert into {id} succeeds");
-                        out.disagree("rejection", Disagreement { expected, actual: refusal(&r) });
-                    }
+        let mut names = doc.names.iter().map(String::as_str);
+        if let Err(r) = ensure_document(cx, &id, names.next(), effect) {
+            refused.get_or_insert(r);
+        }
+        for name in names {
+            cx.name_document(&id, name);
+        }
+        // The recorded text goes in whatever skep answers; a refusal is the
+        // op's disagreement unless an earlier one already is. A document
+        // with no α-image was refused at creation, a refusal settled below.
+        if let Some(t) = &doc.text {
+            if let Ok(r) = cx.insert(&id, VPoint::content(1), t.as_bytes(), effect) {
+                let first = out.status != Status::Disagreed;
+                if first && !matches!(r, Response::AckAddr { .. }) {
+                    let expected = format!("text insert into {id} succeeds");
+                    out.disagree("rejection", Disagreement { expected, actual: refusal(&r) });
                 }
             }
         }
-        // World-construction plans (create_multiple_targets): the pre-pass
-        // covered each created-empty doc's probed content with real copies.
-        // The plan runs whatever skep answered a text insert; the earlier
-        // failure stays the op's.
-        if cx.plans.contains_key(&index) {
-            if let Some(failure) = run_plan(cx, index, out) {
-                if out.status != Status::Disagreed {
-                    plan_failed(out, failure);
-                }
+    }
+    // World-construction plans (create_multiple_targets): the pre-pass
+    // covered each counted, created-empty doc's probed content with real
+    // copies. The plan runs whatever skep answered a text insert; the
+    // earlier failure stays the op's.
+    if created.counted && cx.plans.contains_key(&index) {
+        if let Some(failure) = run_plan(cx, index, out) {
+            if out.status != Status::Disagreed {
+                plan_failed(out, failure);
             }
         }
-        count
-    };
+    }
     if let Some(r) = refused {
         if out.status == Status::Disagreed {
             out.add_note(format!("document creation: {}", refusal(&r)));
@@ -194,7 +144,7 @@ pub(super) fn h_create_documents(cx: &mut Cx, index: usize, op: &Value, out: &mu
         return;
     }
     if settle_accepted(out, recorded_failure) {
-        settle_creation(out, created - synthesized, synthesized);
+        settle_creation(out, created.docs.len() - synthesized, synthesized);
     }
 }
 
@@ -314,10 +264,7 @@ pub(super) fn h_create_version(cx: &mut Cx, op: &Value, out: &mut OpOutcome) {
     if joint_absence(cx, out, recorded_failure.as_deref(), &src) {
         return; // green failed versioning a never-created doc (boundary A7)
     }
-    // A non-address doc/name/label field names the NEW version.
-    let names: Vec<&str> =
-        ["doc", "name", "label"].iter().filter_map(|k| str_field(op, &[k])).collect();
-    match cx.create_version(&src, golden.as_deref(), &names, Effect::of(op)) {
+    match cx.create_version(&src, golden.as_deref(), &version_names(op), Effect::of(op)) {
         Err(_) => out.never_bound(format!("version of never-bound doc {src}")),
         Ok(Response::AckAddr { .. }) => {
             if !settle_accepted(out, recorded_failure) {

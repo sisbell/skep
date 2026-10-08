@@ -13,7 +13,9 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use serde_json::json;
 
-use crate::compare::{COLLAPSED_SUBSPACE_ANALYSIS, VERSION_LINK_CARRYOVER_ANALYSIS};
+use crate::compare::{
+    COLLAPSED_SUBSPACE_ANALYSIS, REMOVE_SPLITS_SUBSPACES_ANALYSIS, VERSION_LINK_CARRYOVER_ANALYSIS,
+};
 use crate::outcome::{OpOutcome, ScenarioRecord, Status, Verdict};
 
 /// `skep/target/conformance/` — where the report and summary are written.
@@ -274,6 +276,10 @@ fn render_summary(records: &[ScenarioRecord]) -> String {
             "udanax version link carryover vs skep content-only Version",
             VERSION_LINK_CARRYOVER_ANALYSIS,
         ),
+        (
+            "udanax whole-document remove that keeps the content and drops the link subspace",
+            REMOVE_SPLITS_SUBSPACES_ANALYSIS,
+        ),
     ] {
         let affected: Vec<&ScenarioRecord> = records
             .iter()
@@ -468,5 +474,21 @@ mod tests {
         let escaped = "- `cat/in\\njected` — op 0 `op\\n0`: x\\n## Divergent scenarios (first \
                        disagreement)\\n\\n(none)\n";
         assert!(summary.contains(escaped), "{summary}");
+    }
+
+    /// Each standing analysis an op's note carries — beside other evidence,
+    /// so by containment — is surfaced once, its scenarios listed under it;
+    /// an analysis no note carries is not surfaced at all.
+    #[test]
+    fn a_standing_analysis_lists_the_scenarios_whose_notes_carry_it() {
+        let mut o = op(0, Status::NotCompared, None);
+        o.note = Some(format!("no-op delete; ANALYSIS: {REMOVE_SPLITS_SUBSPACES_ANALYSIS}"));
+        let summary = render_summary(&[record("split", Verdict::Pass, vec![o])]);
+        let title = "## Standing analysis — udanax whole-document remove that keeps the content \
+                     and drops the link subspace\n\n";
+        let analysis = REMOVE_SPLITS_SUBSPACES_ANALYSIS;
+        let listed = format!("{title}{analysis}\n\nAffected scenarios:\n\n");
+        assert!(summary.contains(&format!("{listed}- `cat/split`\n")), "{summary}");
+        assert!(!summary.contains("## Standing analysis — udanax two-subspace"), "{summary}");
     }
 }

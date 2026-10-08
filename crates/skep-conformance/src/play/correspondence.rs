@@ -13,7 +13,7 @@ use skep_retrieval::RegionSpec;
 
 use super::{compared_nothing, inexpressible, refusal, Cx, Tally};
 use crate::evidence::version_made_before;
-use crate::fields::{field, locate, span_dict, str_field, vspec_dict};
+use crate::fields::{compare_operands, field, locate, span_dict, str_field, CompareOperand};
 use crate::outcome::{Disagreement, OpOutcome};
 use crate::tum::{parse_vpos, VPoint};
 
@@ -262,35 +262,18 @@ fn run_compare_pair(
     judge_shared(recorded, &a, &b, &merged, &foreign).settle(out, comparator);
 }
 
-/// A compare operand named by a top-level vspec-dict field: (field key,
-/// golden docid, content-subspace (ord, width) windows).
-type Operand = (String, String, Vec<(u64, u64)>);
-
 pub(super) fn h_compare_versions(cx: &mut Cx, index: usize, op: &Value, out: &mut OpOutcome) {
-    // Corpus-extension operands (policy `compare-operands-explicit`): two
-    // top-level role-keyed vspec-dict fields name the sides and their
-    // windows explicitly (ms_version_race `version_a1`/`original`, fanout
-    // `dest`/`source` and self-compare `whole`/`whole_again`, the marathon's
-    // `doc`/`vbase`). The original/version convention never applies when
-    // they exist — it aims at the LATEST version, which these recordings
-    // demonstrably do not mean. Verified absent from the 263-scenario
-    // corpus, so the legacy paths are untouched.
-    const NOT_OPERAND: &[&str] = &["result", "pairs", "shared", "shared_spans"];
-    let operands: Vec<Operand> = op
-        .as_object()
-        .map(|o| {
-            o.iter()
-                .filter(|(k, _)| !NOT_OPERAND.contains(&k.as_str()))
-                .filter_map(|(k, v)| {
-                    let (docid, regions) = vspec_dict(v)?;
-                    let wins: Vec<(u64, u64)> =
-                        regions.iter().filter(|r| r.sub == 1).map(|r| (r.ord, r.width)).collect();
-                    Some((k.clone(), docid, wins))
-                })
-                .collect()
-        })
-        .unwrap_or_default();
-    if let Ok([(ka, da, wa), (kb, db, wb)]) = <[Operand; 2]>::try_from(operands) {
+    // Corpus-extension operands (policy `compare-operands-explicit`,
+    // `fields::compare_operands`): two top-level role-keyed vspec-dict
+    // fields name the sides and their windows explicitly (ms_version_race
+    // `version_a1`/`original`, fanout `dest`/`source` and self-compare
+    // `whole`/`whole_again`, the marathon's `doc`/`vbase`). The
+    // original/version convention never applies when they exist — it aims
+    // at the LATEST version, which these recordings demonstrably do not
+    // mean. Verified absent from the 263-scenario corpus, so the legacy
+    // paths are untouched.
+    let operands = compare_operands(op);
+    if let Ok([(ka, da, wa), (kb, db, wb)]) = <[CompareOperand; 2]>::try_from(operands) {
         out.adaptations.push("compare-operands-explicit".into());
         let pairs = field(op, &["result", "shared", "pairs"]).and_then(Value::as_array);
         let count = field(op, &["pair_count"]).and_then(Value::as_u64);

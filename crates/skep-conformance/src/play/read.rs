@@ -13,57 +13,24 @@ use skep_retrieval::{DeliveryItem, Spec};
 
 use super::{
     compared_nothing, inexpressible, joint_absence, probe_state, refusal, settle_accepted,
-    settle_unaccepted, Cx, Probe, Tally,
+    settle_unaccepted, Cx, Tally,
 };
 use crate::allowlist::Adjustments;
 use crate::compare::{
     compare_content, compare_count, compare_spansets, is_collapsed_subspace_shape,
     COLLAPSED_SUBSPACE_ANALYSIS, VERSION_LINK_CARRYOVER_ANALYSIS,
 };
+use crate::evidence::{follow_landing, reply_narrowing, scoped_read};
 use crate::fields::{
     as_text, expected_failure, field, has_observation_fields, locate, op_name, per_doc_replies,
-    position_from_op_name, raw_spanset_of, recorded_content, recorded_spanset, span_dict,
-    str_field, strings_of, verb_of, vspec_dict, Verb,
+    position_from_op_name, recorded_content, recorded_spanset, role_vspan_count, span_dict,
+    str_field, strings_of, target_replies, vspec_dict, Probe, Verb, CONTENT_READS,
 };
 use crate::outcome::{Disagreement, OpOutcome};
 use crate::tum::{is_link_address, link_home_docid, parse_dotted, parse_vpos, VPoint};
 
-/// The arguments a content read carries: the document it reads, and the
-/// region, spec set or position that narrows it.
-const CONTENT_READS: &[&str] = &[
-    "doc", "docid", "doc_label", "specset", "specs", "span", "spans", "vspan", "address", "at",
-    "position",
-];
-
 /// The arguments a vspan/vspanset probe carries: the document it reads.
 const EXTENT_READS: &[&str] = &["doc", "docid", "doc_label"];
-
-/// The retrieve specs for a doc-less retrieve that follows a follow op whose
-/// recorded result is a vspec — the landing the script read (policy
-/// `retrieve-follow-landing`). `None` when the shape does not apply.
-fn follow_landing_specs(cx: &mut Cx, index: usize, op: &Value) -> Option<Vec<Spec>> {
-    if str_field(op, &["doc", "docid"]).is_some() {
-        return None;
-    }
-    let prev = cx.ops.get(index.checked_sub(1)?)?;
-    if !matches!(verb_of(prev), Some(Verb::FollowLink | Verb::Traverse)) {
-        return None;
-    }
-    let (docid, spans) = raw_spanset_of(field(prev, &["result"])?)?;
-    let docid = docid?;
-    if spans.is_empty() {
-        return None;
-    }
-    let d = cx.alpha.translate(&docid)?;
-    let mut specs = Vec::new();
-    for (start, w) in &spans {
-        let region = parse_vpos(start)?.region(crate::tum::parse_width(w)?);
-        if let Some(span) = region.span() {
-            specs.push(Spec { doc: d.clone(), span });
-        }
-    }
-    (!specs.is_empty()).then_some(specs)
-}
 
 /// A `{start, width}` dict whose components parse as dotted decimal but NOT
 /// as a depth-2 V-position — the boundary corpus's nested local addresses
@@ -107,38 +74,25 @@ pub(super) fn h_retrieve_contents(cx: &mut Cx, index: usize, op: &Value, out: &m
         return;
     }
 
-    // Per-target probe list: `targets: [{doc|docid, contents}]` —
-    // identity/identity_multi_document_sharing records every created
-    // target's content only here.
-    if let Some(entries) = op.get("targets").and_then(Value::as_array) {
+    // Per-target probe list: `targets: [{doc|docid, contents}]`
+    // (`fields::target_replies`) — identity/identity_multi_document_sharing
+    // records every created target's content only here.
+    let targets = target_replies(op, cx.shadow);
+    if !targets.is_empty() {
         let mut tally = Tally::default();
-        for e in entries {
-            let docid = e
-                .get("docid")
-                .and_then(Value::as_str)
-                .map(str::to_string)
-                .or_else(|| {
-                    e.get("doc").and_then(Value::as_str).and_then(|n| cx.shadow.resolve_doc(n))
-                });
-            let (Some(docid), Some(strings)) =
-                (docid, e.get("contents").or_else(|| e.get("content")).and_then(strings_of))
-            else {
-                continue;
-            };
+        for (docid, strings) in &targets {
             let label = format!("{docid}: ");
-            match cx.read_content(&docid) {
-                Ok(items) => tally.judge(compare_content(&strings, &items, cx.alpha), &label),
+            match cx.read_content(docid) {
+                Ok(items) => tally.judge(compare_content(strings, &items, cx.alpha), &label),
                 Err(code) => tally.differ(Disagreement {
                     expected: format!("{docid}: contents"),
                     actual: format!("{docid}: {code}"),
                 }),
             }
         }
-        if tally.compared > 0 {
-            out.adaptations.push("contents:content-subspace".into());
-            tally.settle(out, "content");
-            return;
-        }
+        out.adaptations.push("contents:content-subspace".into());
+        tally.settle(out, "content");
+        return;
     }
 
     // Per-doc keyed probe (policy `contents:per-doc-keyed`): the recorded
@@ -164,23 +118,14 @@ pub(super) fn h_retrieve_contents(cx: &mut Cx, index: usize, op: &Value, out: &m
                 continue;
             };
             // Reconstructed narrowing: exactly one recorded string,
-            // strictly inside the shadow's content, located there.
-            let narrowed = match strings.as_slice() {
-                [s] if !s.is_empty()
-                    && !is_link_address(s)
-                    && *s != cx.shadow.text_string(doc) =>
-                {
-                    cx.shadow
-                        .find_text(Some(doc.as_str()), s)
-                        .map(|(_, ord)| (ord, s.len() as u64))
-                }
-                _ => None,
-            };
-            let items = if let Some((ord, w)) = narrowed {
+            // strictly inside the shadow's content, located there
+            // (`evidence::reply_narrowing`).
+            let items = if let Some(region) = reply_narrowing(strings, cx.shadow, doc) {
                 out.adaptations.push("read-span-from-recorded-strings".into());
-                match VPoint::content(ord).region(w).span().map(|span| {
-                    cx.rig.exec(Op::RetrieveV { specs: vec![Spec { doc: d, span }] })
-                }) {
+                match region
+                    .span()
+                    .map(|span| cx.rig.exec(Op::RetrieveV { specs: vec![Spec { doc: d, span }] }))
+                {
                     Some(Response::Delivery { items, .. }) => Ok(items.0),
                     Some(r) => Err(refusal(&r)),
                     None => Ok(Vec::new()),
@@ -359,25 +304,31 @@ pub(super) fn h_retrieve_contents(cx: &mut Cx, index: usize, op: &Value, out: &m
                 }
             }
         }
-    } else if let Some(landing) = (!op_name(op).to_ascii_lowercase().starts_with("full_"))
-        .then(|| follow_landing_specs(cx, index, op))
-        .flatten()
-    {
-        // Policy `retrieve-follow-landing`: a doc-less retrieve right after
-        // a follow whose recorded result names a vspec reads THOSE spans —
-        // the script retrieved the link destination it had just followed
-        // (links/follow_link op8), never the register. A `full_*` op is by
-        // its own name a whole-document read, never a landing read
-        // (round-5 item 4: insert_text_check_both_link_positions op7).
+    } else if let Some((docid, regions)) = follow_landing(cx.ops, index) {
+        // Policy `retrieve-follow-landing` (`evidence::follow_landing`): a
+        // doc-less retrieve right after a follow whose recorded result names
+        // a vspec reads THOSE spans — the script retrieved the link
+        // destination it had just followed (links/follow_link op8), never
+        // the register. A `full_*` op is by its own name a whole-document
+        // read, never a landing read (round-5 item 4:
+        // insert_text_check_both_link_positions op7).
         out.adaptations.push("retrieve-follow-landing".into());
-        specs = landing;
+        let Some(d) = cx.alpha.translate(&docid) else {
+            out.never_bound(format!("retrieve doc {docid} never bound"));
+            return;
+        };
+        specs = regions
+            .iter()
+            .filter_map(|r| r.span())
+            .map(|span| Spec { doc: d.clone(), span })
+            .collect();
     } else {
         // Full probes aim at the doc the last CONTENT write touched, not
         // whatever the register drifted to (policy
         // `full-probe-targets-last-write`).
         let full_probe = op_name(op).to_ascii_lowercase().starts_with("full_");
         let doc = if full_probe && str_field(op, &["doc", "docid"]).is_none() {
-            match cx.shadow.last_written.clone().filter(|d| cx.shadow.knows(d)) {
+            match cx.shadow.last_written().map(str::to_string) {
                 Some(d) => {
                     out.adaptations.push("full-probe-targets-last-write".into());
                     cx.shadow.set_current(&d);
@@ -418,34 +369,17 @@ pub(super) fn h_retrieve_contents(cx: &mut Cx, index: usize, op: &Value, out: &m
             // that includes a link address read BOTH subspaces — content
             // plus the link positions — and the link addresses compare
             // through α (policy `contents:both-subspaces`). One
-            // evidence-driven narrowing: when the recorded TEXT is a strict
-            // prefix of the shadow's (recorded-reality) content, the
-            // script's specset was that much narrower — read only that many
-            // positions (policy `read-scoped-to-recorded-extent`).
-            let n = cx.shadow.text_len(&doc);
-            let mut scoped_to: Option<u64> = None;
+            // evidence-driven narrowing: when the recorded TEXT falls one or
+            // two positions short of the shadow's (recorded-reality)
+            // content, the script's specset was that much narrower — read
+            // only that many positions (policy
+            // `read-scoped-to-recorded-extent`, `evidence::scoped_read`).
             let has_addr = strings
                 .as_ref()
                 .is_some_and(|ss| ss.iter().any(|s| is_link_address(s)));
-            if let Some(ss) = &strings {
-                let text_len: usize =
-                    ss.iter().filter(|s| !is_link_address(s)).map(String::len).sum();
-                let shadow_text = cx.shadow.text_string(&doc);
-                // Bounded at 2 elements: a larger shortfall is a
-                // world-construction failure that must diverge loudly, not
-                // a narrower script read.
-                if (text_len as u64) < n
-                    && n - text_len as u64 <= 2
-                    && text_len > 0
-                    && shadow_text.len() >= text_len
-                    && ss
-                        .iter()
-                        .find(|s| !is_link_address(s))
-                        .is_some_and(|first| shadow_text.starts_with(first.as_str()))
-                {
-                    out.adaptations.push("read-scoped-to-recorded-extent".into());
-                    scoped_to = Some(text_len as u64);
-                }
+            let scoped_to = strings.as_deref().and_then(|ss| scoped_read(ss, cx.shadow, &doc));
+            if scoped_to.is_some() {
+                out.adaptations.push("read-scoped-to-recorded-extent".into());
             }
             out.adaptations.push(
                 if has_addr { "contents:both-subspaces" } else { "contents:content-subspace" }
@@ -513,9 +447,8 @@ pub(super) fn h_retrieve_contents(cx: &mut Cx, index: usize, op: &Value, out: &m
                     // exactly the ambiguity round 6 was misdiagnosed on. A
                     // version doc missing its source's links is the
                     // carryover family ruling 15 decided.
-                    let versioned = link_read_doc
-                        .as_deref()
-                        .is_some_and(|g| cx.shadow.version_of.contains_key(g));
+                    let versioned =
+                        link_read_doc.as_deref().is_some_and(|g| cx.shadow.is_version(g));
                     out.add_note(if versioned {
                         VERSION_LINK_CARRYOVER_ANALYSIS.to_string()
                     } else {
@@ -552,9 +485,7 @@ pub(super) fn h_retrieve_vspanset(
     // A count of a ROLE document's spans names that document (policy
     // `vspan-count-by-role`: ispan_consolidation_bulk's
     // `source_vspan_count`).
-    let role_count: Option<(&str, u64)> = op.as_object().and_then(|o| {
-        o.iter().find_map(|(k, v)| Some((k.strip_suffix("_vspan_count")?, v.as_u64()?)))
-    });
+    let role_count = role_vspan_count(op);
     let role_doc = match role_count {
         Some((role, _)) => match cx.shadow.resolve_doc(role) {
             Some(d) => {
@@ -635,7 +566,7 @@ pub(super) fn h_retrieve_vspanset(
             out.disagree("vspanset", d);
             if is_collapsed_subspace_shape(&spans) {
                 out.note = Some(COLLAPSED_SUBSPACE_ANALYSIS.to_string());
-            } else if cx.shadow.version_of.contains_key(&doc)
+            } else if cx.shadow.is_version(&doc)
                 && cx.shadow.link_count(&doc) > 0
                 && spans.iter().all(|(s, _)| s == "1" || s.starts_with("1."))
             {

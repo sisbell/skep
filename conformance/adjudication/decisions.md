@@ -628,3 +628,45 @@ Report vocabulary:
 
 **Tally (2026-10-07): 297 scenarios — 0 errors; 166 pass, 79 allowlisted,
 45 inexpressible, 7 pending (1 divergent, 6 inexpressible).**
+
+## 2026-10-07 — CONFORMANCE round 2: the pre-pass walks as the play pass plays; a create's `role` names its document
+
+**Recorded, NOT ruled (agent, 2026-10-07):** the grounding pre-pass's walk
+restates each play-pass handler it stands for. A read moves the register
+only as its handler moves it; the walk starts where the lead-in leaves the
+play pass, the register on the first document the scenario names; and it
+probes the shadow only with what the play pass compares a document's whole
+content against — never a read its handler narrows (a span, a position, a
+follow's landing, an extent the script read narrower). No golden's
+groundings change but the one below; the tally is unchanged.
+
+A create's `role` field names its document, as its `doc`, `name` or
+`label` does: versions/version_copies_what names its two documents by role
+alone. Inside that scenario, frozen inexpressible, ops moved without moving
+its verdict:
+
+- op 1 (the insert into `parent`) lands, NOT-COMPARED where it was
+  inexpressible ("document reference `parent` resolves to nothing"), and the
+  pre-pass's placeholder seed for 1.1.0.1.0.1 ("[1.1.0.1.0.1]") is gone —
+  the walk knows the document's content when op 4 links it.
+- op 5 (`retrieve_vspanset` of `parent`) reads its answer and disagrees —
+  the recorded two-subspace pair ("0"/"0.1", "1"/"1") against skep's
+  ("1.1"/"0.21", "2.1"/"0.1") — covered by its entry,
+  udanax-malformed-vspanset (ruling 1); summary.md lists the scenario under
+  that standing analysis.
+- op 6 (`find_links doc: parent`, `count: 2`) asks skep, which finds one
+  link — the scenario made one, at op 4 — where the recording counts two: a
+  disagreement no entry covers, under the scenario's inexpressible verdict,
+  listed in summary.md's section for those and now the scenario's first
+  finding.
+
+Its later ops still name the version skep refused at op 7 (PUB-2.9, ruling
+20a's class).
+
+summary.md gains a standing-analysis section for udanax's whole-document
+remove that keeps the content and drops the link subspace (rulings 2 and
+10), naming delete_all/delete_all_with_links, whose op note carries the
+analysis as it did.
+
+**Tally (2026-10-07): 297 scenarios — 0 errors; 166 pass, 79 allowlisted,
+45 inexpressible, 7 pending (1 divergent, 6 inexpressible).**

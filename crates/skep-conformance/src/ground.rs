@@ -154,7 +154,7 @@ pub fn ground(ops: &[Value]) -> ImpliedSetup {
         // recorded create_version provides: nothing precedes it to seed. A
         // seed here would mint a plain document under the version's golden
         // address holding the very answer its probe expects.
-        if sim.shadow.version_of.contains_key(&doc) {
+        if sim.shadow.is_version(&doc) {
             break;
         }
         let Some(initial) = undo_to_initial(&exp, sim.log_for(&doc)) else { break };

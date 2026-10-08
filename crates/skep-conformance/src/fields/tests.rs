@@ -202,6 +202,56 @@ fn a_version_reads_its_source_and_its_recorded_address() {
     assert_eq!(version(json!("1.1.0.1.0.1.1")).as_deref(), Some("1.1.0.1.0.1.1"));
     assert_eq!(version(json!({"version": "1.1.0.1.0.1.2"})).as_deref(), Some("1.1.0.1.0.1.2"));
     assert_eq!(version_result(&json!({"op": "create_version"})), None);
+    let named = json!({"op": "create_version", "from": "source", "doc": "draft", "label": "v2"});
+    assert_eq!(version_names(&named), ["draft", "v2"]);
+}
+
+/// A plural create's documents, in each shape the corpus records: a docs
+/// map in id order and a roster in name order, each document under its one
+/// name; counted documents under their group's names in each spelling,
+/// carrying their texts. Only the counted shape counts, and a count past
+/// the budget creates nothing.
+#[test]
+fn a_plural_create_reads_its_documents_in_each_shape() {
+    let created = |op: Value| documents_created(&op).expect("the documents");
+    let ids = |c: &CreatedDocuments| c.docs.iter().map(|d| d.id.clone()).collect::<Vec<_>>();
+    let id = |s: &str| Some(s.to_string());
+    let docs = json!({"B": "1.1.0.1.0.2", "A": "1.1.0.1.0.1"});
+    let mapped = created(json!({"op": "create_documents", "docs": docs}));
+    assert_eq!(ids(&mapped), [id("1.1.0.1.0.1"), id("1.1.0.1.0.2")]);
+    assert_eq!(mapped.docs[0].names, ["A"]);
+    assert!(!mapped.counted);
+    let rostered = created(json!({"op": "docs", "doc2": "1.1.0.1.0.2", "doc1": "1.1.0.1.0.1"}));
+    assert_eq!(ids(&rostered), [id("1.1.0.1.0.1"), id("1.1.0.1.0.2")]);
+    assert_eq!(rostered.docs[1].names, ["doc2"]);
+    assert!(!rostered.counted);
+    let counted = created(json!({
+        "op": "create_documents",
+        "type": "peripherals",
+        "count": 2,
+        "results": ["1.1.0.1.0.5"],
+        "texts": ["X"],
+    }));
+    assert!(counted.counted);
+    assert_eq!(ids(&counted), [id("1.1.0.1.0.5"), None]);
+    assert_eq!(counted.docs[1].names, ["peripherals2", "peripheral2", "peripheral_1"]);
+    let texts: Vec<Option<&str>> = counted.docs.iter().map(|d| d.text.as_deref()).collect();
+    assert_eq!(texts, [Some("X"), None]);
+    assert!(documents_created(&json!({"op": "create_documents", "count": 1u64 << 40})).is_err());
+}
+
+/// A create takes its document's name from its `role`, as from a `doc`,
+/// `name` or `label` field, or the role its op's name carries — never from
+/// an address (versions/version_copies_what names its documents only by
+/// role).
+#[test]
+fn a_create_takes_its_name_from_its_role() {
+    let name = |op: Value| create_name_of(&op);
+    let role = json!({"op": "create_document", "role": "parent", "result": "1.1.0.1.0.1"});
+    assert_eq!(name(role).as_deref(), Some("parent"));
+    assert_eq!(name(json!({"op": "create_target"})).as_deref(), Some("target"));
+    assert_eq!(name(json!({"op": "create_document", "role": "1.1.0.1.0.1"})), None);
+    assert_eq!(name(json!({"op": "create_document"})), None);
 }
 
 /// A swap's two region texts name its cuts, the earlier region's first,

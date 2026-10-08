@@ -19,17 +19,17 @@ use skep_febe::Response;
 
 use super::{
     ensure_document, inexpressible, plan_failed, probe_state, refusal, run_plan, settle_accepted,
-    settle_unaccepted, CopyNeverBound, Cx, NeverBound, Probe, Tally,
+    settle_unaccepted, CopyNeverBound, Cx, NeverBound, Tally,
 };
 use crate::allowlist::Adjustments;
-use crate::compare::compare_content;
+use crate::compare::{compare_content, REMOVE_SPLITS_SUBSPACES_ANALYSIS};
 use crate::evidence::{
     delete_is_noop, resolve_delete_span, resolve_insert, vcopy_destination, vcopy_ordinal, Effect,
 };
 use crate::fields::{
     cuts_of, distributed_insert_texts, distribution_targets, expected_failure, field,
-    recorded_count, resolve_position, str_field, strings_of, swap_regions, vcopy_sources, verb_of,
-    Verb,
+    recorded_count, resolve_position, str_field, swap_regions, target_replies, vcopy_sources,
+    verb_of, Probe, Verb,
 };
 use crate::outcome::{Disagreement, OpOutcome, Status};
 use crate::tum::{parse_vpos, VPoint};
@@ -258,17 +258,9 @@ pub(super) fn h_delete(
             "recorded post-delete content equals pre-delete content; udanax removed nothing \
              from the content subspace",
         );
-        // Adjudication analysis (round-5 item 8, delete_all_with_links):
-        // when the SAME recording later reports the doc's links unfindable
-        // (find_links count 0 / empty) while its content probe still reads
-        // the full text, udanax's whole-document remove split the
-        // subspaces — content intact, link-subspace occupancy removed.
-        // Skep cannot reproduce that split without violating the ruled
-        // subspace-confinement invariant (udanax-no-subspace-confinement,
-        // adjudication/decisions.md ruling 2), so the harness keeps the
-        // content no-op, and the later link-findability divergence stands as
-        // recorded — ruled ruling-10-i-coverage-findability (decisions.md
-        // ruling 10).
+        // The standing analysis of a remove that split the subspaces
+        // (`REMOVE_SPLITS_SUBSPACES_ANALYSIS`): the SAME recording later
+        // reports the doc's links unfindable (find_links count 0 / empty).
         let links_vanish = cx.shadow.link_count(&doc) > 0
             && cx.ops[index + 1..].iter().any(|later| {
                 if verb_of(later) != Some(Verb::FindLinks) {
@@ -284,14 +276,8 @@ pub(super) fn h_delete(
                 })
             });
         if links_vanish {
-            note.push_str(
-                "; ANALYSIS: this recording's later find_links expects the home link \
-                 unfindable (count 0) while the content probe still reads the full text — \
-                 udanax's remove deleted link-subspace occupancy only; skep cannot reproduce \
-                 the split without violating the ruled subspace-confinement invariant \
-                 (decisions.md ruling 2), so the link-findability divergence downstream \
-                 stands — ruled ruling-10-i-coverage-findability (decisions.md ruling 10)",
-            );
+            note.push_str("; ANALYSIS: ");
+            note.push_str(REMOVE_SPLITS_SUBSPACES_ANALYSIS);
         }
         out.note = Some(note);
         return;
@@ -381,20 +367,16 @@ pub(super) fn h_vcopy(
             return;
         }
         out.status = Status::NotCompared;
-        // Per-target contents expectations (vcopy_to_multiple) compare here.
-        if let Some(targets) = field(op, &["targets"]).and_then(Value::as_array) {
+        // Per-target contents expectations (vcopy_to_multiple) compare here,
+        // read as every `targets` list is (`fields::target_replies`).
+        let targets = target_replies(op, cx.shadow);
+        if !targets.is_empty() {
             let mut tally = Tally::default();
-            for t in targets {
-                let (Some(id), Some(exp)) = (
-                    t.get("docid").and_then(Value::as_str),
-                    t.get("contents").and_then(strings_of),
-                ) else {
-                    continue;
-                };
+            for (id, exp) in &targets {
                 match cx.read_content(id) {
                     Ok(items) => {
                         let label = format!("{id}: ");
-                        tally.judge(compare_content(&exp, &items, cx.alpha), &label);
+                        tally.judge(compare_content(exp, &items, cx.alpha), &label);
                     }
                     Err(code) => tally.differ(Disagreement {
                         expected: format!("{id}: contents"),
@@ -402,9 +384,7 @@ pub(super) fn h_vcopy(
                     }),
                 }
             }
-            if tally.compared > 0 {
-                tally.settle(out, "content");
-            }
+            tally.settle(out, "content");
         }
         return;
     }

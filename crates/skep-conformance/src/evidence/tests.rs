@@ -86,6 +86,28 @@ fn a_pad_is_declined_when_links_explain_the_surplus_and_bounded_at_two() {
     assert_eq!(bytes(&[insert, probe("0.6")]).as_deref(), Ok("ABC"));
 }
 
+/// A forward scan reads a later read's reply as the play pass reads it
+/// (`fields::recorded_content`): an `expected_contents` array, or a list the
+/// recording client stringified under `after`, is the document's content
+/// after the write before it.
+#[test]
+fn a_forward_scan_reads_a_reply_as_the_play_pass_reads_it() {
+    const DOC: &str = "1.1.0.1.0.1";
+    let mut shadow = Shadow::new();
+    shadow.create_doc(DOC, None);
+    shadow.insert(DOC, 1, b"Hello");
+    let probed = [
+        json!({"op": "insert", "doc": DOC, "text": "!"}),
+        json!({"op": "retrieve_contents", "doc": DOC, "expected_contents": ["Hello!"]}),
+    ];
+    assert_eq!(next_content_probe(&probed, 0, &shadow, DOC).as_deref(), Some("Hello!"));
+    let unchanged = [
+        json!({"op": "delete", "doc": DOC, "span": "llo"}),
+        json!({"op": "retrieve", "after": "['Hello']"}),
+    ];
+    assert!(delete_is_noop(&unchanged, 0, &shadow, DOC));
+}
+
 /// A version the recording made is one udanax carried out before the op
 /// that asks — never one recorded failed, and never the op's own.
 #[test]

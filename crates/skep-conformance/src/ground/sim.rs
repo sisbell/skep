@@ -1,22 +1,27 @@
 //! The pre-pass's walk: the scenario replayed in shadow space under the
-//! seeds inferred so far. Each verb's effect on the shadow is restated here,
-//! in a `Sim::sim_<verb>` method, from the play pass's `h_<verb>` handler —
-//! in `create`, `write` and `link`, and the reads' register moves in
-//! `sim_read`; every content write is logged for the seed undo, every
-//! recorded probe checked, and the macro forms' plans are built where they
-//! stand. Nothing but review keeps a `sim_` method and its handler alike:
-//! change them together.
+//! seeds inferred so far. Each play-pass handler's effect on the shadow is
+//! restated here, in a `Sim::sim_<verb>` method named for its `h_<verb>`:
+//! `create`'s, `write`'s and `link`'s writes and creations, and the reads'
+//! register moves together with the whole-document comparisons their
+//! handlers make (`sim_retrieve_contents`, `sim_observe`,
+//! `sim_retrieve_vspanset`, `sim_retrieve_endsets`, `sim_find_documents`,
+//! `sim_compare_versions`). Every content write is logged for the seed undo,
+//! every content the play pass compares a document's whole content against
+//! is probed against the shadow, and the macro forms' plans are built where
+//! they stand. Nothing but review keeps a `sim_` method and its handler
+//! alike: change them together.
 //!
 //! The walk reads each op through the grammar the play pass reads it
 //! through (`fields`: the verb `normalize` names, which it dispatches on,
-//! a vcopy's sources, a version's source, a swap's regions), skips every op
-//! udanax never carried out (`evidence::took_effect`), and decides what an
-//! edit did by the recorded-evidence policies the play pass applies
-//! (`evidence`: where an insert or a vcopy lands, what a delete removed);
-//! what this module holds is the reconstruction alone. The corpus
-//! extension records its own setup (MANIFEST-NEW): its `probe` checkpoints
-//! carry no docs map, the one shape of them this walk reads, so nothing is
-//! inferred there.
+//! the document an op aims at, a vcopy's sources, a version's source and
+//! names, a swap's regions, the documents a plural create makes, a probe's
+//! recorded content), skips every op udanax never carried out
+//! (`evidence::took_effect`), and decides what an op did by the
+//! recorded-evidence policies the play pass applies (`evidence`: where an
+//! insert or a vcopy lands, what a delete removed, what a read read); what
+//! this module holds is the reconstruction alone. The corpus extension
+//! records its own setup (MANIFEST-NEW), so its `probe` checkpoints seed
+//! nothing ([`observes_state`]).
 
 use std::collections::BTreeMap;
 
@@ -28,18 +33,20 @@ use super::cover::{
 };
 use super::{Edit, SetupStep};
 use crate::evidence::{
-    delete_is_noop, next_content_probe, resolve_delete_span, resolve_insert, took_effect,
-    vcopy_destination, vcopy_ordinal,
+    delete_is_noop, follow_landing, next_content_probe, reply_narrowing, resolve_delete_span,
+    resolve_insert, scoped_read, took_effect, vcopy_destination, vcopy_ordinal,
 };
 use crate::fields::{
-    aim_doc, arrow_results, as_text, created_addresses, cuts_of, distributed_insert_texts,
-    distribution_targets, field, group_word, is_conflict_copy, is_position_marker, locate,
-    normalize, op_name, per_doc_replies, quoted, recorded_content, recorded_count,
-    resolve_position, roster, span_dict, str_field, strings_of, swap_regions, vcopy_sources,
-    verb_of, version_result, version_source, DocAim, Verb, BUILD_BUDGET, POST_WRITE_KEYS,
+    aim_doc, arrow_results, as_text, compare_operands, created_addresses, cuts_of,
+    distributed_insert_texts, distribution_targets, documents_created, endsets_in_link_space,
+    field, is_conflict_copy, is_position_marker, locate, normalize, op_name, per_doc_replies,
+    position_from_op_name, probed_content, quoted, recorded_content, recorded_count,
+    recorded_spanset, resolve_position, role_vspan_count, span_dict, str_field, strings_of,
+    swap_regions, target_replies, vcopy_sources, version_names, version_result, version_source,
+    vspec_dict, DocAim, DocSpans, Probe, Verb, BUILD_BUDGET, CONTENT_READS,
 };
 use crate::shadow::Shadow;
-use crate::tum::{link_home_docid, parse_dotted, parse_vpos, parse_width, VPoint, VRegion};
+use crate::tum::{link_home_docid, parse_vpos, parse_width, VPoint, VRegion};
 
 /// One replay of the scenario: the shadow it built, each document's edit
 /// log, the first probe it found contradicted, the empty documents links
@@ -58,6 +65,10 @@ pub(super) struct Sim {
 }
 
 impl Sim {
+    /// The shadow before op 0, as the play pass's `run_lead_in` leaves it:
+    /// the implied creates, each seed inserted into its document (minted
+    /// when no implied create made it), and the register on the first
+    /// document created.
     fn new(implied: &[String], seeds: &BTreeMap<String, Vec<u8>>) -> Sim {
         let mut sim = Sim {
             shadow: Shadow::new(),
@@ -75,6 +86,9 @@ impl Sim {
                 sim.shadow.create_doc(d, None);
             }
             sim.shadow.insert(d, 1, bytes);
+        }
+        if let Some(first) = sim.shadow.created().first().cloned() {
+            sim.shadow.set_current(&first);
         }
         sim
     }
@@ -117,20 +131,14 @@ impl Sim {
                 self.record(doc, Edit::Insert { at: None, bytes });
             }
             SetupStep::Link { from, to: _, golden } => {
-                // Home = the golden id's own prefix, else the FROM doc.
+                // Home = the golden id's own prefix, else the FROM doc — the
+                // home the play pass's setup step makes the link in.
                 let home = golden
                     .as_ref()
                     .and_then(|g| link_home_docid(g))
                     .or_else(|| from.first().map(|(d, _, _)| d.clone()));
                 if let Some(home) = home {
-                    if !self.shadow.knows(&home) {
-                        self.shadow.create_doc(&home, None);
-                    }
-                    self.shadow.seat_link(&home);
-                    self.shadow.set_current(&home);
-                }
-                if let Some(g) = golden {
-                    self.shadow.last_link = Some(g.clone());
+                    self.shadow.enter_link(&home, golden.as_deref());
                 }
             }
         }
@@ -141,6 +149,35 @@ impl Sim {
             self.apply_step(s);
         }
         self.plans.insert(i, steps);
+    }
+
+    /// A vcopy's expansion plan, carried out as the play pass's `h_vcopy`
+    /// carries out a planned vcopy: each target the op lists made sure of
+    /// first ([`Sim::ensure_document`]: one the shadow holds becomes the
+    /// register, any other is minted), then the plan's steps, then each
+    /// target's recorded contents probed whole (`fields::target_replies`).
+    fn plan_vcopy(&mut self, i: usize, op: &Value, steps: Vec<SetupStep>) {
+        let targets = field(op, &["targets"]).and_then(Value::as_array);
+        for t in targets.into_iter().flatten() {
+            if let Some(id) = t.as_str().or_else(|| t.get("docid").and_then(Value::as_str)) {
+                self.ensure_document(id, None);
+            }
+        }
+        self.plan(i, steps);
+        for (doc, strings) in target_replies(op, &self.shadow) {
+            if let Some(text) = as_text(&strings) {
+                self.probe(&doc, &text);
+            }
+        }
+    }
+
+    /// Probe `doc` with the content `op` records as a probe of `kind`
+    /// (`fields::probed_content`) — what the play pass's `probe_state`
+    /// compares the document's whole content against.
+    fn probe_recorded(&mut self, doc: &str, op: &Value, kind: Probe) {
+        if let Some(text) = probed_content(op, kind).and_then(|(_, s)| as_text(&s)) {
+            self.probe(doc, &text);
+        }
     }
 
     pub(super) fn log_for(&self, doc: &str) -> &[Edit] {
@@ -175,24 +212,30 @@ impl Sim {
         }
     }
 
-    /// Mirror of the play-pass shadow effects, content only. Any drift
-    /// between this and the play pass surfaces as an honest divergence.
-    /// An op udanax never carried out (`evidence::took_effect`) changes
-    /// nothing; the rest dispatch on the verb the play pass dispatches on
-    /// (`fields::normalize`), so the two passes cannot disagree about what
-    /// kind of op a name reads as. Probes run AFTER an op's own edit (write
-    /// branches call check_probes themselves) or in the read fall-through —
-    /// never before, or a write's own result expectation would be compared
-    /// against the pre-edit state and forge a false seed.
+    /// Op `i` restated on the shadow as the play-pass handler `run_op`
+    /// dispatches it to plays it: each write's content effect, each
+    /// creation, each read's register move, and each whole-document
+    /// comparison the handler makes, probed AFTER the op's own edit, never
+    /// before — a write's own result expectation compared against the
+    /// pre-edit state would forge a false seed. The op dispatches on the
+    /// verb the play pass dispatches on (`fields::normalize`), so the two
+    /// passes cannot disagree about what kind of op a name reads as; one
+    /// udanax never carried out (`evidence::took_effect`) changes nothing,
+    /// and one the play pass plays nothing for — no `op` field, a raw wire
+    /// request — is read as nothing. A drift between this and the play
+    /// pass is never an honest divergence: the lead-in and plans this walk
+    /// builds would run against a world the play pass never aims at, and
+    /// the difference would read as skep's.
     fn step(&mut self, i: usize, op: &Value, ops: &[Value]) {
-        if !took_effect(op) {
+        if !took_effect(op) || op_name(op).is_empty() || op_name(op) == "raw_request" {
             return;
         }
         let name = op_name(op).to_ascii_lowercase();
-        match normalize(&name, op) {
-            Some(Verb::CreateChain) => self.sim_create_chain(i, op, ops),
-            Some(Verb::CreateDocuments) => self.sim_create_documents(i, op, ops),
-            Some(Verb::Setup) => {
+        let Some(verb) = normalize(&name, op) else { return };
+        match verb {
+            Verb::CreateChain => self.sim_create_chain(i, op, ops),
+            Verb::CreateDocuments => self.sim_create_documents(i, op, ops),
+            Verb::Setup => {
                 if let Some(steps) = self.expand_keyed_setup(op, i, ops) {
                     self.plan(i, steps);
                 } else if let Some(desc) = str_field(op, &["description", "desc"]) {
@@ -201,26 +244,57 @@ impl Sim {
                     }
                 }
             }
-            Some(Verb::CreateDocument) => self.sim_create_document(op),
-            Some(Verb::OpenDocument) => self.sim_open_document(op),
-            Some(Verb::CreateVersion) => self.sim_create_version(op),
-            Some(Verb::InteriorTyping) => self.sim_interior_typing(op),
-            Some(Verb::InsertLoop) => self.sim_insert_loop(op),
-            Some(Verb::Insert) => self.sim_insert(i, op, ops),
-            Some(Verb::DeleteAll) => self.sim_delete_all(i, op, ops),
-            Some(Verb::Delete) => self.sim_delete(i, op, ops),
-            Some(Verb::Vcopy) if name.starts_with("vcopy_to_multiple") => {
+            Verb::CreateDocument => self.sim_create_document(op),
+            Verb::OpenDocument => self.sim_open_document(op),
+            Verb::CreateVersion => self.sim_create_version(op),
+            Verb::InteriorTyping => self.sim_interior_typing(op),
+            Verb::InsertLoop => self.sim_insert_loop(op),
+            Verb::Insert => self.sim_insert(i, op, ops),
+            Verb::DeleteAll => self.sim_delete_all(i, op, ops),
+            Verb::Delete => self.sim_delete(i, op, ops),
+            Verb::Vcopy if name.starts_with("vcopy_to_multiple") => {
                 self.sim_vcopy_to_multiple(i, op)
             }
-            Some(Verb::Vcopy) if name.starts_with("create_and_transclude") => {
+            Verb::Vcopy if name.starts_with("create_and_transclude") => {
                 self.sim_create_and_transclude(i, op)
             }
-            Some(Verb::Vcopy) => self.sim_vcopy(i, op, ops, &name),
-            Some(verb @ (Verb::Pivot | Verb::Swap | Verb::Rearrange)) => {
-                self.sim_rearrange(op, verb)
+            Verb::Vcopy => self.sim_vcopy(i, op, ops, &name),
+            Verb::Pivot | Verb::Swap | Verb::Rearrange => self.sim_rearrange(op, verb),
+            Verb::CreateLink => self.sim_create_link(op),
+            Verb::RetrieveContents => {
+                for (doc, text) in self.sim_retrieve_contents(i, op, ops) {
+                    self.probe(&doc, &text);
+                }
             }
-            Some(Verb::CreateLink) => self.sim_create_link(op),
-            _ => self.sim_read(op),
+            Verb::Observe => self.sim_observe(i, op, ops, &name),
+            Verb::RetrieveVspan | Verb::RetrieveVspanset => self.sim_retrieve_vspanset(op),
+            Verb::RetrieveEndsets => self.sim_retrieve_endsets(op),
+            Verb::FindDocuments => self.sim_find_documents(op),
+            Verb::CompareVersions => self.sim_compare_versions(op),
+            // Their handlers change nothing on the shadow.
+            Verb::FindLinks
+            | Verb::FollowLink
+            | Verb::Traverse
+            | Verb::CloseDocument
+            | Verb::Meta
+            | Verb::Account
+            | Verb::Connect
+            | Verb::CreateNode => {}
+        }
+    }
+
+    /// Golden document `id`, for an op that records it, as the play pass's
+    /// `ensure_document` makes it: one the shadow already holds — an implied
+    /// create, or a plan's earlier step — is named `name` and made the
+    /// register; any other is minted under `name`.
+    fn ensure_document(&mut self, id: &str, name: Option<&str>) {
+        if self.shadow.knows(id) {
+            if let Some(n) = name {
+                self.shadow.bind_name(n, id);
+            }
+            self.shadow.set_current(id);
+        } else {
+            self.shadow.create_doc(id, name);
         }
     }
 
@@ -228,14 +302,8 @@ impl Sim {
         let name = crate::fields::create_name_of(op);
         let ids = created_addresses(op).unwrap_or_else(|| vec![self.shadow.synthesize_docid()]);
         for (k, id) in ids.iter().enumerate() {
-            if !self.shadow.knows(id) {
-                self.shadow.create_doc(id, if k == 0 { name.as_deref() } else { None });
-            } else {
-                if let Some(n) = &name {
-                    self.shadow.bind_name(n, id);
-                }
-                self.shadow.set_current(id);
-            }
+            // The op's name names its first document.
+            self.ensure_document(id, if k == 0 { name.as_deref() } else { None });
         }
     }
 
@@ -245,7 +313,7 @@ impl Sim {
                 // A result the shadow already holds names another document,
                 // which the fork never overwrites.
                 if let Some(res) = str_field(op, &["result"]).filter(|r| !self.shadow.knows(r)) {
-                    self.shadow.version(&doc, res);
+                    self.shadow.version(&doc, res, &[]);
                 }
             } else {
                 self.shadow.set_current(&doc);
@@ -261,14 +329,7 @@ impl Sim {
         if self.shadow.knows(&res) {
             return;
         }
-        self.shadow.version(&src, &res);
-        for key in ["doc", "name", "label"] {
-            if let Some(name) = str_field(op, &[key]) {
-                if parse_dotted(name).is_none() && self.shadow.resolve_doc(name).is_none() {
-                    self.shadow.bind_name(name, &res);
-                }
-            }
-        }
+        self.shadow.version(&src, &res, &version_names(op));
     }
 
     fn sim_interior_typing(&mut self, op: &Value) {
@@ -286,27 +347,31 @@ impl Sim {
                     self.shadow.insert(&doc, ord, ch.as_bytes());
                     let bytes = ch.as_bytes().to_vec();
                     self.record(&doc, Edit::Insert { at: Some(ord), bytes });
+                    // Each grounded step's own probe, as `h_interior_typing`
+                    // compares it; a step that does not ground compares
+                    // nothing.
+                    self.probe_recorded(&doc, r, Probe::Step);
                 } else {
                     self.record(&doc, Edit::Opaque);
                 }
-                self.check_probes(r);
             }
         }
     }
 
     fn sim_insert_loop(&mut self, op: &Value) {
         let Some(doc) = self.doc_arg(op, &["doc", "docid"]) else { return };
-        // A count past the build budget is an op the play pass refuses, so
-        // its bytes are never built here either; the write udanax made is
-        // unknown to the walk, and no undo crosses it.
-        let Ok(count) = recorded_count(op) else {
+        // A count past the build budget, or none at all, is an op the play
+        // pass refuses, so its bytes are never built here either; the write
+        // udanax made is unknown to the walk, and no undo crosses it.
+        let Ok(Some(count)) = recorded_count(op) else {
             self.record(&doc, Edit::Opaque);
             return;
         };
-        let bytes: Vec<u8> = (0..count.unwrap_or(0)).map(|k| b'A' + (k % 26) as u8).collect();
+        let bytes: Vec<u8> = (0..count).map(|k| b'A' + (k % 26) as u8).collect();
         let end = self.shadow.text_len(&doc) + 1;
         self.shadow.insert(&doc, end, &bytes);
         self.record(&doc, Edit::Insert { at: None, bytes });
+        self.probe_recorded(&doc, op, Probe::PostWrite);
     }
 
     fn sim_insert(&mut self, i: usize, op: &Value, ops: &[Value]) {
@@ -334,31 +399,34 @@ impl Sim {
         if landing.doc != doc {
             self.shadow.set_current(&landing.doc);
         }
-        if landing.at.sub != 1 {
-            return; // a link-subspace insert: no content effect
+        // A link-subspace insert has no content effect; its post-state is
+        // compared all the same.
+        if landing.at.sub == 1 {
+            self.shadow.insert(&landing.doc, landing.at.ord, &landing.bytes);
+            let at = (!landing.appended).then_some(landing.at.ord);
+            self.record(&landing.doc, Edit::Insert { at, bytes: landing.bytes });
         }
-        self.shadow.insert(&landing.doc, landing.at.ord, &landing.bytes);
-        let at = (!landing.appended).then_some(landing.at.ord);
-        self.record(&landing.doc, Edit::Insert { at, bytes: landing.bytes });
-        self.check_probes(op);
+        self.probe_recorded(&landing.doc, op, Probe::PostWrite);
     }
 
     fn sim_delete_all(&mut self, i: usize, op: &Value, ops: &[Value]) {
-        if let Some(doc) = self.doc_arg(op, &["doc", "docid"]) {
-            if delete_is_noop(ops, i, &self.shadow, &doc) {
-                return; // recorded post-state shows udanax removed nothing
-            }
-            let n = self.shadow.text_len(&doc);
-            let bytes = self.shadow.slice(&doc, 1, n);
-            self.shadow.delete(&doc, 1, n);
-            self.record(&doc, Edit::Delete { at: 1, bytes: Some(bytes), explicit: true });
+        let Some(doc) = self.doc_arg(op, &["doc", "docid"]) else { return };
+        if delete_is_noop(ops, i, &self.shadow, &doc) {
+            return; // recorded post-state shows udanax removed nothing
         }
+        let n = self.shadow.text_len(&doc);
+        if n == 0 {
+            return; // an empty document: the play pass deletes nothing
+        }
+        let bytes = self.shadow.slice(&doc, 1, n);
+        self.shadow.delete(&doc, 1, n);
+        self.record(&doc, Edit::Delete { at: 1, bytes: Some(bytes), explicit: true });
+        self.probe_recorded(&doc, op, Probe::PostWrite);
     }
 
     fn sim_delete(&mut self, i: usize, op: &Value, ops: &[Value]) {
         let Some(doc) = self.doc_arg(op, &["doc", "docid"]) else { return };
         if delete_is_noop(ops, i, &self.shadow, &doc) {
-            self.check_probes(op);
             return; // recorded post-state shows udanax removed nothing
         }
         if let Some((VRegion { ord, width: w, .. }, how)) =
@@ -379,14 +447,17 @@ impl Sim {
             self.shadow.delete(&doc, ord, w);
             self.record(&doc, Edit::Delete { at: ord, bytes, explicit: how.position_pinned() });
         } else {
-            // A content delete this grammar cannot place; a link-subspace
-            // delete has no content effect.
+            // A content delete this grammar cannot place is one the play
+            // pass finds inexpressible: the write udanax made is unknown, and
+            // nothing is compared after it. A link-subspace delete has no
+            // content effect, and its post-state is compared.
             let start = str_field(op, &["start", "address", "at"]).and_then(parse_vpos);
             if start.is_none_or(|at| at.sub == 1) {
                 self.record(&doc, Edit::Opaque);
+                return;
             }
         }
-        self.check_probes(op);
+        self.probe_recorded(&doc, op, Probe::PostWrite);
     }
 
     fn sim_create_and_transclude(&mut self, i: usize, op: &Value) {
@@ -394,19 +465,12 @@ impl Sim {
         let Some(src) = src else { return };
         let n = self.shadow.text_len(&src);
         if let Some(targets) = field(op, &["targets"]).and_then(Value::as_array) {
-            let mut steps = Vec::new();
-            for t in targets.iter().filter_map(Value::as_str) {
-                if !self.shadow.knows(t) {
-                    self.shadow.create_doc(t, None);
-                }
-                steps.push(SetupStep::Copy {
-                    doc: t.to_string(),
-                    src: src.clone(),
-                    ord: 1,
-                    width: n,
-                });
-            }
-            self.plan(i, steps);
+            let steps = targets
+                .iter()
+                .filter_map(Value::as_str)
+                .map(|t| SetupStep::Copy { doc: t.to_string(), src: src.clone(), ord: 1, width: n })
+                .collect();
+            self.plan_vcopy(i, op, steps);
         }
     }
 
@@ -461,158 +525,237 @@ impl Sim {
             }
             _ => arrow_results(op).into_iter().map(|(_, _, r)| r).collect(),
         };
+        // Each recorded link enters at the home its id names, as the play
+        // pass's `Cx::make_link` enters it: a home no op made stays unmade,
+        // where the play pass, finding no α-image there, makes no link.
         for r in &results {
             if let Some(home) = link_home_docid(r) {
-                if !self.shadow.knows(&home) {
-                    self.shadow.create_doc(&home, None);
-                }
-                self.shadow.seat_link(&home);
-                // A link's home anchors the scope: the scripts' probes and
-                // doc-less edits after a create_link target it.
-                self.shadow.set_current(&home);
+                self.shadow.enter_link(&home, Some(r));
             }
-            self.shadow.last_link = Some(r.clone());
         }
         for (f, t, r) in arrow_results(op) {
-            self.shadow.arrow_links.insert((f, t), r);
+            self.shadow.add_arrow(&f, &t, &r);
         }
     }
 
-    /// Reads / meta: probe consistency, then register updates from the doc
-    /// field or, failing that, from an expectation's own docid / a
-    /// link-result's home — the recording scripts' probes anchor the scope
-    /// for later doc-less writes (subspace/insert_text_check_link_positions:
-    /// the vspanset probe's docid names doc1 right before the doc-less
-    /// INSERT).
-    fn sim_read(&mut self, op: &Value) {
-        self.check_probes(op);
-        if let Some(s) = str_field(op, &["doc", "docid"]) {
+    /// A content read, restated from `play::read::h_retrieve_contents`: its
+    /// register moves — the op's document (`doc_arg`), a reply's link home,
+    /// the last-written document a `full_*` probe naming none reads — and the
+    /// (document, recorded text) pairs it compares a document's whole content
+    /// against, for the caller to probe with. A read the handler narrows — a
+    /// `positions` map, a spec set, a span, a follow's landing
+    /// (`evidence::follow_landing`), a position, a reply the script read
+    /// narrower (`evidence::scoped_read`, `evidence::reply_narrowing`) —
+    /// compares no whole document, and tells no seed.
+    fn sim_retrieve_contents(
+        &mut self,
+        i: usize,
+        op: &Value,
+        ops: &[Value],
+    ) -> Vec<(String, String)> {
+        let whole = |doc: String, strings: &[String]| as_text(strings).map(|text| (doc, text));
+        if let Some(map) = op.get("docs").and_then(Value::as_object) {
+            return map
+                .iter()
+                .filter_map(|(name, exp)| whole(self.shadow.resolve_doc(name)?, &strings_of(exp)?))
+                .collect();
+        }
+        let targets = target_replies(op, &self.shadow);
+        if !targets.is_empty() {
+            return targets.into_iter().filter_map(|(doc, strings)| whole(doc, &strings)).collect();
+        }
+        let replies = per_doc_replies(op, &self.shadow);
+        if !replies.is_empty() {
+            return replies
+                .into_iter()
+                .filter(|(_, doc, strings)| reply_narrowing(strings, &self.shadow, doc).is_none())
+                .filter_map(|(_, doc, strings)| whole(doc, &strings))
+                .collect();
+        }
+        if op.get("positions").and_then(Value::as_object).is_some() {
+            self.doc_arg(op, &["doc", "docid"]);
+            return Vec::new();
+        }
+        let strings = recorded_content(op, CONTENT_READS).map(|(_, strings)| strings);
+        // A reply naming a link address names its home: the register moves
+        // there.
+        let home = strings.iter().flatten().find_map(|s| link_home_docid(s));
+        if let Some(home) = home.filter(|h| self.shadow.knows(h)) {
+            self.shadow.set_current(&home);
+        }
+        if field(op, &["specset", "specs"]).and_then(Value::as_array).is_some()
+            || str_field(op, &["specset"]).is_some()
+        {
+            return Vec::new(); // a spec set names its own regions
+        }
+        if field(op, &["span", "spans", "vspan"]).is_some() {
+            self.doc_arg(op, &["doc", "docid"]);
+            return Vec::new(); // a narrowing span reads part of its document
+        }
+        if follow_landing(ops, i).is_some() {
+            return Vec::new(); // the follow's landing, read narrow
+        }
+        let full = op_name(op).to_ascii_lowercase().starts_with("full_");
+        let last_written = self.shadow.last_written().map(str::to_string);
+        let doc = match last_written {
+            Some(d) if full && str_field(op, &["doc", "docid"]).is_none() => {
+                self.shadow.set_current(&d);
+                Some(d)
+            }
+            _ => self.doc_arg(op, &["doc", "docid"]),
+        };
+        let Some(doc) = doc else { return Vec::new() };
+        if str_field(op, &["address", "at", "position"]).and_then(parse_vpos).is_some()
+            || position_from_op_name(op_name(op)).is_some()
+        {
+            return Vec::new(); // one position, read narrow
+        }
+        let Some(strings) = strings else { return Vec::new() };
+        if scoped_read(&strings, &self.shadow, &doc).is_some() {
+            return Vec::new(); // a narrower extent the script read
+        }
+        whole(doc, &strings).into_iter().collect()
+    }
+
+    /// An observation bundle, restated from `play::read::h_observe`: one
+    /// recording several documents is a content read
+    /// ([`Sim::sim_retrieve_contents`]); any other aims at the op's document
+    /// and compares it whole with the bundle's reply. The walk probes the
+    /// shadow with a bundle only when its name says it observes a state
+    /// ([`observes_state`]).
+    fn sim_observe(&mut self, i: usize, op: &Value, ops: &[Value], name: &str) {
+        let several = op.get("docs").and_then(Value::as_object).is_some()
+            || op.get("targets").and_then(Value::as_array).is_some()
+            || op.get("positions").and_then(Value::as_object).is_some()
+            || !per_doc_replies(op, &self.shadow).is_empty();
+        let compared = if several {
+            self.sim_retrieve_contents(i, op, ops)
+        } else {
+            let Some(doc) = self.doc_arg(op, &["doc", "docid"]) else { return };
+            let text = probed_content(op, Probe::Bundle).and_then(|(_, s)| as_text(&s));
+            text.map(|text| (doc, text)).into_iter().collect()
+        };
+        if observes_state(name) {
+            for (doc, text) in compared {
+                self.probe(&doc, &text);
+            }
+        }
+    }
+
+    /// A vspan or vspanset probe, restated from `play::read::
+    /// h_retrieve_vspanset`: the register moves to the document its recorded
+    /// span set names, else to the one a `<role>_vspan_count` counts
+    /// (`fields::role_vspan_count`), else to the op's own. It compares no
+    /// content.
+    fn sim_retrieve_vspanset(&mut self, op: &Value) {
+        let named = recorded_spanset(op).and_then(|(_, d, _)| self.shadow.resolve_doc(&d?));
+        let role_doc = match role_vspan_count(op) {
+            Some((role, _)) => match self.shadow.resolve_doc(role) {
+                Some(d) => Some(d),
+                None => return, // a role naming no document aims nowhere
+            },
+            None => None,
+        };
+        if let Some(doc) = named.or(role_doc).or_else(|| self.doc_arg(op, &["doc", "docid"])) {
+            self.shadow.set_current(&doc);
+        }
+    }
+
+    /// A retrieve_endsets, restated from `play::find::h_retrieve_endsets`: a
+    /// query in the link's own space (`fields::endsets_in_link_space`) moves
+    /// nothing; a region query moves the register to the document it
+    /// searches — its search's first document, else the op's own. It
+    /// compares no content.
+    fn sim_retrieve_endsets(&mut self, op: &Value) {
+        if endsets_in_link_space(op) {
+            return;
+        }
+        let doc = match field(op, &["search", "specs", "specset"]).and_then(Value::as_array) {
+            Some(search) => {
+                let specs: Option<Vec<DocSpans>> = search.iter().map(vspec_dict).collect();
+                specs.and_then(|specs| specs.into_iter().next()).map(|(docid, _)| docid)
+            }
+            None => self.doc_arg(op, &["doc", "docid"]),
+        };
+        if let Some(doc) = doc {
+            self.shadow.set_current(&doc);
+        }
+    }
+
+    /// A find_documents, restated from `play::find::h_find_documents`: a
+    /// search the op spells out — a spec set, a region, a query text — moves
+    /// nothing; a `search_from` document becomes the register; a bare search
+    /// aims as its handler's bare aim does — the op's document, else the
+    /// source-role document, else the register's. It compares no content.
+    fn sim_find_documents(&mut self, op: &Value) {
+        if field(op, &["specset", "specs", "search", "regions"]).is_some()
+            || str_field(op, &["query", "search_text", "text"]).is_some()
+        {
+            return;
+        }
+        if let Some(s) = str_field(op, &["search_from", "search_doc", "search_document"]) {
             if let Some(d) = self.shadow.resolve_doc(s) {
+                self.shadow.set_current(&d);
+            }
+            return;
+        }
+        if str_field(op, &["doc", "docid"]).is_none() {
+            if let Some(d) = self.shadow.find_named_containing("source") {
                 self.shadow.set_current(&d);
                 return;
             }
         }
-        self.register_from_expectation(op);
+        self.doc_arg(op, &["doc", "docid"]);
     }
 
-    fn register_from_expectation(&mut self, op: &Value) {
-        if let Some(o) = op.as_object() {
-            for (k, v) in o {
-                if matches!(k.as_str(), "op" | "comment" | "label" | "note" | "interpretation") {
-                    continue;
-                }
-                if let Some((Some(docid), _)) = crate::fields::raw_spanset_of(v) {
-                    let d = docid;
-                    if self.shadow.knows(&d) {
-                        self.shadow.set_current(&d);
-                        return;
-                    }
-                }
-                if let Some(strings) = strings_of(v) {
-                    for s in &strings {
-                        if let Some(home) = link_home_docid(s) {
-                            if self.shadow.knows(&home) {
-                                self.shadow.set_current(&home);
-                                return;
-                            }
-                        }
-                    }
-                }
-            }
+    /// A compare_versions, restated from `play::correspondence::
+    /// h_compare_versions`: only a compare of identity among one document's
+    /// positions — a `positions` list with a `results` map, and neither two
+    /// explicit operands (`fields::compare_operands`) nor a per-source
+    /// comparison list before it — aims at the op's document (`doc_arg`);
+    /// every other compare names its documents and moves nothing. It
+    /// compares no content.
+    fn sim_compare_versions(&mut self, op: &Value) {
+        let per_source = field(op, &["results", "comparisons"])
+            .and_then(Value::as_array)
+            .is_some_and(|e| !e.is_empty() && e.iter().all(|e| e.get("shared").is_some()));
+        let identity_pairs = field(op, &["positions"]).and_then(Value::as_array).is_some()
+            && field(op, &["results"]).and_then(Value::as_object).is_some();
+        if compare_operands(op).len() != 2 && !per_source && identity_pairs {
+            self.doc_arg(op, &["doc", "docid"]);
         }
     }
 
     fn sim_create_documents(&mut self, i: usize, op: &Value, ops: &[Value]) {
-        if let Some(map) = op.get("docs").and_then(Value::as_object) {
-            let mut by_id: Vec<(String, String)> = map
-                .iter()
-                .filter_map(|(n, id)| id.as_str().map(|i| (i.to_string(), n.clone())))
-                .collect();
-            if !by_id.is_empty() {
-                by_id.sort();
-                for (id, name) in by_id {
-                    if !self.shadow.knows(&id) {
-                        self.shadow.create_doc(&id, Some(&name));
-                    } else {
-                        self.shadow.bind_name(&name, &id);
-                    }
+        // The documents the op makes, read as the play pass reads them
+        // (`fields::documents_created`); a count past the build budget is an
+        // op the play pass refuses, so nothing is created here either.
+        let Ok(created) = documents_created(op) else { return };
+        let counted = created.counted;
+        let mut created_empty: Vec<String> = Vec::new();
+        for doc in created.docs {
+            let id = doc.id.unwrap_or_else(|| self.shadow.synthesize_docid());
+            let mut names = doc.names.iter();
+            self.ensure_document(&id, names.next().map(String::as_str));
+            for name in names {
+                self.shadow.bind_name(name, &id);
+            }
+            match doc.text {
+                Some(t) => {
+                    self.shadow.insert(&id, 1, t.as_bytes());
+                    self.record(&id, Edit::Insert { at: Some(1), bytes: t.into_bytes() });
                 }
-                return;
+                None if counted => created_empty.push(id),
+                None => {}
             }
         }
-        // A roster of `<name>: <docid>` fields (`fields::roster`): each
-        // names a document, created here unless an implied create already
-        // made it.
-        let named = roster(op);
-        if !named.is_empty() {
-            for (name, id) in named {
-                if self.shadow.knows(&id) {
-                    self.shadow.bind_name(&name, &id);
-                    self.shadow.set_current(&id);
-                } else {
-                    self.shadow.create_doc(&id, Some(&name));
-                }
-            }
-            return;
-        }
-        let results: Vec<String> = field(op, &["results"])
-            .and_then(Value::as_array)
-            .map(|a| a.iter().filter_map(|v| v.as_str().map(str::to_string)).collect())
-            .unwrap_or_default();
-        let names: Vec<String> = field(op, &["docs"])
-            .and_then(Value::as_array)
-            .map(|a| a.iter().filter_map(|v| v.as_str().map(str::to_string)).collect())
-            .unwrap_or_default();
-        let texts: Vec<String> = field(op, &["texts"])
-            .and_then(Value::as_array)
-            .map(|a| a.iter().filter_map(|v| v.as_str().map(str::to_string)).collect())
-            .unwrap_or_default();
-        let group = group_word(op);
-        // A count past the build budget is an op the play pass refuses:
-        // nothing is created here either.
-        let Ok(count) = recorded_count(op) else { return };
-        let count = count
-            .map(|c| c as usize)
-            .unwrap_or_else(|| results.len().max(names.len()).max(1));
-        let mut created_here: Vec<String> = Vec::new();
-        for k in 0..count.max(results.len()) {
-            let id = results.get(k).cloned().unwrap_or_else(|| self.shadow.synthesize_docid());
-            let name = names
-                .get(k)
-                .cloned()
-                .or_else(|| group.as_ref().map(|t| format!("{t}{}", k + 1)));
-            // A document an implied create already made is named and made
-            // current, as the play pass's `ensure_document` does.
-            if self.shadow.knows(&id) {
-                if let Some(n) = &name {
-                    self.shadow.bind_name(n, &id);
-                }
-                self.shadow.set_current(&id);
-            } else {
-                self.shadow.create_doc(&id, name.as_deref());
-            }
-            // Alternate spellings the scripts use for group members:
-            // singular ("peripheral2" for group "peripherals") and 0-based
-            // underscore ("target_0" — identity_multi_document_sharing).
-            if let Some(g) = &group {
-                let singular = g.trim_end_matches('s');
-                self.shadow.bind_name(&format!("{singular}{}", k + 1), &id);
-                self.shadow.bind_name(&format!("{singular}_{k}"), &id);
-            }
-            if let Some(t) = texts.get(k) {
-                self.shadow.insert(&id, 1, t.as_bytes());
-                self.record(&id, Edit::Insert { at: Some(1), bytes: t.as_bytes().to_vec() });
-            } else {
-                created_here.push(id);
-            }
-        }
-        // World-construction completeness (round-3): a created-empty doc
-        // whose later probe records content gets a cover plan — shared
+        // World-construction completeness (round-3): a counted doc created
+        // empty whose later probe records content gets a cover plan — shared
         // regions as real copies from the docs that already hold them, so
         // the transclusions the scenario descriptions imply actually exist
         // (identity_multi_document_sharing expects five docs SHARING).
         let mut steps: Vec<SetupStep> = Vec::new();
-        for id in created_here {
+        for id in created_empty {
             let Some(expected) = next_content_probe(ops, i, &self.shadow, &id) else { continue };
             let sources = self.shadow.content_docs_except(&id);
             let cover = cover_from_comparisons(&self.shadow, &id, &expected, ops)
@@ -639,11 +782,7 @@ impl Sim {
             .collect();
         by_id.sort();
         for (id, name) in &by_id {
-            if !self.shadow.knows(id) {
-                self.shadow.create_doc(id, Some(name));
-            } else {
-                self.shadow.bind_name(name, id);
-            }
+            self.ensure_document(id, Some(name));
         }
         let mut steps: Vec<SetupStep> = Vec::new();
         let mut built: Vec<String> = Vec::new();
@@ -814,10 +953,10 @@ impl Sim {
         let copied = self.shadow.slice(&src, ord, w);
         let Some(targets) = field(op, &["targets"]).and_then(Value::as_array) else { return };
         // Each target is built by plan steps — a prefix its recorded contents
-        // show ahead of the copy, then the copy — which the plan applies as
-        // the play pass executes them, recorded edits included: a target the
-        // shadow does not hold yet is minted by its first step, one an
-        // implied create made is built where it stands.
+        // show ahead of the copy, then the copy — carried out as the play
+        // pass carries out a planned vcopy ([`Sim::plan_vcopy`]), recorded
+        // edits included: a target the shadow does not hold yet is minted
+        // first, one an implied create made is built where it stands.
         let copied_text = String::from_utf8_lossy(&copied).into_owned();
         let mut steps = Vec::new();
         for t in targets {
@@ -835,7 +974,7 @@ impl Sim {
             }
             steps.push(SetupStep::Copy { doc: id.to_string(), src: src.clone(), ord, width: w });
         }
-        self.plan(i, steps);
+        self.plan_vcopy(i, op, steps);
     }
 
     fn sim_vcopy(&mut self, i: usize, op: &Value, ops: &[Value], op_name: &str) {
@@ -871,7 +1010,7 @@ impl Sim {
                 .unwrap_or_else(|| {
                     cover_with_sources(&self.shadow, &dest, &sources, &remainder)
                 });
-            self.plan(i, steps);
+            self.plan_vcopy(i, op, steps);
             return;
         }
 
@@ -914,14 +1053,16 @@ impl Sim {
         // prefix-insert cluster: "Copied: ", "Link doc: ", "B prefix: ").
         if at.is_none() {
             if let Some(plan) = self.vcopy_reconstruction(i, ops, &dest, &copied, &spec_list) {
-                self.plan(i, plan);
+                self.plan_vcopy(i, op, plan);
                 return;
             }
         }
         let ord = at.unwrap_or_else(|| self.shadow.text_len(&dest) + 1);
         self.shadow.insert(&dest, ord, &copied);
         self.record(&dest, Edit::Insert { at, bytes: copied });
-        self.check_probes(op);
+        // The post-write probe `h_vcopy` compares — at the copy's
+        // destination, wherever the register stands.
+        self.probe_recorded(&dest, op, Probe::PostWrite);
     }
 
     /// Evidence-driven reconstruction of an append-shaped vcopy whose direct
@@ -1062,90 +1203,14 @@ impl Sim {
         Some(steps)
     }
 
-    /// Compare any full-content expectations this op carries against the
-    /// shadow; record the first mismatch for inference. Recorded content is
-    /// read as the play pass reads it (`fields::as_text`, `recorded_content`,
-    /// `per_doc_replies`).
-    fn check_probes(&mut self, op: &Value) {
-        if let Some(map) = op.get("docs").and_then(Value::as_object) {
-            for (name, exp) in map {
-                // create_documents docs-maps hold ID strings, not content.
-                let (Some(doc), Some(text)) =
-                    (self.shadow.resolve_doc(name), strings_of(exp).as_deref().and_then(as_text))
-                else {
-                    continue;
-                };
-                self.probe(&doc, &text);
-            }
-            return;
-        }
-        // Ops with narrowing arguments are not whole-document reads.
-        let narrowing = ["span", "spans", "specs", "specset", "positions", "address", "at"];
-        if op
-            .as_object()
-            .is_some_and(|o| narrowing.iter().any(|k| o.get(*k).is_some_and(|v| !v.is_null())))
-        {
-            return;
-        }
-        let name = op_name(op).to_ascii_lowercase();
-        let recorded = if verb_of(op).is_some_and(Verb::writes_content) {
-            // The play pass's post-write keys: a write's text is its argument.
-            field(op, POST_WRITE_KEYS).and_then(strings_of)
-        } else if matches!(verb_of(op), Some(Verb::RetrieveContents | Verb::Observe))
-            && (name.starts_with("content")
-                || name.starts_with("retrieve")
-                || name.starts_with("full_")
-                || name.contains("state")
-                || name.starts_with("after_")
-                || name.starts_with("verify")
-                // A snapshot op WITH a content expectation is a contents
-                // probe of the named doc, or the register's (isolation/
-                // delete_does_not_affect_other_documents seeds doc B only
-                // through its snapshots); content-less snapshots stay meta.
-                || name.starts_with("snapshot"))
-        {
-            // Per-document replies probe each document they name — save a
-            // reply strictly inside its document's content, which is the
-            // play pass's narrowed read, not the whole document
-            // (ispan_partial_overlap's `source: ["CDEFG"]`).
-            let replies = per_doc_replies(op, &self.shadow);
-            if !replies.is_empty() {
-                for (_, doc, strings) in replies {
-                    let Some(text) = as_text(&strings) else { continue };
-                    let held = self.shadow.text_string(&doc);
-                    if text != held && held.contains(&text) {
-                        continue;
-                    }
-                    self.probe(&doc, &text);
-                }
-                return;
-            }
-            recorded_content(op, &["doc", "docid"]).map(|(_, strings)| strings)
-        } else {
-            return;
-        };
-        // Address strings and recording-client python reprs are never
-        // content bytes: the repr guard is what keeps retrieve_vspan_empty's
-        // "<VSpan …>" out of the seeds.
-        let Some(text) = recorded.as_deref().and_then(as_text) else { return };
-        // A full_* probe reads the doc the last CONTENT write touched
-        // (mirror of the play pass's `full-probe-targets-last-write`).
-        if name.starts_with("full_") && str_field(op, &["doc", "docid"]).is_none() {
-            if let Some(d) = self.shadow.last_written.clone().filter(|d| self.shadow.knows(d)) {
-                self.probe(&d, &text);
-                return;
-            }
-        }
-        let Some(doc) = self.doc_arg(op, &["doc", "docid"]) else { return };
-        self.probe(&doc, &text);
-    }
-
-    /// Note `expected` as `doc`'s probed content: the first probe this pass
-    /// that disagrees with the shadow is the one the next round infers a seed
-    /// from. A probe of a document the shadow does not hold tests nothing —
-    /// the walk infers the setup of documents the scenario makes, and a seed
-    /// for one it never made would mint, in the lead-in, a document no op
-    /// created.
+    /// Note `expected` as `doc`'s probed content — recorded text, never an
+    /// address or a client repr (`fields::as_text`: the repr guard is what
+    /// keeps retrieve_vspan_empty's "<VSpan …>" out of the seeds): the first
+    /// probe this pass that disagrees with the shadow is the one the next
+    /// round infers a seed from. A probe of a document the shadow does not
+    /// hold tests nothing — the walk infers the setup of documents the
+    /// scenario makes, and a seed for one it never made would mint, in the
+    /// lead-in, a document no op created.
     fn probe(&mut self, doc: &str, expected: &str) {
         if !self.shadow.knows(doc) {
             return;
@@ -1154,6 +1219,20 @@ impl Sim {
             self.failed_probe = Some((doc.to_string(), expected.to_string()));
         }
     }
+}
+
+/// Is a bundle named `name` one the walk probes the shadow with — a
+/// snapshot of the state it observes (`snapshot`, `dump_state`,
+/// `initial_state`, `final_state`, `verify_*`, `after_*`) or of a document's
+/// content? A snapshot WITH a content expectation is a content probe of its
+/// document (isolation/delete_does_not_affect_other_documents seeds doc B
+/// only through its snapshots). Never the corpus extension's `probe`
+/// checkpoints: their scenarios record their own setup (MANIFEST-NEW), so a
+/// mismatch there is the walk's own gap, never setup to infer.
+fn observes_state(name: &str) -> bool {
+    const STATE_PREFIXES: &[&str] =
+        &["content", "retrieve", "full_", "after_", "verify", "snapshot"];
+    STATE_PREFIXES.iter().any(|p| name.starts_with(p)) || name.contains("state")
 }
 
 /// The docs-map probe for a NAMED doc after op `i` (create_chain contents).

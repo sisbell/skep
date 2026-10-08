@@ -18,11 +18,12 @@ use super::{
 use crate::allowlist::Adjustments;
 use crate::compare::{compare_addr_sets, compare_count};
 use crate::fields::{
-    expected_failure, field, locate, parse_python_spec, str_field, vspec_dict, DocSpans,
+    endsets_in_link_space, expected_failure, field, locate, parse_python_spec, str_field,
+    vspec_dict, DocSpans,
 };
 use crate::outcome::{Disagreement, OpOutcome};
 use crate::shadow::Shadow;
-use crate::tum::{is_link_address, last_component, parse_vpos, parse_width, VPoint, VRegion};
+use crate::tum::{last_component, parse_vpos, parse_width, VPoint, VRegion};
 
 /// The arguments a find_links carries: the query's slots — search region,
 /// endpoint sides, type filter, home documents — and the routing over them.
@@ -59,14 +60,20 @@ enum SideSpec {
     I(Endset),
 }
 
-pub(super) fn h_find_links(
+/// The four-set query a find_links recording describes — `by` routing, the
+/// search region (deleted content reached through I-history, ruling 10), the
+/// explicit sides, the corpus extension's sets (empty is NOSPECS), the
+/// transcluded-region search, the bare aim, a `doc` field's narrowing, and
+/// the type and home slots — each side imaged to its I-coverage, every
+/// grounding policy applied pushed to `out`'s adaptations and every part
+/// that did not ground to `notes`. `None` when the op is settled
+/// inexpressible on the way, its reason recorded.
+fn find_links_query(
     cx: &mut Cx,
     op: &Value,
     out: &mut OpOutcome,
-    adjustments: &Adjustments,
-) {
-    let mut notes: Vec<String> = Vec::new();
-
+    notes: &mut Vec<String>,
+) -> Option<FourSet> {
     // A document field names a document. One that resolves to nothing — a
     // version skep refused to make, whose name never entered the shadow
     // (rulings 20, 20a) — leaves the search no document to aim at; it is
@@ -75,7 +82,7 @@ pub(super) fn h_find_links(
         if let Some(s) = str_field(op, keys) {
             if cx.shadow.resolve_doc(s).is_none() {
                 inexpressible(out, format!("find_links document `{s}` resolves to nothing"));
-                return;
+                return None;
             }
         }
     }
@@ -213,7 +220,7 @@ pub(super) fn h_find_links(
         }
         let Some(parsed) = arr.iter().map(vspec_dict).collect::<Option<Vec<DocSpans>>>() else {
             inexpressible(out, format!("find_links {key} holds a non-vspec entry"));
-            return;
+            return None;
         };
         if slot == 0 {
             from_sides = Some(SideSpec::V(parsed));
@@ -229,11 +236,11 @@ pub(super) fn h_find_links(
         (Ok(from), Ok(to)) => (from, to),
         (Err(e), _) => {
             inexpressible(out, format!("find_links from: {e}"));
-            return;
+            return None;
         }
         (_, Err(e)) => {
             inexpressible(out, format!("find_links to: {e}"));
-            return;
+            return None;
         }
     };
     if let Some(s) = from_side {
@@ -368,8 +375,8 @@ pub(super) fn h_find_links(
             }
         }
     };
-    let from = side_to_slot(cx, from_sides, &mut notes);
-    let to = side_to_slot(cx, to_sides, &mut notes);
+    let from = side_to_slot(cx, from_sides, &mut *notes);
+    let to = side_to_slot(cx, to_sides, &mut *notes);
     if i_coverage_side {
         out.adaptations.push("i-coverage-search".into());
     }
@@ -433,7 +440,7 @@ pub(super) fn h_find_links(
                 }
                 Err(e) => {
                     inexpressible(out, format!("find_links threeset: {e}"));
-                    return;
+                    return None;
                 }
             },
             None => SlotSpec::Any,
@@ -494,7 +501,21 @@ pub(super) fn h_find_links(
             }
         }
     };
-    let q = FourSet { home, from, to, ty };
+    Some(FourSet { home, from, to, ty })
+}
+
+/// A find_links: the query its recording describes ([`find_links_query`]),
+/// asked of skep, and skep's answer — harness infrastructure filtered out at
+/// receipt — judged against the recorded address list, else the recorded
+/// count.
+pub(super) fn h_find_links(
+    cx: &mut Cx,
+    op: &Value,
+    out: &mut OpOutcome,
+    adjustments: &Adjustments,
+) {
+    let mut notes: Vec<String> = Vec::new();
+    let Some(q) = find_links_query(cx, op, out, &mut notes) else { return };
     let recorded_failure = expected_failure(op);
     let r = cx.rig.exec(Op::FindLinksFtt { q });
     let addrs: Vec<skep_address::Address> = match r {
@@ -747,14 +768,7 @@ pub(super) fn h_retrieve_endsets(cx: &mut Cx, op: &Value, out: &mut OpOutcome) {
     // structural vocabulary, so this comparator checks per-slot width
     // multisets (a representational difference in the address base, not a
     // loosening of the widths).
-    let link_space = str_field(op, &["search"]).is_some_and(|s| s.contains("link"))
-        || field(op, &["from", "source"])
-            .and_then(Value::as_array)
-            .and_then(|a| a.first())
-            .and_then(|v| v.get("docid"))
-            .and_then(Value::as_str)
-            .is_some_and(is_link_address);
-    if link_space {
+    if endsets_in_link_space(op) {
         let link_golden = str_field(op, &["link", "link_id"])
             .map(str::to_string)
             .or_else(|| {
@@ -765,7 +779,7 @@ pub(super) fn h_retrieve_endsets(cx: &mut Cx, op: &Value, out: &mut OpOutcome) {
                     .and_then(Value::as_str)
                     .map(str::to_string)
             })
-            .or_else(|| cx.shadow.last_link.clone());
+            .or_else(|| cx.shadow.last_link().map(str::to_string));
         let Some(link_golden) = link_golden else {
             inexpressible(out, "link-space endsets with no link in scope".into());
             return;

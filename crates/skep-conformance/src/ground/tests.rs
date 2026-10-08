@@ -248,3 +248,41 @@ fn the_walk_swaps_the_regions_a_swap_names() {
     let log = sim.log_for(DOC);
     assert!(matches!(log, [.., Edit::Swap { s1: 1, e1: 4, s2: 12, e2: 15 }]), "{log:?}");
 }
+
+/// A read moves the register only as its handler does: a find_links or a
+/// close_document naming a document leaves it on the document last created,
+/// and a content read naming one moves it there — so each doc-less insert
+/// after them lands where the play pass lands it.
+#[test]
+fn a_read_moves_the_register_only_as_its_handler_does() {
+    const SOURCE: &str = "1.1.0.1.0.1";
+    const OTHER: &str = "1.1.0.1.0.2";
+    let ops = [
+        json!({"op": "create_document", "doc": "source", "result": SOURCE}),
+        json!({"op": "insert", "doc": "source", "text": "AB"}),
+        json!({"op": "create_document", "doc": "other", "result": OTHER}),
+        json!({"op": "find_links", "doc": "source", "result": []}),
+        json!({"op": "close_document", "doc": SOURCE}),
+        json!({"op": "insert", "text": "XY"}),
+        json!({"op": "retrieve_contents", "doc": "source", "result": ["AB"]}),
+        json!({"op": "insert", "text": "CD"}),
+    ];
+    let sim = Sim::replay(&[], &BTreeMap::new(), &ops);
+    assert_eq!(sim.shadow.text_string(OTHER), "XY");
+    assert_eq!(sim.shadow.text_string(SOURCE), "ABCD");
+}
+
+/// A link homed in a document no op made mints nothing: the walk enters it
+/// at no home, as the play pass, finding no α-image there, makes no link.
+#[test]
+fn a_link_homed_where_no_op_made_a_document_mints_nothing() {
+    let ops = [
+        json!({"op": "create_document", "result": "1.1.0.1.0.5"}),
+        json!({"op": "create_link", "result": "1.1.0.1.0.1.0.2.1"}),
+    ];
+    let setup = ground(&ops);
+    assert!(setup.implied_creates.is_empty(), "{:?}", setup.implied_creates);
+    let sim = Sim::replay(&setup.implied_creates, &BTreeMap::new(), &ops);
+    assert!(!sim.shadow.knows("1.1.0.1.0.1"));
+    assert_eq!(sim.shadow.created(), ["1.1.0.1.0.5"]);
+}

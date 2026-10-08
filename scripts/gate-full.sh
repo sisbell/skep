@@ -61,9 +61,11 @@ RUSTDOCFLAGS="-D rustdoc::broken_intra_doc_links -D rustdoc::private_intra_doc_l
     cargo doc -p skep-content --lib --no-deps --document-private-items || exit $?
 
 # …and its suite in release. Every other run here is a debug build, and two
-# of M4's behaviors exist only in release: the fold keeping a stored value
-# where a debug build panics, and `write` reaching its `.expect` with the
-# routing assertion compiled out.
+# of M4's checks are debug assertions, so what M4 does without them is
+# reached only here: the fold keeps a stored value where a debug build
+# panics, and both write doors take an address the routing assertion would
+# stop — `stage_write` stages it as given, and `write` writes it, or reaches
+# its `.expect` when it has no document.
 cargo nextest run -p skep-content --release --profile full || exit $?
 
 # skep-blobs' library without `test-hooks` — every test build turns it on

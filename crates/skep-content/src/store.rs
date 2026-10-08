@@ -350,6 +350,24 @@ impl<'a> IntoIterator for &'a ContentStore {
 /// which shows the value as its length, never a byte. The engine only
 /// `From`-lifts and folds a record; it never builds one.
 ///
+/// THE FORM IS A FORMAT, as the slice's is (`in_tumbler_order`): a record
+/// serializes as its address, then its value, and every content record M2
+/// has journaled is in that form, inside the engine's `Record::Content`. M2
+/// decodes each back through this type wherever a replay meets it — at
+/// open, and at each historical reconstruction — with no compiler edge to
+/// this crate. So a change to those bytes — a field added, removed or
+/// reordered, the address or the value encoded differently, as Open build
+/// decision #3's batched record would make — leaves every content record
+/// already journaled unreadable: a committed record that does not decode is
+/// `Corruption`, which M2 must not skip. It is a format event by M2's rule
+/// (`ARCHITECTURE.md` §The kernel, "The formats are pinned"), owed the bump
+/// of M2's `SKJ` and `SKC` stamps, so that a journal written before the
+/// change is refused by name at open, never replayed into `Corruption`. M2's
+/// golden journal holds content records, so its pin fails by name when these
+/// bytes move; this crate's suite pins the shape a record decodes from
+/// (`raw_record`'s control) and replays records through M2's own codec
+/// (`content_survives_durable_recovery_by_checkpoint_and_replay`).
+///
 /// `#[must_use]`, as the fold is: a record stores nothing until it is
 /// pushed, so one dropped after `stage_write(…)?` — a write that never
 /// happens, while its caller goes on to place the address — is a warning at

@@ -28,7 +28,11 @@ use serde::{Deserialize, Serialize};
 /// checkpoint format, lays down as the length then the raw bytes; the
 /// engine's world dump, a transcode into its `SerdeTree`, sees one integer
 /// node per byte (skep-engine's `a_content_byte_costs_a_whole_tree_node` pins
-/// that).
+/// that). So the form is part of two formats — each journaled
+/// [`ContentWrite`](crate::ContentWrite) holds its value in it, and each
+/// checkpointed [`ContentStore`](crate::ContentStore) slice every value it
+/// stores — and a change to it moves both, owing what the record's doc and
+/// the slice's (`in_tumbler_order`) say a change to their bytes owes.
 ///
 /// A value's bytes never render into a log: its `Debug` is its LENGTH, the
 /// redaction M2's `Attestation` gives a signature, so a type holding a `Val`

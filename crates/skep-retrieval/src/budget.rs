@@ -39,10 +39,11 @@
 /// which has no other tie to COMPARE, included. So an edit of this line is an
 /// edit of those two as well, the walk's by the square, and is argued for
 /// them too: the walk budget's own argument — order a second of one worker —
-/// is made at `2^24`, which is this number's square at `2^12`, and a unit
-/// test in this file holds the walk budget at that value, where the walk
-/// tests, which size their boundaries from this constant, would follow an
-/// edit unremarked.
+/// is made at `2^24`, which is this number's square at `2^12`, and an
+/// assertion beside the walk budget holds it at that value when the crate
+/// compiles, so an edit of this line fails the build there, where the walk
+/// tests, which size their boundaries from this constant, would follow it
+/// unremarked.
 ///
 /// What it refuses is the two shapes no wire cap prices, and the two counts
 /// are what refuse them. The NESTED region×span product, whose region-set
@@ -185,6 +186,18 @@ pub const MAX_DELIVERY_ITEMS: usize = 1 << 17;
 /// [`walk_price`]: crate::vspan::walk_price
 pub(crate) const MAX_WALK_STEPS: usize = MAX_COMPARE_OPERAND_BLOCKS * MAX_COMPARE_OPERAND_BLOCKS;
 
+// The walk budget held at the value its card argues for, `2^24`, when the
+// crate COMPILES: it is the operand budget's square, so an edit of
+// `MAX_COMPARE_OPERAND_BLOCKS` moves the walk budget of all three operations
+// — RETRIEVEV's among them — by the square, and every walk test sizes its
+// boundary from that constant and would follow the edit unremarked. The
+// build that follows such an edit fails here, before any test is run.
+const _: () = assert!(
+    MAX_WALK_STEPS == 1 << 24,
+    "MAX_WALK_STEPS is argued at 2^24 run-list steps; an edit of \
+     MAX_COMPARE_OPERAND_BLOCKS moves it by the square"
+);
+
 /// One count taken against one of the budgets above — the spans a COMPARE
 /// operand or a FINDDOCSCONTAINING request hands to M5, the blocks or coverage
 /// they produce, the pairs a join emits, the items a delivery holds, or the
@@ -262,17 +275,5 @@ mod tests {
             "the refused batch admitted none of itself"
         );
         assert!(count.admit(1).is_err());
-    }
-
-    #[test]
-    fn the_walk_budget_is_the_number_its_card_argues_for() {
-        // `MAX_WALK_STEPS`' card argues `2^24` run-list steps — order a second
-        // of one worker — and the crate doc states that number for callers. It
-        // is `MAX_COMPARE_OPERAND_BLOCKS` squared, so an edit of the operand
-        // number moves the walk budget of all three operations by the square,
-        // RETRIEVEV's among them; every walk test sizes its boundary from that
-        // constant and stays green if it moves, and this is the one assertion
-        // such an edit is discovered at.
-        assert_eq!(MAX_WALK_STEPS, 1 << 24);
     }
 }

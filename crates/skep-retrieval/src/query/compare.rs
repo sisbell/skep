@@ -337,9 +337,9 @@ fn resolve_blocks<'a>(
                     m5.point(&surface, &cursor).as_ref() == Some(run.i_start()),
                     "D-SEQ★: each content run must begin at the V-cursor (gap-free tiling)"
                 );
-                let next = &cursor.ordinal + run.width();
-                out.push(Block::new(&r.doc, cursor.clone(), run));
-                cursor.ordinal = next;
+                let v_start = cursor.clone();
+                cursor.ordinal += run.width();
+                out.push(Block::new(&r.doc, v_start, run));
             }
         }
     }

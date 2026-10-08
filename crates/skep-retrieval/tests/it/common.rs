@@ -206,16 +206,19 @@ pub fn deep_span(subspace: u32) -> Span {
 }
 
 /// Unwrap Ok — `Result::expect` under one name, so the unwrap and its failure
-/// message are uniform across all seven operations. The `Debug` bound is what
-/// makes a failure name WHICH rejection fired rather than only that one did:
-/// every M6 error renders, and a suite this size cannot afford a panic that
-/// says nothing about the answer it got.
+/// message are uniform across all seven operations, and `#[track_caller]` as
+/// `expect` itself is, so a failure is reported at the test's line and not at
+/// this one. The `Debug` bound is what makes a failure name WHICH rejection
+/// fired rather than only that one did: every M6 error renders, and a suite
+/// this size cannot afford a panic that says nothing about the answer it got.
+#[track_caller]
 pub fn ok_of<T, E: fmt::Debug>(r: Result<T, E>) -> T {
     r.expect("expected Ok, got Err")
 }
 
 /// Unwrap Err, the mirror of [`ok_of`] — printing the answer that arrived
-/// where a rejection was claimed.
+/// where a rejection was claimed, at the line that claimed it.
+#[track_caller]
 pub fn err_of<T: fmt::Debug, E>(r: Result<T, E>) -> E {
     r.expect_err("expected Err, got Ok")
 }

@@ -182,9 +182,10 @@ impl Subspace {
 pub(crate) fn walk_price(m5: &M5State, doc: &Address, span: &Span) -> usize {
     let run_count = match Subspace::of_span(span) {
         Some(sub) => sub.run_count(m5, doc),
-        None => Subspace::ALL.into_iter().fold(0, |total: usize, sub| {
-            total.saturating_add(sub.run_count(m5, doc))
-        }),
+        None => Subspace::ALL
+            .into_iter()
+            .map(|sub| sub.run_count(m5, doc))
+            .fold(0, usize::saturating_add),
     };
     as_ordinal_vspan(span)
         .and_then(|shape| (shape.ordinal + shape.count).to_usize())

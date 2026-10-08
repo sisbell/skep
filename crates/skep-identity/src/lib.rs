@@ -44,8 +44,9 @@
 //!   enforcement mode from [`IdentityState::claimant`], composes the frames
 //!   it verifies — a session handshake's under [`framed`], the entry grade's
 //!   through [`entry_frame`] and the record grade's through [`RecordFrame`] —
-//!   and lifts a request's `attest.alg` to its marker tag and back through
-//!   [`SigAlgRow`].
+//!   reads a `sig` that names no row, a session body's or a record's, as a
+//!   [`HybridBlob`], and lifts a request's `attest.alg` to its marker tag and
+//!   back through [`SigAlgRow`].
 //! * `skep-signature`, the one crate that links the signature libraries
 //!   (AUTH-2.2), holds each marker tag's arithmetic over [`SIG_ALGS`]' rows
 //!   and a key's two halves — composing them at keygen
@@ -54,11 +55,11 @@
 //!   signing client and the resolver call its verify.
 //! * `skep-client`, the SIGNING CLIENT, holds keys, spells credential records
 //!   and composes the frames it signs; its reader's verifier composes the
-//!   same frames back.
+//!   same frames back and reads each record's `sig` as a [`HybridBlob`].
 //! * `skep-resolve`, the registry resolver, reads the key set that opens an
 //!   account as of a record's LOG position, finds an account's doc 1 through
-//!   [`doc_1_of`], and verifies each registry record's frame
-//!   ([`RecordFrame`]).
+//!   [`doc_1_of`], and verifies each registry record's `sig` ([`HybridBlob`])
+//!   over its frame ([`RecordFrame`]).
 //! * `skep-cli`, the `skep` command, names keys by their fingerprints and
 //!   spells the enrollment records its key commands print.
 //! * From their suites only: `skep-mcp`, to build records and sign session
@@ -115,8 +116,9 @@
 //! * `key`: keys and fingerprints — [`PublicKey`] with its refusal
 //!   [`ParseKeyError`]; the algorithm table [`ALGS`] with its row type
 //!   [`AlgRow`] and its rows' `ALG_*` tokens; the marker-tag table
-//!   [`SIG_ALGS`] with [`SigAlgRow`]; and [`Fingerprint`] (AUTH-1.1–1.10;
-//!   signed ops);
+//!   [`SIG_ALGS`] with [`SigAlgRow`], and the [`HybridBlob`] its widths
+//!   admit; and [`Fingerprint`] (AUTH-1.1–1.10, AUTH-4.34, AUTH-6.3; signed
+//!   ops);
 //! * `framing`: framing and the tag set — [`Tag`], [`framed`], [`TAGS`]
 //!   (AUTH-1.11–1.17);
 //! * `entry`: THE ENTRY FRAME under [`ENTRY_TAG`] — the bytes a publish-class
@@ -222,9 +224,10 @@ pub use framing::{
     framed, Tag, ENTRY_TAG, KEY_TAG, NODE_HELLO_TAG, SESSION_TAG, SESSION_TAG_V2, TAGS,
 };
 pub use key::{
-    AlgRow, Fingerprint, ParseKeyError, PublicKey, SigAlgRow, ALGS, ALG_FNDSA512_PREVIEW_ED25519,
-    ALG_MLDSA65_ED25519, ED25519_KEY_LEN, FNDSA512_PREVIEW_ED25519_KEY_LEN,
-    FNDSA512_PREVIEW_KEY_LEN, MLDSA65_ED25519_KEY_LEN, MLDSA65_KEY_LEN, SIG_ALGS,
+    AlgRow, Fingerprint, HybridBlob, ParseKeyError, PublicKey, SigAlgRow, ALGS,
+    ALG_FNDSA512_PREVIEW_ED25519, ALG_MLDSA65_ED25519, ED25519_KEY_LEN,
+    FNDSA512_PREVIEW_ED25519_KEY_LEN, FNDSA512_PREVIEW_KEY_LEN, MLDSA65_ED25519_KEY_LEN,
+    MLDSA65_KEY_LEN, SIG_ALGS,
 };
 pub use keyset::{Enrolled, KeySet};
 pub use payload::{

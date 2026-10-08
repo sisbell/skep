@@ -28,7 +28,7 @@ use std::thread;
 use std::time::Duration;
 
 use serde_json::Value;
-use skep_identity::{parse_record_value, BoardTerm, Enrollment, Fingerprint, PublicKey};
+use skep_identity::{parse_record_value, BoardTerm, Enrollment, Fingerprint, HybridBlob, PublicKey};
 
 use crate::address::{document_of, parent_account};
 use crate::board::{answers, frames, AtAnswer, Board, ChangeKey, KeySet, KeySetAnswer, T_CLAIM, T_ENROLL, T_RETIRE};
@@ -531,9 +531,9 @@ fn hand_of(board: &Board, record: &Record, term: Option<BoardTerm>, own: &[(Fing
     match &record.sig {
         Some(sig_hex) => {
             let Some(term) = term else { return Ok(Hand::Unreadable("the board has no H.1, so no record frame can be composed".into())) };
-            let Some(blob) = crate::hex::decode(sig_hex) else { return Ok(Hand::NoKeyVerifies) };
+            let Some(blob) = HybridBlob::parse_hex(sig_hex) else { return Ok(Hand::NoKeyVerifies) };
             // This store's own keys first.
-            if let Some(fp) = record.signed_by(term, &blob, own.iter().map(|(f, k)| (f, k))) {
+            if let Some(fp) = record.signed_by(term, blob.as_bytes(), own.iter().map(|(f, k)| (f, k))) {
                 return Ok(Hand::Key(fp));
             }
             let Some(base) = base else { return Ok(Hand::Unreadable("below the retention floor: the record's base is not readable at this board".into())) };
@@ -541,7 +541,7 @@ fn hand_of(board: &Board, record: &Record, term: Option<BoardTerm>, own: &[(Fing
                 return Ok(Hand::Unreadable("the set as of the record's base is not readable at this board".into()));
             };
             let candidates = set.enrolled.iter().filter(|e| !record.anchor_grade || e.anchor).map(|e| (&e.fingerprint, &e.key));
-            Ok(match record.signed_by(term, &blob, candidates) {
+            Ok(match record.signed_by(term, blob.as_bytes(), candidates) {
                 Some(fp) => Hand::Key(fp),
                 None => Hand::NoKeyVerifies,
             })
@@ -566,7 +566,7 @@ mod tests {
     use std::sync::Arc;
 
     use serde_json::json;
-    use skep_identity::canonical_record;
+    use skep_identity::{canonical_record, SIG_ALGS};
     use skep_signature::HybridSigner;
 
     use super::*;
@@ -644,11 +644,28 @@ mod tests {
         let term = Some(BoardTerm { log_position: 12, chain: [7; 32] });
         let unsigned = enrollment("1.0.1.0.1.0.2.1", vec![Enrollment::new(key(1), true, Some("paper".into())).unwrap()]);
         let mut signed = enrollment("1.0.1.0.1.0.2.2", vec![Enrollment::new(key(2), false, Some("phone".into())).unwrap()]);
-        signed.sig = Some("ab".repeat(64));
+        // A hybrid blob of a row's width, which no key of this store verifies.
+        signed.sig = Some("ab".repeat(SIG_ALGS[0].sig_len()));
         for record in [unsigned, signed] {
             let hand = hand_of(&board, &record, term, &own, None).expect("no read, so no fault");
             assert!(matches!(hand, Hand::Unreadable(_)), "{}: {hand:?}", record.link);
         }
+    }
+
+    /// A `sig` of no row's width — the classical 64 bytes, here — is no hybrid
+    /// blob (skep-identity's `HybridBlob::parse_hex`), so no key could verify
+    /// it: its hand is `NoKeyVerifies`, answered before the set as of its base
+    /// is read, where a blob of a row's width would read that set to try.
+    #[test]
+    fn a_sig_of_no_rows_width_is_verified_by_no_key_and_reads_nothing() {
+        let board = fake::board(&Fake::unread());
+        let key = |b: u8| HybridSigner::public_key(&crate::sign::signer_from_seed(&[b; 32])).clone();
+        let own = [(Fingerprint::of(&key(4)), key(4))];
+        let term = Some(BoardTerm { log_position: 12, chain: [7; 32] });
+        let mut classical = enrollment("1.0.1.0.1.0.2.2", vec![Enrollment::new(key(2), false, None).unwrap()]);
+        classical.sig = Some("ab".repeat(64));
+        let hand = hand_of(&board, &classical, term, &own, Some(19)).expect("no read, so no fault");
+        assert_eq!(hand, Hand::NoKeyVerifies);
     }
 
     #[test]

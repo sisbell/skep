@@ -13,8 +13,8 @@ readme = "README.md"
 # document-to-account arithmetic a home's account is read by (R5 (j)).
 skep-address = { path = "../skep-address" }
 # The record grammar a registry record's `sig` is made over (`RecordFrame`,
-# `RecordRows`), the key set's shape (`Enrolled`) and the key and
-# fingerprint types; no fold is run here.
+# `RecordRows`), the blob that `sig` spells (`HybridBlob`), the key set's
+# shape (`Enrolled`) and the key and fingerprint types; no fold is run here.
 skep-identity = { path = "../skep-identity" }
 # The registry's rows, the two bodies and THE CANONICAL RULE: the resolver
 # CALLS `skep_registry::parse` and derives no parser of its own (REG-1.86 (h)).

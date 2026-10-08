@@ -507,8 +507,11 @@ pub struct RecordValue<T> {
     /// string included, which is a `sig` and never `None`. It is the STRING
     /// the member spells, its JSON escapes read back: the string its signer
     /// composed, so [`canonical_record`] over the value re-spells the body.
-    /// Nothing past that is decoded: what it holds is the verifier's to read
-    /// (the record grade's rule: the hybrid blob in hex).
+    /// Nothing past that is decoded HERE — the fold reads no `sig`, and the
+    /// admission compare wants the string whatever it holds: the record grade's
+    /// verifier reads it as the blob it spells,
+    /// [`HybridBlob::parse_hex`](crate::HybridBlob::parse_hex), a `sig` of no
+    /// row's width being no signature.
     pub sig: Option<String>,
 }
 

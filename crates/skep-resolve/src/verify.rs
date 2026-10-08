@@ -11,9 +11,10 @@
 //!    (REG-1.86 (h): a parser is never derived from another parser) — the
 //!    kind the link's type slot names; a refusal is a MALFORMED record,
 //!    suppressed and counted by the mirror.
-//! 2. THE BLOB — the `sig` member is the hybrid signature in hex, no `alg`
-//!    beside it, decoding to exactly a width some `SIG_ALGS` row's blob
-//!    takes; hex of no row's width is no signature.
+//! 2. THE BLOB — the `sig` member is the hybrid blob in hex, no `alg` beside
+//!    it, read by skep-identity's `HybridBlob::parse_hex`: exactly a width
+//!    some `SIG_ALGS` row's blob takes; hex of no row's width is no
+//!    signature.
 //! 3. THE FRAME — the entry frame under the `record` grammar (`RecordFrame`,
 //!    `RecordRows`), rebuilt from the row's own members as wire.md §Registry
 //!    spells them: `board` `H.1`'s pair, `account` the HOME's account (ω over
@@ -39,10 +40,9 @@
 //! the mirror's to say; this module judges what it is handed.
 
 use skep_address::Address;
-use skep_identity::{BoardTerm, Enrolled, Fingerprint, RecordFrame, RecordRows, SIG_ALGS};
+use skep_identity::{BoardTerm, Enrolled, Fingerprint, HybridBlob, RecordFrame, RecordRows};
 use skep_registry::Record;
 
-use crate::hex_byte;
 use crate::state::Verdict;
 
 /// THE TRIAL's inputs by name — the frame's members beside the candidates.
@@ -65,22 +65,6 @@ pub(crate) struct Trial<'a> {
     pub(crate) keys: &'a [Enrolled],
 }
 
-/// THE BLOB: a record's `sig` as the hybrid signature's bytes — hex,
-/// case-free, decoding to EXACTLY a width some `SIG_ALGS` row's blob takes
-/// (6,746 hex for tag 1's 3,373 bytes, 1,460 for tag 3's 730); `None` for
-/// every other length and for a non-hex byte. The width is checked first, so
-/// no allocation is sized by a stranger's string.
-fn hybrid_blob(sig: &str) -> Option<Vec<u8>> {
-    if !SIG_ALGS.iter().any(|row| row.sig_len() * 2 == sig.len()) {
-        return None;
-    }
-    let (pairs, rest) = sig.as_bytes().as_chunks::<2>();
-    if !rest.is_empty() {
-        return None;
-    }
-    pairs.iter().map(|pair| hex_byte(*pair)).collect()
-}
-
 /// THE VERDICT on one parsed record under its trial (steps 2 to 5 of the
 /// module doc): SIGNED by the first candidate whose verify passes, else
 /// UNSIGNED — a `sig` absent, of no row's width, or verifying under no key of
@@ -89,9 +73,10 @@ pub(crate) fn judge(record: &Record, trial: &Trial<'_>) -> Verdict {
     let Some(sig) = record.sig.as_deref() else {
         return Verdict::Unsigned;
     };
-    let Some(blob) = hybrid_blob(sig) else {
+    let Some(blob) = HybridBlob::parse_hex(sig) else {
         return Verdict::Unsigned;
     };
+    let blob = blob.as_bytes();
     let sigless = record.canonical_sigless();
     let frame = RecordFrame {
         board: trial.board,
@@ -111,7 +96,7 @@ pub(crate) fn judge(record: &Record, trial: &Trial<'_>) -> Verdict {
         if row.sig_len() != blob.len() {
             continue;
         }
-        if skep_signature::verify(row.tag, key, &frame.to_bytes(key.alg()), &blob).is_ok() {
+        if skep_signature::verify(row.tag, key, &frame.to_bytes(key.alg()), blob).is_ok() {
             return Verdict::Signed(Fingerprint::of(key));
         }
     }
@@ -237,14 +222,5 @@ mod tests {
         assert_eq!(verdict(&by_one, &set(&[&foreign, &one])), hand(&one), "a key that does not verify is passed over");
         assert_eq!(verdict(&by_one, &set(&[&three, &foreign, &one])), hand(&one), "a key of another row's width is passed over");
         assert_eq!(verdict(&by_three, &set(&[&one, &foreign, &three])), hand(&three), "a record signed under the other row");
-    }
-
-    #[test]
-    fn the_blob_is_a_rows_width_of_hex_alone() {
-        assert_eq!(hybrid_blob(&"ab".repeat(3373)).map(|b| b.len()), Some(3373));
-        assert_eq!(hybrid_blob(&"AB".repeat(730)).map(|b| b.len()), Some(730));
-        assert_eq!(hybrid_blob(&"ab".repeat(64)), None, "a classical width is no row's");
-        assert_eq!(hybrid_blob(&"zz".repeat(3373)), None, "not hex");
-        assert_eq!(hybrid_blob(""), None);
     }
 }

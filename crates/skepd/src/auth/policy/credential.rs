@@ -11,7 +11,7 @@ use skep_address::{checked_inc, ordinal, parent, Address, Nat, Span};
 use skep_febe::Op;
 use skep_identity::{
     parse_record_value, record_bytes, single_address, Effect, Enrolled, Enrollment, Fingerprint,
-    HasIdentity, IdentityState, Inert, LinkDeposit, PublicKey, RecordEntry, Verdict,
+    HasIdentity, HybridBlob, IdentityState, Inert, LinkDeposit, PublicKey, RecordEntry, Verdict,
     ALG_FNDSA512_PREVIEW_ED25519,
 };
 use skep_links::SlotArg;
@@ -21,7 +21,7 @@ use skep_engine::types::IDENTITY_TYPES;
 
 use super::{addr_spans, deposits_credential_link, AttestFault, CredentialRefusal};
 use crate::auth::entry;
-use crate::auth::session::{keyed_above, opening_account, HybridSig, Scope};
+use crate::auth::session::{keyed_above, opening_account, Scope};
 use crate::auth::LockWrite;
 use crate::World;
 
@@ -562,11 +562,12 @@ enum RecordKind {
 /// too (`policy/registry.rs`), so the two grades verify one way:
 ///
 /// 3. THE BLOB — the `sig` is the hybrid blob in hex, no `alg` beside it,
-///    parsed by the one parse both doors share ([`HybridSig::parse`],
-///    case-free) into a WIDTH-VALIDATED blob that NAMES NO ROW (l7-C3; SO-I6
-///    (i)): row identity comes from each candidate key alone at step 6, and
-///    where two rows share a width both rows' keys enter the trial; hex of
-///    no row's width is `attestation_invalid:malformed`, PERMANENT.
+///    parsed by the one parse both doors share ([`HybridBlob::parse_hex`],
+///    skep-identity's, case-free) into a WIDTH-VALIDATED blob that NAMES NO
+///    ROW (l7-C3; SO-I6 (i)): row identity comes from each candidate key
+///    alone at step 6, and where two rows share a width both rows' keys enter
+///    the trial; hex of no row's width is `attestation_invalid:malformed`,
+///    PERMANENT.
 /// 4. THE FRAME — the `record` grammar over the link and the atom
 ///    ([`entry::compose_record`]): `H.1`'s pair (none →
 ///    `board_unavailable`), the HOME's account (ω over the home, the fold's
@@ -690,7 +691,7 @@ pub(super) struct RecordTrial<'a> {
 /// `attestation_invalid` cause the caller joins to its own family's code.
 pub(super) fn verify_record_sig(world: &World, trial: RecordTrial<'_>) -> Result<(), AttestFault> {
     // 3 — the blob, width-validated, naming no row (l7-C3).
-    let blob = HybridSig::parse(trial.sig).ok_or(AttestFault::Malformed)?;
+    let blob = HybridBlob::parse_hex(trial.sig).ok_or(AttestFault::Malformed)?;
     let blob = blob.as_bytes();
     // 4 — the frame, every member but `alg`: the `record` grammar over the
     // link and the atom, `H.1`'s pair (none → `board_unavailable`), the

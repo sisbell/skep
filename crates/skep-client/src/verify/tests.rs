@@ -230,6 +230,20 @@ fn a_retired_key_admits_nothing_after_its_retirement() {
     assert_eq!(verdict(&entry, &table, Bounds { boundary: Some(12), floor: None }), Verdict::Unsigned);
 }
 
+/// THE BLOB BEFORE THE TRIAL: a record whose `sig` is hex of NO row's width —
+/// the classical 64 bytes, here — is no hybrid blob, read through
+/// skep-identity's `HybridBlob::parse_hex`, and is left inert for that, never
+/// tried against each key and reported as signed by none of them.
+#[test]
+fn a_sig_of_no_rows_width_is_no_hybrid_blob() {
+    let (anchor, device, x) = (signer(2), signer(1), signer(5));
+    let genesis = record(Kind::Enroll, "1.0.1.0.1.0.2.1", &[enroll(&anchor, true, "paper-a"), enroll(&device, false, "notebook")], &[], None, Some(9), true);
+    let classical = record(Kind::Enroll, "1.0.1.0.1.0.2.2", &[enroll(&x, false, "x")], &[], Some("ab".repeat(64)), Some(20), false);
+    let table = FilteredTable::build(&records(vec![genesis, classical]), Some(board()));
+    assert_eq!(table.inert, [Inert { link: "1.0.1.0.1.0.2.2".into(), why: "the `sig` is no hybrid blob's hex".into() }]);
+    assert!(!table.current().any(|a| a.fingerprint == fp(&x)), "nothing it names is admitted");
+}
+
 /// Below the retention floor the records read POSITION-FREE and the filter
 /// builds in RECORD ORDER: a retirement read there takes its key out of the
 /// set for every record after it and every entry judged, and a key it

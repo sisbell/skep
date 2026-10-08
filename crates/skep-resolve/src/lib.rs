@@ -121,10 +121,10 @@ pub fn parse_address(s: &str) -> Option<Address> {
 }
 
 /// One byte from two hex digits, either case — `None` for any other byte.
-/// Every hex string this crate decodes itself — a signature's blob, a chain
-/// — passes through here a byte pair at a time, so text of any content,
-/// off the wire, a copy or a cache, answers `None` and never panics; a
-/// fingerprint or a key is decoded by skep-identity's own reader.
+/// Every hex string this crate decodes itself — a chain — passes through
+/// here a byte pair at a time, so text of any content, off the wire, a copy
+/// or a cache, answers `None` and never panics; a fingerprint, a key or a
+/// signature's blob is decoded by skep-identity's own reader.
 pub(crate) fn hex_byte([hi, lo]: [u8; 2]) -> Option<u8> {
     let nibble = |c: u8| match c {
         b'0'..=b'9' => Some(c - b'0'),

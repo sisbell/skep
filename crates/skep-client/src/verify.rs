@@ -26,7 +26,7 @@
 //! the verdict out. The arithmetic is `skep_signature::verify`'s; nothing
 //! here reads a board. The SESSION verify is `skepd`'s (AUTH-2.2).
 
-use skep_identity::{BoardTerm, Fingerprint, PublicKey, SigAlgRow};
+use skep_identity::{BoardTerm, Fingerprint, HybridBlob, PublicKey, SigAlgRow};
 
 use crate::derive::records::{Kind, Records};
 
@@ -109,7 +109,7 @@ impl FilteredTable {
                 table.inert.push(inert("no H.1: the record frame cannot be composed"));
                 continue;
             };
-            let Some(blob) = crate::hex::decode(sig) else {
+            let Some(blob) = HybridBlob::parse_hex(sig) else {
                 table.inert.push(inert("the `sig` is no hybrid blob's hex"));
                 continue;
             };
@@ -120,7 +120,7 @@ impl FilteredTable {
                 .iter()
                 .filter(|a| a.until == Until::Enrolled && (!r.anchor_grade || a.anchor))
                 .map(|a| (&a.fingerprint, &a.key));
-            match r.signed_by(board, &blob, candidates) {
+            match r.signed_by(board, blob.as_bytes(), candidates) {
                 None => table.inert.push(inert("signed by no key of this account's filtered set")),
                 Some(_) => match r.kind {
                     Kind::Enroll => {

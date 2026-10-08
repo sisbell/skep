@@ -858,18 +858,18 @@ fn an_origin_refusal_precedes_the_burn_and_spends_no_nonce() {
     sd.shutdown();
 }
 
-/// The four hex case policies are documented as the ONE thing the crate's
-/// hex parsers differ by, and three are pinned: the nonce and the token
-/// REFUSE uppercase (`the_handshake_lifecycle_and_a_400_that_spends_no_nonce`
-/// and the codec's own token round trip), the content forms FOLD it. The
-/// signature folds too — it is decoded and never framed — and nothing
-/// watched it, because every signature in this suite comes from
-/// `sign_session`, which encodes lowercase.
+/// The hex the daemon reads is read under a CASE POLICY per reader, and three
+/// readers' policies are pinned: the nonce and the token REFUSE uppercase
+/// (`the_handshake_lifecycle_and_a_400_that_spends_no_nonce` and the codec's
+/// own token round trip), the content forms FOLD it. The signature folds too
+/// — it is decoded and never framed — and nothing watched it, because every
+/// signature in this suite comes from `sign_session`, which encodes
+/// lowercase.
 ///
-/// So merging the signature's `parse_case_free_hex` onto the nonce's strict
-/// `parse_lower_hex` — the obvious cleanup of two near-identical
-/// two-characters-per-byte loops — refuses a signature a client legitimately
-/// sent, as `400 malformed_session_request`.
+/// So a signature parse narrowed to the nonce's strict policy —
+/// skep-identity's `HybridBlob::parse_hex`, which this handshake reads `sig`
+/// through, taking up `parse_lower_hex`'s refusal of uppercase — refuses a
+/// signature a client legitimately sent, as `400 malformed_session_request`.
 #[test]
 fn an_uppercase_signature_is_folded_where_an_uppercase_nonce_is_refused() {
     let dir = tempfile::tempdir().expect("tempdir");

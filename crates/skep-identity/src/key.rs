@@ -1,6 +1,9 @@
 //! Keys and fingerprints — AUTH-1.1–1.10 — and, beside `ALGS`, the
 //! marker-tag table `SIG_ALGS` (signed ops; the design record §7.3 (i)): the
-//! two tables share their tokens and widths, so one file declares both.
+//! two tables share their tokens and widths, so one file declares both. The
+//! hybrid blob a `sig` that names no row spells is read here too, against the
+//! marker-tag table's widths and with the hex codec keys and fingerprints are
+//! read by (AUTH-4.34, AUTH-6.3).
 
 use core::fmt;
 
@@ -142,9 +145,71 @@ const FNDSA512_PREVIEW_ED25519_ROW: SigAlgRow = SigAlgRow {
 /// blob). Read through [`SigAlgRow::of_token`] and [`SigAlgRow::of_tag`] —
 /// the codec's lift of the wire's `attest.alg` token to the marker slot's tag
 /// and back — and by the verifier, which dispatches on the tag to THAT tag's
-/// frozen rule. A key reaches its own row without the table:
+/// frozen rule. A `sig` that names no row is held to the rows' widths by
+/// [`HybridBlob::parse_hex`]. A key reaches its own row without the table:
 /// [`PublicKey::sig_alg_row`].
 pub const SIG_ALGS: &[SigAlgRow] = &[MLDSA65_ED25519_ROW, FNDSA512_PREVIEW_ED25519_ROW];
+
+/// THE HYBRID BLOB a `sig` that names no row carries (AUTH-4.34, AUTH-6.3;
+/// signed ops: the design record §2.4's pin, and §4.5 (4)'s step (3), the
+/// record grade's blob by its width, l7-C3): the post-quantum signature THEN
+/// the Ed25519 signature, two fixed-width fields and no tag beside them, at
+/// EXACTLY a width some [`SIG_ALGS`] row's blob takes
+/// ([`SigAlgRow::sig_len`]). The bytes are private and
+/// [`HybridBlob::parse_hex`] is the one constructor, so a blob of any other
+/// width is UNREPRESENTABLE (AUTH-4.34).
+///
+/// Two members spell one, and each is read through this one parse: a
+/// record's `sig` ([`RecordValue::sig`](crate::RecordValue::sig)), which every
+/// verifier of the record grade reads — the daemon at a deposit, a reader or a
+/// mirror beside the table — and the signed session body's (AUTH-6.3).
+/// Neither names an `alg`, so a width is all either can check before a key is
+/// tried, and each caller answers a `sig` of no row's width in its own terms.
+/// What this admits is every such caller's rule: a change here moves the
+/// session body's grammar and every record-grade verifier's admission
+/// together.
+///
+/// A WIDTH, NEVER A ROW (D7, l7-E1; SO-I6 (i)): a blob is verified under each
+/// candidate KEY's own row ([`PublicKey::sig_alg_row`]; AUTH-4.32, AUTH-4.33),
+/// and one whose width is not that row's simply fails under it — so this type
+/// names no row, and two rows at one width are one width. The widths are the
+/// table's, read at the parse, so a row added there is admitted here with no
+/// other edit.
+#[derive(Clone, PartialEq, Eq)]
+pub struct HybridBlob(Box<[u8]>);
+
+impl HybridBlob {
+    /// THE PARSE: hex, case-free — a `sig` is decoded and never framed, the
+    /// record frame and the session payload alike carrying none (AUTH-6.3) —
+    /// decoding to EXACTLY a width some [`SIG_ALGS`] row's blob takes (today
+    /// 6,746 hex for tag 1's 3,373 bytes, 1,460 for tag 3's 730); `None` for
+    /// every other length and for a non-hex byte. The hex LENGTH is checked
+    /// against the table first, so no allocation is sized by a stranger's
+    /// string.
+    pub fn parse_hex(s: &str) -> Option<HybridBlob> {
+        if !SIG_ALGS.iter().any(|row| row.sig_len() * 2 == s.len()) {
+            return None;
+        }
+        hex_decode(s).map(|bytes| HybridBlob(bytes.into_boxed_slice()))
+    }
+
+    /// The blob's bytes — what a candidate key's own row verifies.
+    pub fn as_bytes(&self) -> &[u8] {
+        &self.0
+    }
+}
+
+/// A blob's width and the SHA-256 of its bytes, in the flat lowercase hex a
+/// fingerprint renders in — NOT its bytes: a blob is 3,373 bytes under tag 1,
+/// which a failing assertion over two blobs would print in full, burying the
+/// difference it exists to show. The bytes are one call away,
+/// [`HybridBlob::as_bytes`], where a reader wants them.
+impl fmt::Debug for HybridBlob {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let digest = hex_encode(&Sha256::digest(&self.0));
+        write!(f, "HybridBlob({} bytes, sha-256 {digest})", self.0.len())
+    }
+}
 
 /// One [`ALGS`] row (AUTH-1.5). Not comparable as a whole:
 /// [`AlgRow::from_raw`] is a function pointer, and its ADDRESS says nothing
@@ -566,8 +631,9 @@ fn hex_encode(bytes: &[u8]) -> String {
     out
 }
 
-/// Case-insensitive hex decode (AUTH-1.3, AUTH-2.17); `None` on an odd
-/// length or a non-hex byte.
+/// Case-insensitive hex decode — a key's and a fingerprint's (AUTH-1.3,
+/// AUTH-2.17), and a hybrid blob's (AUTH-6.3); `None` on an odd length or a
+/// non-hex byte.
 fn hex_decode(s: &str) -> Option<Vec<u8>> {
     fn nibble(c: u8) -> Option<u8> {
         match c {

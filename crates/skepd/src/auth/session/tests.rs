@@ -273,7 +273,7 @@ fn an_expired_nonce_is_the_unit_refusal() {
         // loopback default passes step 2: what refuses is the burn.
         origin: Origin::parse("http://127.0.0.1:8642").expect("canonical"),
         scope: Scope::Full,
-        sig: HybridSig::parse(&"00".repeat(TAG1_SIG_LEN)).expect("tag 1's width"),
+        sig: HybridBlob::parse_hex(&"00".repeat(TAG1_SIG_LEN)).expect("tag 1's width"),
     };
     let refusal = handshake(
         &cfg,
@@ -369,27 +369,29 @@ fn the_sig_is_admitted_at_exactly_the_two_hybrid_widths() {
         (Some(TAG1_SIG_LEN), Some(TAG3_SIG_LEN)),
         "SIG_ALGS' widths, pinned by hand"
     );
-    let tag1 = HybridSig::parse(&"ab".repeat(TAG1_SIG_LEN)).expect("6,746 hex is tag 1's width");
+    let tag1 =
+        HybridBlob::parse_hex(&"ab".repeat(TAG1_SIG_LEN)).expect("6,746 hex is tag 1's width");
     assert_eq!(tag1.as_bytes().len(), 3373);
     assert_eq!(tag1.as_bytes()[0], 0xab);
-    let tag3 = HybridSig::parse(&"cd".repeat(TAG3_SIG_LEN)).expect("1,460 hex is tag 3's width");
+    let tag3 =
+        HybridBlob::parse_hex(&"cd".repeat(TAG3_SIG_LEN)).expect("1,460 hex is tag 3's width");
     assert_eq!(tag3.as_bytes().len(), 730);
     // Case-free: decoded, never framed.
-    assert_eq!(HybridSig::parse(&"AB".repeat(TAG1_SIG_LEN)), Some(tag1.clone()));
+    assert_eq!(HybridBlob::parse_hex(&"AB".repeat(TAG1_SIG_LEN)), Some(tag1.clone()));
     // Every other width is NO sig — the classical 64 bytes first.
     for bytes in [64usize, 0, 1, 3372, 3374, 729, 731, 4032] {
         assert!(
-            HybridSig::parse(&"ab".repeat(bytes)).is_none(),
+            HybridBlob::parse_hex(&"ab".repeat(bytes)).is_none(),
             "{bytes} bytes is none of the hybrid blob widths"
         );
     }
     // An odd hex length, and a non-hex byte at a right width.
-    assert!(HybridSig::parse(&"a".repeat(TAG1_SIG_LEN * 2 - 1)).is_none());
-    assert!(HybridSig::parse(&format!("zz{}", "ab".repeat(TAG1_SIG_LEN - 1))).is_none());
+    assert!(HybridBlob::parse_hex(&"a".repeat(TAG1_SIG_LEN * 2 - 1)).is_none());
+    assert!(HybridBlob::parse_hex(&format!("zz{}", "ab".repeat(TAG1_SIG_LEN - 1))).is_none());
     // Every row's width is admitted, read off the table as the parse reads
     // it — so a row added upstream needs no edit in `session.rs`.
     for row in SIG_ALGS {
-        let sig = HybridSig::parse(&"ab".repeat(row.sig_len()))
+        let sig = HybridBlob::parse_hex(&"ab".repeat(row.sig_len()))
             .unwrap_or_else(|| panic!("tag {}'s width is a hybrid width", row.tag));
         assert_eq!(sig.as_bytes().len(), row.sig_len());
     }

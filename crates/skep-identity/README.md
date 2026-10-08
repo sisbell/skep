@@ -28,9 +28,9 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
   no engine dependency.
 - **Signed-op declarations** — the bytes a signed write's signature
   covers (the entry frame and its members' encodings), the marker-tag
-  table of the two hybrid signature schemes, and a hybrid key's two
-  halves; declarations only — making and checking signatures is
-  [skep-signature](../skep-signature)'s.
+  table of the two hybrid signature schemes, a hybrid key's two halves,
+  and a signature blob's spelling in hex; declarations only — making and
+  checking signatures is [skep-signature](../skep-signature)'s.
 - **Write-path type classes** — the credential kinds widened by the
   grants and audit-view classes — the registry's binding, takedown
   record and policy link among them, each with its subtype rows by

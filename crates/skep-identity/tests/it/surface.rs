@@ -3,10 +3,11 @@
 //! cap), the key's own surface (AUTH-1.1–1.10: `PublicKey::parse`'s pinned
 //! refusal order, the row deciding a key's variant, the two token lookups'
 //! one token set, the KEY PIN's halves, the key's width, the fingerprint's
-//! formula, hex and rendering), the framing byte pins, the fold token
-//! authority, the standard trait surface every consumer dispatches through
-//! and the two traits it withholds, and the items published for the readers
-//! the spec names.
+//! formula, hex and rendering), the hybrid blob a `sig` naming no row spells
+//! (AUTH-4.34, AUTH-6.3), the framing byte pins, the fold token authority,
+//! the standard trait surface every consumer dispatches through and the two
+//! traits it withholds, and the items published for the readers the spec
+//! names.
 
 use crate::common;
 
@@ -17,8 +18,8 @@ use sha2::{Digest, Sha256};
 use skep_identity::{
     canonical_record, doc_1_of, entry_body_publish, framed, parse_enroll, parse_record_value,
     parse_retire, record_bytes, single_address, AlgRow, CredentialKind, Enrollment, Fingerprint,
-    FoldCtx, HasIdentity, IdentityState, Inert, LabelError, ParseKeyError, PayloadError, PublicKey,
-    PublishBody, PublishRefusal, RecordValue, SigAlgRow, Values, ALGS,
+    FoldCtx, HasIdentity, HybridBlob, IdentityState, Inert, LabelError, ParseKeyError,
+    PayloadError, PublicKey, PublishBody, PublishRefusal, RecordValue, SigAlgRow, Values, ALGS,
     ALG_FNDSA512_PREVIEW_ED25519, ALG_MLDSA65_ED25519, ED25519_KEY_LEN, ENROLL_TYPE, ENTRY_TAG,
     FNDSA512_PREVIEW_ED25519_KEY_LEN, FNDSA512_PREVIEW_KEY_LEN, KEY_TAG, MAX_RECORD_BYTES,
     MLDSA65_ED25519_KEY_LEN, MLDSA65_KEY_LEN, NODE_HELLO_TAG, RETIRE_TYPE, SESSION_TAG,
@@ -284,6 +285,60 @@ fn sig_algs_and_algs_agree_and_the_pins_are_the_ruled_widths() {
     let want: [u8; 32] =
         Sha256::digest(framed(KEY_TAG, &[ALG_MLDSA65_ED25519.as_bytes(), &[0x0a; 1984]])).into();
     assert_eq!(Fingerprint::of(&hybrid).as_bytes(), &want);
+}
+
+/// THE HYBRID BLOB a `sig` naming no row spells (AUTH-4.34, AUTH-6.3; signed
+/// ops, the design record §4.5 (4)'s step (3), l7-C3): hex, case-free, at
+/// EXACTLY a width some `SIG_ALGS` row's blob takes — every row's width
+/// admitted, read off the table as the parse reads it, its bytes the ones the
+/// hex spells and its uppercase spelling the same blob — and nothing else: one
+/// byte either side of a row's width, an odd hex length, a non-hex byte at a
+/// row's width, the classical 64 bytes and the empty string are each no blob.
+/// The daemon's handshake and record grade, the resolver and the signing
+/// client's reader all read a `sig` through this one parse, so none answers a
+/// blob of no row's width as one no key verifies.
+#[test]
+fn a_hybrid_blob_is_hex_of_a_rows_width_and_nothing_else() {
+    for row in SIG_ALGS {
+        let n = row.sig_len();
+        let blob = HybridBlob::parse_hex(&"ab".repeat(n))
+            .unwrap_or_else(|| panic!("tag {}'s width is a blob's", row.tag));
+        let bytes = vec![0xab_u8; n];
+        assert_eq!(blob.as_bytes(), bytes.as_slice(), "tag {}: the bytes the hex spells", row.tag);
+        assert_eq!(
+            HybridBlob::parse_hex(&"AB".repeat(n)),
+            Some(blob),
+            "tag {}: case-free — decoded, never framed",
+            row.tag
+        );
+        for off_by_one in [n - 1, n + 1] {
+            if SIG_ALGS.iter().any(|other| other.sig_len() == off_by_one) {
+                continue; // another row's width
+            }
+            let wrong = HybridBlob::parse_hex(&"ab".repeat(off_by_one));
+            assert_eq!(wrong, None, "tag {}: {off_by_one} bytes", row.tag);
+        }
+        let odd = HybridBlob::parse_hex(&"a".repeat(2 * n - 1));
+        assert_eq!(odd, None, "tag {}: an odd hex length", row.tag);
+        let non_hex = HybridBlob::parse_hex(&format!("zz{}", "ab".repeat(n - 1)));
+        assert_eq!(non_hex, None, "tag {}: a non-hex byte at the row's width", row.tag);
+    }
+    let classical = HybridBlob::parse_hex(&"ab".repeat(64));
+    assert_eq!(classical, None, "the classical 64 bytes are no row's");
+    assert_eq!(HybridBlob::parse_hex(""), None, "the empty string");
+}
+
+/// A hybrid blob's `{:?}` is its width and the SHA-256 of its bytes in flat
+/// lowercase hex — never the bytes, which at tag 1's 3,373 a failing
+/// assertion over two blobs would print in full — as a key's `{:?}` is its
+/// fingerprint and never its raw value.
+#[test]
+fn a_hybrid_blob_renders_as_its_width_and_digest() {
+    let row = SigAlgRow::of_tag(1).expect("tag 1's row");
+    let blob = HybridBlob::parse_hex(&"ab".repeat(row.sig_len())).expect("tag 1's width");
+    let digest: String =
+        Sha256::digest(blob.as_bytes()).iter().map(|b| format!("{b:02x}")).collect();
+    assert_eq!(format!("{blob:?}"), format!("HybridBlob(3373 bytes, sha-256 {digest})"));
 }
 
 /// The two token lookups admit ONE token set, exactly the rows':

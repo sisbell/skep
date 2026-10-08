@@ -197,10 +197,10 @@
 //! of the interface as well. `tests/it/tidy.rs` holds the heading, and holds
 //! this list to naming every read the crate publishes. Of what a line says a
 //! read walks, a test holds only what the heap shows: that the touch test
-//! builds nothing per pair, and that `image_on`'s two budgets, both pointwise
-//! budgets and the preview's refusal of a `d` whose own runs are past the
-//! budget each refuse before the work they exist to refuse. The rest, no test
-//! can check.
+//! builds nothing per pair, and that `image_on`'s run budget and its square,
+//! both pointwise budgets and the preview's refusal of a `d` whose own runs
+//! are past the budget each refuse before the work they exist to refuse. The
+//! rest, no test can check.
 //!
 //! * [`image_on`] — no link-store read; one read of M5's `#runs` for the
 //!   surface's content, which reads no run, and then, per region span, one

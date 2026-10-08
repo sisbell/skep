@@ -462,13 +462,14 @@ pub fn fragmented_head_world(run_count: usize) -> Kernel<World> {
     k
 }
 
-/// doc2 fragmented PAST the run budget at two depths, pinned as two snapshots
-/// of `k`: first `MAX + 1` width-1 runs, then `2 × MAX`, every run a COPY of
-/// doc1's position 1, so none abuts the next. A read refused by a budget it
-/// asks AHEAD of the work that budget prices refuses both at one cost — the
-/// runs between the two depths are work it never reaches — and one that asks
-/// after the work pays for them. `k` must already arrange doc1's position 1.
-pub fn doc2_past_the_run_budget_at_two_depths(
+/// doc2 fragmented PAST the run budget at two run counts, pinned as two
+/// snapshots of `k`: first `MAX + 1` width-1 runs, then `2 × MAX`, every run a
+/// COPY of doc1's position 1, so none abuts the next. A read refused by a
+/// budget it asks AHEAD of the work that budget prices refuses both at the
+/// same cost — the runs between the two counts are work it never reaches — and
+/// one that asks after the work pays for them. `k` must already arrange doc1's
+/// position 1.
+pub fn doc2_past_the_run_budget_at_two_run_counts(
     k: &Kernel<World>,
 ) -> (Snapshot<World>, Snapshot<World>) {
     let vstream = skep_arrangement::Vstream::new(k);

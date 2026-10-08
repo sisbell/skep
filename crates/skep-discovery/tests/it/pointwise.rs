@@ -815,9 +815,9 @@ fn the_touch_test_builds_nothing_per_pair() {
 /// section). No verdict shows the order: asked after the work, either budget
 /// refuses the same calls once the extents are lifted or M5's footprint is
 /// built — a span apiece for every run of a `d` past the budget, on reads the
-/// daemon runs with no scan permit. The heap shows it: over doc2 at two depths
-/// past the budget, each read's refusal costs one heap, and the `MAX − 1`
-/// runs more that the deeper surface holds are never read.
+/// daemon runs with no scan permit. The heap shows it: over doc2 at two run
+/// counts past the budget, each read's refusal costs the same heap bytes at
+/// both, and the `MAX − 1` runs `more` adds are never read.
 #[test]
 fn the_pointwise_budgets_are_asked_before_a_run_is_read() {
     let k = kernel();
@@ -825,7 +825,7 @@ fn the_pointwise_budgets_are_asked_before_a_run_is_read() {
     let store = LinkWriter::new(&k, &EVERYONE);
     // Homed, and so seated, in doc1, so doc2's runs are its content alone.
     let e1 = link(&store, &doc1(), &[ca(1)], &[ca(101)]); // touches every run of doc2
-    let (fewer, more) = doc2_past_the_run_budget_at_two_depths(&k);
+    let (fewer, more) = doc2_past_the_run_budget_at_two_run_counts(&k);
     let d = doc2();
     let project_heap = |snap: &Snapshot<World>| -> u64 {
         let (answer, bytes) = settled_heap_bytes(|| project_on(snap, &e1, FROM, &d, &every_home));

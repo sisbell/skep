@@ -514,18 +514,18 @@ fn image_counts_the_runs_a_span_resolves_not_the_positions_it_names() {
 /// materializes a fragmented document whole"). No verdict shows it: a
 /// resolver that collected each span's runs and counted them afterwards
 /// refuses exactly these requests, holding the source's whole fragmentation
-/// live for each. The heap shows it. One span across doc2 at two depths past
-/// the budget is refused at the same pulled run over both, so it costs one
-/// heap over both, and the `MAX − 1` runs the deeper surface holds past that
-/// run are never built.
+/// live for each. The heap shows it. One span across doc2 at two run counts
+/// past the budget is refused at the same pulled run over both, so it costs
+/// the same heap bytes over both, and the `MAX − 1` runs `more` holds past
+/// that run are never built.
 #[test]
 fn image_refuses_past_the_run_budget_without_resolving_the_rest_of_the_span() {
     let k = kernel();
     seed_content(&k, &doc1(), 1);
-    let (fewer, more) = doc2_past_the_run_budget_at_two_depths(&k);
+    let (fewer, more) = doc2_past_the_run_budget_at_two_run_counts(&k);
     let d = doc2();
-    // Every position the deeper surface arranges, its walk inside the square
-    // over both, so the RUN budget is what refuses.
+    // Every position doc2 arranges in `more`, its walk inside the square over
+    // both, so the RUN budget is what refuses.
     let region = [vspan(1, 1, 2 * MAX_IMAGE_RUNS as u32)];
     let heap_of = |snap: &Snapshot<World>| -> u64 {
         let (answer, bytes) = settled_heap_bytes(|| image_on(snap, &d, &region));
@@ -758,7 +758,7 @@ fn the_walk_budget_admits_the_square_itself_and_refuses_one_step_past_it() {
 /// alike, past the square: every span of one names doc2's last position, so
 /// resolving it builds a run, and every span of the other names the position
 /// past it, which builds none. Refused before the first pull, the two cost
-/// one heap.
+/// the same heap bytes.
 #[test]
 fn image_refuses_a_walk_past_the_square_before_resolving_any_run() {
     let k = kernel();
@@ -776,15 +776,15 @@ fn image_refuses_a_walk_past_the_square_before_resolving_any_run() {
     let max = MAX_IMAGE_RUNS as u32;
     // Every span of either prices `min(MAX + 1, e − 1) = MAX + 1`, so `MAX`
     // of them price `MAX × (MAX + 1)`, past the square.
-    let at_last: Vec<Span> = vec![vspan(1, max + 1, 1); MAX_IMAGE_RUNS];
-    let past_last: Vec<Span> = vec![vspan(1, max + 2, 1); MAX_IMAGE_RUNS];
+    let flat_at_end: Vec<Span> = vec![vspan(1, max + 1, 1); MAX_IMAGE_RUNS];
+    let past_end: Vec<Span> = vec![vspan(1, max + 2, 1); MAX_IMAGE_RUNS];
     assert_eq!(
-        image_on(&snap, &d, &at_last[..1]),
+        image_on(&snap, &d, &flat_at_end[..1]),
         Ok(vec![run(&ca(1), 1)]),
         "a span at the last position resolves a run"
     );
     assert_eq!(
-        image_on(&snap, &d, &past_last[..1]),
+        image_on(&snap, &d, &past_end[..1]),
         Ok(vec![]),
         "a span past it resolves none"
     );
@@ -798,8 +798,8 @@ fn image_refuses_a_walk_past_the_square_before_resolving_any_run() {
         bytes
     };
     assert_eq!(
-        heap_of(&at_last),
-        heap_of(&past_last),
+        heap_of(&flat_at_end),
+        heap_of(&past_end),
         "a region the walk refuses has no run built for it"
     );
 }

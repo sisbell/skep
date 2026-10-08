@@ -1424,10 +1424,10 @@ Rules that hold across its files:
   `tests/it/tidy.rs` checks the section's heading and that it names every
   read the crate publishes. Of what a line says a read walks, the suite's
   heap pins check only what the heap shows: that the touch test builds
-  nothing per pair, and that `image_on`'s two budgets, both pointwise
-  budgets and the preview's refusal of a `d` whose own runs are past the
-  budget each refuse before the work they exist to refuse. Nothing checks
-  the rest, or skepd's card.
+  nothing per pair, and that `image_on`'s run budget and its square, both
+  pointwise budgets and the preview's refusal of a `d` whose own runs are
+  past the budget each refuse before the work they exist to refuse. Nothing
+  checks the rest, or skepd's card.
 - **The link store's overlap is restated here.** `skep-links` keeps its
   per-link overlap private — a slot's span meets a query's when they
   properly overlap, one contains the other or they are equal, never when

@@ -426,12 +426,13 @@ fn delete_orphans_refuses_a_document_past_the_run_budget() {
 /// is a lower bound on the exact count taken after the resolution and refuses
 /// nothing that count admits — so a preview without it refuses the same
 /// requests, having resolved all of `d` to do it. The heap shows it: over doc2
-/// at two depths past the budget, the refusal costs one heap.
+/// at two run counts past the budget, the refusal costs the same heap bytes at
+/// both.
 #[test]
 fn the_preview_refuses_a_document_past_the_run_budget_without_resolving_it() {
     let k = kernel();
     seed_content(&k, &doc1(), 1);
-    let (fewer, more) = doc2_past_the_run_budget_at_two_depths(&k);
+    let (fewer, more) = doc2_past_the_run_budget_at_two_run_counts(&k);
     let (d, p, width) = (doc2(), vp(1, 1), n(1));
     let heap_of = |snap: &Snapshot<World>| -> u64 {
         let (answer, bytes) =

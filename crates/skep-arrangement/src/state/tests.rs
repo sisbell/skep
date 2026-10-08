@@ -178,8 +178,8 @@ fn a_fork_appends_one_r_span_per_source_run_from_a_two_address_record() {
     };
     // One R span per source run, at both sizes…
     assert_eq!(fork(2), (2, fork(2).1, 2));
-    let (source_runs, fork_bytes, r_spans) = fork(64);
-    assert_eq!((source_runs, r_spans), (64, 64));
+    let (source_run_count, fork_bytes, r_span_count) = fork(64);
+    assert_eq!((source_run_count, r_span_count), (64, 64));
     // …from a record whose size did not move between them.
     assert_eq!(fork_bytes, fork(2).1);
     // And the record that PAYS for what it commands, for contrast: the
@@ -193,7 +193,7 @@ fn a_fork_appends_one_r_span_per_source_run_from_a_two_address_record() {
     .len();
     assert!(
         fork_bytes * 10 < placing_bytes,
-        "a fork commands {r_spans} permanent R spans in {fork_bytes} bytes; \
+        "a fork commands {r_span_count} permanent R spans in {fork_bytes} bytes; \
          placing the same spans costs {placing_bytes}"
     );
 }
@@ -348,7 +348,7 @@ fn only_placement_and_version_append_to_r() {
 }
 
 #[test]
-fn version_snapshot_of_an_empty_source_leaves_the_fork_absent() {
+fn version_snapshot_of_an_empty_source_gives_the_fork_no_arrangement_entry_and_no_provenance() {
     // §7: n = 0 ⇒ no provenance append AND no arrangements entry — the
     // lazy absent-⇒-empty convention stays clean.
     let s0 = M5State::genesis();

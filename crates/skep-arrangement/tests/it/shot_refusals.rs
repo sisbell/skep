@@ -27,12 +27,14 @@ fn recording_consult<'a>(
     }
 }
 
-/// One shot asked of `shot_admission`, on the world `publish` then opens on,
-/// and then of `publish`, under one consult. Where `at_the_gate`, both refuse
-/// it alike and that refusal is handed back; where not, the admission passes
-/// it and `publish` commits it or refuses it past its gate. Any other pair is
-/// the two disagreeing, and panics.
-fn admission_agrees_with_publish(
+/// The refusal `shot_admission` and `publish` both give one shot at or before
+/// the source gate, or `None` where both carry it past: the shot is asked of
+/// `shot_admission`, on the world `publish` then opens on, and then of
+/// `publish`, under one consult. Where `at_the_gate`, both refuse it alike and
+/// that refusal is handed back; where not, the admission passes it and
+/// `publish` commits it or refuses it past its gate. Any other pair is the two
+/// disagreeing, and panics.
+fn agreed_refusal(
     k: &Kernel<World>,
     caller: Caller,
     doc: &Address,
@@ -1035,7 +1037,7 @@ fn the_shots_admission_is_the_answer_publish_gives_through_its_source_gate() {
     let refused: Vec<PublishError> = cases
         .into_iter()
         .filter_map(|(caller, doc, shot, at_the_gate)| {
-            admission_agrees_with_publish(&k, caller, &doc, &shot, &readable, at_the_gate)
+            agreed_refusal(&k, caller, &doc, &shot, &readable, at_the_gate)
         })
         .collect();
     // Every slot through the gate spoke once, in the order the cases ask.
@@ -1083,12 +1085,12 @@ fn the_shots_admission_is_the_answer_publish_gives_through_its_source_gate() {
         vec![shot_run(&pdoc(), &pca(1), 3), shot_run(&subdoc, &sca, 1)],
     );
     assert_eq!(
-        admission_agrees_with_publish(&k, P1, &pdoc(), &off_the_predecessor, &no_one, true),
+        agreed_refusal(&k, P1, &pdoc(), &off_the_predecessor, &no_one, true),
         Some(PublishError::Withheld(subdoc)),
         "not carried: consulted, and refused, on both sides"
     );
     assert_eq!(
-        admission_agrees_with_publish(&k, P1, &pdoc(), &off_the_head, &no_one, false),
+        agreed_refusal(&k, P1, &pdoc(), &off_the_head, &no_one, false),
         None,
         "own and carried: consulted on neither side"
     );

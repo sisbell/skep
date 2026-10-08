@@ -93,11 +93,11 @@ fn each_module_calls_only_m5state_methods_defined_in_itself_or_above_it() {
         "the scan finds the reads `reads.rs` defines"
     );
     let mut faults = Vec::new();
-    for (at, (caller, text)) in holders.iter().enumerate() {
-        for (definer, below) in &holders[at + 1..] {
-            for name in defined_fns(below) {
+    for (at, (caller, caller_text)) in holders.iter().enumerate() {
+        for (definer, definer_text) in &holders[at + 1..] {
+            for name in defined_fns(definer_text) {
                 let call = format!(".{name}(");
-                for code in code_lines(text).filter(|code| code.contains(&call)) {
+                for code in code_lines(caller_text).filter(|code| code.contains(&call)) {
                     faults.push(format!(
                         "{caller}.rs calls `{name}`, which {definer}.rs defines: {}",
                         code.trim()

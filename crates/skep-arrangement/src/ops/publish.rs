@@ -392,8 +392,8 @@ fn admit<'s, W: HasM3 + HasM5>(
             return Err(PublishError::SourceNotRegistered);
         }
     }
-    if let Some(d) = &shot.draft_document() {
-        if !m3.is_registered_document(d) {
+    if let Some(draft_doc) = &shot.draft_document() {
+        if !m3.is_registered_document(draft_doc) {
             return Err(PublishError::SourceNotRegistered);
         }
     }

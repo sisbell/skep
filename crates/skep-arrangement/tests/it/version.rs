@@ -249,7 +249,7 @@ fn a_fork_is_as_empty_as_the_reading_surface_it_snapshots_not_the_address_named(
 }
 
 #[test]
-fn version_rejects_unregistered_unknown_and_node_tier_callers() {
+fn version_rejects_an_unregistered_source_an_unknown_principal_and_a_node_tier_forker() {
     let k = mem_kernel();
     let vs = insert_abc(&k);
     let unregistered_doc = a(&[1, 0, 1, 0, 9]);

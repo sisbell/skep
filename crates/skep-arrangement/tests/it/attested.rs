@@ -47,7 +47,7 @@ fn an_attested_handle_fills_the_slot_of_its_own_transaction_alone() {
         span: vspan(1, 1, 2),
     }];
     let pivot = [vp(1, 1), vp(1, 2), vp(1, 3)];
-    let s_transclude = attested
+    let s_copy = attested
         .copy(P1, &doc2(), vp(1, 1), &from_doc1)
         .expect("copy commits");
     let s_rearrange = attested
@@ -71,7 +71,7 @@ fn an_attested_handle_fills_the_slot_of_its_own_transaction_alone() {
     assert_eq!(k.attestation_at(s_plain).unwrap(), None, "the plain handle's insert");
     assert_eq!(k.attestation_at(s_att).unwrap(), Some(tag1.clone()), "the attested insert");
     assert_eq!(k.attestation_at(s_del).unwrap(), None, "delete takes the plain arm");
-    for (seq, write) in [(s_transclude, "copy"), (s_rearrange, "rearrange")] {
+    for (seq, write) in [(s_copy, "copy"), (s_rearrange, "rearrange")] {
         assert_eq!(
             k.attestation_at(seq).unwrap(),
             None,
@@ -85,10 +85,10 @@ fn an_attested_handle_fills_the_slot_of_its_own_transaction_alone() {
     // `None` is the plain handle exactly. The deposits land in the HEAD
     // member the shot minted (two positions), at its fresh positions.
     let copied = attested;
-    let (_, s_copy) = copied
+    let (_, s_copied) = copied
         .insert(P1, &pdoc(), vp(1, 3), vec![val(b"d")], declared())
         .expect("a second deposit commits");
-    assert_eq!(k.attestation_at(s_copy).unwrap(), Some(tag1.clone()));
+    assert_eq!(k.attestation_at(s_copied).unwrap(), Some(tag1.clone()));
     let none = Vstream::attested(&k, None);
     let (_, s_none) = none
         .insert(P1, &pdoc(), vp(1, 4), vec![val(b"e")], declared())

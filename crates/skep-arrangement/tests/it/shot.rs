@@ -285,7 +285,7 @@ fn a_declared_deposit_in_the_staging_interval_is_carried_by_the_shot() {
 }
 
 #[test]
-fn a_birth_shot_carries_no_tail_and_a_memberless_base_carries_its_deposits() {
+fn the_birth_shape_carries_no_tail_and_a_memberless_base_carries_its_deposits() {
     // PUB-2.34 against PUB-2.42/2.66: the base absent and the base naming the
     // memberless document itself are ONE destination — the chain's first
     // member — and not one arrangement. A deposit lands in the memberless
@@ -440,7 +440,7 @@ fn the_address_form_of_a_request_is_the_address_form_read_at_the_member() {
     insert_abc(&k); // the staging draft doc1: a b c at ca(1..3)
     vs.insert(P1, &doc2(), vp(1, 1), vec![val(b"d"), val(b"e")], Deposit::Undeclared)
         .expect("doc2, the window's source: d e at its first two addresses");
-    let d2 = |k: u32| a(&[1, 0, 1, 0, 2, 0, 1, k]);
+    let doc2_ca = |ordinal: u32| a(&[1, 0, 1, 0, 2, 0, 1, ordinal]);
     // Two windows onto doc2, adjacent; the draft's `a` re-inserted; the
     // edition's own `a b` by reference — with the base taken at two, so `c`
     // is the carried tail, I-adjacent to that last run.
@@ -448,8 +448,8 @@ fn the_address_form_of_a_request_is_the_address_form_read_at_the_member() {
         base: Some(base(&pdoc(), 2)),
         draft: Some(doc1()),
         runs: vec![
-            shot_run(&doc2(), &d2(1), 1),
-            shot_run(&doc2(), &d2(2), 1),
+            shot_run(&doc2(), &doc2_ca(1), 1),
+            shot_run(&doc2(), &doc2_ca(2), 1),
             shot_run(&doc1(), &ca(1), 1),
             shot_run(&pdoc(), &pca(1), 2),
         ],
@@ -494,7 +494,7 @@ fn the_address_form_of_a_request_is_the_address_form_read_at_the_member() {
         }
     }
     assert!(
-        matches!(&at_member[0], PlacedSegment::Window(w) if *w.i_start() == d2(1) && *w.width() == n(2)),
+        matches!(&at_member[0], PlacedSegment::Window(w) if *w.i_start() == doc2_ca(1) && *w.width() == n(2)),
         "the merged window: {at_member:?}"
     );
     assert!(

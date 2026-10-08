@@ -313,14 +313,14 @@ fn same_content_chain(a: &Run, b: &Run) -> bool {
 /// merges the base's runs once per admission and asks each supplied run of
 /// the union by one search, so a request of many carried runs pays the base's
 /// run count once and not once a run.
-pub(crate) struct RunUnion<'r>(Vec<MergedRun<'r>>);
+pub(crate) struct RunUnion<'r>(Vec<UnionPiece<'r>>);
 
 /// One piece of a [`RunUnion`]: the addresses `[first.i_start,
 /// furthest.reach())` of one content chain — `first` the run that opens the
 /// piece, `furthest` the one of its runs reaching furthest, both of that
 /// content chain, so the piece is one contiguous ordinal range. Named fields,
 /// both being runs: a positional pair would put them within swapping distance.
-struct MergedRun<'r> {
+struct UnionPiece<'r> {
     first: &'r Run,
     furthest: &'r Run,
 }
@@ -337,13 +337,13 @@ impl<'r> RunUnion<'r> {
     pub(crate) fn of(runs: impl IntoIterator<Item = &'r Run>) -> RunUnion<'r> {
         let mut sorted: Vec<&'r Run> = runs.into_iter().collect();
         sorted.sort_unstable_by(|a, b| a.i_start.tumbler().cmp(b.i_start.tumbler()));
-        let mut pieces: Vec<MergedRun<'r>> = Vec::with_capacity(sorted.len());
+        let mut pieces: Vec<UnionPiece<'r>> = Vec::with_capacity(sorted.len());
         // The last piece's reach, kept beside it rather than derived again for
         // every run asked whether it joins.
-        let mut reach: Option<Tumbler> = None;
+        let mut last_reach: Option<Tumbler> = None;
         for run in sorted {
             let run_reach = run.reach();
-            if let (Some(piece), Some(piece_reach)) = (pieces.last_mut(), reach.as_mut()) {
+            if let (Some(piece), Some(piece_reach)) = (pieces.last_mut(), last_reach.as_mut()) {
                 if same_content_chain(piece.first, run) && *run.i_start.tumbler() <= *piece_reach {
                     if run_reach > *piece_reach {
                         piece.furthest = run;
@@ -352,11 +352,11 @@ impl<'r> RunUnion<'r> {
                     continue;
                 }
             }
-            pieces.push(MergedRun {
+            pieces.push(UnionPiece {
                 first: run,
                 furthest: run,
             });
-            reach = Some(run_reach);
+            last_reach = Some(run_reach);
         }
         RunUnion(pieces)
     }
@@ -395,11 +395,11 @@ impl<'r> RunUnion<'r> {
     /// set holds, in exactly one of them. What the shot's existence walk
     /// probes.
     pub(crate) fn runs(&self) -> impl Iterator<Item = Run> + '_ {
-        self.0.iter().map(MergedRun::to_run)
+        self.0.iter().map(UnionPiece::to_run)
     }
 }
 
-impl MergedRun<'_> {
+impl UnionPiece<'_> {
     /// One I-step past the piece's last address: its furthest run's reach.
     fn reach(&self) -> Tumbler {
         self.furthest.reach()
@@ -599,7 +599,7 @@ impl RunList {
     fn clipped_runs(&self, lo: Nat, hi_excl: Option<Nat>) -> impl Iterator<Item = Run> + '_ {
         let stop = hi_excl.clone();
         self.iter_blocks()
-            .take_while(move |block| stop.as_ref().is_none_or(|stop| &block.v_start < stop))
+            .take_while(move |block| stop.as_ref().is_none_or(|hi| &block.v_start < hi))
             .filter_map(move |block| {
                 let v_reach = block.v_reach(); // the first ordinal past this block
                 if v_reach <= lo {

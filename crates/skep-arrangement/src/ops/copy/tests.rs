@@ -230,19 +230,19 @@ fn copy_charges_each_specs_walk_at_its_sources_run_count_before_resolving_it() {
     // charged as one opening past its last; and at the budget the copy is
     // walked and placed.
     let p1 = Caller::Principal(PrincipalId(1));
-    let source_runs: usize = 1024;
+    let source_run_count: usize = 1024;
     // Non-adjacent starts, so nothing coalesces and the source really holds
     // this many runs.
-    let present: Vec<u32> = (1..=source_runs as u32).map(|k| 2 * k).collect();
+    let present: Vec<u32> = (1..=source_run_count as u32).map(|k| 2 * k).collect();
     let runs: Vec<Run> = present.iter().map(|&k| run(&ca(k), 1)).collect();
     let k = gate_kernel_arranging(runs, &present);
     assert_eq!(
         k.snapshot().world().m5().content_run_count(&doc1()),
-        source_runs
+        source_run_count
     );
-    let at_budget = MAX_COPY_RESOLVE_STEPS / source_runs;
+    let at_budget = MAX_COPY_RESOLVE_STEPS / source_run_count;
     assert_eq!(
-        at_budget * source_runs,
+        at_budget * source_run_count,
         MAX_COPY_RESOLVE_STEPS,
         "premise: whole charges"
     );
@@ -254,7 +254,7 @@ fn copy_charges_each_specs_walk_at_its_sources_run_count_before_resolving_it() {
     };
     let past_the_end = VSpec {
         source: doc1(),
-        span: vspan(1, source_runs as u32 + 1, 1),
+        span: vspan(1, source_run_count as u32 + 1, 1),
     };
     let specs = |spec: &VSpec, count: usize| -> Vec<VSpec> {
         std::iter::repeat_with(|| spec.clone())

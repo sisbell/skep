@@ -182,8 +182,9 @@ impl Shot {
         // placement's own; a value run closes the group.
         let mut windows: Vec<Run> = Vec::new();
         for ShotRun { run, .. } in &self.runs {
-            let by_value = run_origin_document(run)
-                .is_some_and(|origin| origin == trunk || draft_doc.as_ref() == Some(&origin));
+            let by_value = run_origin_document(run).is_some_and(|origin_doc| {
+                origin_doc == trunk || draft_doc.as_ref() == Some(&origin_doc)
+            });
             if by_value {
                 out.extend(windows.drain(..).map(PlacedSegment::Window));
                 out.push(PlacedSegment::Value(run.clone()));

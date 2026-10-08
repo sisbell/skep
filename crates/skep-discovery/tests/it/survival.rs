@@ -66,8 +66,12 @@ fn delete_orphans_mirrors_delete_preconditions() {
         Err(OrphanError::OutOfBounds)
     );
     // Boundary acceptance: the last position, and the whole range.
-    assert!(reads.delete_orphans(&doc1(), &vp(1, 3), &n(1)).is_ok());
-    assert!(reads.delete_orphans(&doc1(), &vp(1, 1), &n(3)).is_ok());
+    reads
+        .delete_orphans(&doc1(), &vp(1, 3), &n(1))
+        .expect("the last position");
+    reads
+        .delete_orphans(&doc1(), &vp(1, 1), &n(3))
+        .expect("the whole range");
 }
 
 #[test]
@@ -266,7 +270,8 @@ fn delete_orphans_refuses_exactly_what_the_delete_refuses() {
                     assert_eq!(
                         preview.is_ok(),
                         done.is_ok(),
-                        "preview and DELETE disagree on {doc:?} ({subspace},{ordinal}) width {width}"
+                        "preview and DELETE disagree on {doc:?} ({subspace},{ordinal}) width \
+                         {width}: {preview:?} against {done:?}"
                     );
                 }
             }
@@ -293,7 +298,8 @@ fn the_preview_answers_a_request_the_delete_refuses_for_ownership() {
     let stranger = Caller::Principal(PrincipalId(2));
 
     // The preview accepts, naming the links the delete would orphan …
-    assert!(delete_orphans_on(&k.snapshot(), &doc1(), &vp(1, 1), &n(1), &every_home).is_ok());
+    delete_orphans_on(&k.snapshot(), &doc1(), &vp(1, 1), &n(1), &every_home)
+        .expect("the preview accepts");
     // … and the DELETE it previews refuses this caller outright.
     assert!(matches!(
         Vstream::new(&k).delete(stranger, &doc1(), vp(1, 1), n(1)),
@@ -371,7 +377,9 @@ fn delete_orphans_refuses_a_document_past_the_run_budget() {
     let reads = Reads(&k);
 
     // At the budget: one run deleted and every other retained, `MAX` in all.
-    assert!(reads.delete_orphans(&doc2(), &vp(1, 1), &n(1)).is_ok());
+    reads
+        .delete_orphans(&doc2(), &vp(1, 1), &n(1))
+        .expect("at the budget");
 
     vstream.copy(SYS, &doc2(), vp(1, 1), &[spec(&doc1(), 1, 1, 1)])
         .expect("copy succeeds");
@@ -401,7 +409,9 @@ fn delete_orphans_refuses_a_document_past_the_run_budget() {
         Err(OrphanError::OutOfBounds)
     );
     // And the DELETE it previews, which stabs nothing, admits the request.
-    assert!(vstream.delete(SYS, &doc2(), vp(1, 1), n(1)).is_ok());
+    vstream
+        .delete(SYS, &doc2(), vp(1, 1), n(1))
+        .expect("the DELETE admits it");
 }
 
 /// §6 — the preview's budget counts `d`'s LINK runs too, which no text range
@@ -435,7 +445,9 @@ fn the_preview_budget_counts_the_link_runs_the_second_stab_takes() {
     let snap = k.snapshot();
     assert_eq!(snap.world().m5().content_runs(&doc2()).len(), MAX_IMAGE_RUNS - 1);
     assert_eq!(snap.world().m5().link_runs(&doc2()).len(), 0);
-    assert!(reads.delete_orphans(&doc2(), &vp(1, 1), &n(1)).is_ok());
+    reads
+        .delete_orphans(&doc2(), &vp(1, 1), &n(1))
+        .expect("MAX pieces, no link run");
 
     // One link seated in doc2 — its content untouched, so only the link term
     // moves, and `#runs(d)` is now the budget exactly.
@@ -445,7 +457,9 @@ fn the_preview_budget_counts_the_link_runs_the_second_stab_takes() {
     assert_eq!(snap.world().m5().content_runs(&doc2()).len(), MAX_IMAGE_RUNS - 1);
     assert_eq!(snap.world().m5().link_runs(&doc2()).len(), 1);
     // Position 4, a width-1 run taken whole: `MAX − 1` pieces and the link run.
-    assert!(reads.delete_orphans(&doc2(), &vp(1, 4), &n(1)).is_ok());
+    reads
+        .delete_orphans(&doc2(), &vp(1, 4), &n(1))
+        .expect("MAX − 1 pieces and the link run");
     // The same one-end cut as above: `MAX` pieces and the link run.
     assert_eq!(
         reads.delete_orphans(&doc2(), &vp(1, 1), &n(1)),
@@ -482,7 +496,11 @@ fn the_preview_budget_counts_the_runs_the_range_splits() {
         Err(OrphanError::ImageTooLarge)
     );
     // Position 1 is its first: one end cuts it, `MAX` runs — the budget itself.
-    assert!(reads.delete_orphans(&doc2(), &vp(1, 1), &n(1)).is_ok());
+    reads
+        .delete_orphans(&doc2(), &vp(1, 1), &n(1))
+        .expect("one end cut: MAX runs");
     // Position 4 is a whole width-1 run: no end cuts one, `MAX − 1` runs.
-    assert!(reads.delete_orphans(&doc2(), &vp(1, 4), &n(1)).is_ok());
+    reads
+        .delete_orphans(&doc2(), &vp(1, 4), &n(1))
+        .expect("no end cut: MAX − 1 runs");
 }

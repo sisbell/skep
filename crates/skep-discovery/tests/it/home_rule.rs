@@ -264,7 +264,7 @@ fn the_home_rule_asks_its_predicate_once_per_candidate_and_only_of_homes() {
     );
     assert_eq!(asked.take(), vec![doc2()]);
     // The pointwise pair asks `a`'s home once, and of a homeless `a` nothing.
-    assert!(project_on(&snap, &la2(1), FROM, &doc1(), &recorder).is_ok());
+    project_on(&snap, &la2(1), FROM, &doc1(), &recorder).expect("project");
     assert_eq!(asked.take(), vec![doc2()]);
     assert_eq!(
         addressably_discoverable_from_on(&snap, &a(&[1, 0, 1]), &doc1(), &recorder),

@@ -502,7 +502,9 @@ fn the_pointwise_pair_holds_one_run_constant_over_two_quantities() {
     let reads = Reads(&k);
 
     // Well under the budget, both answer.
-    assert!(reads.project(&e1, FROM, &doc1()).is_ok());
+    reads
+        .project(&e1, FROM, &doc1())
+        .expect("well under the budget");
     assert_eq!(reads.addressably_discoverable_from(&e1, &doc1()), Ok(true));
 
     // Fragment doc2 to exactly the budget: one COPY placing the SAME source
@@ -516,8 +518,12 @@ fn the_pointwise_pair_holds_one_run_constant_over_two_quantities() {
     let snap = k.snapshot();
     assert_eq!(snap.world().m5().content_runs(&doc2()).len(), MAX_IMAGE_RUNS);
     assert_eq!(snap.world().m5().link_runs(&doc2()).len(), 0);
-    assert!(reads.project(&e1, FROM, &doc2()).is_ok());
-    assert!(reads.addressably_discoverable_from(&e1, &doc2()).is_ok());
+    reads
+        .project(&e1, FROM, &doc2())
+        .expect("MAX content runs");
+    reads
+        .addressably_discoverable_from(&e1, &doc2())
+        .expect("MAX runs over both subspaces");
 
     // ONE link run seated in doc2 — and the two counts part company. The
     // content runs are untouched, so `project` still answers; the LINK runs
@@ -527,7 +533,9 @@ fn the_pointwise_pair_holds_one_run_constant_over_two_quantities() {
     let snap = k.snapshot();
     assert_eq!(snap.world().m5().content_runs(&doc2()).len(), MAX_IMAGE_RUNS);
     assert_eq!(snap.world().m5().link_runs(&doc2()).len(), 1);
-    assert!(reads.project(&e1, FROM, &doc2()).is_ok());
+    reads
+        .project(&e1, FROM, &doc2())
+        .expect("its content runs are still MAX");
     assert_eq!(
         reads.addressably_discoverable_from(&e1, &doc2()),
         Err(QueryError::ImageTooLarge)
@@ -607,8 +615,9 @@ fn the_pointwise_budgets_count_the_trunk_heads_runs_not_the_address_named() {
     );
     assert_eq!(snap.world().m5().content_runs(&pdoc()).len(), 1);
     for d in [pdoc(), phead()] {
-        assert!(
-            reads.project(&e1, FROM, &d).is_ok(),
+        assert_eq!(
+            reads.project(&e1, FROM, &d).err(),
+            None,
             "{d:?}: MAX content runs"
         );
         assert_eq!(
@@ -625,8 +634,9 @@ fn the_pointwise_budgets_count_the_trunk_heads_runs_not_the_address_named() {
     assert_eq!(snap.world().m5().link_runs(&phead()).len(), 1);
     assert_eq!(snap.world().m5().link_runs(&pdoc()).len(), 0);
     for d in [pdoc(), phead()] {
-        assert!(
-            reads.project(&e1, FROM, &d).is_ok(),
+        assert_eq!(
+            reads.project(&e1, FROM, &d).err(),
+            None,
             "{d:?}: content alone, still MAX"
         );
         assert_eq!(

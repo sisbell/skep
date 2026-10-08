@@ -56,7 +56,9 @@ fn region_family_gates_doc_then_region_then_defines_empty() {
     // two requests that would have been BadRegion — a non-s_C subspace and a
     // zero count.
     let built = content_vspan(&vp(1, 1), &n(1)).expect("s_C, count ≥ 1");
-    assert!(reads.count_v(&doc1(), &[built]).is_ok());
+    reads
+        .count_v(&doc1(), &[built])
+        .expect("the gate accepts what content_vspan builds");
     assert_eq!(content_vspan(&vp(2, 1), &n(1)), None);
     assert_eq!(content_vspan(&vp(1, 1), &n(0)), None);
     // The rule is "the content subspace", not "anything but the link
@@ -82,7 +84,11 @@ fn region_family_gates_doc_then_region_then_defines_empty() {
                     vspan(subspace, 1, count),
                     "content_vspan builds `count` positions from `at`"
                 );
-                assert!(reads.count_v(&doc1(), &[span]).is_ok());
+                assert_eq!(
+                    reads.count_v(&doc1(), &[span]).err(),
+                    None,
+                    "the gate accepts what content_vspan builds, count {count}"
+                );
             } else if count >= 1 {
                 assert_eq!(
                     reads.count_v(&doc1(), &[vspan(subspace, 1, count)]),

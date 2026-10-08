@@ -47,3 +47,11 @@ serde.workspace = true
 # Lets the test world drive M5's INSERT so the discovery queries have arranged
 # content to resolve (the skep-links test-scaffold precedent).
 skep-content = { path = "../skep-content" }
+
+[lints.clippy]
+# A test that asserts a result succeeded unwraps it — `expect`, or `err()`
+# compared with `None` where the message names the case — so a failure prints
+# the refusal it got. This refuses the bare `assert!(r.is_ok())`, which prints
+# only the expression, in every target of the crate, and `deny` fails any
+# clippy run on one.
+assertions_on_result_states = "deny"

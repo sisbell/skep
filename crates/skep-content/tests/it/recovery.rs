@@ -96,15 +96,15 @@ fn the_slice_serializes_as_its_map_alone_in_tumbler_order() {
 }
 
 /// Decodes `bytes` as `T`, asserts the decode REFUSED them — an `Err`,
-/// neither a value nor a panic — and returns the refusal's message, for a
-/// caller that pins which door refused. A panic is how a reservation sized by
-/// a count the bytes do not carry shows itself when it overflows, and how a
-/// decode that takes what they hold on trust, through an `expect`, shows
+/// neither a decoded `T` nor a panic — and returns the refusal's message, for
+/// a caller that pins which door refused. A panic is how a reservation sized
+/// by a count the bytes do not carry shows itself when it overflows, and how
+/// a decode that takes what they hold on trust, through an `expect`, shows
 /// itself at all.
 fn assert_refused<T: DeserializeOwned>(what: &str, bytes: &[u8]) -> String {
     match std::panic::catch_unwind(|| bincode::deserialize::<T>(bytes)) {
         Ok(Err(refusal)) => refusal.to_string(),
-        Ok(Ok(_)) => panic!("{what}: decoded, though no value serializes as these bytes"),
+        Ok(Ok(_)) => panic!("{what}: decoded, though no slice or record serializes as these bytes"),
         Err(_) => panic!(
             "{what}: the decode panicked instead of refusing the bytes — a reservation sized by \
              a count they do not carry, or an `expect` that took what they hold on trust"
@@ -298,7 +298,7 @@ fn content_survives_durable_recovery_across_a_checkpoint() {
     assert_eq!(c.len(), 2);
     assert_eq!(c.value_at(a1.tumbler()).map(Val::as_bytes), Some(&b"alpha"[..]));
     assert_eq!(c.value_at(a2.tumbler()).map(Val::as_bytes), Some(&b"beta"[..]));
-    // The recovered dom(C) still feeds `stage_write`'s duplicate check.
+    // The recovered dom(C) still feeds `stage_write`'s already-stored check.
     drop(s);
     assert_eq!(
         rejected(write(&k, &a1, val(b"again"))),

@@ -35,25 +35,27 @@
 //!
 //! ## Invariants
 //!
-//! **By construction:** S0(a) domain-persistence and S1/C0 growth
-//! (insert-only fold, no removal op); S0(b) value-preservation (no modify
-//! op exists, and the fold never replaces a stored value — a record whose
-//! address already has a value stored leaves the slice as it was); S4
-//! origin-based identity (keyed by address, never by value — two equal
-//! values at two addresses are two entries; no value→address index); S5
-//! unrestricted sharing (no refcount, no cap — references live in M5);
-//! C-fin finiteness; and unconditional no-GC permanence (orphan content
-//! persists; M4 does not even know about references).
+//! **By construction:** S0(a) domain-persistence and S1 store monotonicity
+//! (ASN-0093 C0's append-only half; insert-only fold, no removal op); S0(b)
+//! value-preservation (no modify op exists, and the fold never replaces a
+//! stored value — a record whose address already has a value stored leaves
+//! the slice as it was); S4 origin-based identity (keyed by address, never
+//! by value — two equal values at two addresses are two entries; no
+//! value→address index); S5 unrestricted sharing (no refcount, no cap —
+//! references live in M5); C-fin finiteness; and unconditional no-GC
+//! permanence (orphan content persists; M4 does not even know about
+//! references).
 //!
 //! **At the doors:** every key is T4-valid (ASN-0093 StoreT4Validity) and a
 //! content-subspace element address (C1, L0 — M4's half of SD);
 //! [`ContentStore`] names each invariant's gate, the two decode paths
 //! included.
 //!
-//! **Diagnosed, not relied on:** an upstream duplicate. [`stage_write`]
-//! refuses an address already stored in the slice it is handed
-//! (`AlreadyStored`), so a duplicate mint becomes a typed rejection instead
-//! of a write the fold drops; its doc says which slice to hand it.
+//! **Diagnosed, not relied on:** a second write at one address.
+//! [`stage_write`] refuses an address already stored in the slice it is
+//! handed (`AlreadyStored`), so an address minted twice upstream becomes a
+//! typed rejection instead of a write the fold drops; its doc says which
+//! slice to hand it.
 //!
 //! ## Boundary — deliberately NOT owned here
 //!
@@ -138,12 +140,13 @@ pub use value::Val;
 /// IMPLEMENTORS OWE one fact the signature cannot carry: `content()` is the
 /// very slice the world's `WorldState::apply` folds this crate's records
 /// into, through [`ContentStore::apply_write`]. Two promises rest on it:
-/// [`stage_write`]'s duplicate check sees only the slice it is handed, so it
-/// refuses what the fold would drop only when `stg.working().content()` is
-/// that slice; and a reader's `snapshot.world().content()` holds every value
-/// the snapshot's placements resolve to, which M6's RETRIEVEV `expect`s
-/// (S3★). An implementor that answered any other `ContentStore` would void
-/// both, and nothing in this crate can check it.
+/// [`stage_write`]'s already-stored check sees only the slice it is handed,
+/// so it refuses what the fold would drop only when
+/// `stg.working().content()` is that slice; and a reader's
+/// `snapshot.world().content()` holds every value the snapshot's placements
+/// resolve to, which M6's RETRIEVEV `expect`s (S3★). An implementor that
+/// answered any other `ContentStore` would void both, and nothing in this
+/// crate can check it.
 pub trait HasContent {
     /// M4's slice of the world state.
     fn content(&self) -> &ContentStore;
@@ -152,15 +155,15 @@ pub trait HasContent {
 /// The auto traits M4's types promise without saying. `WorldState` is
 /// `Send + Sync + 'static`, so the engine's `impl WorldState for World` owes
 /// those bounds of [`ContentStore`], a field of its `World`, and of
-/// [`ContentWrite`], the payload of its `Record::Content`, through types no
-/// signature in this crate mentions; [`Val`] rides M10's `Request` across the
-/// daemon's workers; and [`ContentError`] travels inside M5's `InsertError`
-/// and `PublishError`. They are kept by what the private fields contain — the
-/// `im` map, the `Arc` under `Val` — so a field that revoked one (the
-/// `Rc`-backed `im-rc` for `im`, an `Rc` under `Val`) would compile here and
-/// fail a crate away, never naming the field. Asserted in the library rather
-/// than the suite, because that is the build a manifest change is made in,
-/// and it is this crate's manifest that names `im`.
+/// [`ContentWrite`], the record its `Record::Content` carries, through types
+/// no signature in this crate mentions; [`Val`] rides M10's `Request` across
+/// the daemon's workers; and [`ContentError`] travels inside M5's
+/// `InsertError` and `PublishError`. They are kept by what the private fields
+/// contain — the `im` map, the `Arc` under `Val` — so a field that revoked
+/// one (the `Rc`-backed `im-rc` for `im`, an `Rc` under `Val`) would compile
+/// here and fail a crate away, never naming the field. Asserted in the
+/// library rather than the suite, because that is the build a manifest change
+/// is made in, and it is this crate's manifest that names `im`.
 const _: fn() = || {
     fn owed<T: Send + Sync + 'static>() {}
     owed::<ContentStore>(); // the `WorldState` bound reaches this through the engine

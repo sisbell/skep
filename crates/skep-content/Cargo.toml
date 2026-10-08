@@ -48,8 +48,8 @@ skep-namespace = { path = "../skep-namespace", optional = true }
 # `cargo test` or workspace run, no flag added. A build that compiles no test
 # never reads this table.
 skep-content = { path = ".", features = ["test-hooks"] }
-# The suite drives M2 itself and takes M3's content key for the composite
-# test, so it names both crates whatever the library's features.
+# The suite drives M2 itself and takes M3's content lock key for the
+# composite test, so it names both crates whatever the library's features.
 skep-kernel = { path = "../skep-kernel" }
 skep-namespace = { path = "../skep-namespace" }
 # bincode is M2's actual wire format — the round-trip tests exercise the real

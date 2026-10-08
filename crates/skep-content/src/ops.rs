@@ -27,7 +27,7 @@ use crate::HasContent;
 /// `#[doc(hidden)]` as well, so even a `test-hooks` build's docs send a
 /// reader to M5's composite.
 ///
-/// Locks the per-(document, content-subspace) namespace key — the SAME key
+/// Locks the per-(document, content-subspace) lock key — the SAME key
 /// M3's content allocation and M5's placement composite hold, so alloc,
 /// write, and placement serialize in one scope. `home` is derived by M1's
 /// [`document_of`]; a content address has zeros = 3, so it is always `Some`,

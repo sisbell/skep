@@ -11,20 +11,24 @@ use serde::{Deserialize, Serialize};
 /// refcounts. M4 is **value-oblivious**: it never inspects these bytes, and
 /// it stores nothing beside them — no tag, no discriminator. ASN-0036 leaves
 /// `Val`'s typing open (its first open question), and the M4 design settles
-/// M4's side of it untyped (Conflicts #5). The one kind M4 answers for is the
-/// store's own: every value here is content, stored at an address whose
-/// subspace identifier `E(a)₁` is `s_C` (ASN-0093 L0, read by M1's
+/// M4's side of it untyped (Conflicts #5). The one distinction M4 answers for
+/// is the store's own: every value here is content, stored at an address
+/// whose subspace identifier `E(a)₁` is `s_C` (ASN-0093 L0, read by M1's
 /// `Address::subspace`; [`ContentStore`](crate::ContentStore)'s second key
 /// invariant), and link values are M7's. What the bytes say of themselves is
-/// their reader's to parse, never M4's: a record body names its own kind in a
-/// `type` member (DOCTRINE D13), read by the parser that owns that kind.
+/// their reader's to parse, never M4's: a value that is the body of a
+/// DOCTRINE D13 record — the doctrine's record, not this crate's journal
+/// record [`ContentWrite`](crate::ContentWrite) — is one JSON object naming
+/// that record's kind in a `type` member, read by the parser that owns that
+/// kind.
 ///
 /// Serde rides serde's `rc` feature for the `Arc<[u8]>` impls (an M4-local
 /// dependency knob). A value serializes as a SEQUENCE of `u8` — serde has no
 /// byte specialization for `[u8]` — which bincode, M2's journal and
-/// checkpoint format, lays down as the length then the raw bytes; a transcode
-/// to a value tree, like the engine's world dump, sees one integer per byte
-/// (skep-engine's `a_content_byte_costs_a_whole_tree_node` pins that).
+/// checkpoint format, lays down as the length then the raw bytes; the
+/// engine's world dump, a transcode into its `SerdeTree`, sees one integer
+/// node per byte (skep-engine's `a_content_byte_costs_a_whole_tree_node` pins
+/// that).
 ///
 /// A value's bytes never render into a log: its `Debug` is its LENGTH, the
 /// redaction M2's `Attestation` gives a signature, so a type holding a `Val`

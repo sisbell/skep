@@ -1,5 +1,5 @@
-//! The slice and its write step, with no kernel: what the duplicate check
-//! admits and rejects; that the fold is pure and insert-only and never
+//! The slice and its write step, with no kernel: what the already-stored
+//! check admits and rejects; that the fold is pure and insert-only and never
 //! replaces a stored value — it leaves the whole slice as it was, and panics
 //! on the attempt in debug builds; that a point query matches its address
 //! exactly, never a prefix or an extension; that identity is by address,
@@ -35,7 +35,7 @@ fn stage_write_admits_a_fresh_address_and_commits_nothing() {
 
 #[test]
 fn stage_write_rejects_an_address_already_stored() {
-    // The duplicate check (§Invariants): an address with a value already
+    // The already-stored check (§Invariants): an address with a value already
     // stored is a typed rejection.
     let c = ContentStore::default();
     let a1 = ca(1);
@@ -44,7 +44,10 @@ fn stage_write_rejects_an_address_already_stored() {
     assert_eq!(err, ContentError::AlreadyStored(a1.tumbler().clone()));
     // The message names the address dotted, as M1 renders one, and leaves
     // "rejected" to whichever wrapper carries it.
-    assert_eq!(err.to_string(), "a value is already stored at 1.0.1.0.1.0.1.1 (S0 no-overwrite)");
+    assert_eq!(
+        err.to_string(),
+        "a value is already stored at 1.0.1.0.1.0.1.1 (S0 content immutability)"
+    );
     // The check is per-address: a different fresh address is still admitted.
     assert!(stage_write(&c, &ca(2), val(b"second")).is_ok());
 }
@@ -79,11 +82,12 @@ fn apply_write_is_a_pure_insert_only_fold() {
 )]
 fn apply_write_never_replaces_a_stored_value_and_panics_on_the_attempt_in_debug() {
     // §A/§C: S0(b) is the fold's own — the stored value wins. Staging against
-    // the slice the record is folded into only decides whether a duplicate is
-    // refused or dropped: two records for one address, both staged against
-    // the unchanged c0, each pass the duplicate check; folding the second
-    // panics in a debug build and, in release, leaves the slice as it was —
-    // every entry, not only the one it collided with, so c0 holds others.
+    // the slice the record is folded into only decides whether a second
+    // write at one address is refused or dropped: two records for one
+    // address, both staged against the unchanged c0, each pass the
+    // already-stored check; folding the second panics in a debug build and,
+    // in release, leaves the slice as it was — every entry, not only the one
+    // it collided with, so c0 holds others.
     let mut c0 = ContentStore::default();
     for ordinal in 2..=6 {
         c0 = c0.apply_write(&stage_write(&c0, &ca(ordinal), val(b"other")).expect("fresh"));
@@ -332,11 +336,11 @@ mod routing {
     fn stage_write_asserts_routing_before_it_checks_what_is_stored() {
         // §C: the routing assertion runs BEFORE the already-stored check, so a
         // mis-routed address panics on its own terms even where a value is
-        // stored at it — never an `AlreadyStored`, which reads as a duplicate
-        // mint and sends its reader to M3. A debug build cannot stage such a
-        // value, so it arrives as M2's replay hands one over: a record decoded
-        // from bytes, as a release build — its assertion compiled out —
-        // journaled it.
+        // stored at it — never an `AlreadyStored`, which reads as an address
+        // minted twice and sends its reader to M3. A debug build cannot stage
+        // such a value, so it arrives as M2's replay hands one over: a record
+        // decoded from bytes, as a release build — its assertion compiled
+        // out — journaled it.
         let link_elem = a(&[1, 0, 1, 0, 1, 0, 2, 1]); // subspace s_L = 2
         let replayed: ContentWrite = bincode::deserialize(
             &bincode::serialize(&(link_elem.tumbler(), b"x".to_vec())).expect("pair serializes"),

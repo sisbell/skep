@@ -240,8 +240,8 @@ impl ContentStore {
 }
 
 /// M4's sole authoritative journal delta (§A). Carries the FLAT [`Tumbler`]
-/// (M1: the Tumbler is the storage/journal key; `Address` is the
-/// past-the-door value).
+/// (M1: the flat tumbler is the storage/journal key form; an `Address` is a
+/// tumbler admitted through M1's `Address` door, `validate`).
 ///
 /// Its fields are private, so [`stage_write`] is its one producer; serde's
 /// `Deserialize` — public, as M2's `Record: DeserializeOwned` bound requires —
@@ -287,17 +287,18 @@ fn through_address<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<
 /// predicate-def creation) calls it and lifts the result with
 /// `stg.push(rec.into())`.
 ///
-/// Refuses a duplicate: `Err(AlreadyStored(addr.tumbler()))` if `addr` is
-/// stored in `c`. M3 mints fresh and M5 writes once, so this never fires in
-/// correct operation; when an upstream bug does hand it a duplicate, the
-/// caller gets a typed rejection to refuse its transaction with, instead of
-/// a write the fold would silently drop, leaving the caller with an address
-/// that holds another write's value. It sees only `c`, so hand it the slice
-/// the record will be folded into — `stg.working().content()`, read after
-/// every `push`; staged against an older slice, a duplicate gets through and
-/// the fold keeps the stored value (a debug build panics there). Otherwise
-/// the address is TRUSTED: minted and validated upstream (M3), T4-valid by
-/// M1's standing invariant.
+/// Refuses a second write at one address: `Err(AlreadyStored(addr.tumbler()))`
+/// if `addr` is stored in `c`. M3 mints fresh and M5 writes once, so this
+/// never fires in correct operation; when an upstream bug does hand it an
+/// address already stored, the caller gets a typed rejection to refuse its
+/// transaction with, instead of a write the fold would silently drop, leaving
+/// the caller with an address that holds another write's value. It sees only
+/// `c`, so hand it the slice the record will be folded into —
+/// `stg.working().content()`, read after every `push`; staged against an
+/// older slice, a second write at one address gets through and the fold keeps
+/// the stored value (a debug build panics there). Otherwise the address is
+/// TRUSTED: minted and validated upstream (M3), T4-valid by M1's standing
+/// invariant.
 ///
 /// In debug builds a routing assertion (`level == Element ∧ subspace ==
 /// s_C`; Open build decision #4) runs BEFORE the already-stored check, so a

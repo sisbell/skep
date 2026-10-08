@@ -1,12 +1,12 @@
 //! The standalone `write` — M2 contract 3's transact-wrapped form,
 //! `test-hooks` builds only — and the composite shape production uses
-//! instead: a write commits and reads back through a snapshot, a double
-//! write is refused verbatim with the first value kept, and `stage_write`
-//! composes into one transaction off the working slice. And the routing
-//! assertion at `write`'s door: a debug build panics on a non-content
-//! address before key derivation, a release build writes one that has a
-//! document as given, and either door's panic is located at the line that
-//! passed the address in.
+//! instead: a write commits and reads back through a snapshot, a second
+//! write at one address is refused verbatim with the first value kept, and
+//! `stage_write` composes into one transaction off the working slice. And
+//! the routing assertion at `write`'s door: a debug build panics on a
+//! non-content address before key derivation, a release build writes one
+//! that has a document as given, and either door's panic is located at the
+//! line that passed the address in.
 
 use skep_content::{stage_write, write, ContentError, ContentStore, HasContent, Val};
 use skep_namespace::M3State;
@@ -32,7 +32,7 @@ fn standalone_write_commits_and_reads_back_through_a_snapshot() {
 }
 
 #[test]
-fn standalone_write_rejects_a_double_write_and_preserves_the_first_value() {
+fn standalone_write_rejects_a_second_write_at_one_address_and_preserves_the_first_value() {
     // S0(b) through the composite: the second write is a clean typed
     // rejection (surfaced verbatim per M2), nothing committed, the stored
     // value untouched.
@@ -53,8 +53,8 @@ fn standalone_write_rejects_a_double_write_and_preserves_the_first_value() {
 fn stage_write_composes_into_one_transaction_off_the_working_slice() {
     // The M5-shape composite (§Dependencies & seams): m records staged via
     // stage_write against stg.working().content() in ONE transact, committed
-    // under one marker; the working slice reflects each push, so an
-    // intra-composite double-stage is rejected.
+    // under one marker; the working slice reflects each push, so a second
+    // stage of one address within the composite is rejected.
     let k = mem_kernel();
     let d = a(&[1, 0, 1, 0, 1]);
     let a1 = ca(1);
@@ -65,7 +65,7 @@ fn stage_write_composes_into_one_transaction_off_the_working_slice() {
             stg.push(r1.into());
             // working() reflects the push: re-staging a1 here is rejected.
             assert!(matches!(
-                stage_write(stg.working().content(), &a1, val(b"dup")),
+                stage_write(stg.working().content(), &a1, val(b"again")),
                 Err(ContentError::AlreadyStored(t)) if t == *a1.tumbler()
             ));
             let r2 = stage_write(stg.working().content(), &a2, val(b"two"))?;

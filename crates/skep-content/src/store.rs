@@ -125,6 +125,15 @@ fn in_tumbler_order<S: serde::Serializer>(
 /// to one number however they are spelled, so two spellings of one address
 /// are one address. The refusal names no address: a key can be as long as the
 /// body that carries it, and M2 keeps a refused base's reason.
+///
+/// REFUSAL PRECEDENCE — several of these can hold of one body, and the first
+/// fault in reading order speaks. Within an entry, the key is read first and
+/// refused at M1's `Address` door, then the value, and only then is the key
+/// checked against the entries before it; across entries, the earlier
+/// entry's fault speaks; and a declared count the body does not carry is no
+/// fault of its own — the body is refused where it runs out, after any fault
+/// the entries before that point hold. So the reason M2 keeps for a refused
+/// base names the earliest fault the body holds.
 fn entry_by_entry<'de, D: serde::Deserializer<'de>>(
     deserializer: D,
 ) -> Result<im::OrdMap<Tumbler, Val>, D::Error> {
@@ -210,16 +219,17 @@ impl ContentStore {
     ///
     /// What a `None` MEANS depends on where `a` came from, which the caller
     /// knows and M4 does not; M4 promises only that a stored value is in
-    /// every later slice (S0). An address an arrangement placed — read off a
-    /// V→I resolve against the same `Snapshot` (S3★, kept on M5's write
-    /// path) — and a registered predicate-def's start (M9's residence gate
-    /// admitted it) always yield `Some`, so a `None` for either is an
-    /// internal invariant violation to report or halt on, never a
-    /// domain-level "not found". An address a request or an endset names
-    /// verbatim carries no such promise — it may be unallocated, a ghost
-    /// element, or a link — and the caller holding it decides what that
-    /// absence means to it: a refusal of its own, an absence it reports, or
-    /// an address it passes over.
+    /// every later slice (S0) — of a world's `content()` as well as of the
+    /// fold's own results, by [`HasContent`](crate::HasContent)'s implementor
+    /// obligation. An address an arrangement placed — read off a V→I resolve
+    /// against the same `Snapshot` (S3★, kept on M5's write path) — and a
+    /// registered predicate-def's start (M9's residence gate admitted it)
+    /// always yield `Some`, so a `None` for either is an internal invariant
+    /// violation to report or halt on, never a domain-level "not found". An
+    /// address a request or an endset names verbatim carries no such promise
+    /// — it may be unallocated, a ghost element, or a link — and the caller
+    /// holding it decides what that absence means to it: a refusal of its
+    /// own, an absence it reports, or an address it passes over.
     pub fn value_at(&self, a: &Tumbler) -> Option<&Val> {
         self.map.get(a)
     }
@@ -312,10 +322,13 @@ impl<'a> IntoIterator for &'a ContentStore {
 /// is M2's replay of records already staged. That decode takes `addr`
 /// through M1's `Address` door (`through_address`), so a replayed record's
 /// key is T4-valid as a staged one's is ([`ContentStore`]'s key invariants).
-/// Read access is full: [`addr`](ContentWrite::addr)/[`val`](ContentWrite::val),
-/// and its derived `Debug`, which the engine's `Record: Debug` renders for
-/// this variant and which shows the value as its length, never a byte. The
-/// engine only `From`-lifts and folds a record; it never builds one.
+/// It reads the address before the value, so a frame whose address and value
+/// both fail is refused for its address, and that is the account M2's
+/// `Corruption` carries for the frame. Read access is full:
+/// [`addr`](ContentWrite::addr)/[`val`](ContentWrite::val), and its derived
+/// `Debug`, which the engine's `Record: Debug` renders for this variant and
+/// which shows the value as its length, never a byte. The engine only
+/// `From`-lifts and folds a record; it never builds one.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ContentWrite {
     #[serde(deserialize_with = "through_address")]

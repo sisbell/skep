@@ -45,7 +45,9 @@
 //! value→address index); S5 unrestricted sharing (no refcount, no cap —
 //! references live in M5); C-fin finiteness; and unconditional no-GC
 //! permanence (orphan content persists; M4 does not even know about
-//! references).
+//! references). These hold of every slice M4's own operations produce; a
+//! world's slice keeps them across its commits and restarts by
+//! [`HasContent`]'s implementor obligation.
 //!
 //! **At the doors:** every key is T4-valid (ASN-0093 StoreT4Validity) and a
 //! content-subspace element address (C1, L0 — M4's half of SD);
@@ -140,14 +142,21 @@ pub use value::Val;
 ///
 /// IMPLEMENTORS OWE one fact the signature cannot carry: `content()` is the
 /// very slice the world's `WorldState::apply` folds this crate's records
-/// into, through [`ContentStore::apply_write`]. Two promises rest on it:
+/// into, through [`ContentStore::apply_write`], once per record — and that
+/// fold is the only thing that moves it. Every other record's fold carries
+/// the slice through unchanged; a checkpoint carries it through this crate's
+/// own serde form, neither skipped nor defaulted; and `rebuild_derived`
+/// hands it back as it was decoded. Three promises rest on it:
 /// [`stage_write`]'s already-stored check sees only the slice it is handed,
 /// so it refuses what the fold would drop only when
-/// `stg.working().content()` is that slice; and a reader's
-/// `snapshot.world().content()` holds every value the snapshot's placements
-/// resolve to, which M6's RETRIEVEV `expect`s (S3★). An implementor that
-/// answered any other `ContentStore` would void both, and nothing in this
-/// crate can check it.
+/// `stg.working().content()` is that slice; a value stored in one
+/// `content()` is in every later one, unchanged (S0) — the fold keeps that
+/// only for a slice nothing else replaces, and M5's publish shot `expect`s
+/// it of the working slice; and a reader's `snapshot.world().content()`
+/// holds every value the snapshot's placements resolve to, which M6's
+/// RETRIEVEV `expect`s (S3★). An implementor that answered any other
+/// `ContentStore`, or moved this one by any other path, would void all
+/// three, and nothing in this crate can check it.
 pub trait HasContent {
     /// M4's slice of the world state.
     fn content(&self) -> &ContentStore;

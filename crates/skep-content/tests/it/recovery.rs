@@ -4,9 +4,10 @@
 //! slice's decode takes its entries in every order they can arrive, and
 //! refuses a body naming one address twice, however its digits spell it;
 //! that neither decode trusts a count its bytes do not carry or admits a key
-//! that is no tumbler, or no T4-valid address; and that both admit every
+//! that is no tumbler, or no T4-valid address; that both admit every
 //! T4-valid address, whatever its routing, since a release build stages each
-//! as given.
+//! as given; and that a decode holding several faults is refused for the
+//! first it reads.
 
 use serde::de::DeserializeOwned;
 use skep_address::{content_subspace, validate, Level, Nat, T4Clause, Tumbler};
@@ -390,6 +391,76 @@ fn the_slice_refuses_a_body_naming_one_address_twice() {
             "a slice naming ca(1) twice, {how}, was refused for another reason"
         );
     }
+}
+
+#[test]
+fn the_record_and_the_slice_refuse_for_the_first_fault_they_read() {
+    // store.rs (`entry_by_entry`'s REFUSAL PRECEDENCE, and `ContentWrite`):
+    // where several refusals hold of one body, the first fault in reading
+    // order speaks, and that is the account M2 keeps — a refused base's
+    // reason, a refused frame's `Corruption`. So each body below carries two
+    // faults and is refused for the one it reads first: a key breaking T4
+    // and a second naming of ca(1), in each order; a second naming of ca(1)
+    // whose value counts more bytes than follow, refused for the value,
+    // because the key is checked against the entries before it only once its
+    // value is read; a key breaking T4 under a count no body could carry,
+    // refused for the key, because a count is no fault until the body runs
+    // out; and a record whose address breaks T4 and whose value counts more
+    // bytes than follow, refused for the address, which it reads first.
+    let raw = |key: &[u32]| -> Vec<Nat> { key.iter().map(|&c| Nat::from(c)).collect() };
+    let entry = |key: &[u32]| (raw(key), b"x".to_vec());
+    let slice = |keys: &[&[u32]]| {
+        bincode::serialize(&keys.iter().map(|&key| entry(key)).collect::<Vec<_>>())
+            .expect("the raw slice serializes")
+    };
+    let ca1: &[u32] = &[1, 0, 1, 0, 1, 0, 1, 1];
+    let no_address: &[u32] = &[1, 0, 0, 1];
+    let past_its_bytes = u64::MAX.to_le_bytes();
+    let door_refusal = validate(t(no_address)).expect_err("the key breaks T4").to_string();
+    let named_twice = "a content address named twice in one slice".to_owned();
+    let value_refusal = bincode::deserialize::<Val>(&past_its_bytes)
+        .expect_err("a value counting more bytes than follow is refused")
+        .to_string();
+    // Two entries counted: ca(1) whole, then ca(1) again, its value counting
+    // more bytes than follow.
+    let mut overlong_value = 2u64.to_le_bytes().to_vec();
+    overlong_value.extend(bincode::serialize(&entry(ca1)).expect("the raw entry serializes"));
+    overlong_value.extend(bincode::serialize(&raw(ca1)).expect("the raw key serializes"));
+    overlong_value.extend_from_slice(&past_its_bytes);
+    // ca(1), then a key breaking T4, under a count no body could carry.
+    let mut overlong_count = slice(&[ca1, no_address]);
+    overlong_count[..8].copy_from_slice(&past_its_bytes);
+    for (what, body, speaks) in [
+        (
+            "a key breaking T4 before a second naming of ca(1)",
+            slice(&[ca1, no_address, ca1]),
+            &door_refusal,
+        ),
+        (
+            "a second naming of ca(1) before a key breaking T4",
+            slice(&[ca1, ca1, no_address]),
+            &named_twice,
+        ),
+        (
+            "a second naming of ca(1) whose value counts more bytes than follow",
+            overlong_value,
+            &value_refusal,
+        ),
+        ("a key breaking T4 under a count no body could carry", overlong_count, &door_refusal),
+    ] {
+        assert_eq!(
+            &assert_refused::<ContentStore>(&format!("a slice with {what}"), &body),
+            speaks,
+            "a slice with {what} was refused for a fault it reads later"
+        );
+    }
+    let mut record = bincode::serialize(&raw(no_address)).expect("the raw address serializes");
+    record.extend_from_slice(&past_its_bytes);
+    assert_eq!(
+        assert_refused::<ContentWrite>("a record whose address and value both fail", &record),
+        door_refusal,
+        "a record whose address and value both fail was refused for its value"
+    );
 }
 
 // ---- M2-driven recovery across a checkpoint ----

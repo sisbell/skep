@@ -1,10 +1,11 @@
 //! The slice and its write step, with no kernel: what the already-stored
-//! check admits and rejects; that the fold is pure and insert-only, keeps
-//! every stored address in the memory it had, and never replaces a stored
-//! value — it leaves the whole slice as it was, and panics on the attempt in
-//! debug builds; that a point query matches its address exactly, never a
-//! prefix or an extension; that identity is by address, never by value, and
-//! `Val` implements no `Hash` (S4); that a slice's equality is its contents',
+//! check admits and rejects, and that staging keeps the address it is handed
+//! in the memory it had; that the fold is pure and insert-only, keeps every
+//! stored address in the memory it had, and never replaces a stored value —
+//! it leaves the whole slice as it was, and panics on the attempt in debug
+//! builds; that a point query matches its address exactly, never a prefix or
+//! an extension; that identity is by address, never by value, and `Val`
+//! implements no `Hash` (S4); that a slice's equality is its contents',
 //! address and value each counting; that the one enumeration visits every
 //! entry once, through `iter` and through a `for` loop over the slice alike,
 //! as a walk a caller can name, which knows exactly what remains at every
@@ -47,6 +48,13 @@ macro_rules! implements {
     }};
 }
 
+/// The memory an address's components occupy, named by its first. A move,
+/// or a second view through the `Arc` that holds it, leaves the answer as it
+/// was; a clone rebuilds the components elsewhere and changes it.
+fn component_memory(addr: &Address) -> *const Nat {
+    std::ptr::from_ref(addr.tumbler().iter().next().expect("a tumbler is nonempty"))
+}
+
 // ---- §C stage_write: the pure step ----
 
 #[test]
@@ -54,7 +62,7 @@ fn stage_write_admits_a_fresh_address_and_commits_nothing() {
     // §C: reads off a supplied slice, returns the record, commits nothing.
     let c = ContentStore::default();
     let a1 = ca(1);
-    let rec = stage_write(&c, &a1, val(b"alpha")).expect("fresh address is admitted");
+    let rec = stage_write(&c, a1.clone(), val(b"alpha")).expect("fresh address is admitted");
     // Read-public accessors report the staged pair (§A).
     assert_eq!(rec.addr(), &a1);
     assert_eq!(rec.val().as_bytes(), b"alpha");
@@ -62,7 +70,24 @@ fn stage_write_admits_a_fresh_address_and_commits_nothing() {
     // of the same address against the SAME slice is admitted again — folding
     // between stages (working()) is the caller's obligation.
     assert!(!c.contains(a1.tumbler()));
-    assert!(stage_write(&c, &a1, val(b"alpha")).is_ok());
+    assert!(stage_write(&c, a1, val(b"alpha")).is_ok());
+}
+
+#[test]
+fn stage_write_keeps_the_address_it_is_handed_in_the_memory_it_had() {
+    // store.rs (`stage_write`): the record keeps the address its caller hands
+    // over, moved in whole and never cloned component by component — a clone,
+    // where one is needed, is the caller's to make at its own call
+    // (C-CALLER-CONTROL). So the address the record lends occupies the very
+    // memory the one handed in did.
+    let addr = ca(1);
+    let handed = component_memory(&addr);
+    let rec = stage_write(&ContentStore::default(), addr, val(b"v")).expect("fresh");
+    assert!(
+        std::ptr::eq(handed, component_memory(rec.addr())),
+        "stage_write rebuilt the address it was handed, {}, in new memory",
+        rec.addr()
+    );
 }
 
 #[test]
@@ -71,8 +96,8 @@ fn stage_write_rejects_an_address_already_stored() {
     // stored is a typed rejection.
     let c = ContentStore::default();
     let a1 = ca(1);
-    let c = c.apply_write(&stage_write(&c, &a1, val(b"first")).expect("fresh"));
-    let err = stage_write(&c, &a1, val(b"second")).unwrap_err();
+    let c = c.apply_write(&stage_write(&c, a1.clone(), val(b"first")).expect("fresh"));
+    let err = stage_write(&c, a1.clone(), val(b"second")).unwrap_err();
     assert_eq!(err, ContentError::AlreadyStored(a1.tumbler().clone()));
     // The message names the address dotted, as M1 renders one, and leaves
     // "rejected" to whichever wrapper carries it.
@@ -81,7 +106,7 @@ fn stage_write_rejects_an_address_already_stored() {
         "a value is already stored at 1.0.1.0.1.0.1.1 (S0 content immutability)"
     );
     // The check is per-address: a different fresh address is still admitted.
-    assert!(stage_write(&c, &ca(2), val(b"second")).is_ok());
+    assert!(stage_write(&c, ca(2), val(b"second")).is_ok());
 }
 
 // ---- §A apply_write: the fold ----
@@ -94,7 +119,7 @@ fn apply_write_is_a_pure_insert_only_fold() {
     assert!(c0.is_empty());
     assert_eq!(c0.len(), 0);
     let a1 = ca(1);
-    let rec = stage_write(&c0, &a1, val(b"alpha")).expect("fresh");
+    let rec = stage_write(&c0, a1.clone(), val(b"alpha")).expect("fresh");
     let c1 = c0.apply_write(&rec);
     // The prior slice still exists unchanged (persistent structural sharing —
     // this is what lets snapshots pin old Worlds).
@@ -119,16 +144,13 @@ fn apply_write_keeps_every_stored_address_in_the_memory_it_had() {
     // stores keeps, in the new slice, the very memory its components had.
     // 257 entries put the tree past one node, so the fold copies an inner
     // node as well as a leaf.
-    let component_memory = |addr: &Address| -> *const Nat {
-        std::ptr::from_ref(addr.tumbler().iter().next().expect("a tumbler is nonempty"))
-    };
     let mut c0 = ContentStore::default();
     for ordinal in 1..=257u32 {
-        c0 = c0.apply_write(&stage_write(&c0, &ca(ordinal), val(b"v")).expect("fresh"));
+        c0 = c0.apply_write(&stage_write(&c0, ca(ordinal), val(b"v")).expect("fresh"));
     }
     let stored: std::collections::BTreeMap<&Address, *const Nat> =
         c0.iter().map(|(addr, _)| (addr, component_memory(addr))).collect();
-    let c1 = c0.apply_write(&stage_write(&c0, &ca(258), val(b"v")).expect("fresh"));
+    let c1 = c0.apply_write(&stage_write(&c0, ca(258), val(b"v")).expect("fresh"));
     let mut kept = 0;
     for (addr, _) in &c1 {
         if let Some(&before) = stored.get(addr) {
@@ -157,11 +179,11 @@ fn apply_write_never_replaces_a_stored_value_and_panics_on_the_attempt_in_debug(
     // it collided with, so c0 holds others.
     let mut c0 = ContentStore::default();
     for ordinal in 2..=6 {
-        c0 = c0.apply_write(&stage_write(&c0, &ca(ordinal), val(b"other")).expect("fresh"));
+        c0 = c0.apply_write(&stage_write(&c0, ca(ordinal), val(b"other")).expect("fresh"));
     }
     let a1 = ca(1);
-    let first = stage_write(&c0, &a1, val(b"first")).expect("fresh in c0");
-    let second = stage_write(&c0, &a1, val(b"second")).expect("still fresh in c0");
+    let first = stage_write(&c0, a1.clone(), val(b"first")).expect("fresh in c0");
+    let second = stage_write(&c0, a1.clone(), val(b"second")).expect("still fresh in c0");
     let c1 = c0.apply_write(&first);
     let c2 = c1.apply_write(&second);
     assert_eq!(c2, c1, "a record for a stored address changed the slice it was folded into");
@@ -181,7 +203,7 @@ fn point_queries_report_content_presence_only() {
     let a2 = ca(2);
     assert!(!c.contains(a1.tumbler()));
     assert!(c.value_at(a1.tumbler()).is_none());
-    let c = c.apply_write(&stage_write(&c, &a1, val(b"alpha")).expect("fresh"));
+    let c = c.apply_write(&stage_write(&c, a1.clone(), val(b"alpha")).expect("fresh"));
     assert!(c.contains(a1.tumbler()));
     assert!(!c.contains(a2.tumbler()));
     assert!(c.value_at(a2.tumbler()).is_none());
@@ -196,7 +218,7 @@ fn point_queries_match_the_stored_address_exactly_never_a_prefix_or_an_extension
     // false/None: content is stored at none of them.
     let stored = ca(1);
     let c = ContentStore::default().apply_write(
-        &stage_write(&ContentStore::default(), &stored, val(b"alpha")).expect("fresh"),
+        &stage_write(&ContentStore::default(), stored.clone(), val(b"alpha")).expect("fresh"),
     );
     assert!(c.contains(stored.tumbler()));
     for (what, near) in [
@@ -217,8 +239,8 @@ fn identity_is_by_address_never_by_value() {
     let c = ContentStore::default();
     let a1 = ca(1);
     let a2 = ca(2);
-    let c = c.apply_write(&stage_write(&c, &a1, val(b"same bytes")).expect("fresh"));
-    let c = c.apply_write(&stage_write(&c, &a2, val(b"same bytes")).expect("fresh"));
+    let c = c.apply_write(&stage_write(&c, a1.clone(), val(b"same bytes")).expect("fresh"));
+    let c = c.apply_write(&stage_write(&c, a2.clone(), val(b"same bytes")).expect("fresh"));
     assert_eq!(c.len(), 2);
     assert_eq!(c.value_at(a1.tumbler()).map(Val::as_bytes), Some(&b"same bytes"[..]));
     assert_eq!(c.value_at(a2.tumbler()).map(Val::as_bytes), Some(&b"same bytes"[..]));
@@ -231,14 +253,14 @@ fn slices_are_equal_when_they_store_the_same_values_at_the_same_addresses() {
     // its value. Each half counts on its own: one address holding two values,
     // and one value at two addresses, are two records and two slices.
     let c0 = ContentStore::default();
-    let r1 = stage_write(&c0, &ca(1), val(b"one")).expect("fresh");
-    let r2 = stage_write(&c0, &ca(2), val(b"two")).expect("fresh");
+    let r1 = stage_write(&c0, ca(1), val(b"one")).expect("fresh");
+    let r2 = stage_write(&c0, ca(2), val(b"two")).expect("fresh");
     assert_eq!(c0.apply_write(&r1).apply_write(&r2), c0.apply_write(&r2).apply_write(&r1));
     assert_ne!(c0.apply_write(&r1), c0.apply_write(&r2));
-    let other = stage_write(&c0, &ca(1), val(b"uno")).expect("fresh");
+    let other = stage_write(&c0, ca(1), val(b"uno")).expect("fresh");
     assert_ne!(r1, other, "one address, two values: two records");
     assert_ne!(c0.apply_write(&r1), c0.apply_write(&other));
-    let elsewhere = stage_write(&c0, &ca(2), val(b"one")).expect("fresh");
+    let elsewhere = stage_write(&c0, ca(2), val(b"one")).expect("fresh");
     assert_ne!(r1, elsewhere, "one value at two addresses: two records");
     assert_ne!(
         c0.apply_write(&r1),
@@ -265,10 +287,10 @@ fn iter_visits_every_entry_of_a_pinned_slice_exactly_once() {
     let n = 257u32; // past one B-tree node, so the walk crosses levels
     for ordinal in 1..=n {
         let rec =
-            stage_write(&c, &ca(ordinal), val(format!("v{ordinal}").as_bytes())).expect("fresh");
+            stage_write(&c, ca(ordinal), val(format!("v{ordinal}").as_bytes())).expect("fresh");
         c = c.apply_write(&rec);
     }
-    let later = c.apply_write(&stage_write(&c, &ca(n + 1), val(b"later")).expect("fresh"));
+    let later = c.apply_write(&stage_write(&c, ca(n + 1), val(b"later")).expect("fresh"));
     let walk = c.iter();
     assert_eq!(walk.len(), n as usize, "exact-size: the slice's count");
     let mut seen = std::collections::BTreeSet::new();
@@ -310,7 +332,7 @@ fn iter_lends_a_named_walk_that_knows_its_length_and_shows_no_entry() {
         walk.len()
     }
     let c0 = ContentStore::default();
-    let c = c0.apply_write(&stage_write(&c0, &ca(1), val(b"secret")).expect("fresh"));
+    let c = c0.apply_write(&stage_write(&c0, ca(1), val(b"secret")).expect("fresh"));
     let walk: Iter<'_> = c.iter();
     assert_eq!(format!("{walk:?}"), "Iter { .. }", "the walk, never an entry");
     assert_eq!(lends(walk), 1);
@@ -333,7 +355,7 @@ fn iter_knows_exactly_what_remains_at_every_step_through_len_and_size_hint_alike
     for n in [0u32, 1, 257] {
         let mut c = ContentStore::default();
         for ordinal in 1..=n {
-            c = c.apply_write(&stage_write(&c, &ca(ordinal), val(b"v")).expect("fresh"));
+            c = c.apply_write(&stage_write(&c, ca(ordinal), val(b"v")).expect("fresh"));
         }
         let n = n as usize;
         let mut walk = c.iter();
@@ -425,7 +447,7 @@ fn a_value_is_stored_and_read_back_exactly_as_written_whatever_its_bytes() {
     let written: [&[u8]; 3] = [b"", &[0x00], &[0xff, 0xfe, 0x80]];
     let mut c = ContentStore::default();
     for (ordinal, bytes) in (1..).zip(written) {
-        let rec = stage_write(&c, &ca(ordinal), val(bytes)).expect("fresh");
+        let rec = stage_write(&c, ca(ordinal), val(bytes)).expect("fresh");
         let replayed: ContentWrite =
             bincode::deserialize(&bincode::serialize(&rec).expect("record serializes"))
                 .expect("record decodes");
@@ -457,7 +479,7 @@ fn debug_renders_a_value_by_its_byte_length_never_its_bytes() {
     // §Types/§A: `Val`'s `Debug` is its byte length, so the record and the
     // slice, deriving theirs, render addresses and lengths and never a byte.
     assert_eq!(format!("{:?}", val(b"secret")), "6 bytes");
-    let rec = stage_write(&ContentStore::default(), &ca(7), val(b"abc")).expect("fresh");
+    let rec = stage_write(&ContentStore::default(), ca(7), val(b"abc")).expect("fresh");
     assert_eq!(
         format!("{rec:?}"),
         "ContentWrite { addr: Tumbler([1, 0, 1, 0, 1, 0, 1, 7]), val: 3 bytes }"
@@ -479,7 +501,7 @@ mod routing {
     #[should_panic(expected = "content routing: stage_write")]
     fn stage_write_asserts_against_a_link_subspace_address() {
         let link_elem = a(&[1, 0, 1, 0, 1, 0, 2, 1]); // subspace s_L = 2
-        let _ = stage_write(&ContentStore::default(), &link_elem, val(b"x"));
+        let _ = stage_write(&ContentStore::default(), link_elem, val(b"x"));
     }
 
     #[test]
@@ -487,14 +509,14 @@ mod routing {
     fn stage_write_asserts_against_a_subspace_neither_content_nor_link() {
         // Routing admits s_C = 1 alone — not "every subspace but s_L = 2".
         let elem = a(&[1, 0, 1, 0, 1, 0, 3, 1]); // subspace 3
-        let _ = stage_write(&ContentStore::default(), &elem, val(b"x"));
+        let _ = stage_write(&ContentStore::default(), elem, val(b"x"));
     }
 
     #[test]
     #[should_panic(expected = "content routing: stage_write")]
     fn stage_write_asserts_against_a_non_element_address() {
         let doc = a(&[1, 0, 1, 0, 1]);
-        let _ = stage_write(&ContentStore::default(), &doc, val(b"x"));
+        let _ = stage_write(&ContentStore::default(), doc, val(b"x"));
     }
 
     #[test]
@@ -514,7 +536,7 @@ mod routing {
         .expect("a record's bytes are its address, then its value");
         let c = ContentStore::default().apply_write(&replayed);
         assert!(c.contains(link_elem.tumbler()), "the replayed record's value is stored");
-        let _ = stage_write(&c, &link_elem, val(b"y"));
+        let _ = stage_write(&c, link_elem, val(b"y"));
     }
 }
 
@@ -534,10 +556,9 @@ fn stage_write_stages_every_mis_routed_address_as_given_in_release() {
     // address it was handed, and the fold stores the value there.
     for &(shape, key) in MIS_ROUTED {
         let addr = a(key);
-        let rec =
-            stage_write(&ContentStore::default(), &addr, val(b"x")).unwrap_or_else(|refusal| {
-                panic!("a release build refused to stage {shape}: {refusal}")
-            });
+        let rec = stage_write(&ContentStore::default(), addr.clone(), val(b"x")).unwrap_or_else(
+            |refusal| panic!("a release build refused to stage {shape}: {refusal}"),
+        );
         assert_eq!(rec.addr(), &addr, "a release build staged {shape} at another address");
         assert_eq!(
             ContentStore::default().apply_write(&rec).value_at(addr.tumbler()).map(Val::as_bytes),

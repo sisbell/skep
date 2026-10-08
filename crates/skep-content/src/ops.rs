@@ -75,7 +75,7 @@ where
     debug_assert_content_address_routing(addr, "write");
     let home = document_of(addr).expect("content address ⇒ zeros = 3 (trusted-address contract)");
     kernel.transact(&[M3State::content_lock_key(&home)], |stg| {
-        let rec = stage_write(stg.working().content(), addr, val)?;
+        let rec = stage_write(stg.working().content(), addr.clone(), val)?;
         stg.push(rec.into());
         Ok(addr.tumbler().clone())
     })

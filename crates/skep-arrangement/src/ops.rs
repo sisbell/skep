@@ -297,7 +297,7 @@ where
 {
     let (addr, m3rec) = stg.working().m3().mint_content(home)?;
     stg.push(m3rec.into());
-    let write = stage_write(stg.working().content(), &addr, value)?;
+    let write = stage_write(stg.working().content(), addr.clone(), value)?;
     stg.push(write.into());
     extend_or_push_run(
         runs,

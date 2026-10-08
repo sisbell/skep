@@ -67,7 +67,7 @@ fn gate_kernel_arranging(runs: Vec<Run>, present: &[u32]) -> Kernel<GateWorld> {
     });
     let mut content = ContentStore::default();
     for &k in present {
-        let cw = stage_write(&content, &ca(k), Val::new(&b"x"[..]))
+        let cw = stage_write(&content, ca(k), Val::new(&b"x"[..]))
             .expect("each seeded address is written once");
         content = content.apply_write(&cw);
     }

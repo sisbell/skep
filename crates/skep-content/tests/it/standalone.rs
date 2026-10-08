@@ -61,14 +61,14 @@ fn stage_write_composes_into_one_transaction_off_the_working_slice() {
     let a2 = ca(2);
     let (_, seq) = k
         .transact(&[M3State::content_lock_key(&home)], |stg| {
-            let r1 = stage_write(stg.working().content(), &a1, val(b"one"))?;
+            let r1 = stage_write(stg.working().content(), a1.clone(), val(b"one"))?;
             stg.push(r1.into());
             // working() reflects the push: re-staging a1 here is rejected.
             assert!(matches!(
-                stage_write(stg.working().content(), &a1, val(b"again")),
+                stage_write(stg.working().content(), a1.clone(), val(b"again")),
                 Err(ContentError::AlreadyStored(t)) if t == *a1.tumbler()
             ));
-            let r2 = stage_write(stg.working().content(), &a2, val(b"two"))?;
+            let r2 = stage_write(stg.working().content(), a2.clone(), val(b"two"))?;
             stg.push(r2.into());
             // Pins the closure's error parameter: `?` on stage_write only
             // constrains `E: From<ContentError>`, which infers nothing.
@@ -149,7 +149,7 @@ fn a_panic_at_either_door_is_located_at_the_line_that_passed_the_address_in() {
     assert_eq!(through_write, file!());
     if cfg!(debug_assertions) {
         let through_stage = panic_file(|| {
-            let _ = stage_write(&ContentStore::default(), &account, val(b"x"));
+            let _ = stage_write(&ContentStore::default(), account, val(b"x"));
         });
         assert_eq!(through_stage, file!());
     }

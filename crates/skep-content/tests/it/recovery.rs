@@ -28,7 +28,7 @@ fn the_record_and_the_slice_survive_a_bincode_round_trip() {
     // serialized in checkpoints. bincode is M2's actual wire format.
     let a1 = ca(1);
     let a2 = ca(2);
-    let rec = stage_write(&ContentStore::default(), &a1, val(b"payload")).expect("fresh");
+    let rec = stage_write(&ContentStore::default(), a1.clone(), val(b"payload")).expect("fresh");
     let bytes = bincode::serialize(&rec).expect("record serializes");
     let back: ContentWrite = bincode::deserialize(&bytes).expect("record deserializes");
     assert_eq!(back, rec);
@@ -38,7 +38,7 @@ fn the_record_and_the_slice_survive_a_bincode_round_trip() {
     assert_eq!(c.value_at(a1.tumbler()).map(Val::as_bytes), Some(&b"payload"[..]));
 
     // The slice round-trips whole (checkpoint form; rebuild_derived identity).
-    let c = c.apply_write(&stage_write(&c, &a2, val(b"more")).expect("fresh"));
+    let c = c.apply_write(&stage_write(&c, a2.clone(), val(b"more")).expect("fresh"));
     let bytes = bincode::serialize(&c).expect("slice serializes");
     let back: ContentStore = bincode::deserialize(&bytes).expect("slice deserializes");
     assert_eq!(back, c, "the slice round-trips whole");
@@ -67,7 +67,7 @@ fn the_slice_serializes_as_its_map_alone_in_tumbler_order() {
         let (doc, ordinal) = (1 + i / 16, 1 + i % 16);
         let addr = a(&[1, 0, 1, 0, doc, 0, 1, ordinal]);
         let bytes = format!("{doc}.{ordinal}").into_bytes();
-        c = c.apply_write(&stage_write(&c, &addr, Val::new(bytes.clone())).expect("fresh"));
+        c = c.apply_write(&stage_write(&c, addr.clone(), Val::new(bytes.clone())).expect("fresh"));
         entries.push((addr.tumbler().clone(), bytes));
     }
     // Five more, where Tumbler order parts from orders that agree with it on
@@ -88,7 +88,7 @@ fn the_slice_serializes_as_its_map_alone_in_tumbler_order() {
         ca_under(&[1, 0, 1, 0, 4, 0, 1], Nat::from(u64::MAX) + 1u32),
     ] {
         let bytes = addr.tumbler().to_string().into_bytes();
-        c = c.apply_write(&stage_write(&c, &addr, Val::new(bytes.clone())).expect("fresh"));
+        c = c.apply_write(&stage_write(&c, addr.clone(), Val::new(bytes.clone())).expect("fresh"));
         entries.push((addr.tumbler().clone(), bytes));
     }
     entries.sort_by(|x, y| x.0.cmp(&y.0));
@@ -136,7 +136,7 @@ fn the_record_and_the_slice_refuse_a_count_their_bytes_do_not_carry() {
     // allocator cannot grant aborts the process. A count one past what the
     // bytes hold is the control, refused the ordinary way.
     let held = ContentStore::default()
-        .apply_write(&stage_write(&ContentStore::default(), &ca(1), val(b"held")).expect("fresh"));
+        .apply_write(&stage_write(&ContentStore::default(), ca(1), val(b"held")).expect("fresh"));
     let mut one_past = bincode::serialize(&held).expect("slice serializes");
     // The slice's bytes open with its map's count (pinned by the test above).
     one_past[..8].copy_from_slice(&2u64.to_le_bytes());
@@ -216,7 +216,7 @@ fn the_record_and_the_slice_refuse_a_key_that_is_no_tumbler() {
     // decode to the slice and the record `stage_write` builds there — which
     // is what makes the raw forms the types' own bytes for every test that
     // lays one down — so the refusal is the empty key's alone.
-    let rec = stage_write(&ContentStore::default(), &ca(1), val(b"x")).expect("fresh");
+    let rec = stage_write(&ContentStore::default(), ca(1), val(b"x")).expect("fresh");
     assert_eq!(
         bincode::deserialize::<ContentStore>(&raw_slice(&[CA1]))
             .expect("the control slice decodes"),
@@ -367,7 +367,7 @@ fn the_slice_decodes_its_entries_in_whatever_order_they_arrive() {
     for ordinal in 1..=6u32 {
         let addr = ca(ordinal);
         let bytes = vec![b'0' + ordinal as u8];
-        c = c.apply_write(&stage_write(&c, &addr, Val::new(bytes.clone())).expect("fresh"));
+        c = c.apply_write(&stage_write(&c, addr.clone(), Val::new(bytes.clone())).expect("fresh"));
         entries.push((addr.tumbler().clone(), bytes));
     }
     let orders = every_order(&entries);
@@ -486,7 +486,7 @@ fn the_slice_admits_a_body_exactly_when_it_names_no_address_twice() {
         } else {
             let mut holding = ContentStore::default();
             for (&k, (_, value)) in body.iter().zip(&entries) {
-                let rec = stage_write(&holding, &keys[k], val(value))
+                let rec = stage_write(&holding, keys[k].clone(), val(value))
                     .expect("fresh: the body names no address twice");
                 holding = holding.apply_write(&rec);
             }

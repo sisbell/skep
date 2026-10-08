@@ -122,7 +122,7 @@ fn the_central_record_lifts_each_store_to_its_own_variant_index() {
     let namespace_rec = M3Rec::Allocate { addr: doc.clone(), published: false };
     let content_rec = skep_content::stage_write(
         &ContentStore::default(),
-        &addr(&[1, 0, 1, 0, 1, 0, 1, 1]),
+        addr(&[1, 0, 1, 0, 1, 0, 1, 1]),
         Val::new(vec![b'x']),
     )
     .expect("a fresh content address stages a write");

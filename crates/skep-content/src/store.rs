@@ -77,9 +77,10 @@ pub struct ContentStore {
 /// where an owned address would be cloned component by component — a cost
 /// set by the longest addresses stored near the write, which an INSERT
 /// multiplies by its value count under M2's applier lock and every replay
-/// pays again. The fold puts a record's address into the map by sharing the
-/// record's `Arc`, so folding a record — on commit and on every replay —
-/// never clones its address component by component.
+/// pays again. [`stage_write`] moves the address it is handed into the
+/// record's `Arc`, and the fold puts the record's `Arc` into the map — on
+/// commit and on every replay — so neither staging a write nor folding it
+/// clones its address component by component.
 ///
 /// Ordered and compared as its `Address`, which orders as its tumbler, and
 /// borrowed as that tumbler, so the point queries take a `&Tumbler`; shown and
@@ -443,13 +444,18 @@ impl ContentWrite {
 /// predicate-def creation) calls it and lifts the result with
 /// `stg.push(rec.into())`.
 ///
-/// Refuses a second write at one address: `Err(AlreadyStored(addr.tumbler()))`
-/// if `addr` is stored in `c`. M3 mints fresh and M5 writes once, so this
-/// never fires in correct operation; when an upstream bug does hand it an
-/// address already stored, the caller gets a typed rejection to refuse its
-/// transaction with, instead of a write the fold would silently drop, leaving
-/// the caller with an address that holds another write's value. It sees only
-/// `c`, so hand it the slice the record will be folded into —
+/// Takes the address by value, as it takes the value: the record keeps both,
+/// whole. A caller done with its address hands it over, and nothing is
+/// cloned; a caller that still needs it clones it at its own call, where the
+/// cost is in view and in its power to avoid (C-CALLER-CONTROL).
+///
+/// Refuses a second write at one address: `Err(AlreadyStored(t))`, `t` being
+/// `addr`'s tumbler, if `addr` is stored in `c`. M3 mints fresh and M5 writes
+/// once, so this never fires in correct operation; when an upstream bug does
+/// hand it an address already stored, the caller gets a typed rejection to
+/// refuse its transaction with, instead of a write the fold would silently
+/// drop, leaving the caller with an address that holds another write's value.
+/// It sees only `c`, so hand it the slice the record will be folded into —
 /// `stg.working().content()`, read after every `push`; staged against an
 /// older slice, a second write at one address gets through and the fold keeps
 /// the stored value (a debug build panics there). Otherwise the address is
@@ -466,15 +472,15 @@ impl ContentWrite {
 #[track_caller]
 pub fn stage_write(
     c: &ContentStore,
-    addr: &Address,
+    addr: Address,
     val: Val,
 ) -> Result<ContentWrite, ContentError> {
-    debug_assert_content_address_routing(addr, "stage_write");
+    debug_assert_content_address_routing(&addr, "stage_write");
     if c.contains(addr.tumbler()) {
-        return Err(ContentError::AlreadyStored(addr.tumbler().clone()));
+        return Err(ContentError::AlreadyStored(Tumbler::from(addr)));
     }
     Ok(ContentWrite {
-        addr: Key(Arc::new(addr.clone())),
+        addr: Key(Arc::new(addr)),
         val,
     })
 }

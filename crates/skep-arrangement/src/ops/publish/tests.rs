@@ -111,7 +111,7 @@ fn shot_kernel(member_runs: Vec<Run>, present: &[u32]) -> Kernel<ShotWorld> {
     };
     let mut content = ContentStore::default();
     for &k in present {
-        let cw = stage_write(&content, &pca(k), Val::new(&b"x"[..]))
+        let cw = stage_write(&content, pca(k), Val::new(&b"x"[..]))
             .expect("each seeded address is written once");
         content = content.apply_write(&cw);
     }

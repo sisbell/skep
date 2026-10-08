@@ -10,29 +10,19 @@
 //! the window row — are the parent's, stated there with the frame's other
 //! rows.
 //!
-//! The body is THE COUNT, then THE RUNS THE CLIENT PLACED IN THE ADDRESS FORM
-//! — the SHOT's address form (l6-A4), its runs classed by value and by
-//! address — then THE BASE: the member the shot was staged from and the
-//! extent the copy took (the design record §2.5's `publish` cell as ruled: V
-//! — fam1-Q part (1) — binds the shot's base, its member and its extent both,
-//! since round 7's bu7-E2 (owner 2026-10-01): a verifier DERIVES the member
-//! from the minted member's address and composes it INTO these bytes, so a
-//! re-submission naming another base breaks the signature; fam2-Q's arm A
-//! with l6-A4 reads WHICH runs are signed by value and which by address AT
-//! THE MINTED MEMBER, the version the shot mints; D25's (c′) journals the two
-//! terms a verifier needs beyond that member's runs and address, `placed` and
-//! `base_extent`, in M5's placing record). In order:
+//! The body — the design record §2.5's `publish` cell as ruled — is three
+//! parts, in order:
 //!
 //! * `be64(placed)` — the positions the client placed, Σ width of its runs,
-//!   and so how many of the minted member's positions the segments below
-//!   spell;
-//! * then the minted member's first `placed` positions as SEGMENTS, in
-//!   V-order, each opening with ONE CLASS BYTE: `0x02` a VALUE STRETCH — the
-//!   maximal run of consecutive positions the commit COPIES IN (the shot
-//!   document's own I-space placed by reference, the staging draft's
-//!   re-inserted as fresh identity — at the minted member, one origin, the
-//!   document's own) as one value-sequence row; `0x01` a WINDOW — one run
-//!   onto ANOTHER document's I-space, which the commit keeps as a reference —
+//!   and so how many of the MINTED MEMBER's positions (the version the shot
+//!   mints) the segments below spell;
+//! * then those positions as SEGMENTS, in V-order — THE RUNS THE CLIENT
+//!   PLACED IN THE ADDRESS FORM, the SHOT's address form (l6-A4), classed by
+//!   value and by address at the minted member (fam2-Q's arm A) as
+//!   [`ShotSegmentPiece`]'s card states — each opening with ONE CLASS BYTE:
+//!   `0x02` a VALUE STRETCH, the maximal run of consecutive positions the
+//!   commit COPIES IN, as one value-sequence row; `0x01` a WINDOW, one run
+//!   onto ANOTHER document's I-space, which the commit keeps as a reference,
 //!   as one window row. The segments are the runs AS THE MINTED MEMBER'S
 //!   ARRANGEMENT HOLDS THEM, maximally merged (M5's run-list merges
 //!   I-adjacent runs of one origin), so two I-adjacent windows are one
@@ -43,35 +33,30 @@
 //!   spelling of a present address, so the body takes no new form) followed
 //!   by `be64(base_extent)` — [`push_base`] over a [`ShotBase`].
 //!
-//! THE BASE IS SIGNED (V; bu7-E2 ARM (a), owner 2026-10-01 — the member's
-//! address joined the group at round 7, re-pinned in place under
-//! `skep-entry-v1` by l6-A3, no v1 signature being served before the first
-//! served board): the signer takes the member and the extent off the
-//! request's own `base` and `base_extent`, the daemon off the same request,
-//! and a verifier holding the MINTED MEMBER and no request DERIVES the member
-//! from that member's address — a trunk member `D.k+1` was minted against
-//! `D.k`, a daughter `X.m` against `X`, a birth version against the
-//! memberless document, or against nothing where the group is EMPTY — and
-//! composes it INTO these bytes. So the derivation feeds the preimage: it
-//! answers how a verifier finds the member, never whether the signature
-//! covers it. A re-submission of a signed shot naming ANOTHER base — the
-//! trunk's current head, say — spells another group and verifies under no
-//! key, while a replayed shot naming the base it signed verifies as it did
-//! and names a base its own commit left no longer the head, so the store's
-//! rule mints that base's daughter, never the trunk's next. The address is
-//! the client's own, so the frame stays POSITION-FREE. A verifier so holding
-//! the member composes the rest of the body with no request in hand: it reads
-//! that member's first `placed` positions, classes each run by its origin —
-//! the member's own trunk BY VALUE, any other document BY ADDRESS — reads a
-//! stretch's values there and spells a window from the run that member holds.
-//! [`PublishBody`] builds the body one value and one window at a time under a
-//! byte budget, for a verifier re-composing it off a store, and refuses it
-//! WHOLE at the first piece it cannot take — past that budget or past the
-//! count's `be64` — naming which ([`PublishRefusal`]). A window of no
-//! positions is no piece at all: a window's width is a `NonZeroU64`, as a
-//! run's width is at least one. Every segment is self-delimiting behind its
-//! class byte and the group opens with a zero byte, which no class byte is, so
-//! the body is uniquely decodable from its front.
+//! THE BASE IS SIGNED, its member and its extent both (V, fam1-Q part (1),
+//! with bu7-E2 ARM (a), owner 2026-10-01; the member re-pinned in place under
+//! `skep-entry-v1` by l6-A3, as the frame's other re-pins are). The signer
+//! and the daemon read the two off the request's own `base` and
+//! `base_extent`. A verifier holding the MINTED MEMBER and no request
+//! composes the same bytes: it DERIVES the base member from the minted
+//! member's address — a trunk member `D.k+1` was minted against `D.k`, a
+//! daughter `X.m` against `X`, a birth version against the memberless
+//! document, or against nothing where the group is EMPTY — reads `placed`
+//! and `base_extent` where D25's (c′) journals them, in M5's placing record,
+//! and reads the minted member's first `placed` positions, spelling a stretch
+//! from the values there and a window from the run the member holds. So the
+//! derivation feeds the preimage: it answers how a verifier finds the
+//! member, never whether the signature covers it. A re-submission of a
+//! signed shot naming ANOTHER base — the trunk's current head, say — spells
+//! another group and verifies under no key, while a replayed shot naming the
+//! base it signed verifies as it did and names a base its own commit left no
+//! longer the head, so the store's rule mints that base's daughter, never
+//! the trunk's next. The address is the client's own, so the frame stays
+//! POSITION-FREE.
+//!
+//! Every segment is self-delimiting behind its class byte, and the group
+//! opens with a zero byte, which no class byte is, so the body is uniquely
+//! decodable from its front.
 
 use core::fmt;
 use core::num::NonZeroU64;

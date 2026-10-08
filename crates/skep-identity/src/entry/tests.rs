@@ -202,7 +202,7 @@ fn the_rows_spell_as_the_module_doc_states() {
     // window parted them), the base `1.0.1.0.1.2` at extent 5 — six
     // positions in all. The count is the positions, not the segments; the
     // class byte precedes each segment; the group closes the body: its
-    // length, the member as an address-form slot row of one element — the
+    // length, the member as an address-list row of one element — the
     // optional-address row's spelling of a present address, the form byte,
     // `be64(1)`, the eleven bytes of the address delimited — then be64(5).
     // Group length 32: 1 + 8 + (4 + 11) + 8.
@@ -240,11 +240,11 @@ fn the_rows_spell_as_the_module_doc_states() {
             &base_group(5)[..],
         ]
         .concat(),
-        "values, a window, a value, then the base group: the member's slot row and the extent"
+        "values, a window, a value, then the base group: the member's address-list row and extent"
     );
-    // The base group is the member's slot row and the extent, and NOTHING
-    // ELSE spells it: the same shot over another member of the trunk, or
-    // over the same member at another extent, is another body (V, bu7-E2).
+    // The base group is the member's address-list row and the extent, and
+    // NOTHING ELSE spells it: the same shot over another member of the trunk,
+    // or over the same member at another extent, is another body (V, bu7-E2).
     let other_member = addr(&[1, 0, 1, 0, 1, 3]);
     let over = |base: Option<ShotBase<'_>>| {
         entry_body_publish([ShotSegmentPiece::Value(b"a")], base).as_bytes().to_vec()
@@ -514,15 +514,16 @@ fn a_publish_body_within_its_budget_finishes_to_the_body_of_all_its_pieces() {
     );
     // The base group is counted from the start: `ab`'s body with the base
     // present is thirty-two bytes longer than in the birth shape — the
-    // member's slot row (1 + 8 + 4 + 11) and the extent (8) — and one byte
-    // short of that budget `ab` is refused at its push, not at `finish`.
+    // member's address-list row (1 + 8 + 4 + 11) and the extent (8) — and
+    // one byte short of that budget `ab` is refused at its push, not at
+    // `finish`.
     let birth_budget = entry_body_publish([ShotSegmentPiece::Value(b"ab")], None).as_bytes().len();
     let based_budget = entry_body_publish([ShotSegmentPiece::Value(b"ab")], base).as_bytes().len();
     assert_eq!(based_budget, birth_budget + 32, "the present group's cost over the EMPTY one");
     assert_eq!(
         PublishBody::within(based_budget - 1, base).push(b"ab").err(),
         past,
-        "a present group costs the member's slot row and the extent more than the EMPTY one"
+        "a present group costs the member's address-list row and the extent more than the EMPTY one"
     );
 }
 

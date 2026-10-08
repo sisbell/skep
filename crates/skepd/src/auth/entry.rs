@@ -404,16 +404,15 @@ fn every_copied_run_origin_readable(
 /// [`PublishBody`] held to [`MAX_SHOT_BODY_BYTES`] over the shot's base —
 /// the member and the extent the request named, `Shot::base`, which the
 /// signer composed from the same request (V; bu7-E2) — or why it cannot be
-/// built: an address M4 holds no value at, a
-/// segment that would carry the body past the budget, a term the frame's
-/// fixed-width rows cannot spell, or staging-draft runs re-inserting more
-/// values than the store will. The budget is measured in the body's own
-/// layout as each value is read, so nothing is collected ahead of the build
-/// and no body is held past it; a refused push takes the builder with it, so
-/// the shot is refused whole and no body is finished over the segments before
-/// the refusal — the preimage of a shorter publish. PRECONDITION: the
-/// principal may read every value the shot copies in
-/// ([`every_copied_run_origin_readable`]).
+/// built: an address M4 holds no value at, a base group or a segment that
+/// would carry the body past the budget, a term the frame's fixed-width rows
+/// cannot spell, or staging-draft runs re-inserting more values than the
+/// store will. The budget is measured in the body's own layout as each value
+/// is read, so nothing is collected ahead of the build and no body is held
+/// past it; a refused push takes the builder with it, so the shot is refused
+/// whole and no body is finished over the segments before the refusal — the
+/// preimage of a shorter publish. PRECONDITION: the principal may read every
+/// value the shot copies in ([`every_copied_run_origin_readable`]).
 fn publish_body(
     world: &World,
     shot: &Shot,
@@ -449,7 +448,7 @@ fn publish_body(
     if shot.reinserted_values() > Nat::from(MAX_REINSERTED_VALUES) {
         return Err(ComposeFault::PastReinsertBudget);
     }
-    let mut body = PublishBody::within(MAX_SHOT_BODY_BYTES, base);
+    let mut body = PublishBody::within(MAX_SHOT_BODY_BYTES, base).map_err(refused)?;
     for segment in segments {
         match segment {
             SegmentRun::Value(run) => {
@@ -472,10 +471,11 @@ fn publish_body(
     Ok(body.finish())
 }
 
-/// The composer's answer for a segment [`PublishBody`] refused, by the cause
-/// the builder names: past its budget, [`ComposeFault::PastBodyBudget`]; a
-/// count past `be64`, [`ComposeFault::Unspellable`] (which the up-front sum
-/// has already answered for every shot that reaches the walk).
+/// The composer's answer for what [`PublishBody`] refused — the shot's base at
+/// its mint, a segment after it — by the cause the builder names: past its
+/// budget, [`ComposeFault::PastBodyBudget`]; a count past `be64`,
+/// [`ComposeFault::Unspellable`] (which the up-front sum has already answered
+/// for every shot that reaches the walk).
 fn refused(refusal: PublishRefusal) -> ComposeFault {
     match refusal {
         PublishRefusal::PastBudget => ComposeFault::PastBodyBudget,

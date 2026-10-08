@@ -227,10 +227,11 @@ fn every_publish_body_lands_exactly_on_a_budget_of_its_own_length() {
         ShotSegmentPiece::Window { start: &other, width: nonzero(2) },
     ];
     let fed = |budget: usize, base: Option<ShotBase<'_>>, pieces: &[ShotSegmentPiece<'_>]| {
-        let empty = PublishBody::within(budget, base);
-        pieces.iter().try_fold(empty, |body, piece| match *piece {
-            ShotSegmentPiece::Value(value) => body.push(value),
-            ShotSegmentPiece::Window { start, width } => body.window(start, width),
+        PublishBody::within(budget, base).and_then(|empty| {
+            pieces.iter().try_fold(empty, |body, piece| match *piece {
+                ShotSegmentPiece::Value(value) => body.push(value),
+                ShotSegmentPiece::Window { start, width } => body.window(start, width),
+            })
         })
     };
     let sequences = sequences_of(&alphabet);

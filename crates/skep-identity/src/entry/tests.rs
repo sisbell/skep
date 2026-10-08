@@ -600,9 +600,11 @@ fn a_publish_body_within_its_budget_finishes_to_the_body_of_all_its_pieces() {
     );
     let budget = whole.as_bytes().len();
     let fed = |pieces: &[ShotSegmentPiece<'_>]| {
-        pieces.iter().try_fold(PublishBody::within(budget, base), |body, piece| match *piece {
-            ShotSegmentPiece::Value(value) => body.push(value),
-            ShotSegmentPiece::Window { start, width } => body.window(start, width),
+        PublishBody::within(budget, base).and_then(|empty| {
+            pieces.iter().try_fold(empty, |body, piece| match *piece {
+                ShotSegmentPiece::Value(value) => body.push(value),
+                ShotSegmentPiece::Window { start, width } => body.window(start, width),
+            })
         })
     };
     let window = ShotSegmentPiece::Window { start: &start, width: nonzero(2) };
@@ -654,7 +656,7 @@ fn a_publish_body_within_its_budget_finishes_to_the_body_of_all_its_pieces() {
     let based_budget = entry_body_publish([ShotSegmentPiece::Value(b"ab")], base).as_bytes().len();
     assert_eq!(based_budget, birth_budget + 32, "the present group's cost over the EMPTY one");
     assert_eq!(
-        PublishBody::within(based_budget - 1, base).push(b"ab").err(),
+        PublishBody::within(based_budget - 1, base).and_then(|body| body.push(b"ab")).err(),
         past,
         "a present group costs the member's address-list row and the extent more than the EMPTY one"
     );
@@ -672,15 +674,15 @@ fn a_publish_budget_of_the_empty_body_finishes_to_it_and_admits_nothing() {
     for base in [None, Some(ShotBase { member: &base_member, extent: 3 })] {
         let empty = entry_body_publish([], base);
         let floor = empty.as_bytes().len();
-        assert_eq!(PublishBody::within(floor, base).finish(), empty);
+        assert_eq!(PublishBody::within(floor, base).map(PublishBody::finish), Ok(empty));
         assert_eq!(
-            PublishBody::within(floor, base).push(b"").err(),
+            PublishBody::within(floor, base).and_then(|body| body.push(b"")).err(),
             Some(PublishRefusal::PastBudget),
             "an empty value costs its length prefix"
         );
         assert_eq!(
             PublishBody::within(floor, base)
-                .window(&addr(&[1, 0, 2, 0, 1, 1]), nonzero(1))
+                .and_then(|body| body.window(&addr(&[1, 0, 2, 0, 1, 1]), nonzero(1)))
                 .err(),
             Some(PublishRefusal::PastBudget),
             "a window costs its start and its width"
@@ -688,30 +690,39 @@ fn a_publish_budget_of_the_empty_body_finishes_to_it_and_admits_nothing() {
     }
 }
 
-/// …and below it `within` stops, naming the obligation, in either shape of
-/// the group as at it: a builder minted past its own budget would finish to
-/// the over-budget body the type exists to refuse rather than build, with no
-/// push to refuse it. The PRESENT group is the shape a floor fixed at the
-/// birth shape's twelve bytes would pass — the member's address-list row and
-/// the extent are thirty-two bytes more — so each shape is asked one byte
-/// below its own floor, and must be refused by the floor's own assertion.
+/// …and below it `within` REFUSES, naming the cause, in either shape of the
+/// group as at it: a builder minted past its own budget would finish to the
+/// over-budget body the type exists to refuse rather than build, with no push
+/// to refuse it. The PRESENT group is the shape a floor fixed at the birth
+/// shape's twelve bytes would pass — the member's address-list row and the
+/// extent are thirty-two bytes more — so each shape is asked one byte below
+/// its own floor. Then the case the refusal exists for: ONE budget, a
+/// kilobyte, that holds the body of no segments over an ordinary base, and a
+/// base member deep enough that its group alone passes it. The group holds
+/// the member's address, which the shot's author names (bu7-E2), so a budget
+/// the body of no segments passes is an input's doing, answered as a refusal
+/// and never a panic.
 #[test]
 fn a_publish_budget_below_the_empty_body_is_refused_at_within() {
     let base_member = addr(&[1, 0, 1, 0, 1, 2]);
     for base in [None, Some(ShotBase { member: &base_member, extent: 3 })] {
         let below = entry_body_publish([], base).as_bytes().len() - 1;
-        let refusal = std::panic::catch_unwind(move || PublishBody::within(below, base))
-            .err()
-            .unwrap_or_else(|| panic!("a budget of {below} bytes was admitted under {base:?}"));
-        let message = refusal
-            .downcast_ref::<&str>()
-            .copied()
-            .or_else(|| refusal.downcast_ref::<String>().map(String::as_str));
-        assert!(
-            message.is_some_and(|m| m.contains("cannot hold the body of no segments")),
-            "{base:?}: refused by {message:?}, not the floor's assertion"
+        assert_eq!(
+            PublishBody::within(below, base).err(),
+            Some(PublishRefusal::PastBudget),
+            "{base:?}: one byte below the body of no segments"
         );
     }
+    // A node address of 256 components, each `u32::MAX` — T4-valid, spelled
+    // in 2,815 bytes — makes a body of no segments 2,848 bytes long.
+    let deep = addr(&[u32::MAX; 256]);
+    let ordinary = Some(ShotBase { member: &base_member, extent: 3 });
+    assert!(PublishBody::within(1024, ordinary).is_ok(), "an ordinary base fits a kilobyte");
+    assert_eq!(
+        PublishBody::within(1024, Some(ShotBase { member: &deep, extent: 3 })).err(),
+        Some(PublishRefusal::PastBudget),
+        "a base member spelled past the budget is refused at the mint"
+    );
 }
 
 /// [`PublishBody`] NAMES what it refuses, because a caller answers the causes
@@ -726,7 +737,8 @@ fn each_refusal_names_its_cause() {
     let start = addr(&[1, 0, 2, 0, 1, 4]);
     let full = [ShotSegmentPiece::Window { start: &start, width: NonZeroU64::MAX }];
     let budget = entry_body_publish(full, None).as_bytes().len();
-    let at_full = || PublishBody::within(budget, None).window(&start, NonZeroU64::MAX);
+    let at_full =
+        || PublishBody::within(budget, None).and_then(|body| body.window(&start, NonZeroU64::MAX));
     assert_eq!(
         at_full().and_then(|body| body.window(&start, nonzero(1))).err(),
         Some(PublishRefusal::Unspellable),
@@ -738,7 +750,9 @@ fn each_refusal_names_its_cause() {
         "a value past the count and the budget is told the count"
     );
     assert_eq!(
-        PublishBody::within(budget - 1, None).window(&start, NonZeroU64::MAX).err(),
+        PublishBody::within(budget - 1, None)
+            .and_then(|body| body.window(&start, NonZeroU64::MAX))
+            .err(),
         Some(PublishRefusal::PastBudget),
         "a spellable count past the budget is told the budget"
     );

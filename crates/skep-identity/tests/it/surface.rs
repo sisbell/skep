@@ -591,7 +591,7 @@ fn error_types_lift_into_dyn_error() {
     let boxed = lift(PayloadError::DuplicateKey(4));
     assert_eq!(boxed.to_string(), "duplicate_key:4");
     let floor = entry_body_publish([], None).as_bytes().len();
-    let past_budget = PublishBody::within(floor, None).push(b"");
+    let past_budget = PublishBody::within(floor, None).and_then(|body| body.push(b""));
     let boxed = lift(past_budget.expect_err("an empty value costs its length prefix"));
     assert_eq!(boxed.to_string(), PublishRefusal::PastBudget.to_string());
 }

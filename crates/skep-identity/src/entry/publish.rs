@@ -149,21 +149,24 @@ fn push_base(out: &mut Vec<u8>, base: Option<ShotBase<'_>>) {
 ///
 /// PRECONDITIONS — every value and every window's start spelling is shorter
 /// than 2^32 bytes, as [`entry_body_insert`](super::entry_body_insert)'s
-/// values are, and the positions the pieces cover sum below 2^64 — the
+/// values are, and so is the base group ([`PublishBody::within`]'s
+/// PRECONDITION); and the positions the pieces cover sum below 2^64 — the
 /// count's width. A caller breaking one PANICS, naming the obligation.
 pub fn entry_body_publish<'a>(
     pieces: impl IntoIterator<Item = ShotSegmentPiece<'a>>,
     base: Option<ShotBase<'_>>,
 ) -> EntryBody {
-    pieces
-        .into_iter()
-        .try_fold(PublishBody::within(usize::MAX, base), |body, piece| match piece {
-            ShotSegmentPiece::Value(value) => body.push(value),
-            ShotSegmentPiece::Window { start, width } => body.window(start, width),
+    PublishBody::within(usize::MAX, base)
+        .and_then(|empty| {
+            pieces.into_iter().try_fold(empty, |body, piece| match piece {
+                ShotSegmentPiece::Value(value) => body.push(value),
+                ShotSegmentPiece::Window { start, width } => body.window(start, width),
+            })
         })
         .expect(
-            "a budget of usize::MAX refuses no piece past it — a saturated length never passes \
-             it — so the refusal named here is a caller's broken precondition",
+            "a budget of usize::MAX refuses neither the body of no segments nor a piece past it \
+             — a saturated length never passes it — so the refusal named here is a caller's \
+             broken precondition",
         )
         .finish()
 }
@@ -171,19 +174,20 @@ pub fn entry_body_publish<'a>(
 /// A `publish` BODY built one piece at a time under a byte BUDGET — for the
 /// verifier that re-composes a shot's body off its own store, where each
 /// value arrives by a read that can fail and a body past the budget must be
-/// REFUSED rather than built. [`PublishBody::push`] and
-/// [`PublishBody::window`] measure the budget in the body's own layout and
-/// NAME what they refuse ([`PublishRefusal`]), so no caller restates that
+/// REFUSED rather than built. [`PublishBody::within`], [`PublishBody::push`]
+/// and [`PublishBody::window`] measure the budget in the body's own layout
+/// and NAME what they refuse ([`PublishRefusal`]), so no caller restates that
 /// layout, or the count's arithmetic, to learn which refusal it met; the
 /// caller keeps its walk, its own answer for a value it could not read and
 /// for each refusal, and collects nothing ahead of the build.
 ///
 /// Its standing INVARIANT is the one the budget exists for: the body built so
 /// far, its leading count and the base group [`PublishBody::finish`]
-/// appends included, never passes `budget` bytes — [`PublishBody::within`]'s
-/// PRECONDITION establishes it at the type's one mint site, and each of its
-/// two growth sites, [`PublishBody::push`] and [`PublishBody::window`], keeps
-/// it or refuses, so `finish` never answers a body past its budget.
+/// appends included, never passes `budget` bytes — [`PublishBody::within`]
+/// establishes it at the type's one mint site, refusing a budget the body of
+/// no segments already passes, and each of its two growth sites,
+/// [`PublishBody::push`] and [`PublishBody::window`], keeps it or refuses, so
+/// `finish` never answers a body past its budget.
 ///
 /// A refusal CONSUMES the builder, at a push and at a window alike, and the
 /// type is not `Clone` — the compile-time check beside it holds that — so the
@@ -219,25 +223,35 @@ impl PublishBody {
     /// A body of no segments yet — the leading count's eight bytes, and the
     /// base group held for `finish` — whose [`PublishBody::push`] and
     /// [`PublishBody::window`] admit no piece that would carry the FINISHED
-    /// body past `budget` bytes. `base` is the shot's ([`ShotBase`]): `None`
-    /// in the birth shape, the EMPTY group.
+    /// body past `budget` bytes; else [`PublishRefusal::PastBudget`], where
+    /// that body of no segments passes the budget already. `base` is the
+    /// shot's ([`ShotBase`]): `None` in the birth shape, the EMPTY group.
     ///
-    /// PRECONDITION — `budget` holds those bytes. The body of no segments is
-    /// the least a builder can finish to, so below it the builder would
-    /// start past its own budget and [`PublishBody::finish`] would answer an
-    /// over-budget body no push or window had refused. A caller's bug and
-    /// never an outcome: it PANICS, naming the obligation.
-    pub fn within(budget: usize, base: Option<ShotBase<'_>>) -> PublishBody {
+    /// A budget the body of no segments passes is REFUSED, as a push or a
+    /// window refuses a piece, because it is an input's doing as much as a
+    /// caller's: the base group holds the base MEMBER's address (V; bu7-E2),
+    /// which the shot's author names, at a length the author chooses, so
+    /// whether a budget holds the body of no segments depends on the shot.
+    /// Minted past its own budget, the builder would finish to an over-budget
+    /// body no push or window had refused — the one body the type exists to
+    /// refuse rather than build.
+    ///
+    /// PRECONDITION — the base group is shorter than 2^32 bytes: the member's
+    /// spelling and the twenty-one bytes the group puts around it (the
+    /// address-list row's form byte, `be64` count and `be32` length, then
+    /// `be64(extent)`) together. A longer group PANICS, naming the
+    /// obligation, whatever the budget: it is spelled before it is measured.
+    pub fn within(
+        budget: usize,
+        base: Option<ShotBase<'_>>,
+    ) -> Result<PublishBody, PublishRefusal> {
         let bytes = 0u64.to_be_bytes().to_vec();
         let mut base_group = Vec::new();
         push_base(&mut base_group, base);
-        assert!(
-            bytes.len() + base_group.len() <= budget,
-            "PublishBody::within: a budget of {budget} bytes cannot hold the body of no \
-             segments, {} bytes",
-            bytes.len() + base_group.len()
-        );
-        PublishBody { bytes, stretch: None, placed: 0, base_group, budget }
+        if bytes.len() + base_group.len() > budget {
+            return Err(PublishRefusal::PastBudget);
+        }
+        Ok(PublishBody { bytes, stretch: None, placed: 0, base_group, budget })
     }
 
     /// What the body would measure if finished now: the bytes down, and the
@@ -347,13 +361,15 @@ const _: fn() = || {
     let _ = <PublishBody as AmbiguousIfClone<_>>::check;
 };
 
-/// Why [`PublishBody`] refused a piece — the builder GONE with it, as every
-/// refusal leaves it — NAMED, because a caller answers the two differently: a
-/// body PAST ITS BUDGET is the one the builder exists to refuse rather than
-/// build; a count past the body's leading `be64` names positions no store
-/// holds. What each is answered is the caller's: a refusal reaches no wire
-/// from here. A window of no positions is no cause here: a window's width is
-/// a [`NonZeroU64`], so no such piece can be offered.
+/// Why [`PublishBody`] refused — at its mint, the body of no segments already
+/// past the budget, or at a piece, the builder GONE with it, as every refusal
+/// after the mint leaves it — NAMED, because a caller answers the two
+/// differently: a body PAST ITS BUDGET is the one the builder exists to
+/// refuse rather than build; a count past the body's leading `be64` names
+/// positions no store holds. What each is answered is the caller's: a
+/// refusal reaches no wire from here. A window of no positions is no cause
+/// here: a window's width is a [`NonZeroU64`], so no such piece can be
+/// offered.
 ///
 /// The causes are tested in ONE order, the count first, then the budget — so
 /// a piece the body could not spell at any budget is never answered as past

@@ -76,13 +76,15 @@ pub struct ContentStore {
 /// from bytes it does not trust — so the map's key and value types stay free
 /// of recursion and of sequence elements that decode from zero bytes (M2's
 /// hostile-input obligation on `WorldState`, which `Tumbler` and `Val` meet),
-/// and the map's own declared count is never trusted with a reservation
-/// ([`entry_by_entry`]). The engine's `World` lays these bytes down as one
-/// slice of its checkpoint layout, so a change to them — a field added to or
-/// removed from [`ContentStore`], an entry encoded differently — owes the
-/// engine's `WORLD_FORMAT` bump; the engine's pin
-/// (`each_slice_serializes_the_fields_the_format_count_names`) sees only the
-/// top-level field set, `map`, and a change beneath it owes the bump by hand.
+/// the map's own declared count is never trusted with a reservation, and a
+/// body naming one address twice is refused, so the bytes a hash commits to
+/// never leave a decoder a tie to break ([`entry_by_entry`]). The engine's
+/// `World` lays these bytes down as one slice of its checkpoint layout, so a
+/// change to them — a field added to or removed from [`ContentStore`], an
+/// entry encoded differently — owes the engine's `WORLD_FORMAT` bump; the
+/// engine's pin (`each_slice_serializes_the_fields_the_format_count_names`)
+/// sees only the top-level field set, `map`, and a change beneath it owes the
+/// bump by hand.
 /// And the engine's world dump renders the form as M4's authoritative
 /// section, where the daemon's per-reader `/dump` keeps or drops each `map`
 /// entry by its key's document; a field added to [`ContentStore`] would reach
@@ -113,11 +115,20 @@ fn in_tumbler_order<S: serde::Serializer>(
 /// body runs out of input and the decode refuses it; each key re-enters M1's
 /// `Address` door (`validate`), so a body carrying a key no [`stage_write`]
 /// could have staged is refused the same way ([`ContentStore`]'s key
-/// invariants); and it takes the entries in whatever order they arrive.
+/// invariants); it takes the entries in whatever order they arrive; and it
+/// refuses a body naming one address twice. No build writes one — the encoder
+/// walks a map whose keys are unique — and admitting one would mean choosing
+/// which value stands: `OrdMap::insert` keeps the later, where the fold keeps
+/// the one already stored (S0(b)). Refusing it leaves no tie to break, so
+/// every body this decode admits names one state, whatever order its entries
+/// take. Addresses are compared as decoded, and a component's digits decode
+/// to one number however they are spelled, so two spellings of one address
+/// are one address. The refusal names no address: a key can be as long as the
+/// body that carries it, and M2 keeps a refused base's reason.
 fn entry_by_entry<'de, D: serde::Deserializer<'de>>(
     deserializer: D,
 ) -> Result<im::OrdMap<Tumbler, Val>, D::Error> {
-    use serde::de::{MapAccess, Visitor};
+    use serde::de::{Error, MapAccess, Visitor};
 
     struct MapVisitor;
 
@@ -131,7 +142,9 @@ fn entry_by_entry<'de, D: serde::Deserializer<'de>>(
         fn visit_map<A: MapAccess<'de>>(self, mut entries: A) -> Result<Self::Value, A::Error> {
             let mut map = im::OrdMap::new();
             while let Some((addr, val)) = entries.next_entry::<Address, Val>()? {
-                map.insert(Tumbler::from(addr), val);
+                if map.insert(Tumbler::from(addr), val).is_some() {
+                    return Err(Error::custom("a content address named twice in one slice"));
+                }
             }
             Ok(map)
         }

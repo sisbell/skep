@@ -1,10 +1,12 @@
 //! The journaled record and the checkpointed slice: that both survive a
 //! bincode round trip and M2's durable recovery across a checkpoint; that
 //! the slice's serialized form is the format its readers pin; that the
-//! slice's decode takes its entries in every order they can arrive; that
-//! neither decode trusts a count its bytes do not carry or admits a key that
-//! is no tumbler, or no T4-valid address; and that both admit every T4-valid
-//! address, whatever its routing, since a release build stages each as given.
+//! slice's decode takes its entries in every order they can arrive, and
+//! refuses a body naming one address twice, however its digits spell it;
+//! that neither decode trusts a count its bytes do not carry or admits a key
+//! that is no tumbler, or no T4-valid address; and that both admit every
+//! T4-valid address, whatever its routing, since a release build stages each
+//! as given.
 
 use serde::de::DeserializeOwned;
 use skep_address::{content_subspace, validate, Level, Nat, T4Clause, Tumbler};
@@ -339,6 +341,53 @@ fn the_slice_decodes_its_entries_in_whatever_order_they_arrive() {
             back, c,
             "decoded from entries arriving as ordinals {arrival:?}, the slice is not the one \
              holding them"
+        );
+    }
+}
+
+#[test]
+fn the_slice_refuses_a_body_naming_one_address_twice() {
+    // store.rs (`entry_by_entry`): a body names one state, and a state holds
+    // one value at an address (S0). No build writes a body naming an address
+    // twice — the encoder walks a map whose keys are unique — and a decode
+    // that took one would have to choose which value stands, where the fold
+    // keeps the stored one (S0(b)) and `OrdMap::insert` would keep the later.
+    // So the body is refused, by the decode's own message, and "one address"
+    // is the DECODED address: ca(1) twice as written, then ca(1) twice spelled
+    // two ways — its ordinal's `u32` digits with and without a trailing zero
+    // digit, which num-bigint reads as one number. The bytes are the raw
+    // shapes the refusal tests above lay down, each key spelled as the `u32`
+    // digits its components serialize as; the same shape naming two addresses
+    // is the control, decoding to the slice that holds both values.
+    let digits = |key: &Tumbler| -> Vec<Vec<u32>> { key.iter().map(Nat::to_u32_digits).collect() };
+    assert_eq!(
+        bincode::serialize(&digits(ca(1).tumbler())).expect("the digits serialize"),
+        bincode::serialize(ca(1).tumbler()).expect("the address serializes"),
+        "a tumbler's bytes are not its components' `u32` digits"
+    );
+    let body = |first: Vec<Vec<u32>>, second: Vec<Vec<u32>>| {
+        bincode::serialize(&vec![(first, b"first".to_vec()), (second, b"second".to_vec())])
+            .expect("the raw slice serializes")
+    };
+    let both: ContentStore =
+        bincode::deserialize(&body(digits(ca(1).tumbler()), digits(ca(2).tumbler())))
+            .expect("a body naming two addresses decodes");
+    assert_eq!(both.value_at(ca(1).tumbler()).map(Val::as_bytes), Some(&b"first"[..]));
+    assert_eq!(both.value_at(ca(2).tumbler()).map(Val::as_bytes), Some(&b"second"[..]));
+    // ca(1) as written, and again with its ordinal `[1]` spelled `[1, 0]`: a
+    // trailing zero digit, which num-bigint drops, so that key decodes to
+    // ca(1) itself.
+    let as_written = digits(ca(1).tumbler());
+    let mut respelled = as_written.clone();
+    respelled.last_mut().expect("a tumbler is nonempty").push(0);
+    for (how, second) in [("as written", as_written.clone()), ("spelled two ways", respelled)] {
+        assert_eq!(
+            assert_refused::<ContentStore>(
+                &format!("a slice naming ca(1) twice, {how}"),
+                &body(as_written.clone(), second),
+            ),
+            "a content address named twice in one slice",
+            "a slice naming ca(1) twice, {how}, was refused for another reason"
         );
     }
 }

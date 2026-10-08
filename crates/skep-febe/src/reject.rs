@@ -4,7 +4,7 @@
 //! built for a frame that never parsed, `Rejection::unparseable`, lives
 //! beside the codec that raises it, in `codec`.
 
-use std::fmt;
+use std::{fmt, io};
 
 use skep_address::Address;
 use skep_retrieval::{Operand, SpanFault};
@@ -31,12 +31,12 @@ use crate::request::OpKind;
 ///
 /// A value, with value equality, so a caller may keep one (the last refusal
 /// per operation, say) and compare it against another. Equality is over all
-/// five fields, `detail` included: two rejections agreeing on op/code/
-/// disposition/site but carrying different messages are different answers to
-/// an operator, and compare unequal. `Hash` agrees with that equality, so a
-/// transport may key by a whole rejection — per-`(op, code)` tallies, a set
-/// of the distinct refusals a client has met — as it already keys by a bare
-/// [`RejectCode`].
+/// six fields, `detail` and `io_kind` included: two rejections agreeing on
+/// op/code/disposition/site but carrying different messages are different
+/// answers to an operator, and compare unequal. `Hash` agrees with that
+/// equality, so a transport may key by a whole rejection — per-`(op, code)`
+/// tallies, a set of the distinct refusals a client has met — as it already
+/// keys by a bare [`RejectCode`].
 ///
 /// `#[must_use]`: a rejection is an answer owed to a client, so building one
 /// and dropping it is the silence this module exists to prevent.
@@ -48,6 +48,20 @@ pub struct Rejection {
     pub disposition: Disposition,
     pub site: Option<FaultSite>,
     pub detail: Option<String>,
+    /// The I/O KIND behind a `Durability` refusal, for the daemon alone: the
+    /// kernel's barrier, its segment rotation and its salt's entropy refusal
+    /// all lower to the one code with the OS text as `detail`, and the text
+    /// is no contract — so the kind rides beside it, `Some` on exactly the
+    /// rejections `lower_txn` builds from `TxnError::Durability` and `None`
+    /// on every other. The daemon's write path reads it to tell a full
+    /// volume (`StorageFull`) from any other failure of the barrier and say
+    /// so on its operator stream; it is NEVER marshaled — the transport's
+    /// codec reads the five members above by name and the wire's rejection
+    /// carries them alone — and `Display` does not render it, so no client
+    /// sees it and nothing in a log line changes with it (the operations
+    /// design §1.1 m1: "set at `lower_txn`, read by the daemon and never
+    /// marshaled").
+    pub io_kind: Option<io::ErrorKind>,
 }
 
 /// The advisory half of a rejection: what reissuing would be worth. `code` is
@@ -121,7 +135,7 @@ pub struct FaultSite {
 /// The deduped union of every store error variant plus M10's own — flat &
 /// `Copy`, keyed by the disposition table (§5). Built mechanically: each
 /// store error enum lowers to `(RejectCode, Option<FaultSite>)` via the
-/// crate-internal `Lower` trait.
+/// `Lower` trait, whose one table of impls is the `lower` module's.
 ///
 /// `Hash`, so a caller may key by it: per-code counters are the first thing
 /// a transport instruments this surface with, and only this crate can supply
@@ -353,7 +367,7 @@ impl Rejection {
     /// drifting from the rows every other rejection of that code is given.
     pub fn classified(kind: OpKind, code: RejectCode, site: Option<FaultSite>) -> Rejection {
         let detail = code.fixed_detail().map(str::to_string);
-        Rejection { op: kind, code, disposition: code.disposition(), site, detail }
+        Rejection { op: kind, code, disposition: code.disposition(), site, detail, io_kind: None }
     }
 
     /// Attach a detail message (the `Durability` arm threads the underlying
@@ -363,10 +377,21 @@ impl Rejection {
         self.detail = Some(d);
         self
     }
+
+    /// Attach the I/O kind behind a `Durability` refusal — `with_detail`'s
+    /// shape, for the member beside `detail`. Called at one site, the
+    /// `Durability` arm of `lower_txn`, which is what keeps
+    /// [`Rejection::io_kind`]'s "`Some` on a durability refusal alone" true.
+    pub(crate) fn with_io_kind(mut self, kind: io::ErrorKind) -> Rejection {
+        self.io_kind = Some(kind);
+        self
+    }
 }
 
 /// An operator-facing line: the op that was refused, the authoritative code,
-/// the advisory disposition, and the detail when one was threaded.
+/// the advisory disposition, and the detail when one was threaded. Not the
+/// I/O kind: the detail already carries the OS text, and the kind is the
+/// daemon's to read and put into words of its own ([`Rejection::io_kind`]).
 ///
 /// The codes render through their own `Debug` spelling, NOT a table of wire
 /// strings: the wire vocabulary is the transport's (skepd's `code_name`,

@@ -7,6 +7,7 @@
 //! …), exercising the real request lifecycle end-to-end.
 
 use std::cell::{Cell, RefCell};
+use std::num::NonZeroUsize;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
@@ -318,15 +319,30 @@ impl Stores<World> for KernelStores {
     }
 }
 
-/// A front door over `kernel`, the miniature world's seeded tables and its
-/// enumeration count cleared first, so a test sees only what it seeds itself
-/// and counts only what it asks.
-pub fn surface_over(kernel: Arc<Kernel<World>>) -> OperationSurface<World> {
+/// The retry memo's capacity every fixture's front door is built at — the
+/// test world's own figure, as the daemon's pin is the daemon's: room for
+/// every id a suite keeps in flight at once. A suite about the BOUND builds
+/// its front door at the figure it tests, through [`surface_with_memo`].
+pub const MEMO_CAPACITY: NonZeroUsize = NonZeroUsize::new(16).expect("16 is nonzero");
+
+/// A front door over `kernel` with a retry memo of `memo_capacity` entries,
+/// the miniature world's seeded tables and its enumeration count cleared
+/// first, so a test sees only what it seeds itself and counts only what it
+/// asks.
+pub fn surface_with_memo(
+    kernel: Arc<Kernel<World>>,
+    memo_capacity: NonZeroUsize,
+) -> OperationSurface<World> {
     seed_edition_claims(Vec::new()); // the empty class, until a test seeds it
     seed_universal_grant_index(Vec::new()); // …the empty universal index, likewise
     UNIVERSAL_GRANT_INDEX_ENUMERATIONS.with(|n| n.set(0)); // …no enumeration of it counted yet
     seed_unreadable_world(Vec::new()); // …and a world that admits every read
-    OperationSurface::new(Box::new(KernelStores { kernel }))
+    OperationSurface::new(Box::new(KernelStores { kernel }), memo_capacity)
+}
+
+/// [`surface_with_memo`] at [`MEMO_CAPACITY`].
+pub fn surface_over(kernel: Arc<Kernel<World>>) -> OperationSurface<World> {
+    surface_with_memo(kernel, MEMO_CAPACITY)
 }
 
 /// [`surface_over`] a fresh in-memory kernel.

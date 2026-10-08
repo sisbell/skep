@@ -345,6 +345,7 @@ fn fixture(name: &str) -> Response {
             disposition: Disposition::Permanent,
             site: None,
             detail: None,
+            io_kind: None,
         }),
         "rejected_site" => Response::Rejected(Rejection {
             op: OpKind::RetrieveV,
@@ -356,6 +357,7 @@ fn fixture(name: &str) -> Response {
                 ..FaultSite::default()
             }),
             detail: None,
+            io_kind: None,
         }),
         "rejected_unparseable" => {
             JsonCodec.unparseable(ParseError { detail: Some("unknown op 'frobnicate'".into()) })

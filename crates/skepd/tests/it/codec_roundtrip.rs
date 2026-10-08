@@ -1014,6 +1014,7 @@ fn all_responses() -> Vec<(&'static str, Response)> {
                 disposition: Disposition::Permanent,
                 site: None,
                 detail: None,
+                io_kind: None,
             }),
         ),
         (
@@ -1028,6 +1029,7 @@ fn all_responses() -> Vec<(&'static str, Response)> {
                     ..FaultSite::default()
                 }),
                 detail: None,
+                io_kind: None,
             }),
         ),
         (
@@ -1196,6 +1198,7 @@ fn reject_code_names_are_pinned() {
             disposition: Disposition::Permanent,
             site: None,
             detail: None,
+            io_kind: None,
         });
         let v: Value = serde_json::from_slice(&codec.marshal(&resp)).expect("json");
         assert_eq!(v["code"].as_str(), Some(name), "wire name drifted for {code:?}");
@@ -1258,6 +1261,7 @@ fn every_disposition_marshals_and_diagnostics_are_omitted_when_absent() {
             disposition: disp,
             site: None,
             detail: None,
+            io_kind: None,
         });
         let v: Value = serde_json::from_slice(&codec.marshal(&resp)).expect("json");
         assert_eq!(v["disposition"].as_str(), Some(name));
@@ -1279,6 +1283,7 @@ fn every_disposition_marshals_and_diagnostics_are_omitted_when_absent() {
             addr: Some(d2()),
         }),
         detail: Some("d2 not registered".into()),
+        io_kind: None,
     });
     let v: Value = serde_json::from_slice(&codec.marshal(&resp)).expect("json");
     assert_eq!(v["site"]["operand"].as_str(), Some("second"));
@@ -1288,6 +1293,44 @@ fn every_disposition_marshals_and_diagnostics_are_omitted_when_absent() {
     assert_eq!(v["site"]["fault"].as_str(), Some("start_too_shallow"));
     assert_eq!(v["site"]["addr"].as_str(), Some("1.0.1.0.2"));
     assert_eq!(v["detail"].as_str(), Some("d2 not registered"));
+}
+
+/// The operations design §1.1 m1, NOTHING CROSSES THE WIRE:
+/// `Rejection::io_kind` is the daemon's to read and is never marshaled. A
+/// durability rejection carrying `Some(StorageFull)` and the same rejection
+/// carrying `None` marshal to the same bytes; the object's keys are the
+/// rejection's five documented members (wire.md §Rejections) and the `resp`
+/// tag, and the kind's name appears nowhere in them.
+#[test]
+fn a_rejection_s_io_kind_never_crosses_the_wire() {
+    let codec = JsonCodec;
+    let with_kind = Rejection {
+        op: OpKind::Insert,
+        code: RejectCode::Durability,
+        disposition: Disposition::Retry,
+        site: None,
+        detail: Some("no space left on device".into()),
+        io_kind: Some(std::io::ErrorKind::StorageFull),
+    };
+    let without = Rejection { io_kind: None, ..with_kind.clone() };
+    let bytes = codec.marshal(&Response::Rejected(with_kind));
+    assert_eq!(
+        bytes,
+        codec.marshal(&Response::Rejected(without)),
+        "the kind changes nothing on the wire: byte-equal with and without it"
+    );
+    let v: Value = serde_json::from_slice(&bytes).expect("json");
+    let keys: BTreeSet<&str> =
+        v.as_object().expect("an object").keys().map(String::as_str).collect();
+    assert_eq!(
+        keys,
+        BTreeSet::from(["code", "detail", "disposition", "op", "resp"]),
+        "the five members and the tag, and no sixth"
+    );
+    assert!(
+        !String::from_utf8_lossy(&bytes).contains("StorageFull"),
+        "the kind's name is nowhere in the frame"
+    );
 }
 
 /// wire.md §Value encodings: "Span sets and endsets are JSON arrays of

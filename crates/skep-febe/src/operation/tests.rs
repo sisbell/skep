@@ -1,3 +1,4 @@
+use std::num::NonZeroUsize;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
@@ -164,8 +165,14 @@ impl crate::Stores<World> for KernelStores {
     }
 }
 
+/// The memo capacity every surface here is built at — this suite's own
+/// figure, as the daemon's pin is the daemon's: room for the two ids a
+/// lifecycle test keeps in flight. The bound itself is `memo`'s claim and
+/// `tests/it/idempotency.rs`'s.
+const MEMO_CAPACITY: NonZeroUsize = NonZeroUsize::new(8).expect("8 is nonzero");
+
 fn surface() -> OperationSurface<World> {
-    OperationSurface::new(Box::new(KernelStores { kernel: kernel() }))
+    OperationSurface::new(Box::new(KernelStores { kernel: kernel() }), MEMO_CAPACITY)
 }
 
 /// A `Stores` recording every attestation a driver acquisition carries —
@@ -223,7 +230,7 @@ impl crate::Stores<World> for PoisonableStores {
 fn poisonable_surface() -> (OperationSurface<World>, Arc<AtomicBool>) {
     let poisoned = Arc::new(AtomicBool::new(false));
     let stores = PoisonableStores { kernel: kernel(), poisoned: Arc::clone(&poisoned) };
-    (OperationSurface::new(Box::new(stores)), poisoned)
+    (OperationSurface::new(Box::new(stores), MEMO_CAPACITY), poisoned)
 }
 
 fn insert_op() -> Op {
@@ -614,10 +621,10 @@ fn every_write_under_a_bound_session_is_answered_and_its_refusals_name_it() {
 #[test]
 fn an_attestation_reaches_every_store_driver_a_write_acquires() {
     let carried = Arc::new(Mutex::new(Vec::new()));
-    let febe = OperationSurface::new(Box::new(RecordingStores {
-        kernel: kernel(),
-        carried: Arc::clone(&carried),
-    }));
+    let febe = OperationSurface::new(
+        Box::new(RecordingStores { kernel: kernel(), carried: Arc::clone(&carried) }),
+        MEMO_CAPACITY,
+    );
     let s = febe.bootstrap_session();
     let attestation =
         Attestation::new(1, vec![0xA5]).expect("a non-zero tag over a non-empty blob");

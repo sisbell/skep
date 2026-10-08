@@ -29,7 +29,8 @@ fn ack_addr(r: Response) -> Address {
 #[test]
 fn engine_world_satisfies_the_febe_demand() {
     let engine = mem_engine();
-    let febe: OperationSurface<skep_engine::World> = OperationSurface::new(Box::new(engine.stores()));
+    let febe: OperationSurface<skep_engine::World> =
+        OperationSurface::new(Box::new(engine.stores()), std::num::NonZeroUsize::MIN);
 
     let boot_session = febe.bootstrap_session();
     let prefix = match febe.execute(
@@ -90,7 +91,8 @@ fn engine_world_satisfies_the_febe_demand() {
 #[test]
 fn m10_s_read_surface_answers_through_the_engine_s_predicate() {
     let engine = mem_engine();
-    let febe: OperationSurface<skep_engine::World> = OperationSurface::new(Box::new(engine.stores()));
+    let febe: OperationSurface<skep_engine::World> =
+        OperationSurface::new(Box::new(engine.stores()), std::num::NonZeroUsize::MIN);
 
     let boot_session = febe.bootstrap_session();
     let prefix = match febe.execute(
@@ -196,8 +198,10 @@ fn engine_stores_serves_a_kernel_rooted_at_a_reconstructed_world() {
 
     let world = engine.world_at(past).expect("a committed boundary answers");
     let kernel = Kernel::open(mem_cfg(), world).expect("an in-memory open runs no recovery");
-    let febe: OperationSurface<skep_engine::World> =
-        OperationSurface::new(Box::new(EngineStores::new(Arc::new(kernel))));
+    let febe: OperationSurface<skep_engine::World> = OperationSurface::new(
+        Box::new(EngineStores::new(Arc::new(kernel))),
+        std::num::NonZeroUsize::MIN,
+    );
     let session = febe.open_session(USER);
 
     match febe.execute(

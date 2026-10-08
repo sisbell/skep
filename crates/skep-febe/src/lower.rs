@@ -5,6 +5,14 @@
 //! enum's own impl. Neither converter ever returns `Ok` — every upstream
 //! failure becomes a [`Rejection`].
 //!
+//! The write path's converter, [`lower_txn`], is also THE DOOR a caller
+//! outside the crate lowers through: the daemon's head writer calls the
+//! stores directly, holds the same `TxnError<E>` the dispatch table holds at
+//! its own arms, and renders its refusal as the wire renders a rejection —
+//! the code and the detail, never a `Debug` rendering of the store's error
+//! — by lowering it here, through the one table, with the I/O kind set
+//! where the arm is `Durability` (the operations design §1.1 row 38).
+//!
 //! The ownership ruling (2026-08-16): M5's and M7's `NotOwner(Address)`
 //! variants thread the failing document (or target link) into
 //! `FaultSite::addr` — the same address-localization shape M6's
@@ -23,8 +31,17 @@ use skep_retrieval::{CompareError, DeletionsError, ExtentError, FindError, Origi
 use crate::reject::{FaultSite, RejectCode, Rejection};
 use crate::request::OpKind;
 
-/// One impl per store error enum (mechanical; §5).
-pub(crate) trait Lower {
+/// One impl per store error enum (mechanical; §5), every one of them in this
+/// file: the table is the ONE lowering, and a store error that gains a
+/// variant is lowered here, never at a caller.
+///
+/// Public because [`lower_txn`] is, and a door bounded on a trait its caller
+/// cannot name is no door. Not sealed: an impl a dependent wrote for a type
+/// of its own would classify on that dependent's account, which
+/// [`Rejection::classified`] already lets it do by hand — so a seal would
+/// guard nothing this crate does not publish. What a dependent cannot do is
+/// change how a store error M10 names lowers: those impls are here.
+pub trait Lower {
     fn lower(self) -> (RejectCode, Option<FaultSite>);
 }
 
@@ -47,23 +64,39 @@ pub(crate) fn lower_read<E: Lower>(kind: OpKind, e: E) -> Rejection {
 /// Each of those four says something different about reissuing, and says it
 /// in the disposition, with the cause threaded where an operator needs it.
 /// `Durability` is the one `Retry` — the I/O text rides along, so the hint
-/// has a reason attached. The two encoding refusals are both `Permanent`,
-/// and each carries its own code because they ask different things of an
-/// operator: `TxnUnencodable` names records M2's serializer refused (the
-/// records are staged by the owning store, so the same request re-presented
-/// stages the same record — nothing the client can reframe), while
-/// `TxnOverBudget` names records that all encode but overrun the journal's
-/// per-transaction budget, and carries the remedy — split the request.
-/// `Poisoned` is `Halt`.
-pub(crate) fn lower_txn<E: Lower>(kind: OpKind, e: TxnError<E>) -> Rejection {
+/// has a reason attached, and the I/O KIND rides beside it in
+/// [`Rejection::io_kind`], for the daemon: the barrier's failure, the
+/// rotation's segment creation and the salt's entropy refusal share this
+/// one code, and only the kind tells a full volume from the rest. The two
+/// encoding refusals are both `Permanent`, and each carries its own code
+/// because they ask different things of an operator: `TxnUnencodable` names
+/// records M2's serializer refused (the records are staged by the owning
+/// store, so the same request re-presented stages the same record — nothing
+/// the client can reframe), while `TxnOverBudget` names records that all
+/// encode but overrun the journal's per-transaction budget, and carries the
+/// remedy — split the request. `Poisoned` is `Halt`.
+///
+/// THE DOOR (the operations design §1.1 row 38): public, so a caller that
+/// drives a store itself — the daemon's head writer, which meets
+/// `TxnError<CreateDocumentError>` at its staging draft's mint and
+/// `TxnError<InsertError>` and `TxnError<PublishError>` at the head atom's
+/// insert and publish — lowers what it holds exactly as the dispatch table
+/// lowers the same error for the front door, under the `OpKind` it names,
+/// and renders the rejection's code and detail rather than the store error's
+/// `Debug`. The `detail` is the error's own words where one is threaded (the
+/// I/O text; M2's encoding account) and the code's standing explanation
+/// otherwise; no arm renders a variant name. One body: this function IS the
+/// lowering the dispatch table calls, so the door and the front door cannot
+/// drift.
+pub fn lower_txn<E: Lower>(kind: OpKind, e: TxnError<E>) -> Rejection {
     match e {
         TxnError::Rejected(inner) => {
             let (code, site) = inner.lower();
             Rejection::classified(kind, code, site)
         }
-        TxnError::Durability(io) => {
-            Rejection::classified(kind, RejectCode::Durability, None).with_detail(io.to_string())
-        }
+        TxnError::Durability(io) => Rejection::classified(kind, RejectCode::Durability, None)
+            .with_detail(io.to_string())
+            .with_io_kind(io.kind()),
         TxnError::Unencodable(cause) => {
             Rejection::classified(kind, RejectCode::TxnUnencodable, None)
                 .with_detail(cause.to_string())

@@ -40,17 +40,6 @@ use crate::request::{OpKind, ReqId, MAX_REQ_ID_BYTES};
 use crate::response::CommittedAck;
 use crate::session::SessionId;
 
-/// The retry memo's capacity, in the type [`LruCache`] demands — so
-/// nonzero is proven where the number is written, not re-proven where it is
-/// used.
-// OPEN DECISION: the interface pins `OperationSurface::new(stores)` with NO
-// `idem_capacity` parameter, while the design (§7 / Core data model / Open
-// build decision 3) calls for an explicit construction-time knob with "no
-// implicit default". The interface is the higher authority for the public
-// surface, so the knob is absent and this crate-fixed default bounds the memo
-// instead — surfaced in the build report as an interface↔design conflict.
-const DEFAULT_MEMO_CAPACITY: NonZeroUsize = NonZeroUsize::new(1024).expect("1024 is nonzero");
-
 /// The memo's key (§7): the client's `ReqId` confined to the session that
 /// committed under it. A `ReqId` is unique only WITHIN its session, so the
 /// session is half the key's identity rather than a field beside it.
@@ -75,8 +64,10 @@ struct TaggedAck {
     ack: CommittedAck,
 }
 
-/// The memo itself (§7). Bounded on both axes a CLIENT chooses:
-/// [`DEFAULT_MEMO_CAPACITY`] entries, each keyed by at most
+/// The memo itself (§7). Bounded on both axes: the capacity its constructor
+/// is handed — the design's construction-time knob with no implicit default
+/// (§7, Open build decision 3), so this crate keeps no figure of its own and
+/// the daemon supplies its pin — entries, each keyed by at most
 /// [`MAX_REQ_ID_BYTES`] of client-chosen key, beside one acknowledgment of at
 /// most two store-minted addresses, sized by what they acknowledge. Eviction
 /// is LRU and costs only a re-execution, which is what "best effort" means
@@ -89,8 +80,11 @@ pub(crate) struct RetryMemo {
 }
 
 impl RetryMemo {
-    pub(crate) fn new() -> RetryMemo {
-        RetryMemo { entries: Mutex::new(LruCache::new(DEFAULT_MEMO_CAPACITY)) }
+    /// A memo of `capacity` entries, in the type [`LruCache`] demands — so
+    /// nonzero is proven where the number is written, at the caller that
+    /// chose it, and never re-proven here.
+    pub(crate) fn new(capacity: NonZeroUsize) -> RetryMemo {
+        RetryMemo { entries: Mutex::new(LruCache::new(capacity)) }
     }
 
     /// Memoize one committed-write acknowledgment under this session's key.
@@ -163,13 +157,19 @@ mod tests {
         validate(t).unwrap_or_else(|_| panic!("T4-valid test address"))
     }
 
+    /// A memo of `capacity` entries — the figure each test chooses, as the
+    /// daemon chooses its own.
+    fn memo_of(capacity: usize) -> RetryMemo {
+        RetryMemo::new(NonZeroUsize::new(capacity).expect("a test capacity is nonzero"))
+    }
+
     /// §7: the memo round-trips an ack keyed by [`MemoKey`] and op-kind-
     /// matched — a foreign session or a reused-across-kinds `ReqId` misses —
     /// and `purge_session` clears one session's entries only.
     #[test]
     fn an_entry_is_confined_to_its_session_and_kind_and_dies_with_the_session() {
         let sessions = crate::session::Sessions::new();
-        let memo = RetryMemo::new();
+        let memo = memo_of(8);
         let s1 = sessions.open(skep_namespace::PrincipalId(1));
         let s2 = sessions.open(skep_namespace::PrincipalId(2));
         let id = ReqId(b"req-1".to_vec());
@@ -216,7 +216,7 @@ mod tests {
     #[test]
     fn an_oversized_key_is_not_memoized() {
         let sessions = crate::session::Sessions::new();
-        let memo = RetryMemo::new();
+        let memo = memo_of(8);
         let s = sessions.open(skep_namespace::PrincipalId(1));
 
         let at_cap = ReqId(vec![b'k'; MAX_REQ_ID_BYTES]);
@@ -242,7 +242,7 @@ mod tests {
     #[test]
     fn an_oversized_lookup_misses_before_its_key_is_built() {
         let sessions = crate::session::Sessions::new();
-        let memo = RetryMemo::new();
+        let memo = memo_of(8);
         let s = sessions.open(skep_namespace::PrincipalId(1));
         let over = ReqId(vec![b'k'; MAX_REQ_ID_BYTES + 1]);
         memo.entries.lock().put(
@@ -255,20 +255,21 @@ mod tests {
         );
     }
 
-    /// §7: the memo is BOUNDED at [`DEFAULT_MEMO_CAPACITY`] — the whole
-    /// policy, since the interface's one-argument `new` leaves no
-    /// construction-time knob — and what it drops when it overflows is the
-    /// least recently used entry. A [`RetryMemo::get`] is a use, so the ack a
-    /// client just replayed outlives one nobody has asked for.
+    /// §7 (op-D5): the memo is BOUNDED at the capacity its constructor was
+    /// handed — here two, so the bound is met at the third entry — and what
+    /// it drops when it overflows is the least recently used entry. A
+    /// [`RetryMemo::get`] is a use, so the ack a client just replayed
+    /// outlives one nobody has asked for. The same bound through the front
+    /// door's own constructor is `tests/it/idempotency.rs`'s.
     #[test]
     fn the_memo_is_bounded_and_evicts_least_recently_used() {
         let sessions = crate::session::Sessions::new();
-        let memo = RetryMemo::new();
+        let cap = 2;
+        let memo = memo_of(cap);
         let s = sessions.open(skep_namespace::PrincipalId(1));
         let id = |i: usize| ReqId(i.to_string().into_bytes());
         let ack = |i: usize| CommittedAck::At { at: Seq(i as u64) };
 
-        let cap = DEFAULT_MEMO_CAPACITY.get();
         for i in 0..cap {
             memo.put(s, id(i), OpKind::Delete, ack(i));
         }

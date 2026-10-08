@@ -192,7 +192,7 @@ fn resolve_maps_every_lookup_arm_to_its_actor() {
         salt: SaltSource::Seeded(0),
     })
     .expect("in-memory genesis cannot fail");
-    let febe = OperationSurface::new(Box::new(engine.stores()));
+    let febe = OperationSurface::new(Box::new(engine.stores()), std::num::NonZeroUsize::MIN);
     let snap = engine.kernel().snapshot();
     let world = snap.world();
     // Genesis: the world's own slice holds no account's key, so no signed

@@ -436,7 +436,7 @@ fn a_home_minted_private_below_the_door_is_served_private_and_has_no_clearing_ac
             salt: SaltSource::Seeded(0),
         };
         let engine = Engine::open(cfg).expect("engine recover");
-        let febe = OperationSurface::new(Box::new(engine.stores()));
+        let febe = OperationSurface::new(Box::new(engine.stores()), std::num::NonZeroUsize::MIN);
         let codec = JsonCodec;
         let req = codec
             .parse(create_frame(&account, Some(false)).as_bytes())

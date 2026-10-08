@@ -1300,7 +1300,7 @@ fn pre_feature_positions_answer_bare_entries() {
             salt: SaltSource::Seeded(0),
         };
         let engine = Engine::open(cfg).expect("engine genesis");
-        let febe = OperationSurface::new(Box::new(engine.stores()));
+        let febe = OperationSurface::new(Box::new(engine.stores()), std::num::NonZeroUsize::MIN);
         let codec = JsonCodec;
         let exec = |sid: SessionId, frame: &str| {
             let req = codec

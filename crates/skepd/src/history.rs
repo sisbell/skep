@@ -273,8 +273,11 @@ fn execute_read_on(
     // BY TYPE at the signature above and the swap this card warns about
     // cannot compile.
     let head = head.clone();
-    let febe = OperationSurface::new(Box::new(EngineStores::new(Arc::new(kernel))))
-        .with_read_predicate(move |p: Option<PrincipalId>, doc: &Address| head.readable(p, doc));
+    let febe = OperationSurface::new(
+        Box::new(EngineStores::new(Arc::new(kernel))),
+        std::num::NonZeroUsize::MIN,
+    )
+    .with_read_predicate(move |p: Option<PrincipalId>, doc: &Address| head.readable(p, doc));
     let session = match principal {
         Some(p) => febe.open_session(p),
         None => SessionId::GUEST,

@@ -1424,10 +1424,19 @@ Rules that hold across its files:
 - **Every rejection is classified.** Each one the crate builds goes through
   `Rejection::classified`, which sets its disposition from
   `RejectCode::disposition`; every upstream store error reaches it through
-  the `lower` table.
+  the `lower` table. The write path's lowering, `lower_txn`, is public: it
+  is the door a caller that drives a store itself — the daemon's head
+  writer — lowers its `TxnError` through, so its refusal is the classified
+  rejection the front door would have answered and renders as code and
+  detail, never as the store error's `Debug`. A `Durability` rejection
+  carries the I/O kind in `Rejection::io_kind`, set at `lower_txn` alone,
+  read by the daemon's write path and never marshaled — the transport's
+  codec reads the wire's five members by name.
 - **The retry memo holds `CommittedAck`s and nothing else** — the one
   shape an acknowledged write's `Response` yields — so no rejection and no
-  read answer is ever replayed.
+  read answer is ever replayed. Its capacity is `OperationSurface::new`'s
+  parameter and no default of the crate's: the daemon supplies its own
+  pin, carded at its open, and a test the figure it needs.
 
 Its integration suite is one binary, `tests/it/`: one file per topic over
 the shared `common` world; `reexports`, which checks from outside the crate

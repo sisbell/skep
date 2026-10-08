@@ -269,6 +269,18 @@ fn cadence_bytes_for(newest_checkpoint_len: Option<u64>) -> NonZeroU64 {
 /// [`CHECKPOINT_EVERY_COMMITS`].
 const RETAINED_CHECKPOINTS: usize = 2;
 
+/// THE RETRY MEMO's CAPACITY — 1024 entries, INTERIM: the daemon's own pin,
+/// handed to M10's `OperationSurface::new` at the open as the construction
+/// parameter the M10 design makes it (§7's knob "with no implicit default";
+/// the operations design §2.6, op-D5; the configuration register's row "the
+/// retry memo's capacity, THE DAEMON's PIN"). Never an operator knob: the
+/// memo is a best-effort hint nobody can observe — an evicted key costs one
+/// re-execution and nothing says so — so a flag for it would be a setting
+/// with no echo and no face. The figure is the one the crate fixed before
+/// the parameter existed, so no board's behaviour moves with it.
+const MEMO_CAPACITY: std::num::NonZeroUsize =
+    std::num::NonZeroUsize::new(1024).expect("1024 is nonzero");
+
 /// The body cap for a request — its method and its path — checked on the
 /// declared `Content-Length` before a byte is read, so a route that cannot
 /// use a large body is never asked to allocate for one: the frame routes,
@@ -691,7 +703,7 @@ impl Daemon {
         // the store ONLY while it carries no consult — a consult added here is
         // owed to that dry run too, or the check passes through, UNATTESTED, a
         // shot the store then admits.
-        let febe = OperationSurface::new(Box::new(engine.stores()));
+        let febe = OperationSurface::new(Box::new(engine.stores()), MEMO_CAPACITY);
         let auth = {
             let snap = engine.kernel().snapshot();
             AuthState::open(opts, snap.world()).map_err(DaemonError::BlockedPrefixes)?

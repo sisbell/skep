@@ -23,6 +23,7 @@ mod dispatch;
 pub use door::{consult_read, ReadPredicate};
 
 use std::fmt;
+use std::num::NonZeroUsize;
 
 use skep_address::Address;
 use skep_arrangement::{Caller, M5Rec};
@@ -113,15 +114,22 @@ where
     /// holds neither the kernel nor the registry directly (§9). We reach the
     /// kernel via `stores.kernel()` and acquire each store driver per-op.
     ///
-    /// The retry memo is bounded at a crate-fixed default capacity: the
-    /// design's explicit `idem_capacity` construction knob conflicts with the
-    /// interface's one-argument `new`, and the interface wins (see
-    /// [`RetryMemo`]).
-    pub fn new(stores: Box<dyn Stores<W>>) -> Self {
+    /// The retry memo is bounded at `memo_capacity` entries, and the figure
+    /// is the CALLER's: the design's construction-time knob with no implicit
+    /// default (§7, Open build decision 3; the operations design §2.6,
+    /// op-D5), so this crate keeps no default and the daemon supplies its
+    /// own pin — 1024, carded at its open, never an operator knob, since a
+    /// best-effort memo nobody can observe would make a flag with no echo.
+    /// A test, or a harness whose requests carry no idempotency key, passes
+    /// the figure it needs and no more; a front door that serves reads
+    /// alone, which never touch the memo, passes the smallest,
+    /// `NonZeroUsize::MIN`. In the type the memo's store demands, so nonzero
+    /// is proven where the number is written (`memo::RetryMemo`).
+    pub fn new(stores: Box<dyn Stores<W>>, memo_capacity: NonZeroUsize) -> Self {
         OperationSurface {
             stores,
             sessions: Sessions::new(),
-            memo: RetryMemo::new(),
+            memo: RetryMemo::new(memo_capacity),
             read_predicate: None,
         }
     }
@@ -346,8 +354,8 @@ where
         // step-(b) read/write split hands each write arm a PROVEN-bound
         // principal, so no dispatch arm unwraps an `Option`; and the one
         // runtime `expect` asserts what no input reaches — `unjudged_fill`'s
-        // that `[1]` is a nonempty sequence (the memo capacity's is evaluated
-        // at compile time).
+        // that `[1]` is a nonempty sequence (the memo's capacity arrives
+        // proven nonzero, in the caller's `NonZeroUsize`).
         let Request { id, op, attest } = req;
         let kind = op.kind(); // Copy; captured before dispatch moves the op
         // (a), then (c), then (b) — that order being the stated precedence

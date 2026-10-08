@@ -451,7 +451,7 @@ mod tests {
             salt: SaltSource::Seeded(0),
         })
         .expect("in-memory genesis cannot fail");
-        let febe = OperationSurface::new(Box::new(engine.stores()));
+        let febe = OperationSurface::new(Box::new(engine.stores()), std::num::NonZeroUsize::MIN);
         let exec = |sid, frame: serde_json::Value| -> String {
             let req = JsonCodec
                 .parse(frame.to_string().as_bytes())

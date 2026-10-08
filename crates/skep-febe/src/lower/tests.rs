@@ -438,3 +438,123 @@ fn flat_variants_lower_to_the_same_named_code() {
     same_name(OrphanError::OutOfBounds);
     same_name(OrphanError::ImageTooLarge);
 }
+
+// ─────────────── the I/O kind, and the door the daemon lowers through ───────
+
+/// A durability failure as the kernel's barrier reports a full volume: the
+/// OS kind, and the OS text as its `Display`.
+fn storage_full() -> std::io::Error {
+    std::io::Error::new(std::io::ErrorKind::StorageFull, "no space left on device")
+}
+
+/// The operations design §1.1 m1, THE KIND TRAVELS: the `Durability` arm
+/// carries the `io::Error`'s kind in `io_kind` beside its text in `detail`,
+/// so the daemon tells a full volume from the barrier's other failures
+/// without parsing an OS message; the other four arms carry no kind, and
+/// neither does a read's lowering — the member is `Some` on a durability
+/// refusal alone.
+#[test]
+fn the_durability_arm_carries_the_io_kind_and_no_other_arm_does() {
+    let rej = lower_txn::<InsertError>(OpKind::Insert, TxnError::Durability(storage_full()));
+    assert_eq!(rej.code, RejectCode::Durability);
+    assert_eq!(rej.detail.as_deref(), Some("no space left on device"), "the text, as before");
+    assert_eq!(rej.io_kind, Some(std::io::ErrorKind::StorageFull), "and now the kind");
+
+    let other = std::io::Error::other("entropy refused");
+    let rej = lower_txn::<InsertError>(OpKind::Insert, TxnError::Durability(other));
+    assert_eq!(rej.io_kind, Some(std::io::ErrorKind::Other), "the kind is whatever the error's is");
+
+    for (arm, e) in [
+        ("Rejected", TxnError::Rejected(InsertError::EmptyContent)),
+        ("Unencodable", TxnError::Unencodable("record too large".into())),
+        ("OverBudget", TxnError::OverBudget { bytes: 99 }),
+        ("Poisoned", TxnError::Poisoned),
+    ] {
+        let rej = lower_txn(OpKind::Insert, e);
+        assert_eq!(rej.io_kind, None, "{arm} is no I/O failure and carries no kind");
+    }
+    let rej = lower_read(OpKind::RetrieveV, RetrieveError::TooManyItems);
+    assert_eq!(rej.io_kind, None, "a read's refusal carries no kind");
+}
+
+/// The operations design §1.1 row 38, THE DOOR LOWERS AS THE FRONT DOOR
+/// DOES: for each of the three store errors the daemon's head writer holds —
+/// the namespace's `CreateDocumentError` at its staging draft's mint, the
+/// arrangement's `InsertError` and `PublishError` at the head atom's insert
+/// and publish — a `TxnError::Rejected(e)` through the door is the
+/// rejection the dispatch table would answer: the store's own refusal
+/// through the one table (its code and site) and the code's standing
+/// explanation as detail, `Gate`'s included; a `TxnError::Durability` through
+/// it carries the kind; and no detail is a `Debug` rendering — the error's
+/// own words, no variant name, no braces.
+///
+/// The door is reached as a dependent reaches it, through the crate root:
+/// `crate::lower_txn` resolves only through `lib.rs`'s re-export, which the
+/// compiler admits only for a `pub` item — so a door narrowed to the crate,
+/// or its re-export dropped, fails this build.
+#[test]
+fn the_door_lowers_the_head_writer_s_three_errors_as_the_table_does() {
+    fn as_the_table_does<E: Lower + Clone + std::fmt::Debug>(kind: OpKind, e: E) {
+        let rendered = format!("{e:?}");
+        let name = variant_name(&e);
+        let (code, site) = e.clone().lower();
+        let through_the_door = crate::lower_txn(kind, TxnError::Rejected(e));
+        assert_eq!(
+            through_the_door,
+            Rejection::classified(kind, code, site),
+            "{rendered} through the door is the table's own classification"
+        );
+        assert_eq!(through_the_door.op, kind, "under the kind the caller named");
+        assert_eq!(through_the_door.io_kind, None, "{rendered}: a store's refusal has no kind");
+        if let Some(d) = &through_the_door.detail {
+            assert!(
+                !d.contains(&name) && !d.contains(['{', '}', '(', ')']),
+                "{rendered}: the detail is a standing explanation, never Debug: {d}"
+            );
+        }
+    }
+
+    // The staging draft's mint: M3's two arms, the wrapper's `Gate` carrying
+    // the one standing explanation in the table.
+    as_the_table_does(OpKind::CreateNewDocument, CreateDocumentError::NotOwner);
+    as_the_table_does(
+        OpKind::CreateNewDocument,
+        CreateDocumentError::Mint(MintError::Gate(skep_address::GateViolation)),
+    );
+    let gate = crate::lower_txn(
+        OpKind::CreateNewDocument,
+        TxnError::Rejected(CreateDocumentError::Mint(MintError::Gate(skep_address::GateViolation))),
+    );
+    assert_eq!(gate.code, RejectCode::Gate);
+    assert!(gate.detail.as_deref().is_some_and(|d| d.contains("operator condition")));
+
+    // The head atom's insert: a site-carrying refusal and a flat one.
+    as_the_table_does(OpKind::Insert, InsertError::NotOwner(doc()));
+    as_the_table_does(OpKind::Insert, InsertError::PublishedTarget);
+    let not_owner =
+        crate::lower_txn(OpKind::Insert, TxnError::Rejected(InsertError::NotOwner(doc())));
+    assert_eq!(not_owner.site.expect("the failing document rides the site").addr, Some(doc()));
+
+    // The head's publish: the shot's withheld origin and a budget refusal.
+    as_the_table_does(OpKind::Publish, PublishError::Withheld(doc()));
+    as_the_table_does(OpKind::Publish, PublishError::TooManyValues);
+
+    // A full volume at any of the three commits: the code, the OS text as
+    // the detail — never `Custom { kind: StorageFull, … }` — and the kind.
+    let full = crate::lower_txn::<CreateDocumentError>(
+        OpKind::CreateNewDocument,
+        TxnError::Durability(storage_full()),
+    );
+    assert_eq!(full.code, RejectCode::Durability);
+    assert_eq!(full.detail.as_deref(), Some("no space left on device"));
+    assert_eq!(full.io_kind, Some(std::io::ErrorKind::StorageFull));
+    for rej in [
+        crate::lower_txn::<InsertError>(OpKind::Insert, TxnError::Durability(storage_full())),
+        crate::lower_txn::<PublishError>(OpKind::Publish, TxnError::Durability(storage_full())),
+    ] {
+        assert_eq!(rej.io_kind, Some(std::io::ErrorKind::StorageFull));
+        let d = rej.detail.expect("the I/O text rides the detail");
+        assert_eq!(d, storage_full().to_string(), "the error's Display");
+        assert!(!d.contains("StorageFull") && !d.contains('{'), "never its Debug: {d}");
+    }
+}

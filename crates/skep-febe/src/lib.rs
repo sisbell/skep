@@ -5,7 +5,10 @@
 //! stamped with its linearization coordinate (`committed_at` on every write
 //! that commits, `as_of` on every read that answers — A1/A2/V1), and every
 //! failure that reaches it surfaces as a *typed, classified, never-silent*
-//! rejection. One thing well:
+//! rejection — a durability refusal carrying the I/O kind for the daemon's
+//! eyes alone ([`Rejection::io_kind`]), and the lowering that classifies a
+//! store's refusal published as a door ([`lower_txn`]) for the one caller
+//! that drives a store without this front door. One thing well:
 //! the uniform request lifecycle — *parse → authorize → linearize →
 //! commit-gate → marshal → surface* — driven by a static dispatch table
 //! ([`OperationSurface::execute`]).
@@ -110,7 +113,9 @@
 //!   `Reorder`, it does not reorder);
 //! * exactly-once, in both of the ways a client can fail to get it — the
 //!   retry memo is an in-memory, per-`(SessionId, ReqId)` hint holding
-//!   committed-write acks only (§7). It answers a SEQUENTIAL client's reissue
+//!   committed-write acks only (§7), bounded at the capacity
+//!   [`OperationSurface::new`] is handed — the daemon's own pin, no default
+//!   of this crate's. It answers a SEQUENTIAL client's reissue
 //!   of a write whose acknowledgment was lost; it is empty after a restart,
 //!   and it offers nothing between concurrent requests, a retry issued while
 //!   its original is still in flight finding no entry and executing;
@@ -168,9 +173,11 @@ mod response;
 mod codec;
 // Which principal each session speaks for, for one uptime.
 mod session;
-// The retry memo of committed-write acknowledgments.
+// The retry memo of committed-write acknowledgments, at the capacity its
+// constructor is handed.
 mod memo;
-// Every upstream store error lowered into a classified `Rejection`.
+// Every upstream store error lowered into a classified `Rejection`, and the
+// door a caller driving a store itself lowers its refusal through.
 mod lower;
 // EDITLINK's successor, the one request M10 assembles itself.
 mod successor;
@@ -184,6 +191,13 @@ mod publication;
 mod operation;
 
 pub use codec::{Codec, ParseError};
+// THE LOWERING DOOR: the one function the dispatch table lowers a write
+// path's `TxnError` through, for a caller that drives a store itself — the
+// daemon's head writer — so its refusal renders as the wire renders a
+// rejection (code and detail, the I/O kind beside them), never as the store
+// error's `Debug`; and the trait its bound names, whose one table of impls
+// is `lower`'s.
+pub use lower::{lower_txn, Lower};
 pub use operation::{consult_read, OperationSurface, ReadPredicate};
 pub use reject::{Disposition, FaultSite, RejectCode, Rejection};
 pub use request::{ISpan, ISpanFault, Op, OpKind, ReqId, Request, SuccessorSpec, MAX_REQ_ID_BYTES};

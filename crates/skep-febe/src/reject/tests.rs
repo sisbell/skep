@@ -99,11 +99,14 @@ fn a_rejection_is_a_std_error() {
     assert!(bare.contains("NotOwner") && !bare.ends_with(':'));
 }
 
-/// A rejection is a VALUE: it clones, and it compares over all five
+/// A rejection is a VALUE: it clones, and it compares over all six
 /// fields — `detail` included, since a message an operator reads is part
-/// of the answer. And it keys a map, as the classification vocabulary
-/// alone does, which is the shape a transport tallying refusals reaches
-/// for; the impls have to be here, because a consumer cannot add them.
+/// of the answer, and `io_kind` included, since a full volume and a
+/// refused entropy read are different answers to the daemon (the
+/// operations design §1.1 m1). And it keys a map, as the classification
+/// vocabulary alone does, which is the shape a transport tallying refusals
+/// reaches for; the impls have to be here, because a consumer cannot add
+/// them.
 #[test]
 fn a_rejection_is_a_value_and_keys_a_map() {
     use std::collections::{HashMap, HashSet};
@@ -115,6 +118,7 @@ fn a_rejection_is_a_value_and_keys_a_map() {
         disposition: Disposition::Permanent,
         site: Some(site),
         detail: None,
+        io_kind: None,
     };
     assert_eq!(rej.clone(), rej, "a clone is the same answer");
     assert_ne!(
@@ -127,6 +131,23 @@ fn a_rejection_is_a_value_and_keys_a_map() {
         ..rej.clone()
     };
     assert_ne!(elsewhere, rej, "the same index in another slot is another fault");
+
+    // m1: the I/O kind is part of the value too. Two rejections differing
+    // in nothing but the kind are two answers, a clone carries the kind,
+    // and the two hash apart — so a daemon keying its once-per-condition
+    // state by the whole rejection tells a full volume from another
+    // failure of the same code.
+    let full = Rejection::classified(OpKind::Insert, RejectCode::Durability, None)
+        .with_detail("no space left on device".into())
+        .with_io_kind(std::io::ErrorKind::StorageFull);
+    let other_kind = Rejection { io_kind: Some(std::io::ErrorKind::Other), ..full.clone() };
+    let no_kind = Rejection { io_kind: None, ..full.clone() };
+    assert_eq!(full.clone().io_kind, Some(std::io::ErrorKind::StorageFull), "a clone carries it");
+    assert_ne!(full, other_kind, "the kind is part of the answer the daemon reads");
+    assert_ne!(full, no_kind, "…and so is its absence");
+    let by_kind: HashSet<Rejection> =
+        [full.clone(), other_kind, no_kind, full].into_iter().collect();
+    assert_eq!(by_kind.len(), 3, "the three kinds are three keys; the repeat is one");
 
     let mut per_code: HashMap<RejectCode, u64> = HashMap::new();
     for code in [RejectCode::NotOwner, RejectCode::Durability, RejectCode::NotOwner] {

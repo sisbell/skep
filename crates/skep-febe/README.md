@@ -10,9 +10,18 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
 - **`OperationSurface::execute`** — total by contract: every input yields a
   `Response`, never a panic; failures are typed rejections with
   fault-site localization.
+- **`Rejection::io_kind`** — a durability refusal carries the I/O kind
+  behind its code for the daemon to read (a full volume is `StorageFull`);
+  it never crosses the wire.
+- **`lower_txn`** — the lowering door: a caller that drives a store itself
+  lowers the store's `TxnError` into the same classified `Rejection` the
+  front door would answer, so its refusal renders as code and detail,
+  never as the error's `Debug`.
 - **Sessions** — open / close / bootstrap handles, the guest
   (`SessionId::GUEST`), and a per-session retry memo that answers a
-  retried write with the acknowledgment it committed.
+  retried write with the acknowledgment it committed, bounded at the
+  capacity `OperationSurface::new` is handed — the daemon's own pin, no
+  default of the crate's.
 - **The codec seam** — marshal/unmarshal is a trait boundary, so
   transports choose their encoding; the operation layer never sees
   bytes.

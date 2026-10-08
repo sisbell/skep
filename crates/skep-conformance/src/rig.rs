@@ -207,7 +207,7 @@ impl Rig {
             salt: SaltSource::Os,
         };
         let engine = Engine::open(cfg).map_err(|e| format!("engine open: {e}"))?;
-        let febe = OperationSurface::new(Box::new(engine.stores()));
+        let febe = OperationSurface::new(Box::new(engine.stores()), std::num::NonZeroUsize::MIN);
         let bootstrap_session = febe.bootstrap_session();
 
         // Delegate the scenario's working account under node [1] — udanax's

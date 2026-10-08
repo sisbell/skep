@@ -4,8 +4,12 @@
 //! nothing; the key is confined to its session and matched on op-kind, so a
 //! fresh session or another kind executes afresh; since only the kind is
 //! matched, a different write of the same kind under a reused id is answered
-//! from the memo and runs nothing; and a key past `MAX_REQ_ID_BYTES` is
-//! answered and not memoized.
+//! from the memo and runs nothing; a key past `MAX_REQ_ID_BYTES` is
+//! answered and not memoized; and the memo is bounded at the capacity the
+//! front door's constructor was handed, the entry it drops the least
+//! recently used.
+
+use std::num::NonZeroUsize;
 
 use crate::common;
 
@@ -214,4 +218,42 @@ fn a_retried_delete_replays_its_bare_ack() {
         spans_after, spans_before,
         "the remaining elements survive: the delete did not re-execute"
     );
+}
+
+/// §7, THE CAPACITY IS THE CALLER's (the operations design §2.6, op-D5): the
+/// memo is bounded at the figure `OperationSurface::new` was handed and at
+/// nothing else — a front door built at TWO holds two committed acks and
+/// drops the least recently used at the third, so that write's retry
+/// re-executes while the two kept entries still replay. The daemon hands its
+/// own pin; this suite hands two, which is what makes the bound observable
+/// through the front door rather than through the memo alone.
+#[test]
+fn a_front_door_built_at_two_evicts_the_first_entry_at_the_third() {
+    let fx = fixture_on(surface_with_memo(kernel(), NonZeroUsize::new(2).expect("2 is nonzero")));
+    let d = create_doc(&fx);
+    let insert = |byte: u8| Op::Insert {
+        doc: d.clone(),
+        at: vp(1, 1),
+        values: vec![skep_content::Val::new(vec![byte])],
+        deposit: Deposit::Undeclared,
+    };
+
+    let first = ack_addr(ex_id(&fx.febe, fx.user, b"one", insert(b'a')));
+    let second = ack_addr(ex_id(&fx.febe, fx.user, b"two", insert(b'b')));
+    // Two entries fill a memo of two, and nothing is dropped yet: the first
+    // replays — which also makes it the most recently used of the two.
+    let before = fx.febe.log_position();
+    assert_eq!(ack_addr(ex_id(&fx.febe, fx.user, b"one", insert(b'a'))), first);
+    assert_eq!(fx.febe.log_position(), before, "a memo at capacity has evicted nothing");
+
+    // The third entry is one past the bound: the least recently used — the
+    // second — goes; the first, just replayed, and the third stay.
+    let third = ack_addr(ex_id(&fx.febe, fx.user, b"three", insert(b'c')));
+    let before = fx.febe.log_position();
+    assert_eq!(ack_addr(ex_id(&fx.febe, fx.user, b"three", insert(b'c'))), third);
+    assert_eq!(ack_addr(ex_id(&fx.febe, fx.user, b"one", insert(b'a'))), first);
+    assert_eq!(fx.febe.log_position(), before, "the two kept entries replay and commit nothing");
+    let (addr, at) = ack_addr(ex_id(&fx.febe, fx.user, b"two", insert(b'b')));
+    assert_ne!((addr, at), second, "the evicted entry's retry re-executes…");
+    assert!(fx.febe.log_position() > before, "…and commits");
 }

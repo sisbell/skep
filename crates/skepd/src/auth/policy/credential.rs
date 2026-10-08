@@ -910,7 +910,7 @@ mod tests {
             salt: SaltSource::Seeded(0),
         })
         .expect("in-memory genesis cannot fail");
-        let febe = OperationSurface::new(Box::new(engine.stores()));
+        let febe = OperationSurface::new(Box::new(engine.stores()), std::num::NonZeroUsize::MIN);
         let ty = |t: &Address| t.tumbler().to_string();
         let key = |n: u8| {
             let signer = HybridSigner::from_seed(TAG_MLDSA65_ED25519, &[n; 32]).expect("tag 1");

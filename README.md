@@ -51,7 +51,7 @@ beside them, the differential-conformance harness.
 | `skep-resolve` | the verifying registry resolver: a library a client embeds (no engine, no store, never `skepd`) |
 | `skep-search` | the search index: a library a client embeds — the document model, the tokenizer, the inverted index with positions (no engine, no store, never `skepd`) |
 | `skep-client` | the library every acting client embeds: the dialer, sessions, the key store, signing, the reader's verifier, the claim ceremony |
-| `skep-cli` | the `skep` command over `skep-client`: keygen, claim, session, fingerprint, verify, health, bind |
+| `skep-cli` | the `skep` command over `skep-client`: keygen, claim, session, fingerprint, verify, health, bind, and the ceremonies enroll, recover, retire, rotate, handoff, accept |
 | `skep-conformance` | differential harness vs. `udanax-green` goldens + ratchet |
 
 Conventions: shared metadata and external-dependency versions live in

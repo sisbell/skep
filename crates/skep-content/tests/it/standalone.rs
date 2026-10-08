@@ -117,22 +117,21 @@ fn write_trusts_a_document_level_address_in_release_and_panics_on_it_in_debug() 
 }
 
 /// The source file a panic inside `f` is located at, read by a hook set for
-/// this call alone, the previous hook put back after it.
+/// this call alone, the previous hook put back after it. `#[track_caller]`,
+/// so a call that did not panic is reported at the test's line.
+#[track_caller]
 fn panic_file(f: impl FnOnce()) -> String {
-    use std::cell::RefCell;
+    use std::cell::Cell;
     use std::panic::{self, AssertUnwindSafe};
     thread_local! {
-        static FILE: RefCell<Option<String>> = const { RefCell::new(None) };
+        static FILE: Cell<Option<String>> = const { Cell::new(None) };
     }
     let previous = panic::take_hook();
-    panic::set_hook(Box::new(|info| {
-        let file = info.location().map(|l| l.file().to_owned());
-        FILE.with(|slot| *slot.borrow_mut() = file);
-    }));
+    panic::set_hook(Box::new(|info| FILE.set(info.location().map(|l| l.file().to_owned()))));
     let outcome = panic::catch_unwind(AssertUnwindSafe(f));
     panic::set_hook(previous);
     assert!(outcome.is_err(), "the call was expected to panic");
-    FILE.with(|slot| slot.borrow_mut().take()).expect("a panic has a location")
+    FILE.take().expect("a panic has a location")
 }
 
 #[test]

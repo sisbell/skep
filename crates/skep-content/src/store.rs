@@ -335,7 +335,14 @@ impl<'a> IntoIterator for &'a ContentStore {
 /// `Debug`, which the engine's `Record: Debug` renders for this variant and
 /// which shows the value as its length, never a byte. The engine only
 /// `From`-lifts and folds a record; it never builds one.
+///
+/// `#[must_use]`, as the fold is: a record stores nothing until it is
+/// pushed, so one dropped after `stage_write(…)?` — a write that never
+/// happens, while its caller goes on to place the address — is a warning at
+/// that line, where unflagged it would surface only on a later read, as an
+/// S3★ `expect` tripped by an arranged content position with nothing stored.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[must_use = "a record stores nothing until it is pushed: `stg.push(rec.into())`"]
 pub struct ContentWrite {
     #[serde(deserialize_with = "through_address")]
     addr: Tumbler,

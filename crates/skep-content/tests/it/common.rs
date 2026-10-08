@@ -45,17 +45,25 @@ impl WorldState for World {
 }
 
 // ---- helpers ----
+//
+// A helper that checks what its caller handed it — a literal that must be
+// a tumbler or a T4-valid address, an outcome that must be a rejection —
+// is `#[track_caller]`, as the library's two write doors are, so its
+// panic is reported at the test's line, never at this file's.
 
+#[track_caller]
 pub fn t(comps: &[u32]) -> Tumbler {
     Tumbler::new(comps.iter().map(|&c| Nat::from(c))).expect("test tumblers are nonempty")
 }
 
+#[track_caller]
 pub fn a(comps: &[u32]) -> Address {
     validate(t(comps)).expect("test addresses are T4-valid")
 }
 
 /// A content element address in M3's minted shape: doc `[1,0,1,0,1]`,
 /// element field `[s_C = 1, ordinal]`.
+#[track_caller]
 pub fn ca(ordinal: u32) -> Address {
     a(&[1, 0, 1, 0, 1, 0, 1, ordinal])
 }
@@ -93,6 +101,7 @@ pub fn cfg_fsync(dir: &Path) -> KernelConfig {
 
 /// Unwrap an op's typed rejection (`TxnError::Rejected(E)` — surfaced
 /// verbatim, per M2's transact contract).
+#[track_caller]
 pub fn rejected<T: std::fmt::Debug, E: std::fmt::Debug>(r: Result<T, TxnError<E>>) -> E {
     match r {
         Err(TxnError::Rejected(e)) => e,

@@ -104,7 +104,9 @@ fn the_slice_serializes_as_its_map_alone_in_tumbler_order() {
 /// a caller that pins which door refused. A panic is how a reservation sized
 /// by a count the bytes do not carry shows itself when it overflows, and how
 /// a decode that takes what they hold on trust, through an `expect`, shows
-/// itself at all.
+/// itself at all. `#[track_caller]`, so a decode that did not refuse is
+/// reported at the line that expected it to.
+#[track_caller]
 fn assert_refused<T: DeserializeOwned>(what: &str, bytes: &[u8]) -> String {
     match std::panic::catch_unwind(|| bincode::deserialize::<T>(bytes)) {
         Ok(Err(refusal)) => refusal.to_string(),

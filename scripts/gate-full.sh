@@ -42,9 +42,9 @@ RUSTDOCFLAGS="-D rustdoc::broken_intra_doc_links" \
 cargo check -p skep-arrangement --lib || exit $?
 
 # skep-content's library without `test-hooks` — every test build turns it on
-# (the crate's self dev-dependency), so this is the build that shows the
-# store compiles without `write` and without the two crate edges only it
-# takes.
+# (the crate's self dev-dependency, and skep-retrieval's), so this is the
+# build that shows the store compiles without `write` and without the two
+# crate edges only it takes.
 cargo check -p skep-content --lib || exit $?
 
 # …and its docs as they ship, without `test-hooks`, private links denied

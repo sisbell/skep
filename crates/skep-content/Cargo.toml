@@ -13,9 +13,9 @@ readme = "README.md"
 # transact-wrapped twin of `stage_write` the composition contract asks for.
 # Committed alone a content write has no placement (J0), so production writes
 # through M5's placement composite and never through it. DEFAULT-OFF: this
-# crate's suite turns it on through the self dev-dependency below, so a build
-# that compiles no test compiles none of it — nor the two crate edges only it
-# takes.
+# crate's suite turns it on through the self dev-dependency below, and
+# skep-retrieval's through its own, so a build that compiles no test compiles
+# none of it — nor the two crate edges only it takes.
 test-hooks = ["dep:skep-kernel", "dep:skep-namespace"]
 
 [dependencies]

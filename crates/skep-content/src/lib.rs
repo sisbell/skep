@@ -76,9 +76,15 @@
 //! * link values — M7 is the parallel value-only store for `L`; the link
 //!   layer (M7/M8) never reads M4 (store-disjointness SD:
 //!   `dom(C) ∩ dom(L) = ∅`);
-//! * journal, replay, snapshot, recovery (M2): [`ContentWrite`] is the
-//!   authoritative delta M2 journals; the slice is its fold, fully
-//!   serialized in checkpoints (M2's default `rebuild_derived` identity);
+//! * journal, replay, snapshot, recovery (M2) — M2 owns the files, and M4
+//!   only its own bytes inside them: [`ContentWrite`] is the authoritative
+//!   delta M2 journals, and the slice is its fold, fully serialized in
+//!   checkpoints (M2's default `rebuild_derived` identity), both in this
+//!   crate's serde form and both holding [`Val`]'s. Those bytes are
+//!   formats — read by code no compiler check ties to their shape — and
+//!   what a change to each owes is said where it is spelled: on
+//!   [`ContentWrite`], on `in_tumbler_order` (`store.rs`) for the slice, and
+//!   on [`Val`];
 //! * modify, delete, GC, reclamation, refcounts — none exists, and no
 //!   fixed-width counter that could cap or overflow is ever introduced;
 //! * author/source/origin metadata — origin (S7) is established by M3's

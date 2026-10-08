@@ -18,12 +18,12 @@ use crate::HasContent;
 /// M5's J0/J1★-coupled composite via [`stage_write`].
 ///
 /// So it is compiled only under the `test-hooks` feature (default off),
-/// which this crate's suite turns on through its self dev-dependency: a
-/// build that compiles no test holds none of it, and a production path that
-/// reached for it would not compile. The contract's two-composable-forms
-/// rule asks only that the form exist, and under the feature it does; a
-/// `cfg(test)` gate would not serve, because the suite in `tests/it` is a
-/// separate crate that never sees this library's `cfg(test)`.
+/// which this crate's suite and skep-retrieval's turn on through their
+/// dev-dependencies: a build that compiles no test holds none of it, and a
+/// production path that reached for it would not compile. The contract's
+/// two-composable-forms rule asks only that the form exist, and under the
+/// feature it does; a `cfg(test)` gate would not serve, because each suite
+/// is a separate crate that never sees this library's `cfg(test)`.
 /// `#[doc(hidden)]` as well, so even a `test-hooks` build's docs send a
 /// reader to M5's composite.
 ///

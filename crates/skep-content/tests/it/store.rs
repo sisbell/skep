@@ -119,7 +119,7 @@ fn apply_write_shares_every_address_the_slice_already_stores() {
     // the old slice stores keeps, in the new slice, the very components it
     // had — one storage, not a copy. 257 entries put the tree past one node,
     // so the fold copies an inner node as well as a leaf.
-    let components = |addr: &Tumbler| -> *const Nat {
+    let component_storage = |addr: &Tumbler| -> *const Nat {
         std::ptr::from_ref(addr.iter().next().expect("a tumbler is nonempty"))
     };
     let mut c0 = ContentStore::default();
@@ -127,13 +127,13 @@ fn apply_write_shares_every_address_the_slice_already_stores() {
         c0 = c0.apply_write(&stage_write(&c0, &ca(ordinal), val(b"v")).expect("fresh"));
     }
     let stored: std::collections::BTreeMap<&Tumbler, *const Nat> =
-        c0.iter().map(|(addr, _)| (addr, components(addr))).collect();
+        c0.iter().map(|(addr, _)| (addr, component_storage(addr))).collect();
     let c1 = c0.apply_write(&stage_write(&c0, &ca(258), val(b"v")).expect("fresh"));
     let mut shared = 0;
     for (addr, _) in &c1 {
         if let Some(&before) = stored.get(addr) {
             assert!(
-                std::ptr::eq(before, components(addr)),
+                std::ptr::eq(before, component_storage(addr)),
                 "the fold copied {addr}, an address the slice already stored"
             );
             shared += 1;

@@ -1,6 +1,6 @@
 //! The journaled record and the checkpointed slice: that both survive a
-//! bincode round trip and M2's durable recovery across a checkpoint, the
-//! reopen starting from that checkpoint; that the slice's serialized form is
+//! bincode round trip and M2's durable recovery by checkpoint and replay, the
+//! reopen starting from the checkpoint; that the slice's serialized form is
 //! the format its readers pin; that the slice's decode takes its entries in
 //! every order they can arrive, and refuses a body naming one address twice,
 //! however its digits spell it and wherever its two namings stand, while
@@ -145,22 +145,22 @@ fn the_record_and_the_slice_refuse_a_count_their_bytes_do_not_carry() {
         "a slice counting more entries than any body could hold",
         &u64::MAX.to_le_bytes(),
     );
-    let mut long_value = bincode::serialize(ca(1).tumbler()).expect("address serializes");
-    long_value.extend_from_slice(&u64::MAX.to_le_bytes());
+    let mut overlong_value = bincode::serialize(ca(1).tumbler()).expect("address serializes");
+    overlong_value.extend_from_slice(&u64::MAX.to_le_bytes());
     assert_refused::<ContentWrite>(
         "a record whose value counts more bytes than follow",
-        &long_value,
+        &overlong_value,
     );
     assert_refused::<ContentWrite>(
         "a record whose address counts more components than follow",
         &u64::MAX.to_le_bytes(),
     );
     // One component, which counts more `u32` digits than follow.
-    let mut long_digits = 1u64.to_le_bytes().to_vec();
-    long_digits.extend_from_slice(&u64::MAX.to_le_bytes());
+    let mut overlong_digits = 1u64.to_le_bytes().to_vec();
+    overlong_digits.extend_from_slice(&u64::MAX.to_le_bytes());
     assert_refused::<ContentWrite>(
         "a record whose address's one component counts more digits than follow",
-        &long_digits,
+        &overlong_digits,
     );
 }
 
@@ -529,7 +529,7 @@ fn the_record_and_the_slice_refuse_for_the_first_fault_they_read() {
     let no_address: &[u32] = &[1, 0, 0, 1];
     let past_its_bytes = u64::MAX.to_le_bytes();
     let door_refusal = validate(t(no_address)).expect_err("the key breaks T4").to_string();
-    let named_twice = "a content address named twice in one slice".to_owned();
+    let named_twice_refusal = "a content address named twice in one slice".to_owned();
     let value_refusal = bincode::deserialize::<Val>(&past_its_bytes)
         .expect_err("a value counting more bytes than follow is refused")
         .to_string();
@@ -558,7 +558,7 @@ fn the_record_and_the_slice_refuse_for_the_first_fault_they_read() {
         (
             "a second naming of ca(1) before a key breaking T4",
             raw_slice(&[CA1, CA1, no_address]),
-            &named_twice,
+            &named_twice_refusal,
         ),
         (
             "a second naming of ca(1) whose value counts more bytes than follow",
@@ -585,10 +585,10 @@ fn the_record_and_the_slice_refuse_for_the_first_fault_they_read() {
     );
 }
 
-// ---- M2-driven recovery across a checkpoint ----
+// ---- M2-driven recovery by checkpoint and replay ----
 
 #[test]
-fn content_survives_durable_recovery_across_a_checkpoint() {
+fn content_survives_durable_recovery_by_checkpoint_and_replay() {
     // §Recovery: M4 owns no recovery machinery — M2's open loads the latest
     // checkpoint (deserializing the slice) and replays the tail by folding
     // ContentWrite records through apply → apply_write: a1 is written before

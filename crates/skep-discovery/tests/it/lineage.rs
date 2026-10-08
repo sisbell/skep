@@ -352,24 +352,10 @@ fn lineage_endpoints_rest_on_a_fence_the_write_surface_keeps() {
 /// so only of the claim reported.
 #[test]
 fn lineage_skips_a_supersession_claim_with_an_undefined_endpoint() {
-    let k = kernel();
-    seed_content(&k, &doc1(), 1);
-    let store = LinkWriter::new(&k, &EVERYONE);
-    let e1 = link(&store, &doc1(), &[ca(1)], &[ca(101)]);
-    let e2 = link(&store, &doc1(), &[ca(1)], &[ca(102)]);
-    let (claim, _) = store
-        .assert_sup(SYS, &doc1(), &e1, &e2)
-        .expect("assert_sup succeeds");
-    let sup = k
-        .snapshot()
-        .world()
-        .links()
-        .reserved_type(ShippedType::Supersedes)
-        .clone();
-
-    let two = enc([&e1, &e2]);
+    let w = OneClaim::new();
+    let two = enc([&w.e1, &w.e2]);
     assert!(two.single_denoted().is_none(), "F denotes two addresses");
-    fold_decoded_deposit(&k, &la(8), Link::triple(two, enc([&e2]), sup.clone()));
+    fold_decoded_deposit(&w.k, &la(8), Link::triple(two, enc([&w.e2]), w.sup.clone()));
     let prefix = t(&[1, 0, 1, 0, 1, 0]);
     assert!(
         validate(prefix.clone()).is_err(),
@@ -382,16 +368,16 @@ fn lineage_skips_a_supersession_claim_with_an_undefined_endpoint() {
         "G denotes it alone"
     );
     fold_decoded_deposit(
-        &k,
+        &w.k,
         &la(9),
-        Link::triple(enc([&e1]), no_address, sup.clone()),
+        Link::triple(enc([&w.e1]), no_address, w.sup.clone()),
     );
 
     // The premise: each probe reaches all three claims, so the answers
     // below are the read-out's and not the probes'.
-    let snap = k.snapshot();
-    let old_probe = [e1.tumbler().clone()];
-    let new_probe = [e2.tumbler().clone()];
+    let snap = w.k.snapshot();
+    let old_probe = [w.e1.tumbler().clone()];
+    let new_probe = [w.e2.tumbler().clone()];
     for view in [View::Active, View::Audit] {
         for pattern in [
             Pattern {
@@ -406,48 +392,21 @@ fn lineage_skips_a_supersession_claim_with_an_undefined_endpoint() {
             let reached: Vec<Address> = snap
                 .world()
                 .links()
-                .observe(&sup, pattern, view)
+                .observe(&w.sup, pattern, view)
                 .into_iter()
                 .map(|t| t.addr)
                 .collect();
             assert_eq!(
                 reached,
-                vec![claim.clone(), la(8), la(9)],
+                vec![w.claim.clone(), la(8), la(9)],
                 "{pattern:?} under {view:?}"
             );
         }
     }
 
-    let only_the_claim = vec![SupClaim {
-        claim,
-        old: e1.clone(),
-        new: e2.clone(),
-        home: doc1(),
-        active: true,
-    }];
-    let reads = Reads(&k);
-    for view in [View::Active, View::Audit] {
-        assert_eq!(
-            reads.in_claims(&e1, view),
-            only_the_claim,
-            "in_claims, {view:?}"
-        );
-        assert_eq!(
-            reads.out_claims(&e2, view),
-            only_the_claim,
-            "out_claims, {view:?}"
-        );
-    }
-
-    // Asked once, of the reported claim's home — not of the two non-conformers
-    // skipped.
-    let asked = Asked::default();
-    let recorder = asked.recorder();
-    assert_eq!(
-        in_claims_on(&snap, &e1, View::Active, &recorder),
-        only_the_claim
-    );
-    assert_eq!(asked.take(), vec![doc1()]);
+    // The two non-conformers are skipped: the conforming claim is answered
+    // alone, and the home rule is asked of it alone.
+    w.assert_answered_alone();
 }
 
 /// §7 — a claim is read out only where the endpoint its probe names IS the
@@ -464,20 +423,7 @@ fn lineage_skips_a_supersession_claim_with_an_undefined_endpoint() {
 /// past both, so only of the claim reported.
 #[test]
 fn lineage_reads_out_a_claim_only_where_its_endpoint_is_the_key() {
-    let k = kernel();
-    seed_content(&k, &doc1(), 1);
-    let store = LinkWriter::new(&k, &EVERYONE);
-    let e1 = link(&store, &doc1(), &[ca(1)], &[ca(101)]);
-    let e2 = link(&store, &doc1(), &[ca(1)], &[ca(102)]);
-    let (claim, _) = store
-        .assert_sup(SYS, &doc1(), &e1, &e2)
-        .expect("assert_sup succeeds");
-    let sup = k
-        .snapshot()
-        .world()
-        .links()
-        .reserved_type(ShippedType::Supersedes)
-        .clone();
+    let w = OneClaim::new();
 
     // A claim naming doc1 at both ends: one T4-valid address a side, so its
     // `old` and `new` are defined, and above every link doc1 homes, so it
@@ -489,40 +435,48 @@ fn lineage_reads_out_a_claim_only_where_its_endpoint_is_the_key() {
         Some(doc.tumbler()),
         "one T4-valid address"
     );
-    fold_decoded_deposit(&k, &la(8), Link::triple(above.clone(), above, sup.clone()));
+    fold_decoded_deposit(
+        &w.k,
+        &la(8),
+        Link::triple(above.clone(), above, w.sup.clone()),
+    );
     // And a claim naming, at both ends, a link address no deposit minted.
     let unminted = la(99);
     let named = enc([&unminted]);
-    fold_decoded_deposit(&k, &la(9), Link::triple(named.clone(), named, sup.clone()));
+    fold_decoded_deposit(
+        &w.k,
+        &la(9),
+        Link::triple(named.clone(), named, w.sup.clone()),
+    );
 
     // The premise: each probe of a conforming endpoint reaches the conforming
     // claim AND the document-naming one, and a probe of the unminted address
     // reaches the claim naming it, which no deposit made a resident link.
-    let snap = k.snapshot();
+    let snap = w.k.snapshot();
     let links = snap.world().links();
     let reached = |pattern: Pattern<'_>| -> Vec<Address> {
         links
-            .observe(&sup, pattern, View::Active)
+            .observe(&w.sup, pattern, View::Active)
             .into_iter()
             .map(|t| t.addr)
             .collect()
     };
-    let old_probe = [e1.tumbler().clone()];
-    let new_probe = [e2.tumbler().clone()];
+    let old_probe = [w.e1.tumbler().clone()];
+    let new_probe = [w.e2.tumbler().clone()];
     let unminted_probe = [unminted.tumbler().clone()];
     assert_eq!(
         reached(Pattern {
             from: &old_probe,
             ..Pattern::default()
         }),
-        vec![claim.clone(), la(8)]
+        vec![w.claim.clone(), la(8)]
     );
     assert_eq!(
         reached(Pattern {
             to: &new_probe,
             ..Pattern::default()
         }),
-        vec![claim.clone(), la(8)]
+        vec![w.claim.clone(), la(8)]
     );
     assert_eq!(
         reached(Pattern {
@@ -533,25 +487,14 @@ fn lineage_reads_out_a_claim_only_where_its_endpoint_is_the_key() {
     );
     assert!(links.readlink(&unminted).is_none(), "no deposit minted it");
 
-    let only_the_claim = vec![SupClaim {
-        claim,
-        old: e1.clone(),
-        new: e2.clone(),
-        home: doc1(),
-        active: true,
-    }];
-    let reads = Reads(&k);
+    // The conforming claim is answered alone. The document-naming claim is
+    // homed in doc1 too, so a home rule asked ahead of the denotation filter
+    // would show as a second ask of doc1.
+    w.assert_answered_alone();
+    // And a probe of the unminted address answers no claim, though one names
+    // it: the resident-key gate refuses a key that is no resident link.
+    let reads = Reads(&w.k);
     for view in [View::Active, View::Audit] {
-        assert_eq!(
-            reads.in_claims(&e1, view),
-            only_the_claim,
-            "in_claims, {view:?}"
-        );
-        assert_eq!(
-            reads.out_claims(&e2, view),
-            only_the_claim,
-            "out_claims, {view:?}"
-        );
         assert_eq!(
             reads.in_claims(&unminted, view),
             vec![],
@@ -563,16 +506,6 @@ fn lineage_reads_out_a_claim_only_where_its_endpoint_is_the_key() {
             "out_claims of the unminted address, {view:?}"
         );
     }
-
-    // Asked once, of the reported claim's home — the document-naming claim,
-    // homed in doc1 too, adds no second ask.
-    let asked = Asked::default();
-    let recorder = asked.recorder();
-    assert_eq!(
-        in_claims_on(&snap, &e1, View::Active, &recorder),
-        only_the_claim
-    );
-    assert_eq!(asked.take(), vec![doc1()]);
 }
 
 /// §7 — a claim's HOME is the store's to guarantee, and the read-out asserts
@@ -588,58 +521,100 @@ fn lineage_reads_out_a_claim_only_where_its_endpoint_is_the_key() {
 /// surfaces as this test rather than as that assertion firing on a probe.
 #[test]
 fn lineage_asserts_the_home_m7s_fold_gives_every_claim() {
-    let k = kernel();
-    seed_content(&k, &doc1(), 1);
-    let store = LinkWriter::new(&k, &EVERYONE);
-    let e1 = link(&store, &doc1(), &[ca(1)], &[ca(101)]);
-    let e2 = link(&store, &doc1(), &[ca(1)], &[ca(102)]);
-    let (claim, _) = store
-        .assert_sup(SYS, &doc1(), &e1, &e2)
-        .expect("assert_sup succeeds");
-    let sup = k
-        .snapshot()
-        .world()
-        .links()
-        .reserved_type(ShippedType::Supersedes)
-        .clone();
-    let value = Link::triple(enc([&e1]), enc([&e2]), sup);
+    let w = OneClaim::new();
+    let value = Link::triple(enc([&w.e1]), enc([&w.e2]), w.sup.clone());
 
     let account = a(&[1, 0, 1]);
     assert_eq!(document_of(&account), None, "an account has no home");
     let folded = catch_unwind(AssertUnwindSafe(|| {
-        fold_decoded_deposit(&k, &account, value.clone())
+        fold_decoded_deposit(&w.k, &account, value.clone())
     }));
     assert!(folded.is_err(), "the fold refuses a key with no home");
 
-    // The store is as it was: both probes, under both views, answer the
-    // conforming claim alone.
-    let only_the_claim = vec![SupClaim {
-        claim: claim.clone(),
-        old: e1.clone(),
-        new: e2.clone(),
-        home: doc1(),
-        active: true,
-    }];
-    let reads = Reads(&k);
-    for view in [View::Active, View::Audit] {
-        assert_eq!(
-            reads.in_claims(&e1, view),
-            only_the_claim,
-            "in_claims, {view:?}"
-        );
-        assert_eq!(
-            reads.out_claims(&e2, view),
-            only_the_claim,
-            "out_claims, {view:?}"
-        );
-    }
+    // The store is as it was: the conforming claim is answered alone.
+    w.assert_answered_alone();
 
     // The same claim keyed at a link address of doc1 folds, and reads out.
-    fold_decoded_deposit(&k, &la(8), value);
+    fold_decoded_deposit(&w.k, &la(8), value);
     assert_eq!(
-        claims_of(reads.in_claims(&e1, View::Active)),
-        vec![claim, la(8)]
+        claims_of(Reads(&w.k).in_claims(&w.e1, View::Active)),
+        vec![w.claim.clone(), la(8)]
     );
+}
+
+/// The world the forged-deposit tests fold into: two links of doc1, `e1` and
+/// `e2`, the one conforming claim over them, and the supersession class's
+/// type, read off the store. Whatever a test folds beside that claim,
+/// [`OneClaim::assert_answered_alone`] is the verdict that must still hold.
+struct OneClaim {
+    k: Kernel<World>,
+    e1: Address,
+    e2: Address,
+    claim: Address,
+    sup: Endset,
+}
+
+impl OneClaim {
+    fn new() -> OneClaim {
+        let k = kernel();
+        seed_content(&k, &doc1(), 1);
+        let (e1, e2, claim) = {
+            let store = LinkWriter::new(&k, &EVERYONE);
+            let e1 = link(&store, &doc1(), &[ca(1)], &[ca(101)]);
+            let e2 = link(&store, &doc1(), &[ca(1)], &[ca(102)]);
+            let (claim, _) = store
+                .assert_sup(SYS, &doc1(), &e1, &e2)
+                .expect("assert_sup succeeds");
+            (e1, e2, claim)
+        };
+        let sup = k
+            .snapshot()
+            .world()
+            .links()
+            .reserved_type(ShippedType::Supersedes)
+            .clone();
+        OneClaim {
+            k,
+            e1,
+            e2,
+            claim,
+            sup,
+        }
+    }
+
+    /// The lineage pair answers the conforming claim alone: `in(e1)` and
+    /// `out(e2)`, under both views, return it and nothing folded beside it,
+    /// and the reader's predicate is asked once, of its home — never of a
+    /// claim the read did not report.
+    fn assert_answered_alone(&self) {
+        let only_the_claim = vec![SupClaim {
+            claim: self.claim.clone(),
+            old: self.e1.clone(),
+            new: self.e2.clone(),
+            home: doc1(),
+            active: true,
+        }];
+        let reads = Reads(&self.k);
+        for view in [View::Active, View::Audit] {
+            assert_eq!(
+                reads.in_claims(&self.e1, view),
+                only_the_claim,
+                "in_claims, {view:?}"
+            );
+            assert_eq!(
+                reads.out_claims(&self.e2, view),
+                only_the_claim,
+                "out_claims, {view:?}"
+            );
+        }
+        let asked = Asked::default();
+        let recorder = asked.recorder();
+        assert_eq!(
+            in_claims_on(&self.k.snapshot(), &self.e1, View::Active, &recorder),
+            only_the_claim
+        );
+        assert_eq!(asked.take(), vec![doc1()], "asked of its home alone");
+    }
 }
 
 /// Fold one `LinkRec::Deposit` of `value` at `addr` into the kernel's world

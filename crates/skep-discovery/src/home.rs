@@ -8,20 +8,17 @@
 use skep_address::{document_of, Address};
 
 /// `home(a)`: the origin Document of `a` — M1's `document_of` projection
-/// (EL8b), spelled once so the descriptor family's home filter, the lineage
-/// read-out and the home rule attribute an address the same way. `None` for
-/// an address with no document field — a node or an account — which lives
-/// under no home.
+/// (EL8b), spelled once so every read attributes an address to the same home.
+/// `None` for an address with no document field — a node or an account —
+/// which lives under no home.
 ///
 /// Every LINK has a home, so on a key of the link store this is always
 /// `Some`; the partiality stays in the type all the same, because the
 /// pointwise pair hands the home rule a CALLER's address before anything
 /// establishes that it is a link, and a projection that assumed one would
 /// fault on the first node or account address a request names. So no read
-/// reaches a home that is not there: each caller states what an absent home
-/// means where it asks — the home rule admits the address and the residence
-/// test places it at no home, while the lineage read-out, which projects only
-/// keys of M7's store, asserts the home M7's invariant gives every key.
+/// reaches a home that is not there: each caller states, where it asks, what
+/// an absent home means to it.
 pub(crate) fn home_of(a: &Address) -> Option<Address> {
     document_of(a)
 }

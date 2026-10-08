@@ -119,7 +119,7 @@ fn join_within_budget(span_count: usize, run_count: usize, max_product: usize) -
 /// are held here (`ImageTooLarge`): the reading surface's CONTENT runs — the
 /// runs M5's `project` joins against, so the factor priced is the factor
 /// multiplied — at [`crate::MAX_IMAGE_RUNS`], which sets that count beside
-/// the other three; and their product with the slot's spans at
+/// the others it holds; and their product with the slot's spans at
 /// [`crate::MAX_ANSWER_SPANS`], which states why the answer's budget and not
 /// the run budget's square holds this join. So a large-slot projection into
 /// a heavily fragmented document is refused, and a pointwise refusal has no
@@ -242,7 +242,7 @@ fn touches(e: &Endset, extents: &[Span]) -> bool {
 /// tested — at [`crate::MAX_IMAGE_RUNS`], and its product with the link's
 /// WHOLE coverage, `Σᵢ|eᵢ|`, at that constant's square.
 /// [`crate::MAX_IMAGE_RUNS`] states why the square holds this join, and sets
-/// the run count beside the other three.
+/// the run count beside the others it holds.
 pub fn addressably_discoverable_from_on<W: DiscoveryWorld>(
     s: &Snapshot<W>,
     a: &Address,

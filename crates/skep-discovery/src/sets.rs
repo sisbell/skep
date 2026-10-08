@@ -103,12 +103,11 @@ pub(crate) fn stab_runs<'r>(
 /// * `n` is clamped to ≥ 1 (W9 totality): an unclamped `n = 0` would yield
 ///   `exhausted = (0 < 0) = false` with an empty batch and an unchanged
 ///   cursor — a silent non-terminating signal.
-/// * `keep` is the caller's post-filter over the candidate set — the FTT
-///   residence test, the home rule both families carry, or their
-///   conjunction — applied LAZILY during the range walk, so a link the home
-///   rule or the residence test refuses is skipped BEFORE the slice and never
-///   counted against `n` (PUB-6.14), and a narrow query never materializes
-///   the filtered set.
+/// * `keep` is the caller's post-filter over the candidate set, applied
+///   LAZILY during the range walk: a link it refuses is skipped BEFORE the
+///   slice and never counted against `n` — what PUB-6.14 asks of the home
+///   rule — and a narrow filter never materializes the filtered set. Each
+///   window read states what it passes.
 /// * `exhausted = batch.len() < n` (a short window, zero included, W9);
 ///   `next` = the ≺-max of the batch, else the cursor unchanged.
 pub(crate) fn window_over(

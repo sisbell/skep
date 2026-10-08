@@ -141,11 +141,8 @@ impl FourSet {
     }
 
     /// `athome(a, H)` — ASN-0121/0132's residence test, the companion of
-    /// `touch`: does the home slot admit the link at `a`? `Any` admits every
-    /// link (FL-WILD); a `Spans` admits those whose `home(a)` its coverage
-    /// names — an ADDRESS projection, never an arrangement-presence test
-    /// (CN-STAB: a reverse-orphaned link still satisfies a home-bounded
-    /// query); and the zero admits none, which is FL-EMP for the home slot.
+    /// `touch`: does the home slot admit the link at `a`? It is the home
+    /// slot's clause of `sat`, as [`FourSet`] states it.
     ///
     /// Total: an address with no home — a node or an account — is at no home
     /// a `Spans` names, even one whose coverage reaches the address itself.

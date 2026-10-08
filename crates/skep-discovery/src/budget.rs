@@ -33,14 +33,18 @@
 ///   holds — so its verdict depends on `d` and, at the budget or one run
 ///   under it, on where the range's ends fall.
 ///
-/// So the four refuse DIFFERENT documents, and the inclusions run only one
-/// way: the pointwise pair's counts differ by `d`'s link runs, so a `d`
-/// `project_on` answers about may be one
-/// [`crate::addressably_discoverable_from_on`] refuses, and neither relates
-/// to `image_on`'s verdict, which the caller's region moves. Each site
-/// prices the factor it multiplies; what the budget bounds is the multiple
-/// of the world's fragmentation one request may make M8 pay for, never the
-/// fragmentation itself.
+/// So the four refuse DIFFERENT documents. The pointwise pair's run counts
+/// nest — [`crate::addressably_discoverable_from_on`] counts `d`'s link runs
+/// beside the content runs [`crate::project_on`] counts, so its run clause
+/// refuses every surface the projection's run clause refuses, and more — but
+/// each also holds a product of its own: the projection's, one slot's spans
+/// by the content runs, at [`MAX_ANSWER_SPANS`]; the touch test's, the link's
+/// whole coverage by the runs of both subspaces, at this constant's square.
+/// So for one link either read can refuse what the other answers. Neither
+/// relates to `image_on`'s verdict, which the caller's region moves. Each
+/// site prices the factor it multiplies; what the budget bounds is the
+/// multiple of the world's fragmentation one request may make M8 pay for,
+/// never the fragmentation itself.
 ///
 /// The budget: the runs become one side of a join in every case — lifted into
 /// a query `Endset` for M7's `stab`, which walks the whole store testing

@@ -78,9 +78,12 @@
 //! arrangement for `d`. The one that does not float is
 //! [`delete_orphans_on`]: it previews DELETE, which edits `d`'s own
 //! arrangement and refuses every published target, so on every `d` DELETE
-//! admits, `d` IS its reading surface. On a published `d` the two part and
+//! admits, `d` IS its reading surface. On a published `d` DELETE refuses and
 //! the preview still answers — a gap, stated on the preview, and not a
-//! decision.
+//! decision — and on a BARE published `d` that has a member, `d` and its
+//! reading surface part as well: the preview reads `d`'s own arrangement,
+//! every reader of `d` its trunk head. A version member is its own reading
+//! surface, and so is a published document with no member yet.
 //!
 //! ## The home rule
 //!

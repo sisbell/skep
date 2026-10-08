@@ -66,14 +66,15 @@ fn join_within_budget(span_count: usize, run_count: usize, max_product: usize) -
 /// I→V projection of link `a`'s `slot` into the CONTENT subspace of the
 /// arrangement a reader of `d` sees (ASN-0098 `project`).
 ///
-/// NOT ADDRESSABLE-FILTERED — the one read here that is not narrowed to the
-/// active view. The coverage comes from M7's `followlink`, which takes no
-/// `View` and reports what is recorded, so a NULLIFIED link's slot still
-/// projects to the V-positions it covers. That is ASN-0098's `project`, which
-/// knows nothing of retraction; the addressable-filtered question — is this
-/// link discoverable AND active? — is [`addressably_discoverable_from_on`],
-/// and a caller who wants "the live links reaching here" asks that or the
-/// region family, not this.
+/// NOT ADDRESSABLE-FILTERED — the one link read here that the active view
+/// never narrows; the lineage pair, the crate header's other departure, reads
+/// the view its caller names. The coverage comes from M7's `followlink`,
+/// which takes no `View` and reports what is recorded, so a NULLIFIED link's
+/// slot still projects to the V-positions it covers. That is ASN-0098's
+/// `project`, which knows nothing of retraction; the addressable-filtered
+/// question — is this link discoverable AND active? — is
+/// [`addressably_discoverable_from_on`], and a caller who wants "the live
+/// links reaching here" asks that or the region family, not this.
 ///
 /// CONTENT-SUBSPACE ONLY — strictly weaker than ASN-0098's subspace-agnostic
 /// `project`: a link reachable solely through `d`'s LINK subspace projects ∅

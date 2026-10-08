@@ -90,8 +90,9 @@ fn run_list_walk(region: &[Span], run_count: usize) -> usize {
 /// budget the runs it resolves — which come third because each is priced on
 /// what the region does to `d`'s reading surface, and so cannot be asked
 /// until both gates have admitted the request. A registered `d` whose reading
-/// surface arranges no content yields a defined `Ok(vec![])` — a published `d`
-/// with a head answers from the head, whatever its own arrangement holds.
+/// surface arranges no content yields a defined `Ok(vec![])` — a bare
+/// published `d` that has a member answers from its trunk head, whatever its
+/// own arrangement holds.
 ///
 /// The result is the I-runs of the image, in region-span order and V-order
 /// within each span, deduped on `(i_start, width)` — the pair a `Run`

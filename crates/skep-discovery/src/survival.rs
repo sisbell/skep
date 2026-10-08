@@ -110,12 +110,12 @@ impl DeletePartition {
 ///   `Caller::System` as for a principal — so a published `d` is refused
 ///   there and answered here. That is a fact about the request's TARGET,
 ///   which the reason given for the ω gate does not reach, and it does worse
-///   than answer for an edit M5 refuses: on a published `d` with a member,
-///   this reads `d`'s own arrangement, frozen at its pre-chain state, while
-///   every reader of `d` answers from its trunk head — so the report
-///   describes positions no reader of `d` sees. On every `d` M5's DELETE
-///   admits, `d` IS its own reading surface, which is why the preview reads
-///   `d` and does not float.
+///   than answer for an edit M5 refuses: on a bare published `d` that has a
+///   member, this reads `d`'s own arrangement, whose content is frozen at its
+///   pre-chain state, while every reader of `d` answers from its trunk head
+///   (PUB-2.53) — so the report describes positions no reader of `d` sees.
+///   On every `d` M5's DELETE admits, `d` IS its own reading surface, which
+///   is why the preview reads `d` and does not float.
 ///
 /// And ONE refusal is the preview's own, which DELETE has no word for
 /// because DELETE stabs nothing: `ImageTooLarge`, asked last, when the runs

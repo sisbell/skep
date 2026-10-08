@@ -57,8 +57,8 @@ fn project_is_content_subspace_i_to_v_with_conflated_not_a_link() {
         .expect("registered-empty answers")
         .is_empty());
 
-    // NOT ADDRESSABLE-FILTERED — the one read here that is not narrowed to
-    // the active view.
+    // NOT ADDRESSABLE-FILTERED — the one link read here that the active view
+    // never narrows.
     // Nullifying e1 leaves its projection exactly as it was (followlink
     // reports what is RECORDED), while addressably_discoverable_from, which
     // conjoins is_active, flips: the two answer different questions about one

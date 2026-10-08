@@ -55,8 +55,8 @@ pub struct Window {
 }
 
 /// One supersession claim from the archival lineage (ASN-0125 EL11b): `old`
-/// is the link it records as superseded and `new` the link it records as
-/// superseding. Which stored slot holds which endpoint is M7's convention,
+/// is the address it records as superseded and `new` the address it records
+/// as superseding. Which stored slot holds which endpoint is M7's convention,
 /// stated on its `assert_sup`; this record carries the endpoints and never
 /// the slots. `home` is the pure M1 `document_of` attribution (EL8b).
 ///
@@ -65,16 +65,20 @@ pub struct Window {
 /// no such flag and take no home rule: they are the addresses the claim
 /// names, read out as recorded, and either may itself be a nullified link,
 /// or one homed where the reader may not read (only the claim's home
-/// filters, PUB-6.13).
+/// filters, PUB-6.13). On a store a restored checkpoint or a replayed
+/// journal frame folded, the endpoint a read did not probe — `new` for
+/// [`crate::in_claims_on`], `old` for [`crate::out_claims_on`] — may also be
+/// an address that is no resident link, or the probed key itself:
+/// [`crate::in_claims_on`] states the domain.
 ///
 /// A plain record: its fields are public and a caller may build one freely,
 /// so none of the relations above is a property of this type. They are
 /// postconditions of the reads that return one: a claim
 /// [`crate::in_claims_on`] returns for `y` has `old = y`, one
 /// [`crate::out_claims_on`] returns for `x` has `new = x`, and each has
-/// `old`/`new` the superseded and superseding links its stored tuple records,
-/// `home = document_of(claim)` and `active = is_active(claim)` at the read's
-/// snapshot.
+/// `old`/`new` the addresses its stored tuple records as superseded and
+/// superseding, `home = document_of(claim)` and `active = is_active(claim)`
+/// at the read's snapshot.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct SupClaim {
     pub claim: Address,
@@ -135,9 +139,9 @@ pub struct OrphanReport {
 pub enum QueryError {
     /// `d` is not a registered document (M3) — distinct from a registered `d`
     /// whose reading surface arranges nothing, which yields a defined empty
-    /// answer. The emptiness is the surface's and not `d`'s own: a published
-    /// `d` with a head answers from the head, whatever its own arrangement
-    /// holds.
+    /// answer. The emptiness is the surface's and not `d`'s own: a bare
+    /// published `d` that has a member answers from its trunk head
+    /// (PUB-2.53), whatever its own arrangement holds.
     DocNotRegistered,
     /// `a ∉ dom(L)`. Two further cases answer the same. On both pointwise
     /// reads, a link homed in a document the reader may not read — absent to

@@ -164,7 +164,7 @@ fn the_record_and_the_slice_refuse_a_count_their_bytes_do_not_carry() {
     );
 }
 
-/// `comps` in the shape a tumbler serializes as, its components' `Vec<Nat>`,
+/// `comps` in the form a tumbler serializes as, its components' `Vec<Nat>`,
 /// built without M1's doors — so a test can lay any key where an address
 /// belongs, one no door admits (empty, or breaking T4) as readily as one it
 /// does.
@@ -174,8 +174,8 @@ fn raw_key(comps: &[u32]) -> Vec<Nat> {
 
 /// A slice body naming each of `keys`, in the order given and repeats kept,
 /// with the value `x` at each: a `Vec` of (key, value) pairs, each key in
-/// `raw_key`'s shape and each value its byte sequence. That is a slice's own
-/// shape — `the_slice_serializes_as_its_map_alone_in_tumbler_order` pins a
+/// `raw_key`'s form and each value its byte sequence. That is a slice's own
+/// form — `the_slice_serializes_as_its_map_alone_in_tumbler_order` pins a
 /// slice's bytes as exactly a `Vec` of pairs', and the control in
 /// `the_record_and_the_slice_refuse_a_key_that_is_no_tumbler` decodes
 /// `raw_slice(&[CA1])` to the slice `stage_write` builds at `ca(1)` — so a
@@ -187,14 +187,14 @@ fn raw_slice(keys: &[&[u32]]) -> Vec<u8> {
 }
 
 /// The bytes of a record writing the value `x` at `key` — what a journal
-/// frame carries, never the frame itself: the address in `raw_key`'s shape,
-/// then the value's byte sequence. That is a record's own shape, as the same
+/// frame carries, never the frame itself: the address in `raw_key`'s form,
+/// then the value's byte sequence. That is a record's own form, as the same
 /// control holds of `raw_record(CA1)`.
 fn raw_record(key: &[u32]) -> Vec<u8> {
     bincode::serialize(&(raw_key(key), b"x".to_vec())).expect("the raw record serializes")
 }
 
-/// `ca(1)`'s components, for the raw shapes. The control in
+/// `ca(1)`'s components, for the raw forms. The control in
 /// `the_record_and_the_slice_refuse_a_key_that_is_no_tumbler` decodes them to
 /// the slice and the record `stage_write` builds at `ca(1)`, so the two
 /// cannot part unseen.
@@ -211,10 +211,10 @@ fn the_record_and_the_slice_refuse_a_key_that_is_no_tumbler() {
     // never stored: M1's reads stand on T0 (`ordinal` takes the last
     // component with an `expect` that names it), and a key in `dom(C)`
     // reaches every reader of the recovered store. No constructor builds such
-    // a key, so the bytes are laid through the raw shapes, `raw_slice` and
-    // `raw_record`. The same shapes carrying `ca(1)` are the control: they
+    // a key, so the bytes are laid through the raw forms, `raw_slice` and
+    // `raw_record`. The same forms carrying `ca(1)` are the control: they
     // decode to the slice and the record `stage_write` builds there — which
-    // is what makes the raw shapes the types' own bytes for every test that
+    // is what makes the raw forms the types' own bytes for every test that
     // lays one down — so the refusal is the empty key's alone.
     let rec = stage_write(&ContentStore::default(), &ca(1), val(b"x")).expect("fresh");
     assert_eq!(
@@ -405,7 +405,7 @@ fn the_slice_refuses_a_body_naming_one_address_twice() {
     // trailing zero digit, which num-bigint reads as one number. The bytes
     // are laid as `raw_slice` lays a body, but each key is spelled as the
     // `u32` digits its components serialize as and each value is its own; the
-    // same shape naming two addresses is the control, decoding to the slice
+    // same form naming two addresses is the control, decoding to the slice
     // that holds both values.
     let digits = |key: &Tumbler| -> Vec<Vec<u32>> { key.iter().map(Nat::to_u32_digits).collect() };
     assert_eq!(

@@ -17,9 +17,9 @@
 //! * **Engine plug** (§A) — the slice [`ContentStore`], the record
 //!   [`ContentWrite`], the accessor [`HasContent`], and the fold
 //!   [`ContentStore::apply_write`], per the Engine Composition Contract.
-//! * **Read API** (§B) — [`ContentStore::contains`] (the S3
-//!   referential-integrity oracle: content-presence, whether content is
-//!   stored here — not "allocated", not "registered") and
+//! * **Read API** (§B) — [`ContentStore::contains`] (the
+//!   referential-integrity oracle of S3★'s content clause: content-presence,
+//!   whether content is stored here — not "allocated", not "registered") and
 //!   [`ContentStore::value_at`] (`C(a)`), point queries over any slice, a
 //!   reader's pinned snapshot or a composite's working slice alike
 //!   ([`HasContent`] names both); and [`ContentStore::iter`], the one
@@ -32,9 +32,9 @@
 //!   compiled only under the `test-hooks` feature.
 //!
 //! Spec traceability: each public item's doc-comment cites the labels it
-//! realizes (ASN-0036 S0–S5/S3, ASN-0093 C0/C-fin, K.α, J0, and §§ of the
-//! M4 design), so a reviewer can walk from code to design without the
-//! documents open.
+//! realizes (ASN-0036 S0, S1, S4 and S5; ASN-0047 S3★ and J0; ASN-0093 C0,
+//! C-fin and K.α; and §§ of the M4 design), so a reviewer can walk from code
+//! to design without the documents open.
 //!
 //! ## Invariants
 //!
@@ -68,9 +68,9 @@
 //!   stores is an `Address`, taken as one at the write doors and decoded
 //!   through M1's `Address` door wherever a record or a slice is decoded;
 //! * arranging, referencing, or routing content, and enforcing referential
-//!   integrity (M5 — M4 only *answers* the check via `contains`; the
-//!   strongest S3 timing is achieved by M2's atomicity around M5's
-//!   composite, not by M4);
+//!   integrity (M5 — M4 only *answers* the check via `contains`; that S3★'s
+//!   content clause holds at every committed state, the strongest timing, is
+//!   achieved by M2's atomicity around M5's composite, not by M4);
 //! * V→I resolution (M5's reads); origin attribution, version comparison,
 //!   and the registered-empty-vs-unregistered distinction (M6);
 //! * link values — M7 is the parallel value-only store for `L`; the link
@@ -81,7 +81,7 @@
 //!   delta M2 journals, and the slice is its fold, fully serialized in
 //!   checkpoints (M2's default `rebuild_derived` identity), both in this
 //!   crate's serde form and both holding [`Val`]'s. Those bytes are
-//!   formats — read by code no compiler check ties to their shape — and
+//!   formats — read by code no compiler check ties to their form — and
 //!   what a change to each owes is said where it is spelled: on
 //!   [`ContentWrite`], on `in_tumbler_order` (`store.rs`) for the slice, and
 //!   on [`Val`];

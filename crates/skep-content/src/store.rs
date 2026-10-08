@@ -65,11 +65,12 @@ pub struct ContentStore {
     map: im::OrdMap<Key, Val>,
 }
 
-/// A stored address: the key of the slice's map, and the address a record
-/// carries. It holds the [`Address`] a write door was handed or a decode door
-/// admitted, whole, so every key keeps the T4 validity it was admitted with
-/// ([`ContentStore`]'s first key invariant), and the walk lends it as that
-/// `Address`, never as a tumbler for its reader to validate again.
+/// An address as this crate holds it in memory: the key of the slice's map,
+/// and the address a record carries. It holds the [`Address`] a write door
+/// was handed or a decode door admitted, whole, so every key keeps the T4
+/// validity it was admitted with ([`ContentStore`]'s first key invariant),
+/// and the walk lends it as that `Address`, never as a tumbler for its reader
+/// to validate again.
 ///
 /// Behind an `Arc`, as each value's bytes are: a write copies the tree nodes
 /// on its path, up to 64 entries each, and a copy clones one `Arc` per address
@@ -78,7 +79,7 @@ pub struct ContentStore {
 /// multiplies by its value count under M2's applier lock and every replay
 /// pays again. The fold puts a record's address into the map by sharing the
 /// record's `Arc`, so folding a record — on commit and on every replay —
-/// never copies its address.
+/// never clones its address component by component.
 ///
 /// Ordered and compared as its `Address`, which orders as its tumbler, and
 /// borrowed as that tumbler, so the point queries take a `&Tumbler`; shown and
@@ -255,11 +256,13 @@ impl ContentStore {
         }
     }
 
-    /// S3 referential-integrity oracle — content-presence: is content STORED
-    /// at `a`, `a ∈ dom(C)` (ASN-0036 S3; §B)? Not "allocated" (M3) and not
+    /// The referential-integrity oracle of S3★'s content clause —
+    /// content-presence: is content STORED at `a`, `a ∈ dom(C)` (ASN-0047
+    /// S3★, which supersedes ASN-0036 S3; §B)? Not "allocated" (M3) and not
     /// "registered" (M3): an allocated address with nothing stored is a ghost
     /// element (ASN-0034 T8; ASN-0040 B3), and this answers `false` for it.
-    /// M5 calls this on the content side of placement.
+    /// M5 calls this on the content side of placement; S3★ maps an arranged
+    /// link position into the link store, never this one.
     pub fn contains(&self, a: &Tumbler) -> bool {
         self.map.contains_key(a)
     }
@@ -405,7 +408,7 @@ impl<'a> IntoIterator for &'a ContentStore {
 /// of M2's `SKJ` and `SKC` stamps, so that a journal written before the
 /// change is refused by name at open, never replayed into `Corruption`. M2's
 /// golden journal holds content records, so its pin fails by name when these
-/// bytes move; this crate's suite pins the shape a record decodes from
+/// bytes move; this crate's suite pins the form a record decodes from
 /// (`raw_record`'s control) and replays records through M2's own codec
 /// (`content_survives_durable_recovery_by_checkpoint_and_replay`).
 ///

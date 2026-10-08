@@ -1,6 +1,6 @@
 //! The slice and its write step, with no kernel: what the already-stored
-//! check admits and rejects; that the fold is pure and insert-only, shares
-//! every address the slice already stores, and never replaces a stored
+//! check admits and rejects; that the fold is pure and insert-only, keeps
+//! every stored address in the memory it had, and never replaces a stored
 //! value — it leaves the whole slice as it was, and panics on the attempt in
 //! debug builds; that a point query matches its address exactly, never a
 //! prefix or an extension; that identity is by address, never by value, and
@@ -108,18 +108,18 @@ fn apply_write_is_a_pure_insert_only_fold() {
 }
 
 #[test]
-fn apply_write_shares_every_address_the_slice_already_stores() {
+fn apply_write_keeps_every_stored_address_in_the_memory_it_had() {
     // store.rs (`Key`): a fold copies the tree nodes on its path, up to 64
-    // entries each, and shares everything else — the addresses in the copied
-    // nodes included. A copy that cloned each of those addresses component by
-    // component would make every write pay for up to 64 addresses per level
-    // of the tree, a cost set by the longest addresses stored near it, which
-    // an INSERT multiplies by its value count under M2's applier lock and
-    // every replay pays again. So each address the old slice stores keeps, in
-    // the new slice, the very components it had — one storage, not a copy.
+    // entries each, and leaves every address where it is in memory, those in
+    // the copied nodes included. A node copy that cloned each of those
+    // addresses component by component would make every write pay for up to
+    // 64 addresses per level of the tree, a cost set by the longest addresses
+    // stored near it, which an INSERT multiplies by its value count under M2's
+    // applier lock and every replay pays again. So each address the old slice
+    // stores keeps, in the new slice, the very memory its components had.
     // 257 entries put the tree past one node, so the fold copies an inner
     // node as well as a leaf.
-    let component_storage = |addr: &Address| -> *const Nat {
+    let component_memory = |addr: &Address| -> *const Nat {
         std::ptr::from_ref(addr.tumbler().iter().next().expect("a tumbler is nonempty"))
     };
     let mut c0 = ContentStore::default();
@@ -127,19 +127,19 @@ fn apply_write_shares_every_address_the_slice_already_stores() {
         c0 = c0.apply_write(&stage_write(&c0, &ca(ordinal), val(b"v")).expect("fresh"));
     }
     let stored: std::collections::BTreeMap<&Address, *const Nat> =
-        c0.iter().map(|(addr, _)| (addr, component_storage(addr))).collect();
+        c0.iter().map(|(addr, _)| (addr, component_memory(addr))).collect();
     let c1 = c0.apply_write(&stage_write(&c0, &ca(258), val(b"v")).expect("fresh"));
-    let mut shared = 0;
+    let mut kept = 0;
     for (addr, _) in &c1 {
         if let Some(&before) = stored.get(addr) {
             assert!(
-                std::ptr::eq(before, component_storage(addr)),
-                "the fold copied {addr}, an address the slice already stored"
+                std::ptr::eq(before, component_memory(addr)),
+                "the fold rebuilt {addr}, an address the slice already stored, in new memory"
             );
-            shared += 1;
+            kept += 1;
         }
     }
-    assert_eq!(shared, 257, "the new slice holds every address the old one stored");
+    assert_eq!(kept, 257, "the new slice holds every address the old one stored");
 }
 
 #[test]
@@ -418,7 +418,7 @@ fn val_implements_no_hash_so_no_map_can_key_on_a_value() {
 fn a_value_is_stored_and_read_back_exactly_as_written_whatever_its_bytes() {
     // value.rs: M4 is value-oblivious — it never inspects a value's bytes, so
     // any byte string is a value and comes back exactly as written: the
-    // zero-length one, a single byte (the shape INSERT stores, one byte per
+    // zero-length one, a single byte (the value INSERT stores, one byte per
     // content address), and bytes that are no text at all. Each folds from its
     // journaled record and reads back from the slice and from its checkpoint
     // form; a zero-length value is content stored like any other.

@@ -92,6 +92,33 @@ fn targets_of_at_default_drops_filtered_targets() {
     assert!(!decide_now(&k, &c, View::Active, is_filtered(&retired_ty(), lit_addr(&ca(2)))));
 }
 
+/// The UV rewrite and the `is_filtered` atom read ONE filter, BH1's per-type
+/// `is_filtered_J` (D2): at `default` a member of K is dropped exactly when
+/// `is_filtered_J` holds of it for some BH1 class J other than K, and both
+/// read J's ACTIVE slice. An element retired and then un-retired is filtered
+/// by neither, though the audit record still holds its retirement — a rewrite
+/// that read that record would drop a member `is_filtered` calls unfiltered.
+#[test]
+fn uv_drops_a_member_exactly_when_is_filtered_holds_of_it() {
+    let k = kernel();
+    let c = coord(&k);
+    let writer = link_writer(&k);
+    for x in [ca(3), ca(5)] {
+        writer.emit(Caller::System, &doc1(), &pred_stable_ty(), &x, &[]).expect("a member");
+    }
+    writer.emit(Caller::System, &doc1(), &retired_ty(), &ca(3), &[]).expect("retire ca3");
+    let (retirement, _) =
+        writer.emit(Caller::System, &doc1(), &retired_ty(), &ca(5), &[]).expect("retire ca5");
+    writer.nullify(Caller::System, &doc1(), &retirement).expect("un-retire ca5");
+    let at_default = |t: Term| decide_now(&k, &c, View::Default, t);
+    for (x, filtered) in [(ca(3), true), (ca(5), false)] {
+        let said_filtered = at_default(is_filtered(&retired_ty(), lit_addr(&x)));
+        let kept = at_default(set_mem(lit_addr(&x), members(&pred_stable_ty())));
+        assert_eq!(said_filtered, filtered, "is_filtered({x}) reads the active slice");
+        assert_eq!(kept, !filtered, "the UV rewrite drops {x} iff is_filtered holds of it");
+    }
+}
+
 /// `targets_of` matches its source by COVERAGE of F at `Active`/`Default`
 /// and by DENOTATION at `Audit`: a probe strictly under a denoted address
 /// has targets at the first two views and none at the third, while the

@@ -10,7 +10,7 @@
 //! over `observe(K, ⟨⟩, Audit)`), `L_K` and `L_dom` — names `Slice::Audit`
 //! and relies on `observe` returning that stored slice for it; no second
 //! audit-honoring method is assumed anywhere. Which slice a term's VIEW
-//! reads is `Slice::of`'s one statement (`guest.rs`): the two concepts are
+//! reads is `Slice::of`'s one statement (`value.rs`): the two concepts are
 //! distinct, and `default` names no slice at all.
 //!
 //! The UV default-view rewrite is M9's (Conflicts §3): `members`/`targets_of`
@@ -30,14 +30,14 @@ use std::collections::BTreeSet;
 
 use im::OrdSet;
 use skep_address::{is_prefix, Address, Nat};
-use skep_links::{CoverageClass, Pattern, Tip, Tuple, View};
+use skep_links::{CoverageClass, Endset, Pattern, Tip, Tuple, View};
 use skep_namespace::M3State;
 
 use crate::ast::{Atom, Dom, Lit, Prim, Term, TypeKey, VarId};
 use crate::catalog::TypeCatalog;
 use crate::check::DefSource;
-use crate::guest::{GuestLinks, Slice};
-use crate::value::{lift, Arg, Env, Value};
+use crate::guest::GuestLinks;
+use crate::value::{lift, Arg, Env, Slice, Value};
 
 /// One verdict's read context — all slices off one pinned snapshot, M7's
 /// through the look at guest class, at ONE term view (PC3: the term view is
@@ -102,15 +102,29 @@ fn tuple_var<'e>(env: &'e Env, v: &VarId) -> &'e Tuple {
 }
 
 impl<W> EvalCtx<'_, W> {
-    /// UV `K_queried` self-exclusion: `∃ J ∈ Φ, J ≠ K :: is_k(J, x)` — the
-    /// per-type BH1 filter (D2), fixed active, never M7's aggregate
-    /// `is_filtered`. Takes the queried KEY, so the class lookup a UV rewrite
-    /// needs is made here rather than at each of its four sites.
+    /// BH1's per-type filter, `is_filtered_J(x)` (D2): `J`'s own ACTIVE
+    /// membership — `is_k(J, x)` at the active slice, at every term view.
+    /// What the `is_filtered` atom denotes, and what the UV rewrite asks of
+    /// every BH1 class other than the queried one ([`EvalCtx::filtered_other`]),
+    /// so the two cannot come apart on what "filtered" means. Never M7's
+    /// aggregate `is_filtered`: it is type-less, so it would count the queried
+    /// class against itself and self-erase `members(Retired)` at `default`
+    /// (ASN-0129 UV, settled OQ1).
+    fn filtered_by(&self, j: &Endset, x: &Address) -> bool {
+        self.links.is_k(j, x.tumbler(), Slice::Active)
+    }
+
+    /// UV `K_queried` self-exclusion: `∃ J ∈ Φ, J ≠ K :: is_filtered_J(x)` —
+    /// BH1's per-type filter ([`EvalCtx::filtered_by`]) asked of every
+    /// cataloged BH1 class but the queried one. Takes the queried KEY, so the
+    /// class lookup the rewrite needs is made here rather than at every read
+    /// it rewrites.
     fn filtered_other(&self, k: &TypeKey, x: &Address) -> bool {
         let k_class = self.catalog.class_of(k);
-        self.catalog.read_filter_classes().iter().any(|(j_class, j_endset)| {
-            j_class != k_class && self.links.is_k(j_endset, x.tumbler(), Slice::Active)
-        })
+        self.catalog
+            .read_filter_classes()
+            .iter()
+            .any(|(j_class, j_endset)| j_class != k_class && self.filtered_by(j_endset, x))
     }
 
     /// The UV default-view rewrite as ONE predicate: at `default` an element
@@ -299,12 +313,11 @@ fn eval_atom<W>(cx: &EvalCtx<'_, W>, env: &Env, a: &Atom) -> Value {
             let x = as_addr(eval_term(cx, env, e));
             Value::AddrSet(cx.targets_of_at(tr.key(), &x))
         }
-        // BH1: is_filtered_J ≡ is_k(J, ·) — D2, J's own active membership,
-        // fixed active at every term view.
+        // BH1 (D2): J's own active membership at every term view —
+        // `EvalCtx::filtered_by`, the filter the UV rewrite asks too.
         Atom::IsFiltered(tr, e) => {
-            let k = tr.key();
             let x = as_addr(eval_term(cx, env, e));
-            Value::Bool(cx.links.is_k(&k.0, x.tumbler(), Slice::Active))
+            Value::Bool(cx.filtered_by(&tr.key().0, &x))
         }
         Atom::Succs(tr, e) => {
             let k = tr.key();

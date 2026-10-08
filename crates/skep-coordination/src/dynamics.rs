@@ -10,7 +10,7 @@ use skep_links::{CoverageClass, View};
 
 use crate::ast::{Atom, Dom, Lit, Prim, Term, TypeKey, VarId};
 use crate::catalog::TypeCatalog;
-use crate::guest::Slice;
+use crate::value::Slice;
 use crate::walk::{visit_dom, visit_term, Visit};
 
 /// `classify`'s output — all static, sound-but-incomplete. `footprint`/

@@ -1,8 +1,9 @@
-//! §Core data model — values, sorts, signatures, the eval environment.
+//! §Core data model — values, sorts, the stored slice a read touches,
+//! signatures, the eval environment.
 
 use im::{HashMap, OrdSet, Vector};
 use skep_address::{validate, Address, Nat, Tumbler};
-use skep_links::{CoverageClass, Tuple};
+use skep_links::{CoverageClass, Tuple, View};
 
 use crate::ast::{Term, VarId};
 
@@ -144,6 +145,40 @@ impl From<Arg> for Value {
         match a {
             Arg::Addr(a) => Value::Addr(a),
             Arg::Tuple(t) => Value::Tuple(t),
+        }
+    }
+}
+
+/// Which STORED SLICE a read touches: the active tuples, or the whole audit
+/// record. `A_K` and `L_K` — PL's two tuple domains — are its two values, and
+/// `Observe_K`'s two selectable slices (§Internal 2).
+///
+/// DISTINCT from a term's [`View`] (PC3), an evaluation parameter with three
+/// values: `default` names no slice — it is the active slice plus M9's UV
+/// rewrite over it (`EvalCtx`). [`Slice::of`] is the one statement of that
+/// relation, asked where a term view circulates: by the evaluator, choosing
+/// the slice a view-parameterized read takes, and by the analyzer, charging
+/// that slice to a footprint. The read surface (`GuestLinks`) reads BY a
+/// slice and widens it to M7's `View` where it calls M7. At a DIRECT
+/// `LinkState` read, at no visibility class — the def probes
+/// (`coordinator/defs.rs`) and the divergence monitor
+/// (`coordinator/engine.rs`) — M9 speaks M7's `View`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Slice {
+    Active,
+    Audit,
+}
+
+impl Slice {
+    /// The slice a term at `view` reads: `audit` reads the whole record;
+    /// `active` and `default` both read the active tuples — they differ only
+    /// by the UV rewrite applied OVER them (`EvalCtx::uv_keeps`), never
+    /// by which slice is read. Deliberately not a `From`: the step is lossy,
+    /// and naming it is what keeps the two concepts apart.
+    pub(crate) fn of(view: View) -> Slice {
+        match view {
+            View::Audit => Slice::Audit,
+            View::Active | View::Default => Slice::Active,
         }
     }
 }

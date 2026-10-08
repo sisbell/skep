@@ -113,7 +113,8 @@
 
 // The PL term tree: `Term` and `Dom`, `VarId`'s reserved range, type keys.
 mod ast;
-// Sorts, values and domain elements; the signed term; the environment.
+// Sorts, values and domain elements, and the stored slice a read touches; the
+// signed term; the environment.
 mod value;
 // Test only: one signed term spelling every former — the codec's round trip
 // and the walks' agreement are checked on it — and the unit tests' two

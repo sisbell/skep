@@ -72,40 +72,13 @@ use im::OrdSet;
 use skep_address::{document_of, Address, Tumbler};
 use skep_links::{Endset, HasLinks, LinkState, NotBh4, Pattern, Tip, Tuple, View, Visibility};
 
-use crate::value::lift;
+use crate::value::{lift, Slice};
 
-/// Which STORED SLICE a read touches: the active tuples, or the whole audit
-/// record. `A_K` and `L_K` — PL's two tuple domains — are its two values, and
-/// `Observe_K`'s two selectable slices (§Internal 2).
-///
-/// DISTINCT from a term's [`View`] (PC3), an evaluation parameter with three
-/// values: `default` names no slice — it is the active slice plus M9's UV
-/// rewrite over it (`EvalCtx`). [`Slice::of`] is the one statement of that
-/// relation. At a DIRECT `LinkState` read, at no visibility class — the def
-/// probes (`coordinator/defs.rs`) and the divergence monitor
-/// (`coordinator/engine.rs`) — M9 speaks M7's `View`; inside this read
-/// surface, where a term view also circulates, the slice has its own name.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum Slice {
-    Active,
-    Audit,
-}
-
-impl Slice {
-    /// The slice a term at `view` reads: `audit` reads the whole record;
-    /// `active` and `default` both read the active tuples — they differ only
-    /// by the UV rewrite applied OVER them (`EvalCtx::uv_keeps`), never
-    /// by which slice is read. Deliberately not a `From`: the step is lossy,
-    /// and naming it is what keeps the two concepts apart.
-    pub(crate) fn of(view: View) -> Slice {
-        match view {
-            View::Audit => Slice::Audit,
-            View::Active | View::Default => Slice::Active,
-        }
-    }
-}
-
-/// Widening is total — the one conversion, made where M9 calls M7.
+/// Widening is total — the one conversion, made where M9 calls M7
+/// (`GuestLinks::candidates`), so it belongs to this read surface. The slice
+/// itself, and its relation to a term view (`Slice::of`), are PL vocabulary
+/// (`value.rs`): the evaluator and the analyzer ask that relation, and this
+/// surface, which never sees a term view, reads by the slice alone.
 impl From<Slice> for View {
     fn from(s: Slice) -> View {
         match s {

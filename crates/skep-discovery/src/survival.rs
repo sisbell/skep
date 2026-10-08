@@ -8,11 +8,14 @@
 //! `orphaned = findlinks(A_del) ∖ findlinks(retained)` over the ACTIVE
 //! view (a nullified link that lost its last witness in `d` is NOT reported —
 //! a deliberate divergence from ASN-0117's `D(d,Σ)` over `dom(L)`,
-//! Conflicts #8).
+//! Conflicts #8). The preview is of the DELETE requested, never of a clipped
+//! one: it restates M5's DELETE admission, which M5 keeps private, in
+//! [`DeleteSplit::of`], the one element here a change to DELETE's admission
+//! changes.
 
 use num_traits::{One, Zero};
-use skep_address::{Address, Nat};
-use skep_arrangement::{Run, VPos};
+use skep_address::{Address, Nat, Span};
+use skep_arrangement::{M5State, Run, VPos};
 use skep_kernel::Snapshot;
 
 use crate::budget::MAX_IMAGE_RUNS;
@@ -21,6 +24,59 @@ use crate::image::content_vspan;
 use crate::sets::stab_runs;
 use crate::types::{OrphanError, OrphanReport};
 use crate::DiscoveryWorld;
+
+/// `d`'s content as a requested DELETE `[p, p + width)` splits it: the range
+/// it takes, and the prefix `[1, p)` and suffix `[p + width, n_C]` it leaves —
+/// each `None` where it is empty, no prefix at `p = 1` and no suffix once the
+/// range reaches `n_C`. The three partition `[1, n_C]`, and each is built by
+/// the query surface's own V-span constructor, [`content_vspan`], so what M5
+/// resolves is the shape the region gate accepts.
+struct DeleteSplit {
+    deleted: Span,
+    prefix: Option<Span>,
+    suffix: Option<Span>,
+}
+
+impl DeleteSplit {
+    /// The split, or the refusal of the range's shape — `NotContentSubspace`,
+    /// then `EmptyWidth`, then `OutOfBounds` — that M5's DELETE gives the same
+    /// request, in the order and under the labels [`delete_orphans_on`]
+    /// states. The document gate is not this element's: the preview asks it
+    /// first, as M5's DELETE does.
+    ///
+    /// A RESTATEMENT. M5 keeps DELETE's admission pair (ASN-0117)
+    /// crate-private — `arranges_content_position`, the position test behind
+    /// its `NotArranged` (`p ∈ [1, n_C]`), and `contains_content_range`, the
+    /// containment test behind its `OutOfBounds` (`p + width ≤ n_C + 1`) — so
+    /// the bounds check here is a second statement of the two, folded into one
+    /// check as [`delete_orphans_on`] states. The two statements change
+    /// together: the admission grid in `tests/it/survival.rs` holds this one to
+    /// M5's DELETE on every request it draws. The split is built from the
+    /// check's own arithmetic, so the deleted range is never clipped and
+    /// neither side's count can underflow — the check holds `p ≥ 1` and
+    /// `p + width ≤ n_C + 1`.
+    fn of(m5: &M5State, d: &Address, p: &VPos, width: &Nat) -> Result<DeleteSplit, OrphanError> {
+        if !p.is_content() {
+            return Err(OrphanError::NotContentSubspace); // s_C only (mirror M5 DeleteError)
+        }
+        let p_ordinal = &p.ordinal;
+        if width.is_zero() {
+            return Err(OrphanError::EmptyWidth); // mirror M5 EmptyWidth
+        }
+        let suffix_start = p_ordinal + width; // the first position past the deleted range
+        let content_end = m5.content_count(d) + Nat::one(); // n_C + 1, past the arranged content
+        if p_ordinal.is_zero() || suffix_start > content_end {
+            return Err(OrphanError::OutOfBounds); // folds M5's NotArranged + OutOfBounds, width ≥ 1
+        }
+        let suffix_count = &content_end - &suffix_start;
+        Ok(DeleteSplit {
+            deleted: content_vspan(p, width)
+                .expect("p is s_C and width ≥ 1, both refused above when not"),
+            prefix: content_vspan(&VPos::content(Nat::one()), &(p_ordinal - Nat::one())),
+            suffix: content_vspan(&VPos::content(suffix_start), &suffix_count),
+        })
+    }
+}
 
 /// Pre-edit what-if (ASN-0117): the links the proposed DELETE `[p, p+width)`
 /// would orphan from `d` — read-only, never the edit path.
@@ -111,45 +167,26 @@ pub fn delete_orphans_on<W: DiscoveryWorld>(
     if !w.m3().is_registered_document(d) {
         return Err(OrphanError::DocNotRegistered);
     }
-    if !p.is_content() {
-        return Err(OrphanError::NotContentSubspace); // s_C only (mirror M5 DeleteError)
-    }
-    let p_ordinal = &p.ordinal;
-    if width.is_zero() {
-        return Err(OrphanError::EmptyWidth); // mirror M5 EmptyWidth
-    }
-    let suffix_start = p_ordinal + width; // the first position past the deleted range
-    let content_end = w.m5().content_count(d) + Nat::one(); // n_C + 1, past the arranged content
-    if p_ordinal.is_zero() || suffix_start > content_end {
-        return Err(OrphanError::OutOfBounds); // folds M5's NotArranged + OutOfBounds (width ≥ 1)
-    }
+    // DELETE's checks of the range's shape, restated, and the split the range
+    // makes of `d`'s content.
+    let DeleteSplit {
+        deleted,
+        prefix,
+        suffix,
+    } = DeleteSplit::of(w.m5(), d, p, width)?;
     // The run budget as `d` alone already settles it, off M5's own `#runs`,
-    // which reads no run: the three spans below partition `[1, n_C]` and every
-    // content run contributes at least one piece, so this is a LOWER bound on
-    // the exact count taken after they resolve, and refuses nothing that check
-    // would admit. What it buys is that a `d` past the budget however the
-    // range falls is refused without its arrangement being resolved into a
-    // vector first.
+    // which reads no run: the split's three spans partition `[1, n_C]` and
+    // every content run contributes at least one piece, so this is a LOWER
+    // bound on the exact count taken after they resolve, and refuses nothing
+    // that check would admit. What it buys is that a `d` past the budget
+    // however the range falls is refused without its arrangement being
+    // resolved into a vector first.
     let link_run_count = w.m5().link_run_count(d);
     if w.m5().content_run_count(d) + link_run_count > MAX_IMAGE_RUNS {
         return Err(OrphanError::ImageTooLarge);
     }
 
-    // The three spans partitioning `[1, n_C]`, each built by the query
-    // surface's own V-span constructor, so what M5 resolves is the shape the
-    // region gate accepts. The deleted range is the request's own position,
-    // where the constructor answers because `p` is `s_C` and `width ≥ 1`, both
-    // refused above when not; the bounds are checked, so nothing is clipped.
-    // The prefix `[1, p)` and the suffix `[p + width, n_C]` take the
-    // constructor's own `None` at a zero count as an empty side — no prefix at
-    // `p = 1`, no suffix once the range reaches `n_C` — and neither count can
-    // underflow, the bounds check holding `p ≥ 1` and `p + width ≤ n_C + 1`.
-    let deleted =
-        content_vspan(p, width).expect("p is s_C and width ≥ 1, both refused above when not");
     let a_del = w.m5().resolve(d, &deleted);
-    let prefix = content_vspan(&VPos::content(Nat::one()), &(p_ordinal - Nat::one()));
-    let suffix_count = &content_end - &suffix_start;
-    let suffix = content_vspan(&VPos::content(suffix_start), &suffix_count);
     // The surviving CONTENT runs, pulled off M5's lazy resolution straight into
     // `retained`, so no side is collected into a vector of its own only to be
     // drained. `d`'s link runs are retained too — a text delete never touches

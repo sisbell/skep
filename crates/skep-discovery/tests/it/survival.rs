@@ -227,8 +227,11 @@ fn delete_orphans_keeps_a_link_witnessed_in_the_link_subspace_a_text_delete_neve
 /// sides over a grid that visits requests nobody chose: an overrun from every
 /// start, the `p + width = n_C + 1` equality, the zero width at an
 /// out-of-range start, every subspace but `s_C` on either side of it, an
-/// empty document and an unregistered one. Eight hand-picked points on M8's own error contract
-/// would all still pass if M5's admission moved; this would not.
+/// empty document and an unregistered one. The preview restates DELETE's
+/// admission, which M5 keeps private, so the two must give one verdict, and
+/// this grid is what holds them to it: eight hand-picked points on M8's own
+/// error contract would all still pass if M5's admission moved; this would
+/// not.
 ///
 /// The comparison runs as `SYS`, which is exactly the caller class the
 /// equality holds for: `Caller::System` is exempt from M5's ω gate, so

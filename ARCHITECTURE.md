@@ -1434,6 +1434,15 @@ Rules that hold across its files:
   in the same commit. The unit test beside it holds it to `skep-address`'s
   `classify_spans`, and `tests/it/pointwise.rs` holds discoverability to
   the stab on every relation `classify_spans` draws.
+- **The arrangement's DELETE admission is restated here.**
+  `skep-arrangement` keeps private the two tests its DELETE admits a range
+  by — that the document arranges the range's first position, and that its
+  arranged content contains the whole range — and `delete_orphans_on`
+  restates them as one bounds check in `DeleteSplit::of`, in
+  `src/survival.rs`, so that the preview is of the DELETE requested and
+  never of a clipped one. A change to DELETE's admission changes
+  `DeleteSplit::of` in the same commit. `tests/it/survival.rs` holds the
+  preview to DELETE's verdict on every request its admission grid draws.
 
 Its integration suite is one binary, `tests/it/`: one file per part of the
 read surface over the shared `common` world; `heap`, the binary's

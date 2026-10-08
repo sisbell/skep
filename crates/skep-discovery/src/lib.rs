@@ -314,7 +314,8 @@ mod descriptor;
 // The pointwise pair: projection and addressable discoverability, and the
 // touch test's restatement of M7's private per-link overlap.
 mod pointwise;
-// The delete-orphan preview.
+// The delete-orphan preview, and its restatement of M5's private DELETE
+// admission.
 mod survival;
 // Supersession lineage: the claims naming a link.
 mod lineage;

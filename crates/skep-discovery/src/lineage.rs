@@ -98,11 +98,9 @@ impl Endpoint {
 /// and `new` are read out of. The schema's remaining clauses — the two
 /// endpoints distinct, both resident — M7 holds at its two `[K_sup]` writers
 /// (`assert_sup` checks them, and `editlink`'s DC guard asks them of a
-/// caller's successor through a predicate M7 keeps crate-private). Of those
-/// the read restates residence alone, and only for the endpoint a probe
-/// names: [`claims_naming`] keeps a claim only where that endpoint EQUALS a
-/// key it has found resident. The other endpoint's residence, and the two
-/// endpoints' distinctness, it never asks.
+/// caller's successor through a predicate M7 keeps crate-private). This
+/// read-out asks neither; [`claims_naming`] states which of them the read
+/// restates.
 ///
 /// THE HOME IS M7's, NOT A CONDITION. `t.addr` is a key of M7's store, and
 /// every key there has a home (EL8b): `LinkState`'s invariant, gated by the
@@ -176,6 +174,11 @@ fn sup_claim(l: &LinkState, t: Tuple) -> Option<SupClaim> {
 /// conforming claim names a non-link `key`, and `[]` is the TRUE answer
 /// rather than a fallback, reached without walking the class. Resident, not
 /// active: a nullified link is still resident and remains a legal probe key.
+/// Of the schema's clauses beyond the definedness [`sup_claim`] reads out,
+/// this is the only one the read restates: the other endpoint's residence,
+/// and the two endpoints' distinctness, it never asks — M7 holds both at its
+/// two `[K_sup]` writers — so a claim it returns can name, at its other
+/// endpoint, an address that is no resident link, or `key` itself.
 ///
 /// **Two upstream preconditions are discharged here**, and they arrive on
 /// DIFFERENT channels. `observe` FAULTS on a `ty` that is neither

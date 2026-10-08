@@ -23,9 +23,10 @@ use crate::error::SpanFault;
 // reference, with no allocation — and the O(1)-per-query construction sites,
 // [`Subspace::anchor`] among them, clone through it.
 //
-// Private, which is the point of [`Subspace`] carrying both directions: no
-// file but this one names a raw subspace numeral, so a numeral cannot be
-// handed to a function expecting a count.
+// Private — the statics and [`Subspace::numeral`], the one accessor that
+// hands them out — which is the point of [`Subspace`] carrying both
+// directions: no file but this one can name a raw subspace numeral, so a
+// numeral cannot be handed to a function expecting a count.
 
 /// `s_C` = M1's content-subspace numeral (ASN-0047; T7 convention).
 static S_C: LazyLock<Nat> = LazyLock::new(content_subspace);
@@ -102,7 +103,7 @@ impl Subspace {
     ///
     /// Borrowed from the memoized static, so a caller that must own one
     /// clones at the O(1)-per-query site rather than on every comparison.
-    pub(crate) fn numeral(self) -> &'static Nat {
+    fn numeral(self) -> &'static Nat {
         match self {
             Subspace::Content => &S_C,
             Subspace::Link => &S_L,
@@ -147,9 +148,10 @@ impl Subspace {
     /// `#runs` of this subspace's run list in `doc` — how many runs
     /// [`Subspace::runs`] would hand back, without handing them back: M5's
     /// own count, one map lookup reading no run, selected as `count` and
-    /// `runs` are. The quantity a resolution's walk is priced in
-    /// ([`walk_ceiling`]).
-    pub(crate) fn run_count(self, m5: &M5State, doc: &Address) -> usize {
+    /// `runs` are. The quantity a resolution's walk is priced in, and private
+    /// to this file so that a walk is priced in [`walk_ceiling`] and nowhere
+    /// else.
+    fn run_count(self, m5: &M5State, doc: &Address) -> usize {
         match self {
             Subspace::Content => m5.content_run_count(doc),
             Subspace::Link => m5.link_run_count(doc),

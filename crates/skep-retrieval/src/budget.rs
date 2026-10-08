@@ -145,10 +145,11 @@ pub const MAX_DELIVERY_ITEMS: usize = 1 << 17;
 /// counts see at most what it yields. A request of spans aimed past the end of
 /// a fragmented document costs `|spans| · #runs(doc)` steps and produces
 /// nothing, and `#runs` is cheap to grow: one COPY places up to M5's
-/// `MAX_PLACED_RUNS` runs. `walk_ceiling` prices each span at an upper bound
-/// on its walk, read off M5's O(1) run counts — and prices a span M5's reader
-/// declines, or one starting in neither subspace, though either resolves to
-/// nothing: the first at its whole list, the second against both lists.
+/// `MAX_PLACED_RUNS` runs. `vspan.rs`'s [`walk_ceiling`] prices each span at
+/// an upper bound on its walk, read off M5's O(1) run counts — and prices a
+/// span M5's reader declines, or one starting in neither subspace, though
+/// either resolves to nothing: the first at its whole list, the second against
+/// both lists.
 ///
 /// The budget is the operand budget's square, `2^24` — the bound
 /// [`MAX_COMPARE_OPERAND_BLOCKS`]' card prices COMPARE's join at, order a
@@ -161,6 +162,8 @@ pub const MAX_DELIVERY_ITEMS: usize = 1 << 17;
 /// Crate-private, as M8's is: no answer here reports the run counts a caller
 /// would size a request against, so the refusal renders the number and nothing
 /// publishes it to compute with.
+///
+/// [`walk_ceiling`]: crate::vspan::walk_ceiling
 pub(crate) const MAX_WALK_STEPS: usize = MAX_COMPARE_OPERAND_BLOCKS * MAX_COMPARE_OPERAND_BLOCKS;
 
 /// One count taken against one of the budgets above — the spans a COMPARE

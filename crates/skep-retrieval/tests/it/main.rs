@@ -26,3 +26,4 @@ mod query;
 mod retrieve;
 mod tidy;
 mod traits;
+mod walk_budget;

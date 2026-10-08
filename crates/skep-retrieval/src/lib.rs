@@ -173,7 +173,8 @@ mod budget;
 mod error;
 // The request and result values every operation takes and returns.
 mod types;
-// How M6 reads one request V-span: `Subspace` and the span gate.
+// How M6 reads one request V-span: `Subspace`, the span gate, and the price
+// its walk is charged against the walk budget (`walk_ceiling`).
 mod vspan;
 // `Query` and what its operations share; one file per operation beneath.
 mod query;

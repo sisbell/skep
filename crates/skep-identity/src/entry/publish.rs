@@ -63,7 +63,7 @@ use core::num::NonZeroU64;
 
 use skep_address::Address;
 
-use super::{address_bytes, push_address_list, push_window, EntryBody, ValueSequence};
+use super::{address_bytes, push_address_list, push_window, EntryBody, Grammar, ValueSequence};
 use crate::framing::{delimited_len, push_delimited};
 
 /// The `publish` body's segment CLASS bytes: a WINDOW, a run held BY
@@ -133,7 +133,7 @@ pub struct ShotBase<'a> {
 fn push_base(out: &mut Vec<u8>, base: Option<ShotBase<'_>>) {
     let mut group = Vec::new();
     if let Some(ShotBase { member, extent }) = base {
-        push_address_list(&mut group, std::slice::from_ref(member));
+        push_address_list(&mut group, [member]);
         group.extend_from_slice(&extent.to_be_bytes());
     }
     push_delimited(out, &group);
@@ -327,7 +327,7 @@ impl PublishBody {
         }
         bytes[..8].copy_from_slice(&placed.to_be_bytes());
         bytes.extend_from_slice(&base_group);
-        EntryBody { op: "publish", bytes }
+        EntryBody { grammar: Grammar::Publish, bytes }
     }
 }
 

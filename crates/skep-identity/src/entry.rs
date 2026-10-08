@@ -65,18 +65,20 @@
 //!   stored endset's spans, verbatim and in stored order — one form byte,
 //!   `0x03`, then `be64(n)`, then each span as its START and its WIDTH, each
 //!   tumbler in the address row's dotted-decimal spelling and each
-//!   length-delimited — [`push_slot`] over an [`EntrySlot`]. ONE form byte,
-//!   for "as stored": a frame composed over a request's form fails at the
-//!   row's first byte. The EMPTY slot has ONE spelling, `0x03 ‖ be64(0)`. A
-//!   slot the client named by ADDRESS is stored as one unit subtree span per
-//!   address ([`unit_span`], the spelling M7's `enc` gives), so its row is
-//!   those spans; a slot the client sent as V-specs is stored as the
-//!   I-extents the transaction resolves them to, so its row is those: the
-//!   SIGNER resolves against the base the transaction will take and signs
-//!   the resolved spans, the daemon composes the row from the endset its own
-//!   transaction deposits (a mismatch is `attestation_invalid:signature`,
-//!   the frame re-composed and re-signed), and a verifier composes the same
-//!   row from the stored link alone.
+//!   length-delimited — [`push_slot`] over a borrowed walk of the stored
+//!   spans (an [`EntrySlot`]'s slice, or M7's own `&Endset` where it lies),
+//!   the count the walk's own. ONE form byte, for "as stored": a frame
+//!   composed over a request's form fails at the row's first byte. The EMPTY
+//!   slot has ONE spelling, `0x03 ‖ be64(0)`. A slot the client named by
+//!   ADDRESS is stored as one unit subtree span per address ([`unit_span`],
+//!   the spelling M7's `enc` gives), so its row is those spans; a slot the
+//!   client sent as V-specs is stored as the I-extents the transaction
+//!   resolves them to, so its row is those: the SIGNER resolves against the
+//!   base the transaction will take and signs the resolved spans, the daemon
+//!   composes the row from the endset its own transaction deposits (a
+//!   mismatch is `attestation_invalid:signature`, the frame re-composed and
+//!   re-signed), and a verifier composes the same row from the stored link
+//!   alone.
 //! * THE ADDRESS-LIST ROW — a list of addresses: one form byte, `0x01`, then
 //!   `be64(n)`, then each address as the address row, length-delimited —
 //!   [`push_address_list`]. Never a link slot's row: it spells the `record`
@@ -250,10 +252,10 @@ pub fn entry_frame(
 ) -> Vec<u8> {
     let names_two_homes = matches!(doc, DocTerm::Pair { .. });
     assert!(
-        names_two_homes == (body.op == EDIT_LINK),
+        names_two_homes == body.grammar.names_two_homes(),
         "entry_frame: the `doc` term is the grammar's — the pair's row for an `edit_link` body \
          and one address for every other (d24-1) — and this `{}` body was framed under {}",
-        body.op,
+        body.op(),
         if names_two_homes { "the pair's row" } else { "one address" }
     );
     framed(
@@ -263,7 +265,7 @@ pub fn entry_frame(
             &board_bytes(&board),
             &address_bytes(account),
             &doc_bytes(doc),
-            body.op.as_bytes(),
+            body.op().as_bytes(),
             &body.bytes,
         ],
     )
@@ -301,7 +303,7 @@ fn doc_bytes(doc: DocTerm<'_>) -> Vec<u8> {
         DocTerm::One(a) => address_bytes(a),
         DocTerm::Pair { d_s, d_a } => {
             let mut out = Vec::new();
-            push_address_list(&mut out, &[d_s.clone(), d_a.clone()]);
+            push_address_list(&mut out, [d_s, d_a]);
             out
         }
     }
@@ -354,12 +356,12 @@ pub struct BoardTerm {
 /// names as the wire spells them — `create_new_document`, `fork`,
 /// `version`, `insert`, `make_link`, `emit`, `nullify`, `assert_sup`,
 /// `edit_link`, `publish` — and the record grade's `record`, spelled HERE,
-/// once each, beside the grammar each selects, because they are members of
-/// a signed preimage that a reader beside the table recomposes from this
-/// crate.
+/// once each, in the one private match over the GRAMMARS they select,
+/// because they are members of a signed preimage that a reader beside the
+/// table recomposes from this crate.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EntryBody {
-    op: &'static str,
+    grammar: Grammar,
     bytes: Vec<u8>,
 }
 
@@ -367,12 +369,79 @@ impl EntryBody {
     /// The frame's `op` member: the token naming the body's grammar — the
     /// op-kind token as the wire spells it, or `record`.
     pub fn op(&self) -> &'static str {
-        self.op
+        self.grammar.token()
     }
 
     /// The frame's `body` member: the body in its grammar's bytes.
     pub fn as_bytes(&self) -> &[u8] {
         &self.bytes
+    }
+}
+
+/// The body GRAMMARS — one per cell of the frame, the record grade's
+/// included — each naming its frame's `op` token and the shape of its `doc`
+/// term. Private: a body is minted only by its own builder, which names its
+/// grammar, and a caller reads the token ([`EntryBody::op`]). Each answer
+/// below is an exhaustive match, so a grammar added here does not compile
+/// until it spells its token and says whether its frame names one home or
+/// two — the question [`entry_frame`] asks of every body it frames.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Grammar {
+    /// The three mints' EMPTY body ([`entry_body_empty`]), each under its
+    /// op's own token.
+    ContentFree(ContentFreeOp),
+    /// `insert`'s: the declared type, then the values.
+    Insert,
+    /// `make_link`'s, with its `replaces` row EMPTY or naming the member.
+    MakeLink,
+    /// `emit`'s, over the tuple M7 deposits.
+    Emit,
+    /// `nullify`'s, over the retraction link M7 deposits.
+    Nullify,
+    /// `assert_sup`'s, over the supersession claim M7 deposits.
+    AssertSup,
+    /// `edit_link`'s: the successor's rows, then the supersession claim's
+    /// `from` — the one grammar whose frame names two homes.
+    EditLink,
+    /// `publish`'s, built piece by piece by [`PublishBody`].
+    Publish,
+    /// The record grade's body — the one token no wire op spells.
+    Record,
+}
+
+impl Grammar {
+    /// The frame's `op` member: the op-kind token as the wire spells it, or
+    /// `record` — each spelled here, once.
+    fn token(self) -> &'static str {
+        match self {
+            Grammar::ContentFree(ContentFreeOp::CreateNewDocument) => "create_new_document",
+            Grammar::ContentFree(ContentFreeOp::Fork) => "fork",
+            Grammar::ContentFree(ContentFreeOp::Version) => "version",
+            Grammar::Insert => "insert",
+            Grammar::MakeLink => "make_link",
+            Grammar::Emit => "emit",
+            Grammar::Nullify => "nullify",
+            Grammar::AssertSup => "assert_sup",
+            Grammar::EditLink => "edit_link",
+            Grammar::Publish => "publish",
+            Grammar::Record => "record",
+        }
+    }
+
+    /// Whether the frame's `doc` term is the pair's row (d24-1) rather than
+    /// one address: `edit_link`'s alone, the one op writing two homes.
+    fn names_two_homes(self) -> bool {
+        match self {
+            Grammar::EditLink => true,
+            Grammar::ContentFree(_)
+            | Grammar::Insert
+            | Grammar::MakeLink
+            | Grammar::Emit
+            | Grammar::Nullify
+            | Grammar::AssertSup
+            | Grammar::Publish
+            | Grammar::Record => false,
+        }
     }
 }
 
@@ -440,8 +509,24 @@ fn push_value_sequence<'a>(out: &mut Vec<u8>, values: impl IntoIterator<Item = &
 /// I-extents the transaction resolved them to. The request's forms enter no
 /// frame. `Copy`, as the slice it borrows is: a view of the caller's spans,
 /// never an owner of them.
+///
+/// It is the slot as a SLICE of those spans — one of the walks a
+/// [`LinkSlots`] takes, for a caller holding them so (a signer composing
+/// from a request, a mirror from `read_link`'s answer); a caller holding the
+/// store's own slot, M7's `&Endset`, passes that instead, in place.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct EntrySlot<'a>(pub &'a [Span]);
+
+/// The slot's spans, walked in stored order — what its slot row is written
+/// from.
+impl<'a> IntoIterator for EntrySlot<'a> {
+    type Item = &'a Span;
+    type IntoIter = core::slice::Iter<'a, Span>;
+
+    fn into_iter(self) -> core::slice::Iter<'a, Span> {
+        self.0.iter()
+    }
+}
 
 /// A link write's three link slots, BY NAME. They are three values of one
 /// type, and the body lays them out in an order of its own — the TYPE slot
@@ -455,6 +540,13 @@ pub struct EntrySlot<'a>(pub &'a [Span]);
 /// the call site says which slot is which, and the order is spelled once, in
 /// the one body every link-write builder writes through.
 ///
+/// Each slot is a borrowed WALK of its spans as stored, in stored order —
+/// `S` is whatever the caller holds the three in: [`EntrySlot`]s over
+/// slices, or M7's own `&Endset`s, read off a stored link where they lie. A
+/// slot row needs the walk and nothing more, so a composer framing the link
+/// its transaction will deposit hands the store's slots over in place and
+/// copies no span into a slice to have it framed.
+///
 /// Not `#[non_exhaustive]`: every caller builds one, and a link has exactly
 /// these three slots. The body's fourth row, the `replaces` member, is no
 /// slot of the link the record is: it names the state the record replaces,
@@ -462,13 +554,13 @@ pub struct EntrySlot<'a>(pub &'a [Span]);
 /// here — its presence is the builder's choice,
 /// [`entry_body_make_link_replacing`] against [`entry_body_make_link`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct LinkSlots<'a> {
+pub struct LinkSlots<S> {
     /// The `from` slot.
-    pub from: EntrySlot<'a>,
+    pub from: S,
     /// The `to` slot.
-    pub to: EntrySlot<'a>,
+    pub to: S,
     /// The type slot.
-    pub ty: EntrySlot<'a>,
+    pub ty: S,
 }
 
 /// The slot row's ONE form byte: the stored spans.
@@ -479,20 +571,33 @@ const ADDRESS_LIST_FORM: u8 = 0x01;
 
 /// THE SLOT ROW, onto `out`: the form byte `0x03`, `be64(n)`, then each span
 /// as its start and its width, each tumbler in the address row's spelling,
-/// each length-delimited — the module doc's row.
-fn push_slot(out: &mut Vec<u8>, slot: EntrySlot<'_>) {
-    let EntrySlot(spans) = slot;
+/// each length-delimited — the module doc's row. `slot` is any borrowed walk
+/// of the stored spans, so `n` is the walk's own: held where the row begins
+/// and written back once the spans are down, as [`ValueSequence`] holds the
+/// value-sequence row's — never a length the walk claims.
+fn push_slot<'s>(out: &mut Vec<u8>, slot: impl IntoIterator<Item = &'s Span>) {
     out.push(SLOT_FORM_STORED);
-    out.extend_from_slice(&(spans.len() as u64).to_be_bytes());
-    for span in spans {
+    let at = out.len();
+    out.extend_from_slice(&0u64.to_be_bytes());
+    let mut n: u64 = 0;
+    for span in slot {
         push_delimited(out, span.start().to_string().as_bytes());
         push_delimited(out, span.width().to_string().as_bytes());
+        n += 1;
     }
+    out[at..at + 8].copy_from_slice(&n.to_be_bytes());
 }
 
 /// THE ADDRESS-LIST ROW, onto `out`: the form byte `0x01`, `be64(n)`, then
-/// each address as the address row, length-delimited.
-fn push_address_list(out: &mut Vec<u8>, addrs: &[Address]) {
+/// each address as the address row, length-delimited. `addrs` is any borrowed
+/// walk of known length — a slice, or addresses held apart (the pair's two
+/// homes, one named address) listed by reference, never cloned to be listed.
+fn push_address_list<'a, I>(out: &mut Vec<u8>, addrs: I)
+where
+    I: IntoIterator<Item = &'a Address>,
+    I::IntoIter: ExactSizeIterator,
+{
+    let addrs = addrs.into_iter();
     out.push(ADDRESS_LIST_FORM);
     out.extend_from_slice(&(addrs.len() as u64).to_be_bytes());
     for a in addrs {
@@ -509,7 +614,7 @@ fn push_address_list(out: &mut Vec<u8>, addrs: &[Address]) {
 fn push_optional_address(out: &mut Vec<u8>, named: Option<&Address>) {
     let mut group = Vec::new();
     if let Some(a) = named {
-        push_address_list(&mut group, std::slice::from_ref(a));
+        push_address_list(&mut group, [a]);
     }
     push_delimited(out, &group);
 }
@@ -538,17 +643,6 @@ pub enum ContentFreeOp {
     Version,
 }
 
-impl ContentFreeOp {
-    /// The op-kind token as the wire spells it.
-    fn token(self) -> &'static str {
-        match self {
-            ContentFreeOp::CreateNewDocument => "create_new_document",
-            ContentFreeOp::Fork => "fork",
-            ContentFreeOp::Version => "version",
-        }
-    }
-}
-
 /// THE EMPTY BODY, under `op`'s token: no bytes at all, the member PRESENT
 /// and empty — `be32(0)` where [`entry_frame`] frames it (the design record
 /// §2.5's cell; D24's cells (1)–(3), b2). A mint born published, a `fork`
@@ -559,7 +653,7 @@ impl ContentFreeOp {
 /// one board sign identical bytes, which is the ruled residue ("2 keep
 /// signed"), and `version`'s `d_src` enters no row.
 pub fn entry_body_empty(op: ContentFreeOp) -> EntryBody {
-    EntryBody { op: op.token(), bytes: Vec::new() }
+    EntryBody { grammar: Grammar::ContentFree(op), bytes: Vec::new() }
 }
 
 /// THE `insert` BODY, under the `insert` token: the declared type address in
@@ -580,7 +674,7 @@ pub fn entry_body_insert<'a>(
         None => push_delimited(&mut out, &[]),
     }
     push_value_sequence(&mut out, values);
-    EntryBody { op: "insert", bytes: out }
+    EntryBody { grammar: Grammar::Insert, bytes: out }
 }
 
 /// THE `make_link` BODY of an op carrying NO `replaces` member — the EMPTY
@@ -594,8 +688,8 @@ pub fn entry_body_insert<'a>(
 /// PRECONDITION — every tumbler's spelling (a span's start or width) is
 /// shorter than 2^32 bytes, as [`entry_body_insert`]'s values are; a longer
 /// one PANICS, naming the obligation.
-pub fn entry_body_make_link(slots: LinkSlots<'_>) -> EntryBody {
-    link_write_body("make_link", slots, None)
+pub fn entry_body_make_link<'s>(slots: LinkSlots<impl IntoIterator<Item = &'s Span>>) -> EntryBody {
+    link_write_body(Grammar::MakeLink, slots, None)
 }
 
 /// THE `make_link` BODY of an op whose `replaces` member names `replaces` —
@@ -610,8 +704,11 @@ pub fn entry_body_make_link(slots: LinkSlots<'_>) -> EntryBody {
 /// thirteen bytes its one-element address-list row puts around it (a form
 /// byte, a `be64` count, a `be32` length) together. A longer one PANICS,
 /// naming the obligation.
-pub fn entry_body_make_link_replacing(slots: LinkSlots<'_>, replaces: &Address) -> EntryBody {
-    link_write_body("make_link", slots, Some(replaces))
+pub fn entry_body_make_link_replacing<'s>(
+    slots: LinkSlots<impl IntoIterator<Item = &'s Span>>,
+    replaces: &Address,
+) -> EntryBody {
+    link_write_body(Grammar::MakeLink, slots, Some(replaces))
 }
 
 /// THE `emit` BODY, under the `emit` token: the `make_link` body's four rows
@@ -621,8 +718,8 @@ pub fn entry_body_make_link_replacing(slots: LinkSlots<'_>, replaces: &Address) 
 /// the `replaces` row EMPTY by kind: an `emit` carries no member, and one
 /// typed the `replaces` class is refused. PRECONDITION as
 /// [`entry_body_make_link`]'s.
-pub fn entry_body_emit(slots: LinkSlots<'_>) -> EntryBody {
-    link_write_body("emit", slots, None)
+pub fn entry_body_emit<'s>(slots: LinkSlots<impl IntoIterator<Item = &'s Span>>) -> EntryBody {
+    link_write_body(Grammar::Emit, slots, None)
 }
 
 /// THE `nullify` BODY, under the `nullify` token: the `make_link` body's four
@@ -632,8 +729,8 @@ pub fn entry_body_emit(slots: LinkSlots<'_>) -> EntryBody {
 /// again, kept so the body IS the stored link; `to` the nullified link's unit
 /// span — and the `replaces` row EMPTY by kind. PRECONDITION as
 /// [`entry_body_make_link`]'s.
-pub fn entry_body_nullify(slots: LinkSlots<'_>) -> EntryBody {
-    link_write_body("nullify", slots, None)
+pub fn entry_body_nullify<'s>(slots: LinkSlots<impl IntoIterator<Item = &'s Span>>) -> EntryBody {
+    link_write_body(Grammar::Nullify, slots, None)
 }
 
 /// THE `assert_sup` BODY, under the `assert_sup` token: the `make_link`
@@ -642,14 +739,11 @@ pub fn entry_body_nullify(slots: LinkSlots<'_>) -> EntryBody {
 /// span, fixed by kind; `from` the superseded link's unit span; `to` its
 /// successor's — and the `replaces` row EMPTY by kind. PRECONDITION as
 /// [`entry_body_make_link`]'s.
-pub fn entry_body_assert_sup(slots: LinkSlots<'_>) -> EntryBody {
-    link_write_body("assert_sup", slots, None)
+pub fn entry_body_assert_sup<'s>(
+    slots: LinkSlots<impl IntoIterator<Item = &'s Span>>,
+) -> EntryBody {
+    link_write_body(Grammar::AssertSup, slots, None)
 }
-
-/// The `edit_link` grammar's token — the one grammar whose frame's `doc` is
-/// the pair's row (d24-1), so [`entry_frame`] reads it beside the builder
-/// that spells it.
-const EDIT_LINK: &str = "edit_link";
 
 /// THE `edit_link` BODY, under the `edit_link` token — FIVE rows (the design
 /// record §2.5's cell; D24's cell (7), d24-6): the SUCCESSOR as a
@@ -665,22 +759,30 @@ const EDIT_LINK: &str = "edit_link";
 /// reads the successor's slots off the successor's, one composer for the
 /// five rows. The body's `doc` is the pair's row ([`DocTerm::Pair`]).
 /// PRECONDITION as [`entry_body_make_link`]'s.
-pub fn entry_body_edit_link(successor: LinkSlots<'_>, original: &Span) -> EntryBody {
-    let mut body = link_write_body(EDIT_LINK, successor, None);
-    push_slot(&mut body.bytes, EntrySlot(std::slice::from_ref(original)));
+pub fn entry_body_edit_link<'s>(
+    successor: LinkSlots<impl IntoIterator<Item = &'s Span>>,
+    original: &Span,
+) -> EntryBody {
+    let mut body = link_write_body(Grammar::EditLink, successor, None);
+    push_slot(&mut body.bytes, [original]);
     body
 }
 
 /// The one link-write body every link-write builder writes through, so the
 /// slots' order and the `replaces` row's place after them are spelled once,
-/// under the token the builder names.
-fn link_write_body(op: &'static str, slots: LinkSlots<'_>, replaces: Option<&Address>) -> EntryBody {
+/// under the grammar the builder names.
+fn link_write_body<'s>(
+    grammar: Grammar,
+    slots: LinkSlots<impl IntoIterator<Item = &'s Span>>,
+    replaces: Option<&Address>,
+) -> EntryBody {
+    let LinkSlots { from, to, ty } = slots;
     let mut out = Vec::new();
-    push_slot(&mut out, slots.ty);
-    push_slot(&mut out, slots.from);
-    push_slot(&mut out, slots.to);
+    push_slot(&mut out, ty);
+    push_slot(&mut out, from);
+    push_slot(&mut out, to);
     push_optional_address(&mut out, replaces);
-    EntryBody { op, bytes: out }
+    EntryBody { grammar, bytes: out }
 }
 
 /// A `record` body's FIVE ROWS, BY NAME — the one argument
@@ -736,12 +838,12 @@ pub struct RecordRows<'a> {
 pub fn entry_body_record(rows: RecordRows<'_>) -> EntryBody {
     let RecordRows { ty, to, replaces, lineage_fork_point, sigless_canonical_record } = rows;
     let mut out = Vec::new();
-    push_address_list(&mut out, std::slice::from_ref(ty));
+    push_address_list(&mut out, [ty]);
     push_address_list(&mut out, to);
     push_optional_address(&mut out, replaces);
     push_optional_address(&mut out, lineage_fork_point);
     push_delimited(&mut out, sigless_canonical_record);
-    EntryBody { op: "record", bytes: out }
+    EntryBody { grammar: Grammar::Record, bytes: out }
 }
 
 /// THE RECORD FRAME — the record grade's preimage but for its `alg` (the

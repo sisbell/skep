@@ -105,15 +105,15 @@
 
 use std::num::NonZeroU64;
 
-use skep_address::{document_of, Address, Nat, Span};
+use skep_address::{document_of, Address, Nat};
 use skep_arrangement::{trunk_of, Deposit, HasM5, SegmentRun, Shot, MAX_REINSERTED_VALUES};
 use skep_content::HasContent;
 use skep_febe::{successor_link, Judgment, Op};
 use skep_identity::{
     entry_body_assert_sup, entry_body_edit_link, entry_body_emit, entry_body_empty,
     entry_body_insert, entry_body_make_link, entry_body_make_link_replacing, entry_body_nullify,
-    entry_frame, unit_span, BoardTerm, ContentFreeOp, DocTerm, EntryBody, EntrySlot, LinkSlots,
-    PublishBody, PublishRefusal, RecordFrame, RecordRows, ShotBase,
+    entry_frame, unit_span, BoardTerm, ContentFreeOp, DocTerm, EntryBody, LinkSlots, PublishBody,
+    PublishRefusal, RecordFrame, RecordRows, ShotBase,
 };
 use skep_links::{
     emit_tuple, retraction_tuple, slot_endset, supersession_claim, Endset, Link, SlotArg,
@@ -216,15 +216,11 @@ impl FrameDocTerm {
     }
 }
 
-/// An endset's spans, owned — the slot row's input, as M7 stores the slot.
-fn spans_of(endset: &Endset) -> Vec<Span> {
-    endset.spans().cloned().collect()
-}
-
-/// A stored link's three slot rows, owned, in slot order — what an entry
-/// body's [`LinkSlots`] borrows, read off the link as M7 or M10 builds it.
-fn slot_rows(link: &Link) -> (Vec<Span>, Vec<Span>, Vec<Span>) {
-    (spans_of(link.from_slot()), spans_of(link.to_slot()), spans_of(link.type_slot()))
+/// A stored link's three slots, BY NAME, as M7 holds them — its own
+/// endsets, borrowed where they lie: what an entry body's [`LinkSlots`]
+/// walks, so no span is copied out of the link to be framed.
+fn link_slots(link: &Link) -> LinkSlots<&Endset> {
+    LinkSlots { from: link.from_slot(), to: link.to_slot(), ty: link.type_slot() }
 }
 
 /// ONE `make_link` slot AS THE TRANSACTION WILL STORE IT: M7's own
@@ -235,15 +231,18 @@ fn slot_rows(link: &Link) -> (Vec<Span>, Vec<Span>, Vec<Span>) {
 /// ([`ComposeFault::UnreadableSlotSource`]): the door withholds the write
 /// before the store sees it, and a verdict composed over the source's
 /// I-extents would answer by them.
-fn stored_slot(world: &World, principal: PrincipalId, arg: &SlotArg) -> Result<Vec<Span>, ComposeFault> {
+fn stored_slot(
+    world: &World,
+    principal: PrincipalId,
+    arg: &SlotArg,
+) -> Result<Endset, ComposeFault> {
     if let SlotArg::Resolve(specs) = arg {
         let reader = world.reader_class(Some(principal));
         if specs.iter().any(|spec| !reader.readable(&spec.source)) {
             return Err(ComposeFault::UnreadableSlotSource);
         }
     }
-    let endset = slot_endset(world.m5(), arg).ok_or(ComposeFault::SlotTooLarge)?;
-    Ok(spans_of(&endset))
+    slot_endset(world.m5(), arg).ok_or(ComposeFault::SlotTooLarge)
 }
 
 /// THE ENTRY FRAME for `op` by `principal` on `world`, over the board term
@@ -305,7 +304,7 @@ pub(super) fn compose(
                 stored_slot(world, principal, to)?,
                 stored_slot(world, principal, ty)?,
             );
-            let slots = LinkSlots { from: EntrySlot(&from), to: EntrySlot(&to), ty: EntrySlot(&ty) };
+            let slots = LinkSlots { from: &from, to: &to, ty: &ty };
             // The `replaces` member rides the signed body (PUB-5.15): the
             // EMPTY group where the op carries none, else the state named —
             // so a copy of the request carries the one state its signer named.
@@ -323,19 +322,15 @@ pub(super) fn compose(
         Op::Emit { home, ty, from, to } => {
             // `None` is M7's own budget on the two caller-sized slots.
             let tuple = emit_tuple(ty, from, to).ok_or(ComposeFault::SlotTooLarge)?;
-            let (from, to, ty) = slot_rows(&tuple);
-            let slots = LinkSlots { from: EntrySlot(&from), to: EntrySlot(&to), ty: EntrySlot(&ty) };
-            (FrameDocTerm::One(home.clone()), entry_body_emit(slots))
+            (FrameDocTerm::One(home.clone()), entry_body_emit(link_slots(&tuple)))
         }
         Op::Nullify { home, target } => {
-            let (from, to, ty) = slot_rows(&retraction_tuple(home, target));
-            let slots = LinkSlots { from: EntrySlot(&from), to: EntrySlot(&to), ty: EntrySlot(&ty) };
-            (FrameDocTerm::One(home.clone()), entry_body_nullify(slots))
+            let tuple = retraction_tuple(home, target);
+            (FrameDocTerm::One(home.clone()), entry_body_nullify(link_slots(&tuple)))
         }
         Op::AssertSup { home, old, new } => {
-            let (from, to, ty) = slot_rows(&supersession_claim(old, new));
-            let slots = LinkSlots { from: EntrySlot(&from), to: EntrySlot(&to), ty: EntrySlot(&ty) };
-            (FrameDocTerm::One(home.clone()), entry_body_assert_sup(slots))
+            let tuple = supersession_claim(old, new);
+            (FrameDocTerm::One(home.clone()), entry_body_assert_sup(link_slots(&tuple)))
         }
         // THE EDIT (D24's cell (7)): the successor as M10's own build makes
         // it over this snapshot — the door judges every write that reaches
@@ -353,11 +348,9 @@ pub(super) fn compose(
             }
             let link = successor_link(world.m3(), world.m5(), successor, Judgment::Judged)
                 .map_err(|_| ComposeFault::SuccessorRefused)?;
-            let (from, to, ty) = slot_rows(&link);
-            let slots = LinkSlots { from: EntrySlot(&from), to: EntrySlot(&to), ty: EntrySlot(&ty) };
             (
                 FrameDocTerm::Pair { d_s: d_s.clone(), d_a: d_a.clone() },
-                entry_body_edit_link(slots, &unit_span(original)),
+                entry_body_edit_link(link_slots(&link), &unit_span(original)),
             )
         }
         Op::Publish { doc, shot } => {
@@ -562,13 +555,20 @@ impl EntryFrame {
 
 #[cfg(test)]
 mod tests {
+    use skep_address::Span;
     use skep_febe::{Codec, OpKind};
-    use skep_identity::{entry_body_publish, entry_body_record};
+    use skep_identity::{entry_body_publish, entry_body_record, EntrySlot};
     use skep_links::{enc, registry, ShippedType};
 
     use super::*;
     use crate::codec::op_name;
     use crate::JsonCodec;
+
+    /// An endset's spans, owned, in stored order — what the unit-span pins
+    /// below compare against.
+    fn spans_of(endset: &Endset) -> Vec<Span> {
+        endset.spans().cloned().collect()
+    }
 
     /// The frame's `op` member is the op-kind token AS THE WIRE SPELLS IT
     /// (the design record §2.5): each entry-grade body `skep_identity` builds

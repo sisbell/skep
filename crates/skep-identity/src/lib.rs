@@ -126,7 +126,8 @@
 //!   kind: [`entry_body_empty`] (over a [`ContentFreeOp`]: the three mints'
 //!   EMPTY body), [`entry_body_insert`], [`entry_body_make_link`] and
 //!   [`entry_body_make_link_replacing`] (over a [`LinkSlots`] naming three
-//!   [`EntrySlot`]s — each the slot's spans AS STORED, a [`unit_span`] per
+//!   borrowed walks of the slots' spans AS STORED — [`EntrySlot`]s over
+//!   slices, or the store's own endsets where they lie; a [`unit_span`] per
 //!   address named or the extents resolved — the second with the op's
 //!   `replaces` member), [`entry_body_emit`], [`entry_body_nullify`] and
 //!   [`entry_body_assert_sup`] (the same four rows over the stored link,

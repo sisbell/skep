@@ -288,7 +288,7 @@ fn the_rows_spell_as_the_module_doc_states() {
     let empty = EntrySlot(&[]);
     let slots = LinkSlots { from: EntrySlot(&from), to: empty, ty: EntrySlot(&ty) };
     assert_eq!(optional_address_bytes(None), [0u8, 0, 0, 0], "absent: the EMPTY group");
-    let four_rows = |slots: LinkSlots<'_>| {
+    let four_rows = |slots: LinkSlots<EntrySlot<'_>>| {
         [slot_bytes(slots.ty), slot_bytes(slots.from), slot_bytes(slots.to), optional_address_bytes(None)]
             .concat()
     };
@@ -619,7 +619,7 @@ fn the_frame_is_framed_under_the_entry_tag_over_six_members() {
         }
         want
     };
-    let body = EntryBody { op: "insert", bytes: b"B".to_vec() };
+    let body = EntryBody { grammar: Grammar::Insert, bytes: b"B".to_vec() };
     assert_eq!(
         entry_frame("mldsa65-ed25519", term, &account, DocTerm::One(&doc), &body),
         framed_members([b"mldsa65-ed25519", &board, b"1.0.1", b"1.0.1.0.1", b"insert", b"B"])

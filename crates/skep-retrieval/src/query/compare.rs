@@ -288,11 +288,11 @@ fn resolve_blocks<'a>(
 ) -> Result<Vec<Block<'a>>, OverBudget> {
     // The walk budget, priced over the whole operand before its first span is
     // walked (MAX_WALK_STEPS' card).
-    let mut walk_steps = Count::against(MAX_WALK_STEPS);
+    let mut steps_priced = Count::against(MAX_WALK_STEPS);
     for r in regions {
         let surface = reading_surface(m3, &r.doc);
         for span in &r.spans {
-            walk_steps.admit(walk_ceiling(m5, &surface, span))?;
+            steps_priced.admit(walk_ceiling(m5, &surface, span))?;
         }
     }
     let mut out = Vec::new();
@@ -594,7 +594,7 @@ mod tests {
     }
 
     #[test]
-    fn the_presentation_sorts_by_the_four_component_key_and_folds_identity() {
+    fn the_presentation_orders_two_pairs_tied_on_d1_u1_d2_by_u2() {
         // X12 R3: one deterministic lexicographic (d1, u1, d2, u2)
         // presentation; v1's fold is the identity (finer-than-maximal
         // conforms — R4's canonical form is not required).

@@ -478,7 +478,7 @@ fn compare_lists_two_pairs_that_share_a_presentation_key_in_emission_order() {
 }
 
 #[test]
-fn compare_succeeds_emptily_on_empty_operands_and_depth_incompatible_regions() {
+fn compare_succeeds_emptily_when_an_operand_resolves_to_nothing() {
     // ASN-0122 X12: consulting-state degradations are SUCCESSES with nothing
     // to report — an empty spec-set, a well-formed depth-incompatible span
     // that clips to nothing, and a registered-empty region.

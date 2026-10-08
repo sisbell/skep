@@ -125,17 +125,17 @@ impl<W: RetrievalWorld + HasContent> Query<'_, W> {
         // The walk budget, priced over the whole spec-set before its first
         // spec is walked: each span at the most its resolution can walk
         // (MAX_WALK_STEPS' card).
-        let mut walk_steps = Count::against(MAX_WALK_STEPS);
+        let mut steps_priced = Count::against(MAX_WALK_STEPS);
         for spec in specs {
             let surface = reading_surface(m3, &spec.doc);
-            walk_steps
+            steps_priced
                 .admit(walk_ceiling(m5, &surface, &spec.span))
                 .map_err(over)?;
         }
         let mut out = Vec::new();
         // The delivery budget, counted as the delivery is produced
         // (MAX_DELIVERY_ITEMS' card).
-        let mut items = Count::against(MAX_DELIVERY_ITEMS);
+        let mut items_produced = Count::against(MAX_DELIVERY_ITEMS);
         for spec in specs {
             // Concatenate per spec, IN ORDER (R5) — no global sort. Classify
             // ONCE per spec, because the answer is constant over the spec's
@@ -155,14 +155,14 @@ impl<W: RetrievalWorld + HasContent> Query<'_, W> {
                 // coalesced with a neighbour (PUB-6.58).
                 let origin = run_origin(&run);
                 if !m3.is_registered_document(&origin) || !readable(&origin) {
-                    items.admit(1).map_err(over)?;
+                    items_produced.admit(1).map_err(over)?;
                     out.push(DeliveryItem::Withheld { origin, width: run.width().clone() });
                     continue;
                 }
                 // The run's positions as ONE batch, admitted before the first
                 // is expanded, so a run wider than what the budget has left is
                 // refused whole; a width past `usize` is past any budget.
-                items
+                items_produced
                     .admit(run.width().to_usize().unwrap_or(usize::MAX))
                     .map_err(over)?;
                 // Per active position, ascending V (R3) — no dedup (R8); the

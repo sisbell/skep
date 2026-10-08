@@ -329,12 +329,12 @@ pub fn three_runs(k: &Kernel<World>) -> Vstream<'_, World> {
 /// stored value.
 pub fn fragmented_doc2(k: &Kernel<World>) -> Vstream<'_, World> {
     let vs = insert3(k);
-    let ca1 = VSpec {
+    let ca1_spec = VSpec {
         source: doc1(),
         span: vspan(1, 1, 1),
     };
     for at in [1, 4097] {
-        vs.copy(P1, &doc2(), vp(1, at), &vec![ca1.clone(); 4096])
+        vs.copy(P1, &doc2(), vp(1, at), &vec![ca1_spec.clone(); 4096])
             .expect("copy commits");
     }
     vs

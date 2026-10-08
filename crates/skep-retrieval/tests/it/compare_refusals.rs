@@ -298,19 +298,19 @@ fn compare_refuses_an_operand_whose_spans_would_walk_past_the_walk_budget() {
     fragmented_doc2(&k); // doc2 = 8192 one-position runs, every one ca1
     let s = k.snapshot();
     let q = Query::new(&s);
-    let runs = s.world().m5().content_run_count(&doc2());
-    assert_eq!(runs, 8192, "the premise: doc2 is 8192 runs");
-    let past_budget = MAX_COMPARE_OPERAND_BLOCKS * MAX_COMPARE_OPERAND_BLOCKS / runs + 1;
+    let run_count = s.world().m5().content_run_count(&doc2());
+    assert_eq!(run_count, 8192, "the premise: doc2 is 8192 runs");
+    let past_budget = MAX_COMPARE_OPERAND_BLOCKS * MAX_COMPARE_OPERAND_BLOCKS / run_count + 1;
     let one = || vec![region_spec(doc1(), vec![vspan(1, 1, 1)])];
-    let past_end = vec![region_spec(doc2(), vec![vspan(1, 8193, 1); past_budget])];
+    let over = vec![region_spec(doc2(), vec![vspan(1, 8193, 1); past_budget])];
     assert_eq!(
-        err_of(q.compare(&past_end, &one())),
+        err_of(q.compare(&over, &one())),
         CompareError::TooManyBlocks {
             operand: Operand::First
         }
     );
     assert_eq!(
-        err_of(q.compare(&one(), &past_end)),
+        err_of(q.compare(&one(), &over)),
         CompareError::TooManyBlocks {
             operand: Operand::Second
         }

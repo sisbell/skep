@@ -112,13 +112,13 @@ fn a_content_edit_under_links_moves_the_extent_and_not_the_bounding_box() {
     let after = k.snapshot();
     let q_after = Query::new(&after);
     // The box is [1,1] .. [2, n_L + 1) on both sides of the edit.
-    let box_ = SpanSet::singleton(
+    let bounding_box = SpanSet::singleton(
         Span::from_endpoints(t(&[1, 1]), &t(&[2, 3])).expect("well-formed"),
     );
-    assert_eq!(ok_of(q_before.doc_vspan(&doc1())), box_);
-    assert_eq!(ok_of(q_after.doc_vspan(&doc1())), box_);
+    assert_eq!(ok_of(q_before.doc_vspan(&doc1())), bounding_box);
+    assert_eq!(ok_of(q_after.doc_vspan(&doc1())), bounding_box);
     // The extents are not: the content extent follows n_C.
-    let extents = |q: &Query<'_, World>| {
+    let content_extent = |q: &Query<'_, World>| {
         ok_of(q.doc_vspanset(&doc1()))
             .iter()
             .next()
@@ -126,11 +126,11 @@ fn a_content_edit_under_links_moves_the_extent_and_not_the_bounding_box() {
             .clone()
     };
     assert_eq!(
-        extents(&q_before),
+        content_extent(&q_before),
         Span::new(t(&[1, 1]), t(&[0, 3])).expect("T12")
     );
     assert_eq!(
-        extents(&q_after),
+        content_extent(&q_after),
         Span::new(t(&[1, 1]), t(&[0, 2])).expect("T12")
     );
 }

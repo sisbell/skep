@@ -260,8 +260,8 @@ fn the_answer_collections_behave_like_std_collections() {
     // Borrowed walk, then an owned one that collects straight back.
     let borrowed: Vec<&DeliveryItem> = (&delivery).into_iter().collect();
     assert_eq!(borrowed.len(), 3);
-    let round: Delivery = delivery.clone().into_iter().collect();
-    assert_eq!(round, delivery);
+    let collected: Delivery = delivery.clone().into_iter().collect();
+    assert_eq!(collected, delivery);
     // The empty answers are the defaults, and an empty spec-set yields one.
     assert_eq!(ok_of(q.retrieve_v(&[])), Delivery::default());
     assert!(Delivery::default().is_empty());
@@ -274,8 +274,8 @@ fn the_answer_collections_behave_like_std_collections() {
     assert!(!rep.is_empty());
     assert_eq!(rep.iter().count(), 1);
     assert_eq!(rep.as_slice()[0].d1, doc1());
-    let round: CompareReport = rep.clone().into_iter().collect();
-    assert_eq!(round, rep);
+    let collected: CompareReport = rep.clone().into_iter().collect();
+    assert_eq!(collected, rep);
     assert!(CompareReport::default().is_empty());
     // A report whose second operand names no span — so the two regions share
     // no address — IS the default.

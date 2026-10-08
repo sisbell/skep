@@ -174,15 +174,15 @@ impl Subspace {
 /// classification and M5's own reader, never off a restatement of which spans
 /// M5 folds to nothing, so the price errs only toward refusing.
 pub(crate) fn walk_ceiling(m5: &M5State, doc: &Address, span: &Span) -> usize {
-    let runs = match Subspace::of_span(span) {
+    let run_count = match Subspace::of_span(span) {
         Some(sub) => sub.run_count(m5, doc),
-        None => Subspace::ALL.into_iter().fold(0, |runs: usize, sub| {
-            runs.saturating_add(sub.run_count(m5, doc))
+        None => Subspace::ALL.into_iter().fold(0, |total: usize, sub| {
+            total.saturating_add(sub.run_count(m5, doc))
         }),
     };
     as_ordinal_vspan(span)
         .and_then(|shape| (shape.ordinal + shape.count).to_usize())
-        .map_or(runs, |reach| reach.min(runs))
+        .map_or(run_count, |reach| reach.min(run_count))
 }
 
 /// The SPAN half of ASN-0115's V-spec well-formedness: zero-free,

@@ -153,12 +153,12 @@ fn find_docs_containing_answers_exactly_the_documents_holding_a_covered_address_
     );
     let documents = [doc1(), doc2()];
     for doc in &documents {
-        let positions = u32::try_from(held(doc).len()).expect("a small world");
+        let position_count = u32::try_from(held(doc).len()).expect("a small world");
         // Every start up to one past the last position, at every width up to
         // one more than the document holds: windows that open past the end
         // and windows that run over it are met as well as the ones inside.
-        for start in 1..=positions + 1 {
-            for width in 1..=positions + 1 {
+        for start in 1..=position_count + 1 {
+            for width in 1..=position_count + 1 {
                 let window = vspan(1, start, width);
                 let covered: Vec<Address> = (start..start + width)
                     .filter_map(|o| m5.point(doc, &vp(1, o)))
@@ -443,9 +443,9 @@ fn find_docs_containing_refuses_a_request_whose_spans_would_walk_past_the_walk_b
     fragmented_doc2(&k); // doc2 = 8192 one-position runs, every one ca1
     let s = k.snapshot();
     let q = Query::new(&s);
-    let runs = s.world().m5().content_run_count(&doc2());
-    assert_eq!(runs, 8192, "the premise: doc2 is 8192 runs");
-    let past_budget = MAX_COMPARE_OPERAND_BLOCKS * MAX_COMPARE_OPERAND_BLOCKS / runs + 1;
+    let run_count = s.world().m5().content_run_count(&doc2());
+    assert_eq!(run_count, 8192, "the premise: doc2 is 8192 runs");
+    let past_budget = MAX_COMPARE_OPERAND_BLOCKS * MAX_COMPARE_OPERAND_BLOCKS / run_count + 1;
     assert_eq!(
         err_of(
             q.find_docs_containing(&[region_spec(doc2(), vec![vspan(1, 8193, 1); past_budget])])

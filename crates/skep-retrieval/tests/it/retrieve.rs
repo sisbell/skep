@@ -461,7 +461,7 @@ fn retrieve_v_rejects_the_whole_request_on_any_malformed_spec() {
 }
 
 #[test]
-fn retrieve_v_refuses_a_delivery_past_its_item_budget_whole() {
+fn retrieve_v_refuses_a_delivery_past_its_budget_whole() {
     // `MAX_DELIVERY_ITEMS`' card: a document's extent is VIRTUAL — one COPY
     // of 4096 specs places a 64-position run 4096 times, 2^18 positions from
     // 64 stored values — so ONE spec names a delivery the request's size says
@@ -520,9 +520,9 @@ fn retrieve_v_refuses_a_spec_set_whose_spans_would_walk_past_the_walk_budget() {
     fragmented_doc2(&k); // doc2 = 8192 one-position runs
     let s = k.snapshot();
     let q = Query::new(&s);
-    let runs = s.world().m5().content_run_count(&doc2());
-    assert_eq!(runs, 8192, "the premise: doc2 is 8192 runs");
-    let past_budget = MAX_COMPARE_OPERAND_BLOCKS * MAX_COMPARE_OPERAND_BLOCKS / runs + 1;
+    let run_count = s.world().m5().content_run_count(&doc2());
+    assert_eq!(run_count, 8192, "the premise: doc2 is 8192 runs");
+    let past_budget = MAX_COMPARE_OPERAND_BLOCKS * MAX_COMPARE_OPERAND_BLOCKS / run_count + 1;
     assert_eq!(
         err_of(q.retrieve_v(&vec![spec(doc2(), vspan(1, 8193, 1)); past_budget])),
         RetrieveError::TooManyItems

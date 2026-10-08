@@ -118,10 +118,10 @@ impl<W: RetrievalWorld> Query<'_, W> {
         let over = |OverBudget| FindError::TooMuchCoverage;
         // The walk budget, priced over the whole request before its first
         // span is walked, against the address named (MAX_WALK_STEPS' card).
-        let mut walk_steps = Count::against(MAX_WALK_STEPS);
+        let mut steps_priced = Count::against(MAX_WALK_STEPS);
         for r in regions {
             for span in &r.spans {
-                walk_steps
+                steps_priced
                     .admit(walk_ceiling(m5, &r.doc, span))
                     .map_err(over)?;
             }

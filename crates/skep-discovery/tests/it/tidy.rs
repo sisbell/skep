@@ -1,8 +1,12 @@
 //! THE MODULE MAP, CHECKED: `src/lib.rs` declares this crate's modules in
 //! dependency order, each with a line saying what it holds and each naming
 //! in code only the modules above it, and this is that sentence as tests —
-//! together with two rules no compiler error reports, one about the reader's
-//! predicate and one about a name's suffix.
+//! together with three rules no compiler error reports: one about the
+//! reader's predicate, one about a name's suffix, and one about the crate
+//! doc's `## Cost` section. Every check in the suite that reads this crate's
+//! source is here; past the `mod` lines [`declared_module`] reads, they read
+//! its code through one function, [`code_lines`], so no two of them disagree
+//! about what is code.
 //!
 //! The tree's shape: every file under `src/`, and under the test target's
 //! `tests/it/`, is a module its parent declares — the compiler never reads
@@ -21,12 +25,19 @@
 //! paths it reads between modules, so a reader gone blind fails rather than
 //! passing a clean tree.
 //!
-//! The two rules are held over every code line under `src/`, tests included:
-//! only `home.rs` projects a home or asks the reader's predicate, and a
-//! function ends its name in `_on` exactly when its first parameter is the
-//! `&Snapshot` it reads. Each scan also asserts that it found what its rule
-//! is about, so a scan that matches nothing fails rather than passing a clean
-//! tree.
+//! The first two rules are held over every code line under `src/`, tests
+//! included: only `home.rs` projects a home or asks the reader's predicate,
+//! and a function ends its name in `_on` exactly when its first parameter is
+//! the `&Snapshot` it reads. Each scan also asserts that it found what its
+//! rule is about, so a scan that matches nothing fails rather than passing a
+//! clean tree.
+//!
+//! The third reads `src/lib.rs` alone: its crate doc keeps the `## Cost`
+//! heading skepd's scan pool links by its anchor (`skep_discovery#cost`), and
+//! that section names every read the root re-exports — every re-exported
+//! `_on` name, which the second rule makes exactly the reads. It too asserts
+//! that it found reads and a section to hold them to. What a line of the
+//! section says a read walks, no check here reads.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -257,6 +268,91 @@ fn after_generics(rest: &str) -> &str {
     rest
 }
 
+/// The daemon's scan pool prices the reads it admits from the crate doc's
+/// `## Cost` section and links that section by its heading's anchor
+/// (`skep_discovery#cost`, in skepd's `src/server/scan.rs`). No build checks
+/// an anchor — renamed, the heading leaves that link pointing at the crate's
+/// front page and nothing fails — so the heading is part of this crate's
+/// interface, and this holds it: a change to it changes skepd's link with it.
+#[test]
+fn the_cost_statement_keeps_the_heading_the_scan_pool_links() {
+    let lib = lib_source();
+    assert!(
+        lib.lines().any(|line| line == "//! ## Cost"),
+        "the crate doc's `## Cost` heading is the anchor skepd's scan pool links \
+         (`skep_discovery#cost`); a renamed heading moves that link too"
+    );
+}
+
+/// The `## Cost` section prices EVERY read this crate publishes. The daemon's
+/// class-scan pool (PUB-8.36, PUB-8.37) decides on that section which reads
+/// to bound, so a read it never names is one whose cost no admission control
+/// was told. A published read is a root re-export whose name ends in `_on` —
+/// the suffix the `_on` check above holds to exactly the functions over a
+/// snapshot — and each is named in the section at least once. What a line
+/// says a read walks is beyond any test; that the line is there is this one's.
+/// The check also asserts that it found reads and a section to look in, so a
+/// reader gone blind fails rather than passing.
+#[test]
+fn the_cost_statement_names_every_read_this_crate_publishes() {
+    let lib = lib_source();
+    let section: Vec<&str> = lib
+        .lines()
+        .skip_while(|line| *line != "//! ## Cost")
+        .skip(1)
+        .take_while(|line| !line.starts_with("//! ## "))
+        .collect();
+    let section = section.join("\n");
+    let reads: Vec<String> = root_reexports(&lib)
+        .into_iter()
+        .filter(|name| name.ends_with("_on"))
+        .collect();
+    assert!(
+        reads.len() > 1 && !section.is_empty(),
+        "this check found no published read, or no `## Cost` section, in src/lib.rs: \
+         the forms it reads have moved"
+    );
+    let unpriced: Vec<&String> = reads
+        .iter()
+        .filter(|read| !section.contains(&format!("`{read}`")))
+        .collect();
+    assert!(
+        unpriced.is_empty(),
+        "every read the crate publishes is named in the crate doc's `## Cost` section, \
+         which skepd's class-scan pool decides admission on; these are not: {unpriced:?}"
+    );
+}
+
+/// `src/lib.rs`, whose crate doc holds the `## Cost` section and whose
+/// re-exports are what the crate publishes.
+fn lib_source() -> String {
+    std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("src/lib.rs"))
+        .expect("src/lib.rs is readable")
+}
+
+/// The names `src/lib.rs` re-exports: every `pub use path::{a, b};` and
+/// `pub use path::a;` statement, wrapped across lines or not, with an
+/// attribute ahead of it or not. The code is read through [`code_lines`], so
+/// a comment — a whole line or a line's tail — is never taken for code, and
+/// never hides the statement after it.
+fn root_reexports(lib: &str) -> Vec<String> {
+    let code: Vec<&str> = code_lines(lib).collect();
+    code.join("\n")
+        .split(';')
+        .filter_map(|statement| {
+            statement
+                .split_once("pub use ")
+                .map(|(_, path)| path.trim())
+        })
+        .flat_map(|path| match path.split_once('{') {
+            Some((_, group)) => group.trim_end_matches('}').split(',').collect::<Vec<_>>(),
+            None => vec![path.rsplit("::").next().unwrap_or(path)],
+        })
+        .map(|name| name.trim().to_string())
+        .filter(|name| !name.is_empty())
+        .collect()
+}
+
 fn is_ident_char(c: char) -> bool {
     c.is_alphanumeric() || c == '_'
 }
@@ -383,10 +479,11 @@ fn scan(pred: impl Fn(&str) -> bool) -> Vec<(PathBuf, String)> {
 }
 
 /// The code of `text`, line by line: a comment line is not code, and neither
-/// is a line's trailing comment. `consumer.rs` reads `src/lib.rs`'s
-/// re-exports through it too, so the crate's two source checks agree on what
-/// code is.
-pub(super) fn code_lines(text: &str) -> impl Iterator<Item = &str> {
+/// is a line's trailing comment. The `crate::` paths, the home rule's scan,
+/// the signatures and the re-exports the `## Cost` check prices are all read
+/// through it, so no two of the crate's source checks disagree about what is
+/// code.
+fn code_lines(text: &str) -> impl Iterator<Item = &str> {
     text.lines()
         .filter(|line| !line.trim_start().starts_with("//"))
         .map(|line| {

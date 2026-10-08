@@ -1,12 +1,12 @@
 //! The promises M8 makes to a consumer rather than to itself, checked from
-//! outside the crate: reads that answer off the snapshot they are handed,
-//! one named world bound, the standard traits its values carry, a request and
-//! answer vocabulary reachable through this crate alone, rejection enums that
-//! stay exhaustively matchable, and a `## Cost` section that names every read,
-//! under the heading the daemon's scan pool links by its anchor.
+//! outside the crate by calling it: reads that answer off the snapshot they
+//! are handed, one named world bound, the standard traits its values carry, a
+//! request and answer vocabulary reachable through this crate alone, and
+//! rejection enums that stay exhaustively matchable. The `## Cost` section a
+//! consumer prices these reads by is held by `tidy`, which holds every check
+//! that reads this crate's source.
 
 use crate::common;
-use crate::tidy::code_lines;
 
 use std::collections::HashSet;
 
@@ -263,89 +263,4 @@ fn every_refusal_is_matchable_without_a_catch_all() {
             "{e:?} renders {e}"
         );
     }
-}
-
-/// The daemon's scan pool prices the reads it admits from the crate doc's
-/// `## Cost` section and links that section by its heading's anchor
-/// (`skep_discovery#cost`, in skepd's `src/server/scan.rs`). No build checks
-/// an anchor — renamed, the heading leaves that link pointing at the crate's
-/// front page and nothing fails — so the heading is part of this crate's
-/// interface, and this holds it: a change to it changes skepd's link with it.
-#[test]
-fn the_cost_statement_keeps_the_heading_the_scan_pool_links() {
-    let lib = lib_source();
-    assert!(
-        lib.lines().any(|line| line == "//! ## Cost"),
-        "the crate doc's `## Cost` heading is the anchor skepd's scan pool links \
-         (`skep_discovery#cost`); a renamed heading moves that link too"
-    );
-}
-
-/// The `## Cost` section prices EVERY read this crate publishes. The daemon's
-/// class-scan pool (PUB-8.36, PUB-8.37) decides on that section which reads
-/// to bound, so a read it never names is one whose cost no admission control
-/// was told. A published read is a root re-export whose name ends in `_on` —
-/// the suffix `tests/it/tidy.rs` holds to exactly the functions over a
-/// snapshot — and each is named in the section at least once. What a line
-/// says a read walks is beyond any test; that the line is there is this one's.
-/// The check also asserts that it found reads and a section to look in, so a
-/// reader gone blind fails rather than passing.
-#[test]
-fn the_cost_statement_names_every_read_this_crate_publishes() {
-    let lib = lib_source();
-    let section: Vec<&str> = lib
-        .lines()
-        .skip_while(|line| *line != "//! ## Cost")
-        .skip(1)
-        .take_while(|line| !line.starts_with("//! ## "))
-        .collect();
-    let section = section.join("\n");
-    let reads: Vec<String> = root_reexports(&lib)
-        .into_iter()
-        .filter(|name| name.ends_with("_on"))
-        .collect();
-    assert!(
-        reads.len() > 1 && !section.is_empty(),
-        "this check found no published read, or no `## Cost` section, in src/lib.rs: \
-         the forms it reads have moved"
-    );
-    let unpriced: Vec<&String> = reads
-        .iter()
-        .filter(|read| !section.contains(&format!("`{read}`")))
-        .collect();
-    assert!(
-        unpriced.is_empty(),
-        "every read the crate publishes is named in the crate doc's `## Cost` section, \
-         which skepd's class-scan pool decides admission on; these are not: {unpriced:?}"
-    );
-}
-
-/// `src/lib.rs`, whose crate doc holds the `## Cost` section and whose
-/// re-exports are what the crate publishes.
-fn lib_source() -> String {
-    std::fs::read_to_string(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/lib.rs"))
-        .expect("src/lib.rs is readable")
-}
-
-/// The names `src/lib.rs` re-exports: every `pub use path::{a, b};` and
-/// `pub use path::a;` statement, wrapped across lines or not, with an
-/// attribute ahead of it or not. The code is read through tidy's
-/// [`code_lines`], so a comment — a whole line or a line's tail — is never
-/// taken for code, and never hides the statement after it.
-fn root_reexports(lib: &str) -> Vec<String> {
-    let code: Vec<&str> = code_lines(lib).collect();
-    code.join("\n")
-        .split(';')
-        .filter_map(|statement| {
-            statement
-                .split_once("pub use ")
-                .map(|(_, path)| path.trim())
-        })
-        .flat_map(|path| match path.split_once('{') {
-            Some((_, group)) => group.trim_end_matches('}').split(',').collect::<Vec<_>>(),
-            None => vec![path.rsplit("::").next().unwrap_or(path)],
-        })
-        .map(|name| name.trim().to_string())
-        .filter(|name| !name.is_empty())
-        .collect()
 }

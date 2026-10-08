@@ -1,9 +1,11 @@
 //! Shared test scaffolding: a minimal engine-side world (the composition
 //! contract's assembler role, in miniature) over M3 + M4 + M5 + M7 — exactly
-//! the bound M8 queries under, plus M4 so INSERT can arrange content — its
-//! address/type fixtures, the suite's reads of its current state, and the
-//! window law, wide endset, recording reader and lineage claim addresses
-//! more than one suite reads.
+//! the bound M8 queries under, plus M4 so INSERT can arrange content — and,
+//! under a banner each and in this order, the predicates its writes and reads
+//! run under, its address fixtures, the format type set, the world's assembly
+//! into seeded kernels, the suite's reads of a kernel's current state with the
+//! claim addresses a lineage answer reduces to, and the window law and wide
+//! endset more than one suite reads.
 //! Addresses follow M3's minted shapes: account
 //! `[1,0,1]`, documents `[1,0,1,0,d]`, content elements `[doc·0·1·k]`, link
 //! elements `[doc·0·2·k]`; the five reserved type addresses are the compiled
@@ -38,49 +40,6 @@ pub struct World {
     pub content: ContentStore,
     pub m5: M5State,
     pub links: LinkState,
-}
-
-/// The ALL-VISIBLE class the suite's M7 fixture writes run at (lane 3.3b):
-/// this miniature world carries no publication state — M3's bit is folded
-/// engine-side — so every document is readable to every caller here, and no
-/// M8 verdict turns on what a writer could read.
-pub static EVERYONE: fn(&World, &Address) -> bool = every_document;
-
-fn every_document(_: &World, _: &Address) -> bool {
-    true
-}
-
-/// The TOTAL predicate, admitting every home — the reader this suite's M8
-/// reads run at, beside [`EVERYONE`] for its writes, so every link a query
-/// finds is returned. It belongs to a harness, never a request: a request
-/// without a principal reads as the GUEST, which admits published documents
-/// alone.
-pub fn every_home(_: &Address) -> bool {
-    true
-}
-
-/// The documents a reader predicate was asked about, in order — the
-/// instrument behind the predicate contract the crate header states: asked
-/// only of homes, at most once per candidate, and only past a read's other
-/// filters.
-#[derive(Default)]
-pub struct Asked(RefCell<Vec<Address>>);
-
-impl Asked {
-    /// A reader that admits every home and records each document it is asked
-    /// about.
-    pub fn recorder(&self) -> impl Fn(&Address) -> bool + '_ {
-        move |d: &Address| {
-            self.0.borrow_mut().push(d.clone());
-            true
-        }
-    }
-
-    /// What was asked since the last `take`, in order, leaving the record
-    /// empty.
-    pub fn take(&self) -> Vec<Address> {
-        self.0.take()
-    }
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -167,6 +126,51 @@ impl From<M5Rec> for Record {
 impl From<LinkRec> for Record {
     fn from(r: LinkRec) -> Record {
         Record::Links(r)
+    }
+}
+
+// ────────────── the predicates the writes and reads run under ───────────────
+
+/// The ALL-VISIBLE class the suite's M7 fixture writes run at (lane 3.3b):
+/// this miniature world carries no publication state — M3's bit is folded
+/// engine-side — so every document is readable to every caller here, and no
+/// M8 verdict turns on what a writer could read.
+pub static EVERYONE: fn(&World, &Address) -> bool = every_document;
+
+fn every_document(_: &World, _: &Address) -> bool {
+    true
+}
+
+/// The TOTAL predicate, admitting every home — the reader this suite's M8
+/// reads run at, beside [`EVERYONE`] for its writes, so every link a query
+/// finds is returned. It belongs to a harness, never a request: a request
+/// without a principal reads as the GUEST, which admits published documents
+/// alone.
+pub fn every_home(_: &Address) -> bool {
+    true
+}
+
+/// The documents a reader predicate was asked about, in order — the
+/// instrument behind the predicate contract the crate header states: asked
+/// only of homes, at most once per candidate, and only past a read's other
+/// filters.
+#[derive(Default)]
+pub struct Asked(RefCell<Vec<Address>>);
+
+impl Asked {
+    /// A reader that admits every home and records each document it is asked
+    /// about.
+    pub fn recorder(&self) -> impl Fn(&Address) -> bool + '_ {
+        move |d: &Address| {
+            self.0.borrow_mut().push(d.clone());
+            true
+        }
+    }
+
+    /// What was asked since the last `take`, in order, leaving the record
+    /// empty.
+    pub fn take(&self) -> Vec<Address> {
+        self.0.take()
     }
 }
 

@@ -1328,14 +1328,15 @@ Rules that hold across its files:
   `crates/skepd/src/server/scan.rs` — what each read walks and which walk
   the link store at all. A change to what a read walks, or a new read,
   changes that section and that card in the same commit.
-  `tests/it/consumer.rs` checks the section's heading and that it names
-  every read the crate publishes; nothing checks what a line says a read
-  walks, or skepd's card.
+  `tests/it/tidy.rs` checks the section's heading and that it names every
+  read the crate publishes; nothing checks what a line says a read walks,
+  or skepd's card.
 
 Its integration suite is one binary, `tests/it/`: one file per part of the
 read surface over the shared `common` world; `home_rule` and `consumer`,
-the laws that cross them; and `tidy`, which checks the module map and the
-first two rules.
+the laws that cross them; and `tidy`, which holds every check that reads
+the crate's own source: the module map, the first two rules, and the
+`## Cost` section's heading and its naming of every read.
 
 ## The operation surface, `skep-febe`
 

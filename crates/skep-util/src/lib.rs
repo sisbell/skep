@@ -9,8 +9,10 @@
 //!   behind the daemon's four bounded pools; a permit is a slot of the pool
 //!   that minted it, so no bound can spend another's.
 //! * [`notice`] — the operator's stream: one line, or one notice of several
-//!   lines, every line opening with the program's name, written so that a
-//!   failed write never panics the work the notice is about.
+//!   lines, every line opening with the program's name and the head carrying
+//!   its time, handed to one thread that writes them in order — so that a
+//!   failed write never panics the work the notice is about, and a stalled
+//!   reader never waits it.
 //! * [`json`] — the determinism helpers: [`json::obj`], the key-sorting
 //!   object builder every JSON object the daemon emits goes through;
 //!   [`json::hex_string`], lowercase hex; [`json::parse_lower_hex`] and

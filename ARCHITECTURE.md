@@ -366,9 +366,15 @@ try-acquire with no queue and no blocking whose guard returns its slot on
 drop, the one mechanism behind the reconstruction budget, the class-scan
 pool, the fetch pool and the upload pool; a permit is a slot of the pool
 that minted it, so no bound can spend another's. `notice` — the operator's
-stream (`line`, `lines`): one line, or one notice of several written as
-one, every line prefixed, the write's result discarded so a lost log pipe
-never fails the work the notice is about. `json` — the determinism
+stream (`emit` and `emit_lines`, the class word an argument; `line` and
+`lines`, the un-classed door the call sites written before the class
+existed still take): one line, or one notice of several written as one,
+every line prefixed and the head carrying its time, each put on a bounded
+queue that one thread, `skepd-notice`, writes to stderr in order, the
+write's result discarded so a lost log pipe never fails the work the
+notice is about and a stalled one never waits it; a line a full queue
+cannot take is dropped and counted on the next; `drain` waits the queue
+out at the binary's exits. `json` — the determinism
 helpers: `obj`, the key-sorting object builder every JSON object the
 daemon emits is built through, under which the last pair given wins;
 `hex_string`, lowercase hex; `parse_lower_hex` and `hex_nibble`, its
@@ -397,8 +403,11 @@ Rules that hold across its files:
   makes the name a parameter then, and the call sites' shape stays.
 
 Its unit suites sit beside their code: `json/tests.rs` (the sort and the
-duplicate-key rule) and `notice.rs`'s (the line's bytes, pinned as bytes
-and never through the constant).
+duplicate-key rule) and `notice/tests.rs` (the line's bytes at a known
+instant, pinned as bytes and never through the constant; the civil date at
+instants computed by hand; the queue over a sink the test owns — a door
+that never waits on it, the bound, the drop and its count, the drain, a
+parked writer's line).
 
 ## The registry rows and bodies, `skep-registry`
 

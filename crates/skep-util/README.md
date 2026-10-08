@@ -13,8 +13,10 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
   the pool that minted it, so no bound can spend another's.
 - **The notice line**, `notice` — the operator's stream: one line, or one
   notice of several, every line opening `skepd: ` so a shared stream
-  attributes it, written so that a failed write never panics the work the
-  notice is about. The crate root says why a library spells the name.
+  attributes it and the head carrying its time, handed to one thread that
+  writes them in order so that a failed write never panics the work the
+  notice is about and a stalled reader never waits it. The crate root says
+  why a library spells the name.
 - **The JSON determinism helpers**, `json` — `obj`, the key-sorting object
   builder every JSON object the daemon emits is built through, under
   which the last pair given wins; `hex_string`, lowercase hex; and

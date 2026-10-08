@@ -448,6 +448,7 @@ fn main() {
     let daemon = match Daemon::open_configured(&args.data_dir, opts, media) {
         Ok(d) => d,
         Err(e) => {
+            skep_util::notice::drain();
             eprintln!("skepd: {e}");
             exit(1);
         }
@@ -456,6 +457,7 @@ fn main() {
     let running = match serve(daemon, args.port, args.workers) {
         Ok(s) => s,
         Err(e) => {
+            skep_util::notice::drain();
             eprintln!("skepd: bind 127.0.0.1:{}: {e}", args.port);
             exit(1);
         }
@@ -468,6 +470,7 @@ fn main() {
         args.workers
     );
     running.wait();
+    skep_util::notice::drain();
 }
 
 #[cfg(test)]

@@ -48,10 +48,10 @@ pub fn hex_nibble(b: u8) -> Option<u8> {
 /// inverse at a fixed width, and the parse of every value the daemon reads
 /// back only as its own emitter wrote it: the handshake nonce and the
 /// session token (AUTH-4.15, AUTH-4.17), the published head's hashes, a
-/// picture cell's `hash` and a blind cell's `commitment` (`media/cell.rs`,
-/// `media/blind.rs`: the canonical rule admits only what `encode` writes,
-/// M-I3 (a)), and the hash an operator copies from the inventory's listing
-/// into the pull (`tools::pull`). Each admits only what `hex_string`
+/// picture cell's `hash` and a blind cell's `commitment` (`skep-media`'s
+/// `cell.rs` and `blind.rs`: the canonical rule admits only what `encode`
+/// writes, M-I3 (a)), and the hash an operator copies from the inventory's
+/// listing into the pull (`tools::pull`). Each admits only what `hex_string`
 /// produced, so an uppercase value — or a signed pair, which a radix parse
 /// would read — is refused rather than normalized; what the refusal costs is
 /// stated on each caller. The REFUSAL is this function's own, in the byte it

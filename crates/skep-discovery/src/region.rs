@@ -5,7 +5,9 @@
 //! result is ASN-0131's selection index `sel = findlinks_V ∩ addressable`,
 //! read out four ways — nullified links never surface (Conflicts #8, a
 //! deliberate divergence from ASN-0127/0108's `findlinks_V`/`Match`, which no
-//! addressability filter narrows).
+//! addressability filter narrows). Its touch is M7's overlap with the image's
+//! run extents, wider than ASN-0127's `matches` on the one shape the crate
+//! header states.
 
 use std::collections::HashSet;
 
@@ -24,7 +26,9 @@ use crate::DiscoveryWorld;
 /// The region family's shared selection index: the disjunctive ASN-0127
 /// `findlinks(image(W,d))` ∩ the active view (View::Active internally ==
 /// addressable == `dom(L)` ∖ nullified), as M7's native `OrdSet<Address>`
-/// (address order — ASN-0108's permanent enumeration key).
+/// (address order — ASN-0108's permanent enumeration key). The image reaches
+/// M7 as its runs' I-extents, so the touch is M7's overlap with them — wider
+/// than ASN-0127's `matches` on the one shape the crate header states.
 fn findlinks_v_set_on<W: DiscoveryWorld>(
     s: &Snapshot<W>,
     d: &Address,
@@ -35,7 +39,9 @@ fn findlinks_v_set_on<W: DiscoveryWorld>(
 }
 
 /// Links touching `region` (ASN-0127 findlinks over the image, disjunctive
-/// across slots `{FROM, TO, TYPE}` — exact by the v1 arity-3 invariant), in
+/// across slots `{FROM, TO, TYPE}` — exact by the v1 arity-3 invariant — and
+/// touched by M7's overlap with the image's run extents, which the crate
+/// header states is wider than ASN-0127's `matches` on one shape), in
 /// ASCENDING ADDRESS ORDER: ASN-0108's permanent enumeration key, so this
 /// enumerates in the order [`window_v_on`] pages by.
 /// result = `findlinks_V ∩ addressable` (`View::Active`) — nullified links

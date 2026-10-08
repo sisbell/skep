@@ -86,9 +86,13 @@ use crate::DiscoveryWorld;
 /// `orphaned = findlinks(A_del) ∖ findlinks(retained)` where `retained` =
 /// the prefix + suffix content that survives plus the link runs (a text
 /// delete never touches links) — the last-witness condition with no per-pair
-/// reasoning. Both sides stab the ACTIVE view. The global-ghost determination
-/// (LP17 — discoverable from NO document) reaches provenance R and is M6
-/// territory; M8 stops at the per-document set.
+/// reasoning. Both sides stab the ACTIVE view through the region family's
+/// lift, so a link whose only witness in `d` is a coverage strictly beneath a
+/// deleted address is reported orphaned — the one shape the crate header
+/// states — though ASN-0117's `D(d,Σ)`, over ASN-0098's membership, never
+/// counted it discoverable from `d`. The global-ghost determination (LP17 —
+/// discoverable from NO document) reaches provenance R and is M6 territory;
+/// M8 stops at the per-document set.
 ///
 /// The result-set filter (PUB round 2, lane 3.3, §3): the orphaned set drops
 /// every link whose HOME `readable` refuses, at link identity — a `d`

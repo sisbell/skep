@@ -38,15 +38,18 @@ const V1_SLOTS: [usize; 3] = [FROM, TO, TYPE];
 ///
 /// The lift from arrangement runs to M7's query `Endset` lives here, so every
 /// region-shaped query reaches the spanfilade through one reading of its
-/// I-extents. That endset aggregates iextents across origin documents and is
-/// therefore MIXED-LENGTH by construction; no partition by level class is
-/// owed because its only consumer is M7's `classify_spans` overlap, which is
-/// gate-free — any level-gated operation added here (normalizing the query,
-/// keying a cache on `canonical_key`) would owe the partition `Run::iextent`
-/// names. Empty `runs` skip the store: M7 answers `stab(slot, ⟨⟩, ·) = ∅`
-/// for the endset they lift to, so the short-circuit saves a scan rather than
-/// changing an answer — asked of the lifted endset, which is empty exactly
-/// when the runs were, every run lifting to one span.
+/// I-extents. That reading is WIDER than the image ASN-0127 names, on the one
+/// shape the crate header states: an extent covers every address extending
+/// one its run arranges, so a coverage strictly beneath an arranged address
+/// overlaps it. The query endset aggregates iextents across origin documents
+/// and is therefore MIXED-LENGTH by construction; no partition by level class
+/// is owed because its only consumer is M7's `classify_spans` overlap, which
+/// is gate-free — any level-gated operation added here (normalizing the
+/// query, keying a cache on `canonical_key`) would owe the partition
+/// `Run::iextent` names. Empty `runs` skip the store: M7 answers
+/// `stab(slot, ⟨⟩, ·) = ∅` for the endset they lift to, so the short-circuit
+/// saves a scan rather than changing an answer — asked of the lifted endset,
+/// which is empty exactly when the runs were, every run lifting to one span.
 ///
 /// The runs are taken as a SEQUENCE rather than a slice, because that is all
 /// the lift reads: a caller whose runs are already contiguous passes the
@@ -57,7 +60,9 @@ pub(crate) fn stab_runs_by_slot<'r>(
     l: &LinkState,
     runs: impl IntoIterator<Item = &'r Run>,
 ) -> [(usize, OrdSet<Address>); 3] {
-    let query = Endset::from_spans(runs.into_iter().map(Run::iextent)); // coverage(query) = the runs
+    // Each run lifts to its I-extent, whose coverage holds the run's addresses
+    // and every address extending one of them (the crate header's one shape).
+    let query = Endset::from_spans(runs.into_iter().map(Run::iextent));
     if query.is_empty() {
         return V1_SLOTS.map(|i| (i, OrdSet::new()));
     }

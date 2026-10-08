@@ -1,21 +1,22 @@
 //! §5 — projection and addressable discoverability: what each answers, the
-//! overlap discoverability shares with the region family's stab, the order
-//! their refusals speak in, the trunk head both read, the absence rule both
-//! apply, and the run budget and join square that hold them — the square at a
-//! step that builds nothing per pair.
+//! overlap discoverability shares with the region family's stab and the one
+//! shape where it parts from the projection, the order their refusals speak
+//! in, the trunk head both read, the absence rule both apply, and the run
+//! budget and join square that hold them — the square at a step that builds
+//! nothing per pair.
 
 use crate::common;
 use crate::heap::heap_bytes;
 
 use common::*;
-use skep_address::{classify_spans, Address, Span, SpanRel};
+use skep_address::{classify_spans, is_prefix, Address, Span, SpanRel};
 use skep_arrangement::{HasM5, Vstream};
 use skep_discovery::{
-    addressably_discoverable_from_on, project_on, QueryError, FROM, MAX_ANSWER_SPANS,
+    addressably_discoverable_from_on, project_on, OrphanReport, QueryError, FROM, MAX_ANSWER_SPANS,
     MAX_IMAGE_RUNS, TO, TYPE,
 };
 use skep_kernel::Snapshot;
-use skep_links::{HasLinks, LinkWriter, SlotArg};
+use skep_links::{enc, HasLinks, LinkWriter, SlotArg};
 
 #[test]
 fn project_is_content_subspace_i_to_v_with_conflated_not_a_link() {
@@ -235,6 +236,68 @@ fn discoverability_agrees_with_the_region_familys_stab_on_every_span_relation() 
             reads.addressably_discoverable_from(addr, &doc1()),
             Ok(found.contains(addr)),
             "{addr:?}: discoverable from doc1 exactly where the stab finds it"
+        );
+    }
+}
+
+/// §1/§5/§6 — the ONE shape the crate header states the touch is wider on: a
+/// slot naming an address strictly BENEATH one `d` arranges. No mint produces
+/// such an address, but M7's `Addrs` form deposits any T4-valid name. A run's
+/// I-extent covers every address extending one it arranges, so M7's overlap —
+/// the region family's touch, the preview's, and discoverability's
+/// restatement of it — reaches the link; ASN-0127's image and ASN-0098's
+/// projection are the arranged addresses themselves, and `project`, asking
+/// M5's membership, places it at no position. Pinned as the gap the header
+/// states, so a change to either relation is a change this test is told
+/// about.
+#[test]
+fn the_touch_reaches_a_coverage_beneath_an_arranged_address_where_the_projection_does_not() {
+    let k = kernel();
+    seed_content(&k, &doc1(), 1); // ca(1), at position 1
+    let store = LinkWriter::new(&k, &EVERYONE);
+    let beneath = a(&[1, 0, 1, 0, 1, 0, 1, 1, 1]); // extends ca(1); no mint produces it
+    assert!(is_prefix(ca(1).tumbler(), beneath.tumbler()) && beneath != ca(1));
+    // Homed in doc2, so doc1 seats nothing and its one content run is all it
+    // arranges.
+    let naming = link(&store, &doc2(), std::slice::from_ref(&beneath), &[ca(101)]);
+    let reads = Reads(&k);
+    let region = [vspan(1, 1, 1)];
+    assert_eq!(reads.image(&doc1(), &region), Ok(vec![run(&ca(1), 1)]));
+
+    // The extent's overlap reaches it: found, counted, paged, shipped as an
+    // endset, called reachable, and orphaned by the delete of the one position
+    // it lies beneath …
+    assert_eq!(
+        reads.findlinks_v(&doc1(), &region),
+        Ok(vec![naming.clone()])
+    );
+    assert_eq!(reads.count_v(&doc1(), &region), Ok(1));
+    assert_eq!(
+        reads.window_v(&doc1(), &region, None, 5).map(|w| w.batch),
+        Ok(vec![naming.clone()])
+    );
+    assert_eq!(
+        reads.retrieve_endsets(&doc1(), &region),
+        Ok(vec![(FROM, enc([&beneath]))])
+    );
+    assert_eq!(
+        reads.addressably_discoverable_from(&naming, &doc1()),
+        Ok(true)
+    );
+    assert_eq!(
+        reads.delete_orphans(&doc1(), &vp(1, 1), &n(1)),
+        Ok(OrphanReport {
+            orphaned: vec![naming.clone()]
+        })
+    );
+    // … and membership does not: no slot projects to any position.
+    for slot in [FROM, TO, TYPE] {
+        assert!(
+            reads
+                .project(&naming, slot, &doc1())
+                .expect("project")
+                .is_empty(),
+            "slot {slot}"
         );
     }
 }

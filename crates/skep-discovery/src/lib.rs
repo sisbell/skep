@@ -45,6 +45,25 @@
 //!   claims, never their endpoints, so a live claim can name a nullified
 //!   link.
 //!
+//! ONE SHAPE IS TOUCHED MORE WIDELY THAN THE CORPUS TOUCHES IT — a gap, not
+//! a decision. The region family, the delete preview and
+//! [`addressably_discoverable_from_on`] decide that a link reaches arranged
+//! content by M7's stab overlap with each run's I-extent (restated, for
+//! discoverability, over each span's bounds). ASN-0127's image and ASN-0098's
+//! projection are SETS of arranged addresses, and a slot meets one only by
+//! CONTAINING one of those addresses (F-IMG, F-MATCH; ASN-0098's `project`,
+//! on which LP12 is defined). A run's I-extent also covers every address that
+//! EXTENDS one the run arranges, so a slot whose coverage meets the extents
+//! only strictly BENEATH arranged addresses — a name no mint produces, which
+//! M7's `Addrs` form deposits verbatim — is found, counted, paged, shipped as
+//! an endset, called reachable and reported orphaned here, while the corpus
+//! finds it nowhere and [`project_on`], which asks M5's membership, places it
+//! at no position. On every other slot — one containing an arranged address,
+//! or one meeting no extent — the two relations agree. M8 touches through
+//! M7's published overlap, and M7's matcher has no membership form;
+//! `tests/it/pointwise.rs` pins the shape, so a change to either relation is
+//! a change that test is told about.
+//!
 //! Windowing (ASN-0108) is a stateless key-cut over M7's native
 //! `OrdSet<Address>` — address order IS the permanent enumeration key
 //! (Conflicts #3), so the cursor survives orphaning and M8 pages with no
@@ -54,8 +73,8 @@
 //! `reading_surface`, the one pin of HEAD-FLOAT (PUB-2.49, PUB-2.50,
 //! PUB-2.53), which states what each kind of address answers from. The
 //! region family floats through [`image_on`], and the pointwise pair each
-//! through its own read of the runs, so the two agree about which links
-//! reach `d`. The one that does not float is
+//! through its own read of the runs, so all of them read one arrangement for
+//! `d`. The one that does not float is
 //! [`delete_orphans_on`]: it previews DELETE, which edits `d`'s own
 //! arrangement and refuses every published target, so on every `d` DELETE
 //! admits, `d` IS its reading surface. On a published `d` the two part and
@@ -194,9 +213,11 @@
 //!   narrows nothing M7 walks.
 //! * [`delete_orphans_on`] — six `stab`s: three over the deleted runs, three
 //!   over the retained (none when nothing is retained), and none at all for a
-//!   request past the run budget, which has paid for two reads of M5's
-//!   `#runs` when `d` alone is past it and for resolving `d`'s content
-//!   otherwise.
+//!   request past the run budget. Ahead of every one, each request past the
+//!   width check reads M5's `n_C` for its bounds check — a sum over `d`'s
+//!   content runs, reading each — and a request past the run budget has paid,
+//!   beside it, two reads of M5's `#runs` when `d` alone is past it and the
+//!   resolution of `d`'s content otherwise.
 //! * the lineage pair ([`in_claims_on`], [`out_claims_on`]) — one
 //!   `readlink`, which answers `[]` for a non-link key and stops there;
 //!   otherwise one `observe` of the supersession class — a walk of that

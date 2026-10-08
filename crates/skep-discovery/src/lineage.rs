@@ -55,14 +55,16 @@ impl Endpoint {
 
     /// EL4's accessor for this endpoint — `old` for [`Endpoint::Old`], `new`
     /// for [`Endpoint::New`] — read out of a stored `[K_sup]` claim: the one
-    /// T4-valid address denoted by the slot that holds the endpoint, its F
-    /// for `old` and its G for `new`. That is the mapping
-    /// [`Endpoint::pattern`] probes by, read the other way, so a claim's
-    /// endpoints come out of the slots its probe asked about. `None` where
-    /// that slot denotes several addresses, none, or a tumbler that is no
-    /// address: there the accessor is undefined (Df-DISC(ii)). The
-    /// destructure is exhaustive, so a field M7 adds to [`Tuple`] fails to
-    /// build here, at the one place the mapping lives.
+    /// address the slot holding the endpoint names in Df-DISC(ii)'s canonical
+    /// form, UNIT-DEPTH spans alone denoting one tumbler (M7's
+    /// `single_denoted`), T4-valid — its F for `old` and its G for `new`. That
+    /// is the mapping [`Endpoint::pattern`] probes by, read the other way, so a
+    /// claim's endpoints come out of the slots its probe asked about. `None`
+    /// where that slot carries a span that is not unit-depth, denotes several
+    /// addresses or none, or denotes a tumbler that is no address: there the
+    /// accessor is undefined (Df-DISC(ii)). The destructure is exhaustive, so a
+    /// field M7 adds to [`Tuple`] fails to build here, at the one place the
+    /// mapping lives.
     fn read_out(self, t: &Tuple) -> Option<Address> {
         let Tuple { addr: _, from, to } = t;
         let slot = match self {
@@ -91,10 +93,11 @@ impl Endpoint {
 /// READ OUT ONLY WHERE `old` AND `new` ARE DEFINED. ASN-0125's archival read
 /// ranges over the schema-conforming claims Ŝ^Σ (Df-DISC(ii)), and a claim is
 /// read out only where the part of that schema a [`SupClaim`] is built from
-/// holds: its F and its G each denote ONE address, T4-valid — the part on
-/// which EL4's `old` and `new` are defined. The schema's remaining clauses —
-/// the two endpoints distinct, both resident — M7 holds at its two `[K_sup]`
-/// writers (`assert_sup` checks them, and `editlink`'s DC guard asks them of a
+/// holds: its F and its G each in the schema's canonical form, unit-depth
+/// spans alone denoting ONE address, T4-valid — the part of it EL4's `old`
+/// and `new` are read out of. The schema's remaining clauses — the two
+/// endpoints distinct, both resident — M7 holds at its two `[K_sup]` writers
+/// (`assert_sup` checks them, and `editlink`'s DC guard asks them of a
 /// caller's successor through a predicate M7 keeps crate-private). Of those
 /// the read restates residence alone, and only for the endpoint a probe
 /// names: [`claims_naming`] keeps a claim only where that endpoint EQUALS a
@@ -114,12 +117,13 @@ impl Endpoint {
 /// conforms, Ŝ^Σ = S^Σ, and nothing is skipped. The check is what keeps the
 /// read TOTAL over every state M7's fold accepts, which is wider: the fold
 /// builds the supersession adjacency off every address a slot denotes, so it
-/// admits a slot naming two addresses, or a tumbler that is no address; and a
-/// checkpoint M2 restores, or a frame it replays, decodes through serde, which
-/// checks a link's arity and nothing of this schema. Such a claim is a
-/// NON-CONFORMER — in S^Σ, outside Ŝ^Σ (EL4) — with no `old` or no `new` to
-/// read out, so skipping it IS the read's answer, where reading it out would
-/// fail every probe that reaches it, for as long as it is stored.
+/// admits a slot naming two addresses, a tumbler that is no address, or a
+/// span that is not unit-depth beside one that is; and a checkpoint M2
+/// restores, or a frame it replays, decodes through serde, which checks a
+/// link's arity and nothing of this schema. Such a claim is a NON-CONFORMER
+/// — in S^Σ, outside Ŝ^Σ (EL4) — with no `old` or no `new` to read out, so
+/// skipping it IS the read's answer, where reading it out would fail every
+/// probe that reaches it, for as long as it is stored.
 ///
 /// `t` is a claim M7's `observe` handed over as a [`Tuple`]: its address is a
 /// key of the supersession class's typed slice, and its slots are the claim's
@@ -223,15 +227,20 @@ fn claims_naming(
 /// full history (`succ_h`); `Default` behaves as `Active` (M7's reads coerce
 /// it).
 ///
-/// CLAIMS WHOSE `old` AND `new` ARE DEFINED, and `old = y` EXACTLY: a claim
-/// whose F and G do not each denote one T4-valid address has no `old` or no
-/// `new` (ASN-0125 EL4 — a non-conformer to Df-DISC(ii)) and is not returned,
-/// and a claim is returned only where its `old` IS `y` — never where it merely
-/// lies above `y`, as a document's address lies above every link the
-/// document homes. On a store M7's two `[K_sup]` writers alone have written,
-/// neither clause removes anything; both hold of the answer in every state
-/// M7's fold accepts, a restored checkpoint or a replayed journal frame
-/// included.
+/// THE DOMAIN, EXACTLY: the claims whose F and G are each in Df-DISC(ii)'s
+/// canonical form — unit-depth spans alone, denoting one T4-valid address —
+/// so that EL4's `old` and `new` can be read out, and whose `old` IS `y`,
+/// never merely lying above it, as a document's address lies above every
+/// link the document homes. A claim outside that form is a non-conformer
+/// (ASN-0125 EL4) and is not returned. The rest of the schema is asked of the
+/// probed endpoint alone, whose residence the resident-key gate holds: the
+/// other endpoint's residence, and the two endpoints' distinctness, are never
+/// asked, so a returned claim's `new` can be an address that is no resident
+/// link, or `y` itself. On a store M7's two `[K_sup]` writers alone have
+/// written, every claim is schema-conforming (Ŝ^Σ = S^Σ), none of this
+/// removes or admits anything, and the two views answer exactly `succ_o`'s
+/// and `succ_h`'s claims at `y`; the domain above holds in every state M7's
+/// fold accepts, a restored checkpoint or a replayed journal frame included.
 ///
 /// The view selects which CLAIMS are disclosed, never which endpoints: each
 /// [`SupClaim`]'s `old`/`new` are the addresses the claim names, read out as
@@ -257,9 +266,10 @@ pub fn in_claims_on<W: DiscoveryWorld>(
 }
 
 /// The claims with `new = x` (ASN-0125 EL11b `out(x)`). Same key, view,
-/// order, endpoint-disclosure, exactness and reader contract (PUB round 2,
-/// lane 3.3, §3) as [`in_claims_on`]: every claim returned has `new` EQUAL
-/// to `x`.
+/// order, endpoint-disclosure, domain and reader contract (PUB round 2,
+/// lane 3.3, §3) as [`in_claims_on`], the two endpoints' roles exchanged:
+/// every claim returned has `new` EQUAL to `x`, and its `old` is the
+/// endpoint whose residence is never asked.
 pub fn out_claims_on<W: DiscoveryWorld>(
     s: &Snapshot<W>,
     x: &Address,

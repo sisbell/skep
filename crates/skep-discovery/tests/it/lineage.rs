@@ -1,8 +1,8 @@
 //! §7 — archival supersession lineage: the flipped probes behind the
 //! resident-key gate, the class they restrict to, what one claim says, the
 //! claims of that class with an undefined endpoint, the claims that only
-//! cover a key they do not name, and the home every claim has, which the
-//! store's fold guarantees.
+//! cover a key they do not name, the endpoint no probe asks about, and the
+//! home every claim has, which the store's fold guarantees.
 
 use crate::common;
 
@@ -336,21 +336,24 @@ fn lineage_endpoints_rest_on_a_fence_the_write_surface_keeps() {
 }
 
 /// §7 — the read-out reports a claim only where its `old` and `new` are
-/// defined: a `[K_sup]` claim whose endpoint is not one address is a
-/// non-conformer — in S^Σ, outside the schema-conforming claims Ŝ^Σ ASN-0125's
-/// read ranges over — and is skipped, never a fault. No M7 writer deposits one
-/// — the fence test above pins that — but M7's fold admits one, and a restored
-/// checkpoint or a replayed journal frame reaches the fold through serde,
-/// which checks a link's arity and nothing of the schema. So two such claims
-/// are folded here the way a decoded frame would be, beside one conforming
-/// claim: one whose F denotes TWO addresses, and one whose G denotes doc1's
-/// ELEMENT-FIELD PREFIX — doc1 and the zero that opens its element field, so a
-/// tumbler with a trailing zero, which is no address — whose subtree covers
-/// every link of doc1. Both probes reach all three claims under both views,
-/// and answer the conforming one alone; a read-out that took every claim's
-/// endpoints for defined would fail each of these probes for as long as the
-/// non-conformers are stored. The home rule is asked past that check, so only
-/// of the claim reported.
+/// defined: a `[K_sup]` claim whose endpoint slot is not in Df-DISC(ii)'s
+/// canonical form — unit-depth spans alone, denoting one address — is a
+/// non-conformer, in S^Σ and outside the schema-conforming claims Ŝ^Σ
+/// ASN-0125's read ranges over, and is skipped, never a fault. No M7 writer
+/// deposits one — the fence test above pins that — but M7's fold admits one,
+/// and a restored checkpoint or a replayed journal frame reaches the fold
+/// through serde, which checks a link's arity and nothing of the schema. So
+/// three such claims are folded here the way a decoded frame would be, beside
+/// one conforming claim: one whose F denotes TWO addresses; one whose G
+/// denotes doc1's ELEMENT-FIELD PREFIX — doc1 and the zero that opens its
+/// element field, so a tumbler with a trailing zero, which is no address —
+/// whose subtree covers every link of doc1; and one whose F denotes `e1`
+/// alone, beside a span that is not unit-depth. Both probes reach all four
+/// claims under both views, and answer the conforming one alone; a read-out
+/// that took every claim's endpoints for defined, or read an endpoint off the
+/// one address its slot denotes whatever else the slot carries, would fail
+/// these probes for as long as the non-conformers are stored. The home rule
+/// is asked past that check, so only of the claim reported.
 #[test]
 fn lineage_skips_a_supersession_claim_with_an_undefined_endpoint() {
     let fixture = OneClaim::new();
@@ -377,8 +380,26 @@ fn lineage_skips_a_supersession_claim_with_an_undefined_endpoint() {
         &la(9),
         Link::triple(enc([&fixture.e1]), no_address, fixture.sup.clone()),
     );
+    // A third whose F DENOTES one address — `e1`, the start of its one
+    // unit-depth span — beside a span that is not unit-depth, so it is not
+    // the schema's canonical form and its `old` is undefined.
+    let mixed = Endset::from_spans([subtree_of(fixture.e1.tumbler()), run(&ca(1), 3).iextent()]);
+    assert_eq!(
+        mixed.addrs().collect::<Vec<_>>(),
+        vec![fixture.e1.tumbler()],
+        "F denotes e1 alone"
+    );
+    assert!(
+        mixed.single_denoted().is_none(),
+        "and is not unit-depth throughout"
+    );
+    fold_decoded_deposit(
+        &fixture.k,
+        &la(10),
+        Link::triple(mixed, enc([&fixture.e2]), fixture.sup.clone()),
+    );
 
-    // The premise: each probe reaches all three claims, so the answers
+    // The premise: each probe reaches all four claims, so the answers
     // below are the read-out's and not the probes'.
     let snap = fixture.k.snapshot();
     let old_probe = [fixture.e1.tumbler().clone()];
@@ -403,13 +424,13 @@ fn lineage_skips_a_supersession_claim_with_an_undefined_endpoint() {
                 .collect();
             assert_eq!(
                 reached,
-                vec![fixture.claim.clone(), la(8), la(9)],
+                vec![fixture.claim.clone(), la(8), la(9), la(10)],
                 "{pattern:?} under {view:?}"
             );
         }
     }
 
-    // The two non-conformers are skipped: the conforming claim is answered
+    // The three non-conformers are skipped: the conforming claim is answered
     // alone, and the home rule is asked of it alone.
     fixture.assert_answered_alone();
 }
@@ -504,6 +525,72 @@ fn lineage_reads_out_a_claim_only_where_its_endpoint_is_the_key() {
             reads.in_claims(&unminted, view),
             vec![],
             "in_claims of the unminted address, {view:?}"
+        );
+        assert_eq!(
+            reads.out_claims(&unminted, view),
+            vec![],
+            "out_claims of the unminted address, {view:?}"
+        );
+    }
+}
+
+/// §7 — the read checks the endpoint its probe names and not the other, as
+/// `in_claims_on` states: a claim whose probed endpoint IS the resident key
+/// is returned whatever its other endpoint is — an address that is no
+/// resident link, or the key itself. No M7 writer deposits either
+/// (`assert_sup` asks both endpoints' residence and their distinctness, and
+/// `editlink`'s DC guard asks the same of a caller's successor), but M7's fold
+/// admits both, as a restored checkpoint or a replayed journal frame reaches
+/// it. The unminted endpoint, probed in its turn, is the resident-key gate's
+/// to refuse; the reflexive claim answers both probes of the key.
+#[test]
+fn lineage_checks_the_endpoint_its_probe_names_and_not_the_other() {
+    let fixture = OneClaim::new();
+    let unminted = la(99);
+    fold_decoded_deposit(
+        &fixture.k,
+        &la(8),
+        Link::triple(enc([&fixture.e1]), enc([&unminted]), fixture.sup.clone()),
+    );
+    fold_decoded_deposit(
+        &fixture.k,
+        &la(9),
+        Link::triple(enc([&fixture.e1]), enc([&fixture.e1]), fixture.sup.clone()),
+    );
+    assert!(
+        fixture
+            .k
+            .snapshot()
+            .world()
+            .links()
+            .readlink(&unminted)
+            .is_none(),
+        "no deposit minted it"
+    );
+
+    // Every claim here supersedes `e1`; they differ in the `new` they name.
+    let superseding_e1 = |claim: Address, new: &Address| SupClaim {
+        claim,
+        old: fixture.e1.clone(),
+        new: new.clone(),
+        home: doc1(),
+        active: true,
+    };
+    let reads = Reads(&fixture.k);
+    for view in [View::Active, View::Audit] {
+        assert_eq!(
+            reads.in_claims(&fixture.e1, view),
+            vec![
+                superseding_e1(fixture.claim.clone(), &fixture.e2),
+                superseding_e1(la(8), &unminted),
+                superseding_e1(la(9), &fixture.e1),
+            ],
+            "in_claims of e1, {view:?}"
+        );
+        assert_eq!(
+            reads.out_claims(&fixture.e1, view),
+            vec![superseding_e1(la(9), &fixture.e1)],
+            "out_claims of e1, {view:?}"
         );
         assert_eq!(
             reads.out_claims(&unminted, view),

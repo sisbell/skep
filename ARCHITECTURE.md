@@ -707,10 +707,19 @@ Rules that hold across its files:
   are the shell's. The crate spells the aside's name and judges the resume
   as a pure function over values the shell hands in; the one read over the
   unit keys reads the keys alone.
-- **The surface grows by lane, against these names.** §7's timing tests
-  are the budgets lane's; the embedding — the feed consumer, the bridge
-  call that composes the pair, the refreshes, the jump's landing — the
-  shell's. The crate's `README.md` lists them.
+- **The budgets report and never gate** (`search.md` §7). Every pin of
+  §7.1 is measured by a timing test in the crate's `tests/it/budgets.rs`
+  over §7.3's corpus — the design repository at one pin, read through
+  `git` at run time and never committed — fed through a dev board's
+  `insert` and read back through `retrieve_v`, each row printed as
+  `BUDGET | row | tier | pin | measured | WITHIN or MISSED`; a miss is a
+  word on the line and fails nothing, the design's "what a miss would
+  change" being the owner's decision. The two rows the design asserts
+  (M7's tree, the fuzzy row's flag) assert; without the corpus every
+  budget test prints one skip line and passes.
+- **The surface grows by lane, against these names.** The embedding — the
+  feed consumer, the bridge call that composes the pair, the refreshes,
+  the jump's landing — is the shell's. The crate's `README.md` lists it.
 
 Its unit suites sit beside their code: `unit/tests.rs` (the join, the item
 table's binary search, the contiguity refusal, the head rule),
@@ -739,8 +748,12 @@ cases), `separation` (§2.1's class separation by construction), `index`
 index, the ceiling at the real constant, replacement, the lock split under
 an `RwLock` of the test's own, the join across the parts' edge, the range
 across a `Gap` and a `hex` stretch), `file` (§8.3's file dispositions at
-the public surface, one test each) and `resume` (the open's judgment over a
-loaded header).
+the public surface, one test each), `resume` (the open's judgment over a
+loaded header) and `budgets` (§7's pins, each a timing test in the
+`gate-full only` partition that reports its row and skips without the
+corpus — with `budgets/corpus.rs` reading the design repository at its pin,
+`budgets/board.rs` the dev board the units come through, and
+`budgets/report.rs` the one row shape).
 
 ## The client, `skep-client`
 
@@ -1583,9 +1596,14 @@ imports it.
   their shared fixture through `skep-engine` and the stores it assembles,
   `skep-media`'s on `skep-engine`, whose door's unit test opens a real
   engine to judge generic code against the concrete `World` — the media
-  crate's library never depends on the engine — and `skepd`'s on
+  crate's library never depends on the engine — `skepd`'s on
   `skep-resolve`, whose end-to-end cells and measurements run where boards
-  are spawned — the daemon's library never depends on the resolver.
+  are spawned — the daemon's library never depends on the resolver — and
+  `skep-search`'s on `skepd` and `skep-client`, whose budgets suite writes
+  the design's corpus to a dev board through the client's frames and reads
+  it back as the shell does, so the index is measured on units that came
+  through the wire — the index's library depends on neither (`search.md`
+  §1.3, §7.3).
 - **The client reproduces the daemon's grammars under their rules, never
   its code.** `skep-client` holds its own `Origin::parse`, held to the
   daemon's vector set by a test and never imported from `skepd`; the

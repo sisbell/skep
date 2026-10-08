@@ -21,3 +21,34 @@ unicode-segmentation.workspace = true
 # are dropped. Its tables must be the segmenter's Unicode version, which
 # `token`'s suite asserts; the tree it pulls is tinyvec, pure Rust.
 unicode-normalization.workspace = true
+
+[dev-dependencies]
+# THE DEV BOARD the budgets suite feeds (`search.md` §7.3: the corpus
+# "written to a DEV BOARD through the ordinary `insert` path … and read back
+# through `retrieve_v` so the index is fed exactly as the shell feeds it"):
+# the real daemon, in-process on an ephemeral port over a temp data dir, as
+# skep-client's suite takes it — `test-hooks` is what that suite enables too.
+# A dev-dependency alone, pointing up: the library depends on skep-address
+# and the two Unicode crates and nothing else (§1.3), and a build that
+# compiles no test never reads this table.
+skepd = { path = "../skepd", features = ["test-hooks"] }
+# The reads the shell makes, made by the shell's own library: the one
+# dialer, `Board::op` and the wire's frames spelled once (`frames::retrieve_v`,
+# `span_set`), the claim walk that gives the dev board its claimant — the
+# scripted person behind `test-hooks`, as skep-client's own suite drives it.
+skep-client = { path = "../skep-client", features = ["test-hooks"] }
+# The entry frame an attested write carries on a claimed board (wire.md
+# §Arrangement; signed ops): M6's members are published by the SHOT, the
+# publish class's attested write, whose body skep-identity composes —
+# `entry_frame`, `entry_body_publish`, the empty body of an edition's mint.
+# Already in the graph through skep-client; the suite's alone.
+skep-identity = { path = "../skep-identity" }
+# The wire's JSON, parsed by the SUITE alone — the frames it hand-writes
+# (`insert`, `create_new_document`, `publish`, `compare`, `image`) and the
+# deliveries it turns into the crate's typed items; the library parses no
+# wire JSON (§1.3).
+serde_json.workspace = true
+# The dev board's data directory and the suite's index files, under the
+# system temp dir and never under the repository (§7.3: "the harness OUTSIDE
+# the `xanadu-spec` root").
+tempfile.workspace = true

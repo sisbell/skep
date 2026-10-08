@@ -69,11 +69,26 @@ use crate::unit::{Class, Unit, UnitKey};
 /// §7.3's cut re-measured to the byte — every file tracked at the design
 /// repository's `b17656e9` that is not a generated `_context.*` bundle and
 /// not an image or a video, 3,598 files, the design's "93.1 MB over 3,598
-/// files" — the floor ITEM 2 RULED (d) fixes, held until lane SR-4 reports
-/// M1 and M5 over that tier and confirms or raises it. Counted in LIVE
-/// bytes of text, what a rebuild would hold, as `merge` adds them; the
-/// postings ride beside at M1's multiple (≤ 1× the text in the file) and
-/// are not counted twice.
+/// files" — the floor ITEM 2 RULED (d) fixes. Counted in LIVE bytes of text,
+/// what a rebuild would hold, as `merge` adds them; the postings ride beside
+/// at M1's multiple (≤ 1× the text in the file) and are not counted twice.
+///
+/// MEASURED at that tier by lane SR-4 (2026-10-07; `tests/it/budgets.rs`, a
+/// release build, the tier fed through a dev board and read back): the
+/// build 4.7 s, the postings 0.73× the text, the file 1.78× (157.5 MiB), the
+/// load 0.79 s, the save 0.83 s — M1's two ratios HOLD, the three timings
+/// reported, no pin standing at this tier. M5 does NOT hold: the index
+/// loaded whole is 5.0× its file resident (790 MiB), and 6.9× at 10⁴ and
+/// 7.5× at 10³ — the ratio is the in-memory shape's (a `Vec` per posting,
+/// sixteen bytes an occurrence, the stored text beside) and not the tier's,
+/// so no lower tier holds it either and §7.4's "moved down to where the
+/// numbers hold" has no tier to land on. The figure therefore STANDS
+/// UNCONFIRMED at the records tier's size, the owner's decision, with §7.1's
+/// remedies ahead of any disk-backed index: the lazy stored text (the load
+/// row at 10⁴ missed its 500 ms at 620 ms too), the save cadence scaled to
+/// the file (18.5 GiB an hour at thirty-second saves of this file), and the
+/// compaction trigger (M5's dead residue was 3.4 MiB, the two copies across
+/// a compaction 189 MiB).
 pub const CEILING_BYTES: u64 = 93_075_924;
 
 /// The compaction trigger's fraction (§5.1; §7.1's INTERIM pin): compaction

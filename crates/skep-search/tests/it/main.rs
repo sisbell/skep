@@ -16,9 +16,12 @@
 //! across a `Gap` and a `hex` stretch (§2.3); `file` — the file's
 //! dispositions at the public surface, §8.3's list one by one (§5.1, §5.4);
 //! `resume` — the open's judgment over a loaded header and the wire's
-//! answers (§5.4). Nothing but module declarations and the fixtures they
-//! share belongs here.
+//! answers (§5.4); `budgets` — §7's pins, each MEASURED over §7.3's corpus
+//! fed through a dev board as the shell feeds it and REPORTED beside its pin
+//! (§7.1–§7.4), the timing partition that skips without the corpus. Nothing
+//! but module declarations and the fixtures they share belongs here.
 
+mod budgets;
 mod cases;
 mod file;
 mod grammar;

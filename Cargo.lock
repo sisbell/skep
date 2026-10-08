@@ -1506,7 +1506,12 @@ dependencies = [
 name = "skep-search"
 version = "0.1.0"
 dependencies = [
+ "serde_json",
  "skep-address",
+ "skep-client",
+ "skep-identity",
+ "skepd",
+ "tempfile",
  "unicode-normalization",
  "unicode-segmentation",
 ]

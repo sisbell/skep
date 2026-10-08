@@ -160,19 +160,26 @@ parts, each under the design rule it realizes:
   fills: `Equal`, `FromTheFloor`, `Diverged`, `BeyondHead`,
   `DifferentChain`, `Busy`. The crate moves no file and reads no board.
 
-The INTERIM PINS, each a constant whose doc quotes the design and each held
-until lane SR-4 reports against it: the ceiling (`CEILING_BYTES`, §7.4) at
-the records tier's own size — §7.3's cut re-measured to the byte,
-93,075,924 bytes over 3,598 files at the design repository's `b17656e9` —
-the floor ITEM 2 RULED (d) fixes, until SR-4 reports M1 and M5 over that
-tier; the expansion's bound (`EXPANSION_BOUND_ENTRIES`, `1 << 16` postings
+The INTERIM PINS, each a constant whose doc quotes the design and carries
+what the budgets measured of it (§3; lane SR-4, 2026-10-07): the ceiling
+(`CEILING_BYTES`, §7.4) at the records tier's own size — §7.3's cut
+re-measured to the byte, 93,075,924 bytes over 3,598 files at the design
+repository's `b17656e9` — the floor ITEM 2 RULED (d) fixes, where M1's two
+ratios hold (the postings 0.73× the text, the file 1.78×) and M5's does not
+at any tier (the index loaded whole is 5–7.5× its file resident, the
+in-memory shape's ratio and not the tier's), so the figure stands
+UNCONFIRMED for the owner's decision with §7.1's remedies named in its doc;
+the expansion's bound (`EXPANSION_BOUND_ENTRIES`, `1 << 16` postings
 entries) and the positions bound (`POSITIONS_BOUND`, `1 << 16` positions),
 each derived from §7.1's M2 pin — one frame, 16 ms, half of it the merge,
 at a pessimistic 100 ns an occurrence, the power of two at or below the
-80,000 that gives — until SR-4 reports them at M2; the fuzzy words bound
-(`FUZZY_WORDS`, 3), the fuzzy word's minimum length (`FUZZY_MIN_CHARS`, 5)
-and the prefix minimum (`PREFIX_MIN_CHARS`, 1), §7.1's own figures; the
-snippet's bound (`SNIPPET_BOUND`, 240 bytes either side), §6's. Its rules —
+80,000 that gives — CONFIRMED at M2: the evaluator merges a position in
+47–54 ns and scores a unit in 0.7–0.8 µs, the keystrokes at the bound
+reach p99 13.7 ms, so the figure that stands is the one that holds the
+frame; the fuzzy words bound (`FUZZY_WORDS`, 3), the fuzzy word's minimum
+length (`FUZZY_MIN_CHARS`, 5) and the prefix minimum (`PREFIX_MIN_CHARS`,
+1), §7.1's own figures, each reported against the corpus; the snippet's
+bound (`SNIPPET_BOUND`, 240 bytes either side), §6's. Its rules —
 one class per index, cut once at `merge`, prepare under no lock and install
 by one swap, every bound a flag, one score and one order, nothing of the
 network, the keys or the board, one file in one spelling read whole, no
@@ -181,17 +188,11 @@ the workspace's `ARCHITECTURE.md` §The search index. It depends on
 `skep-address` and the two Unicode crates alone: NOT `skepd`, NOT
 `skep-client`, NOT `serde_json`.
 
-## 2. What later lanes add
+## 2. What the next lane adds
 
-The surface above is `search.md` §1.4 whole; what the next lanes land
-against these names:
+The surface above is `search.md` §1.4 whole and §7's budgets are measured
+(§3 below); what the one lane left lands against these names:
 
-- **The budgets, reported** (§7; lane SR-4) — the timing tests over §7.3's
-  corpus: the build, the size, the per-keystroke phrase-prefix at 10⁴ with
-  the expansion's and the positions bound reported beside it, the fuzzy
-  row, the re-index, the memory, the jump's compare, the save and the load
-  timed among them; the ceiling's figure and the two position bounds
-  confirmed or moved.
 - **The shell's half** (`client.md` §4e; lane SH) — the feed consumer; the
   directory, the file modes `0600`/`0700`, the lock, the save's rename and
   the moving aside under `aside_name`; the `/health` and `/chain?at` reads
@@ -244,8 +245,49 @@ replacement, prepare under no lock and install by one swap under an
 `MAX_DELIVERY_ITEMS` positions with a character across the parts' edge,
 and the range across a `Gap` and a `hex` stretch with the item found by
 binary search — `file` — §8.3's file dispositions at the public surface,
-one test each, and `load`'s order — and `resume` — the open's judgment over
-a loaded header and the wire's answers.
+one test each, and `load`'s order — `resume` — the open's judgment over
+a loaded header and the wire's answers — and `budgets` — §7's pins, each
+MEASURED and REPORTED (§7: "TIMING TESTS THAT REPORT, never assert").
+
+THE BUDGETS (`tests/it/budgets.rs`, with `budgets/corpus.rs`,
+`budgets/board.rs` and `budgets/report.rs`): every test of the partition
+`#[ignore = "timing test - gate-full only"]`, run by `scripts/gate-full.sh`'s
+`full` profile and by hand with `--run-ignored all`. THE CORPUS is §7.3's,
+read at run time from the design repository at its pin `b17656e9` through
+`git` — the path from the environment variable `SKEP_SEARCH_CORPUS` — and
+never committed: the records tier (every tracked file but the `_context.*`
+bundles and the image and video files, 3,598 files, 93,075,924 bytes —
+asserted, the ceiling's derivation) and the cuts at 10³ and 10⁴ documents
+of 1–10 KiB from the tier's `.md` paragraphs under one deterministic rule
+(the module doc states it). THE DEV BOARD is skepd in-process over a temp
+directory under the system temp dir, claimed as the suites claim theirs;
+each cut document is minted as a draft, its text inserted per-byte, and
+read back through `retrieve_v` — in parts past `MAX_DELIVERY_ITEMS` — into
+the crate's typed items, the round trip asserted byte-exact, so the index
+is fed exactly as the shell feeds it; the units a feed delivered are cached
+under the temp dir for the other rows, and the rows that need a live board
+spawn a fresh one (a fed board is never reopened: the daemon's open of a
+board holding thousands of commits replays its history for minutes). THE
+ROWS, one test each, each printing
+`BUDGET | row | tier | pin | measured | WITHIN or MISSED`: M1's build and
+size, M2's keystroke with its named worst cases, the fuzzy query (its
+`fuzzy_bounded` asserted), the keystroke under a writer, the two derived
+bounds' per-occurrence cost, M3's distinct terms, M4's re-index, M5's
+memory (a child process that loads the saved file and nothing else), M6's
+`compare` against the daemon, the load, the save and its bytes per hour,
+the save path's `/chain?at` beside history readers, the rank row's twenty
+queries, the other interim pins, and the ceiling's verdict; M7's tree is
+asserted in every gate. Without the corpus every budget test prints one
+skip line naming the variable and the pin and passes. `SKEP_SEARCH_TIERS`
+restricts a run's tiers (an entry `10^4=10^3` hands a 10⁴ row the 10³ units
+for a dry run, the row naming the tier it measured); `SKEP_SEARCH_RECORDS_BOARD`
+feeds the records tier through the board too (some forty minutes at the
+board's measured rate in a release build — by default that tier enters the
+index directly from the corpus and its rows say `records(direct)`). The
+rows' numbers are a RELEASE build's: `cargo nextest run --release` — an
+unoptimized daemon feeds per-byte text at a tenth of the rate and an
+unoptimized index answers a keystroke in ten times the frame, the gate's
+weather and not the product's.
 
 ## License
 

@@ -90,8 +90,17 @@ use crate::unit::{Item, Unit};
 /// keystroke's commonest form — M2's sample draws 0–2 full words before the
 /// prefix — so the expansion alone may fill the merge's budget, and the
 /// positions bound is what stops a keystroke with fixed words beside it. The
-/// fuzzy word's per-word cap is this same figure. Lane SR-4 reports both
-/// bounds at M2 and confirms or moves them.
+/// fuzzy word's per-word cap is this same figure. CONFIRMED at M2,
+/// 2026-10-07 (lane SR-4, `tests/it/budgets.rs`, a release build over the
+/// 10⁴ cut fed through a dev board): the evaluator's cost came to 54 ns per
+/// position merged, with 0.8 µs per unit scored beside it, over 1,500 bare
+/// prefixes drawn by token frequency — within a factor of two of the 100 ns
+/// assumed, so the figure stands (half a frame over the measured cost would
+/// admit `1 << 17`); the keystroke sample's p99 was 15.7 ms at this bound,
+/// with `more_terms` on 555 of 1,200 keystrokes. What the measurement also
+/// showed, for the design: at 10⁴ the commonest completions — `the`, 827,000
+/// occurrences — exceed the bound alone, so a one-letter prefix expands to
+/// its own term and the bound's flag, never to them.
 pub const EXPANSION_BOUND_ENTRIES: usize = 1 << 16;
 
 /// THE POSITIONS BOUND on a keystroke's WHOLE evaluation (§3.2: "BOUNDED BY
@@ -103,7 +112,15 @@ pub const EXPANSION_BOUND_ENTRIES: usize = 1 << 16;
 /// 100 ns an occurrence, 80,000 positions, the power of two at or below it.
 /// Every posting consulted counts — a form's own, a phrase's other words',
 /// an intersection's — and where the next would pass it the evaluation stops
-/// with `positions_bounded: true`.
+/// with `positions_bounded: true`. CONFIRMED at M2, 2026-10-07, with
+/// [`EXPANSION_BOUND_ENTRIES`] and by the same measurement (54 ns per
+/// position merged; the keystrokes at the bound p50 6.8 ms, p99 15.4 ms);
+/// `positions_bounded` fired on 281 of 1,200 keystrokes at 10⁴, and the
+/// phrase-prefix `"of the d` the design names answered in 3.3 ms under it.
+/// What it costs, for the design: a quoted phrase of common words over long
+/// units admits each fixed word's whole occurrence list per unit walked, so
+/// a five-word title phrase holding `the` stopped at the bound over the
+/// records tier before reaching the record that bears it.
 pub const POSITIONS_BOUND: usize = 1 << 16;
 
 /// THE FUZZY WORDS BOUND (§3.2, §7.1's fuzzy M2 row, as stated): "at most

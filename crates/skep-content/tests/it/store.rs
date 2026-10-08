@@ -4,13 +4,14 @@
 //! on the attempt in debug builds; that a point query matches its address
 //! exactly, never a prefix or an extension; that identity is by address,
 //! never by value, and `Val` implements no `Hash` (S4); that a slice's
-//! equality is its contents'; that the one enumeration visits every entry
-//! once, through `iter` and through a `for` loop over the slice alike, as a
-//! walk a caller can name, which knows its length and shows only its cursor;
-//! that any byte string is a value, comes back exactly as written, and
-//! renders into `Debug` as its byte length, never a byte; and, in debug
-//! builds, that `stage_write` panics on a non-content address before it
-//! looks at what is stored there.
+//! equality is its contents', address and value each counting; that the one
+//! enumeration visits every entry once, through `iter` and through a `for`
+//! loop over the slice alike, as a walk a caller can name, which knows
+//! exactly what remains at every step, shows only its cursor, and offers no
+//! walk from the far end; that any byte string is a value, comes back
+//! exactly as written, and renders into `Debug` as its byte length, never a
+//! byte; and, in debug builds, that `stage_write` panics on a non-content
+//! address before it looks at what is stored there.
 
 use skep_address::Tumbler;
 use skep_content::{stage_write, ContentError, ContentStore, ContentWrite, Iter, Val};
@@ -163,7 +164,8 @@ fn identity_is_by_address_never_by_value() {
 fn slices_are_equal_when_they_store_the_same_values_at_the_same_addresses() {
     // §A: a slice's equality is its contents' — `dom(C)` and `C(a)` — in
     // whatever order its records were folded; a record's is its address and
-    // its value.
+    // its value. Each half counts on its own: one address holding two values,
+    // and one value at two addresses, are two records and two slices.
     let c0 = ContentStore::default();
     let r1 = stage_write(&c0, &ca(1), val(b"one")).expect("fresh");
     let r2 = stage_write(&c0, &ca(2), val(b"two")).expect("fresh");
@@ -172,6 +174,13 @@ fn slices_are_equal_when_they_store_the_same_values_at_the_same_addresses() {
     let other = stage_write(&c0, &ca(1), val(b"uno")).expect("fresh");
     assert_ne!(r1, other, "one address, two values: two records");
     assert_ne!(c0.apply_write(&r1), c0.apply_write(&other));
+    let elsewhere = stage_write(&c0, &ca(2), val(b"one")).expect("fresh");
+    assert_ne!(r1, elsewhere, "one value at two addresses: two records");
+    assert_ne!(
+        c0.apply_write(&r1),
+        c0.apply_write(&elsewhere),
+        "one value at two addresses: two slices (S4)"
+    );
 }
 
 // ---- §B the one enumeration ----
@@ -240,6 +249,79 @@ fn iter_lends_a_named_walk_that_knows_its_length_and_shows_only_its_cursor() {
     assert_eq!(lends(lent), 1);
     let looped: Iter<'_> = IntoIterator::into_iter(&c);
     assert_eq!(lends(looped), 1, "`&ContentStore` lends the same walk");
+}
+
+#[test]
+fn iter_knows_exactly_what_remains_at_every_step_through_len_and_size_hint_alike() {
+    // store.rs, `iter` and `Iter`: the walk is exact-size and "the exact
+    // length is forwarded" — a promise about every step, not only the first,
+    // and about every slice — here the empty one, one pair, and 257 (past one
+    // B-tree node, as in the walk test above). After `k` of `n` pairs,
+    // `len()` is `n - k` and `size_hint()` is `(n - k, Some(n - k))`, the
+    // exact form `ExactSizeIterator` requires, down to the `None` that ends
+    // the walk after exactly `n`. The two faces are forwarded separately, and
+    // std's `Skip` takes `len()` from `size_hint` and asserts it exact: a walk
+    // whose `size_hint` fell back to `(0, None)` would answer `len()` and
+    // panic in `skip(1).len()`.
+    for n in [0u32, 1, 257] {
+        let mut c = ContentStore::default();
+        for ordinal in 1..=n {
+            c = c.apply_write(&stage_write(&c, &ca(ordinal), val(b"v")).expect("fresh"));
+        }
+        let n = n as usize;
+        let mut walk = c.iter();
+        for step in 0..=n {
+            let left = n - step;
+            assert_eq!(walk.len(), left, "len() after {step} of {n} steps");
+            assert_eq!(
+                walk.size_hint(),
+                (left, Some(left)),
+                "size_hint() after {step} of {n} steps"
+            );
+            match walk.next() {
+                Some(_) => assert!(step < n, "the walk yielded a pair past its {n}"),
+                None => assert_eq!(step, n, "the walk ended after {step} of its {n} pairs"),
+            }
+        }
+        assert_eq!(
+            c.iter().skip(1).len(),
+            n.saturating_sub(1),
+            "skip(1)'s len() over {n} pairs, which std reads off size_hint()"
+        );
+    }
+}
+
+#[test]
+#[allow(clippy::assertions_on_constants)] // the probe's answer is a constant by design
+fn iter_offers_no_walk_from_the_far_end_so_it_promises_no_order() {
+    // store.rs, `Iter`: the reverse walk is withheld though `im`'s map
+    // iterator has one — the order is no part of `iter`'s promise, and a walk
+    // from the far end would make one: `iter().rev().next()` reads as "the
+    // highest address stored", an ordered read M4 does not offer, true only
+    // while the map behind the slice is ordered. So `Iter` implements no
+    // `DoubleEndedIterator`. The probe is the one
+    // `val_implements_no_hash_so_no_map_can_key_on_a_value` uses:
+    // `Probe::<T>::FROM_THE_FAR_END` resolves to the inherent `true` where
+    // `T: DoubleEndedIterator` and to the fallback trait's `false` elsewhere;
+    // `std::slice::Iter`, which does walk from either end, is the control that
+    // the probe can read `true` at all.
+    #[allow(dead_code)] // a type to resolve paths on; never built
+    struct Probe<T>(std::marker::PhantomData<T>);
+    trait Fallback {
+        const FROM_THE_FAR_END: bool = false;
+    }
+    impl<T> Fallback for Probe<T> {}
+    impl<T: DoubleEndedIterator> Probe<T> {
+        const FROM_THE_FAR_END: bool = true;
+    }
+    assert!(
+        <Probe<std::slice::Iter<'static, u8>>>::FROM_THE_FAR_END,
+        "the probe reads `false` even for an iterator that walks from either end"
+    );
+    assert!(
+        !<Probe<Iter<'static>>>::FROM_THE_FAR_END,
+        "Iter walks from the far end: `rev()` hands its callers an order `iter` disclaims"
+    );
 }
 
 // ---- §Types: Val, and Debug over the types that hold one ----

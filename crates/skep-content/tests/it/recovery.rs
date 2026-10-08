@@ -1,12 +1,13 @@
 //! The journaled record and the checkpointed slice: that both survive a
 //! bincode round trip and M2's durable recovery across a checkpoint; that
-//! the slice's serialized form is the format its readers pin; and that the
-//! slice's decode takes its entries in any order, while neither decode
-//! trusts a count its bytes do not carry or admits a key that is no
-//! tumbler, or no T4-valid address.
+//! the slice's serialized form is the format its readers pin; that the
+//! slice's decode takes its entries in every order they can arrive; that
+//! neither decode trusts a count its bytes do not carry or admits a key that
+//! is no tumbler, or no T4-valid address; and that both admit every T4-valid
+//! address, whatever its routing, since a release build stages each as given.
 
 use serde::de::DeserializeOwned;
-use skep_address::{validate, Nat, T4Clause, Tumbler};
+use skep_address::{content_subspace, validate, Level, Nat, T4Clause, Tumbler};
 use skep_content::{stage_write, write, ContentError, ContentStore, ContentWrite, HasContent, Val};
 use skep_kernel::Kernel;
 use tempfile::tempdir;
@@ -191,11 +192,7 @@ fn the_record_and_the_slice_refuse_a_key_that_is_no_address() {
     // already write. Each key below is nonempty, so `Tumbler`'s own door (T0,
     // the test above) admits it, and breaks exactly one T4 clause, so only
     // the `Address` door can refuse it — and the refusal is pinned as that
-    // door's own, word for word. The door's other edge is pinned too: a
-    // link-subspace element address is T4-valid, and a release build — its
-    // routing assertion compiled out — can journal one, so the decode admits
-    // it; a door that refused it would leave that build unable to replay its
-    // own journal.
+    // door's own, word for word. What the door admits is the next test's.
     let raw = |key: &[u32]| -> Vec<Nat> { key.iter().map(|&c| Nat::from(c)).collect() };
     let slice = |key: &[u32]| {
         bincode::serialize(&vec![(raw(key), b"x".to_vec())]).expect("the raw slice serializes")
@@ -234,42 +231,116 @@ fn the_record_and_the_slice_refuse_a_key_that_is_no_address() {
             );
         }
     }
-    let link_elem = [1, 0, 1, 0, 1, 0, 2, 1]; // subspace s_L = 2
-    let decoded = bincode::deserialize::<ContentStore>(&slice(&link_elem))
-        .expect("a mis-routed, T4-valid key is the stage door's to check, not the decode's");
-    assert!(decoded.contains(&t(&link_elem)), "the decoded slice holds the key it carried");
-    let decoded = bincode::deserialize::<ContentWrite>(&record(&link_elem))
-        .expect("a mis-routed, T4-valid address is the stage door's to check, not the decode's");
-    assert_eq!(
-        decoded.addr(),
-        &t(&link_elem),
-        "the decoded record carries the address it was given"
-    );
+}
+
+#[test]
+fn the_record_and_the_slice_admit_every_address_a_release_build_can_stage() {
+    // store.rs, `ContentStore`'s second key invariant: a content-subspace
+    // element address — ASN-0093 C1, the element LEVEL, and L0, the content
+    // SUBSPACE — is the stage door's caller to guarantee, checked in debug
+    // builds only; a release build stages a violator of either half as given
+    // (`write_trusts_a_document_level_address_in_release_and_panics_on_it_in_debug`
+    // commits one). So both decode paths take it on journal and checkpoint
+    // integrity: a decode that refused one would leave that build unable to
+    // replay its own journal. The decode therefore admits every address T4
+    // admits, whatever its routing — here one of each shape the routing
+    // assertion stops in a debug build: each level short of an element, and
+    // an element in a subspace other than content's, each checked first to
+    // be T4-valid and no content-subspace element address. The bytes are the
+    // raw shapes the refusal tests above lay down.
+    let raw = |key: &[u32]| -> Vec<Nat> { key.iter().map(|&c| Nat::from(c)).collect() };
+    let slice = |key: &[u32]| {
+        bincode::serialize(&vec![(raw(key), b"x".to_vec())]).expect("the raw slice serializes")
+    };
+    let record = |key: &[u32]| {
+        bincode::serialize(&(raw(key), b"x".to_vec())).expect("the raw record serializes")
+    };
+    for (shape, key) in [
+        ("a node address", &[1u32][..]),
+        ("an account address", &[1, 0, 1][..]),
+        ("a document address", &[1, 0, 1, 0, 1][..]),
+        ("a link-subspace element address", &[1, 0, 1, 0, 1, 0, 2, 1][..]),
+        ("a subspace-3 element address", &[1, 0, 1, 0, 1, 0, 3, 1][..]),
+    ] {
+        let addr = validate(t(key)).expect("T4-valid, so a release stage door admits it");
+        assert!(
+            addr.level() != Level::Element || addr.subspace() != Some(&content_subspace()),
+            "{shape} is routed to content, so routing would not stop it"
+        );
+        let decoded = bincode::deserialize::<ContentStore>(&slice(key))
+            .unwrap_or_else(|refusal| panic!("a slice holding {shape} was refused: {refusal}"));
+        assert_eq!(
+            decoded.value_at(addr.tumbler()).map(Val::as_bytes),
+            Some(&b"x"[..]),
+            "the slice decoded from {shape} does not hold it"
+        );
+        let decoded = bincode::deserialize::<ContentWrite>(&record(key))
+            .unwrap_or_else(|refusal| panic!("a record at {shape} was refused: {refusal}"));
+        assert_eq!(
+            decoded.addr(),
+            addr.tumbler(),
+            "the record decoded from {shape} carries another address"
+        );
+    }
+}
+
+/// Every ordering of `items`, each once: each item first, followed by every
+/// ordering of the rest — `n!` vectors for `n` items.
+fn every_order<T: Clone>(items: &[T]) -> Vec<Vec<T>> {
+    if items.is_empty() {
+        return vec![Vec::new()];
+    }
+    let mut orders = Vec::new();
+    for (i, first) in items.iter().enumerate() {
+        let mut rest = items.to_vec();
+        rest.remove(i);
+        for tail in every_order(&rest) {
+            let mut order = vec![first.clone()];
+            order.extend(tail);
+            orders.push(order);
+        }
+    }
+    orders
 }
 
 #[test]
 fn the_slice_decodes_its_entries_in_whatever_order_they_arrive() {
-    // store.rs and M4's interface: `Serialize` writes the entries in Tumbler
-    // order, and `Deserialize` takes them in any order — the map is rebuilt
-    // from whatever arrives, one entry at a time, so a body whose entries
-    // come in any order loads. Bytes carrying the entries in REVERSE Tumbler
-    // order decode to the slice that holds them.
+    // store.rs (`entry_by_entry`) and M4's interface: `Serialize` writes the
+    // entries in Tumbler order, and `Deserialize` takes them in any order —
+    // the map is rebuilt from whatever arrives, one entry at a time. "Any
+    // order" is a law over every arrival order, and one chosen order stands
+    // for none of the others: a decode can admit the sorted and the reversed
+    // body alike and still refuse one sorted but for its last two entries. So
+    // six entries arrive in each of their 720 orders, and each decodes to the
+    // slice holding them.
     let mut c = ContentStore::default();
-    let mut reversed: Vec<(Tumbler, Vec<u8>)> = Vec::new();
-    for ordinal in 1..=8u32 {
+    let mut entries: Vec<(Tumbler, Vec<u8>)> = Vec::new();
+    for ordinal in 1..=6u32 {
         let addr = ca(ordinal);
         let bytes = vec![b'0' + ordinal as u8];
         c = c.apply_write(&stage_write(&c, &addr, Val::new(bytes.clone())).expect("fresh"));
-        reversed.push((addr.tumbler().clone(), bytes));
+        entries.push((addr.tumbler().clone(), bytes));
     }
-    reversed.sort_by(|x, y| y.0.cmp(&x.0));
-    let back: ContentStore =
-        bincode::deserialize(&bincode::serialize(&reversed).expect("entries serialize"))
-            .expect("entries out of Tumbler order decode");
+    let orders = every_order(&entries);
     assert_eq!(
-        back, c,
-        "decoded from its entries in reverse order, the slice is not the one holding them"
+        orders.iter().collect::<std::collections::BTreeSet<_>>().len(),
+        720,
+        "the generator did not yield each of the 720 orders of six entries once"
     );
+    for order in &orders {
+        let arrival: Vec<String> =
+            order.iter().map(|(addr, _)| skep_address::ordinal(addr).to_string()).collect();
+        let back: ContentStore =
+            bincode::deserialize(&bincode::serialize(order).expect("entries serialize"))
+                .unwrap_or_else(|refusal| {
+                    panic!("entries arriving as ordinals {arrival:?} were refused: {refusal}")
+                });
+        assert_eq!(
+            back, c,
+            "decoded from entries arriving as ordinals {arrival:?}, the slice is not the one \
+             holding them"
+        );
+    }
 }
 
 // ---- M2-driven recovery across a checkpoint ----

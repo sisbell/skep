@@ -438,23 +438,22 @@ impl<'a> Analyzer<'a> {
                 let fp = ae.fp.union(self.slice_fp(tr.key(), Slice::of(view)));
                 Analysis { grow_only, st: false, sf: false, fp }
             }
-            Atom::IsFiltered(tr, e) => {
+            // BH1–BH3 at one class and one argument: each reads that class's
+            // FIXED active slice, so each is Neither whatever the argument — a
+            // deposit or a retraction there can move it. Which of them the
+            // evaluator UV-rewrites at `default` is `atom_moves_with_view`'s to
+            // say, its BH1 charge following the match.
+            Atom::IsFiltered(tr, e)
+            | Atom::Succs(tr, e)
+            | Atom::Chain(tr, e)
+            | Atom::Tip(tr, e)
+            | Atom::SourcesTo(tr, e)
+            | Atom::TargetOf(tr, e) => {
                 let ae = self.term(e);
                 state_read(ae.fp.union(self.slice_fp(tr.key(), Slice::Active)))
             }
-            // BH2/BH3 collections: fixed-active reads — Neither — which the
-            // evaluator UV-rewrites at `default`, the BH1 charge following the
-            // match.
-            Atom::Succs(tr, e) | Atom::Chain(tr, e) | Atom::SourcesTo(tr, e) => {
-                let ae = self.term(e);
-                state_read(ae.fp.union(self.slice_fp(tr.key(), Slice::Active)))
-            }
-            // Verdict/traversal atoms (tip/is_in_chain) and the single-target
-            // projection are never UV-rewritten: fixed active.
-            Atom::Tip(tr, e) | Atom::TargetOf(tr, e) => {
-                let ae = self.term(e);
-                state_read(ae.fp.union(self.slice_fp(tr.key(), Slice::Active)))
-            }
+            // BH2 chain membership: the same fixed active read, at two
+            // arguments.
             Atom::IsInChain(tr, x, y) => {
                 let ax = self.term(x);
                 let ay = self.term(y);
@@ -469,16 +468,9 @@ impl<'a> Analyzer<'a> {
                 fp.targets_keyed = true;
                 state_read(fp)
             }
-            // BH4: fixed active + the home-wide frontier. `age` is a
-            // projection the evaluator never UV-rewrites; the `stale`
-            // collection it does.
-            Atom::Age(tr, e) => {
-                let ae = self.term(e);
-                let mut fp = ae.fp.union(self.slice_fp(tr.key(), Slice::Active));
-                fp.home_frontier = true;
-                state_read(fp)
-            }
-            Atom::Stale(tr, e) => {
+            // BH4: a fixed active read plus the home-wide frontier, which any
+            // same-home deposit moves.
+            Atom::Age(tr, e) | Atom::Stale(tr, e) => {
                 let ae = self.term(e);
                 let mut fp = ae.fp.union(self.slice_fp(tr.key(), Slice::Active));
                 fp.home_frontier = true;

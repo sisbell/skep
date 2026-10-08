@@ -9,8 +9,8 @@
 //!
 //! THE DEF LAYER READS AT NO VISIBILITY CLASS, where the evaluator reads at
 //! guest class (lane 4.1): a def's registration is not a trigger read, so the
-//! two registration probes every gate and query asks — `ever_registered` and
-//! `actively_registered` — and `is_certified_stable`, `current_version` and
+//! two registration probes every gate and query asks — `is_ever_pred` and
+//! `is_active_pred` — and `is_certified_stable`, `current_version` and
 //! `retract_pred`'s target probe all read M7's `LinkState` directly, and a
 //! def registered into a draft home is ever-registered as it was — signed,
 //! resolvable and evaluable — while the look the evaluator reads through
@@ -165,31 +165,6 @@ impl<W: CoordinationWorld> Coordinator<W> {
             .find(|t| names(&t.from, start))
     }
 
-    /// Some `pdef` tuple, active or retracted, names `start` — the
-    /// ever-registration probe, [`Coordinator::tuple_naming`] at `Audit` (the
-    /// one `observe`-honors-`Audit` seam) off the world `w` of a pinned
-    /// snapshot, and AT NO VISIBILITY CLASS by design: a def's registration is
-    /// not a trigger read, so the look the evaluator reads through does not
-    /// apply, and a def registered into a draft home is ever-registered as it
-    /// was. Every ever-registration question in the crate asks it here (the
-    /// memo's derivation gate, the referent gate of `register_pred`,
-    /// `evaluate_def`, `is_ever_pred`).
-    fn ever_registered(&self, w: &W, start: &Address) -> bool {
-        self.tuple_naming(w, ShippedType::PredDef, start, View::Audit).is_some()
-    }
-
-    /// An ACTIVE `pdef` tuple names `start` — the endorsement probe, the
-    /// active twin of [`Coordinator::ever_registered`]:
-    /// [`Coordinator::tuple_naming`] at `Active`, off the world `w` of a
-    /// pinned snapshot, and AT NO VISIBILITY CLASS for the ever-probe's
-    /// reason — endorsement is a registration question, not a trigger read.
-    /// Every actively-registered question in the crate asks it here
-    /// (`register_pred`'s endorsement gate, `is_active_pred`, and through it
-    /// `certify_stable`'s leg).
-    fn actively_registered(&self, w: &W, start: &Address) -> bool {
-        self.tuple_naming(w, ShippedType::PredDef, start, View::Active).is_some()
-    }
-
     // ───────────── resolution: the DefMemo's memo-or-derive (§Internal 4) ─────────────
 
     /// Memo-or-derive at the top of a derivation chain — a status about the
@@ -247,11 +222,10 @@ impl<W: CoordinationWorld> Coordinator<W> {
     /// can only be a breach (content registered past the gate), and freezes.
     fn derive_def(&self, start: &Address, depth: u32) -> Result<DefStatus, DerivedTooDeep> {
         let snap = self.kernel.snapshot();
-        let w = snap.world();
-        if !self.ever_registered(w, start) {
+        if !self.is_ever_pred(start, &snap) {
             return Ok(DefStatus::NeverRegistered);
         }
-        let derived = match parse_def(w.content(), start) {
+        let derived = match parse_def(snap.world().content(), start) {
             // Nothing resident at `start` is no fact about its content: a run
             // may yet be minted there. Undisciplined — a `pdef` naming no def
             // is a breach — but no `ContentBreach`, so never memoized:
@@ -390,8 +364,8 @@ impl<W: CoordinationWorld> Coordinator<W> {
     /// Where several referents fail one of the two referent gates, the
     /// address carried is the FIRST in first-occurrence pre-order
     /// (`direct_referents`), which is the referent the design's walk order
-    /// reaches first. Both referent gates read at no visibility class, as
-    /// [`Coordinator::is_ever_pred`] and [`Coordinator::is_active_pred`] do:
+    /// reaches first. The two referent gates ARE [`Coordinator::is_ever_pred`]
+    /// and [`Coordinator::is_active_pred`] at σ, read at no visibility class:
     /// a referent registered into a draft home is ever-registered and
     /// endorsed.
     ///
@@ -427,7 +401,8 @@ impl<W: CoordinationWorld> Coordinator<W> {
         })?;
         // (iii) every referent ever-registered at σ.
         let referents = direct_referents(&signed.body);
-        if let Some(referent) = referents.iter().find(|referent| !self.ever_registered(w, referent))
+        if let Some(referent) =
+            referents.iter().find(|referent| !self.is_ever_pred(referent, &snap))
         {
             return Err(RegisterError::ReferentNotEverRegistered(referent.clone()));
         }
@@ -438,7 +413,7 @@ impl<W: CoordinationWorld> Coordinator<W> {
         let def = self.check_signed(signed, 0).map_err(RegisterError::IllTyped)?;
         // (iv) endorsement: every referent ACTIVELY registered at σ.
         if let Some(referent) =
-            referents.iter().find(|referent| !self.actively_registered(w, referent))
+            referents.iter().find(|referent| !self.is_active_pred(referent, &snap))
         {
             return Err(RegisterError::ReferentNotActive(referent.clone()));
         }
@@ -471,7 +446,7 @@ impl<W: CoordinationWorld> Coordinator<W> {
     /// a materialized flat term (Conflicts §5), and reads M7 at the term view
     /// `view` through the look at guest class (lane 4.1) — the look an
     /// `Inline` trigger is evaluated through — while the ever-registration
-    /// probe reads at no visibility class (`ever_registered`).
+    /// probe is [`Coordinator::is_ever_pred`], at no visibility class.
     ///
     /// A pure pin to `snap` for the DENOTATION: every structural read it
     /// makes is `snap`'s. The def's RESOLUTION is the memo's, which on a miss
@@ -488,7 +463,7 @@ impl<W: CoordinationWorld> Coordinator<W> {
         view: View,
         snap: &Snapshot<W>,
     ) -> Result<Value, EvalError> {
-        if !self.ever_registered(snap.world(), start) {
+        if !self.is_ever_pred(start, snap) {
             return Err(EvalError::NotEverRegistered);
         }
         let def = match self.def_status(start) {
@@ -511,29 +486,36 @@ impl<W: CoordinationWorld> Coordinator<W> {
     /// ever-registered start with nothing resident yet; an ever-registered
     /// start whose resident content is undisciplined answers `None` via a
     /// PERMANENT poisoned entry (freeze-on-breach, §Internal 4). No snapshot
-    /// parameter — the miss path pins its own; its ever-registration probe
-    /// reads at no visibility class, as [`Coordinator::is_ever_pred`] does, so
-    /// a def registered into a draft home answers `Some` though PL's
-    /// `is_K(pdef, ·)` does not see its tuple. A query: the memo it may fill
-    /// answers every later probe on THIS handle as this one was answered, and
-    /// every handle alike on the disciplined domain (the crate root states the
-    /// breach exception).
+    /// parameter — the miss path pins its own, and its ever-registration probe
+    /// is [`Coordinator::is_ever_pred`] on that pin, so a def registered into a
+    /// draft home answers `Some` though PL's `is_K(pdef, ·)` does not see its
+    /// tuple. A query: the memo it may fill answers every later probe on THIS
+    /// handle as this one was answered, and every handle alike on the
+    /// disciplined domain (the crate root states the breach exception).
     pub fn signature(&self, start: &Address) -> Option<Signature> {
         self.resolve_def_at(start, 0).ok().map(|def| def.signature())
     }
 
-    /// An active `pdef` tuple names `start` — matched by `start`'s coverage
-    /// class, never by covering it, and read at no visibility class
-    /// (`actively_registered`).
-    pub fn is_active_pred(&self, start: &Address, snap: &Snapshot<W>) -> bool {
-        self.actively_registered(snap.world(), start)
+    /// A `pdef` tuple, active or retracted, names `start` — one whose F has
+    /// `start`'s coverage class, never one whose F merely covers it — read off
+    /// `snap` AT NO VISIBILITY CLASS: a def's registration is not a trigger
+    /// read, so a def registered into a draft home is ever-registered as it
+    /// was, though PL's `is_K(pdef, ·)` does not see its tuple. The one
+    /// ever-registration probe: [`Coordinator::evaluate_def`]'s gate,
+    /// [`Coordinator::register_pred`]'s referent gate,
+    /// [`Coordinator::supersede`]'s up-front gate and every derivation of a
+    /// def's signature ask it.
+    pub fn is_ever_pred(&self, start: &Address, snap: &Snapshot<W>) -> bool {
+        self.tuple_naming(snap.world(), ShippedType::PredDef, start, View::Audit).is_some()
     }
 
-    /// A `pdef` tuple, active or retracted, names `start` — matched by
-    /// `start`'s coverage class, never by covering it, and read at no
-    /// visibility class (`ever_registered`).
-    pub fn is_ever_pred(&self, start: &Address, snap: &Snapshot<W>) -> bool {
-        self.ever_registered(snap.world(), start)
+    /// An ACTIVE `pdef` tuple names `start` — the endorsement probe, the active
+    /// twin of [`Coordinator::is_ever_pred`]: matched by `start`'s coverage
+    /// class and read off `snap` at no visibility class, as that probe is.
+    /// [`Coordinator::register_pred`]'s endorsement gate and
+    /// [`Coordinator::certify_stable`]'s activity leg ask it.
+    pub fn is_active_pred(&self, start: &Address, snap: &Snapshot<W>) -> bool {
+        self.tuple_naming(snap.world(), ShippedType::PredDef, start, View::Active).is_some()
     }
 
     /// Register `new_term` (through `define_predicate`) and record old→new

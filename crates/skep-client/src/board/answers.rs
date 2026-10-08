@@ -56,6 +56,138 @@ pub(crate) fn first_atom(v: &Value) -> Option<Vec<u8>> {
     crate::hex::decode(item["atom_hex"].as_str()?)
 }
 
+/// One item of a `delivery`, as the wire types it (wire.md §Value
+/// encodings) and before the search index's own typing: a `content` item's
+/// bytes or a `hex` run's, an `atom`/`atom_hex` at one position, a
+/// `withheld` run at its width with its origin, and an item kind this crate
+/// does not know, kept at the width it carries by the wire's forward rule.
+#[cfg_attr(not(feature = "search"), allow(dead_code))]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum Delivered {
+    /// One `content` item's UTF-8 bytes, or a `hex` run's bytes: one per
+    /// position.
+    Text(Vec<u8>),
+    /// An `atom` or `atom_hex`: one position, a composite value.
+    Atom,
+    /// A `withheld` run: `width` positions, the origin document's address.
+    Withheld { origin: String, width: u64 },
+    /// A kind this crate does not know, at the width it carries (1 where it
+    /// carries none).
+    Unknown { width: u64 },
+}
+
+/// A `delivery`'s items in order with its `as_of` (wire.md §The response
+/// envelope) — the feed consumer's read of a document's content, each item
+/// typed as [`Delivered`]; `None` for a document that is no delivery, or
+/// one whose `hex` run does not parse.
+#[cfg_attr(not(feature = "search"), allow(dead_code))]
+pub(crate) fn delivery(v: &Value) -> Option<(Vec<Delivered>, u64)> {
+    if v["resp"].as_str() != Some("delivery") {
+        return None;
+    }
+    let as_of = v["as_of"].as_u64()?;
+    let mut items = Vec::new();
+    for item in v["items"].as_array()? {
+        let typed = if let Some(text) = item["content"].as_str() {
+            Delivered::Text(text.as_bytes().to_vec())
+        } else if let Some(hex) = item["hex"].as_str() {
+            Delivered::Text(crate::hex::decode(hex)?)
+        } else if item.get("atom").is_some() || item.get("atom_hex").is_some() {
+            Delivered::Atom
+        } else if let Some(w) = item.get("withheld") {
+            let width = w["width"].as_str().and_then(|w| w.parse().ok())?;
+            Delivered::Withheld { origin: w["origin"].as_str()?.to_string(), width }
+        } else {
+            let width = item["width"].as_str().and_then(|w| w.parse().ok()).unwrap_or(1);
+            Delivered::Unknown { width }
+        };
+        items.push(typed);
+    }
+    Some((items, as_of))
+}
+
+/// A `doc_metadata` answer's `published` bit (wire.md §Namespace); `None`
+/// for a document that is no such answer — a rejection among them.
+#[cfg_attr(not(feature = "search"), allow(dead_code))]
+pub(crate) fn published(v: &Value) -> Option<bool> {
+    (v["resp"].as_str() == Some("doc_metadata")).then(|| v["published"].as_bool()).flatten()
+}
+
+/// A `universal_grants` answer's rows (wire.md §Grants): each covered
+/// prefix with the issuers who granted it, in the order served; empty for a
+/// guest and for a document that is no such answer.
+#[cfg_attr(not(feature = "search"), allow(dead_code))]
+pub(crate) fn universal_rows(v: &Value) -> Vec<(&str, Vec<&str>)> {
+    v["rows"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|row| {
+            let prefix = row["prefix"].as_str()?;
+            let issuers = row["issuers"].as_array().into_iter().flatten().filter_map(Value::as_str).collect();
+            Some((prefix, issuers))
+        })
+        .collect()
+}
+
+/// A `skep-head` record's `(position, chain)` pair (wire.md §The other
+/// endpoints) off the delivery of a head member's first atom — the pair an
+/// `H.k` names, re-read byte-equal at the resume (`search.md` §5.4);
+/// `None` where the delivery holds no such record.
+#[cfg_attr(not(feature = "search"), allow(dead_code))]
+pub(crate) fn head_pair(v: &Value) -> Option<(u64, [u8; 32])> {
+    let bytes = first_atom(v)?;
+    let rec: Value = serde_json::from_slice(&bytes).ok()?;
+    if rec["type"].as_str() != Some("skep-head") {
+        return None;
+    }
+    Some((rec["position"].as_u64()?, rec["chain"].as_str().and_then(crate::hex::decode32)?))
+}
+
+/// One pair of a `compare` answer (wire.md §The response envelope): a shared
+/// run of `width` positions at content ordinal `u1` in `d1` and `u2` in `d2`
+/// — the jump's landing rule reads these (`search.md` §3.4).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Correspondence {
+    /// The first operand's document.
+    pub d1: String,
+    /// The second operand's document.
+    pub d2: String,
+    /// The run's first content ordinal in `d1`.
+    pub u1: u64,
+    /// The run's first content ordinal in `d2`.
+    pub u2: u64,
+    /// The run's positions.
+    pub width: u64,
+}
+
+/// A `compare` answer's pairs, in the order served, each over the content
+/// subspace; `None` for a document that is no such answer, or one whose
+/// pair names another subspace or does not parse — the landing rule reads a
+/// whole answer or none.
+#[cfg_attr(not(feature = "search"), allow(dead_code))]
+pub(crate) fn compare_pairs(v: &Value) -> Option<Vec<Correspondence>> {
+    if v["resp"].as_str() != Some("compare") {
+        return None;
+    }
+    let ordinal = |p: &Value| -> Option<u64> {
+        (p["subspace"].as_str() == Some("1")).then(|| p["ordinal"].as_str()?.parse().ok()).flatten()
+    };
+    v["pairs"]
+        .as_array()?
+        .iter()
+        .map(|pair| {
+            Some(Correspondence {
+                d1: pair["d1"].as_str()?.to_string(),
+                d2: pair["d2"].as_str()?.to_string(),
+                u1: ordinal(&pair["u1"])?,
+                u2: ordinal(&pair["u2"])?,
+                width: pair["width"].as_str()?.parse().ok()?,
+            })
+        })
+        .collect()
+}
+
 /// The number of content positions a `retrieve_doc_v_span_set` answer
 /// arranges — the width of its span at the content subspace's first
 /// position, `1.1` — and 0 where no content stands.

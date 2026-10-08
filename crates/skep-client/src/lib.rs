@@ -73,10 +73,26 @@
 //!   `rotate`, `handoff`, `accept`. A walk names compositions and never
 //!   another walk.
 //!
+//! Behind the default-OFF `search` feature — the SHELL's half of search
+//! (`client.md` §4e; the index itself is `skep-search`'s):
+//!
+//! * [`search`] — the feed consumer over `/changes` (one read per changed
+//!   document per poll, in parts past the delivery budget, at the class the
+//!   index takes), the index directory beside the key store (the modes, the
+//!   lock, the save by rename, the aside), the resume at open, the session's
+//!   triggers (widen, narrow, the refresh, the forget), the document index
+//!   the plane reads, the state event's ten arms as a typed enum, the bridge
+//!   call that composes the pair, and the jump's landing rule. A library API
+//!   an embedder calls — the `skep` command one embedder, the shell the
+//!   other — and nothing in it assumes a page or a webview.
+//!
 //! No async runtime, no HTTP crate, no argument-parsing crate (§1.1's
 //! dependency paragraph). The fence (§1.1): this crate reads no content save
 //! the credential records the admitted read names and `H.1`'s pair;
-//! `Board::op` is a general frame pipe for its embedders.
+//! `Board::op` is a general frame pipe for its embedders. The fence is a
+//! statement about the DEFAULT build: the `search` module, OFF by default,
+//! is §4e's consumer and makes its reads only where an embedder turns the
+//! feature on, as the frontend's shell does.
 
 #![forbid(unsafe_code)]
 
@@ -104,6 +120,9 @@ pub mod store;
 #[cfg(feature = "acting")]
 pub mod verify;
 
+#[cfg(feature = "search")]
+pub mod search;
+
 pub use board::{Board, Health, KeySet, Token};
 pub use dial::{DialError, Dialer, PlainHttp, Request, Response};
 pub use halt::{Blocked, Face, Halt, Refused};
@@ -130,4 +149,26 @@ const _: fn() = || {
     assert_send_sync::<Box<dyn sign::Signer>>();
     assert_send_sync::<store::FileStore>();
     assert_send_sync::<ceremony::handshake::Session<'static>>();
+};
+
+/// The search half's promises (`search.md` §5.6): the consumer stands
+/// between the feed thread that writes and the bridge's search thread that
+/// reads, so it and every value that crosses its lock owe `Send + Sync`.
+#[cfg(feature = "search")]
+const _: fn() = || {
+    fn assert_send_sync<T: Send + Sync>() {}
+    fn assert_send<T: Send>() {}
+    assert_send_sync::<search::Consumer<'static>>();
+    // The stream's reader lives on the one thread that loops over it, and
+    // moves there.
+    assert_send::<search::Events<'static>>();
+    assert_send_sync::<search::Stop>();
+    assert_send_sync::<search::SearchDir>();
+    assert_send_sync::<search::State>();
+    assert_send_sync::<search::SearchAnswer>();
+    assert_send_sync::<search::Place>();
+    assert_send_sync::<search::Landing>();
+    assert_send_sync::<search::QueryTooLong>();
+    assert_send_sync::<search::Poll>();
+    assert_send_sync::<search::Orphan>();
 };

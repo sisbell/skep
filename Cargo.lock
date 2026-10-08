@@ -1264,6 +1264,7 @@ dependencies = [
  "skep-identity",
  "skep-namespace",
  "skep-resolve",
+ "skep-search",
  "skep-signature",
  "skepd",
  "tempfile",

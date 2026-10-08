@@ -7,7 +7,9 @@
 //! scripted `Person`, the compositions by their own calls; another hand is
 //! the wire transcript re-driven (`common`'s `wire_*`), never a ceremony.
 //! Two need no daemon: `backup`, the moment alone, and `tidy`, which reads
-//! the crate's own source for the arrangement it promises.
+//! the crate's own source for the arrangement it promises. `search` drives
+//! the `search` module — the feature the self dev-dependency turns on —
+//! over a claimed board, its fixture its own.
 
 mod backup;
 mod claim;
@@ -20,5 +22,6 @@ mod loss;
 mod recover;
 mod retire;
 mod rotate;
+mod search;
 mod tidy;
 mod verifier;

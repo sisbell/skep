@@ -118,6 +118,54 @@ pub fn recording_board(origin: Origin) -> (Board, Arc<Mutex<Vec<String>>>) {
     (board, log)
 }
 
+/// One request a [`Traced`] dialer served: the recording dialer's line,
+/// whether `Skepd-Session` rode it, and the body — so a test pins the CLASS
+/// a read was made at and what its body carried.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Trace {
+    pub line: String,
+    pub token: bool,
+    pub body: Vec<u8>,
+}
+
+/// THE TRACING DIALER: [`Recording`]'s line beside the token's presence and
+/// the body, for the search suites' fence tests — the published index fed
+/// token-free, the supplement under the session's token, no body carrying a
+/// query's words.
+pub struct Traced {
+    inner: PlainHttp,
+    pub traces: Arc<Mutex<Vec<Trace>>>,
+}
+
+impl Dialer for Traced {
+    fn exchange(&self, origin: &Origin, req: &Request) -> Result<Response, DialError> {
+        let mut line = format!("{} {}", req.method.as_str(), req.path);
+        if req.path == "/op" || req.path == "/op-at" {
+            if let Ok(v) = serde_json::from_slice::<Value>(&req.body) {
+                let op = v["op"].as_str().or_else(|| v["frame"]["op"].as_str()).unwrap_or("?");
+                line.push(' ');
+                line.push_str(op);
+            }
+        }
+        let token = req.headers.iter().any(|(k, _)| k.eq_ignore_ascii_case("Skepd-Session"));
+        self.traces.lock().expect("traces").push(Trace { line, token, body: req.body.clone() });
+        self.inner.exchange(origin, req)
+    }
+
+    fn stream(&self, origin: &Origin, head: &RequestHead, body: &mut dyn Read, on_interim: &mut dyn FnMut(&Headers)) -> Result<StreamedResponse, DialError> {
+        let token = head.headers.iter().any(|(k, _)| k.eq_ignore_ascii_case("Skepd-Session"));
+        self.traces.lock().expect("traces").push(Trace { line: format!("{} {} (stream)", head.method.as_str(), head.path), token, body: Vec::new() });
+        self.inner.stream(origin, head, body, on_interim)
+    }
+}
+
+/// A board over the tracing dialer, and its traces.
+pub fn traced_board(origin: Origin) -> (Board, Arc<Mutex<Vec<Trace>>>) {
+    let traces = Arc::new(Mutex::new(Vec::new()));
+    let board = Board::new(origin, Traced { inner: PlainHttp::new(), traces: traces.clone() });
+    (board, traces)
+}
+
 /// THE REDIRECT: every request, in both forms, carried to the daemon at `to`
 /// through the plain arm, whatever origin the board dials — so a board
 /// dialed at a SERVED origin reads the in-process daemon, and a walk meets
@@ -339,4 +387,71 @@ impl Person for Hooked {
 /// `Signer::fingerprint` on a hybrid signer, disambiguated.
 pub fn fp_of(signer: &HybridSigner) -> Fingerprint {
     Signer::fingerprint(signer)
+}
+
+// ── THE SEARCH SUITES' BOARD ─────────────────────────────────────────────
+//
+// A claimed board in CLAIMED-PERMISSIVE mode, so bare sessions still write
+// drafts on loopback and the claimant's bare session mints and fills the
+// documents the index reads back; the claimant's device key opens the
+// signed sessions the search half takes.
+
+/// A BARE session as `principal` — the per-byte writes' door on a
+/// permissive board.
+pub fn bare(board: &Board, principal: u64) -> Token {
+    match board.session_open(SessionBody::Bare { principal }).expect("bare session") {
+        Opened::Token(t) => t,
+        other => panic!("the bare bind answered {other:?}"),
+    }
+}
+
+/// `create_new_document` into `account` from `token`'s session — a private
+/// draft, or a published document with `published`; the minted address.
+pub fn mint(board: &Board, token: &Token, account: &str, published: bool) -> String {
+    let mut frame = serde_json::json!({"op": "create_new_document", "account": account});
+    if published {
+        frame["published"] = Value::Bool(true);
+    }
+    let Answer::Document(v) = board.op(Some(token), &frame).expect("mint") else { panic!("closed") };
+    acked_addr(&v).unwrap_or_else(|| panic!("the mint was refused: {v}")).to_string()
+}
+
+/// `insert` of `text` PER-BYTE at content ordinal `ordinal` of `doc` — the
+/// `str` form, one single-byte value per byte (wire.md §Value encodings) —
+/// as the budgets suite feeds its board; the ack's position.
+pub fn insert_text(board: &Board, token: &Token, doc: &str, ordinal: u64, text: &str) -> u64 {
+    let frame = serde_json::json!({"op": "insert", "doc": doc, "at": {"subspace": "1", "ordinal": ordinal.to_string()}, "values": [text]});
+    let Answer::Document(v) = board.op(Some(token), &frame).expect("insert") else { panic!("closed") };
+    skep_client::board::acked_at(&v).unwrap_or_else(|| panic!("the insert was refused: {v}"))
+}
+
+/// A grant-typed link in `home_doc1` from `token`'s SIGNED session: `from`
+/// the content prefix, `to` the grantee account — or every bound principal
+/// where `None` (wire.md §The read predicate). The link's address, or the
+/// refusal.
+pub fn wire_grant(board: &Board, token: &Token, home_doc1: &str, from: &str, to: Option<&str>) -> Result<String, String> {
+    let to: Vec<&str> = to.into_iter().collect();
+    let Answer::Document(v) = board.op(Some(token), &frames::make_link(home_doc1, &[from], &to, T_GRANT, None)).expect("grant") else { return Err("closed".into()) };
+    acked_addr(&v).map(str::to_string).ok_or_else(|| v.to_string())
+}
+
+/// The GRANTS class type address (wire.md §The read predicate).
+pub const T_GRANT: &str = "1.1.0.1.0.1.0.3.90";
+
+/// A sub-account of the claimant's delegated and keyed: `1.0.1.<n>` minted
+/// from the claimant's session and its first key — `signer` — enrolled by
+/// the claimant's ANCHOR, a handoff's genesis homed in the claimant's doc 1
+/// (AUTH-5.90; the recovery suite's shape). Answers the new account.
+pub fn keyed_sub_account(board: &Board, anchors: &Path, owner: &HybridSigner, n: u64, new_id: u64, signer: &HybridSigner, label: &str) -> String {
+    let account = format!("1.0.1.{n}");
+    let as_owner = wire_session(board, 1, owner);
+    wire_delegate(board, &as_owner, &account, new_id).expect("delegated");
+    board.session_close(&as_owner).unwrap();
+    let (_, anchor) = anchor_file(anchors, "a");
+    let anchor = anchor.signer();
+    let as_anchor = wire_session(board, 1, &anchor);
+    let entry = Enrollment::new(HybridSigner::public_key(signer).clone(), false, Some(label.into())).expect("a label");
+    wire_enroll(board, &as_anchor, &anchor, "1.0.1.0.1", &account, &[entry]).expect("the genesis");
+    board.session_close(&as_anchor).unwrap();
+    account
 }

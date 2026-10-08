@@ -59,6 +59,36 @@ pub fn read_link(a: &str) -> Value {
     json!({"op": "read_link", "a": a})
 }
 
+/// `{"op":"doc_metadata","doc":…}` (wire.md §Namespace; PUB-8.12): the
+/// publication bit and the chain's facts of `doc` — a version member answers
+/// its document's state, an unregistered address `doc_not_registered`,
+/// which is how the feed consumer probes a trunk's members (`search.md`
+/// §2.4).
+pub fn doc_metadata(doc: &str) -> Value {
+    json!({"op": "doc_metadata", "doc": doc})
+}
+
+/// `{"op":"universal_grants"}` (wire.md §Grants; PUB-8.47): the
+/// any-principal discovery read, run beside the principal-keyed grant query
+/// at every poll of the feed consumer (`client.md` §4e.3; R90 (b)).
+pub fn universal_grants() -> Value {
+    json!({"op": "universal_grants"})
+}
+
+/// One region of a `compare` operand: content ordinals `from ..` of `doc`,
+/// `width` of them.
+pub fn region(doc: &str, from: u64, width: u64) -> Value {
+    json!({"doc": doc, "spans": [{"start": format!("1.{from}"), "width": format!("0.{width}")}]})
+}
+
+/// `{"op":"compare","rho1":[…],"rho2":[…]}` (wire.md §Content & provenance
+/// reads): the shared-content correspondence between two region sets, each
+/// a list of [`region`]s — the jump's one read (`search.md` §3.4), its
+/// `rho1` the BAND the page composes and never the hit's span.
+pub fn compare(rho1: &[Value], rho2: &[Value]) -> Value {
+    json!({"op": "compare", "rho1": rho1, "rho2": rho2})
+}
+
 /// A DECLARED deposit of one atom into `doc` at `ordinal` (AUTH-5.4;
 /// PUB-2.64): `deposit` naming the record's class TYPE address.
 pub fn insert_atom(doc: &str, ordinal: u64, atom: &str, deposit_type: &str, id: Option<&str>) -> Value {

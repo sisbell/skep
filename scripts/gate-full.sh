@@ -90,10 +90,13 @@ cargo check -p skep-search || exit $?
 # skep-client's two halves and the sidecar's binary, none of which the full
 # run below makes: the READING half alone (`acting` off — no signer, no
 # store, no ceremony: what a daemon embedding the dialer would take), the
-# ACTING half explicitly, and the `skep` binary without `tls` (the sidecar
-# image's build).
+# ACTING half explicitly, the SEARCH half — `search`, default-off, the shell's
+# feed consumer over skep-search, which the test run below compiles only
+# through the crate's self dev-dependency — and the `skep` binary without
+# `tls` (the sidecar image's build).
 cargo check -p skep-client --lib --no-default-features || exit $?
 cargo check -p skep-client --lib --features acting || exit $?
+cargo check -p skep-client --lib --features search || exit $?
 cargo check -p skep-cli --bins --no-default-features || exit $?
 
 # The feature edges the full run below never compiles: `client` is

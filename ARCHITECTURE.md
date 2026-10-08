@@ -171,14 +171,18 @@ foundation and on the stores above it.
   ceremony, the compositions every later ceremony runs over, and the
   ceremonies over them — the retirement preview with its reach, the anchor
   import, the device and loss arms of recovery, retirement, rotation with
-  its supersession trail, and the handoff door's two walks. Of the
-  skep crates it depends on `skep-address`, `skep-identity`,
-  `skep-signature` and `skep-resolve` alone — never `skepd`, which does
-  not depend on it either (its suite spawns the daemon as a
-  dev-dependency). Three features: `acting` (default on) gates everything
-  that signs or holds a key; `tls` (default off) the `https://` arm;
-  `test-hooks` (default off) the scripted person a suite drives. Its
-  modules and rules: §The client.
+  its supersession trail, and the handoff door's two walks — and, behind
+  its `search` feature, the SHELL's HALF of search over `skep-search`: the
+  feed consumer, the index directory, the resume, the session's triggers,
+  the document index, the state event's arms, the bridge call and the
+  jump's landing rule. Of the skep crates it depends on `skep-address`,
+  `skep-identity`, `skep-signature`, `skep-resolve` and — optional, behind
+  `search` — `skep-search` alone — never `skepd`, which does not depend on
+  it either (its suite spawns the daemon as a dev-dependency). Four
+  features: `acting` (default on) gates everything that signs or holds a
+  key; `tls` (default off) the `https://` arm; `test-hooks` (default off)
+  the scripted person a suite drives; `search` (default off, implies
+  `acting`) the `search` module. Its modules and rules: §The client.
 - `skep-cli` — the `skep` command over `skep-client`, thirteen commands:
   `keygen`, `claim`, `session`, `fingerprint`, `verify`, `health`, `bind`,
   `enroll`, `recover`, `retire`, `rotate`, `handoff`, `accept`; flag
@@ -586,8 +590,9 @@ as the class the embedder passes it, and reads and writes no file but
 through the `Read` and `Write` the embedder hands it; the FRONTEND's shell
 embeds it beside `skep-client`, and the shell's half — the feed consumer,
 the directory, the triggers, the bridge call, the state event — is
-`client.md` §4e's. Its modules are declared in `src/lib.rs`, each with a
-line saying what it holds. `unit` — the document
+`client.md` §4e's, built as `skep-client`'s `search` module behind its
+default-off `search` feature (lane SH; §The client). Its modules are
+declared in `src/lib.rs`, each with a line saying what it holds. `unit` — the document
 model (§2.1, §2.4): `Unit`, one document version's arranged content
 delivered in parts under `MAX_DELIVERY_ITEMS` and JOINED, adjacent text
 items becoming one so a character split at a part's edge is whole again;
@@ -717,9 +722,11 @@ Rules that hold across its files:
   change" being the owner's decision. The two rows the design asserts
   (M7's tree, the fuzzy row's flag) assert; without the corpus every
   budget test prints one skip line and passes.
-- **The surface grows by lane, against these names.** The embedding — the
-  feed consumer, the bridge call that composes the pair, the refreshes,
-  the jump's landing — is the shell's. The crate's `README.md` lists it.
+- **The embedding is the shell's, and lands in `skep-client`.** The feed
+  consumer, the bridge call that composes the pair, the refreshes and the
+  jump's landing are `skep-client`'s `search` module (§The client), which
+  takes this crate as an optional dependency; this crate gains nothing for
+  them. The crate's `README.md` says what remains outside both.
 
 Its unit suites sit beside their code: `unit/tests.rs` (the join, the item
 table's binary search, the contiguity refusal, the head rule),
@@ -804,6 +811,26 @@ each ceremony:
   `recover.rs` the device arm, its loss arm in `recover/loss.rs`;
   `retire.rs`; `rotate.rs`; `handoff.rs` the giver's walk; `accept.rs`
   the recipient's beat.
+- Under `search` (default off; the design's `client.md` §4e) — THE SHELL's
+  HALF of search over `skep-search`, standing BESIDE the ceremonies and
+  naming none: `search.rs` the module and its rules; `search/directory.rs`
+  `<data>/index/<chain>/` — the modes, the feeder's `flock`, the save by
+  `.tmp` and rename, the aside that never overwrites; `search/consumer.rs`
+  the `Consumer` — the open with the aside check and the resume over
+  `GET /chain?at` and the `H.k` re-read, the poll (the `/health` pair
+  before the drain, one read per changed document per poll in parts, the
+  class rule by face, the trunk probe, the straddled draft's pending
+  join, the bare rows, the recorded refusals, `held` the fenced pair), the
+  cadence's save with its compaction, the triggers `widen`/`narrow`, the
+  refresh, the orphan test and the forget, and `events`, the `/events`
+  stream as the loop's input; `search/places.rs` the document index's one
+  part, a file per part beside its index (P39); `search/state.rs` the
+  state event's ten arms as a typed enum and their one composition order;
+  `search/bridge.rs` the bridge call — the query's bound, the pair by
+  role, `places` at the call's class with a standing at the document
+  grain; `search/jump.rs` the landing rule over a `compare` answer's pairs
+  — its unit suite in `search/tests.rs` over a scripted board, its
+  daemon suites in `tests/it/search/`.
 
 Rules that hold across its files:
 
@@ -839,20 +866,41 @@ Rules that hold across its files:
 - **No journal.** Every walk resumes by reading the board (P4); the one
   kind of line written ahead of a frame is the persist-first `new_id`
   binding line (§4.3; AUTH-5.20).
+- **The search half feeds under one lock and reads at one class per
+  index** (`search.md` §4, §5.6). The `Consumer` is the one writer of a
+  board's directory — the feeder's `flock` for its life, a second process
+  refused as busy — and its mutating calls serialize on one feed mutex,
+  while `search` and `state` read under the read side of the one
+  read-write lock around the engines: `prepare` outside it, `merge` under
+  the write side, `compacted` under the read side then `install` under the
+  write side. The published index is fed by token-free reads alone and a
+  supplement by its session's, so the crate's class check never fires; a
+  range's `held` advances only behind a whole page, as the `/health` pair
+  read before the drain or `GET /chain?at` at a save no drain fenced; no
+  read the consumer makes carries a query term, and the bridge call dials
+  nothing.
 
 | Feature | Default | Adds | Compiled by the gate |
 |---|---|---|---|
 | `acting` | on | `sign`, `sheet`, `store`, `person`, `derive::records`, `verify`, `resolve`, `ceremony`; `skep-signature`'s `sign` | every default build; `scripts/gate-full.sh` checks the library without it (the reading half) and with it alone |
 | `tls` | off | the dialer's `https://` arm over rustls and the platform verifier | `skep-cli`'s default build; `scripts/gate-full.sh` checks the `skep` binary without it |
 | `test-hooks` | off | implies `acting`; `person::scripted` | every test build (the crate's self dev-dependency, and `skep-cli`'s dev-dependency); `scripts/gate-full.sh`'s `--features acting` check builds the library without it, and `tests/it/tidy.rs` checks its gate |
+| `search` | off | implies `acting`; the `search` module and the optional `skep-search` dependency | every test build of this crate (the self dev-dependency turns it on, so the search suites run under the workspace gate); `scripts/gate-full.sh` checks the library with it alone, and `tests/it/tidy.rs` checks that `pub mod search;` is gated and the feature off by default |
 
 Its integration suite is one binary, `tests/it/`: the walks driven through
 the scripted person against a daemon spawned in-process, another hand's
 acts re-driven over the wire (`common::wire_*`) and never by a ceremony;
-`backup`, the moment with no daemon; and `tidy`, the arrangement above.
-Its unit suites pin what a composition sends and what it makes of each
-answer with no daemon, over `board/fake.rs`'s fake board, which answers
-each request by the test's own closure and keeps every request it served.
+`backup`, the moment with no daemon; `tidy`, the arrangement above and the
+two feature gates; and `search/` — the class fence, the two principals'
+separation and the events stream (`consumer`), `history_reclaimed` reached
+through the daemon's checkpoint seam (`resume`), the orphan walk and the
+forget (`directory`), the query crossing nothing and the jump's band
+(`bridge`) — over a claimed board whose published text the attested shot
+mints. Its unit suites pin what a composition sends and what it makes of
+each answer with no daemon, over `board/fake.rs`'s fake board, which
+answers each request by the test's own closure and keeps every request it
+served; the search module's over a scripted board of its own
+(`search/tests.rs`).
 
 ## The command, `skep-cli`
 
@@ -1756,7 +1804,11 @@ imports it.
   the design's corpus to a dev board through the client's frames and reads
   it back as the shell does, so the index is measured on units that came
   through the wire — the index's library depends on neither (`search.md`
-  §1.3, §7.3).
+  §1.3, §7.3). `skep-client`'s normal dependency on `skep-search`, behind
+  its `search` feature, points DOWN — `skep-search` stands before it in
+  the map — while `skep-search`'s dev-dependency on `skep-client` is the
+  upward one just named, a dev-cycle Cargo admits: the two libraries never
+  depend on each other both ways.
 - **The client reproduces the daemon's grammars under their rules, never
   its code.** `skep-client` holds its own `Origin::parse`, held to the
   daemon's vector set by a test and never imported from `skepd`; the

@@ -63,13 +63,15 @@
 //!   answers judged as a pure function, [`Resume::judge`] over a
 //!   [`ChainAnswer`] the shell fills.
 //!
-//! What later lanes add, so this surface reads as §1.4 whole but for them:
-//! §7's timing tests, reported (lane SR-4); the shell's embedding — the feed
-//! consumer, the directory, the file modes, the lock, the moving aside, the
-//! `/health` and `/chain?at` reads, the state event, the bridge call that
-//! composes the pair and forwards the flags (`client.md` §4e; lane SH). The
-//! crate's `README.md` lists the same, and `ARCHITECTURE.md` §The search
-//! index the rules below.
+//! This surface is §1.4 whole; §7's timing tests are measured and reported
+//! (lane SR-4); and the shell's embedding — the feed consumer, the
+//! directory, the file modes, the lock, the moving aside, the `/health` and
+//! `/chain?at` reads, the state event, the bridge call that composes the
+//! pair and forwards the flags (`client.md` §4e) — is landed as
+//! `skep-client`'s `search` module behind its default-off `search` feature
+//! (lane SH), which takes this crate as an optional dependency. The crate's
+//! `README.md` says what remains outside both crates, and `ARCHITECTURE.md`
+//! §The search index the rules below.
 //!
 //! ## Rules that hold across its files
 //!

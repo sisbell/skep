@@ -17,6 +17,10 @@
 //!
 //! THE SCRIPTED PERSON, GATED: `person::scripted` compiles only under the
 //! `test-hooks` feature (or `test`) — the second test below.
+//!
+//! THE SEARCH HALF, GATED: `search` compiles only under the `search` feature
+//! — OFF by default, so the default build exports no feed consumer and
+//! `client.md` §1.1's fence holds of it as written — the third test below.
 
 use std::path::{Path, PathBuf};
 
@@ -97,6 +101,34 @@ fn the_scripted_person_compiles_only_under_test_hooks() {
         .expect("src/person.rs declares `mod scripted;`: the declaration this check reads has moved");
     let gated = lines[..at].iter().rev().take_while(|l| l.trim_start().starts_with("#[")).any(|l| is_gate(l.trim()));
     assert!(gated, "src/person.rs:{}: `{}` compiles without `test-hooks`", at + 1, lines[at].trim());
+}
+
+/// THE SEARCH HALF, GATED (`client.md` §1.1, §4e; the `search` feature's
+/// card in `Cargo.toml`): `pub mod search;` in `src/lib.rs` is gated on the
+/// `search` feature, which the manifest leaves OFF by default, so the
+/// default build of the library exports no `search` module — no feed
+/// consumer, no content read — and the shell turns it on as it turns `tls`
+/// on. The gate's `--no-default-features` and `--features acting` checks
+/// prove the library COMPILES without it; this test proves the module is
+/// not IN it.
+#[test]
+fn the_search_module_compiles_only_under_the_search_feature_which_is_off_by_default() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    assert!(root.join("src/search.rs").is_file(), "src/search.rs: the module this check reads has moved");
+    let text = std::fs::read_to_string(root.join("src/lib.rs")).unwrap();
+    let lines: Vec<&str> = text.lines().collect();
+    let at = lines
+        .iter()
+        .position(|l| l.trim() == "pub mod search;")
+        .expect("src/lib.rs declares `pub mod search;`: the declaration this check reads has moved");
+    let gate = lines[..at].iter().rev().take_while(|l| l.trim_start().starts_with("#[")).find(|l| l.contains(r#"feature = "search""#) && l.trim().starts_with("#[cfg(") && !l.contains("not("));
+    assert!(gate.is_some(), "src/lib.rs:{}: `pub mod search;` compiles without the `search` feature", at + 1);
+    let manifest = std::fs::read_to_string(root.join("Cargo.toml")).unwrap();
+    let default = manifest.lines().find(|l| l.trim_start().starts_with("default =")).expect("a `default` feature line");
+    assert!(!default.contains("search"), "Cargo.toml: `search` is on by default: {default}");
+    assert!(manifest.lines().any(|l| l.trim_start().starts_with("search = [") && l.contains("\"acting\"") && l.contains("dep:skep-search")), "Cargo.toml: the `search` feature implies `acting` and turns the optional skep-search on");
+    let search_dep = manifest.lines().find(|l| l.trim_start().starts_with("skep-search = {") && l.contains("optional = true")).expect("skep-search is an OPTIONAL normal dependency");
+    let _ = search_dep;
 }
 
 /// Where a module stands against the ceremony.

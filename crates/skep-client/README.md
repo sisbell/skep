@@ -31,6 +31,20 @@ Behind `acting`:
 | `resolve` | `skep_resolve::Transport` over this crate's dialer |
 | `ceremony` | the compositions every ceremony runs over — `handshake`, `deposit`, `first_session`, `backup`, `trail` public, the rest the crate's own — and the walks over them: `claim` (the notebook walk and the hosted arm), `enroll`, `recover` (the device and loss arms), `retire`, `rotate`, `handoff`, `accept` |
 
+Behind `search` (default off) — THE SHELL's HALF of search (`client.md`
+§4e), over `skep-search`, a library API an embedder calls (the `skep`
+command one embedder, the frontend's shell the other) and nothing that
+assumes a page:
+
+| module | holds |
+|---|---|
+| `search::directory` | `SearchDir`, `<data>/index/`, and `BoardDir`, `<chain>/` keyed by `H.1`'s chain: `published.index`, `principal-<n>.index`, the document index's `published.places` and `principal-<n>.places` beside them, the feeder's `lock`; the modes `0700`/`0600` set at creation, the save by `<name>.tmp` written, synced and renamed over the old, the aside by a rename that never overwrites (`aside_name`), the `flock` held for the consumer's life |
+| `search::consumer` | `Consumer`, one per board: the open with the aside check and the resume (`GET /chain?at` per saved pair, the `H.k` re-read, `Resume::judge`), `poll` — the `/health` pair before the drain, the published range as a guest, each supplement's ranges and the two discovery reads under the session's token, one read per changed document per poll in parts past `MAX_DELIVERY_ITEMS`, the trunk probed where the feed names no head, a straddled draft's join held pending, bare rows counted, refusals recorded, `held` the fenced pair — the save every `SAVE_EVERY_UNITS` or `SAVE_EVERY` and at `close`, compacting where due; the triggers `widen`, `narrow`, the refresh `reindex`, `orphans` and `forget`; `state`, `counts`; `events`, the `/events` stream's commit positions as the loop's input |
+| `search::places` | `Places`, the document index's one part — addresses, first lines, the head member last read at, counts per account — one JSON line per document, the exact address and label matches |
+| `search::state` | `State`, the `index` event's ten arms typed — `None`, `Building`, `Widening`, `Complete`, `AtTheFloor`, `ResumedFromTheFloor`, `Unplaced`, `PastTheCeiling`, `NewerSkep`, `Busy` — and `State::compose` over the pair's parts |
+| `search::bridge` | `Consumer::search(who, query, opts) → SearchAnswer {hits, total, the four flags, places, state}`: the query bounded at `QUERY_BOUND` bytes (`QueryTooLong` echoing nothing), the pair by role with the header ranges and the honored set, `places` at the call's class with a standing at the document grain; `Who::{Guest, Session(SessionRef)}`, `SearchOpts`, `Place` |
+| `search::jump` | `land(span, pairs) → Landing::{Carried, Partial, Absent}` over a `compare` answer's `Correspondence`s, and `landing_of`, the three budget refusals landing `Pinned` |
+
 ## Features
 
 - `acting` (default on) — the acting half: `sign`, `store`, `ceremony`,
@@ -42,5 +56,11 @@ Behind `acting`:
 - `test-hooks` (default off) — implies `acting`; `person::scripted`, the
   test support a suite drives a walk with. Every test build turns it on
   through the dev-dependencies; no shipped build does.
+- `search` (default off) — implies `acting`; the `search` module over the
+  optional `skep-search` dependency. OFF by default so the default build
+  holds no feed consumer and makes no content read (`client.md` §1.1's
+  fence as written); the frontend's shell and the `skep` command's search
+  turn it on, as the shell turns `tls` on. The crate's own tests turn it on
+  through the self dev-dependency.
 
 No async runtime, no HTTP crate, no argument-parsing crate.

@@ -188,19 +188,24 @@ the workspace's `ARCHITECTURE.md` §The search index. It depends on
 `skep-address` and the two Unicode crates alone: NOT `skepd`, NOT
 `skep-client`, NOT `serde_json`.
 
-## 2. What the next lane adds
+## 2. What remains
 
-The surface above is `search.md` §1.4 whole and §7's budgets are measured
-(§3 below); what the one lane left lands against these names:
+The surface above is `search.md` §1.4 whole, §7's budgets are measured (§3
+below), and THE SHELL's HALF IS LANDED (`client.md` §4e; lane SH): the feed
+consumer, the directory with its modes, lock, save-by-rename and aside, the
+`/health` and `/chain?at` reads whose answers `Resume::judge` takes, the
+save after a migration, the triggers, the bridge call that composes the
+`Pair` from the session's indexes, the supplement's header ranges and the
+honored set and forwards the answer's flags, the refreshes that walk
+`keys_by_range`, the jump's landing and the state event — `skep-client`'s
+`search` module, behind its default-off `search` feature, which takes this
+crate as an optional dependency. What is left against these names is
+outside both crates:
 
-- **The shell's half** (`client.md` §4e; lane SH) — the feed consumer; the
-  directory, the file modes `0600`/`0700`, the lock, the save's rename and
-  the moving aside under `aside_name`; the `/health` and `/chain?at` reads
-  whose answers `Resume::judge` takes; the save after a migration; the
-  triggers, the bridge call that composes the `Pair` from the session's
-  indexes, the supplement's header ranges and the honored set and forwards
-  the answer's flags, the refreshes that walk `keys_by_range`, the jump's
-  landing and the state event, in `skep-client`.
+- **The `skep` command's search** (`client.md` §2.1; `search.md` §8.3; the
+  lane after SH) — turns the feature on and drives the module as the shell
+  will.
+- **R9c's sidecar** (`search.md` §8.2) — DEFER.
 
 ## 3. The crate's suite
 

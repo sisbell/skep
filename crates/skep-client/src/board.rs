@@ -25,6 +25,11 @@
 //! crate's own code sends through it — every frame of which [`frames`]
 //! spells, and every read answer of which the child `answers` decodes.
 //! [`Board::board_term`] reads `H.1`'s pair, once per board (D13).
+//! [`Board::changes`] — the feed's PAGE — and [`Board::chain_at`] are the
+//! feed consumer's two reads (`client.md` §4e.2, §4e.3), the consumer
+//! standing behind the `search` feature: in the default build nothing in
+//! this crate calls either, and §1.1's "no `/changes` FEED consumer" holds
+//! of that build as written.
 
 use std::fmt;
 use std::sync::OnceLock;
@@ -127,6 +132,109 @@ impl Health {
     pub fn log_position(&self) -> u64 {
         self.body["log_position"].as_u64().unwrap_or(0)
     }
+
+    /// `chain_head` — the commit chain's value at the committed head, the
+    /// chain OF THE `log_position` BESIDE IT, the two read off one kernel
+    /// snapshot (wire.md §The other endpoints); `None` where the body
+    /// carries none in its 64-lowercase-hex spelling. With `log_position`
+    /// it is the `(position, chain)` pair a feed consumer saves as a
+    /// range's `held` (`client.md` §4e.2).
+    pub fn chain_head(&self) -> Option<[u8; 32]> {
+        self.body["chain_head"].as_str().and_then(crate::hex::decode32)
+    }
+}
+
+/// One `GET /changes` page query (wire.md §The change feed): the fence,
+/// the two narrowings and the page's cap. `limit` is sent only where set —
+/// the route's default is 256 — so a `fits` answered on `malformed_changes`
+/// is re-asked with that limit.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct ChangesQuery<'a> {
+    /// `since=<position>`: the page is `(since, head]`.
+    pub since: u64,
+    /// `under=<address-or-prefix>`: the entries whose reduced `docs` name a
+    /// document at or under it.
+    pub under: Option<&'a str>,
+    /// `drafts=true`: the entries whose reduced `docs` name a draft the
+    /// presented class may read — the supplement's page.
+    pub drafts: bool,
+    /// `limit=<n>`, 1 to 4096; the route's default, 256, where unset.
+    pub limit: Option<u64>,
+}
+
+impl ChangesQuery<'_> {
+    /// The query string, `since` first, each member spelled once.
+    fn path(&self) -> String {
+        let mut path = format!("/changes?since={}", self.since);
+        if let Some(under) = self.under {
+            path.push_str("&under=");
+            path.push_str(under);
+        }
+        if self.drafts {
+            path.push_str("&drafts=true");
+        }
+        if let Some(limit) = self.limit {
+            path.push_str(&format!("&limit={limit}"));
+        }
+        path
+    }
+}
+
+/// One page of the change feed (wire.md §The change feed): the rows as the
+/// wire serves them — a consumer reads the members it knows and ignores
+/// the rest, the forward rule — `last`, the next request's `since`, and
+/// `more`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ChangesPage {
+    /// The entries, oldest first, each the wire's own object.
+    pub changes: Vec<Value>,
+    /// The final entry's position, or the `since` echoed on an empty page.
+    pub last: u64,
+    /// Whether entries stand past `last`.
+    pub more: bool,
+}
+
+/// `GET /changes`'s answers (wire.md §The change feed): the page; the
+/// retention floor, an ANSWER and never an exit (`client.md` §2.3); the
+/// byte budget's refusal carrying the `limit` that fits; and, under a token
+/// alone, the death signal. Non-exhaustive: the set is the wire's.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum ChangesAnswer {
+    Page(ChangesPage),
+    /// `410 history_reclaimed` — `since` reaches below the feed's memory;
+    /// `floor` the oldest position still answerable, when known.
+    HistoryReclaimed { floor: Option<u64> },
+    /// `400 malformed_changes` naming a `limit` whose page would pass the
+    /// 2 MiB page budget — `fits` the largest limit whose page from the same
+    /// `since` fits, re-asked at once. A malformed query of this client's
+    /// own framing carries no `fits` and is the board's refusal instead.
+    TooLarge { fits: u64 },
+    /// The death signal on a token-bearing read; a token-free read halts on
+    /// it instead (the module's doc).
+    Closed,
+}
+
+/// `GET /chain?at=<position>`'s answers (wire.md §Reading history): the
+/// chain's value as of the position, the three position faults and the
+/// reconstruction bound — each an ANSWER, the resume's judgment being the
+/// embedder's (`client.md` §4e.3). Token-blind, so no death signal has an
+/// arm here. Non-exhaustive: the set is the wire's.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum ChainAtAnswer {
+    /// `200 {"at": N, "chain": …}` — the chain's thirty-two bytes.
+    Chain { at: u64, chain: [u8; 32] },
+    /// `410 history_reclaimed` — the position predates retained history;
+    /// `floor` where known.
+    HistoryReclaimed { floor: Option<u64> },
+    /// `400 beyond_head` — the position exceeds the committed head.
+    BeyondHead { head: Option<u64> },
+    /// `400 not_a_position` — `nearest` the greatest position at or below.
+    NotAPosition { nearest: Option<u64> },
+    /// `503 history_busy` — every reconstruction permit is in use; a
+    /// retry-class refusal, never a queue.
+    Busy,
 }
 
 /// `GET /challenge`'s answer: the nonce and the TTL read off the body —
@@ -660,6 +768,66 @@ impl Board {
                     Some(_) => ChangeKey::Lost,
                 })
             }
+        }
+    }
+
+    /// THE `/changes` PAGE READ (wire.md §The change feed; `client.md`
+    /// §4e.2): one page of the feed from `since`, under the narrowings the
+    /// query names, as a GUEST where no token rides — the published feed —
+    /// or at the presented session's class — the supplement's `drafts=true`
+    /// page. The feed consumer behind the `search` feature is this read's
+    /// one caller in this crate; `changes_key` above stays the fence's one
+    /// point query. The retention floor and the page budget's refusal are
+    /// answers; a token-free read halts on the death signal (the module's
+    /// doc).
+    pub fn changes(&self, token: Option<&Token>, query: &ChangesQuery<'_>) -> Result<ChangesAnswer, Halt> {
+        let req = Request::get(query.path());
+        match self.authed(token, req)? {
+            Authed::Closed(_) if token.is_none() => Err(guest_closed()),
+            Authed::Closed(_) => Ok(ChangesAnswer::Closed),
+            Authed::Response(resp) => {
+                let v: Value = serde_json::from_slice(&resp.body).unwrap_or(Value::Null);
+                match (resp.status, v["error"].as_str()) {
+                    (200, _) => {
+                        let v = json_of(&resp)?;
+                        let changes = v["changes"].as_array().cloned().unwrap_or_default();
+                        let last = v["last"].as_u64().unwrap_or(query.since);
+                        let more = v["more"].as_bool().unwrap_or(false);
+                        Ok(ChangesAnswer::Page(ChangesPage { changes, last, more }))
+                    }
+                    (410, Some("history_reclaimed")) => Ok(ChangesAnswer::HistoryReclaimed { floor: v["floor"].as_u64() }),
+                    (400, Some("malformed_changes")) if v["fits"].as_u64().is_some() => {
+                        Ok(ChangesAnswer::TooLarge { fits: v["fits"].as_u64().unwrap_or(1) })
+                    }
+                    _ => Err(transport_refused(&resp)),
+                }
+            }
+        }
+    }
+
+    /// `GET /chain?at=<position>` (wire.md §Reading history): the commit
+    /// chain's value as of `at`, recomputed by the kernel off its own
+    /// journal under one of the board's two reconstruction permits —
+    /// token-blind and class-invariant, so no token rides. The resume check
+    /// a saved `(position, chain)` pair is judged by (`client.md` §4e.3;
+    /// `search.md` §5.4) is this read's caller; the judgment is the
+    /// embedder's, the position faults and the bound its answers.
+    pub fn chain_at(&self, at: u64) -> Result<ChainAtAnswer, Halt> {
+        let resp = self.exchange(&Request::get(format!("/chain?at={at}")))?;
+        let v: Value = serde_json::from_slice(&resp.body).unwrap_or(Value::Null);
+        match (resp.status, v["error"].as_str()) {
+            (200, _) => {
+                let v = json_of(&resp)?;
+                let chain = v["chain"].as_str().and_then(crate::hex::decode32).ok_or_else(|| {
+                    Halt::Dial(crate::dial::DialError::Response(format!("not a chain answer: {v}")))
+                })?;
+                Ok(ChainAtAnswer::Chain { at: v["at"].as_u64().unwrap_or(at), chain })
+            }
+            (410, Some("history_reclaimed")) => Ok(ChainAtAnswer::HistoryReclaimed { floor: v["floor"].as_u64() }),
+            (400, Some("beyond_head")) => Ok(ChainAtAnswer::BeyondHead { head: v["head"].as_u64() }),
+            (400, Some("not_a_position")) => Ok(ChainAtAnswer::NotAPosition { nearest: v["nearest"].as_u64() }),
+            (503, Some("history_busy")) => Ok(ChainAtAnswer::Busy),
+            _ => Err(transport_refused(&resp)),
         }
     }
 

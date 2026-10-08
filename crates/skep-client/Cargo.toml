@@ -29,6 +29,17 @@ tls = ["dep:rustls", "dep:rustls-platform-verifier"]
 # check builds the library without it, and `tests/it/tidy.rs` checks the
 # gate on the module's `mod` line.
 test-hooks = ["acting"]
+# `search` — THE SHELL's HALF of search (client.md §4e; lane SH): the feed
+# consumer over `/changes`, the index directory beside the key store, the
+# resume at open, the session's triggers, the document index the plane
+# reads, the state event's ten arms, the bridge call that composes the pair
+# and the jump's landing rule — the `search` module, over `skep-search`.
+# OFF BY DEFAULT, as `tls` is: the default build of the library holds no
+# feed consumer and makes no content read, so client.md §1.1's fence ("no
+# `/changes` FEED consumer") stays true of it as written; the frontend's
+# shell and the `skep` command's search turn it on, as the shell turns `tls`
+# on. Implies `acting`: the supplement needs a session.
+search = ["acting", "dep:skep-search"]
 
 [dependencies]
 # M1 — the address vocabulary the entry frame and the walks spell addresses
@@ -44,6 +55,13 @@ skep-signature = { path = "../skep-signature" }
 # The registry walk, over this crate's one dialer: the shell dials the board
 # the registry names (P25). Behind `acting`; no cycle, no second trait.
 skep-resolve = { path = "../skep-resolve", optional = true }
+# The search index a client embeds (search.md §1.2) — the engine the
+# `search` module feeds and queries. Behind `search`, OFF by default; a
+# NORMAL dependency pointing DOWN (skep-search stands before this crate in
+# ARCHITECTURE.md's code map), where skep-search's own dev-dependency on
+# this crate — its budgets suite's dev board — is the upward one Cargo
+# admits as a dev-cycle.
+skep-search = { path = "../skep-search", optional = true }
 # The wire frames and the key file.
 serde_json.workspace = true
 # OS entropy: seeds, the backup moment's per-run token, `new_id`.
@@ -58,8 +76,12 @@ rustls-platform-verifier = { workspace = true, optional = true }
 # scripted person under a plain `cargo test` or workspace run, no flag added.
 # A build that compiles no test never reads this table. `default-features =
 # false`, so this line adds `test-hooks` (and the `acting` it implies) and
-# nothing else.
-skep-client = { path = ".", features = ["test-hooks"], default-features = false }
+# `search` — so the `search` module's suites compile and run under a plain
+# `cargo test` and the workspace gate, no flag added — and nothing else.
+skep-client = { path = ".", features = ["test-hooks", "search"], default-features = false }
+# The index's own types, named by the search suites directly — the units
+# they feed, the pair's inputs they check — with no feature of its own.
+skep-search = { path = "../skep-search" }
 # The real daemon, in-process on an ephemeral port over a temp data dir, as
 # skep-mcp's suite takes it: `test-hooks` is what that suite enables too.
 skepd = { path = "../skepd", features = ["test-hooks"] }

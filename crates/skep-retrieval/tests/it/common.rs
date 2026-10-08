@@ -357,14 +357,14 @@ pub fn fragmented_doc2(k: &Kernel<World>) -> Vstream<'_, World> {
 /// target (PUB-2.11).
 pub fn fragmented_head(k: &Kernel<World>) -> Vstream<'_, World> {
     let vs = deposit3(k);
-    let pca1 = ShotRun {
+    let pca1_run = ShotRun {
         origin: pdoc(),
         run: Run::new(pca(1), n(1)).expect("a one-position content run"),
     };
     let shot = Shot {
         base: None,
         draft: None,
-        runs: vec![pca1; 8192],
+        runs: vec![pca1_run; 8192],
     };
     let (head, _) = vs
         .publish(P1, &pdoc(), &shot, &|_: &World, _: &Address| true)

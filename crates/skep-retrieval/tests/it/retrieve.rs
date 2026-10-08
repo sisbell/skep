@@ -244,9 +244,9 @@ fn retrieve_v_masked_withholds_each_unreadable_run_at_its_own_position() {
     );
     // The width withheld is the WINDOW's share of the run, not the run's
     // whole: positions 3..4 cut the second run to one position.
-    let window = ok_of(q.retrieve_v_masked(&[spec(doc2(), vspan(1, 3, 2))], &not_doc1));
+    let delivery = ok_of(q.retrieve_v_masked(&[spec(doc2(), vspan(1, 3, 2))], &not_doc1));
     assert_eq!(
-        window,
+        delivery,
         Delivery(vec![
             DeliveryItem::Withheld {
                 origin: doc1(),
@@ -262,8 +262,8 @@ fn retrieve_v_masked_withholds_each_unreadable_run_at_its_own_position() {
     // NOT empty: `is_empty` asks whether the delivery carries any item, and
     // each withheld run is one (`Delivery::is_empty`'s card).
     assert!(
-        !window.is_empty(),
-        "an all-masked delivery carries its withheld items: {window:?}"
+        !delivery.is_empty(),
+        "an all-masked delivery carries its withheld items: {delivery:?}"
     );
     // A delivery counts a withheld run ONCE, however many positions it spans.
     assert_eq!(
@@ -391,11 +391,12 @@ fn retrieve_v_withholds_a_run_whose_origin_is_not_registered_without_asking_its_
     let k = mem_kernel();
     let vs = deposit3(&k); // pdoc = [pca1, pca2, pca3]
     let unheld_member = a(&[1, 0, 1, 0, 3, 9]); // pdoc's ninth member, never minted
-    let unheld = |ordinal: u32| a(&[1, 0, 1, 0, 3, 9, 0, 1, ordinal]);
+    let unheld_ca = |ordinal: u32| a(&[1, 0, 1, 0, 3, 9, 0, 1, ordinal]);
     for (ordinal, byte) in [(1, b"u"), (2, b"v")] {
-        skep_content::write(&k, &unheld(ordinal), val(byte)).expect("M4's test-only write commits");
+        skep_content::write(&k, &unheld_ca(ordinal), val(byte))
+            .expect("M4's test-only write commits");
     }
-    let window = |start: Address, width: u32| ShotRun {
+    let shot_run = |start: Address, width: u32| ShotRun {
         origin: pdoc(),
         run: Run::new(start, n(width)).expect("a content run"),
     };
@@ -403,7 +404,7 @@ fn retrieve_v_withholds_a_run_whose_origin_is_not_registered_without_asking_its_
         base: None,
         draft: None,
         // pdoc's own pca1, then two positions under the unminted member.
-        runs: vec![window(pca(1), 1), window(unheld(1), 2)],
+        runs: vec![shot_run(pca(1), 1), shot_run(unheld_ca(1), 2)],
     };
     let (head, _) = vs
         .publish(P1, &pdoc(), &shot, &|_: &World, _: &Address| true)
@@ -568,11 +569,11 @@ fn retrieve_v_refuses_a_delivery_past_its_budget_whole() {
     assert!(e.to_string().contains(&MAX_DELIVERY_ITEMS.to_string()));
     // The budget is the SPEC-SET's: two specs of half the budget and a
     // position more — each under it alone — are refused together.
-    let half = budget / 2 + 1;
+    let past_half = budget / 2 + 1;
     assert_eq!(
         err_of(q.retrieve_v(&[
-            spec(doc2(), vspan(1, 1, half)),
-            spec(doc2(), vspan(1, 1, half)),
+            spec(doc2(), vspan(1, 1, past_half)),
+            spec(doc2(), vspan(1, 1, past_half)),
         ])),
         RetrieveError::TooManyItems
     );
@@ -619,10 +620,10 @@ fn retrieve_v_refuses_a_spec_set_whose_spans_would_walk_past_the_walk_budget() {
         asked.borrow_mut().push(d.clone());
         true
     };
-    let mut priced = vec![spec(doc2(), vspan(1, 1, 1))];
-    priced.extend(vec![spec(doc2(), vspan(1, 8193, 1)); past_budget]);
+    let mut specs = vec![spec(doc2(), vspan(1, 1, 1))];
+    specs.extend(vec![spec(doc2(), vspan(1, 8193, 1)); past_budget]);
     assert_eq!(
-        err_of(q.retrieve_v_masked(&priced, &recording)),
+        err_of(q.retrieve_v_masked(&specs, &recording)),
         RetrieveError::TooManyItems
     );
     assert!(

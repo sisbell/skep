@@ -20,11 +20,12 @@
 //! * **Read API** (§B) — [`ContentStore::contains`] (the S3
 //!   referential-integrity oracle: content-presence, whether content is
 //!   stored here — not "allocated", not "registered") and
-//!   [`ContentStore::value_at`] (`C(a)`), point queries over a pinned
-//!   snapshot slice; and [`ContentStore::iter`], the one enumeration — an
-//!   [`Iter`], the walk `&ContentStore` yields too — in no promised order,
-//!   for whole-store work over a pinned snapshot such as the cell index's
-//!   walk.
+//!   [`ContentStore::value_at`] (`C(a)`), point queries over any slice, a
+//!   reader's pinned snapshot or a composite's working slice alike
+//!   ([`HasContent`] names both); and [`ContentStore::iter`], the one
+//!   enumeration — an [`Iter`], the walk `&ContentStore` yields too — in no
+//!   promised order, for whole-store work over a pinned snapshot such as the
+//!   cell index's walk.
 //! * **Write surface** (§C) — the pure step [`stage_write`] (the storage
 //!   half of K.α, composed by M5's placement composite) and `write`, the
 //!   `#[doc(hidden)]` standalone transact-wrapped form (M2 contract 3) —
@@ -71,8 +72,8 @@
 //!   integrity (M5 — M4 only *answers* the check via `contains`; the
 //!   strongest S3 timing is achieved by M2's atomicity around M5's
 //!   composite, not by M4);
-//! * V→I resolution, origin attribution, version comparison, and the
-//!   registered-empty-vs-unallocated distinction (M6);
+//! * V→I resolution (M5's reads); origin attribution, version comparison,
+//!   and the registered-empty-vs-unregistered distinction (M6);
 //! * link values — M7 is the parallel value-only store for `L`; the link
 //!   layer (M7/M8) never reads M4 (store-disjointness SD:
 //!   `dom(C) ∩ dom(L) = ∅`);

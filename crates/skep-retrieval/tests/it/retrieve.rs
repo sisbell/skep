@@ -1,14 +1,16 @@
 //! §A RETRIEVEV (ASN-0115): exact per-position delivery in submitted order,
 //! each stored value delivered itself and never a copy of its bytes, R6's
 //! silent degradations, the whole-request gate, the delivery and walk
-//! budgets, and the masked form's per-origin consult, asked once per run.
+//! budgets, the masked form's per-origin consult, asked once per run, and
+//! the withheld item a run whose origin is not registered takes, asking
+//! nothing.
 
 use std::cell::RefCell;
 
 use skep_address::{Address, Span};
-use skep_arrangement::{seat_link, Deposit, HasM5, VSpec, Vstream};
+use skep_arrangement::{seat_link, Deposit, HasM5, Run, Shot, ShotRun, VSpec, Vstream};
 use skep_content::HasContent;
-use skep_namespace::PrincipalId;
+use skep_namespace::{HasM3, PrincipalId};
 use skep_retrieval::{
     Delivery, DeliveryItem, Query, RetrieveError, SpanFault, MAX_COMPARE_OPERAND_BLOCKS,
     MAX_DELIVERY_ITEMS,
@@ -374,6 +376,69 @@ fn retrieve_v_masked_consults_its_predicate_of_the_floated_runs_origin_not_of_th
 }
 
 #[test]
+fn retrieve_v_withholds_a_run_whose_origin_is_not_registered_without_asking_its_predicate() {
+    // `retrieve_v`'s and `retrieve_v_masked`'s cards (PUB-1.57, PUB-6.37,
+    // RES-162): a run whose ORIGIN — M1's `document_of` of its I-start — is
+    // not a registered document takes the withheld arm directly, one item at
+    // its own position carrying that origin and the run's width, and the
+    // predicate, contracted to registered documents, is never asked about it;
+    // the all-true door withholds it too. RES-162's case is the unheld origin
+    // at a mirror that never held the draft a published window names. One
+    // node reaches the same arm: M4's test-only `write` stores values under a
+    // member of pdoc that was never minted, and the shot windows them, M5
+    // asking the registration of a run's TRUNK where M6 asks it of the run's
+    // document.
+    let k = mem_kernel();
+    let vs = deposit3(&k); // pdoc = [pca1, pca2, pca3]
+    let unheld_member = a(&[1, 0, 1, 0, 3, 9]); // pdoc's ninth member, never minted
+    let unheld = |ordinal: u32| a(&[1, 0, 1, 0, 3, 9, 0, 1, ordinal]);
+    for (ordinal, byte) in [(1, b"u"), (2, b"v")] {
+        skep_content::write(&k, &unheld(ordinal), val(byte)).expect("M4's test-only write commits");
+    }
+    let window = |start: Address, width: u32| ShotRun {
+        origin: pdoc(),
+        run: Run::new(start, n(width)).expect("a content run"),
+    };
+    let shot = Shot {
+        base: None,
+        draft: None,
+        // pdoc's own pca1, then two positions under the unminted member.
+        runs: vec![window(pca(1), 1), window(unheld(1), 2)],
+    };
+    let (head, _) = vs
+        .publish(P1, &pdoc(), &shot, &|_: &World, _: &Address| true)
+        .expect("the birth shot commits: both runs' trunk is pdoc, which is registered");
+    assert_eq!(head, vdoc());
+    let s = k.snapshot();
+    let q = Query::new(&s);
+    assert!(
+        !s.world().m3().is_registered_document(&unheld_member),
+        "the premise: the second run's origin is registered nowhere on this node"
+    );
+    let want = Delivery(vec![
+        DeliveryItem::Content(val(b"a")),
+        DeliveryItem::Withheld {
+            origin: unheld_member,
+            width: n(2),
+        },
+    ]);
+    // Read through the published document, as the edition's reader reads it.
+    assert_eq!(ok_of(q.retrieve_v(&[spec(pdoc(), vspan(1, 1, 3))])), want);
+    let asked: RefCell<Vec<Address>> = RefCell::new(Vec::new());
+    let recording = |d: &Address| {
+        asked.borrow_mut().push(d.clone());
+        true
+    };
+    assert_eq!(
+        ok_of(q.retrieve_v_masked(&[spec(pdoc(), vspan(1, 1, 3))], &recording)),
+        want
+    );
+    // Asked about the registered origin — the control that the consult runs
+    // here at all — and never about the unregistered one.
+    assert_eq!(*asked.borrow(), vec![pdoc()]);
+}
+
+#[test]
 fn retrieve_v_delivers_exactly_the_spans_intersection_with_the_bound_prefix() {
     // ASN-0115 R3 + R6 as the LAW they are: for every well-formed
     // ordinal-level span, the delivery is the document's V-sequence clipped
@@ -501,6 +566,16 @@ fn retrieve_v_refuses_a_delivery_past_its_budget_whole() {
     assert_eq!(e, RetrieveError::TooManyItems);
     // The refusal names its budget, so a client narrows against the number.
     assert!(e.to_string().contains(&MAX_DELIVERY_ITEMS.to_string()));
+    // The budget is the SPEC-SET's: two specs of half the budget and a
+    // position more — each under it alone — are refused together.
+    let half = budget / 2 + 1;
+    assert_eq!(
+        err_of(q.retrieve_v(&[
+            spec(doc2(), vspan(1, 1, half)),
+            spec(doc2(), vspan(1, 1, half)),
+        ])),
+        RetrieveError::TooManyItems
+    );
     // The budget counts ITEMS, and a withheld run is one item however many
     // positions it spans: the whole document, every run masked, is 4096
     // items and is answered.

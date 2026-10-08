@@ -50,6 +50,12 @@ skep-arrangement = { path = "../skep-arrangement" }
 # M5 again with `test-hooks` on: its integration suite seats links through
 # `seat_link`, the test-only twin M5 compiles under that feature alone.
 skep-arrangement = { path = "../skep-arrangement", features = ["test-hooks"] }
+# M4 again with `test-hooks` on: RETRIEVEV's suite stores values with `write`,
+# the test-only door that stores at an address no registration names and no
+# arrangement places, so that a shot can window them — one node's way to
+# arrange a run whose origin is not a registered document, as RES-162's
+# unheld origin is at a mirror.
+skep-content = { path = "../skep-content", features = ["test-hooks"] }
 # bincode is M2's actual wire format — the marshaling-policy tests serialize
 # M6's Serialize-only result/error types with it (M6 journals nothing, so
 # there is no round trip to test: no Deserialize anywhere by design).

@@ -358,6 +358,19 @@ fn find_docs_containing_refuses_a_request_whose_coverage_outnumbers_the_budget_t
         err_of(q.find_docs_containing(&request(under + 1))),
         FindError::TooMuchCoverage
     );
+    // The coverage count is the REQUEST's, across its regions: two regions of
+    // `per_region` spans — `3 · per_region` coverage spans apiece, each
+    // region under the budget alone — are refused together.
+    let per_region = under / 2 + 1;
+    assert!(
+        3 * per_region <= MAX_FIND_COVERAGE_SPANS && 6 * per_region > MAX_FIND_COVERAGE_SPANS,
+        "the premise: each region fits the budget and the two together do not"
+    );
+    let split = vec![region_spec(doc2(), vec![vspan(1, 1, 4); per_region]); 2];
+    assert_eq!(
+        err_of(q.find_docs_containing(&split)),
+        FindError::TooMuchCoverage
+    );
 }
 
 #[test]

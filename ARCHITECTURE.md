@@ -1287,9 +1287,9 @@ surface over the shared `common` world — `retrieve`, `extent`, `origin`,
 `deletions`, `compare` with its refusals in `compare_refusals`, and
 `find`; `query`, `head_float`, `traits` and `walk_budget`, what crosses the
 queries (the handle and the gate's precedence, the published-address
-float, the derive policy, the walk budget's price and its place below the
-gate); and `tidy`, which checks the module map, the first rule and the
-third.
+float, the derive policy, the walk budget's price, its scope and its place
+below the gate); and `tidy`, which checks the module map, the first rule
+and the third.
 
 ## The link reads, `skep-discovery`
 

@@ -8,7 +8,7 @@ use std::fmt;
 use serde::{Deserialize, Serialize};
 use skep_address::{validate, Address, Nat, Span, Tumbler};
 use skep_arrangement::{
-    deposit_class_types, Caller, Deposit, HasM5, M5State, VPos, VSpec, Vstream,
+    deposit_class_types, Caller, Deposit, HasM5, M5State, Run, Shot, ShotRun, VPos, VSpec, Vstream,
 };
 use skep_content::{ContentStore, ContentWrite, HasContent, Val};
 use skep_kernel::{CheckpointPolicy, Durability, Kernel, KernelConfig, SaltSource, WorldState};
@@ -142,6 +142,11 @@ pub fn doc2_la(ordinal: u32) -> Address {
 /// deposit alone (PUB-2.59).
 pub fn pdoc() -> Address {
     a(&[1, 0, 1, 0, 3])
+}
+
+/// pdoc's own content element at `ordinal` — what [`deposit3`] mints.
+pub fn pca(ordinal: u32) -> Address {
+    a(&[1, 0, 1, 0, 3, 0, 1, ordinal])
 }
 
 /// The version fork of pdoc (`(d_src, 1)` chain) and its length-9 content
@@ -340,6 +345,31 @@ pub fn fragmented_doc2(k: &Kernel<World>) -> Vstream<'_, World> {
         vs.copy(P1, &doc2(), vp(1, at), &vec![ca1_spec.clone(); 4096])
             .expect("copy commits");
     }
+    vs
+}
+
+/// pdoc = `[a, b, c]` — [`deposit3`]'s one run — and its birth version, the
+/// head vdoc, published by one shot of 8192 one-position runs, every one pca1
+/// by reference. They never coalesce (each reaches pca2, and the next opens
+/// at pca1), so the bare published address reads a surface of 8192 runs
+/// while its own arrangement is one run. The published twin of
+/// [`fragmented_doc2`], built by a shot because COPY refuses a published
+/// target (PUB-2.11).
+pub fn fragmented_head(k: &Kernel<World>) -> Vstream<'_, World> {
+    let vs = deposit3(k);
+    let pca1 = ShotRun {
+        origin: pdoc(),
+        run: Run::new(pca(1), n(1)).expect("a one-position content run"),
+    };
+    let shot = Shot {
+        base: None,
+        draft: None,
+        runs: vec![pca1; 8192],
+    };
+    let (head, _) = vs
+        .publish(P1, &pdoc(), &shot, &|_: &World, _: &Address| true)
+        .expect("the birth shot commits");
+    assert_eq!(head, vdoc(), "the shot mints pdoc's birth version");
     vs
 }
 

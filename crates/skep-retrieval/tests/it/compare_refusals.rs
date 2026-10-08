@@ -189,6 +189,21 @@ fn compare_refuses_an_operand_whose_blocks_outnumber_the_budget_though_its_spans
             operand: Operand::First
         }
     );
+    // The block count is the OPERAND's, across its regions: two regions of
+    // `per_region` spans — `3 · per_region` blocks apiece, each region under
+    // the budget alone — are refused together.
+    let per_region = under / 2 + 1;
+    assert!(
+        3 * per_region <= MAX_COMPARE_OPERAND_BLOCKS && 6 * per_region > MAX_COMPARE_OPERAND_BLOCKS,
+        "the premise: each region fits the budget and the two together do not"
+    );
+    let split = vec![region_spec(doc2(), vec![vspan(1, 1, 4); per_region]); 2];
+    assert_eq!(
+        err_of(q.compare(&split, &one)),
+        CompareError::TooManyBlocks {
+            operand: Operand::First
+        }
+    );
     // Which operand speaks when ρ₁ is over on BLOCKS and ρ₂ over on SPANS:
     // ρ₁ resolves first and is refused as it resolves, before ρ₂'s spans are
     // counted — the one request that tells "resolve ρ₁ whole, then ρ₂" from
@@ -250,6 +265,11 @@ fn compare_refuses_an_operand_whose_spans_outnumber_the_budget_though_they_resol
         vec![past_end(); MAX_COMPARE_OPERAND_BLOCKS],
     )];
     assert!(ok_of(q.compare(&at, &one())).is_empty());
+    // Each OPERAND's span count is its own: both operands at the budget are
+    // answered, though the request hands M5 twice the budget's spans. (`at`
+    // against `one()` above separates the two scopes only by `one`'s single
+    // span; this separates them by a whole operand.)
+    assert!(ok_of(q.compare(&at, &at)).is_empty());
     // The NESTED region×span product past the budget — one span per region,
     // a region list no per-array wire cap prices — is refused the same way.
     let nested: Vec<RegionSpec> = (0..=MAX_COMPARE_OPERAND_BLOCKS)

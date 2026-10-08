@@ -83,12 +83,11 @@ fn join_within_budget(span_count: usize, run_count: usize, max_product: usize) -
 /// V-positions); it is the scoped-out contextual EL11a, composed above M8.
 ///
 /// BY MEMBERSHIP, as ASN-0098's `project` is: a position answers when the
-/// coverage CONTAINS the address arranged there, so within the content
-/// subspace a non-empty projection is exactly LP12's witness.
-/// [`addressably_discoverable_from_on`] and the region family touch by M7's
-/// overlap with each run's I-extent instead, which reaches one shape this
-/// does not — a coverage strictly beneath an arranged address, projected ∅
-/// here in every slot — and the crate header states it.
+/// coverage CONTAINS the address arranged there, which is what the
+/// biconditional above rests on. [`addressably_discoverable_from_on`] and the
+/// region family touch by M7's overlap with each run's I-extent instead, which
+/// reaches one shape this does not — a coverage strictly beneath an arranged
+/// address, projected ∅ here in every slot — and the crate header states it.
 ///
 /// HEAD-FLOAT: the arrangement projected into is `d`'s reading surface, so
 /// the result is in the V-coordinates [`crate::image_on`] resolves for the
@@ -121,8 +120,7 @@ fn join_within_budget(span_count: usize, run_count: usize, max_product: usize) -
 /// covered positions straight off the spans. The two probe routes are
 /// `SpanSet` membership (`denotes(&[s_C, k])` over the surface's content
 /// positions, cross-checkable via M5's `point`) and `SpanSet::is_empty`,
-/// which is total where the level-gated set comparisons can fault. M8 itself
-/// never tests the projection for emptiness.
+/// which is total where the level-gated set comparisons can fault.
 ///
 /// COST, IN TWO FACTORS: M5 states the work as `#runs(d) × |coverage|` and
 /// leaves admission control to its caller, which is this function, and both
@@ -275,10 +273,7 @@ fn touches(e: &Endset, extent_bounds: &[SpanBounds<'_>]) -> bool {
 /// `Err(NotALink)` iff `a ∉ dom(L)` (aligned with `project`'s non-link
 /// handling).
 ///
-/// A *nullified* link is still a link: it is still resident, so the
-/// resident-link read admits it, and it returns `Ok(false)` through the
-/// `is_active` conjunct — distinguishing "not a link" from "a retracted
-/// link". A registered `d` whose reading surface arranges nothing yields
+/// A registered `d` whose reading surface arranges nothing yields
 /// `Ok(false)` — nothing is reachable — and never `DocNotRegistered`, which
 /// is the distinction the document gate exists to draw.
 ///

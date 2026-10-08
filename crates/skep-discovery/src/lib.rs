@@ -185,11 +185,13 @@
 //!
 //! ## Cost
 //!
-//! What each read asks of M7's link store, counted in M7's primitives (M7
-//! states `stab` and `match_links` as scans of the store in v1). A caller
-//! that admission-controls these reads — the daemon's scan pool does —
-//! prices them from this list, and a change to any line is a change to this
-//! interface. The scan pool links this section by its heading
+//! What each read walks: M7's link store, counted in M7's primitives (M7
+//! states `stab` and `match_links` as scans of the store in v1), and M5's
+//! arrangement, where a read walks one document's runs or joins against them.
+//! A caller that admission-controls these reads — the daemon's scan pool
+//! does — prices every one of them from this list, those that walk no link
+//! store included, so a change to what any line says of either store is a
+//! change to this interface. The scan pool links this section by its heading
 //! (`skep_discovery#cost`), an anchor no build checks, so the heading is part
 //! of the interface as well. `tests/it/tidy.rs` holds the heading, and holds
 //! this list to naming every read the crate publishes; what a line says a read

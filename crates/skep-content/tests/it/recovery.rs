@@ -150,6 +150,41 @@ fn the_record_and_the_slice_refuse_a_count_their_bytes_do_not_carry() {
     );
 }
 
+/// `comps` in the shape a tumbler serializes as, its components' `Vec<Nat>`,
+/// built without M1's doors — so a test can lay any key where an address
+/// belongs, one no door admits (empty, or breaking T4) as readily as one it
+/// does.
+fn raw_key(comps: &[u32]) -> Vec<Nat> {
+    comps.iter().map(|&c| Nat::from(c)).collect()
+}
+
+/// A slice body naming each of `keys`, in the order given and repeats kept,
+/// with the value `x` at each: a `Vec` of (key, value) pairs, each key in
+/// `raw_key`'s shape and each value its byte sequence. That is a slice's own
+/// shape — `the_slice_serializes_as_its_map_alone_in_tumbler_order` pins a
+/// slice's bytes as exactly a `Vec` of pairs', and the control in
+/// `the_record_and_the_slice_refuse_a_key_that_is_no_tumbler` decodes
+/// `raw_slice(&[CA1])` to the slice `stage_write` builds at `ca(1)` — so a
+/// test can lay down a body no store writes: keys out of order, named twice,
+/// or no address at all.
+fn raw_slice(keys: &[&[u32]]) -> Vec<u8> {
+    let entries: Vec<_> = keys.iter().map(|&key| (raw_key(key), b"x".to_vec())).collect();
+    bincode::serialize(&entries).expect("the raw slice serializes")
+}
+
+/// A record frame writing the value `x` at `key`: the address in `raw_key`'s
+/// shape, then the value's byte sequence — a record's own shape, as the same
+/// control holds of `raw_record(CA1)`.
+fn raw_record(key: &[u32]) -> Vec<u8> {
+    bincode::serialize(&(raw_key(key), b"x".to_vec())).expect("the raw record serializes")
+}
+
+/// `ca(1)`'s components, for the raw shapes. The control in
+/// `the_record_and_the_slice_refuse_a_key_that_is_no_tumbler` decodes them to
+/// the slice and the record `stage_write` builds at `ca(1)`, so the two
+/// cannot part unseen.
+const CA1: &[u32] = &[1, 0, 1, 0, 1, 0, 1, 1];
+
 #[test]
 fn the_record_and_the_slice_refuse_a_key_that_is_no_tumbler() {
     // M2's hostile-input obligation, at the key: the slice's decode
@@ -161,29 +196,30 @@ fn the_record_and_the_slice_refuse_a_key_that_is_no_tumbler() {
     // never stored: M1's reads stand on T0 (`ordinal` takes the last
     // component with an `expect` that names it), and a key in `dom(C)`
     // reaches every reader of the recovered store. No constructor builds such
-    // a key, so the bytes are laid through the raw shapes the types serialize
-    // as — a tumbler as its `Vec<Nat>`, a value as its byte sequence, the
-    // slice as a `Vec` of pairs. The same shapes carrying a real address are
-    // the control: they decode to the slice and the record that hold it, so
-    // the refusal is the empty key's alone.
-    let slice = |key: &[Nat]| {
-        bincode::serialize(&vec![(key.to_vec(), b"x".to_vec())]).expect("the raw slice serializes")
-    };
-    let record = |key: &[Nat]| {
-        bincode::serialize(&(key.to_vec(), b"x".to_vec())).expect("the raw record serializes")
-    };
-    let real: Vec<Nat> = ca(1).tumbler().iter().cloned().collect();
+    // a key, so the bytes are laid through the raw shapes, `raw_slice` and
+    // `raw_record`. The same shapes carrying `ca(1)` are the control: they
+    // decode to the slice and the record `stage_write` builds there — which
+    // is what makes the raw shapes the types' own bytes for every test that
+    // lays one down — so the refusal is the empty key's alone.
     let rec = stage_write(&ContentStore::default(), &ca(1), val(b"x")).expect("fresh");
     assert_eq!(
-        bincode::deserialize::<ContentStore>(&slice(&real)).expect("the control slice decodes"),
+        bincode::deserialize::<ContentStore>(&raw_slice(&[CA1]))
+            .expect("the control slice decodes"),
         ContentStore::default().apply_write(&rec)
     );
     assert_eq!(
-        bincode::deserialize::<ContentWrite>(&record(&real)).expect("the control record decodes"),
+        bincode::deserialize::<ContentWrite>(&raw_record(CA1)).expect("the control record decodes"),
         rec
     );
-    assert_refused::<ContentStore>("a slice whose one key is an empty sequence", &slice(&[]));
-    assert_refused::<ContentWrite>("a record whose address is an empty sequence", &record(&[]));
+    let no_tumbler: &[u32] = &[];
+    assert_refused::<ContentStore>(
+        "a slice whose one key is an empty sequence",
+        &raw_slice(&[no_tumbler]),
+    );
+    assert_refused::<ContentWrite>(
+        "a record whose address is an empty sequence",
+        &raw_record(no_tumbler),
+    );
 }
 
 #[test]
@@ -196,13 +232,6 @@ fn the_record_and_the_slice_refuse_a_key_that_is_no_address() {
     // the test above) admits it, and breaks exactly one T4 clause, so only
     // the `Address` door can refuse it — and the refusal is pinned as that
     // door's own, word for word. What the door admits is the next test's.
-    let raw = |key: &[u32]| -> Vec<Nat> { key.iter().map(|&c| Nat::from(c)).collect() };
-    let slice = |key: &[u32]| {
-        bincode::serialize(&vec![(raw(key), b"x".to_vec())]).expect("the raw slice serializes")
-    };
-    let record = |key: &[u32]| {
-        bincode::serialize(&(raw(key), b"x".to_vec())).expect("the raw record serializes")
-    };
     for (clause, key) in [
         (T4Clause::LeadingZero, &[0u32, 1][..]),
         (T4Clause::TrailingZero, &[1, 0][..]),
@@ -217,14 +246,14 @@ fn the_record_and_the_slice_refuse_a_key_that_is_no_address() {
                 "slice",
                 assert_refused::<ContentStore>(
                     &format!("a slice whose one key breaks {clause}"),
-                    &slice(key),
+                    &raw_slice(&[key]),
                 ),
             ),
             (
                 "record",
                 assert_refused::<ContentWrite>(
                     &format!("a record whose address breaks {clause}"),
-                    &record(key),
+                    &raw_record(key),
                 ),
             ),
         ] {
@@ -249,15 +278,8 @@ fn the_record_and_the_slice_admit_every_address_a_release_build_can_stage() {
     // admits, whatever its routing — here one of each shape the routing
     // assertion stops in a debug build: each level short of an element, and
     // an element in a subspace other than content's, each checked first to
-    // be T4-valid and no content-subspace element address. The bytes are the
-    // raw shapes the refusal tests above lay down.
-    let raw = |key: &[u32]| -> Vec<Nat> { key.iter().map(|&c| Nat::from(c)).collect() };
-    let slice = |key: &[u32]| {
-        bincode::serialize(&vec![(raw(key), b"x".to_vec())]).expect("the raw slice serializes")
-    };
-    let record = |key: &[u32]| {
-        bincode::serialize(&(raw(key), b"x".to_vec())).expect("the raw record serializes")
-    };
+    // be T4-valid and no content-subspace element address. The bytes are
+    // `raw_slice`'s and `raw_record`'s.
     for (shape, key) in [
         ("a node address", &[1u32][..]),
         ("an account address", &[1, 0, 1][..]),
@@ -270,14 +292,14 @@ fn the_record_and_the_slice_admit_every_address_a_release_build_can_stage() {
             addr.level() != Level::Element || addr.subspace() != Some(&content_subspace()),
             "{shape} is routed to content, so routing would not stop it"
         );
-        let decoded = bincode::deserialize::<ContentStore>(&slice(key))
+        let decoded = bincode::deserialize::<ContentStore>(&raw_slice(&[key]))
             .unwrap_or_else(|refusal| panic!("a slice holding {shape} was refused: {refusal}"));
         assert_eq!(
             decoded.value_at(addr.tumbler()).map(Val::as_bytes),
             Some(&b"x"[..]),
             "the slice decoded from {shape} does not hold it"
         );
-        let decoded = bincode::deserialize::<ContentWrite>(&record(key))
+        let decoded = bincode::deserialize::<ContentWrite>(&raw_record(key))
             .unwrap_or_else(|refusal| panic!("a record at {shape} was refused: {refusal}"));
         assert_eq!(
             decoded.addr(),
@@ -356,10 +378,11 @@ fn the_slice_refuses_a_body_naming_one_address_twice() {
     // So the body is refused, by the decode's own message, and "one address"
     // is the DECODED address: ca(1) twice as written, then ca(1) twice spelled
     // two ways — its ordinal's `u32` digits with and without a trailing zero
-    // digit, which num-bigint reads as one number. The bytes are the raw
-    // shapes the refusal tests above lay down, each key spelled as the `u32`
-    // digits its components serialize as; the same shape naming two addresses
-    // is the control, decoding to the slice that holds both values.
+    // digit, which num-bigint reads as one number. The bytes are laid as
+    // `raw_slice` lays a body, but each key is spelled as the `u32` digits its
+    // components serialize as and each value is its own; the same shape
+    // naming two addresses is the control, decoding to the slice that holds
+    // both values.
     let digits = |key: &Tumbler| -> Vec<Vec<u32>> { key.iter().map(Nat::to_u32_digits).collect() };
     assert_eq!(
         bincode::serialize(&digits(ca(1).tumbler())).expect("the digits serialize"),
@@ -407,13 +430,6 @@ fn the_record_and_the_slice_refuse_for_the_first_fault_they_read() {
     // refused for the key, because a count is no fault until the body runs
     // out; and a record whose address breaks T4 and whose value counts more
     // bytes than follow, refused for the address, which it reads first.
-    let raw = |key: &[u32]| -> Vec<Nat> { key.iter().map(|&c| Nat::from(c)).collect() };
-    let entry = |key: &[u32]| (raw(key), b"x".to_vec());
-    let slice = |keys: &[&[u32]]| {
-        bincode::serialize(&keys.iter().map(|&key| entry(key)).collect::<Vec<_>>())
-            .expect("the raw slice serializes")
-    };
-    let ca1: &[u32] = &[1, 0, 1, 0, 1, 0, 1, 1];
     let no_address: &[u32] = &[1, 0, 0, 1];
     let past_its_bytes = u64::MAX.to_le_bytes();
     let door_refusal = validate(t(no_address)).expect_err("the key breaks T4").to_string();
@@ -423,22 +439,22 @@ fn the_record_and_the_slice_refuse_for_the_first_fault_they_read() {
         .to_string();
     // Two entries counted: ca(1) whole, then ca(1) again, its value counting
     // more bytes than follow.
-    let mut overlong_value = 2u64.to_le_bytes().to_vec();
-    overlong_value.extend(bincode::serialize(&entry(ca1)).expect("the raw entry serializes"));
-    overlong_value.extend(bincode::serialize(&raw(ca1)).expect("the raw key serializes"));
+    let mut overlong_value = raw_slice(&[CA1]);
+    overlong_value[..8].copy_from_slice(&2u64.to_le_bytes());
+    overlong_value.extend(bincode::serialize(&raw_key(CA1)).expect("the raw key serializes"));
     overlong_value.extend_from_slice(&past_its_bytes);
     // ca(1), then a key breaking T4, under a count no body could carry.
-    let mut overlong_count = slice(&[ca1, no_address]);
+    let mut overlong_count = raw_slice(&[CA1, no_address]);
     overlong_count[..8].copy_from_slice(&past_its_bytes);
     for (what, body, speaks) in [
         (
             "a key breaking T4 before a second naming of ca(1)",
-            slice(&[ca1, no_address, ca1]),
+            raw_slice(&[CA1, no_address, CA1]),
             &door_refusal,
         ),
         (
             "a second naming of ca(1) before a key breaking T4",
-            slice(&[ca1, ca1, no_address]),
+            raw_slice(&[CA1, CA1, no_address]),
             &named_twice,
         ),
         (
@@ -454,7 +470,7 @@ fn the_record_and_the_slice_refuse_for_the_first_fault_they_read() {
             "a slice with {what} was refused for a fault it reads later"
         );
     }
-    let mut record = bincode::serialize(&raw(no_address)).expect("the raw address serializes");
+    let mut record = bincode::serialize(&raw_key(no_address)).expect("the raw address serializes");
     record.extend_from_slice(&past_its_bytes);
     assert_eq!(
         assert_refused::<ContentWrite>("a record whose address and value both fail", &record),

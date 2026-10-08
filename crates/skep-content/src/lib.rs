@@ -3,7 +3,8 @@
 //! The **permascroll**: an append-only, write-once map from allocated
 //! I-address to opaque content value, plus the two point queries over it —
 //! *is content stored here?* ([`ContentStore::contains`]) and *what is
-//! stored here?* ([`ContentStore::value_at`]). M4 owns the immutable,
+//! stored here?* ([`ContentStore::value_at`]) — and its one enumeration,
+//! every entry once ([`ContentStore::iter`]). M4 owns the immutable,
 //! never-GC'd half of the strand — ASN-0036's two-component state, the
 //! content store and the arrangements — and does exactly that one thing:
 //! **store an immutable value at an address forever, and look it up — never

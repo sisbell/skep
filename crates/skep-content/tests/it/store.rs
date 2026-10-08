@@ -18,6 +18,33 @@ use skep_content::{stage_write, ContentError, ContentStore, ContentWrite, Iter, 
 
 use crate::common::*;
 
+/// Whether the type before the colon implements the trait after it, read at
+/// compile time: the inherent `IMPLEMENTS`, which path resolution prefers,
+/// exists only where the bound holds, and the fallback trait's `false`
+/// answers everywhere else. A probe that could only ever say `false` would
+/// pass every "implements no X" claim, so each claim pairs it with a control
+/// type that does implement the trait and must read `true`.
+macro_rules! implements {
+    ($ty:ty: $($bound:tt)+) => {{
+        // Each probe reads one `IMPLEMENTS` of the two — the inherent one
+        // where the bound holds, the fallback's elsewhere — so the other is
+        // dead by design, and `Probe` is a type to resolve paths on, never
+        // built.
+        #[allow(dead_code)]
+        struct Probe<T>(std::marker::PhantomData<T>);
+        #[allow(dead_code)]
+        trait Fallback {
+            const IMPLEMENTS: bool = false;
+        }
+        impl<T> Fallback for Probe<T> {}
+        #[allow(dead_code)]
+        impl<T: $($bound)+> Probe<T> {
+            const IMPLEMENTS: bool = true;
+        }
+        <Probe<$ty>>::IMPLEMENTS
+    }};
+}
+
 // ---- §C stage_write: the pure step ----
 
 #[test]
@@ -294,34 +321,21 @@ fn iter_knows_exactly_what_remains_at_every_step_through_len_and_size_hint_alike
 }
 
 #[test]
-#[allow(clippy::assertions_on_constants)] // the probe's answer is a constant by design
 fn iter_offers_no_walk_from_the_far_end_so_it_promises_no_order() {
     // store.rs, `Iter`: the reverse walk is withheld though `im`'s map
     // iterator has one — the order is no part of `iter`'s promise, and a walk
     // from the far end would make one: `iter().rev().next()` reads as "the
     // highest address stored", an ordered read M4 does not offer, true only
     // while the map behind the slice is ordered. So `Iter` implements no
-    // `DoubleEndedIterator`. The probe is the one
-    // `val_implements_no_hash_so_no_map_can_key_on_a_value` uses:
-    // `Probe::<T>::FROM_THE_FAR_END` resolves to the inherent `true` where
-    // `T: DoubleEndedIterator` and to the fallback trait's `false` elsewhere;
-    // `std::slice::Iter`, which does walk from either end, is the control that
-    // the probe can read `true` at all.
-    #[allow(dead_code)] // a type to resolve paths on; never built
-    struct Probe<T>(std::marker::PhantomData<T>);
-    trait Fallback {
-        const FROM_THE_FAR_END: bool = false;
-    }
-    impl<T> Fallback for Probe<T> {}
-    impl<T: DoubleEndedIterator> Probe<T> {
-        const FROM_THE_FAR_END: bool = true;
-    }
+    // `DoubleEndedIterator`, which `implements!` reads; `std::slice::Iter`,
+    // which does walk from either end, is the control that it can read `true`
+    // at all.
     assert!(
-        <Probe<std::slice::Iter<'static, u8>>>::FROM_THE_FAR_END,
+        implements!(std::slice::Iter<'static, u8>: DoubleEndedIterator),
         "the probe reads `false` even for an iterator that walks from either end"
     );
     assert!(
-        !<Probe<Iter<'static>>>::FROM_THE_FAR_END,
+        !implements!(Iter<'static>: DoubleEndedIterator),
         "Iter walks from the far end: `rev()` hands its callers an order `iter` disclaims"
     );
 }
@@ -346,26 +360,17 @@ fn val_wraps_bytes_and_compares_by_content_value() {
 }
 
 #[test]
-#[allow(clippy::assertions_on_constants)] // the probe's answer is a constant by design
 fn val_implements_no_hash_so_no_map_can_key_on_a_value() {
     // value.rs, S4: identity is by address, never by value, and `Val` keeps it
     // so by implementing no `Hash` — no map, this crate's or a caller's, can
-    // key on a value. `Probe::<T>::HASH` resolves to the inherent `true` where
-    // `T: Hash` and to the fallback trait's `false` elsewhere; `Tumbler`, M4's
-    // key, which does implement `Hash`, is the control that the probe can read
-    // `true` at all.
-    #[allow(dead_code)] // a type to resolve paths on; never built
-    struct Probe<T>(std::marker::PhantomData<T>);
-    trait Fallback {
-        const HASH: bool = false;
-    }
-    impl<T> Fallback for Probe<T> {}
-    impl<T: std::hash::Hash> Probe<T> {
-        const HASH: bool = true;
-    }
-    assert!(<Probe<Tumbler>>::HASH, "the probe reads `false` even for a type that implements Hash");
+    // key on a value. `implements!` reads that; `Tumbler`, M4's key, which
+    // does implement `Hash`, is the control that it can read `true` at all.
     assert!(
-        !<Probe<Val>>::HASH,
+        implements!(Tumbler: std::hash::Hash),
+        "the probe reads `false` even for a type that implements Hash"
+    );
+    assert!(
+        !implements!(Val: std::hash::Hash),
         "Val implements Hash: a map can key on a value, where S4 keys content by its address"
     );
 }

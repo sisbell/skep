@@ -5,7 +5,7 @@ edition.workspace = true
 rust-version.workspace = true
 repository.workspace = true
 license.workspace = true
-description = "M4 — the permascroll: an append-only, write-once map from allocated I-address to opaque content value, plus the two point queries over it (contains / value_at)"
+description = "M4 — the permascroll: an append-only, write-once map from allocated I-address to opaque content value, plus the two point queries over it (contains / value_at) and its one enumeration (iter)"
 readme = "README.md"
 
 [features]

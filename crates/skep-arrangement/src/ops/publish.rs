@@ -18,7 +18,7 @@ use crate::chain::{published_target, trunk_head, trunk_of};
 use crate::error::PublishError;
 use crate::ownership::{gate_write, Caller};
 use crate::run::Run;
-use crate::runlist::extend_or_push_run;
+use crate::runlist::{extend_or_push_run, RunUnion};
 use crate::shot::{run_origin_document, Shot};
 use crate::state::{M5Rec, ShotTerms};
 use crate::HasM5;
@@ -116,8 +116,9 @@ where
     /// this composite opens with on its working world → `TooManyValues`
     /// ([`Shot::reinserted_values`](crate::Shot::reinserted_values) against
     /// [`MAX_REINSERTED_VALUES`] — request arithmetic, so it answers before
-    /// any address is probed) → existence, `DanglingSource` on
-    /// the first run any of whose addresses M4 does not hold → then the
+    /// any address is probed) → existence, `DanglingSource` where an address
+    /// some run names holds no value, each address probed once over the
+    /// union of the runs' I-extents → then the
     /// placement, RUN BY RUN in the order given: a draft-native run's values
     /// `Mint` → `Content` apiece, and after each run `TooManyRuns` once the
     /// accumulator passes the budget; then `TooManyRuns` as the base's tail is
@@ -175,21 +176,22 @@ where
     /// [`MAX_PLACED_RUNS`](crate::MAX_PLACED_RUNS), measured as each run is
     /// accumulated. Both are ceilings a shot cannot be split to meet, since
     /// the member it produces is born whole. Two terms are set by stored state
-    /// rather than by the request's size. The carried-run test sweeps the
-    /// base's runs once per supplied run — a length comparison per resident,
-    /// and an intersection per resident of the supplied run's own length,
-    /// whatever the run's width — so it grows with
-    /// [`content_run_count`](crate::M5State::content_run_count) of the base.
-    /// The existence check derives and probes every address of every supplied
-    /// run, stopping only at the first one M4 does not hold. Over the
+    /// rather than by the request's size. The carried-run test merges the
+    /// base's runs into their union once per admission — `O(n log n)` in
+    /// [`content_run_count`](crate::M5State::content_run_count) of the base,
+    /// and a pointer per run — and answers each supplied run by one binary
+    /// search of it, whatever the run's width. The existence check probes
+    /// every DISTINCT address the supplied runs name, once — their I-extents
+    /// merged first — stopping at the first one M4 does not hold. Over the
     /// draft-native runs that walk is bounded by the re-insert's cap; over the
-    /// BY-REFERENCE runs it is their `Σ width` — for a shot that commits,
-    /// every position they name — so a short run list walks as far as the
-    /// stored content it names, each run paying its whole width even where
-    /// runs repeat one I-extent. The wire caps the run COUNT and not
-    /// `Σ width`. Those two — the base's run count, which the arrangement
-    /// answers without reading a run, and the by-reference runs' `Σ width` —
-    /// are the numbers a route that carries this op owes.
+    /// BY-REFERENCE runs it is the union they name — for a shot that commits,
+    /// every distinct position — which is the stored content the request
+    /// points at and not its repetition of it: a run list naming one I-extent
+    /// many times walks it once, and a short run list still walks as far as
+    /// the stored content it names. The wire caps the run COUNT and not that
+    /// union. Those two — the base's run count, which the arrangement answers
+    /// without reading a run, and the size of the union the by-reference runs
+    /// name — are the numbers a route that carries this op owes.
     pub fn publish(
         &self,
         caller: Caller,
@@ -242,17 +244,21 @@ where
             }
             // Existence (S3★): every address a run names holds a value. Each
             // address is asked, not only the start: a by-reference run is the
-            // CLIENT's I-extent rather than one an arrangement resolved. And each
-            // is asked through `value_at`, the accessor the re-insert below
-            // reads the draft-native bytes with. COPY places by reference and
-            // reads no value back, so presence is the whole of its question;
-            // the shot does read them, and asking with the read's own accessor
-            // makes the answer found here the answer the re-insert gets — M4's
-            // fold only ever adds (S0), so no write staged in between can take
-            // a value away.
+            // CLIENT's I-extent rather than one an arrangement resolved. Each
+            // is asked ONCE, over the union of the supplied runs' I-extents
+            // (`RunUnion`), which holds every address any run names, each in
+            // one of its runs: a value found there is found for every run
+            // naming it, and a request naming one stored extent many times
+            // walks it once. And each is asked through `value_at`, the accessor
+            // the re-insert below reads the draft-native bytes with. COPY
+            // places by reference and reads no value back, so presence is the
+            // whole of its question; the shot does read them, and asking with
+            // the read's own accessor makes the answer found here the answer
+            // the re-insert gets — M4's fold only ever adds (S0), so no write
+            // staged in between can take a value away.
             let content = stg.working().content();
-            for SettledRun { run, .. } in &supplied {
-                if !run.addrs().all(|a| content.value_at(a.tumbler()).is_some()) {
+            for run in RunUnion::of(supplied.iter().map(|settled| settled.run)).runs() {
+                if !run.into_addrs().all(|a| content.value_at(a.tumbler()).is_some()) {
                     return Err(PublishError::DanglingSource);
                 }
             }
@@ -343,9 +349,10 @@ where
 /// distinct origin document, in run order, of `world` — and is held to
 /// `publish`'s first REQUIRES: it answers off the world it is handed.
 ///
-/// COST: `publish`'s own through its gate — the carried-run sweep, one
-/// consult per distinct origin document — and nothing of the existence walk
-/// or the placement. It reads no content store, so a world of M3 and M5
+/// COST: `publish`'s own through its gate — the carried-run test (the base's
+/// runs merged into their union once, each supplied run one search of it),
+/// one consult per distinct origin document — and nothing of the existence
+/// walk or the placement. It reads no content store, so a world of M3 and M5
 /// alone answers it.
 pub fn shot_admission<W: HasM3 + HasM5>(
     world: &W,
@@ -454,16 +461,21 @@ fn admit<'s, W: HasM3 + HasM5>(
     // document speaks before any existence answer. An origin document joins
     // `admitted` only once the consult admits it: a carried run adds nothing
     // to it, so a later run from the same origin that the base does not
-    // arrange is still asked about.
+    // arrange is still asked about. The base's runs are merged into their
+    // union once, at the first run the gate must ask about, and every run is
+    // then one search of it: a carried run admits no origin, so a request of
+    // carried runs asks this of every one.
+    let mut base_union: Option<RunUnion<'_>> = None;
     let mut admitted: BTreeSet<&Address> = BTreeSet::new();
     for SettledRun { run, origin_doc } in &supplied {
         if *origin_doc == trunk || admitted.contains(origin_doc) {
             continue;
         }
-        let carried = shot
-            .base
-            .as_ref()
-            .is_some_and(|base| m5.arranges_run(&base.member, run));
+        let carried = shot.base.as_ref().is_some_and(|base| {
+            base_union
+                .get_or_insert_with(|| m5.content_union(&base.member))
+                .covers(run)
+        });
         if carried {
             continue;
         }

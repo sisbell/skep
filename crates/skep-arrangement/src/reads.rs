@@ -23,7 +23,7 @@ use num_traits::One;
 use skep_address::{difference_sets, union, Address, Nat, Span, SpanSet};
 
 use crate::run::Run;
-use crate::runlist::Runs;
+use crate::runlist::{RunUnion, Runs};
 use crate::state::M5State;
 use crate::vspace::{as_ordinal_vspan, ordinal_vspan, VPos};
 
@@ -177,12 +177,15 @@ impl M5State {
     /// `#runs(doc)` in the content subspace — how many runs
     /// [`content_runs`](M5State::content_runs) would hand back, without handing
     /// them back. NOT [`content_count`](M5State::content_count), which is the
-    /// positions those runs cover. It is the quantity COPY's resolve walk,
+    /// positions those runs cover. It is the quantity COPY's resolve walk —
+    /// which COPY charges at this number against
+    /// [`MAX_COPY_RESOLVE_STEPS`](crate::MAX_COPY_RESOLVE_STEPS) —
     /// [`project`](M5State::project)'s and
     /// [`arranges_any`](M5State::arranges_any)'s joins, VERSION's R-append and
-    /// the shot's carried-run sweep are priced in, so a caller that owns admission
-    /// control for one of them reads the number here rather than materializing
-    /// the runs to count them. One map lookup, reading no run; absent doc ⇒ 0.
+    /// the shot's carried-run union are priced in, so a caller that owns
+    /// admission control for one of them reads the number here rather than
+    /// materializing the runs to count them. One map lookup, reading no run;
+    /// absent doc ⇒ 0.
     pub fn content_run_count(&self, doc: &Address) -> usize {
         self.content_list(doc).run_count()
     }
@@ -271,14 +274,19 @@ impl M5State {
         from + width <= &self.content_count(doc) + &Nat::one()
     }
 
-    /// Does `doc`'s CONTENT arrangement hold every address of `run` — the
+    /// The UNION of `doc`'s content runs' I-extents ([`RunUnion`]) — every
+    /// address its CONTENT arrangement holds, merged so that whether it holds
+    /// EVERY address of a run is one search ([`RunUnion::covers`]), the
     /// membership question of [`seats_link`](M5State::seats_link) asked of a
-    /// run's whole I-extent? The publish shot's carried-run test (PUB-6.24,
+    /// run's whole I-extent. The publish shot's carried-run test (PUB-6.24,
     /// PUB-8.1): a supplied run the base already arranges takes no source
     /// gate, the base having answered for those addresses when it was
-    /// published. Absent doc ⇒ nothing is carried.
-    pub(crate) fn arranges_run(&self, doc: &Address, run: &Run) -> bool {
-        self.content_list(doc).covers(run)
+    /// published. Merged once and asked of every run, so a request of many
+    /// runs pays `doc`'s run count once: `O(n log n)` in
+    /// [`content_run_count`](M5State::content_run_count), and a pointer per
+    /// run. Absent doc ⇒ the empty union, which covers nothing.
+    pub(crate) fn content_union(&self, doc: &Address) -> RunUnion<'_> {
+        RunUnion::of(self.content_list(doc).iter())
     }
 
     /// The content runs of `doc` PAST ordinal `extent` — positions
@@ -379,10 +387,9 @@ impl M5State {
     /// TOTAL for any coverage, mixed-length included: every run is asked about
     /// every cover through the run's own offset arithmetic
     /// (`Run::offsets_covered_by`, both of whose branches are total), never
-    /// through the carried-run test's length filter (`RunList::covers`), which
-    /// is sound only between two run I-extents — a subtree cover holds
-    /// addresses of every length beneath it. CONTENT subspace only, as
-    /// `project` is.
+    /// through the carried-run test's chain match (`RunUnion::covers`), which
+    /// is sound only between two runs — a subtree cover holds addresses of
+    /// every length beneath it. CONTENT subspace only, as `project` is.
     ///
     /// COST: at most `#runs(doc) × |coverage|` pair tests — `project`'s
     /// factors, whose admission control stays the caller's — and no heap

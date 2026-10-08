@@ -183,7 +183,8 @@
 // lift, its constructor and decode door.
 mod run;
 // The implicit-position run-list: splice, contract, reorder, the merge
-// condition and its one accumulator, the mapping blocks, the lazy walks.
+// condition and its one accumulator, the mapping blocks, the lazy walks, and
+// the merged union of a run set's I-extents.
 mod runlist;
 // R, the append-only provenance relation, and its decode door.
 mod provenance;
@@ -223,7 +224,9 @@ pub use deposit::{deposit_class_types, Deposit};
 pub use error::{
     CopyError, DeleteError, InsertError, PublishError, RearrangeError, SeatError, VersionError,
 };
-pub use ops::{shot_admission, Vstream, MAX_PLACED_RUNS, MAX_REINSERTED_VALUES};
+pub use ops::{
+    shot_admission, Vstream, MAX_COPY_RESOLVE_STEPS, MAX_PLACED_RUNS, MAX_REINSERTED_VALUES,
+};
 pub use ownership::Caller;
 pub use run::{Run, RunError};
 pub use runlist::Runs;

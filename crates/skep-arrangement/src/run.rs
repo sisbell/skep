@@ -123,8 +123,7 @@ impl TryFrom<RunShadow> for Run {
 /// answer [`Run::offsets_covered_by`] gives, given a name because it is one
 /// thing: the two bounds never travel apart, and the quantity the I→V read
 /// actually wants from them is [`width`](OffsetRange::width), which the range
-/// derives rather than its reader — and the sweep in `RunList::covers` wants
-/// the bound itself, [`hi`](OffsetRange::hi), so both are answered.
+/// derives rather than its reader.
 ///
 /// NONEMPTY IS THE INVARIANT, and it is why `width` is total: `lo < hi`
 /// always, "covers none" being `None` rather than an empty range. The fields
@@ -151,13 +150,6 @@ impl OffsetRange {
     /// first the covering span reaches.
     pub(crate) fn lo(&self) -> &Nat {
         &self.lo
-    }
-
-    /// One past the last covered offset — the range's exclusive end, which a
-    /// sweep over several ranges compares directly rather than rebuilding it
-    /// as `lo + width`.
-    pub(crate) fn hi(&self) -> &Nat {
-        &self.hi
     }
 
     /// HOW MANY of the run's positions the range covers, `hi − lo`. The count
@@ -211,10 +203,11 @@ impl Run {
     /// routes deserialization into this function.
     ///
     /// M5's own sites divide in two. The PROPAGATING ones — run-list
-    /// split/coalesce, `resolve`, the content placing fold — build Runs by the
-    /// in-crate struct literal from a start that is already one: a start
-    /// reaching them is a minted element address or an in-crate ordinal shift
-    /// of one, and such a shift preserves the element field's length. The two
+    /// split/coalesce, `resolve`, the content placing fold, a run union's
+    /// merged pieces — build Runs by the in-crate struct literal from a start
+    /// that is already one: another run's start, which this type holds to be
+    /// one, or an in-crate ordinal shift of one, and such a shift preserves
+    /// the element field's length. The two
     /// ORIGINATING ones establish it instead, and each does so at its own
     /// door: `allocate_for_placement` — INSERT's per-value step, which the
     /// publish shot's re-insert shares — places what `M3State::mint_content`
@@ -392,11 +385,12 @@ impl Run {
     /// own width, each a `Nat` halving and an ordinal shift at that width's
     /// magnitude. That is bounded by stored state when `self` is a resident
     /// run — [`project`](crate::M5State::project) asks each of a document's
-    /// runs about a caller's coverage — and it is why
-    /// [`RunList::covers`](crate::runlist::RunList::covers), whose `self` is a
-    /// client's run and whose spans are resident runs' I-extents, sends no
-    /// span down it: between two runs, the only spans this branch would be
-    /// asked about are of another endpoint length, which cover nothing.
+    /// runs about a caller's coverage — which is why no caller asks it of a
+    /// CLIENT's run, whose width the client chose: the publish shot's
+    /// carried-run test answers whether a client's run is arranged from a
+    /// merged union of the base's runs
+    /// ([`RunUnion::covers`](crate::runlist::RunUnion::covers)), searching no
+    /// width at all.
     ///
     /// THE SOLE PRODUCER of an `OffsetRange`, which is what makes that type's
     /// nonemptiness structural: an intersection satisfies `start < reach`

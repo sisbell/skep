@@ -143,14 +143,13 @@ fn offsets_covered_by_answers_in_both_branches() {
     );
     // The two quantities the I→V read takes off a range: where it opens,
     // and how many of the run's positions it names — the second derived by
-    // the range, so `project` does not subtract the bounds itself. And the
-    // bound the carried-run sweep takes: one past the last, which is where
-    // the width came from, so the two agree by construction.
+    // the range from its own two bounds, so `project` does not subtract them
+    // itself, and the width reaches exactly the bound it was taken from.
     let range = r.offsets_covered_by(&inner).expect("the cover is nonempty");
     assert_eq!(range.lo(), &n(1));
     assert_eq!(range.width(), n(1));
-    assert_eq!(range.hi(), &n(2));
-    assert_eq!(range.hi(), &(range.lo() + &range.width()));
+    assert_eq!(range.hi, n(2));
+    assert_eq!(range.hi, range.lo() + &range.width());
     let apart = Run::new(ca(9), n(1)).expect("valid run").iextent();
     assert_eq!(r.offsets_covered_by(&apart), None);
     // Cross-length fallback: doc1's content-base subtree covers every

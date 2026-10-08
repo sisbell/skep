@@ -1,7 +1,7 @@
 //! COPY's in-crate claims, in a world whose arrangement and content store are
 //! seeded INDEPENDENTLY — a state no engine reaches: its content-side
-//! referential gate (S3★), its run budget over many specs and over one, and
-//! the published-target refusal ahead of every source read.
+//! referential gate (S3★), its run budget over many specs and over one, its
+//! walk budget, and the published-target refusal ahead of every source read.
 
 use serde::{Deserialize, Serialize};
 use skep_content::{stage_write, ContentStore, Val};
@@ -214,6 +214,80 @@ fn one_spec_over_a_fragmented_source_is_refused_at_the_cap_not_after_it() {
     assert_eq!(
         k.snapshot().world().m5().content_run_count(&doc2()),
         4 + MAX_PLACED_RUNS
+    );
+}
+
+#[test]
+fn copy_charges_each_specs_walk_at_its_sources_run_count_before_resolving_it() {
+    // §5: a spec's resolution walks every run left of its opening ordinal —
+    // all of them for a spec aimed past its source's end, which keeps
+    // nothing — so what a copy's specs command under the applier lock is not
+    // what they place. Each spec is charged its source's WHOLE run count
+    // ahead of its walk, the charges summed in spec order, and a copy whose
+    // sum passes `MAX_COPY_RESOLVE_STEPS` is refused `TooManyRuns`, whatever
+    // its specs would keep and before the crossing spec is walked. The charge
+    // is the worst case, so a spec opening at the source's first position is
+    // charged as one opening past its last; and at the budget the copy is
+    // walked and placed.
+    let p1 = Caller::Principal(PrincipalId(1));
+    let source_runs: usize = 1024;
+    // Non-adjacent starts, so nothing coalesces and the source really holds
+    // this many runs.
+    let present: Vec<u32> = (1..=source_runs as u32).map(|k| 2 * k).collect();
+    let runs: Vec<Run> = present.iter().map(|&k| run(&ca(k), 1)).collect();
+    let k = gate_kernel_arranging(runs, &present);
+    assert_eq!(
+        k.snapshot().world().m5().content_run_count(&doc1()),
+        source_runs
+    );
+    let at_budget = MAX_COPY_RESOLVE_STEPS / source_runs;
+    assert_eq!(
+        at_budget * source_runs,
+        MAX_COPY_RESOLVE_STEPS,
+        "premise: whole charges"
+    );
+    // A spec naming the source's first position walks one run; one opening
+    // past its end walks them all and keeps nothing. Both are charged alike.
+    let first = VSpec {
+        source: doc1(),
+        span: vspan(1, 1, 1),
+    };
+    let past_the_end = VSpec {
+        source: doc1(),
+        span: vspan(1, source_runs as u32 + 1, 1),
+    };
+    let specs = |spec: &VSpec, count: usize| -> Vec<VSpec> {
+        std::iter::repeat_with(|| spec.clone())
+            .take(count)
+            .collect()
+    };
+    let before = k.current_seq();
+    // One spec past the budget, however little each walks.
+    assert!(matches!(
+        rejected(Vstream::new(&k).copy(p1, &doc2(), vp(1, 1), &specs(&first, at_budget + 1))),
+        CopyError::TooManyRuns
+    ));
+    // The budget's specs, then one aimed past the end: the crossing spec is
+    // refused ahead of the walk it would make, keeping nothing.
+    let mut crossing = specs(&first, at_budget);
+    crossing.push(past_the_end.clone());
+    assert!(matches!(
+        rejected(Vstream::new(&k).copy(p1, &doc2(), vp(1, 1), &crossing)),
+        CopyError::TooManyRuns
+    ));
+    // Under the budget a spec past the end is walked, and keeps nothing.
+    assert!(matches!(
+        rejected(Vstream::new(&k).copy(p1, &doc2(), vp(1, 1), &specs(&past_the_end, 1))),
+        CopyError::EmptyResult
+    ));
+    assert_eq!(k.current_seq(), before, "every refusal commits nothing");
+    // At the budget the specs are walked, and what they keep is placed.
+    Vstream::new(&k)
+        .copy(p1, &doc2(), vp(1, 1), &specs(&first, at_budget))
+        .expect("a copy charged exactly the budget is walked");
+    assert_eq!(
+        k.snapshot().world().m5().content_count(&doc2()),
+        n(at_budget as u32)
     );
 }
 

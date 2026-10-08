@@ -1178,7 +1178,7 @@ Rules that hold across its files:
 - **One door for a run.** `Run::new` admits every run not built in this
   crate — the serde shadow and the `LinkSeat` fold go through it — and every
   in-crate literal starts at an address that already is a full element
-  position: a resident run's start, an in-crate shift of one, or what M3's
+  position: another run's start, an in-crate shift of one, or what M3's
   `mint_content` returned. `runlist::extend_or_push_run` is the one place a
   built run is widened and the one place a placement's runs are accumulated.
 - **One allocation step.** Every fresh content address is minted and written

@@ -6,7 +6,7 @@ use skep_content::HasContent;
 use skep_kernel::{Seq, TxnError, WorldState};
 use skep_namespace::{HasM3, M3State};
 
-use super::{Vstream, MAX_PLACED_RUNS};
+use super::{Vstream, MAX_COPY_RESOLVE_STEPS, MAX_PLACED_RUNS};
 use crate::chain::published_target;
 use crate::error::CopyError;
 use crate::ownership::{gate_write, Caller};
@@ -69,7 +69,11 @@ where
     /// refuse to serve, Conflicts #7)
     /// → `SourceNotContentSubspace` (that span's subspace ≠ s_C)
     /// → `EmptySource` (ASN-0118
-    /// enabled(COPY)) → per-run `DanglingSource` (`M4::contains` on the run
+    /// enabled(COPY)) → `TooManyRuns` (the WALK's charge: this spec's source's
+    /// whole run count, summed with the specs before it, past
+    /// [`MAX_COPY_RESOLVE_STEPS`] — taken before
+    /// the spec is resolved, so a spec the budget refuses is never walked) →
+    /// per-run `DanglingSource` (`M4::contains` on the run
     /// start — S3★, Open decision #5 default) → `TooManyRuns`
     /// ([`MAX_PLACED_RUNS`](crate::MAX_PLACED_RUNS), measured after each run
     /// is accumulated; the resolution is pulled LAZILY, so an over-budget spec
@@ -142,6 +146,9 @@ where
                     return Err(CopyError::OutOfBounds);
                 }
                 let mut runs: Vec<Run> = Vec::new();
+                // The run-list steps the specs before this one were charged
+                // (`MAX_COPY_RESOLVE_STEPS`).
+                let mut steps: usize = 0;
                 for spec in specs {
                     if !world.m3().is_registered_document(&spec.source) {
                         return Err(CopyError::SourceNotRegistered);
@@ -155,6 +162,14 @@ where
                     }
                     if world.m5().content_is_empty(&spec.source) {
                         return Err(CopyError::EmptySource);
+                    }
+                    // The WALK's charge, ahead of the walk: the source's whole
+                    // run count, the most this spec's resolution can step past
+                    // — the request's spec list multiplies it, under the
+                    // applier lock, whatever the specs keep.
+                    steps = steps.saturating_add(world.m5().content_run_count(&spec.source));
+                    if steps > MAX_COPY_RESOLVE_STEPS {
+                        return Err(CopyError::TooManyRuns);
                     }
                     // Resolved BEFORE staging ⇒ a self-copy sees the pre-edit
                     // arrangement. Resolved LAZILY, so what one spec makes

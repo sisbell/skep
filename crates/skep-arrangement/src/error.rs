@@ -51,9 +51,12 @@ pub enum InsertError {
 /// `span.start().get(1) ≠ s_C`), `EmptySource` (registered-but-content-empty
 /// source, ASN-0118 enabled(COPY)), `DanglingSource` (a resolved run start
 /// ∉ dom(C) — S3★), `TooManyRuns` (the placement exceeds
-/// [`MAX_PLACED_RUNS`](crate::MAX_PLACED_RUNS)), and `EmptyResult` (net
-/// placement empty after clipping). `NotOwner` carries the DESTINATION
-/// document, which is the only one COPY gates.
+/// [`MAX_PLACED_RUNS`](crate::MAX_PLACED_RUNS), or the specs' run-list walk
+/// would exceed [`MAX_COPY_RESOLVE_STEPS`](crate::MAX_COPY_RESOLVE_STEPS) —
+/// one verdict for both, a run budget the caller meets by splitting the
+/// copy, as M7's `SlotTooLarge` is one for a slot's two budgets), and
+/// `EmptyResult` (net placement empty after clipping). `NotOwner` carries the
+/// DESTINATION document, which is the only one COPY gates.
 ///
 /// Why the residence and referential guards exist — what each protects, and
 /// what widening it would oblige — and which document `NotOwner` names are
@@ -396,7 +399,9 @@ impl fmt::Display for CopyError {
             CopyError::DanglingSource => {
                 "copy: a resolved run start is not present in the content store (S3★)"
             }
-            CopyError::TooManyRuns => "copy: the placement exceeds the per-transaction run budget",
+            CopyError::TooManyRuns => {
+                "copy: the placement, or the run-list walk resolving its specs, exceeds the per-transaction run budget"
+            }
             CopyError::EmptyResult => "copy: the net placement is empty after clipping",
         })
     }

@@ -422,14 +422,16 @@ fn the_carried_test_answers_a_run_of_the_wires_largest_width_without_searching_i
     // PUB-6.24's carried test, asked of a run as wide as the wire can name —
     // a width of 4096 decimal digits — whose endpoint length is not the
     // base's: its start lies under a member of doc2, one component deeper
-    // than the head's one run, which is of the edition's own I-space. A
-    // resident of another length holds no address of the run, so the test
-    // skips it by length rather than binary-searching the client's width — a
-    // search a fragmented head would pay once per resident, under the applier
-    // lock, ahead of any existence answer. Not carried, the run is asked
-    // about; then its first address holds no value. What a regression costs
-    // here is time, which this suite does not measure: a corpus seed for the
-    // fuzzing tier, with a wall-clock budget, against a fragmented head.
+    // than the head's one run, which is of the edition's own I-space. A piece
+    // of another chain holds no address of the run, so the test asks the run
+    // only of the base union's piece of its own chain — none here — and
+    // searches no width: a search of the client's width would cost a
+    // fragmented head tens of thousands of bigint steps per resident, under
+    // the applier lock, ahead of any existence answer. Not carried, the run is
+    // asked about; then its first address holds no value. What a regression
+    // costs here is time, which this suite does not measure: a corpus seed
+    // for the fuzzing tier, with a wall-clock budget, against a fragmented
+    // head.
     let k = mem_kernel();
     let vs = deposit_abc(&k);
     let (member1, _) = vs
@@ -517,6 +519,56 @@ fn a_supplied_run_is_dangling_when_any_address_lacks_a_value_not_only_its_start(
     let s = k.snapshot();
     assert_eq!(s.world().m5().content_count(&member1), n(4));
     assert_eq!(read_v(&s, &member1, 4), b"c".to_vec(), "the draft's c, re-inserted");
+}
+
+#[test]
+fn the_existence_walk_probes_the_union_of_the_runs_and_misses_no_address_of_any() {
+    // S3★ over the UNION of the supplied runs' I-extents: an extent several
+    // runs name is probed once, and the hole only the longest run reaches is
+    // found whichever order the runs come in — the one way a merged walk can
+    // go wrong is to keep the reach of the first run naming a start where it
+    // must keep the furthest. Corpus seed for the fuzzing tier: thousands of
+    // runs over one large stored extent and one dangling run, refused
+    // `DanglingSource` inside a wall-clock budget.
+    let k = mem_kernel();
+    let vs = deposit_abc(&k); // pdoc, memberless
+    vs.insert(
+        P1,
+        &doc2(),
+        vp(1, 1),
+        vec![val(b"w"), val(b"x")],
+        Deposit::Undeclared,
+    )
+    .expect("doc2 holds w, x");
+    let w = a(&[1, 0, 1, 0, 2, 0, 1, 1]);
+    let readable = readable_by(PrincipalId(1));
+    let shot = |widths: [u32; 3]| Shot {
+        base: Some(base(&pdoc(), 3)),
+        draft: None,
+        runs: widths
+            .iter()
+            .map(|&width| shot_run(&doc2(), &w, width))
+            .collect(),
+    };
+    let before = k.current_seq();
+    for widths in [[2, 3, 1], [3, 1, 2], [1, 2, 3]] {
+        assert!(
+            matches!(
+                rejected(vs.publish(P1, &pdoc(), &shot(widths), &readable)),
+                PublishError::DanglingSource
+            ),
+            "{widths:?}: the third address holds no value"
+        );
+    }
+    assert_eq!(k.current_seq(), before, "every refusal commits nothing");
+    let (member, _) = vs
+        .publish(P1, &pdoc(), &shot([2, 2, 1]), &readable)
+        .expect("every address present");
+    assert_eq!(
+        k.snapshot().world().m5().content_count(&member),
+        n(5),
+        "each run placed as named"
+    );
 }
 
 #[test]

@@ -1479,8 +1479,13 @@ element position in the home's link subspace — with `not_home_link` and
 `already_seated` above, a defence on the link the same transaction just
 minted, never a well-formed request's refusal), `too_many_runs` (a
 placement past M5's
-`MAX_PLACED_RUNS` = 65536 runs — permanent; the publish table below
-carries it too) and `too_many_values` (a shot whose draft-native runs
+`MAX_PLACED_RUNS` = 65536 runs, or a copy whose specs command more than
+`MAX_COPY_RESOLVE_STEPS` = 1048576 run-list steps, each spec charged its
+source's whole run count ahead of its walk, so a spec aimed past its
+source's arranged end is refused for the work it would do while keeping
+nothing — one code for both causes, told apart by the store's message;
+permanent, a copy past either is split by its caller; the publish table
+below carries the first) and `too_many_values` (a shot whose draft-native runs
 re-insert more than M5's `MAX_REINSERTED_VALUES` = 131072 values, their
 widths summed — arithmetic on the request, asked after the source gate
 and ahead of existence; permanent, a shot cannot be split to meet it;

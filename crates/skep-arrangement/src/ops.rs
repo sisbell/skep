@@ -40,7 +40,7 @@
 //! types name verdicts, not precedence, and the integration suite pins what is
 //! written here.
 //!
-//! Layout: this file is the handle and what its operations share — the two
+//! Layout: this file is the handle and what its operations share — the three
 //! budgets, J0's allocation step ([`allocate_for_placement`]) and the head
 //! key ([`head_lock_key`]). Each operation is a child module holding one
 //! `impl` block — `ops/insert.rs`, `ops/publish.rs`, `ops/copy.rs`,
@@ -53,9 +53,10 @@
 //! alone, and answer the shot's admission with those two slices too.
 //!
 //! Unit tests sit with what they test: `ops/tests.rs` tests this file — the
-//! handle, J0's step, the two budgets — and the bound claim above on `delete`,
-//! `rearrange` and the shot's admission; `ops/copy/tests.rs` and
-//! `ops/publish/tests.rs` hold the two ops' own claims, which need a world no
+//! handle, J0's step, the placement and re-insert budgets against M2's own
+//! accounting — and the bound claim above on `delete`, `rearrange` and the
+//! shot's admission; `ops/copy/tests.rs` and `ops/publish/tests.rs` hold the
+//! two ops' own claims, COPY's walk budget among them, which need a world no
 //! engine reaches.
 
 use std::fmt;
@@ -113,18 +114,11 @@ pub use publish::shot_admission;
 /// them, plus the base's deposit runs — and a retry of the same arrangement
 /// is refused the same way.
 ///
-/// WHAT IT DOES NOT BIND is the WORK of resolving, which is a separate
-/// quantity with a separate owner. Each COPY spec costs a prefix-sum walk of
-/// its source's run-list to reach the span — `Θ(#runs(source))` for a span
-/// near the end, however narrow the answer — and a request multiplies that
-/// by its spec count. Neither factor has a ceiling here: `#runs(source)` has
-/// none in v1 (Open decision #1) and grows with editing, and a spec count is
-/// bounded only by M10's wire list cap. So admission control and concurrency
-/// for a route carrying COPY are the CALLER's, as they are for the reads that
-/// state their own cost, and a route that carries this op owes that number —
-/// per spec, [`content_run_count`](crate::M5State::content_run_count) of its
-/// source, which the arrangement answers without reading a run. The shot's
-/// own per-run work is stated on [`Vstream::publish`].
+/// WHAT IT DOES NOT BIND is the WORK of resolving: each COPY spec's
+/// prefix-sum walk of its source's run-list to reach the span,
+/// `Θ(#runs(source))` for a span near the end however narrow the answer.
+/// COPY's has a ceiling of its own, [`MAX_COPY_RESOLVE_STEPS`]; the shot's
+/// per-run work is stated on [`Vstream::publish`].
 pub const MAX_PLACED_RUNS: usize = 1 << 16;
 
 /// The most values one publish shot may RE-INSERT — the fresh identities it
@@ -175,6 +169,34 @@ pub const MAX_PLACED_RUNS: usize = 1 << 16;
 /// shot M2 refuses `OverBudget`: for an act that cannot be split, M2's "split
 /// the transaction" means this and nothing else.
 pub const MAX_REINSERTED_VALUES: usize = 1 << 17;
+
+/// The most run-list steps one COPY's specs may command — the WORK its
+/// resolution does, which [`MAX_PLACED_RUNS`] does not bound, since what a
+/// spec keeps does not bound what it walks. Resolving a span walks every run
+/// left of its opening ordinal, one `Nat` addition and comparison apiece
+/// ([`iter_resolve`](crate::M5State::iter_resolve) states it), so a spec
+/// aimed at its source's end — or past it, keeping nothing — costs the
+/// source's whole run count however narrow its answer, and a request's spec
+/// list multiplies that. Every step runs inside COPY's transaction, under
+/// M2's applier lock, where it stalls every writer in the engine and not the
+/// caller alone.
+///
+/// Charged as M7 charges a MAKELINK slot's specs (its
+/// `MAX_SLOT_RESOLVE_STEPS`): each spec at its source's WHOLE run count
+/// ([`content_run_count`](crate::M5State::content_run_count), one map lookup
+/// reading no run), summed over the specs in order and refused
+/// `TooManyRuns` where the sum crosses, ahead of that spec's walk. The worst
+/// case rather than the steps taken — the runs left of an ordinal are not
+/// derivable from the ordinal, run widths being arbitrary — so the bound is
+/// conservative in the one safe direction: a narrow early span over a
+/// fragmented source is refused for work it would not have done.
+///
+/// `2^20` steps: at order 50 ns a step, ~50 ms of applier-lock hold, the
+/// order of a three-slot MAKELINK's walks (three slots of `2^18` steps). It
+/// admits the wire's 4096 specs over a 256-run source, or one spec over a
+/// source of a million runs; a copy past it is split by its caller, as one
+/// past [`MAX_PLACED_RUNS`] is.
+pub const MAX_COPY_RESOLVE_STEPS: usize = 1 << 20;
 
 /// M5's transact-driving op handle over M2 (§B): a thin borrow of the
 /// engine's kernel. The pure reads live on [`M5State`](crate::M5State)

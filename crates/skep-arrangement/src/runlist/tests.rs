@@ -1,5 +1,7 @@
+use std::collections::BTreeSet;
+
 use super::*;
-use crate::testutil::{a, ca, n, run, vca};
+use crate::testutil::{a, ca, n, pca, run, vca};
 
 fn list(runs: Vec<Run>) -> RunList {
     RunList(runs.into_iter().collect())
@@ -137,7 +139,7 @@ fn covers_asks_membership_of_a_whole_i_extent() {
     assert!(!l.covers(&run(&vca(1), 1)), "another origin length covers nothing");
     assert!(!RunList::default().covers(&run(&ca(1), 1)));
     // A document arranging the same address twice — transclusion
-    // multiplicity — counts it once, and the sweep is unbothered.
+    // multiplicity — counts it once: the union holds it in one piece.
     let twice = list(vec![run(&ca(1), 2), run(&vca(5), 1), run(&ca(1), 2)]);
     assert!(twice.covers(&run(&ca(1), 2)));
     assert!(!twice.covers(&run(&ca(1), 3)));
@@ -149,9 +151,9 @@ fn a_run_is_covered_exactly_when_every_one_of_its_addresses_is_held() {
     // oracle is `holds` itself, address by address — a law over runs the
     // list did not choose. The residents leave gaps a probe can straddle at
     // its opening, in its interior and at its tail, hold one address twice,
-    // hold one of another length, and are listed so that a probe's offset
-    // ranges arrive OUT of the order they open in — so the sweep's sort, its
-    // interior refusal and its final bound are each visited.
+    // hold one of another length, and are listed OUT of the order they open
+    // in — so the union's sort, its joins of overlapping and duplicated runs,
+    // its search landing in a gap, and its reach comparison are each visited.
     let l = list(vec![run(&ca(6), 2), run(&vca(1), 1), run(&ca(3), 1), run(&ca(2), 2)]);
     // held: ca2 ca3 ca6 ca7 (ca3 twice), vca1
     let mut carried = 0usize;
@@ -171,16 +173,17 @@ fn a_run_is_covered_exactly_when_every_one_of_its_addresses_is_held() {
 
 #[test]
 fn a_run_of_another_endpoint_length_is_covered_by_no_resident_whatever_its_width() {
-    // PUB-6.24: `covers` skips a resident of another endpoint length
-    // rather than searching it, which is sound only because such a
-    // resident holds no address of the run, whatever the two widths. The
-    // law is asked of the search itself — starts and residents of lengths
-    // 8 and 9 under three origins, each the shorter in turn. Then the one
-    // shape a longer address inside a shorter I-extent must take is shown
-    // to be no run start. Then `covers` answers a run of the wire's widest
-    // width — one the search would walk for tens of thousands of bigint
-    // steps per resident — off the residents of its own length. Corpus
-    // seed for the fuzzing tier, against a fragmented list.
+    // PUB-6.24: `covers` asks a run only of the union's piece of its own
+    // content chain and never searches a resident of another endpoint
+    // length, which is sound only because such a resident holds no address
+    // of the run, whatever the two widths. The law is asked of the run's own
+    // boundary search — starts and residents of lengths 8 and 9 under three
+    // origins, each the shorter in turn. Then the one shape a longer address
+    // inside a shorter I-extent must take is shown to be no run start. Then
+    // `covers` answers a run of the wire's widest width — one a search of
+    // that width would walk for tens of thousands of bigint steps per
+    // resident — by one reach comparison. Corpus seed for the fuzzing tier,
+    // against a fragmented list.
     let other = a(&[1, 0, 1, 1, 0, 1, 0, 1, 1]); // length 9, another account's document
     let residents = vec![run(&ca(1), 3), run(&vca(1), 2), run(&other, 2)];
     let starts = [ca(1), ca(4), vca(1), vca(3), other.clone()];
@@ -211,6 +214,66 @@ fn a_run_of_another_endpoint_length_is_covered_by_no_resident_whatever_its_width
         let wide = Run::new(start.clone(), widest.clone()).expect("a full element position");
         assert!(!l.covers(&wide), "{start:?}: its own length's residents hold only a prefix of it");
     }
+}
+
+#[test]
+fn a_run_union_denotes_exactly_the_runs_addresses_each_once_in_tumbler_order() {
+    // S3★/PUB-6.24: the union a run set's I-extents name, merged within each
+    // content chain — EXACTLY the runs' addresses, none dropped, which the
+    // shot's existence walk and its re-insert's `.expect` stand on, and each
+    // in one merged run, which is what lets the walk pay a stored position
+    // once however often a request names it. Repeats, nesting, overlap,
+    // abutment and a gap in one chain; a second chain of the SAME length,
+    // kept apart by its prefix alone; a third of another length — listed out
+    // of order, so the sort is what brings each chain's runs together.
+    let family = vec![
+        run(&ca(3), 2),
+        run(&ca(1), 2),
+        run(&ca(3), 2),
+        run(&ca(2), 5),
+        run(&ca(9), 1),
+        run(&ca(8), 1),
+        run(&pca(3), 1),
+        run(&pca(1), 1),
+        run(&vca(1), 3),
+        run(&vca(2), 1),
+    ];
+    let union = RunUnion::of(&family);
+    let merged: Vec<Run> = union.runs().collect();
+    assert_eq!(
+        merged,
+        vec![
+            run(&ca(1), 6),
+            run(&ca(8), 2),
+            run(&vca(1), 3),
+            run(&pca(1), 1),
+            run(&pca(3), 1)
+        ]
+    );
+    let named: BTreeSet<Address> = family.iter().flat_map(Run::addrs).collect();
+    let denoted: Vec<Address> = merged.iter().flat_map(Run::addrs).collect();
+    assert_eq!(denoted.len(), named.len(), "no address in two merged runs");
+    assert_eq!(denoted.into_iter().collect::<BTreeSet<_>>(), named);
+    // And whole-run membership is its search, against the address-by-address
+    // oracle, from every start and width across the three chains and their
+    // gaps — the same-length chains being where the prefix, and not the
+    // length, has to keep the search apart.
+    let mut checked = 0usize;
+    for start in (1..=10u32).flat_map(|k| [ca(k), pca(k), vca(k)]) {
+        for width in 1..=7u32 {
+            let probe = run(&start, width);
+            let held = probe.addrs().all(|address| named.contains(&address));
+            assert_eq!(union.covers(&probe), held, "{start:?} × {width}");
+            checked += 1;
+        }
+    }
+    assert_eq!(checked, 210);
+    assert_eq!(
+        RunUnion::of(std::iter::empty::<&Run>()).runs().count(),
+        0,
+        "an empty union"
+    );
+    assert!(!RunUnion::of(std::iter::empty::<&Run>()).covers(&run(&ca(1), 1)));
 }
 
 #[test]

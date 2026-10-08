@@ -1,6 +1,8 @@
 //! §1 — the implicit-position run-list, per subspace: locate, splice,
 //! contract, reorder, eager seam-coalesce (ASN-0058 M12/M14/M16; ASN-0082
-//! shift-absorption; ASN-0117 P2; ASN-0119 tile-by-placement).
+//! shift-absorption; ASN-0117 P2; ASN-0119 tile-by-placement) — and the
+//! union of a run set's I-extents ([`RunUnion`]), merged so that whole-run
+//! membership is one search.
 //!
 //! A `RunList` is an ordered sequence of [`Run`]s; V-positions are NOT
 //! stored — run *j* occupies the ordinals `[1 + Σ_{i<j} widthᵢ, …]`. This one
@@ -19,9 +21,9 @@ use std::fmt;
 
 use num_traits::{One, Zero};
 use serde::{Deserialize, Serialize};
-use skep_address::{Address, Nat, SpanSet};
+use skep_address::{ordinal, Address, Nat, SpanSet, Tumbler};
 
-use crate::run::{OffsetRange, Run};
+use crate::run::Run;
 
 /// I-adjacency (ASN-0058): the right run starts exactly where the left run
 /// [`reaches`](Run::reach), so their I-extents abut with no address between.
@@ -273,6 +275,150 @@ fn blocks_of<'a>(runs: impl Iterator<Item = &'a Run>) -> impl Iterator<Item = Bl
     })
 }
 
+/// Do `a` and `b` lie in ONE content chain — their starts equal in every
+/// component but the ordinal, the `doc·0·subspace` both share (each a full
+/// element position, [`Run::admits_start`](crate::Run::admits_start))? Two
+/// runs share an address only within one content chain. And among run starts
+/// one content chain's positions lie together in the tumbler order: a start
+/// strictly between two positions of a content chain either is of that
+/// content chain or extends its `doc·0·subspace` by two components or more —
+/// an element field of three or more, which no run admits — while a start
+/// differing earlier compares alike with every position of it. What
+/// [`RunUnion`] merges within and searches by.
+fn same_content_chain(a: &Run, b: &Run) -> bool {
+    let (s, t) = (a.i_start.tumbler(), b.i_start.tumbler());
+    s.len() == t.len()
+        && s.iter()
+            .zip(t.iter())
+            .take(s.len() - 1)
+            .all(|(x, y)| x == y)
+}
+
+/// The UNION of a run set's I-extents — every address some run of the set
+/// holds — MERGED: within each content chain, runs that overlap or abut are
+/// joined into one piece, so the pieces are disjoint, hold each address once,
+/// lie in tumbler order, and no two of one content chain abut. BUILT ONLY by
+/// [`RunUnion::of`], which is what lets [`covers`](RunUnion::covers) answer
+/// by a binary search: the order it searches is the type's invariant, not a
+/// promise its caller keeps.
+///
+/// BORROWED: a piece names the run that opens it and the run that reaches
+/// furthest, two pointers apiece, so the union of a document's runs costs a
+/// pointer per run beside the run-list it is asked of rather than a clone of
+/// it — whose size stored state, and not the asking request, sets.
+///
+/// The publish shot asks it twice. Its existence walk (S3★) probes the union
+/// of the supplied runs, each address once, so a request naming one stored
+/// I-extent many times pays for it once. Its carried-run test (PUB-6.24)
+/// merges the base's runs once per admission and asks each supplied run of
+/// the union by one search, so a request of many carried runs pays the base's
+/// run count once and not once a run.
+pub(crate) struct RunUnion<'r>(Vec<MergedRun<'r>>);
+
+/// One piece of a [`RunUnion`]: the addresses `[first.i_start,
+/// furthest.reach())` of one content chain — `first` the run that opens the
+/// piece, `furthest` the one of its runs reaching furthest, both of that
+/// content chain, so the piece is one contiguous ordinal range. Named fields,
+/// both being runs: a positional pair would put them within swapping distance.
+struct MergedRun<'r> {
+    first: &'r Run,
+    furthest: &'r Run,
+}
+
+impl<'r> RunUnion<'r> {
+    /// The union of `runs`' I-extents: sorted by start, then each run joined
+    /// to the piece before it when it is of that piece's content chain and
+    /// opens at or before the piece's reach — overlapping or abutting it — and
+    /// opening a piece of its own otherwise. Sorting is what lets one pass
+    /// join: one content chain's runs lie together among the starts
+    /// ([`same_content_chain`]) and come in ordinal order within it, so a run
+    /// joining no piece before it opens past every address that piece holds.
+    /// `O(n log n)` comparisons for `n` runs, and a pointer per run.
+    pub(crate) fn of(runs: impl IntoIterator<Item = &'r Run>) -> RunUnion<'r> {
+        let mut sorted: Vec<&'r Run> = runs.into_iter().collect();
+        sorted.sort_unstable_by(|a, b| a.i_start.tumbler().cmp(b.i_start.tumbler()));
+        let mut pieces: Vec<MergedRun<'r>> = Vec::with_capacity(sorted.len());
+        // The last piece's reach, kept beside it rather than derived again for
+        // every run asked whether it joins.
+        let mut reach: Option<Tumbler> = None;
+        for run in sorted {
+            let run_reach = run.reach();
+            if let (Some(piece), Some(piece_reach)) = (pieces.last_mut(), reach.as_mut()) {
+                if same_content_chain(piece.first, run) && *run.i_start.tumbler() <= *piece_reach {
+                    if run_reach > *piece_reach {
+                        piece.furthest = run;
+                        *piece_reach = run_reach;
+                    }
+                    continue;
+                }
+            }
+            pieces.push(MergedRun {
+                first: run,
+                furthest: run,
+            });
+            reach = Some(run_reach);
+        }
+        RunUnion(pieces)
+    }
+
+    /// Does the union hold EVERY address of `run`? One binary search, the
+    /// pieces being sorted by start and disjoint: the only piece that can hold
+    /// `run`'s start is the last one opening at or before it, which is of
+    /// `run`'s content chain whenever any piece of it opens there
+    /// ([`same_content_chain`]); and no two pieces of a content chain abut, so
+    /// `run` is held whole exactly when that piece is of its content chain and
+    /// reaches as far.
+    ///
+    /// A piece of ANOTHER content chain holds no address of `run`. Within one
+    /// length, content chains are disjoint by their prefixes. Across lengths,
+    /// a shorter address lies outside a longer piece's I-extent — it is
+    /// compared within the longer's leading components, where both ends of
+    /// that extent agree, so it falls below both or above both — and a longer
+    /// address inside a shorter piece's would follow that piece's subspace
+    /// with two components or more, an element field no run admits. So neither
+    /// the run's width nor any piece's is searched: `O(log #pieces)`
+    /// comparisons and one reach, however wide the run. Transclusion
+    /// multiplicity costs nothing — the union holds a doubly arranged address
+    /// once.
+    pub(crate) fn covers(&self, run: &Run) -> bool {
+        let at = self
+            .0
+            .partition_point(|piece| piece.first.i_start.tumbler() <= run.i_start.tumbler());
+        at.checked_sub(1)
+            .and_then(|i| self.0.get(i))
+            .is_some_and(|piece| {
+                same_content_chain(piece.first, run) && run.reach() <= piece.reach()
+            })
+    }
+
+    /// The union's pieces as owned runs, in tumbler order — every address the
+    /// set holds, in exactly one of them. What the shot's existence walk
+    /// probes.
+    pub(crate) fn runs(&self) -> impl Iterator<Item = Run> + '_ {
+        self.0.iter().map(MergedRun::to_run)
+    }
+}
+
+impl MergedRun<'_> {
+    /// One I-step past the piece's last address: its furthest run's reach.
+    fn reach(&self) -> Tumbler {
+        self.furthest.reach()
+    }
+
+    /// The piece as an owned run — `first`'s start, widened to the piece's
+    /// reach. A PROPAGATING mint, as [`Run::new`](crate::Run::new) divides
+    /// them: the start is a run's own, so a full element position; and the
+    /// width is the ordinal distance to a reach of the same content chain at or
+    /// past `first`'s own, so at least `first`'s width — positive, and the
+    /// subtraction cannot underflow.
+    fn to_run(&self) -> Run {
+        Run {
+            i_start: self.first.i_start.clone(),
+            width: ordinal(&self.reach()) - ordinal(self.first.i_start.tumbler()),
+        }
+    }
+}
+
 impl RunList {
     /// `n(d)` for this subspace — the total arranged width.
     pub(crate) fn total_width(&self) -> Nat {
@@ -324,56 +470,14 @@ impl RunList {
         self.0.iter().any(|r| r.iextent().contains(a.tumbler()))
     }
 
-    /// Does this list hold EVERY address of `run` — is the run's whole
-    /// I-extent arranged here, as one resident run or split across several?
-    /// [`holds`](RunList::holds) asked of an I-extent rather than a point: the
-    /// carried-run test of the publish shot (PUB-6.24, PUB-8.1) — a supplied
-    /// run the base already arranges takes no source gate.
-    ///
-    /// Answered per resident run of `run`'s own endpoint length by the run's
-    /// own offset arithmetic
-    /// ([`Run::offsets_covered_by`](crate::Run::offsets_covered_by) — which of
-    /// `run`'s offsets that resident's I-extent covers) and then by one sweep
-    /// over the covered ranges, so the cost is `O(#runs log #runs)`: a
-    /// resident of another endpoint length costs one length comparison, and
-    /// each of the run's own length one intersection — never a search over
-    /// the run's width, which on the shot's path is the client's.
-    ///
-    /// A resident of ANOTHER endpoint length is skipped, not searched, and
-    /// skipping it changes no answer: it holds no address of `run`. Both are
-    /// full element positions ([`Run::admits_start`](crate::Run::admits_start)).
-    /// The shorter of two such addresses lies outside the longer's I-extent —
-    /// it is compared inside the longer's leading components, where both ends
-    /// of that extent agree, so it falls below both or above both. And a
-    /// longer address inside a shorter run's I-extent would follow that run's
-    /// subspace component with two components or more — an element field of
-    /// three or more, which no `Run` admits.
-    ///
-    /// Transclusion multiplicity is harmless: an address this list arranges
-    /// twice covers its offset twice, and a sweep over a union counts once.
-    pub(crate) fn covers(&self, run: &Run) -> bool {
-        let len = run.i_start().tumbler().len();
-        let mut covered: Vec<OffsetRange> = self
-            .0
-            .iter()
-            .filter(|resident| resident.i_start().tumbler().len() == len)
-            .filter_map(|resident| run.offsets_covered_by(&resident.iextent()))
-            .collect();
-        // Swept in the order the ranges OPEN: a gap is a range opening past
-        // what the ranges before it reached. Ranges opening at one offset see
-        // the same `reached` and leave it at the largest of their `hi`s
-        // whichever comes first, so the sort need not be stable.
-        covered.sort_unstable_by(|a, b| a.lo().cmp(b.lo()));
-        let mut reached = Nat::zero();
-        for range in &covered {
-            if *range.lo() > reached {
-                return false;
-            }
-            if *range.hi() > reached {
-                reached = range.hi().clone();
-            }
-        }
-        reached >= *run.width()
+    /// Does this list hold EVERY address of `run` — [`holds`](RunList::holds)
+    /// asked of a whole I-extent: [`RunUnion::covers`] over the union of this
+    /// list's runs, asked of one run. The composition the carried-run laws are
+    /// pinned on; the publish shot builds the union once and asks it of every
+    /// supplied run ([`M5State::content_union`](crate::M5State::content_union)).
+    #[cfg(test)]
+    fn covers(&self, run: &Run) -> bool {
+        RunUnion::of(self.0.iter()).covers(run)
     }
 
     /// [`split_runs`] over this list's runs.
@@ -476,7 +580,11 @@ impl RunList {
     /// over, so resolving the LAST position of an n-run list costs n steps
     /// however narrow the answer. That term is the `im::Vector<Run>` backing's
     /// (Open decision #1); what laziness removes is the other term, the
-    /// materialization of runs a bounded consumer will never look at.
+    /// materialization of runs a bounded consumer will never look at. The
+    /// first term is charged by the loops that run it inside a write, each
+    /// spec at its source's whole run count: COPY's against
+    /// [`MAX_COPY_RESOLVE_STEPS`](crate::MAX_COPY_RESOLVE_STEPS), M7's slots
+    /// against its own.
     ///
     /// Called with `lo < hi_excl` when bounded. Every emitted run then has
     /// `width ≥ 1` and an element-level start: a run reaching the push has

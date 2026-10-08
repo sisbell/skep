@@ -3,8 +3,8 @@
 
 use skep_address::{validate, Address, Nat, Tumbler};
 use skep_arrangement::{
-    Caller, CopyError, DeleteError, Deposit, HasM5, InsertError, RearrangeError, VPos, VSpec,
-    VersionError, Vstream,
+    deposit_class_types, Caller, CopyError, DeleteError, Deposit, HasM5, InsertError,
+    RearrangeError, VPos, VSpec, VersionError, Vstream,
 };
 use skep_kernel::TxnError;
 use skep_namespace::{HasM3, Namespace, PrincipalId};
@@ -224,8 +224,9 @@ fn a_declared_deposit_at_a_fresh_position_clears_the_refusal() {
 fn the_declaration_names_the_class_and_the_door_admits_a_held_type_alone() {
     // PUB-2.11 / PUB-2.64 (RES-249, RES-261): the declaration carries the
     // record class's TYPE, and a declared insert on a published target is
-    // admitted only where that type is one the deposit class holds — today
-    // ENROLL and RETIRE, the two classes that deposit an atom.
+    // admitted only where that type is one the deposit class holds —
+    // `deposit_class_types`, today the four atom-bearing kinds; ENROLL's and
+    // RETIRE's are deposited here, and the generated law below asks all four.
     let k = mem_kernel();
     let vs = Vstream::new(&k);
     let (enroll_start, _) = vs
@@ -302,16 +303,17 @@ fn the_door_admits_a_declared_type_exactly_when_it_equals_a_held_type() {
     // RES-249: membership in the deposit class is EQUALITY — a subtype
     // beneath a member is no member, and nothing ABOVE one is either. Asked
     // of every address one step from a member in the tumbler tree, generated
-    // rather than chosen: each T4-valid PREFIX of each member (its type
-    // subspace, the ghost home document, that document's account, its node),
-    // each member, each member's first CHILD, and the two commons ordinals
-    // beside them — at the one position a published document admits a
-    // deposit. A door testing containment in either direction, or the
-    // document or subspace a type lies in, admits one of these.
+    // rather than chosen: each T4-valid PREFIX of each of the set's members
+    // (its type subspace, the ghost home document, that document's account,
+    // its node), each member, each member's first CHILD, and the commons
+    // ordinals beside the members — at the one position a published document
+    // admits a deposit. A door testing containment in either direction, or
+    // the document or subspace a type lies in, admits one of these; a door
+    // holding only part of the set refuses one of its members.
     let k = mem_kernel();
     let vs = Vstream::new(&k);
     let mut family: Vec<Address> = Vec::new();
-    for member in [enroll_ty(), retire_ty()] {
+    for member in deposit_class_types() {
         let comps: Vec<Nat> = member.tumbler().iter().cloned().collect();
         for len in 1..=comps.len() {
             let prefix = Tumbler::new(comps[..len].iter().cloned()).expect("a prefix is nonempty");
@@ -322,13 +324,17 @@ fn the_door_admits_a_declared_type_exactly_when_it_equals_a_held_type() {
         let child = Tumbler::new(comps.iter().cloned().chain([n(1)])).expect("nonempty");
         family.push(validate(child).expect("a member's child is T4-valid"));
     }
-    family.extend([3, 4].map(|ordinal| a(&[1, 1, 0, 1, 0, 1, 0, 3, ordinal])));
+    family.extend([3, 4, 54, 57].map(|ordinal| a(&[1, 1, 0, 1, 0, 1, 0, 3, ordinal])));
     family.sort();
     family.dedup();
-    assert_eq!(family.len(), 11, "five shared prefixes, two members, two children, two siblings");
+    assert_eq!(
+        family.len(),
+        17,
+        "five shared prefixes, four members, four children, four siblings"
+    );
     let mut admitted: Vec<Address> = Vec::new();
     for ty in &family {
-        let held = *ty == enroll_ty() || *ty == retire_ty();
+        let held = deposit_class_types().contains(ty);
         let n_c = k.snapshot().world().m5().content_count(&pdoc());
         let at = VPos::content(&n_c + &n(1));
         match vs.insert(P1, &pdoc(), at, vec![val(b"x")], Deposit::Declared(ty.clone())) {
@@ -338,7 +344,7 @@ fn the_door_admits_a_declared_type_exactly_when_it_equals_a_held_type() {
         }
         assert_eq!(admitted.contains(ty), held, "{ty:?}: admitted exactly when it equals a held type");
     }
-    assert_eq!(admitted, vec![enroll_ty(), retire_ty()]);
+    assert_eq!(admitted, deposit_class_types());
 }
 
 #[test]

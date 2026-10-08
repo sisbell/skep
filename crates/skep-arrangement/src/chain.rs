@@ -23,9 +23,17 @@
 //! (PUB-2.12): it seats into the address it names, and neither surface
 //! answers for it.
 //!
-//! CONTRACT, for every read here that consults M3 — the address asked about
-//! is a REGISTERED document or a member of one (PUB-6.37): M3's publication
-//! and frontier reads are answered for registered addresses alone.
+//! CONTRACT, of two kinds. A read on M3's PUBLICATION bit —
+//! [`published_target`], and the two surfaces built on it — REQUIRES the
+//! address asked about to be a REGISTERED document or a member of one
+//! (PUB-6.37): M3 answers that bit for registered addresses alone, and what
+//! it returns for any other is no answer. A read on M3's version FRONTIER
+//! alone — [`trunk_head`], [`birth_version`] — is TOTAL, as M3's
+//! `latest_version` and `first_version_address` are: `None` off the document
+//! tier and for a chain with no member, registered or not. PUB-6.37's
+//! polarity is the caller's there, as M3 states it — registration is asked
+//! first, so an unregistered address is answered by the registration check
+//! and a `None` here says only that the chain is empty.
 
 use skep_address::{validate, Address, Level, Tumbler};
 use skep_namespace::{first_version_address, M3State};
@@ -91,8 +99,11 @@ pub fn trunk_of(a: &Address) -> Address {
 /// composites ask first, and the suite pins `version`'s order by forking one
 /// chain twice (`a_declared_deposit_into_a_published_chain_lands_in_the_head_member_alone`).
 ///
-/// CONTRACT — `doc` is a registered document or a member of one (PUB-6.37),
-/// as [`published_target`] states.
+/// TOTAL: `None` off the document tier and for a chain with no member,
+/// registered or not, as M3's `latest_version` answers. PUB-6.37's polarity
+/// is the caller's — registration asked first, so an unregistered address is
+/// answered by the registration check and a `None` here says only that the
+/// chain is empty.
 pub fn trunk_head(m3: &M3State, doc: &Address) -> Option<Address> {
     m3.latest_version(&trunk_of(doc))
 }
@@ -106,7 +117,8 @@ pub fn trunk_head(m3: &M3State, doc: &Address) -> Option<Address> {
 /// whatever it is handed, so a member handed through would answer its own
 /// daughter chain's first address — well-formed, minted nowhere, and no
 /// error. A chain is anchored at a document alone, so every other tier
-/// answers `None`. CONTRACT as [`published_target`] states.
+/// answers `None`. TOTAL, as [`trunk_head`] is, and PUB-6.37's polarity the
+/// caller's here too.
 pub fn birth_version(m3: &M3State, doc: &Address) -> Option<Address> {
     trunk_head(m3, doc)?;
     first_version_address(&trunk_of(doc))
@@ -297,9 +309,9 @@ mod tests {
     /// version itself, a later member and a daughter of that member all
     /// answer `D.1`, never the first address of the chain THEY anchor — the
     /// daughter's is `D.2.1.1`, the later member's `D.2.1`, and M3 would mint
-    /// either as readily. Memberless, the chain has no birth version; and no
-    /// tier but a document's anchors one. The fold's own question,
-    /// `is_birth_version`, answers the same member from the address alone.
+    /// either as readily. A memberless chain, an account, an element and an
+    /// unregistered document have no head and no birth version (TOTAL reads),
+    /// and the fold's `is_birth_version`, asking the address alone, agrees.
     #[test]
     fn the_birth_version_is_the_trunks_first_member_whoever_asks() {
         let m3 = seeded_m3();
@@ -316,9 +328,10 @@ mod tests {
             assert_eq!(birth_version(&m3, named), Some(member1.clone()), "{named:?}");
             assert_eq!(is_birth_version(named), *named == member1, "{named:?}");
         }
-        for off_tier in [a(&[1, 0, 1]), pca(1)] {
-            assert_eq!(birth_version(&m3, &off_tier), None, "{off_tier:?}");
-            assert!(!is_birth_version(&off_tier), "{off_tier:?}");
+        for headless in [a(&[1, 0, 1]), pca(1), a(&[1, 0, 1, 0, 9])] {
+            assert_eq!(trunk_head(&m3, &headless), None, "{headless:?}");
+            assert_eq!(birth_version(&m3, &headless), None, "{headless:?}");
+            assert!(!is_birth_version(&headless), "{headless:?}");
         }
     }
 

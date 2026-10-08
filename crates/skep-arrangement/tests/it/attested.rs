@@ -83,7 +83,10 @@ fn an_attested_handle_fills_the_slot_of_its_own_transaction_alone() {
 
     // A `Copy` handle copied still carries the borrow; a handle built with
     // `None` is the plain handle exactly. The deposits land in the HEAD
-    // member the shot minted (two positions), at its fresh positions.
+    // member the shot minted (two positions), at its fresh positions. The
+    // suite reuses one handle across writes to pin what the type does; a
+    // producer builds one per call, each attestation signing one entry body
+    // (`Vstream::attested`'s obligation).
     let copied = attested;
     let (_, s_copied) = copied
         .insert(P1, &pdoc(), vp(1, 3), vec![val(b"d")], declared())

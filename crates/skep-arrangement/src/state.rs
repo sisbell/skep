@@ -110,13 +110,15 @@ static EMPTY_ARRANGEMENT: LazyLock<DocArrangement> = LazyLock::new(DocArrangemen
 ///   however the variant set grows (ASN-0047 P2).
 /// * **P4★ — present containment is recorded.** For every `doc`, the current
 ///   content image `⋃ r.iextent()` over `content_runs(doc)` is contained in
-///   `provenance.ever_contained(doc)`. Established by the two arms that
+///   `provenance.ever_contained(doc)`. Established by the three arms that
 ///   place: [`ContentPlace`](M5Rec::ContentPlace) appends exactly the
-///   iextents it splices in, and [`VersionSnapshot`](M5Rec::VersionSnapshot)
-///   appends exactly the iextents of the run-list it installs. Preserved by
-///   the other three: [`ContentRemove`](M5Rec::ContentRemove) only contracts
-///   the image, [`ContentReorder`](M5Rec::ContentReorder) permutes the same
-///   arranged addresses, and [`LinkSeat`](M5Rec::LinkSeat) touches the link
+///   iextents it splices in, [`ShotPlace`](M5Rec::ShotPlace) exactly the
+///   iextents of the runs it splices at ordinal 1 (none when it places none),
+///   and [`VersionSnapshot`](M5Rec::VersionSnapshot) exactly the iextents of
+///   the run-list it installs. Preserved by the other three:
+///   [`ContentRemove`](M5Rec::ContentRemove) only contracts the image,
+///   [`ContentReorder`](M5Rec::ContentReorder) permutes the same arranged
+///   addresses, and [`LinkSeat`](M5Rec::LinkSeat) touches the link
 ///   run-list, which is no part of the content image. Splitting and
 ///   coalescing move the boundaries between runs and not the addresses they
 ///   cover, so the image is stable under both. On the DECODE path P4★ is
@@ -231,8 +233,8 @@ pub struct M5State {
 pub struct ShotTerms {
     /// The positions the client PLACED — Σ width of the shot's runs, the
     /// count its signed body leads with: positions `[1, placed]` of the
-    /// member are the client's runs, and what follows is the base's carried
-    /// tail.
+    /// member are the client's runs; at the mint what follows them is the
+    /// base's carried tail, and a head member's later deposits land after it.
     pub placed: Nat,
     /// The extent of the base the staged copy TOOK — the shot's
     /// `base_extent`, in its signed body — or `None` in the BIRTH SHAPE, the

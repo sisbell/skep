@@ -331,7 +331,7 @@ fn only_placement_and_version_append_to_r() {
             "{r:?} must not append to R"
         );
     }
-    // The two that DO append, so the comparisons above cannot pass
+    // The three that DO append, so the comparisons above cannot pass
     // vacuously — a `provenance` that had stopped changing at all would
     // satisfy them.
     let placed = s.apply_m5(&M5Rec::ContentPlace {
@@ -340,6 +340,15 @@ fn only_placement_and_version_append_to_r() {
         runs: vec![run(&ca(1), 1)],
     });
     assert_ne!(placed.provenance, s.provenance);
+    let shot = s.apply_m5(&M5Rec::ShotPlace {
+        doc: vdoc(),
+        runs: vec![run(&ca(1), 1)],
+        terms: ShotTerms {
+            placed: n(1),
+            base_extent: None,
+        },
+    });
+    assert_ne!(shot.provenance, s.provenance);
     let forked = s.apply_m5(&M5Rec::VersionSnapshot {
         source: doc1(),
         new: vdoc(),

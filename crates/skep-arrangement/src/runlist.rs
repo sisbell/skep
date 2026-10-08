@@ -587,15 +587,16 @@ impl RunList {
     /// against its own.
     ///
     /// Called with `lo < hi_excl` when bounded. Every emitted run then has
-    /// `width ≥ 1` and an element-level start: a run reaching the push has
-    /// `lo < v_reach` and, when bounded, `v_start < hi_excl`; `v_start <
-    /// v_reach` because a run's width is at least one; so `first < past`, and
-    /// the start is [`Run::addr_at`](crate::Run::addr_at) of an offset inside
-    /// the run. Both `Nat` subtractions are therefore over ordered operands
-    /// and cannot underflow. A run the range keeps WHOLE is cloned rather
-    /// than rebuilt: no shift and no validation for a run the clip does not
-    /// touch, which is every interior run of a wide range and every run but
-    /// the first of a suffix.
+    /// `width ≥ 1` and a start that is a full element position: a run reaching
+    /// the push has `lo < v_reach` and, when bounded, `v_start < hi_excl`;
+    /// `v_start < v_reach` because a run's width is at least one; so
+    /// `first < past`, and the start is [`Run::addr_at`](crate::Run::addr_at)
+    /// of an offset inside the run — an ordinal shift that keeps the element
+    /// field's two components. Both `Nat` subtractions are therefore over
+    /// ordered operands and cannot underflow. A run the range keeps WHOLE is
+    /// cloned rather than rebuilt: no shift and no validation for a run the
+    /// clip does not touch, which is every interior run of a wide range and
+    /// every run but the first of a suffix.
     fn clipped_runs(&self, lo: Nat, hi_excl: Option<Nat>) -> impl Iterator<Item = Run> + '_ {
         let stop = hi_excl.clone();
         self.iter_blocks()

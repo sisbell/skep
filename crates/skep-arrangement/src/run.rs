@@ -202,12 +202,16 @@ impl Run {
     /// decoded journal or checkpoint alike — the serde `try_from` shadow
     /// routes deserialization into this function.
     ///
-    /// M5's own sites divide in two. The PROPAGATING ones — run-list
-    /// split/coalesce, `resolve`, the content placing fold, a run union's
-    /// merged pieces — build Runs by the in-crate struct literal from a start
-    /// that is already one: another run's start, which this type holds to be
-    /// one, or an in-crate ordinal shift of one, and such a shift preserves
-    /// the element field's length. The two
+    /// M5's own sites divide in two. The PROPAGATING ones — the run-list's
+    /// split (`split_runs`, both halves of a boundary run), its one clip
+    /// (`RunList::clipped_runs`, under every range and suffix walk: `resolve`,
+    /// the shot's carried tail, the address form read at the member), and a
+    /// run union's merged pieces (`UnionPiece::to_run`) — build Runs by the
+    /// in-crate struct literal from a start that is already one: another run's
+    /// start, which this type holds to be one, or an in-crate ordinal shift of
+    /// one, and such a shift preserves the element field's length. Coalescing
+    /// builds no Run: it widens one, at the one mutation site the type's card
+    /// names. The two
     /// ORIGINATING ones establish it instead, and each does so at its own
     /// door: `allocate_for_placement` — INSERT's per-value step, which the
     /// publish shot's re-insert shares — places what `M3State::mint_content`

@@ -78,11 +78,14 @@ impl Caller {
 /// contract remains readable at its own call site.
 ///
 /// The registration this door establishes is also what the version-chain
-/// reads REQUIRE of the ops that open here ([`published_target`](crate::published_target)
-/// and the reads beside it, PUB-6.37): each of them asks those reads only
-/// after this door, so the publication bit is read on registered addresses
-/// alone and an unregistered target answers the registration refusal, never
-/// a publication code.
+/// reads ask first of the ops that open here (PUB-6.37):
+/// [`published_target`](crate::published_target) and the two surfaces built
+/// on it REQUIRE it, M3 answering the publication bit for registered
+/// addresses alone, and the frontier reads beside them, total, leave that
+/// polarity to their caller. Each op asks those reads only after this door,
+/// so the publication bit is read on registered addresses alone and an
+/// unregistered target answers the registration refusal, never a publication
+/// code.
 pub(crate) fn gate_write<E>(
     m3: &M3State,
     caller: Caller,

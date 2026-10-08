@@ -152,8 +152,9 @@ pub fn val(b: &[u8]) -> Val {
     Val::new(b)
 }
 
-/// The two members of the door's set (PUB-2.11, RES-261), as M5 spells them:
-/// ENROLL's type and RETIRE's.
+/// Two of the door's four held types (PUB-2.11, RES-261), as M5 spells them:
+/// the set's first, ENROLL's, and its second, RETIRE's — the credential pair,
+/// ahead of the registry's BINDING and ENDPOINT.
 pub fn enroll_ty() -> Address {
     deposit_class_types()[0].clone()
 }

@@ -68,13 +68,13 @@ pub(crate) fn vca(ordinal: u32) -> Address {
     a(&[1, 0, 1, 0, 1, 1, 0, 1, ordinal])
 }
 
-/// An in-crate `Run` literal (fields are crate-private; tests uphold the
-/// standing invariants: element-level start, width ≥ 1).
+/// A `Run` through its own door, `Run::new`: a test builds runs as a foreign
+/// producer must, so the standing invariants — a start that is a FULL ELEMENT
+/// POSITION `doc·0·subspace·ordinal`, a width ≥ 1 — hold in a test process
+/// as in every other.
 pub(crate) fn run(start: &Address, width: u32) -> Run {
-    Run {
-        i_start: start.clone(),
-        width: n(width),
-    }
+    Run::new(start.clone(), n(width))
+        .expect("a test run starts at a full element position, width ≥ 1")
 }
 
 /// An ordinal-level depth-2 V-span `[subspace, ordinal]` × `[0, count]`.

@@ -66,10 +66,11 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
 - **Birth extents** — per trunk, the content count its birth version
   (`birth_version`, the member that opens the chain) was minted with
   (PUB-3.19), unmoved by the deposits that grow the head; noted by the
-  fold off the mint's own placing record (a shot that mints it empty
-  notes zero, which `birth_extent` answers as a zero and not as no
-  birth) and carried by checkpoints, since the arrangement cannot say
-  afterwards where the birth ended.
+  fold off the record that mints it — the shot's placing record, or an
+  owned `version`'s snapshot (a mint that leaves it empty notes zero,
+  which `birth_extent` answers as a zero and not as no birth) — and
+  carried by checkpoints, since the arrangement cannot say afterwards
+  where the birth ended.
 - **`resolve` / `project`** — the I-runs a V-region maps onto, and the
   V-footprint an I-address cover leaves in a document; the reads every
   query layer builds on.

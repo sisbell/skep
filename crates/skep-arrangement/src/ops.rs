@@ -234,12 +234,14 @@ pub struct Vstream<'k, W: WorldState> {
     /// THAT commit marker's signature slot; `None` — the plain handle every
     /// other constructor site builds — leaves the slot empty. A BORROW, so
     /// the handle stays `Copy` and the value cannot outlive the caller that
-    /// owns it for the one call this handle serves. The other writes of this
-    /// surface (`delete`, `copy`, `rearrange`, the seat op) lie outside the
-    /// checked set and take the plain arm whatever this field holds: the
-    /// store refuses each of the three into a published document
-    /// (`PublishedTarget`), so no entry of their kind exists for a frame to
-    /// cover.
+    /// owns it; how many commits it signs is the producer's to hold, as
+    /// [`Vstream::attested`] states. The handle's three other writes —
+    /// `delete`, `copy`, `rearrange` — lie outside the checked set and take
+    /// the plain arm whatever this field holds: the store refuses each into a
+    /// published document (`PublishedTarget`), so no entry of their kind
+    /// exists for a frame to cover. Link seating is no write of this handle:
+    /// `stage_seat_link` is a step of M7's MAKELINK, whose own handle carries
+    /// that op's attestation.
     attest: Option<&'k Attestation>,
 }
 
@@ -256,6 +258,15 @@ impl<'k, W: WorldState> Vstream<'k, W> {
     /// and `version` commit under `attest`. Its callers are the slot's
     /// producer set — M10's dispatch, with a value the daemon's check
     /// admitted — and nothing else; `None` is [`Vstream::new`].
+    ///
+    /// ONE CALL PER ATTESTED HANDLE is the PRODUCER's obligation, and the type
+    /// does not hold it. An attestation signs ONE entry body, while every
+    /// `insert`, `publish` and `version` the handle makes — or a copy of it,
+    /// the handle being `Copy` — commits under the one value it carries, so a
+    /// second commit under it carries a signature over a body not its own,
+    /// which no verifier of that entry can verify. M10's `dispatch_write`
+    /// builds one handle per call, for the one write the daemon's check
+    /// admitted the value for.
     pub fn attested(kernel: &'k Kernel<W>, attest: Option<&'k Attestation>) -> Vstream<'k, W> {
         Vstream { kernel, attest }
     }

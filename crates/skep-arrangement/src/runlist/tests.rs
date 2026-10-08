@@ -3,8 +3,11 @@ use std::collections::BTreeSet;
 use super::*;
 use crate::testutil::{a, ca, n, pca, run, vca};
 
+/// A list through the coalesce every `RunList` passes, so a fixture holds the
+/// maximally-merged decomposition the type promises of every list in the
+/// process.
 fn list(runs: Vec<Run>) -> RunList {
-    RunList(runs.into_iter().collect())
+    RunList(coalesced(runs))
 }
 
 /// The whole of a resolution, for the assertions whose subject is WHICH

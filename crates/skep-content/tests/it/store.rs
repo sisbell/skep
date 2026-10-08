@@ -502,7 +502,7 @@ fn val_wraps_bytes_and_compares_by_content_value() {
 }
 
 #[test]
-fn val_clones_share_the_bytes_and_never_copy_them() {
+fn val_shares_its_bytes_with_every_clone_and_never_copies_them() {
     // value.rs: "a clone shares the bytes and never copies them, so it is
     // O(1) however long the value" — what a fold's node copies, M5's
     // re-inserts and M6's delivery, which hands a value out once per position

@@ -49,14 +49,13 @@ cargo check -p skep-content --lib || exit $?
 
 # …and its docs as they ship, without `test-hooks`, private links denied
 # too. A shipped doc names `write` by code span, never by link: without the
-# feature no `write` exists for a link to reach. A public doc names the
-# private codec functions (`in_tumbler_order`, `entry_by_entry`,
-# `through_address`) by code span too: a link to one resolves here, where
-# private items are documented, and breaks in the docs a dependent's
-# `cargo doc` renders without them. The crate is in no `--all-features` doc
-# build below: the feature adds the `ops` module, whose doc links nothing,
-# and `write`, which is `#[doc(hidden)]`, and rustdoc checks no link in a
-# hidden item's doc.
+# feature no `write` exists for a link to reach. A public doc names a private
+# codec item (`Key`, `in_tumbler_order`, `entry_by_entry`) by code span too:
+# a link to one resolves here, where private items are documented, and
+# breaks in the docs a dependent's `cargo doc` renders without them. The
+# crate is in no `--all-features` doc build below: the feature adds the
+# `ops` module, whose doc links nothing, and `write`, which is
+# `#[doc(hidden)]`, and rustdoc checks no link in a hidden item's doc.
 RUSTDOCFLAGS="-D rustdoc::broken_intra_doc_links -D rustdoc::private_intra_doc_links" \
     cargo doc -p skep-content --lib --no-deps --document-private-items || exit $?
 

@@ -311,7 +311,8 @@ mod region;
 // The descriptor family: the four-set request, its candidates and `sat`, and
 // its three read-outs.
 mod descriptor;
-// The pointwise pair: projection and addressable discoverability.
+// The pointwise pair: projection and addressable discoverability, and the
+// touch test's restatement of M7's private per-link overlap.
 mod pointwise;
 // The delete-orphan preview.
 mod survival;

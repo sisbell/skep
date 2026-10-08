@@ -1,9 +1,10 @@
 //! §5 — projection and addressable discoverability: what each answers, the
 //! overlap discoverability shares with the region family's stab and the one
 //! shape where it parts from the projection, the order their refusals speak
-//! in, the trunk head both read, the absence rule both apply, and the run
-//! budget and join square that hold them — the square at a step that builds
-//! nothing per pair.
+//! in, the absence rule both apply, and the run budget and join square that
+//! hold them — the runs counted on a published address's trunk head, and the
+//! square at a step that builds nothing per pair. Which arrangement the pair
+//! reads is `head_float`'s.
 
 use crate::common;
 use crate::heap::heap_bytes;
@@ -332,101 +333,6 @@ fn the_pointwise_gates_settle_the_document_before_the_address() {
         reads.addressably_discoverable_from(&ca(1), &doc1()),
         Err(QueryError::NotALink)
     );
-}
-
-/// §5 — HEAD-FLOAT on the pointwise pair: a bare PUBLISHED address is read
-/// through its trunk head, the pin the region family resolves through, so
-/// the pointwise pair and the region family agree about which links reach it
-/// — every link `findlinks_v` finds through `pdoc` is one
-/// `addressably_discoverable_from` calls reachable from `pdoc`, and `project`
-/// answers in the head's positions. On a private document the float is inert
-/// and reading `d`'s own arrangement is reading the right one; here a link
-/// reaching only the head's positions tells them apart.
-#[test]
-fn the_pointwise_pair_reads_the_trunk_head_the_region_family_resolves() {
-    let k = published_world();
-    let store = LinkWriter::new(&k, &EVERYONE);
-    let pre_chain = link(&store, &doc1(), &[pca(1)], &[ca(101)]); // a position both arrangements hold
-    let head_only = link(&store, &doc1(), &[pca(3)], &[ca(102)]); // a position only the head holds
-    let reads = Reads(&k);
-
-    // The premise: the head holds four positions, pdoc's own arrangement two.
-    let snap = k.snapshot();
-    assert_eq!(snap.world().m5().content_count(&phead()), n(4));
-    assert_eq!(snap.world().m5().content_count(&pdoc()), n(2));
-
-    // The law, and it is not vacuous: both links are found through pdoc.
-    let found = reads.findlinks_v(&pdoc(), &[vspan(1, 1, 4)]).expect("findlinks_v");
-    assert_eq!(found, vec![pre_chain, head_only.clone()]);
-    for a in &found {
-        assert_eq!(
-            reads.addressably_discoverable_from(a, &pdoc()),
-            Ok(true),
-            "{a:?} is found through pdoc, so it reaches pdoc"
-        );
-    }
-    // `project` answers in the positions `image` resolves — the head's.
-    assert_eq!(reads.image(&pdoc(), &[vspan(1, 3, 1)]), Ok(vec![run(&pca(3), 1)]));
-    assert!(reads
-        .project(&head_only, FROM, &pdoc())
-        .expect("project")
-        .denotes(&t(&[1, 3])));
-    // And the bare address answers exactly as its head does: the pin, not a
-    // coincidence of this fixture.
-    for a in &found {
-        assert_eq!(
-            reads.addressably_discoverable_from(a, &pdoc()),
-            reads.addressably_discoverable_from(a, &phead())
-        );
-        assert_eq!(reads.project(a, FROM, &pdoc()), reads.project(a, FROM, &phead()));
-    }
-}
-
-/// §5 — HEAD-FLOAT on discoverability's LINK half. LP12 ranges over both
-/// subspaces of `d`'s reading surface, and the head-float law above meets
-/// only the content half: every link there reaches the head through content.
-/// A link HOMED in the head is seated in the head's own link subspace — a link
-/// is seated in its home document alone (ASN-0047 CL-OWN), and a link write
-/// is outside a published document's edit refusal (PUB-2.12) — so a link
-/// naming it, with no witness in content in any slot, reaches the published
-/// address exactly as it reaches the head. A read that floated the content
-/// runs and took the link runs off pdoc's own frozen arrangement — which
-/// seats no link — would call it unreachable from pdoc, and no other fixture
-/// here can tell the two apart.
-#[test]
-fn discoverability_reaches_a_published_address_through_its_heads_link_subspace() {
-    let k = published_world();
-    let store = LinkWriter::new(&k, &EVERYONE);
-    let seated = link(&store, &phead(), &[ca(101)], &[ca(102)]); // homed, so seated, in the head
-    let naming = link(&store, &doc1(), std::slice::from_ref(&seated), &[ca(103)]);
-    let snap = k.snapshot();
-    assert_eq!(
-        snap.world().m5().link_runs(&phead()).len(),
-        1,
-        "seated in the head"
-    );
-    assert_eq!(
-        snap.world().m5().link_runs(&pdoc()).len(),
-        0,
-        "and in none of pdoc's own"
-    );
-    let reads = Reads(&k);
-    for d in [pdoc(), phead()] {
-        for slot in [FROM, TO, TYPE] {
-            assert!(
-                reads
-                    .project(&naming, slot, &d)
-                    .expect("project")
-                    .is_empty(),
-                "{d:?}: slot {slot} has no witness in content"
-            );
-        }
-        assert_eq!(
-            reads.addressably_discoverable_from(&naming, &d),
-            Ok(true),
-            "{d:?}: reached through the head's link subspace"
-        );
-    }
 }
 
 /// §5 — the pointwise pair apply the ABSENCE RULE: a link homed where the

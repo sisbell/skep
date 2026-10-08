@@ -1424,12 +1424,22 @@ Rules that hold across its files:
   `tests/it/tidy.rs` checks the section's heading and that it names every
   read the crate publishes; nothing checks what a line says a read walks,
   or skepd's card.
+- **The link store's overlap is restated here.** `skep-links` keeps its
+  per-link overlap private — a slot's span meets a query's when they
+  properly overlap, one contains the other or they are equal, never when
+  they only abut — and `addressably_discoverable_from_on` restates it over
+  spans' bounds as `SpanBounds::overlaps`, in `src/pointwise.rs`, so that
+  discoverability touches a run by the relation the region family's stab
+  does. A change to the link store's overlap changes `SpanBounds::overlaps`
+  in the same commit. The unit test beside it holds it to `skep-address`'s
+  `classify_spans`, and `tests/it/pointwise.rs` holds discoverability to
+  the stab on every relation `classify_spans` draws.
 
 Its integration suite is one binary, `tests/it/`: one file per part of the
 read surface over the shared `common` world; `heap`, the binary's
-byte-counting allocator; `home_rule` and `consumer`, the laws that cross
-them; and `tidy`, which holds every check that reads the crate's own
-source: the module map, the first two rules, and the `## Cost` section's
+byte-counting allocator; `home_rule`, `head_float` and `consumer`, the laws
+that cross them; and `tidy`, which holds every check that reads the crate's
+own source: the module map, the first two rules, and the `## Cost` section's
 heading and its naming of every read.
 
 ## The operation surface, `skep-febe`

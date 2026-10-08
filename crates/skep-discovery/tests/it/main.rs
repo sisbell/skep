@@ -10,9 +10,9 @@
 //! the `_on` suffix marks exactly the functions over a snapshot, and that the
 //! crate doc's `## Cost` section keeps its heading and names every read; each
 //! other module is one § of the read surface — a family, a pair, the
-//! preview — or one law that crosses them (`home_rule`, `consumer`), and the
-//! module names are the table of contents. Nothing but module declarations
-//! belongs here.
+//! preview — or one law that crosses them (`home_rule`, `head_float`,
+//! `consumer`), and the module names are the table of contents. Nothing but
+//! module declarations belongs here.
 
 mod common;
 mod heap;
@@ -20,6 +20,7 @@ mod heap;
 mod consumer;
 mod descriptor;
 mod endsets;
+mod head_float;
 mod home_rule;
 mod lineage;
 mod pointwise;

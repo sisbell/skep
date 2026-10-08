@@ -20,9 +20,10 @@
 //!   referential-integrity oracle: content-presence, whether content is
 //!   stored here — not "allocated", not "registered") and
 //!   [`ContentStore::value_at`] (`C(a)`), point queries over a pinned
-//!   snapshot slice; and [`ContentStore::iter`], the one enumeration, in no
-//!   promised order, for whole-store work over a pinned snapshot such as the
-//!   cell index's walk.
+//!   snapshot slice; and [`ContentStore::iter`], the one enumeration — an
+//!   [`Iter`], the walk `&ContentStore` yields too — in no promised order,
+//!   for whole-store work over a pinned snapshot such as the cell index's
+//!   walk.
 //! * **Write surface** (§C) — the pure step [`stage_write`] (the storage
 //!   half of K.α, composed by M5's placement composite) and `write`, the
 //!   `#[doc(hidden)]` standalone transact-wrapped form (M2 contract 3) —
@@ -112,9 +113,9 @@ mod error;
 // The routing assertion (Open build decision #4), shared by `stage_write`
 // and `write`.
 mod routing;
-// The slice — its fold, point queries, one enumeration and serialized form —
-// the record, and `stage_write`, the record's one producer (`ContentWrite`'s
-// fields are private to this file).
+// The slice — its fold, point queries, one enumeration (`Iter`) and
+// serialized form — the record, and `stage_write`, the record's one producer
+// (`ContentWrite`'s fields are private to this file).
 mod store;
 // `write`, the standalone transact-wrapped twin of `stage_write` —
 // `test-hooks` builds only.
@@ -124,7 +125,7 @@ mod ops;
 pub use error::ContentError;
 #[cfg(feature = "test-hooks")]
 pub use ops::write;
-pub use store::{stage_write, ContentStore, ContentWrite};
+pub use store::{stage_write, ContentStore, ContentWrite, Iter};
 pub use value::Val;
 
 /// The engine's **read accessor** for M4's slice (§A; Engine Composition

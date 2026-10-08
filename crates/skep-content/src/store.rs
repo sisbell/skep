@@ -2,6 +2,8 @@
 //! record, the fold, the two point queries and the one enumeration, and the
 //! composable write step.
 
+use std::fmt;
+
 use serde::{Deserialize, Serialize};
 use skep_address::{Address, Tumbler};
 
@@ -122,7 +124,7 @@ fn entry_by_entry<'de, D: serde::Deserializer<'de>>(
     impl<'de> Visitor<'de> for MapVisitor {
         type Value = im::OrdMap<Tumbler, Val>;
 
-        fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
             f.write_str("a map from content address to value")
         }
 
@@ -221,21 +223,70 @@ impl ContentStore {
 
     /// THE ONE ENUMERATION of the slice: every `(address, value)` pair it
     /// holds, each exactly once — the whole of its promise. Exact-size, as
-    /// the map's own walk is. Its ORDER is no part of the promise: the order
-    /// the checkpoint's bytes need is the serializer's to keep
-    /// (`in_tumbler_order` above, which walks the map itself), and a reader
-    /// that wants an order sorts what it reads. Every address it yields is
-    /// the tumbler of a T4-valid `Address` ([`ContentStore`]'s first key
-    /// invariant, kept at every door), so validating one back into an
-    /// `Address` cannot fail.
+    /// the map's own walk is; `&ContentStore` yields the same [`Iter`], so a
+    /// `for` loop over `&store` reads it too. Its ORDER is no part of the
+    /// promise: the order the checkpoint's bytes need is the serializer's to
+    /// keep (`in_tumbler_order` above, which walks the map itself), and a
+    /// reader that wants an order sorts what it reads. Every address it
+    /// yields is the tumbler of a T4-valid `Address` ([`ContentStore`]'s
+    /// first key invariant, kept at every door), so validating one back into
+    /// an `Address` cannot fail.
     ///
     /// A walk of the whole store, for whole-store work over a pinned
     /// snapshot such as the cell index's walk (`skep-media`); there it stays
     /// immutable while commits proceed on later roots (the persistent map's
     /// structural sharing). A request path asks the point reads; no range and
     /// no prefix read is offered beside this one.
-    pub fn iter(&self) -> impl ExactSizeIterator<Item = (&Tumbler, &Val)> + '_ {
-        self.map.iter()
+    pub fn iter(&self) -> Iter<'_> {
+        Iter(self.map.iter())
+    }
+}
+
+/// Every `(address, value)` pair of one slice, each once — what
+/// [`ContentStore::iter`] lends and what `&ContentStore` yields to a `for`
+/// loop. Opaque, as M1's `Spans` and M5's `Runs` are, so the persistent map
+/// behind the slice stays this crate's own choice.
+///
+/// Opacity hides the container, never what the walk promises: the exact
+/// length is forwarded below. The reverse walk is withheld, though `im`'s map
+/// iterator has one: the order is no part of the promise
+/// ([`ContentStore::iter`]), and a walk from the far end would promise one.
+/// `Clone` and the fused guarantee are absent because `im`'s map iterator
+/// implements neither: a caller wanting two cursors asks the slice for two,
+/// and one that polls past the end wraps the walk in `fuse()`.
+#[must_use = "iterators are lazy and do nothing unless consumed"]
+pub struct Iter<'a>(im::ordmap::Iter<'a, Tumbler, Val>);
+
+impl<'a> Iterator for Iter<'a> {
+    type Item = (&'a Tumbler, &'a Val);
+    fn next(&mut self) -> Option<(&'a Tumbler, &'a Val)> {
+        self.0.next()
+    }
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        self.0.size_hint()
+    }
+}
+
+impl ExactSizeIterator for Iter<'_> {
+    fn len(&self) -> usize {
+        self.0.len()
+    }
+}
+
+/// The cursor, not the entries: `im`'s map iterator is not `Debug`, so there
+/// is no way to show what is left without spending it, and the slice it was
+/// lent from is `Debug` already.
+impl fmt::Debug for Iter<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Iter").finish_non_exhaustive()
+    }
+}
+
+impl<'a> IntoIterator for &'a ContentStore {
+    type Item = (&'a Tumbler, &'a Val);
+    type IntoIter = Iter<'a>;
+    fn into_iter(self) -> Iter<'a> {
+        self.iter()
     }
 }
 

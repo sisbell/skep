@@ -5,13 +5,15 @@
 //! exactly, never a prefix or an extension; that identity is by address,
 //! never by value, and `Val` implements no `Hash` (S4); that a slice's
 //! equality is its contents'; that the one enumeration visits every entry
-//! once; that any byte string is a value, comes back exactly as written, and
+//! once, through `iter` and through a `for` loop over the slice alike, as a
+//! walk a caller can name, which knows its length and shows only its cursor;
+//! that any byte string is a value, comes back exactly as written, and
 //! renders into `Debug` as its byte length, never a byte; and, in debug
 //! builds, that `stage_write` panics on a non-content address before it
 //! looks at what is stored there.
 
 use skep_address::Tumbler;
-use skep_content::{stage_write, ContentError, ContentStore, ContentWrite, Val};
+use skep_content::{stage_write, ContentError, ContentStore, ContentWrite, Iter, Val};
 
 use crate::common::*;
 
@@ -179,8 +181,9 @@ fn iter_visits_every_entry_exactly_once_and_promises_no_order() {
     // The one enumeration beside the point reads: every pair once, its
     // count the slice's, over a pinned slice while a later slice grows —
     // the cell index's walk reads a snapshot this way while commits
-    // proceed. The order is no part of its promise (store.rs, `iter`), so
-    // the test asserts the SET and the count, never a sequence.
+    // proceed — and a `for` loop over `&c` reads the same walk. The order is
+    // no part of its promise (store.rs, `iter`), so the test asserts the SET
+    // and the count, never a sequence.
     let c0 = ContentStore::default();
     assert_eq!(c0.iter().len(), 0);
     assert!(c0.iter().next().is_none());
@@ -195,14 +198,48 @@ fn iter_visits_every_entry_exactly_once_and_promises_no_order() {
     assert_eq!(walk.len(), n as usize, "exact-size: the slice's count");
     let mut seen = std::collections::BTreeSet::new();
     for (addr, v) in walk {
-        let ordinal: u32 = addr.iter().last().expect("an ordinal").to_string().parse().expect("small");
+        let ordinal = u32::try_from(skep_address::ordinal(addr)).expect("ca's ordinal is a u32");
         assert_eq!(v.as_bytes(), format!("v{ordinal}").as_bytes(), "the pair is the stored one");
         assert!(seen.insert(ordinal), "an entry is visited once");
         assert!(c.contains(addr), "every address walked is in the slice");
     }
     assert_eq!(seen.len(), n as usize, "every entry is visited");
+    let mut looped = std::collections::BTreeSet::new();
+    for (addr, v) in &c {
+        assert_eq!(
+            c.value_at(addr).map(Val::as_bytes),
+            Some(v.as_bytes()),
+            "a loop over `&c` yields the stored pair"
+        );
+        assert!(looped.insert(addr), "a loop over `&c` visits an entry once");
+    }
+    assert_eq!(looped.len(), n as usize, "a loop over `&c` visits every entry");
     assert_eq!(later.iter().len(), n as usize + 1, "a later slice walks its own entry too");
     assert_eq!(c.iter().len(), n as usize, "and the pinned slice is untouched by it");
+}
+
+#[test]
+fn iter_lends_a_named_walk_that_knows_its_length_and_shows_only_its_cursor() {
+    // store.rs, `Iter`: `iter` lends an `Iter`, whose backing is hidden and
+    // to which a foreign crate can add no trait — so what the loan promises
+    // is witnessed from one: a type a caller can name, the exact length,
+    // `Debug`, and `Send + Sync`, which the type has because of what it
+    // borrows and which a caller handing a walk to another thread depends on
+    // without any signature saying so. `&ContentStore` yields the same type,
+    // and its `Debug` is the cursor, never an entry.
+    fn lends<'a, I>(walk: I) -> usize
+    where
+        I: ExactSizeIterator<Item = (&'a Tumbler, &'a Val)> + std::fmt::Debug + Send + Sync,
+    {
+        walk.len()
+    }
+    let c0 = ContentStore::default();
+    let c = c0.apply_write(&stage_write(&c0, &ca(1), val(b"secret")).expect("fresh"));
+    let lent: Iter<'_> = c.iter();
+    assert_eq!(format!("{lent:?}"), "Iter { .. }", "the cursor, not the entries");
+    assert_eq!(lends(lent), 1);
+    let looped: Iter<'_> = IntoIterator::into_iter(&c);
+    assert_eq!(lends(looped), 1, "`&ContentStore` lends the same walk");
 }
 
 // ---- §Types: Val, and Debug over the types that hold one ----
@@ -230,8 +267,9 @@ fn val_implements_no_hash_so_no_map_can_key_on_a_value() {
     // value.rs, S4: identity is by address, never by value, and `Val` keeps it
     // so by implementing no `Hash` — no map, this crate's or a caller's, can
     // key on a value. `Probe::<T>::HASH` resolves to the inherent `true` where
-    // `T: Hash` and to the fallback trait's `false` elsewhere; `Tumbler`, the
-    // key M4 hashes, is the control that the probe can read `true` at all.
+    // `T: Hash` and to the fallback trait's `false` elsewhere; `Tumbler`, M4's
+    // key, which does implement `Hash`, is the control that the probe can read
+    // `true` at all.
     #[allow(dead_code)] // a type to resolve paths on; never built
     struct Probe<T>(std::marker::PhantomData<T>);
     trait Fallback {

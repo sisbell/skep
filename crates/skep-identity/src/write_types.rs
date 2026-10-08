@@ -170,8 +170,9 @@ impl WriteTypes {
     ///
     /// `credential` is kept as an OWNED copy, so this input agrees with the
     /// fold about what a credential is only when its builder hands in the
-    /// `TypeAddrs` the fold reads (skepd clones its `IDENTITY_TYPES`). That
-    /// agreement is the builder's to keep: nothing here can see the fold's.
+    /// `TypeAddrs` the fold reads (skepd clones the engine's
+    /// `IDENTITY_TYPES`). That agreement is the builder's to keep: nothing
+    /// here can see the fold's.
     ///
     /// PRECONDITION — `audit` gives EVERY [`AuditClass`] an address. A slot
     /// answers [`TargetClass::AuditView`] for a class only if the class was

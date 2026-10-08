@@ -389,9 +389,8 @@ fn the_publish_body_is_its_count_then_its_segments_then_the_base_group() {
     // and a value-sequence row of one — and the EMPTY base group. The class
     // bytes are spelled as the bytes they are — `0x02` a value stretch,
     // `0x01` a window — never as the constants that spell them: a pin
-    // composed from those agrees with whatever value they hold, even the zero
-    // that opens the base group, which no class byte may be if the body is to
-    // read back from its front.
+    // composed from those agrees with whatever value they hold, so a class
+    // byte that moved — and every `publish` preimage with it — would pass it.
     assert_eq!(
         entry_body_publish([ShotSegmentPiece::Value(b"q")], None).as_bytes(),
         [
@@ -461,8 +460,8 @@ fn the_publish_body_is_its_count_then_its_segments_then_the_base_group() {
         ]
         .concat()
     );
-    // The empty shot: the count zero, no segment, the group — the group's
-    // leading zero byte is what tells it from a segment.
+    // The empty shot: the count zero, no segment, the group — a count of
+    // zero positions is what says no segment stands before the group.
     assert_eq!(entry_body_publish([], None).as_bytes(), [0u8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
 }
 

@@ -98,8 +98,9 @@ impl IdentityState {
     /// different values fold one stream against two credential vocabularies,
     /// and [`IdentityState`]'s I2 statement — a function of the record stream
     /// and the fold's frozen constants, and of nothing else — is void, with
-    /// every verdict in the run individually correct. skepd holds ONE in a
-    /// `static`; a mirror owes the same, having fixed one address form for it
+    /// every verdict in the run individually correct. The engine holds ONE in
+    /// a `static`, `IDENTITY_TYPES`, which its fold hook and skepd's precheck
+    /// both pass; a mirror owes the same, having fixed one address form for it
     /// (AUTH-2.125).
     ///
     /// PRECONDITION — `ctx` answers AS OF THE DEPOSIT'S COMMIT, every fact

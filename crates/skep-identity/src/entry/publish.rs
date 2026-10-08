@@ -54,9 +54,14 @@
 //! the trunk's next. The address is the client's own, so the frame stays
 //! POSITION-FREE.
 //!
-//! Every segment is self-delimiting behind its class byte, and the group
-//! opens with a zero byte, which no class byte is, so the body is uniquely
-//! decodable from its front.
+//! Every segment is self-delimiting behind its class byte and carries at
+//! least one position — a stretch its count of values, a window its width —
+//! so the segments end exactly where the positions they carry reach the
+//! leading `be64(placed)`, and the base group is what follows them: the body
+//! is uniquely decodable from its front, whatever the group's own bytes. The
+//! group needs no marker of its own; its first byte is its `be32` length's
+//! high byte, a zero — which no class byte is — only while the group is
+//! shorter than 16 MiB, and the count, not that byte, ends the segments.
 
 use core::fmt;
 use core::num::NonZeroU64;
@@ -127,9 +132,10 @@ pub struct ShotBase<'a> {
 /// as an address-list row of one element (the optional-address row's own
 /// spelling of a present address: the form byte, `be64(1)`, the address
 /// delimited) followed by `be64(base_extent)`. So an absent group is four
-/// bytes and a present one `4 + 1 + 8 + 4 + len(address) + 8`. Either opens
-/// with a zero byte, which no segment's class byte is: that is what ends the
-/// `publish` body's segments without a count of them.
+/// bytes and a present one `4 + 1 + 8 + 4 + len(address) + 8`. It needs no
+/// marker of its own: the segments before it end where the positions they
+/// carry reach the body's leading `be64(placed)` (the module doc), and the
+/// group is what follows them.
 fn push_base(out: &mut Vec<u8>, base: Option<ShotBase<'_>>) {
     let mut group = Vec::new();
     if let Some(ShotBase { member, extent }) = base {

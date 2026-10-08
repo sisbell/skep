@@ -29,11 +29,12 @@
 //! * THE TOKEN ROW — `alg` (the `ALGS` token of the signing key) and `op`
 //!   (the token naming the body's GRAMMAR, which each body's [`EntryBody`]
 //!   carries beside it): the token's ASCII bytes as they stand. For the entry
-//!   grade the token is the op-kind token as the wire spells it — `insert`,
-//!   `make_link`, `publish`. ONE EXCEPTION (the frame merge, fm-I): `record`
-//!   names the RECORD grade's body and no wire op — a record deposit rides an
-//!   `insert` and a `make_link` on the wire, and its signature is the atom's
-//!   own `sig`, made over the frame this token selects.
+//!   grade the token is the op-kind token as the wire spells it, one per
+//!   publish-class op kind, each named beside its body in THE BODIES, below.
+//!   ONE EXCEPTION (the frame merge, fm-I): `record` names the RECORD grade's
+//!   body and no wire op — a record deposit rides an `insert` and a
+//!   `make_link` on the wire, and its signature is the atom's own `sig`, made
+//!   over the frame this token selects.
 //! * THE ADDRESS ROW — `account` (at the ENTRY grade the act's principal's
 //!   account in the board's local form; at the RECORD grade the HOME's
 //!   account, never the depositing principal's — [`RecordFrame`]), `doc` (per
@@ -47,9 +48,11 @@
 //!   the several a string can carry: a component written with a leading zero
 //!   (`1.01.0.1`) names the same address (`1.1.0.1`). So the frame spells the
 //!   ADDRESS and never a string — [`entry_frame`], the insert's declared type,
-//!   the slots and the windows all take `Address` values — and a signer
-//!   holding the address it named signs the bytes the verifier composes,
-//!   whichever spelling carried it on the wire.
+//!   the windows, the base group and the `record` body's rows take `Address`
+//!   values, and the slots `Span`s, whose start and width tumblers M1's
+//!   `Display` spells the same one way — and a signer holding the address it
+//!   named signs the bytes the verifier composes, whichever spelling carried
+//!   it on the wire.
 //! * THE BOARD ROW — `board`, the BOARD TERM ([`BoardTerm`]), `H.1`'s
 //!   committed `(position, chain)` pair (D13, RULED) — its position a LOG
 //!   position, never an element position: eight big-endian bytes, then the
@@ -196,11 +199,12 @@
 //! only as such an element. Every other row is self-delimiting — fixed-width
 //! fields and delimited elements, with a count ahead of any element that
 //! repeats — and stands where its grammar puts it. The one run with no count
-//! ahead is a `publish` body's segments: each opens with its class byte, and
-//! the run ends at the base group, whose opening zero byte is no class byte.
-//! So every body is uniquely decodable from its front, and the
-//! composition is injective at every level: two distinct inputs never spell
-//! one preimage.
+//! of its segments ahead is a `publish` body's: each segment opens with its
+//! class byte and carries at least one position, so the run ends where the
+//! positions its segments carry reach the body's leading `be64(placed)`, the
+//! base group following it. So every body is uniquely decodable from its
+//! front, and the composition is injective at every level: two distinct
+//! inputs never spell one preimage.
 
 use skep_address::{subtree_of, Address, Span};
 
@@ -234,8 +238,8 @@ pub use publish::{entry_body_publish, PublishBody, PublishRefusal, ShotBase, Sho
 /// PRECONDITION — as [`framed`]'s: every member is shorter than 2^32 bytes.
 /// A longer member PANICS, naming the obligation — a caller's bug and never
 /// an outcome. The body is the one member that grows with the write, and no
-/// body the daemon composes comes near the bound ([`framed`]'s card says
-/// why).
+/// body the daemon composes reaches the bound: each grammar's is held to a
+/// bound of its own before it is framed ([`framed`]'s card names them).
 ///
 /// PRECONDITION — `doc` is the shape `body`'s grammar takes: the pair's row
 /// ([`DocTerm::Pair`]) under an `edit_link` body, the one op naming two homes

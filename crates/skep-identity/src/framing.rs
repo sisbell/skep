@@ -86,12 +86,16 @@ pub const TAGS: &[Tag] = &[KEY_TAG, SESSION_TAG, SESSION_TAG_V2, NODE_HELLO_TAG,
 ///
 /// PRECONDITION — every field is shorter than 2^32 bytes, so its length is
 /// what `be32` writes. A longer field is a CALLER's bug and not an outcome:
-/// no field framed today comes near it — the largest is an entry body: an
-/// `insert`'s or a `make_link`'s, carried in a request under the daemon's own
-/// cap, or a `publish`'s, read off the store and held to that same bound by
-/// the daemon's shot-body budget — and truncating the length would silently
-/// break the injectivity above rather than refuse it. It panics, naming the
-/// obligation.
+/// no field framed today reaches it. The largest is an entry body, and each
+/// grammar's is held to a bound of its own before it is framed: an
+/// `insert`'s values, and every address a request names, by the daemon's
+/// request cap; a link write's slots AS STORED — a V-spec slot's I-extents,
+/// which the store resolves and no request carries — by M7's per-slot span
+/// budget; a `publish`'s, read off the store, by the daemon's shot-body
+/// budget; a `record`'s sig-less record by the record cap
+/// ([`MAX_RECORD_BYTES`](crate::MAX_RECORD_BYTES)). Truncating the length
+/// would silently break the injectivity above rather than refuse it, so it
+/// panics, naming the obligation.
 ///
 /// AUTH-1.14 — debug-asserts that `tag` is a member of [`TAGS`], so a tag
 /// declared but not listed fails at its first use; release builds pay

@@ -23,7 +23,8 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
   world-fact traits and consumes only
   [skep-address](../skep-address) types: no I/O, no clock, no
   signature verification (verification lives in
-  [skep-signature](../skep-signature), which skepd's session layer calls),
+  [skep-signature](../skep-signature), which skepd, the signing client
+  and the resolver call),
   no engine dependency.
 - **Signed-op declarations** — the bytes a signed write's signature
   covers (the entry frame and its members' encodings), the marker-tag
@@ -36,9 +37,12 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
   prefix — for the daemon's `nullify` refusals; recognition only,
   never fold state.
 
-Pure enough for a mirror or an audit tool to embed directly. skepd
-holds the fold beside the world today; the spec seats it in the
-engine's world fold.
+Pure enough for a mirror or an audit tool to embed directly. The
+engine seats the fold as its world's identity slice; skepd, the
+signing client ([skep-client](../skep-client)) and the registry
+resolver ([skep-resolve](../skep-resolve)) build on its keys, records
+and frames, and the `skep` command ([skep-cli](../skep-cli)) on its
+keys and records.
 
 ## License
 

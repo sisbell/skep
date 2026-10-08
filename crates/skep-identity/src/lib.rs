@@ -17,63 +17,66 @@
 //!
 //! ## Composition, as built
 //!
-//! The build seats the fold IN THE ENGINE, as the spec casts it
-//! (AUTH-2.79–2.88): `skep-engine`'s `World` carries the [`IdentityState`]
-//! as its identity slice — `Some` on every loaded World, checkpointed with
-//! the world and never rebuilt from the deposits — implements [`Values`] and
-//! [`FoldCtx`] over its own slices and [`HasIdentity`] over the slice, holds
-//! the ONE [`TypeAddrs`] (`IDENTITY_TYPES`, beside the three credential type
-//! pins in its commons ledger), and steps the slice through
-//! [`IdentityState::step`] at every credential deposit's commit, inside the
-//! transaction that deposits the link (AUTH-2.80, AUTH-2.66) — so a reopen
-//! and every historical read carry the table the live fold answered. At load
-//! a checkpoint written WITHOUT the slice is resolved — the empty table over
-//! no credential deposit — or refused as a start point (AUTH-2.83,
-//! AUTH-2.84), through M2's fallible seed seam (AUTH-2.85). skepd reads the
-//! slice off whichever World snapshot it holds, through [`HasIdentity`]:
-//! its session layer (`auth`; the workspace's `ARCHITECTURE.md`, §The
-//! daemon) builds the precheck's [`LinkDeposit`] (the engine's hook folds
-//! that same deposit at the commit), hosts `deposits_credential_link` over
-//! the engine's `IDENTITY_TYPES`, holds the [`WriteTypes`] input, and derives
-//! its enforcement mode from [`IdentityState::claimant`]; `skep-signature` is
-//! the signature arithmetic skepd calls; skep-mcp reaches this crate only
-//! from its suite, to build records and sign session payloads. M10's
-//! `skep-febe` and skep-conformance depend on nothing here; the I2 pins ride
-//! in this crate's own `tests/it/`, and the World's slice bytes beside them.
+//! Who depends on this crate, and for what: one bullet per dependent, at the
+//! grain of a role, so the list moves only when an edge does. What each does
+//! with what it takes is that crate's own to say, and the workspace's
+//! `ARCHITECTURE.md`, §Code map, draws every crate's edges.
 //!
-//! Signed ops' declarations are consumed in skepd as well, at both grades. It
-//! composes the ENTRY frame it verifies through [`entry_frame`], over the
-//! locked snapshot's [`BoardTerm`], the principal's account, and the op's
-//! [`DocTerm`] and [`EntryBody`] — a link write's slots as the transaction
-//! stores them, each a [`unit_span`] or a resolved extent; a `publish`'s
-//! built piece by piece within its budget through [`PublishBody`], whose
-//! [`PublishRefusal`] tells it which answer a refused shot is owed. At a
-//! credential deposit above the claim it
-//! checks the RECORD grade: it reads the record's atom through
-//! [`record_bytes`], its entries and `sig` through [`parse_record_value`] and
-//! the link's type and target through [`single_address`], and frames the
-//! sig-less projection ([`canonical_record`] with no `sig`) as the
-//! [`entry_body_record`] body under the home's account and the home; at the
-//! atom's own `insert`, the same parse tells it whether the record carries a
-//! `sig` at all. Its write-path check reads a presented attestation's row off
-//! the marker tag, and its codec lifts a request's `attest.alg` token to that
-//! tag and back, through [`SigAlgRow::of_token`] and [`SigAlgRow::of_tag`];
-//! each marker tag's arithmetic over [`SIG_ALGS`]' rows and a key's two
-//! halves — composing them at keygen ([`PublicKey::from_halves`]) and reading
-//! them to verify ([`PublicKey::pq_half`], [`PublicKey::ed25519_half`]) — is
-//! `skep-signature`'s, whose verify it calls; and it sizes the handshake's
-//! hybrid blob by the rows' widths.
+//! * `skep-engine` SEATS THE FOLD, as the spec casts it (AUTH-2.79–2.88): its
+//!   `World` carries the [`IdentityState`] as its identity slice — `Some` on
+//!   every loaded World, checkpointed with the world and never rebuilt from
+//!   the deposits — implements [`Values`], [`FoldCtx`] and [`HasIdentity`]
+//!   over its own slices, holds the ONE [`TypeAddrs`] (`IDENTITY_TYPES`,
+//!   beside the three credential type pins in its commons ledger), and steps
+//!   the slice through [`IdentityState::step`] at every credential deposit's
+//!   commit, inside the transaction that deposits the link (AUTH-2.80,
+//!   AUTH-2.66) — so a reopen and every historical read carry the table the
+//!   live fold answered. At load a checkpoint written WITHOUT the slice is
+//!   resolved — the empty table over no credential deposit — or refused as a
+//!   start point (AUTH-2.83, AUTH-2.84), through M2's fallible seed seam
+//!   (AUTH-2.85).
+//! * `skepd` reads the slice off whichever World snapshot it holds, through
+//!   [`HasIdentity`], and guards the write path from its session layer
+//!   (`auth`; the workspace's `ARCHITECTURE.md`, §The daemon): it builds the
+//!   precheck's [`LinkDeposit`] (the engine's hook folds that same deposit at
+//!   the commit), hosts `deposits_credential_link` over the engine's
+//!   `IDENTITY_TYPES`, holds the [`WriteTypes`] input, derives its
+//!   enforcement mode from [`IdentityState::claimant`], composes the frames
+//!   it verifies — a session handshake's under [`framed`], both signed-ops
+//!   grades' through [`entry_frame`] — and lifts a request's `attest.alg` to
+//!   its marker tag and back through [`SigAlgRow`].
+//! * `skep-signature`, the one crate that links the signature libraries
+//!   (AUTH-2.2), holds each marker tag's arithmetic over [`SIG_ALGS`]' rows
+//!   and a key's two halves — composing them at keygen
+//!   ([`PublicKey::from_halves`]) and reading them to verify
+//!   ([`PublicKey::pq_half`], [`PublicKey::ed25519_half`]); skepd, the
+//!   signing client and the resolver call its verify.
+//! * `skep-client`, the SIGNING CLIENT, holds keys, spells credential records
+//!   and composes the frames it signs; its reader's verifier composes the
+//!   same frames back.
+//! * `skep-resolve`, the registry resolver, reads the key set that opens an
+//!   account as of a record's position, finds an account's doc 1 through
+//!   [`doc_1_of`], and verifies each registry record's frame
+//!   ([`entry_body_record`]).
+//! * `skep-cli`, the `skep` command, names keys by their fingerprints and
+//!   spells the enrollment records its key commands print.
+//! * From their suites only: `skep-mcp`, to build records and sign session
+//!   payloads, and `skep-search`, to sign the writes its budgets suite
+//!   commits to a dev board.
+//! * Nothing here: M10's `skep-febe` and `skep-conformance`. The I2 pins ride
+//!   in this crate's own `tests/it/`, and the World's slice bytes beside them.
 //!
-//! This section says what skepd USES, not which of its files does it: that is
-//! skepd's arrangement, and `grep -rn skep_identity crates/skepd/src` answers
-//! it however skepd is cut.
+//! Which file of a dependent takes what is that crate's arrangement:
+//! `grep -rln skep_identity crates/*/src` answers it however each is cut.
 //!
 //! Some public items are public for a reason a grep for callers cannot see,
 //! so finding no caller is no reason to narrow one. [`Tag`],
 //! [`ParseKeyError`], [`LabelError`], [`PayloadError`], [`PublishRefusal`]
 //! and [`RecordEntry`] are public because a public signature names them. The
-//! rest the spec or the design record declares for a reader OUTSIDE the
-//! workspace: [`canonical_record`], [`parse_enroll`], [`parse_retire`] and
+//! rest the spec or the design record declares for a reader it names — in
+//! this workspace `skep-client` is a signing client with a verifier beside
+//! the table and `skep-resolve` a mirror; outside it, bebe and any mirror or
+//! audit tool: [`canonical_record`], [`parse_enroll`], [`parse_retire`] and
 //! [`parse_record_value`] with its [`RecordValue`] for the signing client and
 //! the verifier beside the table, which parses a committed record, reads its
 //! `sig` and composes its sig-less projection (the design record §4.2 (C));
@@ -92,8 +95,8 @@
 //! embedding this crate — computes that address here. M3 spells the slot as
 //! `first_document_address`, which AUTH-2.1's dependency set keeps out of
 //! this crate, and skepd's suite holds the two equal at every account. The
-//! outside reader is why each of these is public, whether or not a crate of
-//! this workspace also calls it, and the suite's `surface.rs` names each of
+//! named reader is why each of these is public, whether or not a crate of
+//! this workspace calls it today, and the suite's `surface.rs` names each of
 //! them from outside the crate, so narrowing one fails the build there.
 //!
 //! ## What lives here
@@ -131,11 +134,13 @@
 //!   [`ShotSegmentPiece`]s — the shot's address form, one copied position's
 //!   value or one window at a time, the pieces its segments are built from
 //!   — and the shot's base), or piece by piece under a byte budget by
-//!   [`PublishBody`], with its refusal [`PublishRefusal`], and
-//!   [`entry_body_record`], over a [`RecordRows`] naming the record grade's
-//!   five rows, under the `record` token — the bytes a publish-class
-//!   entry's signature, or a record's `sig`, is made over (signed ops; the
-//!   design record §2.5; the frame merge);
+//!   [`PublishBody`], with its refusal [`PublishRefusal`] (the `publish`
+//!   body's items, in the child module `entry::publish`, the one module the
+//!   builder's fields are visible to), and [`entry_body_record`], over a
+//!   [`RecordRows`] naming the record grade's five rows, under the `record`
+//!   token — the bytes a publish-class entry's signature, or a record's
+//!   `sig`, is made over (signed ops; the design record §2.5; the frame
+//!   merge);
 //! * `payload`: the credential-record constants and payload types —
 //!   [`ENROLL_TYPE`], [`RETIRE_TYPE`], [`MAX_RECORD_BYTES`], [`Enrollment`]
 //!   with its refusal [`LabelError`], [`PayloadError`] (AUTH-1.18–1.28) —

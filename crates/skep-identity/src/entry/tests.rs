@@ -1,3 +1,5 @@
+use core::num::NonZeroU64;
+
 use skep_address::{validate, Nat, Tumbler};
 
 use super::*;

@@ -5,8 +5,8 @@
 //! one token set, the KEY PIN's halves, the key's width, the fingerprint's
 //! formula, hex and rendering), the framing byte pins, the fold token
 //! authority, the standard trait surface every consumer dispatches through
-//! and the two traits it withholds, and the items published for readers
-//! outside the workspace.
+//! and the two traits it withholds, and the items published for the readers
+//! the spec names.
 
 use crate::common;
 
@@ -757,16 +757,17 @@ fn tag_is_copy_and_debugs_as_its_bytes() {
     assert_eq!(format!("{KEY_TAG:?}"), "Tag(skep-key-v1)");
 }
 
-/// The items this crate publishes for readers OUTSIDE the workspace — the ones
-/// `lib.rs`'s "Composition, as built" lists with the rule that declares each —
-/// named here, from outside the crate. A caller elsewhere in the workspace is
-/// no part of why one is public, and where there is none, a visibility audit
-/// that looks for callers finds nothing and narrowing the item to `pub(crate)`
-/// leaves every other build green; this one stops compiling, at the item. An
-/// item published for such a reader joins this list and that paragraph
-/// together.
+/// The items this crate publishes for the readers the spec or the design
+/// record names — the ones `lib.rs`'s "Composition, as built" lists with the
+/// rule that declares each, some of those readers in this workspace and some
+/// outside it — named here, from outside the crate. Whether a crate of the
+/// workspace calls one today is no part of why it is public: where none does,
+/// a visibility audit that looks for callers finds nothing and narrowing the
+/// item to `pub(crate)` leaves every other build green; this one stops
+/// compiling, at the item. An item published for such a reader joins this
+/// list and that paragraph together.
 #[test]
-fn the_items_published_for_readers_outside_the_workspace_are_public() {
+fn the_items_published_for_the_readers_the_spec_names_are_public() {
     // The signing client and the verifier beside the table (the design
     // record §4.2 (C)) — the verifier's parse answering the entries and the
     // `sig` together.

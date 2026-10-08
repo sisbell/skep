@@ -99,7 +99,7 @@
 //! * THE WINDOW ROW — a run the MINTED MEMBER (the version a `publish` mints)
 //!   holds BY ADDRESS: the run's I-START as the address row, length-delimited,
 //!   then `be64(width)` — [`push_window`]. Which runs those are is the
-//!   `publish` body's rule, below.
+//!   `publish` body's rule, stated in the child module `publish`.
 //!
 //! THE BODIES, per grammar — each an [`EntryBody`], the token paired with
 //! its body, so a body is never framed under another token. The ten
@@ -147,70 +147,12 @@
 //!   span. The claim's `to` — the successor's address, minted inside the
 //!   transaction — and its type, the supersedes constant, are NO rows. Its
 //!   `doc` is the pair's row.
-//! * `publish` — [`entry_body_publish`]: THE COUNT, then THE RUNS THE CLIENT
-//!   PLACED IN THE ADDRESS FORM — the SHOT's address form (l6-A4), its runs
-//!   classed by value and by address — then THE BASE: the member the shot
-//!   was staged from and the extent the copy took (the design record §2.5's
-//!   `publish` cell as ruled: V — fam1-Q part (1) — binds the shot's base,
-//!   its member and its extent both, since round 7's bu7-E2 (owner
-//!   2026-10-01): a verifier DERIVES the member from the minted member's
-//!   address and composes it INTO these bytes, so a re-submission naming
-//!   another base breaks the signature; fam2-Q's arm A with l6-A4 reads
-//!   WHICH runs are signed by value and which by address AT THE MINTED
-//!   MEMBER, the version the shot mints; D25's (c′) journals the two terms
-//!   a verifier needs beyond that member's runs and address, `placed` and
-//!   `base_extent`, in M5's placing record). In order:
-//!     * `be64(placed)` — the positions the client placed, Σ width of its
-//!       runs, and so how many of the minted member's positions the segments
-//!       below spell;
-//!     * then the minted member's first `placed` positions as SEGMENTS, in
-//!       V-order, each opening with ONE CLASS BYTE: `0x02` a VALUE STRETCH —
-//!       the maximal run of consecutive positions the commit COPIES IN (the
-//!       shot document's own I-space placed by reference, the staging draft's
-//!       re-inserted as fresh identity — at the minted member, one origin, the
-//!       document's own) as one value-sequence row; `0x01` a WINDOW — one run
-//!       onto ANOTHER document's I-space, which the commit keeps as a
-//!       reference — as one window row. The segments are the runs AS THE
-//!       MINTED MEMBER'S ARRANGEMENT HOLDS THEM, maximally merged (M5's
-//!       run-list merges I-adjacent runs of one origin), so two I-adjacent
-//!       windows are one segment and a stretch never meets a stretch;
-//!     * then the BASE GROUP, one length-delimited group: EMPTY (`be32(0)`)
-//!       where the shot has no base — the birth bit — else the base MEMBER's
-//!       address as an address-list row of one element (the
-//!       optional-address row's own spelling of a present address, so the
-//!       body takes no new form) followed by `be64(base_extent)` —
-//!       [`push_base`] over a [`ShotBase`].
-//!
-//!   THE BASE IS SIGNED (V; bu7-E2 ARM (a), owner 2026-10-01 — the member's
-//!   address joined the group at round 7, re-pinned in place under
-//!   `skep-entry-v1` by l6-A3, no v1 signature being served before the
-//!   first served board): the signer takes the member and the extent off the
-//!   request's own `base` and `base_extent`, the daemon off the same request,
-//!   and a verifier holding the MINTED MEMBER and no request DERIVES the
-//!   member from that member's address — a trunk member `D.k+1` was minted
-//!   against `D.k`, a daughter `X.m` against `X`, a birth version against the
-//!   memberless document, or against nothing where the group is EMPTY — and
-//!   composes it INTO these bytes. So the derivation feeds the preimage: it
-//!   answers how a verifier finds the member, never whether the signature
-//!   covers it. A re-submission of a signed shot naming ANOTHER base — the
-//!   trunk's current head, say — spells another group and verifies under no
-//!   key, while a replayed shot naming the base it signed verifies as it did
-//!   and names a base its own commit left no longer the head, so the store's
-//!   rule mints that base's daughter, never the trunk's next. The address
-//!   is the client's own, so the frame stays POSITION-FREE. A verifier so
-//!   holding the member composes the rest of the body with no request in
-//!   hand: it reads that member's first `placed` positions, classes each
-//!   run by its origin — the member's own trunk BY VALUE, any other document
-//!   BY ADDRESS — reads a stretch's values there and spells a window from
-//!   the run that member holds. [`PublishBody`] builds the body one value
-//!   and one window at a time under a byte budget, for a verifier
-//!   re-composing it off a store, and refuses it WHOLE at the first piece
-//!   it cannot take — past that budget or past the count's `be64` — naming
-//!   which ([`PublishRefusal`]). A window of no positions is no piece at
-//!   all: a window's width is a `NonZeroU64`, as a run's width is at least
-//!   one. Every segment is self-delimiting behind its class byte and the
-//!   group opens with a zero byte, which no class byte is, so the body is
-//!   uniquely decodable from its front.
+//! * `publish` — [`entry_body_publish`], or piece by piece under a byte
+//!   budget by [`PublishBody`]: the count of positions placed, the shot's
+//!   runs as segments — each a value stretch or a window behind its class
+//!   byte — then the base group. Its grammar is stated beside its builder,
+//!   in the child module `publish`, the one module the builder's fields are
+//!   visible to.
 //! * `record` — [`entry_body_record`] over a [`RecordRows`]: THE RECORD
 //!   GRADE's body (the frame merge, fm-I, RULED 2026-09-29; its design record
 //!   §3), under the `record` token. A record deposit's `sig` rides the atom,
@@ -246,17 +188,18 @@
 //! fields and delimited elements, with a count ahead of any element that
 //! repeats — and stands where its grammar puts it. The one run with no count
 //! ahead is a `publish` body's segments: each opens with its class byte, and
-//! the run ends at the base-extent group, whose opening zero byte is no class
-//! byte. So every body is uniquely decodable from its front, and the
+//! the run ends at the base group, whose opening zero byte is no class byte.
+//! So every body is uniquely decodable from its front, and the
 //! composition is injective at every level: two distinct inputs never spell
 //! one preimage.
 
-use core::fmt;
-use core::num::NonZeroU64;
-
 use skep_address::{subtree_of, Address, Span};
 
-use crate::framing::{delimited_len, framed, push_delimited, ENTRY_TAG};
+use crate::framing::{framed, push_delimited, ENTRY_TAG};
+
+mod publish;
+
+pub use publish::{entry_body_publish, PublishBody, PublishRefusal, ShotBase, ShotSegmentPiece};
 
 /// THE ENTRY FRAME: `framed(ENTRY_TAG, [alg, board, account, doc, op, body])`
 /// (AUTH-1.12's framing), EVERY member spelled here from the value the caller
@@ -309,7 +252,7 @@ pub fn entry_frame(
 /// writes TWO homes, the successor's and the claim's, spelled as THE PAIR'S
 /// ROW (d24-1), `0x01 ‖ be64(2) ‖ be32(len) ‖ d_s ‖ be32(len) ‖ d_a`. The
 /// two homes are taken BY NAME: the op's own order, `d_s` then `d_a`, is
-/// spelled once, in [`doc_bytes`], and a call site that named them the
+/// spelled once, in `doc_bytes`, and a call site that named them the
 /// other way round would be a frame every verifier refuses. `Copy`, as the
 /// addresses it borrows are: a view of the caller's term, never an owner of
 /// it.
@@ -508,12 +451,6 @@ const SLOT_FORM_STORED: u8 = 0x03;
 /// The address-list row's form byte.
 const ADDRESS_LIST_FORM: u8 = 0x01;
 
-/// The `publish` body's segment CLASS bytes: a WINDOW, a run held BY
-/// ADDRESS, and a VALUE STRETCH, positions held BY VALUE. The slot row's
-/// form byte is neither, and the two rows never meet in one body.
-const SEGMENT_WINDOW: u8 = 0x01;
-const SEGMENT_VALUE_STRETCH: u8 = 0x02;
-
 /// THE SLOT ROW, onto `out`: the form byte `0x03`, `be64(n)`, then each span
 /// as its start and its width, each tumbler in the address row's spelling,
 /// each length-delimited — the module doc's row.
@@ -558,40 +495,6 @@ fn push_optional_address(out: &mut Vec<u8>, named: Option<&Address>) {
 fn push_window(out: &mut Vec<u8>, start: &[u8], width: u64) {
     push_delimited(out, start);
     out.extend_from_slice(&width.to_be_bytes());
-}
-
-/// THE SHOT'S BASE as the `publish` body spells it (V; bu7-E2): the MEMBER
-/// the staged draft was copied from — the trunk head for the ordinary shot, a
-/// pinned member for the daughter shot, the memberless document itself for a
-/// shot into a document between its mint and its birth version — and the
-/// EXTENT of it the copy took. The request's own `base` and `base_extent`,
-/// which M5's `Shot::base` carries as `Base { member, extent }`; a verifier
-/// holding the minted member derives the member from that member's address
-/// and reads the extent off `doc_metadata`. `Copy`, as the address it borrows
-/// is: a view of the caller's base, never an owner of it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct ShotBase<'a> {
-    /// The member (or memberless document) the draft was copied from.
-    pub member: &'a Address,
-    /// The content positions of `member` the copy took.
-    pub extent: u64,
-}
-
-/// THE BASE GROUP, onto `out`: ONE length-delimited group — EMPTY (`be32(0)`)
-/// where the shot has no base, the birth bit — else the base member's address
-/// as an address-list row of one element (the optional-address row's own
-/// spelling of a present address: the form byte, `be64(1)`, the address
-/// delimited) followed by `be64(base_extent)`. So an absent group is four
-/// bytes and a present one `4 + 1 + 8 + 4 + len(address) + 8`. Either opens
-/// with a zero byte, which no segment's class byte is: that is what ends the
-/// `publish` body's segments without a count of them.
-fn push_base(out: &mut Vec<u8>, base: Option<ShotBase<'_>>) {
-    let mut group = Vec::new();
-    if let Some(ShotBase { member, extent }) = base {
-        push_address_list(&mut group, std::slice::from_ref(member));
-        group.extend_from_slice(&extent.to_be_bytes());
-    }
-    push_delimited(out, &group);
 }
 
 /// THE THREE CONTENT-FREE OPS — the mints whose cell is the EMPTY body
@@ -748,68 +651,6 @@ fn link_write_body(op: &'static str, slots: LinkSlots<'_>, replaces: Option<&Add
     EntryBody { op, bytes: out }
 }
 
-/// One piece the `publish` body's SEGMENTS are built from — a piece of the
-/// shot's ADDRESS FORM (l6-A4), taken in V-order: one position the commit
-/// copies in, by its value, or one window onto another document's I-space, by
-/// its address. The pieces are not the segments: consecutive values make ONE
-/// value stretch, and each window makes a segment of its own. `Copy`, as the
-/// slices it borrows are: a view of the caller's piece, never an owner of it.
-///
-/// The classing is the minted member's: a run whose origin is that member's
-/// own trunk — the shot document's own I-space placed by reference, or the
-/// staging draft's text re-inserted as fresh identity under that trunk — is
-/// read out as [`ShotSegmentPiece::Value`]s, one per position; a run whose
-/// origin is any other document is one [`ShotSegmentPiece::Window`]. Which of
-/// a shot's runs is which, and where two I-adjacent windows become one, is
-/// M5's to say (`skep-arrangement`'s `Shot::address_form`); this crate spells
-/// what it is handed.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ShotSegmentPiece<'a> {
-    /// One position the commit COPIES IN — its value, read at the minted
-    /// member.
-    Value(&'a [u8]),
-    /// A WINDOW — one run onto another document's I-space, kept by the
-    /// commit as a reference: its I-start and its width, as the minted
-    /// member's arrangement holds the run, clipped to the client's placed
-    /// positions.
-    Window {
-        /// The run's first I-address.
-        start: &'a Address,
-        /// The run's width — at least one position, as every run's is, which
-        /// its type, `NonZeroU64`, holds.
-        width: NonZeroU64,
-    },
-}
-
-/// THE `publish` BODY, under the `publish` token: `be64(placed)`, then the
-/// body's segments built from `pieces` in the order given — each run of
-/// consecutive values ONE value stretch, its class byte and one value-sequence
-/// row; each window its class byte and one window row — then the base group
-/// over `base`, the shot's [`ShotBase`] or `None` in the birth shape. It is
-/// [`PublishBody`] under a budget no body reaches: over pieces a budget
-/// admits, the two build one body.
-///
-/// PRECONDITIONS — every value and every window's start spelling is shorter
-/// than 2^32 bytes, as [`entry_body_insert`]'s values are, and the positions
-/// the pieces cover sum below 2^64 — the count's width. A caller breaking
-/// one PANICS, naming the obligation.
-pub fn entry_body_publish<'a>(
-    pieces: impl IntoIterator<Item = ShotSegmentPiece<'a>>,
-    base: Option<ShotBase<'_>>,
-) -> EntryBody {
-    pieces
-        .into_iter()
-        .try_fold(PublishBody::within(usize::MAX, base), |body, piece| match piece {
-            ShotSegmentPiece::Value(value) => body.push(value),
-            ShotSegmentPiece::Window { start, width } => body.window(start, width),
-        })
-        .expect(
-            "a budget of usize::MAX refuses no piece past it — a saturated length never passes \
-             it — so the refusal named here is a caller's broken precondition",
-        )
-        .finish()
-}
-
 /// A `record` body's FIVE ROWS, BY NAME — the one argument
 /// [`entry_body_record`] takes. Two of them share a type: the `replaces` row
 /// and the LINEAGE row are each an optional address, the first EMPTY by kind
@@ -870,219 +711,6 @@ pub fn entry_body_record(rows: RecordRows<'_>) -> EntryBody {
     push_delimited(&mut out, sigless_canonical_record);
     EntryBody { op: "record", bytes: out }
 }
-
-/// A `publish` BODY built one piece at a time under a byte BUDGET — for the
-/// verifier that re-composes a shot's body off its own store, where each
-/// value arrives by a read that can fail and a body past the budget must be
-/// REFUSED rather than built. [`PublishBody::push`] and
-/// [`PublishBody::window`] measure the budget in the body's own layout and
-/// NAME what they refuse ([`PublishRefusal`]), so no caller restates that
-/// layout, or the count's arithmetic, to learn which refusal it met; the
-/// caller keeps its walk, its own answer for a value it could not read and
-/// for each refusal, and collects nothing ahead of the build.
-///
-/// Its standing INVARIANT is the one the budget exists for: the body built so
-/// far, its leading count and the base group [`PublishBody::finish`]
-/// appends included, never passes `budget` bytes — [`PublishBody::within`]'s
-/// PRECONDITION establishes it at the type's one mint site, and each of its
-/// two growth sites, [`PublishBody::push`] and [`PublishBody::window`], keeps
-/// it or refuses, so `finish` never answers a body past its budget.
-///
-/// A refusal CONSUMES the builder, at a push and at a window alike, and the
-/// type is not `Clone` — the compile-time check beside it holds that — so the
-/// only body that can be finished is one that took EVERY piece it was
-/// offered, in order. A body that skipped a piece, or stopped short of one,
-/// would be the preimage of a different, shorter publish: every other member
-/// of the frame is fixed for one principal's publishes into one trunk under
-/// one key, so a signature made for that publish would verify over it.
-/// [`entry_body_publish`] is this builder under a budget no body reaches, so
-/// over pieces the budget admits the two build one body.
-///
-/// Consecutive values join ONE stretch — the row opened by the first of them
-/// and closed by the next window or by `finish` — so a stretch is always
-/// maximal, whatever run boundaries the caller walked them in; windows are
-/// taken as given, one segment each, and are the minted member's own maximal
-/// runs by the caller's obligation ([`ShotSegmentPiece`]).
-#[derive(Debug)]
-pub struct PublishBody {
-    bytes: Vec<u8>,
-    /// The open value stretch — the segment the latest values joined, still
-    /// taking values until a window or `finish` closes it.
-    stretch: Option<ValueSequence>,
-    /// The positions the pieces so far cover — the leading count, written
-    /// back at `finish`.
-    placed: u64,
-    /// The base group `finish` appends, spelled at `within` so its bytes
-    /// count against the budget from the start.
-    base_group: Vec<u8>,
-    budget: usize,
-}
-
-impl PublishBody {
-    /// A body of no segments yet — the leading count's eight bytes, and the
-    /// base group held for `finish` — whose [`PublishBody::push`] and
-    /// [`PublishBody::window`] admit no piece that would carry the FINISHED
-    /// body past `budget` bytes. `base` is the shot's ([`ShotBase`]): `None`
-    /// in the birth shape, the EMPTY group.
-    ///
-    /// PRECONDITION — `budget` holds those bytes. The body of no segments is
-    /// the least a builder can finish to, so below it the builder would
-    /// start past its own budget and [`PublishBody::finish`] would answer an
-    /// over-budget body no push or window had refused. A caller's bug and
-    /// never an outcome: it PANICS, naming the obligation.
-    pub fn within(budget: usize, base: Option<ShotBase<'_>>) -> PublishBody {
-        let bytes = 0u64.to_be_bytes().to_vec();
-        let mut base_group = Vec::new();
-        push_base(&mut base_group, base);
-        assert!(
-            bytes.len() + base_group.len() <= budget,
-            "PublishBody::within: a budget of {budget} bytes cannot hold the body of no \
-             segments, {} bytes",
-            bytes.len() + base_group.len()
-        );
-        PublishBody { bytes, stretch: None, placed: 0, base_group, budget }
-    }
-
-    /// What the body would measure if finished now: the bytes down, and the
-    /// group `finish` appends.
-    fn finished_len(&self) -> usize {
-        self.bytes.len() + self.base_group.len()
-    }
-
-    /// Append `value` as the body's next position — joining the open value
-    /// stretch, or opening one after a window or at the body's start — and
-    /// hand the builder back; else the cause ([`PublishRefusal`]) and the
-    /// builder GONE: a body that refused a piece can be neither continued
-    /// nor finished. [`PublishRefusal::Unspellable`] where the positions
-    /// placed would pass 2^64 − 1, the count's width; else
-    /// [`PublishRefusal::PastBudget`] where the finished body would pass its
-    /// budget. No value is free — an empty one costs its length prefix, and
-    /// the first of a stretch its class byte and count besides — so a budget
-    /// admits at most a quarter as many values as it has bytes, whatever the
-    /// values hold.
-    ///
-    /// PRECONDITION — as [`entry_body_publish`]'s: `value` is shorter than
-    /// 2^32 bytes, else PANICS; under any budget below that bound, this
-    /// refuses such a value first.
-    #[must_use = "push takes the builder: the body goes on in the one it returns"]
-    pub fn push(mut self, value: &[u8]) -> Result<PublishBody, PublishRefusal> {
-        let placed = self.placed.checked_add(1).ok_or(PublishRefusal::Unspellable)?;
-        let opening: usize = if self.stretch.is_some() { 0 } else { 1 + 8 };
-        let cost = opening.saturating_add(delimited_len(value.len()));
-        if self.finished_len().saturating_add(cost) > self.budget {
-            return Err(PublishRefusal::PastBudget);
-        }
-        let mut stretch = match self.stretch.take() {
-            Some(stretch) => stretch,
-            None => {
-                self.bytes.push(SEGMENT_VALUE_STRETCH);
-                ValueSequence::open(&mut self.bytes)
-            }
-        };
-        stretch.push(&mut self.bytes, value);
-        self.stretch = Some(stretch);
-        self.placed = placed;
-        Ok(self)
-    }
-
-    /// Append a WINDOW — the run from `start` of `width` positions, held by
-    /// address — closing any open value stretch first, and hand the builder
-    /// back; else the cause and the builder GONE, as after a refused push:
-    /// [`PublishRefusal::Unspellable`] where the positions placed would pass
-    /// 2^64 − 1, then [`PublishRefusal::PastBudget`]. `width` is a
-    /// [`NonZeroU64`] because a run holds at least one position: a window of
-    /// none is no call this method can be given. A window costs its class
-    /// byte, its start's delimited spelling and eight bytes of width, whatever
-    /// its width.
-    ///
-    /// PRECONDITION — `start`'s spelling is shorter than 2^32 bytes, else
-    /// PANICS; under any budget below that bound, this refuses such a start
-    /// first.
-    #[must_use = "window takes the builder: the body goes on in the one it returns"]
-    pub fn window(
-        mut self,
-        start: &Address,
-        width: NonZeroU64,
-    ) -> Result<PublishBody, PublishRefusal> {
-        let placed = self.placed.checked_add(width.get()).ok_or(PublishRefusal::Unspellable)?;
-        let start = address_bytes(start);
-        let cost = 1usize.saturating_add(delimited_len(start.len())).saturating_add(8);
-        if self.finished_len().saturating_add(cost) > self.budget {
-            return Err(PublishRefusal::PastBudget);
-        }
-        if let Some(stretch) = self.stretch.take() {
-            stretch.close(&mut self.bytes);
-        }
-        self.bytes.push(SEGMENT_WINDOW);
-        push_window(&mut self.bytes, &start, width.get());
-        self.placed = placed;
-        Ok(self)
-    }
-
-    /// The body, under the `publish` token: the count of positions the
-    /// pieces this builder took cover, the segments built from them in the
-    /// order pushed — the open stretch closed — then the base group; never
-    /// past its budget, by the standing invariant.
-    pub fn finish(self) -> EntryBody {
-        let PublishBody { mut bytes, stretch, placed, base_group, .. } = self;
-        if let Some(stretch) = stretch {
-            stretch.close(&mut bytes);
-        }
-        bytes[..8].copy_from_slice(&placed.to_be_bytes());
-        bytes.extend_from_slice(&base_group);
-        EntryBody { op: "publish", bytes }
-    }
-}
-
-/// [`PublishBody`] is not `Clone`, and this block stops compiling the moment
-/// it is: a copy taken before a push would outlive that push's refusal, and
-/// finish to the shorter body the refusal exists to forbid. The `_` below is
-/// inferred while the blanket impl is the only one that applies; a `Clone`
-/// type meets the second as well, and the path is ambiguous.
-const _: fn() = || {
-    trait AmbiguousIfClone<A> {
-        fn check() {}
-    }
-    impl<T: ?Sized> AmbiguousIfClone<()> for T {}
-    #[allow(dead_code)]
-    struct IsClone;
-    impl<T: Clone> AmbiguousIfClone<IsClone> for T {}
-    let _ = <PublishBody as AmbiguousIfClone<_>>::check;
-};
-
-/// Why [`PublishBody`] refused a piece — the builder GONE with it, as every
-/// refusal leaves it — NAMED, because a caller answers the two differently: a
-/// body PAST ITS BUDGET is the one the builder exists to refuse rather than
-/// build; a count past the body's leading `be64` names positions no store
-/// holds. What each is answered is the caller's: a refusal reaches no wire
-/// from here. A window of no positions is no cause here: a window's width is
-/// a [`NonZeroU64`], so no such piece can be offered.
-///
-/// The causes are tested in ONE order, the count first, then the budget — so
-/// a piece the body could not spell at any budget is never answered as past
-/// this one.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum PublishRefusal {
-    /// The FINISHED body — its leading count and its base group included —
-    /// would pass the builder's budget.
-    PastBudget,
-    /// The positions placed would pass 2^64 − 1, the most the body's leading
-    /// `be64(placed)` spells.
-    Unspellable,
-}
-
-/// Prose, never a wire vocabulary: each caller answers a refusal in its own
-/// terms.
-impl fmt::Display for PublishRefusal {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(match self {
-            PublishRefusal::PastBudget => "the finished body would pass its budget",
-            PublishRefusal::Unspellable => "the positions placed would pass 2^64 - 1",
-        })
-    }
-}
-
-impl std::error::Error for PublishRefusal {}
 
 #[cfg(test)]
 mod tests;

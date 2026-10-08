@@ -153,12 +153,12 @@ pub enum RetrieveError {
     },
     /// The delivery exceeds [`MAX_DELIVERY_ITEMS`] items — refused as it is
     /// produced, a delivered run's positions as one batch — or the spec-set's
-    /// walk is PRICED past `2^24` run-list steps before its first spec is
-    /// walked, each spec at an upper bound that charges a spec resolving to
-    /// nothing as well (crate doc, *What M6 refuses for size*). A document's
-    /// extent is virtual, so one spec may name a delivery no request field
-    /// prices; a refusal, never a truncation, so R3, R5 and R8 hold verbatim
-    /// for every delivery answered.
+    /// walk is PRICED past the walk budget before its first spec is walked,
+    /// each spec at an upper bound that charges a spec resolving to nothing
+    /// as well (crate doc, *What M6 refuses for size*). A document's extent
+    /// is virtual, so one spec may name a delivery no request field prices; a
+    /// refusal, never a truncation, so R3, R5 and R8 hold verbatim for every
+    /// delivery answered.
     TooManyItems,
 }
 
@@ -227,9 +227,9 @@ pub enum CompareError {
     /// The operand's resolution exceeds [`MAX_COMPARE_OPERAND_BLOCKS`] on
     /// either of its two counts: more spans handed to M5 — one walk apiece,
     /// whatever it yields — or more blocks built, than the budget; or its
-    /// spans' walk is PRICED past `2^24` run-list steps before the operand's
-    /// first span is walked, a span resolving to nothing charged as well
-    /// (crate doc, *What M6 refuses for size*). The join is `|P|·|Q|`, so a
+    /// spans' walk is PRICED past the walk budget before the operand's first
+    /// span is walked, a span resolving to nothing charged as well (crate
+    /// doc, *What M6 refuses for size*). The join is `|P|·|Q|`, so a
     /// per-operand budget is what bounds it; refused as the operand resolves
     /// and before the join runs, with ρ₁ resolved first.
     TooManyBlocks { operand: Operand },
@@ -258,13 +258,13 @@ pub enum FindError {
     /// The request's resolution exceeds [`MAX_FIND_COVERAGE_SPANS`] on either
     /// of its two counts: more spans handed to M5 — one walk apiece, whatever
     /// it yields — or more coverage spans produced, than the budget; or its
-    /// spans' walk is PRICED past `2^24` run-list steps before its first span
-    /// is walked, a span resolving to nothing charged as well (crate doc,
-    /// *What M6 refuses for size*). That is the one factor of this
-    /// operation's cost that the request owns, and the multiplier it applies
-    /// to two world-sized scans. Refused BEFORE the candidate scan runs; a
-    /// refusal, never a truncation, so FD-COMPLETE holds verbatim for every
-    /// request answered.
+    /// spans' walk is PRICED past the walk budget before its first span is
+    /// walked, a span resolving to nothing charged as well (crate doc,
+    /// *What M6 refuses for size*). That is the one factor of this operation's
+    /// cost that the request owns, and the multiplier it applies to two
+    /// world-sized scans. Refused BEFORE the candidate scan runs; a refusal,
+    /// never a truncation, so FD-COMPLETE holds verbatim for every request
+    /// answered.
     TooMuchCoverage,
 }
 

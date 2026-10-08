@@ -82,15 +82,16 @@ impl<W: RetrievalWorld> Query<'_, W> {
     /// each operand is held to the operand budget,
     /// [`MAX_COMPARE_OPERAND_BLOCKS`] — on the spans it hands to M5, one
     /// resolution apiece whatever it yields, and on the blocks it resolves to
-    /// (`TooManyBlocks`, refused AS THE OPERAND RESOLVES and before the join
-    /// runs, ρ₁ resolved first) — and the walks those resolutions make, each
-    /// up to `#runs(doc)` steps whatever it yields, to the walk budget of
-    /// `2^24` run-list steps (`TooManyBlocks` too, priced over the operand
-    /// before its first span is walked, a depth-incompatible span charged its
-    /// whole run list; crate doc, *What M6 refuses for size*); and the report
-    /// to the pair budget, [`MAX_COMPARE_PAIRS`] correspondences
-    /// (`TooManyPairs`, refused AS THE PAIRS ARE PRODUCED, so an over-budget
-    /// fan-out stops accumulating rather than being built and then measured).
+    /// (`TooManyBlocks`: the spans refused before the operand's first span is
+    /// walked, the blocks as it resolves, both before the join runs, ρ₁
+    /// resolved first) — and the walks those resolutions make, each up to
+    /// `#runs(doc)` steps whatever it yields, to the walk budget
+    /// (`TooManyBlocks` too, priced over the operand before its first span is
+    /// walked, a depth-incompatible span charged its whole run list; crate
+    /// doc, *What M6 refuses for size*); and the report to the pair budget,
+    /// [`MAX_COMPARE_PAIRS`] correspondences (`TooManyPairs`, refused AS THE
+    /// PAIRS ARE PRODUCED, so an over-budget fan-out stops accumulating rather
+    /// than being built and then measured).
     ///
     /// All are REFUSALS, never truncations: a request past any gets a typed
     /// rejection and no report, so X12 R1–R2 hold verbatim for every request
@@ -240,17 +241,13 @@ impl<'a> Block<'a> {
 
 /// The operand region a spec-set denotes, as blocks: resolve every region's
 /// spans to their I-run blocks, reconstructing each run's V-start by
-/// accumulation. `Err(OverBudget)` when the operand would exceed
-/// [`MAX_COMPARE_OPERAND_BLOCKS`] on either of its two counts, each a
-/// [`Count`]: the span count, taken as each span is handed to M5 — before the
-/// let-else on M5's span reader below, so a span M5 declines is counted too —
-/// and the block count, taken as `iter_resolve` produces each run. The
-/// budget's card says why there are two and what they stop within one span;
-/// `Count`'s says where the boundary falls. And `Err(OverBudget)` when its
-/// spans are priced past [`MAX_WALK_STEPS`], over the whole operand before
-/// its first span is walked, each span at its [`walk_ceiling`] — a
-/// declined span too, priced at its whole list, so the price stays an upper
-/// bound whatever this walk hands M5.
+/// accumulation. `Err(OverBudget)` in two passes, each count a [`Count`]:
+/// before the operand's first span is walked, when it names more spans than
+/// [`MAX_COMPARE_OPERAND_BLOCKS`] or its spans are priced past
+/// [`MAX_WALK_STEPS`], each at its [`walk_ceiling`]; and as `iter_resolve`
+/// produces each run, when its blocks would exceed
+/// [`MAX_COMPARE_OPERAND_BLOCKS`]. The budget's card says why spans are
+/// counted beside blocks; `Count`'s says where the boundary falls.
 ///
 /// REQUIRES A GATED SPEC-SET: every region's document REGISTERED, and every
 /// span content-subspace-started and `gate_vspan`-clean — which
@@ -289,25 +286,25 @@ fn resolve_blocks<'a>(
     m5: &M5State,
     regions: &'a [RegionSpec],
 ) -> Result<Vec<Block<'a>>, OverBudget> {
-    // The walk budget, priced over the whole operand before its first span is
-    // walked (MAX_WALK_STEPS' card).
+    // What the operand NAMES, refused before its first span is walked: its
+    // spans, one resolution apiece (MAX_COMPARE_OPERAND_BLOCKS' card), and
+    // their walks' price against each region's reading surface — the
+    // arrangement the walk below resolves (MAX_WALK_STEPS' card).
+    let mut spans_handed = Count::against(MAX_COMPARE_OPERAND_BLOCKS);
     let mut steps_priced = Count::against(MAX_WALK_STEPS);
     for r in regions {
         let surface = reading_surface(m3, &r.doc);
         for span in &r.spans {
+            spans_handed.admit(1)?;
             steps_priced.admit(walk_ceiling(m5, &surface, span))?;
         }
     }
+    // What the walk PRODUCES, counted as it is produced.
     let mut out = Vec::new();
-    let mut spans_handed = Count::against(MAX_COMPARE_OPERAND_BLOCKS);
     let mut blocks_built = Count::against(MAX_COMPARE_OPERAND_BLOCKS);
     for r in regions {
         let surface = reading_surface(m3, &r.doc);
         for span in &r.spans {
-            // The span count, taken as the span is handed and refused before
-            // its walk; MAX_COMPARE_OPERAND_BLOCKS's card says why spans are
-            // counted beside blocks.
-            spans_handed.admit(1)?;
             // M5's own shape reader, the one its resolution folds every span
             // through — so this let-else is LIVE: a span it declines
             // (well-formed but depth-incompatible, `#start ≥ 3`) opens no

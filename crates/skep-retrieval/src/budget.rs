@@ -13,8 +13,10 @@
 //! its number by definition, is too, and of which budgets move with that
 //! number; [`MAX_WALK_STEPS`]'s is the one statement of what a span's walk
 //! costs and why a request's walks are budgeted, and `vspan.rs`'s
-//! [`walk_ceiling`]'s of how one span's walk is priced; [`Count`]'s card is
-//! the one statement of where a count's boundary falls.
+//! [`walk_ceiling`]'s of how one span's walk is priced — which the crate
+//! doc's *What M6 refuses for size* publishes to callers, `walk_ceiling`
+//! being private; [`Count`]'s card is the one statement of where a count's
+//! boundary falls.
 //!
 //! [`walk_ceiling`]: crate::vspan::walk_ceiling
 
@@ -165,10 +167,8 @@ pub const MAX_DELIVERY_ITEMS: usize = 1 << 17;
 /// a fragmented document costs `|spans| · #runs(doc)` steps and produces
 /// nothing, and `#runs` is cheap to grow: one COPY places up to M5's
 /// `MAX_PLACED_RUNS` runs. `vspan.rs`'s [`walk_ceiling`] prices each span at
-/// an upper bound on its walk, read off M5's O(1) run counts — and prices a
-/// span M5's reader declines, or one starting in neither subspace, though
-/// either resolves to nothing: the first at its whole list, the second against
-/// both lists.
+/// an upper bound on its walk, read off M5's O(1) run counts — a span that
+/// resolves to nothing included — and its card says how.
 ///
 /// The budget is the operand budget's square, `2^24` — the bound
 /// [`MAX_COMPARE_OPERAND_BLOCKS`]' card prices COMPARE's join at, order a
@@ -267,9 +267,8 @@ mod tests {
     #[test]
     fn the_walk_budget_is_the_number_its_card_argues_for() {
         // `MAX_WALK_STEPS`' card argues `2^24` run-list steps — order a second
-        // of one worker — and the three operations' cards, their rejections'
-        // cards and the crate doc state that number. It is
-        // `MAX_COMPARE_OPERAND_BLOCKS` squared, so an edit of the operand
+        // of one worker — and the crate doc states that number for callers. It
+        // is `MAX_COMPARE_OPERAND_BLOCKS` squared, so an edit of the operand
         // number moves the walk budget of all three operations by the square,
         // RETRIEVEV's among them; every walk test sizes its boundary from that
         // constant and stays green if it moves, and this is the one assertion

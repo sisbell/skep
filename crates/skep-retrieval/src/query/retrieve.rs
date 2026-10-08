@@ -64,15 +64,14 @@ impl<W: RetrievalWorld + HasContent> Query<'_, W> {
     /// [`MAX_DELIVERY_ITEMS`] (`TooManyItems`, refused AS THE DELIVERY IS
     /// PRODUCED: a withheld run as one item, a delivered run's positions as one
     /// batch before the first is expanded), and the spec-set's resolution to
-    /// the walk budget of `2^24` run-list steps (`TooManyItems` too, priced
-    /// over the whole spec-set before its first spec is walked, each spec at
-    /// an upper bound on its walk — one that degrades to nothing under R6
-    /// included; crate doc, *What M6 refuses for size*). Both are REFUSALS,
-    /// never truncations: R3 forbids delivering fewer, R5 reordering into
-    /// something cheaper and R8 collapsing the repeats, and a refused request
-    /// is delivered nothing at all, so all three hold verbatim for every
-    /// delivery answered. A caller wanting more splits the spec-set or narrows
-    /// its spans.
+    /// the walk budget (`TooManyItems` too, priced over the whole spec-set
+    /// before its first spec is walked, each spec at an upper bound on its
+    /// walk — one that degrades to nothing under R6 included; crate doc,
+    /// *What M6 refuses for size*). Both are REFUSALS, never truncations: R3
+    /// forbids delivering fewer, R5 reordering into something cheaper and R8
+    /// collapsing the repeats, and a refused request is delivered nothing at
+    /// all, so all three hold verbatim for every delivery answered. A caller
+    /// wanting more splits the spec-set or narrows its spans.
     pub fn retrieve_v(&self, specs: &[Spec]) -> Result<Delivery, RetrieveError> {
         // The masked form under the all-true predicate: its only `Withheld`
         // items are unregistered-origin runs (PUB-6.37; RES-162). M10's
@@ -132,8 +131,9 @@ impl<W: RetrievalWorld + HasContent> Query<'_, W> {
                 .map_err(|fault| RetrieveError::MalformedSpec { index, fault })?;
         }
         let over = |OverBudget| RetrieveError::TooManyItems;
-        // The walk budget, priced over the whole spec-set before its first
-        // spec is walked: each span at an upper bound on its walk
+        // What the spec-set NAMES, refused before its first spec is walked:
+        // its walks' price, each spec at an upper bound on its walk against
+        // its reading surface — the arrangement the delivery below resolves
         // (MAX_WALK_STEPS' card).
         let mut steps_priced = Count::against(MAX_WALK_STEPS);
         for spec in specs {
@@ -182,15 +182,9 @@ impl<W: RetrievalWorld + HasContent> Query<'_, W> {
                 for a in run.into_addrs() {
                     match sub {
                         // S3★ — an arranged content position has an M4 value
-                        // — is kept on M5's WRITE path, and this read is
-                        // where a regression in it would surface. The two
-                        // sites that keep it: `insert` rides mint, write and
-                        // place in one transaction, and `copy` places only
-                        // runs its `SourceNotContentSubspace` (no link
-                        // address at a content position) and per-run
-                        // `DanglingSource` (M4 holds the run's start) guards
-                        // admit. Widening either is what would put an
-                        // address here that M4 never stored.
+                        // — is M5's to keep, on its WRITE path, at every
+                        // operation that places a content run; this read is
+                        // where a regression in any of them would surface.
                         Some(Subspace::Content) => out.push(DeliveryItem::Content(
                             content
                                 .value_at(a.tumbler())

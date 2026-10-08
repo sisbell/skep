@@ -1256,12 +1256,15 @@ Rules that hold across its files:
   SHOWDELETIONS and FINDDOCSCONTAINING read the address named.
 - **The budgets are `budget.rs`'s, and they refuse.** COMPARE's two,
   FINDDOCSCONTAINING's one and RETRIEVEV's delivery budget — and the walk
-  budget all three price their spans' run-list walks against, before the
-  first walk — are counted by `query/compare.rs`, `query/find.rs` and
-  `query/retrieve.rs` through `budget.rs`'s `Count`, which admits exactly a
-  budget and refuses a batch that would exceed it before it lands, so no
-  producer spells that boundary itself; `error.rs` renders them, and a
-  request past one gets its rejection and no partial answer.
+  budget all three price their spans' run-list walks against — are counted
+  by `query/compare.rs`, `query/find.rs` and `query/retrieve.rs` in two
+  passes: what a request names — COMPARE's and FINDDOCSCONTAINING's spans,
+  and every span's walk price — before its first span is walked, and what
+  it produces — blocks, coverage, items, pairs — as each arrives. Every
+  count goes through `budget.rs`'s `Count`, which admits exactly a budget
+  and refuses a batch that would exceed it before it lands, so no producer
+  spells that boundary itself; `error.rs` renders them, and a request past
+  one gets its rejection and no partial answer.
   `tests/it/tidy.rs` refuses any other file's code line that names a budget
   beside a comparison — the spelling a hand-written guard takes. Every
   query that resolves a span pulls `skep-arrangement`'s lazy

@@ -52,21 +52,20 @@ impl<W: RetrievalWorld> Query<'_, W> {
     /// and each holding nothing.
     ///
     /// Only `|spans|` and `|coverage|` are the request's, and both are held to
-    /// the coverage budget, [`MAX_FIND_COVERAGE_SPANS`] (`TooMuchCoverage`,
-    /// refused AS THE REQUEST RESOLVES — the span past the budget before its
-    /// walk, the coverage past it as it is produced — so an over-budget request
-    /// stops resolving rather than resolving whole and then being measured; why
-    /// both are counted, and what the counts stop within one span and what
-    /// they do not, are on the budget's card). The walk behind each span — up
-    /// to `#runs(doc)` steps, whatever the span covers — is held, summed over
-    /// the request, to the walk budget of `2^24` run-list steps
-    /// (`TooMuchCoverage` too, priced before the first span is walked, a span
-    /// resolving to nothing charged as well; crate doc, *What M6 refuses for
-    /// size*). Each is a REFUSAL, never a truncation: a request past either
-    /// gets a typed rejection and no answer, so FD-COMPLETE holds verbatim for
-    /// every request this operation answers — a truncated coverage would
-    /// silently drop containers, which is the hazard the operation names. A
-    /// caller wanting more splits the request.
+    /// the coverage budget, [`MAX_FIND_COVERAGE_SPANS`] (`TooMuchCoverage`:
+    /// the spans past it refused before any span is walked, the coverage past
+    /// it as it is produced, so no over-budget request resolves whole before
+    /// it is refused; why both are counted, and what the counts stop within
+    /// one span and what they do not, are on the budget's card). The walk
+    /// behind each span — up to `#runs(doc)` steps, whatever the span covers —
+    /// is held, summed over the request, to the walk budget (`TooMuchCoverage`
+    /// too, priced before the first span is walked, a span resolving to
+    /// nothing charged as well; crate doc, *What M6 refuses for size*). Each
+    /// is a REFUSAL, never a truncation: a request past either gets a typed
+    /// rejection and no answer, so FD-COMPLETE holds verbatim for every
+    /// request this operation answers — a truncated coverage would silently
+    /// drop containers, which is the hazard the operation names. A caller
+    /// wanting more splits the request.
     ///
     /// `|R|` and a candidate's `#runs(d)` are the WORLD's and no number here
     /// reaches them: they stay with request rate and concurrency, which are
@@ -121,11 +120,17 @@ impl<W: RetrievalWorld> Query<'_, W> {
             }
         }
         let over = |OverBudget| FindError::TooMuchCoverage;
-        // The walk budget, priced over the whole request before its first
-        // span is walked, against the address named (MAX_WALK_STEPS' card).
+        // What the request NAMES, refused before its first span is walked: its
+        // spans, one resolution apiece — MAX_COMPARE_OPERAND_BLOCKS' card says
+        // why they are counted beside the coverage, and why a span M5 folds to
+        // nothing at once counts all the same — and their walks' price against
+        // the address named: the arrangement the walk below resolves, so a
+        // float of this operation moves both passes (MAX_WALK_STEPS' card).
+        let mut spans_handed = Count::against(MAX_FIND_COVERAGE_SPANS);
         let mut steps_priced = Count::against(MAX_WALK_STEPS);
         for r in regions {
             for span in &r.spans {
+                spans_handed.admit(1).map_err(over)?;
                 steps_priced
                     .admit(walk_ceiling(m5, &r.doc, span))
                     .map_err(over)?;
@@ -144,15 +149,9 @@ impl<W: RetrievalWorld> Query<'_, W> {
         // every span, and the budget below would then bound a quantity that
         // costs its own square to produce.
         let mut coverage_spans: Vec<Span> = Vec::new();
-        let mut spans_handed = Count::against(MAX_FIND_COVERAGE_SPANS);
         let mut coverage_produced = Count::against(MAX_FIND_COVERAGE_SPANS);
         for r in regions {
             for span in &r.spans {
-                // The span count, taken as the span is handed and refused
-                // before its walk; MAX_COMPARE_OPERAND_BLOCKS's card says why
-                // spans are counted beside the coverage, and why a span M5
-                // folds to nothing at once counts all the same.
-                spans_handed.admit(1).map_err(over)?;
                 for run in m5.iter_resolve(&r.doc, span) {
                     coverage_produced.admit(1).map_err(over)?;
                     coverage_spans.push(run.iextent());

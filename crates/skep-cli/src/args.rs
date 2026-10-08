@@ -37,11 +37,11 @@ impl fmt::Display for Usage {
 
 impl std::error::Error for Usage {}
 
-/// The parse's answer: the help, or a command with its line.
+/// The parse's answer: the help, or a command line.
 #[derive(Debug)]
 pub enum Parsed {
     Help,
-    Command(CommandLine),
+    CommandLine(CommandLine),
 }
 
 /// One of `client.md` §2.1's thirteen commands — the verb a command line
@@ -241,34 +241,34 @@ pub fn parse(argv: impl IntoIterator<Item = OsString>) -> Result<Parsed, Usage> 
         }
         return Err(Usage(format!("unknown argument `{arg}`")));
     }
-    Ok(Parsed::Command(line))
+    Ok(Parsed::CommandLine(line))
 }
 
 impl CommandLine {
     /// Whether a switch was given.
-    pub fn switch(&self, name: &str) -> bool {
-        self.switches.iter().any(|s| s == name)
+    pub fn switch(&self, flag: &str) -> bool {
+        self.switches.iter().any(|s| s == flag)
     }
 
     /// Every value a flag that repeats was given, in order — lent: a caller
     /// that keeps them copies them.
-    pub fn all(&self, name: &str) -> &[String] {
-        self.values.get(name).map(Vec::as_slice).unwrap_or_default()
+    pub fn values(&self, flag: &str) -> &[String] {
+        self.values.get(flag).map(Vec::as_slice).unwrap_or_default()
     }
 
     /// The value a flag that takes one was given — the flag alone; a
     /// setting is read through its own reader below, which consults the
-    /// variable. Lent, as [`CommandLine::all`]'s are.
-    pub fn value(&self, name: &str) -> Option<&str> {
-        self.values.get(name).and_then(|v| v.first()).map(String::as_str)
+    /// variable. Lent, like the slice [`CommandLine::values`] answers.
+    pub fn value(&self, flag: &str) -> Option<&str> {
+        self.values.get(flag).and_then(|v| v.first()).map(String::as_str)
     }
 
     /// A SETTING: the flag's value, else its variable's — a flag beats its
     /// variable (the daemon's `from_env` precedence, stated once). A
     /// variable set empty is unset; one whose value is not UTF-8 text is
     /// refused ([`env_text`]), never read as unset.
-    fn setting(&self, name: &str, var: &str) -> Result<Option<String>, Usage> {
-        match self.value(name) {
+    fn setting(&self, flag: &str, var: &str) -> Result<Option<String>, Usage> {
+        match self.value(flag) {
             Some(v) => Ok(Some(v.to_owned())),
             None => env_text(var),
         }
@@ -303,11 +303,13 @@ impl CommandLine {
         Ok(self.setting("--key", "SKEP_KEY")?.map(PathBuf::from))
     }
 
-    /// `--principal` / `SKEP_PRINCIPAL`, read by [`principal_text`].
+    /// `--principal` / `SKEP_PRINCIPAL`, read by [`parse_principal`].
     pub fn principal(&self) -> Result<Option<u64>, Usage> {
         match self.setting("--principal", "SKEP_PRINCIPAL")? {
             None => Ok(None),
-            Some(v) => principal_text(&v).map(Some).ok_or_else(|| Usage(format!("--principal: '{v}' is not a principal (a non-negative integer no greater than {MAX_PRINCIPAL})"))),
+            Some(v) => {
+                parse_principal(&v).map(Some).ok_or_else(|| Usage(format!("--principal: '{v}' is not a principal (a non-negative integer no greater than {MAX_PRINCIPAL})")))
+            }
         }
     }
 }
@@ -320,10 +322,10 @@ impl CommandLine {
 /// while the board showed a healthy account.
 pub const MAX_PRINCIPAL: u64 = (1 << 53) - 1;
 
-/// A principal as text — the one grammar of it, at the flag, its variable
-/// and a reply's `principal` line: a non-negative integer no greater than
-/// [`MAX_PRINCIPAL`], else `None`.
-pub fn principal_text(text: &str) -> Option<u64> {
+/// The principal `text` spells — the one grammar of it, at the flag, its
+/// variable and a reply's `principal` line: a non-negative integer no
+/// greater than [`MAX_PRINCIPAL`], else `None`.
+pub fn parse_principal(text: &str) -> Option<u64> {
     text.parse::<u64>().ok().filter(|n| *n <= MAX_PRINCIPAL)
 }
 
@@ -361,28 +363,28 @@ mod tests {
     }
 
     #[test]
-    fn flags_parse_and_refusals_are_named() {
-        let Parsed::Command(c) = parse(argv(&["claim", "--board", "http://127.0.0.1:8642", "--anchor-out", "/a", "--anchor-out", "/b", "--paper"])).unwrap() else { panic!() };
+    fn a_command_line_parses_and_each_malformed_part_is_refused() {
+        let Parsed::CommandLine(c) = parse(argv(&["claim", "--board", "http://127.0.0.1:8642", "--anchor-out", "/a", "--anchor-out", "/b", "--paper"])).unwrap() else { panic!() };
         assert_eq!(c.command, Command::Claim);
-        assert_eq!(c.all("--anchor-out"), ["/a", "/b"]);
+        assert_eq!(c.values("--anchor-out"), ["/a", "/b"]);
         assert!(c.switch("--paper"));
         assert_eq!(c.origin().unwrap().as_str(), "http://127.0.0.1:8642");
         assert!(parse(argv(&["frobnicate"])).is_err(), "an unknown command is refused");
         assert!(parse(argv(&["session", "--board"])).is_err(), "a flag without its value is refused");
         assert!(parse(argv(&["health", "--frob"])).is_err(), "an unknown flag is refused");
         assert!(matches!(parse(argv(&["--help"])).unwrap(), Parsed::Help));
-        let Parsed::Command(c) = parse(argv(&["recover", "--lost", "ab", "--lost", "cd", "--stolen", "--anchor", "/a"])).unwrap() else { panic!() };
-        assert_eq!(c.all("--lost"), ["ab", "cd"], "--lost is repeatable");
+        let Parsed::CommandLine(c) = parse(argv(&["recover", "--lost", "ab", "--lost", "cd", "--stolen", "--anchor", "/a"])).unwrap() else { panic!() };
+        assert_eq!(c.values("--lost"), ["ab", "cd"], "--lost is repeatable");
         assert!(c.switch("--stolen"));
         assert!(parse(argv(&["retire", "--yes"])).is_err(), "--yes does not exist: a typed answer, never a flag");
-        let Parsed::Command(c) = parse(argv(&["keygen", "--payload"])).unwrap() else { panic!() };
+        let Parsed::CommandLine(c) = parse(argv(&["keygen", "--payload"])).unwrap() else { panic!() };
         assert!(c.switch("--payload"), "a switch at keygen");
-        let Parsed::Command(c) = parse(argv(&["verify", "--payload", "-", "--board", "HTTP://x", "--principal", "7x"])).unwrap() else { panic!() };
-        assert_eq!(c.all("--payload"), ["-"], "a value at verify");
+        let Parsed::CommandLine(c) = parse(argv(&["verify", "--payload", "-", "--board", "HTTP://x", "--principal", "7x"])).unwrap() else { panic!() };
+        assert_eq!(c.values("--payload"), ["-"], "a value at verify");
         assert!(c.origin().is_err(), "a non-canonical board is a usage refusal");
         assert!(c.origin_given().is_err(), "a board given badly is refused, never read as one not given");
         assert!(c.principal().is_err(), "a principal given badly is refused, never read as one not given");
-        let Parsed::Command(c) = parse(argv(&["accept", "--board", "http://127.0.0.1:8642", "--principal", "7"])).unwrap() else { panic!() };
+        let Parsed::CommandLine(c) = parse(argv(&["accept", "--board", "http://127.0.0.1:8642", "--principal", "7"])).unwrap() else { panic!() };
         assert_eq!(c.origin_given().unwrap().map(|o| o.as_str().to_string()), Some("http://127.0.0.1:8642".to_string()));
         assert_eq!(c.principal().unwrap(), Some(7));
     }
@@ -392,12 +394,12 @@ mod tests {
     /// in a reply, through the one grammar.
     #[test]
     fn a_principal_past_the_wires_range_is_none() {
-        assert_eq!(principal_text("9007199254740991"), Some(MAX_PRINCIPAL));
-        assert_eq!(principal_text("0"), Some(0));
+        assert_eq!(parse_principal("9007199254740991"), Some(MAX_PRINCIPAL));
+        assert_eq!(parse_principal("0"), Some(0));
         for none in ["9007199254740992", "18446744073709551615", "-1", "7x", ""] {
-            assert_eq!(principal_text(none), None, "`{none}`");
+            assert_eq!(parse_principal(none), None, "`{none}`");
         }
-        let Parsed::Command(c) = parse(argv(&["verify", "--principal", "9007199254740992"])).unwrap() else { panic!() };
+        let Parsed::CommandLine(c) = parse(argv(&["verify", "--principal", "9007199254740992"])).unwrap() else { panic!() };
         assert!(c.principal().is_err(), "past the range at the flag is a usage refusal, never read as one not given");
     }
 
@@ -413,10 +415,10 @@ mod tests {
         assert_eq!(refusal(&["retire", "--yes"]), "unknown argument `--yes`", "a flag of no command's is unknown");
         assert_eq!(refusal(&["recover", "--anchor", "/a", "--anchor", "/b"]), "`--anchor` is given at most once at `recover`");
         assert_eq!(refusal(&["session", "--principal", "1", "--principal", "2"]), "`--principal` is given at most once at `session`", "a setting takes one value");
-        let Parsed::Command(c) = parse(argv(&["verify", "--anchor", "/a", "--anchor", "/b", "--json"])).unwrap() else { panic!() };
-        assert_eq!(c.all("--anchor"), ["/a", "/b"], "--anchor repeats at verify");
+        let Parsed::CommandLine(c) = parse(argv(&["verify", "--anchor", "/a", "--anchor", "/b", "--json"])).unwrap() else { panic!() };
+        assert_eq!(c.values("--anchor"), ["/a", "/b"], "--anchor repeats at verify");
         assert!(c.switch("--json"), "--json is every command's");
-        let Parsed::Command(c) = parse(argv(&["keygen", "--label", "phone", "--dir", "/s"])).unwrap() else { panic!() };
+        let Parsed::CommandLine(c) = parse(argv(&["keygen", "--label", "phone", "--dir", "/s"])).unwrap() else { panic!() };
         assert_eq!(c.value("--label"), Some("phone"), "the settings and --label are every command's");
         // A flag named whole: `--anchor` in `--anchor <path>`, never in
         // `--anchor-out`.
@@ -480,7 +482,7 @@ mod tests {
         let commands: std::collections::HashSet<Command> = GRAMMAR.iter().map(|r| r.command).collect();
         assert_eq!(commands.len(), GRAMMAR.len(), "no two rows share a command");
         for row in &GRAMMAR {
-            let Parsed::Command(c) = parse(argv(&[row.command.verb()])).unwrap() else { panic!("`{}` parsed as the help", row.command) };
+            let Parsed::CommandLine(c) = parse(argv(&[row.command.verb()])).unwrap() else { panic!("`{}` parsed as the help", row.command) };
             assert_eq!(c.command, row.command);
         }
     }

@@ -105,7 +105,7 @@ fn the_person_doors_refuse_without_a_terminal_and_the_three_non_doors_run() {
 /// binary; B's `bind` with the facts, then B's `session` opens; a second
 /// ACCOUNT bound at the same board makes the omission a halt listing both.
 #[test]
-fn the_hop_through_the_binary_and_the_one_binding_test_after_a_claim() {
+fn the_hop_binds_a_second_device_and_one_binding_stands_in_for_the_principal() {
     let dir = tempfile::tempdir().unwrap();
     let sd = spawn(&dir.path().join("board"), false);
     let board = origin(sd.port());
@@ -245,24 +245,24 @@ fn handoff_beat_a_prints_the_address_twice_and_reprint_composes_from_the_files()
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 #[test]
 fn a_person_door_opens_only_where_stdin_and_stderr_are_both_a_terminal() {
-    use crate::common::{on_a_terminal, sh};
+    use crate::common::{on_a_terminal, shell_word};
 
     let dir = tempfile::tempdir().unwrap();
     let store = dir.path().join("store");
     assert_eq!(skep(&["keygen", "--label", "k", "--dir", s(&store)], &[], None).code, 0);
     let before = tree(&store);
     let (err, code) = (dir.path().join("err"), dir.path().join("code"));
-    let retire = format!("{} retire --board http://127.0.0.1:1 --dir {} --principal 1 --fingerprint ab", sh(env!("CARGO_BIN_EXE_skep")), sh(s(&store)));
+    let retire = format!("{} retire --board http://127.0.0.1:1 --dir {} --principal 1 --fingerprint ab", shell_word(env!("CARGO_BIN_EXE_skep")), shell_word(s(&store)));
     let run = |redirect: &str| {
         let _ = std::fs::remove_file(&code);
-        let seen = on_a_terminal(&format!("{retire} {redirect}; echo $? > {}", sh(s(&code))));
+        let seen = on_a_terminal(&format!("{retire} {redirect}; echo $? > {}", shell_word(s(&code))));
         let exit = std::fs::read_to_string(&code).unwrap_or_else(|e| panic!("the run's exit code: {e}: {seen}"));
         (exit.trim().parse::<i32>().unwrap(), seen)
     };
     let (exit, seen) = run("");
     assert_eq!(exit, 4, "both ends a terminal: the door opens and the walk reaches the dead board: {seen}");
     assert!(!seen.contains("requires a controlling terminal"), "{seen}");
-    let (exit, seen) = run(&format!("2> {}", sh(s(&err))));
+    let (exit, seen) = run(&format!("2> {}", shell_word(s(&err))));
     let said = std::fs::read_to_string(&err).unwrap();
     assert_eq!(exit, 3, "stderr captured: {said}{seen}");
     assert!(said.contains("`retire` is a person door and requires a controlling terminal"), "{said}");

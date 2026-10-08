@@ -39,7 +39,7 @@ pub fn fingerprint(c: &CommandLine) -> Result<(), Stop> {
     } else {
         store.list()?
     };
-    let any_binding = bindings.iter().any(|b| matches!(b, Binding::Enrollment { .. }));
+    let any_enrollment_binding = bindings.iter().any(|b| matches!(b, Binding::Enrollment { .. }));
     let mut json_rows = Vec::new();
     for key in &keys {
         let fp = key.fingerprint;
@@ -82,9 +82,10 @@ pub fn fingerprint(c: &CommandLine) -> Result<(), Stop> {
         if unbound {
             // THE PENDING STATE (AUTH-5.32), the durable half of `keygen
             // --payload`'s line: the state, the re-print, the hop's and the
-            // rotation's acts, `skep claim` where this store binds nothing
-            // (§3.5 arm 4's fork), and the handoff recipient's clause.
-            let (state, claim_clause) = if any_binding {
+            // rotation's acts, `skep claim` where this store holds no
+            // enrollment binding (§3.5 arm 4's fork), and the handoff
+            // recipient's clause.
+            let (state, claim_clause) = if any_enrollment_binding {
                 ("UNBOUND — this key is enrolled at no board this store knows", "")
             } else {
                 ("UNBOUND — no board has been claimed from this store", " Where this store is to claim a board of its own: `skep claim`.")

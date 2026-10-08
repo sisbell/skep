@@ -9,7 +9,7 @@ use skep_client::ceremony::handoff::{self as handoff_walk, HandoffOptions, Hando
 use skep_client::dial::plaintext_non_loopback_warning;
 use skep_client::sheet::Facts;
 
-use super::{board_of, facts, person_door, principal_or_bound, read_payload, store_of, talk, Door, Stop};
+use super::{board_of, principal_or_bound, print_facts, read_payload, require_terminal, store_of, talk, Door, Stop};
 use crate::args::{CommandLine, Usage};
 use crate::terminal::Terminal;
 
@@ -22,7 +22,7 @@ pub fn handoff(c: &CommandLine) -> Result<(), Stop> {
     // The comparison and the confirmation make the `--payload` invocation a
     // person door; beat (a) alone is not one.
     if payload.is_some() {
-        person_door(Door { form: "handoff --payload", moments: "the fingerprint comparison, the anchor import and the typed confirmation" })?;
+        require_terminal(Door { form: "handoff --payload", moments: "the fingerprint comparison, the anchor import and the typed confirmation" })?;
     }
     let principal = principal_or_bound(given, &store, &board)?;
     if let Some(w) = plaintext_non_loopback_warning(board.dialed()) {
@@ -32,14 +32,14 @@ pub fn handoff(c: &CommandLine) -> Result<(), Stop> {
     match handoff_walk::handoff(&board, &store, &mut Terminal, &opts)? {
         HandoffOutcome::Delegated { account, principal, already } => {
             talk(if already { "beat (a) stands done: the address is printed again" } else { "beat (a) done: hand the address to the recipient; they run `skep accept --board <origin> --account <address>` and return their record for `skep handoff --payload`" });
-            facts(&Facts { account, principal, origin: board.dialed().clone() })?;
+            print_facts(&Facts { account, principal, origin: board.dialed().clone() })?;
         }
-        HandoffOutcome::Seeded { facts: f, grade, reconciled, warnings } => {
+        HandoffOutcome::Seeded { facts, grade, reconciled, warnings } => {
             for w in &warnings {
                 talk(w);
             }
             talk(format!("the genesis is written at the {grade} grade{}; return the three facts below to the recipient for `skep bind`", if reconciled { " (reconciled from the records)" } else { "" }));
-            facts(&f)?;
+            print_facts(&facts)?;
         }
     }
     Ok(())

@@ -17,8 +17,8 @@ use skep_client::halt::Halt;
 use skep_client::sheet::{render_inert, Facts};
 use skep_client::store::{Binding, KeySelector, KeyStore, Purpose};
 
-use super::{board_of, compare_genesis, data, facts, held_device, held_set, read_payload, select_key, store_of, talk, Stop};
-use crate::args::{principal_text, CommandLine, MAX_PRINCIPAL};
+use super::{board_of, compare_genesis, data, held_device, held_set, print_facts, read_payload, select_key, store_of, talk, Stop};
+use crate::args::{parse_principal, CommandLine, MAX_PRINCIPAL};
 use crate::terminal::answer;
 
 /// Who printed the reply `bind` lands, and so the one party that can print
@@ -30,7 +30,7 @@ use crate::terminal::answer;
 const REPLY_SENDER: &str = "whoever printed the reply — the enrolling device, the giver at a handoff, or your host after a hosted signup";
 
 /// The three facts, from `--account`/`--principal`/`--board`, or `--payload`
-/// — a reply in the lines `facts` prints (`account …`, `principal …`,
+/// — a reply in the lines `print_facts` writes (`account …`, `principal …`,
 /// `origin …`), as `enroll`, `rotate`, `handoff` and `claim --hosted` print
 /// them — or, for an account neither names, a line pasted at the prompt;
 /// the origin the one this command dials, a reply naming another halting.
@@ -53,7 +53,7 @@ fn facts_of(c: &CommandLine, board: &Board, given: Option<u64>) -> Result<Facts,
             match fact {
                 Fact::Account => account = Some(agree("account", account.take(), value.to_string())?),
                 Fact::Principal => {
-                    let n = principal_text(value).ok_or_else(|| {
+                    let n = parse_principal(value).ok_or_else(|| {
                         Halt::face(
                             format!("the reply's principal line `{value}` is not a principal"),
                             format!("a principal is a non-negative integer no greater than {MAX_PRINCIPAL} (AUTH-6.36), as the reply prints it"),
@@ -136,13 +136,14 @@ fn shows_as_it_reads(line: &str) -> bool {
     !line.contains(char::is_control) && render_inert(line) == line
 }
 
-/// A fact the reply names beside one already named — by its flag or an
-/// earlier line: the same value stands; another halts naming both, never
-/// the last one read (the person reads one line; `bind` lands one fact).
-fn agree<T: PartialEq + fmt::Display>(fact: &str, named: Option<T>, read: T) -> Result<T, Halt> {
+/// A fact the reply names — `word`, as its line opens — beside one already
+/// named, by its flag or an earlier line: the same value stands; another
+/// halts naming both, never the last one read (the person reads one line;
+/// `bind` lands one fact).
+fn agree<T: PartialEq + fmt::Display>(word: &str, named: Option<T>, read: T) -> Result<T, Halt> {
     match named {
         Some(named) if named != read => Err(Halt::face(
-            format!("the reply names {fact} {read}, and {fact} {named} is already named — by its flag or an earlier line"),
+            format!("the reply names {word} {read}, and {word} {named} is already named — by its flag or an earlier line"),
             "a fact is named once: two values for it are two replies, and `bind` lands neither",
             format!("re-take the three facts from {REPLY_SENDER}"),
         )),
@@ -250,7 +251,7 @@ pub fn bind(c: &CommandLine) -> Result<(), Stop> {
     // anchor files and this device's key, or on the DECLINE arm this
     // device's key alone — the person asked which landing this is where no
     // `--anchor` says.
-    let held = match held_set(&store, None, c.all("--anchor"), &key)? {
+    let held = match held_set(&store, None, c.values("--anchor"), &key)? {
         Some(held) => Some(held),
         None => match landing()? {
             Some(Landing::Hop) => None,
@@ -308,7 +309,7 @@ pub fn bind(c: &CommandLine) -> Result<(), Stop> {
     if let Err(w) = store.bind(&line) {
         talk(w.to_string());
     }
-    facts(&Facts { account, principal, origin })?;
+    print_facts(&Facts { account, principal, origin })?;
     if let Some(s) = agent_space {
         data(format!("agent space {s}"))?;
     }

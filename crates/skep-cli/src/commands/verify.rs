@@ -32,7 +32,7 @@ pub fn verify(c: &CommandLine) -> Result<(), Stop> {
     key_face(&board, &pre.walk, &key.fingerprint, &own, Site::Session)?;
     // THE WHOLE-SET COMPARE, where the person holds what this device
     // composed (AUTH-4.58's detection; P25).
-    match held_set(&store, c.value("--payload"), c.all("--anchor"), &key)? {
+    match held_set(&store, c.value("--payload"), c.values("--anchor"), &key)? {
         Some(held) => {
             checks.push("payload");
             compare_genesis(&board, &pre.walk, &own, &held, "or decline the account")?;

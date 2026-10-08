@@ -4,11 +4,11 @@
 
 use std::path::PathBuf;
 
-use skep_client::ceremony::claim::{self, ClaimOutcome, HostedOutcome, NotebookOptions};
+use skep_client::ceremony::claim::{self as claim_walk, ClaimOutcome, HostedOutcome, NotebookOptions};
 use skep_client::dial::plaintext_non_loopback_warning;
 use skep_client::sheet::Facts;
 
-use super::{board_of, data, facts, host_name_and_date, person_door, read_payload, store_of, talk, BoxDefault, Door, Stop};
+use super::{board_of, data, host_name_and_date, print_facts, read_payload, require_terminal, store_of, talk, BoxDefault, Door, Stop};
 use crate::args::CommandLine;
 use crate::terminal::Terminal;
 
@@ -18,7 +18,7 @@ pub fn claim(c: &CommandLine) -> Result<(), Stop> {
     if let Some(payload_arg) = c.value("--hosted") {
         // THE HOSTED ARM (§4.5): no --dir, no person, nothing generated.
         let payload = read_payload(payload_arg)?;
-        match claim::hosted(&board, &payload, principal.unwrap_or(1))? {
+        match claim_walk::hosted(&board, &payload, principal.unwrap_or(1))? {
             HostedOutcome::AlreadyClaimed { claimant } => data(format!("claimed by {claimant}"))?,
             HostedOutcome::Claimed(reply) => {
                 for l in &reply.log {
@@ -31,7 +31,7 @@ pub fn claim(c: &CommandLine) -> Result<(), Stop> {
                 // template's "Your board is live" message (cs6-S2); the
                 // operator's log above keeps the anchorless note.
                 data(format!("claimant {}", reply.claimant))?;
-                facts(&reply.facts)?;
+                print_facts(&reply.facts)?;
                 data(format!(
                     "first act: from the device that generated the payload run `skep verify --board {} --principal {} --payload <the record it printed>` \
                      (or `--anchor <a> --anchor <b>`): the genesis record compared entry for entry, fingerprint and anchor flag, against what that \
@@ -44,7 +44,7 @@ pub fn claim(c: &CommandLine) -> Result<(), Stop> {
         return Ok(());
     }
     // THE NOTEBOOK ARM: a person door.
-    person_door(Door { form: "claim", moments: "the name boxes and the backup moment" })?;
+    require_terminal(Door { form: "claim", moments: "the name boxes and the backup moment" })?;
     let store = store_of(c)?;
     if let Some(w) = plaintext_non_loopback_warning(board.dialed()) {
         talk(w);
@@ -53,12 +53,12 @@ pub fn claim(c: &CommandLine) -> Result<(), Stop> {
     let opts = NotebookOptions {
         principal,
         display_name: c.value("--name").map(str::to_owned),
-        anchor_out: c.all("--anchor-out").iter().map(PathBuf::from).collect(),
+        anchor_out: c.values("--anchor-out").iter().map(PathBuf::from).collect(),
         paper: c.switch("--paper"),
         host_name,
         date,
     };
-    match claim::notebook(&board, &store, &mut Terminal, &opts)? {
+    match claim_walk::notebook(&board, &store, &mut Terminal, &opts)? {
         ClaimOutcome::Stranger { claimant } => {
             data(format!("claimed by {claimant}; no key in this store is bound to it — `skep verify` tells you whether one is enrolled"))?;
         }
@@ -67,7 +67,7 @@ pub fn claim(c: &CommandLine) -> Result<(), Stop> {
                 talk(w);
             }
             talk(format!("this board is yours — account {}, principal {}, key {}", done.account, done.principal, done.fingerprint));
-            facts(&Facts { account: done.account.clone(), principal: done.principal, origin: board.dialed().clone() })?;
+            print_facts(&Facts { account: done.account.clone(), principal: done.principal, origin: board.dialed().clone() })?;
             if let Some(space) = &done.agent_space {
                 data(format!("agent space {space}"))?;
             }

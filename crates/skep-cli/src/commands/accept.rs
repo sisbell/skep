@@ -13,7 +13,7 @@ use skep_client::dial::PlainHttp;
 use skep_client::halt::Halt;
 use skep_client::person::{Person, Public, Question};
 
-use super::{data, host_name_and_date, person_door, store_of, BoxDefault, Door, Stop};
+use super::{data, host_name_and_date, require_terminal, store_of, BoxDefault, Door, Stop};
 use crate::args::{CommandLine, Usage};
 use crate::terminal::Terminal;
 
@@ -26,11 +26,11 @@ pub fn accept(c: &CommandLine) -> Result<(), Stop> {
     // person door.
     if c.switch("--reprint") {
         let key_file = c.key_file()?;
-        let anchors: Vec<PathBuf> = c.all("--anchor").iter().map(PathBuf::from).collect();
+        let anchors: Vec<PathBuf> = c.values("--anchor").iter().map(PathBuf::from).collect();
         data(accept_walk::reprint(&store, key_file.as_deref(), &anchors, given_origin.as_ref())?)?;
         return Ok(());
     }
-    person_door(Door { form: "accept", moments: "the name boxes and the backup moment, or on the decline arm its typed confirmation" })?;
+    require_terminal(Door { form: "accept", moments: "the name boxes and the backup moment, or on the decline arm its typed confirmation" })?;
     let mut person = Terminal;
     // `--board` and `--account` REQUIRED: a run missing either ASKS and
     // generates nothing (AUTH RES-162).
@@ -62,7 +62,7 @@ pub fn accept(c: &CommandLine) -> Result<(), Stop> {
     let opts = AcceptOptions {
         account,
         label: c.value("--label").map(str::to_owned),
-        anchor_out: c.all("--anchor-out").iter().map(PathBuf::from).collect(),
+        anchor_out: c.values("--anchor-out").iter().map(PathBuf::from).collect(),
         paper: c.switch("--paper"),
         no_anchors: c.switch("--no-anchors"),
         hosted: None,

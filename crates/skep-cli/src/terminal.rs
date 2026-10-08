@@ -8,8 +8,8 @@
 //! `isatty` on BOTH stdin and stderr: a wrapper that captures the one or
 //! feeds the other — the wrapper §2.4 names as satisfying every step of the
 //! backup moment with no paper and no person — fails it. Each moment is
-//! [`moment`]'s, written once against a [`Desk`], where its lines are said
-//! and its answers read: the [`Terminal`] is the desk over the std streams,
+//! [`moment`]'s, written once against a [`Screen`], where its lines are said
+//! and its answers read: the [`Terminal`] is the screen over the std streams,
 //! and this module's tests drive the same moments from a script. Every
 //! prompt the CLI makes is read through `answer`, those a command that is
 //! no person door asks among them, so none reaches stdout. Every line the
@@ -96,9 +96,10 @@ pub fn answer(prompt: &str) -> io::Result<Option<String>> {
     Ok(Some(line.trim_end_matches(['\n', '\r']).to_string()))
 }
 
-/// Where a moment says its lines and reads its answers: the terminal's own
-/// streams at every door ([`Terminal`]), a script in this module's tests.
-trait Desk {
+/// The screen a moment says its lines on and reads its answers from: the
+/// terminal's own streams at every door ([`Terminal`]), a script in this
+/// module's tests.
+trait Screen {
     /// `prompt` shown, then one answer: the line without its line ending, or
     /// the person gone — the end of input, or the input unreadable.
     fn answer(&mut self, prompt: &str) -> Result<String, Abandoned>;
@@ -116,7 +117,7 @@ trait Desk {
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Terminal;
 
-impl Desk for Terminal {
+impl Screen for Terminal {
     fn answer(&mut self, prompt: &str) -> Result<String, Abandoned> {
         answer(prompt).ok().flatten().ok_or(Abandoned)
     }
@@ -183,27 +184,27 @@ impl Person for Terminal {
 
 /// A path, asked again until one is given; `refusal` says why an empty
 /// line is no answer.
-fn path_line(desk: &mut impl Desk, prompt: &str, refusal: &str) -> Result<PathBuf, Abandoned> {
+fn path_line(screen: &mut impl Screen, prompt: &str, refusal: &str) -> Result<PathBuf, Abandoned> {
     loop {
-        let p = desk.answer(prompt)?;
+        let p = screen.answer(prompt)?;
         if !p.trim().is_empty() {
             return Ok(PathBuf::from(p.trim()));
         }
-        desk.talk(refusal);
+        screen.talk(refusal);
     }
 }
 
 /// A seed typed from the print, its whitespace removed — the R42 groups a
 /// print shows — and nothing else judged: the walk's `Seed::from_hex`
 /// decides it and asks again on a wrong one (AUTH-5.41).
-fn seed_line(desk: &mut impl Desk, prompt: &str) -> Result<String, Abandoned> {
-    Ok(desk.answer(prompt)?.split_whitespace().collect())
+fn seed_line(screen: &mut impl Screen, prompt: &str) -> Result<String, Abandoned> {
+    Ok(screen.answer(prompt)?.split_whitespace().collect())
 }
 
 /// A fingerprint prefix typed from the print, trimmed — the walk's prefix
 /// test decides it (AUTH-5.39).
-fn prefix_line(desk: &mut impl Desk) -> Result<String, Abandoned> {
-    Ok(desk.answer("fingerprint prefix from the print (at least the first 8 hex): ")?.trim().to_string())
+fn prefix_line(screen: &mut impl Screen) -> Result<String, Abandoned> {
+    Ok(screen.answer("fingerprint prefix from the print (at least the first 8 hex): ")?.trim().to_string())
 }
 
 /// The anchor import's three ARMS (`client.md` §4a.2 R1): what the person
@@ -241,59 +242,59 @@ fn boxed(lines: &[String]) -> String {
     out
 }
 
-/// THE MOMENTS, each written once against any [`Desk`]: what a walk's
+/// THE MOMENTS, each written once against any [`Screen`]: what a walk's
 /// `Person` call says, and how its answer is read — asked again where an
-/// answer names none of the moment's choices, and abandoned where the desk
+/// answer names none of the moment's choices, and abandoned where the screen
 /// answers nothing.
 mod moment {
     use std::path::PathBuf;
 
     use skep_client::person::{Abandoned, Confirmation, Destination, HandedPath, Import, Imported, KeptOrPlaced, LabelBox, Question, Retype, Retyped, Sheet, Statement};
 
-    use super::{arm, boxed, path_line, prefix_line, seed_line, Arm, Desk};
+    use super::{arm, boxed, path_line, prefix_line, seed_line, Arm, Screen};
 
     /// A statement, with the rule it renders.
-    pub fn say(desk: &mut impl Desk, s: &Statement) {
-        desk.talk(&format!("[{}] {}", s.rule, s.text));
+    pub fn say(screen: &mut impl Screen, s: &Statement) {
+        screen.talk(&format!("[{}] {}", s.rule, s.text));
     }
 
     /// A name box (AUTH-5.42): its title and its statements said, then the
     /// name asked — the default offered, and taken where the answer is
     /// empty. The walk's domain test judges the name (AUTH-1.24).
-    pub fn label(desk: &mut impl Desk, b: LabelBox) -> Result<String, Abandoned> {
-        desk.talk(&format!("{}:", b.title));
+    pub fn label(screen: &mut impl Screen, b: LabelBox) -> Result<String, Abandoned> {
+        screen.talk(&format!("{}:", b.title));
         for s in &b.statements {
-            desk.talk(&format!("  {s}"));
+            screen.talk(&format!("  {s}"));
         }
         let prompt = match &b.default {
             Some(d) => format!("{} [{d}]: ", b.title),
             None => format!("{}: ", b.title),
         };
-        let typed = desk.answer(&prompt)?;
+        let typed = screen.answer(&prompt)?;
         Ok(if typed.is_empty() { b.default.unwrap_or_default() } else { typed })
     }
 
     /// A question over public facts: its text the prompt, its answer as
     /// typed.
-    pub fn ask(desk: &mut impl Desk, q: &Question) -> Result<String, Abandoned> {
-        desk.answer(&q.text)
+    pub fn ask(screen: &mut impl Screen, q: &Question) -> Result<String, Abandoned> {
+        screen.answer(&q.text)
     }
 
     /// A yes or a no, asked again until the answer is one.
-    pub fn yes_no(desk: &mut impl Desk, q: &Question) -> Result<bool, Abandoned> {
+    pub fn yes_no(screen: &mut impl Screen, q: &Question) -> Result<bool, Abandoned> {
         loop {
-            let a = desk.answer(&format!("{} [y/n]: ", q.text))?;
+            let a = screen.answer(&format!("{} [y/n]: ", q.text))?;
             match a.trim().to_ascii_lowercase().as_str() {
                 "y" | "yes" => return Ok(true),
                 "n" | "no" => return Ok(false),
-                _ => desk.talk("answer y or n"),
+                _ => screen.talk("answer y or n"),
             }
         }
     }
 
     /// The sheet as a ruled box (§5.2), its field list the library's, held
     /// until the person answers that it is printed.
-    pub fn sheet(desk: &mut impl Desk, s: &Sheet) -> Result<(), Abandoned> {
+    pub fn sheet(screen: &mut impl Screen, s: &Sheet) -> Result<(), Abandoned> {
         let mut lines = vec!["skep anchor sheet — print this; the seed below is the key".to_string(), String::new()];
         for (name, value) in s.fields.lines() {
             let mut parts = value.lines();
@@ -302,42 +303,42 @@ mod moment {
                 lines.push(format!("{:<12}{rest}", ""));
             }
         }
-        desk.show(&boxed(&lines));
-        desk.answer("press return once the sheet is printed: ")?;
+        screen.show(&boxed(&lines));
+        screen.answer("press return once the sheet is printed: ")?;
         Ok(())
     }
 
     /// The dismissal: the screen and its scrollback cleared (§5.2; §4.2
     /// step 6).
-    pub fn dismiss(desk: &mut impl Desk) {
-        desk.clear();
+    pub fn dismiss(screen: &mut impl Screen) {
+        screen.clear();
     }
 
     /// The re-type from the print (AUTH-5.41): the seed, an empty one
     /// declining the re-type with no prefix asked (§4.2 step 9), then the
     /// fingerprint prefix — each passed to the walk, which judges them.
-    pub fn retype(desk: &mut impl Desk, r: &Retype) -> Result<Retyped, Abandoned> {
-        desk.talk(&r.prompt);
-        let seed_hex = seed_line(desk, "seed (64 hex, spaces allowed; empty to decline the re-type): ")?;
+    pub fn retype(screen: &mut impl Screen, r: &Retype) -> Result<Retyped, Abandoned> {
+        screen.talk(&r.prompt);
+        let seed_hex = seed_line(screen, "seed (64 hex, spaces allowed; empty to decline the re-type): ")?;
         if seed_hex.is_empty() {
             return Ok(Retyped::Declined);
         }
-        Ok(Retyped::Typed { seed_hex, fingerprint_prefix: prefix_line(desk)? })
+        Ok(Retyped::Typed { seed_hex, fingerprint_prefix: prefix_line(screen)? })
     }
 
     /// One anchor file's destination: a directory, asked again on an empty
     /// line — no default is offered (§4.2 step 4).
-    pub fn destination(desk: &mut impl Desk, d: &Destination) -> Result<PathBuf, Abandoned> {
-        desk.talk(&d.prompt);
-        path_line(desk, "directory: ", "a directory is required; no default is offered")
+    pub fn destination(screen: &mut impl Screen, d: &Destination) -> Result<PathBuf, Abandoned> {
+        screen.talk(&d.prompt);
+        path_line(screen, "directory: ", "a directory is required; no default is offered")
     }
 
     /// A typed confirmation, answered with the text typed, trimmed — never
     /// reduced to a yes or a no, so the walk tells `no` from a wrong row
     /// (AUTH-5.46).
-    pub fn confirm_typed(desk: &mut impl Desk, c: &Confirmation) -> Result<String, Abandoned> {
-        desk.talk(&c.text);
-        let a = desk.answer(&format!("type `{}` to confirm, or `no`: ", c.expected))?;
+    pub fn confirm_typed(screen: &mut impl Screen, c: &Confirmation) -> Result<String, Abandoned> {
+        screen.talk(&c.text);
+        let a = screen.answer(&format!("type `{}` to confirm, or `no`: ", c.expected))?;
         Ok(a.trim().to_string())
     }
 
@@ -347,31 +348,31 @@ mod moment {
     /// (its whitespace removed) and prefix (trimmed) go to the walk with
     /// nothing else judged: its `Seed::from_hex` and prefix test judge them
     /// and ask again on a wrong one (AUTH-5.39, AUTH-5.41).
-    pub fn import(desk: &mut impl Desk, i: &Import) -> Result<Imported, Abandoned> {
-        desk.talk(&i.prompt);
+    pub fn import(screen: &mut impl Screen, i: &Import) -> Result<Imported, Abandoned> {
+        screen.talk(&i.prompt);
         loop {
-            match arm(&desk.answer("which do you hold: the kept FILE (f), the PRINT (p), or NEITHER (n)? ")?) {
-                Some(Arm::File) => return Ok(Imported::File(path_line(desk, "the file's path: ", "a path is required")?)),
+            match arm(&screen.answer("which do you hold: the kept FILE (f), the PRINT (p), or NEITHER (n)? ")?) {
+                Some(Arm::File) => return Ok(Imported::File(path_line(screen, "the file's path: ", "a path is required")?)),
                 Some(Arm::Print) => {
-                    let seed_hex = seed_line(desk, "the seed's 64 hex from the print (spaces allowed): ")?;
-                    return Ok(Imported::Typed { seed_hex, fingerprint_prefix: prefix_line(desk)? });
+                    let seed_hex = seed_line(screen, "the seed's 64 hex from the print (spaces allowed): ")?;
+                    return Ok(Imported::Typed { seed_hex, fingerprint_prefix: prefix_line(screen)? });
                 }
                 Some(Arm::Neither) => return Ok(Imported::Neither),
-                None => desk.talk("answer f, p or n"),
+                None => screen.talk("answer f, p or n"),
             }
         }
     }
 
     /// Kept or placed (AUTH-5.54 step 3's file arm), asked again until the
     /// answer is one.
-    pub fn kept_or_placed(desk: &mut impl Desk, h: &HandedPath) -> Result<KeptOrPlaced, Abandoned> {
-        desk.talk(&h.text);
+    pub fn kept_or_placed(screen: &mut impl Screen, h: &HandedPath) -> Result<KeptOrPlaced, Abandoned> {
+        screen.talk(&h.text);
         loop {
-            let a = desk.answer(&format!("is {} the KEPT artifact (k) or a PLACED copy (p)? ", h.path.display()))?;
+            let a = screen.answer(&format!("is {} the KEPT artifact (k) or a PLACED copy (p)? ", h.path.display()))?;
             match a.trim().to_ascii_lowercase().as_str() {
                 "k" | "kept" => return Ok(KeptOrPlaced::Kept),
                 "p" | "placed" => return Ok(KeptOrPlaced::Placed),
-                _ => desk.talk("answer k or p"),
+                _ => screen.talk("answer k or p"),
             }
         }
     }

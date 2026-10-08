@@ -92,14 +92,14 @@ impl Tap {
         let sent = self.sent.lock().expect("the tap's record").clone();
         let mut requests = Vec::new();
         let mut at = 0;
-        while let Some(end) = sent[at..].windows(4).position(|w| w == b"\r\n\r\n") {
-            let head = String::from_utf8_lossy(&sent[at..at + end]).into_owned();
-            let length: usize =
+        while let Some(head_len) = sent[at..].windows(4).position(|w| w == b"\r\n\r\n") {
+            let head = String::from_utf8_lossy(&sent[at..at + head_len]).into_owned();
+            let declared: usize =
                 head.lines().find_map(|l| l.split_once(':').filter(|(name, _)| name.eq_ignore_ascii_case("content-length")).and_then(|(_, n)| n.trim().parse().ok())).unwrap_or(0);
-            let body = at + end + 4;
-            let close = (body + length).min(sent.len());
-            requests.push((head.lines().next().unwrap_or_default().to_string(), String::from_utf8_lossy(&sent[body..close]).into_owned()));
-            at = close;
+            let body_at = at + head_len + 4;
+            let body_end = (body_at + declared).min(sent.len());
+            requests.push((head.lines().next().unwrap_or_default().to_string(), String::from_utf8_lossy(&sent[body_at..body_end]).into_owned()));
+            at = body_end;
         }
         requests
     }
@@ -149,14 +149,14 @@ pub fn spawn_tapped(dir: &Path) -> (Skepd, Tap) {
 /// hostile board can say, a test says through it.
 pub fn canned(status: u16, body: &'static [u8]) -> String {
     let listener = TcpListener::bind(("127.0.0.1", 0)).expect("the canned board's port");
-    let at = origin(listener.local_addr().expect("the canned board's address").port());
+    let board = origin(listener.local_addr().expect("the canned board's address").port());
     std::thread::spawn(move || {
         for conn in listener.incoming() {
             let Ok(mut conn) = conn else { continue };
             let (mut seen, mut buf) = (Vec::new(), [0u8; 8192]);
             let body_at = loop {
-                if let Some(end) = seen.windows(4).position(|w| w == b"\r\n\r\n") {
-                    break Some(end + 4);
+                if let Some(head_len) = seen.windows(4).position(|w| w == b"\r\n\r\n") {
+                    break Some(head_len + 4);
                 }
                 match conn.read(&mut buf) {
                     Ok(n @ 1..) => seen.extend_from_slice(&buf[..n]),
@@ -179,7 +179,7 @@ pub fn canned(status: u16, body: &'static [u8]) -> String {
             let _ = conn.shutdown(Shutdown::Write);
         }
     });
-    at
+    board
 }
 
 /// A path as the `&str` an argv takes.
@@ -261,8 +261,8 @@ pub fn on_a_terminal(inner: &str) -> String {
     String::from_utf8_lossy(&out.stdout).into_owned()
 }
 
-/// `text` as one `/bin/sh` word.
-pub fn sh(text: &str) -> String {
+/// `text` quoted as one `/bin/sh` word.
+pub fn shell_word(text: &str) -> String {
     format!("'{}'", text.replace('\'', r"'\''"))
 }
 
@@ -317,9 +317,9 @@ fn text_envs<'a>(envs: &[(&'a str, &'a str)]) -> Vec<(&'a str, &'a OsStr)> {
 
 /// `stdin` fed to the run, then closed — EOF; closed at once where `None`.
 fn feed(child: &mut Child, stdin: Option<&[u8]>) {
-    let mut si = child.stdin.take().expect("stdin");
+    let mut pipe = child.stdin.take().expect("stdin");
     if let Some(bytes) = stdin {
-        si.write_all(bytes).expect("feed stdin");
+        pipe.write_all(bytes).expect("feed stdin");
     }
 }
 

@@ -8,7 +8,7 @@ use std::path::PathBuf;
 use skep_client::ceremony::recover::{self as recover_walk, RecoverOptions};
 use skep_client::dial::plaintext_non_loopback_warning;
 
-use super::{board_of, data, facts, host_name_and_date, person_door, principal_or_bound, store_of, talk, BoxDefault, Door, Stop};
+use super::{board_of, data, host_name_and_date, principal_or_bound, print_facts, require_terminal, store_of, talk, BoxDefault, Door, Stop};
 use crate::args::CommandLine;
 use crate::terminal::Terminal;
 
@@ -16,7 +16,7 @@ pub fn recover(c: &CommandLine) -> Result<(), Stop> {
     let board = board_of(c)?;
     let store = store_of(c)?;
     let given = c.principal()?;
-    person_door(Door { form: "recover", moments: "the kept-or-placed answer, the typed hex and the confirmations" })?;
+    require_terminal(Door { form: "recover", moments: "the kept-or-placed answer, the typed hex and the confirmations" })?;
     let principal = principal_or_bound(given, &store, &board)?;
     if let Some(w) = plaintext_non_loopback_warning(board.dialed()) {
         talk(w);
@@ -27,29 +27,29 @@ pub fn recover(c: &CommandLine) -> Result<(), Stop> {
     let opts = RecoverOptions {
         principal,
         anchor: c.value("--anchor").map(PathBuf::from),
-        lost: c.all("--lost").to_vec(),
+        lost: c.values("--lost").to_vec(),
         stolen: c.switch("--stolen").then_some(true),
         anchor_lost: c.switch("--anchor-lost"),
-        anchor_out: c.all("--anchor-out").iter().map(PathBuf::from).collect(),
+        anchor_out: c.values("--anchor-out").iter().map(PathBuf::from).collect(),
         paper: c.switch("--paper"),
         host_name,
         date,
     };
-    let r = recover_walk::recover(&board, &store, &mut Terminal, &opts)?;
-    for w in &r.warnings {
+    let recovered = recover_walk::recover(&board, &store, &mut Terminal, &opts)?;
+    for w in &recovered.warnings {
         talk(w);
     }
-    for l in &r.recovery_read {
+    for l in &recovered.recovery_read {
         talk(format!("[recovery read] {l}"));
     }
-    if let Some(line) = &r.binding_line {
+    if let Some(line) = &recovered.binding_line {
         talk(format!("binding: {line}"));
     }
-    facts(&r.facts)?;
-    for fp in &r.enrolled {
+    print_facts(&recovered.facts)?;
+    for fp in &recovered.enrolled {
         data(format!("enrolled {fp}"))?;
     }
-    for fp in &r.retired {
+    for fp in &recovered.retired {
         data(format!("retired {fp}"))?;
     }
     Ok(())

@@ -5,16 +5,16 @@
 //! to each of them: the two streams, stdout DATA (`data`, `data_verbatim`,
 //! `--help`'s text among what they carry) and stderr TALK (`talk`, the
 //! terminal's line writer, which the prompts share) (§2.4), each inert to
-//! the terminal reading it (`data_text`; the terminal's `inert`), a DATA
+//! the terminal reading it (`c0_inert`; the terminal's `inert`), a DATA
 //! write stdout refuses a halt and a TALK line stderr refuses dropped,
-//! neither a panic; the stops and §2.3's exit codes (`Stop`, and
-//! `exit_code`, the one place a stop's block and its code are chosen —
-//! `main`'s refusal of a command line it cannot parse among them;
-//! `person_door`, the person doors' check, whose refusal is a halt naming
-//! the [`Door`]'s own moments); the plumbing from the flags to a board, a
-//! store, a payload read to its cap ([`PAYLOAD_CAP`]), a principal and a
-//! key; the anchor boxes' per-run default ([`BoxDefault`]); the three
-//! facts' one spelling (`facts`); the outstanding-act line `keygen` and
+//! neither a panic; the stops and §2.3's exit codes (`Stop`, and `finish`,
+//! the one place a stop's block and its code are chosen — `main`'s refusal
+//! of a command line it cannot parse among them; `require_terminal`, the
+//! person doors' check, whose refusal is a halt naming the [`Door`]'s own
+//! moments); the plumbing from the flags to a board, a store, a payload
+//! read to its cap ([`MAX_PAYLOAD_BYTES`]), a principal and a key; the
+//! anchor boxes' per-run default ([`BoxDefault`]); the three facts' one
+//! spelling (`print_facts`); the outstanding-act line `keygen` and
 //! `fingerprint` share (`OUTSTANDING_ACT`); and the whole-set compare, from
 //! the held set to its halt (`held_set`, `compare_genesis`). A halt is one
 //! block on stderr: the state, its cause, the one act (AUTH-5.66;
@@ -69,7 +69,7 @@ use crate::terminal::{has_terminal, talk};
 /// flag's shape alone — or a member of the halt family (§1.1's `halt` row),
 /// a person door reached without a controlling terminal among its HALT AND
 /// SURFACE members (§2.3's exit-3 row). Commands name their stops with `?`;
-/// [`exit_code`] is the one place a stop's stderr block and its code are
+/// [`finish`] is the one place a stop's stderr block and its code are
 /// chosen together.
 #[derive(Debug)]
 pub enum Stop {
@@ -99,9 +99,9 @@ impl From<StoreError> for Stop {
     }
 }
 
-/// A command's outcome rendered: 0, or the stop's one block on stderr and
-/// its exit code.
-pub fn exit_code(outcome: Result<(), Stop>) -> i32 {
+/// A command's outcome finished: a stop's one block said on stderr, and the
+/// exit code answered — 0, or the stop's.
+pub fn finish(outcome: Result<(), Stop>) -> i32 {
     let (block, code) = match outcome {
         Ok(()) => return 0,
         Err(Stop::Usage(u)) => (format!("{u}\n\n{HELP}"), 2),
@@ -129,8 +129,9 @@ struct Door {
 }
 
 /// A person door's check (§2.4: the CLI's, never a walk's), made before
-/// anything is generated.
-fn person_door(door: Door) -> Result<(), Halt> {
+/// anything is generated: a controlling terminal, or the halt naming
+/// `door`'s moments.
+fn require_terminal(door: Door) -> Result<(), Halt> {
     if has_terminal() {
         Ok(())
     } else {
@@ -154,13 +155,13 @@ fn no_terminal(door: Door) -> Halt {
     )
 }
 
-/// DATA, to stdout — ONE line, as [`data_text`] renders it, flushed. A
+/// DATA, to stdout — ONE line, as [`c0_inert`] renders it, flushed. A
 /// write stdout refuses — its reader gone, its disk full — is a halt
 /// ([`data_refused`]) and the command stops there: never a panic, whose
 /// exit 101 §2.3 does not have, and never a pass with the data lost.
 fn data(line: impl AsRef<str>) -> Result<(), Halt> {
     let mut out = io::stdout().lock();
-    writeln!(out, "{}", data_text(line.as_ref())).and_then(|()| out.flush()).map_err(data_refused)
+    writeln!(out, "{}", c0_inert(line.as_ref())).and_then(|()| out.flush()).map_err(data_refused)
 }
 
 /// A DATA line as stdout may carry it: every C0 control — the line break
@@ -173,7 +174,7 @@ fn data(line: impl AsRef<str>) -> Result<(), Halt> {
 /// DATA lines. DEL and a bidi control stand: a record carries a label's
 /// verbatim — AUTH-1.24 admits both, and its encoder escapes neither — and
 /// neither moves a terminal's cursor.
-fn data_text(line: &str) -> Cow<'_, str> {
+fn c0_inert(line: &str) -> Cow<'_, str> {
     let c0 = |c: char| c < ' ';
     if !line.contains(c0) {
         return Cow::Borrowed(line);
@@ -227,12 +228,13 @@ fn store_of(c: &CommandLine) -> Result<FileStore, Usage> {
 /// a customer's payload at the sidecar, a file that never ends — sizes
 /// this run's memory, where a read to its end grows with whatever it is fed
 /// before the record's own cap is ever consulted.
-const PAYLOAD_CAP: usize = MAX_RECORD_BYTES + 2;
+const MAX_PAYLOAD_BYTES: usize = MAX_RECORD_BYTES + 2;
 
 /// A payload argument's bytes: a file, or `-` for stdin, read no further
-/// than one byte past [`PAYLOAD_CAP`] — and past the cap, a halt naming it.
+/// than one byte past [`MAX_PAYLOAD_BYTES`] — and past the cap, a halt
+/// naming it.
 fn read_payload(arg: &str) -> Result<Vec<u8>, Halt> {
-    let limit = PAYLOAD_CAP as u64 + 1;
+    let limit = MAX_PAYLOAD_BYTES as u64 + 1;
     let mut bytes = Vec::new();
     if arg == "-" {
         io::stdin().take(limit).read_to_end(&mut bytes).map_err(|e| Halt::face("the payload could not be read from stdin", e.to_string(), "pipe the payload in"))?;
@@ -241,10 +243,10 @@ fn read_payload(arg: &str) -> Result<Vec<u8>, Halt> {
             Halt::face(format!("the payload file {arg} could not be read: {e}"), "AUTH-5.67: a mis-pathed file is a halt naming the path, never a fallback", "check the path")
         })?;
     }
-    if bytes.len() > PAYLOAD_CAP {
+    if bytes.len() > MAX_PAYLOAD_BYTES {
         let at = if arg == "-" { "stdin" } else { arg };
         return Err(Halt::face(
-            format!("the payload at {at} runs past {PAYLOAD_CAP} bytes and is read no further"),
+            format!("the payload at {at} runs past {MAX_PAYLOAD_BYTES} bytes and is read no further"),
             format!("a payload is one enrollment record of at most {MAX_RECORD_BYTES} bytes (AUTH-1.18) and its line ending, or a reply's few lines: past the cap it is neither"),
             "pass the record or the reply as it was printed, and nothing beside it",
         ));
@@ -349,7 +351,7 @@ fn civil_date(secs: u64) -> String {
 /// The three facts, DATA on stdout — their one spelling, every command's
 /// that prints them, in the lines `bind`'s `facts_of` reads back from a
 /// reply (`account …`, `principal …`, `origin …`).
-fn facts(f: &Facts) -> Result<(), Halt> {
+fn print_facts(f: &Facts) -> Result<(), Halt> {
     data(format!("account {}", f.account))?;
     data(format!("principal {}", f.principal))?;
     data(format!("origin {}", f.origin))
@@ -364,21 +366,22 @@ const OUTSTANDING_ACT: &str = "Where it ADDS a device: take this payload to a de
      facts back to `skep bind` here. Where it REPLACES a machine: `skep rotate --payload` there instead, then `skep bind` here.";
 
 /// What this device HOLDS for the whole-set compare (AUTH-4.58's
-/// detection): `record`'s entries — a `--payload` argument holding the
-/// RECORD this device printed, `verify`'s; never `bind`'s, whose payload is
-/// the reply — and each `anchors` file's public members beside `device`,
-/// the store's key; `None` where neither is given.
-fn held_set(store: &FileStore, record: Option<&str>, anchors: &[String], device: &KeyFacts) -> Result<Option<Vec<Held>>, Halt> {
-    if record.is_none() && anchors.is_empty() {
+/// detection): the entries of the record `record_arg` names — the
+/// `--payload` argument, a file or `-`, naming the RECORD this device
+/// printed, `verify`'s; never `bind`'s, whose payload is the reply — and
+/// each `anchors` file's public members beside `device`, the store's key;
+/// `None` where neither is given.
+fn held_set(store: &FileStore, record_arg: Option<&str>, anchors: &[String], device: &KeyFacts) -> Result<Option<Vec<Held>>, Halt> {
+    if record_arg.is_none() && anchors.is_empty() {
         return Ok(None);
     }
     let mut held = Vec::new();
-    if let Some(arg) = record {
+    if let Some(arg) = record_arg {
         let bytes = read_payload(arg)?;
         let text = std::str::from_utf8(&bytes).map_err(|_| Halt::face("the payload is not UTF-8", "a canonical record is UTF-8 text", "re-take the payload"))?.trim();
         let entries = skep_identity::parse_enroll(text.as_bytes()).map_err(|e| Halt::face("the payload is not a canonical enrollment record", e.to_string(), "re-take it from the device that printed it"))?;
-        for e in entries {
-            held.push(Held { fingerprint: Fingerprint::of(&e.key), anchor: e.anchor, label: e.label().map(str::to_string) });
+        for entry in entries {
+            held.push(Held { fingerprint: Fingerprint::of(&entry.key), anchor: entry.anchor, label: entry.label().map(str::to_string) });
         }
     }
     if !anchors.is_empty() {
@@ -427,8 +430,8 @@ fn compare_genesis(board: &Board, walk: &Walk, own: &[(Fingerprint, PublicKey)],
             ),
         ));
     }
-    for l in &whole.later {
-        talk(later_line(l));
+    for act in &whole.later {
+        talk(later_line(act));
     }
     Ok(())
 }
@@ -457,8 +460,8 @@ fn difference_lines(diffs: &[Difference]) -> Vec<String> {
 
 /// A later act the compare reads off the current set beyond the genesis
 /// record, one line of TALK [`compare_genesis`] says.
-fn later_line(l: &Held) -> String {
-    format!("later act: {} anchor={} label={}", l.fingerprint, l.anchor, l.label.as_deref().map(render_inert).unwrap_or_else(|| "(none)".into()))
+fn later_line(act: &Held) -> String {
+    format!("later act: {} anchor={} label={}", act.fingerprint, act.anchor, act.label.as_deref().map(render_inert).unwrap_or_else(|| "(none)".into()))
 }
 
 #[cfg(test)]
@@ -509,17 +512,17 @@ mod tests {
     /// halt, a person door without a terminal a halt of the family, 3, and
     /// a DATA write stdout refused a halt, 3.
     #[test]
-    fn every_stop_is_rendered_with_its_exit_code() {
-        assert_eq!(exit_code(Ok(())), 0);
-        assert_eq!(exit_code(Err(Usage("a command is required".into()).into())), 2);
-        assert_eq!(exit_code(Err(Halt::face("state", "cause", "act").into())), 3);
+    fn every_stop_finishes_with_its_exit_code() {
+        assert_eq!(finish(Ok(())), 0);
+        assert_eq!(finish(Err(Usage("a command is required".into()).into())), 2);
+        assert_eq!(finish(Err(Halt::face("state", "cause", "act").into())), 3);
         let refused = skep_client::Refused { status: 200, code: "credential_refused".into(), detail: None, op: None, body: serde_json::Value::Null };
-        assert_eq!(exit_code(Err(Halt::Refused(refused).into())), 1);
-        assert_eq!(exit_code(Err(Halt::Dial(skep_client::DialError::Connect("refused".into())).into())), 4);
-        assert_eq!(exit_code(Err(StoreError::NotFound { select: "zz".into() }.into())), 3);
-        assert_eq!(exit_code(Err(no_terminal(RETIRE).into())), 3);
-        assert_eq!(exit_code(Err(data_refused(io::ErrorKind::BrokenPipe.into()).into())), 3);
-        assert_eq!(exit_code(Err(record_refused(LabelError::Newline).into())), 3);
+        assert_eq!(finish(Err(Halt::Refused(refused).into())), 1);
+        assert_eq!(finish(Err(Halt::Dial(skep_client::DialError::Connect("refused".into())).into())), 4);
+        assert_eq!(finish(Err(StoreError::NotFound { select: "zz".into() }.into())), 3);
+        assert_eq!(finish(Err(no_terminal(RETIRE).into())), 3);
+        assert_eq!(finish(Err(data_refused(io::ErrorKind::BrokenPipe.into()).into())), 3);
+        assert_eq!(finish(Err(record_refused(LabelError::Newline).into())), 3);
     }
 
     /// A DATA line carries no control a board chose: each C0 control — a
@@ -530,11 +533,11 @@ mod tests {
     /// other two standing (AUTH-2.130 clause 3).
     #[test]
     fn a_data_line_renders_every_c0_control_and_passes_a_record_whole() {
-        assert_eq!(data_text("claimed by 1.0.1\x1b]52;c;cHduZWQ=\x07\r\naccount 1.0.9"), "claimed by 1.0.1<U+001B>]52;c;cHduZWQ=<U+0007><U+000D><U+000A>account 1.0.9");
+        assert_eq!(c0_inert("claimed by 1.0.1\x1b]52;c;cHduZWQ=\x07\r\naccount 1.0.9"), "claimed by 1.0.1<U+001B>]52;c;cHduZWQ=<U+0007><U+000D><U+000A>account 1.0.9");
         let key = skep_client::sheet::KeyFile::new(skep_client::sheet::Seed::new([7; 32]), false, None, None).public;
         let record = skep_identity::encode_enroll(&[skep_identity::Enrollment::new(key, false, Some("a\tb\u{7f}c\u{202e}d".into())).unwrap()]);
         assert!(record.contains('\u{7f}') && record.contains('\u{202e}') && !record.contains('\t'), "{record}");
-        assert!(matches!(data_text(&record), Cow::Borrowed(text) if text == record));
+        assert!(matches!(c0_inert(&record), Cow::Borrowed(text) if text == record));
     }
 
     /// The person door's refusal is a halt's face — the state, its cause,

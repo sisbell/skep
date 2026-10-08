@@ -877,7 +877,7 @@ them, each naming only those above it:
 - `terminal.rs` `Terminal`, the `Person` over the terminal: every prompt on
   stderr, the sheet as a ruled box, the dismissal's clear, the anchor
   import's arm asked of the person and never guessed from what was typed —
-  each moment written once, in `moment`, against a `Desk` that says its
+  each moment written once, in `moment`, against a `Screen` that says its
   lines and reads its answers, which the `Terminal` is over the std streams
   and the module's unit tests over a script; `has_terminal`, the person
   doors' check; `talk`, the one writer of a line on stderr — the prompts'
@@ -888,16 +888,16 @@ them, each naming only those above it:
   that one line alone — the `Terminal`'s, and those of `bind`, which is no
   person door: its account paste and its landing question.
 - `commands.rs` what the commands share: DATA's writers (`data`, its line
-  rendered by `data_text`, and `data_verbatim`), the stops and their exit
+  rendered by `c0_inert`, and `data_verbatim`), the stops and their exit
   codes (`Stop` — a usage refusal, or a member of the halt family, a
   person door reached without a terminal among its halts — which
-  `exit_code` renders; `person_door`, the check each `Door` makes; `help`,
-  `--help`'s DATA), the plumbing from the flags to a board, a store, a
-  payload (`read_payload`, to `PAYLOAD_CAP`), a principal and a key,
-  the anchor boxes' per-run default (`BoxDefault`), the three facts' one
-  spelling (`facts`, the lines `bind` reads back from a reply), the
-  outstanding-act line `keygen` and `fingerprint` share, and the
-  whole-set compare from the held set to its halt (`held_set`,
+  `finish` renders; `require_terminal`, the check each `Door` makes;
+  `help`, `--help`'s DATA), the plumbing from the flags to a board, a
+  store, a payload (`read_payload`, to `MAX_PAYLOAD_BYTES`), a principal
+  and a key, the anchor boxes' per-run default (`BoxDefault`), the three
+  facts' one spelling (`print_facts`, the lines `bind` reads back from a
+  reply), the outstanding-act line `keygen` and `fingerprint` share, and
+  the whole-set compare from the held set to its halt (`held_set`,
   `compare_genesis`). Beneath it, `commands/<name>.rs`, one file per
   command, each the `pub fn <name>(&CommandLine) -> Result<(), Stop>`
   that `main` dispatches to.
@@ -916,20 +916,20 @@ Rules that hold across its files:
 - **What reaches the terminal is inert.** Every TALK line and prompt is
   rendered by `render_inert` (AUTH-5.2) line by line in `write_inert`, and
   the dismissal's clear is the one escape written, a constant; a DATA line
-  renders every C0 control, the line break among them (`data_text`) — a
+  renders every C0 control, the line break among them (`c0_inert`) — a
   record's encoder escapes exactly those (AUTH-2.130 clause 3), so a
   record passes whole. A byte a board, a reply or a file chose neither
   acts on a terminal nor forges a line. `tests/it/tidy.rs` confines
   stderr's handles to `write_inert` and `clear`, and `tests/it/hostile.rs`
   runs the binary against boards answering escapes.
 - **What a third party hands in is recognized whole, then used.** A
-  payload argument is read no further than one byte past `PAYLOAD_CAP` —
-  a record at its cap (AUTH-1.18) and its line ending — and halts past
-  it; a reply `bind` lands shows as it reads, line by line, names each
-  fact as its name and one value, and names a fact once, a second value —
-  a line's, a flag's or a variable's — halting naming both; a principal
-  is at most `2^53 − 1` (AUTH-6.36), at the flag and in a reply.
-  `tests/it/hostile.rs` checks each.
+  payload argument is read no further than one byte past
+  `MAX_PAYLOAD_BYTES` — a record at its cap (AUTH-1.18) and its line
+  ending — and halts past it; a reply `bind` lands shows as it reads, line
+  by line, names each fact as its name and one value, and names a fact
+  once, a second value — a line's, a flag's or a variable's — halting
+  naming both; a principal is at most `2^53 − 1` (AUTH-6.36), at the flag
+  and in a reply. `tests/it/hostile.rs` checks each.
 - **A prompt holds stdin for one line.** Every prompt is read through
   `answer`, which locks stdin for that line alone, and the only other
   reads are a `-` argument's, whole, in `read_payload` and
@@ -938,19 +938,19 @@ Rules that hold across its files:
 - **A person door checks for a terminal first.** The eight doors —
   `claim`'s notebook arm, `keygen --anchors`, `enroll` without `--reply`,
   `recover`, `retire`, `rotate`, `handoff --payload` and `accept` without
-  `--reprint` — each call `person_door` before anything is generated and,
-  without one, halt (exit 3) naming the moments a person answers at that
-  door; the check is the CLI's, never a walk's (§2.4). `tests/it/cli.rs`
-  and `tests/it/ceremonies.rs` run every door without a terminal, and
-  `tests/it/ceremonies.rs` runs one under a pseudo-terminal, where it
-  opens only with stdin and stderr both a terminal.
+  `--reprint` — each call `require_terminal` before anything is generated
+  and, without one, halt (exit 3) naming the moments a person answers at
+  that door; the check is the CLI's, never a walk's (§2.4).
+  `tests/it/cli.rs` and `tests/it/ceremonies.rs` run every door without a
+  terminal, and `tests/it/ceremonies.rs` runs one under a pseudo-terminal,
+  where it opens only with stdin and stderr both a terminal.
 - **The settings are `args.rs`'s.** Every `SKEP_*` variable is read there
   and nowhere else, which `tests/it/tidy.rs` checks; a session token is
   never an argv value (`session --close -` reads stdin or `SKEP_SESSION`),
   which `tests/it/cli.rs` checks.
 - **A command answers `Ok` or a `Stop`.** It names every stop with `?`,
   and `main` — its dispatch one arm per `Command`, which the compiler
-  holds exhaustive — exits with `exit_code`'s rendering of it, a command
+  holds exhaustive — exits with `finish`'s rendering of it, a command
   line it cannot parse and `--help` included; no command picks a
   renderer or a code, nor ends the process. `commands.rs`'s unit test
   holds each stop to its code, and `tests/it/tidy.rs` checks that only

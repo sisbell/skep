@@ -46,7 +46,7 @@
 //! around the precedence a flag holds over its variable.
 //!
 //! ONLY `main` ENDS THE PROCESS (§2.3). Every `exit(` and `abort(` under
-//! `src/` sits in `main`, which exits with `exit_code`'s rendering of the
+//! `src/` sits in `main`, which exits with `finish`'s rendering of the
 //! command's answer — so no command picks a code of its own, nor ends the
 //! run before its stop's block is said.
 //!
@@ -193,7 +193,7 @@ fn the_process_is_ended_by_main_alone() {
         ends_the_process,
         EXITERS,
         "ends the process",
-        "only `main` ends the process, with `exit_code`'s rendering of the command's answer (§2.3): answer a `Stop` with `?` instead",
+        "only `main` ends the process, with `finish`'s rendering of the command's answer (§2.3): answer a `Stop` with `?` instead",
     );
 }
 

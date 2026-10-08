@@ -19,7 +19,7 @@ use skep_client::sheet::{group_hex, Label};
 use skep_client::store::{KeySelector, KeyStore, Purpose};
 use skep_identity::{encode_enroll, Enrollment};
 
-use super::{data, host_name_and_date, person_door, record_refused, store_of, talk, BoxDefault, Door, Stop, OUTSTANDING_ACT};
+use super::{data, host_name_and_date, record_refused, require_terminal, store_of, talk, BoxDefault, Door, Stop, OUTSTANDING_ACT};
 use crate::args::CommandLine;
 use crate::terminal::Terminal;
 
@@ -58,7 +58,7 @@ pub fn keygen(c: &CommandLine) -> Result<(), Stop> {
     // `--anchors`: the DOOR-SIDE form (§2.2), a person door.
     let door_side = c.switch("--anchors");
     if door_side {
-        person_door(Door { form: "keygen --anchors", moments: "the door-side backup moment" })?;
+        require_terminal(Door { form: "keygen --anchors", moments: "the door-side backup moment" })?;
     }
     let mut person = Terminal;
     // The device-name box: `--label`, or asked; the statements whenever a
@@ -92,7 +92,7 @@ pub fn keygen(c: &CommandLine) -> Result<(), Stop> {
         // sentence unconditionally; then the three-key payload for the
         // hosted signup.
         let labels: Vec<Label> = c
-            .all("--anchor-label")
+            .values("--anchor-label")
             .iter()
             .map(|l| Label::new(l))
             .collect::<Result<_, _>>()
@@ -100,7 +100,7 @@ pub fn keygen(c: &CommandLine) -> Result<(), Stop> {
         let BoxDefault { host_name, date } = host_name_and_date();
         let opts = BackupOptions {
             labels,
-            destinations: c.all("--anchor-out").iter().map(PathBuf::from).collect(),
+            destinations: c.values("--anchor-out").iter().map(PathBuf::from).collect(),
             paper: c.switch("--paper"),
             store: Some(store.root().to_path_buf()),
             host_name,

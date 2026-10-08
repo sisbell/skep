@@ -153,7 +153,7 @@ fn the_person_doors_refuse_without_a_terminal_and_the_rest_run_without_one() {
 
 /// THE LOOP over the hosted arm, every command through the binary.
 #[test]
-fn the_loop_through_the_binary() {
+fn the_hosted_loop_runs_its_seven_commands_through_the_binary() {
     let dir = tempfile::tempdir().unwrap();
     let sd = spawn(&dir.path().join("board"), false);
     let board = origin(sd.port());
@@ -400,12 +400,12 @@ fn the_token_session_prints_is_content_scoped_and_deposits_no_credential() {
     assert_eq!(skep(&["session", "--close", "-", "--board", &b.board], &[], Some(token.as_str().as_bytes())).code, 0);
 }
 
-/// THE HOSTED REPLY AS PRINTED LANDS AT `bind` (§4.5 H6; `facts`, the lines
-/// `bind` reads back): `claim --hosted --principal 7` seats the account at
-/// the principal given and its reply names it — in the three facts and in
-/// the first act's command — and the whole reply, fed to `bind --payload -`,
-/// lands: the facts confirmed, the first signed session run, the binding
-/// line naming principal 7.
+/// THE HOSTED REPLY AS PRINTED LANDS AT `bind` (§4.5 H6; `print_facts`, the
+/// lines `bind` reads back): `claim --hosted --principal 7` seats the
+/// account at the principal given and its reply names it — in the three
+/// facts and in the first act's command — and the whole reply, fed to `bind
+/// --payload -`, lands: the facts confirmed, the first signed session run,
+/// the binding line naming principal 7.
 #[test]
 fn the_hosted_reply_names_the_principal_given_and_lands_at_bind_as_printed() {
     let dir = tempfile::tempdir().unwrap();
@@ -813,7 +813,7 @@ fn a_stderr_that_refuses_the_talk_drops_it_and_the_exit_code_still_carries_the_o
 /// The plaintext non-loopback WARNING rides before any signed session, and
 /// the default store is `~/.skep`.
 #[test]
-fn the_plaintext_warning_and_the_default_store() {
+fn the_plaintext_warning_precedes_a_session_and_the_store_defaults_to_home() {
     let dir = tempfile::tempdir().unwrap();
     let store = dir.path().join("store");
     let r = skep(&["session", "--board", "http://192.0.2.1:9", "--dir", s(&store)], &[], None);

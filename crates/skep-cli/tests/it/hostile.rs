@@ -128,7 +128,7 @@ fn a_payload_past_its_cap_is_refused_before_it_is_read_whole() {
     assert_eq!(r.code, 4, "at the cap the payload is read and the board dialed: {r:?}");
 }
 
-/// A PRINCIPAL PAST THE WIRE'S RANGE IS NONE (`principal_text`; AUTH-6.36's
+/// A PRINCIPAL PAST THE WIRE'S RANGE IS NONE (`parse_principal`; AUTH-6.36's
 /// clause; AUTH-5.20): `--principal 2^53` is a usage refusal before any
 /// socket opens, `2^53 − 1` reads and the dead board is dialed, and a
 /// reply's `principal 2^53` halts naming it.

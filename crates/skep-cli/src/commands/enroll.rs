@@ -5,7 +5,7 @@
 use skep_client::ceremony::enroll::{self as enroll_walk, EnrollOptions};
 use skep_client::dial::plaintext_non_loopback_warning;
 
-use super::{board_of, facts, person_door, principal_or_bound, read_payload, store_of, talk, Door, Stop};
+use super::{board_of, principal_or_bound, print_facts, read_payload, require_terminal, store_of, talk, Door, Stop};
 use crate::args::{CommandLine, Usage};
 use crate::terminal::Terminal;
 
@@ -16,25 +16,25 @@ pub fn enroll(c: &CommandLine) -> Result<(), Stop> {
     let principal = principal_or_bound(given, &store, &board)?;
     // `--reply`: the three facts re-derived, no write — not a person door.
     if let Some(prefix) = c.value("--reply") {
-        let e = enroll_walk::reply(&board, principal, prefix)?;
-        let enrolled = e.fingerprints.first().expect("`enroll::reply` answers the one key its prefix resolved");
-        talk(format!("the reply, offered again (AUTH-5.32): {enrolled} stands ENROLLED at {}", e.facts.account));
-        facts(&e.facts)?;
+        let reply = enroll_walk::reply(&board, principal, prefix)?;
+        let fingerprint = reply.fingerprints.first().expect("`enroll::reply` answers the one key its prefix resolved");
+        talk(format!("the reply, offered again (AUTH-5.32): {fingerprint} stands ENROLLED at {}", reply.facts.account));
+        print_facts(&reply.facts)?;
         return Ok(());
     }
-    person_door(Door { form: "enroll", moments: "the fingerprint comparison and its confirmation" })?;
+    require_terminal(Door { form: "enroll", moments: "the fingerprint comparison and its confirmation" })?;
     let Some(payload_arg) = c.value("--payload") else { return Err(Usage("--payload <file|-> is required (or --reply <fp-prefix>)".into()).into()) };
     let payload = read_payload(payload_arg)?;
     if let Some(w) = plaintext_non_loopback_warning(board.dialed()) {
         talk(w);
     }
-    let e = enroll_walk::enroll(&board, &store, &mut Terminal, &EnrollOptions { principal, payload })?;
+    let enrolled = enroll_walk::enroll(&board, &store, &mut Terminal, &EnrollOptions { principal, payload })?;
     // The walk said what it found, a reconciliation among it (AUTH-5.17),
     // through the person; the warnings are what it leaves for the command
     // to say.
-    for w in &e.warnings {
+    for w in &enrolled.warnings {
         talk(w);
     }
-    facts(&e.facts)?;
+    print_facts(&enrolled.facts)?;
     Ok(())
 }

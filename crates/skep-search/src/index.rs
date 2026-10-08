@@ -1,7 +1,7 @@
 //! The inverted index with positions (`search.md` §1.2's `index` row; §5.1's
 //! in-memory shape) behind the ONE CONCRETE TYPE [`Index`] (§1.4): the term
 //! dictionary, SORTED, so a prefix is a range found by binary search (the
-//! expansion over it is lane SR-3's); the postings — per term, per unit, the
+//! expansion over it is `query`'s); the postings — per term, per unit, the
 //! token ORDINALS and each occurrence's RANGE FROM THE UNIT's START, its
 //! V-ordinal offset and its length in bytes ([`Occurrence`]); the UNIT
 //! RECORDS — the unit itself, its stored text among its items (§6, D10 (i)),
@@ -30,8 +30,15 @@
 //! `compacted` and its `install`. The trigger is counted in DEAD POSTINGS
 //! ([`Index::compaction_due`]; §5.1, §7.1's INTERIM pin). `delete` is no
 //! operation of v1 (§1.4). The file's `save` and `load` stand in `file`,
-//! over this module's shape; the one read over the keys, `keys_by_range`, is
-//! a later lane's (SR-3), and the keys sort in the address order for it.
+//! over this module's shape; the query over it stands in `query`, `rank` and
+//! `hit`, behind `Index::query` (the `pair` module).
+//!
+//! THE ONE READ over the unit keys ([`Index::keys_by_range`]; §1.4; THE
+//! ENUMERATOR RULED (b)): the keys held under a range — the documents under
+//! its [`Prefix`] — at the cost of one scan of those keys, which sort in the
+//! address order, so every document below a prefix is one contiguous run of
+//! the key map. Its callers are the two REFRESHES (§5.4's bare-count refresh,
+//! §5.5's `opts.reindex`) and no other; it reads nothing but the keys.
 //!
 //! THE CEILING ([`CEILING_BYTES`]; §7.4): v1 scale is counted in BYTES OF
 //! TEXT PER INDEX, the index loaded whole; the crate declares a ceiling on
@@ -48,6 +55,9 @@ use std::collections::BTreeMap;
 use std::error::Error;
 use std::fmt;
 use std::io;
+use std::ops::Bound;
+
+use skep_address::{is_prefix, Address};
 
 use crate::token::{self, Revision, REVISION};
 use crate::unit::{Class, Unit, UnitKey};
@@ -80,9 +90,9 @@ pub(crate) type UnitId = usize;
 pub(crate) type TermId = usize;
 
 /// One occurrence in a posting (§5.1): the token's ORDINAL in its unit's
-/// sequence — adjacency is a phrase (lane SR-3) — and its RANGE FROM THE
-/// UNIT's START, the V-ordinal offset and the length in bytes the hit's span
-/// is read off, byte-exact, with no re-tokenizing at result time (§2.3).
+/// sequence — adjacency is a phrase (§3.2) — and its RANGE FROM THE UNIT's
+/// START, the V-ordinal offset and the length in bytes the hit's span is read
+/// off, byte-exact, with no re-tokenizing at result time (§2.3).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Occurrence {
     /// The token's ordinal in the unit.
@@ -150,6 +160,65 @@ impl Body {
             Record::Live { unit, .. } => unit.bytes(),
             Record::Dead => 0,
         }
+    }
+
+    /// The live unit at `id` with its token count — its posting entries,
+    /// one per token, BM25's `dl` (§3.3); `None` for a tombstone, whose
+    /// postings are skipped at query (§5.1).
+    pub(crate) fn live(&self, id: UnitId) -> Option<(&Unit, usize)> {
+        match &self.units[id] {
+            Record::Live { unit, entries, .. } => Some((unit, *entries)),
+            Record::Dead => None,
+        }
+    }
+
+    /// The term `term` where some live unit holds it (§5.1: "a term held
+    /// only by dead units is no term for §3.2's exact-match test, D15's
+    /// correction or the expansion's df order"): its id and its entry.
+    pub(crate) fn live_term(&self, term: &str) -> Option<(&str, TermId)> {
+        let (spelling, &id) = self.dictionary.get_key_value(term)?;
+        (self.terms[id].live_units > 0).then_some((spelling.as_str(), id))
+    }
+
+    /// The live terms under `prefix` in the dictionary's order (§3.2's
+    /// prefix: "expanded over the sorted term dictionary (a binary search
+    /// for the range)") — the range entered at the prefix and left at the
+    /// first term not starting with it.
+    pub(crate) fn live_terms_under(&self, prefix: &str) -> Vec<(&str, TermId)> {
+        self.dictionary
+            .range::<str, _>((Bound::Included(prefix), Bound::Unbounded))
+            .take_while(|(term, _)| term.starts_with(prefix))
+            .filter(|(_, &id)| self.terms[id].live_units > 0)
+            .map(|(term, &id)| (term.as_str(), id))
+            .collect()
+    }
+
+    /// Every live term with its id, in the dictionary's order — the fuzzy
+    /// word's linear candidate scan (§3.2: "The candidate scan is linear over
+    /// the dictionary at v1's scale").
+    pub(crate) fn live_terms(&self) -> impl Iterator<Item = (&str, TermId)> + '_ {
+        self.dictionary
+            .iter()
+            .filter(|(_, &id)| self.terms[id].live_units > 0)
+            .map(|(term, &id)| (term.as_str(), id))
+    }
+
+    /// A term's LIVE posting entries: its occurrences in live units, the
+    /// quantity the two bounds of §3.2 are counted in.
+    pub(crate) fn live_entries(&self, term: TermId) -> usize {
+        self.terms[term]
+            .postings
+            .iter()
+            .filter(|p| self.live(p.unit).is_some())
+            .map(|p| p.occurrences.len())
+            .sum()
+    }
+
+    /// The posting of `term` at `unit`, by binary search over the postings'
+    /// unit-id order; `None` where the unit does not hold the term.
+    pub(crate) fn posting(&self, term: TermId, unit: UnitId) -> Option<&Posting> {
+        let postings = &self.terms[term].postings;
+        postings.binary_search_by_key(&unit, |p| p.unit).ok().map(|at| &postings[at])
     }
 
     /// The tombstone (§5.1): the record becomes `Dead`, its postings stay
@@ -257,13 +326,47 @@ impl Body {
     }
 }
 
+/// A RANGE's PREFIX (`search.md` §1.4's `keys_by_range`; R20: "all versions
+/// of a document are ONE PREFIX — one `under=` range"): the address a
+/// widening named as `under=` — an account's or a document's, or the node's
+/// for the board's whole feed — under which a document lies where the
+/// prefix's tumbler is a prefix of the document's. The crate's own type over
+/// the vocabulary's own test, `skep_address::is_prefix` (T1/T2's order is
+/// prefix-smaller, so the documents under a prefix are one contiguous run
+/// of the keys); the vocabulary has the test and no type for it.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct Prefix(Address);
+
+impl Prefix {
+    /// The prefix of every document under `under`.
+    pub fn new(under: Address) -> Prefix {
+        Prefix(under)
+    }
+
+    /// The address the prefix is.
+    pub fn address(&self) -> &Address {
+        &self.0
+    }
+
+    /// Whether `doc` lies under this prefix.
+    pub fn admits(&self, doc: &Address) -> bool {
+        is_prefix(self.0.tumbler(), doc.tumbler())
+    }
+}
+
+impl fmt::Display for Prefix {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
 /// THE ENGINE, one concrete type (`search.md` §1.4): an index of ONE CLASS —
 /// `Guest` for a published index, `Principal(n)` for `n`'s supplement — the
 /// dictionary, the postings, the unit records, the live counts, and the
 /// tokenizer revision it was made under. The embedder keeps it under a
 /// read-write lock of its own (§5.6): the write side for `merge` and
-/// `install`, the read side for `compacted`, `stats`, `save` and the queries
-/// later lanes add; this crate holds no lock.
+/// `install`, the read side for `compacted`, `stats`, `save`, `query` and
+/// `keys_by_range`; this crate holds no lock.
 #[derive(Debug, Clone)]
 pub struct Index {
     pub(crate) class: Class,
@@ -544,13 +647,32 @@ impl Index {
     /// The dictionary's live membership in its sorted order: every term some
     /// live unit holds, a term held by dead units alone not among them
     /// (§5.1). The structure, for the embedder's and the suite's eyes; the
-    /// query over it is lane SR-3's.
+    /// query over it is `Index::query`.
     pub fn terms(&self) -> impl Iterator<Item = &str> {
+        self.body.live_terms().map(|(term, _)| term)
+    }
+
+    /// THE ONE READ over the index's own unit keys (§1.4; THE ENUMERATOR
+    /// RULED (b): "the crate gains ONE read, keys-by-range, over its own unit
+    /// keys"): the keys held under `range` — the documents under its prefix —
+    /// in the address order, at the cost of one scan of those keys. The keys
+    /// sort in the tumbler order, which is prefix-smaller (T1/T2), so the
+    /// keys under a prefix are one contiguous run of the key map, entered at
+    /// the prefix itself by binary search and left at the first key not under
+    /// it; a tombstoned unit's key is not held, so none is yielded. Its
+    /// callers are the two REFRESHES — §5.4's bare-count refresh and §5.5's
+    /// `opts.reindex`, each re-reading every unit held under a range at its
+    /// own class — and no other; it reads nothing but the keys: never a
+    /// posting, never the stored text, never the shell's document index.
+    pub fn keys_by_range<'a>(
+        &'a self,
+        range: &'a Prefix,
+    ) -> impl Iterator<Item = &'a UnitKey> + 'a {
         self.body
-            .dictionary
-            .iter()
-            .filter(move |(_, &id)| self.body.terms[id].live_units > 0)
-            .map(|(term, _)| term.as_str())
+            .keys
+            .range(UnitKey::new(range.address().clone())..)
+            .map(|(key, _)| key)
+            .take_while(move |key| range.admits(key.doc()))
     }
 }
 

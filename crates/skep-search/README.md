@@ -3,9 +3,11 @@
 The search index a client embeds: one unit per document version's arranged
 content, a tokenizer over UAX #29 word boundaries with the accent,
 apostrophe and format-control folds, an inverted index with positions
-behind one concrete type, and one versioned file per index with its
-dispositions — the reader's own index of a board's text, built from the
-reader's own reads of the feed, the substrate staying search-free.
+behind one concrete type, the one grammar and its evaluator over the pair
+with every bound a flag, BM25 in its pinned form, the hit with its standing
+and snippet, and one versioned file per index with its dispositions — the
+reader's own index of a board's text, built from the reader's own reads of
+the feed, the substrate staying search-free.
 
 Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substrate in the Project Xanadu lineage.
 
@@ -68,7 +70,67 @@ parts, each under the design rule it realizes:
   in dead postings past an eighth of the live; `stats`, the live counts with
   the ceiling and `seen`, the units offered past it; `terms`, the live
   dictionary in order. `IndexError` names the two refusals and a failed
-  save's writer.
+  save's writer. And THE ONE READ over the unit keys, `Index::keys_by_range`
+  (§1.4; the enumerator RULED (b)): the keys held under a `Prefix` — the
+  crate's own type over an account's or a document's address, built on the
+  vocabulary's `is_prefix` — one contiguous scan of the key map in the
+  address order, its callers the two refreshes and no other, reading
+  nothing but the keys.
+- **The query**, `query` (§3.2) — `Query::parse`, THE ONE GRAMMAR: a
+  `Form::Word`; the string's last word a `Form::Prefix` unless whitespace
+  ends the string; a quoted run a `Form::Phrase`, an unclosed quote a
+  `Form::PhrasePrefix`; a split chunk the tokenizer cuts to several tokens
+  (`PUB-5.115`, `search-free`, `東京都`) an implicit phrase, a phrase-prefix
+  at the string's end; several forms a conjunction; no operators. The
+  evaluator over the pair: the term lookup; the prefix expansion over the
+  sorted dictionary by binary search, the terms taken by document frequency
+  descending — the prefix's own term first and always — until the next
+  would pass `EXPANSION_BOUND_ENTRIES`, then `more_terms`; the phrase by
+  adjacent ordinals, never across a `Gap`; the phrase-prefix over the terms
+  that follow the fixed words' occurrences, cut off the stored text, so
+  `"the publish s` finds `shot`; the fuzzy word — a complete word of
+  `FUZZY_MIN_CHARS` or more that is no term, expanded to the terms within
+  one edit counted in characters, at most `FUZZY_WORDS` of them nearest the
+  string's end, the rest as typed with `fuzzy_bounded`, the trailing prefix
+  never fuzzy, `matched` filled; the conjunction walked rarest first under
+  `POSITIONS_BOUND`, every posting consulted counted, a stop answering the
+  units reached ranked with `positions_bounded`. The three bounds are
+  INTERIM pins, constants whose docs quote §7.1 — the two position bounds
+  derived from M2's one-frame pin, the fuzzy words bound its stated three —
+  and EACH IS A FLAG on the answer, never a silent cut.
+- **The ranking**, `rank` (§3.3) — BM25 with `K1 = 1.2` and `B = 0.75`, the
+  idf pinned as written, `ln(1 + (N − df + 0.5)/(df + 0.5))`, positive at
+  every df and floored nowhere; `term_score` as written; one score per
+  query form — a word one term, a phrase one combined term with its words'
+  idf summed, an expansion or a fuzzy word's candidates one combined term
+  over the union of their postings — summed in query order; `Statistics`,
+  the pair's MERGED statistics, N and the tokens over both members, each
+  counted once; `order`, the score descending and ties by document
+  address, member and span start.
+- **The hit**, `hit` (§3.1, §6) — `Hit` with every member the design names:
+  `doc`, `member`, `as_of`, `span` as `Span { start, width }` in V-ordinals
+  byte-exact off the postings' ranges, `score`, `snippet`, `kind`,
+  `standing` — `Standing::Public`, `YoursToRead`, or `Held { kind, rung,
+  issuer }` with `Rung` the range's own shape — `occurrences` and `matched`;
+  `Answer` with `hits`, `total` (exact, or a lower bound where a bound was
+  met), `truncated`, `more_terms`, `fuzzy_bounded`, `positions_bounded`. The
+  `Snippet`: the paragraph window around the span cut from the stored text,
+  bounded to `SNIPPET_BOUND` bytes either side and moved inward to a
+  character boundary, `start` the V-ordinal of its first position, `marks`
+  the `(offset, len, kind)` ranges of the span, of every matched term's
+  occurrence — the term named — and of each `Gap` cut out of the text; a
+  wide conjunction centred on its rarest word.
+- **The pair**, `pair` (§1.4, §5.2) — `Pair { published, supplement,
+  ranges, honored }`, the two indexes BY ROLE and the standing's inputs:
+  the supplement header's `RangeRecord`s and the `Prefix`es the shell's
+  honored set admits — the shell's facts, carried where the shell names
+  what it searches, since the index records nothing of ranges; `Held` is
+  composed from them by prefix arithmetic, the narrowest departed range's
+  cell and issuer, a draft under the subtree's or an honored prefix
+  `YoursToRead`, no read made. `Pair::guest` and `Pair::session`;
+  `QueryOpts { offset, limit }` with `DEFAULT_LIMIT` 50; and
+  `Index::query(pair, &query, &opts) -> Answer`, the one call, evaluated
+  from scratch at every keystroke.
 - **The file**, `header`, `file` and `resume` (§5.1, §5.3, §5.4) — ONE
   VERSIONED FILE PER INDEX, loaded whole. `Header`, the typed header the
   embedder composes and `load` hands back: `board` (`Chain`, the 64
@@ -98,37 +160,46 @@ parts, each under the design rule it realizes:
   fills: `Equal`, `FromTheFloor`, `Diverged`, `BeyondHead`,
   `DifferentChain`, `Busy`. The crate moves no file and reads no board.
 
-The ceiling (`CEILING_BYTES`, §7.4) is an INTERIM PIN at the records tier's
-own size — §7.3's cut re-measured to the byte, 93,075,924 bytes over 3,598
-files at the design repository's `b17656e9` — the floor ITEM 2 RULED (d)
-fixes, held until lane SR-4 reports M1 and M5 over that tier. Its rules —
+The INTERIM PINS, each a constant whose doc quotes the design and each held
+until lane SR-4 reports against it: the ceiling (`CEILING_BYTES`, §7.4) at
+the records tier's own size — §7.3's cut re-measured to the byte,
+93,075,924 bytes over 3,598 files at the design repository's `b17656e9` —
+the floor ITEM 2 RULED (d) fixes, until SR-4 reports M1 and M5 over that
+tier; the expansion's bound (`EXPANSION_BOUND_ENTRIES`, `1 << 16` postings
+entries) and the positions bound (`POSITIONS_BOUND`, `1 << 16` positions),
+each derived from §7.1's M2 pin — one frame, 16 ms, half of it the merge,
+at a pessimistic 100 ns an occurrence, the power of two at or below the
+80,000 that gives — until SR-4 reports them at M2; the fuzzy words bound
+(`FUZZY_WORDS`, 3), the fuzzy word's minimum length (`FUZZY_MIN_CHARS`, 5)
+and the prefix minimum (`PREFIX_MIN_CHARS`, 1), §7.1's own figures; the
+snippet's bound (`SNIPPET_BOUND`, 240 bytes either side), §6's. Its rules —
 one class per index, cut once at `merge`, prepare under no lock and install
-by one swap, nothing of the network, the keys or the board, one file in one
-spelling read whole, no file moved and no board read — are in its crate
-root (`src/lib.rs`) and in the workspace's `ARCHITECTURE.md` §The search
-index. It depends on `skep-address` and the two Unicode crates alone: NOT
-`skepd`, NOT `skep-client`, NOT `serde_json`.
+by one swap, every bound a flag, one score and one order, nothing of the
+network, the keys or the board, one file in one spelling read whole, no
+file moved and no board read — are in its crate root (`src/lib.rs`) and in
+the workspace's `ARCHITECTURE.md` §The search index. It depends on
+`skep-address` and the two Unicode crates alone: NOT `skepd`, NOT
+`skep-client`, NOT `serde_json`.
 
 ## 2. What later lanes add
 
-The surface above is `search.md` §1.4 minus the calls below, which the
-next lanes land against these names:
+The surface above is `search.md` §1.4 whole; what the next lanes land
+against these names:
 
-- **The query and the answer** (§3; lane SR-3) — `Query::parse`, the one
-  grammar; the evaluator (term, prefix expansion over the sorted
-  dictionary, phrase by adjacent ordinals, phrase-prefix, the conjunctive
-  window, the fuzzy word); `rank`, BM25 over one index or the pair's merged
-  statistics; `hit`, `Hit` and `Answer` with the snippet; `Pair`, the two
-  indexes by role; `Index::query`; and THE ONE READ over the keys,
-  `keys_by_range`, whose order `UnitKey` already sorts in.
 - **The budgets, reported** (§7; lane SR-4) — the timing tests over §7.3's
-  corpus, the save and load timed among them, and the ceiling's figure
-  confirmed or raised.
+  corpus: the build, the size, the per-keystroke phrase-prefix at 10⁴ with
+  the expansion's and the positions bound reported beside it, the fuzzy
+  row, the re-index, the memory, the jump's compare, the save and the load
+  timed among them; the ceiling's figure and the two position bounds
+  confirmed or moved.
 - **The shell's half** (`client.md` §4e; lane SH) — the feed consumer; the
   directory, the file modes `0600`/`0700`, the lock, the save's rename and
   the moving aside under `aside_name`; the `/health` and `/chain?at` reads
   whose answers `Resume::judge` takes; the save after a migration; the
-  triggers, the bridge call and the state event, in `skep-client`.
+  triggers, the bridge call that composes the `Pair` from the session's
+  indexes, the supplement's header ranges and the honored set and forwards
+  the answer's flags, the refreshes that walk `keys_by_range`, the jump's
+  landing and the state event, in `skep-client`.
 
 ## 3. The crate's suite
 
@@ -137,19 +208,39 @@ table's binary search, the contiguity refusal, the head rule),
 `token/tests.rs` (the Unicode version pair, the fold's reach and residue,
 the ranges across a gap and a hex stretch), `index/tests.rs` (the postings'
 shape, the tombstone and the live counts, compaction and its trigger, the
-ceiling's arithmetic at a small ceiling, `seen`), `header/tests.rs` (the
-canonical bytes of both kinds, the one spelling both ways, `v` first, every
-re-spelling damaged, the unknown member), `file/tests.rs` (the CRC-32C
-check value, the codecs, the layout, the round trip and the fixed point,
-the trailer over the header line, the newer tokenizer faced with the body
-unread, the class before the body, the migration round trip, a damaged body
-by section, `seen` and the tombstones across a save, the aside, the
-faces), `resume/tests.rs` (one test per arm). The integration suite is one
-binary, `tests/it/`: `cases` — §7.2's twenty-two tokenizer cases, each
-asserting its tokens and its byte range — `index` — the write side under
-the design's fence: the class check, one class per index, the ceiling at
-the real constant, replacement, prepare under no lock and install by one
-swap under an `RwLock` of the test's own, the join of a document of twice
+ceiling's arithmetic at a small ceiling, `seen`, the keys under a prefix),
+`query/tests.rs` (the grammar's forms, each form's evaluation, the fuzzy
+word's edits counted in characters, the three bounds each met at a small
+value with its flag, the list's window, determinism and the tie order),
+`rank/tests.rs` (the idf's pinned form at every df, the term score by
+hand, the merged statistics, the order), `hit/tests.rs` (the rung, the
+tightest window, the paragraph window, the character boundary at the
+bound, the gap cut out and marked, the wide conjunction, the marks'
+order), `pair/tests.rs` (the default opts, the pair by role, the standing
+of each case), `header/tests.rs` (the canonical bytes of both kinds, the
+one spelling both ways, `v` first, every re-spelling damaged, the unknown
+member), `file/tests.rs` (the CRC-32C check value, the codecs, the layout,
+the round trip and the fixed point, the trailer over the header line, the
+newer tokenizer faced with the body unread, the class before the body, the
+migration round trip, a damaged body by section, `seen` and the tombstones
+across a save, the aside, the faces), `resume/tests.rs` (one test per
+arm). The integration suite is one binary, `tests/it/`: `cases` — §7.2's
+twenty-two tokenizer cases, each asserting its tokens and its byte range —
+`grammar` — §7.2's two grammar cases with their byte ranges, the
+phrase-prefix finding `shot`, the implicit phrase and the conjunctive
+window, the fuzzy cases, and each bound met at its REAL constant with its
+flag set — `ranking` — §3.3's vectors: the short unit holding the word
+over the long unit of completions, the first keystroke's union near zero
+and never below, the tie set, the pair's merged statistics counting the
+published member once, the same order twice — `hits` — `Held` across a
+restart off the range's record with its cell's keys, the second honored
+grant, the ancestor's draft, a draft never `Public`, the span's V-ordinals
+with the member and `as_of`, and §6's three snippet cases — `separation`
+— §2.1's class separation by construction, the investigation §4.10 item
+15's vector set — `index` — the write side under the design's fence: the
+class check, one class per index, the ceiling at the real constant,
+replacement, prepare under no lock and install by one swap under an
+`RwLock` of the test's own, the join of a document of twice
 `MAX_DELIVERY_ITEMS` positions with a character across the parts' edge,
 and the range across a `Gap` and a `hex` stretch with the item found by
 binary search — `file` — §8.3's file dispositions at the public surface,

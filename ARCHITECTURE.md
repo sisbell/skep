@@ -601,11 +601,30 @@ head rule `moved_head`, a daughter's row moving no head and an owner's
 boundaries, the fold (NFD, the marks sr-E1 scopes as ITEM 3 amended it,
 the apostrophe variants, the invisible format controls), lowercasing; each
 occurrence's range from the unit's start; the `REVISION` the index
-records. `index` — the inverted index with positions (§1.4, §5.1): the
+records; the rule over one stretch, `segments`, which the query shares.
+`index` — the inverted index with positions (§1.4, §5.1): the
 sorted dictionary, the postings with ordinals and ranges, the unit records
 with their term lists, the tombstones, the live counts; `Index::new`,
 `prepare`, `merge`, `index`, `compacted`, `install`, `compaction_due`,
-`stats`, `terms`; `IndexError`'s refusals; `CEILING_BYTES`. `header` — the
+`stats`, `terms`; `IndexError`'s refusals; `CEILING_BYTES`; and THE ONE
+READ over the unit keys, `Index::keys_by_range` under a `Prefix` — the
+crate's own type over an account's or a document's address — one scan of
+the keys under it, the refreshes' enumerator and nothing else's (RULED
+(b)). `query` — `Query::parse`, the one grammar (§3.2): a word, the trailing
+prefix, a quoted phrase, an unclosed quote's phrase-prefix, a split chunk's
+implicit phrase, the conjunction; the evaluator over the pair — the term
+lookup, the prefix expansion over the sorted dictionary by binary search,
+the phrase by adjacent ordinals, the phrase-prefix over the terms that
+follow the fixed words, the fuzzy word within one edit, the conjunctive
+window — under its three INTERIM pins, `EXPANSION_BOUND_ENTRIES`,
+`POSITIONS_BOUND` and `FUZZY_WORDS`, each a flag on the answer. `rank` —
+BM25 (§3.3): `K1`, `B`, the pinned `idf`, `term_score`, the pair's merged
+`Statistics`, the tie `order`. `hit` — `Hit` and `Answer`, the contract the
+UX designs to (§3.1, §3.5): `Span`, `Standing` with `Rung`, `Matched`, the
+`Snippet` with its `Mark`s (§6), `SNIPPET_BOUND`. `pair` — `Pair`, the two
+indexes by role with the standing's inputs — the supplement's header
+ranges and the honored set's prefixes — `QueryOpts`, `DEFAULT_LIMIT`, and
+`Index::query`, the one call (§1.4, §5.2). `header` — the
 file's header (§5.1): the typed `Header` the embedder composes — `board`
 (a `Chain`), `floor`, the per-range records with `held` as a `ChainAt`
 pair, the refusals, the bare-row count and a granted range's `Grant`, the
@@ -643,6 +662,27 @@ Rules that hold across its files:
   assignment under the write side; the feed thread calls each pair in
   sequence. The crate holds no lock of its own, and every type that
   crosses the embedder's lock is `Send + Sync`, asserted in the library.
+- **Every bound is a flag** (§3.2; PATTERNS P29 as sr-P1 amended it). The
+  expansion's bound in postings entries, the keystroke's positions bound
+  and the fuzzy words bound are INTERIM pins, constants whose docs quote
+  §7.1 — the two position bounds derived from M2's one-frame pin, the fuzzy
+  words bound its stated three; each stops the work where it is met and
+  says so on the `Answer` — `more_terms`, `positions_bounded`,
+  `fuzzy_bounded` — and never cuts silently; `total` is then a lower bound
+  and `truncated` is set. The budgets lane confirms or moves the figures.
+- **One score, one order** (§3.3). BM25's idf in its one pinned form,
+  positive at every df; one score per query form over the pair's MERGED
+  statistics, each member's units counted once (ITEM 4's cut); a higher
+  score the better match; ties by document address, then member, then span
+  start. The same pair and query give the same hits in the same order on
+  every run, and no hash map's seed decides it.
+- **The hit is the contract, the pair names what it searches** (§3.1,
+  §1.4, §5.2). A hit carries every member §3.1 names and no file, path,
+  directory or other principal's index; a draft's hit is never `Public`;
+  `Held` is composed from the range records and the honored prefixes the
+  pair carries — the shell's facts, named at the call — by prefix
+  arithmetic, no read made. The pair's members are passed by role, the
+  guest form's the published index alone.
 - **Nothing of the network, the keys or the board** (§1.3). The
   dependencies are `skep-address` and the two Unicode crates, and nothing
   else — NOT `skepd`, NOT `skep-client`, NOT `serde_json`: the file's one
@@ -665,30 +705,42 @@ Rules that hold across its files:
   `load` take the `Write` and `Read` the embedder hands them; the save's
   rename, the aside's rename and the resume's `/chain?at` and `H.k` reads
   are the shell's. The crate spells the aside's name and judges the resume
-  as a pure function over values the shell hands in.
-- **The surface grows by lane, against these names.** The query, the
-  ranking, the hit, `Pair` and the one read over the keys are the query
-  lane's; §7's timing tests the budgets lane's; the embedding the shell's.
-  The crate's `README.md` lists them.
+  as a pure function over values the shell hands in; the one read over the
+  unit keys reads the keys alone.
+- **The surface grows by lane, against these names.** §7's timing tests
+  are the budgets lane's; the embedding — the feed consumer, the bridge
+  call that composes the pair, the refreshes, the jump's landing — the
+  shell's. The crate's `README.md` lists them.
 
 Its unit suites sit beside their code: `unit/tests.rs` (the join, the item
 table's binary search, the contiguity refusal, the head rule),
 `token/tests.rs` (the Unicode version pair, the fold's reach and its
 residue, the ranges across a gap and a hex stretch), `index/tests.rs` (the
 postings' shape, the tombstone and the live counts, compaction and its
-trigger, the ceiling's arithmetic, `seen`), `header/tests.rs` (the
+trigger, the ceiling's arithmetic, `seen`, the keys under a prefix),
+`query/tests.rs` (the grammar's forms, each form's evaluation, the fuzzy
+edits, the three bounds each met at a small value with its flag, the
+window, determinism), `rank/tests.rs` (the pinned idf, the term score, the
+merged statistics, the order), `hit/tests.rs` (the rung, the tightest
+window, the snippet's cuts, the marks' order), `pair/tests.rs` (the opts,
+the pair by role, the standing of each case), `header/tests.rs` (the
 canonical bytes, the one spelling both ways, `v` first, every re-spelling,
 the unknown member), `file/tests.rs` (the CRC-32C check value, the codecs,
 the layout, the round trip, the trailer over the header line, the
 dispositions in `load`'s order, the migration round trip, a damaged body by
 section) and `resume/tests.rs` (one test per arm). Its integration suite
 is one binary, `tests/it/`: `cases` (§7.2's twenty-two tokenizer cases,
-each with its byte range), `index` (the write side under the design's
-fence: the class check, one class per index, the ceiling at the real
-constant, replacement, the lock split under an `RwLock` of the test's own,
-the join across the parts' edge, the range across a `Gap` and a `hex`
-stretch), `file` (§8.3's file dispositions at the public surface, one test
-each) and `resume` (the open's judgment over a loaded header).
+each with its byte range), `grammar` (§7.2's two grammar cases with their
+byte ranges, §8.3's query items, each bound met at its real constant with
+its flag), `ranking` (§3.3's vectors, the merged statistics, determinism),
+`hits` (the standing across a restart, the span's V-ordinals, §6's snippet
+cases), `separation` (§2.1's class separation by construction), `index`
+(the write side under the design's fence: the class check, one class per
+index, the ceiling at the real constant, replacement, the lock split under
+an `RwLock` of the test's own, the join across the parts' edge, the range
+across a `Gap` and a `hex` stretch), `file` (§8.3's file dispositions at
+the public surface, one test each) and `resume` (the open's judgment over a
+loaded header).
 
 ## The client, `skep-client`
 

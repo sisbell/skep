@@ -262,6 +262,54 @@ fn a_fresh_index_holds_its_class_and_the_running_revision_and_nothing_else() {
     assert!(!index.compaction_due());
 }
 
+/// §1.4 THE ONE READ, RULED (b): the keys under a range — an account's
+/// prefix, a document's own, the node's for the whole board — in the address
+/// order, one contiguous scan; a tombstoned unit's key is not among them,
+/// and the postings and the stored text are never read.
+#[test]
+fn keys_by_range_scans_the_keys_under_a_prefix_in_address_order() {
+    let a = |n: u32| {
+        let t = Tumbler::new([1u32, 0, 1, 0, n].map(Nat::from)).expect("nonempty");
+        UnitKey::new(validate(t).expect("a T4-valid address"))
+    };
+    let b = |n: u32| {
+        let t = Tumbler::new([1u32, 0, 2, 0, n].map(Nat::from)).expect("nonempty");
+        UnitKey::new(validate(t).expect("a T4-valid address"))
+    };
+    let of = |key: &UnitKey| {
+        Unit::new(key.clone(), None, Kind::Edition, Class::Guest, 1, vec![text(1, b"x")])
+            .expect("one extent")
+    };
+    let mut index = Index::new(Class::Guest);
+    for key in [b(2), a(3), a(1), b(1), a(2)] {
+        index.index(of(&key)).expect("admitted");
+    }
+    index.index(of(&a(2))).expect("replaced: its old record a tombstone");
+    let prefix = |comps: &[u32]| {
+        let t = Tumbler::new(comps.iter().map(|&c| Nat::from(c))).expect("nonempty");
+        Prefix::new(validate(t).expect("a T4-valid address"))
+    };
+    let under = |index: &Index, p: &Prefix| index.keys_by_range(p).cloned().collect::<Vec<_>>();
+    assert_eq!(
+        under(&index, &prefix(&[1, 0, 1])),
+        [a(1), a(2), a(3)],
+        "account 1's documents, in order"
+    );
+    assert_eq!(under(&index, &prefix(&[1, 0, 2])), [b(1), b(2)]);
+    assert_eq!(under(&index, &prefix(&[1, 0, 1, 0, 2])), [a(2)], "a document's own prefix: itself");
+    assert_eq!(under(&index, &prefix(&[1, 0, 3])), [], "an account holding nothing");
+    assert_eq!(under(&index, &prefix(&[1])), [a(1), a(2), a(3), b(1), b(2)], "the node: every key");
+    assert!(prefix(&[1, 0, 1]).admits(a(3).doc()) && !prefix(&[1, 0, 1]).admits(b(1).doc()));
+    index.index(of(&a(3))).expect("replaced");
+    let compacted = index.compacted();
+    index.install(compacted);
+    assert_eq!(
+        under(&index, &prefix(&[1, 0, 1])),
+        [a(1), a(2), a(3)],
+        "the same keys after compaction"
+    );
+}
+
 /// The refusals render what the design says they name.
 #[test]
 fn the_refusals_display_both_classes_and_the_bytes_held_against_the_limit() {

@@ -17,9 +17,10 @@
 //! U+0027, a second fold — then every code point inside a segment that is
 //! BOTH Default_Ignorable_Code_Point AND of general category Cf, the
 //! invisible FORMAT CONTROLS, DROPPED, a third fold — then LOWERCASED by
-//! `str::to_lowercase`. The SAME rule runs over the query (lane SR-3), so a
-//! person without accents on their keyboard finds `Émile` by `emile` as an
-//! EXACT hit.
+//! `str::to_lowercase`. The SAME rule runs over the query — [`segments`] is
+//! the rule over one stretch, and `Query::parse` cuts the query string with
+//! it — so a person without accents on their keyboard finds `Émile` by
+//! `emile` as an EXACT hit.
 //!
 //! What the folding does NOT do, stated (§2.3): `ß`, `ø`, `ł` and the
 //! Turkish dotless `ı` have no combining mark to drop and stay; a ligature
@@ -182,17 +183,54 @@ pub fn fold(segment: &str) -> String {
     folded.to_lowercase()
 }
 
+/// One segment the rule keeps (§2.3), cut from a stretch of text with no
+/// unit around it: its TERM — the segment folded and lowercased — and its
+/// range in the stretch, the byte offset of its first byte and its length,
+/// the UNFOLDED segment's.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Segment {
+    /// The folded, lowercased term.
+    pub term: String,
+    /// The byte offset of the segment's first byte in the stretch.
+    pub offset: usize,
+    /// The segment's length in bytes, unfolded.
+    pub len: usize,
+}
+
+/// THE RULE over one stretch of valid UTF-8 (§2.3; §3.2: "The SAME rule runs
+/// over the query"): the stretch's UAX #29 word segments in order, each
+/// folded by [`fold`], and kept only where its FOLDED term holds an
+/// alphanumeric character — a whitespace or punctuation segment is dropped,
+/// and so is a segment of optional marks alone, which the segmenter attaches
+/// to the space before it (WB4) and the fold empties. Three callers and no
+/// other cutting: [`tokenize`] runs it over every valid stretch of every
+/// text item, placing each segment at its ordinal and its range from the
+/// unit's start; the query grammar (`Query::parse`) runs it over the query
+/// string, so a query word is the term the text's word is; and a
+/// phrase-prefix's candidate cut runs it over the stored text at a fixed
+/// occurrence's end, "one token cut there" (§3.2).
+pub fn segments(text: &str) -> impl Iterator<Item = Segment> + '_ {
+    text.unicode_word_indices().filter_map(|(offset, segment)| {
+        let term = fold(segment);
+        term.chars().any(char::is_alphanumeric).then(|| Segment {
+            term,
+            offset,
+            len: segment.len(),
+        })
+    })
+}
+
 /// The unit's tokens in order (§2.3): per text item, the valid UTF-8
-/// stretches segmented at UAX #29 word boundaries, each segment holding an
-/// alphanumeric character folded to its term and placed at its range from
-/// the unit's start; the ordinal advanced by one across every `Gap` and
-/// every invalid byte, so no phrase crosses either. A segment whose FOLDED
-/// term holds no alphanumeric character is no token and takes no ordinal:
-/// the segmenter attaches a stray optional mark to the space before it (UAX
-/// #29's WB4) and counts the mark as alphabetic, and the fold then drops it,
-/// leaving the whitespace segment the rule drops. Built against no index,
-/// under no lock (§5.6): `Index::prepare` calls this and nothing else does
-/// the cutting.
+/// stretches cut by [`segments`] — UAX #29 word boundaries, each segment
+/// holding an alphanumeric character folded to its term — and placed at
+/// their range from the unit's start; the ordinal advanced by one across
+/// every `Gap` and every invalid byte, so no phrase crosses either. A
+/// segment whose FOLDED term holds no alphanumeric character is no token and
+/// takes no ordinal: the segmenter attaches a stray optional mark to the
+/// space before it (UAX #29's WB4) and counts the mark as alphabetic, and
+/// the fold then drops it, leaving the whitespace segment the rule drops.
+/// Built against no index, under no lock (§5.6): `Index::prepare` calls this
+/// and nothing else does the cutting.
 pub fn tokenize(unit: &Unit) -> Vec<Token> {
     let mut tokens = Vec::new();
     let mut ordinal: u32 = 0;
@@ -204,16 +242,12 @@ pub fn tokenize(unit: &Unit) -> Vec<Token> {
                 let mut at = 0usize;
                 for chunk in bytes.utf8_chunks() {
                     let valid = chunk.valid();
-                    for (offset, segment) in valid.unicode_word_indices() {
-                        let term = fold(segment);
-                        if !term.chars().any(char::is_alphanumeric) {
-                            continue;
-                        }
+                    for segment in segments(valid) {
                         tokens.push(Token {
-                            term,
+                            term: segment.term,
                             ordinal,
-                            offset: base + (at + offset) as u64,
-                            len: u32::try_from(segment.len())
+                            offset: base + (at + segment.offset) as u64,
+                            len: u32::try_from(segment.len)
                                 .expect("a word segment past 4 GiB is beyond the ceiling's reach"),
                         });
                         ordinal = next(ordinal, 1);

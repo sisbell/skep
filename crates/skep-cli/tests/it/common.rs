@@ -1,10 +1,11 @@
 //! The fixture: a daemon in-process (skepd's spawn pattern) — alone, or
-//! behind a [`Tap`] that keeps what a client put on the wire — and the built
-//! `skep` binary run with its environment scrubbed of every `SKEP_*`
-//! variable and of `HOME`, stdin fed, stdout and stderr captured — or one of
-//! them closed, its reader gone before the run writes, or all three a
-//! pseudo-terminal; and [`tree`], a directory's state, for the commands that
-//! write nothing.
+//! behind a [`Tap`] that keeps what a client put on the wire — or a
+//! [`canned`] board that answers every request with the bytes a test
+//! chose; the built `skep` binary run with its environment scrubbed of every
+//! `SKEP_*` variable and of `HOME`, stdin fed, stdout and stderr captured —
+//! or one of them closed, its reader gone before the run writes, or all
+//! three a pseudo-terminal; and [`tree`], a directory's state, for the
+//! commands that write nothing.
 
 #![allow(dead_code)]
 
@@ -139,6 +140,46 @@ pub fn spawn_tapped(dir: &Path) -> (Skepd, Tap) {
         }
     });
     (sd, Tap { origin: tapped, sent })
+}
+
+/// A board that is no daemon: every request it is sent answered with
+/// `status` and `body` whole, one connection per request — the request read
+/// through its head and the body its `Content-Length` declares first, so
+/// the client's write never meets a reset. Answers its origin. What a
+/// hostile board can say, a test says through it.
+pub fn canned(status: u16, body: &'static [u8]) -> String {
+    let listener = TcpListener::bind(("127.0.0.1", 0)).expect("the canned board's port");
+    let at = origin(listener.local_addr().expect("the canned board's address").port());
+    std::thread::spawn(move || {
+        for conn in listener.incoming() {
+            let Ok(mut conn) = conn else { continue };
+            let (mut seen, mut buf) = (Vec::new(), [0u8; 8192]);
+            let body_at = loop {
+                if let Some(end) = seen.windows(4).position(|w| w == b"\r\n\r\n") {
+                    break Some(end + 4);
+                }
+                match conn.read(&mut buf) {
+                    Ok(n @ 1..) => seen.extend_from_slice(&buf[..n]),
+                    _ => break None,
+                }
+            };
+            let Some(body_at) = body_at else { continue };
+            let head = String::from_utf8_lossy(&seen[..body_at]).into_owned();
+            let declared: usize =
+                head.lines().find_map(|l| l.split_once(':').filter(|(name, _)| name.eq_ignore_ascii_case("content-length")).and_then(|(_, n)| n.trim().parse().ok())).unwrap_or(0);
+            let mut read = seen.len() - body_at;
+            while read < declared {
+                match conn.read(&mut buf) {
+                    Ok(n @ 1..) => read += n,
+                    _ => break,
+                }
+            }
+            let answer = format!("HTTP/1.1 {status} canned\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", body.len());
+            let _ = conn.write_all(answer.as_bytes()).and_then(|()| conn.write_all(body));
+            let _ = conn.shutdown(Shutdown::Write);
+        }
+    });
+    at
 }
 
 /// A path as the `&str` an argv takes.

@@ -6,17 +6,19 @@
 //! sequence the library's compositions themselves rather than calling a
 //! walk.
 
+use std::fmt;
+
 use skep_client::board::{Board, Scope};
 use skep_client::ceremony::first_session::{first_session, FirstSessionReads};
 use skep_client::ceremony::handshake::{handshake, key_face, Site};
 use skep_client::derive::{origin_arm, principal_of, walk_to_set};
 use skep_client::dial::plaintext_non_loopback_warning;
 use skep_client::halt::Halt;
-use skep_client::sheet::Facts;
+use skep_client::sheet::{render_inert, Facts};
 use skep_client::store::{Binding, KeySelector, KeyStore, Purpose};
 
 use super::{board_of, compare_genesis, data, facts, held_device, held_set, read_payload, select_key, store_of, talk, Stop};
-use crate::args::CommandLine;
+use crate::args::{principal_text, CommandLine, MAX_PRINCIPAL};
 use crate::terminal::answer;
 
 /// Who printed the reply `bind` lands, and so the one party that can print
@@ -32,33 +34,39 @@ const REPLY_SENDER: &str = "whoever printed the reply — the enrolling device, 
 /// `origin …`), as `enroll`, `rotate`, `handoff` and `claim --hosted` print
 /// them — or, for an account neither names, a line pasted at the prompt;
 /// the origin the one this command dials, a reply naming another halting.
-/// `given` is `CommandLine::principal`'s answer; a reply's principal line
-/// that is no principal halts, never standing as one not given.
+/// The reply is recognized whole before a fact is taken from it: each line
+/// shows as it reads ([`shows_as_it_reads`]), a line naming a fact is that
+/// fact and one value ([`fact_line`]), and a fact named twice names one
+/// value ([`agree`]) — so what `bind` lands is what the person's screen
+/// showed, never a line it hid nor the last of two. `given` is
+/// `CommandLine::principal`'s answer, and a fact the reply names against it,
+/// or against `--account`, halts as a second line would; a reply's
+/// principal line that is no principal halts, never standing as one not
+/// given.
 fn facts_of(c: &CommandLine, board: &Board, given: Option<u64>) -> Result<Facts, Halt> {
     let mut account = c.value("--account").map(str::to_owned);
     let mut principal = given;
     if let Some(arg) = c.value("--payload") {
         let bytes = read_payload(arg)?;
         for line in String::from_utf8_lossy(&bytes).lines() {
-            let mut parts = line.split_whitespace();
-            match (parts.next(), parts.next()) {
-                (Some("account"), Some(a)) => account = Some(a.to_string()),
-                (Some("principal"), Some(p)) => {
-                    let n = p.parse().map_err(|_| {
+            let Some((fact, value)) = fact_line(line)? else { continue };
+            match fact {
+                Fact::Account => account = Some(agree("account", account.take(), value.to_string())?),
+                Fact::Principal => {
+                    let n = principal_text(value).ok_or_else(|| {
                         Halt::face(
-                            format!("the reply's principal line `{p}` is not a principal"),
-                            "a principal is a non-negative integer, as the reply prints it",
+                            format!("the reply's principal line `{value}` is not a principal"),
+                            format!("a principal is a non-negative integer no greater than {MAX_PRINCIPAL} (AUTH-6.36), as the reply prints it"),
                             format!("re-take the three facts from {REPLY_SENDER}"),
                         )
                     })?;
-                    principal = Some(n);
+                    principal = Some(agree("principal", principal, n)?);
                 }
-                (Some("origin"), Some(o)) => {
-                    if o != board.dialed().as_str() {
-                        return Err(Halt::face(format!("the reply names origin {o} and this command dials {}", board.dialed()), "the reply came from another board", "dial the board the reply names"));
+                Fact::Origin => {
+                    if value != board.dialed().as_str() {
+                        return Err(Halt::face(format!("the reply names origin {value} and this command dials {}", board.dialed()), "the reply came from another board", "dial the board the reply names"));
                     }
                 }
-                _ => {}
             }
         }
     }
@@ -75,6 +83,71 @@ fn facts_of(c: &CommandLine, board: &Board, given: Option<u64>) -> Result<Facts,
         return Err(Halt::face(format!("`{account}` is not an account address"), "an address is dotted decimal", "pass --account <address>"));
     }
     Ok(Facts { account, principal, origin: board.dialed().clone() })
+}
+
+/// One of the three facts a reply names, by the word its line opens with.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Fact {
+    Account,
+    Principal,
+    Origin,
+}
+
+impl Fact {
+    /// The fact `word` names, if it names one.
+    fn named(word: &str) -> Option<Fact> {
+        match word {
+            "account" => Some(Fact::Account),
+            "principal" => Some(Fact::Principal),
+            "origin" => Some(Fact::Origin),
+            _ => None,
+        }
+    }
+}
+
+/// The fact a reply's line names, and its value: `None` for a line that
+/// names none — the hosted reply's claimant and its two acts among them —
+/// and a halt for a line that shows other than it reads, or that opens with
+/// a fact's name and is not exactly that name and one value.
+fn fact_line(line: &str) -> Result<Option<(Fact, &str)>, Halt> {
+    if !shows_as_it_reads(line) {
+        return Err(Halt::face(
+            format!("the reply's line `{line}` holds a character a screen does not show as it reads"),
+            "a control character or a bidi control moves the cursor, erases or reorders a line, so a screen can show a reply other than the one `bind` reads: the reply is refused whole",
+            format!("re-take the three facts from {REPLY_SENDER}"),
+        ));
+    }
+    let mut words = line.split_whitespace();
+    let Some(fact) = words.next().and_then(Fact::named) else { return Ok(None) };
+    match (words.next(), words.next()) {
+        (Some(value), None) => Ok(Some((fact, value))),
+        _ => Err(Halt::face(
+            format!("the reply's line `{line}` is not one fact"),
+            "a line that opens with a fact's name — `account`, `principal`, `origin` — names that fact and one value, as the reply prints it",
+            format!("re-take the three facts from {REPLY_SENDER}"),
+        )),
+    }
+}
+
+/// Whether `line` shows as it reads: no control character (C0, DEL, C1)
+/// and nothing AUTH-5.2's rendering disarms (a bidi control) — the screen's
+/// reading of it and `bind`'s are one.
+fn shows_as_it_reads(line: &str) -> bool {
+    !line.contains(char::is_control) && render_inert(line) == line
+}
+
+/// A fact the reply names beside one already named — by its flag or an
+/// earlier line: the same value stands; another halts naming both, never
+/// the last one read (the person reads one line; `bind` lands one fact).
+fn agree<T: PartialEq + fmt::Display>(fact: &str, named: Option<T>, read: T) -> Result<T, Halt> {
+    match named {
+        Some(named) if named != read => Err(Halt::face(
+            format!("the reply names {fact} {read}, and {fact} {named} is already named — by its flag or an earlier line"),
+            "a fact is named once: two values for it are two replies, and `bind` lands neither",
+            format!("re-take the three facts from {REPLY_SENDER}"),
+        )),
+        _ => Ok(read),
+    }
 }
 
 /// Which landing this is, where no `--anchor` says (§2.2 `bind`): THE PERSON

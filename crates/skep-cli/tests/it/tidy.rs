@@ -24,11 +24,15 @@
 //! a write stdout refuses with a halt. What reaches stdout is then audited
 //! at their call sites alone.
 //!
-//! STDERR CARRIES TALK. Every `stderr(` handle under `src/` sits in one of
-//! the [`STDERR_WRITERS`]: `talk`, the one line writer — every statement,
-//! prompt heading, command's TALK and halt — and `show`, a prompt's text,
-//! the sheet's box and the dismissal's clear, both dropping a write stderr
-//! refuses; and `has_terminal`, which writes nothing.
+//! STDERR CARRIES TALK, INERT. Every `stderr(` handle under `src/` sits in
+//! one of the [`STDERR_WRITERS`]: `write_inert`, which every line and prompt
+//! passes — `talk`'s, every statement, prompt heading, command's TALK and
+//! halt, and `show`'s, a prompt's text and the sheet's box — rendering it
+//! inert (AUTH-5.2's `render_inert`, line by line) before stderr is handed
+//! a byte; `clear`, the dismissal's escape, a constant; and
+//! `has_terminal`, which writes nothing. Both writers drop a write stderr
+//! refuses. So no byte a board, a reply or a file chose reaches the
+//! terminal as a command.
 //!
 //! A PROMPT HOLDS STDIN FOR ONE LINE. Every touch of stdin under `src/` — a
 //! `stdin(` handle — sits in one of the [`STDIN_READERS`]: `answer`, the one
@@ -62,7 +66,7 @@ const STDOUT_WRITERS: &[(&str, &str)] = &[("commands.rs", "data"), ("commands.rs
 
 /// The functions that may take a stderr handle: a file under `src/` and
 /// the column-0 function in it.
-const STDERR_WRITERS: &[(&str, &str)] = &[("terminal.rs", "has_terminal"), ("terminal.rs", "talk"), ("terminal.rs", "show")];
+const STDERR_WRITERS: &[(&str, &str)] = &[("terminal.rs", "has_terminal"), ("terminal.rs", "write_inert"), ("terminal.rs", "clear")];
 
 /// The functions that may touch stdin: a file under `src/` and the
 /// column-0 function in it.
@@ -158,12 +162,13 @@ fn stdout_is_written_by_the_two_writers_alone() {
 }
 
 #[test]
-fn stderr_is_written_by_talk_and_show_alone() {
+fn stderr_is_written_inert_by_write_inert_and_clear_alone() {
     confined(
         writes_stderr,
         STDERR_WRITERS,
         "takes a stderr handle",
-        "stderr carries TALK through `talk` and the terminal's `show`, each dropping a write stderr refuses rather than panic",
+        "what reaches the terminal is inert: say a line through `talk` and show a prompt or the sheet through `show`, each passing \
+         `write_inert`, which renders it by `render_inert`; `clear` alone writes an escape, a constant",
     );
 }
 

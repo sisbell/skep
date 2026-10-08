@@ -28,6 +28,10 @@ impl Desk for Script {
     fn show(&mut self, text: &str) {
         self.said.push(text.to_string());
     }
+
+    fn clear(&mut self) {
+        self.said.push(CLEAR.to_string());
+    }
 }
 
 fn question(text: &str) -> Question {
@@ -41,6 +45,19 @@ const TYPED_SEED: &str = "0E0E0E0E 0e0e0e0e 0e0e0e0e 0e0e0e0e  0e0e0e0e 0e0e0e0e
 
 fn received_seed() -> String {
     format!("0E0E0E0E{}", "0e0e0e0e".repeat(7))
+}
+
+/// What the terminal is handed is INERT (AUTH-5.2): an escape, a carriage
+/// return, a bell and a bidi control each shown as its code point, the line
+/// breaks kept; the box's rules and its padding pass whole; and a text
+/// rendered once passes as it stands, so a label a walk rendered already
+/// is never rendered into another spelling.
+#[test]
+fn every_line_the_terminal_is_handed_is_inert() {
+    assert_eq!(inert("a\x1b[2Jb\rc\nd\u{202e}e\x07"), "a<U+001B>[2Jb<U+000D>c\nd<U+202E>e<U+0007>");
+    let ruled = boxed(&["the seed".into(), "é—".into()]);
+    assert_eq!(inert(&ruled), ruled, "the box passes whole");
+    assert_eq!(inert(&inert("\x1b]52;c;cHduZWQ=\x07")), inert("\x1b]52;c;cHduZWQ=\x07"), "rendered twice, the same");
 }
 
 /// Every line of the box is padded to the widest, measured in chars: a

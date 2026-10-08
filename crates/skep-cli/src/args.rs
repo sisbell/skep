@@ -303,13 +303,28 @@ impl CommandLine {
         Ok(self.setting("--key", "SKEP_KEY")?.map(PathBuf::from))
     }
 
-    /// `--principal` / `SKEP_PRINCIPAL`.
+    /// `--principal` / `SKEP_PRINCIPAL`, read by [`principal_text`].
     pub fn principal(&self) -> Result<Option<u64>, Usage> {
         match self.setting("--principal", "SKEP_PRINCIPAL")? {
             None => Ok(None),
-            Some(v) => v.parse::<u64>().map(Some).map_err(|_| Usage(format!("--principal: '{v}' is not a principal (a non-negative integer)"))),
+            Some(v) => principal_text(&v).map(Some).ok_or_else(|| Usage(format!("--principal: '{v}' is not a principal (a non-negative integer no greater than {MAX_PRINCIPAL})"))),
         }
     }
+}
+
+/// The largest principal a board registers and a client can say back:
+/// `2^53 − 1`, the top of the range a JSON number carries EXACTLY (AUTH-6.36's
+/// clause) — the bound the library mints under (AUTH-5.20) and reads a key
+/// file's `principal` member under. Past it, on a board that seated the id
+/// anyway, the anchor files a claim writes for it could never be read back,
+/// while the board showed a healthy account.
+pub const MAX_PRINCIPAL: u64 = (1 << 53) - 1;
+
+/// A principal as text — the one grammar of it, at the flag, its variable
+/// and a reply's `principal` line: a non-negative integer no greater than
+/// [`MAX_PRINCIPAL`], else `None`.
+pub fn principal_text(text: &str) -> Option<u64> {
+    text.parse::<u64>().ok().filter(|n| *n <= MAX_PRINCIPAL)
 }
 
 /// `SKEP_SESSION`, the token `session --close -` ends in place of stdin —
@@ -370,6 +385,20 @@ mod tests {
         let Parsed::Command(c) = parse(argv(&["accept", "--board", "http://127.0.0.1:8642", "--principal", "7"])).unwrap() else { panic!() };
         assert_eq!(c.origin_given().unwrap().map(|o| o.as_str().to_string()), Some("http://127.0.0.1:8642".to_string()));
         assert_eq!(c.principal().unwrap(), Some(7));
+    }
+
+    /// A principal is an integer JSON carries exactly (AUTH-6.36): `2^53 − 1`
+    /// reads, `2^53` and anything not an integer are none — at the flag as
+    /// in a reply, through the one grammar.
+    #[test]
+    fn a_principal_past_the_wires_range_is_none() {
+        assert_eq!(principal_text("9007199254740991"), Some(MAX_PRINCIPAL));
+        assert_eq!(principal_text("0"), Some(0));
+        for none in ["9007199254740992", "18446744073709551615", "-1", "7x", ""] {
+            assert_eq!(principal_text(none), None, "`{none}`");
+        }
+        let Parsed::Command(c) = parse(argv(&["verify", "--principal", "9007199254740992"])).unwrap() else { panic!() };
+        assert!(c.principal().is_err(), "past the range at the flag is a usage refusal, never read as one not given");
     }
 
     /// THE GRAMMAR: a flag of another command's is refused naming the

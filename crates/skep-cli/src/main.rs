@@ -20,8 +20,9 @@
 // flag beating its environment variable.
 mod args;
 // The `Person` over the terminal: `answer`, the one reader every prompt
-// goes through, `talk`, the one writer of a line on stderr, the sheet's
-// box, and the controlling-terminal check the person doors make.
+// goes through, `talk`, the one writer of a line on stderr, rendering it
+// inert, the sheet's box, and the controlling-terminal check the person
+// doors make.
 mod terminal;
 // The thirteen commands, one file each beneath it, and what they share:
 // DATA's writers, the stops and their exit codes, the three facts'

@@ -14,36 +14,72 @@
 //! prompt the CLI makes is read through `answer`, those a command that is
 //! no person door asks among them, so none reaches stdout. Every line the
 //! binary says on stderr — a statement, a prompt's heading, a command's
-//! TALK, a halt — is written by `talk`, and a prompt's text, the sheet and
-//! the clear by `show`, each dropping a write stderr refuses rather than
-//! panic.
+//! TALK, a halt — is written by `talk`, and a prompt's text and the sheet
+//! by `show`, each through `write_inert`, which renders its text INERT
+//! ([`inert`], AUTH-5.2's rendering line by line) before stderr is handed
+//! a byte: a byte a board, a reply or a file chose — an escape that moves
+//! the cursor, erases a line, sets the title or the clipboard, or asks the
+//! terminal to type an answer into stdin — reaches the screen as its code
+//! point and never as a command. The dismissal's clear, the one escape this
+//! binary means, is `clear`'s constant, written raw. Both writers drop a
+//! write stderr refuses rather than panic.
 
 use std::fmt;
 use std::io::{self, IsTerminal, Write};
 use std::path::PathBuf;
 
 use skep_client::person::{Abandoned, Confirmation, Consent, Destination, HandedPath, Import, Imported, KeptOrPlaced, LabelBox, Person, Public, Question, Retype, Retyped, Secret, Sheet, Statement};
+use skep_client::sheet::render_inert;
+
+/// The one escape sequence this binary means: the dismissal's clear of the
+/// screen and its scrollback (§5.2; §4.2 step 6) — a constant, never a
+/// foreign byte.
+const CLEAR: &str = "\x1b[2J\x1b[3J\x1b[H";
 
 /// Whether a controlling terminal stands at both ends of a prompt.
 pub fn has_terminal() -> bool {
     io::stdin().is_terminal() && io::stderr().is_terminal()
 }
 
-/// TALK (§2.4): one line on stderr — a moment's statement or heading, the
-/// reason an answer is asked again, a command's talk, a halt's block — the
-/// one line writer the binary has. A line stderr refuses is dropped, never
-/// a panic, whose exit 101 §2.3 does not have: the exit code, or the
-/// answer read next, carries the outcome.
-pub fn talk(line: impl fmt::Display) {
-    let _ = writeln!(io::stderr().lock(), "{line}");
+/// `text` as the terminal may be handed it: each line rendered INERT by
+/// AUTH-5.2's rendering (`render_inert`: every C0 control, DEL and bidi
+/// control shown as its code point), the line breaks kept — the one thing a
+/// TALK block's own text holds that the rendering would otherwise touch.
+/// Rendered twice, the same: the rendering's output holds nothing it
+/// renders, so a label a walk rendered already passes as it stands.
+fn inert(text: &str) -> String {
+    text.split('\n').map(render_inert).collect::<Vec<_>>().join("\n")
 }
 
-/// `text` on stderr as it stands, flushed — a prompt its answer follows on
-/// the same line, the sheet's box, the dismissal's clear — dropped where
-/// stderr refuses it, as [`talk`]'s line is.
+/// TALK (§2.4): one line on stderr, through [`write_inert`] — a moment's
+/// statement or heading, the reason an answer is asked again, a command's
+/// talk, a halt's block — the one line writer the binary has. A line stderr
+/// refuses is dropped, never a panic, whose exit 101 §2.3 does not have:
+/// the exit code, or the answer read next, carries the outcome.
+pub fn talk(line: impl fmt::Display) {
+    write_inert(&format!("{line}\n"));
+}
+
+/// `text` on stderr, through [`write_inert`] — a prompt its answer follows
+/// on the same line, the sheet's box.
 fn show(text: &str) {
+    write_inert(text);
+}
+
+/// `text` on stderr rendered [`inert`], flushed — the door every line and
+/// prompt passes, so no caller hands stderr a byte the rendering has not
+/// seen; dropped where stderr refuses it, never a panic.
+fn write_inert(text: &str) {
     let mut err = io::stderr().lock();
-    let _ = err.write_all(text.as_bytes()).and_then(|()| err.flush());
+    let _ = err.write_all(inert(text).as_bytes()).and_then(|()| err.flush());
+}
+
+/// The dismissal's clear on stderr, flushed: [`CLEAR`], the one escape this
+/// binary writes and its one write past [`write_inert`] — dropped where
+/// stderr refuses it.
+fn clear() {
+    let mut err = io::stderr().lock();
+    let _ = err.write_all(CLEAR.as_bytes()).and_then(|()| err.flush());
 }
 
 /// `prompt` on stderr, then one answer read from stdin: the line without its
@@ -68,12 +104,15 @@ trait Desk {
     fn answer(&mut self, prompt: &str) -> Result<String, Abandoned>;
     /// One line said.
     fn talk(&mut self, line: &str);
-    /// `text` shown as it stands.
+    /// `text` shown — a prompt's or the sheet's.
     fn show(&mut self, text: &str);
+    /// The screen and its scrollback cleared (§5.2; §4.2 step 6).
+    fn clear(&mut self);
 }
 
 /// The terminal person. It holds nothing: every moment is said on stderr
-/// and answered from stdin, through [`talk`], [`show`] and [`answer`].
+/// and answered from stdin, through [`talk`], [`show`], [`clear`] and
+/// [`answer`].
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Terminal;
 
@@ -88,6 +127,10 @@ impl Desk for Terminal {
 
     fn show(&mut self, text: &str) {
         show(text);
+    }
+
+    fn clear(&mut self) {
+        clear();
     }
 }
 
@@ -267,7 +310,7 @@ mod moment {
     /// The dismissal: the screen and its scrollback cleared (§5.2; §4.2
     /// step 6).
     pub fn dismiss(desk: &mut impl Desk) {
-        desk.show("\x1b[2J\x1b[3J\x1b[H");
+        desk.clear();
     }
 
     /// The re-type from the print (AUTH-5.41): the seed, an empty one

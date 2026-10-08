@@ -19,7 +19,7 @@ use skep_client::sheet::{group_hex, Label};
 use skep_client::store::{KeySelector, KeyStore, Purpose};
 use skep_identity::{encode_enroll, Enrollment};
 
-use super::{data, host_name_and_date, person_door, store_of, talk, BoxDefault, Door, Stop, OUTSTANDING_ACT};
+use super::{data, host_name_and_date, person_door, record_refused, store_of, talk, BoxDefault, Door, Stop, OUTSTANDING_ACT};
 use crate::args::CommandLine;
 use crate::terminal::Terminal;
 
@@ -111,10 +111,10 @@ pub fn keygen(c: &CommandLine) -> Result<(), Stop> {
             talk("this form delegates nothing and leaves no board state behind: any anchor file written names no account and opens nothing, ever — destroy it, or keep it plainly marked dead and never beside a live pair");
         })?;
         for a in &outcome.anchors {
-            entries.push(Enrollment::new(a.public.clone(), true, Some(a.label.as_str().to_string())).expect("a label the box admitted"));
+            entries.push(Enrollment::new(a.public.clone(), true, Some(a.label.as_str().to_string())).map_err(record_refused)?);
         }
     }
-    entries.push(Enrollment::new(key.public.clone(), false, Some(label.as_str().to_string())).expect("a label the box admitted"));
+    entries.push(Enrollment::new(key.public.clone(), false, Some(label.as_str().to_string())).map_err(record_refused)?);
     if c.switch("--payload") || door_side {
         // The record FIRST (§2.2): one canonical JSON object.
         data(encode_enroll(&entries))?;
@@ -126,8 +126,11 @@ pub fn keygen(c: &CommandLine) -> Result<(), Stop> {
             talk(format!("this key is not enrolled anywhere yet. {OUTSTANDING_ACT} Where no board has been claimed from this store at all: `skep claim`."));
         }
     }
-    // The fingerprint LAST, flat and grouped — never the bare public key.
+    // The fingerprint LAST, flat and grouped — never the bare public key —
+    // each line its own DATA line.
     data(key.fingerprint.to_hex())?;
-    data(group_hex(&key.fingerprint.to_hex()))?;
+    for line in group_hex(&key.fingerprint.to_hex()).lines() {
+        data(line)?;
+    }
     Ok(())
 }

@@ -881,16 +881,19 @@ them, each naming only those above it:
   lines and reads its answers, which the `Terminal` is over the std streams
   and the module's unit tests over a script; `has_terminal`, the person
   doors' check; `talk`, the one writer of a line on stderr — the prompts'
-  headings, every command's TALK and its halt; and `answer`, the one
-  reader every prompt goes through, stdin locked for that one line alone —
-  the `Terminal`'s, and those of `bind`, which is no person door: its
-  account paste and its landing question.
-- `commands.rs` what the commands share: DATA's writers (`data`,
-  `data_verbatim`), the stops and their exit codes (`Stop` — a usage
-  refusal, or a member of the halt family, a person door reached without
-  a terminal among its halts — which `exit_code` renders; `person_door`,
-  the check each `Door` makes; `help`, `--help`'s DATA), the plumbing
-  from the flags to a board, a store, a payload, a principal and a key,
+  headings, every command's TALK and its halt — and `show`, a prompt's
+  text and the sheet, each through `write_inert`, which renders its text
+  inert before stderr sees it, and `clear`, the dismissal's one escape;
+  and `answer`, the one reader every prompt goes through, stdin locked for
+  that one line alone — the `Terminal`'s, and those of `bind`, which is no
+  person door: its account paste and its landing question.
+- `commands.rs` what the commands share: DATA's writers (`data`, its line
+  rendered by `data_text`, and `data_verbatim`), the stops and their exit
+  codes (`Stop` — a usage refusal, or a member of the halt family, a
+  person door reached without a terminal among its halts — which
+  `exit_code` renders; `person_door`, the check each `Door` makes; `help`,
+  `--help`'s DATA), the plumbing from the flags to a board, a store, a
+  payload (`read_payload`, to `PAYLOAD_CAP`), a principal and a key,
   the anchor boxes' per-run default (`BoxDefault`), the three facts' one
   spelling (`facts`, the lines `bind` reads back from a reply), the
   outstanding-act line `keygen` and `fingerprint` share, and the
@@ -905,10 +908,28 @@ Rules that hold across its files:
   `data_verbatim` write to stdout, `--help`'s text among it, and a write
   stdout refuses is a halt (exit 3) naming the refusal; every prompt,
   warning and halt goes to stderr through `talk` or the terminal's
-  `show`, which drop a write stderr refuses. No std print macro — each
-  panics on a write its stream refuses, an exit 101 §2.3 does not have —
-  stands in `src/`. `tests/it/tidy.rs` checks it, and `tests/it/cli.rs`
-  runs a command whose stdout has no reader, and one whose stderr has none.
+  `show`, whose `write_inert` drops a write stderr refuses. No std print
+  macro — each panics on a write its stream refuses, an exit 101 §2.3 does
+  not have — stands in `src/`. `tests/it/tidy.rs` checks it, and
+  `tests/it/cli.rs` runs a command whose stdout has no reader, and one
+  whose stderr has none.
+- **What reaches the terminal is inert.** Every TALK line and prompt is
+  rendered by `render_inert` (AUTH-5.2) line by line in `write_inert`, and
+  the dismissal's clear is the one escape written, a constant; a DATA line
+  renders every C0 control, the line break among them (`data_text`) — a
+  record's encoder escapes exactly those (AUTH-2.130 clause 3), so a
+  record passes whole. A byte a board, a reply or a file chose neither
+  acts on a terminal nor forges a line. `tests/it/tidy.rs` confines
+  stderr's handles to `write_inert` and `clear`, and `tests/it/hostile.rs`
+  runs the binary against boards answering escapes.
+- **What a third party hands in is recognized whole, then used.** A
+  payload argument is read no further than one byte past `PAYLOAD_CAP` —
+  a record at its cap (AUTH-1.18) and its line ending — and halts past
+  it; a reply `bind` lands shows as it reads, line by line, names each
+  fact as its name and one value, and names a fact once, a second value —
+  a line's, a flag's or a variable's — halting naming both; a principal
+  is at most `2^53 − 1` (AUTH-6.36), at the flag and in a reply.
+  `tests/it/hostile.rs` checks each.
 - **A prompt holds stdin for one line.** Every prompt is read through
   `answer`, which locks stdin for that line alone, and the only other
   reads are a `-` argument's, whole, in `read_payload` and
@@ -955,13 +976,16 @@ Rules that hold across its files:
 Its integration suite is one binary, `tests/it/`: `cli`, the first seven
 commands and the loop over the hosted claim, and `ceremonies`, the six
 ceremony commands and the enroll hop, each driving the built `skep`
-through argv, stdin and stdout against a daemon spawned in-process; and
-`tidy`, the arrangement above, read off the source. `common` holds the
-spawn — alone, or behind a tap that keeps what a client put on the wire —
-and the runs, every `SKEP_*` variable and `HOME` scrubbed from them: piped,
-with stdout or stderr closed, from a chosen working directory, or under a
-pseudo-terminal; and `tree`, a directory's state, for the commands that
-write nothing.
+through argv, stdin and stdout against a daemon spawned in-process;
+`hostile`, what arrives from outside the person's trust — a board's
+escapes, a reply saying two things, a payload past its cap, a principal
+past the wire's range; and `tidy`, the arrangement above, read off the
+source. `common` holds the spawn — alone, or behind a tap that keeps what a
+client put on the wire — a canned board that answers whatever bytes a test
+chose, and the runs, every `SKEP_*` variable and `HOME` scrubbed from them:
+piped, with stdout or stderr closed, from a chosen working directory, or
+under a pseudo-terminal; and `tree`, a directory's state, for the commands
+that write nothing.
 
 ## The name space, `skep-namespace`
 

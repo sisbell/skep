@@ -8,7 +8,7 @@ use skep_client::sheet::{group_hex, render_inert};
 use skep_client::store::{Binding, KeyFacts, KeySelector, Purpose, StoreError};
 use skep_identity::{encode_enroll, Enrollment};
 
-use super::{data, store_of, Stop, OUTSTANDING_ACT};
+use super::{data, record_refused, store_of, Stop, OUTSTANDING_ACT};
 use crate::args::CommandLine;
 
 /// The handoff recipient's clause of the outstanding-act line, its fourth
@@ -44,7 +44,8 @@ pub fn fingerprint(c: &CommandLine) -> Result<(), Stop> {
     for key in &keys {
         let fp = key.fingerprint;
         // The key's enrollment record, where `--payload` asks for it.
-        let record = c.switch("--payload").then(|| encode_enroll(&[Enrollment::new(key.public.clone(), key.anchor, key.label.clone()).expect("a stored label is in the domain")]));
+        let record =
+            c.switch("--payload").then(|| Enrollment::new(key.public.clone(), key.anchor, key.label.clone())).transpose().map_err(record_refused)?.map(|e| encode_enroll(&[e]));
         let bound: Vec<String> = bindings
             .iter()
             .filter_map(|b| match b {
@@ -68,7 +69,9 @@ pub fn fingerprint(c: &CommandLine) -> Result<(), Stop> {
         }
         data(format!("{} {}", key.public.alg(), key.public.to_hex()))?;
         data(fp.to_hex())?;
-        data(group_hex(&fp.to_hex()))?;
+        for line in group_hex(&fp.to_hex()).lines() {
+            data(line)?;
+        }
         data(format!("label {}", key.label.as_deref().map(render_inert).unwrap_or_else(|| "(none)".into())))?;
         if key.anchor {
             data("ANCHOR — a paper's file, never a device key")?;

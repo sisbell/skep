@@ -37,9 +37,9 @@ use crate::value::Val;
 /// [`apply_write`](ContentStore::apply_write) returns a new slice in
 /// O(log n), sharing all untouched structure with the old one, which stays
 /// as it was — so a snapshot pinning an old `World` costs next to nothing.
-/// Its serialized form is canonical, a function of the contents alone (the
-/// `Serialize` impl below says who reads it).
-#[derive(Clone, Debug, Default, PartialEq, Eq, Deserialize)]
+/// Its serialized form is canonical, a function of the contents alone
+/// (`in_tumbler_order` below, the field's emitting half, says who reads it).
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ContentStore {
     // A persistent ORDERED map — `im::OrdMap`, a B-tree keyed by `Tumbler`'s
     // `Ord` — not `im::HashMap`. The reads are point lookups and the writes
@@ -49,75 +49,59 @@ pub struct ContentStore {
     // Conflicts #3), and `ContentStore::iter`, the one enumeration, promises
     // no order. What the order buys is the checkpoint: a whole-store reader
     // that needs every entry in `Tumbler` order at every cadence crossing
-    // (the canonical bytes, `Serialize` below), which the ordered map's walk
-    // gives for free where a hash map's would have to be collected and sorted
-    // at every checkpoint. Its decode is `entry_by_entry`'s, not `im`'s own
-    // visitor, which reserves the count the bytes declare; it takes each key
-    // through M1's `Address` door.
-    #[serde(deserialize_with = "entry_by_entry")]
+    // (the canonical bytes, `in_tumbler_order` below), which the ordered
+    // map's walk gives for free where a hash map's would have to be collected
+    // and sorted at every checkpoint. Its serde form is this crate's, never
+    // `im`'s: `in_tumbler_order` emits it and `entry_by_entry` decodes it,
+    // the two named in the attribute below.
+    #[serde(serialize_with = "in_tumbler_order", deserialize_with = "entry_by_entry")]
     map: im::OrdMap<Tumbler, Val>,
 }
 
-/// CANONICAL SERIALIZATION: the serde form `#[derive(Serialize)]` would give
-/// — a struct with the one field `map`, the map as a map with its length,
-/// its entries in the order the map walks them — spelled by this crate
-/// rather than left to `im`'s own impl, because the form is a FORMAT (below)
-/// and what a dependency writes is its choice. The order is `Tumbler` order:
-/// the map is ordered by its key's `Ord`, so its walk is a function of the
-/// contents alone. So two writes of one store, on two processes or two
-/// machines, yield one byte string, and M2's checkpoint header can commit to
-/// its body by hash. `Deserialize` stays derived, its one field decoded by
-/// `entry_by_entry` below: each key re-enters M1's `Address` door, the map is
-/// rebuilt from the entries whatever order they arrive in, and nothing is
-/// reserved for a count the bytes have not carried. Cost: the O(n) walk the
-/// checkpoint already pays, and no sort.
+/// The `map` field's serde form, emitted: a serde map with its length, its
+/// entries in the map's own walk — `Tumbler` order, the map being ordered by
+/// its key's `Ord` — so the bytes are a function of the contents alone, and
+/// two writes of one store, on two processes or two machines, yield one byte
+/// string that M2's checkpoint header can commit to by hash. Spelled by this
+/// crate rather than left to `im`'s own impl, because the form is a FORMAT
+/// (below) and what a dependency writes is its choice; the struct around the
+/// field is the derive's, as every store slice's is, and the decoding half is
+/// [`entry_by_entry`]. Cost: the O(n) walk the checkpoint already pays, and
+/// no sort.
 ///
 /// THE FORM IS A FORMAT, read by three collaborators, none with a compiler
-/// edge back to this impl. M2's checkpoint hashes it (above), and decodes it
+/// edge back to this crate. M2's checkpoint hashes it (above), and decodes it
 /// from bytes it does not trust — so the map's key and value types stay free
 /// of recursion and of sequence elements that decode from zero bytes (M2's
 /// hostile-input obligation on `WorldState`, which `Tumbler` and `Val` meet),
 /// and the map's own declared count is never trusted with a reservation
-/// (`entry_by_entry`). The engine's `World` lays these bytes down as one
-/// slice of its checkpoint layout, so a change to them — a field added or
-/// removed, an entry encoded differently — owes the engine's `WORLD_FORMAT`
-/// bump; the engine's pin
-/// (`each_slice_serializes_the_fields_the_format_count_names`) sees only
-/// the top-level field set, `map`, and a change beneath it owes the bump by
-/// hand. And the engine's world dump renders the form as M4's authoritative
+/// ([`entry_by_entry`]). The engine's `World` lays these bytes down as one
+/// slice of its checkpoint layout, so a change to them — a field added to or
+/// removed from [`ContentStore`], an entry encoded differently — owes the
+/// engine's `WORLD_FORMAT` bump; the engine's pin
+/// (`each_slice_serializes_the_fields_the_format_count_names`) sees only the
+/// top-level field set, `map`, and a change beneath it owes the bump by hand.
+/// And the engine's world dump renders the form as M4's authoritative
 /// section, where the daemon's per-reader `/dump` keeps or drops each `map`
-/// entry by its key's document; a field added here would reach every reader
-/// class whole, which
-/// `every_entry_at_each_level_of_the_tree_is_reduced_or_kept_by_name`
-/// refuses until the engine's filter is given a disposition for it. This
-/// crate's suite pins the bytes themselves
-/// (`the_slice_serializes_as_its_map_alone_in_tumbler_order`), so a change
-/// to them fails here first. A rename of `map` leaves the bytes alone and
-/// unhooks the dump filter's path, which ends in that name; only the
-/// engine's two pins, which name the field, see it.
-impl Serialize for ContentStore {
-    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        use serde::ser::SerializeStruct;
-        let mut state = serializer.serialize_struct("ContentStore", 1)?;
-        state.serialize_field("map", &InTumblerOrder(&self.map))?;
-        state.end()
-    }
-}
-
-/// The content map as a serde map in `Tumbler` order — the map's own walk,
-/// which is that order — the emitting half of [`ContentStore`]'s
-/// `Serialize`, kept apart so the struct's own shape above reads as the
-/// derive's, and so the bytes are this crate's spelling and not `im`'s.
-struct InTumblerOrder<'a>(&'a im::OrdMap<Tumbler, Val>);
-
-impl Serialize for InTumblerOrder<'_> {
-    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        serializer.collect_map(self.0.iter())
-    }
+/// entry by its key's document; a field added to [`ContentStore`] would reach
+/// every reader class whole, which
+/// `every_entry_at_each_level_of_the_tree_is_reduced_or_kept_by_name` refuses
+/// until the engine's filter is given a disposition for it. This crate's
+/// suite pins the bytes themselves
+/// (`the_slice_serializes_as_its_map_alone_in_tumbler_order`), so a change to
+/// them fails here first. The field's serialized name is the derive's, its
+/// Rust name, which bincode never writes: a rename of `map` leaves the bytes
+/// alone and unhooks the dump filter's path, which ends in that name; only
+/// the engine's tests that name the field see it.
+fn in_tumbler_order<S: serde::Serializer>(
+    map: &im::OrdMap<Tumbler, Val>,
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    serializer.collect_map(map.iter())
 }
 
 /// The content map decoded one entry at a time — the decoding half of
-/// [`ContentStore`]'s serde form, beside [`InTumblerOrder`]. `im`'s own map
+/// [`ContentStore`]'s serde form, beside [`in_tumbler_order`]. `im`'s own map
 /// visitor reserves room for the entry count the bytes declare before it has
 /// read one entry, and a checkpoint body is bytes M2 does not trust: a count
 /// they do not carry — a writer/reader skew reading another slice's bytes as
@@ -238,11 +222,12 @@ impl ContentStore {
     /// THE ONE ENUMERATION of the slice: every `(address, value)` pair it
     /// holds, each exactly once — the whole of its promise. Exact-size, as
     /// the map's own walk is. Its ORDER is no part of the promise: the order
-    /// the checkpoint's bytes need is the serializer's to keep (`Serialize`
-    /// above, which walks the map itself), and a reader that wants an order
-    /// sorts what it reads. Every address it yields is the tumbler of a
-    /// T4-valid `Address` ([`ContentStore`]'s first key invariant, kept at
-    /// every door), so validating one back into an `Address` cannot fail.
+    /// the checkpoint's bytes need is the serializer's to keep
+    /// (`in_tumbler_order` above, which walks the map itself), and a reader
+    /// that wants an order sorts what it reads. Every address it yields is
+    /// the tumbler of a T4-valid `Address` ([`ContentStore`]'s first key
+    /// invariant, kept at every door), so validating one back into an
+    /// `Address` cannot fail.
     ///
     /// A walk of the whole store, for whole-store work over a pinned
     /// snapshot such as the cell index's walk (`skep-media`); there it stays

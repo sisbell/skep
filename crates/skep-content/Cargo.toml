@@ -22,8 +22,9 @@ test-hooks = ["dep:skep-kernel", "dep:skep-namespace"]
 # The persistent map behind `ContentStore` (`im::OrdMap`): apply_write shares
 # all untouched structure with the prior slice, so snapshots pinning old
 # Worlds are nearly free. Why it is ordered is said at the field
-# (src/store.rs). Its serde is M4's own — the walking `Serialize` and
-# `entry_by_entry` — so none of im's feature-gated serde impls is used here.
+# (src/store.rs). Its serde is M4's own — `in_tumbler_order` and
+# `entry_by_entry`, the `map` field's two halves — so none of im's
+# feature-gated serde impls is used here.
 im.workspace = true
 # rc for the Arc<[u8]> impls behind Val (§Types & errors).
 serde = { workspace = true, features = ["rc"] }

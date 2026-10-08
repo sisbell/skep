@@ -42,10 +42,10 @@ fn the_record_and_the_slice_survive_a_bincode_round_trip() {
 
 #[test]
 fn the_slice_serializes_as_its_map_alone_in_tumbler_order() {
-    // The form is a format (store.rs, `impl Serialize for ContentStore`):
-    // M2's checkpoint hashes these bytes, the engine's World lays them down
-    // as one slice of its layout, and the engine's world dump renders them.
-    // So they are pinned whole — the slice's one field, its map, as its
+    // The form is a format (store.rs, `in_tumbler_order`): M2's checkpoint
+    // hashes these bytes, the engine's World lays them down as one slice of
+    // its layout, and the engine's world dump renders them. So they are
+    // pinned whole — the slice's one field, its map, as its
     // length then its entries (exactly a `Vec` of pairs' bytes), the entries
     // in Tumbler order, each value its length then its raw bytes (bincode's
     // form for a sequence of `u8`, which `Val` and `Vec<u8>` both serialize
@@ -114,10 +114,10 @@ fn assert_refused<T: DeserializeOwned>(what: &str, bytes: &[u8]) -> String {
 
 #[test]
 fn the_record_and_the_slice_refuse_a_count_their_bytes_do_not_carry() {
-    // M2's hostile-input obligation (store.rs, `impl Serialize for
-    // ContentStore`): a checkpoint body and a journal frame are bytes M2 does
-    // not trust, and M2 answers one that will not decode by refusing it — a
-    // checkpoint is skipped for an older base, a record is `Corruption`. So a
+    // M2's hostile-input obligation (store.rs, `in_tumbler_order`): a
+    // checkpoint body and a journal frame are bytes M2 does not trust, and
+    // M2 answers one that will not decode by refusing it — a checkpoint is
+    // skipped for an older base, a record is `Corruption`. So a
     // declared count the bytes do not carry (a writer/reader skew reading
     // another slice's bytes as this length, or a crafted file) must decode as
     // an `Err`, by running out of input. Reserving room for the count first

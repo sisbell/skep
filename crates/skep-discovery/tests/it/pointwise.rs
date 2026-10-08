@@ -28,8 +28,9 @@ fn project_is_content_subspace_i_to_v_with_conflated_not_a_link() {
     assert!(!proj.denotes(&t(&[1, 1])));
     assert!(!proj.denotes(&t(&[1, 3])));
 
-    // A slot whose coverage lands nowhere in d's content projects ∅ (TO is a
-    // ghost position; TYPE lives in the reserved subspace).
+    // A slot whose coverage lands nowhere in d's content projects ∅: TO names
+    // ca(101), a content address doc1 never minted, and TYPE names `rel()`,
+    // an ordinary content address of another document.
     assert!(reads.project(&e1, TO, &doc1()).expect("project").is_empty());
     assert!(reads.project(&e1, TYPE, &doc1()).expect("project").is_empty());
 

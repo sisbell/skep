@@ -116,7 +116,7 @@
 //! for as long as a law here compares its answers: every identity stated
 //! "under the same `readable`" — `count = |findlinks|`, a window that drains
 //! `findlinks` — holds exactly that far. M8 cannot check it, since a `Fn`
-//! may consult state that moves, so it is written here, where the laws that
+//! may read state that moves, so it is written here, where the laws that
 //! rest on it are. A predicate closed over one committed state meets it;
 //! which state is the caller's to choose — M10 closes it over the read's own
 //! snapshot, or over the head's for a historical read (PUB-6.48).

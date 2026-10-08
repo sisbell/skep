@@ -16,7 +16,7 @@ readme = "README.md"
 # so no serde feature is needed.
 im.workspace = true
 # Nat::one()/is_zero() are trait fns the delete-orphan ordinal math keeps in
-# scope, and to_usize the one the image's walk budget reads a span's reach
+# scope, and to_usize the one the image's walk price reads a span's reach
 # through.
 num-traits.workspace = true
 # M1 — the value calculus. M8 holds no address algebra of its own.
@@ -40,7 +40,7 @@ skep-links = { path = "../skep-links" }
 [dev-dependencies]
 # M2's actual wire format: the lineage suite decodes a supersession deposit
 # from bincode bytes, the way a restored checkpoint or a replayed journal
-# frame reaches M7's fold, to place a tuple no M7 writer deposits.
+# frame reaches M7's fold, to place a claim no M7 writer deposits.
 bincode.workspace = true
 # The assembled test world derives Serialize/Deserialize (M2's WorldState bound).
 serde.workspace = true

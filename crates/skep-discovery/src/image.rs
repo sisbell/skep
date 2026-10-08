@@ -2,9 +2,9 @@
 //! REGION RESOLVER — the first phase of every region-family read, which
 //! chains it into M7's matcher (`findlinks ∘ image`). It resolves a region
 //! through `d`'s reading surface behind the document gate, the region gate
-//! and the two budgets that price what the region asks of M5; it names no
-//! link, stabs nothing and asks no reader, so it is the family's resolver
-//! and not a member.
+//! and the run budget with its square, which price what the region asks of
+//! M5; it names no link, stabs nothing and asks no reader, so it is the
+//! family's resolver and not a member.
 //!
 //! The shape a request must have lives here too, as the constructor/gate pair
 //! [`content_vspan`]/`check_region` — the module that judges a region is the
@@ -85,13 +85,13 @@ fn run_list_walk(region: &[Span], run_count: usize) -> usize {
 ///
 /// REFUSES, IN THIS ORDER: `DocNotRegistered` — the document-existence gate
 /// is the first act, M5 conflating registered-empty with unallocated — then
-/// the region gate (`BadRegion`), then the two budgets (`ImageTooLarge`),
-/// which come third because each is priced on what the region does to `d`'s
-/// reading surface — the walk it asks of M5, the runs it resolves — and so
-/// cannot be asked until both gates have admitted the request. A registered
-/// `d` whose reading surface arranges no content yields a defined
-/// `Ok(vec![])` — a published `d` with a head answers from the head, whatever
-/// its own arrangement holds.
+/// the region gate (`BadRegion`), then the run budget and its square
+/// (`ImageTooLarge`) — the square holding the walk the region asks of M5, the
+/// budget the runs it resolves — which come third because each is priced on
+/// what the region does to `d`'s reading surface, and so cannot be asked
+/// until both gates have admitted the request. A registered `d` whose reading
+/// surface arranges no content yields a defined `Ok(vec![])` — a published `d`
+/// with a head answers from the head, whatever its own arrangement holds.
 ///
 /// The result is the I-runs of the image, in region-span order and V-order
 /// within each span, deduped on `(i_start, width)` — the pair a `Run`

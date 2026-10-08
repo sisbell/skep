@@ -50,9 +50,9 @@ fn lineage_probes_flipped_slots_with_residence_gate() {
     // through it, and it answers [] twice over: the gate refuses the key
     // before the class is walked, and the read-out's equality would refuse
     // the claim, whose endpoint is not that key. Where the gate ALONE
-    // decides is a tuple whose endpoint IS a non-link key, which no writer
-    // deposits — the forged-tuple test below. doc1 and ca(1), above and
-    // beside the endpoints, reach no claim at all.
+    // decides is a claim whose endpoint IS a non-link key, which no writer
+    // deposits; a decoded-deposit test below folds one. doc1 and ca(1), above
+    // and beside the endpoints, reach no claim at all.
     let under_e1 = a(&[1, 0, 1, 0, 1, 0, 2, 1, 1]);
     let under_e2 = a(&[1, 0, 1, 0, 1, 0, 2, 2, 1]);
     assert!(is_prefix(e1.tumbler(), under_e1.tumbler()));
@@ -542,7 +542,7 @@ fn lineage_asserts_the_home_m7s_fold_gives_every_claim() {
     );
 }
 
-/// The world the forged-deposit tests fold into: two links of doc1, `e1` and
+/// The world the decoded-deposit tests fold into: two links of doc1, `e1` and
 /// `e2`, the one conforming claim over them, and the supersession class's
 /// type, read off the store. Whatever a test folds beside that claim,
 /// [`OneClaim::assert_answered_alone`] is the verdict that must still hold.

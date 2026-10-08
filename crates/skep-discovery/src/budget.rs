@@ -5,7 +5,7 @@
 //! square [`MAX_JOIN_STEPS`] for the two joins no run count prices; and
 //! [`MAX_ANSWER_SPANS`], which bounds what an answer built of spans carries.
 //! Each read applies its own; the numbers and their argument live here
-//! because the region family, the pointwise pair and the preview all consult
+//! because the region family, the pointwise pair and the preview all apply
 //! them.
 
 /// The most arrangement I-runs one request may make M8 materialize or join

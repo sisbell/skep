@@ -30,7 +30,7 @@ use skep_kernel::{CheckpointPolicy, Durability, Kernel, KernelConfig, SaltSource
 use skep_links::{
     enc, Endset, HasLinks, LinkRec, LinkState, LinkWriter, SlotArg, View,
 };
-use skep_namespace::{HasM3, M3Rec, M3State, PrincipalId};
+use skep_namespace::{HasM3, M3Rec, M3State, PrincipalId, GHOST_POSITIONS};
 
 // ───────────────────────── the assembled test world ─────────────────────────
 
@@ -243,10 +243,18 @@ pub fn la2(ordinal: u32) -> Address {
     a(&[1, 0, 1, 0, 2, 0, 2, ordinal])
 }
 
-/// Reserved type address `k` — ghost tumbler `[1,1,0,1,0,1,0,1,k]` (the
-/// compiled format constants for k = 1..=5; higher ordinals are ordinary
-/// unregistered numbers).
+/// Reserved type address `k` — ghost tumbler `[1,1,0,1,0,1,0,1,k]`, content
+/// element `k` of the ghost home document (M3's `ghost_home_document`).
+/// DOMAIN `k = 1..=5`, asserted: those are the compiled format constants
+/// (`ReservedAddrs::format`), and the ghost region has exactly those five
+/// names (M3's `GHOST_POSITIONS`). An element past it is ordinary mintable
+/// content of that document — reserved by nothing and ghost in no sense — so
+/// the suite's own relation type, [`rel`], is spelled without this.
 pub fn ra(k: u32) -> Address {
+    assert!(
+        (1..=GHOST_POSITIONS).contains(&k),
+        "the ghost region is content elements 1..={GHOST_POSITIONS} of the ghost home document"
+    );
     a(&[1, 1, 0, 1, 0, 1, 0, 1, k])
 }
 
@@ -289,10 +297,12 @@ pub fn run(start: &Address, width: u32) -> Run {
 
 /// The one relation type the discovery tests deposit under — an ordinary
 /// unregistered NUMBER (a type is a number; the class-keyed reads serve it
-/// verbatim), carried into tuples through MAKELINK's open surface, since the
-/// managed gate admits only the shipped Unary classes in this format.
+/// verbatim): content element 10 of the ghost home document, past its five
+/// ghost tumblers, so reserved by nothing and ghost in no sense. It is
+/// carried into tuples through MAKELINK's open surface, since the managed
+/// gate admits only the shipped Unary classes in this format.
 pub fn rel() -> Address {
-    ra(10)
+    a(&[1, 1, 0, 1, 0, 1, 0, 1, 10])
 }
 
 /// [`rel`] as the TYPE endset a whole tuple carries.

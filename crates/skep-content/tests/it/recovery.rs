@@ -165,15 +165,16 @@ fn raw_key(comps: &[u32]) -> Vec<Nat> {
 /// slice's bytes as exactly a `Vec` of pairs', and the control in
 /// `the_record_and_the_slice_refuse_a_key_that_is_no_tumbler` decodes
 /// `raw_slice(&[CA1])` to the slice `stage_write` builds at `ca(1)` — so a
-/// test can lay down a body no store writes: keys out of order, named twice,
-/// or no address at all.
+/// test can lay down a body no slice serializes as: keys out of order, named
+/// twice, or no address at all.
 fn raw_slice(keys: &[&[u32]]) -> Vec<u8> {
     let entries: Vec<_> = keys.iter().map(|&key| (raw_key(key), b"x".to_vec())).collect();
     bincode::serialize(&entries).expect("the raw slice serializes")
 }
 
-/// A record frame writing the value `x` at `key`: the address in `raw_key`'s
-/// shape, then the value's byte sequence — a record's own shape, as the same
+/// The bytes of a record writing the value `x` at `key` — what a journal
+/// frame carries, never the frame itself: the address in `raw_key`'s shape,
+/// then the value's byte sequence. That is a record's own shape, as the same
 /// control holds of `raw_record(CA1)`.
 fn raw_record(key: &[u32]) -> Vec<u8> {
     bincode::serialize(&(raw_key(key), b"x".to_vec())).expect("the raw record serializes")
@@ -228,10 +229,10 @@ fn the_record_and_the_slice_refuse_a_key_that_is_no_address() {
     // every key in `dom(C)` is T4-valid, and both decode paths re-enter M1's
     // `Address` door (`validate`) to keep it so — an `Address` journals as
     // its bare tumbler, so the door reads the bytes the record and the slice
-    // already write. Each key below is nonempty, so `Tumbler`'s own door (T0,
-    // the test above) admits it, and breaks exactly one T4 clause, so only
-    // the `Address` door can refuse it — and the refusal is pinned as that
-    // door's own, word for word. What the door admits is the next test's.
+    // already serialize as. Each key below is nonempty, so `Tumbler`'s own
+    // door (T0, the test above) admits it, and breaks exactly one T4 clause,
+    // so only the `Address` door can refuse it — and the refusal is pinned as
+    // that door's own, word for word. What the door admits is the next test's.
     for (clause, key) in [
         (T4Clause::LeadingZero, &[0u32, 1][..]),
         (T4Clause::TrailingZero, &[1, 0][..]),
@@ -330,7 +331,7 @@ fn every_order<T: Clone>(items: &[T]) -> Vec<Vec<T>> {
 
 #[test]
 fn the_slice_decodes_its_entries_in_whatever_order_they_arrive() {
-    // store.rs (`entry_by_entry`) and M4's interface: `Serialize` writes the
+    // store.rs (`entry_by_entry`) and M4's interface: `Serialize` emits the
     // entries in Tumbler order, and `Deserialize` takes them in any order —
     // the map is rebuilt from whatever arrives, one entry at a time. "Any
     // order" is a law over every arrival order, and one chosen order stands
@@ -371,18 +372,18 @@ fn the_slice_decodes_its_entries_in_whatever_order_they_arrive() {
 #[test]
 fn the_slice_refuses_a_body_naming_one_address_twice() {
     // store.rs (`entry_by_entry`): a body names one state, and a state holds
-    // one value at an address (S0). No build writes a body naming an address
-    // twice — the encoder walks a map whose keys are unique — and a decode
-    // that took one would have to choose which value stands, where the fold
-    // keeps the stored one (S0(b)) and `OrdMap::insert` would keep the later.
-    // So the body is refused, by the decode's own message, and "one address"
-    // is the DECODED address: ca(1) twice as written, then ca(1) twice spelled
-    // two ways — its ordinal's `u32` digits with and without a trailing zero
-    // digit, which num-bigint reads as one number. The bytes are laid as
-    // `raw_slice` lays a body, but each key is spelled as the `u32` digits its
-    // components serialize as and each value is its own; the same shape
-    // naming two addresses is the control, decoding to the slice that holds
-    // both values.
+    // one value at an address (S0). No build serializes a body naming an
+    // address twice — its encoder walks a map whose keys are unique — and a
+    // decode that took one would have to choose which value stands, where the
+    // fold keeps the stored one (S0(b)) and `OrdMap::insert` would keep the
+    // later. So the body is refused, by the decode's own message, and "one
+    // address" is the DECODED address: ca(1) twice as serialized, then ca(1)
+    // twice spelled two ways — its ordinal's `u32` digits with and without a
+    // trailing zero digit, which num-bigint reads as one number. The bytes
+    // are laid as `raw_slice` lays a body, but each key is spelled as the
+    // `u32` digits its components serialize as and each value is its own; the
+    // same shape naming two addresses is the control, decoding to the slice
+    // that holds both values.
     let digits = |key: &Tumbler| -> Vec<Vec<u32>> { key.iter().map(Nat::to_u32_digits).collect() };
     assert_eq!(
         bincode::serialize(&digits(ca(1).tumbler())).expect("the digits serialize"),
@@ -398,17 +399,18 @@ fn the_slice_refuses_a_body_naming_one_address_twice() {
             .expect("a body naming two addresses decodes");
     assert_eq!(both.value_at(ca(1).tumbler()).map(Val::as_bytes), Some(&b"first"[..]));
     assert_eq!(both.value_at(ca(2).tumbler()).map(Val::as_bytes), Some(&b"second"[..]));
-    // ca(1) as written, and again with its ordinal `[1]` spelled `[1, 0]`: a
-    // trailing zero digit, which num-bigint drops, so that key decodes to
+    // ca(1) as serialized, and again with its ordinal `[1]` spelled `[1, 0]`:
+    // a trailing zero digit, which num-bigint drops, so that key decodes to
     // ca(1) itself.
-    let as_written = digits(ca(1).tumbler());
-    let mut respelled = as_written.clone();
+    let as_serialized = digits(ca(1).tumbler());
+    let mut respelled = as_serialized.clone();
     respelled.last_mut().expect("a tumbler is nonempty").push(0);
-    for (how, second) in [("as written", as_written.clone()), ("spelled two ways", respelled)] {
+    for (how, second) in [("as serialized", as_serialized.clone()), ("spelled two ways", respelled)]
+    {
         assert_eq!(
             assert_refused::<ContentStore>(
                 &format!("a slice naming ca(1) twice, {how}"),
-                &body(as_written.clone(), second),
+                &body(as_serialized.clone(), second),
             ),
             "a content address named twice in one slice",
             "a slice naming ca(1) twice, {how}, was refused for another reason"
@@ -420,8 +422,8 @@ fn the_slice_refuses_a_body_naming_one_address_twice() {
 fn the_record_and_the_slice_refuse_for_the_first_fault_they_read() {
     // store.rs (`entry_by_entry`'s REFUSAL PRECEDENCE, and `ContentWrite`):
     // where several refusals hold of one body, the first fault in reading
-    // order speaks, and that is the account M2 keeps — a refused base's
-    // reason, a refused frame's `Corruption`. So each body below carries two
+    // order speaks, and that is what M2 keeps — a refused base's reason, a
+    // refused record's `Corruption` cause. So each body below carries two
     // faults and is refused for the one it reads first: a key breaking T4
     // and a second naming of ca(1), in each order; a second naming of ca(1)
     // whose value counts more bytes than follow, refused for the value,

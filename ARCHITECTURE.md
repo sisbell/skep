@@ -72,7 +72,7 @@ foundation and on the stores above it.
   ownership (ω); each document's publication bit. Its modules and rules:
   §The name space.
 - `skep-content` — the write-once map from address to value, ordered by
-  address so a checkpoint walks it without sorting: point reads, and one
+  address so a checkpoint walks it without sorting: point queries, and one
   enumeration of every entry, in no promised order, for whole-store work
   such as the cell index's walk. One feature, default off: `test-hooks`
   compiles in `write`, the test-only twin of `stage_write`, and the

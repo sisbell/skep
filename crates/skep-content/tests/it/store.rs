@@ -7,11 +7,11 @@
 //! equality is its contents', address and value each counting; that the one
 //! enumeration visits every entry once, through `iter` and through a `for`
 //! loop over the slice alike, as a walk a caller can name, which knows
-//! exactly what remains at every step, shows only its cursor, and offers no
-//! walk from the far end; that any byte string is a value, comes back
-//! exactly as written, and renders into `Debug` as its byte length, never a
-//! byte; and, in debug builds, that `stage_write` panics on a non-content
-//! address before it looks at what is stored there.
+//! exactly what remains at every step, shows no entry in its `Debug`, and
+//! offers no walk from the far end; that any byte string is a value, comes
+//! back exactly as written, and renders into `Debug` as its byte length,
+//! never a byte; and, in debug builds, that `stage_write` panics on a
+//! non-content address before it looks at what is stored there.
 
 use skep_address::Tumbler;
 use skep_content::{stage_write, ContentError, ContentStore, ContentWrite, Iter, Val};
@@ -214,7 +214,7 @@ fn slices_are_equal_when_they_store_the_same_values_at_the_same_addresses() {
 
 #[test]
 fn iter_visits_every_entry_of_a_pinned_slice_exactly_once() {
-    // The one enumeration beside the point reads: every pair once, its
+    // The one enumeration beside the point queries: every pair once, its
     // count the slice's, over a pinned slice while a later slice grows —
     // the cell index's walk reads a snapshot this way while commits
     // proceed — and a `for` loop over `&c` reads the same walk. The order is
@@ -257,14 +257,14 @@ fn iter_visits_every_entry_of_a_pinned_slice_exactly_once() {
 }
 
 #[test]
-fn iter_lends_a_named_walk_that_knows_its_length_and_shows_only_its_cursor() {
+fn iter_lends_a_named_walk_that_knows_its_length_and_shows_no_entry() {
     // store.rs, `Iter`: `iter` lends an `Iter`, whose backing is hidden and
     // to which a foreign crate can add no trait — so what the loan promises
     // is witnessed from one: a type a caller can name, the exact length,
     // `Debug`, and `Send + Sync`, which the type has because of what it
     // borrows and which a caller handing a walk to another thread depends on
     // without any signature saying so. `&ContentStore` yields the same type,
-    // and its `Debug` is the cursor, never an entry.
+    // and its `Debug` names the walk, never an entry.
     fn lends<'a, I>(walk: I) -> usize
     where
         I: ExactSizeIterator<Item = (&'a Tumbler, &'a Val)> + std::fmt::Debug + Send + Sync,
@@ -274,7 +274,7 @@ fn iter_lends_a_named_walk_that_knows_its_length_and_shows_only_its_cursor() {
     let c0 = ContentStore::default();
     let c = c0.apply_write(&stage_write(&c0, &ca(1), val(b"secret")).expect("fresh"));
     let walk: Iter<'_> = c.iter();
-    assert_eq!(format!("{walk:?}"), "Iter { .. }", "the cursor, not the entries");
+    assert_eq!(format!("{walk:?}"), "Iter { .. }", "the walk, never an entry");
     assert_eq!(lends(walk), 1);
     let loop_walk: Iter<'_> = IntoIterator::into_iter(&c);
     assert_eq!(lends(loop_walk), 1, "`&ContentStore` lends the same walk");

@@ -85,10 +85,11 @@
 //!   allocation discipline and computed structurally by M1's `document_of`
 //!   (surfaced as SHOWORIGIN in M6); M4 stores only `address → Val`, so no
 //!   redundant origin field can diverge;
-//! * range, prefix-scan, max-under-prefix — the reads are point reads and the
-//!   one enumeration, [`ContentStore::iter`]; no query is built on the map's
-//!   order (its field in `store.rs` says what the order is for), and the
-//!   allocator's max-under-prefix reads M3's own frontier, never M4;
+//! * range, prefix-scan, max-under-prefix — the reads are the two point
+//!   queries and the one enumeration, [`ContentStore::iter`]; no query is
+//!   built on the map's order (its field in `store.rs` says what the order is
+//!   for), and the allocator's max-under-prefix reads M3's own frontier,
+//!   never M4;
 //! * concurrency — none of M4's own: no locks, no threads, no interior
 //!   mutability. Content writes ride M5's composite under the
 //!   per-(document, content-subspace) lock key; every content address is
@@ -154,9 +155,9 @@ pub use value::Val;
 /// `content()` is in every later one, unchanged (S0) — the fold keeps that
 /// only for a slice nothing else replaces, and M5's publish shot `expect`s
 /// it of the working slice; and a reader's `snapshot.world().content()`
-/// holds every value the snapshot's placements resolve to, which M6's
-/// RETRIEVEV `expect`s (S3★). An implementor that answered any other
-/// `ContentStore`, or moved this one by any other path, would void all
+/// holds a value for every arranged content position the snapshot resolves,
+/// which M6's RETRIEVEV `expect`s (S3★). An implementor that answered any
+/// other `ContentStore`, or moved this one by any other path, would void all
 /// three, and nothing in this crate can check it.
 pub trait HasContent {
     /// M4's slice of the world state.

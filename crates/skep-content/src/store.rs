@@ -63,13 +63,13 @@ pub struct ContentStore {
 /// The `map` field's serde form, emitted: a serde map with its length, its
 /// entries in the map's own walk — `Tumbler` order, the map being ordered by
 /// its key's `Ord` — so the bytes are a function of the contents alone, and
-/// two writes of one store, on two processes or two machines, yield one byte
-/// string that M2's checkpoint header can commit to by hash. Spelled by this
-/// crate rather than left to `im`'s own impl, because the form is a FORMAT
-/// (below) and what a dependency writes is its choice; the struct around the
-/// field is the derive's, as every store slice's is, and the decoding half is
-/// [`entry_by_entry`]. Cost: the O(n) walk the checkpoint already pays, and
-/// no sort.
+/// one slice serialized twice, on two processes or two machines, yields one
+/// byte string that M2's checkpoint header can commit to by hash. Spelled by
+/// this crate rather than left to `im`'s own impl, because the form is a
+/// FORMAT (below) and what a dependency emits is its choice; the struct
+/// around the field is the derive's, as every store slice's is, and the
+/// decoding half is [`entry_by_entry`]. Cost: the O(n) walk the checkpoint
+/// already pays, and no sort.
 ///
 /// THE FORM IS A FORMAT, read by three collaborators, none with a compiler
 /// edge back to this crate. M2's checkpoint hashes it (above), and decodes it
@@ -94,7 +94,7 @@ pub struct ContentStore {
 /// suite pins the bytes themselves
 /// (`the_slice_serializes_as_its_map_alone_in_tumbler_order`), so a change to
 /// them fails here first. The field's serialized name is the derive's, its
-/// Rust name, which bincode never writes: a rename of `map` leaves the bytes
+/// Rust name, which bincode never emits: a rename of `map` leaves the bytes
 /// alone and unhooks the dump filter's path, which ends in that name; only
 /// the engine's tests that name the field see it.
 fn in_tumbler_order<S: serde::Serializer>(
@@ -116,15 +116,15 @@ fn in_tumbler_order<S: serde::Serializer>(
 /// `Address` door (`validate`), so a body carrying a key no [`stage_write`]
 /// could have staged is refused the same way ([`ContentStore`]'s key
 /// invariants); it takes the entries in whatever order they arrive; and it
-/// refuses a body naming one address twice. No build writes one — the encoder
-/// walks a map whose keys are unique — and admitting one would mean choosing
-/// which value stands: `OrdMap::insert` keeps the later, where the fold keeps
-/// the one already stored (S0(b)). Refusing it leaves no tie to break, so
-/// every body this decode admits names one state, whatever order its entries
-/// take. Addresses are compared as decoded, and a component's digits decode
-/// to one number however they are spelled, so two spellings of one address
-/// are one address. The refusal names no address: a key can be as long as the
-/// body that carries it, and M2 keeps a refused base's reason.
+/// refuses a body naming one address twice. No build serializes one — its
+/// encoder walks a map whose keys are unique — and admitting one would mean
+/// choosing which value stands: `OrdMap::insert` keeps the later, where the
+/// fold keeps the one already stored (S0(b)). Refusing it leaves no tie to
+/// break, so every body this decode admits names one state, whatever order
+/// its entries take. Addresses are compared as decoded, and a component's
+/// digits decode to one number however they are spelled, so two spellings of
+/// one address are one address. The refusal names no address: a key can be
+/// as long as the body that carries it, and M2 keeps a refused base's reason.
 ///
 /// REFUSAL PRECEDENCE — several of these can hold of one body, and the first
 /// fault in reading order speaks. Within an entry, the key is read first and
@@ -223,16 +223,19 @@ impl ContentStore {
     /// as of the fold's own results, by [`HasContent`](crate::HasContent)'s
     /// implementor obligation — so an address the caller has seen hold a
     /// value, in this slice or in one it descends from, holds that value
-    /// here. An address an arrangement placed, read off a V→I resolve against
-    /// the same `Snapshot`, holds a value too (S3★, kept on M5's write path).
-    /// A `None` for either is an internal invariant violation to report or
+    /// here. The address at an arranged content position — a V-position in
+    /// the content subspace, read off a V→I resolve against the same
+    /// `Snapshot` — holds a value too (S3★, kept on M5's write path). A
+    /// `None` for either is an internal invariant violation to report or
     /// halt on, never a domain-level "not found". Any other address carries
-    /// no promise from M4: one a request names verbatim, or one a link's
-    /// endset names — a predicate-def registration's start included, since an
-    /// endset can name an address before anything is stored there. Such an
-    /// address may be unallocated, a ghost element, or a link, and the caller
-    /// holding it decides what that absence means to it: a refusal of its
-    /// own, an absence it reports, or an address it passes over.
+    /// no promise from M4: one a request names verbatim; the address at an
+    /// arranged link position, which S3★ maps into the link store, never
+    /// this one; or one a link's endset names — a predicate-def
+    /// registration's start included, since an endset can name an address
+    /// before anything is stored there. Such an address may be unallocated, a
+    /// ghost element, or a link, and the caller holding it decides what that
+    /// absence means to it: a refusal of its own, an absence it reports, or an
+    /// address it passes over.
     pub fn value_at(&self, a: &Tumbler) -> Option<&Val> {
         self.map.get(a)
     }
@@ -261,8 +264,8 @@ impl ContentStore {
     /// A walk of the whole store, for whole-store work over a pinned
     /// snapshot such as the cell index's walk (`skep-media`); there it stays
     /// immutable while commits proceed on later roots (the persistent map's
-    /// structural sharing). A request path asks the point reads; no range and
-    /// no prefix read is offered beside this one.
+    /// structural sharing). A request path asks the point queries; no range
+    /// and no prefix read is offered beside this one.
     pub fn iter(&self) -> Iter<'_> {
         Iter(self.map.iter())
     }
@@ -278,7 +281,7 @@ impl ContentStore {
 /// iterator has one: the order is no part of the promise
 /// ([`ContentStore::iter`]), and a walk from the far end would promise one.
 /// `Clone` and the fused guarantee are absent because `im`'s map iterator
-/// implements neither: a caller wanting two cursors asks the slice for two,
+/// implements neither: a caller wanting two walks asks the slice for two,
 /// and one that polls past the end wraps the walk in `fuse()`.
 #[must_use = "iterators are lazy and do nothing unless consumed"]
 pub struct Iter<'a>(im::ordmap::Iter<'a, Tumbler, Val>);
@@ -299,9 +302,9 @@ impl ExactSizeIterator for Iter<'_> {
     }
 }
 
-/// The cursor, not the entries: `im`'s map iterator is not `Debug`, so there
-/// is no way to show what is left without spending it, and the slice it was
-/// lent from is `Debug` already.
+/// `Iter { .. }`: the walk, never an entry — `im`'s map iterator is not
+/// `Debug`, so there is no way to show what is left without spending it, and
+/// the slice it was lent from is `Debug` already.
 impl fmt::Debug for Iter<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Iter").finish_non_exhaustive()
@@ -325,9 +328,9 @@ impl<'a> IntoIterator for &'a ContentStore {
 /// is M2's replay of records already staged. That decode takes `addr`
 /// through M1's `Address` door (`through_address`), so a replayed record's
 /// key is T4-valid as a staged one's is ([`ContentStore`]'s key invariants).
-/// It reads the address before the value, so a frame whose address and value
-/// both fail is refused for its address, and that is the account M2's
-/// `Corruption` carries for the frame. Read access is full:
+/// It reads the address before the value, so a record whose address and
+/// value both fail to decode is refused for its address, and that refusal is
+/// the cause M2's `Corruption` carries for it. Read access is full:
 /// [`addr`](ContentWrite::addr)/[`val`](ContentWrite::val), and its derived
 /// `Debug`, which the engine's `Record: Debug` renders for this variant and
 /// which shows the value as its length, never a byte. The engine only
@@ -355,8 +358,8 @@ impl ContentWrite {
 /// A record's address decoded through M1's `Address` door — `validate`, so
 /// T4, [`ContentStore`]'s first key invariant — and kept as its flat tumbler.
 /// An `Address` journals as its bare tumbler, so this reads exactly the bytes
-/// the record's `Serialize` writes, and refuses an address no [`stage_write`]
-/// could have staged.
+/// a record serializes as, and refuses an address no [`stage_write`] could
+/// have staged.
 fn through_address<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<Tumbler, D::Error> {
     Address::deserialize(deserializer).map(Tumbler::from)
 }

@@ -7,7 +7,7 @@ use super::{Query, RetrievalWorld};
 use crate::budget::{Count, OverBudget, MAX_FIND_COVERAGE_SPANS, MAX_WALK_STEPS};
 use crate::error::FindError;
 use crate::types::RegionSpec;
-use crate::vspan::{gate_vspan, walk_ceiling};
+use crate::vspan::{gate_vspan, walk_price};
 
 impl<W: RetrievalWorld> Query<'_, W> {
     /// FINDDOCSCONTAINING (ASN-0124 `finddocs`) — the documents that CURRENTLY
@@ -32,7 +32,7 @@ impl<W: RetrievalWorld> Query<'_, W> {
     /// the request's span count and walk price below, like any span.
     /// Registered-empty contributes nothing.
     ///
-    /// WHICH REFUSAL SPEAKS. The gate walks the regions in submitted order and
+    /// WHICH REFUSAL SPEAKS. The gate checks the regions in submitted order and
     /// each region's spans in submitted order, reporting the FIRST fault
     /// whatever its kind; within one region the registry check precedes the
     /// span gate. It also completes over the WHOLE request before any span is
@@ -60,7 +60,7 @@ impl<W: RetrievalWorld> Query<'_, W> {
     /// behind each span — up to `#runs(doc)` steps, whatever the span covers —
     /// is held, summed over the request, to the walk budget (`TooMuchCoverage`
     /// too, priced before the first span is walked, a span resolving to
-    /// nothing charged as well; crate doc, *What M6 refuses for size*). Each
+    /// nothing priced as well; crate doc, *What M6 refuses for size*). Each
     /// is a REFUSAL, never a truncation: a request past either gets a typed
     /// rejection and no answer, so FD-COMPLETE holds verbatim for every
     /// request this operation answers — a truncated coverage would silently
@@ -132,7 +132,7 @@ impl<W: RetrievalWorld> Query<'_, W> {
             for span in &r.spans {
                 spans_handed.admit(1).map_err(over)?;
                 steps_priced
-                    .admit(walk_ceiling(m5, &r.doc, span))
+                    .admit(walk_price(m5, &r.doc, span))
                     .map_err(over)?;
             }
         }
@@ -143,7 +143,7 @@ impl<W: RetrievalWorld> Query<'_, W> {
         // straight through and M6 owns no level-class discipline anywhere.
         // The union of the images IS their concatenation, so they are
         // gathered in submitted order and the coverage is built from them
-        // once. Gathering rather than re-unioning is what keeps the walk
+        // once. Gathering rather than re-unioning is what keeps phase 1
         // LINEAR in the coverage: `union` answers with a fresh set, so an
         // accumulator threaded through it copies the coverage built so far at
         // every span, and the budget below would then bound a quantity that
@@ -166,7 +166,7 @@ impl<W: RetrievalWorld> Query<'_, W> {
         // live answer, and the filter discharges both at once — from
         // order-overlap to genuine ever-containment, M5's test admitting the
         // merely ADJACENT candidates whose recorded spans touch the coverage
-        // without sharing a position, so the superset is coarser even than
+        // without sharing an address, so the superset is coarser even than
         // FD-HIST's `finddocs_R`; and from ever to now, dropping FD-GHOST's
         // `ghosts` (`finddocs_R ∖ finddocs`), the documents that held the
         // queried material at some past boundary and hold none of it now.

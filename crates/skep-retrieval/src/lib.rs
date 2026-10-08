@@ -79,7 +79,7 @@
 //! document's whole extent, which a few placing requests can make far larger
 //! than anything stored, to return two halves that may be empty.
 //!
-//! Three carry budgets of their own, each for a factor no upstream gate can
+//! Three carry budgets of their own, each for a factor no upstream cap can
 //! price. COMPARE's cost is SUPERLINEAR in its request — the join is `|P|·|Q|`
 //! over two block lists the caller sizes independently, so a byte cap on the
 //! request buys the square of what it bounds — and it carries an operand
@@ -100,17 +100,17 @@
 //! And all three hold the run-list walk their spans may ask of M5 to a walk
 //! budget of `2^24` steps — per COMPARE operand, per FINDDOCSCONTAINING
 //! request, per RETRIEVEV spec-set — priced before the first of those spans is
-//! walked. Each span is charged an upper bound on its walk, read off M5's run
-//! counts: the runs of the list its start's subspace selects — of both lists,
-//! for a start in neither subspace — capped at the span's reach ordinal, so
-//! every run for a span opening past the arranged end; and a span M5's span
-//! reader declines, a depth-incompatible one, is charged that whole list
-//! outright. So the walk refusal answers that PRICE, not the walk M5 would
-//! make: a span that resolves to nothing — R6's silent degradation, X12's
-//! consulting-state window, a foreign-subspace span — is priced like any
-//! other, and enough of them over a fragmented document refuse the request
-//! for its size, though none is ever refused for what it names. A caller so
-//! refused splits the request.
+//! walked. Each span is priced at an upper bound on its walk, read off M5's
+//! run counts: the runs of the list its start's subspace selects — of both
+//! lists, for a start in neither subspace — capped at the span's reach
+//! ordinal, so every run for a span opening past the arranged end; and a span
+//! M5's span reader declines, a depth-incompatible one, is priced at that
+//! whole list outright. So the walk refusal answers that PRICE, not the walk
+//! M5 would make: a span that resolves to nothing — R6's silent degradation,
+//! X12's consulting-state window, a foreign-subspace span — is priced like
+//! any other, and enough of them over a fragmented document refuse the
+//! request for its size, though none is ever refused for what it names. A
+//! caller so refused splits the request.
 //!
 //! The four numbers are published, so a caller sizes a request against them
 //! rather than transcribing them; the walk budget is not — as M8's is not, no
@@ -174,7 +174,7 @@ mod error;
 // The request and result values every operation takes and returns.
 mod types;
 // How M6 reads one request V-span: `Subspace`, the span gate, and the price
-// its walk is charged against the walk budget (`walk_ceiling`).
+// of its walk against the walk budget (`walk_price`).
 mod vspan;
 // `Query` and what its operations share; one file per operation beneath.
 mod query;

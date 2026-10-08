@@ -82,7 +82,7 @@ impl<W: RetrievalWorld> Query<'_, W> {
         // partial if the span overruns the bound prefix. One pass over M5's
         // lazy resolution: each run's width summed for (vi), its origin taken
         // into the set as it arrives — the answer and the run in hand held
-        // live, never the span's run list.
+        // live, never the span's whole resolution.
         let mut resolved_width = Nat::zero();
         let origins = sorted_addr_set(m5.iter_resolve(&surface, span).map(|run| {
             resolved_width += run.width();

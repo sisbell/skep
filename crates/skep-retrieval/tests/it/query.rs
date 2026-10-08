@@ -154,7 +154,7 @@ fn every_operation_refuses_an_allocated_address_that_is_not_a_document() {
 
 #[test]
 fn the_request_gate_reports_the_first_fault_in_request_order() {
-    // The gate walks the request IN ORDER and the FIRST fault wins, whatever
+    // The gate checks the request IN ORDER and the FIRST fault wins, whatever
     // its kind — which is what makes `index` / `(region, index)` /
     // `(operand, region, index)` localization mean anything. Within ONE spec
     // the registry check precedes the span gate; ACROSS specs, request order

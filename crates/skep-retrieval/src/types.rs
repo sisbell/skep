@@ -32,7 +32,7 @@
 //! [`Delivery`] and [`CompareReport`] are COLLECTIONS, and behave like std's:
 //! `len`/`is_empty`/`iter`/`as_slice`, `IntoIterator` owned and borrowed,
 //! `FromIterator`, and `Default` for the empty answer each genuinely returns.
-//! A consumer walks an answer without naming its representation, which the
+//! A consumer iterates an answer without naming its representation, which the
 //! orphan rule would otherwise forbid it from arranging for itself.
 //! Not `Extend`: these are answers produced whole, never grown in place, and
 //! the narrower promise is the honest one.
@@ -66,9 +66,9 @@ pub struct Spec {
 /// "Region" is two corpus words, and this type sits under both. ASN-0124 FD-Q
 /// calls the pair `(d_j, W_j)` itself a document-scoped V-REGION, so the
 /// `region` a fault coordinate carries, and "region j" wherever this crate
-/// walks a request, count the `RegionSpec`s themselves. ASN-0122's REGION
-/// `R_Σ(ρ)` is the instance set a whole spec-set denotes once each span is
-/// clipped against its document's current arrangement — the union of its
+/// goes through a request, count the `RegionSpec`s themselves. ASN-0122's
+/// REGION `R_Σ(ρ)` is the instance set a whole spec-set denotes once each span
+/// is clipped against its document's current arrangement — the union of its
 /// regions' clipped parts, the thing COMPARE's report is confined to (X12 R1),
 /// and the thing an empty resolution yields none of. This crate names that one
 /// only as the OPERAND's region, or by its symbol.
@@ -78,10 +78,10 @@ pub struct RegionSpec {
     pub spans: Vec<Span>,
 }
 
-/// One delivered item per active V-position (ASN-0115 R3 exactness): a
-/// content position delivers its stored value (an `Arc` clone — cheap, never
-/// a byte copy); a link position delivers the address-as-reference and never
-/// reads M4.
+/// An item of a delivery. A DELIVERED run gives one per active V-position
+/// (ASN-0115 R3 exactness): a content position delivers its stored value (an
+/// `Arc` clone — cheap, never a byte copy); a link position delivers the
+/// address-as-reference and never reads M4.
 ///
 /// The WITHHELD arm (PUB round 2, lane 3.3, §4; PUB-6.41) is the one item
 /// that stands for a RUN rather than a position: a run the reading principal
@@ -137,9 +137,9 @@ impl Delivery {
         &self.0
     }
 
-    /// How many items were delivered — one per active V-position of each
-    /// delivered run (R3), and one per withheld run, however many positions
-    /// it spans.
+    /// How many items the delivery carries — one per active V-position of
+    /// each delivered run (R3), and one per withheld run, however many
+    /// positions it spans.
     pub fn len(&self) -> usize {
         self.0.len()
     }
@@ -152,7 +152,7 @@ impl Delivery {
         self.0.is_empty()
     }
 
-    /// Borrowed items in delivery order — the iterator `&Delivery` walks.
+    /// Borrowed items in delivery order — what iterating `&Delivery` yields.
     pub fn iter(&self) -> std::slice::Iter<'_, DeliveryItem> {
         self.0.iter()
     }
@@ -250,8 +250,8 @@ impl CompareReport {
         self.0.is_empty()
     }
 
-    /// Borrowed correspondences in presentation order — the iterator
-    /// `&CompareReport` walks.
+    /// Borrowed correspondences in presentation order — what iterating
+    /// `&CompareReport` yields.
     pub fn iter(&self) -> std::slice::Iter<'_, CorrPair> {
         self.0.iter()
     }

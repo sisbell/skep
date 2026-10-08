@@ -236,7 +236,7 @@ fn a_request_keys_a_set_as_its_m5_twin_does() {
 #[test]
 fn the_answer_collections_behave_like_std_collections() {
     // §Public interface: Delivery and CompareReport are collections, so a
-    // consumer walks, measures and collects one without naming the Vec
+    // consumer iterates, measures and collects one without naming the Vec
     // inside it — impls the orphan rule would forbid a consumer from adding.
     let k = mem_kernel();
     let vs = insert3(&k);
@@ -257,7 +257,7 @@ fn the_answer_collections_behave_like_std_collections() {
     assert!(!delivery.is_empty());
     assert_eq!(delivery.iter().count(), 3);
     assert_eq!(delivery.as_slice()[0], DeliveryItem::Content(val(b"a")));
-    // Borrowed walk, then an owned one that collects straight back.
+    // Borrowed iteration, then an owned one that collects straight back.
     let borrowed: Vec<&DeliveryItem> = (&delivery).into_iter().collect();
     assert_eq!(borrowed.len(), 3);
     let collected: Delivery = delivery.clone().into_iter().collect();

@@ -1,5 +1,5 @@
 //! The walk budget across the three operations priced against it: every
-//! span is charged an upper bound on its walk before the first is walked —
+//! span is priced at an upper bound on its walk before the first is walked —
 //! one that resolves to nothing included — and a gate fault outranks the
 //! refusal. Each operation's own walk refusal sits beside its other
 //! budgets, in `retrieve`, `compare_refusals` and `find`.

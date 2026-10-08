@@ -58,9 +58,9 @@ pub(crate) enum Subspace {
 impl Subspace {
     /// Both subspaces, ONCE — content, then link: their numerals' order
     /// (`s_C < s_L`, T7), and so the T1 order of the per-subspace extents
-    /// `doc_vspanset` collects AS GIVEN into W13's normal form. Every walk
+    /// `doc_vspanset` collects AS GIVEN into W13's normal form. Every loop
     /// over the two reads it here, [`Subspace::of_numeral`] included; a second
-    /// copy is how a walk comes to miss one, or to list them out of that
+    /// copy is how a loop comes to miss one, or to list them out of that
     /// order.
     pub(crate) const ALL: [Subspace; 2] = [Subspace::Content, Subspace::Link];
 
@@ -149,7 +149,7 @@ impl Subspace {
     /// [`Subspace::runs`] would hand back, without handing them back: M5's
     /// own count, one map lookup reading no run, selected as `count` and
     /// `runs` are. The quantity a resolution's walk is priced in, and private
-    /// to this file so that a walk is priced in [`walk_ceiling`] and nowhere
+    /// to this file so that a walk is priced in [`walk_price`] and nowhere
     /// else.
     fn run_count(self, m5: &M5State, doc: &Address) -> usize {
         match self {
@@ -159,9 +159,10 @@ impl Subspace {
     }
 }
 
-/// An upper bound on the run-list steps M5's resolution of `span` against
-/// `doc` can take, read before the walk from M5's O(1) run counts — what each
-/// span is charged against the walk budget (`MAX_WALK_STEPS`).
+/// A span's WALK PRICE: an upper bound on the run-list steps M5's resolution
+/// of `span` against `doc` can take, read before the walk from M5's O(1) run
+/// counts — what the span is admitted at against the walk budget
+/// (`MAX_WALK_STEPS`).
 ///
 /// M5 reaches a span by walking the selected run list from its first run, and
 /// stops at the first run opening at or past the span's reach ordinal `e`
@@ -178,7 +179,7 @@ impl Subspace {
 /// neither subspace and a span the reader declines both resolve to nothing,
 /// so their request pays for a walk M5 never makes; the crate doc's *What M6
 /// refuses for size* is where a caller is told.
-pub(crate) fn walk_ceiling(m5: &M5State, doc: &Address, span: &Span) -> usize {
+pub(crate) fn walk_price(m5: &M5State, doc: &Address, span: &Span) -> usize {
     let run_count = match Subspace::of_span(span) {
         Some(sub) => sub.run_count(m5, doc),
         None => Subspace::ALL.into_iter().fold(0, |total: usize, sub| {

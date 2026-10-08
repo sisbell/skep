@@ -25,19 +25,20 @@ use crate::types::Deletions;
 ///
 /// LAZY, and that is the point rather than a style: `d`'s arrangement binds
 /// `n_C(d)` content positions — one per value placed, however many bytes it
-/// holds — and each position enumerated is an OWNED `Address`: a `Vec<Nat>`
-/// of element components, order hundreds of bytes and a handful of
-/// allocations. Handing back a `Vec` would make the peak live heap of a
-/// two-document combine the size of both documents, from a request naming two
-/// addresses and nothing else; streaming makes it the size of the part the
-/// caller's filter keeps. Each run's positions are enumerated by the run that
-/// owns them — `Run::addrs`, over M5's lent run-list, so no run is cloned to
-/// be walked and the stream holds one cursor into the snapshot's arrangement.
+/// holds — and the address enumerated at each position is an OWNED
+/// `Address`: a `Vec<Nat>` of element components, order hundreds of bytes and
+/// a handful of allocations. Handing back a `Vec` would make the peak live
+/// heap of a two-document combine the size of both documents, from a request
+/// naming two addresses and nothing else; streaming makes it the size of the
+/// part the caller's filter keeps. Each run's addresses are enumerated by the
+/// run that owns them — `Run::addrs`, over M5's lent run-list, so no run is
+/// cloned to be walked and the stream holds one cursor into the snapshot's
+/// arrangement.
 ///
 /// Enumerating the content runs alone therefore loses nothing AND needs no
 /// filter behind it: `DELETED(a, d)` requires `(a, d) ∈ R`, and R is appended
 /// only where content is placed — seating a link records nothing in it — so a
-/// link position enumerated here could only be filtered away again.
+/// link address enumerated here could only be filtered away again.
 fn current_content<'a>(m5: &'a M5State, d: &Address) -> impl Iterator<Item = Address> + 'a {
     m5.content_runs(d).flat_map(Run::addrs)
 }
@@ -110,10 +111,11 @@ impl<W: RetrievalWorld> Query<'_, W> {
     /// enumeration streams and each half is built as the set it denotes —
     /// every address inserted as it arrives and a duplicate dropped on arrival
     /// — so what else is held live is the deduped halves and the address in
-    /// hand, never a materialized copy of either document's position list,
-    /// however many times its extent repeats an address. Past the covers, the
-    /// worst case is the honest one: two documents where each has deleted what
-    /// the other still holds, whose answer genuinely is that many addresses.
+    /// hand, never a materialized list of the addresses at either document's
+    /// positions, however many times its extent repeats one. Past the covers,
+    /// the worst case is the honest one: two documents where each has deleted
+    /// what the other still holds, whose answer genuinely is that many
+    /// addresses.
     pub fn show_deletions(
         &self,
         d_a: &Address,

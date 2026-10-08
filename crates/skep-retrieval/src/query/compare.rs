@@ -28,7 +28,7 @@ use crate::budget::{
 };
 use crate::error::{CompareError, Operand};
 use crate::types::{CompareReport, CorrPair, RegionSpec};
-use crate::vspan::{gate_vspan, walk_ceiling, Subspace};
+use crate::vspan::{gate_vspan, walk_price, Subspace};
 
 impl<W: RetrievalWorld> Query<'_, W> {
     /// COMPARE (ASN-0122): two content-subspace spec-sets `ρ₁, ρ₂`, each a set
@@ -67,7 +67,7 @@ impl<W: RetrievalWorld> Query<'_, W> {
     /// wrong (⟦Γ⟧ is a set-union; duplicates collapse denotationally and the
     /// stable sort keeps the listed order deterministic).
     ///
-    /// WHICH REFUSAL SPEAKS. The gate walks ρ₁'s regions and their spans in
+    /// WHICH REFUSAL SPEAKS. The gate checks ρ₁'s regions and their spans in
     /// submitted order, then ρ₂'s, and reports the FIRST fault whatever its
     /// kind — so `(operand, region, index)` promises that everything listed
     /// before it is clean. BOTH operands are gated in FULL before either is
@@ -87,7 +87,7 @@ impl<W: RetrievalWorld> Query<'_, W> {
     /// resolved first) — and the walks those resolutions make, each up to
     /// `#runs(doc)` steps whatever it yields, to the walk budget
     /// (`TooManyBlocks` too, priced over the operand before its first span is
-    /// walked, a depth-incompatible span charged its whole run list; crate
+    /// walked, a depth-incompatible span priced at its whole run list; crate
     /// doc, *What M6 refuses for size*); and the report to the pair budget,
     /// [`MAX_COMPARE_PAIRS`] correspondences (`TooManyPairs`, refused AS THE
     /// PAIRS ARE PRODUCED, so an over-budget fan-out stops accumulating rather
@@ -126,7 +126,7 @@ impl<W: RetrievalWorld> Query<'_, W> {
 /// content-subspace-started and well-formed, faults located by
 /// `(operand, region, span-index)`.
 ///
-/// Walks the regions and their spans in SUBMITTED ORDER and returns at the
+/// Checks the regions and their spans in SUBMITTED ORDER and returns at the
 /// first fault whatever its kind, which is what makes the triple locate
 /// anything: it names a span before which everything listed is clean. Per span
 /// the residence check runs BEFORE [`gate_vspan`] — a link-started span that
@@ -244,7 +244,7 @@ impl<'a> Block<'a> {
 /// accumulation. `Err(OverBudget)` in two passes, each count a [`Count`]:
 /// before the operand's first span is walked, when it names more spans than
 /// [`MAX_COMPARE_OPERAND_BLOCKS`] or its spans are priced past
-/// [`MAX_WALK_STEPS`], each at its [`walk_ceiling`]; and as `iter_resolve`
+/// [`MAX_WALK_STEPS`], each at its [`walk_price`]; and as `iter_resolve`
 /// produces each run, when its blocks would exceed
 /// [`MAX_COMPARE_OPERAND_BLOCKS`]. The budget's card says why spans are
 /// counted beside blocks; `Count`'s says where the boundary falls.
@@ -296,7 +296,7 @@ fn resolve_blocks<'a>(
         let surface = reading_surface(m3, &r.doc);
         for span in &r.spans {
             spans_handed.admit(1)?;
-            steps_priced.admit(walk_ceiling(m5, &surface, span))?;
+            steps_priced.admit(walk_price(m5, &surface, span))?;
         }
     }
     // What the walk PRODUCES, counted as it is produced.

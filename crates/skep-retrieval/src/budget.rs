@@ -13,12 +13,12 @@
 //! its number by definition, is too, and of which budgets move with that
 //! number; [`MAX_WALK_STEPS`]'s is the one statement of what a span's walk
 //! costs and why a request's walks are budgeted, and `vspan.rs`'s
-//! [`walk_ceiling`]'s of how one span's walk is priced — which the crate
-//! doc's *What M6 refuses for size* publishes to callers, `walk_ceiling`
-//! being private; [`Count`]'s card is the one statement of where a count's
-//! boundary falls.
+//! [`walk_price`]'s of how one span's walk is priced — which the crate doc's
+//! *What M6 refuses for size* publishes to callers, `walk_price` being
+//! private; [`Count`]'s card is the one statement of where a count's boundary
+//! falls.
 //!
-//! [`walk_ceiling`]: crate::vspan::walk_ceiling
+//! [`walk_price`]: crate::vspan::walk_price
 
 /// The most blocks one COMPARE operand may resolve to, and the most spans it
 /// may hand to M5 — ONE budget on an operand's resolution, counted twice, on
@@ -122,9 +122,9 @@ pub const MAX_COMPARE_PAIRS: usize = 1 << 16;
 /// [`Query::show_deletions`]: crate::Query::show_deletions
 pub const MAX_FIND_COVERAGE_SPANS: usize = MAX_COMPARE_OPERAND_BLOCKS;
 
-/// The most items one RETRIEVEV may deliver — one per position of each
-/// delivered run and one per withheld run, as [`Delivery::len`] counts — and so
-/// the ceiling on what the DELIVERY makes M6 hold live.
+/// The most items one RETRIEVEV's delivery may carry — one per position of
+/// each delivered run and one per withheld run, as [`Delivery::len`] counts —
+/// and so the ceiling on what the DELIVERY makes M6 hold live.
 ///
 /// THE EXTENT IS VIRTUAL, which is why no request field prices it. M5 caps the
 /// runs one placing request stores (`MAX_PLACED_RUNS`) and caps no position
@@ -166,7 +166,7 @@ pub const MAX_DELIVERY_ITEMS: usize = 1 << 17;
 /// counts see at most what it yields. A request of spans aimed past the end of
 /// a fragmented document costs `|spans| · #runs(doc)` steps and produces
 /// nothing, and `#runs` is cheap to grow: one COPY places up to M5's
-/// `MAX_PLACED_RUNS` runs. `vspan.rs`'s [`walk_ceiling`] prices each span at
+/// `MAX_PLACED_RUNS` runs. `vspan.rs`'s [`walk_price`] prices each span at
 /// an upper bound on its walk, read off M5's O(1) run counts — a span that
 /// resolves to nothing included — and its card says how.
 ///
@@ -182,7 +182,7 @@ pub const MAX_DELIVERY_ITEMS: usize = 1 << 17;
 /// would size a request against, so the refusal renders the number and nothing
 /// publishes it to compute with.
 ///
-/// [`walk_ceiling`]: crate::vspan::walk_ceiling
+/// [`walk_price`]: crate::vspan::walk_price
 pub(crate) const MAX_WALK_STEPS: usize = MAX_COMPARE_OPERAND_BLOCKS * MAX_COMPARE_OPERAND_BLOCKS;
 
 /// One count taken against one of the budgets above — the spans a COMPARE

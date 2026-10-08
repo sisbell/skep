@@ -137,12 +137,13 @@ fn run_origin(run: &Run) -> Address {
 /// order — so the set those two keep is exactly the tumbler-deduplicated,
 /// T1-ordered one, with no `.tumbler()` detour and no key clone.
 ///
-/// BUILT AS THE STREAM ARRIVES. SHOWDELETIONS hands this a document's
-/// positions WITH multiplicity, and a document's extent is virtual — M5 caps
-/// the runs a placing request stores and no position count — so the stream
-/// can be `N·W` items for a set of `W`. Each item is inserted as it arrives
-/// and a duplicate is dropped on arrival, so what is held live is the set and
-/// the item in hand, never the stream. Not `collect::<BTreeSet<_>>()`: std's
+/// BUILT AS THE STREAM ARRIVES. SHOWDELETIONS hands this the address at every
+/// content position of a document, so an address placed at `N` positions
+/// arrives `N` times; and a document's extent is virtual — M5 caps the runs a
+/// placing request stores and no position count — so the stream can be `N·W`
+/// items for a set of `W`. Each item is inserted as it arrives and a
+/// duplicate is dropped on arrival, so what is held live is the set and the
+/// item in hand, never the stream. Not `collect::<BTreeSet<_>>()`: std's
 /// `FromIterator` buffers the whole stream into a `Vec` to build the tree in
 /// bulk, and collecting into a `Vec` to sort and dedup holds it the same way.
 ///

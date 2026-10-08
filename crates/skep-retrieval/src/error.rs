@@ -3,12 +3,12 @@
 //!
 //! WHICH REFUSAL SPEAKS, in three clauses a caller may rely on.
 //!
-//! ONE PASS, REQUEST ORDER. Each gate walks the request as submitted and
-//! reports the FIRST fault it reaches, whatever its kind — a fault earlier in
-//! the request outranks any fault later in it, which is what makes
-//! `index` / `(region, index)` / `(operand, region, index)` locate anything:
-//! the payload names a spec, or a region and a span, before which everything
-//! is clean.
+//! ONE PASS, REQUEST ORDER. Each gate checks the request in the order
+//! submitted and reports the FIRST fault it reaches, whatever its kind — a
+//! fault earlier in the request outranks any fault later in it, which is what
+//! makes `index` / `(region, index)` / `(operand, region, index)` locate
+//! anything: the payload names a spec, or a region and a span, before which
+//! everything is clean.
 //!
 //! WITHIN ONE SPEC, OR ONE REGION AND ONE OF ITS SPANS, the checks run in
 //! variant declaration order: registry, then (COMPARE) content residence, then
@@ -104,9 +104,9 @@ use crate::budget::{
 /// several of the four at once, and the one reported is the first of:
 /// [`NotLevelUniform`], [`NotOrdinalLevel`], [`StartNotZeroFree`],
 /// [`StartTooShallow`]. So a fault means "the clauses before it hold" and
-/// says nothing about the ones after it: a caller repairing a span walks the
-/// ladder forward, in a bounded number of round trips, rather than treating
-/// each report as the only defect.
+/// says nothing about the ones after it: a caller repairing a span climbs the
+/// ladder, in a bounded number of round trips, rather than treating each
+/// report as the only defect.
 ///
 /// That is the DECISION order and deliberately NOT the declaration order
 /// below, which carries no meaning for the ladder — the reason `Ord` is
@@ -154,11 +154,11 @@ pub enum RetrieveError {
     /// The delivery exceeds [`MAX_DELIVERY_ITEMS`] items — refused as it is
     /// produced, a delivered run's positions as one batch — or the spec-set's
     /// walk is PRICED past the walk budget before its first spec is walked,
-    /// each spec at an upper bound that charges a spec resolving to nothing
-    /// as well (crate doc, *What M6 refuses for size*). A document's extent
-    /// is virtual, so one spec may name a delivery no request field prices; a
-    /// refusal, never a truncation, so R3, R5 and R8 hold verbatim for every
-    /// delivery answered.
+    /// each spec priced at an upper bound on its walk, a spec resolving to
+    /// nothing included (crate doc, *What M6 refuses for size*). A document's
+    /// extent is virtual, so one spec may name a delivery no request field
+    /// prices; a refusal, never a truncation, so R3, R5 and R8 hold verbatim
+    /// for every delivery answered.
     TooManyItems,
 }
 
@@ -225,10 +225,10 @@ pub enum CompareError {
         fault: SpanFault,
     },
     /// The operand's resolution exceeds [`MAX_COMPARE_OPERAND_BLOCKS`] on
-    /// either of its two counts: more spans handed to M5 — one walk apiece,
-    /// whatever it yields — or more blocks built, than the budget; or its
-    /// spans' walk is PRICED past the walk budget before the operand's first
-    /// span is walked, a span resolving to nothing charged as well (crate
+    /// either of its two counts: more spans handed to M5 — one resolution
+    /// apiece, whatever it yields — or more blocks built, than the budget; or
+    /// its spans' walk is PRICED past the walk budget before the operand's
+    /// first span is walked, a span resolving to nothing priced as well (crate
     /// doc, *What M6 refuses for size*). The join is `|P|·|Q|`, so a
     /// per-operand budget is what bounds it; refused as the operand resolves
     /// and before the join runs, with ρ₁ resolved first.
@@ -256,10 +256,10 @@ pub enum FindError {
         fault: SpanFault,
     },
     /// The request's resolution exceeds [`MAX_FIND_COVERAGE_SPANS`] on either
-    /// of its two counts: more spans handed to M5 — one walk apiece, whatever
-    /// it yields — or more coverage spans produced, than the budget; or its
-    /// spans' walk is PRICED past the walk budget before its first span is
-    /// walked, a span resolving to nothing charged as well (crate doc,
+    /// of its two counts: more spans handed to M5 — one resolution apiece,
+    /// whatever it yields — or more coverage spans produced, than the budget;
+    /// or its spans' walk is PRICED past the walk budget before its first span
+    /// is walked, a span resolving to nothing priced as well (crate doc,
     /// *What M6 refuses for size*). That is the one factor of this operation's
     /// cost that the request owns, and the multiplier it applies to two
     /// world-sized scans. Refused BEFORE the candidate scan runs; a refusal,

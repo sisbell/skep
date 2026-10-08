@@ -10,7 +10,7 @@ use super::{run_origin, Query, RetrievalWorld};
 use crate::budget::{Count, OverBudget, MAX_DELIVERY_ITEMS, MAX_WALK_STEPS};
 use crate::error::RetrieveError;
 use crate::types::{Delivery, DeliveryItem, Spec};
-use crate::vspan::{gate_vspan, walk_ceiling, Subspace};
+use crate::vspan::{gate_vspan, walk_price, Subspace};
 
 /// RETRIEVEV alone opens M4, so RETRIEVEV alone names it: `HasContent` is
 /// this impl block's bound and nowhere else's, which is what makes the other
@@ -44,13 +44,14 @@ impl<W: RetrievalWorld + HasContent> Query<'_, W> {
     /// is a run this form can meet. Per-spec concatenation in submitted order
     /// (R5), ascending-V within, no merge, no global sort.
     ///
-    /// WHICH REFUSAL SPEAKS. The gate walks the spec-set in SUBMITTED ORDER
+    /// WHICH REFUSAL SPEAKS. The gate checks the spec-set in SUBMITTED ORDER
     /// and reports the FIRST faulty spec, whatever the kind of its fault;
     /// within one spec the registry check precedes the span gate. So
     /// `MalformedSpec { index: i }` and `DocNotRegistered` both carry a
     /// promise about the specs before the offending one: a caller may rely on
     /// specs `0..i` being registered documents with well-formed spans, and
-    /// repair a batch by walking forward rather than re-checking it whole.
+    /// repair a batch from the offending spec onward rather than re-checking
+    /// it whole.
     /// And it completes over the whole spec-set before any spec is priced or
     /// walked, so a gate fault always outranks `TooManyItems`.
     ///
@@ -69,8 +70,8 @@ impl<W: RetrievalWorld + HasContent> Query<'_, W> {
     /// walk — one that degrades to nothing under R6 included; crate doc,
     /// *What M6 refuses for size*). Both are REFUSALS, never truncations: R3
     /// forbids delivering fewer, R5 reordering into something cheaper and R8
-    /// collapsing the repeats, and a refused request is delivered nothing at
-    /// all, so all three hold verbatim for every delivery answered. A caller
+    /// collapsing the repeats, and a refused request gets no delivery at all,
+    /// so all three hold verbatim for every delivery answered. A caller
     /// wanting more splits the spec-set or narrows its spans.
     pub fn retrieve_v(&self, specs: &[Spec]) -> Result<Delivery, RetrieveError> {
         // The masked form under the all-true predicate: its only `Withheld`
@@ -139,7 +140,7 @@ impl<W: RetrievalWorld + HasContent> Query<'_, W> {
         for spec in specs {
             let surface = reading_surface(m3, &spec.doc);
             steps_priced
-                .admit(walk_ceiling(m5, &surface, &spec.span))
+                .admit(walk_price(m5, &surface, &spec.span))
                 .map_err(over)?;
         }
         let mut out = Vec::new();

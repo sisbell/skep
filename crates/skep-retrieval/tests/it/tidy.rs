@@ -213,9 +213,10 @@ fn compares(code: &str) -> bool {
 /// as it arrives, so an over-budget request stops its walk at the budget
 /// (`MAX_COMPARE_OPERAND_BLOCKS`' and `MAX_DELIVERY_ITEMS`' cards);
 /// `query/origin.rs` pulls it the same way and keeps each run's origin, so
-/// SHOWORIGIN holds its answer and the run in hand rather than a span's run
-/// list; and `query/find.rs` asks `arranges_any` whether a footprint is empty
-/// rather than building one (the COST paragraph of `find_docs_containing`).
+/// SHOWORIGIN holds its answer and the run in hand rather than the span's
+/// whole resolution; and `query/find.rs` asks `arranges_any` whether a
+/// footprint is empty rather than building one (the COST paragraph of
+/// `find_docs_containing`).
 /// M5 publishes the eager twin of each — `resolve`, `image`, `project` — and
 /// they answer exactly the same, so no behavioural test can tell a query that
 /// stops from one that materializes a document's every run and is refused

@@ -288,13 +288,14 @@ fn the_test_module_checks_close_the_module_on_one_line() {
 
 /// `lib.rs`'s "Traceability" cites the signed-ops design record as "the
 /// design record" with its section or ruling, and never as "the record" or
-/// "its record" alone: in this crate a record is a credential record
-/// (AUTH-1.18), so a bare citation beside an entry, a fingerprint and a label
-/// reads as a place inside one. Held over every comment under `src/` and
-/// `tests/`, each run of comment lines read as one text, so a citation a
-/// reflow splits across two lines is read whole: "the record" or "its
-/// record", or either's possessive, before a section sign or a ruling's `D`
-/// number is a design-record citation missing its "design".
+/// "its record" alone: in this crate a record is one a board holds — a
+/// credential record (AUTH-1.18) or a registry record — so a bare citation
+/// beside an entry, a fingerprint and a label reads as a place inside one.
+/// Held over every comment under `src/` and `tests/`, each run of comment
+/// lines read as one text, so a citation a reflow splits across two lines is
+/// read whole: "the record" or "its record", or either's possessive, before a
+/// section sign or a ruling's `D` number is a design-record citation missing
+/// its "design".
 #[test]
 fn the_design_record_is_never_cited_as_the_record_alone() {
     let crate_dir = Path::new(env!("CARGO_MANIFEST_DIR"));

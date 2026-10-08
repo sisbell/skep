@@ -490,10 +490,12 @@ pub fn canonical_record<T: RecordEntry>(entries: &[T], sig: Option<&str>) -> Str
 /// over it): the kind's ENTRIES and the `sig` member's string where one
 /// stands — what the RECORD grade's verifier reads off a committed atom
 /// (signed ops; the design record §4.2 (C), §7.5 step 3): `sig` is the
-/// signature under trial, and [`RecordValue::sigless_canonical_record`] the
-/// sig-less projection it was made over — the body-bytes row of the `record`
-/// grammar ([`entry_body_record`](crate::entry_body_record)). The fold never
-/// holds one: it reads the entries alone (AUTH-2.13, AUTH-2.94), through
+/// signature under trial, made over the record frame
+/// ([`RecordFrame`](crate::RecordFrame)), and
+/// [`RecordValue::sigless_canonical_record`] the sig-less projection that
+/// frame carries as the `record` grammar's body-bytes row
+/// ([`entry_body_record`](crate::entry_body_record)). The fold never holds
+/// one: it reads the entries alone (AUTH-2.13, AUTH-2.94), through
 /// [`parse_enroll`] and [`parse_retire`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RecordValue<T> {
@@ -513,9 +515,10 @@ pub struct RecordValue<T> {
 impl<T: RecordEntry> RecordValue<T> {
     /// THE SIG-LESS CANONICAL RECORD of this value — [`canonical_record`] over
     /// its entries with no `sig` (the design record §4.2 (C)): the record its
-    /// `sig` was made over, framed as the `record` grammar's body-bytes row,
-    /// [`RecordRows`](crate::RecordRows)'s `sigless_canonical_record`. The
-    /// value holds the entries, so it answers their projection.
+    /// `sig` covers, as the body-bytes row of the frame the `sig` is made over
+    /// ([`RecordFrame`](crate::RecordFrame); [`RecordRows`](crate::RecordRows)'s
+    /// `sigless_canonical_record`). The value holds the entries, so it answers
+    /// their projection.
     pub fn sigless_canonical_record(&self) -> String {
         canonical_record(&self.entries, None)
     }
@@ -573,10 +576,11 @@ impl<T: RecordEntry> RecordValue<T> {
 /// deposit's `make_link`, a reader or a mirror beside the table — calls this
 /// over the atom the link's `from` names, takes the `sig` as the signature
 /// under trial and [`RecordValue::sigless_canonical_record`] as the
-/// body-bytes row of the `record` grammar it was made over. So a body is
-/// admitted by one rule whoever asks — admission is the fold's and not the
-/// verifier's — and a body this refuses is one the fold refuses, `bad_record`
-/// and the rest, carrying no `sig` a verifier could weigh.
+/// body-bytes row of the record frame it was made over
+/// ([`RecordFrame`](crate::RecordFrame)). So a body is admitted by one rule
+/// whoever asks — admission is the fold's and not the verifier's — and a body
+/// this refuses is one the fold refuses, `bad_record` and the rest, carrying
+/// no `sig` a verifier could weigh.
 ///
 /// POSTCONDITION — over `entries`, the kind's own: [`parse_enroll`]'s for the
 /// enrollment kind, [`parse_retire`]'s for the retirement kind; and

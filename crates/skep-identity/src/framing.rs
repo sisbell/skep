@@ -62,14 +62,17 @@ pub const NODE_HELLO_TAG: Tag = Tag(b"skep-node-hello-v1");
 
 /// THE ENTRY FRAME's tag — a tag chosen in another document, declared in
 /// AUTH-1.11's block as AUTH-1.17 binds one (signed ops; the design record
-/// §2.5, §4.2 (C)): the bytes a publish-class entry's signature is made over —
+/// §2.5, §4.2 (C)): the bytes a publish-class entry's signature, or under the
+/// `record` token a record's `sig` (the frame merge, fm-I), is made over —
 /// `framed(ENTRY_TAG, [alg, board, account, doc, op, body])`, composed by
-/// [`crate::entry_frame`] — signed at the entry's own write by the acting
-/// hand and verified by the daemon before the commit and by any reader
+/// [`crate::entry_frame`], a record's through [`crate::RecordFrame`] — signed
+/// by the writing hand, an entry's at its own write and a record's before its
+/// deposit, and verified by the daemon before the commit and by any reader
 /// beside the table. The tag is the frame's whole domain separation: FIPS
 /// 204's `ctx` and FN-DSA's domain context are EMPTY under every marker tag
-/// (the seam build's CTX PIN), so nothing but this tag tells an entry
-/// signature from a session's or a key fingerprint's preimage.
+/// (the seam build's CTX PIN), so nothing but this tag tells an entry's or a
+/// record's signature from a session's or a key fingerprint's preimage; the
+/// `op` member's token tells the two grades apart.
 pub const ENTRY_TAG: Tag = Tag(b"skep-entry-v1");
 
 /// The declared tag set (AUTH-1.11). Every tag begins `skep-` and no tag is

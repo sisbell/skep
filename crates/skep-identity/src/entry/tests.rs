@@ -64,7 +64,8 @@ fn nonzero(width: u64) -> NonZeroU64 {
 /// where its row began is caught; the slot row and the address-list row
 /// are each pinned at TWO elements as well as one, since only a second
 /// element can show the ORDER the row keeps; the slot row's EMPTY spelling
-/// is pinned alone, and the pair's row beside the list row it is one of.
+/// is pinned alone, and the pair's row beside the address-list row it is
+/// one of.
 #[test]
 fn the_rows_spell_as_the_module_doc_states() {
     assert_eq!(
@@ -144,8 +145,9 @@ fn the_rows_spell_as_the_module_doc_states() {
         .concat(),
         "the address-list row keeps its elements in the order given"
     );
-    // THE PAIR'S ROW: an `edit_link`'s two homes as a list row of two, the
-    // successor's home FIRST — and the one-document term the address row.
+    // THE PAIR'S ROW: an `edit_link`'s two homes as an address-list row of
+    // two, the successor's home FIRST — and the one-address term the address
+    // row.
     let (d_s, d_a) = (addr(&[1, 0, 1, 0, 2]), addr(&[1, 0, 1, 0, 1]));
     assert_eq!(
         doc_bytes(DocTerm::Pair { d_s: &d_s, d_a: &d_a }),
@@ -159,7 +161,7 @@ fn the_rows_spell_as_the_module_doc_states() {
         .concat(),
         "the pair's row: d_s then d_a"
     );
-    assert_eq!(doc_bytes(DocTerm::One(&d_a)), b"1.0.1.0.1", "one document: the address row");
+    assert_eq!(doc_bytes(DocTerm::One(&d_a)), b"1.0.1.0.1", "one address: the address row");
     assert_ne!(
         doc_bytes(DocTerm::Pair { d_s: &d_s, d_a: &d_a }),
         doc_bytes(DocTerm::Pair { d_s: &d_a, d_a: &d_s }),
@@ -319,9 +321,9 @@ fn the_rows_spell_as_the_module_doc_states() {
         .concat(),
         "the three slots, then the `replaces` row's group"
     );
-    // A PRESENT group holding an EMPTY list row — a spelling no op makes,
-    // the wire's `replaces` member being one address — is still not the
-    // absent bytes: the group's length tells the two apart.
+    // A PRESENT group holding an EMPTY address-list row — a spelling no op
+    // makes, the wire's `replaces` member being one address — is still not
+    // the absent bytes: the group's length tells the two apart.
     let mut present_and_empty = Vec::new();
     push_delimited(&mut present_and_empty, &address_list_bytes(&[]));
     assert_eq!(present_and_empty, [&[0u8, 0, 0, 9][..], &address_list_bytes(&[])[..]].concat());
@@ -344,14 +346,15 @@ fn the_rows_spell_as_the_module_doc_states() {
         assert_eq!(body.as_bytes(), four_rows(slots), "{token}: the make_link body's four rows");
         assert_eq!(body.op(), token);
     }
-    // THE EDIT_LINK BODY: the successor's four rows, then the claim's `from`
-    // slot row — `original`'s one unit span — and nothing after it.
+    // THE EDIT_LINK BODY: the successor's four rows, then the supersession
+    // claim's `from` slot row — `original`'s one unit span — and nothing
+    // after it.
     let original = addr(&[1, 0, 1, 0, 1, 0, 2, 1]);
     let edit = entry_body_edit_link(slots, &unit_span(&original));
     assert_eq!(
         edit.as_bytes(),
         [four_rows(slots), slot_bytes(EntrySlot(&[unit_span(&original)]))].concat(),
-        "the successor's four rows, then the claim's from slot: the original's unit span"
+        "the successor's four rows, then the supersession claim's from: the original's unit span"
     );
     assert_eq!(edit.op(), "edit_link");
     // THE EMPTY BODY: no bytes, under each content-free op's own token.
@@ -388,9 +391,9 @@ fn the_rows_spell_as_the_module_doc_states() {
         .concat(),
         "type, to, the EMPTY replaces group, the EMPTY lineage group, the bytes"
     );
-    // …and a targetless kind naming both: the `to` row is the EMPTY list
-    // (nine bytes, never absent), each optional row its one address in
-    // the `replaces` row's own spelling, and `from` is nowhere.
+    // …and a targetless kind naming both: the `to` row is the EMPTY
+    // address-list row (nine bytes, never absent), each optional row its one
+    // address in the `replaces` row's own spelling, and `from` is nowhere.
     let fork_point = addr(&[1, 0, 1, 0, 1, 3]);
     let lineage_group = [
         &[0u8, 0, 0, 24][..],
@@ -622,7 +625,8 @@ fn the_frame_is_framed_under_the_entry_tag_over_six_members() {
         framed_members([b"mldsa65-ed25519", &board, b"1.0.1", b"1.0.1.0.1", b"insert", b"B"])
     );
     // Every body, under its own token, each over the `doc` term its grammar
-    // takes: the pair's row for the edit, one document for every other.
+    // takes: the pair's row for the edit, the parent account for a mint, a
+    // document for every other.
     let unit = [unit_span(&addr(&[1, 0, 1, 0, 1, 0, 2, 1]))];
     let slots = LinkSlots { from: EntrySlot(&unit), to: EntrySlot(&[]), ty: EntrySlot(&unit) };
     let ty = addr(&[1, 1, 0, 1, 0, 1, 0, 3, 1]);
@@ -650,10 +654,13 @@ fn the_frame_is_framed_under_the_entry_tag_over_six_members() {
     let d_s = addr(&[1, 0, 1, 0, 2]);
     let pair = DocTerm::Pair { d_s: &d_s, d_a: &doc };
     for body in &bodies {
-        let (doc_term, doc_member) = if body.op() == "edit_link" {
-            (pair, doc_bytes(pair))
-        } else {
-            (DocTerm::One(&doc), b"1.0.1.0.1".to_vec())
+        let (doc_term, doc_member) = match body.op() {
+            "edit_link" => (pair, doc_bytes(pair)),
+            // A mint's `doc` is the PARENT ACCOUNT its document lands in.
+            "create_new_document" | "fork" | "version" => {
+                (DocTerm::One(&account), b"1.0.1".to_vec())
+            }
+            _ => (DocTerm::One(&doc), b"1.0.1.0.1".to_vec()),
         };
         assert_eq!(
             entry_frame("mldsa65-ed25519", term, &account, doc_term, body),

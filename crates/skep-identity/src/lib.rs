@@ -56,7 +56,7 @@
 //!   and composes the frames it signs; its reader's verifier composes the
 //!   same frames back.
 //! * `skep-resolve`, the registry resolver, reads the key set that opens an
-//!   account as of a record's position, finds an account's doc 1 through
+//!   account as of a record's LOG position, finds an account's doc 1 through
 //!   [`doc_1_of`], and verifies each registry record's frame
 //!   ([`RecordFrame`]).
 //! * `skep-cli`, the `skep` command, names keys by their fingerprints and
@@ -120,7 +120,7 @@
 //!   (AUTH-1.11–1.17);
 //! * `entry`: THE ENTRY FRAME under [`ENTRY_TAG`] — [`entry_frame`], which
 //!   spells every member from the values a signer or verifier holds: the
-//!   [`BoardTerm`], the account address, the [`DocTerm`] (one document, or
+//!   [`BoardTerm`], the account address, the [`DocTerm`] (one address, or
 //!   an `edit_link`'s two homes as the pair's row), and an [`EntryBody`] —
 //!   a grammar's token paired with its body, one per publish-class op
 //!   kind: [`entry_body_empty`] (over a [`ContentFreeOp`]: the three mints'
@@ -131,11 +131,11 @@
 //!   `replaces` member), [`entry_body_emit`], [`entry_body_nullify`] and
 //!   [`entry_body_assert_sup`] (the same four rows over the stored link,
 //!   under the op's own token), [`entry_body_edit_link`] (the successor's
-//!   rows then the claim's `from` slot), [`entry_body_publish`] (over
-//!   [`ShotSegmentPiece`]s — the shot's address form, one copied position's
-//!   value or one window at a time, the pieces its segments are built from
-//!   — and the shot's base), or piece by piece under a byte budget by
-//!   [`PublishBody`], with its refusal [`PublishRefusal`] (the `publish`
+//!   rows then the supersession claim's `from` slot), [`entry_body_publish`]
+//!   (over [`ShotSegmentPiece`]s — the shot's address form, one copied
+//!   position's value or one window at a time, the pieces its segments are
+//!   built from — and the shot's base), or piece by piece under a byte budget
+//!   by [`PublishBody`], with its refusal [`PublishRefusal`] (the `publish`
 //!   body's items, in the child module `entry::publish`, the one module the
 //!   builder's fields are visible to), and [`entry_body_record`], over a
 //!   [`RecordRows`] naming the record grade's five rows, under the `record`
@@ -201,11 +201,13 @@
 //! on signed ops' declarations — the marker-tag table, a key's halves, the
 //! length constants, the entry frame and the record projection, which the
 //! AUTH spec declares in no rule and whose authority AUTH-1.5 assigns, by
-//! cite, to the signed-ops design record — that record, cited as "the design
-//! record" with its section or ruling, and never as "the record" or "its
-//! record" alone: in this crate a record is a credential record (AUTH-1.18),
-//! and the suite's `tidy.rs` holds every comment to that rule. So a reviewer
-//! can walk from code to its authority without the documents open.
+//! cite, to the signed-ops design record — that document, cited as "the
+//! design record" with its section or ruling, and never as "the record" or
+//! "its record" alone: in this crate a record is one a board holds — a
+//! credential record (AUTH-1.18), or a registry record the record grade signs
+//! beside it — never a design document, and the suite's `tidy.rs` holds every
+//! comment to that rule. So a reviewer can walk from code to its authority
+//! without the documents open.
 //!
 //! ## Purity note
 //!

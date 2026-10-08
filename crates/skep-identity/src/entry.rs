@@ -1,5 +1,6 @@
 //! THE ENTRY FRAME (signed ops; the design record §2.5, §4.2 (C)'s ENTRY row)
-//! — the bytes a publish-class entry's signature is made over — and THE BYTE
+//! — the bytes a publish-class entry's signature, or under the `record` token
+//! a record's `sig` (the frame merge, fm-I), is made over — and THE BYTE
 //! FORMS of its members (D24's pins, the seam build's own of 2026-09-25,
 //! re-pinned in place under `skep-entry-v1` by the publish re-pin and the
 //! frame merge of 2026-09-29 — l6-A3: no `v1` signature is held before the
@@ -15,13 +16,13 @@
 //! (AUTH-1.12's framing: the tag, then each member — a FIELD, in AUTH-1.12's
 //! word — as `be32(len) ‖ bytes`), every member a compiled constant, a
 //! client-named address, a client-composed byte string or the board's
-//! [`BoardTerm`], fixed from the claim on — no fact the daemon assigns at the
-//! entry's own commit (a minted address, a position, a seq) enters it, which
-//! is what lets a client sign BEFORE the commit with no round trip and the
-//! daemon verify AT the commit with no lookup, and what makes the signature
-//! POSITION-FREE, in the design record's word: free of the entry's own LOG
-//! position, so two identical writes sign identical bytes wherever in the
-//! journal the commit lands them.
+//! [`BoardTerm`], fixed from the board claim on — no fact the daemon assigns
+//! at the entry's own commit (a minted address, a position, a seq) enters it,
+//! which is what lets a client sign BEFORE the commit with no round trip and
+//! the daemon verify AT the commit with no lookup, and what makes the
+//! signature POSITION-FREE, in the design record's word: free of the entry's
+//! own LOG position, so two identical writes sign identical bytes wherever in
+//! the journal the commit lands them.
 //!
 //! THE ROWS, by encoding:
 //!
@@ -35,10 +36,13 @@
 //!   own `sig`, made over the frame this token selects.
 //! * THE ADDRESS ROW — `account` (at the ENTRY grade the act's principal's
 //!   account in the board's local form; at the RECORD grade the HOME's
-//!   account, never the depositing principal's — [`RecordFrame`]), `doc` (the
-//!   document the entry writes: an `insert`'s or a `publish`'s target as its
-//!   TRUNK, a `make_link`'s or a record's home), and every address inside a
-//!   body: the dotted-decimal ASCII rendering M1's `Display` gives a tumbler
+//!   account, never the depositing principal's — [`RecordFrame`]), `doc` (per
+//!   op cell, the address the entry writes into — an `insert`'s or a
+//!   `publish`'s target as its TRUNK, a link write's or a record's home, and
+//!   at the three mints the PARENT ACCOUNT the minted document lands in, never
+//!   `version`'s `d_src`; one address at every cell but `edit_link`'s, whose
+//!   two homes are the pair's row, below), and every address inside a body:
+//!   the dotted-decimal ASCII rendering M1's `Display` gives a tumbler
 //!   (`1.0.1.0.1`) — lossless by T3, and the ONE spelling of the address among
 //!   the several a string can carry: a component written with a leading zero
 //!   (`1.01.0.1`) names the same address (`1.1.0.1`). So the frame spells the
@@ -76,16 +80,16 @@
 //! * THE ADDRESS-LIST ROW — a list of addresses: one form byte, `0x01`, then
 //!   `be64(n)`, then each address as the address row, length-delimited —
 //!   [`push_address_list`]. Never a link slot's row: it spells the `record`
-//!   body's two slot rows — the credential grade's, whose slots are
-//!   address-form by that grade's own refusal and store as the addresses
-//!   named, so the row stands as pinned (d24-4) — the one address an
-//!   optional-address row or the base group names, and THE PAIR'S ROW.
+//!   body's two slot rows — a credential deposit's slots are address-form,
+//!   the write path refusing any other (`resolved_from`), and store as the
+//!   addresses named, so the row stands as pinned (d24-4) — the one address
+//!   an optional-address row or the base group names, and THE PAIR'S ROW.
 //! * THE PAIR'S ROW — an `edit_link`'s `doc` term, the one member of the
-//!   frame naming TWO documents: the successor's home then the claim's home,
-//!   the op's own order, as an address-list row of two elements —
-//!   `0x01 ‖ be64(2) ‖ be32(len) ‖ d_s ‖ be32(len) ‖ d_a` (d24-1), no new
-//!   form byte and no separator, so a build that sent two members, a
-//!   separator or one address fails at the row's second byte —
+//!   frame naming TWO documents: the successor's home then the supersession
+//!   claim's home, the op's own order, as an address-list row of two
+//!   elements — `0x01 ‖ be64(2) ‖ be32(len) ‖ d_s ‖ be32(len) ‖ d_a`
+//!   (d24-1), no new form byte and no separator, so a build that sent two
+//!   members, a separator or one address fails at the row's second byte —
 //!   [`DocTerm::Pair`]. Every other op's `doc` is one address, the address
 //!   row ([`DocTerm::One`]), and [`entry_frame`] holds each body to its own
 //!   shape.
@@ -145,10 +149,10 @@
 //!   d24-6) — the successor as a `make_link` body, its type, `from` and `to`
 //!   slots AS STORED (the I-extents the V-specs resolve to; the type as
 //!   named, or resolved) and its `replaces` row EMPTY by kind, then THE
-//!   FIFTH ROW, the claim's `from` slot as stored: `original`'s one unit
-//!   span. The claim's `to` — the successor's address, minted inside the
-//!   transaction — and its type, the supersedes constant, are NO rows. Its
-//!   `doc` is the pair's row.
+//!   FIFTH ROW, the SUPERSESSION CLAIM's `from` slot as stored: `original`'s
+//!   one unit span. The supersession claim's `to` — the successor's address,
+//!   minted inside the transaction — and its type, the supersedes constant,
+//!   are NO rows. Its `doc` is the pair's row.
 //! * `publish` — [`entry_body_publish`], or piece by piece under a byte
 //!   budget by [`PublishBody`]: the count of positions placed, the shot's
 //!   runs as segments — each a value stretch or a window behind its class
@@ -165,10 +169,10 @@
 //!   this order: (1) the TYPE slot row — the link's type address as an
 //!   address-list row of one element; (2) the `to` slot row — the link's
 //!   target slot as an address-list row, EMPTY (`0x01 ‖ be64(0)`) at a
-//!   targetless kind — both rows standing under `0x01` (d24-4: the credential
-//!   grade's slots are address-form by its own refusal and store as the
-//!   addresses named, so no `record` preimage moved with the slot row's
-//!   re-pin); (3) the `replaces` row, an optional-address row as
+//!   targetless kind — both rows standing under `0x01` (d24-4: a credential
+//!   deposit's slots are address-form, the write path refusing any other, and
+//!   store as the addresses named, so no `record` preimage moved with the
+//!   slot row's re-pin); (3) the `replaces` row, an optional-address row as
 //!   `make_link`'s is (l6-A1; EMPTY by kind at a credential deposit); (4) the
 //!   LINEAGE row, an optional-address row — the EMPTY group on a lineage that
 //!   has not forked, else the fork point's address (D2); (5) the BODY-BYTES
@@ -265,27 +269,28 @@ pub fn entry_frame(
     )
 }
 
-/// THE FRAME'S `doc` TERM — the document an entry writes, per op cell: ONE
-/// address for every op but one — an `insert`'s or a `publish`'s target as
-/// its TRUNK, a link write's home, a mint's parent account, a record's home
-/// — spelled as the address row; and for `edit_link`, the one op that
-/// writes TWO homes, the successor's and the claim's, spelled as THE PAIR'S
-/// ROW (d24-1), `0x01 ‖ be64(2) ‖ be32(len) ‖ d_s ‖ be32(len) ‖ d_a`. The
-/// two homes are taken BY NAME: the op's own order, `d_s` then `d_a`, is
-/// spelled once, in `doc_bytes`, and a call site that named them the
-/// other way round would be a frame every verifier refuses. The shape is the
-/// body's grammar's, and [`entry_frame`] holds each body to its own. `Copy`,
-/// as the addresses it borrows are: a view of the caller's term, never an
-/// owner of it.
+/// THE FRAME'S `doc` TERM — the address an entry writes INTO, per op cell
+/// (the design record's "address term"): ONE address for every op but one —
+/// an `insert`'s or a `publish`'s target as its TRUNK, a link write's home, a
+/// mint's PARENT ACCOUNT (never `version`'s `d_src`), a record's home —
+/// spelled as the address row; and for `edit_link`, the one op that writes
+/// TWO homes, the successor's and the supersession claim's, spelled as THE
+/// PAIR'S ROW (d24-1), `0x01 ‖ be64(2) ‖ be32(len) ‖ d_s ‖ be32(len) ‖ d_a`.
+/// The two homes are taken BY NAME: the op's own order, `d_s` then `d_a`, is
+/// spelled once, in `doc_bytes`, and a call site that named them the other
+/// way round would be a frame every verifier refuses. The shape is the body's
+/// grammar's, and [`entry_frame`] holds each body to its own. `Copy`, as the
+/// addresses it borrows are: a view of the caller's term, never an owner of
+/// it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DocTerm<'a> {
-    /// One document: the address row.
+    /// One address — a document, or a mint's parent account: the address row.
     One(&'a Address),
     /// An `edit_link`'s two homes: the pair's row.
     Pair {
         /// The successor's home, `d_s` — first, the op's own order.
         d_s: &'a Address,
-        /// The claim's home, `d_a`.
+        /// The supersession claim's home, `d_a`.
         d_a: &'a Address,
     },
 }
@@ -308,23 +313,23 @@ fn doc_bytes(doc: DocTerm<'_>) -> Vec<u8> {
 /// width (`1.0.1` is the span from `1.0.1` of width `0.0.1`). A link slot
 /// named by address stores as one of these per address, so the slot row of
 /// such a slot — `make_link`'s address form, `nullify`'s and `assert_sup`'s
-/// one-address slots, `emit`'s `from` and `to`, the `edit_link` claim's
-/// `from` — is these spans. Spelled here so a signer holding the address
-/// alone and a verifier holding the stored link compose one row; skepd's
-/// composer holds it equal to M7's own `enc`.
+/// one-address slots, `emit`'s `from` and `to`, the `edit_link` supersession
+/// claim's `from` — is these spans. Spelled here so a signer holding the
+/// address alone and a verifier holding the stored link compose one row;
+/// skepd's composer holds it equal to M7's own `enc`.
 pub fn unit_span(a: &Address) -> Span {
     subtree_of(a.tumbler())
 }
 
 /// THE BOARD TERM (signed ops; the design record §2.5, D13, RULED): the
 /// committed `(position, chain)` pair `H.1` — the head document's first chain
-/// member — NAMES, fixed from the claim on for the life of the board. It is
-/// the ENTRY frame's `board` member ([`entry_frame`]), and the design
-/// record's RECORD-grade frame names it too (§4.2 (C)) — one term, both
-/// grades. It is NEVER the live pair `/health` serves, nor the pair any later
-/// head names: a signature framed over either is refused
-/// `attestation_invalid:signature`. A value: two terms are equal iff both
-/// halves are.
+/// member — NAMES, fixed from the board claim on for the life of the board.
+/// It is the entry frame's `board` member ([`entry_frame`]) at both grades —
+/// an entry's, and a record's under the `record` token ([`RecordFrame`]; the
+/// design record §4.2 (C), the frame merge, fm-I) — one term, one frame. It is
+/// NEVER the live pair `/health` serves, nor the pair any later head names: a
+/// signature framed over either is refused `attestation_invalid:signature`.
+/// A value: two terms are equal iff both halves are.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct BoardTerm {
     /// The LOG position `H.1` names — a point in the journal, M2's `Seq` and
@@ -498,9 +503,9 @@ fn push_address_list(out: &mut Vec<u8>, addrs: &[Address]) {
 /// THE OPTIONAL-ADDRESS ROW, onto `out`: ONE length-delimited group — EMPTY
 /// where no address is named, else the address as an address-list row of
 /// one element. Delimited as a whole so that no present spelling can meet
-/// the absent one: the least a present group holds is a list row's form
-/// byte and count, nine bytes. The `make_link` body's `replaces` row and the
-/// `record` body's `replaces` and lineage rows are each one of these.
+/// the absent one: the least a present group holds is an address-list row's
+/// form byte and count, nine bytes. The `make_link` body's `replaces` row and
+/// the `record` body's `replaces` and lineage rows are each one of these.
 fn push_optional_address(out: &mut Vec<u8>, named: Option<&Address>) {
     let mut group = Vec::new();
     if let Some(a) = named {
@@ -602,9 +607,9 @@ pub fn entry_body_make_link(slots: LinkSlots<'_>) -> EntryBody {
 ///
 /// PRECONDITION — as [`entry_body_make_link`]'s, and the `replaces` row's
 /// group shorter than 2^32 bytes as well: the member's spelling and the
-/// thirteen bytes its one-element list row puts around it (a form byte, a
-/// `be64` count, a `be32` length) together. A longer one PANICS, naming the
-/// obligation.
+/// thirteen bytes its one-element address-list row puts around it (a form
+/// byte, a `be64` count, a `be32` length) together. A longer one PANICS,
+/// naming the obligation.
 pub fn entry_body_make_link_replacing(slots: LinkSlots<'_>, replaces: &Address) -> EntryBody {
     link_write_body("make_link", slots, Some(replaces))
 }
@@ -632,10 +637,10 @@ pub fn entry_body_nullify(slots: LinkSlots<'_>) -> EntryBody {
 }
 
 /// THE `assert_sup` BODY, under the `assert_sup` token: the `make_link`
-/// body's four rows over the claim M7 deposits, `(unit(old), unit(new),
-/// supersedes)` — the type slot the supersedes class's one unit span, fixed
-/// by kind; `from` the superseded link's unit span; `to` its successor's —
-/// and the `replaces` row EMPTY by kind. PRECONDITION as
+/// body's four rows over the supersession claim M7 deposits, `(unit(old),
+/// unit(new), supersedes)` — the type slot the supersedes class's one unit
+/// span, fixed by kind; `from` the superseded link's unit span; `to` its
+/// successor's — and the `replaces` row EMPTY by kind. PRECONDITION as
 /// [`entry_body_make_link`]'s.
 pub fn entry_body_assert_sup(slots: LinkSlots<'_>) -> EntryBody {
     link_write_body("assert_sup", slots, None)
@@ -651,14 +656,15 @@ const EDIT_LINK: &str = "edit_link";
 /// `make_link` body — its type, `from` and `to` slots AS STORED, the
 /// I-extents its V-specs resolve to (the type as named, or resolved), and its
 /// `replaces` row EMPTY by kind, a `replaces`-typed successor being refused
-/// — then THE FIFTH ROW, the CLAIM's `from` slot as stored: `original`'s one
-/// unit span, which the caller passes as the span ([`unit_span`]) so this
-/// builder spells no address. The claim's `to` — the successor's address,
-/// minted inside the transaction — and its type, the supersedes constant,
-/// are no rows: a verifier reads the claim's `from` off `read_link` at the
-/// claim's home as it reads the successor's slots off the successor's, one
-/// composer for the five rows. The body's `doc` is the pair's row
-/// ([`DocTerm::Pair`]). PRECONDITION as [`entry_body_make_link`]'s.
+/// — then THE FIFTH ROW, the SUPERSESSION CLAIM's `from` slot as stored:
+/// `original`'s one unit span, which the caller passes as the span
+/// ([`unit_span`]) so this builder spells no address. The supersession
+/// claim's `to` — the successor's address, minted inside the transaction —
+/// and its type, the supersedes constant, are no rows: a verifier reads the
+/// supersession claim's `from` off `read_link` at its home, `d_a`, as it
+/// reads the successor's slots off the successor's, one composer for the
+/// five rows. The body's `doc` is the pair's row ([`DocTerm::Pair`]).
+/// PRECONDITION as [`entry_body_make_link`]'s.
 pub fn entry_body_edit_link(successor: LinkSlots<'_>, original: &Span) -> EntryBody {
     let mut body = link_write_body(EDIT_LINK, successor, None);
     push_slot(&mut body.bytes, EntrySlot(std::slice::from_ref(original)));
@@ -724,9 +730,9 @@ pub struct RecordRows<'a> {
 ///
 /// PRECONDITION — every address's spelling, and the sig-less canonical
 /// record, is shorter than 2^32 bytes, and so is each optional row's group:
-/// a named address's spelling and the thirteen bytes its one-element list
-/// row puts around it (a form byte, a `be64` count, a `be32` length). A
-/// longer one PANICS, naming the obligation.
+/// a named address's spelling and the thirteen bytes its one-element
+/// address-list row puts around it (a form byte, a `be64` count, a `be32`
+/// length). A longer one PANICS, naming the obligation.
 pub fn entry_body_record(rows: RecordRows<'_>) -> EntryBody {
     let RecordRows { ty, to, replaces, lineage_fork_point, sigless_canonical_record } = rows;
     let mut out = Vec::new();

@@ -58,16 +58,16 @@ pub enum AuditClass {
     Replaces,
     /// The registry's BINDING — the registration record, prefix → account
     /// (REG-1.39's first member, REG-1.44, REG-1.46): the binding walk reads
-    /// the AUDIT view at every position, so a retraction clears nothing it
-    /// reads; a later binding at the prefix is the one correction. Homed in
-    /// the binding-writing account's own doc 1 by rule, so its membership
+    /// the AUDIT view at every LOG position, so a retraction clears nothing
+    /// it reads; a later binding at the prefix is the one correction. Homed
+    /// in the binding-writing account's own doc 1 by rule, so its membership
     /// waits on no home read.
     Binding,
     /// The registry's TAKEDOWN RECORD, at its KIND's address, so the two rows
     /// under it — its base reading and LIFTED — are members by prefix
     /// (REG-1.21, REG-1.42, REG-1.46): the serving layer reads both on the
-    /// AUDIT view at their own positions, and the LIFT stays the class's one
-    /// reversal. Homed in the operator's own doc 1 by rule.
+    /// AUDIT view at their own LOG positions, and the LIFT stays the class's
+    /// one reversal. Homed in the operator's own doc 1 by rule.
     TakedownRecord,
     /// The registry's POLICY LINK, at its KIND's address, so the five rows
     /// under it — its own reading, the disavowal, an expulsion's and a

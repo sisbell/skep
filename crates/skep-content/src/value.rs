@@ -12,15 +12,16 @@ use serde::{Deserialize, Serialize};
 /// it stores nothing beside them — no tag, no discriminator. ASN-0036 leaves
 /// `Val`'s typing open (its first open question), and the M4 design settles
 /// M4's side of it untyped (Conflicts #5). The one distinction M4 answers for
-/// is the store's own: every value here is content, stored at an address
-/// whose subspace identifier `E(a)₁` is `s_C` (ASN-0093 L0, read by M1's
-/// `Address::subspace`; [`ContentStore`](crate::ContentStore)'s second key
-/// invariant), and link values are M7's. What the bytes say of themselves is
-/// their reader's to parse, never M4's: a value that is the body of a
-/// DOCTRINE D13 record — the doctrine's record, not this crate's journal
-/// record [`ContentWrite`](crate::ContentWrite) — is one JSON object naming
-/// that record's kind in a `type` member, read by the parser that owns that
-/// kind.
+/// is the store's own: every value here is content, which a correct writer
+/// stores at an address whose subspace identifier `E(a)₁` is `s_C`
+/// (ASN-0093 L0, read by M1's `Address::subspace`) — the second key
+/// invariant of [`ContentStore`](crate::ContentStore), owed by the stage
+/// door's caller and not checked at decode — and link values are M7's. What
+/// the bytes say of themselves is their reader's to parse, never M4's: a
+/// value that is the body of a DOCTRINE D13 record — the doctrine's record,
+/// not this crate's journal record [`ContentWrite`](crate::ContentWrite) — is
+/// one JSON object naming that record's kind in a `type` member, read by the
+/// parser that owns that kind.
 ///
 /// Serde rides serde's `rc` feature for the `Arc<[u8]>` impls (an M4-local
 /// dependency knob). A value serializes as a SEQUENCE of `u8` — serde has no

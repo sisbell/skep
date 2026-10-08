@@ -9,8 +9,9 @@
 //! entries, an address's components, a component's digits, a value's bytes —
 //! or admits a key that is no tumbler, or no T4-valid address; that both
 //! admit every T4-valid address, whatever its routing, since a release build
-//! stages each as given; and that a decode holding several faults is refused
-//! for the first it reads, within an entry as across entries.
+//! stages each as given, and lend each as it was decoded; and that a decode
+//! holding several faults is refused for the first it reads, within an entry
+//! as across entries.
 
 use serde::de::DeserializeOwned;
 use skep_address::{content_subspace, validate, Level, Nat, T4Clause, Tumbler};
@@ -239,7 +240,7 @@ fn the_record_and_the_slice_refuse_a_key_that_is_no_tumbler() {
 
 #[test]
 fn the_record_and_the_slice_refuse_a_key_that_is_no_address() {
-    // ASN-0093 StoreT4Validity (store.rs, `ContentStore`'s key invariants):
+    // ASN-0093 StoreT4Validity (store.rs, `ContentStore`'s first key invariant):
     // every key in `dom(C)` is T4-valid, and both decode paths re-enter M1's
     // `Address` door (`validate`) to keep it so — an `Address` journals as
     // its bare tumbler, so the door reads the bytes the record and the slice
@@ -290,9 +291,11 @@ fn the_record_and_the_slice_admit_every_address_a_release_build_can_stage() {
     // stages each shape in `MIS_ROUTED`). So both decode paths take it on
     // journal and checkpoint integrity: a decode that refused one would leave
     // that build unable to replay its own journal. The decode therefore admits
-    // every address T4 admits, whatever its routing — here each shape in
-    // `MIS_ROUTED`, each checked first to be T4-valid and no content-subspace
-    // element address. The bytes are `raw_slice`'s and `raw_record`'s.
+    // every address T4 admits, whatever its routing, and the walk and the
+    // record lend each as it was decoded, so no reader of M4's keys may
+    // assume the invariant either — here each shape in `MIS_ROUTED`, each
+    // checked first to be T4-valid and no content-subspace element address.
+    // The bytes are `raw_slice`'s and `raw_record`'s.
     for &(shape, key) in MIS_ROUTED {
         let addr = validate(t(key)).expect("T4-valid, so a release stage door admits it");
         assert!(
@@ -305,6 +308,10 @@ fn the_record_and_the_slice_admit_every_address_a_release_build_can_stage() {
             decoded.value_at(addr.tumbler()).map(Val::as_bytes),
             Some(&b"x"[..]),
             "the slice decoded from {shape} does not hold it"
+        );
+        assert!(
+            decoded.iter().map(|(at, _)| at).eq([&addr]),
+            "the walk does not lend {shape} as it was decoded"
         );
         let decoded = bincode::deserialize::<ContentWrite>(&raw_record(key))
             .unwrap_or_else(|refusal| panic!("a record at {shape} was refused: {refusal}"));

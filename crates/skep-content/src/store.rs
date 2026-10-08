@@ -19,7 +19,8 @@ use crate::value::Val;
 /// checkpoints (no skip-serialize, so the engine's `rebuild_derived` is
 /// identity for M4).
 ///
-/// Two INVARIANTS hold of every key, each at a named gate:
+/// Two INVARIANTS are kept of the keys, each at a named gate — the first of
+/// every key, the second of every key a correct caller stages:
 ///
 /// * **T4-valid** (ASN-0093 StoreT4Validity, one premise of SD) — every key
 ///   is an `Address`, held as one, so the walk lends it as one and no reader
@@ -36,7 +37,12 @@ use crate::value::Val;
 ///   release trusts it and stages a violator as given. Both decode paths
 ///   take it on journal and checkpoint integrity: a release build can journal
 ///   what its stage door did not check, and a decode that refused it would
-///   leave that build unable to replay its own journal.
+///   leave that build unable to replay its own journal. So no reader of the
+///   keys may assume it: a key a release build staged past its caller's
+///   routing bug, or one decoded from a body no build serialized, may be
+///   T4-valid at any level and in any subspace; the walk and a record lend
+///   each as it was admitted, and a key's `document_of` and `subspace` are
+///   answers its reader handles, never ones it unwraps.
 ///
 /// Cheap to keep many of: `clone` is O(1), and
 /// [`apply_write`](ContentStore::apply_write) costs O(log n) in the size of
@@ -171,17 +177,18 @@ fn in_tumbler_order<S: serde::Serializer>(
 /// entry as it arrives reserves nothing the bytes have not carried, so a short
 /// body runs out of input and the decode refuses it; each key re-enters M1's
 /// `Address` door (`validate`), so a body carrying a key no [`stage_write`]
-/// could have staged is refused the same way ([`ContentStore`]'s key
-/// invariants); it takes the entries in whatever order they arrive; and it
-/// refuses a body naming one address twice. No build serializes one — its
-/// encoder walks a map whose keys are unique — and admitting one would mean
-/// choosing which value stands: `OrdMap::insert` keeps the later, where the
-/// fold keeps the one already stored (S0(b)). Refusing it leaves no tie to
-/// break, so every body this decode admits names one state, whatever order
-/// its entries take. Addresses are compared as decoded, and a component's
-/// digits decode to one number however they are spelled, so two spellings of
-/// one address are one address. The refusal names no address: a key can be
-/// as long as the body that carries it, and M2 keeps a refused base's reason.
+/// could have staged is refused the same way ([`ContentStore`]'s first key
+/// invariant; the second, a key's routing, it admits as given); it takes the
+/// entries in whatever order they arrive; and it refuses a body naming one
+/// address twice. No build serializes one — its encoder walks a map whose
+/// keys are unique — and admitting one would mean choosing which value
+/// stands: `OrdMap::insert` keeps the later, where the fold keeps the one
+/// already stored (S0(b)). Refusing it leaves no tie to break, so every body
+/// this decode admits names one state, whatever order its entries take.
+/// Addresses are compared as decoded, and a component's digits decode to one
+/// number however they are spelled, so two spellings of one address are one
+/// address. The refusal names no address: a key can be as long as the body
+/// that carries it, and M2 keeps a refused base's reason.
 ///
 /// REFUSAL PRECEDENCE — several of these can hold of one body, and the first
 /// fault in reading order speaks. Within an entry, the key is read first and
@@ -315,7 +322,11 @@ impl ContentStore {
     /// `&store` reads it too. Its ORDER is no part of the promise: the order
     /// the checkpoint's bytes need is the serializer's to keep
     /// (`in_tumbler_order` above, which walks the map itself), and a reader
-    /// that wants an order sorts what it reads.
+    /// that wants an order sorts what it reads. Nor is an address's ROUTING:
+    /// every address it yields is T4-valid, as its type says, and may be of
+    /// any level and in any subspace ([`ContentStore`]'s second key invariant
+    /// is not checked at decode), so a reader handles a key's `document_of`
+    /// and `subspace`, never unwraps them.
     ///
     /// A walk of the whole store, for whole-store work over a pinned
     /// snapshot such as the cell index's walk (`skep-media`); the slice it
@@ -386,7 +397,8 @@ impl<'a> IntoIterator for &'a ContentStore {
 /// `Deserialize` — public, as M2's `Record: DeserializeOwned` bound requires —
 /// is M2's replay of records already staged. That decode takes the address
 /// through M1's `Address` door (`validate`), so a replayed record holds an
-/// `Address` as a staged one does ([`ContentStore`]'s key invariants).
+/// `Address` as a staged one does ([`ContentStore`]'s first key invariant),
+/// and holds it routed or not, as it was journaled (the second).
 /// It reads the address before the value, so a record whose address and
 /// value both fail to decode is refused for its address, and that refusal is
 /// the cause M2's `Corruption` carries for it. Read access is full:

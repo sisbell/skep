@@ -51,10 +51,12 @@
 //! world's slice keeps them across its commits and restarts by
 //! [`HasContent`]'s implementor obligation.
 //!
-//! **At the doors:** every key is T4-valid (ASN-0093 StoreT4Validity) and a
-//! content-subspace element address (C1, L0 — M4's half of SD);
-//! [`ContentStore`] names each invariant's gate, the two decode paths
-//! included.
+//! **At the doors:** every key is T4-valid (ASN-0093 StoreT4Validity), at
+//! every door, the two decode paths included. Every key a correct caller
+//! stages is also a content-subspace element address (C1, L0 — M4's half of
+//! SD), checked in debug builds only and admitted as given at decode, so no
+//! reader of M4's keys may assume it. [`ContentStore`] names each
+//! invariant's gate.
 //!
 //! **Diagnosed, not relied on:** a second write at one address.
 //! [`stage_write`] refuses an address already stored in the slice it is

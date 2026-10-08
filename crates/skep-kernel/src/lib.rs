@@ -213,8 +213,9 @@ use serde::Serialize;
 /// would have left it; out of whichever read or [`Kernel::checkpoint`]
 /// releases the last reference to a superseded root, a [`Snapshot`] most
 /// often; and out of [`Kernel::open`], [`Kernel::world_at`],
-/// [`Kernel::chain_at`] and [`Kernel::attestation_at`], whose base loads and
-/// folds drop worlds of their own.
+/// [`Kernel::chain_at`], [`Kernel::attestation_at`] and
+/// [`Kernel::boundaries_above`], whose base loads and folds drop worlds of
+/// their own.
 ///
 /// HOSTILE-INPUT OBLIGATION — `W` is decoded from a checkpoint body, which is
 /// bytes M2 does not trust: the header checksum proves they are the bytes that
@@ -301,8 +302,9 @@ pub trait WorldState: Clone + Serialize + DeserializeOwned + Send + Sync + 'stat
     /// Seed derived hints from authoritative state, or REFUSE the base. Runs
     /// once per base a derivation loads — at every journaled
     /// [`Kernel::open`] and at every history read ([`Kernel::world_at`],
-    /// [`Kernel::chain_at`], [`Kernel::attestation_at`]), on whichever base
-    /// it selects, a retained checkpoint or genesis — BEFORE replay, and
+    /// [`Kernel::chain_at`], [`Kernel::attestation_at`],
+    /// [`Kernel::boundaries_above`]), on whichever base it selects, a
+    /// retained checkpoint or genesis — BEFORE replay, and
     /// NEVER on a live commit, so it cannot keep any hint current by itself.
     /// It exists solely to reconstruct hints a checkpoint skip-serialized
     /// (`#[serde(skip)]`), and to say when it cannot. NOT run under

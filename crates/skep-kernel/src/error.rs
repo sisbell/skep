@@ -379,18 +379,22 @@ impl From<io::Error> for CheckpointError {
 }
 
 /// Failure of the history reads — [`crate::Kernel::world_at`],
-/// [`crate::Kernel::chain_at`] and [`crate::Kernel::attestation_at`] — each
-/// derived read-only from the journal directory. None of these poisons the
-/// kernel or perturbs the live write path; every variant is an honest "this
-/// boundary cannot be answered" (or a corruption find — at rest, save the one
-/// transient [`HistoryError::Corruption`] names).
+/// [`crate::Kernel::chain_at`] and [`crate::Kernel::attestation_at`] at a
+/// boundary, [`crate::Kernel::boundaries_above`] over the range above a
+/// position — each derived read-only from the journal directory. None of
+/// these poisons the kernel or perturbs the live write path; every variant
+/// is an honest "this boundary, or this range, cannot be answered" (or a
+/// corruption find — at rest, save the one transient
+/// [`HistoryError::Corruption`] names).
 #[derive(Debug)]
 pub enum HistoryError {
     /// `at` is above the INSTALLED head at the time of the call — the
     /// installed root's seq ([`crate::Kernel::current_seq`]), which is the
-    /// greatest boundary this kernel answers. Not §7's committed head: a
-    /// kernel poisoned after a barrier but before its install holds a durable
-    /// committed boundary above this one, and refuses it.
+    /// greatest boundary this kernel answers, and the head
+    /// [`crate::Kernel::boundaries_above`] bounds its list at. Not §7's
+    /// committed head: a kernel poisoned after a barrier but before its
+    /// install holds a durable committed boundary above this one, and
+    /// refuses it.
     BeyondHead {
         /// The installed head observed by this call.
         head: Seq,
@@ -398,7 +402,10 @@ pub enum HistoryError {
     /// `at` is not a committed transaction boundary: it names an interior
     /// `Seq` of a multi-record commit (never externally observable — §2/§3)
     /// or a burned `Seq` under `TolerateGap`. Boundaries are the `Seq` values
-    /// `transact` returns; nothing else is one.
+    /// `transact` returns; nothing else is one. Never
+    /// [`crate::Kernel::boundaries_above`]'s, which takes a position and
+    /// judges no boundary: a coordinate this variant refuses is one that read
+    /// simply lists nothing at.
     NotABoundary {
         /// The greatest committed boundary at or below the requested value,
         /// never below the base this call selected — a segment straddling
@@ -417,7 +424,9 @@ pub enum HistoryError {
     },
     /// No base at or below `at` remains derivable — strictly BELOW `at`, for
     /// [`crate::Kernel::attestation_at`], whose base must sit below its
-    /// boundary: no retained checkpoint there loads and seeds (a base whose
+    /// boundary; at or below the position, for
+    /// [`crate::Kernel::boundaries_above`], whose base may sit AT it: no
+    /// retained checkpoint there loads and seeds (a base whose
     /// [`crate::WorldState::rebuild_derived`] refuses is passed over as one
     /// that does not load, AUTH-2.85), and the journal below the oldest
     /// retained checkpoint has been reclaimed (§6), so genesis is
@@ -431,6 +440,9 @@ pub enum HistoryError {
         /// distinguishes. [`crate::Kernel::attestation_at`] answers only
         /// strictly ABOVE it: asked at `floor` itself, it refuses this way
         /// again, `floor` naming the very boundary it was asked.
+        /// [`crate::Kernel::boundaries_above`] answers AT it, the list above
+        /// the floor from the base embodying it, as `world_at` and `chain_at`
+        /// answer there.
         floor: Option<Seq>,
         /// Why the NEWEST base this call could have used refused, when one
         /// was tried at all. `Some` is a retained base that is itself
@@ -467,9 +479,10 @@ pub enum HistoryError {
     /// only `open`'s first-sync-word probe names — a history read truncates
     /// nothing, so its own scan meets that frame as a corrupt run instead.
     /// And the fold's two — an undecodable record, a `Seq` presented twice —
-    /// reach [`crate::Kernel::world_at`] and neither
-    /// [`crate::Kernel::chain_at`] nor [`crate::Kernel::attestation_at`],
-    /// which fold nothing: what they read is framed bytes, and those verify.
+    /// reach [`crate::Kernel::world_at`] and none of
+    /// [`crate::Kernel::chain_at`], [`crate::Kernel::attestation_at`] and
+    /// [`crate::Kernel::boundaries_above`], which fold nothing: what they
+    /// read is framed bytes, and those verify.
     ///
     /// One cause of this can be transient: a commit whose barrier fails
     /// truncating its tail while this read is mid-file leaves the read

@@ -101,17 +101,40 @@ struct TailCut {
     discard: Vec<PathBuf>,
 }
 
+/// What a scan COLLECTS of the committed transactions above its base, beyond
+/// what every scan derives — the head, the chain's running value, the
+/// verdicts, the cut: the one thing the two entry functions differ in,
+/// applied by [`ScanOutcome::collect_commit`], the only writer of either
+/// collection, and read back by the outcome's doors to hold each caller to
+/// what was collected — records above a fold bound were read and dropped,
+/// and a boundary scan read every record and kept none.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Collect {
+    /// The committed records a fold to `bound` reads — those at or below it,
+    /// every one when `None` — and, at `Some`, the marker closing `bound` and
+    /// the nearest boundary below it: [`scan`]'s, for recovery and the three
+    /// one-boundary history reads.
+    Records { bound: Option<u64> },
+    /// Every committed marker above the base, as its `last_seq` and its
+    /// signature slot, and no record: [`scan_boundaries`]'s, for the boundary
+    /// read ([`crate::Kernel::boundaries_above`]).
+    Boundaries,
+}
+
 /// Pass-1 result (§7): the committed head (§7's `W`), the committed records a
 /// fold may read, the corrupt runs, the commit chain's running value and the
 /// verdicts of its links, where the tail to truncate begins, and — for a scan
-/// collected to a boundary — what the marker closing it carries. A scan that
-/// could not enumerate the frame stream produces none of this — it answers
-/// [`ScanFail`] — so nothing here is a PREFIX of what the region holds. What
-/// it COLLECTED is bounded by the caller's own fold bound, which is why the
-/// records are reached through [`ScanOutcome::records_to`] rather than read
-/// as a set; and whether a caller must halt on what it found is ONE question,
+/// collected to a boundary — what the marker closing it carries, or — for a
+/// boundary scan — every committed boundary above the base with its slot. A
+/// scan that could not enumerate the frame stream produces none of this — it
+/// answers [`ScanFail`] — so nothing here is a PREFIX of what the region
+/// holds. What it COLLECTED is bounded by the caller's own fold bound, or is
+/// the boundaries and no record at all ([`Collect`]), which is why the
+/// records are reached through [`ScanOutcome::records_to`] and the
+/// boundaries through [`ScanOutcome::into_boundaries`] rather than read as a
+/// set; and whether a caller must halt on what it found is ONE question,
 /// answered in the order the verdicts speak ([`ScanOutcome::halt_to_head`],
-/// [`ScanOutcome::halt_anywhere`]).
+/// [`ScanOutcome::halt_anywhere`]), the same under either mode.
 pub(crate) struct ScanOutcome {
     /// The base this scan ran against — §7's `S_load`. Every judgment it
     /// answers is relative to that base, so it is carried here rather than
@@ -123,16 +146,20 @@ pub(crate) struct ScanOutcome {
     /// the base's seq is compared with: the base-mismatch check. Carried for
     /// the reason `s_load` is.
     chain_at_base: [u8; 32],
-    /// The boundary this scan COLLECTED to, as [`scan`] was called with it —
-    /// `None` for the whole scanned region. Applied by
+    /// What this scan COLLECTED, as [`scan`] or [`scan_boundaries`] was
+    /// called — a record scan's fold bound, `None` for the whole scanned
+    /// region, or the boundary mode. Applied by
     /// [`ScanOutcome::collect_commit`], the only writer of the records
-    /// collected below, of the nearest boundary below the bound and of the
-    /// marker captured at it, and read back by [`ScanOutcome::covers`] to hold
-    /// a fold to it: records above it were read and dropped, so a fold past it
-    /// is one this outcome cannot answer. Bounding the collection is what
-    /// keeps a history read of one boundary from materializing the whole
-    /// retained window.
-    bound: Option<u64>,
+    /// collected below, of the nearest boundary below the bound, of the
+    /// marker captured at it and of the boundaries, and read back by
+    /// [`ScanOutcome::covers`], [`ScanOutcome::closing_marker`] and
+    /// [`ScanOutcome::into_boundaries`] to hold a caller to it: records above
+    /// a bound were read and dropped, so a fold past it is one this outcome
+    /// cannot answer, and a boundary scan kept no record at all. Bounding the
+    /// collection is what keeps a history read of one boundary from
+    /// materializing the whole retained window; the boundary mode is what
+    /// keeps the boundary read from materializing any record.
+    collect: Collect,
     /// The last COMMITTED marker's `last_seq`, floored at `S_load` — §7's `W`
     /// (if no committed marker sits above the loaded checkpoint it is
     /// `S_load` itself and Pass 2 folds nothing). Never bounded: it is
@@ -148,7 +175,8 @@ pub(crate) struct ScanOutcome {
     pub commits_above_base: u64,
     /// The records a fold may apply, unordered and unfiltered as collected.
     /// Written only by [`ScanOutcome::collect_commit`], which is where the
-    /// collection bound is applied; read through [`ScanOutcome::records_to`],
+    /// collection bound is applied — and never under the boundary mode,
+    /// which keeps no record; read through [`ScanOutcome::records_to`],
     /// which is where the order, the range and the one-coordinate-once rule
     /// are settled.
     committed_records: Vec<CommittedRecord>,
@@ -232,6 +260,16 @@ pub(crate) struct ScanOutcome {
     /// [`ScanOutcome::closing_marker`], which reads its presence as the
     /// membership test and holds its caller to the bound it is keyed on.
     closing_at_bound: Option<ClosingMarker>,
+    /// THE COMMITTED BOUNDARIES above the base, in journal order, each as its
+    /// marker's `last_seq` and the signature slot that marker carries — one
+    /// entry per committed marker [`ScanOutcome::collect_commit`] took above
+    /// `s_load`, under [`Collect::Boundaries`] alone; empty under a record
+    /// scan, which captures the one marker closing its bound instead. Read
+    /// through [`ScanOutcome::into_boundaries`], which holds its caller to
+    /// the mode. The term that grows with the journal under the boundary
+    /// mode: one entry per commit, an [`Attestation`] per attested one, and
+    /// never a record.
+    boundaries: Vec<(u64, Option<Attestation>)>,
 }
 
 /// What the committed marker closing a bounded scan's `bound` carries —
@@ -313,21 +351,26 @@ impl ScanOutcome {
     /// run there is harmless. Recorded, never refused: the callers halt.
     ///
     /// Then the collection: the marker's `last_seq` raises the committed head
-    /// and — below this scan's collection bound — the nearest boundary below
-    /// it, and the group's records join the committed set, those at or below
-    /// the bound. The head is deliberately UNBOUNDED: it is recovery's own
-    /// fold bound, so it must name the last committed marker wherever it sits.
-    /// What is COLLECTED obeys `bound`, and per RECORD rather than per group,
-    /// so a transaction straddling the bound keeps the half below it. That
-    /// asymmetry is the whole of what `bound` means, and stating it here is
-    /// what keeps it off the walk — this is the only writer of either, so the
-    /// rule has one site.
+    /// and — below a record scan's collection bound — the nearest boundary
+    /// below it, and the group's records join the committed set, those at or
+    /// below the bound. The head is deliberately UNBOUNDED: it is recovery's
+    /// own fold bound, so it must name the last committed marker wherever it
+    /// sits. What is COLLECTED obeys `bound`, and per RECORD rather than per
+    /// group, so a transaction straddling the bound keeps the half below it.
+    /// That asymmetry is the whole of what `bound` means, and stating it here
+    /// is what keeps it off the walk — this is the only writer of either, so
+    /// the rule has one site. Under the BOUNDARY MODE ([`Collect::Boundaries`])
+    /// the same site keeps, of every committed marker above the base, its
+    /// `last_seq` and its slot, and releases the group's records with the
+    /// group: the mode answers boundaries, not a fold, so no record is kept
+    /// — which is the whole of what the mode means, stated at the one site
+    /// that could keep one.
     ///
     /// Both are TAKEN: the walk is done with a marker and its group once they
     /// commit, so the slot's blob moves whole into the captured
-    /// [`ClosingMarker`], converted by the slot rule ([`attest::slot`]) — the
-    /// rule the marker decoder asked of these very bytes, so the conversion
-    /// answers as the decode did.
+    /// [`ClosingMarker`], or into the boundary list, converted by the slot
+    /// rule ([`admitted_slot`]) — the rule the marker decoder asked of these
+    /// very bytes, so the conversion answers as the decode did.
     fn collect_commit(&mut self, marker: Marker, group: PendingTxn) {
         if marker.last_seq > self.s_load {
             if group.recomputed_chain(&marker) != marker.chain {
@@ -335,25 +378,31 @@ impl ScanOutcome {
             }
             self.chain_head = marker.chain;
             self.commits_above_base += 1;
-            if self.bound == Some(marker.last_seq) {
-                self.closing_at_bound = Some(ClosingMarker {
-                    chain: marker.chain,
-                    // The slot, interpreted not at all. Every marker reaches
-                    // here through `MarkerShadow`'s door, which admitted
-                    // these bytes by this same pure rule, so asking it again
-                    // gives the decode's own answer.
-                    attestation: attest::slot(marker.sig_alg, marker.sig)
-                        .expect("the marker decoder admitted this slot through this very rule"),
-                });
+            match self.collect {
+                Collect::Records { bound } if bound == Some(marker.last_seq) => {
+                    self.closing_at_bound = Some(ClosingMarker {
+                        chain: marker.chain,
+                        attestation: admitted_slot(marker.sig_alg, marker.sig),
+                    });
+                }
+                Collect::Records { .. } => {}
+                Collect::Boundaries => {
+                    self.boundaries
+                        .push((marker.last_seq, admitted_slot(marker.sig_alg, marker.sig)));
+                }
             }
         } else if marker.last_seq == self.s_load && marker.chain != self.chain_at_base {
             self.base_mismatch.get_or_insert(self.s_load);
         }
         self.committed_head = self.committed_head.max(marker.last_seq);
-        if self.bound.is_some_and(|b| marker.last_seq < b) {
+        let Collect::Records { bound } = self.collect else {
+            // The boundary mode keeps no record: the group, and every record
+            // it holds, is released here.
+            return;
+        };
+        if bound.is_some_and(|b| marker.last_seq < b) {
             self.nearest_below_bound = self.nearest_below_bound.max(marker.last_seq);
         }
-        let bound = self.bound;
         self.committed_records.extend(
             group
                 .records
@@ -431,9 +480,13 @@ impl ScanOutcome {
     /// whether `bound` is at or below the boundary this scan COLLECTED to.
     /// Records above that boundary were read and dropped, so a fold past it
     /// cannot restore them and would answer `Ok` with a world missing exactly
-    /// the range between (§7).
+    /// the range between (§7). A boundary scan read every record and kept
+    /// none, so it covers no fold at all.
     fn covers(&self, bound: u64) -> bool {
-        self.bound.is_none_or(|collected| bound <= collected)
+        match self.collect {
+            Collect::Records { bound: collected } => collected.is_none_or(|c| bound <= c),
+            Collect::Boundaries => false,
+        }
     }
 
     /// The committed marker closing boundary `at` — the one question a history
@@ -446,18 +499,43 @@ impl ScanOutcome {
     /// PRECONDITION — this scan COLLECTED to exactly `at`, above its base
     /// ([`scan`]'s `bound` was `Some(at)`, and `at > s_load`). The capture is
     /// keyed on that bound and on nothing else, so a scan collected to any
-    /// other would answer every boundary as absent: a caller's bug, answered
-    /// as one, as [`ScanOutcome::records_to`] answers a fold past its
+    /// other — a boundary scan among them, which captures no closing marker
+    /// — would answer every boundary as absent: a caller's bug, answered as
+    /// one, as [`ScanOutcome::records_to`] answers a fold past its
     /// collection.
     pub(crate) fn closing_marker(&self, at: u64) -> Result<&ClosingMarker, u64> {
         assert!(
-            self.bound == Some(at) && at > self.s_load,
-            "boundary {at} asked of a scan collected to {:?} above {}: the capture is keyed \
+            self.collect == Collect::Records { bound: Some(at) } && at > self.s_load,
+            "boundary {at} asked of a scan that collected {:?} above {}: the capture is keyed \
              on the collection bound (Base::scan)",
-            self.bound,
+            self.collect,
             self.s_load
         );
         self.closing_at_bound.as_ref().ok_or(self.nearest_below_bound)
+    }
+
+    /// THE COMMITTED BOUNDARIES above the base — every one, each with the
+    /// signature slot its marker carries, in journal order, which is `Seq`
+    /// order for any region whose chain verified: the one question the
+    /// boundary read asks of a scan ([`crate::Kernel::boundaries_above`]),
+    /// asked after the at-rest verdicts ([`ScanOutcome::halt_anywhere`]) have
+    /// spoken, as every history read asks its question. Taken rather than
+    /// borrowed: the outcome holds nothing else that read wants, and the
+    /// slots move rather than copy.
+    ///
+    /// PRECONDITION — this scan COLLECTED boundaries ([`scan_boundaries`]).
+    /// A record scan captures the one marker closing its bound and lists
+    /// none, so asking it would answer every boundary as absent: a caller's
+    /// bug, answered as one, as [`ScanOutcome::closing_marker`] answers a
+    /// scan collected to another bound.
+    pub(crate) fn into_boundaries(self) -> Vec<(u64, Option<Attestation>)> {
+        assert!(
+            self.collect == Collect::Boundaries,
+            "the boundaries asked of a scan that collected {:?}: only a boundary scan lists \
+             them (Base::scan_boundaries)",
+            self.collect
+        );
+        self.boundaries
     }
 
     /// The committed records a fold over `(s_load, bound]` must apply, in
@@ -475,15 +553,17 @@ impl ScanOutcome {
     /// they are properties of.
     ///
     /// PRECONDITION — `bound` must be at or below the boundary this scan
-    /// COLLECTED to ([`ScanOutcome::covers`]). Records above it were read and
-    /// dropped, so a fold past it reads records that were never collected,
-    /// which no filter can restore: a caller's bug, answered as one rather
-    /// than with a world short by exactly that range.
+    /// COLLECTED to ([`ScanOutcome::covers`]), which a boundary scan never
+    /// is: records above the bound were read and dropped, and a boundary
+    /// scan kept none, so a fold past either reads records that were never
+    /// collected, which no filter can restore — a caller's bug, answered as
+    /// one rather than with a world short by exactly that range.
     pub(crate) fn records_to(&self, bound: u64) -> Result<Vec<&CommittedRecord>, u64> {
         assert!(
             self.covers(bound),
-            "fold to {bound} against a scan that did not collect that far: the \
-             records between them were never collected (Base::scan)"
+            "fold to {bound} against a scan that did not collect that far, or collected no \
+             record at all: what was never collected cannot be restored (Base::scan, \
+             Base::scan_boundaries)"
         );
         let mut records: Vec<&CommittedRecord> = self
             .committed_records
@@ -758,7 +838,9 @@ fn read_segment(path: &Path, s_load: u64) -> Result<Vec<u8>, ScanFail> {
 /// cut: the scan records, the callers halt. And ONE MARKER IS CAPTURED, by
 /// [`ScanOutcome::collect_commit`] too: the committed marker closing `bound`,
 /// its chain and its signature slot, which [`ScanOutcome::closing_marker`]
-/// answers every history read's boundary judgment with.
+/// answers every one-boundary history read's boundary judgment with — or,
+/// under [`scan_boundaries`], the same pass in its other collection mode,
+/// EVERY committed marker above the base, as its boundary and its slot.
 ///
 /// `segs` must be ASCENDING by `firstSeq`, as [`super::segment::list_segments`]
 /// produces it. The skip rule ([`scanned_above`]), the tail resolution and the
@@ -777,10 +859,61 @@ pub(crate) fn scan(
     bound: Option<u64>,
     chain_at_base: [u8; 32],
 ) -> Result<ScanOutcome, ScanFail> {
+    walk(segs, s_load, Collect::Records { bound }, chain_at_base)
+}
+
+/// THE SAME PASS, COLLECTING BOUNDARIES — the M2 seam §3.3 step 2 of the
+/// operations design names, "the committed boundaries above a position with
+/// their attestation slots": [`scan`]'s walk over the same segments — the
+/// skip rule, the resynchronization and its budget, the grouping by `txn`,
+/// the committed head, the cut, the chain verified link by link and the two
+/// other verdicts, each derived and recorded exactly as there, so
+/// [`ScanOutcome::halt_anywhere`] judges a boundary scan as it judges a scan
+/// collected to one boundary — differing in ONE thing, what
+/// [`ScanOutcome::collect_commit`] keeps of each committed transaction above
+/// the base: its marker's `last_seq` and the signature slot that marker
+/// carries, every one, and NO RECORD. The records are read, checksummed and
+/// chained as they are in every scan, and released with their group. What a
+/// caller reads of it is [`ScanOutcome::into_boundaries`]; a fold asked of
+/// it is refused as a caller's bug ([`ScanOutcome::records_to`]), since
+/// nothing was collected for one, and so is a closing marker
+/// ([`ScanOutcome::closing_marker`]), since none was captured.
+///
+/// Memory: one segment's bytes and one open transaction's records, as
+/// [`scan`] holds them, and — the term that grows with the journal — one
+/// entry per committed transaction above the base, an [`Attestation`] per
+/// attested one, never the committed records of the scanned region: that is
+/// what the mode is for. A reader that wanted every boundary of the retained
+/// window with its slot had otherwise to run [`scan`] once per boundary, each
+/// a pass from the base to the journal's end, or collect the window's
+/// records whole. Work: [`scan`]'s — one pass over the scanned segments,
+/// resynchronization bounded.
+///
+/// Reached through [`crate::replay::Base::scan_boundaries`], as [`scan`] is
+/// reached through [`crate::replay::Base::scan`], for the same reason: the
+/// base the chain's first link is judged against, and whose closed segments
+/// are skipped, is the base the derivation selected and never an `S_load` a
+/// caller supplied.
+pub(crate) fn scan_boundaries(
+    segs: &[SegmentMeta],
+    s_load: u64,
+    chain_at_base: [u8; 32],
+) -> Result<ScanOutcome, ScanFail> {
+    walk(segs, s_load, Collect::Boundaries, chain_at_base)
+}
+
+/// The pass itself, which both entry functions run — [`scan`]'s card states
+/// it whole, and `collect` is the one thing the two differ in.
+fn walk(
+    segs: &[SegmentMeta],
+    s_load: u64,
+    collect: Collect,
+    chain_at_base: [u8; 32],
+) -> Result<ScanOutcome, ScanFail> {
     let mut outcome = ScanOutcome {
         s_load,
         chain_at_base,
-        bound,
+        collect,
         committed_head: s_load,
         commits_above_base: 0,
         committed_records: Vec::new(),
@@ -792,6 +925,7 @@ pub(crate) fn scan(
         base_mismatch: None,
         uncommitted_intact: None,
         closing_at_bound: None,
+        boundaries: Vec::new(),
     };
     // The scanned-segment index and the BYTE offset just past the last
     // committed marker's frame — where the tail begins. Resolved to a
@@ -952,6 +1086,17 @@ pub(crate) fn scan(
                 .collect(),
         });
     Ok(outcome)
+}
+
+/// The slot of a marker the decoder admitted, as the [`Attestation`] it
+/// spells — `None` for the empty one — interpreted not at all. Every marker
+/// reaches the walk through `MarkerShadow`'s door, which admitted these very
+/// bytes by this same pure rule ([`attest::slot`]), so asking it again gives
+/// the decode's own answer; the blob moves whole, since the walk is done with
+/// a marker once it commits.
+fn admitted_slot(sig_alg: u8, sig: Vec<u8>) -> Option<Attestation> {
+    attest::slot(sig_alg, sig)
+        .expect("the marker decoder admitted this slot through this very rule")
 }
 
 /// The account a chain break travels with, in the callers' `cause` slot: what

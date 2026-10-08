@@ -23,9 +23,12 @@ pub struct KernelConfig {
     ///
     /// Under every arm but [`CheckpointPolicy::Deferred`], a checkpoint the
     /// trigger fires runs INLINE on the committing thread, after that commit
-    /// is durable and installed, and its failure is DISCARDED — the
-    /// transaction is already acknowledged, so the error has no sound path
-    /// out (§3/§6). Under the deferred arm the crossing SETS THE DUE FLAG
+    /// is durable and installed; the run is COUNTED and its failure KEPT as
+    /// text ([`crate::Kernel::inline_checkpoints`],
+    /// [`crate::Kernel::last_inline_checkpoint_failure`]), and that is the
+    /// whole of where the failure goes — the transaction is already
+    /// acknowledged, so the error has no path out of `transact` (§3/§6).
+    /// Under the deferred arm the crossing SETS THE DUE FLAG
     /// ([`crate::Kernel::checkpoint_due`]) and runs nothing; the caller's own
     /// thread runs [`crate::Kernel::checkpoint`] and reads the result — and a
     /// second crossing that finds the flag still set runs the checkpoint

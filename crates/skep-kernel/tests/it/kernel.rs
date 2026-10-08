@@ -22,8 +22,8 @@ use std::path::Path;
 use crate::mutilate::FRAME_MAGIC;
 use serde::{Deserialize, Serialize};
 use skep_kernel::{
-    BurnedSeqPolicy, CheckpointPolicy, Durability, Kernel, KernelConfig, SaltSource, Seq, Step,
-    WorldState,
+    Attestation, BurnedSeqPolicy, CheckpointPolicy, Durability, Kernel, KernelConfig, SaltSource,
+    Seq, Step, WorldState,
 };
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -215,6 +215,32 @@ fn cfg_in_memory() -> KernelConfig {
 fn commit(k: &Kernel<TestWorld>, x: u64) -> Seq {
     k.transact(&[], |stg| {
         stg.push(TestRec::Append(x));
+        Ok::<(), ()>(())
+    })
+    .unwrap()
+    .1
+}
+
+/// [`commit`] with `attestation` in the marker's slot (signed ops): one
+/// record, the slot filled for that transaction alone, answering its
+/// boundary.
+fn commit_attested(k: &Kernel<TestWorld>, x: u64, attestation: &Attestation) -> Seq {
+    k.transact_attested(&[], Some(attestation), |stg| {
+        stg.push(TestRec::Append(x));
+        Ok::<(), ()>(())
+    })
+    .unwrap()
+    .1
+}
+
+/// One committed transaction staging every record of `xs` — a composite,
+/// whose boundary is its LAST record's `Seq` and whose interior seqs are no
+/// boundary at all (§3).
+fn commit_all(k: &Kernel<TestWorld>, xs: &[u64]) -> Seq {
+    k.transact(&[], |stg| {
+        for &x in xs {
+            stg.push(TestRec::Append(x));
+        }
         Ok::<(), ()>(())
     })
     .unwrap()

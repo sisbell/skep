@@ -379,7 +379,8 @@ struct Journaled<W> {
     /// Σ₀ — the genesis world this kernel was opened under, kept because it is
     /// the base every history read falls back to when no checkpoint covers
     /// the boundary ([`Kernel::world_at`], [`Kernel::chain_at`],
-    /// [`Kernel::attestation_at`]).
+    /// [`Kernel::attestation_at`]) or the position
+    /// ([`Kernel::boundaries_above`]).
     genesis: W,
     /// What the open found and did: the start point, the bases it passed
     /// over, the commits it replayed and the tail it cut

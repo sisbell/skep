@@ -37,9 +37,12 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
   `last_reclaimed_bytes` the journal bytes the last landing reclaimed;
   `inline_checkpoints` and `last_inline_checkpoint_failure` how many
   checkpoints `transact` ran on a writer and how the last one failed,
-  as text; `checkpoint_header` one base's header by its seq; and a
+  as text; `checkpoint_header` one base's header by its seq; a
   checkpoint that fails after its base landed is
-  `CheckpointError::Landed`, naming the step (`LandedStep`).
+  `CheckpointError::Landed`, naming the step (`LandedStep`); and
+  `boundaries_above` answers every committed boundary above a position
+  with its signature slot in one scan from the base below it, where
+  `attestation_at` answers one boundary per scan.
 - **Keyed critical sections** — every write names the `LockKey`s it
   would hold. Under the v1 single applier one lock serializes all writes,
   and the keys are the seam a per-key realization will use without

@@ -226,7 +226,11 @@ one checkpoint's header is read by its seq (`Kernel::checkpoint_header`, the
 start point's after an open that skipped a newer base); and a checkpoint
 that failed after its base landed names which step failed — the directory's
 fsync, retention or the journal's reclamation — as `CheckpointError::Landed`
-carrying a `LandedStep`, where a failure before the rename stays `Io`.
+carrying a `LandedStep`, where a failure before the rename stays `Io`; and
+the committed boundaries above a position, each with its signature slot, are
+answered in one scan from the base at or below it
+(`Kernel::boundaries_above`), where `Kernel::attestation_at` answers one
+boundary per scan.
 
 Rules that hold across its files:
 
@@ -243,7 +247,9 @@ Rules that hold across its files:
   `Kernel::checkpoint` never takes it: its own mutex may be taken under
   the applier lock, never the reverse.
 - **A scan and its fold share a base.** Scans are reached through
-  `replay::Base::scan`, never by a caller supplying `S_load`.
+  `replay::Base::scan` — and, in the mode that collects the committed
+  boundaries with their slots and no record, `replay::Base::scan_boundaries`
+  — never by a caller supplying `S_load`.
 - **Retention keeps the bases that load.** `checkpoint::retain` passes over
   the names the open's `Recovery` lists as skipped when it counts the newest
   `retain_checkpoints` bases to keep, and removes them as excess, so the

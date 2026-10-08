@@ -1,6 +1,8 @@
 //! Bounded replay, `Kernel::world_at`: the base it selects, the refusals it
 //! makes and their order, and the answers it gives beside a live appender
-//! (§6/§7).
+//! (§6/§7) — and the one-pass boundary list, `Kernel::boundaries_above`,
+//! held to the per-position read it stands in for (the operations design
+//! §3.3 step 2).
 
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -314,4 +316,261 @@ fn world_at_ignores_the_suffix_a_racing_append_can_leave() {
 
     // A history read writes nothing: the suffix it ignored is still there.
     assert!(fs::metadata(&seg).unwrap().len() > full_len);
+}
+
+/// §3.3 STEP 2 — THE ONE PASS EQUALS THE PER-POSITION READ: over a journal
+/// with two checkpoints, attested and unattested commits and two composites,
+/// `boundaries_above(p)` is, boundary by boundary in `Seq` order, `(seq,
+/// attestation_at(seq))` for every committed boundary in `(p, head]` — for
+/// `p` at genesis, at a checkpoint's seq, at a composite's interior, at a
+/// boundary between the two checkpoints and at one above the newest — the
+/// interiors absent, `p` never judged a boundary, and the slots value-equal
+/// to what `transact_attested` wrote, not merely to what the other read
+/// answers.
+#[test]
+fn boundaries_above_equals_attestation_at_boundary_by_boundary() {
+    let dir = tempdir().unwrap();
+    let k = Kernel::open(cfg_fsync(dir.path()), genesis()).unwrap(); // retain 2
+    let tag_a = Attestation::new(1, vec![0xA1; 64]).unwrap();
+    let tag_b = Attestation::new(2, vec![0xB2; 3_373]).unwrap();
+    let tag_c = Attestation::new(1, vec![0xC3]).unwrap();
+    assert_eq!(commit(&k, 10), Seq(1));
+    assert_eq!(commit_attested(&k, 20, &tag_a), Seq(2));
+    assert_eq!(commit_all(&k, &[30, 31, 32]), Seq(5)); // interiors 3, 4
+    assert_eq!(k.checkpoint().unwrap(), Seq(5));
+    assert_eq!(commit_attested(&k, 60, &tag_b), Seq(6));
+    assert_eq!(commit(&k, 70), Seq(7));
+    assert_eq!(k.checkpoint().unwrap(), Seq(7));
+    assert_eq!(commit_all(&k, &[80, 81]), Seq(9)); // interior 8
+    assert_eq!(commit_attested(&k, 100, &tag_c), Seq(10));
+    assert_eq!(k.current_seq(), Seq(10));
+    let boundaries = [1u64, 2, 5, 6, 7, 9, 10];
+
+    // The per-position read, once per boundary above `p`: what the one
+    // pass must equal, entry for entry.
+    let per_position = |p: u64| -> Vec<(Seq, Option<Attestation>)> {
+        boundaries
+            .iter()
+            .filter(|&&b| b > p)
+            .map(|&b| (Seq(b), k.attestation_at(Seq(b)).unwrap()))
+            .collect()
+    };
+    for p in [0u64, 5, 3, 6, 8, 2, 7, 9] {
+        assert_eq!(k.boundaries_above(Seq(p)).unwrap(), per_position(p), "above {p}");
+    }
+    assert_eq!(
+        k.boundaries_above(Seq(0)).unwrap(),
+        vec![
+            (Seq(1), None),
+            (Seq(2), Some(tag_a)),
+            (Seq(5), None),
+            (Seq(6), Some(tag_b)),
+            (Seq(7), None),
+            (Seq(9), None),
+            (Seq(10), Some(tag_c)),
+        ],
+        "the slots are the ones written"
+    );
+}
+
+/// THE ENDS: `p == head` answers the empty list — on a fresh journal, where
+/// the head is genesis, as after commits — WITHOUT consulting the journal:
+/// with the one segment unreadable the head's own position still answers,
+/// where the position below it refuses `Io`; `p > head` refuses
+/// `BeyondHead` naming the head; and an in-memory kernel refuses
+/// `Unjournaled` at every position, ahead of everything.
+#[test]
+fn boundaries_above_answers_empty_at_the_head_and_refuses_beyond_it() {
+    let dir = tempdir().unwrap();
+    let k = Kernel::open(cfg_fsync(dir.path()), genesis()).unwrap();
+    assert_eq!(k.boundaries_above(Seq(0)).unwrap(), vec![], "a fresh journal's head is genesis");
+    assert!(matches!(k.boundaries_above(Seq(1)), Err(HistoryError::BeyondHead { head: Seq(0) })));
+    commit(&k, 10);
+    commit(&k, 20);
+    assert_eq!(k.boundaries_above(Seq(2)).unwrap(), vec![]);
+    assert_eq!(k.boundaries_above(Seq(1)).unwrap(), vec![(Seq(2), None)]);
+    for beyond in [3, u64::MAX] {
+        assert!(
+            matches!(
+                k.boundaries_above(Seq(beyond)),
+                Err(HistoryError::BeyondHead { head: Seq(2) })
+            ),
+            "above {beyond}"
+        );
+    }
+
+    // The empty range is settled by the head alone: nothing is listed, no
+    // base is loaded, no segment is read.
+    let seg1 = seg_file(dir.path(), 1);
+    let stash = dir.path().join("seg-1.stashed");
+    fs::rename(&seg1, &stash).unwrap();
+    fs::create_dir(&seg1).unwrap();
+    assert_eq!(k.boundaries_above(Seq(2)).unwrap(), vec![], "the head's own position");
+    match k.boundaries_above(Seq(1)) {
+        Err(HistoryError::Io(_)) => {}
+        other => panic!("expected the segment's transient Io below the head, got {other:?}"),
+    }
+    fs::remove_dir(&seg1).unwrap();
+    fs::rename(&stash, &seg1).unwrap();
+    assert_eq!(k.boundaries_above(Seq(1)).unwrap(), vec![(Seq(2), None)]);
+
+    let in_memory = Kernel::open(cfg_in_memory(), genesis()).unwrap();
+    commit(&in_memory, 10);
+    for p in [0, 1, 9] {
+        assert!(
+            matches!(in_memory.boundaries_above(Seq(p)), Err(HistoryError::Unjournaled)),
+            "in memory, above {p}"
+        );
+    }
+}
+
+/// THE FLOOR: with the journal reclaimed below a checkpoint, a position
+/// below that floor refuses `Reclaimed` naming it with nothing tried, as
+/// `attestation_at(p + 1)` refuses — the one base rule, a base at or below
+/// the position being a base strictly below the boundary above it; and a
+/// position AT the floor answers the list above it from the base embodying
+/// the floor, where `attestation_at` refuses at the floor itself, its base
+/// having to sit lower still.
+#[test]
+fn boundaries_above_refuses_below_the_reclamation_floor_and_answers_at_it() {
+    let dir = tempdir().unwrap();
+    let k = Kernel::open(cfg_retain(dir.path(), 1), genesis()).unwrap();
+    for _ in 0..8 {
+        commit_blob(&k);
+    }
+    assert_eq!(k.checkpoint().unwrap(), Seq(8));
+    assert!(!seg_file(dir.path(), 1).exists(), "genesis must be unreachable");
+    let tag = Attestation::new(1, vec![0x5A; 16]).unwrap();
+    assert_eq!(commit_attested(&k, 90, &tag), Seq(9));
+    assert_eq!(commit(&k, 100), Seq(10));
+
+    for p in [0u64, 4, 7] {
+        match k.boundaries_above(Seq(p)) {
+            Err(HistoryError::Reclaimed { floor: Some(Seq(8)), cause: None }) => {}
+            other => panic!("expected Reclaimed above {p}, got {other:?}"),
+        }
+        assert!(
+            matches!(
+                k.attestation_at(Seq(p + 1)),
+                Err(HistoryError::Reclaimed { floor: Some(Seq(8)), cause: None })
+            ),
+            "attestation_at({}) refuses alike",
+            p + 1
+        );
+    }
+    // AT the floor: the list above it, from the base embodying it…
+    assert_eq!(k.boundaries_above(Seq(8)).unwrap(), vec![(Seq(9), Some(tag)), (Seq(10), None)]);
+    assert_eq!(k.boundaries_above(Seq(9)).unwrap(), vec![(Seq(10), None)]);
+    // …where the one-boundary slot read must sit below the floor, and cannot.
+    assert!(matches!(
+        k.attestation_at(Seq(8)),
+        Err(HistoryError::Reclaimed { floor: Some(Seq(8)), cause: None })
+    ));
+}
+
+/// THE AT-REST HALT: a flipped byte in a committed frame above `p` answers
+/// `Corruption` at the coordinate `world_at` names, before any boundary is
+/// listed — a run's own seqs are unreadable, so a list around it could omit
+/// the commit it swallowed — and the journal is untouched by the read. The
+/// same damage BELOW a checkpoint is embodied by that base, so the position
+/// at the checkpoint's seq answers: the base rule made visible, a position
+/// that is a checkpoint's seq taking that checkpoint.
+#[test]
+fn boundaries_above_halts_on_at_rest_damage_and_writes_nothing() {
+    let dir = tempdir().unwrap();
+    let k = Kernel::open(cfg_fsync(dir.path()), genesis()).unwrap();
+    commit(&k, 10);
+    commit(&k, 20);
+    commit(&k, 30);
+    assert_eq!(k.checkpoint().unwrap(), Seq(3));
+    commit(&k, 40);
+    commit(&k, 50);
+    let seg = seg_file(dir.path(), 1);
+    let spans = frame_spans(&seg);
+    // T1..T5, a record and a marker each.
+    assert_eq!(spans.len(), 10);
+    // Rot in T2's record: the run lands on T2's marker, inferred max 2 —
+    // above genesis, embodied by the checkpoint at 3.
+    flip_byte(&seg, spans[2].0 + FRAME_HEADER_LEN + 1);
+    for p in [0u64, 1, 2] {
+        match k.boundaries_above(Seq(p)) {
+            Err(HistoryError::Corruption { at, cause: None }) => {
+                assert_eq!(at, Seq(3), "above {p}")
+            }
+            other => panic!("expected Corruption above {p}, got {other:?}"),
+        }
+    }
+    match k.world_at(Seq(1)) {
+        Err(HistoryError::Corruption { at, .. }) => assert_eq!(at, Seq(3), "as world_at halts"),
+        other => panic!("expected world_at to halt alike, got {other:?}"),
+    }
+    assert_eq!(k.boundaries_above(Seq(3)).unwrap(), vec![(Seq(4), None), (Seq(5), None)]);
+    assert_eq!(k.boundaries_above(Seq(4)).unwrap(), vec![(Seq(5), None)]);
+
+    // Rot above the base too, in T5's record: the run lands on T5's marker,
+    // inferred max 5, fatal from every base below it.
+    flip_byte(&seg, spans[8].0 + FRAME_HEADER_LEN + 1);
+    let damaged = fs::read(&seg).unwrap();
+    for p in [3u64, 4] {
+        match k.boundaries_above(Seq(p)) {
+            Err(HistoryError::Corruption { at, cause: None }) => {
+                assert_eq!(at, Seq(6), "above {p}")
+            }
+            other => panic!("expected Corruption above {p}, got {other:?}"),
+        }
+    }
+    assert_eq!(
+        k.boundaries_above(Seq(5)).unwrap(),
+        vec![],
+        "the head's own position consults nothing"
+    );
+    // A history read writes nothing: the damage lies exactly as it was put.
+    assert_eq!(fs::read(&seg).unwrap(), damaged);
+}
+
+/// UNDER A LIVE APPENDER: a read while another thread commits answers a
+/// list bounded at the head the call began with — every entry a committed
+/// boundary at that head, consecutive here since every commit is one
+/// record, none above the head read after the call and none in `(2, the
+/// head read before it]` missing — as `world_at` answers the same world
+/// under the appender. Nothing reclaims (Manual), so no transient is
+/// licensed: a refusal is as much a finding as a wrong list.
+#[test]
+fn boundaries_above_answers_a_prefix_bounded_at_the_head_under_a_live_appender() {
+    let dir = tempdir().unwrap();
+    let k = Kernel::open(cfg_fsync(dir.path()), genesis()).unwrap();
+    commit(&k, 10);
+    commit(&k, 20); // the position asked from: Seq(2), below everything the writer adds
+    let writing = AtomicBool::new(true);
+    std::thread::scope(|s| {
+        let k = &k;
+        let writing = &writing;
+        s.spawn(move || {
+            // Fat records, so the appends straddle rotations.
+            for _ in 0..20 {
+                commit_blob(k);
+            }
+            writing.store(false, Ordering::Release);
+        });
+        let mut reads = 0u32;
+        while writing.load(Ordering::Acquire) || reads < 20 {
+            let before = k.current_seq();
+            let list = k.boundaries_above(Seq(2)).expect("a live appender never refuses a read");
+            let after = k.current_seq();
+            // The head the call began with lies between the two readings,
+            // and the list is every boundary in (2, that head].
+            let bound = list.last().map_or(2, |(seq, _)| seq.0);
+            assert!(
+                before.0 <= bound && bound <= after.0,
+                "bounded at a head the call could have read: {before} ≤ {bound} ≤ {after}"
+            );
+            assert_eq!(list, (3..=bound).map(|seq| (Seq(seq), None)).collect::<Vec<_>>());
+            reads += 1;
+        }
+    });
+    assert!(
+        segment_count(dir.path()) > 1,
+        "the fixture must rotate, so the reads reach back past a rotation"
+    );
+    assert_eq!(k.boundaries_above(Seq(2)).unwrap().len(), 20);
 }

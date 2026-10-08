@@ -20,7 +20,8 @@
 //! accounting. Its children are the operations over it — `writer` appends
 //! (the barrier, the install hand-off, the repair after a failed commit),
 //! `scan` reads (recovery's Pass 1, its verdicts, the tail cut, the format
-//! probe), `segment` names, lists and reclaims the files, `chain` spells the
+//! probe, and the same pass collecting the committed boundaries with their
+//! slots), `segment` names, lists and reclaims the files, `chain` spells the
 //! commit chain's one link, and `attest` is the signature slot's public type.
 //! The children see this file's private items; the rest of the crate sees
 //! what is marked `pub(crate)` here and the re-export block below.
@@ -38,6 +39,7 @@ pub(crate) use chain::CHAIN_GENESIS;
 pub(crate) use scan::damaged_sync_word_cause;
 pub(crate) use scan::first_sync_word;
 pub(crate) use scan::scan;
+pub(crate) use scan::scan_boundaries;
 pub(crate) use scan::truncate_tail;
 pub(crate) use scan::ClosingMarker;
 pub(crate) use scan::FirstSyncWord;

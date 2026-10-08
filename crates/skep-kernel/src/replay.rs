@@ -103,6 +103,23 @@ impl<W> Base<W> {
     ) -> Result<ScanOutcome, ScanFail> {
         journal::scan(segs, self.s_load, bound, self.chain)
     }
+
+    /// Scan the journal above THIS base for its committed boundaries — every
+    /// one, each with its signature slot, in one pass — the boundary read's
+    /// door ([`crate::Kernel::boundaries_above`]; §3.3 step 2 of the
+    /// operations design), beside [`Base::scan`] and for its reason: the
+    /// base the first link is judged against, and whose closed segments are
+    /// skipped, is the base this derivation selected, never an `S_load` a
+    /// caller got from somewhere else — and here there is no fold to
+    /// disagree with, so the one thing the door guards is that the
+    /// boundaries answered are the boundaries above the base that was
+    /// chosen. The scan collects no record ([`journal::scan_boundaries`]);
+    /// what it answers is [`ScanOutcome::into_boundaries`], once the at-rest
+    /// verdicts have been asked of it as they are asked of [`Base::scan`]'s
+    /// outcome.
+    pub(crate) fn scan_boundaries(&self, segs: &[SegmentMeta]) -> Result<ScanOutcome, ScanFail> {
+        journal::scan_boundaries(segs, self.s_load, self.chain)
+    }
 }
 
 /// No base at or below the requested ceiling remains derivable: no retained

@@ -1,20 +1,23 @@
 //! The history reads — the world, the commit chain and the signature slot as
-//! of a committed boundary — derived read-only from the journal directory
-//! through one derivation, [`Kernel::history_read`], with no kernel lock taken
-//! and nothing written. The rest of `kernel` never sees it or its answer.
+//! of a committed boundary, and the committed boundaries above a position
+//! with their slots — derived read-only from the journal directory, with no
+//! kernel lock taken and nothing written: the three boundary reads through
+//! one derivation, [`Kernel::history_read`], and the boundary list through
+//! the steps that derivation is built from, in the same order. The rest of
+//! `kernel` never sees any of it or its answers.
 
 use crate::checkpoint;
 use crate::error::HistoryError;
-use crate::journal::{self, Attestation, ScanFail};
+use crate::journal::{self, Attestation, ScanFail, ScanOutcome, SegmentMeta};
 use crate::replay;
 use crate::{Seq, WorldState};
 
-use super::Kernel;
+use super::{Journaled, Kernel};
 
 /// Where a history read at `at` stands once every refusal before the fold has
 /// spoken, the boundary judgment included — [`Kernel::history_read`]'s answer,
-/// which each history read finishes with the one thing it reads there: the
-/// fold, the chain, or the slot.
+/// which each of the three boundary reads finishes with the one thing it
+/// reads there: the fold, the chain, or the slot.
 // Returned by one private method and matched at once by each caller, never
 // stored: the size difference between the variants costs one move.
 #[allow(clippy::large_enum_variant)]
@@ -77,7 +80,8 @@ impl<W: WorldState> Kernel<W> {
     /// derivation that [`Kernel::chain_at`] and [`Kernel::attestation_at`]
     /// share, so the three refuse alike up to the fold — save where
     /// [`Kernel::attestation_at`]'s base must sit below the boundary, which it
-    /// states.
+    /// states — and whose steps [`Kernel::boundaries_above`] takes in the
+    /// same order as far as its own question goes.
     ///
     /// COST, per call, uncached: one whole checkpoint file read and
     /// deserialized into a `W`, [`WorldState::rebuild_derived`] run over all
@@ -187,7 +191,9 @@ impl<W: WorldState> Kernel<W> {
     /// the journal reaches back to it — so the `nearest` of its
     /// [`HistoryError::NotABoundary`] and the `floor` of its
     /// [`HistoryError::Reclaimed`] can name a seq it refuses, as those
-    /// variants say.
+    /// variants say. Every slot above a position in ONE scan is
+    /// [`Kernel::boundaries_above`], which answers at each boundary what this
+    /// answers there.
     ///
     /// COST, per call, uncached: [`Kernel::chain_at`]'s, from a base strictly
     /// below `at` — never that read's base-only answer, so at a checkpoint's
@@ -218,12 +224,137 @@ impl<W: WorldState> Kernel<W> {
         Ok(closing.attestation)
     }
 
-    /// THE HISTORY READ, stated once for the three public ones —
+    /// THE COMMITTED BOUNDARIES ABOVE A POSITION, each with its signature
+    /// slot — §3.3 step 2 of the operations design, the one-pass seam the
+    /// attest store's rebuild takes its positions from: every committed
+    /// boundary in `(position, head]`, in `Seq` order, paired with the
+    /// [`Attestation`] its marker carries or `None` for the empty slot —
+    /// value for value what [`Kernel::attestation_at`] answers at each — READ
+    /// in ONE scan from a base at or below `position` to the journal's end,
+    /// where that read runs a scan per boundary. `head` is the INSTALLED head
+    /// at the call ([`Kernel::current_seq`]), as [`HistoryError::BeyondHead`]
+    /// reads it.
+    ///
+    /// `position` is a POSITION, not a boundary: a committed boundary, a
+    /// composite's interior `Seq`, a burned one — whatever a caller's own
+    /// coverage names, which need not be a boundary at all — and it is never
+    /// judged one, so this read has no [`HistoryError::NotABoundary`]. The
+    /// list holds boundaries alone: a composite contributes its `last_seq`
+    /// and never an interior coordinate (§3).
+    ///
+    /// THE BASE, at or below `position` — the newest retained checkpoint
+    /// there that loads and seeds, else genesis while the journal reaches it
+    /// — through the base selection the three boundary reads run, capped at
+    /// `position`: a `position` that IS a checkpoint's seq takes that
+    /// checkpoint and scans the markers above it; `Seq(0)` takes genesis
+    /// while the journal reaches back to `Seq(1)`, and refuses
+    /// [`HistoryError::Reclaimed`] once it does not, exactly as
+    /// `attestation_at(Seq(1))` refuses; a `position` below the oldest
+    /// retained checkpoint refuses the same way, naming that checkpoint as
+    /// the `floor` — at which this read answers, its base sitting AT the
+    /// floor where `attestation_at`'s must sit below it. Every marker above
+    /// the base is scanned and the chain verified from the base to the
+    /// journal's END, as `chain_at` verifies it; what is answered is the
+    /// boundaries above `position`.
+    ///
+    /// THE ENDS: `position == head` names an empty range and answers the
+    /// empty list WITHOUT consulting the journal — no base is loaded and no
+    /// segment read, as genesis's slot is answered without a scan — since
+    /// nothing the journal holds could change an answer the range alone
+    /// settles; `position > head` refuses [`HistoryError::BeyondHead`].
+    ///
+    /// THE BOUND AT THE HEAD: the list is bounded at the head the call began
+    /// with. A commit that lands while the read runs — its marker durable
+    /// and scanned, its root installed after the head was read — is NOT
+    /// answered, so a caller holds a prefix of the boundaries it can reason
+    /// about against a head it read, never a list reaching past one; the
+    /// next call answers from the next head. A boundary the journal no
+    /// longer closes — a last marker rotted at rest, which reads as the torn
+    /// tail (the open item in [`Kernel::open`]'s damage model) — is absent
+    /// from the list, as `attestation_at` refuses it
+    /// [`HistoryError::NotABoundary`].
+    ///
+    /// REFUSAL PRECEDENCE — the three boundary reads' steps in their order,
+    /// as far as this read's question goes: [`HistoryError::Unjournaled`]
+    /// first; then [`HistoryError::BeyondHead`]; then
+    /// [`HistoryError::Reclaimed`], the base selection; then
+    /// [`HistoryError::Corruption`] from the scan — an unenumerable or
+    /// oversized segment, a corrupt run at any height, the chain's own
+    /// verdicts — each at the coordinate and with the account `world_at`
+    /// gives it, since a run's own seqs are unreadable and a region whose
+    /// chain fails is not the history it claims, so the boundary set itself
+    /// is underivable; and none of the fold's, since nothing is folded.
+    /// [`HistoryError::Io`] speaks wherever the read that failed sits.
+    ///
+    /// COST, per call, uncached: the base LOADED and seeded through
+    /// [`WorldState::rebuild_derived`], as every history read loads its base
+    /// — a whole checkpoint file read and deserialized, dropped unfolded —
+    /// then ONE scan from that base to the journal's end: every segment
+    /// above the base READ, the retained window at most, and one entry kept
+    /// per committed transaction above the base, an [`Attestation`] per
+    /// attested one — never the records, which the scan reads, checksums
+    /// and releases. So a caller asking over a long window pays the window's
+    /// commits in memory, and the bytes of every signature in it; what it
+    /// does not pay is a scan per boundary. Nothing here is memoized; peak
+    /// memory is that figure times the calls in flight; admission and
+    /// concurrency are the caller's to gate, as they are for `world_at`.
+    ///
+    /// Safe concurrently with the live appender and with `checkpoint()`:
+    /// takes no kernel lock and writes nothing, under the argument
+    /// [`Kernel::world_at`] states — every frame of a commit at or below the
+    /// head is durable before that head was installed, and a racing append
+    /// can leave at most a torn suffix beyond the last committed marker,
+    /// which classifies as an EOF run and is ignored. The same two transient
+    /// refusals: a checkpoint's retention removing a segment between the
+    /// listing and the read ([`HistoryError::Io`]/[`HistoryError::Reclaimed`]),
+    /// and a commit whose barrier fails truncating its tail under a read
+    /// mid-file, which the read meets as at-rest
+    /// [`HistoryError::Corruption`]. A retry re-derives from the files as
+    /// they then stand.
+    ///
+    /// The kernel INTERPRETS nothing it answers, here as at
+    /// [`Kernel::attestation_at`]: which pair a tag names and whether a blob
+    /// verifies are the verifier's questions, beside the table.
+    pub fn boundaries_above(
+        &self,
+        position: Seq,
+    ) -> Result<Vec<(Seq, Option<Attestation>)>, HistoryError> {
+        let (journaled, head) = self.journaled_head(position)?;
+        // `(position, head]` is empty: nothing the journal holds could change
+        // that, so no base is loaded and no segment read.
+        if position == head {
+            return Ok(Vec::new());
+        }
+        let (base, segs) = base_at_or_below(journaled, position.0)?;
+        let scan = base.scan_boundaries(&segs).map_err(scan_refusal)?;
+        at_rest_halt(&scan)?;
+        let mut above: Vec<(Seq, Option<Attestation>)> = scan
+            .into_boundaries()
+            .into_iter()
+            // Above the position, which the base may sit below; at or below
+            // the head the call began with, which a commit landing under the
+            // read may have passed.
+            .filter(|&(seq, _)| seq > position.0 && seq <= head.0)
+            .map(|(seq, slot)| (Seq(seq), slot))
+            .collect();
+        // Journal order is `Seq` order for every region whose chain verified,
+        // which this one has; the sort makes the order this read promises a
+        // property of the answer rather than an inference from the verdicts.
+        above.sort_by_key(|&(seq, _)| seq);
+        Ok(above)
+    }
+
+    /// THE HISTORY READ, stated once for the three one-boundary reads —
     /// [`Kernel::world_at`], [`Kernel::chain_at`] and [`Kernel::attestation_at`]
     /// — which differ only in how high their base may sit and in what they ask
     /// of its answer: so none can refuse differently from another up to that
     /// question, and the one a peer checks a saved chain against cannot answer
-    /// over a region another refuses.
+    /// over a region another refuses. The fourth read,
+    /// [`Kernel::boundaries_above`], takes the same steps in the same order as
+    /// far as its own question goes, and takes them as the same code: the
+    /// head judgment ([`Kernel::journaled_head`]), the base selection
+    /// ([`base_at_or_below`]) and the at-rest halt ([`at_rest_halt`]) are
+    /// each stated once, here, for both.
     ///
     /// `base_ceiling`, at most `at`, is the highest coordinate the base may
     /// embody: `at` itself for a read the base answers at its own coordinate —
@@ -253,48 +384,13 @@ impl<W: WorldState> Kernel<W> {
             base_ceiling <= at.0,
             "a base at {base_ceiling} lies above the boundary {at} it is asked to answer"
         );
-        // A kernel with no journal can answer no boundary, so that refusal
-        // precedes every question about `at`: a caller told `BeyondHead` here
-        // would walk `at` down to genesis before learning that none of it was
-        // ever answerable.
-        let Some(journaled) = &self.journaled else {
-            return Err(HistoryError::Unjournaled);
-        };
-        let installed_head = self.current_seq();
-        if at > installed_head {
-            return Err(HistoryError::BeyondHead {
-                head: installed_head,
-            });
-        }
-        let checkpoints = checkpoint::list(&journaled.dir)?;
-        let segs = journal::list_segments(&journaled.dir)?;
-        let base = replay::select_base(&checkpoints, &segs, Some(base_ceiling), &journaled.genesis)
-            .map_err(|fail| HistoryError::Reclaimed {
-                floor: fail.floor.map(Seq),
-                cause: fail.cause,
-            })?;
+        let (journaled, _) = self.journaled_head(at)?;
+        let (base, segs) = base_at_or_below(journaled, base_ceiling)?;
         if at.0 == base.s_load() {
             return Ok(HistoryRead::AtBase(base));
         }
-        let scan = base.scan(&segs, Some(at.0)).map_err(|fail| match fail {
-            ScanFail::Io(e) => HistoryError::Io(e),
-            ScanFail::Unscannable { at } => HistoryError::Corruption {
-                at: Seq(at),
-                cause: None,
-            },
-        })?;
-        // Any at-rest verdict above the base is a halt, even beyond `at`: a
-        // corrupt run's own seqs are unreadable, so answering around it could
-        // answer from a hole, and a chain link that failed above `at` says the
-        // region is not the history it claims. (A racing live append never
-        // produces a Landed run: it can tear only the file's suffix, after the
-        // last committed marker, which reaches EOF.)
-        if let Some((halt_at, cause)) = scan.halt_anywhere() {
-            return Err(HistoryError::Corruption {
-                at: Seq(halt_at),
-                cause,
-            });
-        }
+        let scan = base.scan(&segs, Some(at.0)).map_err(scan_refusal)?;
+        at_rest_halt(&scan)?;
         let closing = scan
             .closing_marker(at.0)
             .cloned()
@@ -306,5 +402,76 @@ impl<W: WorldState> Kernel<W> {
             scan,
             closing,
         })
+    }
+
+    /// The journal and its INSTALLED head — the two refusals every history
+    /// read makes before it reads anything, in their order. A kernel with no
+    /// journal can answer no coordinate, so that refusal precedes every
+    /// question about `at`: a caller told [`HistoryError::BeyondHead`] here
+    /// would walk `at` down to genesis before learning that none of it was
+    /// ever answerable. Then `at` above the installed head
+    /// ([`Kernel::current_seq`]) is refused with that head — the greatest
+    /// coordinate this kernel answers, read ONCE here, so what a read judges
+    /// `at` against and what bounds its answer are one reading.
+    fn journaled_head(&self, at: Seq) -> Result<(&Journaled<W>, Seq), HistoryError> {
+        let Some(journaled) = &self.journaled else {
+            return Err(HistoryError::Unjournaled);
+        };
+        let installed_head = self.current_seq();
+        if at > installed_head {
+            return Err(HistoryError::BeyondHead { head: installed_head });
+        }
+        Ok((journaled, installed_head))
+    }
+}
+
+/// The base selection every history read runs, capped at `ceiling`, and the
+/// segment listing taken beside it, which the scan above that base walks:
+/// the checkpoints and the segments listed, then [`replay::select_base`] —
+/// recovery's own fallback chain, the newest retained checkpoint at or below
+/// `ceiling` that loads and seeds, else genesis while the journal reaches it
+/// — refused as [`HistoryError::Reclaimed`] when nothing stands in. One
+/// listing serves the selection and the scan, so the scan walks the
+/// segments the base was chosen against.
+fn base_at_or_below<W: WorldState>(
+    journaled: &Journaled<W>,
+    ceiling: u64,
+) -> Result<(replay::Base<W>, Vec<SegmentMeta>), HistoryError> {
+    let checkpoints = checkpoint::list(&journaled.dir)?;
+    let segs = journal::list_segments(&journaled.dir)?;
+    let base = replay::select_base(&checkpoints, &segs, Some(ceiling), &journaled.genesis)
+        .map_err(reclaimed)?;
+    Ok((base, segs))
+}
+
+/// An exhausted base selection, in the history reads' vocabulary: the floor
+/// a base could still be derived at, and why the newest candidate refused.
+fn reclaimed(fail: replay::Unreachable) -> HistoryError {
+    HistoryError::Reclaimed { floor: fail.floor.map(Seq), cause: fail.cause }
+}
+
+/// A scan that produced no outcome, in the history reads' vocabulary: a
+/// segment that could not be read, and a segment that could not be taken in
+/// within the scan's bounds — [`HistoryError::Corruption`] at the base's own
+/// coordinate, with no account, as [`crate::OpenError::Corruption`] carries
+/// it.
+fn scan_refusal(fail: ScanFail) -> HistoryError {
+    match fail {
+        ScanFail::Io(e) => HistoryError::Io(e),
+        ScanFail::Unscannable { at } => HistoryError::Corruption { at: Seq(at), cause: None },
+    }
+}
+
+/// The at-rest halt every history read makes of its scan, before it asks
+/// the scan anything: any at-rest verdict above the base is a halt, even
+/// beyond the coordinate asked — a corrupt run's own seqs are unreadable, so
+/// answering around it could answer from a hole, and a chain link that
+/// failed above the coordinate says the region is not the history it claims.
+/// (A racing live append never produces a Landed run: it can tear only the
+/// file's suffix, after the last committed marker, which reaches EOF.)
+fn at_rest_halt(scan: &ScanOutcome) -> Result<(), HistoryError> {
+    match scan.halt_anywhere() {
+        Some((at, cause)) => Err(HistoryError::Corruption { at: Seq(at), cause }),
+        None => Ok(()),
     }
 }

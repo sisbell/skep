@@ -1234,6 +1234,156 @@ fn a_boundary_asked_of_a_scan_not_collected_to_it_is_refused_as_the_callers_bug(
     let _ = scan(&segs, 0, None, CHAIN_GENESIS).unwrap().closing_marker(1);
 }
 
+#[test]
+fn a_boundary_scan_captures_every_committed_marker_above_the_base_and_collects_no_record() {
+    // ONE PASS, BOUNDED MEMORY (§3.3 step 2 of the operations design): the
+    // boundary mode walks the segments a record scan walks — the closed
+    // ones above the base and the active one, each once — keeps of every
+    // committed marker above the base its `last_seq` and its slot, a
+    // composite as its boundary alone, and keeps NO record: the term that
+    // grows with the journal is one entry per commit, never the records a
+    // fold would read. A mutant that collected the records too fails here.
+    let dir = tempdir().unwrap();
+    let mut writer = fresh_writer(dir.path());
+    let attestation = Attestation::new(1, vec![0xA5; 5]).unwrap();
+    write_txn(&mut writer, 1, vec![vec![7u8; SEGMENT_ROTATE_BYTES as usize]]); // fills seg-1
+    writer
+        .commit_txn(2, vec![rec(20)], Some(&attestation), |_| {}) // rotates into seg-2
+        .expect("fixture commit");
+    write_txn(&mut writer, 3, vec![rec(30), rec(31)]); // a composite: boundary 4
+    write_txn(&mut writer, 5, vec![rec(50)]);
+    drop(writer);
+    let segs = list_segments(dir.path()).unwrap();
+    assert_eq!(segs.len(), 2, "the fixture rotates");
+    // seg-1: 0=T1 rec, 1=T1 marker. seg-2: 0=T2 rec, 1=T2 marker, 2..=3=T3
+    // recs, 4=T3 marker, 5=T4 rec, 6=T4 marker.
+    let seg1_starts = frame_starts(&segs[0].path);
+    let seg2_starts = frame_starts(&segs[1].path);
+
+    // From genesis: both segments walked to their ends — the cut names
+    // seg-2's — four commits counted, four entries with their slots as
+    // committed, and no record kept, where the record scan over the same
+    // region keeps every one of the five.
+    let out = scan_boundaries(&segs, 0, CHAIN_GENESIS).unwrap();
+    assert_eq!((out.committed_head, out.commits_above_base), (5, 4));
+    assert!(out.runs.is_empty());
+    assert_eq!(out.chain_break(), None, "the chain is verified in this mode too");
+    assert!(out.committed_records.is_empty(), "the boundary mode keeps no record");
+    let tail = out.tail.as_ref().expect("a scanned region has a cut");
+    assert_eq!(tail.segment, segs[1].path);
+    assert_eq!(tail.offset, fs::metadata(&segs[1].path).unwrap().len());
+    assert_eq!(
+        committed_seqs(&scan(&segs, 0, None, CHAIN_GENESIS).unwrap()),
+        vec![1, 2, 3, 4, 5],
+        "the record scan over the same region keeps every record"
+    );
+    assert_eq!(
+        out.into_boundaries(),
+        vec![(1, None), (2, Some(attestation.clone())), (4, None), (5, None)]
+    );
+
+    // Above a base at 1, the closed seg-1 — inferred to end at 1 — is
+    // skipped as the record scan skips it, and the entries are seg-2's; above
+    // a base at 4, the one commit above it. Each base brings its own chain,
+    // and the first link above it verifies against that.
+    let above_1 =
+        scan_boundaries(&segs, 1, chain_of_marker_at(&segs[0].path, seg1_starts[1])).unwrap();
+    assert_eq!((above_1.chain_break(), above_1.commits_above_base), (None, 3));
+    assert_eq!(above_1.into_boundaries(), vec![(2, Some(attestation)), (4, None), (5, None)]);
+    let above_4 =
+        scan_boundaries(&segs, 4, chain_of_marker_at(&segs[1].path, seg2_starts[4])).unwrap();
+    assert_eq!((above_4.chain_break(), above_4.commits_above_base), (None, 1));
+    assert_eq!(above_4.into_boundaries(), vec![(5, None)]);
+}
+
+#[test]
+fn a_boundary_scan_judges_the_at_rest_verdicts_as_a_record_scan_does() {
+    // The verdicts are the pass's, not the mode's: a corrupt run and a
+    // chain break are recorded by a boundary scan at the coordinates, and
+    // with the accounts, a record scan records them — so a history read
+    // halts alike whichever mode it ran, and never lists around damage.
+    let halt_of = |out: &ScanOutcome| {
+        out.halt_anywhere().map(|(at, cause)| (at, cause.map(|c| c.to_string())))
+    };
+    let journal_of_three = || {
+        let dir = tempdir().unwrap();
+        let mut writer = fresh_writer(dir.path());
+        write_txn(&mut writer, 1, vec![rec(10)]);
+        write_txn(&mut writer, 2, vec![rec(20)]);
+        write_txn(&mut writer, 3, vec![rec(30)]);
+        dir
+    };
+    // Frames: 0=T1 rec, 1=T1 marker, 2=T2 rec, 3=T2 marker, 4=T3 rec, 5=T3 marker.
+
+    // T2's record rotted: the run lands on T2's marker and T3's link breaks;
+    // the run speaks, without an account, from either mode — and the list
+    // the boundary scan holds is missing exactly the commit the run ate,
+    // which is why a caller halts before reading it.
+    let dir = journal_of_three();
+    let segs = list_segments(dir.path()).unwrap();
+    let starts = frame_starts(&segs[0].path);
+    flip_byte(&segs[0].path, starts[2] + FRAME_HEADER_LEN + 1);
+    let records = scan(&segs, 0, None, CHAIN_GENESIS).unwrap();
+    let boundaries = scan_boundaries(&segs, 0, CHAIN_GENESIS).unwrap();
+    assert_eq!(halt_of(&records), Some((3, None)));
+    assert_eq!(halt_of(&boundaries), halt_of(&records));
+    assert_eq!(boundaries.chain_break(), records.chain_break());
+    assert_eq!(boundaries.runs, records.runs);
+    assert_eq!(boundaries.into_boundaries(), vec![(1, None), (3, None)]);
+
+    // No run, T2's chain field rewritten consistently: the chain's verdict,
+    // with its account, from either mode.
+    let dir = journal_of_three();
+    let segs = list_segments(dir.path()).unwrap();
+    let starts = frame_starts(&segs[0].path);
+    rewrite_payload(&segs[0].path, starts[3], |payload| payload[56] ^= 0xFF);
+    let records = scan(&segs, 0, None, CHAIN_GENESIS).unwrap();
+    let boundaries = scan_boundaries(&segs, 0, CHAIN_GENESIS).unwrap();
+    match halt_of(&records) {
+        Some((2, Some(cause))) => assert!(cause.contains("chain break"), "{cause}"),
+        other => panic!("expected the chain break at 2, got {other:?}"),
+    }
+    assert_eq!(halt_of(&boundaries), halt_of(&records));
+}
+
+#[test]
+#[should_panic(expected = "collected no record at all")]
+fn a_fold_asked_of_a_boundary_scan_is_refused_as_the_callers_bug() {
+    // The boundary mode kept no record, so a fold over its outcome would
+    // answer `Ok` with a world missing every record above the base: a
+    // caller's bug, refused as a fold past the collection bound is.
+    let dir = tempdir().unwrap();
+    let mut writer = fresh_writer(dir.path());
+    write_txn(&mut writer, 1, vec![rec(10)]);
+    let segs = list_segments(dir.path()).unwrap();
+    let _ = scan_boundaries(&segs, 0, CHAIN_GENESIS).unwrap().records_to(1);
+}
+
+#[test]
+#[should_panic(expected = "keyed on the collection bound")]
+fn a_boundary_asked_of_a_boundary_scan_is_refused_as_the_callers_bug() {
+    // A boundary scan captures no closing marker — it lists every boundary
+    // instead — so a boundary judgment asked of it would answer a boundary
+    // `transact` returned as no boundary at all.
+    let dir = tempdir().unwrap();
+    let mut writer = fresh_writer(dir.path());
+    write_txn(&mut writer, 1, vec![rec(10)]);
+    let segs = list_segments(dir.path()).unwrap();
+    let _ = scan_boundaries(&segs, 0, CHAIN_GENESIS).unwrap().closing_marker(1);
+}
+
+#[test]
+#[should_panic(expected = "only a boundary scan lists them")]
+fn the_boundaries_asked_of_a_record_scan_are_refused_as_the_callers_bug() {
+    // A record scan captures the one marker closing its bound and lists
+    // none, so asking it for the list would answer every boundary as absent.
+    let dir = tempdir().unwrap();
+    let mut writer = fresh_writer(dir.path());
+    write_txn(&mut writer, 1, vec![rec(10)]);
+    let segs = list_segments(dir.path()).unwrap();
+    let _ = scan(&segs, 0, Some(1), CHAIN_GENESIS).unwrap().into_boundaries();
+}
+
 /// Byte offset just past the last INTACT frame (walks until a bad frame).
 fn intact_prefix_end(path: &Path) -> u64 {
     let buf = fs::read(path).unwrap();

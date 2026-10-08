@@ -73,8 +73,8 @@ foundation and on the stores above it.
   §The name space.
 - `skep-content` — the write-once map from address to value, ordered by
   address so a checkpoint walks it without sorting: point reads, and one
-  enumeration of every entry for the daemon's cell-index rebuild at open.
-  One feature, default off: `test-hooks`
+  enumeration of every entry, in no promised order, for whole-store work
+  such as the cell index's walk. One feature, default off: `test-hooks`
   compiles in `write`, the test-only twin of `stage_write`, and the
   `skep-kernel` and `skep-namespace` edges only `write` takes. Every debug
   build asserts that each address written is a content element address.

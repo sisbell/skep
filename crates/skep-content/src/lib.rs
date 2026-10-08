@@ -20,8 +20,9 @@
 //!   referential-integrity oracle: content-presence, whether content is
 //!   stored here — not "allocated", not "registered") and
 //!   [`ContentStore::value_at`] (`C(a)`), point queries over a pinned
-//!   snapshot slice; and [`ContentStore::iter`], the one enumeration, for
-//!   the daemon's cell-index rebuild alone.
+//!   snapshot slice; and [`ContentStore::iter`], the one enumeration, in no
+//!   promised order, for whole-store work over a pinned snapshot such as the
+//!   cell index's walk.
 //! * **Write surface** (§C) — the pure step [`stage_write`] (the storage
 //!   half of K.α, composed by M5's placement composite) and `write`, the
 //!   `#[doc(hidden)]` standalone transact-wrapped form (M2 contract 3) —
@@ -128,7 +129,7 @@ pub use value::Val;
 /// Contract). The engine implements it for its concrete world, and every
 /// reader of M4 reaches the permascroll through it: M5's composites as
 /// `stg.working().content()` — the slice they hand [`stage_write`], and ask
-/// `contains` and `value_at` of — and M6's, M9's and the daemon's reads as
+/// `contains` and `value_at` of — and every reader of a snapshot as
 /// `snapshot.world().content()`. M4's library reads no world of its own;
 /// only the test-only `write` bounds on this. READ side only; its write-side
 /// mirror is the engine's `impl From<ContentWrite> for W::Record` lift,

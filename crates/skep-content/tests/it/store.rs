@@ -174,9 +174,9 @@ fn slices_are_equal_when_they_store_the_same_values_at_the_same_addresses() {
 fn iter_visits_every_entry_exactly_once_and_promises_no_order() {
     // The one enumeration beside the point reads: every pair once, its
     // count the slice's, over a pinned slice while a later slice grows —
-    // the daemon's cell-index rebuild walks a snapshot this way while
-    // commits proceed. The order is the map's own, so the test asserts the
-    // SET and the count, never a sequence.
+    // the cell index's walk reads a snapshot this way while commits
+    // proceed. The order is no part of its promise (store.rs, `iter`), so
+    // the test asserts the SET and the count, never a sequence.
     let c0 = ContentStore::default();
     assert_eq!(c0.iter().len(), 0);
     assert!(c0.iter().next().is_none());

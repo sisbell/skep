@@ -8,12 +8,16 @@ use serde::{Deserialize, Serialize};
 /// An opaque, immutable content value — an element of ASN-0036's `Val`
 /// (§Types & errors). Write-once ⇒ never edited ⇒ needs no internal COW; the
 /// `Arc` gives O(1) clone, so the map's structural sharing just bumps
-/// refcounts. M4 is **value-oblivious**: it never inspects these bytes. A
-/// value's *kind* — text or anything else — is read from the address it is
-/// stored at, as that address's subspace identifier `E(a)₁` (ASN-0093 L0;
-/// M1's `Address::subspace`), never from a tag stored with the value:
-/// ASN-0036 leaves `Val`'s typing open (its first open question), and the M4
-/// design settles it untyped (Conflicts #5).
+/// refcounts. M4 is **value-oblivious**: it never inspects these bytes, and
+/// it stores nothing beside them — no tag, no discriminator. ASN-0036 leaves
+/// `Val`'s typing open (its first open question), and the M4 design settles
+/// M4's side of it untyped (Conflicts #5). The one kind M4 answers for is the
+/// store's own: every value here is content, stored at an address whose
+/// subspace identifier `E(a)₁` is `s_C` (ASN-0093 L0, read by M1's
+/// `Address::subspace`; [`ContentStore`](crate::ContentStore)'s second key
+/// invariant), and link values are M7's. What the bytes say of themselves is
+/// their reader's to parse, never M4's: a record body names its own kind in a
+/// `type` member (DOCTRINE D13), read by the parser that owns that kind.
 ///
 /// Serde rides serde's `rc` feature for the `Arc<[u8]>` impls (an M4-local
 /// dependency knob). A value serializes as a SEQUENCE of `u8` — serde has no

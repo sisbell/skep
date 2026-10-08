@@ -14,9 +14,9 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
   content.
 - **`stage_write` / `value_at` / `contains`** — the storage half of
   insertion composites, the value read retrieval answers from, and the
-  check other stores consult: is content stored here? Point reads alone,
-  but for one enumeration, `iter`, which exists for the daemon's
-  cell-index rebuild at open and nothing else.
+  check other stores consult: is content stored here? Point reads, and
+  one enumeration, `iter`, in no promised order, for whole-store work
+  over a pinned snapshot such as the cell index's walk.
 
 Content here is raw bytes at addresses; what a document *says* is an
 arrangement over these bytes, owned one layer up.

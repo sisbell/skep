@@ -46,11 +46,10 @@ pub struct ContentStore {
     // single inserts, O(log n) here against the HAMT's O(log₃₂ n), and no
     // query asks the order of it: no range or prefix scan is built on it
     // (the allocator's max-under-prefix reads M3's own frontier, never M4:
-    // Conflicts #3), and `ContentStore::iter`, the one enumeration — the
-    // walk the daemon's cell-index rebuild makes at open — asks none. What
-    // the order buys is the checkpoint: a whole-store reader that needs
-    // every entry in `Tumbler` order at every cadence crossing (the
-    // canonical bytes, `Serialize` below), which the ordered map's walk
+    // Conflicts #3), and `ContentStore::iter`, the one enumeration, promises
+    // no order. What the order buys is the checkpoint: a whole-store reader
+    // that needs every entry in `Tumbler` order at every cadence crossing
+    // (the canonical bytes, `Serialize` below), which the ordered map's walk
     // gives for free where a hash map's would have to be collected and sorted
     // at every checkpoint. Its decode is `entry_by_entry`'s, not `im`'s own
     // visitor, which reserves the count the bytes declare; it takes each key
@@ -206,8 +205,9 @@ impl ContentStore {
     /// borrow lives THROUGH the pinning `Snapshot` — bind the snapshot
     /// first (`let s = k.snapshot(); s.world().content().value_at(a)`);
     /// chaining off the temporary won't compile. The design's readers are
-    /// RETRIEVEV (M6, ASN-0115) and predicate-def read-back (M9); M5's
-    /// publish shot and the daemon read it too.
+    /// RETRIEVEV (M6, ASN-0115) and predicate-def read-back (M9); any holder
+    /// of a slice may ask it, and the paragraph below says what its answer
+    /// means.
     ///
     /// What a `None` MEANS depends on where `a` came from, which the caller
     /// knows and M4 does not; M4 promises only that a stored value is in
@@ -218,7 +218,9 @@ impl ContentStore {
     /// internal invariant violation to report or halt on, never a
     /// domain-level "not found". An address a request or an endset names
     /// verbatim carries no such promise — it may be unallocated, a ghost
-    /// element, or a link — and the caller holding it names its own refusal.
+    /// element, or a link — and the caller holding it decides what that
+    /// absence means to it: a refusal of its own, an absence it reports, or
+    /// an address it passes over.
     pub fn value_at(&self, a: &Tumbler) -> Option<&Val> {
         self.map.get(a)
     }
@@ -234,15 +236,19 @@ impl ContentStore {
     }
 
     /// THE ONE ENUMERATION of the slice: every `(address, value)` pair it
-    /// holds, each exactly once, in the map's own order — `Tumbler` order,
-    /// the order the checkpoint's `Serialize` above walks too. Its one
-    /// consumer is the daemon's cell-index rebuild at open, which walks the
-    /// world's whole content once over a pinned snapshot, reading every
-    /// value's leading bytes and asking no order of them. Over a pinned
-    /// snapshot the walk is immutable while commits proceed on later roots
-    /// (the persistent map's structural sharing). Exact-size, as the map's
-    /// own walk is. No range and no prefix read is offered beside it; the
-    /// reads stay point reads.
+    /// holds, each exactly once — the whole of its promise. Exact-size, as
+    /// the map's own walk is. Its ORDER is no part of the promise: the order
+    /// the checkpoint's bytes need is the serializer's to keep (`Serialize`
+    /// above, which walks the map itself), and a reader that wants an order
+    /// sorts what it reads. Every address it yields is the tumbler of a
+    /// T4-valid `Address` ([`ContentStore`]'s first key invariant, kept at
+    /// every door), so validating one back into an `Address` cannot fail.
+    ///
+    /// A walk of the whole store, for whole-store work over a pinned
+    /// snapshot such as the cell index's walk (`skep-media`); there it stays
+    /// immutable while commits proceed on later roots (the persistent map's
+    /// structural sharing). A request path asks the point reads; no range and
+    /// no prefix read is offered beside this one.
     pub fn iter(&self) -> impl ExactSizeIterator<Item = (&Tumbler, &Val)> + '_ {
         self.map.iter()
     }

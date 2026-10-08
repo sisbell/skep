@@ -59,3 +59,13 @@ pub fn heap_bytes<T>(f: impl FnOnce() -> T) -> (T, u64) {
     let value = f();
     (value, HEAP_BYTES.with(Cell::get).wrapping_sub(before))
 }
+
+/// [`heap_bytes`] of `f`'s SECOND run: `f` runs once unmeasured and then once
+/// measured, so nothing its first run sets up — a lazy static, a thread-local
+/// key — is counted against the call. Two such numbers taken of one read over
+/// two worlds differ by the work the read does differently in them, and by
+/// nothing else.
+pub fn settled_heap_bytes<T>(f: impl Fn() -> T) -> (T, u64) {
+    let _ = f();
+    heap_bytes(f)
+}

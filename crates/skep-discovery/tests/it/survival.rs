@@ -1,14 +1,15 @@
 //! §6 — the delete-orphan preview, measured against the DELETE it previews:
 //! its orphan set, its admission, the two gates where preview and DELETE
-//! part, and its run budget.
+//! part, and its run budget, asked of `d`'s own runs before any is resolved.
 
 use crate::common;
+use crate::heap::settled_heap_bytes;
 
 use common::*;
 use skep_address::Address;
 use skep_arrangement::{Caller, DeleteError, HasM5, Vstream};
 use skep_discovery::{delete_orphans_on, FourSet, OrphanError, OrphanReport, MAX_IMAGE_RUNS};
-use skep_kernel::{Kernel, TxnError};
+use skep_kernel::{Kernel, Snapshot, TxnError};
 use skep_links::LinkWriter;
 use skep_namespace::PrincipalId;
 
@@ -415,6 +416,38 @@ fn delete_orphans_refuses_a_document_past_the_run_budget() {
     vstream
         .delete(SYS, &doc2(), vp(1, 1), n(1))
         .expect("the DELETE admits it");
+}
+
+/// §6 — the preview's PRE-CHECK refuses a `d` whose own runs are past the
+/// budget before resolving any of them: "a `d` past the budget however the
+/// range falls is refused without its arrangement being resolved into a
+/// vector first" (`delete_orphans_on`), and the `## Cost` section prices that
+/// refusal at two reads of M5's `#runs`. No verdict shows it — the pre-check
+/// is a lower bound on the exact count taken after the resolution and refuses
+/// nothing that count admits — so a preview without it refuses the same
+/// requests, having resolved all of `d` to do it. The heap shows it: over doc2
+/// at two depths past the budget, the refusal costs one heap.
+#[test]
+fn the_preview_refuses_a_document_past_the_run_budget_without_resolving_it() {
+    let k = kernel();
+    seed_content(&k, &doc1(), 1);
+    let (fewer, more) = doc2_past_the_run_budget_at_two_depths(&k);
+    let (d, p, width) = (doc2(), vp(1, 1), n(1));
+    let heap_of = |snap: &Snapshot<World>| -> u64 {
+        let (answer, bytes) =
+            settled_heap_bytes(|| delete_orphans_on(snap, &d, &p, &width, &every_home));
+        assert_eq!(
+            answer,
+            Err(OrphanError::ImageTooLarge),
+            "past the run budget"
+        );
+        bytes
+    };
+    assert_eq!(
+        heap_of(&more),
+        heap_of(&fewer),
+        "the refusal resolves none of `d`'s runs"
+    );
 }
 
 /// §6 — the preview's budget counts `d`'s LINK runs too, which no text range

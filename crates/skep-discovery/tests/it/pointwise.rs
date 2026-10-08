@@ -1,13 +1,14 @@
 //! §5 — projection and addressable discoverability: what each answers, the
-//! overlap discoverability shares with the region family's stab and the one
-//! shape where it parts from the projection, the order their refusals speak
-//! in, the absence rule both apply, and the run budget and join square that
-//! hold them — the runs counted on a published address's trunk head, and the
-//! square at a step that builds nothing per pair. Which arrangement the pair
-//! reads is `head_float`'s.
+//! overlap discoverability shares with the region family's stab, the one
+//! shape where it parts from the projection and the coarse one where they
+//! agree, the order their refusals speak in, the absence rule both apply, and
+//! the run budget and join square that hold them — the runs counted on a
+//! published address's trunk head, both budgets asked before a run is read,
+//! and the square at a step that builds nothing per pair. Which arrangement
+//! the pair reads is `head_float`'s.
 
 use crate::common;
-use crate::heap::heap_bytes;
+use crate::heap::{heap_bytes, settled_heap_bytes};
 
 use common::*;
 use skep_address::{classify_spans, is_prefix, Address, Span, SpanRel};
@@ -301,6 +302,70 @@ fn the_touch_reaches_a_coverage_beneath_an_arranged_address_where_the_projection
             "slot {slot}"
         );
     }
+}
+
+/// §1/§5/§6 — the other half of the crate header's statement of the touch:
+/// "On every other slot — one containing an arranged address, or one meeting
+/// no extent — the two relations agree." Elsewhere the suite meets that
+/// agreement at the arranged runs' own length, where an overlap with an
+/// extent and membership in it are one test. A COARSE slot — one naming doc1
+/// itself, an address shorter than every address doc1 arranges and a prefix
+/// of each — is where the agreement rests on both relations being total
+/// across lengths: M7's overlap and its restatement here, and M5's membership
+/// search. It is the slot a change that closes the gap must keep: the beneath
+/// shape's test above would flip, and this one must not.
+#[test]
+fn the_touch_and_the_projection_agree_on_a_coverage_above_every_arranged_address() {
+    let k = kernel();
+    seed_content(&k, &doc1(), 2); // ca(1) and ca(2), one run
+    let store = LinkWriter::new(&k, &EVERYONE);
+    // Homed in doc2, so doc1 seats nothing and its one content run is all it
+    // arranges.
+    let coarse = link(&store, &doc2(), &[doc1()], &[ca(101)]);
+    assert!(
+        doc1().tumbler().len() < ca(1).tumbler().len(),
+        "the slot names a shorter address"
+    );
+    let reads = Reads(&k);
+    let region = [vspan(1, 1, 2)];
+    assert_eq!(reads.image(&doc1(), &region), Ok(vec![run(&ca(1), 2)]));
+
+    // The extent's overlap reaches it: found, counted, paged, shipped as an
+    // endset, called reachable …
+    assert_eq!(
+        reads.findlinks_v(&doc1(), &region),
+        Ok(vec![coarse.clone()])
+    );
+    assert_eq!(reads.count_v(&doc1(), &region), Ok(1));
+    assert_eq!(
+        reads.window_v(&doc1(), &region, None, 5).map(|w| w.batch),
+        Ok(vec![coarse.clone()])
+    );
+    assert_eq!(
+        reads.retrieve_endsets(&doc1(), &region),
+        Ok(vec![(FROM, enc(&[doc1()]))])
+    );
+    assert_eq!(
+        reads.addressably_discoverable_from(&coarse, &doc1()),
+        Ok(true)
+    );
+    // … and membership agrees: the slot projects to doc1's whole content.
+    let proj = reads.project(&coarse, FROM, &doc1()).expect("project");
+    assert_eq!(proj.len(), 1, "one span: positions 1 and 2");
+    assert!(proj.denotes(&t(&[1, 1])) && proj.denotes(&t(&[1, 2])));
+    assert!(!proj.denotes(&t(&[1, 3])));
+    // The preview too: either position witnesses the link, so deleting one
+    // orphans nothing, and deleting both orphans it.
+    assert_eq!(
+        reads.delete_orphans(&doc1(), &vp(1, 1), &n(1)),
+        Ok(OrphanReport { orphaned: vec![] })
+    );
+    assert_eq!(
+        reads.delete_orphans(&doc1(), &vp(1, 1), &n(2)),
+        Ok(OrphanReport {
+            orphaned: vec![coarse]
+        })
+    );
 }
 
 /// §5 — the precedence between the two gates, on the call that is faulty in
@@ -740,6 +805,56 @@ fn the_touch_test_builds_nothing_per_pair() {
     assert_eq!(
         wide_added, narrow_added,
         "thirty-two runs more cost the same heap whatever the coverage they meet"
+    );
+}
+
+/// §5 — both pointwise budgets are asked BEFORE A RUN IS READ: each prices
+/// `d` off M5's own `#runs`, "both BEFORE the lift, so an over-budget `d`
+/// costs the count and not the span set" (`addressably_discoverable_from_on`),
+/// and "for a read the budget admits, those runs and ONE JOIN" (the `## Cost`
+/// section). No verdict shows the order: asked after the work, either budget
+/// refuses the same calls once the extents are lifted or M5's footprint is
+/// built — a span apiece for every run of a `d` past the budget, on reads the
+/// daemon runs with no scan permit. The heap shows it: over doc2 at two depths
+/// past the budget, each read's refusal costs one heap, and the `MAX − 1`
+/// runs more that the deeper surface holds are never read.
+#[test]
+fn the_pointwise_budgets_are_asked_before_a_run_is_read() {
+    let k = kernel();
+    seed_content(&k, &doc1(), 1);
+    let store = LinkWriter::new(&k, &EVERYONE);
+    // Homed, and so seated, in doc1, so doc2's runs are its content alone.
+    let e1 = link(&store, &doc1(), &[ca(1)], &[ca(101)]); // touches every run of doc2
+    let (fewer, more) = doc2_past_the_run_budget_at_two_depths(&k);
+    let d = doc2();
+    let project_heap = |snap: &Snapshot<World>| -> u64 {
+        let (answer, bytes) = settled_heap_bytes(|| project_on(snap, &e1, FROM, &d, &every_home));
+        assert_eq!(
+            answer,
+            Err(QueryError::ImageTooLarge),
+            "project, past the run budget"
+        );
+        bytes
+    };
+    assert_eq!(
+        project_heap(&more),
+        project_heap(&fewer),
+        "project builds no footprint ahead of its budget"
+    );
+    let discoverable_heap = |snap: &Snapshot<World>| -> u64 {
+        let (answer, bytes) =
+            settled_heap_bytes(|| addressably_discoverable_from_on(snap, &e1, &d, &every_home));
+        assert_eq!(
+            answer,
+            Err(QueryError::ImageTooLarge),
+            "addressably_discoverable_from, past the run budget"
+        );
+        bytes
+    };
+    assert_eq!(
+        discoverable_heap(&more),
+        discoverable_heap(&fewer),
+        "addressably_discoverable_from lifts no extent ahead of its budget"
     );
 }
 

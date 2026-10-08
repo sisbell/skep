@@ -1,15 +1,20 @@
 //! §1 — content-region discovery: `image_on`'s gates, order, dedup and
-//! budgets — its walk priced on a published address's trunk head — and the
-//! four region reads that inherit them, with the document gate asked, where it
-//! is one rule, of every read that names a document. Which arrangement the
-//! reads resolve is `head_float`'s.
+//! budgets — its walk priced on a published address's trunk head, and each
+//! budget refusing before the work it exists to refuse — and the four region
+//! reads that inherit them, with the document gate asked, where it is one
+//! rule, of every read that names a document. Which arrangement the reads
+//! resolve is `head_float`'s.
 
 use crate::common;
+use crate::heap::settled_heap_bytes;
 
 use common::*;
 use skep_address::{Address, Span};
 use skep_arrangement::{HasM5, Vstream};
-use skep_discovery::{content_vspan, OrphanError, OrphanReport, QueryError, FROM, MAX_IMAGE_RUNS};
+use skep_discovery::{
+    content_vspan, image_on, OrphanError, OrphanReport, QueryError, FROM, MAX_IMAGE_RUNS,
+};
+use skep_kernel::Snapshot;
 use skep_links::{enc, LinkWriter, SlotArg, MAX_SLOT_SPANS};
 use skep_namespace::{HasM3, Namespace, PrincipalId};
 
@@ -445,9 +450,9 @@ fn the_region_family_refuses_an_image_past_the_run_budget() {
 /// budget-exact span keeps two distinct runs, so the count is of runs
 /// resolved, never of runs kept.
 ///
-/// What no verdict shows is what M8 HOLDS while it counts: that the run past
-/// the budget is refused before the next is built rests on the pull, and
-/// `image_on` states it.
+/// What no verdict shows is what M8 HOLDS while it counts — the budget and
+/// the run that trips it, never the span's whole image; the heap shows that,
+/// in the test after this one.
 #[test]
 fn image_counts_the_runs_a_span_resolves_not_the_positions_it_names() {
     let max = MAX_IMAGE_RUNS as u32;
@@ -499,6 +504,43 @@ fn image_counts_the_runs_a_span_resolves_not_the_positions_it_names() {
             "{name}: one run more is refused, not truncated"
         );
     }
+}
+
+/// §1 — the run budget is held AS THE RUNS ARE PULLED: "the run past the
+/// budget is refused as it is pulled, before the next is built, so what a
+/// request makes M8 hold is the budget and the one run that trips it — never
+/// a span's whole image, however fragmented the surface" (`image_on`), the
+/// promise the daemon runs `image` on with no scan permit ("so no region
+/// materializes a fragmented document whole"). No verdict shows it: a
+/// resolver that collected each span's runs and counted them afterwards
+/// refuses exactly these requests, holding the source's whole fragmentation
+/// live for each. The heap shows it. One span across doc2 at two depths past
+/// the budget is refused at the same pulled run over both, so it costs one
+/// heap over both, and the `MAX − 1` runs the deeper surface holds past that
+/// run are never built.
+#[test]
+fn image_refuses_past_the_run_budget_without_resolving_the_rest_of_the_span() {
+    let k = kernel();
+    seed_content(&k, &doc1(), 1);
+    let (fewer, more) = doc2_past_the_run_budget_at_two_depths(&k);
+    let d = doc2();
+    // Every position the deeper surface arranges, its walk inside the square
+    // over both, so the RUN budget is what refuses.
+    let region = [vspan(1, 1, 2 * MAX_IMAGE_RUNS as u32)];
+    let heap_of = |snap: &Snapshot<World>| -> u64 {
+        let (answer, bytes) = settled_heap_bytes(|| image_on(snap, &d, &region));
+        assert_eq!(
+            answer,
+            Err(QueryError::ImageTooLarge),
+            "refused at the run past the budget"
+        );
+        bytes
+    };
+    assert_eq!(
+        heap_of(&more),
+        heap_of(&fewer),
+        "no run past the one that trips the budget is built"
+    );
 }
 
 /// §1 — the RUN-LIST WALK, which the run budget cannot see. M5 reaches every
@@ -704,6 +746,62 @@ fn the_walk_budget_admits_the_square_itself_and_refuses_one_step_past_it() {
             "{name}: priced at each span's reach — the square, still"
         );
     }
+}
+
+/// §1 — the run-list walk is refused BEFORE THE FIRST PULL (`image_on`): the
+/// square prices what M5 would walk, so it is asked of the whole region ahead
+/// of any resolution. No verdict shows the order — a region past the square
+/// is refused wherever its price is asked — but asked as the spans are pulled
+/// it refuses only once M5 has walked the run-list for them, the cost it
+/// exists to refuse, on a read the daemon runs with no scan permit. The heap
+/// shows it. Two regions of `MAX` spans over doc2's `MAX + 1` runs are priced
+/// alike, past the square: every span of one names doc2's last position, so
+/// resolving it builds a run, and every span of the other names the position
+/// past it, which builds none. Refused before the first pull, the two cost
+/// one heap.
+#[test]
+fn image_refuses_a_walk_past_the_square_before_resolving_any_run() {
+    let k = kernel();
+    seed_content(&k, &doc1(), 1);
+    let specs = vec![spec(&doc1(), 1, 1, 1); MAX_IMAGE_RUNS + 1];
+    Vstream::new(&k)
+        .copy(SYS, &doc2(), vp(1, 1), &specs)
+        .expect("copy succeeds");
+    let snap = k.snapshot();
+    assert_eq!(
+        snap.world().m5().content_runs(&doc2()).len(),
+        MAX_IMAGE_RUNS + 1
+    );
+    let d = doc2();
+    let max = MAX_IMAGE_RUNS as u32;
+    // Every span of either prices `min(MAX + 1, e − 1) = MAX + 1`, so `MAX`
+    // of them price `MAX × (MAX + 1)`, past the square.
+    let at_last: Vec<Span> = vec![vspan(1, max + 1, 1); MAX_IMAGE_RUNS];
+    let past_last: Vec<Span> = vec![vspan(1, max + 2, 1); MAX_IMAGE_RUNS];
+    assert_eq!(
+        image_on(&snap, &d, &at_last[..1]),
+        Ok(vec![run(&ca(1), 1)]),
+        "a span at the last position resolves a run"
+    );
+    assert_eq!(
+        image_on(&snap, &d, &past_last[..1]),
+        Ok(vec![]),
+        "a span past it resolves none"
+    );
+    let heap_of = |region: &[Span]| -> u64 {
+        let (answer, bytes) = settled_heap_bytes(|| image_on(&snap, &d, region));
+        assert_eq!(
+            answer,
+            Err(QueryError::ImageTooLarge),
+            "the walk is past the square"
+        );
+        bytes
+    };
+    assert_eq!(
+        heap_of(&at_last),
+        heap_of(&past_last),
+        "a region the walk refuses has no run built for it"
+    );
 }
 
 /// §1 — the walk is priced on the arrangement it WALKS: `d`'s reading

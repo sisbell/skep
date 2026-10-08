@@ -1422,8 +1422,12 @@ Rules that hold across its files:
   the link store at all. A change to what a read walks, or a new read,
   changes that section and that card in the same commit.
   `tests/it/tidy.rs` checks the section's heading and that it names every
-  read the crate publishes; nothing checks what a line says a read walks,
-  or skepd's card.
+  read the crate publishes. Of what a line says a read walks, the suite's
+  heap pins check only what the heap shows: that the touch test builds
+  nothing per pair, and that `image_on`'s two budgets, both pointwise
+  budgets and the preview's refusal of a `d` whose own runs are past the
+  budget each refuse before the work they exist to refuse. Nothing checks
+  the rest, or skepd's card.
 - **The link store's overlap is restated here.** `skep-links` keeps its
   per-link overlap private — a slot's span meets a query's when they
   properly overlap, one contains the other or they are equal, never when

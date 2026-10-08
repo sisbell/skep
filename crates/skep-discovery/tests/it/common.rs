@@ -3,9 +3,10 @@
 //! the bound M8 queries under, plus M4 so INSERT can arrange content — and,
 //! under a banner each and in this order, the predicates its writes and reads
 //! run under, its address fixtures, the suite's relation type, the world's
-//! assembly into seeded kernels, the suite's reads of a kernel's current state
-//! with the claim addresses a lineage answer reduces to, and the window law
-//! and wide endset more than one suite reads.
+//! assembly into seeded kernels and the pinned snapshots a cost pin compares,
+//! the suite's reads of a kernel's current state with the claim addresses a
+//! lineage answer reduces to, and the window law and wide endset more than one
+//! suite reads.
 //! Addresses follow M3's minted shapes: account
 //! `[1,0,1]`, documents `[1,0,1,0,d]`, content elements `[doc·0·1·k]`, link
 //! elements `[doc·0·2·k]`; the five reserved type addresses are the compiled
@@ -24,9 +25,11 @@ use skep_discovery::{
     addressably_discoverable_from_on, count_ftt_on, count_v_on, delete_orphans_on,
     findlinks_ftt_on, findlinks_v_on, image_on, in_claims_on, out_claims_on, project_on,
     retrieve_endsets_on, window_ftt_on, window_v_on, Cursor, FourSet, OrphanError, OrphanReport,
-    QueryError, SupClaim, Window,
+    QueryError, SupClaim, Window, MAX_IMAGE_RUNS,
 };
-use skep_kernel::{CheckpointPolicy, Durability, Kernel, KernelConfig, SaltSource, WorldState};
+use skep_kernel::{
+    CheckpointPolicy, Durability, Kernel, KernelConfig, SaltSource, Snapshot, WorldState,
+};
 use skep_links::{
     enc, Endset, HasLinks, LinkRec, LinkState, LinkWriter, SlotArg, View,
 };
@@ -457,6 +460,41 @@ pub fn fragmented_head_world(run_count: usize) -> Kernel<World> {
         .expect("the birth shot commits");
     assert_eq!(head, phead(), "the chain's first member");
     k
+}
+
+/// doc2 fragmented PAST the run budget at two depths, pinned as two snapshots
+/// of `k`: first `MAX + 1` width-1 runs, then `2 × MAX`, every run a COPY of
+/// doc1's position 1, so none abuts the next. A read refused by a budget it
+/// asks AHEAD of the work that budget prices refuses both at one cost — the
+/// runs between the two depths are work it never reaches — and one that asks
+/// after the work pays for them. `k` must already arrange doc1's position 1.
+pub fn doc2_past_the_run_budget_at_two_depths(
+    k: &Kernel<World>,
+) -> (Snapshot<World>, Snapshot<World>) {
+    let vstream = skep_arrangement::Vstream::new(k);
+    let place = |copies: usize| {
+        vstream
+            .copy(
+                SYS,
+                &doc2(),
+                vp(1, 1),
+                &vec![spec(&doc1(), 1, 1, 1); copies],
+            )
+            .expect("copy succeeds");
+    };
+    place(MAX_IMAGE_RUNS + 1);
+    let fewer = k.snapshot();
+    place(MAX_IMAGE_RUNS - 1);
+    let more = k.snapshot();
+    assert_eq!(
+        fewer.world().m5().content_runs(&doc2()).len(),
+        MAX_IMAGE_RUNS + 1
+    );
+    assert_eq!(
+        more.world().m5().content_runs(&doc2()).len(),
+        2 * MAX_IMAGE_RUNS
+    );
+    (fewer, more)
 }
 
 // ───────────────────────────── the suite's reads ────────────────────────────

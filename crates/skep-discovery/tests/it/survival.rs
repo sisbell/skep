@@ -80,7 +80,7 @@ fn delete_orphans_reports_active_last_witness_losses() {
     seed_content(&k, &doc1(), 3);
     let store = LinkWriter::new(&k, &EVERYONE);
     let reads = Reads(&k);
-    // link_a witnesses positions 1 (FROM) and 2 (TO); link_b only 3.
+    // link_a is witnessed at positions 1 (FROM) and 2 (TO); link_b at 3 alone.
     let _link_a = link(&store, &doc1(), &[ca(1)], &[ca(2)]);
     let link_b = link(&store, &doc1(), &[ca(3)], &[ca(3)]);
 
@@ -108,9 +108,9 @@ fn delete_orphans_reports_active_last_witness_losses() {
 /// The survival fixture, rebuilt per case: the preview is read off one kernel
 /// and the DELETE that follows mutates it, so each `(p, width)` owns its own
 /// world. Every witness shape the `orphaned` identity's three retained terms
-/// answer for is present — a prefix-only witness, a suffix-only one, a split
-/// one, a LINK-subspace one, a link reaching nothing doc1 arranges, and a
-/// retracted one.
+/// answer for is present — a link witnessed in the prefix alone, one in the
+/// suffix alone, one on both sides of the range, one in doc1's LINK subspace,
+/// one reaching nothing doc1 arranges, and a retracted one.
 fn survival_world() -> Kernel<World> {
     let k = kernel();
     seed_content(&k, &doc1(), 4); // V 1..4 → ca(1..4)
@@ -333,13 +333,13 @@ fn the_preview_answers_a_request_the_delete_refuses_for_ownership() {
 fn the_preview_answers_a_published_target_the_delete_refuses() {
     let k = published_world();
     let store = LinkWriter::new(&k, &EVERYONE);
-    let witness = link(&store, &doc1(), &[pca(1)], &[ca(101)]);
+    let orphan = link(&store, &doc1(), &[pca(1)], &[ca(101)]);
 
-    // The preview answers — the witness's one position goes …
+    // The preview answers — the orphan's one witness, position 1, goes …
     assert_eq!(
         delete_orphans_on(&k.snapshot(), &pdoc(), &vp(1, 1), &n(1), &every_home),
         Ok(OrphanReport {
-            orphaned: vec![witness]
+            orphaned: vec![orphan]
         })
     );
     // … and the DELETE it previews is refused outright.

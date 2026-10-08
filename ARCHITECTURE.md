@@ -1438,10 +1438,10 @@ Rules that hold across its files:
   `skep-arrangement` keeps private the two tests its DELETE admits a range
   by — that the document arranges the range's first position, and that its
   arranged content contains the whole range — and `delete_orphans_on`
-  restates them as one bounds check in `DeleteSplit::of`, in
+  restates them as one bounds check in `DeletePartition::of`, in
   `src/survival.rs`, so that the preview is of the DELETE requested and
   never of a clipped one. A change to DELETE's admission changes
-  `DeleteSplit::of` in the same commit. `tests/it/survival.rs` holds the
+  `DeletePartition::of` in the same commit. `tests/it/survival.rs` holds the
   preview to DELETE's verdict on every request its admission grid draws.
 
 Its integration suite is one binary, `tests/it/`: one file per part of the

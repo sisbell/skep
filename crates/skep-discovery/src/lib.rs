@@ -50,9 +50,10 @@
 //! [`addressably_discoverable_from_on`] decide that a link reaches arranged
 //! content by M7's stab overlap with each run's I-extent (restated, for
 //! discoverability, over each span's bounds). ASN-0127's image and ASN-0098's
-//! projection are SETS of arranged addresses, and a slot meets one only by
+//! `ran(M(d))` are SETS of arranged addresses, and a slot meets one only by
 //! CONTAINING one of those addresses (F-IMG, F-MATCH; ASN-0098's `project`,
-//! on which LP12 is defined). A run's I-extent also covers every address that
+//! on which LP12 is defined, answers the V-positions whose arranged address
+//! the coverage contains). A run's I-extent also covers every address that
 //! EXTENDS one the run arranges, so a slot whose coverage meets the extents
 //! only strictly BENEATH arranged addresses — a name no mint produces, which
 //! M7's `Addrs` form deposits verbatim — is found, counted, paged, shipped as
@@ -70,11 +71,11 @@
 //! index of its own.
 //!
 //! Every arrangement read here but one is of `d`'s READING SURFACE — M5's
-//! `reading_surface`, the one pin of HEAD-FLOAT (PUB-2.49, PUB-2.50,
-//! PUB-2.53), which states what each kind of address answers from. The
-//! region family floats through [`image_on`], and the pointwise pair each
-//! through its own read of the runs, so all of them read one arrangement for
-//! `d`. The one that does not float is
+//! `reading_surface`, the one place HEAD-FLOAT is decided (PUB-2.49,
+//! PUB-2.50, PUB-2.53), which states what each kind of address answers
+//! from. The region family floats through [`image_on`], and the pointwise
+//! pair each through its own read of the runs, so all of them read one
+//! arrangement for `d`. The one that does not float is
 //! [`delete_orphans_on`]: it previews DELETE, which edits `d`'s own
 //! arrangement and refuses every published target, so on every `d` DELETE
 //! admits, `d` IS its reading surface. On a published `d` the two part and

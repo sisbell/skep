@@ -4,8 +4,8 @@
 //! version member answers its own, and registered-empty is decided of the
 //! reading surface — asked of the region family and the pointwise pair
 //! alike, and of both subspaces discoverability reads. What a budget counts
-//! on a head is its family's (`region`, `pointwise`), and the preview, which
-//! does not float, is `survival`'s.
+//! on a head is stated in `region` and in `pointwise`, and the preview,
+//! which does not float, in `survival`.
 
 use crate::common;
 
@@ -41,9 +41,9 @@ fn every_region_read_resolves_a_published_document_through_its_trunk_head() {
 }
 
 /// §5 — HEAD-FLOAT on the pointwise pair: a bare PUBLISHED address is read
-/// through its trunk head, the pin the region family resolves through, so
-/// the pointwise pair and the region family agree about which links reach it
-/// — every link `findlinks_v` finds through `pdoc` is one
+/// through its trunk head, by the float the region family resolves through,
+/// so the pointwise pair and the region family agree about which links reach
+/// it — every link `findlinks_v` finds through `pdoc` is one
 /// `addressably_discoverable_from` calls reachable from `pdoc`, and `project`
 /// answers in the head's positions. On a private document the float is inert
 /// and reading `d`'s own arrangement is reading the right one; here a link
@@ -77,7 +77,7 @@ fn the_pointwise_pair_reads_the_trunk_head_the_region_family_resolves() {
         .project(&head_only, FROM, &pdoc())
         .expect("project")
         .denotes(&t(&[1, 3])));
-    // And the bare address answers exactly as its head does: the pin, not a
+    // And the bare address answers exactly as its head does: the float, not a
     // coincidence of this fixture.
     for a in &found {
         assert_eq!(

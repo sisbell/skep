@@ -27,12 +27,12 @@ skep-kernel = { path = "../skep-kernel" }
 # M3 — the document-existence gate every read that names a document asks first.
 skep-namespace = { path = "../skep-namespace" }
 # M5 — the arrangement M8 resolves through, counts the runs of, and projects
-# into; the head-float pin; and the ordinal V-span shape the region gate asks
-# with. M8 never reads R. M8 restates one piece of it, DELETE's admission, as
-# `survival::DeleteSplit::of`, because M5 keeps the pair of tests behind it
-# private: a change to DELETE's admission is a change to `of` too, and
-# tests/it/survival.rs holds the preview to DELETE's verdict on every request
-# its admission grid draws.
+# into; `reading_surface`, where head-float is decided; and the ordinal V-span
+# shape the region gate asks with. M8 never reads R. M8 restates one piece of
+# it, DELETE's admission, as `survival::DeletePartition::of`, because M5 keeps
+# the pair of tests behind it private: a change to DELETE's admission is a
+# change to `of` too, and tests/it/survival.rs holds the preview to DELETE's
+# verdict on every request its admission grid draws.
 skep-arrangement = { path = "../skep-arrangement" }
 # M7 — the link store and the matcher M8 presents. M8 restates one piece of it,
 # the per-link overlap relation, as `pointwise::SpanBounds::overlaps`, because

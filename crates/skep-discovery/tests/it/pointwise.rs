@@ -247,7 +247,7 @@ fn discoverability_agrees_with_the_region_familys_stab_on_every_span_relation() 
 /// I-extent covers every address extending one it arranges, so M7's overlap —
 /// the region family's touch, the preview's, and discoverability's
 /// restatement of it — reaches the link; ASN-0127's image and ASN-0098's
-/// projection are the arranged addresses themselves, and `project`, asking
+/// `ran(M(d))` are the arranged addresses themselves, and `project`, asking
 /// M5's membership, places it at no position. Pinned as the gap the header
 /// states, so a change to either relation is a change this test is told
 /// about.

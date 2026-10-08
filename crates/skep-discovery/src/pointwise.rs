@@ -17,14 +17,15 @@
 //! and in `a` at once and only one verdict speaks.
 //!
 //! Both read `d`'s READING SURFACE (HEAD-FLOAT — PUB-2.49, PUB-2.50,
-//! PUB-2.53): M5's `reading_surface`, the one pin, which [`crate::image_on`]
-//! routes the whole region family through as well. So the pair answers about
-//! the arrangement a reader of `d` sees, and `addressably_discoverable_from`
-//! agrees with the region family about which links reach `d` — a link
-//! `findlinks_v` finds through `d` is one it calls reachable — because both
-//! touch by M7's overlap with the runs' I-extents; `project` asks membership,
-//! and the crate header states the one shape where that parts them. The
-//! document gate runs on the address named, ahead of the float (PUB-6.37).
+//! PUB-2.53): M5's `reading_surface`, the one place the float is decided,
+//! which [`crate::image_on`] routes the whole region family through as well.
+//! So the pair answers about the arrangement a reader of `d` sees, and
+//! `addressably_discoverable_from` agrees with the region family about which
+//! links reach `d` — a link `findlinks_v` finds through `d` is one it calls
+//! reachable — because both touch by M7's overlap with the runs' I-extents;
+//! `project` asks membership, and the crate header states the one shape where
+//! that parts them. The document gate runs on the address named, ahead of the
+//! float (PUB-6.37).
 //!
 //! Both take the caller's DOCUMENT predicate and apply the ABSENCE RULE
 //! (PUB-6.6) — the home rule asked of `a`'s home: neither answer names a

@@ -128,10 +128,10 @@ fn run_list_walk(region: &[Span], run_count: usize) -> usize {
 ///
 /// HEAD-FLOAT (PUB round 2, lane 3.2; PUB-2.49, PUB-2.50, PUB-2.53): the
 /// arrangement resolved is `d`'s READING SURFACE — M5's `reading_surface`,
-/// the one pin. The whole region family inherits it through this function:
-/// `findlinks_v`, `count_v`, `window_v` and `retrieve_endsets` float exactly
-/// as `image` does. The document gate runs on the address named, ahead of the
-/// float (PUB-6.37).
+/// the one place the float is decided. The whole region family inherits it
+/// through this function: `findlinks_v`, `count_v`, `window_v` and
+/// `retrieve_endsets` float exactly as `image` does. The document gate runs
+/// on the address named, ahead of the float (PUB-6.37).
 pub fn image_on<W: DiscoveryWorld>(
     s: &Snapshot<W>,
     d: &Address,

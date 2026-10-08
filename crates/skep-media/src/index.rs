@@ -415,21 +415,17 @@ pub fn walk<W: FebeWorld>(snapshot: &Snapshot<W>, index: &CellIndex) -> Rebuild 
     let world = snapshot.world();
     let (mut values, mut cells, mut halts) = (0usize, 0usize, 0usize);
     let mut parse = Duration::ZERO;
-    for (tumbler, value) in world.content().iter() {
+    for (at, value) in world.content().iter() {
         values += 1;
         let bytes = value.as_bytes();
         if !names_kind_by_prefix(bytes) {
             continue;
         }
         let at_parse = Instant::now();
-        // Every minted address is T4-valid; one that is not names nothing
-        // this index reads.
-        if let Ok(at) = validate(tumbler.clone()) {
-            match index.enter_value(world, &at, bytes) {
-                Entered::Cell => cells += 1,
-                Entered::Halt => halts += 1,
-                Entered::Nothing => {}
-            }
+        match index.enter_value(world, at, bytes) {
+            Entered::Cell => cells += 1,
+            Entered::Halt => halts += 1,
+            Entered::Nothing => {}
         }
         parse += at_parse.elapsed();
     }

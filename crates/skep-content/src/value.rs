@@ -6,9 +6,9 @@ use std::sync::Arc;
 use serde::{Deserialize, Serialize};
 
 /// An opaque, immutable content value — an element of ASN-0036's `Val`
-/// (§Types & errors). Write-once ⇒ never edited ⇒ needs no internal COW; the
-/// `Arc` gives O(1) clone, so the map's structural sharing just bumps
-/// refcounts. M4 is **value-oblivious**: it never inspects these bytes, and
+/// (§Types & errors). Write-once ⇒ never edited ⇒ needs no internal COW; a
+/// clone shares the bytes and never copies them, so it is O(1) however long
+/// the value. M4 is **value-oblivious**: it never inspects these bytes, and
 /// it stores nothing beside them — no tag, no discriminator. ASN-0036 leaves
 /// `Val`'s typing open (its first open question), and the M4 design settles
 /// M4's side of it untyped (Conflicts #5). The one distinction M4 answers for

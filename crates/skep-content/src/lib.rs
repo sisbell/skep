@@ -65,9 +65,8 @@
 //! ## Boundary — deliberately NOT owned here
 //!
 //! * minting or validating addresses (M3; M1's validator) — every key M4
-//!   stores is the tumbler of an `Address`, taken as one at the write doors
-//!   and re-checked through M1's `Address` door wherever a record or a slice
-//!   is decoded;
+//!   stores is an `Address`, taken as one at the write doors and decoded
+//!   through M1's `Address` door wherever a record or a slice is decoded;
 //! * arranging, referencing, or routing content, and enforcing referential
 //!   integrity (M5 — M4 only *answers* the check via `contains`; the
 //!   strongest S3 timing is achieved by M2's atomicity around M5's

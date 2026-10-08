@@ -2,6 +2,7 @@
 //! record, the fold, the two point queries and the one enumeration, and the
 //! composable write step.
 
+use std::borrow::Borrow;
 use std::fmt;
 use std::sync::Arc;
 
@@ -21,12 +22,13 @@ use crate::value::Val;
 /// Two INVARIANTS hold of every key, each at a named gate:
 ///
 /// * **T4-valid** (ASN-0093 StoreT4Validity, one premise of SD) — every key
-///   is the tumbler of an `Address`. Gates: [`stage_write`], which takes an
-///   `Address` on every build, so nothing a build journals or checkpoints
-///   holds a key the decode door refuses; and the two decode paths, a
-///   record's and a slice's, which re-enter M1's `Address` door (`validate`)
-///   for each address, so a journal frame or a checkpoint body carrying any
-///   other key is refused, never folded.
+///   is an `Address`, held as one, so the walk lends it as one and no reader
+///   validates a key again. Gates: [`stage_write`], which takes an `Address`
+///   on every build, so nothing a build journals or checkpoints holds a key
+///   the decode door refuses; and the two decode paths, a record's and a
+///   slice's, which decode each address through M1's `Address` door
+///   (`validate`), so a journal frame or a checkpoint body carrying any other
+///   key is refused, never folded.
 /// * **A content-subspace element address** (ASN-0093 C1 and L0 — M4's half
 ///   of SD, `dom(C) ∩ dom(L) = ∅`). Gate: [`stage_write`], whose caller owes
 ///   it — M3 mints only such addresses for content, and M5 hands only those
@@ -37,18 +39,17 @@ use crate::value::Val;
 ///   leave that build unable to replay its own journal.
 ///
 /// Cheap to keep many of: `clone` is O(1), and
-/// [`apply_write`](ContentStore::apply_write) returns a new slice that copies
-/// only the tree nodes on the write's path — O(log n) of them, each copy
-/// cloning one `Arc` per address and per value it holds, whatever the stored
-/// addresses' lengths — and shares everything else with the old one, which
+/// [`apply_write`](ContentStore::apply_write) costs O(log n) in the size of
+/// the slice, however long the addresses already stored, and returns a new
+/// slice that shares everything the write left alone with the old one, which
 /// stays as it was; so a snapshot pinning an old `World` costs next to
 /// nothing. Its serialized form is canonical, a function of the contents
 /// alone (`in_tumbler_order` below, the field's emitting half, says who reads
 /// it).
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ContentStore {
-    // A persistent ORDERED map — `im::OrdMap`, a B-tree keyed by `Tumbler`'s
-    // `Ord` — not `im::HashMap`. The reads are point lookups and the writes
+    // A persistent ORDERED map — `im::OrdMap`, a B-tree in its keys' `Tumbler`
+    // order — not `im::HashMap`. The reads are point lookups and the writes
     // single inserts, O(log n) here against the HAMT's O(log₃₂ n), and no
     // query asks the order of it: no range or prefix scan is built on it
     // (the allocator's max-under-prefix reads M3's own frontier, never M4:
@@ -60,18 +61,58 @@ pub struct ContentStore {
     // and sorted at every checkpoint. Its serde form is this crate's, never
     // `im`'s: `in_tumbler_order` emits it and `entry_by_entry` decodes it,
     // the two named in the attribute below.
-    //
-    // Each address sits behind an `Arc`, as each value does (value.rs), and
-    // for the same reason: a write copies the tree nodes on its path, up to
-    // 64 entries each, and a copy clones one `Arc` per address where a bare
-    // `Tumbler` would be cloned component by component — a cost set by the
-    // longest addresses stored near the write, which an INSERT multiplies by
-    // its value count under M2's applier lock and every replay pays again.
-    // An `Arc<Tumbler>` serializes as the tumbler it holds (serde's `rc`), so
-    // the bytes are the tumbler's, and borrows as one, so the point queries
-    // take a `&Tumbler` and the walk yields one.
     #[serde(serialize_with = "in_tumbler_order", deserialize_with = "entry_by_entry")]
-    map: im::OrdMap<Arc<Tumbler>, Val>,
+    map: im::OrdMap<Key, Val>,
+}
+
+/// A stored address: the key of the slice's map, and the address a record
+/// carries. It holds the [`Address`] a write door was handed or a decode door
+/// admitted, whole, so every key keeps the T4 validity it was admitted with
+/// ([`ContentStore`]'s first key invariant), and the walk lends it as that
+/// `Address`, never as a tumbler for its reader to validate again.
+///
+/// Behind an `Arc`, as each value's bytes are: a write copies the tree nodes
+/// on its path, up to 64 entries each, and a copy clones one `Arc` per address
+/// where an owned address would be cloned component by component — a cost
+/// set by the longest addresses stored near the write, which an INSERT
+/// multiplies by its value count under M2's applier lock and every replay
+/// pays again. The fold puts a record's address into the map by sharing the
+/// record's `Arc`, so folding a record — on commit and on every replay —
+/// never copies its address.
+///
+/// Ordered and compared as its `Address`, which orders as its tumbler, and
+/// borrowed as that tumbler, so the point queries take a `&Tumbler`; shown and
+/// serialized as the tumbler too — `Debug` as `Tumbler([..])`, the bytes the
+/// bare tumbler an `Address` journals as — and decoded only through M1's
+/// `Address` door (`validate`). So an address has one codec in this crate,
+/// the record's and the slice's alike.
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord)]
+struct Key(Arc<Address>);
+
+impl Borrow<Tumbler> for Key {
+    fn borrow(&self) -> &Tumbler {
+        self.0.tumbler()
+    }
+}
+
+impl fmt::Debug for Key {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Debug::fmt(self.0.tumbler(), f)
+    }
+}
+
+impl Serialize for Key {
+    // The tumbler itself: `Address`'s own form is the same bytes, reached
+    // through a clone of the address.
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        self.0.tumbler().serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for Key {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Key, D::Error> {
+        Address::deserialize(deserializer).map(|addr| Key(Arc::new(addr)))
+    }
 }
 
 /// The `map` field's serde form, emitted: a serde map with its length, its
@@ -89,16 +130,16 @@ pub struct ContentStore {
 /// edge back to this crate. M2's checkpoint hashes it (above), and decodes it
 /// from bytes it does not trust — so the map's key and value types stay free
 /// of recursion and of sequence elements that decode from zero bytes (M2's
-/// hostile-input obligation on `WorldState`, which `Tumbler` and `Val` meet),
-/// the map's own declared count is never trusted with a reservation, and a
-/// body naming one address twice is refused, so the bytes a hash commits to
-/// never leave a decoder a tie to break ([`entry_by_entry`]). The engine's
-/// `World` lays these bytes down as one slice of its checkpoint layout, so a
-/// change to them — a field added to or removed from [`ContentStore`], an
-/// entry encoded differently — owes the engine's `WORLD_FORMAT` bump; the
-/// engine's pin (`each_slice_serializes_the_fields_the_format_count_names`)
-/// sees only the top-level field set, `map`, and a change beneath it owes the
-/// bump by hand.
+/// hostile-input obligation on `WorldState`, which `Key`, decoded as a
+/// tumbler, and `Val` meet), the map's own declared count is never trusted
+/// with a reservation, and a body naming one address twice is refused, so the
+/// bytes a hash commits to never leave a decoder a tie to break
+/// ([`entry_by_entry`]). The engine's `World` lays these bytes down as one
+/// slice of its checkpoint layout, so a change to them — a field added to or
+/// removed from [`ContentStore`], an entry encoded differently — owes the
+/// engine's `WORLD_FORMAT` bump; the engine's pin
+/// (`each_slice_serializes_the_fields_the_format_count_names`) sees only the
+/// top-level field set, `map`, and a change beneath it owes the bump by hand.
 /// And the engine's world dump renders the form as M4's authoritative
 /// section, where the daemon's per-reader `/dump` keeps or drops each `map`
 /// entry by its key's document; a field added to [`ContentStore`] would reach
@@ -112,7 +153,7 @@ pub struct ContentStore {
 /// alone and unhooks the dump filter's path, which ends in that name; only
 /// the engine's tests that name the field see it.
 fn in_tumbler_order<S: serde::Serializer>(
-    map: &im::OrdMap<Arc<Tumbler>, Val>,
+    map: &im::OrdMap<Key, Val>,
     serializer: S,
 ) -> Result<S::Ok, S::Error> {
     serializer.collect_map(map.iter())
@@ -150,13 +191,13 @@ fn in_tumbler_order<S: serde::Serializer>(
 /// base names the earliest fault the body holds.
 fn entry_by_entry<'de, D: serde::Deserializer<'de>>(
     deserializer: D,
-) -> Result<im::OrdMap<Arc<Tumbler>, Val>, D::Error> {
+) -> Result<im::OrdMap<Key, Val>, D::Error> {
     use serde::de::{Error, MapAccess, Visitor};
 
     struct MapVisitor;
 
     impl<'de> Visitor<'de> for MapVisitor {
-        type Value = im::OrdMap<Arc<Tumbler>, Val>;
+        type Value = im::OrdMap<Key, Val>;
 
         fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
             f.write_str("a map from content address to value")
@@ -164,8 +205,8 @@ fn entry_by_entry<'de, D: serde::Deserializer<'de>>(
 
         fn visit_map<A: MapAccess<'de>>(self, mut entries: A) -> Result<Self::Value, A::Error> {
             let mut map = im::OrdMap::new();
-            while let Some((addr, val)) = entries.next_entry::<Address, Val>()? {
-                if map.insert(Arc::new(Tumbler::from(addr)), val).is_some() {
+            while let Some((key, val)) = entries.next_entry::<Key, Val>()? {
+                if map.insert(key, val).is_some() {
                     return Err(Error::custom("a content address named twice in one slice"));
                 }
             }
@@ -210,7 +251,7 @@ impl ContentStore {
             return self.clone();
         }
         ContentStore {
-            map: self.map.update(Arc::new(r.addr.clone()), r.val.clone()),
+            map: self.map.update(r.addr.clone(), r.val.clone()),
         }
     }
 
@@ -265,21 +306,18 @@ impl ContentStore {
     }
 
     /// THE ONE ENUMERATION of the slice: every `(address, value)` pair it
-    /// holds, each exactly once — the whole of its promise. Exact-size, as
-    /// the map's own walk is; `&ContentStore` yields the same [`Iter`], so a
-    /// `for` loop over `&store` reads it too. Its ORDER is no part of the
-    /// promise: the order the checkpoint's bytes need is the serializer's to
-    /// keep (`in_tumbler_order` above, which walks the map itself), and a
-    /// reader that wants an order sorts what it reads. Every address it
-    /// yields is the tumbler of a T4-valid `Address` ([`ContentStore`]'s
-    /// first key invariant, kept at every door), so validating one back into
-    /// an `Address` cannot fail.
+    /// holds, each exactly once — the whole of its promise. Exact-size;
+    /// `&ContentStore` yields the same [`Iter`], so a `for` loop over
+    /// `&store` reads it too. Its ORDER is no part of the promise: the order
+    /// the checkpoint's bytes need is the serializer's to keep
+    /// (`in_tumbler_order` above, which walks the map itself), and a reader
+    /// that wants an order sorts what it reads.
     ///
     /// A walk of the whole store, for whole-store work over a pinned
-    /// snapshot such as the cell index's walk (`skep-media`); there it stays
-    /// immutable while commits proceed on later roots (the persistent map's
-    /// structural sharing). A request path asks the point queries; no range
-    /// and no prefix read is offered beside this one.
+    /// snapshot such as the cell index's walk (`skep-media`); the slice it
+    /// walks stays as it was while commits proceed, since every fold returns
+    /// a new slice and leaves its receiver alone. A request path asks the
+    /// point queries; no range and no prefix read is offered beside this one.
     pub fn iter(&self) -> Iter<'_> {
         Iter(self.map.iter())
     }
@@ -290,20 +328,24 @@ impl ContentStore {
 /// loop. Opaque, as M1's `Spans` and M5's `Runs` are, so the persistent map
 /// behind the slice stays this crate's own choice.
 ///
-/// Opacity hides the container, never what the walk promises: the exact
-/// length is forwarded below. The reverse walk is withheld, though `im`'s map
-/// iterator has one: the order is no part of the promise
-/// ([`ContentStore::iter`]), and a walk from the far end would promise one.
-/// `Clone` and the fused guarantee are absent because `im`'s map iterator
-/// implements neither: a caller wanting two walks asks the slice for two,
-/// and one that polls past the end wraps the walk in `fuse()`.
+/// Opacity hides the container, never what the walk promises: it knows its
+/// exact length at every step. It offers no walk from the far end — the
+/// order is no part of the promise ([`ContentStore::iter`]), and a reverse
+/// walk would make one — and it is neither `Clone` nor fused: a caller
+/// wanting two walks asks the slice for two, and one that polls past the end
+/// wraps the walk in `fuse()`.
 #[must_use = "iterators are lazy and do nothing unless consumed"]
-pub struct Iter<'a>(im::ordmap::Iter<'a, Arc<Tumbler>, Val>);
+pub struct Iter<'a>(
+    // `im`'s map walk: it has a reverse walk, withheld above, and no `Clone`,
+    // fused end or `Debug` to forward — so `Iter` forwards the exact length
+    // alone.
+    im::ordmap::Iter<'a, Key, Val>,
+);
 
 impl<'a> Iterator for Iter<'a> {
-    type Item = (&'a Tumbler, &'a Val);
-    fn next(&mut self) -> Option<(&'a Tumbler, &'a Val)> {
-        self.0.next().map(|(addr, val)| (&**addr, val))
+    type Item = (&'a Address, &'a Val);
+    fn next(&mut self) -> Option<(&'a Address, &'a Val)> {
+        self.0.next().map(|(key, val)| (&*key.0, val))
     }
     fn size_hint(&self) -> (usize, Option<usize>) {
         self.0.size_hint()
@@ -316,9 +358,8 @@ impl ExactSizeIterator for Iter<'_> {
     }
 }
 
-/// `Iter { .. }`: the walk, never an entry — `im`'s map iterator is not
-/// `Debug`, so there is no way to show what is left without spending it, and
-/// the slice it was lent from is `Debug` already.
+/// `Iter { .. }`: the walk, never an entry — what is left cannot be shown
+/// without spending it, and the slice it was lent from is `Debug` already.
 impl fmt::Debug for Iter<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Iter").finish_non_exhaustive()
@@ -326,22 +367,22 @@ impl fmt::Debug for Iter<'_> {
 }
 
 impl<'a> IntoIterator for &'a ContentStore {
-    type Item = (&'a Tumbler, &'a Val);
+    type Item = (&'a Address, &'a Val);
     type IntoIter = Iter<'a>;
     fn into_iter(self) -> Iter<'a> {
         self.iter()
     }
 }
 
-/// M4's sole authoritative journal delta (§A). Carries the FLAT [`Tumbler`]
-/// (M1: the flat tumbler is the storage/journal key form; an `Address` is a
-/// tumbler admitted through M1's `Address` door, `validate`).
+/// M4's sole authoritative journal delta (§A). Carries the [`Address`] it
+/// writes at, journaled as its flat tumbler (M1: the flat tumbler is the
+/// storage/journal key form).
 ///
 /// Its fields are private, so [`stage_write`] is its one producer; serde's
 /// `Deserialize` — public, as M2's `Record: DeserializeOwned` bound requires —
-/// is M2's replay of records already staged. That decode takes `addr`
-/// through M1's `Address` door (`through_address`), so a replayed record's
-/// key is T4-valid as a staged one's is ([`ContentStore`]'s key invariants).
+/// is M2's replay of records already staged. That decode takes the address
+/// through M1's `Address` door (`validate`), so a replayed record holds an
+/// `Address` as a staged one does ([`ContentStore`]'s key invariants).
 /// It reads the address before the value, so a record whose address and
 /// value both fail to decode is refused for its address, and that refusal is
 /// the cause M2's `Corruption` carries for it. Read access is full:
@@ -376,31 +417,21 @@ impl<'a> IntoIterator for &'a ContentStore {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[must_use = "a record stores nothing until it is pushed: `stg.push(rec.into())`"]
 pub struct ContentWrite {
-    #[serde(deserialize_with = "through_address")]
-    addr: Tumbler,
+    addr: Key,
     val: Val,
 }
 
 impl ContentWrite {
-    /// The flat storage/journal key — the tumbler of an `Address`, whether
-    /// the record was staged or decoded. Read-only.
-    pub fn addr(&self) -> &Tumbler {
-        &self.addr
+    /// The address the record writes at — an `Address` whether the record
+    /// was staged or decoded, journaled as its flat tumbler. Read-only.
+    pub fn addr(&self) -> &Address {
+        &self.addr.0
     }
 
     /// The value the record writes at [`addr`](ContentWrite::addr). Read-only.
     pub fn val(&self) -> &Val {
         &self.val
     }
-}
-
-/// A record's address decoded through M1's `Address` door — `validate`, so
-/// T4, [`ContentStore`]'s first key invariant — and kept as its flat tumbler.
-/// An `Address` journals as its bare tumbler, so this reads exactly the bytes
-/// a record serializes as, and refuses an address no [`stage_write`] could
-/// have staged.
-fn through_address<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<Tumbler, D::Error> {
-    Address::deserialize(deserializer).map(Tumbler::from)
 }
 
 /// PURE STEP — the storage half of K.α (§C; M2 contract 3). Reads the slice
@@ -440,7 +471,7 @@ pub fn stage_write(
         return Err(ContentError::AlreadyStored(addr.tumbler().clone()));
     }
     Ok(ContentWrite {
-        addr: addr.tumbler().clone(),
+        addr: Key(Arc::new(addr.clone())),
         val,
     })
 }

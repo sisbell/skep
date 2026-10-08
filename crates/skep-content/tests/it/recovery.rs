@@ -287,21 +287,13 @@ fn the_record_and_the_slice_admit_every_address_a_release_build_can_stage() {
     // SUBSPACE — is the stage door's caller to guarantee, checked in debug
     // builds only; a release build stages a violator of either half as given
     // (store.rs's `stage_write_stages_every_mis_routed_address_as_given_in_release`
-    // stages each shape below). So both decode paths take it on journal and
-    // checkpoint integrity: a decode that refused one would leave that build
-    // unable to replay its own journal. The decode therefore admits every
-    // address T4 admits, whatever its routing — here one of each shape the
-    // routing assertion stops in a debug build: each level short of an
-    // element, and an element in a subspace other than content's, each checked
-    // first to be T4-valid and no content-subspace element address. The bytes
-    // are `raw_slice`'s and `raw_record`'s.
-    for (shape, key) in [
-        ("a node address", &[1u32][..]),
-        ("an account address", &[1, 0, 1][..]),
-        ("a document address", &[1, 0, 1, 0, 1][..]),
-        ("a link-subspace element address", &[1, 0, 1, 0, 1, 0, 2, 1][..]),
-        ("a subspace-3 element address", &[1, 0, 1, 0, 1, 0, 3, 1][..]),
-    ] {
+    // stages each shape in `MIS_ROUTED`). So both decode paths take it on
+    // journal and checkpoint integrity: a decode that refused one would leave
+    // that build unable to replay its own journal. The decode therefore admits
+    // every address T4 admits, whatever its routing — here each shape in
+    // `MIS_ROUTED`, each checked first to be T4-valid and no content-subspace
+    // element address. The bytes are `raw_slice`'s and `raw_record`'s.
+    for &(shape, key) in MIS_ROUTED {
         let addr = validate(t(key)).expect("T4-valid, so a release stage door admits it");
         assert!(
             addr.level() != Level::Element || addr.subspace() != Some(&content_subspace()),
@@ -318,7 +310,7 @@ fn the_record_and_the_slice_admit_every_address_a_release_build_can_stage() {
             .unwrap_or_else(|refusal| panic!("a record at {shape} was refused: {refusal}"));
         assert_eq!(
             decoded.addr(),
-            addr.tumbler(),
+            &addr,
             "the record decoded from {shape} carries another address"
         );
     }

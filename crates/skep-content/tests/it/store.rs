@@ -15,7 +15,7 @@
 //! looks at what is stored there, and stages every such address as given in
 //! release.
 
-use skep_address::{Nat, Tumbler};
+use skep_address::{Address, Nat};
 use skep_content::{stage_write, ContentError, ContentStore, ContentWrite, Iter, Val};
 
 use crate::common::*;
@@ -56,7 +56,7 @@ fn stage_write_admits_a_fresh_address_and_commits_nothing() {
     let a1 = ca(1);
     let rec = stage_write(&c, &a1, val(b"alpha")).expect("fresh address is admitted");
     // Read-public accessors report the staged pair (§A).
-    assert_eq!(rec.addr(), a1.tumbler());
+    assert_eq!(rec.addr(), &a1);
     assert_eq!(rec.val().as_bytes(), b"alpha");
     // Nothing committed: the supplied slice is untouched, so a second stage
     // of the same address against the SAME slice is admitted again — folding
@@ -109,24 +109,24 @@ fn apply_write_is_a_pure_insert_only_fold() {
 
 #[test]
 fn apply_write_shares_every_address_the_slice_already_stores() {
-    // store.rs (`ContentStore`, the `map` field): a fold copies the tree
-    // nodes on its path, up to 64 entries each, and shares everything else —
-    // the addresses in the copied nodes included. A copy that cloned each of
-    // those addresses component by component would make every write pay for
-    // up to 64 addresses per level of the tree, a cost set by the longest
-    // addresses stored near it, which an INSERT multiplies by its value count
-    // under M2's applier lock and every replay pays again. So each address
-    // the old slice stores keeps, in the new slice, the very components it
-    // had — one storage, not a copy. 257 entries put the tree past one node,
-    // so the fold copies an inner node as well as a leaf.
-    let component_storage = |addr: &Tumbler| -> *const Nat {
-        std::ptr::from_ref(addr.iter().next().expect("a tumbler is nonempty"))
+    // store.rs (`Key`): a fold copies the tree nodes on its path, up to 64
+    // entries each, and shares everything else — the addresses in the copied
+    // nodes included. A copy that cloned each of those addresses component by
+    // component would make every write pay for up to 64 addresses per level
+    // of the tree, a cost set by the longest addresses stored near it, which
+    // an INSERT multiplies by its value count under M2's applier lock and
+    // every replay pays again. So each address the old slice stores keeps, in
+    // the new slice, the very components it had — one storage, not a copy.
+    // 257 entries put the tree past one node, so the fold copies an inner
+    // node as well as a leaf.
+    let component_storage = |addr: &Address| -> *const Nat {
+        std::ptr::from_ref(addr.tumbler().iter().next().expect("a tumbler is nonempty"))
     };
     let mut c0 = ContentStore::default();
     for ordinal in 1..=257u32 {
         c0 = c0.apply_write(&stage_write(&c0, &ca(ordinal), val(b"v")).expect("fresh"));
     }
-    let stored: std::collections::BTreeMap<&Tumbler, *const Nat> =
+    let stored: std::collections::BTreeMap<&Address, *const Nat> =
         c0.iter().map(|(addr, _)| (addr, component_storage(addr))).collect();
     let c1 = c0.apply_write(&stage_write(&c0, &ca(258), val(b"v")).expect("fresh"));
     let mut shared = 0;
@@ -273,16 +273,17 @@ fn iter_visits_every_entry_of_a_pinned_slice_exactly_once() {
     assert_eq!(walk.len(), n as usize, "exact-size: the slice's count");
     let mut seen = std::collections::BTreeSet::new();
     for (addr, v) in walk {
-        let ordinal = u32::try_from(skep_address::ordinal(addr)).expect("ca's ordinal is a u32");
+        let ordinal =
+            u32::try_from(skep_address::ordinal(addr.tumbler())).expect("ca's ordinal is a u32");
         assert_eq!(v.as_bytes(), format!("v{ordinal}").as_bytes(), "the pair is the stored one");
         assert!(seen.insert(ordinal), "an entry is visited once");
-        assert!(c.contains(addr), "every address walked is in the slice");
+        assert!(c.contains(addr.tumbler()), "every address walked is in the slice");
     }
     assert_eq!(seen.len(), n as usize, "every entry is visited");
     let mut looped = std::collections::BTreeSet::new();
     for (addr, v) in &c {
         assert_eq!(
-            c.value_at(addr).map(Val::as_bytes),
+            c.value_at(addr.tumbler()).map(Val::as_bytes),
             Some(v.as_bytes()),
             "a loop over `&c` yields the stored pair"
         );
@@ -304,7 +305,7 @@ fn iter_lends_a_named_walk_that_knows_its_length_and_shows_no_entry() {
     // and its `Debug` names the walk, never an entry.
     fn lends<'a, I>(walk: I) -> usize
     where
-        I: ExactSizeIterator<Item = (&'a Tumbler, &'a Val)> + std::fmt::Debug + Send + Sync,
+        I: ExactSizeIterator<Item = (&'a Address, &'a Val)> + std::fmt::Debug + Send + Sync,
     {
         walk.len()
     }
@@ -400,10 +401,11 @@ fn val_wraps_bytes_and_compares_by_content_value() {
 fn val_implements_no_hash_so_no_map_can_key_on_a_value() {
     // value.rs, S4: identity is by address, never by value, and `Val` keeps it
     // so by implementing no `Hash` — no map, this crate's or a caller's, can
-    // key on a value. `implements!` reads that; `Tumbler`, M4's key, which
-    // does implement `Hash`, is the control that it can read `true` at all.
+    // key on a value. `implements!` reads that; `Address`, what M4 keys
+    // content by, which does implement `Hash`, is the control that it can read
+    // `true` at all.
     assert!(
-        implements!(Tumbler: std::hash::Hash),
+        implements!(Address: std::hash::Hash),
         "the probe reads `false` even for a type that implements Hash"
     );
     assert!(
@@ -528,22 +530,15 @@ fn stage_write_stages_every_mis_routed_address_as_given_in_release() {
     // SUBSPACE — is the caller's to guarantee, and a release build stages a
     // violator of either half as given. `write`'s release test commits a
     // document address, the level half through `write`'s door; here each
-    // shape the debug routing tests stop goes through `stage_write`: its
-    // record carries the address it was handed, and the fold stores the
-    // value there.
-    for (shape, key) in [
-        ("a node address", &[1u32][..]),
-        ("an account address", &[1, 0, 1][..]),
-        ("a document address", &[1, 0, 1, 0, 1][..]),
-        ("a link-subspace element address", &[1, 0, 1, 0, 1, 0, 2, 1][..]),
-        ("a subspace-3 element address", &[1, 0, 1, 0, 1, 0, 3, 1][..]),
-    ] {
+    // shape in `MIS_ROUTED` goes through `stage_write`: its record carries the
+    // address it was handed, and the fold stores the value there.
+    for &(shape, key) in MIS_ROUTED {
         let addr = a(key);
         let rec =
             stage_write(&ContentStore::default(), &addr, val(b"x")).unwrap_or_else(|refusal| {
                 panic!("a release build refused to stage {shape}: {refusal}")
             });
-        assert_eq!(rec.addr(), addr.tumbler(), "a release build staged {shape} at another address");
+        assert_eq!(rec.addr(), &addr, "a release build staged {shape} at another address");
         assert_eq!(
             ContentStore::default().apply_write(&rec).value_at(addr.tumbler()).map(Val::as_bytes),
             Some(&b"x"[..]),

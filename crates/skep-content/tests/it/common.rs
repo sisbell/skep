@@ -68,6 +68,20 @@ pub fn ca(ordinal: u32) -> Address {
     a(&[1, 0, 1, 0, 1, 0, 1, ordinal])
 }
 
+/// One T4-valid address of each shape the routing assertion stops in a debug
+/// build — each level short of an element, and an element in a subspace other
+/// than content's — with the name a failure reports it by. Two tests read it:
+/// store.rs's release staging test stages each as given, and recovery.rs's
+/// decode test admits each, so the shapes one door takes and the other admits
+/// cannot part.
+pub const MIS_ROUTED: &[(&str, &[u32])] = &[
+    ("a node address", &[1]),
+    ("an account address", &[1, 0, 1]),
+    ("a document address", &[1, 0, 1, 0, 1]),
+    ("a link-subspace element address", &[1, 0, 1, 0, 1, 0, 2, 1]),
+    ("a subspace-3 element address", &[1, 0, 1, 0, 1, 0, 3, 1]),
+];
+
 pub fn val(b: &[u8]) -> Val {
     Val::new(b)
 }

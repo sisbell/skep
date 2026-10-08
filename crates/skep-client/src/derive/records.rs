@@ -28,7 +28,7 @@ use std::thread;
 use std::time::Duration;
 
 use serde_json::Value;
-use skep_identity::{canonical_record, parse_record_value, BoardTerm, Enrollment, Fingerprint, PublicKey};
+use skep_identity::{parse_record_value, BoardTerm, Enrollment, Fingerprint, PublicKey};
 
 use crate::address::{document_of, parent_account};
 use crate::board::{answers, frames, AtAnswer, Board, ChangeKey, KeySet, KeySetAnswer, T_CLAIM, T_ENROLL, T_RETIRE};
@@ -459,14 +459,14 @@ pub fn credential_records(board: &Board, account: &str, own: &[(Fingerprint, Pub
                 Kind::Enroll => match parse_record_value::<Enrollment>(&bytes) {
                     Ok(v) => {
                         let grade = v.entries.iter().any(|e| e.anchor);
-                        let sigless = canonical_record(&v.entries, None);
+                        let sigless = v.sigless_canonical_record();
                         (v.entries, Vec::new(), v.sig, sigless, grade)
                     }
                     Err(_) => continue,
                 },
                 Kind::Retire => match parse_record_value::<Fingerprint>(&bytes) {
                     Ok(v) => {
-                        let sigless = canonical_record(&v.entries, None);
+                        let sigless = v.sigless_canonical_record();
                         (Vec::new(), v.entries, v.sig, sigless, false)
                     }
                     Err(_) => continue,
@@ -566,6 +566,7 @@ mod tests {
     use std::sync::Arc;
 
     use serde_json::json;
+    use skep_identity::canonical_record;
     use skep_signature::HybridSigner;
 
     use super::*;

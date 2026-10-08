@@ -14,18 +14,18 @@
 //! 2. THE BLOB — the `sig` member is the hybrid signature in hex, no `alg`
 //!    beside it, decoding to exactly a width some `SIG_ALGS` row's blob
 //!    takes; hex of no row's width is no signature.
-//! 3. THE FRAME — the entry frame under the `record` grammar
-//!    (`entry_frame`, `entry_body_record`, `RecordRows`), rebuilt from the
-//!    row's own members as wire.md §Registry spells them: `board` `H.1`'s
-//!    pair, `account` the HOME's account (ω over the home: the claimant's for
-//!    a binding in the registrar's doc 1, the node account's for an endpoint
-//!    in its own), `doc` the home, and the five body rows — the link's type
-//!    address, its target as stored (the account bound, or none), the
-//!    `replaces` row EMPTY (the member rides INSIDE the signed body for these
-//!    kinds and no `replaces` link is written with them), the lineage row the
-//!    trial hands — the lineage the reader's own root hint names (REG-3.45),
-//!    EMPTY at this build (D2: the daemon composes every record grade so) —
-//!    and the SIG-LESS CANONICAL PROJECTION of the body.
+//! 3. THE FRAME — the entry frame under the `record` grammar (`RecordFrame`,
+//!    `RecordRows`), rebuilt from the row's own members as wire.md §Registry
+//!    spells them: `board` `H.1`'s pair, `account` the HOME's account (ω over
+//!    the home: the claimant's for a binding in the registrar's doc 1, the
+//!    node account's for an endpoint in its own), `doc` the home, and the five
+//!    body rows — the link's type address, its target as stored (the account
+//!    bound, or none), the `replaces` row EMPTY (the member rides INSIDE the
+//!    signed body for these kinds and no `replaces` link is written with
+//!    them), the lineage row the trial hands — the lineage the reader's own
+//!    root hint names (REG-3.45), EMPTY at this build (D2: the daemon composes
+//!    every record grade so) — and the SIG-LESS CANONICAL PROJECTION of the
+//!    body.
 //! 4. THE CANDIDATES — the enrolled keys of THE SET THAT OPENS THE HOME'S
 //!    ACCOUNT as of the record's own position, of the blob's width (the
 //!    mirror supplies that set, `mirror/keys.rs`; anchor grade is never
@@ -39,9 +39,7 @@
 //! the mirror's to say; this module judges what it is handed.
 
 use skep_address::Address;
-use skep_identity::{
-    entry_body_record, entry_frame, BoardTerm, DocTerm, Enrolled, Fingerprint, RecordRows, SIG_ALGS,
-};
+use skep_identity::{BoardTerm, Enrolled, Fingerprint, RecordFrame, RecordRows, SIG_ALGS};
 use skep_registry::Record;
 
 use crate::hex_byte;
@@ -95,21 +93,25 @@ pub(crate) fn judge(record: &Record, trial: &Trial<'_>) -> Verdict {
         return Verdict::Unsigned;
     };
     let sigless = record.canonical_sigless();
-    let body = entry_body_record(RecordRows {
-        ty: trial.ty,
-        to: trial.to,
-        replaces: None,
-        lineage_fork_point: trial.lineage,
-        sigless_canonical_record: sigless.as_bytes(),
-    });
+    let frame = RecordFrame {
+        board: trial.board,
+        home_account: trial.home_account,
+        home: trial.home,
+        rows: RecordRows {
+            ty: trial.ty,
+            to: trial.to,
+            replaces: None,
+            lineage_fork_point: trial.lineage,
+            sigless_canonical_record: sigless.as_bytes(),
+        },
+    };
     for enrolled in trial.keys {
         let key = &enrolled.key;
         let row = key.sig_alg_row();
         if row.sig_len() != blob.len() {
             continue;
         }
-        let frame = entry_frame(key.alg(), trial.board, trial.home_account, DocTerm::One(trial.home), &body);
-        if skep_signature::verify(row.tag, key, &frame, &blob).is_ok() {
+        if skep_signature::verify(row.tag, key, &frame.to_bytes(key.alg()), &blob).is_ok() {
             return Verdict::Signed(Fingerprint::of(key));
         }
     }
@@ -118,6 +120,7 @@ pub(crate) fn judge(record: &Record, trial: &Trial<'_>) -> Verdict {
 
 #[cfg(test)]
 mod tests {
+    use skep_identity::{entry_body_record, entry_frame, DocTerm};
     use skep_registry::{encode, parse, Binding, Body, BodyKind, Record};
     use skep_signature::{HybridSigner, TAG_FNDSA512_PREVIEW_ED25519, TAG_MLDSA65_ED25519};
 

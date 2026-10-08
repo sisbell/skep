@@ -598,10 +598,10 @@ fn each_refusal_names_its_cause() {
 /// nothing else: the tag, then each member length-delimited — the board
 /// term as the board row, the account as the address row, the `doc` term
 /// as the address row or the pair's row, the op and body the
-/// [`EntryBody`]'s own — over EVERY body: each builder's token is the
-/// frame's fifth member and its bytes the sixth, the EMPTY body framed as
-/// `be32(0)` with the member present, and an `edit_link`'s pair's row the
-/// fourth member whole.
+/// [`EntryBody`]'s own — over EVERY body, each under the `doc` term its own
+/// grammar takes: each builder's token is the frame's fifth member and its
+/// bytes the sixth, the EMPTY body framed as `be32(0)` with the member
+/// present, and an `edit_link`'s pair's row the fourth member whole.
 #[test]
 fn the_frame_is_framed_under_the_entry_tag_over_six_members() {
     let term = BoardTerm { log_position: 1, chain: [0; 32] };
@@ -620,7 +620,8 @@ fn the_frame_is_framed_under_the_entry_tag_over_six_members() {
         entry_frame("mldsa65-ed25519", term, &account, DocTerm::One(&doc), &body),
         framed_members([b"mldsa65-ed25519", &board, b"1.0.1", b"1.0.1.0.1", b"insert", b"B"])
     );
-    // Every body, under its own token, over one document.
+    // Every body, under its own token, each over the `doc` term its grammar
+    // takes: the pair's row for the edit, one document for every other.
     let unit = [unit_span(&addr(&[1, 0, 1, 0, 1, 0, 2, 1]))];
     let slots = LinkSlots { from: EntrySlot(&unit), to: EntrySlot(&[]), ty: EntrySlot(&unit) };
     let ty = addr(&[1, 1, 0, 1, 0, 1, 0, 3, 1]);
@@ -644,14 +645,22 @@ fn the_frame_is_framed_under_the_entry_tag_over_six_members() {
             sigless_canonical_record: b"",
         }),
     ];
+    // The pair's row as the `doc` member, whole, where the op names two homes.
+    let d_s = addr(&[1, 0, 1, 0, 2]);
+    let pair = DocTerm::Pair { d_s: &d_s, d_a: &doc };
     for body in &bodies {
+        let (doc_term, doc_member) = if body.op() == "edit_link" {
+            (pair, doc_bytes(pair))
+        } else {
+            (DocTerm::One(&doc), b"1.0.1.0.1".to_vec())
+        };
         assert_eq!(
-            entry_frame("mldsa65-ed25519", term, &account, DocTerm::One(&doc), body),
+            entry_frame("mldsa65-ed25519", term, &account, doc_term, body),
             framed_members([
                 b"mldsa65-ed25519",
                 &board,
                 b"1.0.1",
-                b"1.0.1.0.1",
+                &doc_member,
                 body.op().as_bytes(),
                 body.as_bytes()
             ]),
@@ -659,17 +668,73 @@ fn the_frame_is_framed_under_the_entry_tag_over_six_members() {
             body.op()
         );
     }
-    // The pair's row as the `doc` member, whole, where the op names two homes.
-    let d_s = addr(&[1, 0, 1, 0, 2]);
-    assert_eq!(
-        entry_frame("mldsa65-ed25519", term, &account, DocTerm::Pair { d_s: &d_s, d_a: &doc }, &bodies[9]),
-        framed_members([
-            b"mldsa65-ed25519",
-            &board,
-            b"1.0.1",
-            &doc_bytes(DocTerm::Pair { d_s: &d_s, d_a: &doc }),
-            b"edit_link",
-            bodies[9].as_bytes()
-        ])
+}
+
+/// …and each body over the `doc` term its own grammar takes: an `edit_link`
+/// body under one address — the term every other link write takes, its
+/// successor's home the address a `make_link`'s would be — is a frame no
+/// verifier composes, and [`entry_frame`] stops, naming the obligation
+/// (d24-1).
+#[test]
+#[should_panic(expected = "this `edit_link` body was framed under one address")]
+fn an_edit_link_body_under_one_address_is_refused_at_the_frame() {
+    let (account, d_s) = (addr(&[1, 0, 1]), addr(&[1, 0, 1, 0, 2]));
+    let empty = EntrySlot(&[]);
+    let edit = entry_body_edit_link(
+        LinkSlots { from: empty, to: empty, ty: empty },
+        &unit_span(&addr(&[1, 0, 1, 0, 1, 0, 2, 1])),
     );
+    let term = BoardTerm { log_position: 1, chain: [0; 32] };
+    let _ = entry_frame("mldsa65-ed25519", term, &account, DocTerm::One(&d_s), &edit);
+}
+
+/// …and the pair's row under any other body, as a `make_link`'s, is the same
+/// refusal.
+#[test]
+#[should_panic(expected = "this `make_link` body was framed under the pair's row")]
+fn any_other_body_under_the_pairs_row_is_refused_at_the_frame() {
+    let (account, d_s, d_a) = (addr(&[1, 0, 1]), addr(&[1, 0, 1, 0, 2]), addr(&[1, 0, 1, 0, 1]));
+    let empty = EntrySlot(&[]);
+    let link = entry_body_make_link(LinkSlots { from: empty, to: empty, ty: empty });
+    let term = BoardTerm { log_position: 1, chain: [0; 32] };
+    let pair = DocTerm::Pair { d_s: &d_s, d_a: &d_a };
+    let _ = entry_frame("mldsa65-ed25519", term, &account, pair, &link);
+}
+
+/// THE RECORD FRAME is the entry frame under the `record` grammar with its two
+/// address members fixed by the grade: `account` the home's account and `doc`
+/// the home, one address — under whichever token signs it, each member in its
+/// place. The home and its account are two addresses of one type, and traded
+/// they spell another preimage.
+#[test]
+fn the_record_frame_is_the_entry_frame_over_the_home_and_its_account() {
+    let term = BoardTerm { log_position: 12, chain: [0xAB; 32] };
+    let board = board_bytes(&term);
+    let (home_account, home) = (addr(&[1, 0, 1]), addr(&[1, 0, 1, 0, 1]));
+    let (ty, subject) = (addr(&[1, 1, 0, 1, 0, 1, 0, 3, 1]), [addr(&[1, 0, 2])]);
+    let rows = RecordRows {
+        ty: &ty,
+        to: &subject,
+        replaces: None,
+        lineage_fork_point: None,
+        sigless_canonical_record: b"{}",
+    };
+    let body = entry_body_record(rows);
+    let frame = RecordFrame { board: term, home_account: &home_account, home: &home, rows };
+    for alg in ["mldsa65-ed25519", "fndsa512-preview-ed25519"] {
+        let members: [&[u8]; 6] =
+            [alg.as_bytes(), &board, b"1.0.1", b"1.0.1.0.1", b"record", body.as_bytes()];
+        let mut want = b"skep-entry-v1".to_vec();
+        for m in members {
+            want.extend_from_slice(&(m.len() as u32).to_be_bytes());
+            want.extend_from_slice(m);
+        }
+        assert_eq!(
+            frame.to_bytes(alg),
+            want,
+            "{alg}: the record body over the home's account, the home"
+        );
+    }
+    let traded = RecordFrame { home_account: &home, home: &home_account, ..frame };
+    assert_ne!(traded.to_bytes("mldsa65-ed25519"), frame.to_bytes("mldsa65-ed25519"), "traded");
 }

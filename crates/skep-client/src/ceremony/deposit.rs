@@ -3,7 +3,7 @@
 //! L6, T2, T4, G4 and `enroll` — holding, ABOVE THE CLAIM, THE RECORD GRADE
 //! in this order: the SIG-LESS canonical record composed (AUTH-4.58: that
 //! body is the record's identity); the `record` frame composed over it by
-//! `skep_identity::entry_frame` — `board` the head document `H.1`'s pair,
+//! `skep_identity::RecordFrame` — `board` the head document `H.1`'s pair,
 //! `account` the HOME's account, `doc` the home, the five rows wire.md states
 //! — SIGNED by the HAND the caller passes, the `sig` appended canonically
 //! LAST; then the insert declared under the record's class type (AUTH-5.4;

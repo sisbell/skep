@@ -135,7 +135,8 @@ proptest! {
     /// parsers drop the `sig`, so the value's own round trip is read through
     /// the verifier's: `parse_record_value` answers the entries and the `sig`
     /// the body carried — the empty one, which the generator draws, included —
-    /// and `canonical_record` over that value is the body again, `sig` and all.
+    /// and `canonical_record` over that value is the body again, `sig` and all,
+    /// while the value's own sig-less projection is the body without it.
     #[test]
     fn i1_encode_parse_bijection_over_the_record_value(
         entries in enrollments(),
@@ -161,6 +162,12 @@ proptest! {
                 &sig_bearing,
                 "the value is the body again"
             );
+            prop_assert_eq!(
+                parse_record_value::<Enrollment>(sig_bearing.as_bytes())
+                    .map(|value| value.sigless_canonical_record()),
+                Ok(base.clone()),
+                "the value's own projection is the sig-free body"
+            );
         }
         // Retirement: the same, both ways.
         let base = encode_retire(&fps);
@@ -179,6 +186,12 @@ proptest! {
                 &canonical_record(&fps, Some(sig.as_str())),
                 &sig_bearing,
                 "the value is the body again"
+            );
+            prop_assert_eq!(
+                parse_record_value::<Fingerprint>(sig_bearing.as_bytes())
+                    .map(|value| value.sigless_canonical_record()),
+                Ok(base.clone()),
+                "the value's own projection is the sig-free body"
             );
         }
     }

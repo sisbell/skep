@@ -33,18 +33,19 @@
 //!   names the RECORD grade's body and no wire op — a record deposit rides an
 //!   `insert` and a `make_link` on the wire, and its signature is the atom's
 //!   own `sig`, made over the frame this token selects.
-//! * THE ADDRESS ROW — `account` (the act's principal's account in the
-//!   board's local form), `doc` (the document the entry writes: an `insert`'s
-//!   or a `publish`'s target as its TRUNK, a `make_link`'s or a record's
-//!   home), and every address inside a body: the dotted-decimal ASCII
-//!   rendering M1's `Display` gives a tumbler (`1.0.1.0.1`) — lossless by T3,
-//!   and the ONE spelling of the address among the several a string can
-//!   carry: a component written with a leading zero (`1.01.0.1`) names the
-//!   same address (`1.1.0.1`). So the frame spells the ADDRESS and never a
-//!   string — [`entry_frame`], the insert's declared type, the slots and the
-//!   windows all take `Address` values — and a signer holding the address it
-//!   named signs the bytes the verifier composes, whichever spelling carried
-//!   it on the wire.
+//! * THE ADDRESS ROW — `account` (at the ENTRY grade the act's principal's
+//!   account in the board's local form; at the RECORD grade the HOME's
+//!   account, never the depositing principal's — [`RecordFrame`]), `doc` (the
+//!   document the entry writes: an `insert`'s or a `publish`'s target as its
+//!   TRUNK, a `make_link`'s or a record's home), and every address inside a
+//!   body: the dotted-decimal ASCII rendering M1's `Display` gives a tumbler
+//!   (`1.0.1.0.1`) — lossless by T3, and the ONE spelling of the address among
+//!   the several a string can carry: a component written with a leading zero
+//!   (`1.01.0.1`) names the same address (`1.1.0.1`). So the frame spells the
+//!   ADDRESS and never a string — [`entry_frame`], the insert's declared type,
+//!   the slots and the windows all take `Address` values — and a signer
+//!   holding the address it named signs the bytes the verifier composes,
+//!   whichever spelling carried it on the wire.
 //! * THE BOARD ROW — `board`, the BOARD TERM ([`BoardTerm`]), `H.1`'s
 //!   committed `(position, chain)` pair (D13, RULED) — its position a LOG
 //!   position, never an element position: eight big-endian bytes, then the
@@ -86,7 +87,8 @@
 //!   form byte and no separator, so a build that sent two members, a
 //!   separator or one address fails at the row's second byte —
 //!   [`DocTerm::Pair`]. Every other op's `doc` is one address, the address
-//!   row ([`DocTerm::One`]).
+//!   row ([`DocTerm::One`]), and [`entry_frame`] holds each body to its own
+//!   shape.
 //! * THE OPTIONAL-ADDRESS ROW — ONE length-delimited group, EMPTY (`be32(0)`)
 //!   where no address is named, and otherwise holding the one address named
 //!   as an address-list row of one element — [`push_optional_address`].
@@ -157,27 +159,28 @@
 //!   GRADE's body (the frame merge, fm-I, RULED 2026-09-29; its design record
 //!   §3), under the `record` token. A record deposit's `sig` rides the atom,
 //!   canonically last, and the marker slot stays EMPTY at both of its
-//!   commits; this body is the preimage that `sig` is made over — what the
-//!   design record called "the record frame". FIVE rows, taken by name as
-//!   `make_link`'s slots are, in this order: (1) the TYPE slot row — the
-//!   link's type address as an address-list row of one element; (2) the
-//!   `to` slot row — the link's target slot as an address-list row, EMPTY
-//!   (`0x01 ‖ be64(0)`) at a targetless kind — both rows standing under
-//!   `0x01` (d24-4: the credential grade's slots are address-form by its own
-//!   refusal and store as the addresses named, so no `record` preimage
-//!   moved with the slot row's re-pin); (3) the `replaces` row, an
-//!   optional-address row as `make_link`'s is (l6-A1; EMPTY by kind at a
-//!   credential deposit); (4) the LINEAGE row, an optional-address row — the
-//!   EMPTY group on a lineage that has not forked, else the fork point's
-//!   address (D2); (5) the BODY-BYTES row — the sig-less canonical record
-//!   bytes ([`canonical_record`](crate::canonical_record) with no `sig`), one
+//!   commits; the entry frame over this body — what the design record called
+//!   "the record frame", [`RecordFrame`] — is the preimage that `sig` is made
+//!   over. The body's FIVE rows, taken by name as `make_link`'s slots are, in
+//!   this order: (1) the TYPE slot row — the link's type address as an
+//!   address-list row of one element; (2) the `to` slot row — the link's
+//!   target slot as an address-list row, EMPTY (`0x01 ‖ be64(0)`) at a
+//!   targetless kind — both rows standing under `0x01` (d24-4: the credential
+//!   grade's slots are address-form by its own refusal and store as the
+//!   addresses named, so no `record` preimage moved with the slot row's
+//!   re-pin); (3) the `replaces` row, an optional-address row as
+//!   `make_link`'s is (l6-A1; EMPTY by kind at a credential deposit); (4) the
+//!   LINEAGE row, an optional-address row — the EMPTY group on a lineage that
+//!   has not forked, else the fork point's address (D2); (5) the BODY-BYTES
+//!   row — the sig-less canonical record bytes
+//!   ([`canonical_record`](crate::canonical_record) with no `sig`), one
 //!   length-delimited element. `from` — the atom the `sig` rides, whose
 //!   address does not exist when the `sig` is composed — is NO row, and the
 //!   subject needs none: it is the `to` slot at a credential deposit and the
 //!   frame's `account` at a registry deposit or a targetless kind. This crate
-//!   pins the grammar; the frame's `account` is the HOME's account and its
-//!   `doc` the home — a credential record's own doc 1 (AUTH-2.127), so both
-//!   are read off the link's address. Who signs and verifies over it, and
+//!   pins the grammar and, in [`RecordFrame`], the frame's two address
+//!   members: `account` the HOME's account and `doc` the home — a credential
+//!   record's own doc 1 (AUTH-2.127). Who signs and verifies over it, and
 //!   what a record carrying no `sig` is answered, is the record grade's (2a)
 //!   and the host's: the crate-level composition note says where skepd does.
 //!
@@ -210,7 +213,9 @@ pub use publish::{entry_body_publish, PublishBody, PublishRefusal, ShotBase, Sho
 /// * `board` — the [`BoardTerm`] (D13): `be64(log_position) ‖ chain`, forty
 ///   bytes;
 /// * `account` — the ADDRESS in its dotted-decimal spelling (`1.0.1.0.1`),
-///   the one spelling of the address whatever string named it;
+///   the one spelling of the address whatever string named it: the act's
+///   principal's account at the entry grade, the HOME's account at the record
+///   grade ([`RecordFrame`], which takes it by name);
 /// * `doc` — the [`DocTerm`]: one address as the address row, or an
 ///   `edit_link`'s two homes as the pair's row;
 /// * `op`, `body` — the [`EntryBody`]'s token and bytes, which its builder
@@ -225,6 +230,13 @@ pub use publish::{entry_body_publish, PublishBody, PublishRefusal, ShotBase, Sho
 /// an outcome. The body is the one member that grows with the write, and no
 /// body the daemon composes comes near the bound ([`framed`]'s card says
 /// why).
+///
+/// PRECONDITION — `doc` is the shape `body`'s grammar takes: the pair's row
+/// ([`DocTerm::Pair`]) under an `edit_link` body, the one op naming two homes
+/// (d24-1), and one address ([`DocTerm::One`]) under every other. A frame of
+/// the other shape is one no verifier composes — every signature over it is
+/// refused `attestation_invalid:signature`, nothing naming the term — so it
+/// is a caller's bug and never an outcome: it PANICS, naming the obligation.
 pub fn entry_frame(
     alg: &str,
     board: BoardTerm,
@@ -232,6 +244,14 @@ pub fn entry_frame(
     doc: DocTerm<'_>,
     body: &EntryBody,
 ) -> Vec<u8> {
+    let names_two_homes = matches!(doc, DocTerm::Pair { .. });
+    assert!(
+        names_two_homes == (body.op == EDIT_LINK),
+        "entry_frame: the `doc` term is the grammar's — the pair's row for an `edit_link` body \
+         and one address for every other (d24-1) — and this `{}` body was framed under {}",
+        body.op,
+        if names_two_homes { "the pair's row" } else { "one address" }
+    );
     framed(
         ENTRY_TAG,
         &[
@@ -253,9 +273,10 @@ pub fn entry_frame(
 /// ROW (d24-1), `0x01 ‖ be64(2) ‖ be32(len) ‖ d_s ‖ be32(len) ‖ d_a`. The
 /// two homes are taken BY NAME: the op's own order, `d_s` then `d_a`, is
 /// spelled once, in `doc_bytes`, and a call site that named them the
-/// other way round would be a frame every verifier refuses. `Copy`, as the
-/// addresses it borrows are: a view of the caller's term, never an owner of
-/// it.
+/// other way round would be a frame every verifier refuses. The shape is the
+/// body's grammar's, and [`entry_frame`] holds each body to its own. `Copy`,
+/// as the addresses it borrows are: a view of the caller's term, never an
+/// owner of it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DocTerm<'a> {
     /// One document: the address row.
@@ -620,6 +641,11 @@ pub fn entry_body_assert_sup(slots: LinkSlots<'_>) -> EntryBody {
     link_write_body("assert_sup", slots, None)
 }
 
+/// The `edit_link` grammar's token — the one grammar whose frame's `doc` is
+/// the pair's row (d24-1), so [`entry_frame`] reads it beside the builder
+/// that spells it.
+const EDIT_LINK: &str = "edit_link";
+
 /// THE `edit_link` BODY, under the `edit_link` token — FIVE rows (the design
 /// record §2.5's cell; D24's cell (7), d24-6): the SUCCESSOR as a
 /// `make_link` body — its type, `from` and `to` slots AS STORED, the
@@ -634,7 +660,7 @@ pub fn entry_body_assert_sup(slots: LinkSlots<'_>) -> EntryBody {
 /// composer for the five rows. The body's `doc` is the pair's row
 /// ([`DocTerm::Pair`]). PRECONDITION as [`entry_body_make_link`]'s.
 pub fn entry_body_edit_link(successor: LinkSlots<'_>, original: &Span) -> EntryBody {
-    let mut body = link_write_body("edit_link", successor, None);
+    let mut body = link_write_body(EDIT_LINK, successor, None);
     push_slot(&mut body.bytes, EntrySlot(std::slice::from_ref(original)));
     body
 }
@@ -710,6 +736,51 @@ pub fn entry_body_record(rows: RecordRows<'_>) -> EntryBody {
     push_optional_address(&mut out, lineage_fork_point);
     push_delimited(&mut out, sigless_canonical_record);
     EntryBody { op: "record", bytes: out }
+}
+
+/// THE RECORD FRAME — the record grade's preimage but for its `alg` (the
+/// frame merge, fm-I; its design record §3): the entry frame under the
+/// `record` grammar, its two address members FIXED BY THE GRADE and taken BY
+/// NAME. `account` is the HOME's account — never the depositing principal's,
+/// the entry grade's member, which enters no record frame (the design record
+/// §4.5's clause (a)) — and `doc` is the home, one address, never the pair's
+/// row. The two are addresses of one type, so a frame with them traded
+/// compiles, signs and never verifies: by field, as [`RecordRows`] takes the
+/// body's rows, the call site says which is which.
+///
+/// Every party to a record composes this one value — the signer before its
+/// deposit, the daemon at the record's `make_link`, a mirror off `find_links`
+/// and `retrieve` — each READING the members its own way (`H.1` off its
+/// board, the home's account by ω); what fills which member is the grammar's,
+/// spelled here once. `Copy`, as the views it holds are.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RecordFrame<'a> {
+    /// The frame's `board`: `H.1`'s pair (D13).
+    pub board: BoardTerm,
+    /// The frame's `account`: the HOME's account — ω over the home, the
+    /// fold's own H (AUTH-2.35) — which at every honored credential record is
+    /// the account whose doc 1 the home is (AUTH-2.126, AUTH-2.127).
+    pub home_account: &'a Address,
+    /// The frame's `doc`: the link's home.
+    pub home: &'a Address,
+    /// The body's five rows, under the `record` token.
+    pub rows: RecordRows<'a>,
+}
+
+impl RecordFrame<'_> {
+    /// The frame's bytes under `alg`, the signing key's `ALGS` token:
+    /// [`entry_frame`] over [`entry_body_record`] of the rows, the home's
+    /// account as `account` and the home as `doc`. A verifier asks once per
+    /// candidate key, under that key's own token; the body is spelled at each
+    /// ask — one more copy of the rows beside the one [`entry_frame`] makes,
+    /// and the verify's own pass over the frame.
+    ///
+    /// PRECONDITION — as [`entry_frame`]'s and [`entry_body_record`]'s: it
+    /// PANICS where either does.
+    pub fn to_bytes(&self, alg: &str) -> Vec<u8> {
+        let body = entry_body_record(self.rows);
+        entry_frame(alg, self.board, self.home_account, DocTerm::One(self.home), &body)
+    }
 }
 
 #[cfg(test)]

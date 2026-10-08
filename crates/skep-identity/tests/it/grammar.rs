@@ -865,10 +865,13 @@ fn every_payload_error_variant_has_its_pinned_token() {
 /// empty member included, and `None` where it does not — and the value
 /// round-trips through `canonical_record` on both sides: with the `sig`, the
 /// bytes admitted; with `None`, the SIG-LESS PROJECTION the record grade
-/// signs. A body the fold refuses is refused here with the same fault, so no
-/// `sig` is ever read off one: the `sig` is canonically LAST, and a body
-/// carrying it elsewhere is `bad_record` to both. A `sig` spelled with escapes
-/// is read back decoded by `a_sig_is_admitted_only_in_its_canonical_escaping`.
+/// signs, which the value answers itself
+/// (`RecordValue::sigless_canonical_record`), any `sig` projected away — the
+/// empty one included. A body the fold refuses is refused here with the same
+/// fault, so no `sig` is ever read off one: the `sig` is canonically LAST, and
+/// a body carrying it elsewhere is `bad_record` to both. A `sig` spelled with
+/// escapes is read back decoded by
+/// `a_sig_is_admitted_only_in_its_canonical_escaping`.
 #[test]
 fn parse_record_value_answers_the_entries_and_the_sig_under_the_folds_own_admission() {
     let h = key_hex(1);
@@ -893,6 +896,11 @@ fn parse_record_value_answers_the_entries_and_the_sig_under_the_folds_own_admiss
         sig_bearing
     );
     assert_eq!(canonical_record(&sig_bearing_value.entries, None), bare, "the sig-less projection");
+    assert_eq!(
+        sig_bearing_value.sigless_canonical_record(),
+        bare,
+        "the value answers its own projection"
+    );
     // The EMPTY member is a member: `"sig":""` carries a sig, the empty string —
     // never `None`, which says the body carried no `sig` at all.
     let blank = format!("{},\"sig\":\"\"}}", &bare[..bare.len() - 1]);
@@ -900,11 +908,21 @@ fn parse_record_value_answers_the_entries_and_the_sig_under_the_folds_own_admiss
         parse_record_value(blank.as_bytes()).expect("admitted");
     assert_eq!(blank_value.sig.as_deref(), Some(""), "an empty sig member is a sig");
     assert_eq!(canonical_record(&blank_value.entries, blank_value.sig.as_deref()), blank);
+    assert_eq!(
+        blank_value.sigless_canonical_record(),
+        bare,
+        "an empty sig projects away as any sig does"
+    );
     // The retirement kind alike.
     let retire = format!(r#"{{"type":"skep-retire","fingerprints":["{}"],"sig":"ab"}}"#, fp_hex(1));
     let value: RecordValue<Fingerprint> = parse_record_value(retire.as_bytes()).expect("admitted");
     assert_eq!((value.entries.as_slice(), value.sig.as_deref()), (&[fp(1)][..], Some("ab")));
     assert_eq!(canonical_record(&value.entries, None), encode_retire(&[fp(1)]));
+    assert_eq!(
+        value.sigless_canonical_record(),
+        encode_retire(&[fp(1)]),
+        "the retirement's own projection"
+    );
     // Refused as the fold refuses: a `sig` not last, a wrong kind.
     let sig_not_last = format!(
         r#"{{"type":"skep-enroll","sig":"00","keys":[{{"alg":"mldsa65-ed25519","key":"{h}","anchor":false}}]}}"#

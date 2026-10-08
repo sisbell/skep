@@ -42,9 +42,10 @@
 //!   the commit), hosts `deposits_credential_link` over the engine's
 //!   `IDENTITY_TYPES`, holds the [`WriteTypes`] input, derives its
 //!   enforcement mode from [`IdentityState::claimant`], composes the frames
-//!   it verifies — a session handshake's under [`framed`], both signed-ops
-//!   grades' through [`entry_frame`] — and lifts a request's `attest.alg` to
-//!   its marker tag and back through [`SigAlgRow`].
+//!   it verifies — a session handshake's under [`framed`], the entry grade's
+//!   through [`entry_frame`] and the record grade's through [`RecordFrame`] —
+//!   and lifts a request's `attest.alg` to its marker tag and back through
+//!   [`SigAlgRow`].
 //! * `skep-signature`, the one crate that links the signature libraries
 //!   (AUTH-2.2), holds each marker tag's arithmetic over [`SIG_ALGS`]' rows
 //!   and a key's two halves — composing them at keygen
@@ -57,7 +58,7 @@
 //! * `skep-resolve`, the registry resolver, reads the key set that opens an
 //!   account as of a record's position, finds an account's doc 1 through
 //!   [`doc_1_of`], and verifies each registry record's frame
-//!   ([`entry_body_record`]).
+//!   ([`RecordFrame`]).
 //! * `skep-cli`, the `skep` command, names keys by their fingerprints and
 //!   spells the enrollment records its key commands print.
 //! * From their suites only: `skep-mcp`, to build records and sign session
@@ -138,9 +139,10 @@
 //!   body's items, in the child module `entry::publish`, the one module the
 //!   builder's fields are visible to), and [`entry_body_record`], over a
 //!   [`RecordRows`] naming the record grade's five rows, under the `record`
-//!   token — the bytes a publish-class entry's signature, or a record's
-//!   `sig`, is made over (signed ops; the design record §2.5; the frame
-//!   merge);
+//!   token, with [`RecordFrame`] that grade's whole frame but for its `alg`,
+//!   its two address members taken by name — the bytes a publish-class
+//!   entry's signature, or a record's `sig`, is made over (signed ops; the
+//!   design record §2.5; the frame merge);
 //! * `payload`: the credential-record constants and payload types —
 //!   [`ENROLL_TYPE`], [`RETIRE_TYPE`], [`MAX_RECORD_BYTES`], [`Enrollment`]
 //!   with its refusal [`LabelError`], [`PayloadError`] (AUTH-1.18–1.28) —
@@ -151,7 +153,8 @@
 //!   signer's `sig`-bearing record and the verifier's SIG-LESS PROJECTION
 //!   (the design record §4.2 (C)) — with the verifier's parse,
 //!   [`parse_record_value`], answering a body's entries and its `sig`
-//!   together as a [`RecordValue`];
+//!   together as a [`RecordValue`], which answers its own sig-less
+//!   projection;
 //! * `read`: the ONE pinned payload read — [`record_bytes`] (AUTH-2.3–2.5,
 //!   AUTH-2.36–2.45);
 //! * `keyset`: the key set — [`Enrolled`], [`KeySet`] (AUTH-1.29–1.37);
@@ -232,8 +235,8 @@ pub use entry::{
     entry_body_assert_sup, entry_body_edit_link, entry_body_emit, entry_body_empty,
     entry_body_insert, entry_body_make_link, entry_body_make_link_replacing, entry_body_nullify,
     entry_body_publish, entry_body_record, entry_frame, unit_span, BoardTerm, ContentFreeOp,
-    DocTerm, EntryBody, EntrySlot, LinkSlots, PublishBody, PublishRefusal, RecordRows, ShotBase,
-    ShotSegmentPiece,
+    DocTerm, EntryBody, EntrySlot, LinkSlots, PublishBody, PublishRefusal, RecordFrame, RecordRows,
+    ShotBase, ShotSegmentPiece,
 };
 pub use framing::{
     framed, Tag, ENTRY_TAG, KEY_TAG, NODE_HELLO_TAG, SESSION_TAG, SESSION_TAG_V2, TAGS,

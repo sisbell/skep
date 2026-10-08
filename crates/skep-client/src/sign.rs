@@ -17,10 +17,7 @@
 //! step 3's DROP is OPEN WORK for that half, reported and not claimed here.
 
 use skep_address::Address;
-use skep_identity::{
-    entry_body_record, entry_frame, framed, BoardTerm, DocTerm, Fingerprint, PublicKey, RecordRows, SESSION_TAG,
-    SESSION_TAG_V2,
-};
+use skep_identity::{framed, BoardTerm, Fingerprint, PublicKey, RecordRows, SESSION_TAG, SESSION_TAG_V2};
 use skep_signature::HybridSigner;
 
 use crate::address::parse_address;
@@ -163,7 +160,7 @@ pub fn session_payload(origin: &Origin, nonce: &str, principal: u64, scope: Scop
 /// the body the five rows over the sig-less canonical record. Its rows are
 /// NAMED, so no two of its addresses trade places in a call: a frame with
 /// the home and its account swapped signs and never verifies. Composed by
-/// `skep_identity::entry_frame`, spelled by nobody here.
+/// `skep_identity::RecordFrame`, spelled by nobody here.
 #[derive(Debug, Clone, Copy)]
 pub struct RecordFrame<'a> {
     /// The signing key's `ALGS` token.
@@ -189,8 +186,8 @@ impl RecordFrame<'_> {
         let home = parse_address(self.home)?;
         let ty = parse_address(self.ty)?;
         let to: Vec<Address> = self.to.iter().map(|a| parse_address(a)).collect::<Option<_>>()?;
-        let body = entry_body_record(RecordRows { ty: &ty, to: &to, replaces: None, lineage_fork_point: None, sigless_canonical_record: self.sigless });
-        Some(entry_frame(self.alg, self.board, &account, DocTerm::One(&home), &body))
+        let rows = RecordRows { ty: &ty, to: &to, replaces: None, lineage_fork_point: None, sigless_canonical_record: self.sigless };
+        Some(skep_identity::RecordFrame { board: self.board, home_account: &account, home: &home, rows }.to_bytes(self.alg))
     }
 }
 

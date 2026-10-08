@@ -10,9 +10,9 @@
 use skep_address::{checked_inc, ordinal, parent, Address, Nat, Span};
 use skep_febe::Op;
 use skep_identity::{
-    canonical_record, parse_record_value, record_bytes, single_address, Effect, Enrolled,
-    Enrollment, Fingerprint, HasIdentity, IdentityState, Inert, LinkDeposit, PublicKey,
-    RecordEntry, Verdict, ALG_FNDSA512_PREVIEW_ED25519,
+    parse_record_value, record_bytes, single_address, Effect, Enrolled, Enrollment, Fingerprint,
+    HasIdentity, IdentityState, Inert, LinkDeposit, PublicKey, RecordEntry, Verdict,
+    ALG_FNDSA512_PREVIEW_ED25519,
 };
 use skep_links::SlotArg;
 use skep_namespace::{system_account, HasM3};
@@ -740,7 +740,7 @@ pub(super) fn verify_record_sig(world: &World, trial: RecordTrial<'_>) -> Result
 fn record_value<T: RecordEntry>(world: &World, dep: &DepositSpans) -> Option<(String, Option<String>)> {
     let bytes = record_bytes(world, &dep.home, &dep.from).ok()?;
     let value = parse_record_value::<T>(&bytes).ok()?;
-    Some((canonical_record(&value.entries, None), value.sig))
+    Some((value.sigless_canonical_record(), value.sig))
 }
 
 /// AUTH-3.21's ADDRESS TEST — what slot (6) tells of one previewed
@@ -893,7 +893,7 @@ mod tests {
     fn a_claimed_board_with_no_h1_answers_the_record_grade_board_unavailable() {
         use serde_json::json;
         use skep_febe::{Codec, OperationSurface, Response};
-        use skep_identity::encode_enroll;
+        use skep_identity::{canonical_record, encode_enroll};
         use skep_kernel::{CheckpointPolicy, Durability, KernelConfig, SaltSource};
         use skep_namespace::PrincipalId;
         use skep_signature::{HybridSigner, TAG_MLDSA65_ED25519};

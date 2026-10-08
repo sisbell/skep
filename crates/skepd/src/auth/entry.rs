@@ -25,9 +25,9 @@
 //! * `op` — the op-kind token as the wire spells it, which the body's
 //!   [`EntryBody`] carries (`each_body_carries_the_wire_name_of_its_op`
 //!   holds it to the codec's own `op_name`) — and, at a credential deposit's
-//!   `make_link`, the RECORD grade's `record` ([`compose_record`]: the frame
-//!   the record's own `sig` is made over, `account` the HOME's account and
-//!   `doc` the home, both the fold's own reading of the link's address);
+//!   `make_link`, the RECORD grade's `record` ([`compose_record`]:
+//!   skep-identity's [`RecordFrame`] over the fold's own reading of the
+//!   link's address — its home, and the home's account by ω);
 //! * `body` — per op cell: EMPTY for the three mints; the declared type and
 //!   the values for `insert`; for the LINK WRITES the stored link's slots AS
 //!   THE TRANSACTION WILL DEPOSIT THEM (the design record §2.5's slot row as
@@ -112,8 +112,8 @@ use skep_febe::{successor_link, Judgment, Op};
 use skep_identity::{
     entry_body_assert_sup, entry_body_edit_link, entry_body_emit, entry_body_empty,
     entry_body_insert, entry_body_make_link, entry_body_make_link_replacing, entry_body_nullify,
-    entry_body_record, entry_frame, unit_span, BoardTerm, ContentFreeOp, DocTerm, EntryBody,
-    EntrySlot, LinkSlots, PublishBody, PublishRefusal, RecordRows, ShotBase,
+    entry_frame, unit_span, BoardTerm, ContentFreeOp, DocTerm, EntryBody, EntrySlot, LinkSlots,
+    PublishBody, PublishRefusal, RecordFrame, RecordRows, ShotBase,
 };
 use skep_links::{
     emit_tuple, retraction_tuple, slot_endset, supersession_claim, Endset, Link, SlotArg,
@@ -491,9 +491,9 @@ fn refused(refusal: PublishRefusal) -> ComposeFault {
 }
 
 /// THE RECORD FRAME for a credential deposit's `make_link` (signed ops, the
-/// record grade, 2a; the frame merge, fm-I: the entry frame under the
-/// `record` grammar, [`skep_identity::entry_body_record`]) — every member but
-/// `alg`, which is each candidate key's own ([`EntryFrame::to_bytes`]):
+/// record grade, 2a; the frame merge, fm-I) — skep-identity's
+/// [`RecordFrame`], every member but `alg`, which is each candidate key's own
+/// ([`RecordFrame::to_bytes`]), read here:
 ///
 /// * `board` — the board term, `H.1`'s pair (D13), off the snapshot;
 /// * `account` — `home_account`, the HOME's account: the fold's own H, ω
@@ -518,34 +518,29 @@ fn refused(refusal: PublishRefusal) -> ComposeFault {
 /// and the type says so. No fault of [`compose`]'s can reach this function's
 /// caller, and a second refusal added here changes this signature, which
 /// sends its author to the caller that must answer it.
-pub(super) fn compose_record(
+pub(super) fn compose_record<'a>(
     world: &World,
-    home_account: &Address,
-    home: &Address,
-    ty: &Address,
-    to: &[Address],
-    canonical: &[u8],
-) -> Option<EntryFrame> {
+    home_account: &'a Address,
+    home: &'a Address,
+    ty: &'a Address,
+    to: &'a [Address],
+    canonical: &'a [u8],
+) -> Option<RecordFrame<'a>> {
     let board = board_term(world)?;
-    let body = entry_body_record(RecordRows {
+    let rows = RecordRows {
         ty,
         to,
         replaces: None,
         lineage_fork_point: None,
         sigless_canonical_record: canonical,
-    });
-    Some(EntryFrame {
-        board,
-        account: home_account.clone(),
-        doc: FrameDocTerm::One(home.clone()),
-        body,
-    })
+    };
+    Some(RecordFrame { board, home_account, home, rows })
 }
 
-/// An ENTRY frame composed but for its `alg` member — [`compose`]'s answer,
-/// or [`compose_record`]'s — every other member as the value
-/// [`skep_identity::entry_frame`] spells: the board term, the account, the
-/// document term, and the body with its grammar's token.
+/// An ENTRY frame composed but for its `alg` member — [`compose`]'s answer —
+/// every other member as the value [`skep_identity::entry_frame`] spells: the
+/// board term, the account, the document term, and the body with its
+/// grammar's token.
 pub(super) struct EntryFrame {
     board: BoardTerm,
     account: Address,

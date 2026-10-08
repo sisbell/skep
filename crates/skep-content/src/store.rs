@@ -134,8 +134,8 @@ impl<'de> Deserialize<'de> for Key {
 /// decoding half is [`entry_by_entry`]. Cost: the O(n) walk the checkpoint
 /// already pays, and no sort.
 ///
-/// THE FORM IS A FORMAT, read by three collaborators, none with a compiler
-/// edge back to this crate. M2's checkpoint hashes it (above), and decodes it
+/// THE FORM IS A FORMAT, read by three collaborators that no compiler check
+/// ties to it. M2's checkpoint hashes it (above), and decodes it
 /// from bytes it does not trust — so the map's key and value types stay free
 /// of recursion and of sequence elements that decode from zero bytes (M2's
 /// hostile-input obligation on `WorldState`, which `Key`, decoded as a

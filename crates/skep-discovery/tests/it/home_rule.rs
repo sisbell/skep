@@ -171,13 +171,13 @@ fn every_result_set_read_drops_exactly_the_links_homed_where_the_reader_may_not_
 
 /// The home rule's contract with its predicate, over every read that takes
 /// one: asked only of a candidate's HOME, at most once per candidate
-/// (PUB-7.15, PUB-7.16) — a window asks no further than it walks, and a
-/// read asks only past its OTHER filters — and of the pointwise pair's `a`
-/// alone, never of a named `d`. Under the pure predicates every other test
-/// passes, a read that asked a link, asked once per slot, asked the named
-/// document, or asked ahead of the residence test answers exactly as the
-/// right one does; a predicate that records what it is asked is where each
-/// shows.
+/// (PUB-7.15, PUB-7.16) — a window asks no further than it walks, neither
+/// beyond its `n` nor behind its cursor, and a read asks only past its OTHER
+/// filters — and of the pointwise pair's `a` alone, never of a named `d`.
+/// Under the pure predicates every other test passes, a read that asked a
+/// link, asked once per slot, asked the named document, or asked ahead of the
+/// residence test answers exactly as the right one does; a predicate that
+/// records what it is asked is where each shows.
 ///
 /// Each link here touches the region through FROM and TO both, which is what
 /// separates one ask per candidate from one ask per `(candidate, slot)`; and
@@ -234,6 +234,20 @@ fn the_home_rule_asks_its_predicate_once_per_candidate_and_only_of_homes() {
         vec![la(1)]
     );
     assert_eq!(asked.take(), vec![doc1()]);
+    // … and a window RESUMED past a cursor asks of the candidates past it
+    // alone: the links behind the cursor are never walked, so never asked.
+    assert_eq!(
+        window_ftt_on(&snap, &FourSet::any(), Some(la(2)), 1, &recorder).batch,
+        vec![la2(1)]
+    );
+    assert_eq!(asked.take(), vec![doc2()]);
+    assert_eq!(
+        window_v_on(&snap, &doc1(), &region, Some(la(2)), 1, &recorder)
+            .expect("window_v")
+            .batch,
+        vec![la2(1)]
+    );
+    assert_eq!(asked.take(), vec![doc2()]);
     // RETRIEVEENDSETS asks at the CANDIDATE's identity, ONCE, before its slots
     // are read: each link reaches the region through FROM and TO, so a rule
     // asked per (candidate, slot) asks twice for each.

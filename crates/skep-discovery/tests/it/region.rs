@@ -1,14 +1,16 @@
 //! §1 — content-region discovery: `image_on`'s gates, order, dedup, budgets
-//! and float, and the four region reads that inherit them.
+//! and float, and the four region reads that inherit them — with the document
+//! gate and the float asked, where they are one rule, of every read that names
+//! a document.
 
 use crate::common;
 
 use common::*;
 use skep_address::{Address, Span};
 use skep_arrangement::{HasM5, Vstream};
-use skep_discovery::{content_vspan, OrphanReport, QueryError, FROM, MAX_IMAGE_RUNS};
+use skep_discovery::{content_vspan, OrphanError, OrphanReport, QueryError, FROM, MAX_IMAGE_RUNS};
 use skep_links::{enc, LinkWriter, SlotArg, MAX_SLOT_SPANS};
-use skep_namespace::{Namespace, PrincipalId};
+use skep_namespace::{HasM3, Namespace, PrincipalId};
 
 #[test]
 fn region_family_gates_doc_then_region_then_defines_empty() {
@@ -62,39 +64,46 @@ fn region_family_gates_doc_then_region_then_defines_empty() {
     assert_eq!(content_vspan(&vp(2, 1), &n(1)), None);
     assert_eq!(content_vspan(&vp(1, 1), &n(0)), None);
     // The rule is "the content subspace", not "anything but the link
-    // subspace": over subspaces either side of both numerals, the constructor
-    // builds exactly at `s_C` with a count, and the gate refuses exactly what
-    // it declines — a subspace-0 or subspace-3 span it admitted would resolve
-    // silently to ∅, a different query.
+    // subspace", and it holds at every opening ordinal: over subspaces either
+    // side of both numerals, ordinals from 0 — which names no position, and
+    // which M5's constructor builds all the same — and counts from 0, the
+    // constructor builds exactly at `s_C` with a count, builds the span it was
+    // asked for, and the gate refuses exactly what it declines. A subspace-0 or
+    // subspace-3 span it admitted would resolve silently to ∅, a different
+    // query; a gate that refused ordinal 0 would refuse a span the constructor
+    // builds.
     for subspace in 0..=3u32 {
-        for count in 0..=2u32 {
-            let built = content_vspan(&vp(subspace, 1), &n(count));
-            assert_eq!(
-                built.is_some(),
-                subspace == 1 && count >= 1,
-                "content_vspan at subspace {subspace}, count {count}"
-            );
-            if let Some(span) = built {
-                // WHICH span, not merely that there is one: `count` positions
-                // FROM `at`, so a constructor that transposed the two would
-                // still build a shape the gate accepts and name a different
-                // region. At count 2 the transposition is a different span.
+        for ordinal in 0..=2u32 {
+            for count in 0..=2u32 {
+                let built = content_vspan(&vp(subspace, ordinal), &n(count));
                 assert_eq!(
-                    span,
-                    vspan(subspace, 1, count),
-                    "content_vspan builds `count` positions from `at`"
+                    built.is_some(),
+                    subspace == 1 && count >= 1,
+                    "content_vspan at ({subspace}, {ordinal}), count {count}"
                 );
-                assert_eq!(
-                    reads.count_v(&doc1(), &[span]).err(),
-                    None,
-                    "the gate accepts what content_vspan builds, count {count}"
-                );
-            } else if count >= 1 {
-                assert_eq!(
-                    reads.count_v(&doc1(), &[vspan(subspace, 1, count)]),
-                    Err(QueryError::BadRegion),
-                    "a region in subspace {subspace} is refused"
-                );
+                if let Some(span) = built {
+                    // WHICH span, not merely that there is one: `count`
+                    // positions FROM `at`, so a constructor that transposed the
+                    // two, or ignored the ordinal, would still build a shape
+                    // the gate accepts and name a different region.
+                    assert_eq!(
+                        span,
+                        vspan(subspace, ordinal, count),
+                        "content_vspan builds `count` positions from `at`"
+                    );
+                    assert_eq!(
+                        reads.count_v(&doc1(), &[span]).err(),
+                        None,
+                        "the gate accepts what content_vspan builds at ordinal {ordinal}, \
+                         count {count}"
+                    );
+                } else if count >= 1 {
+                    assert_eq!(
+                        reads.count_v(&doc1(), &[vspan(subspace, ordinal, count)]),
+                        Err(QueryError::BadRegion),
+                        "a region in subspace {subspace} is refused at ordinal {ordinal}"
+                    );
+                }
             }
         }
     }
@@ -167,6 +176,57 @@ fn every_region_entry_point_answers_both_gates_in_order() {
     }
 }
 
+/// §1/§5/§6 — every read that names a document refuses a `d` that is not a
+/// registered DOCUMENT, and not only one M3 never minted. M3's allocation
+/// oracle answers for nodes, accounts and every element M3 mints as well, so a
+/// gate loosened to "M3 allocated it" would pass each of these on to M5, whose
+/// reads answer an address that arranges nothing with ∅: the caller would get
+/// a defined empty answer for a document that does not exist — the conflation
+/// the gate exists to prevent — and the preview a range fault. Every other
+/// refusal in the suite names a document-shaped address past the frontier,
+/// which such a gate refuses all the same. Each `d` here is allocated and is
+/// no document — a node, an account, a content element and a link element —
+/// and the premise says so off M3 before any read is asked.
+#[test]
+fn every_document_gate_refuses_an_allocated_address_that_is_no_document() {
+    let k = kernel();
+    seed_content(&k, &doc1(), 1);
+    let store = LinkWriter::new(&k, &EVERYONE);
+    let e1 = link(&store, &doc1(), &[ca(1)], &[ca(101)]);
+    let snap = k.snapshot();
+    let m3 = snap.world().m3();
+    let reads = Reads(&k);
+    let entry_points = region_entry_points(reads);
+    for d in [a(&[1]), a(&[1, 0, 1]), ca(1), e1.clone()] {
+        assert!(
+            m3.is_allocated(&d) && !m3.is_registered_document(&d),
+            "{d:?}: allocated in M3, and no document"
+        );
+        for (name, refusal) in &entry_points {
+            assert_eq!(
+                refusal(&d, &[vspan(1, 1, 1)]),
+                Some(QueryError::DocNotRegistered),
+                "{name} at {d:?}"
+            );
+        }
+        assert_eq!(
+            reads.project(&e1, FROM, &d),
+            Err(QueryError::DocNotRegistered),
+            "project at {d:?}"
+        );
+        assert_eq!(
+            reads.addressably_discoverable_from(&e1, &d),
+            Err(QueryError::DocNotRegistered),
+            "addressably_discoverable_from at {d:?}"
+        );
+        assert_eq!(
+            reads.delete_orphans(&d, &vp(1, 1), &n(1)),
+            Err(OrphanError::DocNotRegistered),
+            "delete_orphans at {d:?}"
+        );
+    }
+}
+
 #[test]
 fn image_resolves_dedups_and_clips() {
     let k = kernel();
@@ -190,8 +250,16 @@ fn image_resolves_dedups_and_clips() {
         reads.image(&doc1(), &[vspan(1, 1, 2), vspan(1, 2, 2)]),
         Ok(vec![run(&ca(1), 2), run(&ca(2), 2)])
     );
-    // Out-of-range tails are the arrangement intersection (W ∩ dom M(d)).
+    // Out-of-range tails are the arrangement intersection (W ∩ dom M(d)) …
     assert_eq!(reads.image(&doc1(), &[vspan(1, 2, 99)]), Ok(vec![run(&ca(2), 2)]));
+    // … and so is a span opening below the first position: ordinal 0 names no
+    // position, so a span opening there contributes from position 1 on, and
+    // one naming 0 alone names nothing arranged.
+    assert_eq!(
+        reads.image(&doc1(), &[vspan(1, 0, 2)]),
+        Ok(vec![run(&ca(1), 1)])
+    );
+    assert_eq!(reads.image(&doc1(), &[vspan(1, 0, 1)]), Ok(vec![]));
 }
 
 /// §1 — the I-runs come back in REGION-SPAN order, and in V-order within each
@@ -785,4 +853,61 @@ fn a_published_document_whose_own_arrangement_is_empty_answers_from_its_head() {
         .expect("project")
         .denotes(&t(&[1, 1])));
     assert_eq!(reads.addressably_discoverable_from(&e1, &pdoc()), Ok(true));
+}
+
+/// §1/§5 — HEAD-FLOAT moves the BARE published address and nothing else: a
+/// VERSION address answers its own arrangement forever (PUB-2.50), even once
+/// a later member has become the head. Every other published fixture reads
+/// `phead` while it IS the head, where "a member answers itself" and "every
+/// address of the chain answers the head" — the rule M5's deposit surface
+/// keeps, and a reader must not — give one answer, so a read that floated a
+/// member to the head would pass them all and answer a question about an
+/// older version with the latest one. Here a second VERSION pins `phead`, and
+/// one declared deposit lands on the new head alone: the link naming that
+/// position reaches the bare address and the head, and no read finds it
+/// through the pinned member.
+#[test]
+fn a_pinned_version_member_answers_its_own_arrangement_not_the_heads() {
+    let k = published_world(); // phead holds pca(1..=4)
+    let (head, _) = Vstream::new(&k)
+        .version(PrincipalId(1), &pdoc(), None)
+        .expect("the owner versions its published document again");
+    assert_eq!(head, a(&[1, 0, 1, 0, 3, 2]), "the chain's second member");
+    seed_published_content(&k, &pdoc(), 1); // pca(5), on the new head alone
+    let store = LinkWriter::new(&k, &EVERYONE);
+    let latest = link(&store, &doc1(), &[pca(5)], &[ca(101)]);
+    let snap = k.snapshot();
+    assert_eq!(snap.world().m5().content_count(&head), n(5));
+    assert_eq!(
+        snap.world().m5().content_count(&phead()),
+        n(4),
+        "phead keeps what it held when it was pinned"
+    );
+
+    let reads = Reads(&k);
+    let fifth = [vspan(1, 5, 1)];
+    for d in [pdoc(), head.clone()] {
+        assert_eq!(reads.image(&d, &fifth), Ok(vec![run(&pca(5), 1)]), "{d:?}");
+        assert_eq!(
+            reads.findlinks_v(&d, &fifth),
+            Ok(vec![latest.clone()]),
+            "{d:?}"
+        );
+        assert_eq!(
+            reads.addressably_discoverable_from(&latest, &d),
+            Ok(true),
+            "{d:?}"
+        );
+    }
+    assert_eq!(reads.image(&phead(), &fifth), Ok(vec![]));
+    assert_eq!(reads.findlinks_v(&phead(), &fifth), Ok(vec![]));
+    assert_eq!(reads.count_v(&phead(), &fifth), Ok(0));
+    assert!(reads
+        .project(&latest, FROM, &phead())
+        .expect("project")
+        .is_empty());
+    assert_eq!(
+        reads.addressably_discoverable_from(&latest, &phead()),
+        Ok(false)
+    );
 }

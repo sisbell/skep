@@ -320,8 +320,8 @@ fn a_sig_member_is_skipped_and_the_table_is_identical() {
 /// escape-free.
 #[test]
 fn a_sig_is_admitted_only_in_its_canonical_escaping() {
-    let base = canonical_enroll_record();
-    let splice = |sig_text: &str| format!("{},\"sig\":\"{sig_text}\"}}", &base[..base.len() - 1]);
+    let bare = canonical_enroll_record();
+    let splice = |sig_text: &str| format!("{},\"sig\":\"{sig_text}\"}}", &bare[..bare.len() - 1]);
     // As on `non_canonical_escapes_are_bad_record`: the backslash is built at
     // runtime, so no source escape is decoded before the JSON sees it.
     let bs = char::from(92);
@@ -331,7 +331,7 @@ fn a_sig_is_admitted_only_in_its_canonical_escaping() {
     let canonical_sig = format!("{bs}u0000{bs}b{bs}t{bs}n{bs}f{bs}r{bs}u001f {bs}\"{bs}{bs}/é~");
     assert_eq!(
         ok_enroll(splice(&canonical_sig).as_bytes()),
-        ok_enroll(base.as_bytes()),
+        ok_enroll(bare.as_bytes()),
         "a canonically escaped sig is admitted, and ignored"
     );
     // …and READ BACK decoded, by the verifier's parse — the one call that
@@ -915,11 +915,15 @@ fn parse_record_value_answers_the_entries_and_the_sig_under_the_folds_own_admiss
     );
     // The retirement kind alike.
     let retire = format!(r#"{{"type":"skep-retire","fingerprints":["{}"],"sig":"ab"}}"#, fp_hex(1));
-    let value: RecordValue<Fingerprint> = parse_record_value(retire.as_bytes()).expect("admitted");
-    assert_eq!((value.entries.as_slice(), value.sig.as_deref()), (&[fp(1)][..], Some("ab")));
-    assert_eq!(canonical_record(&value.entries, None), encode_retire(&[fp(1)]));
+    let retire_value: RecordValue<Fingerprint> =
+        parse_record_value(retire.as_bytes()).expect("admitted");
     assert_eq!(
-        value.sigless_canonical_record(),
+        (retire_value.entries.as_slice(), retire_value.sig.as_deref()),
+        (&[fp(1)][..], Some("ab"))
+    );
+    assert_eq!(canonical_record(&retire_value.entries, None), encode_retire(&[fp(1)]));
+    assert_eq!(
+        retire_value.sigless_canonical_record(),
         encode_retire(&[fp(1)]),
         "the retirement's own projection"
     );

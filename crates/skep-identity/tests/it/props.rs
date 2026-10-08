@@ -88,8 +88,8 @@ fn retire_fps() -> impl Strategy<Value = Vec<Fingerprint>> {
 /// Splice a canonical `sig` member (canonically LAST) into a canonical record
 /// body's closing brace. The `sig` charset is printable ASCII minus `"` and
 /// `\`, so it needs no escaping and the spliced body is canonical.
-fn with_canonical_sig(base: &str, sig: &str) -> String {
-    format!("{},\"sig\":\"{sig}\"}}", &base[..base.len() - 1])
+fn with_canonical_sig(bare: &str, sig: &str) -> String {
+    format!("{},\"sig\":\"{sig}\"}}", &bare[..bare.len() - 1])
 }
 
 /// The suite's config at `cases`: the seed file is `props.proptest-regressions`
@@ -145,13 +145,13 @@ proptest! {
         retire_sig in prop::option::of("[ -~&&[^\"\\\\]]{0,40}"),
     ) {
         // Enrollment: the no-sig body re-encodes to itself.
-        let base = encode_enroll(&entries);
-        prop_assert_eq!(&encode_enroll(&parse_enroll(base.as_bytes()).unwrap()), &base);
+        let bare = encode_enroll(&entries);
+        prop_assert_eq!(&encode_enroll(&parse_enroll(bare.as_bytes()).unwrap()), &bare);
         if let Some(sig) = enroll_sig {
-            let sig_bearing = with_canonical_sig(&base, &sig);
+            let sig_bearing = with_canonical_sig(&bare, &sig);
             let admitted = parse_enroll(sig_bearing.as_bytes());
             prop_assert_eq!(&admitted, &Ok(entries.clone()), "the sig-bearing body is admitted, sig skipped");
-            prop_assert_eq!(encode_enroll(&admitted.unwrap()), base.clone(), "encode emits no sig");
+            prop_assert_eq!(encode_enroll(&admitted.unwrap()), bare.clone(), "encode emits no sig");
             prop_assert_eq!(
                 parse_record_value::<Enrollment>(sig_bearing.as_bytes()),
                 Ok(RecordValue { entries: entries.clone(), sig: Some(sig.clone()) }),
@@ -165,18 +165,18 @@ proptest! {
             prop_assert_eq!(
                 parse_record_value::<Enrollment>(sig_bearing.as_bytes())
                     .map(|value| value.sigless_canonical_record()),
-                Ok(base.clone()),
+                Ok(bare.clone()),
                 "the value's own projection is the sig-free body"
             );
         }
         // Retirement: the same, both ways.
-        let base = encode_retire(&fps);
-        prop_assert_eq!(&encode_retire(&parse_retire(base.as_bytes()).unwrap()), &base);
+        let bare = encode_retire(&fps);
+        prop_assert_eq!(&encode_retire(&parse_retire(bare.as_bytes()).unwrap()), &bare);
         if let Some(sig) = retire_sig {
-            let sig_bearing = with_canonical_sig(&base, &sig);
+            let sig_bearing = with_canonical_sig(&bare, &sig);
             let admitted = parse_retire(sig_bearing.as_bytes());
             prop_assert_eq!(&admitted, &Ok(fps.clone()), "the sig-bearing body is admitted, sig skipped");
-            prop_assert_eq!(encode_retire(&admitted.unwrap()), base.clone(), "encode emits no sig");
+            prop_assert_eq!(encode_retire(&admitted.unwrap()), bare.clone(), "encode emits no sig");
             prop_assert_eq!(
                 parse_record_value::<Fingerprint>(sig_bearing.as_bytes()),
                 Ok(RecordValue { entries: fps.clone(), sig: Some(sig.clone()) }),
@@ -190,7 +190,7 @@ proptest! {
             prop_assert_eq!(
                 parse_record_value::<Fingerprint>(sig_bearing.as_bytes())
                     .map(|value| value.sigless_canonical_record()),
-                Ok(base.clone()),
+                Ok(bare.clone()),
                 "the value's own projection is the sig-free body"
             );
         }

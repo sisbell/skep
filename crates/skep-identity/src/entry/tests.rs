@@ -204,9 +204,9 @@ fn the_address_list_row_keeps_its_addresses_in_the_order_given() {
         address_list_bytes(std::slice::from_ref(&element)),
         [&[0x01u8, 0, 0, 0, 0, 0, 0, 0, 1][..], &[0, 0, 0, 15][..], b"1.0.1.0.1.0.1.1"].concat()
     );
-    let pair = [addr(&[1, 0, 30]), addr(&[1, 0, 2])];
+    let descending = [addr(&[1, 0, 30]), addr(&[1, 0, 2])];
     assert_eq!(
-        address_list_bytes(&pair),
+        address_list_bytes(&descending),
         [
             &[0x01u8, 0, 0, 0, 0, 0, 0, 0, 2][..],
             &[0, 0, 0, 6][..],
@@ -414,7 +414,7 @@ fn the_publish_body_is_its_count_then_its_segments_then_the_base_group() {
     // Group length 32: 1 + 8 + (4 + 11) + 8.
     let window_start = addr(&[1, 0, 2, 0, 1, 4]);
     let base_member = addr(&[1, 0, 1, 0, 1, 2]);
-    let base = |extent: u64| Some(ShotBase { member: &base_member, extent });
+    let base_at = |extent: u64| Some(ShotBase { member: &base_member, extent });
     let mixed = entry_body_publish(
         [
             ShotSegmentPiece::Value(b"a"),
@@ -422,7 +422,7 @@ fn the_publish_body_is_its_count_then_its_segments_then_the_base_group() {
             ShotSegmentPiece::Window { start: &window_start, width: nonzero(3) },
             ShotSegmentPiece::Value(b"c"),
         ],
-        base(5),
+        base_at(5),
     );
     assert_eq!(
         mixed.as_bytes(),
@@ -448,7 +448,7 @@ fn the_publish_body_is_its_count_then_its_segments_then_the_base_group() {
                 ShotSegmentPiece::Window { start: &window_start, width: nonzero(3) },
                 ShotSegmentPiece::Window { start: &second_start, width: nonzero(1) },
             ],
-            base(0),
+            base_at(0),
         )
         .as_bytes(),
         [
@@ -473,18 +473,18 @@ fn the_publish_body_is_its_count_then_its_segments_then_the_base_group() {
 #[test]
 fn the_base_group_signs_its_member_and_its_extent_both() {
     let base_member = addr(&[1, 0, 1, 0, 1, 2]);
-    let base = |extent: u64| Some(ShotBase { member: &base_member, extent });
+    let base_at = |extent: u64| Some(ShotBase { member: &base_member, extent });
     let other_member = addr(&[1, 0, 1, 0, 1, 3]);
     let over = |base: Option<ShotBase<'_>>| {
         entry_body_publish([ShotSegmentPiece::Value(b"a")], base).as_bytes().to_vec()
     };
     assert_ne!(
-        over(base(5)),
+        over(base_at(5)),
         over(Some(ShotBase { member: &other_member, extent: 5 })),
         "another member"
     );
-    assert_ne!(over(base(5)), over(base(4)), "another extent");
-    assert_ne!(over(base(5)), over(None), "the birth shape");
+    assert_ne!(over(base_at(5)), over(base_at(4)), "another extent");
+    assert_ne!(over(base_at(5)), over(None), "the birth shape");
 }
 
 /// THE `record` BODY: its five rows in order — the type slot row, the `to`
@@ -715,11 +715,11 @@ fn a_publish_budget_below_the_empty_body_is_refused_at_within() {
     }
     // A node address of 256 components, each `u32::MAX` — T4-valid, spelled
     // in 2,815 bytes — makes a body of no segments 2,848 bytes long.
-    let deep = addr(&[u32::MAX; 256]);
-    let ordinary = Some(ShotBase { member: &base_member, extent: 3 });
-    assert!(PublishBody::within(1024, ordinary).is_ok(), "an ordinary base fits a kilobyte");
+    let deep_member = addr(&[u32::MAX; 256]);
+    let ordinary_base = Some(ShotBase { member: &base_member, extent: 3 });
+    assert!(PublishBody::within(1024, ordinary_base).is_ok(), "an ordinary base fits a kilobyte");
     assert_eq!(
-        PublishBody::within(1024, Some(ShotBase { member: &deep, extent: 3 })).err(),
+        PublishBody::within(1024, Some(ShotBase { member: &deep_member, extent: 3 })).err(),
         Some(PublishRefusal::PastBudget),
         "a base member spelled past the budget is refused at the mint"
     );
@@ -863,10 +863,10 @@ fn an_edit_link_body_under_one_address_is_refused_at_the_frame() {
 fn any_other_body_under_the_pairs_row_is_refused_at_the_frame() {
     let (account, d_s, d_a) = (addr(&[1, 0, 1]), addr(&[1, 0, 1, 0, 2]), addr(&[1, 0, 1, 0, 1]));
     let empty = EntrySlot(&[]);
-    let link = entry_body_make_link(LinkSlots { from: empty, to: empty, ty: empty });
+    let body = entry_body_make_link(LinkSlots { from: empty, to: empty, ty: empty });
     let term = BoardTerm { log_position: 1, chain: [0; 32] };
     let pair = DocTerm::Pair { d_s: &d_s, d_a: &d_a };
-    let _ = entry_frame("mldsa65-ed25519", term, &account, pair, &link);
+    let _ = entry_frame("mldsa65-ed25519", term, &account, pair, &body);
 }
 
 /// THE RECORD FRAME is the entry frame under the `record` grammar with its two

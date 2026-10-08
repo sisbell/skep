@@ -52,7 +52,7 @@ fn sequences_of<T: Clone>(elements: &[T]) -> Vec<Vec<T>> {
 /// crate away, by skepd's hand-spelled frame pin and the goldens signed over
 /// the same frames.
 #[test]
-fn no_two_distinct_slot_triples_spell_one_make_link_body() {
+fn no_two_distinct_inputs_spell_one_make_link_or_edit_link_body() {
     // DESCENDING in address order and in spelled order alike, so a row that
     // sorted its spans by either comparison reorders every mixed pair.
     let span = |start: &[u32], width: &[u32]| Span::new(tum(start), tum(width)).expect("T12-valid");
@@ -218,13 +218,13 @@ fn a_link_write_body_is_the_same_over_any_walk_of_its_slots() {
 /// body sat within its budget.
 #[test]
 fn every_publish_body_lands_exactly_on_a_budget_of_its_own_length() {
-    let (start, other) = (addr(&[1, 0, 2, 0, 1, 4]), addr(&[1, 0, 30, 0, 1, 1]));
+    let (window_start, second_start) = (addr(&[1, 0, 2, 0, 1, 4]), addr(&[1, 0, 30, 0, 1, 1]));
     let nonzero = |n: u64| NonZeroU64::new(n).expect("a window holds at least one position");
     let alphabet = [
         ShotSegmentPiece::Value(b""),
         ShotSegmentPiece::Value(b"ab"),
-        ShotSegmentPiece::Window { start: &start, width: nonzero(1) },
-        ShotSegmentPiece::Window { start: &other, width: nonzero(2) },
+        ShotSegmentPiece::Window { start: &window_start, width: nonzero(1) },
+        ShotSegmentPiece::Window { start: &second_start, width: nonzero(2) },
     ];
     let fed = |budget: usize, base: Option<ShotBase<'_>>, pieces: &[ShotSegmentPiece<'_>]| {
         PublishBody::within(budget, base).and_then(|empty| {

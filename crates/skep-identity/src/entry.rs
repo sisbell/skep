@@ -250,13 +250,13 @@ pub fn entry_frame(
     doc: DocTerm<'_>,
     body: &EntryBody,
 ) -> Vec<u8> {
-    let names_two_homes = matches!(doc, DocTerm::Pair { .. });
+    let doc_names_two_homes = matches!(doc, DocTerm::Pair { .. });
     assert!(
-        names_two_homes == body.grammar.names_two_homes(),
+        doc_names_two_homes == body.grammar.names_two_homes(),
         "entry_frame: the `doc` term is the grammar's — the pair's row for an `edit_link` body \
          and one address for every other (d24-1) — and this `{}` body was framed under {}",
         body.op(),
-        if names_two_homes { "the pair's row" } else { "one address" }
+        if doc_names_two_homes { "the pair's row" } else { "one address" }
     );
     framed(
         ENTRY_TAG,

@@ -102,70 +102,47 @@
 //!
 //! ## What lives here
 //!
-//! One bullet per module, named first. `state` — the fold — sits on top and
-//! no module imports it; `entry` imports only `framing`, and `write_types`
-//! only `shape`, so the signed-ops frame and the write path's classes read no
-//! fold state and write none. The suite's `tidy.rs` checks all three, and
-//! this list against `src/`.
+//! One bullet per module, named first: what the module is for, the items a
+//! caller starts from, and the rules it realizes — never what each item does,
+//! which is that item's own card, nor everything it exports, which is its
+//! `pub use` line below — so a bullet moves when its module's job does, not
+//! each time an item's card does. `state` — the fold — sits on top and no
+//! module imports it; `entry` imports only `framing`, and `write_types` only
+//! `shape`, so the signed-ops frame and the write path's classes read no fold
+//! state and write none. The suite's `tidy.rs` checks all three, and this list
+//! against `src/`.
 //!
-//! * `key`: keys and fingerprints — [`PublicKey`] with the two HYBRID tokens
-//!   [`ALG_MLDSA65_ED25519`] (tag 1, production) and
-//!   [`ALG_FNDSA512_PREVIEW_ED25519`] (tag 3, preview) — the key kinds are
-//!   the two hybrid rows, the classical `ed25519` row DELETED at the
-//!   hybrid-only launch (AUTH-1.1, AUTH-1.5) — its refusal
-//!   [`ParseKeyError`], [`ALGS`] with its row type [`AlgRow`], the marker-tag
-//!   table [`SIG_ALGS`] with [`SigAlgRow`], [`Fingerprint`] (AUTH-1.1–1.10;
+//! * `key`: keys and fingerprints — [`PublicKey`] with its refusal
+//!   [`ParseKeyError`]; the algorithm table [`ALGS`] with its row type
+//!   [`AlgRow`] and its rows' `ALG_*` tokens; the marker-tag table
+//!   [`SIG_ALGS`] with [`SigAlgRow`]; and [`Fingerprint`] (AUTH-1.1–1.10;
 //!   signed ops);
 //! * `framing`: framing and the tag set — [`Tag`], [`framed`], [`TAGS`]
 //!   (AUTH-1.11–1.17);
-//! * `entry`: THE ENTRY FRAME under [`ENTRY_TAG`] — [`entry_frame`], which
-//!   spells every member from the values a signer or verifier holds: the
-//!   [`BoardTerm`], the account address, the [`DocTerm`] (one address, or
-//!   an `edit_link`'s two homes as the pair's row), and an [`EntryBody`] —
-//!   a grammar's token paired with its body, one per publish-class op
-//!   kind: [`entry_body_empty`] (over a [`ContentFreeOp`]: the three mints'
-//!   EMPTY body), [`entry_body_insert`], [`entry_body_make_link`] and
-//!   [`entry_body_make_link_replacing`] (over a [`LinkSlots`] naming three
-//!   borrowed walks of the slots' spans AS STORED — [`EntrySlot`]s over
-//!   slices, or the store's own endsets where they lie; a [`unit_span`] per
-//!   address named or the extents resolved — the second with the op's
-//!   `replaces` member), [`entry_body_emit`], [`entry_body_nullify`] and
-//!   [`entry_body_assert_sup`] (the same four rows over the stored link,
-//!   under the op's own token), [`entry_body_edit_link`] (the successor's
-//!   rows then the supersession claim's `from` slot), [`entry_body_publish`]
-//!   (over [`ShotSegmentPiece`]s — the shot's address form, one copied
-//!   position's value or one window at a time, the pieces its segments are
-//!   built from — and the shot's base), or piece by piece under a byte budget
-//!   by [`PublishBody`], with its refusal [`PublishRefusal`] (the `publish`
-//!   body's items, in the child module `entry::publish`, the one module the
-//!   builder's fields are visible to), and [`entry_body_record`], over a
-//!   [`RecordRows`] naming the record grade's five rows, under the `record`
-//!   token, with [`RecordFrame`] that grade's whole frame but for its `alg`,
-//!   its two address members taken by name — the bytes a publish-class
-//!   entry's signature, or a record's `sig`, is made over (signed ops; the
-//!   design record §2.5; the frame merge);
-//! * `payload`: the credential-record constants and payload types —
-//!   [`ENROLL_TYPE`], [`RETIRE_TYPE`], [`MAX_RECORD_BYTES`], [`Enrollment`]
-//!   with its refusal [`LabelError`], [`PayloadError`] (AUTH-1.18–1.28) —
-//!   with the JSON record schemas
-//!   [`parse_enroll`]/[`parse_retire`]/[`encode_enroll`]/[`encode_retire`]
-//!   (AUTH-2.15–2.19, AUTH-2.128–2.130), and the record value at one name
-//!   with both directions — [`canonical_record`] over a [`RecordEntry`]: the
-//!   signer's `sig`-bearing record and the verifier's SIG-LESS PROJECTION
-//!   (the design record §4.2 (C)) — with the verifier's parse,
-//!   [`parse_record_value`], answering a body's entries and its `sig`
-//!   together as a [`RecordValue`], which answers its own sig-less
-//!   projection;
+//! * `entry`: THE ENTRY FRAME under [`ENTRY_TAG`] — the bytes a publish-class
+//!   entry's signature, or a record's `sig`, is made over: [`entry_frame`],
+//!   its terms [`BoardTerm`] and [`DocTerm`], and the [`EntryBody`] each
+//!   grammar's builders mint; the `publish` body's budgeted builder
+//!   [`PublishBody`], with its refusal [`PublishRefusal`], in the child module
+//!   `entry::publish`, the one module its fields are visible to; and
+//!   [`RecordFrame`], the record grade's frame (signed ops; the design record
+//!   §2.5; the frame merge);
+//! * `payload`: the credential records — [`ENROLL_TYPE`], [`RETIRE_TYPE`],
+//!   [`MAX_RECORD_BYTES`], [`Enrollment`] with its refusal [`LabelError`],
+//!   [`PayloadError`] (AUTH-1.18–1.28) — and their JSON schemas and canonical
+//!   encoding: the fold's [`parse_enroll`]/[`parse_retire`], the encoders
+//!   [`encode_enroll`]/[`encode_retire`], the verifier's
+//!   [`parse_record_value`] with its [`RecordValue`], and [`canonical_record`]
+//!   (AUTH-2.15–2.19, AUTH-2.128–2.130; the design record §4.2 (C));
 //! * `read`: the ONE pinned payload read — [`record_bytes`] (AUTH-2.3–2.5,
 //!   AUTH-2.36–2.45);
 //! * `keyset`: the key set — [`Enrolled`], [`KeySet`] (AUTH-1.29–1.37);
 //! * `shape`: shape recognition — [`CredentialKind`], [`TypeAddrs`],
 //!   [`LinkDeposit`], [`single_address`] (AUTH-2.20–2.28);
 //! * `write_types`: the write path's type-recognition input —
-//!   [`WriteTypes`]/[`TargetClass`]/[`AuditClass`] (PUB-6.30, PUB-6.64; owner
-//!   ruling D3): the grant and audit-view classes a `nullify` is refused at
-//!   — the registry's binding, takedown record and policy link among them
-//!   (REG-1.44, REG-1.46) — read off the fold's recognition with `kind_of`
+//!   [`WriteTypes`]/[`TargetClass`]/[`AuditClass`] (PUB-6.30, PUB-6.64,
+//!   REG-1.44, REG-1.46; owner ruling D3): the grant and audit-view classes a
+//!   `nullify` is refused at, read off the fold's recognition with `kind_of`
 //!   untouched;
 //! * `seam`: the fold seam — [`Values`], [`FoldCtx`], [`Owner`]
 //!   (AUTH-2.29–2.34);

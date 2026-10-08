@@ -5,7 +5,7 @@ edition.workspace = true
 rust-version.workspace = true
 repository.workspace = true
 license.workspace = true
-description = "AUTH — pure credential data model and the deterministic identity fold: keys, fingerprints, framing, the record grammar, key sets, classify/step"
+description = "AUTH — the pure credential data model and the deterministic identity fold (keys, fingerprints, framing, the record grammar, key sets, classify/step); beside them, the declarations signed writes are checked against (the entry frame with its bodies and the record grade's frame, the marker-tag table) and the write path's type classes"
 readme = "README.md"
 
 [dependencies]

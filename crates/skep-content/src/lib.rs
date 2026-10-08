@@ -78,14 +78,10 @@
 //!   allocation discipline and computed structurally by M1's `document_of`
 //!   (surfaced as SHOWORIGIN in M6); M4 stores only `address → Val`, so no
 //!   redundant origin field can diverge;
-//! * range, prefix-scan, max-under-prefix — the reads are point reads. The
-//!   map is ordered by `Tumbler`'s `Ord` so that the checkpoint, a
-//!   whole-store reader at every cadence crossing, walks it in address order
-//!   with no sort (`store.rs`), and no range or prefix read is built on that
-//!   order: the allocator's max-under-prefix reads M3's own frontier, never
-//!   M4. The ONE enumeration beside the point reads, [`ContentStore::iter`],
-//!   exists for one consumer: the daemon's cell-index rebuild, which walks
-//!   every value once at open and asks no order of it;
+//! * range, prefix-scan, max-under-prefix — the reads are point reads and the
+//!   one enumeration, [`ContentStore::iter`]; no query is built on the map's
+//!   order (its field in `store.rs` says what the order is for), and the
+//!   allocator's max-under-prefix reads M3's own frontier, never M4;
 //! * concurrency — none of M4's own: no locks, no threads, no interior
 //!   mutability. Content writes ride M5's composite under the
 //!   per-(document, content-subspace) lock key; every content address is
@@ -113,8 +109,9 @@ mod error;
 // The routing assertion (Open build decision #4), shared by `stage_write`
 // and `write`.
 mod routing;
-// The slice, its fold and point queries, the record, and `stage_write`, the
-// record's one producer (`ContentWrite`'s fields are private to this file).
+// The slice — its fold, point queries, one enumeration and serialized form —
+// the record, and `stage_write`, the record's one producer (`ContentWrite`'s
+// fields are private to this file).
 mod store;
 // `write`, the standalone transact-wrapped twin of `stage_write` —
 // `test-hooks` builds only.

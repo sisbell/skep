@@ -1,5 +1,6 @@
-//! §A/§B and the pure half of §C — the slice, the record, the fold, the two
-//! point queries, and the composable write step.
+//! §A/§B and the pure half of §C — the slice and its serialized form, the
+//! record, the fold, the two point queries and the one enumeration, and the
+//! composable write step.
 
 use serde::{Deserialize, Serialize};
 use skep_address::{Address, Tumbler};
@@ -50,8 +51,8 @@ pub struct ContentStore {
     // the order buys is the checkpoint: a whole-store reader that needs
     // every entry in `Tumbler` order at every cadence crossing (the
     // canonical bytes, `Serialize` below), which the ordered map's walk
-    // gives for free where a hash map's had to be collected and sorted at
-    // every checkpoint. Its decode is `entry_by_entry`'s, not `im`'s own
+    // gives for free where a hash map's would have to be collected and sorted
+    // at every checkpoint. Its decode is `entry_by_entry`'s, not `im`'s own
     // visitor, which reserves the count the bytes declare; it takes each key
     // through M1's `Address` door.
     #[serde(deserialize_with = "entry_by_entry")]
@@ -64,14 +65,13 @@ pub struct ContentStore {
 /// rather than left to `im`'s own impl, because the form is a FORMAT (below)
 /// and what a dependency writes is its choice. The order is `Tumbler` order:
 /// the map is ordered by its key's `Ord`, so its walk is a function of the
-/// contents alone and not of a hasher's version or the platform's word size.
-/// So two writes of one store, on two processes or two machines, yield one
-/// byte string, and M2's checkpoint header can commit to its body by hash.
-/// `Deserialize` stays derived, its one field decoded by `entry_by_entry`
-/// below: each key re-enters M1's `Address` door, the map is rebuilt from
-/// the entries whatever order they arrive in, and nothing is reserved for a
-/// count the bytes have not carried. Cost: the O(n) walk the checkpoint
-/// already pays, and no sort.
+/// contents alone. So two writes of one store, on two processes or two
+/// machines, yield one byte string, and M2's checkpoint header can commit to
+/// its body by hash. `Deserialize` stays derived, its one field decoded by
+/// `entry_by_entry` below: each key re-enters M1's `Address` door, the map is
+/// rebuilt from the entries whatever order they arrive in, and nothing is
+/// reserved for a count the bytes have not carried. Cost: the O(n) walk the
+/// checkpoint already pays, and no sort.
 ///
 /// THE FORM IS A FORMAT, read by three collaborators, none with a compiler
 /// edge back to this impl. M2's checkpoint hashes it (above), and decodes it

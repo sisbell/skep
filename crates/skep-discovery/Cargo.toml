@@ -31,10 +31,10 @@ skep-namespace = { path = "../skep-namespace" }
 # with. M8 never reads R.
 skep-arrangement = { path = "../skep-arrangement" }
 # M7 — the link store and the matcher M8 presents. M8 restates one piece of it,
-# the per-link overlap relation `pointwise::touches` tests, because M7 keeps
-# that test private: a change to M7's overlap is a change to `touches` too, and
-# tests/it/pointwise.rs holds the two to one answer on every relation
-# `classify_spans` draws.
+# the per-link overlap relation, as `pointwise::SpanBounds::overlaps`, because
+# M7 keeps that test private: a change to M7's overlap is a change to
+# `overlaps` too, and tests/it/pointwise.rs holds the two to one answer on
+# every relation `classify_spans` draws.
 skep-links = { path = "../skep-links" }
 
 [dev-dependencies]

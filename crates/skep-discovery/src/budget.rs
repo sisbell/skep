@@ -77,8 +77,9 @@
 ///   span of a link's coverage against every run, where a link's WHOLE
 ///   coverage is up to `MAX_SLOT_SPANS` a slot, so the run count alone admits
 ///   three times the square. Its product is WORK and only work — a boolean
-///   `any` that allocates nothing and stops at its first overlap — which is
-///   what the square prices.
+///   `any` that stops at its first overlap, over endpoints derived ONCE per
+///   span as M6's COMPARE stores each block's reach, so a step is at most two
+///   tumbler comparisons and builds nothing: the step the square prices.
 ///
 /// `#runs(d)` and `|links|` are the WORLD's, and no number here reaches them:
 /// they stay with request rate and concurrency, which are M10's as the

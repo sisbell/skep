@@ -29,12 +29,12 @@
 //! link, so there is no result set to filter, and a link the reader may not
 //! see is instead ABSENT as an argument.
 //!
-//! The per-link `classify_spans` touch test here is M8's one
-//! pointwise span comparison — a level-gate-free order relation, total on
-//! cross-length spans, categorically distinct from the level-gated set
-//! algebra M8 avoids.
+//! The per-link touch test here — M7's stab overlap restated over endpoints
+//! derived once per span — is M8's one pointwise span comparison: a
+//! level-gate-free order relation, total on cross-length spans, categorically
+//! distinct from the level-gated set algebra M8 avoids.
 
-use skep_address::{classify_spans, Address, Span, SpanRel, SpanSet};
+use skep_address::{Address, Span, SpanSet, Tumbler};
 use skep_arrangement::reading_surface;
 use skep_kernel::Snapshot;
 use skep_links::Endset;
@@ -152,27 +152,60 @@ pub fn project_on<W: DiscoveryWorld>(
     Ok(w.m5().project(&surface, &coverage)) // I→V, content subspace, level-class-safe inside M5
 }
 
-/// `coverage(e) ∩ ⋃ extents ≠ ∅` — pointwise, by M7's stab overlap relation
-/// (ProperOverlap | Containment | Equal, never Adjacent). M7 keeps its own
-/// statement of that relation private, so this is a second one and the two
-/// change together; `tests/it/pointwise.rs` holds discoverability to the
-/// region family's stab on every relation `classify_spans` draws.
-/// `classify_spans` is a pure, level-gate-free order relation, total on
-/// cross-length spans (a link-address span against a content run classifies
-/// by plain tumbler order — no fault), so the cross-subspace cases just work.
+/// One span as the two endpoints the touch test compares: its start, borrowed,
+/// and its reach, derived ONCE — M1's derived `(start, reach)` form, which M1
+/// keeps crate-private. M1's `classify_spans` derives both operands' endpoints
+/// afresh on every call, a copy of each start and an addition for each reach,
+/// so a join run through it allocates four tumblers per (coverage span, run)
+/// PAIR. Derived once per span instead — as M6's COMPARE stores each block's
+/// reach, for the same reason — a test compares borrowed tumblers and builds
+/// nothing, which is the step [`MAX_JOIN_STEPS`] is argued at. Named for the
+/// span's bounds rather than M1's `Endpoints`, since an endpoint in this crate
+/// is a supersession claim's (`lineage`'s `Endpoint`).
+struct SpanBounds<'s> {
+    start: &'s Tumbler,
+    reach: Tumbler,
+}
+
+impl<'s> SpanBounds<'s> {
+    fn of(span: &'s Span) -> SpanBounds<'s> {
+        SpanBounds {
+            start: span.start(),
+            reach: span.reach(),
+        }
+    }
+
+    /// M7's stab overlap — ProperOverlap | Containment | Equal, never
+    /// Adjacent — over the two spans' endpoints. M1's classification answers
+    /// one of those three relations exactly when `max start < min reach`, and
+    /// over non-empty spans — which T12 makes every `Span`, its reach strictly
+    /// past its start — that is each span starting before the other reaches:
+    /// at most two tumbler comparisons, the first deciding every pair whose
+    /// first span lies wholly past the second. Pure tumbler order, total on
+    /// cross-length operands as `classify_spans` is, so a link-address span
+    /// against a content run compares without fault. M7 keeps its own
+    /// statement of the relation private, so this is a second one and the two
+    /// change together: `tests/it/pointwise.rs` holds discoverability to the
+    /// region family's stab on every relation `classify_spans` draws, and the
+    /// test below holds this to M1's classification on every pair of a
+    /// mixed-length grid.
+    fn overlaps(&self, other: &SpanBounds<'_>) -> bool {
+        self.start < &other.reach && other.start < &self.reach
+    }
+}
+
+/// `coverage(e) ∩ ⋃ extents ≠ ∅` — pointwise, by [`SpanBounds::overlaps`].
 /// Vacuously false over an empty extent list.
 ///
-/// `extents` are the I-extents of the document's runs, lifted by the caller:
-/// this is asked once per slot of a link, and a run's extent depends on the
-/// run alone, so the lift belongs where the runs are read.
-fn touches(e: &Endset, extents: &[Span]) -> bool {
+/// `extents` are the bounds of the document's runs' I-extents, derived by the
+/// caller: this is asked once per slot of a link, and a run's extent depends
+/// on the run alone, so the derivation belongs where the runs are read. Each
+/// span of `e` derives its own bounds once, ahead of every extent it is
+/// tested against.
+fn touches(e: &Endset, extents: &[SpanBounds<'_>]) -> bool {
     e.spans().any(|span| {
-        extents.iter().any(|extent| {
-            matches!(
-                classify_spans(span, extent),
-                SpanRel::ProperOverlap | SpanRel::Containment | SpanRel::Equal
-            )
-        })
+        let span = SpanBounds::of(span);
+        extents.iter().any(|extent| span.overlaps(extent))
     })
 }
 
@@ -190,9 +223,10 @@ fn touches(e: &Endset, extents: &[Span]) -> bool {
 ///
 /// Tests LP12's characterisation directly per link —
 /// `∃ i : coverage(Σ.L(a).eᵢ) ∩ ran(M(reading_surface(d))) ≠ ∅` over BOTH
-/// subspaces (`content_runs` + `link_runs`) — conjoined with `is_active(a)`;
-/// at most `Σᵢ|eᵢ| × |runs|` `classify_spans` calls, each rebuilding both
-/// spans' endpoints. The test iterates the link's full arity, so it carries
+/// subspaces (`content_runs` + `link_runs`) — conjoined with `is_active(a)`:
+/// each span's endpoints derived once, `Σᵢ|eᵢ| + |runs|` reaches, and then at
+/// most `Σᵢ|eᵢ| × |runs|` tests of at most two tumbler comparisons apiece,
+/// building nothing. The test iterates the link's full arity, so it carries
 /// no arity-3 caveat.
 ///
 /// HEAD-FLOAT: LP12 is read at `d`'s reading surface —
@@ -276,5 +310,65 @@ pub fn addressably_discoverable_from_on<W: DiscoveryWorld>(
         .chain(w.m5().link_runs(&surface))
         .map(|r| r.iextent())
         .collect(); // ran(M(reading_surface(d))) as I-extents, BOTH subspaces (LP12)
-    Ok(link.slots().any(|e| touches(e, &extents)))
+    let bounds: Vec<SpanBounds<'_>> = extents.iter().map(SpanBounds::of).collect();
+    Ok(link.slots().any(|e| touches(e, &bounds)))
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashSet;
+
+    use super::*;
+    use skep_address::{classify_spans, subtree_of, Nat, SpanRel};
+
+    fn t(comps: &[u32]) -> Tumbler {
+        Tumbler::new(comps.iter().map(|&c| Nat::from(c))).expect("nonempty")
+    }
+
+    /// `count` positions from `start`, counted at its last component.
+    fn wide(start: &[u32], count: u32) -> Span {
+        let mut width = vec![0; start.len()];
+        *width.last_mut().expect("nonempty") = count;
+        Span::new(t(start), t(&width)).expect("a width at the last component is T12-valid")
+    }
+
+    /// The restated overlap answers as M1's classification does on every pair
+    /// of a grid that mixes lengths — a node's subtree, an account's, a
+    /// document's, a trailing-zero carrier's, content runs of eight components
+    /// and of nine, a link address, the zero sentinel's span — and meets all
+    /// five relations in both orders of their operands, so each of the two
+    /// comparisons `overlaps` makes is asked on both sides of its boundary: a
+    /// `<=` in either would take Adjacent for a touch, and either comparison
+    /// alone would take Separated for one.
+    #[test]
+    fn overlaps_answers_as_classify_spans_on_every_pair_of_mixed_lengths() {
+        let grid = [
+            subtree_of(&t(&[1])),
+            subtree_of(&t(&[1, 0, 1])),
+            subtree_of(&t(&[1, 0, 1, 0, 1])),
+            subtree_of(&t(&[1, 0, 1, 0, 1, 0])),
+            wide(&[1, 0, 1, 0, 1, 0, 1, 1], 3), // positions 1 to 3
+            wide(&[1, 0, 1, 0, 1, 0, 1, 3], 2), // 3 and 4: overlaps the one above
+            subtree_of(&t(&[1, 0, 1, 0, 1, 0, 1, 4])), // abuts 1 to 3
+            subtree_of(&t(&[1, 0, 1, 0, 1, 0, 2, 1])), // a link address
+            subtree_of(&t(&[1, 0, 1, 1, 0, 1, 0, 1, 1])), // nine components
+            wide(&[0], 1),
+        ];
+        let mut met = HashSet::new();
+        for a in &grid {
+            for b in &grid {
+                let relation = classify_spans(a, b);
+                met.insert(relation);
+                assert_eq!(
+                    SpanBounds::of(a).overlaps(&SpanBounds::of(b)),
+                    matches!(
+                        relation,
+                        SpanRel::ProperOverlap | SpanRel::Containment | SpanRel::Equal
+                    ),
+                    "{a:?} against {b:?}: {relation:?}"
+                );
+            }
+        }
+        assert_eq!(met.len(), 5, "every relation is met: {met:?}");
+    }
 }

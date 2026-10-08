@@ -1,9 +1,11 @@
 //! §5 — projection and addressable discoverability: what each answers, the
 //! overlap discoverability shares with the region family's stab, the order
 //! their refusals speak in, the trunk head both read, the absence rule both
-//! apply, and the run budget and join square that hold them.
+//! apply, and the run budget and join square that hold them — the square at a
+//! step that builds nothing per pair.
 
 use crate::common;
+use crate::heap::heap_bytes;
 
 use common::*;
 use skep_address::{classify_spans, Address, Span, SpanRel};
@@ -12,6 +14,7 @@ use skep_discovery::{
     addressably_discoverable_from_on, project_on, QueryError, FROM, MAX_ANSWER_SPANS,
     MAX_IMAGE_RUNS, TO, TYPE,
 };
+use skep_kernel::Snapshot;
 use skep_links::{HasLinks, LinkWriter, SlotArg};
 
 #[test]
@@ -716,6 +719,61 @@ fn addressably_discoverable_from_holds_its_join_to_the_square_of_the_run_budget(
     assert_eq!(reads.addressably_discoverable_from(&exact, &doc2()), Ok(true));
 }
 
+/// §5 — the touch test BUILDS NOTHING PER PAIR. Its join is held to the
+/// square of `MAX_IMAGE_RUNS`, which that constant argues as M6's COMPARE
+/// budget — comparisons of endpoints derived once — and the daemon runs this
+/// read with no scan permit on the strength of it. A test that derived a
+/// span's reach for every (coverage span, run) PAIR, as M1's `classify_spans`
+/// does and M7's private overlap does through it, answers exactly as the
+/// right one does while paying heap work the square never priced: no answer
+/// shows it, and the heap does. Every span of both links names an address
+/// past doc2's one arranged position, so no pair touches, `any` never stops
+/// early, and every pair is tested — and thirty-two runs more then cost a
+/// link three spans wide exactly the heap bytes they cost a link forty-two
+/// spans wide: their extents and a reach apiece, and nothing per span they
+/// meet.
+#[test]
+fn the_touch_test_builds_nothing_per_pair() {
+    let k = kernel();
+    seed_content(&k, &doc1(), 1); // ca(1): the one address every run of doc2 holds
+    let store = LinkWriter::new(&k, &EVERYONE);
+    // Homed, and so seated, in doc1, so doc2's runs are its content alone.
+    let narrow = link(&store, &doc1(), &[ca(1001)], &[ca(101)]); // three spans in all
+    let forty: Vec<Address> = (1001..1041).map(ca).collect();
+    let wide = link(&store, &doc1(), &forty, &[ca(101)]); // forty-two
+    let vstream = Vstream::new(&k);
+    let specs = vec![spec(&doc1(), 1, 1, 1); 32];
+    vstream
+        .copy(SYS, &doc2(), vp(1, 1), &specs)
+        .expect("copy succeeds");
+    let fewer = k.snapshot();
+    vstream
+        .copy(SYS, &doc2(), vp(1, 1), &specs)
+        .expect("copy succeeds");
+    let more = k.snapshot();
+    assert_eq!(fewer.world().m5().content_runs(&doc2()).len(), 32);
+    assert_eq!(more.world().m5().content_runs(&doc2()).len(), 64);
+    assert_eq!(more.world().m5().link_runs(&doc2()).len(), 0);
+
+    let d = doc2();
+    let heap_of = |snap: &Snapshot<World>, a: &Address| -> u64 {
+        let (answer, bytes) =
+            heap_bytes(|| addressably_discoverable_from_on(snap, a, &d, &every_home));
+        assert_eq!(
+            answer,
+            Ok(false),
+            "{a:?}: every pair is tested, and none touches"
+        );
+        bytes
+    };
+    let narrow_added = heap_of(&more, &narrow) - heap_of(&fewer, &narrow);
+    let wide_added = heap_of(&more, &wide) - heap_of(&fewer, &wide);
+    assert_eq!(
+        wide_added, narrow_added,
+        "thirty-two runs more cost the same heap whatever the coverage they meet"
+    );
+}
+
 /// §5 — `project`'s join product is the ANSWER it builds and not merely the
 /// work it does: M5 pushes one V-span per overlapping (run, coverage span)
 /// pair into one vector before it normalizes. A coverage of REPEATED spans —
@@ -723,9 +781,9 @@ fn addressably_discoverable_from_holds_its_join_to_the_square_of_the_run_budget(
 /// depositor's to choose up to M7's slot cap — over a document whose runs all
 /// sit at one address realizes that product in full, for an answer that
 /// normalizes to a single span. So it is held at the ANSWER budget, where the
-/// touch test beside it, whose join is a boolean that allocates nothing,
-/// keeps the square: the same link the projection refuses is answered there,
-/// which is what shows the two products are two numbers for a reason.
+/// touch test beside it, whose join is a boolean that builds nothing per
+/// pair, keeps the square: the same link the projection refuses is answered
+/// there, which is what shows the two products are two numbers for a reason.
 #[test]
 fn project_holds_its_product_to_the_answer_budget() {
     let k = kernel();

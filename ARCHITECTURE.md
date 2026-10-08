@@ -1426,10 +1426,11 @@ Rules that hold across its files:
   or skepd's card.
 
 Its integration suite is one binary, `tests/it/`: one file per part of the
-read surface over the shared `common` world; `home_rule` and `consumer`,
-the laws that cross them; and `tidy`, which holds every check that reads
-the crate's own source: the module map, the first two rules, and the
-`## Cost` section's heading and its naming of every read.
+read surface over the shared `common` world; `heap`, the binary's
+byte-counting allocator; `home_rule` and `consumer`, the laws that cross
+them; and `tidy`, which holds every check that reads the crate's own
+source: the module map, the first two rules, and the `## Cost` section's
+heading and its naming of every read.
 
 ## The operation surface, `skep-febe`
 

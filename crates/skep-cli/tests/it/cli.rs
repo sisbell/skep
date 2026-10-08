@@ -3,14 +3,16 @@
 //! before any socket for a non-canonical board, the person doors' terminal
 //! check, THE LOOP over the hosted arm (keygen → claim --hosted → bind →
 //! session → verify → health → fingerprint), the hosted reply as printed
-//! landing at `bind`, the token's custody and its CONTENT scope, the
-//! whole-set compare, `bind`'s landing question, its refusal of a reply
-//! from another board, its warning where the store cannot be appended and
-//! its first session's scope on the wire, `keygen`'s box at the prompt, a
-//! refused setting never read as an absent one, a variable and an argument
-//! that are not text refused, a refused stdout a halt and a refused stderr
-//! dropped, the plaintext warning, the default store and its edges, the
-//! pending state beside a bound key, `bind`'s paste prompt on stderr.
+//! landing at `bind`, the token's custody, its two sources in order and its
+//! CONTENT scope, the whole-set compare, `bind`'s landing question, its
+//! refusal of a reply from another board and of a key file its store does
+//! not hold, its warning where the store cannot be appended and its first
+//! session's scope on the wire, `fingerprint`'s refusal of two keys named,
+//! `keygen`'s box at the prompt, a refused setting never read as an absent
+//! one, a variable and an argument that are not text refused, a refused
+//! stdout a halt and a refused stderr dropped, the plaintext warning, the
+//! default store and its edges, the pending state beside a bound key,
+//! `bind`'s paste prompt on stderr.
 
 use std::path::{Path, PathBuf};
 
@@ -300,13 +302,31 @@ fn the_hosted_loop_runs_its_seven_commands_through_the_binary() {
     let r = skep(&["session", "--close", "-", "--board", &board], &[("SKEP_SESSION", &token2)], None);
     assert_eq!(r.code, 0, "{r:?}");
     assert!(r.err.is_empty());
-    let r = skep(&["session", "--close", "-", "--board", &board], &[], Some(b"not a token"));
-    assert_eq!(r.code, 2);
-    // Bytes that are not text are no token, and are named so — never a
-    // read stdin refused.
-    let r = skep(&["session", "--close", "-", "--board", &board], &[], Some(b"\xff\xfe"));
+    // SKEP_SESSION where it is set, stdin then unread: the variable's token
+    // is the one ended — closed above, so already dead — and a live token
+    // piped beside it stands, unread.
+    let r = skep(&["session", "--board", &board, "--dir", s(&store)], &[], None);
+    assert_eq!(r.code, 0, "{r:?}");
+    let piped = r.out.trim().to_string();
+    let r = skep(&["session", "--close", "-", "--board", &board], &[("SKEP_SESSION", &token2)], Some(piped.as_bytes()));
+    assert_eq!(r.code, 0, "{r:?}");
+    assert!(r.err.contains("already dead"), "the variable's token is the one ended: {}", r.err);
+    let r = skep(&["session", "--close", "-", "--board", &board], &[], Some(piped.as_bytes()));
+    assert_eq!(r.code, 0, "{r:?}");
+    assert!(r.err.is_empty(), "the piped token stood live: {}", r.err);
+    // Bytes read from stdin that are no token — not a token's text, or no
+    // text at all — are a state the read came to (exit 3), named so; never
+    // a usage refusal, which is the command line's shape alone. A
+    // SKEP_SESSION that is no token is a setting given badly (exit 2), named
+    // by its variable.
+    for bytes in [&b"not a token"[..], b"\xff\xfe"] {
+        let r = skep(&["session", "--close", "-", "--board", &board], &[], Some(bytes));
+        assert_eq!(r.code, 3, "{bytes:?}: {r:?}");
+        assert!(r.err.contains("the bytes read from stdin are not a session token"), "{}", r.err);
+    }
+    let r = skep(&["session", "--close", "-", "--board", &board], &[("SKEP_SESSION", "not a token")], None);
     assert_eq!(r.code, 2, "{r:?}");
-    assert!(r.err.contains("is not a session token"), "{}", r.err);
+    assert!(r.err.contains("SKEP_SESSION: the value is not a session token"), "{}", r.err);
 
     // verify: the origin arm, the key arm, the whole-set compare.
     let r = skep(&["verify", "--board", &board, "--dir", s(&store), "--principal", "1", "--payload", s(&payload_file)], &[], None);
@@ -600,6 +620,58 @@ fn bind_on_a_store_it_cannot_append_warns_with_the_line_and_lands_the_facts() {
     assert!(r.err.contains(&format!("record this binding line yourself: {} 1 1.0.1 {}", b.board, b.fp)), "{}", r.err);
     assert_eq!(r.lines(), ["account 1.0.1", "principal 1", format!("origin {}", b.board).as_str()]);
     assert_eq!(std::fs::read_to_string(b.store.join("bindings")).unwrap(), before, "nothing appended");
+}
+
+/// A KEY FILE OUTSIDE THE STORE BINDS NOTHING THERE (§3.5 arm 2: the line
+/// names a key this store holds): `bind` with `--key`, or `SKEP_KEY`,
+/// naming a copy of the bound key, against a store that holds no file for
+/// it, halts naming the file before anything is written — never a binding
+/// or persist-first line every later lookup would meet as a missing file;
+/// the key named inside its own store binds.
+#[test]
+fn bind_refuses_a_key_file_its_store_does_not_hold() {
+    let dir = tempfile::tempdir().unwrap();
+    let b = hosted_and_bound(dir.path());
+    let held = b.store.join("keys").join(format!("{}.key", b.fp));
+    let loose = dir.path().join("loose.key");
+    std::fs::copy(&held, &loose).unwrap();
+    let empty = dir.path().join("empty");
+    for (flags, envs) in [(vec!["--key", s(&loose)], vec![]), (vec![], vec![("SKEP_KEY", s(&loose))])] {
+        let mut args = vec!["bind", "--board", &b.board, "--dir", s(&empty), "--account", "1.0.1", "--principal", "1"];
+        args.extend(flags);
+        let r = skep(&args, &envs, None);
+        assert_eq!(r.code, 3, "{envs:?}: {r:?}");
+        assert!(r.err.contains(&format!("the key file {} is not this store's", loose.display())), "{}", r.err);
+        assert!(r.out.is_empty(), "{}", r.out);
+        assert!(!empty.exists(), "nothing written");
+    }
+    let r = skep(&["bind", "--board", &b.board, "--dir", s(&b.store), "--key", s(&held), "--account", "1.0.1", "--principal", "1"], &[], None);
+    assert_eq!(r.code, 0, "{r:?}");
+}
+
+/// TWO KEYS NAMED ARE REFUSED, NEVER ONE PICKED (§2.2: selecting within a
+/// store is `--select`'s alone, and `--key` names one key file): `fingerprint
+/// --select` beside `--key`, or beside `SKEP_KEY`, is exit 2 printing
+/// nothing — never one key's record printed for the other's; a SKEP_KEY set
+/// empty is unset, and `--select` alone answers.
+#[test]
+fn fingerprint_refuses_select_beside_a_key_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = dir.path().join("store");
+    let phone = skep(&["keygen", "--label", "phone", "--dir", s(&store)], &[], None).lines()[0].to_string();
+    let laptop = skep(&["keygen", "--label", "laptop", "--dir", s(&store)], &[], None).lines()[0].to_string();
+    let laptop_file = store.join("keys").join(format!("{laptop}.key"));
+    for (flags, envs) in [(vec!["--key", s(&laptop_file)], vec![]), (vec![], vec![("SKEP_KEY", s(&laptop_file))])] {
+        let mut args = vec!["fingerprint", "--dir", s(&store), "--select", "phone", "--payload"];
+        args.extend(flags);
+        let r = skep(&args, &envs, None);
+        assert_eq!(r.code, 2, "{envs:?}: {r:?}");
+        assert!(r.err.contains("`--select` names a key in the store and `--key` (or SKEP_KEY) names a key file: give one"), "{}", r.err);
+        assert!(r.out.is_empty(), "{}", r.out);
+    }
+    let r = skep(&["fingerprint", "--dir", s(&store), "--select", "phone"], &[("SKEP_KEY", "")], None);
+    assert_eq!(r.code, 0, "{r:?}");
+    assert!(r.lines().contains(&phone.as_str()) && !r.out.contains(&laptop), "{}", r.out);
 }
 
 /// THE ACCOUNT'S FIRST SIGNED SESSION IS CONTENT-SCOPED (§2.2 `bind`): the

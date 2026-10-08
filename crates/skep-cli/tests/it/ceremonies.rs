@@ -2,12 +2,14 @@
 //! the help lists thirteen and `--yes` is exit 2; each person door refuses
 //! without a controlling terminal, and opens under a pseudo-terminal only
 //! where stdin and stderr are both one, while `accept --reprint`, `enroll
-//! --reply` and `handoff` without `--payload` run without one; a required
-//! flag missing is a usage refusal ahead of the door; THE HOP (store B's
-//! `keygen --payload`, A's enrollment, `enroll --reply` writing nothing, B's
-//! `bind` and `session`, A's whole-set compare naming B's key a later act);
-//! THE ONE-BINDING TEST after a claim; beat (a) through the binary,
-//! idempotent; `accept --reprint` from the files, writing nothing.
+//! --reply` and `handoff` without `--payload` run without one; a usage
+//! refusal — a required flag missing, a setting given badly, a key file a
+//! walk cannot take, a flag outside its form — is judged ahead of the door,
+//! and an anchor label at its box ahead of `keygen`'s generation; THE HOP
+//! (store B's `keygen --payload`, A's enrollment, `enroll --reply` writing
+//! nothing, B's `bind` and `session`, A's whole-set compare naming B's key
+//! a later act); THE ONE-BINDING TEST after a claim; beat (a) through the
+//! binary, idempotent; `accept --reprint` from the files, writing nothing.
 
 use std::path::Path;
 
@@ -21,7 +23,7 @@ use skep_client::store::{FileStore, KeyStore};
 use skep_client::Origin;
 use skep_identity::parse_enroll;
 
-use crate::common::{origin, s, skep, spawn, tree};
+use crate::common::{origin, s, skep, skep_os, spawn, tree, Run};
 
 const THIRTEEN: [&str; 13] = ["keygen", "claim", "session", "fingerprint", "verify", "health", "bind", "enroll", "recover", "retire", "rotate", "handoff", "accept"];
 
@@ -272,22 +274,111 @@ fn a_person_door_opens_only_where_stdin_and_stderr_are_both_a_terminal() {
     assert_eq!(tree(&store), before, "nothing touched");
 }
 
-/// A REQUIRED FLAG MISSING IS A USAGE REFUSAL AHEAD OF THE DOOR (§2.3's exit
-/// 2): `retire` without `--fingerprint` and `handoff` without `--account`
-/// each name the flag they require, before any terminal check and any read
-/// — never a walk handed an empty prefix or address.
+/// A USAGE REFUSAL IS JUDGED AHEAD OF THE DOOR (§2.3's exit 2): `retire`
+/// without `--fingerprint`, `handoff` without `--account` and `enroll` with
+/// neither `--payload` nor `--reply` each name what they require, and
+/// `claim`'s notebook arm refuses a store setting given badly, before any
+/// terminal check and any read — never a walk handed an empty prefix or
+/// address, and never one command line answered 3 without a terminal and 2
+/// at one.
 #[test]
-fn retire_and_handoff_refuse_a_missing_required_flag_as_usage_before_the_door() {
+fn a_usage_refusal_is_judged_ahead_of_the_door() {
     let dir = tempfile::tempdir().unwrap();
     let store = dir.path().join("store");
-    for (args, required) in [
-        (vec!["retire", "--board", "http://127.0.0.1:1", "--dir", s(&store), "--principal", "1"], "--fingerprint <fp-prefix> is required"),
-        (vec!["handoff", "--board", "http://127.0.0.1:1", "--dir", s(&store), "--principal", "1"], "--account <address> is required"),
+    let dead = "http://127.0.0.1:1";
+    let ahead = |r: Run, required: &str| {
+        assert_eq!(r.code, 2, "{r:?}");
+        assert!(r.err.contains(required), "{}", r.err);
+        assert!(!r.err.contains("controlling terminal"), "ahead of the door: {}", r.err);
+        assert!(r.out.is_empty(), "{}", r.out);
+    };
+    ahead(skep(&["retire", "--board", dead, "--dir", s(&store), "--principal", "1"], &[], None), "--fingerprint <fp-prefix> is required");
+    ahead(skep(&["handoff", "--board", dead, "--dir", s(&store), "--principal", "1"], &[], None), "--account <address> is required");
+    ahead(skep(&["enroll", "--board", dead, "--dir", s(&store), "--principal", "1"], &[], None), "--payload <file|-> is required (or --reply <fp-prefix>)");
+    #[cfg(unix)]
+    {
+        use std::ffi::OsStr;
+        use std::os::unix::ffi::OsStrExt;
+        ahead(skep_os(&["claim", "--board", dead], &[("SKEP_KEYSTORE", OsStr::from_bytes(b"\xff"))], None), "SKEP_KEYSTORE: the value is not UTF-8 text");
+    }
+    assert!(!store.exists(), "nothing written");
+}
+
+/// `--key` WHERE A WALK CANNOT TAKE IT IS REFUSED, NEVER DROPPED (§3.5 arm 1
+/// owes `enroll` and `retire` the key file it names; their walks select
+/// from the store's lookup alone): `retire` and `enroll` with `--key`, or
+/// with `SKEP_KEY`, are exit 2 ahead of the door — never a key the person
+/// did not name signing a permanent record — and `enroll --reply`, which
+/// selects no key, runs on to the dead board behind it.
+#[test]
+fn enroll_and_retire_refuse_a_key_file_their_walks_cannot_take() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = dir.path().join("store");
+    let payload = dir.path().join("p.json");
+    std::fs::write(&payload, "{}").unwrap();
+    let dead = "http://127.0.0.1:1";
+    let retire = ["retire", "--board", dead, "--dir", s(&store), "--principal", "1", "--fingerprint", "ab"];
+    let enroll = ["enroll", "--board", dead, "--dir", s(&store), "--principal", "1", "--payload", s(&payload)];
+    for (command, args) in [("retire", &retire[..]), ("enroll", &enroll[..])] {
+        let flagged = [args, &["--key", "/x"][..]].concat();
+        for (r, how) in [(skep(&flagged, &[], None), "the flag"), (skep(args, &[("SKEP_KEY", "/x")], None), "the variable")] {
+            assert_eq!(r.code, 2, "{command} by {how}: {r:?}");
+            assert!(r.err.contains(&format!("`--key` (or SKEP_KEY) names a key file, and `skep {command}` selects its key from the store's lookup alone")), "{}", r.err);
+            assert!(!r.err.contains("controlling terminal"), "ahead of the door: {}", r.err);
+        }
+    }
+    let r = skep(&["enroll", "--board", dead, "--dir", s(&store), "--principal", "1", "--reply", "ab"], &[("SKEP_KEY", "/x")], None);
+    assert_eq!(r.code, 4, "the reply selects no key, and dials the board: {r:?}");
+    assert!(!store.exists(), "nothing written");
+}
+
+/// A FLAG OUTSIDE ITS FORM IS REFUSED BEFORE ANYTHING RUNS (§2.3's exit 2;
+/// the grammar's forms): `accept --anchor` without `--reprint` — the record
+/// asked for again, its flag forgotten — is refused naming the form, never
+/// run as the beat that makes a fresh key and pair; and `recover
+/// --anchor-lost --stolen` is refused, never the loss arm run with the
+/// stolen arm's recovery read dropped.
+#[test]
+fn a_flag_outside_its_form_is_refused_before_anything_runs() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = dir.path().join("store");
+    let dead = "http://127.0.0.1:1";
+    for (args, refusal) in [
+        (
+            vec!["accept", "--board", dead, "--dir", s(&store), "--account", "1.0.1.2", "--anchor", "/a", "--anchor", "/b"],
+            "`--anchor` belongs to `accept --reprint` and is refused without `--reprint`",
+        ),
+        (
+            vec!["recover", "--board", dead, "--dir", s(&store), "--principal", "1", "--anchor-lost", "--stolen"],
+            "`--anchor-lost` and `--stolen` belong to two forms of `recover`: give one",
+        ),
     ] {
         let r = skep(&args, &[], None);
         assert_eq!(r.code, 2, "{args:?}: {r:?}");
-        assert!(r.err.contains(required), "{args:?}: {}", r.err);
-        assert!(!r.err.contains("controlling terminal"), "ahead of the door: {}", r.err);
+        assert!(r.err.starts_with(&format!("skep: {refusal}\n\nusage: skep <command> [flags]\n")), "the refusal, the help beneath: {}", r.err);
         assert!(r.out.is_empty(), "{}", r.out);
     }
+    assert!(!store.exists(), "nothing generated");
+}
+
+/// AN ANCHOR LABEL IS JUDGED AT ITS BOX BEFORE ANYTHING IS GENERATED (§2.2
+/// `keygen`; P13): under a pseudo-terminal, past the door, `keygen
+/// --anchors` with an `--anchor-label` outside AUTH-1.24's domain halts
+/// naming the box, and the store holds nothing — no device key left for the
+/// corrected run's to stand beside, where §3.5 arm 3 would then select none.
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+#[test]
+fn keygen_anchors_judges_an_anchor_label_before_the_device_key_is_generated() {
+    use crate::common::{on_a_terminal, shell_word};
+
+    let dir = tempfile::tempdir().unwrap();
+    let store = dir.path().join("store");
+    let code = dir.path().join("code");
+    let keygen = format!("{} keygen --anchors --label phone --anchor-label {} --dir {}", shell_word(env!("CARGO_BIN_EXE_skep")), "x".repeat(129), shell_word(s(&store)));
+    let seen = on_a_terminal(&format!("{keygen}; echo $? > {}", shell_word(s(&code))));
+    let exit = std::fs::read_to_string(&code).unwrap_or_else(|e| panic!("the run's exit code: {e}: {seen}"));
+    assert_eq!(exit.trim(), "3", "{seen}");
+    assert!(seen.contains("an anchor label is refused at the box"), "{seen}");
+    assert!(!seen.contains("requires a controlling terminal"), "past the door: {seen}");
+    assert!(tree(&store).is_empty(), "nothing generated: {:?}", tree(&store).keys().collect::<Vec<_>>());
 }

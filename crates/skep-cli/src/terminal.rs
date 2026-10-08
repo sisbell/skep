@@ -16,13 +16,14 @@
 //! binary says on stderr — a statement, a prompt's heading, a command's
 //! TALK, a halt — is written by `talk`, and a prompt's text and the sheet
 //! by `show`, each through `write_inert`, which renders its text INERT
-//! ([`inert`], AUTH-5.2's rendering line by line) before stderr is handed
-//! a byte: a byte a board, a reply or a file chose — an escape that moves
-//! the cursor, erases a line, sets the title or the clipboard, or asks the
-//! terminal to type an answer into stdin — reaches the screen as its code
-//! point and never as a command. The dismissal's clear, the one escape this
-//! binary means, is `clear`'s constant, written raw. Both writers drop a
-//! write stderr refuses rather than panic.
+//! ([`inert`], AUTH-5.2's rendering line by line: every control character,
+//! C0, DEL and C1, and every bidi control) before stderr is handed a byte:
+//! a control a board, a reply or a file chose — an escape, 7-bit or 8-bit,
+//! that moves the cursor, erases a line, sets the title or the clipboard,
+//! or asks the terminal to type an answer into stdin — reaches the screen
+//! as its code point and never as a command. The dismissal's clear, the
+//! one escape this binary means, is `clear`'s constant, written raw. Both
+//! writers drop a write stderr refuses rather than panic.
 
 use std::fmt;
 use std::io::{self, IsTerminal, Write};
@@ -41,14 +42,30 @@ pub fn has_terminal() -> bool {
     io::stdin().is_terminal() && io::stderr().is_terminal()
 }
 
-/// `text` as the terminal may be handed it: each line rendered INERT by
-/// AUTH-5.2's rendering (`render_inert`: every C0 control, DEL and bidi
-/// control shown as its code point), the line breaks kept — the one thing a
-/// TALK block's own text holds that the rendering would otherwise touch.
-/// Rendered twice, the same: the rendering's output holds nothing it
-/// renders, so a label a walk rendered already passes as it stands.
+/// `text` as the terminal may be handed it: each line rendered INERT, every
+/// character AUTH-5.2 names — a control character (C0, DEL and C1) or a
+/// bidi control — shown as its code point: `render_inert`'s rendering, and
+/// the C1 controls its set leaves out spelled as it spells the rest. The
+/// line breaks are kept, the one thing a TALK block's own text holds that
+/// the rendering would otherwise touch. Rendered twice, the same: the
+/// rendering's output holds nothing it renders, so a label a walk rendered
+/// already passes as it stands.
 fn inert(text: &str) -> String {
-    text.split('\n').map(render_inert).collect::<Vec<_>>().join("\n")
+    let mut out = String::with_capacity(text.len());
+    for (i, line) in text.split('\n').enumerate() {
+        if i > 0 {
+            out.push('\n');
+        }
+        // What `render_inert` leaves of the control characters: C1.
+        for c in render_inert(line).chars() {
+            if c.is_control() {
+                out.push_str(&format!("<U+{:04X}>", u32::from(c)));
+            } else {
+                out.push(c);
+            }
+        }
+    }
+    out
 }
 
 /// TALK (§2.4): one line on stderr, through [`write_inert`] — a moment's

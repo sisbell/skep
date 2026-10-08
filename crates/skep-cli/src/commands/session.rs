@@ -1,6 +1,7 @@
 //! `skep session` (`client.md` §2.2): a CONTENT-scoped signed session
-//! opened with the store's key, its token printed live; `--close -` ends a
-//! token read from stdin or `SKEP_SESSION`, never from argv (AUTH-4.53).
+//! opened with the store's key, its token printed live; `--close -` ends
+//! the token in `SKEP_SESSION` where it is set — stdin then unread — else
+//! the one read from stdin, never one from argv (AUTH-4.53).
 
 use std::io::{self, Read};
 
@@ -18,21 +19,26 @@ pub fn session(c: &CommandLine) -> Result<(), Stop> {
     if let Some(close) = c.value("--close") {
         // THE TOKEN IS NEVER AN ARGV VALUE (§2.2; AUTH-4.53; §9 item 29).
         if close != "-" {
-            return Err(Usage("--close takes `-` and reads the token from stdin (or SKEP_SESSION); a token given as a flag value is refused — a command line is world-readable and outlives the run in shell history".into()).into());
+            return Err(Usage("--close takes `-` and ends the token in SKEP_SESSION where it is set — stdin then unread — else the one read from stdin; a token given as a flag value is refused — a command line is world-readable and outlives the run in shell history".into()).into());
         }
-        // The token's bytes, judged whole: bytes that are not text are no
-        // token, and a read stdin refuses is a halt carrying its error —
-        // never a usage refusal, which is the flag's shape alone (§2.3).
-        let bytes = match session_env()? {
-            Some(t) => t.into_bytes(),
+        // The token: SKEP_SESSION's where it is set, judged by its own
+        // reader as every setting is (a value given badly is exit 2); else
+        // stdin's bytes, judged whole — bytes that are no token, and a read
+        // stdin refuses, are a state the read came to (exit 3), never a
+        // usage refusal, which is the command line's shape alone (§2.3).
+        let token = match session_env()? {
+            Some(token) => token,
             None => {
                 let mut bytes = Vec::new();
                 io::stdin().read_to_end(&mut bytes).map_err(|e| Halt::face("the token could not be read from stdin", e.to_string(), "pipe the token in, or set SKEP_SESSION"))?;
-                bytes
+                std::str::from_utf8(&bytes).ok().and_then(Token::parse).ok_or_else(|| {
+                    Halt::face(
+                        "the bytes read from stdin are not a session token",
+                        "a session token is 32 lowercase hex, as `skep session` printed it",
+                        "pipe the token `skep session` printed, and nothing beside it",
+                    )
+                })?
             }
-        };
-        let Some(token) = std::str::from_utf8(&bytes).ok().and_then(Token::parse) else {
-            return Err(Usage("the token read is not a session token (32 lowercase hex)".into()).into());
         };
         if board.session_close(&token)?.already_dead {
             talk("the token was already dead (the death signal rode the 204): a restart, a retirement, a block, a genesis at the account, or an earlier close ended it");

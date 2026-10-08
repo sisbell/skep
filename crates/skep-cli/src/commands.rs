@@ -4,21 +4,23 @@
 //! walk a library call — and what they share, private here and so visible
 //! to each of them: the two streams, stdout DATA (`data`, `data_verbatim`,
 //! `--help`'s text among what they carry) and stderr TALK (`talk`, the
-//! terminal's line writer, which the prompts share) (§2.4), each inert to
-//! the terminal reading it (`c0_inert`; the terminal's `inert`), a DATA
-//! write stdout refuses a halt and a TALK line stderr refuses dropped,
-//! neither a panic; the stops and §2.3's exit codes (`Stop`, and `finish`,
-//! the one place a stop's block and its code are chosen — `main`'s refusal
-//! of a command line it cannot parse among them; `require_terminal`, the
-//! person doors' check, whose refusal is a halt naming the [`Door`]'s own
-//! moments); the plumbing from the flags to a board, a store, a payload
-//! read to its cap ([`MAX_PAYLOAD_BYTES`]), a principal and a key; the
-//! anchor boxes' per-run default ([`BoxDefault`]); the three facts' one
-//! spelling (`print_facts`); the outstanding-act line `keygen` and
-//! `fingerprint` share (`OUTSTANDING_ACT`); and the whole-set compare, from
-//! the held set to its halt (`held_set`, `compare_genesis`). A halt is one
-//! block on stderr: the state, its cause, the one act (AUTH-5.66;
-//! AUTH-5.67's key-file cell naming the path and the state).
+//! terminal's line writer, which the prompts share) (§2.4) — TALK rendered
+//! inert to the terminal reading it (the terminal's `inert`), and a DATA
+//! line its C0 controls (`c0_inert`); a DATA write stdout refuses a halt
+//! and a TALK line stderr refuses dropped, neither a panic; the stops and
+//! §2.3's exit codes (`Stop`, and `finish`, the one place a stop's block
+//! and its code are chosen — `main`'s refusal of a command line it cannot
+//! parse among them; `require_terminal`, the person doors' check, whose
+//! refusal is a halt naming the [`Door`]'s own moments); the plumbing from
+//! the flags to a board, a store, a payload read to its cap
+//! ([`MAX_PAYLOAD_BYTES`]), a principal and a key — a key file refused
+//! where a walk takes none (`require_no_key_file`); the anchor boxes'
+//! per-run default ([`BoxDefault`]); the three facts' one spelling
+//! (`print_facts`); the outstanding-act line `keygen` and `fingerprint`
+//! share (`OUTSTANDING_ACT`); and the whole-set compare, from the held set
+//! to its halt (`held_set`, `compare_genesis`). A halt is one block on
+//! stderr: the state, its cause, the one act (AUTH-5.66; AUTH-5.67's
+//! key-file cell naming the path and the state).
 
 mod accept;
 mod bind;
@@ -166,14 +168,16 @@ fn data(line: impl AsRef<str>) -> Result<(), Halt> {
 
 /// A DATA line as stdout may carry it: every C0 control — the line break
 /// among them — rendered as its code point (`render_inert`'s spelling), so
-/// a byte a board chose neither acts on the terminal reading stdout nor
-/// forges a second line for the script reading it. No line this binary
-/// composes holds one: a record's encoder escapes exactly the C0 controls
-/// (AUTH-2.130 clause 3), the three facts are address text, an integer and
-/// an origin, hex is hex, and a fingerprint's two grouped lines are two
-/// DATA lines. DEL and a bidi control stand: a record carries a label's
-/// verbatim — AUTH-1.24 admits both, and its encoder escapes neither — and
-/// neither moves a terminal's cursor.
+/// a byte a board chose forges no second line for the script reading
+/// stdout, and opens no 7-bit escape sequence on the terminal reading it,
+/// ESC being a C0 control. No line this binary composes holds one: a
+/// record's encoder escapes exactly the C0 controls (AUTH-2.130 clause 3),
+/// the three facts are address text, an integer and an origin, hex is hex,
+/// and a fingerprint's two grouped lines are two DATA lines. DEL, a bidi
+/// control and a C1 control stand: a record carries a label's verbatim —
+/// AUTH-1.24 admits all three, and its encoder escapes none — so a
+/// terminal reading stdout that interprets the 8-bit C1 controls, as some
+/// do, meets one a board chose as it came.
 fn c0_inert(line: &str) -> Cow<'_, str> {
     let c0 = |c: char| c < ' ';
     if !line.contains(c0) {
@@ -282,12 +286,30 @@ fn principal_or_bound(given: Option<u64>, store: &FileStore, board: &Board) -> R
     }
 }
 
+/// The check a walk that takes no key file makes (`enroll`'s and
+/// `retire`'s, which select their key from the store's lookup alone):
+/// §3.5 owes `--key` (or `SKEP_KEY`) the lookup's first arm at those
+/// commands, so a key file named there is refused — a usage refusal, ahead
+/// of the door — never dropped for a key the person did not name.
+fn require_no_key_file(c: &CommandLine) -> Result<(), Usage> {
+    match c.key_file()? {
+        Some(_) => Err(Usage(format!(
+            "`--key` (or SKEP_KEY) names a key file, and `skep {}` selects its key from the store's lookup alone in this build: run it without either",
+            c.command
+        ))),
+        None => Ok(()),
+    }
+}
+
 /// The key file `key_file` names — `CommandLine::key_file`'s answer, its
 /// refusal already returned as exit 2 by the caller — else the store's key
 /// for this board and principal (§3.5's lookup), its public facts judged for
 /// `purpose`: an anchor file refused where the key signs and read where it
 /// does not (§2.2's selection test; P11); its signer the store's
-/// (`KeyStore::signer`); the arm-4 face forked on the claimant.
+/// (`KeyStore::signer`). Where no key is selected, the arm-4 face forks on
+/// the claimant, a `/health` read of its own (§3.5 arm 4): a board that
+/// does not answer speaks first, its transport halt in place of the store's
+/// face.
 fn select_key(key_file: Option<&Path>, store: &FileStore, board: &Board, principal: u64, purpose: Purpose) -> Result<KeyFacts, Halt> {
     let sel = match key_file {
         Some(path) => store.select(&KeySelector::Path(path), purpose),
@@ -310,27 +332,30 @@ struct BoxDefault {
 }
 
 /// This run's [`BoxDefault`]: the machine's host name and today's date in
-/// UTC. The name is the first that answers on §6's three platforms:
-/// `COMPUTERNAME` (Windows), `HOSTNAME` (where a shell exports it),
-/// `/etc/hostname` (Linux), then the `hostname` command's first line
-/// (macOS) — cut at its first dot and lowercased, `this-machine` where none
-/// answers.
+/// UTC. The name is the first source's name ([`host_name_of`]) that is not
+/// empty, on §6's three platforms: `COMPUTERNAME` (Windows), `HOSTNAME`
+/// (where a shell exports it), `/etc/hostname` (Linux), then the `hostname`
+/// command's output (macOS) — `this-machine` where none answers. So the
+/// name is never empty, never holds a dot and is lowercase.
 fn host_name_and_date() -> BoxDefault {
     let host_name = std::env::var("COMPUTERNAME")
         .ok()
-        .and_then(first_line)
-        .or_else(|| std::env::var("HOSTNAME").ok().and_then(first_line))
-        .or_else(|| std::fs::read_to_string("/etc/hostname").ok().and_then(first_line))
-        .or_else(|| std::process::Command::new("hostname").output().ok().and_then(|out| String::from_utf8(out.stdout).ok()).and_then(first_line))
+        .and_then(host_name_of)
+        .or_else(|| std::env::var("HOSTNAME").ok().and_then(host_name_of))
+        .or_else(|| std::fs::read_to_string("/etc/hostname").ok().and_then(host_name_of))
+        .or_else(|| std::process::Command::new("hostname").output().ok().and_then(|out| String::from_utf8(out.stdout).ok()).and_then(host_name_of))
         .unwrap_or_else(|| "this-machine".to_string());
-    let host_name = host_name.split('.').next().unwrap_or("this-machine").to_lowercase();
     let secs = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
     BoxDefault { host_name, date: civil_date(secs) }
 }
 
-/// A host-name source's first line, trimmed; `None` where it is empty.
-fn first_line(text: String) -> Option<String> {
-    Some(text.lines().next().unwrap_or("").trim().to_string()).filter(|h| !h.is_empty())
+/// A host-name source's name: its first line, trimmed, cut at its first dot
+/// and lowercased — `None` where that leaves nothing, a source of `.local`
+/// as much as an empty one, so the next source is asked.
+fn host_name_of(text: String) -> Option<String> {
+    let line = text.lines().next().unwrap_or_default().trim();
+    let name = line.split_once('.').map_or(line, |(name, _)| name).to_lowercase();
+    Some(name).filter(|name| !name.is_empty())
 }
 
 /// `yyyy-mm-dd` from unix seconds (Howard Hinnant's civil-from-days).
@@ -473,9 +498,11 @@ mod tests {
 
     #[test]
     fn the_host_name_is_a_sources_first_line_cut_and_lowercased() {
-        assert_eq!(first_line("notebook.local\nsecond\n".into()).as_deref(), Some("notebook.local"));
-        assert_eq!(first_line("  \n".into()), None, "an empty source answers nothing, and the next is asked");
-        assert_eq!(first_line(String::new()), None);
+        assert_eq!(host_name_of("Notebook.local\nsecond\n".into()).as_deref(), Some("notebook"));
+        assert_eq!(host_name_of(" Notebook \n".into()).as_deref(), Some("notebook"));
+        assert_eq!(host_name_of(".local\n".into()), None, "a name the cut leaves empty answers nothing, and the next source is asked");
+        assert_eq!(host_name_of("  \n".into()), None, "an empty source answers nothing, and the next is asked");
+        assert_eq!(host_name_of(String::new()), None);
         let BoxDefault { host_name: host, date } = host_name_and_date();
         assert!(!host.is_empty() && !host.contains('.') && host == host.to_lowercase(), "{host}");
         assert_eq!(civil_date(0), "1970-01-01");

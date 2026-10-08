@@ -2,9 +2,10 @@
 //! `from_env`). A command line opens with its [`Command`], one of §2.1's
 //! thirteen, and is judged against THE GRAMMAR, one row per command beside
 //! `HELP`, the text that documents it: a flag in no row, a flag of another
-//! command's, a missing value and a second value of a flag that takes one
-//! are usage refusals (§2.3's exit 2 — the flag's SHAPE alone), and so is
-//! an argument that is not UTF-8 text, refused as a variable's is. Every
+//! command's, a missing value, a second value of a flag that takes one, a
+//! flag outside the form of its command that reads it, and two forms at
+//! once are usage refusals (§2.3's exit 2 — the flag's SHAPE alone), and so
+//! is an argument that is not UTF-8 text, refused as a variable's is. Every
 //! setting is read through `CommandLine::setting`, the one place a flag
 //! beats its environment variable, and its reader — named for what it
 //! answers, an origin, a store's directory, a key file's path, a principal
@@ -22,6 +23,7 @@ use std::ffi::OsString;
 use std::fmt;
 use std::path::PathBuf;
 
+use skep_client::board::Token;
 use skep_client::Origin;
 
 /// A usage refusal: what is wrong with the command line, one sentence that
@@ -107,7 +109,8 @@ pub struct CommandLine {
 /// beside them, is every command's too.
 const GLOBAL: [&str; 5] = ["--board", "--dir", "--key", "--principal", "--label"];
 
-/// One command's flags beyond the [`GLOBAL`] ones.
+/// One command's flags beyond the [`GLOBAL`] ones, and the rules its forms
+/// hold them to.
 struct Row {
     command: Command,
     /// The flags that take one value.
@@ -116,27 +119,115 @@ struct Row {
     repeated: &'static [&'static str],
     /// The switches beside `--json`.
     switches: &'static [&'static str],
+    /// The rules the command's FORMS hold its row's flags to — each naming
+    /// flags of this row alone — so no flag reaches a run whose form drops
+    /// it.
+    forms: &'static [Form],
+}
+
+/// One rule a FORM of a command holds its row's flags to, judged once the
+/// whole line is read: a run reads a flag only in the form it belongs to,
+/// so a flag outside its form, or beside another form's, would be accepted
+/// and dropped (§2.3's exit 2 refuses it instead).
+#[derive(Clone, Copy, Debug)]
+enum Form {
+    /// The flag belongs to the form the second flag opens: refused without
+    /// it.
+    Within(&'static str, &'static str),
+    /// The two flags belong to two forms of the command: refused together.
+    Apart(&'static str, &'static str),
+    /// Inside the form the second flag opens, the first names one value.
+    OnceWithin(&'static str, &'static str),
+    /// Given at most this many times: the backup moment exports two
+    /// anchors, and reads a label and a destination for each (§4.2).
+    AtMost(&'static str, usize),
+}
+
+impl Form {
+    /// The refusal `line` meets at this rule, where it breaks it; `None`
+    /// where it keeps it.
+    fn refusal(self, line: &CommandLine) -> Option<Usage> {
+        let command = line.command;
+        let text = match self {
+            Form::Within(flag, opener) if line.given(flag) && !line.given(opener) => format!("`{flag}` belongs to `{command} {opener}` and is refused without `{opener}`"),
+            Form::Apart(a, b) if line.given(a) && line.given(b) => format!("`{a}` and `{b}` belong to two forms of `{command}`: give one"),
+            Form::OnceWithin(flag, opener) if line.values(flag).len() > 1 && line.given(opener) => format!("`{flag}` is given at most once at `{command} {opener}`"),
+            Form::AtMost(flag, most) if line.values(flag).len() > most => format!("`{flag}` is given at most {most} times at `{command}`"),
+            _ => return None,
+        };
+        Some(Usage(text))
+    }
 }
 
 /// THE GRAMMAR: the thirteen commands (`client.md` §2.1's IN set), each with
-/// the flags §2.2 gives it and `HELP` documents. `--payload` takes a value
-/// where it names a file or `-`, and is a SWITCH at `keygen` and
-/// `fingerprint`, where it prints. `--yes` is in no row: a retirement's
-/// confirmation is a typed answer at the terminal, never a flag (AUTH-5.46).
+/// the flags §2.2 gives it and `HELP` documents, and the rules its forms
+/// hold them to — the forms the record's synopses draw: `keygen --anchors`
+/// (§2.2), `claim`'s notebook walk or `--hosted` (§4.5), `enroll`'s walk or
+/// `--reply`, `recover`'s device arm or `--anchor-lost` (§4a.6),
+/// `handoff --payload` (§4c.2), and `accept`'s pair, its decline
+/// (`--no-anchors`) or `--reprint` (§4c.1), whose synopsis requires the
+/// `--account` it reads nowhere. `--payload` takes a value where it names a
+/// file or `-`, and is a SWITCH at `keygen` and `fingerprint`, where it
+/// prints. `--yes` is in no row: a retirement's confirmation is a typed
+/// answer at the terminal, never a flag (AUTH-5.46).
 const GRAMMAR: [Row; 13] = [
-    Row { command: Command::Keygen, once: &[], repeated: &["--anchor-label", "--anchor-out"], switches: &["--payload", "--anchors", "--paper"] },
-    Row { command: Command::Claim, once: &["--name", "--hosted"], repeated: &["--anchor-out"], switches: &["--paper"] },
-    Row { command: Command::Session, once: &["--close"], repeated: &[], switches: &[] },
-    Row { command: Command::Fingerprint, once: &["--select"], repeated: &[], switches: &["--payload"] },
-    Row { command: Command::Verify, once: &["--payload"], repeated: &["--anchor"], switches: &[] },
-    Row { command: Command::Health, once: &[], repeated: &[], switches: &[] },
-    Row { command: Command::Bind, once: &["--account", "--payload"], repeated: &["--anchor"], switches: &[] },
-    Row { command: Command::Enroll, once: &["--payload", "--reply"], repeated: &[], switches: &[] },
-    Row { command: Command::Recover, once: &["--anchor"], repeated: &["--lost", "--anchor-out"], switches: &["--stolen", "--anchor-lost", "--paper"] },
-    Row { command: Command::Retire, once: &["--fingerprint"], repeated: &[], switches: &[] },
-    Row { command: Command::Rotate, once: &["--payload"], repeated: &[], switches: &[] },
-    Row { command: Command::Handoff, once: &["--account", "--payload", "--anchor"], repeated: &[], switches: &[] },
-    Row { command: Command::Accept, once: &["--account"], repeated: &["--anchor-out", "--anchor"], switches: &["--paper", "--no-anchors", "--reprint"] },
+    Row {
+        command: Command::Keygen,
+        once: &[],
+        repeated: &["--anchor-label", "--anchor-out"],
+        switches: &["--payload", "--anchors", "--paper"],
+        forms: &[
+            Form::Within("--anchor-label", "--anchors"),
+            Form::Within("--anchor-out", "--anchors"),
+            Form::Within("--paper", "--anchors"),
+            Form::AtMost("--anchor-label", 2),
+            Form::AtMost("--anchor-out", 2),
+        ],
+    },
+    Row {
+        command: Command::Claim,
+        once: &["--name", "--hosted"],
+        repeated: &["--anchor-out"],
+        switches: &["--paper"],
+        forms: &[Form::Apart("--hosted", "--name"), Form::Apart("--hosted", "--anchor-out"), Form::Apart("--hosted", "--paper"), Form::AtMost("--anchor-out", 2)],
+    },
+    Row { command: Command::Session, once: &["--close"], repeated: &[], switches: &[], forms: &[] },
+    Row { command: Command::Fingerprint, once: &["--select"], repeated: &[], switches: &["--payload"], forms: &[] },
+    Row { command: Command::Verify, once: &["--payload"], repeated: &["--anchor"], switches: &[], forms: &[] },
+    Row { command: Command::Health, once: &[], repeated: &[], switches: &[], forms: &[] },
+    Row { command: Command::Bind, once: &["--account", "--payload"], repeated: &["--anchor"], switches: &[], forms: &[] },
+    Row { command: Command::Enroll, once: &["--payload", "--reply"], repeated: &[], switches: &[], forms: &[Form::Apart("--reply", "--payload")] },
+    Row {
+        command: Command::Recover,
+        once: &["--anchor"],
+        repeated: &["--lost", "--anchor-out"],
+        switches: &["--stolen", "--anchor-lost", "--paper"],
+        forms: &[
+            Form::Within("--anchor-out", "--anchor-lost"),
+            Form::Within("--paper", "--anchor-lost"),
+            Form::Apart("--anchor-lost", "--stolen"),
+            Form::OnceWithin("--lost", "--anchor-lost"),
+            Form::AtMost("--anchor-out", 2),
+        ],
+    },
+    Row { command: Command::Retire, once: &["--fingerprint"], repeated: &[], switches: &[], forms: &[] },
+    Row { command: Command::Rotate, once: &["--payload"], repeated: &[], switches: &[], forms: &[] },
+    Row { command: Command::Handoff, once: &["--account", "--payload", "--anchor"], repeated: &[], switches: &[], forms: &[Form::Within("--anchor", "--payload")] },
+    Row {
+        command: Command::Accept,
+        once: &["--account"],
+        repeated: &["--anchor-out", "--anchor"],
+        switches: &["--paper", "--no-anchors", "--reprint"],
+        forms: &[
+            Form::Within("--anchor", "--reprint"),
+            Form::Apart("--reprint", "--anchor-out"),
+            Form::Apart("--reprint", "--paper"),
+            Form::Apart("--reprint", "--no-anchors"),
+            Form::Apart("--no-anchors", "--anchor-out"),
+            Form::Apart("--no-anchors", "--paper"),
+            Form::AtMost("--anchor-out", 2),
+        ],
+    },
 ];
 
 /// The help text: the thirteen commands, each as the design writes it, and
@@ -149,9 +240,10 @@ usage: skep <command> [flags]
   claim        claim a board: the notebook walk (a person door), or
                --hosted <payload|-> the dark claim for a hosted customer
   session      open a CONTENT-scoped signed session and print the token;
-               --close - ends the token read from stdin (or SKEP_SESSION)
-  fingerprint  list the store's keys (--select <fp-prefix|label>, --key
-               <path>, --payload, --json)
+               --close - ends the token in SKEP_SESSION where it is set
+               (stdin then unread), else the one read from stdin
+  fingerprint  list the store's keys, or the one --select or --key names
+               (never both); --payload, --json
   verify       the pre-check as a command: the origin arm, the key arm, and
                with --payload/--anchor the whole-set compare; exit 0/3
   health       GET /health verbatim on stdout; the derived mode on stderr
@@ -178,30 +270,38 @@ usage: skep <command> [flags]
 flags:
   --board <origin>      the board, a canonical origin (env SKEP_BOARD)
   --dir <path>          the key store (env SKEP_KEYSTORE; default ~/.skep)
-  --key <path>          one key file, bypassing the store's lookup
-                        (env SKEP_KEY); an anchor file is refused where the
-                        key signs; not consulted at claim and recover
+  --key <path>          one key file, bypassing the store's lookup (env
+                        SKEP_KEY): read at session, verify, bind,
+                        fingerprint and accept --reprint, an anchor file
+                        refused where the key signs; refused where enroll
+                        and retire sign, their walks taking none yet; not
+                        consulted elsewhere
   --principal <n>       the principal (env SKEP_PRINCIPAL); may be omitted
-                        where the store holds one binding at the board
+                        where the store holds one binding at the board; at
+                        claim, the new account's id, 1 where omitted
   --label <text>        a byline (keygen, rotate, accept)
   --json                one JSON document on stdout (verify, health,
                         fingerprint)
-  keygen:   --payload  --anchors  --anchor-label <l> (twice)
-            --anchor-out <dir> (once per anchor)  --paper
-  claim:    --name <display name>  --anchor-out <dir> (once per anchor)
-            --paper  --hosted <payload|->
+  keygen:   [--payload]  [--anchors, and with it  [--paper]
+            [--anchor-label <l>]... (two at most)
+            [--anchor-out <dir>]... (one per anchor, two at most)]
+  claim:    [--name <display name>]  [--anchor-out <dir>]... (two at
+            most)  [--paper]; or --hosted <payload|-> without them
   session:  --close -
-  fingerprint: --select <fp-prefix|label>  --payload
+  fingerprint: [--select <fp-prefix|label>, or --key <path>; never both]
+            [--payload]
   verify:   --payload <file|->  --anchor <path> (once per anchor)
   bind:     --account <address>  --payload <reply|->  --anchor <path>
-  enroll:   --payload <file|->  [--reply <fp-prefix>]
-  recover:  [--anchor <path>]  [--lost <fp-prefix>]...  [--stolen]
-            [--anchor-lost [--anchor-out <dir>] [--paper]]
+  enroll:   --payload <file|->; or --reply <fp-prefix> without it
+  recover:  [--anchor <path>]  [--lost <fp-prefix>]...  [--stolen]; or
+            --anchor-lost  [--anchor <path>]  [--lost <fp-prefix>]
+            [--anchor-out <dir>]... (two at most)  [--paper]
   retire:   --fingerprint <fp-prefix>
   rotate:   [--label <l>]  [--payload <file|->]
-  handoff:  --account <address>  [--payload <file|->]  [--anchor <path>]
-  accept:   --account <address>  [--label <l>]  [--anchor-out <dir>]
-            [--paper]  [--no-anchors]  [--reprint [--anchor <path>]...]
+  handoff:  --account <address>  [--payload <file|->  [--anchor <path>]]
+  accept:   --account <address>  [--label <l>], and the pair
+            ([--anchor-out <dir>]... (two at most)  [--paper]) or its
+            decline (--no-anchors); or --reprint  [--anchor <path>]...
 
 exit codes: 0 done, 1 the board refused, 2 usage, 3 halt and surface,
 4 transport. stdout carries data; stderr carries talk. No --yes exists:
@@ -209,7 +309,10 @@ a retirement's confirmation is typed at the terminal.
 ";
 
 /// The command line after the program's name, as the platform carries it:
-/// each argument taken as UTF-8 text, or refused naming it.
+/// each argument taken as UTF-8 text, or refused naming it. Judged in two
+/// passes, and where several refusals hold the first met speaks: each
+/// argument as it is read, against its command's row; then, the line read
+/// whole, the rules of the row's forms, in the row's order.
 pub fn parse(argv: impl IntoIterator<Item = OsString>) -> Result<Parsed, Usage> {
     let mut argv = argv.into_iter().map(|arg| arg.into_string().map_err(|arg| Usage(format!("the argument '{}' is not UTF-8 text", arg.to_string_lossy()))));
     let Some(first) = argv.next().transpose()? else { return Err(Usage("a command is required".into())) };
@@ -241,13 +344,21 @@ pub fn parse(argv: impl IntoIterator<Item = OsString>) -> Result<Parsed, Usage> 
         }
         return Err(Usage(format!("unknown argument `{arg}`")));
     }
-    Ok(Parsed::CommandLine(line))
+    match row.forms.iter().find_map(|form| form.refusal(&line)) {
+        Some(refusal) => Err(refusal),
+        None => Ok(Parsed::CommandLine(line)),
+    }
 }
 
 impl CommandLine {
     /// Whether a switch was given.
     pub fn switch(&self, flag: &str) -> bool {
         self.switches.iter().any(|s| s == flag)
+    }
+
+    /// Whether a flag was given — a switch, or a flag with its value.
+    fn given(&self, flag: &str) -> bool {
+        self.switch(flag) || self.values.contains_key(flag)
     }
 
     /// Every value a flag that repeats was given, in order — lent: a caller
@@ -329,11 +440,13 @@ pub fn parse_principal(text: &str) -> Option<u64> {
     text.parse::<u64>().ok().filter(|n| *n <= MAX_PRINCIPAL)
 }
 
-/// `SKEP_SESSION`, the token `session --close -` ends in place of stdin —
-/// the one setting no flag carries: a token is never an argv value (§2.2;
-/// AUTH-4.53; §9 item 29).
-pub fn session_env() -> Result<Option<String>, Usage> {
-    env_text("SKEP_SESSION")
+/// `SKEP_SESSION`, the token `session --close -` ends where it is set — its
+/// stdin then unread — the one setting no flag carries: a token is never an
+/// argv value (§2.2; AUTH-4.53; §9 item 29). A value that is no session
+/// token is a setting given badly, refused here as one not UTF-8 text is.
+pub fn session_env() -> Result<Option<Token>, Usage> {
+    let Some(text) = env_text("SKEP_SESSION")? else { return Ok(None) };
+    Token::parse(&text).map(Some).ok_or_else(|| Usage("SKEP_SESSION: the value is not a session token (32 lowercase hex)".into()))
 }
 
 /// A `SKEP_*` variable's text, `None` where it is unset or set empty; a
@@ -348,158 +461,4 @@ fn env_text(var: &str) -> Result<Option<String>, Usage> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn argv(a: &[&str]) -> Vec<OsString> {
-        a.iter().copied().map(OsString::from).collect()
-    }
-
-    fn refusal(a: &[&str]) -> String {
-        match parse(argv(a)) {
-            Err(Usage(text)) => text,
-            Ok(_) => panic!("{a:?} parsed"),
-        }
-    }
-
-    #[test]
-    fn a_command_line_parses_and_each_malformed_part_is_refused() {
-        let Parsed::CommandLine(c) = parse(argv(&["claim", "--board", "http://127.0.0.1:8642", "--anchor-out", "/a", "--anchor-out", "/b", "--paper"])).unwrap() else { panic!() };
-        assert_eq!(c.command, Command::Claim);
-        assert_eq!(c.values("--anchor-out"), ["/a", "/b"]);
-        assert!(c.switch("--paper"));
-        assert_eq!(c.origin().unwrap().as_str(), "http://127.0.0.1:8642");
-        assert!(parse(argv(&["frobnicate"])).is_err(), "an unknown command is refused");
-        assert!(parse(argv(&["session", "--board"])).is_err(), "a flag without its value is refused");
-        assert!(parse(argv(&["health", "--frob"])).is_err(), "an unknown flag is refused");
-        assert!(matches!(parse(argv(&["--help"])).unwrap(), Parsed::Help));
-        let Parsed::CommandLine(c) = parse(argv(&["recover", "--lost", "ab", "--lost", "cd", "--stolen", "--anchor", "/a"])).unwrap() else { panic!() };
-        assert_eq!(c.values("--lost"), ["ab", "cd"], "--lost is repeatable");
-        assert!(c.switch("--stolen"));
-        assert!(parse(argv(&["retire", "--yes"])).is_err(), "--yes does not exist: a typed answer, never a flag");
-        let Parsed::CommandLine(c) = parse(argv(&["keygen", "--payload"])).unwrap() else { panic!() };
-        assert!(c.switch("--payload"), "a switch at keygen");
-        let Parsed::CommandLine(c) = parse(argv(&["verify", "--payload", "-", "--board", "HTTP://x", "--principal", "7x"])).unwrap() else { panic!() };
-        assert_eq!(c.values("--payload"), ["-"], "a value at verify");
-        assert!(c.origin().is_err(), "a non-canonical board is a usage refusal");
-        assert!(c.origin_given().is_err(), "a board given badly is refused, never read as one not given");
-        assert!(c.principal().is_err(), "a principal given badly is refused, never read as one not given");
-        let Parsed::CommandLine(c) = parse(argv(&["accept", "--board", "http://127.0.0.1:8642", "--principal", "7"])).unwrap() else { panic!() };
-        assert_eq!(c.origin_given().unwrap().map(|o| o.as_str().to_string()), Some("http://127.0.0.1:8642".to_string()));
-        assert_eq!(c.principal().unwrap(), Some(7));
-    }
-
-    /// A principal is an integer JSON carries exactly (AUTH-6.36): `2^53 − 1`
-    /// reads, `2^53` and anything not an integer are none — at the flag as
-    /// in a reply, through the one grammar.
-    #[test]
-    fn a_principal_past_the_wires_range_is_none() {
-        assert_eq!(parse_principal("9007199254740991"), Some(MAX_PRINCIPAL));
-        assert_eq!(parse_principal("0"), Some(0));
-        for none in ["9007199254740992", "18446744073709551615", "-1", "7x", ""] {
-            assert_eq!(parse_principal(none), None, "`{none}`");
-        }
-        let Parsed::CommandLine(c) = parse(argv(&["verify", "--principal", "9007199254740992"])).unwrap() else { panic!() };
-        assert!(c.principal().is_err(), "past the range at the flag is a usage refusal, never read as one not given");
-    }
-
-    /// THE GRAMMAR: a flag of another command's is refused naming the
-    /// command, never accepted and dropped; a second value of a flag that
-    /// takes one is refused, never the last one standing; a flag that
-    /// repeats keeps every value; and every flag a row names is one `HELP`
-    /// documents.
-    #[test]
-    fn each_command_takes_its_own_flags_and_a_flag_that_takes_one_value_takes_one() {
-        assert_eq!(refusal(&["health", "--fingerprint", "ab"]), "`--fingerprint` is not a flag of `health`");
-        assert_eq!(refusal(&["verify", "--anchor-out", "/d"]), "`--anchor-out` is not a flag of `verify`");
-        assert_eq!(refusal(&["retire", "--yes"]), "unknown argument `--yes`", "a flag of no command's is unknown");
-        assert_eq!(refusal(&["recover", "--anchor", "/a", "--anchor", "/b"]), "`--anchor` is given at most once at `recover`");
-        assert_eq!(refusal(&["session", "--principal", "1", "--principal", "2"]), "`--principal` is given at most once at `session`", "a setting takes one value");
-        let Parsed::CommandLine(c) = parse(argv(&["verify", "--anchor", "/a", "--anchor", "/b", "--json"])).unwrap() else { panic!() };
-        assert_eq!(c.values("--anchor"), ["/a", "/b"], "--anchor repeats at verify");
-        assert!(c.switch("--json"), "--json is every command's");
-        let Parsed::CommandLine(c) = parse(argv(&["keygen", "--label", "phone", "--dir", "/s"])).unwrap() else { panic!() };
-        assert_eq!(c.value("--label"), Some("phone"), "the settings and --label are every command's");
-        // A flag named whole: `--anchor` in `--anchor <path>`, never in
-        // `--anchor-out`.
-        let documented = |flag: &str| HELP.match_indices(flag).any(|(i, _)| !HELP[i + flag.len()..].starts_with(|c: char| c.is_ascii_alphanumeric() || c == '-'));
-        for row in &GRAMMAR {
-            for &flag in row.once.iter().chain(row.repeated).chain(row.switches).chain(&GLOBAL) {
-                assert!(documented(flag), "`{flag}` of `{}` is documented in HELP", row.command);
-            }
-            assert!(HELP.contains(&format!("\n  {} ", row.command)), "`{}` is listed in HELP", row.command);
-        }
-    }
-
-    /// THE GRAMMAR from `HELP`'s side: every flag `HELP` shows at a command
-    /// — in its description or its flags line — is one that command's parser
-    /// takes, and every flag it lists for all commands is one each takes; so
-    /// a person following `--help` never meets exit 2 for a flag it showed.
-    #[test]
-    fn every_flag_help_shows_at_a_command_is_one_its_parser_takes() {
-        let takes = |command: Command, flag: &str| match parse(argv(&[command.verb(), flag])) {
-            Ok(_) => true,
-            Err(Usage(text)) if text == format!("{flag} needs a value") => parse(argv(&[command.verb(), flag, "x"])).is_ok(),
-            Err(_) => false,
-        };
-        let flags = |line: &str| -> Vec<String> {
-            line.match_indices("--").map(|(i, _)| line[i..].chars().take_while(|c| *c == '-' || c.is_ascii_lowercase()).collect::<String>()).filter(|f| f.len() > 2).collect()
-        };
-        let (mut shown, mut every, mut at) = (Vec::new(), Vec::new(), None);
-        for line in HELP.lines().take_while(|l| !l.starts_with("exit codes:")) {
-            if let Some(row) = GRAMMAR.iter().find(|r| line.starts_with(&format!("  {} ", r.command)) || line.starts_with(&format!("  {}:", r.command))) {
-                at = Some(row.command);
-            } else if line.starts_with("  --") {
-                at = None;
-                every.extend(flags(line));
-                continue;
-            } else if !line.starts_with("   ") {
-                at = None;
-            }
-            if let Some(command) = at {
-                shown.extend(flags(line).into_iter().map(|f| (command, f)));
-            }
-        }
-        assert!(
-            shown.contains(&(Command::Handoff, "--anchor".to_string())) && shown.contains(&(Command::Session, "--close".to_string())),
-            "the scan reads HELP's command sections: {shown:?}"
-        );
-        assert!(GLOBAL.iter().all(|g| every.iter().any(|e| e == g)) && every.iter().any(|e| e == "--json"), "the scan reads HELP's flags for all commands: {every:?}");
-        for (command, flag) in &shown {
-            assert!(takes(*command, flag), "HELP shows `{flag}` at `{command}`, and its parser refuses it");
-        }
-        for row in &GRAMMAR {
-            for flag in &every {
-                assert!(takes(row.command, flag), "HELP lists `{flag}` for every command, and `{}` refuses it", row.command);
-            }
-        }
-    }
-
-    /// Each row is one command's, opened by its own verb: no two rows share
-    /// a command, and every row's verb parses to that row's command.
-    #[test]
-    fn each_row_is_one_command_opened_by_its_verb() {
-        let commands: std::collections::HashSet<Command> = GRAMMAR.iter().map(|r| r.command).collect();
-        assert_eq!(commands.len(), GRAMMAR.len(), "no two rows share a command");
-        for row in &GRAMMAR {
-            let Parsed::CommandLine(c) = parse(argv(&[row.command.verb()])).unwrap() else { panic!("`{}` parsed as the help", row.command) };
-            assert_eq!(c.command, row.command);
-        }
-    }
-
-    /// An argument that is not UTF-8 text is refused naming it — as a
-    /// variable's is — wherever it stands: the command, a flag, a value.
-    #[cfg(unix)]
-    #[test]
-    fn an_argument_that_is_not_text_is_refused_naming_it() {
-        use std::os::unix::ffi::OsStringExt;
-
-        let not_text = || OsString::from_vec(b"store-\xff".to_vec());
-        for line in [vec![not_text()], vec!["keygen".into(), not_text()], vec!["keygen".into(), "--dir".into(), not_text()]] {
-            match parse(line) {
-                Err(Usage(text)) => assert_eq!(text, "the argument 'store-\u{fffd}' is not UTF-8 text"),
-                Ok(parsed) => panic!("parsed: {parsed:?}"),
-            }
-        }
-    }
-}
+mod tests;

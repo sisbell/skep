@@ -16,8 +16,9 @@
 #![forbid(unsafe_code)]
 
 // The thirteen `Command`s and the grammar — each command's flags and
-// switches, one row per command — beside `HELP`, and the settings, each
-// flag beating its environment variable.
+// switches and the rules its forms hold them to, one row per command —
+// beside `HELP`, and the settings, each flag beating its environment
+// variable.
 mod args;
 // The `Person` over the terminal: `answer`, the one reader every prompt
 // goes through, `talk`, the one writer of a line on stderr, rendering it

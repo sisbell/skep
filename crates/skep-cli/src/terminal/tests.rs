@@ -48,16 +48,18 @@ fn received_seed() -> String {
 }
 
 /// What the terminal is handed is INERT (AUTH-5.2): an escape, a carriage
-/// return, a bell and a bidi control each shown as its code point, the line
-/// breaks kept; the box's rules and its padding pass whole; and a text
-/// rendered once passes as it stands, so a label a walk rendered already
-/// is never rendered into another spelling.
+/// return, a bell, DEL, a C1 control and a bidi control each shown as its
+/// code point, the line breaks kept; the box's rules and its padding pass
+/// whole; and a text rendered once passes as it stands, so a label a walk
+/// rendered already is never rendered into another spelling.
 #[test]
 fn every_line_the_terminal_is_handed_is_inert() {
     assert_eq!(inert("a\x1b[2Jb\rc\nd\u{202e}e\x07"), "a<U+001B>[2Jb<U+000D>c\nd<U+202E>e<U+0007>");
+    assert_eq!(inert("f\u{9b}2Jg\u{7f}h\u{85}"), "f<U+009B>2Jg<U+007F>h<U+0085>", "the 8-bit CSI, DEL and NEL");
     let ruled = boxed(&["the seed".into(), "é—".into()]);
     assert_eq!(inert(&ruled), ruled, "the box passes whole");
     assert_eq!(inert(&inert("\x1b]52;c;cHduZWQ=\x07")), inert("\x1b]52;c;cHduZWQ=\x07"), "rendered twice, the same");
+    assert_eq!(inert(&inert("\u{9d}0;title\u{9c}")), inert("\u{9d}0;title\u{9c}"), "C1 rendered twice, the same");
 }
 
 /// Every line of the box is padded to the widest, measured in chars: a

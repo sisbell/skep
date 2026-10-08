@@ -1,7 +1,8 @@
-//! `skep fingerprint` (`client.md` §2.2): the store's keys — every one, or
-//! the one `--select` or `--key` names — each with the bindings that name
-//! it, or the pending state where none does (AUTH-5.32); `--payload`
-//! re-prints a key's enrollment record, `--json` answers one document.
+//! `skep fingerprint` (`client.md` §2.2): the store's keys — every key in
+//! the store, or the one `--select` names in it, or the one file `--key`
+//! (or `SKEP_KEY`) names, never two — each with the bindings that name it,
+//! or the pending state where none does (AUTH-5.32); `--payload` re-prints
+//! a key's enrollment record, `--json` answers one document.
 
 use skep_client::halt::Halt;
 use skep_client::sheet::{group_hex, render_inert};
@@ -9,7 +10,7 @@ use skep_client::store::{Binding, KeyFacts, KeySelector, Purpose, StoreError};
 use skep_identity::{encode_enroll, Enrollment};
 
 use super::{data, record_refused, store_of, Stop, OUTSTANDING_ACT};
-use crate::args::CommandLine;
+use crate::args::{CommandLine, Usage};
 
 /// The handoff recipient's clause of the outstanding-act line, its fourth
 /// (§2.2): the payload went to a GIVER who seeds an account with it, and the
@@ -20,14 +21,16 @@ const ACCEPT_CLAUSE: &str = "Where this key was made at `skep accept`: the outst
 
 pub fn fingerprint(c: &CommandLine) -> Result<(), Stop> {
     let store = store_of(c)?;
-    let key_file = c.key_file()?;
-    // An unreadable bindings file halts naming it: read as an empty one, it
-    // would list every key UNBOUND and name the wrong act.
-    let bindings = store.all_bindings()?;
-    let keys: Vec<KeyFacts> = if let Some(path) = key_file {
-        vec![store.select(&KeySelector::Path(&path), Purpose::Read)?]
-    } else if let Some(select) = c.value("--select") {
-        match store.select(&KeySelector::select(select), Purpose::Read) {
+    // The keys named: the one file `--key` (or `SKEP_KEY`) names, the one
+    // `--select` names in the store, or every key the store holds — two
+    // named at once refused, never one picked over the other (§2.2:
+    // selecting within a store is `--select`'s alone).
+    let keys: Vec<KeyFacts> = match (c.key_file()?, c.value("--select")) {
+        (Some(_), Some(_)) => {
+            return Err(Usage("`--select` names a key in the store and `--key` (or SKEP_KEY) names a key file: give one — SKEP_KEY set empty is unset".into()).into())
+        }
+        (Some(path), None) => vec![store.select(&KeySelector::Path(&path), Purpose::Read)?],
+        (None, Some(select)) => match store.select(&KeySelector::select(select), Purpose::Read) {
             Ok(k) => vec![k],
             Err(StoreError::Ambiguous { keys }) => {
                 let list: Vec<String> = keys.iter().map(|k| format!("{} {}", k.fingerprint, k.label.as_deref().map(render_inert).unwrap_or_default())).collect();
@@ -35,10 +38,12 @@ pub fn fingerprint(c: &CommandLine) -> Result<(), Stop> {
             }
             Err(StoreError::NotFound { select }) => return Err(Halt::face(format!("no key in the store matches `{select}`"), "the store's keys are listed by `skep fingerprint --dir`", "check the selector").into()),
             Err(e) => return Err(e.into()),
-        }
-    } else {
-        store.list()?
+        },
+        (None, None) => store.list()?,
     };
+    // An unreadable bindings file halts naming it: read as an empty one, it
+    // would list every key UNBOUND and name the wrong act.
+    let bindings = store.all_bindings()?;
     let any_enrollment_binding = bindings.iter().any(|b| matches!(b, Binding::Enrollment { .. }));
     let mut json_rows = Vec::new();
     for key in &keys {

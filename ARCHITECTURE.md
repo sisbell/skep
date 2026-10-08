@@ -868,12 +868,12 @@ them, each naming only those above it:
 
 - `args.rs` `Command`, one of the thirteen, the verb `main` dispatches
   on; the grammar — one row per command, its flags that take one value,
-  those that repeat and its switches, beside the flags every command takes
-  (`GLOBAL`) — with `HELP`, the text that documents it; and `CommandLine`,
-  one parsed command line, its values lent to the commands that read
-  them, its settings each read through `CommandLine::setting`, the one
-  place a flag beats its `SKEP_*` variable, with `session_env` the one
-  setting no flag carries.
+  those that repeat and its switches, and the rules its forms hold them to
+  (`Form`), beside the flags every command takes (`GLOBAL`) — with `HELP`,
+  the text that documents it; and `CommandLine`, one parsed command line,
+  its values lent to the commands that read them, its settings each read
+  through `CommandLine::setting`, the one place a flag beats its `SKEP_*`
+  variable, with `session_env` the one setting no flag carries.
 - `terminal.rs` `Terminal`, the `Person` over the terminal: every prompt on
   stderr, the sheet as a ruled box, the dismissal's clear, the anchor
   import's arm asked of the person and never guessed from what was typed —
@@ -894,13 +894,15 @@ them, each naming only those above it:
   `finish` renders; `require_terminal`, the check each `Door` makes;
   `help`, `--help`'s DATA), the plumbing from the flags to a board, a
   store, a payload (`read_payload`, to `MAX_PAYLOAD_BYTES`), a principal
-  and a key, the anchor boxes' per-run default (`BoxDefault`), the three
-  facts' one spelling (`print_facts`, the lines `bind` reads back from a
-  reply), the outstanding-act line `keygen` and `fingerprint` share, and
-  the whole-set compare from the held set to its halt (`held_set`,
-  `compare_genesis`). Beneath it, `commands/<name>.rs`, one file per
-  command, each the `pub fn <name>(&CommandLine) -> Result<(), Stop>`
-  that `main` dispatches to.
+  and a key — a key file refused where a walk takes none
+  (`require_no_key_file`) — the anchor boxes' per-run default
+  (`BoxDefault`), the three facts' one spelling (`print_facts`, the lines
+  `bind` reads back from a reply), the outstanding-act line `keygen` and
+  `fingerprint` share, and the whole-set compare from the held set to its
+  halt (`held_set`, `compare_genesis`). Beneath it, `commands/<name>.rs`,
+  one file per command, each the
+  `pub fn <name>(&CommandLine) -> Result<(), Stop>` that `main`
+  dispatches to.
 
 Rules that hold across its files:
 
@@ -913,15 +915,20 @@ Rules that hold across its files:
   not have — stands in `src/`. `tests/it/tidy.rs` checks it, and
   `tests/it/cli.rs` runs a command whose stdout has no reader, and one
   whose stderr has none.
-- **What reaches the terminal is inert.** Every TALK line and prompt is
-  rendered by `render_inert` (AUTH-5.2) line by line in `write_inert`, and
-  the dismissal's clear is the one escape written, a constant; a DATA line
-  renders every C0 control, the line break among them (`c0_inert`) — a
-  record's encoder escapes exactly those (AUTH-2.130 clause 3), so a
-  record passes whole. A byte a board, a reply or a file chose neither
-  acts on a terminal nor forges a line. `tests/it/tidy.rs` confines
-  stderr's handles to `write_inert` and `clear`, and `tests/it/hostile.rs`
-  runs the binary against boards answering escapes.
+- **What reaches the terminal is inert on stderr, and C0-free on
+  stdout.** Every TALK line and prompt is rendered line by line in
+  `write_inert` — every character AUTH-5.2 names, a control character (C0,
+  DEL and C1) or a bidi control: `render_inert`'s rendering and the C1
+  controls its set leaves out — and the dismissal's clear is the one escape
+  written, a constant. A DATA line renders every C0 control, the line
+  break among them (`c0_inert`) — a record's encoder escapes exactly those
+  (AUTH-2.130 clause 3), so a record passes whole, and DEL, a bidi control
+  and a C1 control stand on stdout as a label in it carries them. So a
+  control a board, a reply or a file chose acts on no terminal through
+  stderr, and through stdout forges no line and opens no 7-bit escape
+  sequence. `tests/it/tidy.rs` confines stderr's handles to `write_inert`
+  and `clear`, and `tests/it/hostile.rs` runs the binary against boards
+  answering 7-bit and 8-bit escapes.
 - **What a third party hands in is recognized whole, then used.** A
   payload argument is read no further than one byte past
   `MAX_PAYLOAD_BYTES` — a record at its cap (AUTH-1.18) and its line
@@ -940,14 +947,18 @@ Rules that hold across its files:
   `recover`, `retire`, `rotate`, `handoff --payload` and `accept` without
   `--reprint` — each call `require_terminal` before anything is generated
   and, without one, halt (exit 3) naming the moments a person answers at
-  that door; the check is the CLI's, never a walk's (§2.4).
+  that door; the check is the CLI's, never a walk's (§2.4). Every usage
+  refusal of its command line — a required flag missing, a setting given
+  badly, a key file its walk cannot take — is judged ahead of it, so it
+  answers exit 2 whether a terminal stands there or not.
   `tests/it/cli.rs` and `tests/it/ceremonies.rs` run every door without a
   terminal, and `tests/it/ceremonies.rs` runs one under a pseudo-terminal,
   where it opens only with stdin and stderr both a terminal.
 - **The settings are `args.rs`'s.** Every `SKEP_*` variable is read there
   and nowhere else, which `tests/it/tidy.rs` checks; a session token is
-  never an argv value (`session --close -` reads stdin or `SKEP_SESSION`),
-  which `tests/it/cli.rs` checks.
+  never an argv value — `session --close -` ends the token in
+  `SKEP_SESSION` where it is set, stdin then unread, else the one read
+  from stdin — which `tests/it/cli.rs` checks.
 - **A command answers `Ok` or a `Stop`.** It names every stop with `?`,
   and `main` — its dispatch one arm per `Command`, which the compiler
   holds exhaustive — exits with `finish`'s rendering of it, a command
@@ -955,12 +966,21 @@ Rules that hold across its files:
   renderer or a code, nor ends the process. `commands.rs`'s unit test
   holds each stop to its code, and `tests/it/tidy.rs` checks that only
   `main` exits.
-- **A command takes its own flags.** A flag its row does not name is
-  refused, as is a second value of a flag that takes one, so no flag is
-  accepted and dropped; an argument that is not UTF-8 text is refused as
-  a variable's value is, never a panic. `args.rs`'s unit tests check it,
-  and that `HELP` documents every flag a row names; `tests/it/cli.rs`
-  runs the binary on an argument that is not text.
+- **A command takes its own flags, in the form that reads them.** A flag
+  its row does not name is refused, as is a second value of a flag that
+  takes one. A flag that belongs to one form of its command is refused
+  outside it, two flags of two forms are refused together, a flag that
+  names one value inside a form is refused a second, and the backup
+  moment's flags are refused past its two anchors — so no row flag reaches
+  a run whose form drops it. The flags §2.2 declares at every command
+  (`GLOBAL`, `--json`) are taken at each and read where `HELP` says, as
+  §2.2 has `claim` say of `--key`; `accept --reprint` takes the
+  `--account` §4c.1's synopsis requires and reads it nowhere. An argument
+  that is not UTF-8 text is refused as a variable's value is, never a
+  panic. `args.rs`'s unit tests check it, that `HELP` documents every flag
+  a row names, and that every flag `HELP` shows parses in its form;
+  `tests/it/cli.rs` runs the binary on an argument that is not text, and
+  `tests/it/ceremonies.rs` on flags outside their form.
 - **A setting refused is never a setting absent.**
   `CommandLine::principal`, `CommandLine::origin_given`,
   `CommandLine::key_file` and `session_env` answer `Err` for a value given

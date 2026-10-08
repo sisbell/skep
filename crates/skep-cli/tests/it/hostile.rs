@@ -1,11 +1,12 @@
 //! WHAT ARRIVES FROM OUTSIDE THE PERSON'S TRUST, through the binary: a
 //! board's answer — the board may be the very operator AUTH-4.58's compare
 //! exists to catch, or anyone on a plaintext path — reaching the terminal
-//! inert, on stderr and on stdout; a reply a third party printed, landed by
-//! `bind` only as the person's screen shows it; a payload read to its cap
-//! and no further; and a principal past the range a JSON number carries.
-//! Every board here is a [`canned`] one or a dead origin, so each refusal
-//! is seen before, or instead of, any daemon's answer.
+//! inert on stderr, and on stdout with every C0 control rendered; a reply a
+//! third party printed, landed by `bind` only as the person's screen shows
+//! it; a payload read to its cap and no further; and a principal past the
+//! range a JSON number carries. Every board here is a [`canned`] one or a
+//! dead origin, so each refusal is seen before, or instead of, any daemon's
+//! answer.
 
 use crate::common::{canned, s, skep, Run};
 
@@ -21,11 +22,12 @@ fn raw_control(r: &Run) -> bool {
 /// A BOARD'S BYTES REACH THE TERMINAL INERT, NEVER AS COMMANDS (`talk`,
 /// `show`, `data`; AUTH-5.2's rendering): an answer that is no JSON, a
 /// claimant and an origin list carrying a screen clear and a clipboard
-/// write, a refusal whose code sets the title, and a reply carrying an
-/// escape each reach stderr as code points — the health body passed
-/// VERBATIM on stdout (AUTH-5.86), JSON's own escapes and all — and a
-/// claimant on stdout reaches it as code points too, its line break never
-/// a second DATA line.
+/// write, a refusal whose code sets the title — by a 7-bit escape or by the
+/// 8-bit C1 controls — and a reply carrying an escape each reach stderr as
+/// code points — the health body passed VERBATIM on stdout (AUTH-5.86),
+/// JSON's own escapes and all — and a claimant on stdout reaches it with
+/// its C0 controls as code points, its line break never a second DATA
+/// line.
 #[test]
 fn a_board_s_bytes_reach_the_terminal_inert_never_as_commands() {
     let r = skep(&["health", "--board", &canned(200, b"\x1b]0;pwned\x07\x1b[2J")], &[], None);
@@ -41,6 +43,13 @@ fn a_board_s_bytes_reach_the_terminal_inert_never_as_commands() {
     let r = skep(&["health", "--board", &canned(403, br#"{"error":"\u001b]0;x\u0007"}"#)], &[], None);
     assert_eq!(r.code, 1, "{r:?}");
     assert!(r.err.contains("the board refused: <U+001B>]0;x<U+0007> (HTTP 403)") && !raw_control(&r), "{r:?}");
+
+    // The 8-bit sequences too — a C1 CSI, OSC and ST: AUTH-5.2's control
+    // characters are C1 as much as C0, and stderr carries none of them raw.
+    let r = skep(&["health", "--board", &canned(403, br#"{"error":"\u009b2J\u009d0;x\u009c"}"#)], &[], None);
+    assert_eq!(r.code, 1, "{r:?}");
+    assert!(r.err.contains("the board refused: <U+009B>2J<U+009D>0;x<U+009C> (HTTP 403)"), "{r:?}");
+    assert!(!r.err.contains(|c: char| c.is_control() && c != '\n'), "no control but the line break: {r:?}");
 
     let dir = tempfile::tempdir().unwrap();
     let r = skep(&["bind", "--board", DEAD, "--dir", s(&dir.path().join("store")), "--payload", "-"], &[], Some(b"account 1.0.1\nprincipal 1\norigin http://x\x1b[2J\n"));

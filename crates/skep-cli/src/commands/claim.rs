@@ -17,6 +17,8 @@ pub fn claim(c: &CommandLine) -> Result<(), Stop> {
     let principal = c.principal()?;
     if let Some(payload_arg) = c.value("--hosted") {
         // THE HOSTED ARM (§4.5): no --dir, no person, nothing generated.
+        // `--principal` is the new account's id, 1 where omitted — §2.2's
+        // recommended default, §9 item 9's ruling — as at the notebook arm.
         let payload = read_payload(payload_arg)?;
         match claim_walk::hosted(&board, &payload, principal.unwrap_or(1))? {
             HostedOutcome::AlreadyClaimed { claimant } => data(format!("claimed by {claimant}"))?,
@@ -43,9 +45,10 @@ pub fn claim(c: &CommandLine) -> Result<(), Stop> {
         }
         return Ok(());
     }
-    // THE NOTEBOOK ARM: a person door.
-    require_terminal(Door { form: "claim", moments: "the name boxes and the backup moment" })?;
+    // THE NOTEBOOK ARM: a person door, the store's setting judged ahead of
+    // it as every usage refusal is.
     let store = store_of(c)?;
+    require_terminal(Door { form: "claim", moments: "the name boxes and the backup moment" })?;
     if let Some(w) = plaintext_non_loopback_warning(board.dialed()) {
         talk(w);
     }

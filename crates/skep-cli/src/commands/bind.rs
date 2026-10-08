@@ -2,9 +2,10 @@
 //! handoff or a hosted signup landed on this device — confirmed against the
 //! board, the set compared whole where another hand wrote the account's
 //! first set, the account's first signed session run where one is owed,
-//! the binding line written. With `keygen`, one of the two commands that
-//! sequence the library's compositions themselves rather than calling a
-//! walk.
+//! the binding line written — naming a key this store holds, a key file
+//! from outside it refused before anything is. With `keygen`, one of the
+//! two commands that sequence the library's compositions themselves rather
+//! than calling a walk.
 
 use std::fmt;
 
@@ -242,6 +243,19 @@ pub fn bind(c: &CommandLine) -> Result<(), Stop> {
         }
     }
     let key = select_key(key_file.as_deref(), &store, &board, principal, Purpose::Sign)?;
+    // The binding line this command appends, and the first session's
+    // persist-first line beside it, name a key this store holds (§3.5 arm
+    // 2, which reads the line back to the file): a key file `--key` (or
+    // `SKEP_KEY`) names outside the store binds nothing here, and nothing
+    // is written.
+    if !store.key_path(&key.fingerprint).is_file() {
+        return Err(Halt::face(
+            format!("the key file {} is not this store's: {} holds no file for {}", key.path.display(), store.root().display(), key.fingerprint),
+            "a binding line names a key this store holds (client.md §3.5 arm 2); one naming another would answer every later lookup with a missing file",
+            "run `skep bind` with `--dir` naming the store that holds this key",
+        )
+        .into());
+    }
     let walk = walk_to_set(&board, &account)?;
     let own = [(key.fingerprint, key.public.clone())];
     key_face(&board, &walk, &key.fingerprint, &own, Site::Tail)?;

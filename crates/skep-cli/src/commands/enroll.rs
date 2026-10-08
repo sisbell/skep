@@ -5,7 +5,7 @@
 use skep_client::ceremony::enroll::{self as enroll_walk, EnrollOptions};
 use skep_client::dial::plaintext_non_loopback_warning;
 
-use super::{board_of, principal_or_bound, print_facts, read_payload, require_terminal, store_of, talk, Door, Stop};
+use super::{board_of, principal_or_bound, print_facts, read_payload, require_no_key_file, require_terminal, store_of, talk, Door, Stop};
 use crate::args::{CommandLine, Usage};
 use crate::terminal::Terminal;
 
@@ -13,17 +13,21 @@ pub fn enroll(c: &CommandLine) -> Result<(), Stop> {
     let board = board_of(c)?;
     let store = store_of(c)?;
     let given = c.principal()?;
-    let principal = principal_or_bound(given, &store, &board)?;
-    // `--reply`: the three facts re-derived, no write — not a person door.
+    // `--reply`: the three facts re-derived, no write — not a person door,
+    // and no key selected.
     if let Some(prefix) = c.value("--reply") {
+        let principal = principal_or_bound(given, &store, &board)?;
         let reply = enroll_walk::reply(&board, principal, prefix)?;
         let fingerprint = reply.fingerprints.first().expect("`enroll::reply` answers the one key its prefix resolved");
         talk(format!("the reply, offered again (AUTH-5.32): {fingerprint} stands ENROLLED at {}", reply.facts.account));
         print_facts(&reply.facts)?;
         return Ok(());
     }
-    require_terminal(Door { form: "enroll", moments: "the fingerprint comparison and its confirmation" })?;
+    // The walk's usage refusals, ahead of the door.
     let Some(payload_arg) = c.value("--payload") else { return Err(Usage("--payload <file|-> is required (or --reply <fp-prefix>)".into()).into()) };
+    require_no_key_file(c)?;
+    require_terminal(Door { form: "enroll", moments: "the fingerprint comparison and its confirmation" })?;
+    let principal = principal_or_bound(given, &store, &board)?;
     let payload = read_payload(payload_arg)?;
     if let Some(w) = plaintext_non_loopback_warning(board.dialed()) {
         talk(w);

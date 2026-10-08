@@ -60,6 +60,15 @@ pub fn keygen(c: &CommandLine) -> Result<(), Stop> {
     if door_side {
         require_terminal(Door { form: "keygen --anchors", moments: "the door-side backup moment" })?;
     }
+    // Every label a flag fixes is judged at its box before anything is
+    // asked or generated (§2.2; P13): the anchors' here — given only with
+    // `--anchors`, the grammar's rule — and the device's below.
+    let anchor_labels: Vec<Label> = c
+        .values("--anchor-label")
+        .iter()
+        .map(|l| Label::new(l))
+        .collect::<Result<_, _>>()
+        .map_err(|fault| Halt::face(format!("an anchor label is refused at the box: {fault}"), "AUTH-1.24's domain", "pass labels inside the domain"))?;
     let mut person = Terminal;
     // The device-name box: `--label`, or asked; the statements whenever a
     // label is fixed; the domain test at the box (P13).
@@ -91,15 +100,9 @@ pub fn keygen(c: &CommandLine) -> Result<(), Stop> {
         // anchor pair with no board, statement (a) carrying the operator
         // sentence unconditionally; then the three-key payload for the
         // hosted signup.
-        let labels: Vec<Label> = c
-            .values("--anchor-label")
-            .iter()
-            .map(|l| Label::new(l))
-            .collect::<Result<_, _>>()
-            .map_err(|fault| Halt::face(format!("an anchor label is refused at the box: {fault}"), "AUTH-1.24's domain", "pass labels inside the domain"))?;
         let BoxDefault { host_name, date } = host_name_and_date();
         let opts = BackupOptions {
-            labels,
+            labels: anchor_labels,
             destinations: c.values("--anchor-out").iter().map(PathBuf::from).collect(),
             paper: c.switch("--paper"),
             store: Some(store.root().to_path_buf()),

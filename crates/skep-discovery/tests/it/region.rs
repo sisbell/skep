@@ -869,15 +869,19 @@ fn a_published_document_whose_own_arrangement_is_empty_answers_from_its_head() {
 #[test]
 fn a_pinned_version_member_answers_its_own_arrangement_not_the_heads() {
     let k = published_world(); // phead holds pca(1..=4)
-    let (head, _) = Vstream::new(&k)
+    let (new_head, _) = Vstream::new(&k)
         .version(PrincipalId(1), &pdoc(), None)
         .expect("the owner versions its published document again");
-    assert_eq!(head, a(&[1, 0, 1, 0, 3, 2]), "the chain's second member");
+    assert_eq!(
+        new_head,
+        a(&[1, 0, 1, 0, 3, 2]),
+        "the chain's second member"
+    );
     seed_published_content(&k, &pdoc(), 1); // pca(5), on the new head alone
     let store = LinkWriter::new(&k, &EVERYONE);
     let latest = link(&store, &doc1(), &[pca(5)], &[ca(101)]);
     let snap = k.snapshot();
-    assert_eq!(snap.world().m5().content_count(&head), n(5));
+    assert_eq!(snap.world().m5().content_count(&new_head), n(5));
     assert_eq!(
         snap.world().m5().content_count(&phead()),
         n(4),
@@ -886,7 +890,7 @@ fn a_pinned_version_member_answers_its_own_arrangement_not_the_heads() {
 
     let reads = Reads(&k);
     let fifth = [vspan(1, 5, 1)];
-    for d in [pdoc(), head.clone()] {
+    for d in [pdoc(), new_head.clone()] {
         assert_eq!(reads.image(&d, &fifth), Ok(vec![run(&pca(5), 1)]), "{d:?}");
         assert_eq!(
             reads.findlinks_v(&d, &fifth),

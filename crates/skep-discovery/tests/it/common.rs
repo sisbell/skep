@@ -2,10 +2,10 @@
 //! contract's assembler role, in miniature) over M3 + M4 + M5 + M7 — exactly
 //! the bound M8 queries under, plus M4 so INSERT can arrange content — and,
 //! under a banner each and in this order, the predicates its writes and reads
-//! run under, its address fixtures, the format type set, the world's assembly
-//! into seeded kernels, the suite's reads of a kernel's current state with the
-//! claim addresses a lineage answer reduces to, and the window law and wide
-//! endset more than one suite reads.
+//! run under, its address fixtures, the suite's relation type, the world's
+//! assembly into seeded kernels, the suite's reads of a kernel's current state
+//! with the claim addresses a lineage answer reduces to, and the window law
+//! and wide endset more than one suite reads.
 //! Addresses follow M3's minted shapes: account
 //! `[1,0,1]`, documents `[1,0,1,0,d]`, content elements `[doc·0·1·k]`, link
 //! elements `[doc·0·2·k]`; the five reserved type addresses are the compiled
@@ -293,7 +293,7 @@ pub fn run(start: &Address, width: u32) -> Run {
     Run::new(start.clone(), n(width)).expect("element-level start with width ≥ 1 is a valid Run")
 }
 
-// ─────────────────────────── the format type set ────────────────────────────
+// ──────────────────────── the suite's relation type ─────────────────────────
 
 /// The one relation type the discovery tests deposit under — an ordinary
 /// unregistered NUMBER (a type is a number; the class-keyed reads serve it

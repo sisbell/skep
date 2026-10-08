@@ -721,8 +721,8 @@ fn addressably_discoverable_from_holds_its_join_to_the_square_of_the_run_budget(
 
 /// §5 — the touch test BUILDS NOTHING PER PAIR. Its join is held to the
 /// square of `MAX_IMAGE_RUNS`, which that constant argues as M6's COMPARE
-/// budget — comparisons of endpoints derived once — and the daemon runs this
-/// read with no scan permit on the strength of it. A test that derived a
+/// budget — comparisons of bounds derived once per span — and the daemon runs
+/// this read with no scan permit on the strength of it. A test that derived a
 /// span's reach for every (coverage span, run) PAIR, as M1's `classify_spans`
 /// does and M7's private overlap does through it, answers exactly as the
 /// right one does while paying heap work the square never priced: no answer

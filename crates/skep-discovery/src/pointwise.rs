@@ -29,8 +29,8 @@
 //! link, so there is no result set to filter, and a link the reader may not
 //! see is instead ABSENT as an argument.
 //!
-//! The per-link touch test here — M7's stab overlap restated over endpoints
-//! derived once per span — is M8's one pointwise span comparison: a
+//! The per-link touch test here — M7's stab overlap restated over each span's
+//! bounds, derived once — is M8's one pointwise span comparison: a
 //! level-gate-free order relation, total on cross-length spans, categorically
 //! distinct from the level-gated set algebra M8 avoids.
 
@@ -152,9 +152,9 @@ pub fn project_on<W: DiscoveryWorld>(
     Ok(w.m5().project(&surface, &coverage)) // I→V, content subspace, level-class-safe inside M5
 }
 
-/// One span as the two endpoints the touch test compares: its start, borrowed,
+/// One span as the two bounds the touch test compares: its start, borrowed,
 /// and its reach, derived ONCE — M1's derived `(start, reach)` form, which M1
-/// keeps crate-private. M1's `classify_spans` derives both operands' endpoints
+/// keeps crate-private. M1's `classify_spans` derives both operands' bounds
 /// afresh on every call, a copy of each start and an addition for each reach,
 /// so a join run through it allocates four tumblers per (coverage span, run)
 /// PAIR. Derived once per span instead — as M6's COMPARE stores each block's
@@ -176,7 +176,7 @@ impl<'s> SpanBounds<'s> {
     }
 
     /// M7's stab overlap — ProperOverlap | Containment | Equal, never
-    /// Adjacent — over the two spans' endpoints. M1's classification answers
+    /// Adjacent — over the two spans' bounds. M1's classification answers
     /// one of those three relations exactly when `max start < min reach`, and
     /// over non-empty spans — which T12 makes every `Span`, its reach strictly
     /// past its start — that is each span starting before the other reaches:
@@ -197,15 +197,15 @@ impl<'s> SpanBounds<'s> {
 /// `coverage(e) ∩ ⋃ extents ≠ ∅` — pointwise, by [`SpanBounds::overlaps`].
 /// Vacuously false over an empty extent list.
 ///
-/// `extents` are the bounds of the document's runs' I-extents, derived by the
-/// caller: this is asked once per slot of a link, and a run's extent depends
-/// on the run alone, so the derivation belongs where the runs are read. Each
-/// span of `e` derives its own bounds once, ahead of every extent it is
-/// tested against.
-fn touches(e: &Endset, extents: &[SpanBounds<'_>]) -> bool {
+/// `extent_bounds` are the bounds of the document's runs' I-extents, derived
+/// by the caller: this is asked once per slot of a link, and a run's extent
+/// depends on the run alone, so the derivation belongs where the runs are
+/// read. Each span of `e` derives its own bounds once, ahead of every extent
+/// it is tested against.
+fn touches(e: &Endset, extent_bounds: &[SpanBounds<'_>]) -> bool {
     e.spans().any(|span| {
         let span = SpanBounds::of(span);
-        extents.iter().any(|extent| span.overlaps(extent))
+        extent_bounds.iter().any(|extent| span.overlaps(extent))
     })
 }
 
@@ -224,7 +224,7 @@ fn touches(e: &Endset, extents: &[SpanBounds<'_>]) -> bool {
 /// Tests LP12's characterisation directly per link —
 /// `∃ i : coverage(Σ.L(a).eᵢ) ∩ ran(M(reading_surface(d))) ≠ ∅` over BOTH
 /// subspaces (`content_runs` + `link_runs`) — conjoined with `is_active(a)`:
-/// each span's endpoints derived once, `Σᵢ|eᵢ| + |runs|` reaches, and then at
+/// each span's bounds derived once, `Σᵢ|eᵢ| + |runs|` reaches, and then at
 /// most `Σᵢ|eᵢ| × |runs|` tests of at most two tumbler comparisons apiece,
 /// building nothing. The test iterates the link's full arity, so it carries
 /// no arity-3 caveat.
@@ -310,8 +310,8 @@ pub fn addressably_discoverable_from_on<W: DiscoveryWorld>(
         .chain(w.m5().link_runs(&surface))
         .map(|r| r.iextent())
         .collect(); // ran(M(reading_surface(d))) as I-extents, BOTH subspaces (LP12)
-    let bounds: Vec<SpanBounds<'_>> = extents.iter().map(SpanBounds::of).collect();
-    Ok(link.slots().any(|e| touches(e, &bounds)))
+    let extent_bounds: Vec<SpanBounds<'_>> = extents.iter().map(SpanBounds::of).collect();
+    Ok(link.slots().any(|e| touches(e, &extent_bounds)))
 }
 
 #[cfg(test)]

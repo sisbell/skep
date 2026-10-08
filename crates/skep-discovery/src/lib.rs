@@ -211,10 +211,10 @@
 //!   for its content and link runs ([`addressably_discoverable_from_on`]),
 //!   neither reading a run — and then, for a read the budget admits, those
 //!   runs and ONE JOIN of the link's coverage against them: for the touch
-//!   test, at most two tumbler comparisons a test over endpoints derived once
-//!   per span; for the projection, M5's `project`. The touch test's product is
-//!   held at the square of [`MAX_IMAGE_RUNS`] and the projection's at
-//!   [`MAX_ANSWER_SPANS`], for the reasons those constants state.
+//!   test, at most two tumbler comparisons a test over each span's bounds,
+//!   derived once; for the projection, M5's `project`. The touch test's
+//!   product is held at the square of [`MAX_IMAGE_RUNS`] and the projection's
+//!   at [`MAX_ANSWER_SPANS`], for the reasons those constants state.
 //!
 //! A window computes its family's whole candidate set before it cuts,
 //! whatever `n` and wherever the cursor: paging bounds the answer, never the

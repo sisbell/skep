@@ -344,18 +344,23 @@ fn lineage_endpoints_rest_on_a_fence_the_write_surface_keeps() {
 /// which checks a link's arity and nothing of the schema. So two such claims
 /// are folded here the way a decoded frame would be, beside one conforming
 /// claim: one whose F denotes TWO addresses, and one whose G denotes doc1's
-/// link-subspace PREFIX — a tumbler with a trailing zero, so no address, whose
-/// subtree covers every link of doc1. Both probes reach all three claims under
-/// both views, and answer the conforming one alone; a read-out that took every
-/// claim's endpoints for defined would fail each of these probes for as long
-/// as the non-conformers are stored. The home rule is asked past that check,
-/// so only of the claim reported.
+/// ELEMENT-FIELD PREFIX — doc1 and the zero that opens its element field, so a
+/// tumbler with a trailing zero, which is no address — whose subtree covers
+/// every link of doc1. Both probes reach all three claims under both views,
+/// and answer the conforming one alone; a read-out that took every claim's
+/// endpoints for defined would fail each of these probes for as long as the
+/// non-conformers are stored. The home rule is asked past that check, so only
+/// of the claim reported.
 #[test]
 fn lineage_skips_a_supersession_claim_with_an_undefined_endpoint() {
-    let w = OneClaim::new();
-    let two = enc([&w.e1, &w.e2]);
+    let fixture = OneClaim::new();
+    let two = enc([&fixture.e1, &fixture.e2]);
     assert!(two.single_denoted().is_none(), "F denotes two addresses");
-    fold_decoded_deposit(&w.k, &la(8), Link::triple(two, enc([&w.e2]), w.sup.clone()));
+    fold_decoded_deposit(
+        &fixture.k,
+        &la(8),
+        Link::triple(two, enc([&fixture.e2]), fixture.sup.clone()),
+    );
     let prefix = t(&[1, 0, 1, 0, 1, 0]);
     assert!(
         validate(prefix.clone()).is_err(),
@@ -368,16 +373,16 @@ fn lineage_skips_a_supersession_claim_with_an_undefined_endpoint() {
         "G denotes it alone"
     );
     fold_decoded_deposit(
-        &w.k,
+        &fixture.k,
         &la(9),
-        Link::triple(enc([&w.e1]), no_address, w.sup.clone()),
+        Link::triple(enc([&fixture.e1]), no_address, fixture.sup.clone()),
     );
 
     // The premise: each probe reaches all three claims, so the answers
     // below are the read-out's and not the probes'.
-    let snap = w.k.snapshot();
-    let old_probe = [w.e1.tumbler().clone()];
-    let new_probe = [w.e2.tumbler().clone()];
+    let snap = fixture.k.snapshot();
+    let old_probe = [fixture.e1.tumbler().clone()];
+    let new_probe = [fixture.e2.tumbler().clone()];
     for view in [View::Active, View::Audit] {
         for pattern in [
             Pattern {
@@ -392,13 +397,13 @@ fn lineage_skips_a_supersession_claim_with_an_undefined_endpoint() {
             let reached: Vec<Address> = snap
                 .world()
                 .links()
-                .observe(&w.sup, pattern, view)
+                .observe(&fixture.sup, pattern, view)
                 .into_iter()
                 .map(|t| t.addr)
                 .collect();
             assert_eq!(
                 reached,
-                vec![w.claim.clone(), la(8), la(9)],
+                vec![fixture.claim.clone(), la(8), la(9)],
                 "{pattern:?} under {view:?}"
             );
         }
@@ -406,7 +411,7 @@ fn lineage_skips_a_supersession_claim_with_an_undefined_endpoint() {
 
     // The two non-conformers are skipped: the conforming claim is answered
     // alone, and the home rule is asked of it alone.
-    w.assert_answered_alone();
+    fixture.assert_answered_alone();
 }
 
 /// §7 — a claim is read out only where the endpoint its probe names IS the
@@ -423,7 +428,7 @@ fn lineage_skips_a_supersession_claim_with_an_undefined_endpoint() {
 /// past both, so only of the claim reported.
 #[test]
 fn lineage_reads_out_a_claim_only_where_its_endpoint_is_the_key() {
-    let w = OneClaim::new();
+    let fixture = OneClaim::new();
 
     // A claim naming doc1 at both ends: one T4-valid address a side, so its
     // `old` and `new` are defined, and above every link doc1 homes, so it
@@ -436,47 +441,47 @@ fn lineage_reads_out_a_claim_only_where_its_endpoint_is_the_key() {
         "one T4-valid address"
     );
     fold_decoded_deposit(
-        &w.k,
+        &fixture.k,
         &la(8),
-        Link::triple(above.clone(), above, w.sup.clone()),
+        Link::triple(above.clone(), above, fixture.sup.clone()),
     );
     // And a claim naming, at both ends, a link address no deposit minted.
     let unminted = la(99);
     let named = enc([&unminted]);
     fold_decoded_deposit(
-        &w.k,
+        &fixture.k,
         &la(9),
-        Link::triple(named.clone(), named, w.sup.clone()),
+        Link::triple(named.clone(), named, fixture.sup.clone()),
     );
 
     // The premise: each probe of a conforming endpoint reaches the conforming
     // claim AND the document-naming one, and a probe of the unminted address
     // reaches the claim naming it, which no deposit made a resident link.
-    let snap = w.k.snapshot();
+    let snap = fixture.k.snapshot();
     let links = snap.world().links();
     let reached = |pattern: Pattern<'_>| -> Vec<Address> {
         links
-            .observe(&w.sup, pattern, View::Active)
+            .observe(&fixture.sup, pattern, View::Active)
             .into_iter()
             .map(|t| t.addr)
             .collect()
     };
-    let old_probe = [w.e1.tumbler().clone()];
-    let new_probe = [w.e2.tumbler().clone()];
+    let old_probe = [fixture.e1.tumbler().clone()];
+    let new_probe = [fixture.e2.tumbler().clone()];
     let unminted_probe = [unminted.tumbler().clone()];
     assert_eq!(
         reached(Pattern {
             from: &old_probe,
             ..Pattern::default()
         }),
-        vec![w.claim.clone(), la(8)]
+        vec![fixture.claim.clone(), la(8)]
     );
     assert_eq!(
         reached(Pattern {
             to: &new_probe,
             ..Pattern::default()
         }),
-        vec![w.claim.clone(), la(8)]
+        vec![fixture.claim.clone(), la(8)]
     );
     assert_eq!(
         reached(Pattern {
@@ -490,10 +495,10 @@ fn lineage_reads_out_a_claim_only_where_its_endpoint_is_the_key() {
     // The conforming claim is answered alone. The document-naming claim is
     // homed in doc1 too, so a home rule asked ahead of the denotation filter
     // would show as a second ask of doc1.
-    w.assert_answered_alone();
+    fixture.assert_answered_alone();
     // And a probe of the unminted address answers no claim, though one names
     // it: the resident-key gate refuses a key that is no resident link.
-    let reads = Reads(&w.k);
+    let reads = Reads(&fixture.k);
     for view in [View::Active, View::Audit] {
         assert_eq!(
             reads.in_claims(&unminted, view),
@@ -521,24 +526,24 @@ fn lineage_reads_out_a_claim_only_where_its_endpoint_is_the_key() {
 /// surfaces as this test rather than as that assertion firing on a probe.
 #[test]
 fn lineage_asserts_the_home_m7s_fold_gives_every_claim() {
-    let w = OneClaim::new();
-    let value = Link::triple(enc([&w.e1]), enc([&w.e2]), w.sup.clone());
+    let fixture = OneClaim::new();
+    let value = Link::triple(enc([&fixture.e1]), enc([&fixture.e2]), fixture.sup.clone());
 
     let account = a(&[1, 0, 1]);
     assert_eq!(document_of(&account), None, "an account has no home");
     let folded = catch_unwind(AssertUnwindSafe(|| {
-        fold_decoded_deposit(&w.k, &account, value.clone())
+        fold_decoded_deposit(&fixture.k, &account, value.clone())
     }));
     assert!(folded.is_err(), "the fold refuses a key with no home");
 
     // The store is as it was: the conforming claim is answered alone.
-    w.assert_answered_alone();
+    fixture.assert_answered_alone();
 
     // The same claim keyed at a link address of doc1 folds, and reads out.
-    fold_decoded_deposit(&w.k, &la(8), value);
+    fold_decoded_deposit(&fixture.k, &la(8), value);
     assert_eq!(
-        claims_of(Reads(&w.k).in_claims(&w.e1, View::Active)),
-        vec![w.claim.clone(), la(8)]
+        claims_of(Reads(&fixture.k).in_claims(&fixture.e1, View::Active)),
+        vec![fixture.claim.clone(), la(8)]
     );
 }
 

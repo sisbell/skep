@@ -3,6 +3,7 @@
 //! composable write step.
 
 use std::fmt;
+use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 use skep_address::{Address, Tumbler};
@@ -36,11 +37,14 @@ use crate::value::Val;
 ///   leave that build unable to replay its own journal.
 ///
 /// Cheap to keep many of: `clone` is O(1), and
-/// [`apply_write`](ContentStore::apply_write) returns a new slice in
-/// O(log n), sharing all untouched structure with the old one, which stays
-/// as it was — so a snapshot pinning an old `World` costs next to nothing.
-/// Its serialized form is canonical, a function of the contents alone
-/// (`in_tumbler_order` below, the field's emitting half, says who reads it).
+/// [`apply_write`](ContentStore::apply_write) returns a new slice that copies
+/// only the tree nodes on the write's path — O(log n) of them, each copy
+/// cloning one `Arc` per address and per value it holds, whatever the stored
+/// addresses' lengths — and shares everything else with the old one, which
+/// stays as it was; so a snapshot pinning an old `World` costs next to
+/// nothing. Its serialized form is canonical, a function of the contents
+/// alone (`in_tumbler_order` below, the field's emitting half, says who reads
+/// it).
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ContentStore {
     // A persistent ORDERED map — `im::OrdMap`, a B-tree keyed by `Tumbler`'s
@@ -56,8 +60,18 @@ pub struct ContentStore {
     // and sorted at every checkpoint. Its serde form is this crate's, never
     // `im`'s: `in_tumbler_order` emits it and `entry_by_entry` decodes it,
     // the two named in the attribute below.
+    //
+    // Each address sits behind an `Arc`, as each value does (value.rs), and
+    // for the same reason: a write copies the tree nodes on its path, up to
+    // 64 entries each, and a copy clones one `Arc` per address where a bare
+    // `Tumbler` would be cloned component by component — a cost set by the
+    // longest addresses stored near the write, which an INSERT multiplies by
+    // its value count under M2's applier lock and every replay pays again.
+    // An `Arc<Tumbler>` serializes as the tumbler it holds (serde's `rc`), so
+    // the bytes are the tumbler's, and borrows as one, so the point queries
+    // take a `&Tumbler` and the walk yields one.
     #[serde(serialize_with = "in_tumbler_order", deserialize_with = "entry_by_entry")]
-    map: im::OrdMap<Tumbler, Val>,
+    map: im::OrdMap<Arc<Tumbler>, Val>,
 }
 
 /// The `map` field's serde form, emitted: a serde map with its length, its
@@ -98,7 +112,7 @@ pub struct ContentStore {
 /// alone and unhooks the dump filter's path, which ends in that name; only
 /// the engine's tests that name the field see it.
 fn in_tumbler_order<S: serde::Serializer>(
-    map: &im::OrdMap<Tumbler, Val>,
+    map: &im::OrdMap<Arc<Tumbler>, Val>,
     serializer: S,
 ) -> Result<S::Ok, S::Error> {
     serializer.collect_map(map.iter())
@@ -136,13 +150,13 @@ fn in_tumbler_order<S: serde::Serializer>(
 /// base names the earliest fault the body holds.
 fn entry_by_entry<'de, D: serde::Deserializer<'de>>(
     deserializer: D,
-) -> Result<im::OrdMap<Tumbler, Val>, D::Error> {
+) -> Result<im::OrdMap<Arc<Tumbler>, Val>, D::Error> {
     use serde::de::{Error, MapAccess, Visitor};
 
     struct MapVisitor;
 
     impl<'de> Visitor<'de> for MapVisitor {
-        type Value = im::OrdMap<Tumbler, Val>;
+        type Value = im::OrdMap<Arc<Tumbler>, Val>;
 
         fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
             f.write_str("a map from content address to value")
@@ -151,7 +165,7 @@ fn entry_by_entry<'de, D: serde::Deserializer<'de>>(
         fn visit_map<A: MapAccess<'de>>(self, mut entries: A) -> Result<Self::Value, A::Error> {
             let mut map = im::OrdMap::new();
             while let Some((addr, val)) = entries.next_entry::<Address, Val>()? {
-                if map.insert(Tumbler::from(addr), val).is_some() {
+                if map.insert(Arc::new(Tumbler::from(addr)), val).is_some() {
                     return Err(Error::custom("a content address named twice in one slice"));
                 }
             }
@@ -196,7 +210,7 @@ impl ContentStore {
             return self.clone();
         }
         ContentStore {
-            map: self.map.update(r.addr.clone(), r.val.clone()),
+            map: self.map.update(Arc::new(r.addr.clone()), r.val.clone()),
         }
     }
 
@@ -284,12 +298,12 @@ impl ContentStore {
 /// implements neither: a caller wanting two walks asks the slice for two,
 /// and one that polls past the end wraps the walk in `fuse()`.
 #[must_use = "iterators are lazy and do nothing unless consumed"]
-pub struct Iter<'a>(im::ordmap::Iter<'a, Tumbler, Val>);
+pub struct Iter<'a>(im::ordmap::Iter<'a, Arc<Tumbler>, Val>);
 
 impl<'a> Iterator for Iter<'a> {
     type Item = (&'a Tumbler, &'a Val);
     fn next(&mut self) -> Option<(&'a Tumbler, &'a Val)> {
-        self.0.next()
+        self.0.next().map(|(addr, val)| (&**addr, val))
     }
     fn size_hint(&self) -> (usize, Option<usize>) {
         self.0.size_hint()

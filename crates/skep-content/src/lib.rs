@@ -171,11 +171,12 @@ pub trait HasContent {
 /// no signature in this crate mentions; [`Val`] rides M10's `Request` across
 /// the daemon's workers; and [`ContentError`] travels inside M5's
 /// `InsertError` and `PublishError`. They are kept by what the private fields
-/// contain — the `im` map, the `Arc` under `Val` — so a field that revoked
-/// one (the `Rc`-backed `im-rc` for `im`, an `Rc` under `Val`) would compile
-/// here and fail a crate away, never naming the field. Asserted in the
-/// library rather than the suite, because that is the build a manifest change
-/// is made in, and it is this crate's manifest that names `im`.
+/// contain — the `im` map, the `Arc` under each of its keys and under `Val` —
+/// so a field that revoked one (the `Rc`-backed `im-rc` for `im`, an `Rc`
+/// under a key or under `Val`) would compile here and fail a crate away,
+/// never naming the field. Asserted in the library rather than the suite,
+/// because that is the build a manifest change is made in, and it is this
+/// crate's manifest that names `im`.
 const _: fn() = || {
     fn owed<T: Send + Sync + 'static>() {}
     owed::<ContentStore>(); // the `WorldState` bound reaches this through the engine

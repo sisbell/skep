@@ -1,20 +1,21 @@
 //! The slice and its write step, with no kernel: what the already-stored
-//! check admits and rejects; that the fold is pure and insert-only and never
-//! replaces a stored value — it leaves the whole slice as it was, and panics
-//! on the attempt in debug builds; that a point query matches its address
-//! exactly, never a prefix or an extension; that identity is by address,
-//! never by value, and `Val` implements no `Hash` (S4); that a slice's
-//! equality is its contents', address and value each counting; that the one
-//! enumeration visits every entry once, through `iter` and through a `for`
-//! loop over the slice alike, as a walk a caller can name, which knows
-//! exactly what remains at every step, shows no entry in its `Debug`, and
-//! offers no walk from the far end; that any byte string is a value, comes
-//! back exactly as written, and renders into `Debug` as its byte length,
-//! never a byte; and that `stage_write` panics on a non-content address in
-//! debug builds, before it looks at what is stored there, and stages every
-//! such address as given in release.
+//! check admits and rejects; that the fold is pure and insert-only, shares
+//! every address the slice already stores, and never replaces a stored
+//! value — it leaves the whole slice as it was, and panics on the attempt in
+//! debug builds; that a point query matches its address exactly, never a
+//! prefix or an extension; that identity is by address, never by value, and
+//! `Val` implements no `Hash` (S4); that a slice's equality is its contents',
+//! address and value each counting; that the one enumeration visits every
+//! entry once, through `iter` and through a `for` loop over the slice alike,
+//! as a walk a caller can name, which knows exactly what remains at every
+//! step, shows no entry in its `Debug`, and offers no walk from the far end;
+//! that any byte string is a value, comes back exactly as written, and
+//! renders into `Debug` as its byte length, never a byte; and that
+//! `stage_write` panics on a non-content address in debug builds, before it
+//! looks at what is stored there, and stages every such address as given in
+//! release.
 
-use skep_address::Tumbler;
+use skep_address::{Nat, Tumbler};
 use skep_content::{stage_write, ContentError, ContentStore, ContentWrite, Iter, Val};
 
 use crate::common::*;
@@ -104,6 +105,41 @@ fn apply_write_is_a_pure_insert_only_fold() {
     assert_eq!(c1.value_at(a1.tumbler()).map(Val::as_bytes), Some(&b"alpha"[..]));
     assert_eq!(c1.len(), 1);
     assert!(!c1.is_empty());
+}
+
+#[test]
+fn apply_write_shares_every_address_the_slice_already_stores() {
+    // store.rs (`ContentStore`, the `map` field): a fold copies the tree
+    // nodes on its path, up to 64 entries each, and shares everything else —
+    // the addresses in the copied nodes included. A copy that cloned each of
+    // those addresses component by component would make every write pay for
+    // up to 64 addresses per level of the tree, a cost set by the longest
+    // addresses stored near it, which an INSERT multiplies by its value count
+    // under M2's applier lock and every replay pays again. So each address
+    // the old slice stores keeps, in the new slice, the very components it
+    // had — one storage, not a copy. 257 entries put the tree past one node,
+    // so the fold copies an inner node as well as a leaf.
+    let components = |addr: &Tumbler| -> *const Nat {
+        std::ptr::from_ref(addr.iter().next().expect("a tumbler is nonempty"))
+    };
+    let mut c0 = ContentStore::default();
+    for ordinal in 1..=257u32 {
+        c0 = c0.apply_write(&stage_write(&c0, &ca(ordinal), val(b"v")).expect("fresh"));
+    }
+    let stored: std::collections::BTreeMap<&Tumbler, *const Nat> =
+        c0.iter().map(|(addr, _)| (addr, components(addr))).collect();
+    let c1 = c0.apply_write(&stage_write(&c0, &ca(258), val(b"v")).expect("fresh"));
+    let mut shared = 0;
+    for (addr, _) in &c1 {
+        if let Some(&before) = stored.get(addr) {
+            assert!(
+                std::ptr::eq(before, components(addr)),
+                "the fold copied {addr}, an address the slice already stored"
+            );
+            shared += 1;
+        }
+    }
+    assert_eq!(shared, 257, "the new slice holds every address the old one stored");
 }
 
 #[test]

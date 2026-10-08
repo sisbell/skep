@@ -26,7 +26,8 @@ test-hooks = ["dep:skep-kernel", "dep:skep-namespace"]
 # `entry_by_entry`, the `map` field's two halves — so none of im's
 # feature-gated serde impls is used here.
 im.workspace = true
-# rc for the Arc<[u8]> impls behind Val (§Types & errors).
+# rc for the Arc impls: the Arc<[u8]> behind Val (§Types & errors), and the
+# map's Arc<Tumbler> keys (src/store.rs).
 serde = { workspace = true, features = ["rc"] }
 # M1 — Tumbler/Address; Level and content_subspace for the routing assertion
 # (src/routing.rs), document_of for `write`. M4 holds no address algebra of

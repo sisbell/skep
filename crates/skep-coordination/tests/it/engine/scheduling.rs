@@ -230,10 +230,10 @@ fn a_certified_marker_rule_is_not_re_armed_by_retracting_its_own_marker() {
         c.certify_rule(&rule(&c, View::Audit)).expect("well-formed"),
         RuleCertification::CertifiedTerminating
     );
-    let audit = c.register_rule(rule(&c, View::Audit)).expect("the certified rule");
-    let active = c.register_rule(rule(&c, View::Active)).expect("its active twin");
+    let audit_rule = c.register_rule(rule(&c, View::Audit)).expect("the certified rule");
+    let active_rule = c.register_rule(rule(&c, View::Active)).expect("its active twin");
     let marker = match c.step(&k.snapshot()) {
-        StepOutcome::Fired { rule: fired, effect, .. } if fired == audit => effect,
+        StepOutcome::Fired { rule: fired, effect, .. } if fired == audit_rule => effect,
         other => panic!("expected the certified rule to fire first, got {other:?}"),
     };
     assert!(c.quiescent(&k.snapshot()), "its marker falsifies both triggers");
@@ -243,12 +243,12 @@ fn a_certified_marker_rule_is_not_re_armed_by_retracting_its_own_marker() {
         .expect("retract the rule's own marker");
     assert_eq!(
         c.next_enabled(&k.snapshot()),
-        Some(Occurrence { rule: active, arg: Arg::Addr(ca(1)) }),
+        Some(Occurrence { rule: active_rule, arg: Arg::Addr(ca(1)) }),
         "only the active twin is re-armed: the audit trigger still reads the marker's record"
     );
     assert!(matches!(
         c.step(&k.snapshot()),
-        StepOutcome::Fired { rule: fired, .. } if fired == active
+        StepOutcome::Fired { rule: fired, .. } if fired == active_rule
     ));
     assert!(c.quiescent(&k.snapshot()));
 }
@@ -720,10 +720,10 @@ fn a_default_view_rule_never_sees_a_uv_hidden_argument() {
     assert!(c.next_enabled(&s).is_none());
     assert!(matches!(c.step(&s), StepOutcome::Quiescent));
 
-    let active = c.register_rule(rule(&c, View::Active)).expect("R_active");
+    let active_rule = c.register_rule(rule(&c, View::Active)).expect("R_active");
     let s = k.snapshot();
     assert!(!c.quiescent(&s));
-    assert_eq!(c.next_enabled(&s), Some(Occurrence { rule: active, arg: Arg::Addr(ca(3)) }));
+    assert_eq!(c.next_enabled(&s), Some(Occurrence { rule: active_rule, arg: Arg::Addr(ca(3)) }));
 }
 
 // ─────────────────────────────── nullify ───────────────────────────────

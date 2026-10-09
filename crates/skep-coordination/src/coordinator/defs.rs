@@ -787,19 +787,19 @@ mod tests {
     fn each_direct_referent_appears_once_in_first_occurrence_order() {
         let (p, q) = (a(&[1, 0, 1, 0, 1, 0, 1, 1]), a(&[1, 0, 1, 0, 1, 0, 1, 2]));
         let at = |t: Term| Arc::new(t);
-        let r = |x: &Address| Term::Ref { addr: x.clone(), args: vec![] };
+        let reference = |x: &Address| Term::Ref { addr: x.clone(), args: vec![] };
         // q first, then p, then q again — inside a domain body, so the walk's
         // reach over `Dom` is covered too.
         let body = Term::And(
-            at(r(&q)),
+            at(reference(&q)),
             at(Term::Exists {
                 var: v(1),
                 dom: Arc::new(Dom::Filter {
                     dom: Arc::new(Dom::LinkDom),
                     var: v(2),
-                    pred: at(r(&p)),
+                    pred: at(reference(&p)),
                 }),
-                body: at(r(&q)),
+                body: at(reference(&q)),
             }),
         );
         assert_eq!(direct_referents(&body), vec![q, p]);

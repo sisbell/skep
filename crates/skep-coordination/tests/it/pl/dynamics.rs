@@ -96,7 +96,7 @@ fn classify_places_a_spelling_on_the_lattice_relative_to_its_view() {
 /// Boolean parent reads a non-Boolean child's stability, only its footprint,
 /// so an arm that called a grow-only set ⊤-stable would show here alone.
 #[test]
-fn a_non_boolean_term_is_step_constant_or_neither() {
+fn a_non_boolean_term_s_two_directions_coincide() {
     let k = kernel();
     let c = coord(&k);
     let sup = c.reserved_type(ShippedType::Supersedes).clone();

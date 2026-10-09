@@ -258,10 +258,10 @@ fn armer_cycles_follow_the_edge_rule() {
     // member, which is not the order the search finishes them in.
     let k = kernel();
     let mut c = coord(&k);
-    let marker = c
+    let marker_rule = c
         .register_rule(rule(&c, is_k(&marker_ty(), var(1)), View::Audit, marker_action()))
         .expect("reads its own class at audit");
-    let nullify = c
+    let nullify_rule = c
         .register_rule(rule(
             &c,
             is_k(&marker_ty(), var(1)),
@@ -269,7 +269,7 @@ fn armer_cycles_follow_the_edge_rule() {
             FireAction::Nullify { home: doc1() },
         ))
         .expect("reads that class at active");
-    assert_eq!(c.armer_cycles(), vec![vec![marker], vec![nullify]]);
+    assert_eq!(c.armer_cycles(), vec![vec![marker_rule], vec![nullify_rule]]);
 
     // A Nullify emission lands in `[R]` itself, so it arms a trigger reading
     // `[R]`'s AUDIT slice through that class — with no active read in sight.

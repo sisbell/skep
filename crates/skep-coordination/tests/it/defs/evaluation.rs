@@ -187,8 +187,8 @@ fn a_def_is_stored_as_its_source_and_reg_expanded_when_derived() {
         let tt = c.type_check(vec![(v(1), Sort::Addr)], t).expect("P(x)");
         c.define_predicate(&doc1(), &tt).expect("define").0
     };
-    let in_some_class = Term::Atom(Atom::IsK(TypeRef::ClassVar(v(7)), at(var(1))));
-    let some_class = define(exists(7, Dom::Reg, in_some_class));
+    let is_k7 = Term::Atom(Atom::IsK(TypeRef::ClassVar(v(7)), at(var(1))));
+    let some_class = define(exists(7, Dom::Reg, is_k7));
     let one_class = define(is_k(&retired_ty(), var(1)));
     let stored = |start: &Address| {
         k.snapshot().world().content().value_at(start.tumbler()).expect("resident").len()

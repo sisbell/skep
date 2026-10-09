@@ -103,17 +103,17 @@ fn rejections_display_and_chain_to_their_cause() {
 
     // `supersede` nests one level further, each operation's vocabulary its
     // own: SupersedeError → DefineError → RegisterError → TypeError.
-    let sup = SupersedeError::Define(define);
+    let supersede = SupersedeError::Define(define);
     assert_eq!(
-        sup.to_string(),
+        supersede.to_string(),
         format!("supersede: {stored}: register_pred: the def is ill-typed: {ill}")
     );
-    let define_cause = sup.source().expect("Define carries its DefineError");
+    let supersede_cause = supersede.source().expect("Define carries its DefineError");
     assert_eq!(
-        define_cause.to_string(),
+        supersede_cause.to_string(),
         format!("{stored}: register_pred: the def is ill-typed: {ill}")
     );
-    assert!(define_cause.source().is_some(), "and the chain runs on beneath it");
+    assert!(supersede_cause.source().is_some(), "and the chain runs on beneath it");
     // Its lineage refusal names the successor transactions 1–2 committed.
     let lineage = SupersedeError::Lineage {
         successor: ca(2),

@@ -50,10 +50,10 @@ fn every_file_is_declared_and_every_declaration_says_what_it_holds() {
     let mut faults = undeclared_files(crate_dir, "src", "lib");
     faults.extend(undeclared_files(crate_dir, "tests/it", "main"));
     let src = crate_dir.join("src");
-    let mut files = Vec::new();
-    rust_files(&src, &mut files);
-    files.sort();
-    for file in &files {
+    let mut src_files = Vec::new();
+    rust_files(&src, &mut src_files);
+    src_files.sort();
+    for file in &src_files {
         let path = file.strip_prefix(&src).unwrap().display().to_string();
         let text = std::fs::read_to_string(file).unwrap();
         let lines: Vec<&str> = text.lines().collect();
@@ -81,9 +81,9 @@ fn every_file_is_declared_and_every_declaration_says_what_it_holds() {
     test_files.sort();
     for file in &test_files {
         let Some((parent, name)) = declared_by(&tests, "main", file) else { continue };
-        let text = std::fs::read_to_string(&parent).unwrap_or_default();
+        let parent_text = std::fs::read_to_string(&parent).unwrap_or_default();
         let named = format!("`{name}`");
-        if !text.lines().filter_map(|l| l.strip_prefix("//!")).any(|l| l.contains(&named)) {
+        if !parent_text.lines().filter_map(|l| l.strip_prefix("//!")).any(|l| l.contains(&named)) {
             let shown = parent.strip_prefix(crate_dir).unwrap().display();
             faults.push(format!(
                 "{shown}: its `//!` doc does not name `{name}` — a test-tree parent's map names \

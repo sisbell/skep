@@ -226,8 +226,8 @@ fn a_cold_memo_derives_a_retracted_def_and_its_standing_consumer() {
         Ok(Value::Bool(true)),
         "the standing consumer, derived cold, evaluates through its retracted referent"
     );
-    let warm = c.signature(&p).expect("the handle that registered P holds its signature");
-    assert_eq!(cold.signature(&p), Some(warm), "the cold memo answers as the warm one");
+    let warm_sig = c.signature(&p).expect("the handle that registered P holds its signature");
+    assert_eq!(cold.signature(&p), Some(warm_sig), "the cold memo answers as the warm one");
     cold.type_check(vec![], Term::Ref { addr: p.clone(), args: vec![at(lit_addr(&ca(2)))] })
         .expect("WT-ref keys on ever-registration, cold as warm");
     cold.register_rule(Rule {
@@ -308,8 +308,11 @@ fn supersede_admits_a_retracted_old_start() {
     c.retract_pred(&doc1(), &old).expect("retract");
     assert!(!c.is_active_pred(&old, &k.snapshot()));
     let before = k.snapshot().world().m5().content_count(&doc1());
-    let result = c.supersede(&doc1(), &old, &term);
-    assert!(!matches!(result, Err(SupersedeError::OldStartNotEverRegistered(_))), "{result:?}");
+    let superseded = c.supersede(&doc1(), &old, &term);
+    assert!(
+        !matches!(superseded, Err(SupersedeError::OldStartNotEverRegistered(_))),
+        "{superseded:?}"
+    );
     assert_eq!(
         k.snapshot().world().m5().content_count(&doc1()),
         before + n(1),

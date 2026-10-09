@@ -46,7 +46,9 @@ pub enum SeedingRefusal {
 }
 
 impl SeedingRefusal {
-    /// The arm's name.
+    /// The arm's name — what a caller matching the refusal reads, and the
+    /// head the operator's sentence (its `Display`) opens on, so the two name
+    /// one arm.
     pub fn arm(&self) -> &'static str {
         match self {
             SeedingRefusal::Disjointness { .. } => "disjointness",
@@ -58,30 +60,28 @@ impl SeedingRefusal {
 
 impl fmt::Display for SeedingRefusal {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}: ", self.arm())?;
         match self {
             SeedingRefusal::Disjointness { registry, foreign } => write!(
                 f,
-                "disjointness: the registry row {registry} and the foreign commons row {foreign} meet at the subtree grain"
+                "the registry row {registry} and the foreign commons row {foreign} meet at the subtree grain"
             ),
             SeedingRefusal::Completeness { missing: RowOf::Kind(kind) } => {
-                write!(f, "completeness: {} has no row", kind.name())
+                write!(f, "{} has no row", kind.name())
             }
-            SeedingRefusal::Completeness { missing: RowOf::Subtype(subtype) } => write!(
-                f,
-                "completeness: {} has no row under {}",
-                subtype.name(),
-                subtype.kind().name()
-            ),
+            SeedingRefusal::Completeness { missing: RowOf::Subtype(subtype) } => {
+                write!(f, "{} has no row under {}", subtype.name(), subtype.kind().name())
+            }
             SeedingRefusal::Count { kind_row_count, row: None } => write!(
                 f,
-                "count: {kind_row_count} kind rows against the registry range's {} ordinals 3.{}-3.{}",
+                "{kind_row_count} kind rows against the registry range's {} ordinals 3.{}-3.{}",
                 REGISTRY_RANGE.count(),
                 REGISTRY_RANGE.start(),
                 REGISTRY_RANGE.end()
             ),
             SeedingRefusal::Count { kind_row_count, row: Some(row) } => write!(
                 f,
-                "count: of {kind_row_count} kind rows, {row} is no bare ordinal of the registry range 3.{}-3.{} left to it",
+                "of {kind_row_count} kind rows, {row} is no bare ordinal of the registry range 3.{}-3.{} left to it",
                 REGISTRY_RANGE.start(),
                 REGISTRY_RANGE.end()
             ),

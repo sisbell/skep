@@ -57,7 +57,8 @@ back — is this crate:
   the registry's rows and every other commons row a build holds:
   DISJOINTNESS at the subtree grain, COMPLETENESS against the kinds' home,
   and THE COUNT against the registry range's five ordinals (REG-1.28 to
-  REG-1.32). A refusal names its arm; the hand that runs it writes nothing.
+  REG-1.32). A refusal names its arm, and on one the hand that runs the
+  check owes a genesis that does not complete: nothing is written.
 - **The vector set**, `tests/vectors/records.json` — the admitted and
   refused bodies, one JSON array, with each refused body's cause and each
   admitted body's sig-less canonical projection. Every parser of the two

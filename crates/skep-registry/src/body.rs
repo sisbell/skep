@@ -80,11 +80,9 @@ use crate::rows::Kind;
 /// read is QUADRATIC) and a rendering by under three. One component filling
 /// this cap, 16,352 digits, costs [`parse`] 1.1 ms and the verifier 0.45 ms
 /// more, where a `sig` filling it costs [`parse`] 0.04 ms. A reader that
-/// parses under a lock holds it that long per body — the daemon does, under
-/// its serialization lock at a declared `insert` (skepd's
-/// `declared_record_atom`), before the write's `attest` is asked for — so
-/// the cap prices that lock: at the credential records' 128 KiB the same
-/// three conversions cost 34 ms, some thirty times this cap's.
+/// parses under a lock holds it that long per body, so the cap prices every
+/// such lock: at the credential records' 128 KiB the same three conversions
+/// cost 34 ms, some thirty times this cap's.
 pub const MAX_REGISTRY_RECORD_BYTES: usize = 16 * 1024;
 
 /// The two kinds whose bodies this crate parses — the kind the caller names

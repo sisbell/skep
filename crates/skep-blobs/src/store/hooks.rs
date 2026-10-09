@@ -14,7 +14,7 @@
 //! without the feature carries none of it, and its hook before a step is a
 //! no-op (`store.rs`).
 
-use std::fs::{self, File};
+use std::fs::{self, OpenOptions};
 use std::io::{self, Write};
 use std::path::Path;
 use std::sync::Arc;
@@ -109,13 +109,28 @@ impl Stream<'_> {
 }
 
 /// Write `bytes` at `path` by the blob's own order: a temp file beside the
-/// target, fsynced, renamed over it, the directory fsynced.
+/// target, fsynced, renamed over it, the directory fsynced — the directory
+/// born `0700` and the temp file `0600` on unix, as the finish's are.
 fn install_whole(path: &Path, bytes: &[u8]) -> io::Result<()> {
     let dir = path.parent().expect("a blob sits in its designation directory");
-    fs::create_dir_all(dir)?;
+    let mut builder = fs::DirBuilder::new();
+    builder.recursive(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::DirBuilderExt;
+        builder.mode(0o700);
+    }
+    builder.create(dir)?;
     let tmp = dir.join(format!(".install-{}", std::process::id()));
     {
-        let mut f = File::create(&tmp)?;
+        let mut opts = OpenOptions::new();
+        opts.write(true).create(true).truncate(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            opts.mode(0o600);
+        }
+        let mut f = opts.open(&tmp)?;
         f.write_all(bytes)?;
         f.sync_all()?;
     }

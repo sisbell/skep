@@ -716,7 +716,21 @@ impl<W: WorldState> Kernel<W> {
         salt_source: SaltSource,
         seam: Seam,
     ) -> Result<Recovered<W>, OpenError> {
-        fs::create_dir_all(dir)?;
+        // THE DIRECTORY, OWNER-ONLY: every component this creates is born
+        // `0700` on unix, the mode set at creation so the process umask can
+        // only tighten it — as every file the kernel creates in it is born
+        // `0600` (the lock, a segment, `checkpoint.tmp`). A reader of the
+        // directory holds the board whole, and a umask is the one thing no
+        // caller can be relied on to have set. A directory that already
+        // stands is left exactly as found: nothing here chmods.
+        let mut builder = fs::DirBuilder::new();
+        builder.recursive(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::DirBuilderExt;
+            builder.mode(0o700);
+        }
+        builder.create(dir)?;
         let lock = journal::acquire_journal_lock(dir)?;
         // THE STRAY TEMP FILE, removed under the flock before anything is
         // listed: a checkpoint a crash or a failed write left half-written

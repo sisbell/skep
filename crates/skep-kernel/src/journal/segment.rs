@@ -157,12 +157,17 @@ pub(crate) fn fsync_dir(dir: &Path) -> io::Result<()> {
 /// (Lifecycle): at most one live kernel — appender *or* recoverer — per
 /// journal. flock semantics, so the lock dies with the process; a second
 /// `open()` fails with the acquisition error (surfaced as `OpenError::Io`).
+/// The lock file is born `0600` on unix where this creates it, as every
+/// file of the kernel's is; one that already stands keeps its mode.
 pub(crate) fn acquire_journal_lock(dir: &Path) -> io::Result<File> {
-    let f = OpenOptions::new()
-        .create(true)
-        .truncate(false)
-        .write(true)
-        .open(dir.join("kernel.lock"))?;
+    let mut opts = OpenOptions::new();
+    opts.create(true).truncate(false).write(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        opts.mode(0o600);
+    }
+    let f = opts.open(dir.join("kernel.lock"))?;
     fs2::FileExt::try_lock_exclusive(&f)?;
     Ok(f)
 }

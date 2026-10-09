@@ -37,7 +37,7 @@
 mod handle;
 
 use std::collections::{HashMap, HashSet};
-use std::fs::{self, File, OpenOptions};
+use std::fs::{self, OpenOptions};
 use std::io;
 use std::path::{Path, PathBuf};
 
@@ -77,8 +77,26 @@ pub(crate) fn partial_path(root: &Path, designation: &str, id: &UploadId) -> Pat
 /// open has made durable.
 pub(crate) fn create(root: &Path, designation: &str, id: &UploadId) -> io::Result<()> {
     let dir = root.join(designation);
-    fs::create_dir_all(&dir)?;
-    let f = File::create(partial_path(root, designation, id))?;
+    // The designation directory is born `0700` and the partial `0600` on
+    // unix — the mode set at creation, the process umask irrelevant: the
+    // bytes received are the depositor's, owner-only from the first grain,
+    // and the finish's rename carries the file's mode onto its hex name.
+    let mut builder = fs::DirBuilder::new();
+    builder.recursive(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::DirBuilderExt;
+        builder.mode(0o700);
+    }
+    builder.create(&dir)?;
+    let mut opts = OpenOptions::new();
+    opts.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        opts.mode(0o600);
+    }
+    let f = opts.open(partial_path(root, designation, id))?;
     f.sync_all()?;
     fsync_dir(&dir)?;
     Ok(())

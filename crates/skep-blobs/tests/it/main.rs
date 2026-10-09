@@ -5,6 +5,7 @@
 mod blobs;
 mod finish;
 mod lease;
+mod modes;
 mod reopen;
 mod replace;
 mod tidy;

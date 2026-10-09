@@ -182,7 +182,16 @@ impl JournalWriter {
         seam: Seam,
     ) -> io::Result<Self> {
         let path = segment_path(dir, first_seq);
-        let file = OpenOptions::new().create(true).append(true).open(&path)?;
+        // Born `0600` on unix: the segment is the board's history whole, and
+        // the mode is set at creation so the process umask cannot loosen it.
+        let mut opts = OpenOptions::new();
+        opts.create(true).append(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            opts.mode(0o600);
+        }
+        let file = opts.open(&path)?;
         // The new entry must be durable before any commit acked out of this
         // segment can rely on recovery finding the file (§1: fsync-of-dir on
         // rotate / first init).

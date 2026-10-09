@@ -21,7 +21,7 @@
 //! name a checkpoint by `(seq, chain_head, body_hash)`. The CRC stays as the
 //! first, cheap bit-rot check `load` runs before anything else.
 
-use std::fs::{self, File};
+use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 
@@ -554,7 +554,18 @@ pub(crate) fn write<W: Serialize>(
     codec().serialize_into(&mut body, world).map_err(|e| WriteFail::Serialize(e))?;
     let tmp = tmp_path(dir);
     seam.before(Step::CheckpointCreate)?;
-    let mut f = File::create(&tmp)?;
+    // The temp file is born `0600` on unix — the mode set at creation,
+    // whatever the process umask — and the rename below carries it onto
+    // `checkpoint.<seq>`: a base is the world whole, owner-only from its
+    // first byte.
+    let mut opts = OpenOptions::new();
+    opts.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        opts.mode(0o600);
+    }
+    let mut f = opts.open(&tmp)?;
     let mut header = Vec::with_capacity(HEADER_LEN);
     header.extend_from_slice(&MAGIC);
     header.extend_from_slice(&seq.to_le_bytes());

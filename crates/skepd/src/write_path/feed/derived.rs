@@ -188,7 +188,7 @@ impl LineFile {
         keep: impl Fn(u64) -> bool,
     ) -> io::Result<(LineFile, Entries)> {
         let path = dir.join(name);
-        let file = OpenOptions::new().create(true).read(true).append(true).open(&path)?;
+        let file = open_line_file(&path)?;
         let mut coverage = 0u64;
         let mut entries = Vec::new();
         let mut foreign = false;
@@ -414,7 +414,7 @@ impl LineFile {
         }
         out.extend_from_slice(&fence_line(covered));
         let renamed = (|| -> io::Result<()> {
-            let mut f = File::create(&tmp)?;
+            let mut f = create_rewrite_temp(&tmp)?;
             f.write_all(&out)?;
             f.sync_all()?;
             drop(f);
@@ -425,10 +425,10 @@ impl LineFile {
         let reopened = if std::mem::take(&mut self.fail_next_rewrite_past_rename) {
             Err(io::Error::other("test seam: the rewritten file's reopen refused"))
         } else {
-            OpenOptions::new().create(true).read(true).append(true).open(&path)
+            open_line_file(&path)
         };
         #[cfg(not(any(test, feature = "test-hooks")))]
-        let reopened = OpenOptions::new().create(true).read(true).append(true).open(&path);
+        let reopened = open_line_file(&path);
         self.coverage = covered;
         match reopened {
             Ok(file) => {
@@ -458,7 +458,7 @@ impl LineFile {
     fn purge_foreign(&mut self, head: u64) -> io::Result<()> {
         let path = self.dir.join(self.name);
         let tmp = self.dir.join(format!("{}.compact", self.name));
-        let mut out = BufWriter::new(File::create(&tmp)?);
+        let mut out = BufWriter::new(create_rewrite_temp(&tmp)?);
         let mut reader = BufReader::new(File::open(&path)?);
         let mut line = Vec::new();
         while reader.read_until(b'\n', &mut line)? > 0 {
@@ -474,9 +474,38 @@ impl LineFile {
         f.sync_all()?;
         drop(f);
         std::fs::rename(&tmp, &path)?;
-        self.file = OpenOptions::new().create(true).read(true).append(true).open(&path)?;
+        self.file = open_line_file(&path)?;
         Ok(())
     }
+}
+
+/// A line file opened for reading and appending, created where absent —
+/// born `0600` on unix, the mode set at creation and the process umask
+/// irrelevant; a file that already stands keeps its mode. The one open
+/// every line file takes, the attest store's included: at the replay, and
+/// after each rewrite's rename.
+fn open_line_file(path: &Path) -> io::Result<File> {
+    let mut opts = OpenOptions::new();
+    opts.create(true).read(true).append(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        opts.mode(0o600);
+    }
+    opts.open(path)
+}
+
+/// A rewrite's temp file, created afresh — born `0600` on unix, the mode
+/// set at creation, which the rename carries onto the line file.
+fn create_rewrite_temp(path: &Path) -> io::Result<File> {
+    let mut opts = OpenOptions::new();
+    opts.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        opts.mode(0o600);
+    }
+    opts.open(path)
 }
 
 /// One record object for `at` from its fields — THE shape every line of a

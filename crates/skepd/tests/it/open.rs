@@ -49,7 +49,7 @@ const WORKER_FAULT: &str = "SKEPD_TEST_WORKER_FAULT";
 /// How long a claim waits for the binary to serve, to say a line or to
 /// exit: an open on a fresh directory is a fraction of a second and a
 /// refusal milliseconds, so a minute is the room machine weather gets.
-const PATIENCE: Duration = Duration::from_secs(60);
+pub(crate) const PATIENCE: Duration = Duration::from_secs(60);
 
 /// THE REFUSAL's CEILING (§4 row 22, "milliseconds, not after a minute's
 /// open"): what a held port's refusal may take from spawn to exit. The act
@@ -65,7 +65,7 @@ const REFUSAL_CEILING: Duration = Duration::from_secs(10);
 
 /// The binary over `dir` with `flags` after `--data-dir`, both streams
 /// piped — what every spawn here starts from.
-fn skepd(dir: &Path, flags: &[&str]) -> Command {
+pub(crate) fn skepd(dir: &Path, flags: &[&str]) -> Command {
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_skepd"));
     cmd.arg("--data-dir").arg(dir).args(flags).stdout(Stdio::piped()).stderr(Stdio::piped());
     cmd
@@ -82,18 +82,18 @@ fn reader_less_pipe() -> io::PipeWriter {
 
 /// A spawned binary, KILLED AND REAPED when dropped — on a passing claim's
 /// return and on a failing one's unwind alike — so no red leaks a daemon.
-struct Spawned {
-    child: Child,
+pub(crate) struct Spawned {
+    pub(crate) child: Child,
 }
 
 impl Spawned {
-    fn launch(cmd: &mut Command) -> Spawned {
+    pub(crate) fn launch(cmd: &mut Command) -> Spawned {
         Spawned { child: cmd.spawn().expect("spawn the skepd binary") }
     }
 
     /// The child's exit, polled under a deadline: a wedge fails by name,
     /// and the guard then kills it.
-    fn wait_within(&mut self, within: Duration) -> ExitStatus {
+    pub(crate) fn wait_within(&mut self, within: Duration) -> ExitStatus {
         let deadline = Instant::now() + within;
         loop {
             if let Some(status) = self.child.try_wait().expect("the child's state") {
@@ -106,7 +106,7 @@ impl Spawned {
 
     /// Kill the child and answer its exit — by the signal, where it was
     /// still running.
-    fn kill(&mut self) -> ExitStatus {
+    pub(crate) fn kill(&mut self) -> ExitStatus {
         let _ = self.child.kill();
         self.child.wait().expect("reap the child")
     }
@@ -123,13 +123,13 @@ impl Drop for Spawned {
 /// down a channel as it arrives and kept here as it is received, so a claim
 /// waits for a line by its words under a deadline, and reads the whole
 /// stream once the child is gone.
-struct Stderr {
+pub(crate) struct Stderr {
     lines: mpsc::Receiver<String>,
     seen: Vec<String>,
 }
 
 impl Stderr {
-    fn of(child: &mut Child) -> Stderr {
+    pub(crate) fn of(child: &mut Child) -> Stderr {
         let stderr = child.stderr.take().expect("the child's stderr is piped");
         let (tx, rx) = mpsc::channel();
         thread::spawn(move || {
@@ -146,7 +146,7 @@ impl Stderr {
     /// The next line `wanted` admits, every line before it kept; past
     /// `within` with none, or the stream closed first, a panic naming
     /// `what` and what was read.
-    fn wait_for(&mut self, what: &str, within: Duration, wanted: impl Fn(&str) -> bool) -> String {
+    pub(crate) fn wait_for(&mut self, what: &str, within: Duration, wanted: impl Fn(&str) -> bool) -> String {
         let deadline = Instant::now() + within;
         loop {
             let left = deadline.saturating_duration_since(Instant::now());
@@ -170,7 +170,7 @@ impl Stderr {
     }
 
     /// Every line, to the stream's close — read once the child is gone.
-    fn whole(mut self) -> Vec<String> {
+    pub(crate) fn whole(mut self) -> Vec<String> {
         while let Ok(line) = self.lines.recv() {
             self.seen.push(line);
         }
@@ -181,7 +181,7 @@ impl Stderr {
 /// The grammar's head on a line — `skepd: {RFC 3339 UTC to the millisecond}
 /// {class}: ` — and what follows it, or `None` where the line is not a
 /// timed line of `class`.
-fn after_the_head<'a>(line: &'a str, class: &str) -> Option<&'a str> {
+pub(crate) fn after_the_head<'a>(line: &'a str, class: &str) -> Option<&'a str> {
     let rest = line.strip_prefix("skepd: ")?;
     let (time, rest) = rest.split_once(' ')?;
     let timed = time.len() == 24 && time.ends_with('Z') && time.as_bytes()[10] == b'T';
@@ -194,7 +194,7 @@ fn after_the_head<'a>(line: &'a str, class: &str) -> Option<&'a str> {
 /// The port off the serving line — stdout's first line, as `hazard.rs`
 /// reads it — under a deadline on a thread, so a child that never serves
 /// fails by name rather than hanging the claim.
-fn serving_port(child: &mut Child, within: Duration) -> u16 {
+pub(crate) fn serving_port(child: &mut Child, within: Duration) -> u16 {
     let stdout = child.stdout.take().expect("the child's stdout is piped");
     let (tx, rx) = mpsc::channel();
     thread::spawn(move || {
@@ -266,7 +266,7 @@ fn recovered_figures(line: &str) -> (String, u64, u64) {
 /// the delegate from 0 and the home's mint by principal 1 (the one mint an
 /// unclaimed board admits; every later mint waits on the claim) — and the
 /// session the home's writes ride.
-fn delegate_a_home(port: u16) -> (String, String) {
+pub(crate) fn delegate_a_home(port: u16) -> (String, String) {
     let boot = open_session(port, 0);
     let v = op(port, Some(&boot), r#"{"op":"next_account_prefix","parent":"1"}"#);
     let prefix = expect_resp(&v, "maybe_addr")["addr"].as_str().expect("prefix").to_string();

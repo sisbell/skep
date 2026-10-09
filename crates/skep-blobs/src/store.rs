@@ -277,7 +277,18 @@ impl Store {
     /// over the same directory fails there, before it reaches `blobs/`.
     pub fn open(root: impl AsRef<Path>, horizon: Duration, now_ms: u64) -> io::Result<Store> {
         let root = root.as_ref();
-        fs::create_dir_all(root)?;
+        // `blobs/` is born `0700` on unix — every directory the store makes
+        // is, and every file `0600` — the mode set at creation so the
+        // process umask cannot loosen it: the deposited bytes are the
+        // depositors' own. A root that already stands is left as found.
+        let mut builder = fs::DirBuilder::new();
+        builder.recursive(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::DirBuilderExt;
+            builder.mode(0o700);
+        }
+        builder.create(root)?;
         blobs::refuse_links_and_special_files(root)?;
         let leases = LeaseLog::open(root, horizon, now_ms)?;
         let mut uploads = UploadRecords::open(root)?;
@@ -499,11 +510,28 @@ impl Store {
         let root = root.as_ref();
         let designation = function.designation();
         let dir = root.join(designation);
-        fs::create_dir_all(&dir)?;
+        // The designation directory born `0700` and the temp file `0600`
+        // on unix, as the finish's are — the mode set at creation, the
+        // rename carrying the file's onto its hex name.
+        let mut builder = fs::DirBuilder::new();
+        builder.recursive(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::DirBuilderExt;
+            builder.mode(0o700);
+        }
+        builder.create(&dir)?;
         let mut from = fs::File::open(source.as_ref())?;
         let temp = partials::partial_path(root, designation, &UploadId::mint()?);
         let (hex, size) = {
-            let mut out = fs::File::create(&temp)?;
+            let mut opts = fs::OpenOptions::new();
+            opts.write(true).create(true).truncate(true);
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::OpenOptionsExt;
+                opts.mode(0o600);
+            }
+            let mut out = opts.open(&temp)?;
             let mut hasher = blake3::Hasher::new();
             let mut buf = [0u8; 64 * 1024];
             let mut size = 0u64;

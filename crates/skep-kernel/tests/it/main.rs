@@ -10,5 +10,6 @@ mod fixture;
 mod golden;
 mod hazard;
 mod kernel;
+mod modes;
 mod mutilate;
 mod tidy;

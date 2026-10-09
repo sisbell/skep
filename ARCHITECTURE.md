@@ -197,7 +197,9 @@ The kernel owns one directory: the journal's segments (`seg-<n>.wal`), the
 checkpoints (`checkpoint.<n>`, each written through `checkpoint.tmp` — a
 temp file the kernel alone deletes: a failed write removes its own before
 answering, and `Kernel::open` removes one a crash left, reporting its size)
-and the exclusion lock (`kernel.lock`). One applier lock serializes every
+and the exclusion lock (`kernel.lock`) — the directory born `0700` and
+every file in it `0600` on unix, the mode set at creation so the process
+umask cannot loosen it. One applier lock serializes every
 write; a write is appended, fsynced, and only then installed as the root
 that lock-free readers load. The checkpoint cadence is tested on commit
 under that lock and never by a timer; under its deferred arm a crossing
@@ -1928,7 +1930,13 @@ imports it.
   the aside's unlink and the logs' compaction hold no arm of it. The arm
   is the daemon's to hand in: `skep-media`'s pass takes it as a closure
   and names no lock of the daemon's (§The media resource).
-- **The daemon writes only its own files.** The journal and checkpoints
+- **The daemon writes only its own files.** Every directory and file the
+  board creates — the kernel's, the daemon's own and the media stores' —
+  is born owner-only on unix, directories `0700` and files `0600`, the
+  mode set at creation and the umask irrelevant; and the binary refuses
+  to start on a data directory other users of this machine can read,
+  naming the directory, the mode found and the `chmod 700` that fixes it,
+  repairing nothing. The journal and checkpoints
   are the kernel's — its `checkpoint.tmp` included, which the kernel
   removes at open. The daemon's own files are `commits.log` — its
   testimony about what it committed, for whom, and whether the entry was

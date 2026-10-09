@@ -172,7 +172,16 @@ impl Log {
         let mut len = 0;
         let mut lines = 0;
         {
-            let mut f = File::create(&twin)?;
+            // The twin is born `0600` on unix — the mode set at creation,
+            // which the rename carries onto the log.
+            let mut opts = OpenOptions::new();
+            opts.write(true).create(true).truncate(true);
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::OpenOptionsExt;
+                opts.mode(0o600);
+            }
+            let mut f = opts.open(&twin)?;
             for v in current {
                 let line = line_of(&v);
                 f.write_all(&line)?;
@@ -231,9 +240,18 @@ fn whole_lines(bytes: &[u8]) -> (Vec<Value>, usize) {
     (values, good)
 }
 
-/// Open the log at `path` for appending, creating it where absent.
+/// Open the log at `path` for appending, creating it where absent — born
+/// `0600` on unix, the mode set at creation and the process umask
+/// irrelevant; a log that already stands keeps its mode.
 fn open_append(path: &Path) -> io::Result<File> {
-    OpenOptions::new().create(true).append(true).open(path)
+    let mut opts = OpenOptions::new();
+    opts.create(true).append(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        opts.mode(0o600);
+    }
+    opts.open(path)
 }
 
 /// One JSON object as its line, members in sorted order (serde_json's map

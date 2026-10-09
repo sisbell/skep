@@ -640,7 +640,7 @@ impl CommitsLog {
     /// limping past.
     pub(super) fn open(dir: &Path, engine: &Engine) -> io::Result<(CommitsLog, Vec<Walked>)> {
         let path = dir.join(SIDECAR_FILE);
-        let mut file = OpenOptions::new().create(true).read(true).append(true).open(&path)?;
+        let mut file = open_sidecar(&path)?;
         let mut bytes = Vec::new();
         file.read_to_end(&mut bytes)?;
         let (records, valid_end) = parse_records(&bytes);
@@ -1090,6 +1090,34 @@ impl std::fmt::Display for RewriteFail {
 /// the create and the rename leaves it until the next compaction truncates
 /// it, which is the price of the rename being the only atomic step.
 ///
+/// `commits.log` opened for reading and appending, created where absent —
+/// born `0600` on unix, the mode set at creation and the process umask
+/// irrelevant; a file that already stands keeps its mode. The one open the
+/// sidecar takes: at the daemon's open, and after a rewrite's rename.
+fn open_sidecar(path: &Path) -> io::Result<File> {
+    let mut opts = OpenOptions::new();
+    opts.create(true).read(true).append(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        opts.mode(0o600);
+    }
+    opts.open(path)
+}
+
+/// A rewrite's temp file, created afresh — born `0600` on unix, the mode
+/// set at creation, which the rename carries onto `commits.log`.
+fn create_rewrite_temp(path: &Path) -> io::Result<File> {
+    let mut opts = OpenOptions::new();
+    opts.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        opts.mode(0o600);
+    }
+    opts.open(path)
+}
+
 /// `fail_past_rename` is the test seam: the reopen refused, so the
 /// past-rename arm is reachable without a disk that fails on cue; `false`
 /// outside a test build.
@@ -1109,7 +1137,7 @@ fn rewrite(
         out.extend_from_slice(&entry_line(*at, meta));
     }
     let renamed = (|| -> io::Result<()> {
-        let mut f = File::create(&tmp)?;
+        let mut f = create_rewrite_temp(&tmp)?;
         f.write_all(&out)?;
         f.sync_all()?;
         drop(f);
@@ -1121,12 +1149,7 @@ fn rewrite(
             "test seam: the rewritten file's reopen refused",
         )));
     }
-    let file = OpenOptions::new()
-        .create(true)
-        .read(true)
-        .append(true)
-        .open(&path)
-        .map_err(RewriteFail::PastRename)?;
+    let file = open_sidecar(&path).map_err(RewriteFail::PastRename)?;
     Ok((file, offsets, out.len() as u64))
 }
 

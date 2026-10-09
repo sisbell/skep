@@ -147,8 +147,12 @@ pub enum Durability {
         /// `checkpoint.tmp` and `kernel.lock`: checkpoint retention and
         /// journal reclamation are deletions, and a foreign file bearing one
         /// of those names is a base or a segment as far as recovery is
-        /// concerned. The `open()`-held flock excludes a second kernel and
-        /// nothing else. M2 cannot check this.
+        /// concerned. On unix the directory and every file the kernel
+        /// creates in it are OWNER-ONLY — the directory `0700` (every
+        /// component `open()` makes), each file `0600` — the mode set at
+        /// creation, the process umask irrelevant; a directory or file that
+        /// already stands keeps the mode it has. The `open()`-held flock
+        /// excludes a second kernel and nothing else. M2 cannot check this.
         journal_path: PathBuf,
         /// `N ≥ 1` most-recent checkpoints kept; the journal is reclaimed only
         /// BELOW the OLDEST retained one, so `BadCheckpoint` can fall back to

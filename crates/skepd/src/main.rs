@@ -17,7 +17,7 @@
 use std::fmt;
 use std::io::{self, Write};
 use std::panic::Location;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::exit;
 
 use skep_util::notice::{self, Class};
@@ -132,6 +132,53 @@ fn refuse(line: fmt::Arguments<'_>) {
     let _ = writeln!(io::stderr(), "{line}");
 }
 
+/// THE LOOSE DATA DIRECTORY's REFUSAL: a data directory that stands and
+/// that other users of this machine can read — any group or other bit set
+/// — is refused before the open, in these words: the directory as the
+/// operator named it, the mode found, in octal, and the one act that fixes
+/// it, named once. The posture is refuse-never-repair: nothing is chmod'd
+/// and nothing is created inside the directory. A pure value the unit
+/// suite pins by `to_string()`; [`loose_data_dir`] is what finds one.
+struct LooseDataDir<'a> {
+    path: &'a Path,
+    mode: u32,
+}
+
+impl fmt::Display for LooseDataDir<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "the data directory {} is mode {:o}: other users of this machine can read the board; \
+             chmod 700 {} and start again",
+            self.path.display(),
+            self.mode,
+            self.path.display()
+        )
+    }
+}
+
+/// The refusal for `path` where it is a directory that stands and other
+/// users can read it — `mode & 0o077 != 0`, on unix — and `None` where it
+/// does not exist (the kernel then creates it owner-only, and no mode is
+/// ever refused on a directory the board made), where it is no directory
+/// (the open's own refusal names that), and on every other platform, which
+/// has no mode to read.
+fn loose_data_dir(path: &Path) -> Option<LooseDataDir<'_>> {
+    let meta = std::fs::metadata(path).ok()?;
+    if !meta.is_dir() {
+        return None;
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = meta.permissions().mode() & 0o7777;
+        if mode & 0o077 != 0 {
+            return Some(LooseDataDir { path, mode });
+        }
+    }
+    None
+}
+
 /// The node prefix's variable (REG-1.69), carried by [`from_env`] like every
 /// other setting: [`NodePrefix`]'s `FromStr` is what lets it, so the two
 /// rules that pair holds — a non-UTF-8 value refused rather than read as
@@ -161,7 +208,11 @@ usage: skepd --data-dir <DIR> [--port <PORT>] [--workers <N>]
                      journal and its checkpoints, the blob store under
                      blobs/, and the change feed's files — commits.log,
                      the four feed-*.log files and feed-attest.log;
-                     created if absent, recovered if populated
+                     created if absent, recovered if populated. Created
+                     owner-only — the directory 0700 and every file in
+                     it 0600, set at creation whatever the umask — and a
+                     directory other users of this machine can read is
+                     refused at start: chmod 700 it and start again
   --port <PORT>      TCP port on 127.0.0.1 (env: SKEPD_PORT; default \
 {DEFAULT_PORT};
                      0 picks an ephemeral port)
@@ -528,6 +579,19 @@ fn main() {
     if let Some(arm) = std::env::var_os(SKEPD_TEST_WORKER_FAULT) {
         Daemon::panic_the_next_worker(arm.to_str().expect("the worker fault's arm is text"));
     }
+    // THE LOOSE DIRECTORY, REFUSED (unix): a data directory that stands and
+    // that other users of this machine can read is refused here — before
+    // the open, so no `kernel.lock` is taken and nothing is created inside
+    // it — naming the directory, the mode found and the one act that fixes
+    // it, repairing nothing. A directory that does not exist is the
+    // kernel's to create, owner-only, and is never refused. This is the
+    // served start's door alone: the library's open and the two tools open
+    // the directory the caller names as they find it. No line of the
+    // stream's has been said yet, so nothing waits to be drained.
+    if let Some(loose) = loose_data_dir(&args.data_dir) {
+        refuse(format_args!("skepd: {loose}"));
+        exit(1);
+    }
     // Genesis-or-recover; every EngineError is an operator condition
     // (corrupt journal, bad checkpoint) — report and stop.
     // `--origin` names the CONFIGURED set — the flag's own vocabulary and
@@ -604,233 +668,4 @@ fn main() {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn argv(args: &[&str]) -> impl Iterator<Item = String> {
-        args.iter().map(|s| s.to_string()).collect::<Vec<_>>().into_iter()
-    }
-
-    /// Asking for the usage text is an outcome the caller receives, not an
-    /// exit taken inside the parser — which is what makes every other case
-    /// here testable at all.
-    #[test]
-    fn help_is_an_answer_not_an_exit() {
-        for flag in ["--help", "-h"] {
-            let parsed = parse_args(argv(&[flag])).expect("--help is not an error");
-            assert!(parsed.is_none(), "{flag} asks for usage, not a run");
-            assert!(parse_command(argv(&["inventory", flag])).expect("usage").is_none());
-            assert!(parse_command(argv(&["pull", flag])).expect("usage").is_none());
-        }
-    }
-
-    /// THE UPLOAD SETTING (wire.md §Media): OPEN unless `--no-uploads` is
-    /// given, `--uploads` the affirmative default, and the usage text names
-    /// both with the variable.
-    #[test]
-    fn the_upload_setting_is_open_unless_closed() {
-        let absent = parse_args(argv(&["--data-dir", "/tmp/x"])).expect("valid").expect("a run");
-        assert!(absent.uploads, "open by default");
-        let closed = parse_args(argv(&["--data-dir", "/tmp/x", "--no-uploads"])).expect("valid").expect("a run");
-        assert!(!closed.uploads);
-        let open = parse_args(argv(&["--data-dir", "/tmp/x", "--no-uploads", "--uploads"])).expect("valid").expect("a run");
-        assert!(open.uploads, "the last flag wins, as --local-trust's pair does");
-        let text = usage();
-        for named in ["--no-uploads", "SKEPD_UPLOADS", "skepd inventory", "skepd pull", "--no-rehash", "--hash"] {
-            assert!(text.contains(named), "the usage names {named}");
-        }
-    }
-
-    /// THE DATA DIRECTORY's SENTENCE (the register's F14): the help names
-    /// what the daemon writes under `--data-dir` — not the journal and its
-    /// checkpoints alone, but the blob store and the change feed's files
-    /// beside them, the attest store by name — so an operator sizing or
-    /// backing up the directory is not undersold.
-    #[test]
-    fn the_usage_names_what_the_data_directory_holds() {
-        let text = usage();
-        let sentence = text
-            .split("\n  --data-dir <DIR>")
-            .nth(1)
-            .and_then(|rest| rest.split("\n  --port <PORT>").next())
-            .expect("the --data-dir sentence");
-        for named in ["journal", "checkpoints", "blobs/", "commits.log", "feed-*.log", "feed-attest.log", "SKEPD_DATA_DIR"] {
-            assert!(sentence.contains(named), "the --data-dir sentence names {named}: {sentence:?}");
-        }
-    }
-
-    /// THE HOOK's LINE (row 41) at fixed inputs: the thread's name, the
-    /// location as std spells it, and the payload only where the hook found
-    /// a `&'static str` — a formatted panic shows its location alone; an
-    /// unnamed thread and a missing location are said as such, never as a
-    /// hole in the line.
-    #[test]
-    fn the_hooks_line_names_the_thread_the_location_and_a_literal_payload_alone() {
-        let here = Location::caller();
-        assert_eq!(
-            panic_line(Some("skepd-worker"), Some(here), Some("the test seam's worker fault")),
-            format!("skepd-worker: a thread panicked at {here}: the test seam's worker fault")
-        );
-        assert_eq!(
-            panic_line(Some("skepd-pruner"), Some(here), None),
-            format!("skepd-pruner: a thread panicked at {here}"),
-            "a formatted payload — a String — is not carried: the location identifies the site"
-        );
-        assert_eq!(
-            panic_line(None, None, Some("boom")),
-            "an unnamed thread: a thread panicked at an unknown location: boom"
-        );
-        assert!(
-            here.to_string().ends_with(&format!(":{}:{}", here.line(), here.column())),
-            "the location is std's own spelling, file:line:column: {here}"
-        );
-    }
-
-    /// THE EXIT's LINE (m16): the words the binary says when `wait` returns,
-    /// before exit 1 — the state and what it means for the board.
-    #[test]
-    fn the_exits_line_says_every_worker_has_ended_and_the_board_serves_nothing() {
-        assert_eq!(WORKERS_ENDED, "every worker thread has ended; the board serves nothing");
-    }
-
-    /// THE TOOLS' LINES: a leading verb names the tool before any flag; the
-    /// inventory takes its directory and `--no-rehash`, the pull its
-    /// directory, an optional `--hash` and one file; a missing directory or
-    /// file, an unknown flag and a daemon flag under a tool are refused by
-    /// name; and a line with no verb is the daemon's own.
-    #[test]
-    fn the_tools_parse_a_leading_verb_before_their_flags() {
-        match parse_command(argv(&["inventory", "--data-dir", "/tmp/b"])).expect("valid").expect("a tool") {
-            Command::Inventory { data_dir, check } => {
-                assert_eq!(data_dir, PathBuf::from("/tmp/b"));
-                assert_eq!(check, tools::HoleCheck::Rehash, "re-hashed by default");
-            }
-            _ => panic!("the inventory"),
-        }
-        match parse_command(argv(&["inventory", "--no-rehash", "--data-dir", "/tmp/b"])).expect("valid").expect("a tool") {
-            Command::Inventory { check, .. } => assert_eq!(check, tools::HoleCheck::LengthOnly),
-            _ => panic!("the inventory"),
-        }
-        match parse_command(argv(&["pull", "--data-dir", "/tmp/b", "/tmp/picture"])).expect("valid").expect("a tool") {
-            Command::Pull { data_dir, hash, file } => {
-                assert_eq!((data_dir, hash, file), (PathBuf::from("/tmp/b"), None, PathBuf::from("/tmp/picture")));
-            }
-            _ => panic!("the pull"),
-        }
-        let hex = "ab".repeat(32);
-        match parse_command(argv(&["pull", "--hash", &hex, "/tmp/picture", "--data-dir", "/tmp/b"])).expect("valid").expect("a tool") {
-            Command::Pull { hash, file, .. } => {
-                assert_eq!((hash, file), (Some(hex.clone()), PathBuf::from("/tmp/picture")));
-            }
-            _ => panic!("the pull"),
-        }
-        for bad in [
-            &["inventory"][..],
-            &["pull", "--data-dir", "/tmp/b"],
-            &["pull", "--data-dir", "/tmp/b", "a", "b"],
-            &["inventory", "--data-dir", "/tmp/b", "--hash", "x"],
-            &["pull", "--data-dir", "/tmp/b", "--no-rehash", "f"],
-            &["inventory", "--data-dir", "/tmp/b", "--port", "1"],
-            &["inventory", "--data-dir"],
-        ] {
-            assert!(parse_command(argv(bad)).is_err(), "{bad:?} is refused");
-        }
-        assert!(matches!(
-            parse_command(argv(&["--data-dir", "/tmp/x"])).expect("valid"),
-            Some(Command::Serve(_))
-        ));
-    }
-
-    /// Flags are read as given; a missing data dir and an unknown argument
-    /// are named refusals.
-    #[test]
-    fn flags_parse_and_refusals_are_named() {
-        let a = parse_args(argv(&["--data-dir", "/tmp/skepd-test", "--port", "0"]))
-            .expect("valid flags")
-            .expect("a run, not usage");
-        assert_eq!(a.data_dir, PathBuf::from("/tmp/skepd-test"));
-        assert_eq!(a.port, 0);
-        let a = parse_args(argv(&["--data-dir", "/tmp/x", "--blocked-prefixes", "/etc/skepd/blocked.json"]))
-            .expect("valid flags")
-            .expect("a run, not usage");
-        assert_eq!(
-            a.blocked_prefixes,
-            Some(PathBuf::from("/etc/skepd/blocked.json")),
-            "the list's supply is a path, carried as given — reading it is the open's"
-        );
-        assert!(
-            parse_args(argv(&["--data-dir", "/tmp/x", "--blocked-prefixes"])).is_err(),
-            "the flag without its file is refused"
-        );
-        assert!(parse_args(argv(&["--frobnicate"])).is_err(), "an unknown argument is refused");
-        assert!(parse_args(argv(&["--port"])).is_err(), "a flag without its value is refused");
-        assert!(
-            parse_args(argv(&["--data-dir", "/tmp/x", "--port", "notaport"])).is_err(),
-            "a non-numeric port is refused"
-        );
-        assert!(
-            parse_args(argv(&["--data-dir", "/tmp/x", "--workers", "0"])).is_err(),
-            "a zero worker count is refused, not repaired into a one-worker server"
-        );
-        assert_eq!(
-            parse_args(argv(&["--data-dir", "/tmp/x", "--workers", "2"]))
-                .expect("a count of two is in range")
-                .expect("a run, not usage")
-                .workers,
-            2,
-            "and a count in range is read as given"
-        );
-    }
-
-    /// AUTH-1.44's `--allow-preview-keys`: a bare flag, OFF unless given, and
-    /// seeded by no environment variable — a served board's image cannot
-    /// turn it on in silence.
-    #[test]
-    fn the_preview_keys_flag_is_off_unless_given() {
-        let absent = parse_args(argv(&["--data-dir", "/tmp/x"]))
-            .expect("valid flags")
-            .expect("a run, not usage");
-        assert!(!absent.allow_preview_keys, "the default is OFF");
-        let given = parse_args(argv(&["--data-dir", "/tmp/x", "--allow-preview-keys"]))
-            .expect("valid flags")
-            .expect("a run, not usage");
-        assert!(given.allow_preview_keys, "the flag turns it on");
-        assert!(
-            parse_args(argv(&["--data-dir", "/tmp/x", "--allow-preview-keys", "true"])).is_err(),
-            "the flag takes no value: a trailing word is an unknown argument"
-        );
-    }
-
-    /// REG-1.69's `--node-prefix 1.N`: an address under the root `1`, read
-    /// as given and optional; the root itself, an address under another
-    /// first component, and an account address are refused at the parse
-    /// with the form named — never repaired, never read as absent.
-    #[test]
-    fn the_node_prefix_flag_takes_a_node_address_under_the_root_and_nothing_else() {
-        let a = parse_args(argv(&["--data-dir", "/tmp/x", "--node-prefix", "1.3"]))
-            .expect("valid flags")
-            .expect("a run, not usage");
-        assert_eq!(
-            a.node_prefix.as_ref().map(|p| p.to_string()),
-            Some("1.3".to_string()),
-            "the board's node prefix, as given"
-        );
-        let absent = parse_args(argv(&["--data-dir", "/tmp/x"]))
-            .expect("valid flags")
-            .expect("a run, not usage");
-        assert!(absent.node_prefix.is_none(), "the flag is optional: a notebook has none");
-        for bad in ["1", "2.4", "1.3.0.7", "1.0", "x", ""] {
-            match parse_args(argv(&["--data-dir", "/tmp/x", "--node-prefix", bad])) {
-                Err(refused) => assert!(
-                    refused.starts_with(&format!("--node-prefix: '{bad}' is not a node prefix")),
-                    "the refusal names the flag, the value and the form: {refused}"
-                ),
-                Ok(_) => panic!("'{bad}' is not a node prefix, and was not refused"),
-            }
-        }
-        assert!(
-            parse_args(argv(&["--data-dir", "/tmp/x", "--node-prefix"])).is_err(),
-            "the flag without its value is refused"
-        );
-    }
-}
+mod tests;

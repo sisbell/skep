@@ -242,9 +242,9 @@ fn derived_docs_over(before: &World, after: &World, links: &[Address]) -> Vec<Ad
 /// (one new document, three ops), of a plain `make_link` against an `emit`
 /// or `assert_sup`, of an `edit_link`; a `delegate` under a node that
 /// `register_node` admitted and that no enumeration from the bootstrap and
-/// system nodes reaches (M3 publishes no walk of its principals). Every
-/// member a witness rules out is ABSENT on the row, as on the recorded one;
-/// every member no witness decides stays `null`.
+/// system nodes reaches (that enumeration follows account frontiers, and M3
+/// enumerates no nodes). Every member a witness rules out is ABSENT on the
+/// row, as on the recorded one; every member no witness decides stays `null`.
 ///
 /// COST, beside [`derived_docs`]'s: one walk of the board's principal list
 /// at `after` with a frontier read at `before` per account or node, and —

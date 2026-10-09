@@ -1,7 +1,8 @@
 //! §B delegate: the account mint and its principal seat in one transaction,
 //! and so an account's seat as its allocation; the peek that is not a
-//! reservation, the pinned rejection order, the depth refusal and the peek's
-//! bound, and ordinal one under every node.
+//! reservation, the code an allocated account earns, the pinned rejection
+//! order, the depth refusal and the peek's bound, and ordinal one under
+//! every node.
 
 use crate::common::*;
 use crate::heap::heap_bytes;
@@ -9,8 +10,8 @@ use crate::heap::heap_bytes;
 use skep_address::Level;
 use skep_kernel::{HistoryError, Kernel, Seq};
 use skep_namespace::{
-    system_account, DelegateError, HasM3, M3Rec, M3State, Namespace, BOOTSTRAP_PRINCIPAL,
-    MAX_PRINCIPAL_COMPONENTS, SYSTEM_PRINCIPAL,
+    system_account, DelegateError, HasM3, M3Rec, M3State, Namespace, PrincipalId,
+    BOOTSTRAP_PRINCIPAL, MAX_PRINCIPAL_COMPONENTS, SYSTEM_PRINCIPAL,
 };
 use tempfile::tempdir;
 
@@ -219,6 +220,54 @@ fn a_stale_peek_loses_and_never_re_seats_a_live_prefix() {
     assert!(m3.principal_prefix(ID2).is_none());
     // …and the chain moved on, so a fresh peek names a different prefix.
     assert_eq!(m3.next_account_prefix(&a(&[1])), Some(a(&[1, 0, 2])));
+}
+
+/// `NotFresh` is earned only on a state the ops never produce — an account
+/// allocated without its seat. On every state they do produce an allocated
+/// account is seated, so ω of it is the principal seated there, never a
+/// delegator `NotAncestor` let through, and `NotAuthorized` refuses first.
+/// So every allocated account of a board the ops built — under the bootstrap
+/// node, the system node and a provisioned one, a sub-account among them —
+/// delegated by every principal seated on it and by one it does not know,
+/// earns some code other than `NotFresh`, and nothing commits. The accounts
+/// and the delegators come off the registry's own walk, so no hand-picked
+/// list decides it; the shapes that DO earn `NotFresh` are seeded through
+/// the fold in `delegate_rejection_order_is_pinned`.
+#[test]
+fn an_allocated_account_never_earns_not_fresh_on_a_board_the_ops_built() {
+    let k = mem_kernel(genesis_world());
+    let ns = Namespace::new(&k);
+    ns.delegate(BOOTSTRAP_PRINCIPAL, t(&[1, 0, 1]), ID1)
+        .expect("an account under the bootstrap node");
+    ns.delegate(ID1, t(&[1, 0, 1, 1]), ID2)
+        .expect("a sub-account under it");
+    ns.register_node(t(&[1, 7])).expect("a provisioned node");
+    ns.delegate(BOOTSTRAP_PRINCIPAL, t(&[1, 7, 0, 1]), PrincipalId(3))
+        .expect("the provisioned node's operator");
+    let m3 = k.snapshot().world().m3().clone();
+    let seats: Vec<_> = m3
+        .principals()
+        .map(|(prefix, id)| (prefix.clone(), id))
+        .collect();
+    let before = k.current_seq();
+
+    let mut probed = 0;
+    for (account, _) in seats.iter().filter(|(p, _)| m3.is_registered_account(p)) {
+        for delegator in seats.iter().map(|&(_, id)| id).chain([UNKNOWN_ID]) {
+            let refusal =
+                rejected(ns.delegate(delegator, account.tumbler().clone(), PrincipalId(1_000)));
+            assert_ne!(
+                refusal,
+                DelegateError::NotFresh,
+                "{delegator:?} delegating the allocated {account:?}"
+            );
+            probed += 1;
+        }
+    }
+    // The system account and the three delegated accounts, each by the five
+    // seated principals and by the unknown one.
+    assert_eq!(probed, 4 * 6, "every allocated account was probed");
+    assert_eq!(k.current_seq(), before, "no refusal committed anything");
 }
 
 #[test]
@@ -534,13 +583,15 @@ fn the_peek_and_the_delegate_gate_stop_at_the_same_nesting_depth() {
 /// convention (ruling clause 2), and M3 already enforces the half a format
 /// can: the first delegate under ANY node receives account ordinal 1 — the
 /// frontier's `c₁ = N·0·1`, which `delegate`'s next-form gate demands
-/// verbatim — and once seated it is never re-delegated, because prefix
-/// freshness refuses the seat a second time (ASN-0042's
-/// PrefixBaptismCoupling, then NamespacePrincipalExclusivity). Pinned at the
-/// bootstrap node and at the host node 1.2 (the numbering ruling's other
-/// named node); at the system node 1.1 (the ruling's registry node) the seat
-/// is genesis's own — PUB-6.65 seeds the system account at 1.1.0.1 — so there
-/// the test pins the seed holding ordinal 1 and the next arrival landing at 2.
+/// verbatim — and once seated it is never re-delegated (ASN-0042's
+/// PrefixBaptismCoupling, then NamespacePrincipalExclusivity): ω of the seat
+/// is its own principal, so `NotAuthorized` refuses every delegator above it
+/// and `NotAncestor` the seated one, both ahead of the freshness gate. Pinned
+/// at the bootstrap node and at the host node 1.2 (the numbering ruling's
+/// other named node); at the system node 1.1 (the ruling's registry node) the
+/// seat is genesis's own — PUB-6.65 seeds the system account at 1.1.0.1 — so
+/// there the test pins the seed holding ordinal 1 and the next arrival
+/// landing at 2.
 #[test]
 fn the_first_delegate_under_a_node_receives_account_ordinal_one() {
     let k = mem_kernel(genesis_world());

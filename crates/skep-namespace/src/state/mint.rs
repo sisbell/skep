@@ -169,7 +169,9 @@ impl M3State {
     /// transaction's WORKING state and stages the returned [`M3Rec`] there,
     /// before its next mint on the chain — so successive mints in one
     /// composite each see the prior one ([`M3Rec::Allocate`] states the rule
-    /// and what breaking it costs).
+    /// and what breaking it costs). [`M3State::next_content_address`] is this
+    /// without the record, which is the content chain's peek: the read for a
+    /// caller that wants the address and mints nothing.
     pub fn mint_content(&self, home: &Address) -> Result<(Address, M3Rec), MintError> {
         if !self.is_registered_document(home) {
             return Err(MintError::HomeNotRegistered); // P6/C2

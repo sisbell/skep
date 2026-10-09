@@ -70,11 +70,9 @@ pub(crate) struct NsKey {
 ///
 /// No key read out of `frontiers` reaches `first_in`: all five mints build a
 /// fresh key from a `*_ns` constructor, and loaded keys are only compared for
-/// lookup and written back out. So this door is defence for the first
-/// frontier-enumerating or re-keying reader to appear, and that reader is why
-/// it is here: M3 publishes no enumeration over its frontier map, which is
-/// why the engine's observation surface reads this slice through its serde
-/// bytes instead.
+/// lookup and written back out. So the door guards a reader M3 does not have
+/// yet — one that enumerates or re-keys the frontier map, which no M3 read
+/// does.
 fn t4_anchor<'de, D: Deserializer<'de>>(d: D) -> Result<Tumbler, D::Error> {
     let parent = Tumbler::deserialize(d)?;
     if !is_t4_valid(&parent) {

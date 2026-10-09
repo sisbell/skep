@@ -2,13 +2,13 @@
 //! writing nothing — all but the two peeks, which call a mint and so live in
 //! `mint`. Entity membership (§2), the two chain-end reads that read a
 //! frontier directly (`has_documents`, `latest_version`), the publication
-//! map's point read and its walk, the principal registry and the ω resolver
-//! (§5), and [`prefix_contains`], which answers where an address sits and
-//! never who may write it. An `impl M3State` child of `state`: it
-//! reads the slice's private fields the way a child does, and keeps the one
-//! chain-membership decision (`is_chain_member`) and the one ω walk (`omega`)
-//! private to itself, so every other reader goes through a method that
-//! states its contract.
+//! map's point read and its walk, the principal registry's reads, its walk
+//! and the ω resolver (§5), and [`prefix_contains`], which answers where an
+//! address sits and never who may write it. An `impl M3State` child of
+//! `state`: it reads the slice's private fields the way a child does, and
+//! keeps the one chain-membership decision (`is_chain_member`) and the one ω
+//! walk (`omega`) private to itself, so every other reader goes through a
+//! method that states its contract.
 
 use std::ops::Bound::{Excluded, Unbounded};
 
@@ -100,15 +100,15 @@ impl M3State {
     /// `entity_level(a) == Some(Account)` — the account-hood precondition
     /// (P8/CND.pre): what [`M3State::mint_document`] gates on, what
     /// `create_new_document` and `fork` reach through it, and the
-    /// account-hood test M10's credential fold and key-set read ask. NOT
-    /// `delegate`'s parent gate, which is the account mint's own and
-    /// admits a registered node OR account — a node parent being the ordinary
-    /// case, since the first delegate under a node has one. The
-    /// account twin of [`M3State::is_registered_document`], published for the
-    /// same reason: the question is asked from outside M3, and spelling it as
-    /// a comparison against an `Option<Level>` makes every caller import M1's
-    /// tier enum and choose between `.is_some()` (any entity — what
-    /// `register_node`'s freshness gate wants) and this.
+    /// account-hood test the credential fold (AUTH-2.33) and the key-set read
+    /// (AUTH-6.19) ask. NOT `delegate`'s parent gate, which is the account
+    /// mint's own and admits a registered node OR account — a node parent
+    /// being the ordinary case, since the first delegate under a node has
+    /// one. The account twin of [`M3State::is_registered_document`], published
+    /// for the same reason: the question is asked from outside M3, and
+    /// spelling it as a comparison against an `Option<Level>` makes every
+    /// caller import M1's tier enum and choose between `.is_some()` (any
+    /// entity — what `register_node`'s freshness gate wants) and this.
     pub fn is_registered_account(&self, a: &Address) -> bool {
         self.entity_level(a) == Some(Level::Account)
     }
@@ -300,13 +300,14 @@ impl M3State {
     /// hoisted `NotAccountTier` gate), so a below-tier entry is unreachable
     /// through the ops and representable only in a corrupted checkpoint — and
     /// ω is the one reader whose answer to such an entry would be a PASS,
-    /// which is why ω is the one reader that refuses it. The other two readers
-    /// of Π need no filter: [`M3State::has_principal_strictly_under`] already
-    /// answers a rejection when it sees one, and [`M3State::principal_prefix`]
-    /// returns the registry's verbatim answer, which every mint that could
-    /// receive such a prefix then refuses on its own tier gate. No tie is
-    /// possible here: two prefixes of one address have different lengths, and
-    /// Π is prefix-injective.
+    /// which is why ω is the one reader that refuses it. The other readers of
+    /// Π need no filter: [`M3State::has_principal_strictly_under`] already
+    /// answers a rejection when it sees one, [`M3State::account_seat`] looks
+    /// up an account-tier key and so never meets one, and
+    /// [`M3State::principal_prefix`] and [`M3State::principals`] answer the
+    /// registry verbatim — a prefix every mint that could receive it then
+    /// refuses on its own tier gate. No tie is possible here: two prefixes of
+    /// one address have different lengths, and Π is prefix-injective.
     fn omega(&self, a: &Address) -> Option<(&Address, PrincipalId)> {
         self.principals
             .iter()
@@ -483,6 +484,33 @@ impl M3State {
             .iter()
             .find(|(_, pid)| **pid == id)
             .map(|(prefix, _)| prefix)
+    }
+
+    /// Every seat in Π (§5) with the principal seated there, in address
+    /// order — the ENUMERATION of the principal registry that ω walks,
+    /// [`M3State::account_seat`] probes one entry of and
+    /// [`M3State::principal_prefix`] scans by id. Verbatim, as
+    /// `principal_prefix` answers: π₀'s node-tier seat at `[1]`, the system
+    /// account genesis seats, every account [`crate::Namespace::delegate`]
+    /// seated — and, off a corrupted checkpoint, a below-tier entry, which ω's
+    /// O1a filter refuses and this walk does not. The order is the `OrdMap`'s,
+    /// a function of the contents, so two boards with one history enumerate
+    /// alike; double-ended and exact-size, as [`M3State::documents`] is, so
+    /// `.len()` is |Π| at one call and no walk.
+    ///
+    /// The read for a caller that holds neither an address nor an id — one
+    /// that names the seat a commit made by comparing this walk on the worlds
+    /// either side of it, or one that renders the registry. Such a caller
+    /// otherwise rebuilds Π from the account chains' frontiers and misses
+    /// every seat beneath a node [`crate::Namespace::register_node`] admitted,
+    /// which no frontier walk from the genesis seats reaches, since M3
+    /// enumerates no nodes. Each walk is Θ(|Π|), and |Π| is a number any key
+    /// holder can raise (`omega` says how); who owns an address is ω's
+    /// question, and where an id is seated `principal_prefix`'s.
+    pub fn principals(
+        &self,
+    ) -> impl DoubleEndedIterator<Item = (&Address, PrincipalId)> + ExactSizeIterator + '_ {
+        self.principals.iter().map(|(prefix, id)| (prefix, *id))
     }
 
     /// §6 (iv): does a registered principal sit STRICTLY under `p`? The

@@ -337,12 +337,14 @@ where
                 return Err(DelegateError::NotTopDown);
             }
             // (v) freshness: unallocated (T4-validity was the pre-work lift)
-            // [non-monotone]. On any state M3's own ops can produce, next-form
-            // below independently refuses every allocated prefix — allocated
-            // ⇒ ordinal ≤ m, while the value it compares carries m + 1 — so on
-            // the live path this gate fixes the rejection CODE and next-form
-            // holds the invariant; relax next-form and (v) becomes the sole
-            // guard.
+            // [non-monotone]. Never reached with an allocated prefix on a
+            // state M3's ops produce: there an allocated account is seated,
+            // so (ii) has already refused it. On the state they never
+            // produce — an account allocated without its seat — next-form
+            // below would refuse the same input too (allocated ⇒ ordinal ≤ m,
+            // while the value it compares carries m + 1), and this gate fixes
+            // the code that state earns; relax next-form and it is that
+            // state's only guard.
             if base.is_allocated(&new_prefix) {
                 return Err(DelegateError::NotFresh);
             }

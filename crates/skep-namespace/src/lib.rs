@@ -75,20 +75,21 @@
 //!   [`M3State::effective_owner_pair`] for the whole entry, AUTH-6.37) and
 //!   [`M3State::account_seat`], the owner of a registered document or
 //!   account, that entry by one lookup at its own account
-//!   \[ASN-0042 O1–O9\], id→prefix resolution, the four chain-end reads —
-//!   the next-form peek [`M3State::next_account_prefix`], the content
-//!   chain's frontier [`M3State::next_content_address`] (the
-//!   content-frontier read's answer, AUTH-6.38), the version chain's latest
-//!   member [`M3State::latest_version`], and the emptiness of an account's
+//!   \[ASN-0042 O1–O9\], id→prefix resolution and the walk of every seat
+//!   ([`M3State::principals`]), the four chain-end reads — the next-form
+//!   peek [`M3State::next_account_prefix`], the content chain's frontier
+//!   [`M3State::next_content_address`] (the content-frontier read's
+//!   answer, AUTH-6.38), the version chain's latest member
+//!   [`M3State::latest_version`], and the emptiness of an account's
 //!   document chain [`M3State::has_documents`] — and the publication read
-//!   [`M3State::published`] and its enumeration
-//!   [`M3State::documents`] — the engine's ONE definition of a document's
-//!   publication state, the bit its own allocation record journaled
-//!   \[PUB-7.8, PUB-7.10; owner ruling D1\] — plus three
-//!   registry-free address answers: [`prefix_contains`], which answers
-//!   where an address SITS and never who may write it, and the two slots a
-//!   chain opens at, [`first_document_address`] for an account's document
-//!   chain and [`first_version_address`] for a document's version chain.
+//!   [`M3State::published`] and its enumeration [`M3State::documents`] —
+//!   the engine's ONE definition of a document's publication state, the
+//!   bit its own allocation record journaled \[PUB-7.8, PUB-7.10; owner
+//!   ruling D1\] — plus three registry-free address answers:
+//!   [`prefix_contains`], which answers where an address SITS and never
+//!   who may write it, and the two slots a chain opens at,
+//!   [`first_document_address`] for an account's document chain and
+//!   [`first_version_address`] for a document's version chain.
 //! * **The ghost region** (owner ruling, 2026-08-26) — the first
 //!   [`GHOST_POSITIONS`] content addresses of [`ghost_home_document`],
 //!   spelled by [`ghost_position`]: five ghost tumblers that are compiled

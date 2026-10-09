@@ -1,7 +1,8 @@
 //! §C ownership: containment is not authorization, ω is the longest covering
 //! prefix, a registered document is owned at its own account and found there
-//! by one lookup, the principal registry answers in both directions, ω's work
-//! follows the registry and not the probe, and the seats ω refuses or names.
+//! by one lookup, the principal registry answers in both directions and
+//! enumerates every seat, ω's work follows the registry and not the probe,
+//! and the seats ω refuses or names.
 
 use crate::common::*;
 use crate::heap::heap_bytes;
@@ -9,7 +10,7 @@ use crate::heap::heap_bytes;
 use skep_address::{same_account, validate, Address, Level, Tumbler};
 use skep_namespace::{
     first_document_address, prefix_contains, system_account, CreateDocumentError, HasM3, M3Rec,
-    M3State, Namespace, PrincipalId, BOOTSTRAP_PRINCIPAL,
+    M3State, Namespace, PrincipalId, BOOTSTRAP_PRINCIPAL, SYSTEM_PRINCIPAL,
 };
 
 #[test]
@@ -419,6 +420,48 @@ fn the_principal_registry_answers_one_prefix_per_principal_in_both_directions() 
 }
 
 #[test]
+fn the_principal_registry_enumerates_every_seat_in_address_order() {
+    // §5: Π's walk is every seat, verbatim, in address order — π₀'s node-tier
+    // seat, the system account genesis seats, each delegation's — including a
+    // seat beneath a node `register_node` admitted, which no walk of account
+    // frontiers from the genesis seats reaches. One delegation is one new
+    // entry, so the walk of the world after a commit, less the walk of the
+    // world before it, names the seat that commit made: the comparison a
+    // caller holding neither an address nor an id makes.
+    let k = mem_kernel(genesis_world());
+    let ns = Namespace::new(&k);
+    let (acct, _) = ns
+        .delegate(BOOTSTRAP_PRINCIPAL, t(&[1, 0, 1]), ID1)
+        .expect("an account under the bootstrap node");
+    ns.register_node(t(&[1, 7])).expect("a provisioned node");
+    let before = k.snapshot().world().m3().clone();
+    let (provisioned, _) = ns
+        .delegate(BOOTSTRAP_PRINCIPAL, t(&[1, 7, 0, 1]), ID2)
+        .expect("an account under the provisioned node");
+    let after = k.snapshot().world().m3().clone();
+
+    let (root, system) = (a(&[1]), system_account());
+    assert_eq!(
+        after.principals().collect::<Vec<_>>(),
+        vec![
+            (&root, BOOTSTRAP_PRINCIPAL),
+            (&acct, ID1),
+            (&system, SYSTEM_PRINCIPAL),
+            (&provisioned, ID2),
+        ],
+        "every seat, in address order"
+    );
+    assert_eq!(after.principals().len(), 4);
+    assert_eq!(after.principals().next_back(), Some((&provisioned, ID2)));
+    // The commit's one new seat: the walk after it, less the walk before.
+    let seated: Vec<_> = after
+        .principals()
+        .filter(|entry| !before.principals().any(|seat| seat == *entry))
+        .collect();
+    assert_eq!(seated, vec![(&provisioned, ID2)]);
+}
+
+#[test]
 fn omega_resolves_by_the_registry_not_by_the_probes_depth() {
     // §5 cost discipline: ω's work is sized by Π, never by the address the
     // caller hands in. T4 constrains an address's zero pattern, NOT its
@@ -526,9 +569,10 @@ fn omega_refuses_a_principal_seated_below_the_account_tier() {
     assert_eq!(m3.effective_owner_prefix(&element), Some(&a(&[1, 0, 1])));
     assert!(!m3.is_effective_owner(ID2, &element));
 
-    // The other two readers of Π answer VERBATIM, as their docs say — the
-    // registry still reports the seat…
+    // The registry's verbatim readers report the seat, as their docs say —
+    // by id and in the walk of every seat…
     assert_eq!(m3.principal_prefix(ID2), Some(&doc));
+    assert!(m3.principals().any(|seat| seat == (&doc, ID2)));
     // …and the ω-gated op is what refuses it. Without the filter this call
     // passes authorization and refuses structurally instead — the right
     // outcome for the wrong reason, and the wrong one for M5, which asks ω

@@ -126,11 +126,34 @@ where
     /// EMPTY SURFACE: when the arrangement snapshotted arranges no content,
     /// the fork is registered and ABSENT from the arrangement map — the lazy
     /// absent-⇒-empty convention, with no redundant entry and no provenance
-    /// (ASN-0123 V1) — and every read answers for it as for any document M5
-    /// has not yet touched. The emptiness is the SURFACE's, not the address
-    /// named's: a bare published source whose own pre-chain arrangement is
-    /// empty forks its head's content, and one whose head is empty forks
-    /// nothing, whatever its pre-chain arrangement holds.
+    /// (ASN-0123 V1) — and every read of its arrangement and of R answers for
+    /// it as for any document M5 has not yet touched. The emptiness is the
+    /// SURFACE's, not the address named's: a bare published source whose own
+    /// pre-chain arrangement is empty forks its head's content, and one whose
+    /// head is empty forks nothing, whatever its pre-chain arrangement holds.
+    ///
+    /// THE BIRTH EXTENT: a fork that is its trunk's BIRTH VERSION (PUB-2.34)
+    /// — `D.1`, which the owned arm mints off a memberless published document
+    /// — has its birth extent noted at the count it shares (BIRTH★, on
+    /// [`M5State`](crate::M5State)), ZERO when the surface is empty. So for
+    /// that fork [`birth_extent`](crate::M5State::birth_extent) answers a
+    /// noted zero where a document M5 has not touched answers `None` — the one
+    /// read that tells an empty birth version from an untouched document. No
+    /// other fork notes an extent, and no fork carries
+    /// [`shot_terms`](crate::M5State::shot_terms): no shot minted it.
+    ///
+    /// THE LINK SUBSPACE IS NOT SHARED: the fork's link subspace starts EMPTY,
+    /// whatever the surface seats. ASN-0123 V2 shares the CONTENT map, and a
+    /// link is arranged only in its home document (CL-OWN), so the source's
+    /// seated links stay the source's; a link made on the source's content
+    /// still reaches the fork through the content the two share, found at
+    /// query time by link discovery rather than enumerated in the fork's own
+    /// link subspace. That is a ruled divergence from the reference
+    /// implementation, which copies the source's link subspace into the
+    /// version (`conformance/adjudication/decisions.md`, ruling 15);
+    /// link-subspace versioning is ASN-0123's open question OQ3. The shot's
+    /// member starts with an empty link subspace for the same reason
+    /// ([`publish`](Vstream::publish)).
     ///
     /// COST, AND WHO OWNS IT. One request names one address, and the record
     /// it stages names two; what the fold then does is share the surface's

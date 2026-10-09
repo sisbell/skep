@@ -16,20 +16,23 @@
 //! the process dies, and dies again at every open of that checkpoint.
 //! Inserting each entry as it arrives reserves nothing the bytes have not
 //! carried, so a short body runs out of input and the decode refuses it. M4's
-//! content map decodes the same way, for the same reason.
+//! content map decodes entry by entry for the same reason, and parts from
+//! this door at a repeated key (below).
 //!
 //! The decode is otherwise `im`'s own. The bytes are the ones `im`'s
 //! `Serialize` writes — a count, then the entries in order — so the encoding
 //! is untouched; each entry is decoded by its own `Deserialize`, door and all
 //! (a key re-enters M1's `Address` door, a run [`Run::new`](crate::Run::new),
 //! a span T12); a map's later entry under a repeated key replaces the
-//! earlier, as `im`'s insert-in-order does; and nothing `im`'s visitor admits
-//! is refused. What bounds the loop is the ELEMENT: each must consume at least
-//! one byte, so a count larger than the entries that follow costs at most one
-//! pass over the body. Every element the slice holds does — an address, a
-//! run, a span, a natural and the shot terms each open with a count of their
-//! own — and an element that decoded from zero bytes would turn a lying count
-//! into an unbounded loop (M2's obligation states that hazard on `Record`).
+//! earlier, as `im`'s insert-in-order does (M4's door refuses a body naming
+//! one key twice instead, leaving no tie to break); and nothing `im`'s
+//! visitor admits is refused. What bounds the loop is the ELEMENT: each must
+//! consume at least one byte, so a count larger than the entries that follow
+//! costs at most one pass over the body. Every element the slice holds does
+//! — an address, a run, a span, a natural and the shot terms each open with a
+//! count of their own — and an element that decoded from zero bytes would
+//! turn a lying count into an unbounded loop (M2's obligation states that
+//! hazard on `Record`).
 //!
 //! Every collection the slice decodes comes through here: `M5State`'s three
 //! maps, each run-list behind `RunListShadow`, and R's map and each

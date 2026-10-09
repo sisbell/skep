@@ -92,7 +92,8 @@ use skep_address::{intersect, ordinal, shift, validate, Address, Nat, Span, Tumb
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(try_from = "RunShadow")]
 pub struct Run {
-    // Crate-visible so the run-list and the run union build and widen runs
+    // Crate-visible so the run-list, the run union and J0's allocation step
+    // (`ops::allocate_for_placement`) build runs, and the run-list widens them,
     // without the checked door; `Run::admits_start` lists those sites and what
     // each keeps (ARCHITECTURE.md §The arrangement, "One door for a run").
     pub(crate) i_start: Address,

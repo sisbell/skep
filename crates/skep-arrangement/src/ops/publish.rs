@@ -158,12 +158,15 @@ where
     /// that is fail-open on an unregistered address (PUB-7.5), and that reads
     /// the world it is handed, cannot decide the gate.
     ///
-    /// REQUIRES of `readable`, two clauses the composite cannot check. It
-    /// answers off the world it is HANDED: the guarantee above holds only for
-    /// a predicate that reads that world, and one that answers from a world
-    /// captured before this transaction — an M2 snapshot, or a consult that
-    /// ignores its argument — may be asked about an origin its world never
-    /// registered, where a fail-open predicate admits it. And it runs inside
+    /// REQUIRES of `readable`, two clauses the composite cannot check. First,
+    /// it answers off the world it is HANDED, as a FUNCTION of that world and
+    /// the origin document it is asked about — the same pair always answered
+    /// alike. The guarantee above holds only for a predicate that reads that
+    /// world: one that answers from a world captured before this transaction
+    /// — an M2 snapshot, or a consult that ignores its argument — may be
+    /// asked about an origin its world never registered, where a fail-open
+    /// predicate admits it. And [`shot_admission`]'s one answer holds only
+    /// for a predicate that answers each pair alike. Second, it runs inside
     /// this op's transaction, under M2's applier lock, so it inherits
     /// `transact`'s precondition: it must not call `transact` on this kernel
     /// (M2 answers that nested write with its reentrancy panic, the caller's
@@ -366,11 +369,15 @@ where
 /// it answers after that — `TooManyValues` onward — is the composite's alone.
 ///
 /// ONE ANSWER, NOT TWO: `publish` opens with this check on its working world,
-/// so a door asking it of the world the transaction will open on is told
-/// what `publish` will answer through its gate, with nothing simulated or
-/// staged to learn it. `readable` is asked as `publish` asks it — once per
-/// distinct origin document, in run order, of `world` — and is held to
-/// `publish`'s first REQUIRES: it answers off the world it is handed.
+/// so a door asking it of the world the transaction will open on, with the
+/// predicate `publish` will be handed, is told what `publish` will answer
+/// through its gate, with nothing simulated or staged to learn it.
+/// `readable` is asked as `publish` asks it — once per distinct origin
+/// document, in run order, of `world` — and is held to `publish`'s first
+/// REQUIRES: a function of the world it is handed and the origin it is asked
+/// about. The one answer rests on that premise, which nothing here can check:
+/// a predicate that answers one pair two ways — off a budget, a clock or a
+/// count of its calls — can tell this query one thing and `publish` another.
 ///
 /// COST: `publish`'s own through its gate — the carried-run test (the base's
 /// runs merged into their union once, each supplied run one search of it),

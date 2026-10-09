@@ -169,24 +169,52 @@ fn the_allocation_step_mints_writes_and_accumulates_through_the_merge_condition(
 fn the_placement_budget_stays_inside_the_transaction_budget() {
     // MAX_PLACED_RUNS is a number with an argument behind it, and the
     // argument is about M2's encoding — so it is measured against that
-    // encoding rather than remembered. A full placement must still be a
+    // encoding rather than remembered. At the shallowest content address,
+    // where the card states it, a full placement must still be a
     // transaction M2 could accept: a cap above the journal's own ceiling
-    // would be no cap at all, since the work would be done and then
-    // refused downstream, which is the cost the cap exists to refuse.
+    // would be no cap at all, since the work would be done and then refused
+    // downstream, which is the cost the cap exists to refuse. The card's
+    // scope is measured too: every further component lengthens each run, so
+    // a full placement still fits at eighty components and no longer at
+    // ninety — the card's "about eighty-five", held to the real encoding.
     const SAMPLE: usize = 64;
-    let runs: Vec<Run> = (1..=SAMPLE as u32).map(|k| run(&ca(2 * k), 1)).collect();
-    let rec = M5Rec::ContentPlace {
-        doc: doc1(),
-        at: n(1),
-        runs,
+    // The encoded bytes per run of a placement of SAMPLE content runs whose
+    // starts are `depth` components long — node, account, a document field
+    // of `depth − 7` components (a member nested `depth − 8` deep), then the
+    // element's subspace and ordinal — none I-adjacent to the next.
+    let per_run = |depth: usize| -> u64 {
+        let runs: Vec<Run> = (1..=SAMPLE as u32)
+            .map(|k| {
+                let mut comps = vec![1, 0, 1, 0];
+                comps.resize(depth - 3, 1);
+                comps.extend([0, 1, 2 * k]);
+                run(&a(&comps), 1)
+            })
+            .collect();
+        let rec = M5Rec::ContentPlace {
+            doc: doc1(),
+            at: n(1),
+            runs,
+        };
+        (bincode::serialize(&rec).expect("the record encodes").len() / SAMPLE) as u64
     };
-    let per_run = bincode::serialize(&rec).expect("the record encodes").len() / SAMPLE;
-    let full = MAX_PLACED_RUNS as u64 * per_run as u64;
+    let full = |depth: usize| MAX_PLACED_RUNS as u64 * per_run(depth);
+    assert_eq!(
+        ca(1).tumbler().len(),
+        8,
+        "the premise: the shallowest content address"
+    );
     assert!(
-        full < skep_kernel::MAX_TXN_BYTES,
-        "a full placement encodes to ~{full} bytes, past M2's {}",
+        full(8) < skep_kernel::MAX_TXN_BYTES,
+        "a full placement encodes to ~{} bytes, past M2's {}",
+        full(8),
         skep_kernel::MAX_TXN_BYTES
     );
+    assert!(
+        full(80) < skep_kernel::MAX_TXN_BYTES,
+        "eighty components still fit"
+    );
+    assert!(full(90) > skep_kernel::MAX_TXN_BYTES, "ninety no longer do");
 }
 
 #[test]

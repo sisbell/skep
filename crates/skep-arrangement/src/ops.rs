@@ -91,14 +91,25 @@ pub use publish::shot_admission;
 /// ceiling on what one request can make M5 hold live while it decides
 /// whether to place anything at all.
 ///
-/// The budget: a `Run` journals as an element `Address` and a width, about a
-/// hundred bytes as bincode writes them, so M2's `MAX_TXN_BYTES` (64 MiB)
-/// admits on the order of half a million of them and no more — past that the
-/// transaction cannot commit whatever M5 does, and the work of building it
-/// is spent for a refusal. `2^16` sits an order inside that ceiling, which
-/// keeps the LIVE heap one placing request commands to the same order as the
-/// transaction budget M2 already prices rather than several times it. The
-/// arithmetic is checked against the real encoding rather than restated here
+/// The budget: a `Run` journals as an element `Address` and a width — about
+/// a hundred bytes as bincode writes them at the shallowest content address,
+/// eight components, and about twelve more for each further component — so
+/// at that depth M2's `MAX_TXN_BYTES` (64 MiB) admits on the order of half a
+/// million of them and no more: past that the transaction cannot commit
+/// whatever M5 does, and the work of building it is spent for a refusal.
+/// There `2^16` sits an order inside the ceiling, which keeps the LIVE heap
+/// one placing request commands to the same order as the transaction budget
+/// M2 already prices rather than several times it. The argument is the
+/// shallow address's: a run's journal bytes and its resident address both
+/// grow with the address's component count — an account prefix up to M3's
+/// `MAX_PRINCIPAL_COMPONENTS`, then the version components of the nested
+/// members beneath it — so from about eighty-five components on a placement
+/// of the cap's runs no longer fits M2's ceiling, and one under the cap can
+/// be built whole and then refused `OverBudget`. The cap bounds the RUNS one
+/// request commands; it does not promise that every placement under it
+/// commits, and a route that wants depth priced ahead of the work owes that
+/// number. The arithmetic, the shallow case and the crossing alike, is
+/// checked against the real encoding rather than restated here
 /// (`the_placement_budget_stays_inside_the_transaction_budget`).
 ///
 /// IT BINDS WHAT ONE COPY OR ONE SHOT PLACES AND HOLDS LIVE, and that is the
@@ -155,13 +166,16 @@ pub const MAX_PLACED_RUNS: usize = 1 << 16;
 /// transaction M2 accepts (`the_reinsert_budget_is_a_transaction_m2_accepts`
 /// measures it against M2's own accounting), and the live heap one shot
 /// commands stays on the order of the budget M2 already prices, as
-/// [`MAX_PLACED_RUNS`] keeps it for a placement's runs. That heap is the
-/// count's alone — a re-inserted value's bytes are shared with the stored
-/// value they are read from, never copied — but the journal is not: a longer
-/// value, or a deeper document's addresses, makes every record longer, so
-/// there the ceiling holds fewer values and a re-insert under the cap can
-/// still meet M2's own refusal. The cap bounds the staging a shot commands;
-/// it does not promise that every staging under it commits.
+/// [`MAX_PLACED_RUNS`] keeps it for a placement's runs at that depth. The
+/// heap does not grow with a value's LENGTH — a re-inserted value's bytes are
+/// shared with the stored value they are read from, never copied — but it
+/// grows with the address's DEPTH, every staged record and the working
+/// world's new entry holding the fresh address whole; and the journal grows
+/// with both: a longer value, or a deeper document's addresses, makes every
+/// record longer, so there the ceiling holds fewer values and a re-insert
+/// under the cap can still meet M2's own refusal. The cap bounds the VALUES a
+/// shot commands; it does not promise that every staging under it commits,
+/// nor that its heap stays on M2's order past the shallowest address.
 ///
 /// A shot cannot be split to meet it, any more than it can
 /// [`MAX_PLACED_RUNS`]: the member it produces is born whole, and a retry of

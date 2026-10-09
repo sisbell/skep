@@ -62,8 +62,8 @@ fn omega_is_the_longest_covering_prefix_at_every_depth() {
     // §5 / O2/O3: ω is the LONGEST principal prefix, and is_effective_owner
     // agrees with it everywhere. Checked against an independent oracle — the
     // linear scan keeping the longest match, which the design names as the
-    // reference — over a GENERATED family of probes, so no chosen point
-    // decides it and a candidate walk that truncates at depth is caught.
+    // reference — over GENERATED probes, so no chosen point decides it and a
+    // candidate walk that truncates at depth is caught.
     let seeded = World {
         m3: M3State::genesis()
             .apply_m3(&alloc(&[1, 0, 1]))
@@ -131,7 +131,7 @@ fn omega_is_the_longest_covering_prefix_at_every_depth() {
     };
     let m3 = seeded.m3;
 
-    // The family: every prefix of a deep address, each of those with its
+    // The probes: every prefix of a deep address, each of those with its
     // last component bumped (an uncovered sibling), and a foreign node's
     // subtree.
     let deep = [1u32, 0, 1, 1, 1, 0, 1, 0, 1, 1];
@@ -161,7 +161,7 @@ fn omega_is_the_longest_covering_prefix_at_every_depth() {
     }
     assert!(
         probes.len() > 12,
-        "the generated family is the point of this test"
+        "the generated probes are the point of this test"
     );
 
     let mut ids: Vec<PrincipalId> = pi.iter().map(|(_, id)| *id).collect();

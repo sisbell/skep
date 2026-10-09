@@ -43,8 +43,9 @@ fn the_content_chain_of_the_ghost_home_document_never_issues_a_ghost_tumbler() {
     let k = mem_kernel(genesis_world());
     let ns = Namespace::new(&k);
 
-    // The lineage is seeded and its document is EMPTY: nothing exists at a
-    // ghost tumbler at genesis.
+    // The seed is in place — the system node, the system account and its
+    // doc 1 — and that document is EMPTY: nothing exists at a ghost tumbler
+    // at genesis.
     let d1 = ghost_home_document();
     {
         let snap = k.snapshot();
@@ -105,7 +106,7 @@ fn the_content_chain_of_the_ghost_home_document_never_issues_a_ghost_tumbler() {
         Some(a(&[1, 1, 0, 1, 0, 1, 0, 1, GHOST_POSITIONS + 8]))
     );
 
-    // The sibling chains under the same lineage produce their own members,
+    // The other chains under the same document produce their own members,
     // never a ghost tumbler — the T4b unique-parse half of the argument, at
     // the chains an attacker would actually drive: the link chain differs in
     // subspace, the version chain in tier shape.
@@ -136,16 +137,17 @@ fn the_content_chain_of_the_ghost_home_document_never_issues_a_ghost_tumbler() {
     assert_eq!(first, a(&[1, 1, 0, 1, 0, 3, 0, 1, 1]));
 }
 
-/// The floored frontier is ordinary recoverable state: a slice that minted
-/// past the ghost region round-trips M2's checkpoint encoding, and the
+/// A frontier past the ghost floor is ordinary recoverable state — the floor
+/// itself is compiled format, and no checkpoint carries it: a slice that
+/// minted past the ghost region round-trips M2's checkpoint encoding, and the
 /// restored slice keeps both halves — members stay members, ghosts stay
 /// excluded. The frontier key's anchor is the ghost home document's content
 /// base, which must pass `NsKey`'s T4 anchor door like any other key.
 #[test]
-fn a_floored_frontier_survives_the_checkpoint_round_trip() {
+fn a_frontier_past_the_ghost_floor_survives_the_checkpoint_round_trip() {
     let k = mem_kernel(genesis_world());
     // The ghost home document is genesis's (PUB-6.65's seed), born empty: the
-    // first mint on its chain is what floors the frontier.
+    // first mint on its chain stores the chain's frontier, past the floor.
     let d1 = ghost_home_document();
     commit_mint(&k, M3State::content_lock_key(&d1), |m3| {
         m3.mint_content(&d1)

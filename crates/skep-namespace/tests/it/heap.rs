@@ -1,13 +1,13 @@
 //! The test binary's global allocator — the system's, counting the heap bytes
 //! each thread asks for — so a test measures one call's heap cost on its own
-//! thread while the suite's other tests allocate on theirs. A cost claim then
-//! becomes a number a regression changes at once, where a wall-clock bound
-//! would flake and a slow test would pass. It counts BYTES, not allocations:
+//! thread while the suite's other tests use the heap on theirs. A cost claim
+//! then becomes a number a regression changes at once, where a wall-clock
+//! bound would flake and a slow test would pass. It counts BYTES, not blocks:
 //! M1's `Nat` keeps a one-digit value inline, so copying a tumbler is one
-//! allocation at any depth, and only that allocation's size tells a
+//! heap block at any depth, and only that block's size tells a
 //! fifty-thousand-component copy from a three-component one. The module's
-//! one test holds the counter to exactly that. "Heap" throughout: this
-//! crate's other allocation, an address minted on a frontier, is
+//! one test holds the counter to exactly that. "Heap" and "block" throughout:
+//! allocation in this crate is an address minted on a chain, and is
 //! `allocation.rs`'s.
 
 use std::alloc::{GlobalAlloc, Layout, System};
@@ -31,7 +31,8 @@ fn count(bytes: usize) {
 struct CountingSystem;
 
 // SAFETY: every method forwards its own arguments to `System` unchanged; the
-// one addition, a thread-local wrapping add, neither allocates nor unwinds.
+// one addition, a thread-local wrapping add, neither touches the heap nor
+// unwinds.
 unsafe impl GlobalAlloc for CountingSystem {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
         count(layout.size());

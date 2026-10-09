@@ -33,7 +33,7 @@ use serde::{Deserialize, Serialize};
 use skep_address::{ordinal, validate, Address, GateViolation, Level, Nat, Tumbler};
 
 use crate::ghost::{ghost_floor, ghost_home_document};
-use crate::ns::{is_mintable_element, namespace_of, nth_in, NsKey};
+use crate::ns::{is_content_or_link_slot, namespace_of, nth_in, NsKey};
 use crate::record::{M3Rec, PrincipalId, BOOTSTRAP_PRINCIPAL, SYSTEM_PRINCIPAL};
 
 /// The `published` an `Allocate` carries OUTSIDE the document tier — an
@@ -442,7 +442,7 @@ impl M3State {
     /// `max(frontier, floor)`; the floor is nonzero only for the ghost content
     /// namespace — `ghost_floor`). A mint's record is such a record wherever
     /// it is staged as [`M3Rec::Allocate`] requires — against the working
-    /// state the mint read: a mint extends a REGISTERED parent and emits
+    /// state the mint read: a mint extends a REGISTERED parent and issues
     /// exactly `c_{m+1}` of that state, past the floor. That the parent is
     /// REGISTERED (P8) is the mints' gate and no part of this domain: an
     /// `Allocate` under an unregistered parent folds like any other, and that
@@ -593,10 +593,11 @@ impl M3State {
     /// [`M3State::effective_frontier`] (the stored count, floored past the
     /// ghost region for the one namespace that holds it). Pure function of
     /// `frontiers` (B2 determinism — the natural property-test oracle). M1's
-    /// `checked_inc` is the TA5a gate ⇒ B6(ii)/(iii); routing every emission
-    /// through it, via `first_in`, is the defensive guard: it cannot fire on
-    /// a live path, nor on any frontier COUNT, since `first_in` sees only the
-    /// anchor — only on a key that fails `first_in`'s anchor precondition.
+    /// `checked_inc` is the TA5a gate ⇒ B6(ii)/(iii); routing every address
+    /// this issues through that gate, via `first_in`, is the defensive guard:
+    /// it cannot fire on a live path, nor on any frontier COUNT, since
+    /// `first_in` sees only the anchor — only on a key that fails `first_in`'s
+    /// anchor precondition.
     ///
     /// That precondition is `first_in`'s, stated in `crate::ns` beside the
     /// `validate` that consumes it, and the five mints — this function's only
@@ -608,25 +609,25 @@ impl M3State {
     /// makes `home` a Document, so `inc(home, 2)` lands inside T4.
     ///
     /// Every minted address is computed here, so this is also where the
-    /// element families are held to two: an element [`is_mintable_element`]
-    /// refuses — one off any chain but a content or a link chain — is a panic
-    /// naming the guarantee, never an address. The shape of what this issues
-    /// follows from `key` alone and `key` from a mint's own constructor, so no
-    /// state, corrupted or not, reaches the panic — only a third element
-    /// family added to M3, which fails at its first mint rather than
-    /// allocating the subspace-3 type names readers treat as never minted
-    /// (AUTH-7.1 horn B; AUTH-3.70).
+    /// element families are held to two: an element that is no slot of a
+    /// content or a link chain ([`is_content_or_link_slot`]) is a panic naming
+    /// the guarantee, never an address. The shape of what this issues follows
+    /// from `key` alone and `key` from a mint's own constructor, so no state,
+    /// corrupted or not, reaches the panic — only a third element family added
+    /// to M3, which fails at its first mint rather than allocating the
+    /// subspace-3 type names readers treat as never minted (AUTH-7.1 horn B;
+    /// AUTH-3.70).
     ///
     /// [`version_ns`]: crate::ns::version_ns
     /// [`document_ns`]: crate::ns::document_ns
     /// [`account_ns`]: crate::ns::account_ns
     /// [`content_ns`]: crate::ns::content_ns
     /// [`link_ns`]: crate::ns::link_ns
-    /// [`is_mintable_element`]: crate::ns::is_mintable_element
+    /// [`is_content_or_link_slot`]: crate::ns::is_content_or_link_slot
     fn next_in(&self, key: &NsKey) -> Result<Address, GateViolation> {
         let next = nth_in(key, &(self.effective_frontier(key) + 1u32))?;
         assert!(
-            next.level() != Level::Element || is_mintable_element(&next),
+            next.level() != Level::Element || is_content_or_link_slot(&next),
             "M3 mints elements on the content and link chains alone: {next} is on neither (AUTH-7.1 horn B — subspace 3 holds type names)"
         );
         Ok(next)

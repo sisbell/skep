@@ -58,10 +58,11 @@
 //!   under a node and the sub-account `(A, 1)` under an account — is minted
 //!   internally by [`Namespace::delegate`], the only op that allocates one,
 //!   and its next value is published as the peek
-//!   [`M3State::next_account_prefix`]. Every chain issues `c_{m+1}` and so
-//!   opens at ordinal 1 on an empty frontier — except the ghost content
-//!   chain, which opens at [`GHOST_POSITIONS`] + 1 (the ghost region
-//!   below). Two of the chains issue elements — a document's content chain
+//!   [`M3State::next_account_prefix`]. Every chain issues `c_{m+1}`, so on
+//!   an empty frontier its first member lands on the slot it opens at,
+//!   ordinal 1 — except on the ghost content chain, whose first member lands
+//!   at [`GHOST_POSITIONS`] + 1, past the slots the ghost region reserves
+//!   (below). Two of the chains issue elements — a document's content chain
 //!   and its link chain — and no third does: the allocator refuses to issue
 //!   any other element, so no element in any other subspace is ever minted,
 //!   and subspace 3, where type names are spelled, stays unallocated
@@ -157,7 +158,7 @@
 // The typed rejections of the public surface, each enum in its op's pinned order.
 mod error;
 // Namespaces — ASN-0040's `(p, d)`, spelled `(anchor, g)` here: the frontier
-// and lock key, built only here; the chain-family rule; a chain's members by
+// and lock key, built only here; the chain-family rule; a chain's slots by
 // ordinal; its opening slots.
 mod ns;
 // The ghost region: the five reserved type addresses M7 reads, and the floor

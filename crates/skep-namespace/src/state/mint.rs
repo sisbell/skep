@@ -88,12 +88,12 @@ impl M3State {
     }
 
     /// Account-chain `LockKey`: `(parent, 2)` under a node, `(parent, 1)`
-    /// under an account — the one family whose `g` the chain-family rule
-    /// picks (Conflicts §8). Pairs with [`M3State::mint_account`]`(parent)`
-    /// — take it BEFORE the closure; the mint inside READS this key's
-    /// frontier, and the [`M3Rec`] you stage ADVANCES it. `pub(crate)` for
-    /// the reason the mint is: `delegate` is the only caller and lives in
-    /// this crate.
+    /// under an account — the one key whose `g` the chain-family rule picks
+    /// from `parent`'s tier (Conflicts §8). Pairs with
+    /// [`M3State::mint_account`]`(parent)` — take it BEFORE the closure; the
+    /// mint inside READS this key's frontier, and the [`M3Rec`] you stage
+    /// ADVANCES it. `pub(crate)` for the reason the mint is: `delegate` is the
+    /// only caller and lives in this crate.
     pub(crate) fn account_lock_key(parent: &Address) -> LockKey {
         ns_lock_key(&account_ns(parent))
     }
@@ -130,11 +130,10 @@ impl M3State {
 }
 
 // ---------------------------------------------------------------------------
-// §A The five pure mints — one per chain, covering the corpus's six
-// families, since `mint_account` serves both account-tier families
-// (`A_account(N)` under a node and the sub-account `(A, 1)` under an
-// account, whose `g` the chain-family rule picks). So every address M3
-// originates is minted here. Four are public and fold into M5/M7 composites
+// §A The five pure mints, covering the six chain families, since
+// `mint_account` serves both account-tier families (`A_account(N)` under a
+// node and the sub-account `(A, 1)` under an account, whose `g` the
+// chain-family rule picks). So every address M3 originates is minted here. Four are public and fold into M5/M7 composites
 // (M2 contract 3); the fifth, `mint_account`, is `pub(crate)` because
 // `delegate` is its only caller and lives in this crate.
 //
@@ -334,10 +333,10 @@ impl M3State {
     /// ordinal only grows, and every value `home` ever minted — arranged,
     /// deleted, or never placed — lies below it, so the read says nothing of
     /// what they hold. It is the document's mint count plus one on every
-    /// document but one: [`crate::ghost_home_document`]'s chain opens past the
-    /// ghost region, so there the ordinal is the mint count plus
-    /// [`crate::GHOST_POSITIONS`] + 1, and the read counts that document's
-    /// mints only once the floor is taken off.
+    /// document but one: on [`crate::ghost_home_document`]'s content chain the
+    /// first member lands past the ghost region, so there the ordinal is the
+    /// mint count plus [`crate::GHOST_POSITIONS`] + 1, and the read counts
+    /// that document's mints only once the floor is taken off.
     pub fn next_content_address(&self, home: &Address) -> Option<Address> {
         match self.mint_content(home) {
             Err(MintError::HomeNotRegistered) => None,

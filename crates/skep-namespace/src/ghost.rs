@@ -104,7 +104,7 @@ fn is_ghost_ns(key: &NsKey) -> bool {
 /// running this format, ever yields a ghost tumbler. Every mint returns
 /// `c_{m+1}` of the one namespace its key names, and by T4b unique-parse the
 /// decomposed namespace of a ghost tumbler `[1,1,0,1,0,1,0,1,x]` is exactly
-/// the ghost content namespace (a `g = 2` member would carry a separator
+/// the ghost content namespace (a `g = 2` slot would carry a separator
 /// before its ordinal; every other `g = 1` family differs in subspace, tier
 /// gate, or anchor) — so the ghost content chain is the ONLY chain that
 /// could issue one. Every mint it serves carries the ordinal one past the
@@ -132,7 +132,7 @@ pub(crate) fn ghost_floor(key: &NsKey) -> Nat {
 mod tests {
     use super::*;
 
-    use crate::ns::namespace_of;
+    use crate::ns::{is_content_or_link_slot, namespace_of};
     use skep_address::Level;
 
     fn t(comps: &[u32]) -> Tumbler {
@@ -144,10 +144,10 @@ mod tests {
     }
 
     /// The two halves of non-reissue meet: every address M7 dispatches on is a
-    /// member of the ONE chain the allocator floors. `ghost_position` names the
-    /// five and `ghost_floor` skips a namespace; nothing else ties them, so
-    /// this asserts the tie directly rather than through the `is_allocated`
-    /// consequence the integration suite checks.
+    /// slot of the ONE chain the allocator floors, and a member of none.
+    /// `ghost_position` names the five and `ghost_floor` skips a namespace;
+    /// nothing else ties them, so this asserts the tie directly rather than
+    /// through the `is_allocated` consequence the integration suite checks.
     #[test]
     fn every_ghost_position_sits_in_the_namespace_the_floor_skips() {
         let ghost_ns = content_ns(&ghost_home_document());
@@ -167,6 +167,9 @@ mod tests {
             );
             assert_eq!(position.level(), Level::Element);
             assert_eq!(position.subspace(), Some(&content_subspace()));
+            // A slot of the floored chain, which the allocator's element check
+            // admits: it asks shape, never allocation.
+            assert!(is_content_or_link_slot(&position), "ghost {ordinal}");
         }
         // The floor is exactly five content addresses of ONE document: a
         // sibling doc's content chain carries none.

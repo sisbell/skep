@@ -101,7 +101,7 @@ fn a_next_field_key_over_an_element_anchor_fails_soft() {
         bincode::deserialize::<NsKey>(&bytes).expect("the door admits the pair"),
         key
     );
-    // …and both chain-member reads answer the refusal as a value.
+    // …and both slot reads answer the refusal as a value.
     assert_eq!(first_in(&key), Err(GateViolation));
     assert_eq!(nth_in(&key, &Nat::from(3u32)), Err(GateViolation));
 }
@@ -146,8 +146,8 @@ fn generator_is_its_numeral_and_admits_no_third_value() {
     }
 }
 
-/// The chain-family rule at the tier pairs the `*_ns` family is built at:
-/// an anchor and child at the SAME tier extend the anchor's own field, a
+/// The chain-family rule at the tier pairs the `*_ns` constructors are built
+/// at: an anchor and child at the SAME tier extend the anchor's own field, a
 /// child one tier down opens the next one. This is what puts the document
 /// chain `(A, 2)` and the version chain `(d, 1)` on separate frontiers
 /// (ASN-0123 VD), so the two keys anchored at one account differ.
@@ -190,33 +190,33 @@ fn the_chain_family_rule_separates_document_from_version() {
     assert_eq!(namespace_of(&acct), Some(account_ns(&node)));
 }
 
-/// §2's membership-correctness invariant, stated as a law — "for T4-valid
-/// `a`, `a` is exactly `c_{ordinal(a)}` of its decomposed `(parent, g)`
-/// namespace" — held over every address `every_address(8, 2)` yields, with
-/// the fact `Allocate`'s door rests on beside it:
+/// §2's membership-correctness invariant, stated as a law — "every T4-valid
+/// `a` with a parent is exactly the slot `c_{ordinal(a)}` of its decomposed
+/// `(parent, g)` namespace" — held over every address `every_address(8, 2)`
+/// yields, with the fact `Allocate`'s door rests on beside it:
 ///
 /// * a namespace exists iff the address has two or more components — the
 ///   door's `#a ≥ 2`, M1's `parent` and `namespace_of` agree everywhere;
-/// * address → key → address: `a` is the member its own key names at its own
-///   ordinal — what makes membership exact, since a key naming another member
-///   at `a`'s ordinal would make `a` read allocated once that member was
-///   minted;
-/// * key → address → key: every member of that chain, at small ordinals and
+/// * address → key → address: `a` is the slot its own key names at its own
+///   ordinal — what makes membership exact, since a key naming another slot
+///   at `a`'s ordinal would make `a` read allocated once that slot was
+///   filled;
+/// * key → address → key: every slot of that chain, at small ordinals and
 ///   past a machine word, derives the same key and carries its ordinal —
-///   "every member of a chain must derive the same key or the frontier forks"
+///   "every slot of a chain must derive the same key or the frontier forks"
 ///   (§1/§8).
 ///
 /// `each_chains_minted_addresses_advance_the_key_their_mint_read` pins six
-/// mint families at ordinals 1 and 2; this reaches what it does not — a node
+/// chain families at ordinals 1 and 2; this reaches what it does not — a node
 /// under a node; a subspace base under its document, whose key would be the
 /// document's VERSION chain if the chain-family rule ever read
 /// `(Document, Element)` as same-field; multi-component fields at every tier.
 #[test]
-fn every_address_is_the_member_its_own_key_names() {
-    let family = every_address(8, 2);
+fn every_address_is_the_slot_its_own_key_names() {
+    let addresses = every_address(8, 2);
     assert!(
-        family.len() > 2_000,
-        "the generated family is the point of this test"
+        addresses.len() > 2_000,
+        "the generated addresses are the point of this test"
     );
     let ordinals = [
         Nat::from(1u32),
@@ -226,7 +226,7 @@ fn every_address_is_the_member_its_own_key_names() {
         Nat::from(1u64 << 32),
         Nat::from(u64::MAX) + 2u32,
     ];
-    for addr in &family {
+    for addr in &addresses {
         let extends_a_parent = addr.tumbler().len() >= 2;
         assert_eq!(
             parent(addr).is_some(),
@@ -244,59 +244,59 @@ fn every_address_is_the_member_its_own_key_names() {
         assert_eq!(
             nth_in(&key, ordinal(addr.tumbler())),
             Ok(addr.clone()),
-            "{addr:?} is not the member its own key names"
+            "{addr:?} is not the slot its own key names"
         );
         for n in &ordinals {
-            let member = nth_in(&key, n)
+            let slot = nth_in(&key, n)
                 .expect("a NextField key comes of a peeled separator: its anchor is not Element");
             assert_eq!(
-                namespace_of(&member),
+                namespace_of(&slot),
                 Some(key.clone()),
-                "{member:?} forks {key:?}"
+                "{slot:?} forks {key:?}"
             );
             assert_eq!(
-                ordinal(member.tumbler()),
+                ordinal(slot.tumbler()),
                 n,
-                "{member:?} is not member {n} of {key:?}"
+                "{slot:?} is not slot {n} of {key:?}"
             );
         }
     }
 }
 
-/// The allocator's element check, `is_mintable_element`, IS the two element
-/// families: over every address `every_address(9, 3)` yields, an element
-/// answers `true` exactly when its own chain is its document's content chain
-/// or its link chain — the keys `content_ns` and `link_ns` build — and every
-/// other address answers `false`. The check is spelled by M1's subspace
-/// numerals, so a mint pays one comparison for it, and the two keys by M1
-/// arithmetic; this law is what holds the two spellings to one answer. Nine
-/// components over `0..=3` is the smallest family that reaches, beside a
-/// subspace base `d·0·s`, both other shapes the check refuses: subspace 3,
-/// where type names are spelled (AUTH-7.1 horn B), and an element field of
-/// three components.
+/// The allocator's element check, `is_content_or_link_slot`, IS the two
+/// element families: over every address `every_address(9, 3)` yields, an
+/// element answers `true` exactly when its own chain is its document's
+/// content chain or its link chain — the keys `content_ns` and `link_ns`
+/// build — and every other address answers `false`. The check is spelled by
+/// M1's subspace numerals, so a mint pays one comparison for it, and the two
+/// keys by M1 arithmetic; this law is what holds the two spellings to one
+/// answer. Nine components over `0..=3` is the smallest enumeration that
+/// reaches, beside a subspace base `d·0·s`, both other shapes the check
+/// refuses: subspace 3, where type names are spelled (AUTH-7.1 horn B), and
+/// an element field of three components.
 #[test]
-fn the_mintable_element_check_is_the_two_element_families() {
-    let family = every_address(9, 3);
-    let (mut mintable, mut refused) = (0, 0);
-    for addr in &family {
+fn the_content_or_link_slot_check_is_the_two_element_families() {
+    let addresses = every_address(9, 3);
+    let (mut slots, mut refused) = (0, 0);
+    for addr in &addresses {
         let on_an_element_family = addr.level() == Level::Element && {
             let doc = document_of(addr).expect("an element lies in a document");
             namespace_of(addr).is_some_and(|key| key == content_ns(&doc) || key == link_ns(&doc))
         };
         assert_eq!(
-            is_mintable_element(addr),
+            is_content_or_link_slot(addr),
             on_an_element_family,
             "{addr}: the check and the two families' keys disagree"
         );
         match (addr.level(), on_an_element_family) {
-            (Level::Element, true) => mintable += 1,
+            (Level::Element, true) => slots += 1,
             (Level::Element, false) => refused += 1,
             _ => {}
         }
     }
     assert!(
-        mintable > 0 && refused > 0,
-        "both answers occur among the elements: {mintable} mintable, {refused} refused"
+        slots > 0 && refused > 0,
+        "both answers occur among the elements: {slots} content or link slots, {refused} refused"
     );
     for refused_shape in [
         a(&[1, 0, 1, 0, 1, 0, 3, 1]),    // subspace 3
@@ -304,16 +304,16 @@ fn the_mintable_element_check_is_the_two_element_families() {
         a(&[1, 0, 1, 0, 1, 0, 1]),       // a subspace base
     ] {
         assert!(
-            family.contains(&refused_shape),
-            "{refused_shape}: the family does not reach this shape"
+            addresses.contains(&refused_shape),
+            "{refused_shape}: the enumeration does not reach this shape"
         );
-        assert!(!is_mintable_element(&refused_shape), "{refused_shape}");
+        assert!(!is_content_or_link_slot(&refused_shape), "{refused_shape}");
     }
 }
 
 /// The `NsKey → LockKey` map is INJECTIVE (§1) — distinct namespaces,
 /// distinct locks — and functional, on EVERY pair a key can be built from,
-/// T4-valid anchor or not. A law, so a generated family: every anchor of one
+/// T4-valid anchor or not. A law, so generated keys: every anchor of one
 /// to three components over an alphabet of magnitudes whose encodings run
 /// together when spliced — zero, one and two, the byte boundaries
 /// 255/256/257 and 65_535/65_536, both sides of the 32-bit and of the 64-bit
@@ -322,7 +322,7 @@ fn the_mintable_element_check_is_the_two_element_families() {
 /// and `[257, 0]` encode alike; spliced by machine word instead of by byte,
 /// `[2⁶⁴, 0]` and `[0, 2⁶⁴]` do.
 #[test]
-fn the_lock_key_encoding_is_injective_over_a_generated_family() {
+fn the_lock_key_encoding_is_injective_over_generated_keys() {
     let alphabet: Vec<Nat> = [
         0u64,
         1,
@@ -382,7 +382,7 @@ fn the_lock_key_encoding_is_injective_over_a_generated_family() {
     }
     assert!(
         locks.len() > 4_000,
-        "the generated family is the point of this test"
+        "the generated keys are the point of this test"
     );
 }
 

@@ -37,15 +37,15 @@ impl M3State {
     /// Is `a` a member of its own chain? The §2 decision behind
     /// [`M3State::is_allocated`] (and so behind [`M3State::entity_level`]),
     /// settled by decomposing and comparing against the frontier.
-    /// Membership-correctness invariant: for T4-valid `a`, `a` is *exactly*
-    /// `c_{ordinal(a)}` of its decomposed `(parent, g)` namespace (ASN-0040
-    /// `S(p, d)` canonical form; T4b unique-parse), so `a` is realized —
-    /// `a ∈ {c_{floor+1}..cₘ}` — iff `floor < ordinal(a) ≤ m`, where the floor
-    /// is 0 everywhere but the ghost content namespace — genuine chain
-    /// membership with NO false positives, not an approximation. The code
-    /// spells that interval, and both of its ends absorb their edge case:
-    /// where the floor is zero the lower bound is free, because T4 forbids a
-    /// trailing zero and `ordinal` reads the last component, so the
+    /// Membership-correctness invariant: every T4-valid `a` with a parent is
+    /// *exactly* the slot `c_{ordinal(a)}` of its decomposed `(parent, g)`
+    /// namespace (ASN-0040 `S(p, d)` canonical form; T4b unique-parse), so `a`
+    /// is a member — `a ∈ {c_{floor+1}..cₘ}` — iff `floor < ordinal(a) ≤ m`,
+    /// where the floor is 0 everywhere but the ghost content namespace —
+    /// genuine chain membership with NO false positives, not an approximation.
+    /// The code spells that interval, and both of its ends absorb their edge
+    /// case: where the floor is zero the lower bound is free, because T4
+    /// forbids a trailing zero and `ordinal` reads the last component, so the
     /// [`Address`] type carries a positive ordinal; and an absent frontier is
     /// `m = 0`, which no positive ordinal is ≤. The ghost exclusion is
     /// permanent: the five ghost tumblers answer unallocated on every board
@@ -59,7 +59,7 @@ impl M3State {
         *n > ghost_floor(&key) && self.frontiers.get(&key).is_some_and(|m| n <= m)
     }
 
-    /// `true` iff `a` exists in the name space — minted on a frontier in ANY
+    /// `true` iff `a` exists in the name space — minted on the chain of ANY
     /// namespace, content/link included, or, for a node, held in the node
     /// registry: Σ₀'s root `[1]`, the system node genesis's seed admits, and
     /// every node `register_node` admitted (node addresses are never minted
@@ -155,7 +155,7 @@ impl M3State {
     }
 
     /// The LATEST member of `source`'s version chain `(source, 1)` — `c_m`
-    /// for the chain's frontier `m`, spelled by the one chain-member helper
+    /// for the chain's frontier `m`, spelled by the one slot-by-ordinal helper
     /// (`nth_in`) at `m` — or `None` when the chain holds no member yet.
     /// [M5: the trunk head a bare document address floats to,
     /// PUB-2.49/PUB-2.53, and the head/older distinction the publish shot

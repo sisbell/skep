@@ -17,7 +17,7 @@ fn a(comps: &[u32]) -> Address {
 /// byte-identical to the key its caller locks and its mint reads (the
 /// anchor side). A divergence would under-serialize a namespace and
 /// REUSE an address. Checked at two ordinals per chain, because every
-/// member of a chain must derive the same key or the frontier forks.
+/// slot of a chain must derive the same key or the frontier forks.
 #[test]
 fn each_chains_minted_addresses_advance_the_key_their_mint_read() {
     let node = a(&[1]);
@@ -175,11 +175,11 @@ fn the_ghost_floor_holds_against_a_regressed_frontier() {
 #[should_panic(expected = "M3 mints elements on the content and link chains alone")]
 fn the_allocator_refuses_an_element_off_the_content_and_link_chains() {
     let enroll_type = a(&[1, 1, 0, 1, 0, 1, 0, 3, 1]);
-    let third_family = namespace_of(&enroll_type).expect("an element extends a parent");
-    let _ = M3State::genesis().next_in(&third_family);
+    let subspace_3_chain = namespace_of(&enroll_type).expect("an element extends a parent");
+    let _ = M3State::genesis().next_in(&subspace_3_chain);
 }
 
-/// §1: a stored ZERO is an empty chain at both frontier-end reads — the
+/// §1: a stored ZERO is an empty chain at both chain-end reads — the
 /// reading [`M3State::has_documents`] and [`M3State::latest_version`] each
 /// state, and which neither can reach through M3's own ops, since
 /// [`M3State::apply_m3`] inserts only `effective_frontier + 1`, and genesis's
@@ -318,8 +318,8 @@ fn has_documents_reads_the_chain_not_the_registry() {
 }
 
 /// §6 (iv): the single probe answers "does a registered principal sit
-/// STRICTLY under `p`?" — checked over the shape family one probe can
-/// meet, because only ONE key is ever examined, so a wrong range bound or
+/// STRICTLY under `p`?" — checked over the shapes one probe can meet,
+/// because only ONE key is ever examined, so a wrong range bound or
 /// a dropped containment test still answers correctly at a chosen point.
 /// Π holds the seats each row names plus genesis's two: `[1]`, an ANCESTOR
 /// of `p` that sorts before it, so no row's answer may come from it; and the

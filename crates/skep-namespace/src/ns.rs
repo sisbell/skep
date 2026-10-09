@@ -1,14 +1,19 @@
 //! Namespaces — ASN-0040's `(p, d)`, spelled `(anchor, g)` here: one chain,
-//! one frontier, one lock (§1/§3). [`NsKey`] is the frontier-map key and,
-//! through the injective [`ns_lock_key`], the lock key. It is built only
-//! here: by the five anchor-side constructors ([`content_ns`], [`link_ns`],
-//! [`version_ns`], [`document_ns`], [`account_ns`]), by [`namespace_of`] from
-//! a member, or by its decode, whose anchor passes the at-rest door
-//! [`t4_anchor`]. Its fields are private to this module, so the key a mint
-//! reads, the key its `Allocate` advances and the lock its caller holds
-//! cannot be spelled two ways. Also here: the chain-family rule that picks
-//! every generator, a chain's members by ordinal, and the two opening slots
-//! published to callers outside M3 ([`first_document_address`],
+//! one frontier, one lock (§1/§3). A chain's SLOTS are its positions
+//! `c₁, c₂, …`, allocated or not — ASN-0042's "slots" of a stream, `c₁` the
+//! slot it opens at; its MEMBERS are the slots allocated on it, ASN-0040's
+//! children of `(p, d)`. Every T4-valid address with a parent is a slot of
+//! exactly one chain, and the five ghost tumblers are slots of one chain and
+//! members of none. [`NsKey`] is the frontier-map key and, through the
+//! injective [`ns_lock_key`], the lock key. It is built only here: by the
+//! five anchor-side constructors ([`content_ns`], [`link_ns`],
+//! [`version_ns`], [`document_ns`], [`account_ns`]), by [`namespace_of`]
+//! from any slot of its chain, or by its decode, whose anchor passes the
+//! at-rest door [`t4_anchor`]. Its fields are private to this module, so the
+//! key a mint reads, the key its `Allocate` advances and the lock its caller
+//! holds cannot be spelled two ways. Also here: the chain-family rule that
+//! picks every generator, a chain's slots by ordinal, and the two opening
+//! slots published to callers outside M3 ([`first_document_address`],
 //! [`first_version_address`]).
 
 use num_traits::Zero;
@@ -166,11 +171,11 @@ fn generator(anchor: Level, child: Level) -> Generator {
 /// Every child-side reader of a frontier key routes through here —
 /// membership for its chain range probe, the fold for its frontier advance —
 /// so the key a staged `Allocate` advances is the key its mint read, by
-/// construction (§1/§2). Anchor-side keys come from the `*_ns` family below,
-/// one per chain, and both sides take their `g` from [`generator`] at the
-/// same tier pair, which is what makes them one key. Callers that hold a
-/// ≥ 2-component address by their own gate discharge the `None` case with an
-/// `expect` that names that gate.
+/// construction (§1/§2). Anchor-side keys come from the `*_ns` constructors
+/// below, which build every chain family's keys, and both sides take their
+/// `g` from [`generator`] at the same tier pair, which is what makes them one
+/// key. Callers that hold a ≥ 2-component address by their own gate discharge
+/// the `None` case with an `expect` that names that gate.
 pub(crate) fn namespace_of(a: &Address) -> Option<NsKey> {
     let par = parent(a)?;
     let g = generator(par.level(), a.level());
@@ -190,16 +195,23 @@ pub(crate) fn namespace_of(a: &Address) -> Option<NsKey> {
 // rather than by naming a subspace: `inc(d, 2)` opens the element field at
 // `s_C`, and `inc(b_C(d), 0)` steps it on to `s_L`.
 //
-// These two are the ONLY element families: no chain is anchored at any other
-// subspace base, so no mint issues an element in subspace 3 or above — and
-// `M3State::next_in` refuses to issue any element `is_mintable_element` does
-// not admit, so a third family fails at its first mint. Type names are
-// spelled in subspace 3 — the commons vocabulary's, in the ghost home
-// document's (AUTH-7.1 horn B) — and their unreachability rests on it
-// (AUTH-3.70; `M3State::is_allocated` states the guarantee). A third element
-// family is therefore a FORMAT change, as moving the ghost floor would be: it
-// allocates names their readers treat as never minted, and those names move
-// first.
+// A chain FAMILY is one kind of chain — the content chains of every
+// document, say: ASN-0047's sub-allocators `A_C(·)`, `A_L(·)`, `A_v(·)`,
+// `A_doc(·)` and `A_account(·)`, and ASN-0042's sub-account chains, six in
+// all, built by the five `*_ns` constructors below (`account_ns` builds the
+// last two).
+//
+// The content and link families are the ONLY element families — ASN-0047's
+// content and link sub-allocators, the two ASN-0093 commits to: no chain is
+// anchored at any other subspace base, so no mint issues an element in
+// subspace 3 or above — and `M3State::next_in` refuses to issue any element
+// that is no content-or-link slot (`is_content_or_link_slot`), so a third
+// family fails at its first mint. Type names are spelled in subspace 3 — the
+// commons vocabulary's, in the ghost home document's (AUTH-7.1 horn B) — and
+// their unreachability rests on it (AUTH-3.70; `M3State::is_allocated` states
+// the guarantee). A third element family is therefore a FORMAT change, as
+// moving the ghost floor would be: it allocates names their readers treat as
+// never minted, and those names move first.
 //
 // Each fixed family's `g` is what `generator` yields at that family's FIXED
 // tier pair, noted beside each constructor, so the variants below and the
@@ -224,15 +236,19 @@ pub(crate) fn link_ns(home: &Address) -> NsKey {
     }
 }
 
-/// Is `e` an element some chain may issue — an element field of exactly
-/// `[s, n]`, `s` the content or link subspace, the shape every member of
-/// [`content_ns`]'s and [`link_ns`]'s chains has? `false` for every other
-/// element — subspace 3 and above, a subspace base `d·0·s`, a deeper field
-/// `d·0·s·x·n` — and for every non-element. Spelled by M1's two subspace
-/// numerals rather than by rebuilding the two keys, so the allocator asks it
-/// on every mint at the cost of one comparison; `ns/tests.rs` holds it equal
-/// to the key-built answer over a generated family of addresses.
-pub(crate) fn is_mintable_element(e: &Address) -> bool {
+/// Is `e` a slot of its document's content chain or link chain — an element
+/// field of exactly `[s, n]`, `s` the content or link subspace, the shape of
+/// every slot of ASN-0047's content and link sub-allocators `A_C(d)` and
+/// `A_L(d)`, the two ASN-0093 commits to, whose keys [`content_ns`] and
+/// [`link_ns`] build? `false` for every other element — subspace 3 and
+/// above, a subspace base `d·0·s`, a deeper field `d·0·s·x·n` — and for every
+/// non-element. A slot, not a member: allocation is not asked, so the five
+/// ghost tumblers, slots of the ghost content chain that no mint ever fills,
+/// answer `true`. Spelled by M1's two subspace numerals rather than by
+/// rebuilding the two keys, so the allocator asks it on every mint at the
+/// cost of one comparison; `ns/tests.rs` holds it equal to the key-built
+/// answer over every address its enumeration reaches.
+pub(crate) fn is_content_or_link_slot(e: &Address) -> bool {
     matches!(e.element_field(), Some([s, _]) if *s == content_subspace() || *s == link_subspace())
 }
 pub(crate) fn version_ns(source: &Address) -> NsKey {
@@ -252,9 +268,9 @@ pub(crate) fn document_ns(account: &Address) -> NsKey {
 
 /// `A_account(N)` and the sub-account family: the account chain under
 /// `parent` — `(N, 2)` under a node, `(A, 1)` under an account (the sixth
-/// family ASN-0042 licenses — Conflicts §8). The one family whose `g` is not
-/// fixed: the target is account-tier by definition, so the chain-family rule
-/// picks.
+/// family, which ASN-0042 licenses — Conflicts §8). The one constructor that
+/// builds two families, and so the one whose `g` is not fixed: the target is
+/// account-tier by definition, so the chain-family rule picks.
 pub(crate) fn account_ns(parent: &Address) -> NsKey {
     NsKey {
         parent: parent.tumbler().clone(),
@@ -262,11 +278,11 @@ pub(crate) fn account_ns(parent: &Address) -> NsKey {
     }
 }
 
-/// `c₁` of the chain `key` names — `inc(anchor, g)`, the address its FIRST
-/// member occupies, allocated or not. THE one spelling of a chain's opening
-/// address: [`nth_in`] advances it to any later member, and
-/// [`first_document_address`] and [`first_version_address`] publish it for
-/// the two chains a caller outside M3 has to name.
+/// `c₁` of the chain `key` names — `inc(anchor, g)`, the slot the chain opens
+/// at, allocated or not. THE one spelling of a chain's opening address:
+/// [`nth_in`] advances it to any later slot, and [`first_document_address`]
+/// and [`first_version_address`] publish it for the two chains a caller
+/// outside M3 has to name.
 ///
 /// PRECONDITION — the anchor precondition, stated here because this is the
 /// one place an anchor is lifted back to an [`Address`]: `key.parent` is
@@ -287,14 +303,14 @@ fn first_in(key: &NsKey) -> Result<Address, GateViolation> {
 }
 
 /// `cₙ` of the chain `key` names, for `n ≥ 1`: [`first_in`] with its
-/// trailing ordinal advanced by `n − 1` — THE one spelling of a chain member
-/// by ordinal, which `M3State::next_in` asks for at `m + 1` and
-/// [`M3State::latest_version`] at `m`. M1's `shift` is ordinal-only and
-/// SAFE here: `c₁` is a FULL address carrying its ordinal in the last
-/// position, never a bare `doc·0·subspace` base (the TA7a hazard); and it
-/// is total at 0, so `n = 1` is `c₁` itself with no branch. Re-`validate`
-/// is total, since `cₙ` differs from the gated `c₁` only in a positive
-/// ordinal.
+/// trailing ordinal advanced by `n − 1` — THE one spelling of a chain's slot
+/// by ordinal, which `M3State::next_in` asks for at `m + 1`, the slot the
+/// next mint fills, and [`M3State::latest_version`] at `m`, the latest
+/// member's. M1's `shift` is ordinal-only and SAFE here: `c₁` is a FULL
+/// address carrying its ordinal in the last position, never a bare
+/// `doc·0·subspace` base (the TA7a hazard); and it is total at 0, so `n = 1`
+/// is `c₁` itself with no branch. Re-`validate` is total, since `cₙ` differs
+/// from the gated `c₁` only in a positive ordinal.
 ///
 /// PRECONDITION `n ≥ 1` — a chain opens at ordinal 1. Both callers
 /// discharge it (`next_in` passes `m + 1`; `latest_version` answers `None`

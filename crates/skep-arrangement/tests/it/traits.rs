@@ -1,11 +1,13 @@
 //! The public values' standard traits, which a foreign crate cannot add:
 //! `Hash` agreeing with `Eq`, the V-span reading, the lent run walk, the
-//! `Copy` handle.
+//! `Copy` handle, and the `Send + Sync` the request values and every refusal
+//! carry.
 
 use skep_address::{Address, Span};
 use skep_arrangement::{
-    as_ordinal_vspan, is_ordinal_vspan, seat_link, Caller, Deposit, HasM5, Run, RunError, Runs,
-    SegmentRun, Shot, ShotTerms, VSpec, Vstream,
+    as_ordinal_vspan, is_ordinal_vspan, seat_link, Base, Caller, CopyError, DeleteError, Deposit,
+    HasM5, InsertError, PublishError, RearrangeError, Run, RunError, Runs, SeatError, SegmentRun,
+    Shot, ShotRun, ShotTerms, VPos, VSpec, VersionError, Vstream,
 };
 
 use crate::common::*;
@@ -121,4 +123,36 @@ fn the_op_handle_copies_as_the_reference_it_is() {
     copies(vs);
     vs.insert(P1, &doc1(), vp(1, 1), vec![val(b"a")], Deposit::Undeclared)
         .expect("the handle is still usable after being copied out");
+}
+
+#[test]
+fn the_request_values_and_every_refusal_cross_threads() {
+    // A caller moves M5's request values and refusals across threads — a
+    // refusal boxed into `Box<dyn Error + Send + Sync>`, a shot handed to a
+    // worker — and no signature says they may: each is `Send` and `Sync`
+    // because of what it holds, and the refusals hold M3's `MintError` and
+    // M4's `ContentError`, so a change in either crate could revoke the
+    // promise with no M5 signature moving. Witnessed from a foreign crate,
+    // so the build that breaks it is this one. `M5State` and `M5Rec` — and
+    // `Run` and `ShotTerms` inside them — are witnessed already by every
+    // test world, `WorldState` asking `Send + Sync + 'static` of the slice
+    // and its record.
+    fn crosses<T: Send + Sync + 'static>() {}
+    fn refusal<E: std::error::Error + Send + Sync + 'static>() {}
+    crosses::<VPos>();
+    crosses::<VSpec>();
+    crosses::<Caller>();
+    crosses::<Deposit>();
+    crosses::<ShotRun>();
+    crosses::<Base>();
+    crosses::<Shot>();
+    crosses::<SegmentRun>();
+    refusal::<RunError>();
+    refusal::<InsertError>();
+    refusal::<CopyError>();
+    refusal::<DeleteError>();
+    refusal::<RearrangeError>();
+    refusal::<VersionError>();
+    refusal::<PublishError>();
+    refusal::<SeatError>();
 }

@@ -333,7 +333,7 @@ impl M5State {
                 };
                 let at = VPos::content(&block.v_start + covered.lo());
                 vspans.push(
-                    ordinal_vspan(&at, &covered.width())
+                    ordinal_vspan(at, covered.width())
                         .expect("an OffsetRange is nonempty, so its width is ≥ 1"),
                 );
             }

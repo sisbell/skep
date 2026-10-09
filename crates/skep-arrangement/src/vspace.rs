@@ -161,19 +161,22 @@ pub fn is_ordinal_vspan(span: &Span) -> bool {
 /// well-formed span naming a subspace that selects nothing and reports as
 /// emptiness far downstream.
 ///
+/// `at` and `count` are taken by value, since the span keeps their components
+/// — as [`VPos::content`] takes the ordinal it keeps: a caller done with them
+/// hands them over, and one that keeps them clones at its own call.
+///
 /// `None` iff `count == 0`: M1's T12 rejects a zero-width span outright, the
 /// empty designation being `SpanSet::empty()` rather than a degenerate span.
 /// Every other argument yields a span, `at`'s components being unconstrained
 /// naturals here — whether the subspace numeral selects a run-list is the
 /// arrangement's question, answered where it is asked.
-pub fn ordinal_vspan(at: &VPos, count: &Nat) -> Option<Span> {
+pub fn ordinal_vspan(at: VPos, count: Nat) -> Option<Span> {
     if count.is_zero() {
         return None;
     }
-    let start = Tumbler::new([at.subspace.clone(), at.ordinal.clone()])
-        .expect("a two-component sequence is nonempty");
-    let width = Tumbler::new([Nat::zero(), count.clone()])
-        .expect("a two-component sequence is nonempty");
+    let VPos { subspace, ordinal } = at;
+    let start = Tumbler::new([subspace, ordinal]).expect("a two-component sequence is nonempty");
+    let width = Tumbler::new([Nat::zero(), count]).expect("a two-component sequence is nonempty");
     Some(Span::new(start, width).expect("count ≥ 1 at action point 2 ⇒ T12-valid"))
 }
 
@@ -188,7 +191,7 @@ mod tests {
         // ordinal-level depth-2 V-span, in either subspace — and reading it
         // recovers exactly the three quantities it was built from.
         for (sub, ord, count) in [(1u32, 1u32, 1u32), (1, 7, 4), (2, 1, 9)] {
-            let s = ordinal_vspan(&vp(sub, ord), &n(count)).expect("count ≥ 1");
+            let s = ordinal_vspan(vp(sub, ord), n(count)).expect("count ≥ 1");
             assert!(is_ordinal_vspan(&s));
             assert_eq!(s.start(), &t(&[sub, ord]));
             assert_eq!(s.width(), &t(&[0, count]));
@@ -206,7 +209,7 @@ mod tests {
         }
         // Zero positions is not a span: ⟨⟩ designates nothing, T12 has no
         // zero-width value to hand back.
-        assert!(ordinal_vspan(&vp(1, 1), &n(0)).is_none());
+        assert!(ordinal_vspan(vp(1, 1), n(0)).is_none());
     }
 
     #[test]
@@ -216,10 +219,7 @@ mod tests {
         // different position rather than failing.
         assert_eq!(vp(1, 2), vp(1, 2));
         assert_ne!(vp(1, 2), vp(2, 1));
-        assert_ne!(
-            ordinal_vspan(&vp(1, 2), &n(1)),
-            ordinal_vspan(&vp(2, 1), &n(1))
-        );
+        assert_ne!(ordinal_vspan(vp(1, 2), n(1)), ordinal_vspan(vp(2, 1), n(1)));
     }
 
     #[test]

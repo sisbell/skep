@@ -118,11 +118,9 @@ impl<'r> RunUnion<'r> {
         let at = self
             .0
             .partition_point(|piece| piece.first.i_start.tumbler() <= run.i_start.tumbler());
-        at.checked_sub(1)
-            .and_then(|i| self.0.get(i))
-            .is_some_and(|piece| {
-                same_content_chain(piece.first, run) && run.reach() <= piece.reach()
-            })
+        self.0[..at].last().is_some_and(|piece| {
+            same_content_chain(piece.first, run) && run.reach() <= piece.reach()
+        })
     }
 
     /// The union's pieces as owned runs, in tumbler order — every address the

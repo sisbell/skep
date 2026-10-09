@@ -37,7 +37,7 @@ pub fn content_vspan(at: &VPos, count: &Nat) -> Option<Span> {
     if !at.is_content() {
         return None;
     }
-    ordinal_vspan(at, count)
+    ordinal_vspan(at.clone(), count.clone())
 }
 
 /// Region gate: each span must be an ordinal-level depth-2 V-span — M5's

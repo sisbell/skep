@@ -81,7 +81,7 @@ impl VRegion {
     /// `width == 0`: T12 rejects a zero width, and the golden encodes
     /// emptiness as an absent span, never a zero span.
     pub fn span(self) -> Option<Span> {
-        ordinal_vspan(&self.at().vpos(), &Nat::from(self.width))
+        ordinal_vspan(self.at().vpos(), Nat::from(self.width))
     }
 }
 

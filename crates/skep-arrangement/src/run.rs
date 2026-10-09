@@ -16,7 +16,7 @@ use std::fmt;
 
 use num_traits::{One, Zero};
 use serde::{Deserialize, Serialize};
-use skep_address::{intersect, shift, validate, Address, Nat, Span, Tumbler};
+use skep_address::{intersect, ordinal, shift, validate, Address, Nat, Span, Tumbler};
 
 /// One arrangement run: `width` consecutive I-addresses starting at
 /// `i_start`, occupying implicit consecutive V-ordinals (§Core data model —
@@ -403,20 +403,17 @@ impl Run {
         if span.is_level_uniform() && span.start().len() == addr_len {
             let intersection = intersect(&self.iextent(), span)
                 .expect("both operands level-uniform at one length — gate passes")?;
-            // The last component of an endpoint of this run's own length — its
-            // ordinal. A nested fn rather than a closure so it hands back the
-            // borrow `get` already made: a closure's elided lifetimes do not
-            // tie its return to its argument, and a clone would be the price
-            // of that.
-            fn ordinal_of(t: &Tumbler, addr_len: usize) -> &Nat {
-                t.get(addr_len)
-                    .expect("run I-extent endpoints have #t == addr_len")
-            }
-            let start_ordinal = ordinal_of(self.i_start.tumbler(), addr_len);
+            // Each endpoint here is of the run's own length and lies within
+            // its I-extent — the run's start, and the two ends of an
+            // intersection M1 takes within one level class — so it shares the
+            // start's `doc·0·subspace` and differs only in its last component,
+            // M1's `ordinal`: the element ordinal the offsets are differences
+            // of.
+            let start_ordinal = ordinal(self.i_start.tumbler());
             let reach = intersection.reach();
             Some(OffsetRange {
-                lo: ordinal_of(intersection.start(), addr_len) - start_ordinal,
-                hi: ordinal_of(&reach, addr_len) - start_ordinal,
+                lo: ordinal(intersection.start()) - start_ordinal,
+                hi: ordinal(&reach) - start_ordinal,
             })
         } else {
             let k_lo = self.lower_bound(span.start());

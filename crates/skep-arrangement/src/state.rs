@@ -564,7 +564,7 @@ impl M5State {
             // whole document or a whole subspace refusing every later link of
             // that document for good, CL-UNIQ being I-extent membership.
             M5Rec::LinkSeat { doc, link } => M5State {
-                arrangements: match Run::new(link.clone(), Nat::from(1u32)) {
+                arrangements: match Run::new(link.clone(), Nat::one()) {
                     Ok(seated) => self.arrangements_with_link(doc, |l| l.append(seated)),
                     Err(_) => self.arrangements.clone(),
                 },

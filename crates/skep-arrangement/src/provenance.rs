@@ -63,11 +63,7 @@ struct ProvenanceShadow(im::OrdMap<Address, im::Vector<Span>>);
 impl TryFrom<ProvenanceShadow> for Provenance {
     type Error = &'static str;
     fn try_from(s: ProvenanceShadow) -> Result<Provenance, &'static str> {
-        if s.0
-            .iter()
-            .flat_map(|(_, spans)| spans.iter())
-            .all(Span::is_level_uniform)
-        {
+        if s.0.values().flatten().all(Span::is_level_uniform) {
             Ok(Provenance(s.0))
         } else {
             Err("provenance: every recorded span is a run I-extent (level-uniform)")

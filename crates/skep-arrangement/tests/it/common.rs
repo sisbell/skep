@@ -145,7 +145,7 @@ pub fn vp(subspace: u32, ordinal: u32) -> VPos {
 }
 
 pub fn vspan(subspace: u32, ordinal: u32, count: u32) -> Span {
-    ordinal_vspan(&vp(subspace, ordinal), &n(count)).expect("test spans name ≥ 1 position")
+    ordinal_vspan(vp(subspace, ordinal), n(count)).expect("test spans name ≥ 1 position")
 }
 
 pub fn val(b: &[u8]) -> Val {

@@ -31,8 +31,8 @@ use crate::vspan::Subspace;
 /// compile — the hazard M5 designs out of `ordinal_vspan` by taking a `VPos`,
 /// since a swap here builds a well-formed span naming a subspace that selects
 /// nothing and reports as emptiness far downstream.
-fn ext_span(s: Subspace, n: &Nat) -> Option<Span> {
-    ordinal_vspan(&s.anchor(), n)
+fn ext_span(s: Subspace, n: Nat) -> Option<Span> {
+    ordinal_vspan(s.anchor(), n)
 }
 
 /// D-SEQ★ defense-in-depth for the extent queries (open build decision,
@@ -156,7 +156,7 @@ impl<W: RetrievalWorld> Query<'_, W> {
         // constructor.
         let extents: SpanSet = Subspace::ALL
             .into_iter()
-            .filter_map(|s| ext_span(s, &s.count(m5, &surface)))
+            .filter_map(|s| ext_span(s, s.count(m5, &surface)))
             .collect();
         debug_assert!(
             extents.is_normalized(),

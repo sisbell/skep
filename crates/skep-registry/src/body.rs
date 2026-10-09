@@ -244,8 +244,8 @@ pub enum Member {
 impl Member {
     /// The member's name as a body spells it: what [`parse`] reads the
     /// member by, what [`encode`] writes it under, and the tail of its
-    /// refusal's token.
-    pub fn name(self) -> &'static str {
+    /// refusal's token ([`ParseRefusal::token`]).
+    pub(crate) fn name(self) -> &'static str {
         match self {
             Member::Prefix => "prefix",
             Member::Origins => "origins",
@@ -550,6 +550,9 @@ fn escape_json_string(s: &str, out: &mut String) {
     out.push('"');
 }
 
+// What only this module's privates can show: the one-spelling reader
+// `address_of`, and the codec's cases built through it. The bodies' public
+// face is tested from outside, in `tests/it/body.rs` and its child `laws`.
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -589,20 +592,6 @@ mod tests {
         );
     }
 
-    /// The escaping is the shortest JSON escape and no other, so a body
-    /// spelled with a longer escape of the same string is not canonical.
-    #[test]
-    fn strings_take_the_shortest_escapes_alone() {
-        let body =
-            Body::Endpoint(Endpoint { origins: origins(&["a\"b\\c\n\u{1}/é"]), replaces: None });
-        assert_eq!(
-            encode(&body, None),
-            "{\"type\":\"endpoint\",\"origins\":[\"a\\\"b\\\\c\\n\\u0001/é\"]}"
-        );
-        let longer = "{\"type\":\"endpoint\",\"origins\":[\"a\\\"b\\\\c\\n\\u0001\\/é\"]}";
-        assert_eq!(parse(BodyKind::Endpoint, longer.as_bytes()), Err(ParseRefusal::NotCanonical));
-    }
-
     /// The address form is one spelling: a sign, a separator, a zero-padded
     /// component, an empty component and a T4-invalid tumbler are each
     /// refused.
@@ -627,29 +616,6 @@ mod tests {
             let text = format!(r#"{{"type":"binding","prefix":"{prefix}"}}"#);
             let record = parse(BodyKind::Binding, text.as_bytes()).expect("a binding");
             assert_eq!(record.body, binding(prefix, None), "{prefix}");
-        }
-    }
-
-    /// AN ADDRESS MEMBER IS THE ADDRESS IT SPELLS, at any size the cap
-    /// admits (wire.md §Value encodings: a component is one decimal
-    /// natural): a component past a machine word, one of 4,097 digits —
-    /// past the board's wire cap on a component, which a record's own cap
-    /// bounds instead — and one of 16,352, the body exactly the cap, which
-    /// [`MAX_REGISTRY_RECORD_BYTES`] prices: each reads as the address whose
-    /// rendering is the member, and the body re-encodes byte for byte.
-    #[test]
-    fn an_address_member_is_the_address_it_spells_at_any_size() {
-        let filling = format!("1.{}", "9".repeat(16_352));
-        let at_cap = format!(r#"{{"type":"binding","prefix":"{filling}"}}"#);
-        assert_eq!(at_cap.len(), MAX_REGISTRY_RECORD_BYTES, "the priced body fills the cap");
-        let prefixes =
-            ["1.18446744073709551616".to_owned(), format!("1.{}", "9".repeat(4097)), filling];
-        for prefix in prefixes {
-            let text = format!(r#"{{"type":"binding","prefix":"{prefix}"}}"#);
-            let record = parse(BodyKind::Binding, text.as_bytes()).expect("canonical");
-            let Body::Binding(b) = &record.body else { panic!("a binding") };
-            assert_eq!(b.prefix.to_string(), prefix);
-            assert_eq!(encode(&record.body, None), text);
         }
     }
 
@@ -678,25 +644,6 @@ mod tests {
                 assert_eq!((&record.body, record.sig.as_deref()), (&body, sig));
             }
         }
-    }
-
-    /// The origins walk as the collection they are, in the org's order and
-    /// whole, a repeated origin two entries: by reference, as `for origin in
-    /// &origins` and `iter` do, by value, and whole, as `as_slice` and
-    /// `into_vec` hand them — `into_vec` the list the resolver walks.
-    #[test]
-    fn origins_walk_in_the_orgs_order() {
-        let order = ["https://b.example", "http://a.onion", "http://a.onion", "https://a.example"];
-        let list = origins(&order);
-        let mut walked = Vec::new();
-        for origin in &list {
-            walked.push(origin.as_str());
-        }
-        assert_eq!(walked, order);
-        assert!(list.iter().map(String::as_str).eq(order));
-        assert_eq!(list.as_slice(), order);
-        assert_eq!(list.clone().into_vec(), order);
-        assert_eq!(list.into_iter().collect::<Vec<String>>(), order);
     }
 
     /// The cap bounds the parse, never a record: a body one byte past it is

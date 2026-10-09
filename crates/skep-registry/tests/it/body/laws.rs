@@ -222,9 +222,12 @@ fn the_parse_laws_hold_on_every_one_byte_mutant() {
     assert!(admitted > 100 && refused > 100, "{admitted} admitted, {refused} refused");
 }
 
-/// splitmix64 — the generator the hostile bodies are drawn from, seeded
-/// with one constant, so every run tries the same bodies and a failure
-/// names the one that broke.
+/// splitmix64 — the one generator both seeded laws draw from: the hostile
+/// bodies (`the_parse_laws_hold_on_seeded_hostile_bodies`) and the bodies a
+/// caller builds (`every_body_a_caller_builds_is_a_record_up_to_the_cap`),
+/// each seeded with a constant of its own, so every run tries the same draws
+/// and a failure names the one that broke. How many draws each takes is
+/// [`rounds`]'s, beside it, so the deep sweep widens both alike.
 struct SplitMix64(u64);
 
 impl SplitMix64 {
@@ -244,6 +247,18 @@ impl SplitMix64 {
     /// One of `items`, which hold at least one.
     fn pick<'a, T>(&mut self, items: &'a [T]) -> &'a T {
         &items[self.below(items.len())]
+    }
+}
+
+/// How many draws a seeded law takes: `in_the_gate` in the gate, forty times
+/// as many under `FUZZ_EXHAUSTIVE=1`, the workspace's deep sweep of its
+/// tier-1 fuzz suites.
+fn rounds(in_the_gate: usize) -> usize {
+    let deep = std::env::var_os("FUZZ_EXHAUSTIVE").is_some_and(|v| v == "1");
+    if deep {
+        in_the_gate * 40
+    } else {
+        in_the_gate
     }
 }
 
@@ -464,18 +479,6 @@ fn hostile_body(rng: &mut SplitMix64, corpus: &Corpus) -> Vec<u8> {
         edit(rng, &mut body, corpus);
     }
     body
-}
-
-/// How many draws a seeded law takes: `in_the_gate` in the gate, forty times
-/// as many under `FUZZ_EXHAUSTIVE=1`, the workspace's deep sweep of its
-/// tier-1 fuzz suites.
-fn rounds(in_the_gate: usize) -> usize {
-    let deep = std::env::var_os("FUZZ_EXHAUSTIVE").is_some_and(|v| v == "1");
-    if deep {
-        in_the_gate * 40
-    } else {
-        in_the_gate
-    }
 }
 
 /// Every refusal the parse answers, by token — what a run of hostile bodies

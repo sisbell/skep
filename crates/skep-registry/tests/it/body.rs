@@ -6,18 +6,22 @@
 //! second transcription. (`skep-resolve` builds none: it calls this crate's
 //! `parse`.)
 //!
-//! Beside the set, the spec's two examples in their one canonical form and
-//! the cases that pin this parser alone: a refusal's member as a value, the
-//! first stage to fault where two do, and the `type` member read off its
-//! kind's row. The laws on inputs no hand chose are the child `laws`. The
-//! set's readers live here — `vector_set`, `bytes_of` and `kind_of` — and
-//! the child reads the set through the first two.
+//! Beside the set, the spec's two examples in their one canonical form, the
+//! cases that pin this parser alone — a refusal's member as a value, the
+//! first stage to fault where two do, the `type` member read off its kind's
+//! row — and the codec's public face at cases a hand chose: the shortest
+//! escapes, an address member at any size, the origins' walk. What only
+//! `src/body.rs`'s privates can show — its one-spelling reader `address_of`
+//! and the cases built through it — is that module's unit suite. The laws on
+//! inputs no hand chose are the child `laws`. The set's readers live here —
+//! `vector_set`, `bytes_of` and `kind_of` — and the child reads the set
+//! through the first two.
 
 use std::path::Path;
 
 use serde_json::Value;
 use skep_registry::{
-    encode, parse, rows, Body, BodyKind, Kind, Member, ParseRefusal, Record,
+    encode, parse, rows, Body, BodyKind, Endpoint, Kind, Member, Origins, ParseRefusal, Record,
     MAX_REGISTRY_RECORD_BYTES,
 };
 
@@ -286,4 +290,65 @@ fn the_type_member_is_the_string_its_kinds_row_holds() {
             }
         }
     }
+}
+
+/// An endpoint's origins from a hand's list, one at least.
+fn origins(list: &[&str]) -> Origins {
+    Origins::new(list.iter().map(|o| o.to_string()).collect()).expect("at least one origin")
+}
+
+/// The escaping is the shortest JSON escape and no other, so a body
+/// spelled with a longer escape of the same string is not canonical.
+#[test]
+fn strings_take_the_shortest_escapes_alone() {
+    let body =
+        Body::Endpoint(Endpoint { origins: origins(&["a\"b\\c\n\u{1}/é"]), replaces: None });
+    assert_eq!(
+        encode(&body, None),
+        "{\"type\":\"endpoint\",\"origins\":[\"a\\\"b\\\\c\\n\\u0001/é\"]}"
+    );
+    let longer = "{\"type\":\"endpoint\",\"origins\":[\"a\\\"b\\\\c\\n\\u0001\\/é\"]}";
+    assert_eq!(parse(BodyKind::Endpoint, longer.as_bytes()), Err(ParseRefusal::NotCanonical));
+}
+
+/// AN ADDRESS MEMBER IS THE ADDRESS IT SPELLS, at any size the cap
+/// admits (wire.md §Value encodings: a component is one decimal
+/// natural): a component past a machine word, one of 4,097 digits —
+/// past the board's wire cap on a component, which a record's own cap
+/// bounds instead — and one of 16,352, the body exactly the cap, which
+/// [`MAX_REGISTRY_RECORD_BYTES`] prices: each reads as the address whose
+/// rendering is the member, and the body re-encodes byte for byte.
+#[test]
+fn an_address_member_is_the_address_it_spells_at_any_size() {
+    let filling = format!("1.{}", "9".repeat(16_352));
+    let at_cap = format!(r#"{{"type":"binding","prefix":"{filling}"}}"#);
+    assert_eq!(at_cap.len(), MAX_REGISTRY_RECORD_BYTES, "the priced body fills the cap");
+    let prefixes =
+        ["1.18446744073709551616".to_owned(), format!("1.{}", "9".repeat(4097)), filling];
+    for prefix in prefixes {
+        let text = format!(r#"{{"type":"binding","prefix":"{prefix}"}}"#);
+        let record = parse(BodyKind::Binding, text.as_bytes()).expect("canonical");
+        let Body::Binding(b) = &record.body else { panic!("a binding") };
+        assert_eq!(b.prefix.to_string(), prefix);
+        assert_eq!(encode(&record.body, None), text);
+    }
+}
+
+/// The origins walk as the collection they are, in the org's order and
+/// whole, a repeated origin two entries: by reference, as `for origin in
+/// &origins` and `iter` do, by value, and whole, as `as_slice` and
+/// `into_vec` hand them — `into_vec` the list the resolver walks.
+#[test]
+fn origins_walk_in_the_orgs_order() {
+    let order = ["https://b.example", "http://a.onion", "http://a.onion", "https://a.example"];
+    let list = origins(&order);
+    let mut walked = Vec::new();
+    for origin in &list {
+        walked.push(origin.as_str());
+    }
+    assert_eq!(walked, order);
+    assert!(list.iter().map(String::as_str).eq(order));
+    assert_eq!(list.as_slice(), order);
+    assert_eq!(list.clone().into_vec(), order);
+    assert_eq!(list.into_iter().collect::<Vec<String>>(), order);
 }

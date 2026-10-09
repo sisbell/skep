@@ -83,8 +83,9 @@ impl Kind {
     pub const ALL: [Kind; 5] =
         [Kind::Binding, Kind::Endpoint, Kind::TakedownRecord, Kind::SuccessorOf, Kind::PolicyLink];
 
-    /// The kind's name as the rules spell it.
-    pub fn name(self) -> &'static str {
+    /// The kind's name as the rules spell it — what the seeding check's
+    /// refusal sentence names it by ([`crate::SeedingRefusal`]).
+    pub(crate) fn name(self) -> &'static str {
         match self {
             Kind::Binding => "the binding",
             Kind::Endpoint => "the endpoint",
@@ -146,8 +147,9 @@ impl Subtype {
         }
     }
 
-    /// The row's name as the rules spell it.
-    pub fn name(self) -> &'static str {
+    /// The row's name as the rules spell it — what the seeding check's
+    /// refusal sentence names it by ([`crate::SeedingRefusal`]).
+    pub(crate) fn name(self) -> &'static str {
         match self {
             Subtype::TakedownBase => "the takedown record's base reading",
             Subtype::TakedownLifted => "lifted",

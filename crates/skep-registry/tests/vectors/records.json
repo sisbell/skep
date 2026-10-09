@@ -265,7 +265,7 @@
       "why": "every signed later binding's form: the row's own member, then replaces, then sig, as the endpoint's takes them"
     },
     {
-      "name": "binding_with_sig_before_replaces",
+      "name": "sig_before_replaces",
       "kind": "binding",
       "bytes": "{\"type\":\"binding\",\"prefix\":\"1.5\",\"sig\":\"abcd\",\"replaces\":\"1.0.1.0.1.0.2.3\"}",
       "parse": "not_canonical",
@@ -488,7 +488,7 @@
       "why": "no whitespace outside strings"
     },
     {
-      "name": "byte_order_mark_ahead_of_the_body",
+      "name": "leading_byte_order_mark",
       "kind": "binding",
       "bytes": "\ufeff{\"type\":\"binding\",\"prefix\":\"1.5\"}",
       "parse": "not_json",

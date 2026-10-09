@@ -147,10 +147,10 @@ fn the_table_is_the_maps_line_by_line() {
 
 /// REG-1.18's test read off the table's ADDRESSES: a row carries
 /// deposits exactly where no other row nests under it — so the column
-/// computed off the subtypes' kinds agrees with the readings the table
+/// computed off the subtypes' kinds agrees with the subtype rows the table
 /// places under each kind.
 #[test]
-fn a_row_carries_deposits_exactly_where_no_reading_nests_under_it() {
+fn a_row_carries_deposits_exactly_where_no_other_row_nests_under_it() {
     for r in rows() {
         let nested = rows()
             .iter()

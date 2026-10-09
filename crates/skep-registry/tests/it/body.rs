@@ -128,7 +128,7 @@ fn the_vector_set_meets_one_answer_at_this_parser() {
         "type_not_first",
         "replaces_before_prefix",
         "sig_not_last",
-        "binding_with_sig_before_replaces",
+        "sig_before_replaces",
         "strings_take_the_shortest_escapes_alone",
         "strings_past_ascii_stand_as_themselves",
         "escape_long_form_of_a_named_control",
@@ -138,7 +138,7 @@ fn the_vector_set_meets_one_answer_at_this_parser() {
         "escape_of_the_line_separator",
         "escape_of_del",
         "raw_control_in_a_string",
-        "byte_order_mark_ahead_of_the_body",
+        "leading_byte_order_mark",
         "surrogate_encoded_in_a_string",
         "code_point_past_u10ffff_in_a_string",
         "prefix_component_past_a_machine_word",
@@ -238,9 +238,8 @@ fn a_refusal_names_the_member_that_faulted() {
 /// an escaped unpaired surrogate. None of these is in the vector set: the set
 /// pins what every parser answers, and these pin this one. The fourth text
 /// the value stage reads as no JSON, a byte-order mark ahead of the value, is
-/// the set's (`byte_order_mark_ahead_of_the_body`): unlike these, a reader
-/// can turn it into an admission, its decoder dropping the mark before the
-/// compare.
+/// the set's (`leading_byte_order_mark`): unlike these, a reader can turn it
+/// into an admission, its decoder dropping the mark before the compare.
 #[test]
 fn a_body_answers_the_first_stage_that_faults() {
     let nested = |arrays: usize| {

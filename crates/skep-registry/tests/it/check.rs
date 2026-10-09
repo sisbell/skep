@@ -79,13 +79,13 @@ fn the_shipped_rows_are_disjoint_from_every_other_row_the_map_lists() {
 /// a foreign row ABOVE the registry's whole block.
 #[test]
 fn the_disjointness_arm_refuses_a_foreign_row_inside_above_or_at_a_registry_row() {
-    for (foreign, registry) in [
+    for (ordinals, registry) in [
         (&[58, 6][..], t_policy_link()),
         (&[55, 1][..], t_binding()),
         (&[57, 2][..], t_takedown_record()),
         (&[59][..], t_successor_of()),
     ] {
-        let f = commons_type(foreign);
+        let f = commons_type(ordinals);
         assert_eq!(
             seeding_check(rows(), std::iter::once(&f)),
             Err(SeedingRefusal::Disjointness { registry: registry.clone(), foreign: f.clone() }),
@@ -324,19 +324,19 @@ fn within_an_arm_the_first_fault_in_the_stated_order_speaks() {
     }
     let second_policy_link =
         Row { of: RowOf::Kind(Kind::PolicyLink), address: commons_type(&[54]), type_value: None };
-    let mut first = rows().to_vec();
-    first.insert(0, second_policy_link.clone());
+    let mut ahead = rows().to_vec();
+    ahead.insert(0, second_policy_link.clone());
     assert_eq!(
-        seeding_check(&first, std::iter::empty()),
+        seeding_check(&ahead, std::iter::empty()),
         Err(SeedingRefusal::Completeness { missing: RowOf::Subtype(Subtype::PolicyLinkOwn) }),
         "a second policy-link row ahead of the shipped one: its readings are sought under it"
     );
-    let mut last = rows().to_vec();
-    last.push(second_policy_link);
+    let mut behind = rows().to_vec();
+    behind.push(second_policy_link);
     assert_eq!(
-        seeding_check(&last, std::iter::empty()),
+        seeding_check(&behind, std::iter::empty()),
         Err(SeedingRefusal::Count { kind_row_count: 6, row: None }),
-        "the same row after it: the readings stand under the first, and six kind rows count"
+        "the same row behind it: the readings stand under the first, and six kind rows count"
     );
     let mut two_outside = moved(RowOf::Kind(Kind::Endpoint), &[53]);
     for r in &mut two_outside {

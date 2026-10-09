@@ -214,7 +214,7 @@ fn one_byte_mutants() -> Vec<Vec<u8>> {
 /// hand chose that stand nearest the records. The counts show the laws were
 /// tried on both sides.
 #[test]
-fn the_parse_laws_hold_on_every_one_byte_mutant() {
+fn the_parse_laws_hold_on_one_byte_mutants() {
     let mutants = one_byte_mutants();
     assert!(mutants.len() > 10_000, "{} mutants", mutants.len());
     let (mut admitted, mut refused) = (0, 0);

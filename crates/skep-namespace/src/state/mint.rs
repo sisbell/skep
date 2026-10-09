@@ -176,7 +176,8 @@ impl M3State {
         if !self.is_registered_document(home) {
             return Err(MintError::HomeNotRegistered); // P6/C2
         }
-        self.mint_on(&content_ns(home), NO_PUBLICATION_STATE).map_err(MintError::Gate)
+        self.mint_on(&content_ns(home), NO_PUBLICATION_STATE)
+            .map_err(MintError::Gate)
     }
 
     /// Next link address under `home`: namespace `(b_L(home), 1)`, element
@@ -188,7 +189,8 @@ impl M3State {
         if !self.is_registered_document(home) {
             return Err(MintError::HomeNotRegistered); // L1a
         }
-        self.mint_on(&link_ns(home), NO_PUBLICATION_STATE).map_err(MintError::Gate)
+        self.mint_on(&link_ns(home), NO_PUBLICATION_STATE)
+            .map_err(MintError::Gate)
     }
 
     /// Next version identity: namespace `(source, 1)` — the version chain,
@@ -216,7 +218,8 @@ impl M3State {
             // V-WF: registered Document (covers unregistered AND non-document).
             return Err(MintError::SourceNotRegistered);
         }
-        self.mint_on(&version_ns(source), published).map_err(MintError::Gate)
+        self.mint_on(&version_ns(source), published)
+            .map_err(MintError::Gate)
     }
 
     /// Next document identity under an account: namespace `(account, 2)`.
@@ -244,7 +247,8 @@ impl M3State {
             // P8/CND.pre (covers unregistered AND non-account).
             return Err(MintError::NotAnAccount);
         }
-        self.mint_on(&document_ns(account), published).map_err(MintError::Gate)
+        self.mint_on(&document_ns(account), published)
+            .map_err(MintError::Gate)
     }
 
     /// Next account identity under `parent`: namespace `(parent, 2)` under a
@@ -334,6 +338,9 @@ impl M3State {
     /// [`crate::GHOST_POSITIONS`] + 1, and the read counts that document's
     /// mints only once the floor is taken off.
     pub fn next_content_address(&self, home: &Address) -> Option<Address> {
-        self.mint_content(home).ok().map(|(addr, _)| addr)
+        match self.mint_content(home) {
+            Err(MintError::HomeNotRegistered) => None,
+            minted => Some(minted.expect("k = 1 passes TA5a on every anchor").0),
+        }
     }
 }

@@ -198,7 +198,7 @@ where
             // PUB-8.21, off WORKING state under the held chain key: the
             // flagless FIRST mint is born published; every other flagless
             // mint is private (PUB-1.1); an explicit flag is honored as sent.
-            let published = published.unwrap_or(!m3.has_documents(account));
+            let published = published.unwrap_or_else(|| !m3.has_documents(account));
             let (addr, rec) = m3.mint_document(account, published)?;
             stg.push(rec.into());
             Ok(addr)

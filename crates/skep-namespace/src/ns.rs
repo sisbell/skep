@@ -117,8 +117,8 @@ impl Generator {
 
 impl From<Generator> for u8 {
     /// The generator's numeral — ASN-0040's `d`, and the byte itself: what a
-    /// checkpointed frontier key carries and what [`ns_lock_key`] pushes.
-    /// [`Generator::try_from`] is its inverse.
+    /// checkpointed frontier key carries and what `ns_lock_key` pushes.
+    /// `Generator::try_from` is its inverse.
     fn from(g: Generator) -> u8 {
         match g {
             Generator::SameField => 1,

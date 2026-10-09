@@ -412,6 +412,12 @@ fn mint_preconditions_reject_structurally() {
     // unregistered cases are pinned in
     // `delegate_mints_the_account_and_registers_its_principal`).
     assert!(m3.next_account_prefix(&element).is_none());
+    // The content chain's peek reads the mint's one refusal as an absence, at
+    // every home that mint refuses: unregistered, an account, a node, an
+    // element.
+    for home in [&unregistered_doc, &acct, &node, &element] {
+        assert_eq!(m3.next_content_address(home), None, "{home:?}");
+    }
 }
 
 #[test]

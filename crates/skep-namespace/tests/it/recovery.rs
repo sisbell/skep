@@ -342,7 +342,7 @@ fn two_slices_holding_the_same_entries_encode_to_one_byte_string() {
     };
     let document = |i: usize| M3Rec::Allocate {
         addr: a(&docs[i]),
-        published: i % 2 == 0,
+        published: i.is_multiple_of(2),
     };
     let node = |n: u32| M3Rec::RegisterNode { addr: a(&[1, n]) };
 

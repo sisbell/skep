@@ -522,7 +522,7 @@ impl M3State {
     /// itself seated does not move the answer.
     pub(crate) fn has_principal_strictly_under(&self, p: &Address) -> bool {
         self.principals
-            .range((Excluded(p.clone()), Unbounded))
+            .range::<_, Address>((Excluded(p), Unbounded))
             .next()
             .is_some_and(|(first, _)| prefix_contains(p, first))
     }

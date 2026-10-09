@@ -707,12 +707,14 @@ impl Daemon {
     /// warnings at both their moments, the open's-report `auth:` line, the
     /// node prefix, the blocked list at its three moments, the claim's flip
     /// line and a reissue's refusal among them; and the standing line
-    /// (`standing:`), the kernel's halt line and the two thread catches'
-    /// consequence lines (`failure:`) — so a suite pins the words and the
-    /// class of what went to the operator stream, which no suite captures
-    /// in-process. The open's own lines (said before the daemon exists) and
-    /// the checkpoint thread's own landing, failure and backstop lines
-    /// ([`Daemon::checkpoint_lines`]) are not among them.
+    /// (`standing:`), the kernel's halt line, the full volume's line, the
+    /// feed files' lines — a cut, the unreadable slots and the malformed
+    /// names at their open, a stop past a rename while serving — and the
+    /// two thread catches' consequence lines (`failure:`) — so a suite pins
+    /// the words and the class of what went to the operator stream, which
+    /// no suite captures in-process. The open's own lines (said before the
+    /// write path exists) and the checkpoint thread's own landing, failure
+    /// and backstop lines ([`Daemon::checkpoint_lines`]) are not among them.
     #[doc(hidden)]
     pub fn lines_said(&self) -> Vec<String> {
         self.said.lock().clone()

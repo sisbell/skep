@@ -38,7 +38,9 @@
 //!
 //! * A torn tail is truncated at the last whole record on open — trust ends
 //!   at the first unparseable line; the daemon never wedges on its own
-//!   testimony.
+//!   testimony. The cut is said on the operator stream once, with the last
+//!   trusted position and the bytes ([`Cut`]), and its case: the cut part
+//!   is re-derived as bare entries by the walk below.
 //! * Positions whose record was lost, or that predate the feature, are
 //!   reconstructed as BARE positions and answer `docs`/`key`/`time` as
 //!   `null`. NEVER an invented value. The op's own TERMS, and the op where
@@ -107,8 +109,10 @@ use skep_address::Address;
 use skep_engine::{Engine, HistoryError, World};
 use skep_kernel::{Attestation, Seq};
 use skep_util::json::obj;
+use skep_util::notice::Class;
 
 use super::classify::{derived_journal, parse_dotted};
+use super::Lines;
 use crate::codec::{j_attest, to_bytes};
 use crate::serial::SerialGuard;
 
@@ -562,6 +566,9 @@ pub(super) struct CommitsLog {
     last_time: u64,
     /// The file's length — the offset the next appended line lands at.
     len: u64,
+    /// The classed door with the daemon's record ([`Lines`]): what the
+    /// rewrite's stop is said through, once per uptime.
+    lines: Lines,
     /// Set by the first FAILED append of this uptime — or a compaction's
     /// rewrite failed PAST its rename ([`CommitsLog::compact_to`]), after
     /// which the handle names a file no open reads — after which this file
@@ -642,19 +649,35 @@ impl CommitsLog {
     /// is already owed, so lost testimony degrades to bare; at open nothing
     /// is owed yet, and a data dir that cannot take a write the kernel just
     /// performed is an operator condition worth reporting rather than
-    /// limping past.
-    pub(super) fn open(dir: &Path, engine: &Engine) -> io::Result<(CommitsLog, Vec<Walked>)> {
+    /// limping past. Every failure NAMES THIS FILE, the kind kept
+    /// (`operations.md` §1.1 row 2): one closure wraps each `?` the open
+    /// takes on the file, as the blocked list's read wraps its path, so the
+    /// daemon's `change-feed sidecar: {e}` reads `commits.log: {e}`.
+    ///
+    /// `lines` is the classed door: a torn tail is said through it once
+    /// ([`LogCutLine`]) and the malformed names once with their count
+    /// ([`demote_malformed_names`]); the log keeps a clone for its stop.
+    pub(super) fn open(
+        dir: &Path,
+        engine: &Engine,
+        lines: &Lines,
+    ) -> io::Result<(CommitsLog, Vec<Walked>)> {
+        let with_file = |e: io::Error| io::Error::new(e.kind(), format!("{SIDECAR_FILE}: {e}"));
         let path = dir.join(SIDECAR_FILE);
-        let mut file = open_sidecar(&path)?;
+        let mut file = open_sidecar(&path).map_err(with_file)?;
         let mut bytes = Vec::new();
-        file.read_to_end(&mut bytes)?;
+        file.read_to_end(&mut bytes).map_err(with_file)?;
         let (records, valid_end) = parse_records(&bytes);
-        if valid_end < bytes.len() {
+        let cut = if valid_end < bytes.len() {
             // The torn (or corrupt) tail: truncate at the last whole record.
             // Anything the dropped lines described is re-covered as bare
-            // positions by the walk below.
-            file.set_len(valid_end as u64)?;
-        }
+            // positions by the walk below — said once the walk's own fence
+            // `low` is known, which is the position trust ends at.
+            file.set_len(valid_end as u64).map_err(with_file)?;
+            Some((valid_end as u64, bytes.len() as u64))
+        } else {
+            None
+        };
         let mut len = valid_end as u64;
         let mut entries = BTreeMap::new();
         let mut offsets = BTreeMap::new();
@@ -691,6 +714,12 @@ impl CommitsLog {
             min_since = 0;
         }
         let low = entries.keys().next_back().copied().unwrap_or(0).max(min_since);
+        if let Some((valid_end, before)) = cut {
+            // Row 9 for this file: the last trusted position is the walk's
+            // own fence, the highest surviving record at or below the head
+            // (or the fence record), from which the cut part is re-derived.
+            lines.say(Class::Failure, LogCutLine { cut: Cut { valid_end, len: before, trusted: low } });
+        }
         let mut walked = Vec::new();
         if head > low {
             // The walk's own fence, qualified because the accumulator it
@@ -701,13 +730,13 @@ impl CommitsLog {
                 offsets.insert(w.at, LineOffset(len));
                 let line = entry_line(w.at, &meta);
                 entries.insert(w.at, meta);
-                file.write_all(&line)?;
+                file.write_all(&line).map_err(with_file)?;
                 len += line.len() as u64;
             }
             if let Some(walked_min) = walk_min_since {
                 min_since = min_since.max(walked_min);
                 let line = min_since_line(walked_min);
-                file.write_all(&line)?;
+                file.write_all(&line).map_err(with_file)?;
                 len += line.len() as u64;
             }
             walked = boundaries;
@@ -732,18 +761,22 @@ impl CommitsLog {
             rewritten: false,
             last_time: 0,
             len,
+            lines: lines.clone(),
             stopped: None,
             #[cfg(any(test, feature = "test-hooks"))]
             fail_next_rewrite_past_rename: false,
         };
         // The compaction is the same rewrite the thread runs after each
         // checkpoint, through the same method; at open a failure is fatal
-        // either side of the rename. The rewrite is unconditional under a
-        // discarded fence, so a journal that later grows past that number
-        // cannot resurrect it from the file — the one forcing the thread's
-        // compaction never makes, since a fence above the head is a thing
-        // only an open meets.
-        log.compact_inner(floor_fence.unwrap_or(0), stale_fence).map_err(RewriteFail::into_io)?;
+        // either side of the rename — the bare I/O error either side
+        // (`RewriteFail::into_io` names no file), wrapped here with this
+        // file's name as every other failure of the open is. The rewrite is
+        // unconditional under a discarded fence, so a journal that later
+        // grows past that number cannot resurrect it from the file — the one
+        // forcing the thread's compaction never makes, since a fence above
+        // the head is a thing only an open meets.
+        log.compact_inner(floor_fence.unwrap_or(0), stale_fence)
+            .map_err(|failed| with_file(failed.into_io()))?;
         if log.rewritten {
             walked.retain(|w| w.at > log.min_since);
         }
@@ -752,7 +785,7 @@ impl CommitsLog {
         // testimony this daemon cannot repeat, and it answers BARE — in
         // memory alone, AFTER any rewrite above, which writes the line as it
         // was read: this file is the sole surviving record of those commits.
-        demote_malformed_names(&mut log.entries);
+        demote_malformed_names(&mut log.entries, lines);
         log.last_time = log.entries.values().filter_map(CommitMeta::time).max().unwrap_or(0);
         Ok((log, walked))
     }
@@ -776,8 +809,12 @@ impl CommitsLog {
     /// REPLACED file, which no open reads, so the file is STOPPED for the
     /// uptime as a failed append stops it — the resident entries are
     /// trimmed all the same and serve this uptime, and the next open
-    /// re-derives from the rewritten file's own fence. Said once, here, as
-    /// the append's stop is said at the append.
+    /// re-derives from the rewritten file's own fence. Said ONCE PER UPTIME
+    /// (`operations.md` §1.1 row 29): this method has no stop guard, so a
+    /// stopped log is rewritten at every compacting landing — each rewrite
+    /// running, the stop's position moving to the newest fence — and the
+    /// line is said at the stop's transition alone, the standing line
+    /// re-saying it while it stands.
     pub(super) fn compact_to(&mut self, min_since: u64) -> Result<bool, RewriteFail> {
         self.compact_inner(min_since, false)
     }
@@ -817,12 +854,22 @@ impl CommitsLog {
                 self.rewritten = true;
             }
             Err(RewriteFail::PastRename(e)) => {
+                // Said where the stop is SET, not where it is re-set: a
+                // stopped log is rewritten again at the next compacting
+                // landing, its stop moving to the newest fence in silence.
+                let first = self.stopped.is_none();
                 self.stopped = Some(self.min_since);
                 self.rewritten = true;
-                skep_util::notice::line(format_args!(
-                    "commits.log rewrite failed past its rename: {e}; this file takes no further \
-                     line, so the next open re-derives from its fence as bare entries"
-                ));
+                if first {
+                    self.lines.say(
+                        Class::Failure,
+                        format_args!(
+                            "commits.log rewrite failed past its rename: {e}; this file takes no \
+                             further line, so the next open re-derives from its fence as bare \
+                             entries"
+                        ),
+                    );
+                }
                 return Err(RewriteFail::PastRename(e));
             }
             Err(before) => return Err(before),
@@ -1039,6 +1086,77 @@ pub(super) fn reclaim_floor(engine: &Engine) -> Option<u64> {
     }
 }
 
+/// THE CUT a feed file's replay made (`operations.md` §1.1 row 9): trust
+/// ended at a line that was torn or did not parse, and the file was
+/// truncated there. Answered by each replay to its caller — `commits.log`'s
+/// own open and `LineFile::open` for the four derived files and the attest
+/// store — which words it with the case that is its own: a derived file's
+/// cut part is re-derived, `commits.log`'s as bare entries, and the attest
+/// store's lies on one side of the reclaim floor. [`CutHead`] renders the
+/// head every one of those lines opens with.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct Cut {
+    /// The byte trust ends at — the end of the last whole line that parsed,
+    /// where the file was truncated.
+    pub valid_end: u64,
+    /// The file's length before the cut.
+    pub len: u64,
+    /// THE LAST TRUSTED POSITION: the coverage the scan reached before the
+    /// cut — the highest position the surviving lines reach at or below the
+    /// head, an entry's or a fence's — and so the position the cut part is
+    /// re-derived from. Every cut line's position lies above it, the files
+    /// being position-ordered.
+    pub trusted: u64,
+}
+
+impl Cut {
+    /// The bytes after the trusted end — what was cut.
+    fn after(&self) -> u64 {
+        self.len.saturating_sub(self.valid_end)
+    }
+}
+
+/// Row 9's HEAD — `{file}: trust ends at position {c} (byte {n} of {len});
+/// the {k} bytes after it are cut` — the words every cut line opens with,
+/// each caller adding its own case after a semicolon. A pure value, pinned
+/// by `to_string()` in the unit suite.
+pub(super) struct CutHead {
+    pub name: &'static str,
+    pub cut: Cut,
+}
+
+impl std::fmt::Display for CutHead {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{}: trust ends at position {} (byte {} of {}); the {} bytes after it are cut",
+            self.name,
+            self.cut.trusted,
+            self.cut.valid_end,
+            self.cut.len,
+            self.cut.after()
+        )
+    }
+}
+
+/// Row 9 for `commits.log`: the head, then this file's own case — the cut
+/// part is re-derived as bare entries, by the walk the open runs from the
+/// last trusted position (the file's own recovery, which line 31 names for
+/// a failed append). Emitted under `Class::Failure` by [`CommitsLog::open`].
+pub(super) struct LogCutLine {
+    pub cut: Cut,
+}
+
+impl std::fmt::Display for LogCutLine {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{}; the cut part is re-derived as bare entries",
+            CutHead { name: SIDECAR_FILE, cut: self.cut }
+        )
+    }
+}
+
 /// How a feed file's REWRITE failed — on which side of the rename, which is
 /// the whole of what the caller acts on. The rename is the one atomic step:
 /// before it the old file stands whole and the handle still names it, so
@@ -1046,7 +1164,8 @@ pub(super) fn reclaim_floor(engine: &Engine) -> Option<u64> {
 /// file is in place and the handle names the REPLACED one, which no open
 /// reads, so the file is STOPPED for the uptime ([`CommitsLog::compact_to`],
 /// `LineFile::rewrite`). At open either side is fatal, through
-/// [`RewriteFail::into_io`]; while serving the thread reports and moves on.
+/// [`RewriteFail::into_io`] — the bare I/O error, which the open wraps with
+/// the file's name; while serving the thread reports and moves on.
 #[derive(Debug)]
 pub(super) enum RewriteFail {
     /// The temp file's creation, write or sync, or the rename itself: the
@@ -1188,23 +1307,29 @@ fn rewrite(
 /// so a malformed name is never rewritten away over what may be one build's
 /// rendering.
 ///
+/// SAID ONCE PER OPEN (`operations.md` §1.1 row 11): the positions demoted
+/// are counted and one line names the count and the first of them
+/// ([`report_malformed_names`]) — the file is re-read whole at every open
+/// and never rewritten over them, so each open says it once.
+///
 /// UNREACHABLE as built — the names are rendered from validated `Address`es
 /// by [`super::feed::Feed::record`] and read back by [`parse_dotted`], which
 /// is that rendering's inverse — and the obligation keeping it so is held by
 /// nobody: the write path renders, this file stores, the feed's open parses.
-fn demote_malformed_names(entries: &mut BTreeMap<u64, CommitMeta>) {
-    let half_recorded: Vec<(u64, usize)> = entries
+fn demote_malformed_names(entries: &mut BTreeMap<u64, CommitMeta>, lines: &Lines) {
+    let half_recorded: Vec<u64> = entries
         .iter()
         .filter_map(|(at, meta)| match meta {
             CommitMeta::Recorded { docs, .. } => {
-                let dropped = docs.iter().filter(|s| parse_dotted(s).is_none()).count();
-                (dropped > 0).then_some((*at, dropped))
+                docs.iter().any(|s| parse_dotted(s).is_none()).then_some(*at)
             }
             CommitMeta::Bare { .. } => None,
         })
         .collect();
-    for (at, dropped) in half_recorded {
-        report_malformed_names(SIDECAR_FILE, at, dropped);
+    if let Some(&first) = half_recorded.first() {
+        report_malformed_names(lines, SIDECAR_FILE, half_recorded.len(), first);
+    }
+    for at in half_recorded {
         entries.insert(at, CommitMeta::bare());
     }
 }
@@ -1478,15 +1603,33 @@ fn min_since_line(min_since: u64) -> Vec<u8> {
     line_bytes(&obj(vec![("min_since", Value::Number(min_since.into()))]))
 }
 
-/// One line carrying document names this daemon cannot parse — the notice
-/// both halves of the feed's name-parsing share: this file's own
-/// [`demote_malformed_names`] and the derived index's read of the same
-/// names. Written through [`skep_util::notice`], which owns the stream and
-/// states why a notice may not panic.
-pub(super) fn report_malformed_names(file: &str, at: u64, dropped: usize) {
-    skep_util::notice::line(format_args!(
-        "{file} position {at} carries {dropped} malformed document name(s)"
-    ));
+/// THE MALFORMED NAMES, said ONCE PER OPEN with a count (`operations.md`
+/// §1.1 row 11) — the notice both halves of the feed's name-parsing share:
+/// this file's own [`demote_malformed_names`] and the derived index's read
+/// of the same names, each counting the positions it met and saying the
+/// count and the first of them through `lines`, the classed door. Nothing
+/// per position: the words are [`MalformedNamesLine`]'s.
+pub(super) fn report_malformed_names(lines: &Lines, file: &'static str, positions: usize, first: u64) {
+    lines.say(Class::Failure, MalformedNamesLine { file, positions, first });
+}
+
+/// Row 11's words: `{file}: {n} positions carry malformed document names,
+/// the first at position {p}` — one line per file per open. A pure value,
+/// pinned by `to_string()` in the unit suite.
+pub(super) struct MalformedNamesLine {
+    pub file: &'static str,
+    pub positions: usize,
+    pub first: u64,
+}
+
+impl std::fmt::Display for MalformedNamesLine {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{}: {} positions carry malformed document names, the first at position {}",
+            self.file, self.positions, self.first
+        )
+    }
 }
 
 /// One newline-terminated file line — the codec's serializer, so a line is
@@ -1518,6 +1661,7 @@ impl CommitsLog {
             rewritten: false,
             last_time: 0,
             len: 0,
+            lines: Lines::new(),
             stopped: None,
             fail_next_rewrite_past_rename: false,
         }

@@ -33,7 +33,7 @@ use std::path::Path;
 
 use common::*;
 use serde_json::Value;
-use skepd::Seq;
+use skepd::{Seq, Skepd};
 
 mod mirror;
 
@@ -963,15 +963,25 @@ fn sidecar_survives_restart_truncates_torn_tail_and_bares_lost_records() {
     // ── torn tail: a partial trailing record is truncated at open; the
     //    daemon comes up and the feed is unchanged. (The fragment's number
     //    must not prefix any REAL record's `{"at":N,` — every committed
-    //    position here is ≤ 32.) ──
+    //    position here is ≤ 32.) THE CUT IS SAID (`operations.md` §1.1 row
+    //    9): once, under `failure:`, with the last trusted position — the
+    //    head, every position recorded — the bytes, and this file's case,
+    //    the cut part re-derived as bare entries. A DERIVED file torn
+    //    beside it — `feed-index.log` cut through its fence line and into
+    //    the head's own entry line — says its own case, the cut part
+    //    re-derived, `{c}` the highest position its surviving lines reach,
+    //    below the head; the open re-derives the head's entry. ──
     {
         use std::io::Write;
+        let whole = std::fs::metadata(&sidecar_path).expect("metadata").len();
         let mut f = std::fs::OpenOptions::new()
             .append(true)
             .open(&sidecar_path)
             .expect("append to commits.log");
         f.write_all(b"{\"at\":9999").expect("write the torn tail");
         drop(f);
+        let index_path = dir.path().join("feed-index.log");
+        let index_cut = tear_the_last_line(&index_path, 20);
         let sd = spawn(dir.path());
         let port = sd.port();
         let (st, body) = owner_changes(port, "since=0");
@@ -979,6 +989,44 @@ fn sidecar_survives_restart_truncates_torn_tail_and_bares_lost_records() {
         assert_eq!(body, before, "a torn sidecar tail must not change the feed");
         let contents = std::fs::read_to_string(&sidecar_path).expect("read commits.log");
         assert!(!contents.contains("{\"at\":9999"), "the torn tail was truncated on open");
+        let head = *all_ats().last().expect("the head");
+        let said = sd.daemon().lines_said();
+        let log_line = format!(
+            "failure: commits.log: trust ends at position {head} (byte {whole} of {}); the 10 \
+             bytes after it are cut; the cut part is re-derived as bare entries",
+            whole + 10
+        );
+        assert_eq!(
+            said.iter().filter(|l| l.as_str() == log_line).count(),
+            1,
+            "FINDING (row 9): commits.log's cut, once, with the last trusted position:\n{}",
+            said.join("\n")
+        );
+        let (trusted, valid_end, len) = index_cut;
+        let index_line = format!(
+            "failure: feed-index.log: trust ends at position {trusted} (byte {valid_end} of \
+             {len}); the {} bytes after it are cut; the cut part is re-derived",
+            len - valid_end
+        );
+        assert_eq!(
+            said.iter().filter(|l| l.as_str() == index_line).count(),
+            1,
+            "FINDING (row 9): the derived file's cut, once, re-derived:\n{}",
+            said.join("\n")
+        );
+        assert_eq!(
+            said.iter().filter(|l| l.contains("trust ends at")).count(),
+            2,
+            "no other file was cut:\n{}",
+            said.join("\n")
+        );
+        assert!(trusted < head, "the tear reached the head's entry line: {trusted} < {head}");
+        let positions = feed_files_positions(dir.path());
+        assert_eq!(
+            positions["feed-index.log"].0.iter().max(),
+            Some(&head),
+            "the cut part re-derived: the head's entry is back in the index file"
+        );
         sd.shutdown();
     }
 
@@ -1042,6 +1090,53 @@ fn sidecar_survives_restart_truncates_torn_tail_and_bares_lost_records() {
     }
 }
 
+/// Cut `path` `short` bytes into its last line — a torn tail — answering
+/// what the replay will say of it: the last trusted position (the highest
+/// `at` or `covered` among the whole lines left), the trusted end and the
+/// length after the tear.
+fn tear_the_last_line(path: &Path, short: u64) -> (u64, u64, u64) {
+    let bytes = std::fs::read(path).expect("read the file");
+    let len = bytes.len() as u64 - short;
+    let kept = &bytes[..len as usize];
+    let valid_end = kept.iter().rposition(|&b| b == b'\n').map_or(0, |i| i as u64 + 1);
+    let trusted = std::str::from_utf8(&kept[..valid_end as usize])
+        .expect("utf-8")
+        .lines()
+        .map(|line| {
+            let v: Value = serde_json::from_str(line).expect("a whole line is JSON");
+            v.get("at").or_else(|| v.get("covered")).and_then(Value::as_u64).expect("a position")
+        })
+        .max()
+        .expect("a whole line survives");
+    let fh = std::fs::OpenOptions::new().write(true).open(path).expect("open");
+    fh.set_len(len).expect("tear the tail");
+    drop(fh);
+    (trusted, valid_end, len)
+}
+
+/// Rewrite the `docs` of the LAST `n` document-naming lines of the feed
+/// file at `path` as `["1.0"]` — a dotted decimal that is not an address
+/// (T4 refuses a trailing zero), so each LINE still parses as a record and
+/// only its names do not — answering the positions doctored, ascending.
+fn doctor_the_last_named_docs(path: &Path, n: usize) -> Vec<u64> {
+    let contents = std::fs::read_to_string(path).expect("read the file");
+    let mut lines: Vec<String> = Vec::new();
+    let mut doctored = Vec::new();
+    for line in contents.lines().rev() {
+        let mut v: Value = serde_json::from_str(line).expect("a feed line is JSON");
+        let names = v.get("docs").and_then(Value::as_array).map_or(0, Vec::len);
+        if doctored.len() < n && names > 0 {
+            doctored.push(v["at"].as_u64().expect("a record carries its position"));
+            v["docs"] = serde_json::json!(["1.0"]);
+        }
+        lines.push(serde_json::to_string(&v).expect("json"));
+    }
+    lines.reverse();
+    doctored.reverse();
+    std::fs::write(path, format!("{}\n", lines.join("\n"))).expect("rewrite");
+    doctored
+}
+
 /// A RECORDED position carrying a MALFORMED document name answers as a BARE
 /// one — op, docs, time and key all null — and its op, its time and the
 /// FINGERPRINT of the key whose session committed it are not disclosed.
@@ -1057,85 +1152,107 @@ fn sidecar_survives_restart_truncates_torn_tail_and_bares_lost_records() {
 /// The rewritten line keeps its `op`, `time` and `key` intact: what the
 /// daemon refuses is a HALF-RECORDED position, exactly as `parse_line`
 /// already refuses a line carrying some of those three and not the others.
+///
+/// THE LINE, ONCE PER OPEN WITH A COUNT (`operations.md` §1.1 row 11), BOTH
+/// HALVES: THREE positions doctored in `commits.log` and the same three in
+/// `feed-index.log`, the first open says `commits.log: 3 positions carry
+/// malformed document names, the first at position {p}` once and the index
+/// file's own once, under `failure:`, and nothing per position; the second
+/// open, the index gone, says `commits.log`'s once again and no index line.
 #[test]
 fn a_position_carrying_a_malformed_document_name_answers_bare() {
     let dir = tempfile::tempdir().expect("tempdir");
     let sidecar_path = dir.path().join("commits.log");
+    let index_path = dir.path().join("feed-index.log");
     {
         let sd = spawn(dir.path());
         seed_flow(sd.port());
         sd.shutdown();
     }
 
-    // Make the LAST document-naming record's docs MALFORMED — the seeded
-    // `make_link` into principal 1's PRIVATE draft, so the mask is what the
-    // demotion is protecting. `1.0` is a dotted decimal that is not an
-    // address (T4 refuses a trailing zero), so the LINE still parses as a
-    // record and only its names do not.
-    let contents = std::fs::read_to_string(&sidecar_path).expect("read commits.log");
-    let mut lines: Vec<String> = Vec::new();
-    let mut doctored: Option<u64> = None;
-    for line in contents.lines().rev() {
-        let mut v: Value = serde_json::from_str(line).expect("a sidecar line is JSON");
-        let names = v.get("docs").and_then(Value::as_array).map_or(0, Vec::len);
-        if doctored.is_none() && names > 0 {
-            doctored = Some(v["at"].as_u64().expect("a record carries its position"));
-            v["docs"] = serde_json::json!(["1.0"]);
-        }
-        lines.push(serde_json::to_string(&v).expect("json"));
-    }
-    lines.reverse();
-    let at = doctored.expect("the seeded feed holds a record naming a document");
-    assert_eq!(at, SEEDED_ATS[4], "the doctored position is the make_link into the draft");
-    std::fs::write(&sidecar_path, format!("{}\n", lines.join("\n"))).expect("rewrite");
+    // Make the LAST THREE document-naming records' docs MALFORMED — the
+    // seeded writes into principal 1's PRIVATE draft (its mint, the insert,
+    // the `make_link`), so the mask is what the demotion is protecting —
+    // in the authority file and in the derived index alike.
+    let doctored = doctor_the_last_named_docs(&sidecar_path, 3);
+    assert_eq!(doctored, &SEEDED_ATS[2..], "the three writes into the private draft");
+    assert_eq!(doctor_the_last_named_docs(&index_path, 3), doctored, "the index's same three");
+    let first = doctored[0];
 
     let bare_to_owner_masked_from_guest = |port: u16, what: &str| {
         let s1 = open_session(port, 1);
         let v = changes_ok(port, Some(&s1), "since=0");
-        assert_eq!(entry_ats(&v), all_ats(), "{what}: the owner still sees the position");
-        let entry = v["changes"]
-            .as_array()
-            .expect("changes")
-            .iter()
-            .find(|e| e["at"].as_u64() == Some(at))
-            .expect("the doctored position")
-            .clone();
-        assert!(
-            entry["op"].is_null()
-                && entry["docs"].is_null()
-                && entry["time"].is_null()
-                && entry["key"].is_null(),
-            "{what}: a position whose names this daemon cannot parse stands behind \
-             none of its testimony — not its op, not its time, and not the \
-             fingerprint of the key whose session committed it: {entry}"
-        );
+        assert_eq!(entry_ats(&v), all_ats(), "{what}: the owner still sees the positions");
+        for at in &doctored {
+            let entry = v["changes"]
+                .as_array()
+                .expect("changes")
+                .iter()
+                .find(|e| e["at"].as_u64() == Some(*at))
+                .expect("the doctored position")
+                .clone();
+            assert!(
+                entry["op"].is_null()
+                    && entry["docs"].is_null()
+                    && entry["time"].is_null()
+                    && entry["key"].is_null(),
+                "{what}: a position whose names this daemon cannot parse stands behind \
+                 none of its testimony — not its op, not its time, and not the \
+                 fingerprint of the key whose session committed it: {entry}"
+            );
+        }
         let g = changes_ok(port, None, "since=0");
         assert!(
-            !entry_ats(&g).contains(&at),
+            doctored.iter().all(|at| !entry_ats(&g).contains(at)),
             "{what}: and a draft write is not unmasked by testimony this daemon \
              cannot parse: {:?}",
             entry_ats(&g)
         );
     };
+    let malformed_lines = |sd: &Skepd| -> Vec<String> {
+        sd.daemon().lines_said().into_iter().filter(|l| l.contains("malformed")).collect()
+    };
+    let log_line = format!(
+        "failure: commits.log: 3 positions carry malformed document names, the first at \
+         position {first}"
+    );
+    let index_line = format!(
+        "failure: feed-index.log: 3 positions carry malformed document names, the first at \
+         position {first}"
+    );
 
-    // The derived index still holds that position's GOOD names, and the
-    // demotion is driven by the authority file regardless — so the entry
-    // renders bare while its class, and with it the mask, is untouched.
+    // The derived index holds the same malformed names, and the demotion is
+    // driven by the authority file regardless — so the entries render bare
+    // while the bitmap, seeded from its own file, keeps the mask. Both
+    // halves say their line, once, with the count.
     {
         let sd = spawn(dir.path());
-        bare_to_owner_masked_from_guest(sd.port(), "with the derived index intact");
+        bare_to_owner_masked_from_guest(sd.port(), "with the derived index doctored too");
+        assert_eq!(
+            malformed_lines(&sd),
+            [log_line.clone(), index_line.clone()],
+            "FINDING (row 11): one line per file per open, with the count and the first:\n{}",
+            sd.daemon().lines_said().join("\n")
+        );
         sd.shutdown();
     }
 
     // And with the index gone, so no derived file rescues the class: the
-    // position classifies from the JOURNAL (the bare path, PUB-6.45) and
-    // still discloses none of its testimony. This is the leg where the
+    // positions classify from the JOURNAL (the bare path, PUB-6.45) and
+    // still disclose none of their testimony. This is the leg where the
     // defect lives — a class none of whose names parse is EMPTY, and an
-    // empty class is a `[]`-docs entry, which is never masked.
-    std::fs::remove_file(dir.path().join("feed-index.log")).expect("drop the derived index");
+    // empty class is a `[]`-docs entry, which is never masked. The file is
+    // re-read whole, so its line is said once more; the index has none.
+    std::fs::remove_file(&index_path).expect("drop the derived index");
     {
         let sd = spawn(dir.path());
         bare_to_owner_masked_from_guest(sd.port(), "with the derived index gone");
+        assert_eq!(
+            malformed_lines(&sd),
+            [log_line.clone()],
+            "FINDING (row 11): the second open, the authority file alone:\n{}",
+            sd.daemon().lines_said().join("\n")
+        );
         sd.shutdown();
     }
 }
@@ -1746,8 +1863,17 @@ fn the_checkpoint_threads_landing_compacts_the_five_feed_files_while_serving() {
 /// this uptime from the resident entries; the next open re-derives the
 /// unrecorded position as a bare entry. Driven through the seam that refuses
 /// the reopen of each of the five files.
+///
+/// SAID ONCE PER UPTIME (`operations.md` §1.1 rows 29 and 30): a SECOND
+/// landing that compacts — the floor moved past the surviving entries by
+/// two more checkpoints, the seam armed again — rewrites every stopped
+/// file again, behind the new fence, and writes NO second line for any of
+/// the five; `stopped_feed_files` still names them, and the standing line
+/// re-says each with its position.
 #[test]
 fn a_feed_rewrite_failed_past_its_rename_stops_the_file_and_fails_no_op() {
+    const FIVE: [&str; 5] =
+        ["commits.log", "feed-index.log", "feed-offsets.log", "feed-masked.log", "feed-streams.log"];
     let dir = tempfile::tempdir().expect("tempdir");
     let sd = spawn(dir.path());
     let port = sd.port();
@@ -1760,7 +1886,7 @@ fn a_feed_rewrite_failed_past_its_rename_stops_the_file_and_fails_no_op() {
     assert_eq!(sd.daemon().newest_checkpoint().map(|h| h.seq.0), Some(head), "the checkpoint landed");
     assert_eq!(
         sd.daemon().stopped_feed_files(),
-        vec!["commits.log", "feed-index.log", "feed-offsets.log", "feed-masked.log", "feed-streams.log"],
+        FIVE.to_vec(),
         "each file's rewrite failed past its rename: every one is stopped"
     );
     // The rewritten files are whole and in place: the fence recorded, the
@@ -1772,6 +1898,30 @@ fn a_feed_rewrite_failed_past_its_rename_stops_the_file_and_fails_no_op() {
         .keys()
         .map(|name| (*name, std::fs::metadata(dir.path().join(name)).unwrap().len()))
         .collect();
+    // Each stop said ONCE, under `failure:`, in the ruled words — the log's
+    // first, then the four in the order the compaction rewrites them.
+    let stop_lines = |sd: &Skepd| -> Vec<String> {
+        sd.daemon().lines_said().into_iter().filter(|l| l.contains("rewrite failed past its rename")).collect()
+    };
+    let said = stop_lines(&sd);
+    assert_eq!(said.len(), 5, "one line per stopped file:\n{}", said.join("\n"));
+    assert_eq!(
+        said[0],
+        "failure: commits.log rewrite failed past its rename: test seam: the rewritten file's \
+         reopen refused; this file takes no further line, so the next open re-derives from its \
+         fence as bare entries"
+    );
+    let rewrite_order = ["feed-index.log", "feed-masked.log", "feed-streams.log", "feed-offsets.log"];
+    for (line, name) in said[1..].iter().zip(rewrite_order) {
+        assert_eq!(
+            line,
+            &format!(
+                "failure: {name} rewrite failed past its rename: test seam: the rewritten file's \
+                 reopen refused; this file takes no further line, so the next open re-derives \
+                 from its fence"
+            )
+        );
+    }
 
     // THE NEXT APPEND IS A NO-OP on every stopped file, and the write it
     // followed is acked and served this uptime.
@@ -1789,6 +1939,58 @@ fn a_feed_rewrite_failed_past_its_rename_stops_the_file_and_fails_no_op() {
     let v = changes_ok(port, Some(&s1), &format!("since={head}"));
     assert_eq!(entry_ats(&v).first(), Some(&at), "the write is served this uptime: {v}");
     assert!(v["changes"][0]["op"].is_string(), "with full testimony: {v}");
+
+    // A SECOND LANDING THAT COMPACTS: two more checkpoints move the oldest
+    // retained one — the reclaim floor — past every surviving entry, the
+    // seam armed again, so each stopped file's rewrite fails past its
+    // rename once more. The rewrites run — the new fence on disk, nothing
+    // at or below it — and NO second line is said.
+    sd.daemon().checkpoint_now();
+    let second = sd.daemon().newest_checkpoint().expect("the second checkpoint").seq.0;
+    assert!(second > head, "a checkpoint above the first: {second} > {head}");
+    small_commit(port, &s1, &doc);
+    sd.daemon().fail_the_feeds_next_rewrite_past_rename();
+    sd.daemon().service_the_checkpoint_now();
+    let third = sd.daemon().newest_checkpoint().expect("the third checkpoint").seq.0;
+    assert!(third > second, "the third landed: {third} > {second}");
+    let again = feed_files_positions(dir.path());
+    let new_fence = again["commits.log"].1.expect("the fence");
+    assert_eq!(new_fence, second - 1, "compacted to the floor the second checkpoint set");
+    assert!(again["commits.log"].0.iter().all(|&at| at > new_fence), "the rewrite ran: {again:?}");
+    assert_eq!(sd.daemon().stopped_feed_files(), FIVE.to_vec(), "still stopped, every one");
+    assert_eq!(
+        stop_lines(&sd),
+        said,
+        "FINDING (rows 29/30): a second compacting landing said a stop again:\n{}",
+        stop_lines(&sd).join("\n")
+    );
+    // The standing line re-says each stop, with the position it moved to.
+    sd.daemon().set_standing_interval_millis(50);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    let standing = loop {
+        let lines: Vec<String> =
+            sd.daemon().lines_said().into_iter().filter(|l| l.starts_with("standing: ")).collect();
+        if let Some(line) = lines.into_iter().next() {
+            break line;
+        }
+        assert!(std::time::Instant::now() < deadline, "no standing line within 20 s");
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    };
+    for name in FIVE {
+        assert!(
+            standing.contains(&format!("{name} stopped since position ")),
+            "the standing line re-says {name}: {standing}"
+        );
+    }
+    assert!(
+        standing.contains(&format!("commits.log stopped since position {new_fence}")),
+        "commits.log's stop moved to the newest fence: {standing}"
+    );
+    // A write after the final stop: acked, served this uptime, and no file
+    // takes its line — the second rewrite wrote the earlier ones whole from
+    // the resident entries, so this is the one the next open must re-derive.
+    let at = small_commit(port, &s1, &doc);
+    assert!(at > third, "committed above the third checkpoint: {at} > {third}");
     sd.shutdown();
 
     // THE NEXT OPEN re-derives: the unrecorded position is a bare entry, and
@@ -1796,7 +1998,7 @@ fn a_feed_rewrite_failed_past_its_rename_stops_the_file_and_fails_no_op() {
     let sd = spawn(dir.path());
     let port = sd.port();
     let s1 = open_session(port, 1);
-    let v = changes_ok(port, Some(&s1), &format!("since={head}"));
+    let v = changes_ok(port, Some(&s1), &format!("since={third}"));
     let entries = v["changes"].as_array().expect("changes");
     assert!(entries.iter().any(|e| e["at"].as_u64() == Some(at)), "re-derived: {v}");
     let bare = entries.iter().find(|e| e["at"].as_u64() == Some(at)).unwrap();

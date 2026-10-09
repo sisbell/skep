@@ -203,6 +203,29 @@ fn the_checkpoint_signal_keeps_a_raise_coalesces_a_burst_and_stops_every_wait_fo
     );
 }
 
+/// THE FULL VOLUME's LINE (`operations.md` §1.1 m1), in the ruled words,
+/// with the position the refused write would have taken — and the door it
+/// goes through keeps it in the record under its class word.
+#[test]
+fn the_full_volume_line_renders_the_ruled_words_and_the_door_records_it() {
+    assert_eq!(
+        FullVolumeLine { at: Seq(1204) }.to_string(),
+        "a write was refused at a full volume at position 1204: no write lands until room is \
+         freed on the volume; reads serve; the next write succeeds by itself once room stands, \
+         and no restart is owed"
+    );
+    let lines = Lines::new();
+    let shared = lines.clone();
+    lines.say(Class::Failure, FullVolumeLine { at: Seq(7) });
+    assert_eq!(
+        shared.said().lock().as_slice(),
+        ["failure: a write was refused at a full volume at position 7: no write lands until \
+          room is freed on the volume; reads serve; the next write succeeds by itself once room \
+          stands, and no restart is owed"],
+        "a clone shares the one record, the class word ahead of the line"
+    );
+}
+
 /// A raise WAKES a wait already parked — the thread asleep on the signal
 /// between two crossings runs the checkpoint the next crossing calls for.
 #[test]

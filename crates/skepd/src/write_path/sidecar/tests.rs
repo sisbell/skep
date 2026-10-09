@@ -578,3 +578,98 @@ fn a_failed_append_stops_the_log_so_the_reopen_walk_starts_below_the_gap() {
         .collect();
     assert_eq!(claimed, Vec::<u64>::new(), "the file claims no position above the gap");
 }
+
+/// THE WORDS of this file's three open-time and once-per-open lines, each
+/// a pure value: row 9's head with the last trusted position and the bytes
+/// ([`CutHead`]), `commits.log`'s own case after it ([`LogCutLine`]), and
+/// row 11's count with the first position ([`MalformedNamesLine`]).
+#[test]
+fn the_cut_and_the_malformed_names_render_the_ruled_words() {
+    let cut = Cut { valid_end: 4_096, len: 4_106, trusted: 32 };
+    assert_eq!(
+        CutHead { name: SIDECAR_FILE, cut }.to_string(),
+        "commits.log: trust ends at position 32 (byte 4096 of 4106); the 10 bytes after it are \
+         cut"
+    );
+    assert_eq!(
+        LogCutLine { cut }.to_string(),
+        "commits.log: trust ends at position 32 (byte 4096 of 4106); the 10 bytes after it are \
+         cut; the cut part is re-derived as bare entries"
+    );
+    assert_eq!(
+        MalformedNamesLine { file: SIDECAR_FILE, positions: 3, first: 24 }.to_string(),
+        "commits.log: 3 positions carry malformed document names, the first at position 24"
+    );
+}
+
+/// The malformed names are demoted in memory as before and SAID ONCE with
+/// their count and the first position (`operations.md` §1.1 row 11), under
+/// `failure:` — three half-recorded positions among five entries, one line;
+/// no malformed name, no line.
+#[test]
+fn malformed_names_are_said_once_with_the_count_and_the_first_position() {
+    let mut entries: BTreeMap<u64, CommitMeta> = [
+        (20, recorded("insert", &["1.0.1.0.1"], 1, Some("bare"))),
+        (24, recorded("insert", &["1.0"], 2, Some("bare"))),
+        (29, recorded("make_link", &["1.0.2.0.2", "not an address"], 3, Some("bare"))),
+        (31, CommitMeta::bare()),
+        (32, recorded("insert", &["1.0"], 4, Some("bare"))),
+    ]
+    .into_iter()
+    .collect();
+    let lines = Lines::new();
+    demote_malformed_names(&mut entries, &lines);
+    assert_eq!(
+        lines.said().lock().as_slice(),
+        ["failure: commits.log: 3 positions carry malformed document names, the first at \
+          position 24"],
+        "one line for the three"
+    );
+    for at in [24, 29, 32] {
+        assert!(matches!(entries[&at], CommitMeta::Bare { .. }), "{at} is demoted");
+    }
+    assert!(matches!(entries[&20], CommitMeta::Recorded { .. }), "a good record stands");
+    let lines = Lines::new();
+    demote_malformed_names(&mut entries, &lines);
+    assert!(lines.said().lock().is_empty(), "nothing malformed left: no line");
+}
+
+/// `commits.log`'s rewrite past its rename STOPS the log and says so ONCE
+/// PER UPTIME (`operations.md` §1.1 row 29): a second compacting rewrite on
+/// the stopped log still runs — the file rewritten behind the new fence,
+/// the stop's position moved to it — and adds no line.
+#[test]
+fn a_rewrite_failed_past_its_rename_is_said_once_and_later_ones_run_in_silence() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let mut log = CommitsLog::over_unwritable(dir.path(), 9);
+    for at in 1..=4 {
+        log.entries.insert(at, CommitMeta::bare());
+    }
+    log.fail_next_rewrite_past_rename();
+    let refused = log.compact_to(1).expect_err("the reopen is refused");
+    assert!(matches!(refused, RewriteFail::PastRename(_)), "{refused:?}");
+    assert_eq!(log.stopped_since(), Some(1), "stopped since the fence");
+    let stop_line = "failure: commits.log rewrite failed past its rename: test seam: the rewritten \
+                     file's reopen refused; this file takes no further line, so the next open \
+                     re-derives from its fence as bare entries";
+    assert_eq!(log.lines.said().lock().as_slice(), [stop_line]);
+    assert_eq!(
+        std::fs::read_to_string(dir.path().join(SIDECAR_FILE)).expect("read"),
+        "{\"min_since\":1}\n{\"at\":2}\n{\"at\":3}\n{\"at\":4}\n",
+        "the first rewrite is in place"
+    );
+
+    log.fail_next_rewrite_past_rename();
+    let refused = log.compact_to(2).expect_err("refused again");
+    assert!(matches!(refused, RewriteFail::PastRename(_)), "{refused:?}");
+    assert_eq!(log.stopped_since(), Some(2), "the stop moved to the newest fence");
+    assert_eq!(
+        std::fs::read_to_string(dir.path().join(SIDECAR_FILE)).expect("read"),
+        "{\"min_since\":2}\n{\"at\":3}\n{\"at\":4}\n",
+        "the second rewrite still ran"
+    );
+    // The record read ONCE into a local: a failing assertion that took the
+    // lock again for its message would deadlock instead of failing.
+    let said = log.lines.said().lock().clone();
+    assert_eq!(said.len(), 1, "FINDING (row 29): a second line for one stop:\n{}", said.join("\n"));
+}

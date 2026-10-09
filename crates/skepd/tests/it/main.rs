@@ -59,4 +59,5 @@ mod transport;
 mod universal_grants;
 mod vectors;
 mod version_chain;
+mod volume;
 mod wire_doc;

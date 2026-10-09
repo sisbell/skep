@@ -1900,11 +1900,14 @@ the store's install — nothing above their own layer.
      checkpoint thread after any landing, its own or a backstop's, its
      answer naming each file that stood; beneath it,
      `write_path/feed/derived.rs` keeps the feed's derived index files —
-     a rewrite that fails past its rename stops its file for the uptime,
-     said once — and `write_path/feed/attest.rs` the attest store, the
-     marker slot mirrored per attested commit, never compacted, its
-     missing tail rebuilt at open in one scan of the kernel's markers
-     above the store's fence;
+     a torn tail is cut at open and said with the last trusted position,
+     the bytes and that the cut part is re-derived; malformed names and
+     unreadable slots are said once per open with a count and the first
+     position; a rewrite that fails past its rename stops its file for the
+     uptime, said once per uptime — and `write_path/feed/attest.rs` the
+     attest store, the marker slot mirrored per attested commit, never
+     compacted, its missing tail rebuilt at open in one scan of the
+     kernel's markers above the store's fence;
    - `write_path/sidecar.rs` — `commits.log`, the daemon's record of what
      it committed, for whom, and whether the entry was signed — and, on a
      bare line, the journal's answer for the row's op and terms;
@@ -2047,7 +2050,10 @@ imports it.
   moment — and `feed-attest.log`, the attest store: each attested commit's
   marker slot, mirrored at commit from the value the write path admitted,
   rebuilt from the journal above the reclaim floor in one scan of the
-  kernel's markers above the store's fence, and the one daemon
+  kernel's markers above the store's fence — a cut at open said with the
+  floor and the side it reached, REBUILT where every cut line lies above
+  the floor and LOST where the lines between the last trusted position
+  and the floor were taken — and the one daemon
   file that is not a projection — below the floor the checkpoint holds no
   marker, so its line there is the entry signature's only copy at the
   origin, kept and never compacted, its one cut the open's tail check,

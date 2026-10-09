@@ -226,14 +226,24 @@ pub(crate) struct WritePath {
     /// through [`WritePath::say_the_kernels_halt_once`]. Poison does not
     /// persist across a restart, and neither does this.
     kernel_halt_said: AtomicBool,
-    /// TEST SEAM: the daemon's record of every line said through its
-    /// classed door this uptime ([`LinesSaid`]), held HERE and shared with
-    /// the daemon above, because one line of the daemon's is said from this
-    /// card, below the daemon — the kernel's halt at
-    /// [`WritePath::commit_recorded`] — and must stand in the same record,
-    /// in order, as the lines the daemon says itself.
-    #[cfg(any(test, feature = "test-hooks"))]
-    said: LinesSaid,
+    /// THE FULL VOLUME's ONCE-FLAG (`operations.md` §1.1 m1; §4 row 1):
+    /// whether [`FullVolumeLine`] has been said for the condition that
+    /// stands — set where `execute` answers `Rejected` coded `Durability`
+    /// whose I/O kind is `StorageFull`, and CLEARED where a commit lands
+    /// ([`WritePath::record`] answers a position), so the next refusal at a
+    /// full volume is a fresh condition and says the line again. Set, read
+    /// and cleared under the serialization guard at the door, so no
+    /// ordering is needed on the atomic; it is one so the field is `Sync`.
+    volume_full_said: AtomicBool,
+    /// THE CLASSED DOOR WITH ITS RECORD ([`Lines`]): every line said from
+    /// this card and the feed beneath it goes through it — the feed files'
+    /// open-time lines (a cut, the unreadable slots, the malformed names),
+    /// the files' once-per-uptime stops, the kernel's halt and the full
+    /// volume — and, under the test seam, into the one record the daemon
+    /// above shares (`LinesSaid`), in order with the lines the daemon
+    /// says itself. Made BEFORE the feed opens and handed down, which is
+    /// what lets a suite pin the open's lines in-process.
+    said: Lines,
     /// THE CHECKPOINT THREAD's SIGNAL (the module doc): raised after the
     /// record step of a commit whose crossing set the kernel's due flag, or
     /// whose execute ran a checkpoint inline — the kernel's backstop — and
@@ -260,7 +270,11 @@ impl WritePath {
     /// were written where it cannot read one — so the caller's error type
     /// need name only that.
     pub fn open(data_dir: &Path, engine: &Engine, index: Arc<CellIndex>) -> io::Result<WritePath> {
-        let feed = Feed::open(data_dir, engine)?;
+        // The door first, so the feed's open-time lines stand in the record
+        // the daemon will share: a cut, the unreadable slots, the malformed
+        // names are said by the files' opens, below any daemon.
+        let said = Lines::new();
+        let feed = Feed::open(data_dir, engine, &said)?;
         // Opened AFTER the feed, at the same head, and before any febe
         // exists to commit between the two: the stream's first announced
         // position is therefore one `/changes` already carries. That is the
@@ -283,8 +297,8 @@ impl WritePath {
             halted: AtomicBool::new(false),
             halted_at: AtomicU64::new(0),
             kernel_halt_said: AtomicBool::new(false),
-            #[cfg(any(test, feature = "test-hooks"))]
-            said: Arc::new(Mutex::new(Vec::new())),
+            volume_full_said: AtomicBool::new(false),
+            said,
             checkpoint_signal: CheckpointSignal::new(),
             inline_runs_seen: AtomicU64::new(0),
         })
@@ -319,10 +333,26 @@ impl WritePath {
         if self.kernel_halt_said.swap(true, Ordering::AcqRel) {
             return;
         }
-        let line = KernelHaltLine { at: self.stores.kernel().current_seq() };
-        #[cfg(any(test, feature = "test-hooks"))]
-        self.said.lock().push(format!("{}: {line}", Class::Failure));
-        notice::emit(Class::Failure, line);
+        self.said.say(Class::Failure, KernelHaltLine { at: self.stores.kernel().current_seq() });
+    }
+
+    /// THE FULL VOLUME's LINE (`operations.md` §1.1 m1; §4 row 1), said ONCE
+    /// PER CONDITION from [`WritePath::commit_recorded`], where `execute`
+    /// answered `Rejected` coded `Durability` whose I/O kind is `StorageFull`
+    /// — the journal's append or its barrier refused by the volume's room, a
+    /// true no-op, the seqs rolled back. `{p}` is `Kernel::current_seq() + 1`,
+    /// the first position the refused write would have taken: its boundary,
+    /// for a multi-record write, lies that many seqs higher, which the answer
+    /// does not carry, and what the operator reads is the ordering — no write
+    /// lands past the head until room stands. The once-flag is cleared by
+    /// the next LANDED commit, so a volume that fills again is said again;
+    /// a second refusal under one condition says nothing.
+    fn say_the_full_volume_once(&self) {
+        if self.volume_full_said.swap(true, Ordering::Relaxed) {
+            return;
+        }
+        let at = Seq(self.stores.kernel().current_seq().0.saturating_add(1));
+        self.said.say(Class::Failure, FullVolumeLine { at });
     }
 
     /// TEST SEAM: the daemon's record of its said lines, which this card
@@ -330,7 +360,7 @@ impl WritePath {
     /// API.
     #[cfg(any(test, feature = "test-hooks"))]
     pub(crate) fn lines_said(&self) -> &LinesSaid {
-        &self.said
+        self.said.said()
     }
 
     /// THE CHECKPOINT THREAD's SIGNAL: what the thread `serve` spawns waits
@@ -551,8 +581,14 @@ impl WritePath {
     /// that `execute` ANSWERS, with the halt above unset, is the kernel's —
     /// M10 lowers `TxnError::Poisoned` to that code — and this door is the
     /// first site of the kernel's halt line, said once by
-    /// [`WritePath::say_the_kernels_halt_once`]. One match on the answer per
-    /// write, and nothing on an ack.
+    /// [`WritePath::say_the_kernels_halt_once`]. AND THE FULL VOLUME (m1): a
+    /// `Rejected` coded `Durability` whose I/O kind — M10's unmarshaled
+    /// `io_kind`, set where it lowers `TxnError::Durability` — is
+    /// `StorageFull` is the volume refusing the journal's append or barrier,
+    /// said once per condition by [`WritePath::say_the_full_volume_once`]
+    /// and cleared by the next commit that lands; any other `Durability`
+    /// kind takes no line here. One match on the answer per write, and
+    /// nothing on an ack but the clearing.
     fn commit_recorded(
         &self,
         serial: &SerialGuard<'_>,
@@ -568,8 +604,16 @@ impl WritePath {
             if rejection.code == RejectCode::Poisoned {
                 self.say_the_kernels_halt_once();
             }
+            if rejection.code == RejectCode::Durability
+                && rejection.io_kind == Some(io::ErrorKind::StorageFull)
+            {
+                self.say_the_full_volume_once();
+            }
         }
         if let Some(at) = self.record(serial, meta, &resp) {
+            // A commit landed: the volume took it, so a full volume said
+            // before this is a condition that cleared, and the next is new.
+            self.volume_full_said.store(false, Ordering::Relaxed);
             self.commit_stream.announce(at);
         }
         // THE CHECKPOINT THREAD's WAKE, after the record step (the module
@@ -803,12 +847,80 @@ impl fmt::Display for KernelHaltLine {
     }
 }
 
+/// THE FULL VOLUME's LINE (`operations.md` §1.1 m1; §4 row 1), in the
+/// operator stream's ruled words: a write refused at a full volume, the
+/// position it would have taken, what lands and what serves, and the act —
+/// none, the condition clearing by itself once room stands. A pure value,
+/// pinned by `to_string()` in the unit suite; emitted under `Class::Failure`
+/// through [`WritePath::say_the_full_volume_once`], once per condition. Here
+/// beside [`KernelHaltLine`] for its reason: the site is this card's, below
+/// the daemon.
+pub(crate) struct FullVolumeLine {
+    /// `Kernel::current_seq() + 1` at the site — the first position the
+    /// refused write would have taken.
+    pub(crate) at: Seq,
+}
+
+impl fmt::Display for FullVolumeLine {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "a write was refused at a full volume at position {}: no write lands until room is \
+             freed on the volume; reads serve; the next write succeeds by itself once room \
+             stands, and no restart is owed",
+            self.at
+        )
+    }
+}
+
+/// THE CLASSED DOOR WITH ITS RECORD — `notice::emit` under a class word
+/// and, under the test seam, the line kept in `LinesSaid`, the one record
+/// the daemon shares: made by [`WritePath::open`] BEFORE the feed opens and
+/// handed down to every site below the daemon that says a line — the feed's
+/// open, each line file's and `commits.log`'s rewrite, the attest store's
+/// open — so the open-time lines (a cut, the unreadable slots, the malformed
+/// names) and the uptime lines (a file's stop, the kernel's halt, the full
+/// volume) stand in one record, in order, and a suite pins them in-process.
+/// A clone shares the record; outside the test seam it holds nothing and
+/// the door is `notice::emit` alone.
+#[derive(Clone)]
+pub(crate) struct Lines {
+    #[cfg(any(test, feature = "test-hooks"))]
+    said: LinesSaid,
+}
+
+impl Lines {
+    /// A door over a fresh, empty record.
+    pub(crate) fn new() -> Lines {
+        Lines {
+            #[cfg(any(test, feature = "test-hooks"))]
+            said: Arc::new(Mutex::new(Vec::new())),
+        }
+    }
+
+    /// One classed line — `{class}: {what}` into the record, then through
+    /// `notice::emit`, which renders now and writes from its own thread.
+    pub(crate) fn say(&self, class: Class, what: impl fmt::Display) {
+        #[cfg(any(test, feature = "test-hooks"))]
+        self.said.lock().push(format!("{class}: {what}"));
+        notice::emit(class, what);
+    }
+
+    /// The record this door writes into, for the daemon to share. Not a
+    /// stable API.
+    #[cfg(any(test, feature = "test-hooks"))]
+    pub(crate) fn said(&self) -> &LinesSaid {
+        &self.said
+    }
+}
+
 /// TEST SEAM: the daemon's record of every line said through its classed
 /// door this uptime, each `{class}: {text}`, oldest first — what
 /// `crate::Daemon::lines_said` answers. Behind an `Arc` and owned by the
-/// write path ([`WritePath`]'s `said`), which the daemon above shares,
-/// because one line of the daemon's is said from below it — the kernel's
-/// halt at [`WritePath::commit_recorded`] — and a suite pins it in the one
+/// write path ([`WritePath`]'s `said`, a [`Lines`]), which the daemon above
+/// shares, because lines of the daemon's are said from below it — the feed
+/// files' at their open, their stops, the kernel's halt and the full volume
+/// at [`WritePath::commit_recorded`] — and a suite pins them in the one
 /// record, in order with the rest. Not a stable API.
 #[cfg(any(test, feature = "test-hooks"))]
 pub(crate) type LinesSaid = Arc<Mutex<Vec<String>>>;

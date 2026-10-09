@@ -30,10 +30,15 @@
 //! too, where each was an entry signature's only copy. A crash tears the
 //! file's newest lines, at the head's end, which the journal still answers and
 //! the open rebuilds; a cut that reaches below the floor is damage to the
-//! file, and the open names every cut on the operator stream so the board
-//! directory's backup can be restored. At HEAD no read serves a below-floor
-//! slot (`/changes` answers `410 history_reclaimed` below the feed's floor):
-//! the lines below it are kept for a read that does not yet exist, the class
+//! file. The open names every cut on the operator stream with the last
+//! trusted position, the reclaim floor at this open and THE SIDE the cut
+//! reached ([`AttestCutLine`]) — REBUILT where every cut line lies above the
+//! floor, which is `coverage + 1 ≥ floor` since the file is position-ordered
+//! and the rebuild covers `(coverage, head]`; LOST between the last trusted
+//! position and the floor otherwise — so the board directory's backup is
+//! restored on a LOST cut alone. At HEAD no read serves a below-floor slot
+//! (`/changes` answers `410 history_reclaimed` below the feed's floor): the
+//! lines below it are kept for a read that does not yet exist, the class
 //! being the design record's and not this build's to narrow.
 //!
 //! DURABLE BEFORE THE NEXT COMMIT, AND A FAILED LINE HALTS WRITES (SO-I5 (d):
@@ -73,9 +78,11 @@ use serde_json::{Map, Value};
 use skep_engine::Engine;
 use skep_kernel::{Attestation, HistoryError, Seq};
 use skep_util::json::hex_string;
+use skep_util::notice::Class;
 
 use super::derived::LineFile;
-use super::super::sidecar::CommitsLog;
+use super::super::sidecar::{reclaim_floor, CommitsLog, Cut, CutHead};
+use super::super::Lines;
 use super::AttestStoreFailed;
 use crate::codec::parse_lower_hex_bytes;
 
@@ -116,9 +123,19 @@ impl AttestStore {
     /// (d)).
     ///
     /// A line this daemon cannot read (a tag of no signature, a blob of none,
-    /// hex it did not write) is reported and not held: the row then renders
-    /// `attest: null` where its line records the marker filled, never an
-    /// invented slot. The tail is every committed boundary above the file's
+    /// hex it did not write) is counted and not held — said ONCE PER OPEN
+    /// with the count and the first position (`operations.md` §1.1 row 10),
+    /// the file never compacted and the line never rewritten, so each open
+    /// meets it again: the row then renders `attest: null` where its line
+    /// records the marker filled, never an invented slot. A CUT the replay
+    /// made is said with the floor and the side it reached
+    /// ([`AttestCutLine`]), the floor read by the feed's own probe
+    /// ([`reclaim_floor`]) at a cut alone — the same refusal the rebuild
+    /// below meets where its fence's base is gone, both the kernel's one
+    /// base selection naming the oldest retained checkpoint. Every failure
+    /// of the open names this file, the kind kept (row 2): the replay's
+    /// through `LineFile::open`, the rebuilt lines' appends, the fence and
+    /// the sync through one closure here. The tail is every committed boundary above the file's
     /// coverage whose slot is filled, listed by `Kernel::boundaries_above` in
     /// one scan from one base ([`rebuilt_tail`]: the floor arm, and what a
     /// refusal leaves), kept where the log serves the position — the
@@ -145,29 +162,47 @@ impl AttestStore {
     /// took only unattested writes pay, a restart measured in minutes to
     /// hours at a large world. Never a compaction: the store keeps what the
     /// log drops.
-    pub(super) fn open(dir: &Path, engine: &Engine, log: &CommitsLog) -> io::Result<AttestStore> {
+    pub(super) fn open(
+        dir: &Path,
+        engine: &Engine,
+        log: &CommitsLog,
+        lines: &Lines,
+    ) -> io::Result<AttestStore> {
+        let with_file = |e: io::Error| io::Error::new(e.kind(), format!("{ATTEST_FILE}: {e}"));
         let head = log.open_head();
         let served_only = |at: u64| log.entries().contains_key(&at);
-        let (mut file, entries) = LineFile::open(dir, ATTEST_FILE, head, served_only)?;
+        let (mut file, entries, cut) = LineFile::open(dir, ATTEST_FILE, head, served_only, lines)?;
+        if let Some(cut) = cut {
+            // The floor, one probe, at a cut alone: `None` is a journal that
+            // still answers genesis, so every cut line is rebuilt — the floor
+            // is genesis, position 0.
+            let floor = reclaim_floor(engine).unwrap_or(0);
+            lines.say(Class::Failure, AttestCutLine { cut, floor });
+        }
         let mut served = BTreeMap::new();
+        let mut unreadable: Option<(usize, u64)> = None;
         for (at, m) in &entries {
             match attest_of_record(m) {
                 Some(slot) => {
                     served.insert(*at, Arc::new(slot));
                 }
-                None => skep_util::notice::line(format_args!(
-                    "{ATTEST_FILE} position {at} carries a slot this daemon cannot read"
-                )),
+                None => {
+                    let (count, first) = unreadable.unwrap_or((0, *at));
+                    unreadable = Some((count + 1, first.min(*at)));
+                }
             }
+        }
+        if let Some((count, first)) = unreadable {
+            lines.say(Class::Failure, UnreadableSlotsLine { count, first });
         }
         for (at, slot) in rebuilt_tail(engine, file.coverage()) {
             if served_only(at) {
-                file.append(at, attest_fields(&slot))?;
+                file.append(at, attest_fields(&slot)).map_err(with_file)?;
                 served.insert(at, Arc::new(slot));
             }
         }
-        file.fence(head)?;
-        file.sync()?;
+        file.fence(head).map_err(with_file)?;
+        file.sync().map_err(with_file)?;
         Ok(AttestStore { file, served })
     }
 
@@ -213,6 +248,69 @@ impl AttestStore {
     /// cloned: the page that asks renders it after the feed's lock is gone.
     pub(super) fn slot(&self, at: u64) -> Option<Arc<Attestation>> {
         self.served.get(&at).cloned()
+    }
+}
+
+/// Row 9 for the attest store (`operations.md` §1.1 row 9; §3.6 step 3; §4
+/// row 17): the head every cut line opens with, then THE SIDE — `coverage +
+/// 1 ≥ floor` is REBUILT: the file is position-ordered, so every cut line's
+/// position is above the last trusted one, and the rebuild covers
+/// `(coverage, head]` where the journal still answers, which is above the
+/// floor; otherwise the lines between the last trusted position and the
+/// floor were entry signatures' only copies, LOST unless the board
+/// directory's backup is restored. `floor` is the reclaim floor at this open
+/// — genesis, 0, where nothing is reclaimed. A pure value, pinned by
+/// `to_string()` in the unit suite; emitted under `Class::Failure` by
+/// [`AttestStore::open`].
+struct AttestCutLine {
+    cut: Cut,
+    floor: u64,
+}
+
+impl AttestCutLine {
+    /// Whether the rebuild covers every cut line.
+    fn rebuilt(&self) -> bool {
+        self.cut.trusted.saturating_add(1) >= self.floor
+    }
+}
+
+impl std::fmt::Display for AttestCutLine {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let head = CutHead { name: ATTEST_FILE, cut: self.cut };
+        if self.rebuilt() {
+            write!(
+                f,
+                "{head}; every cut line lies above the reclaim floor at position {} and is \
+                 rebuilt from the journal",
+                self.floor
+            )
+        } else {
+            write!(
+                f,
+                "{head}; the lines between position {} and the reclaim floor at position {} are \
+                 LOST unless the board directory's backup is restored",
+                self.cut.trusted, self.floor
+            )
+        }
+    }
+}
+
+/// Row 10's words (`operations.md` §1.1 row 10): `feed-attest.log: {n} slots
+/// this daemon cannot read, the first at position {p}` — one line per open,
+/// the rows rendering `attest: null`. A pure value, pinned by `to_string()`
+/// in the unit suite; emitted under `Class::Failure` by [`AttestStore::open`].
+struct UnreadableSlotsLine {
+    count: usize,
+    first: u64,
+}
+
+impl std::fmt::Display for UnreadableSlotsLine {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{ATTEST_FILE}: {} slots this daemon cannot read, the first at position {}",
+            self.count, self.first
+        )
     }
 }
 
@@ -291,19 +389,20 @@ mod tests {
     #[test]
     fn a_recorded_slot_is_served_and_replays_from_its_line_as_itself() {
         let dir = tempfile::tempdir().expect("tempdir");
+        let lines = Lines::new();
         let slot = Attestation::new(1, vec![0xab, 0x01]).expect("tag 1 and a non-empty blob");
         {
-            let (file, entries) =
-                LineFile::open(dir.path(), ATTEST_FILE, 9, |_| true).expect("a fresh store opens");
-            assert!(entries.is_empty());
+            let (file, entries, cut) = LineFile::open(dir.path(), ATTEST_FILE, 9, |_| true, &lines)
+                .expect("a fresh store opens");
+            assert!(entries.is_empty() && cut.is_none());
             let mut store = AttestStore { file, served: BTreeMap::new() };
             store.record(5, slot.clone()).expect("a writable store takes the line");
             assert_eq!(store.synced_through(), 5, "and syncs it before answering");
             assert_eq!(store.slot(5).as_deref(), Some(&slot), "served at once");
             assert_eq!(store.slot(4).as_deref(), None, "and only where recorded");
         }
-        let (_file, entries) =
-            LineFile::open(dir.path(), ATTEST_FILE, 9, |_| true).expect("reopen");
+        let (_file, entries, _) =
+            LineFile::open(dir.path(), ATTEST_FILE, 9, |_| true, &lines).expect("reopen");
         let replayed: Vec<(u64, Option<Attestation>)> =
             entries.iter().map(|(at, m)| (*at, attest_of_record(m))).collect();
         assert_eq!(replayed, [(5, Some(slot))], "the line replays as the slot it mirrors");
@@ -326,6 +425,47 @@ mod tests {
             attest_of_record(&record(Value::from(200u64), "ab01")),
             Attestation::new(200, vec![0xab, 0x01]).ok(),
             "a tag no row names replays as the slot it spells"
+        );
+    }
+
+    /// Row 9's attest words, both sides, and row 10's: the cut is REBUILT
+    /// exactly where `coverage + 1 ≥ floor` — the last trusted position one
+    /// below the floor included, the rebuild covering the floor's own
+    /// boundary from the base embodying it — and LOST below, naming the
+    /// last trusted position and the floor; a journal still answering
+    /// genesis is the floor at 0, every cut rebuilt.
+    #[test]
+    fn the_attest_cut_names_the_floor_and_its_side_and_the_unreadable_slots_their_count() {
+        let cut = Cut { valid_end: 1_400, len: 2_000, trusted: 40 };
+        let head = "feed-attest.log: trust ends at position 40 (byte 1400 of 2000); the 600 bytes \
+                    after it are cut";
+        assert_eq!(
+            AttestCutLine { cut, floor: 41 }.to_string(),
+            format!(
+                "{head}; every cut line lies above the reclaim floor at position 41 and is \
+                 rebuilt from the journal"
+            ),
+            "coverage + 1 = floor: rebuilt"
+        );
+        assert_eq!(
+            AttestCutLine { cut, floor: 0 }.to_string(),
+            format!(
+                "{head}; every cut line lies above the reclaim floor at position 0 and is \
+                 rebuilt from the journal"
+            ),
+            "nothing reclaimed: the floor is genesis"
+        );
+        assert_eq!(
+            AttestCutLine { cut, floor: 42 }.to_string(),
+            format!(
+                "{head}; the lines between position 40 and the reclaim floor at position 42 are \
+                 LOST unless the board directory's backup is restored"
+            ),
+            "coverage + 1 < floor: lost"
+        );
+        assert_eq!(
+            UnreadableSlotsLine { count: 3, first: 17 }.to_string(),
+            "feed-attest.log: 3 slots this daemon cannot read, the first at position 17"
         );
     }
 }

@@ -110,6 +110,7 @@ use skep_address::{is_prefix, parent, Address, Tumbler};
 use skep_engine::{Engine, IssuerGrantIndexRow, ReaderClass, World};
 use skep_kernel::{Attestation, Seq};
 use skep_namespace::{HasM3, PrincipalId};
+use skep_util::notice::Class;
 
 use self::attest::AttestStore;
 use self::derived::{
@@ -117,11 +118,11 @@ use self::derived::{
     STREAMS_OWNERS,
 };
 use super::sidecar::{
-    reclaim_floor, report_malformed_names, Carrier, CommitMeta, CommitsLog, LineOffset,
-    OpTerms, RewriteFail,
+    reclaim_floor, report_malformed_names, Carrier, CommitMeta, CommitsLog, Cut, CutHead,
+    LineOffset, OpTerms, RewriteFail,
 };
 use super::classify::{classify, derived_docs, parse_dotted, Doc};
-use super::Signed;
+use super::{Lines, Signed};
 use crate::codec::to_bytes;
 use crate::limits::MAX_CHANGES_PAGE_BYTES;
 use crate::serial::SerialGuard;
@@ -453,8 +454,18 @@ impl Feed {
     /// file is rewritten only when the log compacted under it, when it
     /// carries another journal's lines, or (the offset array) when its
     /// offsets no longer match the log's.
-    pub(super) fn open(dir: &Path, engine: &Engine) -> io::Result<Feed> {
-        let (log, walked) = CommitsLog::open(dir, engine)?;
+    ///
+    /// THE LINES (`operations.md` §1.1 rows 9, 11, 2), through `lines`, the
+    /// classed door the write path made ahead of this open: a derived file's
+    /// cut, answered by its replay, is said here with the last trusted
+    /// position and that the cut part is re-derived ([`DerivedCutLine`]);
+    /// the index file's malformed names are counted and said once with the
+    /// first position (the second half of `report_malformed_names`); and
+    /// every failure of the open names its file, the kind kept — the
+    /// replays' and the attest store's at their own opens, this open's
+    /// appends, fences and rewrites through one closure per file here.
+    pub(super) fn open(dir: &Path, engine: &Engine, lines: &Lines) -> io::Result<Feed> {
+        let (log, walked) = CommitsLog::open(dir, engine, lines)?;
         let head = log.open_head();
         let snap = engine.kernel().snapshot();
         let world = snap.world();
@@ -462,15 +473,26 @@ impl Feed {
         // Every line of the four is held: each is bounded by the journal's
         // retention, compacted below when the log was, and the offset array's
         // agreement test reads every entry, the ones the log no longer holds
-        // included.
-        let (mut f_index, index_entries) = LineFile::open(dir, INDEX_FILE, head, |_| true)?;
-        let (mut f_offsets, offset_entries) = LineFile::open(dir, OFFSETS_FILE, head, |_| true)?;
-        let (mut f_masked, masked_entries) = LineFile::open(dir, MASKED_FILE, head, |_| true)?;
-        let (mut f_streams, stream_entries) = LineFile::open(dir, STREAMS_FILE, head, |_| true)?;
+        // included. A cut is each file's own to say: re-derived, below.
+        let (mut f_index, index_entries, cut) =
+            LineFile::open(dir, INDEX_FILE, head, |_| true, lines)?;
+        say_derived_cut(lines, INDEX_FILE, cut);
+        let (mut f_offsets, offset_entries, cut) =
+            LineFile::open(dir, OFFSETS_FILE, head, |_| true, lines)?;
+        say_derived_cut(lines, OFFSETS_FILE, cut);
+        let (mut f_masked, masked_entries, cut) =
+            LineFile::open(dir, MASKED_FILE, head, |_| true, lines)?;
+        say_derived_cut(lines, MASKED_FILE, cut);
+        let (mut f_streams, stream_entries, cut) =
+            LineFile::open(dir, STREAMS_FILE, head, |_| true, lines)?;
+        say_derived_cut(lines, STREAMS_FILE, cut);
 
         // ── the classification map: the index file's entries for positions
         //    the log holds, then this open's walk, then the index's tail ──
         let mut docs: BTreeMap<u64, Vec<Doc>> = BTreeMap::new();
+        // The index file's malformed names, counted for one line after the
+        // read: the positions met and the first of them.
+        let mut malformed: Option<(usize, u64)> = None;
         for (at, m) in &index_entries {
             let Some(meta) = log.entries().get(at) else { continue };
             // Counted against what the file CLAIMED, not against what could
@@ -493,7 +515,8 @@ impl Feed {
                 // position by a smaller set than the write touched, and
                 // accepting an empty one would make it a `[]`-docs entry,
                 // which is never masked.
-                report_malformed_names(INDEX_FILE, *at, named.len() - addrs.len());
+                let (count, first) = malformed.unwrap_or((0, *at));
+                malformed = Some((count + 1, first.min(*at)));
                 match meta {
                     CommitMeta::Recorded { docs: authority, .. } => {
                         authority.iter().filter_map(|s| parse_dotted(s)).collect()
@@ -504,6 +527,9 @@ impl Feed {
             if !addrs.is_empty() {
                 docs.insert(*at, classify(world, addrs));
             }
+        }
+        if let Some((positions, first)) = malformed {
+            report_malformed_names(lines, INDEX_FILE, positions, first);
         }
         let walked_at: BTreeSet<u64> = walked.iter().map(|w| w.at).collect();
         for w in &walked {
@@ -531,10 +557,12 @@ impl Feed {
                 }
             }
             if let Some(ds) = docs.get(&at) {
-                f_index.append(at, vec![(INDEX_DOCS, doc_strings(ds))])?;
+                f_index
+                    .append(at, vec![(INDEX_DOCS, doc_strings(ds))])
+                    .map_err(with_file(INDEX_FILE))?;
             }
         }
-        f_index.fence(head)?;
+        f_index.fence(head).map_err(with_file(INDEX_FILE))?;
 
         // ── the position index twin, from the classification map ──
         let mut index: BTreeMap<Tumbler, (Address, Vec<u64>)> = BTreeMap::new();
@@ -558,10 +586,10 @@ impl Feed {
         for (&at, _) in log.entries().range(f_masked.first_uncovered()..) {
             if masked_at_commit(docs.get(&at).map(Vec::as_slice).unwrap_or(&[])) {
                 masked.insert(at);
-                f_masked.append(at, vec![])?;
+                f_masked.append(at, vec![]).map_err(with_file(MASKED_FILE))?;
             }
         }
-        f_masked.fence(head)?;
+        f_masked.fence(head).map_err(with_file(MASKED_FILE))?;
         let published: BTreeSet<u64> =
             log.entries().keys().copied().filter(|at| !masked.contains(at)).collect();
 
@@ -609,10 +637,12 @@ impl Feed {
                 for owner in &owners {
                     streams.entry(owner.clone()).or_default().push(at);
                 }
-                f_streams.append(at, vec![(STREAMS_OWNERS, addr_strings(&owners))])?;
+                f_streams
+                    .append(at, vec![(STREAMS_OWNERS, addr_strings(&owners))])
+                    .map_err(with_file(STREAMS_FILE))?;
             }
         }
-        f_streams.fence(head)?;
+        f_streams.fence(head).map_err(with_file(STREAMS_FILE))?;
 
         // ── the offset array, checked against the log's own replay ──
         //
@@ -627,13 +657,15 @@ impl Feed {
             });
         if offsets_agree {
             for (&at, &offset) in log.offsets().range(f_offsets.first_uncovered()..) {
-                f_offsets.append(at, vec![(OFFSETS_OFFSET, Value::Number(offset.0.into()))])?;
+                f_offsets
+                    .append(at, vec![(OFFSETS_OFFSET, Value::Number(offset.0.into()))])
+                    .map_err(with_file(OFFSETS_FILE))?;
             }
-            f_offsets.fence(head)?;
+            f_offsets.fence(head).map_err(with_file(OFFSETS_FILE))?;
         }
 
         // ── the attest store, on its own card ──
-        let attest = AttestStore::open(dir, engine, &log)?;
+        let attest = AttestStore::open(dir, engine, &log, lines)?;
 
         // ── compaction: the log dropped what the journal reclaimed, so the
         //    derived files drop it too, rewritten from the twins — the SAME
@@ -643,7 +675,8 @@ impl Feed {
         //    log stands and its offsets disagree. A fifth DERIVED file
         //    belongs in that method; the attest store is not one, and
         //    `Files` does not hold it. Fatal here, either side of a rename:
-        //    nothing is served yet. ──
+        //    nothing is served yet — the bare I/O error wrapped with the
+        //    file's name, which `RewriteFail::into_io` does not carry. ──
         let compacted = log.rewritten();
         let mut inner = Inner {
             log,
@@ -667,8 +700,8 @@ impl Feed {
         } else {
             Vec::new()
         };
-        if let Some((_, failed)) = failures.into_iter().next() {
-            return Err(failed.into_io());
+        if let Some((name, failed)) = failures.into_iter().next() {
+            return Err(with_file(name)(failed.into_io()));
         }
         Ok(Feed { inner: Mutex::new(inner) })
     }
@@ -922,6 +955,40 @@ impl Feed {
     /// for the head writer's resume.
     pub fn entries_above(&self, position: u64) -> Vec<(u64, CommitMeta)> {
         self.inner.lock().log.entries_above(position)
+    }
+}
+
+/// An open-time failure on a derived file, naming the file — the closure
+/// `BlockedSupply::read` wraps its path with, per file: the kind kept, the
+/// name before the OS's text, so the daemon's `change-feed sidecar: {e}`
+/// reads `change-feed sidecar: feed-index.log: {e}` (`operations.md` §1.1
+/// row 2).
+fn with_file(name: &'static str) -> impl Fn(io::Error) -> io::Error {
+    move |e| io::Error::new(e.kind(), format!("{name}: {e}"))
+}
+
+/// Row 9 for a derived file, said where its replay answered a cut: the head,
+/// then this file's case — the cut part is re-derived, by the tail
+/// derivation [`Feed::open`] runs from the last trusted position.
+fn say_derived_cut(lines: &Lines, name: &'static str, cut: Option<Cut>) {
+    if let Some(cut) = cut {
+        lines.say(Class::Failure, DerivedCutLine { name, cut });
+    }
+}
+
+/// Row 9's words for one of the four derived files (`operations.md` §1.1
+/// row 9): `{file}: trust ends at position {c} (byte {n} of {len}); the {k}
+/// bytes after it are cut; the cut part is re-derived`. A pure value, pinned
+/// by `to_string()` in the unit suite; emitted under `Class::Failure` by
+/// [`say_derived_cut`].
+struct DerivedCutLine {
+    name: &'static str,
+    cut: Cut,
+}
+
+impl std::fmt::Display for DerivedCutLine {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}; the cut part is re-derived", CutHead { name: self.name, cut: self.cut })
     }
 }
 
@@ -1490,5 +1557,22 @@ mod tests {
         assert_eq!(at_or_above(&s, 9).collect::<Vec<_>>(), vec![20]);
         assert_eq!(at_or_above(&s, 21).count(), 0);
         assert_eq!(at_or_above(&s, 0).count(), 4);
+    }
+
+    /// Row 9's words for a derived file: the head with the last trusted
+    /// position and the bytes, then that the cut part is re-derived — and
+    /// the open's failures name their file ahead of the OS's text, the kind
+    /// kept.
+    #[test]
+    fn a_derived_cut_says_it_is_re_derived_and_a_failure_names_its_file() {
+        let cut = Cut { valid_end: 120, len: 131, trusted: 32 };
+        assert_eq!(
+            DerivedCutLine { name: INDEX_FILE, cut }.to_string(),
+            "feed-index.log: trust ends at position 32 (byte 120 of 131); the 11 bytes after it \
+             are cut; the cut part is re-derived"
+        );
+        let refused = with_file(MASKED_FILE)(io::Error::new(io::ErrorKind::StorageFull, "no room"));
+        assert_eq!(refused.kind(), io::ErrorKind::StorageFull, "the kind is kept");
+        assert_eq!(refused.to_string(), "feed-masked.log: no room");
     }
 }

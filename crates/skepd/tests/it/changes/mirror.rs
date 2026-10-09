@@ -336,6 +336,14 @@ fn the_claim_boundary_is_read_off_the_feed_alone() {
 /// answers value for value. With `commits.log` lost beside it, the rows
 /// come back bare and the slot rides the bare row — the journal's own fact
 /// beside the lost testimony.
+///
+/// THE CUT IS SAID, REBUILT (`operations.md` §1.1 row 9; §4 row 17): the
+/// torn store's open says, once, under `failure:`, the last trusted
+/// position — the first signed write, the only whole line left — the
+/// bytes, and the side: nothing reclaimed on this board, the floor is
+/// genesis, so `every cut line lies above the reclaim floor at position 0
+/// and is rebuilt from the journal`; a lost store, read whole as empty,
+/// says no cut.
 #[test]
 fn a_lost_or_torn_attest_store_is_rebuilt_from_the_journal_and_serves_the_same_bytes() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -363,7 +371,7 @@ fn a_lost_or_torn_attest_store_is_rebuilt_from_the_journal_and_serves_the_same_b
         sd.shutdown();
         (before, vec![a1, a2], vec![attest1, attest2])
     };
-    let judge = |ctx: &str| {
+    let judge = |ctx: &str, cut: Option<String>| {
         let sd = spawn(dir.path());
         let port = sd.port();
         let bare = open_session(port, CLAIMANT_PRINCIPAL);
@@ -377,17 +385,34 @@ fn a_lost_or_torn_attest_store_is_rebuilt_from_the_journal_and_serves_the_same_b
             signed_ats,
             "{ctx}: the store is rebuilt whole"
         );
+        let said: Vec<String> =
+            sd.daemon().lines_said().into_iter().filter(|l| l.contains("trust ends at")).collect();
+        assert_eq!(
+            said,
+            cut.into_iter().collect::<Vec<_>>(),
+            "FINDING (row 9): {ctx}: the cut as said:\n{}",
+            sd.daemon().lines_said().join("\n")
+        );
         sd.shutdown();
     };
-    // Deleted after commit: rebuilt from the journal.
+    // Deleted after commit: rebuilt from the journal, and no cut to say.
     std::fs::remove_file(&store).expect("lose the store");
-    judge("the store deleted");
-    // Torn: the last line cut into, truncated at open, its position re-derived.
-    let len = std::fs::metadata(&store).expect("metadata").len();
-    let fh = std::fs::OpenOptions::new().write(true).open(&store).expect("open");
-    fh.set_len(len.saturating_sub(37)).expect("tear the tail");
-    drop(fh);
-    judge("the store torn");
+    judge("the store deleted", None);
+    // Torn: the last line cut into — the fence line and the second signed
+    // write's line — truncated at open, its position re-derived; the cut
+    // said with the first signed write as the last trusted position, the
+    // bytes, and REBUILT above a floor at genesis.
+    let (trusted, valid_end, len) = tear_the_last_line(&store, 37);
+    assert_eq!(trusted, signed_ats[0], "the first signed write's line is the last whole one");
+    judge(
+        "the store torn",
+        Some(format!(
+            "failure: feed-attest.log: trust ends at position {trusted} (byte {valid_end} of \
+             {len}); the {} bytes after it are cut; every cut line lies above the reclaim floor \
+             at position 0 and is rebuilt from the journal",
+            len - valid_end
+        )),
+    );
     // The testimony gone too: bare rows, the slot riding them.
     std::fs::remove_file(dir.path().join("commits.log")).expect("lose the testimony");
     std::fs::remove_file(&store).expect("lose the store");
@@ -406,6 +431,70 @@ fn a_lost_or_torn_attest_store_is_rebuilt_from_the_journal_and_serves_the_same_b
     sd.shutdown();
 }
 
+/// ROW 10, ONCE PER OPEN WITH A COUNT (`operations.md` §1.1 row 10): a store
+/// holding THREE lines this daemon cannot read — a tag of no signature, a
+/// blob of none, hex not in the store's own lowercase, one at each of three
+/// attested positions — opens with ONE line, `feed-attest.log: 3 slots this
+/// daemon cannot read, the first at position {p}`, under `failure:`, no
+/// line per position; the three rows render `attest: null` — LOST, never an
+/// invented slot — and nothing is rebuilt below the file's coverage.
+#[test]
+fn three_unreadable_slots_are_said_once_with_the_count_and_the_rows_render_null() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let store = dir.path().join("feed-attest.log");
+    let ats = {
+        let sd = spawn(dir.path());
+        let port = sd.port();
+        let signed = open_signed_session(port, CLAIMANT_PRINCIPAL, &device_key());
+        let ats: Vec<u64> = (1..=3).map(|n| signed_ghost_link(port, &signed, n).0).collect();
+        sd.shutdown();
+        ats
+    };
+    // The store rewritten as three lines in its own shape, none a slot.
+    std::fs::write(
+        &store,
+        format!(
+            "{{\"alg\":0,\"at\":{},\"sig\":\"ab01\"}}\n{{\"alg\":1,\"at\":{},\"sig\":\"\"}}\n\
+             {{\"alg\":1,\"at\":{},\"sig\":\"AB01\"}}\n",
+            ats[0], ats[1], ats[2]
+        ),
+    )
+    .expect("three unreadable lines");
+    let sd = spawn(dir.path());
+    let port = sd.port();
+    let said: Vec<String> =
+        sd.daemon().lines_said().into_iter().filter(|l| l.contains("cannot read")).collect();
+    assert_eq!(
+        said,
+        [format!(
+            "failure: feed-attest.log: 3 slots this daemon cannot read, the first at position {}",
+            ats[0]
+        )],
+        "FINDING (row 10): one line with the count and the first position:\n{}",
+        sd.daemon().lines_said().join("\n")
+    );
+    let bare = open_session(port, CLAIMANT_PRINCIPAL);
+    let entries = all_entries(port, Some(&bare));
+    for at in &ats {
+        let e = entry_at(&entries, *at);
+        assert!(
+            e.get("attest").is_some_and(Value::is_null),
+            "recorded signed, the line unreadable: attest is null, LOST: {e}"
+        );
+        assert_absent(e, &["key"], "a signed row");
+    }
+    // The three lines stand as written — the store is never rewritten over
+    // a line it holds, and the rebuild covers only above the file's
+    // coverage, which the three themselves set.
+    let lines = attest_store_lines(dir.path());
+    assert_eq!(
+        ats.iter().map(|at| lines[at].1.as_str()).collect::<Vec<_>>(),
+        ["ab01", "", "AB01"],
+        "nothing rebuilt over the unreadable lines: {lines:?}"
+    );
+    sd.shutdown();
+}
+
 /// ABSENCE IS A VERDICT — at and below the floor (BW-01; D11's floor arm):
 /// after a reclamation drops `commits.log`'s entries below the floor,
 /// `feed-attest.log` still holds its line there (the file read directly:
@@ -421,6 +510,14 @@ fn a_lost_or_torn_attest_store_is_rebuilt_from_the_journal_and_serves_the_same_b
 /// before, the floor's own slot stays LOST, and the reopen loads ONE base
 /// more than the reopen after it — the refusal loads none, the floor's
 /// list one.
+///
+/// THE CUT IS SAID, LOST (`operations.md` §1.1 row 9; §3.6 step 3; §4 row
+/// 17): the store torn into the line at the floor, trust ends at the early
+/// signed write, BELOW the floor the external checkpoint set — the open
+/// says, once, under `failure:`, the last trusted position, the bytes, and
+/// `the lines between position {c} and the reclaim floor at position {f}
+/// are LOST unless the board directory's backup is restored`, `{f}` the
+/// floor `/changes` names; the row at the floor renders `attest: null`.
 #[test]
 fn the_attest_store_keeps_below_the_floor_and_serves_a_lost_slot_at_the_floor_as_null() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -467,6 +564,54 @@ fn the_attest_store_keeps_below_the_floor_and_serves_a_lost_slot_at_the_floor_as
         let e = entry_at(page["changes"].as_array().expect("changes"), last_at);
         assert_eq!(e["attest"], last_attest, "the row at the floor serves its slot off the kept line: {e}");
         assert_absent(e, &["key"], "a signed row");
+        assert!(
+            !sd.daemon().lines_said().iter().any(|l| l.contains("trust ends at")),
+            "a whole store says no cut:\n{}",
+            sd.daemon().lines_said().join("\n")
+        );
+        sd.shutdown();
+    }
+    // The store CUT BELOW THE FLOOR: the line at the floor torn into, so
+    // trust ends at the early signed write, below the floor — said as LOST,
+    // naming the last trusted position and the floor; nothing is rebuilt
+    // between the two, and the row at the floor renders null.
+    {
+        let (trusted, valid_end, len) = tear_the_last_line(&store, 37);
+        assert_eq!(trusted, early_at, "the early signed write's line is the last whole one");
+        let sd = spawn(dir.path());
+        let port = sd.port();
+        let bare = open_session(port, CLAIMANT_PRINCIPAL);
+        let (st, body) = changes_raw(port, Some(&bare), "since=0");
+        assert_eq!(st, 410, "{}", text(&body));
+        let floor = json(&body)["floor"].as_u64().expect("floor");
+        assert_eq!(floor, last_at);
+        let lost = format!(
+            "failure: feed-attest.log: trust ends at position {trusted} (byte {valid_end} of \
+             {len}); the {} bytes after it are cut; the lines between position {trusted} and the \
+             reclaim floor at position {floor} are LOST unless the board directory's backup is \
+             restored",
+            len - valid_end
+        );
+        let said: Vec<String> =
+            sd.daemon().lines_said().into_iter().filter(|l| l.contains("trust ends at")).collect();
+        assert_eq!(
+            said,
+            [lost],
+            "FINDING (row 9): the cut below the floor, said LOST with the floor:\n{}",
+            sd.daemon().lines_said().join("\n")
+        );
+        let page = changes_ok(port, Some(&bare), &format!("since={}", floor - 1));
+        let e = entry_at(page["changes"].as_array().expect("changes"), last_at);
+        assert!(
+            e.get("attest").is_some_and(Value::is_null),
+            "the row at the floor, its line cut: attest is null, LOST: {e}"
+        );
+        assert_absent(e, &["key"], "a signed row");
+        let lines = attest_store_lines(dir.path());
+        assert!(
+            lines.contains_key(&early_at) && !lines.contains_key(&last_at),
+            "the early line kept, the floor's not rebuilt: {lines:?}"
+        );
         sd.shutdown();
     }
     // The store lost: the journal refuses the slot, nothing is rebuilt, and

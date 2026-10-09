@@ -22,8 +22,11 @@
 //! * a line is a JSON object built through the codec's key-sorting device,
 //!   newline-terminated; trust ends at the first line that is torn or does
 //!   not parse, and the file is truncated there at open — a [`LineFile`]'s
-//!   cut named on the operator stream, since in the attest store it can take
-//!   primary state with it;
+//!   cut ANSWERED to its caller (`Cut`: the trusted end, the length, the
+//!   last trusted position), which names it on the operator stream with
+//!   its own case — a derived file's cut part is re-derived; in the attest
+//!   store the cut can take primary state with it, and its open says which
+//!   side of the reclaim floor it reached;
 //! * a record above the journal's head, or a fence above it, describes a
 //!   different journal (an operator swapped files under the sidecar) and is
 //!   dropped — and the file rewritten without it, so a journal that later
@@ -57,8 +60,9 @@
 //!   and at no other moment, after each checkpoint the daemon's checkpoint
 //!   thread lands; one that fails PAST its rename while serving leaves the
 //!   handle naming the replaced file, so it STOPS the file as a failed
-//!   append does, said once (P22: a slower answer at the next open, never
-//!   an outage).
+//!   append does, said once per uptime — the later landings' rewrites still
+//!   run, the stop moving to each newest fence in silence (P22: a slower
+//!   answer at the next open, never an outage).
 //!
 //! Loss unmasks nothing: no derived file is consulted for WHAT an entry
 //! says (that is `commits.log`'s) or for WHETHER a class may see it (that
@@ -72,8 +76,10 @@ use std::path::{Path, PathBuf};
 
 use serde_json::{Map, Value};
 use skep_util::json::obj;
+use skep_util::notice::Class;
 
-use super::super::sidecar::{line_bytes, RewriteFail};
+use super::super::sidecar::{line_bytes, Cut, RewriteFail};
+use super::super::Lines;
 
 // Each file below is named BESIDE the field its records carry, because this
 // module owns the LINE and would otherwise own only half of what a line is:
@@ -121,6 +127,9 @@ pub(super) struct LineFile {
     dir: PathBuf,
     name: &'static str,
     coverage: u64,
+    /// The classed door with the daemon's record ([`Lines`]): what the
+    /// rewrite's stop is said through, once per uptime.
+    lines: Lines,
     /// Set by the first FAILED [`LineFile::append`] of this uptime — or
     /// failed [`LineFile::sync`], or a [`LineFile::rewrite`] that failed
     /// PAST its rename — after which this file takes no further APPEND and
@@ -136,13 +145,15 @@ pub(super) struct LineFile {
     /// true, so it CLOSES a gap rather than claiming over one — the opposite
     /// of what this flag guards against — and a stopped file rewritten
     /// whole is right on disk again while the flag stands for the uptime.
-    /// What a rewrite can do is SET it. At open every rewrite's failure is
-    /// fatal — `?`-propagated into `DaemonError::Sidecar` before any append
-    /// — so the flag is moot there; but the checkpoint thread's compaction
-    /// runs the same rewrite while serving, and one that fails past its
-    /// rename leaves this handle naming the REPLACED file, which no open
-    /// reads: the file stops, said once, and the next open re-derives from
-    /// the rewritten file's own fence.
+    /// What a rewrite can do is SET it, and a rewrite past its rename on a
+    /// file already stopped MOVES it to the newest fence. At open every
+    /// rewrite's failure is fatal — `?`-propagated into
+    /// `DaemonError::Sidecar` before any append — so the flag is moot there;
+    /// but the checkpoint thread's compaction runs the same rewrite while
+    /// serving, and one that fails past its rename leaves this handle naming
+    /// the REPLACED file, which no open reads: the file stops, said once per
+    /// uptime at the transition, and the next open re-derives from the
+    /// rewritten file's own fence.
     ///
     /// COVERAGE IS A CLAIM, and a gap beneath it is the one loss the check
     /// cannot close: a position at or below coverage with no record reads as
@@ -176,10 +187,22 @@ pub(super) type Entries = Vec<(u64, Map<String, Value>)>;
 
 impl LineFile {
     /// Replay `name` in `dir` a line at a time: truncate at the first line
-    /// that is torn or does not parse, saying so on the operator stream, drop
-    /// what describes another journal (rewriting the file without it), and
-    /// hand back the entries at or below `head` that `keep` admits, with the
-    /// file's coverage — which counts every trusted line, kept or not.
+    /// that is torn or does not parse — ANSWERING THE CUT to the caller
+    /// ([`Cut`]: the trusted end, the length before it and the last trusted
+    /// position, which is the coverage the scan reached), never saying it
+    /// here, since the case is the caller's: a derived file re-derives the
+    /// cut part, the attest store says which side of the reclaim floor it
+    /// lies on — drop what describes another journal (rewriting the file
+    /// without it), and hand back the entries at or below `head` that `keep`
+    /// admits, with the file's coverage — which counts every trusted line,
+    /// kept or not. `None` for the cut is a file read whole.
+    ///
+    /// Every failure NAMES THIS FILE, the kind kept (`operations.md` §1.1
+    /// row 2): one closure wraps each `?` the open takes on the file — the
+    /// open, the read, the length, the truncation, the purge — as the
+    /// blocked list's read wraps its path, so the daemon's `change-feed
+    /// sidecar: {e}` reads `{name}: {e}`. `lines` is the classed door the
+    /// file keeps for its one line while serving, the rewrite's stop.
     ///
     /// The scan holds one line and the kept entries, never the file. The
     /// attest store's file is NEVER COMPACTED (`attest.rs`), so a replay that
@@ -191,9 +214,11 @@ impl LineFile {
         name: &'static str,
         head: u64,
         keep: impl Fn(u64) -> bool,
-    ) -> io::Result<(LineFile, Entries)> {
+        lines: &Lines,
+    ) -> io::Result<(LineFile, Entries, Option<Cut>)> {
+        let with_file = |e: io::Error| io::Error::new(e.kind(), format!("{name}: {e}"));
         let path = dir.join(name);
-        let file = open_line_file(&path)?;
+        let file = open_line_file(&path).map_err(with_file)?;
         let mut coverage = 0u64;
         let mut entries = Vec::new();
         let mut foreign = false;
@@ -202,7 +227,7 @@ impl LineFile {
         let mut line = Vec::new();
         loop {
             line.clear();
-            let read = reader.read_until(b'\n', &mut line)?;
+            let read = reader.read_until(b'\n', &mut line).map_err(with_file)?;
             // Trust ends at the first line that is torn — no newline, the end
             // of the file included — or does not parse.
             let Some(record) = line.strip_suffix(b"\n").and_then(parse_line) else { break };
@@ -219,21 +244,21 @@ impl LineFile {
             }
         }
         drop(reader);
-        let len = file.metadata()?.len();
-        if valid_end < len {
-            // Said, never silent: in the attest store the cut can take
-            // primary state with it, below the floor.
-            skep_util::notice::line(format_args!(
-                "{name}: trust ends at byte {valid_end} of {len}; the {} bytes after it are cut",
-                len - valid_end
-            ));
-            file.set_len(valid_end)?;
-        }
+        let len = file.metadata().map_err(with_file)?.len();
+        let cut = if valid_end < len {
+            // Cut, and answered: the caller says it, with its own case — in
+            // the attest store the cut can take primary state with it.
+            file.set_len(valid_end).map_err(with_file)?;
+            Some(Cut { valid_end, len, trusted: coverage })
+        } else {
+            None
+        };
         let mut this = LineFile {
             file,
             dir: dir.to_path_buf(),
             name,
             coverage,
+            lines: lines.clone(),
             stopped: None,
             #[cfg(any(test, feature = "test-hooks"))]
             synced: 0,
@@ -242,9 +267,9 @@ impl LineFile {
         };
         if foreign {
             // Purge what is not this journal's, once, so it cannot come back.
-            this.purge_foreign(head)?;
+            this.purge_foreign(head).map_err(with_file)?;
         }
-        Ok((this, entries))
+        Ok((this, entries, cut))
     }
 
     /// Every position at or below this is processed into the file.
@@ -258,8 +283,9 @@ impl LineFile {
     /// ([`LineFile::coverage`]: every position at or below it is
     /// processed), so that reading is a fact of this type rather than of the
     /// arithmetic each caller would otherwise spell — one per derived
-    /// structure in [`super::Feed::open`], over two different maps, and the
-    /// attest store's in [`super::attest::AttestStore::open`].
+    /// structure in [`super::Feed::open`], over two different maps. The
+    /// attest store's rebuild asks the kernel for the boundaries ABOVE its
+    /// coverage itself, in one scan, and reads [`LineFile::coverage`].
     ///
     /// Saturating, so a file covering `u64::MAX` answers `u64::MAX` and its
     /// tail is the empty range rather than a wrap to genesis.
@@ -414,10 +440,13 @@ impl LineFile {
     /// lost, the next checkpoint's compaction trying again; PAST it the new
     /// file is in place and this handle names the REPLACED one, which no
     /// open reads, so the file is STOPPED for the uptime as a failed append
-    /// stops it — said once, here — its coverage the fence the new file
-    /// carries, which the next open re-derives from. At open either side is
-    /// fatal; while serving the caller reports the before-rename arm and
-    /// moves on.
+    /// stops it — said ONCE PER UPTIME, here, at the stop's transition
+    /// (`operations.md` §1.1 row 30): a stopped file is rewritten again at
+    /// every compacting landing, its stop moving to the newest fence in
+    /// silence, the standing line re-saying it — its coverage the fence the
+    /// new file carries, which the next open re-derives from. At open either
+    /// side is fatal; while serving the caller reports the before-rename arm
+    /// and moves on.
     pub fn rewrite(&mut self, records: Vec<Value>, covered: u64) -> Result<(), RewriteFail> {
         let path = self.dir.join(self.name);
         let tmp = self.dir.join(format!("{}.compact", self.name));
@@ -449,12 +478,18 @@ impl LineFile {
                 Ok(())
             }
             Err(e) => {
+                let first = self.stopped.is_none();
                 self.stopped = Some(covered);
-                skep_util::notice::line(format_args!(
-                    "{} rewrite failed past its rename: {e}; this file takes no further line, so \
-                     the next open re-derives from its fence",
-                    self.name
-                ));
+                if first {
+                    self.lines.say(
+                        Class::Failure,
+                        format_args!(
+                            "{} rewrite failed past its rename: {e}; this file takes no further \
+                             line, so the next open re-derives from its fence",
+                            self.name
+                        ),
+                    );
+                }
                 Err(RewriteFail::PastRename(e))
             }
         }
@@ -562,6 +597,7 @@ impl LineFile {
             dir: dir.to_path_buf(),
             name,
             coverage,
+            lines: Lines::new(),
             stopped: None,
             synced: 0,
             fail_next_rewrite_past_rename: false,

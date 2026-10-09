@@ -716,7 +716,11 @@ fn a_publish_budget_below_the_empty_body_is_refused_at_within() {
     // in 2,815 bytes — makes a body of no segments 2,848 bytes long.
     let deep_member = addr(&[u32::MAX; 256]);
     let ordinary_base = Some(ShotBase { member: &base_member, extent: 3 });
-    assert!(PublishBody::within(1024, ordinary_base).is_ok(), "an ordinary base fits a kilobyte");
+    assert_eq!(
+        PublishBody::within(1024, ordinary_base).err(),
+        None,
+        "an ordinary base fits a kilobyte"
+    );
     assert_eq!(
         PublishBody::within(1024, Some(ShotBase { member: &deep_member, extent: 3 })).err(),
         Some(PublishRefusal::PastBudget),

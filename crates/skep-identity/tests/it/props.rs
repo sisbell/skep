@@ -414,7 +414,7 @@ proptest! {
                     // board.
                     claim_count += 1;
                     prop_assert!(claim_count <= 1);
-                    prop_assert!(st.claimant().is_none());
+                    prop_assert_eq!(st.claimant(), None);
                 }
                 _ => {}
             }

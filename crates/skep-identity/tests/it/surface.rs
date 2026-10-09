@@ -17,8 +17,8 @@ use common::{
 use sha2::{Digest, Sha256};
 use skep_identity::{
     canonical_record, doc_1_of, entry_body_publish, framed, parse_enroll, parse_record_value,
-    parse_retire, record_bytes, single_address, AlgRow, CredentialKind, Enrollment, Fingerprint,
-    FoldCtx, HasIdentity, HybridBlob, IdentityState, Inert, LabelError, ParseKeyError,
+    parse_retire, record_bytes, single_address, AlgRow, BoardTerm, CredentialKind, Enrollment,
+    Fingerprint, FoldCtx, HasIdentity, HybridBlob, IdentityState, Inert, LabelError, ParseKeyError,
     PayloadError, PublicKey, PublishBody, PublishRefusal, RecordValue, SigAlgRow, Values, ALGS,
     ALG_FNDSA512_PREVIEW_ED25519, ALG_MLDSA65_ED25519, ED25519_KEY_LEN, ENROLL_TYPE, ENTRY_TAG,
     FNDSA512_PREVIEW_ED25519_KEY_LEN, FNDSA512_PREVIEW_KEY_LEN, KEY_TAG, MAX_RECORD_BYTES,
@@ -257,8 +257,9 @@ fn sig_algs_and_algs_agree_and_the_pins_are_the_ruled_widths() {
         }
     }
     assert_eq!(SIG_ALGS.len(), ALGS.len(), "every key kind signs under a marker tag");
-    assert!(SigAlgRow::of_token("ed25519").is_none(), "the deleted classical token names no row");
-    assert!(SigAlgRow::of_tag(0).is_none() && SigAlgRow::of_tag(2).is_none());
+    assert_eq!(SigAlgRow::of_token("ed25519"), None, "the deleted classical token names no row");
+    assert_eq!(SigAlgRow::of_tag(0), None, "tag 0 is the empty marker slot");
+    assert_eq!(SigAlgRow::of_tag(2), None, "tag 2 is reserved for the final FIPS 206");
     // The tag lookup is `const`: a width a type is sized by is read off the
     // row at compile time, never by a consumer's own walk of the table.
     const TAG1_BLOB: usize = match SigAlgRow::of_tag(1) {
@@ -455,7 +456,7 @@ fn public_key_surface() {
         PublicKey::parse("mldsa65-ed25519", &key_hex.to_uppercase()).unwrap(),
         k
     );
-    assert!(PublicKey::parse("mldsa65-ed25519", &"ff".repeat(1984)).is_ok());
+    assert_eq!(PublicKey::parse("mldsa65-ed25519", &"ff".repeat(1984)).err(), None);
 
     assert_eq!(PublicKey::parse("rsa", &key_hex), Err(ParseKeyError::UnknownAlg));
     // The deleted classical token names no row (AUTH-1.5): `UnknownAlg`, as
@@ -488,9 +489,9 @@ fn fingerprint_hex_round_trips_and_admits_exactly_64_chars() {
     assert_eq!(fp_hex, fp_hex.to_lowercase());
     assert_eq!(Fingerprint::parse_hex(&fp_hex).unwrap(), f);
     assert_eq!(Fingerprint::parse_hex(&fp_hex.to_uppercase()).unwrap(), f);
-    assert!(Fingerprint::parse_hex(&fp_hex[..62]).is_none());
-    assert!(Fingerprint::parse_hex(&format!("{fp_hex}00")).is_none());
-    assert!(Fingerprint::parse_hex(&format!("g{}", &fp_hex[1..])).is_none());
+    assert_eq!(Fingerprint::parse_hex(&fp_hex[..62]), None);
+    assert_eq!(Fingerprint::parse_hex(&format!("{fp_hex}00")), None);
+    assert_eq!(Fingerprint::parse_hex(&format!("g{}", &fp_hex[1..])), None);
 }
 
 /// AUTH-2.93 — the `TAGS` assertion: every tag begins `skep-`, and no tag
@@ -607,7 +608,7 @@ fn genesis_state_is_default_and_answers_empty() {
     let st = IdentityState::genesis();
     assert_eq!(st, IdentityState::default());
     assert!(st.key_set(&addr(ACCT_A)).is_empty());
-    assert!(st.claimant().is_none());
+    assert_eq!(st.claimant(), None);
     assert_eq!(st.keyed_accounts().count(), 0);
 }
 
@@ -793,6 +794,23 @@ fn key_and_fingerprint_render_as_the_fingerprint_hex() {
     let f = fp(0xab);
     assert_eq!(f.to_string(), f.to_hex());
     assert_eq!(format!("{f:?}"), format!("Fingerprint({})", f.to_hex()));
+}
+
+/// A board term's `{:?}` is its two halves as the wire spells them (D13): the
+/// LOG position in decimal and the chain in flat lowercase hex — `/health`'s
+/// `chain_head` and `H.1`'s `chain` — never thirty-two decimal bytes; and its
+/// `{:#?}` lays the two out field by field, as a derived `Debug` does. The
+/// chain counts up from `00`, so a rendering that reversed, dropped or
+/// reordered a byte reads otherwise.
+#[test]
+fn a_board_term_renders_its_chain_as_hex() {
+    let term = BoardTerm { log_position: 12, chain: std::array::from_fn(|i| i as u8) };
+    let chain: String = (0u8..32).map(|b| format!("{b:02x}")).collect();
+    assert_eq!(format!("{term:?}"), format!("BoardTerm {{ log_position: 12, chain: {chain} }}"));
+    assert_eq!(
+        format!("{term:#?}"),
+        format!("BoardTerm {{\n    log_position: 12,\n    chain: {chain},\n}}")
+    );
 }
 
 /// A `Tag` is `Copy`, so a BOUND tag frames as often as a caller likes and

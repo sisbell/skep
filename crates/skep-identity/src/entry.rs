@@ -152,6 +152,8 @@
 //! front, and the composition is injective at every level: two distinct
 //! inputs never spell one preimage.
 
+use core::fmt;
+
 use skep_address::{subtree_of, Address, Span};
 
 use crate::framing::{framed, push_delimited, ENTRY_TAG};
@@ -278,7 +280,7 @@ pub fn unit_span(a: &Address) -> Span {
 /// NEVER the live pair `/health` serves, nor the pair any later head names: a
 /// signature framed over either is refused `attestation_invalid:signature`.
 /// A value: two terms are equal iff both halves are.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
 pub struct BoardTerm {
     /// The LOG position `H.1` names — a point in the journal, M2's `Seq` and
     /// the axis the wire serves as `/health`'s `log_position` — never an
@@ -287,6 +289,29 @@ pub struct BoardTerm {
     pub log_position: u64,
     /// The whole-log chain value at that LOG position, thirty-two raw bytes.
     pub chain: [u8; 32],
+}
+
+/// The term as the wire spells its two halves (D13): the LOG position in
+/// decimal, and the chain in the flat lowercase hex `/health`'s `chain_head`
+/// and `H.1`'s own `chain` carry — never thirty-two decimal bytes, which a
+/// failing assertion over two terms would print for its reader to set
+/// against that hex by hand. A [`Fingerprint`](crate::Fingerprint), the
+/// crate's other thirty-two-byte digest, renders its bytes as the same hex.
+impl fmt::Debug for BoardTerm {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // The chain as flat lowercase hex, written inside the struct form so
+        // `{:#?}` lays a term out field by field, as a derived `Debug` would.
+        struct Hex<'a>(&'a [u8; 32]);
+        impl fmt::Debug for Hex<'_> {
+            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                self.0.iter().try_for_each(|b| write!(f, "{b:02x}"))
+            }
+        }
+        f.debug_struct("BoardTerm")
+            .field("log_position", &self.log_position)
+            .field("chain", &Hex(&self.chain))
+            .finish()
+    }
 }
 
 /// ONE entry frame's `op` and `body` members — an entry's, or under the

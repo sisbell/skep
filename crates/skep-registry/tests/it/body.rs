@@ -232,14 +232,16 @@ fn a_refusal_names_the_member_that_faulted() {
 /// own), the members' forms one member at a time (`replaces`, then `sig`,
 /// then the row's own, at each kind with the row's own faulty and with it
 /// absent) — and the value stage's choices the parser adopts, where RFC 8259
-/// leaves one: a member spelled twice read at its last occurrence; and no
-/// JSON in a value nested past 127 objects and arrays, a number too large
-/// for a 64-bit float (one that rounds to zero is read, and is `number`), or
-/// an escaped unpaired surrogate. None of these is in the vector set: the set
-/// pins what every parser answers, and these pin this one. The fourth text
-/// the value stage reads as no JSON, a byte-order mark ahead of the value, is
-/// the set's (`leading_byte_order_mark`): unlike these, a reader can turn it
-/// into an admission, its decoder dropping the mark before the compare.
+/// leaves one: a member spelled twice kept at its last occurrence, a fault
+/// only the earlier one holds named by no later stage, so the body answers
+/// the first stage its kept members fault at; and no JSON in a value nested
+/// past 127 objects and arrays, a number too large for a 64-bit float (one
+/// that rounds to zero is read, and is `number`), or an escaped unpaired
+/// surrogate. None of these is in the vector set: the set pins what every
+/// parser answers, and these pin this one. The fourth text the value stage
+/// reads as no JSON, a byte-order mark ahead of the value, is the set's
+/// (`leading_byte_order_mark`): unlike these, a reader can turn it into an
+/// admission, its decoder dropping the mark before the compare.
 #[test]
 fn a_body_answers_the_first_stage_that_faults() {
     let nested = |arrays: usize| {
@@ -247,7 +249,7 @@ fn a_body_answers_the_first_stage_that_faults() {
         format!(r#"{{"type":"binding","prefix":"1.5","x":{open}{close}}}"#)
     };
     let (deep, too_deep) = (nested(126), nested(127));
-    let cases: [(&str, &str); 16] = [
+    let cases: [(&str, &str); 18] = [
         ("not_an_object", "[15]"),
         ("number", r#"{"type":"endpoint","prefix":15}"#),
         ("unknown_member", r#"{"type":"binding","tier":"root"}"#),
@@ -257,6 +259,8 @@ fn a_body_answers_the_first_stage_that_faults() {
         ("not_canonical", r#"{"type":"binding","prefix":15,"prefix":"1.5"}"#),
         ("number", r#"{"type":"binding","prefix":"1.5","prefix":15}"#),
         ("not_canonical", r#"{"type":"endpoint","type":"binding","prefix":"1.5"}"#),
+        ("not_an_address:prefix", r#"{"type":"binding","prefix":15,"prefix":"x"}"#),
+        ("not_an_address:prefix", r#"{"type":"endpoint","type":"binding","prefix":"x"}"#),
         ("unknown_member", &deep),
         ("not_json", &too_deep),
         ("unknown_member", r#"{"type":"binding","prefix":"1.5","sig":true,"tier":"root"}"#),

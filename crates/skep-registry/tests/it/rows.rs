@@ -159,6 +159,20 @@ fn a_row_carries_deposits_exactly_where_no_other_row_nests_under_it() {
     }
 }
 
+/// … and answered off what a row is the row OF, never off its address, as
+/// `Row::carries_deposits`' doc states: each line's row built again at
+/// `3.54` — an address no row of the table holds and nothing nests under —
+/// answers its line's Deposits, the takedown record's and the policy link's
+/// `false` among them.
+#[test]
+fn a_row_answers_its_deposits_off_what_it_is_the_row_of() {
+    let elsewhere = commons_type(&[54]);
+    for line in &THE_MAP {
+        let row = Row { of: line.of, address: elsewhere.clone(), type_value: line.type_value };
+        assert_eq!(row.carries_deposits(), line.carries_deposits, "{:?} at {elsewhere}", line.of);
+    }
+}
+
 /// Every row nests under its own kind's row alone: a subtype row is a
 /// PREFIX under its own kind's row (REG-1.20) and under no other kind's,
 /// and a kind's own row is that row itself, under no other kind's — the

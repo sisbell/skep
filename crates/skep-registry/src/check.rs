@@ -104,13 +104,16 @@ impl std::error::Error for SeedingRefusal {}
 /// (REG-1.30), then COMPLETENESS (REG-1.29), then THE COUNT (REG-1.25), the
 /// first to fire speaking — and within an arm its first fault in this order.
 /// DISJOINTNESS names the first entry of `foreign`, in its own order, that
-/// meets any row, with the first row of `rows` it meets. COMPLETENESS names
-/// the first kind of [`Kind::ALL`] with no row, and only where every kind has
-/// one, the first subtype of [`Subtype::ALL`] with no row strictly under its
-/// kind's — the FIRST row that kind has in `rows`. THE COUNT names an excess
-/// of kind rows over the range's ordinals ahead of any one row, then the
-/// first kind row of `rows` that is no bare ordinal of the range or stands at
-/// one an earlier kind row took.
+/// meets any row — at the subtree grain, either address a prefix of the
+/// other, an entry AT a row's address included — with the first row of
+/// `rows` it meets. COMPLETENESS names the first kind of [`Kind::ALL`] with
+/// no row of its own, and only where every kind has one, the first subtype
+/// of [`Subtype::ALL`] with no row of its own strictly under its kind's —
+/// the FIRST row that kind has in `rows`. THE COUNT names an excess of kind
+/// rows over the registry range's five ordinals, `3.55`–`3.59`, ahead of any
+/// one row, then the first kind row of `rows` that is no bare ordinal of
+/// that range — no address [`crate::commons_type`] spells from one of its
+/// ordinals alone — or stands at one an earlier kind row took.
 ///
 /// WHAT THE HAND OWES IN `foreign`: REG-1.31's domain, every address in it
 /// read as foreign. A registry row spelled a second time — the insert door's

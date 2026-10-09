@@ -167,8 +167,10 @@ impl<'a> IntoIterator for &'a Origins {
 /// A body of one of the two kinds, its `sig` aside: the `type` its variant
 /// names and the members REG-1.86's table lists for its row, `replaces`
 /// among them — every member but the one REG-1.86 (e) reserves, `sig`,
-/// whose presence, absence and value are no input to any read. [`Record`]
-/// holds the `sig` beside it, and [`encode`] writes the two as the one body
+/// which the registry's reads take no input from. [`Record`] holds the
+/// `sig` beside it — [`parse`] holding it to its form alone, a string where
+/// present, and a verifying reader trying its value for a verdict that
+/// stands beside the read — and [`encode`] writes the two as the one body
 /// they spell.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Body {
@@ -266,9 +268,11 @@ pub enum ParseRefusal {
     /// A JSON number somewhere in the value the parse read (REG-1.86 (d)):
     /// the whole value's range, tested before any member is read. A number
     /// only in an occurrence the value stage did not keep — the earlier of a
-    /// member spelled twice — is answered [`ParseRefusal::NotCanonical`], and
-    /// one too large for a 64-bit float, which the value stage reads as no
-    /// value at all, [`ParseRefusal::NotJson`].
+    /// member spelled twice — is no `number`: the body answers the first
+    /// stage its kept members fault at, [`ParseRefusal::NotCanonical`] where
+    /// they fault at none. One too large for a 64-bit float, which the value
+    /// stage reads as no value at all, is [`ParseRefusal::NotJson`] wherever
+    /// it stands.
     Number,
     /// The `type` member is absent, no string, or not the string of the
     /// kind the caller named: a record of that kind it is not (REG-1.86 (a)).
@@ -360,9 +364,12 @@ impl std::error::Error for ParseRefusal {}
 /// (c), (g)) is its writer's — a global-form address is spelled alike, and
 /// no parse tells the two apart — and qualifying it by that board's node
 /// prefix is its reader's, the two forms being one at the root (REG-1.64;
-/// REG-1.86 (c)); and whether `replaces` names the deposit current at the
-/// record's position is the reader's currency rule (REG-1.10, REG-2.24).
-/// None is asked here.
+/// REG-1.86 (c)); whether `replaces` names the deposit current at the
+/// record's position is the reader's currency rule (REG-1.10, REG-2.24);
+/// and whether `sig` is a signature at all — the hybrid blob in hex, at a
+/// width some row of skep-identity's `SIG_ALGS` takes — and whether it
+/// verifies are a verifying reader's, its verdict beside the read (REG-1.86
+/// (e)), every string being a `sig` here ([`Record`]). None is asked here.
 ///
 /// THE STAGES, the first to fault naming the refusal ([`ParseRefusal`]): the cap;
 /// the text; the value; the object; the number scan; `type`; the member set;
@@ -375,17 +382,20 @@ impl std::error::Error for ParseRefusal {}
 ///
 /// THE VALUE STAGE is `serde_json`'s, and where RFC 8259 leaves a parser a
 /// choice (§4, §6, §8.1, §8.2, §9) this parser adopts serde_json's as its
-/// own. A member spelled twice is read at its LAST occurrence, so a fault in
-/// an earlier one — a number, a wrong `type` — surfaces as `not_canonical`.
-/// And serde_json reads no value — `not_json` — from four texts RFC 8259
-/// lets a parser refuse: a value nested more than 127 objects and arrays
-/// deep, the body's own object counted; a number too large for a 64-bit
-/// float (`1e400` — one that rounds to zero, `1e-400`, is read, and is
-/// `number`); an escaped unpaired surrogate (`"\ud800"`); and a byte-order
-/// mark ahead of the value, the one of the four the vector set pins for
-/// every parser: a reader whose decoder drops the mark before its compare
-/// would admit a body this parse refuses. Past those choices `not_json` is
-/// RFC 8259's grammar, and every other refusal is this schema's.
+/// own. A member spelled twice is kept at its LAST occurrence, and every
+/// stage after the value reads the kept one alone: a fault only an earlier
+/// occurrence holds — a number, a wrong `type` — is named by none of them,
+/// and the body answers the first stage its kept members fault at,
+/// `not_canonical` where they fault at none. And serde_json reads no value —
+/// `not_json` — from four texts RFC 8259 lets a parser refuse: a value
+/// nested more than 127 objects and arrays deep, the body's own object
+/// counted; a number too large for a 64-bit float (`1e400` — one that rounds
+/// to zero, `1e-400`, is read, and is `number`); an escaped unpaired
+/// surrogate (`"\ud800"`); and a byte-order mark ahead of the value, the one
+/// of the four the vector set pins for every parser: a reader whose decoder
+/// drops the mark before its compare would admit a body this parse refuses.
+/// Past those choices `not_json` is RFC 8259's grammar, and every other
+/// refusal is this schema's.
 pub fn parse(kind: BodyKind, bytes: &[u8]) -> Result<Record, ParseRefusal> {
     if bytes.len() > MAX_REGISTRY_RECORD_BYTES {
         return Err(ParseRefusal::PastCap);

@@ -227,15 +227,18 @@ pub struct Row {
 }
 
 impl Row {
-    /// The map's "Deposits" column: whether a deposit rides THIS address —
-    /// REG-1.18's test, which every reader of a kind's deposits reads. Every
-    /// subtype row carries deposits; a kind's own row carries them exactly
-    /// where no subtype row nests under the kind, a kind that reads ONE way,
-    /// and none where its readings are rows under it. Computed off
-    /// [`Subtype::ALL`] and [`Subtype::kind`] and never stored, so a subtype
-    /// row the table gains (REG-1.15) carries deposits by the test itself
-    /// once its subtype joins `Subtype::ALL`, as the completeness arm
-    /// requires of every subtype, and moves no row already in the table.
+    /// The map's "Deposits" column for the row OF `of`: whether a deposit
+    /// rides that row's address — REG-1.18's test, which every reader of a
+    /// kind's deposits reads — answered off `of` alone and never off
+    /// `address`, so a row of the table ([`rows()`]) answers for its own
+    /// address, and a row a suite builds at another address still answers
+    /// for its `of`. Every subtype row carries deposits; a kind's own row
+    /// carries them exactly where no subtype row nests under the kind, a kind
+    /// that reads ONE way, and none where its readings are rows under it.
+    /// Computed off [`Subtype::ALL`] and [`Subtype::kind`] and never stored,
+    /// so a subtype row the table gains (REG-1.15) carries deposits by the
+    /// test itself once its subtype joins `Subtype::ALL`, as the completeness
+    /// arm requires of every subtype, and moves no row already in the table.
     /// A new reading is the takedown record's or the policy link's, which take
     /// one at no cost, their bare ordinals carrying no deposit already
     /// (REG-1.19). A kind that reads ONE way takes no subtype row, since one

@@ -4,14 +4,11 @@
 //! preview draws through: the exact bytes its keygen is fed (the KDF's half
 //! seed) and the OS draw a signature's seed comes from. Compiled under
 //! `sign`, which skepd leaves off, so the daemon's build holds none of it.
-//! The signer's own test hooks sit here — the two beside the private fields
-//! they read, and the suites' classical pair, [`Ed25519SigningKey`] and
-//! [`Ed25519VerifyingKey`] — each gated on `test-hooks`.
+//! Its own two test hooks sit here, beside the private fields they read,
+//! each gated on `test-hooks`.
 
 use std::fmt;
 
-#[cfg(feature = "test-hooks")]
-use ed25519_dalek::VerifyingKey as EdVerifyingKey;
 use ed25519_dalek::{Signer as _, SigningKey as EdSigningKey};
 use fn_dsa::{
     signature_size, sign_key_size, vrfy_key_size, KeyPairGenerator, KeyPairGeneratorStandard,
@@ -232,12 +229,13 @@ impl HybridSigner {
     /// enrolled key's Ed25519 half, and the suites' negative vector — a
     /// 64-byte Ed25519-only `sig`, the classical layout no served board
     /// admits — is made with it. Handed out as the suites' own
-    /// [`Ed25519SigningKey`] — a copy of the half, wiped on drop as the
-    /// original is — so no caller names `ed25519-dalek`'s type.
+    /// [`Ed25519SigningKey`](crate::hooks::Ed25519SigningKey) — a copy of the
+    /// half, wiped on drop as the original is — so no caller names
+    /// `ed25519-dalek`'s type.
     #[cfg(feature = "test-hooks")]
     #[doc(hidden)]
-    pub fn ed25519_signing_key(&self) -> Ed25519SigningKey {
-        Ed25519SigningKey(self.ed.clone())
+    pub fn ed25519_signing_key(&self) -> crate::hooks::Ed25519SigningKey {
+        crate::hooks::Ed25519SigningKey(self.ed.clone())
     }
 
     /// TEST HOOK (the same standing) — [`HybridSigner::sign`] with tag 3's
@@ -282,88 +280,6 @@ impl HybridSigner {
         blob.extend_from_slice(&self.ed.sign(msg).to_bytes());
         debug_assert_eq!(blob.len(), self.public.sig_alg_row().sig_len());
         blob
-    }
-}
-
-/// TEST HOOK (the `fuzz_support` standing: `#[doc(hidden)]`, not a stable
-/// API) — THE SUITES' SEED CARRIER: an Ed25519 signing key from 32 bytes.
-/// The fixtures hold one per principal and read its bytes back as the seed
-/// of that principal's hybrid key ([`HybridSigner::from_seed`] over
-/// [`Ed25519SigningKey::to_bytes`]); [`HybridSigner::ed25519_signing_key`]
-/// hands the hybrid's derived Ed25519 half out as one too. It signs the
-/// 64-byte classical blob — the suites' one negative vector, the
-/// Ed25519-only layout no served board admits — and names its verifying
-/// key, so a suite names this crate and never `ed25519-dalek`, which this
-/// crate alone links. Private-key material: prints none of itself, wiped on
-/// drop (`ed25519-dalek`'s own).
-#[cfg(feature = "test-hooks")]
-#[doc(hidden)]
-#[derive(Clone)]
-pub struct Ed25519SigningKey(EdSigningKey);
-
-#[cfg(feature = "test-hooks")]
-impl Ed25519SigningKey {
-    /// The key `bytes` seed (`ed25519-dalek`'s `SigningKey::from_bytes`).
-    pub fn from_bytes(bytes: &[u8; 32]) -> Ed25519SigningKey {
-        Ed25519SigningKey(EdSigningKey::from_bytes(bytes))
-    }
-
-    /// The seed back — the 32 bytes the key was made from.
-    pub fn to_bytes(&self) -> [u8; 32] {
-        self.0.to_bytes()
-    }
-
-    /// The classical Ed25519 signature over `msg`: 64 bytes, this half
-    /// alone — never a hybrid blob, which [`HybridSigner::sign`] makes.
-    pub fn sign(&self, msg: &[u8]) -> [u8; 64] {
-        self.0.sign(msg).to_bytes()
-    }
-
-    /// This key's verifying key.
-    pub fn verifying_key(&self) -> Ed25519VerifyingKey {
-        Ed25519VerifyingKey(self.0.verifying_key())
-    }
-}
-
-#[cfg(feature = "test-hooks")]
-impl fmt::Debug for Ed25519SigningKey {
-    /// A signing key is private-key material: never printed.
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str("Ed25519SigningKey(..)")
-    }
-}
-
-/// TEST HOOK (the same standing) — an Ed25519 verifying key: the 32 bytes
-/// of a key's public half, or the point decode's refusal of 32 bytes that
-/// are no point — how a suite finds the undecodable key it enrolls to draw
-/// the daemon's own refusal, from the verifier's answer rather than a
-/// hard-coded string.
-#[cfg(feature = "test-hooks")]
-#[doc(hidden)]
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Ed25519VerifyingKey(EdVerifyingKey);
-
-#[cfg(feature = "test-hooks")]
-impl Ed25519VerifyingKey {
-    /// The key `bytes` encode, or
-    /// [`HybridFault::Signature`](crate::HybridFault::Signature) where they
-    /// decode to no point — the decode [`verify`](crate::verify) runs on an
-    /// Ed25519 half, and the fault it answers under a half that does not
-    /// decode ([`key_decodes`](crate::key_decodes) answers `false` there).
-    pub fn from_bytes(bytes: &[u8; 32]) -> Result<Ed25519VerifyingKey, crate::HybridFault> {
-        EdVerifyingKey::from_bytes(bytes)
-            .map(Ed25519VerifyingKey)
-            .map_err(|_| crate::HybridFault::Signature)
-    }
-
-    /// The key's 32 bytes, borrowed.
-    pub fn as_bytes(&self) -> &[u8; 32] {
-        self.0.as_bytes()
-    }
-
-    /// The key's 32 bytes.
-    pub fn to_bytes(&self) -> [u8; 32] {
-        self.0.to_bytes()
     }
 }
 
@@ -520,36 +436,5 @@ mod tests {
              ML-DSA-65 key and the half seeds; not the `hkdf` state, which no crate in this build \
              overwrites — `HybridSigner`'s doc"
         );
-    }
-
-    /// THE ONE CRATE THAT LINKS `ed25519-dalek`, read off the workspace's
-    /// resolved graph: every package `Cargo.lock` lists as depending on it —
-    /// dev-dependencies included, since the lock does not tell them apart —
-    /// is this crate and no other. The suites reach the classical pair
-    /// through [`Ed25519SigningKey`] and [`Ed25519VerifyingKey`] instead, so
-    /// a manifest that names the library again lands in the lock and fails
-    /// here, the way `cargo tree -i ed25519-dalek --workspace` would show it.
-    #[test]
-    fn ed25519_dalek_is_linked_by_this_crate_alone() {
-        let lock = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../../Cargo.lock"))
-            .expect("the workspace's Cargo.lock");
-        let names_dalek = |entry: &str| {
-            // A dependency entry is `"name"` or `"name version"` when more
-            // than one version of it is resolved.
-            let entry = entry.trim().trim_end_matches(',').trim_matches('"');
-            entry == "ed25519-dalek" || entry.starts_with("ed25519-dalek ")
-        };
-        let dependents: Vec<&str> = lock
-            .split("[[package]]")
-            .skip(1)
-            .filter(|package| package.lines().any(names_dalek))
-            .map(|package| {
-                package
-                    .lines()
-                    .find_map(|line| line.strip_prefix("name = \"")?.strip_suffix('"'))
-                    .expect("every package in the lock has a name")
-            })
-            .collect();
-        assert_eq!(dependents, ["skep-signature"], "the packages the lock resolves `ed25519-dalek` for");
     }
 }

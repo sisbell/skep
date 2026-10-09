@@ -31,9 +31,10 @@ arithmetic over it, and names no other skep crate.
 
 skepd depends on this crate with no feature, so the daemon's own build
 (`cargo build -p skepd`) holds no signer. Cargo unifies features across
-everything one invocation builds, so a `--workspace` build that compiles
-the test suites turns `sign` and `test-hooks` on here — for the daemon's
-binary too: the shipped daemon is built with `-p skepd`.
+everything one invocation builds: a `--workspace` build turns `sign` on
+here — skep-client's default `acting` feature asks for it — and one that
+compiles the test suites turns `test-hooks` on too; either reaches the
+daemon's binary, so the shipped daemon is built with `-p skepd`.
 
 ## License
 

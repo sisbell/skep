@@ -2414,9 +2414,10 @@ fn doc_metadata_serves_a_shot_minted_members_terms_and_null_where_none() {
 
 // ── the frames ──────────────────────────────────────────────────────────────
 //
-// TWINS: `addr` and `fixed_frames` have copies in skep-signature's
-// `tests/it/golden.rs`, whose goldens sign these frames; the test below pins
-// their bytes here, so a copy that drifts from its twin fails a golden there.
+// TWINS: `addr`, `extent` and `fixed_frames` have copies in
+// skep-signature's `tests/it/frames.rs`, whose `tests/it/golden.rs` signs
+// these frames; the test below pins their bytes here, so a copy that drifts
+// from its twin fails a golden there.
 
 fn addr(s: &str) -> skep_address::Address {
     let comps: Vec<skep_address::Nat> =

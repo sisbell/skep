@@ -22,12 +22,13 @@ readme = "README.md"
 sign = ["dep:rand_core_06", "dep:hkdf", "dep:sha2", "dep:getrandom", "dep:zeroize"]
 # `test-hooks` compiles in the fixtures' hooks — the seeded RNG
 # (`SeededRng06`), `HybridSigner::sign_with_rng`, the Ed25519 half's signing
-# key, the KDF's half seeds (`derive_half_seeds`) and the widths the sizes pin
-# reads (`pq_widths`) — and implies `sign`.
+# key, the KDF's half seeds (`derive_half_seeds`), the widths the sizes pin
+# reads (`pq_widths`) and the suites' classical pair (`Ed25519SigningKey`,
+# `Ed25519VerifyingKey`) — and implies `sign`.
 # No shipped signer enables it: this crate's own tests turn it on through the
-# self dev-dependency below, and skepd's tests through their own
-# dev-dependency on this crate, so a build that compiles no test compiles
-# none of it.
+# self dev-dependency below, and skepd's and skep-mcp's tests through their
+# own dev-dependencies on this crate, so a build that compiles no test
+# compiles none of it.
 test-hooks = ["sign"]
 
 [dependencies]
@@ -93,12 +94,14 @@ zeroize = { version = "1", optional = true }
 # and the hooks under a plain `cargo test` or workspace run, no flag added. A
 # build that compiles no test never reads this table.
 skep-signature = { path = ".", features = ["test-hooks"] }
-# The goldens' fixed frames name their account, document and type addresses.
+# The fixed frames (`tests/it/frames.rs`) name their account, document and
+# type addresses.
 skep-address = { path = "../skep-address" }
-# The goldens' digests (`sha_hex`): each pin is a key's or a blob's SHA-256.
+# The goldens' digests (`sha_hex`): each pin is a key's or a blob's SHA-256;
+# and the RFC 5869 oracle's hash (`tests/it/wire_doc.rs`).
 sha2.workspace = true
 # THE DIFFERENTIAL ORACLE for tag 1 (the PQ investigation §8.4 (4), §8.5 (ii)):
-# a second pure-Rust FIPS 204 implementation the golden checks `ml-dsa`'s
-# keys-from-seed and signatures byte-equal against — the gate every future
-# bump of the pinned crate must pass.
+# a second pure-Rust FIPS 204 implementation `tests/it/differential.rs`
+# checks `ml-dsa`'s keys-from-seed and signatures byte-equal against — the
+# gate every future bump of the pinned crate must pass.
 fips204 = { version = "=0.4.6", default-features = false, features = ["ml-dsa-65"] }

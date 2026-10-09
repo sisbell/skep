@@ -3,8 +3,9 @@
 //! seed to either — the signer's side, compiled under `sign`. The signer
 //! derives through [`derive_half_seeds`] inside `HybridSigner::from_seed`;
 //! the crate's surface carries it, and the [`HalfSeeds`] it answers, only as
-//! a test hook, for the goldens that feed a half seed to a second
-//! implementation.
+//! a test hook, for the integration suites that hold a half seed to a second
+//! implementation: the tag-1 differential, and the KDF recomputed from
+//! RFC 5869.
 
 use std::fmt;
 

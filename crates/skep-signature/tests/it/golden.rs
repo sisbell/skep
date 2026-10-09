@@ -1,29 +1,24 @@
 //! THE GOLDENS (the frozen-tag rule's pin), beside the one implementation
 //! they pin: per tag, one seed through the KDF to both public keys and the
-//! fingerprint; every op cell's signature over a fixed entry frame — the ten
-//! publish-class kinds and the `record` grammar at three kinds; tag 1's
-//! signatures byte-stable (FIPS 204's deterministic variant), tag 3's under
-//! the fixtures' seeded RNG; the hybrid cross-check; tag 1 DIFFERENTIAL
-//! against a second pure-Rust FIPS 204 crate — keys-from-seed and signatures
-//! byte-equal; the widths each pinned crate fixes, pinned by hand beside the
-//! sizes and timings the report takes back; which FN-DSA backend signed them
-//! on this target; and the keygen-from-seed rule as `docs/wire.md` publishes
-//! it: its formula, recomputed from RFC 5869 against the KDF, and its two
-//! vectors, checked against the keys themselves.
+//! fingerprint; every op cell's signature over a fixed entry frame
+//! (`frames.rs`) — the ten publish-class kinds and the `record` grammar at
+//! three kinds; tag 1's signatures byte-stable (FIPS 204's deterministic
+//! variant), tag 3's under the fixtures' seeded RNG; every op cell's frame
+//! preimage; the hybrid cross-check; the widths each pinned crate fixes,
+//! pinned by hand beside the sizes and timings the report takes back; and
+//! which FN-DSA backend signed them on this target.
 
 use sha2::{Digest, Sha256};
 use skep_identity::{
-    entry_body_assert_sup, entry_body_edit_link, entry_body_emit, entry_body_empty,
-    entry_body_insert, entry_body_make_link, entry_body_make_link_replacing, entry_body_nullify,
-    entry_body_publish, entry_body_record, entry_frame, unit_span, BoardTerm, ContentFreeOp,
-    DocTerm, EntrySlot, Fingerprint, LinkSlots, RecordRows, ShotBase, ShotSegmentPiece,
-    SigAlgRow, ALG_MLDSA65_ED25519,
+    entry_body_insert, entry_body_make_link, entry_body_make_link_replacing, entry_body_publish,
+    entry_frame, unit_span, BoardTerm, DocTerm, EntrySlot, Fingerprint, LinkSlots,
+    ShotSegmentPiece, SigAlgRow, ALG_MLDSA65_ED25519,
 };
-use skep_signature::{
-    derive_half_seeds, pq_widths, verify, HybridFault, HybridSigner, PqWidths, SeededRng06,
-};
+use skep_signature::{pq_widths, verify, HybridFault, HybridSigner, PqWidths, SeededRng06};
 
-fn hex(bytes: &[u8]) -> String {
+use crate::frames::{addr, extent, fixed_frames};
+
+pub fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
@@ -31,167 +26,11 @@ fn sha_hex(bytes: &[u8]) -> String {
     hex(&Sha256::digest(bytes))
 }
 
-/// `docs/wire.md` as prose, rewrapped at will: every run of whitespace reads
-/// as one space.
-fn wire_md_prose() -> String {
-    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/wire.md");
-    let text = std::fs::read_to_string(&path)
-        .unwrap_or_else(|e| panic!("cannot read {}: {e}", path.display()));
-    text.split_whitespace().collect::<Vec<_>>().join(" ")
-}
-
-// ── the frames ──────────────────────────────────────────────────────────────
-//
-// TWINS: `addr` and `fixed_frames` are copies of the two in skepd's
-// `tests/it/signed_ops.rs`, whose `the_entry_frames_bytes_per_op_are_pinned`
-// pins the frames' bytes; the goldens below pin their signatures, so a copy
-// that drifts from its twin fails a golden here.
-
-fn addr(s: &str) -> skep_address::Address {
-    let comps: Vec<skep_address::Nat> =
-        s.split('.').map(|c| skep_address::Nat::from(c.parse::<u64>().unwrap())).collect();
-    skep_address::validate(skep_address::Tumbler::new(comps).unwrap()).unwrap()
-}
-
-/// A stored content extent — a resolved slot's span — from its I-start and
-/// its width in positions, as a run's `iextent` spells one.
-fn extent(start: &str, width: u64) -> skep_address::Span {
-    let start = addr(start);
-    let depth = start.tumbler().len();
-    let mut comps = vec![skep_address::Nat::from(0u64); depth];
-    comps[depth - 1] = skep_address::Nat::from(width);
-    skep_address::Span::new(start.tumbler().clone(), skep_address::Tumbler::new(comps).unwrap())
-        .unwrap()
-}
-
-/// The thirteen fixed instances every golden signs, on a board whose `H.1`
-/// pair is `(12, 0xAB…)`, by account `1.0.1`: the frames of an `insert`
-/// (undeclared, two values), a `make_link` (three slots as stored: a unit
-/// type span, a unit `from`, the `to` EMPTY), a `publish` (three values
-/// copied in, one window of two positions onto another document, the base
-/// `1.0.1.0.1.1` taken at three — the address form, l6-A4; the base member
-/// in the group since round 7, bu7-E2) and three `record`s (the frame
-/// merge, fm-I; the record grade, 2a): an enrol's kind — its type slot, one
-/// subject, neither optional row named, a short canonical body — a retire's
-/// kind beside it over the same subject, and the claim's — its type slot,
-/// the EMPTY target slot, no record at all (a claim carries none,
-/// AUTH-2.48), the body-bytes row empty; then the seven cells D24 pinned: a
-/// `create_new_document`, a `fork` and a `version`, each the EMPTY body
-/// over the parent account `1.0.1`; a `nullify` of the link `…0.2.1` from
-/// its home, a `assert_sup` of that link by `…0.2.2`, an `emit` of the
-/// retired class over `1.0.1.0.2` with its `to` EMPTY (Unary), each the
-/// stored link's rows; and an `edit_link` of `…0.2.1` whose successor is
-/// homed in `1.0.1.0.2` with two resolved content extents and a named
-/// type, its claim homed in `1.0.1.0.1` — the pair's row as its `doc`.
-fn fixed_frames(alg: &str) -> [(&'static str, Vec<u8>); 13] {
-    let (account, doc, other) = (addr("1.0.1"), addr("1.0.1.0.1"), addr("1.0.1.0.2"));
-    let board = BoardTerm { log_position: 12, chain: [0xAB; 32] };
-    let insert = entry_body_insert(None, [&b"a"[..], &b"b"[..]]);
-    let ty = [unit_span(&addr("1.1.0.1.0.1.0.3.90"))];
-    let from = [unit_span(&addr("1.0.1"))];
-    let link = entry_body_make_link(LinkSlots {
-        from: EntrySlot(&from),
-        to: EntrySlot(&[]),
-        ty: EntrySlot(&ty),
-    });
-    let window = addr("1.0.1.0.2.0.1.1");
-    let base_member = addr("1.0.1.0.1.1");
-    let publish = entry_body_publish(
-        [
-            ShotSegmentPiece::Value(b"x"),
-            ShotSegmentPiece::Value(b"y"),
-            ShotSegmentPiece::Value(b"z"),
-            ShotSegmentPiece::Window {
-                start: &window,
-                width: std::num::NonZeroU64::new(2).expect("2 is not zero"),
-            },
-        ],
-        Some(ShotBase { member: &base_member, extent: 3 }),
-    );
-    let subject = [addr("1.0.2")];
-    let enrol = entry_body_record(RecordRows {
-        ty: &addr("1.1.0.1.0.1.0.3.1"),
-        to: &subject,
-        replaces: None,
-        lineage_fork_point: None,
-        sigless_canonical_record: br#"{"type":"skep-enroll"}"#,
-    });
-    let retire = entry_body_record(RecordRows {
-        ty: &addr("1.1.0.1.0.1.0.3.2"),
-        to: &subject,
-        replaces: None,
-        lineage_fork_point: None,
-        sigless_canonical_record: br#"{"type":"skep-retire"}"#,
-    });
-    let claim = entry_body_record(RecordRows {
-        ty: &addr("1.1.0.1.0.1.0.3.3"),
-        to: &[],
-        replaces: None,
-        lineage_fork_point: None,
-        sigless_canonical_record: b"",
-    });
-    // The other link writes, over the stored link's unit spans: the link
-    // `1.0.1.0.1.0.2.1` retracted from its home, superseded by `…0.2.2`; a
-    // retired-class tuple over `1.0.1.0.2`, its `to` EMPTY.
-    let (l1, l2) = (unit_span(&addr("1.0.1.0.1.0.2.1")), unit_span(&addr("1.0.1.0.1.0.2.2")));
-    let (home, retraction) = (unit_span(&doc), unit_span(&addr("1.1.0.1.0.1.0.1.5")));
-    let supersedes = unit_span(&addr("1.1.0.1.0.1.0.1.4"));
-    let (retired, retired_doc) = (unit_span(&addr("1.1.0.1.0.1.0.1.3")), unit_span(&other));
-    let nullify = entry_body_nullify(LinkSlots {
-        from: EntrySlot(std::slice::from_ref(&home)),
-        to: EntrySlot(std::slice::from_ref(&l1)),
-        ty: EntrySlot(std::slice::from_ref(&retraction)),
-    });
-    let assert_sup = entry_body_assert_sup(LinkSlots {
-        from: EntrySlot(std::slice::from_ref(&l1)),
-        to: EntrySlot(std::slice::from_ref(&l2)),
-        ty: EntrySlot(std::slice::from_ref(&supersedes)),
-    });
-    let emit = entry_body_emit(LinkSlots {
-        from: EntrySlot(std::slice::from_ref(&retired_doc)),
-        to: EntrySlot(&[]),
-        ty: EntrySlot(std::slice::from_ref(&retired)),
-    });
-    // The edit: the successor's `from` and `to` resolved to content extents
-    // of `1.0.1.0.2` (five positions from its first, two from its sixth),
-    // its type a ghost name, the original `…0.2.1`'s unit span the fifth row.
-    let (s_from, s_to) = (extent("1.0.1.0.2.0.1.1", 5), extent("1.0.1.0.2.0.1.6", 2));
-    let s_ty = unit_span(&addr("1.0.1.0.3.0.2.1"));
-    let edit = entry_body_edit_link(
-        LinkSlots {
-            from: EntrySlot(std::slice::from_ref(&s_from)),
-            to: EntrySlot(std::slice::from_ref(&s_to)),
-            ty: EntrySlot(std::slice::from_ref(&s_ty)),
-        },
-        &l1,
-    );
-    let frame = |body: &skep_identity::EntryBody, term: DocTerm<'_>| {
-        (body.op(), entry_frame(alg, board, &account, term, body))
-    };
-    [
-        frame(&insert, DocTerm::One(&doc)),
-        frame(&link, DocTerm::One(&doc)),
-        frame(&publish, DocTerm::One(&doc)),
-        frame(&enrol, DocTerm::One(&doc)),
-        frame(&retire, DocTerm::One(&doc)),
-        frame(&claim, DocTerm::One(&doc)),
-        frame(&entry_body_empty(ContentFreeOp::CreateNewDocument), DocTerm::One(&account)),
-        frame(&entry_body_empty(ContentFreeOp::Fork), DocTerm::One(&account)),
-        frame(&entry_body_empty(ContentFreeOp::Version), DocTerm::One(&account)),
-        frame(&nullify, DocTerm::One(&doc)),
-        frame(&assert_sup, DocTerm::One(&doc)),
-        frame(&emit, DocTerm::One(&doc)),
-        frame(&edit, DocTerm::Pair { d_s: &other, d_a: &doc }),
-    ]
-}
-
-// ── the goldens ─────────────────────────────────────────────────────────────
-
 /// The golden's seed: one 32-byte seed, the paper backup's one 64-hex line —
 /// and the seed of the keygen-from-seed rule's vectors `docs/wire.md`
 /// publishes, so the fingerprints below are the ones a client author checks
 /// against.
-const GOLDEN_SEED: [u8; 32] = [
+pub const GOLDEN_SEED: [u8; 32] = [
     0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f,
     0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1a, 0x1b, 0x1c, 0x1d, 0x1e, 0x1f,
 ];
@@ -357,17 +196,17 @@ fn golden_tag_3_fndsa512_preview_ed25519() {
 /// signing is randomized — byte-asserted, so a member silently absent from a
 /// body (round 7's BLOCKER: the base member the `publish` body did not carry)
 /// fails the build here, whatever the signatures over it do. The thirteen
-/// fixed frames above cover `insert` (undeclared), `make_link` WITHOUT its
-/// `replaces` row over unit spans and the EMPTY `to`, `publish` with a value
-/// stretch, a window and the base group FILLED, the three `record`s (rows 3
-/// and 4 EMPTY), the three EMPTY bodies over the parent account, the three
-/// other link writes over the stored link and the `edit_link` with its
-/// pair's row and resolved extents; this table adds the cells they leave
-/// out — an `insert` DECLARED under a type, a `make_link` WITH its
-/// `replaces` row, a `make_link` whose `to` is a RESOLVED content extent
-/// (the slot a V-spec stores as, §7.6's vector (vii)), the `publish` BIRTH
-/// SHAPE with the EMPTY group — and pins the thirteen beside them, so one
-/// table names every cell with its preimage's length. The frames are the
+/// fixed frames (`frames.rs`) cover `insert` (undeclared), `make_link`
+/// WITHOUT its `replaces` row over unit spans and the EMPTY `to`, `publish`
+/// with a value stretch, a window and the base group FILLED, the three
+/// `record`s (rows 3 and 4 EMPTY), the three EMPTY bodies over the parent
+/// account, the three other link writes over the stored link and the
+/// `edit_link` with its pair's row and resolved extents; this table adds the
+/// cells they leave out — an `insert` DECLARED under a type, a `make_link`
+/// WITH its `replaces` row, a `make_link` whose `to` is a RESOLVED content
+/// extent (the slot a V-spec stores as, §7.6's vector (vii)), the `publish`
+/// BIRTH SHAPE with the EMPTY group — and pins the thirteen beside them, so
+/// one table names every cell with its preimage's length. The frames are the
 /// twins skepd pins byte for byte (`the_entry_frames_bytes_per_op_are_pinned`);
 /// the pin here is the hash a second implementation checks against.
 #[test]
@@ -439,104 +278,6 @@ fn the_frame_preimage_per_op_cell_is_pinned() {
     assert_eq!(got, want, "a preimage moved — the cells as composed:\n{report}");
 }
 
-/// THE PUBLISHED VECTORS: `docs/wire.md`'s keygen-from-seed rule (§The
-/// claim ceremony and credentials) hands a client author `GOLDEN_SEED` and
-/// each tag's fingerprint as that rule's vectors — the keys the two goldens
-/// above derive. Checked against the KDF and keygen themselves, so a vector
-/// that drifts in the prose fails as a drifted key does.
-#[test]
-fn wire_md_publishes_the_keygen_from_seed_vectors() {
-    let prose = wire_md_prose();
-    let seed = format!("the seed `{}` derives", hex(&GOLDEN_SEED));
-    assert!(prose.contains(&seed), "wire.md's vectors do not say: {seed}");
-    for tag in [1u8, 3] {
-        let token = SigAlgRow::of_tag(tag).unwrap().token;
-        let signer = HybridSigner::from_seed(tag, &GOLDEN_SEED).unwrap();
-        let vector = format!(
-            "under tag `{tag}` (`{token}`), the key whose fingerprint is `{}`",
-            Fingerprint::of(signer.public_key()).to_hex()
-        );
-        assert!(prose.contains(&vector), "wire.md's vectors do not say: {vector}");
-    }
-}
-
-// ── the KDF, recomputed ─────────────────────────────────────────────────────
-
-/// HMAC-SHA-256 (RFC 2104) from `sha2` alone, so the oracle below shares no
-/// code with the `hkdf` crate the KDF calls. Every key here is at most one
-/// SHA-256 output, inside the 64-byte block.
-fn hmac_sha256(key: &[u8], message: &[&[u8]]) -> [u8; 32] {
-    let mut block = [0u8; 64];
-    block[..key.len()].copy_from_slice(key);
-    let mut inner = Sha256::new().chain_update(block.map(|b| b ^ 0x36));
-    for part in message {
-        inner.update(part);
-    }
-    Sha256::new()
-        .chain_update(block.map(|b| b ^ 0x5c))
-        .chain_update(inner.finalize())
-        .finalize()
-        .into()
-}
-
-/// HKDF-SHA-256 (RFC 5869) at `L = 32`: `PRK = HMAC(salt, IKM)`, then the one
-/// Expand block `T(1) = HMAC(PRK, info ‖ 0x01)`, `info` given as its parts.
-fn hkdf_sha256_32(salt: &[u8], ikm: &[u8], info: &[&[u8]]) -> [u8; 32] {
-    let prk = hmac_sha256(salt, &[ikm]);
-    let mut expand = info.to_vec();
-    expand.push(&[1u8]);
-    hmac_sha256(&prk, &expand)
-}
-
-/// THE KDF IS THE FORMULA `docs/wire.md` PUBLISHES: the formula and its half
-/// labels as wire.md states them, recomputed by RFC 5869 from `sha2` alone —
-/// the oracle first held to RFC 5869's own Test Case 1 — for both tags, both
-/// halves and three seeds; and the signer's Ed25519 key IS its half seed, the
-/// key's Ed25519 half that key's public half. The published vectors are the
-/// code's own output; this holds the code to the formula a client implements.
-#[test]
-fn the_kdf_is_the_hkdf_formula_wire_md_publishes() {
-    let rfc_salt: Vec<u8> = (0x00..=0x0c).collect();
-    let rfc_info: Vec<u8> = (0xf0..=0xf9).collect();
-    assert_eq!(
-        hex(&hkdf_sha256_32(&rfc_salt, &[0x0b; 22], &[&rfc_info[..]])),
-        "3cb25f25faacd57a90434f64d0362f2a2d2d0a90cf1a5a4c5db02d56ecc4c5bf",
-        "the oracle is not RFC 5869's HKDF-SHA-256 (Appendix A.1, the OKM's first 32 bytes)"
-    );
-    let prose = wire_md_prose();
-    for stated in [
-        "half_seed = HKDF-SHA-256(salt = \"skep-kdf-v1\", IKM = seed, \
-         info = <alg token> ‖ 0x00 ‖ <half label>, L = 32)",
-        "with the half labels `ed25519` for the Ed25519 half and, for the post-quantum half, \
-         `ml-dsa-65` under tag `1` and `fn-dsa-512` under tag `3`",
-    ] {
-        assert!(prose.contains(stated), "wire.md's keygen-from-seed rule does not say: {stated}");
-    }
-    for (tag, token, pq_label) in
-        [(1u8, "mldsa65-ed25519", "ml-dsa-65"), (3, "fndsa512-preview-ed25519", "fn-dsa-512")]
-    {
-        let formula = |seed: &[u8; 32], label: &str| {
-            hkdf_sha256_32(b"skep-kdf-v1", seed, &[token.as_bytes(), &[0u8], label.as_bytes()])
-        };
-        for seed in [GOLDEN_SEED, [0x00; 32], [0xff; 32]] {
-            let halves = derive_half_seeds(tag, &seed).unwrap();
-            assert!(
-                halves.ed25519 == formula(&seed, "ed25519"),
-                "tag {tag}: the Ed25519 half seed"
-            );
-            assert!(halves.pq == formula(&seed, pq_label), "tag {tag}: the post-quantum half seed");
-        }
-        let signer = HybridSigner::from_seed(tag, &GOLDEN_SEED).unwrap();
-        let ed = signer.ed25519_signing_key();
-        assert!(ed.to_bytes() == formula(&GOLDEN_SEED, "ed25519"), "tag {tag}: the Ed25519 key");
-        assert_eq!(
-            signer.public_key().ed25519_half(),
-            ed.verifying_key().as_bytes(),
-            "tag {tag}: the key's Ed25519 half is that key's public half"
-        );
-    }
-}
-
 /// THE HYBRID CROSS-CHECK at the frame: each half alone fails — a valid PQ
 /// half with a foreign Ed25519 half, and the reverse — answering `Signature`
 /// under both tags: the spliced blob is the row's width under the row's own
@@ -571,36 +312,6 @@ fn each_half_alone_fails_under_both_tags() {
             Ok(()),
             "tag {tag}: our blob, unmixed"
         );
-    }
-}
-
-/// THE DIFFERENTIAL TEST for tag 1 (the PQ investigation §8.4 (4), §8.5
-/// (ii)): `ml-dsa` 0.1.1's keys from ξ and its deterministic signatures are
-/// byte-equal to `fips204` 0.4.6's, a second pure-Rust FIPS 204, over
-/// sixteen seeds and the six fixed frames — the gate every future bump of
-/// the pinned crate must pass, since FIPS 204 fixes `KeyGen_internal(ξ)`
-/// and the deterministic variant.
-#[test]
-fn tag_1_is_byte_equal_to_a_second_fips_204_implementation() {
-    use fips204::traits::{KeyGen, SerDes, Signer, Verifier};
-    for i in 0..16u8 {
-        let seed = [i; 32];
-        let halves = derive_half_seeds(1, &seed).unwrap();
-        // `ml-dsa`'s side: the PQ half of the hybrid key and its signature.
-        let ours = HybridSigner::from_seed(1, &seed).unwrap();
-        let our_pk = ours.public_key().pq_half().to_vec();
-        // `fips204`'s side, from the same ξ.
-        let (their_pk, their_sk) = fips204::ml_dsa_65::KG::keygen_from_seed(&halves.pq);
-        assert_eq!(our_pk, their_pk.clone().into_bytes().to_vec(), "seed {i}: the public key");
-        for (op, frame) in fixed_frames(ALG_MLDSA65_ED25519) {
-            let our_sig = ours.sign(&frame);
-            let our_pq = &our_sig[..ours.public_key().sig_alg_row().pq_sig_len];
-            let their_sig = their_sk.try_sign_with_seed(&[0u8; 32], &frame, &[]).unwrap();
-            assert_eq!(our_pq, &their_sig[..], "seed {i}, {op}: the deterministic signature");
-            assert!(their_pk.verify(&frame, &their_sig, &[]), "their verify of their own");
-            let as_theirs: [u8; fips204::ml_dsa_65::SIG_LEN] = our_pq.try_into().unwrap();
-            assert!(their_pk.verify(&frame, &as_theirs, &[]), "their verify of ours");
-        }
     }
 }
 

@@ -707,6 +707,83 @@ fn the_birth_extents_ride_the_checkpoint_because_nothing_can_rebuild_them() {
 }
 
 #[test]
+fn the_slice_decodes_or_refuses_whatever_count_its_bytes_declare() {
+    // M2's HOSTILE-INPUT OBLIGATION on `WorldState`: a checkpoint body is
+    // bytes M2 does not trust, and its load refuses one that will not decode
+    // and falls back to an older base. So no count the body declares may size
+    // a reservation before the entries it counts have arrived — past
+    // `isize::MAX` bytes the reservation panics, and short of it a count the
+    // allocator cannot grant aborts the process where the load must refuse.
+    // Every collection the slice holds — the arrangement map, each document's
+    // content and link run-lists, R's map and each document's spans, the
+    // birth extents and the shot terms — decodes through `decode`'s doors,
+    // and every sequence beneath them (an address's components, a natural's
+    // digits) reserves cautiously. So `u64::MAX` written over ANY eight bytes
+    // of a body holding every one of them is decoded or refused, and never
+    // reserved for: a collection decoded by `im`'s own visitor fails here,
+    // the empty count of a field added since included. It fails one of two
+    // ways, both the hazard itself. Written squarely over a count, `u64::MAX`
+    // overflows the reservation's layout and panics, caught below and
+    // reported at its offset; written across one, the window reads part of it
+    // and part of the bytes beside it — a count the layout admits and the
+    // allocator cannot grant — and the process aborts, which nextest reports
+    // against this test. A corpus seed for the fuzzing tier: this body, at
+    // every offset, under every count.
+    let s = place(&M5State::genesis(), &doc1(), 1, vec![run(&ca(1), 3)]);
+    let s = s.apply_m5(&M5Rec::LinkSeat {
+        doc: doc1(),
+        link: la(1),
+    });
+    let s = s.apply_m5(&M5Rec::ShotPlace {
+        doc: vdoc(),
+        runs: vec![run(&ca(1), 2)],
+        terms: ShotTerms {
+            placed: n(2),
+            base_extent: Some(n(1)),
+        },
+    });
+    let s = s.apply_m5(&M5Rec::ShotPlace {
+        doc: a(&[1, 0, 1, 0, 2, 1]),
+        runs: vec![run(&pca(1), 1)],
+        terms: ShotTerms {
+            placed: n(1),
+            base_extent: None,
+        },
+    });
+    // The premise: every collection the slice decodes holds an entry, so the
+    // sweep writes over each one's count and over the counts within it.
+    assert_eq!(s.arrangements.len(), 3);
+    assert_eq!(s.link_run_count(&doc1()), 1);
+    assert_eq!(s.recorded_span_count(&doc1()), 1);
+    assert_eq!(s.birth_extents.len(), 2);
+    assert_eq!(s.shot_terms.len(), 2);
+    let bytes = bincode::serialize(&s).expect("state serializes");
+    assert_eq!(
+        bincode::deserialize::<M5State>(&bytes).expect("state deserializes"),
+        s
+    );
+    let mut refused_at = Vec::new();
+    for at in 0..=bytes.len() - 8 {
+        let mut lying = bytes.clone();
+        lying[at..at + 8].copy_from_slice(&u64::MAX.to_le_bytes());
+        match std::panic::catch_unwind(|| bincode::deserialize::<M5State>(&lying)) {
+            Ok(Err(_)) => refused_at.push(at),
+            Ok(Ok(_)) => {}
+            Err(_) => panic!(
+                "u64::MAX over bytes {at}..{} panicked the decode: a reservation sized by a \
+                 count the body does not carry",
+                at + 8
+            ),
+        }
+    }
+    assert_eq!(
+        refused_at.first(),
+        Some(&0),
+        "the arrangement map's count, the body's first eight bytes, is refused"
+    );
+}
+
+#[test]
 fn m5rec_survives_a_bincode_round_trip() {
     // §A: M5Rec is THE journaled delta, and every variant of it rides
     // replay — so each one comes back as the same record, and the

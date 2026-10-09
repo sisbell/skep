@@ -47,7 +47,12 @@
 //! proof beside it, every read is total, [`M5State::apply_m5`] answers a
 //! record outside its input class without panicking, and the decode doors
 //! refuse (`Run`, R) or repair (the run-list) a malformed value rather than
-//! admit one a later read would panic on. The panics a caller can provoke are
+//! admit one a later read would panic on. No collection the slice decodes
+//! reserves room for the count its bytes declare (`decode.rs`, M2's
+//! hostile-input obligation on `WorldState`): a checkpoint body counting more
+//! entries than it carries runs out of input and is refused, where a
+//! reservation sized by that count would panic, or abort the process on a
+//! count the allocator cannot grant. The panics a caller can provoke are
 //! its own broken preconditions, both M2's: calling a transacting entry point
 //! here (a [`Vstream`] op, `seat_link`) from inside a `transact` closure on
 //! the same kernel, or handing [`Vstream::publish`] a `readable` that calls
@@ -179,6 +184,10 @@
 
 #![forbid(unsafe_code)]
 
+// The slice's collections decoded entry by entry: an `im` map or vector read
+// one entry at a time, reserving nothing from the count a checkpoint body
+// declares.
+mod decode;
 // The `Run`: one placed I-extent, its position arithmetic, its one Span
 // lift, its constructor and decode door.
 mod run;

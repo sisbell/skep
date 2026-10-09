@@ -29,7 +29,9 @@ test-hooks = []
 # member it mints) — plus the RunList's v1 physical backing im::Vector<Run>
 # (Open build decision #1 default). The serde feature because all four fields
 # are fully serialized in checkpoints (no skip-serialize; rebuild_derived is
-# identity).
+# identity): im's `Serialize` writes them, and their decode is this crate's
+# own (src/decode.rs), entry by entry, since im's visitor reserves room for
+# the count a checkpoint body declares.
 im.workspace = true
 # Nat::zero()/one()/is_zero() are trait fns the ordinal math keeps in scope.
 num-traits.workspace = true

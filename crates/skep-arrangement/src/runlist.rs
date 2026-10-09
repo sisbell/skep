@@ -21,6 +21,7 @@ use num_traits::{One, Zero};
 use serde::{Deserialize, Serialize};
 use skep_address::{Address, Nat, SpanSet};
 
+use crate::decode::element_by_element;
 use crate::run::Run;
 #[cfg(test)]
 use crate::run_union::RunUnion;
@@ -173,9 +174,12 @@ pub(crate) struct RunList(im::Vector<Run>);
 ///
 /// It reads exactly what a `RunList` writes — the same newtype over the same
 /// vector, which bincode encodes as its inner value — and `Serialize` is
-/// derived on `RunList` itself, so the shadow costs the encoding nothing.
+/// derived on `RunList` itself, so the shadow costs the encoding nothing. The
+/// vector is read run by run ([`element_by_element`]), each run through
+/// `Run`'s own door, so no count a checkpoint body declares sizes a
+/// reservation.
 #[derive(Deserialize)]
-struct RunListShadow(im::Vector<Run>);
+struct RunListShadow(#[serde(deserialize_with = "element_by_element")] im::Vector<Run>);
 
 impl From<RunListShadow> for RunList {
     fn from(s: RunListShadow) -> RunList {

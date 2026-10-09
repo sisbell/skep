@@ -12,6 +12,7 @@ use serde::{Deserialize, Serialize};
 use skep_address::{content_subspace, link_subspace, Address, Nat};
 
 use crate::chain::is_birth_version;
+use crate::decode::entry_by_entry;
 use crate::provenance::Provenance;
 use crate::run::Run;
 use crate::runlist::RunList;
@@ -214,9 +215,16 @@ pub struct M5State {
     // this module builds an `M5State` — a default, a decoded checkpoint, or
     // the fold's output — and every other module reaches the arrangement map
     // through `arrangement_of` (ARCHITECTURE.md §The arrangement, "One fold").
+    // Each map decodes entry by entry (`decode`), never through `im`'s own
+    // visitor, which reserves room for the count a checkpoint body declares;
+    // `provenance` and each document's run-lists decode the same way, behind
+    // their own shadows.
+    #[serde(deserialize_with = "entry_by_entry")]
     arrangements: im::OrdMap<Address, DocArrangement>,
     pub(crate) provenance: Provenance,
+    #[serde(deserialize_with = "entry_by_entry")]
     birth_extents: im::OrdMap<Address, Nat>,
+    #[serde(deserialize_with = "entry_by_entry")]
     shot_terms: im::OrdMap<Address, ShotTerms>,
 }
 

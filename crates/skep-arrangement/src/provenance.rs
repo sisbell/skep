@@ -4,6 +4,7 @@
 use serde::{Deserialize, Serialize};
 use skep_address::{classify_spans, Address, Span, SpanRel, SpanSet};
 
+use crate::decode::{element_by_element, entry_by_entry};
 use crate::run::Run;
 
 /// R, keyed by placing document — every content span a document has ever
@@ -38,12 +39,14 @@ use crate::run::Run;
 pub(crate) struct Provenance(im::OrdMap<Address, im::Vector<Span>>);
 
 /// The deserialization mint path (the serde `try_from` shadow, as [`Run`] and
-/// M1's `Address`/`Span`/`Tumbler` each carry one): the map is decoded — each
-/// key re-entering `validate` and each span re-entering T12 through their own
-/// shadows — and then the SPAN SHAPE clause the reads depend on is
-/// re-established here, so a checkpoint whose R holds a span no
-/// [`Run::iextent`] could have produced is a decode failure M2 reports as
-/// corruption rather than a value that panics
+/// M1's `Address`/`Span`/`Tumbler` each carry one): the map is decoded entry
+/// by entry ([`entry_by_entry`]) and each document's spans element by element
+/// ([`EverContainedShadow`]) — each key re-entering `validate` and each span
+/// re-entering T12 through their own shadows, and no count the checkpoint body
+/// declares, the map's or a document's, sizing a reservation — and then the
+/// SPAN SHAPE clause the reads depend on is re-established here, so a
+/// checkpoint whose R holds a span no [`Run::iextent`] could have produced is
+/// a decode failure M2 reports as corruption rather than a value that panics
 /// [`M5State::deletions`](crate::M5State::deletions) on the next
 /// SHOWDELETIONS, on a worker thread, per request.
 ///
@@ -55,16 +58,31 @@ pub(crate) struct Provenance(im::OrdMap<Address, im::Vector<Span>>);
 /// recorded span, once, at checkpoint load.
 ///
 /// It reads exactly what a `Provenance` writes — the same newtype over the
-/// same map — and `Serialize` is derived on `Provenance` itself, so the
-/// shadow costs the encoding nothing.
+/// same map, each value a newtype over the same vector, and bincode encodes a
+/// newtype as its inner value — and `Serialize` is derived on `Provenance`
+/// itself, so the shadow costs the encoding nothing.
 #[derive(Deserialize)]
-struct ProvenanceShadow(im::OrdMap<Address, im::Vector<Span>>);
+struct ProvenanceShadow(
+    #[serde(deserialize_with = "entry_by_entry")] im::OrdMap<Address, EverContainedShadow>,
+);
+
+/// One document's R↾doc as [`ProvenanceShadow`] decodes it: its recorded
+/// spans, read element by element ([`element_by_element`]), so a span count
+/// the checkpoint body does not carry is refused where the input runs out
+/// rather than reserved for. A carrier and nothing else — the conversion below
+/// unwraps it into the relation.
+#[derive(Clone, Deserialize)]
+struct EverContainedShadow(#[serde(deserialize_with = "element_by_element")] im::Vector<Span>);
 
 impl TryFrom<ProvenanceShadow> for Provenance {
     type Error = &'static str;
     fn try_from(s: ProvenanceShadow) -> Result<Provenance, &'static str> {
-        if s.0.values().flatten().all(Span::is_level_uniform) {
-            Ok(Provenance(s.0))
+        let relation: im::OrdMap<Address, im::Vector<Span>> =
+            s.0.into_iter()
+                .map(|(doc, EverContainedShadow(spans))| (doc, spans))
+                .collect();
+        if relation.values().flatten().all(Span::is_level_uniform) {
+            Ok(Provenance(relation))
         } else {
             Err("provenance: every recorded span is a run I-extent (level-uniform)")
         }

@@ -1159,22 +1159,28 @@ in the workspace where state is destroyed: `delete` removes positions and
 `rearrange` reorders them, in place, and R keeps every address a delete
 removed. Its modules are declared in `src/lib.rs` in dependency order, each
 with a line saying what it holds; each names in code only the modules above
-it, and `tests/it/tidy.rs` checks it. `ops.rs` is the `Vstream` handle and
-what its operations share; beneath it, `ops/insert.rs`, `ops/publish.rs`,
-`ops/copy.rs`, `ops/delete.rs`, `ops/rearrange.rs` and `ops/version.rs` each
-hold one operation's `impl` block. Its `test-hooks` feature (default off)
-compiles in `seat_link`, the test-only twin of the link seat;
-`scripts/gate-full.sh` checks the library without it.
+it. `tests/it/tidy.rs` checks that, that every declaration under `src/` but a
+`tests` module carries its line, and that every file under `src/` and
+`tests/it/` is declared. `run.rs` is the run; beside it, `run_union.rs` holds
+the union of a run set's I-extents, in tumbler order, and `runlist.rs` the
+run-list, in V-order — two modules that share no private item. `ops.rs` is the
+`Vstream` handle and what its operations share; beneath it,
+`ops/insert.rs`, `ops/publish.rs`, `ops/copy.rs`, `ops/delete.rs`,
+`ops/rearrange.rs` and `ops/version.rs` each hold one operation's `impl`
+block. Its `test-hooks` feature (default off) compiles in `seat_link`, the
+test-only twin of the link seat; `scripts/gate-full.sh` checks the library
+and its docs without it.
 
 Rules that hold across its files:
 
 - **One fold.** A committed `M5State` comes only from `apply_m5` over an
-  `M5Rec`, and inside this crate only `state.rs` builds one: two of its
-  fields are private there. The fold reaches an arrangement through
-  `state.rs`'s own `arrangement_of` and calls nothing defined in `reads.rs`
-  or `shot.rs`, the other two files holding `M5State`'s methods, so an edit
-  to a read or to the address form cannot change what replay folds;
-  `tests/it/tidy.rs` checks it.
+  `M5Rec`, and inside this crate only `state.rs` builds one: three of its
+  four fields are private there, the arrangement map among them, so every
+  other module reaches an arrangement through `state.rs`'s `arrangement_of`
+  and the absent-⇒-empty convention it applies. The fold reaches one the
+  same way and calls nothing defined in `reads.rs` or `shot.rs`, the other
+  two files holding `M5State`'s methods, so an edit to a read or to the
+  address form cannot change what replay folds; `tests/it/tidy.rs` checks it.
 - **One door for a run.** `Run::new` admits every run not built in this
   crate — the serde shadow and the `LinkSeat` fold go through it — and every
   in-crate literal starts at an address that already is a full element
@@ -1195,11 +1201,18 @@ Rules that hold across its files:
   content arrangement joins that list.
 - **The slice's shape is its format.** `M5State`'s fields and `M5Rec`'s
   variants are appended, never inserted or reordered: bincode writes fields
-  in order and variants by index, and `skep-kernel`'s goldens pin the bytes.
+  in order and variants by index. Three checks pin it, none alone:
+  `skep-kernel`'s goldens pin the bytes of the records their ops reach —
+  every variant but the shot's `ShotPlace`, since the fixture runs no shot;
+  `state/tests.rs`'s `shot_place_folds_as_a_placement_at_one_and_notes_the_terms`
+  pins that record's index and fields; and `skep-engine`'s
+  `each_slice_serializes_the_fields_the_format_count_names` pins the slice's
+  field order, which the goldens cannot see for the two fields they leave
+  empty.
 
 Its integration suite is one binary, `tests/it/`: one file per surface over
-the shared `common` world, and `tidy`, which checks the module order and the
-first rule.
+the shared `common` world, and `tidy`, which checks the module tree, its
+order and the first rule.
 
 ## The link store, `skep-links`
 

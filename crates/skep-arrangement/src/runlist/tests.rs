@@ -1,7 +1,5 @@
-use std::collections::BTreeSet;
-
 use super::*;
-use crate::testutil::{a, ca, n, pca, run, vca};
+use crate::testutil::{a, ca, n, run, vca};
 
 /// A list through the coalesce every `RunList` passes, so a fixture holds the
 /// maximally-merged decomposition the type promises of every list in the
@@ -217,66 +215,6 @@ fn a_run_of_another_endpoint_length_is_covered_by_no_resident_whatever_its_width
         let wide = Run::new(start.clone(), widest.clone()).expect("a full element position");
         assert!(!l.covers(&wide), "{start:?}: its own length's residents hold only a prefix of it");
     }
-}
-
-#[test]
-fn a_run_union_denotes_exactly_the_runs_addresses_each_once_in_tumbler_order() {
-    // S3★/PUB-6.24: the union a run set's I-extents name, merged within each
-    // content chain — EXACTLY the runs' addresses, none dropped, which the
-    // shot's existence walk and its re-insert's `.expect` stand on, and each
-    // in one merged run, which is what lets the walk pay a stored position
-    // once however often a request names it. Repeats, nesting, overlap,
-    // abutment and a gap in one chain; a second chain of the SAME length,
-    // kept apart by its prefix alone; a third of another length — listed out
-    // of order, so the sort is what brings each chain's runs together.
-    let family = vec![
-        run(&ca(3), 2),
-        run(&ca(1), 2),
-        run(&ca(3), 2),
-        run(&ca(2), 5),
-        run(&ca(9), 1),
-        run(&ca(8), 1),
-        run(&pca(3), 1),
-        run(&pca(1), 1),
-        run(&vca(1), 3),
-        run(&vca(2), 1),
-    ];
-    let union = RunUnion::of(&family);
-    let merged: Vec<Run> = union.runs().collect();
-    assert_eq!(
-        merged,
-        vec![
-            run(&ca(1), 6),
-            run(&ca(8), 2),
-            run(&vca(1), 3),
-            run(&pca(1), 1),
-            run(&pca(3), 1)
-        ]
-    );
-    let named: BTreeSet<Address> = family.iter().flat_map(Run::addrs).collect();
-    let denoted: Vec<Address> = merged.iter().flat_map(Run::addrs).collect();
-    assert_eq!(denoted.len(), named.len(), "no address in two merged runs");
-    assert_eq!(denoted.into_iter().collect::<BTreeSet<_>>(), named);
-    // And whole-run membership is its search, against the address-by-address
-    // oracle, from every start and width across the three chains and their
-    // gaps — the same-length chains being where the prefix, and not the
-    // length, has to keep the search apart.
-    let mut checked = 0usize;
-    for start in (1..=10u32).flat_map(|k| [ca(k), pca(k), vca(k)]) {
-        for width in 1..=7u32 {
-            let probe = run(&start, width);
-            let held = probe.addrs().all(|address| named.contains(&address));
-            assert_eq!(union.covers(&probe), held, "{start:?} × {width}");
-            checked += 1;
-        }
-    }
-    assert_eq!(checked, 210);
-    assert_eq!(
-        RunUnion::of(std::iter::empty::<&Run>()).runs().count(),
-        0,
-        "an empty union"
-    );
-    assert!(!RunUnion::of(std::iter::empty::<&Run>()).covers(&run(&ca(1), 1)));
 }
 
 #[test]

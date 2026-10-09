@@ -23,7 +23,8 @@ use num_traits::One;
 use skep_address::{difference_sets, union, Address, Nat, Span, SpanSet};
 
 use crate::run::Run;
-use crate::runlist::{RunUnion, Runs};
+use crate::run_union::RunUnion;
+use crate::runlist::Runs;
 use crate::state::M5State;
 use crate::vspace::{as_ordinal_vspan, ordinal_vspan, VPos};
 

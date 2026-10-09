@@ -297,7 +297,11 @@ fn an_empty_shot_mints_its_member_places_nothing_and_journals_its_terms() {
     assert_eq!(m5.content_runs(&member).len(), 0, "nothing is placed for it");
     assert_eq!(m5.content_count(&member), n(0));
     assert_eq!(m5.provenance, before.provenance, "nothing in R for it");
-    assert_eq!(m5.arrangements, before.arrangements, "no arrangement entry: the lazy empty one");
+    assert_eq!(
+        m5.arrangement_map(),
+        before.arrangement_map(),
+        "no arrangement entry: the lazy empty one"
+    );
     assert_eq!(
         m5.shot_terms(&member),
         Some(&ShotTerms { placed: n(0), base_extent: shot.base.map(|base| base.extent) }),

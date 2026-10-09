@@ -41,6 +41,15 @@ RUSTDOCFLAGS="-D rustdoc::broken_intra_doc_links" \
 # whatever the daemon's graph holds.
 cargo check -p skep-arrangement --lib || exit $?
 
+# …and its docs as they ship, without `test-hooks`, private links denied too,
+# for skep-content's reason: `stage_seat_link`'s doc names `seat_link` by code
+# span, never by link — without the feature no `seat_link` exists for a link
+# to reach — and a public card names a crate-private item by code span as
+# well. The crate-private cards link each other by path, so a move inside the
+# crate that strands a link fails here rather than in a reader's hands.
+RUSTDOCFLAGS="-D rustdoc::broken_intra_doc_links -D rustdoc::private_intra_doc_links" \
+    cargo doc -p skep-arrangement --lib --no-deps --document-private-items || exit $?
+
 # skep-content's library without `test-hooks` — every test build turns it on
 # (the crate's self dev-dependency, and skep-retrieval's), so this is the
 # build that shows the store compiles without `write` and without the two

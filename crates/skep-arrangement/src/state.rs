@@ -57,10 +57,16 @@ static EMPTY_ARRANGEMENT: LazyLock<DocArrangement> = LazyLock::new(DocArrangemen
 /// permanence R promises holds by construction. `arrangements` is sparse: an
 /// absent doc ⇒ empty arrangement (the eager-lazy split with M3). v1 has no
 /// derived-hint fields ⇒ [`rebuild_derived`](M5State::rebuild_derived) is
-/// the identity. Two of its four fields, `birth_extents` and `shot_terms`,
-/// are private to this module, so no other module can build an `M5State` by
-/// struct literal: every one in the crate is a default, a decoded checkpoint,
-/// or the fold's output.
+/// the identity.
+///
+/// Three of its four fields — `arrangements`, `birth_extents` and
+/// `shot_terms` — are private to this module. No other module can therefore
+/// build an `M5State` by struct literal — every one in the crate is a
+/// default, a decoded checkpoint, or the fold's output — and none reads the
+/// arrangement map but through `arrangement_of` and its two narrowings,
+/// `content_list` and `link_list`, which apply the absent-⇒-empty
+/// convention; one level down, `DocArrangement`'s two lists are private here
+/// too. `provenance` alone is crate-visible, for the reads R answers.
 ///
 /// THE BIRTH EXTENTS (`birth_extents`; PUB-3.19 as RES-276 reads it, frozen
 /// by the owner's ruling D2, 2026-09-17) are the third field, and the one
@@ -217,7 +223,7 @@ static EMPTY_ARRANGEMENT: LazyLock<DocArrangement> = LazyLock::new(DocArrangemen
 /// both carried by this crate's dependencies (Build precondition).
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct M5State {
-    pub(crate) arrangements: im::OrdMap<Address, DocArrangement>,
+    arrangements: im::OrdMap<Address, DocArrangement>,
     pub(crate) provenance: Provenance,
     birth_extents: im::OrdMap<Address, Nat>,
     shot_terms: im::OrdMap<Address, ShotTerms>,
@@ -344,6 +350,9 @@ impl M5State {
     /// through [`content_list`](M5State::content_list) — comes through here, which
     /// leaves `arrangements` touched directly only by the writes that own it:
     /// the folds' `update`, and the no-op arm that hands the map back whole.
+    /// The field is private to this module, so outside it this is the
+    /// compiler's rule and not a convention; a test that must see the map
+    /// itself asks `arrangement_map`.
     pub(crate) fn arrangement_of(&self, doc: &Address) -> &DocArrangement {
         self.arrangements
             .get(doc)
@@ -358,6 +367,15 @@ impl M5State {
     /// `doc`'s link run-list — empty for an absent document.
     pub(crate) fn link_list(&self, doc: &Address) -> &RunList {
         &self.arrangement_of(doc).link
+    }
+
+    /// The arrangements map whole, for a test asserting what a record left
+    /// it: every read applies the absent-⇒-empty convention, so none tells an
+    /// ABSENT entry from an empty one — the question `Provenance::is_recorded`
+    /// answers for R.
+    #[cfg(test)]
+    pub(crate) fn arrangement_map(&self) -> &im::OrdMap<Address, DocArrangement> {
+        &self.arrangements
     }
 
     /// The arrangements map with `doc`'s content run-list replaced by `f` of

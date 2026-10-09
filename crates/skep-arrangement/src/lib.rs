@@ -182,9 +182,12 @@
 // The `Run`: one placed I-extent, its position arithmetic, its one Span
 // lift, its constructor and decode door.
 mod run;
+// The union of a run set's I-extents, merged within each content chain in
+// tumbler order, so that whether it holds every address of a run is one
+// search.
+mod run_union;
 // The implicit-position run-list: splice, contract, reorder, the merge
-// condition and its one accumulator, the mapping blocks, the lazy walks, and
-// the merged union of a run set's I-extents.
+// condition and its one accumulator, the mapping blocks, the lazy walks.
 mod runlist;
 // R, the append-only provenance relation, and its decode door.
 mod provenance;
@@ -214,6 +217,8 @@ mod seat;
 // `Vstream` and what its operations share; one file per operation beneath.
 mod ops;
 
+// The unit tests' fixtures: addresses, runs, V-spans, the seeded M3 slice,
+// the in-memory kernel and the typed-refusal unwrap.
 #[cfg(test)]
 pub(crate) mod testutil;
 

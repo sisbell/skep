@@ -393,7 +393,7 @@ impl Run {
     /// CLIENT's run, whose width the client chose: the publish shot's
     /// carried-run test answers whether a client's run is arranged from a
     /// merged union of the base's runs
-    /// ([`RunUnion::covers`](crate::runlist::RunUnion::covers)), searching no
+    /// ([`RunUnion::covers`](crate::run_union::RunUnion::covers)), searching no
     /// width at all.
     ///
     /// THE SOLE PRODUCER of an `OffsetRange`, which is what makes that type's

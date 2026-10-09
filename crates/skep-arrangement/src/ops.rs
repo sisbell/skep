@@ -71,11 +71,17 @@ use crate::chain::trunk_of;
 use crate::run::Run;
 use crate::runlist::extend_or_push_run;
 
+// COPY (ASN-0118): transclusion by reference, allocating nothing.
 mod copy;
+// DELETE (ASN-0117): a content range removed and the gap closed.
 mod delete;
+// INSERT (ASN-0116): fresh content placed, and the declared deposit.
 mod insert;
+// PUBLISH, the shot (PUB-2.33), and its admission.
 mod publish;
+// REARRANGE (ASN-0119/0084): the pivot and the swap.
 mod rearrange;
+// CREATENEWVERSION (ASN-0123): the fork.
 mod version;
 
 pub use publish::shot_admission;

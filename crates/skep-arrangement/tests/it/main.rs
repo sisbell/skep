@@ -11,8 +11,10 @@
 //! shot, and that the journaled slice survives serde plus M2's real
 //! checkpoint-and-replay recovery. `common` is the minimal engine assembly the
 //! composition contract prescribes and the helpers every suite shares; `tidy`
-//! checks the module order `src/lib.rs` declares; each other module is one
-//! surface. Nothing but module declarations belongs here.
+//! checks the module tree — every file declared, every `src/` declaration with
+//! its map line, the order `src/lib.rs` declares — and the `M5State` method
+//! calls no path records; each other module is one surface. Nothing but module
+//! declarations belongs here.
 //!
 //! This binary compiles as a FOREIGN crate, so it also witnesses the sealing
 //! claims: `M5Rec` cannot be built here, `Run` fields cannot be reached or

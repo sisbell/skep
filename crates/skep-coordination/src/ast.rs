@@ -134,7 +134,8 @@ pub enum Term {
     Var(VarId),
     /// ⊤ ⊥ ℕ-lit addr-lit ; ⊥:T∪{⊥} ; ⊥:ℕ∪{⊥}.
     Lit(Lit),
-    /// State-reading atoms (BH1–BH4, V-DOC, V-TUP).
+    /// The atoms that read state (the core atoms, BH1–BH4, V-DOC) and V-TUP's
+    /// tuple projections, which read only their bound tuple.
     Atom(Atom),
     /// V-PRIM ops: = ≼ T1 ∈ set= =∅ elems ℕ(= ≤ +) ·\[K\] def.
     Prim(Prim),
@@ -168,7 +169,11 @@ pub enum Term {
     Ref { addr: Address, args: Vec<ArcTerm> },
 }
 
-/// State-reading atoms (ASN-0128/0129).
+/// PL's atoms (ASN-0128/0129), V-PRIM's primitives aside ([`Prim`]): those
+/// that read state — the three view-parameterized core atoms, BH1–BH4 and
+/// V-DOC — and V-TUP's tuple projections and coverage tests, which read only
+/// the tuple bound to their variable and so are constant across states
+/// (ASN-0129 V-TUP).
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Atom {
     /// Core (view-parameterized).

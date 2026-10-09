@@ -435,7 +435,9 @@ impl<W: CoordinationWorld> Coordinator<W> {
         Ok((tuple, seq))
     }
 
-    /// resolve + expand + denote. Refuses, in this order: a start not
+    /// Resolve, then denote: the def's checked body as the memo holds it —
+    /// parsed and `Reg`-expanded once, when the memo admitted it — denoted
+    /// against `snap`. Refuses, in this order: a start not
     /// EVER-registered (active or not) at the caller's `snap`
     /// (`NotEverRegistered`); an ever-registered start whose content is
     /// absent or fails the PR-ENC parse/WT — a PR-DISC breach
@@ -720,8 +722,9 @@ struct DerivedTooDeep;
 
 /// The referent supplier for the DAG-recursive drivers (a def's denotation,
 /// the flat expansion) — the content-read pass stays distinct from the
-/// structural denotation, so the denotation remains reference-free
-/// (Conflicts §5). Asked at level 0, so the one refusal is "no defined
+/// structural denotation, so the denotation remains content-free (Conflicts
+/// §5): at each `Ref` node it asks this resolver for the referent, and reads
+/// no content itself. Asked at level 0, so the one refusal is "no defined
 /// signature".
 impl<W: CoordinationWorld> DefSource for Coordinator<W> {
     fn resolve_def(&self, addr: &Address) -> Option<Arc<TypedTerm>> {

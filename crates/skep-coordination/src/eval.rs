@@ -39,8 +39,8 @@ use crate::check::DefSource;
 use crate::guest::GuestLinks;
 use crate::value::{lift, Arg, Env, Slice, Value};
 
-/// One verdict's read context — all slices off one pinned snapshot, M7's
-/// through the look at guest class, at ONE term view (PC3: the term view is
+/// One verdict's read context — M7, through the look at guest class, and M3,
+/// both off one pinned snapshot, at ONE term view (PC3: the term view is
 /// fixed for the life of a verdict, so it is context, not an argument). Built
 /// only by `Coordinator::eval_ctx`.
 pub(crate) struct EvalCtx<'a, W> {

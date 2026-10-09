@@ -44,7 +44,7 @@
 //! function of the def's immutable content plus M7's monotone audit slice, so
 //! the fill is unobservable — every handle, warm or cold, answers alike — and
 //! each of those queries stays one. Under a breach the design gives that up
-//! on purpose (freeze-on-breach, §Internal 4): a start deposited past the
+//! on purpose (freeze-on-breach, §Internal 4): a start registered past the
 //! gate before its referent was defined, and probed in that window, stays
 //! POISONED on the probing handle while a handle that first probes it later
 //! derives it defined; and a reference to breached content may be refused

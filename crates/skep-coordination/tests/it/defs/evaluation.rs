@@ -176,10 +176,11 @@ fn an_opt_nat_argument_narrows_through_the_binder_guard() {
 /// A stored def is its SOURCE: `define_predicate` encodes the compact
 /// pre-`Reg`-expansion body, so `∃K ∈ Reg :: is_K(x)` names no class and its
 /// stored run is SHORTER than that of its first instance `is_K(Retired, x)`,
-/// which spells a key — the expansion would spell five. A cold coordinator
-/// re-derives the expansion from those bytes, its last instance included.
+/// which spells a key — the quantifier's `Reg`-expansion would spell five. A
+/// cold coordinator re-derives that `Reg`-expansion from those bytes, its last
+/// instance included.
 #[test]
-fn a_def_is_stored_as_its_source_and_expanded_when_derived() {
+fn a_def_is_stored_as_its_source_and_reg_expanded_when_derived() {
     let k = kernel();
     let c = coord(&k);
     let define = |t: Term| {
@@ -198,8 +199,8 @@ fn a_def_is_stored_as_its_source_and_expanded_when_derived() {
         stored(&some_class),
         stored(&one_class)
     );
-    // PredStable is the catalog's last class, so its instance is the last the
-    // expansion builds.
+    // PredStable is the catalog's last class, so its instance is the last
+    // `Reg`-expansion builds.
     link_writer(&k)
         .emit(Caller::System, &doc1(), &pred_stable_ty(), &ca(5), &[])
         .expect("ca5 heads PredStable");

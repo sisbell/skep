@@ -25,14 +25,15 @@ skep-kernel = { path = "../skep-kernel" }
 # M3 — is_registered_document is PL's is_doc and the emit home-gate.
 skep-namespace = { path = "../skep-namespace" }
 # M4 — value_at(start) for resolve/parse of stored defs (the only content
-# read; lives in the operation-surface pass, never the denotation).
+# read; lives in the content-read pass — a def's resolution — never the
+# denotation).
 skep-content = { path = "../skep-content" }
 # M5 — Vstream::insert writes def content through the placement composite
 # (J0); content_count and VPos::content for the append position.
 skep-arrangement = { path = "../skep-arrangement" }
-# M7 — the link store, read off `LinkState`: `observe` (the one slice
+# M7 — the link store, read off `LinkState`: `observe` (the one read
 # `GuestLinks` rebuilds every PL read over at guest class, and the one the def
-# probes and the divergence monitor read at no visibility class), BH4's
+# probes and the divergence monitor make at no visibility class), BH4's
 # `age`/`stale`, `tip` for a def's lineage head and `readlink` for a fire's
 # gap accounting; `coverage_class` over `enc({start})` and each
 # address-denoting candidate F (`Endset::is_address_denoting` admits it) — the

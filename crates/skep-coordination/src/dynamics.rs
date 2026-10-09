@@ -721,12 +721,13 @@ pub(crate) fn st_plus(catalog: &TypeCatalog, t: &Term) -> bool {
 // ───────────────────── the certified-Marker spelling ─────────────────────
 
 /// The negated membership a certifiable Marker rule's trigger is spelled as:
-/// `¬ is_K(x)` at `param`, yielding K — the witness the rule engine matches
-/// its emitted class against (§8 leg b). `None` for every other spelling:
-/// sound but incomplete, as the rest of this module is, and by spelling, so
-/// an equivalent trigger written otherwise is simply not certified.
-/// Preconditions as the [`Analyzer`]'s — the depth bound included: this walk
-/// has none of its own.
+/// `¬ is_K(x)` at `param`, yielding K — the type of the witness the trigger's
+/// negated existential quantifies over (a K-tuple covering `x`, ASN-0133 Q3).
+/// The rule engine matches K against the class its action emits (§8 leg b).
+/// `None` for every other spelling: sound but incomplete, as the rest of this
+/// module is, and by spelling, so an equivalent trigger written otherwise is
+/// simply not certified. Preconditions as the [`Analyzer`]'s — the depth
+/// bound included: this walk has none of its own.
 pub(crate) fn negated_membership(t: &Term, param: VarId) -> Option<&TypeKey> {
     let Term::Not(inner) = t else { return None };
     match inner.as_ref() {

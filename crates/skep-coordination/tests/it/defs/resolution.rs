@@ -58,7 +58,7 @@ fn a_breach_freezes_the_start_poisoned() {
 }
 
 /// Freeze-on-breach is a per-handle POLICY, not an immutability fact
-/// (§Internal 4): content deposited past the gate before its referent exists,
+/// (§Internal 4): content registered past the gate before its referent exists,
 /// and probed in that window, freezes POISONED on the probing handle and stays
 /// so — through the referent's registration, and through a `register_pred`
 /// that passes every gate and returns `Ok` — while a handle that first probes

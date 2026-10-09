@@ -610,7 +610,7 @@ fn a_def_trigger_through_a_reference_is_linted_flat_and_evaluated_through_the_me
 /// evaluator nor the analyzer can walk a `Reg` binder, so a trigger read by
 /// its source body could not be linted, registered or fired at all.
 #[test]
-fn a_reg_quantified_trigger_is_read_by_its_expansion() {
+fn a_reg_quantified_trigger_is_read_through_its_instances() {
     let k = kernel();
     let mut c = coord(&k);
     link_writer(&k).emit(Caller::System, &doc1(), &pred_stable_ty(), &ca(1), &[]).expect("rel");

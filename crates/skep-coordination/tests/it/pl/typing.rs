@@ -492,7 +492,7 @@ fn a_reference_too_deep_for_its_referent_is_refused_before_its_arguments_warm_or
 /// unfolds to: forty levels of `And(a, a)` are forty-one nodes to build and
 /// 2⁴¹ to check, refused at the budget rather than after it.
 #[test]
-fn type_check_refuses_an_expansion_past_the_node_budget() {
+fn type_check_charges_reg_instances_and_shared_bodies_against_the_node_budget() {
     let k = kernel();
     let c = coord(&k);
     let nested_reg = |levels: u32| {
@@ -559,7 +559,7 @@ fn type_check_charges_every_payload_kind_against_the_node_budget() {
 /// checks and `¬¹²⁹ ⊤` is `TooDeep` — at the cap, before recursing further,
 /// so a term nested thousands deep is refused on this default thread rather
 /// than walked to its end. A `Reg` quantifier's instances sit under the join
-/// chain the expansion builds — one level per cataloged class past the first
+/// chain `Reg`-expansion builds — one level per cataloged class past the first
 /// — so the deepest instance, not the quantifier's own node, is what the cap
 /// charges.
 #[test]

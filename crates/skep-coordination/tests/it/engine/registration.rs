@@ -293,10 +293,11 @@ fn a_fire_action_reports_the_home_it_writes_into() {
 }
 
 /// The lint's three legs, each failed alone: every leg is relative to the
-/// declared view; the Marker witness must be the marker's own class AND the
-/// trigger's parameter; a `Filter` by an SF predicate leaves the grow-only
-/// closure; and a tuple-domained trigger over the tuple's address is not
-/// the canonical spelling (sound-but-incomplete, by spelling).
+/// declared view; the witness the trigger negates must be of the marker's
+/// own class AND cover the trigger's parameter; a `Filter` by an SF predicate
+/// leaves the grow-only closure; and a tuple-domained trigger over the
+/// tuple's address is not the canonical spelling (sound-but-incomplete, by
+/// spelling).
 #[test]
 fn certify_rule_names_each_failed_leg() {
     let k = kernel();
@@ -321,7 +322,7 @@ fn certify_rule_names_each_failed_leg() {
         lint(members_dom(), trig(not(is_k(&pred_stable_ty(), var(1)))), View::Audit),
         uncertified(true, false, true)
     );
-    // (b) the witness must be the trigger's parameter.
+    // (b) the witness must cover the trigger's parameter.
     assert_eq!(
         lint(members_dom(), trig(not(is_k(&marker_ty(), lit_addr(&ca(1))))), View::Audit),
         uncertified(true, false, true)

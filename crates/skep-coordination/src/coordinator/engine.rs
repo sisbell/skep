@@ -176,8 +176,8 @@ impl<W: CoordinationWorld> Coordinator<W> {
             FireAction::Marker { ty, .. } => {
                 let param = trigger.param().0;
                 rule.view == View::Audit
-                    && negated_membership(&flat_expansion, param).is_some_and(|witness| {
-                        self.catalog.class_of(witness) == self.catalog.class_of(ty)
+                    && negated_membership(&flat_expansion, param).is_some_and(|witness_ty| {
+                        self.catalog.class_of(witness_ty) == self.catalog.class_of(ty)
                     })
             }
             FireAction::Nullify { .. } => false,

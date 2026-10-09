@@ -115,7 +115,7 @@ pub(crate) struct GuestLinks<'a, W> {
 impl<'a, W> GuestLinks<'a, W> {
     /// Over the world of one pinned snapshot and the guest-class predicate
     /// the coordinator lends (a borrow of the one closure it holds — the same
-    /// one every `LinkWriter` it builds runs at). The link slice is taken
+    /// one every `LinkWriter` it builds runs at). M7's `LinkState` is taken
     /// FROM that world, so the tuples read and the homes they are filtered by
     /// cannot come from two worlds; the bound sits here alone, the reads
     /// below staying unbounded in `W`.

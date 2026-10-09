@@ -358,17 +358,17 @@ fn the_top_down_probe_sees_strict_descendants_and_nothing_else() {
             true,
         ),
     ] {
-        let state = seats
+        let s = seats
             .iter()
             .enumerate()
-            .fold(M3State::genesis(), |state, (nth, prefix)| {
-                state.apply_m3(&M3Rec::RegisterPrincipal {
+            .fold(M3State::genesis(), |s, (nth, prefix)| {
+                s.apply_m3(&M3Rec::RegisterPrincipal {
                     prefix: a(prefix),
                     id: PrincipalId(nth as u64 + 1),
                 })
             });
         assert_eq!(
-            state.has_principal_strictly_under(&p),
+            s.has_principal_strictly_under(&p),
             expected,
             "{shape}: the top-down probe disagrees"
         );

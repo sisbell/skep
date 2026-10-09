@@ -353,7 +353,7 @@ where
             // that advances it, so the value the gate compares and the record
             // the closure stages cannot come apart. Next-form is MANDATORY
             // under the counter representation (§6).
-            let Some((next, alloc)) = stg.working().m3().mint_account(&parent) else {
+            let Some((next, rec)) = stg.working().m3().mint_account(&parent) else {
                 return Err(DelegateError::ParentNotRegistered);
             };
             if next != new_prefix {
@@ -361,7 +361,7 @@ where
             }
             // Baptism + principal registration, one transaction (O17b): both
             // records carry the allocator's own value.
-            stg.push(alloc.into());
+            stg.push(rec.into());
             stg.push(
                 M3Rec::RegisterPrincipal {
                     prefix: next,

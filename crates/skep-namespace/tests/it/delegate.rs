@@ -505,9 +505,9 @@ fn delegate_refuses_a_wire_deep_prefix_structurally() {
 
     // A node-tier prefix of the same length is refused for its TIER, which the
     // pinned order puts first — depth bounds the principal registry alone.
-    let node_deep: Vec<u32> = std::iter::repeat_n(1u32, 50_000).collect();
+    let deep_node: Vec<u32> = std::iter::repeat_n(1u32, 50_000).collect();
     assert_eq!(
-        rejected(ns.delegate(ID1, t(&node_deep), ID2)),
+        rejected(ns.delegate(ID1, t(&deep_node), ID2)),
         DelegateError::NotAccountTier
     );
 

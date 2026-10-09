@@ -177,10 +177,10 @@ fn generator(anchor: Level, child: Level) -> Generator {
 /// key. Callers that hold a ≥ 2-component address by their own gate discharge
 /// the `None` case with an `expect` that names that gate.
 pub(crate) fn namespace_of(a: &Address) -> Option<NsKey> {
-    let par = parent(a)?;
-    let g = generator(par.level(), a.level());
+    let anchor = parent(a)?;
+    let g = generator(anchor.level(), a.level());
     Some(NsKey {
-        parent: Tumbler::from(par),
+        parent: Tumbler::from(anchor),
         g,
     })
 }

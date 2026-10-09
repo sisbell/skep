@@ -123,8 +123,8 @@ pub const SYSTEM_PRINCIPAL: PrincipalId = PrincipalId(9_000_000_000_000_000);
 /// let (addr, mut rec) = M3State::genesis()
 ///     .mint_document(&system_account(), true)
 ///     .expect("the system account mints");
-/// if let M3Rec::Allocate(minted) = &mut rec {
-///     assert_eq!(*minted.addr(), addr);
+/// if let M3Rec::Allocate(allocation) = &mut rec {
+///     assert_eq!(*allocation.addr(), addr);
 /// }
 /// ```
 /// ```compile_fail,E0616
@@ -132,8 +132,8 @@ pub const SYSTEM_PRINCIPAL: PrincipalId = PrincipalId(9_000_000_000_000_000);
 /// let (addr, mut rec) = M3State::genesis()
 ///     .mint_document(&system_account(), true)
 ///     .expect("the system account mints");
-/// if let M3Rec::Allocate(minted) = &mut rec {
-///     minted.addr = addr;
+/// if let M3Rec::Allocate(allocation) = &mut rec {
+///     allocation.addr = addr;
 /// }
 /// ```
 /// ```
@@ -141,11 +141,11 @@ pub const SYSTEM_PRINCIPAL: PrincipalId = PrincipalId(9_000_000_000_000_000);
 /// let (addr, minted) = M3State::genesis()
 ///     .mint_document(&system_account(), true)
 ///     .expect("the system account mints");
-/// let M3Rec::Allocate(payload) = minted else {
+/// let M3Rec::Allocate(allocation) = minted else {
 ///     unreachable!("a mint returns an Allocate")
 /// };
-/// let payload: Allocation = payload;
-/// let rec = M3Rec::Allocate(payload);
+/// let allocation: Allocation = allocation;
+/// let rec = M3Rec::Allocate(allocation);
 /// assert!(matches!(&rec, M3Rec::Allocate(allocation) if *allocation.addr() == addr));
 /// ```
 /// ```compile_fail,E0451
@@ -153,11 +153,11 @@ pub const SYSTEM_PRINCIPAL: PrincipalId = PrincipalId(9_000_000_000_000_000);
 /// let (addr, minted) = M3State::genesis()
 ///     .mint_document(&system_account(), true)
 ///     .expect("the system account mints");
-/// let M3Rec::Allocate(payload) = minted else {
+/// let M3Rec::Allocate(allocation) = minted else {
 ///     unreachable!("a mint returns an Allocate")
 /// };
-/// let payload: Allocation = Allocation { addr: addr.clone(), published: true };
-/// let rec = M3Rec::Allocate(payload);
+/// let allocation: Allocation = Allocation { addr: addr.clone(), published: true };
+/// let rec = M3Rec::Allocate(allocation);
 /// assert!(matches!(&rec, M3Rec::Allocate(allocation) if *allocation.addr() == addr));
 /// ```
 /// ```

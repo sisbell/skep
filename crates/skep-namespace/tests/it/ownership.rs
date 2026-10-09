@@ -410,19 +410,19 @@ fn the_principal_registry_answers_one_prefix_per_principal_in_both_directions() 
     // and a reported prefix could otherwise arrive through.
     let bytes = bincode::serialize(&m3).expect("serialize M3State");
     let restored: M3State = bincode::deserialize(&bytes).expect("deserialize M3State");
-    for state in [&m3, &restored] {
+    for s in [&m3, &restored] {
         for (id, prefix) in &seated {
-            assert_eq!(state.principal_prefix(*id), Some(prefix));
+            assert_eq!(s.principal_prefix(*id), Some(prefix));
             // …and ω at that very prefix names the principal back.
-            assert_eq!(state.effective_owner(prefix), Some(*id));
-            assert!(state.is_effective_owner(*id, prefix));
+            assert_eq!(s.effective_owner(prefix), Some(*id));
+            assert!(s.is_effective_owner(*id, prefix));
             // The seat ω names IS the seat the registry keys it by.
-            assert_eq!(state.effective_owner_prefix(prefix), Some(prefix));
+            assert_eq!(s.effective_owner_prefix(prefix), Some(prefix));
         }
         // An unknown id names no prefix, and no address answers it as ω.
-        assert!(state.principal_prefix(UNKNOWN_ID).is_none());
+        assert!(s.principal_prefix(UNKNOWN_ID).is_none());
         for (_, prefix) in &seated {
-            assert!(!state.is_effective_owner(UNKNOWN_ID, prefix));
+            assert!(!s.is_effective_owner(UNKNOWN_ID, prefix));
         }
     }
 }

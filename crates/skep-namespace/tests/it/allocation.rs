@@ -1,4 +1,4 @@
-//! §A frontier mints — the next address on each documented chain, the
+//! §A frontier mints — the next address each answers on its own chain, the
 //! caller's half of a mint, the allocator's laws, each mint's structural
 //! refusals and how a wrapping refusal reports its cause — and §C
 //! membership, which is exact chain membership.
@@ -14,7 +14,7 @@ use skep_namespace::{
 };
 
 #[test]
-fn pure_mints_answer_the_next_address_on_each_documented_chain() {
+fn pure_mints_answer_the_next_address_on_their_own_chains() {
     let (k, acct, doc) = kernel_with_account_and_doc();
     let snap = k.snapshot();
     let m3 = snap.world().m3();

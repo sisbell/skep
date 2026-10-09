@@ -7,10 +7,13 @@
 //! first served board, and dev boards regenerate): stated ONCE here, by
 //! encoding and not by member, so the signer (a client, the test signer) and
 //! the verifier (the daemon's check, a mirror beside the table) compose one
-//! preimage from one description. Values in, bytes out: this crate reads no
-//! world and holds no key (AUTH-2.1); what it fixes is how a value the caller
-//! already holds is spelled into the frame, and [`entry_frame`] spells EVERY
-//! member itself, so no caller spells one.
+//! preimage from one description. This module is private, so the public
+//! rustdoc shows none of this doc: the public items' cards restate the rows
+//! they write, so a row is changed here and on every card that restates it —
+//! by hand, since no test reads prose. Values in, bytes out: this crate reads
+//! no world and holds no key (AUTH-2.1); what it fixes is how a value the
+//! caller already holds is spelled into the frame, and [`entry_frame`] spells
+//! EVERY member itself, so no caller spells one.
 //!
 //! THE FRAME. `framed(ENTRY_TAG, [alg, board, account, doc, op, body])`
 //! (AUTH-1.12's framing: the tag, then each member — a FIELD, in AUTH-1.12's
@@ -30,9 +33,9 @@
 //!   (the token naming the body's GRAMMAR, which each body's [`EntryBody`]
 //!   carries beside it): the token's ASCII bytes as they stand. For the entry
 //!   grade the token is the op-kind token as the wire spells it, one per
-//!   publish-class op kind, each named beside its body in THE BODIES, below.
-//!   ONE EXCEPTION (the frame merge, fm-I): `record` names the RECORD grade's
-//!   body and no wire op — a record deposit rides an `insert` and a
+//!   publish-class op kind, each named beside its builder in THE BODIES,
+//!   below. ONE EXCEPTION (the frame merge, fm-I): `record` names the RECORD
+//!   grade's body and no wire op — a record deposit rides an `insert` and a
 //!   `make_link` on the wire, and its signature is the atom's own `sig`, made
 //!   over the frame this token selects.
 //! * THE ADDRESS ROW — `account` (at the ENTRY grade the act's principal's
@@ -116,82 +119,25 @@
 //! its body, so a body is never framed under another token. The ten
 //! publish-class op kinds each have a cell; `delete`, `copy` and `rearrange`
 //! have none, since the store refuses every one of them into a published
-//! document and the frame's domain holds no entry of those kinds:
+//! document and the frame's domain holds no entry of those kinds. Each body's
+//! grammar over the rows above is stated on its builder's card, which the
+//! public rustdoc shows; the `publish` body's is argued in full in its child
+//! module, beside its builder:
 //!
 //! * `create_new_document`, `fork`, `version` — [`entry_body_empty`], under
-//!   the op's own token: THE EMPTY BODY, the member PRESENT and empty —
-//!   `be32(0)` in the frame — so what is attested is that this principal
-//!   performed this kind of act on this board against this parent account
-//!   (`doc`, the account the minted document lands in: the request's at
-//!   `create_new_document`, the principal's own at `fork` and `version`),
-//!   and nothing else; two such acts by one principal sign identical bytes
-//!   (the design record §2.5's cell; D24's cells (1)–(3)). `version`'s
-//!   `d_src` enters no row.
-//! * `insert` — [`entry_body_insert`]: the DECLARED TYPE ADDRESS (the address
-//!   row, length-delimited; empty where the insert declares none) then the
-//!   values placed as a value sequence.
-//! * `make_link` — over a [`LinkSlots`]: the type slot, then the `from` slot,
-//!   then the `to` slot, each a slot row — the slots taken by name, so this
-//!   order is spelled here and nowhere else — then the `replaces` row, an
-//!   optional-address row: [`entry_body_make_link`] where the op carries no
-//!   `replaces` member, [`entry_body_make_link_replacing`] where it names one.
-//!   So a body with no `replaces` member is the three slots and an EMPTY
-//!   group, never the three slots alone.
+//!   each op's own token ([`ContentFreeOp`]);
+//! * `insert` — [`entry_body_insert`];
+//! * `make_link` — [`entry_body_make_link`], or
+//!   [`entry_body_make_link_replacing`] where the op names a `replaces`
+//!   member;
 //! * `emit`, `nullify`, `assert_sup` — [`entry_body_emit`],
-//!   [`entry_body_nullify`], [`entry_body_assert_sup`]: the `make_link`
-//!   body's four rows over the STORED link, under the op's own token — the
-//!   type slot, `from`, `to`, each a slot row, then the `replaces` row EMPTY
-//!   by kind, none of the three carrying the member (D24's cells (4)–(6)).
-//!   `nullify`'s rows are the retraction link M7 deposits, `(unit(home),
-//!   unit(target), retraction)` — the type the retraction class's one unit
-//!   span, fixed by kind; `assert_sup`'s `(unit(old), unit(new),
-//!   supersedes)`; `emit`'s `(unit(from), unit(each of to), ty)`, the type
-//!   the request's spans verbatim as M7 stores them, and `to` EMPTY at a
-//!   Unary class. The request shapes differ from `make_link`'s and the
-//!   frame never sees them: the rows are the stored link's, so a verifier
-//!   composes them from `read_link` alone.
-//! * `edit_link` — [`entry_body_edit_link`]: FIVE rows (D24's cell (7),
-//!   d24-6) — the successor as a `make_link` body, its type, `from` and `to`
-//!   slots AS STORED (the I-extents the V-specs resolve to; the type as
-//!   named, or resolved) and its `replaces` row EMPTY by kind, then THE
-//!   FIFTH ROW, the SUPERSESSION CLAIM's `from` slot as stored: `original`'s
-//!   one unit span. The supersession claim's `to` — the successor's address,
-//!   minted inside the transaction — and its type, the supersedes constant,
-//!   are NO rows. Its `doc` is the pair's row.
+//!   [`entry_body_nullify`], [`entry_body_assert_sup`];
+//! * `edit_link` — [`entry_body_edit_link`];
 //! * `publish` — [`entry_body_publish`], or piece by piece under a byte
-//!   budget by [`PublishBody`]: the count of positions placed, the shot's
-//!   runs as segments — each a value stretch or a window behind its class
-//!   byte — then the base group. Its grammar is stated beside its builder,
-//!   in the child module `publish`, the one module the builder's fields are
-//!   visible to.
-//! * `record` — [`entry_body_record`] over a [`RecordRows`]: THE RECORD
-//!   GRADE's body (the frame merge, fm-I, RULED 2026-09-29; its design record
-//!   §3), under the `record` token. A record deposit's `sig` rides the atom,
-//!   canonically last, and the marker slot stays EMPTY at both of its
-//!   commits; the entry frame over this body — what the design record called
-//!   "the record frame", [`RecordFrame`] — is the preimage that `sig` is made
-//!   over. The body's FIVE rows, taken by name as `make_link`'s slots are, in
-//!   this order: (1) the TYPE slot row — the link's type address as an
-//!   address-list row of one element; (2) the `to` slot row — the link's
-//!   target slot as an address-list row, EMPTY (`0x01 ‖ be64(0)`) at a
-//!   targetless kind — both rows standing under `0x01` (d24-4: a credential
-//!   deposit's slots are address-form, the write path refusing any other, and
-//!   store as the addresses named, so no `record` preimage moved with the
-//!   slot row's re-pin); (3) the `replaces` row, an optional-address row as
-//!   `make_link`'s is (l6-A1; EMPTY by kind at a credential deposit); (4) the
-//!   LINEAGE row, an optional-address row — the EMPTY group on a lineage that
-//!   has not forked, else the fork point's address (D2); (5) the BODY-BYTES
-//!   row — the sig-less canonical record bytes
-//!   ([`canonical_record`](crate::canonical_record) with no `sig`), one
-//!   length-delimited element. `from` — the atom the `sig` rides, whose
-//!   address does not exist when the `sig` is composed — is NO row, and the
-//!   subject needs none: it is the `to` slot at a credential deposit and the
-//!   frame's `account` at a registry deposit or a targetless kind. This crate
-//!   pins the grammar and, in [`RecordFrame`], the frame's two address
-//!   members: `account` the HOME's account and `doc` the home — a credential
-//!   record's own doc 1 (AUTH-2.127). Who signs and verifies over it, and
-//!   what a record carrying no `sig` is answered, is the record grade's (2a)
-//!   and the host's: the crate-level composition note says where skepd does.
+//!   budget by [`PublishBody`], in the child module `publish`, the one module
+//!   the builder's fields are visible to;
+//! * `record` — [`entry_body_record`] over a [`RecordRows`], framed by
+//!   [`RecordFrame`]: the record grade's body.
 //!
 //! Every length-delimited element is written by [`push_delimited`], the one
 //! function [`framed`] delimits its own fields with, and a spelling that
@@ -229,11 +175,7 @@ pub use publish::{entry_body_publish, PublishBody, PublishRefusal, ShotBase, Sho
 /// * `doc` — the [`DocTerm`]: one address as the address row, or an
 ///   `edit_link`'s two homes as the pair's row;
 /// * `op`, `body` — the [`EntryBody`]'s token and bytes, which its builder
-///   ([`entry_body_empty`], [`entry_body_insert`], [`entry_body_make_link`],
-///   [`entry_body_make_link_replacing`], [`entry_body_emit`],
-///   [`entry_body_nullify`], [`entry_body_assert_sup`],
-///   [`entry_body_edit_link`], [`entry_body_publish`], [`PublishBody`],
-///   [`entry_body_record`]) pairs.
+///   pairs ([`EntryBody`]'s card names every builder).
 ///
 /// PRECONDITION — as [`framed`]'s: every member is shorter than 2^32 bytes.
 /// A longer member PANICS, naming the obligation — a caller's bug and never
@@ -549,7 +491,9 @@ impl<'a> IntoIterator for EntrySlot<'a> {
 /// slices, or M7's own `&Endset`s, read off a stored link where they lie. A
 /// slot row needs the walk and nothing more, so a composer framing the link
 /// its transaction will deposit hands the store's slots over in place and
-/// copies no span into a slice to have it framed.
+/// copies no span into a slice to have it framed — and because each slot row
+/// is the stored link's and never the request's, a verifier composes it from
+/// `read_link` alone.
 ///
 /// Not `#[non_exhaustive]`: every caller builds one, and a link has exactly
 /// these three slots. The body's fourth row, the `replaces` member, is no
@@ -650,12 +594,14 @@ pub enum ContentFreeOp {
 /// THE EMPTY BODY, under `op`'s token: no bytes at all, the member PRESENT
 /// and empty — `be32(0)` where [`entry_frame`] frames it (the design record
 /// §2.5's cell; D24's cells (1)–(3), b2). A mint born published, a `fork`
-/// and a `version` sign it over their parent account: the signature attests
-/// that THIS principal performed THIS kind of act on THIS board against
-/// THIS parent, and nothing else — no content, and no minted address, a
-/// daemon fact the frame cannot carry. So two such acts by one principal on
-/// one board sign identical bytes, which is the ruled residue ("2 keep
-/// signed"), and `version`'s `d_src` enters no row.
+/// and a `version` sign it over their PARENT ACCOUNT, the frame's `doc` —
+/// the request's `account` at `create_new_document`, the principal's own at
+/// `fork` and `version`: the signature attests that THIS principal performed
+/// THIS kind of act on THIS board against THIS parent, and nothing else — no
+/// content, and no minted address, a daemon fact the frame cannot carry. So
+/// two such acts by one principal on one board sign identical bytes, which is
+/// the ruled residue ("2 keep signed"), and `version`'s `d_src` enters no
+/// row.
 pub fn entry_body_empty(op: ContentFreeOp) -> EntryBody {
     EntryBody { grammar: Grammar::ContentFree(op), bytes: Vec::new() }
 }
@@ -687,7 +633,8 @@ pub fn entry_body_insert<'a>(
 /// slot — the body's order, whatever order the caller names them in — each
 /// AS STORED, a slot row: the form byte `0x03`, `be64(n)`, then each span's
 /// start and width, each in its dotted-decimal spelling and
-/// length-delimited; then the `replaces` row EMPTY, `be32(0)`.
+/// length-delimited; then the `replaces` row EMPTY, `be32(0)` — present and
+/// empty, so the body is never the three slots alone.
 ///
 /// PRECONDITION — every tumbler's spelling (a span's start or width) is
 /// shorter than 2^32 bytes, as [`entry_body_insert`]'s values are; a longer
@@ -716,32 +663,33 @@ pub fn entry_body_make_link_replacing<'s>(
 }
 
 /// THE `emit` BODY, under the `emit` token: the `make_link` body's four rows
-/// over the tuple M7 deposits — the type slot the request's spans VERBATIM,
-/// as M7 stores `ty` for e₃; `from` the one address's unit span; `to` one
-/// unit span per address, EMPTY (`0x03 ‖ be64(0)`) at a Unary class — and
-/// the `replaces` row EMPTY by kind: an `emit` carries no member, and one
-/// typed the `replaces` class is refused. PRECONDITION as
-/// [`entry_body_make_link`]'s.
+/// over the tuple M7 deposits (D24's cells (4)–(6), with `nullify`'s and
+/// `assert_sup`'s) — the type slot the request's spans VERBATIM, as M7 stores
+/// `ty` for e₃; `from` the one address's unit span; `to` one unit span per
+/// address, EMPTY (`0x03 ‖ be64(0)`) at a Unary class — and the `replaces`
+/// row EMPTY by kind: an `emit` carries no member, and one typed the
+/// `replaces` class is refused. PRECONDITION as [`entry_body_make_link`]'s.
 pub fn entry_body_emit<'s>(slots: LinkSlots<impl IntoIterator<Item = &'s Span>>) -> EntryBody {
     link_write_body(Grammar::Emit, slots, None)
 }
 
 /// THE `nullify` BODY, under the `nullify` token: the `make_link` body's four
-/// rows over the retraction link M7 deposits, `(unit(home), unit(target),
-/// retraction)` — the type slot the retraction class's one unit span, a
-/// constant fixed by kind; `from` the home's unit span, the frame's own `doc`
-/// again, kept so the body IS the stored link; `to` the nullified link's unit
-/// span — and the `replaces` row EMPTY by kind. PRECONDITION as
-/// [`entry_body_make_link`]'s.
+/// rows over the retraction link M7 deposits (D24's cells (4)–(6), with
+/// `emit`'s and `assert_sup`'s), `(unit(home), unit(target), retraction)` —
+/// the type slot the retraction class's one unit span, a constant fixed by
+/// kind; `from` the home's unit span, the frame's own `doc` again, kept so the
+/// body IS the stored link; `to` the nullified link's unit span — and the
+/// `replaces` row EMPTY by kind. PRECONDITION as [`entry_body_make_link`]'s.
 pub fn entry_body_nullify<'s>(slots: LinkSlots<impl IntoIterator<Item = &'s Span>>) -> EntryBody {
     link_write_body(Grammar::Nullify, slots, None)
 }
 
 /// THE `assert_sup` BODY, under the `assert_sup` token: the `make_link`
-/// body's four rows over the supersession claim M7 deposits, `(unit(old),
-/// unit(new), supersedes)` — the type slot the supersedes class's one unit
-/// span, fixed by kind; `from` the superseded link's unit span; `to` its
-/// successor's — and the `replaces` row EMPTY by kind. PRECONDITION as
+/// body's four rows over the supersession claim M7 deposits (D24's cells
+/// (4)–(6), with `emit`'s and `nullify`'s), `(unit(old), unit(new),
+/// supersedes)` — the type slot the supersedes class's one unit span, fixed
+/// by kind; `from` the superseded link's unit span; `to` its successor's —
+/// and the `replaces` row EMPTY by kind. PRECONDITION as
 /// [`entry_body_make_link`]'s.
 pub fn entry_body_assert_sup<'s>(
     slots: LinkSlots<impl IntoIterator<Item = &'s Span>>,
@@ -824,15 +772,19 @@ pub struct RecordRows<'a> {
     pub sigless_canonical_record: &'a [u8],
 }
 
-/// THE `record` BODY, under the `record` token — the record grade's preimage
+/// THE `record` BODY, under the `record` token — the body of the record
+/// grade's frame, [`RecordFrame`], the preimage a record's `sig` is made over
 /// (the frame merge, fm-I; its design record §3): the [`RecordRows`] in the
 /// body's order — the TYPE slot row and the `to` slot row, each an
 /// ADDRESS-LIST row (the `to` row EMPTY, `0x01 ‖ be64(0)`, at a targetless
 /// kind; both under `0x01`, d24-4), the `replaces` row and the LINEAGE row
 /// (each an optional-address row: the EMPTY group where nothing is named,
 /// else the address as an address-list row of one element, delimited), then
-/// the sig-less canonical record as one length-delimited element. `from` is
-/// no row.
+/// the sig-less canonical record as one length-delimited element. `from` —
+/// the atom the `sig` rides, whose address does not exist when the `sig` is
+/// composed — is NO row, and the subject needs none: it is the `to` slot at a
+/// credential deposit and the frame's `account` at a registry deposit or a
+/// targetless kind.
 ///
 /// PRECONDITION — every address's spelling, and the sig-less canonical
 /// record, is shorter than 2^32 bytes, and so is each optional row's group:
@@ -859,6 +811,13 @@ pub fn entry_body_record(rows: RecordRows<'_>) -> EntryBody {
 /// row. The two are addresses of one type, so a frame with them traded
 /// compiles, signs and never verifies: by field, as [`RecordRows`] takes the
 /// body's rows, the call site says which is which.
+///
+/// A record deposit's `sig` rides its atom, canonically last, and the
+/// deposit's marker slot stays EMPTY at both of its commits (D27): this
+/// frame, under the signing key's token, is the whole of what that `sig`
+/// covers. Who signs and verifies over it, and what a record carrying no
+/// `sig` is answered, are the design record's (2a) — the record grade's
+/// writer, verifier and refusal — and the host's.
 ///
 /// Every party to a record composes this one value — the signer before its
 /// deposit, the daemon at the record's `make_link`, a mirror off `find_links`

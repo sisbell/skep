@@ -37,29 +37,24 @@
 //!   (AUTH-2.85).
 //! * `skepd` reads the slice off whichever World snapshot it holds, through
 //!   [`HasIdentity`], and guards the write path from its session layer
-//!   (`auth`; the workspace's `ARCHITECTURE.md`, §The daemon): it builds the
-//!   precheck's [`LinkDeposit`] (the engine's hook folds that same deposit at
-//!   the commit), hosts `deposits_credential_link` over the engine's
-//!   `IDENTITY_TYPES`, holds the [`WriteTypes`] input, derives its
-//!   enforcement mode from [`IdentityState::claimant`], composes the frames
-//!   it verifies — a session handshake's under [`framed`], the entry grade's
-//!   through [`entry_frame`] and the record grade's through [`RecordFrame`] —
-//!   reads a `sig` that names no row, a session body's or a record's, as a
-//!   [`HybridBlob`], and lifts a request's `attest.alg` to its marker tag and
-//!   back through [`SigAlgRow`].
+//!   (`auth`; the workspace's `ARCHITECTURE.md`, §The daemon): it prechecks
+//!   each credential deposit through the fold the engine's hook applies to
+//!   the same deposit at the commit, classifies a `nullify`'s target link,
+//!   derives its enforcement mode from the board's claim, and composes every
+//!   preimage it verifies — a session handshake's, and both signed-ops
+//!   grades' — with each signature and marker tag read against this crate's
+//!   tables.
 //! * `skep-signature`, the one crate that links the signature libraries
-//!   (AUTH-2.2), holds each marker tag's arithmetic over [`SIG_ALGS`]' rows
-//!   and a key's two halves — composing them at keygen
-//!   ([`PublicKey::from_halves`]) and reading them to verify
-//!   ([`PublicKey::pq_half`], [`PublicKey::ed25519_half`]); skepd, the
-//!   signing client and the resolver call its verify.
+//!   (AUTH-2.2), holds each marker tag's arithmetic over the marker-tag
+//!   table's rows and a hybrid key's two halves, composing a key at keygen
+//!   and reading its halves to verify; skepd, the signing client and the
+//!   resolver call its verify.
 //! * `skep-client`, the SIGNING CLIENT, holds keys, spells credential records
 //!   and composes the frames it signs; its reader's verifier composes the
-//!   same frames back and reads each record's `sig` as a [`HybridBlob`].
+//!   same frames back and checks each record's `sig` over them.
 //! * `skep-resolve`, the registry resolver, reads the key set that opens an
-//!   account as of a record's LOG position, finds an account's doc 1 through
-//!   [`doc_1_of`], and verifies each registry record's `sig` ([`HybridBlob`])
-//!   over its frame ([`RecordFrame`]).
+//!   account as of a record's LOG position, finds an account's doc 1, and
+//!   checks each registry record's `sig` over its frame.
 //! * `skep-cli`, the `skep` command, names keys by their fingerprints and
 //!   spells the enrollment records its key commands print.
 //! * From their suites only: `skep-mcp`, to build records and sign session

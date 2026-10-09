@@ -195,14 +195,13 @@ fn every_registered_document_is_owned_at_its_own_account() {
     // `pfx(ω(d)) ≼ acct(d)`; M3 makes it equality because every document is
     // minted under a registered account (P8; a version under a registered
     // document) and every registered account holds its own seat (`delegate`).
-    // Readers take this answer as the document's owner account (the engine's
-    // exception set, PUB-7.5; the doc-metadata read, PUB-8.12), so it is
-    // walked over EVERY document `documents` enumerates — on a fold-produced
-    // slice, every registered document: genesis's two under the system
-    // account, and under one account a document, a fork, a version and a
-    // version of that version, beside a document under the account's
-    // sub-account — the one shape where an ancestor account's seat covers the
-    // document too.
+    // That account is the document's OWNER ACCOUNT (PUB-7.5, PUB-8.12), which
+    // `account_seat` reads by one lookup, so ω and that read are both walked
+    // over EVERY document `documents` enumerates — on a fold-produced slice,
+    // every registered document: genesis's two under the system account, and
+    // under one account a document, a fork, a version and a version of that
+    // version, beside a document under the account's sub-account — the one
+    // shape where an ancestor account's seat covers the document too.
     let (k, _acct, doc) = kernel_with_account_and_doc();
     let ns = Namespace::new(&k);
     let (sub_acct, _) = ns
@@ -235,6 +234,12 @@ fn every_registered_document_is_owned_at_its_own_account() {
             same_account(owner, d),
             "{d:?} is owned at {owner:?}, not at its own account"
         );
+        // …and the owner-account read answers that same seat, by one lookup.
+        assert_eq!(
+            m3.account_seat(d).map(|(seat, _)| seat),
+            Some(owner),
+            "{d:?}: the owner-account read disagrees with ω"
+        );
         walked.push(d.clone());
     }
     // The walk reached every shape built above; genesis's two are the seed's,
@@ -249,19 +254,19 @@ fn the_account_seat_is_omega_by_one_lookup_and_never_climbs() {
     // §5: `account_seat` is ω by ONE point lookup wherever the probe's own
     // account holds a seat — on every state M3's ops produce, every registered
     // document and every registered account — and `None` wherever ω climbs
-    // past that account. It is how a registered document's OWNER ACCOUNT is
-    // read once per entry of a walk over the store (the engine's draft memo
-    // and grant admission, rebuilt at every load and every historical
-    // reconstruction), so agreement is checked over every document, every
-    // seat, and every seated account's doc-1 slot — the first address past
-    // that seat in key order — with Π grown past one 64-key B-tree leaf, so
-    // the lookup descends through an internal node and some seat is that
-    // node's separator key: the shape a neighbour search that ignores the
-    // separator answers wrongly. The two shapes where ω climbs — to an
-    // ancestor ACCOUNT, which a tier check on ω's answer passes, and to the
-    // NODE — are built through the fold, the only way to reach a registered
-    // document whose own account holds no seat. The cost is pinned in heap
-    // bytes: a copy of the account and nothing past it.
+    // past that account. It is THE read of a registered document's OWNER
+    // ACCOUNT, per request or once per entry of a walk over the store (the
+    // engine's draft memo and grant admission, rebuilt at every load and
+    // every historical reconstruction), so agreement is checked over every
+    // document, every seat, and every seated account's doc-1 slot — the
+    // first address past that seat in key order — with Π grown past one
+    // 64-key B-tree leaf, so the lookup descends through an internal node and
+    // some seat is that node's separator key: the shape a neighbour search
+    // that ignores the separator answers wrongly. The two shapes where ω
+    // climbs — to an ancestor ACCOUNT, which a tier check on ω's answer
+    // passes, and to the NODE — are built through the fold, the only way to
+    // reach a registered document whose own account holds no seat. The cost
+    // is pinned in heap bytes: a copy of the account and nothing past it.
     let (k, acct, doc) = kernel_with_account_and_doc();
     let ns = Namespace::new(&k);
     // Seventy sub-accounts, each seated for its own principal: with genesis's

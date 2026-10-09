@@ -52,8 +52,9 @@ pub struct Namespace<'k, W: WorldState> {
     /// arm at the one transaction each opens, filling THAT commit marker's
     /// signature slot; `None` — the plain handle every other constructor
     /// site builds — leaves the slot empty. A BORROW, so the handle stays
-    /// `Copy` and the value cannot outlive the caller that owns it for the
-    /// one call this handle serves. `delegate` and `register_node` lie
+    /// `Copy` and the value cannot outlive the caller that owns it; that an
+    /// attested handle serves ONE call is its producer's obligation, which
+    /// [`Namespace::attested`] states. `delegate` and `register_node` lie
     /// outside the checked set and take the plain arm whatever this field
     /// holds.
     attest: Option<&'k Attestation>,
@@ -72,32 +73,49 @@ impl<'k, W: WorldState> Namespace<'k, W> {
     /// under `attest`. Its callers are the slot's producer set — M10's
     /// dispatch, with a value the daemon's check admitted — and nothing
     /// else; `None` is [`Namespace::new`].
+    ///
+    /// ONE CALL PER ATTESTED HANDLE is the PRODUCER's obligation, and the type
+    /// does not hold it. An attestation signs ONE act — this principal, this
+    /// kind of mint, against this parent account, over an empty body and no
+    /// minted address — while every `create_new_document` and `fork` the
+    /// handle makes, or a copy of it makes, the handle being `Copy`, commits
+    /// under the one value it carries. A second mint by another principal, of
+    /// the other kind or into another account carries a signature over a
+    /// frame not its own, which no verifier of that entry can verify; a second
+    /// mint that matches all three frames the same bytes, so it commits an act
+    /// its principal never sent under a signature that verifies. M10's
+    /// `dispatch_write` builds one handle per call, for the one mint the
+    /// daemon's check admitted the value for.
     pub fn attested(kernel: &'k Kernel<W>, attest: Option<&'k Attestation>) -> Namespace<'k, W> {
         Namespace { kernel, attest }
     }
 }
 
-/// The handle renders as what it drives: the kernel it borrows, whose own
-/// `Debug` reports the coordinate, the poison flag and the configuration,
-/// lock-free, and nothing of the world — never the attestation it may
-/// carry, a blob as wide as M2's `MAX_SIG_BYTES` that is no thing to print
-/// into a diagnostic. Written out because a derive would also bound the impl
-/// on `W: Debug`, which no `WorldState` owes.
+/// The handle renders as what it drives and how: the kernel it borrows,
+/// whose own `Debug` reports the coordinate, the poison flag and the
+/// configuration, lock-free, and nothing of the world; and whether it carries
+/// an attestation — the one fact about the handle that changes what its two
+/// document mints commit, as M5's `Vstream` prints its own — but never the
+/// attestation's bytes, a blob as wide as M2's `MAX_SIG_BYTES` that is no
+/// thing to print into a diagnostic. Written out because a derive would also
+/// bound the impl on `W: Debug`, which no `WorldState` owes.
 impl<W: WorldState> fmt::Debug for Namespace<'_, W> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Namespace")
             .field("kernel", self.kernel)
+            .field("attested", &self.attest.is_some())
             .finish()
     }
 }
 
 /// Two borrows — the kernel and, on an attested handle, the attestation — so
-/// a copy of the handle is a copy of two references and drives the same
-/// kernel. Written out, as `Debug` is: the derives would bound the impls on
-/// `W: Clone` / `W: Copy`, and no `WorldState` is `Copy` — the choice M5's
-/// `Vstream` and M6's `Query` make for the same reason. `Copy` holds because
-/// the handle is those borrows and nothing else; a field of its own would
-/// end it.
+/// a copy of the handle is a copy of two references: it drives the same
+/// kernel and, attested, commits under the same attestation, so a copy is no
+/// handle for a second call ([`Namespace::attested`]). Written out, as
+/// `Debug` is: the derives would bound the impls on `W: Clone` / `W: Copy`,
+/// and no `WorldState` is `Copy` — the choice M5's `Vstream` and M6's `Query`
+/// make for the same reason. `Copy` holds because the handle is those borrows
+/// and nothing else; a field of its own would end it.
 impl<W: WorldState> Clone for Namespace<'_, W> {
     fn clone(&self) -> Self {
         *self

@@ -73,14 +73,14 @@
 //!   the owner it names ([`M3State::effective_owner`] for the id,
 //!   [`M3State::effective_owner_prefix`] for the address it is seated at,
 //!   [`M3State::effective_owner_pair`] for the whole entry, AUTH-6.37) and
-//!   [`M3State::account_seat`], that entry by one lookup wherever the
-//!   address's own account holds it \[ASN-0042 O1–O9\], id→prefix
-//!   resolution, the four chain-end reads — the next-form peek
-//!   [`M3State::next_account_prefix`], the content chain's frontier
-//!   [`M3State::next_content_address`] (the content-frontier read's answer,
-//!   AUTH-6.38), the version chain's latest member
-//!   [`M3State::latest_version`], and the emptiness of an account's document
-//!   chain [`M3State::has_documents`] — and the publication read
+//!   [`M3State::account_seat`], the owner of a registered document or
+//!   account, that entry by one lookup at its own account
+//!   \[ASN-0042 O1–O9\], id→prefix resolution, the four chain-end reads —
+//!   the next-form peek [`M3State::next_account_prefix`], the content
+//!   chain's frontier [`M3State::next_content_address`] (the
+//!   content-frontier read's answer, AUTH-6.38), the version chain's latest
+//!   member [`M3State::latest_version`], and the emptiness of an account's
+//!   document chain [`M3State::has_documents`] — and the publication read
 //!   [`M3State::published`] and its enumeration
 //!   [`M3State::documents`] — the engine's ONE definition of a document's
 //!   publication state, the bit its own allocation record journaled

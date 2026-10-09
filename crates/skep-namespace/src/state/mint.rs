@@ -312,18 +312,21 @@ impl M3State {
     }
 
     /// Peek the content chain's FRONTIER under `home` — the next content
-    /// address [`M3State::mint_content`]`(home)` would issue, whose ordinal is
-    /// the document's mint count plus one (AUTH-6.38, "the home's mint
-    /// frontier at N"): the content-frontier read's answer, the fourth
-    /// chain-end read beside [`M3State::next_account_prefix`] and of its
-    /// shape — the mint without its record, so the value a reader peeks and
-    /// the value the next mint issues come off one chain by one code path.
+    /// address [`M3State::mint_content`]`(home)` would issue (AUTH-6.38, "the
+    /// home's mint frontier at N"): the content-frontier read's answer, the
+    /// fourth chain-end read beside [`M3State::next_account_prefix`] and of
+    /// its shape — the mint without its record, so the value a reader peeks
+    /// and the value the next mint issues come off one chain by one code path.
     /// Pure frontier read off any snapshot; `None` where `home` is not a
     /// REGISTERED document (E is append-only, so a `Some` never regresses to
     /// `None`), which is [`MintError::HomeNotRegistered`]'s one cause read as
-    /// an absence. The ordinal only grows: every value `home` ever minted —
-    /// arranged, deleted, or never placed — lies below it, so the read says
-    /// how many values the document minted and nothing of what they hold.
+    /// an absence. The ordinal only grows, and every value `home` ever minted
+    /// — arranged, deleted, or never placed — lies below it, so the read says
+    /// nothing of what they hold. It is the document's mint count plus one on
+    /// every document but one: [`crate::ghost_home_document`]'s chain opens
+    /// past the ghost region, so there the ordinal is the mint count plus
+    /// [`crate::GHOST_POSITIONS`] + 1, and the read counts that document's
+    /// mints only once the floor is taken off.
     pub fn next_content_address(&self, home: &Address) -> Option<Address> {
         self.mint_content(home).ok().map(|(addr, _)| addr)
     }

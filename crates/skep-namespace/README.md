@@ -23,10 +23,12 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
   peek — the mint without its record — for a reader: the account
   chain's next delegable prefix, and the content chain's next
   address, whose ordinal is a document's mint count plus one (the
-  content-frontier read's answer). The five reserved type addresses (the ghost
-  tumblers — content addresses 1–5 of doc 1 of the system account
-  `1.1.0.1`, which genesis seeds) are never issued at all: their
-  chain's frontier is floored past them as compiled format.
+  content-frontier read's answer). The five reserved type addresses
+  (the ghost tumblers — content addresses 1–5 of doc 1 of the system
+  account `1.1.0.1`, which genesis seeds) are never issued at all:
+  their chain's frontier is floored past them as compiled format, so
+  on that one document the content frontier is its mint count plus
+  six.
 - **Allocation and entity reads** — is-this-allocated over every
   chain, M3's own allocation oracle, and node/account/document
   classification over the entity registry, the registration check

@@ -1135,10 +1135,9 @@ Rules that hold across its files:
   that allocates an account: it stages the account's `M3Rec::Allocate` and
   its principal's `M3Rec::RegisterPrincipal` in one transaction, and genesis
   folds its one account the same way. So a registered account is owned at
-  exactly its own prefix, and so is every document in it — the owner
-  account `skep-engine` reads by one lookup (`M3State::account_seat`) and
-  `skep-febe` and `skepd` read off ω. A second path that allocates an
-  account owes the same seat.
+  exactly its own prefix, and so is every document in it — its owner
+  account, which `M3State::account_seat` reads by one lookup. A second path
+  that allocates an account owes the same seat.
 - **A namespace has one spelling.** `NsKey`'s fields are private to
   `src/ns.rs`, so every frontier key, and every chain lock key encoded from
   one, is built there. The two registry keys are M3's own, crate-private.

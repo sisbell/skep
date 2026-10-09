@@ -1,19 +1,21 @@
 //! §B the `Namespace` handle, across its four ops: what the type's own doc
 //! and impls promise rather than any one op's — the transaction each op
 //! opens, the refusals it decides before opening it and those it decides
-//! inside, and the nested call its caller must never make — and the handle
-//! itself, borrows and nothing else, which copies as they do and prints as
-//! the kernel it borrows.
+//! inside, the nested call its caller must never make, and which of those
+//! transactions an attestation it carries signs — and the handle itself,
+//! borrows and nothing else, which copies as they do and prints as the
+//! kernel it borrows and the arm it commits under.
 
 use std::panic::{catch_unwind, AssertUnwindSafe};
 
 use crate::common::*;
 
-use skep_kernel::Kernel;
+use skep_kernel::{Attestation, Kernel};
 use skep_namespace::{
     CreateDocumentError, DelegateError, M3Rec, M3State, MintError, Namespace, PrincipalId,
     RegisterNodeError, BOOTSTRAP_PRINCIPAL, MAX_NODE_COMPONENTS, MAX_PRINCIPAL_COMPONENTS,
 };
+use tempfile::tempdir;
 
 #[test]
 fn pre_work_rejections_open_no_transaction() {
@@ -308,10 +310,10 @@ fn a_fork_past_its_unknown_id_opens_a_transaction_of_its_own() {
 
 /// The handle is borrows and nothing else — the plain one built here borrows
 /// the kernel alone — so it copies as a reference does, and it prints as the
-/// kernel it borrows: the kernel's own rendering, nothing of the world. The
-/// world here is not `Debug`, which is the case a derived impl could not
-/// serve. A copy drives the same kernel: a node admitted through it is no
-/// longer fresh to the original.
+/// kernel it borrows and its arm, plain here: the kernel's own rendering,
+/// nothing of the world. The world here is not `Debug`, which is the case a
+/// derived impl could not serve. A copy drives the same kernel: a node
+/// admitted through it is no longer fresh to the original.
 #[test]
 fn the_handle_is_a_kernel_borrow_that_copies_and_prints() {
     let k = mem_kernel(genesis_world());
@@ -319,7 +321,7 @@ fn the_handle_is_a_kernel_borrow_that_copies_and_prints() {
     let copy = ns;
     assert_eq!(
         format!("{copy:?}"),
-        format!("Namespace {{ kernel: {k:?} }}")
+        format!("Namespace {{ kernel: {k:?}, attested: false }}")
     );
     copy.register_node(t(&[1, 7]))
         .expect("admitted through the copy");
@@ -327,4 +329,57 @@ fn the_handle_is_a_kernel_borrow_that_copies_and_prints() {
         rejected(ns.register_node(t(&[1, 7]))),
         RegisterNodeError::NotFresh
     );
+}
+
+/// THE ATTESTED ARM (signed ops): which of M3's transactions an attestation
+/// fills is M3's alone, stated on the handle's `attest` field — M10's
+/// dispatch holds no copy of it — so this suite is the one place M3's half is
+/// observed. An attested handle's `create_new_document` and `fork` commit
+/// under the value it carries; its `delegate` and `register_node`, outside
+/// the checked set, leave their slots empty whatever it carries; a plain
+/// handle's mint leaves its slot empty too; and the handle prints the arm it
+/// commits under, never the value. Over a journaled kernel, since an
+/// in-memory one keeps no marker. One attested handle serves four calls here
+/// to pin what the type does; a producer builds one per call
+/// (`Namespace::attested`'s obligation).
+#[test]
+fn an_attested_handle_signs_its_two_document_mints_alone() {
+    let dir = tempdir().expect("tempdir");
+    let k = Kernel::open(fsync_config(dir.path()), genesis_world()).expect("open");
+    let attestation =
+        Attestation::new(1, vec![0xA5; 64]).expect("a non-zero tag over a non-empty blob");
+    let signed = Namespace::attested(&k, Some(&attestation));
+    assert_eq!(
+        format!("{signed:?}"),
+        format!("Namespace {{ kernel: {k:?}, attested: true }}")
+    );
+
+    let (acct, delegated) = signed
+        .delegate(BOOTSTRAP_PRINCIPAL, t(&[1, 0, 1]), ID1)
+        .expect("the delegation commits");
+    let (_, admitted) = signed
+        .register_node(t(&[1, 7]))
+        .expect("the admission commits");
+    let (_, created) = signed
+        .create_new_document(ID1, &acct, None)
+        .expect("the create commits");
+    let (_, forked) = signed.fork(ID1, None).expect("the fork commits");
+    let (_, plain) = Namespace::new(&k)
+        .create_new_document(ID1, &acct, None)
+        .expect("a plain handle's create commits");
+
+    for (at, commit, slot) in [
+        (delegated, "delegate", None),
+        (admitted, "register_node", None),
+        (created, "create_new_document", Some(attestation.clone())),
+        (forked, "fork", Some(attestation.clone())),
+        (plain, "a plain handle's create_new_document", None),
+    ] {
+        assert_eq!(
+            k.attestation_at(at)
+                .expect("a journaled kernel reads its own markers"),
+            slot,
+            "{commit}: its marker's signature slot"
+        );
+    }
 }

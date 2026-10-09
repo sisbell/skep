@@ -63,6 +63,14 @@ fn the_content_chain_of_the_ghost_home_document_never_issues_a_ghost_tumbler() {
                 "ghost {ordinal} allocated at genesis"
             );
         }
+        // The content-frontier read says the same of the empty chain: its next
+        // address is past the region, so on this one document the frontier is
+        // the mint count, zero, plus GHOST_POSITIONS + 1.
+        assert_eq!(
+            m3.next_content_address(&d1),
+            Some(a(&[1, 1, 0, 1, 0, 1, 0, 1, GHOST_POSITIONS + 1])),
+            "the ghost home document's content frontier starts past the region"
+        );
     }
 
     // Drive the one namespace whose chain contains the five ghost tumblers:
@@ -90,6 +98,12 @@ fn the_content_chain_of_the_ghost_home_document_never_issues_a_ghost_tumbler() {
         );
     }
     assert!(m3.is_allocated(&a(&[1, 1, 0, 1, 0, 1, 0, 1, GHOST_POSITIONS + 1])));
+    // …and the content-frontier read is the mint count, seven, plus
+    // GHOST_POSITIONS + 1.
+    assert_eq!(
+        m3.next_content_address(&d1),
+        Some(a(&[1, 1, 0, 1, 0, 1, 0, 1, GHOST_POSITIONS + 8]))
+    );
 
     // The sibling chains under the same lineage produce their own members,
     // never a ghost tumbler — the T4b unique-parse half of the argument, at
@@ -110,6 +124,11 @@ fn the_content_chain_of_the_ghost_home_document_never_issues_a_ghost_tumbler() {
         .create_new_document(SYSTEM_PRINCIPAL, &system_account(), None)
         .expect("doc 3");
     assert_eq!(d3, a(&[1, 1, 0, 1, 0, 3]));
+    // Its content-frontier read is the ordinary one: the mint count plus one.
+    assert_eq!(
+        k.snapshot().world().m3().next_content_address(&d3),
+        Some(a(&[1, 1, 0, 1, 0, 3, 0, 1, 1]))
+    );
     let first = commit_mint(&k, M3State::content_lock_key(&d3), |m3| {
         m3.mint_content(&d3)
     });

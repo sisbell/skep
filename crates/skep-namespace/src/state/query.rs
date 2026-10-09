@@ -330,7 +330,9 @@ impl M3State {
     /// and |Π| is a number any account holder can raise (`omega` says how);
     /// the bound is per CALL, so one ω per entry of a walk pays the product. A
     /// seat below the account tier — representable only off a corrupted
-    /// checkpoint — is never the answer (O1a).
+    /// checkpoint — is never the answer (O1a). Who owns a registered document
+    /// or account is [`M3State::account_seat`]'s question: the same seat by
+    /// one lookup.
     ///
     /// For WHETHER a given id owns `a` — the authorization question — ask
     /// [`M3State::is_effective_owner`], which settles it without naming the
@@ -356,20 +358,16 @@ impl M3State {
     /// `pfx(ω(a)) ≼ acct(a)` — and its own worked example owns a document
     /// element from ABOVE its account, under a sub-account baptized with no
     /// principal of its own (ASN-0042's "organizational namespace"). M3 makes
-    /// the containment an EQUALITY wherever `acct(a)` is a registered account,
-    /// on any state its own ops produce, because M3 allocates no account
-    /// without its seat — an account's seat is its allocation
-    /// ([`crate::Namespace::delegate`]). Every registered document, a version
-    /// included, is such an address: [`M3State::mint_document`] mints only
-    /// under a registered account (P8) and [`M3State::mint_version`] only
-    /// under a registered document. So for a registered document this
-    /// answers the account it lies in — never `None`, never the node above
-    /// it, never an ancestor account — and that is what readers take as the
-    /// document's OWNER ACCOUNT: the doc-metadata read (PUB-8.12), and the
-    /// engine's exception set, which memoizes it per draft (PUB-7.5). A
-    /// reader that asks it once per entry of a walk over the store asks
-    /// [`M3State::account_seat`] instead, which answers the same seat by one
-    /// lookup — as the exception set does.
+    /// the containment an EQUALITY for every registered document, on any
+    /// state its own ops produce: the document's own account holds a seat
+    /// ([`M3State::account_seat`] states why), and no node- or account-tier
+    /// prefix of the document is longer than its account. So for a registered
+    /// document this answers the account it lies in — never `None`, never the
+    /// node above it, never an ancestor account. That account is the
+    /// document's OWNER ACCOUNT, and [`M3State::account_seat`] is its read:
+    /// the same seat by one lookup, answering `None` rather than an ancestor
+    /// where the account holds no seat. Ask ω for the covering owner of an
+    /// arbitrary address.
     pub fn effective_owner_prefix(&self, a: &Address) -> Option<&Address> {
         self.omega(a).map(|(prefix, _)| prefix)
     }
@@ -394,36 +392,45 @@ impl M3State {
     /// seated AT that prefix. For an account the test is sound because its
     /// seat is its allocation ([`crate::Namespace::delegate`]); at every other
     /// tier it is no allocation test, since a node `register_node` admitted
-    /// and every minted document are seated nowhere — a registered document
-    /// answers its own account's seat ([`M3State::effective_owner_prefix`]).
+    /// and every minted document are seated nowhere. A caller holding a
+    /// registered document or account and asking who owns it asks
+    /// [`M3State::account_seat`] instead: the same pair by one lookup, where
+    /// this walks Π.
     pub fn effective_owner_pair(&self, a: &Address) -> Option<(&Address, PrincipalId)> {
         self.omega(a)
     }
 
-    /// The seat at `a`'s own ACCOUNT, `acct(a)` — the prefix of `a` through
-    /// its user field, `N·0·U` — and the principal seated there, found by ONE
-    /// point lookup in Π: `None` when no principal is seated exactly there,
-    /// and for a node address, which has no account. Never a walk: the work is
-    /// one copy of `acct(a)` — none of the document or element fields past it
-    /// — and O(log |Π|) comparisons, where every ω reader pays Θ(|Π|).
+    /// THE OWNER of a registered document or account: the seat at `a`'s own
+    /// ACCOUNT, `acct(a)` — the prefix of `a` through its user field,
+    /// `N·0·U` — and the principal seated there, found by ONE point lookup in
+    /// Π. `None` when no principal is seated exactly there, and for a node
+    /// address, which has no account. Never a walk: the work is one copy of
+    /// `acct(a)` — none of the document or element fields past it — and
+    /// O(log |Π|) comparisons, where every ω reader pays Θ(|Π|).
+    ///
+    /// It answers for EVERY registered document and every registered account,
+    /// on every state M3's own ops produce, because M3 allocates no account
+    /// without its seat — an account's seat is its allocation
+    /// ([`crate::Namespace::delegate`]) — and every registered document, a
+    /// version included, lies in a registered account:
+    /// [`M3State::mint_document`] mints only under a registered account (P8)
+    /// and [`M3State::mint_version`] only under a registered document. So
+    /// this is a document's OWNER ACCOUNT and the principal seated there —
+    /// what the doc-metadata read reports (PUB-8.12), the engine's draft memo
+    /// keeps (PUB-7.5) and its grant admission names as issuer (PUB-5.19) —
+    /// and it is the read for that question whether a reader asks it once or
+    /// once per entry of a walk over the store, where one ω per entry would
+    /// cost Θ(entries · |Π|), each factor grown by one write apiece.
     ///
     /// Wherever it answers, it answers ω: no node- or account-tier prefix of
     /// `a` is longer than `acct(a)`, so a seat AT `acct(a)` is the longest
-    /// covering one, and this equals [`M3State::effective_owner_pair`]. For
-    /// every registered document and every registered account it answers, on
-    /// every state M3's own ops produce — the guarantee
-    /// [`M3State::effective_owner_prefix`] states. Where the two differ, `a`
-    /// is a node or `acct(a)` holds no seat, and this answers `None` where ω
-    /// climbs to an ancestor account or to the node: the fail-CLOSED side, so
-    /// an owner read from it is always the account `a` lies in. Where the
-    /// question IS the covering owner of an unseated account —
-    /// `create_new_document`'s and `delegate`'s authorization — ask ω.
-    ///
-    /// Published for the reader that asks a registered document's OWNER
-    /// ACCOUNT once per entry of a walk over the store — the engine's draft
-    /// memo and grant admission, rebuilt at every load and every historical
-    /// reconstruction — where one ω per entry would cost Θ(entries · |Π|),
-    /// each factor grown by one write apiece.
+    /// covering one, and this equals [`M3State::effective_owner_pair`]. Where
+    /// the two differ, `a` is a node or `acct(a)` holds no seat, and this
+    /// answers `None` where ω climbs to an ancestor account or to the node:
+    /// the fail-CLOSED side, so an owner read from it is always the account
+    /// `a` lies in. Where the question IS the covering owner of an address
+    /// whose own account holds no seat — `create_new_document`'s and
+    /// `delegate`'s authorization — ask ω.
     pub fn account_seat(&self, a: &Address) -> Option<(&Address, PrincipalId)> {
         let user = a.account_field()?;
         // `acct(a)` is the prefix of `a` through its user field: the node

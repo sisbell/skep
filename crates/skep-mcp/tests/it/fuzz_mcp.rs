@@ -25,42 +25,13 @@
 //! standalone or widened with `FUZZ_EXHAUSTIVE=1`.
 
 use std::io::{BufRead, BufReader, Write};
-use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
 use std::time::Duration;
 
 use serde_json::{json, Value};
 use skepd::fuzz_support::{mutate, splitmix64};
-use skepd::{serve, Daemon, Skepd, DEFAULT_WORKERS};
 
-// ── a self-owned temp dir (kept dependency-free, mirroring mcp.rs) ──────────
-
-struct TempDir(PathBuf);
-
-impl TempDir {
-    fn new(tag: &str) -> TempDir {
-        static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-        let n = SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        let dir = std::env::temp_dir().join(format!("skep-fuzzmcp-{tag}-{}-{n}", std::process::id()));
-        std::fs::create_dir_all(&dir).expect("create temp dir");
-        TempDir(dir)
-    }
-
-    fn path(&self) -> &Path {
-        &self.0
-    }
-}
-
-impl Drop for TempDir {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.0);
-    }
-}
-
-fn spawn_daemon(dir: &Path) -> Skepd {
-    let daemon = Daemon::open(dir).expect("daemon open");
-    serve(daemon, 0, DEFAULT_WORKERS).expect("bind ephemeral port")
-}
+use crate::common::{spawn_daemon, TempDir};
 
 // ── the adapter under test, storm-driven ────────────────────────────────────
 
@@ -226,7 +197,7 @@ fn random_utf8_line(st: &mut u64, maxlen: usize) -> String {
 #[test]
 fn mcp_line_protocol_storm_survives_and_stays_correct() {
     let dir = TempDir::new("storm");
-    let sd = spawn_daemon(dir.path());
+    let sd = spawn_daemon(dir.path(), 0);
     let port = sd.port();
     let mut mcp = Mcp::spawn(port);
 

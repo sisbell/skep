@@ -12,7 +12,7 @@ libFuzzer needs nightly:
   - `skep/crates/skepd/tests/fuzz_codec.rs` — the JSON codec.
   - `skep/crates/skepd/tests/fuzz_http.rs` — the owned HTTP/1.1 layer.
   - `skep/crates/skepd/tests/fuzz_envelope.rs` — the envelope endpoints.
-  - `skep/crates/skep-mcp/tests/fuzz_mcp.rs` — the MCP JSON-RPC line
+  - `skep/crates/skep-mcp/tests/it/fuzz_mcp.rs` — the MCP JSON-RPC line
     protocol (stormed through the real spawned binary).
 
   Widen any of them with `FUZZ_EXHAUSTIVE=1` (×40 iterations, plus the
@@ -65,12 +65,13 @@ blocks at test time, so it tracks the wire without a copy step.
 
 ## Why there is no `mcp` libFuzzer target
 
-`skep-mcp` is binary-only — it exposes no library seam, and adding one would
-be a structural change beyond this round's visibility-only authorization for
-its `src/`. Its fuzzing is the tier-1 spawn-storm
-(`skep-mcp/tests/fuzz_mcp.rs`), which drives the real process over stdio and
-is more faithful than a per-input handler target would be. Widen it the same
-way: `FUZZ_EXHAUSTIVE=1 cargo test -p skep-mcp --test fuzz_mcp`.
+`skep-mcp` is binary-only, and stays so: a library target would make the
+adapter's server, daemon side and catalog a surface the tests and this crate
+compile against, and would put its `pub` items beyond the dead-code lint's
+reach — all to buy a per-input handler target that the tier-1 spawn-storm
+(`skep-mcp/tests/it/fuzz_mcp.rs`) already covers more faithfully, since it
+drives the real process through its real stdio framing. Widen it the same
+way: `FUZZ_EXHAUSTIVE=1 cargo test -p skep-mcp --test it fuzz_mcp`.
 
 ## Non-goals (this round)
 

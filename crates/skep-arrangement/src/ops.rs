@@ -1,4 +1,4 @@
-//! §B / §3–§7 — the editing & versioning surface: `Vstream`, one M2
+//! §B / §3–§7 — the editing & versioning operations: `Vstream`, one M2
 //! `transact` per operation, every mutation under an M3 lock key for the
 //! touched document's allocation domain (§Serialization key).
 //!
@@ -17,12 +17,13 @@
 //! only after commit.
 //!
 //! Ownership: five ops take a [`Caller`](crate::Caller) and open with
-//! [`gate_write`](crate::ownership::gate_write) — the in-txn ω gate — on the
-//! address the caller NAMES: the four edits and the shot (COPY: its
-//! destination only; VERSION is ungated, non-owner versioning being
-//! denial-as-fork, O10). The address named is not always the arrangement
-//! written. A DECLARED DEPOSIT into a published chain that has a head lands
-//! on that head ([`deposit_surface`](crate::deposit_surface)) rather than in
+//! [`gate_write`](crate::ownership::gate_write) — the in-txn ownership gate,
+//! registration then the ω gate — on the address the caller NAMES: the four
+//! edits and the shot (COPY: its destination only; VERSION is ungated,
+//! non-owner versioning being denial-as-fork, O10). The address named is not
+//! always the arrangement written. A DECLARED DEPOSIT into a published chain
+//! that has a head lands on that head
+//! ([`deposit_surface`](crate::deposit_surface)) rather than in
 //! the named address's arrangement, and a shot writes only the member it
 //! mints; both are members of the named document's chain, minted under it,
 //! so the owner the gate checked is theirs too.
@@ -213,9 +214,9 @@ pub const MAX_COPY_RESOLVE_STEPS: usize = 1 << 20;
 /// publish SHOT — that M10 (and, for `insert`, M9) dispatches.
 ///
 /// THE EDITION IS APPEND-ONLY (PUB-2.43) — the invariant the shot's carried
-/// tail rests on ([`Vstream::publish`]), kept by this surface and by no fold.
-/// A document's publication bit is fixed at its mint (M3), and every content
-/// arrangement of a published document's chain starts as the transaction
+/// tail rests on ([`Vstream::publish`]), kept by these operations and by no
+/// fold. A document's publication bit is fixed at its mint (M3), and every
+/// content arrangement of a published document's chain starts as the transaction
 /// that mints its document or member leaves it — empty from M3's create
 /// path, a shot's placement, a version's snapshot — and afterwards changes
 /// only by a DECLARED deposit at `n_C + 1` of the arrangement
@@ -235,7 +236,7 @@ pub const MAX_COPY_RESOLVE_STEPS: usize = 1 << 20;
 pub struct Vstream<'k, W: WorldState> {
     kernel: &'k Kernel<W>,
     /// THE ATTESTATION this handle's `insert`, `publish` and `version` commit
-    /// under (signed ops) — the three ops of this surface in THE CHECKED
+    /// under (signed ops) — the three ops of this handle in THE CHECKED
     /// SET, the op kinds the daemon's write-path check reaches (the owner's
     /// term; skepd's `in_checked_set`): handed to the kernel's
     /// `transact_attested` arm at the one transaction each opens, filling

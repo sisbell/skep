@@ -320,7 +320,7 @@ pub fn insert_abc(kernel: &Kernel<World>) -> Vstream<'_, World> {
 }
 
 /// Leave pdoc (the published edition) holding `a`, `b`, `c` — the ONE way
-/// content enters a published document on this surface: a DECLARED deposit
+/// content enters a published document through these ops: a DECLARED deposit
 /// at its fresh positions (PUB-2.59, PUB-9.13).
 pub fn deposit_abc(kernel: &Kernel<World>) -> Vstream<'_, World> {
     let vs = Vstream::new(kernel);

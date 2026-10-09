@@ -5,8 +5,8 @@
 
 use skep_address::{Address, SpanSet};
 use skep_arrangement::{
-    reading_surface, seat_link, trunk_head, Base, Deposit, HasM5, M5State, PlacedSegment,
-    PublishError, Run, Shot, ShotTerms, VSpec, Vstream,
+    reading_surface, seat_link, trunk_head, Base, Deposit, HasM5, M5State, PublishError, Run,
+    SegmentRun, Shot, ShotTerms, VSpec, Vstream,
 };
 use skep_content::{ContentStore, HasContent};
 use skep_namespace::{HasM3, PrincipalId};
@@ -22,7 +22,8 @@ fn run_starts(m5: &M5State, doc: &Address) -> Vec<Address> {
 /// One item of a shot's signed body as it spells the address form: a
 /// position of a VALUE run by its value, and a WINDOW by its run — so the
 /// runs a value stretch was named by, and the addresses they name, are
-/// spelled by nothing.
+/// spelled by nothing, and consecutive value runs read as the ONE stretch
+/// the body's segments make of them.
 #[derive(Debug, PartialEq)]
 enum Spelled {
     Value(Vec<u8>),
@@ -31,17 +32,17 @@ enum Spelled {
 
 /// `form` as the signed body spells it, each value run's values read off
 /// `content`.
-fn spelled(form: &[PlacedSegment], content: &ContentStore) -> Vec<Spelled> {
+fn spelled(form: &[SegmentRun], content: &ContentStore) -> Vec<Spelled> {
     let mut out = Vec::new();
-    for segment in form {
-        match segment {
-            PlacedSegment::Value(run) => out.extend(run.addrs().map(|a| {
+    for segment_run in form {
+        match segment_run {
+            SegmentRun::Value(run) => out.extend(run.addrs().map(|a| {
                 let value = content
                     .value_at(a.tumbler())
                     .expect("a value run's position holds a value");
                 Spelled::Value(value.as_bytes().to_vec())
             })),
-            PlacedSegment::Window(run) => out.push(Spelled::Window(run.clone())),
+            SegmentRun::Window(run) => out.push(Spelled::Window(run.clone())),
         }
     }
     out
@@ -473,8 +474,9 @@ fn the_address_form_of_a_request_is_the_address_form_read_at_the_member() {
     assert_eq!(m5.content_run_count(&member), 3);
     assert_eq!(m5.content_count(&member), n(6));
     let at_member = m5.address_form_of(&member, &terms.placed);
-    let values_of = |seg: &PlacedSegment| -> Vec<Vec<u8>> {
-        seg.run()
+    let values_of = |segment_run: &SegmentRun| -> Vec<Vec<u8>> {
+        segment_run
+            .run()
             .addrs()
             .map(|a| content.value_at(a.tumbler()).expect("a placed value").as_bytes().to_vec())
             .collect()
@@ -483,10 +485,10 @@ fn the_address_form_of_a_request_is_the_address_form_read_at_the_member() {
     assert_eq!(at_member.len(), 3, "read back the same, the last clipped at `placed`");
     for (r, m) in requested.iter().zip(&at_member) {
         match (r, m) {
-            (PlacedSegment::Window(x), PlacedSegment::Window(y)) => {
+            (SegmentRun::Window(x), SegmentRun::Window(y)) => {
                 assert_eq!(x, y, "a window is the same run on both sides")
             }
-            (PlacedSegment::Value(x), PlacedSegment::Value(y)) => {
+            (SegmentRun::Value(x), SegmentRun::Value(y)) => {
                 assert_eq!(x.width(), y.width(), "a value run keeps its width");
                 assert_eq!(values_of(r), values_of(m), "…and spells the same values");
             }
@@ -494,20 +496,20 @@ fn the_address_form_of_a_request_is_the_address_form_read_at_the_member() {
         }
     }
     assert!(
-        matches!(&at_member[0], PlacedSegment::Window(w) if *w.i_start() == doc2_ca(1) && *w.width() == n(2)),
+        matches!(&at_member[0], SegmentRun::Window(w) if *w.i_start() == doc2_ca(1) && *w.width() == n(2)),
         "the merged window: {at_member:?}"
     );
     assert!(
-        matches!(&at_member[2], PlacedSegment::Value(v) if *v.i_start() == pca(1) && *v.width() == n(2)),
+        matches!(&at_member[2], SegmentRun::Value(v) if *v.i_start() == pca(1) && *v.width() == n(2)),
         "the last own run clipped from three to the two the client placed: {at_member:?}"
     );
     // Asked past the client's positions, the member answers what it has —
     // the whole run, the tail included; asked of nothing, nothing.
     assert!(
-        matches!(&m5.address_form_of(&member, &n(9))[2], PlacedSegment::Value(v) if *v.width() == n(3))
+        matches!(&m5.address_form_of(&member, &n(9))[2], SegmentRun::Value(v) if *v.width() == n(3))
     );
     assert!(m5.address_form_of(&member, &n(0)).is_empty());
-    assert!(m5.address_form_of(&doc2(), &n(2)).iter().all(|s| matches!(s, PlacedSegment::Value(_))),
+    assert!(m5.address_form_of(&doc2(), &n(2)).iter().all(|s| matches!(s, SegmentRun::Value(_))),
         "a document's own runs are spelled by value, read at the address named");
 }
 
@@ -546,7 +548,7 @@ fn the_address_forms_agree_as_the_body_spells_them_where_their_runs_do_not() {
         .shot_terms(&member)
         .expect("the shot's member carries its terms");
     let at_member = m5.address_form_of(&member, &terms.placed);
-    // The runs differ: four segments asked for, three held — the own `a b`
+    // The runs differ: four runs asked for, three held — the own `a b`
     // merged, and the draft's text re-inserted at pca(4..5).
     assert_eq!(requested.len(), 4, "{requested:?}");
     assert_eq!(at_member.len(), 3, "{at_member:?}");
@@ -571,16 +573,16 @@ fn the_address_forms_agree_as_the_body_spells_them_where_their_runs_do_not() {
 
 #[test]
 fn the_values_a_shot_says_it_reinserts_are_the_values_its_commit_writes() {
-    // `Shot::reinserted_runs` names the values the commit re-mints and
+    // `Shot::reinserted_runs` names the values the commit re-inserts and
     // `Shot::reinserted_values` counts them — THE count `publish` holds to
     // MAX_REINSERTED_VALUES, and the one a caller pricing a shot ahead of its
     // transaction asks — so they must be exactly the values the commit
-    // writes: the draft-native runs, a run the client names twice re-minted
+    // writes: the draft-native runs, a run the client names twice re-inserted
     // twice, and no position of the document's own I-space or of a window.
     // And WHERE it writes them, as `publish` states it: in that order, as the
     // last addresses of the trunk's content chain, nothing else minted there
     // — which is how skep-media's cell index, told only the member by the
-    // ack, finds the cells a shot re-mints.
+    // ack, finds the reference cells among the values a shot re-inserts.
     let k = mem_kernel();
     let vs = deposit_abc(&k); // pdoc: a b c at pca(1..3), memberless
     insert_abc(&k); // the staging draft doc1: a b c at ca(1..3)
@@ -639,7 +641,7 @@ fn the_values_a_shot_says_it_reinserts_are_the_values_its_commit_writes() {
     assert_eq!(
         s.world().m3().next_content_address(&pdoc()),
         Some(pca(7)),
-        "three fresh identities past the edition's three, and nothing else minted under its chain"
+        "three fresh identities past the edition's three, and nothing else minted under its content chain"
     );
     let value = |at: &Address| {
         content
@@ -656,7 +658,7 @@ fn the_values_a_shot_says_it_reinserts_are_the_values_its_commit_writes() {
         .collect();
     assert_eq!(
         landed, named,
-        "the chain's last three addresses, in the order the shot names them"
+        "the content chain's last three addresses, in the order the shot names them"
     );
     assert_eq!(named, vec![b"b".to_vec(), b"c".to_vec(), b"b".to_vec()]);
 }
@@ -670,8 +672,9 @@ fn a_shot_judges_every_address_it_names_as_the_document_it_projects_to() {
     // head took NAMED BY THE HEAD, so minted under the member's content chain.
     // Judged as documents, the draft's run is re-inserted — the one value the
     // count says, and no address of the draft in the member (PUB-2.41) — and
-    // the member-chain run is the document's own on BOTH sides of the address
-    // form, spelled by value as the client's body is.
+    // the run minted under the member's content chain is the document's own
+    // on BOTH sides of the address form, spelled by value as the client's
+    // body is.
     let k = mem_kernel();
     let vs = deposit_abc(&k); // pdoc: a b c at pca(1..3), memberless
     insert_abc(&k); // the staging draft doc1: a b c at ca(1..3)

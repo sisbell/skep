@@ -47,11 +47,12 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
   address — registration, ownership, the base's shape, the source gate —
   is one query too, `shot_admission`, which a door asks of the world the
   transaction will open on to learn the shot's verdict through its gate.
-- **Write-surface gates** — the four edit ops and `publish` take a
-  `Caller` and admit only the document's effective owner (ω, exact
-  account match; `Caller::System` is the in-process automation path,
-  exempt from ω alone). A PUBLISHED document refuses every in-place edit
-  (`PublishedTarget`, PUB-2.11) except an `insert` DECLARED under a type
+- **The ownership gate and the publication refusals** — the four edit ops
+  and `publish` take a `Caller` and admit only a registered document's
+  effective owner (ω, exact account match; `Caller::System` is the
+  in-process automation path, exempt from ω alone). A PUBLISHED document
+  refuses every in-place edit (`PublishedTarget`, PUB-2.11) except an
+  `insert` DECLARED under a type
   the deposit class holds (`deposit_class_types` — ENROLL, RETIRE, the
   registry's BINDING and its ENDPOINT today, the four atom-bearing kinds
   whose records the daemon parses) at `n_C + 1` of the arrangement
@@ -62,9 +63,9 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
   explicit-private member of a published one
   (`PrivateVersionOfPublished`, PUB-2.7). Link seating is outside the
   rule (PUB-2.12).
-- **Provenance (R)** — the append-only record of which addresses a
-  document has ever contained, including a fork's shared ones. It is
-  recorded, not recomputable: an arrangement that no longer holds an
+- **Provenance (R)** — the append-only provenance relation: which
+  addresses a document has ever contained, including a fork's shared
+  ones. It is recorded, not recomputable: an arrangement that no longer holds an
   address cannot tell you it once did, which is what makes deletions
   and "who has ever contained this" answerable at all.
 - **Birth extents** — per trunk, the content count its birth version

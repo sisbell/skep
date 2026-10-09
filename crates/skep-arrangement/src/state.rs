@@ -53,7 +53,7 @@ static EMPTY_ARRANGEMENT: LazyLock<DocArrangement> = LazyLock::new(DocArrangemen
 /// relation R (`Provenance`) co-located beside it (ASN-0075). The arrangement
 /// is authoritative MUTABLE state recovered by replay — NOT a recomputable
 /// hint (ASN-0047 P3); provenance is the append-only history housed next to
-/// it, and it is a type of its own whose surface offers no removal, so the
+/// it, and it is a type of its own whose methods offer no removal, so the
 /// permanence R promises holds by construction. The arrangement map is
 /// sparse: an absent doc reads as the empty arrangement (the eager-lazy split
 /// with M3). v1 has no derived-hint fields ⇒

@@ -1196,7 +1196,9 @@ Rules that hold across its files:
   the one reader of M3's version frontier; the floating readers of
   `skep-retrieval` and `skep-discovery` ask its `reading_surface` rather than
   float by hand.
-- **One front door.** Every gated op opens with `ownership::gate_write`.
+- **One ownership gate.** Every gated op opens with `ownership::gate_write`:
+  registration, then the ω gate. A door ahead of the store asks the same two
+  questions through `Caller::passes_ownership_gate`.
 - **The edition is append-only by the ops.** The fold does not check it;
   `Vstream`'s card lists the ops that keep it, and an op that writes a
   content arrangement joins that list.

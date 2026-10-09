@@ -1,4 +1,4 @@
-//! §Errors — the typed rejections of M5's op surface. Each variant names one
+//! §Errors — the typed rejections of M5's operations. Each variant names one
 //! verdict and says what it means; that is the whole job of this file.
 //!
 //! WHICH ERROR WINS when several conditions fail at once is a property of the
@@ -321,7 +321,7 @@ impl fmt::Display for PublishError {
                 f.write_str("publish: the placement exceeds the per-transaction run budget")
             }
             PublishError::TooManyValues => f.write_str(
-                "publish: the values the shot re-inserts from its draft exceed the per-transaction value budget",
+                "publish: the values the shot re-inserts from its draft exceed the per-transaction re-insert budget",
             ),
             // This layer only — the inner message is the `source`.
             PublishError::Mint(_) => f.write_str("publish: an identity or content mint failed"),
@@ -358,7 +358,7 @@ impl fmt::Display for InsertError {
             InsertError::EmptyContent => f.write_str("insert: values is empty"),
             // The wrapping variants describe THIS layer only; the inner
             // message is reachable through `source`, and a reporter that
-            // walks the chain would otherwise print it twice.
+            // walks the `source` chain would otherwise print it twice.
             InsertError::Mint(_) => f.write_str("insert: content mint failed"),
             InsertError::Content(_) => f.write_str("insert: content write rejected"),
         }
@@ -505,8 +505,8 @@ mod tests {
     fn wrapping_errors_name_their_own_layer_and_delegate_the_cause() {
         // The terse `Display` on the wrapping variants is affordable only
         // because the cause is reachable through `source`, so a reporter
-        // walking the chain prints it exactly once. That chain is the whole
-        // justification, and it is what this pins.
+        // walking the `source` chain prints it exactly once. That chain is the
+        // whole justification, and it is what this pins.
         let cause = MintError::HomeNotRegistered;
         let insert_mint = InsertError::Mint(cause);
         assert_eq!(insert_mint.to_string(), "insert: content mint failed");
@@ -542,8 +542,8 @@ mod tests {
             refusal.to_string()
         );
 
-        // The unwrapped verdicts are the end of the chain: they describe
-        // themselves and wrap nothing.
+        // The unwrapped verdicts are the end of the `source` chain: they
+        // describe themselves and wrap nothing.
         assert!(InsertError::EmptyContent.source().is_none());
         assert!(VersionError::NotAPrincipal.source().is_none());
         assert!(CopyError::EmptyResult.source().is_none());

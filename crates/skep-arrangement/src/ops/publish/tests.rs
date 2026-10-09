@@ -203,7 +203,7 @@ fn the_shot_refuses_a_carried_tail_past_the_run_budget() {
 }
 
 #[test]
-fn the_shot_refuses_a_reinsert_past_the_value_budget_before_probing_an_address() {
+fn the_shot_refuses_a_reinsert_past_its_budget_before_probing_an_address() {
     // MAX_REINSERTED_VALUES binds how many values one SHOT re-inserts
     // from its draft, and the count is request arithmetic — the
     // draft-native runs' widths, summed — answered before any address is

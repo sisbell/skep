@@ -54,7 +54,7 @@ use crate::HasM5;
 ///   ask whether `doc` is a registered document, nor whether the writing
 ///   caller is its effective owner, and a record it returns writes a link
 ///   V-position into `doc` regardless. Before composing it, establish both,
-///   in the order the edit ops' gate fixes —
+///   in the order the ownership gate fixes —
 ///   `M3State::is_registered_document(doc)`, then
 ///   [`Caller::is_owner`](crate::Caller::is_owner) — so an unregistered `doc`
 ///   never yields an ownership verdict (M7's `home_gate` keeps that order).
@@ -63,9 +63,9 @@ use crate::HasM5;
 ///   tumbler anyone can spell.
 ///
 /// `seat_link`, the `test-hooks` twin below, discharges the first two and NOT
-/// the third. M7's MAKELINK discharges all three: it runs its own
-/// registration-and-ω gate on `home` before composing this step, in the same
-/// transaction and under the same key it holds for its K.λ mint.
+/// the third. M7's MAKELINK discharges all three: it runs its own ownership
+/// gate — registration, then ω — on `home` before composing this step, in
+/// the same transaction and under the same key it holds for its K.λ mint.
 ///
 /// Returns the delta; M7 lifts via `.into()` and stages it inside MAKELINK's
 /// K.λ + K.μ⁺_L transaction. The fold appends at `n_L(d) + 1` and records NO

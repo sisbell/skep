@@ -572,7 +572,7 @@ impl<W: FebeWorld> OperationSurface<W> {
     /// that verdict inside its own transaction, so the door realizes the order
     /// by DEFERRING: the consult runs only where the destination's own gate
     /// would pass — registered, and ω-owned by the caller, asked as the
-    /// store's own front-door question (`Caller::passes_write_gate`, M5's:
+    /// store's own ownership-gate question (`Caller::passes_ownership_gate`, M5's:
     /// registration, then ω through `Caller::is_owner`, which is M3's
     /// `is_effective_owner`) — and where it would not, nothing here speaks, nor
     /// anything built from the sources it left unconsulted (the `Unjudged` it
@@ -682,7 +682,10 @@ impl<W: FebeWorld> OperationSurface<W> {
         // PUB-6.36's slot 1 ahead of its slot 6: defer to the store wherever
         // the destination's own gate would refuse.
         let caller = wc.caller();
-        if !destinations.iter().all(|d| caller.passes_write_gate(m3, d)) {
+        if !destinations
+            .iter()
+            .all(|d| caller.passes_ownership_gate(m3, d))
+        {
             return Ok(Judgment::Unjudged);
         }
         // PUB-6.36's slot 5 ahead of its slot 6 (lane 4.2, F3): the model's

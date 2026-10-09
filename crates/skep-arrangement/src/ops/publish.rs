@@ -74,7 +74,7 @@ where
     /// family, as `Shot` states. The runs are placed
     /// in the order given, then the BASE'S POST-RENDER DEPOSITS after them: a
     /// published member changes only by exempt deposits appended at fresh
-    /// positions (PUB-2.43 — the append-only edition this surface keeps, as
+    /// positions (PUB-2.43 — the append-only edition these operations keep, as
     /// [`Vstream`] states), so its positions past `base.extent` — the extent
     /// the staged copy took, which the client states and M5 refutes only when
     /// it exceeds the base's count ([`Base`](crate::Base) states the
@@ -104,16 +104,17 @@ where
     /// run named twice minted twice — are minted IN THAT ORDER, one after
     /// another, under the content chain of the document `doc` projects to
     /// (the member's own trunk), and the commit mints nothing else under that
-    /// chain: the member itself is minted on a version chain. Each content
-    /// mint takes its chain's next ordinal (`M3State::mint_content`), the fact
-    /// INSERT's one run rests on too, so in the world the commit leaves they
-    /// are that chain's LAST `reinserted_values()` addresses, just below its
-    /// frontier (`M3State::next_content_address`) — where skep-media's cell
-    /// index reads them, off the commit's own world, to enter the cells a
-    /// shot re-mints. A later content mint under the chain moves the frontier
-    /// past them.
+    /// content chain: the member itself is minted on a version chain. Each
+    /// content mint takes the content chain's next ordinal
+    /// (`M3State::mint_content`), the fact INSERT's one run rests on too, so
+    /// in the world the commit leaves they are that content chain's LAST
+    /// `reinserted_values()` addresses, just below its frontier
+    /// (`M3State::next_content_address`) — where skep-media's cell index
+    /// reads them, off the commit's own world, to enter any reference cell
+    /// among them. A later content mint under that content chain moves its
+    /// frontier past them.
     /// `the_values_a_shot_says_it_reinserts_are_the_values_its_commit_writes`
-    /// pins the order, the chain and the "nothing else".
+    /// pins the order, the content chain and the "nothing else".
     ///
     /// Check order (which error wins), PUB-6.36's slots: `DocNotRegistered`
     /// → `NotOwner` (slot 1, ω on the address named — the only question the

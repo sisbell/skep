@@ -7,8 +7,8 @@
 //! which one a DECLARED DEPOSIT naming it lands in ([`deposit_surface`]) —
 //! and which member OPENS the chain, its birth version ([`birth_version`],
 //! PUB-2.34). Pure over M1's address arithmetic and M3's slice: no
-//! arrangement is read here, and every chain read the write surface makes
-//! asks this file rather than spelling the read itself.
+//! arrangement is read here, and every chain read M5's writes make asks this
+//! file rather than spelling the read itself.
 //!
 //! The two surfaces are two answers because they differ at exactly one kind
 //! of address, a PINNED member — any member other than the trunk head

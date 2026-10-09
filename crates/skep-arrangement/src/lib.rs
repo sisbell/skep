@@ -11,7 +11,7 @@
 //! [ASN-0116], DELETE [ASN-0117], COPY [ASN-0118], REARRANGE [ASN-0119/0084],
 //! CREATENEWVERSION [ASN-0123], and the publish SHOT [PUB-2.33]), a
 //! semantics-blind link-seating step for M7 (CL-OWN/CL-UNIQ), forward V→I
-//! resolution and reverse I→V projection for readers, the R read surface for
+//! resolution and reverse I→V projection for readers, the R reads for
 //! provenance queries, the birth-extent and shot-terms reads the doc-metadata
 //! read serves ([`M5State::birth_extent`], [`M5State::shot_terms`]), and the
 //! ADDRESS FORM a shot's entry signature is made over, on both of its sides
@@ -82,7 +82,7 @@
 //!
 //! Owner ruling D2b (2026-09-05): the three write-path refusals of the
 //! version-chain model run HERE, at the transact, as typed errors beside the
-//! ownership check — the in-place advance refusal `PublishedTarget` on
+//! ownership gate — the in-place advance refusal `PublishedTarget` on
 //! `insert`/`copy`/`delete`/`rearrange` (PUB-2.11), the private-member
 //! refusal `PrivateVersionOfPublished` and the versionless sibling
 //! `PrivateSourceVersionless` on `version` (PUB-2.7, PUB-2.9) — each
@@ -208,8 +208,8 @@ mod reads;
 mod shot;
 // The deposit declaration and the deposit class's types.
 mod deposit;
-// `Caller` and `gate_write`, the write surface's one front door, and its
-// question answered as one boolean for a door ahead of the store.
+// `Caller` and `gate_write`, the ownership gate every gated write opens with,
+// and its question answered as one boolean for a door ahead of the store.
 mod ownership;
 // The typed rejections, one enum per operation.
 mod error;
@@ -239,7 +239,7 @@ pub use runlist::Runs;
 #[cfg(feature = "test-hooks")]
 pub use seat::seat_link;
 pub use seat::stage_seat_link;
-pub use shot::{Base, PlacedSegment, Shot, ShotRun};
+pub use shot::{Base, SegmentRun, Shot, ShotRun};
 pub use state::{M5Rec, M5State, ShotTerms};
 pub use vspace::{as_ordinal_vspan, is_ordinal_vspan, ordinal_vspan, OrdinalVSpan, VPos, VSpec};
 

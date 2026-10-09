@@ -11,15 +11,15 @@ use crate::common::*;
 /// THE ATTESTED HANDLE FILLS THE SLOT OF ITS OWN TRANSACTION AND NO OTHER
 /// (signed ops; the design record §2.4's route, the attestation riding the
 /// handle; SO-I4): a `Vstream::attested` handle's `insert`, `publish` and
-/// `version` — the three publish-class kinds of this surface — commit under
+/// `version` — the three publish-class kinds of this handle — commit under
 /// the attestation it carries — the kernel reads it back at exactly those
 /// boundaries — while a plain `Vstream::new` handle's writes, and the
 /// attested handle's three others (`delete`, `copy`, `rearrange`, which no
 /// published document admits), leave their slots empty. The driver's own
 /// signature is unchanged; the value rides the handle. And the slot moves
-/// the chain: an unattested twin history chains identically up to the first
-/// filled slot and parts there, the slot's digest being a chain input
-/// (r6-2c).
+/// the commit chain: an unattested twin history chains identically up to
+/// the first filled slot and parts there, the slot's digest being a
+/// commit-chain input (r6-2c).
 #[test]
 fn an_attested_handle_fills_the_slot_of_its_own_transaction_alone() {
     use skep_kernel::Attestation;
@@ -99,7 +99,7 @@ fn an_attested_handle_fills_the_slot_of_its_own_transaction_alone() {
     assert_eq!(k.attestation_at(s_none).unwrap(), None);
 
     // The unattested twin chains identically up to the first filled slot and
-    // parts there: the slot's digest is a chain input (r6-2c).
+    // parts there: the slot's digest is a commit-chain input (r6-2c).
     let twin_dir = tempdir().expect("tempdir");
     let twin = Kernel::<World>::open(cfg_fsync(twin_dir.path()), genesis()).expect("open");
     let vs = Vstream::new(&twin);
@@ -120,5 +120,5 @@ fn an_attested_handle_fills_the_slot_of_its_own_transaction_alone() {
     vs.insert(P1, &pdoc(), vp(1, 4), vec![val(b"e")], declared()).unwrap();
     assert_eq!(twin.chain_at(s_plain).unwrap(), k.chain_at(s_plain).unwrap(), "unsigned alike");
     assert_ne!(twin.chain_at(s_att).unwrap(), k.chain_at(s_att).unwrap(), "the first filled slot parts them");
-    assert_ne!(twin.chain_head(), k.chain_head(), "the slot is inside its link");
+    assert_ne!(twin.chain_head(), k.chain_head(), "the slot is inside its chain link");
 }

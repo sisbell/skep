@@ -24,7 +24,7 @@ where
     /// `Seq`.
     ///
     /// Whether `principal` owns `source` is asked of M3's authorization
-    /// predicate — `is_effective_owner`, the ω rule every write gate asks
+    /// predicate — `is_effective_owner`, the ω rule the ownership gate asks
     /// through [`Caller::is_owner`](crate::Caller::is_owner), so ownership
     /// has one spelling here just as the P-tier rule below does — off an M2
     /// snapshot (stable for an existing document, per M3), to choose branch +

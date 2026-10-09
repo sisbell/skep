@@ -425,15 +425,15 @@ fn the_carried_test_answers_a_run_of_the_wires_largest_width_without_searching_i
     // a width of 4096 decimal digits — whose endpoint length is not the
     // base's: its start lies under a member of doc2, one component deeper
     // than the head's one run, which is of the edition's own I-space. A piece
-    // of another chain holds no address of the run, so the test asks the run
-    // only of the base union's piece of its own chain — none here — and
-    // searches no width: a search of the client's width would cost a
-    // fragmented head tens of thousands of bigint steps per resident, under
-    // the applier lock, ahead of any existence answer. Not carried, the run is
-    // asked about; then its first address holds no value. What a regression
-    // costs here is time, which this suite does not measure: a corpus seed
-    // for the fuzzing tier, with a wall-clock budget, against a fragmented
-    // head.
+    // of another content chain holds no address of the run, so the test asks
+    // the run only of the base union's piece of its own content chain — none
+    // here — and searches no width: a search of the client's width would
+    // cost a fragmented head tens of thousands of bigint steps per resident,
+    // under the applier lock, ahead of any existence answer. Not carried, the
+    // run is asked about; then its first address holds no value. What a
+    // regression costs here is time, which this suite does not measure: a
+    // corpus seed for the fuzzing tier, with a wall-clock budget, against a
+    // fragmented head.
     let k = mem_kernel();
     let vs = deposit_abc(&k);
     let (member1, _) = vs
@@ -574,7 +574,7 @@ fn the_existence_walk_probes_the_union_of_the_runs_and_misses_no_address_of_any(
 }
 
 #[test]
-fn a_shot_rendering_its_drafts_content_past_the_value_budget_is_refused_before_it_stages() {
+fn a_shot_rendering_its_drafts_content_past_the_reinsert_budget_is_refused_before_it_stages() {
     // The re-insert's size is the draft-native positions a shot renders, and
     // a small request can render a draft's stored content many times over:
     // here 4096 runs, each naming the same forty stored values — 163,840
@@ -979,7 +979,7 @@ fn a_shot_refused_at_its_last_check_leaves_no_member_no_mint_and_no_placement() 
     let (start, _) = vs.insert(P1, &pdoc(), vp(1, 4), vec![val(b"z")], declared()).expect("deposit");
     assert_eq!(start, pca(4), "no content mint was committed by the refused shot");
     // And the ordinary shot still lands, so the refusal above is about the
-    // dangling run and not about the surface being closed.
+    // dangling run and not about publishing being closed.
     let (member1, _) = vs
         .publish(
             P1,

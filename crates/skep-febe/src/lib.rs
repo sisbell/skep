@@ -129,8 +129,8 @@
 //!   not read ([`OperationSurface::execute`] gives the four forms). The one
 //!   place M10 ASKS ω without wording it is the write door's source consult
 //!   (lane 3.3c, PUB-6.36/6.38): it defers to the store wherever the
-//!   destination's own front door would refuse, through the store's own
-//!   `Caller::passes_write_gate` (registration, then ω), so no source is
+//!   destination's own ownership gate would refuse, through the store's own
+//!   `Caller::passes_ownership_gate` (registration, then ω), so no source is
 //!   judged ahead of the store's registration refusal or its `not_owner`.
 //!
 //! ## Composition

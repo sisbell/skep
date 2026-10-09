@@ -7,7 +7,7 @@ use skep_address::{elem_addr, Address, ElemPos, Nat};
 use skep_namespace::ghost_home_document;
 
 /// The deposit DECLARATION an INSERT carries or omits (PUB-9.13's DECLARED
-/// horn; PUB-2.59, PUB-2.61): the one declaration M5's write surface takes,
+/// horn; PUB-2.59, PUB-2.61): the one declaration M5's writes take,
 /// and the one thing that clears the in-place refusal on a published
 /// document — and only for an insert at a fresh content position
 /// ([`Vstream::insert`](crate::Vstream::insert) states the shape). Into a

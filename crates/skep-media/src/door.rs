@@ -319,8 +319,8 @@ pub fn media_door<W: FebeWorld>(
 }
 
 /// The `insert` arms (1, 3, 4): read only where `doc` is registered and the
-/// caller owns it — the store's front-door question, asked of M5
-/// ([`Caller::passes_write_gate`]): PUB-6.36's slot 1 ahead of everything
+/// caller owns it — the store's ownership-gate question, asked of M5
+/// ([`Caller::passes_ownership_gate`]): PUB-6.36's slot 1 ahead of everything
 /// here, as every producer ahead of the store keeps it, so an unregistered
 /// or foreign `doc` answers the store's own `doc_not_registered` or
 /// `not_owner` and is never told whether it is published. EVERY value
@@ -336,7 +336,7 @@ fn insert_arm<W: FebeWorld>(
     media_gate: &MediaGate,
 ) -> Option<MediaRefusal> {
     let m3 = world.m3();
-    if !Caller::Principal(principal).passes_write_gate(m3, doc) {
+    if !Caller::Principal(principal).passes_ownership_gate(m3, doc) {
         return None;
     }
     let mut named = values.iter().filter_map(names_the_kind).peekable();

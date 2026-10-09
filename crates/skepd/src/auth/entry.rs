@@ -106,7 +106,7 @@
 use std::num::NonZeroU64;
 
 use skep_address::{document_of, Address, Nat, Span};
-use skep_arrangement::{trunk_of, Deposit, HasM5, PlacedSegment, Shot, MAX_REINSERTED_VALUES};
+use skep_arrangement::{trunk_of, Deposit, HasM5, SegmentRun, Shot, MAX_REINSERTED_VALUES};
 use skep_content::HasContent;
 use skep_febe::{successor_link, Judgment, Op};
 use skep_identity::{
@@ -394,15 +394,15 @@ pub(super) fn compose(
 fn every_copied_run_origin_readable(
     world: &World,
     trunk: &Address,
-    segments: &[PlacedSegment],
+    segments: &[SegmentRun],
     principal: PrincipalId,
 ) -> bool {
     let reader = world.reader_class(Some(principal));
     segments.iter().all(|segment| match segment {
-        PlacedSegment::Value(run) => document_of(run.i_start())
+        SegmentRun::Value(run) => document_of(run.i_start())
             .map(|d| trunk_of(&d))
             .is_some_and(|origin| origin == *trunk || reader.readable(&origin)),
-        PlacedSegment::Window(_) => true,
+        SegmentRun::Window(_) => true,
     })
 }
 
@@ -424,7 +424,7 @@ fn every_copied_run_origin_readable(
 fn publish_body(
     world: &World,
     shot: &Shot,
-    segments: &[PlacedSegment],
+    segments: &[SegmentRun],
 ) -> Result<EntryBody, ComposeFault> {
     let content = world.content();
     let spelled = |n: &Nat| u64::try_from(n).map_err(|_| ComposeFault::Unspellable);
@@ -459,13 +459,13 @@ fn publish_body(
     let mut body = PublishBody::within(MAX_SHOT_BODY_BYTES, base);
     for segment in segments {
         match segment {
-            PlacedSegment::Value(run) => {
+            SegmentRun::Value(run) => {
                 for a in run.addrs() {
                     let v = content.value_at(a.tumbler()).ok_or(ComposeFault::MissingValue)?;
                     body = body.push(v.as_bytes()).map_err(refused)?;
                 }
             }
-            PlacedSegment::Window(run) => {
+            SegmentRun::Window(run) => {
                 // A window here is a `Run`, whose width is at least one
                 // (`RunError::ZeroWidth`): a zero is a broken premise, and
                 // STOPS LOUDLY, as `compose`'s precondition does.

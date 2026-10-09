@@ -5,11 +5,11 @@ edition.workspace = true
 rust-version.workspace = true
 repository.workspace = true
 license.workspace = true
-description = "M5 — Arrangements & Editing (Vstream): the per-document mutable V→I arrangement (POOM) plus the append-only content-provenance relation R; editing/versioning operations and the publish shot with its admission query, the version-chain reads (head-float, the deposit surface and the birth version), link seating for M7, forward/reverse arrangement reads, the R read surface, the birth-extent and shot-terms reads, and the shot's address form"
+description = "M5 — Arrangements & Editing (Vstream): the per-document mutable V→I arrangement (POOM) plus the append-only content-provenance relation R; editing/versioning operations and the publish shot with its admission query, the version-chain reads (head-float, the deposit surface and the birth version), link seating for M7, forward/reverse arrangement reads, the R reads, the birth-extent and shot-terms reads, and the shot's address form"
 readme = "README.md"
 
 [features]
-# `test-hooks` compiles in the test-only surface: `seat_link`, the standalone
+# `test-hooks` compiles in one test-only item: `seat_link`, the standalone
 # transact-wrapped twin of `stage_seat_link` the composition contract asks
 # for. It applies no ownership gate and seats with no link allocation, so
 # production seats through M7's MAKELINK and never through it. DEFAULT-OFF:

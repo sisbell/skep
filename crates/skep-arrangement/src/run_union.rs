@@ -170,9 +170,10 @@ mod tests {
         // shot's existence walk and its re-insert's `.expect` stand on, and each
         // in one merged run, which is what lets the walk pay a stored position
         // once however often a request names it. Repeats, nesting, overlap,
-        // abutment and a gap in one chain; a second chain of the SAME length,
-        // kept apart by its prefix alone; a third of another length — listed out
-        // of order, so the sort is what brings each chain's runs together.
+        // abutment and a gap in one content chain; a second content chain of
+        // the SAME length, kept apart by its prefix alone; a third of another
+        // length — listed out of order, so the sort is what brings each content
+        // chain's runs together.
         let family = vec![
             run(&ca(3), 2),
             run(&ca(1), 2),
@@ -202,9 +203,9 @@ mod tests {
         assert_eq!(denoted.len(), named.len(), "no address in two merged runs");
         assert_eq!(denoted.into_iter().collect::<BTreeSet<_>>(), named);
         // And whole-run membership is its search, against the address-by-address
-        // oracle, from every start and width across the three chains and their
-        // gaps — the same-length chains being where the prefix, and not the
-        // length, has to keep the search apart.
+        // oracle, from every start and width across the three content chains
+        // and their gaps — the same-length content chains being where the
+        // prefix, and not the length, has to keep the search apart.
         let mut checked = 0usize;
         for start in (1..=10u32).flat_map(|k| [ca(k), pca(k), vca(k)]) {
             for width in 1..=7u32 {

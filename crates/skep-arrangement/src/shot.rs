@@ -143,19 +143,21 @@ impl Shot {
     /// when [`Vstream::publish`](crate::Vstream::publish) is asked with `doc`
     /// — into the next member of the document `doc` projects to (PUB-2.15), a
     /// member of its chain naming the shot as the document itself does (l6-A4
-    /// = r6-4, owner-ruled 2026-09-29; fam2-Q's arm A): the segments the
-    /// shot's entry signature is made over, each run classed by the family
-    /// the commit gives it — a run the commit COPIES IN (the corpus's verb)
-    /// is a [`Value`](PlacedSegment::Value) run, signed BY VALUE: the shot
-    /// document's own I-space (its origin document, that projection), placed
-    /// by reference, and the staging draft's text (its origin document the
+    /// = r6-4, owner-ruled 2026-09-29; fam2-Q's arm A): the runs the shot's
+    /// entry signature spells, each CLASSED by the family the commit gives
+    /// it — a run the commit COPIES IN (the corpus's verb) is a
+    /// [`Value`](SegmentRun::Value) run, signed BY VALUE: the shot document's
+    /// own I-space (its origin document, that projection), placed by
+    /// reference, and the staging draft's text (its origin document the
     /// draft's trunk), re-inserted as fresh identity under the document's own
     /// I-space — at the member, both are the trunk's own; every other run is
-    /// a [`Window`](PlacedSegment::Window), a reference the commit keeps to
+    /// a [`Window`](SegmentRun::Window), a reference the commit keeps to
     /// another document's I-space, signed BY ADDRESS. Consecutive windows
     /// that are I-adjacent become ONE, through the placement's own
     /// accumulator, exactly as the member's run-list will hold them; the
-    /// value runs keep their boundaries, which the body never spells.
+    /// value runs keep their boundaries, which the body never spells — its
+    /// SEGMENTS are each window and each stretch of consecutive value runs,
+    /// as [`SegmentRun`] states.
     ///
     /// So it answers for the request what [`M5State::address_form_of`]
     /// answers for the member it mints, read back with the shot's `placed`
@@ -173,10 +175,10 @@ impl Shot {
     /// `origin`, so a run the commit will refuse `BadRun` — a start that is
     /// no content element — classes as a window here, spelled and never
     /// read; the store's refusal answers it. Reads no world.
-    pub fn address_form(&self, doc: &Address) -> Vec<PlacedSegment> {
+    pub fn address_form(&self, doc: &Address) -> Vec<SegmentRun> {
         let trunk = trunk_of(doc);
         let draft_doc = self.draft_document();
-        let mut out: Vec<PlacedSegment> = Vec::new();
+        let mut out: Vec<SegmentRun> = Vec::new();
         // The consecutive windows in hand, accumulated through the ONE run
         // accumulator (`extend_or_push_run`), so the merge condition is the
         // placement's own; a value run closes the group.
@@ -186,13 +188,13 @@ impl Shot {
                 origin_doc == trunk || draft_doc.as_ref() == Some(&origin_doc)
             });
             if by_value {
-                out.extend(windows.drain(..).map(PlacedSegment::Window));
-                out.push(PlacedSegment::Value(run.clone()));
+                out.extend(windows.drain(..).map(SegmentRun::Window));
+                out.push(SegmentRun::Value(run.clone()));
             } else {
                 extend_or_push_run(&mut windows, run.clone());
             }
         }
-        out.extend(windows.into_iter().map(PlacedSegment::Window));
+        out.extend(windows.into_iter().map(SegmentRun::Window));
         out
     }
 
@@ -201,12 +203,13 @@ impl Shot {
     /// own start, as [`address_form`](Shot::address_form) derives it, and
     /// never from the stated `origin` — is [`draft_document`](Shot::draft_document);
     /// none with no draft, and a run named twice yielded twice. Their values
-    /// are the ones the commit re-mints as fresh identity under the document's
-    /// own I-space, in this order ([`Vstream::publish`](crate::Vstream::publish)
-    /// states where that identity lands); the address form spells them by
-    /// value beside the document's own runs and does not tell the two apart.
-    /// Request arithmetic over the runs and the draft as the client stated
-    /// them, reading nothing — so a caller judging the values a shot re-mints
+    /// are the ones the commit re-inserts as fresh identity under the
+    /// document's own I-space, in this order
+    /// ([`Vstream::publish`](crate::Vstream::publish) states where that
+    /// identity lands); the address form spells them by value beside the
+    /// document's own runs and does not tell the two apart. Request
+    /// arithmetic over the runs and the draft as the client stated them,
+    /// reading nothing — so a caller judging the values a shot re-inserts
     /// asks this rather than re-deriving each run's family.
     pub fn reinserted_runs(&self) -> impl Iterator<Item = &Run> + '_ {
         let draft_doc = self.draft_document();
@@ -232,7 +235,7 @@ impl Shot {
     /// named: the one a run's ORIGIN DOCUMENT must be for the run to be
     /// DRAFT-NATIVE, re-inserted as fresh identity (PUB-2.40) — the document
     /// whose registration the shot checks, and whose owner and readability a
-    /// door judging the re-minted values asks about. The draft half of the
+    /// door judging the re-inserted values asks about. The draft half of the
     /// family rule [`Shot`] states, spelled once and asked by
     /// [`address_form`](Shot::address_form),
     /// [`reinserted_runs`](Shot::reinserted_runs) and `publish`'s
@@ -243,22 +246,27 @@ impl Shot {
     }
 }
 
-/// One segment of a shot's ADDRESS FORM (l6-A4): a run of the member the
-/// shot mints, classed by the family the commit gives it — the two classes
-/// the signed body spells apart. Answered for the REQUEST by
-/// [`Shot::address_form`] and for the committed MEMBER by
-/// [`M5State::address_form_of`], which agree as the signed body spells them
-/// (stated on [`Shot::address_form`]): that agreement is what lets a verifier
-/// holding the member, and no request, compose the body the client signed.
+/// One RUN of a shot's ADDRESS FORM (l6-A4) — a run of the member the shot
+/// mints, classed by the family the commit gives it, the two classes the
+/// signed body spells apart — named for the SEGMENT of that body it lies in.
+/// A run, and not a segment: the body's SEGMENTS (wire.md's `publish` body,
+/// which skep-identity's `PublishBody` builds) are each window and each
+/// stretch of consecutive value runs, so two value runs side by side here lie
+/// in ONE value stretch there, and a window is a segment of its own.
+/// Answered for the REQUEST by [`Shot::address_form`] and for the committed
+/// MEMBER by [`M5State::address_form_of`], which agree as the signed body
+/// spells them (stated on [`Shot::address_form`]): that agreement is what
+/// lets a verifier holding the member, and no request, compose the body the
+/// client signed.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub enum PlacedSegment {
+pub enum SegmentRun {
     /// A run of a VALUE STRETCH — a run the commit copies in (the corpus's
     /// verb): the shot document's own I-space by reference, or the staging
     /// draft's text re-inserted as fresh identity under it — signed BY VALUE,
     /// each position's value in V-order. The verb is not COPY's act: a value
     /// run may carry fresh identity, which COPY never mints, and a run the
     /// draft took by COPY from a third document is a
-    /// [`Window`](PlacedSegment::Window) here. At the member every such run
+    /// [`Window`](SegmentRun::Window) here. At the member every such run
     /// is of the member's own trunk; the request's run boundaries within a
     /// stretch of them are not the member's and are spelled by nothing.
     Value(Run),
@@ -269,13 +277,13 @@ pub enum PlacedSegment {
     Window(Run),
 }
 
-impl PlacedSegment {
-    /// The run this segment places, whichever class it is — a value run's
-    /// positions or a window's I-extent. The class is the variant; a caller
-    /// after the run alone asks this rather than matching both arms.
+impl SegmentRun {
+    /// The run itself, whichever class it is — a value run's positions or a
+    /// window's I-extent. The class is the variant; a caller after the run
+    /// alone asks this rather than matching both arms.
     pub fn run(&self) -> &Run {
         match self {
-            PlacedSegment::Value(run) | PlacedSegment::Window(run) => run,
+            SegmentRun::Value(run) | SegmentRun::Window(run) => run,
         }
     }
 }
@@ -284,13 +292,13 @@ impl M5State {
     /// THE ADDRESS FORM READ AT THE MEMBER (l6-A4 = r6-4, owner-ruled
     /// 2026-09-29): `member`'s first `placed` content positions — the runs
     /// the client placed, which its entry signature covers, ahead of the
-    /// base's carried tail — as [`PlacedSegment`]s in V-order, each run
+    /// base's carried tail — as [`SegmentRun`]s in V-order, each run
     /// classed by its ORIGIN DOCUMENT as the commit left it: a run of the
-    /// member's own trunk is a [`Value`](PlacedSegment::Value) run — the shot
+    /// member's own trunk is a [`Value`](SegmentRun::Value) run — the shot
     /// document's own I-space placed by reference, and the staging draft's
     /// text the commit re-inserted under that trunk, told apart by nothing
     /// here and signed alike, BY VALUE — and a run of any other document is a
-    /// [`Window`](PlacedSegment::Window), signed BY ADDRESS. The runs are the
+    /// [`Window`](SegmentRun::Window), signed BY ADDRESS. The runs are the
     /// arrangement's own, maximally merged, the last one CLIPPED where the
     /// client's positions end, by the run-list's own clip — the range walk
     /// every resolution takes; so what this answers for a committed member is
@@ -300,15 +308,15 @@ impl M5State {
     /// the caller's — the member's own [`shot_terms`](M5State::shot_terms),
     /// or a count a checker chooses. A member with fewer positions than
     /// `placed` answers what it has; an absent arrangement answers nothing.
-    pub fn address_form_of(&self, member: &Address, placed: &Nat) -> Vec<PlacedSegment> {
+    pub fn address_form_of(&self, member: &Address, placed: &Nat) -> Vec<SegmentRun> {
         let trunk = trunk_of(member);
         self.content_list(member)
             .iter_resolve_range(&Nat::one(), placed)
             .map(|run| {
                 if run_origin_document(&run).as_ref() == Some(&trunk) {
-                    PlacedSegment::Value(run)
+                    SegmentRun::Value(run)
                 } else {
-                    PlacedSegment::Window(run)
+                    SegmentRun::Window(run)
                 }
             })
             .collect()

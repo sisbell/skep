@@ -1,11 +1,11 @@
-//! The write-surface ownership gate (as amended 2026-08-16, ownership
-//! ruling): ONE caller identity type and ONE ownership predicate, shared by
-//! M5's write surface and (by re-export) M7's link-deposit ops, so the ω half
-//! of "who may write into this document's space" has one definition
-//! everywhere — and the whole question, registration then ω, has one too:
-//! answered as one boolean ([`Caller::passes_write_gate`]) for a door ahead
-//! of the store, and as the ordered verdict by M5's front door,
-//! [`gate_write`].
+//! THE OWNERSHIP GATE (as amended 2026-08-16, the ownership ruling): a gated
+//! write's registration, then its ω gate — ONE caller identity type and ONE
+//! ownership predicate, shared by M5's writes and (by re-export) M7's
+//! link-deposit ops, so the ω half of "who may write into this document's
+//! space" has one definition everywhere — and the whole gate, registration
+//! then ω, has one too: answered as one boolean
+//! ([`Caller::passes_ownership_gate`]) for a door ahead of the store, and as
+//! the ordered verdict by [`gate_write`].
 //!
 //! The predicate is M3's [`M3State::is_effective_owner`] — ω, the longest
 //! registered account/node-tier prefix, compared by principal id: the
@@ -26,8 +26,8 @@ use skep_namespace::{M3State, PrincipalId};
 /// `Principal` is a FEBE-attributed write: M10 resolves the session's
 /// principal and the store checks it owns the written document. `System` is
 /// the in-process automation path — M9's rule fires and def writes reach
-/// the gated write surface directly with no wire principal (M10 ⟂ M9, by
-/// architecture); the ownership check does not apply. The transport never
+/// M5's gated writes directly with no wire principal (M10 ⟂ M9, by
+/// architecture); the ω gate does not apply. The transport never
 /// constructs `System`.
 ///
 /// `System` is exempt from ω and from NOTHING ELSE: the version-chain
@@ -52,7 +52,7 @@ pub enum Caller {
 
 impl Caller {
     /// Is this caller the effective owner of `doc`? The ONE ownership
-    /// predicate of the write surface, and it does not compute ω itself: it
+    /// predicate of M5's writes, and it does not compute ω itself: it
     /// asks M3, whose `is_effective_owner` IS the rule (exact account match
     /// by principal id — delegation's id-injectivity makes id equality
     /// equivalent to prefix equality, and no registered owning prefix is
@@ -65,9 +65,9 @@ impl Caller {
     ///
     /// ω answers ANY address, registered or not, by its longest registered
     /// prefix, so this says "owner" of an address under the caller's own
-    /// account that names no document. Whether a write would pass the front
-    /// door is [`passes_write_gate`](Caller::passes_write_gate)'s question,
-    /// which asks registration first.
+    /// account that names no document. Whether a write would pass the
+    /// ownership gate is [`passes_ownership_gate`](Caller::passes_ownership_gate)'s
+    /// question, which asks registration first.
     pub fn is_owner(&self, m3: &M3State, doc: &Address) -> bool {
         match self {
             Caller::System => true,
@@ -75,38 +75,38 @@ impl Caller {
         }
     }
 
-    /// Does this caller pass the write surface's FRONT DOOR for `doc` — is
-    /// `doc` a REGISTERED document and this caller its effective owner
+    /// Does this caller pass the OWNERSHIP GATE for `doc` — is `doc` a
+    /// REGISTERED document and this caller its effective owner
     /// ([`is_owner`](Caller::is_owner))? The two questions `gate_write` asks,
     /// in its order, answered as one, for a door AHEAD of the store that
     /// defers to the store wherever the store's own first slot would refuse
     /// (PUB-6.36 slot 1, PUB-6.37) and so needs the answer and not the
     /// verdict: M10's write door, skep-media's media door and the daemon's
     /// producers ask it. `System` passes wherever `doc` is registered.
-    pub fn passes_write_gate(&self, m3: &M3State, doc: &Address) -> bool {
+    pub fn passes_ownership_gate(&self, m3: &M3State, doc: &Address) -> bool {
         m3.is_registered_document(doc) && self.is_owner(m3, doc)
     }
 }
 
-/// The front door every edit op and the publish shot open: `doc` must be a
-/// registered document, and `caller` must be its effective owner.
+/// THE OWNERSHIP GATE every edit op and the publish shot open: `doc` must be
+/// a registered document, and `caller` must be its effective owner.
 ///
 /// THE ORDER IS DECIDED HERE — registration first, so a write aimed at an
 /// unregistered document never reports `NotOwner` and never discloses an
 /// ownership verdict about an address that names nothing. The verdicts stay
 /// with the caller: each op passes its own two constructors, so its error
 /// contract remains readable at its own call site. Its boolean, for a door
-/// that defers rather than refuses, is [`Caller::passes_write_gate`] — the
-/// same two questions, and
-/// `the_front_doors_boolean_is_its_ordered_verdict_answered_as_one` holds
-/// the two to one answer over every kind of caller and address.
+/// that defers rather than refuses, is [`Caller::passes_ownership_gate`] —
+/// the same two questions, and
+/// `the_ownership_gates_boolean_is_its_ordered_verdict_answered_as_one`
+/// holds the two to one answer over every kind of caller and address.
 ///
-/// The registration this door establishes is also what the version-chain
+/// The registration this gate establishes is also what the version-chain
 /// reads ask first of the ops that open here (PUB-6.37):
 /// [`published_target`](crate::published_target) and the two surfaces built
 /// on it REQUIRE it, M3 answering the publication bit for registered
 /// addresses alone, and the frontier reads beside them, total, leave that
-/// polarity to their caller. Each op asks those reads only after this door,
+/// polarity to their caller. Each op asks those reads only after this gate,
 /// so the publication bit is read on registered addresses alone and an
 /// unregistered target answers the registration refusal, never a publication
 /// code.
@@ -132,8 +132,8 @@ mod tests {
     use crate::testutil::{a, ca, doc1, doc2, pdoc, seeded_m3};
 
     #[test]
-    fn the_front_doors_boolean_is_its_ordered_verdict_answered_as_one() {
-        // `passes_write_gate` is `gate_write`'s two questions as one answer,
+    fn the_ownership_gates_boolean_is_its_ordered_verdict_answered_as_one() {
+        // `passes_ownership_gate` is `gate_write`'s two questions as one answer,
         // for a door that defers rather than refuses — so over every kind of
         // caller and every tier of address it passes exactly where the gate
         // does. The family holds each owner's documents, an address under
@@ -159,7 +159,7 @@ mod tests {
             for doc in &addresses {
                 let verdict = gate_write(&m3, caller, doc, (), |_| ()).is_ok();
                 assert_eq!(
-                    caller.passes_write_gate(&m3, doc),
+                    caller.passes_ownership_gate(&m3, doc),
                     verdict,
                     "{caller:?} at {doc:?}"
                 );

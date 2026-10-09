@@ -77,7 +77,7 @@ fn cross_owner_version_mints_under_the_forkers_account() {
 
 #[test]
 fn a_parent_accounts_principal_versions_its_sub_accounts_document_across_ownership() {
-    // ω is EXACT on `version`'s arm as on the write gates (ASN-0042
+    // ω is EXACT on `version`'s arm as at the ownership gate (ASN-0042
     // O2/O3/O8): the parent account [1,0,1] contains the sub-account's
     // document by prefix, but its principal is not that document's effective
     // owner, so its fork takes the CROSS-OWNER arm — a fresh document in its

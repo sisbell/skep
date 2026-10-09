@@ -4,8 +4,8 @@
 
 use skep_address::{Address, Span};
 use skep_arrangement::{
-    as_ordinal_vspan, is_ordinal_vspan, seat_link, Caller, Deposit, HasM5, PlacedSegment, Run,
-    RunError, Runs, Shot, ShotTerms, VSpec, Vstream,
+    as_ordinal_vspan, is_ordinal_vspan, seat_link, Caller, Deposit, HasM5, Run, RunError, Runs,
+    SegmentRun, Shot, ShotTerms, VSpec, Vstream,
 };
 
 use crate::common::*;
@@ -52,10 +52,11 @@ fn the_public_values_key_a_hash_set_by_the_equality_they_compare_on() {
             base_extent: Some(n(0)),
         },
     );
-    // A segment is its class AND its run: one run, two classes, two segments.
+    // A segment run is its class AND its run: one run in two classes keys
+    // two entries.
     one_and_another(
-        PlacedSegment::Value(run(&ca(1), 1)),
-        PlacedSegment::Window(run(&ca(1), 1)),
+        SegmentRun::Value(run(&ca(1), 1)),
+        SegmentRun::Window(run(&ca(1), 1)),
     );
 }
 

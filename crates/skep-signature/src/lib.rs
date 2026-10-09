@@ -73,14 +73,11 @@
 //! * `signer.rs` — keygen from a seed and signing, per tag (`HybridSigner`),
 //!   under `sign`, which skepd leaves off and skep-client's `acting` turns
 //!   on: the client's signer, the suites' test signer and the goldens that
-//!   pin each tag's rule. Its two hooks — the Ed25519 half and
-//!   `sign_with_rng` — sit beside the private fields they read, each gated
-//!   on `test-hooks`.
-//! * `hooks.rs` — the fixtures' other hooks: the seeded stream, the widths
-//!   the sizes pin reads, the suites' seed carrier (`SeedCarrier`, no key),
-//!   and the hybrid's Ed25519 half as a suite holds it (`Ed25519SigningKey`),
-//!   the one door a suite has to `ed25519-dalek`'s key type; under
-//!   `test-hooks`, which implies `sign`.
+//!   pin each tag's rule. Its hooks sit beside the private fields they read,
+//!   each gated on `test-hooks`.
+//! * `hooks.rs` — the fixtures' hooks that read none of the signer's private
+//!   fields, and the crate's one list of every hook; under `test-hooks`,
+//!   which implies `sign`.
 //!
 //! `Rule`, below, is the one statement of the tag set all four match on.
 

@@ -20,12 +20,9 @@ readme = "README.md"
 # (`HybridSigner::sign`) and the signer's OS draw — for a signer, and for the
 # suites that sign their fixtures.
 sign = ["dep:rand_core_06", "dep:hkdf", "dep:sha2", "dep:getrandom", "dep:zeroize"]
-# `test-hooks` compiles in the fixtures' hooks — the seeded RNG
-# (`SeededRng06`), `HybridSigner::sign_with_rng`, the Ed25519 half's signing
-# key (`Ed25519SigningKey`, which `HybridSigner::ed25519_signing_key` alone
-# makes), the KDF's half seeds (`derive_half_seeds`), the widths the sizes pin
-# reads (`pq_widths`) and the suites' seed carrier (`SeedCarrier`) — and
-# implies `sign`.
+# `test-hooks` compiles in the fixtures' hooks — every item whose doc opens
+# `TEST HOOK`, each `#[doc(hidden)]` and no stable API, named together in
+# `src/hooks.rs`'s doc — and implies `sign`.
 # No shipped signer enables it: this crate's own tests turn it on through the
 # self dev-dependency below, and skepd's and skep-mcp's tests through their
 # own dev-dependencies on this crate, so a build that compiles no test

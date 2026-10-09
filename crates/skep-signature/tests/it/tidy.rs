@@ -1,19 +1,20 @@
 //! The crate's outer boundary, which the compiler holds none of: AUTH-2.2's
 //! "the one crate that links the signature libraries", read off the
-//! workspace's resolved graph; and the verify-only build a daemon links
+//! workspace's resolved graph; the verify-only build a daemon links
 //! (AUTH-2.89, I1: "skepd's source has no signing capability"), read off
-//! this crate's manifest.
+//! this crate's manifest; and the test hooks, as the one list `src/hooks.rs`
+//! keeps names them, read off the source's `TEST HOOK` markers.
 
 use std::collections::BTreeSet;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 /// THE ONE CRATE THAT LINKS `ed25519-dalek`, read off the workspace's
 /// resolved graph: every package `Cargo.lock` lists as depending on it —
 /// dev-dependencies included, since the lock does not tell them apart —
-/// is this crate and no other. The suites hold their seeds in `SeedCarrier`
-/// and reach the Ed25519 half through `Ed25519SigningKey` instead, so a
-/// manifest that names the library again lands in the lock and fails here,
-/// the way `cargo tree -i ed25519-dalek --workspace` would show it.
+/// is this crate and no other. The suites reach Ed25519 through this crate's
+/// hooks instead (`src/hooks.rs` names them), so a manifest that names the
+/// library again lands in the lock and fails here, the way
+/// `cargo tree -i ed25519-dalek --workspace` would show it.
 #[test]
 fn ed25519_dalek_is_linked_by_this_crate_alone() {
     let lock = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../../Cargo.lock"))
@@ -100,4 +101,84 @@ fn dependency_named(line: &str) -> Option<&str> {
     let name = key.split('.').next()?.trim().trim_matches('"');
     let is_name = |c: char| c.is_ascii_alphanumeric() || c == '-' || c == '_';
     (!name.is_empty() && name.chars().all(is_name)).then_some(name)
+}
+
+/// THE ONE LIST OF TEST HOOKS: `src/hooks.rs`'s module doc links every item
+/// this crate documents as a test hook — a doc line opening `TEST HOOK`, the
+/// marker skepd's `every_test_hook_compiles_only_under_test_hooks` reads to
+/// hold each one under the gate — and links nothing else. The doc build
+/// holds each link to a live item; this holds the list to the markers both
+/// ways, so a hook added without its entry, or an entry left for an item no
+/// longer marked, fails here — and the crate's other docs point at the list
+/// rather than restate it.
+#[test]
+fn hooks_rs_lists_every_test_hook_and_nothing_else() {
+    let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    let mut files = Vec::new();
+    rust_files(&src, &mut files);
+    let mut marked = BTreeSet::new();
+    for file in &files {
+        let text = std::fs::read_to_string(file).expect("a source file");
+        let lines: Vec<&str> = text.lines().collect();
+        // As skepd's check reads them: a file's markers end where its inline
+        // test module begins.
+        let end = lines.iter().position(|l| l.trim() == "mod tests {").unwrap_or(lines.len());
+        for (i, line) in lines[..end].iter().enumerate() {
+            if !line.trim_start().starts_with("/// TEST HOOK") {
+                continue;
+            }
+            let item = lines[i..]
+                .iter()
+                .map(|l| l.trim_start())
+                .find(|l| !l.starts_with("///") && !l.starts_with("#["))
+                .expect("a marked doc documents an item");
+            let names = names_declared(item);
+            assert!(!names.is_empty(), "{}: no name read off `{item}`", file.display());
+            marked.extend(names.into_iter().map(String::from));
+        }
+    }
+    assert!(!marked.is_empty(), "no `TEST HOOK` marker under src/: the markers have moved");
+    let hooks_rs = std::fs::read_to_string(src.join("hooks.rs")).expect("src/hooks.rs");
+    let list: Vec<&str> = hooks_rs.lines().map_while(|l| l.strip_prefix("//!")).collect();
+    let listed: BTreeSet<String> = list
+        .join(" ")
+        .split("[`")
+        .skip(1)
+        .filter_map(|link| link.split_once("`]"))
+        .map(|(target, _)| target.rsplit("::").next().unwrap_or(target).to_string())
+        .collect();
+    assert_eq!(listed, marked, "src/hooks.rs's list, against the items marked `TEST HOOK`");
+}
+
+/// The names one item line declares: each name a `pub use` brings in, or
+/// the name after the `fn`, `struct`, `enum`, `trait`, `type` or `const`
+/// keyword.
+fn names_declared(item: &str) -> Vec<&str> {
+    if let Some(path) = item.strip_prefix("pub use ") {
+        let path = path.trim_end_matches(';');
+        let group = match path.split_once('{') {
+            Some((_, group)) => group.trim_end_matches('}'),
+            None => path.rsplit("::").next().unwrap_or(path),
+        };
+        return group.split(',').map(str::trim).filter(|name| !name.is_empty()).collect();
+    }
+    let mut tokens = item.split_whitespace();
+    let keywords = ["fn", "struct", "enum", "trait", "type", "const"];
+    let Some(name) = tokens.find(|t| keywords.contains(t)).and_then(|_| tokens.next()) else {
+        return Vec::new();
+    };
+    let end = name.find(|c: char| !(c.is_alphanumeric() || c == '_')).unwrap_or(name.len());
+    vec![&name[..end]]
+}
+
+/// Every `.rs` file under `dir`, at any depth.
+fn rust_files(dir: &Path, out: &mut Vec<PathBuf>) {
+    for entry in std::fs::read_dir(dir).expect("a source directory") {
+        let path = entry.expect("a directory entry").path();
+        if path.is_dir() {
+            rust_files(&path, out);
+        } else if path.extension().is_some_and(|ext| ext == "rs") {
+            out.push(path);
+        }
+    }
 }

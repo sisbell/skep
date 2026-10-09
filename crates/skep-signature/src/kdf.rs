@@ -66,40 +66,40 @@ impl Drop for HalfSeeds {
 
 impl ZeroizeOnDrop for HalfSeeds {}
 
-/// HKDF-SHA-256 as the KDF PIN states it: `salt = KDF_SALT`, `IKM = seed`,
-/// `info = token ‖ 0x00 ‖ half_label`, 32 bytes out.
+/// THE KDF, as the KDF PIN states it (the crate doc): one seed to both half
+/// seeds under `tag`'s token by HKDF-SHA-256 — ONE Extract, `PRK =
+/// HMAC(KDF_SALT, seed)`, then one Expand per half, `info = token ‖ 0x00 ‖
+/// half_label`, 32 bytes out, written straight into the [`HalfSeeds`] that
+/// wipes it. `None` for a tag no row names or this build holds no rule for.
 ///
-/// THE ONE UNWIPED RESIDUE of a signer's keygen, by name: the `Hkdf` state —
-/// `hmac` 0.12's HMAC core, keyed by the PRK every half seed of a tag
-/// derives from, so as good as the seed itself — lives for this one call
-/// and is released before the half seed is handed back, but released as it
-/// is: neither `hkdf` 0.12 nor `hmac` 0.12 offers a wipe, and its fields
-/// are theirs to reach, not this crate's. The signer's wiping test pins
-/// exactly this.
-fn derive_half_seed(seed: &[u8; 32], token: &str, half_label: &[u8]) -> [u8; 32] {
-    let hk = Hkdf::<Sha256>::new(Some(KDF_SALT), seed);
-    let mut out = [0u8; 32];
-    // `info = token ‖ 0x00 ‖ half_label`, handed over as its three
-    // components: `hkdf`'s own `expand` is `expand_multi_info` over one
-    // component, so the concatenation is the crate's to make and no buffer is
-    // built here.
-    hk.expand_multi_info(&[token.as_bytes(), &[0u8], half_label], &mut out)
-        .expect("32 bytes is within HKDF-SHA-256's output bound");
-    out
-}
-
-/// THE KDF: one seed to both half seeds under `tag`'s token; `None` for a
-/// tag no row names or this build holds no rule for.
+/// WHAT IT LEAVES UNWIPED: the working state of `hkdf` 0.12 and of the
+/// `hmac` 0.12 and `digest` 0.10 it runs on, which wipe nothing they drop.
+/// By name, the parts that matter: a copy of the seed itself, which
+/// Extract's HMAC buffers and leaves in place when it pads the block; the
+/// PRK, which `Hkdf::new` computes and drops, and the HMAC state keyed by
+/// it, which the `Hkdf` keeps and each Expand copies; and each Expand's
+/// output block, which at 32 bytes IS that half seed. Every other
+/// intermediate derives from these. None of it is this crate's to reach; all
+/// of it is released before this returns; and holding a copy of the seed, it
+/// can tell no more than the seed does. The signer's wiping test pins the
+/// types.
 pub fn derive_half_seeds(tag: u8, seed: &[u8; 32]) -> Option<HalfSeeds> {
     let row = SigAlgRow::of_tag(tag)?;
     let pq_label = match Rule::of(tag)? {
         Rule::MlDsa65Ed25519 => HALF_LABEL_MLDSA65,
         Rule::FnDsa512PreviewEd25519 => HALF_LABEL_FNDSA512,
     };
-    Some(HalfSeeds {
-        ed25519: derive_half_seed(seed, row.token, HALF_LABEL_ED25519),
-        pq: derive_half_seed(seed, row.token, pq_label),
-    })
+    let hk = Hkdf::<Sha256>::new(Some(KDF_SALT), seed);
+    // `info = token ‖ 0x00 ‖ half_label`, handed over as its three
+    // components, so no buffer is built here.
+    let expand = |half_label: &[u8], out: &mut [u8; 32]| {
+        hk.expand_multi_info(&[row.token.as_bytes(), &[0u8], half_label], out)
+            .expect("32 bytes is within HKDF-SHA-256's output bound");
+    };
+    let mut halves = HalfSeeds { ed25519: [0; 32], pq: [0; 32] };
+    expand(HALF_LABEL_ED25519, &mut halves.ed25519);
+    expand(pq_label, &mut halves.pq);
+    Some(halves)
 }
 
 #[cfg(test)]

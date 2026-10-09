@@ -43,29 +43,28 @@ const GOLDEN_STREAM_SEED: [u8; 32] = GOLDEN_SEED;
 
 /// One tag's golden, in the documented form: the SHA-256 of the PQ public
 /// half, of the Ed25519 public half, of the whole raw key; the fingerprint;
-/// and per op cell the SHA-256 of the signature blob — the frames themselves
-/// pinned byte for byte by skepd's `the_entry_frames_bytes_per_op_are_pinned`.
-/// The `make_link` signatures moved with the replay fix (PUB-5.15): the body
-/// gained its `replaces` row, an EMPTY group in this member-less frame, in
-/// place under `skep-entry-v1` (l6-A3) — and ONCE MORE with the slot row's
-/// re-pin (ap6-3, d24-2; still in place under `skep-entry-v1`): the three
-/// slots are signed AS STORED, each a `0x03` row of spans, so the fixed
-/// make_link frame grew by its two unit spans' widths. The `publish`
-/// signatures moved with the publish re-pin of 2026-09-29 (V, l6-A4, D25's
-/// (c′)): the body became the count, the runs in the address form and the
-/// base-extent group, in place under the same tag, and the fixed instance
-/// gained a window and a base — and moved ONCE MORE at round 7 (bu7-E2 ARM
-/// (a), 2026-10-02; still in place under `skep-entry-v1`, l6-A3): the base
-/// group gained the base MEMBER's address beside the extent, the fixed
-/// publish frame growing by the member's slot row, twenty-four bytes; the
-/// `record` signatures were minted at the frame merge, its fourth grammar
-/// (fm-I) — the enrol's, which the record grade's build (2a) left unmoved,
-/// pinning the retire's and the claim's beside it — and stood through the
-/// slot row's re-pin, their two slot rows staying under `0x01` (d24-4); and
-/// the seven cells of the ten D24 pinned were minted with the widening, the
-/// three EMPTY bodies, the three other link writes and the `edit_link`. The
-/// keys, the fingerprints and the `insert` signatures have not moved since
-/// the tag was pinned.
+/// and per op cell the SHA-256 of the signature blob over that cell's fixed
+/// frame (`frames.rs`).
+///
+/// WHAT MAY MOVE A PIN — the frozen-tag rule, as a failing golden reads it.
+/// The KEY pins are what the seed derives under the tag — the KDF, the
+/// keygen, the KEY PIN's order — and the fingerprint of that key
+/// `docs/wire.md` publishes (`wire_doc.rs`). None is ever re-pinned: a moved
+/// key is a changed rule, which ships as a NEW tag, and a moved fingerprint
+/// renames every key a board has enrolled. A SIGNATURE pin is a function of
+/// the key, its cell's frame and, under tag 3, the fixtures' stream
+/// (`GOLDEN_STREAM_SEED`), and is re-pinned only in the change that moves
+/// one of those: a frame that changes — skep-identity's entry frame, changed
+/// in place under `skep-entry-v1` (l6-A3), or a fixed instance in
+/// `frames.rs` — moves that cell's pin in
+/// `the_frame_preimage_per_op_cell_is_pinned` in the same change, and a
+/// change to `SeededRng06` moves every tag-3 signature at once. A signature
+/// that moves while its preimage pin and, under tag 3, the stream stand is a
+/// change to what the tag signs or verifies: a NEW tag, never a re-pin. Made
+/// to the signer and the verifier alike, such a change passes every round
+/// trip in this crate, and for tag 3's post-quantum half and both tags'
+/// Ed25519 half these pins alone see it. Which pins have moved, and under
+/// which ruling, is this file's history.
 struct TagGolden {
     tag: u8,
     pq_pk: &'static str,
@@ -120,10 +119,24 @@ fn check_golden(g: &TagGolden) {
     );
     assert_eq!(pq, g.pq_pk, "the PQ public half moved — a keygen change is a NEW tag\n{report}");
     assert_eq!(ed, g.ed_pk, "the Ed25519 half moved — the KDF is a frozen pin\n{report}");
-    assert_eq!(raw, g.raw_key, "{report}");
-    assert_eq!(fp, g.fingerprint, "{report}");
+    assert_eq!(
+        raw, g.raw_key,
+        "the raw key moved with both halves standing — the KEY PIN's order is frozen: a NEW \
+         tag\n{report}"
+    );
+    assert_eq!(
+        fp, g.fingerprint,
+        "the fingerprint moved with the key standing — that renames every enrolled key and moves \
+         wire.md's published vectors: never a re-pin here\n{report}"
+    );
     for (i, SignedFrame { op, .. }) in signed.iter().enumerate() {
-        assert_eq!(sigs[i], g.sigs[i], "the {op} signature moved under tag {}\n{report}", g.tag);
+        assert_eq!(
+            sigs[i], g.sigs[i],
+            "the {op} signature moved under tag {} — re-pinned only beside a moved preimage pin \
+             for this cell (or, under tag 3, a changed fixture stream); otherwise the rule \
+             moved: a NEW tag (`TagGolden`)\n{report}",
+            g.tag
+        );
     }
 }
 
@@ -189,26 +202,29 @@ fn golden_tag_3_fndsa512_preview_ed25519() {
     });
 }
 
-/// THE PREIMAGE GOLDEN (round 7, 2026-10-02 — the builder's
-/// `owed-test-instruments-without-lane`; SO-I1, SO-I6): one FIXED frame
-/// PREIMAGE per op cell of the entry frame, pinned as its bytes' SHA-256 hex
-/// under tag 1's `alg` token — preimages and not signatures, since tag 3's
-/// signing is randomized — byte-asserted, so a member silently absent from a
-/// body (round 7's BLOCKER: the base member the `publish` body did not carry)
-/// fails the build here, whatever the signatures over it do. The thirteen
-/// fixed frames (`frames.rs`) cover `insert` (undeclared), `make_link`
-/// WITHOUT its `replaces` row over unit spans and the EMPTY `to`, `publish`
-/// with a value stretch, a window and the base group FILLED, the three
-/// `record`s (rows 3 and 4 EMPTY), the three EMPTY bodies over the parent
-/// account, the three other link writes over the stored link and the
+/// THE PREIMAGE GOLDEN (SO-I1, SO-I6): one FIXED frame PREIMAGE per op cell of
+/// the entry frame, pinned as its bytes' SHA-256 hex under tag 1's `alg` token
+/// (preimages and not signatures, since tag 3's signing is randomized),
+/// byte-asserted, so a member silently absent from a body — the base member of
+/// a `publish`, for one — fails the build here, whatever the signatures over
+/// it do. The thirteen fixed frames (`frames.rs`) cover `insert` (undeclared),
+/// `make_link` WITHOUT its `replaces` row over unit spans and the EMPTY `to`,
+/// `publish` with a value stretch, a window and the base group FILLED, the
+/// three `record`s (rows 3 and 4 EMPTY), the three EMPTY bodies over the
+/// parent account, the three other link writes over the stored link and the
 /// `edit_link` with its pair's row and resolved extents; this table adds the
 /// cells they leave out — an `insert` DECLARED under a type, a `make_link`
 /// WITH its `replaces` row, a `make_link` whose `to` is a RESOLVED content
 /// extent (the slot a V-spec stores as, §7.6's vector (vii)), the `publish`
 /// BIRTH SHAPE with the EMPTY group — and pins the thirteen beside them, so
 /// one table names every cell with its preimage's length. The frames are the
-/// twins skepd pins byte for byte (`the_entry_frames_bytes_per_op_are_pinned`);
-/// the pin here is the hash a second implementation checks against.
+/// twins skepd pins byte for byte
+/// (`the_entry_frames_bytes_per_op_are_pinned`); the pin here is the hash a
+/// second implementation checks against. It moves only with the frame —
+/// skep-identity's entry frame, changed in place under `skep-entry-v1`
+/// (l6-A3), or a fixed instance in `frames.rs` — re-pinned here beside skepd's
+/// byte pin, and it is the witness the signature goldens' re-pin rule reads
+/// (`TagGolden`).
 #[test]
 fn the_frame_preimage_per_op_cell_is_pinned() {
     let alg = ALG_MLDSA65_ED25519;
@@ -241,12 +257,6 @@ fn the_frame_preimage_per_op_cell_is_pinned() {
     );
     let [(_, insert), (_, link), (_, publish), (_, enrol), (_, retire), (_, claim), (_, create), (_, fork), (_, version), (_, nullify), (_, assert_sup), (_, emit), (_, edit)] =
         thirteen;
-    // The publish cell's preimage grew by the base member's slot row — 185
-    // to 209 bytes — at round 7's re-pin; the make_link cells grew by their
-    // two unit spans' delimited widths — 177 to 207 and 205 to 235 — at the
-    // slot row's re-pin, which minted the resolved cell and the seven D24
-    // cells beside them; every other cell is as the seam build, the replay
-    // fix and the frame merge left it.
     let cells: [(&str, Vec<u8>, usize, &str); 17] = [
         ("insert, undeclared", insert, 134, "d84853b3c36c8bf452ec57e662c57911eae550193a6c9cf6e8c468ecf118efe2"),
         ("insert, declared", frame(&declared), 146, "199775c4e92c52b6b49b7fb702de449690f2b6be837b5f72d07cb640176aed26"),
@@ -386,10 +396,11 @@ fn sizes_and_timings_per_tag() {
 /// question): `fn-dsa` 0.4.0 selects its floating-point backend by
 /// `target_arch` alone — the native `f64` on `x86_64`, `aarch64`, `arm64ec`
 /// and `riscv64`, the INTEGER-EMULATED IEEE-754 backend everywhere else —
-/// with no feature to force the emulation, so on this `aarch64` machine the
-/// native backend signs; the emulated signer is compiled for no installed
-/// target here and could not be run. This test records which backend signed
-/// the goldens, and that it signs and verifies.
+/// with no feature to force the emulation. The tag-3 signature pins are the
+/// native backend's output; that the emulated one reproduces them — as
+/// `fn-dsa` means it to, bit for bit — is checked only where this suite runs
+/// on a target outside the four. This test prints which backend signs here,
+/// and checks that it signs and verifies.
 #[test]
 fn the_fn_dsa_preview_signs_and_verifies_on_this_target() {
     let native = cfg!(any(

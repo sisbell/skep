@@ -1,11 +1,19 @@
 //! THE FIXTURES' HOOKS (the `fuzz_support` standing: `#[doc(hidden)]`, not a
-//! stable API) — the seeded stream a tag-3 golden signs over
-//! ([`SeededRng06`]), the widths the sizes pin reads ([`pq_widths`]), the
+//! stable API), compiled under `test-hooks` alone, which no shipped signer
+//! enables — and the crate's ONE LIST of its hooks, every item whose doc opens
+//! `TEST HOOK`: `tests/it/tidy.rs` holds this list to those markers both ways,
+//! so a hook added or dropped is named here and nowhere else in prose. In this
+//! file: the seeded stream a tag-3 golden signs over ([`SeededRng06`]), the
+//! widths the sizes pin reads ([`pq_widths`], answering [`PqWidths`]), the
 //! suites' seed carrier ([`SeedCarrier`]), which is no key, and the hybrid's
 //! Ed25519 half as a suite holds it ([`Ed25519SigningKey`]), the one door a
-//! suite has to `ed25519-dalek`'s key type — compiled under `test-hooks`
-//! alone, which no shipped signer enables. The two hooks on `HybridSigner`
-//! itself sit in the signer's file, beside the private fields they read.
+//! suite has to `ed25519-dalek`'s key type. Beside the private fields they
+//! read, in the signer's file:
+//! [`HybridSigner::ed25519_signing_key`](crate::HybridSigner::ed25519_signing_key)
+//! and [`HybridSigner::sign_with_rng`](crate::HybridSigner::sign_with_rng).
+//! And the KDF's own answer, re-exported at the crate root:
+//! [`derive_half_seeds`](crate::derive_half_seeds), answering
+//! [`HalfSeeds`](crate::HalfSeeds).
 
 use std::fmt;
 
@@ -78,9 +86,9 @@ impl rand_core_06::RngCore for SeededRng06 {
 
 impl rand_core_06::CryptoRng for SeededRng06 {}
 
-/// The widths one tag's rule fixes — [`pq_widths`]' answer. Named, not a
-/// triple: three `usize`s meaning three things, printed into a report that
-/// is transcribed.
+/// TEST HOOK (the same standing) — the widths one tag's rule fixes,
+/// [`pq_widths`]' answer. Named, not a triple: three `usize`s meaning three
+/// things, printed into a report that is transcribed.
 #[doc(hidden)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct PqWidths {

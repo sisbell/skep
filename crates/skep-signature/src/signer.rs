@@ -4,8 +4,8 @@
 //! preview draws through: the exact bytes its keygen is fed (the KDF's half
 //! seed) and the OS draw a signature's seed comes from. Compiled under
 //! `sign`, which skepd leaves off, so the daemon's build holds none of it.
-//! Its own two test hooks sit here, beside the private fields they read,
-//! each gated on `test-hooks`.
+//! Its own test hooks sit here, beside the private fields they read, each
+//! gated on `test-hooks`.
 
 use std::fmt;
 
@@ -169,13 +169,16 @@ impl PqSigner {
 /// from it wipes itself, `fn-dsa`'s own). The half seeds
 /// [`HybridSigner::from_seed`] derives are wiped as they go out of scope
 /// inside it, once each half has been handed to its keygen (`HalfSeeds`).
-/// WHAT IS NOT WIPED, by name: the `hkdf` state the KDF derives each half
-/// seed through — `hmac` 0.12's HMAC core keyed by the PRK, which neither
-/// `hkdf` 0.12 nor `hmac` 0.12 overwrites and this crate cannot reach; it
-/// lives for one derivation and never past `from_seed`. And the caveat
-/// every wipe carries: a copy the compiler makes when a value is moved is
-/// beyond any crate's reach. The signer's wiping test holds this paragraph
-/// to the build, type by type.
+/// WHAT IS NOT WIPED, by name: the KDF's working state — `hkdf` 0.12's, and
+/// that of the `hmac` 0.12 and `digest` 0.10 it runs on, which wipe nothing
+/// they drop and which this crate cannot reach: a copy of the seed itself,
+/// as Extract's HMAC buffers it, and what derives from it on the way to the
+/// half seeds — the PRK, the HMAC state keyed by it, and each Expand's
+/// output block, a copy of that half seed. All of it is released before
+/// `from_seed` keygens either half, and holding a copy of the seed, it tells
+/// no more than the seed does. And the caveat every wipe carries: a copy the
+/// compiler makes when a value is moved is beyond any crate's reach. The
+/// signer's wiping test holds this paragraph to the build, type by type.
 pub struct HybridSigner {
     ed: EdSigningKey,
     pq: PqSigner,
@@ -403,10 +406,11 @@ mod tests {
     /// off each type's `ZeroizeOnDrop` in this very build: the Ed25519 signing
     /// key, the FN-DSA key each tag-3 signature decodes, the stored FN-DSA
     /// encoding it decodes from, the ML-DSA-65 key and the KDF's half seeds
-    /// wipe themselves; the `hkdf` state the KDF derives the half seeds
-    /// through does not — the one residue, named in the doc. A feature line,
-    /// a derive or a field type that moves any of the six fails here, so the
-    /// doc moves with it.
+    /// wipe themselves; the KDF's working state does not — Extract's HMAC,
+    /// which buffers a copy of the seed, the `Output` the PRK and each
+    /// Expand's block are held in, and the `Hkdf` keyed by the PRK — the
+    /// residue the doc names. A feature line, a derive or a field type that
+    /// moves any of the eight fails here, so the doc moves with it.
     #[test]
     fn a_dropped_signer_wipes_both_keys_and_the_half_seeds_but_not_the_kdf_state() {
         use std::marker::PhantomData;
@@ -437,12 +441,16 @@ mod tests {
                 Probe::<Zeroizing<Vec<u8>>>::WIPES,
                 Probe::<ml_dsa::SigningKey<MlDsa65>>::WIPES,
                 Probe::<crate::kdf::HalfSeeds>::WIPES,
+                Probe::<hkdf::HkdfExtract<sha2::Sha256>>::WIPES,
+                Probe::<sha2::digest::Output<sha2::Sha256>>::WIPES,
                 Probe::<hkdf::Hkdf<sha2::Sha256>>::WIPES,
             ],
-            [true, true, true, true, true, false],
+            [true, true, true, true, true, false, false, false],
             "wiped on drop: the Ed25519 key, the decoded FN-DSA key and its stored encoding, the \
-             ML-DSA-65 key and the half seeds; not the `hkdf` state, which no crate in this build \
-             overwrites — `HybridSigner`'s doc"
+             ML-DSA-65 key and the half seeds; not the KDF's working state — Extract's HMAC with \
+             its copy of the seed, the `Output` the PRK and each Expand's block are held in, the \
+             `Hkdf` keyed by the PRK — which no crate in this build overwrites: `HybridSigner`'s \
+             doc"
         );
     }
 }

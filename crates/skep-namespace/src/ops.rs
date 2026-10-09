@@ -36,12 +36,14 @@ use crate::HasM3;
 ///
 /// PRECEDENCE — every `TxnError` other than `Rejected` is M2's, passed
 /// through unchanged, and it speaks in M2's stated order around this
-/// module's own refusals: an op's pre-work refusals first, since they open
-/// no transaction; then M2's `Poisoned`, which `transact` answers before
-/// running the closure; then the op's in-closure refusals, in its error
-/// enum's declared order; then what M2 judges only of a closure that staged
-/// its records, in M2's order — `Poisoned` on an exhausted `Seq` order, then
-/// `Unencodable`, `OverBudget` and `Durability`.
+/// module's own refusals: the refusals made before any transaction opens
+/// come first — an op's pre-work, and `fork`'s unknown id, which `fork`
+/// reads off a snapshot M2 serves even from a poisoned kernel; then M2's
+/// `Poisoned`, which `transact` answers before running the closure; then
+/// the op's in-closure refusals, in its error enum's declared order; then
+/// what M2 judges only of a closure that staged its records, in M2's order —
+/// `Poisoned` on an exhausted `Seq` order, then `Unencodable`, `OverBudget`
+/// and `Durability`.
 pub struct Namespace<'k, W: WorldState> {
     kernel: &'k Kernel<W>,
     /// THE ATTESTATION this handle's two document mints commit under (signed
@@ -462,7 +464,9 @@ where
     /// `pfx(caller)` off a snapshot — value-stable, since prefixes are
     /// immutable (O13) — so the resolution takes no transaction; an unknown
     /// id returns `Err(TxnError::Rejected(CreateDocumentError::NotOwner))`
-    /// directly, opening NO transaction. Then reduces to
+    /// directly, opening NO transaction — so it speaks ahead of M2's
+    /// `Poisoned`, M2 serving that snapshot even from a poisoned kernel
+    /// (PRECEDENCE on [`Namespace`]). Then reduces to
     /// [`Namespace::create_new_document`]`(caller, pfx(caller))`, whose
     /// ω-auth passes by construction (SelfOwnershipAtPrefix), and returns
     /// its `(Address, Seq)`: that op's one transaction is the only one `fork`

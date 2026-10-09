@@ -114,6 +114,12 @@ pub enum M3Rec {
     /// folds it, and [`M3State::is_allocated`]'s permanent `true` no longer
     /// holds on its chain.
     ///
+    /// An ACCOUNT's `Allocate` owes one record more, and the fold does not
+    /// check it: its principal's [`M3Rec::RegisterPrincipal`], in the same
+    /// transaction (O17b — an account's seat is its allocation; that record
+    /// states the coupling's other half). `delegate`, the only op that
+    /// allocates an account, stages both.
+    ///
     /// `published` is the RESOLVED publication state of a minted DOCUMENT
     /// (PUB-7.8, PUB-7.10, PUB-8.18): every document-minting record journals
     /// the bit its caller resolved — never the caller's three-valued flag, so
@@ -145,6 +151,20 @@ pub enum M3Rec {
     /// Delegation's principal half (§6). Written once: the fold leaves an
     /// already-seated prefix's principal alone (O12/O13), so no later record
     /// replaces a seat.
+    ///
+    /// ITS PRODUCER'S HALF — two clauses, and the fold checks neither: stage
+    /// it in the transaction that stages its prefix's own `Allocate` (O17b;
+    /// ASN-0042's PrefixBaptismCoupling — an account's seat is its
+    /// allocation), and under an `id` no principal carries. `delegate`, its
+    /// one producer on the journal, keeps both: its `DuplicateId` gate
+    /// refuses a carried id, and it stages the seat beside the `Allocate` its
+    /// account mint returned. Genesis folds its one seat beside its account's
+    /// `Allocate`, under an id no root carries. Staged without the
+    /// allocation, the record seats an account no chain holds, and the
+    /// owner-of-address read (AUTH-6.37) then calls that account allocated;
+    /// staged under a carried id, it makes [`M3State::principal_prefix`]
+    /// arbitrary. Any other producer owes both clauses, and no type enforces
+    /// them.
     RegisterPrincipal {
         #[serde(deserialize_with = "account_tier_prefix")]
         prefix: Address,
@@ -320,7 +340,7 @@ pub struct M3State {
     /// (the private walk `omega` states the cost;
     /// [`crate::Namespace::delegate`] names whose bound the count is).
     ///
-    /// Three standing properties, and they hold by three different means:
+    /// Four standing properties, and they hold by three different means:
     ///
     /// * prefix-injectivity (O1b, by (v)) is STRUCTURAL, carried by the map's
     ///   own key;
@@ -337,6 +357,19 @@ pub struct M3State {
     ///   bare derive because genesis's own seat is node-tier. So ω re-checks
     ///   it as well — the private walk `omega` filters by tier — ω being the
     ///   one reader whose answer to a below-tier entry would be a PASS.
+    /// * the seat–allocation coupling — an account-tier prefix is seated iff
+    ///   it is allocated, the seated ⇒ allocated half being ASN-0042's
+    ///   PrefixBaptismCoupling — is a PRODUCER invariant like id-injectivity.
+    ///   `delegate`, the account chain's sole allocator, stages an account's
+    ///   `Allocate` and its `RegisterPrincipal` in one transaction (O17b), and
+    ///   genesis folds its one account the same way; [`M3State::apply_m3`]
+    ///   folds either record without the other and re-establishes neither
+    ///   half ([`M3Rec::RegisterPrincipal`] states what its producer owes).
+    ///   It is the property [`M3State::account_seat`] stands on to answer for
+    ///   every registered document and account, and
+    ///   [`M3State::effective_owner_prefix`] to answer a registered
+    ///   document's own account, and what makes the owner-of-address read's
+    ///   `prefix == a` an account's allocation test (AUTH-6.37).
     ///
     /// The ONLY authoritative ownership state — the delegation forest is
     /// recomputable (NestingByDelegation) and never stored. An `OrdMap`
@@ -663,14 +696,19 @@ impl M3State {
     /// immutable; no op re-seats, since `delegate` seats only a fresh
     /// prefix). Whether a prefix is seated is a claim about the registry,
     /// which no door holding one frame can settle, so the fold answers it at
-    /// one lookup, on every build. Id-injectivity is the fact that arm does
-    /// NOT check, and that is deliberate rather than missing: one id ↦ at
-    /// most one principal is a PRODUCER invariant, owned by `delegate`'s
-    /// `DuplicateId` gate alone. The fold could check it — an arm sees the
-    /// whole slice — but Π is keyed by prefix, so the check is a Θ(|Π|) scan
-    /// per replayed seat, making replay of N delegations Θ(N²); and it has no
-    /// fail-safe direction, since skipping the seat would leave the account
-    /// its transaction allocated unseated. What rests on it is
+    /// one lookup, on every build. Two facts that arm does NOT check are its
+    /// producer's, and [`M3Rec::RegisterPrincipal`] states both. The prefix's
+    /// allocation is one: a seat folds whether or not its prefix is
+    /// allocated, as an account's `Allocate` folds without a seat, so their
+    /// coupling is the producer invariant `delegate` keeps by staging both in
+    /// one transaction (O17b). Id-injectivity is the other, and leaving it
+    /// unchecked is deliberate rather than missing: one id ↦ at most one
+    /// principal is a PRODUCER invariant, owned by `delegate`'s `DuplicateId`
+    /// gate alone. The fold could check it — an arm sees the whole slice —
+    /// but Π is keyed by prefix, so the check is a Θ(|Π|) scan per replayed
+    /// seat, making replay of N delegations Θ(N²); and it has no fail-safe
+    /// direction, since skipping the seat would leave the account its
+    /// transaction allocated unseated. What rests on it is
     /// [`M3State::principal_prefix`]'s single-valuedness, and through it
     /// `fork`'s account and M5's cross-owner VERSION target: a
     /// `RegisterPrincipal` from any producer but `delegate` would seat a
@@ -678,8 +716,8 @@ impl M3State {
     /// is its sole producer on the journal; genesis folds one more —
     /// `SYSTEM_PRINCIPAL`'s seat, onto roots where only π₀'s id is live —
     /// before any delegation can run, and from then on `delegate`'s
-    /// `DuplicateId` gate refuses that id. M2's journal is the boundary that
-    /// keeps it so.
+    /// `DuplicateId` gate refuses that id. Any other producer owes both
+    /// clauses, and no type enforces them.
     #[must_use = "apply_m3 returns the folded slice; it does not modify the receiver"]
     pub fn apply_m3(&self, r: &M3Rec) -> M3State {
         let mut s = self.clone();

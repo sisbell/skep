@@ -11,6 +11,7 @@
 //! published to callers outside M3 ([`first_document_address`],
 //! [`first_version_address`]).
 
+use num_traits::Zero;
 use serde::{Deserialize, Deserializer, Serialize};
 use skep_address::{
     checked_inc, inc, is_t4_valid, parent, shift, validate, Address, GateViolation, Level, Nat,
@@ -274,10 +275,16 @@ fn first_in(key: &NsKey) -> Result<Address, GateViolation> {
 ///
 /// PRECONDITION `n ≥ 1` — a chain opens at ordinal 1. Both callers
 /// discharge it (`next_in` passes `m + 1`; `latest_version` answers `None`
-/// at `m = 0`), and `Nat`'s subtraction panics on underflow if one does not.
+/// at `m = 0`). It is asserted on entry, ahead of the anchor's own
+/// precondition, so a call at `n = 0` is a caller's bug answered as one: a
+/// panic naming this precondition, whatever key it names.
 ///
 /// [`M3State::latest_version`]: crate::M3State::latest_version
 pub(crate) fn nth_in(key: &NsKey, n: &Nat) -> Result<Address, GateViolation> {
+    assert!(
+        !n.is_zero(),
+        "nth_in precondition: n ≥ 1 — a chain opens at ordinal 1"
+    );
     let c1 = first_in(key)?;
     Ok(validate(shift(c1.tumbler(), &(n - 1u32)))
         .expect("differs from gated c1 only in a positive ordinal"))

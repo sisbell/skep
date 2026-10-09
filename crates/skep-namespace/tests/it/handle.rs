@@ -19,15 +19,17 @@ use tempfile::tempdir;
 
 #[test]
 fn pre_work_rejections_open_no_transaction() {
-    // §6/§7: `delegate`'s NotValid/NotAccountTier/TooDeep, `register_node`'s
-    // NotValid/NotNode/TooDeep and `fork`'s unknown id are decided from the
-    // argument alone and reject with NO transaction opened. M2 answers a
-    // nested `transact` with a panic naming the broken obligation and permits
-    // `snapshot()` inside a closure (kernel §3), so calling them from inside
-    // a transaction is what separates "rejected before opening one" from
-    // "rejected inside one" — `current_seq` cannot, since a rejected closure
-    // draws no Seq either. Both `TooDeep`s are here for the reason they exist:
-    // an oversized request must cost nothing, not a lock and a transaction.
+    // §6/§7: `delegate`'s NotValid/NotAccountTier/TooDeep and
+    // `register_node`'s NotValid/NotNode/TooDeep are decided from the argument
+    // alone, and `fork`'s unknown id off a snapshot of committed state, so all
+    // reject with NO transaction opened. M2 answers a nested `transact` with a
+    // panic naming the broken obligation and permits `snapshot()` inside a
+    // closure (kernel §3) — the read `fork`'s refusal makes — so calling them
+    // from inside a transaction is what separates "rejected before opening
+    // one" from "rejected inside one" — `current_seq` cannot, since a rejected
+    // closure draws no Seq either. Both `TooDeep`s are here for the reason
+    // they exist: an oversized request must cost nothing, not a lock and a
+    // transaction.
     let k = mem_kernel(genesis_world());
     let ns = Namespace::new(&k);
     let over_cap_node: Vec<u32> = std::iter::repeat_n(1u32, MAX_NODE_COMPONENTS + 1).collect();

@@ -104,6 +104,25 @@ fn a_next_field_key_over_an_element_anchor_fails_soft() {
     assert_eq!(nth_in(&key, &Nat::from(3u32)), Err(GateViolation));
 }
 
+/// `nth_in`'s precondition `n ≥ 1` is its callers' — a chain opens at
+/// ordinal 1 — and a breach is a caller's bug answered as one: a panic that
+/// names the broken precondition, raised on entry. The key is the one above,
+/// which answers `GateViolation` as a value at every positive ordinal, so
+/// the test shows the precondition speaking ahead of the anchor's soft
+/// refusal: checked after the anchor — where `Nat`'s own subtraction sits —
+/// the breach would come back here as a value its caller reads as a
+/// refusal, and on every other key as a panic inside `Nat`'s arithmetic
+/// that names no obligation.
+#[test]
+#[should_panic(expected = "nth_in precondition: n ≥ 1")]
+fn nth_in_at_ordinal_zero_panics_naming_its_precondition() {
+    let key = NsKey {
+        parent: t(&[1, 0, 1, 0, 1, 0, 1, 1]),
+        g: Generator::NextField,
+    };
+    let _ = nth_in(&key, &Nat::from(0u32));
+}
+
 /// The generator IS ASN-0040's baptismal depth `d ∈ {1, 2}`: it is the
 /// numeral wherever bytes are written — the checkpointed frontier key and
 /// `ns_lock_key`'s trailing byte — and no third value survives the way back

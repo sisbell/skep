@@ -1,6 +1,6 @@
-//! The fold's totality domain, the journaled types' serde round trips, decode
-//! doors, canonical bytes and the slice's rendering, and durable recovery by
-//! checkpoint and replay.
+//! The fold's totality domain and what it leaves to its producers, the
+//! journaled types' serde round trips, decode doors, canonical bytes and the
+//! slice's rendering, and durable recovery by checkpoint and replay.
 
 use crate::common::*;
 
@@ -122,6 +122,42 @@ fn a_replayed_seat_never_replaces_a_seated_principal() {
     assert_eq!(replayed.principal_prefix(ID1), Some(&acct));
     assert!(replayed.principal_prefix(ID2).is_none());
     assert_eq!(replayed, seated);
+}
+
+/// The seat–allocation coupling (O17b; ASN-0042's PrefixBaptismCoupling) is
+/// its PRODUCERS' and not the fold's — `M3Rec::RegisterPrincipal` states
+/// what a producer owes, and the `principals` field lists the coupling among
+/// Π's producer invariants: `apply_m3` folds an account's `Allocate` with no
+/// seat, and a `RegisterPrincipal` at an account no chain holds, each as it
+/// arrives, and re-establishes neither half. On every state the ops produce
+/// the halves agree
+/// (`an_account_is_allocated_iff_a_principal_is_seated_at_it`); this is the
+/// state a producer that broke the coupling leaves, and what each half's
+/// breach costs the owner-of-address read (AUTH-6.37), which reads
+/// `prefix == a` as an account's allocation test. The other clause the fold
+/// leaves unchecked, a seat under a carried id, is
+/// `omega_names_the_seat_it_matched_when_two_principals_carry_one_id`'s.
+#[test]
+fn the_fold_leaves_the_seat_allocation_coupling_to_its_producers() {
+    let (allocated, seated) = (a(&[1, 0, 1]), a(&[1, 0, 2]));
+    let s = M3State::genesis()
+        .apply_m3(&alloc(&[1, 0, 1]))
+        .apply_m3(&M3Rec::RegisterPrincipal {
+            prefix: seated.clone(),
+            id: ID2,
+        });
+
+    // Allocated and seated nowhere: ω climbs to π₀'s node seat, so the
+    // owner-of-address read calls the account free, an owner above it owns
+    // its documents, and the owner-account read answers nobody.
+    assert!(s.is_registered_account(&allocated));
+    assert_eq!(s.effective_owner_prefix(&allocated), Some(&a(&[1])));
+    assert_eq!(s.account_seat(&allocated), None);
+    // Seated and allocated nowhere: ω answers the seat itself, so the
+    // owner-of-address read calls allocated an account no chain holds.
+    assert!(!s.is_allocated(&seated));
+    assert_eq!(s.effective_owner_prefix(&seated), Some(&seated));
+    assert_eq!(s.principal_prefix(ID2), Some(&seated));
 }
 
 // ---- serde / recovery ----

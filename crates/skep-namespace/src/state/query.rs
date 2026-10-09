@@ -59,16 +59,18 @@ impl M3State {
     }
 
     /// `true` iff `a` exists in the name space — minted on a frontier in ANY
-    /// namespace, content/link included, or, for a node, admitted by
-    /// `register_node` (node addresses are never minted here — ASN-0047
-    /// NodeBaptism originates them outside the docuverse). THE allocation
-    /// oracle (§2). Ghost principle (B3): reflects *allocation*, never
-    /// byte-presence — a registered-empty document is a valid, addressable
-    /// ghost; content existence is M4's separate axis, and a check that
-    /// content exists asks M4, never this read. E is append-only, so a `true`
-    /// answer is permanent (B0/P1) on any slice whose every record fell
-    /// inside [`M3State::apply_m3`]'s totality domain — as each mint's record
-    /// does when staged where [`M3Rec::Allocate`] says.
+    /// namespace, content/link included, or, for a node, held in the node
+    /// registry: Σ₀'s root `[1]`, the system node genesis's seed admits, and
+    /// every node `register_node` admitted (node addresses are never minted
+    /// here — ASN-0047 NodeBaptism originates them outside the docuverse).
+    /// THE allocation oracle (§2). Ghost principle (B3): reflects
+    /// *allocation*, never byte-presence — a registered-empty document is a
+    /// valid, addressable ghost; content existence is M4's separate axis, and
+    /// a check that content exists asks M4, never this read. E is
+    /// append-only, so a `true` answer is permanent (B0/P1) on any slice
+    /// whose every record fell inside [`M3State::apply_m3`]'s totality domain
+    /// — as each mint's record does when staged where [`M3Rec::Allocate`]
+    /// says.
     ///
     /// [`M3Rec::Allocate`]: crate::M3Rec::Allocate
     pub fn is_allocated(&self, a: &Address) -> bool {
@@ -461,10 +463,9 @@ impl M3State {
     /// [`prefix_contains`] — the ownership-divergence trap: π₀'s prefix `[1]`
     /// contains every account delegated under it, so containment is true for
     /// several principals at once, and only the longest match arbitrates. O2
-    /// exclusivity is then a theorem given prefix-injectivity, which
-    /// delegation's freshness gate enforces; id-injectivity (`DuplicateId`)
-    /// makes the id comparison equivalent to comparing the principals
-    /// themselves.
+    /// exclusivity is then a theorem given prefix-injectivity, which Π's key
+    /// makes structural (O1b); id-injectivity (`DuplicateId`) makes the id
+    /// comparison equivalent to comparing the principals themselves.
     pub fn is_effective_owner(&self, id: PrincipalId, a: &Address) -> bool {
         self.effective_owner(a) == Some(id)
     }

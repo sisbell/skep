@@ -1136,8 +1136,10 @@ Rules that hold across its files:
   its principal's `M3Rec::RegisterPrincipal` in one transaction, and genesis
   folds its one account the same way. So a registered account is owned at
   exactly its own prefix, and so is every document in it — its owner
-  account, which `M3State::account_seat` reads by one lookup. A second path
-  that allocates an account owes the same seat.
+  account, which `M3State::account_seat` reads by one lookup. The fold
+  checks neither half: a second path that allocates an account owes the
+  same seat, and a second path that seats a principal owes its prefix's
+  allocation.
 - **A namespace has one spelling.** `NsKey`'s fields are private to
   `src/ns.rs`, so every frontier key, and every chain lock key encoded from
   one, is built there. The two registry keys are M3's own, crate-private.

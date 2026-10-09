@@ -1081,7 +1081,14 @@ fn doc_states_the_upload_setting_the_default_limit_the_creations_gate_and_the_to
         "the upload permit pool is carried, and the list of what is not names it still: {not_carried}"
     );
     let health = prose("\n## The other endpoints", &["\n## A first board, end to end"]);
-    for fact in ["`media`", "`media.uploads`", "\"media\":{\"uploads\":true}"] {
+    for fact in [
+        "`media`",
+        "`media.uploads`",
+        "\"media\":{\"uploads\":true}",
+        "`writes`",
+        "`writes.halted`",
+        "\"writes\":{\"halted\":false}",
+    ] {
         assert!(health.contains(fact), "§The other endpoints says {fact:?}");
     }
     let refusals = prose("\n### Credential refusals", &["\n## Operations"]);
@@ -1165,6 +1172,98 @@ fn doc_states_the_cell_index_the_readiness_refusal_and_the_pruner() {
         statuses.contains("| 503 | `index_rebuilding` |"),
         "§HTTP status codes carries the token at 503"
     );
+}
+
+/// D23 — `/health`'s `writes` MEMBER (wire.md §The other endpoints; op-D10
+/// (a)) and the object's ORDER RULE: the section names the member, its one
+/// boolean `halted`, what the boolean means and the count of members a
+/// consumer is written to; its example carries `"writes":{"halted":false}`
+/// in its place; the example's top-level keys stand in the order the
+/// daemon's key-sorting `obj` writes them — alphabetical, `writes` after
+/// `ok` — and a live daemon's `/health` answers the same keys in the same
+/// order, `writes` false on a healthy board.
+#[test]
+fn doc_states_the_writes_member_and_the_health_examples_keys_are_the_daemons_in_its_order() {
+    let health = prose("\n## The other endpoints", &["\n## A first board, end to end"]);
+    for fact in [
+        "`writes` is an object with one boolean, `halted`",
+        "`writes.halted` is `false` on a healthy board",
+        "these seven members",
+        "must not treat an eighth as a violation",
+    ] {
+        assert!(health.contains(fact), "§The other endpoints says {fact:?}");
+    }
+    // The example off the document's own lines: `prose` collapses the
+    // section's whitespace, and the example is the one line opening on
+    // the `auth` member.
+    let text = wire_md();
+    let section = text.find("\n## The other endpoints").expect("the section");
+    let example = text[section..]
+        .lines()
+        .find(|line| line.starts_with("{\"auth\":"))
+        .expect("the section's /health example");
+    let keys = top_level_keys(example);
+    let mut sorted = keys.clone();
+    sorted.sort();
+    assert_eq!(keys, sorted, "the example's keys stand in obj's alphabetical order");
+    assert_eq!(
+        keys,
+        ["auth", "chain_head", "head_time", "log_position", "media", "ok", "writes"],
+        "the seven members, each once"
+    );
+    let dir = tempfile::tempdir().expect("tempdir");
+    let sd = crate::common::spawn_unclaimed(dir.path());
+    let (st, body) = crate::common::get(sd.port(), "/health");
+    assert_eq!(st, 200, "{}", String::from_utf8_lossy(&body));
+    let served = std::str::from_utf8(&body).expect("the answer is UTF-8");
+    assert_eq!(top_level_keys(served), keys, "the daemon's /health carries the example's keys in its order");
+    let v: Value = serde_json::from_slice(&body).expect("json");
+    assert_eq!(v["writes"], serde_json::json!({"halted": false}), "a healthy board: {v}");
+    sd.shutdown();
+}
+
+/// The member names of one JSON object's text at its top level, in the
+/// order written — read off the bytes, since a parsed map forgets the
+/// order: a string met at depth one where a member name is due.
+fn top_level_keys(text: &str) -> Vec<String> {
+    let bytes = text.as_bytes();
+    let mut keys = Vec::new();
+    let mut depth = 0usize;
+    let mut in_string = false;
+    let mut escaped = false;
+    let mut string_start = 0;
+    let mut name_due = false;
+    for (i, &b) in bytes.iter().enumerate() {
+        if in_string {
+            if escaped {
+                escaped = false;
+            } else if b == b'\\' {
+                escaped = true;
+            } else if b == b'"' {
+                in_string = false;
+                if depth == 1 && name_due {
+                    keys.push(text[string_start..i].to_string());
+                    name_due = false;
+                }
+            }
+            continue;
+        }
+        match b {
+            b'{' => {
+                depth += 1;
+                name_due = depth == 1;
+            }
+            b'[' => depth += 1,
+            b'}' | b']' => depth -= 1,
+            b',' if depth == 1 => name_due = true,
+            b'"' => {
+                in_string = true;
+                string_start = i + 1;
+            }
+            _ => {}
+        }
+    }
+    keys
 }
 
 /// Every `op_at` example is the strict `{"at", "frame"}` envelope around a

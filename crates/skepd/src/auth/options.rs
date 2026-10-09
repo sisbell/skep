@@ -270,6 +270,17 @@ impl AuthConfig {
         )
     }
 
+    /// Whether this config is CLAIMED-PERMISSIVE at a snapshot whose claim
+    /// is `claimed` — the one bit the standing line re-says once an hour
+    /// while it stands (`operations.md` §1 THE RATES, `CLAIMED-PERMISSIVE`),
+    /// read as [`Mode::of`] reads the pair rather than as the conjunction
+    /// that computes it. A method and not a `Mode` at the caller because
+    /// this module is private to the session layer: the daemon's tick can
+    /// reach the config it holds and no type of this file's.
+    pub fn claimed_permissive(&self, claimed: bool) -> bool {
+        Mode::of(self, claimed) == Mode::ClaimedPermissive
+    }
+
     /// THE LIST IN FORCE — AUTH-4.36 step 4b's `blocked_prefixes(cfg)`, a
     /// pure read of the cell [`AuthConfig::install_blocked`] replaces. By
     /// value (one pointer clone), so no reader holds the cell's lock across

@@ -63,6 +63,22 @@ pub(crate) const BLOB_IDLE_BOUND: Duration = Duration::from_secs(30);
 /// listing.
 pub(crate) const PRUNE_INTERVAL: Duration = Duration::from_secs(3600);
 
+/// THE STANDING LINE's CADENCE — one hour, INTERIM (D1: a daemon constant
+/// for a cadence, as the pruner's interval is, and its precedent): the
+/// interval of the checkpoint thread's timed wait on the write path's
+/// signal (`write_path::CheckpointSignal::wait`), at each tick of which the
+/// thread writes ONE `standing:` line re-saying every standing bad state
+/// that stands — the write path's halt, the kernel's poison, a stopped feed
+/// file, the pruner's dead thread, the floor binding, CLAIMED-PERMISSIVE —
+/// and nothing on a healthy board (`operations.md` §1 THE RATES; §1.1 m11).
+/// What the interval bounds is how long a standing state goes unsaid past
+/// its transition: each is said once at its transition, so a stream rotated
+/// past that line holds nothing of it, and an hour is the most a reader of
+/// the current stream waits to learn of a state that still stands. A tick
+/// on a healthy board costs the six reads — an atomic load or one lock each
+/// — and writes nothing.
+pub(crate) const STANDING_INTERVAL: Duration = Duration::from_secs(3600);
+
 /// THE TRANSFER BOUND of one blob request — 10 minutes, INTERIM: the
 /// deadline on SLOWNESS the idle bound cannot give (a peer pacing one byte
 /// per interval renews the idle bound for as long as it cares to, and the

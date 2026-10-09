@@ -179,9 +179,7 @@ mod scan;
 use std::fmt;
 use std::num::NonZeroU64;
 use std::path::Path;
-#[cfg(any(test, feature = "test-hooks"))]
-use std::sync::atomic::AtomicBool;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::Instant;
 
 #[cfg(any(test, feature = "test-hooks"))]
@@ -211,7 +209,9 @@ use crate::auth::{startup_warnings, AuthOptions, AuthState, PortAlreadyBound, Re
 use crate::codec::JsonCodec;
 use crate::history::History;
 use crate::limits::{MAX_REQUEST_BODY, MAX_SMALL_BODY};
-use crate::write_path::{FeedCompaction, FirstHead, WritePath};
+#[cfg(any(test, feature = "test-hooks"))]
+use crate::write_path::LinesSaid;
+use crate::write_path::{FeedCompaction, FirstHead, StoppedFile, WritePath};
 use actor::Resolved;
 use reply::{class_varying, refuse, with_signal, TransportError};
 use request::BodySource;
@@ -497,6 +497,10 @@ pub struct Daemon {
     /// resident set's high-water. Held here because the thread is
     /// `listen.rs`'s and the test seam runs its arms on a caller's thread.
     checkpointer: CheckpointMemory,
+    /// THE LIVENESS FLAGS of the daemon's two threads ([`ThreadLiveness`]):
+    /// each set by its loop's catch as the thread ends on a caught panic,
+    /// the pruner's read by the standing line.
+    threads: ThreadLiveness,
     /// The dirty-crash harness's one seam into the claim's step
     /// (`Daemon::hold_between_the_claim_and_its_head`): armed, the
     /// claim-flip tail announces the crash window and parks there, both
@@ -506,16 +510,52 @@ pub struct Daemon {
     /// this crate's library, outside its `cfg(test)`.
     #[cfg(any(test, feature = "test-hooks"))]
     hold_between_claim_and_head: AtomicBool,
+    /// TEST SEAM: the three panic seams the thread-death claims arm
+    /// ([`ThreadFaults`]) — the checkpoint thread's, the pruner's and the
+    /// deferred unlink's — each fired once at its site and disarmed as it
+    /// fires. `false` is the only state production ever sees.
+    #[cfg(any(test, feature = "test-hooks"))]
+    faults: ThreadFaults,
     /// TEST SEAM: every line this daemon has said through its own classed
     /// door ([`Daemon::say`], [`Daemon::say_lines`]) this uptime, each
     /// `{class}: {text}` — the configuration lines after the bind, the
     /// warnings at both their moments, the blocked list, the flip's landing
-    /// line, the reissue's refusal — kept for `Daemon::lines_said`, since no
-    /// suite captures stderr in-process. The open's own lines are said
+    /// line, the reissue's refusal, the standing line, the kernel's halt
+    /// line and the two thread catches' lines — kept for
+    /// `Daemon::lines_said`, since no suite captures stderr in-process. The
+    /// record is the write path's ([`LinesSaid`]), shared: the kernel's halt
+    /// line has a site below the daemon. The open's own lines are said
     /// before this value exists and the checkpoint thread's keep their own
     /// record; neither is here.
     #[cfg(any(test, feature = "test-hooks"))]
-    said: Mutex<Vec<String>>,
+    said: LinesSaid,
+}
+
+/// THE LIVENESS FLAGS (`operations.md` §1.1 row 41; §4 rows 24 and 25): one
+/// per daemon-owned loop thread, set by the thread's own catch as it ends
+/// on a caught panic — never cleared, since nothing re-spawns a thread but
+/// a restart. The pruner's is a read of the standing line (`the pruner's
+/// thread is gone`); the checkpoint thread's is the standing line's own
+/// carrier, so no clause reads it — the hook reads both.
+struct ThreadLiveness {
+    /// The pruner's thread ended on a caught panic: no pass runs until a
+    /// restart.
+    pruner_ended: AtomicBool,
+    /// The checkpoint thread ended on a caught panic: every checkpoint from
+    /// here is the backstop's, and no standing line comes.
+    checkpointer_ended: AtomicBool,
+}
+
+/// TEST SEAM: the three panic seams, each an arm fired ONCE at its site —
+/// the checkpoint thread's at the top of its next loop turn, the pruner's at
+/// the top of its next, the deferred unlink's inside `Daemon::retire_asides`
+/// — and disarmed as it fires. Per daemon, as the checkpoint hold is, since
+/// each site is a method or a loop of one daemon's.
+#[cfg(any(test, feature = "test-hooks"))]
+struct ThreadFaults {
+    checkpointer: AtomicBool,
+    pruner: AtomicBool,
+    unlink: AtomicBool,
 }
 
 /// Deliberately opaque: reporting the log position would take the kernel's
@@ -761,6 +801,8 @@ impl Daemon {
             let snap = engine.kernel().snapshot();
             AuthState::open(opts, snap.world()).map_err(DaemonError::BlockedPrefixes)?
         };
+        #[cfg(any(test, feature = "test-hooks"))]
+        let said = Arc::clone(writes.lines_said());
         let daemon = Daemon {
             engine,
             febe,
@@ -773,10 +815,20 @@ impl Daemon {
             fetches: FetchPool::new(),
             uploads: UploadPool::new(),
             checkpointer: CheckpointMemory::at_open(start_point, newest_at_open),
+            threads: ThreadLiveness {
+                pruner_ended: AtomicBool::new(false),
+                checkpointer_ended: AtomicBool::new(false),
+            },
             #[cfg(any(test, feature = "test-hooks"))]
             hold_between_claim_and_head: AtomicBool::new(false),
             #[cfg(any(test, feature = "test-hooks"))]
-            said: Mutex::new(Vec::new()),
+            faults: ThreadFaults {
+                checkpointer: AtomicBool::new(false),
+                pruner: AtomicBool::new(false),
+                unlink: AtomicBool::new(false),
+            },
+            #[cfg(any(test, feature = "test-hooks"))]
+            said,
         };
         // THE CRASH WINDOW, closed before anything is served (signed ops, s1;
         // see the method): a claimed board whose journal holds no head owes
@@ -1195,12 +1247,79 @@ impl Daemon {
         }
     }
 
+    /// THE STANDING LINE's ACT (`operations.md` §1 THE RATES; §1.1 m11) —
+    /// what the checkpoint thread runs at each tick of its timed wait
+    /// ([`Woken::Tick`](crate::write_path::Woken::Tick)): the six reads,
+    /// each one atomic load or one lock and none under the serialization
+    /// guard — the write path's halt with its position, the kernel's poison,
+    /// the feed's stopped files with theirs, the pruner's liveness flag, the
+    /// media gate's free space against its floor in force (both read fresh
+    /// here, so the floor's clause stops by itself once room stands) and the
+    /// CLAIMED-PERMISSIVE bit as `log_config_warnings` reads the claim — and
+    /// ONE line, [`StandingLine`], under `Class::Standing`, where at least
+    /// one clause stands; NOTHING otherwise. The cell index's FAILED state
+    /// is the seventh read, the index's own lane's: the renderer holds its
+    /// place and nothing here reads it yet. No clause for the checkpoint
+    /// thread's own death — it is the carrier.
+    pub(crate) fn say_the_standing_line(&self) {
+        let free_space = self.media.free_space();
+        let floor = self.media.floor();
+        let line = StandingLine {
+            halted_at: self.writes.halted_at(),
+            poisoned: self.engine.kernel().is_poisoned(),
+            stopped_files: self.writes.stopped_feed_files(),
+            pruner_gone: self.threads.pruner_ended.load(Ordering::Acquire),
+            index_failed: false,
+            floor: (free_space < floor).then_some(FloorBinding { free_space, floor }),
+            claimed_permissive: self.auth.cfg.claimed_permissive(self.board_is_claimed()),
+        };
+        if line.stands() {
+            self.say(Class::Standing, line);
+        }
+    }
+
+    /// THE KERNEL's HALT, READ AT THE CATCH (m10's second site): after the
+    /// transport caught a panic on a write, one atomic load of the kernel's
+    /// poison — an unwind whose repair failed, or that passed the barrier,
+    /// poisons the kernel and re-raises, so the `500 internal_panic` the
+    /// catch answers is the only answer that write gives and no `Rejected`
+    /// comes until the next write, hours away on a quiet board — and, where
+    /// it reads poisoned, the line through the write path's once-flag
+    /// ([`WritePath::say_the_kernels_halt_once`]), which the first site
+    /// shares: said once between the two, whichever is reached first.
+    pub(crate) fn say_the_kernels_halt_if_poisoned(&self) {
+        if self.engine.kernel().is_poisoned() {
+            self.writes.say_the_kernels_halt_once();
+        }
+    }
+
+    /// THE CHECKPOINT THREAD's CATCH (`operations.md` §1.1 row 41; §4 row
+    /// 25): what its loop's `catch_unwind` runs on a caught panic, as the
+    /// thread ends — the liveness flag, then the consequence line
+    /// ([`CheckpointThreadEndedLine`]) under `Class::Failure`. The hook's
+    /// line has said the panic and its site; this says what the board lost.
+    /// The standing line ends with its carrier: no cure here.
+    pub(crate) fn the_checkpoint_thread_ended(&self) {
+        self.threads.checkpointer_ended.store(true, Ordering::Release);
+        self.say(Class::Failure, CheckpointThreadEndedLine);
+    }
+
+    /// THE PRUNER's CATCH (row 41; §4 row 24): what its loop's
+    /// `catch_unwind` runs on a caught panic, as the thread ends — the
+    /// liveness flag the standing line reads, then the consequence line
+    /// ([`PrunerThreadEndedLine`]) under `Class::Failure`.
+    pub(crate) fn the_pruner_thread_ended(&self) {
+        self.threads.pruner_ended.store(true, Ordering::Release);
+        self.say(Class::Failure, PrunerThreadEndedLine);
+    }
+
     /// One classed line of this daemon's own on the operator stream — the
-    /// configuration lines, the warnings, the flip's landing, a refusal —
-    /// through the classed door, so no line of this daemon's can go out
-    /// without its class word; and, under the test seam, kept for the suite
-    /// (`Daemon::lines_said`). The checkpoint thread's lines take their own
-    /// door ([`Daemon::say_checkpoint_line`]), with their own record.
+    /// configuration lines, the warnings, the flip's landing, a refusal,
+    /// the standing line, a thread catch's consequence — through the classed
+    /// door, so no line of this daemon's can go out without its class word;
+    /// and, under the test seam, kept for the suite (`Daemon::lines_said`).
+    /// The checkpoint thread's lines take their own door
+    /// ([`Daemon::say_checkpoint_line`]), with their own record.
     fn say(&self, class: Class, what: impl fmt::Display) {
         #[cfg(any(test, feature = "test-hooks"))]
         self.said.lock().push(format!("{class}: {what}"));
@@ -1898,6 +2017,123 @@ impl fmt::Display for CheckpointThreadRefusedLine<'_> {
              cadence's byte bound and the media floor stay at the open's figures; and no \
              standing line will come: each state is said at its transition alone",
             self.0
+        )
+    }
+}
+
+/// THE STANDING LINE (`operations.md` §1 THE RATES; §1.1 m11), in the
+/// operator stream's ruled words: one clause per standing bad state, each
+/// by name with its position or file, joined by `; ` in THE RATES' order —
+/// `the write path is halted since position {p} (feed-attest.log)`; `the
+/// kernel is poisoned`; `{file} stopped since position {p}` once per
+/// stopped file; `the pruner's thread is gone`; `the cell index failed to
+/// build`; `deposits refused at the floor (free space {f} below the floor
+/// in force {F})`; `CLAIMED-PERMISSIVE`. A pure value over the reads
+/// ([`Daemon::say_the_standing_line`] makes them), pinned by `to_string()`
+/// in the unit suite; emitted under `Class::Standing` at a tick where
+/// [`StandingLine::stands`], and never otherwise. States, positions and
+/// files alone — no principal, token, path, query or reader rides it. The
+/// index's clause has its field and no read yet: the cell index's FAILED
+/// state is its own lane's, which supplies the read.
+pub(super) struct StandingLine {
+    /// The write path's halt and the position it was set at.
+    pub(super) halted_at: Option<Seq>,
+    /// `Kernel::is_poisoned`.
+    pub(super) poisoned: bool,
+    /// The feed's stopped files, each with its position.
+    pub(super) stopped_files: Vec<StoppedFile>,
+    /// The pruner's liveness flag.
+    pub(super) pruner_gone: bool,
+    /// The cell index's FAILED state — the seventh read, its lane's.
+    pub(super) index_failed: bool,
+    /// The floor binding: the free space read below the floor in force.
+    pub(super) floor: Option<FloorBinding>,
+    /// The board CLAIMED-PERMISSIVE.
+    pub(super) claimed_permissive: bool,
+}
+
+/// The floor's two figures at the tick, both the media gate's own reads.
+pub(super) struct FloorBinding {
+    pub(super) free_space: u64,
+    pub(super) floor: u64,
+}
+
+impl StandingLine {
+    /// Whether at least one clause stands — the one condition the line is
+    /// said under.
+    pub(super) fn stands(&self) -> bool {
+        self.halted_at.is_some()
+            || self.poisoned
+            || !self.stopped_files.is_empty()
+            || self.pruner_gone
+            || self.index_failed
+            || self.floor.is_some()
+            || self.claimed_permissive
+    }
+}
+
+impl fmt::Display for StandingLine {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let mut clauses: Vec<String> = Vec::new();
+        if let Some(at) = self.halted_at {
+            clauses.push(format!("the write path is halted since position {at} (feed-attest.log)"));
+        }
+        if self.poisoned {
+            clauses.push("the kernel is poisoned".to_string());
+        }
+        for file in &self.stopped_files {
+            clauses.push(format!("{} stopped since position {}", file.name, file.since));
+        }
+        if self.pruner_gone {
+            clauses.push("the pruner's thread is gone".to_string());
+        }
+        if self.index_failed {
+            clauses.push("the cell index failed to build".to_string());
+        }
+        if let Some(floor) = &self.floor {
+            clauses.push(format!(
+                "deposits refused at the floor (free space {} below the floor in force {})",
+                floor.free_space, floor.floor
+            ));
+        }
+        if self.claimed_permissive {
+            clauses.push("CLAIMED-PERMISSIVE".to_string());
+        }
+        f.write_str(&clauses.join("; "))
+    }
+}
+
+/// THE CHECKPOINT THREAD's CONSEQUENCE LINE (`operations.md` §1.1 row 41;
+/// §4 row 25), the ruled words verbatim: what the board lost with the
+/// thread — every checkpoint from here is the kernel's backstop's, run
+/// inline on a writer and said by nothing, and the byte bound and the media
+/// floor stand frozen at the last landing's figures (the re-reads were the
+/// thread's). A pure value pinned by `to_string()`; emitted under
+/// `Class::Failure` by [`Daemon::the_checkpoint_thread_ended`], once, after
+/// the hook's line has said the panic itself.
+pub(super) struct CheckpointThreadEndedLine;
+
+impl fmt::Display for CheckpointThreadEndedLine {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(
+            "checkpoint thread ended: every checkpoint from here is the backstop's, unsaid; the \
+             byte bound and the floor stay where they were",
+        )
+    }
+}
+
+/// THE PRUNER's CONSEQUENCE LINE (row 41; §4 row 24), the ruled words
+/// verbatim: no pass runs until a restart, so the blob logs are never
+/// compacted and the lapsed tail is never reclaimed. A pure value pinned by
+/// `to_string()`; emitted under `Class::Failure` by
+/// [`Daemon::the_pruner_thread_ended`], once, after the hook's line.
+pub(super) struct PrunerThreadEndedLine;
+
+impl fmt::Display for PrunerThreadEndedLine {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(
+            "pruner thread ended: no pass runs until a restart; the blob logs' compaction and \
+             the lapsed tail's reclaim stop",
         )
     }
 }

@@ -575,6 +575,10 @@ impl Daemon {
     /// operator's line, never a client's: the aside stands for the pass or
     /// the next open.
     pub(super) fn retire_asides(&self) {
+        // THE FAULT (test seam): a panic inside the deferred step, which the
+        // transport's catch around this call contains.
+        #[cfg(any(test, feature = "test-hooks"))]
+        self.fire_the_unlinks_fault();
         if let Err(e) = self.media.store().unlink_asides() {
             skep_util::notice::line(format_args!(
                 "blob store: a replaced file's aside could not be unlinked: {e}"

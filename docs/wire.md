@@ -4592,12 +4592,12 @@ the other — and every such reading corrects itself on the next probe.
 The forward rule the change feed states for its own members (§The change
 feed: "a client MUST ignore an entry member it does not know … a consumer
 written to today's members must not treat a later one as a protocol
-violation") holds here too: a consumer written to these six members must
-not treat a seventh as a violation. A claimed board configured with one
-origin answers, illustratively:
+violation") holds here too: a consumer written to these seven members
+must not treat an eighth as a violation. A claimed board configured with
+one origin answers, illustratively:
 
 ```json
-{"auth":{"claimant":"1.0.1","local_trust":true,"origins":["http://127.0.0.1:8642","http://[::1]:8642","http://localhost:8642","https://board.example"],"signed_origins":["https://board.example"]},"chain_head":"a65b74b44f6e7c4338342b8a6a8760b6d73e753b57492fc43b3ab2599f7b75b7","head_time":1786838400047,"log_position":24,"media":{"uploads":true},"ok":true}
+{"auth":{"claimant":"1.0.1","local_trust":true,"origins":["http://127.0.0.1:8642","http://[::1]:8642","http://localhost:8642","https://board.example"],"signed_origins":["https://board.example"]},"chain_head":"a65b74b44f6e7c4338342b8a6a8760b6d73e753b57492fc43b3ab2599f7b75b7","head_time":1786838400047,"log_position":24,"media":{"uploads":true},"ok":true,"writes":{"halted":false}}
 ```
 
 `auth.claimant` is the claiming account's address, `null` while
@@ -4613,7 +4613,15 @@ derive the mode from the `(claimant, local_trust)` pair (§Identity).
 daemon config like `auth.local_trust` and never board state:
 `media.uploads` echoes the upload setting (§Media, THE UPLOAD SETTING —
 `--no-uploads` closes the upload family), the one read a client makes
-before any face that names an upload speaks.
+before any face that names an upload speaks. `writes` is an object with
+one boolean, `halted`: whether the daemon refuses every write until a
+restart — the write path's halt, where an entry signature's line could
+not be made durable, or the kernel's poison, where a commit's repair
+could not complete — while reads serve; `writes.halted` is `false` on a
+healthy board, `true` for the rest of the uptime once either halt stands
+(every write then answers `poisoned` at the `halt` disposition, §Rejection
+codes), and `ok` stays `true` throughout, since the daemon is serving.
+The operator stream names each halt's cause and the act.
 
 **The published head document** — `1.1.0.1.0.2`, the version-chain document
 `H` (PUB-6.65). The board's OWN daemon writes `H` as

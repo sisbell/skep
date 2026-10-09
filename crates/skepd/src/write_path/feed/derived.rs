@@ -124,7 +124,12 @@ pub(super) struct LineFile {
     /// Set by the first FAILED [`LineFile::append`] of this uptime — or
     /// failed [`LineFile::sync`], or a [`LineFile::rewrite`] that failed
     /// PAST its rename — after which this file takes no further APPEND and
-    /// no FENCE.
+    /// no FENCE. `Some` carries THE POSITION THE STOP WAS SET AT — the
+    /// position the stop's own line names, an ordering the standing line
+    /// re-says the stop by (`operations.md` §1 THE RATES, `{file} stopped
+    /// since position {p}`): the failed append's position; the coverage a
+    /// failed sync was asked to make durable; the fence a rewrite failed
+    /// past its rename at, which is what the next open re-derives from.
     ///
     /// [`LineFile::rewrite`] is not GUARDED by it: it writes the file WHOLE
     /// from the resident twin and fences at the coverage it has just made
@@ -149,7 +154,7 @@ pub(super) struct LineFile {
     /// position after it from `commits.log`. The resident twin is updated
     /// ahead of every append, so this uptime still answers correctly; what
     /// stops is the testimony, which is what the next open reads.
-    stopped: bool,
+    stopped: Option<u64>,
     /// The coverage the last successful [`LineFile::sync`] made durable —
     /// set in that sync's own success arm, so no line reads as synced that
     /// no `sync_data` covered.
@@ -229,7 +234,7 @@ impl LineFile {
             dir: dir.to_path_buf(),
             name,
             coverage,
-            stopped: false,
+            stopped: None,
             #[cfg(any(test, feature = "test-hooks"))]
             synced: 0,
             #[cfg(any(test, feature = "test-hooks"))]
@@ -270,11 +275,11 @@ impl LineFile {
     /// the failure was reported once, at the append that raised it, and this
     /// file's on-disk coverage must not rise past the gap it left.
     pub fn append(&mut self, at: u64, fields: Vec<(&'static str, Value)>) -> io::Result<()> {
-        if self.stopped {
+        if self.stopped.is_some() {
             return Ok(());
         }
         if let Err(e) = self.file.write_all(&line_bytes(&record_object(at, fields))) {
-            self.stopped = true;
+            self.stopped = Some(at);
             return Err(e);
         }
         self.coverage = self.coverage.max(at);
@@ -315,7 +320,7 @@ impl LineFile {
     /// file takes nothing and answers an error, never `Ok` — a line it did
     /// not write is no durable line.
     pub fn append_synced(&mut self, at: u64, fields: Vec<(&'static str, Value)>) -> io::Result<()> {
-        if self.stopped {
+        if self.stopped.is_some() {
             return Err(io::Error::other(format!("{} stopped at an earlier failure", self.name)));
         }
         self.append(at, fields)?;
@@ -336,7 +341,7 @@ impl LineFile {
                 Ok(())
             }
             Err(e) => {
-                self.stopped = true;
+                self.stopped = Some(self.coverage);
                 Err(e)
             }
         }
@@ -369,18 +374,26 @@ impl LineFile {
         self.fail_next_rewrite_past_rename = true;
     }
 
-    /// The test seam's reading of the stop: whether this file takes no
-    /// further line. Not a stable API.
-    #[cfg(any(test, feature = "test-hooks"))]
-    pub fn is_stopped(&self) -> bool {
+    /// THE STOP AS A READ: the position this file's stop was set at
+    /// ([`LineFile`]'s `stopped` says which position each cause carries),
+    /// or `None` while the file takes lines — what the standing line
+    /// re-says a stopped file by, once an hour while it stands.
+    pub fn stopped_since(&self) -> Option<u64> {
         self.stopped
+    }
+
+    /// The unit suite's reading of the stop: whether this file takes no
+    /// further line. Not a stable API.
+    #[cfg(test)]
+    pub fn is_stopped(&self) -> bool {
+        self.stopped.is_some()
     }
 
     /// Append the coverage fence `{"covered":N}` — a no-op when the file
     /// already covers `covered`, and a no-op on a stopped file, whose
     /// coverage claim must stay below the position it lost.
     pub fn fence(&mut self, covered: u64) -> io::Result<()> {
-        if self.stopped || covered <= self.coverage {
+        if self.stopped.is_some() || covered <= self.coverage {
             return Ok(());
         }
         self.file.write_all(&fence_line(covered))?;
@@ -436,7 +449,7 @@ impl LineFile {
                 Ok(())
             }
             Err(e) => {
-                self.stopped = true;
+                self.stopped = Some(covered);
                 skep_util::notice::line(format_args!(
                     "{} rewrite failed past its rename: {e}; this file takes no further line, so \
                      the next open re-derives from its fence",
@@ -549,7 +562,7 @@ impl LineFile {
             dir: dir.to_path_buf(),
             name,
             coverage,
-            stopped: false,
+            stopped: None,
             synced: 0,
             fail_next_rewrite_past_rename: false,
         }

@@ -337,6 +337,23 @@ pub(super) struct Feed {
     inner: Mutex<Inner>,
 }
 
+/// A feed file STOPPED this uptime — `commits.log` or one of the four
+/// derived files, taking no further line — by name, with the position its
+/// stop was set at: the failed append's position, or the fence a rewrite
+/// failed past its rename at (each file's `stopped` field says which). What
+/// the standing line re-says a stopped file by, once an hour while it
+/// stands (`operations.md` §1 THE RATES, `{file} stopped since position
+/// {p}`); the attest store is never among them — its stop halts the write
+/// path, which the halt's own clause carries.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct StoppedFile {
+    /// The file's name, as its own lines name it.
+    pub name: &'static str,
+    /// The position the stop was set at — an ordering (THE JOINS), the one
+    /// the file's own stop line names.
+    pub since: u64,
+}
+
 /// THE ATTEST STORE'S FAILURE (SO-I5 (d)): a line [`AttestStore::record`]
 /// could not make durable — its write or its sync failed, said once on the
 /// operator stream there — answered through [`Feed::record`] to the write
@@ -732,14 +749,17 @@ impl Feed {
         inner.files.streams.fail_next_rewrite_past_rename();
     }
 
-    /// The test seam behind `crate::Daemon::stopped_feed_files`: the names
-    /// of the five files that take no further line. Not a stable API.
-    #[cfg(any(test, feature = "test-hooks"))]
-    pub(super) fn stopped_files(&self) -> Vec<&'static str> {
+    /// THE STOPPED FILES, as a read: of `commits.log` and the four derived
+    /// files, those that take no further line this uptime, each with the
+    /// position its stop was set at ([`StoppedFile`]) — `commits.log` first,
+    /// then the four in their table's order — under the feed's lock and no
+    /// guard. The standing line's read (once an hour while any stands) and
+    /// the test seam `crate::Daemon::stopped_feed_files`'s.
+    pub(super) fn stopped_files(&self) -> Vec<StoppedFile> {
         let inner = self.inner.lock();
         let mut stopped = Vec::new();
-        if inner.log.is_stopped() {
-            stopped.push("commits.log");
+        if let Some(since) = inner.log.stopped_since() {
+            stopped.push(StoppedFile { name: "commits.log", since });
         }
         for (name, file) in [
             (INDEX_FILE, &inner.files.index),
@@ -747,8 +767,8 @@ impl Feed {
             (MASKED_FILE, &inner.files.masked),
             (STREAMS_FILE, &inner.files.streams),
         ] {
-            if file.is_stopped() {
-                stopped.push(name);
+            if let Some(since) = file.stopped_since() {
+                stopped.push(StoppedFile { name, since });
             }
         }
         stopped

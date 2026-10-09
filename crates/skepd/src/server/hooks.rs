@@ -3,7 +3,7 @@
 
 use std::num::NonZeroU64;
 use std::path::Path;
-use std::sync::atomic::{AtomicU8, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::time::Duration;
 
 use skep_engine::{HistoryError, Recovery};
@@ -77,7 +77,104 @@ pub(super) fn fire_the_worker_fault_outside_the_catch() {
     }
 }
 
+/// Take a per-daemon arm where it stands: `true` once per arming.
+fn take_the_fault(arm: &AtomicBool) -> bool {
+    arm.swap(false, Ordering::AcqRel)
+}
+
 impl Daemon {
+    /// The checkpoint thread's side of its panic seam, called by the
+    /// transport at the top of the thread's loop turn, after the hold and
+    /// before it looks at the flag: a panic whose payload is a literal, so
+    /// the binary's hook carries it, located at the CALLER's site, which
+    /// the loop's catch contains — the consequence line, the flag, and the
+    /// thread's end.
+    #[track_caller]
+    pub(super) fn fire_the_checkpoint_threads_fault(&self) {
+        if take_the_fault(&self.faults.checkpointer) {
+            panic!("the test seam's fault in the checkpoint thread's loop");
+        }
+    }
+
+    /// The pruner's side of its panic seam, called by the transport at the
+    /// top of the pruner's loop turn: the shape above, the pruner's catch
+    /// containing it.
+    #[track_caller]
+    pub(super) fn fire_the_pruners_fault(&self) {
+        if take_the_fault(&self.faults.pruner) {
+            panic!("the test seam's fault in the pruner's loop");
+        }
+    }
+
+    /// The deferred unlink's side of its panic seam, called inside
+    /// `Daemon::retire_asides` before the store's unlink: the shape above,
+    /// the worker's catch around the unlink containing it — the reply
+    /// already on the socket, the worker serving on.
+    #[track_caller]
+    pub(super) fn fire_the_unlinks_fault(&self) {
+        if take_the_fault(&self.faults.unlink) {
+            panic!("the test seam's fault in the deferred unlink");
+        }
+    }
+
+    /// TEST HOOK (the `fuzz_support` standing: `#[doc(hidden)]`, not a
+    /// stable API): PANIC THE CHECKPOINT THREAD at the top of its next loop
+    /// turn — the turn a crossing's wake, a tick or a release of the hold
+    /// brings — once: the loop's catch says the consequence line, sets the
+    /// liveness flag ([`Daemon::checkpoint_thread_ended`]) and the thread
+    /// ends, every later checkpoint the backstop's. Arming again re-arms.
+    #[doc(hidden)]
+    pub fn panic_the_checkpoint_thread_next(&self) {
+        self.faults.checkpointer.store(true, Ordering::Release);
+    }
+
+    /// TEST HOOK (the same standing): PANIC THE PRUNER's THREAD at the top
+    /// of its next loop turn — within its readiness poll while the index
+    /// walks, else at its next cadence — once: its catch says the
+    /// consequence line, sets the flag ([`Daemon::pruner_thread_ended`])
+    /// and the thread ends, no pass running after. Arming again re-arms.
+    #[doc(hidden)]
+    pub fn panic_the_pruner_next(&self) {
+        self.faults.pruner.store(true, Ordering::Release);
+    }
+
+    /// TEST HOOK (the same standing): PANIC INSIDE THE NEXT DEFERRED UNLINK
+    /// — `Daemon::retire_asides`, which the transport runs after a blob
+    /// family's reply is on the socket — once: the catch around it contains
+    /// the panic, the aside stands for the pass, and the worker serves its
+    /// next connection. Arming again re-arms.
+    #[doc(hidden)]
+    pub fn panic_in_the_next_unlink(&self) {
+        self.faults.unlink.store(true, Ordering::Release);
+    }
+
+    /// TEST HOOK (the same standing): whether the checkpoint thread has
+    /// ENDED on a caught panic this uptime — the liveness flag its catch
+    /// sets. No standing line comes after it: the thread is the carrier.
+    #[doc(hidden)]
+    pub fn checkpoint_thread_ended(&self) -> bool {
+        self.threads.checkpointer_ended.load(Ordering::Acquire)
+    }
+
+    /// TEST HOOK (the same standing): whether the pruner's thread has ENDED
+    /// on a caught panic this uptime — the liveness flag its catch sets and
+    /// the standing line reads as `the pruner's thread is gone`.
+    #[doc(hidden)]
+    pub fn pruner_thread_ended(&self) -> bool {
+        self.threads.pruner_ended.load(Ordering::Acquire)
+    }
+
+    /// TEST HOOK (the same standing): SHORTEN THE STANDING INTERVAL to
+    /// `millis` — the checkpoint thread's timed wait ticks every so many
+    /// milliseconds from now in place of the shipped hour, the deadline
+    /// still carried across the crossings' wakes — so a suite drives the
+    /// standing line through a seam rather than a wait, as
+    /// [`Daemon::set_head_writer_clock_millis`] drives the head's clock.
+    /// Every daemon's interval is the constant until this is called.
+    #[doc(hidden)]
+    pub fn set_standing_interval_millis(&self, millis: u64) {
+        self.writes.checkpoint_signal().set_tick_interval(Duration::from_millis(millis));
+    }
     /// TEST HOOK (the `fuzz_support` standing: `#[doc(hidden)]`, not a
     /// stable API): PANIC THE NEXT WORKER, ONCE — `"inside"` its handler's
     /// catch on its next request, the request answered `500 internal_panic`
@@ -520,25 +617,48 @@ impl Daemon {
 
     /// TEST HOOK (the same standing): the feed files STOPPED this uptime —
     /// `commits.log` and the four derived files that take no further line —
-    /// by name.
+    /// by name; the write path's own read carries each stop's position
+    /// beside the name, which the standing line says.
     #[doc(hidden)]
     pub fn stopped_feed_files(&self) -> Vec<&'static str> {
-        self.writes.stopped_feed_files()
+        self.writes.stopped_feed_files().into_iter().map(|file| file.name).collect()
     }
 
     /// TEST HOOK (the same standing): FAIL THE NEXT `step` of the kernel's
     /// write paths with an I/O error of `kind` — the kernel's own write-fault
-    /// seam (`Kernel::fail_the_next`), reached through the daemon so a suite
-    /// drives the checkpoint thread's failure line at each of the seam's
-    /// steps: `CheckpointSync` armed fails the checkpoint BEFORE its rename
-    /// (no base, `CheckpointError::Io`), `CheckpointDirSync` fails the
-    /// directory's sync AFTER it (a landed base, `CheckpointError::Landed`);
-    /// a full volume is `io::ErrorKind::StorageFull`. ONCE: the arm fires
-    /// and disarms; arming a step again replaces its arm.
+    /// seam (`Kernel::fail_the_next`), which serves BOTH write paths, the
+    /// journal's as well as the checkpoint's, whatever this door's name says
+    /// — reached through the daemon so a suite drives the checkpoint thread's
+    /// failure line at each of the checkpoint's steps: `CheckpointSync`
+    /// armed fails the checkpoint BEFORE its rename (no base,
+    /// `CheckpointError::Io`), `CheckpointDirSync` fails the directory's
+    /// sync AFTER it (a landed base, `CheckpointError::Landed`); a full
+    /// volume is `io::ErrorKind::StorageFull` — and the kernel's halt at the
+    /// journal's: `JournalBarrier` armed fails a commit's barrier,
+    /// `JournalRepair` armed beside it fails the truncation that repairs it,
+    /// which POISONS the kernel (`TxnError::Poisoned`, the write answered
+    /// `poisoned`). ONCE: the arm fires and disarms; arming a step again
+    /// replaces its arm.
     #[cfg(feature = "test-hooks")]
     #[doc(hidden)]
     pub fn fail_the_next_checkpoint_step(&self, step: Step, kind: std::io::ErrorKind) {
         self.engine.kernel().fail_the_next(step, kind);
+    }
+
+    /// TEST HOOK (the same standing): PANIC at the next `step` of the
+    /// kernel's write paths — the seam's panic arm (`Kernel::panic_at_the_next`),
+    /// beside the failure arm above: the checkpoint write's three steps, or
+    /// `JournalAppend`, the unwind out of the commit region the kernel's
+    /// guard repairs, whose repair `JournalRepair` armed to fail then fails
+    /// — the kernel poisoned and the panic re-raised, so the write answers
+    /// `500 internal_panic` at the transport's catch, where the kernel's
+    /// halt line is read. The barrier and the repair take no panic arm, and
+    /// naming one PANICS here as the kernel's door does. ONCE, as the
+    /// failure arm is.
+    #[cfg(feature = "test-hooks")]
+    #[doc(hidden)]
+    pub fn panic_at_the_next_kernel_step(&self, step: Step) {
+        self.engine.kernel().panic_at_the_next(step);
     }
 
     /// TEST HOOK (the same standing): how many checkpoints the kernel has run
@@ -586,11 +706,13 @@ impl Daemon {
     /// then each line of the rest on a line of its own — the configuration
     /// warnings at both their moments, the open's-report `auth:` line, the
     /// node prefix, the blocked list at its three moments, the claim's flip
-    /// line and a reissue's refusal among them — so a suite pins the words
-    /// and the class of what went to the operator stream, which no suite
-    /// captures in-process. The open's own lines (said before the daemon
-    /// exists) and the checkpoint thread's ([`Daemon::checkpoint_lines`])
-    /// are not among them.
+    /// line and a reissue's refusal among them; and the standing line
+    /// (`standing:`), the kernel's halt line and the two thread catches'
+    /// consequence lines (`failure:`) — so a suite pins the words and the
+    /// class of what went to the operator stream, which no suite captures
+    /// in-process. The open's own lines (said before the daemon exists) and
+    /// the checkpoint thread's own landing, failure and backstop lines
+    /// ([`Daemon::checkpoint_lines`]) are not among them.
     #[doc(hidden)]
     pub fn lines_said(&self) -> Vec<String> {
         self.said.lock().clone()

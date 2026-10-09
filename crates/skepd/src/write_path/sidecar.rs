@@ -580,8 +580,13 @@ pub(super) struct CommitsLog {
     /// layer's own stop rule (`feed/derived.rs`) buys for the same
     /// condition. The resident `entries` map is written ahead of every
     /// append, so this uptime answers with full testimony; what stops is
-    /// what the next open reads.
-    stopped: bool,
+    /// what the next open reads. `Some` carries THE POSITION THE STOP WAS SET
+    /// AT — the position the stop's own line names, an ordering the standing
+    /// line re-says the stop by (`operations.md` §1 THE RATES, `{file}
+    /// stopped since position {p}`): the failed append's position, or the
+    /// fence a rewrite failed past its rename at, which is what the next
+    /// open re-derives from.
+    stopped: Option<u64>,
     /// The test seam behind `crate::Daemon::fail_the_feeds_next_rewrite_past_rename`:
     /// the next compaction's rewrite fails AFTER its rename, at the reopen
     /// of the new file, so the stop that failure carries is reachable
@@ -727,7 +732,7 @@ impl CommitsLog {
             rewritten: false,
             last_time: 0,
             len,
-            stopped: false,
+            stopped: None,
             #[cfg(any(test, feature = "test-hooks"))]
             fail_next_rewrite_past_rename: false,
         };
@@ -812,7 +817,7 @@ impl CommitsLog {
                 self.rewritten = true;
             }
             Err(RewriteFail::PastRename(e)) => {
-                self.stopped = true;
+                self.stopped = Some(self.min_since);
                 self.rewritten = true;
                 skep_util::notice::line(format_args!(
                     "commits.log rewrite failed past its rename: {e}; this file takes no further \
@@ -898,11 +903,11 @@ impl CommitsLog {
         // instead of above it. The failure is REPORTED through
         // [`skep_util::notice`], which states why a notice may not panic.
         let line = entry_line(at, &meta);
-        if !self.stopped {
+        if self.stopped.is_none() {
             match self.file.write_all(&line) {
                 Ok(()) => self.len += line.len() as u64,
                 Err(e) => {
-                    self.stopped = true;
+                    self.stopped = Some(at);
                     skep_util::notice::line(format_args!(
                         "commits.log append failed at position {at}: {e}; this file takes no \
                          further line, so the next open re-derives from {at} as bare entries"
@@ -1513,13 +1518,21 @@ impl CommitsLog {
             rewritten: false,
             last_time: 0,
             len: 0,
-            stopped: false,
+            stopped: None,
             fail_next_rewrite_past_rename: false,
         }
     }
 }
 
 impl CommitsLog {
+    /// THE STOP AS A READ: the position this file's stop was set at
+    /// ([`CommitsLog`]'s `stopped` says which position each cause carries),
+    /// or `None` while the file takes lines — what the standing line re-says
+    /// a stopped file by, once an hour while it stands.
+    pub(super) fn stopped_since(&self) -> Option<u64> {
+        self.stopped
+    }
+
     /// The test seam behind `crate::Daemon::fail_the_feeds_next_rewrite_past_rename`:
     /// the next compaction's rewrite fails at the reopen of the file it has
     /// just renamed into place — the past-rename arm, and the stop it
@@ -1527,13 +1540,6 @@ impl CommitsLog {
     #[cfg(any(test, feature = "test-hooks"))]
     pub(super) fn fail_next_rewrite_past_rename(&mut self) {
         self.fail_next_rewrite_past_rename = true;
-    }
-
-    /// The test seam's reading of the stop: whether this file takes no
-    /// further line. Not a stable API.
-    #[cfg(any(test, feature = "test-hooks"))]
-    pub(super) fn is_stopped(&self) -> bool {
-        self.stopped
     }
 }
 

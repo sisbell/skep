@@ -522,6 +522,9 @@ fn the_configuration_lines_go_through_the_classed_door_with_their_class_words() 
         "Moment::AtClaim | Moment::AtReissue => Class::Landing",
         "self.log_blocked_prefixes(Moment::AtReissue)",
         "self.say(Class::Failure, ReissueRefusedLine {",
+        "self.say(Class::Standing, line)",
+        "self.say(Class::Failure, CheckpointThreadEndedLine)",
+        "self.say(Class::Failure, PrunerThreadEndedLine)",
         "notice::emit(class, what)",
         "notice::emit_lines(class, head, rest)",
     ] {
@@ -1095,5 +1098,85 @@ fn the_checkpoint_threads_lines_go_through_the_classed_door() {
     assert!(
         !section.contains("notice::line(") && !section.contains("notice::lines("),
         "no line of the section goes through the un-classed door"
+    );
+}
+
+/// THE STANDING LINE's WORDS at fixed reads (`operations.md` §1 THE RATES;
+/// §1.1 m11): every clause standing, each in THE RATES' words with its
+/// position or file, in THE RATES' order, joined by `; ` — the seventh, the
+/// cell index's, with its place held; one clause alone; and no clause,
+/// which is no line at all (`stands` false).
+#[test]
+fn the_standing_line_carries_each_clause_in_the_rates_words_and_order() {
+    use crate::write_path::StoppedFile;
+
+    let every = StandingLine {
+        halted_at: Some(Seq(17)),
+        poisoned: true,
+        stopped_files: vec![
+            StoppedFile { name: "commits.log", since: 9 },
+            StoppedFile { name: "feed-index.log", since: 12 },
+        ],
+        pruner_gone: true,
+        index_failed: true,
+        floor: Some(FloorBinding { free_space: 1000, floor: 268_435_456 }),
+        claimed_permissive: true,
+    };
+    assert!(every.stands());
+    assert_eq!(
+        every.to_string(),
+        "the write path is halted since position 17 (feed-attest.log); the kernel is poisoned; \
+         commits.log stopped since position 9; feed-index.log stopped since position 12; the \
+         pruner's thread is gone; the cell index failed to build; deposits refused at the \
+         floor (free space 1000 below the floor in force 268435456); CLAIMED-PERMISSIVE"
+    );
+    let one = StandingLine {
+        halted_at: None,
+        poisoned: false,
+        stopped_files: Vec::new(),
+        pruner_gone: true,
+        index_failed: false,
+        floor: None,
+        claimed_permissive: false,
+    };
+    assert!(one.stands());
+    assert_eq!(one.to_string(), "the pruner's thread is gone");
+    let none = StandingLine {
+        halted_at: None,
+        poisoned: false,
+        stopped_files: Vec::new(),
+        pruner_gone: false,
+        index_failed: false,
+        floor: None,
+        claimed_permissive: false,
+    };
+    assert!(!none.stands(), "nothing on a healthy board");
+    assert_eq!(none.to_string(), "");
+}
+
+/// m10's WORDS and ROW 41's TWO CONSEQUENCE LINES at fixed inputs: the
+/// kernel's halt with its position, the class of its three causes and the
+/// act; the checkpoint thread's and the pruner's, verbatim.
+#[test]
+fn the_halt_line_and_the_two_catches_lines_carry_their_ruled_words() {
+    use crate::write_path::KernelHaltLine;
+
+    assert_eq!(
+        KernelHaltLine { at: Seq(1203) }.to_string(),
+        "the kernel halted its write paths at position 1203: every write is refused poisoned \
+         until a restart; reads serve. The cause is one of three the kernel does not report — \
+         a commit that could not be rolled back durably, an unwind past the durability \
+         barrier, or the sequence order exhausted; check the volume and the device, then \
+         restart"
+    );
+    assert_eq!(
+        CheckpointThreadEndedLine.to_string(),
+        "checkpoint thread ended: every checkpoint from here is the backstop's, unsaid; the \
+         byte bound and the floor stay where they were"
+    );
+    assert_eq!(
+        PrunerThreadEndedLine.to_string(),
+        "pruner thread ended: no pass runs until a restart; the blob logs' compaction and the \
+         lapsed tail's reclaim stop"
     );
 }

@@ -110,9 +110,10 @@ impl Daemon {
         // (a fresh world): transport metadata, never invented, and never an
         // older position's time offered in the head's place.
         //
-        // THREE independent reads under no lock — this, the auth object's
-        // own head snapshot (whose World carries the key table), and the
-        // `(log_position, chain_head)` pair at the end — so this answer may
+        // FOUR independent reads under no lock — this, the auth object's
+        // own head snapshot (whose World carries the key table), the
+        // `(log_position, chain_head)` pair at the end, and the `writes`
+        // member's two atomic loads beside them — so this answer may
         // straddle one in-flight commit at either seam. A `head_time` correct
         // for the position the sidecar last recorded sits beside a
         // `log_position` one commit newer; and a client polling for the claim
@@ -141,11 +142,19 @@ impl Daemon {
         // direction the straddle above describes.
         let auth = self.auth.auth_object(self.engine.kernel().snapshot().world().identity());
         let (log_position, chain_head) = self.febe.head_coordinate();
+        // THE `writes` OBJECT (wire.md §The other endpoints; op-D10 (a)):
+        // whether the daemon refuses every write until a restart — the
+        // write path's halt (a failed attest line) OR the kernel's poison —
+        // two atomic loads, so the member and the operator stream's two
+        // halt lines agree on one fact; a `true` is terminal for the uptime
+        // and so actionable without a race, a `false` one moment's reading.
+        let halted = self.writes.halted_at().is_some() || self.engine.kernel().is_poisoned();
         // The media object (wire.md §Media, THE UPLOAD SETTING): the upload
         // switch echoed where its state lives (`MediaGate::health_object`),
         // a boundary setting read once by the client before any face that
         // names an upload speaks (P37) — daemon config, never board state,
-        // so no snapshot and no straddle.
+        // so no snapshot and no straddle. The members ride `obj`, which sorts
+        // keys, so the wire's order is alphabetical whatever this list's.
         Reply::json(
             200,
             obj(vec![
@@ -155,6 +164,7 @@ impl Daemon {
                 ("log_position", Value::Number(log_position.0.into())),
                 ("media", self.media.health_object()),
                 ("ok", Value::Bool(true)),
+                ("writes", obj(vec![("halted", Value::Bool(halted))])),
             ]),
         )
     }

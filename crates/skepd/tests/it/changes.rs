@@ -567,6 +567,14 @@ fn head(port: u16) -> u64 {
     json(&body)["log_position"].as_u64().expect("log_position")
 }
 
+/// `/health`'s `writes.halted` (wire.md §The other endpoints): whether the
+/// daemon refuses every write until a restart.
+fn writes_halted(port: u16) -> bool {
+    let (st, body) = get(port, "/health");
+    assert_eq!(st, 200, "/health: {}", String::from_utf8_lossy(&body));
+    json(&body)["writes"]["halted"].as_bool().expect("writes.halted")
+}
+
 /// One write, its ack, and exactly the one feed entry it produced — the
 /// page is taken from the head as it stood before the write, so nothing
 /// earlier can be mistaken for this write's entry. Read as the WRITER
@@ -2212,7 +2220,9 @@ fn each_attest_store_line_is_synced_before_the_next_commit_begins() {
 /// an attested mint, an unattested `delegate` — is refused `poisoned`;
 /// reads answer, the feed serving the failed position's row with its
 /// `attest`; and after a restart the store holds the failed position's
-/// signature and writes are admitted again.
+/// signature and writes are admitted again. `/health`'s `writes.halted`
+/// (wire.md §The other endpoints; op-D10 (a)) reads the halt at both points:
+/// `true` from the failing write on, `false` after the restart.
 #[test]
 fn a_failed_attest_store_line_halts_every_later_write_until_a_restart() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -2224,11 +2234,16 @@ fn a_failed_attest_store_line_halts_every_later_write_until_a_restart() {
         let port = sd.port();
         let signed = open_signed_session(port, CLAIMANT_PRINCIPAL, &device_key());
         signed_ghost_link(port, &signed, 1);
+        assert!(!writes_halted(port), "a healthy board: /health says writes are not halted");
         sd.daemon().set_head_writer_clock_millis(u64::MAX);
         sd.daemon().fail_the_attest_stores_next_write();
         let before = head(port);
         let failed_at = acked_at(&op(port, Some(&signed), &ghost(2)));
         assert_eq!(head(port), failed_at, "the failing write is acked, and the due head refused");
+        assert!(
+            writes_halted(port),
+            "FINDING (op-D10 (a)): /health's writes.halted is false after the attest halt"
+        );
         assert!(
             !attest_store_lines(dir.path()).contains_key(&failed_at),
             "the store holds no line for the failed position"
@@ -2277,6 +2292,7 @@ fn a_failed_attest_store_line_halts_every_later_write_until_a_restart() {
         Some(&failed_sig),
         "the restart's open rebuilt the failed position's line from the journal"
     );
+    assert!(!writes_halted(port), "after the restart /health says writes are not halted");
     let signed = open_signed_session(port, CLAIMANT_PRINCIPAL, &device_key());
     let (at, _) = signed_ghost_link(port, &signed, 3);
     assert!(at > failed_at, "writes are admitted again");

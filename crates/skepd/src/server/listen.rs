@@ -528,36 +528,65 @@ impl Skepd {
 /// re-reads and says the backstop's line off the kernel's inline count; a
 /// wake the flag's arm has just answered finds the count said and does
 /// nothing. Then wait on the write path's signal for the next crossing or
-/// inline run, or the stop. A flag set, or a count moved, before the thread
-/// existed (a crossing inside the open's own commits) is read at the first
-/// pass, before any wait. A failure is the operator's line per attempt, and
-/// the next crossing's to retry: the kernel clears the flag as it starts, so
-/// a kernel that cannot checkpoint is not asked again until a commit crosses.
+/// inline run, the standing interval's tick, or the stop. A flag set, or a
+/// count moved, before the thread existed (a crossing inside the open's own
+/// commits) is read at the first pass, before any wait. A failure is the
+/// operator's line per attempt, and the next crossing's to retry: the kernel
+/// clears the flag as it starts, so a kernel that cannot checkpoint is not
+/// asked again until a commit crosses.
+///
+/// AND THE TICK (`operations.md` §1 THE RATES): the wait is timed, and at
+/// each tick the thread says the standing line
+/// (`Daemon::say_the_standing_line`) — one line where a standing bad state
+/// stands, nothing on a healthy board — then takes its turn as after any
+/// wake. THE CATCH (row 41): the whole loop runs under `catch_unwind`, and
+/// a panic that escapes a turn ENDS the thread through its catch
+/// (`Daemon::the_checkpoint_thread_ended`): the liveness flag and the
+/// consequence line, after the hook's line has said the panic itself. No
+/// cure — nothing re-spawns the thread but a restart — and the standing line
+/// ends with its carrier.
 fn checkpoint_on_due(daemon: &Daemon, signal: &CheckpointSignal) {
-    loop {
+    let turns = catch_unwind(AssertUnwindSafe(|| loop {
         // THE HOLD (test seam): a suite parks the thread here, before it
         // looks at the flag, so a second crossing meets the flag still set
         // and runs inline as the backstop; the stop reaches a held thread.
         #[cfg(any(test, feature = "test-hooks"))]
         daemon.wait_while_the_checkpoint_thread_is_held(|| signal.is_stopped());
+        // THE FAULT (test seam): a panic at the top of a turn, the shape the
+        // thread's death has, which the catch below contains.
+        #[cfg(any(test, feature = "test-hooks"))]
+        daemon.fire_the_checkpoint_threads_fault();
         while !signal.is_stopped() && daemon.checkpoint_is_due() {
             daemon.service_the_checkpoint();
         }
         if !signal.is_stopped() {
             daemon.follow_the_backstop();
         }
-        if signal.wait() == Woken::Stop {
-            return;
+        match signal.wait() {
+            Woken::Due => {}
+            Woken::Tick => daemon.say_the_standing_line(),
+            Woken::Stop => return,
         }
+    }));
+    if turns.is_err() {
+        daemon.the_checkpoint_thread_ended();
     }
 }
 
 /// THE PRUNER's LOOP: wait for the cell index to ready — in short waits, so
 /// the stop reaches it — run the pass, then wait the cadence out or the
 /// stop, whichever comes first. A pass's I/O failure is the operator's
-/// line, and the next pass tries again.
+/// line, and the next pass tries again. THE CATCH (row 41): the whole loop
+/// runs under `catch_unwind`, and a panic that escapes a turn ENDS the
+/// thread through its catch (`Daemon::the_pruner_thread_ended`): the
+/// liveness flag the standing line reads hourly, and the consequence line,
+/// after the hook's line has said the panic itself. No cure but a restart.
 fn prune_on_cadence(daemon: &Daemon, cadence: &Cadence) {
-    loop {
+    let turns = catch_unwind(AssertUnwindSafe(|| loop {
+        // THE FAULT (test seam): a panic at the top of a turn, the shape the
+        // thread's death has, which the catch below contains.
+        #[cfg(any(test, feature = "test-hooks"))]
+        daemon.fire_the_pruners_fault();
         if daemon.index_is_ready_for_pruning() {
             match daemon.prune_pass() {
                 // The pass's own line: its figures, the halt, the logs'
@@ -572,6 +601,9 @@ fn prune_on_cadence(daemon: &Daemon, cadence: &Cadence) {
         } else if cadence.wait(INDEX_READINESS_POLL) == Wake::Stop {
             return;
         }
+    }));
+    if turns.is_err() {
+        daemon.the_pruner_thread_ended();
     }
 }
 
@@ -658,7 +690,20 @@ fn serve_connection(daemon: &Arc<Daemon>, subscribers: &Subscribers, mut stream:
         daemon.route_parked(&req, parked)
     })) {
         Ok(r) => r,
-        Err(_) => Routed::Reply(refuse(TransportError::InternalPanic, None)),
+        Err(_) => {
+            // THE KERNEL's HALT, READ HERE (`operations.md` §1.1 m10, the
+            // second site): a panic on a WRITE — `POST /op`, the one route
+            // that commits; a read frame on it reads the kernel unpoisoned
+            // and costs the one load — may be the kernel's own unwind out of
+            // its commit region, which poisons it where the repair failed or
+            // the barrier had passed and re-raises: this `500` is then the
+            // only answer that write gives, and the quiet-board gap closes
+            // here rather than at the next write, hours away.
+            if req.method == "POST" && req.path == "/op" {
+                daemon.say_the_kernels_halt_if_poisoned();
+            }
+            Routed::Reply(refuse(TransportError::InternalPanic, None))
+        }
     };
     match routed {
         Routed::Reply(reply) => {
@@ -670,9 +715,15 @@ fn serve_connection(daemon: &Arc<Daemon>, subscribers: &Subscribers, mut stream:
             let _ = write_reply(&mut stream, &reply, Instant::now() + TRANSFER_DEADLINE, head_only);
             // THE DEFERRED STEP of a replace: the replaced instance's name
             // unlinked AFTER the answer is on the socket, off the request's
-            // path — the blob family's requests alone owe one.
+            // path — the blob family's requests alone owe one. Under a
+            // catch of its own (row 41; §4 row 32), since it runs outside
+            // the handler's: a panic inside it is contained, the aside
+            // standing for the pass or the next open, the reply already
+            // given, and this worker serves its next connection — so a
+            // worker's death is reachable by nothing in its loop but
+            // `accept`'s error.
             if blob_routes::is_blob_path(&req.path) {
-                daemon.retire_asides();
+                let _ = catch_unwind(AssertUnwindSafe(|| daemon.retire_asides()));
             }
         }
         Routed::EventStream => {

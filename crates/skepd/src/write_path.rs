@@ -90,6 +90,7 @@
 //! the frame, through the index's cheap prefix test, so a prose insert of
 //! a million bytes costs the hook a byte compare apiece and no read.
 
+use std::fmt;
 use std::io;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -104,6 +105,7 @@ use skep_febe::{Op, OpKind, RejectCode, Rejection, Response, Stores};
 use skep_kernel::{Attestation, Seq};
 use skep_media::cell::names_kind_by_prefix;
 use skep_media::index::CellIndex;
+use skep_util::notice::{self, Class};
 
 // The change feed behind `GET /changes`: its authority file, and the one
 // question it asks the world.
@@ -114,10 +116,11 @@ mod sidecar;
 // The published head writer, which commits through this module's own door.
 mod head;
 
-pub(crate) use feed::{ChangesAnswer, ChangesQuery, FeedClass, FeedCompaction};
+pub(crate) use feed::{ChangesAnswer, ChangesQuery, FeedClass, FeedCompaction, StoppedFile};
 pub(crate) use head::board_term;
 
 use self::head::HeadWriter;
+use crate::limits::STANDING_INTERVAL;
 
 /// What [`WritePath::write_first_head`] came to — the three states a claimed
 /// board's first head can be in once the call returns, which its two callers
@@ -203,9 +206,34 @@ pub(crate) struct WritePath {
     /// THE HALT (the module doc; SO-I5 (d)): set by [`WritePath::record`]
     /// where the attest store failed a line, and never cleared — every
     /// commit after it is refused at [`WritePath::commit_recorded`]'s door.
-    /// Set and read under the serialization guard alone, so the guard is
-    /// what orders it, and the atomic only what makes the field `Sync`.
+    /// Set and read under the serialization guard at the door, which is
+    /// what orders it there; read OUTSIDE the guard by `/health`'s `writes`
+    /// member and the standing line ([`WritePath::halted_at`]), one atomic
+    /// load each, so the store is a release and those loads acquire.
     halted: AtomicBool,
+    /// THE POSITION THE HALT WAS SET AT — the position of the commit whose
+    /// attest line failed, in hand at the one site that sets `halted` and
+    /// written before it — what the standing line re-says the halt by
+    /// (`operations.md` §1 THE RATES: `the write path is halted since
+    /// position {p} (feed-attest.log)`), joining the store's own line, which
+    /// names the same position. Meaningful only while `halted` reads true.
+    halted_at: AtomicU64,
+    /// THE KERNEL's HALT LINE's ONCE-FLAG (m10): whether
+    /// [`KernelHaltLine`] has been said this uptime, by either of its two
+    /// sites — [`WritePath::commit_recorded`], where `execute` answers
+    /// `Rejected` coded `Poisoned` with the halt above unset, and the
+    /// transport's handler catch after a caught panic on a write — both
+    /// through [`WritePath::say_the_kernels_halt_once`]. Poison does not
+    /// persist across a restart, and neither does this.
+    kernel_halt_said: AtomicBool,
+    /// TEST SEAM: the daemon's record of every line said through its
+    /// classed door this uptime ([`LinesSaid`]), held HERE and shared with
+    /// the daemon above, because one line of the daemon's is said from this
+    /// card, below the daemon — the kernel's halt at
+    /// [`WritePath::commit_recorded`] — and must stand in the same record,
+    /// in order, as the lines the daemon says itself.
+    #[cfg(any(test, feature = "test-hooks"))]
+    said: LinesSaid,
     /// THE CHECKPOINT THREAD's SIGNAL (the module doc): raised after the
     /// record step of a commit whose crossing set the kernel's due flag, or
     /// whose execute ran a checkpoint inline — the kernel's backstop — and
@@ -253,9 +281,56 @@ impl WritePath {
             head_writer,
             index,
             halted: AtomicBool::new(false),
+            halted_at: AtomicU64::new(0),
+            kernel_halt_said: AtomicBool::new(false),
+            #[cfg(any(test, feature = "test-hooks"))]
+            said: Arc::new(Mutex::new(Vec::new())),
             checkpoint_signal: CheckpointSignal::new(),
             inline_runs_seen: AtomicU64::new(0),
         })
+    }
+
+    /// THE HALT AS A READ (op-D10 (a); `operations.md` §1 THE RATES): the
+    /// position the write path halted at — the commit whose attest line
+    /// failed — or `None` while it admits writes. Two atomic loads under no
+    /// lock and no guard, for the two readers outside the door: `/health`'s
+    /// `writes.halted` and the standing line's clause. A `Some` is terminal
+    /// for the uptime, so it is actionable without a race; a `None` is the
+    /// reading of one moment.
+    pub fn halted_at(&self) -> Option<Seq> {
+        self.halted.load(Ordering::Acquire).then(|| Seq(self.halted_at.load(Ordering::Acquire)))
+    }
+
+    /// THE KERNEL's HALT LINE (`operations.md` §1.1 m10; §4 row 29), said
+    /// ONCE per uptime — by the once-flag this card holds — from whichever of
+    /// its two sites reaches it first: [`WritePath::commit_recorded`], where
+    /// `execute` answered `Rejected` coded `Poisoned` with the write path's
+    /// own halt unset (the order exhausted, or a commit's repair that could
+    /// not complete), and the transport's handler catch, after a caught panic
+    /// on a write found the kernel poisoned (an unwind whose repair failed or
+    /// that passed the barrier — the poison that no `Rejected` carries until
+    /// the next write, hours away on a quiet board). `{p}` is the kernel's
+    /// installed head at the site (`Kernel::current_seq`), an ordering: no
+    /// write lands past it until a restart. Through the classed door under
+    /// `Class::Failure`, and — under the test seam — into the daemon's
+    /// record, so a suite pins the words and the class. A second call says
+    /// nothing: the state is standing, and the standing line re-says it.
+    pub(crate) fn say_the_kernels_halt_once(&self) {
+        if self.kernel_halt_said.swap(true, Ordering::AcqRel) {
+            return;
+        }
+        let line = KernelHaltLine { at: self.stores.kernel().current_seq() };
+        #[cfg(any(test, feature = "test-hooks"))]
+        self.said.lock().push(format!("{}: {line}", Class::Failure));
+        notice::emit(Class::Failure, line);
+    }
+
+    /// TEST SEAM: the daemon's record of its said lines, which this card
+    /// holds (the `said` field says why) and the daemon shares. Not a stable
+    /// API.
+    #[cfg(any(test, feature = "test-hooks"))]
+    pub(crate) fn lines_said(&self) -> &LinesSaid {
+        &self.said
     }
 
     /// THE CHECKPOINT THREAD's SIGNAL: what the thread `serve` spawns waits
@@ -290,10 +365,13 @@ impl WritePath {
         self.feed.fail_next_rewrite_past_rename();
     }
 
-    /// The test seam behind `crate::Daemon::stopped_feed_files`: the feed
-    /// files that take no further line this uptime. Not a stable API.
-    #[cfg(any(test, feature = "test-hooks"))]
-    pub(crate) fn stopped_feed_files(&self) -> Vec<&'static str> {
+    /// THE STOPPED FEED FILES, as a read: of `commits.log` and the four
+    /// derived files, those that take no further line this uptime, each with
+    /// the position its stop was set at ([`StoppedFile`]) — the feed's one
+    /// lock, no guard. The standing line's read, once an hour while any
+    /// stands (`operations.md` §1 THE RATES), and the test seam
+    /// `crate::Daemon::stopped_feed_files`'s.
+    pub fn stopped_feed_files(&self) -> Vec<StoppedFile> {
         self.feed.stopped_files()
     }
 
@@ -466,6 +544,15 @@ impl WritePath {
     /// ack was lost meets the halt and not its original ack. A guest's
     /// write never reaches the door, and M10 refuses it `Unauthenticated`,
     /// committing nothing.
+    ///
+    /// AND THE KERNEL's OWN HALT (m10), told from the write path's by the
+    /// arm it comes through: the attest halt returns above, before
+    /// `execute`, said once at its transition; a `Rejected` coded `Poisoned`
+    /// that `execute` ANSWERS, with the halt above unset, is the kernel's —
+    /// M10 lowers `TxnError::Poisoned` to that code — and this door is the
+    /// first site of the kernel's halt line, said once by
+    /// [`WritePath::say_the_kernels_halt_once`]. One match on the answer per
+    /// write, and nothing on an ack.
     fn commit_recorded(
         &self,
         serial: &SerialGuard<'_>,
@@ -477,6 +564,11 @@ impl WritePath {
             return Response::Rejected(halt);
         }
         let resp = execute();
+        if let Response::Rejected(rejection) = &resp {
+            if rejection.code == RejectCode::Poisoned {
+                self.say_the_kernels_halt_once();
+            }
+        }
         if let Some(at) = self.record(serial, meta, &resp) {
             self.commit_stream.announce(at);
         }
@@ -669,12 +761,57 @@ impl WritePath {
             post.world(),
         );
         if recorded.is_err() {
-            // The attest store has said it, once: the line's file and position.
-            self.halted.store(true, Ordering::Relaxed);
+            // The attest store has said it, once: the line's file and
+            // position. The position first, then the flag that makes it
+            // readable — the standing line and `/health` read the pair
+            // outside the guard.
+            self.halted_at.store(at.0, Ordering::Release);
+            self.halted.store(true, Ordering::Release);
         }
         Some(at)
     }
 }
+
+/// THE KERNEL's HALT LINE (`operations.md` §1.1 m10; §4 row 29), in the
+/// operator stream's ruled words: the position the kernel halted at — the
+/// installed head at the site, an ordering — what is refused and what
+/// serves, and the CLASS of the three causes, which the kernel does not
+/// report (`CommitFail::Unrepaired` carries none and `is_poisoned` is a
+/// bool): a commit's repair that could not complete durably, an unwind past
+/// the durability barrier, or the sequence order exhausted; then the act. A
+/// pure value, pinned by `to_string()` in the unit suite; emitted under
+/// `Class::Failure` through [`WritePath::say_the_kernels_halt_once`], once an
+/// uptime, and re-said by the standing line as `the kernel is poisoned`.
+/// Here and not in `server.rs` beside the daemon's other lines because its
+/// first site is this card's, below the daemon, and imports point down.
+pub(crate) struct KernelHaltLine {
+    /// `Kernel::current_seq` at the site.
+    pub(crate) at: Seq,
+}
+
+impl fmt::Display for KernelHaltLine {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "the kernel halted its write paths at position {}: every write is refused poisoned \
+             until a restart; reads serve. The cause is one of three the kernel does not report \
+             — a commit that could not be rolled back durably, an unwind past the durability \
+             barrier, or the sequence order exhausted; check the volume and the device, then \
+             restart",
+            self.at
+        )
+    }
+}
+
+/// TEST SEAM: the daemon's record of every line said through its classed
+/// door this uptime, each `{class}: {text}`, oldest first — what
+/// `crate::Daemon::lines_said` answers. Behind an `Arc` and owned by the
+/// write path ([`WritePath`]'s `said`), which the daemon above shares,
+/// because one line of the daemon's is said from below it — the kernel's
+/// halt at [`WritePath::commit_recorded`] — and a suite pins it in the one
+/// record, in order with the rest. Not a stable API.
+#[cfg(any(test, feature = "test-hooks"))]
+pub(crate) type LinesSaid = Arc<Mutex<Vec<String>>>;
 
 // ── the read/write partition, and what a write records ───────────────────
 
@@ -1056,17 +1193,28 @@ pub(crate) fn write_meta(op: &Op) -> Option<FrameMeta> {
 
 // ── the checkpoint thread's signal ───────────────────────────────────────
 
-/// THE CHECKPOINT THREAD's SIGNAL: a pending bit and the stop under one
-/// mutex, one condvar — the pruner's cadence's shape, with a wake in place
-/// of an interval. [`WritePath::commit_recorded`] RAISES it after the record
-/// step of a commit that finds the kernel's due flag set; the thread
-/// [`serve`](crate::server::serve) spawns WAITS on it, runs the checkpoint
-/// and returns to wait; the shutdown STOPS it, so a wait ends at once and no
-/// thread blocks a stop. A wake while no thread waits is kept as the pending
-/// bit, so a crossing is never lost to a thread that was busy; two wakes
-/// before one wait coalesce into one, since the thread reads the kernel's
-/// flag and not a count. Costs one mutex lock per wake and one per wait —
-/// once per crossing of the cadence, never per commit.
+/// THE CHECKPOINT THREAD's SIGNAL: a pending bit, the stop and THE TICK's
+/// DEADLINE under one mutex, one condvar — the pruner's cadence's shape,
+/// with a wake beside the interval. [`WritePath::commit_recorded`] RAISES it
+/// after the record step of a commit that finds the kernel's due flag set;
+/// the thread [`serve`](crate::server::serve) spawns WAITS on it, runs the
+/// checkpoint and returns to wait; the shutdown STOPS it, so a wait ends at
+/// once and no thread blocks a stop. A wake while no thread waits is kept as
+/// the pending bit, so a crossing is never lost to a thread that was busy;
+/// two wakes before one wait coalesce into one, since the thread reads the
+/// kernel's flag and not a count. Costs one mutex lock per wake and one per
+/// wait — once per crossing of the cadence, never per commit.
+///
+/// AND THE TICK (`operations.md` §1 THE RATES; §1.1 m11): the wait is
+/// TIMED — every [`STANDING_INTERVAL`] with neither raise nor stop it
+/// answers [`Woken::Tick`], on which the thread says the standing line. The
+/// deadline is HELD IN THE STATE and carried across `Due` wakes, never reset
+/// by one: a board whose crossings wake the thread more often than the
+/// interval still gets one tick per interval, the deadline found passed at
+/// the first wait after it, where a wait timed from each wake would starve
+/// the tick for as long as the crossings came. The stop outranks the tick,
+/// the tick a raise only where the deadline has passed; a raise is answered
+/// first and the tick at the next wait, so neither is lost.
 pub(crate) struct CheckpointSignal {
     state: Mutex<SignalState>,
     cond: Condvar,
@@ -1075,6 +1223,12 @@ pub(crate) struct CheckpointSignal {
 struct SignalState {
     pending: bool,
     stopped: bool,
+    /// The tick's interval — [`STANDING_INTERVAL`], or the figure the test
+    /// seam shortened it to.
+    interval: Duration,
+    /// When the next tick is due: advanced by one interval as each tick is
+    /// answered, and by nothing else.
+    tick_due: Instant,
 }
 
 /// What a wait on the [`CheckpointSignal`] ended with.
@@ -1082,6 +1236,9 @@ struct SignalState {
 pub(crate) enum Woken {
     /// The signal was raised: a checkpoint may be due.
     Due,
+    /// The standing interval passed with no raise and no stop: the thread
+    /// says the standing line, where a standing state stands.
+    Tick,
     /// The stop was asked.
     Stop,
 }
@@ -1089,7 +1246,12 @@ pub(crate) enum Woken {
 impl CheckpointSignal {
     fn new() -> CheckpointSignal {
         CheckpointSignal {
-            state: Mutex::new(SignalState { pending: false, stopped: false }),
+            state: Mutex::new(SignalState {
+                pending: false,
+                stopped: false,
+                interval: STANDING_INTERVAL,
+                tick_due: Instant::now() + STANDING_INTERVAL,
+            }),
             cond: Condvar::new(),
         }
     }
@@ -1101,9 +1263,12 @@ impl CheckpointSignal {
         self.cond.notify_one();
     }
 
-    /// Wait for a raise, or the stop — whichever comes first, the stop
-    /// outranking a raise once asked. A raise that came before this wait is
-    /// answered at once.
+    /// Wait for a raise, the tick or the stop — whichever comes first, the
+    /// stop outranking the others once asked, a raise outranking a tick
+    /// that is due beside it (the tick then answers the next wait). A raise
+    /// that came before this wait is answered at once; so is a tick whose
+    /// deadline passed while the thread was busy, since the deadline stands
+    /// in the state and no wake moved it.
     pub(crate) fn wait(&self) -> Woken {
         let mut state = self.state.lock();
         loop {
@@ -1114,13 +1279,31 @@ impl CheckpointSignal {
                 state.pending = false;
                 return Woken::Due;
             }
-            self.cond.wait(&mut state);
+            let now = Instant::now();
+            if now >= state.tick_due {
+                state.tick_due = now + state.interval;
+                return Woken::Tick;
+            }
+            let deadline = state.tick_due;
+            self.cond.wait_until(&mut state, deadline);
         }
     }
 
     /// Stop: every wait answers [`Woken::Stop`], now and forever.
     pub(crate) fn stop(&self) {
         self.state.lock().stopped = true;
+        self.cond.notify_all();
+    }
+
+    /// The test seam behind `crate::Daemon::set_standing_interval_millis`:
+    /// the tick's interval moved to `interval` and the next tick due one
+    /// interval from now, a parked wait woken to take the new deadline — so
+    /// a suite drives the standing line in milliseconds. Not a stable API.
+    #[cfg(any(test, feature = "test-hooks"))]
+    pub(crate) fn set_tick_interval(&self, interval: Duration) {
+        let mut state = self.state.lock();
+        state.interval = interval;
+        state.tick_due = Instant::now() + interval;
         self.cond.notify_all();
     }
 

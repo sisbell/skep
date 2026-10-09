@@ -1700,8 +1700,10 @@ write passes down through them in this order:
 │                    backstop's — the byte bound and the  │
 │                    floor re-read off the newest base,   │
 │                    the feed compacted, each landing and │
-│                    each failure said · a replace's      │
-│                    deferred unlink after the reply      │
+│                    each failure said, and once an hour  │
+│                    the standing line while a bad state  │
+│                    stands · a replace's deferred unlink │
+│                    after the reply, under its own catch │
 ├─────────────────────────────────────────────────────────┤
 │ 2 ROUTES           server.rs (router) · actor.rs        │
 │                    session_routes · read_routes · op ·  │
@@ -1798,7 +1800,9 @@ the store's install — nothing above their own layer.
    binary says and exits 1 on — the
    event streams' loop and budget, the pruner's cadence thread — the pass
    once the cell index is ready and then hourly, the logs' compaction on
-   its trigger among its acts — THE CHECKPOINT THREAD — the kernel's
+   its trigger among its acts; its loop under a catch that, on a panic,
+   says what the board lost (no pass until a restart) and sets a liveness
+   flag the standing line reads — THE CHECKPOINT THREAD — the kernel's
    deferred trigger serviced off the write path's guard: the checkpoint
    every 1024 commits or the byte bound, whichever first, its result on
    the operator stream — a landing's figures, a failure said per attempt
@@ -1807,9 +1811,20 @@ the store's install — nothing above their own layer.
    the kernel's inline count moved, the thread reading the newest
    checkpoint once on its wake and saying the backstop's line), the byte
    bound and the media floor re-read from that checkpoint's size and the
-   change feed's five files compacted to the journal's reclaim floor —
+   change feed's five files compacted to the journal's reclaim floor; its
+   wait on the signal TIMED, so that once an hour, while any standing bad
+   state stands — the write path's halt, the kernel's poison, a stopped
+   feed file, the pruner's thread gone, the floor binding,
+   CLAIMED-PERMISSIVE — it says ONE `standing:` line naming each with its
+   position or file, and nothing on a healthy board; its loop under the
+   same catch, which says what is lost with it (every checkpoint the
+   backstop's, unsaid; the bound and the floor frozen); and the kernel's
+   own halt said once, at the write path's door where a write answers
+   `poisoned` or at the handler's catch after a panic on a write, which
+   `GET /health`'s `writes.halted` reads beside the write path's halt —
    and, after a blob reply is written, the replaced file's deferred
-   unlink) and
+   unlink, under a catch of its own so a panic there costs the aside and
+   never the worker) and
    `server/http.rs` (the HTTP bytes: the request reader, the reply
    writer, the event framing — and the streaming arm: for the blob
    upload's two body-carrying methods the reader takes the head alone

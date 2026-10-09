@@ -12,6 +12,17 @@ use crate::tools::{wire_frame, Catalog, SESSION_INFO};
 /// should), answer the newest revision this server was written against.
 const FALLBACK_PROTOCOL_VERSION: &str = "2025-06-18";
 
+/// The JSON-RPC 2.0 error codes this server answers (the spec's §5.1),
+/// each the spec's own number: a name for it, never a new one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ErrorCode {
+    ParseError = -32700,
+    InvalidRequest = -32600,
+    MethodNotFound = -32601,
+    InvalidParams = -32602,
+}
+
+#[derive(Debug)]
 pub struct Server {
     pub skepd: Skepd,
     pub catalog: Catalog,
@@ -55,12 +66,21 @@ impl Server {
         }
         let msg: Value = match serde_json::from_slice(line) {
             Ok(v) => v,
-            Err(e) => return Some(rpc_error(Value::Null, -32700, &format!("parse error: {e}"))),
+            Err(e) => {
+                let message = format!("parse error: {e}");
+                return Some(rpc_error(Value::Null, ErrorCode::ParseError, &message));
+            }
         };
-        let Value::Object(msg) = msg else {
-            return Some(rpc_error(Value::Null, -32600, "a message is a JSON object"));
+        let Value::Object(mut msg) = msg else {
+            return Some(rpc_error(
+                Value::Null,
+                ErrorCode::InvalidRequest,
+                "a message is a JSON object",
+            ));
         };
-        let id = msg.get("id").cloned();
+        // The message is owned: its id and params move out, never copied.
+        let id = msg.remove("id");
+        let params = msg.remove("params");
         let method = msg.get("method").and_then(Value::as_str);
         match (method, id) {
             (None, None) => None,
@@ -69,20 +89,21 @@ impl Server {
                     // A stray response to a request this server never sent.
                     None
                 } else {
-                    Some(rpc_error(id, -32600, "a request names a method"))
+                    Some(rpc_error(id, ErrorCode::InvalidRequest, "a request names a method"))
                 }
             }
             // Notifications — `notifications/initialized` and all others.
             (Some(_), None) => None,
-            (Some(m), Some(id)) => Some(self.request(m, msg.get("params"), id)),
+            (Some(m), Some(id)) => Some(self.request(m, params, id)),
         }
     }
 
     /// One request → its JSON-RPC response.
-    fn request(&mut self, method: &str, params: Option<&Value>, id: Value) -> Value {
+    fn request(&mut self, method: &str, params: Option<Value>, id: Value) -> Value {
         match method {
             "initialize" => {
                 let version = params
+                    .as_ref()
                     .and_then(|p| p.get("protocolVersion"))
                     .and_then(Value::as_str)
                     .unwrap_or(FALLBACK_PROTOCOL_VERSION);
@@ -92,17 +113,20 @@ impl Server {
                         "protocolVersion": version,
                         "capabilities": {"tools": {}},
                         "serverInfo": {"name": "skep", "version": env!("CARGO_PKG_VERSION")},
-                        "instructions": self.catalog.instructions,
+                        "instructions": self.catalog.instructions(),
                     }),
                 )
             }
             "ping" => rpc_result(id, json!({})),
-            "tools/list" => rpc_result(id, json!({"tools": self.catalog.tools})),
+            "tools/list" => rpc_result(id, json!({"tools": self.catalog.tools()})),
             "tools/call" => match call_params(params) {
-                Ok((name, args)) => rpc_result(id, self.call(name, args)),
-                Err(e) => rpc_error(id, -32602, &e),
+                Ok((name, args)) => rpc_result(id, self.call(&name, args)),
+                Err(e) => rpc_error(id, ErrorCode::InvalidParams, &e),
             },
-            other => rpc_error(id, -32601, &format!("method '{other}' not supported")),
+            other => {
+                let message = format!("method '{other}' not supported");
+                rpc_error(id, ErrorCode::MethodNotFound, &message)
+            }
         }
     }
 
@@ -144,16 +168,16 @@ impl Server {
 }
 
 /// `tools/call` params: `{"name": …, "arguments": {…}?}`; absent or null
-/// arguments are the empty object.
-fn call_params(params: Option<&Value>) -> Result<(&str, Map<String, Value>), String> {
-    let p = params.ok_or("tools/call requires params")?;
-    let name = p
-        .get("name")
-        .and_then(Value::as_str)
-        .ok_or("tools/call params require a string 'name'")?;
-    let args = match p.get("arguments") {
+/// arguments are the empty object. The params are the message's own, taken
+/// by value: the arguments move into the frame, never copied.
+fn call_params(params: Option<Value>) -> Result<(String, Map<String, Value>), String> {
+    let mut p = params.ok_or("tools/call requires params")?;
+    let Some(Value::String(name)) = p.get_mut("name").map(Value::take) else {
+        return Err("tools/call params require a string 'name'".into());
+    };
+    let args = match p.get_mut("arguments").map(Value::take) {
         None | Some(Value::Null) => Map::new(),
-        Some(Value::Object(m)) => m.clone(),
+        Some(Value::Object(args)) => args,
         Some(_) => return Err("'arguments' must be a JSON object".into()),
     };
     Ok((name, args))
@@ -163,8 +187,8 @@ fn rpc_result(id: Value, result: Value) -> Value {
     json!({"jsonrpc": "2.0", "id": id, "result": result})
 }
 
-fn rpc_error(id: Value, code: i64, message: &str) -> Value {
-    json!({"jsonrpc": "2.0", "id": id, "error": {"code": code, "message": message}})
+fn rpc_error(id: Value, code: ErrorCode, message: &str) -> Value {
+    json!({"jsonrpc": "2.0", "id": id, "error": {"code": code as i64, "message": message}})
 }
 
 /// A tool result of one text content block, `isError` as given.
@@ -178,12 +202,17 @@ mod tests {
 
     #[test]
     fn call_params_shapes() {
-        let p = json!({"name": "fork"});
-        let (name, args) = call_params(Some(&p)).expect("argument-less call");
+        let (name, args) = call_params(Some(json!({"name": "fork"}))).expect("argument-less call");
         assert_eq!(name, "fork");
         assert!(args.is_empty());
+        let p = json!({"name": "fork", "arguments": null});
+        assert!(call_params(Some(p)).expect("null arguments").1.is_empty());
+        let p = json!({"name": "insert", "arguments": {"doc": "1.0.1.0.1", "values": ["x"]}});
+        let (name, args) = call_params(Some(p)).expect("a call with arguments");
+        assert_eq!(name, "insert");
+        assert_eq!(Value::Object(args), json!({"doc": "1.0.1.0.1", "values": ["x"]}), "whole");
         assert!(call_params(None).is_err());
-        let p = json!({"name": "fork", "arguments": 3});
-        assert!(call_params(Some(&p)).is_err());
+        assert!(call_params(Some(json!({"name": 7}))).is_err());
+        assert!(call_params(Some(json!({"name": "fork", "arguments": 3}))).is_err());
     }
 }

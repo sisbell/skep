@@ -38,8 +38,14 @@ mod http;
 mod server;
 mod tools;
 
+use std::borrow::Cow;
+use std::env::{self, VarError};
+use std::path::PathBuf;
+
 use crate::daemon::Skepd;
+use crate::http::Http;
 use crate::server::Server;
+use crate::tools::Catalog;
 
 const USAGE: &str = "\
 usage: skep-mcp [--tools-file <PATH>]
@@ -59,68 +65,63 @@ Speaks MCP (JSON-RPC 2.0, one message per line) on stdio; the skepd side
 is specified in skep/docs/wire.md.";
 
 fn main() {
-    let mut tools_file: Option<std::path::PathBuf> = None;
-    let mut args = std::env::args().skip(1);
+    let mut tools_file: Option<PathBuf> = None;
+    let mut args = env::args_os().skip(1);
     while let Some(arg) = args.next() {
-        match arg.as_str() {
-            "--tools-file" => match args.next() {
+        match arg.to_str() {
+            Some("--tools-file") => match args.next() {
                 Some(p) => tools_file = Some(p.into()),
                 None => die_usage("--tools-file needs a value"),
             },
-            "--help" | "-h" => {
+            Some("--help" | "-h") => {
                 println!("{USAGE}");
                 return;
             }
-            other => die_usage(&format!("unknown argument '{other}'")),
+            _ => die_usage(&format!("unknown argument '{}'", arg.to_string_lossy())),
         }
     }
     // The catalog first: a drifted tools file is a startup error before any
     // environment or network is consulted.
     let text = match &tools_file {
-        None => tools::EMBEDDED.to_string(),
+        None => Cow::Borrowed(tools::EMBEDDED),
         Some(p) => match std::fs::read_to_string(p) {
-            Ok(t) => t,
+            Ok(t) => Cow::Owned(t),
             Err(e) => die(&format!("--tools-file {}: {e}", p.display())),
         },
     };
-    let mut catalog = match tools::load(&text) {
+    let mut catalog = match Catalog::load(&text) {
         Ok(c) => c,
         Err(e) => die(&format!("tools file: {e}")),
     };
-    let principal = match std::env::var("SKEP_PRINCIPAL") {
-        Ok(v) => match v.parse::<u64>() {
+    let principal = match env_text("SKEP_PRINCIPAL") {
+        Some(v) => match v.parse::<u64>() {
             Ok(p) => p,
             Err(_) => die(&format!(
                 "SKEP_PRINCIPAL: '{v}' is not a principal (a non-negative integer)"
             )),
         },
-        Err(_) => die("SKEP_PRINCIPAL is required (the principal this adapter binds)"),
+        None => die("SKEP_PRINCIPAL is required (the principal this adapter binds)"),
     };
-    let url =
-        std::env::var("SKEPD_URL").unwrap_or_else(|_| String::from("http://127.0.0.1:8642"));
-    let http = match http::parse_url(&url) {
+    let url = env_text("SKEPD_URL").unwrap_or_else(|| String::from("http://127.0.0.1:8642"));
+    let http = match Http::parse(&url) {
         Ok(h) => h,
         Err(e) => die(&format!("SKEPD_URL {e}")),
     };
     // The commons pointer: an address the instructions hand to agents,
     // never dereferenced here — T4 well-formedness is the whole startup
     // check, the same class of refusal as a bad SKEPD_URL.
-    let commons = match std::env::var("SKEP_COMMONS") {
-        Ok(a) => {
-            if !is_t4_address(&a) {
-                die(&format!("SKEP_COMMONS: '{a}' is not a T4-valid address"));
-            }
-            Some(a)
+    let commons = env_text("SKEP_COMMONS").inspect(|a| {
+        if !is_t4_address(a) {
+            die(&format!("SKEP_COMMONS: '{a}' is not a T4-valid address"));
         }
-        Err(_) => None,
-    };
+    });
     if let Some(addr) = &commons {
         catalog.append_commons(addr);
     }
     eprintln!(
         "skep-mcp: skepd at http://{}, principal {principal}, {} tools{}",
         http.authority(),
-        catalog.tools.len(),
+        catalog.tools().len(),
         commons.as_deref().map(|a| format!(", commons {a}")).unwrap_or_default()
     );
     Server { skepd: Skepd::new(http, principal), catalog }.run();
@@ -134,6 +135,18 @@ fn die(msg: &str) -> ! {
 fn die_usage(msg: &str) -> ! {
     eprintln!("skep-mcp: {msg}\n\n{USAGE}");
     std::process::exit(2);
+}
+
+/// A variable's text, `None` while it is unset. A value that is not UTF-8
+/// text is refused by name, in skepd's words, never read as unset: it was
+/// given, and running on the default in its place is the silent failure
+/// the refusal exists to prevent.
+fn env_text(var: &str) -> Option<String> {
+    match env::var(var) {
+        Ok(text) => Some(text),
+        Err(VarError::NotPresent) => None,
+        Err(VarError::NotUnicode(_)) => die(&format!("{var}: the value is not UTF-8 text")),
+    }
 }
 
 /// T4 well-formedness of a dotted-decimal tumbler string (wire.md §Value

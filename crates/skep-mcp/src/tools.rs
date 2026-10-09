@@ -97,25 +97,95 @@ pub fn wire_frame(name: &str, mut args: Map<String, Value>) -> Option<Vec<u8>> {
     Some(frame)
 }
 
-/// The substitution point in `commons_instructions`: `load` refuses a
-/// template without one, and `Catalog::append_commons` replaces every one.
+/// The substitution point in `commons_instructions`: `Catalog::load`
+/// refuses a template without one, and `Catalog::append_commons` replaces
+/// every one.
 const ADDR_PLACEHOLDER: &str = "{addr}";
 
 /// The loaded catalog: the server instructions, the commons sentence
-/// template, and the tool definitions `tools/list` answers.
+/// template, and the tool definitions `tools/list` answers. Its fields are
+/// private, so outside this module `Catalog::load` is the one way to build
+/// one, and what it checked stays checked.
 #[derive(Debug)]
 pub struct Catalog {
-    pub instructions: String,
+    instructions: String,
     /// The sentence `append_commons` adds to `instructions` when
     /// `SKEP_COMMONS` names the commons; `{addr}` is the substitution point.
     commons_instructions: String,
     /// The catalog's tool definitions in file order, each checked by
     /// `check_tool` and kept as the file spells it: exactly the `tools`
     /// array `tools/list` answers.
-    pub tools: Vec<Value>,
+    tools: Vec<Value>,
 }
 
 impl Catalog {
+    /// Parse and validate one catalog. Every fault is a startup error
+    /// carrying the offending name — the no-drift contract is enforced
+    /// here, in both directions.
+    pub fn load(text: &str) -> Result<Catalog, String> {
+        let v: Value = serde_json::from_str(text).map_err(|e| format!("not JSON: {e}"))?;
+        let Value::Object(mut root) = v else {
+            return Err("root must be a JSON object".into());
+        };
+        for k in root.keys() {
+            if k != "instructions" && k != "commons_instructions" && k != "tools" {
+                return Err(format!("unknown root field '{k}'"));
+            }
+        }
+        let instructions = root
+            .get("instructions")
+            .and_then(Value::as_str)
+            .ok_or("missing string field 'instructions'")?
+            .to_string();
+        if instructions.is_empty() {
+            return Err("'instructions' must be nonempty".into());
+        }
+        let commons_instructions = root
+            .get("commons_instructions")
+            .and_then(Value::as_str)
+            .ok_or("missing string field 'commons_instructions'")?
+            .to_string();
+        if !commons_instructions.contains(ADDR_PLACEHOLDER) {
+            return Err(format!(
+                "'commons_instructions' must contain the '{ADDR_PLACEHOLDER}' placeholder"
+            ));
+        }
+        let Some(Value::Array(tools)) = root.remove("tools") else {
+            return Err("missing array field 'tools'".into());
+        };
+        let mut names = Vec::with_capacity(tools.len());
+        for (i, t) in tools.iter().enumerate() {
+            names.push(check_tool(t).map_err(|e| format!("tools[{i}]: {e}"))?);
+        }
+        let mut seen = std::collections::BTreeSet::new();
+        for name in names {
+            if !seen.insert(name) {
+                return Err(format!("duplicate tool '{name}'"));
+            }
+            if name != SESSION_INFO && !DISPATCH_OPS.contains(&name) {
+                return Err(format!("tool '{name}' names an op the dispatch doesn't know"));
+            }
+        }
+        for op in DISPATCH_OPS.iter().copied().chain([SESSION_INFO]) {
+            if !seen.contains(op) {
+                return Err(format!("dispatch op '{op}' has no tools-file entry"));
+            }
+        }
+        Ok(Catalog { instructions, commons_instructions, tools })
+    }
+
+    /// The server instructions `initialize` answers, the commons sentence
+    /// appended when `SKEP_COMMONS` is set.
+    pub fn instructions(&self) -> &str {
+        &self.instructions
+    }
+
+    /// The tool definitions `tools/list` answers: exactly the entries
+    /// `Catalog::load` checked, in file order.
+    pub fn tools(&self) -> &[Value] {
+        &self.tools
+    }
+
     /// Point the instructions at the commons: the commons template with
     /// every `{addr}` replaced by `addr`, appended after a blank line.
     pub fn append_commons(&mut self, addr: &str) {
@@ -123,61 +193,6 @@ impl Catalog {
         self.instructions.push_str("\n\n");
         self.instructions.push_str(&sentence);
     }
-}
-
-/// Parse and validate one catalog. Every fault is a startup error carrying
-/// the offending name — the no-drift contract is enforced here, in both
-/// directions.
-pub fn load(text: &str) -> Result<Catalog, String> {
-    let v: Value = serde_json::from_str(text).map_err(|e| format!("not JSON: {e}"))?;
-    let Value::Object(mut root) = v else {
-        return Err("root must be a JSON object".into());
-    };
-    for k in root.keys() {
-        if k != "instructions" && k != "commons_instructions" && k != "tools" {
-            return Err(format!("unknown root field '{k}'"));
-        }
-    }
-    let instructions = root
-        .get("instructions")
-        .and_then(Value::as_str)
-        .ok_or("missing string field 'instructions'")?
-        .to_string();
-    if instructions.is_empty() {
-        return Err("'instructions' must be nonempty".into());
-    }
-    let commons_instructions = root
-        .get("commons_instructions")
-        .and_then(Value::as_str)
-        .ok_or("missing string field 'commons_instructions'")?
-        .to_string();
-    if !commons_instructions.contains(ADDR_PLACEHOLDER) {
-        return Err(format!(
-            "'commons_instructions' must contain the '{ADDR_PLACEHOLDER}' placeholder"
-        ));
-    }
-    let Some(Value::Array(tools)) = root.remove("tools") else {
-        return Err("missing array field 'tools'".into());
-    };
-    let mut names = Vec::with_capacity(tools.len());
-    for (i, t) in tools.iter().enumerate() {
-        names.push(check_tool(t).map_err(|e| format!("tools[{i}]: {e}"))?);
-    }
-    let mut seen = std::collections::BTreeSet::new();
-    for name in names {
-        if !seen.insert(name) {
-            return Err(format!("duplicate tool '{name}'"));
-        }
-        if name != SESSION_INFO && !DISPATCH_OPS.contains(&name) {
-            return Err(format!("tool '{name}' names an op the dispatch doesn't know"));
-        }
-    }
-    for op in DISPATCH_OPS.iter().copied().chain([SESSION_INFO]) {
-        if !seen.contains(op) {
-            return Err(format!("dispatch op '{op}' has no tools-file entry"));
-        }
-    }
-    Ok(Catalog { instructions, commons_instructions, tools })
 }
 
 /// Check one catalog entry — an MCP tool definition: a nonempty string
@@ -214,12 +229,12 @@ mod tests {
     use serde_json::json;
 
     /// The shipped catalog: every dispatch op plus `session_info`, every
-    /// entry named, described, and schema'd — `load` enforces both no-drift
-    /// directions, so a clean load IS the no-drift assertion for the
-    /// embedded file — and every entry kept as the file spells it.
+    /// entry named, described, and schema'd — `Catalog::load` enforces both
+    /// no-drift directions, so a clean load IS the no-drift assertion for
+    /// the embedded file — and every entry kept as the file spells it.
     #[test]
     fn embedded_catalog_matches_dispatch() {
-        let t = load(EMBEDDED).expect("embedded tools.json must validate");
+        let t = Catalog::load(EMBEDDED).expect("embedded tools.json must validate");
         assert_eq!(t.tools.len(), DISPATCH_OPS.len() + 1);
         assert!(!t.instructions.is_empty());
         let file: Value = serde_json::from_str(EMBEDDED).expect("embedded parses");
@@ -236,7 +251,7 @@ mod tests {
             "description": "no such wire op",
             "inputSchema": {"type": "object"}
         }));
-        let err = load(&v.to_string()).expect_err("must refuse");
+        let err = Catalog::load(&v.to_string()).expect_err("must refuse");
         assert!(err.contains("frobnicate"), "error must name the tool: {err}");
     }
 
@@ -246,7 +261,7 @@ mod tests {
     fn missing_op_refuses() {
         let mut v: Value = serde_json::from_str(EMBEDDED).expect("embedded parses");
         v["tools"].as_array_mut().expect("tools").retain(|t| t["name"] != "insert");
-        let err = load(&v.to_string()).expect_err("must refuse");
+        let err = Catalog::load(&v.to_string()).expect_err("must refuse");
         assert!(err.contains("insert"), "error must name the op: {err}");
     }
 
@@ -256,12 +271,12 @@ mod tests {
     fn commons_template_refusals() {
         let mut v: Value = serde_json::from_str(EMBEDDED).expect("embedded parses");
         v.as_object_mut().expect("root").remove("commons_instructions");
-        let err = load(&v.to_string()).expect_err("must refuse");
+        let err = Catalog::load(&v.to_string()).expect_err("must refuse");
         assert!(err.contains("commons_instructions"), "error names the field: {err}");
 
         let mut v: Value = serde_json::from_str(EMBEDDED).expect("embedded parses");
         v["commons_instructions"] = json!("a sentence with no substitution point");
-        let err = load(&v.to_string()).expect_err("must refuse");
+        let err = Catalog::load(&v.to_string()).expect_err("must refuse");
         assert!(err.contains("{addr}"), "error names the placeholder: {err}");
     }
 

@@ -211,6 +211,14 @@ fn initialize_and_tools_list_serve_the_catalog() {
     let v = mcp.request("resources/list", json!({}));
     assert_eq!(v["error"]["code"], json!(-32601), "unknown method: {v}");
 
+    // Invalid params and an invalid request, JSON-RPC 2.0's own codes.
+    let v = mcp.request("tools/call", json!({}));
+    assert_eq!(v["error"]["code"], json!(-32602), "params that name no tool: {v}");
+    mcp.send_line(r#"{"jsonrpc":"2.0","id":"no-method"}"#);
+    let v = mcp.read_message();
+    assert_eq!(v["error"]["code"], json!(-32600), "a request that names no method: {v}");
+    assert_eq!(v["id"], json!("no-method"), "answered under its own id: {v}");
+
     // Stdin EOF is the clean exit.
     let status = mcp.finish();
     assert!(status.success(), "clean exit on stdin EOF: {status:?}");
@@ -536,6 +544,46 @@ fn malformed_skep_commons_refuses_startup() {
         let err = String::from_utf8_lossy(&out.stderr);
         assert!(err.contains("SKEP_COMMONS"), "stderr names the variable for '{bad}': {err}");
     }
+}
+
+/// A variable set to bytes that are not UTF-8 is refused by name, never
+/// read as unset: an unreadable SKEPD_URL must not run against the default.
+#[cfg(unix)]
+#[test]
+fn non_utf8_environment_refuses_startup() {
+    use std::os::unix::ffi::OsStrExt;
+    let bytes = std::ffi::OsStr::from_bytes(b"\xff");
+    for var in ["SKEP_PRINCIPAL", "SKEPD_URL", "SKEP_COMMONS"] {
+        let out = Command::new(env!("CARGO_BIN_EXE_skep-mcp"))
+            .env("SKEPD_URL", "http://127.0.0.1:1")
+            .env("SKEP_PRINCIPAL", "1")
+            .env_remove("SKEP_COMMONS")
+            .env(var, bytes)
+            .output()
+            .expect("run skep-mcp");
+        assert!(!out.status.success(), "a non-UTF-8 {var} must refuse startup");
+        let err = String::from_utf8_lossy(&out.stderr);
+        assert!(err.contains(&format!("{var}: the value is not UTF-8 text")), "{var}: {err}");
+    }
+}
+
+/// A path is an OS string: a `--tools-file` that is not UTF-8 is read as a
+/// path — here one that does not exist, a refusal naming the flag — never a
+/// panic in argument parsing.
+#[cfg(unix)]
+#[test]
+fn non_utf8_tools_file_path_is_a_path() {
+    use std::os::unix::ffi::OsStrExt;
+    let out = Command::new(env!("CARGO_BIN_EXE_skep-mcp"))
+        .arg("--tools-file")
+        .arg(std::ffi::OsStr::from_bytes(b"/nonexistent/\xff.json"))
+        .env("SKEPD_URL", "http://127.0.0.1:1")
+        .env("SKEP_PRINCIPAL", "1")
+        .env_remove("SKEP_COMMONS")
+        .output()
+        .expect("run skep-mcp");
+    assert_eq!(out.status.code(), Some(1), "a refusal, not a panic: {out:?}");
+    assert!(String::from_utf8_lossy(&out.stderr).contains("--tools-file"), "{out:?}");
 }
 
 #[test]

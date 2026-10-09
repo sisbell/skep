@@ -17,43 +17,63 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 /// ten seconds is headroom, not an expected wait.
 const IO_TIMEOUT: Duration = Duration::from_secs(10);
 
+/// The method of one exchange — a type of its own, as skep-client's and
+/// skep-resolve's dialers give it, so the method and the path, both text
+/// on the request line, cannot trade places in a call.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Method {
+    Get,
+    Post,
+}
+
+impl Method {
+    /// The method as the request line spells it.
+    fn as_str(self) -> &'static str {
+        match self {
+            Method::Get => "GET",
+            Method::Post => "POST",
+        }
+    }
+}
+
 /// The daemon's origin, ready to dial: host, port, and the authority
 /// (`host[:port]`) the `Host` header and error messages carry.
+#[derive(Debug)]
 pub struct Http {
     host: String,
     port: u16,
     authority: String,
 }
 
-/// Parse `SKEPD_URL` as the daemon's origin: `http://host[:port]` and
-/// nothing else — the daemon speaks plain HTTP on loopback, so any other
-/// scheme or a path is a configuration mistake worth refusing at startup.
-pub fn parse_url(url: &str) -> Result<Http, String> {
-    let rest = url
-        .strip_prefix("http://")
-        .ok_or_else(|| format!("'{url}': only http:// URLs are supported"))?;
-    let (authority, path) = match rest.split_once('/') {
-        Some((a, p)) => (a, p),
-        None => (rest, ""),
-    };
-    if !path.is_empty() {
-        return Err(format!("'{url}': the daemon's origin takes no path"));
-    }
-    let (host, port) = match authority.rsplit_once(':') {
-        Some((h, p)) => {
-            (h, p.parse::<u16>().map_err(|_| format!("'{url}': '{p}' is not a port"))?)
-        }
-        None => (authority, 80),
-    };
-    // Bracketed IPv6 sheds its brackets for the resolver.
-    let host = host.trim_start_matches('[').trim_end_matches(']');
-    if host.is_empty() {
-        return Err(format!("'{url}': missing host"));
-    }
-    Ok(Http { host: host.to_string(), port, authority: authority.to_string() })
-}
-
 impl Http {
+    /// Parse `SKEPD_URL` as the daemon's origin: `http://host[:port]` and
+    /// nothing else — the daemon speaks plain HTTP on loopback, so any other
+    /// scheme or a path is a configuration mistake worth refusing at startup.
+    pub fn parse(url: &str) -> Result<Http, String> {
+        let rest = url
+            .strip_prefix("http://")
+            .ok_or_else(|| format!("'{url}': only http:// URLs are supported"))?;
+        let (authority, path) = match rest.split_once('/') {
+            Some((a, p)) => (a, p),
+            None => (rest, ""),
+        };
+        if !path.is_empty() {
+            return Err(format!("'{url}': the daemon's origin takes no path"));
+        }
+        let (host, port) = match authority.rsplit_once(':') {
+            Some((h, p)) => {
+                (h, p.parse::<u16>().map_err(|_| format!("'{url}': '{p}' is not a port"))?)
+            }
+            None => (authority, 80),
+        };
+        // Bracketed IPv6 sheds its brackets for the resolver.
+        let host = host.trim_start_matches('[').trim_end_matches(']');
+        if host.is_empty() {
+            return Err(format!("'{url}': missing host"));
+        }
+        Ok(Http { host: host.to_string(), port, authority: authority.to_string() })
+    }
+
     pub fn authority(&self) -> &str {
         &self.authority
     }
@@ -66,7 +86,7 @@ impl Http {
     /// and never quotes the request, whose headers can carry a credential.
     pub fn request(
         &self,
-        method: &str,
+        method: Method,
         path: &str,
         headers: &[(&str, &str)],
         body: &[u8],
@@ -80,6 +100,7 @@ impl Http {
             .map_err(|e| self.fail("connect", e))?;
         stream.set_read_timeout(Some(IO_TIMEOUT)).map_err(|e| self.fail("socket", e))?;
         stream.set_write_timeout(Some(IO_TIMEOUT)).map_err(|e| self.fail("socket", e))?;
+        let method = method.as_str();
         let mut req = format!(
             "{method} {path} HTTP/1.1\r\nHost: {}\r\nConnection: close\r\n",
             self.authority
@@ -147,11 +168,11 @@ mod tests {
 
     #[test]
     fn url_forms() {
-        let h = parse_url("http://127.0.0.1:8642").expect("default form");
+        let h = Http::parse("http://127.0.0.1:8642").expect("default form");
         assert_eq!(h.authority(), "127.0.0.1:8642");
-        let h = parse_url("http://localhost").expect("portless form");
+        let h = Http::parse("http://localhost").expect("portless form");
         assert_eq!((h.host.as_str(), h.port), ("localhost", 80));
-        let h = parse_url("http://127.0.0.1:8642/").expect("bare trailing slash");
+        let h = Http::parse("http://127.0.0.1:8642/").expect("bare trailing slash");
         assert_eq!(h.port, 8642);
         for bad in [
             "https://127.0.0.1:8642",
@@ -161,7 +182,7 @@ mod tests {
             "http://127.0.0.1:notaport",
             "http://127.0.0.1:8642/op",
         ] {
-            assert!(parse_url(bad).is_err(), "'{bad}' must not parse");
+            assert!(Http::parse(bad).is_err(), "'{bad}' must not parse");
         }
     }
 
@@ -192,10 +213,10 @@ mod tests {
                 let _ = conn.write_all(answer);
             }
         });
-        let http = parse_url(&format!("http://127.0.0.1:{port}")).expect("stub url");
+        let http = Http::parse(&format!("http://127.0.0.1:{port}")).expect("stub url");
         for _ in answers {
             let err = http
-                .request("POST", "/op", &[("Skepd-Session", "s3cr3t")], b"{}")
+                .request(Method::Post, "/op", &[("Skepd-Session", "s3cr3t")], b"{}")
                 .expect_err("no answer to read");
             assert!(!err.contains("s3cr3t"), "the failure quotes the request: {err}");
             assert!(err.starts_with(&format!("skepd at http://127.0.0.1:{port}: ")), "{err}");

@@ -1,16 +1,33 @@
-//! The `skepd` binary: flags/env → [`Daemon::open_configured`] → [`serve`] →
-//! wait. Crash-stop is the shutdown story (M2's WAL recovers), so there is
-//! no signal handling to get wrong. And THE OPERATOR's TWO TOOLS over a
-//! board directory, run with no server — `skepd inventory` and `skepd pull`
-//! (`skepd::tools`) — a leading verb parsed before any flag.
+//! The `skepd` binary: the panic hook, then flags/env → [`bind`] →
+//! [`Daemon::open_configured`] → [`serve_bound`] → wait → exit 1. The
+//! listener is bound BEFORE the open, so a held port is refused in
+//! milliseconds with the open's whole cost unpaid and no `kernel.lock`
+//! taken; `wait` returns only when every worker thread has ended, which the
+//! binary says and exits 1 on — a failure, on a code a supervisor reads as
+//! one. Crash-stop is the shutdown story (M2's WAL recovers), so there is
+//! no signal handling to get wrong. The binary's own lines — the refusals
+//! before each exit, on stderr, and the serving line, on stdout — are
+//! written synchronously with the write's result DISCARDED, as the operator
+//! stream writes, so a lost reader costs the line and never the daemon or
+//! its exit code; the hook's line and the exit's go through the stream's
+//! classed door. And THE OPERATOR's TWO TOOLS over a board directory, run
+//! with no server — `skepd inventory` and `skepd pull` (`skepd::tools`) — a
+//! leading verb parsed before any flag.
 
+use std::fmt;
+use std::io::{self, Write};
+use std::panic::Location;
 use std::path::PathBuf;
 use std::process::exit;
 
+use skep_util::notice::{self, Class};
 // `DEFAULT_WORKERS` is the LIBRARY's, not this binary's: it is the fifth
 // term of a relation whose other four are the daemon's permit pools, and the
 // library holds the assertion that keeps the five in step.
-use skepd::{serve, tools, AuthOptions, Daemon, MediaOptions, NodePrefix, Origin, DEFAULT_WORKERS};
+use skepd::{
+    bind, serve_bound, tools, AuthOptions, Daemon, MediaOptions, NodePrefix, Origin,
+    DEFAULT_WORKERS,
+};
 
 const DEFAULT_PORT: u16 = 8642;
 
@@ -51,6 +68,70 @@ const SKEPD_ORIGIN: &str = "SKEPD_ORIGIN";
 /// [`Daemon::open_with`]'s to say.
 const SKEPD_BLOCKED_PREFIXES: &str = "SKEPD_BLOCKED_PREFIXES";
 
+/// THE WORKER FAULT's VARIABLE — a TEST SEAM, read by `test-hooks` builds
+/// alone: `inside` or `outside`, the arm `Daemon::panic_the_next_worker` is
+/// handed before the workers spawn, so a suite drives the binary's panic
+/// hook and the workers' end in the real binary. A shipped build reads no
+/// such variable: the read below it does not compile without the feature.
+#[cfg(feature = "test-hooks")]
+const SKEPD_TEST_WORKER_FAULT: &str = "SKEPD_TEST_WORKER_FAULT";
+
+/// THE EXIT's LINE (`operations.md` §1.1 m16; §4 row 32): what the binary
+/// says when `wait` returns — every worker thread has ended, a panic past
+/// the handler's catch having taken each — before it exits 1. The class
+/// word is the emitter's (`Class::Failure`); the words stand alone here so
+/// the unit suite pins them.
+const WORKERS_ENDED: &str = "every worker thread has ended; the board serves nothing";
+
+/// THE HOOK's LINE (`operations.md` §1.1 row 41), the words alone — a pure
+/// function the unit suite pins: the thread by its name (`an unnamed thread`
+/// where it has none), `a thread panicked at` the location as std spells it
+/// (`file:line:column`; `an unknown location` where the hook's info carries
+/// none), and the payload ONLY where it is a `&'static str` — a literal the
+/// code wrote, which no request can have formatted — so a formatted panic
+/// (`expect`, `assert_eq!`, an index) shows its location alone, which
+/// identifies the site, and nothing of §1's NEVER list can ride the line.
+/// The class word is the emitter's (`Class::Failure`).
+fn panic_line(
+    thread: Option<&str>,
+    location: Option<&Location<'_>>,
+    payload: Option<&str>,
+) -> String {
+    let thread = thread.unwrap_or("an unnamed thread");
+    let at = location.map_or_else(|| "an unknown location".to_string(), |at| at.to_string());
+    match payload {
+        Some(payload) => format!("{thread}: a thread panicked at {at}: {payload}"),
+        None => format!("{thread}: a thread panicked at {at}"),
+    }
+}
+
+/// THE HOOK, INSTALLED — the binary's, never the library's (a process-global
+/// an embedder must be free to set itself): one prefixed, timed line through
+/// the operator stream's classed door at every panic, before any catch —
+/// Rust's own unprefixed text never reaches the stream. Installed FIRST,
+/// before the command line is read, so no thread of this process's panics
+/// outside it. The line is enqueued as every notice is and written by the
+/// stream's thread: a worker's panic lands while the daemon serves on; a
+/// panic on `main`'s own thread unwinds to exit 101 with no drain, so the
+/// line races the exit and the stream's thread wins it or not.
+fn install_the_panic_hook() {
+    std::panic::set_hook(Box::new(|info| {
+        let thread = std::thread::current();
+        let payload = info.payload().downcast_ref::<&'static str>().copied();
+        notice::emit(Class::Failure, panic_line(thread.name(), info.location(), payload));
+    }));
+}
+
+/// One line of the binary's own on stderr — a refusal before its exit —
+/// written synchronously with the write's result DISCARDED (`operations.md`
+/// §0 fact 1): a lost reader costs the line and never the exit code, where
+/// `eprintln!` would panic and turn an exit 1 or 2 into 101. Synchronous
+/// because the exit follows at once, and the stream's queue is drained
+/// before it wherever a line of the open's could still be waiting.
+fn refuse(line: fmt::Arguments<'_>) {
+    let _ = writeln!(io::stderr(), "{line}");
+}
+
 /// The node prefix's variable (REG-1.69), carried by [`from_env`] like every
 /// other setting: [`NodePrefix`]'s `FromStr` is what lets it, so the two
 /// rules that pair holds — a non-UTF-8 value refused rather than read as
@@ -76,7 +157,10 @@ usage: skepd --data-dir <DIR> [--port <PORT>] [--workers <N>]
        skepd inventory --data-dir <DIR> [--no-rehash]
        skepd pull --data-dir <DIR> [--hash <HEX>] <FILE>
 
-  --data-dir <DIR>   journal/checkpoint directory (env: SKEPD_DATA_DIR);
+  --data-dir <DIR>   the board's directory (env: SKEPD_DATA_DIR): the
+                     journal and its checkpoints, the blob store under
+                     blobs/, and the change feed's files — commits.log,
+                     the four feed-*.log files and feed-attest.log;
                      created if absent, recovered if populated
   --port <PORT>      TCP port on 127.0.0.1 (env: SKEPD_PORT; default \
 {DEFAULT_PORT};
@@ -388,17 +472,20 @@ fn parse_args(argv: impl Iterator<Item = String>) -> Result<Option<Args>, String
 }
 
 fn main() {
+    install_the_panic_hook();
     let args = match parse_command(std::env::args().skip(1)) {
         Ok(Some(Command::Serve(a))) => a,
         // THE TOOLS: one object or one line on stdout, one line on stderr
-        // where refused, no server bound.
+        // where refused, no server bound. A tool's answer is its whole work,
+        // so its `println!` STAYS: an answer that cannot be written fails the
+        // tool loudly rather than exiting 0 as if it had been delivered.
         Ok(Some(Command::Inventory { data_dir, check })) => match tools::inventory(&data_dir, check) {
             Ok(v) => {
                 println!("{}", serde_json::to_string_pretty(&v).expect("a JSON value renders"));
                 exit(0);
             }
             Err(e) => {
-                eprintln!("skepd inventory: {e}");
+                refuse(format_args!("skepd inventory: {e}"));
                 exit(1);
             }
         },
@@ -408,7 +495,7 @@ fn main() {
                 exit(0);
             }
             Err(e) => {
-                eprintln!("skepd pull: {e}");
+                refuse(format_args!("skepd pull: {e}"));
                 exit(1);
             }
         },
@@ -417,10 +504,30 @@ fn main() {
             exit(0);
         }
         Err(e) => {
-            eprintln!("skepd: {e}\n\n{}", usage());
+            refuse(format_args!("skepd: {e}\n\n{}", usage()));
             exit(2);
         }
     };
+    // THE BIND, FIRST: a port another process holds is decidable before any
+    // byte of the journal is read, so it is refused here — at once, exit 1,
+    // with no `kernel.lock` taken and nothing created under the data
+    // directory — and not after the open's whole cost. The port is held
+    // through the open; a connect meanwhile waits in the backlog for the
+    // first worker. No line of the stream's has been said yet, so nothing
+    // waits to be drained before this refusal.
+    let listener = match bind(args.port) {
+        Ok(l) => l,
+        Err(e) => {
+            refuse(format_args!("skepd: bind 127.0.0.1:{}: {e}", args.port));
+            exit(1);
+        }
+    };
+    // THE WORKER FAULT's ARM (test seam, `test-hooks` builds alone): the
+    // variable names the arm, before any worker exists.
+    #[cfg(feature = "test-hooks")]
+    if let Some(arm) = std::env::var_os(SKEPD_TEST_WORKER_FAULT) {
+        Daemon::panic_the_next_worker(arm.to_str().expect("the worker fault's arm is text"));
+    }
     // Genesis-or-recover; every EngineError is an operator condition
     // (corrupt journal, bad checkpoint) — report and stop.
     // `--origin` names the CONFIGURED set — the flag's own vocabulary and
@@ -448,21 +555,38 @@ fn main() {
     let daemon = match Daemon::open_configured(&args.data_dir, opts, media) {
         Ok(d) => d,
         Err(e) => {
-            skep_util::notice::drain();
-            eprintln!("skepd: {e}");
+            notice::drain();
+            refuse(format_args!("skepd: {e}"));
             exit(1);
         }
     };
     let seq = daemon.log_position();
-    let running = match serve(daemon, args.port, args.workers) {
+    // THE SERVE over the bound listener: the auth port bound to the port
+    // the bind answered, the warnings, then the workers. What can fail here
+    // is the OS refusing a worker thread — the bind's own refusal was said
+    // above — so the line says that: the act, the cause, what the start left
+    // and the act that clears it.
+    let running = match serve_bound(daemon, listener, args.workers) {
         Ok(s) => s,
         Err(e) => {
-            skep_util::notice::drain();
-            eprintln!("skepd: bind 127.0.0.1:{}: {e}", args.port);
+            notice::drain();
+            refuse(format_args!(
+                "skepd: the OS refused a worker thread at start: {e}; the workers that started \
+                 are stopped, the port and the data directory released, and nothing serves; \
+                 retry under a higher thread limit"
+            ));
             exit(1);
         }
     };
-    println!(
+    // THE SERVING LINE, on stdout — the one line that names the port under
+    // `--port 0`, outside the stream's grammar — written once the open's
+    // report has reached the stream, so an operator reads the board's
+    // standing before the line that says it serves; the write's result
+    // DISCARDED: a stdout whose reader is gone costs this line and never
+    // the daemon, which serves on.
+    notice::drain();
+    let _ = writeln!(
+        io::stdout(),
         "skepd: serving http://127.0.0.1:{}/ data-dir {} log-position {} workers {}",
         running.port(),
         args.data_dir.display(),
@@ -470,7 +594,13 @@ fn main() {
         args.workers
     );
     running.wait();
-    skep_util::notice::drain();
+    // THE WORKERS' END: `wait` returns only when every worker thread has
+    // ended — a FAILURE in serve mode, said as one and exited 1 on, never
+    // the fall-off's 0 a supervisor reads as a clean end. The queue is
+    // drained so the line, and the hook's before it, reach the stream.
+    notice::emit(Class::Failure, WORKERS_ENDED);
+    notice::drain();
+    exit(1);
 }
 
 #[cfg(test)]
@@ -509,6 +639,58 @@ mod tests {
         for named in ["--no-uploads", "SKEPD_UPLOADS", "skepd inventory", "skepd pull", "--no-rehash", "--hash"] {
             assert!(text.contains(named), "the usage names {named}");
         }
+    }
+
+    /// THE DATA DIRECTORY's SENTENCE (the register's F14): the help names
+    /// what the daemon writes under `--data-dir` — not the journal and its
+    /// checkpoints alone, but the blob store and the change feed's files
+    /// beside them, the attest store by name — so an operator sizing or
+    /// backing up the directory is not undersold.
+    #[test]
+    fn the_usage_names_what_the_data_directory_holds() {
+        let text = usage();
+        let sentence = text
+            .split("\n  --data-dir <DIR>")
+            .nth(1)
+            .and_then(|rest| rest.split("\n  --port <PORT>").next())
+            .expect("the --data-dir sentence");
+        for named in ["journal", "checkpoints", "blobs/", "commits.log", "feed-*.log", "feed-attest.log", "SKEPD_DATA_DIR"] {
+            assert!(sentence.contains(named), "the --data-dir sentence names {named}: {sentence:?}");
+        }
+    }
+
+    /// THE HOOK's LINE (row 41) at fixed inputs: the thread's name, the
+    /// location as std spells it, and the payload only where the hook found
+    /// a `&'static str` — a formatted panic shows its location alone; an
+    /// unnamed thread and a missing location are said as such, never as a
+    /// hole in the line.
+    #[test]
+    fn the_hooks_line_names_the_thread_the_location_and_a_literal_payload_alone() {
+        let here = Location::caller();
+        assert_eq!(
+            panic_line(Some("skepd-worker"), Some(here), Some("the test seam's worker fault")),
+            format!("skepd-worker: a thread panicked at {here}: the test seam's worker fault")
+        );
+        assert_eq!(
+            panic_line(Some("skepd-pruner"), Some(here), None),
+            format!("skepd-pruner: a thread panicked at {here}"),
+            "a formatted payload — a String — is not carried: the location identifies the site"
+        );
+        assert_eq!(
+            panic_line(None, None, Some("boom")),
+            "an unnamed thread: a thread panicked at an unknown location: boom"
+        );
+        assert!(
+            here.to_string().ends_with(&format!(":{}:{}", here.line(), here.column())),
+            "the location is std's own spelling, file:line:column: {here}"
+        );
+    }
+
+    /// THE EXIT's LINE (m16): the words the binary says when `wait` returns,
+    /// before exit 1 — the state and what it means for the board.
+    #[test]
+    fn the_exits_line_says_every_worker_has_ended_and_the_board_serves_nothing() {
+        assert_eq!(WORKERS_ENDED, "every worker thread has ended; the board serves nothing");
     }
 
     /// THE TOOLS' LINES: a leading verb names the tool before any flag; the

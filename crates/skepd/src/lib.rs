@@ -152,8 +152,8 @@ pub mod fuzz_support;
 pub use auth::{AuthOptions, NodePrefix, NotANodePrefix, NotCanonical, Origin, PortAlreadyBound};
 pub use codec::JsonCodec;
 pub use server::{
-    body_cap, serve, Body, Daemon, DaemonError, Fetch, HttpRequest, Peer, Reply, Routed,
-    Skepd, DEFAULT_WORKERS, MIN_WORKERS, UNIVERSAL_HEADERS,
+    bind, body_cap, serve, serve_bound, Body, Daemon, DaemonError, Fetch, HttpRequest, Listener,
+    Peer, Reply, Routed, Skepd, DEFAULT_WORKERS, MIN_WORKERS, UNIVERSAL_HEADERS,
 };
 
 /// The engine types this crate's public surface hands out: the world

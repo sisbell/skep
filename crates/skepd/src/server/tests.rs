@@ -1,5 +1,6 @@
-use std::io::{Read, Write};
-use std::net::TcpStream;
+use std::io::{ErrorKind, Read, Write};
+use std::net::{TcpListener, TcpStream};
+use std::path::Path;
 use std::time::{Duration, Instant};
 
 use serde_json::Value;
@@ -249,6 +250,123 @@ fn serving_a_daemon_whose_auth_port_is_bound_is_a_callers_bug() {
     let daemon = Daemon::open(dir.path()).expect("genesis open");
     daemon.bind_auth_port(1).expect("a fresh daemon binds once");
     let _server = serve(daemon, 0, 1);
+}
+
+/// THE BIND BEFORE THE OPEN (`operations.md` §4 row 22): the bind is a door
+/// of its own, so a held port is refused there — `AddrInUse`, the kind a
+/// caller dispatches on — with no daemon opened and nothing created under
+/// the data directory; released, the same port binds, and the listener
+/// carries the number it bound.
+#[test]
+fn a_held_port_is_refused_at_the_bind_with_no_open_run() {
+    let held = TcpListener::bind(("127.0.0.1", 0)).expect("hold a port");
+    let port = held.local_addr().expect("the held port").port();
+    let dir = tempfile::tempdir().expect("tempdir");
+    let data_dir = dir.path().join("data");
+    let refused = bind(port).expect_err("a held port is refused at the bind");
+    assert_eq!(refused.kind(), ErrorKind::AddrInUse, "{refused}");
+    assert!(!data_dir.exists(), "the bind touches no directory: no open ran");
+    drop(held);
+    let listener = bind(port).expect("the released port binds");
+    assert_eq!(listener.port(), port, "the listener carries the port it bound");
+}
+
+/// `serve` IS `bind` THEN `serve_bound` (§4 row 22's split): a listener
+/// bound before the open holds its port through it — a connect meanwhile is
+/// not refused but waits in the backlog, its request answered by the first
+/// worker — and the server serves on that port.
+#[test]
+fn serve_bound_serves_over_the_listener_the_bind_answered_and_a_connect_during_the_open_waits() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let listener = bind(0).expect("an ephemeral port");
+    let port = listener.port();
+    // A client during the open: the connect completes, the request is
+    // written, and nothing answers it yet — no worker exists.
+    let mut early = TcpStream::connect(("127.0.0.1", port))
+        .expect("a connect while the port is bound and nothing accepts completes");
+    early
+        .write_all(b"GET /health HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n")
+        .expect("the request waits in the backlog");
+    let daemon = Daemon::open(dir.path()).expect("genesis open");
+    let server = serve_bound(daemon, listener, 1).expect("the workers over the bound listener");
+    assert_eq!(server.port(), port, "the server serves on the port the bind answered");
+    early.set_read_timeout(Some(Duration::from_secs(10))).expect("read timeout");
+    let mut raw = Vec::new();
+    early.read_to_end(&mut raw).expect("the queued request is answered once a worker accepts");
+    assert!(raw.starts_with(b"HTTP/1.1 200 "), "{}", String::from_utf8_lossy(&raw));
+    server.shutdown();
+}
+
+/// THE OPEN's TWO LINES' WORDS (`operations.md` §1.1 m7; §3.1 step 3),
+/// pinned at fixed figures: the directory as the operator named it; the
+/// base as the two warnings name it — `genesis` at `Seq(0)`, else the
+/// checkpoint's file name — the commits replayed and the engine's open in
+/// milliseconds; and an engine that gave no account, said as a genesis that
+/// replayed nothing.
+#[test]
+fn the_opens_two_lines_carry_the_directory_the_base_the_replay_and_the_duration_in_their_words() {
+    use skep_engine::Recovery;
+
+    assert_eq!(
+        DataDirLine(Path::new("/var/lib/skep/board")).to_string(),
+        "data-dir /var/lib/skep/board"
+    );
+    assert_eq!(
+        RecoveredLine { start_point: Seq(0), replayed: 0, duration_ms: 12 }.to_string(),
+        "recovered from genesis, 0 commits replayed, in 12 ms"
+    );
+    assert_eq!(
+        RecoveredLine { start_point: Seq(4096), replayed: 317, duration_ms: 60_301 }.to_string(),
+        "recovered from checkpoint.4096, 317 commits replayed, in 60301 ms"
+    );
+    let account = Recovery {
+        start_point: Seq(2048),
+        skipped: vec![],
+        replayed: 9,
+        tail_cut: 0,
+        identity_resolved_empty: false,
+    };
+    assert_eq!(
+        RecoveredLine::of(Some(&account), 5).to_string(),
+        "recovered from checkpoint.2048, 9 commits replayed, in 5 ms"
+    );
+    assert_eq!(
+        RecoveredLine::of(None, 5).to_string(),
+        "recovered from genesis, 0 commits replayed, in 5 ms",
+        "no account — an in-memory engine, which no daemon opens — is a genesis that replayed nothing"
+    );
+    // ONE rendering of the base: the landing's and the warnings' alike.
+    assert_eq!(Base(Seq(0)).to_string(), "genesis");
+    assert_eq!(Base(Seq(77)).to_string(), "checkpoint.77");
+}
+
+/// THE CLASSED DOOR for the open's own lines (CUT 1 (a)): both go out
+/// through `say_open_line`, which emits under `Class::Open` — read off the
+/// source, since no suite captures the stream in-process; the class word on
+/// the stream itself is pinned by the child-process suite
+/// (`tests/it/open.rs`), which reads `open:` on the binary's stderr.
+#[test]
+fn the_opens_two_lines_go_through_the_classed_door() {
+    let source = include_str!("../server.rs");
+    let start = source.find("fn open_under(").expect("open_under");
+    let end =
+        source[start..].find("fn write_the_claims_head_if_owed(").expect("the next fn") + start;
+    let open_under = &source[start..end];
+    assert_eq!(
+        open_under.matches("say_open_line(").count(),
+        2,
+        "the two lines, each through the door"
+    );
+    assert!(
+        open_under.find("say_open_line(DataDirLine(").expect("the directory's line")
+            < open_under.find("Engine::open(").expect("the engine's open"),
+        "the directory's line comes before the engine's open"
+    );
+    let door = source.find("fn say_open_line(").expect("the door");
+    assert!(
+        source[door..door + 160].contains("notice::emit(Class::Open,"),
+        "the door emits under Class::Open"
+    );
 }
 
 /// The operator stream's moments, as a line spells each: the closed set the

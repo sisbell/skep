@@ -36,6 +36,7 @@ mod http_lifecycle;
 mod identity_slice;
 mod media;
 mod nullify_class;
+mod open;
 mod ownership;
 mod properties;
 mod pruner;

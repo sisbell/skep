@@ -1706,10 +1706,16 @@ media resource's walk and reads the store's inspection; the pull reads the
 same index or the hash the operator hands it, and writes one file through
 the store's install — nothing above their own layer.
 
-1. **The transport** — `server/listen.rs` (sockets, worker threads — the
+1. **The transport** — `server/listen.rs` (sockets — the listener bound
+   BEFORE the open, `bind` then `serve_bound`, `serve` the two in sequence,
+   so a held port is refused in milliseconds before the kernel's lock is
+   taken and a connect during the open waits in the backlog for the first
+   worker — worker threads — the
    default count and the minimum, one more than the four permit pools'
    slots together: the reconstruction, the class scan, the fetch and the
-   upload — the
+   upload; spawned last, after the open, and `wait`, the binary's
+   foreground call, returning only when every one has ended, which the
+   binary says and exits 1 on — the
    event streams' loop and budget, the pruner's cadence thread — the pass
    once the cell index is ready and then hourly, the logs' compaction on
    its trigger among its acts — THE CHECKPOINT THREAD — the kernel's
@@ -1846,7 +1852,13 @@ the store's install — nothing above their own layer.
 `lib.rs` declares the daemon's modules in layer order, then the fuzz
 harness and the crate's public surface; `main.rs` is the binary — the
 daemon's flags, and the two tools' lines, a leading verb parsed before any
-flag.
+flag; the process's panic hook, installed first, one prefixed line on the
+operator stream for any thread's panic, the payload only where it is a
+literal the code wrote; its own lines — the refusals before each exit and
+the serving line on stdout — written synchronously with the write's
+result discarded, so a lost reader costs the line and never the exit
+code; and the order bind, open, serve, then `wait`, whose return is the
+workers' end, said and exited 1.
 `fuzz_support.rs` (in `test-hooks` builds only) serves the fuzz targets and
 the tests: it stands above the transport, and nothing in the daemon
 imports it.

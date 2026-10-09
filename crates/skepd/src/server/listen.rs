@@ -131,6 +131,76 @@ impl std::fmt::Debug for Skepd {
     }
 }
 
+/// THE ACCEPT-FAILURE PAUSE — 10 ms, INTERIM (the register's F15): how long
+/// a worker whose `accept` failed waits before it tries again, in place of
+/// a spin. The failures this meets are transient and clear by themselves —
+/// `EMFILE` and kin, a descriptor freed when any connection closes, which
+/// is milliseconds on a serving board — so the pause is of that order: long
+/// enough that a worker refused at the descriptor wall does not burn a core
+/// re-asking, short enough that a connection waiting in the backlog meets a
+/// worker again within a few of them. A longer pause would hold every new
+/// connection for its length once the wall clears.
+const ACCEPT_RETRY_PAUSE: Duration = Duration::from_millis(10);
+
+/// THE PRUNER's READINESS POLL — 250 ms, INTERIM (the register's F15): how
+/// often the pruner's thread looks for the cell index's walk at open to
+/// complete before its first pass, the one wait of its life with nothing to
+/// wake it (the walk's landing raises no signal; the cadence does, after).
+/// The walk is seconds to a minute on a large board, so a quarter-second
+/// poll costs four wakes a second on a thread that does nothing else
+/// meanwhile, bounds the first pass's lag behind the walk at that, and
+/// bounds how long the stop waits on a thread parked here.
+const INDEX_READINESS_POLL: Duration = Duration::from_millis(250);
+
+/// The listener [`bind`] bound, carrying the port it bound — what the open
+/// runs with and [`serve_bound`] serves over. Bound BEFORE the open, so a
+/// held port is refused in milliseconds, before the kernel's lock is taken
+/// and before anything is written under the data directory; held THROUGH
+/// it, so no other process takes the port between the bind and the serve —
+/// a connect during the open waits in the socket's backlog and is answered
+/// once a worker accepts, where it met a refusal before. Nothing accepts
+/// until the workers exist. DROPPING IT RELEASES THE PORT, which is why the
+/// type is `#[must_use]`: a `bind(…)?;` statement whose listener falls at
+/// the semicolon has bound nothing a serve can use.
+#[must_use = "dropping the listener releases the port it bound: hand it to `serve_bound`"]
+#[derive(Debug)]
+pub struct Listener {
+    listener: TcpListener,
+    port: u16,
+}
+
+impl Listener {
+    /// The bound port (the number to serve on under `port = 0`, and the one
+    /// [`serve_bound`] binds the auth surface to).
+    pub fn port(&self) -> u16 {
+        self.port
+    }
+}
+
+/// Bind `127.0.0.1:port` (`0` = ephemeral) and answer the listener with
+/// the port it bound — the FIRST act of a start, before [`Daemon::open_configured`]:
+/// a port another process holds is a fault decidable before any byte of the
+/// journal is read, so it is refused here, at once, with the open's whole
+/// cost unpaid and no `kernel.lock` taken. Nothing accepts on the listener
+/// until [`serve_bound`] spawns the workers.
+///
+/// Failure is the socket's or the OS's: binding the address, or reading
+/// back the port it bound — both `io::Error`, which is what lets a caller
+/// dispatch on `ErrorKind` — `AddrInUse` to try the next port,
+/// `PermissionDenied` for a privileged one — without a downcast.
+pub fn bind(port: u16) -> io::Result<Listener> {
+    let listener = TcpListener::bind(("127.0.0.1", port))?;
+    let port = listener.local_addr()?.port();
+    Ok(Listener { listener, port })
+}
+
+/// [`bind`] then [`serve_bound`], in sequence — the one-call door for a
+/// caller whose open costs nothing worth refusing a held port ahead of (a
+/// test's fresh directory, an embedder's own ordering). The binary takes the
+/// two apart: the bind first, the open between, the serve after, so a held
+/// port refuses the start before the open runs. Everything below holds of
+/// this door and of `serve_bound` alike.
+///
 /// Bind `127.0.0.1:port` (`0` = ephemeral) and serve with `workers`
 /// threads. Concurrency policy in full: each worker blocks in `accept`,
 /// serves the one request on that connection, closes it — one request per
@@ -189,14 +259,31 @@ impl std::fmt::Debug for Skepd {
 /// the port it bound, or a refused worker thread — all three `io::Error`,
 /// which is what lets a caller dispatch on `ErrorKind` — `AddrInUse` to try
 /// the next port, `PermissionDenied` for a privileged one — without a
-/// downcast. A refused thread retires whatever has already started before
-/// returning, so the port and the journal-directory lock are free for that
-/// retry.
+/// downcast. The first two are [`bind`]'s, the third [`serve_bound`]'s. A
+/// refused thread retires whatever has already started before returning, so
+/// the port and the journal-directory lock are free for that retry.
 pub fn serve(daemon: Daemon, port: u16, workers: usize) -> io::Result<Skepd> {
+    serve_bound(daemon, bind(port)?, workers)
+}
+
+/// Serve `daemon` over the listener [`bind`] bound, with `workers` threads —
+/// everything [`serve`] does after its bind, and the door the binary takes
+/// once the open has run with the port already held: the auth surface bound
+/// to the listener's port, the configuration warnings, the node prefix, the
+/// blocked list, the workers, the pruner's thread and the checkpoint thread,
+/// in that order — the workers LAST, since a worker spawned before a daemon
+/// exists would route into nothing. [`serve`]'s concurrency policy and its
+/// two PRECONDITIONS — `workers >= 1`, the daemon's auth port unbound — are
+/// this door's, stated there.
+///
+/// Failure is the OS's alone: a refused worker thread, an `io::Error`. The
+/// listener and the port it bound were the caller's before this call and
+/// are released with the retired start, as `serve` releases them.
+pub fn serve_bound(daemon: Daemon, listener: Listener, workers: usize) -> io::Result<Skepd> {
     assert!(workers >= 1, "serve requires at least one worker thread (workers = 0)");
     let daemon = Arc::new(daemon);
-    let listener = Arc::new(TcpListener::bind(("127.0.0.1", port))?);
-    let port = listener.local_addr()?.port();
+    let Listener { listener, port } = listener;
+    let listener = Arc::new(listener);
     // The auth surface derives its origin sets from the BOUND port, and the
     // startup warnings are logged here — the one thing the glue does with
     // the config before serving (AUTH-4.11). AFTER the bind, and not before:
@@ -238,7 +325,7 @@ pub fn serve(daemon: Daemon, port: u16, workers: usize) -> io::Result<Skepd> {
                 Err(_) => {
                     // Transient accept failure (EMFILE and kin): brief
                     // pause instead of a spin, then re-check stop.
-                    thread::sleep(Duration::from_millis(10));
+                    thread::sleep(ACCEPT_RETRY_PAUSE);
                     continue;
                 }
             };
@@ -248,6 +335,12 @@ pub fn serve(daemon: Daemon, port: u16, workers: usize) -> io::Result<Skepd> {
                 break;
             }
             serve_connection(&daemon, &subscribers, stream);
+            // THE FAULT DOOR's OUTSIDE ARM (test seam): a panic HERE, after
+            // the reply is written and outside the handler's catch, is the
+            // shape a worker's death has — the thread ends, the rest serve,
+            // and when the last is gone `wait` returns to the binary.
+            #[cfg(any(test, feature = "test-hooks"))]
+            super::hooks::fire_the_worker_fault_outside_the_catch();
         });
         match spawned {
             Ok(h) => handles.push(h),
@@ -342,9 +435,12 @@ impl Skepd {
     /// practice that is until the process ends: `wait` consumes the server,
     /// so nothing is left to set the stop flag, and crash-stop is the
     /// shutdown story (M2's WAL makes recovery the clean path, so there is
-    /// no signal machinery). An embedder that wants to stop a running server
-    /// keeps the [`Skepd`] and calls [`Skepd::shutdown`] instead. Returning
-    /// would end every event stream too, since the server is dropped here.
+    /// no signal machinery). A RETURN is every worker having ended — a
+    /// panic past the handler's catch, one worker at a time, until none is
+    /// left to accept — which the binary says as the failure it is and exits
+    /// 1 on. An embedder that wants to stop a running server keeps the
+    /// [`Skepd`] and calls [`Skepd::shutdown`] instead. Returning ends every
+    /// event stream too, since the server is dropped here.
     pub fn wait(mut self) {
         for h in self.workers.drain(..) {
             let _ = h.join();
@@ -363,7 +459,7 @@ impl Skepd {
     /// direction, plus its handler's own time; then every subscriber is woken
     /// by the commit stream's broadcast, and one blocked writing to a peer
     /// that stopped draining is joined only when its socket's
-    /// [`WRITE_TIMEOUT`] fires — `serve_events` writes without a deadline by
+    /// `WRITE_TIMEOUT` fires — `serve_events` writes without a deadline by
     /// design (see `write_bounded`). So this stop does wait on a client,
     /// for at most that timeout. Interrupting it would mean holding a second
     /// descriptor per live stream, against the budget [`MAX_SUBSCRIBERS`]
@@ -469,7 +565,7 @@ fn prune_on_cadence(daemon: &Daemon, cadence: &Cadence) {
             if cadence.wait(PRUNE_INTERVAL) == Wake::Stop {
                 return;
             }
-        } else if cadence.wait(Duration::from_millis(250)) == Wake::Stop {
+        } else if cadence.wait(INDEX_READINESS_POLL) == Wake::Stop {
             return;
         }
     }
@@ -549,7 +645,14 @@ fn serve_connection(daemon: &Arc<Daemon>, subscribers: &Subscribers, mut stream:
     // token after M10 has minted the session the token would name, so the
     // unwind drops a `SessionId` nothing then presents or closes; `GET
     // /challenge` draws before it touches its store and costs nothing.
-    let routed = match catch_unwind(AssertUnwindSafe(|| daemon.route_parked(&req, parked))) {
+    let routed = match catch_unwind(AssertUnwindSafe(|| {
+        // THE FAULT DOOR's INSIDE ARM (test seam): a panic HERE is one the
+        // catch below contains — the request answers `500 internal_panic`
+        // and this worker serves its next connection.
+        #[cfg(any(test, feature = "test-hooks"))]
+        super::hooks::fire_the_worker_fault_inside_the_catch();
+        daemon.route_parked(&req, parked)
+    })) {
         Ok(r) => r,
         Err(_) => Routed::Reply(refuse(TransportError::InternalPanic, None)),
     };

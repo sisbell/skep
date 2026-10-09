@@ -217,7 +217,7 @@ use scan::ClassScans;
 
 pub use crate::auth::session::Peer;
 pub use http::UNIVERSAL_HEADERS;
-pub use listen::{serve, Skepd, DEFAULT_WORKERS, MIN_WORKERS};
+pub use listen::{bind, serve, serve_bound, Listener, Skepd, DEFAULT_WORKERS, MIN_WORKERS};
 pub use reply::{Body, Fetch, Reply, Routed};
 pub use request::HttpRequest;
 
@@ -624,6 +624,11 @@ impl Daemon {
         media_opts: MediaOptions,
         salt: SaltSource,
     ) -> Result<Daemon, DaemonError> {
+        // THE OPEN's FIRST LINE (§3.1 step 3; m7): the directory, before the
+        // seeding check and the engine's open — the one line on the operator
+        // stream that names the directory, which a collector keys on, and
+        // the tell that an open has begun where it is long.
+        say_open_line(DataDirLine(data_dir));
         // THE CADENCE (jw-R1, jw-R2): every `CHECKPOINT_EVERY_COMMITS` OR the
         // byte bound, whichever first, DEFERRED — a crossing sets the
         // kernel's due flag and the checkpoint thread runs it off the write
@@ -650,7 +655,11 @@ impl Daemon {
         // is a genesis that does not complete: no claim, no session and no
         // board record, nothing written, no engine opened.
         crate::auth::policy::genesis_seeding_check().map_err(DaemonError::Registry)?;
+        // THE ENGINE's OPEN, TIMED: the daemon's own `Instant` around the
+        // call, the figure the recovery's landing carries.
+        let began = Instant::now();
         let engine = Engine::open(cfg).map_err(DaemonError::Engine)?;
+        let open_ms = began.elapsed().as_millis();
         // THE START POINT's account (AUTH-2.86): every retained checkpoint
         // the engine's open passed over, with the start point it resolved
         // from, and a slice-less start point that resolved to the empty
@@ -659,6 +668,11 @@ impl Daemon {
         for warning in recovery_warnings(engine.recovery()) {
             notice::line(format_args!("warning (at open): {warning}"));
         }
+        // THE RECOVERY's LANDING (m7): the base the open loaded, the commits
+        // it replayed above it and how long the engine's open took — said on
+        // EVERY open, not on a skip alone, after the account above of what
+        // was passed over on the way to that base.
+        say_open_line(RecoveredLine::of(engine.recovery(), open_ms));
         // THE STRAY TEMP FILE (jw-R4; AUTH-2.86's family of startup reports):
         // a checkpoint a crash or a full volume left half-written, which the
         // kernel's open found and removed — said here, the kernel answering
@@ -1598,10 +1612,7 @@ impl fmt::Display for BackstopLine {
 /// line here.
 fn recovery_warnings(recovery: Option<&Recovery>) -> Vec<String> {
     let Some(recovery) = recovery else { return Vec::new() };
-    let start = match recovery.start_point {
-        Seq(0) => "genesis".to_string(),
-        Seq(seq) => format!("checkpoint.{seq}"),
-    };
+    let start = Base(recovery.start_point);
     let mut lines: Vec<String> = recovery
         .skipped
         .iter()
@@ -1621,6 +1632,86 @@ fn recovery_warnings(recovery: Option<&Recovery>) -> Vec<String> {
         ));
     }
     lines
+}
+
+/// A BASE as every line of the open names it: `genesis` where the world was
+/// folded from nothing — `Seq(0)`, no checkpoint file — and `checkpoint.{n}`
+/// for a retained checkpoint's position, the file's own name. ONE rendering,
+/// so the recovery's landing and the two warnings above it spell the start
+/// point one way and a reader joins them on it.
+struct Base(Seq);
+
+impl fmt::Display for Base {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self.0 {
+            Seq(0) => f.write_str("genesis"),
+            Seq(seq) => write!(f, "checkpoint.{seq}"),
+        }
+    }
+}
+
+/// THE OPEN's FIRST LINE (`operations.md` §3.1 step 3; m7): the data
+/// directory, as the operator named it — `data-dir {path}` — said before
+/// the seeding check and the engine's open, so the one line that names the
+/// directory stands on the stream before anything is read from it. A pure
+/// value the unit suite pins by `to_string()`; emitted under `Class::Open`
+/// through [`say_open_line`].
+struct DataDirLine<'a>(&'a Path);
+
+impl fmt::Display for DataDirLine<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "data-dir {}", self.0.display())
+    }
+}
+
+/// THE RECOVERY's LANDING (m7), in the operator stream's words — `recovered
+/// from {checkpoint.n | genesis}, {k} commits replayed, in {d} ms` — rendered
+/// from the engine's own account of its open: the base it loaded ([`Base`]'s
+/// words, the ones the two warnings name the start point by), the commits
+/// it replayed above that base (`Recovery::replayed`: transactions, never
+/// the records they carry; `0` where the base was the committed head, a
+/// fresh board's genesis included) and the engine's open's duration, whole
+/// milliseconds, the daemon's own `Instant` around the call. A pure value
+/// the unit suite pins by `to_string()`; emitted under `Class::Open` through
+/// [`say_open_line`].
+struct RecoveredLine {
+    start_point: Seq,
+    replayed: u64,
+    duration_ms: u128,
+}
+
+impl RecoveredLine {
+    /// The line from the engine's account, where it gave one. An engine that
+    /// answers NO account loads nothing — `Durability::InMemory`, which no
+    /// daemon opens under: every daemon's open is journaled — and is said as
+    /// a genesis that replayed nothing, which is what the open's sizing reads
+    /// of the same absence.
+    fn of(recovery: Option<&Recovery>, duration_ms: u128) -> RecoveredLine {
+        RecoveredLine {
+            start_point: recovery.map_or(Seq(0), |r| r.start_point),
+            replayed: recovery.map_or(0, |r| r.replayed),
+            duration_ms,
+        }
+    }
+}
+
+impl fmt::Display for RecoveredLine {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "recovered from {}, {} commits replayed, in {} ms",
+            Base(self.start_point),
+            self.replayed,
+            self.duration_ms
+        )
+    }
+}
+
+/// THE OPEN's OWN LINES, SAID: the classed door for the open's report — one
+/// function, so every line of the open's own goes out under `Class::Open`
+/// and no site spells the class. Through the queue, as every notice is.
+fn say_open_line(line: impl fmt::Display) {
+    notice::emit(Class::Open, line);
 }
 
 /// When the daemon names its configuration on the operator stream — the

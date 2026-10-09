@@ -13,7 +13,7 @@
 
 use std::collections::HashMap;
 use std::io::{ErrorKind, Read, Write};
-use std::net::{TcpListener, TcpStream};
+use std::net::TcpStream;
 use std::path::Path;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
@@ -29,7 +29,10 @@ use skep_identity::{
     SESSION_TAG, SESSION_TAG_V2,
 };
 use skep_signature::{Ed25519SigningKey as SigningKey, HybridSigner};
-use skepd::{serve, AuthOptions, Daemon, MediaOptions, NodePrefix, Origin, Skepd, DEFAULT_WORKERS};
+use skepd::{
+    bind, serve, serve_bound, AuthOptions, Daemon, MediaOptions, NodePrefix, Origin, Skepd,
+    DEFAULT_WORKERS,
+};
 
 mod ops;
 mod signer;
@@ -764,30 +767,30 @@ fn spawn_under(
     // THE WALK's FENCE, from before the open until the index is ready
     // ([`WALK_FENCE`]): no test holding the walk parks this daemon's.
     let _unheld = (walk == Walk::Awaited).then(WalkUnheld::take);
-    // The reservation is held through the slow open, so only the rebind gap
-    // races — and under this suite it DOES: every exchange is one
+    // THE PORT IS BOUND FIRST and held through the open — the binary's own
+    // order (`bind`, the open, `serve_bound`): the origin names the port, so
+    // it must be known before the open, and the listener bound here is the
+    // one the daemon serves on, so nothing can take the port between. (The
+    // reserve-release-rebind this once did raced: every exchange is one
     // connection, a run leaves some thirty thousand sockets in TIME_WAIT
-    // against an ephemeral range of 16 384, and with the range that full a
-    // port released here is one of the few free, so the next `connect`
-    // anywhere in the process is handed it. A lost race is `AddrInUse` on
-    // the rebind, and costs one more attempt on a fresh port: `serve`
-    // dropped the daemon with its error, so the data dir is free to reopen
-    // (recovery is idempotent), and the origin is rebuilt because it names
-    // the port. Bounded, so a port that can never be bound still fails loudly.
+    // against an ephemeral range of 16 384, and a port released here was
+    // one of the few free, handed to the next `connect` anywhere in the
+    // process.) Nothing accepts on it until the workers spawn, and nothing
+    // in this process connects before this returns.
     //
-    // The SECOND race, on the same loop and the same budget: the retry
-    // reopens the SAME data dir, and the kernel's journal-directory flock
-    // from the attempt just dropped is not always re-acquirable the instant
-    // `close` returns under the parallel suite's load — a transient
-    // `WouldBlock` at open ([`open_lost_the_lock_race`]). It is not a bad
-    // data dir (a fresh tempdir, or one this helper itself just held), so it
-    // is retried with a brief backoff to let the release land, bounded the
-    // same way; any OTHER open error is a real fault and panics at once.
+    // The ONE race left, bounded: the retry reopens the SAME data dir, and
+    // the kernel's journal-directory flock from the attempt just dropped is
+    // not always re-acquirable the instant `close` returns under the
+    // parallel suite's load — a transient `WouldBlock` at open
+    // ([`open_lost_the_lock_race`]). It is not a bad data dir (a fresh
+    // tempdir, or one this helper itself just held), so it is retried with a
+    // brief backoff to let the release land, on a fresh port each time;
+    // any OTHER open error is a real fault and panics at once.
     const ATTEMPTS: usize = 12;
     let mut last_lock_err = None;
     for _ in 0..ATTEMPTS {
-        let reserved = TcpListener::bind(("127.0.0.1", 0)).expect("reserve an ephemeral port");
-        let port = reserved.local_addr().expect("reserved local addr").port();
+        let listener = bind(0).expect("bind an ephemeral port");
+        let port = listener.port();
         let origin = Origin::parse(&format!("http://127.0.0.1:{port}"))
             .expect("a canonical loopback origin");
         let mut opts = AuthOptions::default();
@@ -804,27 +807,22 @@ fn spawn_under(
             Ok(daemon) => daemon,
             Err(e) if open_lost_the_lock_race(&e) => {
                 last_lock_err = Some(e.to_string());
-                drop(reserved);
+                drop(listener);
                 std::thread::sleep(Duration::from_millis(25));
                 continue;
             }
             Err(e) => panic!("daemon open (genesis or recover) at {}: {e}", dir.display()),
         };
-        drop(reserved);
-        match serve(daemon, port, DEFAULT_WORKERS) {
-            Ok(sd) => {
-                forget_port(sd.port());
-                if walk == Walk::Awaited {
-                    wait_for_the_index(&sd);
-                }
-                return sd;
-            }
-            Err(e) if e.kind() == ErrorKind::AddrInUse => continue,
-            Err(e) => panic!("bind the reserved port: {e}"),
+        let sd = serve_bound(daemon, listener, DEFAULT_WORKERS)
+            .expect("spawn the workers over the bound port");
+        forget_port(sd.port());
+        if walk == Walk::Awaited {
+            wait_for_the_index(&sd);
         }
+        return sd;
     }
     panic!(
-        "spawn: lost the rebind or journal-lock race {ATTEMPTS} times running \
+        "spawn: lost the journal-lock race {ATTEMPTS} times running \
          (last lock error: {last_lock_err:?})"
     )
 }

@@ -3,7 +3,7 @@
 
 use std::num::NonZeroU64;
 use std::path::Path;
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicU8, Ordering};
 use std::time::Duration;
 
 use skep_engine::{HistoryError, Recovery};
@@ -21,7 +21,79 @@ use skep_util::permits::Permit;
 use super::{Daemon, DaemonError};
 use crate::auth::AuthOptions;
 
+/// THE WORKER's FAULT DOOR (the test seam behind [`Daemon::panic_the_next_worker`]):
+/// one process-wide arm, fired ONCE by the next worker that reaches it and
+/// disarmed as it fires — `WORKER_FAULT_NONE` while nothing is armed, else
+/// one of the two arms. Process-wide, as the stream hold is, because the
+/// workers are the transport's threads and a child binary arms it before
+/// any daemon exists.
+static WORKER_FAULT: AtomicU8 = AtomicU8::new(WORKER_FAULT_NONE);
+
+/// The door's three states: nothing armed; a panic INSIDE the handler's
+/// catch on the next request; a panic OUTSIDE it at the worker's next loop
+/// turn, after its reply.
+const WORKER_FAULT_NONE: u8 = 0;
+const WORKER_FAULT_INSIDE: u8 = 1;
+const WORKER_FAULT_OUTSIDE: u8 = 2;
+
+/// The door's arm named: the words the hook takes and the child's variable
+/// carries, one spelling for both.
+fn worker_fault_arm(arm: &str) -> u8 {
+    match arm {
+        "inside" => WORKER_FAULT_INSIDE,
+        "outside" => WORKER_FAULT_OUTSIDE,
+        other => panic!("no worker fault arm named {other:?}: `inside` or `outside`"),
+    }
+}
+
+/// Take the arm where it is the one armed: `true` once per arming, so the
+/// panic fires on one worker and no later one.
+fn take_the_worker_fault(arm: u8) -> bool {
+    WORKER_FAULT
+        .compare_exchange(arm, WORKER_FAULT_NONE, Ordering::AcqRel, Ordering::Acquire)
+        .is_ok()
+}
+
+/// The worker's side of the INSIDE arm, called by the transport inside its
+/// handler's catch before the request is routed: a panic whose payload is a
+/// literal, so the binary's hook carries it, and whose location is the
+/// CALLER's — the site in the worker's loop, as a fault there would name
+/// it; the catch answers `500 internal_panic` and the worker serves on.
+#[track_caller]
+pub(super) fn fire_the_worker_fault_inside_the_catch() {
+    if take_the_worker_fault(WORKER_FAULT_INSIDE) {
+        panic!("the test seam's worker fault, inside the handler's catch");
+    }
+}
+
+/// The worker's side of the OUTSIDE arm, called by the transport at the
+/// worker's next loop turn after its reply is written: a panic past the
+/// catch, located at the caller's site, which ends the worker — the shape a
+/// worker's death has.
+#[track_caller]
+pub(super) fn fire_the_worker_fault_outside_the_catch() {
+    if take_the_worker_fault(WORKER_FAULT_OUTSIDE) {
+        panic!("the test seam's worker fault, outside the handler's catch");
+    }
+}
+
 impl Daemon {
+    /// TEST HOOK (the `fuzz_support` standing: `#[doc(hidden)]`, not a
+    /// stable API): PANIC THE NEXT WORKER, ONCE — `"inside"` its handler's
+    /// catch on its next request, the request answered `500 internal_panic`
+    /// and the worker serving on, or `"outside"` it at its next loop turn
+    /// after a reply, the worker ending — so a suite drives the binary's
+    /// panic hook and, with one worker, the workers' end and the exit it
+    /// earns. The arm fires on the first worker to reach it and disarms;
+    /// arming again replaces the arm. Process-wide, armed before or after a
+    /// daemon exists; a child binary is armed by the variable
+    /// `SKEPD_TEST_WORKER_FAULT`, which `main.rs` reads under `test-hooks`
+    /// and hands here. Any other word is a caller's bug and PANICS.
+    #[doc(hidden)]
+    pub fn panic_the_next_worker(arm: &str) {
+        WORKER_FAULT.store(worker_fault_arm(arm), Ordering::Release);
+    }
+
     /// TEST HOOK (the `fuzz_support` standing: `#[doc(hidden)]`, not a
     /// stable API): hold one FETCH permit exactly as an in-flight fetch
     /// does, or `None` when all [`MAX_CONCURRENT_FETCHES`](skep_media::limits::MAX_CONCURRENT_FETCHES)

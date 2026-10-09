@@ -10,7 +10,7 @@ use std::thread::JoinHandle;
 
 use serde_json::{json, Value};
 use skep_identity::{encode_enroll, framed, Enrollment, PublicKey, SESSION_TAG};
-use skep_signature::{Ed25519SigningKey as SigningKey, HybridSigner, TAG_MLDSA65_ED25519};
+use skep_signature::{HybridSigner, SeedCarrier as SigningKey, TAG_MLDSA65_ED25519};
 use skepd::{serve, Daemon, Skepd, DEFAULT_WORKERS};
 
 // ── a self-owned temp dir (kept dependency-free) ────────────────────────
@@ -112,8 +112,8 @@ fn hex(bytes: &[u8]) -> String {
 }
 
 /// The HYBRID signer a seed carrier derives under tag 1 — the production row
-/// (`mldsa65-ed25519`), the KDF PIN's two halves from the key's 32 bytes,
-/// never the raw key itself (the ruled "one seed, two halves"): what the
+/// (`mldsa65-ed25519`), the KDF PIN's two halves from the carrier's 32 bytes,
+/// never the raw seed itself (the ruled "one seed, two halves"): what the
 /// ceremony enrols and what signs its sessions, both halves.
 fn signer_of(sk: &SigningKey) -> HybridSigner {
     HybridSigner::from_seed(TAG_MLDSA65_ED25519, &sk.to_bytes()).expect("tag 1 is a row")

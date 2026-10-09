@@ -31,7 +31,7 @@ fn entry_at(entries: &[Value], at: u64) -> &Value {
 
 /// The fingerprint hex a seed carrier's hybrid key enrols under — what a
 /// signed session's unsigned writes testify as their `key`.
-fn fingerprint_of(sk: &skep_signature::Ed25519SigningKey) -> String {
+fn fingerprint_of(sk: &skep_signature::SeedCarrier) -> String {
     Fingerprint::of(&public_key_of(sk)).to_hex()
 }
 

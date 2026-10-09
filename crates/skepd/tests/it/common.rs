@@ -28,7 +28,7 @@ use skep_identity::{
     LinkSlots, PublicKey, RecordEntry, RecordRows, ShotBase, ShotSegmentPiece, SigAlgRow,
     SESSION_TAG, SESSION_TAG_V2,
 };
-use skep_signature::{Ed25519SigningKey as SigningKey, HybridSigner};
+use skep_signature::{HybridSigner, SeedCarrier as SigningKey};
 use skepd::{
     bind, serve, serve_bound, AuthOptions, Daemon, MediaOptions, NodePrefix, Origin, Skepd,
     DEFAULT_WORKERS,
@@ -89,12 +89,12 @@ pub const FIXTURE_TAG: u8 = skep_signature::TAG_MLDSA65_ED25519;
 
 /// THE SEED A HELPER'S `SigningKey` CARRIES (signed ops): the suites keep
 /// one 32-byte seed per principal — `DEVICE_SEED`, `ANCHOR_SEED`,
-/// `distinct_key(n)` — spelled as an Ed25519 `SigningKey` since before
-/// signed ops, and that spelling is kept at every one of the 231 call sites
-/// as THE SEED CARRIER: what a helper signs with, and what it enrols, is
-/// derived from the key's 32 bytes through the KDF PIN (`skep_signature`),
-/// never the key itself — the ruled "one seed, two halves, never the raw
-/// seed".
+/// `distinct_key(n)` — spelled `SigningKey` since before signed ops (the
+/// import alias of `skep_signature::SeedCarrier`, which is no key), and that
+/// spelling is kept at every one of the 231 call sites as THE SEED CARRIER:
+/// what a helper signs with, and what it enrols, is derived from the
+/// carrier's 32 bytes through the KDF PIN (`skep_signature`), never the
+/// carrier itself — the ruled "one seed, two halves, never the raw seed".
 pub fn seed_of(sk: &SigningKey) -> [u8; 32] {
     sk.to_bytes()
 }

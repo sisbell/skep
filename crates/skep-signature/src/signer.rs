@@ -231,7 +231,9 @@ impl HybridSigner {
     /// admits — is made with it. Handed out as the suites' own
     /// [`Ed25519SigningKey`](crate::hooks::Ed25519SigningKey) — a copy of the
     /// half, wiped on drop as the original is — so no caller names
-    /// `ed25519-dalek`'s type.
+    /// `ed25519-dalek`'s type; and it is the one way a suite gets one, so
+    /// every Ed25519 key a suite signs with is a hybrid's derived half and
+    /// never a raw seed's.
     #[cfg(feature = "test-hooks")]
     #[doc(hidden)]
     pub fn ed25519_signing_key(&self) -> crate::hooks::Ed25519SigningKey {
@@ -286,7 +288,7 @@ impl HybridSigner {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::hooks::SeededRng06;
+    use crate::hooks::{SeedCarrier, SeededRng06};
     use crate::{TAG_FNDSA512_PREVIEW_ED25519, TAG_MLDSA65_ED25519};
 
     /// Lowercase hex, two digits a byte — skepd's `codec::hex_string`'s output,
@@ -296,7 +298,8 @@ mod tests {
     }
 
     /// PRIVATE-KEY MATERIAL PRINTS NONE OF ITSELF: `{:?}` of `HalfSeeds`, a
-    /// `HybridSigner` of either tag and `SeededRng06` — what a log line, an
+    /// `HybridSigner` of either tag and the Ed25519 half it hands out, and the
+    /// fixtures' `SeededRng06` and `SeedCarrier` — what a log line, an
     /// assertion's message or a panic carries — holds neither the seed, nor a
     /// half seed, nor the Ed25519 signing key, nor the FN-DSA signing key the
     /// tag-3 signer stores as bytes, in the decimal list a derived `Debug`
@@ -320,7 +323,8 @@ mod tests {
             if let PqSigner::FnDsa512Preview(sk) = &signer.pq {
                 secrets.push(sk.to_vec());
             }
-            for printed in [format!("{halves:?}"), format!("{signer:?}")] {
+            let half = signer.ed25519_signing_key();
+            for printed in [format!("{halves:?}"), format!("{signer:?}"), format!("{half:?}")] {
                 for secret in &secrets {
                     assert!(
                         !leaks(&printed, &secret[..]),
@@ -329,8 +333,12 @@ mod tests {
                 }
             }
         }
-        let printed = format!("{:?}", SeededRng06::new(seed));
-        assert!(!leaks(&printed, &seed[..]), "the fixture stream prints its seed: {printed}");
+        for printed in [
+            format!("{:?}", SeededRng06::new(seed)),
+            format!("{:?}", SeedCarrier::from_bytes(&seed)),
+        ] {
+            assert!(!leaks(&printed, &seed[..]), "a fixture hook prints its seed: {printed}");
+        }
     }
 
     /// THE PQ HALF ON ITS OWN CARD: `PqSigner::keygen` makes the public key's

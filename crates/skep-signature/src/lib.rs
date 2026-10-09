@@ -77,9 +77,10 @@
 //!   `sign_with_rng` — sit beside the private fields they read, each gated
 //!   on `test-hooks`.
 //! * `hooks.rs` — the fixtures' other hooks: the seeded stream, the widths
-//!   the sizes pin reads, and the suites' classical pair,
-//!   `Ed25519SigningKey` and `Ed25519VerifyingKey`, the one door a suite has
-//!   to `ed25519-dalek`'s key types; under `test-hooks`, which implies `sign`.
+//!   the sizes pin reads, the suites' seed carrier (`SeedCarrier`, no key),
+//!   and the hybrid's Ed25519 half as a suite holds it (`Ed25519SigningKey`),
+//!   the one door a suite has to `ed25519-dalek`'s key type; under
+//!   `test-hooks`, which implies `sign`.
 //!
 //! `Rule`, below, is the one statement of the tag set all four match on.
 
@@ -108,12 +109,12 @@ pub use kdf::{derive_half_seeds, HalfSeeds};
 #[cfg(feature = "test-hooks")]
 #[doc(hidden)]
 pub use hooks::{pq_widths, PqWidths, SeededRng06};
-/// TEST HOOK (the same standing) — the suites' classical pair: the seed
-/// carrier the fixtures key each principal with and the point decode they
-/// find an undecodable key by, so no suite links `ed25519-dalek` itself.
+/// TEST HOOK (the same standing) — the suites' seed carrier, which keys each
+/// principal's fixtures and is no key itself, and the hybrid's Ed25519 half
+/// as a suite holds it, so no suite links `ed25519-dalek` itself.
 #[cfg(feature = "test-hooks")]
 #[doc(hidden)]
-pub use hooks::{Ed25519SigningKey, Ed25519VerifyingKey};
+pub use hooks::{Ed25519SigningKey, SeedCarrier};
 
 /// The marker tag of the PRODUCTION row, `mldsa65-ed25519` (ML-DSA-65 +
 /// Ed25519).
@@ -173,11 +174,12 @@ const _: fn() = || {
     assert_send_sync::<hooks::SeededRng06>();
     #[cfg(feature = "test-hooks")]
     assert_send_sync::<hooks::PqWidths>();
-    // The suites' seed carriers, shared across the threads a fixture spawns.
+    // The suites' seed carriers and the Ed25519 half a signer hands them,
+    // shared across the threads a fixture spawns.
+    #[cfg(feature = "test-hooks")]
+    assert_send_sync::<hooks::SeedCarrier>();
     #[cfg(feature = "test-hooks")]
     assert_send_sync::<hooks::Ed25519SigningKey>();
-    #[cfg(feature = "test-hooks")]
-    assert_send_sync::<hooks::Ed25519VerifyingKey>();
 };
 
 #[cfg(test)]

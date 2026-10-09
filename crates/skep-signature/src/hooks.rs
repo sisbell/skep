@@ -1,18 +1,19 @@
 //! THE FIXTURES' HOOKS (the `fuzz_support` standing: `#[doc(hidden)]`, not a
 //! stable API) — the seeded stream a tag-3 golden signs over
-//! ([`SeededRng06`]), the widths the sizes pin reads ([`pq_widths`]), and the
-//! suites' classical pair ([`Ed25519SigningKey`], [`Ed25519VerifyingKey`]),
-//! the one door a suite has to `ed25519-dalek`'s key types — compiled under
-//! `test-hooks` alone, which no shipped signer enables. The two hooks on
-//! `HybridSigner` itself sit in the signer's file, beside the private fields
-//! they read.
+//! ([`SeededRng06`]), the widths the sizes pin reads ([`pq_widths`]), the
+//! suites' seed carrier ([`SeedCarrier`]), which is no key, and the hybrid's
+//! Ed25519 half as a suite holds it ([`Ed25519SigningKey`]), the one door a
+//! suite has to `ed25519-dalek`'s key type — compiled under `test-hooks`
+//! alone, which no shipped signer enables. The two hooks on `HybridSigner`
+//! itself sit in the signer's file, beside the private fields they read.
 
 use std::fmt;
 
-use ed25519_dalek::{Signer as _, SigningKey as EdSigningKey, VerifyingKey as EdVerifyingKey};
+use ed25519_dalek::{Signer as _, SigningKey as EdSigningKey};
 use fn_dsa::{signature_size, sign_key_size, vrfy_key_size, FN_DSA_LOGN_512};
 use ml_dsa::{EncodedSignature, EncodedVerifyingKey, ExpandedSigningKeyBytes, MlDsa65};
 use sha2::Sha256;
+use zeroize::Zeroizing;
 
 use crate::Rule;
 
@@ -116,31 +117,93 @@ pub fn pq_widths(tag: u8) -> Option<PqWidths> {
 }
 
 /// TEST HOOK (the `fuzz_support` standing: `#[doc(hidden)]`, not a stable
-/// API) — THE SUITES' SEED CARRIER: an Ed25519 signing key from 32 bytes.
-/// The fixtures hold one per principal and read its bytes back as the seed
-/// of that principal's hybrid key
-/// ([`HybridSigner::from_seed`](crate::HybridSigner::from_seed) over
-/// [`Ed25519SigningKey::to_bytes`]);
+/// API) — THE SUITES' SEED CARRIER: one hybrid key's 32-byte seed, held for
+/// a fixture — one per principal — and handed back by
+/// [`SeedCarrier::to_bytes`] to
+/// [`HybridSigner::from_seed`](crate::HybridSigner::from_seed), which derives
+/// the key it seeds. It is NO KEY: it signs nothing and names no public key,
+/// so no fixture signs or enrols under the raw seed (the KDF PIN: never the
+/// raw seed to either half). Private-key material: prints none of itself,
+/// wiped on drop (`Zeroizing`).
+///
+/// The twin signs with the Ed25519 half the carrier's seed derives; the
+/// refusal below it signs with the carrier itself, its one difference (the
+/// `E0599` code is checked on nightly only, so the twin rather than the
+/// annotation carries the weight):
+///
+/// ```
+/// use skep_signature::{HybridSigner, SeedCarrier, TAG_MLDSA65_ED25519};
+/// let carrier = SeedCarrier::from_bytes(&[7; 32]);
+/// let signer = HybridSigner::from_seed(TAG_MLDSA65_ED25519, &carrier.to_bytes()).unwrap();
+/// let half = signer.ed25519_signing_key();
+/// let _ = half.sign(b"the entry frame");
+/// ```
+/// ```compile_fail,E0599
+/// use skep_signature::{HybridSigner, SeedCarrier, TAG_MLDSA65_ED25519};
+/// let carrier = SeedCarrier::from_bytes(&[7; 32]);
+/// let signer = HybridSigner::from_seed(TAG_MLDSA65_ED25519, &carrier.to_bytes()).unwrap();
+/// let half = carrier;
+/// let _ = half.sign(b"the entry frame");
+/// ```
+#[doc(hidden)]
+#[derive(Clone)]
+pub struct SeedCarrier(Zeroizing<[u8; 32]>);
+
+impl SeedCarrier {
+    /// The carrier of the seed `bytes`.
+    pub fn from_bytes(bytes: &[u8; 32]) -> SeedCarrier {
+        SeedCarrier(Zeroizing::new(*bytes))
+    }
+
+    /// The seed: the 32 bytes `HybridSigner::from_seed` takes.
+    pub fn to_bytes(&self) -> [u8; 32] {
+        *self.0
+    }
+}
+
+impl fmt::Debug for SeedCarrier {
+    /// A seed is private-key material: never printed.
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("SeedCarrier(..)")
+    }
+}
+
+/// TEST HOOK (the same standing) — THE HYBRID'S DERIVED ED25519 HALF, as a
+/// suite holds it: what
 /// [`HybridSigner::ed25519_signing_key`](crate::HybridSigner::ed25519_signing_key)
-/// hands the hybrid's derived Ed25519 half out as one too. It signs the
-/// 64-byte classical blob — the suites' one negative vector, the
+/// hands out, and the only way to get one — the type has no public
+/// constructor, so every Ed25519 key a suite holds is a hybrid's half and
+/// never a raw seed's (a seed is a [`SeedCarrier`], which is no key). It
+/// signs the 64-byte classical blob — the suites' one negative vector, the
 /// Ed25519-only layout no served board admits — and names its verifying
-/// key, so a suite names this crate and never `ed25519-dalek`, which this
-/// crate alone links. Private-key material: prints none of itself, wiped on
-/// drop (`ed25519-dalek`'s own). Its field is the crate's, so
-/// `HybridSigner::ed25519_signing_key` wraps a clone of the signer's own
+/// key's 32 bytes, so a suite names this crate and never `ed25519-dalek`,
+/// which this crate alone links. Private-key material: prints none of
+/// itself, wiped on drop (`ed25519-dalek`'s own). Its field is the crate's,
+/// so `HybridSigner::ed25519_signing_key` wraps a clone of the signer's own
 /// half.
+///
+/// The twin takes the half from a signer; the refusal below it makes one
+/// from 32 bytes, its one difference:
+///
+/// ```
+/// use skep_signature::{Ed25519SigningKey, HybridSigner, TAG_MLDSA65_ED25519};
+/// let signer = HybridSigner::from_seed(TAG_MLDSA65_ED25519, &[7; 32]).unwrap();
+/// let half: Ed25519SigningKey = signer.ed25519_signing_key();
+/// let _ = half.sign(b"the entry frame");
+/// ```
+/// ```compile_fail,E0599
+/// use skep_signature::{Ed25519SigningKey, HybridSigner, TAG_MLDSA65_ED25519};
+/// let signer = HybridSigner::from_seed(TAG_MLDSA65_ED25519, &[7; 32]).unwrap();
+/// let half: Ed25519SigningKey = Ed25519SigningKey::from_bytes(&[7; 32]);
+/// let _ = half.sign(b"the entry frame");
+/// ```
 #[doc(hidden)]
 #[derive(Clone)]
 pub struct Ed25519SigningKey(pub(crate) EdSigningKey);
 
 impl Ed25519SigningKey {
-    /// The key `bytes` seed (`ed25519-dalek`'s `SigningKey::from_bytes`).
-    pub fn from_bytes(bytes: &[u8; 32]) -> Ed25519SigningKey {
-        Ed25519SigningKey(EdSigningKey::from_bytes(bytes))
-    }
-
-    /// The seed back — the 32 bytes the key was made from.
+    /// The half's 32 bytes — the KDF's Ed25519 half seed it was made from
+    /// (`ed25519-dalek`'s `SigningKey::to_bytes`).
     pub fn to_bytes(&self) -> [u8; 32] {
         self.0.to_bytes()
     }
@@ -152,9 +215,11 @@ impl Ed25519SigningKey {
         self.0.sign(msg).to_bytes()
     }
 
-    /// This key's verifying key.
-    pub fn verifying_key(&self) -> Ed25519VerifyingKey {
-        Ed25519VerifyingKey(self.0.verifying_key())
+    /// This half's verifying key, as its 32 bytes — the Ed25519 half a hybrid
+    /// public key carries
+    /// ([`PublicKey::ed25519_half`](skep_identity::PublicKey::ed25519_half)).
+    pub fn verifying_key(&self) -> [u8; 32] {
+        self.0.verifying_key().to_bytes()
     }
 }
 
@@ -162,37 +227,5 @@ impl fmt::Debug for Ed25519SigningKey {
     /// A signing key is private-key material: never printed.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str("Ed25519SigningKey(..)")
-    }
-}
-
-/// TEST HOOK (the same standing) — an Ed25519 verifying key: the 32 bytes
-/// of a key's public half, or the point decode's refusal of 32 bytes that
-/// are no point — how a suite finds the undecodable key it enrolls to draw
-/// the daemon's own refusal, from the verifier's answer rather than a
-/// hard-coded string.
-#[doc(hidden)]
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Ed25519VerifyingKey(EdVerifyingKey);
-
-impl Ed25519VerifyingKey {
-    /// The key `bytes` encode, or
-    /// [`HybridFault::Signature`](crate::HybridFault::Signature) where they
-    /// decode to no point — the decode [`verify`](crate::verify) runs on an
-    /// Ed25519 half, and the fault it answers under a half that does not
-    /// decode ([`key_decodes`](crate::key_decodes) answers `false` there).
-    pub fn from_bytes(bytes: &[u8; 32]) -> Result<Ed25519VerifyingKey, crate::HybridFault> {
-        EdVerifyingKey::from_bytes(bytes)
-            .map(Ed25519VerifyingKey)
-            .map_err(|_| crate::HybridFault::Signature)
-    }
-
-    /// The key's 32 bytes, borrowed.
-    pub fn as_bytes(&self) -> &[u8; 32] {
-        self.0.as_bytes()
-    }
-
-    /// The key's 32 bytes.
-    pub fn to_bytes(&self) -> [u8; 32] {
-        self.0.to_bytes()
     }
 }

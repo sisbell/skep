@@ -48,7 +48,7 @@ use skep_identity::{
     Enrollment, EntryBody, EntrySlot, Fingerprint, LinkSlots, PublicKey, RecordRows, RecordValue,
     ShotBase, ShotSegmentPiece, SigAlgRow, ALG_FNDSA512_PREVIEW_ED25519, ALG_MLDSA65_ED25519,
 };
-use skep_signature::{Ed25519SigningKey as SigningKey, HybridSigner};
+use skep_signature::{HybridSigner, SeedCarrier as SigningKey};
 use skepd::{JsonCodec, Seq};
 use tempfile::tempdir;
 
@@ -2802,7 +2802,7 @@ fn hex_to_bytes(h: &str) -> Vec<u8> {
     (0..h.len() / 2).map(|i| u8::from_str_radix(&h[2 * i..2 * i + 2], 16).unwrap()).collect()
 }
 
-/// The seed carrier's derived halves differ from the raw key and from each
+/// The seed carrier's derived halves differ from the raw seed and from each
 /// other, and the enrolled hybrid's fingerprint is the session's testimony:
 /// the ruled "one seed, two halves" at the fixtures.
 #[test]
@@ -2813,5 +2813,5 @@ fn the_fixtures_seed_carrier_derives_both_halves() {
     let enrolled: PublicKey = public_key_of(&sk);
     assert_eq!(enrolled.alg(), ALG_MLDSA65_ED25519);
     assert_eq!(enrolled.raw().len(), 1984);
-    assert_eq!(enrolled.ed25519_half(), &signer.ed25519_signing_key().verifying_key().to_bytes());
+    assert_eq!(enrolled.ed25519_half(), &signer.ed25519_signing_key().verifying_key());
 }

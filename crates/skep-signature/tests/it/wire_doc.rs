@@ -109,7 +109,7 @@ fn the_kdf_is_the_hkdf_formula_wire_md_publishes() {
         assert!(ed.to_bytes() == formula(&GOLDEN_SEED, "ed25519"), "tag {tag}: the Ed25519 key");
         assert_eq!(
             signer.public_key().ed25519_half(),
-            ed.verifying_key().as_bytes(),
+            &ed.verifying_key(),
             "tag {tag}: the key's Ed25519 half is that key's public half"
         );
     }

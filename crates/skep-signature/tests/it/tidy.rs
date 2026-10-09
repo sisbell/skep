@@ -10,10 +10,10 @@ use std::path::Path;
 /// THE ONE CRATE THAT LINKS `ed25519-dalek`, read off the workspace's
 /// resolved graph: every package `Cargo.lock` lists as depending on it —
 /// dev-dependencies included, since the lock does not tell them apart —
-/// is this crate and no other. The suites reach the classical pair
-/// through `Ed25519SigningKey` and `Ed25519VerifyingKey` instead, so
-/// a manifest that names the library again lands in the lock and fails
-/// here, the way `cargo tree -i ed25519-dalek --workspace` would show it.
+/// is this crate and no other. The suites hold their seeds in `SeedCarrier`
+/// and reach the Ed25519 half through `Ed25519SigningKey` instead, so a
+/// manifest that names the library again lands in the lock and fails here,
+/// the way `cargo tree -i ed25519-dalek --workspace` would show it.
 #[test]
 fn ed25519_dalek_is_linked_by_this_crate_alone() {
     let lock = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../../Cargo.lock"))

@@ -31,16 +31,23 @@ fn enroll_atom_with_trailing_non_point(n: usize) -> String {
 }
 
 /// A TAG-1 hybrid key of the row's exact width whose ED25519 HALF decodes to
-/// no point — a real derived key's post-quantum half beside
-/// [`non_point_hex`]'s bytes as its Ed25519 half. The fold admits it (syntax
-/// alone, AUTH-1.4); the precheck's all-halves decode refuses it on that half.
+/// no point — a real derived key's post-quantum half beside the first
+/// constant-byte Ed25519 half the precheck's own decode refuses
+/// (`skep_signature::key_decodes`): ML-DSA-65's half decodes at any byte
+/// string of its length, so the refusal is the Ed25519 half's. Found, not
+/// hardcoded — roughly half of all 32-byte strings fail decompression, and
+/// the `expect` keeps a search that finds nothing from passing silently. The
+/// fold admits it (syntax alone, AUTH-1.4); the precheck's all-halves decode
+/// refuses it on that half.
 fn non_point_hybrid_key() -> PublicKey {
     let real = public_key_of(&distinct_key(200));
-    let spelled = non_point_hex();
-    let non_point: [u8; 32] =
-        std::array::from_fn(|i| u8::from_str_radix(&spelled[2 * i..2 * i + 2], 16).unwrap());
-    PublicKey::from_halves(ALG_MLDSA65_ED25519, real.pq_half(), &non_point)
-        .expect("the row's widths — the fold admits syntax and never decodes a half")
+    (0u8..=255)
+        .map(|n| {
+            PublicKey::from_halves(ALG_MLDSA65_ED25519, real.pq_half(), &[n; 32])
+                .expect("the row's widths — the fold admits syntax and never decodes a half")
+        })
+        .find(|key| !skep_signature::key_decodes(key))
+        .expect("no non-point among the 256 constant-byte candidates")
 }
 
 /// A TAG-3 key of the row's exact width whose FN-DSA HALF does not decode:
@@ -546,19 +553,6 @@ fn a_malformed_record_names_its_payload_fault_after_the_join() {
     );
 
     sd.shutdown();
-}
-
-/// Thirty-two bytes that are valid hex and are NOT a canonical Ed25519
-/// point, derived from the verifier's own answer rather than hardcoded:
-/// roughly half of all 32-byte strings fail decompression, and the panic
-/// below is what keeps a search that finds nothing from passing silently.
-fn non_point_hex() -> String {
-    for n in 0u8..=255 {
-        if VerifyingKey::from_bytes(&[n; 32]).is_err() {
-            return hex(&[n; 32]);
-        }
-    }
-    panic!("no non-point among the 256 constant-byte candidates");
 }
 
 /// wire.md §Credential refusals: a valid-hex key any half of which does not

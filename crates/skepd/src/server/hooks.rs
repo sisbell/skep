@@ -785,12 +785,31 @@ impl Daemon {
     /// empty (signed ops), against the journal itself rather than the feed:
     /// `/changes` serves the slot as the row's `attest` member off the
     /// attest store (`feed-attest.log`), which mirrors the marker at commit
-    /// and is rebuilt from this very read above the reclaim floor (the
-    /// design record §7.3 (i)) — so the two are one value where both answer,
-    /// and this read is what a suite compares the served member against.
+    /// and is rebuilt above the reclaim floor from the one-scan list
+    /// `Kernel::boundaries_above`, which answers at each boundary what this
+    /// read answers there (the design record §7.3 (i)) — so the two are one
+    /// value where both answer, and this read is what a suite compares the
+    /// served member against.
     #[doc(hidden)]
     pub fn attestation_at(&self, at: Seq) -> Result<Option<Attestation>, HistoryError> {
         self.engine.kernel().attestation_at(at)
+    }
+
+    /// TEST HOOK (the same standing): THE BASES THE DAEMON's KERNEL HAS
+    /// LOADED for its history reads since the open — `Kernel::bases_loaded`
+    /// on the daemon's own kernel, one per base a read selected, a
+    /// checkpoint's whole body decoded or genesis seeded — so a suite pins
+    /// what a reopen COSTS in bases rather than in seconds: the attest
+    /// store's rebuild (`feed-attest.log`) lists every boundary above its
+    /// fence in ONE scan from one base (the operations design §3.3 step 2),
+    /// where a read per position loaded a base per position — one whole
+    /// checkpoint decoded per commit since the last open. The open's own
+    /// reads load bases too (the feed's floor probe among them), so a suite
+    /// reads this after two opens of one board and pins the DIFFERENCE,
+    /// never an absolute.
+    #[doc(hidden)]
+    pub fn bases_loaded(&self) -> u64 {
+        self.engine.kernel().bases_loaded()
     }
 
     /// TEST HOOK (the same standing: `#[doc(hidden)]`, not a stable API):

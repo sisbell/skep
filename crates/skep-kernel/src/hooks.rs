@@ -11,6 +11,16 @@
 //! the gate on every platform, where the one failure a test could reach
 //! before was a directory squatting on a name.
 //!
+//! And THE BASE-LOAD COUNT (§3.3 step 2 of the operations design): the
+//! bases this kernel's history reads have selected, loaded and seeded — a
+//! retained checkpoint's whole body read, hashed, deserialized and seeded,
+//! or genesis cloned and seeded — moved once at the reads' one base
+//! selection ([`Kernel::base_at_or_below`]), so a suite fences what a
+//! caller COSTS in bases where it cannot in seconds: a consumer that asks
+//! once over a window and one that asks once per boundary read the same
+//! slots and differ here alone. Recovery's base at the open is not among
+//! them, nor a candidate the fallback chain passed over.
+//!
 //! The state is ONE KERNEL's, never the process's — one test opens several
 //! kernels, and the suite runs many tests in one process: [`Kernel`] holds
 //! it and hands its journal appender a second handle at the open
@@ -18,19 +28,23 @@
 //! reference (`checkpoint::write`); the `Seam` alias in `lib.rs` is the
 //! handle. The doors a test arms it through are [`Kernel`]'s
 //! `#[doc(hidden)]` [`fail_the_next`], [`panic_at_the_next`] and
-//! [`armed_steps`], which delegate here. A build without the feature
-//! carries none of it, and the write sites' hook before a step is the
-//! no-op `NoHooks` of `lib.rs`. Like [`SaltSource::Seeded`], a test-time
-//! knob the shipped binary never turns: the kernel still has no logging
-//! seam — it answers facts, and this seam only makes a step fail.
+//! [`armed_steps`], which delegate here, and the count is read through
+//! [`bases_loaded`]. A build without the feature carries none of it, and
+//! the write sites' hook before a step is the no-op `NoHooks` of `lib.rs`.
+//! Like [`SaltSource::Seeded`], a test-time knob the shipped binary never
+//! turns: the kernel still has no logging seam — it answers facts, and this
+//! seam only makes a step fail and counts what the reads loaded.
 //!
 //! [`Kernel`]: crate::Kernel
+//! [`Kernel::base_at_or_below`]: crate::Kernel::base_at_or_below
 //! [`fail_the_next`]: crate::Kernel::fail_the_next
 //! [`panic_at_the_next`]: crate::Kernel::panic_at_the_next
 //! [`armed_steps`]: crate::Kernel::armed_steps
+//! [`bases_loaded`]: crate::Kernel::bases_loaded
 //! [`SaltSource::Seeded`]: crate::SaltSource::Seeded
 
 use std::io;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use parking_lot::Mutex;
 
@@ -49,13 +63,31 @@ enum Arm {
 /// the first hook that reaches its step. Behind an `Arc` (the `Seam`
 /// alias) so the kernel and its journal appender hold one state: the
 /// kernel's doors arm it, the appender's and the checkpoint write's hooks
-/// fire it.
+/// fire it. Beside the arms, the one count the seam keeps.
 #[derive(Default)]
 pub(crate) struct Hooks {
     armed: Mutex<Vec<(Step, Arm)>>,
+    /// THE BASE-LOAD COUNT: the bases this kernel's history reads have
+    /// loaded since the open, moved by [`Hooks::base_loaded`] at the reads'
+    /// base selection and read by [`Hooks::bases_loaded`]. Monotone.
+    bases_loaded: AtomicU64,
 }
 
 impl Hooks {
+    /// ONE MORE BASE LOADED by a history read — what the reads' base
+    /// selection calls once its base stands: a retained checkpoint's whole
+    /// body decoded and seeded, or genesis cloned and seeded. A candidate
+    /// the fallback chain passed over is not one, nor a selection that
+    /// refused: the count is of bases a read went on to scan from.
+    pub(crate) fn base_loaded(&self) {
+        self.bases_loaded.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// The bases this kernel's history reads have loaded since the open.
+    pub(crate) fn bases_loaded(&self) -> u64 {
+        self.bases_loaded.load(Ordering::Relaxed)
+    }
+
     /// The seam's hook before a step — what each write site calls: the arm
     /// standing at `step`, if one does, is TAKEN, so the next call of the
     /// same step runs the real step, and fires in the step's place — a
@@ -192,6 +224,23 @@ mod tests {
         hooks.panic_at_the_next(Step::JournalAppend);
         assert!(catch_unwind(AssertUnwindSafe(|| hooks.before(Step::JournalAppend))).is_err());
         assert_eq!(hooks.armed_steps(), vec![Step::JournalRepair]);
+    }
+
+    /// The count starts at zero, moves by one per base loaded, and the
+    /// arms beside it neither move it nor are moved by it.
+    #[test]
+    fn the_base_load_count_starts_at_zero_and_moves_once_per_load() {
+        let hooks = Hooks::default();
+        assert_eq!(hooks.bases_loaded(), 0);
+        hooks.base_loaded();
+        hooks.base_loaded();
+        assert_eq!(hooks.bases_loaded(), 2);
+        hooks.fail_the_next(Step::JournalAppend, io::ErrorKind::StorageFull);
+        hooks.before(Step::JournalAppend).expect_err("the armed step fails");
+        assert_eq!(hooks.bases_loaded(), 2, "an arm firing is no base loaded");
+        hooks.base_loaded();
+        assert_eq!(hooks.bases_loaded(), 3);
+        assert!(hooks.armed_steps().is_empty(), "and a load arms nothing");
     }
 
     #[test]

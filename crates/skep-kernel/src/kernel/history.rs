@@ -325,7 +325,7 @@ impl<W: WorldState> Kernel<W> {
         if position == head {
             return Ok(Vec::new());
         }
-        let (base, segs) = base_at_or_below(journaled, position.0)?;
+        let (base, segs) = self.base_at_or_below(journaled, position.0)?;
         let scan = base.scan_boundaries(&segs).map_err(scan_refusal)?;
         at_rest_halt(&scan)?;
         let mut above: Vec<(Seq, Option<Attestation>)> = scan
@@ -353,8 +353,8 @@ impl<W: WorldState> Kernel<W> {
     /// [`Kernel::boundaries_above`], takes the same steps in the same order as
     /// far as its own question goes, and takes them as the same code: the
     /// head judgment ([`Kernel::journaled_head`]), the base selection
-    /// ([`base_at_or_below`]) and the at-rest halt ([`at_rest_halt`]) are
-    /// each stated once, here, for both.
+    /// ([`Kernel::base_at_or_below`]) and the at-rest halt ([`at_rest_halt`])
+    /// are each stated once, here, for both.
     ///
     /// `base_ceiling`, at most `at`, is the highest coordinate the base may
     /// embody: `at` itself for a read the base answers at its own coordinate —
@@ -385,7 +385,7 @@ impl<W: WorldState> Kernel<W> {
             "a base at {base_ceiling} lies above the boundary {at} it is asked to answer"
         );
         let (journaled, _) = self.journaled_head(at)?;
-        let (base, segs) = base_at_or_below(journaled, base_ceiling)?;
+        let (base, segs) = self.base_at_or_below(journaled, base_ceiling)?;
         if at.0 == base.s_load() {
             return Ok(HistoryRead::AtBase(base));
         }
@@ -423,25 +423,40 @@ impl<W: WorldState> Kernel<W> {
         }
         Ok((journaled, installed_head))
     }
-}
 
-/// The base selection every history read runs, capped at `ceiling`, and the
-/// segment listing taken beside it, which the scan above that base walks:
-/// the checkpoints and the segments listed, then [`replay::select_base`] —
-/// recovery's own fallback chain, the newest retained checkpoint at or below
-/// `ceiling` that loads and seeds, else genesis while the journal reaches it
-/// — refused as [`HistoryError::Reclaimed`] when nothing stands in. One
-/// listing serves the selection and the scan, so the scan walks the
-/// segments the base was chosen against.
-fn base_at_or_below<W: WorldState>(
-    journaled: &Journaled<W>,
-    ceiling: u64,
-) -> Result<(replay::Base<W>, Vec<SegmentMeta>), HistoryError> {
-    let checkpoints = checkpoint::list(&journaled.dir)?;
-    let segs = journal::list_segments(&journaled.dir)?;
-    let base = replay::select_base(&checkpoints, &segs, Some(ceiling), &journaled.genesis)
-        .map_err(reclaimed)?;
-    Ok((base, segs))
+    /// The base selection every history read runs, capped at `ceiling`, and
+    /// the segment listing taken beside it, which the scan above that base
+    /// walks: the checkpoints and the segments listed, then
+    /// [`replay::select_base`] — recovery's own fallback chain, the newest
+    /// retained checkpoint at or below `ceiling` that loads and seeds, else
+    /// genesis while the journal reaches it — refused as
+    /// [`HistoryError::Reclaimed`] when nothing stands in. One listing serves
+    /// the selection and the scan, so the scan walks the segments the base
+    /// was chosen against.
+    ///
+    /// THE ONE SITE A HISTORY READ LOADS A BASE, so it is where the base is
+    /// COUNTED: under `test-hooks` the base that stands moves this kernel's
+    /// seam's count by one — the `#[doc(hidden)]` door `Kernel::bases_loaded`
+    /// reads it — so a suite pins what a caller costs in bases, a consumer
+    /// asking once over a window against one asking once per boundary (§3.3
+    /// step 2 of the operations design). `journaled` is this kernel's own,
+    /// as [`Kernel::journaled_head`] answered it; the receiver is here for
+    /// the seam. Recovery's base at the open runs the selection directly and
+    /// is not counted, nor is a candidate the chain passed over, nor a
+    /// selection that refused.
+    fn base_at_or_below(
+        &self,
+        journaled: &Journaled<W>,
+        ceiling: u64,
+    ) -> Result<(replay::Base<W>, Vec<SegmentMeta>), HistoryError> {
+        let checkpoints = checkpoint::list(&journaled.dir)?;
+        let segs = journal::list_segments(&journaled.dir)?;
+        let base = replay::select_base(&checkpoints, &segs, Some(ceiling), &journaled.genesis)
+            .map_err(reclaimed)?;
+        #[cfg(feature = "test-hooks")]
+        self.seam.base_loaded();
+        Ok((base, segs))
+    }
 }
 
 /// An exhausted base selection, in the history reads' vocabulary: the floor

@@ -9,10 +9,14 @@
 //! byte-equal to what the request presented — appended AT COMMIT from the
 //! value the plain sequence admitted and handed the kernel, under the write
 //! path's serialization lock in the same `record` that appends `commits.log`;
-//! REBUILT on loss or a short tail from `Kernel::attestation_at` for every
-//! position the journal still answers, ABOVE THE RECLAIM FLOOR alone — a
-//! position the journal refuses `Reclaimed` is neither rebuilt nor dropped,
-//! and its row renders `attest: null` (LOST). Below the floor the checkpoint
+//! REBUILT on loss or a short tail from the kernel's markers in ONE scan —
+//! `Kernel::boundaries_above` the file's fence, every committed boundary
+//! above it with its slot, from one base (the operations design §3.3 step
+//! 2) — for every served position the journal still answers, ABOVE THE
+//! RECLAIM FLOOR alone — a position the journal refuses `Reclaimed` is
+//! neither rebuilt nor dropped, and its row renders `attest: null` (LOST),
+//! and the list is asked again at the floor the refusal names, for the
+//! positions above it ([`rebuilt_tail`]). Below the floor the checkpoint
 //! body holds no marker, so a line here is an entry signature's ONLY copy at
 //! the origin: there the store is PRIMARY state and not a projection — NEVER
 //! COMPACTED to the journal's retention (where `commits.log` and the four
@@ -67,7 +71,7 @@ use std::sync::Arc;
 
 use serde_json::{Map, Value};
 use skep_engine::Engine;
-use skep_kernel::{Attestation, Seq};
+use skep_kernel::{Attestation, HistoryError, Seq};
 use skep_util::json::hex_string;
 
 use super::derived::LineFile;
@@ -107,27 +111,40 @@ impl AttestStore {
     /// below the head, a line at a time, holding resident the SERVED window
     /// alone — the lines below the log's fence are read past and stay in the
     /// FILE, untouched — then rebuild the missing tail from the journal's
-    /// markers, then fence at the head and SYNC, so every line the open
-    /// rebuilt is on disk before the first commit can begin (SO-I5 (d)).
+    /// markers in ONE scan, then fence at the head and SYNC, so every line
+    /// the open rebuilt is on disk before the first commit can begin (SO-I5
+    /// (d)).
     ///
     /// A line this daemon cannot read (a tag of no signature, a blob of none,
     /// hex it did not write) is reported and not held: the row then renders
     /// `attest: null` where its line records the marker filled, never an
-    /// invented slot. The tail is every served position above the file's
-    /// coverage, asked of the journal — the marker-mirroring rebuild, above
-    /// the floor alone. `Ok(None)` is an empty slot and contributes nothing; a
-    /// refusal (`Reclaimed` — the segment holding the marker is gone though
-    /// the position is still served; or any other) rebuilds nothing and drops
-    /// nothing, and the fence still closes over it: the journal will not
-    /// answer it on a later open either, and the row's own line says LOST.
+    /// invented slot. The tail is every committed boundary above the file's
+    /// coverage whose slot is filled, listed by `Kernel::boundaries_above` in
+    /// one scan from one base ([`rebuilt_tail`]: the floor arm, and what a
+    /// refusal leaves), kept where the log serves the position — the
+    /// marker-mirroring rebuild, above the floor alone. An empty slot
+    /// contributes nothing; a refusal rebuilds nothing and drops nothing, and
+    /// the fence still closes over it: the journal will not answer it on a
+    /// later open either, and the row's own line says LOST.
     ///
     /// COST: O(the file) to READ it, a line at a time — holding one line and
     /// the served window, never the file, which keeps a line for every
-    /// attested commit the board ever made — and one `Kernel::attestation_at`
-    /// — a bounded journal scan from the base below the position — per
-    /// uncovered retained position, so a lost store is O(retained window ×
-    /// scan) at the open that rebuilds it. Never a compaction: the store keeps
-    /// what the log drops.
+    /// attested commit the board ever made — and, for the tail, ONE
+    /// `Kernel::boundaries_above`: the base at or below the fence LOADED and
+    /// seeded — a whole checkpoint file read and deserialized, dropped
+    /// unfolded — then ONE scan from that base to the journal's end, the
+    /// retained window at most, one entry kept per committed transaction
+    /// above the base and a signature per attested one; a second such read
+    /// where the fence's base is gone (the floor arm). Where nothing is
+    /// uncovered — the fence at the head, the last commit attested or the
+    /// board reopened twice — no base is loaded and no segment read. What it
+    /// does not pay is a base and a scan PER uncovered position: a whole
+    /// checkpoint decoded per commit made since the last open, which the
+    /// fence's own motion — at an attested commit and at this open's end,
+    /// never at an unattested commit — made every reopen of a board that
+    /// took only unattested writes pay, a restart measured in minutes to
+    /// hours at a large world. Never a compaction: the store keeps what the
+    /// log drops.
     pub(super) fn open(dir: &Path, engine: &Engine, log: &CommitsLog) -> io::Result<AttestStore> {
         let head = log.open_head();
         let served_only = |at: u64| log.entries().contains_key(&at);
@@ -143,8 +160,8 @@ impl AttestStore {
                 )),
             }
         }
-        for (&at, _) in log.entries().range(file.first_uncovered()..) {
-            if let Ok(Some(slot)) = engine.kernel().attestation_at(Seq(at)) {
+        for (at, slot) in rebuilt_tail(engine, file.coverage()) {
+            if served_only(at) {
                 file.append(at, attest_fields(&slot))?;
                 served.insert(at, Arc::new(slot));
             }
@@ -197,6 +214,43 @@ impl AttestStore {
     pub(super) fn slot(&self, at: u64) -> Option<Arc<Attestation>> {
         self.served.get(&at).cloned()
     }
+}
+
+/// THE TAIL REBUILT (the operations design §3.3 step 2): every committed
+/// boundary above `coverage` — the file's fence — whose marker slot is
+/// filled, in `Seq` order, read in ONE scan: `Kernel::boundaries_above` the
+/// fence, from one base at or below it to the journal's end, where a read
+/// per position loaded a base per position. Empty slots contribute nothing.
+/// A fence at the head asks nothing of the journal: the read answers its
+/// head's own position empty before any base is loaded.
+///
+/// THE FLOOR: where the fence's base is gone — the read refuses `Reclaimed`
+/// naming a `floor`, the oldest retained checkpoint, above the fence — the
+/// list is asked again AT the floor, where the read answers from the base
+/// embodying it (its base may sit at its position, where `attestation_at`'s
+/// must sit below), and every position in `(coverage, floor]` stays as it
+/// was: neither rebuilt nor dropped, its row LOST. A floor at or below the
+/// fence names a base that refused to load, which asking again would meet
+/// again; asked once. Every other refusal — a `Reclaimed` naming no floor,
+/// at-rest damage, I/O — rebuilds nothing, as the per-position read's
+/// refusal did: the fence still closes over the tail, the journal will not
+/// answer it at a later open either, and each row's own line says LOST. No
+/// retry: the feed opens before the listener and the checkpoint thread, so
+/// nothing appends or reclaims under this read and its two transient
+/// refusals cannot occur here.
+fn rebuilt_tail(engine: &Engine, coverage: u64) -> Vec<(u64, Attestation)> {
+    let kernel = engine.kernel();
+    let listed = match kernel.boundaries_above(Seq(coverage)) {
+        Err(HistoryError::Reclaimed { floor: Some(floor), .. }) if floor.0 > coverage => {
+            kernel.boundaries_above(floor)
+        }
+        answered => answered,
+    };
+    listed
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|(seq, slot)| slot.map(|slot| (seq.0, slot)))
+        .collect()
 }
 
 /// One attest-store record's two fields for the marker slot `a`: the tag as

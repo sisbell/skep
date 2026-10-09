@@ -213,8 +213,10 @@ shipped build) `src/hooks.rs` is the write-fault seam: the next checkpoint
 write, before or past its rename, or the next journal append, barrier or
 repair failing with a named `io::ErrorKind`, or a panic in the checkpoint
 write, each arm firing once, armed through `#[doc(hidden)]` doors on
-`Kernel` and scoped to that kernel; the `Step` the write sites hook before
-is named in every build, and the hook is a no-op without the feature.
+`Kernel` and scoped to that kernel — and the count of the bases that
+kernel's history reads have loaded, read through a door of the same
+standing; the `Step` the write sites hook before is named in every build,
+and the hook is a no-op without the feature.
 
 The kernel has no logging seam: it answers facts, and the daemon says them.
 A journaled open reports what it found and did as `Recovery` — the start
@@ -1900,7 +1902,9 @@ the store's install — nothing above their own layer.
      `write_path/feed/derived.rs` keeps the feed's derived index files —
      a rewrite that fails past its rename stops its file for the uptime,
      said once — and `write_path/feed/attest.rs` the attest store, the
-     marker slot mirrored per attested commit, never compacted;
+     marker slot mirrored per attested commit, never compacted, its
+     missing tail rebuilt at open in one scan of the kernel's markers
+     above the store's fence;
    - `write_path/sidecar.rs` — `commits.log`, the daemon's record of what
      it committed, for whom, and whether the entry was signed — and, on a
      bare line, the journal's answer for the row's op and terms;
@@ -2042,7 +2046,8 @@ imports it.
   the checkpoint thread lands, the floor moving then and at no other
   moment — and `feed-attest.log`, the attest store: each attested commit's
   marker slot, mirrored at commit from the value the write path admitted,
-  rebuilt from the journal above the reclaim floor, and the one daemon
+  rebuilt from the journal above the reclaim floor in one scan of the
+  kernel's markers above the store's fence, and the one daemon
   file that is not a projection — below the floor the checkpoint holds no
   marker, so its line there is the entry signature's only copy at the
   origin, kept and never compacted, its one cut the open's tail check,

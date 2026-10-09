@@ -1606,7 +1606,9 @@ impl<W: WorldState> Kernel<W> {
 
 /// THE WRITE-FAULT SEAM's DOORS (`test-hooks` builds only; `hooks.rs` is the
 /// seam): how a test makes the next step of this kernel's write paths fail
-/// or unwind on cue. Each door arms THIS kernel's seam alone.
+/// or unwind on cue — and reads the one count the seam keeps, the bases
+/// this kernel's history reads loaded. Each door arms or reads THIS
+/// kernel's seam alone.
 #[cfg(feature = "test-hooks")]
 impl<W: WorldState> Kernel<W> {
     /// TEST HOOK (`test-hooks`): FAIL the next `step` this kernel's write
@@ -1647,6 +1649,25 @@ impl<W: WorldState> Kernel<W> {
     #[doc(hidden)]
     pub fn armed_steps(&self) -> Vec<Step> {
         self.seam.armed_steps()
+    }
+
+    /// TEST HOOK (`test-hooks`): THE BASES THIS KERNEL's HISTORY READS HAVE
+    /// LOADED since the open — one per base a read's selection stood on, a
+    /// retained checkpoint's whole body read, hashed, deserialized and
+    /// seeded, or genesis cloned and seeded: "the base LOADED" every
+    /// history read's COST paragraph opens with ([`Kernel::world_at`],
+    /// [`Kernel::boundaries_above`]), counted at its one site, the reads'
+    /// base selection — so a suite fences what a caller costs in BASES,
+    /// which no clock can on a loaded machine: a consumer asking once over
+    /// a window and one asking once per boundary read the same slots and
+    /// differ here alone (§3.3 step 2 of the operations design). Not
+    /// counted: recovery's base at the open, which runs the selection
+    /// directly; a candidate the fallback chain passed over; a selection
+    /// that refused `Reclaimed`. Monotone over the kernel's life and read
+    /// lock-free; a suite reads it twice and pins the difference.
+    #[doc(hidden)]
+    pub fn bases_loaded(&self) -> u64 {
+        self.seam.bases_loaded()
     }
 }
 

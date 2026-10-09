@@ -326,11 +326,16 @@ fn the_claim_boundary_is_read_off_the_feed_alone() {
     sd.shutdown();
 }
 
-/// ABSENCE IS A VERDICT, SO THE STORE IS HONEST — above the floor: a lost or
-/// torn `feed-attest.log` is rebuilt at open from the journal's markers
-/// (`Kernel::attestation_at`) and the feed serves the SAME `attest` bytes;
-/// with `commits.log` lost beside it, the rows come back bare and the slot
-/// rides the bare row — the journal's own fact beside the lost testimony.
+/// ABSENCE IS A VERDICT, SO THE STORE IS HONEST — above the floor (D11, the
+/// operations design §3.3 step 2): a lost or torn `feed-attest.log` is
+/// rebuilt at open from the journal's markers in ONE scan —
+/// `Kernel::boundaries_above` the file's fence, every boundary above it with
+/// its slot from one base — and the feed serves the SAME `attest` bytes the
+/// per-position mirror wrote; each rebuilt line is compared with the
+/// per-position read `Kernel::attestation_at`, the oracle the one scan
+/// answers value for value. With `commits.log` lost beside it, the rows
+/// come back bare and the slot rides the bare row — the journal's own fact
+/// beside the lost testimony.
 #[test]
 fn a_lost_or_torn_attest_store_is_rebuilt_from_the_journal_and_serves_the_same_bytes() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -401,18 +406,26 @@ fn a_lost_or_torn_attest_store_is_rebuilt_from_the_journal_and_serves_the_same_b
     sd.shutdown();
 }
 
-/// ABSENCE IS A VERDICT — at and below the floor (BW-01): after a
-/// reclamation drops `commits.log`'s entries below the floor,
+/// ABSENCE IS A VERDICT — at and below the floor (BW-01; D11's floor arm):
+/// after a reclamation drops `commits.log`'s entries below the floor,
 /// `feed-attest.log` still holds its line there (the file read directly:
 /// no route serves a below-floor position, e-Q1), and the row AT the floor
 /// — whose marker the journal refuses `Reclaimed`, the segment holding it
 /// gone — serves its slot off the kept line; with the line lost, that row
-/// renders `attest: null`, LOST, never absent, and still no `key`.
+/// renders `attest: null`, LOST, never absent, and still no `key`: the
+/// rebuild's one scan, asked above the fence, meets the same refusal — the
+/// fence's base is gone — and asks again AT the floor the refusal names,
+/// where the list is empty, the floor being the head. Then, with two
+/// attested commits above the floor and the store lost again, the same arm
+/// has a tail: the two are rebuilt from the base at the floor and served as
+/// before, the floor's own slot stays LOST, and the reopen loads ONE base
+/// more than the reopen after it — the refusal loads none, the floor's
+/// list one.
 #[test]
 fn the_attest_store_keeps_below_the_floor_and_serves_a_lost_slot_at_the_floor_as_null() {
     let dir = tempfile::tempdir().expect("tempdir");
     let store = dir.path().join("feed-attest.log");
-    let (early_at, last_at, last_attest) = {
+    let (early_at, last_at, last_attest, doc) = {
         let sd = spawn(dir.path());
         let port = sd.port();
         let doc = seed_flow(port);
@@ -423,7 +436,7 @@ fn the_attest_store_keeps_below_the_floor_and_serves_a_lost_slot_at_the_floor_as
         let (last_at, last_attest) = signed_ghost_link(port, &signed, 2);
         assert_eq!(last_at, head(port), "the signed write is the head");
         sd.shutdown();
-        (early_at, last_at, last_attest)
+        (early_at, last_at, last_attest, doc)
     };
     reclaim_below_the_head(dir.path(), last_at);
 
@@ -473,6 +486,194 @@ fn the_attest_store_keeps_below_the_floor_and_serves_a_lost_slot_at_the_floor_as
         assert!(attest_store_lines(dir.path()).is_empty(), "nothing was rebuilt: the journal refused the slot");
         sd.shutdown();
     }
+    // The floor arm with a tail to rebuild: two attested commits above the
+    // floor, then the store lost again — its fence at 0, below the floor,
+    // so the read above the fence refuses `Reclaimed` naming the floor, and
+    // asked again AT the floor lists the two from the base embodying it.
+    let (above, above_attests) = {
+        let sd = spawn(dir.path());
+        let port = sd.port();
+        // The reclaim's checkpoint made a head due (the head writer's
+        // trigger (b)): a bare commit takes it, with the head's own commit
+        // riding it, so each signed write below is one entry.
+        small_commit(port, &open_session(port, 1), &doc);
+        let signed = open_signed_session(port, CLAIMANT_PRINCIPAL, &device_key());
+        let (b1, attest1) = signed_ghost_link(port, &signed, 3);
+        let (b2, attest2) = signed_ghost_link(port, &signed, 4);
+        sd.shutdown();
+        (vec![b1, b2], vec![attest1, attest2])
+    };
+    std::fs::remove_file(&store).expect("lose the store again");
+    let through_the_floor = {
+        let sd = spawn(dir.path());
+        let port = sd.port();
+        let bare = open_session(port, CLAIMANT_PRINCIPAL);
+        assert_eq!(
+            attest_store_lines(dir.path()).keys().copied().collect::<Vec<_>>(),
+            above,
+            "the two above the floor are rebuilt — the list asked again at the floor the refusal \
+             named — and the floor's own slot is not"
+        );
+        let page = changes_ok(port, Some(&bare), &format!("since={}", last_at - 1));
+        let rows = page["changes"].as_array().expect("changes");
+        let e = entry_at(rows, last_at);
+        assert!(
+            e.get("attest").is_some_and(Value::is_null),
+            "the row at the floor stays LOST: {e}"
+        );
+        for (at, attest) in above.iter().zip(&above_attests) {
+            let e = entry_at(rows, *at);
+            assert_eq!(e["attest"], *attest, "a row above the floor serves its rebuilt slot: {e}");
+        }
+        let loaded = sd.daemon().bases_loaded();
+        sd.shutdown();
+        loaded
+    };
+    let at_the_head = {
+        let sd = spawn(dir.path());
+        let loaded = sd.daemon().bases_loaded();
+        sd.shutdown();
+        loaded
+    };
+    assert_eq!(
+        through_the_floor - at_the_head,
+        1,
+        "the floor arm loads ONE base: the refusal above the fence loads none, the list at the \
+         floor one"
+    );
+}
+
+/// D11, THE ONE SCAN COUNTED (the operations design §3.3 step 2): the
+/// rebuild asks the kernel ONCE — `Kernel::boundaries_above` the file's
+/// fence — so a lost store with `k` attested positions above the fence costs
+/// the open ONE base load, where a read per position cost `k`; and where the
+/// fence is AT the head — the last commit attested, so the fence moved with
+/// it; or a board reopened twice in a row — it costs NONE, the read
+/// answering its head's own position without the journal. The kernel's
+/// count of the bases its history reads loaded (`Daemon::bases_loaded`, the
+/// `test-hooks` door) is read after each open, and the open's own reads load
+/// bases too (the feed's floor probe), so what is pinned is the DIFFERENCE
+/// between opens of one board, never an absolute: the reopen before the loss
+/// and the reopen after the rebuild — the fence at the head in both — read
+/// alike, and the rebuilding reopen reads exactly one more. The lines the
+/// rebuild writes are the lines the loss took.
+#[test]
+fn a_lost_attest_store_is_rebuilt_in_one_scan_loading_one_base_and_none_at_the_head() {
+    const ATTESTED: u64 = 8;
+    let dir = tempfile::tempdir().expect("tempdir");
+    let store = dir.path().join("feed-attest.log");
+    let head_at = {
+        let sd = spawn(dir.path());
+        let port = sd.port();
+        let signed = open_signed_session(port, CLAIMANT_PRINCIPAL, &device_key());
+        let ats: Vec<u64> = (1..=ATTESTED).map(|n| signed_ghost_link(port, &signed, n).0).collect();
+        let head_at = head(port);
+        assert_eq!(
+            ats.last(),
+            Some(&head_at),
+            "the last commit is attested: the fence moved with it"
+        );
+        sd.shutdown();
+        head_at
+    };
+    let lines_before = attest_store_lines(dir.path());
+    assert!(
+        lines_before.len() >= ATTESTED as usize,
+        "a line per attested link, at least: {lines_before:?}"
+    );
+    // One reopen, its base-load count read: the reopen commits nothing and
+    // syncs the store through the head before any write (SO-I5 (d)).
+    let reopen = |ctx: &str| -> u64 {
+        let sd = spawn(dir.path());
+        assert_eq!(head(sd.port()), head_at, "{ctx}: the reopen commits nothing");
+        assert_eq!(
+            sd.daemon().attest_store_synced_through(),
+            head_at,
+            "{ctx}: synced through the head"
+        );
+        let loaded = sd.daemon().bases_loaded();
+        sd.shutdown();
+        loaded
+    };
+    let at_the_head = reopen("the fence at the head, the last commit attested");
+    assert_eq!(attest_store_lines(dir.path()), lines_before, "nothing to rebuild, nothing written");
+    std::fs::remove_file(&store).expect("lose the store");
+    let rebuilding = reopen("the store lost");
+    assert_eq!(
+        attest_store_lines(dir.path()),
+        lines_before,
+        "the store is rebuilt whole, line for line"
+    );
+    let again = reopen("the store rebuilt, the fence at the head again");
+    assert_eq!(
+        again, at_the_head,
+        "the common case twice — the fence moved with the last attested commit, and a board \
+         reopened twice in a row — loads what the open's own reads load, and nothing for the store"
+    );
+    assert_eq!(
+        rebuilding - at_the_head,
+        1,
+        "the rebuild of {ATTESTED} attested positions loaded ONE base — the one scan; a read per \
+         position loads {ATTESTED}"
+    );
+}
+
+/// THE REOPEN TRAP CLOSED (the operations design §3.3 step 2; SO-I5 (d)
+/// kept): the store's fence moves only at an attested commit and at an
+/// open's end, so after `k` UNATTESTED commits a plain reopen — the store
+/// intact, its fence below the head — has `k` served positions above the
+/// fence, each with an empty slot. The rebuild lists them in ONE scan from
+/// one base: the reopen loads ONE base more than the reopen after it, the
+/// fence then at the head, where a read per position loaded one per
+/// position — a whole checkpoint decoded per commit since the last open,
+/// the restart measured in minutes to hours at a large world. The lines are
+/// what they were — no slot is filled, so none is written — and the fence
+/// closes over the tail at the head, synced before the first commit.
+#[test]
+fn a_reopen_after_unattested_commits_loads_one_base_not_one_per_commit() {
+    const UNATTESTED: u64 = 30;
+    let dir = tempfile::tempdir().expect("tempdir");
+    let head_at = {
+        let sd = spawn(dir.path());
+        let port = sd.port();
+        let doc = seed_flow(port);
+        let s1 = open_session(port, 1);
+        for _ in 0..UNATTESTED {
+            small_commit(port, &s1, &doc);
+        }
+        let head_at = head(port);
+        sd.shutdown();
+        head_at
+    };
+    let lines_before = attest_store_lines(dir.path());
+    assert!(
+        lines_before.keys().all(|at| *at + UNATTESTED <= head_at),
+        "every attested line lies below the unattested run: {lines_before:?}"
+    );
+    let reopen = |ctx: &str| -> u64 {
+        let sd = spawn(dir.path());
+        assert_eq!(head(sd.port()), head_at, "{ctx}: the reopen commits nothing");
+        assert_eq!(
+            sd.daemon().attest_store_synced_through(),
+            head_at,
+            "{ctx}: the fence at the head, synced"
+        );
+        let loaded = sd.daemon().bases_loaded();
+        sd.shutdown();
+        loaded
+    };
+    let below_the_head = reopen("the fence below the head");
+    assert_eq!(
+        attest_store_lines(dir.path()),
+        lines_before,
+        "no slot above the fence is filled: no line written"
+    );
+    let at_the_head = reopen("the fence at the head");
+    assert_eq!(
+        below_the_head - at_the_head,
+        1,
+        "{UNATTESTED} unattested positions above the fence: ONE base loaded, not one per position"
+    );
 }
 
 /// D12 ON A RECORD DEPOSIT'S TWO ROWS — e-Q2 RE-CUT AT THE ATOM ROW (SO-I7

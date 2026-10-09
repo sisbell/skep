@@ -298,7 +298,8 @@ fn the_arms_run_in_order() {
 /// order — `successor-of` ahead of the policy link, which the table lists
 /// first — and seeks a subtype's row under the FIRST row its kind has; the
 /// count names an excess of kind rows ahead of any one row, then the first
-/// kind row of the list that is no bare ordinal of the registry range.
+/// kind row of the list that is no bare ordinal of the registry range or
+/// stands at one an earlier kind row took, whichever fault it holds.
 #[test]
 fn within_an_arm_the_first_fault_in_the_stated_order_speaks() {
     let (under_policy_link, under_binding) = (commons_type(&[58, 6]), commons_type(&[55, 1]));
@@ -348,6 +349,22 @@ fn within_an_arm_the_first_fault_in_the_stated_order_speaks() {
         Err(SeedingRefusal::Count { kind_row_count: 5, row: Some(commons_type(&[53])) }),
         "two kind rows outside the range: the first of the list is named"
     );
+    // The count's two faults in one list — a kind row at an ordinal an
+    // earlier one took, and one outside the range — answer whichever stands
+    // first in the list: the arm reads each kind row once for both.
+    for (endpoint_at, successor_of_at, named) in [(55, 53, 55), (53, 55, 53)] {
+        let mut two_faults = moved(RowOf::Kind(Kind::Endpoint), &[endpoint_at]);
+        for r in &mut two_faults {
+            if r.of == RowOf::Kind(Kind::SuccessorOf) {
+                r.address = commons_type(&[successor_of_at]);
+            }
+        }
+        assert_eq!(
+            seeding_check(&two_faults, std::iter::empty()),
+            Err(SeedingRefusal::Count { kind_row_count: 5, row: Some(commons_type(&[named])) }),
+            "the endpoint at 3.{endpoint_at}, successor-of at 3.{successor_of_at}"
+        );
+    }
 }
 
 /// REG-1.14's five kinds and REG-1.15's seven subtype rows in the rules' own

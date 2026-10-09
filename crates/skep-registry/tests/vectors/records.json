@@ -16,7 +16,7 @@
       "kind": "binding",
       "bytes": "{\"type\": \"binding\", \"prefix\": \"1.5\"}",
       "parse": "not_canonical",
-      "why": "the spec's example as printed carries spaces: the members pass and the bytes are not their re-encoding"
+      "why": "the spec's binding example with a space after each colon and comma, as a specification prints a body: the members pass and the bytes are not their re-encoding"
     },
     {
       "name": "binding_with_replaces",
@@ -32,7 +32,7 @@
       "kind": "binding",
       "bytes": "{\"type\": \"binding\", \"prefix\": \"1.5\", \"replaces\": \"<the link's address of the binding it replaces>\"}",
       "parse": "not_an_address:replaces",
-      "why": "the spec's later-record example as printed: its placeholder is no address, and the member's form is read ahead of the canonical compare"
+      "why": "the spec's later-record example, spaced: its placeholder is no address, and the member's form is read ahead of the canonical compare"
     },
     {
       "name": "endpoint_canonical_three_origins",
@@ -48,7 +48,7 @@
       "kind": "endpoint",
       "bytes": "{\"type\": \"endpoint\", \"origins\": [\"https://acme.example\", \"https://acme.example.net\", \"http://<acme's onion host>.onion\"]}",
       "parse": "not_canonical",
-      "why": "the spec's example as printed carries spaces"
+      "why": "the spec's endpoint example, spaced as a specification prints a body"
     },
     {
       "name": "endpoint_with_replaces",
@@ -64,7 +64,7 @@
       "kind": "endpoint",
       "bytes": "{\"type\": \"endpoint\", \"origins\": [\"https://acme.example.net\"], \"replaces\": \"<the link's address of the endpoint deposit it replaces>\"}",
       "parse": "not_an_address:replaces",
-      "why": "the spec's later-record example as printed: its placeholder is no address"
+      "why": "the spec's later-record example, spaced: its placeholder is no address"
     },
     {
       "name": "number_as_prefix",
@@ -254,6 +254,22 @@
       "canonical_sigless": "{\"type\":\"endpoint\",\"origins\":[\"https://acme.example.net\"],\"replaces\":\"1.0.2.0.1.0.2.1\"}",
       "sig": "00ff",
       "why": "both optional members, in their order"
+    },
+    {
+      "name": "binding_with_replaces_and_sig",
+      "kind": "binding",
+      "bytes": "{\"type\":\"binding\",\"prefix\":\"1.5\",\"replaces\":\"1.0.1.0.1.0.2.3\",\"sig\":\"abcd\"}",
+      "parse": "ok",
+      "canonical_sigless": "{\"type\":\"binding\",\"prefix\":\"1.5\",\"replaces\":\"1.0.1.0.1.0.2.3\"}",
+      "sig": "abcd",
+      "why": "every signed later binding's form: the row's own member, then replaces, then sig, as the endpoint's takes them"
+    },
+    {
+      "name": "binding_with_sig_before_replaces",
+      "kind": "binding",
+      "bytes": "{\"type\":\"binding\",\"prefix\":\"1.5\",\"sig\":\"abcd\",\"replaces\":\"1.0.1.0.1.0.2.3\"}",
+      "parse": "not_canonical",
+      "why": "sig is last where replaces stands too: the same members in another order are no record"
     },
     {
       "name": "sig_not_last",

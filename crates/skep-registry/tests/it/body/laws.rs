@@ -6,10 +6,11 @@
 //! its own encoding, of the kind named, its sig-less projection a fixpoint,
 //! and a record under one kind at most, `wrong_type` under the other. Every
 //! vector of the set meets them, under both kinds, and so does every
-//! one-byte mutant of every admitted vector and every seeded hostile body
-//! several edits from any vector, at every refusal the parse answers. Those
-//! laws hold what the parse admits and never see it refuse a body it owes,
-//! so THE ENCODER'S LAW stands beside them: every body a caller builds — any
+//! one-byte mutant of every admitted vector up to
+//! [`MAX_MUTANT_SOURCE_BYTES`] and every seeded hostile body several edits
+//! from any vector, at every refusal the parse answers. Those laws hold
+//! what the parse admits and never see it refuse a body it owes, so THE
+//! ENCODER'S LAW stands beside them: every body a caller builds — any
 //! number of origins, address members of any level and length, any `sig`
 //! string — is the record its encoding spells up to the cap, and `past_cap`
 //! past it. The vector set and its readers are the parent's, and the parent
@@ -208,9 +209,10 @@ fn one_byte_mutants() -> Vec<Vec<u8>> {
     mutants
 }
 
-/// THE PARSE'S LAWS ON EVERY ONE-BYTE MUTANT of every admitted vector
-/// ([`assert_the_laws_at`]) — the inputs no hand chose that stand nearest
-/// the records. The counts show the laws were tried on both sides.
+/// THE PARSE'S LAWS ON EVERY ONE-BYTE MUTANT of every admitted vector up
+/// to [`MAX_MUTANT_SOURCE_BYTES`] ([`assert_the_laws_at`]) — the inputs no
+/// hand chose that stand nearest the records. The counts show the laws were
+/// tried on both sides.
 #[test]
 fn the_parse_laws_hold_on_every_one_byte_mutant() {
     let mutants = one_byte_mutants();

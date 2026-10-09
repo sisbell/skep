@@ -102,10 +102,11 @@ fn the_vector_set_meets_one_answer_at_this_parser() {
             }
         }
     }
-    assert!(admitted >= 16 && refused >= 63, "{admitted} admitted, {refused} refused");
+    assert!(admitted >= 17 && refused >= 64, "{admitted} admitted, {refused} refused");
     // The vectors the lane names, the cap's two sides, the escape table's,
-    // and the sizes no reader's own bound may refuse and the digits no digit
-    // class may widen, each present by name.
+    // the canonical member order's, admitted and refused, and the sizes no
+    // reader's own bound may refuse and the digits no digit class may widen,
+    // each present by name.
     for required in [
         "binding_canonical",
         "binding_spec_example_spaced",
@@ -122,6 +123,12 @@ fn the_vector_set_meets_one_answer_at_this_parser() {
         "one_past_the_cap_with_sig",
         "past_the_cap",
         "binding_with_sig",
+        "binding_with_replaces_and_sig",
+        "endpoint_with_replaces_and_sig",
+        "type_not_first",
+        "replaces_before_prefix",
+        "sig_not_last",
+        "binding_with_sig_before_replaces",
         "strings_take_the_shortest_escapes_alone",
         "strings_past_ascii_stand_as_themselves",
         "escape_long_form_of_a_named_control",
@@ -142,7 +149,8 @@ fn the_vector_set_meets_one_answer_at_this_parser() {
 }
 
 /// The two spec examples, in canonical form, byte for byte and in length;
-/// the spaced spellings the spec shows are what the parse refuses; and the
+/// the same two with a space after each colon and comma, as REG-1.86 says a
+/// specification prints a body, are what the parse refuses; and the
 /// endpoint's origins are the org's list in the order its bytes write them,
 /// read off `into_vec` — the list the resolver walks — and never through
 /// the encoder, which would undo a reordering the parse made.
@@ -219,13 +227,14 @@ fn a_refusal_names_the_member_that_faulted() {
 /// number scan, the number scan before `type`, the member set before every
 /// member's form (the row's own, `sig` and `replaces` each by a case of its
 /// own), the members' forms one member at a time (`replaces`, then `sig`,
-/// then the row's own) — and the value stage's choices the parser adopts,
-/// where RFC 8259 leaves one: a member spelled twice read at its last
-/// occurrence; and no JSON in a value nested past 127 objects and arrays, a
-/// number too large for a 64-bit float (one that rounds to zero is read, and
-/// is `number`), an escaped unpaired surrogate, or a text opening on a
-/// byte-order mark. None of these is in the vector set: the set pins what
-/// every parser answers, and these pin this one.
+/// then the row's own, at each kind with the row's own faulty and with it
+/// absent) — and the value stage's choices the parser adopts, where RFC 8259
+/// leaves one: a member spelled twice read at its last occurrence; and no
+/// JSON in a value nested past 127 objects and arrays, a number too large
+/// for a 64-bit float (one that rounds to zero is read, and is `number`), an
+/// escaped unpaired surrogate, or a text opening on a byte-order mark. None
+/// of these is in the vector set: the set pins what every parser answers,
+/// and these pin this one.
 #[test]
 fn a_body_answers_the_first_stage_that_faults() {
     let nested = |arrays: usize| {
@@ -256,8 +265,17 @@ fn a_body_answers_the_first_stage_that_faults() {
         let answer = parse(BodyKind::Binding, text.as_bytes()).map_err(|r| r.token());
         assert_eq!(answer, Err(cause.to_owned()), "{text}");
     }
-    let answer = parse(BodyKind::Endpoint, br#"{"type":"endpoint","origins":[],"sig":true}"#);
-    assert_eq!(answer.unwrap_err().token(), "not_a_string:sig", "sig before the row's own");
+    // `sig` before the row's own member, at each kind: the member present
+    // and faulty, and absent — its absence answered at its own turn.
+    for (kind, text) in [
+        (BodyKind::Binding, r#"{"type":"binding","prefix":"x","sig":true}"#),
+        (BodyKind::Binding, r#"{"type":"binding","sig":true}"#),
+        (BodyKind::Endpoint, r#"{"type":"endpoint","origins":[],"sig":true}"#),
+        (BodyKind::Endpoint, r#"{"type":"endpoint","sig":true}"#),
+    ] {
+        let answer = parse(kind, text.as_bytes()).map_err(|r| r.token());
+        assert_eq!(answer, Err("not_a_string:sig".to_owned()), "sig before the row's own: {text}");
+    }
     let past = vec![0xff_u8; MAX_REGISTRY_RECORD_BYTES + 1];
     assert_eq!(
         parse(BodyKind::Binding, &past),

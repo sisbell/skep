@@ -288,7 +288,7 @@ impl Fixture {
 /// production row, since the classical row's deletion (the hybrid-only
 /// launch, AUTH-1.1): [`key_of`] at that row. The grammar is
 /// algorithm-agnostic (AUTH-1.4), so every vector built on this key tests
-/// the record's shape and not the row's arithmetic.
+/// the record's shape and not the row's algorithm.
 pub fn key(i: u8) -> PublicKey {
     key_of(KeyKind::MlDsa65Ed25519, i)
 }

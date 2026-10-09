@@ -105,10 +105,11 @@ impl TypeAddrs {
 /// AUTH-2.23 — the fold's view of one link deposit. Exactly TWO constructors
 /// build it, neither inventing a field: the fold hook
 /// (`home = document_of(addr)`, computed once — AUTH-2.82) in the host that
-/// folds, and the precheck a frame passes ahead of its commit (the frame's
-/// `home`). Address-form slots are constructed via M7's `enc`
-/// on ALL THREE slots (AUTH-2.24); `from` is in ENDSET ORDER and stays that
-/// way — no constructor may sort, dedup, or normalize it (AUTH-2.25).
+/// folds, and the precheck a request passes ahead of its commit (the request
+/// frame's `home` — AUTH-2.23's frame, the `make_link` op as sent,
+/// AUTH-3.17). Address-form slots are constructed via M7's `enc` on ALL THREE
+/// slots (AUTH-2.24); `from` is in ENDSET ORDER and stays that way — no
+/// constructor may sort, dedup, or normalize it (AUTH-2.25).
 ///
 /// PRECONDITION — `home` is a REGISTERED DOCUMENT, the only home M7's gate
 /// admits a link into. Both halves are the constructor's, and the fold checks
@@ -124,8 +125,8 @@ impl TypeAddrs {
 /// unallocated address under a registered principal as readily as a minted
 /// one (M3), so such a home passes item 2 and reaches item 3. The fold hook
 /// has both halves from `document_of` of a link M7 admitted; skepd's precheck
-/// takes the frame's `home` as sent, before M7 runs, and owes both ahead of
-/// `classify`.
+/// takes the request frame's `home` as sent, before M7 runs, and owes both
+/// ahead of `classify`.
 ///
 /// Outside the precondition the fold still decides what its order decides
 /// ahead of item 3's read: a `ty` naming no credential answers

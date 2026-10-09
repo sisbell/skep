@@ -289,8 +289,9 @@ pub struct BoardTerm {
     pub chain: [u8; 32],
 }
 
-/// ONE entry's `op` and `body` members, held together because they are one
-/// fact: each grammar has its own body, and the `op` token names which.
+/// ONE entry frame's `op` and `body` members — an entry's, or under the
+/// `record` token a record's — held together because they are one fact: each
+/// grammar has its own body, and the `op` token names which.
 /// Built only by [`entry_body_empty`], [`entry_body_insert`], the two
 /// `make_link` builders ([`entry_body_make_link`],
 /// [`entry_body_make_link_replacing`]), the three other link writes'
@@ -326,7 +327,7 @@ impl EntryBody {
 
 /// The body GRAMMARS — one per cell of the frame, the record grade's
 /// included — each naming its frame's `op` token and the shape of its `doc`
-/// term. Private: a body is minted only by its own builder, which names its
+/// term. Private: a body is built only by its own builder, which names its
 /// grammar, and a caller reads the token ([`EntryBody::op`]). Each answer
 /// below is an exhaustive match, so a grammar added here does not compile
 /// until it spells its token and says whether its frame names one home or
@@ -816,8 +817,9 @@ pub fn entry_body_record(rows: RecordRows<'_>) -> EntryBody {
 /// deposit's marker slot stays EMPTY at both of its commits (D27): this
 /// frame, under the signing key's token, is the whole of what that `sig`
 /// covers. Who signs and verifies over it, and what a record carrying no
-/// `sig` is answered, are the design record's (2a) — the record grade's
-/// writer, verifier and refusal — and the host's.
+/// `sig` is answered, are the design record's — (2a) for a credential
+/// record and (2b) for a registry record, the record grade's writer,
+/// verifier and refusal at each — and the host's.
 ///
 /// Every party to a record composes this one value — the signer before its
 /// deposit, the daemon at the record's `make_link`, a mirror off `find_links`

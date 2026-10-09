@@ -16,8 +16,8 @@ use crate::framing::{framed, KEY_TAG};
 /// D7, the owner 2026-09-23 "keep tag 1"; the TOKEN PIN RATIFIED 2026-09-26):
 /// ONE `ALGS` row over ONE concatenated raw value — the ML-DSA-65 (FIPS 204)
 /// public key, 1,952 bytes, THEN the Ed25519 public key, 32 bytes (the KEY
-/// PIN: the post-quantum half FIRST, the order the marker slot's blob takes
-/// too) — one entry, one fingerprint, one label (the design record §4.4). Its
+/// PIN: the post-quantum half FIRST, the order the row's blob takes too) —
+/// one entry, one fingerprint, one label (the design record §4.4). Its
 /// marker tag is `1` ([`SIG_ALGS`]). THE KEY KINDS ARE THE TWO HYBRID ROWS:
 /// there is no classical `ed25519` row and no `Ed25519` arm (the hybrid-only
 /// launch, owner 2026-09-26, "Q1 b delete it"), and tag 2's token
@@ -55,11 +55,13 @@ pub const FNDSA512_PREVIEW_ED25519_KEY_LEN: usize = FNDSA512_PREVIEW_KEY_LEN + E
 /// ITS OWN"): the commit marker's `sig_alg` byte, the [`ALGS`] token of the
 /// hybrid key that signs under it, and the fixed widths the tag's frozen
 /// rule pins — the post-quantum half's key and signature, the Ed25519
-/// half's being [`ED25519_KEY_LEN`] and 64 at every row. The blob a marker
-/// slot carries under the tag is the PQ signature THEN the Ed25519 signature
-/// (the design record §2.4's pin: two fixed-width fields, no length prefix,
-/// no parser), so [`SigAlgRow::sig_len`] is the slot's whole width and
-/// [`SigAlgRow::pq_sig_len`] is where the halves part.
+/// half's being [`ED25519_KEY_LEN`] and 64 at every row. The row's BLOB
+/// (AUTH-4.32) is the PQ signature THEN the Ed25519 signature (the design
+/// record §2.4's pin: two fixed-width fields, no length prefix, no parser),
+/// whichever carrier holds it — the marker slot at the entry grade; a
+/// record's `sig` at the record grade and the signed session body's `sig`,
+/// each read as a [`HybridBlob`] — so [`SigAlgRow::sig_len`] is the blob's
+/// whole width and [`SigAlgRow::pq_sig_len`] is where the halves part.
 ///
 /// Tag `0` is the EMPTY marker slot and has no row; tag `2` is RESERVED for
 /// the final FIPS 206 and has none yet. Under the frozen-tag rule a row, once
@@ -81,7 +83,7 @@ pub struct SigAlgRow {
     /// row's raw key; the Ed25519 half is the last [`ED25519_KEY_LEN`].
     pub pq_key_len: usize,
     /// The post-quantum half's signature width — the FIRST bytes of the
-    /// marker slot's blob; the Ed25519 half is the last 64.
+    /// row's blob; the Ed25519 half is the last 64.
     pub pq_sig_len: usize,
 }
 
@@ -108,8 +110,8 @@ impl SigAlgRow {
         SIG_ALGS.iter().find(|row| row.token == token)
     }
 
-    /// The marker slot's whole blob width under this tag: the PQ signature ‖
-    /// the Ed25519 signature (64).
+    /// The blob's whole width under this tag, in the marker slot and in a
+    /// `sig` member alike: the PQ signature ‖ the Ed25519 signature (64).
     pub const fn sig_len(&self) -> usize {
         self.pq_sig_len + 64
     }
@@ -417,8 +419,8 @@ impl PublicKey {
 
     /// THE ED25519 HALF — the last 32 raw bytes of a hybrid key, whichever
     /// row it is: the half the Ed25519 signature of every blob — a session's
-    /// (AUTH-4.32) and an entry's alike — verifies under, beside the
-    /// post-quantum half's; no half opens anything alone.
+    /// (AUTH-4.32), an entry's and a record's alike — verifies under, beside
+    /// the post-quantum half's; no half opens anything alone.
     pub fn ed25519_half(&self) -> &[u8; ED25519_KEY_LEN] {
         self.halves().1
     }

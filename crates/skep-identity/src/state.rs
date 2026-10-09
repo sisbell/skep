@@ -676,14 +676,14 @@ fn delegator(ctx: &impl FoldCtx, a: &Address) -> Option<Delegator> {
 /// address. An element-level one debug-asserts.
 ///
 /// PUBLIC, though AUTH-2.126 declares it crate-private: M3 computes the same
-/// slot as `skep_namespace::first_document_address`, a crate this one cannot
-/// depend on (AUTH-2.1), so the two agree by value and not by one function.
-/// skepd's suite, which links both, holds them equal at every account-level
-/// operand (`crates/skepd/tests/it/doc_one.rs`) and states where they part:
-/// at a node-level prefix this arithmetic still answers `N·0·1`, the node's
-/// first ACCOUNT, where M3's answers `None`. The difference moves no
-/// verdict: a home is a document and `N·0·1` is not, so the pin refuses
-/// there either way.
+/// address as `skep_namespace::first_document_address`, a crate this one
+/// cannot depend on (AUTH-2.1), so the two agree by value and not by one
+/// function. skepd's suite, which links both, holds them equal at every
+/// account-level operand (`crates/skepd/tests/it/doc_one.rs`) and states
+/// where they part: at a node-level prefix this arithmetic still answers
+/// `N·0·1`, the node's first ACCOUNT, where M3's answers `None`. The
+/// difference moves no verdict: a home is a document and `N·0·1` is not, so
+/// the pin refuses there either way.
 pub fn doc_1_of(a: &Address) -> Address {
     match checked_inc(a, 2) {
         Ok(doc) => doc,

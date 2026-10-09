@@ -27,8 +27,9 @@ use crate::seam::Values;
 /// silently and in release. Nothing here checks it and there is nothing to
 /// check — `home` is the caller's own datum. [`LinkDeposit`]'s PRECONDITION
 /// places it on that type's constructors (AUTH-2.23) — the fold hook has it
-/// from `document_of`, skepd's precheck owes it of the frame's `home` — and a
-/// non-folding reader LINKING this function (AUTH-2.37) owes the same.
+/// from `document_of`, skepd's precheck owes it of the request frame's
+/// `home` — and a non-folding reader LINKING this function (AUTH-2.37) owes
+/// the same.
 ///
 /// [`LinkDeposit`]: crate::LinkDeposit
 ///

@@ -45,10 +45,10 @@
 //!   grades' — with each signature and marker tag read against this crate's
 //!   tables.
 //! * `skep-signature`, the one crate that links the signature libraries
-//!   (AUTH-2.2), holds each marker tag's arithmetic over the marker-tag
-//!   table's rows and a hybrid key's two halves, composing a key at keygen
-//!   and reading its halves to verify; skepd, the signing client and the
-//!   resolver call its verify.
+//!   (AUTH-2.2), holds each marker tag's frozen rules — its verification and
+//!   its keygen-from-seed — over the marker-tag table's rows and a hybrid
+//!   key's two halves, composing a key at keygen and reading its halves to
+//!   verify; skepd, the signing client and the resolver call its verify.
 //! * `skep-client`, the SIGNING CLIENT, holds keys, spells credential records
 //!   and composes the frames it signs; its reader's verifier composes the
 //!   same frames back and checks each record's `sig` over them.
@@ -89,12 +89,13 @@
 //! item the spec declares crate-private is published too: [`doc_1_of`]
 //! (AUTH-2.126), since every honored credential link is homed in a doc 1
 //! (AUTH-2.127) and a reader holding no M3 — a mirror or an audit tool
-//! embedding this crate — computes that address here. M3 spells the slot as
-//! `first_document_address`, which AUTH-2.1's dependency set keeps out of
-//! this crate, and skepd's suite holds the two equal at every account. The
-//! named reader is why each of these is public, whether or not a crate of
-//! this workspace calls it today, and the suite's `surface.rs` names each of
-//! them from outside the crate, so narrowing one fails the build there.
+//! embedding this crate — computes that address here. M3 computes the same
+//! address as `first_document_address`, which AUTH-2.1's dependency set
+//! keeps out of this crate, and skepd's suite holds the two equal at every
+//! account. The named reader is why each of these is public, whether or not
+//! a crate of this workspace calls it today, and the suite's `surface.rs`
+//! names each of them from outside the crate, so narrowing one fails the
+//! build there.
 //!
 //! ## What lives here
 //!
@@ -119,7 +120,7 @@
 //! * `entry`: THE ENTRY FRAME under [`ENTRY_TAG`] — the bytes a publish-class
 //!   entry's signature, or a record's `sig`, is made over: [`entry_frame`],
 //!   its terms [`BoardTerm`] and [`DocTerm`], and the [`EntryBody`] each
-//!   grammar's builders mint; the `publish` body's budgeted builder
+//!   grammar's builders return; the `publish` body's budgeted builder
 //!   [`PublishBody`], with its refusal [`PublishRefusal`], in the child module
 //!   `entry::publish`, the one module its fields are visible to; and
 //!   [`RecordFrame`], the record grade's frame (signed ops; the design record

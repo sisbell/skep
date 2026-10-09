@@ -402,7 +402,7 @@ fn the_publish_body_is_its_count_then_its_segments_then_the_base_group() {
         .concat(),
         "one value, no base: count 1, one stretch, the EMPTY group"
     );
-    // All three classes with a base: two values (one stretch), a window
+    // Both classes, and a base: two values (one stretch), a window
     // of three positions, one more value (a SECOND stretch, since the
     // window parted them), the base `1.0.1.0.1.2` at extent 5 — six
     // positions in all. The count is the positions, not the segments; the
@@ -690,12 +690,12 @@ fn a_publish_budget_of_the_empty_body_finishes_to_it_and_admits_nothing() {
 }
 
 /// …and below it `within` REFUSES, naming the cause, in either shape of the
-/// group as at it: a builder minted past its own budget would finish to the
-/// over-budget body the type exists to refuse rather than build, with no push
-/// to refuse it. The PRESENT group is the shape a floor fixed at the birth
-/// shape's twelve bytes would pass — the member's address-list row and the
-/// extent are thirty-two bytes more — so each shape is asked one byte below
-/// its own floor. Then the case the refusal exists for: ONE budget, a
+/// group as at it: a builder constructed past its own budget would finish to
+/// the over-budget body the type exists to refuse rather than build, with no
+/// push to refuse it. The PRESENT group is the shape a floor fixed at the
+/// birth shape's twelve bytes would pass — the member's address-list row and
+/// the extent are thirty-two bytes more — so each shape is asked one byte
+/// below its own floor. Then the case the refusal exists for: ONE budget, a
 /// kilobyte, that holds the body of no segments over an ordinary base, and a
 /// base member deep enough that its group alone passes it. The group holds
 /// the member's address, which the shot's author names (bu7-E2), so a budget
@@ -720,7 +720,7 @@ fn a_publish_budget_below_the_empty_body_is_refused_at_within() {
     assert_eq!(
         PublishBody::within(1024, Some(ShotBase { member: &deep_member, extent: 3 })).err(),
         Some(PublishRefusal::PastBudget),
-        "a base member spelled past the budget is refused at the mint"
+        "a base member spelled past the budget is refused at construction"
     );
 }
 

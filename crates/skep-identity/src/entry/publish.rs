@@ -1,7 +1,7 @@
 //! THE `publish` BODY — the cell [`entry_body_publish`] spells, and
 //! [`PublishBody`] builds piece by piece under a byte budget — in a module of
 //! its own for one reason: the builder's fields are private HERE. No code
-//! outside this file can mint a [`PublishBody`] but through
+//! outside this file can construct a [`PublishBody`] but through
 //! [`PublishBody::within`], or grow one but through [`PublishBody::push`] and
 //! [`PublishBody::window`], so the standing invariant its card states — never
 //! past its budget, never short of a piece it was offered — rests on the code
@@ -189,8 +189,8 @@ pub fn entry_body_publish<'a>(
 ///
 /// Its standing INVARIANT is the one the budget exists for: the body built so
 /// far, its leading count and the base group [`PublishBody::finish`]
-/// appends included, never passes `budget` bytes — [`PublishBody::within`]
-/// establishes it at the type's one mint site, refusing a budget the body of
+/// appends included, never passes `budget` bytes — [`PublishBody::within`],
+/// the type's one constructor, establishes it, refusing a budget the body of
 /// no segments already passes, and each of its two growth sites,
 /// [`PublishBody::push`] and [`PublishBody::window`], keeps it or refuses, so
 /// `finish` never answers a body past its budget.
@@ -238,9 +238,9 @@ impl PublishBody {
     /// caller's: the base group holds the base MEMBER's address (V; bu7-E2),
     /// which the shot's author names, at a length the author chooses, so
     /// whether a budget holds the body of no segments depends on the shot.
-    /// Minted past its own budget, the builder would finish to an over-budget
-    /// body no push or window had refused — the one body the type exists to
-    /// refuse rather than build.
+    /// Constructed past its own budget, the builder would finish to an
+    /// over-budget body no push or window had refused — the one body the type
+    /// exists to refuse rather than build.
     ///
     /// PRECONDITION — the base group is shorter than 2^32 bytes: the member's
     /// spelling and the twenty-one bytes the group puts around it (the
@@ -367,9 +367,10 @@ const _: fn() = || {
     let _ = <PublishBody as AmbiguousIfClone<_>>::check;
 };
 
-/// Why [`PublishBody`] refused — at its mint, the body of no segments already
-/// past the budget, or at a piece, the builder GONE with it, as every refusal
-/// after the mint leaves it — NAMED, because a caller answers the two
+/// Why [`PublishBody`] refused — at its construction
+/// ([`PublishBody::within`]), the body of no segments already past the
+/// budget, or at a piece, the builder GONE with it, as every refusal after
+/// construction leaves it — NAMED, because a caller answers the two
 /// differently: a body PAST ITS BUDGET is the one the builder exists to
 /// refuse rather than build; a count past the body's leading `be64` names
 /// positions no store holds. What each is answered is the caller's: a

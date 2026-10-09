@@ -16,12 +16,12 @@
 //! and the `M5State` method calls no path records; each other module is one
 //! subject. Nothing but module declarations belongs here.
 //!
-//! This binary compiles as a FOREIGN crate, so it also witnesses the sealing
-//! claims: `M5Rec` cannot be built here, `Run` fields cannot be reached or
-//! mutated (accessors only), and every suite drives the system through
-//! `Vstream`/`stage_seat_link`/`seat_link` alone. It witnesses the other half
-//! of the public API too — the standard traits the public values carry, which
-//! a foreign crate could not add for itself.
+//! This binary compiles as a FOREIGN crate, so it drives M5 as one does —
+//! through `Vstream`, `stage_seat_link` and `seat_link` — and witnesses the
+//! half of the public API a foreign crate could not add for itself: the
+//! standard traits the public values carry. The seals a foreign crate meets
+//! cannot be witnessed by code that compiles; the `compile_fail` pairs on
+//! `Run` and `M5Rec` pin them, and the gate runs them as doctests.
 
 mod common;
 

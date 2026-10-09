@@ -156,31 +156,50 @@ fn one_spec_over_a_fragmented_source_is_refused_at_the_cap_not_after_it() {
     // §5: a spec list is one multiplier of the source's fragmentation and
     // the SPAN is the other — a single spec over a heavily fragmented
     // source names as many runs as the source holds in range. The cap
-    // therefore has to bind one spec, and because the resolution is pulled
-    // lazily the refusal arrives AT the cap: the accumulator never holds
-    // more than the budget, whatever the source's run count.
+    // therefore has to bind one spec, and it is measured as each run is
+    // accumulated, so the refusal arrives AT the cap: the walk stops there,
+    // whatever the source's run count, and never reaches a run past it.
     let p1 = Caller::Principal(PrincipalId(1));
-    // Non-adjacent starts (`shift(ca(2k), 1) = ca(2k + 1) ≠ ca(2k + 2)`),
-    // so nothing coalesces and the source really holds this many runs.
-    let over_budget_run_count = MAX_PLACED_RUNS + 1;
-    let present: Vec<u32> = (1..=over_budget_run_count as u32).map(|k| 2 * k).collect();
-    let runs: Vec<Run> = present.iter().map(|&k| run(&ca(k), 1)).collect();
+    // Non-adjacent starts (`shift(ca(2k), 1) = ca(2k + 1) ≠ ca(2k + 2)`), so
+    // nothing coalesces: the budget's runs, the one past it, and one more
+    // whose start the store does not hold — a hole only a walk past the cap
+    // reaches.
+    let source_run_count = MAX_PLACED_RUNS + 2;
+    let runs: Vec<Run> = (1..=source_run_count as u32)
+        .map(|k| run(&ca(2 * k), 1))
+        .collect();
+    let present: Vec<u32> = (1..source_run_count as u32).map(|k| 2 * k).collect();
     let k = gate_kernel_arranging(runs, &present);
     assert_eq!(
         k.snapshot().world().m5().content_runs(&doc1()).len(),
-        over_budget_run_count,
+        source_run_count,
         "the source arranges one run per placed address"
     );
-    // ONE spec, whose span covers the whole source.
+    // ONE spec over the whole source: refused at run MAX_PLACED_RUNS + 1, so
+    // never walked to the hole after it — a cap measured after the spec, or
+    // after the spec list, would reach it and answer `DanglingSource`.
     let whole = [VSpec {
         source: doc1(),
-        span: vspan(1, 1, over_budget_run_count as u32),
+        span: vspan(1, 1, source_run_count as u32),
     }];
     assert!(matches!(
         rejected(Vstream::new(&k).copy(p1, &doc2(), vp(1, 1), &whole)),
         CopyError::TooManyRuns
     ));
     assert_eq!(k.snapshot().world().m5().content_count(&doc2()), n(0));
+    // The hole is real: a spec over the last run alone is walked to it.
+    assert!(matches!(
+        rejected(Vstream::new(&k).copy(
+            p1,
+            &doc2(),
+            vp(1, 1),
+            &[VSpec {
+                source: doc1(),
+                span: vspan(1, source_run_count as u32, 1),
+            }]
+        )),
+        CopyError::DanglingSource
+    ));
     // A span inside the budget over the same source still commits, so the
     // refusal above is about the count and not about the source.
     Vstream::new(&k)
@@ -225,16 +244,21 @@ fn copy_charges_each_specs_walk_at_its_sources_run_count_before_resolving_it() {
     // what they place. Each spec is charged its source's WHOLE run count
     // ahead of its walk, the charges summed in spec order, and a copy whose
     // sum passes `MAX_COPY_RESOLVE_STEPS` is refused `TooManyRuns`, whatever
-    // its specs would keep and before the crossing spec is walked. The charge
-    // is the worst case, so a spec opening at the source's first position is
-    // charged as one opening past its last; and at the budget the copy is
-    // walked and placed.
+    // its specs would keep and before the crossing spec is walked — which the
+    // source's one absent start makes visible, a walk reaching it answering
+    // `DanglingSource`. The charge is the worst case, so a spec opening at the
+    // source's first position is charged as one opening past its last; and at
+    // the budget the copy is walked and placed.
     let p1 = Caller::Principal(PrincipalId(1));
     let source_run_count: usize = 1024;
     // Non-adjacent starts, so nothing coalesces and the source really holds
     // this many runs.
-    let present: Vec<u32> = (1..=source_run_count as u32).map(|k| 2 * k).collect();
-    let runs: Vec<Run> = present.iter().map(|&k| run(&ca(k), 1)).collect();
+    let runs: Vec<Run> = (1..=source_run_count as u32)
+        .map(|k| run(&ca(2 * k), 1))
+        .collect();
+    // The store holds every start but the LAST: a spec reaching that run is
+    // refused `DanglingSource` — if it is walked.
+    let present: Vec<u32> = (1..source_run_count as u32).map(|k| 2 * k).collect();
     let k = gate_kernel_arranging(runs, &present);
     assert_eq!(
         k.snapshot().world().m5().content_run_count(&doc1()),
@@ -256,6 +280,10 @@ fn copy_charges_each_specs_walk_at_its_sources_run_count_before_resolving_it() {
         source: doc1(),
         span: vspan(1, source_run_count as u32 + 1, 1),
     };
+    let last = VSpec {
+        source: doc1(),
+        span: vspan(1, source_run_count as u32, 1),
+    };
     let specs = |spec: &VSpec, count: usize| -> Vec<VSpec> {
         std::iter::repeat_with(|| spec.clone())
             .take(count)
@@ -274,6 +302,19 @@ fn copy_charges_each_specs_walk_at_its_sources_run_count_before_resolving_it() {
     assert!(matches!(
         rejected(Vstream::new(&k).copy(p1, &doc2(), vp(1, 1), &crossing)),
         CopyError::TooManyRuns
+    ));
+    // AHEAD of the walk, visibly: a crossing spec that would walk onto the
+    // absent start is refused `TooManyRuns`, never `DanglingSource`.
+    let mut crossing_onto_the_hole = specs(&first, at_budget);
+    crossing_onto_the_hole.push(last.clone());
+    assert!(matches!(
+        rejected(Vstream::new(&k).copy(p1, &doc2(), vp(1, 1), &crossing_onto_the_hole)),
+        CopyError::TooManyRuns
+    ));
+    // Under the budget the same spec is walked, and refused for the hole.
+    assert!(matches!(
+        rejected(Vstream::new(&k).copy(p1, &doc2(), vp(1, 1), &specs(&last, 1))),
+        CopyError::DanglingSource
     ));
     // Under the budget a spec past the end is walked, and keeps nothing.
     assert!(matches!(

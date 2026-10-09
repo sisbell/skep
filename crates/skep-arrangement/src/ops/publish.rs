@@ -114,7 +114,9 @@ where
     /// among them. A later content mint under that content chain moves its
     /// frontier past them.
     /// `the_values_a_shot_says_it_reinserts_are_the_values_its_commit_writes`
-    /// pins the order, the content chain and the "nothing else".
+    /// pins the order, the content chain and the "nothing else", and
+    /// `a_shot_judges_every_address_it_names_as_the_document_it_projects_to`
+    /// the content chain of a shot a member names.
     ///
     /// Check order (which error wins), PUB-6.36's slots: `DocNotRegistered`
     /// → `NotOwner` (slot 1, ω on the address named — the only question the

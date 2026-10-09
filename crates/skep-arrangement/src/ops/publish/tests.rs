@@ -1,7 +1,8 @@
 //! The publish shot's in-crate claims — its run budget at both sites, its
-//! re-insert budget, and its empty member — in a world whose three slices are
-//! seeded apart, so a head can arrange more runs than a test could build by
-//! transactions, and a draft can name values that were never stored.
+//! re-insert budget, its empty member, and a refusal after its re-insert is
+//! staged — in a world whose three slices are seeded apart, so a head can
+//! arrange more runs than a test could build by transactions, and a draft can
+//! name values that were never stored.
 
 use serde::{Deserialize, Serialize};
 use skep_content::{stage_write, ContentStore, Val};
@@ -9,9 +10,10 @@ use skep_kernel::Kernel;
 use skep_namespace::PrincipalId;
 
 use super::*;
+use crate::deposit::Deposit;
 use crate::shot::{Base, ShotRun};
 use crate::state::M5State;
-use crate::testutil::{a, ca, doc1, mem_kernel_of, n, pca, pdoc, rejected, run, seeded_m3};
+use crate::testutil::{a, ca, doc1, mem_kernel_of, n, pca, pdoc, rejected, run, seeded_m3, vp};
 
 /// A world carrying all three slices the SHOT touches — M3 (its member's
 /// mint), M4 (the existence check and the re-insert's writes) and M5 (the
@@ -308,4 +310,65 @@ fn an_empty_shot_mints_its_member_places_nothing_and_journals_its_terms() {
         "the terms are journaled all the same"
     );
     assert_eq!(m5.birth_extent(&member), None, "the chain's second member is no birth version");
+}
+
+#[test]
+fn a_shot_refused_after_its_reinsert_is_staged_leaves_no_mint_no_write_and_no_member() {
+    // "A rejection leaves no state change" where it is more than trivially
+    // true: the draft's one value re-inserted — a mint and a write staged —
+    // ahead of a carried tail of exactly the budget, which it pushes one run
+    // past. The refusal leaves no `Seq`, no value, no move of the trunk's
+    // content frontier and no member (PUB-2.33's ONE commit). One carried run
+    // shorter, the same shot commits, its re-insert landing where the refused
+    // one staged its mint.
+    let p1 = Caller::Principal(PrincipalId(1));
+    let ordinals: Vec<u32> = (1..=MAX_PLACED_RUNS as u32 + 1).map(|o| 2 * o).collect();
+    let head_runs: Vec<Run> = ordinals.iter().map(|&o| run(&pca(o), 1)).collect();
+    let k = shot_kernel(head_runs, &ordinals);
+    let vs = Vstream::new(&k);
+    let d = vec![Val::new(&b"d"[..])];
+    vs.insert(p1, &doc1(), vp(1, 1), d, Deposit::Undeclared)
+        .expect("the draft holds one value, at ca(1)");
+    let anyone = |_: &ShotWorld, _: &Address| true;
+    let carrying_past = |extent: u32| Shot {
+        base: Some(Base {
+            member: pdoc_member(),
+            extent: n(extent),
+        }),
+        draft: Some(doc1()),
+        runs: vec![ShotRun {
+            origin: doc1(),
+            run: run(&ca(1), 1),
+        }],
+    };
+    let before = k.current_seq();
+    let stored = k.snapshot().world().content().len();
+    let frontier = k.snapshot().world().m3().next_content_address(&pdoc());
+    assert!(matches!(
+        rejected(vs.publish(p1, &pdoc(), &carrying_past(1), &anyone)),
+        PublishError::TooManyRuns
+    ));
+    let s = k.snapshot();
+    let (m3, content) = (s.world().m3(), s.world().content());
+    assert_eq!(k.current_seq(), before, "no Seq drawn");
+    assert_eq!(content.len(), stored, "the staged write is gone");
+    assert_eq!(
+        m3.next_content_address(&pdoc()),
+        frontier,
+        "the staged mint is gone"
+    );
+    assert!(
+        !m3.is_registered_document(&a(&[1, 0, 1, 0, 3, 2])),
+        "no member"
+    );
+    let (member, _) = vs
+        .publish(p1, &pdoc(), &carrying_past(2), &anyone)
+        .expect("the re-insert and a tail one run shorter place exactly the budget");
+    let s = k.snapshot();
+    assert_eq!(s.world().m5().content_run_count(&member), MAX_PLACED_RUNS);
+    assert_eq!(
+        s.world().m5().point(&member, &vp(1, 1)),
+        frontier,
+        "the re-insert lands where the refused one staged its mint"
+    );
 }

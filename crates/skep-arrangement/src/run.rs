@@ -48,6 +48,40 @@ use skep_address::{intersect, ordinal, shift, validate, Address, Nat, Span, Tumb
 /// justifies the `.expect`s in the run's own position arithmetic — they rest
 /// on the type, not on M2's checkpoint integrity.
 ///
+/// The seal as a foreign crate meets it, a PAIR: the twin builds a run through
+/// the door and reads it back, and each refusal below it is one line from the
+/// twin — a struct literal, then a field written. A bare `compile_fail` is
+/// satisfied by ANY compile error, so the twin is what keeps each refusal a
+/// statement about the fields' privacy: were the surrounding code to stop
+/// compiling for another reason, the twin turns red. (The error codes are
+/// checked on nightly only.)
+///
+/// ```
+/// use skep_address::{validate, Nat, Tumbler};
+/// use skep_arrangement::Run;
+/// let comps = [1u32, 0, 1, 0, 1, 0, 1, 1].map(Nat::from);
+/// let start = validate(Tumbler::new(comps).unwrap()).unwrap();
+/// let run = Run::new(start.clone(), Nat::from(2u32)).unwrap();
+/// assert_eq!((run.i_start(), run.width()), (&start, &Nat::from(2u32)));
+/// ```
+/// ```compile_fail,E0451
+/// use skep_address::{validate, Nat, Tumbler};
+/// use skep_arrangement::Run;
+/// let comps = [1u32, 0, 1, 0, 1, 0, 1, 1].map(Nat::from);
+/// let start = validate(Tumbler::new(comps).unwrap()).unwrap();
+/// let run = Run { i_start: start.clone(), width: Nat::from(2u32) };
+/// assert_eq!((run.i_start(), run.width()), (&start, &Nat::from(2u32)));
+/// ```
+/// ```compile_fail,E0616
+/// use skep_address::{validate, Nat, Tumbler};
+/// use skep_arrangement::Run;
+/// let comps = [1u32, 0, 1, 0, 1, 0, 1, 1].map(Nat::from);
+/// let start = validate(Tumbler::new(comps).unwrap()).unwrap();
+/// let mut run = Run::new(start.clone(), Nat::from(2u32)).unwrap();
+/// run.width = Nat::from(0u32);
+/// assert_eq!((run.i_start(), run.width()), (&start, &Nat::from(2u32)));
+/// ```
+///
 /// `Hash` agrees with `Eq`: a run IS its start and its width, so a set or map
 /// keyed on runs keys on exactly that pair, and no caller spells a proxy key
 /// that could drop half of it. There is no `Ord`. A run's place in an

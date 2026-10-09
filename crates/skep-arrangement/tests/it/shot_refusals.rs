@@ -940,15 +940,67 @@ fn a_stated_origin_or_draft_that_is_no_document_is_refused_not_projected() {
 }
 
 #[test]
-fn a_shot_refused_at_its_last_check_leaves_no_member_no_mint_and_no_placement() {
-    // PUB-2.33's ONE COMMIT, from the refusal side. The composite's mints
-    // and writes are staged inside the one closure whose rejection M2
-    // discards whole, and the kernel offers no fault-injection point
-    // between them and the commit — so the residue claim is witnessed at
-    // the one seam the kernel has: a shot refused at its LAST check (the
-    // dangling run, listed behind the draft-native run it would have
-    // re-inserted) leaves the head, the chain, the content chain and the
-    // arrangement exactly as they were.
+fn a_shot_named_by_a_member_is_gated_as_named_and_judged_as_its_document() {
+    // PUB-2.15 on the shot's own `doc`, where the projection MOVES it:
+    // registration and ω are the ADDRESS NAMED's (slot 1), publication the
+    // DOCUMENT's (slot 5) — as the four edits and `version` are judged. The
+    // fixture stamps each member with the bit its document does NOT carry,
+    // and a member address the chain never minted names nothing, though its
+    // trunk is registered and P1's.
+    let k = mem_kernel_of(genesis_with_members());
+    let vs = Vstream::new(&k);
+    let readable = readable_by(PrincipalId(1));
+    let shot = |base: Option<Base>| Shot {
+        base,
+        draft: None,
+        runs: vec![],
+    };
+    let member_of_draft = a(&[1, 0, 1, 0, 1, 1]); // stamped published; doc1 is private
+    let member_of_edition = a(&[1, 0, 1, 0, 3, 1]); // stamped private; pdoc is published
+    let before = k.current_seq();
+    // Gated on the trunk instead, this would pass slot 1 and answer
+    // `BaseSuperseded`, pdoc's chain having a member.
+    assert!(matches!(
+        rejected(vs.publish(P1, &a(&[1, 0, 1, 0, 3, 7]), &shot(None), &readable)),
+        PublishError::DocNotRegistered
+    ));
+    // The payload is the address named, not the document it projects to.
+    assert!(matches!(
+        rejected(vs.publish(
+            Caller::Principal(PrincipalId(2)),
+            &member_of_edition,
+            &shot(None),
+            &readable
+        )),
+        PublishError::NotOwner(d) if d == member_of_edition
+    ));
+    // Read off the member's own bit, this would answer `BaseSuperseded`.
+    assert!(matches!(
+        rejected(vs.publish(P1, &member_of_draft, &shot(None), &readable)),
+        PublishError::PrivateSourceVersionless
+    ));
+    assert_eq!(k.current_seq(), before, "every refusal commits nothing");
+    // Read off the member's own bit, this would be refused as private.
+    let off_the_member = shot(Some(base(&member_of_edition, 0)));
+    let (member, _) = vs
+        .publish(P1, &member_of_edition, &off_the_member, &readable)
+        .expect("a member of a published document is shot as its document");
+    assert_eq!(member, a(&[1, 0, 1, 0, 3, 2]));
+    assert!(
+        k.snapshot().world().m3().published(&member),
+        "born published"
+    );
+}
+
+#[test]
+fn a_shot_refused_for_a_dangling_run_leaves_no_member_no_mint_and_no_placement() {
+    // PUB-2.33's ONE COMMIT, from the refusal side, over the whole assembly:
+    // a shot refused for a dangling run listed behind a draft-native run
+    // leaves the head, the chain, the content chain and the arrangement as
+    // they were. The existence walk runs ahead of the re-insert, so this
+    // refusal arrives before anything is staged; the refusal AFTER a staged
+    // re-insert — the run budget's — is pinned in `ops::publish::tests`,
+    // whose world can seed a head of the budget's runs.
     let k = mem_kernel();
     let vs = deposit_abc(&k);
     insert_abc(&k);

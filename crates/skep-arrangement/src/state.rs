@@ -265,6 +265,33 @@ pub struct ShotTerms {
 /// M5's own crate — [`M5State::apply_m5`] matches and destructures freely —
 /// and the engine needs neither, `From`-lifting and folding the record whole.
 ///
+/// The variant seal as a foreign crate meets it, a PAIR: the twin reaches a
+/// record through the step that stages it and matches it; the refusal's one
+/// difference is the struct literal. A bare `compile_fail` is satisfied by
+/// ANY compile error, so the twin is what keeps the refusal a statement about
+/// the seal. (The error code is checked on nightly only.)
+///
+/// ```
+/// use skep_address::{validate, Nat, Tumbler};
+/// use skep_arrangement::{stage_seat_link, M5Rec, M5State};
+/// let address = |comps: &[u32]| {
+///     validate(Tumbler::new(comps.iter().map(|&c| Nat::from(c))).unwrap()).unwrap()
+/// };
+/// let (doc, link) = (address(&[1, 0, 1, 0, 1]), address(&[1, 0, 1, 0, 1, 0, 2, 1]));
+/// let rec = stage_seat_link(&M5State::genesis(), &doc, &link).unwrap();
+/// assert!(matches!(rec, M5Rec::LinkSeat { .. }));
+/// ```
+/// ```compile_fail,E0639
+/// use skep_address::{validate, Nat, Tumbler};
+/// use skep_arrangement::{stage_seat_link, M5Rec, M5State};
+/// let address = |comps: &[u32]| {
+///     validate(Tumbler::new(comps.iter().map(|&c| Nat::from(c))).unwrap()).unwrap()
+/// };
+/// let (doc, link) = (address(&[1, 0, 1, 0, 1]), address(&[1, 0, 1, 0, 1, 0, 2, 1]));
+/// let rec = M5Rec::LinkSeat { doc, link };
+/// assert!(matches!(rec, M5Rec::LinkSeat { .. }));
+/// ```
+///
 /// It grows at its END only: the journal writes a variant as its index and
 /// its fields in order, with no framing (bincode), so a new variant is
 /// appended after the last and no variant or field is ever inserted or

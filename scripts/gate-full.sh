@@ -50,6 +50,11 @@ cargo check -p skep-arrangement --lib || exit $?
 RUSTDOCFLAGS="-D rustdoc::broken_intra_doc_links -D rustdoc::private_intra_doc_links" \
     cargo doc -p skep-arrangement --lib --no-deps --document-private-items || exit $?
 
+# …and its doctests, which no nextest run reaches: the `compile_fail` pairs
+# on `Run` and `M5Rec` pin the seals a foreign crate meets, and a doctest the
+# gate never runs pins nothing.
+cargo test -p skep-arrangement --doc || exit $?
+
 # skep-content's library without `test-hooks` — every test build turns it on
 # (the crate's self dev-dependency, and skep-retrieval's), so this is the
 # build that shows the store compiles without `write` and without the two

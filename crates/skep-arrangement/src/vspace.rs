@@ -213,6 +213,43 @@ mod tests {
     }
 
     #[test]
+    fn the_constructor_yields_a_span_exactly_when_the_count_is_positive_whatever_the_position() {
+        // The law over positions no one chose — zero and the wire's widest
+        // natural among them: where M1's T12 refused one, this public
+        // function would panic rather than answer.
+        let widest = Nat::from(10u32).pow(4096) - n(1);
+        let naturals = [n(0), n(1), n(2), n(7), Nat::from(u64::MAX), widest];
+        for subspace in &naturals {
+            for ordinal in &naturals {
+                for count in &naturals {
+                    let at = VPos {
+                        subspace: subspace.clone(),
+                        ordinal: ordinal.clone(),
+                    };
+                    let built = ordinal_vspan(at, count.clone());
+                    assert_eq!(
+                        built.is_some(),
+                        !count.is_zero(),
+                        "[{subspace}, {ordinal}] × {count}"
+                    );
+                    if let Some(span) = built {
+                        assert_eq!(
+                            as_ordinal_vspan(&span)
+                                .expect("what the constructor builds, the reader reads"),
+                            OrdinalVSpan {
+                                subspace,
+                                ordinal,
+                                count
+                            },
+                            "[{subspace}, {ordinal}] × {count}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
     fn a_v_position_is_its_subspace_and_ordinal_in_that_order() {
         // Why the constructor takes a VPos and not two naturals: the two
         // components are not interchangeable, and a transposed pair names a

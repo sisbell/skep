@@ -671,10 +671,11 @@ fn a_shot_judges_every_address_it_names_as_the_document_it_projects_to() {
     // projects to, which must be registered; and one own run is a deposit the
     // head took NAMED BY THE HEAD, so minted under the member's content chain.
     // Judged as documents, the draft's run is re-inserted — the one value the
-    // count says, and no address of the draft in the member (PUB-2.41) — and
-    // the run minted under the member's content chain is the document's own
-    // on BOTH sides of the address form, spelled by value as the client's
-    // body is.
+    // count says, and no address of the draft in the member (PUB-2.41) — the
+    // value it re-inserts lands under the TRUNK's content chain, not the
+    // head's, and the run minted under the member's content chain is the
+    // document's own on BOTH sides of the address form, spelled by value as
+    // the client's body is.
     let k = mem_kernel();
     let vs = deposit_abc(&k); // pdoc: a b c at pca(1..3), memberless
     insert_abc(&k); // the staging draft doc1: a b c at ca(1..3)
@@ -732,6 +733,19 @@ fn a_shot_judges_every_address_it_names_as_the_document_it_projects_to() {
         }),
         "no address of the draft in the member (PUB-2.41)"
     );
+    // WHERE the fresh identity lands, the shot named by the head: under the
+    // content chain of the document the head projects to — the trunk's
+    // fourth address, past the edition's three — and nothing under the
+    // head's own content chain, which holds `z` alone. skep-media's cell
+    // index reads the trunk's content chain for it; minted under the head's,
+    // the index would read the edition's own last address in its place.
+    assert_eq!(
+        run_starts(m5, &member),
+        vec![pca(1), vca(1), w.clone(), pca(4)],
+        "the draft's `c` re-inserted at the trunk's next address"
+    );
+    assert_eq!(s.world().m3().next_content_address(&pdoc()), Some(pca(5)));
+    assert_eq!(s.world().m3().next_content_address(&head), Some(vca(2)));
     let terms = m5
         .shot_terms(&member)
         .expect("the shot's member carries its terms");
@@ -751,5 +765,136 @@ fn a_shot_judges_every_address_it_names_as_the_document_it_projects_to() {
         spelled(&requested, content),
         at_member,
         "the request spells the member's body"
+    );
+}
+
+#[test]
+fn the_address_forms_agree_as_the_body_spells_them_over_every_short_shot() {
+    // l6-A4 as the LAW it is, over shots no one chose: every sequence of up
+    // to three runs from a menu of all three families — the edition's own
+    // I-space by either content chain, the staging draft's text, windows onto
+    // another document, I-adjacent and not — off one base at three extents:
+    // where the carried tail merges into a last own run, where it merges into
+    // a last window, and where nothing is carried. For each, the member
+    // carries the shot's terms and the base's positions past the extent, and
+    // the request's address form spells the member's body. 186 of the shots
+    // end on a window, which the request side still holds when its runs run
+    // out.
+    let k = mem_kernel();
+    let vs = deposit_abc(&k); // pdoc: a b c at pca(1..3), memberless
+    insert_abc(&k); // the staging draft doc1: a b c at ca(1..3)
+    vs.insert(
+        P1,
+        &doc2(),
+        vp(1, 1),
+        vec![val(b"w"), val(b"x")],
+        Deposit::Undeclared,
+    )
+    .expect("doc2, the windows' source, holds w x");
+    let doc2_ca = |ordinal: u32| a(&[1, 0, 1, 0, 2, 0, 1, ordinal]);
+    let readable = readable_by(PrincipalId(1));
+    // The base, five positions: a b c by reference, a window onto doc2's x,
+    // and a deposit z it took while the head, under its own content chain.
+    let (base_member, _) = vs
+        .publish(
+            P1,
+            &pdoc(),
+            &Shot {
+                base: Some(base(&pdoc(), 3)),
+                draft: None,
+                runs: vec![
+                    shot_run(&pdoc(), &pca(1), 3),
+                    shot_run(&doc2(), &doc2_ca(2), 1),
+                ],
+            },
+            &readable,
+        )
+        .expect("the base");
+    let (z, _) = vs
+        .insert(P1, &base_member, vp(1, 5), vec![val(b"z")], declared())
+        .expect("a deposit the base took while the head");
+    assert_eq!(
+        z,
+        vca(1),
+        "the premise: minted under the base's own content chain"
+    );
+    // Each run, its name, and the positions it places.
+    let menu = [
+        ("a b (own)", shot_run(&pdoc(), &pca(1), 2), 2u32),
+        (
+            "z (own, the member's content chain)",
+            shot_run(&base_member, &z, 1),
+            1,
+        ),
+        ("b c (the draft's)", shot_run(&doc1(), &ca(2), 2), 2),
+        ("w (window)", shot_run(&doc2(), &doc2_ca(1), 1), 1),
+        (
+            "x (window, I-adjacent to w)",
+            shot_run(&doc2(), &doc2_ca(2), 1),
+            1,
+        ),
+    ];
+    let mut sequences: Vec<Vec<usize>> = vec![Vec::new()];
+    let mut longest: Vec<Vec<usize>> = vec![Vec::new()];
+    for _ in 0..3 {
+        longest = longest
+            .iter()
+            .flat_map(|prefix| {
+                (0..menu.len()).map(move |item| {
+                    let mut sequence = prefix.clone();
+                    sequence.push(item);
+                    sequence
+                })
+            })
+            .collect();
+        sequences.extend(longest.iter().cloned());
+    }
+    assert_eq!(
+        sequences.len(),
+        1 + 5 + 25 + 125,
+        "every sequence of up to three runs"
+    );
+    let mut ending_on_a_window = 0usize;
+    for extent in [2u32, 3, 5] {
+        for sequence in &sequences {
+            let names: Vec<&str> = sequence.iter().map(|&i| menu[i].0).collect();
+            let label = format!("[{}] off the base at {extent}", names.join(", "));
+            let shot = Shot {
+                base: Some(base(&base_member, extent)),
+                draft: Some(doc1()),
+                runs: sequence.iter().map(|&i| menu[i].1.clone()).collect(),
+            };
+            let placed: u32 = sequence.iter().map(|&i| menu[i].2).sum();
+            let requested = shot.address_form(&pdoc());
+            let (member, _) = vs
+                .publish(P1, &pdoc(), &shot, &readable)
+                .unwrap_or_else(|refusal| panic!("{label}: {refusal:?}"));
+            let s = k.snapshot();
+            let (m5, content) = (s.world().m5(), s.world().content());
+            assert_eq!(
+                m5.shot_terms(&member),
+                Some(&ShotTerms {
+                    placed: n(placed),
+                    base_extent: Some(n(extent))
+                }),
+                "{label}"
+            );
+            assert_eq!(
+                m5.content_count(&member),
+                n(placed + 5 - extent),
+                "{label}: the client's positions, then the base's past the extent"
+            );
+            assert_eq!(
+                spelled(&requested, content),
+                spelled(&m5.address_form_of(&member, &n(placed)), content),
+                "{label}: the request spells the member's body"
+            );
+            ending_on_a_window += usize::from(sequence.last().is_some_and(|&i| i >= 3));
+        }
+    }
+    assert_eq!(
+        ending_on_a_window,
+        3 * (2 + 10 + 50),
+        "the family ends shots on windows"
     );
 }

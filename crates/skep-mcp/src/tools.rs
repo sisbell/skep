@@ -237,11 +237,11 @@ mod tests {
     /// the embedded file — and every entry kept as the file spells it.
     #[test]
     fn embedded_catalog_matches_dispatch() {
-        let t = Catalog::load(EMBEDDED).expect("embedded tools.json must validate");
-        assert_eq!(t.tools.len(), DISPATCH_OPS.len() + 1);
-        assert!(!t.instructions.is_empty());
+        let catalog = Catalog::load(EMBEDDED).expect("embedded tools.json must validate");
+        assert_eq!(catalog.tools.len(), DISPATCH_OPS.len() + 1);
+        assert!(!catalog.instructions.is_empty());
         let file: Value = serde_json::from_str(EMBEDDED).expect("embedded parses");
-        assert_eq!(Some(&t.tools), file["tools"].as_array(), "entries kept verbatim");
+        assert_eq!(Some(&catalog.tools), file["tools"].as_array(), "entries kept verbatim");
     }
 
     /// Direction one: a file entry the dispatch doesn't know refuses to
@@ -307,7 +307,7 @@ mod tests {
     /// The commons sentence template is catalog data like everything else:
     /// absent, or present without its substitution point, refuses to load.
     #[test]
-    fn commons_template_refusals() {
+    fn a_commons_template_absent_or_without_its_placeholder_refuses() {
         let mut v: Value = serde_json::from_str(EMBEDDED).expect("embedded parses");
         v.as_object_mut().expect("root").remove("commons_instructions");
         let err = Catalog::load(&v.to_string()).expect_err("must refuse");
@@ -323,13 +323,16 @@ mod tests {
     /// `{addr}` takes the address, and the sentence follows a blank line.
     #[test]
     fn append_commons_fills_every_placeholder() {
-        let mut t = Catalog {
+        let mut catalog = Catalog {
             instructions: "Base.".to_string(),
             commons_instructions: "Commons at {addr}; defines is {addr}.0.3.50.".to_string(),
             tools: Vec::new(),
         };
-        t.append_commons("1.0.2.0.9");
-        assert_eq!(t.instructions, "Base.\n\nCommons at 1.0.2.0.9; defines is 1.0.2.0.9.0.3.50.");
+        catalog.append_commons("1.0.2.0.9");
+        assert_eq!(
+            catalog.instructions,
+            "Base.\n\nCommons at 1.0.2.0.9; defines is 1.0.2.0.9.0.3.50."
+        );
     }
 
     /// The first rule, whole: the name rides as `op` (over any `op` the

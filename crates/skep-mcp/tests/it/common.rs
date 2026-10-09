@@ -127,9 +127,9 @@ fn pubkey_of(sk: &SigningKey) -> PublicKey {
 
 fn open_bare_session(port: u16, principal: u64) -> String {
     let body = format!("{{\"principal\":{principal}}}");
-    let (st, resp) = http(port, "POST", "/session", None, body.as_bytes());
-    assert_eq!(st, 200, "bare session: {}", String::from_utf8_lossy(&resp));
-    let v: Value = serde_json::from_slice(&resp).expect("session JSON");
+    let (st, answer) = http(port, "POST", "/session", None, body.as_bytes());
+    assert_eq!(st, 200, "bare session: {}", String::from_utf8_lossy(&answer));
+    let v: Value = serde_json::from_slice(&answer).expect("session JSON");
     v["session"].as_str().expect("session token").to_string()
 }
 
@@ -140,9 +140,10 @@ fn open_bare_session(port: u16, principal: u64) -> String {
 /// adapter itself opens BARE sessions and signs nothing; this is the
 /// fixture's ceremony alone.
 fn open_signed_session(port: u16, principal: u64, sk: &SigningKey) -> String {
-    let (st, body) = http(port, "GET", &format!("/challenge?principal={principal}"), None, b"");
-    assert_eq!(st, 200, "challenge: {}", String::from_utf8_lossy(&body));
-    let v: Value = serde_json::from_slice(&body).expect("challenge JSON");
+    let (st, challenge) =
+        http(port, "GET", &format!("/challenge?principal={principal}"), None, b"");
+    assert_eq!(st, 200, "challenge: {}", String::from_utf8_lossy(&challenge));
+    let v: Value = serde_json::from_slice(&challenge).expect("challenge JSON");
     let nonce = v["nonce"].as_str().expect("nonce").to_string();
     let origin = format!("http://127.0.0.1:{port}");
     let payload = framed(
@@ -152,9 +153,9 @@ fn open_signed_session(port: u16, principal: u64, sk: &SigningKey) -> String {
     let sig = hex(&signer_of(sk).sign(&payload));
     let body =
         json!({"principal": principal, "nonce": nonce, "origin": origin, "sig": sig}).to_string();
-    let (st, resp) = http(port, "POST", "/session", None, body.as_bytes());
-    assert_eq!(st, 200, "signed session: {}", String::from_utf8_lossy(&resp));
-    let v: Value = serde_json::from_slice(&resp).expect("session JSON");
+    let (st, answer) = http(port, "POST", "/session", None, body.as_bytes());
+    assert_eq!(st, 200, "signed session: {}", String::from_utf8_lossy(&answer));
+    let v: Value = serde_json::from_slice(&answer).expect("session JSON");
     v["session"].as_str().expect("session token").to_string()
 }
 

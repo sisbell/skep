@@ -63,7 +63,7 @@ fn failures_never_quote_the_request() {
     let http = Http::parse(&format!("http://127.0.0.1:{port}")).expect("stub url");
     for _ in answers {
         let err = http
-            .request(Method::Post, "/op", &[("Skepd-Session", "s3cr3t")], b"{}")
+            .exchange(Method::Post, "/op", &[("Skepd-Session", "s3cr3t")], b"{}")
             .expect_err("no answer to read");
         assert!(!err.contains("s3cr3t"), "the failure quotes the request: {err}");
         assert!(err.starts_with(&format!("skepd at http://127.0.0.1:{port}: ")), "{err}");
@@ -87,7 +87,7 @@ fn a_daemon_that_never_answers_fails_the_read_within_its_bound() {
     let http = Http::parse(&format!("http://127.0.0.1:{port}")).expect("stub url");
     let (done, outcome) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
-        let _ = done.send(http.request(Method::Post, "/op", &[], b"{}"));
+        let _ = done.send(http.exchange(Method::Post, "/op", &[], b"{}"));
     });
     let err = outcome
         .recv_timeout(IO_TIMEOUT * 3)
@@ -135,7 +135,7 @@ fn an_answer_is_read_to_the_cap_and_one_byte_past_it_is_refused() {
             let _ = conn.write_all(&answer);
         });
         let http = Http::parse(&format!("http://127.0.0.1:{port}")).expect("stub url");
-        match http.request(Method::Post, "/op", &[], b"{}") {
+        match http.exchange(Method::Post, "/op", &[], b"{}") {
             Ok((_, body)) => assert!(whole && body.len() == total - head_len, "{total} read whole"),
             Err(e) => assert!(!whole && e.contains(": read: answer past the "), "{total}: {e}"),
         }
@@ -145,7 +145,7 @@ fn an_answer_is_read_to_the_cap_and_one_byte_past_it_is_refused() {
 
 /// A paced answer — a byte every half second, each renewing the per-call
 /// timeout — is cut at its deadline, within the read in flight: slowness
-/// ends a read as silence does. Two seconds here; `request` passes
+/// ends a read as silence does. Two seconds here; `exchange` passes
 /// `TRANSFER_DEADLINE`.
 #[test]
 fn a_paced_answer_is_cut_at_its_deadline() {
@@ -176,7 +176,7 @@ fn a_paced_answer_is_cut_at_its_deadline() {
 /// byte renewing the silence bound — is cut at its deadline, within one
 /// `WRITE_POLL`: 32 MiB outruns any loopback buffer, so the write is still
 /// waiting on the peer when the deadline passes. Two seconds here;
-/// `request` passes `TRANSFER_DEADLINE`.
+/// `exchange` passes `TRANSFER_DEADLINE`.
 #[test]
 fn a_slowly_drained_request_is_cut_at_its_deadline() {
     let (stop, stopped) = std::sync::mpsc::channel::<()>();
@@ -216,9 +216,9 @@ fn a_slowly_drained_request_is_cut_at_its_deadline() {
 /// `IO_TIMEOUT` and up to one probe interval by construction.
 #[test]
 fn a_request_the_peer_stops_taking_is_cut_at_the_silence_bound() {
-    let (stop, stopped) = std::sync::mpsc::channel::<()>();
+    let (release, held) = std::sync::mpsc::channel::<()>();
     let (port, peer) = stub(move |_conn| {
-        let _ = stopped.recv(); // open, never read, until the test lets go
+        let _ = held.recv(); // open, never read, until the test lets go
     });
     let mut conn = TcpStream::connect(("127.0.0.1", port)).expect("connect to the stub");
     let deadline = IO_TIMEOUT * 4;
@@ -236,7 +236,7 @@ fn a_request_the_peer_stops_taking_is_cut_at_the_silence_bound() {
     assert_eq!(err.kind(), io::ErrorKind::TimedOut, "{err}");
     assert!(err.to_string().contains("stopped draining"), "the silence bound cut it: {err}");
     assert!(took >= IO_TIMEOUT && took < deadline, "cut at {took:?}");
-    drop(stop);
+    drop(release);
     peer.join().expect("the stub peer");
 }
 

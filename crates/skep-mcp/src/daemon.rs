@@ -12,7 +12,7 @@
 //! session header. Beside the type, two rules keep it out of every tool
 //! result and log line: no error string in this module quotes a `/session`
 //! success body — the one answer a token rides, read only by
-//! `session_token` — and `Http::request` never quotes the request it
+//! `session_token` — and `Http::exchange` never quotes the request it
 //! wrote. The type and each rule have a test beside them.
 
 use std::fmt;
@@ -67,12 +67,12 @@ impl fmt::Debug for Token {
 /// The adapter's standing with skepd: one origin, one principal, at most
 /// one live token. `Err(String)` is the adapter's own message for an
 /// exchange that left it no answer to hand on: skepd was not reached, or
-/// did not answer within the bounds `Http::request` holds an exchange to —
-/// its deadlines and its answer cap; the bare session open `op` needs, or
-/// the health read, answered a status other than 200 or a body the adapter
-/// could not read; or the account read's answer was not JSON. Whatever
-/// response document skepd answered to an op itself within those bounds —
-/// rejections included — is an `Ok` payload.
+/// did not answer within `Http::exchange`'s bounds — its deadlines and its
+/// answer cap; the bare session open `op` needs, or the health read,
+/// answered a status other than 200 or a body the adapter could not read;
+/// or the account read's answer was not JSON. Whatever response document
+/// skepd answered to an op itself within those bounds — rejections
+/// included — is an `Ok` payload.
 #[derive(Debug)]
 pub struct Skepd {
     http: Http,
@@ -119,9 +119,9 @@ impl Skepd {
     pub fn account(&mut self) -> Result<Value, String> {
         let frame = json!({"op": "principal_prefix", "principal": self.principal}).to_string();
         let body = self.op(frame.as_bytes())?;
-        let resolved: Value = serde_json::from_slice(&body)
+        let answer: Value = serde_json::from_slice(&body)
             .map_err(|e| format!("principal_prefix answer is not JSON: {e}"))?;
-        Ok(resolved.get("addr").cloned().unwrap_or(Value::Null))
+        Ok(answer.get("addr").cloned().unwrap_or(Value::Null))
     }
 
     /// `GET /health`: the daemon's health answer, a live reading of its
@@ -130,7 +130,7 @@ impl Skepd {
     /// §The other endpoints). The route is token-blind (wire.md §Sessions),
     /// so no token rides it.
     pub fn health(&self) -> Result<Value, String> {
-        let (status, body) = self.http.request(Method::Get, "/health", &[], b"")?;
+        let (status, body) = self.http.exchange(Method::Get, "/health", &[], b"")?;
         if status != 200 {
             return Err(format!(
                 "GET /health answered {status}: {}",
@@ -148,7 +148,8 @@ impl Skepd {
     /// quotes it.
     fn open_bare_session(&mut self) -> Result<(), String> {
         let body = json!({"principal": self.principal}).to_string();
-        let (status, answer) = self.http.request(Method::Post, "/session", &[], body.as_bytes())?;
+        let (status, answer) =
+            self.http.exchange(Method::Post, "/session", &[], body.as_bytes())?;
         if status != 200 {
             return Err(format!(
                 "bare session open for principal {} failed ({status}): {}",
@@ -164,7 +165,7 @@ impl Skepd {
     /// One `POST /op`, the live token, if any, riding as the session header.
     fn post_op(&self, frame: &[u8]) -> Result<Vec<u8>, String> {
         let session = self.token.as_ref().map(Token::header);
-        let (_, body) = self.http.request(Method::Post, "/op", session.as_slice(), frame)?;
+        let (_, body) = self.http.exchange(Method::Post, "/op", session.as_slice(), frame)?;
         Ok(body)
     }
 }

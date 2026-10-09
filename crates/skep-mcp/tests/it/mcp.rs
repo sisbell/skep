@@ -177,7 +177,7 @@ impl Drop for Mcp {
 
 /// The catalog the binary embeds — the expected tools/list and the base
 /// for the drift fixtures.
-fn embedded_tools() -> Value {
+fn embedded_catalog() -> Value {
     let path = concat!(env!("CARGO_MANIFEST_DIR"), "/tools.json");
     serde_json::from_str(&std::fs::read_to_string(path).expect("read tools.json"))
         .expect("tools.json parses")
@@ -213,11 +213,11 @@ fn an_insert() -> Value {
 }
 
 /// A `/session` 200 issuing `token` to principal 1.
-fn session_answer(token: &str) -> Vec<u8> {
+fn session_reply(token: &str) -> Vec<u8> {
     reply(200, &format!(r#"{{"principal":1,"session":"{token}"}}"#))
 }
 
-/// An answer the connection broke in the middle of: its `Content-Length`
+/// A reply the connection broke in the middle of: its `Content-Length`
 /// promises 64 bytes, and 7 arrive.
 fn cut_short() -> Vec<u8> {
     b"HTTP/1.1 200 X\r\nContent-Length: 64\r\nConnection: close\r\n\r\n{\"at\":7".to_vec()
@@ -271,7 +271,7 @@ fn initialize_and_tools_list_serve_the_catalog() {
     let v = mcp.request("tools/list", json!({}));
     let tools = v["result"]["tools"].as_array().expect("tools array").clone();
     let listed: Vec<&str> = tools.iter().map(|t| t["name"].as_str().expect("name")).collect();
-    let file = embedded_tools();
+    let file = embedded_catalog();
     let expected: Vec<&str> = file["tools"]
         .as_array()
         .expect("file tools")
@@ -323,8 +323,8 @@ fn initialize_answers_the_fallback_revision_when_none_is_named() {
 #[test]
 fn session_info_reports_principal_account_health() {
     let dir = TempDir::new("sessinfo");
-    let sd = spawn_daemon(dir.path(), 0);
-    let port = sd.port();
+    let daemon = spawn_daemon(dir.path(), 0);
+    let port = daemon.port();
     let account = provision_principal_1(port);
 
     let mut mcp = Mcp::spawn(port, "1");
@@ -343,14 +343,14 @@ fn session_info_reports_principal_account_health() {
     assert_eq!(info["principal"], json!(2), "{info}");
     assert!(info["account"].is_null(), "an undelegated principal's account: {info}");
 
-    sd.shutdown();
+    daemon.shutdown();
 }
 
 #[test]
 fn lifecycle_create_insert_retrieve_link_and_rejections() {
     let dir = TempDir::new("life");
-    let sd = spawn_daemon(dir.path(), 0);
-    let port = sd.port();
+    let daemon = spawn_daemon(dir.path(), 0);
+    let port = daemon.port();
     let account = provision_principal_1(port);
 
     let mut mcp = Mcp::spawn(port, "1");
@@ -456,14 +456,14 @@ fn lifecycle_create_insert_retrieve_link_and_rejections() {
     let v = mcp.request("ping", json!({}));
     assert_eq!(v["result"], json!({}), "the adapter survives a non-UTF-8 line");
 
-    sd.shutdown();
+    daemon.shutdown();
 }
 
 #[test]
 fn daemon_restart_reopens_the_session_and_reissues() {
     let dir = TempDir::new("restart");
-    let sd = spawn_daemon(dir.path(), 0);
-    let port = sd.port();
+    let daemon = spawn_daemon(dir.path(), 0);
+    let port = daemon.port();
     let account = provision_principal_1(port);
 
     let mut mcp = Mcp::spawn(port, "1");
@@ -479,8 +479,8 @@ fn daemon_restart_reopens_the_session_and_reissues() {
     // Kill the daemon mid-session — tokens die with the process — and
     // restart on the same data dir and the SAME port (the adapter's URL is
     // fixed for its lifetime).
-    sd.shutdown();
-    let sd = spawn_daemon(dir.path(), port);
+    daemon.shutdown();
+    let daemon = spawn_daemon(dir.path(), port);
 
     // The adapter holds a stale token: the daemon answers unauthenticated,
     // the adapter reopens its session and reissues the frame once —
@@ -497,7 +497,7 @@ fn daemon_restart_reopens_the_session_and_reissues() {
     );
     assert_eq!(v["items"], json!([{"content": "hello, wire"}]));
 
-    sd.shutdown();
+    daemon.shutdown();
 }
 
 /// Wire v5's two-form slots through the adapter, one link exercising both:
@@ -508,8 +508,8 @@ fn daemon_restart_reopens_the_session_and_reissues() {
 #[test]
 fn make_link_addrs_form_records_names_verbatim() {
     let dir = TempDir::new("addrs");
-    let sd = spawn_daemon(dir.path(), 0);
-    let port = sd.port();
+    let daemon = spawn_daemon(dir.path(), 0);
+    let port = daemon.port();
     let account = provision_principal_1(port);
 
     let mut mcp = Mcp::spawn(port, "1");
@@ -553,7 +553,7 @@ fn make_link_addrs_form_records_names_verbatim() {
         "recorded endsets — resolved I-span, then names verbatim: {v}"
     );
 
-    sd.shutdown();
+    daemon.shutdown();
 }
 
 /// The slot forms' failure modes are data, not transport errors: an object
@@ -563,8 +563,8 @@ fn make_link_addrs_form_records_names_verbatim() {
 #[test]
 fn slot_form_faults_surface_as_normal_results() {
     let dir = TempDir::new("slotfault");
-    let sd = spawn_daemon(dir.path(), 0);
-    let port = sd.port();
+    let daemon = spawn_daemon(dir.path(), 0);
+    let port = daemon.port();
     let account = provision_principal_1(port);
 
     let mut mcp = Mcp::spawn(port, "1");
@@ -605,7 +605,7 @@ fn slot_form_faults_surface_as_normal_results() {
     assert_eq!((&v["op"], &v["code"]), (&json!("unparseable"), &json!("malformed")), "{v}");
     assert!(v["detail"].as_str().is_some_and(|d| d.contains("from_")), "{v}");
 
-    sd.shutdown();
+    daemon.shutdown();
 }
 
 // ── the session rules, against a stub daemon ─────────────────────────────
@@ -627,7 +627,7 @@ fn every_answer_but_unauthenticated_comes_back_verbatim_from_one_exchange() {
         r#"{"code":"poisoned","disposition":"halt","op":"insert","resp":"rejected"}"#,
         r#"{"code":"not_owner","disposition":"permanent","op":"insert","resp":"rejected"}"#,
     ];
-    let mut replies = vec![reply(200, UNAUTHENTICATED), session_answer(TOKEN), reply(200, ACK)];
+    let mut replies = vec![reply(200, UNAUTHENTICATED), session_reply(TOKEN), reply(200, ACK)];
     replies.extend(answers.iter().map(|a| reply(200, a)));
     let (port, stub) = stub_daemon(replies);
     let mut mcp = Mcp::spawn(port, "1");
@@ -646,7 +646,7 @@ fn every_answer_but_unauthenticated_comes_back_verbatim_from_one_exchange() {
 #[test]
 fn unauthenticated_opens_a_bare_session_and_reissues_the_frame_once_under_its_token() {
     let (port, stub) =
-        stub_daemon(vec![reply(200, UNAUTHENTICATED), session_answer(TOKEN), reply(200, ACK)]);
+        stub_daemon(vec![reply(200, UNAUTHENTICATED), session_reply(TOKEN), reply(200, ACK)]);
     let mut mcp = Mcp::spawn(port, "1");
     mcp.initialize();
     assert_eq!(mcp.call("insert", an_insert()), (false, ACK.to_string()), "the reissue's answer");
@@ -665,7 +665,7 @@ fn unauthenticated_opens_a_bare_session_and_reissues_the_frame_once_under_its_to
 fn a_second_unauthenticated_passes_through_as_data() {
     let (port, stub) = stub_daemon(vec![
         reply(200, UNAUTHENTICATED),
-        session_answer(TOKEN),
+        session_reply(TOKEN),
         reply(200, UNAUTHENTICATED),
     ]);
     let mut mcp = Mcp::spawn(port, "1");
@@ -700,11 +700,11 @@ fn a_failed_exchange_is_never_reissued() {
 fn the_held_token_rides_each_op_until_a_reopen_replaces_it() {
     let (port, stub) = stub_daemon(vec![
         reply(200, UNAUTHENTICATED), // the first write opens
-        session_answer(OLD),
+        session_reply(OLD),
         reply(200, ACK),
         reply(200, ACK),             // the next rides OLD at once
         reply(200, UNAUTHENTICATED), // a restart killed OLD
-        session_answer(NEW),
+        session_reply(NEW),
         reply(200, ACK),
     ]);
     let mut mcp = Mcp::spawn(port, "1");
@@ -727,7 +727,7 @@ fn the_health_read_carries_no_token_and_is_reported_whole() {
     let health = r#"{"log_position":9,"ok":true,"seventh":"unheard of"}"#;
     let (port, stub) = stub_daemon(vec![
         reply(200, UNAUTHENTICATED),
-        session_answer(TOKEN),
+        session_reply(TOKEN),
         reply(200, ACK),
         reply(200, r#"{"addr":"1.0.2","as_of":9,"resp":"maybe_addr"}"#),
         reply(200, health),
@@ -751,10 +751,10 @@ fn the_health_read_carries_no_token_and_is_reported_whole() {
 fn a_session_token_reaches_no_tool_result_and_no_log_line() {
     let (port, stub) = stub_daemon(vec![
         reply(200, UNAUTHENTICATED),
-        session_answer(OLD),
+        session_reply(OLD),
         reply(200, ACK),
         reply(200, UNAUTHENTICATED),
-        session_answer(NEW),
+        session_reply(NEW),
         cut_short(),
     ]);
     let mut mcp = Mcp::spawn_logged(port, "1");
@@ -783,7 +783,7 @@ fn a_session_token_reaches_no_tool_result_and_no_log_line() {
 /// sits below 1024, where no unprivileged process can listen, so the
 /// connect is refused.
 #[test]
-fn an_unreachable_daemon_answers_is_error_naming_its_origin() {
+fn calls_to_an_unreachable_daemon_answer_is_error_naming_its_origin() {
     let mut mcp = Mcp::spawn(1, "1");
     mcp.initialize();
     for (tool, args) in [("insert", an_insert()), ("session_info", json!({}))] {
@@ -884,7 +884,7 @@ fn a_closed_stdout_ends_the_adapter() {
 /// anywhere — initialize never dials skepd.
 #[test]
 fn skep_commons_appends_the_commons_sentence() {
-    let file = embedded_tools();
+    let file = embedded_catalog();
     let base = file["instructions"].as_str().expect("instructions").to_string();
     let template = file["commons_instructions"].as_str().expect("template").to_string();
 
@@ -973,7 +973,7 @@ fn tools_file_dispatch_drift_refuses_startup_both_directions() {
     // Catalog validation precedes any network use, so no daemon is needed
     // and SKEPD_URL can point nowhere.
     let dir = TempDir::new("drift");
-    let real = embedded_tools();
+    let real = embedded_catalog();
 
     // Direction one: a file entry the dispatch doesn't know.
     let mut extra = real.clone();
@@ -984,7 +984,7 @@ fn tools_file_dispatch_drift_refuses_startup_both_directions() {
     }));
     let path = dir.path().join("extra.json");
     std::fs::write(&path, extra.to_string()).expect("write doctored file");
-    let err = spawn_expect_startup_failure(&path);
+    let err = tools_file_refusal(&path);
     assert!(err.contains("frobnicate"), "stderr names the unknown tool: {err}");
 
     // Direction two: a dispatch op with no file entry.
@@ -992,7 +992,7 @@ fn tools_file_dispatch_drift_refuses_startup_both_directions() {
     missing["tools"].as_array_mut().expect("tools").retain(|t| t["name"] != "insert");
     let path = dir.path().join("missing.json");
     std::fs::write(&path, missing.to_string()).expect("write doctored file");
-    let err = spawn_expect_startup_failure(&path);
+    let err = tools_file_refusal(&path);
     assert!(err.contains("insert"), "stderr names the uncovered op: {err}");
 
     // And the undoctored file starts, then exits cleanly on immediate EOF.
@@ -1012,7 +1012,9 @@ fn tools_file_dispatch_drift_refuses_startup_both_directions() {
     );
 }
 
-fn spawn_expect_startup_failure(tools_file: &Path) -> String {
+/// The adapter run to completion on `tools_file`, which startup must
+/// refuse: its stderr, the refusal.
+fn tools_file_refusal(tools_file: &Path) -> String {
     let out = Command::new(env!("CARGO_BIN_EXE_skep-mcp"))
         .args(["--tools-file", tools_file.to_str().expect("utf-8 path")])
         .env("SKEPD_URL", "http://127.0.0.1:1")

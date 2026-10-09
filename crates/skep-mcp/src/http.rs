@@ -124,7 +124,7 @@ impl Http {
     /// reached or did not answer within those bounds; its message names the
     /// origin and the failed step and never quotes the request, whose
     /// headers can carry a credential.
-    pub fn request(
+    pub fn exchange(
         &self,
         method: Method,
         path: &str,
@@ -140,19 +140,19 @@ impl Http {
             .map_err(|e| self.fail("connect", e))?;
         stream.set_read_timeout(Some(IO_TIMEOUT)).map_err(|e| self.fail("socket", e))?;
         let method = method.as_str();
-        let mut req = format!(
+        let mut head = format!(
             "{method} {path} HTTP/1.1\r\nHost: {}\r\nConnection: close\r\n",
             self.authority
         );
         for (name, value) in headers {
-            req.push_str(&format!("{name}: {value}\r\n"));
+            head.push_str(&format!("{name}: {value}\r\n"));
         }
-        req.push_str(&format!(
+        head.push_str(&format!(
             "Content-Type: application/json\r\nContent-Length: {}\r\n\r\n",
             body.len()
         ));
         let deadline = Instant::now() + TRANSFER_DEADLINE;
-        write_bounded(&mut stream, req.as_bytes(), deadline)
+        write_bounded(&mut stream, head.as_bytes(), deadline)
             .and_then(|()| write_bounded(&mut stream, body, deadline))
             .map_err(|e| self.fail("write", e))?;
         let raw = read_bounded(&mut stream, Instant::now() + TRANSFER_DEADLINE)

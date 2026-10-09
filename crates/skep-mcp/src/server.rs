@@ -94,12 +94,12 @@ impl Server {
             }
             // Notifications — `notifications/initialized` and all others.
             (Some(_), None) => None,
-            (Some(m), Some(id)) => Some(self.request(m, params, id)),
+            (Some(m), Some(id)) => Some(self.respond(m, params, id)),
         }
     }
 
     /// One request → its JSON-RPC response.
-    fn request(&mut self, method: &str, params: Option<Value>, id: Value) -> Value {
+    fn respond(&mut self, method: &str, params: Option<Value>, id: Value) -> Value {
         match method {
             "initialize" => {
                 let version = params

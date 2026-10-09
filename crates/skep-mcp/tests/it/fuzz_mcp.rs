@@ -114,7 +114,7 @@ impl Mcp {
     /// `responses_for_raw` of a storm line, its newlines dropped: they would
     /// split one fuzz input into several lines and skew the count — the
     /// payload, not the framing, is under test there.
-    fn responses_for(&mut self, line: &str) -> Vec<Value> {
+    fn responses_for_storm_line(&mut self, line: &str) -> Vec<Value> {
         let sanitized: String = line.chars().filter(|&c| c != '\n' && c != '\r').collect();
         self.responses_for_raw(sanitized.as_bytes())
     }
@@ -190,15 +190,15 @@ fn corpus() -> Vec<Vec<u8>> {
 
 /// A seeded arbitrary UTF-8 line (no newline) — JSON-ish punctuation biased,
 /// so the parser is genuinely exercised.
-fn random_utf8_line(st: &mut u64, maxlen: usize) -> String {
-    let len = (splitmix64(st) as usize) % (maxlen + 1);
+fn random_utf8_line(rng: &mut u64, max_len: usize) -> String {
+    let len = (splitmix64(rng) as usize) % (max_len + 1);
     let mut s = String::with_capacity(len);
     for _ in 0..len {
         let ascii = b" {}[]\":,0123456789tfnul-.abcxyz/";
-        let ch = if splitmix64(st) % 8 == 0 {
-            char::from_u32(0x100 + (splitmix64(st) as u32 % 0x2000)).unwrap_or('?')
+        let ch = if splitmix64(rng) % 8 == 0 {
+            char::from_u32(0x100 + (splitmix64(rng) as u32 % 0x2000)).unwrap_or('?')
         } else {
-            ascii[(splitmix64(st) as usize) % ascii.len()] as char
+            ascii[(splitmix64(rng) as usize) % ascii.len()] as char
         };
         if ch != '\n' && ch != '\r' {
             s.push(ch);
@@ -263,10 +263,10 @@ fn each_line_shape_gets_its_documented_answer() {
 }
 
 #[test]
-fn mcp_line_protocol_storm_survives_and_stays_correct() {
+fn mcp_line_protocol_storm_survives_and_answers_each_line_at_most_once() {
     let dir = TempDir::new("storm");
-    let sd = spawn_daemon(dir.path(), 0);
-    let port = sd.port();
+    let daemon = spawn_daemon(dir.path(), 0);
+    let port = daemon.port();
     let mut mcp = Mcp::spawn(port);
 
     // Bring the session up the ordinary way first.
@@ -284,15 +284,15 @@ fn mcp_line_protocol_storm_survives_and_stays_correct() {
 
     // The storm: arbitrary and mutated lines.
     let corpus = corpus();
-    let mut st = 0x4D43_5000_0000_0001; // "MCP\0\0\0\0\1"
+    let mut rng = 0x4D43_5000_0000_0001; // "MCP\0\0\0\0\1"
     for i in 0..budget(400) {
-        let line = if splitmix64(&mut st) % 3 == 0 {
-            random_utf8_line(&mut st, 160)
+        let line = if splitmix64(&mut rng) % 3 == 0 {
+            random_utf8_line(&mut rng, 160)
         } else {
-            String::from_utf8_lossy(&mutate(splitmix64(&mut st), &corpus)).into_owned()
+            String::from_utf8_lossy(&mutate(splitmix64(&mut rng), &corpus)).into_owned()
         };
-        let before = mcp.responses_for(&line);
-        for v in &before {
+        let responses = mcp.responses_for_storm_line(&line);
+        for v in &responses {
             assert_jsonrpc(v);
         }
         // At most one response per line (the sentinel counts the rest); an
@@ -300,9 +300,9 @@ fn mcp_line_protocol_storm_survives_and_stays_correct() {
         // is the adapter's job — the robust invariants are: ≤1 response, each
         // well-formed, and (below) the process stays alive.
         assert!(
-            before.len() <= 1,
+            responses.len() <= 1,
             "FINDING (fuzz_mcp): line {i} produced {} responses: {line:?}",
-            before.len()
+            responses.len()
         );
     }
 
@@ -314,5 +314,5 @@ fn mcp_line_protocol_storm_survives_and_stays_correct() {
     // Clean exit on stdin EOF.
     let status = mcp.finish();
     assert!(status.success(), "clean exit after the storm: {status:?}");
-    sd.shutdown();
+    daemon.shutdown();
 }

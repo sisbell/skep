@@ -162,22 +162,22 @@ fn is_t4_address(s: &str) -> bool {
     let is_zero = |c: &str| c.bytes().all(|b| b == b'0');
     let mut zeros = 0usize;
     let mut prev_zero = false;
-    let mut count = 0usize;
+    let mut components = 0usize;
     for comp in s.split('.') {
         if comp.is_empty() || !comp.bytes().all(|b| b.is_ascii_digit()) {
             return false;
         }
         let z = is_zero(comp);
         if z {
-            if prev_zero || count == 0 {
+            if prev_zero || components == 0 {
                 return false;
             }
             zeros += 1;
         }
         prev_zero = z;
-        count += 1;
+        components += 1;
     }
-    count > 0 && !prev_zero && zeros <= 3
+    components > 0 && !prev_zero && zeros <= 3
 }
 
 #[cfg(test)]
@@ -207,7 +207,7 @@ mod tests {
     /// Nine components are the fewest in which a fourth zero breaks no other
     /// clause; `00` is a zero by its digits, `10` a nonzero ending in one.
     #[test]
-    fn t4_check_agrees_with_skep_address_on_every_short_dotted_decimal() {
+    fn the_commons_gate_agrees_with_skep_address_on_every_short_dotted_decimal() {
         use skep_address::{is_t4_valid, Nat, Tumbler};
         let alphabet: [(&str, u32); 4] = [("0", 0), ("00", 0), ("1", 1), ("10", 10)];
         let (mut visited, mut disagreements) = (0usize, Vec::new());

@@ -1,21 +1,57 @@
 //! The HTTP side of the adapter: skepd speaks one request per connection
 //! with `Connection: close` on every response (wire.md §Transport), so a
-//! client is a `TcpStream`, one written-out request, and a read to EOF.
-//! Connect/read/write timeouts make a dead or hung daemon a fast, clear
-//! failure instead of a stall — every error string names the daemon's
-//! origin, because these surface verbatim as `isError` tool results.
+//! client is a `TcpStream`, one written-out request, and a read to the
+//! daemon's close. Each exchange is bounded three ways — `IO_TIMEOUT`
+//! bounds silence, a per-direction deadline bounds slowness, an answer cap
+//! bounds size — so a dead, hung, paced or boundless peer ends in a clear
+//! failure within a stated bound, never a stall or a memory bill. Every
+//! error string names the daemon's origin, because these surface verbatim
+//! as `isError` tool results.
 
-use std::io::{Read, Write};
+use std::io::{self, Read, Write};
 use std::net::{TcpStream, ToSocketAddrs};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 /// A dead local daemon answers `connection refused` instantly; this bounds
 /// the pathological cases (unroutable address, filtered port).
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 
-/// Per-call read/write bound. A skepd op is milliseconds even under fsync;
-/// ten seconds is headroom, not an expected wait.
+/// The SILENCE bound: how long the answer's read waits for a byte, and the
+/// request's write for the socket to take one; any byte renews it. A skepd
+/// op is milliseconds even under fsync; ten seconds is headroom, not an
+/// expected wait.
 const IO_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// The deadline on one direction of an exchange — the request out, or the
+/// answer in — checked between socket calls: the answer's realized bound is
+/// this plus one `IO_TIMEOUT`, a read in flight running to its socket
+/// timeout, and the request's this plus one `WRITE_POLL`. Only this bounds
+/// SLOWNESS: a peer that paces a byte per nine seconds renews `IO_TIMEOUT`
+/// for as long as it likes, and this adapter is one thread. Never shorter
+/// than an honest skepd's own bound: it reads a request, and writes an
+/// answer, under its `TRANSFER_DEADLINE` plus one thirty-second socket
+/// timeout (`server/http.rs`) — sixty seconds, after which it has abandoned
+/// the transfer itself — and its handler's silence before the answer's
+/// first byte is held to one `IO_TIMEOUT` already, or the read fails on
+/// that bound first. Ten and sixty make seventy, so this cuts nothing skepd
+/// would finish sending.
+const TRANSFER_DEADLINE: Duration = Duration::from_secs(70);
+
+/// How long the request's write sleeps while its socket takes no more, the
+/// send buffer full: the granularity of its two bounds. An honest skepd
+/// takes a request as fast as it reads, so an exchange pays this at most
+/// once per refill of a send buffer of 128 KiB or more — 64 ms all told
+/// for a frame at the 8 MiB cap, and nothing for one that fits the buffer.
+const WRITE_POLL: Duration = Duration::from_millis(1);
+
+/// The most bytes one answer may hold, head and body: skep-client's
+/// `MAX_ANSWER_BYTES`, the frame routes' 8 MiB request cap with room for
+/// the head (wire.md §Transport). skepd caps no `/op` answer — a
+/// `retrieve_v` renders every delivered position's value, and one atom
+/// copied to many positions renders as many times — so this is the
+/// adapter's own bound on what a board can make it hold. An answer past it
+/// is read no further; the agent narrows its request.
+const MAX_ANSWER_BYTES: usize = 8 * 1024 * 1024 + 64 * 1024;
 
 /// The method of one exchange — a type of its own, as skep-client's and
 /// skep-resolve's dialers give it, so the method and the path, both text
@@ -81,11 +117,13 @@ impl Http {
     }
 
     /// One exchange: write the request, `headers` riding after `Host` and
-    /// `Connection: close`, read to EOF (the daemon closes), and return
-    /// (status, body) whatever the status — what a status means is the
-    /// caller's to judge, route by route. `Err` means skepd was not reached
-    /// or did not answer; its message names the origin and the failed step
-    /// and never quotes the request, whose headers can carry a credential.
+    /// `Connection: close`, read to the daemon's close — each direction
+    /// under `TRANSFER_DEADLINE`, the answer under `MAX_ANSWER_BYTES` — and
+    /// return (status, body) whatever the status — what a status means is
+    /// the caller's to judge, route by route. `Err` means skepd was not
+    /// reached or did not answer within those bounds; its message names the
+    /// origin and the failed step and never quotes the request, whose
+    /// headers can carry a credential.
     pub fn request(
         &self,
         method: Method,
@@ -101,7 +139,6 @@ impl Http {
         let mut stream = TcpStream::connect_timeout(&addr, CONNECT_TIMEOUT)
             .map_err(|e| self.fail("connect", e))?;
         stream.set_read_timeout(Some(IO_TIMEOUT)).map_err(|e| self.fail("socket", e))?;
-        stream.set_write_timeout(Some(IO_TIMEOUT)).map_err(|e| self.fail("socket", e))?;
         let method = method.as_str();
         let mut req = format!(
             "{method} {path} HTTP/1.1\r\nHost: {}\r\nConnection: close\r\n",
@@ -114,12 +151,12 @@ impl Http {
             "Content-Type: application/json\r\nContent-Length: {}\r\n\r\n",
             body.len()
         ));
-        stream
-            .write_all(req.as_bytes())
-            .and_then(|()| stream.write_all(body))
+        let deadline = Instant::now() + TRANSFER_DEADLINE;
+        write_bounded(&mut stream, req.as_bytes(), deadline)
+            .and_then(|()| write_bounded(&mut stream, body, deadline))
             .map_err(|e| self.fail("write", e))?;
-        let mut raw = Vec::new();
-        stream.read_to_end(&mut raw).map_err(|e| self.fail("read", e))?;
+        let raw = read_bounded(&mut stream, Instant::now() + TRANSFER_DEADLINE)
+            .map_err(|e| self.fail("read", e))?;
         parse_response(&raw).map_err(|e| self.fail("response", e))
     }
 
@@ -128,10 +165,75 @@ impl Http {
     }
 }
 
-/// Split status and body out of one complete HTTP response. The daemon
-/// always sends `Content-Length`; checking it catches a connection that
-/// broke mid-body, which would otherwise surface as mysteriously truncated
-/// JSON.
+/// `write_all` under `deadline`, the socket non-blocking for the length of
+/// it. A blocking `write` cannot be held to a deadline checked between
+/// calls: on BSD stacks the write timeout bounds each wait inside one call,
+/// not the call, so a peer that keeps draining — however slowly — keeps one
+/// call running until it has written everything it was handed. Non-blocking,
+/// a call takes what fits at once, and this loop holds both bounds itself:
+/// `IO_TIMEOUT` with no byte taken, `deadline` in all, each to within one
+/// `WRITE_POLL`.
+fn write_bounded(stream: &mut TcpStream, mut bytes: &[u8], deadline: Instant) -> io::Result<()> {
+    stream.set_nonblocking(true)?;
+    let mut taken = Instant::now();
+    while !bytes.is_empty() {
+        let now = Instant::now();
+        if now >= deadline {
+            let late = "request not taken within the transfer deadline";
+            return Err(io::Error::new(io::ErrorKind::TimedOut, late));
+        }
+        if now >= taken + IO_TIMEOUT {
+            let quiet = "request not taken: the peer stopped draining";
+            return Err(io::Error::new(io::ErrorKind::TimedOut, quiet));
+        }
+        match stream.write(bytes) {
+            Ok(0) => return Err(io::ErrorKind::WriteZero.into()),
+            Ok(n) => {
+                bytes = &bytes[n..];
+                taken = Instant::now();
+            }
+            Err(e) if e.kind() == io::ErrorKind::WouldBlock => std::thread::sleep(WRITE_POLL),
+            Err(e) if e.kind() == io::ErrorKind::Interrupted => {}
+            Err(e) => return Err(e),
+        }
+    }
+    stream.set_nonblocking(false)
+}
+
+/// The answer, to the daemon's close, under `deadline` and
+/// `MAX_ANSWER_BYTES`: a peer that paces its bytes, or sends past the cap,
+/// is refused rather than read for as long, or as far, as it likes. `raw`
+/// never passes the cap and one read adds at most a chunk, so the sum
+/// below cannot wrap.
+fn read_bounded(stream: &mut TcpStream, deadline: Instant) -> io::Result<Vec<u8>> {
+    let mut raw = Vec::new();
+    let mut chunk = [0u8; 8192];
+    loop {
+        if Instant::now() >= deadline {
+            let late = "answer not delivered within the transfer deadline";
+            return Err(io::Error::new(io::ErrorKind::TimedOut, late));
+        }
+        match stream.read(&mut chunk) {
+            Ok(0) => return Ok(raw),
+            Ok(n) if raw.len() + n > MAX_ANSWER_BYTES => {
+                let past =
+                    format!("answer past the {MAX_ANSWER_BYTES}-byte cap; narrow the request");
+                return Err(io::Error::new(io::ErrorKind::InvalidData, past));
+            }
+            Ok(n) => raw.extend_from_slice(&chunk[..n]),
+            Err(e) if e.kind() == io::ErrorKind::Interrupted => {}
+            Err(e) => return Err(e),
+        }
+    }
+}
+
+/// Split status and body out of one complete HTTP response, recognized whole
+/// or refused: the status line opens `HTTP/1.` (as skep-client's
+/// `parse_head` requires), and `Content-Length` appears exactly once, as
+/// `1*DIGIT` (the rule skepd's own reader holds requests to). skepd sends
+/// exactly that on every answer this adapter asks for. The length is what
+/// tells a connection that broke mid-body from a whole answer, so a head
+/// that cannot state it is a failure, never relayed as skepd's document.
 fn parse_response(raw: &[u8]) -> Result<(u16, Vec<u8>), String> {
     let sep = raw
         .windows(4)
@@ -139,128 +241,37 @@ fn parse_response(raw: &[u8]) -> Result<(u16, Vec<u8>), String> {
         .ok_or_else(|| String::from("no header terminator"))?;
     let head =
         std::str::from_utf8(&raw[..sep]).map_err(|_| String::from("non-UTF-8 response head"))?;
-    let status: u16 = head
+    let mut lines = head.split("\r\n");
+    let status_line = lines.next().unwrap_or("");
+    if !status_line.starts_with("HTTP/1.") {
+        return Err(String::from("not an HTTP/1.x status line"));
+    }
+    let status: u16 = status_line
         .split_whitespace()
         .nth(1)
         .and_then(|s| s.parse().ok())
         .ok_or_else(|| String::from("malformed status line"))?;
     let mut content_length: Option<usize> = None;
-    for line in head.split("\r\n").skip(1) {
-        if let Some((k, v)) = line.split_once(':') {
-            if k.trim().eq_ignore_ascii_case("Content-Length") {
-                content_length = v.trim().parse().ok();
-            }
+    for line in lines {
+        let Some((name, value)) = line.split_once(':') else { continue };
+        if !name.trim().eq_ignore_ascii_case("Content-Length") {
+            continue;
         }
-    }
-    let mut body = raw[sep + 4..].to_vec();
-    if let Some(cl) = content_length {
-        if body.len() < cl {
-            return Err(format!("truncated body ({} of {cl} bytes)", body.len()));
+        let value = value.trim();
+        let digits = !value.is_empty() && value.bytes().all(|b| b.is_ascii_digit());
+        if content_length.is_some() || !digits {
+            return Err(String::from("Content-Length repeated or not 1*DIGIT"));
         }
-        body.truncate(cl);
+        content_length =
+            Some(value.parse().map_err(|_| String::from("Content-Length past usize"))?);
     }
-    Ok((status, body))
+    let cl = content_length.ok_or_else(|| String::from("no Content-Length"))?;
+    let body = &raw[sep + 4..];
+    if body.len() < cl {
+        return Err(format!("truncated body ({} of {cl} bytes)", body.len()));
+    }
+    Ok((status, body[..cl].to_vec()))
 }
 
 #[cfg(test)]
-mod tests {
-    use std::net::TcpListener;
-
-    use super::*;
-
-    #[test]
-    fn only_an_http_origin_without_a_path_parses() {
-        let h = Http::parse("http://127.0.0.1:8642").expect("default form");
-        assert_eq!(h.authority(), "127.0.0.1:8642");
-        let h = Http::parse("http://localhost").expect("portless form");
-        assert_eq!((h.host.as_str(), h.port), ("localhost", 80));
-        let h = Http::parse("http://127.0.0.1:8642/").expect("bare trailing slash");
-        assert_eq!(h.port, 8642);
-        for bad in [
-            "https://127.0.0.1:8642",
-            "127.0.0.1:8642",
-            "http://",
-            "http://:8642",
-            "http://127.0.0.1:notaport",
-            "http://127.0.0.1:8642/op",
-        ] {
-            assert!(Http::parse(bad).is_err(), "'{bad}' must not parse");
-        }
-    }
-
-    /// Bracketed IPv6 sheds its brackets for the resolver, with a port and
-    /// without one — the colons inside the brackets are the address's own —
-    /// while the authority keeps them for the `Host` header.
-    #[test]
-    fn bracketed_ipv6_sheds_its_brackets() {
-        let h = Http::parse("http://[::1]:8642").expect("bracketed, with a port");
-        assert_eq!((h.host.as_str(), h.port, h.authority()), ("::1", 8642, "[::1]:8642"));
-        let h = Http::parse("http://[::1]").expect("bracketed, without a port");
-        assert_eq!((h.host.as_str(), h.port, h.authority()), ("::1", 80, "[::1]"));
-    }
-
-    #[test]
-    fn a_response_splits_at_its_head_and_a_short_body_is_a_break() {
-        let (st, body) =
-            parse_response(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\n{}").expect("parse");
-        assert_eq!((st, body.as_slice()), (200, &b"{}"[..]));
-        assert!(
-            parse_response(b"HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\n{}").is_err(),
-            "a short body is a broken connection, not an answer"
-        );
-        assert!(parse_response(b"garbage").is_err());
-    }
-
-    /// A failed exchange names the origin and the step, never the request:
-    /// a daemon that answers garbage, or hangs up unanswered, is reported
-    /// without the header value that rode the request.
-    #[test]
-    fn failures_never_quote_the_request() {
-        let listener = TcpListener::bind("127.0.0.1:0").expect("bind a stub daemon");
-        let port = listener.local_addr().expect("stub address").port();
-        let answers: [&[u8]; 2] = [b"garbage", b""];
-        let stub = std::thread::spawn(move || {
-            for answer in answers {
-                let (mut conn, _) = listener.accept().expect("accept");
-                let _ = conn.read(&mut [0u8; 1024]);
-                let _ = conn.write_all(answer);
-            }
-        });
-        let http = Http::parse(&format!("http://127.0.0.1:{port}")).expect("stub url");
-        for _ in answers {
-            let err = http
-                .request(Method::Post, "/op", &[("Skepd-Session", "s3cr3t")], b"{}")
-                .expect_err("no answer to read");
-            assert!(!err.contains("s3cr3t"), "the failure quotes the request: {err}");
-            assert!(err.starts_with(&format!("skepd at http://127.0.0.1:{port}: ")), "{err}");
-        }
-        stub.join().expect("the stub daemon");
-    }
-
-    /// A daemon that takes the request and never answers is a clear failure
-    /// within the read bound, not a stall: the exchange ends `Err`, naming
-    /// the origin and the read step. Takes `IO_TIMEOUT` by construction.
-    #[test]
-    fn a_daemon_that_never_answers_fails_the_read_within_its_bound() {
-        let listener = TcpListener::bind("127.0.0.1:0").expect("bind a stub daemon");
-        let port = listener.local_addr().expect("stub address").port();
-        let (release, held) = std::sync::mpsc::channel::<()>();
-        let stub = std::thread::spawn(move || {
-            let (mut conn, _) = listener.accept().expect("accept");
-            let _ = conn.read(&mut [0u8; 1024]);
-            let _ = held.recv(); // open, unanswered, until the test lets go
-        });
-        let http = Http::parse(&format!("http://127.0.0.1:{port}")).expect("stub url");
-        let (done, outcome) = std::sync::mpsc::channel();
-        std::thread::spawn(move || {
-            let _ = done.send(http.request(Method::Post, "/op", &[], b"{}"));
-        });
-        let err = outcome
-            .recv_timeout(IO_TIMEOUT * 3)
-            .expect("the exchange outlived three read bounds: a hung daemon stalls the adapter")
-            .expect_err("no answer came");
-        assert!(err.starts_with(&format!("skepd at http://127.0.0.1:{port}: read: ")), "{err}");
-        drop(release);
-        stub.join().expect("the stub daemon");
-    }
-}
+mod tests;

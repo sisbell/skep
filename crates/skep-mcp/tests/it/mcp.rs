@@ -558,7 +558,8 @@ fn make_link_addrs_form_records_names_verbatim() {
 
 /// The slot forms' failure modes are data, not transport errors: an object
 /// mixing the two forms is the daemon's unparseable rejection, an empty
-/// addrs TYPE its empty_type_resolution — both isError false.
+/// addrs TYPE its empty_type_resolution, and FROM spelled both ways the
+/// daemon's unknown-field refusal — all isError false.
 #[test]
 fn slot_form_faults_surface_as_normal_results() {
     let dir = TempDir::new("slotfault");
@@ -594,6 +595,15 @@ fn slot_form_faults_surface_as_normal_results() {
     );
     assert_eq!(v["resp"], "rejected", "empty addrs type: {v}");
     assert_eq!(v["code"], "empty_type_resolution");
+
+    // FROM spelled both ways at once: the relay resolves nothing, so the
+    // daemon's unknown-field refusal answers, as it would the raw frame.
+    let v = mcp.call_json(
+        "make_link",
+        json!({"home": doc, "from": [], "from_": [], "to": [], "ty": {"addrs": []}}),
+    );
+    assert_eq!((&v["op"], &v["code"]), (&json!("unparseable"), &json!("malformed")), "{v}");
+    assert!(v["detail"].as_str().is_some_and(|d| d.contains("from_")), "{v}");
 
     sd.shutdown();
 }

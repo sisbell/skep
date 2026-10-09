@@ -5,12 +5,14 @@
 //!
 //! * Tool name → wire op is mechanical: the name IS the frame's `op`, the
 //!   arguments ARE the frame (the one mapping is `from_` → `from` on
-//!   make_link/emit). Arguments pass through unvalidated — the daemon's
-//!   strict parse is the validator, and its rejection comes back as data.
-//! * A skepd response document is the tool result, verbatim. `isError` is
-//!   ONLY transport failure reaching skepd; an op rejection is a normal
-//!   result — a client that cannot read a rejection has been silently
-//!   failed.
+//!   make_link/emit, when the arguments carry no `from` of their own).
+//!   Arguments pass through unvalidated — the daemon's strict parse is the
+//!   validator, and its rejection comes back as data.
+//! * A skepd response document is the tool result, verbatim, up to the
+//!   size cap `http.rs` reads an answer to. `isError` is ONLY transport
+//!   failure reaching skepd, an answer past that cap among them; an op
+//!   rejection is a normal result — a client that cannot read a rejection
+//!   has been silently failed.
 //! * Sessions are the adapter's apparatus: bare sessions only (wire.md
 //!   §Sessions), opened when the daemon demands one — `unauthenticated` on
 //!   a write, at the adapter's first write and again after a restarted

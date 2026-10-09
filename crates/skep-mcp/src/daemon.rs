@@ -24,6 +24,19 @@ use crate::http::{Http, Method};
 /// The header a session token rides (wire.md §Sessions).
 const SESSION_HEADER: &str = "Skepd-Session";
 
+/// The longest answer `is_unauthenticated` parses. The cue is M10's
+/// `reject(kind, Unauthenticated)` — `Rejection::classified` with no
+/// `site`, whose `fixed_detail` gives a `detail` to `Gate` alone — and no
+/// response echoes a request id (wire.md §Correlation and idempotency), so
+/// it is wire.md §Rejections' own example with the op's name in it: 78
+/// bytes and the name, 101 at the longest dispatch op. Forty times that
+/// leaves room for any `site` or `detail` a later daemon may add. A longer
+/// answer is not the cue and is relayed unparsed: a full `Value` of a
+/// `retrieve_v` at skep-retrieval's `MAX_DELIVERY_ITEMS` — 2^17 one-member
+/// `{"atom"}` items, 1.7 MB on the wire — is ~90 MB of B-tree leaves,
+/// built to read two members.
+const MAX_CUE_BYTES: usize = 4096;
+
 /// A live session token: wire.md §Sessions' 32 lowercase hex and nothing
 /// else, since the daemon admits nothing else as one. A credential, so it
 /// prints none of itself — no `Display`, and a `Debug` that elides it, as
@@ -53,12 +66,13 @@ impl fmt::Debug for Token {
 
 /// The adapter's standing with skepd: one origin, one principal, at most
 /// one live token. `Err(String)` is the adapter's own message for an
-/// exchange that left it no answer to hand on: skepd was not reached or
-/// did not answer; the bare session open `op` needs, or the health read,
-/// answered a status other than 200 or a body the adapter could not read;
-/// or the account read's answer was not JSON. Whatever response document
-/// skepd answered to an op itself — rejections included — is an `Ok`
-/// payload.
+/// exchange that left it no answer to hand on: skepd was not reached, or
+/// did not answer within the bounds `Http::request` holds an exchange to —
+/// its deadlines and its answer cap; the bare session open `op` needs, or
+/// the health read, answered a status other than 200 or a body the adapter
+/// could not read; or the account read's answer was not JSON. Whatever
+/// response document skepd answered to an op itself within those bounds —
+/// rejections included — is an `Ok` payload.
 #[derive(Debug)]
 pub struct Skepd {
     http: Http,
@@ -159,8 +173,12 @@ impl Skepd {
 /// `unauthenticated` rejection, wire.md §Sessions' signal to (re)open a
 /// session and the cue to reissue. Only writes carry it — a read without a
 /// live token runs at guest class instead (wire.md §Sessions) — so no
-/// read/write classification lives in this binary.
+/// read/write classification lives in this binary. Only an answer of the
+/// cue's size is parsed (`MAX_CUE_BYTES`).
 fn is_unauthenticated(body: &[u8]) -> bool {
+    if body.len() > MAX_CUE_BYTES {
+        return false;
+    }
     match serde_json::from_slice::<Value>(body) {
         Ok(v) => v["resp"] == "rejected" && v["code"] == "unauthenticated",
         Err(_) => false,
@@ -203,6 +221,24 @@ mod tests {
             br#"{"code":"not_owner","disposition":"permanent","op":"insert","resp":"rejected"}"#
         ));
         assert!(!is_unauthenticated(b"not json"));
+    }
+
+    /// The cue is parsed only at a size it can have: wire.md's rejection
+    /// padded with a `detail` to exactly `MAX_CUE_BYTES` is still the cue,
+    /// and one byte more is relayed unparsed — so no answer the cap admits,
+    /// a 2^17-item delivery among them, is built into a `Value` for it.
+    #[test]
+    fn the_cue_is_parsed_only_at_a_size_it_can_have() {
+        let cue = |pad: usize| {
+            let detail = "x".repeat(pad);
+            json!({"code": "unauthenticated", "detail": detail, "disposition": "permanent",
+                   "op": "insert", "resp": "rejected"})
+            .to_string()
+        };
+        let pad = MAX_CUE_BYTES - cue(0).len();
+        assert_eq!(cue(pad).len(), MAX_CUE_BYTES, "the padded cue sits at the bound");
+        assert!(is_unauthenticated(cue(pad).as_bytes()), "the cue at the bound is read");
+        assert!(!is_unauthenticated(cue(pad + 1).as_bytes()), "past it nothing is parsed");
     }
 
     /// A `/session` 200 is read for its token, and one the adapter cannot

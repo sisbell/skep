@@ -72,21 +72,24 @@ const DISPATCH_OPS: &[&str] = &[
 
 /// The ops whose wire `from` argument rides as `from_` in the tool schema
 /// (harnesses that turn schemas into function parameters cannot always take
-/// `from`); `wire_frame` renames it back. Only top-level argument names are
+/// `from`); `wire_frame` renames it back — unless the arguments already
+/// carry the wire's own `from`, when both ride and the daemon's
+/// unknown-field refusal answers: the collision is the strict parse's to
+/// refuse, never the relay's to resolve. Only top-level argument names are
 /// affected — a `from` nested inside an object value is wire shape,
 /// untouched.
 const RENAMES_FROM: &[&str] = &["make_link", "emit"];
 
 /// A tool call's wire frame — the crate's first rule, in one place: the
 /// name IS the frame's `op`, the arguments ARE the frame, and on the
-/// `RENAMES_FROM` ops a top-level `from_` rides back as `from`. `None` for
-/// a name the dispatch doesn't map: `session_info`, a wire op outside
-/// `DISPATCH_OPS`, or no op at all.
+/// `RENAMES_FROM` ops a top-level `from_` rides back as `from` where no
+/// `from` is already there. `None` for a name the dispatch doesn't map:
+/// `session_info`, a wire op outside `DISPATCH_OPS`, or no op at all.
 pub fn wire_frame(name: &str, mut args: Map<String, Value>) -> Option<Vec<u8>> {
     if !DISPATCH_OPS.contains(&name) {
         return None;
     }
-    if RENAMES_FROM.contains(&name) {
+    if RENAMES_FROM.contains(&name) && !args.contains_key("from") {
         if let Some(v) = args.remove("from_") {
             args.insert("from".to_string(), v);
         }
@@ -331,8 +334,9 @@ mod tests {
 
     /// The first rule, whole: the name rides as `op` (over any `op` the
     /// arguments carry), a top-level `from_` comes back as `from` on the
-    /// renaming ops and nowhere else, a nested `from_` is wire shape, and a
-    /// name the dispatch doesn't map has no frame.
+    /// renaming ops and nowhere else — unless a `from` is already there,
+    /// when both ride — a nested `from_` is wire shape, and a name the
+    /// dispatch doesn't map has no frame.
     #[test]
     fn wire_frame_is_the_first_rule() {
         let frame = |name: &str, args: Value| -> Option<Value> {
@@ -344,6 +348,11 @@ mod tests {
                 frame(op, json!({"from_": "1.1", "to": [{"from_": "x"}]})),
                 Some(json!({"op": op, "from": "1.1", "to": [{"from_": "x"}]})),
                 "{op} renames its top-level from_"
+            );
+            assert_eq!(
+                frame(op, json!({"from": "1.1", "from_": "2.2"})),
+                Some(json!({"op": op, "from": "1.1", "from_": "2.2"})),
+                "{op}: both spellings ride — the collision is the daemon's to refuse"
             );
         }
         assert_eq!(

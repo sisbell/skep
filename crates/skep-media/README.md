@@ -26,7 +26,7 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
   and the deposit read take — `store`, `key`, `now_ms`, `limits`
   (`Limits`), `index`, `index_ready`, `own_pending`, `uploads_open`,
   `health_object`, `startup_line`; the floor — `floor_in_force`,
-  `set_floor`, `floor`; and THE INVENTORY's two reads, `lease_counted`
+  `set_floor`, `floor`, `free_space`; and THE INVENTORY's two reads, `lease_counted`
   (`Counted`) and `upload_counted`, under the gate's own pending rule and
   its own reading of a store key, with `wall_clock_ms`, its reading of the
   clock.

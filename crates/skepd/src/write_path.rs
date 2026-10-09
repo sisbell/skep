@@ -92,7 +92,7 @@
 
 use std::io;
 use std::path::Path;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -114,7 +114,7 @@ mod sidecar;
 // The published head writer, which commits through this module's own door.
 mod head;
 
-pub(crate) use feed::{ChangesAnswer, ChangesQuery, FeedClass};
+pub(crate) use feed::{ChangesAnswer, ChangesQuery, FeedClass, FeedCompaction};
 pub(crate) use head::board_term;
 
 use self::head::HeadWriter;
@@ -185,9 +185,18 @@ pub(crate) struct WritePath {
     /// what orders it, and the atomic only what makes the field `Sync`.
     halted: AtomicBool,
     /// THE CHECKPOINT THREAD's SIGNAL (the module doc): raised after the
-    /// record step of a commit whose crossing set the kernel's due flag,
-    /// waited on by the thread `serve` spawns, stopped at shutdown.
+    /// record step of a commit whose crossing set the kernel's due flag, or
+    /// whose execute ran a checkpoint inline — the kernel's backstop — and
+    /// moved the inline count; waited on by the thread `serve` spawns,
+    /// stopped at shutdown.
     checkpoint_signal: CheckpointSignal,
+    /// THE INLINE COUNT AS THIS CARD LAST SAW IT (m13): the kernel's
+    /// `inline_checkpoints` after the last commit's record step, so the
+    /// next commit's one load beside the due flag's tells a backstop run
+    /// inside its execute from none. Read and moved under the serialization
+    /// guard alone, like `halted`; the atomic is what makes the field
+    /// `Sync`. Zero at open, as the kernel's count is at its open.
+    inline_runs_seen: AtomicU64,
 }
 
 impl WritePath {
@@ -223,6 +232,7 @@ impl WritePath {
             index,
             halted: AtomicBool::new(false),
             checkpoint_signal: CheckpointSignal::new(),
+            inline_runs_seen: AtomicU64::new(0),
         })
     }
 
@@ -235,14 +245,17 @@ impl WritePath {
     }
 
     /// COMPACT THE FEED's FIVE FILES to the journal's reclaim floor — what
-    /// the checkpoint thread runs after each checkpoint lands, the floor
-    /// having moved: `commits.log` and the four derived files rewritten
-    /// around the positions the journal reclaimed, under the feed's lock and
-    /// no guard, the attest store untouched. The feed's own rewrite, the one
-    /// its open runs ([`Feed::compact_below_reclaim_floor`] states the
-    /// disposition, which fails no op). Answers the fence compacted to, or
-    /// `None` where nothing lay below the floor.
-    pub fn compact_feed_below_reclaim_floor(&self, engine: &Engine) -> Option<u64> {
+    /// the checkpoint thread runs after any checkpoint lands, its own or a
+    /// backstop's, the floor having moved: `commits.log` and the four
+    /// derived files rewritten around the positions the journal reclaimed,
+    /// under the feed's lock and no guard, the attest store untouched. The
+    /// feed's own rewrite, the one its open runs
+    /// ([`Feed::compact_below_reclaim_floor`] states the disposition, which
+    /// fails no op). Answers what it did ([`FeedCompaction`]): the fence
+    /// compacted to, or none where nothing lay below the floor, and the
+    /// files that stood beside it, by name — what the thread's landing line
+    /// says of each file.
+    pub fn compact_feed_below_reclaim_floor(&self, engine: &Engine) -> FeedCompaction {
         self.feed.compact_below_reclaim_floor(engine)
     }
 
@@ -439,8 +452,20 @@ impl WritePath {
         // ran nothing; the thread runs it. One atomic load per commit, and
         // a wake only where the flag stands — once per crossing, a second
         // while the thread is still on its way coalescing into the one
-        // wait.
-        if self.stores.kernel().checkpoint_due() {
+        // wait. AND THE BACKSTOP's (m13): a second atomic load beside the
+        // first — the kernel's count of checkpoints run INLINE on a
+        // committing thread, against the count this card last saw — raising
+        // the same signal where it moved, so a checkpoint the backstop ran
+        // inside this execute wakes the thread as a crossing does: the
+        // thread finds no flag, reads the newest checkpoint once and takes
+        // the landing's re-reads and the backstop's line off the count.
+        let kernel = self.stores.kernel();
+        let inline_runs = kernel.inline_checkpoints();
+        let moved = inline_runs != self.inline_runs_seen.load(Ordering::Relaxed);
+        if moved {
+            self.inline_runs_seen.store(inline_runs, Ordering::Relaxed);
+        }
+        if kernel.checkpoint_due() || moved {
             self.checkpoint_signal.raise();
         }
         resp

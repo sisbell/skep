@@ -527,3 +527,275 @@ fn the_cadence_byte_bound_is_a_quarter_of_the_newest_checkpoint_and_never_below_
         assert_eq!(cadence_bytes_for(newest).get(), bound, "newest checkpoint {newest:?}");
     }
 }
+
+/// LINE 25's WORDS (`operations.md` §1.1 row 25), pinned at fixed figures:
+/// the position and the size, the duration in milliseconds, the journal
+/// bytes reclaimed — or "nothing reclaimed" at zero — both bounds, the
+/// volume's free space, the resident set's peak, the compaction's fence
+/// with each file that stood named, and the inline clause present only
+/// where the count moved. A header that did not answer reads "size unread";
+/// a resident set never read reads "unread"; a landing with nothing below
+/// the floor says so.
+#[test]
+fn the_landing_line_carries_row_25s_figures_in_its_words() {
+    let full = LandingLine {
+        position: Seq(4200),
+        bytes: Some(1_048_576),
+        duration_ms: 17,
+        reclaimed: 2_097_152,
+        bytes_bound: 25_165_824,
+        floor: 268_435_456,
+        free_space: 9_000_000_000,
+        resident_peak: Some(123_456_789),
+        compaction: FeedCompaction {
+            fence: Some(4095),
+            standing: vec!["commits.log", "feed-index.log"],
+        },
+        inline: Some(InlineRuns { runs: 2, since: Seq(3100) }),
+    };
+    assert_eq!(
+        full.to_string(),
+        "checkpoint at position 4200 landed (1048576 bytes) in 17 ms; 2097152 journal bytes \
+         reclaimed; the cadence's byte bound 25165824, the media floor in force 268435456, the \
+         volume's free space 9000000000; the process's resident set peaked at 123456789 bytes; \
+         the change feed's files compacted below position 4096, commits.log standing as it \
+         was, feed-index.log standing as it was; 2 checkpoints ran inline on a writer since \
+         position 3100"
+    );
+    let quiet = LandingLine {
+        position: Seq(7),
+        bytes: None,
+        duration_ms: 0,
+        reclaimed: 0,
+        bytes_bound: 24 * 1024 * 1024,
+        floor: 256 * 1024 * 1024,
+        free_space: 0,
+        resident_peak: None,
+        compaction: FeedCompaction::default(),
+        inline: None,
+    };
+    assert_eq!(
+        quiet.to_string(),
+        "checkpoint at position 7 landed (size unread) in 0 ms; nothing reclaimed; the \
+         cadence's byte bound 25165824, the media floor in force 268435456, the volume's free \
+         space 0; the process's resident set unread; the change feed's files hold nothing \
+         below the reclaim floor"
+    );
+}
+
+/// LINE 26's WORDS (row 26; §4 row 2) at each cause: the head's position as
+/// an ordering, a full volume in the operator's words beside the OS's text,
+/// every other cause its own text, and the trailer keyed to the cause — an
+/// I/O cause retries at the next crossing, a poisoned kernel takes no
+/// checkpoint until a restart, a world that will not serialize refuses the
+/// same way until the build fixes it. A base that LANDED opens the line on
+/// its position and names which of the three steps failed, in the daemon's
+/// words and never the kernel's, the volume's words re-applied to its cause;
+/// a landed base whose header did not answer is placed at or above the head
+/// the run began at.
+#[test]
+fn the_failure_line_keys_its_trailer_to_the_cause_and_names_a_landed_bases_step() {
+    use std::io::{Error, ErrorKind};
+
+    let at = Seq(90);
+    let retry = "; the journal is not reclaimed and holds every commit; the next attempt is at \
+                 the cadence's next crossing";
+    let full = CheckpointError::Io(Error::new(ErrorKind::StorageFull, "No space left on device"));
+    assert_eq!(
+        FailureLine { at, landed_at: None, error: &full }.to_string(),
+        format!(
+            "checkpoint FAILED (the head stood at position 90 when the run began): the volume \
+             is full (No space left on device){retry}"
+        )
+    );
+    let denied = CheckpointError::Io(Error::new(ErrorKind::PermissionDenied, "denied"));
+    assert_eq!(
+        FailureLine { at, landed_at: None, error: &denied }.to_string(),
+        format!(
+            "checkpoint FAILED (the head stood at position 90 when the run began): denied{retry}"
+        )
+    );
+    assert_eq!(
+        FailureLine { at, landed_at: None, error: &CheckpointError::Poisoned }.to_string(),
+        "checkpoint FAILED (the head stood at position 90 when the run began): kernel is \
+         poisoned; no checkpoint taken; no checkpoint is taken until a restart (the kernel's \
+         halt, said above)"
+    );
+    let refused = CheckpointError::Serialize("the `m5` slice refused".into());
+    assert_eq!(
+        FailureLine { at, landed_at: None, error: &refused }.to_string(),
+        "checkpoint FAILED (the head stood at position 90 when the run began): checkpoint \
+         world serialization failed: the `m5` slice refused; every crossing refuses the same \
+         way until the world encodes: the build's to fix"
+    );
+    for (step, words) in [
+        (LandedStep::DirectorySync, "the directory's sync"),
+        (LandedStep::Retention, "retention"),
+        (LandedStep::Reclamation, "the journal's reclamation"),
+    ] {
+        let landed = CheckpointError::Landed {
+            step,
+            cause: Error::new(ErrorKind::StorageFull, "No space left on device"),
+        };
+        assert_eq!(
+            FailureLine { at, landed_at: Some(Seq(96)), error: &landed }.to_string(),
+            format!(
+                "a checkpoint landed at position 96 but {words} failed: the volume is full (No \
+                 space left on device){retry}"
+            ),
+            "{step:?}"
+        );
+        // The kernel's own words for the step never reach the line.
+        assert!(!FailureLine { at, landed_at: Some(Seq(96)), error: &landed }
+            .to_string()
+            .contains(&step.to_string()));
+    }
+    let squatted = CheckpointError::Landed {
+        step: LandedStep::Retention,
+        cause: Error::other("a directory stands on the name"),
+    };
+    assert_eq!(
+        FailureLine { at, landed_at: None, error: &squatted }.to_string(),
+        format!(
+            "a checkpoint landed at or above position 90 (its header unread) but retention \
+             failed: a directory stands on the name{retry}"
+        )
+    );
+}
+
+/// THE BACKSTOP's LINE (m13): the runs since the position they are counted
+/// from, and whether the last of them landed or how it failed, in the
+/// kernel's rendered words.
+#[test]
+fn the_backstop_line_counts_the_inline_runs_from_a_position_and_says_how_the_last_ended() {
+    assert_eq!(
+        BackstopLine { runs: 1, since: Seq(0), last_failure: None }.to_string(),
+        "checkpoint: the cadence outran the checkpoint thread; 1 checkpoints ran inline on a \
+         writer since position 0, the last landed"
+    );
+    let failed = BackstopLine {
+        runs: 3,
+        since: Seq(512),
+        last_failure: Some("checkpoint I/O failure: No space left on device".to_string()),
+    };
+    assert_eq!(
+        failed.to_string(),
+        "checkpoint: the cadence outran the checkpoint thread; 3 checkpoints ran inline on a \
+         writer since position 512, the last FAILED: checkpoint I/O failure: No space left on \
+         device"
+    );
+}
+
+/// m13's READ POINT: a checkpoint the kernel's backstop ran inline inside an
+/// execute wakes the checkpoint thread through the write path's SECOND load
+/// — the inline count against the count the write path last saw — with NO
+/// due flag standing. Two writes made through M10 directly, past the write
+/// path (the one path that commits without its record step, and so without
+/// its wake), cross a one-byte bound twice: the first sets the flag, the
+/// second finds it set and runs the backstop inline — the flag cleared, the
+/// count moved — and nothing has raised the thread's signal, which a waiter
+/// on it shows. Then the bound set wide and one write THROUGH the write
+/// path, which crosses nothing: its record step finds the count moved and
+/// raises, and the waiter is woken `Due`. Socket-free, so the signal is
+/// observed and not consumed by a thread; the thread's own wake arm is the
+/// integration suite's (`tests/it/checkpoint.rs`).
+#[test]
+fn a_write_whose_record_step_finds_the_inline_count_moved_wakes_the_checkpoint_thread() {
+    use std::sync::mpsc;
+    use std::time::Duration;
+
+    use crate::write_path::Woken;
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let daemon = Daemon::open(dir.path()).expect("genesis open");
+    let token = bare_session(&daemon, 0);
+    let past_the_write_path = |addr: &str| {
+        let frame = format!(r#"{{"op":"register_node","addr":"{addr}"}}"#);
+        let req = daemon.codec.parse(frame.as_bytes()).unwrap_or_else(|_| panic!("parses"));
+        let sid = daemon.febe.bootstrap_session();
+        match daemon.febe.execute(sid, req) {
+            Response::AckAddr { .. } => {}
+            other => panic!(
+                "register_node acks an address: {}",
+                String::from_utf8_lossy(&daemon.codec.marshal(&other))
+            ),
+        }
+    };
+    daemon.set_checkpoint_bytes_bound(1);
+    past_the_write_path("1.9001");
+    assert!(daemon.checkpoint_is_due(), "the first crossing set the flag, unserviced");
+    assert_eq!(daemon.inline_checkpoints(), 0);
+    past_the_write_path("1.9002");
+    assert!(!daemon.checkpoint_is_due(), "the second crossing ran inline and cleared the flag");
+    assert_eq!(daemon.inline_checkpoints(), 1, "the backstop, counted");
+    assert!(daemon.newest_checkpoint().is_some(), "…and landed");
+    assert!(daemon.checkpoint_lines().is_empty(), "no thread, nothing said");
+
+    let signal = daemon.writes.checkpoint_signal();
+    std::thread::scope(|scope| {
+        let (woken, waiter) = mpsc::channel();
+        scope.spawn(move || {
+            let _ = woken.send(signal.wait());
+        });
+        assert!(
+            waiter.recv_timeout(Duration::from_millis(300)).is_err(),
+            "two writes past the write path raised nothing, the backstop's landing among them"
+        );
+        // THE BOUND WIDE, so the one write through the write path crosses
+        // nothing: its record step raises on the moved count alone.
+        daemon.set_checkpoint_bytes_bound(1 << 40);
+        let read = daemon.route(&HttpRequest {
+            method: "POST".to_string(),
+            path: "/op".to_string(),
+            query: None,
+            session_token: Some(token.clone()),
+            origin: None,
+            peer: Peer::Loopback,
+            body: br#"{"op":"next_account_prefix","parent":"1"}"#.to_vec(),
+        });
+        let Routed::Reply(read) = read else { panic!("POST /op is not the event stream") };
+        let v: Value = serde_json::from_slice(read.bytes()).expect("json");
+        let prefix = v["addr"].as_str().expect("a delegable prefix").to_string();
+        let Routed::Reply(written) = daemon.route(&HttpRequest {
+            method: "POST".to_string(),
+            path: "/op".to_string(),
+            query: None,
+            session_token: Some(token.clone()),
+            origin: None,
+            peer: Peer::Loopback,
+            body: format!(r#"{{"op":"delegate","new_prefix":"{prefix}","new_id":41}}"#)
+                .into_bytes(),
+        }) else {
+            panic!("POST /op is not the event stream")
+        };
+        let v: Value = serde_json::from_slice(written.bytes()).expect("json");
+        assert!(v["at"].is_u64(), "the write through the write path commits: {v}");
+        assert!(!daemon.checkpoint_is_due(), "under the wide bound it crossed nothing");
+        let woken = waiter.recv_timeout(Duration::from_secs(5));
+        signal.stop();
+        assert_eq!(woken, Ok(Woken::Due), "the record step raised on the moved count alone");
+    });
+}
+
+/// THE CLASSED DOOR (CUT 1 (a)): every line of the checkpoint thread's
+/// section goes out through `notice::emit` with its class word, and none
+/// through the un-classed `line` or `lines` — read off the source, since no
+/// suite captures the stream in-process; the class each line is emitted
+/// under is pinned through `Daemon::checkpoint_lines` by the integration
+/// suite (`tests/it/checkpoint.rs`).
+#[test]
+fn the_checkpoint_threads_lines_go_through_the_classed_door() {
+    let source = include_str!("../server.rs");
+    let start =
+        source.find("// ── the checkpoint thread's work").expect("the section's marker");
+    let end = source[start..]
+        .find("/// AUTH-2.86's two startup warnings")
+        .expect("the section's end")
+        + start;
+    let section = &source[start..end];
+    assert!(section.contains("notice::emit("), "the section says its lines through `emit`");
+    assert!(
+        !section.contains("notice::line(") && !section.contains("notice::lines("),
+        "no line of the section goes through the un-classed door"
+    );
+}

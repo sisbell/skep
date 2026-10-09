@@ -10,6 +10,7 @@ mod cascade;
 mod chain_at;
 mod chain_head;
 mod changes;
+mod checkpoint;
 mod client;
 mod codec_roundtrip;
 mod common;

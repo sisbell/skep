@@ -1489,7 +1489,10 @@ bytes — the venue total, the floor — in that order, the requester's own
 record first), the creation's gate (the standing-uploads bound, the floor
 on no length), THE FLOOR IN FORCE — the larger of the constant 256 MiB and
 twice the newest checkpoint's size plus one maximal segment, set by the
-daemon at open and as each checkpoint lands — the binding's read with its
+daemon at open off the start point's header (the base that loaded, never a
+skipped header's claim) and after any landing, the thread's own or a
+backstop's; and the volume's free space as the floor reads it, the one
+figure the daemon's landing line carries too — the binding's read with its
 window, and THE INVENTORY's two reads, whose figures the operator's tool
 reports under the gate's own pending rule. `index.rs` — THE CELL INDEX:
 per hash the cells naming it, per account the distinct hashes its cells
@@ -1616,11 +1619,13 @@ write passes down through them in this order:
 │                    pruner's cadence, the logs'          │
 │                    compaction by its pass · the         │
 │                    checkpoint thread: the kernel's      │
-│                    deferred trigger serviced, the byte  │
-│                    bound and the floor re-read, the     │
-│                    feed compacted, a failure said · a   │
-│                    replace's deferred unlink after the  │
-│                    reply                                │
+│                    deferred trigger serviced, and after │
+│                    any landing — its own or a           │
+│                    backstop's — the byte bound and the  │
+│                    floor re-read off the newest base,   │
+│                    the feed compacted, each landing and │
+│                    each failure said · a replace's      │
+│                    deferred unlink after the reply      │
 ├─────────────────────────────────────────────────────────┤
 │ 2 ROUTES           server.rs (router) · actor.rs        │
 │                    session_routes · read_routes · op ·  │
@@ -1710,8 +1715,12 @@ the store's install — nothing above their own layer.
    its trigger among its acts — THE CHECKPOINT THREAD — the kernel's
    deferred trigger serviced off the write path's guard: the checkpoint
    every 1024 commits or the byte bound, whichever first, its result on
-   the operator stream, a failure said once, and after a landing the byte
-   bound and the media floor re-read from the checkpoint's size and the
+   the operator stream — a landing's figures, a failure said per attempt
+   — and after ANY landing, its own or one the kernel's backstop ran
+   inline on a writer (the write path raising the thread's signal where
+   the kernel's inline count moved, the thread reading the newest
+   checkpoint once on its wake and saying the backstop's line), the byte
+   bound and the media floor re-read from that checkpoint's size and the
    change feed's five files compacted to the journal's reclaim floor —
    and, after a blob reply is written, the replaced file's deferred
    unlink) and
@@ -1785,7 +1794,8 @@ the store's install — nothing above their own layer.
    door). Beneath it, and reachable only from it:
    - `write_path/feed.rs` — the change feed, and the one compaction of its
      five files to the journal's reclaim floor, run at open and by the
-     checkpoint thread after each landing; beneath it,
+     checkpoint thread after any landing, its own or a backstop's, its
+     answer naming each file that stood; beneath it,
      `write_path/feed/derived.rs` keeps the feed's derived index files —
      a rewrite that fails past its rename stops its file for the uptime,
      said once — and `write_path/feed/attest.rs` the attest store, the
@@ -1812,8 +1822,10 @@ the store's install — nothing above their own layer.
    crate at its `World` and composes with it: `MediaOptions`, the upload
    setting, rides `Daemon::open_configured` and is echoed on `/health`;
    the deposit read is a route helper of `server/blob_routes.rs` over the
-   gate's reads; the floor is re-read by the checkpoint thread as each
-   checkpoint lands; and the upload and fetch pools are counted into the
+   gate's reads; the floor is sized at the open off the start point's
+   header — the base the open loaded, never a skipped header's claim —
+   and re-read by the checkpoint thread after any landing, its own or a
+   backstop's; and the upload and fetch pools are counted into the
    worker minimum beside the two pools of the daemon's own.
 6. **The leaves** — `codec.rs` with `codec/marshal.rs` (the JSON wire
    format: parse, and marshal — its key-sorting `obj` and the lowercase

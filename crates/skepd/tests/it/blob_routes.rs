@@ -476,35 +476,49 @@ fn the_seven_clauses_as_vectors_over_the_wire() {
     }
 }
 
-/// THE FLOOR's SCALING (fs-1; M-I5 (f): the floor sized to keep the journal
-/// writable THROUGH ITS NEXT CHECKPOINT, the larger of the constant and
-/// twice the newest checkpoint's size plus one maximal segment, re-read as
-/// each checkpoint lands; M-I6 (f) THE FLOOR IS THE HOST'S; M-I6 (h): the
-/// refusal shows no figure). The fixture's `floor_bytes` pins the CONSTANT
-/// HALF; this carries the scaling. At the open the daemon reads the floor
-/// ONCE off the newest checkpoint on disk: a checkpoint whose header claims
-/// a 300 MiB body — made so here, the file itself then no base, which the
-/// open passes over with a warning and the header still answers — puts the
-/// floor in force at 600 MiB plus a segment, and a creation the constant
-/// would admit at 400 MiB of free space is refused `floor`, its face naming
-/// the scope and no figure. A landed checkpoint moves it: the checkpoint
-/// thread's act lands a small one, the floor returns to the constant, and
-/// the same creation is admitted.
+/// THE FLOOR's SIZING AT THE OPEN (fs-1; M-I5 (f): the floor sized to keep
+/// the journal writable THROUGH ITS NEXT CHECKPOINT, the larger of the
+/// constant and twice a checkpoint's size plus one maximal segment; M-I6 (f)
+/// THE FLOOR IS THE HOST'S; `operations.md` §4 row 14: the open sizes the
+/// floor and the byte bound off the START POINT's header — the base the
+/// open LOADED — never a skipped header's claim). The fixture's
+/// `floor_bytes` pins the CONSTANT HALF; this carries the sizing. Two bases
+/// stand: a small sound one, and a newer one whose header is made to claim
+/// a 300 MiB body — the header reads, the base does not load, the open
+/// passes it over with a warning and loads the older one as its start
+/// point. The floor in force is then the constant, sized off the base that
+/// loaded and not off the claim (which would have put it at 600 MiB plus a
+/// segment), so a creation at 400 MiB of free space is admitted at once.
+/// THE FIRST LANDING keeps the base the open loaded from beside the new one
+/// and removes the skipped base as excess, whatever its age (retention
+/// counts the bases that load), and the floor re-read from the landing is
+/// the constant still.
 #[test]
-fn the_floor_in_force_is_read_off_the_newest_checkpoint_at_open_and_moved_by_a_landing() {
+fn the_floor_in_force_is_sized_off_the_start_point_at_open_and_the_first_landing_removes_the_skipped_base(
+) {
     let mib: u64 = 1024 * 1024;
     let dir = tempfile::tempdir().expect("tempdir");
-    let claimed = {
+    let (loaded, skipped) = {
         let sd = spawn(dir.path());
+        let port = sd.port();
         assert_eq!(sd.daemon().media_floor_in_force(), 256 * mib, "no checkpoint: the constant");
         sd.daemon().checkpoint_now();
-        let seq = sd.daemon().newest_checkpoint().expect("one checkpoint").seq.0;
+        let loaded = sd.daemon().newest_checkpoint().expect("the first base").seq.0;
+        let owner = open_session(port, CLAIMANT_PRINCIPAL);
+        acked_at(&op(
+            port,
+            Some(&owner),
+            &format!(r#"{{"op":"create_new_document","account":"{CLAIMANT_ACCOUNT}"}}"#),
+        ));
+        sd.daemon().checkpoint_now();
+        let skipped = sd.daemon().newest_checkpoint().expect("the second base").seq.0;
+        assert!(skipped > loaded, "two bases at two positions: {loaded} then {skipped}");
         sd.shutdown();
-        seq
+        (loaded, skipped)
     };
-    // The header's `body_len` — bytes 16..24, little-endian — made to claim
-    // 300 MiB: the header reads, the base does not load.
-    let path = dir.path().join(format!("checkpoint.{claimed}"));
+    // The newer header's `body_len` — bytes 16..24, little-endian — made to
+    // claim 300 MiB: the header reads, the base does not load.
+    let path = dir.path().join(format!("checkpoint.{skipped}"));
     let mut bytes = std::fs::read(&path).expect("the checkpoint");
     let claimed_body = 300 * mib;
     bytes[16..24].copy_from_slice(&claimed_body.to_le_bytes());
@@ -512,36 +526,52 @@ fn the_floor_in_force_is_read_off_the_newest_checkpoint_at_open_and_moved_by_a_l
 
     let sd = spawn(dir.path());
     let port = sd.port();
-    let scaled = 2 * (claimed_body + 88) + skep_kernel::MAX_SEGMENT_LEN;
+    let recovery = sd.daemon().recovery().expect("a journaled daemon").clone();
+    assert_eq!(recovery.start_point.0, loaded, "the open loaded the older base: {recovery:?}");
+    assert_eq!(
+        recovery.skipped.iter().map(|s| s.seq.0).collect::<Vec<_>>(),
+        vec![skipped],
+        "the doctored base was passed over at the open, and said"
+    );
+    let claimed_floor = 2 * (claimed_body + 88) + skep_kernel::MAX_SEGMENT_LEN;
     assert_eq!(
         sd.daemon().media_floor_in_force(),
-        scaled,
-        "read once at the open off the newest checkpoint's header: twice its length plus a segment"
-    );
-    assert!(
-        sd.daemon().recovery().is_some_and(|r| !r.skipped.is_empty()),
-        "the doctored base was passed over at the open, and said"
+        256 * mib,
+        "sized off the start point's header — a small base, the constant — and never off the \
+         skipped header's claim of {claimed_floor}"
     );
     let a = open_session(port, CLAIMANT_PRINCIPAL);
     sd.daemon().set_media_free_space(Some(400 * mib));
     let (st, _, body) = blob_create(port, Some(&a), 10, b"");
-    assert_eq!(st, 507, "the floor in force refuses: {}", String::from_utf8_lossy(&body));
-    let v = json(&body);
-    assert_eq!(v["error"].as_str(), Some("deposit_refused"));
-    assert_eq!(v["scope"].as_str(), Some("floor"), "{v}");
-    let text = String::from_utf8_lossy(&body);
-    assert!(
-        !text.contains(&scaled.to_string()) && !text.contains(&(400 * mib).to_string()),
-        "the face shows no figure: {text}"
+    assert_eq!(
+        st,
+        200,
+        "the creation the constant admits is admitted at once: {}",
+        String::from_utf8_lossy(&body)
     );
 
-    // THE LANDING moves the floor: a small checkpoint is the newest now — at
-    // the same position as the doctored one where nothing committed since,
-    // written over it whole, its header claiming its own length again.
+    // THE FIRST LANDING, at a position above both: retention counts the
+    // bases that loaded, so the base the open loaded from stands beside the
+    // new one and the skipped one is removed as excess.
+    let owner = open_session(port, CLAIMANT_PRINCIPAL);
+    acked_at(&op(
+        port,
+        Some(&owner),
+        &format!(r#"{{"op":"create_new_document","account":"{CLAIMANT_ACCOUNT}"}}"#),
+    ));
     sd.daemon().service_the_checkpoint_now();
     let landed = sd.daemon().newest_checkpoint().expect("the thread's checkpoint landed");
-    assert!(landed.seq.0 >= claimed, "{landed:?}");
+    assert!(landed.seq.0 > skipped, "{landed:?}");
     assert!(landed.len < mib, "a small board's checkpoint: {landed:?}");
+    assert!(
+        dir.path().join(format!("checkpoint.{loaded}")).is_file(),
+        "the base the open loaded from is kept beside the new one"
+    );
+    assert!(
+        !dir.path().join(format!("checkpoint.{skipped}")).exists(),
+        "the skipped base is removed by the first landing, whatever its age"
+    );
+    assert!(dir.path().join(format!("checkpoint.{}", landed.seq.0)).is_file());
     assert_eq!(sd.daemon().media_floor_in_force(), 256 * mib, "re-read from the landing: the constant");
     let (st, _, body) = blob_create(port, Some(&a), 10, b"");
     assert_eq!(st, 200, "the same creation admitted: {}", String::from_utf8_lossy(&body));

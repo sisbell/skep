@@ -696,8 +696,18 @@ impl MediaGate {
         Ok(())
     }
 
-    /// The volume's free space — the host's, or the seam's reading.
-    fn free_space(&self) -> u64 {
+    /// THE VOLUME's FREE SPACE AS THE FLOOR READS IT — the seam's figure
+    /// where `set_free_space` pinned one (a `test-hooks` build), else the
+    /// host's: one `statvfs` at the store's root
+    /// ([`skep_blobs::Store::free_space`]), a host that cannot answer read as
+    /// having no room, so the floor refuses rather than admitting a deposit
+    /// it cannot price. `pub` for ONE reader beyond the floor's two gates:
+    /// the daemon's checkpoint thread, whose landing line carries the
+    /// volume's free space — read through this door and never by a second
+    /// read of the store, so the figure the floor refuses on and the figure
+    /// the line carries are one reading's, and a suite that pins the floor's
+    /// figure has pinned the line's.
+    pub fn free_space(&self) -> u64 {
         #[cfg(any(test, feature = "test-hooks"))]
         if let Some(n) = *self.free_space_override.lock() {
             return n;

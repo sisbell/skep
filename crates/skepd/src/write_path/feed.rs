@@ -264,6 +264,25 @@ impl<'a> FeedClass<'a> {
     }
 }
 
+/// WHAT ONE COMPACTION OF THE FEED's FILES DID — the answer of
+/// [`Feed::compact_below_reclaim_floor`], read by the checkpoint thread for
+/// its landing line: the fence compacted to, or `None` where nothing lay
+/// below the reclaim floor and nothing was written; and, beside the fence,
+/// the files that STOOD — each whose rewrite failed BEFORE its rename, the
+/// old file whole and the next compaction trying again — by name, so the
+/// line is truthful of each file. A file whose rewrite failed PAST its
+/// rename was compacted (the new file is in place) and has said its own
+/// stop; it is none of these. Empty with no fence: nothing was attempted.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct FeedCompaction {
+    /// The last position dropped — the files are compacted below the
+    /// position after it — or `None` where nothing lay below the floor.
+    pub fence: Option<u64>,
+    /// The files whose rewrite failed before its rename, standing as they
+    /// were, in the order the compaction attempted them.
+    pub standing: Vec<&'static str>,
+}
+
 /// One `/changes` question — the parsed query string, beside
 /// [`ChangesAnswer`], its answer.
 #[derive(Clone, Debug)]
@@ -647,20 +666,28 @@ impl Feed {
     /// same positions and the four derived files are rewritten from them
     /// whole, fenced at the last recorded position; the attest store is
     /// untouched (its class: below the floor its lines are primary). Answers
-    /// the fence compacted to, or `None` where the floor has not moved past
-    /// the oldest entry — the ordinary answer between reclaiming checkpoints
-    /// — and nothing is written.
+    /// what it did ([`FeedCompaction`]): the fence compacted to, or none
+    /// where the floor has not moved past the oldest entry — the ordinary
+    /// answer between reclaiming checkpoints — and nothing is written; and
+    /// beside the fence, by name, each file that STOOD.
     ///
     /// THE DISPOSITION while serving is the record step's own (the settled
     /// rule for `record`): reported on the operator stream, never failing an
     /// op. A rewrite that fails BEFORE its rename leaves that file whole and
     /// standing and is said here, the next checkpoint's compaction trying
-    /// again; one that fails PAST its rename stops its file for the uptime
-    /// and is said by the file itself, once — the resident twins are trimmed
-    /// either way and serve this uptime, and the next open re-derives (P22).
-    pub(super) fn compact_below_reclaim_floor(&self, engine: &Engine) -> Option<u64> {
-        let fence = reclaim_floor(engine)?.saturating_sub(1);
+    /// again — and that file is named in the answer, so the checkpoint
+    /// thread's landing line is truthful of it; one that fails PAST its
+    /// rename stops its file for the uptime and is said by the file itself,
+    /// once — the new file is in place, so it is not one that stood — the
+    /// resident twins are trimmed either way and serve this uptime, and the
+    /// next open re-derives (P22).
+    pub(super) fn compact_below_reclaim_floor(&self, engine: &Engine) -> FeedCompaction {
+        let Some(floor) = reclaim_floor(engine) else {
+            return FeedCompaction::default();
+        };
+        let fence = floor.saturating_sub(1);
         let mut inner = self.inner.lock();
+        let mut standing = Vec::new();
         let dropped = match inner.log.compact_to(fence) {
             Ok(dropped) => dropped,
             // The file said its own stop; the entries are trimmed all the
@@ -671,11 +698,12 @@ impl Feed {
                     "commits.log compaction below the reclaim floor failed {before}; the file \
                      stands as it was, and the next checkpoint's compaction tries again"
                 ));
+                standing.push("commits.log");
                 true
             }
         };
         if !dropped {
-            return None;
+            return FeedCompaction::default();
         }
         inner.drop_at_or_below(fence);
         let covered = inner.log.entries().keys().next_back().copied().unwrap_or(fence);
@@ -685,9 +713,10 @@ impl Feed {
                     "{name} compaction below the reclaim floor failed before its rename: {e}; \
                      the file stands as it was, and the next checkpoint's compaction tries again"
                 ));
+                standing.push(name);
             }
         }
-        Some(fence)
+        FeedCompaction { fence: Some(fence), standing }
     }
 
     /// The test seam behind `crate::Daemon::fail_the_feeds_next_rewrite_past_rename`:

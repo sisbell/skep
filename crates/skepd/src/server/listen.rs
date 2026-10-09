@@ -420,16 +420,31 @@ impl Skepd {
 /// THE CHECKPOINT THREAD's LOOP: while the kernel's due flag stands and no
 /// stop has been asked, run the checkpoint the cadence calls for with its
 /// consequences (`Daemon::service_the_checkpoint`) — again where a crossing
-/// during the run set the flag anew — then wait on the write path's signal
-/// for the next crossing, or the stop. A flag set before the thread existed
-/// (a crossing inside the open's own commits) is read at the first pass,
-/// before any wait. A failure is the operator's line, once, and the next
-/// crossing's to retry: the kernel clears the flag as it starts, so a
-/// kernel that cannot checkpoint is not asked again until a commit crosses.
+/// during the run set the flag anew; then, flag or none, FOLLOW THE
+/// BACKSTOP (`Daemon::follow_the_backstop`): the write path raises the same
+/// signal where a commit's execute ran a checkpoint inline — the kernel's
+/// backstop, a second crossing while the first's flag stood — so a wake
+/// with NO flag is that landing's, and the thread takes the landing's
+/// re-reads and says the backstop's line off the kernel's inline count; a
+/// wake the flag's arm has just answered finds the count said and does
+/// nothing. Then wait on the write path's signal for the next crossing or
+/// inline run, or the stop. A flag set, or a count moved, before the thread
+/// existed (a crossing inside the open's own commits) is read at the first
+/// pass, before any wait. A failure is the operator's line per attempt, and
+/// the next crossing's to retry: the kernel clears the flag as it starts, so
+/// a kernel that cannot checkpoint is not asked again until a commit crosses.
 fn checkpoint_on_due(daemon: &Daemon, signal: &CheckpointSignal) {
     loop {
+        // THE HOLD (test seam): a suite parks the thread here, before it
+        // looks at the flag, so a second crossing meets the flag still set
+        // and runs inline as the backstop; the stop reaches a held thread.
+        #[cfg(any(test, feature = "test-hooks"))]
+        daemon.wait_while_the_checkpoint_thread_is_held(|| signal.is_stopped());
         while !signal.is_stopped() && daemon.checkpoint_is_due() {
             daemon.service_the_checkpoint();
+        }
+        if !signal.is_stopped() {
+            daemon.follow_the_backstop();
         }
         if signal.wait() == Woken::Stop {
             return;

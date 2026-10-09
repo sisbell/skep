@@ -142,6 +142,19 @@ parking_lot.workspace = true
 # mid-stream re-check ends sends a reset and never a clean finish a client
 # could read as the whole file. The `net` feature alone.
 rustix = { version = "1", features = ["net"] }
+# THE RESIDENT SET on the checkpoint thread's landing line (server.rs,
+# `service_the_checkpoint`): the process's physical memory — the resident
+# set size on macOS and Linux — read once per landing and once per backstop
+# wake, on that thread, and kept as THE DAEMON's OWN HIGH-WATER, the
+# largest reading it has taken this uptime, which is the figure the line
+# carries as "the process's resident set peaked at"; NOT the kernel's
+# `ru_maxrss`, which the two differ from by whatever rose and fell between
+# two readings. Ruled in for this one figure: the `rustix` above has no
+# `getrusage` at 1.1.x, `/proc` is Linux's alone, and a `libc` call is the
+# `unsafe` FFI `lib.rs`'s `#![forbid(unsafe_code)]` refuses — the `unsafe`
+# lives inside this crate, as rustix's does. No other use, nothing of it on
+# `/health`, and its optional `serde` left off.
+memory-stats = "1.2"
 # BLAKE3 at the operator's tools (tools.rs): the inventory's re-hash of a
 # referenced file and the pull's hash of the file it installs, each held to
 # the hex a cell names — the designation the store deposits under. The

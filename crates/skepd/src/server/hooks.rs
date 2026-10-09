@@ -4,8 +4,11 @@
 use std::num::NonZeroU64;
 use std::path::Path;
 use std::sync::atomic::Ordering;
+use std::time::Duration;
 
 use skep_engine::{HistoryError, Recovery};
+#[cfg(feature = "test-hooks")]
+use skep_kernel::Step;
 use skep_kernel::{Attestation, CheckpointHeader, SaltSource, Seq};
 use skep_media::index::{Rebuild, WALK_HOLD};
 use skep_media::pruner::PrunePass;
@@ -449,6 +452,119 @@ impl Daemon {
     #[doc(hidden)]
     pub fn stopped_feed_files(&self) -> Vec<&'static str> {
         self.writes.stopped_feed_files()
+    }
+
+    /// TEST HOOK (the same standing): FAIL THE NEXT `step` of the kernel's
+    /// write paths with an I/O error of `kind` — the kernel's own write-fault
+    /// seam (`Kernel::fail_the_next`), reached through the daemon so a suite
+    /// drives the checkpoint thread's failure line at each of the seam's
+    /// steps: `CheckpointSync` armed fails the checkpoint BEFORE its rename
+    /// (no base, `CheckpointError::Io`), `CheckpointDirSync` fails the
+    /// directory's sync AFTER it (a landed base, `CheckpointError::Landed`);
+    /// a full volume is `io::ErrorKind::StorageFull`. ONCE: the arm fires
+    /// and disarms; arming a step again replaces its arm.
+    #[cfg(feature = "test-hooks")]
+    #[doc(hidden)]
+    pub fn fail_the_next_checkpoint_step(&self, step: Step, kind: std::io::ErrorKind) {
+        self.engine.kernel().fail_the_next(step, kind);
+    }
+
+    /// TEST HOOK (the same standing): how many checkpoints the kernel has run
+    /// INLINE on a committing thread this uptime (`Kernel::inline_checkpoints`)
+    /// — under the daemon's deferred cadence, the backstop's runs alone — as
+    /// the daemon reads it beside the due flag after every commit.
+    #[doc(hidden)]
+    pub fn inline_checkpoints(&self) -> u64 {
+        self.engine.kernel().inline_checkpoints()
+    }
+
+    /// TEST HOOK (the same standing): how the LAST inline checkpoint failed,
+    /// as the kernel rendered it (`Kernel::last_inline_checkpoint_failure`),
+    /// or `None` where it landed or none has run — what the backstop's line
+    /// carries after "the last".
+    #[doc(hidden)]
+    pub fn last_inline_checkpoint_failure(&self) -> Option<String> {
+        self.engine.kernel().last_inline_checkpoint_failure()
+    }
+
+    /// TEST HOOK (the same standing): the journal bytes the LAST landed
+    /// checkpoint reclaimed (`Kernel::last_reclaimed_bytes`) — `Some(0)` for a
+    /// landing that reclaimed nothing, `None` before any landing this uptime
+    /// — the figure line 25 carries as "{r} journal bytes reclaimed".
+    #[doc(hidden)]
+    pub fn last_reclaimed_bytes(&self) -> Option<u64> {
+        self.engine.kernel().last_reclaimed_bytes()
+    }
+
+    /// TEST HOOK (the same standing): every line the checkpoint thread's arms
+    /// have rendered this uptime, oldest first, each as `{class}: {text}` —
+    /// the landing (line 25), the failure (line 26) and the backstop's line
+    /// (m13) with the class word each was emitted under — so a suite pins
+    /// the words and the class of what went to the operator stream, which no
+    /// suite captures in-process. The whole act is the thread's or
+    /// [`Daemon::service_the_checkpoint_now`]'s; this is its record.
+    #[doc(hidden)]
+    pub fn checkpoint_lines(&self) -> Vec<String> {
+        self.checkpointer.lines.lock().clone()
+    }
+
+    /// TEST HOOK (the same standing): the daemon's HIGH-WATER of its own
+    /// resident set — the largest reading it has taken, one per landing and
+    /// per backstop wake — or `None` before the first reading; the figure
+    /// line 25 carries as "peaked at", so a suite pins the line's figure
+    /// against the daemon's and its monotonicity across landings.
+    #[doc(hidden)]
+    pub fn resident_set_peak(&self) -> Option<u64> {
+        match self.checkpointer.resident_peak.load(Ordering::Acquire) {
+            0 => None,
+            peak => Some(peak),
+        }
+    }
+
+    /// TEST HOOK (the same standing): move the MEDIA FLOOR in force to
+    /// `bytes` (`MediaGate::set_floor`) — the floor's twin of
+    /// [`Daemon::set_checkpoint_bytes_bound`] — so a suite pins that the
+    /// thread's re-read after a landing it did not take itself (a backstop's,
+    /// a base that landed before its run failed) restores the floor the
+    /// newest checkpoint sizes: a small board's checkpoint sizes the floor at
+    /// its constant, which a suite cannot otherwise tell from "not re-read".
+    #[doc(hidden)]
+    pub fn set_media_floor(&self, bytes: u64) {
+        self.media.set_floor(bytes);
+    }
+
+    /// TEST HOOK (the same standing): HOLD THE CHECKPOINT THREAD — from the
+    /// top of its next loop, before it looks at the kernel's due flag, until
+    /// [`Daemon::release_the_checkpoint_thread`] — so a suite lands a second
+    /// crossing while the first's flag still stands and the kernel's
+    /// backstop runs that checkpoint inline on the committing thread,
+    /// deterministically and with no race against the thread, which on its
+    /// release finds no flag and takes the backstop's wake arm. A held thread
+    /// parks between landings and holds no lock. Released by the stop too,
+    /// so a shutdown under the hold joins.
+    #[doc(hidden)]
+    pub fn hold_the_checkpoint_thread(&self) {
+        *self.checkpointer.hold.held.lock() = true;
+    }
+
+    /// TEST HOOK (the same standing): release the held checkpoint thread, and
+    /// hold it at no later loop.
+    #[doc(hidden)]
+    pub fn release_the_checkpoint_thread(&self) {
+        let hold = &self.checkpointer.hold;
+        *hold.held.lock() = false;
+        hold.released.notify_all();
+    }
+
+    /// The thread's side of the hold: park here while it is armed and no
+    /// stop has been asked — `listen.rs`'s loop calls it at the top of each
+    /// pass. Timed waits, so the stop reaches a thread held when it comes.
+    pub(crate) fn wait_while_the_checkpoint_thread_is_held(&self, stopped: impl Fn() -> bool) {
+        let hold = &self.checkpointer.hold;
+        let mut held = hold.held.lock();
+        while *held && !stopped() {
+            hold.released.wait_for(&mut held, Duration::from_millis(50));
+        }
     }
 
     /// TEST HOOK (the same standing: `#[doc(hidden)]`, not a stable API):

@@ -176,16 +176,23 @@ mod reply;
 mod request;
 mod scan;
 
+use std::fmt;
 use std::num::NonZeroU64;
 use std::path::Path;
 #[cfg(any(test, feature = "test-hooks"))]
 use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::Instant;
 
+#[cfg(any(test, feature = "test-hooks"))]
+use parking_lot::Condvar;
+use parking_lot::Mutex;
 use skep_engine::{Engine, EngineError, HistoryError, Recovery, World};
 use skep_febe::OperationSurface;
 use skep_identity::HasIdentity;
 use skep_kernel::{
-    BurnedSeqPolicy, CheckpointError, CheckpointPolicy, Durability, KernelConfig, SaltSource, Seq,
+    BurnedSeqPolicy, CheckpointError, CheckpointPolicy, Durability, KernelConfig, LandedStep,
+    SaltSource, Seq,
 };
 use skep_media::gate::MediaGate;
 use skep_media::index;
@@ -194,7 +201,7 @@ use skep_media::serve::FetchPool;
 use skep_media::{MediaOptions, UploadPool};
 #[cfg(feature = "observe")]
 use skep_namespace::PrincipalId;
-use skep_util::notice;
+use skep_util::notice::{self, Class};
 
 use std::sync::Arc;
 
@@ -202,7 +209,7 @@ use crate::auth::{startup_warnings, AuthOptions, AuthState, PortAlreadyBound, Re
 use crate::codec::JsonCodec;
 use crate::history::History;
 use crate::limits::{MAX_REQUEST_BODY, MAX_SMALL_BODY};
-use crate::write_path::WritePath;
+use crate::write_path::{FeedCompaction, WritePath};
 use actor::Resolved;
 use reply::{class_varying, refuse, with_signal, TransportError};
 use request::BodySource;
@@ -482,6 +489,12 @@ pub struct Daemon {
     /// the serving path like the fetch pool (D9): the family is asked or
     /// refused, never told.
     uploads: UploadPool,
+    /// THE CHECKPOINT THREAD's MEMORY between its wakes ([`CheckpointMemory`]):
+    /// the inline count as it last said it and the position that count is
+    /// counted from, the newest checkpoint as it last looked, and the
+    /// resident set's high-water. Held here because the thread is
+    /// `listen.rs`'s and the test seam runs its arms on a caller's thread.
+    checkpointer: CheckpointMemory,
     /// The dirty-crash harness's one seam into the claim's step
     /// (`Daemon::hold_between_the_claim_and_its_head`): armed, the
     /// claim-flip tail announces the crash window and parks there, both
@@ -657,11 +670,25 @@ impl Daemon {
                  reclaimed by the open"
             ));
         }
-        // THE NEWEST CHECKPOINT's SIZE, read once here: the byte bound of
-        // the cadence and the floor in force both scale by it, and the
-        // thread re-reads it as each checkpoint lands.
-        let newest_checkpoint_len = engine.kernel().newest_checkpoint().map(|header| header.len);
-        engine.kernel().set_cadence_bytes(cadence_bytes_for(newest_checkpoint_len));
+        // THE START POINT's SIZE, read once here: the byte bound of the
+        // cadence and the floor in force both scale by a checkpoint's size,
+        // and the one the open sizes by is the START POINT's — the base the
+        // engine's open LOADED the world from (`recovery.start_point`), its
+        // header read by name — never the newest file's, whose header may be
+        // a skipped base's claim: a damaged `body_len` the open passed over
+        // would otherwise refuse every deposit at a floor sized to the claim
+        // and hold the cadence's byte half off until the first landing. A
+        // start point at genesis names no file and sizes as no checkpoint
+        // does. The thread re-reads the NEWEST checkpoint as each one lands,
+        // every later base having loaded.
+        let start_point = engine.recovery().map_or(Seq(0), |recovery| recovery.start_point);
+        let start_point_len =
+            engine.kernel().checkpoint_header(start_point).map(|header| header.len);
+        engine.kernel().set_cadence_bytes(cadence_bytes_for(start_point_len));
+        // The newest checkpoint as the thread will find it at its first wake,
+        // so a wake with no flag and no landing re-reads nothing off a header
+        // the open did not size by.
+        let newest_at_open = engine.kernel().newest_checkpoint().map(|header| header.seq);
         // THE BLOB STORE, opened under `blobs/` beside the journal: its
         // reconciliation and compaction complete here, before anything is
         // served (the record: "OPEN's PASSES OVER BOTH STORES … COMPLETE
@@ -673,7 +700,7 @@ impl Daemon {
         // setting after. Opened AHEAD of the write path, which takes the
         // gate's cell index to enter at every commit from here on.
         let media = MediaGate::open_with(data_dir, media_opts).map_err(DaemonError::Media)?;
-        media.set_floor(MediaGate::floor_in_force(newest_checkpoint_len));
+        media.set_floor(MediaGate::floor_in_force(start_point_len));
         notice::line(media.startup_line());
         notice::line(format_args!(
             "media uploads: {}",
@@ -719,6 +746,7 @@ impl Daemon {
             media,
             fetches: FetchPool::new(),
             uploads: UploadPool::new(),
+            checkpointer: CheckpointMemory::at_open(start_point, newest_at_open),
             #[cfg(any(test, feature = "test-hooks"))]
             hold_between_claim_and_head: AtomicBool::new(false),
         };
@@ -1098,8 +1126,105 @@ impl Daemon {
 // ── the checkpoint thread's work ─────────────────────────────────────────
 //
 // What the thread `listen.rs` spawns runs, as `Daemon` methods at the routes'
-// layer: the kernel's flag read, and the checkpoint with its consequences —
-// the byte bound and the floor re-read, the feed compacted, the failure said.
+// layer: the kernel's flag read; the checkpoint with its consequences — the
+// byte bound and the floor re-read, the feed compacted, the landing or the
+// failure said; and, on a wake with no flag, the backstop's landing followed
+// the same way. The three lines are rendered by the pure types below this
+// block — `LandingLine`, `FailureLine`, `BackstopLine` — which the unit
+// suite pins by `to_string()`, and every one goes to the operator stream
+// through `Daemon::say_checkpoint_line`, classed.
+
+/// THE CHECKPOINT THREAD's MEMORY between wakes — what one line of the
+/// thread's leaves for the next: the inline count as last said and the
+/// position it is counted from, the newest checkpoint as the thread last
+/// looked, the resident set's high-water, and — under the test seam — every
+/// line the arms rendered this uptime, since no suite captures stderr
+/// in-process.
+struct CheckpointMemory {
+    looked: Mutex<Looked>,
+    /// THE RESIDENT SET's HIGH-WATER: the largest reading the daemon has
+    /// taken of its own physical memory (`memory_stats`), one reading per
+    /// landing and per backstop wake, on the checkpoint thread — the figure
+    /// line 25 carries as "peaked at". The daemon's own, not the kernel's
+    /// `ru_maxrss`, which this differs from by what rose and fell between two
+    /// readings. Zero before the first reading: a resident set is never zero.
+    resident_peak: AtomicU64,
+    /// TEST SEAM: the lines rendered this uptime, each `{class}: {text}`.
+    #[cfg(any(test, feature = "test-hooks"))]
+    lines: Mutex<Vec<String>>,
+    /// TEST SEAM: the hold the two-crossings claim parks the thread at, read
+    /// by `listen.rs`'s loop before it looks at the flag.
+    #[cfg(any(test, feature = "test-hooks"))]
+    hold: CheckpointHold,
+}
+
+/// What the thread last looked at and last said — one value under one lock,
+/// because the three move together at every line.
+struct Looked {
+    /// THE INLINE COUNT AS LAST SAID (m13): the kernel's `inline_checkpoints`
+    /// as the thread last carried it on a line — line 25's inline clause or
+    /// the backstop's line. The next line's `{n}` is the count past this.
+    inline_said: u64,
+    /// THE POSITION THE COUNT IS COUNTED FROM — the next line's `{p}`: the
+    /// newest checkpoint's position as the thread read it at the wake it
+    /// last said a line at (the landing's own position on line 25), and
+    /// before any line this uptime the open's START POINT, genesis as `0`.
+    since: Seq,
+    /// The newest checkpoint's position as the thread last looked — at the
+    /// open, and at every line since — so a wake with no flag takes the
+    /// landing's re-reads only where the newest moved.
+    newest: Option<Seq>,
+}
+
+impl CheckpointMemory {
+    /// The memory at the open: nothing said, the count counted from the start
+    /// point, the newest checkpoint as the open found it.
+    fn at_open(start_point: Seq, newest: Option<Seq>) -> CheckpointMemory {
+        CheckpointMemory {
+            looked: Mutex::new(Looked { inline_said: 0, since: start_point, newest }),
+            resident_peak: AtomicU64::new(0),
+            #[cfg(any(test, feature = "test-hooks"))]
+            lines: Mutex::new(Vec::new()),
+            #[cfg(any(test, feature = "test-hooks"))]
+            hold: CheckpointHold { held: Mutex::new(false), released: Condvar::new() },
+        }
+    }
+
+    /// One reading of the process's resident set, folded into the high-water,
+    /// which is answered — `None` where no reading was ever made, this one
+    /// included. A reading the crate cannot make moves nothing and fails
+    /// nothing: the line then carries the peak so far, or says it is unread.
+    fn note_resident_set(&self) -> Option<u64> {
+        if let Some(reading) = memory_stats::memory_stats() {
+            self.resident_peak.fetch_max(reading.physical_mem as u64, Ordering::AcqRel);
+        }
+        match self.resident_peak.load(Ordering::Acquire) {
+            0 => None,
+            peak => Some(peak),
+        }
+    }
+}
+
+/// TEST SEAM: the hold `Daemon::hold_the_checkpoint_thread` arms — the
+/// thread parks at the top of its loop, before it looks at the flag, until
+/// the release — so a suite lands a second crossing while the flag still
+/// stands and the kernel's backstop runs it inline, with no race against
+/// the thread. The stream hold's shape (`skep_media::serve::STREAM_HOLD`),
+/// per daemon rather than per process.
+#[cfg(any(test, feature = "test-hooks"))]
+struct CheckpointHold {
+    held: Mutex<bool>,
+    released: Condvar,
+}
+
+/// THE LANDING's RE-READS, what follows ANY checkpoint — the figures the
+/// one function below answers for the line.
+struct ReRead {
+    bytes_bound: NonZeroU64,
+    floor: u64,
+    compaction: FeedCompaction,
+}
+
 impl Daemon {
     /// Whether the kernel's cadence has crossed since the last checkpoint
     /// began (`Kernel::checkpoint_due`) — what the checkpoint thread reads
@@ -1109,58 +1234,354 @@ impl Daemon {
         self.engine.kernel().checkpoint_due()
     }
 
+    /// THE LANDING's RE-READS, after ANY checkpoint — the thread's own, a
+    /// base that landed before its run failed, or a backstop's found on a
+    /// wake with no flag: the cadence's byte bound ([`cadence_bytes_for`])
+    /// and the media floor (`MediaGate::floor_in_force`) set from the newest
+    /// checkpoint's size, then the change feed's five files compacted to the
+    /// journal's reclaim floor (`WritePath::compact_feed_below_reclaim_floor`).
+    /// ONE function, so the three arms cannot disagree about what follows a
+    /// landing; the newest header is the caller's one read of it, its length
+    /// handed in. Where the floor has not moved — a reclamation that failed,
+    /// a landing below the retained window — the compaction finds nothing
+    /// below the floor and writes nothing.
+    fn re_read_after_a_landing(&self, newest_len: Option<u64>) -> ReRead {
+        let bytes_bound = cadence_bytes_for(newest_len);
+        self.engine.kernel().set_cadence_bytes(bytes_bound);
+        let floor = MediaGate::floor_in_force(newest_len);
+        self.media.set_floor(floor);
+        let compaction = self.writes.compact_feed_below_reclaim_floor(&self.engine);
+        ReRead { bytes_bound, floor, compaction }
+    }
+
+    /// One line of the checkpoint thread's on the operator stream, with its
+    /// class word — the classed door, so no line of this section can go out
+    /// without one — and, under the test seam, kept for the suite.
+    fn say_checkpoint_line(&self, class: Class, text: String) {
+        #[cfg(any(test, feature = "test-hooks"))]
+        self.checkpointer.lines.lock().push(format!("{class}: {text}"));
+        notice::emit(class, text);
+    }
+
     /// RUN THE CHECKPOINT THE CADENCE CALLS FOR, on the calling thread —
     /// the checkpoint thread's one act (jw-R2 (c)), off the write path's
     /// guard: `Kernel::checkpoint`, which clears the due flag first and
     /// takes its own mutex and no applier lock, so every write proceeds
-    /// beside it. On a LANDING: the newest checkpoint's size re-read and the
-    /// cadence's byte bound ([`cadence_bytes_for`]) and the media floor
-    /// (`MediaGate::floor_in_force`) set from it, then the change feed's
-    /// five files compacted to the journal's reclaim floor
-    /// (`WritePath::compact_feed_below_reclaim_floor`), and one line naming
-    /// all of it. On a FAILURE: ONE line in the operator's terms — the
-    /// position the checkpoint was taken at, the cause with the I/O text (a
-    /// full volume says so), that the journal is NOT reclaimed, and that the
-    /// next attempt is at the cadence's next crossing — never twice for one
-    /// failure, since the flag it cleared is set again only by a crossing.
-    /// The kernel removes its own temp file before answering the failure.
+    /// beside it, timed by this thread's own `Instant` around the call,
+    /// under no lock. On a LANDING: the newest checkpoint's header read once,
+    /// the landing's re-reads taken from it ([`Daemon::re_read_after_a_landing`]),
+    /// and ONE line — [`LandingLine`], the position and the size, the run's
+    /// duration, the journal bytes the kernel reclaimed
+    /// (`Kernel::last_reclaimed_bytes`, read after the `Ok`), both bounds in
+    /// force, the volume's free space as the media floor reads it (the
+    /// gate's one door, so the floor's refusal and this line never
+    /// disagree), the resident set's high-water, the feed's compaction per
+    /// file, and the inline count where it moved since the thread last said
+    /// it. On a FAILURE: ONE line per ATTEMPT — [`FailureLine`]: the head's
+    /// position when the run began as an ordering, the cause (a full volume
+    /// in the operator's words), and the trailer the cause earns; and where
+    /// the kernel answers that a BASE LANDED before the step after its rename
+    /// failed (`CheckpointError::Landed`), the newest header is read after
+    /// the call — the base is on disk — the landing's re-reads are taken off
+    /// it, and the line names the landed position and which step failed.
+    /// The kernel removes its own temp file before answering a failure that
+    /// landed nothing.
     pub(crate) fn service_the_checkpoint(&self) {
-        let at = self.engine.kernel().current_seq();
-        match self.engine.kernel().checkpoint() {
+        let kernel = self.engine.kernel();
+        let at = kernel.current_seq();
+        let began = Instant::now();
+        let outcome = kernel.checkpoint();
+        let duration_ms = began.elapsed().as_millis();
+        match outcome {
             Ok(landed) => {
-                let newest = self.engine.kernel().newest_checkpoint().map(|header| header.len);
-                let bytes_bound = cadence_bytes_for(newest);
-                self.engine.kernel().set_cadence_bytes(bytes_bound);
-                let floor = MediaGate::floor_in_force(newest);
-                self.media.set_floor(floor);
-                let compacted = self.writes.compact_feed_below_reclaim_floor(&self.engine);
-                notice::line(format_args!(
-                    "checkpoint at position {landed} landed ({} bytes): the cadence's byte bound \
-                     {bytes_bound}, the media floor in force {floor}; the change feed's files {}",
-                    newest.map_or_else(|| "size unread".to_string(), |len| len.to_string()),
-                    match compacted {
-                        Some(fence) => format!("compacted below position {}", fence + 1),
-                        None => "hold nothing below the reclaim floor".to_string(),
+                let newest = kernel.newest_checkpoint();
+                let re_read = self.re_read_after_a_landing(newest.as_ref().map(|h| h.len));
+                let runs = kernel.inline_checkpoints();
+                let line = {
+                    let mut looked = self.checkpointer.looked.lock();
+                    let inline = (runs != looked.inline_said).then(|| InlineRuns {
+                        runs: runs.saturating_sub(looked.inline_said),
+                        since: looked.since,
+                    });
+                    looked.inline_said = runs;
+                    looked.since = landed;
+                    looked.newest = newest.as_ref().map(|h| h.seq);
+                    LandingLine {
+                        position: landed,
+                        bytes: newest.map(|h| h.len),
+                        duration_ms,
+                        reclaimed: kernel.last_reclaimed_bytes().unwrap_or(0),
+                        bytes_bound: re_read.bytes_bound.get(),
+                        floor: re_read.floor,
+                        free_space: self.media.free_space(),
+                        resident_peak: self.checkpointer.note_resident_set(),
+                        compaction: re_read.compaction,
+                        inline,
                     }
-                ));
+                };
+                self.say_checkpoint_line(Class::Landing, line.to_string());
             }
             Err(e) => {
-                // A full volume is named in the operator's own words beside
-                // the I/O text, which carries the OS's: it is the one cause
-                // whose act — room freed on the volume — is the operator's
-                // alone.
-                let cause = match &e {
-                    CheckpointError::Io(io) if io.kind() == std::io::ErrorKind::StorageFull => {
-                        format!("the volume is full ({io})")
+                let landed_at = match &e {
+                    CheckpointError::Landed { .. } => {
+                        let newest = kernel.newest_checkpoint();
+                        self.re_read_after_a_landing(newest.as_ref().map(|h| h.len));
+                        let seq = newest.map(|h| h.seq);
+                        self.checkpointer.looked.lock().newest = seq;
+                        seq
                     }
-                    other => other.to_string(),
+                    CheckpointError::Io(_)
+                    | CheckpointError::Serialize(_)
+                    | CheckpointError::Poisoned => None,
                 };
-                notice::line(format_args!(
-                    "checkpoint at position {at} FAILED: {cause}; the journal is not reclaimed \
-                     and holds every commit, and the next attempt is at the cadence's next \
-                     crossing"
-                ));
+                let line = FailureLine { at, landed_at, error: &e };
+                self.say_checkpoint_line(Class::Failure, line.to_string());
             }
+        }
+    }
+
+    /// THE BACKSTOP's WAKE (m13; §4 rows 25 and 35) — what the checkpoint
+    /// thread runs on every wake AFTER the flag's arm, so a wake with NO flag
+    /// is answered: where the kernel's count of checkpoints run inline on a
+    /// committing thread (`Kernel::inline_checkpoints`) moved past the count
+    /// the thread last said, the newest checkpoint is read ONCE and, where
+    /// it moved since the thread last looked, the landing's re-reads are
+    /// taken off it — the same function the landing arm runs — and the
+    /// backstop's line is said ([`BackstopLine`]): the runs since the last
+    /// line, the position they are counted from, and whether the last of
+    /// them landed or how it failed (`Kernel::last_inline_checkpoint_failure`).
+    /// Said once for each movement of the count and never otherwise; a
+    /// count line 25 has just carried is one that moved not. The resident
+    /// set is read here too, as at a landing.
+    pub(crate) fn follow_the_backstop(&self) {
+        let kernel = self.engine.kernel();
+        let runs = kernel.inline_checkpoints();
+        let line = {
+            let mut looked = self.checkpointer.looked.lock();
+            if runs == looked.inline_said {
+                return;
+            }
+            let newest = kernel.newest_checkpoint();
+            let newest_seq = newest.as_ref().map(|h| h.seq);
+            if newest_seq != looked.newest {
+                self.re_read_after_a_landing(newest.map(|h| h.len));
+                looked.newest = newest_seq;
+            }
+            let line = BackstopLine {
+                runs: runs.saturating_sub(looked.inline_said),
+                since: looked.since,
+                last_failure: kernel.last_inline_checkpoint_failure(),
+            };
+            looked.inline_said = runs;
+            if let Some(seq) = newest_seq {
+                looked.since = seq;
+            }
+            line
+        };
+        self.checkpointer.note_resident_set();
+        self.say_checkpoint_line(Class::Landing, line.to_string());
+    }
+}
+
+/// LINE 25 — THE LANDING, in the operator stream's words (`operations.md`
+/// §1.1 row 25), rendered from the figures the thread read: a pure value,
+/// so the unit suite pins the words by `to_string()` at fixed figures. The
+/// class word is the emitter's (`Class::Landing`); every dimension is spelt
+/// the stream's one way — a position as `position N`, a file by its name,
+/// a duration in milliseconds.
+struct LandingLine {
+    /// The position the checkpoint embodies — `Kernel::checkpoint`'s answer.
+    position: Seq,
+    /// The file's length as the newest header claims it, `None` where the
+    /// header did not answer — "size unread".
+    bytes: Option<u64>,
+    /// The run's duration, whole milliseconds, the thread's own `Instant`.
+    duration_ms: u128,
+    /// The journal bytes the landing reclaimed; zero is "nothing reclaimed".
+    reclaimed: u64,
+    /// The cadence's byte bound in force after the re-read.
+    bytes_bound: u64,
+    /// The media floor in force after the re-read.
+    floor: u64,
+    /// The volume's free space as the media floor reads it.
+    free_space: u64,
+    /// The daemon's high-water of its resident set, in bytes; `None` where
+    /// no reading was ever made — "unread".
+    resident_peak: Option<u64>,
+    /// The feed's compaction: the fence, and the files that stood.
+    compaction: FeedCompaction,
+    /// The inline count where it moved since the thread last said it, with
+    /// the position it is counted from; `None` where it did not move, and
+    /// the clause is absent.
+    inline: Option<InlineRuns>,
+}
+
+/// The inline clause's two figures — line 25's and the backstop line's.
+struct InlineRuns {
+    /// The checkpoints run inline on a writer since `since`.
+    runs: u64,
+    /// The position the count is counted from (`Looked::since`).
+    since: Seq,
+}
+
+impl fmt::Display for LandingLine {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "checkpoint at position {} landed (", self.position)?;
+        match self.bytes {
+            Some(bytes) => write!(f, "{bytes} bytes")?,
+            None => f.write_str("size unread")?,
+        }
+        write!(f, ") in {} ms; ", self.duration_ms)?;
+        match self.reclaimed {
+            0 => f.write_str("nothing reclaimed")?,
+            reclaimed => write!(f, "{reclaimed} journal bytes reclaimed")?,
+        }
+        write!(
+            f,
+            "; the cadence's byte bound {}, the media floor in force {}, the volume's free \
+             space {}; ",
+            self.bytes_bound, self.floor, self.free_space
+        )?;
+        match self.resident_peak {
+            Some(peak) => write!(f, "the process's resident set peaked at {peak} bytes")?,
+            None => f.write_str("the process's resident set unread")?,
+        }
+        f.write_str("; the change feed's files ")?;
+        match self.compaction.fence {
+            Some(fence) => {
+                write!(f, "compacted below position {}", fence.saturating_add(1))?;
+                for file in &self.compaction.standing {
+                    write!(f, ", {file} standing as it was")?;
+                }
+            }
+            None => f.write_str("hold nothing below the reclaim floor")?,
+        }
+        if let Some(inline) = &self.inline {
+            write!(
+                f,
+                "; {} checkpoints ran inline on a writer since position {}",
+                inline.runs, inline.since
+            )?;
+        }
+        Ok(())
+    }
+}
+
+/// LINE 26 — THE FAILURE, in the operator stream's words (row 26; §4 row
+/// 2), rendered from what the kernel answered: a pure value the unit suite
+/// pins by `to_string()` at each cause. Where the error is
+/// `CheckpointError::Landed`, the line opens on the landed base — "a
+/// checkpoint landed at position {n} but {step} failed" — the step in the
+/// DAEMON's three words (the directory's sync, retention, the journal's
+/// reclamation), chosen by `LandedStep`'s arm and never the kernel's
+/// `Display`; otherwise on the head's position when the run began, worded
+/// as the ordering it is. The cause: a full volume (`StorageFull`) in the
+/// operator's words beside the OS's text, in the `Io` arm and the `Landed`
+/// arm alike; every other cause its own `Display`. The trailer is keyed to
+/// the cause: an I/O cause retries at the cadence's next crossing, a
+/// poisoned kernel takes no checkpoint until a restart, a world that will
+/// not serialize refuses the same way until the build fixes it. The class
+/// word is the emitter's (`Class::Failure`).
+struct FailureLine<'a> {
+    /// `Kernel::current_seq` read BEFORE the call — an ordering, since the
+    /// checkpoint loads its own root under its mutex.
+    at: Seq,
+    /// Where a base landed: the newest checkpoint's position read AFTER the
+    /// call, `None` where its header did not answer.
+    landed_at: Option<Seq>,
+    error: &'a CheckpointError,
+}
+
+impl fmt::Display for FailureLine<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self.error {
+            CheckpointError::Landed { step, cause } => {
+                match self.landed_at {
+                    Some(landed) => write!(f, "a checkpoint landed at position {landed}")?,
+                    None => write!(
+                        f,
+                        "a checkpoint landed at or above position {} (its header unread)",
+                        self.at
+                    )?,
+                }
+                let step = match step {
+                    LandedStep::DirectorySync => "the directory's sync",
+                    LandedStep::Retention => "retention",
+                    LandedStep::Reclamation => "the journal's reclamation",
+                };
+                write!(f, " but {step} failed: {}", VolumeWords(cause))?;
+            }
+            CheckpointError::Io(io) => write!(
+                f,
+                "checkpoint FAILED (the head stood at position {} when the run began): {}",
+                self.at,
+                VolumeWords(io)
+            )?,
+            other @ (CheckpointError::Serialize(_) | CheckpointError::Poisoned) => write!(
+                f,
+                "checkpoint FAILED (the head stood at position {} when the run began): {other}",
+                self.at
+            )?,
+        }
+        // THE TRAILER, keyed to the cause: what still serves and when the
+        // next attempt comes — a promise of a crossing only where one can.
+        f.write_str(match self.error {
+            CheckpointError::Io(_) | CheckpointError::Landed { .. } => {
+                "; the journal is not reclaimed and holds every commit; the next attempt is at \
+                 the cadence's next crossing"
+            }
+            CheckpointError::Poisoned => {
+                "; no checkpoint is taken until a restart (the kernel's halt, said above)"
+            }
+            CheckpointError::Serialize(_) => {
+                "; every crossing refuses the same way until the world encodes: the build's to fix"
+            }
+        })
+    }
+}
+
+/// An I/O cause in the operator's words: a full volume (`StorageFull`) is
+/// "the volume is full" with the OS's text beside it — the one cause whose
+/// act, room freed on the volume, is the operator's alone — and every other
+/// kind its own text.
+struct VolumeWords<'a>(&'a std::io::Error);
+
+impl fmt::Display for VolumeWords<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if self.0.kind() == std::io::ErrorKind::StorageFull {
+            write!(f, "the volume is full ({})", self.0)
+        } else {
+            write!(f, "{}", self.0)
+        }
+    }
+}
+
+/// THE BACKSTOP's LINE (`operations.md` §1.1 m13), rendered from the
+/// kernel's count and its last inline run's text: the checkpoints run
+/// inline on a writer since the position the count is counted from
+/// (`Looked::since` — the newest checkpoint's position at the thread's last
+/// line, the start point before any), and whether the last of them landed
+/// or how it failed, in the kernel's rendered words. A pure value, pinned by
+/// `to_string()`; emitted under `Class::Landing`.
+struct BackstopLine {
+    runs: u64,
+    since: Seq,
+    /// `Kernel::last_inline_checkpoint_failure`: `None` where the last inline
+    /// run landed.
+    last_failure: Option<String>,
+}
+
+impl fmt::Display for BackstopLine {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "checkpoint: the cadence outran the checkpoint thread; {} checkpoints ran inline on \
+             a writer since position {}, the last ",
+            self.runs, self.since
+        )?;
+        match &self.last_failure {
+            None => f.write_str("landed"),
+            Some(cause) => write!(f, "FAILED: {cause}"),
         }
     }
 }

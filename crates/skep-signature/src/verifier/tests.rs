@@ -496,6 +496,77 @@ fn the_pq_half_refuses_every_fn_dsa_signature_header_byte_but_0x39() {
     }
 }
 
+/// ML-DSA-65's `z`, AT THE BOUND THE POST-QUANTUM HALF'S UNFORGEABILITY
+/// RESTS ON — FIPS 204 Verify's ‖z‖∞ < γ1 − β, γ1 = 2^19 and β = τ·η = 196,
+/// which `ml-dsa` 0.1.1 checks in its sigDecode — and at the ends of its
+/// 20-bit range: a genuine tag-1 field with its first or its last `z`
+/// coefficient re-encoded at γ1 − β − 1 still decodes, and at γ1 − β does
+/// not, on the positive side and the negative alike; re-encoded as 0
+/// (z = γ1) or as 2^20 − 1 (z = −(γ1 − 1): every bit `BitUnpack` reads set,
+/// the value its `assert!` admits last) it is refused without a panic.
+/// Behind a genuine Ed25519 half, which any key holder makes, [`verify`]
+/// answers `Signature` to every one — past the bound at the decode, within
+/// it at the arithmetic. Every other field the suite hands this decoder
+/// keeps the genuine `z`, and every golden, round trip and differential
+/// signs within the bound, so nothing else holds this edge: a bump of
+/// `ml-dsa` that loosened or moved the bound, or a semver move of the
+/// `module-lattice` (the unpack's mask) or `ctutils` (the bound's
+/// comparison) it floats on, fails here — or panics here, rather than in a
+/// key holder's session request.
+#[test]
+fn the_pq_half_refuses_an_ml_dsa_z_at_its_bound_and_its_range_ends() {
+    const GAMMA1: u32 = 1 << 19;
+    const BOUND: u32 = GAMMA1 - 196;
+    let msg = b"the entry frame";
+    let signer1 = HybridSigner::from_seed(TAG_MLDSA65_ED25519, &[0x42; 32]).unwrap();
+    let key = signer1.public_key();
+    let half = PqVerifier::decode(key).expect("a derived key decodes");
+    let pq_sig_len = key.sig_alg_row().pq_sig_len;
+    let genuine = signer1.sign_with_rng(&mut SeededRng06::new([7; 32]), msg);
+    assert_eq!(verify(TAG_MLDSA65_ED25519, key, msg, &genuine), Ok(()), "the premise");
+    // `z` is the five 640-byte polynomials between the 48-byte c̃ and the
+    // 61-byte hint: 1,280 coefficients, two to every five bytes, 20 bits
+    // each, little-endian, each encoded as γ1 − z.
+    let z_at = pq_sig_len - (55 + 6) - 5 * 640;
+    assert_eq!(z_at, 48, "the premise: c̃ is ML-DSA-65's 48 bytes");
+    let with_z = |i: usize, encoded: u32| {
+        let mut field = genuine[..pq_sig_len].to_vec();
+        let (at, shift) = (z_at + 5 * (i / 2), 20 * (i % 2));
+        let mut word = [0u8; 8];
+        word[..5].copy_from_slice(&field[at..at + 5]);
+        let x =
+            (u64::from_le_bytes(word) & !(0xF_FFFF_u64 << shift)) | (u64::from(encoded) << shift);
+        field[at..at + 5].copy_from_slice(&x.to_le_bytes()[..5]);
+        field
+    };
+    for i in [0, 1279] {
+        for (encoded, decodes, what) in [
+            (GAMMA1 - (BOUND - 1), true, "γ1 − β − 1"),
+            (GAMMA1 - BOUND, false, "γ1 − β"),
+            (GAMMA1 + (BOUND - 1), true, "−(γ1 − β − 1)"),
+            (GAMMA1 + BOUND, false, "−(γ1 − β)"),
+            (0, false, "γ1, the range's top"),
+            ((1 << 20) - 1, false, "−(γ1 − 1), every bit set"),
+        ] {
+            let field = with_z(i, encoded);
+            assert_ne!(field[..], genuine[..pq_sig_len], "the premise: z[{i}] = {what} moves it");
+            let enc = <&EncodedSignature<MlDsa65>>::try_from(&field[..]).expect("the row's width");
+            assert_eq!(
+                ml_dsa::Signature::<MlDsa65>::decode(enc).is_some(),
+                decodes,
+                "z[{i}] = {what}"
+            );
+            assert!(!half.verify(msg, &field), "z[{i}] = {what}");
+            let blob = [&field[..], &genuine[pq_sig_len..]].concat();
+            assert_eq!(
+                verify(TAG_MLDSA65_ED25519, key, msg, &blob),
+                Err(HybridFault::Signature),
+                "z[{i}] = {what}"
+            );
+        }
+    }
+}
+
 /// THE ED25519 HALF IS `verify_strict`'s (AUTH-4.32), AGAINST A LOW-ORDER
 /// KEY: each of the eight low-order Ed25519 halves is a point, which
 /// [`key_decodes`] admits — as the decode admits a non-canonical encoding,

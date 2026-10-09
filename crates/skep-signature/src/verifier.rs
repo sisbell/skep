@@ -179,10 +179,12 @@ pub fn key_decodes(key: &PublicKey) -> bool {
 /// so a caller establishes nothing first, and every fault a stranger's bytes
 /// can carry is a [`HybridFault`]. A key holder chooses the post-quantum
 /// field behind their own passing Ed25519 half, so this is a promise about
-/// the two pinned decoders as much as about this function; the suite hands
-/// each decoder, behind a genuine Ed25519 half, the fields that would trip
-/// its bounds checks
-/// (`a_hostile_post_quantum_field_behind_a_genuine_ed25519_half_answers_signature`).
+/// the two pinned decoders, and the crates they float on, as much as about
+/// this function; the suite hands each decoder, behind a genuine Ed25519
+/// half, the fields that would trip its bounds checks
+/// (`a_hostile_post_quantum_field_behind_a_genuine_ed25519_half_answers_signature`)
+/// and ML-DSA-65's `z` at its bound and at its range's ends
+/// (`the_pq_half_refuses_an_ml_dsa_z_at_its_bound_and_its_range_ends`).
 ///
 /// `msg` comes before `sig`, the order RustCrypto's
 /// `signature::Verifier::verify` and `ed25519-dalek`'s `verify_strict` take

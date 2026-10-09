@@ -127,7 +127,7 @@ pub fn pq_widths(tag: u8) -> Option<PqWidths> {
 /// TEST HOOK (the `fuzz_support` standing: `#[doc(hidden)]`, not a stable
 /// API) — THE SUITES' SEED: one hybrid key's 32-byte seed — wire.md's seed,
 /// the paper backup's 64 hex — held for a fixture, one per principal, and
-/// handed back by [`Seed::to_bytes`] to
+/// lent by [`Seed::as_bytes`] to
 /// [`HybridSigner::from_seed`](crate::HybridSigner::from_seed), which derives
 /// the key it seeds. It is NO KEY: it signs nothing and names no public key,
 /// so no fixture signs or enrols under the raw seed (the KDF PIN: never the
@@ -142,14 +142,14 @@ pub fn pq_widths(tag: u8) -> Option<PqWidths> {
 /// ```
 /// use skep_signature::{HybridSigner, Seed, TAG_MLDSA65_ED25519};
 /// let seed = Seed::from_bytes(&[7; 32]);
-/// let signer = HybridSigner::from_seed(TAG_MLDSA65_ED25519, &seed.to_bytes()).unwrap();
+/// let signer = HybridSigner::from_seed(TAG_MLDSA65_ED25519, seed.as_bytes()).unwrap();
 /// let half = signer.ed25519_signing_key();
 /// let _ = half.sign(b"the entry frame");
 /// ```
 /// ```compile_fail,E0599
 /// use skep_signature::{HybridSigner, Seed, TAG_MLDSA65_ED25519};
 /// let seed = Seed::from_bytes(&[7; 32]);
-/// let signer = HybridSigner::from_seed(TAG_MLDSA65_ED25519, &seed.to_bytes()).unwrap();
+/// let signer = HybridSigner::from_seed(TAG_MLDSA65_ED25519, seed.as_bytes()).unwrap();
 /// let half = seed;
 /// let _ = half.sign(b"the entry frame");
 /// ```
@@ -163,9 +163,10 @@ impl Seed {
         Seed(Zeroizing::new(*bytes))
     }
 
-    /// The seed's 32 bytes, as `HybridSigner::from_seed` takes them.
-    pub fn to_bytes(&self) -> [u8; 32] {
-        *self.0
+    /// The seed's 32 bytes, lent as `HybridSigner::from_seed` takes them: a
+    /// borrow of the wiped buffer, never a copy of it.
+    pub fn as_bytes(&self) -> &[u8; 32] {
+        &self.0
     }
 }
 

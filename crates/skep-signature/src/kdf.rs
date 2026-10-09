@@ -26,14 +26,18 @@ const HALF_LABEL_FNDSA512: &[u8] = b"fn-dsa-512";
 
 /// The two half seeds one 32-byte seed derives under one tag —
 /// private-key material: WIPED ON DROP, both halves overwritten as the
-/// value goes out of scope (`Zeroize`, `ZeroizeOnDrop`), which inside
-/// `HybridSigner::from_seed` is once each half has been handed to its
-/// keygen. So `Clone` and nothing more: not `Copy`, which a `Drop` impl
-/// rules out and could never be taken back; and no derived `PartialEq`,
-/// whose comparison stops at the first differing byte. A constant-time
-/// equality could be added later without breaking a caller; nothing here
-/// could be removed.
-#[derive(Clone)]
+/// value goes out of scope, which inside `HybridSigner::from_seed` is once
+/// each half has been handed to its keygen. So `Clone` and nothing more:
+/// not `Copy`, which a `Drop` impl rules out and could never be taken back;
+/// and no derived `PartialEq`, whose comparison stops at the first
+/// differing byte. A constant-time equality could be added later without
+/// breaking a caller; nothing here could be removed.
+///
+/// The wipe is DERIVED, `Zeroize` and `ZeroizeOnDrop` together: the one
+/// `ZeroizeOnDrop` derive writes both the `Drop` that overwrites the halves
+/// and the `ZeroizeOnDrop` marker the signer's wiping test reads, so the
+/// marker cannot stand without the wipe it promises.
+#[derive(Clone, Zeroize, ZeroizeOnDrop)]
 pub struct HalfSeeds {
     /// The Ed25519 half seed: the half's private key, `ed25519-dalek`'s
     /// `SecretKey` (`SigningKey::from_bytes`).
@@ -49,23 +53,6 @@ impl fmt::Debug for HalfSeeds {
         f.write_str("HalfSeeds(..)")
     }
 }
-
-impl Zeroize for HalfSeeds {
-    fn zeroize(&mut self) {
-        self.ed25519.zeroize();
-        self.pq.zeroize();
-    }
-}
-
-/// The wipe on drop the type's doc states; `ZeroizeOnDrop` below is the
-/// marker the signer's wiping test reads it off.
-impl Drop for HalfSeeds {
-    fn drop(&mut self) {
-        self.zeroize();
-    }
-}
-
-impl ZeroizeOnDrop for HalfSeeds {}
 
 /// THE KDF, as the KDF PIN states it (the crate doc): one seed to both half
 /// seeds under `tag`'s token by HKDF-SHA-256 — ONE Extract, `PRK =

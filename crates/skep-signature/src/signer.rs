@@ -11,8 +11,8 @@ use std::fmt;
 
 use ed25519_dalek::{Signer as _, SigningKey as EdSigningKey};
 use fn_dsa::{
-    signature_size, sign_key_size, vrfy_key_size, KeyPairGenerator, KeyPairGeneratorStandard,
-    SigningKey as _, SigningKeyStandard, DOMAIN_NONE, FN_DSA_LOGN_512, HASH_ID_RAW,
+    sign_key_size, vrfy_key_size, KeyPairGenerator, KeyPairGeneratorStandard, SigningKey as _,
+    SigningKeyStandard, DOMAIN_NONE, FN_DSA_LOGN_512, HASH_ID_RAW,
 };
 use ml_dsa::{Keypair as _, MlDsa65, Signer as _};
 use skep_identity::{PublicKey, SigAlgRow};
@@ -87,7 +87,7 @@ impl rand_core_06::CryptoRng for OsEntropy {}
 
 /// The post-quantum half of a signer, per tag — and on this one card both
 /// things its rule asks of it: keygen from the KDF's PQ half seed
-/// (`PqSigner::keygen`) and the PQ signature (`PqSigner::sign`).
+/// (`PqSigner::keygen`) and the PQ signature (`PqSigner::sign_into`).
 enum PqSigner {
     /// Tag 1: `ml-dsa`'s ML-DSA-65 signing key from ξ — the expanded key that
     /// signs, beside the verifying key and ξ itself, which `ml-dsa` keeps in
@@ -139,22 +139,27 @@ impl PqSigner {
         }
     }
 
-    /// THE POST-QUANTUM SIGNATURE over `msg` under this half's rule:
+    /// THE POST-QUANTUM SIGNATURE over `msg` under this half's rule, written
+    /// into `field` — the blob's first field, exactly this rule's width
+    /// (`SigAlgRow::pq_sig_len`), the out-slice `fn-dsa`'s own `sign` takes:
     /// ML-DSA-65's deterministic variant with the empty `ctx`, drawing
     /// nothing; the FN-DSA-512 preview's randomized signing with
     /// `DOMAIN_NONE` and `HASH_ID_RAW`, its per-signature seed drawn from
     /// `rng` and its key decoded from the stored bytes for this one signature
-    /// (`fn-dsa`'s `sign` takes `&mut self`).
-    fn sign(&self, rng: &mut impl rand_core_06::CryptoRngCore, msg: &[u8]) -> Vec<u8> {
+    /// (`fn-dsa`'s `sign` takes `&mut self`). A `field` of any other width
+    /// would mean the row and the pinned crate disagree, which
+    /// `sizes_and_timings_per_tag` rules out; that disagreement panics where
+    /// the field is written — at the ML-DSA-65 copy, at `fn-dsa`'s own width
+    /// assertion — so no blob is ever handed out at a width its crate did not
+    /// sign.
+    fn sign_into(&self, rng: &mut impl rand_core_06::CryptoRngCore, msg: &[u8], field: &mut [u8]) {
         match self {
-            PqSigner::MlDsa65(sk) => sk.sign(msg).encode().as_slice().to_vec(),
+            PqSigner::MlDsa65(sk) => field.copy_from_slice(sk.sign(msg).encode().as_slice()),
             PqSigner::FnDsa512Preview(sk_bytes) => {
                 let mut sk = SigningKeyStandard::decode(sk_bytes)
                     .expect("this signer's own encoded key decodes");
-                let mut sig = vec![0u8; signature_size(FN_DSA_LOGN_512)];
-                sk.sign(rng, &DOMAIN_NONE, &HASH_ID_RAW, msg, &mut sig)
+                sk.sign(rng, &DOMAIN_NONE, &HASH_ID_RAW, msg, field)
                     .expect("a valid signing key signs");
-                sig
             }
         }
     }
@@ -281,12 +286,17 @@ impl HybridSigner {
     /// The one signing body, over the RNG tag 3's per-signature seed is drawn
     /// from — the OS's for [`HybridSigner::sign`], a fixture's stream for the
     /// test hook `sign_with_rng` — private, so no shipped caller picks the
-    /// draw. It composes THE BLOB: the PQ half's signature
-    /// (`PqSigner::sign`) THEN the Ed25519 signature, over the same `msg`.
+    /// draw. It writes THE BLOB at its row's width, parted where
+    /// [`verify`](crate::verify) parts it: the PQ half's signature into the
+    /// first field (`PqSigner::sign_into`), the Ed25519 signature into the
+    /// last 64 bytes, over the same `msg`.
     fn sign_drawing(&self, rng: &mut impl rand_core_06::CryptoRngCore, msg: &[u8]) -> Vec<u8> {
-        let mut blob = self.pq.sign(rng, msg);
-        blob.extend_from_slice(&self.ed.sign(msg).to_bytes());
-        debug_assert_eq!(blob.len(), self.public.sig_alg_row().sig_len());
+        let mut blob = vec![0u8; self.public.sig_alg_row().sig_len()];
+        let (pq_field, ed_field) = blob
+            .split_last_chunk_mut::<{ ed25519_dalek::SIGNATURE_LENGTH }>()
+            .expect("a row's blob is its post-quantum field and the Ed25519 signature's 64 bytes");
+        self.pq.sign_into(rng, msg, pq_field);
+        *ed_field = self.ed.sign(msg).to_bytes();
         blob
     }
 }
@@ -347,9 +357,10 @@ mod tests {
     }
 
     /// THE PQ HALF ON ITS OWN CARD: `PqSigner::keygen` makes the public key's
-    /// first half and `PqSigner::sign` the blob's first field — the KEY PIN
-    /// and THE BLOB, the PQ half THEN the Ed25519 one — so `HybridSigner`
-    /// composes the two halves and holds no tag's arithmetic itself.
+    /// first half and `PqSigner::sign_into` writes the blob's first field —
+    /// the KEY PIN and THE BLOB, the PQ half THEN the Ed25519 one — so
+    /// `HybridSigner` composes the two halves and holds no tag's arithmetic
+    /// itself.
     #[test]
     fn the_pq_half_makes_the_keys_first_half_and_the_blobs_first_field() {
         let seed = [0x42u8; 32];
@@ -364,8 +375,31 @@ mod tests {
                 "tag {tag}: the key's first half"
             );
             let blob = signer.sign_with_rng(&mut SeededRng06::new([7; 32]), msg);
-            let pq_sig = pq.sign(&mut SeededRng06::new([7; 32]), msg);
-            assert_eq!(&blob[..pq_sig.len()], &pq_sig[..], "tag {tag}: the blob's first field");
+            let pq_sig_len = signer.public_key().sig_alg_row().pq_sig_len;
+            let mut pq_sig = vec![0u8; pq_sig_len];
+            pq.sign_into(&mut SeededRng06::new([7; 32]), msg, &mut pq_sig);
+            assert_eq!(&blob[..pq_sig_len], &pq_sig[..], "tag {tag}: the blob's first field");
+        }
+    }
+
+    /// `PqSigner::sign_into` WRITES ITS RULE'S WIDTH OR NOTHING: handed a
+    /// field one byte short or one byte long of the row's post-quantum width,
+    /// either tag's half panics where it writes — the ML-DSA-65 copy,
+    /// `fn-dsa`'s own width assertion — rather than fill part of it: a row its
+    /// pinned crate disagreed with makes `sign` panic, never a blob.
+    #[test]
+    fn the_pq_half_refuses_a_field_of_any_width_but_its_rules() {
+        let msg = b"the entry frame";
+        for tag in [TAG_MLDSA65_ED25519, TAG_FNDSA512_PREVIEW_ED25519] {
+            let halves = derive_half_seeds(tag, &[0x42; 32]).unwrap();
+            let (pq, _) = PqSigner::keygen(Rule::of(tag).unwrap(), &halves.pq);
+            let pq_sig_len = SigAlgRow::of_tag(tag).unwrap().pq_sig_len;
+            for len in [pq_sig_len - 1, pq_sig_len + 1] {
+                let written = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    pq.sign_into(&mut SeededRng06::new([7; 32]), msg, &mut vec![0u8; len]);
+                }));
+                assert!(written.is_err(), "tag {tag}: a {len}-byte field was signed into");
+            }
         }
     }
 

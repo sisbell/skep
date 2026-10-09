@@ -2819,7 +2819,7 @@ fn hex_to_bytes(h: &str) -> Vec<u8> {
 fn the_fixtures_seed_carrier_derives_both_halves() {
     let sk: SigningKey = device_key();
     let signer = hybrid_signer(&sk);
-    assert_ne!(signer.ed25519_signing_key().to_bytes(), sk.to_bytes(), "never the raw seed");
+    assert_ne!(signer.ed25519_signing_key().to_bytes(), *sk.as_bytes(), "never the raw seed");
     let enrolled: PublicKey = public_key_of(&sk);
     assert_eq!(enrolled.alg(), ALG_MLDSA65_ED25519);
     assert_eq!(enrolled.raw().len(), 1984);

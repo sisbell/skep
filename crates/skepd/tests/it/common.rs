@@ -96,7 +96,7 @@ pub const FIXTURE_TAG: u8 = skep_signature::TAG_MLDSA65_ED25519;
 /// carrier's 32 bytes through the KDF PIN (`skep_signature`), never the
 /// carrier itself — the ruled "one seed, two halves, never the raw seed".
 pub fn seed_of(sk: &SigningKey) -> [u8; 32] {
-    sk.to_bytes()
+    *sk.as_bytes()
 }
 
 /// The hybrid signer one seed carrier derives under [`FIXTURE_TAG`]: both

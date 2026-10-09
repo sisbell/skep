@@ -116,7 +116,7 @@ fn hex(bytes: &[u8]) -> String {
 /// never the raw seed itself (the ruled "one seed, two halves"): what the
 /// ceremony enrols and what signs its sessions, both halves.
 fn signer_of(sk: &SigningKey) -> HybridSigner {
-    HybridSigner::from_seed(TAG_MLDSA65_ED25519, &sk.to_bytes()).expect("tag 1 is a row")
+    HybridSigner::from_seed(TAG_MLDSA65_ED25519, sk.as_bytes()).expect("tag 1 is a row")
 }
 
 /// The ONE `ALGS` entry a seed carrier enrols: its derived tag-1 hybrid key

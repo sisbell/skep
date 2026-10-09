@@ -79,12 +79,15 @@ sha2 = { workspace = true, optional = true }
 # The signer's OS draw: a tag-3 signature's per-signature seed outside a
 # seeded fixture, fail-stop — never a seed from anything weaker.
 getrandom = { version = "0.3", optional = true }
-# THE WIPE of what the signer holds itself: `Zeroize` and `ZeroizeOnDrop` for
-# the KDF's half seeds, and `Zeroizing` around the stored FN-DSA-512 key
-# encoding. The two key libraries wipe their own keys through their own
-# `zeroize` features (`ed25519-dalek`'s default, `ml-dsa`'s above); the
-# signer's wiping test asks every key type about `ZeroizeOnDrop`.
-zeroize = { version = "1", optional = true }
+# THE WIPE of what the signer holds itself: `Zeroize` and `ZeroizeOnDrop`,
+# DERIVED (`derive`) for the KDF's half seeds, and `Zeroizing` around the
+# stored FN-DSA-512 key encoding. Naming `derive` compiles no crate the build
+# would not: `fn-dsa`'s own `fn-dsa-sign` and `fn-dsa-kgen` take `zeroize`
+# with `zeroize_derive` in every build. The two key libraries wipe their own
+# keys through their own `zeroize` features (`ed25519-dalek`'s default,
+# `ml-dsa`'s above); the signer's wiping test asks every key type about
+# `ZeroizeOnDrop`.
+zeroize = { version = "1", optional = true, features = ["derive"] }
 
 [dev-dependencies]
 # This crate itself with `test-hooks` on, so its integration tests

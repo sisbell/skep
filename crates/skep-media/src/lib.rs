@@ -76,17 +76,21 @@
 #![deny(missing_docs)]
 
 use skep_util::permits::{Permit, Permits};
+use skep_util::source::Source;
 
 use crate::limits::MAX_CONCURRENT_UPLOADS;
 
 /// The media resource's configuration, as the operator supplies it — the
 /// upload setting, `--no-uploads` (`SKEPD_UPLOADS=false`): `uploads` OPEN
-/// by default. `#[non_exhaustive]` and paired with [`Default`] for the
-/// reason `skepd::AuthOptions` is: a caller starts from the defaults and
-/// sets what it means to change, so a knob added later arrives at its
-/// default rather than breaking every construction. Daemon config, never
-/// board state: in no record, journal, sidecar or fold; `/health` echoes it
-/// as `media.uploads`.
+/// by default, and beside it WHERE the setting came from
+/// (`uploads_source`), so the open's report names the switch with its
+/// source (`operations.md` §1.1 row 8). `#[non_exhaustive]` and paired
+/// with [`Default`] for the reason `skepd::AuthOptions` is: a caller starts
+/// from the defaults and sets what it means to change, so a knob added
+/// later arrives at its default rather than breaking every construction.
+/// Daemon config, never board state: in no record, journal, sidecar or
+/// fold; `/health` echoes the switch as `media.uploads`, and nothing of its
+/// source.
 ///
 /// ```
 /// use skep_media::MediaOptions;
@@ -102,11 +106,16 @@ pub struct MediaOptions {
     /// `uploads_closed` before any body byte; nothing else of the family or
     /// the door moves.
     pub uploads: bool,
+    /// Where `uploads` came from — the default, the flag (`--uploads` /
+    /// `--no-uploads`) or the variable (`SKEPD_UPLOADS`) — as the binary's
+    /// parse recorded it; `Source::Default` from a caller that sets the
+    /// switch and names no source, which the daemon's line then says.
+    pub uploads_source: Source,
 }
 
 impl Default for MediaOptions {
     fn default() -> MediaOptions {
-        MediaOptions { uploads: true }
+        MediaOptions { uploads: true, uploads_source: Source::Default }
     }
 }
 

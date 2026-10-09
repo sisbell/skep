@@ -21,6 +21,7 @@ use std::path::{Path, PathBuf};
 use std::process::exit;
 
 use skep_util::notice::{self, Class};
+use skep_util::source::Source;
 // `DEFAULT_WORKERS` is the LIBRARY's, not this binary's: it is the fifth
 // term of a relation whose other four are the daemon's permit pools, and the
 // library holds the assertion that keeps the five in step.
@@ -331,9 +332,15 @@ struct Args {
     port: u16,
     workers: usize,
     local_trust: bool,
+    /// Where `local_trust` came from — the default, the flag or the variable
+    /// — which the open's `auth:` line names beside the flag's value
+    /// (`operations.md` §1.1 m14).
+    local_trust_source: Source,
     /// `--uploads` / `--no-uploads` (wire.md §Media): the upload family's
     /// switch, OPEN by default.
     uploads: bool,
+    /// Where `uploads` came from, which line 8 names (§1.1 row 8).
+    uploads_source: Source,
     /// `--allow-preview-keys` (AUTH-1.44): a flag, no environment variable —
     /// a dev setting a served board never sets, so nothing can turn it on in
     /// silence from the image's environment.
@@ -341,6 +348,37 @@ struct Args {
     origins: Vec<Origin>,
     blocked_prefixes: Option<PathBuf>,
     node_prefix: Option<NodePrefix>,
+    /// Where `node_prefix` came from, which line 19 names (§1.1 row 19).
+    node_prefix_source: Source,
+}
+
+/// One setting as the parse resolves it, WITH the arm that set it: seeded
+/// from its variable, then overwritten by its flag — so the source is
+/// known where the value is decided, and not lost at the `unwrap_or` that
+/// resolves the default. The three settings the open's report names with
+/// their source ride this; the rest keep their bare `Option`.
+struct Sourced<T> {
+    value: Option<T>,
+    source: Source,
+}
+
+impl<T: std::str::FromStr> Sourced<T> {
+    /// The setting as its variable seeds it — `Env` where the variable is
+    /// set, `Default` where it is not — before the flag loop runs.
+    fn from_env(setting: EnvSetting) -> Result<Sourced<T>, String> {
+        let value = from_env(setting)?;
+        let source = if value.is_some() { Source::Env } else { Source::Default };
+        Ok(Sourced { value, source })
+    }
+}
+
+impl<T> Sourced<T> {
+    /// The flag's arm: the value set, the source the flag's — the last flag
+    /// given wins, as it does for every pair.
+    fn set_by_flag(&mut self, value: T) {
+        self.value = Some(value);
+        self.source = Source::Flag;
+    }
 }
 
 /// Read one setting from the environment, or `None` when it is UNSET. Each
@@ -428,8 +466,10 @@ fn parse_args(argv: impl Iterator<Item = String>) -> Result<Option<Args>, String
     let mut data_dir = std::env::var_os(SKEPD_DATA_DIR).map(PathBuf::from);
     let mut port: Option<u16> = from_env(SKEPD_PORT)?;
     let mut workers: Option<usize> = from_env(SKEPD_WORKERS)?;
-    let mut local_trust: Option<bool> = from_env(SKEPD_LOCAL_TRUST)?;
-    let mut uploads: Option<bool> = from_env(SKEPD_UPLOADS)?;
+    // The three settings the open's report names WITH their source: which
+    // arm set each is recorded here, where the parse knows it.
+    let mut local_trust: Sourced<bool> = Sourced::from_env(SKEPD_LOCAL_TRUST)?;
+    let mut uploads: Sourced<bool> = Sourced::from_env(SKEPD_UPLOADS)?;
     // The one setting [`from_env`] cannot carry, being a LIST — so the
     // two rules that helper holds are restated here and nowhere else: a
     // variable set to bytes that are not text is refused rather than read
@@ -450,7 +490,7 @@ fn parse_args(argv: impl Iterator<Item = String>) -> Result<Option<Args>, String
             .collect::<Result<_, _>>()?,
     };
     let mut blocked_prefixes = std::env::var_os(SKEPD_BLOCKED_PREFIXES).map(PathBuf::from);
-    let mut node_prefix: Option<NodePrefix> = from_env(SKEPD_NODE_PREFIX)?;
+    let mut node_prefix: Sourced<NodePrefix> = Sourced::from_env(SKEPD_NODE_PREFIX)?;
     // Default OFF, and no variable seeds it (AUTH-1.44: "the daemon REFUSES
     // ENROLLMENT of a tag-3 key unless this setting allows it").
     let mut allow_preview_keys = false;
@@ -470,10 +510,10 @@ fn parse_args(argv: impl Iterator<Item = String>) -> Result<Option<Args>, String
                 workers =
                     Some(v.parse().map_err(|_| format!("--workers: '{v}' is not a count"))?);
             }
-            "--local-trust" => local_trust = Some(true),
-            "--no-local-trust" => local_trust = Some(false),
-            "--uploads" => uploads = Some(true),
-            "--no-uploads" => uploads = Some(false),
+            "--local-trust" => local_trust.set_by_flag(true),
+            "--no-local-trust" => local_trust.set_by_flag(false),
+            "--uploads" => uploads.set_by_flag(true),
+            "--no-uploads" => uploads.set_by_flag(false),
             "--allow-preview-keys" => allow_preview_keys = true,
             "--origin" => {
                 let v = it.next().ok_or("--origin needs a value")?;
@@ -487,9 +527,10 @@ fn parse_args(argv: impl Iterator<Item = String>) -> Result<Option<Args>, String
             }
             "--node-prefix" => {
                 let v = it.next().ok_or("--node-prefix needs a value")?;
-                node_prefix = Some(v.parse::<NodePrefix>().map_err(|_| {
-                    format!("--node-prefix: '{v}' is not {NODE_PREFIX_FORM}")
-                })?);
+                node_prefix.set_by_flag(
+                    v.parse::<NodePrefix>()
+                        .map_err(|_| format!("--node-prefix: '{v}' is not {NODE_PREFIX_FORM}"))?,
+                );
             }
             "--help" | "-h" => return Ok(None),
             other => return Err(format!("unknown argument '{other}'")),
@@ -511,14 +552,17 @@ fn parse_args(argv: impl Iterator<Item = String>) -> Result<Option<Args>, String
         workers,
         // Phase A default ON (AUTH-1.45): a hosted image must set the flag
         // AFFIRMATIVELY false — abstention keeps the notebook behavior.
-        local_trust: local_trust.unwrap_or(true),
+        local_trust: local_trust.value.unwrap_or(true),
+        local_trust_source: local_trust.source,
         // OPEN by default (the owner's ruling), the default per-account
         // limit in force from start; the off switch is affirmative.
-        uploads: uploads.unwrap_or(true),
+        uploads: uploads.value.unwrap_or(true),
+        uploads_source: uploads.source,
         allow_preview_keys,
         origins,
         blocked_prefixes,
-        node_prefix,
+        node_prefix: node_prefix.value,
+        node_prefix_source: node_prefix.source,
     }))
 }
 
@@ -601,6 +645,7 @@ fn main() {
     // at its own default rather than at whatever a literal here omitted.
     let mut opts = AuthOptions::default();
     opts.local_trust = args.local_trust;
+    opts.local_trust_source = args.local_trust_source;
     // The dev setting (AUTH-1.44): ENROLLMENT of tag-3 keys, refused unless
     // the flag says otherwise; a served board is launched without it.
     opts.allow_preview_keys = args.allow_preview_keys;
@@ -610,12 +655,16 @@ fn main() {
     opts.blocked_supply_path = args.blocked_prefixes;
     // The node prefix (REG-1.69): egress and assertion config, supplied at
     // every start and never journaled — a fresh one is this binary
-    // relaunched (REG-1.70). `serve` names it, or its absence, at start.
+    // relaunched (REG-1.70). `serve` names it, or its absence, at start,
+    // with the source the parse recorded.
     opts.node_prefix = args.node_prefix;
+    opts.node_prefix_source = args.node_prefix_source;
     // The media resource's setting (wire.md §Media): the upload switch,
-    // open unless `--no-uploads` closed it.
+    // open unless `--no-uploads` closed it, and where it came from, which
+    // the open names beside it.
     let mut media = MediaOptions::default();
     media.uploads = args.uploads;
+    media.uploads_source = args.uploads_source;
     let daemon = match Daemon::open_configured(&args.data_dir, opts, media) {
         Ok(d) => d,
         Err(e) => {

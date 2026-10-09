@@ -103,7 +103,7 @@ pub enum Class {
 }
 
 /// When a warning's setting was read, as its class word spells it —
-/// `warning (at start):`. Three moments, closed, so a site names one rather
+/// `warning (at start):`. Four moments, closed, so a site names one rather
 /// than spelling a label.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Moment {
@@ -113,6 +113,9 @@ pub enum Moment {
     AtClaim,
     /// Inside the open, before anything is served.
     AtOpen,
+    /// At a reissue of the blocked-prefix list — a replaced supply file
+    /// installed while the daemon runs.
+    AtReissue,
 }
 
 /// The class word as a line spells it: the word alone, the colon the line's.
@@ -136,6 +139,7 @@ impl Display for Moment {
             Moment::AtStart => "at start",
             Moment::AtClaim => "at claim",
             Moment::AtOpen => "at open",
+            Moment::AtReissue => "at reissue",
         })
     }
 }

@@ -197,13 +197,20 @@ pub(crate) fn signed_origins(cfg: &AuthConfig, claimed: bool) -> BTreeSet<Origin
 // ── startup warnings (AUTH-4.9–4.11) ─────────────────────────────────────
 
 /// The three config-lockout warnings — evaluated at startup and at the
-/// claim flip, logged both times (RES-30: unconditionally at the flip).
+/// claim flip, logged both times (RES-30: unconditionally at the flip) —
+/// and, beside them, the dev setting's echo (`operations.md` §1.1 m5; the
+/// register's F2): a fourth kind, said at the same two points, so the one
+/// flag with no variable, no `/health` member and no start line is echoed
+/// wherever it is on.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum Warning {
     ClaimedWithLocalTrust,
     ClaimedWithEmptyConfigured,
     /// Carries the OFFENDING configured origin (AUTH-4.10), one arm each.
     ConfiguredLoopbackPortChanged(Origin),
+    /// `--allow-preview-keys` is on (AUTH-1.44): the enrollment of a tag-3
+    /// preview key is admitted, a dev setting a served board never sets.
+    PreviewKeysAllowed,
 }
 
 impl fmt::Display for Warning {
@@ -227,13 +234,22 @@ impl fmt::Display for Warning {
                 "configured origin {o} names a loopback host at a port this \
                  daemon is not bound to; re-issue the origin for the bound port",
             ),
+            // The WARNING form (§1): the setting, the consequence, the act.
+            Warning::PreviewKeysAllowed => f.write_str(
+                "the dev setting --allow-preview-keys is on: the enrollment of a preview key \
+                 (the tag-3 row, fndsa512-preview-ed25519) is admitted, a genesis included — a \
+                 served board runs without it; drop the flag and restart",
+            ),
         }
     }
 }
 
 /// The one pure warnings function (AUTH-4.9): arm 1 CLAIMED-PERMISSIVE,
 /// arm 2 claimed-with-empty-configured, arm 3 the port change — pure set
-/// membership over config, one arm per offending origin.
+/// membership over config, one arm per offending origin — and, beside the
+/// three the rule declares, the dev setting's arm (m5): `allow_preview_keys`
+/// on, whatever the claim, so a board that admits preview keys says so at
+/// both of AUTH-4.11's points as the others are said.
 pub(crate) fn startup_warnings(cfg: &AuthConfig, claimed: bool) -> Vec<Warning> {
     let mut out = Vec::new();
     if Mode::of(cfg, claimed) == Mode::ClaimedPermissive {
@@ -247,6 +263,9 @@ pub(crate) fn startup_warnings(cfg: &AuthConfig, claimed: bool) -> Vec<Warning> 
         if o.names_loopback_host() && !defaults.contains(o) {
             out.push(Warning::ConfiguredLoopbackPortChanged(o.clone()));
         }
+    }
+    if cfg.allow_preview_keys {
+        out.push(Warning::PreviewKeysAllowed);
     }
     out
 }
@@ -356,5 +375,31 @@ mod tests {
         );
         // A hosted board configured with its public origin alone is silent.
         assert!(startup_warnings(&cfg_with(443, false, &["https://b.example"]), false).is_empty());
+    }
+
+    /// m5 — THE DEV SETTING's ARM: `allow_preview_keys` on yields the
+    /// warning at both points, claimed or not, after the three lockout arms;
+    /// off — a served board's setting — it yields nothing, so the three
+    /// cells above stand as they were. The words carry the setting, the
+    /// consequence and the act.
+    #[test]
+    fn the_preview_keys_arm_fires_whenever_the_setting_is_on() {
+        let allowing = AuthConfig::new(AuthOptions {
+            local_trust: false,
+            configured: vec![Origin::parse("https://b.example").expect("canonical")],
+            allow_preview_keys: true,
+            ..AuthOptions::default()
+        });
+        allowing.bind_port(8642).expect("a fresh config binds once");
+        assert_eq!(startup_warnings(&allowing, false), [Warning::PreviewKeysAllowed]);
+        assert_eq!(startup_warnings(&allowing, true), [Warning::PreviewKeysAllowed]);
+        let refusing = cfg_with(8642, false, &["https://b.example"]);
+        assert!(startup_warnings(&refusing, true).is_empty(), "off: nothing to say");
+        let words = Warning::PreviewKeysAllowed.to_string();
+        for needle in
+            ["--allow-preview-keys is on", "preview key", "tag-3", "drop the flag and restart"]
+        {
+            assert!(words.contains(needle), "{needle:?} missing from {words:?}");
+        }
     }
 }

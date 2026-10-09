@@ -414,6 +414,125 @@ fn the_claim_flip_into_enforcing_kills_every_bare_binding() {
     sd.shutdown();
 }
 
+/// m14 — THE CLAIM's FLIP SAYS ITSELF: after the claim, the daemon has said
+/// ONE `landing:` line — `board claimed by {account} at position {p}: the
+/// mode is now CLAIMED-ENFORCING; H.1 written` — `{account}` the claimant
+/// the commit seated and `{p}` the position the claim's own ack carried,
+/// NOT the head's position after the flip, which `H.1`'s own commits have
+/// moved past it by the time the line is said. Read through the daemon's
+/// record of what it said (`lines_said`), since no suite captures stderr
+/// in-process.
+#[test]
+fn the_claims_flip_says_the_account_the_claims_position_the_mode_and_the_head() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let sd = spawn_configured(dir.path(), false);
+    let port = sd.port();
+    ceremony_before_the_claim(port);
+    let signed = open_signed_session(port, CLAIMANT_PRINCIPAL, &device_key());
+    let v = op(port, Some(&signed), &claim_frame(CLAIMANT_DOC1, CLAIMANT_ACCOUNT));
+    let claim_at = acked_at(&v);
+    assert!(claimed(port), "the claim link flips the board claimed");
+    assert!(
+        head_position(port) > claim_at,
+        "H.1's own commits follow the claim, so the head is past the ack's position"
+    );
+    let said = sd.daemon().lines_said();
+    let flip: Vec<&String> = said.iter().filter(|l| l.starts_with("landing: board claimed by ")).collect();
+    assert_eq!(flip.len(), 1, "said once per flip:\n{}", said.join("\n"));
+    assert_eq!(
+        flip[0],
+        &format!(
+            "landing: board claimed by {CLAIMANT_ACCOUNT} at position {claim_at}: the mode is \
+             now CLAIMED-ENFORCING; H.1 written"
+        ),
+        "FINDING (m14): the flip's line"
+    );
+    sd.shutdown();
+}
+
+/// m14's OWED ARM, through the head writer's refusal seam
+/// (`refuse_the_next_head_once`, the one seam that refuses a first head
+/// today): the claim's `H.1` refused by the driver, the flip's line says
+/// `H.1 owed — the head writer refused it` with the claim's position and
+/// the mode the flag picks — CLAIMED-PERMISSIVE here — and is said BEFORE
+/// the claim-time warnings, whose first is the permissive one.
+#[test]
+fn a_refused_first_head_is_said_owed_on_the_flips_line_before_the_claims_warnings() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let sd = spawn_configured(dir.path(), true);
+    let port = sd.port();
+    ceremony_before_the_claim(port);
+    sd.daemon().refuse_the_next_head_once();
+    let signed = open_signed_session(port, CLAIMANT_PRINCIPAL, &device_key());
+    let v = op(port, Some(&signed), &claim_frame(CLAIMANT_DOC1, CLAIMANT_ACCOUNT));
+    let claim_at = acked_at(&v);
+    assert!(claimed(port), "the claim stands, its H.1 refused");
+    assert!(board_term(port).is_none(), "no board term: the first head was refused");
+    let said = sd.daemon().lines_said();
+    let flip_at = said
+        .iter()
+        .position(|l| l.starts_with("landing: board claimed by "))
+        .unwrap_or_else(|| panic!("FINDING (m14): no flip line:\n{}", said.join("\n")));
+    assert_eq!(
+        said[flip_at],
+        format!(
+            "landing: board claimed by {CLAIMANT_ACCOUNT} at position {claim_at}: the mode is \
+             now CLAIMED-PERMISSIVE; H.1 owed — the head writer refused it"
+        )
+    );
+    let warned_at = said
+        .iter()
+        .position(|l| l.starts_with("warning (at claim): board is claimed with --local-trust still on"))
+        .unwrap_or_else(|| panic!("the claim-time warning:\n{}", said.join("\n")));
+    assert!(flip_at < warned_at, "the landing line before the claim-time warnings");
+    sd.shutdown();
+}
+
+/// m14's THIRD ARM, the state the design's two left unsaid: a head the
+/// CADENCE wrote before the claim — a checkpoint taken pre-claim is one of
+/// the head's triggers, so the ceremony's next write commits `H.1` — leaves
+/// the claim's own first head a no-op, the board term standing and naming
+/// a position BEFORE the claim; the flip's line says `H.1 written before
+/// the claim`, never `owed`, which would be false of a board that serves
+/// attested writes at once.
+#[test]
+fn a_head_the_cadence_wrote_before_the_claim_is_said_so_on_the_flips_line() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let sd = spawn_configured(dir.path(), false);
+    let port = sd.port();
+    ceremony_before_the_claim(port);
+    // A checkpoint, then one more pre-claim write: its turn writes a head.
+    sd.daemon().checkpoint_now();
+    let claimant = open_session(port, CLAIMANT_PRINCIPAL);
+    let v = op(
+        port,
+        Some(&claimant),
+        &format!(
+            r#"{{"op":"insert","doc":"{CLAIMANT_DOC1}","at":{{"subspace":"1","ordinal":"2"}},"values":["x"],"deposit":"{T_ENROLL}"}}"#
+        ),
+    );
+    expect_resp(&v, "ack_addr");
+    let before = board_term(port).expect("the cadence's head stands before the claim");
+    let signed = open_signed_session(port, CLAIMANT_PRINCIPAL, &device_key());
+    let v = op(port, Some(&signed), &claim_frame(CLAIMANT_DOC1, CLAIMANT_ACCOUNT));
+    let claim_at = acked_at(&v);
+    assert!(before.log_position < claim_at, "H.1 names a position before the claim");
+    assert_eq!(head_position(port), claim_at, "the claim's step wrote no second head");
+    let said = sd.daemon().lines_said();
+    let flip = said
+        .iter()
+        .find(|l| l.starts_with("landing: board claimed by "))
+        .unwrap_or_else(|| panic!("no flip line:\n{}", said.join("\n")));
+    assert_eq!(
+        flip,
+        &format!(
+            "landing: board claimed by {CLAIMANT_ACCOUNT} at position {claim_at}: the mode is \
+             now CLAIMED-ENFORCING; H.1 written before the claim"
+        )
+    );
+    sd.shutdown();
+}
+
 /// wire.md §Sessions fixes the death signal's routes as a table: six carry
 /// it; `/health`, `/challenge`, `/session` and — in `client` builds — `/`
 /// are token-blind, and §Reading history adds `/chain` ("token-blind and

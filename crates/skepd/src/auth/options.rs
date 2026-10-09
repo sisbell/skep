@@ -7,9 +7,11 @@ use std::fmt;
 use std::path::PathBuf;
 use std::sync::{Arc, OnceLock};
 
+use skep_util::source::Source;
+
 use super::blocked::BlockedPrefixes;
 use super::lock::LockWrite;
-use super::origin::Origin;
+use super::origin::{signed_origins, Origin};
 use super::prefix::NodePrefix;
 
 /// The daemon's session-layer configuration, as the operator supplies it:
@@ -17,7 +19,10 @@ use super::prefix::NodePrefix;
 /// AFFIRMATIVELY false, AUTH-4.57 (i)), the configured origins (AUTH-4.7:
 /// configure what the board is actually reachable at), the blocked-prefix
 /// supply, the node prefix, and the ONE dev setting signed ops added —
-/// `allow_preview_keys` (AUTH-1.44), default OFF.
+/// `allow_preview_keys` (AUTH-1.44), default OFF; and beside the flag and
+/// the prefix WHERE each came from (`local_trust_source`,
+/// `node_prefix_source`), so the open's report names each setting with its
+/// source (`operations.md` §1 THE OPEN's REPORT; §1.1 rows 19 and m14).
 ///
 /// `#[non_exhaustive]`, paired with the [`Default`] below: a caller starts
 /// from the defaults and sets what it means to change, so a knob added
@@ -48,6 +53,13 @@ pub struct AuthOptions {
     /// when true; ENFORCING when false. Pre-claim the flag is not consulted:
     /// the board is UNCLAIMED whatever it says ([`Mode::of`], AUTH-4.26).
     pub local_trust: bool,
+    /// Where `local_trust` came from — the default, the flag
+    /// (`--local-trust` / `--no-local-trust`) or the variable
+    /// (`SKEPD_LOCAL_TRUST`) — as the binary's parse recorded it, which the
+    /// open's `auth:` line names beside the flag's value (§1.1 m14);
+    /// `Source::Default` from a caller that sets the flag and names no
+    /// source, which the line then says.
+    pub local_trust_source: Source,
     /// The CONFIGURED origin set — the signed arm's whole set once claimed;
     /// unioned with the loopback defaults on the bare arm.
     ///
@@ -91,6 +103,12 @@ pub struct AuthOptions {
     /// The FORM is [`NodePrefix`]'s, carried by the type: a `Some` is a node
     /// address strictly under the root because nothing else can be built.
     pub node_prefix: Option<NodePrefix>,
+    /// Where `node_prefix` came from — the flag (`--node-prefix`) or the
+    /// variable (`SKEPD_NODE_PREFIX`); `Source::Default` where none was
+    /// supplied, and from a caller that sets a prefix and names no source —
+    /// which the start-up line (`AuthConfig::node_prefix_line`) names beside
+    /// the prefix (§1.1 row 19).
+    pub node_prefix_source: Source,
     /// THE DEV SETTING `allow_preview_keys` — `--allow-preview-keys`
     /// (AUTH-1.44; the hybrid-only launch's Q5, owner 2026-09-26 "b"; AUTH
     /// RES-206): the daemon REFUSES ENROLLMENT of a TAG-3 key — a key of the
@@ -110,9 +128,11 @@ impl Default for AuthOptions {
     fn default() -> AuthOptions {
         AuthOptions {
             local_trust: true,
+            local_trust_source: Source::Default,
             configured: Vec::new(),
             blocked_supply_path: None,
             node_prefix: None,
+            node_prefix_source: Source::Default,
             allow_preview_keys: false,
         }
     }
@@ -138,6 +158,9 @@ impl Default for AuthOptions {
 /// behind no lock, and every install of the list reads the one in force.
 pub(crate) struct AuthConfig {
     pub local_trust: bool,
+    /// [`AuthOptions::local_trust_source`], as supplied — what the `auth:`
+    /// line reads beside the flag.
+    local_trust_source: Source,
     pub configured: BTreeSet<Origin>,
     port: OnceLock<u16>,
     /// The list IN FORCE, read through [`AuthConfig::blocked_prefixes`] and
@@ -151,6 +174,9 @@ pub(crate) struct AuthConfig {
     /// [`AuthOptions::node_prefix`], as supplied; `None` where the daemon
     /// was told none.
     node_prefix: Option<NodePrefix>,
+    /// [`AuthOptions::node_prefix_source`], as supplied — what the start-up
+    /// line reads beside the prefix.
+    node_prefix_source: Source,
     /// [`AuthOptions::allow_preview_keys`], as supplied — the ONE setting
     /// the precheck's slot (4) reads (AUTH-3.15 as RES-206 landed it).
     pub allow_preview_keys: bool,
@@ -160,11 +186,13 @@ impl AuthConfig {
     pub(super) fn new(opts: AuthOptions) -> AuthConfig {
         AuthConfig {
             local_trust: opts.local_trust,
+            local_trust_source: opts.local_trust_source,
             configured: opts.configured.into_iter().collect(),
             port: OnceLock::new(),
             // Empty until [`AuthState::open`] installs the start-up supply.
             blocked: parking_lot::RwLock::new(Arc::new(BlockedPrefixes::default())),
             node_prefix: opts.node_prefix,
+            node_prefix_source: opts.node_prefix_source,
             allow_preview_keys: opts.allow_preview_keys,
         }
     }
@@ -175,20 +203,71 @@ impl AuthConfig {
         self.node_prefix.as_ref()
     }
 
-    /// The start-up line's text: the node prefix in force, or its absence
-    /// — said once, at start, whether or not a list is supplied, because a
-    /// hosted board launched without its prefix has its off-board test OFF
-    /// and would otherwise learn so only at its first install.
+    /// The start-up line's text (`operations.md` §1.1 row 19): the node
+    /// prefix in force with its SOURCE — `(--node-prefix)` or
+    /// `(SKEPD_NODE_PREFIX)`, the name alone, the line already saying the
+    /// value; `(the default)` from a caller that set one and named no source
+    /// — or its absence; said once, at start, whether or not a list is
+    /// supplied, because a hosted board launched without its prefix has its
+    /// off-board test OFF and would otherwise learn so only at its first
+    /// install.
     pub fn node_prefix_line(&self) -> String {
         match &self.node_prefix {
             Some(prefix) => format!(
-                "node prefix {prefix} (--node-prefix): egress and assertion config, never \
-                 journaled; the blocked-prefix list's off-board test runs against it"
+                "node prefix {prefix} ({}): egress and assertion config, never journaled; the \
+                 blocked-prefix list's off-board test runs against it",
+                self.node_prefix_source.words("--node-prefix", "SKEPD_NODE_PREFIX")
             ),
             None => "no --node-prefix: the off-board test is off (every operator account reads \
                      as this board's own); a hosted board must supply one"
                 .to_string(),
         }
+    }
+
+    /// The board's mode at a snapshot whose claim is `claimed` — [`Mode::of`]
+    /// over this config, for the sites outside this module that say the mode
+    /// on the operator stream and can name the words but not the type.
+    pub fn mode(&self, claimed: bool) -> Mode {
+        Mode::of(self, claimed)
+    }
+
+    /// THE OPEN's-REPORT `auth:` LINE's text (`operations.md` §1.1 m14),
+    /// rendered HERE because this is where its state lives — the convention
+    /// this module keeps for everything it publishes, the `/health` object
+    /// included: `auth: {unclaimed | CLAIMED-ENFORCING | CLAIMED-PERMISSIVE}
+    /// (--local-trust {on|off}, {source}); configured origins {list | none};
+    /// signed origins {list}` — the mode derived from the pair as AUTH-5.86
+    /// derives it ([`Mode::of`]), the flag's value and its source beside it,
+    /// the configured set, and the signed set as the handshake admits it at
+    /// this claim ([`signed_origins`]: the configured set alone once
+    /// claimed, else the bare set — the loopback defaults of the BOUND port
+    /// with the configured). Each set in one spelling: the origins'
+    /// canonical text, in the set's order, `none` where the set is empty —
+    /// a claimed board with no configured origin has an empty signed set,
+    /// which row 17's warning names the consequence of. The one line that
+    /// names a mistyped `--origin` on an ENFORCING board, where every signed
+    /// session is otherwise refused in silence.
+    pub fn auth_line(&self, claimed: bool) -> String {
+        let (flag, variable) = if self.local_trust {
+            ("--local-trust", "SKEPD_LOCAL_TRUST=true")
+        } else {
+            ("--no-local-trust", "SKEPD_LOCAL_TRUST=false")
+        };
+        let list = |set: &BTreeSet<Origin>| -> String {
+            if set.is_empty() {
+                "none".to_string()
+            } else {
+                set.iter().map(Origin::as_str).collect::<Vec<_>>().join(", ")
+            }
+        };
+        format!(
+            "auth: {} (--local-trust {}, {}); configured origins {}; signed origins {}",
+            Mode::of(self, claimed),
+            if self.local_trust { "on" } else { "off" },
+            self.local_trust_source.words(flag, variable),
+            list(&self.configured),
+            list(&signed_origins(self, claimed)),
+        )
     }
 
     /// THE LIST IN FORCE — AUTH-4.36 step 4b's `blocked_prefixes(cfg)`, a
@@ -311,9 +390,117 @@ impl Mode {
     }
 }
 
+/// The mode as the operator stream spells it (`operations.md` §1.1 m14):
+/// `unclaimed`, `CLAIMED-PERMISSIVE`, `CLAIMED-ENFORCING` — the two claimed
+/// modes in capitals, the design's own spelling, so the `auth:` line at
+/// start and the flip's landing line say one word for one mode.
+impl fmt::Display for Mode {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Mode::Unclaimed => "unclaimed",
+            Mode::ClaimedPermissive => "CLAIMED-PERMISSIVE",
+            Mode::Enforcing => "CLAIMED-ENFORCING",
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// THE MODE's WORDS (m14): one spelling per mode, the design's own.
+    #[test]
+    fn each_mode_spells_its_own_word() {
+        assert_eq!(Mode::Unclaimed.to_string(), "unclaimed");
+        assert_eq!(Mode::ClaimedPermissive.to_string(), "CLAIMED-PERMISSIVE");
+        assert_eq!(Mode::Enforcing.to_string(), "CLAIMED-ENFORCING");
+    }
+
+    /// THE `auth:` LINE's WORDS (m14) at fixed figures: an unclaimed board
+    /// under the defaults names the bare set — the bound port's three
+    /// loopback defaults — as its signed set and no configured origin; a
+    /// claimed board with the flag off by its flag names its mode
+    /// CLAIMED-ENFORCING and the configured set alone, in the set's order;
+    /// one claimed with the flag on by its variable names
+    /// CLAIMED-PERMISSIVE; and a claimed board with no configured origin
+    /// says `none` for both sets. The source's words are the setting's,
+    /// `(--local-trust {on|off}, {source})` as m14 spells them.
+    #[test]
+    fn the_auth_line_names_the_mode_the_flag_with_its_source_and_the_two_sets() {
+        let cfg = AuthConfig::new(AuthOptions::default());
+        cfg.bind_port(8642).expect("binds once");
+        assert_eq!(
+            cfg.auth_line(false),
+            "auth: unclaimed (--local-trust on, the default); configured origins none; signed \
+             origins http://127.0.0.1:8642, http://[::1]:8642, http://localhost:8642"
+        );
+        let configured = |s: &str| Origin::parse(s).expect("canonical");
+        let enforcing = AuthConfig::new(AuthOptions {
+            local_trust: false,
+            local_trust_source: Source::Flag,
+            configured: vec![
+                configured("https://board.example"),
+                configured("http://127.0.0.1:8642"),
+            ],
+            ..AuthOptions::default()
+        });
+        enforcing.bind_port(8642).expect("binds once");
+        assert_eq!(
+            enforcing.auth_line(true),
+            "auth: CLAIMED-ENFORCING (--local-trust off, --no-local-trust); configured origins \
+             http://127.0.0.1:8642, https://board.example; signed origins http://127.0.0.1:8642, \
+             https://board.example"
+        );
+        let permissive = AuthConfig::new(AuthOptions {
+            local_trust: true,
+            local_trust_source: Source::Env,
+            configured: vec![configured("https://board.example")],
+            ..AuthOptions::default()
+        });
+        permissive.bind_port(443).expect("binds once");
+        assert_eq!(
+            permissive.auth_line(true),
+            "auth: CLAIMED-PERMISSIVE (--local-trust on, SKEPD_LOCAL_TRUST=true); configured \
+             origins https://board.example; signed origins https://board.example"
+        );
+        let unconfigured = AuthConfig::new(AuthOptions {
+            local_trust: false,
+            local_trust_source: Source::Env,
+            ..AuthOptions::default()
+        });
+        unconfigured.bind_port(8642).expect("binds once");
+        assert_eq!(
+            unconfigured.auth_line(true),
+            "auth: CLAIMED-ENFORCING (--local-trust off, SKEPD_LOCAL_TRUST=false); configured \
+             origins none; signed origins none"
+        );
+    }
+
+    /// THE NODE PREFIX's LINE (row 19) names its source: the flag, the
+    /// variable by its bare name, and the default's phrase where a caller
+    /// set a prefix and named no source; a board told none keeps its one
+    /// sentence.
+    #[test]
+    fn the_node_prefix_line_names_the_prefix_with_its_source() {
+        let at = |source: Source| {
+            AuthConfig::new(AuthOptions {
+                node_prefix: Some("1.3".parse().expect("a node prefix")),
+                node_prefix_source: source,
+                ..AuthOptions::default()
+            })
+            .node_prefix_line()
+        };
+        let rest = ": egress and assertion config, never journaled; the blocked-prefix list's \
+                    off-board test runs against it";
+        assert_eq!(at(Source::Flag), format!("node prefix 1.3 (--node-prefix){rest}"));
+        assert_eq!(at(Source::Env), format!("node prefix 1.3 (SKEPD_NODE_PREFIX){rest}"));
+        assert_eq!(at(Source::Default), format!("node prefix 1.3 (the default){rest}"));
+        assert_eq!(
+            AuthConfig::new(AuthOptions::default()).node_prefix_line(),
+            "no --node-prefix: the off-board test is off (every operator account reads as this \
+             board's own); a hosted board must supply one"
+        );
+    }
 
     /// [`AuthConfig::bind_port`] refuses a second bind and names the port
     /// already bound — the number every live session's origin set was

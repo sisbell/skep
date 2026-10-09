@@ -23,6 +23,15 @@
 //!   serving line and never the daemon, which serves on; a stderr with no
 //!   reader costs a refusal's line and never its exit code — 2 stays 2, 1
 //!   stays 1, never 101.
+//! * THE OPEN's-REPORT `auth:` LINE (`operations.md` §1.1 m14): after the
+//!   bind and the warnings, `open: auth: {mode} (--local-trust {on|off},
+//!   {source}); configured origins {list | none}; signed origins {list}` on
+//!   every start — an unclaimed board under the defaults, a board claimed
+//!   in a prior run started ENFORCING by flag, and the same board started
+//!   PERMISSIVE by its variable.
+//! * ROWS 8 AND 19 NAME THEIR SOURCE: `media uploads: … ({source})` and
+//!   `node prefix {p} ({source}): …` read the arm that set each — the flag,
+//!   the variable on the command, or the default.
 //!
 //! The daemon's fault door (`Daemon::panic_the_next_worker`) reaches the
 //! child through the variable `main.rs` reads under `test-hooks`, the
@@ -38,7 +47,8 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use crate::common::{
-    acked_addr, expect_resp, get, json, op, open_session, spawn_unclaimed, T_ENROLL,
+    acked_addr, claim_board, expect_resp, get, json, op, open_session, spawn_unclaimed,
+    T_ENROLL,
 };
 
 /// THE WORKER FAULT's VARIABLE — the binary's test door (`main.rs`, read
@@ -226,7 +236,15 @@ struct Served {
 /// stderr: the directory's line as the first line of the stream, and the
 /// recovery's landing after it.
 fn serve_and_read_the_open(dir: &Path, env: &[(&str, &str)]) -> Served {
-    let mut cmd = skepd(dir, &["--port", "0", "--workers", "1"]);
+    serve_and_read_the_open_with(dir, &[], env)
+}
+
+/// [`serve_and_read_the_open`] with `flags` after the port and the worker
+/// count — the setting flags whose lines the open's report names.
+fn serve_and_read_the_open_with(dir: &Path, flags: &[&str], env: &[(&str, &str)]) -> Served {
+    let mut args = vec!["--port", "0", "--workers", "1"];
+    args.extend_from_slice(flags);
+    let mut cmd = skepd(dir, &args);
     for (name, value) in env {
         cmd.env(name, value);
     }
@@ -246,6 +264,56 @@ fn serve_and_read_the_open(dir: &Path, env: &[(&str, &str)]) -> Served {
     let recovered_line =
         after_the_head(&recovered, "open").expect("the landing's head").to_string();
     Served { child, stderr, port, data_dir_line, recovered_line }
+}
+
+/// A stderr line of `class` whose text opens with `prefix`.
+fn said(line: &str, class: &str, prefix: &str) -> bool {
+    after_the_head(line, class).is_some_and(|text| text.starts_with(prefix))
+}
+
+/// The text after the head of the first line of `class` opening with
+/// `prefix`, awaited on `stderr`.
+fn await_said(stderr: &mut Stderr, class: &str, prefix: &str) -> String {
+    let line = stderr.wait_for(prefix, Duration::from_secs(10), |l| said(l, class, prefix));
+    after_the_head(&line, class).expect("the awaited head").to_string()
+}
+
+/// A binary serving over `dir` on a port RESERVED for it — bound and
+/// released here, so a flag can name it (`--origin` carries the port) —
+/// with ONE worker, `flags(port)` after the port and the count, and `env`
+/// on the command; retried on a fresh port where another process took the
+/// reserved one between the release and the child's bind, as the lost
+/// reader's claim retries. The child, its stderr read up to its first line,
+/// and the port off the serving line.
+fn serve_on_a_reserved_port(
+    dir: &Path,
+    flags: impl Fn(u16) -> Vec<String>,
+    env: &[(&str, &str)],
+) -> (Spawned, Stderr, u16) {
+    const ATTEMPTS: usize = 12;
+    for _ in 0..ATTEMPTS {
+        let reserved = TcpListener::bind(("127.0.0.1", 0)).expect("reserve a port");
+        let port = reserved.local_addr().expect("the port").port();
+        drop(reserved);
+        let mut args = vec!["--port".to_string(), port.to_string(), "--workers".into(), "1".into()];
+        args.extend(flags(port));
+        let args: Vec<&str> = args.iter().map(String::as_str).collect();
+        let mut cmd = skepd(dir, &args);
+        for (name, value) in env {
+            cmd.env(name, value);
+        }
+        let mut child = Spawned::launch(&mut cmd);
+        let mut stderr = Stderr::of(&mut child.child);
+        let first = stderr.wait_for("the first line", PATIENCE, |_| true);
+        if first.starts_with(&format!("skepd: bind 127.0.0.1:{port}: ")) {
+            continue;
+        }
+        assert!(after_the_head(&first, "open").is_some(), "the open's first line: {first:?}");
+        let served = serving_port(&mut child.child, PATIENCE);
+        assert_eq!(served, port, "the serving line names the reserved port");
+        return (child, stderr, port);
+    }
+    panic!("the binary bound a reserved port within no {ATTEMPTS} attempts")
 }
 
 /// The landing's figures off its words — `recovered from {base}, {k}
@@ -452,6 +520,157 @@ fn the_open_says_its_directory_first_and_its_recovery_with_the_kernels_figures()
         third.recovered_line
     );
     third.child.kill();
+}
+
+/// m14 — THE OPEN's-REPORT `auth:` LINE AT EVERY START, on the real binary:
+/// a fresh UNCLAIMED board under the defaults says `open: auth: unclaimed
+/// (--local-trust on, the default); configured origins none; signed origins
+/// {the bound port's three loopback defaults}` — the bare set, since
+/// unclaimed the signed set is the bare one; the board CLAIMED over the
+/// wire in that life and started again `--no-local-trust --origin
+/// http://127.0.0.1:{port}` says `CLAIMED-ENFORCING (--local-trust off,
+/// --no-local-trust); configured origins {that origin}; signed origins
+/// {that origin}` — the configured set ALONE once claimed, the mode derived
+/// from the pair as AUTH-5.86 derives it — with no warning, since the origin
+/// names the bound port, and before the node prefix's line; and the same
+/// board started with `SKEPD_LOCAL_TRUST=true` on the command says
+/// `CLAIMED-PERMISSIVE (--local-trust on, SKEPD_LOCAL_TRUST=true) …`, the
+/// permissive warning said before it. Each child killed by the test.
+#[test]
+fn the_auth_line_names_the_mode_the_flag_with_its_source_and_the_two_sets_at_every_start() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let dir = tmp.path().join("data");
+
+    // FIRST LIFE: unclaimed, the defaults — the bare set is the signed set;
+    // the upload setting reads the default's source beside it.
+    let mut first = serve_and_read_the_open(&dir, &[]);
+    let port = first.port;
+    assert_eq!(
+        await_said(&mut first.stderr, "open", "media uploads: "),
+        "media uploads: open (the default)"
+    );
+    assert_eq!(
+        await_said(&mut first.stderr, "open", "auth: "),
+        format!(
+            "auth: unclaimed (--local-trust on, the default); configured origins none; signed \
+             origins http://127.0.0.1:{port}, http://[::1]:{port}, http://localhost:{port}"
+        ),
+        "FINDING (m14): the unclaimed board's auth line"
+    );
+    claim_board(port);
+    first.child.kill();
+
+    // SECOND LIFE: claimed, ENFORCING by flag, its origin configured for the
+    // bound port — the one line that would catch a mistyped origin.
+    let origin = |port: u16| format!("http://127.0.0.1:{port}");
+    let (mut second, mut stderr, port) = serve_on_a_reserved_port(
+        &dir,
+        |port| vec!["--no-local-trust".into(), "--origin".into(), origin(port)],
+        &[],
+    );
+    assert_eq!(
+        await_said(&mut stderr, "open", "auth: "),
+        format!(
+            "auth: CLAIMED-ENFORCING (--local-trust off, --no-local-trust); configured origins \
+             {o}; signed origins {o}",
+            o = origin(port)
+        ),
+        "FINDING (m14): the enforcing board's auth line"
+    );
+    await_said(&mut stderr, "open", "no --node-prefix");
+    let at = |stderr: &Stderr, class: &str, prefix: &str| {
+        stderr.seen.iter().position(|l| said(l, class, prefix))
+    };
+    assert!(
+        at(&stderr, "open", "auth: ") < at(&stderr, "open", "no --node-prefix"),
+        "the auth line comes before the node prefix's:\n{}",
+        stderr.seen.join("\n")
+    );
+    assert!(
+        !stderr.seen.iter().any(|l| after_the_head(l, "warning (at start)").is_some_and(|w| w.starts_with("board is claimed"))),
+        "well configured: no lockout warning\n{}",
+        stderr.seen.join("\n")
+    );
+    second.kill();
+
+    // THIRD LIFE: the same board, PERMISSIVE by its variable, warned first.
+    let (mut third, mut stderr, port) = serve_on_a_reserved_port(
+        &dir,
+        |port| vec!["--origin".into(), origin(port)],
+        &[("SKEPD_LOCAL_TRUST", "true")],
+    );
+    assert_eq!(
+        await_said(&mut stderr, "open", "auth: "),
+        format!(
+            "auth: CLAIMED-PERMISSIVE (--local-trust on, SKEPD_LOCAL_TRUST=true); configured \
+             origins {o}; signed origins {o}",
+            o = origin(port)
+        ),
+        "FINDING (m14): the permissive board's auth line"
+    );
+    let warned = at(&stderr, "warning (at start)", "board is claimed with --local-trust still on");
+    assert!(
+        warned.is_some() && warned < at(&stderr, "open", "auth: "),
+        "the permissive warning is said before the auth line:\n{}",
+        stderr.seen.join("\n")
+    );
+    third.kill();
+}
+
+/// ROWS 8 AND 19 — THE SOURCE WORDS on the real binary: `--no-uploads` reads
+/// `media uploads: CLOSED (--no-uploads): …` and `SKEPD_NODE_PREFIX` on the
+/// command `node prefix 1.3 (SKEPD_NODE_PREFIX): …`; `SKEPD_UPLOADS=true`
+/// reads `media uploads: open (SKEPD_UPLOADS=true)` and no prefix its one
+/// sentence; `--uploads --node-prefix 1.5` read the flags. The default's
+/// phrase is the auth line claim's first child's.
+#[test]
+fn the_upload_setting_and_the_node_prefix_name_the_arm_that_set_each() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let rest = ": egress and assertion config, never journaled; the blocked-prefix list's \
+                off-board test runs against it";
+    let closed = "the creation and the resume are refused uploads_closed";
+
+    let mut by_flag_and_variable =
+        serve_and_read_the_open_with(&tmp.path().join("a"), &["--no-uploads"], &[("SKEPD_NODE_PREFIX", "1.3")]);
+    assert_eq!(
+        await_said(&mut by_flag_and_variable.stderr, "open", "media uploads: "),
+        format!("media uploads: CLOSED (--no-uploads): {closed}"),
+        "FINDING (row 8): the flag's source"
+    );
+    assert_eq!(
+        await_said(&mut by_flag_and_variable.stderr, "open", "node prefix "),
+        format!("node prefix 1.3 (SKEPD_NODE_PREFIX){rest}"),
+        "FINDING (row 19): the variable's source"
+    );
+    by_flag_and_variable.child.kill();
+
+    let mut by_variable =
+        serve_and_read_the_open_with(&tmp.path().join("b"), &[], &[("SKEPD_UPLOADS", "true")]);
+    assert_eq!(
+        await_said(&mut by_variable.stderr, "open", "media uploads: "),
+        "media uploads: open (SKEPD_UPLOADS=true)",
+        "FINDING (row 8): the variable's source"
+    );
+    assert_eq!(
+        await_said(&mut by_variable.stderr, "open", "no --node-prefix"),
+        "no --node-prefix: the off-board test is off (every operator account reads as this \
+         board's own); a hosted board must supply one"
+    );
+    by_variable.child.kill();
+
+    let mut by_flags =
+        serve_and_read_the_open_with(&tmp.path().join("c"), &["--uploads", "--node-prefix", "1.5"], &[]);
+    assert_eq!(
+        await_said(&mut by_flags.stderr, "open", "media uploads: "),
+        "media uploads: open (--uploads)",
+        "FINDING (row 8): an explicit --uploads is the flag's, not the default's"
+    );
+    assert_eq!(
+        await_said(&mut by_flags.stderr, "open", "node prefix "),
+        format!("node prefix 1.5 (--node-prefix){rest}"),
+        "FINDING (row 19): the flag's source"
+    );
+    by_flags.child.kill();
 }
 
 /// ROW 41 — THE HOOK's LINE: the child with the door's INSIDE arm armed

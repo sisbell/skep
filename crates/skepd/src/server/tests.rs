@@ -340,13 +340,14 @@ fn the_opens_two_lines_carry_the_directory_the_base_the_replay_and_the_duration_
     assert_eq!(Base(Seq(77)).to_string(), "checkpoint.77");
 }
 
-/// THE CLASSED DOOR for the open's own lines (CUT 1 (a)): both go out
-/// through `say_open_line`, which emits under `Class::Open` — read off the
-/// source, since no suite captures the stream in-process; the class word on
-/// the stream itself is pinned by the child-process suite
-/// (`tests/it/open.rs`), which reads `open:` on the binary's stderr.
+/// THE CLASSED DOOR for the open's own lines (CUT 1 (a)): the directory's,
+/// the recovery's and the upload setting's all go out through
+/// `say_open_line`, which emits under `Class::Open` — read off the source,
+/// since no suite captures the stream in-process; the class word on the
+/// stream itself is pinned by the child-process suite (`tests/it/open.rs`),
+/// which reads `open:` on the binary's stderr.
 #[test]
-fn the_opens_two_lines_go_through_the_classed_door() {
+fn the_opens_own_lines_go_through_the_classed_door() {
     let source = include_str!("../server.rs");
     let start = source.find("fn open_under(").expect("open_under");
     let end =
@@ -354,13 +355,17 @@ fn the_opens_two_lines_go_through_the_classed_door() {
     let open_under = &source[start..end];
     assert_eq!(
         open_under.matches("say_open_line(").count(),
-        2,
-        "the two lines, each through the door"
+        3,
+        "the three lines — the directory, the recovery, the upload setting — each through the door"
     );
     assert!(
         open_under.find("say_open_line(DataDirLine(").expect("the directory's line")
             < open_under.find("Engine::open(").expect("the engine's open"),
         "the directory's line comes before the engine's open"
+    );
+    assert!(
+        open_under.contains("say_open_line(UploadsLine {"),
+        "the upload setting's line is a rendered value through the door"
     );
     let door = source.find("fn say_open_line(").expect("the door");
     assert!(
@@ -369,16 +374,191 @@ fn the_opens_two_lines_go_through_the_classed_door() {
     );
 }
 
-/// The operator stream's moments, as a line spells each: the closed set the
-/// config-lockout warnings and the blocked-prefix list are labelled by, one
-/// label per moment and no two alike.
+/// THE GRAMMAR's MOMENTS, as a warning's class word spells each — the four
+/// the warning class is keyed by, `at reissue` the fourth (RULED at this
+/// lane's cut) — one label per moment and no two alike; and ROW 20's HEADER,
+/// which keeps its own ruled spelling for the list's three moments:
+/// `reissued` where the warning class says `at reissue`.
 #[test]
-fn every_moment_spells_its_own_label() {
-    let labels: Vec<String> = [Moment::AtStart, Moment::Reissued, Moment::AtClaim]
+fn every_moment_spells_its_own_label_and_the_lists_header_keeps_its_own() {
+    let labels: Vec<String> = [Moment::AtStart, Moment::AtClaim, Moment::AtOpen, Moment::AtReissue]
         .iter()
         .map(ToString::to_string)
         .collect();
-    assert_eq!(labels, ["at start", "reissued", "at claim"]);
+    assert_eq!(labels, ["at start", "at claim", "at open", "at reissue"]);
+    assert_eq!(Class::Warning(Moment::AtReissue).to_string(), "warning (at reissue)");
+    let path = Path::new("/etc/skepd/blocked.json");
+    assert_eq!(
+        ListHeader { when: Moment::AtStart, path }.to_string(),
+        "blocked-prefix list (at start, /etc/skepd/blocked.json):"
+    );
+    assert_eq!(
+        ListHeader { when: Moment::AtReissue, path }.to_string(),
+        "blocked-prefix list (reissued, /etc/skepd/blocked.json):"
+    );
+    assert_eq!(
+        ListHeader { when: Moment::AtClaim, path }.to_string(),
+        "blocked-prefix list (at claim, /etc/skepd/blocked.json):"
+    );
+}
+
+/// LINE 8's WORDS (`operations.md` §1.1 row 8) at each source: the switch's
+/// state with the source the parse recorded — the default's phrase, the
+/// flag as typed, the variable with its value — and, closed, what the
+/// family answers.
+#[test]
+fn the_upload_settings_line_names_its_state_and_its_source() {
+    assert_eq!(
+        UploadsLine { open: true, source: Source::Default }.to_string(),
+        "media uploads: open (the default)"
+    );
+    assert_eq!(
+        UploadsLine { open: true, source: Source::Flag }.to_string(),
+        "media uploads: open (--uploads)"
+    );
+    assert_eq!(
+        UploadsLine { open: true, source: Source::Env }.to_string(),
+        "media uploads: open (SKEPD_UPLOADS=true)"
+    );
+    let closed = "the creation and the resume are refused uploads_closed";
+    assert_eq!(
+        UploadsLine { open: false, source: Source::Flag }.to_string(),
+        format!("media uploads: CLOSED (--no-uploads): {closed}")
+    );
+    assert_eq!(
+        UploadsLine { open: false, source: Source::Env }.to_string(),
+        format!("media uploads: CLOSED (SKEPD_UPLOADS=false): {closed}")
+    );
+    assert_eq!(
+        UploadsLine { open: false, source: Source::Default }.to_string(),
+        format!("media uploads: CLOSED (the default): {closed}"),
+        "a caller that closes the switch and names no source: the default's phrase, as told"
+    );
+}
+
+/// THE FLIP's LINE (m14) at fixed figures, each of `H.1`'s three arms: the
+/// claimant as `/health` spells it, the claim's position, the mode's word,
+/// and what became of the first head — written now, written before the
+/// claim by the cadence (the state the design's two arms left unsaid), or
+/// owed after the head writer's refusal.
+#[test]
+fn the_flips_line_names_the_account_the_position_the_mode_and_each_head_arm() {
+    use crate::codec::wire_address;
+
+    let claimant = wire_address("1.0.1").expect("an account address");
+    let at = |head: FirstHead, mode: &str| {
+        ClaimLine { claimant: &claimant, position: Seq(42), mode, head }.to_string()
+    };
+    assert_eq!(
+        at(FirstHead::Written, "CLAIMED-ENFORCING"),
+        "board claimed by 1.0.1 at position 42: the mode is now CLAIMED-ENFORCING; H.1 written"
+    );
+    assert_eq!(
+        at(FirstHead::Stood, "CLAIMED-PERMISSIVE"),
+        "board claimed by 1.0.1 at position 42: the mode is now CLAIMED-PERMISSIVE; H.1 written \
+         before the claim"
+    );
+    assert_eq!(
+        at(FirstHead::Refused, "CLAIMED-PERMISSIVE"),
+        "board claimed by 1.0.1 at position 42: the mode is now CLAIMED-PERMISSIVE; H.1 owed — \
+         the head writer refused it"
+    );
+}
+
+/// ROW 22's and ROW 24's WORDS at fixed inputs: the checkpoint thread's
+/// refusal with its cause, what still serves, the act and what is lost
+/// until it; a reissue's refusal with its cause, what stands, what the next
+/// start does and the lift's form, the supply's path named.
+#[test]
+fn the_two_refusal_lines_carry_their_ruled_words() {
+    use std::io::Error;
+
+    let refused = Error::new(ErrorKind::WouldBlock, "Resource temporarily unavailable");
+    assert_eq!(
+        CheckpointThreadRefusedLine(&refused).to_string(),
+        "checkpoint thread: the OS refused it (Resource temporarily unavailable); the kernel's \
+         backstop runs each second crossing's checkpoint inline on the committing thread \
+         instead; until a restart re-spawns it, every checkpoint is the backstop's and says \
+         nothing — no landing line and no failure line — and the change feed's files are not \
+         compacted, and the cadence's byte bound and the media floor stay at the open's \
+         figures; and no standing line will come: each state is said at its transition alone"
+    );
+    let torn = Error::new(ErrorKind::InvalidData, "/etc/skepd/blocked.json: not a list");
+    assert_eq!(
+        ReissueRefusedLine { error: &torn, path: Path::new("/etc/skepd/blocked.json") }.to_string(),
+        "blocked-prefix list: reissue REFUSED — /etc/skepd/blocked.json: not a list; the list \
+         in force stands until a restart, and the next start REFUSES until a valid list stands \
+         at /etc/skepd/blocked.json: an empty \"entries\" lifts every block, an absent file \
+         lifts none"
+    );
+}
+
+/// THE CLASSED DOOR for the configuration lines (CUT 1 (a); this lane's
+/// sites): every line of the daemon's own section — the warnings, the
+/// `auth:` line, the node prefix, the blocked list, the reissue's refusal —
+/// goes out through `Daemon::say` or `Daemon::say_lines`, which emit with
+/// the class word each takes, and none through the un-classed `line` or
+/// `lines`; the flip's line in `op.rs`, the checkpoint thread's refusal in
+/// `listen.rs` and the head writer's row 40 take the classed door too — read
+/// off the sources, since no suite captures the stream in-process; the
+/// class each line is emitted under is pinned through `Daemon::lines_said`
+/// by the integration suites.
+#[test]
+fn the_configuration_lines_go_through_the_classed_door_with_their_class_words() {
+    let source = include_str!("../server.rs");
+    let start = source.find("    fn log_config_warnings(").expect("the section's first method");
+    let end = source[start..].find("// ── the checkpoint thread's work").expect("the section's end")
+        + start;
+    let section = &source[start..end];
+    assert!(
+        !section.contains("notice::line(") && !section.contains("notice::lines("),
+        "no line of the section goes through the un-classed door"
+    );
+    for site in [
+        "self.say(Class::Warning(when), w)",
+        "self.say(Class::Open, self.auth.cfg.auth_line(",
+        "self.say(Class::Open, self.auth.cfg.node_prefix_line(",
+        "Moment::AtStart | Moment::AtOpen => Class::Open",
+        "Moment::AtClaim | Moment::AtReissue => Class::Landing",
+        "self.log_blocked_prefixes(Moment::AtReissue)",
+        "self.say(Class::Failure, ReissueRefusedLine {",
+        "notice::emit(class, what)",
+        "notice::emit_lines(class, head, rest)",
+    ] {
+        assert!(section.contains(site), "the section lacks `{site}`");
+    }
+    let op = include_str!("op.rs");
+    let flip = op.find("    fn on_claim_flip(").expect("the flip");
+    let flip = &op[flip..op[flip..].find("    pub(super) fn post_op(").expect("the next fn") + flip];
+    assert!(flip.contains("self.say(Class::Landing, ClaimLine {"), "the flip's landing line");
+    assert!(
+        flip.find("self.say(Class::Landing, ClaimLine {").expect("the line")
+            < flip.find("self.log_config_warnings(Moment::AtClaim)").expect("the warnings"),
+        "the landing line is said before the claim-time warnings"
+    );
+    let listen = include_str!("listen.rs");
+    assert!(
+        listen.contains("notice::emit(Class::Failure, CheckpointThreadRefusedLine(&e))"),
+        "row 22 through the classed door"
+    );
+    let serve_bound = listen.find("pub fn serve_bound(").expect("serve_bound");
+    let order: Vec<usize> = [
+        "daemon.bind_auth_port(port)",
+        "daemon.log_config_warnings(Moment::AtStart)",
+        "daemon.log_auth_line()",
+        "daemon.log_node_prefix()",
+        "daemon.log_blocked_prefixes(Moment::AtStart)",
+        "thread::Builder::new().name(\"skepd-worker\"",
+    ]
+    .iter()
+    .map(|site| listen[serve_bound..].find(site).unwrap_or_else(|| panic!("`{site}`")))
+    .collect();
+    assert!(order.windows(2).all(|w| w[0] < w[1]), "§3.1 step 3's order: {order:?}");
+    let head = include_str!("../write_path/head.rs");
+    let draft = head.find("    fn ensure_draft(").expect("ensure_draft");
+    let draft = &head[draft..head[draft..].find("    fn commit_insert(").expect("the next fn") + draft];
+    assert!(draft.contains("notice::emit(") && draft.contains("DraftMintedElsewhere {"));
+    assert!(!draft.contains("notice::line("), "row 40 through the classed door");
 }
 
 /// A bare session's token for `principal`, opened through the route itself.

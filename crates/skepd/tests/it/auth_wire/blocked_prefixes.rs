@@ -642,6 +642,15 @@ fn a_restart_under_a_fresh_node_prefix_moves_the_off_board_test() {
 /// (never an empty list in its place), and a reissue that is not a list
 /// installs NOTHING — the list in force stands until a good issue replaces
 /// it WHOLE.
+///
+/// And THE WORDS (`operations.md` §1.1 rows 20 and 24), read through the
+/// daemon's record of what it said: the restart's install is a line of the
+/// open's report under row 20's `at start` header; each refused issue is
+/// said ONCE, as a failure in row 24's ruled words — the cause, the list in
+/// force standing until a restart, the NEXT START refusing until a valid
+/// list stands at the supply's path, and the lift's form; and the good
+/// issue that replaces the list is a landing under row 20's `reissued`
+/// header, through the classed door.
 #[test]
 fn a_restart_reinstalls_the_list_and_a_bad_issue_installs_nothing() {
     let root = tempfile::tempdir().expect("tempdir");
@@ -658,26 +667,66 @@ fn a_restart_reinstalls_the_list_and_a_bad_issue_installs_nothing() {
     };
 
     // The restart: the same supply, and the block holds at the FIRST request
-    // — installed at open, with no reissue in between.
+    // — installed at open, with no reissue in between — and named as a line
+    // of the open's report under row 20's header.
     let (sd, list) = spawn_listed(root.path());
     let port = sd.port();
     assert_blocked(port, 931, &member_key, RECORD_MEMBER, "the block holds across the restart");
+    let said = sd.daemon().lines_said();
+    assert!(
+        said.iter().any(|l| l.starts_with(&format!("open: blocked-prefix list (at start, {}):", list.display()))),
+        "the start's install is a line of the open's report:\n{}",
+        said.join("\n")
+    );
 
     // A reissue that is not a list — torn JSON, an unknown field, an address
     // no tumbler spells — installs nothing: the block stands.
-    for bad in [
+    let bad_issues: [&[u8]; 5] = [
         &br#"{"entries":[{"prefix":"1.0.2","#[..],
         br#"{"entries":[],"lifted":true}"#,
         br#"{"entries":[{"prefix":"1..2","record":"1.0.1.0.7.1"}]}"#,
         br#"{"operator":null,"entries":[]}"#,
         br#"[]"#,
-    ] {
+    ];
+    for bad in bad_issues {
         issue_blocked_list_bytes(&list, bad);
         assert_blocked(port, 931, &member_key, RECORD_MEMBER, "a refused issue moves nothing");
     }
-    // …and the next GOOD issue replaces the list whole.
+    // ROW 24 (S8): one failure line per refused issue — not per request, and
+    // the handshake above made two per issue — in the ruled words, the
+    // supply's path named.
+    let refusals: Vec<String> = sd
+        .daemon()
+        .lines_said()
+        .into_iter()
+        .filter(|l| l.starts_with("failure: blocked-prefix list: reissue REFUSED — "))
+        .collect();
+    assert_eq!(
+        refusals.len(),
+        bad_issues.len(),
+        "said once per bad issue:\n{}",
+        refusals.join("\n")
+    );
+    let trailer = format!(
+        "; the list in force stands until a restart, and the next start REFUSES until a valid \
+         list stands at {}: an empty \"entries\" lifts every block, an absent file lifts none",
+        list.display()
+    );
+    for line in &refusals {
+        assert!(line.ends_with(&trailer), "FINDING (row 24): the ruled trailer is missing: {line}");
+        let cause = &line["failure: blocked-prefix list: reissue REFUSED — ".len()..line.len() - trailer.len()];
+        assert!(!cause.is_empty(), "the cause rides between: {line}");
+    }
+    // …and the next GOOD issue replaces the list whole — a landing under
+    // row 20's `reissued` header.
     issue_blocked_list(&list, BlockedHeader::default(), &[]);
     open_signed_session(port, 931, &member_key);
+    let said = sd.daemon().lines_said();
+    assert!(
+        said.iter().any(|l| l.starts_with(&format!("landing: blocked-prefix list (reissued, {}):", list.display()))),
+        "the reissue's install is a landing under row 20's header:\n{}",
+        said.join("\n")
+    );
     sd.shutdown();
 
     // An issue made while the daemon is DOWN is what the next start installs.

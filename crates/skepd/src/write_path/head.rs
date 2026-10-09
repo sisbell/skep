@@ -143,7 +143,7 @@ use skep_identity::BoardTerm;
 use skep_kernel::Seq;
 use skep_namespace::{head_document, system_account, HasM3, SYSTEM_PRINCIPAL};
 use skep_util::json::{hex_string, parse_lower_hex};
-use skep_util::notice;
+use skep_util::notice::{self, Class};
 
 use super::feed::Feed;
 use super::sidecar::{wall_clock_millis, CommitMeta};
@@ -711,11 +711,12 @@ impl HeadWriter {
             // The system principal mints nothing else, so the first mint under
             // its account is doc 3 by the seed's frontier; anything else means
             // some other writer minted under the system account — surfaced,
-            // and the head goes on with the draft it did mint.
-            notice::line(format_args!(
-                "head writer: the staging draft minted at {draft}, not at {} — another writer minted under the system account",
-                staging_draft_address()
-            ));
+            // and the head goes on with the draft it did mint, which the line
+            // says (`operations.md` §1.1 row 40).
+            notice::emit(
+                Class::Failure,
+                DraftMintedElsewhere { minted: &draft, expected: &staging_draft_address() },
+            );
         }
         self.state.lock().staging_draft = Some(draft.clone());
         Some(draft)
@@ -806,6 +807,27 @@ impl HeadWriter {
             return None;
         };
         Some(addr)
+    }
+}
+
+/// ROW 40's LINE (`operations.md` §1.1 row 40), in the operator stream's
+/// words — the staging draft minted somewhere other than the address the
+/// seed's frontier pins, the cause, and WHAT STILL SERVES: the head goes on
+/// with the draft it minted. A pure value the unit suite pins by
+/// `to_string()`; emitted under `Class::Failure`.
+struct DraftMintedElsewhere<'a> {
+    minted: &'a Address,
+    expected: &'a Address,
+}
+
+impl std::fmt::Display for DraftMintedElsewhere<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "head writer: the staging draft minted at {}, not at {} — another writer minted \
+             under the system account; the head goes on with the draft it minted",
+            self.minted, self.expected
+        )
     }
 }
 
@@ -1027,6 +1049,22 @@ mod tests {
             (r.commits_since_head, r.last_head_millis),
             (0, None),
             "nothing above the head"
+        );
+    }
+
+    /// ROW 40's WORDS at fixed addresses: the draft minted, the address the
+    /// frontier pins, the cause, and that the head goes on with the draft it
+    /// minted.
+    #[test]
+    fn the_misminted_drafts_line_names_both_addresses_and_that_the_head_goes_on() {
+        let minted = Tumbler::new([1u32, 1, 0, 1, 0, 4].into_iter().map(Nat::from))
+            .ok()
+            .and_then(|t| validate(t).ok())
+            .expect("1.1.0.1.0.4 is T4-valid");
+        assert_eq!(
+            DraftMintedElsewhere { minted: &minted, expected: &staging_draft_address() }.to_string(),
+            "head writer: the staging draft minted at 1.1.0.1.0.4, not at 1.1.0.1.0.3 — another \
+             writer minted under the system account; the head goes on with the draft it minted"
         );
     }
 }

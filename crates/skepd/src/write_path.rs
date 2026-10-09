@@ -118,6 +118,28 @@ pub(crate) use feed::{ChangesAnswer, ChangesQuery, FeedClass, FeedCompaction};
 pub(crate) use head::board_term;
 
 use self::head::HeadWriter;
+
+/// What [`WritePath::write_first_head`] came to — the three states a claimed
+/// board's first head can be in once the call returns, which its two callers
+/// say on the operator stream: the claim's flip line (`operations.md` §1.1
+/// m14) and the open's line 12. Three and not a `bool`, because "not
+/// written now" is two states the operator reads differently: a head that
+/// already stood — the cadence wrote one before the claim, an hour idle
+/// before the ceremony's last step being enough — leaves the board term
+/// present, and a refusal leaves it OWED, the board answering attested
+/// writes `board_unavailable` for one write (`head.rs`, THE CLAIM'S HEAD,
+/// OWED).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum FirstHead {
+    /// `H.1` landed in this call, naming the committed pair as it stood.
+    Written,
+    /// A head already stood, so none was written: the board term is present
+    /// and names a position before this call's.
+    Stood,
+    /// The head writer's driver refused it: surfaced by the head writer, the
+    /// head owed at the write path's next turn.
+    Refused,
+}
 use self::sidecar::OpTerms;
 use crate::codec::op_name;
 use crate::serial::{Serial, SerialGuard};
@@ -315,12 +337,23 @@ impl WritePath {
     /// names the claim's own position and no write lands between the two;
     /// and the open, on a claimed board whose journal holds no head — the
     /// crash window between the claim's transaction and the head's, or an
-    /// `H.1` the head writer's driver refused while serving. `true` iff a
-    /// head landed; `false` is a no-op or a refusal the head writer has
-    /// already surfaced. Nothing else about a head moves:
+    /// `H.1` the head writer's driver refused while serving. The answer is
+    /// one of [`FirstHead`]'s three, READ by both callers: the flip's
+    /// landing line says which (`operations.md` §1.1 m14) and the open says
+    /// a head it wrote (row 12). The head writer answers whether a head
+    /// LANDED; whether a head already STOOD is read here off the world the
+    /// kernel holds after the call ([`board_term`]), so a refusal — the
+    /// third case — is what is left. Nothing else about a head moves:
     /// [`HeadWriter::write_first_head`] states the rule.
-    pub(crate) fn write_first_head(&self, serial: &SerialGuard<'_>) -> bool {
-        self.head_writer.write_first_head(self, serial)
+    pub(crate) fn write_first_head(&self, serial: &SerialGuard<'_>) -> FirstHead {
+        if self.head_writer.write_first_head(self, serial) {
+            return FirstHead::Written;
+        }
+        if board_term(self.stores.kernel().snapshot().world()).is_some() {
+            FirstHead::Stood
+        } else {
+            FirstHead::Refused
+        }
     }
 
     /// Take the write-serialization lock ALONE — for the auth write

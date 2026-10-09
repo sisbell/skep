@@ -1712,7 +1712,11 @@ the store's install — nothing above their own layer.
    BEFORE the open, `bind` then `serve_bound`, `serve` the two in sequence,
    so a held port is refused in milliseconds before the kernel's lock is
    taken and a connect during the open waits in the backlog for the first
-   worker — worker threads — the
+   worker; `serve_bound` binds the auth port, says the configuration
+   warnings and then the open's-report `auth:` line — the mode as AUTH-5.86
+   derives it, the local-trust flag with its source, the configured and
+   the signed origin sets — then the node prefix and the blocked list,
+   before any worker exists — worker threads — the
    default count and the minimum, one more than the four permit pools'
    slots together: the reconstruction, the class scan, the fetch and the
    upload; spawned last, after the open, and `wait`, the binary's
@@ -1828,7 +1832,10 @@ the store's install — nothing above their own layer.
    the fetch's composed order, which `server/blob_routes.rs` runs for
    `GET /blob?i=` and the transport streams. The daemon instantiates the
    crate at its `World` and composes with it: `MediaOptions`, the upload
-   setting, rides `Daemon::open_configured` and is echoed on `/health`;
+   setting with the source it was set from (`skep-util`'s `Source` — the
+   default, the flag, the variable, as the binary's parse recorded it),
+   rides `Daemon::open_configured`; the setting is echoed on `/health` and
+   the open's report names it with its source;
    the deposit read is a route helper of `server/blob_routes.rs` over the
    gate's reads; the floor is sized at the open off the start point's
    header — the base the open loaded, never a skipped header's claim —

@@ -580,6 +580,22 @@ impl Daemon {
         self.checkpointer.lines.lock().clone()
     }
 
+    /// TEST HOOK (the same standing): every line this daemon has said
+    /// through its own classed door this uptime, oldest first, each as
+    /// `{class}: {text}` — a notice of several lines kept whole, the head
+    /// then each line of the rest on a line of its own — the configuration
+    /// warnings at both their moments, the open's-report `auth:` line, the
+    /// node prefix, the blocked list at its three moments, the claim's flip
+    /// line and a reissue's refusal among them — so a suite pins the words
+    /// and the class of what went to the operator stream, which no suite
+    /// captures in-process. The open's own lines (said before the daemon
+    /// exists) and the checkpoint thread's ([`Daemon::checkpoint_lines`])
+    /// are not among them.
+    #[doc(hidden)]
+    pub fn lines_said(&self) -> Vec<String> {
+        self.said.lock().clone()
+    }
+
     /// TEST HOOK (the same standing): the daemon's HIGH-WATER of its own
     /// resident set — the largest reading it has taken, one per landing and
     /// per backstop wake — or `None` before the first reading; the figure

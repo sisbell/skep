@@ -187,6 +187,7 @@ use std::time::Instant;
 #[cfg(any(test, feature = "test-hooks"))]
 use parking_lot::Condvar;
 use parking_lot::Mutex;
+use skep_address::Address;
 use skep_engine::{Engine, EngineError, HistoryError, Recovery, World};
 use skep_febe::OperationSurface;
 use skep_identity::HasIdentity;
@@ -201,7 +202,8 @@ use skep_media::serve::FetchPool;
 use skep_media::{MediaOptions, UploadPool};
 #[cfg(feature = "observe")]
 use skep_namespace::PrincipalId;
-use skep_util::notice::{self, Class};
+use skep_util::notice::{self, Class, Moment};
+use skep_util::source::Source;
 
 use std::sync::Arc;
 
@@ -209,7 +211,7 @@ use crate::auth::{startup_warnings, AuthOptions, AuthState, PortAlreadyBound, Re
 use crate::codec::JsonCodec;
 use crate::history::History;
 use crate::limits::{MAX_REQUEST_BODY, MAX_SMALL_BODY};
-use crate::write_path::{FeedCompaction, WritePath};
+use crate::write_path::{FeedCompaction, FirstHead, WritePath};
 use actor::Resolved;
 use reply::{class_varying, refuse, with_signal, TransportError};
 use request::BodySource;
@@ -504,6 +506,16 @@ pub struct Daemon {
     /// this crate's library, outside its `cfg(test)`.
     #[cfg(any(test, feature = "test-hooks"))]
     hold_between_claim_and_head: AtomicBool,
+    /// TEST SEAM: every line this daemon has said through its own classed
+    /// door ([`Daemon::say`], [`Daemon::say_lines`]) this uptime, each
+    /// `{class}: {text}` — the configuration lines after the bind, the
+    /// warnings at both their moments, the blocked list, the flip's landing
+    /// line, the reissue's refusal — kept for `Daemon::lines_said`, since no
+    /// suite captures stderr in-process. The open's own lines are said
+    /// before this value exists and the checkpoint thread's keep their own
+    /// record; neither is here.
+    #[cfg(any(test, feature = "test-hooks"))]
+    said: Mutex<Vec<String>>,
 }
 
 /// Deliberately opaque: reporting the log position would take the kernel's
@@ -711,15 +723,15 @@ impl Daemon {
         // once here, until the serving layer's channel installs a record
         // (AUTH-4.70, owed) — are named on the operator stream with their
         // source, the floor in force at start beside them, and the upload
-        // setting after. Opened AHEAD of the write path, which takes the
+        // setting after, WITH ITS SOURCE (§1.1 row 8): the default, the
+        // flag or the variable, as the parse recorded it on the option type
+        // the gate takes. Opened AHEAD of the write path, which takes the
         // gate's cell index to enter at every commit from here on.
+        let uploads_source = media_opts.uploads_source;
         let media = MediaGate::open_with(data_dir, media_opts).map_err(DaemonError::Media)?;
         media.set_floor(MediaGate::floor_in_force(start_point_len));
         notice::line(media.startup_line());
-        notice::line(format_args!(
-            "media uploads: {}",
-            if media.uploads_open() { "open (the default)" } else { "CLOSED (--no-uploads): the creation and the resume are refused uploads_closed" }
-        ));
+        say_open_line(UploadsLine { open: media.uploads_open(), source: uploads_source });
         let writes = WritePath::open(data_dir, &engine, Arc::clone(media.index()))
             .map_err(DaemonError::Sidecar)?;
         // THE READ PREDICATE (PUB-1.31; PUB-6.39's one-per-request shape;
@@ -763,6 +775,8 @@ impl Daemon {
             checkpointer: CheckpointMemory::at_open(start_point, newest_at_open),
             #[cfg(any(test, feature = "test-hooks"))]
             hold_between_claim_and_head: AtomicBool::new(false),
+            #[cfg(any(test, feature = "test-hooks"))]
+            said: Mutex::new(Vec::new()),
         };
         // THE CRASH WINDOW, closed before anything is served (signed ops, s1;
         // see the method): a claimed board whose journal holds no head owes
@@ -809,16 +823,24 @@ impl Daemon {
     /// (`head.rs`, WHAT A HEAD IS), not a limit of the journal's format, and
     /// this open is what closes the gap it leaves.
     fn write_the_claims_head_if_owed(&self) {
-        if self.engine.kernel().snapshot().world().identity().claimant().is_none() {
+        if !self.board_is_claimed() {
             return;
         }
         let serial = self.writes.serial_lock();
-        if self.writes.write_first_head(&serial) {
+        if self.writes.write_first_head(&serial) == FirstHead::Written {
             notice::line(
                 "the board is claimed and its journal held no head: H.1 written at open, \
                  naming the committed pair as it stood",
             );
         }
+    }
+
+    /// Whether the board is CLAIMED, read off the head's identity slice —
+    /// the one bit the mode and the two origin sets turn on (AUTH-1.42),
+    /// read here rather than supplied so no caller can hand a line a fact
+    /// the daemon can answer.
+    fn board_is_claimed(&self) -> bool {
+        self.engine.kernel().snapshot().world().identity().claimant().is_some()
     }
 
     /// Bind the auth surface to the served port — the origin sets and the
@@ -1064,62 +1086,92 @@ impl Daemon {
         with_signal(f(&resolved), resolved.closed)
     }
 
-    /// Log the config-lockout warnings (AUTH-4.9–4.11) to stderr — at
-    /// startup, and again at the claim flip, which RES-30 requires
-    /// unconditionally. One method because the three are one obligation:
-    /// WHICH warnings apply is [`crate::auth::startup_warnings`]'s, but the
-    /// claim reading they are computed against and the stream they go to
-    /// are this daemon's, and [`serve`] would otherwise reach two levels
-    /// into [`crate::auth::AuthState`] to spell them.
+    /// Log the config-lockout warnings (AUTH-4.9–4.11) — at startup, and
+    /// again at the claim flip, which RES-30 requires unconditionally — each
+    /// under its class word, `warning ({when}):`, through the classed door.
+    /// One method because the warnings are one obligation: WHICH apply is
+    /// [`crate::auth::startup_warnings`]'s, but the claim reading they are
+    /// computed against and the stream they go to are this daemon's, and
+    /// [`serve`] would otherwise reach two levels into
+    /// [`crate::auth::AuthState`] to spell them.
     ///
-    /// `when` only labels the line. The claim itself is READ from the head's
-    /// slice rather than supplied, so no caller can hand this method a fact
-    /// the daemon can answer.
+    /// `when` is the grammar's moment and only labels the line. The claim
+    /// itself is READ from the head's slice ([`Daemon::board_is_claimed`])
+    /// rather than supplied, so no caller can hand this method a fact the
+    /// daemon can answer.
     fn log_config_warnings(&self, when: Moment) {
-        let claimed = self.engine.kernel().snapshot().world().identity().claimant().is_some();
+        let claimed = self.board_is_claimed();
         for w in startup_warnings(&self.auth.cfg, claimed) {
-            notice::line(format_args!("warning ({when}): {w}"));
+            self.say(Class::Warning(when), w);
         }
     }
 
-    /// Log the blocked-prefix list IN FORCE to stderr (AUTH-4.70: "the
-    /// startup log names the list in force"; AUTH-4.36 step 4b: an inert
-    /// entry is "ignored at install and said so in the log") — the count,
-    /// the header as the install resolved it, and the inert entries by
-    /// name. Written at the three [`Moment`]s an install happens — at start,
-    /// on a reissue, and at the claim, where the flip re-compares the issue
-    /// against the claimant it first has. WHAT the lines say is
-    /// `BlockedPrefixes::log_lines`'s; the stream is this
+    /// THE OPEN's-REPORT `auth:` LINE (`operations.md` §1.1 m14; §3.1 step
+    /// 3): the mode as AUTH-5.86 derives it from the pair, the local-trust
+    /// flag with its source, and the two origin sets — said on EVERY start,
+    /// after the bind (the signed set's bare arm is the BOUND port's
+    /// defaults) and the configuration warnings, before the node prefix and
+    /// the blocked list. A state line and no warning: `startup_warnings`
+    /// says what is wrong, this says what IS, so an ENFORCING board with a
+    /// mistyped `--origin` names the origin it will refuse every signed
+    /// session but. WHAT the line says is `AuthConfig::auth_line`'s, built
+    /// where its state lives; the claim reading and the stream are this
     /// daemon's, for [`Daemon::log_config_warnings`]'s reason.
+    fn log_auth_line(&self) {
+        self.say(Class::Open, self.auth.cfg.auth_line(self.board_is_claimed()));
+    }
+
+    /// The node prefix in force, or its absence (REG-1.69), named ONCE at
+    /// start with its source (§1.1 row 19) — whether or not a list is
+    /// supplied, because a hosted board launched without its prefix has its
+    /// off-board test OFF and would otherwise learn so only at its first
+    /// install. It is the one config the blocked-prefix list's off-board
+    /// test reads (AUTH-4.36 step 4b as ruled 2026-09-18). WHAT the line
+    /// says is `AuthConfig::node_prefix_line`'s; the stream is this
+    /// daemon's, for [`Daemon::log_config_warnings`]'s reason. A line of
+    /// the open's report, so `Class::Open`.
+    fn log_node_prefix(&self) {
+        self.say(Class::Open, self.auth.cfg.node_prefix_line());
+    }
+
+    /// Log the blocked-prefix list IN FORCE (AUTH-4.70: "the startup log
+    /// names the list in force"; AUTH-4.36 step 4b: an inert entry is
+    /// "ignored at install and said so in the log") — the count, the header
+    /// as the install resolved it, and the inert entries by name, as ONE
+    /// notice of several lines through the classed door. Written at the
+    /// three moments an install happens, under the class row 20 gives each
+    /// ([`ListHeader`]): at start a line of the open's report, `Class::Open`;
+    /// at a reissue and at the claim — where the flip re-compares the issue
+    /// against the claimant it first has — a `Class::Landing`. WHAT the lines
+    /// say is `BlockedPrefixes::log_lines`'s; the stream is this daemon's,
+    /// for [`Daemon::log_config_warnings`]'s reason.
     ///
     /// SILENT where no supply was named: that is a board whose operator
     /// supplies none, and there is no list to name.
     fn log_blocked_prefixes(&self, when: Moment) {
         let Some(path) = self.auth.blocked_supply_path() else { return };
-        notice::lines(
-            format_args!("blocked-prefix list ({when}, {}):", path.display()),
+        let class = match when {
+            Moment::AtStart | Moment::AtOpen => Class::Open,
+            Moment::AtClaim | Moment::AtReissue => Class::Landing,
+        };
+        self.say_lines(
+            class,
+            ListHeader { when, path },
             &self.auth.cfg.blocked_prefixes().log_lines(),
         );
-    }
-
-    /// The node prefix in force, or its absence (REG-1.69), named ONCE at
-    /// start — whether or not a list is supplied, because a hosted board
-    /// launched without its prefix has its off-board test OFF and would
-    /// otherwise learn so only at its first install. It is the one config the
-    /// blocked-prefix list's off-board test reads (AUTH-4.36 step 4b as ruled
-    /// 2026-09-18). WHAT the line says is
-    /// `AuthConfig::node_prefix_line`'s; the stream is this
-    /// daemon's, for [`Daemon::log_config_warnings`]'s reason.
-    fn log_node_prefix(&self) {
-        notice::line(self.auth.cfg.node_prefix_line());
     }
 
     /// THE REISSUE, at the head of every request (AUTH-4.70): where the
     /// supply file moved, [`AuthState::reissue_blocked_prefixes`] re-reads
     /// it and installs the new issue WHOLE under the credential write lock
-    /// — the list's commit — and the log names the list then in force. A
-    /// file that cannot be read, or is not a list, installs NOTHING: the
-    /// list in force stands and the refusal is logged, once.
+    /// — the list's commit — and the log names the list then in force, a
+    /// landing under row 20's `reissued` header. A file that cannot be read,
+    /// or is not a list, installs NOTHING: the list in force stands and the
+    /// refusal is said ONCE per bad issue, as a failure in row 24's words
+    /// ([`ReissueRefusedLine`]) — what stands, and that the NEXT START
+    /// refuses until a valid list stands at the path, since every start
+    /// reads the file again (RES-115). No warning is written at a reissue:
+    /// `startup_warnings` is evaluated at AUTH-4.11's two points alone.
     ///
     /// A COMMAND, and called under NO lock: it takes the credential write
     /// lock, which is why it runs here and not where the list is read. The
@@ -1129,11 +1181,47 @@ impl Daemon {
         let head_identity = || self.engine.kernel().snapshot().world().identity().clone();
         match self.auth.reissue_blocked_prefixes(head_identity) {
             None => {}
-            Some(Reissue::Installed) => self.log_blocked_prefixes(Moment::Reissued),
-            Some(Reissue::Refused(e)) => notice::line(format_args!(
-                "blocked-prefix list: reissue REFUSED — {e}; the list in force stands"
-            )),
+            Some(Reissue::Installed) => self.log_blocked_prefixes(Moment::AtReissue),
+            Some(Reissue::Refused(e)) => {
+                // A reissue comes from a supply, so the channel names its
+                // file; the arm renders the path it would otherwise have to
+                // invent.
+                let path = self
+                    .auth
+                    .blocked_supply_path()
+                    .expect("a reissue is the supply channel's, which names its file");
+                self.say(Class::Failure, ReissueRefusedLine { error: &e, path });
+            }
         }
+    }
+
+    /// One classed line of this daemon's own on the operator stream — the
+    /// configuration lines, the warnings, the flip's landing, a refusal —
+    /// through the classed door, so no line of this daemon's can go out
+    /// without its class word; and, under the test seam, kept for the suite
+    /// (`Daemon::lines_said`). The checkpoint thread's lines take their own
+    /// door ([`Daemon::say_checkpoint_line`]), with their own record.
+    fn say(&self, class: Class, what: impl fmt::Display) {
+        #[cfg(any(test, feature = "test-hooks"))]
+        self.said.lock().push(format!("{class}: {what}"));
+        notice::emit(class, what);
+    }
+
+    /// [`Daemon::say`] for a notice of several lines — the blocked list's —
+    /// through `emit_lines`: one write, the head carrying the class word and
+    /// the time; and, under the test seam, kept whole, the head and each
+    /// line of the rest on a line of its own.
+    fn say_lines(&self, class: Class, head: impl fmt::Display, rest: &[String]) {
+        #[cfg(any(test, feature = "test-hooks"))]
+        {
+            let mut whole = format!("{class}: {head}");
+            for line in rest {
+                whole.push('\n');
+                whole.push_str(line);
+            }
+            self.said.lock().push(whole);
+        }
+        notice::emit_lines(class, head, rest);
     }
 }
 
@@ -1714,27 +1802,141 @@ fn say_open_line(line: impl fmt::Display) {
     notice::emit(Class::Open, line);
 }
 
-/// When the daemon names its configuration on the operator stream — the
-/// label every such line carries. Closed, so a caller names one of the three
-/// moments rather than spelling a label, and no call site reads backwards.
-#[derive(Clone, Copy, Debug)]
-enum Moment {
-    /// Before the listener serves ([`serve`]).
-    AtStart,
-    /// A replaced supply file installed ([`Daemon::reissue_blocked_prefixes`]).
-    Reissued,
-    /// The claim flip (`op.rs`'s `Daemon::on_claim_flip`).
-    AtClaim,
+/// LINE 8 — THE UPLOAD SETTING (`operations.md` §1.1 row 8), in the operator
+/// stream's words: the switch's state and its SOURCE — `the default`, the
+/// flag as typed (`--uploads` / `--no-uploads`) or the variable with its
+/// value (`SKEPD_UPLOADS=true` / `=false`) — and, closed, what the family
+/// answers. A pure value the unit suite pins by `to_string()`; emitted under
+/// `Class::Open` through [`say_open_line`].
+struct UploadsLine {
+    open: bool,
+    source: Source,
 }
 
-/// The label as a line spells it.
-impl std::fmt::Display for Moment {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(match self {
+impl fmt::Display for UploadsLine {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if self.open {
+            write!(f, "media uploads: open ({})", self.source.words("--uploads", "SKEPD_UPLOADS=true"))
+        } else {
+            write!(
+                f,
+                "media uploads: CLOSED ({}): the creation and the resume are refused \
+                 uploads_closed",
+                self.source.words("--no-uploads", "SKEPD_UPLOADS=false")
+            )
+        }
+    }
+}
+
+/// ROW 20's HEADER — `blocked-prefix list ({at start | reissued | at claim},
+/// {path}):` — the head of the list's multi-line notice, in the row's own
+/// ruled spelling: the moment's word is the grammar's for the start and the
+/// claim, and row 20's own `reissued` where the grammar's warning class
+/// would say `at reissue` — two spellings of one moment, the header's kept
+/// as ruled. A pure value the unit suite pins by `to_string()`.
+struct ListHeader<'a> {
+    when: Moment,
+    path: &'a Path,
+}
+
+impl fmt::Display for ListHeader<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let word = match self.when {
             Moment::AtStart => "at start",
-            Moment::Reissued => "reissued",
             Moment::AtClaim => "at claim",
-        })
+            Moment::AtReissue => "reissued",
+            Moment::AtOpen => "at open",
+        };
+        write!(f, "blocked-prefix list ({word}, {}):", self.path.display())
+    }
+}
+
+/// LINE 24 — A REISSUE REFUSED (`operations.md` §1.1 row 24; §4 row 20), in
+/// the operator stream's words: the cause, what stands — the list in force,
+/// until a restart — and what the NEXT START does: refuses, until a valid
+/// list stands at the path, since every start reads the file again
+/// (AUTH-4.70; RES-115); and the lift's form, so a file deleted to lift
+/// every block is told from the empty issue that would. A pure value the
+/// unit suite pins by `to_string()`; emitted under `Class::Failure`.
+struct ReissueRefusedLine<'a> {
+    error: &'a std::io::Error,
+    path: &'a Path,
+}
+
+impl fmt::Display for ReissueRefusedLine<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "blocked-prefix list: reissue REFUSED — {}; the list in force stands until a \
+             restart, and the next start REFUSES until a valid list stands at {}: an empty \
+             \"entries\" lifts every block, an absent file lifts none",
+            self.error,
+            self.path.display()
+        )
+    }
+}
+
+/// LINE 22 — THE CHECKPOINT THREAD REFUSED (`operations.md` §1.1 row 22), in
+/// the operator stream's words: the cause, what still serves — the kernel's
+/// backstop — the ACT (a restart; nothing else re-spawns the thread) and
+/// WHAT IS LOST with it: every checkpoint is the backstop's and says nothing,
+/// the change feed's files are not compacted, the cadence's byte bound and
+/// the media floor stay at the open's figures (the re-reads are the
+/// thread's, on its wake), and no standing line will come. A pure value the
+/// unit suite pins by `to_string()`; emitted under `Class::Failure` at
+/// `serve_bound`'s one site.
+pub(super) struct CheckpointThreadRefusedLine<'a>(pub(super) &'a std::io::Error);
+
+impl fmt::Display for CheckpointThreadRefusedLine<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "checkpoint thread: the OS refused it ({}); the kernel's backstop runs each second \
+             crossing's checkpoint inline on the committing thread instead; until a restart \
+             re-spawns it, every checkpoint is the backstop's and says nothing — no landing \
+             line and no failure line — and the change feed's files are not compacted, and the \
+             cadence's byte bound and the media floor stay at the open's figures; and no \
+             standing line will come: each state is said at its transition alone",
+            self.0
+        )
+    }
+}
+
+/// THE CLAIM's FLIP LINE (`operations.md` §1.1 m14), in the operator stream's
+/// words — `board claimed by {account} at position {p}: the mode is now
+/// {mode}; H.1 {written | written before the claim | owed — the head writer
+/// refused it}` — rendered from what the flip's tail holds: the claimant the
+/// commit seated, spelled as `/health` spells it; the claim's own position,
+/// the credential sequence's ack, passed down (P21's boundary — never the
+/// head's position after the flip, which the head's own commits move); the
+/// mode the board is now in, derived as AUTH-5.86 derives it with the claim
+/// read as set; and what [`WritePath::write_first_head`] answered. The
+/// design's two arms are the first and the third; the second says the one
+/// state neither covers — a head the cadence wrote before the claim, so the
+/// board term stands and names an earlier position — rather than misname it
+/// a refusal. A pure value the unit suite pins by `to_string()`; emitted
+/// under `Class::Landing` from `op.rs`'s `Daemon::on_claim_flip`.
+pub(super) struct ClaimLine<'a> {
+    pub(super) claimant: &'a Address,
+    pub(super) position: Seq,
+    pub(super) mode: &'a str,
+    pub(super) head: FirstHead,
+}
+
+impl fmt::Display for ClaimLine<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "board claimed by {} at position {}: the mode is now {}; H.1 {}",
+            self.claimant.tumbler(),
+            self.position,
+            self.mode,
+            match self.head {
+                FirstHead::Written => "written",
+                FirstHead::Stood => "written before the claim",
+                FirstHead::Refused => "owed — the head writer refused it",
+            }
+        )
     }
 }
 

@@ -1,6 +1,6 @@
 //! # skep-util — the support crate below the daemon and the media crate
 //!
-//! Three utilities `skepd` and `skep-media` both take and neither owns, in
+//! Four utilities `skepd` and `skep-media` both take and neither owns, in
 //! one home, so the media crate's move out of the daemon copies no helper
 //! and the daemon's four pools keep one permit type:
 //!
@@ -18,6 +18,10 @@
 //!   [`json::hex_string`], lowercase hex; [`json::parse_lower_hex`] and
 //!   [`json::hex_nibble`], its exact inverse at a fixed width, refusing
 //!   what `hex_string` never writes.
+//! * [`source`] — [`source::Source`], where a setting's value in force came
+//!   from: the default, a flag, a variable — carried beside the value on
+//!   the daemon's session-layer options and the media crate's upload
+//!   setting, so the open's report names each setting's source.
 //!
 //! ## The rule of membership
 //!
@@ -25,7 +29,10 @@
 //! AND it has no subject of its own. A constant is configuration, not a
 //! utility — the limits the two crates share are the media crate's own
 //! public numbers, and the daemon's stay the daemon's — so none lives here.
-//! The crate names no store and no engine; it depends on `serde_json` and
+//! A setting's SOURCE is the rule's positive case beside the permit: both
+//! crates' option types carry one, and whether a value came from a flag or
+//! a variable is a fact about the parse, the subject of neither crate. The
+//! crate names no store and no engine; it depends on `serde_json` and
 //! `std` alone, and on nothing of skep.
 //!
 //! ## The program's name
@@ -49,3 +56,4 @@
 pub mod json;
 pub mod notice;
 pub mod permits;
+pub mod source;

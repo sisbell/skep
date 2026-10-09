@@ -48,7 +48,9 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
   `FETCH_RECHECK_BYTES`, `FETCH_RECHECK_INTERVAL`, `DEFAULT_LIMIT_SHARE`,
   `DEFAULT_LIMIT_FLOOR_BYTES`, `COMPACTION_TRIGGER`, `COMPACTION_MIN_LINES`
   and `MAX_CELL_BYTES`.
-- **The root** — `MediaOptions`, the upload setting; `UploadPool` (`new`,
+- **The root** — `MediaOptions`, the upload setting and, beside it, the
+  source it was set from (`skep-util`'s `Source`: the default, the flag,
+  the variable), which the daemon's open names; `UploadPool` (`new`,
   `admit`), the fetch pool's twin.
 - **The test seam** (`test-hooks`, default off; every item of it
   `#[doc(hidden)]`) — the walk hold, the stream hold, the prune hold and its

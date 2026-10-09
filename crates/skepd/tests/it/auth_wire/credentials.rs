@@ -723,6 +723,41 @@ fn a_preview_key_is_refused_at_enrollment_unless_the_daemon_allows_it() {
     sd.shutdown();
 }
 
+/// m5 (the register's F2) — THE DEV SETTING IS ECHOED: a daemon that admits
+/// preview keys — the fixtures' spawn — says so at start, ONE `warning (at
+/// start):` line naming the flag, the consequence and the act, and nothing
+/// else to warn of on an unclaimed board under the defaults; one refusing
+/// them — a served board's setting, `spawn_refusing_preview_keys` — says no
+/// such line at its start or at its claim. Read through the daemon's record
+/// of what it said, since no suite captures stderr in-process.
+#[test]
+fn a_daemon_allowing_preview_keys_says_so_at_start_and_one_refusing_them_says_nothing() {
+    let allowing = tempfile::tempdir().expect("tempdir");
+    let sd = spawn_configured(allowing.path(), true);
+    let said = sd.daemon().lines_said();
+    let warned: Vec<&String> = said.iter().filter(|l| l.starts_with("warning (at start): ")).collect();
+    assert_eq!(
+        warned,
+        [&"warning (at start): the dev setting --allow-preview-keys is on: the enrollment of a \
+           preview key (the tag-3 row, fndsa512-preview-ed25519) is admitted, a genesis included \
+           — a served board runs without it; drop the flag and restart"
+            .to_string()],
+        "FINDING (m5): the one warning at start:\n{}",
+        said.join("\n")
+    );
+    sd.shutdown();
+
+    let refusing = tempfile::tempdir().expect("tempdir");
+    let sd = spawn_refusing_preview_keys(refusing.path());
+    let said = sd.daemon().lines_said();
+    assert!(
+        !said.iter().any(|l| l.contains("--allow-preview-keys")),
+        "a served board's setting: no such line at start or at the claim:\n{}",
+        said.join("\n")
+    );
+    sd.shutdown();
+}
+
 /// AUTH-1.44 — `allow_preview_keys` GATES ENROLLMENT AND NOTHING ELSE: a
 /// tag-3 key enrolled while the daemon allowed preview keys stays a key when
 /// the same board restarts refusing them — `key_set` still lists it and it

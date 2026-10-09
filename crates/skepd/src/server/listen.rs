@@ -14,7 +14,7 @@ use skep_media::pruner::{Cadence, Wake};
 use skep_media::serve::Progress;
 #[cfg(feature = "test-hooks")]
 use skep_media::serve::STREAM_HOLD;
-use skep_util::notice;
+use skep_util::notice::{self, Class, Moment};
 
 use super::blob_routes;
 use super::http::{
@@ -25,7 +25,7 @@ use super::http::{
 use super::reply::{refuse, Fetch, Routed, TransportError, SESSION_HEADER};
 use super::request::HttpRequest;
 use super::scan::MAX_CONCURRENT_CLASS_SCANS;
-use super::{Daemon, Moment};
+use super::{CheckpointThreadRefusedLine, Daemon};
 use crate::auth::session::Peer;
 use crate::limits::{BLOB_CHUNK, BLOB_IDLE_BOUND, BLOB_TRANSFER_BOUND, PRUNE_INTERVAL};
 use crate::write_path::{CheckpointSignal, StreamStep, Woken};
@@ -269,12 +269,13 @@ pub fn serve(daemon: Daemon, port: u16, workers: usize) -> io::Result<Skepd> {
 /// Serve `daemon` over the listener [`bind`] bound, with `workers` threads —
 /// everything [`serve`] does after its bind, and the door the binary takes
 /// once the open has run with the port already held: the auth surface bound
-/// to the listener's port, the configuration warnings, the node prefix, the
+/// to the listener's port, the configuration warnings, the open's-report
+/// `auth:` line (the mode and the two origin sets), the node prefix, the
 /// blocked list, the workers, the pruner's thread and the checkpoint thread,
-/// in that order — the workers LAST, since a worker spawned before a daemon
-/// exists would route into nothing. [`serve`]'s concurrency policy and its
-/// two PRECONDITIONS — `workers >= 1`, the daemon's auth port unbound — are
-/// this door's, stated there.
+/// in that order (`operations.md` §3.1 step 3) — the workers LAST, since a
+/// worker spawned before a daemon exists would route into nothing.
+/// [`serve`]'s concurrency policy and its two PRECONDITIONS — `workers >=
+/// 1`, the daemon's auth port unbound — are this door's, stated there.
 ///
 /// Failure is the OS's alone: a refused worker thread, an `io::Error`. The
 /// listener and the port it bound were the caller's before this call and
@@ -295,6 +296,11 @@ pub fn serve_bound(daemon: Daemon, listener: Listener, workers: usize) -> io::Re
          disagreeing about the number every live session's origin set derives from",
     );
     daemon.log_config_warnings(Moment::AtStart);
+    // THE OPEN's-REPORT `auth:` LINE (m14): the mode, the flag with its
+    // source and the two origin sets — after the warnings, which say what
+    // is wrong with the configuration this says the state of; after the
+    // bind, since the signed set's bare arm is the BOUND port's defaults.
+    daemon.log_auth_line();
     // The node prefix in force, or its absence (REG-1.69), which the
     // blocked-prefix list's off-board test reads.
     daemon.log_node_prefix();
@@ -376,7 +382,8 @@ pub fn serve_bound(daemon: Daemon, listener: Listener, workers: usize) -> io::Re
     // waiting on the write path's signal, stopped and joined at shutdown. A
     // refused thread costs the deferral and nothing of the serving — the
     // kernel's backstop then runs the checkpoint inline at every second
-    // crossing — and is said.
+    // crossing — and is said as a failure, in row 22's words: the act (a
+    // restart) and what is lost until it.
     let checkpointer = {
         let daemon = Arc::clone(&daemon);
         thread::Builder::new()
@@ -386,10 +393,7 @@ pub fn serve_bound(daemon: Daemon, listener: Listener, workers: usize) -> io::Re
     let checkpointer = match checkpointer {
         Ok(h) => Some(h),
         Err(e) => {
-            notice::line(format_args!(
-                "checkpoint thread: the OS refused it ({e}); the kernel's backstop runs each \
-                 second crossing's checkpoint inline on the committing thread instead"
-            ));
+            notice::emit(Class::Failure, CheckpointThreadRefusedLine(&e));
             None
         }
     };

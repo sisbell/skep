@@ -8,10 +8,11 @@ use std::thread;
 use skep_engine::World;
 use skep_febe::{Codec, Request, Response, SessionId};
 use skep_identity::{HasIdentity, IdentityState};
-use skep_kernel::{Attestation, Snapshot};
+use skep_kernel::{Attestation, Seq, Snapshot};
 use skep_media::door::media_door;
 #[cfg(any(test, feature = "test-hooks"))]
 use skep_util::notice;
+use skep_util::notice::{Class, Moment};
 
 use super::actor::Resolved;
 use super::reply::{
@@ -20,7 +21,7 @@ use super::reply::{
 };
 use super::request::HttpRequest;
 use super::scan::ScanBusy;
-use super::{Daemon, Moment};
+use super::{ClaimLine, Daemon};
 use crate::auth::key_set_of;
 use crate::auth::policy::{
     deposits_credential_link, deposits_registry_link, op_shape_refusal, plain_admission,
@@ -59,15 +60,17 @@ impl Daemon {
     /// position, and — where the head writer's driver ADMITS it — the first
     /// write admitted after the claim finds the board term present. Where the
     /// driver REFUSES it, the claim STANDS, whatever the refusal: its ack is
-    /// owed, which is why
+    /// owed, so
     /// [`WritePath::write_first_head`](crate::write_path::WritePath::write_first_head)'s
-    /// answer is not read here — and the head stays OWED, written at the
-    /// write path's NEXT TURN, a refused write's turn included (l7-C1; SO-I4
-    /// (a)): the first attested write after the refusal answers
-    /// `attestation_invalid:board_unavailable`, its own turn writes `H.1`,
-    /// and its retry is admitted. What a refusal is and when the first head
-    /// comes after one are the head writer's (`head.rs`, WHAT A REFUSAL
-    /// DOES); what an attested write meets meanwhile is
+    /// answer is read for ONE thing here — the flip's landing line
+    /// (`operations.md` §1.1 m14), which says whether `H.1` was written, stood
+    /// from before the claim, or is owed — and decides nothing: the head
+    /// stays OWED, written at the write path's NEXT TURN, a refused write's
+    /// turn included (l7-C1; SO-I4 (a)): the first attested write after the
+    /// refusal answers `attestation_invalid:board_unavailable`, its own turn
+    /// writes `H.1`, and its retry is admitted. What a refusal is and when
+    /// the first head comes after one are the head writer's (`head.rs`, WHAT
+    /// A REFUSAL DOES); what an attested write meets meanwhile is
     /// [`crate::write_path::board_term`]'s. `credential_lock` is the
     /// credential write lock's write guard: the re-install replaces the list
     /// under the lock the claim itself committed under, so no SESSION write
@@ -81,12 +84,24 @@ impl Daemon {
     /// writes nothing — made by no session, they meet no list, and they
     /// deposit no credential, so the slice is as the claim left it. `identity`
     /// is the POST-COMMIT world's slice — the one that names the claimant the
-    /// flip seated, which the re-install compares against.
+    /// flip seated, which the re-install compares against and the landing
+    /// line names. `position` is the claim's own — the credential sequence's
+    /// ack, passed down — which the landing line names (P21's boundary):
+    /// never the head's position after the flip, which `H.1`'s own commits
+    /// have moved by the time the line is said.
+    ///
+    /// THE FLIP SAYS ITSELF (m14): one `landing:` line, said FIRST — the
+    /// account, the position, the mode the board is now in and what became
+    /// of `H.1` — then the claim-time warnings, which say what is wrong with
+    /// the configuration the line has just said the state of, then the list.
+    /// A well-configured board's claim thus writes one line where it wrote
+    /// none.
     fn on_claim_flip(
         &self,
         credential_lock: &LockWrite<'_>,
         serial: &SerialGuard<'_>,
         identity: &IdentityState,
+        position: Seq,
     ) {
         // THE CRASH WINDOW's seam: armed, the process is held HERE — the
         // claim durable and flipped, no head — for the harness to kill.
@@ -97,11 +112,16 @@ impl Daemon {
                 thread::park();
             }
         }
-        // Its answer is not read: a refused `H.1` fails nothing here — the
-        // claim stands (the card above), the head writer surfaces the
-        // refusal itself and owes the head at its next turn, a refused
-        // write's included (l7-C1).
-        self.writes.write_first_head(serial);
+        // The answer is read for the line and decides nothing: a refused
+        // `H.1` fails nothing here — the claim stands (the card above), the
+        // head writer surfaces the refusal itself and owes the head at its
+        // next turn, a refused write's included (l7-C1).
+        let head = self.writes.write_first_head(serial);
+        let claimant = identity
+            .claimant()
+            .expect("the flip is the transition to a slice that names a claimant");
+        let mode = self.auth.cfg.mode(true).to_string();
+        self.say(Class::Landing, ClaimLine { claimant, position, mode: &mode, head });
         self.log_config_warnings(Moment::AtClaim);
         self.auth.reinstall_blocked_at_claim(credential_lock, identity);
         // The flip can only have made an entry INERT, so an issue with no
@@ -483,7 +503,7 @@ impl Daemon {
                 self.febe.execute(binding.sid, frame)
             });
         let ack = self.codec.marshal(&resp);
-        if matches!(resp, Response::AckAddr { .. }) {
+        if let Response::AckAddr { at, .. } = &resp {
             // 8 — the committed tail (AUTH-3.43): the memo entry under the
             // write guard, and the flip read off the two slices — the locked
             // snapshot's before the commit, the post-commit snapshot's after.
@@ -506,9 +526,11 @@ impl Daemon {
                 &ack,
             );
             // 9 — the claim flip's tail, under both guards: `H.1` in this
-            // same step (signed ops, s1), then the warnings and the list.
+            // same step (signed ops, s1) and the flip's line naming the
+            // ack's position — the claim's own — then the warnings and the
+            // list.
             if flipped {
-                self.on_claim_flip(&credential_lock, &serial, post.world().identity());
+                self.on_claim_flip(&credential_lock, &serial, post.world().identity(), *at);
             }
         }
         with_signal(op_answer(ack), closed)

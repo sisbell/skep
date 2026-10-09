@@ -28,14 +28,15 @@ pub fn obj(mut pairs: Vec<(&'static str, Value)>) -> Value {
 /// the ONE mapping the daemon holds from a hex byte to a nibble.
 ///
 /// CASE IS POLICY and stays with each parser, which is the whole of what
-/// the three differ by: the codec's `hex_digit` folds it and names the
+/// the two differ by: the codec's `hex_digit` folds it and names the
 /// offending character; [`parse_lower_hex`] REFUSES it, admitting only what
 /// [`hex_string`] emits — the parse behind the nonce, the session token, the
 /// published head's hashes and the media cells' hashes, so an uppercase nonce
 /// is a syntax fault whose nonce survives rather than a burned credential,
-/// and an uppercase cell hash spells no cell; and the session's signature
-/// parser (`auth::session::parse_case_free_hex`) folds it, the signature
-/// being decoded and never framed. None of them owns the table.
+/// and an uppercase cell hash spells no cell. Neither owns the table. A
+/// signature's hex — the session body's, a record's — is read by
+/// skep-identity's `HybridBlob::parse_hex` over that crate's own table, and
+/// folds case: the signature is decoded and never framed.
 pub fn hex_nibble(b: u8) -> Option<u8> {
     match b {
         b'0'..=b'9' => Some(b - b'0'),

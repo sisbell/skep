@@ -84,18 +84,27 @@ impl Value {
 /// holds is one by type: handed over by M7 or M3 as an `Address`, decoded as
 /// a literal through the codec's own `validate`, or supplied by a caller.
 ///
-/// That rests on one upstream property that is M7's to keep: EVERY UNIT-DEPTH
-/// SPAN IN A STORED SLOT HAS A T4-VALID START. `Endset::addrs()` filters on a
-/// span's SHAPE (`s == subtree_of(s.start())`) and says nothing about its
-/// start, so the property is established by M7's write doors — which admit a
-/// start only as an `Address` (`SlotArg::Addrs`, `emit`'s and `assert_sup`'s
-/// endpoints) or as a `Run::i_start`, an `Address` by type — and is NOT
+/// That rests on one upstream property, and not every M7 write door
+/// establishes it: EVERY UNIT-DEPTH SPAN IN A STORED F OR G HAS A T4-VALID
+/// START — F and G being the slots every caller above lifts out of.
+/// `Endset::addrs()` filters on a span's SHAPE (`s == subtree_of(s.start())`)
+/// and says nothing about its start. `SlotArg`'s two forms, which both
+/// `makelink` writes take, and the endpoints of `emit`, `assert_sup` and
+/// `nullify` build F and G from an `Address` or a `Run::i_start`, and so
+/// establish it. `editlink` does not: it takes a caller-built successor
+/// `Link`, and of its F and G asks only a span count and level-uniformity,
+/// which a unit-depth span at a T4-invalid start — `subtree_of(1.0.0.1)`,
+/// adjacent zeros — passes. There the property holds only by its one caller's
+/// construction: M10's dispatch of EDITLINK hands it the successor
+/// `successor_link` builds, whose F and G are `Run::iextent`s. Nor is it
 /// re-established on the journal/checkpoint deserialize path, where `Endset`
 /// derives a plain `Deserialize` while `Address`, `Span`, `Tumbler` and `Link`
 /// each validate through a shadow. So a tampered store reaches this `expect`
-/// at the first read that gathers the slot; a hostile peer does not.
+/// at the first read that gathers the slot, and so would a second `editlink`
+/// caller that built a successor from raw spans; a hostile peer on today's
+/// wire does not. M7's own reads (`lift_denoted`) rest on the same property.
 pub(crate) fn lift(t: &Tumbler) -> Address {
-    validate(t.clone()).expect("a stored slot denotes T4-valid addresses only (M7's write doors)")
+    validate(t.clone()).expect("a stored F/G slot's unit-depth spans start at T4-valid addresses")
 }
 
 /// A PL DOMAIN ELEMENT — what `[D]_snap` yields (QD, §Internal 2): an address,

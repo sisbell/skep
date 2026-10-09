@@ -509,6 +509,14 @@ impl M3State {
     /// enumerates no nodes. Each walk is Θ(|Π|), and |Π| is a number any key
     /// holder can raise (`omega` says how); who owns an address is ω's
     /// question, and where an id is seated `principal_prefix`'s.
+    ///
+    /// A COMPARISON OF TWO WALKS is one pass, never a search: both run in
+    /// address order, and across a commit the later registry holds every seat
+    /// of the earlier — the fold writes a seat once and removes none
+    /// (O12/O13) — so the two walked in step leave exactly the seats the
+    /// commit added, in Θ(|Π|). Searching one walk once per entry of the other
+    /// gives the same answer at Θ(|Π|²), in a number any key holder raises one
+    /// delegation at a time.
     pub fn principals(
         &self,
     ) -> impl DoubleEndedIterator<Item = (&Address, PrincipalId)> + ExactSizeIterator + '_ {

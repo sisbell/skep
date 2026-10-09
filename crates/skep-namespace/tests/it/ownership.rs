@@ -479,11 +479,19 @@ fn the_principal_registry_enumerates_every_seat_in_address_order() {
     );
     assert_eq!(after.principals().len(), 4);
     assert_eq!(after.principals().next_back(), Some((&provisioned, ID2)));
-    // The commit's one new seat: the walk after it, less the walk before.
+    // The commit's one new seat: the walk after it, less the walk before —
+    // taken in ONE pass over the two in step, as `principals`' card says a
+    // comparison of two walks is; the earlier walk is a subsequence of the
+    // later.
+    let mut earlier = before.principals().peekable();
     let seated: Vec<_> = after
         .principals()
-        .filter(|entry| !before.principals().any(|seat| seat == *entry))
+        .filter(|seat| earlier.next_if_eq(seat).is_none())
         .collect();
+    assert!(
+        earlier.next().is_none(),
+        "every seat of the earlier walk is in the later one"
+    );
     assert_eq!(seated, vec![(&provisioned, ID2)]);
 }
 

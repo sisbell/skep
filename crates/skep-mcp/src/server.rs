@@ -97,21 +97,7 @@ impl Server {
                 )
             }
             "ping" => rpc_result(id, json!({})),
-            "tools/list" => {
-                let tools: Vec<Value> = self
-                    .catalog
-                    .tools
-                    .iter()
-                    .map(|t| {
-                        json!({
-                            "name": t.name,
-                            "description": t.description,
-                            "inputSchema": t.input_schema,
-                        })
-                    })
-                    .collect();
-                rpc_result(id, json!({"tools": tools}))
-            }
+            "tools/list" => rpc_result(id, json!({"tools": self.catalog.tools})),
             "tools/call" => match call_params(params) {
                 Ok((name, args)) => rpc_result(id, self.call(name, args)),
                 Err(e) => rpc_error(id, -32602, &e),
@@ -120,10 +106,10 @@ impl Server {
         }
     }
 
-    /// Run one tool. Every outcome that reached the daemon is a normal
-    /// result carrying skepd's document verbatim — rejections are data.
-    /// `isError` is reserved for failing to reach skepd (and for a tool
-    /// name outside the catalog, which reaches nothing).
+    /// Run one tool. A wire op's result is whatever document skepd answered,
+    /// verbatim — rejections are data. An `Err` from the daemon side
+    /// (`Skepd`'s doc says when) is `isError` with the adapter's message, as
+    /// is a tool name outside the catalog, which reaches nothing.
     fn call(&mut self, name: &str, args: Map<String, Value>) -> Value {
         if name == SESSION_INFO {
             return match self.session_info() {
@@ -181,8 +167,7 @@ fn rpc_error(id: Value, code: i64, message: &str) -> Value {
     json!({"jsonrpc": "2.0", "id": id, "error": {"code": code, "message": message}})
 }
 
-/// One text content block; `is_error` marks ONLY transport failure (and
-/// the unknown-tool miss).
+/// One text content block, `isError` as given.
 fn tool_text(text: String, is_error: bool) -> Value {
     json!({"content": [{"type": "text", "text": text}], "isError": is_error})
 }

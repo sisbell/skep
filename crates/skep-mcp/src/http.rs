@@ -58,14 +58,17 @@ impl Http {
         &self.authority
     }
 
-    /// One exchange: write the request, read to EOF (the daemon closes),
-    /// return (status, body). `Err` means skepd was not reached or did not
-    /// answer — the one condition the MCP side reports as `isError`.
+    /// One exchange: write the request, `headers` riding after `Host` and
+    /// `Connection: close`, read to EOF (the daemon closes), and return
+    /// (status, body) whatever the status — what a status means is the
+    /// caller's to judge, route by route. `Err` means skepd was not reached
+    /// or did not answer; its message names the address and the failed step
+    /// and never quotes the request, whose headers can carry a credential.
     pub fn request(
         &self,
         method: &str,
         path: &str,
-        session: Option<&str>,
+        headers: &[(&str, &str)],
         body: &[u8],
     ) -> Result<(u16, Vec<u8>), String> {
         let addr = (self.host.as_str(), self.port)
@@ -81,8 +84,8 @@ impl Http {
             "{method} {path} HTTP/1.1\r\nHost: {}\r\nConnection: close\r\n",
             self.authority
         );
-        if let Some(tok) = session {
-            req.push_str(&format!("Skepd-Session: {tok}\r\n"));
+        for (name, value) in headers {
+            req.push_str(&format!("{name}: {value}\r\n"));
         }
         req.push_str(&format!(
             "Content-Type: application/json\r\nContent-Length: {}\r\n\r\n",
@@ -138,6 +141,8 @@ fn parse_response(raw: &[u8]) -> Result<(u16, Vec<u8>), String> {
 
 #[cfg(test)]
 mod tests {
+    use std::net::TcpListener;
+
     use super::*;
 
     #[test]
@@ -170,5 +175,31 @@ mod tests {
             "a short body is a broken connection, not an answer"
         );
         assert!(parse_response(b"garbage").is_err());
+    }
+
+    /// A failed exchange names the address and the step, never the request:
+    /// a daemon that answers garbage, or hangs up unanswered, is reported
+    /// without the header value that rode the request.
+    #[test]
+    fn failures_never_quote_the_request() {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind a stub daemon");
+        let port = listener.local_addr().expect("stub address").port();
+        let answers: [&[u8]; 2] = [b"garbage", b""];
+        let stub = std::thread::spawn(move || {
+            for answer in answers {
+                let (mut conn, _) = listener.accept().expect("accept");
+                let _ = conn.read(&mut [0u8; 1024]);
+                let _ = conn.write_all(answer);
+            }
+        });
+        let http = parse_url(&format!("http://127.0.0.1:{port}")).expect("stub url");
+        for _ in answers {
+            let err = http
+                .request("POST", "/op", &[("Skepd-Session", "s3cr3t")], b"{}")
+                .expect_err("no answer to read");
+            assert!(!err.contains("s3cr3t"), "the failure quotes the request: {err}");
+            assert!(err.starts_with(&format!("skepd at http://127.0.0.1:{port}: ")), "{err}");
+        }
+        stub.join().expect("the stub daemon");
     }
 }

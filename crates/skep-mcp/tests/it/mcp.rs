@@ -195,7 +195,7 @@ fn initialize_and_tools_list_serve_the_catalog() {
         .map(|t| t["name"].as_str().expect("file name"))
         .collect();
     assert_eq!(listed, expected, "exactly the tools file's names, in file order");
-    assert_eq!(tools.len(), 39, "38 wire ops + session_info");
+    assert_eq!(v["result"]["tools"], file["tools"], "tools/list is the file's entries, verbatim");
     for t in &tools {
         assert!(
             t["description"].as_str().is_some_and(|s| !s.is_empty()),

@@ -208,6 +208,11 @@ fn mcp_line_protocol_storm_survives_and_stays_correct() {
         json!({"protocolVersion": "2025-06-18", "capabilities": {}}),
     );
     assert_eq!(init["result"]["serverInfo"]["name"], "skep", "initialize: {init}");
+    let catalog = mcp.request("tools/list", 2, json!({}))["result"]["tools"].clone();
+    assert!(
+        catalog.as_array().is_some_and(|t| !t.is_empty()),
+        "a nonempty tools array before the storm: {catalog}"
+    );
 
     // Targeted, documented cases (named so a regression is obvious).
     // Parse error → -32700, id null.
@@ -254,10 +259,10 @@ fn mcp_line_protocol_storm_survives_and_stays_correct() {
         );
     }
 
-    // Survival: tools/list still answers the full catalog.
+    // Survival: tools/list still answers the catalog it answered before the
+    // storm.
     let v = mcp.request("tools/list", 100_000, json!({}));
-    let tools = v["result"]["tools"].as_array().expect("tools array after the storm");
-    assert_eq!(tools.len(), 39, "38 wire ops + session_info survive the storm");
+    assert_eq!(v["result"]["tools"], catalog, "the catalog survives the storm whole");
 
     // Clean exit on stdin EOF.
     let status = mcp.finish();

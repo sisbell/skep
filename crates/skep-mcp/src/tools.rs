@@ -95,15 +95,6 @@ pub fn wire_frame(name: &str, mut args: Map<String, Value>) -> Option<Vec<u8>> {
     Some(frame)
 }
 
-/// One catalog entry. Order is preserved: `tools/list` answers in file
-/// order.
-#[derive(Debug)]
-pub struct Tool {
-    pub name: String,
-    pub description: String,
-    pub input_schema: Value,
-}
-
 /// The substitution point in `commons_instructions`: `load` refuses a
 /// template without one, and `Tools::append_commons` replaces every one.
 const ADDR_PLACEHOLDER: &str = "{addr}";
@@ -115,7 +106,10 @@ pub struct Tools {
     /// `SKEP_COMMONS` names a link-type registry document; `{addr}` is the
     /// substitution point.
     commons_instructions: String,
-    pub tools: Vec<Tool>,
+    /// The catalog's tool definitions in file order, each checked by
+    /// `check_tool` and kept as the file spells it: exactly the `tools`
+    /// array `tools/list` answers.
+    pub tools: Vec<Value>,
 }
 
 impl Tools {
@@ -134,7 +128,7 @@ impl Tools {
 /// directions.
 pub fn load(text: &str) -> Result<Tools, String> {
     let v: Value = serde_json::from_str(text).map_err(|e| format!("not JSON: {e}"))?;
-    let Value::Object(root) = v else {
+    let Value::Object(mut root) = v else {
         return Err("root must be a JSON object".into());
     };
     for k in root.keys() {
@@ -160,19 +154,20 @@ pub fn load(text: &str) -> Result<Tools, String> {
             "'commons_instructions' must contain the '{ADDR_PLACEHOLDER}' placeholder"
         ));
     }
-    let entries =
-        root.get("tools").and_then(Value::as_array).ok_or("missing array field 'tools'")?;
-    let mut tools = Vec::with_capacity(entries.len());
-    for (i, e) in entries.iter().enumerate() {
-        tools.push(parse_tool(e).map_err(|e| format!("tools[{i}]: {e}"))?);
+    let Some(Value::Array(tools)) = root.remove("tools") else {
+        return Err("missing array field 'tools'".into());
+    };
+    let mut names = Vec::with_capacity(tools.len());
+    for (i, t) in tools.iter().enumerate() {
+        names.push(check_tool(t).map_err(|e| format!("tools[{i}]: {e}"))?);
     }
     let mut seen = std::collections::BTreeSet::new();
-    for t in &tools {
-        if !seen.insert(t.name.as_str()) {
-            return Err(format!("duplicate tool '{}'", t.name));
+    for name in names {
+        if !seen.insert(name) {
+            return Err(format!("duplicate tool '{name}'"));
         }
-        if t.name != SESSION_INFO && !WIRE_OPS.contains(&t.name.as_str()) {
-            return Err(format!("tool '{}' names an op the dispatch doesn't know", t.name));
+        if name != SESSION_INFO && !WIRE_OPS.contains(&name) {
+            return Err(format!("tool '{name}' names an op the dispatch doesn't know"));
         }
     }
     for op in WIRE_OPS.iter().copied().chain([SESSION_INFO]) {
@@ -183,7 +178,11 @@ pub fn load(text: &str) -> Result<Tools, String> {
     Ok(Tools { instructions, commons_instructions, tools })
 }
 
-fn parse_tool(v: &Value) -> Result<Tool, String> {
+/// Check one catalog entry — an MCP tool definition: a nonempty string
+/// `name` and `description`, an object `inputSchema`, and no other field —
+/// and answer its name. A definition's fields are named here and nowhere
+/// else in the adapter.
+fn check_tool(v: &Value) -> Result<&str, String> {
     let Value::Object(m) = v else {
         return Err("must be an object".into());
     };
@@ -204,11 +203,7 @@ fn parse_tool(v: &Value) -> Result<Tool, String> {
     if !schema.is_object() {
         return Err("'inputSchema' must be a JSON Schema object".into());
     }
-    Ok(Tool {
-        name: name.to_string(),
-        description: description.to_string(),
-        input_schema: schema.clone(),
-    })
+    Ok(name)
 }
 
 #[cfg(test)]
@@ -216,15 +211,17 @@ mod tests {
     use super::*;
     use serde_json::json;
 
-    /// The shipped catalog: 38 wire ops + session_info, every entry named,
-    /// described, and schema'd — `load` enforces both no-drift directions,
-    /// so a clean load IS the no-drift assertion for the embedded file.
+    /// The shipped catalog: every dispatch op plus `session_info`, every
+    /// entry named, described, and schema'd — `load` enforces both no-drift
+    /// directions, so a clean load IS the no-drift assertion for the
+    /// embedded file — and every entry kept as the file spells it.
     #[test]
     fn embedded_catalog_matches_dispatch() {
         let t = load(EMBEDDED).expect("embedded tools.json must validate");
         assert_eq!(t.tools.len(), WIRE_OPS.len() + 1);
-        assert_eq!(t.tools.len(), 39);
         assert!(!t.instructions.is_empty());
+        let file: Value = serde_json::from_str(EMBEDDED).expect("embedded parses");
+        assert_eq!(Some(&t.tools), file["tools"].as_array(), "entries kept verbatim");
     }
 
     /// Direction one: a file entry the dispatch doesn't know refuses to
@@ -304,8 +301,10 @@ mod tests {
         assert_eq!(frame("frobnicate", json!({})), None);
     }
 
+    /// The dispatch table is distinct, and its size is pinned here and
+    /// nowhere else: mapping or dropping a wire op changes this number.
     #[test]
-    fn wire_ops_are_38_and_distinct() {
+    fn wire_ops_are_distinct_and_counted() {
         let set: std::collections::BTreeSet<_> = WIRE_OPS.iter().collect();
         assert_eq!(set.len(), WIRE_OPS.len());
         assert_eq!(WIRE_OPS.len(), 38);

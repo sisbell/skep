@@ -6,13 +6,19 @@
 //! method of this module. The endpoint and the principal are set at
 //! construction and only read after it, so a token is only ever sent to
 //! the address that issued it, for the principal it was opened for. Only
-//! `open_session` stores a token and only `op` reads one, to pass as the
-//! `Skepd-Session` header `Http::request` writes: no tool answer or log
-//! line can carry it.
+//! `open_session` stores a token and only `post_op` reads one, to pass as
+//! the session header. No tool answer or log line can carry it while two
+//! rules hold: no error string in this module quotes a `/session` success
+//! body — the one answer a token rides, read only by `session_token` — and
+//! `Http::request` never quotes the request it wrote. A test beside each
+//! holds its rule.
 
 use serde_json::Value;
 
 use crate::http::Http;
+
+/// The header a session token rides (wire.md §Sessions).
+const SESSION_HEADER: &str = "Skepd-Session";
 
 /// The adapter's standing with skepd: one endpoint, one principal, at most
 /// one live token. `Err(String)` is the adapter's own message for an
@@ -48,13 +54,12 @@ impl Skepd {
     /// cannot double-apply; a second `unauthenticated` passes through as
     /// data like any other rejection. This is the only retry anywhere.
     pub fn op(&mut self, frame: &[u8]) -> Result<Vec<u8>, String> {
-        let (_, body) = self.http.request("POST", "/op", self.token.as_deref(), frame)?;
+        let body = self.post_op(frame)?;
         if !is_unauthenticated(&body) {
             return Ok(body);
         }
         self.open_session()?;
-        let (_, body) = self.http.request("POST", "/op", self.token.as_deref(), frame)?;
-        Ok(body)
+        self.post_op(frame)
     }
 
     /// The bound principal's account: `principal_prefix`'s `addr` (wire.md
@@ -73,7 +78,7 @@ impl Skepd {
     /// `GET /health`: the daemon's health document. The route is
     /// token-blind (wire.md §Sessions), so no token rides it.
     pub fn health(&self) -> Result<Value, String> {
-        let (status, body) = self.http.request("GET", "/health", None, b"")?;
+        let (status, body) = self.http.request("GET", "/health", &[], b"")?;
         if status != 200 {
             return Err(format!(
                 "GET /health answered {status}: {}",
@@ -84,10 +89,13 @@ impl Skepd {
     }
 
     /// `POST /session` for the configured principal. Local trust: the
-    /// principal is named, not proven (wire.md §Identity).
+    /// principal is named, not proven (wire.md §Identity). A refusal is
+    /// quoted in the error, since no non-200 answer carries a token (wire.md
+    /// §HTTP status codes); a 200 goes to `session_token`, which never
+    /// quotes it.
     fn open_session(&mut self) -> Result<(), String> {
         let body = format!("{{\"principal\":{}}}", self.principal);
-        let (status, resp) = self.http.request("POST", "/session", None, body.as_bytes())?;
+        let (status, resp) = self.http.request("POST", "/session", &[], body.as_bytes())?;
         if status != 200 {
             return Err(format!(
                 "session open for principal {} failed ({status}): {}",
@@ -95,13 +103,16 @@ impl Skepd {
                 String::from_utf8_lossy(&resp)
             ));
         }
-        let v: Value = serde_json::from_slice(&resp)
-            .map_err(|e| format!("session response is not JSON: {e}"))?;
-        let token =
-            v["session"].as_str().ok_or_else(|| format!("session response has no token: {v}"))?;
-        self.token = Some(token.to_string());
+        self.token = Some(session_token(&resp)?);
         eprintln!("skep-mcp: session opened (principal {})", self.principal);
         Ok(())
+    }
+
+    /// One `POST /op`, the live token, if any, riding as the session header.
+    fn post_op(&self, frame: &[u8]) -> Result<Vec<u8>, String> {
+        let session = self.token.as_deref().map(|t| (SESSION_HEADER, t));
+        let (_, body) = self.http.request("POST", "/op", session.as_slice(), frame)?;
+        Ok(body)
     }
 }
 
@@ -115,6 +126,18 @@ fn is_unauthenticated(body: &[u8]) -> bool {
         Ok(v) => v["resp"] == "rejected" && v["code"] == "unauthenticated",
         Err(_) => false,
     }
+}
+
+/// The token out of a `/session` 200 answer (`{"principal":…,"session":…}`,
+/// wire.md §Sessions). That is the one answer a token rides, so a body this
+/// adapter cannot read — a daemon that spells or nests the token
+/// differently — is refused by naming what is missing, never by quoting
+/// it: the refusal reaches the agent as tool text.
+fn session_token(resp: &[u8]) -> Result<String, String> {
+    let v: Value =
+        serde_json::from_slice(resp).map_err(|e| format!("session response is not JSON: {e}"))?;
+    let token = v["session"].as_str().ok_or("session response has no string 'session' field")?;
+    Ok(token.to_string())
 }
 
 #[cfg(test)]
@@ -133,5 +156,23 @@ mod tests {
             br#"{"code":"not_owner","disposition":"permanent","op":"insert","resp":"rejected"}"#
         ));
         assert!(!is_unauthenticated(b"not json"));
+    }
+
+    /// A `/session` 200 is read for its token, and one the adapter cannot
+    /// read is refused without quoting it: under a spelling this adapter
+    /// doesn't know, the body may still carry a token.
+    #[test]
+    fn unreadable_session_answer_is_never_quoted() {
+        let token = "9f3a6c21d4b8e07a5c1b2d4e6f708192";
+        let answer = format!(r#"{{"principal":7,"session":"{token}"}}"#);
+        assert_eq!(session_token(answer.as_bytes()), Ok(token.to_string()));
+        for unreadable in [
+            format!(r#"{{"principal":7,"token":"{token}"}}"#),
+            format!(r#"{{"principal":7,"session":{{"id":"{token}"}}}}"#),
+            format!(r#"{{"principal":7,"session":"{token}""#),
+        ] {
+            let err = session_token(unreadable.as_bytes()).expect_err("unreadable");
+            assert!(!err.contains(token), "the refusal quotes the body: {err}");
+        }
     }
 }

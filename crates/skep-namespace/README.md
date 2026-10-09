@@ -8,11 +8,13 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
 - **Principal registry** — principals seated at node or account
   prefixes, delegated top-down; registration is permanent and a
   prefix is never re-seated.
-- **ω (effective owner)** — the principal seated at the LONGEST prefix
-  covering an address, never bare containment: the bootstrap
-  principal's prefix `[1]` contains every account delegated beneath it,
-  so several principals' prefixes contain one address and only the
-  longest match owns it.
+- **Ownership** — ω, the effective owner of an address, is the
+  principal seated at the LONGEST prefix covering it, never bare
+  containment: the bootstrap principal's prefix `[1]` contains every
+  account delegated beneath it, so several principals' prefixes contain
+  one address and only the longest match owns it. Every ω call walks
+  every seat; for a registered document or account, `account_seat`
+  answers the same owner by one lookup — the seat at its own account.
 - **The frontier allocator** — one frontier per chain, keyed by
   `(anchor, generator)`: account, document, version, content and link
   addresses are minted as the next ordinal on the chain their anchor
@@ -29,6 +31,17 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
   their chain's frontier is floored past them as compiled format, so
   on that one document the content chain's next ordinal is its mint
   count plus six.
+- **Entity operations** — the `Namespace` handle's four writes, one
+  kernel transaction each: `create_new_document` baptizes an empty
+  document under an account its caller owns by ω and resolves the
+  publication flag there — an account's first document, flagless, is
+  born published, a later flagless one private, and an explicit flag
+  is honored as sent; `delegate`, asked by the new account's ω,
+  baptizes the next account under a registered node or account and
+  seats a new principal there in the same commit, so an account's seat
+  is its allocation; `register_node` admits a node address
+  provisioning chose, granting no ownership; and `fork` creates a
+  document in the caller's own account, as `create_new_document` does.
 - **Allocation and entity reads** — is-this-allocated over every
   chain, M3's own allocation oracle, and node/account/document
   classification over the entity registry, the registration check

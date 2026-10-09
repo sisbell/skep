@@ -509,8 +509,10 @@ impl M3State {
     /// every seat beneath a node [`crate::Namespace::register_node`] admitted,
     /// which no frontier walk from the genesis seats reaches, since M3
     /// enumerates no nodes. Each walk is Θ(|Π|), and |Π| is a number any key
-    /// holder can raise (`omega` says how); who owns an address is ω's
-    /// question, and where an id is seated `principal_prefix`'s.
+    /// holder can raise (`omega` says how); the covering owner of an address
+    /// is ω's question, the owner of a registered document or account
+    /// [`M3State::account_seat`]'s, and where an id is seated
+    /// `principal_prefix`'s.
     ///
     /// A COMPARISON OF TWO WALKS is one pass, never a search: both run in
     /// address order, and across a commit the later registry holds every seat

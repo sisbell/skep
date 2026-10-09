@@ -153,6 +153,17 @@ fn push_base(out: &mut Vec<u8>, base: Option<ShotBase<'_>>) {
 /// [`PublishBody`] under a budget no body reaches: over pieces a budget
 /// admits, the two build one body.
 ///
+/// It is a SIGNER's composer, over pieces the signer authored: it holds no
+/// budget and refuses nothing. Pieces a caller did not author — a shot
+/// re-composed off the caller's own store, or off the answers of a board it
+/// reads — are [`PublishBody`]'s, under a budget of the caller's own, which
+/// refuses by name a body past that budget ([`PublishRefusal::PastBudget`])
+/// and a count past `be64` ([`PublishRefusal::Unspellable`]). Over such
+/// pieces this function builds without bound and PANICS on the count — one
+/// window of width 2^64 − 1 and any piece after it break the count's
+/// PRECONDITION below — and nothing here can tell a signer's pieces from a
+/// stranger's: which of the two a caller builds through is the caller's.
+///
 /// PRECONDITIONS — every value and every window's start spelling is shorter
 /// than 2^32 bytes, as [`entry_body_insert`](super::entry_body_insert)'s
 /// values are, and so is the base group ([`PublishBody::within`]'s
@@ -178,14 +189,15 @@ pub fn entry_body_publish<'a>(
 }
 
 /// A `publish` BODY built one piece at a time under a byte BUDGET — for the
-/// verifier that re-composes a shot's body off its own store, where each
-/// value arrives by a read that can fail and a body past the budget must be
-/// REFUSED rather than built. [`PublishBody::within`], [`PublishBody::push`]
-/// and [`PublishBody::window`] measure the budget in the body's own layout
-/// and NAME what they refuse ([`PublishRefusal`]), so no caller restates that
-/// layout, or the count's arithmetic, to learn which refusal it met; the
-/// caller keeps its walk, its own answer for a value it could not read and
-/// for each refusal, and collects nothing ahead of the build.
+/// verifier that re-composes a shot's body, off its own store or off the
+/// answers of a board it reads, where each value arrives by a read that can
+/// fail and a body past the budget must be REFUSED rather than built.
+/// [`PublishBody::within`], [`PublishBody::push`] and [`PublishBody::window`]
+/// measure the budget in the body's own layout and NAME what they refuse
+/// ([`PublishRefusal`]), so no caller restates that layout, or the count's
+/// arithmetic, to learn which refusal it met; the caller keeps its walk, its
+/// own answer for a value it could not read and for each refusal, and
+/// collects nothing ahead of the build.
 ///
 /// Its standing INVARIANT is the one the budget exists for: the body built so
 /// far, its leading count and the base group [`PublishBody::finish`]

@@ -390,9 +390,13 @@ const _: fn() = || {
 /// here: a window's width is a [`NonZeroU64`], so no such piece can be
 /// offered.
 ///
-/// The causes are tested in ONE order, the count first, then the budget — so
-/// a piece the body could not spell at any budget is never answered as past
-/// this one.
+/// The causes are tested in ONE order, the count first, then the budget: a
+/// piece that carries the count past `be64` is unspellable whatever the
+/// budget, and is told so — never answered as past THIS budget, a refusal a
+/// larger one would not make. An element spelled in 2^32 bytes or more — a
+/// value, or a window's start — has no cause of its own: it breaks the
+/// PRECONDITION of [`PublishBody::push`] or [`PublishBody::window`], whose
+/// cards say how each answers it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum PublishRefusal {
     /// The FINISHED body — its leading count and its base group included —

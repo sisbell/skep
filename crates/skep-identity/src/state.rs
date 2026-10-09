@@ -37,12 +37,18 @@ static EMPTY_KEY_SET: LazyLock<KeySet> = LazyLock::new(KeySet::default);
 /// else (I2, AUTH-2.90).
 ///
 /// Standing invariant — every row of `sets` is KEYED, its enrolled map
-/// non-empty: what [`keyed_accounts`] promises, and what makes two states
-/// that answer every [`key_set`] and [`claimant`] read alike EQUAL, as values
-/// and as serialized bytes. [`step`] establishes it — the genesis post is
-/// never empty and no post empties a set (`apply`'s PRECONDITION) — and, like
-/// [`KeySet`]'s own, it is re-checked nowhere on this side, so a deserialized
-/// value carries it only as its source did.
+/// non-empty: what [`keyed_accounts`] promises (AUTH-2.59, "every keyed
+/// account"), and what makes two states that answer every [`key_set`] and
+/// [`claimant`] read alike EQUAL, as values and as serialized bytes. [`step`]
+/// establishes it — the genesis post is never empty and no post empties a set
+/// (`apply`'s PRECONDITION). Where a value is DESERIALIZED, no party owes a
+/// re-check of it. Not this side: the derived `Deserialize` sees bytes alone,
+/// and cannot tell a transferred or restored checkpoint from one the daemon
+/// wrote itself, which AUTH-1.33 trusts with no per-load pass. Nor the host's
+/// pass at a transferred or restored checkpoint (AUTH-1.33, with AUTH-1.37
+/// and AUTH-1.57): it re-checks [`KeySet`]'s three invariants and not this
+/// one — a row holding no key and no retired key passes AUTH-1.57's test. So
+/// a deserialized value carries it only as its source did.
 ///
 /// [`claimant`]: IdentityState::claimant
 /// [`key_set`]: IdentityState::key_set
@@ -804,7 +810,8 @@ mod tests {
     /// account above the parent whose set is NOT EMPTY". An account row
     /// holding the EMPTY set — one no fold posts, the standing invariant
     /// keeping every row keyed, so a row only a slice deserialized from
-    /// elsewhere can carry, its re-check the host's (AUTH-1.33) — opens
+    /// elsewhere can carry, and one the host's re-check at a transferred
+    /// checkpoint (AUTH-1.33) does not refuse (`IdentityState`'s card) — opens
     /// nothing: `key_set` answers that account the empty set either way, and
     /// the walk climbs past it to the keyed account above. A walk that took
     /// the first PRESENT row would answer the empty set there, and the latch

@@ -49,8 +49,8 @@ fn varid_new_stops_at_the_watershed() {
 /// promise, and nothing in the handle's signature states it — the injected
 /// factories and predicate, the memo's lock and the catalog all have to keep
 /// it. And it renders: a struct holding one derives `Debug`, and the
-/// rendering is the working set — the registered rule ids and the rotation
-/// cursor.
+/// rendering is what a driver reads back of the working set — the registered
+/// rule ids and the rotation's cursor over them.
 #[test]
 fn a_coordinator_is_send_sync_and_debug() {
     fn owed<T: Send + Sync + std::fmt::Debug>() {}

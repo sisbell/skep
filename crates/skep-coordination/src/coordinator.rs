@@ -92,8 +92,9 @@ pub type LinkWriterFactory<W> =
 
 /// M9's one public handle: PL (group A), predicate definitions (group B), and
 /// the reactive rule engine (group C). Owns no authoritative state — the
-/// `DefMemo` is an interior-mutable recomputable hint; the rule registry
-/// and rotation cursor are the `&mut self` working set.
+/// `DefMemo` is an interior-mutable recomputable hint; the rule registry and
+/// its rotation — the cursor over the rules, and each rule's last pick — are
+/// the `&mut self` working set.
 ///
 /// Every `&Snapshot<W>` an operation takes is the caller's pin of THIS
 /// coordinator's kernel — the one [`Coordinator::new`] was handed. A
@@ -103,6 +104,23 @@ pub type LinkWriterFactory<W> =
 /// caller's pin with this coordinator's own kernel (a def resolved, a fire
 /// pinned), would join two logs in one answer. "As of `snap.seq()`" names a
 /// position in this kernel's log.
+///
+/// Each operation that checks, evaluates, expands or analyzes a term —
+/// `type_check`, `type_check_trigger`, `eval`, `decide`, `classify`,
+/// `define_predicate`, `register_pred`, `signature`, `evaluate_def`,
+/// `supersede`, `certify_stable`, `register_rule`, `certify_rule`,
+/// `quiescent`, `quiescent_scoped`, `next_enabled`, `fire` and `step` —
+/// recurses once per former on the CALLER'S THREAD, down to the crate's one
+/// nesting bound of 128 levels counted through references (a registered
+/// reference chain derives up to 65 definitions deep on a cold memo). The
+/// bound is set against a DEFAULT 2 MiB thread stack in a debug build, where
+/// the suite measures every walk. So each such call is owed at least that
+/// stack: on a smaller one, content `register_pred` admits can overflow it,
+/// and an overflow ABORTS the process — it is no panic, and nothing here can
+/// refuse it. A term or domain the caller builds is the caller's to keep
+/// within that stack too: its drop recurses once per level, and `type_check`,
+/// `type_check_trigger` and `register_rule` take theirs by value and drop a
+/// refused one here, however deep.
 pub struct Coordinator<W: WorldState> {
     kernel: Arc<Kernel<W>>,
     catalog: TypeCatalog,
@@ -137,9 +155,10 @@ pub struct Coordinator<W: WorldState> {
     guest: Box<Visibility<'static, W>>,
 }
 
-/// The working set is what a driver reads back — the registered rule ids
-/// and the rotation cursor. The kernel, the catalog projection, the memo and
-/// the injected factories are elided (`finish_non_exhaustive`).
+/// What a driver reads back of the working set — the registered rule ids and
+/// the rotation's cursor over them. Each rule's last pick, the kernel, the
+/// catalog projection, the memo and the injected factories are elided
+/// (`finish_non_exhaustive`).
 impl<W: WorldState> fmt::Debug for Coordinator<W> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Coordinator")

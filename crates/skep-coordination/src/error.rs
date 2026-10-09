@@ -41,11 +41,14 @@ pub enum TypeError {
     /// name's later binding would shadow its earlier one, leaving the argument
     /// passed at the earlier position unreadable. Carries the repeated name.
     DuplicateParameter(VarId),
-    /// A term at a sort its position does not take — a child under its
-    /// former, or a trigger's body, whose codomain is `Bool`. `expected` is
-    /// the sort the position requires — `OptAddr` where it takes either
-    /// optional (an `IfSome` guard, `def`), the then-branch's sort where an
-    /// `IfSome`'s two branches must agree — and `found` the term's.
+    /// A sort a position does not take: a term's — a child under its former,
+    /// or a trigger's body, whose codomain is `Bool` — a domain's element sort
+    /// (`Reflect`, `MaxT1` and `MinT1` fold only `dom(Addr)`, so a tuple slice
+    /// is `found: Tup`), or a V-TUP atom's variable, bound at a sort other than
+    /// `Tup`. `expected` is the sort the position requires — `OptAddr` where
+    /// it takes either optional (an `IfSome` guard, `def`), the then-branch's
+    /// sort where an `IfSome`'s two branches must agree — and `found` the sort
+    /// it was given.
     SortMismatch { expected: Sort, found: Sort },
     /// A `Ref` passing `found` arguments to a referent whose Γ_D binds
     /// `expected` (WT-ref: one argument per formal). Speaks where

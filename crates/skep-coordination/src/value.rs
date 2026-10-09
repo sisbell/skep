@@ -113,8 +113,8 @@ pub(crate) fn lift(t: &Tumbler) -> Address {
 /// sorts the WT domain judgment admits — `dom(Addr)` and `dom(Tup)` — are this
 /// type's two shapes, so a quantifier, a fold and a rule each bind exactly
 /// what a domain can yield. A rule's bound argument is one of these
-/// (`Occurrence.arg`), projected to an address for bookkeeping
-/// ([`Arg::key_addr`]).
+/// (`Occurrence.arg`); what a fire acts at, and the bookkeeping key, is its
+/// address ([`Arg::key_addr`]).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Arg {
     Addr(Address),
@@ -122,11 +122,15 @@ pub enum Arg {
 }
 
 impl Arg {
-    /// The bookkeeping key for a bound argument of EITHER shape: the address
+    /// The address a bound argument of EITHER shape stands for: the address
     /// itself, or the tuple's `t.addr` (R1 AddressInjectivity, so an address
-    /// hit is a value hit) — what a `StepOutcome` reports and what
-    /// `fire_count` keys on, so a driver holding a peeked `Occurrence`
-    /// reaches the same key the rule engine would rather than re-deriving it.
+    /// hit is a value hit). It is what a fire acts at — the address a Marker's
+    /// tuple covers, the link a Nullify retracts, the address whose document
+    /// the draft boundary judges (§Internal 5: `a` is the bound argument's
+    /// address) — and the bookkeeping key: what a `StepOutcome` reports, what
+    /// `fire_count` keys on and what a rule's `step` rotation advances past, so
+    /// a driver holding a peeked `Occurrence` reaches the same key the rule
+    /// engine would rather than re-deriving it.
     pub fn key_addr(&self) -> &Address {
         match self {
             Arg::Addr(a) => a,

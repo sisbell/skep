@@ -285,6 +285,10 @@ fn supersede_gates_up_front_and_trips_m7_s_supersession_fence() {
                 c.evaluate_def(&successor, &[], View::Active, &k.snapshot()),
                 Ok(Value::Bool(false))
             );
+            assert!(
+                matches!(c.current_version(&p_start, &k.snapshot()), Tip::Sink(x) if x == p_start),
+                "no lineage committed: the def start is its own head"
+            );
         }
         other => panic!("fence drift resolved? got {other:?}"),
     }

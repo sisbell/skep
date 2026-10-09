@@ -302,15 +302,17 @@ impl<W: CoordinationWorld> Coordinator<W> {
     /// that means to publish the document holding its predicates defines into
     /// it first.
     ///
-    /// Of `register_pred`'s refusals, a term checked on the disciplined
-    /// domain meets only two after the insert has committed:
+    /// Of `register_pred`'s refusals, a term checked over this kernel, on the
+    /// disciplined domain, meets only two after the insert has committed:
     /// `ReferentNotActive` — with no concurrency at all when it references a
     /// def retracted before the call (`type_check` keys on ever-registration,
     /// gate (iv) on endorsement; `retract_pred` states it), or when one is
     /// retracted in the gap — and M7's own refusal of the emit (`Emit`).
     /// Either way the content stays, orphan, at the `start` the refusal
     /// carries — the caller's only route to it — and a later
-    /// `register_pred(home, start)` adopts it once the cause is gone.
+    /// `register_pred(home, start)` adopts it once the cause is gone. A
+    /// ref-bearing term checked over another kernel names its referents
+    /// there; this call judges it anew, after the insert.
     ///
     /// Under concurrency: a concurrent INSERT lands the def mid-document
     /// (harmless — identity is the returned start); a concurrent DELETE
@@ -578,6 +580,11 @@ impl<W: CoordinationWorld> Coordinator<W> {
     /// Read from M7 at no visibility class, as the def probes are, where PL's
     /// `tip` atom walks only the claims the look at guest class admits: a
     /// claim homed in a draft moves this answer and not the atom's.
+    ///
+    /// As built no def lineage commits — M7 fences `supersede`'s claim (its
+    /// doc states it) — so a def start is its own head, `Sink(start)`; the
+    /// `[K_sup]` claims the walk follows are those `assert_sup` and `editlink`
+    /// write, between resident links.
     pub fn current_version(&self, start: &Address, snap: &Snapshot<W>) -> Tip {
         snap.world()
             .links()

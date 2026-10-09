@@ -46,10 +46,11 @@ impl TypedDom {
 }
 
 /// One registered rule in the working set: the checked domain, the checked
-/// trigger, the declared view, the action, and the trigger's footprint —
+/// trigger, the declared view, the action, the trigger's footprint —
 /// `footprint(T_ρ)`, the reads §8's armer graph asks about, never the rule's
-/// writes. Built only by `register_rule`; the id alone is read outside this
-/// module, by the handle's `Debug`.
+/// writes — and the rule's place in `step`'s rotation. Built only by
+/// `register_rule`; the id alone is read outside this module, by the handle's
+/// `Debug`.
 #[derive(Debug, Clone)]
 pub(super) struct CheckedRule {
     pub(super) id: RuleId,
@@ -75,6 +76,13 @@ pub(super) struct CheckedRule {
     /// the armer graph reads §8's edge rule off it rather than re-expanding
     /// every trigger on every call.
     trigger_footprint: Footprint,
+    /// The key of the occurrence this rule's last `step` turn picked (`None`
+    /// before its first): where the rule's own rotation resumes
+    /// ([`Coordinator::step`], §7). Every domain enumerates in ascending key
+    /// order — an address domain's set in T1 order, a tuple slice in M7's
+    /// ascending tuple-address order (`observe`'s stated order), a filter in
+    /// its base's — so "past it" is "greater".
+    last_pick: Option<Address>,
 }
 
 /// What `validate_rule` decides once, for both of its callers: the checked
@@ -138,6 +146,7 @@ impl<W: CoordinationWorld> Coordinator<W> {
             view: rule.view,
             action: rule.action,
             trigger_footprint,
+            last_pick: None,
         });
         Ok(id)
     }
@@ -306,11 +315,12 @@ impl<W: CoordinationWorld> Coordinator<W> {
     /// The rule's first ENABLED occurrence at `snap` among the arguments
     /// `keep` admits: `[D_ρ]` in enumeration order, the first whose trigger
     /// holds — the ONE statement of "enabled" (ASN-0133). The peek asks it
-    /// (`next_enabled`/`quiescent` and `step`), `quiescent_scoped` filters it
-    /// by scope, and `fire` asks it again at its own snapshot, narrowed to
-    /// one element — so the peek and the fire answer the same question, and
-    /// `NoOp` means exactly "enabled at the peek, not at the fire". `keep` is
-    /// asked first, so an argument it rejects costs no trigger evaluation.
+    /// (`next_enabled`/`quiescent`, and `step` through `next_pick`'s
+    /// rotation), `quiescent_scoped` filters it by scope, and `fire` asks it
+    /// again at its own snapshot, narrowed to one element — so the peek and
+    /// the fire answer the same question, and `NoOp` means exactly "enabled
+    /// at the peek, not at the fire". `keep` is asked first, so an argument it
+    /// rejects costs no trigger evaluation.
     fn first_enabled(
         &self,
         rule: &CheckedRule,
@@ -320,6 +330,22 @@ impl<W: CoordinationWorld> Coordinator<W> {
         self.enum_rule_dom(rule, snap)
             .into_iter()
             .find(|arg| keep(arg) && self.trigger_true(rule, arg, snap))
+    }
+
+    /// The rule's pick on its `step` turn — the agenda's rotation within one
+    /// rule (§7): its first ENABLED argument past the one its last turn picked
+    /// (`first_enabled`, narrowed to keys greater than `last_pick`), wrapping
+    /// to its first enabled argument at or before that key when none lies
+    /// past. So a rule's turns cycle through its own enabled occurrences, and
+    /// one whose fire leaves it enabled — a `Failed`, or a `Deduped` under a
+    /// trigger its action does not falsify — cannot hold its rule's later
+    /// arguments back. `None` exactly when the rule has no enabled occurrence
+    /// at `snap`: the wrap admits every argument the first scan does not, and
+    /// both scans read `snap`.
+    fn next_pick(&self, rule: &CheckedRule, snap: &Snapshot<W>) -> Option<Arg> {
+        let past = |arg: &Arg| rule.last_pick.as_ref().is_none_or(|last| arg.key_addr() > last);
+        self.first_enabled(rule, snap, past)
+            .or_else(|| self.first_enabled(rule, snap, |arg| !past(arg)))
     }
 
     // ───────────────────────────── quiescence ─────────────────────────────
@@ -403,7 +429,7 @@ impl<W: CoordinationWorld> Coordinator<W> {
     /// the first rule in registration order with an enabled argument, and
     /// that rule's first enabled argument in its domain's enumeration order
     /// (Tumbler order for an address domain, M7's `observe` order for a
-    /// tuple slice). It cannot advance the rotation cursor, so it is not
+    /// tuple slice). It cannot advance `step`'s rotation, so it is not
     /// itself "fair" (weak fairness is a property of the `&mut self` `step`
     /// loop).
     pub fn next_enabled(&self, snap: &Snapshot<W>) -> Option<Occurrence> {
@@ -549,15 +575,25 @@ impl<W: CoordinationWorld> Coordinator<W> {
     }
 
     /// The pick+fire default driver (replaceable — the scheduler/violation
-    /// policy is handed upward, ASN-0133). Owns the round-robin rotation over
-    /// rules — weak fairness is a property of this loop, sufficient to
-    /// reach/hold quiescence for an all-SF, grow-only, bounded-input registry
-    /// (Q5a/Q6). Peeks at `snap`; the fire pins its own, so an occurrence
-    /// enabled at `snap` and falsified since is `NoOp`, and `Quiescent`
-    /// means no rule has an enabled occurrence at `snap`. A fire error
-    /// surfaces as `Failed` (never swallowed) and the cursor rotates PAST
-    /// the failing occurrence, so it cannot starve the rest of the agenda
-    /// (§7).
+    /// policy is handed upward, ASN-0133). Owns the rotation over the agenda
+    /// (§7) — round-robin over the rules, and on each rule's turn its first
+    /// enabled occurrence past the one that rule's last turn picked, wrapping
+    /// (`next_pick`) — and weak fairness is a property of this loop. It is
+    /// sufficient to reach and hold quiescence for an all-SF,
+    /// EXTINCTION-DISCIPLINED registry over grow-only domains on bounded input
+    /// (ASN-0133 Q6 regime (ii), Q5a): every trigger an SF spelling, and every
+    /// rule's own fire falsifying its trigger at the argument it fired (X-DEF)
+    /// — the Marker pattern `certify_rule` certifies (Q3). SF alone is not
+    /// enough (Q5a): a rule whose fire does not falsify its own trigger — a ⊤
+    /// trigger's Marker, say, whose every later turn at a fired argument is a
+    /// `Deduped` — stays enabled there, so the registry never reaches
+    /// `Quiescent`. Peeks at `snap`; the fire pins its own, so an occurrence
+    /// enabled at `snap` and falsified since is `NoOp`, and `Quiescent` means
+    /// no rule has an enabled occurrence at `snap`. A fire error surfaces as
+    /// `Failed` (never swallowed) and the rotation moves PAST the failing
+    /// occurrence — to the next rule now, and on its own rule's next turn to
+    /// that rule's next enabled argument — so it starves neither another rule
+    /// nor its own rule's later arguments (§7).
     ///
     /// CALLER'S OBLIGATION, and the hypothesis the reachability claim above
     /// rests on: RE-PIN between steps — `step(&kernel.snapshot())` per
@@ -582,14 +618,16 @@ impl<W: CoordinationWorld> Coordinator<W> {
         }
         for i in 0..n {
             let idx = (self.cursor + i) % n;
-            let Some(arg) = self.first_enabled(&self.rules[idx], snap, |_| true) else {
+            let Some(arg) = self.next_pick(&self.rules[idx], snap) else {
                 continue;
             };
             let id = self.rules[idx].id;
-            self.cursor = (idx + 1) % n; // rotate past, success or failure
+            self.cursor = (idx + 1) % n; // rotate past the rule, success or failure …
             // The outcome reports the bookkeeping KEY, not the bound value —
             // owned here, the argument itself moving into the occurrence.
             let arg_addr = arg.key_addr().clone();
+            // … and, on the rule's next turn, past the occurrence (§7).
+            self.rules[idx].last_pick = Some(arg_addr.clone());
             let occurrence = Occurrence { rule: id, arg };
             return match self.fire(&occurrence) {
                 Ok(FireOutcome::Fired { effect, seq }) => {

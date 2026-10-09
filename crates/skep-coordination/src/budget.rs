@@ -48,7 +48,10 @@ use crate::ast::{Lit, Term};
 /// `a_reference_chain_at_the_cap_derives_cold_and_one_deeper_is_refused`,
 /// `an_argument_free_reference_chain_at_the_cap_derives_cold`), so a cap
 /// raised past the budget, or a walk grown past it, aborts there rather than
-/// in a daemon.
+/// in a daemon. The caller's half of this budget — a thread with at least the
+/// default stack — is written where a caller reads it, on `Coordinator`'s
+/// doc, in this module's figures, which this module's test holds to the
+/// constants: a change to the cap moves both.
 pub(crate) const MAX_DEPTH: u32 = 128;
 
 /// The levels a reference costs beyond its own node, in [`MAX_DEPTH`]'s
@@ -214,5 +217,26 @@ impl Budget {
     #[cfg(test)]
     pub(crate) fn units(&self) -> usize {
         self.0.get()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{DERIVATION_COST, MAX_DEPTH};
+
+    /// The caller's half of the depth budget — the stack it owes — is written
+    /// on `Coordinator`'s doc in this module's numbers: the cap, and the
+    /// deepest cold derivation an argument-free reference chain registered to
+    /// it demands (`an_argument_free_reference_chain_at_the_cap_derives_cold`
+    /// measures it). Each moves with its constant, or this fails.
+    #[test]
+    fn the_coordinator_doc_states_the_depths_a_caller_owes_stack_for() {
+        let doc = include_str!("coordinator.rs").replace("\n/// ", " ");
+        for stated in [
+            format!("nesting bound of {MAX_DEPTH} levels"),
+            format!("derives up to {} definitions deep", MAX_DEPTH / DERIVATION_COST + 1),
+        ] {
+            assert!(doc.contains(&stated), "`Coordinator`'s doc no longer states {stated:?}");
+        }
     }
 }

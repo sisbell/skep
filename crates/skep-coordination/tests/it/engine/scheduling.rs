@@ -1,6 +1,7 @@
 //! Scheduling: the peek, the fire and the step — the two-transaction gap
-//! accounted, the rotation's fairness and its rotate-past on every outcome,
-//! failure included, quiescence and its base case — and the Nullify action.
+//! accounted, the rotation's fairness across rules and within one and its
+//! rotate-past on every outcome, failure included, quiescence and its base
+//! case — and the Nullify action.
 
 use crate::common::*;
 use crate::terms::*;
@@ -10,7 +11,7 @@ use skep_coordination::{
     Arg, Atom, Coordinator, Dom, FireAction, FireError, FireOutcome, Occurrence, Rule,
     RuleCertification, RuleId, ScopeBody, Sort, StepOutcome, Term, Trigger, TypeRef, View,
 };
-use skep_kernel::TxnError;
+use skep_kernel::{Kernel, TxnError};
 use skep_links::{enc, Caller, Endset, HasLinks, NullifyError, Tuple};
 
 // ─────────────────────────── fire, step, quiescence ───────────────────────────
@@ -257,7 +258,9 @@ fn a_certified_marker_rule_is_not_re_armed_by_retracting_its_own_marker() {
 /// own marker at its second fire — an incumbent already resident at that
 /// fire's own snapshot — so M7 answers the incumbent with its base `Seq` and
 /// commits nothing, the step reports `Deduped`, the recomputed count does not
-/// move, and the rule stays enabled; the first fire's `Fired` carries its own
+/// move, and the rule stays enabled: SF and grow-only as `certify_rule` reads
+/// it, and never `Quiescent` — the case `step`'s claim excludes by extinction
+/// discipline (ASN-0133 Q5a). The first fire's `Fired` carries its own
 /// commit. A witness planted AFTER a fire's snapshot reports `Fired` instead
 /// (`Coordinator::fire`'s one-way miscount), which no single-threaded test
 /// can arrange.
@@ -266,14 +269,18 @@ fn a_dedup_onto_an_incumbent_the_fire_can_see_reports_deduped_and_commits_nothin
     let k = kernel();
     let mut c = coord(&k);
     link_writer(&k).emit(Caller::System, &doc1(), &pred_stable_ty(), &ca(1), &[]).expect("rel");
-    let id = c
-        .register_rule(Rule {
-            domain: Dom::MembersDom(concrete(&pred_stable_ty())),
-            trigger: always_addr(&c),
-            view: View::Audit,
-            action: marker_action(),
-        })
-        .expect("register");
+    let rule = Rule {
+        domain: Dom::MembersDom(concrete(&pred_stable_ty())),
+        trigger: always_addr(&c),
+        view: View::Audit,
+        action: marker_action(),
+    };
+    assert_eq!(
+        c.certify_rule(&rule).expect("well-formed"),
+        RuleCertification::Uncertified { sf: true, marker: false, grow_only: true },
+        "all-SF and grow-only: what `step`'s claim needs extinction discipline beside"
+    );
+    let id = c.register_rule(rule).expect("register");
     let first = match c.step(&k.snapshot()) {
         StepOutcome::Fired { rule, arg, effect, seq } => {
             assert_eq!((rule, arg), (id, ca(1)));
@@ -409,6 +416,100 @@ fn a_failing_rule_does_not_starve_the_agenda() {
     );
 }
 
+/// Rotate-past holds WITHIN a rule as well as across rules (§7: the rotation
+/// is over the agenda, every enabled occurrence): a rule's next turn takes its
+/// first enabled argument past the one it last picked, wrapping. Here the
+/// first member's fire stops at the draft boundary every time — its document
+/// a draft the guest class refuses, its witnessing tuple readable — and the
+/// second, readable member still fires on the rule's next turn; the failing
+/// occurrence comes round again after it.
+#[test]
+fn a_failing_occurrence_does_not_starve_its_own_rule_s_later_arguments() {
+    let k = kernel();
+    let mut c = coord_with_guest(&k, |_, d| *d != doc2());
+    let in_draft = a(&[1, 0, 1, 0, 2, 0, 1, 1]); // an element of the draft doc2
+    let readable = a(&[1, 0, 1, 0, 3, 0, 1, 1]); // of the published doc3, after it in T1
+    let writer = link_writer(&k);
+    for member in [&in_draft, &readable] {
+        writer.emit(Caller::System, &doc1(), &pred_stable_ty(), member, &[]).expect("a member");
+    }
+    let id = c
+        .register_rule(Rule {
+            domain: Dom::MembersDom(concrete(&pred_stable_ty())),
+            trigger: not_marked(&c),
+            view: View::Audit,
+            action: marker_action(),
+        })
+        .expect("register");
+    assert!(matches!(
+        c.step(&k.snapshot()),
+        StepOutcome::Failed { rule, arg, err: FireError::DraftBoundary(d) }
+            if rule == id && arg == in_draft && d == doc2()
+    ));
+    assert!(
+        matches!(c.step(&k.snapshot()), StepOutcome::Fired { arg, .. } if arg == readable),
+        "the rule's next turn passes the failing occurrence"
+    );
+    assert!(
+        matches!(c.step(&k.snapshot()), StepOutcome::Failed { arg, .. } if arg == in_draft),
+        "which comes round again, the readable member now marked"
+    );
+}
+
+/// The same rotation under a trigger its action does not falsify, for either
+/// element shape: a ⊤ trigger over two arguments fires each once, then dedups
+/// each in turn — never the first alone, which a rotation over rules only
+/// would hand every turn. A Marker rule over an address domain rotates in T1
+/// order; a Nullify rule over a tuple slice, whose second retraction of a
+/// tuple M7 absorbs into its first, rotates in M7's ascending tuple-address
+/// order — the two orders a rule's rotation reads "past" by.
+#[test]
+fn a_rule_s_turns_rotate_through_its_enabled_arguments() {
+    let four_steps = |c: &mut Coordinator<World>, k: &Kernel<World>| {
+        (0..4)
+            .map(|_| match c.step(&k.snapshot()) {
+                StepOutcome::Fired { arg, .. } => ("fired", arg),
+                StepOutcome::Deduped { arg, .. } => ("deduped", arg),
+                other => panic!("expected Fired or Deduped, got {other:?}"),
+            })
+            .collect::<Vec<_>>()
+    };
+
+    let k = kernel();
+    let mut c = coord(&k);
+    let writer = link_writer(&k);
+    for member in [ca(1), ca(3)] {
+        writer.emit(Caller::System, &doc1(), &pred_stable_ty(), &member, &[]).expect("a member");
+    }
+    c.register_rule(Rule {
+        domain: Dom::MembersDom(concrete(&pred_stable_ty())),
+        trigger: always_addr(&c),
+        view: View::Audit,
+        action: marker_action(),
+    })
+    .expect("register");
+    assert_eq!(
+        four_steps(&mut c, &k),
+        [("fired", ca(1)), ("fired", ca(3)), ("deduped", ca(1)), ("deduped", ca(3))]
+    );
+
+    let k = kernel();
+    let mut c = coord(&k);
+    let l1 = deposit_rel(&k, PRED_STABLE, &ca(1), &ca(2));
+    let l2 = deposit_rel(&k, PRED_STABLE, &ca(3), &ca(4));
+    c.register_rule(Rule {
+        domain: Dom::AuditSlice(concrete(&pred_stable_ty())),
+        trigger: always_tup(&c),
+        view: View::Audit,
+        action: FireAction::Nullify { home: doc1() },
+    })
+    .expect("register");
+    assert_eq!(
+        four_steps(&mut c, &k),
+        [("fired", l1.clone()), ("fired", l2.clone()), ("deduped", l1), ("deduped", l2)]
+    );
+}
+
 /// The cursor rotates past its pick on a `Deduped` step too: two rules whose
 /// triggers no fire falsifies alternate through their dedups, where a cursor
 /// that held on a dedup would hand the first rule every turn.
@@ -440,10 +541,11 @@ fn a_deduped_step_rotates_past_its_rule() {
     assert_eq!(picks, [("fired", r1), ("fired", r2), ("deduped", r1), ("deduped", r2)]);
 }
 
-/// A `NoOp` step rotates the cursor as well (`StepOutcome::NoOp`: "the cursor
-/// rotated"): two rules enabled at a stale snapshot, the first falsified
-/// since — the step after its `NoOp` fires the second at that same snapshot,
-/// where a cursor that held on a `NoOp` would pick the falsified rule again.
+/// A `NoOp` step rotates the cursor as well (`StepOutcome::NoOp`: "the
+/// rotation moved past it"): two rules enabled at a stale snapshot, the first
+/// falsified since — the step after its `NoOp` fires the second at that same
+/// snapshot, where a cursor that held on a `NoOp` would pick the falsified
+/// rule again.
 #[test]
 fn a_no_op_step_rotates_past_its_rule() {
     let k = kernel();

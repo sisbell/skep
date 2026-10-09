@@ -36,10 +36,13 @@ pub enum Trigger {
     /// be ref-free (`register_rule` rejects otherwise —
     /// `RuleError::RefBearingInlineTrigger`).
     Inline(TriggerTerm),
-    /// pdef-backed: the def's checked body is captured at `register_rule`,
-    /// so the rule survives the def's later retraction and reads only the
-    /// snapshot it is evaluated on. A `Def` signature is Codom-only — it
-    /// cannot serve a `Tup` domain.
+    /// pdef-backed: any def with a defined signature — EVER-registered, a
+    /// retracted one included, endorsement gating only a new REFERENCE
+    /// (`register_pred`'s gate (iv)), never a trigger. Its checked body is
+    /// captured at `register_rule`, so the rule survives the def's
+    /// retraction, before or after, and reads only the snapshot it is
+    /// evaluated on. A `Def` signature is Codom-only — it cannot serve a `Tup`
+    /// domain.
     Def(Address),
 }
 
@@ -53,16 +56,17 @@ pub enum Trigger {
 #[non_exhaustive]
 pub enum FireAction {
     /// Canonical certifiable Marker: emit ONE Unary K-tuple covering the
-    /// bound argument `a` at `home`, flipping audit `is_K(a)` false→true.
+    /// bound argument's address `a` (`Arg::key_addr` — a bound tuple's own
+    /// `t.addr`) at `home`, flipping audit `is_K(a)` false→true.
     /// `ty` must be a cataloged idem⊤ Unary type that is NOT a PredLayer
     /// class (`register_rule` rejects otherwise — PR-DISC).
     Marker { home: Address, ty: TypeKey },
-    /// Single retraction: `nullify(home, a)` on the bound argument. NEVER
-    /// certifiable: `certify_rule`'s Marker leg is false BY ACTION, whatever
-    /// the trigger's stability (a ⊤ trigger is SF and the rule is still
-    /// `Uncertified`) — admitted under the uncertified-rule policy with the
-    /// divergence monitor as backstop. Documented contract: the domain must
-    /// yield RESIDENT LINKS
+    /// Single retraction: `nullify(home, a)` on the bound argument's address
+    /// `a` (a bound tuple's own `t.addr`). NEVER certifiable: `certify_rule`'s
+    /// Marker leg is false BY ACTION, whatever the trigger's stability (a ⊤
+    /// trigger is SF and the rule is still `Uncertified`) — admitted under the
+    /// uncertified-rule policy with the divergence monitor as backstop.
+    /// Documented contract: the domain must yield RESIDENT LINKS
     /// (tuple-domained, or `Addr`-over-`L_dom`); an `Addr`-over-`M_K` domain
     /// passes `register_rule` but every fire then trips
     /// `FireError::Nullify(Rejected(BadTarget))`.
@@ -145,8 +149,9 @@ pub struct RuleId(pub(crate) u64);
 /// relative to a snapshot — `next_enabled` peeks one that is; `fire`
 /// re-checks on its own pin and answers `NoOp` if it no longer is. `arg` is
 /// `Arg::Addr` for an `Addr`-domain rule, `Arg::Tuple` for a `Tup`-domain
-/// rule (the trigger/atom dispatch consumes the whole tuple; only the
-/// bookkeeping projects to the address).
+/// rule (the trigger and its atoms consume the whole tuple; what the fire
+/// acts at, the document its draft boundary judges and the bookkeeping all
+/// take its address, `Arg::key_addr`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Occurrence {
     pub rule: RuleId,
@@ -195,9 +200,10 @@ pub enum FireOutcome {
 /// with its coordinator.
 ///
 /// `NoOp` means the pick was enabled at the peeked snapshot and not at the
-/// fire's own: nothing committed, the cursor rotated, and — the peek being
-/// the CALLER's snapshot — no progress toward `quiescent` AT that snapshot.
-/// Re-pin per step ([`crate::Coordinator::step`] states the obligation).
+/// fire's own: nothing committed, the rotation moved past it, and — the peek
+/// being the CALLER's snapshot — no progress toward `quiescent` AT that
+/// snapshot. Re-pin per step ([`crate::Coordinator::step`] states the
+/// obligation).
 ///
 /// Deliberately exhaustive, as `FireOutcome` is: a step fires, dedups, fails,
 /// finds its pick a no-op, or finds nothing enabled — the scheduler's whole
@@ -214,10 +220,11 @@ pub enum StepOutcome {
     Quiescent,
 }
 
-/// `certify_rule`'s answer: SF trigger + Marker witness-coverage + grow-only
-/// domain (+ bounded input, a workload hypothesis) ⇒ terminating under weak
-/// fairness (Q5a/Q6); otherwise the failed legs are named. Sound but
-/// incomplete — never over-certifies.
+/// `certify_rule`'s answer: SF trigger + Marker witness-coverage — the
+/// extinction discipline Q5a needs beside SF, by the Marker pattern (Q3) — +
+/// grow-only domain (+ bounded input, a workload hypothesis) ⇒ terminating
+/// under weak fairness (Q5a/Q6); otherwise the failed legs are named. Sound
+/// but incomplete — never over-certifies.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum RuleCertification {
     CertifiedTerminating,

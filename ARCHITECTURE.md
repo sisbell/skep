@@ -1185,8 +1185,9 @@ Rules that hold across its files:
   crate — the serde shadow and the `LinkSeat` fold go through it — and every
   in-crate literal starts at an address that already is a full element
   position: another run's start, an in-crate shift of one, or what M3's
-  `mint_content` returned. `runlist::extend_or_push_run` is the one place a
-  built run is widened and the one place a placement's runs are accumulated.
+  `mint_content` returned; `Run::admits_start` lists those literals.
+  `runlist::extend_or_push_run` is the one place a built run is widened and
+  the one place a placement's runs are accumulated.
 - **One allocation step.** Every fresh content address is minted and written
   by `ops::allocate_for_placement`, inside the transaction whose placement
   record places it.
@@ -1334,7 +1335,7 @@ Rules that hold across its files:
   document's every run, and SHOWORIGIN keeping only each run's origin — and
   FINDDOCSCONTAINING's filter asks `arranges_any` rather than building a
   candidate's footprint; `tidy` refuses any file the eager twins —
-  `resolve`, `image`, `project` — which answer the same.
+  `resolve`, `project` — which answer the same.
 - **The rejections are part of the wire.** `skep-febe`'s `lower.rs` maps
   each variant of the six error enums to a `RejectCode` with no wildcard
   arm, so a new variant fails to compile there. `docs/wire.md` names each

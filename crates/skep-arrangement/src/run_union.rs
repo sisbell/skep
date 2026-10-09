@@ -140,10 +140,11 @@ impl UnionPiece<'_> {
     }
 
     /// The piece as an owned run — `first`'s start, widened to the piece's
-    /// reach. A PROPAGATING mint, as [`Run::new`](crate::Run::new) divides
-    /// them: the start is a run's own, so a full element position; and the
-    /// width is the ordinal distance to a reach of the same content chain at or
-    /// past `first`'s own, so at least `first`'s width — positive, and the
+    /// reach. A PROPAGATING mint, as
+    /// [`Run::admits_start`](crate::Run::admits_start) lists them: the start
+    /// is a run's own, so a full element position; and the width is the
+    /// ordinal distance to a reach of the same content chain at or past
+    /// `first`'s own, so at least `first`'s width — positive, and the
     /// subtraction cannot underflow.
     fn to_run(&self) -> Run {
         Run {

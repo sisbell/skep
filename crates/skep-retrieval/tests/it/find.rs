@@ -5,7 +5,7 @@
 
 use std::cell::RefCell;
 
-use skep_address::{Address, Span};
+use skep_address::{Address, Span, SpanSet};
 use skep_arrangement::{seat_link, HasM5, VSpec};
 use skep_namespace::PrincipalId;
 use skep_retrieval::{
@@ -147,8 +147,12 @@ fn find_docs_containing_answers_exactly_the_documents_holding_a_covered_address_
     assert_eq!(held(&doc1()), vec![ca(2), ca(3)]);
     assert_eq!(held(&doc2()), vec![doc2_ca(1), ca(1), ca(2), ca(1)]);
     assert!(
-        m5.docs_ever_containing(&m5.image(&doc2(), &vspan(1, 2, 1)))
-            .contains(&doc1()),
+        m5.docs_ever_containing(
+            &m5.iter_resolve(&doc2(), &vspan(1, 2, 1))
+                .map(|run| run.iextent())
+                .collect::<SpanSet>()
+        )
+        .contains(&doc1()),
         "the premise: R still names doc1 for ca1, which it no longer holds"
     );
     let documents = [doc1(), doc2()];
@@ -388,11 +392,12 @@ fn find_docs_containing_refuses_a_request_whose_spans_outnumber_the_budget_thoug
     let s = k.snapshot();
     let q = Query::new(&s);
     let past_end = || vspan(1, 1000, 1);
-    // The premise: a past-end span images to NO coverage, so the coverage
-    // count never moves and only the span count can explain a refusal below.
+    // The premise: a past-end span resolves to no run, so to NO coverage, so
+    // the coverage count never moves and only the span count can explain a
+    // refusal below.
     assert!(
-        s.world().m5().image(&doc1(), &past_end()).is_empty(),
-        "the premise: a span past the arranged extent images to nothing"
+        s.world().m5().resolve(&doc1(), &past_end()).is_empty(),
+        "the premise: a span past the arranged extent resolves to nothing"
     );
     let over = vec![region_spec(
         doc1(),
@@ -403,7 +408,7 @@ fn find_docs_containing_refuses_a_request_whose_spans_outnumber_the_budget_thoug
         FindError::TooMuchCoverage
     );
     // At the budget the same shape still answers — emptily, every span
-    // imaging to nothing — so the resolutions are made, their number
+    // resolving to nothing — so the resolutions are made, their number
     // bounded at the budget.
     let at = vec![region_spec(
         doc1(),
@@ -427,7 +432,7 @@ fn find_docs_containing_refuses_a_request_whose_spans_outnumber_the_budget_thoug
     // resolution and counted all the same.
     for folded in [deep_span(1), vspan(3, 1, 1)] {
         assert!(
-            s.world().m5().image(&doc1(), &folded).is_empty(),
+            s.world().m5().resolve(&doc1(), &folded).is_empty(),
             "the premise: M5 folds it to nothing"
         );
         let over = vec![region_spec(

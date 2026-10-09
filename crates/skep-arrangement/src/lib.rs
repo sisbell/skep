@@ -200,8 +200,8 @@ mod chain;
 // convention, the journal delta `M5Rec`, the fold, and the two reads
 // (`birth_extent`, `shot_terms`) of the fields only the fold writes.
 mod state;
-// The reads on the slice: resolve, point, image, project, deletions, the
-// counts, and the admission predicates the ops ask.
+// The reads on the slice: resolve, point, project, deletions, the counts,
+// and the admission predicates the ops ask.
 mod reads;
 // The publish shot: its request values, the runs and values it re-inserts,
 // and its address form, both sides.

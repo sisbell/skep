@@ -54,19 +54,10 @@ static EMPTY_ARRANGEMENT: LazyLock<DocArrangement> = LazyLock::new(DocArrangemen
 /// is authoritative MUTABLE state recovered by replay — NOT a recomputable
 /// hint (ASN-0047 P3); provenance is the append-only history housed next to
 /// it, and it is a type of its own whose surface offers no removal, so the
-/// permanence R promises holds by construction. `arrangements` is sparse: an
-/// absent doc ⇒ empty arrangement (the eager-lazy split with M3). v1 has no
-/// derived-hint fields ⇒ [`rebuild_derived`](M5State::rebuild_derived) is
-/// the identity.
-///
-/// Three of its four fields — `arrangements`, `birth_extents` and
-/// `shot_terms` — are private to this module. No other module can therefore
-/// build an `M5State` by struct literal — every one in the crate is a
-/// default, a decoded checkpoint, or the fold's output — and none reads the
-/// arrangement map but through `arrangement_of` and its two narrowings,
-/// `content_list` and `link_list`, which apply the absent-⇒-empty
-/// convention; one level down, `DocArrangement`'s two lists are private here
-/// too. `provenance` alone is crate-visible, for the reads R answers.
+/// permanence R promises holds by construction. The arrangement map is
+/// sparse: an absent doc reads as the empty arrangement (the eager-lazy split
+/// with M3). v1 has no derived-hint fields ⇒
+/// [`rebuild_derived`](M5State::rebuild_derived) is the identity.
 ///
 /// THE BIRTH EXTENTS (`birth_extents`; PUB-3.19 as RES-276 reads it, frozen
 /// by the owner's ruling D2, 2026-09-17) are the third field, and the one
@@ -196,10 +187,10 @@ static EMPTY_ARRANGEMENT: LazyLock<DocArrangement> = LazyLock::new(DocArrangemen
 ///   locating each run again.
 ///
 /// EVERY READ HERE ANSWERS THE ADDRESS NAMED. `resolve`, `iter_resolve`,
-/// `point`, `image`, `content_runs`, `link_runs`, `content_count`,
-/// `link_count`, `content_run_count`, `link_run_count`, `project`,
-/// `arranges_any`, `deletions` and `recorded_span_count` never float: asked
-/// of a bare published document with members, they answer its own pre-chain
+/// `point`, `content_runs`, `link_runs`, `content_count`, `link_count`,
+/// `content_run_count`, `link_run_count`, `project`, `arranges_any`,
+/// `deletions` and `recorded_span_count` never float: asked of a bare
+/// published document with members, they answer its own pre-chain
 /// arrangement, which the chain has superseded, and its own R↾doc, not the
 /// trunk head's. Head-float (PUB-2.49) is a composition the READER makes —
 /// [`reading_surface`](crate::reading_surface) first, then the read — as
@@ -217,12 +208,12 @@ static EMPTY_ARRANGEMENT: LazyLock<DocArrangement> = LazyLock::new(DocArrangemen
 /// prescribes; and an `Address` re-validates on the way in (M1's `try_from`
 /// shadow), so a key that is not T4-valid is a decode failure M2 reports as
 /// corruption rather than a value some later read has to assert about.
-///
-/// Serialization needs the `im` crate's `serde` feature and
-/// `Tumbler: Serialize/DeserializeOwned` (M1's `num-bigint` serde feature) —
-/// both carried by this crate's dependencies (Build precondition).
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct M5State {
+    // Private but for `provenance`, which the reads R answers reach: only
+    // this module builds an `M5State` — a default, a decoded checkpoint, or
+    // the fold's output — and every other module reaches the arrangement map
+    // through `arrangement_of` (ARCHITECTURE.md §The arrangement, "One fold").
     arrangements: im::OrdMap<Address, DocArrangement>,
     pub(crate) provenance: Provenance,
     birth_extents: im::OrdMap<Address, Nat>,
@@ -438,13 +429,10 @@ impl M5State {
     /// edition's claim was written over (PUB-3.10), and this extent answers
     /// the same as of every later `Seq`.
     ///
-    /// EXACT for a birth version born EMPTY too: its mint notes it at zero —
-    /// the shot journals its record for every member it mints, an empty
-    /// placement included ([`M5Rec::ShotPlace`] carries the shot's terms
-    /// whatever the placement holds), and an owned VERSION its snapshot — and
-    /// no deposit notes an extent, so the first one grows `content_count`
-    /// alone, and this answers a zero however much the head has taken since.
-    /// No conforming mint is empty (PUB-3.11).
+    /// EXACT for a birth version born EMPTY too: it answers a noted zero,
+    /// frozen like any extent, however much the head has taken since —
+    /// BIRTH★ on [`M5State`] states which records note an extent. No
+    /// conforming mint is empty (PUB-3.11).
     ///
     /// `None` where no extent is noted — every address that is no birth
     /// version, and a birth version not yet minted — so a noted zero, a birth

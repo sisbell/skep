@@ -493,7 +493,7 @@ fn admit<'s, W: HasM3 + HasM5>(
         }
         let carried = shot.base.as_ref().is_some_and(|base| {
             base_union
-                .get_or_insert_with(|| m5.content_union(&base.member))
+                .get_or_insert_with(|| RunUnion::of(m5.content_runs(&base.member)))
                 .covers(run)
         });
         if carried {

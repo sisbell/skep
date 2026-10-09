@@ -217,8 +217,8 @@ fn compares(code: &str) -> bool {
 /// whole resolution; and `query/find.rs` asks `arranges_any` whether a
 /// footprint is empty rather than building one (the COST paragraph of
 /// `find_docs_containing`).
-/// M5 publishes the eager twin of each — `resolve`, `image`, `project` — and
-/// they answer exactly the same, so no behavioural test can tell a query that
+/// M5 publishes the eager twin of each — `resolve`, `project` — and they
+/// answer exactly the same, so no behavioural test can tell a query that
 /// stops from one that materializes a document's every run and is refused
 /// afterwards. No code line under `src/` calls an eager read, and the scan
 /// asserts it found each lazy one where it belongs, so a scan gone blind
@@ -231,11 +231,7 @@ fn every_query_asks_m5_only_its_lazy_reads() {
             && !calls("for run in m5.iter_resolve(&surface, span) {", "resolve"),
         "`calls` no longer tells a call of an eager read from the lazy one named after it"
     );
-    let eager = scan(|code| {
-        ["resolve", "image", "project"]
-            .iter()
-            .any(|read| calls(code, read))
-    });
+    let eager = scan(|code| ["resolve", "project"].iter().any(|read| calls(code, read)));
     assert!(
         eager.is_empty(),
         "a query asks M5 an eager read, which materializes what its budget exists to stop \

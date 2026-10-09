@@ -288,10 +288,15 @@ fn point_answers_m_of_d_and_folds_bad_positions_to_none() {
 }
 
 #[test]
-fn image_is_the_concatenated_iextent_lift() {
-    // §2: ⋃ r.iextent(), total, not normalized, possibly mixed-length.
+fn a_resolution_lifts_to_the_concatenated_iextent_cover() {
+    // §2: the runs `iter_resolve` yields, each lifted by `Run::iextent` —
+    // ⋃ r.iextent(), not normalized, possibly mixed-length: the cover every
+    // aggregator of run I-extents builds, under the level-class discipline.
     let s = arranged();
-    let cov = s.image(&doc1(), &vspan(1, 1, 5));
+    let cov: SpanSet = s
+        .iter_resolve(&doc1(), &vspan(1, 1, 5))
+        .map(|r| r.iextent())
+        .collect();
     let spans: Vec<Span> = cov.iter().cloned().collect();
     assert_eq!(spans.len(), 2);
     assert_eq!(spans[0].start().len(), 8);

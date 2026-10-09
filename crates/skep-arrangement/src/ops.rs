@@ -192,10 +192,12 @@ pub const MAX_REINSERTED_VALUES: usize = 1 << 17;
 /// ([`content_run_count`](crate::M5State::content_run_count), one map lookup
 /// reading no run), summed over the specs in order and refused
 /// `TooManyRuns` where the sum crosses, ahead of that spec's walk. The worst
-/// case rather than the steps taken — the runs left of an ordinal are not
-/// derivable from the ordinal, run widths being arbitrary — so the bound is
-/// conservative in the one safe direction: a narrow early span over a
-/// fragmented source is refused for work it would not have done.
+/// case rather than the steps taken, and the one ceiling that holds whatever
+/// backs the run-list: a span's reach bounds today's walk too
+/// ([`iter_resolve`](crate::M5State::iter_resolve)'s card), but only
+/// today's, so it is not charged — and the bound is conservative in the one
+/// safe direction: a narrow early span over a fragmented source is refused
+/// for work it would not have done.
 ///
 /// `2^20` steps: at order 50 ns a step, ~50 ms of applier-lock hold, the
 /// order of a three-slot MAKELINK's walks (three slots of `2^18` steps). It

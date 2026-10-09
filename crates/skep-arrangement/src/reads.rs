@@ -1,4 +1,4 @@
-//! §D/§E — arrangement reads (resolve/iter_resolve/point/image/project/
+//! §D/§E — arrangement reads (resolve/iter_resolve/point/project/
 //! arranges_any), the content subspace's admission predicates, and the
 //! provenance reads (deletions/docs_ever_containing), pure over any M2
 //! snapshot (§2, §9).
@@ -14,16 +14,14 @@
 //! `classify_spans`/`contains`. The discipline is ENCAPSULATED behind the
 //! query methods ([`M5State::project`], [`M5State::arranges_any`],
 //! [`M5State::deletions`]) and OWED by whoever aggregates run I-extents
-//! themselves — [`M5State::image`]'s raw cover, and the runs
-//! [`M5State::resolve`] and [`M5State::iter_resolve`] hand back for a caller
-//! to lift. Both routes reach [`Run::iextent`], where the obligation is stated
-//! (Conflicts #8).
+//! themselves — lifting the runs [`M5State::resolve`] and
+//! [`M5State::iter_resolve`] hand back through [`Run::iextent`], where the
+//! obligation is stated (Conflicts #8).
 
 use num_traits::One;
 use skep_address::{difference_sets, union, Address, Nat, Span, SpanSet};
 
 use crate::run::Run;
-use crate::run_union::RunUnion;
 use crate::runlist::Runs;
 use crate::state::M5State;
 use crate::vspace::{as_ordinal_vspan, ordinal_vspan, VPos};
@@ -82,13 +80,22 @@ impl M5State {
     /// M10's successor slot spans. [`resolve`](M5State::resolve) is this
     /// collected, for a caller that hands the runs onward whole.
     ///
-    /// What pulling does NOT bound is the walk to the span's opening ordinal:
-    /// the prefix-sum walk passes every run that ends before it before the
-    /// first run is yielded — all of them, for a span opening past the
-    /// arranged end — so one call is `Θ(#runs left of the opening ordinal)`
-    /// steps whatever it yields, and
-    /// [`content_run_count`](M5State::content_run_count) is that walk's
-    /// ceiling for a content span, readable before asking.
+    /// What pulling does NOT bound is the walk to the span's opening ordinal,
+    /// whatever the call yields. Its CONTRACT is a ceiling: `#runs` of the
+    /// list the span's subspace selects —
+    /// [`content_run_count`](M5State::content_run_count) or
+    /// [`link_run_count`](M5State::link_run_count), one lookup before asking
+    /// — which a span opening past the arranged end reaches, and which holds
+    /// under any backing the run-list takes (Open decision #1). Today's
+    /// backing walks from the first run, passing every run that ends before
+    /// the opening ordinal, so it also stops within `min(#runs, ord + count)`
+    /// runs: each run holds at least one position of the dense prefix
+    /// (D-SEQ★), so fewer runs than `ord + count` open before the span's
+    /// reach. That tighter figure is the backing's and not this card's: the
+    /// profiling-gated alternatives Open decision #1 holds in reserve locate
+    /// the opening ordinal in `O(log #runs)` steps whatever its reach, so a
+    /// caller pricing a walk by its reach re-prices when the backing changes,
+    /// and one pricing it at `#runs` does not.
     pub fn iter_resolve(&self, doc: &Address, span: &Span) -> impl Iterator<Item = Run> + '_ {
         as_ordinal_vspan(span)
             .and_then(|vspan| {
@@ -110,26 +117,6 @@ impl M5State {
         self.arrangement_of(doc)
             .list(&p.subspace)?
             .point(&p.ordinal)
-    }
-
-    /// The region's I-image as a SpanSet (§2; ASN-0127 `image(W, d, Σ)`, the
-    /// addresses `doc`'s arrangement maps the V-region `span` onto):
-    /// `⋃ r.iextent()` over the runs [`resolve`](M5State::resolve) returns —
-    /// the coverage operand
-    /// [`docs_ever_containing`](M5State::docs_ever_containing),
-    /// [`project`](M5State::project) and
-    /// [`arranges_any`](M5State::arranges_any) take, collected whole. A
-    /// caller that counts its coverage against a budget pulls the same runs
-    /// off [`iter_resolve`](M5State::iter_resolve) and lifts each with
-    /// [`Run::iextent`] as it counts, as M6's FINDDOCSCONTAINING does, so an
-    /// over-budget region stops at the budget rather than being collected
-    /// here first. `union` (concatenation) only ⇒ total, never faults, NOT
-    /// normalized; possibly mixed-length when `span` covers transcluded runs,
-    /// so it is consumed under the level-class discipline (the hazard is
-    /// stated on [`Run::iextent`], which every aggregator of run I-extents
-    /// reaches, whether or not it comes through here).
-    pub fn image(&self, doc: &Address, span: &Span) -> SpanSet {
-        self.iter_resolve(doc, span).map(|r| r.iextent()).collect()
     }
 
     /// The canonical, V-ordered content run decomposition — maximally merged
@@ -275,21 +262,6 @@ impl M5State {
         from + width <= &self.content_count(doc) + &Nat::one()
     }
 
-    /// The UNION of `doc`'s content runs' I-extents ([`RunUnion`]) — every
-    /// address its CONTENT arrangement holds, merged so that whether it holds
-    /// EVERY address of a run is one search ([`RunUnion::covers`]), the
-    /// membership question of [`seats_link`](M5State::seats_link) asked of a
-    /// run's whole I-extent. The publish shot's carried-run test (PUB-6.24,
-    /// PUB-8.1): a supplied run the base already arranges takes no source
-    /// gate, the base having answered for those addresses when it was
-    /// published. Merged once and asked of every run, so a request of many
-    /// runs pays `doc`'s run count once: `O(n log n)` in
-    /// [`content_run_count`](M5State::content_run_count), and a pointer per
-    /// run. Absent doc ⇒ the empty union, which covers nothing.
-    pub(crate) fn content_union(&self, doc: &Address) -> RunUnion<'_> {
-        RunUnion::of(self.content_list(doc).iter())
-    }
-
     /// The content runs of `doc` PAST ordinal `extent` — positions
     /// `[extent + 1, n_C]`, V-ordered, the boundary run clipped, and nothing
     /// at all when `extent ≥ n_C`. The publish shot's carried tail (PUB-2.42,
@@ -318,13 +290,13 @@ impl M5State {
     /// construction (link reverse-discovery is M7's BH3; there is no subspace
     /// argument): the V-positions of `doc` whose content I-address falls in
     /// `coverage` — an I-address cover, an endset's coverage (M8's route) or a
-    /// region [`image`](M5State::image) alike, possibly fragmented and
-    /// mixed-length — as depth-2 V-spans, normalized. The result is the
-    /// FOOTPRINT those addresses have in `doc` (ASN-0119's `project`), which
-    /// is why a footprint interrupted in V-space comes back as several spans.
-    /// TOTAL — the level-class discipline is applied internally, so the call
-    /// is fault-free for any coverage, including cross-length prefix/subtree
-    /// spans.
+    /// region's runs lifted through [`Run::iextent`] alike, possibly
+    /// fragmented and mixed-length — as depth-2 V-spans, normalized. The
+    /// result is the FOOTPRINT those addresses have in `doc` (ASN-0119's
+    /// `project`), which is why a footprint interrupted in V-space comes back
+    /// as several spans. TOTAL — the level-class discipline is applied
+    /// internally, so the call is fault-free for any coverage, including
+    /// cross-length prefix/subtree spans.
     ///
     /// Per content block × coverage span: the block's run reports which of
     /// its offsets the span covers (the run owns both the same-level-class

@@ -330,7 +330,7 @@ impl RunList {
     /// asked of a whole I-extent: [`RunUnion::covers`] over the union of this
     /// list's runs, asked of one run. The composition the carried-run laws are
     /// pinned on; the publish shot builds the union once and asks it of every
-    /// supplied run ([`M5State::content_union`](crate::M5State::content_union)).
+    /// supplied run (`admit`, in `ops/publish.rs`).
     #[cfg(test)]
     fn covers(&self, run: &Run) -> bool {
         RunUnion::of(self.0.iter()).covers(run)

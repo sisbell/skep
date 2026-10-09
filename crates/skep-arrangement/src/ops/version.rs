@@ -76,25 +76,6 @@ where
     /// private working copy of every published document to every principal,
     /// which PUB-2.14 forbids.
     ///
-    /// ALL FOUR PRE-TRANSACTION READS ARE OFF AN M2 SNAPSHOT, taken before the
-    /// applier lock and so possibly stale by the time the transaction runs,
-    /// and each is sound for its own reason. The ownership read is stable for
-    /// an existing document (per M3), which is what makes the branch and the
-    /// lock key safe to choose before the transaction opens. The two
-    /// REGISTRATION reads — `is_registered_document(source)` and
-    /// `is_registered_account(prefix)` — are sound because M3's registrations
-    /// are MONOTONE: its record set allocates and registers and never
-    /// withdraws, so a `true` here cannot go stale, and a `false` can only be
-    /// a rejection a retry need not repeat. The forker's PREFIX,
-    /// `principal_prefix(principal)` — the cross-owner arm's target account —
-    /// is value-stable across M2 snapshots (M3: prefixes are immutable and
-    /// principals persist), so a `Some` names the same account inside the
-    /// transaction and a `None` is a rejection a retry need not repeat. Any
-    /// future M2 realization that widens what may land between an M2 snapshot
-    /// and its transaction must re-examine this, along with
-    /// [`M5Rec::VersionSnapshot`]'s linearization-at-fold, which the same
-    /// change already obliges.
-    ///
     /// UNGATED, deliberately: this op takes no [`Caller`](crate::Caller) and applies no ω
     /// check, because forking a document one may not write IS the remedy the
     /// medium offers for that denial (denial-as-fork, ASN-0042 O10). What
@@ -124,7 +105,9 @@ where
     /// neither refusal reading on that arm (PUB-2.14). `Mint` is defensive on
     /// both arms: the source's registration and the forker's account-hood are
     /// established above and M3's registrations are monotone, which leaves
-    /// only M3's frontier gate.
+    /// only M3's frontier gate. The three refusals answered off that snapshot
+    /// are answered off a state that may predate the transaction, so one that
+    /// raced a registration need not recur on a retry.
     ///
     /// WHICH ARRANGEMENT IS SNAPSHOTTED (lane 3.2's head-float): the source's
     /// READING SURFACE ([`reading_surface`]) — a bare published source with
@@ -134,10 +117,11 @@ where
     /// address float back to. A version address forks its own member
     /// (PUB-2.50); a private or memberless source forks itself. The record's
     /// `source` is that surface, read off the working state — never off the
-    /// M2 snapshot the four reads above take, since a shot or an owned fork of
-    /// the trunk can advance the frontier between the two — and read before
-    /// the fork's own mint is staged, as [`trunk_head`](crate::trunk_head) requires: after it, an
-    /// owned fork would be the head it asks about.
+    /// M2 snapshot the branch and its lock key are chosen from, since a shot
+    /// or an owned fork of the trunk can advance the frontier between the two
+    /// — and read before the fork's own mint is staged, as
+    /// [`trunk_head`](crate::trunk_head) requires: after it, an owned fork
+    /// would be the head it asks about.
     ///
     /// EMPTY SURFACE: when the arrangement snapshotted arranges no content,
     /// the fork is registered and ABSENT from the arrangement map — the lazy
@@ -194,7 +178,21 @@ where
         // The four pre-transaction reads, and nothing else, come off the M2
         // snapshot: it lives in this block alone, which yields the key and
         // the branch and ends before the transaction opens, so no read inside
-        // the transaction can be taken off it.
+        // the transaction can be taken off it. The snapshot may be stale by
+        // the time the transaction runs, and each read is sound for its own
+        // reason. The ownership read is stable for an existing document (per
+        // M3), which is what makes the branch and the lock key safe to choose
+        // here. The two REGISTRATION reads — `is_registered_document(source)`
+        // and `is_registered_account(prefix)` — are sound because M3's
+        // registrations are MONOTONE: its records allocate and register and
+        // never withdraw, so a `true` cannot go stale and a `false` is a
+        // rejection a retry need not repeat. The forker's PREFIX is
+        // value-stable across snapshots (M3: prefixes are immutable and
+        // principals persist), so a `Some` names the same account inside the
+        // transaction and a `None` is a rejection a retry need not repeat. An
+        // M2 realization that widens what may land between a snapshot and its
+        // transaction must re-examine this, with `M5Rec::VersionSnapshot`'s
+        // linearization-at-fold, which the same change already obliges.
         let (key, branch) = {
             let snap = self.kernel.snapshot();
             let snapshot_m3 = snap.world().m3();

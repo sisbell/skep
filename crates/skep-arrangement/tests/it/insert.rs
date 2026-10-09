@@ -1,6 +1,7 @@
 //! INSERT (§B; ASN-0116): what it mints, writes and places, the run start it
 //! returns, and the order of its refusals.
 
+use skep_address::SpanSet;
 use skep_arrangement::{Deposit, HasM5, InsertError, Run, Vstream};
 
 use crate::common::*;
@@ -26,8 +27,11 @@ fn insert_mints_writes_places_and_returns_the_run_start() {
     assert_eq!(runs[0].width(), &n(3));
     assert_eq!(m5.point(&doc1(), &vp(1, 2)), Some(ca(2)));
     assert_eq!(read_v(&s, &doc1(), 2), b"b".to_vec());
-    // image is the centralized iextent lift.
-    let cov = m5.image(&doc1(), &vspan(1, 1, 3));
+    // The resolution, lifted run by run through `Run::iextent`.
+    let cov: SpanSet = m5
+        .iter_resolve(&doc1(), &vspan(1, 1, 3))
+        .map(|r| r.iextent())
+        .collect();
     assert!(cov.denotes(ca(1).tumbler()));
     assert!(cov.denotes(ca(3).tumbler()));
     assert!(!cov.denotes(ca(4).tumbler()));

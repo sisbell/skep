@@ -38,12 +38,7 @@ use skep_address::{intersect, shift, validate, Address, Nat, Span, Tumbler};
 /// struct literal nor mutate one it holds — including an OWNED `Run` that
 /// `resolve` returns or that a caller clones out of `content_runs` or
 /// `link_runs` — so runs are read-only across every seam (M6/M7/M8 read via
-/// the [`i_start`](Run::i_start)/[`width`](Run::width) accessors). In-crate,
-/// ONE site mutates a built `Run`: `extend_or_push_run` widens the
-/// accumulator's last run by the width of an I-adjacent one — a positive
-/// width added to a positive width, the start untouched — so both invariants
-/// survive it. A second mutation site joins this sentence or the invariant is
-/// re-examined.
+/// the [`i_start`](Run::i_start)/[`width`](Run::width) accessors).
 /// [`Run::new`] is the sole foreign constructor, and it is also the
 /// DESERIALIZATION path: a decoded Run re-enters it through the serde shadow
 /// below, so a journalled [`ContentPlace`](crate::M5Rec::ContentPlace) cannot
@@ -63,6 +58,9 @@ use skep_address::{intersect, shift, validate, Address, Nat, Span, Tumbler};
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(try_from = "RunShadow")]
 pub struct Run {
+    // Crate-visible so the run-list and the run union build and widen runs
+    // without the checked door; `Run::admits_start` lists those sites and what
+    // each keeps (ARCHITECTURE.md §The arrangement, "One door for a run").
     pub(crate) i_start: Address,
     pub(crate) width: Nat,
 }
@@ -190,6 +188,25 @@ impl Run {
     /// subdivision T7 leaves open whose last component is not an ordinal
     /// either. In both cases the ordinal advance of [`tumbler_at`](Run::tumbler_at)
     /// would move something that is not an ordinal.
+    ///
+    /// THE CRATE'S OWN SITES build or widen a `Run` without [`Run::new`], each
+    /// keeping both invariants by its own argument; a new site joins this
+    /// list, or the invariants are re-examined. The PROPAGATING sites build by
+    /// struct literal from a start that already is a full element position —
+    /// another run's start, or an in-crate ordinal shift of one, which keeps
+    /// the element field's two components: the run-list's split
+    /// (`split_runs`, both halves of a boundary run), its one clip
+    /// (`RunList::clipped_runs`, under every range and suffix walk: `resolve`,
+    /// the shot's carried tail, the address form read at the member), and a
+    /// run union's merged pieces (`UnionPiece::to_run`). The ORIGINATING sites
+    /// establish it at their own door: `allocate_for_placement` — INSERT's
+    /// per-value step, which the shot's re-insert shares — places what
+    /// `M3State::mint_content` returns, `doc·0·s_C·ordinal` by construction,
+    /// and the `LinkSeat` fold mints through [`Run::new`], since a replayed
+    /// record's `Address` re-enters only M1's `validate` and T4-validity does
+    /// not imply a full element position. ONE site widens a built run:
+    /// `extend_or_push_run`, a positive width added to a positive width, the
+    /// start untouched.
     pub(crate) fn admits_start(a: &Address) -> bool {
         a.element_field().is_some_and(|e| e.len() == 2)
     }
@@ -201,25 +218,6 @@ impl Run {
     /// own emission sites walks through here, an external producer and a
     /// decoded journal or checkpoint alike — the serde `try_from` shadow
     /// routes deserialization into this function.
-    ///
-    /// M5's own sites divide in two. The PROPAGATING ones — the run-list's
-    /// split (`split_runs`, both halves of a boundary run), its one clip
-    /// (`RunList::clipped_runs`, under every range and suffix walk: `resolve`,
-    /// the shot's carried tail, the address form read at the member), and a
-    /// run union's merged pieces (`UnionPiece::to_run`) — build Runs by the
-    /// in-crate struct literal from a start that is already one: another run's
-    /// start, which this type holds to be one, or an in-crate ordinal shift of
-    /// one, and such a shift preserves the element field's length. Coalescing
-    /// builds no Run: it widens one, at the one mutation site the type's card
-    /// names. The two
-    /// ORIGINATING ones establish it instead, and each does so at its own
-    /// door: `allocate_for_placement` — INSERT's per-value step, which the
-    /// publish shot's re-insert shares — places what `M3State::mint_content`
-    /// returns, which is `doc·0·s_C·ordinal` by construction, and the
-    /// `LinkSeat` fold seats an address that arrives in a record, so it calls
-    /// THIS function — `stage_seat_link` checks the shape on the live path,
-    /// but a replayed record's `Address` re-enters only M1's `validate`, and
-    /// T4-validity does not imply a full element position.
     ///
     /// Field privacy then closes the mutate-after-obtain path: a foreign
     /// holder cannot later set `width = 0` or swap `i_start` on any Run it

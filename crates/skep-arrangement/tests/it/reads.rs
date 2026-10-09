@@ -84,8 +84,11 @@ fn mixed_length_transclusion_flows_through_the_level_class_discipline() {
         assert_eq!(runs.len(), 2); // cross-length runs never coalesce
         assert_eq!(runs[0].i_start(), &pca(1));
         assert_eq!(runs[1].i_start(), &vca(1));
-        // image hands back the RAW mixed-length cover.
-        let cov = m5.image(&doc2(), &vspan(1, 1, 4));
+        // The resolution's lift is the RAW mixed-length cover.
+        let cov: SpanSet = m5
+            .iter_resolve(&doc2(), &vspan(1, 1, 4))
+            .map(|r| r.iextent())
+            .collect();
         let lens: Vec<usize> = cov.iter().map(|span| span.start().len()).collect();
         assert_eq!(lens, vec![8, 9]);
         // project is fault-free under a cross-length prefix cover: pdoc's

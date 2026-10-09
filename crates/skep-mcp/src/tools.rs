@@ -5,9 +5,13 @@
 //! `--tools-file`. Loading cross-checks the catalog against the dispatch
 //! table in BOTH directions, so the file and the code cannot drift
 //! silently: a file entry the dispatch doesn't know refuses startup, and a
-//! dispatch op the file doesn't name refuses startup.
+//! dispatch op the file doesn't name refuses startup. `wire_frame` maps a
+//! tool call onto its frame from that same table, so the table the catalog
+//! is checked against is the one calls are dispatched by; and
+//! `Tools::append_commons` fills the commons template in beside the check
+//! on its placeholder.
 
-use serde_json::Value;
+use serde_json::{Map, Value};
 
 /// The shipped catalog (`tools.json` beside `Cargo.toml`).
 pub const EMBEDDED: &str = include_str!("../tools.json");
@@ -18,7 +22,7 @@ pub const SESSION_INFO: &str = "session_info";
 
 /// Every wire operation the dispatch maps, exactly the wire's snake_case
 /// op names (wire.md §Operations): the tool name IS the frame's `op`.
-pub const WIRE_OPS: &[&str] = &[
+const WIRE_OPS: &[&str] = &[
     // Namespace.
     "create_new_document",
     "delegate",
@@ -67,10 +71,29 @@ pub const WIRE_OPS: &[&str] = &[
 
 /// The ops whose wire `from` argument rides as `from_` in the tool schema
 /// (harnesses that turn schemas into function parameters cannot always take
-/// `from`); dispatch renames it back mechanically. Only top-level argument
-/// names are affected — a `from` nested inside an object value is wire
-/// shape, untouched.
-pub const RENAMES_FROM: &[&str] = &["make_link", "emit"];
+/// `from`); `wire_frame` renames it back. Only top-level argument names are
+/// affected — a `from` nested inside an object value is wire shape,
+/// untouched.
+const RENAMES_FROM: &[&str] = &["make_link", "emit"];
+
+/// A tool call's wire frame — the crate's first rule, in one place: the
+/// name IS the frame's `op`, the arguments ARE the frame, and on the
+/// `RENAMES_FROM` ops a top-level `from_` rides back as `from`. `None` for
+/// a name that is no wire op, `session_info` included.
+pub fn wire_frame(name: &str, mut args: Map<String, Value>) -> Option<Vec<u8>> {
+    if !WIRE_OPS.contains(&name) {
+        return None;
+    }
+    if RENAMES_FROM.contains(&name) {
+        if let Some(v) = args.remove("from_") {
+            args.insert("from".to_string(), v);
+        }
+    }
+    args.insert("op".to_string(), Value::String(name.to_string()));
+    let frame = serde_json::to_vec(&Value::Object(args))
+        .expect("serializing a serde_json::Value cannot fail");
+    Some(frame)
+}
 
 /// One catalog entry. Order is preserved: `tools/list` answers in file
 /// order.
@@ -81,13 +104,29 @@ pub struct Tool {
     pub input_schema: Value,
 }
 
+/// The substitution point in `commons_instructions`: `load` refuses a
+/// template without one, and `Tools::append_commons` replaces every one.
+const ADDR_PLACEHOLDER: &str = "{addr}";
+
 #[derive(Debug)]
 pub struct Tools {
     pub instructions: String,
-    /// The sentence appended to `instructions` when `SKEP_COMMONS` names a
-    /// link-type registry document; `{addr}` is the substitution point.
-    pub commons_instructions: String,
+    /// The sentence `append_commons` adds to `instructions` when
+    /// `SKEP_COMMONS` names a link-type registry document; `{addr}` is the
+    /// substitution point.
+    commons_instructions: String,
     pub tools: Vec<Tool>,
+}
+
+impl Tools {
+    /// Point the instructions at a link-type registry document: the
+    /// commons template with every `{addr}` replaced by `addr`, appended
+    /// after a blank line.
+    pub fn append_commons(&mut self, addr: &str) {
+        let sentence = self.commons_instructions.replace(ADDR_PLACEHOLDER, addr);
+        self.instructions.push_str("\n\n");
+        self.instructions.push_str(&sentence);
+    }
 }
 
 /// Parse and validate one catalog. Every fault is a startup error carrying
@@ -116,8 +155,10 @@ pub fn load(text: &str) -> Result<Tools, String> {
         .and_then(Value::as_str)
         .ok_or("missing string field 'commons_instructions'")?
         .to_string();
-    if !commons_instructions.contains("{addr}") {
-        return Err("'commons_instructions' must contain the '{addr}' placeholder".into());
+    if !commons_instructions.contains(ADDR_PLACEHOLDER) {
+        return Err(format!(
+            "'commons_instructions' must contain the '{ADDR_PLACEHOLDER}' placeholder"
+        ));
     }
     let entries =
         root.get("tools").and_then(Value::as_array).ok_or("missing array field 'tools'")?;
@@ -223,6 +264,44 @@ mod tests {
         v["commons_instructions"] = json!("a sentence with no substitution point");
         let err = load(&v.to_string()).expect_err("must refuse");
         assert!(err.contains("{addr}"), "error names the placeholder: {err}");
+    }
+
+    /// The template is filled in where its placeholder is checked: every
+    /// `{addr}` takes the address, and the sentence follows a blank line.
+    #[test]
+    fn append_commons_fills_every_placeholder() {
+        let mut t = Tools {
+            instructions: "Base.".to_string(),
+            commons_instructions: "Registry at {addr}; defines is {addr}.0.3.50.".to_string(),
+            tools: Vec::new(),
+        };
+        t.append_commons("1.0.2.0.9");
+        assert_eq!(t.instructions, "Base.\n\nRegistry at 1.0.2.0.9; defines is 1.0.2.0.9.0.3.50.");
+    }
+
+    /// The first rule, whole: the name rides as `op` (over any `op` the
+    /// arguments carry), a top-level `from_` comes back as `from` on the
+    /// renaming ops and nowhere else, a nested `from_` is wire shape, and a
+    /// name that is no wire op has no frame.
+    #[test]
+    fn wire_frame_is_the_first_rule() {
+        let frame = |name: &str, args: Value| -> Option<Value> {
+            let Value::Object(args) = args else { panic!("arguments are an object") };
+            wire_frame(name, args).map(|f| serde_json::from_slice(&f).expect("a JSON frame"))
+        };
+        for op in ["make_link", "emit"] {
+            assert_eq!(
+                frame(op, json!({"from_": "1.1", "to": [{"from_": "x"}]})),
+                Some(json!({"op": op, "from": "1.1", "to": [{"from_": "x"}]})),
+                "{op} renames its top-level from_"
+            );
+        }
+        assert_eq!(
+            frame("insert", json!({"from_": "1.1", "op": "delete"})),
+            Some(json!({"op": "insert", "from_": "1.1"}))
+        );
+        assert_eq!(frame(SESSION_INFO, json!({})), None);
+        assert_eq!(frame("frobnicate", json!({})), None);
     }
 
     #[test]

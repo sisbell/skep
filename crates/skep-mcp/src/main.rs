@@ -17,13 +17,14 @@
 //!   token. That is the only retry logic anywhere.
 //!
 //! `server.rs` is the MCP side: the stdio loop, the JSON-RPC dispatch, and
-//! `call`, which keeps the first two rules. `daemon.rs` is the skepd side:
-//! the principal, the session token — which no other module can read — and
-//! the one resend of the third. `http.rs` is the written-out HTTP/1.1
-//! client every exchange with skepd goes through. `tools.rs` holds the
-//! catalog (`tools.json`, embedded) and the dispatch table it is checked
-//! against when loaded. This file is startup: flags, environment, the
-//! `SKEP_COMMONS` check.
+//! `call`, which keeps the second rule. `daemon.rs` is the skepd side: the
+//! principal, the session token — which no other module can read — the one
+//! resend of the third rule, and every exchange the adapter has with skepd.
+//! `http.rs` is the written-out HTTP/1.1 client those exchanges go through.
+//! `tools.rs` holds the catalog (`tools.json`, embedded) with its commons
+//! sentence, the dispatch table the catalog is checked against when loaded,
+//! and the first rule's mapping of a tool call onto a wire frame. This file
+//! is startup: flags, environment, the `SKEP_COMMONS` check.
 //!
 //! stdout is protocol-only; all logging goes to stderr. Stdin EOF is the
 //! clean exit.
@@ -111,9 +112,7 @@ fn main() {
         Err(_) => None,
     };
     if let Some(addr) = &commons {
-        let sentence = catalog.commons_instructions.replace("{addr}", addr);
-        catalog.instructions.push_str("\n\n");
-        catalog.instructions.push_str(&sentence);
+        catalog.append_commons(addr);
     }
     eprintln!(
         "skep-mcp: skepd at http://{}, principal {principal}, {} tools{}",

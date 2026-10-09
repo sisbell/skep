@@ -57,6 +57,13 @@ impl Mcp {
         stdin.flush().expect("flush to adapter");
     }
 
+    /// Raw bytes onto the adapter's stdin — for a line no `&str` can hold.
+    fn send_bytes(&mut self, bytes: &[u8]) {
+        let stdin = self.stdin.as_mut().expect("stdin open");
+        stdin.write_all(bytes).expect("write to adapter");
+        stdin.flush().expect("flush to adapter");
+    }
+
     fn read_message(&mut self) -> Value {
         let mut line = String::new();
         loop {
@@ -328,6 +335,14 @@ fn lifecycle_create_insert_retrieve_link_and_rejections() {
     assert!(v["id"].is_null(), "parse errors carry id null: {v}");
     let v = mcp.request("ping", json!({}));
     assert_eq!(v["result"], json!({}), "the adapter survives malformed input");
+
+    // A line that is not UTF-8 is a parse error too, never the end of stdin.
+    mcp.send_bytes(b"\xff\xfe\n");
+    let v = mcp.read_message();
+    assert_eq!(v["error"]["code"], json!(-32700), "non-UTF-8 parse error: {v}");
+    assert!(v["id"].is_null(), "parse errors carry id null: {v}");
+    let v = mcp.request("ping", json!({}));
+    assert_eq!(v["result"], json!({}), "the adapter survives a non-UTF-8 line");
 
     sd.shutdown();
 }

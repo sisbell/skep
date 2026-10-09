@@ -6,7 +6,7 @@ use std::io::{BufRead, Write};
 use serde_json::{json, Map, Value};
 
 use crate::daemon::Skepd;
-use crate::tools::{Tools, RENAMES_FROM, SESSION_INFO, WIRE_OPS};
+use crate::tools::{wire_frame, Tools, SESSION_INFO};
 
 /// When the client's `initialize` names no protocolVersion (it always
 /// should), answer the newest revision this server was written against.
@@ -19,12 +19,14 @@ pub struct Server {
 
 impl Server {
     /// The stdio loop: one JSON-RPC message per line in, one per line out,
-    /// nothing else ever on stdout. EOF is the clean exit; a closed stdout
-    /// (the harness hung up) ends the process too.
+    /// nothing else ever on stdout. EOF is the clean exit; a failed read, or
+    /// a closed stdout (the harness hung up), ends the process too. Each
+    /// line goes to `handle_line` as raw bytes: what a line is, its encoding
+    /// included, is that method's call.
     pub fn run(&mut self) {
         let stdin = std::io::stdin();
         let mut out = std::io::stdout();
-        for line in stdin.lock().lines() {
+        for line in stdin.lock().split(b'\n') {
             let line = match line {
                 Ok(l) => l,
                 Err(e) => {
@@ -32,9 +34,6 @@ impl Server {
                     return;
                 }
             };
-            if line.trim().is_empty() {
-                continue;
-            }
             let Some(reply) = self.handle_line(&line) else { continue };
             let mut bytes =
                 serde_json::to_vec(&reply).expect("serializing a serde_json::Value cannot fail");
@@ -45,11 +44,16 @@ impl Server {
         }
     }
 
-    /// One inbound line → at most one outbound message. `None` for
-    /// notifications (all consumed silently) and for id-less non-requests
-    /// there is nothing to answer.
-    fn handle_line(&mut self, line: &str) -> Option<Value> {
-        let msg: Value = match serde_json::from_str(line) {
+    /// One inbound line, as raw bytes → at most one outbound message.
+    /// `None` for a blank line, a notification (all consumed silently), a
+    /// stray response or an id-less non-request: there is nothing to
+    /// answer. A line that does not parse as JSON — bytes that are not
+    /// UTF-8 included — is the -32700 parse error, id null.
+    fn handle_line(&mut self, line: &[u8]) -> Option<Value> {
+        if std::str::from_utf8(line).is_ok_and(|s| s.trim().is_empty()) {
+            return None;
+        }
+        let msg: Value = match serde_json::from_slice(line) {
             Ok(v) => v,
             Err(e) => return Some(rpc_error(Value::Null, -32700, &format!("parse error: {e}"))),
         };
@@ -120,28 +124,19 @@ impl Server {
     /// result carrying skepd's document verbatim — rejections are data.
     /// `isError` is reserved for failing to reach skepd (and for a tool
     /// name outside the catalog, which reaches nothing).
-    fn call(&mut self, name: &str, mut args: Map<String, Value>) -> Value {
+    fn call(&mut self, name: &str, args: Map<String, Value>) -> Value {
         if name == SESSION_INFO {
             return match self.session_info() {
                 Ok(doc) => tool_text(doc.to_string(), false),
                 Err(e) => tool_text(e, true),
             };
         }
-        if !WIRE_OPS.contains(&name) {
+        let Some(frame) = wire_frame(name, args) else {
             return tool_text(
                 format!("unknown tool '{name}'; tools/list names the available tools"),
                 true,
             );
-        }
-        // The one schema→wire mapping: `from_` rides for the wire's `from`.
-        if RENAMES_FROM.contains(&name) {
-            if let Some(v) = args.remove("from_") {
-                args.insert("from".to_string(), v);
-            }
-        }
-        args.insert("op".to_string(), Value::String(name.to_string()));
-        let frame = serde_json::to_vec(&Value::Object(args))
-            .expect("serializing a serde_json::Value cannot fail");
+        };
         match self.skepd.op(&frame) {
             Ok(body) => tool_text(String::from_utf8_lossy(&body).into_owned(), false),
             Err(e) => tool_text(e, true),
@@ -152,21 +147,8 @@ impl Server {
     /// account (`principal_prefix`; null until delegated), and the daemon's
     /// health document.
     fn session_info(&mut self) -> Result<Value, String> {
-        let frame =
-            format!("{{\"op\":\"principal_prefix\",\"principal\":{}}}", self.skepd.principal());
-        let body = self.skepd.op(frame.as_bytes())?;
-        let resolved: Value = serde_json::from_slice(&body)
-            .map_err(|e| format!("principal_prefix answer is not JSON: {e}"))?;
-        let account = resolved.get("addr").cloned().unwrap_or(Value::Null);
-        let (status, hbody) = self.skepd.http().request("GET", "/health", None, b"")?;
-        if status != 200 {
-            return Err(format!(
-                "GET /health answered {status}: {}",
-                String::from_utf8_lossy(&hbody)
-            ));
-        }
-        let health: Value = serde_json::from_slice(&hbody)
-            .map_err(|e| format!("/health answer is not JSON: {e}"))?;
+        let account = self.skepd.account()?;
+        let health = self.skepd.health()?;
         Ok(json!({
             "account": account,
             "health": health,

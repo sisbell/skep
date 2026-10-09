@@ -336,11 +336,11 @@ fn the_handle_is_a_kernel_borrow_that_copies_and_prints() {
 /// dispatch holds no copy of it — so this suite is the one place M3's half is
 /// observed. An attested handle's `create_new_document` and `fork` commit
 /// under the value it carries; its `delegate` and `register_node`, outside
-/// the checked set, leave their slots empty whatever it carries; a plain
-/// handle's mint leaves its slot empty too; and the handle prints the arm it
-/// commits under, never the value. Over a journaled kernel, since an
-/// in-memory one keeps no marker. One attested handle serves four calls here
-/// to pin what the type does; a producer builds one per call
+/// the checked set, leave their signature slots empty whatever it carries; a
+/// plain handle's mint leaves its signature slot empty too; and the handle
+/// prints the arm it commits under, never the value. Over a journaled
+/// kernel, since an in-memory one keeps no marker. One attested handle serves
+/// four calls here to pin what the type does; a producer builds one per call
 /// (`Namespace::attested`'s obligation).
 #[test]
 fn an_attested_handle_signs_its_two_document_mints_alone() {
@@ -368,7 +368,7 @@ fn an_attested_handle_signs_its_two_document_mints_alone() {
         .create_new_document(ID1, &acct, None)
         .expect("a plain handle's create commits");
 
-    for (at, commit, slot) in [
+    for (at, commit, signature_slot) in [
         (delegated, "delegate", None),
         (admitted, "register_node", None),
         (created, "create_new_document", Some(attestation.clone())),
@@ -378,7 +378,7 @@ fn an_attested_handle_signs_its_two_document_mints_alone() {
         assert_eq!(
             k.attestation_at(at)
                 .expect("a journaled kernel reads its own markers"),
-            slot,
+            signature_slot,
             "{commit}: its marker's signature slot"
         );
     }

@@ -64,12 +64,12 @@ fn the_content_chain_of_the_ghost_home_document_never_issues_a_ghost_tumbler() {
             );
         }
         // The content-frontier read says the same of the empty chain: its next
-        // address is past the region, so on this one document the frontier is
+        // address is past the region, so on this one document its ordinal is
         // the mint count, zero, plus GHOST_POSITIONS + 1.
         assert_eq!(
             m3.next_content_address(&d1),
             Some(a(&[1, 1, 0, 1, 0, 1, 0, 1, GHOST_POSITIONS + 1])),
-            "the ghost home document's content frontier starts past the region"
+            "the ghost home document's next content address starts past the region"
         );
     }
 
@@ -98,7 +98,7 @@ fn the_content_chain_of_the_ghost_home_document_never_issues_a_ghost_tumbler() {
         );
     }
     assert!(m3.is_allocated(&a(&[1, 1, 0, 1, 0, 1, 0, 1, GHOST_POSITIONS + 1])));
-    // …and the content-frontier read is the mint count, seven, plus
+    // …and the content-frontier read's ordinal is the mint count, seven, plus
     // GHOST_POSITIONS + 1.
     assert_eq!(
         m3.next_content_address(&d1),
@@ -124,7 +124,8 @@ fn the_content_chain_of_the_ghost_home_document_never_issues_a_ghost_tumbler() {
         .create_new_document(SYSTEM_PRINCIPAL, &system_account(), None)
         .expect("doc 3");
     assert_eq!(d3, a(&[1, 1, 0, 1, 0, 3]));
-    // Its content-frontier read is the ordinary one: the mint count plus one.
+    // Its content-frontier read's ordinal is the ordinary one: the mint count
+    // plus one.
     assert_eq!(
         k.snapshot().world().m3().next_content_address(&d3),
         Some(a(&[1, 1, 0, 1, 0, 3, 0, 1, 1]))

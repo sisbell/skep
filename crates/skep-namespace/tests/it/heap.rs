@@ -13,9 +13,10 @@ use std::alloc::{GlobalAlloc, Layout, System};
 use std::cell::Cell;
 
 thread_local! {
-    // `const`-initialized, and a `Cell<u64>` needs no destructor, so the slot
-    // is a plain thread-local with no lazy initializer and no destructor to
-    // register: the allocator can touch it without reentering itself.
+    // `const`-initialized, and a `Cell<u64>` needs no destructor, so the
+    // counter is a plain thread-local with no lazy initializer and no
+    // destructor to register: the allocator can touch it without reentering
+    // itself.
     static HEAP_BYTES: Cell<u64> = const { Cell::new(0) };
 }
 

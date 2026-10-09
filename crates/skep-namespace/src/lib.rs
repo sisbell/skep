@@ -77,9 +77,9 @@
 //!   account, that entry by one lookup at its own account
 //!   \[ASN-0042 O1–O9\], id→prefix resolution and the walk of every seat
 //!   ([`M3State::principals`]), the four chain-end reads — the next-form
-//!   peek [`M3State::next_account_prefix`], the content chain's frontier
-//!   [`M3State::next_content_address`] (the content-frontier read's
-//!   answer, AUTH-6.38), the version chain's latest member
+//!   peek [`M3State::next_account_prefix`], the content chain's next
+//!   address [`M3State::next_content_address`] (the content-frontier
+//!   read's answer, AUTH-6.38), the version chain's latest member
 //!   [`M3State::latest_version`], and the emptiness of an account's
 //!   document chain [`M3State::has_documents`] — and the publication read
 //!   [`M3State::published`] and its enumeration [`M3State::documents`] —
@@ -127,12 +127,15 @@
 //!   one carve-out is the ghost region above, which is compiled format
 //!   rather than state: the skipped ordinals are never issued and never
 //!   members, on every board;
-//! * a publish op — none exists, in either direction: a document's
-//!   publication state is fixed at its mint and journaled on its own
-//!   allocation record, and no M3 function changes it (PUB-1.9, PUB-1.68).
-//!   The three-valued wire flag and the first-mint refusal at the daemon's
-//!   door (PUB-8.20) are the daemon's, and the exception set derived over the
-//!   bit (PUB-7.5) is the engine's (owner rulings D1/D2).
+//! * a publication transition — none exists, in either direction: a
+//!   document's publication state is fixed at its mint and journaled on its
+//!   own allocation record, and no M3 function changes it (PUB-1.9:
+//!   publication is at birth and forever; PUB-1.68). The `publish` op, M5's
+//!   publish shot, changes no bit either: it appends a NEW member to a
+//!   version chain, born published through [`M3State::mint_version`]. The
+//!   three-valued wire flag and the first-mint refusal at the daemon's door
+//!   (PUB-8.20) are the daemon's, and the exception set derived over the bit
+//!   (PUB-7.5) is the engine's (owner rulings D1/D2).
 //!
 //! ## Composition
 //!
@@ -140,10 +143,10 @@
 //! `World`/`Record`: the engine implements [`HasM3`] for its
 //! `W: WorldState` (the read accessor), lifts M3's deltas via
 //! `impl From<M3Rec> for W::Record` (the write-side mirror), and dispatches
-//! its `Record::M3` variant into the fold [`M3State::apply_m3`]. M3's slice
-//! is fully serialized — nothing skip-serialized — so it takes M2's default
-//! `rebuild_derived`: restored verbatim from the loaded checkpoint, then
-//! advanced by replaying the post-checkpoint records.
+//! the variant that carries an [`M3Rec`] into the fold [`M3State::apply_m3`].
+//! M3's slice is fully serialized — nothing skip-serialized — so it takes
+//! M2's default `rebuild_derived`: restored verbatim from the loaded
+//! checkpoint, then advanced by replaying the post-checkpoint records.
 
 #![forbid(unsafe_code)]
 

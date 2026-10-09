@@ -34,7 +34,7 @@ fn create_and_read(
 
 /// PUB-8.21, the create-path default, resolved by `create_new_document` and
 /// never by the mint: a FLAGLESS first mint into an empty account is honored
-/// born PUBLISHED (PUB-1.17: the home) — the Allocate the mint stamps carries
+/// born PUBLISHED as doc 1 (PUB-1.17) — the Allocate the mint stamps carries
 /// `true`, the fold's map holds `true`, and `published` answers `true`.
 #[test]
 fn a_flagless_first_create_is_born_published() {
@@ -139,7 +139,7 @@ fn a_create_into_a_non_empty_account_is_private_unless_flagged() {
 /// so this is the near miss the rule has not been handed — and the one a read
 /// of "a registered document under the prefix" (the publication map holds
 /// exactly those), or of the sub-account chain anchored at the same tumbler,
-/// gets wrong, minting the home private.
+/// gets wrong, minting doc 1 private.
 #[test]
 fn a_sub_accounts_documents_leave_its_parent_empty() {
     let k = mem_kernel(genesis_world());

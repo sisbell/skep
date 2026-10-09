@@ -120,19 +120,21 @@ pub enum M3Rec {
     /// replay reconstructs the world that committed and not a re-derivation
     /// from the op's arguments — and [`M3State::apply_m3`] folds it into the
     /// publication map for a Document-tier `addr` (a version is a document
-    /// too). IMMUTABLE after mint: no op changes it, there is no publish op in
-    /// either direction (PUB-1.9, PUB-1.68), and no LATER record changes it
-    /// either — the fold writes the entry only where none is held, so a second
-    /// `Allocate` naming a registered document leaves its bit alone. Outside the
-    /// document tier — an account, a content or link element — publication is
-    /// not a property of the address at all (PUB-1.68: one bit per DOCUMENT);
-    /// those mints stamp `NO_PUBLICATION_STATE` (`false`) and the fold does
-    /// not read it. NON-OPTIONAL by design (PUB-7.8) — no `Option`, no
-    /// `#[serde(default)]`: a frame written before the bit existed ends where
-    /// the bit should begin, and that end-of-input is the refusal. M2 then
-    /// replays from an older start point or refuses to serve (PUB-7.9); the
-    /// frame is never read as private or as published by a default it never
-    /// carried (PUB-1.2: no grandfather clause).
+    /// too). IMMUTABLE after mint: no op changes it — there is no publication
+    /// transition in either direction, and the publish shot mints a new member
+    /// rather than changing one (PUB-1.9, PUB-1.68) — and no LATER record
+    /// changes it either: the fold writes the entry only where none is held,
+    /// so a second `Allocate` naming a registered document leaves its bit
+    /// alone. Outside the document tier — an account, a content or link
+    /// element — publication is not a property of the address at all
+    /// (PUB-1.68: one bit per DOCUMENT); those mints stamp
+    /// `NO_PUBLICATION_STATE` (`false`) and the fold does not read it.
+    /// NON-OPTIONAL by design (PUB-7.8) — no `Option`, no `#[serde(default)]`:
+    /// a frame written before the bit existed ends where the bit should begin,
+    /// and that end-of-input is the refusal. M2 then replays from an older
+    /// start point or refuses to serve (PUB-7.9); the frame is never read as
+    /// private or as published by a default it never carried (PUB-1.2: no
+    /// grandfather clause).
     Allocate {
         #[serde(deserialize_with = "parented_address")]
         addr: Address,
@@ -352,12 +354,13 @@ pub struct M3State {
     /// never a second). Keyed by document address, versions included (a
     /// version is a registered Document); the value is the RESOLVED bit its
     /// minting `Allocate` journaled (PUB-7.10), folded by
-    /// [`M3State::apply_m3`] and written by nothing else: there is no publish
-    /// op and no transition (PUB-1.9, PUB-1.11), so an entry is written once,
-    /// at mint, and stands forever. AUTHORITATIVE working state like its
-    /// three siblings — an ordinary serde field, restored from the checkpoint
-    /// and advanced by replay, never `#[serde(skip)]` — and the engine's
-    /// exception set (PUB-7.5) is a derived membership index OVER it
+    /// [`M3State::apply_m3`] and written by nothing else: there is no
+    /// publication transition (PUB-1.9, PUB-1.11) — the publish shot mints a
+    /// new member born published rather than changing an entry — so an entry
+    /// is written once, at mint, and stands forever. AUTHORITATIVE working
+    /// state like its three siblings — an ordinary serde field, restored from
+    /// the checkpoint and advanced by replay, never `#[serde(skip)]` — and the
+    /// engine's exception set (PUB-7.5) is a derived membership index OVER it
     /// (PUB-7.7), answerable off this map at the one-lookup cost
     /// [`M3State::published`] pays, and seeded by one walk of it,
     /// [`M3State::documents`].
@@ -413,7 +416,7 @@ pub struct M3State {
 /// or large-magnitude entry lengthens every later `nodes` probe.
 ///
 /// What the cap closes is the per-component FIXED overhead: each component
-/// occupies a `Vec<Nat>` slot plus its own heap magnitude allocation — ~32
+/// occupies a `Vec<Nat>` element plus its own heap magnitude allocation — ~32
 /// bytes resident — against ~2 bytes of dotted decimal to supply, so a small
 /// component is a ~16× permanent, replicated charge. 32 leaves an order of
 /// magnitude over any physical provisioning hierarchy (one component per
@@ -591,21 +594,21 @@ impl M3State {
         seed.iter().fold(roots, |s, r| s.apply_m3(r))
     }
 
-    /// M3's fold — `pub`: the engine crate wires `World::apply`'s `Record::M3`
-    /// dispatch to this. TOTALITY DOMAIN (M2's total-apply obligation, stated
-    /// here at the seam the engine wires): total — deterministic,
-    /// side-effect-free, panic-free — over every record whose `Allocate`
-    /// address BOTH extends a parent AND carries its namespace's effective
-    /// frontier + 1 as its ordinal (effective = `max(frontier, floor)`; the
-    /// floor is nonzero only for the ghost content namespace —
-    /// `ghost_floor`). A mint's record is such a record wherever it is
-    /// staged as [`M3Rec::Allocate`] requires — against the working state the
-    /// mint read: a mint extends a REGISTERED parent and emits exactly
-    /// `c_{m+1}` of that state, past the floor. That the parent is REGISTERED
-    /// (P8) is the mints' gate and no part of this domain: an `Allocate` under
-    /// an unregistered parent folds like any other, and that is the state
-    /// [`M3State::has_documents`] and [`M3State::latest_version`] answer by
-    /// their chains.
+    /// M3's fold — `pub`: the engine crate wires `World::apply`'s dispatch of
+    /// the variant carrying an [`M3Rec`] to this. TOTALITY DOMAIN (M2's
+    /// total-apply obligation, stated here at the seam the engine wires):
+    /// total — deterministic, side-effect-free, panic-free — over every record
+    /// whose `Allocate` address BOTH extends a parent AND carries its
+    /// namespace's effective frontier + 1 as its ordinal (effective =
+    /// `max(frontier, floor)`; the floor is nonzero only for the ghost content
+    /// namespace — `ghost_floor`). A mint's record is such a record wherever
+    /// it is staged as [`M3Rec::Allocate`] requires — against the working
+    /// state the mint read: a mint extends a REGISTERED parent and emits
+    /// exactly `c_{m+1}` of that state, past the floor. That the parent is
+    /// REGISTERED (P8) is the mints' gate and no part of this domain: an
+    /// `Allocate` under an unregistered parent folds like any other, and that
+    /// is the state [`M3State::has_documents`] and [`M3State::latest_version`]
+    /// answer by their chains.
     ///
     /// The two conditions differ in kind, and only the first is owed to the
     /// journal. Extending a parent is a fact about one field, so it is carried

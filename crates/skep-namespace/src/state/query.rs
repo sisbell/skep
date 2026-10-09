@@ -200,7 +200,9 @@ impl M3State {
     /// by membership MISS inverts that, and should say so where it is built.
     ///
     /// IMMUTABLE: no M3 function changes a document's bit after its mint —
-    /// there is no publish op, in either direction (PUB-1.9, PUB-1.68).
+    /// there is no publication transition, in either direction (PUB-1.9,
+    /// PUB-1.68), and the publish shot changes none either: it mints a NEW
+    /// member of a version chain, born published.
     pub fn published(&self, doc: &Address) -> bool {
         self.publication.get(doc).copied().unwrap_or(false)
     }

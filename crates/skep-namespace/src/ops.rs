@@ -47,13 +47,14 @@ pub struct Namespace<'k, W: WorldState> {
     /// THE ATTESTATION this handle's two document mints commit under (signed
     /// ops) — [`Namespace::create_new_document`] and [`Namespace::fork`],
     /// which opens that same transaction — the two ops of this surface in
-    /// the daemon's checked set, a mint born published signing an EMPTY body
-    /// over its parent account: handed to the kernel's `transact_attested`
-    /// arm at the one transaction each opens, filling THAT commit marker's
-    /// signature slot; `None` — the plain handle every other constructor
-    /// site builds — leaves the slot empty. A BORROW, so the handle stays
-    /// `Copy` and the value cannot outlive the caller that owns it; that an
-    /// attested handle serves ONE call is its producer's obligation, which
+    /// the daemon's checked set (skepd's name for the writes an attestation
+    /// is admitted on), a mint born published signing an EMPTY body over its
+    /// parent account: handed to the kernel's `transact_attested` arm at the
+    /// one transaction each opens, filling THAT commit marker's signature
+    /// slot; `None` — the plain handle every other constructor site builds —
+    /// leaves that signature slot empty. A BORROW, so the handle stays `Copy`
+    /// and the value cannot outlive the caller that owns it; that an attested
+    /// handle serves ONE call is its producer's obligation, which
     /// [`Namespace::attested`] states. `delegate` and `register_node` lie
     /// outside the checked set and take the plain arm whatever this field
     /// holds.
@@ -70,9 +71,10 @@ impl<'k, W: WorldState> Namespace<'k, W> {
     /// THE ATTESTED CONSTRUCTOR (signed ops; the attestation rides the
     /// handle, as M5's `Vstream::attested` and M7's `LinkWriter::attested`
     /// carry theirs): a handle whose `create_new_document` and `fork` commit
-    /// under `attest`. Its callers are the slot's producer set — M10's
-    /// dispatch, with a value the daemon's check admitted — and nothing
-    /// else; `None` is [`Namespace::new`].
+    /// under `attest`. Its callers are the signature slot's producer set (the
+    /// signed-ops design record §5.5) — M10's dispatch, with a value the
+    /// daemon's check admitted — and nothing else; `None` is
+    /// [`Namespace::new`].
     ///
     /// ONE CALL PER ATTESTED HANDLE is the PRODUCER's obligation, and the type
     /// does not hold it. An attestation signs ONE act — this principal, this
@@ -175,9 +177,9 @@ where
     ///
     /// THE ATTESTED ARM (signed ops): the transaction commits under the
     /// handle's attestation where it carries one — a mint born published is
-    /// a publish-class act, signed over its parent account — and with the
-    /// slot empty otherwise; the kernel's arm is `transact` itself under
-    /// `None`.
+    /// a publish-class act, signed over its parent account — and with its
+    /// commit marker's signature slot empty otherwise; the kernel's arm is
+    /// `transact` itself under `None`.
     pub fn create_new_document(
         &self,
         caller: PrincipalId,

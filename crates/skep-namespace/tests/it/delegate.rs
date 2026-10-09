@@ -339,16 +339,10 @@ fn delegate_rejection_order_is_pinned() {
     let seeded = World {
         m3: M3State::genesis()
             .apply_m3(&alloc(&[1, 0, 1]))
-            .apply_m3(&M3Rec::RegisterPrincipal {
-                prefix: a(&[1, 0, 1]),
-                id: ID1,
-            })
+            .apply_m3(&M3Rec::register_principal(a(&[1, 0, 1]), ID1))
             .apply_m3(&alloc(&[1, 0, 1, 1]))
             .apply_m3(&alloc(&[1, 0, 1, 1, 1]))
-            .apply_m3(&M3Rec::RegisterPrincipal {
-                prefix: a(&[1, 0, 1, 1, 1]),
-                id: ID2,
-            }),
+            .apply_m3(&M3Rec::register_principal(a(&[1, 0, 1, 1, 1]), ID2)),
     };
     let flanked_k = mem_kernel(seeded);
     let flanked_ns = Namespace::new(&flanked_k);
@@ -438,10 +432,7 @@ fn delegate_rejection_order_is_pinned() {
         m3: M3State::genesis()
             .apply_m3(&alloc(&[1, 0, 1]))
             .apply_m3(&alloc(&[1, 0, 1, 1]))
-            .apply_m3(&M3Rec::RegisterPrincipal {
-                prefix: a(&[1, 0, 1, 1]),
-                id: ID2,
-            }),
+            .apply_m3(&M3Rec::register_principal(a(&[1, 0, 1, 1]), ID2)),
     };
     let nested_k = mem_kernel(seeded);
     let nested_ns = Namespace::new(&nested_k);

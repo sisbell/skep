@@ -5,10 +5,12 @@
 //! journal, private here because the record's own decode is their one
 //! caller. The variant order is the journal format, as `M3State`'s field
 //! order is the checkpoint's: a variant is appended, never inserted or
-//! reordered. What a caller staging a mint's record owes is on
-//! [`M3Rec::Allocate`]; the `published` a non-document record carries,
-//! `NO_PUBLICATION_STATE`, is its producers' word and is declared beside
-//! them, in `state`.
+//! reordered. Every variant is sealed (`#[non_exhaustive]`), so no other
+//! crate builds a record; the `test-hooks` feature compiles in three
+//! constructors for the test suites that seed M3 state through the fold.
+//! What a caller staging a mint's record owes is on [`M3Rec::Allocate`]; the
+//! `published` a non-document record carries, `NO_PUBLICATION_STATE`, is its
+//! producers' word and is declared beside them, in `state`.
 //!
 //! [`M3State::apply_m3`]: crate::M3State::apply_m3
 
@@ -76,8 +78,76 @@ pub const SYSTEM_PRINCIPAL: PrincipalId = PrincipalId(9_000_000_000_000_000);
 /// enum itself: a variant added here decodes with no second edit, and the
 /// journal and checkpoint encoding is the enum's own.
 ///
+/// TWO SEALS, as on M5's `M5Rec` and M7's `LinkRec`. Each VARIANT is
+/// `#[non_exhaustive]`, so no crate but this one builds an `M3Rec` by struct
+/// literal: the mints, the four ops and genesis are its producers, and a
+/// composite in another crate stages the record a mint returned and writes
+/// no seat or frontier of its own. The four public mints are the only
+/// constructors a foreign crate can NAME, and not the only path it can
+/// REACH: the record derives `Deserialize`, as M2's journal requires, so
+/// bytes a foreign crate wrote decode into one. Such a record passes the two
+/// field doors above and meets a fold that writes a seat or a bit only once,
+/// but what its producer owes — the next ordinal, the seat beside an
+/// account, a fresh id — no door can check, so the fold's guarantees do not
+/// cover it. The TYPE is `#[non_exhaustive]` too, so a foreign `match`
+/// carries a `_` arm and a variant appended at the end costs it no build.
+/// Neither seal costs a reader anything: a foreign crate still lifts the
+/// record whole and binds a variant's fields through a pattern with `..`,
+/// and this crate's fold matches and destructures freely. The suites that
+/// seed M3 state through the fold — states no op produces among them — build
+/// their records with the `test-hooks` constructors, which a build that
+/// compiles no test does not contain.
+///
+/// The two seals as a foreign crate meets them, each a pair: the twin
+/// reaches a record through the mint that returns it and matches it, and the
+/// refusal differs from it in one place — the struct literal for the
+/// variant seal, the `_` arm a `match` over every variant leaves out for the
+/// type seal. A bare `compile_fail` is satisfied by ANY compile error, so
+/// the twin is what keeps each refusal a statement about its seal. (The
+/// error codes are checked on nightly only.)
+///
+/// ```
+/// use skep_namespace::{system_account, M3Rec, M3State};
+/// let (_, rec) = M3State::genesis()
+///     .mint_document(&system_account(), true)
+///     .expect("the system account mints");
+/// assert!(matches!(rec, M3Rec::Allocate { .. }));
+/// ```
+/// ```compile_fail,E0639
+/// use skep_namespace::{system_account, M3Rec, M3State};
+/// let (addr, _) = M3State::genesis()
+///     .mint_document(&system_account(), true)
+///     .expect("the system account mints");
+/// let rec = M3Rec::Allocate { addr, published: true };
+/// assert!(matches!(rec, M3Rec::Allocate { .. }));
+/// ```
+/// ```
+/// use skep_namespace::{system_account, M3Rec, M3State};
+/// let (_, rec) = M3State::genesis()
+///     .mint_document(&system_account(), true)
+///     .expect("the system account mints");
+/// let allocates = match rec {
+///     M3Rec::Allocate { .. } => true,
+///     M3Rec::RegisterNode { .. } | M3Rec::RegisterPrincipal { .. } => false,
+///     _ => false,
+/// };
+/// assert!(allocates);
+/// ```
+/// ```compile_fail,E0004
+/// use skep_namespace::{system_account, M3Rec, M3State};
+/// let (_, rec) = M3State::genesis()
+///     .mint_document(&system_account(), true)
+///     .expect("the system account mints");
+/// let allocates = match rec {
+///     M3Rec::Allocate { .. } => true,
+///     M3Rec::RegisterNode { .. } | M3Rec::RegisterPrincipal { .. } => false,
+/// };
+/// assert!(allocates);
+/// ```
+///
 /// [`M3State::apply_m3`]: crate::M3State::apply_m3
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub enum M3Rec {
     /// A mint's COMMIT HALF: advance the frontier of the chain `addr` lies on
     /// (§1) — this record is the only thing that moves a frontier — which is
@@ -134,12 +204,14 @@ pub enum M3Rec {
     ///
     /// [`M3State::apply_m3`]: crate::M3State::apply_m3
     /// [`M3State::is_allocated`]: crate::M3State::is_allocated
+    #[non_exhaustive]
     Allocate {
         #[serde(deserialize_with = "parented_address")]
         addr: Address,
         published: bool,
     },
     /// External node admission (ASN-0047 NodeBaptism; §7).
+    #[non_exhaustive]
     RegisterNode { addr: Address },
     /// Delegation's principal half (§6). Written once: the fold leaves an
     /// already-seated prefix's principal alone (O12/O13), so no later record
@@ -156,15 +228,45 @@ pub enum M3Rec {
     /// allocation, the record seats an account no chain holds, and the
     /// owner-of-address read (AUTH-6.37) then calls that account allocated;
     /// staged under a carried id, it makes [`M3State::principal_prefix`]
-    /// arbitrary. Any other producer owes both clauses, and no type enforces
-    /// them.
+    /// arbitrary. A producer this crate adds owes both clauses, and no other
+    /// crate can be one: the variant is sealed ([`M3Rec`]), and the
+    /// `test-hooks` constructor that builds one unchecked is default-off,
+    /// turned on only on dev-dependency lines.
     ///
     /// [`M3State::principal_prefix`]: crate::M3State::principal_prefix
+    #[non_exhaustive]
     RegisterPrincipal {
         #[serde(deserialize_with = "account_tier_prefix")]
         prefix: Address,
         id: PrincipalId,
     },
+}
+
+/// The record's three TEST constructors (`test-hooks`, default off): the one
+/// way a crate other than this one builds an `M3Rec`, for the suites that
+/// seed M3 state through the fold — states no op produces among them, an
+/// account allocated without its seat, a seat below the account tier. Each
+/// builds its variant as given and checks nothing, as a struct literal
+/// inside this crate does. The feature is turned on only on dev-dependency
+/// lines, so a build that compiles no test holds none of them, and a
+/// production path that reached for one would not compile.
+#[cfg(feature = "test-hooks")]
+#[doc(hidden)]
+impl M3Rec {
+    /// `Allocate { addr, published }`.
+    pub fn allocate(addr: Address, published: bool) -> M3Rec {
+        M3Rec::Allocate { addr, published }
+    }
+
+    /// `RegisterNode { addr }`.
+    pub fn register_node(addr: Address) -> M3Rec {
+        M3Rec::RegisterNode { addr }
+    }
+
+    /// `RegisterPrincipal { prefix, id }`.
+    pub fn register_principal(prefix: Address, id: PrincipalId) -> M3Rec {
+        M3Rec::RegisterPrincipal { prefix, id }
+    }
 }
 
 /// `Allocate.addr`'s at-rest door: M1's validating decode, then the standing

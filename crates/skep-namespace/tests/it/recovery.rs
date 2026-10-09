@@ -55,7 +55,7 @@ fn a_non_node_entry_in_the_node_registry_is_unreachable() {
     let s = [&acct, &doc, &ghost]
         .into_iter()
         .fold(M3State::genesis(), |s, addr| {
-            s.apply_m3(&M3Rec::RegisterNode { addr: addr.clone() })
+            s.apply_m3(&M3Rec::register_node(addr.clone()))
         });
     for addr in [&acct, &doc, &ghost] {
         assert!(
@@ -93,10 +93,7 @@ fn a_non_node_entry_in_the_node_registry_is_unreachable() {
 /// guard on both build profiles.
 #[test]
 fn a_replayed_seat_never_replaces_a_seated_principal() {
-    let s = M3State::genesis().apply_m3(&M3Rec::RegisterPrincipal {
-        prefix: system_account(),
-        id: ID1,
-    });
+    let s = M3State::genesis().apply_m3(&M3Rec::register_principal(system_account(), ID1));
     assert_eq!(s.effective_owner(&head_document()), Some(SYSTEM_PRINCIPAL));
     assert_eq!(
         s.principal_prefix(SYSTEM_PRINCIPAL),
@@ -110,10 +107,7 @@ fn a_replayed_seat_never_replaces_a_seated_principal() {
 
     // …and an account `delegate` seated, the same.
     let acct = a(&[1, 0, 1]);
-    let seat = |id| M3Rec::RegisterPrincipal {
-        prefix: acct.clone(),
-        id,
-    };
+    let seat = |id| M3Rec::register_principal(acct.clone(), id);
     let seated = M3State::genesis()
         .apply_m3(&alloc(&[1, 0, 1]))
         .apply_m3(&seat(ID1));
@@ -142,10 +136,7 @@ fn the_fold_leaves_the_seat_allocation_coupling_to_its_producers() {
     let (allocated, seated) = (a(&[1, 0, 1]), a(&[1, 0, 2]));
     let s = M3State::genesis()
         .apply_m3(&alloc(&[1, 0, 1]))
-        .apply_m3(&M3Rec::RegisterPrincipal {
-            prefix: seated.clone(),
-            id: ID2,
-        });
+        .apply_m3(&M3Rec::register_principal(seated.clone(), ID2));
 
     // Allocated and seated nowhere: ω climbs to π₀'s node seat, so the
     // owner-of-address read calls the account free, an owner above it owns
@@ -177,21 +168,12 @@ enum RawM3Rec {
 fn journaled_types_survive_serde_round_trips() {
     // M3Rec — the journal delta — through M2's actual wire format (bincode).
     let recs = [
-        M3Rec::Allocate {
-            addr: a(&[1, 0, 1]),
-            published: false,
-        },
+        M3Rec::allocate(a(&[1, 0, 1]), false),
         // A document's Allocate carries its resolved bit, and the bit rides
         // the round trip with it (PUB-7.8/7.10).
-        M3Rec::Allocate {
-            addr: a(&[1, 0, 1, 0, 1]),
-            published: true,
-        },
-        M3Rec::RegisterNode { addr: a(&[1, 7]) },
-        M3Rec::RegisterPrincipal {
-            prefix: a(&[1, 0, 1]),
-            id: ID1,
-        },
+        M3Rec::allocate(a(&[1, 0, 1, 0, 1]), true),
+        M3Rec::register_node(a(&[1, 7])),
+        M3Rec::register_principal(a(&[1, 0, 1]), ID1),
     ];
     for rec in &recs {
         let bytes = bincode::serialize(rec).expect("serialize M3Rec");
@@ -306,10 +288,7 @@ fn a_journal_frame_re_enters_only_through_its_field_doors() {
     assert_eq!(
         bincode::deserialize::<M3Rec>(&shortest_parented_frame)
             .expect("a two-component Allocate decodes"),
-        M3Rec::Allocate {
-            addr: a(&[1, 1]),
-            published: false,
-        }
+        M3Rec::allocate(a(&[1, 1]), false)
     );
     // …and RegisterNode is untouched by it: a one-component node is exactly
     // what that variant carries.
@@ -317,7 +296,7 @@ fn a_journal_frame_re_enters_only_through_its_field_doors() {
         .expect("serialize the raw shape");
     assert_eq!(
         bincode::deserialize::<M3Rec>(&bare_node_frame).expect("a bare node registers"),
-        M3Rec::RegisterNode { addr: a(&[7]) }
+        M3Rec::register_node(a(&[7]))
     );
 
     // A principal seats at an ACCOUNT prefix and nowhere else. `delegate` is
@@ -353,10 +332,7 @@ fn a_journal_frame_re_enters_only_through_its_field_doors() {
     .expect("serialize the raw shape");
     assert_eq!(
         bincode::deserialize::<M3Rec>(&sub_account_frame).expect("a sub-account seat decodes"),
-        M3Rec::RegisterPrincipal {
-            prefix: a(&[1, 0, 1, 1]),
-            id: ID2
-        }
+        M3Rec::register_principal(a(&[1, 0, 1, 1]), ID2)
     );
 
     // …and no door carries an op's CAP. `register_node` refuses a node past
@@ -375,29 +351,21 @@ fn a_journal_frame_re_enters_only_through_its_field_doors() {
             RawM3Rec::RegisterNode {
                 addr: t(&over_cap_node),
             },
-            M3Rec::RegisterNode {
-                addr: a(&over_cap_node),
-            },
+            M3Rec::register_node(a(&over_cap_node)),
         ),
         (
             RawM3Rec::Allocate {
                 addr: t(&over_cap_acct),
                 published: false,
             },
-            M3Rec::Allocate {
-                addr: a(&over_cap_acct),
-                published: false,
-            },
+            M3Rec::allocate(a(&over_cap_acct), false),
         ),
         (
             RawM3Rec::RegisterPrincipal {
                 prefix: t(&over_cap_acct),
                 id: ID2,
             },
-            M3Rec::RegisterPrincipal {
-                prefix: a(&over_cap_acct),
-                id: ID2,
-            },
+            M3Rec::register_principal(a(&over_cap_acct), ID2),
         ),
     ] {
         let frame = bincode::serialize(&raw).expect("serialize the raw shape");
@@ -421,15 +389,9 @@ fn a_journal_frame_re_enters_only_through_its_field_doors() {
 fn two_slices_holding_the_same_entries_encode_to_one_byte_string() {
     let accounts: Vec<Vec<u32>> = (1..=6).map(|i| vec![1, 0, i]).collect();
     let docs: Vec<Vec<u32>> = (1..=6).map(|i| vec![1, 0, i, 0, 1]).collect();
-    let seat = |i: usize| M3Rec::RegisterPrincipal {
-        prefix: a(&accounts[i]),
-        id: PrincipalId(10 + i as u64),
-    };
-    let document = |i: usize| M3Rec::Allocate {
-        addr: a(&docs[i]),
-        published: i.is_multiple_of(2),
-    };
-    let node = |n: u32| M3Rec::RegisterNode { addr: a(&[1, n]) };
+    let seat = |i: usize| M3Rec::register_principal(a(&accounts[i]), PrincipalId(10 + i as u64));
+    let document = |i: usize| M3Rec::allocate(a(&docs[i]), i.is_multiple_of(2));
+    let node = |n: u32| M3Rec::register_node(a(&[1, n]));
 
     // History X: account by account — its baptism, its seat, its document —
     // then the nodes 1.2..1.7 ascending.

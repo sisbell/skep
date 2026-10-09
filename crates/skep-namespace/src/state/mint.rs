@@ -133,9 +133,10 @@ impl M3State {
 // §A The five pure mints, covering the six chain families, since
 // `mint_account` serves both account-tier families (`A_account(N)` under a
 // node and the sub-account `(A, 1)` under an account, whose `g` the
-// chain-family rule picks). So every address M3 originates is minted here. Four are public and fold into M5/M7 composites
-// (M2 contract 3); the fifth, `mint_account`, is `pub(crate)` because
-// `delegate` is its only caller and lives in this crate.
+// chain-family rule picks). So every address M3 originates is minted here.
+// Four are public and fold into M5/M7 composites (M2 contract 3); the fifth,
+// `mint_account`, is `pub(crate)` because `delegate` is its only caller and
+// lives in this crate.
 //
 // Each is a query: called on a transaction's WORKING state, it checks one
 // structural precondition and hands back the next address on its chain

@@ -1120,7 +1120,10 @@ frontier arithmetic; beneath it, `state/mint.rs` holds the lock keys, the
 five mints (§A) and the two peeks — `next_account_prefix` and
 `next_content_address`, each its chain's mint without the record, kept
 beside the mints they call so the two files depend one way — and
-`state/query.rs` every other query (§C).
+`state/query.rs` every other query (§C). Its `test-hooks` feature (default
+off) compiles in `M3Rec`'s three test constructors, the one way another
+crate's suite builds a record; the doctest pairs on `M3Rec` pin the two
+seals a foreign crate meets.
 
 Rules that hold across its files:
 
@@ -1138,9 +1141,10 @@ Rules that hold across its files:
   folds its one account the same way. So a registered account is owned at
   exactly its own prefix, and so is every document in it — its owner
   account, which `M3State::account_seat` reads by one lookup. The fold
-  checks neither half: a second path that allocates an account owes the
-  same seat, and a second path that seats a principal owes its prefix's
-  allocation.
+  checks neither half, and only this crate builds a record — `M3Rec` and
+  each of its variants are `#[non_exhaustive]`, as `M5Rec`'s and
+  `LinkRec`'s are — so a second path that allocates an account, or seats a
+  principal, is one inside it and owes the other half.
 - **A namespace has one spelling.** `NsKey`'s fields are private to
   `src/ns.rs`, so every frontier key, and every chain lock key encoded from
   one, is built there. The two registry keys are M3's own, crate-private.

@@ -26,13 +26,7 @@ fn pure_mints_answer_the_next_address_on_each_documented_chain() {
     // The mint hands back exactly the Allocate for the minted address —
     // whole value, variant and payload alike; an element carries no
     // publication state, so the bit is the non-document mints' `false`.
-    assert_eq!(
-        rec,
-        M3Rec::Allocate {
-            addr: c1.clone(),
-            published: false,
-        }
-    );
+    assert_eq!(rec, M3Rec::allocate(c1.clone(), false));
     // Determinism (B2): a pure function of the frontier — same state, same
     // answer.
     assert_eq!(m3.mint_content(&doc).expect("repeat").0, c1);

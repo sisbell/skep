@@ -61,6 +61,10 @@ skep-content = { path = "../skep-content" }
 # under a plain `cargo test` or workspace run, no flag added. A build that
 # compiles no test never reads this table.
 skep-arrangement = { path = ".", features = ["test-hooks"] }
+# M3 again with `test-hooks` on: the unit and integration suites seed M3
+# state by folding records built with `M3Rec`'s test constructors, its
+# variants being sealed.
+skep-namespace = { path = "../skep-namespace", features = ["test-hooks"] }
 # bincode is M2's actual wire format — the round-trip tests exercise the real
 # journal/checkpoint encoding; tempfile hosts the durable-recovery test.
 bincode.workspace = true

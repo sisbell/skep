@@ -98,10 +98,7 @@ fn pdoc_member() -> Address {
 /// stages an empty placement — and pdoc's content elements stored at the
 /// ordinals in `present`.
 fn shot_kernel(member_runs: Vec<Run>, present: &[u32]) -> Kernel<ShotWorld> {
-    let m3 = seeded_m3().apply_m3(&M3Rec::Allocate {
-        addr: pdoc_member(),
-        published: true,
-    });
+    let m3 = seeded_m3().apply_m3(&M3Rec::allocate(pdoc_member(), true));
     let m5 = if member_runs.is_empty() {
         M5State::genesis()
     } else {

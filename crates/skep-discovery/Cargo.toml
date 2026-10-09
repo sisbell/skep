@@ -47,6 +47,9 @@ serde.workspace = true
 # Lets the test world drive M5's INSERT so the discovery queries have arranged
 # content to resolve (the skep-links test-scaffold precedent).
 skep-content = { path = "../skep-content" }
+# M3 again with `test-hooks` on: the suite seeds M3 state by folding records
+# built with `M3Rec`'s test constructors, its variants being sealed.
+skep-namespace = { path = "../skep-namespace", features = ["test-hooks"] }
 
 [lints.clippy]
 # A test that asserts a result succeeded unwraps it — `expect`, or `err()`

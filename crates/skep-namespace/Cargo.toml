@@ -8,6 +8,17 @@ license.workspace = true
 description = "M3 — the authoritative permanent name space: single minting authority (frontier allocation), entity registry, principal registry with ω ownership resolution, and each document's publication bit"
 readme = "README.md"
 
+[features]
+# `test-hooks` compiles in `M3Rec`'s three test constructors — `allocate`,
+# `register_node`, `register_principal` — the one way a crate other than this
+# one builds a record, every variant being `#[non_exhaustive]`. The suites
+# that seed M3 state through the fold build with them, some of it state no op
+# produces. DEFAULT-OFF: this crate's tests turn it on through the self
+# dev-dependency below, and the five crates whose suites seed M3 state on
+# their own dev-dependency lines, so a build that compiles no test compiles
+# none of it.
+test-hooks = []
+
 [dependencies]
 # The design's mandated shapes (§Core data model): persistent `im` collections
 # for the three authoritative registries and the publication map beside them
@@ -24,6 +35,11 @@ skep-address = { path = "../skep-address" }
 skep-kernel = { path = "../skep-kernel" }
 
 [dev-dependencies]
+# This crate itself with `test-hooks` on, so its integration tests
+# (tests/it, outside this library's `cfg(test)`) compile against the record's
+# test constructors under a plain `cargo test` or workspace run, no flag
+# added. A build that compiles no test never reads this table.
+skep-namespace = { path = ".", features = ["test-hooks"] }
 # bincode is M2's actual wire format — the round-trip tests exercise the real
 # journal/checkpoint encoding; tempfile hosts the durable-recovery test.
 bincode.workspace = true

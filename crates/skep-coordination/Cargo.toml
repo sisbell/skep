@@ -48,3 +48,6 @@ skep-links = { path = "../skep-links" }
 # The test world (the composition contract's assembler role, in miniature)
 # derives Serialize/Deserialize for M2's WorldState bound.
 serde.workspace = true
+# M3 again with `test-hooks` on: the suite seeds M3 state by folding records
+# built with `M3Rec`'s test constructors, its variants being sealed.
+skep-namespace = { path = "../skep-namespace", features = ["test-hooks"] }

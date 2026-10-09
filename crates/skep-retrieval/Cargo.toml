@@ -56,6 +56,9 @@ skep-arrangement = { path = "../skep-arrangement", features = ["test-hooks"] }
 # arrange a run whose origin is not a registered document, as RES-162's
 # unheld origin is at a mirror.
 skep-content = { path = "../skep-content", features = ["test-hooks"] }
+# M3 again with `test-hooks` on: the suite seeds M3 state by folding records
+# built with `M3Rec`'s test constructors, its variants being sealed.
+skep-namespace = { path = "../skep-namespace", features = ["test-hooks"] }
 # bincode is M2's actual wire format — the marshaling-policy tests serialize
 # M6's Serialize-only result/error types with it (M6 journals nothing, so
 # there is no round trip to test: no Deserialize anywhere by design).

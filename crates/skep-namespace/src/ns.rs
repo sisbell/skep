@@ -216,6 +216,7 @@ pub(crate) fn namespace_of(a: &Address) -> Option<NsKey> {
 // Each fixed family's `g` is what `generator` yields at that family's FIXED
 // tier pair, noted beside each constructor, so the variants below and the
 // chain-family rule cannot drift apart unnoticed.
+
 /// `b_C(d) = inc(d, 2)` — the content sub-allocator's anchor, named because
 /// [`link_ns`] is defined off it: `b_L(d) = inc(b_C(d), 0)` (§3).
 fn content_base(home: &Address) -> Tumbler {
@@ -251,6 +252,7 @@ pub(crate) fn link_ns(home: &Address) -> NsKey {
 pub(crate) fn is_content_or_link_slot(e: &Address) -> bool {
     matches!(e.element_field(), Some([s, _]) if *s == content_subspace() || *s == link_subspace())
 }
+
 pub(crate) fn version_ns(source: &Address) -> NsKey {
     // (source, 1) — Document → Document, the ASN-0123 separate chain.
     NsKey {

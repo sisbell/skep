@@ -37,6 +37,9 @@ skep-arrangement = { path = "../skep-arrangement" }
 # MAKELINK has arranged content to resolve.
 bincode.workspace = true
 skep-content = { path = "../skep-content" }
+# M3 again with `test-hooks` on: the suite seeds M3 state by folding records
+# built with `M3Rec`'s test constructors, its variants being sealed.
+skep-namespace = { path = "../skep-namespace", features = ["test-hooks"] }
 # The attested-handle case (signed ops) pins a FILLED marker slot, which
 # only a journaled kernel writes.
 tempfile.workspace = true

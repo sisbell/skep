@@ -116,17 +116,11 @@ fn in_closure_rejections_open_the_ops_own_transaction() {
     let seeded = World {
         m3: M3State::genesis()
             .apply_m3(&alloc(&[1, 0, 1]))
-            .apply_m3(&M3Rec::RegisterPrincipal {
-                prefix: a(&[1, 0, 1]),
-                id: ID1,
-            })
+            .apply_m3(&M3Rec::register_principal(a(&[1, 0, 1]), ID1))
             .apply_m3(&alloc(&[1, 0, 2]))
             .apply_m3(&alloc(&[1, 0, 3]))
             .apply_m3(&alloc(&[1, 0, 3, 1]))
-            .apply_m3(&M3Rec::RegisterPrincipal {
-                prefix: a(&[1, 0, 3, 1]),
-                id: PrincipalId(3),
-            }),
+            .apply_m3(&M3Rec::register_principal(a(&[1, 0, 3, 1]), PrincipalId(3))),
     };
     let k = mem_kernel(seeded);
     let ns = Namespace::new(&k);

@@ -61,10 +61,7 @@ pub fn a(comps: &[u32]) -> Address {
 /// value the non-document mints stamp themselves. A test ABOUT the bit builds
 /// its record explicitly.
 pub fn alloc(comps: &[u32]) -> M3Rec {
-    M3Rec::Allocate {
-        addr: a(comps),
-        published: false,
-    }
+    M3Rec::allocate(a(comps), false)
 }
 
 pub fn genesis_world() -> World {

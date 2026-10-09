@@ -102,8 +102,9 @@ fn each_slice_serializes_the_fields_the_format_count_names() {
 /// and the next state-contributing store's variant would sit most
 /// naturally in the MIDDLE of this list, which is the edit that costs.
 ///
-/// Three payloads come from their own stores' public constructors, so
-/// each index is read off a record a store really built. M7 seals its
+/// Three payloads come from their own stores' public steps — M3's
+/// `mint_document`, M4's `stage_write`, M5's `stage_seat_link` — so each
+/// index is read off a record a store really built. M7 seals its
 /// `Deposit` variant, so no crate but M7 can construct a [`LinkRec`] —
 /// the fourth index is pinned by what the decoder REFUSES instead. A bare
 /// tag naming a variant gets past the tag and runs out of payload (an
@@ -119,7 +120,9 @@ fn each_slice_serializes_the_fields_the_format_count_names() {
 #[test]
 fn the_central_record_lifts_each_store_to_its_own_variant_index() {
     let doc = addr(&[1, 0, 1, 0, 1]);
-    let namespace_rec = M3Rec::Allocate { addr: doc.clone(), published: false };
+    let (_, namespace_rec) = M3State::genesis()
+        .mint_document(&skep_namespace::system_account(), false)
+        .expect("the seeded system account mints a document");
     let content_rec = skep_content::stage_write(
         &ContentStore::default(),
         addr(&[1, 0, 1, 0, 1, 0, 1, 1]),

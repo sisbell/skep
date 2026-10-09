@@ -333,26 +333,11 @@ pub fn link(store: &LinkWriter<'_, World>, home: &Address, from: &[Address], to:
 /// publication state.
 pub fn seeded_m3() -> M3State {
     M3State::genesis()
-        .apply_m3(&M3Rec::Allocate {
-            addr: a(&[1, 0, 1]),
-            published: false,
-        })
-        .apply_m3(&M3Rec::RegisterPrincipal {
-            prefix: a(&[1, 0, 1]),
-            id: PrincipalId(1),
-        })
-        .apply_m3(&M3Rec::Allocate {
-            addr: a(&[1, 0, 1, 0, 1]),
-            published: false,
-        })
-        .apply_m3(&M3Rec::Allocate {
-            addr: a(&[1, 0, 1, 0, 2]),
-            published: false,
-        })
-        .apply_m3(&M3Rec::Allocate {
-            addr: a(&[1, 0, 1, 0, 3]),
-            published: true,
-        })
+        .apply_m3(&M3Rec::allocate(a(&[1, 0, 1]), false))
+        .apply_m3(&M3Rec::register_principal(a(&[1, 0, 1]), PrincipalId(1)))
+        .apply_m3(&M3Rec::allocate(a(&[1, 0, 1, 0, 1]), false))
+        .apply_m3(&M3Rec::allocate(a(&[1, 0, 1, 0, 2]), false))
+        .apply_m3(&M3Rec::allocate(a(&[1, 0, 1, 0, 3]), true))
 }
 
 pub fn genesis_world() -> World {

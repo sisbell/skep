@@ -463,7 +463,8 @@ impl M3State {
     /// path. A debug build fail-stops on the contiguity `debug_assert`; a
     /// release build folds the record as written, moving the frontier to its
     /// ordinal. What the fold trusts for both conditions is an IN-PROCESS
-    /// producer, which builds the variant directly.
+    /// producer, and [`M3Rec`]'s seal keeps every one inside this crate — the
+    /// mints, the ops and genesis — in a build that compiles no test.
     ///
     /// `Allocate`'s publication bit is folded for a DOCUMENT-tier address and
     /// read for no other (PUB-7.7's fold half, at M3's own allocation record:
@@ -522,8 +523,9 @@ impl M3State {
     /// is its sole producer on the journal; genesis folds one more —
     /// `SYSTEM_PRINCIPAL`'s seat, onto roots where only π₀'s id is live —
     /// before any delegation can run, and from then on `delegate`'s
-    /// `DuplicateId` gate refuses that id. Any other producer owes both
-    /// clauses, and no type enforces them.
+    /// `DuplicateId` gate refuses that id. A producer this crate adds owes
+    /// both clauses; [`M3Rec`]'s seal keeps every other crate from being one
+    /// in a build that compiles no test.
     #[must_use = "apply_m3 returns the folded slice; it does not modify the receiver"]
     pub fn apply_m3(&self, r: &M3Rec) -> M3State {
         let mut s = self.clone();

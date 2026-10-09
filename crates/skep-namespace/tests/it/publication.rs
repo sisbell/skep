@@ -62,13 +62,7 @@ fn a_flagless_first_create_is_born_published() {
         .mint_document(&acct, true)
         .expect("the empty account mints");
     assert_eq!(addr, slot);
-    assert_eq!(
-        rec,
-        M3Rec::Allocate {
-            addr: slot.clone(),
-            published: true,
-        }
-    );
+    assert_eq!(rec, M3Rec::allocate(slot.clone(), true));
     // …and folding that one record is the whole of what the op committed:
     // the map is written by the fold, in the same step as the registration.
     assert_eq!(before_create.apply_m3(&rec), *k.snapshot().world().m3());
@@ -208,13 +202,7 @@ fn mint_version_stamps_exactly_the_bit_passed() {
     // The record carries the bit verbatim, whole value, in both directions.
     for bit in [false, true] {
         let (next, rec) = m3.mint_version(&src, bit).expect("peek");
-        assert_eq!(
-            rec,
-            M3Rec::Allocate {
-                addr: next,
-                published: bit,
-            }
-        );
+        assert_eq!(rec, M3Rec::allocate(next, bit));
     }
 }
 
@@ -258,26 +246,16 @@ fn mint_document_applies_no_default_into_an_empty_account() {
 #[test]
 fn only_a_document_allocate_writes_the_publication_map() {
     let s = M3State::genesis()
-        .apply_m3(&M3Rec::Allocate {
-            addr: a(&[1, 0, 1]),
-            published: true, // an account: outside the axis, not read
-        })
-        .apply_m3(&M3Rec::Allocate {
-            addr: a(&[1, 0, 1, 0, 1]),
-            published: true,
-        })
-        .apply_m3(&M3Rec::Allocate {
-            addr: a(&[1, 0, 1, 0, 1, 0, 1, 1]),
-            published: true, // an element: outside the axis, not read
-        });
+        // An account, stamped `true`: outside the axis, not read.
+        .apply_m3(&M3Rec::allocate(a(&[1, 0, 1]), true))
+        .apply_m3(&M3Rec::allocate(a(&[1, 0, 1, 0, 1]), true))
+        // An element, stamped `true`: outside the axis, not read.
+        .apply_m3(&M3Rec::allocate(a(&[1, 0, 1, 0, 1, 0, 1, 1]), true));
     assert!(s.published(&a(&[1, 0, 1, 0, 1])));
     assert!(!s.published(&a(&[1, 0, 1])));
     assert!(!s.published(&a(&[1, 0, 1, 0, 1, 0, 1, 1])));
     // A version is a document, and its Allocate is folded like any other's.
-    let s = s.apply_m3(&M3Rec::Allocate {
-        addr: a(&[1, 0, 1, 0, 1, 1]),
-        published: false,
-    });
+    let s = s.apply_m3(&M3Rec::allocate(a(&[1, 0, 1, 0, 1, 1]), false));
     assert!(s.is_registered_document(&a(&[1, 0, 1, 0, 1, 1])));
     assert!(!s.published(&a(&[1, 0, 1, 0, 1, 1])));
     // The enumeration is the registered documents and nothing else — the
@@ -329,23 +307,16 @@ fn the_publication_walk_is_in_address_order_not_mint_order() {
         s.documents().collect::<Vec<_>>(),
         vec![(&seed_1, true), (&seed_h, true)]
     );
-    let s = s.apply_m3(&alloc(&[1, 0, 1])).apply_m3(&M3Rec::Allocate {
-        addr: d1.clone(),
-        published: true,
-    });
+    let s = s
+        .apply_m3(&alloc(&[1, 0, 1]))
+        .apply_m3(&M3Rec::allocate(d1.clone(), true));
     assert_eq!(
         s.documents().collect::<Vec<_>>(),
         vec![(&d1, true), (&seed_1, true), (&seed_h, true)]
     );
     let s = s
-        .apply_m3(&M3Rec::Allocate {
-            addr: d2.clone(),
-            published: false,
-        })
-        .apply_m3(&M3Rec::Allocate {
-            addr: v1.clone(),
-            published: true,
-        });
+        .apply_m3(&M3Rec::allocate(d2.clone(), false))
+        .apply_m3(&M3Rec::allocate(v1.clone(), true));
 
     // Address order — d1, then d1's version, then d2, then the seed — not the
     // mint order (seed), d1, d2, v1.
@@ -463,11 +434,8 @@ fn a_record_or_checkpoint_without_the_bit_fails_to_decode() {
     })
     .expect("serialize the old shape");
     for bit in [false, true] {
-        let new = bincode::serialize(&M3Rec::Allocate {
-            addr: doc.clone(),
-            published: bit,
-        })
-        .expect("serialize the current shape");
+        let new = bincode::serialize(&M3Rec::allocate(doc.clone(), bit))
+            .expect("serialize the current shape");
         assert_eq!(
             new,
             [old.as_slice(), &[u8::from(bit)][..]].concat(),

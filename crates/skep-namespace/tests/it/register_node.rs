@@ -130,9 +130,7 @@ fn register_node_validates_and_admits_supplied_addresses() {
     // deliberately does not carry the cap (an over-cap entry is a permanent
     // resource charge, and nothing more).
     let seeded = World {
-        m3: M3State::genesis().apply_m3(&M3Rec::RegisterNode {
-            addr: a(&over_cap_node),
-        }),
+        m3: M3State::genesis().apply_m3(&M3Rec::register_node(a(&over_cap_node))),
     };
     let over_cap_k = mem_kernel(seeded);
     assert_eq!(
@@ -144,7 +142,7 @@ fn register_node_validates_and_admits_supplied_addresses() {
     // the bootstrap lineage — a state `register_node` itself cannot reach,
     // so seed it through the fold.
     let seeded = World {
-        m3: M3State::genesis().apply_m3(&M3Rec::RegisterNode { addr: a(&[2]) }),
+        m3: M3State::genesis().apply_m3(&M3Rec::register_node(a(&[2]))),
     };
     let off_lineage_k = mem_kernel(seeded);
     assert_eq!(

@@ -117,3 +117,38 @@ fn every_per_tag_step_answers_for_exactly_the_tags_rule_names() {
     row_tags.sort_unstable();
     assert_eq!(rule_tags, row_tags, "a rule here for exactly the tags SIG_ALGS names");
 }
+
+/// THE ED25519 HALF A SIGNER HANDS OUT IS THE ONE ITS BLOBS CARRY: under
+/// either tag, the hook's bare Ed25519 signature over a message is the
+/// Ed25519 field of the blob `sign` makes over it, and passes RFC 8032's
+/// strict verify under the hook's verifying key — the Ed25519 half of the
+/// signer's own key. The suites' negative vector is this hook's, and skepd
+/// reads its refusal as the width's "and not a wrong key's"
+/// (`sign_session_ed25519_half_alone`): a hook that signed under another
+/// key, or signed nothing, would leave every cell that sends it green.
+#[test]
+fn the_ed25519_half_a_signer_hands_out_makes_its_blobs_ed25519_field() {
+    let msg = b"the entry frame";
+    for tag in [TAG_MLDSA65_ED25519, TAG_FNDSA512_PREVIEW_ED25519] {
+        let signer = HybridSigner::from_seed(tag, &[0x42; 32]).unwrap();
+        let half = signer.ed25519_signing_key();
+        let bare = half.sign(msg);
+        let pq_sig_len = signer.public_key().sig_alg_row().pq_sig_len;
+        assert_eq!(
+            bare[..],
+            signer.sign(msg)[pq_sig_len..],
+            "tag {tag}: the hook's bare signature is the blob's Ed25519 field"
+        );
+        assert_eq!(
+            &half.verifying_key(),
+            signer.public_key().ed25519_half(),
+            "tag {tag}: the hook's verifying key is the key's Ed25519 half"
+        );
+        let point = ed25519_dalek::VerifyingKey::from_bytes(&half.verifying_key())
+            .expect("a derived half is a point");
+        assert!(
+            point.verify_strict(msg, &ed25519_dalek::Signature::from_bytes(&bare)).is_ok(),
+            "tag {tag}: the hook's bare signature is RFC 8032's over the message"
+        );
+    }
+}

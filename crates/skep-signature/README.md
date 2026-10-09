@@ -22,8 +22,10 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
   fingerprint and the signatures over fixed entry frames; tag 1
   checked byte for byte against a second FIPS 204 implementation; and
   the keygen-from-seed rule as `docs/wire.md` publishes it — its
-  formula, recomputed from RFC 5869 against the KDF, and its two
-  vectors, checked against the keys themselves.
+  formula, recomputed from RFC 5869 against the KDF; its key and blob
+  layout, rebuilt from each half's own library and held to the signer
+  and the verify; and its two vectors, checked against the keys
+  themselves.
 
 The syntax — the tag table, the key layout, the fingerprint, the entry
 frame — is [skep-identity](../skep-identity)'s; this crate holds the

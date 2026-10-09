@@ -185,8 +185,8 @@ impl fmt::Debug for Seed {
 /// never a raw seed's (a seed is a [`Seed`], which is no key). It makes a
 /// bare Ed25519 signature, 64 bytes (wire.md §Sessions) — the suites' one
 /// negative vector, the classical layout no served board admits — and names
-/// its verifying key's 32 bytes, so a suite names this crate and never
-/// `ed25519-dalek`, which this crate alone links. Private-key material:
+/// its verifying key's 32 bytes, so another crate's suite names this crate and
+/// never `ed25519-dalek`, which this crate alone links. Private-key material:
 /// prints none of itself, wiped on drop (`ed25519-dalek`'s own). Its field
 /// is the crate's, so `HybridSigner::ed25519_signing_key` wraps a clone of
 /// the signer's own half.

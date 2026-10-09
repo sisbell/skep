@@ -2,8 +2,10 @@
 //! "the one crate that links the signature libraries", read off the
 //! workspace's resolved graph; the verify-only build a daemon links
 //! (AUTH-2.89, I1: "skepd's source has no signing capability"), read off
-//! this crate's manifest; and the test hooks, as the one list `src/hooks.rs`
-//! keeps names them, read off the source's `TEST HOOK` markers.
+//! this crate's manifest; the crates each frozen rule runs, read off the
+//! lock at the versions its tag froze; and the test hooks, as the one list
+//! `src/hooks.rs` keeps names them, read off the source's `TEST HOOK`
+//! markers.
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
@@ -11,9 +13,9 @@ use std::path::{Path, PathBuf};
 /// THE ONE CRATE THAT LINKS `ed25519-dalek`, read off the workspace's
 /// resolved graph: every package `Cargo.lock` lists as depending on it —
 /// dev-dependencies included, since the lock does not tell them apart —
-/// is this crate and no other. The suites reach Ed25519 through this crate's
-/// hooks instead (`src/hooks.rs` names them), so a manifest that names the
-/// library again lands in the lock and fails here, the way
+/// is this crate and no other. Other crates' suites reach Ed25519 through
+/// this crate's hooks instead (`src/hooks.rs` names them), so a manifest that
+/// names the library again lands in the lock and fails here, the way
 /// `cargo tree -i ed25519-dalek --workspace` would show it.
 #[test]
 fn ed25519_dalek_is_linked_by_this_crate_alone() {
@@ -92,6 +94,49 @@ fn the_verify_only_build_links_the_verifys_four_and_no_signer_library() {
     let skep: Vec<&str> =
         every_build.iter().chain(&optional).copied().filter(|n| n.starts_with("skep-")).collect();
     assert_eq!(skep, ["skep-identity"], "the one skep crate this crate names");
+}
+
+/// THE EXACT PINS REACH THE CODE THEY FREEZE — the manifest's "PINNED
+/// EXACTLY … a version bump is a rule change that ships as a NEW tag", read
+/// off `Cargo.lock`: every crate a tag's rule runs resolves to the one
+/// version its tag froze — `ml-dsa` 0.1.1 under tag 1; under tag 3, `fn-dsa`
+/// 0.4.0 and the four crates that ARE its code, `fn-dsa-comm`, `-kgen`,
+/// `-sign` and `-vrfy`, which the facade asks for as `0.4`, so that
+/// `fn-dsa = "=0.4.0"` holds them at nothing and a `cargo update` moves them
+/// within 0.4.x. A move that changes a key or a signature fails a golden;
+/// one that changes only what verifies can fail nothing but this.
+#[test]
+fn every_crate_a_frozen_rule_runs_resolves_to_the_version_it_froze() {
+    let lock = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../../Cargo.lock"))
+        .expect("the workspace's Cargo.lock");
+    for (name, frozen) in [
+        ("ml-dsa", "0.1.1"),
+        ("fn-dsa", "0.4.0"),
+        ("fn-dsa-comm", "0.4.0"),
+        ("fn-dsa-kgen", "0.4.0"),
+        ("fn-dsa-sign", "0.4.0"),
+        ("fn-dsa-vrfy", "0.4.0"),
+    ] {
+        assert_eq!(
+            resolved_versions(&lock, name),
+            [frozen],
+            "`{name}` as the lock resolves it: a tag's rule runs {name} {frozen}, so any other \
+             version is a NEW tag, never an edit (`cargo update -p {name} --precise {frozen}` \
+             restores the lock)"
+        );
+    }
+}
+
+/// The versions `Cargo.lock` resolves the package `name` at, one per entry.
+fn resolved_versions<'l>(lock: &'l str, name: &str) -> Vec<&'l str> {
+    let header = format!("name = \"{name}\"");
+    lock.split("[[package]]")
+        .skip(1)
+        .filter(|package| package.lines().any(|line| line == header))
+        .filter_map(|package| {
+            package.lines().find_map(|line| line.strip_prefix("version = \"")?.strip_suffix('"'))
+        })
+        .collect()
 }
 
 /// The dependency a manifest line names, where it names one: the key ahead

@@ -445,8 +445,9 @@ mod tests {
     /// wipe themselves; the KDF's working state does not — Extract's HMAC,
     /// which buffers a copy of the seed, the `Output` the PRK and each
     /// Expand's block are held in, and the `Hkdf` keyed by the PRK — the
-    /// residue the doc names. A feature line, a derive or a field type that
-    /// moves any of the eight fails here, so the doc moves with it.
+    /// residue the doc names. A feature line or a derive that moves any of the
+    /// eight, or a key field the signer holds whose type moves — each read off
+    /// the signer's own field below — fails here, so the doc moves with it.
     #[test]
     fn a_dropped_signer_wipes_both_keys_and_the_half_seeds_but_not_the_kdf_state() {
         use std::marker::PhantomData;
@@ -462,9 +463,16 @@ mod tests {
         impl<T: ZeroizeOnDrop> Probe<T> {
             const WIPES: bool = true;
         }
-        // The stored encoding's type, read off a tag-3 signer's own field:
-        // a field typed otherwise fails to compile here, so the probe below
-        // asks about the type the signer holds.
+        // Each key type the probes below ask about, read off a signer's own
+        // field — the Ed25519 key and the ML-DSA-65 key off a tag-1 signer, the
+        // stored FN-DSA encoding off a tag-3 one: a field typed otherwise fails
+        // to compile here, so each probe asks about the type the signer holds.
+        let tag1 = HybridSigner::from_seed(TAG_MLDSA65_ED25519, &[0x42; 32]).unwrap();
+        let _: &EdSigningKey = &tag1.ed;
+        let _: &ml_dsa::SigningKey<MlDsa65> = match &tag1.pq {
+            PqSigner::MlDsa65(key) => key,
+            PqSigner::FnDsa512Preview(_) => panic!("tag 1 holds ML-DSA-65's signing key"),
+        };
         let tag3 = HybridSigner::from_seed(TAG_FNDSA512_PREVIEW_ED25519, &[0x42; 32]).unwrap();
         let _: &Zeroizing<Vec<u8>> = match &tag3.pq {
             PqSigner::FnDsa512Preview(stored) => stored,

@@ -65,9 +65,15 @@ const GOLDEN_STREAM_SEED: [u8; 32] = GOLDEN_SEED;
 /// signature that moves while its frame's preimage pin and, under tag 3, the
 /// stream stand is a change to what the tag signs or verifies: a NEW tag,
 /// never a re-pin. Made to the signer and the verifier alike, such a change
-/// passes every round trip in this crate, and for tag 3's post-quantum half
-/// and both tags' Ed25519 half these pins alone see it. Which pins have
-/// moved, and under which ruling, is this file's history.
+/// passes every round trip in this crate; two tests see it whatever these
+/// pins are re-pinned beside — `wire_doc.rs`'s
+/// `the_key_and_the_blob_are_wire_mds_layout_built_without_the_signer`,
+/// which signs no fixed frame and draws one stream on both sides, for a
+/// change to this crate's code, and `tidy.rs`'s
+/// `every_crate_a_frozen_rule_runs_resolves_to_the_version_it_froze` for a
+/// pinned library that moved — so a moved signature is re-pinned only with
+/// both green. Which pins have moved, and under which ruling, is this file's
+/// history.
 struct TagGolden {
     tag: u8,
     pq_pk: &'static str,
@@ -137,8 +143,8 @@ fn check_golden(g: &TagGolden) {
             sigs[i], g.sigs[i],
             "the signature over `{name}` moved under tag {} — re-pinned only beside a moved \
              preimage pin under the same name in `the_frame_preimage_per_op_cell_is_pinned` (or, \
-             under tag 3, a changed fixture stream); otherwise the rule moved: a NEW tag \
-             (`TagGolden`)\n{report}",
+             under tag 3, a changed fixture stream) and with the two tests `TagGolden` names \
+             green; otherwise the rule moved: a NEW tag\n{report}",
             g.tag
         );
     }

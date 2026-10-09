@@ -87,10 +87,15 @@ fn the_pq_half_decode_refuses_every_fn_dsa_header_byte_but_0x09() {
 /// THE FN-DSA HALF'S COEFFICIENTS, AT q: `fn-dsa` 0.4.0 packs the key's 512
 /// coefficients 14 bits each, four to every seven bytes after the header
 /// byte, little-endian, and decodes one only below q = 12,289. A derived key
-/// with its first or last coefficient set to 12,288 still decodes; set to
-/// 12,289 it does not, and the courtesy refuses it with the decode.
+/// with any one of its 512 coefficients set to 12,288 still decodes; set to
+/// 12,289 it does not, and the courtesy refuses it with the decode. Every
+/// position, since `fn-dsa-comm`'s `modq_decode` checks coefficients 0 to 507
+/// in a loop over eight-byte windows and the last four in a hand-written
+/// tail, four lane checks each: the first and the last coefficient reach two
+/// of those eight checks, and a decoder that dropped any of the other six
+/// would pass them.
 #[test]
-fn the_pq_half_decode_refuses_an_fn_dsa_coefficient_of_q() {
+fn the_pq_half_decode_refuses_an_fn_dsa_coefficient_of_q_at_every_position() {
     fn with_coefficient(pq: &[u8], i: usize, value: u16) -> Vec<u8> {
         let mut pq = pq.to_vec();
         let at = 1 + 7 * (i / 4);
@@ -103,7 +108,7 @@ fn the_pq_half_decode_refuses_an_fn_dsa_coefficient_of_q() {
     }
     let signer3 = HybridSigner::from_seed(TAG_FNDSA512_PREVIEW_ED25519, &[0x42; 32]).unwrap();
     let key = signer3.public_key();
-    for i in [0, 511] {
+    for i in 0..512 {
         for (value, decodes) in [(12_288, true), (12_289, false)] {
             let pq = with_coefficient(key.pq_half(), i, value);
             let k = PublicKey::from_halves(key.alg(), &pq, key.ed25519_half())
@@ -465,6 +470,29 @@ fn the_pq_half_refuses_a_second_encoding_of_a_genuine_field() {
         let mut near = field.clone();
         near[41 + at / 8] |= 1 << (at % 8);
         assert!(!half.verify(msg, &near), "tag 3: {what}");
+    }
+}
+
+/// THE FN-DSA SIGNATURE'S HEADER BYTE, AT EVERY VALUE: a genuine tag-3 field
+/// with its header byte — `0x30 + logn`, `0x39` at degree 512 — set to each
+/// of the 256 values verifies under `0x39` alone. The low-bit sweep reaches
+/// one wrong value, `0x38`, whose degree nibble is wrong; a decoder that read
+/// the degree nibble alone would refuse that one and admit the fifteen
+/// headers whose high nibble differs — fifteen second encodings of every
+/// genuine signature, a one-encoding door no bit-0 flip and no second
+/// encoding of `s2` reaches.
+#[test]
+fn the_pq_half_refuses_every_fn_dsa_signature_header_byte_but_0x39() {
+    let msg = b"the entry frame";
+    let signer3 = HybridSigner::from_seed(TAG_FNDSA512_PREVIEW_ED25519, &[0x42; 32]).unwrap();
+    let half = PqVerifier::decode(signer3.public_key()).expect("a derived key decodes");
+    let pq_sig_len = signer3.public_key().sig_alg_row().pq_sig_len;
+    let field = signer3.sign_with_rng(&mut SeededRng06::new([7; 32]), msg)[..pq_sig_len].to_vec();
+    assert_eq!(field[0], 0x39, "the premise: fn-dsa 0.4.0's degree-512 signature header byte");
+    for header in 0..=u8::MAX {
+        let mut near = field.clone();
+        near[0] = header;
+        assert_eq!(half.verify(msg, &near), header == 0x39, "header {header:#04x}");
     }
 }
 

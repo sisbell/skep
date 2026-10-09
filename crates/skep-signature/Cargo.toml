@@ -60,6 +60,9 @@ ml-dsa = { version = "=0.1.1", default-features = false, features = ["alloc", "z
 # Tag 3 (PREVIEW): FN-DSA-512 + Ed25519 — Thomas Pornin's pure-Rust `fn-dsa`,
 # a "best guess" at the FN-DSA draft; its 0.4.0 keygen and format ARE tag 3's
 # frozen rule (the final FIPS 206 is a later tag; tag 2 stays free for it).
+# Its code is four crates the facade asks for as `0.4` — `fn-dsa-comm`,
+# `-kgen`, `-sign`, `-vrfy` — which `=0.4.0` holds at nothing: the lock holds
+# them at 0.4.0, and `tests/it/tidy.rs` holds the lock.
 fn-dsa = "=0.4.0"
 # THE SIGNER's libraries, below: each OPTIONAL, enabled by `sign` alone — the
 # verify links none of them.
@@ -104,5 +107,6 @@ sha2.workspace = true
 # THE DIFFERENTIAL ORACLE for tag 1 (the PQ investigation §8.4 (4), §8.5 (ii)):
 # a second pure-Rust FIPS 204 implementation `tests/it/differential.rs`
 # checks `ml-dsa`'s keys-from-seed and signatures byte-equal against — the
-# gate every future bump of the pinned crate must pass.
+# gate every future bump of the pinned crate must pass. `tests/it/wire_doc.rs`
+# builds tag 1's post-quantum half of a blob with it, without the signer.
 fips204 = { version = "=0.4.6", default-features = false, features = ["ml-dsa-65"] }

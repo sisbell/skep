@@ -102,11 +102,11 @@ fn the_vector_set_meets_one_answer_at_this_parser() {
             }
         }
     }
-    assert!(admitted >= 17 && refused >= 64, "{admitted} admitted, {refused} refused");
+    assert!(admitted >= 17 && refused >= 67, "{admitted} admitted, {refused} refused");
     // The vectors the lane names, the cap's two sides, the escape table's,
-    // the canonical member order's, admitted and refused, and the sizes no
-    // reader's own bound may refuse and the digits no digit class may widen,
-    // each present by name.
+    // the canonical member order's, admitted and refused, the sizes no
+    // reader's own bound may refuse, the digits no digit class may widen,
+    // and the text no lax decoder may pass, each present by name.
     for required in [
         "binding_canonical",
         "binding_spec_example_spaced",
@@ -138,6 +138,9 @@ fn the_vector_set_meets_one_answer_at_this_parser() {
         "escape_of_the_line_separator",
         "escape_of_del",
         "raw_control_in_a_string",
+        "byte_order_mark_ahead_of_the_body",
+        "surrogate_encoded_in_a_string",
+        "code_point_past_u10ffff_in_a_string",
         "prefix_component_past_a_machine_word",
         "prefix_component_past_the_wire_digit_cap",
         "prefix_of_257_components",
@@ -231,10 +234,13 @@ fn a_refusal_names_the_member_that_faulted() {
 /// absent) — and the value stage's choices the parser adopts, where RFC 8259
 /// leaves one: a member spelled twice read at its last occurrence; and no
 /// JSON in a value nested past 127 objects and arrays, a number too large
-/// for a 64-bit float (one that rounds to zero is read, and is `number`), an
-/// escaped unpaired surrogate, or a text opening on a byte-order mark. None
-/// of these is in the vector set: the set pins what every parser answers,
-/// and these pin this one.
+/// for a 64-bit float (one that rounds to zero is read, and is `number`), or
+/// an escaped unpaired surrogate. None of these is in the vector set: the set
+/// pins what every parser answers, and these pin this one. The fourth text
+/// the value stage reads as no JSON, a byte-order mark ahead of the value, is
+/// the set's (`byte_order_mark_ahead_of_the_body`): unlike these, a reader
+/// can turn it into an admission, its decoder dropping the mark before the
+/// compare.
 #[test]
 fn a_body_answers_the_first_stage_that_faults() {
     let nested = |arrays: usize| {
@@ -242,7 +248,7 @@ fn a_body_answers_the_first_stage_that_faults() {
         format!(r#"{{"type":"binding","prefix":"1.5","x":{open}{close}}}"#)
     };
     let (deep, too_deep) = (nested(126), nested(127));
-    let cases: [(&str, &str); 17] = [
+    let cases: [(&str, &str); 16] = [
         ("not_an_object", "[15]"),
         ("number", r#"{"type":"endpoint","prefix":15}"#),
         ("unknown_member", r#"{"type":"binding","tier":"root"}"#),
@@ -259,7 +265,6 @@ fn a_body_answers_the_first_stage_that_faults() {
         ("not_json", r#"{"type":"binding","prefix":"1.5","x":1e400}"#),
         ("number", r#"{"type":"binding","prefix":"1.5","x":1e-400}"#),
         ("not_json", r#"{"type":"binding","prefix":"1.5","sig":"\ud800"}"#),
-        ("not_json", "\u{feff}{\"type\":\"binding\",\"prefix\":\"1.5\"}"),
     ];
     for (cause, text) in cases {
         let answer = parse(BodyKind::Binding, text.as_bytes()).map_err(|r| r.token());

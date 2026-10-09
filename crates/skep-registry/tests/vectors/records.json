@@ -488,6 +488,13 @@
       "why": "no whitespace outside strings"
     },
     {
+      "name": "byte_order_mark_ahead_of_the_body",
+      "kind": "binding",
+      "bytes": "\ufeff{\"type\":\"binding\",\"prefix\":\"1.5\"}",
+      "parse": "not_json",
+      "why": "U+FEFF is no JSON whitespace and the canonical compare reads the body's own bytes: a reader whose decoder drops a leading byte-order mark before its compare admits what the rule refuses"
+    },
+    {
       "name": "not_json",
       "kind": "binding",
       "bytes": "binding 1.5",
@@ -602,6 +609,20 @@
       "bytes_hex": "7b227479706522ff7d",
       "parse": "not_utf8",
       "why": "bytes that are no UTF-8 text"
+    },
+    {
+      "name": "surrogate_encoded_in_a_string",
+      "kind": "endpoint",
+      "bytes_hex": "7b2274797065223a22656e64706f696e74222c226f726967696e73223a5b22eda080225d7d",
+      "parse": "not_utf8",
+      "why": "UTF-8 encodes no surrogate: ED A0 80 is U+D800's three-byte shape, which a check of lead and continuation bytes alone passes and a code-point encoder writes back byte for byte"
+    },
+    {
+      "name": "code_point_past_u10ffff_in_a_string",
+      "kind": "endpoint",
+      "bytes_hex": "7b2274797065223a22656e64706f696e74222c226f726967696e73223a5b22f4908080225d7d",
+      "parse": "not_utf8",
+      "why": "UTF-8 ends at U+10FFFF: F4 90 80 80 is U+110000's four-byte shape, which a check of lead and continuation bytes alone passes and a code-point encoder writes back byte for byte"
     }
   ]
 }

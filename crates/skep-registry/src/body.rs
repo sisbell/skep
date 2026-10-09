@@ -382,8 +382,10 @@ impl std::error::Error for ParseRefusal {}
 /// deep, the body's own object counted; a number too large for a 64-bit
 /// float (`1e400` — one that rounds to zero, `1e-400`, is read, and is
 /// `number`); an escaped unpaired surrogate (`"\ud800"`); and a byte-order
-/// mark ahead of the value. Past those choices `not_json` is RFC 8259's
-/// grammar, and every other refusal is this schema's.
+/// mark ahead of the value, the one of the four the vector set pins for
+/// every parser: a reader whose decoder drops the mark before its compare
+/// would admit a body this parse refuses. Past those choices `not_json` is
+/// RFC 8259's grammar, and every other refusal is this schema's.
 pub fn parse(kind: BodyKind, bytes: &[u8]) -> Result<Record, ParseRefusal> {
     if bytes.len() > MAX_REGISTRY_RECORD_BYTES {
         return Err(ParseRefusal::PastCap);

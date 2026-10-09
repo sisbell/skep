@@ -7,7 +7,7 @@
 use std::sync::LazyLock;
 
 use skep_address::{document_of, Address};
-use skep_arrangement::{trunk_of, Deposit};
+use skep_arrangement::{trunk_of, Caller, Deposit};
 use skep_engine::types::{
     t_binding, t_consumption_marker, t_endorse, t_grant, t_journal_designation, t_policy_link,
     t_rail_record, t_replaces, t_steward_classification, t_successor_of, t_takedown,
@@ -310,7 +310,7 @@ fn replaces_refusal(
     let m3 = world.m3();
     homes
         .into_iter()
-        .all(|home| m3.is_registered_document(home) && m3.is_effective_owner(principal, home))
+        .all(|home| Caller::Principal(principal).passes_write_gate(m3, home))
         .then_some(CredentialRefusal::ReplacesNotStandalone)
 }
 
@@ -459,13 +459,14 @@ fn board_state_admission(
 /// table), which is why that mint is admitted from a bare session.
 fn publish_class(world: &World, op: &Op, principal: PrincipalId) -> bool {
     // Registration and ω — the pair that stands AHEAD of this gate (PUB-6.37,
-    // PUB-6.36 slot 1) on every HOME and TARGET arm, in ONE spelling, so an
-    // arm that means to take the pair cannot take half of it: an address
+    // PUB-6.36 slot 1) on every HOME and TARGET arm, in ONE spelling, the
+    // store's own front-door question (M5's `Caller::passes_write_gate`), so
+    // an arm that means to take the pair cannot take half of it: an address
     // failing either falls through to execute's own code and is never told
     // whether it is published. The three MINTING arms below take something
     // else and each says what.
     let m3 = world.m3();
-    let owned = |a: &Address| m3.is_registered_document(a) && m3.is_effective_owner(principal, a);
+    let owned = |a: &Address| Caller::Principal(principal).passes_write_gate(m3, a);
     let homed = |home: &Address| -> bool { owned(home) && published(world, home) };
     match op {
         // An EXPLICIT `published: true` on a mint IS the gate input

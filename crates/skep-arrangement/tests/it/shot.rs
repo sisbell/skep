@@ -1,7 +1,7 @@
 //! The publish shot (PUB round 2, lane 3.2): the member it appends from the
 //! client's runs, the windows it keeps, the deposits it carries, the birth
-//! extent and terms it records, the values it re-inserts, and its address
-//! form on both sides.
+//! extent and terms it records, the values it re-inserts and where they land,
+//! and its address form on both sides.
 
 use skep_address::{Address, SpanSet};
 use skep_arrangement::{
@@ -571,11 +571,16 @@ fn the_address_forms_agree_as_the_body_spells_them_where_their_runs_do_not() {
 
 #[test]
 fn the_values_a_shot_says_it_reinserts_are_the_values_its_commit_writes() {
-    // `Shot::reinserted_values` is THE count `publish` holds to
+    // `Shot::reinserted_runs` names the values the commit re-mints and
+    // `Shot::reinserted_values` counts them — THE count `publish` holds to
     // MAX_REINSERTED_VALUES, and the one a caller pricing a shot ahead of its
-    // transaction asks — so it must be exactly the values the commit writes:
-    // the draft-native runs' widths, a run the client names twice counted
+    // transaction asks — so they must be exactly the values the commit
+    // writes: the draft-native runs, a run the client names twice re-minted
     // twice, and no position of the document's own I-space or of a window.
+    // And WHERE it writes them, as `publish` states it: in that order, as the
+    // last addresses of the trunk's content chain, nothing else minted there
+    // — which is how skep-media's cell index, told only the member by the
+    // ack, finds the cells a shot re-mints.
     let k = mem_kernel();
     let vs = deposit_abc(&k); // pdoc: a b c at pca(1..3), memberless
     insert_abc(&k); // the staging draft doc1: a b c at ca(1..3)
@@ -593,36 +598,67 @@ fn the_values_a_shot_says_it_reinserts_are_the_values_its_commit_writes() {
         ],
     };
     assert_eq!(
-        shot.reinserted_values(),
-        n(3),
-        "the draft's two runs, widths 2 and 1"
+        shot.reinserted_runs().cloned().collect::<Vec<_>>(),
+        vec![
+            Run::new(ca(2), n(2)).expect("a run"),
+            Run::new(ca(2), n(1)).expect("a run"),
+        ],
+        "the draft's two runs, in the order given"
     );
+    assert_eq!(shot.reinserted_values(), n(3), "their widths, 2 and 1");
     let no_draft = Shot {
         draft: None,
         ..shot.clone()
     };
     assert_eq!(
-        no_draft.reinserted_values(),
-        n(0),
+        no_draft.reinserted_runs().count(),
+        0,
         "with no draft named, no run is draft-native"
     );
+    assert_eq!(no_draft.reinserted_values(), n(0));
     let draft_named_by_its_member = Shot {
         draft: Some(a(&[1, 0, 1, 0, 1, 1])),
         ..shot.clone()
     };
     assert_eq!(
-        draft_named_by_its_member.reinserted_values(),
-        n(3),
+        draft_named_by_its_member.draft_document(),
+        Some(doc1()),
         "a draft named by a member of its chain is judged as its document (PUB-2.15)"
     );
+    assert_eq!(draft_named_by_its_member.reinserted_values(), n(3));
     let stored = k.snapshot().world().content().len();
     vs.publish(P1, &pdoc(), &shot, &readable_by(PrincipalId(1)))
         .expect("the shot commits");
+    let s = k.snapshot();
+    let content = s.world().content();
     assert_eq!(
-        k.snapshot().world().content().len() - stored,
+        content.len() - stored,
         3,
         "the commit wrote exactly the values the shot said it re-inserts"
     );
+    assert_eq!(
+        s.world().m3().next_content_address(&pdoc()),
+        Some(pca(7)),
+        "three fresh identities past the edition's three, and nothing else minted under its chain"
+    );
+    let value = |at: &Address| {
+        content
+            .value_at(at.tumbler())
+            .expect("a stored value")
+            .as_bytes()
+            .to_vec()
+    };
+    let landed: Vec<Vec<u8>> = (4..=6).map(|ordinal| value(&pca(ordinal))).collect();
+    let named: Vec<Vec<u8>> = shot
+        .reinserted_runs()
+        .flat_map(Run::addrs)
+        .map(|at| value(&at))
+        .collect();
+    assert_eq!(
+        landed, named,
+        "the chain's last three addresses, in the order the shot names them"
+    );
+    assert_eq!(named, vec![b"b".to_vec(), b"c".to_vec(), b"b".to_vec()]);
 }
 
 #[test]

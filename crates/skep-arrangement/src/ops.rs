@@ -323,6 +323,14 @@ impl<W: WorldState> Copy for Vstream<'_, W> {}
 /// frontier ever to hand back a non-adjacent address — a batched or striped
 /// allocator in M3 — the placement would be a correct multi-run one, never a
 /// single run widened over addresses M3 never allocated and M4 never wrote.
+///
+/// What the OPS state of their mints rests on M3 and not on this step:
+/// INSERT's one run, and the shot's fresh identity landing at the end of its
+/// trunk's content chain (each stated on its op), hold because M3's content
+/// chain issues each mint at the next ordinal (`M3State::mint_content`).
+/// This step assumes nothing of it, so a placement stays correct where those
+/// statements would need revising — and revising them is owed to their
+/// readers, skep-media's cell index among them.
 fn allocate_for_placement<W, E>(
     stg: &mut Staging<W>,
     home: &Address,

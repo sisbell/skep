@@ -97,6 +97,24 @@ where
     /// the base stays the base's — a link is arranged only in its home
     /// document (CL-OWN, PUB-2.12), and the member is a home no link has yet.
     ///
+    /// WHERE THE FRESH IDENTITY LANDS (PUB-2.40), stated because a reader the
+    /// ack does not tell reads it back. The values
+    /// [`Shot::reinserted_runs`](crate::Shot::reinserted_runs) names —
+    /// [`Shot::reinserted_values`](crate::Shot::reinserted_values) of them, a
+    /// run named twice minted twice — are minted IN THAT ORDER, one after
+    /// another, under the content chain of the document `doc` projects to
+    /// (the member's own trunk), and the commit mints nothing else under that
+    /// chain: the member itself is minted on a version chain. Each content
+    /// mint takes its chain's next ordinal (`M3State::mint_content`), the fact
+    /// INSERT's one run rests on too, so in the world the commit leaves they
+    /// are that chain's LAST `reinserted_values()` addresses, just below its
+    /// frontier (`M3State::next_content_address`) — where skep-media's cell
+    /// index reads them, off the commit's own world, to enter the cells a
+    /// shot re-mints. A later content mint under the chain moves the frontier
+    /// past them.
+    /// `the_values_a_shot_says_it_reinserts_are_the_values_its_commit_writes`
+    /// pins the order, the chain and the "nothing else".
+    ///
     /// Check order (which error wins), PUB-6.36's slots: `DocNotRegistered`
     /// → `NotOwner` (slot 1, ω on the address named — the only question the
     /// shot asks of its caller, and one [`Caller::System`] passes) → registration
@@ -226,11 +244,12 @@ where
                 admit(stg.working(), caller, doc, shot, readable)?;
             // Which runs are the STAGING DRAFT's, re-inserted as fresh
             // identity rather than placed by reference (PUB-2.40) — the
-            // family rule `Shot` states, by which `Shot::reinserted_values`
-            // counts the values this placement re-inserts: both compare the
+            // family rule `Shot` states, by which `Shot::reinserted_runs`
+            // names the runs this placement re-inserts: both compare the
             // run's origin document with `Shot::draft_document`, and
             // `the_values_a_shot_says_it_reinserts_are_the_values_its_commit_writes`
-            // holds them to one answer.
+            // holds them to one answer, value for value and in the order they
+            // land.
             let draft_doc = shot.draft_document();
             let draft_native = |origin_doc: &Address| draft_doc.as_ref() == Some(origin_doc);
             // The re-insert's size, refused before any address is probed:

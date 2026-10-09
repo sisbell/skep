@@ -6,7 +6,7 @@ use skep_arrangement::{
     Caller, CopyError, DeleteError, Deposit, HasM5, InsertError, PublishError, RearrangeError, Shot,
     VSpec, Vstream,
 };
-use skep_namespace::PrincipalId;
+use skep_namespace::{HasM3, PrincipalId};
 
 use crate::common::*;
 
@@ -102,6 +102,20 @@ fn an_unregistered_document_never_yields_an_ownership_verdict() {
         )),
         PublishError::DocNotRegistered
     ));
+    // The front door's question as one answer, for a door ahead of the
+    // store: ω alone says P1 owns the address that names nothing; the gate,
+    // asking registration first, does not.
+    let s = k.snapshot();
+    let m3 = s.world().m3();
+    assert!(
+        P1.is_owner(m3, &unregistered_doc),
+        "ω answers by the longest registered prefix"
+    );
+    assert!(!P1.passes_write_gate(m3, &unregistered_doc));
+    assert!(P1.passes_write_gate(m3, &doc1()));
+    assert!(!p2.passes_write_gate(m3, &doc1()));
+    assert!(Caller::System.passes_write_gate(m3, &doc1()));
+    assert!(!Caller::System.passes_write_gate(m3, &unregistered_doc));
 }
 
 #[test]

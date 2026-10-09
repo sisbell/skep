@@ -2,20 +2,20 @@
 //! client-supplied I-address runs with the origin each windows, the base the
 //! staged draft was taken from, and the whole shot, the composite's
 //! arrangement input, taken FROM THE CLIENT and never read off any draft's
-//! arrangement at commit — the values it re-inserts
-//! ([`Shot::reinserted_values`]), and its ADDRESS FORM on both sides of the
-//! commit: [`Shot::address_form`] for the request, [`M5State::address_form_of`]
-//! for the member it minted, and [`run_origin_document`], the classifier all
-//! three ask. The two sides of the address form must agree as the signed body
-//! spells them — window for window, and value for value between — so they are
-//! stated in one file.
+//! arrangement at commit — the runs it re-inserts and their count
+//! ([`Shot::reinserted_runs`], [`Shot::reinserted_values`]), and its ADDRESS
+//! FORM on both sides of the commit: [`Shot::address_form`] for the request,
+//! [`M5State::address_form_of`] for the member it minted, and
+//! [`run_origin_document`], the classifier each of them asks. The two sides
+//! of the address form must agree as the signed body spells them — window for
+//! window, and value for value between — so they are stated in one file.
 //!
 //! Three values rather than loose arguments, for the reason [`crate::VPos`]
 //! and [`crate::VSpec`] are values: the pieces of a shot travel together, and
 //! a `base` handed over without the extent its copy took would be a base the
 //! composite cannot compose against (PUB-2.42).
 
-use num_traits::{One, Zero};
+use num_traits::One;
 use skep_address::{content_subspace, document_of, Address, Nat};
 
 use crate::chain::trunk_of;
@@ -196,38 +196,49 @@ impl Shot {
         out
     }
 
-    /// THE VALUES THIS SHOT RE-INSERTS — the fresh identities its commit
-    /// mints for the staging draft's text (PUB-2.40), two staged records
-    /// apiece: Σ width of the DRAFT-NATIVE runs, those whose ORIGIN DOCUMENT —
-    /// derived from the run's own start, as [`address_form`](Shot::address_form)
-    /// derives it, and never from the stated `origin` — is the document
-    /// `draft` projects to (PUB-2.15), a run named twice counted twice; zero
-    /// with no draft. THE count [`Vstream::publish`](crate::Vstream::publish)
-    /// holds to [`MAX_REINSERTED_VALUES`](crate::MAX_REINSERTED_VALUES)
-    /// (`TooManyValues`), and its one spelling: request arithmetic over the
-    /// runs and the draft as the client stated them, reading nothing — so a
-    /// caller pricing a shot ahead of its transaction asks this, and its
-    /// refusal and the store's cannot part.
-    pub fn reinserted_values(&self) -> Nat {
-        let Some(draft_doc) = self.draft_document() else {
-            return Nat::zero();
-        };
+    /// THE RUNS THIS SHOT RE-INSERTS — its DRAFT-NATIVE runs (PUB-2.40), in
+    /// the order given: those whose ORIGIN DOCUMENT — derived from the run's
+    /// own start, as [`address_form`](Shot::address_form) derives it, and
+    /// never from the stated `origin` — is [`draft_document`](Shot::draft_document);
+    /// none with no draft, and a run named twice yielded twice. Their values
+    /// are the ones the commit re-mints as fresh identity under the document's
+    /// own I-space, in this order ([`Vstream::publish`](crate::Vstream::publish)
+    /// states where that identity lands); the address form spells them by
+    /// value beside the document's own runs and does not tell the two apart.
+    /// Request arithmetic over the runs and the draft as the client stated
+    /// them, reading nothing — so a caller judging the values a shot re-mints
+    /// asks this rather than re-deriving each run's family.
+    pub fn reinserted_runs(&self) -> impl Iterator<Item = &Run> + '_ {
+        let draft_doc = self.draft_document();
         self.runs
             .iter()
-            .filter(|stated| run_origin_document(&stated.run).as_ref() == Some(&draft_doc))
-            .map(|stated| stated.run.width())
-            .sum()
+            .map(|stated| &stated.run)
+            .filter(move |run| draft_doc.is_some() && run_origin_document(run) == draft_doc)
+    }
+
+    /// THE VALUES THIS SHOT RE-INSERTS, counted —
+    /// [`reinserted_runs`](Shot::reinserted_runs)' widths summed, two staged
+    /// records apiece; zero with no draft. THE count
+    /// [`Vstream::publish`](crate::Vstream::publish) holds to
+    /// [`MAX_REINSERTED_VALUES`](crate::MAX_REINSERTED_VALUES)
+    /// (`TooManyValues`), and its one spelling: request arithmetic, reading
+    /// nothing — so a caller pricing a shot ahead of its transaction asks
+    /// this, and its refusal and the store's cannot part.
+    pub fn reinserted_values(&self) -> Nat {
+        self.reinserted_runs().map(Run::width).sum()
     }
 
     /// The document `draft` projects to (PUB-2.15), or `None` with no draft
     /// named: the one a run's ORIGIN DOCUMENT must be for the run to be
-    /// DRAFT-NATIVE, re-inserted as fresh identity (PUB-2.40). The draft half
-    /// of the family rule [`Shot`] states, spelled once and asked by
+    /// DRAFT-NATIVE, re-inserted as fresh identity (PUB-2.40) — the document
+    /// whose registration the shot checks, and whose owner and readability a
+    /// door judging the re-minted values asks about. The draft half of the
+    /// family rule [`Shot`] states, spelled once and asked by
     /// [`address_form`](Shot::address_form),
-    /// [`reinserted_values`](Shot::reinserted_values) and `publish`'s
+    /// [`reinserted_runs`](Shot::reinserted_runs) and `publish`'s
     /// registration check and placement alike; the run half, its origin
-    /// document, is `run_origin_document`'s.
-    pub(crate) fn draft_document(&self) -> Option<Address> {
+    /// document, is derived from each run's own start, as [`ShotRun`] states.
+    pub fn draft_document(&self) -> Option<Address> {
         self.draft.as_ref().map(trunk_of)
     }
 }

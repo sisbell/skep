@@ -375,9 +375,10 @@ impl CellIndex {
     /// THE ENTRY AT A SHOT's COMMIT: the `reinserted` values the shot minted
     /// as fresh identity under the trunk's content chain — the last
     /// `reinserted` addresses of that chain in the post-commit `world`,
-    /// read off its frontier (M3's content mint, asked and not staged, is
-    /// the chain's peek) — each put through the prefix test and the one
-    /// entry path.
+    /// where `skep_arrangement::Vstream::publish` states a shot's fresh
+    /// identity lands, read off its frontier (M3's content mint, asked and
+    /// not staged, is the chain's peek) — each put through the prefix test
+    /// and the one entry path.
     pub fn enter_publish<W: FebeWorld>(&self, world: &W, member: &Address, reinserted: u64) {
         let trunk = trunk_of(member);
         let Ok((next, _)) = world.m3().mint_content(&trunk) else { return };

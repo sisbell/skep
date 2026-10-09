@@ -131,10 +131,8 @@
 //! commits nothing and gives the head writer its turn, as an admission
 //! refusal does (l7-C1).
 
-use skep_address::{document_of, Address, Nat};
-use skep_arrangement::{
-    published_target, shot_admission, trunk_of, Caller, PlacedSegment, Shot, MAX_REINSERTED_VALUES,
-};
+use skep_address::{Address, Nat};
+use skep_arrangement::{published_target, shot_admission, Caller, Shot, MAX_REINSERTED_VALUES};
 use skep_content::Val;
 use skep_febe::{Disposition, FebeWorld, Op, ReadableWorld};
 use skep_namespace::PrincipalId;
@@ -321,14 +319,15 @@ pub fn media_door<W: FebeWorld>(
 }
 
 /// The `insert` arms (1, 3, 4): read only where `doc` is registered and the
-/// caller owns it — PUB-6.36's slot 1 ahead of everything here, as every
-/// producer ahead of the store keeps it, so an unregistered or foreign
-/// `doc` answers the store's own `doc_not_registered` or `not_owner` and is
-/// never told whether it is published. EVERY value naming the kind is
-/// judged (M-I1 (a): the binding is per cell, and a cell bound beside one
-/// that is not binds nothing for it), in V-order, the first refusal
-/// answering; a value that names it not is passed over at the cost of one
-/// byte compare.
+/// caller owns it — the store's front-door question, asked of M5
+/// ([`Caller::passes_write_gate`]): PUB-6.36's slot 1 ahead of everything
+/// here, as every producer ahead of the store keeps it, so an unregistered
+/// or foreign `doc` answers the store's own `doc_not_registered` or
+/// `not_owner` and is never told whether it is published. EVERY value
+/// naming the kind is judged (M-I1 (a): the binding is per cell, and a cell
+/// bound beside one that is not binds nothing for it), in V-order, the
+/// first refusal answering; a value that names it not is passed over at the
+/// cost of one byte compare.
 fn insert_arm<W: FebeWorld>(
     world: &W,
     doc: &Address,
@@ -337,7 +336,7 @@ fn insert_arm<W: FebeWorld>(
     media_gate: &MediaGate,
 ) -> Option<MediaRefusal> {
     let m3 = world.m3();
-    if !(m3.is_registered_document(doc) && Caller::Principal(principal).is_owner(m3, doc)) {
+    if !Caller::Principal(principal).passes_write_gate(m3, doc) {
         return None;
     }
     let mut named = values.iter().filter_map(names_the_kind).peekable();
@@ -356,12 +355,12 @@ fn insert_arm<W: FebeWorld>(
 /// to the caller, and the re-insert is within M5's budget — so every
 /// refusal the store gives ahead of its existence walk stands ahead of this
 /// door, in the store's own words, and the door reads no value the caller
-/// may not read. The draft-native runs are walked as the commit will class
-/// them ([`Shot::address_form`], M5's own classing), each position's value
-/// read by `value_at`, the accessor the re-insert reads with; EVERY value
-/// naming the kind is judged (M-I1 (a)) — the owner test once, at the
-/// first, then each value's own verdict in placement order, the first
-/// refusal answering.
+/// may not read. The draft-native runs are walked as the commit re-mints
+/// them ([`Shot::reinserted_runs`], M5's own family rule, in the commit's
+/// order), each position's value read by `value_at`, the accessor the
+/// re-insert reads with; EVERY value naming the kind is judged (M-I1 (a)) —
+/// the owner test once, at the first, then each value's own verdict in
+/// placement order, the first refusal answering.
 fn publish_arm<W: FebeWorld>(
     world: &W,
     doc: &Address,
@@ -379,9 +378,10 @@ fn publish_arm<W: FebeWorld>(
     if shot_admission(world, caller, doc, shot, &visible_to::<W>(caller)).is_err() {
         return None;
     }
-    // The staging draft, judged as the document it projects to (PUB-2.15);
-    // with none, no run is draft-native and the shot re-inserts nothing.
-    let draft = trunk_of(shot.draft.as_ref()?);
+    // The staging draft, judged as the document it projects to (PUB-2.15) —
+    // M5's own projection; with none, no run is draft-native and the shot
+    // re-inserts nothing.
+    let draft = shot.draft_document()?;
     // P31: nothing of a draft the caller may not read is read on its behalf.
     // (The admission passes a run the base carries without consulting its
     // origin, PUB-6.24; the write-path check has refused an attested shot
@@ -403,15 +403,10 @@ fn publish_arm<W: FebeWorld>(
     // answering.
     let content = world.content();
     let mut owner_tested = false;
-    for segment in shot.address_form(doc) {
-        let PlacedSegment::Value(run) = segment else {
-            continue; // a window: a reference, read from nowhere
-        };
-        // A value run of the trunk's own I-space is placed by reference and
-        // mints nothing; the draft's is re-inserted (PUB-2.40).
-        if document_of(run.i_start()).map(|d| trunk_of(&d)).as_ref() != Some(&draft) {
-            continue;
-        }
+    // The runs the commit re-mints, in its order — M5's own family rule
+    // (PUB-2.40): a run of the trunk's own I-space is placed by reference
+    // and a window kept as one, and neither mints.
+    for run in shot.reinserted_runs() {
         for a in run.addrs() {
             // An address holding no value is the store's `dangling_source`;
             // there is nothing to read.

@@ -51,8 +51,10 @@ skep-namespace = { path = "../skep-namespace" }
 # M4 — HasContent, Val (the value a cell is; the walk over the content
 # store); ContentWrite, a name of the record lift.
 skep-content = { path = "../skep-content" }
-# M5 — published_target, shot_admission, trunk_of, the re-insert cap; M5Rec,
-# a name of the record lift.
+# M5 — published_target, shot_admission, trunk_of, Caller's front-door
+# question; the shot's re-insert (reinserted_runs, draft_document,
+# reinserted_values and the cap) and where publish states its fresh identity
+# lands; M5Rec, a name of the record lift.
 skep-arrangement = { path = "../skep-arrangement" }
 # M7 — LinkRec alone: the fourth name of the record lift
 # `OperationSurface::execute` requires of its world (`W::Record: From<…>`,

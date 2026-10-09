@@ -39,7 +39,11 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
   took — for every member it mints, so a verifier of the member's entry
   signature reads them off the state beside the member's runs, in the
   address form the signature covers (the document's own runs by value,
-  windows by address). Everything `publish` checks before it probes an
+  windows by address). What the shot re-inserts is answered too —
+  `Shot::reinserted_runs` and its count — and `publish` states where
+  that fresh identity lands: the last addresses of the document's own
+  content chain, which a reader the ack does not tell (the media cell
+  index) reads it back from. Everything `publish` checks before it probes an
   address — registration, ownership, the base's shape, the source gate —
   is one query too, `shot_admission`, which a door asks of the world the
   transaction will open on to learn the shot's verdict through its gate.

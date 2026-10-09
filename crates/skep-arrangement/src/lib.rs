@@ -203,12 +203,13 @@ mod state;
 // The reads on the slice: resolve, point, image, project, deletions, the
 // counts, and the admission predicates the ops ask.
 mod reads;
-// The publish shot: its request values, the values it re-inserts, and its
-// address form, both sides.
+// The publish shot: its request values, the runs and values it re-inserts,
+// and its address form, both sides.
 mod shot;
 // The deposit declaration and the deposit class's types.
 mod deposit;
-// `Caller` and `gate_write`, the write surface's one front door.
+// `Caller` and `gate_write`, the write surface's one front door, and its
+// question answered as one boolean for a door ahead of the store.
 mod ownership;
 // The typed rejections, one enum per operation.
 mod error;

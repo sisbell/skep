@@ -2,8 +2,10 @@
 //! ruling): ONE caller identity type and ONE ownership predicate, shared by
 //! M5's write surface and (by re-export) M7's link-deposit ops, so the ω half
 //! of "who may write into this document's space" has one definition
-//! everywhere — and M5's front door, [`gate_write`], which asks registration
-//! first and that predicate second.
+//! everywhere — and the whole question, registration then ω, has one too:
+//! answered as one boolean ([`Caller::passes_write_gate`]) for a door ahead
+//! of the store, and as the ordered verdict by M5's front door,
+//! [`gate_write`].
 //!
 //! The predicate is M3's [`M3State::is_effective_owner`] — ω, the longest
 //! registered account/node-tier prefix, compared by principal id: the
@@ -60,11 +62,29 @@ impl Caller {
     /// `System` answers `true` — it is exempt from ω, as the type states — so
     /// what this decides is whether the caller passes the ω gate, which is
     /// the question every caller asks it.
+    ///
+    /// ω answers ANY address, registered or not, by its longest registered
+    /// prefix, so this says "owner" of an address under the caller's own
+    /// account that names no document. Whether a write would pass the front
+    /// door is [`passes_write_gate`](Caller::passes_write_gate)'s question,
+    /// which asks registration first.
     pub fn is_owner(&self, m3: &M3State, doc: &Address) -> bool {
         match self {
             Caller::System => true,
             Caller::Principal(p) => m3.is_effective_owner(*p, doc),
         }
+    }
+
+    /// Does this caller pass the write surface's FRONT DOOR for `doc` — is
+    /// `doc` a REGISTERED document and this caller its effective owner
+    /// ([`is_owner`](Caller::is_owner))? The two questions `gate_write` asks,
+    /// in its order, answered as one, for a door AHEAD of the store that
+    /// defers to the store wherever the store's own first slot would refuse
+    /// (PUB-6.36 slot 1, PUB-6.37) and so needs the answer and not the
+    /// verdict: M10's write door, skep-media's media door and the daemon's
+    /// producers ask it. `System` passes wherever `doc` is registered.
+    pub fn passes_write_gate(&self, m3: &M3State, doc: &Address) -> bool {
+        m3.is_registered_document(doc) && self.is_owner(m3, doc)
     }
 }
 
@@ -75,7 +95,11 @@ impl Caller {
 /// unregistered document never reports `NotOwner` and never discloses an
 /// ownership verdict about an address that names nothing. The verdicts stay
 /// with the caller: each op passes its own two constructors, so its error
-/// contract remains readable at its own call site.
+/// contract remains readable at its own call site. Its boolean, for a door
+/// that defers rather than refuses, is [`Caller::passes_write_gate`] — the
+/// same two questions, and
+/// `the_front_doors_boolean_is_its_ordered_verdict_answered_as_one` holds
+/// the two to one answer over every kind of caller and address.
 ///
 /// The registration this door establishes is also what the version-chain
 /// reads ask first of the ops that open here (PUB-6.37):
@@ -100,4 +124,49 @@ pub(crate) fn gate_write<E>(
         return Err(not_owner(doc.clone()));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::testutil::{a, ca, doc1, doc2, pdoc, seeded_m3};
+
+    #[test]
+    fn the_front_doors_boolean_is_its_ordered_verdict_answered_as_one() {
+        // `passes_write_gate` is `gate_write`'s two questions as one answer,
+        // for a door that defers rather than refuses — so over every kind of
+        // caller and every tier of address it passes exactly where the gate
+        // does. The family holds each owner's documents, an address under
+        // P1's account that names no document — which ω ALONE says P1 owns,
+        // so the registration half is asked and not assumed — an account and
+        // an element.
+        let m3 = seeded_m3();
+        let nameless = a(&[1, 0, 1, 0, 9]);
+        let p1 = Caller::Principal(PrincipalId(1));
+        assert!(
+            p1.is_owner(&m3, &nameless),
+            "the premise: ω answers by prefix"
+        );
+        let callers = [
+            p1,
+            Caller::Principal(PrincipalId(2)),
+            Caller::Principal(PrincipalId(99)),
+            Caller::System,
+        ];
+        let addresses = [doc1(), doc2(), pdoc(), nameless, a(&[1, 0, 2]), ca(1)];
+        let mut passed = 0usize;
+        for caller in callers {
+            for doc in &addresses {
+                let verdict = gate_write(&m3, caller, doc, (), |_| ()).is_ok();
+                assert_eq!(
+                    caller.passes_write_gate(&m3, doc),
+                    verdict,
+                    "{caller:?} at {doc:?}"
+                );
+                passed += usize::from(verdict);
+            }
+        }
+        // P1, and System, at each of P1's three documents; no one elsewhere.
+        assert_eq!(passed, 6);
+    }
 }

@@ -8,17 +8,27 @@
 //!   make_link/emit, when the arguments carry no `from` of their own).
 //!   Arguments pass through unvalidated — the daemon's strict parse is the
 //!   validator, and its rejection comes back as data.
-//! * A skepd response document is the tool result, verbatim, up to the
-//!   size cap `http.rs` reads an answer to. `isError` is ONLY transport
-//!   failure reaching skepd, an answer past that cap among them; an op
-//!   rejection is a normal result — a client that cannot read a rejection
-//!   has been silently failed.
+//! * Whatever skepd answers to a frame is the tool result, verbatim, up to
+//!   the size cap `http.rs` reads an answer to: a response document, or —
+//!   at a non-200 status, which wire.md §HTTP status codes calls a
+//!   transport-level failure — its `{"error", "detail"?}` body. `isError`
+//!   is ONLY the adapter's failure to bring back such an answer — `Skepd`'s
+//!   `Err`, an answer past that cap among them — and after one on a write,
+//!   that write's outcome is unknown: its frame may have reached the daemon
+//!   and committed, and the adapter never reissues it. An op rejection is a
+//!   normal result — a client that cannot read a rejection has been
+//!   silently failed. A call the adapter will not run — a tool outside the
+//!   catalog, an argument `session_info` does not take — is no tool result
+//!   at all: it is refused -32602, as malformed `tools/call` params are.
 //! * Sessions are the adapter's apparatus: bare sessions only (wire.md
 //!   §Sessions), opened when the daemon demands one — `unauthenticated` on
-//!   a write, at the adapter's first write and again after a restarted
-//!   daemon has killed the token — and the demanding frame reissued once.
-//!   That is the only reissue anywhere; every other rejection, whatever
-//!   its disposition, passes through as data.
+//!   a write, at the adapter's first write and again once the token has
+//!   died (a daemon restart kills every token) — and the demanding frame
+//!   reissued once. That is the only reissue anywhere; every other
+//!   rejection, whatever its disposition, passes through as data. A read
+//!   demands no session, so while none is live — before the first write,
+//!   and from a session's end to the next write — reads run at guest class
+//!   (wire.md §The read predicate).
 //!
 //! `server.rs` is the MCP side: the stdio loop, the JSON-RPC dispatch, and
 //! `call`, which keeps the second rule. `daemon.rs` is the skepd side: the
@@ -28,10 +38,11 @@
 //! `tools.rs` holds the catalog (`tools.json`, embedded) with its commons
 //! sentence, the dispatch table the catalog is checked against when loaded,
 //! and the first rule's mapping of a tool call onto a wire frame. This file
-//! is startup: flags, environment, the `SKEP_COMMONS` check.
+//! is startup — flags, environment, the `SKEP_COMMONS` check — and `log`,
+//! the operator's stream every module writes through.
 //!
-//! stdout is protocol-only; all logging goes to stderr. Stdin EOF is the
-//! clean exit.
+//! stdout is protocol-only; all logging goes to stderr, through `log`,
+//! whose failure fails nothing. Stdin EOF is the clean exit.
 
 #![forbid(unsafe_code)]
 
@@ -42,6 +53,8 @@ mod tools;
 
 use std::borrow::Cow;
 use std::env::{self, VarError};
+use std::fmt::Display;
+use std::io::Write;
 use std::path::PathBuf;
 
 use crate::daemon::Skepd;
@@ -58,7 +71,8 @@ usage: skep-mcp [--tools-file <PATH>]
 
 environment:
   SKEPD_URL       the daemon's origin (default http://127.0.0.1:8642)
-  SKEP_PRINCIPAL  the principal this adapter binds (required, integer)
+  SKEP_PRINCIPAL  the principal this adapter binds (required: an integer,
+                  0 to 9007199254740991, the largest a board registers)
   SKEP_COMMONS    optional address of the commons, the document whose
                   subspace 3 names link types; when set, the server
                   instructions point agents at it
@@ -66,12 +80,23 @@ environment:
 Speaks MCP (JSON-RPC 2.0, one message per line) on stdio; the skepd side
 is specified in skep/docs/wire.md.";
 
+/// The largest principal id a board registers: `2^53 − 1`, the top of the
+/// range a JSON number carries exactly — skepd's `delegate` refuses a
+/// larger `new_id` at the parse (wire.md §Value encodings), so every
+/// principal a board seats sits at or below it. An adapter bound past it
+/// could never write, and skepd refuses such an id at no door this adapter
+/// uses (the bare `POST /session` body and `principal_prefix` read any
+/// `u64`), so startup is the bound's one check here — as skep-cli's
+/// `parse_principal` is for the same variable, at the same bound.
+const MAX_PRINCIPAL: u64 = (1 << 53) - 1;
+
 fn main() {
     let mut tools_file: Option<PathBuf> = None;
     let mut args = env::args_os().skip(1);
     while let Some(arg) = args.next() {
         match arg.to_str() {
             Some("--tools-file") => match args.next() {
+                Some(_) if tools_file.is_some() => die_usage("--tools-file is given at most once"),
                 Some(p) => tools_file = Some(p.into()),
                 None => die_usage("--tools-file needs a value"),
             },
@@ -95,11 +120,14 @@ fn main() {
         Ok(c) => c,
         Err(e) => die(&format!("tools file: {e}")),
     };
+    // Then the environment, each variable refused by name and the first
+    // refusal ending startup: SKEP_PRINCIPAL, SKEPD_URL, SKEP_COMMONS.
     let principal = match env_text("SKEP_PRINCIPAL") {
-        Some(v) => match v.parse::<u64>() {
-            Ok(p) => p,
-            Err(_) => die(&format!(
-                "SKEP_PRINCIPAL: '{v}' is not a principal (a non-negative integer)"
+        Some(v) => match v.parse::<u64>().ok().filter(|p| *p <= MAX_PRINCIPAL) {
+            Some(p) => p,
+            None => die(&format!(
+                "SKEP_PRINCIPAL: '{v}' is not a principal (a non-negative integer no greater \
+                 than {MAX_PRINCIPAL})"
             )),
         },
         None => die("SKEP_PRINCIPAL is required (the principal this adapter binds)"),
@@ -120,22 +148,33 @@ fn main() {
     if let Some(addr) = &commons {
         catalog.append_commons(addr);
     }
-    eprintln!(
-        "skep-mcp: skepd at http://{}, principal {principal}, {} tools{}",
+    log(format_args!(
+        "skepd at http://{}, principal {principal}, {} tools{}",
         http.authority(),
         catalog.tools().len(),
         commons.as_deref().map(|a| format!(", commons {a}")).unwrap_or_default()
-    );
+    ));
     Server { skepd: Skepd::new(http, principal), catalog }.run();
 }
 
+/// One line on the operator's stream: stderr, prefixed `skep-mcp: `,
+/// written by `writeln!` with the result discarded — never `eprintln!`,
+/// which panics when the write fails. MCP's stdio transport lets a client
+/// ignore the server's stderr, and an unread log fails its writes (a pipe
+/// whose reader has gone answers EPIPE, a full volume ENOSPC): a line is
+/// never worth the work it reports on, the rule skep-util's `notice` keeps
+/// for the daemon. So a log line never fails and never reports.
+fn log(line: impl Display) {
+    let _ = writeln!(std::io::stderr(), "skep-mcp: {line}");
+}
+
 fn die(msg: &str) -> ! {
-    eprintln!("skep-mcp: {msg}");
+    log(msg);
     std::process::exit(1);
 }
 
 fn die_usage(msg: &str) -> ! {
-    eprintln!("skep-mcp: {msg}\n\n{USAGE}");
+    log(format_args!("{msg}\n\n{USAGE}"));
     std::process::exit(2);
 }
 

@@ -50,6 +50,14 @@ impl Mcp {
         Mcp::launch(port, principal, None, Stdio::piped())
     }
 
+    /// An adapter whose log no one reads: its stderr a pipe whose read end
+    /// is already closed, so every line it writes there fails (EPIPE).
+    fn spawn_unread(port: u16, principal: &str) -> Mcp {
+        let (reader, writer) = std::io::pipe().expect("a pipe");
+        drop(reader);
+        Mcp::launch(port, principal, None, Stdio::from(writer))
+    }
+
     fn launch(port: u16, principal: &str, commons: Option<&str>, log: Stdio) -> Mcp {
         let mut cmd = Command::new(env!("CARGO_BIN_EXE_skep-mcp"));
         cmd.env("SKEPD_URL", format!("http://127.0.0.1:{port}"))
@@ -128,7 +136,7 @@ impl Mcp {
     /// tools/call, returning (isError, text).
     fn call(&mut self, tool: &str, args: Value) -> (bool, String) {
         let v = self.request("tools/call", json!({"name": tool, "arguments": args}));
-        assert!(v.get("error").is_none(), "tools/call is never a JSON-RPC error: {v}");
+        assert!(v.get("error").is_none(), "a call the adapter runs is never a JSON-RPC error: {v}");
         let result = &v["result"];
         assert_eq!(result["content"][0]["type"], "text", "one text block: {result}");
         let is_error = result["isError"].as_bool().expect("isError present");
@@ -434,11 +442,6 @@ fn lifecycle_create_insert_retrieve_link_and_rejections() {
     assert_eq!(v["resp"], "rejected", "rejections pass through as content: {v}");
     assert_eq!(v["code"], "doc_not_registered");
 
-    // An unknown tool name is isError with a message naming it.
-    let (is_error, text) = mcp.call("frobnicate", json!({}));
-    assert!(is_error, "unknown tool is isError");
-    assert!(text.contains("frobnicate"), "the message names the tool: {text}");
-
     // A malformed JSON line gets -32700 with id null, and the process
     // survives to answer the next request.
     mcp.send_line("this is not json");
@@ -612,11 +615,13 @@ fn slot_form_faults_surface_as_normal_results() {
 
 /// Every answer but `unauthenticated` is the tool result, byte for byte and
 /// never `isError`, from ONE exchange: an ack — whose reissue would apply
-/// the write twice — and a rejection of each disposition, `retry` among
-/// them. The session is held first, so no open rides along; a second
-/// exchange would take the next case's reply as a session answer, or meet
-/// the stub's closed listener, and come back `isError`. The ack is spelled
-/// as skepd never spells one (wire.md §Determinism: sorted keys, no
+/// the write twice — a rejection of each disposition, `retry` among them,
+/// and a non-200's `{"error"}` body, which wire.md §HTTP status codes calls
+/// a transport-level failure and the adapter relays as the daemon's answer
+/// to the frame. The session is held first, so no open rides along; a
+/// second exchange would take the next case's reply as a session answer,
+/// or meet the stub's closed listener, and come back `isError`. The ack is
+/// spelled as skepd never spells one (wire.md §Determinism: sorted keys, no
 /// whitespace), so a result rebuilt from parsed JSON cannot match it.
 #[test]
 fn every_answer_but_unauthenticated_comes_back_verbatim_from_one_exchange() {
@@ -627,17 +632,19 @@ fn every_answer_but_unauthenticated_comes_back_verbatim_from_one_exchange() {
         r#"{"code":"poisoned","disposition":"halt","op":"insert","resp":"rejected"}"#,
         r#"{"code":"not_owner","disposition":"permanent","op":"insert","resp":"rejected"}"#,
     ];
+    let refusal = r#"{"error":"internal_panic"}"#;
     let mut replies = vec![reply(200, UNAUTHENTICATED), session_reply(TOKEN), reply(200, ACK)];
     replies.extend(answers.iter().map(|a| reply(200, a)));
+    replies.push(reply(500, refusal));
     let (port, stub) = stub_daemon(replies);
     let mut mcp = Mcp::spawn(port, "1");
     mcp.initialize();
     assert_eq!(mcp.call("insert", an_insert()), (false, ACK.to_string()), "premise: a session");
-    for answer in answers {
+    for answer in answers.into_iter().chain([refusal]) {
         assert_eq!(mcp.call("insert", an_insert()), (false, answer.to_string()), "{answer}");
     }
     let requests = stub.join().expect("the stub daemon");
-    assert_eq!(requests.len(), 3 + answers.len(), "one exchange each");
+    assert_eq!(requests.len(), 3 + answers.len() + 1, "one exchange each");
 }
 
 /// `unauthenticated` is the cue: the adapter opens a bare session — a
@@ -676,8 +683,9 @@ fn a_second_unauthenticated_passes_through_as_data() {
 
 /// A failed exchange is never reissued — not even one whose answer broke
 /// off mid-body, after the daemon may well have committed the write: the
-/// failure is the tool result, `isError`, and the reply a reissue would
-/// have taken is still waiting when the test comes for it.
+/// failure is the tool result, `isError` — though the frame reached the
+/// daemon whole, so the write's outcome is unknown — and the reply a
+/// reissue would have taken is still waiting when the test comes for it.
 #[test]
 fn a_failed_exchange_is_never_reissued() {
     let (port, stub) = stub_daemon(vec![cut_short(), reply(200, ACK)]);
@@ -689,6 +697,10 @@ fn a_failed_exchange_is_never_reissued() {
     let mut drain = TcpStream::connect(("127.0.0.1", port)).expect("the stub still listens");
     drain.write_all(b"GET /drain HTTP/1.1\r\n\r\n").expect("the drain request");
     let requests = stub.join().expect("the stub daemon");
+    let mut frame = an_insert();
+    frame["op"] = json!("insert");
+    assert!(requests[0].starts_with("POST /op "), "the write went out: {}", requests[0]);
+    assert_eq!(body_of(&requests[0]), frame.to_string(), "the frame reached the daemon whole");
     assert!(requests[1].starts_with("GET /drain "), "the second reply went to: {}", requests[1]);
 }
 
@@ -743,6 +755,34 @@ fn the_health_read_carries_no_token_and_is_reported_whole() {
     assert_eq!(session_of(&r[4]), None, "a held token rode GET /health: {}", r[4]);
 }
 
+/// The account read is a query: principal_prefix's maybe_addr, its null
+/// the wire's "absent" — and an answer that is no well-formed maybe_addr is
+/// neither an account nor its absence. A rejection — `unauthenticated`
+/// included, which no skepd answers a read and which opens no session here
+/// — a non-200's error body, or a maybe_addr whose `addr` is missing or
+/// neither a string nor null comes back isError quoting it, never as an
+/// account of null, and no health read follows.
+#[test]
+fn an_account_read_answered_no_maybe_addr_answers_is_error_never_null() {
+    let answers = [
+        (200, UNAUTHENTICATED),
+        (500, r#"{"error":"internal_panic"}"#),
+        (200, r#"{"as_of":9,"resp":"maybe_addr"}"#),
+        (200, r#"{"addr":7,"as_of":9,"resp":"maybe_addr"}"#),
+    ];
+    let (port, stub) = stub_daemon(answers.iter().map(|&(status, a)| reply(status, a)).collect());
+    let mut mcp = Mcp::spawn(port, "1");
+    mcp.initialize();
+    for (_, answer) in answers {
+        let (is_error, text) = mcp.call("session_info", json!({}));
+        assert!(is_error, "no account read as null: {text}");
+        assert!(text.contains(answer), "the answer is quoted: {text}");
+    }
+    let r = stub.join().expect("the stub daemon");
+    let lines: Vec<&str> = r.iter().map(|q| q.lines().next().unwrap_or("")).collect();
+    assert_eq!(lines, ["POST /op HTTP/1.1"; 4], "no session open, no health read");
+}
+
 /// No session token leaves the adapter: not in a tool result — an answer,
 /// or a failure after the token rode the request — and not in a log line,
 /// across a session's open and its reopen. The stub issues the tokens, so
@@ -775,6 +815,34 @@ fn a_session_token_reaches_no_tool_result_and_no_log_line() {
     }
 }
 
+/// MCP's stdio transport lets a client ignore the server's stderr, and a
+/// log no one reads fails every line written to it. No log line is worth
+/// the work it reports on: startup, the session open its line reports, the
+/// reissue, the answer and the clean exit all go on without it, and a
+/// refusal is still exit 1.
+#[test]
+fn a_log_no_one_reads_fails_no_work() {
+    let (port, stub) =
+        stub_daemon(vec![reply(200, UNAUTHENTICATED), session_reply(TOKEN), reply(200, ACK)]);
+    let mut mcp = Mcp::spawn_unread(port, "1");
+    mcp.initialize();
+    assert_eq!(mcp.call("insert", an_insert()), (false, ACK.to_string()), "the reissue's answer");
+    assert_eq!(stub.join().expect("the stub daemon").len(), 3, "the open and the reissue ran");
+    assert!(mcp.finish().success(), "the clean exit, its log unwritable");
+    let (reader, writer) = std::io::pipe().expect("a pipe");
+    drop(reader);
+    let status = Command::new(env!("CARGO_BIN_EXE_skep-mcp"))
+        .env("SKEPD_URL", "http://127.0.0.1:1")
+        .env_remove("SKEP_PRINCIPAL")
+        .env_remove("SKEP_COMMONS")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(writer)
+        .status()
+        .expect("run skep-mcp");
+    assert_eq!(status.code(), Some(1), "a refusal its log cannot carry is still exit 1");
+}
+
 // ── startup, and no daemon behind the adapter ────────────────────────────
 
 /// A daemon the adapter cannot reach is what `isError` marks: a wire op and
@@ -794,32 +862,62 @@ fn calls_to_an_unreachable_daemon_answer_is_error_naming_its_origin() {
     assert_eq!(mcp.request("ping", json!({}))["result"], json!({}), "the adapter keeps answering");
 }
 
-/// SKEP_PRINCIPAL is required and an integer: unset, startup refuses by
-/// name; set to anything that is no non-negative integer, it refuses
-/// quoting the value — never binding a default principal.
+/// The adapter's own refusals of a call it will not run take the channel
+/// call_params' faults take — -32602 under the call's id, never isError,
+/// which marks the daemon side's failure alone: a name outside the catalog,
+/// and an argument session_info does not take (its schema takes none, and
+/// the adapter is the one party that reads them: ignored, a `principal` of
+/// 2 would be answered with this adapter's own principal, as if it were
+/// 2's). Neither reaches skepd, so none stands behind the adapter.
 #[test]
-fn skep_principal_is_required_and_an_integer() {
+fn a_call_the_adapter_will_not_run_is_invalid_params_naming_why() {
+    let mut mcp = Mcp::spawn(1, "1");
+    mcp.initialize();
+    for (call, names) in [
+        (json!({"name": "frobnicate", "arguments": {}}), "'frobnicate'"),
+        (json!({"name": "session_info", "arguments": {"principal": 2}}), "'principal'"),
+    ] {
+        let v = mcp.request("tools/call", call);
+        assert_eq!(v["error"]["code"], json!(-32602), "{v}");
+        let message = v["error"]["message"].as_str().unwrap_or_default();
+        assert!(message.contains(names), "the refusal names {names}: {v}");
+    }
+}
+
+/// SKEP_PRINCIPAL is required and an id a board can register: unset,
+/// startup refuses by name; set to anything that is no integer from 0 to
+/// 2^53 − 1, it refuses quoting the value — never binding a default
+/// principal, or one no board can seat.
+#[test]
+fn skep_principal_is_required_and_an_id_a_board_can_register() {
     let url = ("SKEPD_URL", "http://127.0.0.1:1");
     let out = run_adapter(&[], &[url]);
     assert_eq!(out.status.code(), Some(1), "unset: {out:?}");
     assert!(String::from_utf8_lossy(&out.stderr).contains("SKEP_PRINCIPAL is required"), "{out:?}");
-    for bad in ["", "abc", "-1", "1.5", "18446744073709551616"] {
+    for bad in ["", "abc", "-1", "1.5", "9007199254740992", "18446744073709551616"] {
         let out = run_adapter(&[], &[url, ("SKEP_PRINCIPAL", bad)]);
         assert_eq!(out.status.code(), Some(1), "'{bad}': {out:?}");
         let err = String::from_utf8_lossy(&out.stderr);
         assert!(err.contains(&format!("SKEP_PRINCIPAL: '{bad}' is not a principal")), "{err}");
     }
+    let out = run_adapter(&[], &[url, ("SKEP_PRINCIPAL", "9007199254740991")]);
+    assert!(out.status.success(), "2^53 - 1, the largest id a board registers, binds: {out:?}");
 }
 
-/// A word the usage does not name, or `--tools-file` without its path, is a
-/// usage error — exit 2, the usage on stderr — never ignored: a mistyped
-/// `--tools-file` must not quietly serve the embedded catalog instead.
+/// A word the usage does not name, `--tools-file` without its path, or
+/// `--tools-file` given twice, is a usage error — exit 2, the usage on
+/// stderr — never ignored: a mistyped `--tools-file` must not quietly serve
+/// the embedded catalog instead, nor a second one quietly win.
 #[test]
-fn an_unknown_word_or_a_flag_without_its_value_is_a_usage_error() {
+fn an_unknown_word_or_a_flag_without_its_value_or_given_twice_is_a_usage_error() {
     let env = [("SKEPD_URL", "http://127.0.0.1:1"), ("SKEP_PRINCIPAL", "1")];
     for (args, says) in [
         (&["--tool-file", "mine.json"][..], "unknown argument '--tool-file'"),
         (&["--tools-file"][..], "--tools-file needs a value"),
+        (
+            &["--tools-file", "a.json", "--tools-file", "b.json"][..],
+            "--tools-file is given at most once",
+        ),
     ] {
         let out = run_adapter(args, &env);
         assert_eq!(out.status.code(), Some(2), "{args:?}: {out:?}");

@@ -82,9 +82,12 @@ pub struct Http {
 }
 
 impl Http {
-    /// Parse `SKEPD_URL` as the daemon's origin: `http://host[:port]` and
-    /// nothing else — the daemon speaks plain HTTP on loopback, so any other
-    /// scheme or a path is a configuration mistake worth refusing at startup.
+    /// Parse `SKEPD_URL` as the daemon's origin: `http://host[:port]`, a
+    /// bare trailing `/` allowed. The daemon speaks plain HTTP on loopback,
+    /// so another scheme, a path, a port that is no `u16` or an empty host
+    /// is a configuration mistake refused here, at startup. The host's own
+    /// text is not checked: one that does not resolve fails the first
+    /// exchange instead, at its `resolve:` step, naming the origin.
     pub fn parse(url: &str) -> Result<Http, String> {
         let rest = url
             .strip_prefix("http://")
@@ -112,6 +115,9 @@ impl Http {
         Ok(Http { host: host.to_string(), port, authority: authority.to_string() })
     }
 
+    /// The origin's authority as `SKEPD_URL` spelled it (`host[:port]`,
+    /// brackets kept): the `Host` header's value, and the origin every
+    /// error names.
     pub fn authority(&self) -> &str {
         &self.authority
     }
@@ -123,7 +129,12 @@ impl Http {
     /// the caller's to judge, route by route. `Err` means skepd was not
     /// reached or did not answer within those bounds; its message names the
     /// origin and the failed step and never quotes the request, whose
-    /// headers can carry a credential.
+    /// headers can carry a credential. It dials the first address `host`
+    /// resolves to, and no other. `path` and each header's name and value
+    /// go into the head as given: keeping CR and LF out of them is the
+    /// caller's obligation, unchecked here. `daemon.rs` discharges it: its
+    /// paths and header name are constants, and its one header value is a
+    /// `Token`.
     pub fn exchange(
         &self,
         method: Method,
@@ -234,6 +245,7 @@ fn read_bounded(stream: &mut TcpStream, deadline: Instant) -> io::Result<Vec<u8>
 /// exactly that on every answer this adapter asks for. The length is what
 /// tells a connection that broke mid-body from a whole answer, so a head
 /// that cannot state it is a failure, never relayed as skepd's document.
+/// Bytes past the stated length are no part of the answer and are dropped.
 fn parse_response(raw: &[u8]) -> Result<(u16, Vec<u8>), String> {
     let sep = raw
         .windows(4)

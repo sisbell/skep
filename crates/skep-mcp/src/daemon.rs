@@ -44,7 +44,10 @@ const MAX_CUE_BYTES: usize = 4096;
 struct Token(String);
 
 impl Token {
-    /// Exactly 32 lowercase hex, else `None` (wire.md §Sessions).
+    /// Exactly 32 lowercase hex, else `None` (wire.md §Sessions). The one
+    /// check on bytes the daemon chose that reach a request head: the
+    /// grammar admits no CR, LF or `:`, discharging `Http::exchange`'s
+    /// precondition on a header value.
     fn parse(s: &str) -> Option<Token> {
         let wire = s.len() == 32 && s.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'));
         wire.then(|| Token(s.to_string()))
@@ -70,9 +73,13 @@ impl fmt::Debug for Token {
 /// did not answer within `Http::exchange`'s bounds — its deadlines and its
 /// answer cap; the bare session open `op` needs, or the health read,
 /// answered a status other than 200 or a body the adapter could not read;
-/// or the account read's answer was not JSON. Whatever response document
-/// skepd answered to an op itself within those bounds — rejections
-/// included — is an `Ok` payload.
+/// or the account read was answered no well-formed `maybe_addr`. An `Err`
+/// that came after a frame was written whole — at the exchange's read or
+/// response step, the reissue's included — leaves that write's outcome
+/// unknown: it may have committed. Whatever skepd answered to an op itself
+/// within those bounds is an `Ok` payload at any status, since `post_op`
+/// reads none: a 200's response document, rejections included, or a
+/// non-200's `{"error", "detail"?}` body (wire.md §HTTP status codes).
 #[derive(Debug)]
 pub struct Skepd {
     http: Http,
@@ -92,16 +99,17 @@ impl Skepd {
         self.principal
     }
 
-    /// POST one frame to `/op`; hand back its response document verbatim.
-    /// On `unauthenticated` — wire.md §Sessions' signal to (re)open a
-    /// session: this write needs one the adapter doesn't hold (never opened,
-    /// or the daemon restarted and the token died with the process) — open a
-    /// bare session and reissue the frame once, overriding the rejection's
-    /// `permanent` hint as a client that knows its own context may (wire.md
-    /// §Rejections). The rejected attempt executed nothing, so the reissue
-    /// cannot double-apply; a second `unauthenticated` passes through as data
-    /// like any other rejection. This is the only reissue anywhere: no other
-    /// rejection is reissued, whatever its disposition, `retry` included.
+    /// POST one frame to `/op`; hand back skepd's answer to it verbatim, at
+    /// any status. On `unauthenticated` — wire.md §Sessions' signal to
+    /// (re)open a session: this write needs one the adapter doesn't hold
+    /// (never opened, or ended — a daemon restart ends every session, and
+    /// wire.md §Sessions lists the other ends) — open a bare session and
+    /// reissue the frame once, overriding the rejection's `permanent` hint
+    /// as a client that knows its own context may (wire.md §Rejections). The
+    /// rejected attempt executed nothing, so the reissue cannot double-apply;
+    /// a second `unauthenticated` passes through as data like any other
+    /// rejection. This is the only reissue anywhere: no other rejection is
+    /// reissued, whatever its disposition, `retry` included.
     pub fn op(&mut self, frame: &[u8]) -> Result<Vec<u8>, String> {
         let body = self.post_op(frame)?;
         if !is_unauthenticated(&body) {
@@ -111,17 +119,28 @@ impl Skepd {
         self.post_op(frame)
     }
 
-    /// The bound principal's account: `principal_prefix`'s `addr` (wire.md
-    /// `maybe_addr`), null while the principal is undelegated — and null
-    /// for any other JSON answer that carries no `addr`, a rejection among
-    /// them. A namespace read is exempt from the read predicate (AUTH-6.37),
-    /// so the answer is the same whether or not a session is live.
-    pub fn account(&mut self) -> Result<Value, String> {
+    /// The bound principal's account: the `addr` of `principal_prefix`'s
+    /// `maybe_addr` answer (wire.md §The response envelope), null while the
+    /// principal is undelegated. A query: one `POST /op` under the held
+    /// token, if any, and never a session open — a read is never answered
+    /// `unauthenticated` (wire.md §Sessions), and a namespace read is exempt
+    /// from the read predicate (AUTH-6.37), so the answer is the same with a
+    /// session live or none. Any other answer — a rejection, a non-200's
+    /// `{"error"}` body, a `maybe_addr` whose `addr` is neither a string nor
+    /// null — is neither an account nor its absence: `Err`, quoting it,
+    /// never a null that would read as "undelegated".
+    pub fn account(&self) -> Result<Value, String> {
         let frame = json!({"op": "principal_prefix", "principal": self.principal}).to_string();
-        let body = self.op(frame.as_bytes())?;
+        let body = self.post_op(frame.as_bytes())?;
         let answer: Value = serde_json::from_slice(&body)
             .map_err(|e| format!("principal_prefix answer is not JSON: {e}"))?;
-        Ok(answer.get("addr").cloned().unwrap_or(Value::Null))
+        match answer.get("addr").filter(|addr| addr.is_string() || addr.is_null()) {
+            Some(addr) if answer["resp"] == "maybe_addr" => Ok(addr.clone()),
+            _ => Err(format!(
+                "principal_prefix answered no well-formed maybe_addr: {}",
+                String::from_utf8_lossy(&body)
+            )),
+        }
     }
 
     /// `GET /health`: the daemon's health answer, a live reading of its
@@ -158,11 +177,12 @@ impl Skepd {
             ));
         }
         self.token = Some(session_token(&answer)?);
-        eprintln!("skep-mcp: bare session opened (principal {})", self.principal);
+        crate::log(format_args!("bare session opened (principal {})", self.principal));
         Ok(())
     }
 
-    /// One `POST /op`, the live token, if any, riding as the session header.
+    /// One `POST /op`, the live token, if any, riding as the session header:
+    /// the answer's body, whatever its status — the status is not read.
     fn post_op(&self, frame: &[u8]) -> Result<Vec<u8>, String> {
         let session = self.token.as_ref().map(Token::header);
         let (_, body) = self.http.exchange(Method::Post, "/op", session.as_slice(), frame)?;

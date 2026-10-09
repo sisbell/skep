@@ -16,6 +16,7 @@ fn only_an_http_origin_without_a_path_parses() {
         "http://",
         "http://:8642",
         "http://127.0.0.1:notaport",
+        "http://127.0.0.1:65536",
         "http://127.0.0.1:8642/op",
     ] {
         assert!(Http::parse(bad).is_err(), "'{bad}' must not parse");
@@ -38,6 +39,9 @@ fn a_response_splits_at_its_head_and_a_short_body_is_a_break() {
     let (st, body) =
         parse_response(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\n{}").expect("parse");
     assert_eq!((st, body.as_slice()), (200, &b"{}"[..]));
+    let (_, body) = parse_response(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\n{}tail")
+        .expect("a body with bytes past its length");
+    assert_eq!(body, b"{}", "bytes past the stated length are no part of the answer");
     assert!(
         parse_response(b"HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\n{}").is_err(),
         "a short body is a broken connection, not an answer"

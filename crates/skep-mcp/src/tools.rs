@@ -106,9 +106,14 @@ pub fn wire_frame(name: &str, mut args: Map<String, Value>) -> Option<Vec<u8>> {
 const ADDR_PLACEHOLDER: &str = "{addr}";
 
 /// The loaded catalog: the server instructions, the commons sentence
-/// template, and the tool definitions `tools/list` answers. Its fields are
-/// private, so outside this module `Catalog::load` is the one way to build
-/// one, and what it checked stays checked.
+/// template, and the tool definitions `tools/list` answers. Its invariant,
+/// established by `Catalog::load`: `instructions` is nonempty;
+/// `commons_instructions` holds `{addr}`; `tools` is one `check_tool`-valid
+/// entry per `DISPATCH_OPS` op and one for `session_info`, no name twice,
+/// in file order — so every tool `tools/list` names is one `Server::call`
+/// runs, and every op it runs is listed. The fields are private, so outside
+/// this module `load` is the one way to build one, and `append_commons`,
+/// the one mutation, only appends to `instructions`.
 #[derive(Debug)]
 pub struct Catalog {
     instructions: String,
@@ -122,9 +127,13 @@ pub struct Catalog {
 }
 
 impl Catalog {
-    /// Parse and validate one catalog. Every fault is a startup error
-    /// carrying the offending name — the no-drift contract is enforced
-    /// here, in both directions.
+    /// Parse and validate one catalog, establishing `Catalog`'s invariant —
+    /// the no-drift contract, in both directions. Every fault is a startup
+    /// error naming what is wrong — the field, the entry's index, the tool
+    /// or the op — one fault at a time, the first found speaking: the root
+    /// and its fields, `instructions`, `commons_instructions`, then each
+    /// entry by index, then each name in file order (a duplicate, or one the
+    /// dispatch doesn't know), then each dispatch op the file doesn't name.
     pub fn load(text: &str) -> Result<Catalog, String> {
         let v: Value = serde_json::from_str(text).map_err(|e| format!("not JSON: {e}"))?;
         let Value::Object(mut root) = v else {
@@ -191,6 +200,9 @@ impl Catalog {
 
     /// Point the instructions at the commons: the commons template with
     /// every `{addr}` replaced by `addr`, appended after a blank line.
+    /// `addr` goes in as given: that it is T4-valid is the caller's to have
+    /// checked — `main`'s `SKEP_COMMONS` gate — and it is checked nowhere
+    /// here.
     pub fn append_commons(&mut self, addr: &str) {
         let sentence = self.commons_instructions.replace(ADDR_PLACEHOLDER, addr);
         self.instructions.push_str("\n\n");
@@ -302,6 +314,25 @@ mod tests {
         ] {
             assert!(err.contains(names), "the refusal names {names}: {err}");
         }
+    }
+
+    /// One fault at a time, the first found speaking: a catalog with an
+    /// unknown root field, a malformed entry and a missing op is refused for
+    /// the root field; without it, for the entry; without both, for the op.
+    #[test]
+    fn the_first_fault_found_speaks() {
+        let mut v: Value = serde_json::from_str(EMBEDDED).expect("embedded parses");
+        v["version"] = json!(1);
+        v["tools"][0]["title"] = json!("Title");
+        v["tools"].as_array_mut().expect("tools").retain(|t| t["name"] != "insert");
+        let err = Catalog::load(&v.to_string()).expect_err("three faults");
+        assert!(err.contains("'version'"), "the root speaks first: {err}");
+        v.as_object_mut().expect("root").remove("version");
+        let err = Catalog::load(&v.to_string()).expect_err("two faults");
+        assert!(err.starts_with("tools[0]: ") && err.contains("'title'"), "then the entry: {err}");
+        v["tools"][0].as_object_mut().expect("entry").remove("title");
+        let err = Catalog::load(&v.to_string()).expect_err("one fault");
+        assert!(err.contains("'insert'"), "then the op: {err}");
     }
 
     /// The commons sentence template is catalog data like everything else:

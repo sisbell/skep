@@ -41,7 +41,7 @@ impl Server {
             let line = match line {
                 Ok(l) => l,
                 Err(e) => {
-                    eprintln!("skep-mcp: stdin: {e}");
+                    crate::log(format_args!("stdin: {e}"));
                     return;
                 }
             };
@@ -55,11 +55,17 @@ impl Server {
         }
     }
 
-    /// One inbound line, as raw bytes → at most one outbound message.
-    /// `None` for a blank line, a notification (all consumed silently), a
-    /// stray response or an id-less non-request: there is nothing to
-    /// answer. A line that does not parse as JSON — bytes that are not
-    /// UTF-8 included — is the -32700 parse error, id null.
+    /// One inbound line, as raw bytes → at most one outbound message,
+    /// classified by two members alone: `method` (a string) and `id` (any
+    /// JSON value, echoed as given; `jsonrpc` is not read). A request — a
+    /// method and an id — gets its response under that id. `None` for a
+    /// blank line, a notification (a method, no id: all consumed silently),
+    /// a stray response (an id, no method, a `result` or an `error`) or an
+    /// id-less non-request: there is nothing to answer under. A line that
+    /// does not parse as JSON — bytes that are not UTF-8 included — is the
+    /// -32700 parse error and JSON that is no object the -32600, both id
+    /// null; an id with no method, no `result` and no `error` is the -32600
+    /// under that id.
     fn handle_line(&mut self, line: &[u8]) -> Option<Value> {
         if std::str::from_utf8(line).is_ok_and(|s| s.trim().is_empty()) {
             return None;
@@ -119,10 +125,13 @@ impl Server {
             }
             "ping" => rpc_result(id, json!({})),
             "tools/list" => rpc_result(id, json!({"tools": self.catalog.tools()})),
-            "tools/call" => match call_params(params) {
-                Ok((name, args)) => rpc_result(id, self.call(&name, args)),
-                Err(e) => rpc_error(id, ErrorCode::InvalidParams, &e),
-            },
+            "tools/call" => {
+                let called = call_params(params).and_then(|(name, args)| self.call(&name, args));
+                match called {
+                    Ok(result) => rpc_result(id, result),
+                    Err(refusal) => rpc_error(id, ErrorCode::InvalidParams, &refusal),
+                }
+            }
             other => {
                 let message = format!("method '{other}' not supported");
                 rpc_error(id, ErrorCode::MethodNotFound, &message)
@@ -130,33 +139,42 @@ impl Server {
         }
     }
 
-    /// Run one tool. A wire op's result is whatever response document skepd
-    /// answered, verbatim — rejections are data. An `Err` from the daemon
-    /// side (`Skepd`'s doc says when) is `isError` with the adapter's
-    /// message, as is a tool name outside the catalog, which reaches nothing.
-    fn call(&mut self, name: &str, args: Map<String, Value>) -> Value {
+    /// Run one tool: `Ok` its tool result, `Err` the refusal of a call the
+    /// adapter will not run — a name outside the catalog, or an argument
+    /// `session_info` does not take — which `respond` answers -32602, the
+    /// channel `call_params`' faults take (MCP 2025-06-18, Tools §Error
+    /// Handling: unknown tools and invalid arguments are protocol errors).
+    /// A wire op's result is whatever skepd answered to its frame, verbatim
+    /// (a body that is not UTF-8, never skepd's, has its invalid bytes
+    /// replaced) — rejections are data — and an `Err` from the daemon side
+    /// (`Skepd`'s doc says when) is `isError` with the adapter's message:
+    /// the one meaning `isError` has.
+    fn call(&mut self, name: &str, args: Map<String, Value>) -> Result<Value, String> {
         if name == SESSION_INFO {
-            return match self.session_info() {
+            // The one tool the adapter answers itself, so the one whose
+            // arguments it reads: its schema takes none.
+            if let Some(arg) = args.keys().next() {
+                return Err(format!("session_info takes no arguments; got '{arg}'"));
+            }
+            return Ok(match self.session_info() {
                 Ok(info) => tool_result(info.to_string(), false),
                 Err(e) => tool_result(e, true),
-            };
+            });
         }
-        let Some(frame) = wire_frame(name, args) else {
-            return tool_result(
-                format!("unknown tool '{name}'; tools/list names the available tools"),
-                true,
-            );
-        };
-        match self.skepd.op(&frame) {
+        let frame = wire_frame(name, args).ok_or_else(|| {
+            format!("unknown tool '{name}'; tools/list names the available tools")
+        })?;
+        Ok(match self.skepd.op(&frame) {
             Ok(body) => tool_result(String::from_utf8_lossy(&body).into_owned(), false),
             Err(e) => tool_result(e, true),
-        }
+        })
     }
 
     /// The apparatus tool: this adapter's principal, that principal's
     /// account (`principal_prefix`; null until delegated), and the daemon's
-    /// health answer.
-    fn session_info(&mut self) -> Result<Value, String> {
+    /// health answer — two queries, the account read first: its `Err`
+    /// answers alone, and no health read follows.
+    fn session_info(&self) -> Result<Value, String> {
         let account = self.skepd.account()?;
         let health = self.skepd.health()?;
         Ok(json!({

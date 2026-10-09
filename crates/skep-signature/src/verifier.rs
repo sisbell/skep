@@ -1,10 +1,10 @@
 //! THE VERIFY and THE ALL-HALVES DECODE — what skepd links, in every build:
 //! [`verify`], both halves of a hybrid signature over the same bytes, and
 //! [`key_decodes`], the enrollment courtesy, which reads the very two half
-//! decodes the verify runs before its arithmetic. The verify-only build a
-//! daemon links is this file and the crate root, and nothing in either
-//! signs; its tests, in `verifier/tests.rs`, sign their fixtures through the
-//! signer.
+//! decodes the verify runs, each before its own half's arithmetic. The
+//! verify-only build a daemon links is this file and the crate root, and
+//! nothing in either signs; its tests, in `verifier/tests.rs`, sign their
+//! fixtures through the signer.
 
 use std::fmt;
 
@@ -64,9 +64,10 @@ impl std::error::Error for HybridFault {}
 /// `VerifyingKey::from_bytes` over the KEY PIN's LAST 32 raw bytes (the
 /// crate pick is argued in `Cargo.toml`), which decodes under ZIP-215: a
 /// point of any order, under its canonical encoding or not — or `None`
-/// where the half is no point. One of the two decodes [`verify`] runs before
-/// its arithmetic and [`key_decodes`] runs alone; a half of small order,
-/// which it admits, is `verify_strict`'s to refuse, signature by signature.
+/// where the half is no point. One of the two decodes [`verify`] runs — this
+/// one first, before any arithmetic — and [`key_decodes`] runs alone; a half
+/// of small order, which it admits, is `verify_strict`'s to refuse, signature
+/// by signature.
 fn decode_ed25519_half(key: &PublicKey) -> Option<EdVerifyingKey> {
     EdVerifyingKey::from_bytes(key.ed25519_half()).ok()
 }
@@ -137,8 +138,9 @@ impl PqVerifier {
 /// THE ALL-HALVES DECODE — the precheck's `undecodable_key` courtesy
 /// (AUTH-3.56 as RES-206 landed it; the hybrid-only launch's Q9, owner
 /// 2026-09-26): `true` iff EVERY half the key's row names decodes, by the
-/// very two decodes [`verify`] runs before its arithmetic, so the two cannot
-/// disagree about what decodes and a new tag's decode is one arm both read.
+/// very two decodes [`verify`] runs — each before its own half's arithmetic,
+/// the Ed25519 half's first — so the courtesy and the verify cannot disagree
+/// about what decodes, and a new tag's decode is one arm both read.
 /// On a key this answers `false` for, every [`verify`] that gets past the
 /// row and the width answers [`HybridFault::Signature`]. Its `true` is a
 /// decode's, not a promise that the key can sign: wire.md's

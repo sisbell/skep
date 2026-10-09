@@ -93,10 +93,11 @@ getrandom = { version = "0.3", optional = true }
 zeroize = { version = "1", optional = true, features = ["derive"] }
 
 [dev-dependencies]
-# This crate itself with `test-hooks` on, so its integration tests
-# (tests/it, outside this library's `cfg(test)`) compile against the signer
-# and the hooks under a plain `cargo test` or workspace run, no flag added. A
-# build that compiles no test never reads this table.
+# This crate itself with `test-hooks` on, so its tests — the unit tests under
+# the library's `cfg(test)` as much as the integration tests under tests/it,
+# since every hook is gated on `test-hooks` and none on `test` — compile
+# against the signer and the hooks under a plain `cargo test` or workspace
+# run, no flag added. A build that compiles no test never reads this table.
 skep-signature = { path = ".", features = ["test-hooks"] }
 # The fixed frames (`tests/it/frames.rs`) name their account, document and
 # type addresses.

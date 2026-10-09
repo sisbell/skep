@@ -25,8 +25,9 @@ use crate::Rule;
 /// `fn-dsa` 0.4.0's keygen is fed so that its one 32-byte draw IS the KDF's
 /// PQ half seed. A longer draw would be a keygen this build did not pin, and
 /// under the frozen-tag rule a NEW tag; refusing it makes the rule loud. It
-/// BORROWS the bytes: the KDF's half seed is lent to the keygen and never
-/// copied onto the heap.
+/// BORROWS the bytes: this crate makes no copy of the KDF's half seed to feed
+/// the keygen — the copy the keygen takes of its draw is its own, and
+/// [`HybridSigner`]'s doc names it.
 struct ExactBytes<'a> {
     bytes: &'a [u8],
     drawn: usize,
@@ -174,19 +175,44 @@ impl PqSigner {
 /// default `zeroize` feature); the ML-DSA-65 key — ξ and the expanded key
 /// beside it (`ml-dsa`'s `zeroize` feature); and the stored FN-DSA-512
 /// encoding (a `Zeroizing` vector — the key each tag-3 signature decodes
-/// from it wipes itself, `fn-dsa`'s own). The half seeds
-/// [`HybridSigner::from_seed`] derives are wiped as they go out of scope
-/// inside it, once each half has been handed to its keygen (`HalfSeeds`).
-/// WHAT IS NOT WIPED, by name: the KDF's working state — `hkdf` 0.12's, and
-/// that of the `hmac` 0.12 and `digest` 0.10 it runs on, which wipe nothing
-/// they drop and which this crate cannot reach: a copy of the seed itself,
-/// as Extract's HMAC buffers it, and what derives from it on the way to the
-/// half seeds — the PRK, the HMAC state keyed by it, and each Expand's
-/// output block, a copy of that half seed. All of it is released before
-/// `from_seed` keygens either half, and holding a copy of the seed, it tells
-/// no more than the seed does. And the caveat every wipe carries: a copy the
+/// from it wipes itself, its scratch included, `fn-dsa`'s own). The half
+/// seeds [`HybridSigner::from_seed`] derives are wiped as they go out of
+/// scope inside it, once each half has been handed to its keygen
+/// (`HalfSeeds`).
+///
+/// WHAT IS NOT WIPED: what the KDF and the three key libraries compute from
+/// a secret inside a call, which each releases without overwriting and this
+/// crate cannot reach — a library's `zeroize` feature wipes the keys it
+/// holds, never what its calls compute from them. By name, the parts that
+/// matter:
+///
+/// * AT KEYGEN, all released before `from_seed` returns. The KDF's working
+///   state, released before either half's keygen runs — `hkdf` 0.12's, and
+///   that of the `hmac` 0.12 and `digest` 0.10 it runs on: a copy of the
+///   seed itself, as Extract's HMAC buffers it, the PRK, the HMAC state
+///   keyed by it, and each Expand's output block, a copy of that half seed;
+///   holding a copy of the seed, it tells no more than the seed does. Then
+///   `ed25519-dalek`'s SHA-512 output over the Ed25519 half seed — the 64
+///   bytes its expanded key is cut from, the expanded key itself wiping;
+///   `ml-dsa`'s SHAKE state over ξ and the seed ρ′ it squeezes for the key's
+///   secret vectors; and the copy `fn-dsa`'s keygen takes of its one 32-byte
+///   draw — the PQ half seed itself — with the stream it seeds.
+/// * AT EVERY SIGNATURE, released as the call returns. `ed25519-dalek`'s
+///   SHA-512 output again, re-derived from the Ed25519 key for each
+///   signature and as good as that key, and the signature's nonce, which
+///   beside the signature yields the secret scalar that signs; under tag 1,
+///   `ml-dsa`'s private seed ρ″ and the masks it expands; under tag 3,
+///   `fn-dsa`'s hedged per-signature seed and the sampler it seeds.
+///
+/// Each library's other intermediates are of the same kind, computed from
+/// these and from the keys. And the caveat every wipe carries: a copy the
 /// compiler makes when a value is moved is beyond any crate's reach. The
-/// signer's wiping test holds this paragraph to the build, type by type.
+/// signer's wiping test holds the keys, the half seeds and the KDF's state to
+/// the build, type by type; the libraries' own residue lives in their call
+/// frames, read off their source at the versions the lock holds —
+/// `ed25519-dalek` 2.2.0, which the manifest lets float within `2`, and
+/// `ml-dsa` 0.1.1 and `fn-dsa` 0.4.0, which `tests/it/tidy.rs` holds there —
+/// and moves with them.
 pub struct HybridSigner {
     ed: EdSigningKey,
     pq: PqSigner,
@@ -442,11 +468,12 @@ mod tests {
     /// WHAT A DROPPED SIGNER WIPES, as [`HybridSigner`]'s doc states it, read
     /// off each type's `ZeroizeOnDrop` in this very build: the Ed25519 signing
     /// key, the FN-DSA key each tag-3 signature decodes, the stored FN-DSA
-    /// encoding it decodes from, the ML-DSA-65 key and the KDF's half seeds
-    /// wipe themselves; the KDF's working state does not — Extract's HMAC,
-    /// which buffers a copy of the seed, the `Output` the PRK and each
-    /// Expand's block are held in, and the `Hkdf` keyed by the PRK — the
-    /// residue the doc names. A feature line or a derive that moves any of the
+    /// encoding it decodes from, the ML-DSA-65 key and the KDF's half seeds wipe
+    /// themselves; the KDF's working state does not — Extract's HMAC, which
+    /// buffers a copy of the seed, the `Output` the PRK and each Expand's block
+    /// are held in, and the `Hkdf` keyed by the PRK — the KDF's part of the
+    /// residue the doc names, the key libraries' part sitting in call frames no
+    /// probe of a type can see. A feature line or a derive that moves any of the
     /// eight, or a key field the signer holds whose type moves — each read off
     /// the signer's own field below — fails here, so the doc moves with it.
     #[test]

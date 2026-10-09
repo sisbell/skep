@@ -6,9 +6,9 @@
 //! file: the seeded stream a tag-3 golden signs over ([`SeededRng06`]), the
 //! widths the sizes pin reads ([`pq_widths`], answering [`PqWidths`]), the
 //! suites' seed ([`Seed`]), which is no key, and the hybrid's Ed25519 half
-//! as a suite holds it ([`Ed25519SigningKey`]), the one door a suite has to
-//! `ed25519-dalek`'s key type. Beside the private fields they read, in the
-//! signer's file:
+//! as a suite holds it ([`Ed25519SigningKey`]), the one door another crate's
+//! suite has to `ed25519-dalek`'s key type. Beside the private fields they
+//! read, in the signer's file:
 //! [`HybridSigner::ed25519_signing_key`](crate::HybridSigner::ed25519_signing_key)
 //! and [`HybridSigner::sign_with_rng`](crate::HybridSigner::sign_with_rng).
 //! And the KDF's own answer, re-exported at the crate root:
@@ -42,6 +42,12 @@ pub struct SeededRng06 {
 }
 
 impl SeededRng06 {
+    /// The stream `seed` keys, from its first byte: block `i` is
+    /// SHA-256(`seed` ‖ `i` as eight big-endian bytes), `i` from 0, handed
+    /// out front to back — so one seed yields one stream, and every tag-3
+    /// signature pin rests on this definition (golden.rs's `TagGolden`;
+    /// `the_stream_is_its_seeds_sha_256_blocks_front_to_back` holds it to
+    /// this sentence).
     pub fn new(seed: [u8; 32]) -> SeededRng06 {
         let block = [0; 32];
         SeededRng06 { seed, counter: 0, drawn: block.len(), block }
@@ -236,5 +242,36 @@ impl fmt::Debug for Ed25519SigningKey {
     /// A signing key is private-key material: never printed.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str("Ed25519SigningKey(..)")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rand_core_06::RngCore as _;
+    use sha2::Digest as _;
+
+    /// THE STREAM IS [`SeededRng06::new`]'S DEFINITION: block `i` is
+    /// SHA-256(seed ‖ `i` as eight big-endian bytes), `i` from 0 — recomputed
+    /// here by the one-shot digest over that concatenation — and the stream
+    /// hands the blocks out front to back whatever the draws' sizes: one
+    /// byte, a draw that ends a block, a draw that crosses into the next. A
+    /// change to the counter's width, byte order or start, to what is hashed
+    /// or to where a draw reads from fails here by name, before it moves
+    /// every tag-3 signature pin at once.
+    #[test]
+    fn the_stream_is_its_seeds_sha_256_blocks_front_to_back() {
+        let seed = [0x5a_u8; 32];
+        let blocks: Vec<u8> = (0..3u64)
+            .flat_map(|i| Sha256::digest([&seed[..], &i.to_be_bytes()].concat()))
+            .collect();
+        let mut stream = SeededRng06::new(seed);
+        let mut drawn = Vec::new();
+        for len in [1, 31, 33, 31] {
+            let mut draw = vec![0u8; len];
+            stream.fill_bytes(&mut draw);
+            drawn.extend(draw);
+        }
+        assert_eq!(drawn, blocks, "the stream, against SHA-256(seed ‖ i) for i in 0, 1, 2");
     }
 }

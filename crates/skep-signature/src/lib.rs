@@ -110,7 +110,8 @@ pub use kdf::{derive_half_seeds, HalfSeeds};
 pub use hooks::{pq_widths, PqWidths, SeededRng06};
 /// TEST HOOK (the same standing) — the suites' seed, which keys each
 /// principal's fixtures and is no key itself, and the hybrid's Ed25519 half
-/// as a suite holds it, so no suite links `ed25519-dalek` itself.
+/// as a suite holds it, so no other crate's suite links `ed25519-dalek`
+/// (`tests/it/tidy.rs` holds the lock to that).
 #[cfg(feature = "test-hooks")]
 #[doc(hidden)]
 pub use hooks::{Ed25519SigningKey, Seed};

@@ -6,20 +6,22 @@
 //! * Tool name → wire op is mechanical: the name IS the frame's `op`, the
 //!   arguments ARE the frame (the one mapping is `from_` → `from` on
 //!   make_link/emit). Arguments pass through unvalidated — the daemon's
-//!   strict parse is the validator, and its verdict comes back as data.
+//!   strict parse is the validator, and its rejection comes back as data.
 //! * A skepd response document is the tool result, verbatim. `isError` is
 //!   ONLY transport failure reaching skepd; an op rejection is a normal
 //!   result — a client that cannot read a rejection has been silently
 //!   failed.
-//! * Sessions are the adapter's apparatus, opened lazily when the daemon
-//!   first demands one (`unauthenticated` on a write) and reopened —
-//!   resending the frame once — when a restarted daemon has killed the
-//!   token. That is the only retry logic anywhere.
+//! * Sessions are the adapter's apparatus: bare sessions only (wire.md
+//!   §Sessions), opened when the daemon demands one — `unauthenticated` on
+//!   a write, at the adapter's first write and again after a restarted
+//!   daemon has killed the token — and the demanding frame reissued once.
+//!   That is the only reissue anywhere; every other rejection, whatever
+//!   its disposition, passes through as data.
 //!
 //! `server.rs` is the MCP side: the stdio loop, the JSON-RPC dispatch, and
 //! `call`, which keeps the second rule. `daemon.rs` is the skepd side: the
 //! principal, the session token — which no other module can read — the one
-//! resend of the third rule, and every exchange the adapter has with skepd.
+//! reissue of the third rule, and every exchange the adapter has with skepd.
 //! `http.rs` is the written-out HTTP/1.1 client those exchanges go through.
 //! `tools.rs` holds the catalog (`tools.json`, embedded) with its commons
 //! sentence, the dispatch table the catalog is checked against when loaded,
@@ -47,10 +49,11 @@ usage: skep-mcp [--tools-file <PATH>]
   --help               this text
 
 environment:
-  SKEPD_URL       the daemon's base URL (default http://127.0.0.1:8642)
+  SKEPD_URL       the daemon's origin (default http://127.0.0.1:8642)
   SKEP_PRINCIPAL  the principal this adapter binds (required, integer)
-  SKEP_COMMONS    optional address of a link-type registry document; when
-                  set, the server instructions point agents at it
+  SKEP_COMMONS    optional address of the commons, the document whose
+                  subspace 3 names link types; when set, the server
+                  instructions point agents at it
 
 Speaks MCP (JSON-RPC 2.0, one message per line) on stdio; the skepd side
 is specified in skep/docs/wire.md.";

@@ -6,7 +6,7 @@ use std::io::{BufRead, Write};
 use serde_json::{json, Map, Value};
 
 use crate::daemon::Skepd;
-use crate::tools::{wire_frame, Tools, SESSION_INFO};
+use crate::tools::{wire_frame, Catalog, SESSION_INFO};
 
 /// When the client's `initialize` names no protocolVersion (it always
 /// should), answer the newest revision this server was written against.
@@ -14,7 +14,7 @@ const FALLBACK_PROTOCOL_VERSION: &str = "2025-06-18";
 
 pub struct Server {
     pub skepd: Skepd,
-    pub catalog: Tools,
+    pub catalog: Catalog,
 }
 
 impl Server {
@@ -78,7 +78,7 @@ impl Server {
         }
     }
 
-    /// One request → its response document.
+    /// One request → its JSON-RPC response.
     fn request(&mut self, method: &str, params: Option<&Value>, id: Value) -> Value {
         match method {
             "initialize" => {
@@ -106,32 +106,32 @@ impl Server {
         }
     }
 
-    /// Run one tool. A wire op's result is whatever document skepd answered,
-    /// verbatim — rejections are data. An `Err` from the daemon side
-    /// (`Skepd`'s doc says when) is `isError` with the adapter's message, as
-    /// is a tool name outside the catalog, which reaches nothing.
+    /// Run one tool. A wire op's result is whatever response document skepd
+    /// answered, verbatim — rejections are data. An `Err` from the daemon
+    /// side (`Skepd`'s doc says when) is `isError` with the adapter's
+    /// message, as is a tool name outside the catalog, which reaches nothing.
     fn call(&mut self, name: &str, args: Map<String, Value>) -> Value {
         if name == SESSION_INFO {
             return match self.session_info() {
-                Ok(doc) => tool_text(doc.to_string(), false),
-                Err(e) => tool_text(e, true),
+                Ok(info) => tool_result(info.to_string(), false),
+                Err(e) => tool_result(e, true),
             };
         }
         let Some(frame) = wire_frame(name, args) else {
-            return tool_text(
+            return tool_result(
                 format!("unknown tool '{name}'; tools/list names the available tools"),
                 true,
             );
         };
         match self.skepd.op(&frame) {
-            Ok(body) => tool_text(String::from_utf8_lossy(&body).into_owned(), false),
-            Err(e) => tool_text(e, true),
+            Ok(body) => tool_result(String::from_utf8_lossy(&body).into_owned(), false),
+            Err(e) => tool_result(e, true),
         }
     }
 
     /// The apparatus tool: this adapter's principal, that principal's
     /// account (`principal_prefix`; null until delegated), and the daemon's
-    /// health document.
+    /// health answer.
     fn session_info(&mut self) -> Result<Value, String> {
         let account = self.skepd.account()?;
         let health = self.skepd.health()?;
@@ -167,8 +167,8 @@ fn rpc_error(id: Value, code: i64, message: &str) -> Value {
     json!({"jsonrpc": "2.0", "id": id, "error": {"code": code, "message": message}})
 }
 
-/// One text content block, `isError` as given.
-fn tool_text(text: String, is_error: bool) -> Value {
+/// A tool result of one text content block, `isError` as given.
+fn tool_result(text: String, is_error: bool) -> Value {
     json!({"content": [{"type": "text", "text": text}], "isError": is_error})
 }
 

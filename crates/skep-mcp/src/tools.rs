@@ -8,7 +8,7 @@
 //! dispatch op the file doesn't name refuses startup. `wire_frame` maps a
 //! tool call onto its frame from that same table, so the table the catalog
 //! is checked against is the one calls are dispatched by; and
-//! `Tools::append_commons` fills the commons template in beside the check
+//! `Catalog::append_commons` fills the commons template in beside the check
 //! on its placeholder.
 
 use serde_json::{Map, Value};
@@ -20,9 +20,10 @@ pub const EMBEDDED: &str = include_str!("../tools.json");
 /// `principal_prefix` and `GET /health`.
 pub const SESSION_INFO: &str = "session_info";
 
-/// Every wire operation the dispatch maps, exactly the wire's snake_case
-/// op names (wire.md §Operations): the tool name IS the frame's `op`.
-const WIRE_OPS: &[&str] = &[
+/// The dispatch table: the wire operations this adapter maps — not every op
+/// of wire.md §Operations — each spelled exactly as the wire spells it,
+/// since the tool name IS the frame's `op`.
+const DISPATCH_OPS: &[&str] = &[
     // Namespace.
     "create_new_document",
     "delegate",
@@ -79,9 +80,10 @@ const RENAMES_FROM: &[&str] = &["make_link", "emit"];
 /// A tool call's wire frame — the crate's first rule, in one place: the
 /// name IS the frame's `op`, the arguments ARE the frame, and on the
 /// `RENAMES_FROM` ops a top-level `from_` rides back as `from`. `None` for
-/// a name that is no wire op, `session_info` included.
+/// a name the dispatch doesn't map: `session_info`, a wire op outside
+/// `DISPATCH_OPS`, or no op at all.
 pub fn wire_frame(name: &str, mut args: Map<String, Value>) -> Option<Vec<u8>> {
-    if !WIRE_OPS.contains(&name) {
+    if !DISPATCH_OPS.contains(&name) {
         return None;
     }
     if RENAMES_FROM.contains(&name) {
@@ -96,15 +98,16 @@ pub fn wire_frame(name: &str, mut args: Map<String, Value>) -> Option<Vec<u8>> {
 }
 
 /// The substitution point in `commons_instructions`: `load` refuses a
-/// template without one, and `Tools::append_commons` replaces every one.
+/// template without one, and `Catalog::append_commons` replaces every one.
 const ADDR_PLACEHOLDER: &str = "{addr}";
 
+/// The loaded catalog: the server instructions, the commons sentence
+/// template, and the tool definitions `tools/list` answers.
 #[derive(Debug)]
-pub struct Tools {
+pub struct Catalog {
     pub instructions: String,
     /// The sentence `append_commons` adds to `instructions` when
-    /// `SKEP_COMMONS` names a link-type registry document; `{addr}` is the
-    /// substitution point.
+    /// `SKEP_COMMONS` names the commons; `{addr}` is the substitution point.
     commons_instructions: String,
     /// The catalog's tool definitions in file order, each checked by
     /// `check_tool` and kept as the file spells it: exactly the `tools`
@@ -112,10 +115,9 @@ pub struct Tools {
     pub tools: Vec<Value>,
 }
 
-impl Tools {
-    /// Point the instructions at a link-type registry document: the
-    /// commons template with every `{addr}` replaced by `addr`, appended
-    /// after a blank line.
+impl Catalog {
+    /// Point the instructions at the commons: the commons template with
+    /// every `{addr}` replaced by `addr`, appended after a blank line.
     pub fn append_commons(&mut self, addr: &str) {
         let sentence = self.commons_instructions.replace(ADDR_PLACEHOLDER, addr);
         self.instructions.push_str("\n\n");
@@ -126,7 +128,7 @@ impl Tools {
 /// Parse and validate one catalog. Every fault is a startup error carrying
 /// the offending name — the no-drift contract is enforced here, in both
 /// directions.
-pub fn load(text: &str) -> Result<Tools, String> {
+pub fn load(text: &str) -> Result<Catalog, String> {
     let v: Value = serde_json::from_str(text).map_err(|e| format!("not JSON: {e}"))?;
     let Value::Object(mut root) = v else {
         return Err("root must be a JSON object".into());
@@ -166,16 +168,16 @@ pub fn load(text: &str) -> Result<Tools, String> {
         if !seen.insert(name) {
             return Err(format!("duplicate tool '{name}'"));
         }
-        if name != SESSION_INFO && !WIRE_OPS.contains(&name) {
+        if name != SESSION_INFO && !DISPATCH_OPS.contains(&name) {
             return Err(format!("tool '{name}' names an op the dispatch doesn't know"));
         }
     }
-    for op in WIRE_OPS.iter().copied().chain([SESSION_INFO]) {
+    for op in DISPATCH_OPS.iter().copied().chain([SESSION_INFO]) {
         if !seen.contains(op) {
             return Err(format!("dispatch op '{op}' has no tools-file entry"));
         }
     }
-    Ok(Tools { instructions, commons_instructions, tools })
+    Ok(Catalog { instructions, commons_instructions, tools })
 }
 
 /// Check one catalog entry — an MCP tool definition: a nonempty string
@@ -218,7 +220,7 @@ mod tests {
     #[test]
     fn embedded_catalog_matches_dispatch() {
         let t = load(EMBEDDED).expect("embedded tools.json must validate");
-        assert_eq!(t.tools.len(), WIRE_OPS.len() + 1);
+        assert_eq!(t.tools.len(), DISPATCH_OPS.len() + 1);
         assert!(!t.instructions.is_empty());
         let file: Value = serde_json::from_str(EMBEDDED).expect("embedded parses");
         assert_eq!(Some(&t.tools), file["tools"].as_array(), "entries kept verbatim");
@@ -267,19 +269,19 @@ mod tests {
     /// `{addr}` takes the address, and the sentence follows a blank line.
     #[test]
     fn append_commons_fills_every_placeholder() {
-        let mut t = Tools {
+        let mut t = Catalog {
             instructions: "Base.".to_string(),
-            commons_instructions: "Registry at {addr}; defines is {addr}.0.3.50.".to_string(),
+            commons_instructions: "Commons at {addr}; defines is {addr}.0.3.50.".to_string(),
             tools: Vec::new(),
         };
         t.append_commons("1.0.2.0.9");
-        assert_eq!(t.instructions, "Base.\n\nRegistry at 1.0.2.0.9; defines is 1.0.2.0.9.0.3.50.");
+        assert_eq!(t.instructions, "Base.\n\nCommons at 1.0.2.0.9; defines is 1.0.2.0.9.0.3.50.");
     }
 
     /// The first rule, whole: the name rides as `op` (over any `op` the
     /// arguments carry), a top-level `from_` comes back as `from` on the
     /// renaming ops and nowhere else, a nested `from_` is wire shape, and a
-    /// name that is no wire op has no frame.
+    /// name the dispatch doesn't map has no frame.
     #[test]
     fn wire_frame_is_the_first_rule() {
         let frame = |name: &str, args: Value| -> Option<Value> {
@@ -304,9 +306,9 @@ mod tests {
     /// The dispatch table is distinct, and its size is pinned here and
     /// nowhere else: mapping or dropping a wire op changes this number.
     #[test]
-    fn wire_ops_are_distinct_and_counted() {
-        let set: std::collections::BTreeSet<_> = WIRE_OPS.iter().collect();
-        assert_eq!(set.len(), WIRE_OPS.len());
-        assert_eq!(WIRE_OPS.len(), 38);
+    fn dispatch_ops_are_distinct_and_counted() {
+        let set: std::collections::BTreeSet<_> = DISPATCH_OPS.iter().collect();
+        assert_eq!(set.len(), DISPATCH_OPS.len());
+        assert_eq!(DISPATCH_OPS.len(), 38);
     }
 }

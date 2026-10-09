@@ -2,8 +2,8 @@
 //! with `Connection: close` on every response (wire.md §Transport), so a
 //! client is a `TcpStream`, one written-out request, and a read to EOF.
 //! Connect/read/write timeouts make a dead or hung daemon a fast, clear
-//! failure instead of a stall — every error string names the daemon
-//! address, because these surface verbatim as `isError` tool results.
+//! failure instead of a stall — every error string names the daemon's
+//! origin, because these surface verbatim as `isError` tool results.
 
 use std::io::{Read, Write};
 use std::net::{TcpStream, ToSocketAddrs};
@@ -17,17 +17,17 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 /// ten seconds is headroom, not an expected wait.
 const IO_TIMEOUT: Duration = Duration::from_secs(10);
 
-/// One skepd endpoint: host, port, and the authority string for the `Host`
-/// header and error messages.
+/// The daemon's origin, ready to dial: host, port, and the authority
+/// (`host[:port]`) the `Host` header and error messages carry.
 pub struct Http {
     host: String,
     port: u16,
     authority: String,
 }
 
-/// Parse `SKEPD_URL`: `http://host[:port]` and nothing else — the daemon
-/// speaks plain HTTP on loopback, so any other scheme or a path is a
-/// configuration mistake worth refusing at startup.
+/// Parse `SKEPD_URL` as the daemon's origin: `http://host[:port]` and
+/// nothing else — the daemon speaks plain HTTP on loopback, so any other
+/// scheme or a path is a configuration mistake worth refusing at startup.
 pub fn parse_url(url: &str) -> Result<Http, String> {
     let rest = url
         .strip_prefix("http://")
@@ -37,7 +37,7 @@ pub fn parse_url(url: &str) -> Result<Http, String> {
         None => (rest, ""),
     };
     if !path.is_empty() {
-        return Err(format!("'{url}': the daemon address takes no path"));
+        return Err(format!("'{url}': the daemon's origin takes no path"));
     }
     let (host, port) = match authority.rsplit_once(':') {
         Some((h, p)) => {
@@ -62,7 +62,7 @@ impl Http {
     /// `Connection: close`, read to EOF (the daemon closes), and return
     /// (status, body) whatever the status — what a status means is the
     /// caller's to judge, route by route. `Err` means skepd was not reached
-    /// or did not answer; its message names the address and the failed step
+    /// or did not answer; its message names the origin and the failed step
     /// and never quotes the request, whose headers can carry a credential.
     pub fn request(
         &self,
@@ -177,7 +177,7 @@ mod tests {
         assert!(parse_response(b"garbage").is_err());
     }
 
-    /// A failed exchange names the address and the step, never the request:
+    /// A failed exchange names the origin and the step, never the request:
     /// a daemon that answers garbage, or hangs up unanswered, is reported
     /// without the header value that rode the request.
     #[test]

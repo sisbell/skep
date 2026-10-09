@@ -5,7 +5,7 @@
 //! — real JSON-RPC driven through its stdin/stdout. Store semantics are
 //! trusted to the stores' own tests; these assert the adapter: protocol
 //! framing, verbatim pass-through (rejections included), the
-//! reopen-and-resend path across a daemon restart, and the
+//! reopen-and-reissue path across a daemon restart, and the
 //! tools-file↔dispatch no-drift startup errors. The daemon and the
 //! principal are `common`'s; this file is the adapter's driver and the
 //! tests.
@@ -118,12 +118,13 @@ impl Mcp {
         (is_error, text)
     }
 
-    /// tools/call that must reach skepd: parses the verbatim document.
-    fn call_doc(&mut self, tool: &str, args: Value) -> Value {
+    /// tools/call that must reach skepd: its tool result's text, parsed as
+    /// JSON — a response document, or session_info's report.
+    fn call_json(&mut self, tool: &str, args: Value) -> Value {
         let (is_error, text) = self.call(tool, args);
         assert!(!is_error, "unexpected transport failure: {text}");
         serde_json::from_str(&text)
-            .unwrap_or_else(|e| panic!("tool text is not JSON ({e}): {text}"))
+            .unwrap_or_else(|e| panic!("tool result's text is not JSON ({e}): {text}"))
     }
 
     /// Close stdin (EOF) and reap — the clean-exit path under test.
@@ -226,11 +227,11 @@ fn session_info_reports_principal_account_health() {
 
     let mut mcp = Mcp::spawn(port, "1");
     mcp.initialize();
-    let doc = mcp.call_doc("session_info", json!({}));
-    assert_eq!(doc["principal"], json!(1));
-    assert_eq!(doc["account"].as_str(), Some(account.as_str()), "account: {doc}");
-    assert_eq!(doc["health"]["ok"], json!(true));
-    assert!(doc["health"]["log_position"].is_u64(), "health rides along: {doc}");
+    let info = mcp.call_json("session_info", json!({}));
+    assert_eq!(info["principal"], json!(1));
+    assert_eq!(info["account"].as_str(), Some(account.as_str()), "account: {info}");
+    assert_eq!(info["health"]["ok"], json!(true));
+    assert!(info["health"]["log_position"].is_u64(), "health rides along: {info}");
 
     sd.shutdown();
 }
@@ -248,17 +249,17 @@ fn lifecycle_create_insert_retrieve_link_and_rejections() {
     // create → insert → retrieve. The string write form is per-byte:
     // "hello" seats five values at positions 1..=5, so width "0.5" covers
     // it exactly and the delivery is one content item.
-    let v = mcp.call_doc("create_new_document", json!({"account": account}));
+    let v = mcp.call_json("create_new_document", json!({"account": account}));
     assert_eq!(v["resp"], "ack_addr", "create: {v}");
     let doc = v["addr"].as_str().expect("doc addr").to_string();
 
-    let v = mcp.call_doc(
+    let v = mcp.call_json(
         "insert",
         json!({"doc": doc, "at": {"subspace": "1", "ordinal": "1"}, "values": ["hello"]}),
     );
     assert_eq!(v["resp"], "ack_addr", "insert: {v}");
 
-    let v = mcp.call_doc(
+    let v = mcp.call_json(
         "retrieve_v",
         json!({"specs": [{"doc": doc, "span": {"start": "1.1", "width": "0.5"}}]}),
     );
@@ -267,12 +268,12 @@ fn lifecycle_create_insert_retrieve_link_and_rejections() {
 
     // An atom form: ONE composite value at ONE position, never coalesced
     // into the per-byte run beside it.
-    let v = mcp.call_doc(
+    let v = mcp.call_json(
         "insert",
         json!({"doc": doc, "at": {"subspace": "1", "ordinal": "6"}, "values": [{"atom": "chunk"}]}),
     );
     assert_eq!(v["resp"], "ack_addr", "atom insert: {v}");
-    let v = mcp.call_doc(
+    let v = mcp.call_json(
         "retrieve_v",
         json!({"specs": [{"doc": doc, "span": {"start": "1.1", "width": "0.6"}}]}),
     );
@@ -280,22 +281,22 @@ fn lifecycle_create_insert_retrieve_link_and_rejections() {
 
     // make_link (through the schema's from_ → the wire's from) and
     // follow_link on the TO slot.
-    let v = mcp.call_doc("create_new_document", json!({"account": account}));
+    let v = mcp.call_json("create_new_document", json!({"account": account}));
     let doc2 = v["addr"].as_str().expect("doc2 addr").to_string();
-    let v = mcp.call_doc(
+    let v = mcp.call_json(
         "insert",
         json!({"doc": doc2, "at": {"subspace": "1", "ordinal": "1"}, "values": ["linked"]}),
     );
     assert_eq!(v["resp"], "ack_addr");
-    let v = mcp.call_doc("create_new_document", json!({"account": account}));
+    let v = mcp.call_json("create_new_document", json!({"account": account}));
     let tdoc = v["addr"].as_str().expect("tdoc addr").to_string();
-    let v = mcp.call_doc(
+    let v = mcp.call_json(
         "insert",
         json!({"doc": tdoc, "at": {"subspace": "1", "ordinal": "1"}, "values": ["type:jump"]}),
     );
     assert_eq!(v["resp"], "ack_addr");
 
-    let v = mcp.call_doc(
+    let v = mcp.call_json(
         "make_link",
         json!({
             "home": doc,
@@ -307,15 +308,16 @@ fn lifecycle_create_insert_retrieve_link_and_rejections() {
     assert_eq!(v["resp"], "ack_addr", "make_link with from_: {v}");
     let link = v["addr"].as_str().expect("link addr").to_string();
 
-    let v = mcp.call_doc("follow_link", json!({"a": link, "slot": 2}));
+    let v = mcp.call_json("follow_link", json!({"a": link, "slot": 2}));
     assert_eq!(v["resp"], "follow");
     assert!(
         v["result"]["ok"].as_array().is_some_and(|s| !s.is_empty()),
         "TO coverage nonempty: {v}"
     );
 
-    // A rejection is a NORMAL result: isError false, document verbatim.
-    let v = mcp.call_doc(
+    // A rejection is a NORMAL result: isError false, response document
+    // verbatim.
+    let v = mcp.call_json(
         "retrieve_v",
         json!({"specs": [{"doc": "1.0.9.0.1", "span": {"start": "1.1", "width": "0.1"}}]}),
     );
@@ -348,7 +350,7 @@ fn lifecycle_create_insert_retrieve_link_and_rejections() {
 }
 
 #[test]
-fn daemon_restart_reopens_the_session_and_resends() {
+fn daemon_restart_reopens_the_session_and_reissues() {
     let dir = TempDir::new("restart");
     let sd = spawn_daemon(dir.path(), 0);
     let port = sd.port();
@@ -356,9 +358,9 @@ fn daemon_restart_reopens_the_session_and_resends() {
 
     let mut mcp = Mcp::spawn(port, "1");
     mcp.initialize();
-    let v = mcp.call_doc("create_new_document", json!({"account": account}));
+    let v = mcp.call_json("create_new_document", json!({"account": account}));
     let doc = v["addr"].as_str().expect("doc addr").to_string();
-    let v = mcp.call_doc(
+    let v = mcp.call_json(
         "insert",
         json!({"doc": doc, "at": {"subspace": "1", "ordinal": "1"}, "values": ["hello"]}),
     );
@@ -371,14 +373,15 @@ fn daemon_restart_reopens_the_session_and_resends() {
     let sd = spawn_daemon(dir.path(), port);
 
     // The adapter holds a stale token: the daemon answers unauthenticated,
-    // the adapter reopens its session and resends once — invisible here.
-    let v = mcp.call_doc(
+    // the adapter reopens its session and reissues the frame once —
+    // invisible here.
+    let v = mcp.call_json(
         "insert",
         json!({"doc": doc, "at": {"subspace": "1", "ordinal": "6"}, "values": [", wire"]}),
     );
     assert_eq!(v["resp"], "ack_addr", "the write after restart must succeed: {v}");
 
-    let v = mcp.call_doc(
+    let v = mcp.call_json(
         "retrieve_v",
         json!({"specs": [{"doc": doc, "span": {"start": "1.1", "width": "0.11"}}]}),
     );
@@ -402,22 +405,22 @@ fn make_link_addrs_form_records_names_verbatim() {
     let mut mcp = Mcp::spawn(port, "1");
     mcp.initialize();
 
-    let v = mcp.call_doc("create_new_document", json!({"account": account}));
+    let v = mcp.call_json("create_new_document", json!({"account": account}));
     let doc = v["addr"].as_str().expect("doc addr").to_string();
-    let v = mcp.call_doc(
+    let v = mcp.call_json(
         "insert",
         json!({"doc": doc, "at": {"subspace": "1", "ordinal": "1"}, "values": ["hello"]}),
     );
     assert_eq!(v["resp"], "ack_addr", "insert: {v}");
     let i_start = v["addr"].as_str().expect("first minted I-address").to_string();
 
-    let v = mcp.call_doc("create_new_document", json!({"account": account}));
+    let v = mcp.call_json("create_new_document", json!({"account": account}));
     let doc2 = v["addr"].as_str().expect("doc2 addr").to_string();
     // A ghost: doc2's never-occupied subspace 3. Nothing resides there and
     // nothing has to — the addrs form records names, not contents.
     let ghost = format!("{doc2}.0.3.6.1");
 
-    let v = mcp.call_doc(
+    let v = mcp.call_json(
         "make_link",
         json!({
             "home": doc,
@@ -429,7 +432,7 @@ fn make_link_addrs_form_records_names_verbatim() {
     assert_eq!(v["resp"], "ack_addr", "two-form make_link: {v}");
     let link = v["addr"].as_str().expect("link addr").to_string();
 
-    let v = mcp.call_doc("read_link", json!({"a": link}));
+    let v = mcp.call_json("read_link", json!({"a": link}));
     assert_eq!(
         v["link"]["slots"],
         json!([
@@ -455,12 +458,12 @@ fn slot_form_faults_surface_as_normal_results() {
 
     let mut mcp = Mcp::spawn(port, "1");
     mcp.initialize();
-    let v = mcp.call_doc("create_new_document", json!({"account": account}));
+    let v = mcp.call_json("create_new_document", json!({"account": account}));
     let doc = v["addr"].as_str().expect("doc addr").to_string();
 
     // Both forms at once in one slot: not a form ('resolve' is not a
     // make_link key), so the frame never becomes an operation.
-    let v = mcp.call_doc(
+    let v = mcp.call_json(
         "make_link",
         json!({
             "home": doc,
@@ -475,7 +478,7 @@ fn slot_form_faults_surface_as_normal_results() {
 
     // An empty addrs TYPE parses; the store rejects it exactly as an empty
     // resolution always has — the type floor reads the slot as given.
-    let v = mcp.call_doc(
+    let v = mcp.call_json(
         "make_link",
         json!({"home": doc, "from_": [], "to": [], "ty": {"addrs": []}}),
     );
@@ -485,12 +488,12 @@ fn slot_form_faults_surface_as_normal_results() {
     sd.shutdown();
 }
 
-/// SKEP_COMMONS set: the instructions carry the registry sentence with the
+/// SKEP_COMMONS set: the instructions carry the commons sentence with the
 /// address substituted. Unset: byte-identical to the tools file's
 /// instructions. Malformed: startup refusal naming the variable. No daemon
 /// anywhere — initialize never dials skepd.
 #[test]
-fn skep_commons_appends_the_registry_sentence() {
+fn skep_commons_appends_the_commons_sentence() {
     let file = embedded_tools();
     let base = file["instructions"].as_str().expect("instructions").to_string();
     let template = file["commons_instructions"].as_str().expect("template").to_string();

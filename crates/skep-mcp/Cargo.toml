@@ -5,13 +5,13 @@ edition.workspace = true
 rust-version.workspace = true
 repository.workspace = true
 license.workspace = true
-description = "The MCP adapter: JSON-RPC 2.0 over stdio on the agent side, skepd's HTTP/JSON wire on the other. One static binary an operator points a harness at; tool name → wire op is mechanical, skepd documents pass through verbatim, rejections are data."
+description = "The MCP adapter: JSON-RPC 2.0 over stdio on the agent side, skepd's HTTP/JSON wire on the other. One static binary an operator points a harness at; tool name → wire op is mechanical, skepd's response documents pass through verbatim, rejections are data."
 readme = "README.md"
 
 [dependencies]
 # Both protocols are small enough to own — a written-out HTTP/1.1 client
 # over std::net (skepd is one-request-per-connection, Connection: close),
-# and newline-delimited JSON-RPC over stdio. JSON framing is the one thing
+# and newline-delimited JSON-RPC over stdio. JSON encoding is the one thing
 # taken from a library.
 serde_json.workspace = true
 

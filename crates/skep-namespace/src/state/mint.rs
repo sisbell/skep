@@ -10,9 +10,10 @@
 use skep_address::{Address, GateViolation, Level};
 use skep_kernel::{LockKey, Space};
 
-use super::{M3Rec, M3State, MAX_PRINCIPAL_COMPONENTS, NO_PUBLICATION_STATE};
+use super::{M3State, MAX_PRINCIPAL_COMPONENTS, NO_PUBLICATION_STATE};
 use crate::error::MintError;
 use crate::ns::{account_ns, content_ns, document_ns, link_ns, ns_lock_key, version_ns, NsKey};
+use crate::record::M3Rec;
 
 // ---------------------------------------------------------------------------
 // §A The lock-key constructors: one per chain, and the two registry keys.

@@ -15,9 +15,10 @@ use std::ops::Bound::{Excluded, Unbounded};
 use num_traits::Zero;
 use skep_address::{is_prefix, ordinal, validate, Address, Level, Tumbler};
 
-use super::{M3State, PrincipalId};
+use super::M3State;
 use crate::ghost::ghost_floor;
 use crate::ns::{document_ns, namespace_of, nth_in, version_ns};
+use crate::record::PrincipalId;
 
 // ---------------------------------------------------------------------------
 // §C Queries (pure; read off any M2 Snapshot; write nothing) + §2 membership.

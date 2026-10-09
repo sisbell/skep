@@ -13,9 +13,9 @@ use skep_address::{parent, validate, Address, Level, Tumbler};
 use skep_kernel::{Attestation, Kernel, Seq, TxnError, WorldState};
 
 use crate::error::{CreateDocumentError, DelegateError, RegisterNodeError};
+use crate::record::{M3Rec, PrincipalId};
 use crate::state::{
-    bootstrap_root, prefix_contains, M3Rec, M3State, PrincipalId, MAX_NODE_COMPONENTS,
-    MAX_PRINCIPAL_COMPONENTS,
+    bootstrap_root, prefix_contains, M3State, MAX_NODE_COMPONENTS, MAX_PRINCIPAL_COMPONENTS,
 };
 use crate::HasM3;
 

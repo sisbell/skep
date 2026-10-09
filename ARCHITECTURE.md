@@ -1113,13 +1113,14 @@ five mints, and every store that mints or writes under a chain
 owns what (ω, the longest seated prefix) and each document's publication
 bit, all in one slice, `M3State`. Node addresses come from provisioning
 and are only admitted. Its modules are declared in `src/lib.rs` in
-dependency order, each with a line saying what it holds. `state.rs` is the
-slice — its types, its journal delta, genesis, the fold and the frontier
-arithmetic; beneath it, `state/mint.rs` holds the lock keys, the five mints
-(§A) and the two peeks — `next_account_prefix` and `next_content_address`,
-each its chain's mint without the record, kept beside the mints they call
-so the two files depend one way — and `state/query.rs` every other query
-(§C).
+dependency order, each with a line saying what it holds. `record.rs` is the
+journal delta, `M3Rec`, with its two field doors and the identity type it
+names; `state.rs` is the slice — `M3State`, genesis, the fold and the
+frontier arithmetic; beneath it, `state/mint.rs` holds the lock keys, the
+five mints (§A) and the two peeks — `next_account_prefix` and
+`next_content_address`, each its chain's mint without the record, kept
+beside the mints they call so the two files depend one way — and
+`state/query.rs` every other query (§C).
 
 Rules that hold across its files:
 
@@ -1146,8 +1147,11 @@ Rules that hold across its files:
 - **No mint lands in the ghost region.** `skep-links` builds its reserved
   type addresses from `ghost_position`, and `src/ghost.rs`'s floor keeps the
   allocator past them on every board.
-- **The slice's field order is its checkpoint format.** Fields are appended
-  to `M3State`, never inserted.
+- **The slice's shape is its format.** `M3State`'s fields and `M3Rec`'s
+  variants are appended, never inserted or reordered: bincode writes fields
+  in order and variants by index. `tests/it/genesis.rs` pins genesis's
+  bytes field by field, and `tests/it/recovery.rs` each variant's against a
+  raw twin.
 
 Its integration suite is one binary, `tests/it/`: one file per surface over
 the shared `common` world, and `heap`, the binary's byte-counting

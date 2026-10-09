@@ -159,10 +159,13 @@ mod ns;
 // The ghost region: the five reserved type addresses M7 reads, and the floor
 // that keeps the allocator past them.
 mod ghost;
-// M3's slice: the identity type, the journal delta and its two field doors,
-// `M3State`, genesis and the fold, the frontier arithmetic; beneath it
-// `state/mint.rs` (§A: the lock keys, the five mints and the two peeks, each
-// a mint without its record) and `state/query.rs` (§C: every other query).
+// The journal delta `M3Rec` and its two field doors, and the identity type
+// it names with that type's two fixed ids.
+mod record;
+// M3's slice: `M3State`, genesis and the fold, the frontier arithmetic and
+// the two registry caps; beneath it `state/mint.rs` (§A: the lock keys, the
+// five mints and the two peeks, each a mint without its record) and
+// `state/query.rs` (§C: every other query).
 mod state;
 // The `Namespace` handle: the four entity operations, each one transaction.
 mod ops;
@@ -171,9 +174,10 @@ pub use error::{CreateDocumentError, DelegateError, MintError, RegisterNodeError
 pub use ghost::{ghost_home_document, ghost_position, GHOST_POSITIONS};
 pub use ns::{first_document_address, first_version_address};
 pub use ops::Namespace;
+pub use record::{M3Rec, PrincipalId, BOOTSTRAP_PRINCIPAL, SYSTEM_PRINCIPAL};
 pub use state::{
-    head_document, prefix_contains, system_account, system_node, M3Rec, M3State, PrincipalId,
-    BOOTSTRAP_PRINCIPAL, MAX_NODE_COMPONENTS, MAX_PRINCIPAL_COMPONENTS, SYSTEM_PRINCIPAL,
+    head_document, prefix_contains, system_account, system_node, M3State, MAX_NODE_COMPONENTS,
+    MAX_PRINCIPAL_COMPONENTS,
 };
 
 /// The engine's **read accessor** for M3's slice (Engine Composition

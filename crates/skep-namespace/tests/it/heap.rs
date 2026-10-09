@@ -5,9 +5,10 @@
 //! would flake and a slow test would pass. It counts BYTES, not allocations:
 //! M1's `Nat` keeps a one-digit value inline, so copying a tumbler is one
 //! allocation at any depth, and only that allocation's size tells a
-//! fifty-thousand-component copy from a three-component one. "Heap"
-//! throughout: this crate's other allocation, an address minted on a
-//! frontier, is `allocation.rs`'s.
+//! fifty-thousand-component copy from a three-component one. The module's
+//! one test holds the counter to exactly that. "Heap" throughout: this
+//! crate's other allocation, an address minted on a frontier, is
+//! `allocation.rs`'s.
 
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::cell::Cell;
@@ -61,4 +62,28 @@ pub fn heap_bytes<T>(f: impl FnOnce() -> T) -> (T, u64) {
     let before = HEAP_BYTES.with(Cell::get);
     let value = f();
     (value, HEAP_BYTES.with(Cell::get).wrapping_sub(before))
+}
+
+/// The instrument's own claim, which every cost test in this binary stands
+/// on: a copy shows, and a deep copy shows as MORE than a shallow one. The
+/// cost tests assert that two calls ask the heap for EQUAL bytes — an
+/// equality a counter that counted nothing would satisfy at every depth, as
+/// would one that counted blocks rather than bytes, since a tumbler copy is
+/// one block at any depth. Either would turn every cost test green for the
+/// wrong reason; this is what goes red instead.
+#[test]
+fn the_counter_sees_a_copy_and_tells_its_depth() {
+    let address = |len: usize| {
+        let mut comps = vec![1u32, 0];
+        comps.extend(std::iter::repeat_n(1u32, len - 2));
+        crate::common::a(&comps)
+    };
+    let (shallow, deep) = (address(3), address(1_000));
+    let (_, shallow_bytes) = heap_bytes(|| shallow.clone());
+    let (_, deep_bytes) = heap_bytes(|| deep.clone());
+    assert!(shallow_bytes > 0, "the counter saw no copy at all");
+    assert!(
+        deep_bytes > shallow_bytes,
+        "the counter cannot tell a 1000-component copy ({deep_bytes} bytes) from a 3-component one ({shallow_bytes})"
+    );
 }

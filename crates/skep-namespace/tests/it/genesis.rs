@@ -1,9 +1,10 @@
 //! §D genesis: Σ₀'s roots and the system-account seed folded onto them
-//! (PUB-6.65).
+//! (PUB-6.65), and the one value they make, byte for byte.
 
 use crate::common::*;
 
-use skep_address::Level;
+use serde::Serialize;
+use skep_address::{Level, Nat, Tumbler};
 use skep_namespace::{
     ghost_home_document, head_document, system_account, system_node, M3State, BOOTSTRAP_PRINCIPAL,
     SYSTEM_PRINCIPAL,
@@ -62,4 +63,59 @@ fn genesis_seeds_the_bootstrap_roots_and_the_system_account() {
     // Unknown ids resolve to nothing (single-valued scan, §5).
     assert!(s.principal_prefix(ID1).is_none());
     assert!(!s.is_effective_owner(ID1, &a(&[1])));
+}
+
+/// Σ₀ is ONE value, pinned here byte for byte. M2's caller contract on
+/// `Kernel::open`: genesis MUST be byte-identical on every open of a given
+/// journal, because recovery folds journaled deltas onto it — a drifting
+/// genesis silently mis-recovers, and M2 cannot check it. Determinism inside
+/// one build is the engine's `two_geneses_are_byte_identical`; drift ACROSS
+/// builds only a pin can see. The pin is also the one watch on genesis's
+/// "seeds no unpublished document and no link": the publication suite pins
+/// the slice's three trailing fields as a suffix, and a seeded link, content
+/// atom or chain count moves the frontier map alone. That map's key is the
+/// crate's private `NsKey`, whose bytes are its anchor tumbler and then its
+/// generator numeral (`ns/tests.rs` pins the shape), so a raw struct of that
+/// shape spells its two entries: the system node's account chain `(1.1, 2)`
+/// at 1, and the system account's document chain `(1.1.0.1, 2)` at 2.
+#[test]
+fn genesis_is_the_roots_and_the_seed_byte_for_byte() {
+    #[derive(Serialize)]
+    struct RawNsKey {
+        parent: Tumbler,
+        g: u8,
+    }
+    let frontiers = bincode::serialize(&vec![
+        (
+            RawNsKey {
+                parent: t(&[1, 1]),
+                g: 2,
+            },
+            Nat::from(1u32),
+        ),
+        (
+            RawNsKey {
+                parent: t(&[1, 1, 0, 1]),
+                g: 2,
+            },
+            Nat::from(2u32),
+        ),
+    ])
+    .expect("the frontier map");
+    let nodes = bincode::serialize(&vec![t(&[1]), t(&[1, 1])]).expect("the node set");
+    let principals = bincode::serialize(&vec![
+        (t(&[1]), BOOTSTRAP_PRINCIPAL),
+        (t(&[1, 1, 0, 1]), SYSTEM_PRINCIPAL),
+    ])
+    .expect("the principal map");
+    let publication = bincode::serialize(&vec![
+        (t(&[1, 1, 0, 1, 0, 1]), true),
+        (t(&[1, 1, 0, 1, 0, 2]), true),
+    ])
+    .expect("the publication map");
+    assert_eq!(
+        bincode::serialize(&M3State::genesis()).expect("serialize genesis"),
+        [frontiers, nodes, principals, publication].concat(),
+        "Σ₀ drifted: every journal replayed from genesis would fold onto another world"
+    );
 }

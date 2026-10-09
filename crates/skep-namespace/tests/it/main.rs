@@ -7,8 +7,8 @@
 //! the interface does its ordinary job. `common` is the minimal engine
 //! assembly and the helpers every suite shares, and `heap` the binary's
 //! allocator, which counts the heap bytes each thread asks for so a cost
-//! claim is a number; each other module is one surface. Nothing but module
-//! declarations belongs here.
+//! claim is a number, and tests that it does; each other module is one
+//! surface. Nothing but module declarations belongs here.
 
 mod common;
 mod heap;

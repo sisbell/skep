@@ -9,7 +9,8 @@ use skep_address::{Level, Tumbler};
 use skep_kernel::Kernel;
 use skep_namespace::{
     ghost_position, head_document, system_account, HasM3, M3Rec, M3State, MintError, Namespace,
-    PrincipalId, BOOTSTRAP_PRINCIPAL, SYSTEM_PRINCIPAL,
+    PrincipalId, BOOTSTRAP_PRINCIPAL, MAX_NODE_COMPONENTS, MAX_PRINCIPAL_COMPONENTS,
+    SYSTEM_PRINCIPAL,
 };
 use tempfile::tempdir;
 
@@ -232,7 +233,8 @@ fn journaled_types_survive_serde_round_trips() {
 /// `Allocate`'s address door refuses a parentless one, and
 /// `RegisterPrincipal`'s prefix door refuses every seat off the account tier —
 /// each a decode failure, never a value the fold could be handed — while the
-/// shapes just inside each door still decode.
+/// shapes just inside each door still decode, and so does every shape past an
+/// op's depth cap, which no door carries.
 #[test]
 fn a_journal_frame_re_enters_only_through_its_field_doors() {
     // A tumbler that is not T4-valid cannot arrive as a record: the payload
@@ -320,18 +322,65 @@ fn a_journal_frame_re_enters_only_through_its_field_doors() {
             id: ID2
         }
     );
+
+    // …and no door carries an op's CAP. `register_node` refuses a node past
+    // MAX_NODE_COMPONENTS and `delegate` a prefix past
+    // MAX_PRINCIPAL_COMPONENTS, at their gates and never off the journal: a
+    // cap at a door would refuse a record M3 wrote before the cap existed,
+    // and M2 halts on a frame that will not decode, so a board whose journal
+    // held one could never open again — a resource charge turned into an
+    // unreplayable journal. Each over-cap shape a door could be tempted to
+    // refuse decodes.
+    let deep_node: Vec<u32> = std::iter::repeat_n(1u32, MAX_NODE_COMPONENTS + 1).collect();
+    let mut deep_account = vec![1u32, 0];
+    deep_account.extend(std::iter::repeat_n(1u32, MAX_PRINCIPAL_COMPONENTS));
+    for (raw, rec) in [
+        (
+            RawM3Rec::RegisterNode {
+                addr: t(&deep_node),
+            },
+            M3Rec::RegisterNode {
+                addr: a(&deep_node),
+            },
+        ),
+        (
+            RawM3Rec::Allocate {
+                addr: t(&deep_account),
+                published: false,
+            },
+            M3Rec::Allocate {
+                addr: a(&deep_account),
+                published: false,
+            },
+        ),
+        (
+            RawM3Rec::RegisterPrincipal {
+                prefix: t(&deep_account),
+                id: ID2,
+            },
+            M3Rec::RegisterPrincipal {
+                prefix: a(&deep_account),
+                id: ID2,
+            },
+        ),
+    ] {
+        let frame = bincode::serialize(&raw).expect("serialize the raw shape");
+        assert_eq!(
+            bincode::deserialize::<M3Rec>(&frame).expect("an over-cap record decodes"),
+            rec
+        );
+    }
 }
 
 /// `M3State`'s bytes are CANONICAL — "two slices holding the same entries
 /// encode to one byte string on any process and any machine" — which is what
 /// lets M2's checkpoint header commit to its body by hash, and a published
-/// head name a checkpoint by hash. The crate's only other pin on the slice's
-/// bytes is genesis's, at two entries per field, where a hash-ordered field
-/// would still match half the time, and it does not reach the frontier map,
-/// the field whose order its own doc calls WRITTEN. So: eight or more entries
-/// in EVERY field, reached along two different histories off two SEPARATELY
-/// built geneses — not one cloned, so a hash-ordered field would carry two
-/// hashers — and the bytes compared whole.
+/// head name a checkpoint by hash. The crate's other pins on the slice's bytes
+/// are genesis's (`genesis.rs`, and the publication suite's suffix), at two
+/// entries per field, where a hash-ordered field would still match half the
+/// time. So: eight or more entries in EVERY field, reached along two different
+/// histories off two SEPARATELY built geneses — not one cloned, so a
+/// hash-ordered field would carry two hashers — and the bytes compared whole.
 #[test]
 fn two_slices_holding_the_same_entries_encode_to_one_byte_string() {
     let accounts: Vec<Vec<u32>> = (1..=6).map(|i| vec![1, 0, i]).collect();

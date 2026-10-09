@@ -120,8 +120,15 @@ fn fork_mints_in_the_callers_own_account() {
     // The flag rides the same reduction (PUB-8.16; owner 2026-09-05, one
     // rule in one place): a flagless fork into the EMPTY account is the
     // born-published doc 1 (PUB-8.21)…
-    let (d1, _) = ns.fork(ID1, None).expect("fork");
+    let before = k.current_seq();
+    let (d1, seq) = ns.fork(ID1, None).expect("fork");
     assert_eq!(d1, a(&[1, 0, 1, 0, 1]));
+    // …acknowledged at its OWN commit (commit-before-acknowledge): the
+    // coordinate `fork` answers is the one create_new_document committed it
+    // at, never the snapshot it read the caller's account off — the
+    // coordinate before it.
+    assert!(seq > before, "fork answered {seq:?}, not past {before:?}");
+    assert_eq!(k.current_seq(), seq);
     assert!(prefix_contains(&acct, &d1));
     let snap = k.snapshot();
     assert!(snap.world().m3().is_registered_document(&d1));

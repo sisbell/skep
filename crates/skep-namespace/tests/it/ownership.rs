@@ -267,7 +267,8 @@ fn the_account_seat_is_omega_by_one_lookup_and_never_climbs() {
     // climbs — to an ancestor ACCOUNT, which a tier check on ω's answer
     // passes, and to the NODE — are built through the fold, the only way to
     // reach a registered document whose own account holds no seat. The cost
-    // is pinned in heap bytes: a copy of the account and nothing past it.
+    // is pinned in heap bytes: one copy of the account, nothing past it and
+    // nothing beside it — never a walk of Π.
     let (k, acct, doc) = kernel_with_account_and_doc();
     let ns = Namespace::new(&k);
     // Seventy sub-accounts, each seated for its own principal: with genesis's
@@ -370,6 +371,31 @@ fn the_account_seat_is_omega_by_one_lookup_and_never_climbs() {
             "a copy past the account at {depth} components"
         );
     }
+
+    // …and nothing BESIDE that copy: ONE point lookup, never a walk of Π. A
+    // walk asks the heap for its iterator's path through the tree and the
+    // lookup asks for nothing, so the read's whole heap use is what M1's two
+    // constructors ask to rebuild the account from its own components — and
+    // at a node, which has no account to rebuild, nothing at all. A body
+    // spelled as ω narrowed to the probe's own account gives every answer
+    // above, agreement and climbs alike, at one cost per depth, and walks Π
+    // on every call: the engine's draft memo and grant admission would cost
+    // Θ(entries · |Π|) again at every load and every historical read.
+    let (_, one_copy_bytes) = heap_bytes(|| {
+        validate(Tumbler::new(acct.tumbler().iter().cloned()).expect("an account is nonempty"))
+            .expect("an account rebuilt from its own components is T4-valid")
+    });
+    assert_eq!(
+        shallow_bytes, one_copy_bytes,
+        "the read asked the heap for more than one copy of its account: it walked Π"
+    );
+    let node = a(&[1]);
+    let (seat, node_bytes) = heap_bytes(|| m3.account_seat(&node));
+    assert_eq!(seat, None);
+    assert_eq!(
+        node_bytes, 0,
+        "at a node, which has no account to rebuild, the read asked the heap for bytes: it walked Π"
+    );
 }
 
 #[test]
@@ -539,7 +565,11 @@ fn omega_refuses_a_principal_seated_below_the_account_tier() {
     // one would be a PASS. The seat is unreachable through `delegate` (its
     // hoisted NotAccountTier gate) and representable in a corrupted checkpoint
     // (`M3State` decodes by bare derive), so the fold is how a test reaches it.
+    // Below the account tier are TWO tiers, and each is seated here — a
+    // document and an element beneath it — because a filter that refused one
+    // of them would pass a test that seats only the other.
     let doc = a(&[1, 0, 1, 0, 1]);
+    let element = a(&[1, 0, 1, 0, 1, 0, 1, 1]);
     let seeded = World {
         m3: M3State::genesis()
             .apply_m3(&alloc(&[1, 0, 1]))
@@ -552,27 +582,38 @@ fn omega_refuses_a_principal_seated_below_the_account_tier() {
             .apply_m3(&M3Rec::RegisterPrincipal {
                 prefix: doc.clone(),
                 id: ID2,
+            })
+            // …and an ELEMENT-tier seat beneath it, the bound's other side.
+            .apply_m3(&alloc(&[1, 0, 1, 0, 1, 0, 1, 1]))
+            .apply_m3(&M3Rec::RegisterPrincipal {
+                prefix: element.clone(),
+                id: PrincipalId(3),
             }),
     };
     let k = mem_kernel(seeded);
     let snap = k.snapshot();
     let m3 = snap.world().m3();
 
-    // ω skips it and keeps the longest ADMISSIBLE cover — the account above —
-    // so a below-tier seat shadows no one, at the document or beneath it. Both
-    // projections refuse it, because they share the walk that filters.
+    // ω skips both and keeps the longest ADMISSIBLE cover — the account above
+    // — so a below-tier seat shadows no one, at its own address or beneath
+    // it. Both projections refuse them, because they share the walk that
+    // filters.
     assert_eq!(m3.effective_owner(&doc), Some(ID1));
     assert_eq!(m3.effective_owner_prefix(&doc), Some(&a(&[1, 0, 1])));
     assert!(!m3.is_effective_owner(ID2, &doc));
-    let element = a(&[1, 0, 1, 0, 1, 0, 1, 1]);
     assert_eq!(m3.effective_owner(&element), Some(ID1));
     assert_eq!(m3.effective_owner_prefix(&element), Some(&a(&[1, 0, 1])));
     assert!(!m3.is_effective_owner(ID2, &element));
+    assert!(!m3.is_effective_owner(PrincipalId(3), &element));
 
-    // The registry's verbatim readers report the seat, as their docs say —
+    // The registry's verbatim readers report both seats, as their docs say —
     // by id and in the walk of every seat…
     assert_eq!(m3.principal_prefix(ID2), Some(&doc));
+    assert_eq!(m3.principal_prefix(PrincipalId(3)), Some(&element));
     assert!(m3.principals().any(|seat| seat == (&doc, ID2)));
+    assert!(m3
+        .principals()
+        .any(|seat| seat == (&element, PrincipalId(3))));
     // …and the ω-gated op is what refuses it. Without the filter this call
     // passes authorization and refuses structurally instead — the right
     // outcome for the wrong reason, and the wrong one for M5, which asks ω

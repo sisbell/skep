@@ -13,14 +13,9 @@
 //! (two readings), the policy link (five) — carries NONE on its bare
 //! ordinal, every reading a row at a prefix under it. The map's "Deposits"
 //! column is that test, computed off the subtype rows' kinds and never
-//! stored ([`Row::carries_deposits`]), so a reading row the table gains
-//! (REG-1.15) joins the column by the test alone and no row already in it
-//! moves: a new reading is the takedown record's or the policy link's, which
-//! take one at no cost, their bare ordinals carrying no deposit already
-//! (REG-1.19). A kind that reads ONE way never takes one — its deposits
-//! already ride its bare ordinal, and none is rewritten (REG-1.60) — so its
-//! later form is the MEMBER form and never a reading row (REG-1.86, HOW A
-//! FORM CHANGES LATER).
+//! stored: [`Row::carries_deposits`], whose doc says why a reading row the
+//! table gains moves no row already in it, and why a kind that reads ONE
+//! way never takes one.
 //!
 //! THE ORDER (the map): the first three kinds in REG-1.14's order at `3.55`,
 //! `3.56`, `3.57`; `successor-of`, REG-1.14's fourth kind, at `3.59` where
@@ -238,14 +233,16 @@ impl Row {
     /// where no subtype row nests under the kind, a kind that reads ONE way,
     /// and none where its readings are rows under it. Computed off
     /// [`Subtype::ALL`] and [`Subtype::kind`] and never stored, so a reading
-    /// row added under the takedown record or the policy link (REG-1.15,
-    /// REG-1.19) carries deposits by the test itself once its subtype joins
-    /// `Subtype::ALL`, as the completeness arm requires of every subtype row.
-    /// The test never moves a kind's own row: a kind that reads ONE way takes
-    /// no reading row, since a subtype under it would leave the deposits
-    /// already on its bare ordinal, which no rewrite reaches (REG-1.60), on
-    /// an ordinal this test reads as carrying none (REG-1.86, HOW A FORM
-    /// CHANGES LATER).
+    /// row the table gains (REG-1.15) carries deposits by the test itself
+    /// once its subtype joins `Subtype::ALL`, as the completeness arm
+    /// requires of every subtype row, and moves no row already in the table.
+    /// A new reading is the takedown record's or the policy link's, which take
+    /// one at no cost, their bare ordinals carrying no deposit already
+    /// (REG-1.19). A kind that reads ONE way takes no reading row, since a
+    /// subtype under it would leave the deposits already on its bare ordinal,
+    /// which no rewrite reaches (REG-1.60), on an ordinal this test reads as
+    /// carrying none — so its later form is the MEMBER form and never a
+    /// reading row (REG-1.86, HOW A FORM CHANGES LATER).
     pub fn carries_deposits(&self) -> bool {
         match self.of {
             RowOf::Subtype(_) => true,

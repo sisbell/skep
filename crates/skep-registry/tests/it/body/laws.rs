@@ -5,13 +5,15 @@
 //! panic, `past_cap` exactly past the cap, a record only where the body is
 //! its own encoding, of the kind named, its sig-less projection a fixpoint,
 //! and a record under one kind at most, `wrong_type` under the other. Every
-//! one-byte mutant of every admitted vector meets them, and so do seeded
-//! hostile bodies several edits from any vector, at every refusal the parse
-//! answers. Those laws hold what the parse admits and never see it refuse a
-//! body it owes, so THE ENCODER'S LAW stands beside them: every body a caller
-//! builds — any number of origins, address members of any level and length,
-//! any `sig` string — is the record its encoding spells up to the cap, and
-//! `past_cap` past it. The vector set and its readers are the parent's.
+//! vector of the set meets them, under both kinds, and so does every
+//! one-byte mutant of every admitted vector and every seeded hostile body
+//! several edits from any vector, at every refusal the parse answers. Those
+//! laws hold what the parse admits and never see it refuse a body it owes,
+//! so THE ENCODER'S LAW stands beside them: every body a caller builds — any
+//! number of origins, address members of any level and length, any `sig`
+//! string — is the record its encoding spells up to the cap, and `past_cap`
+//! past it. The vector set and its readers are the parent's, and the parent
+//! drives [`assert_the_laws_at`] over the set.
 
 use skep_address::{validate, Address, Nat, Tumbler};
 use skep_registry::{
@@ -107,12 +109,13 @@ fn every_scalar_value_in_a_string_encodes_to_a_record() {
 /// `past_cap` exactly where the body is past the cap; a record only where
 /// the body is its own canonical encoding (REG-1.86 (h)), of the kind named,
 /// its sig-less projection a fixpoint (REG-1.86 (e)); and a record under one
-/// kind at most, `wrong_type` under the other (REG-1.86 (a)). The one-byte
-/// mutants and the hostile bodies below both drive it, so a law joins here
-/// once and every input meets it. Hands back, under each kind, the parse's
-/// answer with its record set aside: `Ok(())` where the kind admitted the
-/// body, the refusal where it did not.
-fn assert_the_laws_at(body: &[u8]) -> [Result<(), ParseRefusal>; 2] {
+/// kind at most, `wrong_type` under the other (REG-1.86 (a)). The vector set
+/// (the parent's `the_vector_set_meets_one_answer_at_this_parser`), the
+/// one-byte mutants and the hostile bodies below each drive it, so a law
+/// joins here once and every input meets it. Hands back, under each kind,
+/// the parse's answer with its record set aside: `Ok(())` where the kind
+/// admitted the body, the refusal where it did not.
+pub(super) fn assert_the_laws_at(body: &[u8]) -> [Result<(), ParseRefusal>; 2] {
     let shown = || {
         let head: String = String::from_utf8_lossy(body).chars().take(240).collect();
         format!("{head:?} ({} bytes)", body.len())
@@ -161,9 +164,10 @@ fn assert_the_laws_at(body: &[u8]) -> [Result<(), ParseRefusal>; 2] {
 /// continuation byte, and a byte no UTF-8 holds.
 const MUTANT_ALPHABET: &[u8] = b" \t\n\"\\/{}[]:,.+-019eAFbnu\x00\x7f\x80\xff";
 
-/// The longest admitted vector the one-byte mutants are drawn from: the
-/// set's vectors at the cap are pinned whole by their own answers, and the
-/// one-byte mutants of one would be some 930,000 bodies of 16 KiB.
+/// The longest admitted vector the one-byte mutants are drawn from: a longer
+/// one meets the laws whole, where the parent drives them over the set, and
+/// the one-byte mutants of one at the cap would be some 930,000 bodies of
+/// 16 KiB.
 const MAX_MUTANT_SOURCE_BYTES: usize = 1024;
 
 /// Every one-byte mutant of every admitted vector no longer than

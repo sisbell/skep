@@ -500,15 +500,16 @@ at this parser, the examples' one canonical form, the cases that pin this
 parser alone — a refusal's member, the first stage to fault, the `type`
 member read off its kind's row — and the codec's public face at cases a
 hand chose), with its child `body/laws.rs` (the escape table at every
-Unicode scalar value; the parse's laws, stated once and met on every
-one-byte mutant of every admitted vector and on seeded hostile bodies
-several edits from the vectors, at every refusal the parse answers; and the
-encoder's law, every body a caller builds a record up to the cap), and
-`tidy` (the manifest's two dependencies, the leaf the code map names). Its
-unit suites sit inline beside their code and hold only what that code's
-privates can show — in `rows.rs`, the registry range, its ordinal reader
-and `row_at` against the type subspace's own prefix; in `body.rs`, the
-one-spelling reader `address_of` and the codec's cases built through it.
+Unicode scalar value; the parse's laws, stated once and met on every vector
+of the set, on every one-byte mutant of every admitted vector and on seeded
+hostile bodies several edits from the vectors, at every refusal the parse
+answers; and the encoder's law, every body a caller builds a record up to
+the cap), and `tidy` (the manifest's two dependencies, the leaf the code
+map names). Its unit suites sit inline beside their code and hold only what
+that code's privates can show — in `rows.rs`, the registry range, its
+ordinal reader and `row_at` against the type subspace's own prefix; in
+`body.rs`, the one-spelling reader `address_of` and the codec's cases built
+through it.
 
 ## The resolver, `skep-resolve`
 

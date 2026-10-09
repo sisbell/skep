@@ -16,30 +16,14 @@
 //! escapes and no others (`"`, `\`, the five named C0 controls, `\u00xx`
 //! lowercase for the rest; nothing else escaped), no byte after the brace.
 //!
-//! WHAT THE PARSE CHECKS IS THE FORM, NEVER THE ADMISSIBILITY (REG-1.86
-//! (c), (d), (g)): `type` is the string of the kind THE CALLER NAMES — the
-//! link's slot — and any other `type` is refused (`wrong_type`); NO MEMBER IS
-//! A JSON NUMBER, anywhere in the body; no member stands beside the row's
-//! own, `replaces` and `sig`; the ADDRESS MEMBERS — `prefix` and `replaces`,
-//! the members written in address form — each spell an address in its one
-//! dotted-decimal spelling; `origins` is a non-empty array of strings; and
-//! `sig`, where present, is a string (REG-1.86 (e): "a STRING where signed
-//! ops comes to write one"), the one form [`encode`] writes it in.
-//! Whether an origin is https with a routable host is the resolver's
-//! question; whether an address member is written in the LOCAL FORM of the
-//! board the record is homed on (REG-1.86 (c), (g)) is its writer's — a
-//! global-form address is spelled alike, and no parse tells the two apart;
-//! and whether `replaces` names the deposit current at the record's position
-//! is the reader's currency rule (REG-1.10, REG-2.24). None is asked here.
-//! `sig` is answered as the string found, present or absent, beside the
-//! SIG-LESS CANONICAL PROJECTION a verifier frames (REG-1.86 (e)).
-//!
-//! WHAT THE PARSE CHECKS, THE TYPES CARRY: an address member is the
-//! [`Address`] it spells and the origins are [`Origins`], never empty. So a
-//! reader takes each member as the value it is and converts or checks
-//! nothing again, and every [`Body`] a caller can build encodes to bytes
-//! [`parse`] admits, the cap aside — a signer never signs a body the daemon
-//! then refuses for its form.
+//! WHAT THE PARSE CHECKS — every member's FORM, never its admissibility —
+//! and what it leaves the record's reader are [`parse`]'s contract, stated
+//! on it beside its stages. What it checks, THE TYPES CARRY: an address
+//! member — `prefix` or `replaces` — is the [`Address`] it spells and the
+//! origins are [`Origins`], never empty. So a reader takes each member as
+//! the value it is and converts or checks nothing again, and every [`Body`]
+//! a caller can build encodes to bytes [`parse`] admits, the cap aside — a
+//! signer never signs a body the daemon then refuses for its form.
 //!
 //! THE CAP, [`MAX_REGISTRY_RECORD_BYTES`], counts every byte, `sig`
 //! included: a body past it is refused before any tree is built, since a
@@ -134,7 +118,10 @@ pub struct Endpoint {
 /// AN ENDPOINT's ORIGINS (REG-1.9): the org's ordered list, AT LEAST ONE
 /// entry, the order load-bearing at the resolver's walk. Never empty: a list
 /// of no origin is no value of this type, so `[]` — which no reader holds
-/// ([`ParseRefusal::EmptyOrigins`]) — is a body no caller can build.
+/// ([`ParseRefusal::EmptyOrigins`]) — is a body no caller can build. Each
+/// entry is the string the org wrote — any string, the empty one included —
+/// and whether it names an origin a reader can dial is that reader's
+/// question, never [`parse`]'s.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Origins(Vec<String>);
 
@@ -349,6 +336,26 @@ impl std::error::Error for ParseRefusal {}
 /// for byte; and `bytes` are at most [`MAX_REGISTRY_RECORD_BYTES`]. So bytes
 /// that are a record under one kind are `wrong_type` under the other: a
 /// record under one kind at most.
+///
+/// WHAT THE PARSE CHECKS IS THE FORM, NEVER THE ADMISSIBILITY (REG-1.86
+/// (c), (d), (g)): `type` is the string of the kind THE CALLER NAMES — the
+/// link's slot — and any other `type` is refused (`wrong_type`); NO MEMBER IS
+/// A JSON NUMBER, anywhere in the body; no member stands beside the row's
+/// own, `replaces` and `sig`; the ADDRESS MEMBERS — `prefix` and `replaces`,
+/// the members written in address form — each spell an address in its one
+/// dotted-decimal spelling; `origins` is a non-empty array of strings; and
+/// `sig`, where present, is a string (REG-1.86 (e): "a STRING where signed
+/// ops comes to write one"), the one form [`encode`] writes it in.
+/// Whether an entry of `origins` is an origin — https with a routable host
+/// — is its reader's question, the resolver's at its walk, an entry being
+/// any string the org wrote ([`Origins`]); whether an address member is
+/// written in the LOCAL FORM of the board the record is homed on (REG-1.86
+/// (c), (g)) is its writer's — a global-form address is spelled alike, and
+/// no parse tells the two apart — and qualifying it by that board's node
+/// prefix is its reader's, the two forms being one at the root (REG-1.64;
+/// REG-1.86 (c)); and whether `replaces` names the deposit current at the
+/// record's position is the reader's currency rule (REG-1.10, REG-2.24).
+/// None is asked here.
 ///
 /// THE STAGES, the first to fault naming the refusal ([`ParseRefusal`]): the cap;
 /// the text; the value; the object; the number scan; `type`; the member set;

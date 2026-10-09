@@ -1,7 +1,7 @@
 //! THE VECTOR SET at this parser (`tests/vectors/records.json`): every
 //! vector meets the answer the set pins at the parse — a record, or its
-//! refusal's cause — every admitted body is its own re-encoding and a
-//! fixpoint, and the set pins the cap this crate does, so a parser another
+//! refusal's cause — and every law of the parse, stated once in the child
+//! `laws`; and the set pins the cap this crate does, so a parser another
 //! reader of the bodies builds reads the pins from the set and not from a
 //! second transcription. (`skep-resolve` builds none: it calls this crate's
 //! `parse`.)
@@ -12,16 +12,16 @@
 //! row — and the codec's public face at cases a hand chose: the shortest
 //! escapes, an address member at any size, the origins' walk. What only
 //! `src/body.rs`'s privates can show — its one-spelling reader `address_of`
-//! and the cases built through it — is that module's unit suite. The laws on
-//! inputs no hand chose are the child `laws`. The set's readers live here —
-//! `vector_set`, `bytes_of` and `kind_of` — and the child reads the set
-//! through the first two.
+//! and the cases built through it — is that module's unit suite. The parse's
+//! laws, and the inputs no hand chose they are driven on, are the child
+//! `laws`. The set's readers live here — `vector_set`, `bytes_of` and
+//! `kind_of` — and the child reads the set through the first two.
 
 use std::path::Path;
 
 use serde_json::Value;
 use skep_registry::{
-    encode, parse, rows, Body, BodyKind, Endpoint, Kind, Member, Origins, ParseRefusal, Record,
+    encode, parse, rows, Body, BodyKind, Endpoint, Kind, Member, Origins, ParseRefusal,
     MAX_REGISTRY_RECORD_BYTES,
 };
 
@@ -58,10 +58,11 @@ fn kind_of(vector: &Value) -> BodyKind {
     }
 }
 
-/// Every vector, under its own name, one answer at the parse; the admitted
-/// ones read from both sides of the canonical rule. A name two vectors
-/// shared would let a required name below match the wrong one, and a
-/// failure that names it would point at two.
+/// Every vector, under its own name: every law of the parse under both
+/// kinds ([`laws::assert_the_laws_at`]), one answer at the parse under its
+/// own kind, and for an admitted one the sig-less projection and the `sig`
+/// the set pins. A name two vectors shared would let a required name below
+/// match the wrong one, and a failure that names it would point at two.
 #[test]
 fn the_vector_set_meets_one_answer_at_this_parser() {
     let set = vector_set();
@@ -75,22 +76,15 @@ fn the_vector_set_meets_one_answer_at_this_parser() {
         let kind = kind_of(vector);
         let bytes = bytes_of(vector);
         let answer = vector["parse"].as_str().expect("the parse's answer");
+        let _ = laws::assert_the_laws_at(&bytes);
         match (answer, parse(kind, &bytes)) {
             ("ok", Ok(record)) => {
-                assert_eq!(record.body.kind(), kind, "{name}: the body's kind is the slot's");
-                assert_eq!(
-                    encode(&record.body, record.sig.as_deref()).as_bytes(),
-                    bytes.as_slice(),
-                    "{name}: b == encode(parse(b))"
-                );
                 assert_eq!(
                     Some(record.canonical_sigless().as_str()),
                     vector["canonical_sigless"].as_str(),
                     "{name}: the sig-less canonical projection"
                 );
                 assert_eq!(record.sig.as_deref(), vector["sig"].as_str(), "{name}: the sig as found");
-                let again = parse(kind, record.canonical_sigless().as_bytes()).expect("a fixpoint");
-                assert_eq!(again, Record { body: record.body, sig: None }, "{name}");
                 admitted += 1;
             }
             ("ok", Err(refusal)) => panic!("{name}: the set admits it, the parser refuses {refusal}"),

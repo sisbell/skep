@@ -280,11 +280,11 @@ fn the_token_the_tag_and_the_key_each_reach_the_same_marker_row() {
 /// at compile time, never by a consumer's own walk of the table.
 #[test]
 fn the_marker_tag_lookup_reads_a_blob_width_at_compile_time() {
-    const TAG1_BLOB: usize = match SigAlgRow::of_tag(1) {
+    const TAG1_SIG_LEN: usize = match SigAlgRow::of_tag(1) {
         Some(row) => row.sig_len(),
         None => 0,
     };
-    assert_eq!(TAG1_BLOB, 3373, "tag 1's blob width, read at compile time");
+    assert_eq!(TAG1_SIG_LEN, 3373, "tag 1's blob width, read at compile time");
 }
 
 /// The ruled widths, by literal: tag 1's 1,984-byte key and 3,373-byte blob
@@ -346,27 +346,27 @@ fn a_hybrids_fingerprint_covers_its_whole_raw_value() {
 #[test]
 fn a_hybrid_blob_is_hex_of_a_rows_width_and_nothing_else() {
     for row in SIG_ALGS {
-        let n = row.sig_len();
-        let blob = HybridBlob::parse_hex(&"ab".repeat(n))
+        let sig_len = row.sig_len();
+        let blob = HybridBlob::parse_hex(&"ab".repeat(sig_len))
             .unwrap_or_else(|| panic!("tag {}'s width is a blob's", row.tag));
-        let bytes = vec![0xab_u8; n];
-        assert_eq!(blob.as_bytes(), bytes.as_slice(), "tag {}: the bytes the hex spells", row.tag);
+        let want = vec![0xab_u8; sig_len];
+        assert_eq!(blob.as_bytes(), want.as_slice(), "tag {}: the bytes the hex spells", row.tag);
         assert_eq!(
-            HybridBlob::parse_hex(&"AB".repeat(n)),
+            HybridBlob::parse_hex(&"AB".repeat(sig_len)),
             Some(blob),
             "tag {}: case-free — decoded, never framed",
             row.tag
         );
-        for off_by_one in [n - 1, n + 1] {
+        for off_by_one in [sig_len - 1, sig_len + 1] {
             if SIG_ALGS.iter().any(|other| other.sig_len() == off_by_one) {
                 continue; // another row's width
             }
             let wrong = HybridBlob::parse_hex(&"ab".repeat(off_by_one));
             assert_eq!(wrong, None, "tag {}: {off_by_one} bytes", row.tag);
         }
-        let odd = HybridBlob::parse_hex(&"a".repeat(2 * n - 1));
+        let odd = HybridBlob::parse_hex(&"a".repeat(2 * sig_len - 1));
         assert_eq!(odd, None, "tag {}: an odd hex length", row.tag);
-        let non_hex = HybridBlob::parse_hex(&format!("zz{}", "ab".repeat(n - 1)));
+        let non_hex = HybridBlob::parse_hex(&format!("zz{}", "ab".repeat(sig_len - 1)));
         assert_eq!(non_hex, None, "tag {}: a non-hex byte at the row's width", row.tag);
     }
     let classical = HybridBlob::parse_hex(&"ab".repeat(64));
@@ -904,7 +904,7 @@ fn a_board_term_renders_its_chain_as_hex() {
 /// exist). `Debug` renders the bytes, which for a `skep-` ASCII tag is the
 /// name (AUTH-1.15).
 #[test]
-fn tag_is_copy_and_debugs_as_its_bytes() {
+fn tag_is_copy_and_renders_as_its_bytes() {
     let tag = KEY_TAG;
     let first = framed(tag, &[b"a"]);
     let second = framed(tag, &[b"a"]);

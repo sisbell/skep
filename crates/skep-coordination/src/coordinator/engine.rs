@@ -623,9 +623,11 @@ impl<W: CoordinationWorld> Coordinator<W> {
     /// Reads `LinkState` AT NO VISIBILITY CLASS, where every verdict reads
     /// through the look at guest class: the attribution key pins the home to
     /// the rule's own action home, and a fire into a home the guest class
-    /// hides deposits nothing (`FireError::DraftBoundary`), so no count this
-    /// recompute can produce would differ through the look — while an operator
-    /// looking for a runaway wants every tuple the journal recovered.
+    /// hides deposits nothing (`FireError::DraftBoundary`), so the look would
+    /// drop no tuple of the rule's own fires — only another writer's at the
+    /// key, homed where the guest class cannot see, which is part of the
+    /// over-count above and is counted with the rest: an operator looking for
+    /// a runaway wants every tuple the journal recovered.
     pub fn fire_count(&self, id: RuleId, x: &Address) -> u64 {
         let Some(rule) = self.rules.iter().find(|r| r.id == id) else {
             return 0;

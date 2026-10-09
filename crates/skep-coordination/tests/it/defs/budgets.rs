@@ -286,9 +286,10 @@ fn an_argument_free_reference_chain_at_the_cap_derives_cold() {
 /// its flat expansion doubles per level — `P₈` certifies, `P₁₆` is
 /// `ExpansionTooLarge` before its 2¹⁶ copies of `P₀` exist, and a `Def`
 /// trigger over it is refused at the door `certify_rule` and `armer_cycles`
-/// stand behind. Evaluation never builds that expansion (Conflicts §5): `P₁₆`
-/// still denotes, DAG-recursively through the memo. Retracted, `P₁₆` is
-/// `NotActive` instead: the activity leg speaks before the expansion is built.
+/// stand behind — over a tuple domain, for its parameter's sort first.
+/// Evaluation never builds that expansion (Conflicts §5): `P₁₆` still
+/// denotes, DAG-recursively through the memo. Retracted, `P₁₆` is `NotActive`
+/// instead: the activity leg speaks before the expansion is built.
 #[test]
 fn certify_stable_refuses_an_expansion_past_the_node_budget() {
     let k = kernel();
@@ -319,6 +320,17 @@ fn certify_stable_refuses_an_expansion_past_the_node_budget() {
     };
     assert!(matches!(c.certify_rule(&rule), Err(RuleError::TriggerExpansionTooLarge)));
     assert!(matches!(c.register_rule(rule), Err(RuleError::TriggerExpansionTooLarge)));
+    // The sort reconciliation speaks before that door: over a tuple domain the
+    // same trigger is refused for its parameter's sort, its expansion unbuilt.
+    assert!(matches!(
+        c.register_rule(Rule {
+            domain: Dom::ActiveSlice(concrete(&pred_stable_ty())),
+            trigger: Trigger::Def(p.clone()),
+            view: View::Audit,
+            action: marker_action(),
+        }),
+        Err(RuleError::DomainTriggerSortMismatch { expected: Sort::Tup, found: Sort::Addr })
+    ));
     // Evaluation never builds that expansion (Conflicts §5): the same def
     // denotes, DAG-recursively, through the memo.
     assert_eq!(

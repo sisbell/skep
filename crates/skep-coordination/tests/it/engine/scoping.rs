@@ -1,22 +1,24 @@
 //! Q7's scoped quiescence: exact over a sort-homogeneous scoped set and a safe
 //! over-approximation wherever a body and a rule's element shape disagree, Q9's
-//! four scope bodies and the one address each reads, the view a scope is read
-//! at, and the precondition's four conjuncts, each refused at the door.
+//! four scope bodies and the one address each reads, a scope's `Reg`
+//! quantifier read through its instances, the view a scope is read at, and the
+//! precondition's four conjuncts, each refused at the door.
 
 use crate::common::*;
 use crate::terms::*;
 
 use skep_address::Address;
 use skep_coordination::{
-    Arg, Dom, FireAction, FireOutcome, Occurrence, Rule, ScopeBody, Sort, Term, Trigger, TypedTerm,
-    View,
+    Arg, Atom, Dom, FireAction, FireOutcome, Occurrence, Rule, ScopeBody, Sort, Term, Trigger,
+    TypeRef, TypedTerm, View,
 };
 use skep_links::{Caller, SlotArg};
 
 /// Q7: scoped quiescence is exact for a sort-homogeneous scoped set, and a
 /// strict over-approximation (never false quiescence) wherever a body and a
 /// rule's element shape disagree — a tuple body over an address domain, or
-/// `PerAddress` once a tuple-domained rule joins the registry.
+/// `PerAddress` once a tuple-domained rule joins the registry. A scope that
+/// quantifies over classes is read through its `Reg` instances.
 #[test]
 fn quiescent_scoped_is_exact_then_over_approximates_in_the_safe_direction() {
     let k = kernel();
@@ -50,6 +52,16 @@ fn quiescent_scoped_is_exact_then_over_approximates_in_the_safe_direction() {
         assert!(!c.quiescent_scoped(&nowhere, body, &k.snapshot()), "{body:?} over addresses");
     }
     assert!(c.quiescent_scoped(&nowhere, ScopeBody::PerAddress, &k.snapshot()));
+    // A scope may quantify over classes — "y heads some cataloged class" — and
+    // is read through its instances: ca1 and ca3 head pred_stable, so the
+    // rule's work is in scope.
+    let heads_a_class = c
+        .type_check(
+            vec![(v(9), Sort::Addr)],
+            exists(7, Dom::Reg, Term::Atom(Atom::IsK(TypeRef::ClassVar(v(7)), at(var(9))))),
+        )
+        .expect("a Reg-quantified scope");
+    assert!(!c.quiescent_scoped(&heads_a_class, ScopeBody::PerAddress, &k.snapshot()));
 
     // Discharge the in-scope work only: scoped-quiescent, globally not.
     match c.fire(&Occurrence { rule: id, arg: Arg::Addr(ca(1)) }).expect("fire ca1") {

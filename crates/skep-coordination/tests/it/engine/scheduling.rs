@@ -300,11 +300,13 @@ fn a_dedup_onto_an_incumbent_the_fire_can_see_reports_deduped_and_commits_nothin
     assert!(!c.quiescent(&k.snapshot()), "a ⊤ trigger stays enabled");
 }
 
-/// `step` peeks at the caller's snapshot and `fire` pins its own: an
-/// occurrence enabled at a stale snapshot and falsified since is a `NoOp`
-/// step — no second deposit, no dedup — and the fresh snapshot is quiescent.
+/// The peek answers as of the snapshot the caller pins — `quiescent`,
+/// `next_enabled` and `step`'s pick alike — and `fire` pins its own: an
+/// occurrence enabled at a stale snapshot and falsified since is still enabled
+/// there to Q0 and to the peek, and its step is a `NoOp` — no second deposit,
+/// no dedup — while the fresh snapshot is quiescent.
 #[test]
-fn step_peeks_at_the_caller_s_snapshot_but_fires_at_its_own() {
+fn the_peek_answers_at_the_caller_s_snapshot_and_the_fire_at_its_own() {
     let k = kernel();
     let mut c = coord(&k);
     link_writer(&k).emit(Caller::System, &doc1(), &pred_stable_ty(), &ca(1), &[]).expect("rel");
@@ -321,6 +323,10 @@ fn step_peeks_at_the_caller_s_snapshot_but_fires_at_its_own() {
         c.fire(&Occurrence { rule: id, arg: Arg::Addr(ca(1)) }).expect("fire"),
         FireOutcome::Fired { .. }
     ));
+    // Q0 and the peek answer as of `stale`, never the present: there the
+    // occurrence is still enabled.
+    assert!(!c.quiescent(&stale));
+    assert_eq!(c.next_enabled(&stale), Some(Occurrence { rule: id, arg: Arg::Addr(ca(1)) }));
     assert!(matches!(c.step(&stale), StepOutcome::NoOp));
     assert!(matches!(c.step(&k.snapshot()), StepOutcome::Quiescent));
     assert_eq!(c.fire_count(id, &ca(1)), 1);
@@ -645,6 +651,50 @@ fn a_reg_quantified_trigger_is_read_through_its_instances() {
         matches!(c.step(&k.snapshot()), StepOutcome::Quiescent),
         "the marker class's instance falsifies the trigger"
     );
+}
+
+/// A rule's DOMAIN is checked AND normalized at registration, as its trigger
+/// is: a `Reg` quantifier inside a domain's body is legitimate PL, expanded
+/// away into one instance per cataloged class, and it is that expanded domain
+/// the lint analyzes and the scheduler enumerates — neither can walk a `Reg`
+/// binder. Here the domain is the cataloged links that head some cataloged
+/// class, `{l ∈ L_dom | ∃K ∈ Reg :: is_K(l)}`; of the world's three links only
+/// `l2` heads one, so it is the one argument the rule is enabled at, and the
+/// rule's own marker then quiesces it. Every other rule domain in the suite is
+/// `Reg`-free, where the raw submission and the checked domain are one tree, so
+/// a registry that kept the raw `rule.domain` passed them all.
+#[test]
+fn a_reg_quantified_rule_domain_is_read_through_its_instances() {
+    let k = kernel();
+    let mut c = coord(&k);
+    deposit_rel(&k, PRED_STABLE, &ca(1), &ca(2));
+    let l2 = deposit_rel(&k, PRED_STABLE, &ca(3), &ca(4));
+    link_writer(&k)
+        .emit(Caller::System, &doc1(), &pred_stable_ty(), &l2, &[])
+        .expect("a tuple covering l2");
+    let heads_a_class = filter(
+        Dom::LinkDom,
+        2,
+        exists(7, Dom::Reg, Term::Atom(Atom::IsK(TypeRef::ClassVar(v(7)), at(var(2))))),
+    );
+    let rule = Rule {
+        domain: heads_a_class,
+        trigger: not_marked(&c),
+        view: View::Audit,
+        action: marker_action(),
+    };
+    assert_eq!(
+        c.certify_rule(&rule).expect("well-formed"),
+        RuleCertification::CertifiedTerminating,
+        "the grow-only leg read the domain's instances"
+    );
+    let id = c.register_rule(rule).expect("register");
+    assert_eq!(
+        c.next_enabled(&k.snapshot()),
+        Some(Occurrence { rule: id, arg: Arg::Addr(l2.clone()) })
+    );
+    assert!(matches!(c.step(&k.snapshot()), StepOutcome::Fired { arg, .. } if arg == l2));
+    assert!(matches!(c.step(&k.snapshot()), StepOutcome::Quiescent));
 }
 
 /// A rule's domain is enumerated at the RULE's declared view: a

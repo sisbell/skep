@@ -1,12 +1,13 @@
 //! Certification (`certify_stable`): CVALID's legs in their order, ST⁺
-//! decided over the flat expansion through references, and the state-reading
-//! atoms that pass PR-VIEW and leave ST⁺ the only guard.
+//! decided over the flat expansion through references, the state-reading
+//! atoms that pass PR-VIEW and leave ST⁺ the only guard, and a `Reg`
+//! quantifier read through its instances, directly and through a reference.
 
 use crate::common::*;
 use crate::terms::*;
 
 use skep_address::Address;
-use skep_coordination::{CertifyError, Dom, Lit, Sort, Stability, Term, Value, View};
+use skep_coordination::{CertifyError, Dom, Lit, Sort, Stability, Term, TypeRef, Value, View};
 use skep_links::{Caller, ShippedType};
 
 /// CVALID(0..iii) in order, the ST⁺ parameter widening, and the certificate's
@@ -229,4 +230,38 @@ fn a_reference_with_an_argument_is_as_unproven_as_its_referent() {
     assert_eq!(now(), Ok(Value::Bool(true)));
     deposit_rel(&k, RETIRED, &ca(12), &ca(13));
     assert_eq!(now(), Ok(Value::Bool(false)), "the falsification the refusal stood against");
+}
+
+/// A stored def keeps its `Reg` quantifier in its SOURCE, and every reader of
+/// its checked form walks the instances instead: its flat expansion, directly
+/// and through a reference, and its denotation through a reference. `P(x) :=
+/// ∃K ∈ Reg :: ∃t ∈ L_K :: x ∈ cov_F(t)` — some audit tuple of some cataloged
+/// class covers x in its F — is ⊤-stable and view-independent once expanded,
+/// so it certifies, and so does `R := P(x₀)`; R denotes false until a tuple
+/// covers x₀. The suite's one other class-quantifying def is only ever
+/// evaluated directly, so a reader that took the source body — which neither
+/// the evaluator nor the analyzer can walk — passed it.
+#[test]
+fn a_reg_quantified_def_is_certified_and_evaluated_through_a_reference() {
+    let k = kernel();
+    let c = coord(&k);
+    let in_some_class = exists(
+        7,
+        Dom::Reg,
+        exists(2, Dom::AuditSlice(TypeRef::ClassVar(v(7))), in_coverage_f(var(1), 2)),
+    );
+    let p = c.type_check(vec![(v(1), Sort::Addr)], in_some_class).expect("P(x)");
+    let (p, _) = c.define_predicate(&doc1(), &p).expect("define P");
+    // A doc2 position: no def's `pdef` or certificate covers it.
+    let x0 = a(&[1, 0, 1, 0, 2, 0, 1, 1]);
+    let r = c
+        .type_check(vec![], Term::Ref { addr: p.clone(), args: vec![at(lit_addr(&x0))] })
+        .expect("R := P(x₀)");
+    let (r, _) = c.define_predicate(&doc1(), &r).expect("define R");
+    c.certify_stable(&doc1(), &p).expect("P's instances are ⊤-stable and view-independent");
+    c.certify_stable(&doc1(), &r).expect("and so is a reference to it");
+    let now = || c.evaluate_def(&r, &[], View::Active, &k.snapshot());
+    assert_eq!(now(), Ok(Value::Bool(false)));
+    deposit_rel(&k, PRED_STABLE, &x0, &ca(9));
+    assert_eq!(now(), Ok(Value::Bool(true)), "a tuple of one cataloged class covers x₀");
 }

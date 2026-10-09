@@ -86,7 +86,7 @@ fn register_rule_refuses_at_each_gate_with_its_own_rejection() {
         .define_predicate(&doc1(), &c.type_check(vec![(v(1), Sort::Addr)], lit_nat(1)).expect("Nat def"))
         .expect("define a Nat-codomain def");
     assert!(matches!(
-        c.register_rule(rule(Dom::MembersDom(concrete(&pred_stable_ty())), Trigger::Def(nat_def), marker_action())),
+        c.register_rule(rule(Dom::MembersDom(concrete(&pred_stable_ty())), Trigger::Def(nat_def.clone()), marker_action())),
         Err(RuleError::TriggerNotBoolean)
     ));
     let (closed_def, _) = c
@@ -170,7 +170,7 @@ fn register_rule_refuses_at_each_gate_with_its_own_rejection() {
         )),
         Err(RuleError::RefBearingInlineTrigger)
     ));
-    // … and for a `Def` trigger arity before the Boolean codomain.
+    // … and for a `Def` trigger arity before the Boolean codomain …
     let (nat_closed, _) = c
         .define_predicate(&doc1(), &c.type_check(vec![], lit_nat(1)).expect("closed Nat def"))
         .expect("define a closed Nat-codomain def");
@@ -181,6 +181,16 @@ fn register_rule_refuses_at_each_gate_with_its_own_rejection() {
             marker_action()
         )),
         Err(RuleError::BadTriggerArity)
+    ));
+    // … then the Boolean codomain before the sort reconciliation: an ℕ-valued
+    // def over a tuple domain fails both.
+    assert!(matches!(
+        c.register_rule(rule(
+            Dom::ActiveSlice(concrete(&pred_stable_ty())),
+            Trigger::Def(nat_def),
+            marker_action()
+        )),
+        Err(RuleError::TriggerNotBoolean)
     ));
 }
 

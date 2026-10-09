@@ -5,12 +5,12 @@
 use crate::common::*;
 use crate::terms::*;
 
-use skep_coordination::{Dom, Sort, Stability, Term, View};
+use skep_coordination::{Dom, Sort, Stability, Term, TypeRef, View};
 use skep_links::{coverage_class, ShippedType};
 
 /// PD0 by spelling: the 4-point lattice, the count-threshold split, the
-/// per-view audit-is_K rule, the PR-VIEW scan, and the named active-view
-/// exception.
+/// per-view audit-is_K rule, the PR-VIEW scan, a `Reg` quantifier classified
+/// through its instances, and the named active-view exception.
 #[test]
 fn classify_places_a_spelling_on_the_lattice_relative_to_its_view() {
     let k = kernel();
@@ -52,6 +52,12 @@ fn classify_places_a_spelling_on_the_lattice_relative_to_its_view() {
     assert!(!c.classify(&isk, View::Audit).view_independent);
     assert!(c.classify(&ex, View::Audit).view_independent);
 
+    // A `Reg` quantifier is classified through its instances, never its source
+    // body: ∃ over each audit slice is ST, and so is their disjunction.
+    let class_slice = || Dom::AuditSlice(TypeRef::ClassVar(v(7)));
+    let some_slice = tc(exists(7, Dom::Reg, exists(2, class_slice(), tru())));
+    assert_eq!(c.classify(&some_slice, View::Audit).stability, Stability::StOnly);
+
     // The named exception: an active-slice read can shrink under retraction —
     // a property of the footprint, so the flag and the footprint's own
     // accessor are one answer.
@@ -81,6 +87,63 @@ fn classify_places_a_spelling_on_the_lattice_relative_to_its_view() {
     assert!(c.classify(&ldom, View::Audit).footprint.reads_all_audit());
     let isdoc = tc1(is_doc(var(1)));
     assert!(c.classify(&isdoc, View::Audit).footprint.reads_residence());
+}
+
+/// A non-Boolean term's two directions coincide — `StSf` exactly when it reads
+/// no state, `Neither` otherwise, a grow-only set included — so `StOnly` and
+/// `SfOnly` arise only for a Boolean term. A law over every non-Boolean former,
+/// spelled once reading nothing and once reading state, at every view: no
+/// Boolean parent reads a non-Boolean child's stability, only its footprint,
+/// so an arm that called a grow-only set ⊤-stable would show here alone.
+#[test]
+fn a_non_boolean_term_is_step_constant_or_neither() {
+    let k = kernel();
+    let c = coord(&k);
+    let sup = c.reserved_type(ShippedType::Supersedes).clone();
+    let pd = || concrete(&pred_def_ty());
+    let x = || lit_addr(&ca(1));
+    // v8 a map, v9 a set: values bound before any step, so they read nothing.
+    let gamma = || vec![(v(8), Sort::Map), (v(9), Sort::AddrSet)];
+    let fixed = || Dom::SetTerm(at(var(9)));
+    let constant = [
+        lit_nat(1),
+        x(),
+        bot_addr(),
+        bot_nat(),
+        var(9),
+        nat_add(lit_nat(1), lit_nat(2)),
+        map_get(var(8), &pred_def_ty()),
+        count(fixed()),
+        reflect(fixed()),
+        big_union(fixed(), 2, var(9)),
+        Term::MaxT1(ad(fixed())),
+        let_(5, lit_nat(1), var(9)),
+        if_some(bot_addr(), 5, lit_nat(1), lit_nat(2)),
+    ];
+    let reading = [
+        members(&pred_def_ty()),
+        targets_of(&pred_def_ty(), x()),
+        count(Dom::AuditSlice(pd())),
+        reflect(Dom::MembersDom(pd())),
+        big_union(Dom::AuditSlice(pd()), 2, tup_addrs_f(2)),
+        Term::MinT1(ad(Dom::LinkDom)),
+        succs(&sup, x()),
+        chain(&sup, x()),
+        elems(chain(&sup, x())),
+        tip(&sup, x()),
+        let_(5, count(Dom::LinkDom), lit_nat(1)),
+        if_some(tip(&sup, x()), 5, var(5), x()),
+    ];
+    let rows = [(&constant[..], Stability::StSf), (&reading[..], Stability::Neither)];
+    for view in [View::Active, View::Audit, View::Default] {
+        for (terms, expected) in rows {
+            for t in terms {
+                let tt = c.type_check(gamma(), t.clone()).expect("a non-Boolean term");
+                assert_ne!(tt.result_sort(), Sort::Bool, "{t:?}");
+                assert_eq!(c.classify(&tt, view).stability, expected, "{t:?} at {view:?}");
+            }
+        }
+    }
 }
 
 /// PR-VIEW's scan refuses EXACTLY the view-parameterized constituents and the

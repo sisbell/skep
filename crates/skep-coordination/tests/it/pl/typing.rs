@@ -186,7 +186,8 @@ fn type_check_refuses_each_documented_edge_by_name() {
 /// behavior guard before its children; children left to right; a binder's
 /// domain before its body; a `Ref`'s referent before its arguments, and each
 /// argument on its own account before it is matched against its formal — an
-/// extra argument included, before the arity it breaks.
+/// extra argument included, before the arity it breaks, and every given
+/// argument before a missing one is reported.
 #[test]
 fn type_check_reports_the_first_rejection_in_its_stated_walk_order() {
     let k = kernel();
@@ -234,6 +235,18 @@ fn type_check_reports_the_first_rejection_in_its_stated_walk_order() {
         c.define_predicate(&doc1(), &c.type_check(vec![], tru()).expect("Q")).expect("define Q");
     assert_eq!(
         c.type_check(vec![], Term::Ref { addr: q, args: vec![at(bad_arg())] }).err(),
+        mismatch(Sort::Bool, Sort::Nat)
+    );
+    // … and a MISSING one is reported only once every given argument has
+    // checked on its own account — which would report `ArgArityMismatch` too.
+    let (r, _) = c
+        .define_predicate(
+            &doc1(),
+            &c.type_check(vec![(v(1), Sort::Addr), (v(2), Sort::Nat)], tru()).expect("R(x, n)"),
+        )
+        .expect("define R");
+    assert_eq!(
+        c.type_check(vec![], Term::Ref { addr: r, args: vec![at(bad_arg())] }).err(),
         mismatch(Sort::Bool, Sort::Nat)
     );
 }
@@ -529,10 +542,11 @@ fn type_check_charges_a_literal_s_payload_against_the_node_budget() {
 /// `TooLarge` names four payloads besides the node itself, and the checker
 /// charges each where it meets it — not only a `Nat`'s limbs: a Γ_D
 /// parameter, before anything is sized by the context's length, so an
-/// over-long context is `TooLarge` even where it also repeats a name; a
-/// literal address's components, once per `Reg` instance it is copied into;
-/// and a `Ref`'s address, at the `Ref`'s own node, before its referent is
-/// resolved. Each refused term fits the budget once its payload goes
+/// over-long context is `TooLarge` even where it also repeats a name, though
+/// `TupParameter` still speaks first where it holds a tuple; a literal
+/// address's components, once per `Reg` instance it is copied into; and a
+/// `Ref`'s address, at the `Ref`'s own node, before its referent is resolved.
+/// Each term refused `TooLarge` fits the budget once its payload goes
 /// uncharged.
 #[test]
 fn type_check_charges_every_payload_kind_against_the_node_budget() {
@@ -543,6 +557,9 @@ fn type_check_charges_every_payload_kind_against_the_node_budget() {
     let mut repeated = context(70_000);
     repeated.push((v(1), Sort::Bool));
     assert!(matches!(c.type_check(repeated, tru()), Err(TypeError::TooLarge)));
+    let mut tupled = context(70_000);
+    tupled.push((v(70_001), Sort::Tup));
+    assert_eq!(c.type_check(tupled, tru()).err(), Some(TypeError::TupParameter(v(70_001))));
 
     let long = a(&vec![1u32; 1 << 13]); // 8 192 components, no separator: a node address
     c.type_check(vec![], is_doc(lit_addr(&long))).expect("one long literal fits");

@@ -1,14 +1,15 @@
 //! A def's life through the writes: define, register (and its idem⊤ dedup),
 //! retract, re-register and supersede — what each returns, and that a
-//! retraction never cascades.
+//! retraction never cascades, on the handle that watched it and on a cold
+//! memo alike.
 
 use crate::common::*;
 use crate::terms::*;
 
 use skep_arrangement::HasM5;
 use skep_coordination::{
-    DefineError, EvalError, Lit, RegisterError, RetractError, Sort, SupersedeError, Term, Value,
-    View,
+    CertifyError, DefineError, Dom, EvalError, Lit, RegisterError, RetractError, Rule, Sort,
+    SupersedeError, Term, Trigger, Value, View,
 };
 use skep_kernel::TxnError;
 use skep_links::{enc, EmitError, HasLinks, Tip, Tuple};
@@ -192,6 +193,54 @@ fn endorsement_gates_a_new_reference_and_retraction_never_cascades() {
     c.register_pred(&doc1(), &p_start).expect("P re-registers afresh");
     c.register_pred(&doc1(), &orphan).expect("the orphan is adopted");
     assert_eq!(c.evaluate_def(&orphan, &[], View::Active, &k.snapshot()), Ok(Value::Bool(false)));
+}
+
+/// Retraction never cascades on a REBUILT memo either. The memo is a hint,
+/// recomputed from a def's immutable content and M7's audit slice, and a
+/// derivation keys on EVER-registration, so a coordinator whose first contact
+/// with a def comes after its retraction — a restarted driver's — answers as
+/// the handle that registered it does: the standing consumer, derived cold,
+/// evaluates through it; its signature is the warm handle's; a new term still
+/// references it, and a rule may still name it as a `Def` trigger; only
+/// endorsement — `certify_stable`'s activity leg — sees the retraction. The
+/// suite's other retractions are probed on the handle that registered the def,
+/// whose memo `register_pred` had already filled.
+#[test]
+fn a_cold_memo_derives_a_retracted_def_and_its_standing_consumer() {
+    let k = kernel();
+    let c = coord(&k);
+    let p = c
+        .type_check(vec![(v(1), Sort::Addr)], addr_eq(var(1), lit_addr(&ca(1))))
+        .expect("P(x) := x = ca1");
+    let (p, _) = c.define_predicate(&doc1(), &p).expect("define P");
+    let q = c
+        .type_check(vec![], Term::Ref { addr: p.clone(), args: vec![at(lit_addr(&ca(1)))] })
+        .expect("Q := P(ca1)");
+    let (q, _) = c.define_predicate(&doc1(), &q).expect("define Q");
+    c.retract_pred(&doc1(), &p).expect("retract P");
+
+    // The cold handle meets Q first, so P is derived as Q's referent.
+    let mut cold = coord(&k);
+    assert_eq!(
+        cold.evaluate_def(&q, &[], View::Active, &k.snapshot()),
+        Ok(Value::Bool(true)),
+        "the standing consumer, derived cold, evaluates through its retracted referent"
+    );
+    let warm = c.signature(&p).expect("the handle that registered P holds its signature");
+    assert_eq!(cold.signature(&p), Some(warm), "the cold memo answers as the warm one");
+    cold.type_check(vec![], Term::Ref { addr: p.clone(), args: vec![at(lit_addr(&ca(2)))] })
+        .expect("WT-ref keys on ever-registration, cold as warm");
+    cold.register_rule(Rule {
+        domain: Dom::MembersDom(concrete(&pred_stable_ty())),
+        trigger: Trigger::Def(p.clone()),
+        view: View::Audit,
+        action: marker_action(),
+    })
+    .expect("a Def trigger names an EVER-registered def");
+    assert!(
+        matches!(cold.certify_stable(&doc1(), &p), Err(CertifyError::NotActive)),
+        "endorsement alone sees the retraction"
+    );
 }
 
 /// supersede's up-front gates, `current_version` over the shipped class, and

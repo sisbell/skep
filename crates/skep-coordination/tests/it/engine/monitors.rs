@@ -1,14 +1,14 @@
 //! The monitors: the key a peeked occurrence hands the divergence count, that
-//! count recomputed from the store under its attribution key, a foreign
-//! `RuleId`'s two answers (`fire` panics, `fire_count` counts 0), and the
-//! armer graph's edge rule.
+//! count recomputed from the store under its attribution key and at no
+//! visibility class, a foreign `RuleId`'s two answers (`fire` panics,
+//! `fire_count` counts 0), and the armer graph's edge rule.
 
 use crate::common::*;
 use crate::terms::*;
 
 use skep_coordination::{
-    Arg, Coordinator, Dom, FireAction, Occurrence, Rule, RuleId, Sort, StepOutcome, Term, Trigger,
-    View,
+    Arg, Coordinator, Dom, FireAction, FireError, Occurrence, Rule, RuleId, Sort, StepOutcome,
+    Term, Trigger, View,
 };
 use skep_links::{Caller, SlotArg};
 
@@ -161,6 +161,36 @@ fn fire_counts_are_recomputed_from_the_store_not_tallied_in_memory() {
     deposit_rel(&k, RETIRED, &ca(1), &ca(2));
     assert_eq!(c.fire_count(id, &ca(1)), 2);
     assert_eq!(fresh.fire_count(id2, &ca(1)), 2);
+}
+
+/// `fire_count` reads M7's store at NO visibility class, where a verdict reads
+/// through the look at guest class: an operator hunting a runaway wants every
+/// tuple the journal recovered. This rule's action home is a draft the guest
+/// class refuses, so every fire it attempts stops at the draft boundary — yet a
+/// non-rule writer's marker at its attribution key `(ty, home, F = {x})`, homed
+/// in that draft, is counted all the same: the documented over-count, which a
+/// count read through the look would drop.
+#[test]
+fn fire_count_reads_the_store_at_no_visibility_class() {
+    let k = kernel();
+    let mut c = coord_with_guest(&k, |_, d| *d != doc2());
+    link_writer(&k).emit(Caller::System, &doc1(), &pred_stable_ty(), &ca(1), &[]).expect("rel");
+    let id = c
+        .register_rule(Rule {
+            domain: Dom::MembersDom(concrete(&pred_stable_ty())),
+            trigger: not_marked(&c),
+            view: View::Audit,
+            action: FireAction::Marker { home: doc2(), ty: key(&marker_ty()) },
+        })
+        .expect("register");
+    assert!(matches!(
+        c.step(&k.snapshot()),
+        StepOutcome::Failed { err: FireError::DraftBoundary(d), .. } if d == doc2()
+    ));
+    link_writer(&k)
+        .emit(Caller::System, &doc2(), &marker_ty(), &ca(1), &[])
+        .expect("a non-rule marker at the rule's key, homed in the draft");
+    assert_eq!(c.fire_count(id, &ca(1)), 1);
 }
 
 /// The armer graph's edge rule: an empty footprint is armed by nothing;

@@ -1,6 +1,7 @@
 //! §B register_node: validate-not-mint admission — no seat granted, nothing
 //! asked of the address's ancestors — in its pinned guard order, with the
-//! depth cap at its exact edge.
+//! depth cap at its exact edge. One test per promise, so a red names the
+//! promise that broke.
 
 use crate::common::*;
 
@@ -10,7 +11,7 @@ use skep_namespace::{
 };
 
 #[test]
-fn register_node_validates_and_admits_supplied_addresses() {
+fn register_node_admits_a_supplied_node_and_seats_no_one() {
     let k = mem_kernel(genesis_world());
     let ns = Namespace::new(&k);
 
@@ -35,6 +36,12 @@ fn register_node_validates_and_admits_supplied_addresses() {
     assert_eq!(peek, a(&[1, 7, 0, 1]));
     ns.delegate(BOOTSTRAP_PRINCIPAL, peek.into(), ID1)
         .expect("delegate under the new node");
+}
+
+#[test]
+fn register_node_asks_nothing_of_the_nodes_ancestors() {
+    let k = mem_kernel(genesis_world());
+    let ns = Namespace::new(&k);
 
     // Admission asks nothing of the address's ANCESTORS: a node address names
     // a provisioning path originated OUTSIDE the docuverse, so `nodes` is
@@ -51,11 +58,24 @@ fn register_node_validates_and_admits_supplied_addresses() {
         Some(Level::Node)
     );
     assert_eq!(k.snapshot().world().m3().entity_level(&a(&[1, 5])), None);
+}
+
+#[test]
+fn register_node_rejection_order_is_pinned() {
+    // A provisioned node [1,7] with its first account delegated beneath it:
+    // the shapes the NotFresh and NotNode-before-NotFresh cases below refuse.
+    let k = mem_kernel(genesis_world());
+    let ns = Namespace::new(&k);
+    ns.register_node(t(&[1, 7])).expect("register");
+    ns.delegate(BOOTSTRAP_PRINCIPAL, t(&[1, 7, 0, 1]), ID1)
+        .expect("delegate under the new node");
 
     // Rejections, in the documented guard order. The first three are pure
     // pre-work (validity, level and depth read the address alone); `NotFresh`
     // reads the registry under the held key, and `NotDescendantOfBootstrap`
-    // reads none, following it because the order is the contract.
+    // reads none, following it because the order is the contract. TooDeep's
+    // own refusal is the cap's edge, pinned in
+    // `the_node_cap_admits_its_edge_and_refuses_one_past_it`.
     let before = k.current_seq();
     // NotValid — not T4 ([1,0] has a trailing zero).
     assert_eq!(
@@ -74,19 +94,8 @@ fn register_node_validates_and_admits_supplied_addresses() {
         rejected(ns.register_node(t(&[1, 7, 0, 1]))),
         RegisterNodeError::NotNode
     );
-    // TooDeep — `nodes` is the one registry M3 cannot keep in frontier form,
-    // so an entry's component COUNT is refused rather than stored (magnitude
-    // is M1-unbounded — see `MAX_NODE_COMPONENTS`). The probe is otherwise
-    // impeccable — node-level, fresh, bootstrap-descended — so depth is the
-    // only guard that can be refusing it.
-    let over_cap_node: Vec<u32> = std::iter::repeat_n(1u32, MAX_NODE_COMPONENTS + 1).collect();
-    assert_eq!(a(&over_cap_node).level(), Level::Node);
-    assert_eq!(
-        rejected(ns.register_node(t(&over_cap_node))),
-        RegisterNodeError::TooDeep
-    );
-    // NotNode precedes TooDeep: an equally over-long ACCOUNT-tier address is
-    // refused for its tier, since depth bounds the node registry alone.
+    // NotNode precedes TooDeep: an over-cap ACCOUNT-tier address is refused
+    // for its tier, since depth bounds the node registry alone.
     let mut over_cap_acct = vec![1u32, 0];
     over_cap_acct.extend(std::iter::repeat_n(1u32, MAX_NODE_COMPONENTS + 1));
     assert_eq!(
@@ -111,24 +120,12 @@ fn register_node_validates_and_admits_supplied_addresses() {
     // A rejected admission commits nothing, whichever guard refused it.
     assert_eq!(k.current_seq(), before);
 
-    // The cap is exactly where it says it is: one component shorter than the
-    // refusal above is admitted, so `TooDeep` bounds the registry rather than
-    // narrowing what provisioning may name.
-    let at_cap: Vec<u32> = std::iter::repeat_n(1u32, MAX_NODE_COMPONENTS).collect();
-    assert_eq!(
-        ns.register_node(t(&at_cap)).expect("at the cap").0,
-        a(&at_cap)
-    );
-    assert_eq!(
-        k.snapshot().world().m3().entity_level(&a(&at_cap)),
-        Some(Level::Node)
-    );
-
     // TooDeep precedes NotFresh: an over-cap address that is ALSO registered.
     // `register_node` cannot reach that state — the cap refuses admission —
     // and `apply_m3` documents it as representable, since the record door
     // deliberately does not carry the cap (an over-cap entry is a permanent
     // resource charge, and nothing more).
+    let over_cap_node: Vec<u32> = std::iter::repeat_n(1u32, MAX_NODE_COMPONENTS + 1).collect();
     let seeded = World {
         m3: M3State::genesis().apply_m3(&M3Rec::register_node(a(&over_cap_node))),
     };
@@ -148,5 +145,39 @@ fn register_node_validates_and_admits_supplied_addresses() {
     assert_eq!(
         rejected(Namespace::new(&off_lineage_k).register_node(t(&[2]))),
         RegisterNodeError::NotFresh
+    );
+}
+
+#[test]
+fn the_node_cap_admits_its_edge_and_refuses_one_past_it() {
+    let k = mem_kernel(genesis_world());
+    let ns = Namespace::new(&k);
+
+    // TooDeep — `nodes` is the one registry M3 cannot keep in frontier form,
+    // so an entry's component COUNT is refused rather than stored (magnitude
+    // is M1-unbounded — see `MAX_NODE_COMPONENTS`). The probe is otherwise
+    // impeccable — node-level, fresh, bootstrap-descended — so depth is the
+    // only guard that can be refusing it.
+    let before = k.current_seq();
+    let over_cap_node: Vec<u32> = std::iter::repeat_n(1u32, MAX_NODE_COMPONENTS + 1).collect();
+    assert_eq!(a(&over_cap_node).level(), Level::Node);
+    assert_eq!(
+        rejected(ns.register_node(t(&over_cap_node))),
+        RegisterNodeError::TooDeep
+    );
+    // …and, like every rejected admission, it commits nothing.
+    assert_eq!(k.current_seq(), before);
+
+    // The cap is exactly where it says it is: one component shorter than the
+    // refusal above is admitted, so `TooDeep` bounds the registry rather than
+    // narrowing what provisioning may name.
+    let at_cap: Vec<u32> = std::iter::repeat_n(1u32, MAX_NODE_COMPONENTS).collect();
+    assert_eq!(
+        ns.register_node(t(&at_cap)).expect("at the cap").0,
+        a(&at_cap)
+    );
+    assert_eq!(
+        k.snapshot().world().m3().entity_level(&a(&at_cap)),
+        Some(Level::Node)
     );
 }

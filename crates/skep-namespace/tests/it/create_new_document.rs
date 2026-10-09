@@ -108,7 +108,7 @@ fn the_first_document_address_is_the_slot_the_document_chain_opens_at() {
 // ---- §B fork ----
 
 #[test]
-fn fork_mints_in_the_callers_own_account() {
+fn fork_mints_in_the_callers_own_account_at_its_own_commit() {
     let k = mem_kernel(genesis_world());
     let ns = Namespace::new(&k);
     let (acct, _) = ns
@@ -116,10 +116,7 @@ fn fork_mints_in_the_callers_own_account() {
         .expect("delegate");
 
     // O10, account-tier: reduces to create_new_document(caller,
-    // pfx(caller)) — a fresh self-owned document one tier below the prefix.
-    // The flag rides the same reduction (PUB-8.16; owner 2026-09-05, one
-    // rule in one place): a flagless fork into the EMPTY account is the
-    // born-published doc 1 (PUB-8.21)…
+    // pfx(caller)) — a fresh self-owned document one tier below the prefix…
     let before = k.current_seq();
     let (d1, seq) = ns.fork(ID1, None).expect("fork");
     assert_eq!(d1, a(&[1, 0, 1, 0, 1]));
@@ -133,13 +130,29 @@ fn fork_mints_in_the_callers_own_account() {
     let snap = k.snapshot();
     assert!(snap.world().m3().is_registered_document(&d1));
     assert!(snap.world().m3().is_effective_owner(ID1, &d1));
-    assert!(
-        snap.world().m3().published(&d1),
-        "the flagless first fork is doc 1, born published"
-    );
     // Shares the (account, 2) chain with create_new_document.
     let (d2, _) = ns.create_new_document(ID1, &acct, None).expect("create");
     assert_eq!(d2, a(&[1, 0, 1, 0, 2]));
+}
+
+#[test]
+fn fork_resolves_its_flag_as_create_new_document_does() {
+    let k = mem_kernel(genesis_world());
+    let ns = Namespace::new(&k);
+    let (acct, _) = ns
+        .delegate(BOOTSTRAP_PRINCIPAL, t(&[1, 0, 1]), ID1)
+        .expect("delegate");
+
+    // The flag rides the reduction to create_new_document (PUB-8.16; owner
+    // 2026-09-05, one rule in one place): a flagless fork into the EMPTY
+    // account is the born-published doc 1 (PUB-8.21)…
+    let (d1, _) = ns.fork(ID1, None).expect("fork");
+    assert!(
+        k.snapshot().world().m3().published(&d1),
+        "the flagless first fork is doc 1, born published"
+    );
+    // The account's second document, created on the chain fork mints on.
+    ns.create_new_document(ID1, &acct, None).expect("create");
     // …a flagless fork into the NON-empty account is private, and an
     // explicit flag is honored as sent.
     let (d3, _) = ns.fork(ID1, None).expect("a later fork");
@@ -153,6 +166,14 @@ fn fork_mints_in_the_callers_own_account() {
     );
     assert!(m3.published(&d4));
     assert!(!m3.published(&d5));
+}
+
+#[test]
+fn fork_refuses_an_unknown_id_and_a_node_tier_caller() {
+    // Bare genesis holds both shapes: no principal carries UNKNOWN_ID, and
+    // π₀'s own prefix is the node [1].
+    let k = mem_kernel(genesis_world());
+    let ns = Namespace::new(&k);
 
     // Unknown id: typed NotOwner (an unregistered caller owns nothing).
     assert_eq!(

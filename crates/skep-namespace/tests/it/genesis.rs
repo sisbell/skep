@@ -6,8 +6,8 @@ use crate::common::*;
 use serde::Serialize;
 use skep_address::{Level, Nat, Tumbler};
 use skep_namespace::{
-    ghost_home_document, head_document, system_account, system_node, M3State, BOOTSTRAP_PRINCIPAL,
-    SYSTEM_PRINCIPAL,
+    ghost_home_document, head_document, system_account, system_node, M3State, PrincipalId,
+    BOOTSTRAP_PRINCIPAL, SYSTEM_PRINCIPAL,
 };
 
 #[test]
@@ -77,7 +77,9 @@ fn genesis_seeds_the_bootstrap_roots_and_the_system_account() {
 /// crate's private `NsKey`, whose bytes are its anchor tumbler and then its
 /// generator numeral (`ns/tests.rs` pins the shape), so a raw struct of that
 /// shape spells its two entries: the system node's account chain `(1.1, 2)`
-/// at 1, and the system account's document chain `(1.1.0.1, 2)` at 2.
+/// at 1, and the system account's document chain `(1.1.0.1, 2)` at 2. Every
+/// value is spelled as the bytes it must be, the two fixed ids included: a
+/// pin spelled by their constants would carry any change to them along.
 #[test]
 fn genesis_is_the_roots_and_the_seed_byte_for_byte() {
     #[derive(Serialize)]
@@ -103,9 +105,12 @@ fn genesis_is_the_roots_and_the_seed_byte_for_byte() {
     ])
     .expect("the frontier map");
     let nodes = bincode::serialize(&vec![t(&[1]), t(&[1, 1])]).expect("the node set");
+    // The two fixed ids by VALUE, never by the constants this pin watches: π₀
+    // is id 0 (O14), and the system principal is the reserved sentinel
+    // 9 × 10^15, below the wire's 2^53 − 1 (AUTH-5.20; PUB-6.65).
     let principals = bincode::serialize(&vec![
-        (t(&[1]), BOOTSTRAP_PRINCIPAL),
-        (t(&[1, 1, 0, 1]), SYSTEM_PRINCIPAL),
+        (t(&[1]), PrincipalId(0)),
+        (t(&[1, 1, 0, 1]), PrincipalId(9_000_000_000_000_000)),
     ])
     .expect("the principal map");
     let publication = bincode::serialize(&vec![

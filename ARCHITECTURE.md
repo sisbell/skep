@@ -1122,8 +1122,9 @@ five mints (§A) and the two peeks — `next_account_prefix` and
 beside the mints they call so the two files depend one way — and
 `state/query.rs` every other query (§C). Its `test-hooks` feature (default
 off) compiles in `M3Rec`'s three test constructors, the one way another
-crate's suite builds a record; the doctest pairs on `M3Rec` pin the two
-seals a foreign crate meets.
+crate's suite builds a record; `scripts/gate-full.sh` runs its doctests —
+the `compile_fail` pairs on `M3Rec` that pin the two seals a foreign crate
+meets.
 
 Rules that hold across its files:
 

@@ -55,6 +55,12 @@ RUSTDOCFLAGS="-D rustdoc::broken_intra_doc_links -D rustdoc::private_intra_doc_l
 # gate never runs pins nothing.
 cargo test -p skep-arrangement --doc || exit $?
 
+# …and skep-namespace's doctests, which no nextest run reaches either: the
+# two `compile_fail` pairs on `M3Rec` pin the variant seal (E0639) and the
+# type seal (E0004) a foreign crate meets, and a doctest the gate never runs
+# pins nothing.
+cargo test -p skep-namespace --doc || exit $?
+
 # skep-content's library without `test-hooks` — every test build turns it on
 # (the crate's self dev-dependency, and skep-retrieval's), so this is the
 # build that shows the store compiles without `write` and without the two

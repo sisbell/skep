@@ -30,7 +30,7 @@ use skep_identity::{
     encode_enroll, encode_retire, Enrollment, Fingerprint, PublicKey, ALG_FNDSA512_PREVIEW_ED25519,
     ALG_MLDSA65_ED25519, MAX_RECORD_BYTES,
 };
-use skep_signature::{HybridSigner, SeedCarrier as SigningKey};
+use skep_signature::{HybridSigner, Seed as SigningKey};
 
 mod blocked_prefixes;
 mod credentials;

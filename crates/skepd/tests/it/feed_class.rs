@@ -48,7 +48,7 @@ use std::path::Path;
 use common::*;
 use serde_json::{Map, Value};
 use skep_identity::Fingerprint;
-use skep_signature::SeedCarrier as SigningKey;
+use skep_signature::Seed as SigningKey;
 
 /// One write the fixture made, as the `docs` convention states it — and the
 /// members beyond `at`/`op`/`docs`/`time` its row carries, as the fixture

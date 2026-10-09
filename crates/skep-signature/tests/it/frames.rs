@@ -1,6 +1,6 @@
 //! THE FIXED FRAMES the suites sign and pin: the thirteen entry frames at
-//! fixed instances (`fixed_frames`), and the two helpers that spell their
-//! addresses and extents.
+//! fixed instances (`fixed_frames`), each under its name, and the two
+//! helpers that spell their addresses and extents.
 //!
 //! TWINS: `addr`, `extent` and `fixed_frames` are copies of the three in
 //! skepd's `tests/it/signed_ops.rs`, whose
@@ -50,7 +50,10 @@ pub fn extent(start: &str, width: u64) -> skep_address::Span {
 /// retired class over `1.0.1.0.2` with its `to` EMPTY (Unary), each the
 /// stored link's rows; and an `edit_link` of `…0.2.1` whose successor is
 /// homed in `1.0.1.0.2` with two resolved content extents and a named
-/// type, its claim homed in `1.0.1.0.1` — the pair's row as its `doc`.
+/// type, its claim homed in `1.0.1.0.1` — the pair's row as its `doc`. Each
+/// comes under its NAME — its op and, after a comma, what marks the instance
+/// out (`insert, undeclared`; `record, enroll`) — the one label both goldens
+/// report it by.
 pub fn fixed_frames(alg: &str) -> [(&'static str, Vec<u8>); 13] {
     let (account, doc, other) = (addr("1.0.1"), addr("1.0.1.0.1"), addr("1.0.1.0.2"));
     let board = BoardTerm { log_position: 12, chain: [0xAB; 32] };
@@ -133,22 +136,27 @@ pub fn fixed_frames(alg: &str) -> [(&'static str, Vec<u8>); 13] {
         },
         &l1,
     );
-    let frame = |body: &skep_identity::EntryBody, term: DocTerm<'_>| {
-        (body.op(), entry_frame(alg, board, &account, term, body))
+    let (create, fork, version) = (
+        entry_body_empty(ContentFreeOp::CreateNewDocument),
+        entry_body_empty(ContentFreeOp::Fork),
+        entry_body_empty(ContentFreeOp::Version),
+    );
+    let frame = |name: &'static str, body: &skep_identity::EntryBody, term: DocTerm<'_>| {
+        (name, entry_frame(alg, board, &account, term, body))
     };
     [
-        frame(&insert, DocTerm::One(&doc)),
-        frame(&link, DocTerm::One(&doc)),
-        frame(&publish, DocTerm::One(&doc)),
-        frame(&enrol, DocTerm::One(&doc)),
-        frame(&retire, DocTerm::One(&doc)),
-        frame(&claim, DocTerm::One(&doc)),
-        frame(&entry_body_empty(ContentFreeOp::CreateNewDocument), DocTerm::One(&account)),
-        frame(&entry_body_empty(ContentFreeOp::Fork), DocTerm::One(&account)),
-        frame(&entry_body_empty(ContentFreeOp::Version), DocTerm::One(&account)),
-        frame(&nullify, DocTerm::One(&doc)),
-        frame(&assert_sup, DocTerm::One(&doc)),
-        frame(&emit, DocTerm::One(&doc)),
-        frame(&edit, DocTerm::Pair { d_s: &other, d_a: &doc }),
+        frame("insert, undeclared", &insert, DocTerm::One(&doc)),
+        frame("make_link, no replaces", &link, DocTerm::One(&doc)),
+        frame("publish, the base filled", &publish, DocTerm::One(&doc)),
+        frame("record, enroll", &enrol, DocTerm::One(&doc)),
+        frame("record, retire", &retire, DocTerm::One(&doc)),
+        frame("record, claim", &claim, DocTerm::One(&doc)),
+        frame("create_new_document, the empty body", &create, DocTerm::One(&account)),
+        frame("fork, the empty body", &fork, DocTerm::One(&account)),
+        frame("version, the empty body", &version, DocTerm::One(&account)),
+        frame("nullify", &nullify, DocTerm::One(&doc)),
+        frame("assert_sup", &assert_sup, DocTerm::One(&doc)),
+        frame("emit, the to empty", &emit, DocTerm::One(&doc)),
+        frame("edit_link, the pair row", &edit, DocTerm::Pair { d_s: &other, d_a: &doc }),
     ]
 }

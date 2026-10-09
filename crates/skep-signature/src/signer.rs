@@ -23,7 +23,7 @@ use crate::Rule;
 
 /// An RNG that yields EXACTLY the bytes it was given and then refuses — what
 /// `fn-dsa` 0.4.0's keygen is fed so that its one 32-byte draw IS the KDF's
-/// FN-DSA seed. A longer draw would be a keygen this build did not pin, and
+/// PQ half seed. A longer draw would be a keygen this build did not pin, and
 /// under the frozen-tag rule a NEW tag; refusing it makes the rule loud. It
 /// BORROWS the bytes: the KDF's half seed is lent to the keygen and never
 /// copied onto the heap.
@@ -130,7 +130,10 @@ impl PqSigner {
                     &mut sk,
                     &mut pk,
                 );
-                assert_eq!(rng.drawn, 32, "fn-dsa 0.4.0's keygen draws its one 32-byte seed");
+                assert_eq!(
+                    rng.drawn, 32,
+                    "fn-dsa 0.4.0's keygen draws the whole 32-byte half seed"
+                );
                 (PqSigner::FnDsa512Preview(sk), pk)
             }
         }
@@ -224,13 +227,13 @@ impl HybridSigner {
     }
 
     /// TEST HOOK (the `fuzz_support` standing: `#[doc(hidden)]`, not a stable
-    /// API) — the Ed25519 half's signing key, ONE of the two halves every blob
-    /// this signer makes carries, a session's, an entry's and a record's
+    /// API) — the Ed25519 half's signing key, which makes the Ed25519 half of
+    /// every blob this signer makes, a session's, an entry's and a record's
     /// alike; alone it opens nothing (no half opens a session alone). This
     /// crate's own tests read it (the Ed25519 half differs per tag), skepd's
     /// fixtures check that it differs from the raw seed and matches the
-    /// enrolled key's Ed25519 half, and the suites' negative vector — a
-    /// 64-byte Ed25519-only `sig`, the classical layout no served board
+    /// enrolled key's Ed25519 half, and the suites' negative vector — a bare
+    /// Ed25519 signature as the `sig`, the classical layout no served board
     /// admits — is made with it. Handed out as the suites' own
     /// [`Ed25519SigningKey`](crate::hooks::Ed25519SigningKey) — a copy of the
     /// half, wiped on drop as the original is — so no caller names
@@ -291,7 +294,7 @@ impl HybridSigner {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::hooks::{SeedCarrier, SeededRng06};
+    use crate::hooks::{Seed, SeededRng06};
     use crate::{TAG_FNDSA512_PREVIEW_ED25519, TAG_MLDSA65_ED25519};
 
     /// Lowercase hex, two digits a byte — skepd's `codec::hex_string`'s output,
@@ -302,11 +305,11 @@ mod tests {
 
     /// PRIVATE-KEY MATERIAL PRINTS NONE OF ITSELF: `{:?}` of `HalfSeeds`, a
     /// `HybridSigner` of either tag and the Ed25519 half it hands out, and the
-    /// fixtures' `SeededRng06` and `SeedCarrier` — what a log line, an
-    /// assertion's message or a panic carries — holds neither the seed, nor a
-    /// half seed, nor the Ed25519 signing key, nor the FN-DSA signing key the
-    /// tag-3 signer stores as bytes, in the decimal list a derived `Debug`
-    /// prints or in hex. The hand-written impls are all that stands between a
+    /// fixtures' `SeededRng06` and `Seed` — what a log line, an assertion's
+    /// message or a panic carries — holds neither the seed, nor a half seed,
+    /// nor the Ed25519 signing key, nor the FN-DSA signing key the tag-3
+    /// signer stores as bytes, in the decimal list a derived `Debug` prints or
+    /// in hex. The hand-written impls are all that stands between a
     /// `#[derive(Debug)]` and a production key's ξ in a log.
     #[test]
     fn private_key_material_prints_none_of_itself() {
@@ -336,10 +339,9 @@ mod tests {
                 }
             }
         }
-        for printed in [
-            format!("{:?}", SeededRng06::new(seed)),
-            format!("{:?}", SeedCarrier::from_bytes(&seed)),
-        ] {
+        for printed in
+            [format!("{:?}", SeededRng06::new(seed)), format!("{:?}", Seed::from_bytes(&seed))]
+        {
             assert!(!leaks(&printed, &seed[..]), "a fixture hook prints its seed: {printed}");
         }
     }

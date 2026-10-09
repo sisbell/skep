@@ -5,10 +5,10 @@
 //! so a hook added or dropped is named here and nowhere else in prose. In this
 //! file: the seeded stream a tag-3 golden signs over ([`SeededRng06`]), the
 //! widths the sizes pin reads ([`pq_widths`], answering [`PqWidths`]), the
-//! suites' seed carrier ([`SeedCarrier`]), which is no key, and the hybrid's
-//! Ed25519 half as a suite holds it ([`Ed25519SigningKey`]), the one door a
-//! suite has to `ed25519-dalek`'s key type. Beside the private fields they
-//! read, in the signer's file:
+//! suites' seed ([`Seed`]), which is no key, and the hybrid's Ed25519 half
+//! as a suite holds it ([`Ed25519SigningKey`]), the one door a suite has to
+//! `ed25519-dalek`'s key type. Beside the private fields they read, in the
+//! signer's file:
 //! [`HybridSigner::ed25519_signing_key`](crate::HybridSigner::ed25519_signing_key)
 //! and [`HybridSigner::sign_with_rng`](crate::HybridSigner::sign_with_rng).
 //! And the KDF's own answer, re-exported at the crate root:
@@ -125,54 +125,54 @@ pub fn pq_widths(tag: u8) -> Option<PqWidths> {
 }
 
 /// TEST HOOK (the `fuzz_support` standing: `#[doc(hidden)]`, not a stable
-/// API) — THE SUITES' SEED CARRIER: one hybrid key's 32-byte seed, held for
-/// a fixture — one per principal — and handed back by
-/// [`SeedCarrier::to_bytes`] to
+/// API) — THE SUITES' SEED: one hybrid key's 32-byte seed — wire.md's seed,
+/// the paper backup's 64 hex — held for a fixture, one per principal, and
+/// handed back by [`Seed::to_bytes`] to
 /// [`HybridSigner::from_seed`](crate::HybridSigner::from_seed), which derives
 /// the key it seeds. It is NO KEY: it signs nothing and names no public key,
 /// so no fixture signs or enrols under the raw seed (the KDF PIN: never the
 /// raw seed to either half). Private-key material: prints none of itself,
 /// wiped on drop (`Zeroizing`).
 ///
-/// The twin signs with the Ed25519 half the carrier's seed derives; the
-/// refusal below it signs with the carrier itself, its one difference (the
-/// `E0599` code is checked on nightly only, so the twin rather than the
-/// annotation carries the weight):
+/// The twin signs with the Ed25519 half the seed derives; the refusal below
+/// it signs with the seed itself, its one difference (the `E0599` code is
+/// checked on nightly only, so the twin rather than the annotation carries
+/// the weight):
 ///
 /// ```
-/// use skep_signature::{HybridSigner, SeedCarrier, TAG_MLDSA65_ED25519};
-/// let carrier = SeedCarrier::from_bytes(&[7; 32]);
-/// let signer = HybridSigner::from_seed(TAG_MLDSA65_ED25519, &carrier.to_bytes()).unwrap();
+/// use skep_signature::{HybridSigner, Seed, TAG_MLDSA65_ED25519};
+/// let seed = Seed::from_bytes(&[7; 32]);
+/// let signer = HybridSigner::from_seed(TAG_MLDSA65_ED25519, &seed.to_bytes()).unwrap();
 /// let half = signer.ed25519_signing_key();
 /// let _ = half.sign(b"the entry frame");
 /// ```
 /// ```compile_fail,E0599
-/// use skep_signature::{HybridSigner, SeedCarrier, TAG_MLDSA65_ED25519};
-/// let carrier = SeedCarrier::from_bytes(&[7; 32]);
-/// let signer = HybridSigner::from_seed(TAG_MLDSA65_ED25519, &carrier.to_bytes()).unwrap();
-/// let half = carrier;
+/// use skep_signature::{HybridSigner, Seed, TAG_MLDSA65_ED25519};
+/// let seed = Seed::from_bytes(&[7; 32]);
+/// let signer = HybridSigner::from_seed(TAG_MLDSA65_ED25519, &seed.to_bytes()).unwrap();
+/// let half = seed;
 /// let _ = half.sign(b"the entry frame");
 /// ```
 #[doc(hidden)]
 #[derive(Clone)]
-pub struct SeedCarrier(Zeroizing<[u8; 32]>);
+pub struct Seed(Zeroizing<[u8; 32]>);
 
-impl SeedCarrier {
-    /// The carrier of the seed `bytes`.
-    pub fn from_bytes(bytes: &[u8; 32]) -> SeedCarrier {
-        SeedCarrier(Zeroizing::new(*bytes))
+impl Seed {
+    /// The seed `bytes`.
+    pub fn from_bytes(bytes: &[u8; 32]) -> Seed {
+        Seed(Zeroizing::new(*bytes))
     }
 
-    /// The seed: the 32 bytes `HybridSigner::from_seed` takes.
+    /// The seed's 32 bytes, as `HybridSigner::from_seed` takes them.
     pub fn to_bytes(&self) -> [u8; 32] {
         *self.0
     }
 }
 
-impl fmt::Debug for SeedCarrier {
+impl fmt::Debug for Seed {
     /// A seed is private-key material: never printed.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str("SeedCarrier(..)")
+        f.write_str("Seed(..)")
     }
 }
 
@@ -181,14 +181,14 @@ impl fmt::Debug for SeedCarrier {
 /// [`HybridSigner::ed25519_signing_key`](crate::HybridSigner::ed25519_signing_key)
 /// hands out, and the only way to get one — the type has no public
 /// constructor, so every Ed25519 key a suite holds is a hybrid's half and
-/// never a raw seed's (a seed is a [`SeedCarrier`], which is no key). It
-/// signs the 64-byte classical blob — the suites' one negative vector, the
-/// Ed25519-only layout no served board admits — and names its verifying
-/// key's 32 bytes, so a suite names this crate and never `ed25519-dalek`,
-/// which this crate alone links. Private-key material: prints none of
-/// itself, wiped on drop (`ed25519-dalek`'s own). Its field is the crate's,
-/// so `HybridSigner::ed25519_signing_key` wraps a clone of the signer's own
-/// half.
+/// never a raw seed's (a seed is a [`Seed`], which is no key). It makes a
+/// bare Ed25519 signature, 64 bytes (wire.md §Sessions) — the suites' one
+/// negative vector, the classical layout no served board admits — and names
+/// its verifying key's 32 bytes, so a suite names this crate and never
+/// `ed25519-dalek`, which this crate alone links. Private-key material:
+/// prints none of itself, wiped on drop (`ed25519-dalek`'s own). Its field
+/// is the crate's, so `HybridSigner::ed25519_signing_key` wraps a clone of
+/// the signer's own half.
 ///
 /// The twin takes the half from a signer; the refusal below it makes one
 /// from 32 bytes, its one difference:
@@ -216,9 +216,9 @@ impl Ed25519SigningKey {
         self.0.to_bytes()
     }
 
-    /// The classical Ed25519 signature over `msg`: 64 bytes, this half
-    /// alone — never a hybrid blob, which
-    /// [`HybridSigner::sign`](crate::HybridSigner::sign) makes.
+    /// A bare Ed25519 signature over `msg`, 64 bytes: this half alone —
+    /// never a blob, which [`HybridSigner::sign`](crate::HybridSigner::sign)
+    /// makes.
     pub fn sign(&self, msg: &[u8]) -> [u8; 64] {
         self.0.sign(msg).to_bytes()
     }

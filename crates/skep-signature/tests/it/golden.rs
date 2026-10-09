@@ -1,12 +1,15 @@
 //! THE GOLDENS (the frozen-tag rule's pin), beside the one implementation
 //! they pin: per tag, one seed through the KDF to both public keys and the
-//! fingerprint; every op cell's signature over a fixed entry frame
-//! (`frames.rs`) — the ten publish-class kinds and the `record` grammar at
-//! three kinds; tag 1's signatures byte-stable (FIPS 204's deterministic
-//! variant), tag 3's under the fixtures' seeded RNG; every op cell's frame
-//! preimage; the hybrid cross-check; the widths each pinned crate fixes,
-//! pinned by hand beside the sizes and timings the report takes back; and
-//! which FN-DSA backend signed them on this target.
+//! fingerprint; a signature over each fixed entry frame (`frames.rs`), under
+//! its name — the ten publish-class kinds and the `record` grammar at three
+//! kinds; tag 1's signatures byte-stable (FIPS 204's deterministic variant),
+//! tag 3's under the fixtures' seeded stream; the preimage of every fixed
+//! frame and of the shapes of a cell they leave out; the hybrid cross-check;
+//! the widths each pinned crate fixes, pinned by hand beside the sizes and
+//! timings the report takes back; and which FN-DSA backend signed them on
+//! this target.
+
+use std::collections::BTreeSet;
 
 use sha2::{Digest, Sha256};
 use skep_identity::{
@@ -43,28 +46,28 @@ const GOLDEN_STREAM_SEED: [u8; 32] = GOLDEN_SEED;
 
 /// One tag's golden, in the documented form: the SHA-256 of the PQ public
 /// half, of the Ed25519 public half, of the whole raw key; the fingerprint;
-/// and per op cell the SHA-256 of the signature blob over that cell's fixed
-/// frame (`frames.rs`).
+/// and per fixed frame (`frames.rs`), in `fixed_frames`' order, the SHA-256
+/// of the signature blob over it.
 ///
 /// WHAT MAY MOVE A PIN — the frozen-tag rule, as a failing golden reads it.
-/// The KEY pins are what the seed derives under the tag — the KDF, the
-/// keygen, the KEY PIN's order — and the fingerprint of that key
-/// `docs/wire.md` publishes (`wire_doc.rs`). None is ever re-pinned: a moved
-/// key is a changed rule, which ships as a NEW tag, and a moved fingerprint
-/// renames every key a board has enrolled. A SIGNATURE pin is a function of
-/// the key, its cell's frame and, under tag 3, the fixtures' stream
-/// (`GOLDEN_STREAM_SEED`), and is re-pinned only in the change that moves
-/// one of those: a frame that changes — skep-identity's entry frame, changed
-/// in place under `skep-entry-v1` (l6-A3), or a fixed instance in
-/// `frames.rs` — moves that cell's pin in
-/// `the_frame_preimage_per_op_cell_is_pinned` in the same change, and a
-/// change to `SeededRng06` moves every tag-3 signature at once. A signature
-/// that moves while its preimage pin and, under tag 3, the stream stand is a
-/// change to what the tag signs or verifies: a NEW tag, never a re-pin. Made
-/// to the signer and the verifier alike, such a change passes every round
-/// trip in this crate, and for tag 3's post-quantum half and both tags'
-/// Ed25519 half these pins alone see it. Which pins have moved, and under
-/// which ruling, is this file's history.
+/// The pins on the key are what the seed derives under the tag — through the
+/// KDF, the keygen and THE KEY PIN's half order — and the fingerprint of
+/// that key `docs/wire.md` publishes (`wire_doc.rs`). None is ever
+/// re-pinned: a moved key is a changed rule, which ships as a NEW tag, and a
+/// moved fingerprint renames every key a board has enrolled. A SIGNATURE pin
+/// is a function of the key, its fixed frame and, under tag 3, the fixtures'
+/// stream (`GOLDEN_STREAM_SEED`), and is re-pinned only in the change that
+/// moves one of those: a frame that changes — skep-identity's entry frame,
+/// changed in place under `skep-entry-v1` (l6-A3), or a fixed instance in
+/// `frames.rs` — moves that frame's own preimage pin, the row under the same
+/// name in `the_frame_preimage_per_op_cell_is_pinned`, in the same change,
+/// and a change to `SeededRng06` moves every tag-3 signature at once. A
+/// signature that moves while its frame's preimage pin and, under tag 3, the
+/// stream stand is a change to what the tag signs or verifies: a NEW tag,
+/// never a re-pin. Made to the signer and the verifier alike, such a change
+/// passes every round trip in this crate, and for tag 3's post-quantum half
+/// and both tags' Ed25519 half these pins alone see it. Which pins have
+/// moved, and under which ruling, is this file's history.
 struct TagGolden {
     tag: u8,
     pq_pk: &'static str,
@@ -74,12 +77,12 @@ struct TagGolden {
     sigs: [&'static str; 13],
 }
 
-/// One fixed frame, signed: its op's name, the frame's bytes and the
-/// signature blob over them — named, not a triple, as `PqWidths` is: the
-/// frame and the blob are both `Vec<u8>`, and a position would let them
-/// trade places.
+/// One fixed frame, signed: the name `fixed_frames` gives it, the frame's
+/// bytes and the signature blob over them — named, not a triple, as
+/// `PqWidths` is: the frame and the blob are both `Vec<u8>`, and a position
+/// would let them trade places.
 struct SignedFrame {
-    op: &'static str,
+    name: &'static str,
     frame: Vec<u8>,
     sig: Vec<u8>,
 }
@@ -88,18 +91,18 @@ fn sign_fixed_frames(tag: u8) -> (HybridSigner, Vec<SignedFrame>) {
     let signer = HybridSigner::from_seed(tag, &GOLDEN_SEED).unwrap();
     let alg = SigAlgRow::of_tag(tag).unwrap().token;
     let mut out = Vec::new();
-    for (op, frame) in fixed_frames(alg) {
+    for (name, frame) in fixed_frames(alg) {
         // Tag 3's signature draws its per-signature seed from the fixtures'
-        // stream, reseeded per op from `GOLDEN_STREAM_SEED` so each signature
-        // is a function of its frame alone.
+        // stream, reseeded per frame from `GOLDEN_STREAM_SEED` so each
+        // signature is a function of its frame alone.
         let mut rng = SeededRng06::new(GOLDEN_STREAM_SEED);
         let sig = signer.sign_with_rng(&mut rng, &frame);
         assert_eq!(
             verify(tag, signer.public_key(), &frame, &sig),
             Ok(()),
-            "tag {tag}: the {op} frame's blob verifies"
+            "tag {tag}: the blob over `{name}` verifies"
         );
-        out.push(SignedFrame { op, frame, sig });
+        out.push(SignedFrame { name, frame, sig });
     }
     (signer, out)
 }
@@ -129,12 +132,13 @@ fn check_golden(g: &TagGolden) {
         "the fingerprint moved with the key standing — that renames every enrolled key and moves \
          wire.md's published vectors: never a re-pin here\n{report}"
     );
-    for (i, SignedFrame { op, .. }) in signed.iter().enumerate() {
+    for (i, SignedFrame { name, .. }) in signed.iter().enumerate() {
         assert_eq!(
             sigs[i], g.sigs[i],
-            "the {op} signature moved under tag {} — re-pinned only beside a moved preimage pin \
-             for this cell (or, under tag 3, a changed fixture stream); otherwise the rule \
-             moved: a NEW tag (`TagGolden`)\n{report}",
+            "the signature over `{name}` moved under tag {} — re-pinned only beside a moved \
+             preimage pin under the same name in `the_frame_preimage_per_op_cell_is_pinned` (or, \
+             under tag 3, a changed fixture stream); otherwise the rule moved: a NEW tag \
+             (`TagGolden`)\n{report}",
             g.tag
         );
     }
@@ -171,11 +175,11 @@ fn golden_tag_1_mldsa65_ed25519() {
 }
 
 /// TAG 3's GOLDEN (the PREVIEW): the KEY-DERIVATION golden — `fn-dsa`
-/// 0.4.0's keygen from the KDF's seed IS the tag's frozen keygen rule — and
-/// the thirteen signatures under the fixtures' seeded RNG (FN-DSA signing is
-/// randomized by the draft's own rule; what the tag freezes is the key, the
-/// frame and the verify, and the fixture's RNG makes the bytes reproducible
-/// here).
+/// 0.4.0's keygen from the KDF's PQ half seed IS the tag's frozen keygen
+/// rule — and the thirteen signatures under the fixtures' seeded stream
+/// (FN-DSA signing is randomized by the draft's own rule; what the tag
+/// freezes is the key, the frame and the verify, and that stream makes the
+/// bytes reproducible here).
 #[test]
 fn golden_tag_3_fndsa512_preview_ed25519() {
     check_golden(&TagGolden {
@@ -202,33 +206,35 @@ fn golden_tag_3_fndsa512_preview_ed25519() {
     });
 }
 
-/// THE PREIMAGE GOLDEN (SO-I1, SO-I6): one FIXED frame PREIMAGE per op cell of
-/// the entry frame, pinned as its bytes' SHA-256 hex under tag 1's `alg` token
-/// (preimages and not signatures, since tag 3's signing is randomized),
-/// byte-asserted, so a member silently absent from a body — the base member of
-/// a `publish`, for one — fails the build here, whatever the signatures over
-/// it do. The thirteen fixed frames (`frames.rs`) cover `insert` (undeclared),
+/// THE PREIMAGE GOLDEN (SO-I1, SO-I6): the PREIMAGE of every FIXED frame, and
+/// of each shape of an op cell of the entry frame those frames leave out,
+/// pinned as its bytes' SHA-256 hex under tag 1's `alg` token (preimages and
+/// not signatures, since tag 3's signing is randomized), byte-asserted, so a
+/// member silently absent from a body — the base member of a `publish`, for
+/// one — fails the build here, whatever the signatures over it do. The
+/// thirteen fixed frames (`frames.rs`) cover `insert` (undeclared),
 /// `make_link` WITHOUT its `replaces` row over unit spans and the EMPTY `to`,
 /// `publish` with a value stretch, a window and the base group FILLED, the
 /// three `record`s (rows 3 and 4 EMPTY), the three EMPTY bodies over the
 /// parent account, the three other link writes over the stored link and the
 /// `edit_link` with its pair's row and resolved extents; this table adds the
-/// cells they leave out — an `insert` DECLARED under a type, a `make_link`
+/// shapes they leave out — an `insert` DECLARED under a type, a `make_link`
 /// WITH its `replaces` row, a `make_link` whose `to` is a RESOLVED content
 /// extent (the slot a V-spec stores as, §7.6's vector (vii)), the `publish`
-/// BIRTH SHAPE with the EMPTY group — and pins the thirteen beside them, so
-/// one table names every cell with its preimage's length. The frames are the
-/// twins skepd pins byte for byte
+/// BIRTH SHAPE with the EMPTY group — and pins the thirteen beside them under
+/// their own names, so one table names every cell, at each shape it is pinned
+/// at, with its preimage's length, and no two shapes share a name: a name
+/// picks out one row. The frames are the twins skepd pins byte for byte
 /// (`the_entry_frames_bytes_per_op_are_pinned`); the pin here is the hash a
 /// second implementation checks against. It moves only with the frame —
 /// skep-identity's entry frame, changed in place under `skep-entry-v1`
-/// (l6-A3), or a fixed instance in `frames.rs` — re-pinned here beside skepd's
-/// byte pin, and it is the witness the signature goldens' re-pin rule reads
+/// (l6-A3), or a fixed instance in `frames.rs` — re-pinned here beside
+/// skepd's byte pin, and each fixed frame's row is the witness the signature
+/// goldens' re-pin rule reads for the signature under the same name
 /// (`TagGolden`).
 #[test]
 fn the_frame_preimage_per_op_cell_is_pinned() {
     let alg = ALG_MLDSA65_ED25519;
-    let thirteen = fixed_frames(alg);
     let (account, doc) = (addr("1.0.1"), addr("1.0.1.0.1"));
     let board = BoardTerm { log_position: 12, chain: [0xAB; 32] };
     let frame = |body: &skep_identity::EntryBody| entry_frame(alg, board, &account, DocTerm::One(&doc), body);
@@ -255,37 +261,49 @@ fn the_frame_preimage_per_op_cell_is_pinned() {
         ],
         None,
     );
-    let [(_, insert), (_, link), (_, publish), (_, enrol), (_, retire), (_, claim), (_, create), (_, fork), (_, version), (_, nullify), (_, assert_sup), (_, emit), (_, edit)] =
-        thirteen;
-    let cells: [(&str, Vec<u8>, usize, &str); 17] = [
-        ("insert, undeclared", insert, 134, "d84853b3c36c8bf452ec57e662c57911eae550193a6c9cf6e8c468ecf118efe2"),
+    let [insert, link, publish, enrol, retire, claim, create, fork, version, nullify, assert_sup, emit, edit] =
+        fixed_frames(alg);
+    // The thirteen come under `fixed_frames`' own names, the names the
+    // signature goldens report them by; the shapes they leave out are named
+    // here.
+    let named = |(name, bytes): (&'static str, Vec<u8>), len: usize, hash: &'static str| {
+        (name, bytes, len, hash)
+    };
+    let shapes: [(&str, Vec<u8>, usize, &str); 17] = [
+        named(insert, 134, "d84853b3c36c8bf452ec57e662c57911eae550193a6c9cf6e8c468ecf118efe2"),
         ("insert, declared", frame(&declared), 146, "199775c4e92c52b6b49b7fb702de449690f2b6be837b5f72d07cb640176aed26"),
-        ("make_link, no replaces", link, 207, "c31ac3319996a82e6900d2571724d5b8ae69616fd2c3f785535bb09f63e880f5"),
+        named(link, 207, "c31ac3319996a82e6900d2571724d5b8ae69616fd2c3f785535bb09f63e880f5"),
         ("make_link, replacing", frame(&replacing), 235, "c18ce6f345cde5d15dcd2883d6be46b693fdaf87e0059dab6bdd1ecd1c093da3"),
         ("make_link, a resolved to", frame(&resolved), 245, "daea951d32f82858d99ea5e0500feceec7ae5d926d2ee5375f7392b48a95cd7b"),
-        ("publish, the base filled", publish, 209, "774ae1d5bd454d7eb59ae7f3f3027a2f7cbc927c855036a9cbdda2b0664a6945"),
+        named(publish, 209, "774ae1d5bd454d7eb59ae7f3f3027a2f7cbc927c855036a9cbdda2b0664a6945"),
         ("publish, the birth shape", frame(&birth), 167, "34e6abd5f4dc9dac148a29b6dcddf040918730e45bd510d91cff262308e88e6f"),
-        ("record, enroll", enrol, 194, "e15f5fce4fd268e3064237c413eb6d7fb25f67269c6d7f0b046b26c72a9dfc60"),
-        ("record, retire", retire, 194, "e60761e01fbd6785680b07833fd9618de55150aacefaee1d3e1ebf75ae42918a"),
-        ("record, claim", claim, 163, "e5f5b1a5b96c2f7ce52cf32c8ef6f59a8ea56e882f7e5181456feb511b74b15f"),
-        ("create_new_document, the empty body", create, 121, "a7c1b8b81d99252b51dcd44f342ab306f5db48a0226f43d41b5352b136c15fd5"),
-        ("fork, the empty body", fork, 106, "a1225f6e56bf757f138ebb8471b417dbce494effff30f959840b99bfcf77eed2"),
-        ("version, the empty body", version, 109, "6f593040109dc5cf8932bb1c7d690fb053339fdba2ac196aee60ae74e833f1f6"),
-        ("nullify", nullify, 250, "662660f94fedf12edec1f1a6aac041f953344dc3c4214b3021c3cee880662d1b"),
-        ("assert_sup", assert_sup, 265, "9fd23e8ac0bb18347353b830fbc5bbbd0f68a268bd45451651c18d854aff54cc"),
-        ("emit, the to empty", emit, 209, "e7b6e747a67f7d0f3545ae31f096c82df586c07e51c9d3537482bd8e22288d10"),
-        ("edit_link, the pair row", edit, 333, "86c04744e99ffe3317c82e6283afa645e4601e177474fbf5f2eb61c80a39e09c"),
+        named(enrol, 194, "e15f5fce4fd268e3064237c413eb6d7fb25f67269c6d7f0b046b26c72a9dfc60"),
+        named(retire, 194, "e60761e01fbd6785680b07833fd9618de55150aacefaee1d3e1ebf75ae42918a"),
+        named(claim, 163, "e5f5b1a5b96c2f7ce52cf32c8ef6f59a8ea56e882f7e5181456feb511b74b15f"),
+        named(create, 121, "a7c1b8b81d99252b51dcd44f342ab306f5db48a0226f43d41b5352b136c15fd5"),
+        named(fork, 106, "a1225f6e56bf757f138ebb8471b417dbce494effff30f959840b99bfcf77eed2"),
+        named(version, 109, "6f593040109dc5cf8932bb1c7d690fb053339fdba2ac196aee60ae74e833f1f6"),
+        named(nullify, 250, "662660f94fedf12edec1f1a6aac041f953344dc3c4214b3021c3cee880662d1b"),
+        named(assert_sup, 265, "9fd23e8ac0bb18347353b830fbc5bbbd0f68a268bd45451651c18d854aff54cc"),
+        named(emit, 209, "e7b6e747a67f7d0f3545ae31f096c82df586c07e51c9d3537482bd8e22288d10"),
+        named(edit, 333, "86c04744e99ffe3317c82e6283afa645e4601e177474fbf5f2eb61c80a39e09c"),
     ];
+    let names: BTreeSet<&str> = shapes.iter().map(|(shape, ..)| *shape).collect();
+    assert_eq!(
+        names.len(),
+        shapes.len(),
+        "each shape under a name of its own, the name `TagGolden`'s re-pin rule reads: {names:?}"
+    );
     let got: Vec<(&str, usize, String)> =
-        cells.iter().map(|(cell, bytes, ..)| (*cell, bytes.len(), sha_hex(bytes))).collect();
+        shapes.iter().map(|(shape, bytes, ..)| (*shape, bytes.len(), sha_hex(bytes))).collect();
     let want: Vec<(&str, usize, String)> =
-        cells.iter().map(|(cell, _, len, want)| (*cell, *len, want.to_string())).collect();
+        shapes.iter().map(|(shape, _, len, want)| (*shape, *len, want.to_string())).collect();
     let report = got
         .iter()
-        .map(|(cell, len, hash)| format!("  {cell}: {len} bytes, sha256 {hash}"))
+        .map(|(shape, len, hash)| format!("  {shape}: {len} bytes, sha256 {hash}"))
         .collect::<Vec<_>>()
         .join("\n");
-    assert_eq!(got, want, "a preimage moved — the cells as composed:\n{report}");
+    assert_eq!(got, want, "a preimage moved — the shapes as composed:\n{report}");
 }
 
 /// THE HYBRID CROSS-CHECK at the frame: each half alone fails — a valid PQ
@@ -415,8 +433,8 @@ fn the_fn_dsa_preview_signs_and_verifies_on_this_target() {
         if native { "native f64 (fn-dsa 0.4.0 flr_native)" } else { "integer-emulated IEEE-754 (flr_emu)" }
     );
     let (signer, signed) = sign_fixed_frames(3);
-    for SignedFrame { op, frame, sig } in &signed {
-        assert_eq!(verify(3, signer.public_key(), frame, sig), Ok(()), "{op}");
-        assert_eq!(sig.len(), 730, "{op}");
+    for SignedFrame { name, frame, sig } in &signed {
+        assert_eq!(verify(3, signer.public_key(), frame, sig), Ok(()), "{name}");
+        assert_eq!(sig.len(), 730, "{name}");
     }
 }

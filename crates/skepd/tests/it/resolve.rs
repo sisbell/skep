@@ -35,7 +35,7 @@ use skep_resolve::{
     NameResolver, Opened, Origin, RealmId, Refusal, Resolution, RootHint, Term, Transport,
     TransportError, Transports, Unreachable, Verdict,
 };
-use skep_signature::SeedCarrier as SigningKey;
+use skep_signature::Seed as SigningKey;
 
 /// The orgs' principals, above every other suite's ids; an org's key seed is
 /// its own number.

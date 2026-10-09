@@ -24,12 +24,13 @@
 //! * TAG 3 — FN-DSA-512 + Ed25519, PREVIEW: Thomas Pornin's `fn-dsa`
 //!   `=0.4.0` — its 2026-07-22 "best guess" at the FN-DSA draft, which the
 //!   crate itself says will change before 1.0 — so the exact version IS the
-//!   rule: its keygen from a 32-byte seed (the RNG draw `keygen_inner`
-//!   makes, and nothing else), its key and signature encodings, its `verify`
-//!   with `DOMAIN_NONE` and `HASH_ID_RAW` (the CTX PIN again). FN-DSA signing
-//!   is RANDOMIZED (the draft "only allows randomized signing"), so a tag-3
-//!   signature's bytes depend on the signer's RNG and only the KEY and the
-//!   VERIFY are byte-stable; a seeded RNG makes a fixture reproducible.
+//!   rule: its keygen from the 32-byte half seed (the one RNG draw
+//!   `keygen_inner` makes, and nothing else), its key and signature
+//!   encodings, its `verify` with `DOMAIN_NONE` and `HASH_ID_RAW` (the CTX
+//!   PIN again). FN-DSA signing is RANDOMIZED (the draft "only allows
+//!   randomized signing"), so a tag-3 signature's bytes depend on the
+//!   signer's RNG and only the KEY and the VERIFY are byte-stable; a seeded
+//!   RNG makes a fixture reproducible.
 //!
 //! THE KDF PIN — `docs/wire.md`'s keygen-from-seed rule (the design record
 //! §5.2 (ii)'s three inputs: the KDF, the domain-separation bytes, the keygen
@@ -45,9 +46,10 @@
 //! seed derives DIFFERENT Ed25519 halves under tag 1 and tag 3 (the token is
 //! in the `info`), one derived half's leak reveals neither the seed nor the
 //! other half (HKDF is one-way), and the paper backup stays one 64-hex
-//! seed. The Ed25519 half's 32 bytes are `ed25519-dalek`'s seed
-//! (`SigningKey::from_bytes`); the ML-DSA half's are FIPS 204's ξ; the
-//! FN-DSA half's are the bytes `fn-dsa` 0.4.0's keygen draws.
+//! seed. The Ed25519 half's 32 bytes are its private key (RFC 8032's;
+//! `ed25519-dalek`'s `SecretKey`, which `SigningKey::from_bytes` takes); the
+//! ML-DSA half's are FIPS 204's ξ; the FN-DSA half's are the one 32-byte
+//! draw `fn-dsa` 0.4.0's keygen makes, and nothing else.
 //!
 //! THE KEY PIN: a hybrid's raw public key is the PQ half's encoding THEN the
 //! Ed25519 half's 32 bytes — [`skep_identity::PublicKey::from_halves`] writes
@@ -106,12 +108,12 @@ pub use kdf::{derive_half_seeds, HalfSeeds};
 #[cfg(feature = "test-hooks")]
 #[doc(hidden)]
 pub use hooks::{pq_widths, PqWidths, SeededRng06};
-/// TEST HOOK (the same standing) — the suites' seed carrier, which keys each
+/// TEST HOOK (the same standing) — the suites' seed, which keys each
 /// principal's fixtures and is no key itself, and the hybrid's Ed25519 half
 /// as a suite holds it, so no suite links `ed25519-dalek` itself.
 #[cfg(feature = "test-hooks")]
 #[doc(hidden)]
-pub use hooks::{Ed25519SigningKey, SeedCarrier};
+pub use hooks::{Ed25519SigningKey, Seed};
 
 /// The marker tag of the PRODUCTION row, `mldsa65-ed25519` (ML-DSA-65 +
 /// Ed25519).
@@ -122,7 +124,7 @@ pub const TAG_FNDSA512_PREVIEW_ED25519: u8 = 3;
 
 /// The rules this crate holds, one per marker tag — the ONE statement of
 /// which tags this build can derive, keygen, decode and verify under.
-/// Every per-tag step matches on it exhaustively — the PQ half's KDF label,
+/// Every per-tag step matches on it exhaustively — the PQ half's label,
 /// its keygen (`PqSigner::keygen`), its decode (`PqVerifier::decode`), its
 /// widths, a file each (the code map above) — and those two per-tag enums,
 /// `PqSigner` in [`signer`] and `PqVerifier` in [`verifier`], carry each
@@ -171,10 +173,10 @@ const _: fn() = || {
     assert_send_sync::<hooks::SeededRng06>();
     #[cfg(feature = "test-hooks")]
     assert_send_sync::<hooks::PqWidths>();
-    // The suites' seed carriers and the Ed25519 half a signer hands them,
-    // shared across the threads a fixture spawns.
+    // The suites' seeds and the Ed25519 half a signer hands them, shared
+    // across the threads a fixture spawns.
     #[cfg(feature = "test-hooks")]
-    assert_send_sync::<hooks::SeedCarrier>();
+    assert_send_sync::<hooks::Seed>();
     #[cfg(feature = "test-hooks")]
     assert_send_sync::<hooks::Ed25519SigningKey>();
 };

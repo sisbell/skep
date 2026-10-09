@@ -25,11 +25,11 @@ fn tag_1_is_byte_equal_to_a_second_fips_204_implementation() {
         // `fips204`'s side, from the same ξ.
         let (their_pk, their_sk) = fips204::ml_dsa_65::KG::keygen_from_seed(&halves.pq);
         assert_eq!(our_pk, their_pk.clone().into_bytes().to_vec(), "seed {i}: the public key");
-        for (op, frame) in fixed_frames(ALG_MLDSA65_ED25519) {
+        for (name, frame) in fixed_frames(ALG_MLDSA65_ED25519) {
             let our_sig = ours.sign(&frame);
             let our_pq = &our_sig[..ours.public_key().sig_alg_row().pq_sig_len];
             let their_sig = their_sk.try_sign_with_seed(&[0u8; 32], &frame, &[]).unwrap();
-            assert_eq!(our_pq, &their_sig[..], "seed {i}, {op}: the deterministic signature");
+            assert_eq!(our_pq, &their_sig[..], "seed {i}, `{name}`: the deterministic signature");
             assert!(their_pk.verify(&frame, &their_sig, &[]), "their verify of their own");
             let as_theirs: [u8; fips204::ml_dsa_65::SIG_LEN] = our_pq.try_into().unwrap();
             assert!(their_pk.verify(&frame, &as_theirs, &[]), "their verify of ours");

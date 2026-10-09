@@ -17,7 +17,7 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
   seed per tag, and signing: the post-quantum signature then the
   Ed25519 one.
 - **`test-hooks`** — implies `sign`, and adds the fixtures' seeded
-  RNG and the other test-only doors. No shipped signer enables it.
+  stream and the other test-only doors. No shipped signer enables it.
 - **Goldens** — per tag, one seed to both public keys, the
   fingerprint and the signatures over fixed entry frames; tag 1
   checked byte for byte against a second FIPS 204 implementation; and

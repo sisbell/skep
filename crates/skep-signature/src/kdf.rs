@@ -35,9 +35,10 @@ const HALF_LABEL_FNDSA512: &[u8] = b"fn-dsa-512";
 /// could be removed.
 #[derive(Clone)]
 pub struct HalfSeeds {
-    /// The Ed25519 half's seed (`ed25519-dalek`'s `SigningKey::from_bytes`).
+    /// The Ed25519 half seed: the half's private key, `ed25519-dalek`'s
+    /// `SecretKey` (`SigningKey::from_bytes`).
     pub ed25519: [u8; 32],
-    /// The post-quantum half's seed: ξ for ML-DSA-65; the keygen draw for
+    /// The post-quantum half seed: ξ for ML-DSA-65; the one keygen draw for
     /// the FN-DSA-512 preview.
     pub pq: [u8; 32],
 }

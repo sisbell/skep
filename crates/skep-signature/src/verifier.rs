@@ -205,7 +205,7 @@ pub fn verify(tag: u8, key: &PublicKey, msg: &[u8], sig: &[u8]) -> Result<(), Hy
     // be the wrong width.
     let Some((pq_sig, ed_sig)) = sig
         .split_last_chunk::<{ ed25519_dalek::SIGNATURE_LENGTH }>()
-        .filter(|(pq, _)| pq.len() == row.pq_sig_len)
+        .filter(|(pq_sig, _)| pq_sig.len() == row.pq_sig_len)
     else {
         return Err(HybridFault::Malformed);
     };

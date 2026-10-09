@@ -21,10 +21,10 @@ use std::path::{Path, PathBuf};
 fn ed25519_dalek_is_linked_by_this_crate_alone() {
     let lock = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../../Cargo.lock"))
         .expect("the workspace's Cargo.lock");
-    let names_dalek = |entry: &str| {
+    let names_dalek = |line: &str| {
         // A dependency entry is `"name"` or `"name version"` when more
         // than one version of it is resolved.
-        let entry = entry.trim().trim_end_matches(',').trim_matches('"');
+        let entry = line.trim().trim_end_matches(',').trim_matches('"');
         entry == "ed25519-dalek" || entry.starts_with("ed25519-dalek ")
     };
     let dependents: Vec<&str> = lock
@@ -61,7 +61,7 @@ fn the_verify_only_build_links_the_verifys_four_and_no_signer_library() {
     let manifest =
         std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("Cargo.toml"))
             .expect("the manifest");
-    let (mut table, mut tables) = ("", BTreeSet::new());
+    let (mut table, mut dependency_tables) = ("", BTreeSet::new());
     let (mut every_build, mut optional, mut sign) =
         (BTreeSet::new(), BTreeSet::new(), BTreeSet::new());
     for line in manifest.lines() {
@@ -69,7 +69,7 @@ fn the_verify_only_build_links_the_verifys_four_and_no_signer_library() {
         if line.starts_with('[') {
             table = line;
             if line.contains("dependencies") {
-                tables.insert(line);
+                dependency_tables.insert(line);
             }
         } else if table == "[features]" && line.starts_with("sign = [") {
             sign.extend(line.split('"').filter_map(|item| item.strip_prefix("dep:")));
@@ -83,7 +83,10 @@ fn the_verify_only_build_links_the_verifys_four_and_no_signer_library() {
         }
     }
     let allowed = BTreeSet::from(["[dependencies]", "[dev-dependencies]"]);
-    assert!(tables.is_subset(&allowed), "Cargo.toml's dependency tables: {tables:?}");
+    assert!(
+        dependency_tables.is_subset(&allowed),
+        "Cargo.toml's dependency tables: {dependency_tables:?}"
+    );
     assert_eq!(
         every_build,
         BTreeSet::from(["ed25519-dalek", "fn-dsa", "ml-dsa", "skep-identity"]),
@@ -129,10 +132,10 @@ fn every_crate_a_frozen_rule_runs_resolves_to_the_version_it_froze() {
 
 /// The versions `Cargo.lock` resolves the package `name` at, one per entry.
 fn resolved_versions<'l>(lock: &'l str, name: &str) -> Vec<&'l str> {
-    let header = format!("name = \"{name}\"");
+    let name_line = format!("name = \"{name}\"");
     lock.split("[[package]]")
         .skip(1)
-        .filter(|package| package.lines().any(|line| line == header))
+        .filter(|package| package.lines().any(|line| line == name_line))
         .filter_map(|package| {
             package.lines().find_map(|line| line.strip_prefix("version = \"")?.strip_suffix('"'))
         })

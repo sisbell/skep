@@ -39,7 +39,7 @@ pub fn extent(start: &str, width: u64) -> skep_address::Span {
 /// copied in, one window of two positions onto another document, the base
 /// `1.0.1.0.1.1` taken at three — the address form, l6-A4; the base member
 /// in the group since round 7, bu7-E2) and three `record`s (the frame
-/// merge, fm-I; the record grade, 2a): an enrol's kind — its type slot, one
+/// merge, fm-I; the record grade, 2a): an enroll's kind — its type slot, one
 /// subject, neither optional row named, a short canonical body — a retire's
 /// kind beside it over the same subject, and the claim's — its type slot,
 /// the EMPTY target slot, no record at all (a claim carries none,
@@ -80,7 +80,7 @@ pub fn fixed_frames(alg: &str) -> [(&'static str, Vec<u8>); 13] {
         Some(ShotBase { member: &base_member, extent: 3 }),
     );
     let subject = [addr("1.0.2")];
-    let enrol = entry_body_record(RecordRows {
+    let enroll = entry_body_record(RecordRows {
         ty: &addr("1.1.0.1.0.1.0.3.1"),
         to: &subject,
         replaces: None,
@@ -148,7 +148,7 @@ pub fn fixed_frames(alg: &str) -> [(&'static str, Vec<u8>); 13] {
         frame("insert, undeclared", &insert, DocTerm::One(&doc)),
         frame("make_link, no replaces", &link, DocTerm::One(&doc)),
         frame("publish, the base filled", &publish, DocTerm::One(&doc)),
-        frame("record, enroll", &enrol, DocTerm::One(&doc)),
+        frame("record, enroll", &enroll, DocTerm::One(&doc)),
         frame("record, retire", &retire, DocTerm::One(&doc)),
         frame("record, claim", &claim, DocTerm::One(&doc)),
         frame("create_new_document, the empty body", &create, DocTerm::One(&account)),

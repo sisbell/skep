@@ -96,7 +96,7 @@ struct SignedFrame {
 fn sign_fixed_frames(tag: u8) -> (HybridSigner, Vec<SignedFrame>) {
     let signer = HybridSigner::from_seed(tag, &GOLDEN_SEED).unwrap();
     let alg = SigAlgRow::of_tag(tag).unwrap().token;
-    let mut out = Vec::new();
+    let mut signed = Vec::new();
     for (name, frame) in fixed_frames(alg) {
         // Tag 3's signature draws its per-signature seed from the fixtures'
         // stream, reseeded per frame from `GOLDEN_STREAM_SEED` so each
@@ -108,9 +108,9 @@ fn sign_fixed_frames(tag: u8) -> (HybridSigner, Vec<SignedFrame>) {
             Ok(()),
             "tag {tag}: the blob over `{name}` verifies"
         );
-        out.push(SignedFrame { name, frame, sig });
+        signed.push(SignedFrame { name, frame, sig });
     }
-    (signer, out)
+    (signer, signed)
 }
 
 fn check_golden(g: &TagGolden) {
@@ -267,7 +267,7 @@ fn the_frame_preimage_per_op_cell_is_pinned() {
         ],
         None,
     );
-    let [insert, link, publish, enrol, retire, claim, create, fork, version, nullify, assert_sup, emit, edit] =
+    let [insert, link, publish, enroll, retire, claim, create, fork, version, nullify, assert_sup, emit, edit] =
         fixed_frames(alg);
     // The thirteen come under `fixed_frames`' own names, the names the
     // signature goldens report them by; the shapes they leave out are named
@@ -283,7 +283,7 @@ fn the_frame_preimage_per_op_cell_is_pinned() {
         ("make_link, a resolved to", frame(&resolved), 245, "daea951d32f82858d99ea5e0500feceec7ae5d926d2ee5375f7392b48a95cd7b"),
         named(publish, 209, "774ae1d5bd454d7eb59ae7f3f3027a2f7cbc927c855036a9cbdda2b0664a6945"),
         ("publish, the birth shape", frame(&birth), 167, "34e6abd5f4dc9dac148a29b6dcddf040918730e45bd510d91cff262308e88e6f"),
-        named(enrol, 194, "e15f5fce4fd268e3064237c413eb6d7fb25f67269c6d7f0b046b26c72a9dfc60"),
+        named(enroll, 194, "e15f5fce4fd268e3064237c413eb6d7fb25f67269c6d7f0b046b26c72a9dfc60"),
         named(retire, 194, "e60761e01fbd6785680b07833fd9618de55150aacefaee1d3e1ebf75ae42918a"),
         named(claim, 163, "e5f5b1a5b96c2f7ce52cf32c8ef6f59a8ea56e882f7e5181456feb511b74b15f"),
         named(create, 121, "a7c1b8b81d99252b51dcd44f342ab306f5db48a0226f43d41b5352b136c15fd5"),
@@ -294,19 +294,19 @@ fn the_frame_preimage_per_op_cell_is_pinned() {
         named(emit, 209, "e7b6e747a67f7d0f3545ae31f096c82df586c07e51c9d3537482bd8e22288d10"),
         named(edit, 333, "86c04744e99ffe3317c82e6283afa645e4601e177474fbf5f2eb61c80a39e09c"),
     ];
-    let names: BTreeSet<&str> = shapes.iter().map(|(shape, ..)| *shape).collect();
+    let names: BTreeSet<&str> = shapes.iter().map(|(name, ..)| *name).collect();
     assert_eq!(
         names.len(),
         shapes.len(),
         "each shape under a name of its own, the name `TagGolden`'s re-pin rule reads: {names:?}"
     );
     let got: Vec<(&str, usize, String)> =
-        shapes.iter().map(|(shape, bytes, ..)| (*shape, bytes.len(), sha_hex(bytes))).collect();
+        shapes.iter().map(|(name, bytes, ..)| (*name, bytes.len(), sha_hex(bytes))).collect();
     let want: Vec<(&str, usize, String)> =
-        shapes.iter().map(|(shape, _, len, want)| (*shape, *len, want.to_string())).collect();
+        shapes.iter().map(|(name, _, len, hash)| (*name, *len, hash.to_string())).collect();
     let report = got
         .iter()
-        .map(|(shape, len, hash)| format!("  {shape}: {len} bytes, sha256 {hash}"))
+        .map(|(name, len, hash)| format!("  {name}: {len} bytes, sha256 {hash}"))
         .collect::<Vec<_>>()
         .join("\n");
     assert_eq!(got, want, "a preimage moved — the shapes as composed:\n{report}");

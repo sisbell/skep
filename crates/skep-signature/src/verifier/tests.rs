@@ -44,7 +44,7 @@ fn bytes32(hex: &str) -> [u8; 32] {
 /// what carries that row's decode fault. And the courtesy, [`key_decodes`],
 /// answers exactly as the two decodes [`verify`] runs.
 #[test]
-fn the_pq_half_decode_refuses_every_fn_dsa_header_byte_but_0x09() {
+fn the_pq_half_decode_refuses_every_fn_dsa_key_header_byte_but_0x09() {
     let seed = [0x42u8; 32];
     for tag in [TAG_MLDSA65_ED25519, TAG_FNDSA512_PREVIEW_ED25519] {
         let signer = HybridSigner::from_seed(tag, &seed).unwrap();
@@ -55,7 +55,7 @@ fn the_pq_half_decode_refuses_every_fn_dsa_header_byte_but_0x09() {
     }
     let signer3 = HybridSigner::from_seed(TAG_FNDSA512_PREVIEW_ED25519, &seed).unwrap();
     let mut pq = signer3.public_key().pq_half().to_vec();
-    assert_eq!(pq[0], 0x09, "fn-dsa 0.4.0's degree-512 header byte");
+    assert_eq!(pq[0], 0x09, "fn-dsa 0.4.0's degree-512 key header byte");
     pq[0] = 0x0a;
     let bad =
         PublicKey::from_halves(signer3.public_key().alg(), &pq, signer3.public_key().ed25519_half())
@@ -121,10 +121,10 @@ fn the_pq_half_decode_refuses_an_fn_dsa_coefficient_of_q_at_every_position() {
 
 /// A KEY THAT DOES NOT DECODE ANSWERS `Signature`, whichever half fails
 /// first: a tag-3 key whose FN-DSA header byte is not `0x09`, handed a
-/// blob its own signer made over `msg`, answers `Signature` over `msg` —
-/// its Ed25519 half passes, then its post-quantum half does not decode —
-/// and over another message, where the Ed25519 half fails first. The
-/// order `verify` checks the halves in moves no verdict, the variant
+/// blob its own signer made over `signed`, answers `Signature` over
+/// `signed` — its Ed25519 half passes, then its post-quantum half does not
+/// decode — and over another message, where the Ed25519 half fails first.
+/// The order `verify` checks the halves in moves no verdict, the variant
 /// included; `WrongRow` is the row's answer alone. That such a half is
 /// the KEY's fault and never its row's is the crate's tag sweep's to
 /// show: every `SIG_ALGS` row has a rule here.
@@ -132,23 +132,30 @@ fn the_pq_half_decode_refuses_an_fn_dsa_coefficient_of_q_at_every_position() {
 fn a_key_that_does_not_decode_answers_signature_whichever_half_fails_first() {
     let seed = [0x42u8; 32];
     let signer3 = HybridSigner::from_seed(TAG_FNDSA512_PREVIEW_ED25519, &seed).unwrap();
-    let msg = b"the entry frame";
-    let sig = signer3.sign_with_rng(&mut SeededRng06::new([7; 32]), msg);
+    let signed = b"the entry frame";
+    let sig = signer3.sign_with_rng(&mut SeededRng06::new([7; 32]), signed);
     let mut pq = signer3.public_key().pq_half().to_vec();
     pq[0] = 0x0a;
     let bad =
         PublicKey::from_halves(signer3.public_key().alg(), &pq, signer3.public_key().ed25519_half())
             .expect("the row's widths");
+    let ed_key = decode_ed25519_half(&bad).expect("the premise: its Ed25519 half decodes");
     assert!(
-        decode_ed25519_half(&bad).is_some() && PqVerifier::decode(&bad).is_none(),
-        "the premise: its Ed25519 half decodes and its post-quantum half does not"
+        PqVerifier::decode(&bad).is_none(),
+        "the premise: its post-quantum half does not decode"
     );
-    for signed in [&msg[..], &b"other"[..]] {
+    let ed_sig = ed25519_dalek::Signature::from_bytes(sig.last_chunk().expect("an Ed25519 field"));
+    for (msg, ed25519_half_passes) in [(&signed[..], true), (&b"other"[..], false)] {
+        let over = String::from_utf8_lossy(msg);
         assert_eq!(
-            verify(TAG_FNDSA512_PREVIEW_ED25519, &bad, signed, &sig),
+            ed_key.verify_strict(msg, &ed_sig).is_ok(),
+            ed25519_half_passes,
+            "the premise: which half fails first, over {over:?}"
+        );
+        assert_eq!(
+            verify(TAG_FNDSA512_PREVIEW_ED25519, &bad, msg, &sig),
             Err(HybridFault::Signature),
-            "over {:?}",
-            String::from_utf8_lossy(signed)
+            "over {over:?}"
         );
     }
 }

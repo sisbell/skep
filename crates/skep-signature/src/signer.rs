@@ -307,8 +307,9 @@ mod tests {
     use crate::hooks::{Seed, SeededRng06};
     use crate::{TAG_FNDSA512_PREVIEW_ED25519, TAG_MLDSA65_ED25519};
 
-    /// Lowercase hex, two digits a byte — skepd's `codec::hex_string`'s output,
-    /// the spelling [`private_key_material_prints_none_of_itself`] looks for.
+    /// Lowercase hex, two digits a byte — skep-util's `json::hex_string`'s
+    /// output, which skepd's codec writes with, and the spelling
+    /// [`private_key_material_prints_none_of_itself`] looks for.
     fn hex_string(b: &[u8]) -> String {
         b.iter().map(|byte| format!("{byte:02x}")).collect()
     }
@@ -467,14 +468,14 @@ mod tests {
         // field — the Ed25519 key and the ML-DSA-65 key off a tag-1 signer, the
         // stored FN-DSA encoding off a tag-3 one: a field typed otherwise fails
         // to compile here, so each probe asks about the type the signer holds.
-        let tag1 = HybridSigner::from_seed(TAG_MLDSA65_ED25519, &[0x42; 32]).unwrap();
-        let _: &EdSigningKey = &tag1.ed;
-        let _: &ml_dsa::SigningKey<MlDsa65> = match &tag1.pq {
+        let signer1 = HybridSigner::from_seed(TAG_MLDSA65_ED25519, &[0x42; 32]).unwrap();
+        let _: &EdSigningKey = &signer1.ed;
+        let _: &ml_dsa::SigningKey<MlDsa65> = match &signer1.pq {
             PqSigner::MlDsa65(key) => key,
             PqSigner::FnDsa512Preview(_) => panic!("tag 1 holds ML-DSA-65's signing key"),
         };
-        let tag3 = HybridSigner::from_seed(TAG_FNDSA512_PREVIEW_ED25519, &[0x42; 32]).unwrap();
-        let _: &Zeroizing<Vec<u8>> = match &tag3.pq {
+        let signer3 = HybridSigner::from_seed(TAG_FNDSA512_PREVIEW_ED25519, &[0x42; 32]).unwrap();
+        let _: &Zeroizing<Vec<u8>> = match &signer3.pq {
             PqSigner::FnDsa512Preview(stored) => stored,
             PqSigner::MlDsa65(_) => panic!("tag 3 stores its FN-DSA key as bytes"),
         };

@@ -29,8 +29,8 @@ fn wire_md_prose() -> String {
 #[test]
 fn wire_md_publishes_the_keygen_from_seed_vectors() {
     let prose = wire_md_prose();
-    let seed = format!("the seed `{}` derives", hex(&GOLDEN_SEED));
-    assert!(prose.contains(&seed), "wire.md's vectors do not say: {seed}");
+    let seed_clause = format!("the seed `{}` derives", hex(&GOLDEN_SEED));
+    assert!(prose.contains(&seed_clause), "wire.md's vectors do not say: {seed_clause}");
     for tag in [1u8, 3] {
         let token = SigAlgRow::of_tag(tag).unwrap().token;
         let signer = HybridSigner::from_seed(tag, &GOLDEN_SEED).unwrap();
@@ -169,7 +169,7 @@ fn the_key_and_the_blob_are_wire_mds_layout_built_without_the_signer() {
                   signature blob is the post-quantum signature THEN the Ed25519 signature's 64 \
                   bytes, both over the same bytes, two fixed-width fields with no length prefix.";
     assert!(wire_md_prose().contains(layout), "wire.md's layout does not say: {layout}");
-    let stream = [7u8; 32];
+    let stream_seed = [7u8; 32];
     for (tag, token, pq_label) in
         [(1u8, "mldsa65-ed25519", "ml-dsa-65"), (3, "fndsa512-preview-ed25519", "fn-dsa-512")]
     {
@@ -195,7 +195,7 @@ fn the_key_and_the_blob_are_wire_mds_layout_built_without_the_signer() {
                 fn_dsa::SigningKeyStandard::decode(&sk)
                     .expect("its own key decodes")
                     .sign(
-                        &mut SeededRng06::new(stream),
+                        &mut SeededRng06::new(stream_seed),
                         &fn_dsa::DOMAIN_NONE,
                         &fn_dsa::HASH_ID_RAW,
                         msg,
@@ -208,7 +208,7 @@ fn the_key_and_the_blob_are_wire_mds_layout_built_without_the_signer() {
                 .expect("the row's widths");
             assert_eq!(signer.public_key(), &key, "tag {tag}: the key wire.md lays out");
             let blob = [&pq_sig[..], &ed.sign(msg).to_bytes()[..]].concat();
-            let ours = signer.sign_with_rng(&mut SeededRng06::new(stream), msg);
+            let ours = signer.sign_with_rng(&mut SeededRng06::new(stream_seed), msg);
             let parts_at = ours.iter().zip(&blob).position(|(a, b)| a != b);
             assert!(
                 ours.len() == blob.len() && parts_at.is_none(),

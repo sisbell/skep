@@ -159,8 +159,8 @@ fn journaled_types_survive_serde_round_trips() {
     ];
     for rec in &recs {
         let bytes = bincode::serialize(rec).expect("serialize M3Rec");
-        let back: M3Rec = bincode::deserialize(&bytes).expect("deserialize M3Rec");
-        assert_eq!(*rec, back); // whole value: variant AND payload
+        let restored: M3Rec = bincode::deserialize(&bytes).expect("deserialize M3Rec");
+        assert_eq!(*rec, restored); // whole value: variant AND payload
     }
 
     // The Address payloads journal as bare, flat tumblers — the data model's
@@ -331,35 +331,35 @@ fn a_journal_frame_re_enters_only_through_its_field_doors() {
     // held one could never open again — a resource charge turned into an
     // unreplayable journal. Each over-cap shape a door could be tempted to
     // refuse decodes.
-    let deep_node: Vec<u32> = std::iter::repeat_n(1u32, MAX_NODE_COMPONENTS + 1).collect();
-    let mut deep_account = vec![1u32, 0];
-    deep_account.extend(std::iter::repeat_n(1u32, MAX_PRINCIPAL_COMPONENTS));
+    let over_cap_node: Vec<u32> = std::iter::repeat_n(1u32, MAX_NODE_COMPONENTS + 1).collect();
+    let mut over_cap_acct = vec![1u32, 0];
+    over_cap_acct.extend(std::iter::repeat_n(1u32, MAX_PRINCIPAL_COMPONENTS));
     for (raw, rec) in [
         (
             RawM3Rec::RegisterNode {
-                addr: t(&deep_node),
+                addr: t(&over_cap_node),
             },
             M3Rec::RegisterNode {
-                addr: a(&deep_node),
+                addr: a(&over_cap_node),
             },
         ),
         (
             RawM3Rec::Allocate {
-                addr: t(&deep_account),
+                addr: t(&over_cap_acct),
                 published: false,
             },
             M3Rec::Allocate {
-                addr: a(&deep_account),
+                addr: a(&over_cap_acct),
                 published: false,
             },
         ),
         (
             RawM3Rec::RegisterPrincipal {
-                prefix: t(&deep_account),
+                prefix: t(&over_cap_acct),
                 id: ID2,
             },
             M3Rec::RegisterPrincipal {
-                prefix: a(&deep_account),
+                prefix: a(&over_cap_acct),
                 id: ID2,
             },
         ),
@@ -445,14 +445,17 @@ fn the_slice_prints_its_four_fields_and_their_contents() {
     // and not just names.
     let (k, _acct, _doc) = kernel_with_account_and_doc();
     let snap = k.snapshot();
-    let dump = format!("{:?}", snap.world().m3());
+    let rendered = format!("{:?}", snap.world().m3());
     for field in ["frontiers", "nodes", "principals", "publication"] {
-        assert!(dump.contains(field), "the dump omits {field}: {dump}");
+        assert!(
+            rendered.contains(field),
+            "the rendering omits {field}: {rendered}"
+        );
     }
     // The contents ride along: the bootstrap principal and the delegate.
-    assert!(dump.contains("PrincipalId(0)"), "{dump}");
-    assert!(dump.contains("PrincipalId(1)"), "{dump}");
-    // NOT: comparing two rendered dumps as an equality oracle. Every field
+    assert!(rendered.contains("PrincipalId(0)"), "{rendered}");
+    assert!(rendered.contains("PrincipalId(1)"), "{rendered}");
+    // NOT: comparing two renderings as an equality oracle. Every field
     // is an ORDERED collection since 2026-09-23 (`frontiers` moved off the
     // `im::HashMap` whose per-process `RandomState` once printed equal slices
     // in differing orders), so two equal slices now render alike — but the

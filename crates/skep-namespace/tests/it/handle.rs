@@ -30,9 +30,9 @@ fn pre_work_rejections_open_no_transaction() {
     // an oversized request must cost nothing, not a lock and a transaction.
     let k = mem_kernel(genesis_world());
     let ns = Namespace::new(&k);
-    let too_deep: Vec<u32> = std::iter::repeat_n(1u32, MAX_NODE_COMPONENTS + 1).collect();
-    let mut deep_prefix = vec![1u32, 0];
-    deep_prefix.extend(std::iter::repeat_n(1u32, MAX_PRINCIPAL_COMPONENTS));
+    let over_cap_node: Vec<u32> = std::iter::repeat_n(1u32, MAX_NODE_COMPONENTS + 1).collect();
+    let mut over_cap_acct = vec![1u32, 0];
+    over_cap_acct.extend(std::iter::repeat_n(1u32, MAX_PRINCIPAL_COMPONENTS));
     k.transact::<_, ()>(&[], |_stg| {
         assert_eq!(
             rejected(ns.delegate(ID1, t(&[1, 0]), ID2)),
@@ -43,7 +43,7 @@ fn pre_work_rejections_open_no_transaction() {
             DelegateError::NotAccountTier
         );
         assert_eq!(
-            rejected(ns.delegate(ID1, t(&deep_prefix), ID2)),
+            rejected(ns.delegate(ID1, t(&over_cap_acct), ID2)),
             DelegateError::TooDeep
         );
         assert_eq!(
@@ -55,7 +55,7 @@ fn pre_work_rejections_open_no_transaction() {
             RegisterNodeError::NotNode
         );
         assert_eq!(
-            rejected(ns.register_node(t(&too_deep))),
+            rejected(ns.register_node(t(&over_cap_node))),
             RegisterNodeError::TooDeep
         );
         assert_eq!(
@@ -315,7 +315,7 @@ fn a_fork_past_its_unknown_id_opens_a_transaction_of_its_own() {
 /// derived impl could not serve. A copy drives the same kernel: a node
 /// admitted through it is no longer fresh to the original.
 #[test]
-fn the_handle_is_a_kernel_borrow_that_copies_and_prints() {
+fn a_plain_handle_is_a_kernel_borrow_that_copies_and_prints() {
     let k = mem_kernel(genesis_world());
     let ns = Namespace::new(&k);
     let copy = ns;
@@ -348,22 +348,22 @@ fn an_attested_handle_signs_its_two_document_mints_alone() {
     let k = Kernel::open(fsync_config(dir.path()), genesis_world()).expect("open");
     let attestation =
         Attestation::new(1, vec![0xA5; 64]).expect("a non-zero tag over a non-empty blob");
-    let signed = Namespace::attested(&k, Some(&attestation));
+    let attested = Namespace::attested(&k, Some(&attestation));
     assert_eq!(
-        format!("{signed:?}"),
+        format!("{attested:?}"),
         format!("Namespace {{ kernel: {k:?}, attested: true }}")
     );
 
-    let (acct, delegated) = signed
+    let (acct, delegated) = attested
         .delegate(BOOTSTRAP_PRINCIPAL, t(&[1, 0, 1]), ID1)
         .expect("the delegation commits");
-    let (_, admitted) = signed
+    let (_, admitted) = attested
         .register_node(t(&[1, 7]))
         .expect("the admission commits");
-    let (_, created) = signed
+    let (_, created) = attested
         .create_new_document(ID1, &acct, None)
         .expect("the create commits");
-    let (_, forked) = signed.fork(ID1, None).expect("the fork commits");
+    let (_, forked) = attested.fork(ID1, None).expect("the fork commits");
     let (_, plain) = Namespace::new(&k)
         .create_new_document(ID1, &acct, None)
         .expect("a plain handle's create commits");

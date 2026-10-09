@@ -297,18 +297,18 @@ fn delegate_rejection_order_is_pinned() {
     // NotAccountTier precedes TooDeep: an over-cap NODE-tier prefix is refused
     // for its tier, since depth bounds the principal registry alone — the
     // mirror of `register_node`'s NotNode-before-TooDeep.
-    let node_over: Vec<u32> = std::iter::repeat_n(1u32, MAX_PRINCIPAL_COMPONENTS + 1).collect();
+    let over_cap_node: Vec<u32> = std::iter::repeat_n(1u32, MAX_PRINCIPAL_COMPONENTS + 1).collect();
     assert_eq!(
-        rejected(ns.delegate(UNKNOWN_ID, t(&node_over), ID1)),
+        rejected(ns.delegate(UNKNOWN_ID, t(&over_cap_node), ID1)),
         DelegateError::NotAccountTier
     );
     // …then TooDeep, the last pre-work guard, which precedes DelegatorUnknown:
     // an over-cap account-tier prefix from a caller who names no principal is
     // refused on depth, before any registry read.
-    let mut acct_over = vec![1u32, 0];
-    acct_over.extend(std::iter::repeat_n(1u32, MAX_PRINCIPAL_COMPONENTS));
+    let mut over_cap_acct = vec![1u32, 0];
+    over_cap_acct.extend(std::iter::repeat_n(1u32, MAX_PRINCIPAL_COMPONENTS));
     assert_eq!(
-        rejected(ns.delegate(UNKNOWN_ID, t(&acct_over), ID1)),
+        rejected(ns.delegate(UNKNOWN_ID, t(&over_cap_acct), ID1)),
         DelegateError::TooDeep
     );
     // DelegatorUnknown: the first in-closure gate.

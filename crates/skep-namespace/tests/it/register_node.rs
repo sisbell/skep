@@ -79,18 +79,18 @@ fn register_node_validates_and_admits_supplied_addresses() {
     // is M1-unbounded — see `MAX_NODE_COMPONENTS`). The probe is otherwise
     // impeccable — node-level, fresh, bootstrap-descended — so depth is the
     // only guard that can be refusing it.
-    let too_deep: Vec<u32> = std::iter::repeat_n(1u32, MAX_NODE_COMPONENTS + 1).collect();
-    assert_eq!(a(&too_deep).level(), Level::Node);
+    let over_cap_node: Vec<u32> = std::iter::repeat_n(1u32, MAX_NODE_COMPONENTS + 1).collect();
+    assert_eq!(a(&over_cap_node).level(), Level::Node);
     assert_eq!(
-        rejected(ns.register_node(t(&too_deep))),
+        rejected(ns.register_node(t(&over_cap_node))),
         RegisterNodeError::TooDeep
     );
     // NotNode precedes TooDeep: an equally over-long ACCOUNT-tier address is
     // refused for its tier, since depth bounds the node registry alone.
-    let mut deep_acct = vec![1u32, 0];
-    deep_acct.extend(std::iter::repeat_n(1u32, MAX_NODE_COMPONENTS + 1));
+    let mut over_cap_acct = vec![1u32, 0];
+    over_cap_acct.extend(std::iter::repeat_n(1u32, MAX_NODE_COMPONENTS + 1));
     assert_eq!(
-        rejected(ns.register_node(t(&deep_acct))),
+        rejected(ns.register_node(t(&over_cap_acct))),
         RegisterNodeError::NotNode
     );
     // NotFresh — duplicates surface typed, never a silent coalesce; the
@@ -130,11 +130,13 @@ fn register_node_validates_and_admits_supplied_addresses() {
     // deliberately does not carry the cap (an over-cap entry is a permanent
     // resource charge, and nothing more).
     let seeded = World {
-        m3: M3State::genesis().apply_m3(&M3Rec::RegisterNode { addr: a(&too_deep) }),
+        m3: M3State::genesis().apply_m3(&M3Rec::RegisterNode {
+            addr: a(&over_cap_node),
+        }),
     };
     let over_cap_k = mem_kernel(seeded);
     assert_eq!(
-        rejected(Namespace::new(&over_cap_k).register_node(t(&too_deep))),
+        rejected(Namespace::new(&over_cap_k).register_node(t(&over_cap_node))),
         RegisterNodeError::TooDeep
     );
 

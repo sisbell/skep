@@ -414,29 +414,29 @@ fn the_allocate_door_admits_exactly_what_the_fold_can_key() {
 /// none under the node; a sub-account outranks its parent by length; and
 /// an address no seat contains has neither half.
 #[test]
-fn the_pair_accessor_is_omega_unprojected() {
+fn effective_owner_pair_is_omega_unprojected() {
     let (x, x_id) = (a(&[1, 0, 1]), PrincipalId(7));
-    let (sub, sub_id) = (a(&[1, 0, 1, 2]), PrincipalId(9));
+    let (sub_acct, sub_acct_id) = (a(&[1, 0, 1, 2]), PrincipalId(9));
     let s = M3State::genesis()
         .apply_m3(&M3Rec::RegisterPrincipal {
             prefix: x.clone(),
             id: x_id,
         })
         .apply_m3(&M3Rec::RegisterPrincipal {
-            prefix: sub.clone(),
-            id: sub_id,
+            prefix: sub_acct.clone(),
+            id: sub_acct_id,
         });
 
     let node = a(&[1]);
     for (probe, expected) in [
         // A seat of its own: the prefix IS the address asked.
         (x.clone(), Some((&x, x_id))),
-        (sub.clone(), Some((&sub, sub_id))),
+        (sub_acct.clone(), Some((&sub_acct, sub_acct_id))),
         (node.clone(), Some((&node, BOOTSTRAP_PRINCIPAL))),
         // Unallocated `inc(X, 1)`: X's own seat, the nearest above it.
         (a(&[1, 0, 1, 1]), Some((&x, x_id))),
         // Beneath a sub-account: the LONGEST containing prefix wins.
-        (a(&[1, 0, 1, 2, 0, 4]), Some((&sub, sub_id))),
+        (a(&[1, 0, 1, 2, 0, 4]), Some((&sub_acct, sub_acct_id))),
         // A document of X's, and an unregistered sibling account under
         // the node alone.
         (a(&[1, 0, 1, 0, 3]), Some((&x, x_id))),

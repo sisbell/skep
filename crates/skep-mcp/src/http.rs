@@ -61,10 +61,12 @@ impl Http {
             return Err(format!("'{url}': the daemon's origin takes no path"));
         }
         let (host, port) = match authority.rsplit_once(':') {
-            Some((h, p)) => {
+            // A colon inside the brackets is the IPv6 literal's own, not a
+            // port's: `[::1]` takes the default port.
+            Some((h, p)) if !p.ends_with(']') => {
                 (h, p.parse::<u16>().map_err(|_| format!("'{url}': '{p}' is not a port"))?)
             }
-            None => (authority, 80),
+            _ => (authority, 80),
         };
         // Bracketed IPv6 sheds its brackets for the resolver.
         let host = host.trim_start_matches('[').trim_end_matches(']');
@@ -167,7 +169,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn url_forms() {
+    fn only_an_http_origin_without_a_path_parses() {
         let h = Http::parse("http://127.0.0.1:8642").expect("default form");
         assert_eq!(h.authority(), "127.0.0.1:8642");
         let h = Http::parse("http://localhost").expect("portless form");
@@ -186,8 +188,19 @@ mod tests {
         }
     }
 
+    /// Bracketed IPv6 sheds its brackets for the resolver, with a port and
+    /// without one — the colons inside the brackets are the address's own —
+    /// while the authority keeps them for the `Host` header.
     #[test]
-    fn response_parse() {
+    fn bracketed_ipv6_sheds_its_brackets() {
+        let h = Http::parse("http://[::1]:8642").expect("bracketed, with a port");
+        assert_eq!((h.host.as_str(), h.port, h.authority()), ("::1", 8642, "[::1]:8642"));
+        let h = Http::parse("http://[::1]").expect("bracketed, without a port");
+        assert_eq!((h.host.as_str(), h.port, h.authority()), ("::1", 80, "[::1]"));
+    }
+
+    #[test]
+    fn a_response_splits_at_its_head_and_a_short_body_is_a_break() {
         let (st, body) =
             parse_response(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\n{}").expect("parse");
         assert_eq!((st, body.as_slice()), (200, &b"{}"[..]));
@@ -221,6 +234,33 @@ mod tests {
             assert!(!err.contains("s3cr3t"), "the failure quotes the request: {err}");
             assert!(err.starts_with(&format!("skepd at http://127.0.0.1:{port}: ")), "{err}");
         }
+        stub.join().expect("the stub daemon");
+    }
+
+    /// A daemon that takes the request and never answers is a clear failure
+    /// within the read bound, not a stall: the exchange ends `Err`, naming
+    /// the origin and the read step. Takes `IO_TIMEOUT` by construction.
+    #[test]
+    fn a_daemon_that_never_answers_fails_the_read_within_its_bound() {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind a stub daemon");
+        let port = listener.local_addr().expect("stub address").port();
+        let (release, held) = std::sync::mpsc::channel::<()>();
+        let stub = std::thread::spawn(move || {
+            let (mut conn, _) = listener.accept().expect("accept");
+            let _ = conn.read(&mut [0u8; 1024]);
+            let _ = held.recv(); // open, unanswered, until the test lets go
+        });
+        let http = Http::parse(&format!("http://127.0.0.1:{port}")).expect("stub url");
+        let (done, outcome) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = done.send(http.request(Method::Post, "/op", &[], b"{}"));
+        });
+        let err = outcome
+            .recv_timeout(IO_TIMEOUT * 3)
+            .expect("the exchange outlived three read bounds: a hung daemon stalls the adapter")
+            .expect_err("no answer came");
+        assert!(err.starts_with(&format!("skepd at http://127.0.0.1:{port}: read: ")), "{err}");
+        drop(release);
         stub.join().expect("the stub daemon");
     }
 }

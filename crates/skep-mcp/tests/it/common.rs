@@ -1,10 +1,12 @@
 //! The board the suites talk to: a temp data dir, an in-process daemon over
 //! it, and — for the suites that write — the claim ceremony (RES-27) and
-//! principal 1 provisioned the way wire.md's end-to-end example does.
+//! principal 1 provisioned the way wire.md's end-to-end example does; and a
+//! scripted stub daemon, for the answers the real one is never made to give.
 
 use std::io::{Read, Write};
-use std::net::TcpStream;
+use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
+use std::thread::JoinHandle;
 
 use serde_json::{json, Value};
 use skep_identity::{encode_enroll, framed, Enrollment, PublicKey, SESSION_TAG};
@@ -265,4 +267,62 @@ pub fn provision_principal_1(port: u16) -> String {
     );
     assert_eq!(v["resp"], "ack_addr", "principal 1's home mint: {v}");
     account
+}
+
+// ── a stub daemon, for answers the real one is never made to give ───────
+
+/// A stand-in skepd on an ephemeral loopback port, for the rules only an
+/// answer the real daemon never gives can show — `unauthenticated` on cue,
+/// a reply cut short, bytes no canonical marshal writes. It answers each
+/// connection in turn with the next scripted reply, exactly as given, and
+/// closes its listener after the last, so a request past the script is
+/// refused at once rather than left waiting. The handle yields every
+/// request it read, head and body, as text.
+pub fn stub_daemon(replies: Vec<Vec<u8>>) -> (u16, JoinHandle<Vec<String>>) {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind a stub daemon");
+    let port = listener.local_addr().expect("stub address").port();
+    let stub = std::thread::spawn(move || {
+        let mut requests = Vec::new();
+        for reply in replies {
+            let (mut conn, _) = listener.accept().expect("accept");
+            requests.push(read_request(&mut conn));
+            // A caller that hangs up first is no fault of the stub's.
+            let _ = conn.write_all(&reply);
+        }
+        requests
+    });
+    (port, stub)
+}
+
+/// One complete HTTP response as skepd frames it: the status, the
+/// `Content-Length` that says where the body ends, `Connection: close`.
+pub fn reply(status: u16, body: &str) -> Vec<u8> {
+    format!(
+        "HTTP/1.1 {status} X\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        body.len()
+    )
+    .into_bytes()
+}
+
+/// One request off a stub connection — its head, then as many body bytes
+/// as its `Content-Length` names — as text.
+fn read_request(conn: &mut TcpStream) -> String {
+    let mut raw = Vec::new();
+    let mut buf = [0u8; 1024];
+    loop {
+        if let Some(sep) = raw.windows(4).position(|w| w == b"\r\n\r\n") {
+            let head = String::from_utf8_lossy(&raw[..sep]).to_ascii_lowercase();
+            let len: usize = head
+                .lines()
+                .find_map(|l| l.strip_prefix("content-length:"))
+                .and_then(|v| v.trim().parse().ok())
+                .unwrap_or(0);
+            if raw.len() >= sep + 4 + len {
+                return String::from_utf8_lossy(&raw).into_owned();
+            }
+        }
+        let n = conn.read(&mut buf).expect("read the request");
+        assert!(n > 0, "the request ended early");
+        raw.extend_from_slice(&buf[..n]);
+    }
 }

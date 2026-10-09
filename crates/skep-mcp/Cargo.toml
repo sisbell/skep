@@ -30,3 +30,7 @@ skep-identity = { path = "../skep-identity" }
 # key (`HybridSigner`), which signs the session blobs; the daemon only
 # verifies.
 skep-signature = { path = "../skep-signature", features = ["test-hooks"] }
+# The SKEP_COMMONS gate's reference: the gate reproduces skep-address's T4
+# validator rather than importing it, and a unit test holds the two equal
+# over every short dotted decimal.
+skep-address = { path = "../skep-address" }

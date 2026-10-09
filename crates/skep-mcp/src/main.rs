@@ -154,7 +154,8 @@ fn env_text(var: &str) -> Option<String> {
 /// component is a decimal natural, the first and last are nonzero, no two
 /// zeros are adjacent, and at most three components are zero. Zeroness is
 /// judged on the digits (`"00"` is zero, matching the daemon's lenient
-/// numeric read); magnitudes stay strings — T4 never bounds size.
+/// numeric read); magnitudes stay strings — T4 never bounds size. A test
+/// holds it to the validator's verdict on every short dotted decimal.
 fn is_t4_address(s: &str) -> bool {
     let is_zero = |c: &str| c.bytes().all(|b| b == b'0');
     let mut zeros = 0usize;
@@ -185,7 +186,7 @@ mod tests {
     /// zero, adjacent zeros, and a fourth separator all refuse; depth and
     /// magnitude do not.
     #[test]
-    fn t4_address_check() {
+    fn the_commons_gate_refuses_each_t4_clause_but_no_depth_or_magnitude() {
         for good in
             ["1", "1.1", "1.0.2", "1.0.1.0.1", "1.0.1.0.1.0.1.1", "1.0.2.0.3.0.3.6.1", "10.20.30"]
         {
@@ -196,5 +197,41 @@ mod tests {
         {
             assert!(!is_t4_address(bad), "'{bad}' is not T4-valid");
         }
+    }
+
+    /// The gate is skep-address's T4 validator read off the digits — a law,
+    /// so every string of a family is visited, not a chosen few: each dotted
+    /// decimal of one to nine components drawn from `0`, `00`, `1` and `10`.
+    /// Nine components are the fewest in which a fourth zero breaks no other
+    /// clause; `00` is a zero by its digits, `10` a nonzero ending in one.
+    #[test]
+    fn t4_check_agrees_with_skep_address_on_every_short_dotted_decimal() {
+        use skep_address::{is_t4_valid, Nat, Tumbler};
+        let alphabet: [(&str, u32); 4] = [("0", 0), ("00", 0), ("1", 1), ("10", 10)];
+        let (mut visited, mut disagreements) = (0usize, Vec::new());
+        for depth in 1..=9u32 {
+            for mut n in 0..4usize.pow(depth) {
+                let (mut digits, mut comps) = (Vec::new(), Vec::new());
+                for _ in 0..depth {
+                    let (text, value) = alphabet[n % 4];
+                    digits.push(text);
+                    comps.push(Nat::from(value));
+                    n /= 4;
+                }
+                let s = digits.join(".");
+                let valid = is_t4_valid(&Tumbler::new(comps).expect("a nonempty tumbler"));
+                if is_t4_address(&s) != valid {
+                    disagreements.push(s);
+                }
+                visited += 1;
+            }
+        }
+        assert_eq!(visited, 349_524, "the family visited whole");
+        assert!(
+            disagreements.is_empty(),
+            "{} strings judged unlike is_t4_valid, first: {:?}",
+            disagreements.len(),
+            &disagreements[..disagreements.len().min(5)]
+        );
     }
 }

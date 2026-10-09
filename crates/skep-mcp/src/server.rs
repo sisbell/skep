@@ -200,8 +200,10 @@ fn tool_result(text: String, is_error: bool) -> Value {
 mod tests {
     use super::*;
 
+    /// tools/call params: a string `name`; `arguments` absent, null (both the
+    /// empty object) or an object taken whole — anything else refused.
     #[test]
-    fn call_params_shapes() {
+    fn tools_call_params_are_a_string_name_and_object_or_absent_arguments() {
         let (name, args) = call_params(Some(json!({"name": "fork"}))).expect("argument-less call");
         assert_eq!(name, "fork");
         assert!(args.is_empty());

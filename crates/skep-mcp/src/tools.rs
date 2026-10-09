@@ -265,6 +265,42 @@ mod tests {
         assert!(err.contains("insert"), "error must name the op: {err}");
     }
 
+    /// Every fault `load` refuses that would otherwise load — a catalog
+    /// served verbatim to harnesses that may reject a malformed tool list
+    /// wholesale — refuses, naming what is wrong.
+    #[test]
+    fn every_fault_that_would_load_refuses_by_name() {
+        fn refusal(edit: impl FnOnce(&mut Value)) -> String {
+            let mut v: Value = serde_json::from_str(EMBEDDED).expect("embedded parses");
+            edit(&mut v);
+            Catalog::load(&v.to_string()).expect_err("the doctored catalog must refuse")
+        }
+        fn tool<'a>(v: &'a mut Value, name: &str) -> &'a mut Value {
+            let tools = v["tools"].as_array_mut().expect("tools");
+            tools.iter_mut().find(|t| t["name"] == name).expect("the named tool")
+        }
+        fn without(v: &mut Value, name: &str) {
+            v["tools"].as_array_mut().expect("tools").retain(|t| t["name"] != name);
+        }
+        for (err, names) in [
+            (refusal(|v| v["version"] = json!(1)), "'version'"),
+            (refusal(|v| v["instructions"] = json!("")), "'instructions'"),
+            (refusal(|v| tool(v, "insert")["title"] = json!("Insert")), "'title'"),
+            (refusal(|v| tool(v, "insert")["description"] = json!("")), "'description'"),
+            (refusal(|v| tool(v, "insert")["inputSchema"] = json!("object")), "'inputSchema'"),
+            (
+                refusal(|v| {
+                    let twin = tool(v, "insert").clone();
+                    v["tools"].as_array_mut().expect("tools").push(twin)
+                }),
+                "duplicate tool 'insert'",
+            ),
+            (refusal(|v| without(v, SESSION_INFO)), "'session_info'"),
+        ] {
+            assert!(err.contains(names), "the refusal names {names}: {err}");
+        }
+    }
+
     /// The commons sentence template is catalog data like everything else:
     /// absent, or present without its substitution point, refuses to load.
     #[test]

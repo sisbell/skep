@@ -4,20 +4,26 @@
 //! and the built `skep-mcp` binary spawned with env pointing at the daemon
 //! — real JSON-RPC driven through its stdin/stdout. Store semantics are
 //! trusted to the stores' own tests; these assert the adapter: protocol
-//! framing, verbatim pass-through (rejections included), the
-//! reopen-and-reissue path across a daemon restart, and the
-//! tools-file↔dispatch no-drift startup errors. The daemon and the
-//! principal are `common`'s; this file is the adapter's driver and the
-//! tests.
+//! framing, verbatim pass-through (rejections included), the session's
+//! open, reissue and token, the reopen-and-reissue path across a daemon
+//! restart, and startup's refusals, the tools-file↔dispatch no-drift
+//! errors among them. The daemon and the principal are `common`'s; this
+//! file is the adapter's driver and the tests.
+//!
+//! Where a rule shows only in an answer the real daemon never gives —
+//! `unauthenticated` on cue, a reply cut short, bytes no canonical marshal
+//! writes — `common::stub_daemon` answers instead and hands back the
+//! requests it read; startup and the line protocol need no daemon at all.
 
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader, Read, Write};
+use std::net::TcpStream;
 use std::path::Path;
-use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
-use std::time::Duration;
+use std::process::{Child, ChildStderr, ChildStdin, ChildStdout, Command, Output, Stdio};
+use std::time::{Duration, Instant};
 
 use serde_json::{json, Value};
 
-use crate::common::{provision_principal_1, spawn_daemon, TempDir};
+use crate::common::{provision_principal_1, reply, spawn_daemon, stub_daemon, TempDir};
 
 // ── the adapter under test ───────────────────────────────────────────────
 
@@ -25,29 +31,41 @@ struct Mcp {
     child: Child,
     stdin: Option<ChildStdin>,
     stdout: BufReader<ChildStdout>,
+    /// The adapter's log, when the test reads it (`spawn_logged`).
+    stderr: Option<ChildStderr>,
     next_id: u64,
 }
 
 impl Mcp {
     fn spawn(port: u16, principal: &str) -> Mcp {
-        Mcp::spawn_with_commons(port, principal, None)
+        Mcp::launch(port, principal, None, Stdio::inherit())
     }
 
     fn spawn_with_commons(port: u16, principal: &str, commons: Option<&str>) -> Mcp {
+        Mcp::launch(port, principal, commons, Stdio::inherit())
+    }
+
+    /// An adapter whose log the test reads, through `finish_logged`.
+    fn spawn_logged(port: u16, principal: &str) -> Mcp {
+        Mcp::launch(port, principal, None, Stdio::piped())
+    }
+
+    fn launch(port: u16, principal: &str, commons: Option<&str>, log: Stdio) -> Mcp {
         let mut cmd = Command::new(env!("CARGO_BIN_EXE_skep-mcp"));
         cmd.env("SKEPD_URL", format!("http://127.0.0.1:{port}"))
             .env("SKEP_PRINCIPAL", principal)
             .env_remove("SKEP_COMMONS")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::inherit());
+            .stderr(log);
         if let Some(addr) = commons {
             cmd.env("SKEP_COMMONS", addr);
         }
         let mut child = cmd.spawn().expect("spawn skep-mcp");
         let stdin = child.stdin.take().expect("child stdin");
         let stdout = BufReader::new(child.stdout.take().expect("child stdout"));
-        Mcp { child, stdin: Some(stdin), stdout, next_id: 0 }
+        let stderr = child.stderr.take();
+        Mcp { child, stdin: Some(stdin), stdout, stderr, next_id: 0 }
     }
 
     fn send_line(&mut self, line: &str) {
@@ -132,6 +150,15 @@ impl Mcp {
         drop(self.stdin.take());
         self.child.wait().expect("wait for adapter")
     }
+
+    /// Close stdin (EOF), read the adapter's log to its end, and reap.
+    fn finish_logged(mut self) -> (std::process::ExitStatus, String) {
+        drop(self.stdin.take());
+        let mut log = String::new();
+        let mut stderr = self.stderr.take().expect("an adapter spawned logged");
+        stderr.read_to_string(&mut log).expect("read the adapter's log");
+        (self.child.wait().expect("wait for adapter"), log)
+    }
 }
 
 impl Drop for Mcp {
@@ -167,17 +194,73 @@ fn width_of(addr: &str, last: u64) -> String {
     comps.join(".")
 }
 
+/// wire.md §Rejections' own example: the write gate's answer to a frame
+/// that carries no live session — the adapter's one cue to reissue.
+const UNAUTHENTICATED: &str =
+    r#"{"code":"unauthenticated","disposition":"permanent","op":"insert","resp":"rejected"}"#;
+
+/// An acknowledged write, as skepd spells one.
+const ACK: &str = r#"{"addr":"1.0.1.0.1.0.1.1","at":7,"resp":"ack_addr"}"#;
+
+/// Session tokens a stub issues (wire.md §Sessions: 32 lowercase hex).
+const TOKEN: &str = "9f3a6c21d4b8e07a5c1b2d4e6f708192";
+const OLD: &str = "0123456789abcdef0123456789abcdef";
+const NEW: &str = "fedcba9876543210fedcba9876543210";
+
+/// One insert's arguments — any write will do; the stub reads none of it.
+fn an_insert() -> Value {
+    json!({"doc": "1.0.1.0.1", "at": {"subspace": "1", "ordinal": "1"}, "values": ["x"]})
+}
+
+/// A `/session` 200 issuing `token` to principal 1.
+fn session_answer(token: &str) -> Vec<u8> {
+    reply(200, &format!(r#"{{"principal":1,"session":"{token}"}}"#))
+}
+
+/// An answer the connection broke in the middle of: its `Content-Length`
+/// promises 64 bytes, and 7 arrive.
+fn cut_short() -> Vec<u8> {
+    b"HTTP/1.1 200 X\r\nContent-Length: 64\r\nConnection: close\r\n\r\n{\"at\":7".to_vec()
+}
+
+/// The session token a stub request carried, if any.
+fn session_of(request: &str) -> Option<&str> {
+    let (head, _) = request.split_once("\r\n\r\n").expect("a request head");
+    head.lines().find_map(|line| {
+        let (name, value) = line.split_once(':')?;
+        name.eq_ignore_ascii_case("skepd-session").then(|| value.trim())
+    })
+}
+
+/// A stub request's body: what follows its head.
+fn body_of(request: &str) -> &str {
+    request.split_once("\r\n\r\n").expect("a request head").1
+}
+
+/// The adapter run to completion: `args`, the three variables removed and
+/// then `env` set, stdin empty.
+fn run_adapter(args: &[&str], env: &[(&str, &str)]) -> Output {
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_skep-mcp"));
+    cmd.args(args);
+    for var in ["SKEPD_URL", "SKEP_PRINCIPAL", "SKEP_COMMONS"] {
+        cmd.env_remove(var);
+    }
+    cmd.envs(env.iter().copied());
+    cmd.output().expect("run skep-mcp")
+}
+
 // ── the tests ────────────────────────────────────────────────────────────
 
 #[test]
 fn initialize_and_tools_list_serve_the_catalog() {
-    let dir = TempDir::new("init");
-    let sd = spawn_daemon(dir.path(), 0);
-    let port = sd.port();
-
-    let mut mcp = Mcp::spawn(port, "1");
+    // No daemon: nothing below dials skepd.
+    let mut mcp = Mcp::spawn(1, "1");
     let init = mcp.initialize();
-    assert_eq!(init["protocolVersion"], "2025-06-18", "protocolVersion echoes the client's");
+    assert_eq!(
+        init["protocolVersion"], "2025-06-18",
+        "a client naming 2025-06-18 is answered it — also the fallback, so this cannot tell \
+         an echo from a constant"
+    );
     assert_eq!(init["serverInfo"]["name"], "skep");
     assert!(
         init["instructions"].as_str().is_some_and(|s| !s.is_empty()),
@@ -222,8 +305,19 @@ fn initialize_and_tools_list_serve_the_catalog() {
     // Stdin EOF is the clean exit.
     let status = mcp.finish();
     assert!(status.success(), "clean exit on stdin EOF: {status:?}");
+}
 
-    sd.shutdown();
+/// A client that names no protocolVersion is answered the revision this
+/// server was written against, 2025-06-18 — params without one, or no
+/// params at all. No daemon: initialize never dials.
+#[test]
+fn initialize_answers_the_fallback_revision_when_none_is_named() {
+    let mut mcp = Mcp::spawn(1, "1");
+    let v = mcp.request("initialize", json!({"capabilities": {}}));
+    assert_eq!(v["result"]["protocolVersion"], "2025-06-18", "params without a revision: {v}");
+    mcp.send_line(r#"{"jsonrpc":"2.0","id":"bare","method":"initialize"}"#);
+    let v = mcp.read_message();
+    assert_eq!((&v["id"], &v["result"]["protocolVersion"]), (&json!("bare"), &json!("2025-06-18")));
 }
 
 #[test]
@@ -240,6 +334,14 @@ fn session_info_reports_principal_account_health() {
     assert_eq!(info["account"].as_str(), Some(account.as_str()), "account: {info}");
     assert_eq!(info["health"]["ok"], json!(true));
     assert!(info["health"]["log_position"].is_u64(), "health rides along: {info}");
+
+    // An undelegated principal's account is null — wire.md's maybe_addr for
+    // an unknown principal — and session_info still answers, never isError.
+    let mut stranger = Mcp::spawn(port, "2");
+    stranger.initialize();
+    let info = stranger.call_json("session_info", json!({}));
+    assert_eq!(info["principal"], json!(2), "{info}");
+    assert!(info["account"].is_null(), "an undelegated principal's account: {info}");
 
     sd.shutdown();
 }
@@ -494,6 +596,276 @@ fn slot_form_faults_surface_as_normal_results() {
     assert_eq!(v["code"], "empty_type_resolution");
 
     sd.shutdown();
+}
+
+// ── the session rules, against a stub daemon ─────────────────────────────
+
+/// Every answer but `unauthenticated` is the tool result, byte for byte and
+/// never `isError`, from ONE exchange: an ack — whose reissue would apply
+/// the write twice — and a rejection of each disposition, `retry` among
+/// them. The session is held first, so no open rides along; a second
+/// exchange would take the next case's reply as a session answer, or meet
+/// the stub's closed listener, and come back `isError`. The ack is spelled
+/// as skepd never spells one (wire.md §Determinism: sorted keys, no
+/// whitespace), so a result rebuilt from parsed JSON cannot match it.
+#[test]
+fn every_answer_but_unauthenticated_comes_back_verbatim_from_one_exchange() {
+    let answers = [
+        r#"{"resp": "ack_addr", "at": 7, "addr": "1.0.1.0.1.0.1.2"}"#,
+        r#"{"code":"durability","disposition":"retry","op":"insert","resp":"rejected"}"#,
+        r#"{"code":"doc_not_registered","disposition":"reorder","op":"insert","resp":"rejected"}"#,
+        r#"{"code":"poisoned","disposition":"halt","op":"insert","resp":"rejected"}"#,
+        r#"{"code":"not_owner","disposition":"permanent","op":"insert","resp":"rejected"}"#,
+    ];
+    let mut replies = vec![reply(200, UNAUTHENTICATED), session_answer(TOKEN), reply(200, ACK)];
+    replies.extend(answers.iter().map(|a| reply(200, a)));
+    let (port, stub) = stub_daemon(replies);
+    let mut mcp = Mcp::spawn(port, "1");
+    mcp.initialize();
+    assert_eq!(mcp.call("insert", an_insert()), (false, ACK.to_string()), "premise: a session");
+    for answer in answers {
+        assert_eq!(mcp.call("insert", an_insert()), (false, answer.to_string()), "{answer}");
+    }
+    let requests = stub.join().expect("the stub daemon");
+    assert_eq!(requests.len(), 3 + answers.len(), "one exchange each");
+}
+
+/// `unauthenticated` is the cue: the adapter opens a bare session — a
+/// request that carries no token — and reissues the very frame once under
+/// the token it was issued; the reissue's answer is the tool result.
+#[test]
+fn unauthenticated_opens_a_bare_session_and_reissues_the_frame_once_under_its_token() {
+    let (port, stub) =
+        stub_daemon(vec![reply(200, UNAUTHENTICATED), session_answer(TOKEN), reply(200, ACK)]);
+    let mut mcp = Mcp::spawn(port, "1");
+    mcp.initialize();
+    assert_eq!(mcp.call("insert", an_insert()), (false, ACK.to_string()), "the reissue's answer");
+    let r = stub.join().expect("the stub daemon");
+    let lines: Vec<&str> = r.iter().map(|q| q.lines().next().unwrap_or("")).collect();
+    assert_eq!(lines, ["POST /op HTTP/1.1", "POST /session HTTP/1.1", "POST /op HTTP/1.1"]);
+    let tokens: Vec<Option<&str>> = r.iter().map(|q| session_of(q)).collect();
+    assert_eq!(tokens, [None, None, Some(TOKEN)], "the token each exchange carried");
+    assert_eq!(body_of(&r[2]), body_of(&r[0]), "the reissue is the very frame");
+}
+
+/// A second `unauthenticated`, answered to the reissue, is data like any
+/// other rejection: the tool result, `isError` false, after three
+/// exchanges — no second open, no loop.
+#[test]
+fn a_second_unauthenticated_passes_through_as_data() {
+    let (port, stub) = stub_daemon(vec![
+        reply(200, UNAUTHENTICATED),
+        session_answer(TOKEN),
+        reply(200, UNAUTHENTICATED),
+    ]);
+    let mut mcp = Mcp::spawn(port, "1");
+    mcp.initialize();
+    assert_eq!(mcp.call("insert", an_insert()), (false, UNAUTHENTICATED.to_string()));
+    assert_eq!(stub.join().expect("the stub daemon").len(), 3, "three exchanges, no more");
+}
+
+/// A failed exchange is never reissued — not even one whose answer broke
+/// off mid-body, after the daemon may well have committed the write: the
+/// failure is the tool result, `isError`, and the reply a reissue would
+/// have taken is still waiting when the test comes for it.
+#[test]
+fn a_failed_exchange_is_never_reissued() {
+    let (port, stub) = stub_daemon(vec![cut_short(), reply(200, ACK)]);
+    let mut mcp = Mcp::spawn(port, "1");
+    mcp.initialize();
+    let (is_error, text) = mcp.call("insert", an_insert());
+    assert!(is_error, "the broken answer is the result, not a reissue's ack: {text}");
+    assert!(text.starts_with(&format!("skepd at http://127.0.0.1:{port}: response: ")), "{text}");
+    let mut drain = TcpStream::connect(("127.0.0.1", port)).expect("the stub still listens");
+    drain.write_all(b"GET /drain HTTP/1.1\r\n\r\n").expect("the drain request");
+    let requests = stub.join().expect("the stub daemon");
+    assert!(requests[1].starts_with("GET /drain "), "the second reply went to: {}", requests[1]);
+}
+
+/// The token the adapter holds is the newest the daemon issued, and it
+/// rides every op from that op's first attempt on: a held token goes out at
+/// once, with no reopen; after a restart's `unauthenticated` the reopen
+/// carries no token, dead or live, and the reissue the new one alone.
+#[test]
+fn the_held_token_rides_each_op_until_a_reopen_replaces_it() {
+    let (port, stub) = stub_daemon(vec![
+        reply(200, UNAUTHENTICATED), // the first write opens
+        session_answer(OLD),
+        reply(200, ACK),
+        reply(200, ACK),             // the next rides OLD at once
+        reply(200, UNAUTHENTICATED), // a restart killed OLD
+        session_answer(NEW),
+        reply(200, ACK),
+    ]);
+    let mut mcp = Mcp::spawn(port, "1");
+    mcp.initialize();
+    for _ in 0..3 {
+        assert_eq!(mcp.call("insert", an_insert()), (false, ACK.to_string()));
+    }
+    let r = stub.join().expect("the stub daemon");
+    let tokens: Vec<Option<&str>> = r.iter().map(|q| session_of(q)).collect();
+    assert_eq!(tokens, [None, None, Some(OLD), Some(OLD), Some(OLD), None, Some(NEW)]);
+    assert!(r[5].starts_with("POST /session "), "the reopen: {}", r[5]);
+}
+
+/// GET /health is token-blind (wire.md §Sessions): the health read carries
+/// no token even while one is held. Its answer rides in session_info whole,
+/// a member this adapter never heard of included (wire.md: a seventh member
+/// is no violation).
+#[test]
+fn the_health_read_carries_no_token_and_is_reported_whole() {
+    let health = r#"{"log_position":9,"ok":true,"seventh":"unheard of"}"#;
+    let (port, stub) = stub_daemon(vec![
+        reply(200, UNAUTHENTICATED),
+        session_answer(TOKEN),
+        reply(200, ACK),
+        reply(200, r#"{"addr":"1.0.2","as_of":9,"resp":"maybe_addr"}"#),
+        reply(200, health),
+    ]);
+    let mut mcp = Mcp::spawn(port, "1");
+    mcp.initialize();
+    assert_eq!(mcp.call("insert", an_insert()), (false, ACK.to_string()), "premise: a session");
+    let info = mcp.call_json("session_info", json!({}));
+    let whole: Value = serde_json::from_str(health).expect("the stub's health is JSON");
+    assert_eq!(info, json!({"account": "1.0.2", "health": whole, "principal": 1}));
+    let r = stub.join().expect("the stub daemon");
+    assert!(r[4].starts_with("GET /health "), "{}", r[4]);
+    assert_eq!(session_of(&r[4]), None, "a held token rode GET /health: {}", r[4]);
+}
+
+/// No session token leaves the adapter: not in a tool result — an answer,
+/// or a failure after the token rode the request — and not in a log line,
+/// across a session's open and its reopen. The stub issues the tokens, so
+/// the test knows exactly what must never appear.
+#[test]
+fn a_session_token_reaches_no_tool_result_and_no_log_line() {
+    let (port, stub) = stub_daemon(vec![
+        reply(200, UNAUTHENTICATED),
+        session_answer(OLD),
+        reply(200, ACK),
+        reply(200, UNAUTHENTICATED),
+        session_answer(NEW),
+        cut_short(),
+    ]);
+    let mut mcp = Mcp::spawn_logged(port, "1");
+    mcp.initialize();
+    let (_, answer) = mcp.call("insert", an_insert());
+    let (is_error, failure) = mcp.call("insert", an_insert());
+    assert!(is_error, "premise: the reissue's broken answer is a failure: {failure}");
+    let (status, log) = mcp.finish_logged();
+    assert!(status.success(), "{status:?}");
+    let r = stub.join().expect("the stub daemon");
+    assert_eq!((session_of(&r[2]), session_of(&r[5])), (Some(OLD), Some(NEW)), "both rode");
+    assert_eq!(log.matches("bare session opened").count(), 2, "both opens logged: {log}");
+    let channels = [("an answer", &answer), ("a failure", &failure), ("the log", &log)];
+    for token in [OLD, NEW] {
+        for (channel, text) in channels {
+            assert!(!text.contains(token), "{channel} carries a session token: {text}");
+        }
+    }
+}
+
+// ── startup, and no daemon behind the adapter ────────────────────────────
+
+/// A daemon the adapter cannot reach is what `isError` marks: a wire op and
+/// session_info alike answer `isError`, the adapter's own message naming
+/// the origin and the failed step, and the adapter keeps answering. Port 1
+/// sits below 1024, where no unprivileged process can listen, so the
+/// connect is refused.
+#[test]
+fn an_unreachable_daemon_answers_is_error_naming_its_origin() {
+    let mut mcp = Mcp::spawn(1, "1");
+    mcp.initialize();
+    for (tool, args) in [("insert", an_insert()), ("session_info", json!({}))] {
+        let (is_error, text) = mcp.call(tool, args);
+        assert!(is_error, "{tool}, no daemon: isError: {text}");
+        assert!(text.starts_with("skepd at http://127.0.0.1:1: connect: "), "{tool}: {text}");
+    }
+    assert_eq!(mcp.request("ping", json!({}))["result"], json!({}), "the adapter keeps answering");
+}
+
+/// SKEP_PRINCIPAL is required and an integer: unset, startup refuses by
+/// name; set to anything that is no non-negative integer, it refuses
+/// quoting the value — never binding a default principal.
+#[test]
+fn skep_principal_is_required_and_an_integer() {
+    let url = ("SKEPD_URL", "http://127.0.0.1:1");
+    let out = run_adapter(&[], &[url]);
+    assert_eq!(out.status.code(), Some(1), "unset: {out:?}");
+    assert!(String::from_utf8_lossy(&out.stderr).contains("SKEP_PRINCIPAL is required"), "{out:?}");
+    for bad in ["", "abc", "-1", "1.5", "18446744073709551616"] {
+        let out = run_adapter(&[], &[url, ("SKEP_PRINCIPAL", bad)]);
+        assert_eq!(out.status.code(), Some(1), "'{bad}': {out:?}");
+        let err = String::from_utf8_lossy(&out.stderr);
+        assert!(err.contains(&format!("SKEP_PRINCIPAL: '{bad}' is not a principal")), "{err}");
+    }
+}
+
+/// A word the usage does not name, or `--tools-file` without its path, is a
+/// usage error — exit 2, the usage on stderr — never ignored: a mistyped
+/// `--tools-file` must not quietly serve the embedded catalog instead.
+#[test]
+fn an_unknown_word_or_a_flag_without_its_value_is_a_usage_error() {
+    let env = [("SKEPD_URL", "http://127.0.0.1:1"), ("SKEP_PRINCIPAL", "1")];
+    for (args, says) in [
+        (&["--tool-file", "mine.json"][..], "unknown argument '--tool-file'"),
+        (&["--tools-file"][..], "--tools-file needs a value"),
+    ] {
+        let out = run_adapter(args, &env);
+        assert_eq!(out.status.code(), Some(2), "{args:?}: {out:?}");
+        let err = String::from_utf8_lossy(&out.stderr);
+        assert!(err.contains(says) && err.contains("usage: skep-mcp"), "{args:?}: {err}");
+    }
+}
+
+/// SKEPD_URL unset is the origin the usage names; set but malformed,
+/// startup refuses naming the variable — never falling back to that
+/// default. Nothing is dialed: stdin is empty.
+#[test]
+fn skepd_url_unset_is_the_default_origin_and_malformed_refuses() {
+    let out = run_adapter(&[], &[("SKEP_PRINCIPAL", "1")]);
+    assert!(out.status.success(), "{out:?}");
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("http://127.0.0.1:8642"), "the startup line names the default: {err}");
+    for bad in ["https://127.0.0.1:8642", "127.0.0.1:8642", "http://127.0.0.1:8642/op"] {
+        let out = run_adapter(&[], &[("SKEPD_URL", bad), ("SKEP_PRINCIPAL", "1")]);
+        assert_eq!(out.status.code(), Some(1), "'{bad}': {out:?}");
+        assert!(String::from_utf8_lossy(&out.stderr).contains("SKEPD_URL"), "'{bad}': {out:?}");
+    }
+}
+
+/// A harness that hangs up stdout ends the adapter: the first answer it
+/// cannot write is its exit, stdin still open — no orphan goes on taking
+/// requests whose answers nobody reads.
+#[test]
+fn a_closed_stdout_ends_the_adapter() {
+    let mut child = Command::new(env!("CARGO_BIN_EXE_skep-mcp"))
+        .env("SKEPD_URL", "http://127.0.0.1:1")
+        .env("SKEP_PRINCIPAL", "1")
+        .env_remove("SKEP_COMMONS")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("spawn skep-mcp");
+    drop(child.stdout.take());
+    let mut stdin = child.stdin.take().expect("child stdin");
+    stdin.write_all(b"{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"ping\"}\n").expect("a request");
+    stdin.flush().expect("flush");
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let exited = loop {
+        match child.try_wait().expect("poll the adapter") {
+            Some(status) => break Some(status),
+            None if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(20)),
+            None => break None,
+        }
+    };
+    if exited.is_none() {
+        let _ = child.kill();
+        let _ = child.wait();
+    }
+    drop(stdin);
+    assert!(exited.is_some(), "the adapter outlived its closed stdout by 10 s, stdin open");
 }
 
 /// SKEP_COMMONS set: the instructions carry the commons sentence with the

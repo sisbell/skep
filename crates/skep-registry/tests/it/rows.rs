@@ -30,7 +30,7 @@ struct MapLine {
 /// question the map answers of a row is asked of every line at once
 /// (`the_table_is_the_maps_line_by_line`), so a row the table gains
 /// (REG-1.15) owes one line here and meets every question where it joins.
-/// No line already here changes its Deposits: a new reading row joins under
+/// No line already here changes its Deposits: a new subtype row joins under
 /// the takedown record or the policy link, whose bare ordinals carry no
 /// deposit already (REG-1.19), and a kind that reads one way takes none
 /// (REG-1.86, HOW A FORM CHANGES LATER).
@@ -137,7 +137,7 @@ fn the_table_is_the_maps_line_by_line() {
         assert_eq!(
             r.carries_deposits(),
             line.carries_deposits,
-            "{of:?}: no line's Deposits moves — a kind that reads one way takes no reading row \
+            "{of:?}: no line's Deposits moves — a kind that reads one way takes no subtype row \
              (REG-1.86, HOW A FORM CHANGES LATER)"
         );
         assert!(std::ptr::eq(read(), &r.address), "{of:?}: the reader is the row's own address");

@@ -39,7 +39,7 @@ back — is this crate:
   names) — `{"type":"binding","prefix":…}`
   and `{"type":"endpoint","origins":[…]}`, each with `replaces` where a
   later record names the one it replaces and `sig` where signed, under THE
-  CANONICAL RULE: `parse(b)` answers a body only where `b ==
+  CANONICAL RULE: `parse(b)` answers a record only where `b ==
   encode(parse(b))`. The parse checks the FORM of every member — `type` the
   kind the caller names, no JSON number anywhere, no member beside the row's
   own, `prefix` and `replaces` addresses in dotted decimal, `origins`

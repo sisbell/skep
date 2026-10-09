@@ -13,7 +13,7 @@
 //! (two readings), the policy link (five) — carries NONE on its bare
 //! ordinal, every reading a row at a prefix under it. The map's "Deposits"
 //! column is that test, computed off the subtype rows' kinds and never
-//! stored: [`Row::carries_deposits`], whose doc says why a reading row the
+//! stored: [`Row::carries_deposits`], whose doc says why a subtype row the
 //! table gains moves no row already in it, and why a kind that reads ONE
 //! way never takes one.
 //!
@@ -232,17 +232,17 @@ impl Row {
     /// subtype row carries deposits; a kind's own row carries them exactly
     /// where no subtype row nests under the kind, a kind that reads ONE way,
     /// and none where its readings are rows under it. Computed off
-    /// [`Subtype::ALL`] and [`Subtype::kind`] and never stored, so a reading
+    /// [`Subtype::ALL`] and [`Subtype::kind`] and never stored, so a subtype
     /// row the table gains (REG-1.15) carries deposits by the test itself
     /// once its subtype joins `Subtype::ALL`, as the completeness arm
-    /// requires of every subtype row, and moves no row already in the table.
+    /// requires of every subtype, and moves no row already in the table.
     /// A new reading is the takedown record's or the policy link's, which take
     /// one at no cost, their bare ordinals carrying no deposit already
-    /// (REG-1.19). A kind that reads ONE way takes no reading row, since a
-    /// subtype under it would leave the deposits already on its bare ordinal,
-    /// which no rewrite reaches (REG-1.60), on an ordinal this test reads as
+    /// (REG-1.19). A kind that reads ONE way takes no subtype row, since one
+    /// under it would leave the deposits already on its bare ordinal, which
+    /// no rewrite reaches (REG-1.60), on an ordinal this test reads as
     /// carrying none — so its later form is the MEMBER form and never a
-    /// reading row (REG-1.86, HOW A FORM CHANGES LATER).
+    /// subtype row (REG-1.86, HOW A FORM CHANGES LATER).
     pub fn carries_deposits(&self) -> bool {
         match self.of {
             RowOf::Subtype(_) => true,

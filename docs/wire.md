@@ -3276,7 +3276,8 @@ whose `type` is another kind's is no record of the slot's kind; NO member
 is a JSON number, anywhere in the body; `prefix` and `replaces` parse as
 addresses in their one spelling (no sign, no zero-padded component, the
 whole T4-valid); `origins` is non-empty; `sig`, where present, is a
-string. Whether an origin is https with a routable host is the resolver's
+string. An origin's admissibility — https or a self-authenticating
+origin, the host term with it (REG-3.34, REG-3.35) — is the resolver's
 check, and whether `replaces` names the deposit current at the record's
 position is the reader's currency rule — a later record naming one that
 is no longer current COMMITS and is inert at every reader (REG-1.10,
@@ -3307,8 +3308,8 @@ does, made by the writing hand's key over the entry frame under the
 `record` grammar — `board` `H.1`'s pair, `account` the HOME's account (ω
 over the home: the claimant's for a binding in the registrar's doc 1, the
 node account's for an endpoint in its own), `doc` the home, and the
-body's five rows: the link's type address, its target as stored (the
-account bound, or none), the `replaces` row EMPTY (the member rides
+`record` body's five rows: the link's type address, its target as stored
+(the account bound, or none), the `replaces` row EMPTY (the member rides
 INSIDE the signed body for these kinds, and no `replaces` link is written
 with them), the lineage row EMPTY, and the SIG-LESS CANONICAL PROJECTION
 of the body. The record covers BOTH of the deposit's positions: the atom's

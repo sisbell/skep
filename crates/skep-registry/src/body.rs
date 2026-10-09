@@ -1,7 +1,7 @@
 //! THE TWO BODIES THIS CRATE PINS — the BINDING's and the ENDPOINT's
 //! (REG-1.86's table, its first two rows) — under THE CANONICAL RULE: the
 //! credential records' admission sentence applied to a flat one-object body,
-//! `parse(b)` answering a body only where `b == encode(parse(b))`. So each
+//! `parse(b)` answering a record only where `b == encode(parse(b))`. So each
 //! body has ONE form: the sig-less projection a record-grade signature
 //! ranges over is the one every reader re-derives, byte for byte, from the
 //! bytes it parses, and a body spelled any other way — a space, a member out
@@ -120,8 +120,9 @@ pub struct Endpoint {
 /// of no origin is no value of this type, so `[]` — which no reader holds
 /// ([`ParseRefusal::EmptyOrigins`]) — is a body no caller can build. Each
 /// entry is the string the org wrote — any string, the empty one included —
-/// and whether it names an origin a reader can dial is that reader's
-/// question, never [`parse`]'s.
+/// and its admissibility, https or a self-authenticating origin with the
+/// host term (REG-3.34, REG-3.35), is its reader's question, the
+/// resolver's at its walk, never [`parse`]'s.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Origins(Vec<String>);
 
@@ -163,7 +164,12 @@ impl<'a> IntoIterator for &'a Origins {
     }
 }
 
-/// A body of one of the two kinds.
+/// A body of one of the two kinds, its `sig` aside: the `type` its variant
+/// names and the members REG-1.86's table lists for its row, `replaces`
+/// among them — every member but the one REG-1.86 (e) reserves, `sig`,
+/// whose presence, absence and value are no input to any read. [`Record`]
+/// holds the `sig` beside it, and [`encode`] writes the two as the one body
+/// they spell.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Body {
     Binding(Binding),
@@ -188,12 +194,12 @@ impl Body {
     }
 }
 
-/// A parsed record: the body and the `sig` member's string as it stands —
-/// present or absent, the empty string included, which is a `sig` and never
-/// `None`. What a verifier reads off a committed atom: `sig` the signature
-/// under trial, and [`Record::canonical_sigless`] the body its `record`
-/// frame carries — the frame, not these bytes alone, being what the
-/// signature was made over.
+/// A parsed record: its [`Body`] and the `sig` member's string as it stands
+/// — present or absent, the empty string included, which is a `sig` and
+/// never `None`. What a verifier reads off a committed atom: `sig` the
+/// signature under trial, and [`Record::canonical_sigless`] the sig-less
+/// projection, which its `record` frame carries as row (5) — the frame, not
+/// these bytes alone, being what the signature was made over.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Record {
     pub body: Body,
@@ -346,9 +352,10 @@ impl std::error::Error for ParseRefusal {}
 /// dotted-decimal spelling; `origins` is a non-empty array of strings; and
 /// `sig`, where present, is a string (REG-1.86 (e): "a STRING where signed
 /// ops comes to write one"), the one form [`encode`] writes it in.
-/// Whether an entry of `origins` is an origin — https with a routable host
-/// — is its reader's question, the resolver's at its walk, an entry being
-/// any string the org wrote ([`Origins`]); whether an address member is
+/// Whether an entry of `origins` is admissible — https or a
+/// self-authenticating origin, the host term with it (REG-3.34, REG-3.35) —
+/// is its reader's question, the resolver's at its walk, an entry being any
+/// string the org wrote ([`Origins`]); whether an address member is
 /// written in the LOCAL FORM of the board the record is homed on (REG-1.86
 /// (c), (g)) is its writer's — a global-form address is spelled alike, and
 /// no parse tells the two apart — and qualifying it by that board's node

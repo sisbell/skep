@@ -83,6 +83,7 @@ pub(super) struct CheckedRule {
 /// built where the node budget admits it
 /// (`RuleError::TriggerExpansionTooLarge`) and handed on, so no later pass
 /// re-derives it or has to argue that it fits.
+#[derive(Debug)]
 struct Validated {
     domain: TypedDom,
     trigger: TriggerTerm,

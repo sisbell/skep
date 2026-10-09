@@ -488,7 +488,7 @@ impl<'a> Checker<'a> {
     }
 
     /// A child at `depth`, required at `expected`.
-    fn sub(&self, ctx: &Ctx, t: &ArcTerm, expected: Sort, depth: u32) -> Result<Checked, TypeError> {
+    fn sub(&self, ctx: &Ctx, t: &Term, expected: Sort, depth: u32) -> Result<Checked, TypeError> {
         let c = self.check_term(ctx, t, depth)?;
         want(expected, c.sort)?;
         Ok(c)
@@ -499,8 +499,8 @@ impl<'a> Checker<'a> {
     fn bool2(
         &self,
         ctx: &Ctx,
-        a: &ArcTerm,
-        b: &ArcTerm,
+        a: &Term,
+        b: &Term,
         depth: u32,
         mk: fn(ArcTerm, ArcTerm) -> Term,
     ) -> Result<Checked, TypeError> {
@@ -519,8 +519,8 @@ impl<'a> Checker<'a> {
         &self,
         ctx: &Ctx,
         var: VarId,
-        dom: &ArcDom,
-        body: &ArcTerm,
+        dom: &Dom,
+        body: &Term,
         depth: u32,
     ) -> Result<(CheckedDom, Checked), TypeError> {
         let cd = self.check_dom(ctx, dom, depth)?;
@@ -533,7 +533,7 @@ impl<'a> Checker<'a> {
     fn extremum(
         &self,
         ctx: &Ctx,
-        d: &ArcDom,
+        d: &Dom,
         depth: u32,
         mk: fn(ArcDom) -> Term,
     ) -> Result<Checked, TypeError> {
@@ -777,17 +777,11 @@ impl<'a> Checker<'a> {
             if self.nodes.spent() {
                 return Err(TypeError::TooLarge);
             }
-            let c = self
-                .check_term(ctx, &inst, inst_depth)
-                .and_then(|c| {
-                    want(Sort::Bool, c.sort)?;
-                    Ok(c)
-                })
-                .map_err(|e| match e {
-                    // The budgets are the whole term's, not an instance's.
-                    TypeError::TooDeep | TypeError::TooLarge => e,
-                    other => TypeError::RegInstanceIllTyped(Box::new(other)),
-                })?;
+            let c = self.sub(ctx, &inst, Sort::Bool, inst_depth).map_err(|e| match e {
+                // The budgets are the whole term's, not an instance's.
+                TypeError::TooDeep | TypeError::TooLarge => e,
+                other => TypeError::RegInstanceIllTyped(Box::new(other)),
+            })?;
             acc = Some(match acc {
                 None => c,
                 Some(prev) => Checked {
@@ -811,7 +805,7 @@ impl<'a> Checker<'a> {
             }
         };
         // A one-argument atom at a type position: the argument at `sort`.
-        let arg = |e: &ArcTerm, sort: Sort| self.sub(ctx, e, sort, child_depth);
+        let arg = |e: &Term, sort: Sort| self.sub(ctx, e, sort, child_depth);
         let (atom, sort, ref_free) = match a {
             Atom::IsK(tr, e) => {
                 let k = self.guarded(tr, Guard::Cataloged)?;
@@ -910,8 +904,8 @@ impl<'a> Checker<'a> {
     fn prim2(
         &self,
         ctx: &Ctx,
-        x: &ArcTerm,
-        y: &ArcTerm,
+        x: &Term,
+        y: &Term,
         depth: u32,
         rule: PrimRule,
         mk: fn(ArcTerm, ArcTerm) -> Prim,
@@ -929,7 +923,7 @@ impl<'a> Checker<'a> {
     fn prim1(
         &self,
         ctx: &Ctx,
-        x: &ArcTerm,
+        x: &Term,
         depth: u32,
         rule: PrimRule,
         mk: fn(ArcTerm) -> Prim,

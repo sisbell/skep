@@ -704,7 +704,7 @@ impl Rd<'_> {
         self.charge(len.div_ceil(8))?; // the limbs `from_bytes_be` will allocate
         let bytes = self.b.get(self.pos..).and_then(|rest| rest.get(..len)).ok_or(Malformed)?;
         self.pos += len;
-        if bytes.is_empty() || (bytes.len() > 1 && bytes[0] == 0) {
+        if matches!(bytes, [] | [0, _, ..]) {
             return Err(Malformed); // canonical big-endian only
         }
         Ok(Nat::from_bytes_be(bytes))

@@ -55,11 +55,11 @@ pub(crate) trait Rewrite {
     }
 }
 
-fn arc_term<R: Rewrite + ?Sized>(r: &mut R, t: &ArcTerm) -> ArcTerm {
+fn arc_term<R: Rewrite + ?Sized>(r: &mut R, t: &Term) -> ArcTerm {
     Arc::new(r.term(t))
 }
 
-fn arc_dom<R: Rewrite + ?Sized>(r: &mut R, d: &ArcDom) -> ArcDom {
+fn arc_dom<R: Rewrite + ?Sized>(r: &mut R, d: &Dom) -> ArcDom {
     Arc::new(r.dom(d))
 }
 

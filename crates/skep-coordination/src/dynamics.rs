@@ -293,9 +293,7 @@ impl<'a> Analyzer<'a> {
     fn read_filter_fp(&self) -> Footprint {
         let mut fp = Footprint::default();
         if self.view == View::Default {
-            for (j, _) in self.catalog.read_filter_classes() {
-                fp.active.insert(j.clone());
-            }
+            fp.active.extend(self.catalog.read_filter_classes().iter().map(|(j, _)| j.clone()));
         }
         fp
     }
@@ -462,9 +460,8 @@ impl<'a> Analyzer<'a> {
             Atom::TargetsKeyed(e) => {
                 let ae = self.term(e);
                 let mut fp = ae.fp;
-                for (c, _) in self.catalog.reverse_lookup_classes() {
-                    fp.active.insert(c.clone());
-                }
+                fp.active
+                    .extend(self.catalog.reverse_lookup_classes().iter().map(|(c, _)| c.clone()));
                 fp.targets_keyed = true;
                 state_read(fp)
             }

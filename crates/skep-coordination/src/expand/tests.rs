@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use skep_address::{Address, Tumbler};
+use skep_address::Address;
 
 use super::*;
 use crate::ast::Prim;
@@ -9,11 +9,11 @@ use crate::fixture::{a, v};
 use crate::value::{SignedTerm, Sort};
 
 /// A referent table standing in for the memo.
-struct Stub(HashMap<Tumbler, Arc<TypedTerm>>);
+struct Stub(HashMap<Address, Arc<TypedTerm>>);
 
 impl DefSource for Stub {
     fn resolve_def(&self, addr: &Address) -> Option<Arc<TypedTerm>> {
-        self.0.get(addr.tumbler()).cloned()
+        self.0.get(addr).cloned()
     }
 }
 
@@ -44,7 +44,7 @@ fn expands_a_reference_with_fresh_disjoint_names() {
         true, // ref-free
         2,    // reach
     );
-    let stub = Stub(HashMap::from([(p.tumbler().clone(), Arc::new(referent))]));
+    let stub = Stub(HashMap::from([(p.clone(), Arc::new(referent))]));
     // Host: ∃ y ∈ L_dom :: P(y).
     let host = Term::Exists {
         var: v(2),
@@ -91,7 +91,7 @@ fn a_universal_binder_takes_a_fresh_name_and_stays_universal() {
         true, // ref-free
         2,    // reach
     );
-    let stub = Stub(HashMap::from([(p.tumbler().clone(), Arc::new(referent))]));
+    let stub = Stub(HashMap::from([(p.clone(), Arc::new(referent))]));
     let host = Term::Ref { addr: p, args: vec![Arc::new(Term::Var(v(2)))] };
     let (x0, x1) = (VarId::expansion(0), VarId::expansion(1));
     let expected = Term::Let {
@@ -148,7 +148,7 @@ fn every_binding_position_takes_a_fresh_name_in_its_own_scope() {
         true, // ref-free
         5,    // reach
     );
-    let stub = Stub(HashMap::from([(p.tumbler().clone(), Arc::new(referent))]));
+    let stub = Stub(HashMap::from([(p.clone(), Arc::new(referent))]));
     // The host spells its arguments with the referent's OWN parameter
     // names, which the expansion must not touch.
     let host = Term::Ref {
@@ -216,7 +216,7 @@ fn the_expansion_charges_domain_formers_in_both_walks() {
             true, // ref-free
             0,    // reach: the expander does not read it
         );
-        Stub(HashMap::from([(p.tumbler().clone(), Arc::new(referent))]))
+        Stub(HashMap::from([(p.clone(), Arc::new(referent))]))
     };
     let host = Term::Ref { addr: p.clone(), args: vec![] };
     assert!(Expander::new(&stub(2048)).expand(&host).is_ok(), "2 048 leaves fit the budget");

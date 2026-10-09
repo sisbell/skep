@@ -46,7 +46,7 @@ use std::collections::HashSet;
 use std::slice::from_ref;
 use std::sync::Arc;
 
-use skep_address::{Address, Tumbler};
+use skep_address::Address;
 use skep_arrangement::{Deposit, VPos};
 use skep_content::{ContentStore, Val};
 use skep_kernel::{Seq, Snapshot};
@@ -100,12 +100,12 @@ fn parse_def(content: &ContentStore, start: &Address) -> Result<SignedTerm, Pars
 fn direct_referents(t: &Term) -> Vec<Address> {
     struct DirectReferents {
         out: Vec<Address>,
-        seen: HashSet<Tumbler>,
+        seen: HashSet<Address>,
     }
     impl Visit for DirectReferents {
         fn term(&mut self, t: &Term) {
             if let Term::Ref { addr, .. } = t {
-                if self.seen.insert(addr.tumbler().clone()) {
+                if self.seen.insert(addr.clone()) {
                     self.out.push(addr.clone());
                 }
             }

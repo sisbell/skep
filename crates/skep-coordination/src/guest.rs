@@ -95,6 +95,7 @@ impl From<Slice> for View {
 type ForwardClaims = BTreeMap<Address, OrdSet<Address>>;
 
 /// One forward walk's result over the visible operative claims.
+#[derive(Debug)]
 struct Walk {
     /// The traversed path from the starting node, inclusive of it.
     path: Vec<Address>,

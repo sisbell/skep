@@ -50,6 +50,7 @@ pub(crate) struct ExpansionTooLarge;
 /// the fresh-name counter — the ONE mint site for reserved names, so an
 /// expansion's name sequence is a function of its content — and the node
 /// budget, one sum across both walks.
+#[derive(Debug)]
 struct State {
     next_name: u32,
     nodes: Budget,

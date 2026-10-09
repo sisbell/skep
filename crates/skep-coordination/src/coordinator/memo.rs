@@ -12,7 +12,7 @@
 use std::collections::HashMap;
 use std::sync::{Arc, PoisonError, RwLock};
 
-use skep_address::{Address, Tumbler};
+use skep_address::Address;
 
 use crate::check::TypedTerm;
 
@@ -86,7 +86,7 @@ pub(super) struct ContentBreach;
 /// write under it is an `or_insert_with` of a fully built entry, so a panic
 /// mid-write leaves nothing torn to guard.
 #[derive(Debug)]
-pub(super) struct DefMemo(RwLock<HashMap<Tumbler, MemoEntry>>);
+pub(super) struct DefMemo(RwLock<HashMap<Address, MemoEntry>>);
 
 impl DefMemo {
     pub(super) fn new() -> DefMemo {
@@ -97,7 +97,7 @@ impl DefMemo {
     /// def".
     pub(super) fn get(&self, start: &Address) -> Option<DefStatus> {
         let memo = self.0.read().unwrap_or_else(PoisonError::into_inner);
-        memo.get(start.tumbler()).map(DefStatus::from)
+        memo.get(start).map(DefStatus::from)
     }
 
     /// Record the derived status for an ever-registered start — first fill
@@ -108,7 +108,7 @@ impl DefMemo {
         derived: Result<TypedTerm, ContentBreach>,
     ) -> DefStatus {
         let mut memo = self.0.write().unwrap_or_else(PoisonError::into_inner);
-        let entry = memo.entry(start.tumbler().clone()).or_insert_with(|| match derived {
+        let entry = memo.entry(start.clone()).or_insert_with(|| match derived {
             Ok(t) => MemoEntry::Defined(Arc::new(t)),
             Err(ContentBreach) => MemoEntry::Poisoned,
         });

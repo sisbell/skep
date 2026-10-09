@@ -493,7 +493,7 @@ impl PublicKey {
     /// the deleted classical token naming no row — while
     /// `parse("mldsa65-ed25519", "zz")` is `BadHex`; a length test hoisted
     /// ahead of the decode would flip that last row, which is what
-    /// `public_key_surface` watches.
+    /// `parse_refuses_in_its_pinned_order_token_then_hex_then_length` watches.
     pub fn parse(alg: &str, hex: &str) -> Result<PublicKey, ParseKeyError> {
         let row = row_of(alg)?;
         let bytes = hex_decode(hex).ok_or(ParseKeyError::BadHex)?;

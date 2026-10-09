@@ -223,50 +223,76 @@ fn a_rows_token_admits_its_own_width_and_never_another_rows() {
 
 /// THE MARKER-TAG TABLE beside `ALGS` (signed ops; the design record §7.3
 /// (i)'s two-row `u8 ↔ token` table): every row's token is an `ALGS` row
-/// whose raw length is the row's own key width — and every `ALGS` row has a
-/// marker tag, the key kinds being the hybrid rows alone; the tags are
-/// distinct, non-zero (0 is the empty marker slot) and not `2` (reserved for
-/// the final FIPS 206); the two lookups answer the whole row, and a key's own
-/// [`PublicKey::sig_alg_row`] answers the same row as a value; the deleted
-/// classical token names no row; and the pinned widths are the ruled ones —
-/// tag 1's 1,984-byte key and 3,373-byte blob (6,746 hex), tag 3's 929 and
-/// 730 (1,460 hex) — the widths a session's `sig` is admitted at, and no
-/// other (AUTH-6.3). The KEY PIN's halves read out of a parsed hybrid at
-/// those widths.
+/// whose raw length is the row's own key width, and every `ALGS` row has a
+/// marker tag — the key kinds are the hybrid rows alone.
 #[test]
-fn sig_algs_and_algs_agree_and_the_pins_are_the_ruled_widths() {
+fn every_marker_tag_row_is_an_algs_row_of_its_own_key_width() {
     for row in SIG_ALGS {
-        let alg_row = ALGS.iter().find(|a| a.token == row.token).expect("a SIG_ALGS token is an ALGS row");
-        assert_eq!(alg_row.raw_len, row.key_len(), "{}: the row's key width is its ALGS raw_len", row.token);
+        let alg_row =
+            ALGS.iter().find(|a| a.token == row.token).expect("a SIG_ALGS token is an ALGS row");
+        assert_eq!(
+            alg_row.raw_len,
+            row.key_len(),
+            "{}: the row's key width is its ALGS raw_len",
+            row.token
+        );
+    }
+    assert_eq!(SIG_ALGS.len(), ALGS.len(), "every key kind signs under a marker tag");
+}
+
+/// The marker tags are distinct, never `0` — the empty marker slot — and
+/// never `2`, reserved for the final FIPS 206; neither of those two names a
+/// row.
+#[test]
+fn the_marker_tags_are_distinct_and_never_the_empty_slot_or_the_reserved_tag() {
+    for row in SIG_ALGS {
         assert_ne!(row.tag, 0, "tag 0 is the empty marker slot");
         assert_ne!(row.tag, 2, "tag 2 is reserved for the final FIPS 206");
-        let token_row = SigAlgRow::of_token(row.token);
-        assert_eq!(token_row, Some(row), "{}: the token names this row", row.token);
-        assert_eq!(SigAlgRow::of_tag(row.tag), Some(row), "{}: the tag names this row", row.token);
-        let key = PublicKey::parse(row.token, &"0a".repeat(row.key_len())).unwrap();
-        assert_eq!(key.pq_half().len(), row.pq_key_len, "the PQ half leads");
-        assert_eq!(key.ed25519_half().len(), 32, "the Ed25519 half closes");
-        // The key's own row, reached by its arm and never by the table, is the
-        // table's row for its token — the whole row, as a value.
-        assert_eq!(key.sig_alg_row(), row, "{}: the key's row is the table's", row.token);
-        assert_eq!(SigAlgRow::of_token(key.alg()), Some(key.sig_alg_row()), "{}", row.token);
     }
     for (i, a) in SIG_ALGS.iter().enumerate() {
         for b in &SIG_ALGS[i + 1..] {
             assert_ne!(a.tag, b.tag, "two rows name one tag");
         }
     }
-    assert_eq!(SIG_ALGS.len(), ALGS.len(), "every key kind signs under a marker tag");
-    assert_eq!(SigAlgRow::of_token("ed25519"), None, "the deleted classical token names no row");
     assert_eq!(SigAlgRow::of_tag(0), None, "tag 0 is the empty marker slot");
     assert_eq!(SigAlgRow::of_tag(2), None, "tag 2 is reserved for the final FIPS 206");
-    // The tag lookup is `const`: a width a type is sized by is read off the
-    // row at compile time, never by a consumer's own walk of the table.
+}
+
+/// Every route to a marker row answers the whole row, the same one — its
+/// token, its tag, and a key's own [`PublicKey::sig_alg_row`] — and the
+/// deleted classical token names no row.
+#[test]
+fn the_token_the_tag_and_the_key_each_reach_the_same_marker_row() {
+    for row in SIG_ALGS {
+        let token_row = SigAlgRow::of_token(row.token);
+        assert_eq!(token_row, Some(row), "{}: the token names this row", row.token);
+        assert_eq!(SigAlgRow::of_tag(row.tag), Some(row), "{}: the tag names this row", row.token);
+        let key = PublicKey::parse(row.token, &"0a".repeat(row.key_len())).unwrap();
+        // The key's own row, reached by its arm and never by the table, is the
+        // table's row for its token — the whole row, as a value.
+        assert_eq!(key.sig_alg_row(), row, "{}: the key's row is the table's", row.token);
+        assert_eq!(SigAlgRow::of_token(key.alg()), Some(key.sig_alg_row()), "{}", row.token);
+    }
+    assert_eq!(SigAlgRow::of_token("ed25519"), None, "the deleted classical token names no row");
+}
+
+/// The tag lookup is `const`: a width a type is sized by is read off the row
+/// at compile time, never by a consumer's own walk of the table.
+#[test]
+fn the_marker_tag_lookup_reads_a_blob_width_at_compile_time() {
     const TAG1_BLOB: usize = match SigAlgRow::of_tag(1) {
         Some(row) => row.sig_len(),
         None => 0,
     };
     assert_eq!(TAG1_BLOB, 3373, "tag 1's blob width, read at compile time");
+}
+
+/// The ruled widths, by literal: tag 1's 1,984-byte key and 3,373-byte blob
+/// (6,746 hex), tag 3's 929 and 730 (1,460 hex) — the widths a `sig` naming
+/// no row is admitted at, and no other (AUTH-6.3) — each key width the
+/// `*_KEY_LEN` constant beside it, and the preview saying so in its token.
+#[test]
+fn the_marker_rows_carry_the_ruled_widths() {
     let tag1 = SigAlgRow::of_token(ALG_MLDSA65_ED25519).unwrap();
     assert_eq!((tag1.tag, tag1.key_len(), tag1.sig_len(), tag1.pq_sig_len), (1, 1984, 3373, 3309));
     assert_eq!(tag1.key_len(), MLDSA65_ED25519_KEY_LEN);
@@ -274,14 +300,33 @@ fn sig_algs_and_algs_agree_and_the_pins_are_the_ruled_widths() {
     assert_eq!((tag3.tag, tag3.key_len(), tag3.sig_len(), tag3.pq_sig_len), (3, 929, 730, 666));
     assert_eq!(tag3.key_len(), FNDSA512_PREVIEW_ED25519_KEY_LEN);
     assert!(ALG_FNDSA512_PREVIEW_ED25519.contains("preview"), "the preview says so in its token");
-    // A hybrid's Ed25519 half is its LAST 32 raw bytes, the PQ half everything
-    // before them (the KEY PIN).
+}
+
+/// THE KEY PIN, read out of a parsed hybrid: the post-quantum half leads at
+/// its row's width and the Ed25519 half is the LAST 32 raw bytes — at every
+/// row, and at tag 1 over bytes that vary by position, so a swap or a
+/// misplaced split shows.
+#[test]
+fn a_parsed_hybrid_leads_with_its_post_quantum_half_and_closes_with_its_ed25519_half() {
+    for row in SIG_ALGS {
+        let key = PublicKey::parse(row.token, &"0a".repeat(row.key_len())).unwrap();
+        assert_eq!(key.pq_half().len(), row.pq_key_len, "the PQ half leads");
+        assert_eq!(key.ed25519_half().len(), 32, "the Ed25519 half closes");
+    }
     let raw: Vec<u8> = (0..1984u32).map(|i| (i % 251) as u8).collect();
-    let k = PublicKey::parse(ALG_MLDSA65_ED25519, &raw.iter().map(|b| format!("{b:02x}")).collect::<String>()).unwrap();
+    let k = PublicKey::parse(
+        ALG_MLDSA65_ED25519,
+        &raw.iter().map(|b| format!("{b:02x}")).collect::<String>(),
+    )
+    .unwrap();
     assert_eq!(k.ed25519_half(), &raw[1952..]);
     assert_eq!(k.pq_half(), &raw[..1952]);
-    // One fingerprint over the whole concatenated raw value (the design
-    // record §4.4): a hybrid's fingerprint is not either half's.
+}
+
+/// One fingerprint over the whole concatenated raw value (the design record
+/// §4.4): a hybrid's fingerprint is not either half's.
+#[test]
+fn a_hybrids_fingerprint_covers_its_whole_raw_value() {
     let hybrid = PublicKey::parse(ALG_MLDSA65_ED25519, &"0a".repeat(1984)).unwrap();
     let want: [u8; 32] =
         Sha256::digest(framed(KEY_TAG, &[ALG_MLDSA65_ED25519.as_bytes(), &[0x0a; 1984]])).into();
@@ -440,24 +485,51 @@ fn a_public_key_is_a_few_words_wide() {
     );
 }
 
-/// AUTH-1.2/AUTH-1.3/AUTH-1.4 — `PublicKey::parse` is syntax-only and
-/// case-insensitive; `to_hex` is lowercase; `alg`/`raw` read the table row —
-/// at the tag-1 row, 1,984 raw bytes and 3,968 hex.
+/// AUTH-1.2/AUTH-1.3 — a key answers its row's token and raw value — at the
+/// tag-1 row, 1,984 raw bytes — and spells that value as lowercase hex, two
+/// digits a byte, 3,968 characters.
 #[test]
-fn public_key_surface() {
+fn a_key_answers_its_rows_token_and_spells_its_raw_value_in_lowercase_hex() {
     let k = key(0xab);
     assert_eq!(k.alg(), "mldsa65-ed25519");
     assert_eq!(k.raw().len(), 1984);
     let key_hex = k.to_hex();
     assert_eq!(key_hex.len(), 3968);
     assert_eq!(key_hex, key_hex.to_lowercase());
+}
 
-    assert_eq!(
-        PublicKey::parse("mldsa65-ed25519", &key_hex.to_uppercase()).unwrap(),
-        k
-    );
+/// AUTH-1.3 — `parse` reads hex in either case: a key's hex spelled in
+/// uppercase parses to that key, so `parse` inverts `to_hex` whatever case a
+/// caller wrote.
+#[test]
+fn parse_reads_either_case_and_inverts_to_hex() {
+    let k = key(0xab);
+    let key_hex = k.to_hex();
+    assert_eq!(PublicKey::parse("mldsa65-ed25519", &key_hex.to_uppercase()).unwrap(), k);
+}
+
+/// AUTH-1.4 — SYNTAX ONLY: `parse` decodes no point and no lattice key, so
+/// bytes of the row's raw width are a key whatever they hold — 1,984 bytes of
+/// `0xff` here.
+#[test]
+fn parse_judges_syntax_alone_and_admits_any_bytes_of_the_rows_width() {
     assert_eq!(PublicKey::parse("mldsa65-ed25519", &"ff".repeat(1984)).err(), None);
+}
 
+/// AUTH-1.4 — `parse`'s checks run in ONE order and the first failure is the
+/// verdict: the token, then the hex, then the length. A token no row carries
+/// is `UnknownAlg` whatever the hex: hex that does not decode — the card's
+/// own example, `("rsa", "zz")` — a key's own hex, and the deleted classical
+/// token over a classical-width key. Then hex that does not decode is
+/// `BadHex`: non-hex digits, `"zz"`, and an odd length, a key's hex one
+/// character short. Only then is a wrong length `BadLength`: a key's hex one
+/// byte short. A decode hoisted above the lookup answers `BadHex` for
+/// `("rsa", "zz")`; a length test hoisted above the decode answers
+/// `BadLength` for `"zz"` and for the odd length.
+#[test]
+fn parse_refuses_in_its_pinned_order_token_then_hex_then_length() {
+    let key_hex = key(0xab).to_hex();
+    assert_eq!(PublicKey::parse("rsa", "zz"), Err(ParseKeyError::UnknownAlg));
     assert_eq!(PublicKey::parse("rsa", &key_hex), Err(ParseKeyError::UnknownAlg));
     // The deleted classical token names no row (AUTH-1.5): `UnknownAlg`, as
     // any unadmitted token, whatever the key.
@@ -471,7 +543,15 @@ fn public_key_surface() {
         PublicKey::parse("mldsa65-ed25519", &key_hex[..key_hex.len() - 2]),
         Err(ParseKeyError::BadLength)
     );
+}
 
+/// `parse`'s two arguments are both `&str`, so a caller can pass either where
+/// the other belongs, and neither is ever read as the other: a key's hex in
+/// the token's place names no row (`UnknownAlg`), and a token in the hex's
+/// place is no hex (`BadHex`).
+#[test]
+fn parse_never_reads_a_keys_hex_as_a_token_or_a_token_as_hex() {
+    let key_hex = key(0xab).to_hex();
     assert_eq!(PublicKey::parse(&key_hex, ALG_MLDSA65_ED25519), Err(ParseKeyError::UnknownAlg));
     assert_eq!(
         PublicKey::parse(ALG_MLDSA65_ED25519, ALG_MLDSA65_ED25519),
@@ -552,10 +632,10 @@ fn the_declared_tag_bytes_are_pinned() {
 /// record's `alg` member and every entry frame's first member, so renaming
 /// one moves all three for every key of its row, and every signature made
 /// under the old spelling stops verifying. Tag 1's spelling is also stated by
-/// `public_key_surface` and the grammar corpus's literal records; tag 3's is
-/// stated nowhere else in this crate — `contains("preview")` admits most
-/// renames — and outside it only skepd's tag-3 golden would notice, as a
-/// fingerprint digest that moved.
+/// `a_key_answers_its_rows_token_and_spells_its_raw_value_in_lowercase_hex`
+/// and the grammar corpus's literal records; tag 3's is stated nowhere else in
+/// this crate — `contains("preview")` admits most renames — and outside it
+/// only skepd's tag-3 golden would notice, as a fingerprint digest that moved.
 #[test]
 fn the_alg_tokens_are_pinned_by_value() {
     assert_eq!(ALG_MLDSA65_ED25519, "mldsa65-ed25519");
@@ -652,19 +732,23 @@ fn error_types_lift_into_dyn_error() {
     assert_eq!(boxed.to_string(), PublishRefusal::PastBudget.to_string());
 }
 
-/// Two of this crate's promises are kept by a trait it does NOT implement,
-/// which no call can test and a derive added for symmetry breaks — so they
-/// are held here at compile time, as `PublishBody`'s not-`Clone` is beside its
-/// type: the `_` below is inferred while the blanket impl is the only one that
-/// applies, and a type meeting the second makes the path ambiguous. `Inert`
-/// is deliberately not `Display`, and so no `std::error::Error`: its wire
-/// detail is [`Inert::detail`]'s join on the payload arm, and the `{}` a
-/// consumer reaches for first would answer the token alone —
-/// `malformed_payload` where the detail is `malformed_payload:bad_record`. And
-/// `Enrollment::new` is the ONLY constructor (AUTH-1.25): a derived
-/// `Deserialize` — `PublicKey`, `Fingerprint` and `Enrolled` each carry one —
-/// would be a second, building a label outside AUTH-1.24's domain that no
-/// record admits and that I1's round trip, drawing through `new`, never meets.
+/// Three of this crate's promises are kept by a trait their type does NOT
+/// implement, which no call can test and a derive added for symmetry breaks —
+/// so they are held here at compile time, as `PublishBody`'s not-`Clone` is
+/// beside its type: the `_` below is inferred while the blanket impl is the
+/// only one that applies, and a type meeting the second makes the path
+/// ambiguous. `Inert` is deliberately not `Display`, and so no
+/// `std::error::Error`: its wire detail is [`Inert::detail`]'s join on the
+/// payload arm, and the `{}` a consumer reaches for first would answer the
+/// token alone — `malformed_payload` where the detail is
+/// `malformed_payload:bad_record`. `Enrollment::new` is the ONLY constructor
+/// (AUTH-1.25): a derived `Deserialize` — `PublicKey`, `Fingerprint` and
+/// `Enrolled` each carry one — would be a second, building a label outside
+/// AUTH-1.24's domain that no record admits and that I1's round trip, drawing
+/// through `new`, never meets. And [`HybridBlob::parse_hex`] is its type's
+/// ONLY constructor (AUTH-4.34): a derived `Deserialize` — `PublicKey` and
+/// `Fingerprint` carry one in the same file — would be a second, admitting a
+/// blob of any width, the one value the type exists to make unrepresentable.
 const _: fn() = || {
     trait AmbiguousIfDisplay<A> {
         fn check() {}
@@ -683,6 +767,7 @@ const _: fn() = || {
     struct IsDeserialize;
     impl<T: for<'de> serde::Deserialize<'de>> AmbiguousIfDeserialize<IsDeserialize> for T {}
     let _ = <Enrollment as AmbiguousIfDeserialize<_>>::check;
+    let _ = <HybridBlob as AmbiguousIfDeserialize<_>>::check;
 };
 
 /// The fold's seam forwards through `&T` and `Box<T>`, as std's own traits

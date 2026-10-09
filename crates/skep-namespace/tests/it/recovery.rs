@@ -334,6 +334,20 @@ fn a_journal_frame_re_enters_only_through_its_field_doors() {
         bincode::deserialize::<M3Rec>(&sub_account_frame).expect("a sub-account seat decodes"),
         M3Rec::register_principal(a(&[1, 0, 1, 1]), ID2)
     );
+    // A crate holding a decoded seat reads it through its payload's accessors
+    // and has no way to write it: `Principal`'s fields are private, so the
+    // account tier this door just checked stands for as long as the record
+    // does, and a record pushed from here is one its own replay decodes (the
+    // E0616 pair on `M3Rec` pins the write's refusal).
+    let M3Rec::RegisterPrincipal(principal) =
+        bincode::deserialize::<M3Rec>(&sub_account_frame).expect("a sub-account seat decodes")
+    else {
+        panic!("a RegisterPrincipal frame decodes into a RegisterPrincipal");
+    };
+    assert_eq!(
+        (principal.prefix(), principal.id()),
+        (&a(&[1, 0, 1, 1]), ID2)
+    );
 
     // …and no door carries an op's CAP. `register_node` refuses a node past
     // MAX_NODE_COMPONENTS and `delegate` a prefix past

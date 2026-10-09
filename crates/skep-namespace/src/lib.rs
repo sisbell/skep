@@ -148,9 +148,10 @@
 //! `World`/`Record`: the engine implements [`HasM3`] for its
 //! `W: WorldState` (the read accessor), lifts M3's deltas via
 //! `impl From<M3Rec> for W::Record` (the write-side mirror), and dispatches
-//! the variant that carries an [`M3Rec`] into the fold [`M3State::apply_m3`].
-//! M3's slice is fully serialized — nothing skip-serialized — so it takes
-//! M2's default `rebuild_derived`: restored verbatim from the loaded
+//! the variant that carries an [`M3Rec`] into the fold [`M3State::apply_m3`],
+//! the one fold that moves the slice ([`HasM3`] states what its implementor
+//! owes). M3's slice is fully serialized — nothing skip-serialized — so it
+//! takes M2's default `rebuild_derived`: restored verbatim from the loaded
 //! checkpoint, then advanced by replaying the post-checkpoint records.
 
 #![forbid(unsafe_code)]
@@ -164,9 +165,9 @@ mod ns;
 // The ghost region: the five reserved type addresses M7 reads, and the floor
 // that keeps the allocator past them.
 mod ghost;
-// The journal delta `M3Rec`, `Allocate`'s sealed payload `Allocation`, and
-// the two field doors, and the identity type it names with that type's two
-// fixed ids.
+// The journal delta `M3Rec`, its two sealed payloads `Allocation` and
+// `Principal`, and the two field doors, and the identity type it names with
+// that type's two fixed ids.
 mod record;
 // M3's slice: `M3State`, genesis and the fold, the frontier arithmetic and
 // the two registry caps; beneath it `state/mint.rs` (§A: the lock keys, the
@@ -180,7 +181,9 @@ pub use error::{CreateDocumentError, DelegateError, MintError, RegisterNodeError
 pub use ghost::{ghost_home_document, ghost_position, GHOST_POSITIONS};
 pub use ns::{first_document_address, first_version_address};
 pub use ops::Namespace;
-pub use record::{Allocation, M3Rec, PrincipalId, BOOTSTRAP_PRINCIPAL, SYSTEM_PRINCIPAL};
+pub use record::{
+    Allocation, M3Rec, Principal, PrincipalId, BOOTSTRAP_PRINCIPAL, SYSTEM_PRINCIPAL,
+};
 pub use state::{
     head_document, prefix_contains, system_account, system_node, M3State, MAX_NODE_COMPONENTS,
     MAX_PRINCIPAL_COMPONENTS,
@@ -195,6 +198,29 @@ pub use state::{
 /// `snapshot.world().m3()` for a read. READ side only; its write-side mirror
 /// is the engine's `impl From<M3Rec> for W::Record` lift, through which the
 /// transact-driving ops stage deltas via `stg.push(rec.into())`.
+///
+/// IMPLEMENTORS OWE one fact the signature cannot carry: `m3()` is the very
+/// slice the world's `WorldState::apply` folds this crate's records into —
+/// every [`M3Rec`] the `From<M3Rec>` lift carries, unchanged, through
+/// [`M3State::apply_m3`], once per record — and that fold is the only thing
+/// that moves it. Every other record's fold carries the slice through
+/// unchanged; a checkpoint carries it through this crate's own serde form,
+/// neither skipped nor defaulted; and the world's `rebuild_derived` hands it
+/// back as it was decoded, M3's share of that rebuild being M2's default, the
+/// identity. Three promises rest on it. A mint called on
+/// `stg.working().m3()` reads the frontier every record pushed before it
+/// advanced, so successive mints in one composite issue distinct addresses
+/// and, given the caller's half ([`M3Rec::Allocate`]), no address is issued
+/// twice (B8, the single baptismal authority it names). [`Namespace`]'s
+/// gates, read off `stg.base().m3()`, judge the state the op commits into.
+/// And every answer this crate promises never regresses —
+/// [`M3State::is_allocated`]'s `true` (B0), a seat (O12/O13), a document's
+/// bit (PUB-1.9), a `Some` from [`M3State::latest_version`],
+/// [`M3State::next_account_prefix`] or [`M3State::next_content_address`] —
+/// holds from one `snapshot.world().m3()` to the next only because nothing
+/// else replaces the slice. An implementor that answered any other
+/// `M3State`, or moved this one by any other path, would void all three, and
+/// nothing in this crate can check it.
 pub trait HasM3 {
     /// M3's slice of the world state.
     fn m3(&self) -> &M3State;

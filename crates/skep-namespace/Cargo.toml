@@ -11,13 +11,14 @@ readme = "README.md"
 [features]
 # `test-hooks` compiles in `M3Rec`'s three test constructors — `allocate`,
 # `register_node`, `register_principal` — the one way a crate other than this
-# one builds a record, its two registry variants being `#[non_exhaustive]`
-# and `Allocate`'s payload, `Allocation`, keeping its fields private. The
-# suites that seed M3 state through the fold build with them, some of it state
-# no op produces. DEFAULT-OFF: this crate's tests turn it on through the self
-# dev-dependency below, and the five crates whose suites seed M3 state on
-# their own dev-dependency lines, so a build that compiles no test compiles
-# none of it.
+# one constructs a record of its own choosing without decoding bytes,
+# `RegisterNode` being `#[non_exhaustive]` and the payloads of `Allocate` and
+# `RegisterPrincipal`, `Allocation` and `Principal`, keeping their fields
+# private. The suites that seed M3 state through the fold build with them,
+# some of it state no op produces. DEFAULT-OFF: this crate's tests turn it on
+# through the self dev-dependency below, and the five crates whose suites
+# seed M3 state on their own dev-dependency lines, so a build that compiles
+# no test compiles none of it.
 test-hooks = []
 
 [dependencies]

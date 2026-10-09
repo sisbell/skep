@@ -1122,9 +1122,9 @@ five mints (§A) and the two peeks — `next_account_prefix` and
 beside the mints they call so the two files depend one way — and
 `state/query.rs` every other query (§C). Its `test-hooks` feature (default
 off) compiles in `M3Rec`'s three test constructors, the one way another
-crate's suite builds a record; `scripts/gate-full.sh` runs its doctests —
-the `compile_fail` pairs on `M3Rec` that pin the seals a foreign crate
-meets.
+crate's suite constructs a record without decoding one;
+`scripts/gate-full.sh` runs its doctests — the `compile_fail` pairs on
+`M3Rec` that pin the seals a foreign crate meets.
 
 Rules that hold across its files:
 
@@ -1144,11 +1144,14 @@ Rules that hold across its files:
   folds its one account the same way. So a registered account is owned at
   exactly its own prefix, and so is every document in it — its owner
   account, which `M3State::account_seat` reads by one lookup. The fold
-  checks neither half, and only this crate builds or edits a record —
-  `M3Rec` and its two registry variants are `#[non_exhaustive]`, as
-  `M5Rec`'s and `LinkRec`'s are, and `Allocate`'s payload keeps its fields
+  checks neither half, and only this crate constructs a record, and no
+  other edits one past its doors — `M3Rec` and `RegisterNode` are
+  `#[non_exhaustive]`, as `M5Rec`'s and `LinkRec`'s variants are, and the
+  payloads of `Allocate` and `RegisterPrincipal` keep their fields
   private — so a second path that allocates an account, or seats a
-  principal, is one inside it and owes the other half.
+  principal, is one inside it and owes the other half. A record decoded
+  from bytes rather than built here owes both halves too, and no door
+  checks them.
 - **A namespace has one spelling.** `NsKey`'s fields are private to
   `src/ns.rs`, so every frontier key, and every chain lock key encoded from
   one, is built there. The two registry keys are M3's own, crate-private.
@@ -1163,12 +1166,12 @@ Rules that hold across its files:
   commons vocabulary's in the ghost home document's — and rest on it, so a
   third element chain is a format change those names must move ahead of.
 - **The slice's shape is its format.** `M3State`'s fields, `M3Rec`'s
-  variants and `Allocation`'s fields are appended, never inserted or
-  reordered: bincode writes fields in order and variants by index, and
-  writes `Allocate` over its payload exactly as it would a struct variant
-  carrying those fields. `tests/it/genesis.rs` pins genesis's bytes field
-  by field, and `tests/it/recovery.rs` each variant's against a raw
-  struct-variant twin.
+  variants and the fields of `Allocation` and `Principal` are appended,
+  never inserted or reordered: bincode writes fields in order and variants
+  by index, and writes `Allocate` and `RegisterPrincipal` over their
+  payloads exactly as it would struct variants carrying those fields.
+  `tests/it/genesis.rs` pins genesis's bytes field by field, and
+  `tests/it/recovery.rs` each variant's against a raw struct-variant twin.
 
 Its integration suite is one binary, `tests/it/`: one file per surface over
 the shared `common` world, and `heap`, the binary's byte-counting

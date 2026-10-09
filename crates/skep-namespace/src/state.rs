@@ -34,7 +34,9 @@ use skep_address::{ordinal, validate, Address, GateViolation, Level, Nat, Tumble
 
 use crate::ghost::{ghost_floor, ghost_home_document};
 use crate::ns::{is_content_or_link_slot, namespace_of, nth_in, NsKey};
-use crate::record::{Allocation, M3Rec, PrincipalId, BOOTSTRAP_PRINCIPAL, SYSTEM_PRINCIPAL};
+use crate::record::{
+    Allocation, M3Rec, Principal, PrincipalId, BOOTSTRAP_PRINCIPAL, SYSTEM_PRINCIPAL,
+};
 
 /// The `published` an `Allocate` carries OUTSIDE the document tier — an
 /// account, a content or link element — where publication is not a property
@@ -158,11 +160,13 @@ pub struct M3State {
     ///   genesis (which seats π₀ at the node prefix `[1]`) and by `delegate`'s
     ///   hoisted `NotAccountTier` gate. On the journal path
     ///   `RegisterPrincipal`'s prefix door re-establishes it — stricter than
-    ///   O1a, since every seat `delegate` stages is account-tier exactly — but
-    ///   a seat can also arrive inside a whole [`M3State`], which decodes by
-    ///   bare derive because genesis's own seat is node-tier. So ω re-checks
-    ///   it as well — the private walk `omega` filters by tier — ω being the
-    ///   one reader whose answer to a below-tier entry would be a PASS.
+    ///   O1a, since every seat `delegate` stages is account-tier exactly — and
+    ///   the record's payload keeps its fields private ([`crate::Principal`]),
+    ///   so no holder rewrites a decoded prefix past that door. But a seat can
+    ///   also arrive inside a whole [`M3State`], which decodes by bare derive
+    ///   because genesis's own seat is node-tier. So ω re-checks it as well —
+    ///   the private walk `omega` filters by tier — ω being the one reader
+    ///   whose answer to a below-tier entry would be a PASS.
     /// * the seat–allocation coupling — an account-tier prefix is seated iff
     ///   it is allocated, the seated ⇒ allocated half being ASN-0042's
     ///   PrefixBaptismCoupling — is a PRODUCER invariant like id-injectivity.
@@ -416,10 +420,10 @@ impl M3State {
                 addr: system_account(),
                 published: NO_PUBLICATION_STATE,
             }),
-            M3Rec::RegisterPrincipal {
+            M3Rec::RegisterPrincipal(Principal {
                 prefix: system_account(),
                 id: SYSTEM_PRINCIPAL,
-            },
+            }),
             // Two creates under it, both born published: doc 1, then doc 2 (H).
             M3Rec::Allocate(Allocation {
                 addr: ghost_home_document(),
@@ -462,11 +466,16 @@ impl M3State {
     /// staged where [`M3Rec::Allocate`] forbids, rather than a live error
     /// path. A debug build fail-stops on the contiguity `debug_assert`; a
     /// release build folds the record as written, moving the frontier to its
-    /// ordinal. What the fold trusts for both conditions is an IN-PROCESS
-    /// producer, and [`M3Rec`]'s seals keep every one inside this crate — the
-    /// mints, the ops and genesis — in a build that compiles no test: no
-    /// other crate builds a record, and none edits the `Allocate` a mint
-    /// returned, whose payload's fields are private.
+    /// ordinal. What the fold trusts for both conditions is the IN-PROCESS
+    /// producer and stager of the record. [`M3Rec`]'s seals keep the producer
+    /// inside this crate in a build that compiles no test — the mints, the
+    /// ops and genesis construct every record, and no other crate constructs
+    /// one or edits the `Allocate` a mint returned, whose payload's fields are
+    /// private — but not the stager: a composite in another crate places the
+    /// record a mint returned, and contiguity rests on where it does
+    /// ([`M3Rec::Allocate`]). A record decoded from bytes rather than
+    /// constructed here carries the first condition through its door and owes
+    /// the second unchecked; [`M3Rec`] states what it costs.
     ///
     /// `Allocate`'s publication bit is folded for a DOCUMENT-tier address and
     /// read for no other (PUB-7.7's fold half, at M3's own allocation record:
@@ -526,8 +535,9 @@ impl M3State {
     /// `SYSTEM_PRINCIPAL`'s seat, onto roots where only π₀'s id is live —
     /// before any delegation can run, and from then on `delegate`'s
     /// `DuplicateId` gate refuses that id. A producer this crate adds owes
-    /// both clauses; [`M3Rec`]'s seals keep every other crate from being one
-    /// in a build that compiles no test.
+    /// both clauses; [`M3Rec`]'s seals keep every other crate from
+    /// constructing one in a build that compiles no test, and a crate that
+    /// decodes a seat from bytes it wrote owes both, unchecked.
     #[must_use = "apply_m3 returns the folded slice; it does not modify the receiver"]
     pub fn apply_m3(&self, r: &M3Rec) -> M3State {
         let mut s = self.clone();
@@ -556,7 +566,7 @@ impl M3State {
             M3Rec::RegisterNode { addr } => {
                 s.nodes.insert(addr.clone());
             }
-            M3Rec::RegisterPrincipal { prefix, id } => {
+            M3Rec::RegisterPrincipal(Principal { prefix, id }) => {
                 // Written once (O12/O13): the first seat stands.
                 if !s.principals.contains_key(prefix) {
                     s.principals.insert(prefix.clone(), *id);

@@ -13,7 +13,7 @@ use skep_address::{parent, validate, Address, Level, Tumbler};
 use skep_kernel::{Attestation, Kernel, Seq, TxnError, WorldState};
 
 use crate::error::{CreateDocumentError, DelegateError, RegisterNodeError};
-use crate::record::{M3Rec, PrincipalId};
+use crate::record::{M3Rec, Principal, PrincipalId};
 use crate::state::{
     bootstrap_root, prefix_contains, M3State, MAX_NODE_COMPONENTS, MAX_PRINCIPAL_COMPONENTS,
 };
@@ -363,10 +363,10 @@ where
             // records carry the allocator's own value.
             stg.push(rec.into());
             stg.push(
-                M3Rec::RegisterPrincipal {
+                M3Rec::RegisterPrincipal(Principal {
                     prefix: next,
                     id: new_id,
-                }
+                })
                 .into(),
             );
             Ok(new_prefix)

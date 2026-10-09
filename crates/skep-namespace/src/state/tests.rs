@@ -362,10 +362,10 @@ fn the_top_down_probe_sees_strict_descendants_and_nothing_else() {
             .iter()
             .enumerate()
             .fold(M3State::genesis(), |s, (nth, prefix)| {
-                s.apply_m3(&M3Rec::RegisterPrincipal {
+                s.apply_m3(&M3Rec::RegisterPrincipal(Principal {
                     prefix: a(prefix),
                     id: PrincipalId(nth as u64 + 1),
-                })
+                }))
             });
         assert_eq!(
             s.has_principal_strictly_under(&p),
@@ -435,14 +435,14 @@ fn effective_owner_pair_is_omega_unprojected() {
     let (x, x_id) = (a(&[1, 0, 1]), PrincipalId(7));
     let (sub_acct, sub_acct_id) = (a(&[1, 0, 1, 2]), PrincipalId(9));
     let s = M3State::genesis()
-        .apply_m3(&M3Rec::RegisterPrincipal {
+        .apply_m3(&M3Rec::RegisterPrincipal(Principal {
             prefix: x.clone(),
             id: x_id,
-        })
-        .apply_m3(&M3Rec::RegisterPrincipal {
+        }))
+        .apply_m3(&M3Rec::RegisterPrincipal(Principal {
             prefix: sub_acct.clone(),
             id: sub_acct_id,
-        });
+        }));
 
     let node = a(&[1]);
     for (probe, expected) in [

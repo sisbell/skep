@@ -162,6 +162,23 @@ fn the_ghost_floor_holds_against_a_regressed_frontier() {
     }
 }
 
+/// §1: the allocator holds the element families to two. Asked to issue an
+/// element off any chain but a content or a link chain, `next_in` panics
+/// naming the guarantee instead of returning an address. No mint builds such
+/// a chain; this is the one a third element family would add, and the first
+/// address it would issue is the commons vocabulary's ENROLLMENT type,
+/// `1.1.0.1.0.1.0.3.1` — subspace 3 of the ghost home document, which every
+/// reader of a type name treats as never minted (AUTH-7.1 horn B;
+/// AUTH-3.70). Reached through `namespace_of`, since no `*_ns` constructor
+/// names that chain.
+#[test]
+#[should_panic(expected = "M3 mints elements on the content and link chains alone")]
+fn the_allocator_refuses_an_element_off_the_content_and_link_chains() {
+    let enroll_type = a(&[1, 1, 0, 1, 0, 1, 0, 3, 1]);
+    let third_family = namespace_of(&enroll_type).expect("an element extends a parent");
+    let _ = M3State::genesis().next_in(&third_family);
+}
+
 /// §1: a stored ZERO is an empty chain at both frontier-end reads — the
 /// reading [`M3State::has_documents`] and [`M3State::latest_version`] each
 /// state, and which neither can reach through M3's own ops, since

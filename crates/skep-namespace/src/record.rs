@@ -79,10 +79,10 @@ pub const SYSTEM_PRINCIPAL: PrincipalId = PrincipalId(9_000_000_000_000_000);
 /// [`M3State::apply_m3`]: crate::M3State::apply_m3
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum M3Rec {
-    /// A mint's COMMIT HALF: advance `frontiers[namespace_of(addr)]` (§1) —
-    /// this record is the only thing that moves a frontier. The `(parent, g)`
-    /// of an `Allocate` is exactly the `NsKey` of the `LockKey` the minting op
-    /// held — frontier key and lock key are the same key.
+    /// A mint's COMMIT HALF: advance the frontier of the chain `addr` lies on
+    /// (§1) — this record is the only thing that moves a frontier — which is
+    /// exactly the chain whose `*_lock_key` its mint pairs with: frontier key
+    /// and lock key are one key.
     ///
     /// WHERE IT MAY BE STAGED — the caller's half of every mint, and the one
     /// obligation M3 cannot check, since the record carries an address and

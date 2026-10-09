@@ -519,6 +519,7 @@ fn membership_is_exact_chain_membership() {
         a(&[1, 0, 1, 0, 1, 0, 1]),       // b_C(d) — the chain's own anchor
         a(&[1, 0, 1, 0, 1, 0, 2]),       // b_L(d) — the link anchor
         a(&[1, 0, 1, 0, 1, 0, 2, 1]),    // the same ordinal in the link subspace
+        a(&[1, 0, 1, 0, 1, 0, 3, 1]),    // the same ordinal in subspace 3, which no chain anchors
         a(&[1, 0, 1, 0, 1, 0, 1, 1, 1]), // one component deeper than c1
         a(&[1, 0, 1, 0, 2, 0, 1, 1]),    // the same ordinal under a sibling doc
         a(&[1, 0, 1, 0, 1, 1]),          // the version chain's first slot

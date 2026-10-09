@@ -14,8 +14,8 @@
 use num_traits::Zero;
 use serde::{Deserialize, Deserializer, Serialize};
 use skep_address::{
-    checked_inc, inc, is_t4_valid, parent, shift, validate, Address, GateViolation, Level, Nat,
-    Tumbler,
+    checked_inc, content_subspace, inc, is_t4_valid, link_subspace, parent, shift, validate,
+    Address, GateViolation, Level, Nat, Tumbler,
 };
 use skep_kernel::{LockKey, Space};
 
@@ -190,6 +190,17 @@ pub(crate) fn namespace_of(a: &Address) -> Option<NsKey> {
 // rather than by naming a subspace: `inc(d, 2)` opens the element field at
 // `s_C`, and `inc(b_C(d), 0)` steps it on to `s_L`.
 //
+// These two are the ONLY element families: no chain is anchored at any other
+// subspace base, so no mint issues an element in subspace 3 or above — and
+// `M3State::next_in` refuses to issue any element `is_mintable_element` does
+// not admit, so a third family fails at its first mint. Type names are
+// spelled in subspace 3 — the commons vocabulary's, in the ghost home
+// document's (AUTH-7.1 horn B) — and their unreachability rests on it
+// (AUTH-3.70; `M3State::is_allocated` states the guarantee). A third element
+// family is therefore a FORMAT change, as moving the ghost floor would be: it
+// allocates names their readers treat as never minted, and those names move
+// first.
+//
 // Each fixed family's `g` is what `generator` yields at that family's FIXED
 // tier pair, noted beside each constructor, so the variants below and the
 // chain-family rule cannot drift apart unnoticed.
@@ -211,6 +222,18 @@ pub(crate) fn link_ns(home: &Address) -> NsKey {
         parent: inc(&content_base(home), 0),
         g: Generator::SameField,
     }
+}
+
+/// Is `e` an element some chain may issue — an element field of exactly
+/// `[s, n]`, `s` the content or link subspace, the shape every member of
+/// [`content_ns`]'s and [`link_ns`]'s chains has? `false` for every other
+/// element — subspace 3 and above, a subspace base `d·0·s`, a deeper field
+/// `d·0·s·x·n` — and for every non-element. Spelled by M1's two subspace
+/// numerals rather than by rebuilding the two keys, so the allocator asks it
+/// on every mint at the cost of one comparison; `ns/tests.rs` holds it equal
+/// to the key-built answer over a generated family of addresses.
+pub(crate) fn is_mintable_element(e: &Address) -> bool {
+    matches!(e.element_field(), Some([s, _]) if *s == content_subspace() || *s == link_subspace())
 }
 pub(crate) fn version_ns(source: &Address) -> NsKey {
     // (source, 1) — Document → Document, the ASN-0123 separate chain.

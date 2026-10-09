@@ -19,11 +19,14 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
   `(anchor, generator)`: account, document, version, content and link
   addresses are minted as the next ordinal on the chain their anchor
   names, gap-free and monotone behind M1's structural-validity gate.
-  Over-allocation is harmless, and an address is never reused given
-  the caller's half — the mint reads the frontier, the record it
-  hands back advances it. Two chains publish their next address as a
-  peek — the mint without its record — for a reader: the account
-  chain's next delegable prefix, and the content chain's next
+  Elements come off two chains per document, content and link, and no
+  third: an element address in any other subspace — subspace 3, where
+  type names are spelled — is never minted, and the allocator refuses
+  to issue one. Over-allocation is harmless, and an address is never
+  reused given the caller's half — the mint reads the frontier, the
+  record it hands back advances it. Two chains publish their next
+  address as a peek — the mint without its record — for a reader: the
+  account chain's next delegable prefix, and the content chain's next
   address, whose ordinal is a document's mint count plus one (the
   content-frontier read's answer). The five reserved type addresses
   (the ghost tumblers — content addresses 1–5 of doc 1 of the system

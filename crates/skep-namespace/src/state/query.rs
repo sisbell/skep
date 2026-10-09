@@ -73,6 +73,17 @@ impl M3State {
     /// — as each mint's record does when staged where [`M3Rec::Allocate`]
     /// says.
     ///
+    /// An ELEMENT is allocated only on one of two chains: its document's
+    /// content chain, `d·0·1·n`, or its link chain, `d·0·2·n` — the only
+    /// element chains any mint builds, and the allocator refuses to issue any
+    /// other element. Every other element address — subspace 3 and above, a
+    /// subspace base `d·0·s`, a deeper field `d·0·s·x·n` — answers `false` on
+    /// every slice M3's own ops produce, on every board running this format.
+    /// Type names are spelled there — the commons vocabulary's, in subspace 3
+    /// of [`crate::ghost_home_document`] (AUTH-7.1 horn B), and any a client
+    /// spells in a document's subspace 3 — and their unreachability
+    /// (AUTH-3.70) rests on it, as the five ghost tumblers rest on the floor.
+    ///
     /// [`M3Rec::Allocate`]: crate::M3Rec::Allocate
     pub fn is_allocated(&self, a: &Address) -> bool {
         match a.level() {
@@ -333,12 +344,12 @@ impl M3State {
     /// COST — one walk of Π: `Σ_{p ∈ Π} |p|` component comparisons, and heap
     /// use that does not grow with `a`, however deep it is, so a probe a caller
     /// made deep costs no more than a shallow one — but every call is Θ(|Π|),
-    /// and |Π| is a number any account holder can raise (`omega` says how);
-    /// the bound is per CALL, so one ω per entry of a walk pays the product. A
-    /// seat below the account tier — representable only off a corrupted
-    /// checkpoint — is never the answer (O1a). Who owns a registered document
-    /// or account is [`M3State::account_seat`]'s question: the same seat by
-    /// one lookup.
+    /// and |Π| is a number any account holder can raise
+    /// ([`crate::Namespace::delegate`] says how); the bound is per CALL, so
+    /// one ω per entry of a walk pays the product. A seat below the account
+    /// tier — representable only off a corrupted checkpoint — is never the
+    /// answer (O1a). Who owns a registered document or account is
+    /// [`M3State::account_seat`]'s question: the same seat by one lookup.
     ///
     /// For WHETHER a given id owns `a` — the authorization question — ask
     /// [`M3State::is_effective_owner`], which settles it without naming the
@@ -475,14 +486,15 @@ impl M3State {
     /// the M5→M3 cross-owner-VERSION seam need, since `principals` is keyed by
     /// PREFIX, not id: an O(|Π|) scan, not a point lookup (the §5 scan) — and
     /// |Π| is unbounded, since O1a bounds a seat's tier and not how many seats
-    /// one holder can create (`omega`). The answer is the registry's own key,
-    /// so the prefix a principal is seated at and the prefix it is reported
-    /// at are one value. SINGLE-VALUED because `delegate` enforces
-    /// id-freshness (`DuplicateId`), so at most one principal carries any id
-    /// (§5/§6). Value-stable across snapshots: prefixes are immutable (O13)
-    /// and principals persist (O12), and the fold writes a seat only where
-    /// none is held — so a caller that needs the prefix as a value says
-    /// `.cloned()`, and one that only probes or forwards it pays nothing.
+    /// one holder can create ([`crate::Namespace::delegate`] says how). The
+    /// answer is the registry's own key, so the prefix a principal is seated
+    /// at and the prefix it is reported at are one value. SINGLE-VALUED
+    /// because `delegate` enforces id-freshness (`DuplicateId`), so at most
+    /// one principal carries any id (§5/§6). Value-stable across snapshots:
+    /// prefixes are immutable (O13) and principals persist (O12), and the
+    /// fold writes a seat only where none is held — so a caller that needs
+    /// the prefix as a value says `.cloned()`, and one that only probes or
+    /// forwards it pays nothing.
     pub fn principal_prefix(&self, id: PrincipalId) -> Option<&Address> {
         self.principals
             .iter()
@@ -509,10 +521,10 @@ impl M3State {
     /// every seat beneath a node [`crate::Namespace::register_node`] admitted,
     /// which no frontier walk from the genesis seats reaches, since M3
     /// enumerates no nodes. Each walk is Θ(|Π|), and |Π| is a number any key
-    /// holder can raise (`omega` says how); the covering owner of an address
-    /// is ω's question, the owner of a registered document or account
-    /// [`M3State::account_seat`]'s, and where an id is seated
-    /// `principal_prefix`'s.
+    /// holder can raise ([`crate::Namespace::delegate`] says how); the
+    /// covering owner of an address is ω's question, the owner of a
+    /// registered document or account [`M3State::account_seat`]'s, and where
+    /// an id is seated `principal_prefix`'s.
     ///
     /// A COMPARISON OF TWO WALKS is one pass, never a search: both run in
     /// address order, and across a commit the later registry holds every seat

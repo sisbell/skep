@@ -1147,6 +1147,13 @@ Rules that hold across its files:
 - **No mint lands in the ghost region.** `skep-links` builds its reserved
   type addresses from `ghost_position`, and `src/ghost.rs`'s floor keeps the
   allocator past them on every board.
+- **Elements come off two chains, and no third.** A document's content
+  chain issues `d·0·1·n` and its link chain `d·0·2·n`, both built in
+  `src/ns.rs`; no chain is anchored at any other subspace, and
+  `M3State::next_in`, where every minted address is computed, refuses to
+  issue any other element. Type names are spelled in subspace 3 — the
+  commons vocabulary's in the ghost home document's — and rest on it, so a
+  third element chain is a format change those names must move ahead of.
 - **The slice's shape is its format.** `M3State`'s fields and `M3Rec`'s
   variants are appended, never inserted or reordered: bincode writes fields
   in order and variants by index. `tests/it/genesis.rs` pins genesis's

@@ -135,20 +135,12 @@ where
     ///
     /// Authorization is by EFFECTIVE owner ω, never bare containment (O5 —
     /// the ownership-divergence trap): `CreateDocumentError::NotOwner` if
-    /// ω(`account`) is absent or names another principal. The ω read is
-    /// evaluated first, in-closure against `stg.base().m3()` — the state the
-    /// mint's account gate then reads too, since the closure stages nothing
-    /// before the mint — and that pairing is what makes it stale-safe: ω of
-    /// an account registered in that state is the account's own seat, which
-    /// is permanent (§6/§8), and an account not registered there is refused
-    /// by the mint whatever ω answered. So the held
-    /// `M3State::principals_lock_key` is defensive, not load-bearing — but
-    /// the read cannot leave this closure: taken off a snapshot before it, ω
-    /// of a then-unregistered account names the principal above it, and a
-    /// delegation committing in between lets that principal mint into the
-    /// account it has just delegated away. With auth passed, the structural
-    /// mint gate surfaces as `CreateDocumentError::Mint` (`NotAnAccount`
-    /// covers unregistered and non-account alike — P8).
+    /// ω(`account`) is absent or names another principal. ω is judged inside
+    /// this op's one transaction, against the very state the document is
+    /// minted into, so no delegation of `account` lands between the
+    /// authorization and the mint. With auth passed, the structural mint gate
+    /// surfaces as `CreateDocumentError::Mint` (`NotAnAccount` covers
+    /// unregistered and non-account alike — P8).
     ///
     /// Registers d only — no M5 arrangement write (lazy — Conflicts §3). No
     /// idempotency key (identity is the address; a retried lost-ack yields a
@@ -160,8 +152,8 @@ where
     /// `absent | true | false`, `None` being absent), and THIS op resolves it
     /// to the bit the mint journals (PUB-7.10, PUB-8.18) — the mint applies
     /// no default of its own. The rule is PUB-8.21's empty-account rule,
-    /// read off the same WORKING state the mint reads, under the held
-    /// document-chain key, so exactly one mint is ever the account's first:
+    /// judged in the same transaction as the mint, so exactly one mint is
+    /// ever the account's first:
     ///
     /// | the account has documents | flag          | the bit journaled |
     /// |---------------------------|---------------|-------------------|
@@ -193,6 +185,16 @@ where
             M3State::principals_lock_key(),
         ];
         self.kernel.transact_attested(&keys, self.attest, |stg| {
+            // ω first, off the base — the state the mint's account gate reads
+            // too, since nothing is staged before the mint. That pairing makes
+            // the read stale-safe: ω of an account registered here is its own
+            // seat, which is permanent (§6/§8), and an account not registered
+            // here is refused by the mint whatever ω answered — so the
+            // principals key is held defensively, not load-bearing. The read
+            // cannot leave this closure: off a snapshot before it, ω of a
+            // then-unregistered account names the principal above it, and a
+            // delegation committing in between lets that principal mint into
+            // the account it has just delegated away.
             if !stg.base().m3().is_effective_owner(caller, account) {
                 return Err(CreateDocumentError::NotOwner);
             }
@@ -214,19 +216,11 @@ where
     /// the principal in ONE transaction (a two-phase baptize-then-register
     /// could half-fail).
     ///
-    /// This is the sole allocator of the account chain: the last two gates
-    /// are one call to `M3State::mint_account`, which refuses an
-    /// unregistered parent and otherwise returns the chain's next address
-    /// beside the `Allocate` that advances it, so the value next-form
-    /// compares and the record the closure stages are the allocator's own.
-    /// Callers peek that same value through
-    /// [`M3State::next_account_prefix`].
-    ///
-    /// Because it is the sole allocator and seats every prefix it mints, an
-    /// account's SEAT is its allocation: on any state M3's own ops produce —
-    /// genesis seeds its one account seated too — an account-tier address is
-    /// registered iff a principal is seated exactly at it,
-    /// [`M3State::is_registered_account`]`(a)` iff
+    /// Because it is the account chain's sole allocator and seats every
+    /// prefix it mints, an account's SEAT is its allocation: on any state
+    /// M3's own ops produce — genesis seeds its one account seated too — an
+    /// account-tier address is registered iff a principal is seated exactly
+    /// at it, [`M3State::is_registered_account`]`(a)` iff
     /// [`M3State::effective_owner_prefix`]`(a) == Some(a)`. One half —
     /// seated ⇒ allocated — is ASN-0042's PrefixBaptismCoupling (every
     /// principal's prefix is baptized), kept by staging each seat in the
@@ -240,27 +234,19 @@ where
     /// it, since a document is owned at its own account only while that
     /// account holds its seat ([`M3State::effective_owner_prefix`]).
     ///
-    /// Pure pre-work runs first: the validate-lift (`NotValid`), the
-    /// HOISTED tier check (`NotAccountTier`) — hoisted because the lift
-    /// alone does not make `parent()`/lock-key construction safe (a
-    /// 1-component node prefix is T4-valid but parentless — §6) — and the
-    /// depth refusal (`TooDeep`). All three pre-work failures reject via
-    /// `TxnError::Rejected` with NO transaction opened. Every race-prone
-    /// condition is then evaluated inside the closure against
-    /// `stg.base().m3()` under the held namespace + global-principals locks;
-    /// the id-freshness race is CROSS-namespace (same `new_id`, different
-    /// `new_prefix`), which only the single global
-    /// `M3State::principals_lock_key` serializes (§8).
+    /// The three refusals `new_prefix` alone decides — `NotValid`,
+    /// `NotAccountTier`, `TooDeep` — are made via `TxnError::Rejected` before
+    /// any transaction opens. Every other is judged inside the op's one
+    /// transaction, against the state the delegation commits into, so two
+    /// delegations racing for one prefix, or for one `new_id` under two
+    /// prefixes, leave exactly one winner.
     ///
     /// The depth guard is a resource refusal, not a shape one, and it is the
     /// twin of [`Namespace::register_node`]'s: this is the other path by
     /// which a caller's chosen component count enters a permanent,
     /// uncompressed registry — one Π walks on every ω query besides — and
     /// `new_prefix` arrives unvalidated off the wire, so the count is bounded
-    /// here or nowhere (see [`MAX_PRINCIPAL_COMPONENTS`]). It is placed ahead
-    /// of `parent()` and the lock key deliberately: an oversized prefix must
-    /// cost neither the full-depth clone nor the encoding nor the
-    /// transaction.
+    /// here or nowhere (see [`MAX_PRINCIPAL_COMPONENTS`]).
     ///
     /// The COUNT is bounded nowhere in M3: the gate admits every fresh,
     /// next-form prefix its delegator is ω of, and every account holder is ω
@@ -297,9 +283,10 @@ where
         new_id: PrincipalId,
     ) -> Result<(Address, Seq), TxnError<DelegateError>> {
         // Pre-work (§6): validate-lift, then the hoisted tier check (iii) —
-        // only after it is parent() total on new_prefix — then the depth
-        // refusal, ahead of the clone, the encoding and the transaction it
-        // exists to keep an oversized prefix from commanding.
+        // only after it is parent() total on new_prefix, since a 1-component
+        // node prefix is T4-valid but parentless — then the depth refusal,
+        // ahead of the clone, the encoding and the transaction it exists to
+        // keep an oversized prefix from commanding.
         let new_prefix =
             validate(new_prefix).map_err(|_| TxnError::Rejected(DelegateError::NotValid))?;
         if new_prefix.level() != Level::Account {
@@ -313,6 +300,9 @@ where
         // `account_ns(parent)` (§1/§6).
         let parent = parent(&new_prefix)
             .expect("account tier (hoisted tier check) ⇒ N·0·U ⇒ ≥ 3 components");
+        // Beside the chain's key, the single global principals key: the
+        // id-freshness race is CROSS-namespace — one `new_id` under two
+        // prefixes — so no per-namespace key could serialize it (§8).
         let keys = [
             M3State::account_lock_key(&parent),
             M3State::principals_lock_key(),
@@ -387,16 +377,15 @@ where
     /// ADDRESS is chosen by provisioning, not minted here — the one
     /// validate-not-mint path (Conflicts §1). Guards, in order: T4-validity
     /// (`NotValid`), node level (`NotNode`), depth
-    /// ([`MAX_NODE_COMPONENTS`] — `TooDeep`), freshness (`NotFresh` — the
-    /// held coarse `M3State::nodes_lock_key` makes a concurrent duplicate
-    /// surface typed rather than silently coalesce, §7/§8), and bootstrap
-    /// lineage `[1] ≼ addr` (`NotDescendantOfBootstrap`). There is NO
-    /// parent-exists check: P8 gates the creation of docuverse entities
-    /// (`delegate`'s `ParentNotRegistered`, [`M3State::mint_document`]'s
-    /// account gate) and not admission, because a node address names a
-    /// provisioning path originated OUTSIDE the docuverse and `nodes` is
-    /// deliberately non-contiguous — `[1, 5, 7]` is admissible with `[1, 5]`
-    /// unregistered.
+    /// ([`MAX_NODE_COMPONENTS`] — `TooDeep`), freshness (`NotFresh` — a
+    /// concurrent duplicate surfaces typed rather than silently coalescing,
+    /// §7/§8), and bootstrap lineage `[1] ≼ addr`
+    /// (`NotDescendantOfBootstrap`). There is NO parent-exists check: P8
+    /// gates the creation of docuverse entities (`delegate`'s
+    /// `ParentNotRegistered`, [`M3State::mint_document`]'s account gate) and
+    /// not admission, because a node address names a provisioning path
+    /// originated OUTSIDE the docuverse and `nodes` is deliberately
+    /// non-contiguous — `[1, 5, 7]` is admissible with `[1, 5]` unregistered.
     ///
     /// Returns the node address and its commit `Seq`. A RETRIED admission
     /// whose first attempt committed is REFUSED, not duplicated: it answers
@@ -416,14 +405,10 @@ where
     ///
     /// The first three guards are pure pre-work — validity, level and depth
     /// are decidable from the address alone — so a malformed or oversized
-    /// input rejects via `TxnError::Rejected` with NO transaction opened. The
-    /// bootstrap-lineage guard is decidable from the address alone TOO, and
-    /// is inside the closure anyway: the PINNED order puts `NotFresh` first,
-    /// and `NotFresh` is the one guard that must read the registry. So an
-    /// off-lineage address does open a transaction and take
-    /// `M3State::nodes_lock_key` before it is refused — the price of the
-    /// precedence contract, and the reason this guard must NOT be hoisted to
-    /// pre-work the way the first three were.
+    /// input rejects via `TxnError::Rejected` with NO transaction opened.
+    /// Freshness and lineage are judged inside the op's transaction, in that
+    /// order, so an off-lineage address opens a transaction before it is
+    /// refused.
     ///
     /// The depth guard is a resource refusal, not a shape one: this is the
     /// single path by which bytes a caller chose enter a permanent,
@@ -446,11 +431,18 @@ where
         if addr.tumbler().len() > MAX_NODE_COMPONENTS {
             return Err(TxnError::Rejected(RegisterNodeError::TooDeep));
         }
+        // The coarse nodes key: a concurrent duplicate meets NotFresh below
+        // rather than coalescing silently in the fold (§7/§8).
         let keys = [M3State::nodes_lock_key()];
         self.kernel.transact(&keys, move |stg| {
             if stg.base().m3().entity_level(&addr).is_some() {
                 return Err(RegisterNodeError::NotFresh);
             }
+            // Lineage reads no state, yet is judged here and not in the
+            // pre-work above: the PINNED order puts NotFresh first, and
+            // NotFresh must read the registry, so a hoisted lineage check
+            // would give an already-registered off-lineage node the wrong
+            // code. The price is a transaction per off-lineage call.
             if !prefix_contains(bootstrap_root(), &addr) {
                 return Err(RegisterNodeError::NotDescendantOfBootstrap);
             }

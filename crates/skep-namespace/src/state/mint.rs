@@ -105,11 +105,11 @@ impl M3State {
     /// its id-freshness read against concurrent same-id delegations — the id
     /// race is CROSS-namespace (same `new_id`, different `new_prefix`), which
     /// no per-namespace key can serialize. Held DEFENSIVELY by
-    /// `create_new_document`, whose ω read is stale-safe for the reason that
-    /// op's doc gives (§6/§8). Redundant under M2 v1's global applier lock.
-    /// `pub(crate)` because only this crate's ops take it: a store that took
-    /// it as well would, under a per-key M2, serialize itself against every
-    /// delegation in the docuverse.
+    /// `create_new_document`, whose ω read is stale-safe for the reason
+    /// stated beside that read (§6/§8). Redundant under M2 v1's global
+    /// applier lock. `pub(crate)` because only this crate's ops take it: a
+    /// store that took it as well would, under a per-key M2, serialize itself
+    /// against every delegation in the docuverse.
     pub(crate) fn principals_lock_key() -> LockKey {
         LockKey::new(Space::Principals, &[])
     }
@@ -298,20 +298,20 @@ impl M3State {
     /// Peek the next delegable account-tier prefix under `parent` — the exact
     /// value `delegate` will demand as next-form (O17c), so a caller obtains a
     /// valid `new_prefix` instead of guess-and-retry on `NotNextForm`. It is
-    /// `M3State::mint_account` without the record, so the value a caller
-    /// peeks and the value the gate compares come off one chain by one code
-    /// path. `g` follows `parent`'s level: a node ⇒ the `(parent, 2)` account
-    /// chain; an account ⇒ the `(parent, 1)` sub-account chain (the sixth
-    /// chain family ASN-0042 licenses — Conflicts §8). Both yield zeros = 1.
-    /// Pure frontier read off any snapshot; `None` for two reasons, and both
-    /// are monotone, so a `Some` answer never regresses: `parent` is not a
-    /// REGISTERED node or account (E is append-only), or the slot it names
-    /// would exceed [`MAX_PRINCIPAL_COMPONENTS`], which is a compiled
-    /// constant. That second refusal is here so the peek and `delegate`'s
-    /// `TooDeep` gate read one bound and no caller is handed a prefix the
-    /// gate refuses. The returned prefix still faces `delegate`'s full
-    /// in-closure gate — two racing peeks of the same value leave exactly one
-    /// winner.
+    /// the account chain's mint — the one `delegate` makes — without the
+    /// record, so the value a caller peeks and the value the gate compares
+    /// come off one chain by one code path. `g` follows `parent`'s level: a
+    /// node ⇒ the `(parent, 2)` account chain; an account ⇒ the `(parent, 1)`
+    /// sub-account chain (the sixth chain family ASN-0042 licenses —
+    /// Conflicts §8). Both yield zeros = 1. Pure frontier read off any
+    /// snapshot; `None` for two reasons, and both are monotone, so a `Some`
+    /// answer never regresses: `parent` is not a REGISTERED node or account
+    /// (E is append-only), or the slot it names would exceed
+    /// [`MAX_PRINCIPAL_COMPONENTS`], which is a compiled constant. That
+    /// second refusal is here so the peek and `delegate`'s `TooDeep` gate
+    /// read one bound and no caller is handed a prefix the gate refuses. The
+    /// returned prefix still faces `delegate`'s full in-closure gate — two
+    /// racing peeks of the same value leave exactly one winner.
     pub fn next_account_prefix(&self, parent: &Address) -> Option<Address> {
         self.mint_account(parent)
             .map(|(addr, _)| addr)

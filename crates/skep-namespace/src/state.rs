@@ -33,7 +33,7 @@ use serde::{Deserialize, Serialize};
 use skep_address::{ordinal, validate, Address, GateViolation, Level, Nat, Tumbler};
 
 use crate::ghost::{ghost_floor, ghost_home_document};
-use crate::ns::{namespace_of, nth_in, NsKey};
+use crate::ns::{is_mintable_element, namespace_of, nth_in, NsKey};
 use crate::record::{M3Rec, PrincipalId, BOOTSTRAP_PRINCIPAL, SYSTEM_PRINCIPAL};
 
 /// The `published` an `Allocate` carries OUTSIDE the document tier — an
@@ -607,13 +607,29 @@ impl M3State {
     /// [`content_ns`]/[`link_ns`] sit behind `is_registered_document`, which
     /// makes `home` a Document, so `inc(home, 2)` lands inside T4.
     ///
+    /// Every minted address is computed here, so this is also where the
+    /// element families are held to two: an element [`is_mintable_element`]
+    /// refuses — one off any chain but a content or a link chain — is a panic
+    /// naming the guarantee, never an address. The shape of what this issues
+    /// follows from `key` alone and `key` from a mint's own constructor, so no
+    /// state, corrupted or not, reaches the panic — only a third element
+    /// family added to M3, which fails at its first mint rather than
+    /// allocating the subspace-3 type names readers treat as never minted
+    /// (AUTH-7.1 horn B; AUTH-3.70).
+    ///
     /// [`version_ns`]: crate::ns::version_ns
     /// [`document_ns`]: crate::ns::document_ns
     /// [`account_ns`]: crate::ns::account_ns
     /// [`content_ns`]: crate::ns::content_ns
     /// [`link_ns`]: crate::ns::link_ns
+    /// [`is_mintable_element`]: crate::ns::is_mintable_element
     fn next_in(&self, key: &NsKey) -> Result<Address, GateViolation> {
-        nth_in(key, &(self.effective_frontier(key) + 1u32))
+        let next = nth_in(key, &(self.effective_frontier(key) + 1u32))?;
+        assert!(
+            next.level() != Level::Element || is_mintable_element(&next),
+            "M3 mints elements on the content and link chains alone: {next} is on neither (AUTH-7.1 horn B — subspace 3 holds type names)"
+        );
+        Ok(next)
     }
 }
 

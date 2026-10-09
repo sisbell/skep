@@ -1,7 +1,7 @@
 use super::*;
 
 use crate::M3State;
-use skep_address::ordinal;
+use skep_address::{document_of, ordinal};
 
 fn t(comps: &[u32]) -> Tumbler {
     Tumbler::new(comps.iter().map(|&c| Nat::from(c))).expect("nonempty")
@@ -11,14 +11,16 @@ fn a(comps: &[u32]) -> Address {
     validate(t(comps)).expect("T4-valid")
 }
 
-/// Every T4-valid address of `1..=max_len` components drawn from {0, 1, 2}:
-/// every tier, every field length the total allows, both subspaces, every
-/// separator position — enumerated, so no shape is one a human chose.
-fn every_address_up_to(max_len: u32) -> Vec<Address> {
+/// Every T4-valid address of `1..=max_len` components drawn from
+/// `0..=max_digit`: every tier, every field length the total allows, every
+/// subspace numeral up to `max_digit`, every separator position —
+/// enumerated, so no shape is one a human chose.
+fn every_address(max_len: u32, max_digit: u32) -> Vec<Address> {
+    let base = max_digit + 1;
     (1..=max_len)
         .flat_map(|len| {
-            (0..3u32.pow(len)).filter_map(move |code| {
-                let comps: Vec<u32> = (0..len).map(|i| code / 3u32.pow(i) % 3).collect();
+            (0..base.pow(len)).filter_map(move |code| {
+                let comps: Vec<u32> = (0..len).map(|i| code / base.pow(i) % base).collect();
                 validate(t(&comps)).ok()
             })
         })
@@ -190,7 +192,7 @@ fn the_chain_family_rule_separates_document_from_version() {
 
 /// §2's membership-correctness invariant, stated as a law — "for T4-valid
 /// `a`, `a` is exactly `c_{ordinal(a)}` of its decomposed `(parent, g)`
-/// namespace" — held over every address `every_address_up_to(8)` yields, with
+/// namespace" — held over every address `every_address(8, 2)` yields, with
 /// the fact `Allocate`'s door rests on beside it:
 ///
 /// * a namespace exists iff the address has two or more components — the
@@ -211,7 +213,7 @@ fn the_chain_family_rule_separates_document_from_version() {
 /// `(Document, Element)` as same-field; multi-component fields at every tier.
 #[test]
 fn every_address_is_the_member_its_own_key_names() {
-    let family = every_address_up_to(8);
+    let family = every_address(8, 2);
     assert!(
         family.len() > 2_000,
         "the generated family is the point of this test"
@@ -258,6 +260,54 @@ fn every_address_is_the_member_its_own_key_names() {
                 "{member:?} is not member {n} of {key:?}"
             );
         }
+    }
+}
+
+/// The allocator's element check, `is_mintable_element`, IS the two element
+/// families: over every address `every_address(9, 3)` yields, an element
+/// answers `true` exactly when its own chain is its document's content chain
+/// or its link chain — the keys `content_ns` and `link_ns` build — and every
+/// other address answers `false`. The check is spelled by M1's subspace
+/// numerals, so a mint pays one comparison for it, and the two keys by M1
+/// arithmetic; this law is what holds the two spellings to one answer. Nine
+/// components over `0..=3` is the smallest family that reaches, beside a
+/// subspace base `d·0·s`, both other shapes the check refuses: subspace 3,
+/// where type names are spelled (AUTH-7.1 horn B), and an element field of
+/// three components.
+#[test]
+fn the_mintable_element_check_is_the_two_element_families() {
+    let family = every_address(9, 3);
+    let (mut mintable, mut refused) = (0, 0);
+    for addr in &family {
+        let on_an_element_family = addr.level() == Level::Element && {
+            let doc = document_of(addr).expect("an element lies in a document");
+            namespace_of(addr).is_some_and(|key| key == content_ns(&doc) || key == link_ns(&doc))
+        };
+        assert_eq!(
+            is_mintable_element(addr),
+            on_an_element_family,
+            "{addr}: the check and the two families' keys disagree"
+        );
+        match (addr.level(), on_an_element_family) {
+            (Level::Element, true) => mintable += 1,
+            (Level::Element, false) => refused += 1,
+            _ => {}
+        }
+    }
+    assert!(
+        mintable > 0 && refused > 0,
+        "both answers occur among the elements: {mintable} mintable, {refused} refused"
+    );
+    for refused_shape in [
+        a(&[1, 0, 1, 0, 1, 0, 3, 1]),    // subspace 3
+        a(&[1, 0, 1, 0, 1, 0, 1, 1, 1]), // a three-component element field
+        a(&[1, 0, 1, 0, 1, 0, 1]),       // a subspace base
+    ] {
+        assert!(
+            family.contains(&refused_shape),
+            "{refused_shape}: the family does not reach this shape"
+        );
+        assert!(!is_mintable_element(&refused_shape), "{refused_shape}");
     }
 }
 

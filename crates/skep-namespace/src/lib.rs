@@ -61,7 +61,11 @@
 //!   [`M3State::next_account_prefix`]. Every chain issues `c_{m+1}` and so
 //!   opens at ordinal 1 on an empty frontier — except the ghost content
 //!   chain, which opens at [`GHOST_POSITIONS`] + 1 (the ghost region
-//!   below).
+//!   below). Two of the chains issue elements — a document's content chain
+//!   and its link chain — and no third does: the allocator refuses to issue
+//!   any other element, so no element in any other subspace is ever minted,
+//!   and subspace 3, where type names are spelled, stays unallocated
+//!   ([`M3State::is_allocated`]).
 //! * **Entity operations** (§B) — the transact-driving [`Namespace`]
 //!   handle: [`Namespace::create_new_document`] \[ASN-0103\],
 //!   [`Namespace::delegate`] \[ASN-0042 O15/O17c\],

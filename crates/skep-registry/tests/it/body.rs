@@ -35,17 +35,22 @@ fn vector_set() -> Value {
     serde_json::from_str(&text).expect("the vector set is JSON")
 }
 
-/// A vector's bytes: its `bytes` string, or its `bytes_hex`, whole bytes
-/// alone — a digit left over is a fault of the set, never a byte dropped.
+/// A vector's bytes: its `bytes` string, or its `bytes_hex`, whole bytes of
+/// hex digits alone — a digit left over, or a character no hex digit, is a
+/// fault of the set, never a byte dropped or read as another.
 fn bytes_of(vector: &Value) -> Vec<u8> {
     if let Some(text) = vector["bytes"].as_str() {
         return text.as_bytes().to_vec();
     }
     let hex = vector["bytes_hex"].as_str().expect("a vector carries bytes or bytes_hex");
-    assert!(hex.len().is_multiple_of(2), "bytes_hex holds whole bytes: {hex}");
-    (0..hex.len() / 2)
-        .map(|i| u8::from_str_radix(&hex[2 * i..2 * i + 2], 16).expect("hex"))
-        .collect()
+    let (pairs, left_over) = hex.as_bytes().as_chunks::<2>();
+    assert!(left_over.is_empty(), "bytes_hex holds whole bytes: {hex}");
+    let digit = |b: u8| {
+        char::from(b)
+            .to_digit(16)
+            .unwrap_or_else(|| panic!("bytes_hex holds hex digits alone: {hex}"))
+    };
+    pairs.iter().map(|&[high, low]| (16 * digit(high) + digit(low)) as u8).collect()
 }
 
 /// A vector's `kind`: the kind the caller names, standing in for the link's

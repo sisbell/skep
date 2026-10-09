@@ -2,7 +2,7 @@
 //! the shipped table passing against the rows commons-map lists as the
 //! build's.
 
-use skep_address::Address;
+use skep_address::{validate, Address, Nat, Tumbler};
 use skep_registry::{
     commons_type, rows, seeding_check, t_binding, t_policy_link, t_successor_of, t_takedown_record,
     Kind, Row, RowOf, SeedingRefusal, Subtype,
@@ -39,8 +39,8 @@ fn the_maps_other_rows() -> Vec<Address> {
         &[90, 1],
         &[91],
     ]
-    .iter()
-    .map(|ordinals| commons_type(ordinals))
+    .into_iter()
+    .map(commons_type)
     .collect()
 }
 
@@ -94,11 +94,9 @@ fn the_disjointness_arm_refuses_a_foreign_row_inside_above_or_at_a_registry_row(
     }
     // Above the block: the subspace itself contains every row; the first
     // row in table order is the one named.
-    let subspace = skep_address::validate(
-        skep_address::Tumbler::new([1u32, 1, 0, 1, 0, 1, 0, 3].map(skep_address::Nat::from))
-            .expect("a tumbler"),
-    )
-    .expect("an address");
+    let subspace =
+        validate(Tumbler::new([1u32, 1, 0, 1, 0, 1, 0, 3].map(Nat::from)).expect("a tumbler"))
+            .expect("an address");
     assert_eq!(
         seeding_check(rows(), std::iter::once(&subspace)),
         Err(SeedingRefusal::Disjointness { registry: t_binding().clone(), foreign: subspace })
@@ -195,8 +193,9 @@ fn the_completeness_arm_names_each_of_the_twelve_rows_missing() {
         "one sentence per row of the table, in its order"
     );
     for (of, sentence) in missing {
-        let refusal = seeding_check(&without(of), std::iter::empty())
-            .expect_err(&format!("the table without {of:?} seeds"));
+        let Err(refusal) = seeding_check(&without(of), std::iter::empty()) else {
+            panic!("the table without {of:?} seeds");
+        };
         assert_eq!(refusal, SeedingRefusal::Completeness { missing: of }, "{of:?}");
         assert_eq!(refusal.to_string(), sentence, "{of:?}");
     }

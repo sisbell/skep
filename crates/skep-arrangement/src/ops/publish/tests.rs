@@ -326,8 +326,8 @@ fn a_shot_refused_after_its_reinsert_is_staged_leaves_no_mint_no_write_and_no_me
     let head_runs: Vec<Run> = ordinals.iter().map(|&o| run(&pca(o), 1)).collect();
     let k = shot_kernel(head_runs, &ordinals);
     let vs = Vstream::new(&k);
-    let d = vec![Val::new(&b"d"[..])];
-    vs.insert(p1, &doc1(), vp(1, 1), d, Deposit::Undeclared)
+    let values = vec![Val::new(&b"d"[..])];
+    vs.insert(p1, &doc1(), vp(1, 1), values, Deposit::Undeclared)
         .expect("the draft holds one value, at ca(1)");
     let anyone = |_: &ShotWorld, _: &Address| true;
     let carrying_past = |extent: u32| Shot {

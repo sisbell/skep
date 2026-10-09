@@ -20,7 +20,7 @@ use skep_address::{content_subspace, document_of, Address, Nat};
 
 use crate::chain::trunk_of;
 use crate::run::Run;
-use crate::runlist::extend_or_push_run;
+use crate::run_list::extend_or_push_run;
 use crate::state::M5State;
 
 /// A supplied run's ORIGIN DOCUMENT — the trunk (PUB-2.15) of the document

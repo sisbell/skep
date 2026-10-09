@@ -138,7 +138,7 @@ fn the_request_values_and_every_refusal_cross_threads() {
     // test world, `WorldState` asking `Send + Sync + 'static` of the slice
     // and its record.
     fn crosses<T: Send + Sync + 'static>() {}
-    fn refusal<E: std::error::Error + Send + Sync + 'static>() {}
+    fn crosses_as_refusal<E: std::error::Error + Send + Sync + 'static>() {}
     crosses::<VPos>();
     crosses::<VSpec>();
     crosses::<Caller>();
@@ -147,12 +147,12 @@ fn the_request_values_and_every_refusal_cross_threads() {
     crosses::<Base>();
     crosses::<Shot>();
     crosses::<SegmentRun>();
-    refusal::<RunError>();
-    refusal::<InsertError>();
-    refusal::<CopyError>();
-    refusal::<DeleteError>();
-    refusal::<RearrangeError>();
-    refusal::<VersionError>();
-    refusal::<PublishError>();
-    refusal::<SeatError>();
+    crosses_as_refusal::<RunError>();
+    crosses_as_refusal::<InsertError>();
+    crosses_as_refusal::<CopyError>();
+    crosses_as_refusal::<DeleteError>();
+    crosses_as_refusal::<RearrangeError>();
+    crosses_as_refusal::<VersionError>();
+    crosses_as_refusal::<PublishError>();
+    crosses_as_refusal::<SeatError>();
 }

@@ -54,9 +54,9 @@ where
     K: Deserialize<'de> + Ord + Clone,
     V: Deserialize<'de> + Clone,
 {
-    struct Entries<K, V>(PhantomData<(K, V)>);
+    struct MapVisitor<K, V>(PhantomData<(K, V)>);
 
-    impl<'de, K, V> Visitor<'de> for Entries<K, V>
+    impl<'de, K, V> Visitor<'de> for MapVisitor<K, V>
     where
         K: Deserialize<'de> + Ord + Clone,
         V: Deserialize<'de> + Clone,
@@ -76,27 +76,27 @@ where
         }
     }
 
-    deserializer.deserialize_map(Entries(PhantomData))
+    deserializer.deserialize_map(MapVisitor(PhantomData))
 }
 
 /// An `im::Vector`, decoded one element at a time, in order — the door every
 /// vector the slice holds decodes through, as [`entry_by_entry`] is every
 /// map's. Reserves nothing; each element is decoded by its own `Deserialize`.
-pub(crate) fn element_by_element<'de, D, A>(deserializer: D) -> Result<im::Vector<A>, D::Error>
+pub(crate) fn element_by_element<'de, D, T>(deserializer: D) -> Result<im::Vector<T>, D::Error>
 where
     D: Deserializer<'de>,
-    A: Deserialize<'de> + Clone,
+    T: Deserialize<'de> + Clone,
 {
-    struct Elements<A>(PhantomData<A>);
+    struct SeqVisitor<T>(PhantomData<T>);
 
-    impl<'de, A: Deserialize<'de> + Clone> Visitor<'de> for Elements<A> {
-        type Value = im::Vector<A>;
+    impl<'de, T: Deserialize<'de> + Clone> Visitor<'de> for SeqVisitor<T> {
+        type Value = im::Vector<T>;
 
         fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
             f.write_str("a sequence")
         }
 
-        fn visit_seq<S: SeqAccess<'de>>(self, mut elements: S) -> Result<Self::Value, S::Error> {
+        fn visit_seq<A: SeqAccess<'de>>(self, mut elements: A) -> Result<Self::Value, A::Error> {
             let mut vector = im::Vector::new();
             while let Some(element) = elements.next_element()? {
                 vector.push_back(element);
@@ -105,7 +105,7 @@ where
         }
     }
 
-    deserializer.deserialize_seq(Elements(PhantomData))
+    deserializer.deserialize_seq(SeqVisitor(PhantomData))
 }
 
 #[cfg(test)]
@@ -157,22 +157,22 @@ mod tests {
             .expect("no panic")
             .expect("a repeated key decodes");
         assert_eq!(later.map, im::OrdMap::unit(1, 11), "the later value stands");
-        let vector_count = 8 + 3 * (4 + 8);
+        let vector_count_at = 8 + 3 * (4 + 8);
         assert_eq!(
-            bytes[vector_count..vector_count + 8],
+            bytes[vector_count_at..vector_count_at + 8],
             3u64.to_le_bytes(),
             "the premise: the vector's count follows the map's entries"
         );
-        for (door, at) in [("the map's", 0), ("the vector's", vector_count)] {
+        for (door, at) in [("the map's", 0), ("the vector's", vector_count_at)] {
             let mut lying = bytes.clone();
             lying[at..at + 8].copy_from_slice(&u64::MAX.to_le_bytes());
-            let refused = decoded(&lying).unwrap_or_else(|| {
+            let outcome = decoded(&lying).unwrap_or_else(|| {
                 panic!(
                     "{door} count of u64::MAX panicked the decode: a reservation sized by a \
                      count the bytes do not carry"
                 )
             });
-            assert!(refused.is_err(), "{door} count of u64::MAX decoded");
+            assert!(outcome.is_err(), "{door} count of u64::MAX decoded");
         }
     }
 }

@@ -118,12 +118,12 @@ pub fn pdoc() -> Address {
     a(&[1, 0, 1, 0, 3])
 }
 
-/// doc1 content element k (length 8), M3's minted shape.
+/// doc1 content element at `ordinal` (length 8), M3's minted shape.
 pub fn ca(ordinal: u32) -> Address {
     a(&[1, 0, 1, 0, 1, 0, 1, ordinal])
 }
 
-/// pdoc's content element k (length 8).
+/// pdoc's content element at `ordinal` (length 8).
 pub fn pca(ordinal: u32) -> Address {
     a(&[1, 0, 1, 0, 3, 0, 1, ordinal])
 }

@@ -1,9 +1,9 @@
 //! The UNION of a run set's I-extents ([`RunUnion`]): every address some run
 //! of the set holds, merged within each content chain in TUMBLER order, so
 //! that whether the set holds every address of a run is one search. The
-//! run-list (`runlist.rs`) orders runs by V-position; the two share no private
-//! item, and this module's privacy is what makes [`RunUnion::of`] the union's
-//! one constructor.
+//! run-list (`run_list.rs`) orders runs by V-position; the two share no
+//! private item, and this module's privacy is what makes [`RunUnion::of`] the
+//! union's one constructor.
 
 use skep_address::{ordinal, Tumbler};
 

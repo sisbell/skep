@@ -197,7 +197,7 @@ mod run;
 mod run_union;
 // The implicit-position run-list: splice, contract, reorder, the merge
 // condition and its one accumulator, the mapping blocks, the lazy walks.
-mod runlist;
+mod run_list;
 // R, the append-only provenance relation, and its decode door.
 mod provenance;
 // Request-side V-space values: `VPos`, `VSpec`, the ordinal V-span shape.
@@ -244,7 +244,7 @@ pub use ops::{
 };
 pub use ownership::Caller;
 pub use run::{Run, RunError};
-pub use runlist::Runs;
+pub use run_list::Runs;
 #[cfg(feature = "test-hooks")]
 pub use seat::seat_link;
 pub use seat::stage_seat_link;

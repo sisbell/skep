@@ -70,7 +70,7 @@ use skep_namespace::{HasM3, M3Rec, M3State, MintError};
 
 use crate::chain::trunk_of;
 use crate::run::Run;
-use crate::runlist::extend_or_push_run;
+use crate::run_list::extend_or_push_run;
 
 // COPY (ASN-0118): transclusion by reference, allocating nothing.
 mod copy;

@@ -156,12 +156,12 @@ mod tests {
         let addresses = [doc1(), doc2(), pdoc(), nameless, a(&[1, 0, 2]), ca(1)];
         let mut passed = 0usize;
         for caller in callers {
-            for doc in &addresses {
-                let verdict = gate_write(&m3, caller, doc, (), |_| ()).is_ok();
+            for address in &addresses {
+                let verdict = gate_write(&m3, caller, address, (), |_| ()).is_ok();
                 assert_eq!(
-                    caller.passes_ownership_gate(&m3, doc),
+                    caller.passes_ownership_gate(&m3, address),
                     verdict,
-                    "{caller:?} at {doc:?}"
+                    "{caller:?} at {address:?}"
                 );
                 passed += usize::from(verdict);
             }

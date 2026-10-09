@@ -1162,7 +1162,7 @@ with a line saying what it holds; each names in code only the modules above
 it. `tests/it/tidy.rs` checks that, that every declaration under `src/` but a
 `tests` module carries its line, and that every file under `src/` and
 `tests/it/` is declared. `run.rs` is the run; beside it, `run_union.rs` holds
-the union of a run set's I-extents, in tumbler order, and `runlist.rs` the
+the union of a run set's I-extents, in tumbler order, and `run_list.rs` the
 run-list, in V-order — two modules that share no private item. `ops.rs` is the
 `Vstream` handle and what its operations share; beneath it,
 `ops/insert.rs`, `ops/publish.rs`, `ops/copy.rs`, `ops/delete.rs`,
@@ -1187,7 +1187,7 @@ Rules that hold across its files:
   in-crate literal starts at an address that already is a full element
   position: another run's start, an in-crate shift of one, or what M3's
   `mint_content` returned; `Run::admits_start` lists those literals.
-  `runlist::extend_or_push_run` is the one place a built run is widened and
+  `run_list::extend_or_push_run` is the one place a built run is widened and
   the one place a placement's runs are accumulated.
 - **One allocation step.** Every fresh content address is minted and written
   by `ops::allocate_for_placement`, inside the transaction whose placement

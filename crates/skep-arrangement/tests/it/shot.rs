@@ -509,8 +509,12 @@ fn the_address_form_of_a_request_is_the_address_form_read_at_the_member() {
         matches!(&m5.address_form_of(&member, &n(9))[2], SegmentRun::Value(v) if *v.width() == n(3))
     );
     assert!(m5.address_form_of(&member, &n(0)).is_empty());
-    assert!(m5.address_form_of(&doc2(), &n(2)).iter().all(|s| matches!(s, SegmentRun::Value(_))),
-        "a document's own runs are spelled by value, read at the address named");
+    assert!(
+        m5.address_form_of(&doc2(), &n(2))
+            .iter()
+            .all(|segment_run| matches!(segment_run, SegmentRun::Value(_))),
+        "a document's own runs are spelled by value, read at the address named"
+    );
 }
 
 #[test]
@@ -643,9 +647,9 @@ fn the_values_a_shot_says_it_reinserts_are_the_values_its_commit_writes() {
         Some(pca(7)),
         "three fresh identities past the edition's three, and nothing else minted under its content chain"
     );
-    let value = |at: &Address| {
+    let value = |address: &Address| {
         content
-            .value_at(at.tumbler())
+            .value_at(address.tumbler())
             .expect("a stored value")
             .as_bytes()
             .to_vec()
@@ -654,7 +658,7 @@ fn the_values_a_shot_says_it_reinserts_are_the_values_its_commit_writes() {
     let named: Vec<Vec<u8>> = shot
         .reinserted_runs()
         .flat_map(Run::addrs)
-        .map(|at| value(&at))
+        .map(|address| value(&address))
         .collect();
     assert_eq!(
         landed, named,
@@ -834,6 +838,8 @@ fn the_address_forms_agree_as_the_body_spells_them_over_every_short_shot() {
             1,
         ),
     ];
+    // The menu closes on its two windows.
+    let first_window = menu.len() - 2;
     let mut sequences: Vec<Vec<usize>> = vec![Vec::new()];
     let mut longest: Vec<Vec<usize>> = vec![Vec::new()];
     for _ in 0..3 {
@@ -889,7 +895,7 @@ fn the_address_forms_agree_as_the_body_spells_them_over_every_short_shot() {
                 spelled(&m5.address_form_of(&member, &n(placed)), content),
                 "{label}: the request spells the member's body"
             );
-            ending_on_a_window += usize::from(sequence.last().is_some_and(|&i| i >= 3));
+            ending_on_a_window += usize::from(sequence.last().is_some_and(|&i| i >= first_window));
         }
     }
     assert_eq!(

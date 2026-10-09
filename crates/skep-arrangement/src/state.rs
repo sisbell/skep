@@ -15,7 +15,7 @@ use crate::chain::is_birth_version;
 use crate::decode::entry_by_entry;
 use crate::provenance::Provenance;
 use crate::run::Run;
-use crate::runlist::RunList;
+use crate::run_list::RunList;
 
 /// One document's POOM: the content and link run-lists (§Core data model).
 /// Exactly these two subspaces exist, which is a fact about the arrangement

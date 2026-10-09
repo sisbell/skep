@@ -97,7 +97,7 @@ fn every_module_names_only_itself_and_modules_declared_above_it() {
                         file.strip_prefix(&src).expect("under src").display(),
                         order[below],
                     )),
-                    Some(&above) => edges += usize::from(above < own_rank),
+                    Some(&at_or_above) => edges += usize::from(at_or_above < own_rank),
                     None => {}
                 }
             }

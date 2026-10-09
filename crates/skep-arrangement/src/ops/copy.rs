@@ -11,7 +11,7 @@ use crate::chain::published_target;
 use crate::error::CopyError;
 use crate::ownership::{gate_write, Caller};
 use crate::run::Run;
-use crate::runlist::extend_or_push_run;
+use crate::run_list::extend_or_push_run;
 use crate::state::M5Rec;
 use crate::vspace::{as_ordinal_vspan, VPos, VSpec};
 use crate::HasM5;

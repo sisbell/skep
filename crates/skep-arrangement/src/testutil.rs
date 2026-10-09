@@ -47,23 +47,23 @@ pub(crate) fn vdoc() -> Address {
     a(&[1, 0, 1, 0, 1, 1])
 }
 
-/// doc1 content element `k` (length 8): `[1,0,1,0,1,0,1,k]`.
+/// doc1 content element at `ordinal` (length 8): `[1,0,1,0,1,0,1,ordinal]`.
 pub(crate) fn ca(ordinal: u32) -> Address {
     a(&[1, 0, 1, 0, 1, 0, 1, ordinal])
 }
 
-/// pdoc content element `k` (length 8): `[1,0,1,0,3,0,1,k]`.
+/// pdoc content element at `ordinal` (length 8): `[1,0,1,0,3,0,1,ordinal]`.
 pub(crate) fn pca(ordinal: u32) -> Address {
     a(&[1, 0, 1, 0, 3, 0, 1, ordinal])
 }
 
-/// doc1 link element `k` (length 8): `[1,0,1,0,1,0,2,k]`.
+/// doc1 link element at `ordinal` (length 8): `[1,0,1,0,1,0,2,ordinal]`.
 pub(crate) fn la(ordinal: u32) -> Address {
     a(&[1, 0, 1, 0, 1, 0, 2, ordinal])
 }
 
-/// vdoc content element `k` (length 9): `[1,0,1,0,1,1,0,1,k]` — a different
-/// level class than [`ca`].
+/// vdoc content element at `ordinal` (length 9): `[1,0,1,0,1,1,0,1,ordinal]`
+/// — a different level class than [`ca`].
 pub(crate) fn vca(ordinal: u32) -> Address {
     a(&[1, 0, 1, 0, 1, 1, 0, 1, ordinal])
 }

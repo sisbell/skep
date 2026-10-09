@@ -1,16 +1,18 @@
 //! M3's journal delta and the identity type it names (§Core data model):
 //! [`PrincipalId`] with its two fixed ids, and [`M3Rec`] — the records M3
 //! stages through M2's `transact` and the fold [`M3State::apply_m3`]
-//! consumes — with the two field doors a record re-enters through off the
-//! journal, private here because the record's own decode is their one
-//! caller. The variant order is the journal format, as `M3State`'s field
-//! order is the checkpoint's: a variant is appended, never inserted or
-//! reordered. Every variant is sealed (`#[non_exhaustive]`), so no other
-//! crate builds a record; the `test-hooks` feature compiles in three
-//! constructors for the test suites that seed M3 state through the fold.
-//! What a caller staging a mint's record owes is on [`M3Rec::Allocate`]; the
-//! `published` a non-document record carries, `NO_PUBLICATION_STATE`, is its
-//! producers' word and is declared beside them, in `state`.
+//! consumes — with `Allocate`'s payload, [`Allocation`], and the two field
+//! doors a record re-enters through off the journal, private here because
+//! the record's own decode is their one caller. The variant order is the
+//! journal format, as `M3State`'s field order is the checkpoint's: a variant
+//! is appended, never inserted or reordered. No other crate builds or edits
+//! a record — `Allocate`'s payload keeps its fields private, and the two
+//! registry variants are `#[non_exhaustive]`; the `test-hooks` feature
+//! compiles in three constructors for the test suites that seed M3 state
+//! through the fold. What a caller staging a mint's record owes is on
+//! [`M3Rec::Allocate`]; the `published` a non-document record carries,
+//! `NO_PUBLICATION_STATE`, is its producers' word and is declared beside
+//! them, in `state`.
 //!
 //! [`M3State::apply_m3`]: crate::M3State::apply_m3
 
@@ -74,52 +76,103 @@ pub const SYSTEM_PRINCIPAL: PrincipalId = PrincipalId(9_000_000_000_000_000);
 /// parent (`parented_address`), and a `RegisterPrincipal` prefix is
 /// account-tier (`account_tier_prefix`). A record lacking either is refused
 /// at decode, as M2's ordinary decode failure. Both are facts about one
-/// field, so they ride on the field and `Deserialize` is derived from this
-/// enum itself: a variant added here decodes with no second edit, and the
-/// journal and checkpoint encoding is the enum's own.
+/// field, so they ride on the field and `Deserialize` is derived — on this
+/// enum, and on [`Allocation`] for `Allocate`'s payload: a variant added here
+/// decodes with no second edit, and the journal and checkpoint encoding is
+/// the types' own.
 ///
-/// TWO SEALS, as on M5's `M5Rec` and M7's `LinkRec`. Each VARIANT is
-/// `#[non_exhaustive]`, so no crate but this one builds an `M3Rec` by struct
-/// literal: the mints, the four ops and genesis are its producers, and a
-/// composite in another crate stages the record a mint returned and writes
-/// no seat or frontier of its own. The four public mints are the only
-/// constructors a foreign crate can NAME, and not the only path it can
-/// REACH: the record derives `Deserialize`, as M2's journal requires, so
-/// bytes a foreign crate wrote decode into one. Such a record passes the two
-/// field doors above and meets a fold that writes a seat or a bit only once,
-/// but what its producer owes — the next ordinal, the seat beside an
-/// account, a fresh id — no door can check, so the fold's guarantees do not
-/// cover it. The TYPE is `#[non_exhaustive]` too, so a foreign `match`
+/// THREE SEALS. The TYPE is `#[non_exhaustive]`, so a foreign `match`
 /// carries a `_` arm and a variant appended at the end costs it no build.
-/// Neither seal costs a reader anything: a foreign crate still lifts the
-/// record whole and binds a variant's fields through a pattern with `..`,
-/// and this crate's fold matches and destructures freely. The suites that
-/// seed M3 state through the fold — states no op produces among them — build
+/// `RegisterNode` and `RegisterPrincipal` are `#[non_exhaustive]` too, as
+/// M5's `M5Rec` and M7's `LinkRec` variants are, so no crate but this one
+/// builds either by struct literal, and nothing here hands another crate one
+/// to edit: no mint returns either, and the ops stage theirs inside their own
+/// transactions. And `Allocate`'s payload is an [`Allocation`], whose fields
+/// are private, so no crate but this one builds one or WRITES one. A variant
+/// seal alone would not do there: Rust has no private enum-variant fields, so
+/// every crate that can match a struct variant can bind its fields through
+/// `&mut`, and every M5 and M7 write composite holds a minted `Allocate`
+/// between the mint and the push — while the fold asks an `Allocate` for
+/// nothing but contiguity, and that only in a debug build. So the mints, the
+/// four ops and genesis are this record's producers, a composite in another
+/// crate stages the record a mint returned exactly as the mint built it, and
+/// the four public mints are the only constructors a foreign crate can NAME.
+/// They are not the only path it can REACH: the record derives
+/// `Deserialize`, as M2's journal requires, so bytes a foreign crate wrote
+/// decode into one. Such a record passes the two field doors above and meets
+/// a fold that writes a seat or a bit only once, but what its producer owes —
+/// the next ordinal, the seat beside an account, a fresh id — no door can
+/// check, so the fold's guarantees do not cover it. None of the seals costs a
+/// reader anything: a foreign crate lifts the record whole, reads an
+/// `Allocate` through [`Allocation::addr`] and [`Allocation::published`],
+/// and binds the other variants' fields through a pattern with `..`, and
+/// this crate's fold matches and destructures freely. The suites that seed
+/// M3 state through the fold — states no op produces among them — build
 /// their records with the `test-hooks` constructors, which a build that
 /// compiles no test does not contain.
 ///
-/// The two seals as a foreign crate meets them, each a pair: the twin
-/// reaches a record through the mint that returns it and matches it, and the
-/// refusal differs from it in one place — the struct literal for the
-/// variant seal, the `_` arm a `match` over every variant leaves out for the
-/// type seal. A bare `compile_fail` is satisfied by ANY compile error, so
-/// the twin is what keeps each refusal a statement about its seal. (The
-/// error codes are checked on nightly only.)
+/// The seals as a foreign crate meets them, each a pair: the twin compiles,
+/// and the refusal differs from it in one place — a write to the payload's
+/// field, a payload built by literal, a seat built by literal, a `match` over
+/// every variant with no `_` arm. A bare `compile_fail` is satisfied by ANY
+/// compile error, so the twin is what keeps each refusal a statement about
+/// its seal. (The error codes are checked on nightly only.)
 ///
 /// ```
 /// use skep_namespace::{system_account, M3Rec, M3State};
-/// let (_, rec) = M3State::genesis()
+/// let (addr, mut rec) = M3State::genesis()
 ///     .mint_document(&system_account(), true)
 ///     .expect("the system account mints");
-/// assert!(matches!(rec, M3Rec::Allocate { .. }));
+/// if let M3Rec::Allocate(minted) = &mut rec {
+///     assert_eq!(*minted.addr(), addr);
+/// }
+/// ```
+/// ```compile_fail,E0616
+/// use skep_namespace::{system_account, M3Rec, M3State};
+/// let (addr, mut rec) = M3State::genesis()
+///     .mint_document(&system_account(), true)
+///     .expect("the system account mints");
+/// if let M3Rec::Allocate(minted) = &mut rec {
+///     minted.addr = addr;
+/// }
+/// ```
+/// ```
+/// use skep_namespace::{system_account, Allocation, M3Rec, M3State};
+/// let (addr, minted) = M3State::genesis()
+///     .mint_document(&system_account(), true)
+///     .expect("the system account mints");
+/// let M3Rec::Allocate(payload) = minted else {
+///     unreachable!("a mint returns an Allocate")
+/// };
+/// let payload: Allocation = payload;
+/// let rec = M3Rec::Allocate(payload);
+/// assert!(matches!(&rec, M3Rec::Allocate(allocation) if *allocation.addr() == addr));
+/// ```
+/// ```compile_fail,E0451
+/// use skep_namespace::{system_account, Allocation, M3Rec, M3State};
+/// let (addr, minted) = M3State::genesis()
+///     .mint_document(&system_account(), true)
+///     .expect("the system account mints");
+/// let M3Rec::Allocate(payload) = minted else {
+///     unreachable!("a mint returns an Allocate")
+/// };
+/// let payload: Allocation = Allocation { addr: addr.clone(), published: true };
+/// let rec = M3Rec::Allocate(payload);
+/// assert!(matches!(&rec, M3Rec::Allocate(allocation) if *allocation.addr() == addr));
+/// ```
+/// ```
+/// use skep_namespace::{system_account, M3Rec, M3State, PrincipalId};
+/// let (prefix, id) = (system_account(), PrincipalId(7));
+/// let (_, rec) = M3State::genesis()
+///     .mint_document(&prefix, true)
+///     .expect("the system account mints");
+/// assert!(!matches!(rec, M3Rec::RegisterNode { .. }), "{id:?}");
 /// ```
 /// ```compile_fail,E0639
-/// use skep_namespace::{system_account, M3Rec, M3State};
-/// let (addr, _) = M3State::genesis()
-///     .mint_document(&system_account(), true)
-///     .expect("the system account mints");
-/// let rec = M3Rec::Allocate { addr, published: true };
-/// assert!(matches!(rec, M3Rec::Allocate { .. }));
+/// use skep_namespace::{system_account, M3Rec, M3State, PrincipalId};
+/// let (prefix, id) = (system_account(), PrincipalId(7));
+/// let rec = M3Rec::RegisterPrincipal { prefix, id };
+/// assert!(!matches!(rec, M3Rec::RegisterNode { .. }), "{id:?}");
 /// ```
 /// ```
 /// use skep_namespace::{system_account, M3Rec, M3State};
@@ -127,7 +180,7 @@ pub const SYSTEM_PRINCIPAL: PrincipalId = PrincipalId(9_000_000_000_000_000);
 ///     .mint_document(&system_account(), true)
 ///     .expect("the system account mints");
 /// let allocates = match rec {
-///     M3Rec::Allocate { .. } => true,
+///     M3Rec::Allocate(_) => true,
 ///     M3Rec::RegisterNode { .. } | M3Rec::RegisterPrincipal { .. } => false,
 ///     _ => false,
 /// };
@@ -139,7 +192,7 @@ pub const SYSTEM_PRINCIPAL: PrincipalId = PrincipalId(9_000_000_000_000_000);
 ///     .mint_document(&system_account(), true)
 ///     .expect("the system account mints");
 /// let allocates = match rec {
-///     M3Rec::Allocate { .. } => true,
+///     M3Rec::Allocate(_) => true,
 ///     M3Rec::RegisterNode { .. } | M3Rec::RegisterPrincipal { .. } => false,
 /// };
 /// assert!(allocates);
@@ -149,10 +202,10 @@ pub const SYSTEM_PRINCIPAL: PrincipalId = PrincipalId(9_000_000_000_000_000);
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[non_exhaustive]
 pub enum M3Rec {
-    /// A mint's COMMIT HALF: advance the frontier of the chain `addr` lies on
-    /// (§1) — this record is the only thing that moves a frontier — which is
-    /// exactly the chain whose `*_lock_key` its mint pairs with: frontier key
-    /// and lock key are one key.
+    /// A mint's COMMIT HALF: advance the frontier of the chain its address
+    /// ([`Allocation::addr`]) lies on (§1) — this record is the only thing
+    /// that moves a frontier — which is exactly the chain whose `*_lock_key`
+    /// its mint pairs with: frontier key and lock key are one key.
     ///
     /// WHERE IT MAY BE STAGED — the caller's half of every mint, and the one
     /// obligation M3 cannot check, since the record carries an address and
@@ -180,21 +233,22 @@ pub enum M3Rec {
     /// states the coupling's other half). `delegate`, the only op that
     /// allocates an account, stages both.
     ///
-    /// `published` is the RESOLVED publication state of a minted DOCUMENT
-    /// (PUB-7.8, PUB-7.10, PUB-8.18): every document-minting record journals
-    /// the bit its caller resolved — never the caller's three-valued flag, so
-    /// replay reconstructs the world that committed and not a re-derivation
-    /// from the op's arguments — and [`M3State::apply_m3`] folds it into the
-    /// publication map for a Document-tier `addr` (a version is a document
-    /// too). IMMUTABLE after mint: no op changes it — there is no publication
-    /// transition in either direction, and the publish shot mints a new member
-    /// rather than changing one (PUB-1.9, PUB-1.68) — and no LATER record
-    /// changes it either: the fold writes the entry only where none is held,
-    /// so a second `Allocate` naming a registered document leaves its bit
-    /// alone. Outside the document tier — an account, a content or link
-    /// element — publication is not a property of the address at all
-    /// (PUB-1.68: one bit per DOCUMENT); those mints stamp
-    /// `NO_PUBLICATION_STATE` (`false`) and the fold does not read it.
+    /// Its bit, [`Allocation::published`], is the RESOLVED publication state
+    /// of a minted DOCUMENT (PUB-7.8, PUB-7.10, PUB-8.18): every
+    /// document-minting record journals the bit its caller resolved — never
+    /// the caller's three-valued flag, so replay reconstructs the world that
+    /// committed and not a re-derivation from the op's arguments — and
+    /// [`M3State::apply_m3`] folds it into the publication map for a
+    /// Document-tier address (a version is a document too). IMMUTABLE after
+    /// mint: no op changes it — there is no publication transition in either
+    /// direction, and the publish shot mints a new member rather than
+    /// changing one (PUB-1.9, PUB-1.68) — and no LATER record changes it
+    /// either: the fold writes the entry only where none is held, so a second
+    /// `Allocate` naming a registered document leaves its bit alone. Outside
+    /// the document tier — an account, a content or link element —
+    /// publication is not a property of the address at all (PUB-1.68: one
+    /// bit per DOCUMENT); those mints stamp `NO_PUBLICATION_STATE` (`false`)
+    /// and the fold does not read it.
     /// NON-OPTIONAL by design (PUB-7.8) — no `Option`, no `#[serde(default)]`:
     /// a frame written before the bit existed ends where the bit should begin,
     /// and that end-of-input is the refusal. M2 then replays from an older
@@ -204,12 +258,7 @@ pub enum M3Rec {
     ///
     /// [`M3State::apply_m3`]: crate::M3State::apply_m3
     /// [`M3State::is_allocated`]: crate::M3State::is_allocated
-    #[non_exhaustive]
-    Allocate {
-        #[serde(deserialize_with = "parented_address")]
-        addr: Address,
-        published: bool,
-    },
+    Allocate(Allocation),
     /// External node admission (ASN-0047 NodeBaptism; §7).
     #[non_exhaustive]
     RegisterNode { addr: Address },
@@ -242,6 +291,44 @@ pub enum M3Rec {
     },
 }
 
+/// What an [`M3Rec::Allocate`] carries — the address a mint issued and the
+/// publication bit stamped on it — behind private fields, so the record a
+/// mint returns is the record the fold receives: no crate but this one builds
+/// an `Allocation` or writes one. A struct variant cannot hold that line,
+/// since Rust has no private enum-variant fields: a crate that can match
+/// `Allocate { addr, .. }` can bind `addr` through `&mut`, `#[non_exhaustive]`
+/// or not. Read through [`Allocation::addr`] and [`Allocation::published`].
+///
+/// Its bytes are a struct variant's: bincode writes a newtype variant as its
+/// index and then its payload, and a struct as its fields in order, which is
+/// exactly how it writes a struct variant `Allocate { addr, published }` —
+/// `tests/it/recovery.rs` pins the bytes against a raw struct-variant twin. So
+/// the field order is journal format, as the variant order is: a field is
+/// appended, never inserted or reordered. `addr` re-enters through its at-rest
+/// door (`parented_address`), and `published` takes no default (PUB-7.8).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Allocation {
+    /// The address the mint issued: `c_{m+1}` of the chain it lies on.
+    #[serde(deserialize_with = "parented_address")]
+    pub(crate) addr: Address,
+    /// The bit the mint stamped ([`M3Rec::Allocate`] states its rule).
+    pub(crate) published: bool,
+}
+
+impl Allocation {
+    /// The address the mint issued.
+    pub fn addr(&self) -> &Address {
+        &self.addr
+    }
+
+    /// The publication bit the record journals: the RESOLVED state of a
+    /// Document-tier [`Allocation::addr`] (PUB-8.18), and for any other tier
+    /// the `NO_PUBLICATION_STATE` absence the fold never reads.
+    pub fn published(&self) -> bool {
+        self.published
+    }
+}
+
 /// The record's three TEST constructors (`test-hooks`, default off): the one
 /// way a crate other than this one builds an `M3Rec`, for the suites that
 /// seed M3 state through the fold — states no op produces among them, an
@@ -253,9 +340,9 @@ pub enum M3Rec {
 #[cfg(feature = "test-hooks")]
 #[doc(hidden)]
 impl M3Rec {
-    /// `Allocate { addr, published }`.
+    /// `Allocate(Allocation { addr, published })`.
     pub fn allocate(addr: Address, published: bool) -> M3Rec {
-        M3Rec::Allocate { addr, published }
+        M3Rec::Allocate(Allocation { addr, published })
     }
 
     /// `RegisterNode { addr }`.
@@ -269,7 +356,7 @@ impl M3Rec {
     }
 }
 
-/// `Allocate.addr`'s at-rest door: M1's validating decode, then the standing
+/// `Allocation.addr`'s at-rest door: M1's validating decode, then the standing
 /// fact [`M3State::apply_m3`]'s `namespace_of` `expect` rests on, and which
 /// T4-validity does NOT carry: a minted address extends a parent. `[7]` is
 /// T4-valid, so M1's door passes it, and a parentless `Allocate` reaching the

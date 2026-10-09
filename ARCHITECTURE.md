@@ -1123,7 +1123,7 @@ beside the mints they call so the two files depend one way — and
 `state/query.rs` every other query (§C). Its `test-hooks` feature (default
 off) compiles in `M3Rec`'s three test constructors, the one way another
 crate's suite builds a record; `scripts/gate-full.sh` runs its doctests —
-the `compile_fail` pairs on `M3Rec` that pin the two seals a foreign crate
+the `compile_fail` pairs on `M3Rec` that pin the seals a foreign crate
 meets.
 
 Rules that hold across its files:
@@ -1132,19 +1132,22 @@ Rules that hold across its files:
   address with the one `M3Rec::Allocate` that realizes it. The caller takes
   the paired `*_lock_key` for the transaction, mints off that transaction's
   working state, and pushes the record in it before its next mint on the
-  chain. That record is the only thing that advances a frontier. A mint
-  whose record is dropped hands out the same address again, and nothing
-  reports it; a record pushed anywhere else is stale and issues its address
-  twice, refused only by a debug build's fold.
+  chain. That record is the only thing that advances a frontier, and the
+  caller pushes it exactly as the mint built it: `Allocate`'s payload,
+  `Allocation`, keeps its fields private, so no caller rewrites the address
+  it carries. A mint whose record is dropped hands out the same address
+  again, and nothing reports it; a record pushed anywhere else is stale and
+  issues its address twice, refused only by a debug build's fold.
 - **An account is minted only with its seat.** `delegate` is the only op
   that allocates an account: it stages the account's `M3Rec::Allocate` and
   its principal's `M3Rec::RegisterPrincipal` in one transaction, and genesis
   folds its one account the same way. So a registered account is owned at
   exactly its own prefix, and so is every document in it — its owner
   account, which `M3State::account_seat` reads by one lookup. The fold
-  checks neither half, and only this crate builds a record — `M3Rec` and
-  each of its variants are `#[non_exhaustive]`, as `M5Rec`'s and
-  `LinkRec`'s are — so a second path that allocates an account, or seats a
+  checks neither half, and only this crate builds or edits a record —
+  `M3Rec` and its two registry variants are `#[non_exhaustive]`, as
+  `M5Rec`'s and `LinkRec`'s are, and `Allocate`'s payload keeps its fields
+  private — so a second path that allocates an account, or seats a
   principal, is one inside it and owes the other half.
 - **A namespace has one spelling.** `NsKey`'s fields are private to
   `src/ns.rs`, so every frontier key, and every chain lock key encoded from
@@ -1159,11 +1162,13 @@ Rules that hold across its files:
   issue any other element. Type names are spelled in subspace 3 — the
   commons vocabulary's in the ghost home document's — and rest on it, so a
   third element chain is a format change those names must move ahead of.
-- **The slice's shape is its format.** `M3State`'s fields and `M3Rec`'s
-  variants are appended, never inserted or reordered: bincode writes fields
-  in order and variants by index. `tests/it/genesis.rs` pins genesis's
-  bytes field by field, and `tests/it/recovery.rs` each variant's against a
-  raw twin.
+- **The slice's shape is its format.** `M3State`'s fields, `M3Rec`'s
+  variants and `Allocation`'s fields are appended, never inserted or
+  reordered: bincode writes fields in order and variants by index, and
+  writes `Allocate` over its payload exactly as it would a struct variant
+  carrying those fields. `tests/it/genesis.rs` pins genesis's bytes field
+  by field, and `tests/it/recovery.rs` each variant's against a raw
+  struct-variant twin.
 
 Its integration suite is one binary, `tests/it/`: one file per surface over
 the shared `common` world, and `heap`, the binary's byte-counting

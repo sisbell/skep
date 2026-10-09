@@ -34,7 +34,7 @@ use skep_address::{ordinal, validate, Address, GateViolation, Level, Nat, Tumble
 
 use crate::ghost::{ghost_floor, ghost_home_document};
 use crate::ns::{is_content_or_link_slot, namespace_of, nth_in, NsKey};
-use crate::record::{M3Rec, PrincipalId, BOOTSTRAP_PRINCIPAL, SYSTEM_PRINCIPAL};
+use crate::record::{Allocation, M3Rec, PrincipalId, BOOTSTRAP_PRINCIPAL, SYSTEM_PRINCIPAL};
 
 /// The `published` an `Allocate` carries OUTSIDE the document tier — an
 /// account, a content or link element — where publication is not a property
@@ -412,23 +412,23 @@ impl M3State {
                 addr: system_node(),
             },
             // `delegate`: the system account 1.1.0.1, baptized and seated.
-            M3Rec::Allocate {
+            M3Rec::Allocate(Allocation {
                 addr: system_account(),
                 published: NO_PUBLICATION_STATE,
-            },
+            }),
             M3Rec::RegisterPrincipal {
                 prefix: system_account(),
                 id: SYSTEM_PRINCIPAL,
             },
             // Two creates under it, both born published: doc 1, then doc 2 (H).
-            M3Rec::Allocate {
+            M3Rec::Allocate(Allocation {
                 addr: ghost_home_document(),
                 published: true,
-            },
-            M3Rec::Allocate {
+            }),
+            M3Rec::Allocate(Allocation {
                 addr: head_document(),
                 published: true,
-            },
+            }),
         ];
         seed.iter().fold(roots, |s, r| s.apply_m3(r))
     }
@@ -463,8 +463,10 @@ impl M3State {
     /// path. A debug build fail-stops on the contiguity `debug_assert`; a
     /// release build folds the record as written, moving the frontier to its
     /// ordinal. What the fold trusts for both conditions is an IN-PROCESS
-    /// producer, and [`M3Rec`]'s seal keeps every one inside this crate — the
-    /// mints, the ops and genesis — in a build that compiles no test.
+    /// producer, and [`M3Rec`]'s seals keep every one inside this crate — the
+    /// mints, the ops and genesis — in a build that compiles no test: no
+    /// other crate builds a record, and none edits the `Allocate` a mint
+    /// returned, whose payload's fields are private.
     ///
     /// `Allocate`'s publication bit is folded for a DOCUMENT-tier address and
     /// read for no other (PUB-7.7's fold half, at M3's own allocation record:
@@ -524,13 +526,13 @@ impl M3State {
     /// `SYSTEM_PRINCIPAL`'s seat, onto roots where only π₀'s id is live —
     /// before any delegation can run, and from then on `delegate`'s
     /// `DuplicateId` gate refuses that id. A producer this crate adds owes
-    /// both clauses; [`M3Rec`]'s seal keeps every other crate from being one
+    /// both clauses; [`M3Rec`]'s seals keep every other crate from being one
     /// in a build that compiles no test.
     #[must_use = "apply_m3 returns the folded slice; it does not modify the receiver"]
     pub fn apply_m3(&self, r: &M3Rec) -> M3State {
         let mut s = self.clone();
         match r {
-            M3Rec::Allocate { addr, published } => {
+            M3Rec::Allocate(Allocation { addr, published }) => {
                 let key = namespace_of(addr).expect(
                     "≥ 2 components: Allocate's address door refuses a parentless address off the journal, and the totality domain asks it of an in-process producer",
                 );

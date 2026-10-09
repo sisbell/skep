@@ -198,14 +198,14 @@ fn a_zero_frontier_is_an_empty_chain_at_both_reads() {
     let acct = a(&[1, 0, 1]);
     let doc = a(&[1, 0, 1, 0, 1]);
     let mut s = M3State::genesis()
-        .apply_m3(&M3Rec::Allocate {
+        .apply_m3(&M3Rec::Allocate(Allocation {
             addr: acct.clone(),
             published: false,
-        })
-        .apply_m3(&M3Rec::Allocate {
+        }))
+        .apply_m3(&M3Rec::Allocate(Allocation {
             addr: doc.clone(),
             published: true,
-        });
+        }));
     // The ordinary readings first, so a guard that answers `false`/`None`
     // unconditionally is not what turns this test green.
     assert!(s.has_documents(&acct));
@@ -248,22 +248,22 @@ fn a_replayed_allocate_never_moves_a_documents_bit() {
     let acct = a(&[1, 0, 1]);
     let doc = a(&[1, 0, 1, 0, 1]);
     let minted = M3State::genesis()
-        .apply_m3(&M3Rec::Allocate {
+        .apply_m3(&M3Rec::Allocate(Allocation {
             addr: acct.clone(),
             published: false,
-        })
-        .apply_m3(&M3Rec::Allocate {
+        }))
+        .apply_m3(&M3Rec::Allocate(Allocation {
             addr: doc.clone(),
             published: false,
-        });
+        }));
     assert!(!minted.published(&doc), "minted private");
 
     let mut regressed = minted.clone();
     regressed.frontiers.insert(document_ns(&acct), Nat::zero());
-    let replayed = regressed.apply_m3(&M3Rec::Allocate {
+    let replayed = regressed.apply_m3(&M3Rec::Allocate(Allocation {
         addr: doc.clone(),
         published: true,
-    });
+    }));
 
     assert!(replayed.is_registered_document(&doc));
     assert!(
@@ -283,10 +283,10 @@ fn a_replayed_allocate_never_moves_a_documents_bit() {
 fn latest_version_reads_the_chain_not_the_registry() {
     let unregistered_doc = a(&[1, 0, 1, 0, 9]);
     let member = a(&[1, 0, 1, 0, 9, 1]);
-    let s = M3State::genesis().apply_m3(&M3Rec::Allocate {
+    let s = M3State::genesis().apply_m3(&M3Rec::Allocate(Allocation {
         addr: member.clone(),
         published: false,
-    });
+    }));
     assert!(
         !s.is_registered_document(&unregistered_doc),
         "the source was never minted"
@@ -306,10 +306,10 @@ fn latest_version_reads_the_chain_not_the_registry() {
 #[test]
 fn has_documents_reads_the_chain_not_the_registry() {
     let unregistered_acct = a(&[1, 0, 9]);
-    let s = M3State::genesis().apply_m3(&M3Rec::Allocate {
+    let s = M3State::genesis().apply_m3(&M3Rec::Allocate(Allocation {
         addr: a(&[1, 0, 9, 0, 1]),
         published: false,
-    });
+    }));
     assert!(
         !s.is_registered_account(&unregistered_acct),
         "the account was never minted"

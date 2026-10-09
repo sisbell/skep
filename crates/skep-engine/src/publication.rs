@@ -206,10 +206,10 @@ fn draft_entry(namespace: &M3State, doc: &Address) -> Option<(Address, Address)>
 /// land in the ONE commit that carries the record (PUB-7.7 as RES-209 states
 /// it): a reader's head snapshot holds both or neither.
 pub(crate) fn fold(prev: &Drafts, namespace: &M3State, rec: &M3Rec) -> Drafts {
-    let M3Rec::Allocate { addr, .. } = rec else {
+    let M3Rec::Allocate(allocation) = rec else {
         return prev.clone();
     };
-    match draft_entry(namespace, addr) {
+    match draft_entry(namespace, allocation.addr()) {
         Some((doc, owner)) => prev.update(doc, owner),
         None => prev.clone(),
     }

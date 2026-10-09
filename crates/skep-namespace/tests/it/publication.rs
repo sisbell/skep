@@ -199,9 +199,15 @@ fn mint_version_stamps_exactly_the_bit_passed() {
         "the source's own bit is not the version's"
     );
 
-    // The record carries the bit verbatim, whole value, in both directions.
+    // The record carries the bit verbatim, whole value, in both directions —
+    // and a caller outside the crate reads it back through the payload's own
+    // accessors, the one read its private fields leave open.
     for bit in [false, true] {
         let (next, rec) = m3.mint_version(&src, bit).expect("peek");
+        let M3Rec::Allocate(allocation) = &rec else {
+            panic!("a mint returns an Allocate, got {rec:?}");
+        };
+        assert_eq!((allocation.addr(), allocation.published()), (&next, bit));
         assert_eq!(rec, M3Rec::allocate(next, bit));
     }
 }

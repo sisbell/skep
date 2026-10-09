@@ -13,7 +13,7 @@ use skep_kernel::{LockKey, Space};
 use super::{M3State, MAX_PRINCIPAL_COMPONENTS, NO_PUBLICATION_STATE};
 use crate::error::MintError;
 use crate::ns::{account_ns, content_ns, document_ns, link_ns, ns_lock_key, version_ns, NsKey};
-use crate::record::M3Rec;
+use crate::record::{Allocation, M3Rec};
 
 // ---------------------------------------------------------------------------
 // §A The lock-key constructors: one per chain, and the two registry keys.
@@ -160,7 +160,10 @@ impl M3State {
     /// (§A); each public mint is this behind its own structural gate.
     fn mint_on(&self, key: &NsKey, published: bool) -> Result<(Address, M3Rec), GateViolation> {
         let addr = self.next_in(key)?;
-        Ok((addr.clone(), M3Rec::Allocate { addr, published }))
+        Ok((
+            addr.clone(),
+            M3Rec::Allocate(Allocation { addr, published }),
+        ))
     }
 
     /// Next content address under `home`: namespace `(b_C(home), 1)`, element

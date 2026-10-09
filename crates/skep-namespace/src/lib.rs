@@ -164,8 +164,9 @@ mod ns;
 // The ghost region: the five reserved type addresses M7 reads, and the floor
 // that keeps the allocator past them.
 mod ghost;
-// The journal delta `M3Rec` and its two field doors, and the identity type
-// it names with that type's two fixed ids.
+// The journal delta `M3Rec`, `Allocate`'s sealed payload `Allocation`, and
+// the two field doors, and the identity type it names with that type's two
+// fixed ids.
 mod record;
 // M3's slice: `M3State`, genesis and the fold, the frontier arithmetic and
 // the two registry caps; beneath it `state/mint.rs` (§A: the lock keys, the
@@ -179,7 +180,7 @@ pub use error::{CreateDocumentError, DelegateError, MintError, RegisterNodeError
 pub use ghost::{ghost_home_document, ghost_position, GHOST_POSITIONS};
 pub use ns::{first_document_address, first_version_address};
 pub use ops::Namespace;
-pub use record::{M3Rec, PrincipalId, BOOTSTRAP_PRINCIPAL, SYSTEM_PRINCIPAL};
+pub use record::{Allocation, M3Rec, PrincipalId, BOOTSTRAP_PRINCIPAL, SYSTEM_PRINCIPAL};
 pub use state::{
     head_document, prefix_contains, system_account, system_node, M3State, MAX_NODE_COMPONENTS,
     MAX_PRINCIPAL_COMPONENTS,

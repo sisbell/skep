@@ -1115,8 +1115,11 @@ bit, all in one slice, `M3State`. Node addresses come from provisioning
 and are only admitted. Its modules are declared in `src/lib.rs` in
 dependency order, each with a line saying what it holds. `state.rs` is the
 slice — its types, its journal delta, genesis, the fold and the frontier
-arithmetic; beneath it, `state/mint.rs` holds the lock keys and the five
-mints (§A) and `state/query.rs` the queries (§C).
+arithmetic; beneath it, `state/mint.rs` holds the lock keys, the five mints
+(§A) and the two peeks — `next_account_prefix` and `next_content_address`,
+each its chain's mint without the record, kept beside the mints they call
+so the two files depend one way — and `state/query.rs` every other query
+(§C).
 
 Rules that hold across its files:
 

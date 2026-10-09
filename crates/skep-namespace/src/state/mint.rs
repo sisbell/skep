@@ -1,7 +1,8 @@
 //! §A, beneath [`M3State`]: the lock keys a transaction holds, the five mints
-//! that read their frontiers, and the account chain's peek
-//! ([`M3State::next_account_prefix`]), which is the account mint without its
-//! record. An `impl M3State` child of `state`: it reaches the frontier
+//! that read their frontiers, and the two peeks —
+//! [`M3State::next_account_prefix`] and [`M3State::next_content_address`],
+//! each its chain's mint without the record, kept beside the mints they
+//! call. An `impl M3State` child of `state`: it reaches the frontier
 //! arithmetic (`next_in`) the way a child does, and keeps `mint_on`, the mint
 //! behind the five, private to itself, so no other module reaches that mint
 //! except through one of the five gates.
@@ -147,11 +148,6 @@ impl M3State {
 // to keep GIVEN the caller's half; what dropping the record, or staging it
 // anywhere else, costs is stated on `M3Rec::Allocate`, the record the
 // caller stages.
-//
-// A mint is also the chain's PEEK: called without staging it answers the
-// next address and moves nothing, which is what `next_account_prefix`
-// publishes for the account chain and what the determinism assertions here
-// ask of the other four.
 // ---------------------------------------------------------------------------
 
 impl M3State {
@@ -276,7 +272,22 @@ impl M3State {
                 .expect("a registered node/account anchor with g ≤ 2 passes TA5a"),
         )
     }
+}
 
+// ---------------------------------------------------------------------------
+// §A The two peeks — each its chain's mint without the record. Called
+// without staging, a mint answers the next address on its chain and moves
+// nothing; two chains publish that answer as a read: `next_account_prefix`
+// for the account chain, the next-form `delegate` demands, and
+// `next_content_address` for the content chain, the content-frontier read
+// (AUTH-6.38). They are §C reads by role and live here because of what they
+// call: each calls its chain's mint, and the mints call `query`'s gates, so
+// with the peeks beside the mints the two files depend one way. Every mint
+// answers the same way unstaged; the allocation suite's determinism
+// assertions rely on it.
+// ---------------------------------------------------------------------------
+
+impl M3State {
     /// Peek the next delegable account-tier prefix under `parent` — the exact
     /// value `delegate` will demand as next-form (O17c), so a caller obtains a
     /// valid `new_prefix` instead of guess-and-retry on `NotNextForm`. It is

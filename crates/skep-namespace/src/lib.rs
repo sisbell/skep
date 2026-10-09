@@ -157,8 +157,8 @@ mod ns;
 mod ghost;
 // M3's slice: the identity type, the journal delta and its two field doors,
 // `M3State`, genesis and the fold, the frontier arithmetic; beneath it
-// `state/mint.rs` (§A: the lock keys and the five mints) and `state/query.rs`
-// (§C: the queries).
+// `state/mint.rs` (§A: the lock keys, the five mints and the two peeks, each
+// a mint without its record) and `state/query.rs` (§C: every other query).
 mod state;
 // The `Namespace` handle: the four entity operations, each one transaction.
 mod ops;

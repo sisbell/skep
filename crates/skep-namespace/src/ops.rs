@@ -20,9 +20,10 @@ use crate::state::{
 use crate::HasM3;
 
 /// M3's transact-driving op handle over M2 (§B): a thin borrow of the
-/// engine's kernel. The pure mints and queries live on [`M3State`] (reached
-/// through [`HasM3`]); this type owns only the four entity operations M10
-/// dispatches.
+/// engine's kernel and, on an attested handle, of the attestation its two
+/// document mints commit under. The pure mints and queries live on
+/// [`M3State`] (reached through [`HasM3`]); this type owns only the four
+/// entity operations M10 dispatches.
 ///
 /// Two facts each op inherits from M2's `transact`, written here because they
 /// bind its callers.

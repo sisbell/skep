@@ -10,13 +10,13 @@
 //! private items the way a child does, so nothing here is widened for them:
 //!
 //! * [`mint`] — §A: the lock keys a transaction holds, the five mints, and
-//!   the account chain's peek.
+//!   the two peeks, each a mint without its record.
 //! * [`query`] — §C: entity membership (§2), the publication reads, the
 //!   principal registry and the ω resolver (§5).
 //!
 //! The unit tests for the slice and both children are `state/tests.rs`.
 
-// §A: the lock keys a transaction holds, the five mints, the account peek.
+// §A: the lock keys a transaction holds, the five mints, the two peeks.
 mod mint;
 // §C: membership, the publication reads, the principal registry and ω.
 mod query;

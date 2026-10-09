@@ -1,8 +1,10 @@
 //! §C, beneath [`M3State`]: the queries — pure reads off any M2 snapshot,
-//! writing nothing. Entity membership (§2) and the chain-end reads, the
-//! publication map's point read and its walk, the principal registry and the
-//! ω resolver (§5), and [`prefix_contains`], which answers where an address
-//! sits and never who may write it. An `impl M3State` child of `state`: it
+//! writing nothing — all but the two peeks, which call a mint and so live in
+//! `mint`. Entity membership (§2), the two chain-end reads that read a
+//! frontier directly (`has_documents`, `latest_version`), the publication
+//! map's point read and its walk, the principal registry and the ω resolver
+//! (§5), and [`prefix_contains`], which answers where an address sits and
+//! never who may write it. An `impl M3State` child of `state`: it
 //! reads the slice's private fields the way a child does, and keeps the one
 //! chain-membership decision (`is_chain_member`) and the one ω walk (`omega`)
 //! private to itself, so every other reader goes through a method that

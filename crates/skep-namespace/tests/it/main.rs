@@ -18,6 +18,7 @@ mod create_new_document;
 mod delegate;
 mod genesis;
 mod ghost;
+mod handle;
 mod ownership;
 mod publication;
 mod recovery;

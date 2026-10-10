@@ -22,7 +22,12 @@
 //! mapping onto the wire's transport errors.
 //!
 //! The budget is a [`Permits`] pool — `skep_util::permits`, the daemon's one
-//! permit mechanism, whose other instance is the class-scan pool.
+//! permit mechanism, whose other instance is the class-scan pool — and
+//! beside it the pool's EDGE PAIR (`operations.md` §1.1 m12; §4 row 27): an
+//! [`EdgeTracker`] the one door tells of every refusal and admission, which
+//! answers the edge crossed — the first refusal of an episode, the admission
+//! a hold-down past its last — and queues it for the daemon's classed door,
+//! this module holding none (`crate::limits::EDGE_HOLD_DOWN`'s card).
 
 use std::sync::Arc;
 
@@ -33,7 +38,9 @@ use skep_engine::{Engine, EngineStores, HistoryError, World};
 use skep_febe::{OperationSurface, Request, Response, SessionId};
 use skep_kernel::{CheckpointPolicy, Durability, Kernel, KernelConfig, SaltSource, Seq, Snapshot};
 use skep_namespace::PrincipalId;
-use skep_util::permits::{Permit, Permits};
+use skep_util::permits::{edge_clock_now, EdgeTracker, Permit, Permits};
+
+use crate::limits::EDGE_HOLD_DOWN;
 
 /// Concurrent historical reconstructions (`Engine::world_at` behind
 /// `/op-at` and `/dump?at`, and the chain read behind `/chain?at`, which
@@ -74,11 +81,18 @@ pub(crate) enum Unavailable {
 #[derive(Debug)]
 pub(crate) struct History {
     permits: Permits,
+    /// THE POOL's EDGE PAIR (m12): the memory of the episode that stands, if
+    /// one does, and the edges the one door crossed and has not yet handed
+    /// the daemon ([`History::edge`]).
+    edge: EdgeTracker,
 }
 
 impl History {
     pub fn new() -> History {
-        History { permits: Permits::new(MAX_CONCURRENT_RECONSTRUCTIONS) }
+        History {
+            permits: Permits::new(MAX_CONCURRENT_RECONSTRUCTIONS),
+            edge: EdgeTracker::new(EDGE_HOLD_DOWN),
+        }
     }
 
     /// The budget's one door — a permit, or [`Unavailable::Busy`] when every
@@ -87,8 +101,30 @@ impl History {
     /// journal verdict ([`Unavailable::Busy`]'s card states what that costs a
     /// caller), so it is written here once rather than by each question that
     /// spends a permit.
+    ///
+    /// THE EDGE PAIR's ONE SITE (m12): the tracker is told of the refusal or
+    /// the admission at the edge clock's instant, and the edge it answers —
+    /// the first refusal of an episode, the first admission a hold-down past
+    /// its last refusal — is queued for the daemon, which says it through
+    /// its classed door at the end of the request that crossed it, in the
+    /// pool's ruled words (`the history pool is saturated` / `has room
+    /// again`). The test hook (`History::try_hold_permit`) takes its permits
+    /// beside this door and crosses no edge: what a suite holds is the pool,
+    /// not a request.
     fn admit(&self) -> Result<Permit<'_>, Unavailable> {
-        self.permits.try_acquire().ok_or(Unavailable::Busy)
+        let permit = self.permits.try_acquire();
+        let now = edge_clock_now();
+        self.edge.queue(match &permit {
+            Some(_) => self.edge.admitted(now),
+            None => self.edge.refused(now),
+        });
+        permit.ok_or(Unavailable::Busy)
+    }
+
+    /// The pool's edge tracker, for the daemon to drain: the edges the one
+    /// door crossed since the last drain, in order.
+    pub(crate) fn edge(&self) -> &EdgeTracker {
+        &self.edge
     }
 
     /// One reconstruction and the permit that licenses it. The guard is

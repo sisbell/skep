@@ -15,6 +15,7 @@ use skep_media::serve::Progress;
 #[cfg(feature = "test-hooks")]
 use skep_media::serve::STREAM_HOLD;
 use skep_util::notice::{self, Class, Moment};
+use skep_util::permits::{edge_clock_now, Edge, EdgeTracker};
 
 use super::blob_routes;
 use super::http::{
@@ -25,9 +26,13 @@ use super::http::{
 use super::reply::{refuse, Fetch, Routed, TransportError, SESSION_HEADER};
 use super::request::HttpRequest;
 use super::scan::MAX_CONCURRENT_CLASS_SCANS;
-use super::{CheckpointThreadRefusedLine, Daemon};
+use super::{
+    AcceptFailedLine, AcceptRecoveredLine, BudgetEdgeLine, CheckpointThreadRefusedLine, Daemon,
+};
 use crate::auth::session::Peer;
-use crate::limits::{BLOB_CHUNK, BLOB_IDLE_BOUND, BLOB_TRANSFER_BOUND, PRUNE_INTERVAL};
+use crate::limits::{
+    BLOB_CHUNK, BLOB_IDLE_BOUND, BLOB_TRANSFER_BOUND, EDGE_HOLD_DOWN, PRUNE_INTERVAL,
+};
 use crate::write_path::{CheckpointSignal, StreamStep, Woken};
 
 /// The request worker count `skepd` serves with when the operator names
@@ -315,6 +320,13 @@ pub fn serve_bound(daemon: Daemon, listener: Listener, workers: usize) -> io::Re
     daemon.log_blocked_prefixes(Moment::AtStart);
     let stop = Arc::new(AtomicBool::new(false));
     let subscribers = Arc::new(Subscribers::new());
+    // THE ACCEPT PAIR (`operations.md` §1.1 m12; §4 row 33): ONE tracker
+    // across the workers — the episode's flag and its counter behind one
+    // `Arc` — so the first failing `accept` on ANY worker says the failure
+    // line once, every worker's failures count into the one episode, and
+    // the first success a hold-down after the last failure says the
+    // recovery once, with that count.
+    let accepts = Arc::new(EdgeTracker::new(EDGE_HOLD_DOWN));
     // Spawned FALLIBLY, and named: `thread::spawn` panics when the OS
     // refuses a thread, and a panic here would unwind out of a half-built
     // handle vector — detaching the workers that did start, with the
@@ -327,15 +339,33 @@ pub fn serve_bound(daemon: Daemon, listener: Listener, workers: usize) -> io::Re
         let listener = Arc::clone(&listener);
         let stop = Arc::clone(&stop);
         let subscribers = Arc::clone(&subscribers);
+        let accepts = Arc::clone(&accepts);
         let spawned = thread::Builder::new().name("skepd-worker".into()).spawn(move || loop {
             if stop.load(Ordering::Acquire) {
                 break;
             }
-            let stream = match listener.accept() {
-                Ok((s, _)) => s,
-                Err(_) => {
-                    // Transient accept failure (EMFILE and kin): brief
-                    // pause instead of a spin, then re-check stop.
+            let accepted = listener.accept();
+            // THE ACCEPT SEAM (test seam, `server/hooks.rs`): the next `k`
+            // accepts a suite armed answer the chosen error in place of the
+            // connection they took, which is dropped — so the pair below is
+            // driven without exhausting the process's descriptors.
+            #[cfg(any(test, feature = "test-hooks"))]
+            let accepted = super::hooks::fail_the_accept_if_armed(accepted);
+            let stream = match accepted {
+                Ok((s, _)) => {
+                    // THE ACCEPT PAIR's SECOND EDGE (m12): a success a whole
+                    // hold-down after the episode's last failure says the
+                    // recovery, once, with every worker's failures counted.
+                    say_accept_recovered_if_due(&daemon, &accepts);
+                    s
+                }
+                Err(e) => {
+                    // Transient accept failure (EMFILE and kin): said ONCE
+                    // across the workers at the first of an episode — the
+                    // OS's text names the cause; the act is the operator's,
+                    // the descriptor limit — then a brief pause instead of a
+                    // spin, and re-check stop.
+                    say_accept_failed_once(&daemon, &accepts, &e);
                     thread::sleep(ACCEPT_RETRY_PAUSE);
                     continue;
                 }
@@ -851,6 +881,30 @@ fn stream_fetch(daemon: &Daemon, req: &HttpRequest, stream: &mut TcpStream, fetc
 /// trying to.
 const MAX_SUBSCRIBERS: usize = 64;
 
+/// THE ACCEPT PAIR's FIRST EDGE (`operations.md` §1.1 m12; §4 row 33): a
+/// failed `accept` on this worker, told to the one tracker the workers share
+/// at the edge clock's instant — the first of an episode says
+/// [`AcceptFailedLine`] through the daemon's classed door, once across the
+/// workers, the OS's text as the cause; every later failure inside the
+/// episode is counted and restarts the hold-down, and says nothing. The
+/// pause and the retry are the loop's, unchanged.
+fn say_accept_failed_once(daemon: &Daemon, accepts: &EdgeTracker, e: &io::Error) {
+    if let Some(edge) = accepts.refused(edge_clock_now()) {
+        daemon.say(edge.class(), AcceptFailedLine(e));
+    }
+}
+
+/// THE ACCEPT PAIR's SECOND EDGE (m12; §4 row 33): a successful `accept`
+/// told to the shared tracker — the first one a whole hold-down after the
+/// episode's last failure says [`AcceptRecoveredLine`], once, with every
+/// worker's failures counted; a success with no episode standing, or inside
+/// the hold-down, costs one atomic load and says nothing.
+fn say_accept_recovered_if_due(daemon: &Daemon, accepts: &EdgeTracker) {
+    if let Some(Edge::Landing { refusals }) = accepts.admitted(edge_clock_now()) {
+        daemon.say(Class::Landing, AcceptRecoveredLine { failures: refusals });
+    }
+}
+
 /// The live event streams: the budget, the admission, and the retirement.
 /// One card, because a stream admitted here is one shutdown must join, and
 /// a slot is free only once the thread that held it has finished — two
@@ -858,24 +912,50 @@ const MAX_SUBSCRIBERS: usize = 64;
 #[derive(Debug)]
 struct Subscribers {
     live: Mutex<Vec<JoinHandle<()>>>,
+    /// THE BUDGET's EDGE PAIR (`operations.md` §1.1 m12; §6's row): the
+    /// tracker the admission tells of every stream refused past the budget
+    /// and every stream admitted, whose edges it says at once through the
+    /// daemon's classed door ([`BudgetEdgeLine`]) — `the live-stream budget
+    /// is saturated` at the first refusal of an episode, `the live-stream
+    /// budget has room again` at the first admission a hold-down past its
+    /// last refusal — once per episode and nothing per stream.
+    edge: EdgeTracker,
 }
 
 impl Subscribers {
     fn new() -> Subscribers {
-        Subscribers { live: Mutex::new(Vec::new()) }
+        Subscribers { live: Mutex::new(Vec::new()), edge: EdgeTracker::new(EDGE_HOLD_DOWN) }
     }
 
     /// Admit one stream and give it its own thread, or refuse it by dropping
     /// the socket — a clean close before any stream head, which is the same
     /// end a subscriber meets at shutdown and the one a reconnecting client
-    /// already handles.
+    /// already handles — each edge of the budget's pair said once per
+    /// episode (m12): the first refusal, and the first admission a hold-down
+    /// after the last refusal.
     fn admit(&self, daemon: Arc<Daemon>, stream: TcpStream, closed: bool) {
         let mut live = self.live.lock();
         // Reap finished threads so the registry tracks live streams, not
         // history — which is also what returns a departed subscriber's slot.
         live.retain(|h| !h.is_finished());
         if live.len() >= MAX_SUBSCRIBERS {
+            // THE BUDGET's FIRST EDGE (m12): the stream past the budget is
+            // refused as before — dropped, a clean close before any head —
+            // and the first refusal of an episode says so, once, through the
+            // daemon's classed door; the rest say nothing and restart the
+            // hold-down.
+            if let Some(edge) = self.edge.refused(edge_clock_now()) {
+                daemon.say(edge.class(), BudgetEdgeLine(edge));
+            }
             return;
+        }
+        // THE BUDGET's SECOND EDGE (m12): admitted — the budget has room —
+        // and where that is the first admission a whole hold-down after the
+        // episode's last refusal, said once. Judged here, at the budget's
+        // own decision: the spawn below is another condition's, not the
+        // budget's.
+        if let Some(edge) = self.edge.admitted(edge_clock_now()) {
+            daemon.say(edge.class(), BudgetEdgeLine(edge));
         }
         // Spawn FALLIBLY. `thread::spawn` panics when the OS refuses a
         // thread, and this call sits outside the handler's `catch_unwind` —

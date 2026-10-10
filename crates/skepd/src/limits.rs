@@ -1,12 +1,14 @@
 //! The three request-body caps the wire promises (wire.md §Transport), the
-//! change feed's three page bounds (wire.md §The change feed), and the blob
+//! change feed's three page bounds (wire.md §The change feed), the blob
 //! route's own bounds that are the daemon's — the streaming arm's chunk,
-//! its two deadlines and the pruner's cadence (wire.md §Media). The media
-//! resource's own numbers — the per-file cap, the fetch pool and its two
-//! intervals, the upload pool, the default per-account limit's share and
-//! floor, the standing-uploads bound, the logs' compaction trigger and the
-//! picture cell's cap — are `skep_media::limits`'s, the daemon taking the
-//! four it reads from there.
+//! its two deadlines and the pruner's cadence (wire.md §Media) — and the
+//! operator stream's own cadences: the standing line's, the feed walk's
+//! progress and the hold-down the edge pairs judge their second line by
+//! (`operations.md` §1.1 m11, m12, m15). The media resource's own numbers —
+//! the per-file cap, the fetch pool and its two intervals, the upload pool,
+//! the default per-account limit's share and floor, the standing-uploads
+//! bound, the logs' compaction trigger and the picture cell's cap — are
+//! `skep_media::limits`'s, the daemon taking the four it reads from there.
 
 use std::num::NonZeroUsize;
 use std::time::Duration;
@@ -101,6 +103,47 @@ pub(crate) const FEED_WALK_PROGRESS_BOUNDARIES: u64 = 1_000;
 /// is well under a supervisor's patience and well over the stream's own
 /// cost of a line.
 pub(crate) const FEED_WALK_PROGRESS_INTERVAL: Duration = Duration::from_secs(10);
+
+/// THE EDGE PAIRS' HOLD-DOWN — 15 s, INTERIM (the register's; D1: a daemon
+/// constant for a cadence, as the standing line's and the pruner's are):
+/// how long a bound that refused must have stood CLEAR — no refusal — before
+/// its next admission says the second line of its edge pair, `landing:`
+/// (`operations.md` §1.1 m12; §4 rows 27 and 33; §6's three rows). ONE
+/// constant for the eight pairs: the five permit pools — the
+/// reconstruction, the class scan, the fetch, the upload and the write —
+/// the live-stream budget, the challenge store's live evictions and the
+/// workers' `accept`; each judges it through `skep_util::permits`'s
+/// [`EdgeTracker`](skep_util::permits::EdgeTracker), the one mechanism. The
+/// first line, `failure:`, is said when a request FIRST meets the bound; a
+/// refusal inside the hold-down keeps the episode open and restarts it, so
+/// an episode is two lines however long it lasts and however often the
+/// bound flaps at exactly the load that matters — a permit returns, a
+/// request is admitted, the next is refused.
+///
+/// WHY SECONDS, AND WHY FIFTEEN. The reference figures the pairs stand
+/// among: the accept loop's retry pause 10 ms (`listen.rs`'s
+/// `ACCEPT_RETRY_PAUSE` — `EMFILE` flaps as fast as connections close and
+/// open, so a hold-down of milliseconds would say a pair per flap); a read
+/// pool's permit held for one request, at most the transport's
+/// `TRANSFER_DEADLINE` of 30 s; an upload's held at most
+/// [`BLOB_TRANSFER_BOUND`], ten minutes; the `/events` keepalive, 15 s
+/// (wire.md §The commit stream); the challenge TTL, 60 s
+/// (`auth::session`'s `CHALLENGE_TTL`). Fifteen seconds is long enough that
+/// a pool releasing one permit at a time under steady overload says one
+/// pair for the overload and not one per permit, and short enough that an
+/// operator reading the stream learns the condition cleared within the
+/// keepalive's own cadence. The arms the constant's words admit are 5, 15
+/// and 30 s; the owner's figure is 15.
+///
+/// WHEN THE SECOND LINE COMES. It is judged at the holder's next ADMITTED
+/// act — a permit taken, a stream admitted, a mint that evicted no live
+/// nonce, an `accept` that succeeded — never by a timer and never at a
+/// refusal: a landing says the condition is clear, and only an act the
+/// bound admitted shows it so. The ops lanes record §5.3 states the
+/// property for the challenge pair and it holds of every pair: on a quiet
+/// holder the `landing:` comes at its first admitted act after the
+/// hold-down, however late.
+pub const EDGE_HOLD_DOWN: Duration = Duration::from_secs(15);
 
 /// THE TRANSFER BOUND of one blob request — 10 minutes, INTERIM: the
 /// deadline on SLOWNESS the idle bound cannot give (a peer pacing one byte

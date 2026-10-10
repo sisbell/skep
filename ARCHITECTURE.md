@@ -53,7 +53,9 @@ above it.
   Its modules and rules: §The blob store.
 - `skep-util` — the support crate below the daemon and the media crate:
   the three utilities both take and neither owns — the counting permit
-  pool behind the daemon's five bounded pools, the operator's notice line
+  pool behind the daemon's five bounded pools and, beside it, the edge
+  tracker each bound that refuses holds, so its saturation and its
+  clearing are said once per episode; the operator's notice line
   (`skepd: ` on every line; §The support crate says why a library spells
   it), and the JSON determinism helpers — `obj`, the key-sorting object
   builder every JSON object the daemon emits is built through,
@@ -409,7 +411,16 @@ decision. `permits` — the counting permit pool (`Permits`, `Permit`): a
 try-acquire with no queue and no blocking whose guard returns its slot on
 drop, the one mechanism behind the reconstruction budget, the class-scan
 pool, the fetch pool, the upload pool and the write pool; a permit is a
-slot of the pool that minted it, so no bound can spend another's. `notice` — the operator's
+slot of the pool that minted it, so no bound can spend another's. Beside
+it the edge tracker (`EdgeTracker`, `Edge`): the once-per-episode memory
+of a bound that refuses — the first refusal it meets an edge, the first
+admission once the condition has stood clear for a hold-down the holder
+names the other — which those five pools, the daemon's live-stream
+budget, its challenge store and its accept loop each hold, so what each
+says on the operator stream is two lines per episode and nothing per
+request; the one rendering of a pool's two lines (`PoolEdgeLine`); and
+the one clock the hold-down is judged against (`edge_clock_now`), whose
+offset the daemon's test seam advances. `notice` — the operator's
 stream (`emit` and `emit_lines`, the class word an argument; `line` and
 `lines`, the un-classed door the call sites written before the class
 existed still take): one line, or one notice of several written as one,

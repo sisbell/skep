@@ -1,9 +1,12 @@
 //! `Daemon`'s test hooks and the notices their holds write — every
 //! `#[doc(hidden)]` item of `Daemon`.
 
+use std::io;
+use std::net::{SocketAddr, TcpStream};
 use std::num::NonZeroU64;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
+use std::thread::{self, ThreadId};
 use std::time::Duration;
 
 use parking_lot::{Condvar, Mutex};
@@ -126,6 +129,54 @@ pub(super) fn park_while_the_write_guard_is_held() {
     while *held {
         WRITE_GUARD_HOLD.released.wait(&mut held);
     }
+}
+
+/// THE ACCEPT SEAM (the test seam behind [`Daemon::fail_the_next_accepts`]):
+/// the next `remaining` connections the workers accept are DROPPED — the
+/// socket closed unanswered, so the peer meets a clean close — and each such
+/// `accept` is read as having FAILED with the chosen error, so a suite
+/// drives the accept pair (`operations.md` §1.1 m12; §4 row 33) without
+/// exhausting the process's descriptors; the real `EMFILE` stays untested
+/// in-process (row 33's TEST column, `none`). Process-wide, as the worker
+/// fault door is: the workers are the transport's threads. Counts every
+/// fire and the distinct workers that fired, so a suite can hold the pair to
+/// ONE line across two workers.
+struct AcceptFaults {
+    remaining: usize,
+    kind: io::ErrorKind,
+    text: String,
+    fired: u64,
+    workers: Vec<ThreadId>,
+}
+
+/// The seam's one arm.
+static ACCEPT_FAULTS: Mutex<AcceptFaults> = Mutex::new(AcceptFaults {
+    remaining: 0,
+    kind: io::ErrorKind::Other,
+    text: String::new(),
+    fired: 0,
+    workers: Vec::new(),
+});
+
+/// The worker loop's side of the seam, called with what `accept` answered:
+/// where the seam is armed and the accept succeeded, the connection is
+/// dropped and the chosen error answered in its place, one arm spent and
+/// this worker counted; otherwise the answer as it came.
+pub(super) fn fail_the_accept_if_armed(
+    accepted: io::Result<(TcpStream, SocketAddr)>,
+) -> io::Result<(TcpStream, SocketAddr)> {
+    let mut faults = ACCEPT_FAULTS.lock();
+    if faults.remaining == 0 || accepted.is_err() {
+        return accepted;
+    }
+    faults.remaining -= 1;
+    faults.fired += 1;
+    let worker = thread::current().id();
+    if !faults.workers.contains(&worker) {
+        faults.workers.push(worker);
+    }
+    drop(accepted);
+    Err(io::Error::new(faults.kind, faults.text.clone()))
 }
 
 impl Daemon {
@@ -596,6 +647,54 @@ impl Daemon {
     #[doc(hidden)]
     pub fn advance_media_clock_ms(&self, ms: u64) {
         self.media.advance_clock_ms(ms);
+    }
+
+    /// TEST HOOK (the same standing): ADVANCE THE EDGE CLOCK by `ms` — the
+    /// one reading the eight edge pairs judge their hold-down against
+    /// (`skep_util::permits::edge_clock_now`; `limits.rs`'s `EDGE_HOLD_DOWN`)
+    /// — so a suite drives a pair's second line through a seam rather than
+    /// a `sleep`, as [`Daemon::advance_media_clock_ms`] drives an expiry.
+    /// The clock is the PROCESS's and not this daemon's: one offset every
+    /// holder in the process reads, which is what makes it one clock for the
+    /// eight pairs — the five pools', the live-stream budget's, the accept
+    /// loop's and the challenge store's, whose mint reads it for the nonces'
+    /// time to live as well, so an expiry and the hold-down move together.
+    #[doc(hidden)]
+    pub fn advance_edge_clock_ms(&self, ms: u64) {
+        skep_util::permits::advance_edge_clock_ms(ms);
+    }
+
+    /// TEST HOOK (the same standing): FAIL THE NEXT `k` ACCEPTS — on
+    /// whichever workers take the next `k` connections, each connection
+    /// dropped unanswered (the peer meets a clean close) and the `accept`
+    /// read as failed with an `io::Error` of `kind` whose text is `text` —
+    /// so a suite drives the accept pair (`operations.md` §1.1 m12; §4 row
+    /// 33) across two workers without exhausting the process's descriptors.
+    /// Process-wide, as the worker fault door is; arming again replaces the
+    /// arm; [`Daemon::accept_faults_remaining`] counts it down.
+    #[doc(hidden)]
+    pub fn fail_the_next_accepts(k: usize, kind: io::ErrorKind, text: &str) {
+        let mut faults = ACCEPT_FAULTS.lock();
+        faults.remaining = k;
+        faults.kind = kind;
+        faults.text = text.to_string();
+    }
+
+    /// TEST HOOK (the same standing): the accepts the seam has yet to fail —
+    /// what a suite waits on reaching zero before it reads the pair's line.
+    #[doc(hidden)]
+    pub fn accept_faults_remaining() -> usize {
+        ACCEPT_FAULTS.lock().remaining
+    }
+
+    /// TEST HOOK (the same standing): how many accepts the seam has failed
+    /// in this process, and on how many DISTINCT workers — the `{n}` the
+    /// recovery line is owed, and the proof that two workers failed where
+    /// the failure line was said once.
+    #[doc(hidden)]
+    pub fn accept_faults_fired() -> (u64, usize) {
+        let faults = ACCEPT_FAULTS.lock();
+        (faults.fired, faults.workers.len())
     }
 
     /// TEST HOOK (the same standing): the floor reads `bytes` as the

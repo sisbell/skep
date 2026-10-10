@@ -60,6 +60,7 @@
 
 use std::fs::File;
 use std::io::{self, Read};
+use std::time::Duration;
 
 use skep_address::{document_of, Address, Level, Nat};
 use skep_arrangement::M5Rec;
@@ -68,30 +69,69 @@ use skep_febe::{FebeWorld, ISpan, Op, OperationSurface, Rejection, Request, Resp
 use skep_links::LinkRec;
 use skep_namespace::M3Rec;
 use skep_util::json::hex_string;
-use skep_util::permits::{Permit, Permits};
+use skep_util::permits::{edge_clock_now, EdgeTracker, Permit, Permits, PoolEdgeLine};
 
 use crate::cell::{self, Class, DESIGNATION};
-use crate::gate::MediaGate;
+use crate::gate::{Door, MediaGate};
 use crate::limits::{
     FETCH_RECHECK_BYTES, FETCH_RECHECK_INTERVAL, MAX_BLOB_BYTES, MAX_CONCURRENT_FETCHES,
 };
+
+/// The word the fetch pool's two lines name it by (`operations.md` §1.1 m12:
+/// one word per pool, the same in both lines) — the refusal's own,
+/// `fetch_busy`.
+const FETCH_POOL: &str = "fetch";
 
 /// THE FETCH POOL — the third instance of [`skep_util::permits`]'s mechanism,
 /// disjoint from the reconstruction pool and the class-scan pool by the
 /// borrow: a [`Permit`] names the pool that issued it, so no fetch spends a
 /// slot of either and neither spends one of these. [`MAX_CONCURRENT_FETCHES`]
 /// slots; a drained pool REFUSES, never queues.
-pub struct FetchPool(Permits);
+///
+/// Beside the pool, ITS EDGE PAIR (`operations.md` §1.1 m12; §4 row 27): an
+/// [`EdgeTracker`] the admission tells of every refusal and every permit
+/// taken, whose edges the pool says at once through the media gate's
+/// classed door, a clone of which it holds (`MediaGate::door`) — `the
+/// fetch pool is saturated` at the first refusal of an episode, `the fetch
+/// pool has room again` at the first admission a hold-down past its last
+/// refusal; nothing per request, nothing else on a line (D9, read loose: a
+/// pool saying "full" names no reader). The hold-down is the daemon's one
+/// constant for every pair, handed in at the open.
+pub struct FetchPool {
+    permits: Permits,
+    edge: EdgeTracker,
+    door: Door,
+}
 
 impl FetchPool {
-    /// The pool at its count, [`MAX_CONCURRENT_FETCHES`], every slot free.
-    pub fn new() -> FetchPool {
-        FetchPool(Permits::new(MAX_CONCURRENT_FETCHES))
+    /// The pool at its count, [`MAX_CONCURRENT_FETCHES`], every slot free —
+    /// its edge pair said through `gate`'s door and judged by `hold_down`.
+    pub fn new(gate: &MediaGate, hold_down: Duration) -> FetchPool {
+        FetchPool {
+            permits: Permits::new(MAX_CONCURRENT_FETCHES),
+            edge: EdgeTracker::new(hold_down),
+            door: gate.door(),
+        }
     }
 
-    /// One permit for a whole answer, or `None` right now.
+    /// One permit for a whole answer, or `None` right now — and the pool's
+    /// edge pair, judged at this one door at the edge clock's instant and
+    /// said at the edge: the admission or the refusal is told to the tracker,
+    /// and the edge it answers goes out through the gate's door in the
+    /// pool's ruled words. The test hook below takes its permits beside this
+    /// door and crosses no edge: what a suite holds is the pool, not a
+    /// request.
     fn admit(&self) -> Option<Permit<'_>> {
-        self.0.try_acquire()
+        let permit = self.permits.try_acquire();
+        let now = edge_clock_now();
+        let edge = match &permit {
+            Some(_) => self.edge.admitted(now),
+            None => self.edge.refused(now),
+        };
+        if let Some(edge) = edge {
+            self.door.say(edge.class(), PoolEdgeLine::new(FETCH_POOL, edge));
+        }
+        permit
     }
 
     /// TEST HOOK, reached through `Daemon::try_hold_fetch_permit`: hold one
@@ -100,7 +140,7 @@ impl FetchPool {
     #[doc(hidden)]
     #[must_use = "a permit dropped at once holds nothing"]
     pub fn try_hold(&self) -> Option<Permit<'_>> {
-        self.0.try_acquire()
+        self.permits.try_acquire()
     }
 }
 
@@ -388,15 +428,28 @@ mod tests {
     use super::*;
 
     /// The pool holds exactly [`MAX_CONCURRENT_FETCHES`] permits, refuses
-    /// the next rather than queueing, and a released permit reopens its slot.
+    /// the next rather than queueing, and a released permit reopens its slot
+    /// — and its edge pair rides the gate's door: the first refusal says the
+    /// failure line through it, in the pool's ruled words, and a second
+    /// refusal says nothing more (m12).
     #[test]
     fn the_fetch_pool_admits_the_pools_count_and_refuses_the_next() {
-        let pool = FetchPool::new();
+        let dir = tempfile::tempdir().expect("tempdir");
+        let media_gate = MediaGate::open(dir.path()).expect("the store opens");
+        let pool = FetchPool::new(&media_gate, Duration::from_secs(15));
         let held: Vec<_> =
             (0..MAX_CONCURRENT_FETCHES).map(|_| pool.admit().expect("a permit")).collect();
+        assert!(media_gate.lines_said().is_empty(), "admissions with no episode say nothing");
         assert!(pool.admit().is_none(), "a drained pool refuses; it never queues");
+        assert!(pool.admit().is_none(), "…and again");
+        assert_eq!(
+            media_gate.lines_said(),
+            ["failure: the fetch pool is saturated"],
+            "the first refusal of an episode, once, through the gate's door"
+        );
         drop(held);
         assert!(pool.admit().is_some(), "a released permit reopens its slot");
+        assert_eq!(media_gate.lines_said().len(), 1, "inside the hold-down: no landing");
         assert_eq!(MAX_CONCURRENT_FETCHES, 2);
         assert_eq!(
             MAX_BLOB_BYTES * MAX_CONCURRENT_FETCHES as u64,

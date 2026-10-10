@@ -5,6 +5,7 @@ use std::time::Instant;
 use serde_json::Value;
 use skep_namespace::PrincipalId;
 use skep_util::json::obj;
+use skep_util::permits::edge_clock_now;
 
 use super::actor::Resolved;
 use super::reply::{refuse, refuse_handshake, Reply, TransportError};
@@ -18,13 +19,21 @@ use crate::auth::OsEntropy;
 impl Daemon {
     /// `GET /challenge?principal=N` (AUTH-6.1): issue a nonce for ANY
     /// principal — nothing is secret; the burn is the credential.
+    ///
+    /// The mint's clock is the EDGE CLOCK (`skep_util::permits::edge_clock_now`):
+    /// the monotonic clock plus the test seam's offset, which is nothing in
+    /// a shipped daemon — so the store judges a nonce's time to live and its
+    /// edge pair's hold-down (`operations.md` §1.1 m12) by one reading, and
+    /// a suite drives both through the daemon's one clock seam. The pair is
+    /// judged at the mint and said by the daemon at the end of this routing
+    /// (`Daemon::say_the_edges_crossed`); the answer is unchanged.
     pub(super) fn get_challenge(&self, query: Option<&str>) -> Reply {
         let principal = match challenge_principal(query) {
             Ok(p) => p,
             Err(detail) => return refuse(TransportError::MalformedChallenge, Some(&detail)),
         };
         let nonce =
-            self.auth.challenges.issue(PrincipalId(principal), Instant::now(), &mut OsEntropy);
+            self.auth.challenges.issue(PrincipalId(principal), edge_clock_now(), &mut OsEntropy);
         Reply::json(
             200,
             obj(vec![

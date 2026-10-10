@@ -18,6 +18,7 @@ mod cors;
 mod dedup_class;
 mod deposit_class;
 mod doc_one;
+mod edges;
 mod effective_owner;
 mod events;
 mod feed_class;

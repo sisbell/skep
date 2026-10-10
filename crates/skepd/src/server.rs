@@ -212,7 +212,7 @@ use skep_media::{MediaOptions, UploadPool};
 #[cfg(feature = "observe")]
 use skep_namespace::PrincipalId;
 use skep_util::notice::{self, Class, Moment};
-use skep_util::permits::Permits;
+use skep_util::permits::{Edge, EdgeTracker, Permits, PoolEdgeLine};
 use skep_util::source::Source;
 
 use std::sync::Arc;
@@ -220,7 +220,7 @@ use std::sync::Arc;
 use crate::auth::{startup_warnings, AuthOptions, AuthState, PortAlreadyBound, Reissue};
 use crate::codec::JsonCodec;
 use crate::history::History;
-use crate::limits::{MAX_REQUEST_BODY, MAX_SMALL_BODY};
+use crate::limits::{EDGE_HOLD_DOWN, MAX_REQUEST_BODY, MAX_SMALL_BODY};
 #[cfg(any(test, feature = "test-hooks"))]
 use crate::write_path::LinesSaid;
 use crate::write_path::{FeedCompaction, FirstHead, StoppedFile, WritePath};
@@ -550,6 +550,15 @@ pub struct Daemon {
     /// of [`MIN_WORKERS`]. In the serving path like the four (D9): the write
     /// path is asked or not asked, never told.
     write_permits: Permits,
+    /// THE WRITE POOL's EDGE PAIR (`operations.md` §1.1 m12; §4 row 27): the
+    /// tracker the pool's one door (`op.rs`'s `Daemon::take_write_permit`)
+    /// tells of every refusal and every permit taken, whose edges that door
+    /// says at once through [`Daemon::say`] — `the write pool is saturated`
+    /// at the first refusal of an episode, `the write pool has room again`
+    /// at the first permit taken a hold-down past its last — once per
+    /// episode and nothing per request; the pool's twin of the tracker each
+    /// of the four other pools holds for itself.
+    write_edge: EdgeTracker,
     /// THE CHECKPOINT THREAD's MEMORY between its wakes ([`CheckpointMemory`]):
     /// the inline count as it last said it and the position that count is
     /// counted from, the newest checkpoint as it last looked, and the
@@ -883,6 +892,11 @@ impl Daemon {
         };
         #[cfg(any(test, feature = "test-hooks"))]
         let said = Arc::clone(writes.lines_said());
+        // THE TWO MEDIA POOLS, over the media gate's classed door and the
+        // daemon's one hold-down for every edge pair (m12): built before the
+        // gate moves into the daemon, each holding a clone of its door.
+        let fetches = FetchPool::new(&media, EDGE_HOLD_DOWN);
+        let uploads = UploadPool::new(&media, EDGE_HOLD_DOWN);
         let daemon = Daemon {
             engine,
             febe,
@@ -892,9 +906,10 @@ impl Daemon {
             history: History::new(),
             scans: ClassScans::new(),
             media,
-            fetches: FetchPool::new(),
-            uploads: UploadPool::new(),
+            fetches,
+            uploads,
             write_permits: Permits::new(MAX_CONCURRENT_WRITES),
+            write_edge: EdgeTracker::new(EDGE_HOLD_DOWN),
             checkpointer: CheckpointMemory::at_open(start_point, newest_at_open),
             threads: ThreadLiveness {
                 pruner_ended: AtomicBool::new(false),
@@ -1098,6 +1113,15 @@ impl Daemon {
     /// and `HEAD /blob?i=` admitted are [`Routed::Fetch`] — the whole file,
     /// checked, with the fetch pool's permit the value holds — which the
     /// accept path streams; every refusal of the route is a [`Routed::Reply`].
+    ///
+    /// THE EDGE PAIRS (`operations.md` §1.1 m12): a routing that first meets
+    /// a saturated pool, or first spends a live nonce past the challenge
+    /// store's cap, puts ONE `failure:` line on the operator stream before
+    /// its answer is written, and the first routing admitted once the
+    /// condition has stood clear for `EDGE_HOLD_DOWN` one `landing:`
+    /// (`Daemon::say_the_edges_crossed`); nothing per request. The answers
+    /// themselves — the five `503 …_busy` refusals, `/challenge`'s nonce —
+    /// are unchanged.
     pub fn route(&self, req: &HttpRequest) -> Routed<'_> {
         self.route_parked(req, None)
     }
@@ -1111,11 +1135,19 @@ impl Daemon {
     /// source type.
     fn route_parked(&self, req: &HttpRequest, parked: Option<BodySource<'static>>) -> Routed<'_> {
         self.reissue_blocked_prefixes();
-        match (req.method.as_str(), req.path.as_str()) {
+        let routed = match (req.method.as_str(), req.path.as_str()) {
             ("GET", "/events") => Routed::EventStream,
             ("GET" | "HEAD", p) if blob_routes::is_fetch_path(p) => self.fetch_route(req),
             _ => Routed::Reply(self.reply(req, parked)),
-        }
+        };
+        // THE EDGES THIS ROUTING CROSSED, SAID (m12): the three holders with
+        // no door of their own — the reconstruction pool, the class-scan
+        // pool and the challenge store — queued the edge an admission or a
+        // refusal crossed; the daemon says each here, after the handler and
+        // before the transport writes the reply, through its own classed
+        // door.
+        self.say_the_edges_crossed();
+        routed
     }
 
     /// The request/response routes — every method/path pair but the event
@@ -1423,6 +1455,31 @@ impl Daemon {
             self.said.lock().push(whole);
         }
         notice::emit_lines(class, head, rest);
+    }
+
+    /// THE EDGES CROSSED BY ONE ROUTING, SAID (`operations.md` §1.1 m12; §4
+    /// row 27; §6's three rows): the reconstruction pool's, the class-scan
+    /// pool's and the challenge store's edge trackers drained in turn — each
+    /// the edges its one door crossed since the last drain, in order — and
+    /// each edge said through [`Daemon::say`] in its holder's ruled words
+    /// under the edge's own class word ([`PoolEdgeLine`] for a pool,
+    /// [`ChallengeEdgeLine`] for the store). Run at the end of every routing
+    /// ([`Daemon::route_parked`]), on the request's thread, after the handler
+    /// has answered and before the transport writes the reply, so a line is
+    /// on the stream and in the record by the time its request's answer is
+    /// read. The three holders QUEUE because they hold no door: `History` and
+    /// `ClassScans` know nothing of the daemon, and the challenge store is
+    /// the session layer's. The write pool's door is the daemon's own
+    /// (`op.rs`'s `Daemon::take_write_permit`), the live-stream budget and
+    /// the accept loop hold the daemon (`listen.rs`), and the two media pools
+    /// hold the media gate's door: those five say their edges AT the edge.
+    /// A routing that crossed no edge costs three atomic loads here.
+    fn say_the_edges_crossed(&self) {
+        self.history
+            .edge()
+            .drain(|edge| self.say(edge.class(), PoolEdgeLine::new(HISTORY_POOL, edge)));
+        self.scans.edge().drain(|edge| self.say(edge.class(), PoolEdgeLine::new(SCAN_POOL, edge)));
+        self.auth.challenges.edge().drain(|edge| self.say(edge.class(), ChallengeEdgeLine(edge)));
     }
 }
 
@@ -2300,6 +2357,102 @@ impl fmt::Display for ClaimLine<'_> {
                 FirstHead::Refused => "owed — the head writer refused it",
             }
         )
+    }
+}
+
+// ── the edge pairs' words ────────────────────────────────────────────────
+//
+// What the eight pairs say (`operations.md` §1.1 m12; §4 rows 27 and 33;
+// §6's three rows): the five pools in one form — `skep_util::permits`'s
+// `PoolEdgeLine`, under the word each pool names itself by — the live-stream
+// budget in that form too, the challenge store and the accept loop in their
+// own ruled words. Each a pure value pinned by `to_string()` in the edge
+// suite (`tests/it/edges.rs`), said under the edge's class word through the
+// classed door and never the un-classed one; nothing on a line but the
+// condition — no count (the upload pool's landing alone carries one), no
+// path, query, principal, peer, position or reader.
+
+/// The word the reconstruction pool's two lines name it by (m12: one word
+/// per pool, the same in both lines) — the refusal's own, `history_busy`.
+pub(super) const HISTORY_POOL: &str = "history";
+
+/// The word the class-scan pool's two lines name it by — the refusal's own,
+/// `scan_busy`.
+pub(super) const SCAN_POOL: &str = "scan";
+
+/// The word the write pool's two lines name it by — the refusal's own,
+/// `write_busy`.
+pub(super) const WRITE_POOL: &str = "write";
+
+/// THE LIVE-STREAM BUDGET's TWO LINES (m12, the budget's pair in the pools'
+/// form; §6's row): `the live-stream budget is saturated` when a stream past
+/// the budget is first refused — the 65th, dropped with a clean close — and
+/// `the live-stream budget has room again` at the first stream admitted a
+/// hold-down past the last refusal. No count: the budget's size is
+/// `listen.rs`'s `MAX_SUBSCRIBERS`'s card's, and a line naming no reader and
+/// counting nothing is not read telemetry (D9, read loose). Said from
+/// `listen.rs`'s `Subscribers::admit` through [`Daemon::say`].
+pub(super) struct BudgetEdgeLine(pub(super) Edge);
+
+impl fmt::Display for BudgetEdgeLine {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self.0 {
+            Edge::Failure => "the live-stream budget is saturated",
+            Edge::Landing { .. } => "the live-stream budget has room again",
+        })
+    }
+}
+
+/// THE CHALLENGE STORE's TWO LINES (m12; §6's row), the ruled words
+/// verbatim: `challenge store: a nonce was evicted inside its time to live;
+/// a handshake it belonged to will be refused` when a mint first evicts a
+/// nonce younger than its TTL, and `challenge store: minting without
+/// evicting a live nonce again` at the first mint that evicted no live nonce
+/// a hold-down after the last that did. No caller, count or origin
+/// (AUTH-1.48: the cap is a memory bound and never an abuse bound — the line
+/// says the fact, not who met it). Said from
+/// [`Daemon::say_the_edges_crossed`].
+pub(super) struct ChallengeEdgeLine(pub(super) Edge);
+
+impl fmt::Display for ChallengeEdgeLine {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self.0 {
+            Edge::Failure => {
+                "challenge store: a nonce was evicted inside its time to live; a handshake it \
+                 belonged to will be refused"
+            }
+            Edge::Landing { .. } => "challenge store: minting without evicting a live nonce again",
+        })
+    }
+}
+
+/// THE ACCEPT PAIR's FIRST LINE (m12; §4 row 33), the ruled words: `worker:
+/// accept failed ({e}); new connections wait`, `{e}` the OS's own text of
+/// the error — `Too many open files (os error 24)` at the descriptor wall —
+/// which names the cause; the act is the operator's, the descriptor limit.
+/// Said ONCE across the workers at the first failed `accept` of an episode,
+/// from the worker loop (`listen.rs`) through [`Daemon::say`]; no peer and
+/// no worker named.
+pub(super) struct AcceptFailedLine<'a>(pub(super) &'a std::io::Error);
+
+impl fmt::Display for AcceptFailedLine<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "worker: accept failed ({}); new connections wait", self.0)
+    }
+}
+
+/// THE ACCEPT PAIR's SECOND LINE (m12; §4 row 33), the ruled words: `worker:
+/// accept recovered after {n} failures`, `{n}` every worker's failures
+/// counted into the one episode — said at the first `accept` that succeeded
+/// a hold-down after the episode's last failure, from the worker loop
+/// through [`Daemon::say`].
+pub(super) struct AcceptRecoveredLine {
+    pub(super) failures: u64,
+}
+
+impl fmt::Display for AcceptRecoveredLine {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "worker: accept recovered after {} failures", self.failures)
     }
 }
 

@@ -431,12 +431,53 @@ pub struct MediaGate {
     /// the cadence's first pass before it moves the clock.
     #[cfg(any(test, feature = "test-hooks"))]
     passes_completed: AtomicU64,
-    /// The test seam's record of every line the gate said through its
-    /// classed door ([`MediaGate::say`]), each `{class}: {text}`, oldest
-    /// first — the daemon's own record holds none of them, and the stream
-    /// no in-process suite reads.
+    /// THE GATE's CLASSED DOOR ([`Door`]): `notice::emit` under a class word
+    /// and, under the test seam, the record of every line said through it
+    /// (`MediaGate::lines_said`, the hook) — the gate's own lines, and the
+    /// two media pools', which hold a clone ([`MediaGate::door`]).
+    door: Door,
+}
+
+/// THE GATE's CLASSED DOOR WITH ITS RECORD — `notice::emit` under a class
+/// word and, under the test seam, the line kept in the record the hook
+/// `MediaGate::lines_said` answers, each `{class}: {text}`, oldest first:
+/// the gate's own door, which the two media pools hold a CLONE of
+/// ([`MediaGate::door`]), so a pool's edge pair (`operations.md` §1.1 m12) is
+/// said through the gate's door and read by the same hook, the pools having
+/// no door of their own. A clone shares the record; outside the test seam it
+/// holds nothing and the door is `notice::emit` alone. The daemon's own
+/// record holds none of these lines: they are said below its door, and the
+/// stream itself no in-process suite reads.
+#[derive(Clone)]
+pub(crate) struct Door {
     #[cfg(any(test, feature = "test-hooks"))]
-    said: Mutex<Vec<String>>,
+    said: Arc<Mutex<Vec<String>>>,
+}
+
+impl Door {
+    /// A door over a fresh, empty record.
+    fn new() -> Door {
+        Door {
+            #[cfg(any(test, feature = "test-hooks"))]
+            said: Arc::new(Mutex::new(Vec::new())),
+        }
+    }
+
+    /// One classed line — `{class}: {what}` into the record under the test
+    /// seam, then through `skep_util::notice`'s classed door, so no line of
+    /// the gate's or the pools' goes out without its class word.
+    pub(crate) fn say(&self, class: Class, what: impl fmt::Display) {
+        #[cfg(any(test, feature = "test-hooks"))]
+        self.said.lock().push(format!("{class}: {what}"));
+        notice::emit(class, what);
+    }
+
+    /// The record, whole: every line said through this door or a clone of
+    /// it, oldest first.
+    #[cfg(any(test, feature = "test-hooks"))]
+    fn lines_said(&self) -> Vec<String> {
+        self.said.lock().clone()
+    }
 }
 
 impl MediaGate {
@@ -468,8 +509,7 @@ impl MediaGate {
             prune_hold: AtomicBool::new(false),
             #[cfg(any(test, feature = "test-hooks"))]
             passes_completed: AtomicU64::new(0),
-            #[cfg(any(test, feature = "test-hooks"))]
-            said: Mutex::new(Vec::new()),
+            door: Door::new(),
         })
     }
 
@@ -637,25 +677,34 @@ impl MediaGate {
 
     /// One classed line of the gate's own on the operator stream — the
     /// floor's binding and its lift, a limits record's refusal — through
-    /// `skep_util::notice`'s classed door, as the daemon's own lines go, so
-    /// no line of the gate's goes out without its class word; and, under
-    /// the test seam, kept for the suite (`MediaGate::lines_said`, the hook):
-    /// the stream itself no in-process suite reads.
+    /// the gate's door ([`Door::say`]): `skep_util::notice`'s classed door,
+    /// as the daemon's own lines go, so no line of the gate's goes out
+    /// without its class word; and, under the test seam, kept for the suite
+    /// (`MediaGate::lines_said`, the hook): the stream itself no in-process
+    /// suite reads.
     fn say(&self, class: Class, what: impl fmt::Display) {
-        #[cfg(any(test, feature = "test-hooks"))]
-        self.said.lock().push(format!("{class}: {what}"));
-        notice::emit(class, what);
+        self.door.say(class, what);
+    }
+
+    /// A clone of the gate's classed door ([`Door`]), for the two media
+    /// pools — the fetch pool and the upload pool — to say their edge pairs
+    /// through (`operations.md` §1.1 m12): the same `notice::emit` and, under
+    /// the test seam, the same record `MediaGate::lines_said` answers.
+    pub(crate) fn door(&self) -> Door {
+        self.door.clone()
     }
 
     /// TEST HOOK (reached through `Daemon::media_lines_said`): every line
     /// the gate has said through its classed door this uptime, each
     /// `{class}: {text}`, oldest first — the floor's binding and its lift, a
-    /// limits record's refusal. The daemon's own record (`Daemon::lines_said`)
-    /// holds none of them: they are said below its door.
+    /// limits record's refusal, and the two media pools' edge pairs, said
+    /// through a clone of the same door. The daemon's own record
+    /// (`Daemon::lines_said`) holds none of them: they are said below its
+    /// door.
     #[cfg(any(test, feature = "test-hooks"))]
     #[doc(hidden)]
     pub fn lines_said(&self) -> Vec<String> {
-        self.said.lock().clone()
+        self.door.lines_said()
     }
 
     /// The gate's reading of the clock, unix milliseconds — the one every

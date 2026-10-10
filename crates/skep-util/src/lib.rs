@@ -2,12 +2,17 @@
 //!
 //! Four utilities `skepd` and `skep-media` both take and neither owns, in
 //! one home, so the media crate's move out of the daemon copies no helper
-//! and the daemon's four pools keep one permit type:
+//! and the daemon's five pools keep one permit type:
 //!
 //! * [`permits`] — the counting permit pool: a try-acquire with no queue
 //!   and no blocking, whose guard returns its slot on drop. One mechanism
-//!   behind the daemon's four bounded pools; a permit is a slot of the pool
-//!   that minted it, so no bound can spend another's.
+//!   behind the daemon's five bounded pools; a permit is a slot of the pool
+//!   that minted it, so no bound can spend another's. Beside it, the edge
+//!   tracker: the once-per-episode memory of a bound that refuses — the
+//!   first refusal an edge, the clearing an edge once the condition has
+//!   stood clear for a hold-down — which the five pools, the daemon's
+//!   stream budget, its challenge store and its accept loop each hold, and
+//!   the one clock their hold-down is judged against.
 //! * [`notice`] — the operator's stream: one line, or one notice of several
 //!   lines, every line opening with the program's name and the head carrying
 //!   its time, handed to one thread that writes them in order — so that a

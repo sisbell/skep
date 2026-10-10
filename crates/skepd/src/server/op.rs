@@ -13,6 +13,7 @@ use skep_media::door::media_door;
 #[cfg(any(test, feature = "test-hooks"))]
 use skep_util::notice;
 use skep_util::notice::{Class, Moment};
+use skep_util::permits::{edge_clock_now, Permit, PoolEdgeLine};
 
 use super::actor::Resolved;
 use super::reply::{
@@ -21,7 +22,7 @@ use super::reply::{
 };
 use super::request::HttpRequest;
 use super::scan::ScanBusy;
-use super::{ClaimLine, Daemon};
+use super::{ClaimLine, Daemon, WRITE_POOL};
 use crate::auth::key_set_of;
 use crate::auth::policy::{
     deposits_credential_link, deposits_registry_link, op_shape_refusal, plain_admission,
@@ -248,7 +249,7 @@ impl Daemon {
         // 1b — THE WRITE POOL's PERMIT (§4 rows 25, 27), before the locks:
         // one of `MAX_CONCURRENT_WRITES`, or the refusal at once. Bound to
         // this frame, so it returns after the commit below and never earlier.
-        let Some(_permit) = self.write_permits.try_acquire() else {
+        let Some(_permit) = self.take_write_permit() else {
             return refuse_write_busy(meta.kind);
         };
         // 2 — the locks, the locked snapshot, and this site's own resolution.
@@ -274,6 +275,37 @@ impl Daemon {
                 self.febe.execute(binding.sid, frame)
             });
         with_signal(self.op_reply(&resp), closed)
+    }
+
+    /// THE WRITE POOL's ONE DOOR (`operations.md` §4 rows 25, 27; §1.1 m12):
+    /// one of `MAX_CONCURRENT_WRITES`, or `None` — the three write
+    /// sequences' first act before any lock, so a write that finds none is
+    /// refused `503 write_busy` at once and nothing is committed, the
+    /// answers unchanged — and THE POOL's EDGE PAIR, judged here and said at
+    /// the edge through [`Daemon::say`]: the refusal or the permit taken is
+    /// told to the pool's tracker at the edge clock's instant, and the edge
+    /// it answers — the first refusal of an episode, the first permit taken
+    /// a hold-down past its last refusal — goes out in the pool's ruled words
+    /// (`the write pool is saturated` / `the write pool has room again`),
+    /// once per episode and nothing per request. One helper for the three
+    /// sites, so the pair cannot be judged at two of them and missed at the
+    /// third. The test hook (`Daemon::try_hold_write_permit`) takes its
+    /// permits beside this door and crosses no edge: what a suite holds is
+    /// the pool, not a request. The head writer's own commits take no permit
+    /// and pass no door: they run inside the triggering write's turn.
+    #[must_use = "a permit dropped at once returns its slot at once: bind it for the sequence's \
+                  whole frame"]
+    fn take_write_permit(&self) -> Option<Permit<'_>> {
+        let permit = self.write_permits.try_acquire();
+        let now = edge_clock_now();
+        let edge = match &permit {
+            Some(_) => self.write_edge.admitted(now),
+            None => self.write_edge.refused(now),
+        };
+        if let Some(edge) = edge {
+            self.say(edge.class(), PoolEdgeLine::new(WRITE_POOL, edge));
+        }
+        permit
     }
 
     /// The locked state one write sequence stands on: the world snapshot —
@@ -332,7 +364,7 @@ impl Daemon {
         // `MAX_CONCURRENT_WRITES`, before the credential lock and the guard,
         // or the refusal at once. Bound to this frame — declared ahead of the
         // two guards, so it drops after them, once the answer below is built.
-        let Some(_permit) = self.write_permits.try_acquire() else {
+        let Some(_permit) = self.take_write_permit() else {
             return refuse_write_busy(meta.kind);
         };
         let credential_lock = self.auth.credential_lock.read();
@@ -467,7 +499,7 @@ impl Daemon {
         // `MAX_CONCURRENT_WRITES`, or `503 write_busy` at once. Bound to this
         // frame, ahead of the two guards, so it drops after them: once the
         // commit and the tail after it are done.
-        let Some(_permit) = self.write_permits.try_acquire() else {
+        let Some(_permit) = self.take_write_permit() else {
             return refuse_write_busy(meta.kind);
         };
         // 3 — the credential write lock, the serialization lock, the locked

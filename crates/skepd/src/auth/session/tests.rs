@@ -3,6 +3,7 @@ use skep_febe::OperationSurface;
 use skep_identity::SigAlgRow;
 use skep_kernel::{CheckpointPolicy, Durability, KernelConfig, SaltSource};
 use skep_signature::{TAG_FNDSA512_PREVIEW_ED25519, TAG_MLDSA65_ED25519};
+use skep_util::permits::Edge;
 
 use super::super::AuthOptions;
 use super::*;
@@ -499,4 +500,91 @@ fn challenge_cap_evicts_oldest() {
     assert!(!ch.burn(&a, PrincipalId(1), now), "the oldest was evicted");
     assert!(ch.burn(&b, PrincipalId(1), now));
     assert!(ch.burn(&c, PrincipalId(1), now));
+}
+
+/// The edges the store's tracker holds for the daemon, drained in order.
+fn edges_of(ch: &Challenges) -> Vec<Edge> {
+    let mut edges = Vec::new();
+    ch.edge().drain(|edge| edges.push(edge));
+    edges
+}
+
+/// m12 — THE CHALLENGE PAIR AT THE STORE, THE FIRST EDGE ONCE: filling the
+/// store to its cap evicts nothing and crosses no edge; the mint past the
+/// cap evicts the oldest nonce INSIDE its time to live — a handshake that
+/// nonce belonged to will be refused — and crosses the failure edge; the
+/// next live eviction, inside the episode, crosses none. The edges carry no
+/// principal, nonce or count: the daemon's line names the store and the
+/// fact alone.
+#[test]
+fn a_live_nonces_eviction_is_the_failure_edge_once_per_episode() {
+    let ch = Challenges::new(2);
+    let mut rng = super::super::OsEntropy;
+    let t0 = Instant::now();
+    ch.issue(PrincipalId(7), t0, &mut rng);
+    ch.issue(PrincipalId(8), t0, &mut rng);
+    assert_eq!(edges_of(&ch), [], "the store filled to its cap evicts nothing");
+    ch.issue(PrincipalId(9), t0 + Duration::from_secs(1), &mut rng);
+    assert_eq!(edges_of(&ch), [Edge::Failure], "the first live eviction: the failure edge, once");
+    ch.issue(PrincipalId(9), t0 + Duration::from_secs(2), &mut rng);
+    ch.issue(PrincipalId(9), t0 + Duration::from_secs(3), &mut rng);
+    assert_eq!(edges_of(&ch), [], "every later live eviction inside the episode adds no edge");
+}
+
+/// m12 — AN EXPIRED NONCE's EVICTION IS NO EDGE: a nonce evicted at or past
+/// its expiry — `now + CHALLENGE_TTL` at its mint, no longer ahead of the
+/// evicting mint's `now` — was no handshake's to lose, so the mint that
+/// evicts it is an admission, not a refusal: no failure edge, and with no
+/// episode standing, no landing either. "Inside its time to live" is the
+/// burn's own test, `now < expires`: the nonce evicted AT its expiry is as
+/// dead to the eviction as it is to the burn.
+#[test]
+fn an_expired_nonces_eviction_is_no_edge() {
+    let ch = Challenges::new(2);
+    let mut rng = super::super::OsEntropy;
+    let t0 = Instant::now();
+    ch.issue(PrincipalId(1), t0, &mut rng);
+    ch.issue(PrincipalId(2), t0 + Duration::from_secs(1), &mut rng);
+    ch.issue(PrincipalId(3), t0 + CHALLENGE_TTL, &mut rng);
+    assert_eq!(edges_of(&ch), [], "the oldest expired exactly at the mint: no handshake lost");
+    ch.issue(PrincipalId(4), t0 + CHALLENGE_TTL + Duration::from_secs(30), &mut rng);
+    assert_eq!(edges_of(&ch), [], "the next, long expired: no edge, and no episode to land");
+}
+
+/// m12 — THE SECOND EDGE, JUDGED AT A MINT (the ops lanes record §5.3's
+/// property): after a live eviction opened an episode, a mint that evicts
+/// only an EXPIRED nonce — the clock past the TTL — a whole hold-down after
+/// the last live eviction crosses the landing edge with the episode's
+/// evictions counted; a mint that evicts a live nonce after the hold-down
+/// lands nothing and keeps the episode open; the next live eviction after
+/// a landing opens a new episode. Nothing lands by itself: on a quiet store
+/// the landing comes at the first clean mint after the hold-down, however
+/// late.
+#[test]
+fn a_clean_mint_a_hold_down_after_the_last_live_eviction_is_the_landing_edge() {
+    let ch = Challenges::new(2);
+    let mut rng = super::super::OsEntropy;
+    let t0 = Instant::now();
+    let secs = |s: u64| t0 + Duration::from_secs(s);
+    ch.issue(PrincipalId(1), t0, &mut rng);
+    ch.issue(PrincipalId(1), t0, &mut rng);
+    ch.issue(PrincipalId(1), secs(1), &mut rng);
+    ch.issue(PrincipalId(1), secs(2), &mut rng);
+    assert_eq!(edges_of(&ch), [Edge::Failure], "two live evictions: one failure edge");
+    // A live eviction after the hold-down: a refusal never lands.
+    ch.issue(PrincipalId(1), secs(20), &mut rng);
+    assert_eq!(edges_of(&ch), [], "a live eviction after the hold-down lands nothing");
+    // The oldest standing (minted at 2 s) expires at 62 s; at 70 s the mint
+    // evicts it expired — a clean mint, 50 s after the last live eviction.
+    ch.issue(PrincipalId(1), secs(70), &mut rng);
+    assert_eq!(
+        edges_of(&ch),
+        [Edge::Landing { refusals: 3 }],
+        "the clean mint a whole hold-down after the last live eviction: the landing, with the \
+         episode's three live evictions counted"
+    );
+    // The two standing were minted at 20 s and 70 s: at 71 s the oldest is
+    // live, so this mint evicts it live — a new episode.
+    ch.issue(PrincipalId(1), secs(71), &mut rng);
+    assert_eq!(edges_of(&ch), [Edge::Failure], "the next live eviction opens a new episode");
 }

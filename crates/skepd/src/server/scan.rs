@@ -1,7 +1,9 @@
 //! The class-scan pool (`MAX_CONCURRENT_CLASS_SCANS`, `ClassScans`, `ScanBusy`, `is_class_scan`).
 
 use skep_febe::Op;
-use skep_util::permits::{Permit, Permits};
+use skep_util::permits::{edge_clock_now, EdgeTracker, Permit, Permits};
+
+use crate::limits::EDGE_HOLD_DOWN;
 
 /// Concurrent CLASS SCANS admitted at `/op` at once (wire v7.9; PUB-8.36,
 /// PUB-8.37): the link-discovery reads [`is_class_scan`] enumerates, each of
@@ -41,8 +43,15 @@ pub(super) const MAX_CONCURRENT_CLASS_SCANS: usize = 2;
 /// A second instance of [`skep_util::permits`]'s mechanism, and disjoint from
 /// the reconstruction pool BY THE BORROW rather than by convention: a
 /// [`Permit`] names the pool that issued it, so no signature here can spend
-/// a reconstruction slot.
-pub(super) struct ClassScans(Permits);
+/// a reconstruction slot. Beside the pool, its EDGE PAIR (`operations.md`
+/// §1.1 m12): an [`EdgeTracker`] the admission tells of every refusal and
+/// every permit taken, whose edges the daemon drains ([`ClassScans::edge`])
+/// and says through its classed door — `the scan pool is saturated` / `has
+/// room again`, once per episode.
+pub(super) struct ClassScans {
+    permits: Permits,
+    edge: EdgeTracker,
+}
 
 /// Every class-scan permit is in use. Says nothing about HTTP, as
 /// [`crate::history::Unavailable`] does not: the mapping onto the wire is
@@ -55,7 +64,10 @@ pub(super) struct ScanBusy;
 
 impl ClassScans {
     pub(super) fn new() -> ClassScans {
-        ClassScans(Permits::new(MAX_CONCURRENT_CLASS_SCANS))
+        ClassScans {
+            permits: Permits::new(MAX_CONCURRENT_CLASS_SCANS),
+            edge: EdgeTracker::new(EDGE_HOLD_DOWN),
+        }
     }
 
     /// THE CLASS-SCAN ADMISSION (lane 3.7 §2): a class-scan-shaped read
@@ -73,11 +85,29 @@ impl ClassScans {
     /// class scan is the one thing decided here; what it answers stays the
     /// stores' — an admitted scan's answer is byte-for-byte the unbounded
     /// one.
+    ///
+    /// THE EDGE PAIR's ONE SITE (m12): a class scan's refusal or admission
+    /// is told to the tracker at the edge clock's instant and the edge it
+    /// answers queued for the daemon's door; a read that takes no permit
+    /// crosses none, and neither does the test hook below, which holds the
+    /// pool and not a request.
     pub(super) fn admit(&self, op: &Op) -> Result<Option<Permit<'_>>, ScanBusy> {
         if !is_class_scan(op) {
             return Ok(None);
         }
-        self.0.try_acquire().map(Some).ok_or(ScanBusy)
+        let permit = self.permits.try_acquire();
+        let now = edge_clock_now();
+        self.edge.queue(match &permit {
+            Some(_) => self.edge.admitted(now),
+            None => self.edge.refused(now),
+        });
+        permit.map(Some).ok_or(ScanBusy)
+    }
+
+    /// The pool's edge tracker, for the daemon to drain: the edges the
+    /// admission crossed since the last drain, in order.
+    pub(super) fn edge(&self) -> &EdgeTracker {
+        &self.edge
     }
 
     /// TEST HOOK, reached through `Daemon::try_hold_scan_permit`: hold one
@@ -85,7 +115,7 @@ impl ClassScans {
     #[cfg(any(test, feature = "test-hooks"))]
     #[must_use = "a permit dropped at once holds nothing"]
     pub(super) fn try_hold(&self) -> Option<Permit<'_>> {
-        self.0.try_acquire()
+        self.permits.try_acquire()
     }
 }
 

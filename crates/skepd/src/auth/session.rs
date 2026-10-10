@@ -15,9 +15,11 @@ use skep_identity::{
 };
 use skep_namespace::{PrincipalId, BOOTSTRAP_PRINCIPAL};
 use skep_util::json::{hex_string, parse_lower_hex};
+use skep_util::permits::EdgeTracker;
 
 use super::{bare_origins, signed_origins, AuthConfig, Mode, Origin};
 use crate::codec::check_keys;
+use crate::limits::EDGE_HOLD_DOWN;
 use crate::World;
 use skep_address::{parent, Address, Level};
 use skep_namespace::HasM3;
@@ -119,10 +121,18 @@ impl Nonce {
 
 /// The challenge store (AUTH-4.19): a map plus a FIFO of insertion order
 /// behind the store's OWN lock; the exclusion never spans a verify. A
-/// burned nonce retains NEITHER entry.
+/// burned nonce retains NEITHER entry. Beside the store, ITS EDGE PAIR
+/// (`operations.md` §1.1 m12; §6's row): an [`EdgeTracker`] the mint tells
+/// whether it evicted a nonce still inside its time to live — a refusal, of
+/// the handshake that nonce belonged to — or evicted none, or only expired
+/// ones — an admission — whose edges the daemon drains ([`Challenges::edge`])
+/// and says through its classed door, once per episode. The cap is a MEMORY
+/// bound and never an abuse bound (AUTH-1.48): the eviction itself is
+/// unchanged, and the pair says only that it happened to a live nonce.
 pub(crate) struct Challenges {
     inner: parking_lot::Mutex<ChallengeInner>,
     cap: usize,
+    edge: EdgeTracker,
 }
 
 struct ChallengeInner {
@@ -138,11 +148,24 @@ impl Challenges {
                 order: VecDeque::new(),
             }),
             cap,
+            edge: EdgeTracker::new(EDGE_HOLD_DOWN),
         }
     }
 
     /// Issue a nonce for ANY principal (nothing is secret); evict the
     /// oldest past the cap (AUTH-4.20).
+    ///
+    /// THE EDGE PAIR's ONE SITE (m12), judged at the mint by the mint's own
+    /// `now`: an eviction INSIDE the evicted nonce's time to live — its
+    /// expiry, fixed at its mint as `now + CHALLENGE_TTL`, still ahead of
+    /// this `now` — is a refusal of the handshake it belonged to, and the
+    /// tracker is told so; a mint that evicts nothing, or only nonces whose
+    /// time to live has passed, is an admission, the state the second line
+    /// says once no live nonce has been evicted for the hold-down. So on a
+    /// quiet store the `landing:` comes at the first such mint after the
+    /// hold-down, however late (the ops lanes record §5.3). Neither edge
+    /// carries the principal, the nonce or a count: the daemon's line names
+    /// the store and the fact alone.
     pub fn issue(
         &self,
         principal: PrincipalId,
@@ -155,12 +178,23 @@ impl Challenges {
         let mut inner = self.inner.lock();
         inner.map.insert(nonce, (principal, now + CHALLENGE_TTL));
         inner.order.push_back(nonce);
+        let mut evicted_live = false;
         while inner.order.len() > self.cap {
             if let Some(old) = inner.order.pop_front() {
-                inner.map.remove(&old);
+                if let Some((_, expires)) = inner.map.remove(&old) {
+                    evicted_live |= now < expires;
+                }
             }
         }
+        drop(inner);
+        self.edge.queue(if evicted_live { self.edge.refused(now) } else { self.edge.admitted(now) });
         nonce
+    }
+
+    /// The store's edge tracker, for the daemon to drain: the edges the
+    /// mints crossed since the last drain, in order.
+    pub(crate) fn edge(&self) -> &EdgeTracker {
+        &self.edge
     }
 
     /// SINGLE-USE: the burn (AUTH-4.21) — removes the entry from BOTH

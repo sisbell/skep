@@ -277,11 +277,14 @@ pub(crate) struct WritePath {
     /// THE CLASSED DOOR WITH ITS RECORD ([`Lines`]): every line said from
     /// this card and the feed beneath it goes through it — the feed files'
     /// open-time lines (a cut, the unreadable slots, the malformed names),
-    /// the files' once-per-uptime stops, the kernel's halt and the full
-    /// volume — and, under the test seam, into the one record the daemon
-    /// above shares (`LinesSaid`), in order with the lines the daemon
-    /// says itself. Made BEFORE the feed opens and handed down, which is
-    /// what lets a suite pin the open's lines in-process.
+    /// the files' once-per-uptime stops and their failed appends, the
+    /// compaction's per-attempt failures, the head writer's refused head
+    /// and its clearing, the kernel's halt and the full volume — and, under
+    /// the test seam, into the one record the daemon above shares
+    /// (`LinesSaid`), in order with the lines the daemon says itself. Made
+    /// BEFORE the feed opens and handed down, which is what lets a suite pin
+    /// the open's lines in-process; and handed UP once, to the deferred
+    /// unlink's site ([`WritePath::lines`]).
     said: Lines,
     /// THE CHECKPOINT THREAD's SIGNAL (the module doc): raised after the
     /// record step of a commit whose crossing set the kernel's due flag, or
@@ -328,8 +331,9 @@ impl WritePath {
         // head's own recorded time (the chain's open items, item 2) — BEFORE
         // the walk thread spawns, so a pending region is one it reads as
         // pending and resumes off the kernel's seq (`head.rs`), never a race
-        // against the landing.
-        let head_writer = HeadWriter::open(engine.stores(), &feed);
+        // against the landing. It holds the door, as `commits.log` does: a
+        // refused head and the landing that clears it are lines of its own.
+        let head_writer = HeadWriter::open(engine.stores(), &feed, &said);
         // THE WALK, last (the module doc): over the region the feed's open
         // left pending, on a thread of its own, the board serving meanwhile.
         let walk = pending.map(|snapshot| {
@@ -437,6 +441,15 @@ impl WritePath {
         self.said.say(Class::Failure, FullVolumeLine { at });
     }
 
+    /// THE CLASSED DOOR, for a line of the daemon's whose site lies ABOVE
+    /// this card — the deferred unlink's at `server/blob_routes.rs`, row 37
+    /// and its clearing — so it stands in the one record beside the lines
+    /// said from here and below, in order. The door itself, not its record:
+    /// the site says through it and reads nothing.
+    pub(crate) fn lines(&self) -> &Lines {
+        &self.said
+    }
+
     /// TEST SEAM: the daemon's record of its said lines, which this card
     /// holds (the `said` field says why) and the daemon shares. Not a stable
     /// API.
@@ -465,7 +478,7 @@ impl WritePath {
     /// files that stood beside it, by name — what the thread's landing line
     /// says of each file.
     pub fn compact_feed_below_reclaim_floor(&self, engine: &Engine) -> FeedCompaction {
-        self.feed.compact_below_reclaim_floor(engine)
+        self.feed.compact_below_reclaim_floor(engine, &self.said)
     }
 
     /// The test seam behind `crate::Daemon::fail_the_feeds_next_rewrite_past_rename`:
@@ -495,12 +508,14 @@ impl WritePath {
         self.head_writer.set_clock_millis(millis);
     }
 
-    /// The test seam behind `crate::Daemon::refuse_the_next_head_once`: the
-    /// head writer's driver refuses the next head it is due to write, once,
-    /// exactly as a driver refusal is handled. Not a stable API.
+    /// The test seam behind `crate::Daemon::refuse_the_next_head_once` and
+    /// its `_as` sibling: the head writer's driver refuses the next head it
+    /// is due to write, once, exactly as a driver refusal is handled — the
+    /// refusal's `detail` the given one, or the seam's standing detail under
+    /// `None`. Not a stable API.
     #[cfg(any(test, feature = "test-hooks"))]
-    pub(crate) fn refuse_next_head_once(&self) {
-        self.head_writer.refuse_next_head_once();
+    pub(crate) fn refuse_next_head_once(&self, detail: Option<&str>) {
+        self.head_writer.refuse_next_head_once(detail);
     }
 
     /// The test seam behind `crate::Daemon::attest_store_synced_through`:

@@ -560,6 +560,19 @@ pub struct Daemon {
     /// each set by its loop's catch as the thread ends on a caught panic,
     /// the pruner's read by the standing line.
     threads: ThreadLiveness,
+    /// THE ASIDE FAULT's ONCE-FLAG (`operations.md` §1.1 row 37; the ops
+    /// lanes' D21): whether row 37's line has been said for the unlink
+    /// fault that stands — set at [`Daemon::retire_asides`] where the
+    /// store's deferred unlink answers an error, the line naming the aside
+    /// at the queue's head and the act that clears it; cleared, with the
+    /// clearing line, at the next call that answers `Ok` — the queue
+    /// drained by that call, or found empty because the pruner's pass swept
+    /// the aside first — and clear at every open, the store's queue being
+    /// empty there. The pruner's pass clears nothing here: the flag reads
+    /// the deferred unlink's own answer and nothing else. Set, read and
+    /// cleared at one site, under no lock: the atomic is what makes the
+    /// field `Sync`.
+    aside_fault_said: AtomicBool,
     /// The dirty-crash harness's one seam into the claim's step
     /// (`Daemon::hold_between_the_claim_and_its_head`): armed, the
     /// claim-flip tail announces the crash window and parks there, both
@@ -879,6 +892,7 @@ impl Daemon {
                 pruner_ended: AtomicBool::new(false),
                 checkpointer_ended: AtomicBool::new(false),
             },
+            aside_fault_said: AtomicBool::new(false),
             #[cfg(any(test, feature = "test-hooks"))]
             hold_between_claim_and_head: AtomicBool::new(false),
             #[cfg(any(test, feature = "test-hooks"))]

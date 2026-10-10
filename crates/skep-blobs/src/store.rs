@@ -690,6 +690,16 @@ impl Store {
         Ok(done)
     }
 
+    /// THE ASIDE AT THE QUEUE's HEAD — the next one [`Store::unlink_asides`]
+    /// will take, which is the one a failed unlink re-queued there: the
+    /// daemon's line names it by this read, the error it answered being the
+    /// OS's and naming no file. `None` while nothing is queued — before any
+    /// replace is answered, and once a call has drained the queue. The path
+    /// as queued, under the root.
+    pub fn next_aside(&self) -> Option<PathBuf> {
+        self.aside_queue.lock().first().cloned()
+    }
+
     // ── the expired uploads, as the pruner removes them ──────────────────
 
     /// THE EXPIRED UPLOADS at `now_ms`: every record past its expiry, in

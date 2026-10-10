@@ -245,6 +245,180 @@ fn the_full_volume_line_renders_the_ruled_words_and_the_door_records_it() {
     );
 }
 
+/// ROWS 27 AND 28 ON THE DOOR, PER ATTEMPT (`operations.md` §1.1 rows 27 and
+/// 28; §4 row 27's line cell; L12's door): a compaction rewrite that fails
+/// BEFORE its rename — a directory standing on the temp file's name,
+/// `commits.log.compact` and `feed-index.log.compact`, which no create
+/// passes — is said through the classed door under `failure:`, in the
+/// ruled words, one line per file that stood; and said AGAIN at the next
+/// landing that compacts while the cause stands — per attempt, the rule's
+/// named exception, each landing a fresh act — where every other line of
+/// the feed's is once. Driven one layer below the daemon, whose pre-claim
+/// gate admits no bulk write: an engine over a temp dir under the daemon's
+/// own kernel config, the write path over it, six bulk inserts as the
+/// system principal through the session door — each recorded in the feed
+/// — rotating the journal's segment so the first checkpoint reclaims below
+/// it and the compaction has a floor; the checkpoint and the compaction
+/// run here as the checkpoint thread runs them.
+#[test]
+fn a_compaction_failed_before_its_rename_is_said_through_the_door_at_every_attempt() {
+    use skep_address::Nat;
+    use skep_arrangement::Caller;
+    use skep_febe::{Deposit, VPos};
+    use skep_kernel::{BurnedSeqPolicy, CheckpointPolicy, Durability, KernelConfig, SaltSource};
+    use skep_namespace::{system_account, SYSTEM_PRINCIPAL};
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let engine = Engine::open(KernelConfig {
+        durability: Durability::Fsync {
+            journal_path: dir.path().to_path_buf(),
+            retain_checkpoints: 2,
+            burned_seq: BurnedSeqPolicy::Rollback,
+        },
+        checkpoint: CheckpointPolicy::Deferred(Box::new(CheckpointPolicy::EveryN(1024))),
+        salt: SaltSource::Os,
+    })
+    .expect("a fresh engine");
+    let wp = WritePath::open(dir.path(), &engine, Arc::new(CellIndex::new())).expect("open");
+    let stores = engine.stores();
+    // One write through the session door, as the daemon's sequences commit:
+    // the meta derived from the op, the driver run inside the lock.
+    let commit = |op: Op, run: &dyn Fn() -> (Address, Seq)| {
+        let meta = write_meta(&op).expect("a write").attributed("bare".to_string(), None);
+        let serial = wp.serial_lock();
+        let resp = wp.commit_under(&serial, meta, || {
+            let (addr, at) = run();
+            Response::AckAddr { addr, at }
+        });
+        assert!(matches!(resp, Response::AckAddr { .. }), "the write is acked through the door");
+    };
+    // Two mints under the system account: doc 3 is the head writer's own
+    // staging draft, so the second, doc 4, is the private draft the inserts
+    // go into.
+    let account = system_account();
+    let mut minted = Vec::new();
+    for _ in 0..2 {
+        let op = Op::CreateNewDocument { account: account.clone(), published: Some(false) };
+        let mint = || {
+            stores
+                .namespace()
+                .create_new_document(SYSTEM_PRINCIPAL, &account, Some(false))
+                .expect("the mint commits")
+        };
+        commit(op, &mint);
+        minted.push(mint_address(&stores, minted.len() + 3));
+    }
+    let doc = minted[1].clone();
+    // A text value as the wire's codec hands it to the store: one atom per
+    // character, which is what makes an 8 KiB insert a journal's worth of
+    // records.
+    let insert = |value: &str| {
+        let values: Vec<Val> = value.bytes().map(|b| Val::new([b])).collect();
+        let op = Op::Insert {
+            doc: doc.clone(),
+            at: VPos::content(Nat::from(1u32)),
+            values: values.clone(),
+            deposit: Deposit::Undeclared,
+        };
+        let run = || {
+            stores
+                .vstream()
+                .insert(
+                    Caller::Principal(SYSTEM_PRINCIPAL),
+                    &doc,
+                    VPos::content(Nat::from(1u32)),
+                    values.clone(),
+                    Deposit::Undeclared,
+                )
+                .expect("the insert commits")
+        };
+        commit(op, &run);
+    };
+    let bulk = "z".repeat(8192);
+    for _ in 0..6 {
+        insert(&bulk);
+    }
+    // THE OBSTACLE: a directory on each temp file's name, so the rewrite's
+    // create fails and nothing is renamed.
+    std::fs::create_dir(dir.path().join("commits.log.compact")).expect("the obstacle");
+    std::fs::create_dir(dir.path().join("feed-index.log.compact")).expect("the obstacle");
+    let compaction_lines = || -> Vec<String> {
+        wp.lines_said()
+            .lock()
+            .iter()
+            .filter(|l| l.contains("compaction below the reclaim floor failed"))
+            .cloned()
+            .collect()
+    };
+    let tail = "; the file stands as it was, and the next checkpoint's compaction tries again";
+
+    // The checkpoint thread's act: the checkpoint, then the compaction.
+    engine.kernel().checkpoint().expect("the first checkpoint lands");
+    let compacted = wp.compact_feed_below_reclaim_floor(&engine);
+    assert!(compacted.fence.is_some(), "the floor moved: a fence to compact to");
+    assert_eq!(
+        compacted.standing,
+        ["commits.log", "feed-index.log"],
+        "the two files whose rewrite failed before its rename stood"
+    );
+    let first = compaction_lines();
+    assert_eq!(
+        first.len(),
+        2,
+        "one line per file that stood, through the door:\n{}",
+        wp.lines_said().lock().join("\n")
+    );
+    assert!(
+        first[0].starts_with(
+            "failure: commits.log compaction below the reclaim floor failed before its rename: "
+        ) && first[0].ends_with(tail),
+        "row 27: {}",
+        first[0]
+    );
+    assert!(
+        first[1].starts_with(
+            "failure: feed-index.log compaction below the reclaim floor failed before its rename: "
+        ) && first[1].ends_with(tail),
+        "row 28: {}",
+        first[1]
+    );
+
+    // A SECOND LANDING THAT COMPACTS, the obstacle standing: two more
+    // checkpoints move the floor past the surviving entries, and each line
+    // is said AGAIN — per attempt.
+    insert("q");
+    engine.kernel().checkpoint().expect("the second checkpoint lands");
+    insert("q");
+    engine.kernel().checkpoint().expect("the third checkpoint lands");
+    let compacted = wp.compact_feed_below_reclaim_floor(&engine);
+    assert_eq!(compacted.standing, ["commits.log", "feed-index.log"], "stood again");
+    let again = compaction_lines();
+    assert_eq!(
+        again.len(),
+        4,
+        "FINDING (rows 27/28): per attempt — two landings, two lines each:\n{}",
+        again.join("\n")
+    );
+    assert_eq!(again[2..], first[..], "the same two lines, again");
+}
+
+/// The address of the system account's `n`th document, as the mint lands
+/// it — read off the world, so the test names what the store minted and
+/// not a transcription.
+fn mint_address(stores: &EngineStores, n: usize) -> Address {
+    use skep_address::{validate, Nat, Tumbler};
+    use skep_namespace::HasM3;
+    let t = Tumbler::new([1u32, 1, 0, 1, 0, n as u32].into_iter().map(Nat::from))
+        .expect("a six-component sequence is nonempty");
+    let addr = validate(t).expect("the system account's documents are T4-valid");
+    let snap = stores.kernel().snapshot();
+    assert!(
+        snap.world().m3().is_registered_document(&addr),
+        "doc {n} of the system account is registered: {addr}"
+    );
+    addr
+}
+
 /// A raise WAKES a wait already parked — the thread asleep on the signal
 /// between two crossings runs the checkpoint the next crossing calls for.
 #[test]

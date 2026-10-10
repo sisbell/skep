@@ -892,7 +892,18 @@ impl Feed {
     /// `commits.log`'s `min_since` ahead of the line its file holds until
     /// the landing. The answer names the fence, the compaction of the
     /// RESIDENT feed being what it describes, and no file standing.
-    pub(super) fn compact_below_reclaim_floor(&self, engine: &Engine) -> FeedCompaction {
+    ///
+    /// THE LINES (`operations.md` §1.1 rows 27 and 28) go through `lines`,
+    /// the write path's classed door, handed at the call as the walk's
+    /// landing is handed it: a rewrite that failed BEFORE its rename, said
+    /// per ATTEMPT — each landing while the cause stands is a fresh act
+    /// whose failure is news, the rule's named exception — under
+    /// `Class::Failure`.
+    pub(super) fn compact_below_reclaim_floor(
+        &self,
+        engine: &Engine,
+        lines: &Lines,
+    ) -> FeedCompaction {
         let Some(floor) = reclaim_floor(engine) else {
             return FeedCompaction::default();
         };
@@ -905,10 +916,13 @@ impl Feed {
             // same, and the twins follow them below.
             Err(RewriteFail::PastRename(_)) => true,
             Err(before) => {
-                skep_util::notice::line(format_args!(
-                    "commits.log compaction below the reclaim floor failed {before}; the file \
-                     stands as it was, and the next checkpoint's compaction tries again"
-                ));
+                lines.say(
+                    Class::Failure,
+                    format_args!(
+                        "commits.log compaction below the reclaim floor failed {before}; the file \
+                         stands as it was, and the next checkpoint's compaction tries again"
+                    ),
+                );
                 standing.push("commits.log");
                 true
             }
@@ -923,10 +937,14 @@ impl Feed {
         let covered = inner.log.entries().keys().next_back().copied().unwrap_or(fence);
         for (name, failed) in inner.rewrite_derived_files(covered) {
             if let RewriteFail::BeforeRename(e) = failed {
-                skep_util::notice::line(format_args!(
-                    "{name} compaction below the reclaim floor failed before its rename: {e}; \
-                     the file stands as it was, and the next checkpoint's compaction tries again"
-                ));
+                lines.say(
+                    Class::Failure,
+                    format_args!(
+                        "{name} compaction below the reclaim floor failed before its rename: {e}; \
+                         the file stands as it was, and the next checkpoint's compaction tries \
+                         again"
+                    ),
+                );
                 standing.push(name);
             }
         }

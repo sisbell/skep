@@ -628,15 +628,29 @@ impl Daemon {
     /// TEST HOOK (the same standing: `#[doc(hidden)]`, not a stable API):
     /// the HEAD WRITER'S DRIVER REFUSES THE NEXT HEAD it is due to write,
     /// once — armed before a claim, the claim's own `H.1` — handled exactly
-    /// as a driver refusal is (`head.rs`, WHAT A REFUSAL DOES: surfaced, the
-    /// state unadvanced, the triggering write untouched), so a suite can
-    /// stand a RUNNING claimed board with no board term and judge what the
-    /// write path does next (l7-C1: the first head owed at every turn, a
-    /// refused write's included — `tests/it/head.rs`). Disarms itself at the
-    /// one refusal it injects.
+    /// as a driver refusal is (`head.rs`, WHAT A REFUSAL DOES: surfaced once
+    /// per cause with its position, the state unadvanced, the triggering
+    /// write untouched), so a suite can stand a RUNNING claimed board with
+    /// no board term and judge what the write path does next (l7-C1: the
+    /// first head owed at every turn, a refused write's included —
+    /// `tests/it/head.rs`). The refusal is injected INSIDE the driver — the
+    /// first store call of the head's write answers a `durability`
+    /// rejection whose `detail` is the seam's standing one, `the test
+    /// seam's refusal` — so it rides row 38's whole path. Disarms itself at
+    /// the one refusal it injects.
     #[doc(hidden)]
     pub fn refuse_the_next_head_once(&self) {
-        self.writes.refuse_next_head_once();
+        self.writes.refuse_next_head_once(None);
+    }
+
+    /// TEST HOOK (the same standing): [`Daemon::refuse_the_next_head_once`]
+    /// with a `detail` of the suite's own in place of the standing one — so
+    /// a suite stands two DIFFERENT causes against the once-per-cause memo
+    /// (`operations.md` §1.1 row 38) and judges the second said where the
+    /// same cause again is not.
+    #[doc(hidden)]
+    pub fn refuse_the_next_head_once_as(&self, detail: &str) {
+        self.writes.refuse_next_head_once(Some(detail));
     }
 
     /// TEST HOOK (the same standing: `#[doc(hidden)]`, not a stable API):

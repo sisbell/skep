@@ -320,17 +320,18 @@ impl LineFile {
     /// cannot take a write the kernel just performed is an operator condition
     /// worth reporting rather than limping past.
     ///
-    /// The notice names THIS file, from the name this handle already holds, so
-    /// no caller pairs a handle with a file-name constant. ONE per file per
-    /// uptime: [`LineFile::stopped`] answers `Ok` and writes nothing after
-    /// the first failure, so a busy board's stderr carries it alone, and that
-    /// field's own card says what the stop buys.
+    /// The line names THIS file, from the name this handle already holds, so
+    /// no caller pairs a handle with a file-name constant, and goes through
+    /// the classed door this file holds (`operations.md` §1.1 row 32). ONE
+    /// per file per uptime: [`LineFile::stopped`] answers `Ok` and writes
+    /// nothing after the first failure, so a busy board's stream carries it
+    /// alone, and that field's own card says what the stop buys.
     pub fn append_or_report(&mut self, at: u64, fields: Vec<(&'static str, Value)>) {
         if let Err(e) = self.append(at, fields) {
-            skep_util::notice::line(format_args!(
-                "{} append failed at position {at}: {e}",
-                self.name
-            ));
+            self.lines.say(
+                Class::Failure,
+                format_args!("{} append failed at position {at}: {e}", self.name),
+            );
         }
     }
 

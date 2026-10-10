@@ -111,6 +111,10 @@ pub(super) struct AttestStore {
     /// `Arc`, so a page rendered after the feed's lock is released
     /// ([`super::Feed::page`]) clones a pointer, never a signature.
     served: BTreeMap<u64, Arc<Attestation>>,
+    /// The classed door with the daemon's record ([`Lines`]), a clone held
+    /// from the open as the line files hold theirs: what the halt's line
+    /// (`operations.md` §1.1 row 33) is said through, once.
+    lines: Lines,
 }
 
 impl AttestStore {
@@ -210,25 +214,29 @@ impl AttestStore {
         }
         file.fence(head).map_err(with_file)?;
         file.sync().map_err(with_file)?;
-        Ok(AttestStore { file, served })
+        Ok(AttestStore { file, served, lines: lines.clone() })
     }
 
     /// Mirror one admitted marker slot at RECORD time — the attestation the
     /// plain sequence's check admitted and handed the kernel — into the file,
     /// SYNCED before this returns, and into the served window (SO-I5 (d)).
     /// A failed write or sync stops the file for the uptime, is said ONCE
-    /// on the operator stream — this file and the position — and is
-    /// answered [`AttestStoreFailed`], on which the write path halts, so no later
-    /// commit runs to say it twice. This uptime still serves the slot, and
-    /// the restart's open rebuilds the line from the journal.
+    /// through the classed door (`operations.md` §1.1 row 33) — this file,
+    /// the position, the cause, what still serves and the act — and is
+    /// answered [`AttestStoreFailed`], on which the write path halts, so no
+    /// later commit runs to say it twice. This uptime still serves the slot,
+    /// and the restart's open rebuilds the line from the journal.
     pub(super) fn record(&mut self, at: u64, slot: Attestation) -> Result<(), AttestStoreFailed> {
         let durable = self.file.append_synced(at, attest_fields(&slot));
         self.served.insert(at, Arc::new(slot));
         durable.map_err(|e| {
-            skep_util::notice::line(format_args!(
-                "{ATTEST_FILE}: position {at}'s line is not durable ({e}); every later write is \
-                 refused until a restart, whose open rebuilds the line from the journal"
-            ));
+            self.lines.say(
+                Class::Failure,
+                format_args!(
+                    "{ATTEST_FILE}: position {at}'s line is not durable ({e}); every later write \
+                     is refused until a restart, whose open rebuilds the line from the journal"
+                ),
+            );
             AttestStoreFailed
         })
     }
@@ -402,11 +410,12 @@ mod tests {
             let (file, entries, cut) = LineFile::open(dir.path(), ATTEST_FILE, 9, |_| true, &lines)
                 .expect("a fresh store opens");
             assert!(entries.is_empty() && cut.is_none());
-            let mut store = AttestStore { file, served: BTreeMap::new() };
+            let mut store = AttestStore { file, served: BTreeMap::new(), lines: lines.clone() };
             store.record(5, slot.clone()).expect("a writable store takes the line");
             assert_eq!(store.synced_through(), 5, "and syncs it before answering");
             assert_eq!(store.slot(5).as_deref(), Some(&slot), "served at once");
             assert_eq!(store.slot(4).as_deref(), None, "and only where recorded");
+            assert!(lines.said().lock().is_empty(), "a line that landed says nothing");
         }
         let (_file, entries, _) =
             LineFile::open(dir.path(), ATTEST_FILE, 9, |_| true, &lines).expect("reopen");
@@ -432,6 +441,43 @@ mod tests {
             attest_of_record(&record(Value::from(200u64), "ab01")),
             Attestation::new(200, vec![0xab, 0x01]).ok(),
             "a tag no row names replays as the slot it spells"
+        );
+    }
+
+    /// ROW 33 ON THE DOOR (`operations.md` §1.1 row 33; SO-I5 (d)): a line
+    /// the store cannot make durable — its handle read-only, the seam
+    /// `fail_next_write` — is answered [`AttestStoreFailed`] and said
+    /// through the classed door under `failure:`, in the ruled words: the
+    /// file, the position, the cause, what still serves and the act. The
+    /// slot is served this uptime all the same. ONCE by the halt above: the
+    /// write path refuses every later commit on the answer, so no later
+    /// `record` runs — the file's own refusal of a later line is the halt's
+    /// premise, not this card's rate.
+    #[test]
+    fn a_line_the_store_cannot_make_durable_is_said_through_the_door_and_answered() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let lines = Lines::new();
+        let (file, _, _) = LineFile::open(dir.path(), ATTEST_FILE, 9, |_| true, &lines)
+            .expect("a fresh store opens");
+        let mut store = AttestStore { file, served: BTreeMap::new(), lines: lines.clone() };
+        store.fail_next_write();
+        let slot = Attestation::new(1, vec![0xab, 0x01]).expect("a slot");
+        assert!(store.record(5, slot.clone()).is_err(), "answered, so the write path halts");
+        assert_eq!(store.slot(5).as_deref(), Some(&slot), "served this uptime all the same");
+        let said = lines.said().lock().clone();
+        assert_eq!(said.len(), 1, "one line for the failure:\n{}", said.join("\n"));
+        assert!(
+            said[0].starts_with("failure: feed-attest.log: position 5's line is not durable ("),
+            "the class word, the file and the position: {}",
+            said[0]
+        );
+        assert!(
+            said[0].ends_with(
+                "); every later write is refused until a restart, whose open rebuilds the line \
+                 from the journal"
+            ),
+            "what still serves and the act: {}",
+            said[0]
         );
     }
 

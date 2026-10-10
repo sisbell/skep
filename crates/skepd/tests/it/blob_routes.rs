@@ -621,6 +621,147 @@ fn a_closed_board_keeps_a_standing_upload_and_serves_its_reads() {
     sd.shutdown();
 }
 
+/// The asides standing under `blobs/blake3/` — the replaced instances'
+/// second names, `.retired-<hex>-<n>` — in name order; none where the
+/// directory does not exist yet.
+fn asides_on_disk(data_dir: &Path) -> Vec<String> {
+    let Ok(entries) = std::fs::read_dir(data_dir.join("blobs").join("blake3")) else {
+        return Vec::new();
+    };
+    let mut asides: Vec<String> = entries
+        .filter_map(|e| e.ok())
+        .filter_map(|e| e.file_name().to_str().map(str::to_string))
+        .filter(|name| name.starts_with(".retired-"))
+        .collect();
+    asides.sort();
+    asides
+}
+
+/// The lines the daemon has said of the blob store — row 37 and its
+/// clearing — in order.
+fn blob_store_lines(sd: &skepd::Skepd) -> Vec<String> {
+    sd.daemon().lines_said().into_iter().filter(|l| l.contains("blob store:")).collect()
+}
+
+/// Wait for `holds`, polling — the deferred unlink runs on the worker after
+/// the reply is written, so what it says lands on the stream after the
+/// client has its answer.
+fn wait_until(what: &str, holds: impl Fn() -> bool) {
+    let deadline = Instant::now() + Duration::from_secs(20);
+    while !holds() {
+        assert!(Instant::now() < deadline, "{what}: not within 20 s");
+        thread::sleep(Duration::from_millis(10));
+    }
+}
+
+/// ROW 37 ON THE STREAM (`operations.md` §1.1 row 37; §1 NEVER — a line is
+/// said once per condition, never per request; the ops lanes' D21). A1 —
+/// ONE FAILURE LINE PER STANDING UNLINK FAULT, NAMING THE ASIDE: a second
+/// deposit of the same bytes is a REPLACE, which queues the replaced
+/// instance's aside for the deferred unlink the transport runs after the
+/// reply; with the store's seam failing that step, the stream carries
+/// EXACTLY ONE `failure:` line naming the aside as its name within
+/// `blobs/`, the cause and the act that clears it, and three more requests
+/// of the family while the fault stands — a deposit read, a second replace,
+/// a deposit read — write NO further line of any kind (the D9 discipline:
+/// the family's requests write nothing), the asides standing on disk. A2 —
+/// THE CLEARING: the seam disarmed, the next request's deferred unlink
+/// drains the queue and the stream carries EXACTLY ONE `landing:` line; a
+/// further request and replace write nothing, and no aside stands.
+#[test]
+fn a_failed_aside_unlink_is_said_once_naming_the_aside_and_cleared_once_when_the_queue_drains() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let sd = spawn(dir.path());
+    let port = sd.port();
+    let token = open_session(port, CLAIMANT_PRINCIPAL);
+    let bytes = b"the picture's bytes, replaced under the seam";
+    assert!(blob_store_lines(&sd).is_empty(), "a healthy board: no line of the blob store's");
+
+    // The first deposit stands alone; the replace, under the seam, queues
+    // its aside and the deferred unlink fails at it.
+    put_whole(port, &token, bytes);
+    sd.daemon().fail_blob_finish_at(Some(Step::UnlinkAside));
+    put_whole(port, &token, bytes);
+    wait_until("row 37's line", || !blob_store_lines(&sd).is_empty());
+    let asides = asides_on_disk(dir.path());
+    assert_eq!(asides.len(), 1, "the replaced instance's aside stands: {asides:?}");
+    assert_eq!(
+        blob_store_lines(&sd),
+        [format!(
+            "failure: blob store: the aside blake3/{} could not be unlinked: injected failure at \
+             UnlinkAside; it stands for the pass or the next open",
+            asides[0]
+        )],
+        "said once, naming the aside within blobs/, the cause and the act"
+    );
+
+    // THE ONCE: three more requests of the family while the fault stands,
+    // each running the deferred unlink into the same fault — no further
+    // line, of this kind or any.
+    let before = sd.daemon().lines_said().len();
+    let (st, _, _) = blob_deposit_read(port, Some(&token));
+    assert_eq!(st, 200);
+    put_whole(port, &token, bytes);
+    let (st, _, _) = blob_deposit_read(port, Some(&token));
+    assert_eq!(st, 200);
+    thread::sleep(Duration::from_millis(500));
+    assert_eq!(
+        sd.daemon().lines_said().len(),
+        before,
+        "FINDING (row 37; §1 NEVER): a line per request of the family:\n{}",
+        sd.daemon().lines_said().join("\n")
+    );
+    assert_eq!(asides_on_disk(dir.path()).len(), 2, "both asides stand, the first at the head");
+
+    // A2 — THE CLEARING: disarmed, the next request's deferred unlink drains
+    // the queue.
+    sd.daemon().fail_blob_finish_at(None);
+    let (st, _, _) = blob_deposit_read(port, Some(&token));
+    assert_eq!(st, 200);
+    wait_until("the clearing line", || blob_store_lines(&sd).len() == 2);
+    assert_eq!(blob_store_lines(&sd)[1], "landing: blob store: the asides unlink again");
+    assert!(asides_on_disk(dir.path()).is_empty(), "the queue drained: no aside stands");
+    let before = sd.daemon().lines_said().len();
+    let (st, _, _) = blob_deposit_read(port, Some(&token));
+    assert_eq!(st, 200);
+    put_whole(port, &token, bytes);
+    wait_until("the replace's aside unlinked", || asides_on_disk(dir.path()).is_empty());
+    thread::sleep(Duration::from_millis(300));
+    assert_eq!(
+        sd.daemon().lines_said().len(),
+        before,
+        "a cleared fault writes nothing more:\n{}",
+        sd.daemon().lines_said().join("\n")
+    );
+    sd.shutdown();
+}
+
+/// A3 — THE COMMON CASE IS SILENT (row 37; D9): a deposit and a replace with
+/// no fault armed write NO line — the stream is unchanged by the family's
+/// requests — the replaced instance's aside unlinked by the deferred step
+/// after the reply.
+#[test]
+fn a_replace_with_no_fault_writes_no_line_and_its_aside_goes_after_the_reply() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let sd = spawn(dir.path());
+    let port = sd.port();
+    let token = open_session(port, CLAIMANT_PRINCIPAL);
+    let bytes = b"the picture's bytes, replaced in the common case";
+    let before = sd.daemon().lines_said().len();
+    put_whole(port, &token, bytes);
+    put_whole(port, &token, bytes);
+    wait_until("the replace's aside unlinked", || asides_on_disk(dir.path()).is_empty());
+    thread::sleep(Duration::from_millis(300));
+    assert_eq!(
+        sd.daemon().lines_said().len(),
+        before,
+        "the family's requests write nothing:\n{}",
+        sd.daemon().lines_said().join("\n")
+    );
+    assert!(blob_store_lines(&sd).is_empty());
+    sd.shutdown();
+}
+
 /// THE UPLOAD FAMILY's LOG (D9; s6-op-h; `media.md` §Recovery, the restore
 /// face's clause: skepd's log of the upload family records at most the path
 /// and the status and never the principal): the real binary, its stderr

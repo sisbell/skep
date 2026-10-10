@@ -1075,18 +1075,22 @@ impl CommitsLog {
         // ack is owed regardless; a lost append answers BARE after restart,
         // which [`CommitsLog::stopped`] is what makes true — the failure
         // stops this file, so the next open's walk starts below the gap
-        // instead of above it. The failure is REPORTED through
-        // [`skep_util::notice`], which states why a notice may not panic.
+        // instead of above it. The failure is REPORTED through the classed
+        // door (`operations.md` §1.1 row 31) — once, since the stop takes
+        // every later line — which states why a notice may not panic.
         let line = entry_line(at, &meta);
         if self.stopped.is_none() {
             match self.file.write_all(&line) {
                 Ok(()) => self.len += line.len() as u64,
                 Err(e) => {
                     self.stopped = Some(at);
-                    skep_util::notice::line(format_args!(
-                        "commits.log append failed at position {at}: {e}; this file takes no \
-                         further line, so the next open re-derives from {at} as bare entries"
-                    ));
+                    self.lines.say(
+                        Class::Failure,
+                        format_args!(
+                            "commits.log append failed at position {at}: {e}; this file takes no \
+                             further line, so the next open re-derives from {at} as bare entries"
+                        ),
+                    );
                 }
             }
         }

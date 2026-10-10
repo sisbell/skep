@@ -106,6 +106,7 @@
 //! and what the guest may not read M10's gate withholds (M-I2 (a)).
 
 use std::io;
+use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use serde_json::Value;
@@ -117,6 +118,7 @@ use skep_media::pruner::{self, PrunePass};
 use skep_media::serve;
 use skep_namespace::PrincipalId;
 use skep_util::json::obj;
+use skep_util::notice::Class;
 
 use super::actor::Resolved;
 use super::reply::{
@@ -574,15 +576,57 @@ impl Daemon {
     /// sweeps whatever it did not reach. An I/O failure here is the
     /// operator's line, never a client's: the aside stands for the pass or
     /// the next open.
+    ///
+    /// ROW 37, ONCE PER STANDING FAULT (`operations.md` §1.1 row 37; §1
+    /// NEVER — a line is said once per condition, never per request; the
+    /// family's requests write no line of their own, D9): the store
+    /// re-queues a failed aside at the queue's head, so every later request
+    /// of the family meets the same fault; the once-flag
+    /// (`Daemon::aside_fault_said`) says it at the first and not again,
+    /// naming THE ASIDE — the queue's head, `Store::next_aside`, as the
+    /// file's name within `blobs/`, `{designation}/{aside}`, never an
+    /// absolute path — the OS's cause, and the act that clears it. A later
+    /// call that answers `Ok` with the flag set — the queue drained here,
+    /// or swept by the pruner's pass first — says the clearing line once
+    /// and clears the flag; the common case, `Ok` with the flag clear,
+    /// writes nothing. Through the write path's classed door, so the pair
+    /// stands in the one record beside the daemon's other lines.
     pub(super) fn retire_asides(&self) {
         // THE FAULT (test seam): a panic inside the deferred step, which the
         // transport's catch around this call contains.
         #[cfg(any(test, feature = "test-hooks"))]
         self.fire_the_unlinks_fault();
-        if let Err(e) = self.media.store().unlink_asides() {
-            skep_util::notice::line(format_args!(
-                "blob store: a replaced file's aside could not be unlinked: {e}"
-            ));
+        let store = self.media.store();
+        match store.unlink_asides() {
+            Ok(_) => {
+                if self.aside_fault_said.swap(false, Ordering::AcqRel) {
+                    self.writes.lines().say(Class::Landing, "blob store: the asides unlink again");
+                }
+            }
+            Err(e) => {
+                if self.aside_fault_said.swap(true, Ordering::AcqRel) {
+                    return;
+                }
+                // The failed aside, back at the head: its last two path
+                // components are the designation directory and the aside's
+                // own name, the file's name within `blobs/`.
+                let name = store.next_aside().map_or_else(
+                    || "an aside".to_string(),
+                    |aside| {
+                        let mut within: Vec<&str> =
+                            aside.iter().rev().take(2).filter_map(|c| c.to_str()).collect();
+                        within.reverse();
+                        within.join("/")
+                    },
+                );
+                self.writes.lines().say(
+                    Class::Failure,
+                    format_args!(
+                        "blob store: the aside {name} could not be unlinked: {e}; it stands for \
+                         the pass or the next open"
+                    ),
+                );
+            }
         }
     }
 

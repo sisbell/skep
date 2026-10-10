@@ -98,10 +98,21 @@
 //!
 //! WHAT A REFUSAL DOES. A driver refusal on any of the head's commits is a
 //! SURFACED failure (I11 (c), PUB-5.75: never a board left silently headless):
-//! a `skepd:` notice names it, the head is skipped for this cycle with the
-//! writer's state unadvanced, and the triggering write is untouched — it
-//! committed, and its ack is owed whatever the daemon's own write did. The
-//! next landed commit retries a CADENCE head, whose trigger stays due.
+//! row 38's line names it (`operations.md` §1.1 row 38; §4 row 31) — the
+//! position the head would have named and the refusal AS THE WIRE RENDERS
+//! A REJECTION, its code and its detail through M10's own lowering
+//! ([`lower_txn`]), never a store error's `Debug` — said ONCE PER CAUSE: a
+//! memo of the last refusal said is kept under the state lock, a refusal
+//! rendering as that one is not said again (the trigger stays due and every
+//! landed commit retries it, so the same cause would otherwise be said per
+//! commit), and a refusal rendering otherwise is a new cause and is said.
+//! The head is skipped for this cycle with the writer's state unadvanced,
+//! and the triggering write is untouched — it committed, and its ack is
+//! owed whatever the daemon's own write did. When a head next LANDS the
+//! memo clears with ONE `landing:` line naming the head's position and the
+//! first refused one ([`RefusalsClearedLine`]), so the next refusal is news
+//! again. The next landed commit retries a CADENCE head, whose trigger
+//! stays due.
 //!
 //! THE CLAIM'S HEAD, OWED (l7-C1; SO-I4 (a), owner 2026-10-02: the boundary
 //! is derived "from the write path's next turn wherever its first write was
@@ -127,8 +138,7 @@
 //! never constructing `Caller::System`; every ω check passes because the system
 //! account owns `H` and its draft, and nothing in the engine is widened.
 
-#[cfg(any(test, feature = "test-hooks"))]
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::io;
 
 use parking_lot::Mutex;
 use serde_json::Value;
@@ -138,7 +148,9 @@ use skep_arrangement::{
 };
 use skep_content::{HasContent, Val};
 use skep_engine::{EngineStores, World};
-use skep_febe::{Op, Response, Stores};
+use skep_febe::{lower_txn, Codec, Op, OpKind, Rejection, Response, Stores};
+#[cfg(any(test, feature = "test-hooks"))]
+use skep_febe::RejectCode;
 use skep_identity::BoardTerm;
 use skep_kernel::Seq;
 use skep_namespace::{head_document, system_account, HasM3, SYSTEM_PRINCIPAL};
@@ -147,7 +159,8 @@ use skep_util::notice::{self, Class};
 
 use super::feed::Feed;
 use super::sidecar::{wall_clock_millis, CommitMeta};
-use super::{write_meta, WriteMeta, WritePath};
+use super::{write_meta, Lines, WriteMeta, WritePath};
+use crate::codec::JsonCodec;
 use crate::serial::SerialGuard;
 
 /// The head record's `format` member — the journal stamp in force (`SKJ4`),
@@ -186,6 +199,13 @@ const COUNT_BOUND: u64 = 64;
 /// never by a thread, and never writing a duplicate for a position that has
 /// not moved.
 const TIME_BOUND_MILLIS: u64 = 3_600_000; // one hour
+
+/// The test seam's STANDING DETAIL — the `detail` of the refusal
+/// `crate::Daemon::refuse_the_next_head_once` arms, its `_as` sibling arming
+/// a detail of the test's own, so a suite can stand two causes against
+/// the once-per-cause memo.
+#[cfg(any(test, feature = "test-hooks"))]
+const SEAM_REFUSAL_DETAIL: &str = "the test seam's refusal";
 
 /// The head writer's own clock, so the time bound (trigger (c)) is drivable in
 /// tests through a seam rather than a `sleep`. In production `now_millis` is
@@ -281,6 +301,19 @@ struct HeadState {
     /// Never set on a board with a head: `write_head_if_due` reads
     /// `last_head` first.
     first_head_owed: bool,
+    /// ROW 38's MEMO (the module doc's WHAT A REFUSAL DOES): the cause of
+    /// the last refusal SAID, rendered as the line renders it —
+    /// `{code}: {detail}` ([`render_cause`]) — so a refusal rendering the
+    /// same is not said again while it stands; `None` before any refusal
+    /// and again once a head lands. Under this lock because the refusal is
+    /// met inside the head's own commit, outside the decision's lock span,
+    /// and the clearing is taken under it.
+    last_refusal: Option<String>,
+    /// THE FIRST REFUSED POSITION since a head last landed — the `{q}` the
+    /// clearing line names: set at the first refusal said after a landing,
+    /// kept through every refusal after it, cleared with the line when a
+    /// head lands. `None` while no refusal stands.
+    refusals_since: Option<u64>,
 }
 
 /// A COMMITTED PAIR — a position and the commit chain's value AT it, which
@@ -409,13 +442,21 @@ pub(super) struct HeadWriter {
     stores: EngineStores,
     state: Mutex<HeadState>,
     clock: Clock,
-    /// The test seam behind `crate::Daemon::refuse_the_next_head_once`: the
-    /// next head this writer is due to write meets a DRIVER REFUSAL — the
-    /// head skipped, the state unadvanced, the notice written — exactly as
-    /// `run_commit` answers a real one, and the seam disarms itself there.
-    /// `false` is the only state production ever sees.
+    /// The classed door with the daemon's record ([`Lines`]), a clone handed
+    /// at [`HeadWriter::open`] as `commits.log` holds one: row 38's line,
+    /// its clearing and the malformed run's go through it.
+    lines: Lines,
+    /// The test seam behind `crate::Daemon::refuse_the_next_head_once` and
+    /// its `_as` sibling: `Some(detail)` arms ONE driver refusal INSIDE the
+    /// driver — the first store call of the next head's write answers a
+    /// `durability` rejection carrying `detail` in place of running
+    /// ([`HeadWriter::injected_refusal`]) — so the refusal takes row 38's
+    /// whole path, exactly as `run_commit` answers a real one: the head
+    /// skipped, the state unadvanced, the line said once per cause. The
+    /// seam disarms at the one refusal it injects. `None` is the only state
+    /// production ever sees.
     #[cfg(any(test, feature = "test-hooks"))]
-    refuse_next_head: AtomicBool,
+    refuse_next_head: Mutex<Option<String>>,
 }
 
 impl HeadWriter {
@@ -442,7 +483,10 @@ impl HeadWriter {
     /// ever. The direction the `commits_since_head` card accepts: a head
     /// early by at most the over-count, never a duplicate (the position
     /// gate) and never a changed content (D1).
-    pub(super) fn open(stores: EngineStores, feed: &Feed) -> HeadWriter {
+    ///
+    /// `lines` is the write path's classed door, cloned in — the one record
+    /// the daemon shares — for the three lines this writer says.
+    pub(super) fn open(stores: EngineStores, feed: &Feed, lines: &Lines) -> HeadWriter {
         let clock = Clock::new();
         let now = clock.now_millis();
         let snap = stores.kernel().snapshot();
@@ -468,10 +512,13 @@ impl HeadWriter {
                 last_head_millis: resumed.last_head_millis.unwrap_or(now),
                 staging_draft,
                 first_head_owed: false,
+                last_refusal: None,
+                refusals_since: None,
             }),
             clock,
+            lines: lines.clone(),
             #[cfg(any(test, feature = "test-hooks"))]
-            refuse_next_head: AtomicBool::new(false),
+            refuse_next_head: Mutex::new(None),
         }
     }
 
@@ -483,28 +530,33 @@ impl HeadWriter {
         self.clock.set_millis(millis);
     }
 
-    /// The test seam behind `crate::Daemon::refuse_the_next_head_once`: arm
-    /// one injected driver refusal of the next due head. Not a stable API.
+    /// The test seam behind `crate::Daemon::refuse_the_next_head_once` and
+    /// its `_as` sibling: arm one injected driver refusal of the next due
+    /// head, its `detail` the given one or [`SEAM_REFUSAL_DETAIL`] under
+    /// `None`. Arming again replaces the arm. Not a stable API.
     #[cfg(any(test, feature = "test-hooks"))]
-    pub(super) fn refuse_next_head_once(&self) {
-        self.refuse_next_head.store(true, Ordering::Relaxed);
+    pub(super) fn refuse_next_head_once(&self, detail: Option<&str>) {
+        *self.refuse_next_head.lock() = Some(detail.unwrap_or(SEAM_REFUSAL_DETAIL).to_string());
     }
 
-    /// Whether the armed seam takes THIS head: `true` once per arming, the
-    /// seam disarmed by the read; always `false` in production, where the
-    /// field does not exist.
-    fn injected_refusal(&self) -> bool {
+    /// The armed seam's refusal for THIS commit, TAKEN — the seam disarmed
+    /// by the read — as the rejection the driver would have answered: M10's
+    /// `durability` under the commit's own op kind, the armed detail as its
+    /// `detail`, so it rides row 38's whole path. Always `None` in
+    /// production, where the field does not exist.
+    fn injected_refusal(&self, kind: OpKind) -> Option<Rejection> {
         #[cfg(any(test, feature = "test-hooks"))]
         {
-            if self.refuse_next_head.swap(false, Ordering::Relaxed) {
-                notice::line(
-                    "head writer: test seam — the driver's refusal of this head injected; no \
-                     head written this cycle",
-                );
-                return true;
-            }
+            let detail = self.refuse_next_head.lock().take()?;
+            let mut refusal = Rejection::classified(kind, RejectCode::Durability, None);
+            refusal.detail = Some(detail);
+            Some(refusal)
         }
-        false
+        #[cfg(not(any(test, feature = "test-hooks")))]
+        {
+            let _ = kind;
+            None
+        }
     }
 
     /// THE HEAD WRITER'S TURN, taken from [`WritePath::commit_under`] after
@@ -635,9 +687,20 @@ impl HeadWriter {
         };
         let (due_head, first) = due_head;
 
-        let landed = !self.injected_refusal() && self.write_head(wp, serial, &due_head.record);
+        let landed = self.write_head(wp, serial, &due_head.record);
         let mut state = self.state.lock();
         if landed {
+            // THE CLEARING (row 38's second line): a head landed, so every
+            // refusal said since the last one is history — said once, naming
+            // this head's position and the first refused one, and the memo
+            // cleared so the next refusal is news again.
+            if let Some(since) = state.refusals_since.take() {
+                state.last_refusal = None;
+                self.lines.say(
+                    Class::Landing,
+                    RefusalsClearedLine { landed: due_head.record.position, since },
+                );
+            }
             state.last_head = Some(due_head.record);
             state.commits_since_head = 0;
             state.last_head_millis = due_head.now_millis;
@@ -660,7 +723,10 @@ impl HeadWriter {
     /// committed — a failed publish leaves the atom an orphan in the draft (the
     /// resume case), the state is not advanced, and the next commit retries.
     fn write_head(&self, wp: &WritePath, serial: &SerialGuard<'_>, record: &HeadRecord) -> bool {
-        let Some(draft) = self.ensure_draft(wp, serial) else {
+        // The position the head names — what row 38's line names where any
+        // of its commits is refused.
+        let position = record.position;
+        let Some(draft) = self.ensure_draft(wp, serial, position) else {
             return false;
         };
         let bytes = record.to_bytes();
@@ -670,7 +736,9 @@ impl HeadWriter {
             let snap = self.stores.kernel().snapshot();
             snap.world().m5().content_count(&draft) + Nat::from(1u32)
         };
-        let Some(atom_start) = self.commit_insert(wp, serial, &draft, next_ordinal, bytes) else {
+        let Some(atom_start) =
+            self.commit_insert(wp, serial, &draft, next_ordinal, bytes, position)
+        else {
             return false;
         };
 
@@ -691,10 +759,16 @@ impl HeadWriter {
             Ok(run) => run,
             Err(e) => {
                 // Unreachable — the insert answered a content element start —
-                // but a silent arm is what I11 (c) forbids, so it is named.
-                notice::line(format_args!(
-                    "head writer: the head atom's run is malformed ({e:?}); no head written this cycle"
-                ));
+                // but a silent arm is what I11 (c) forbids, so it is named:
+                // the error's own words (`RunError`'s `Display`, never its
+                // `Debug`), through the classed door.
+                self.lines.say(
+                    Class::Failure,
+                    format_args!(
+                        "head writer: the head atom's run is malformed ({e}); no head written \
+                         this cycle"
+                    ),
+                );
                 return false;
             }
         };
@@ -703,14 +777,19 @@ impl HeadWriter {
             draft: Some(draft.clone()),
             runs: vec![ShotRun { origin: draft, run }],
         };
-        self.commit_publish(wp, serial, h, shot).is_some()
+        self.commit_publish(wp, serial, h, shot, position).is_some()
     }
 
     /// The staging draft: the one found at open or minted by an earlier head
     /// this uptime, else minted now under the system account (a private
     /// document, `published: false`) — ONCE for the life of the board, since
     /// every later open finds it ([`find_staging_draft`]).
-    fn ensure_draft(&self, wp: &WritePath, serial: &SerialGuard<'_>) -> Option<Address> {
+    fn ensure_draft(
+        &self,
+        wp: &WritePath,
+        serial: &SerialGuard<'_>,
+        position: u64,
+    ) -> Option<Address> {
         // Read in a statement of its own, so the state guard drops at the `;`:
         // an `if let` keeps its scrutinee's temporaries alive through its
         // body, and this lock is never to be held across a commit.
@@ -721,11 +800,13 @@ impl HeadWriter {
         let account = system_account();
         let op = Op::CreateNewDocument { account: account.clone(), published: Some(false) };
         let meta = write_meta(&op)?.attributed(SYSTEM_TESTIMONY.to_string(), None);
-        let draft = self.run_commit(wp, serial, meta, move || {
+        // The refusal lowered as the front door lowers the same error for a
+        // `create_new_document` (`lower_txn`, M10's one table).
+        let draft = self.run_commit(wp, serial, meta, position, move || {
             self.stores
                 .namespace()
                 .create_new_document(SYSTEM_PRINCIPAL, &account, Some(false))
-                .map_err(|e| format!("staging draft mint refused: {e:?}"))
+                .map_err(|e| lower_txn(OpKind::CreateNewDocument, e))
         })?;
         if draft != staging_draft_address() {
             // The system principal mints nothing else, so the first mint under
@@ -749,6 +830,7 @@ impl HeadWriter {
         draft: &Address,
         ordinal: Nat,
         bytes: Vec<u8>,
+        position: u64,
     ) -> Option<Address> {
         let op = Op::Insert {
             doc: draft.clone(),
@@ -760,11 +842,12 @@ impl HeadWriter {
         let Op::Insert { doc, at, values, deposit } = op else {
             return None;
         };
-        self.run_commit(wp, serial, meta, move || {
+        // The refusal lowered as the front door lowers an `insert`'s.
+        self.run_commit(wp, serial, meta, position, move || {
             self.stores
                 .vstream()
                 .insert(Caller::Principal(SYSTEM_PRINCIPAL), &doc, at, values, deposit)
-                .map_err(|e| format!("head atom insert refused: {e:?}"))
+                .map_err(|e| lower_txn(OpKind::Insert, e))
         })
     }
 
@@ -774,6 +857,7 @@ impl HeadWriter {
         serial: &SerialGuard<'_>,
         h: Address,
         shot: Shot,
+        position: u64,
     ) -> Option<Address> {
         let op = Op::Publish { doc: h, shot };
         let meta = write_meta(&op)?.attributed(SYSTEM_TESTIMONY.to_string(), None);
@@ -782,9 +866,10 @@ impl HeadWriter {
         };
         // The source consult at the SYSTEM PRINCIPAL's class, never System's
         // (PUB-6.65): the system account owns H and the draft, so no origin is
-        // withheld.
+        // withheld. The refusal lowered as the front door lowers a
+        // `publish`'s.
         let visibility = World::visible_to(Caller::Principal(SYSTEM_PRINCIPAL));
-        self.run_commit(wp, serial, meta, move || {
+        self.run_commit(wp, serial, meta, position, move || {
             self.stores
                 .vstream()
                 .publish(
@@ -793,7 +878,7 @@ impl HeadWriter {
                     &shot,
                     &visibility,
                 )
-                .map_err(|e| format!("head publish refused: {e:?}"))
+                .map_err(|e| lower_txn(OpKind::Publish, e))
         })
     }
 
@@ -804,29 +889,139 @@ impl HeadWriter {
     /// `record`/announce want, and read the committed address back off the
     /// answer the door returns, the one copy of it there is. No caller reads
     /// the committed `Seq`, so the address alone is returned. A driver
-    /// refusal is named inside the closure, where it is in hand, and answered
-    /// with a non-committing `Response` (recorded nowhere), so the head is
-    /// skipped and the triggering write is untouched.
+    /// refusal is a [`Rejection`] — the store's error lowered through M10's
+    /// one table under the op's own kind, so it reads as the wire's refusal
+    /// of the same op would — met inside the closure, where it is in hand,
+    /// said once per cause with `position`, the one the head would have
+    /// named ([`HeadWriter::say_the_refusal_once`]), and answered with a
+    /// non-committing `Response` (recorded nowhere), so the head is skipped
+    /// and the triggering write is untouched. The test seam's refusal is
+    /// taken here too, ahead of the driver, so it rides the same path.
     fn run_commit(
         &self,
         wp: &WritePath,
         serial: &SerialGuard<'_>,
         meta: WriteMeta,
-        run: impl FnOnce() -> Result<(Address, Seq), String>,
+        position: u64,
+        run: impl FnOnce() -> Result<(Address, Seq), Rejection>,
     ) -> Option<Address> {
-        let resp = wp.commit_recorded(serial, meta, || match run() {
-            Ok((addr, at)) => Response::AckAddr { addr, at },
-            Err(e) => {
-                notice::line(format_args!("head writer: {e}; no head written this cycle"));
-                // A no-op answer `record` returns None for: nothing recorded,
-                // nothing announced. Dropped below, never on the wire.
-                Response::Bool { val: false, as_of: Seq(0) }
+        let kind = meta.kind;
+        let resp = wp.commit_recorded(serial, meta, || {
+            let outcome = match self.injected_refusal(kind) {
+                Some(refusal) => Err(refusal),
+                None => run(),
+            };
+            match outcome {
+                Ok((addr, at)) => Response::AckAddr { addr, at },
+                Err(refusal) => {
+                    self.say_the_refusal_once(position, &refusal);
+                    // A no-op answer `record` returns None for: nothing
+                    // recorded, nothing announced. Dropped below, never on
+                    // the wire.
+                    Response::Bool { val: false, as_of: Seq(0) }
+                }
             }
         });
         let Response::AckAddr { addr, .. } = resp else {
             return None;
         };
         Some(addr)
+    }
+
+    /// ROW 38's LINE, ONCE PER CAUSE (the module doc's WHAT A REFUSAL DOES):
+    /// the refusal rendered as the wire renders a rejection — `{code}:
+    /// {detail}` ([`render_cause`]) — compared under the state lock with the
+    /// last one said: the same cause is not said again; a new one is said
+    /// with `position`, the one the head would have named, and remembered,
+    /// and the first refused position since a landing is kept for the
+    /// clearing line. Said under the lock, so this line and the clearing a
+    /// landing says are one order on the stream.
+    fn say_the_refusal_once(&self, position: u64, refusal: &Rejection) {
+        let cause = render_cause(refusal);
+        let mut state = self.state.lock();
+        if state.last_refusal.as_deref() == Some(cause.as_str()) {
+            return;
+        }
+        state.refusals_since.get_or_insert(position);
+        self.lines.say(Class::Failure, HeadRefusedLine { position, cause: &cause });
+        state.last_refusal = Some(cause);
+    }
+}
+
+/// ROW 38's CAUSE, as the wire renders a rejection (`operations.md` §1.1
+/// row 38): `{code}: {detail}` — the code as the wire spells it
+/// ([`wire_code`]) and the rejection's own `detail` where it carries one,
+/// the code alone otherwise; a `durability` refusal whose I/O kind is
+/// `StorageFull` says the operator's words, `the volume is full`, ahead of
+/// the OS's text, as the checkpoint's failure line says them. Never a
+/// `Debug` rendering: the inner errors are the stores', whose `Display` the
+/// daemon cannot assume and whose `Debug` names a variant.
+fn render_cause(refusal: &Rejection) -> String {
+    let code = wire_code(refusal);
+    let full = refusal.io_kind == Some(io::ErrorKind::StorageFull);
+    match (&refusal.detail, full) {
+        (Some(detail), true) => format!("{code}: the volume is full ({detail})"),
+        (None, true) => format!("{code}: the volume is full"),
+        (Some(detail), false) => format!("{code}: {detail}"),
+        (None, false) => code,
+    }
+}
+
+/// THE CODE AS THE WIRE SPELLS IT — `durability`, never `Durability`: read
+/// off the JSON codec's own rendering of the rejection ([`JsonCodec`]'s
+/// `marshal`, whose `code` member is the transport's one vocabulary, pinned
+/// against wire.md), so this line and a client's refusal spell one word and
+/// no second table of names stands here. The round trip renders one small
+/// JSON document per refusal SAID — once per cause — which is what one
+/// vocabulary costs while the codec's name table is the codec's own.
+fn wire_code(refusal: &Rejection) -> String {
+    let rendered = JsonCodec.marshal(&Response::Rejected(refusal.clone()));
+    serde_json::from_slice::<Value>(&rendered)
+        .ok()
+        .and_then(|v| v.get("code")?.as_str().map(str::to_string))
+        // Unreachable — the codec renders every rejection with its code —
+        // and not a variant name even here.
+        .unwrap_or_else(|| "refused".to_string())
+}
+
+/// ROW 38's LINE (`operations.md` §1.1 row 38; §4 row 31), in the operator
+/// stream's ruled words: the position the head would have named and the
+/// cause as [`render_cause`] renders it. A pure value the unit suite pins by
+/// `to_string()`; emitted under `Class::Failure` through
+/// [`HeadWriter::say_the_refusal_once`], once per cause.
+struct HeadRefusedLine<'a> {
+    position: u64,
+    cause: &'a str,
+}
+
+impl std::fmt::Display for HeadRefusedLine<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "head writer: the head at position {} was refused ({}); no head written this cycle",
+            self.position, self.cause
+        )
+    }
+}
+
+/// ROW 38's CLEARING LINE, in the ruled words: the position the landed head
+/// names and the first position refused since the last head — the span the
+/// refusals covered, now history. A pure value, pinned by `to_string()`;
+/// emitted under `Class::Landing` by [`HeadWriter::write_head_if_due`] where
+/// a head lands with refusals on the memo, once.
+struct RefusalsClearedLine {
+    landed: u64,
+    since: u64,
+}
+
+impl std::fmt::Display for RefusalsClearedLine {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "head writer: a head landed at position {}; the refusals since position {} are \
+             cleared",
+            self.landed, self.since
+        )
     }
 }
 
@@ -1087,6 +1282,75 @@ mod tests {
             DraftMintedElsewhere { minted: &minted, expected: &staging_draft_address() }.to_string(),
             "head writer: the staging draft minted at 1.1.0.1.0.4, not at 1.1.0.1.0.3 — another \
              writer minted under the system account; the head goes on with the draft it minted"
+        );
+    }
+
+    /// ROW 38's TWO LINES at fixed inputs — the refusal with its position and
+    /// the cause, the clearing with the landed and the first refused
+    /// positions — and THE CAUSE's RENDERING as the wire renders a
+    /// rejection: the code as the wire spells it (`durability`, never
+    /// `Durability`), the detail where one is threaded, the code alone where
+    /// none is (a `publish` refused `base_superseded`, lowered through M10's
+    /// table), and the operator's words for a full volume ahead of the OS's
+    /// text. No rendering carries a variant name or a brace — the `Debug`
+    /// tells — and the door keeps each under its class word.
+    #[test]
+    fn row_38s_lines_render_the_ruled_words_and_the_cause_as_the_wire_renders_a_rejection() {
+        use skep_arrangement::{InsertError, PublishError};
+        use skep_kernel::TxnError;
+
+        assert_eq!(
+            HeadRefusedLine { position: 24, cause: "durability: the test seam's refusal" }
+                .to_string(),
+            "head writer: the head at position 24 was refused (durability: the test seam's \
+             refusal); no head written this cycle"
+        );
+        assert_eq!(
+            RefusalsClearedLine { landed: 31, since: 24 }.to_string(),
+            "head writer: a head landed at position 31; the refusals since position 24 are \
+             cleared"
+        );
+        let mut seam = Rejection::classified(OpKind::Insert, RejectCode::Durability, None);
+        seam.detail = Some(SEAM_REFUSAL_DETAIL.to_string());
+        assert_eq!(render_cause(&seam), "durability: the test seam's refusal");
+        let superseded =
+            lower_txn(OpKind::Publish, TxnError::Rejected(PublishError::BaseSuperseded));
+        assert_eq!(render_cause(&superseded), "base_superseded", "no detail: the code alone");
+        let full = lower_txn::<InsertError>(
+            OpKind::Insert,
+            TxnError::Durability(io::Error::new(
+                io::ErrorKind::StorageFull,
+                "No space left on device (os error 28)",
+            )),
+        );
+        assert_eq!(
+            render_cause(&full),
+            "durability: the volume is full (No space left on device (os error 28))",
+            "a full volume: the operator's words, then the OS's"
+        );
+        let other = lower_txn::<InsertError>(
+            OpKind::Insert,
+            TxnError::Durability(io::Error::other("the OS refused entropy")),
+        );
+        assert_eq!(render_cause(&other), "durability: the OS refused entropy");
+        for cause in [&seam, &superseded, &full, &other].map(render_cause) {
+            assert!(
+                !cause.contains("::") && !cause.contains("Error") && !cause.contains(['{', '}']),
+                "a Debug tell in the cause: {cause}"
+            );
+        }
+        let lines = Lines::new();
+        lines.say(Class::Failure, HeadRefusedLine { position: 24, cause: &render_cause(&seam) });
+        lines.say(Class::Landing, RefusalsClearedLine { landed: 31, since: 24 });
+        assert_eq!(
+            lines.said().lock().as_slice(),
+            [
+                "failure: head writer: the head at position 24 was refused (durability: the test \
+                 seam's refusal); no head written this cycle",
+                "landing: head writer: a head landed at position 31; the refusals since position \
+                 24 are cleared",
+            ],
+            "the class word ahead of each"
         );
     }
 }

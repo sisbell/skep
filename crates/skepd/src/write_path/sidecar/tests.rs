@@ -549,6 +549,24 @@ fn a_failed_append_stops_the_log_so_the_reopen_walk_starts_below_the_gap() {
         log.record(&serial, 10, "insert", vec!["1.0.1.0.1".into()], "bare".into(), None, None);
     assert!(offset.is_some(), "the position is recorded whatever the file does");
     assert!(log.entries.contains_key(&10), "and this uptime answers it in full");
+    // ROW 31 ON THE DOOR (`operations.md` §1.1 row 31): the failure said
+    // ONCE through the classed door under `failure:` — the position, the
+    // cause, the stop and the recovery.
+    let said = log.lines.said().lock().clone();
+    assert_eq!(said.len(), 1, "one line for the stop:\n{}", said.join("\n"));
+    assert!(
+        said[0].starts_with("failure: commits.log append failed at position 10: "),
+        "the class word, the file, the position, then the cause: {}",
+        said[0]
+    );
+    assert!(
+        said[0].ends_with(
+            "; this file takes no further line, so the next open re-derives from 10 as bare \
+             entries"
+        ),
+        "the stop and the recovery: {}",
+        said[0]
+    );
 
     // The condition clears: the very next append COULD succeed.
     log.file = OpenOptions::new().append(true).open(&path).expect("a writable handle");
@@ -557,6 +575,7 @@ fn a_failed_append_stops_the_log_so_the_reopen_walk_starts_below_the_gap() {
     // walk's floor over it. Accepted as an outcome, written nowhere.
     log.record(&serial, 11, "insert", vec!["1.0.1.0.2".into()], "bare".into(), None, None)
         .expect("a stopped log still records: the ack is owed either way");
+    assert_eq!(log.lines.said().lock().len(), 1, "the stop takes the next line in silence");
     assert_eq!(
         std::fs::read(&path).expect("read"),
         Vec::<u8>::new(),

@@ -263,6 +263,34 @@ fn a_rewrite_failed_past_its_rename_stops_the_file_and_one_failed_before_it_does
     assert!(!reopened.is_stopped());
 }
 
+/// ROW 32 ON THE DOOR (`operations.md` §1.1 row 32): a derived file's first
+/// failed append — the handle read-only, the one condition the stop rule
+/// is about — STOPS the file and is said ONCE through the classed door
+/// under `failure:`, naming the file, the position and the cause; the
+/// next append, which the stop takes, says nothing more, and the claim on
+/// disk never rises past the stop.
+#[test]
+fn a_failed_append_is_said_once_through_the_door_and_the_stop_is_silent_after() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let lines = Lines::new();
+    let (mut f, _, _) =
+        LineFile::open(dir.path(), MASKED_FILE, 20, |_| true, &lines).expect("open");
+    f.append(3, vec![]).expect("a writable file takes a line");
+    f.make_unwritable().expect("the read-only handle");
+    f.append_or_report(7, vec![]);
+    assert_eq!((f.is_stopped(), f.stopped_since()), (true, Some(7)), "stopped at the failure");
+    let said = lines.said().lock().clone();
+    assert_eq!(said.len(), 1, "one line for the stop:\n{}", said.join("\n"));
+    assert!(
+        said[0].starts_with("failure: feed-masked.log append failed at position 7: "),
+        "the class word, the file, the position, then the cause: {}",
+        said[0]
+    );
+    f.append_or_report(8, vec![]);
+    assert_eq!(lines.said().lock().len(), 1, "the stop takes the next line in silence");
+    assert_eq!(f.coverage(), 3, "the claim never rises past the stop");
+}
+
 /// The attest store's append (SO-I5 (d)) is synced through its own line,
 /// ANSWERS its failure rather than reporting it, and on a stopped file
 /// answers every later line an error, never `Ok`: a line the file did

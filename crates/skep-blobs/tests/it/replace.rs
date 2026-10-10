@@ -246,6 +246,36 @@ fn a_failed_unlink_leaves_that_aside_and_every_one_after_it_queued() {
     assert!(store.asides_of("blake3").unwrap().is_empty());
 }
 
+/// THE ASIDE AT THE QUEUE's HEAD (`Store::next_aside`): nothing before a
+/// replace is answered; the answered replace's aside once it is; after a
+/// failed deferred unlink the SAME aside, re-queued at the head — the one
+/// the daemon's line names, since the OS's error names no file; and `None`
+/// again once a call has drained the queue.
+#[test]
+fn next_aside_names_the_failed_aside_and_none_once_the_queue_is_drained() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let store = open(&dir.path().join("blobs"), 0);
+    assert_eq!(store.next_aside(), None, "nothing queued before any replace");
+    let right = b"the picture's bytes".to_vec();
+    let hex = hex_of(&right);
+    store.install("blake3", &hex, b"garbage under the right name").unwrap();
+    store.fail_at(Some(Step::UnlinkAside));
+    put_whole(&store, "k", &right, 1);
+    let queued = store.next_aside().expect("the answered replace's aside is queued");
+    let on_disk = store.asides_of("blake3").unwrap();
+    assert_eq!(
+        queued.file_name().and_then(|n| n.to_str()),
+        Some(on_disk[0].as_str()),
+        "the queued path names the aside the directory holds"
+    );
+    assert!(queued.starts_with(dir.path().join("blobs").join("blake3")), "{}", queued.display());
+    assert!(store.unlink_asides().is_err(), "the injected failure at the deferred unlink");
+    assert_eq!(store.next_aside(), Some(queued), "the failed aside, re-queued at the head");
+    store.fail_at(None);
+    assert_eq!(store.unlink_asides().unwrap(), 1, "the next deferred unlink takes it");
+    assert_eq!(store.next_aside(), None, "drained: nothing at the head");
+}
+
 /// REPLACE, NOT NO-OP (Op inventory 1): a file holding the WRONG bytes
 /// under the right name — the corrupt case — is repaired by a PUT of the
 /// right bytes, and the PUT's answer is the very answer a PUT of the same

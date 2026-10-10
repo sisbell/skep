@@ -306,8 +306,11 @@ Rules that hold across its files:
 - **The PUT's order.** `Stream::finish` is the one path from a partial to
   a file: durable before named, leased before answered, a present name
   REPLACED and the replaced instance's aside unlinked only after the answer
-  (`Store::unlink_asides`). A crash leaves at worst a file with no lease,
-  a record open retires, or an aside open removes.
+  (`Store::unlink_asides`) — a failed unlink re-queued at the queue's head
+  (`Store::next_aside`), which the daemon says once, naming the aside, and
+  clears with a line when a later call empties the queue. A crash leaves at
+  worst a file with no lease, a record open retires, or an aside open
+  removes.
 - **Three exclusions are the caller's.** One `Store` per root
   (`Store::open`); one stream of an upload at a time, its acts serialized
   (`Store`); and no `unlink_blob` or `remove_aside` while a finish runs
@@ -1827,7 +1830,11 @@ the store's install — nothing above their own layer.
    `GET /health`'s `writes.halted` reads beside the write path's halt —
    and, after a blob reply is written, the replaced file's deferred
    unlink, under a catch of its own so a panic there costs the aside and
-   never the worker) and
+   never the worker, a failed unlink said ONCE per standing fault by a
+   once-flag on the daemon, naming the aside within `blobs/` and that it
+   stands for the pass or the next open, and cleared by one `landing:`
+   line when a later call empties the queue — the family's requests
+   writing no line of their own) and
    `server/http.rs` (the HTTP bytes: the request reader, the reply
    writer, the event framing — and the streaming arm: for the blob
    upload's two body-carrying methods the reader takes the head alone
@@ -1897,7 +1904,13 @@ the store's install — nothing above their own layer.
 5. **The write path** — `write_path.rs`. The single point every write
    passes through, one at a time, and the head writer
    (`write_path/head.rs`, which commits through the write path's own
-   door). Beneath it, and reachable only from it:
+   door — a refused head said ONCE PER CAUSE with the position its head
+   would have named and the refusal as the wire renders a rejection, the
+   code and the detail through M10's own lowering and never a type name,
+   a memo under the writer's state lock holding the last cause said, and
+   cleared by one `landing:` line naming the landed position and the
+   first refused one when a head next lands). Beneath it, and reachable
+   only from it:
    - `write_path/feed.rs` — the change feed, and the one compaction of its
      five files to the journal's reclaim floor, run at open and by the
      checkpoint thread after any landing, its own or a backstop's, its

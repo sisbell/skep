@@ -62,6 +62,7 @@ gate run. Release binaries are `skepd` and `skep-mcp`; library crates
 publish to crates.io as they stabilize (`skep-address` first). The wire contract clients build against is
 `docs/wire.md` — the contract as it stands; versioning begins at the first
 release, independent of crate versions. License: MIT OR Apache-2.0 (dual, the Rust convention).
+The runbook for running a board — start, stop, restart, upgrade, back up, restore, the full volume — is [RUNBOOK.md](RUNBOOK.md).
 See [CONTRIBUTING.md](CONTRIBUTING.md) for the commit convention.
 
 **Keys and the claim.** The client you install IS the board: `skepd` on

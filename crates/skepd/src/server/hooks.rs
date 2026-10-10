@@ -6,6 +6,7 @@ use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::time::Duration;
 
+use parking_lot::{Condvar, Mutex};
 use skep_engine::{HistoryError, Recovery};
 #[cfg(feature = "test-hooks")]
 use skep_kernel::Step;
@@ -22,19 +23,26 @@ use super::{Daemon, DaemonError};
 use crate::auth::AuthOptions;
 
 /// THE WORKER's FAULT DOOR (the test seam behind [`Daemon::panic_the_next_worker`]):
-/// one process-wide arm, fired ONCE by the next worker that reaches it and
-/// disarmed as it fires — `WORKER_FAULT_NONE` while nothing is armed, else
-/// one of the two arms. Process-wide, as the stream hold is, because the
-/// workers are the transport's threads and a child binary arms it before
-/// any daemon exists.
+/// one process-wide arm — `WORKER_FAULT_NONE` while nothing is armed, else
+/// one of the three arms. The two ONCE arms, `inside` and `outside`, are
+/// fired ONCE by the next worker that reaches each and disarmed as they
+/// fire; the EVERY arm is READ at the outside site and never taken, so it
+/// fires in every worker that reaches it and stands until another arming
+/// replaces it. Process-wide, as the stream hold is, because the workers
+/// are the transport's threads and a child binary arms it before any daemon
+/// exists.
 static WORKER_FAULT: AtomicU8 = AtomicU8::new(WORKER_FAULT_NONE);
 
-/// The door's three states: nothing armed; a panic INSIDE the handler's
+/// The door's four states: nothing armed; a panic INSIDE the handler's
 /// catch on the next request; a panic OUTSIDE it at the worker's next loop
-/// turn, after its reply.
+/// turn, after its reply; and that same panic outside the catch in EVERY
+/// worker that reaches it, one reply each — the arm a suite ends every
+/// worker with under the real worker floor, where one death leaves the
+/// rest serving.
 const WORKER_FAULT_NONE: u8 = 0;
 const WORKER_FAULT_INSIDE: u8 = 1;
 const WORKER_FAULT_OUTSIDE: u8 = 2;
+const WORKER_FAULT_EVERY: u8 = 3;
 
 /// The door's arm named: the words the hook takes and the child's variable
 /// carries, one spelling for both.
@@ -42,16 +50,24 @@ fn worker_fault_arm(arm: &str) -> u8 {
     match arm {
         "inside" => WORKER_FAULT_INSIDE,
         "outside" => WORKER_FAULT_OUTSIDE,
-        other => panic!("no worker fault arm named {other:?}: `inside` or `outside`"),
+        "every" => WORKER_FAULT_EVERY,
+        other => panic!("no worker fault arm named {other:?}: `inside`, `outside` or `every`"),
     }
 }
 
-/// Take the arm where it is the one armed: `true` once per arming, so the
-/// panic fires on one worker and no later one.
+/// Take a ONCE arm where it is the one armed: `true` once per arming, so
+/// the panic fires on one worker and no later one. The every arm is never
+/// taken: [`the_every_arm_stands`] reads it.
 fn take_the_worker_fault(arm: u8) -> bool {
     WORKER_FAULT
         .compare_exchange(arm, WORKER_FAULT_NONE, Ordering::AcqRel, Ordering::Acquire)
         .is_ok()
+}
+
+/// Whether the EVERY arm stands — read and never cleared, so every worker
+/// that asks is answered the same until another arming replaces it.
+fn the_every_arm_stands() -> bool {
+    WORKER_FAULT.load(Ordering::Acquire) == WORKER_FAULT_EVERY
 }
 
 /// The worker's side of the INSIDE arm, called by the transport inside its
@@ -66,13 +82,15 @@ pub(super) fn fire_the_worker_fault_inside_the_catch() {
     }
 }
 
-/// The worker's side of the OUTSIDE arm, called by the transport at the
-/// worker's next loop turn after its reply is written: a panic past the
-/// catch, located at the caller's site, which ends the worker — the shape a
-/// worker's death has.
+/// The worker's side of the OUTSIDE arm and of the EVERY arm, called by the
+/// transport at the worker's next loop turn after its reply is written: a
+/// panic past the catch, located at the caller's site, which ends the
+/// worker — the shape a worker's death has. The outside arm is taken, so
+/// one worker ends; the every arm is read, so every worker that reaches
+/// this site ends, each after its one reply, with one panic text for both.
 #[track_caller]
 pub(super) fn fire_the_worker_fault_outside_the_catch() {
-    if take_the_worker_fault(WORKER_FAULT_OUTSIDE) {
+    if take_the_worker_fault(WORKER_FAULT_OUTSIDE) || the_every_arm_stands() {
         panic!("the test seam's worker fault, outside the handler's catch");
     }
 }
@@ -80,6 +98,33 @@ pub(super) fn fire_the_worker_fault_outside_the_catch() {
 /// Take a per-daemon arm where it stands: `true` once per arming.
 fn take_the_fault(arm: &AtomicBool) -> bool {
     arm.swap(false, Ordering::AcqRel)
+}
+
+/// THE WRITE GUARD's HOLD (the test seam behind
+/// [`Daemon::hold_the_write_guard`]): armed, the plain write sequence parks
+/// AFTER taking its permit and both of its locks — the shape of the trigger
+/// inside an inline backstop, which holds the guard for its whole run —
+/// until released; the writers behind it take their permits and block on
+/// `serial_lock()`, and the one past the pool is refused `write_busy` at
+/// once. Process-wide, as the index walk's hold is: the sequence is a method
+/// of whichever daemon serves the write, and the hold is armed before it.
+struct WriteGuardHold {
+    held: Mutex<bool>,
+    released: Condvar,
+}
+
+/// The test seam's one hold on the write guard.
+static WRITE_GUARD_HOLD: WriteGuardHold =
+    WriteGuardHold { held: Mutex::new(false), released: Condvar::new() };
+
+/// The write sequence's side of the hold, called by `op.rs`'s plain sequence
+/// once its permit and its two locks are taken: park while the hold is
+/// armed, the locks and the permit held through the park.
+pub(super) fn park_while_the_write_guard_is_held() {
+    let mut held = WRITE_GUARD_HOLD.held.lock();
+    while *held {
+        WRITE_GUARD_HOLD.released.wait(&mut held);
+    }
 }
 
 impl Daemon {
@@ -179,13 +224,17 @@ impl Daemon {
     /// stable API): PANIC THE NEXT WORKER, ONCE — `"inside"` its handler's
     /// catch on its next request, the request answered `500 internal_panic`
     /// and the worker serving on, or `"outside"` it at its next loop turn
-    /// after a reply, the worker ending — so a suite drives the binary's
-    /// panic hook and, with one worker, the workers' end and the exit it
-    /// earns. The arm fires on the first worker to reach it and disarms;
-    /// arming again replaces the arm. Process-wide, armed before or after a
-    /// daemon exists; a child binary is armed by the variable
-    /// `SKEPD_TEST_WORKER_FAULT`, which `main.rs` reads under `test-hooks`
-    /// and hands here. Any other word is a caller's bug and PANICS.
+    /// after a reply, the worker ending — or PANIC EVERY WORKER, `"every"`:
+    /// the outside arm's panic in every worker that reaches that site, each
+    /// after its one reply, the arm read and never taken — so a suite drives
+    /// the binary's panic hook and, under the real worker floor with one
+    /// request per worker, the workers' end and the exit it earns. A once
+    /// arm fires on the first worker to reach it and disarms; the every arm
+    /// stands until another arming replaces it; arming again replaces the
+    /// arm. Process-wide, armed before or after a daemon exists; a child
+    /// binary is armed by the variable `SKEPD_TEST_WORKER_FAULT`, which
+    /// `main.rs` reads under `test-hooks` and hands here. Any other word is
+    /// a caller's bug and PANICS.
     #[doc(hidden)]
     pub fn panic_the_next_worker(arm: &str) {
         WORKER_FAULT.store(worker_fault_arm(arm), Ordering::Release);
@@ -214,6 +263,43 @@ impl Daemon {
     #[must_use = "a permit dropped at once holds nothing"]
     pub fn try_hold_upload_permit(&self) -> Option<Permit<'_>> {
         self.uploads.try_hold()
+    }
+
+    /// TEST HOOK (the same standing): hold one WRITE permit exactly as an
+    /// in-flight write on `/op` does, or `None` when all
+    /// [`MAX_CONCURRENT_WRITES`](super::MAX_CONCURRENT_WRITES) are taken
+    /// (`operations.md` §4 rows 25, 27). A permit from here is a slot of the
+    /// write pool alone: holding every one refuses the next write on `/op`
+    /// `write_busy` and leaves the fetch, the upload, `/op-at`, the class
+    /// scans and every read untouched — and holds no worker, so a suite that
+    /// pins the pool's count drains it here and a suite that pins worker
+    /// OCCUPANCY parks real writes under [`Daemon::hold_the_write_guard`]
+    /// instead.
+    #[doc(hidden)]
+    #[must_use = "a permit dropped at once holds nothing"]
+    pub fn try_hold_write_permit(&self) -> Option<Permit<'_>> {
+        self.write_permits.try_acquire()
+    }
+
+    /// TEST HOOK (the same standing): HOLD THE WRITE GUARD — in this
+    /// process, the plain write sequence parks after taking its permit and
+    /// both of its locks until [`Daemon::release_the_write_guard`], the
+    /// shape of the trigger inside an inline backstop; the writers behind it
+    /// take their permits and park on the guard, and the one past the pool is
+    /// refused `write_busy` at once, not after the guard frees. A
+    /// process-wide seam, as the index walk's is. A suite releases it before
+    /// its daemon stops: a parked worker is one the stop joins.
+    #[doc(hidden)]
+    pub fn hold_the_write_guard() {
+        *WRITE_GUARD_HOLD.held.lock() = true;
+    }
+
+    /// TEST HOOK (the same standing): release the parked writer, and hold no
+    /// later one.
+    #[doc(hidden)]
+    pub fn release_the_write_guard() {
+        *WRITE_GUARD_HOLD.held.lock() = false;
+        WRITE_GUARD_HOLD.released.notify_all();
     }
 
     /// TEST HOOK (the same standing): HOLD EVERY FETCH STREAM between two

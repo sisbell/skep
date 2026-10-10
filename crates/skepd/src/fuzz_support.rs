@@ -112,6 +112,13 @@ pub const TRANSPORT_ERRORS: &[&str] = &[
     // query on `/op` that finds every scan permit taken — 503, retry-class,
     // the body naming the `op`.
     "scan_busy",
+    // The write permit pool (`operations.md` §4 rows 25, 27): a write on
+    // `/op` that finds every write permit taken — 503, retry-class, the body
+    // naming the `op`, before the credential lock and the guard; nothing
+    // committed. A fuzz daemon's four permits are never all held by a
+    // tokenless exchange, so the name is one no fuzz target is answered
+    // today.
+    "write_busy",
     "internal_panic",
     "history_io",
     "history_corrupt",

@@ -213,15 +213,104 @@ fn flags_parse_and_refusals_are_named() {
     );
     assert!(
         parse_args(argv(&["--data-dir", "/tmp/x", "--workers", "0"])).is_err(),
-        "a zero worker count is refused, not repaired into a one-worker server"
+        "a zero worker count is refused, not repaired into a serving count"
     );
+    let in_range = MIN_WORKERS + 1;
     assert_eq!(
-        parse_args(argv(&["--data-dir", "/tmp/x", "--workers", "2"]))
-            .expect("a count of two is in range")
+        parse_args(argv(&["--data-dir", "/tmp/x", "--workers", &in_range.to_string()]))
+            .expect("a count above the minimum is in range")
             .expect("a run, not usage")
             .workers,
-        2,
+        in_range,
         "and a count in range is read as given"
+    );
+}
+
+/// THE `--workers` FLOOR (`operations.md` §2.3 F1; op-D7 (a)): a count below
+/// `MIN_WORKERS` — zero, one, and one short of it — is REFUSED at the parse
+/// with the relation stated, in the ruling's words: the count, the minimum
+/// rendered from the constant, what the minimum is (one more than the permit
+/// pools' slots together) and what a count below it costs (a caller holding
+/// every permit leaves no worker for `/health`, `/session` or a write); the
+/// minimum itself, one above it and the default are read as given; and the
+/// usage text renders the minimum and the default from the constants, the
+/// old literal gone. Every figure here is the constant, never a literal, so
+/// a pool that moves keeps the claim true.
+#[test]
+fn the_worker_count_is_refused_below_the_minimum_stating_the_relation() {
+    let relation = |n: usize| {
+        format!(
+            "--workers: {n} is below the minimum {MIN_WORKERS} — one more than the permit pools' \
+             slots together; below it a caller holding every permit leaves no worker for \
+             /health, /session or a write"
+        )
+    };
+    for below in [0, 1, MIN_WORKERS - 1] {
+        let Err(refused) =
+            parse_args(argv(&["--data-dir", "/tmp/x", "--workers", &below.to_string()]))
+        else {
+            panic!("--workers {below} is below the minimum and was not refused");
+        };
+        assert_eq!(refused, relation(below), "the relation, in the ruling's words");
+        assert!(refused.contains(&format!("below the minimum {MIN_WORKERS}")), "{refused}");
+        assert!(refused.contains("one more than the permit pools' slots together"), "{refused}");
+    }
+    for admitted in [MIN_WORKERS, MIN_WORKERS + 1, DEFAULT_WORKERS] {
+        let a = parse_args(argv(&["--data-dir", "/tmp/x", "--workers", &admitted.to_string()]))
+            .expect("a count at or above the minimum is in range")
+            .expect("a run, not usage");
+        assert_eq!(a.workers, admitted, "read as given");
+    }
+    let absent = parse_args(argv(&["--data-dir", "/tmp/x"])).expect("valid").expect("a run");
+    assert_eq!(absent.workers, DEFAULT_WORKERS, "the default satisfies the floor");
+    let text = usage();
+    assert!(text.contains(&format!("minimum {MIN_WORKERS})")), "the help renders the minimum: {text}");
+    assert!(text.contains(&format!("default {DEFAULT_WORKERS};")), "the help renders the default: {text}");
+    assert!(!text.contains("minimum 1)"), "the old literal is gone: {text}");
+}
+
+/// THE VARIABLE MEETS THE SAME FLOOR: `SKEPD_WORKERS` set below `MIN_WORKERS`
+/// with no `--workers` on the line is refused by the same arm with the same
+/// relation — the variable seeds the count the flag overrides, and the one
+/// check reads the count whichever set it — and an in-range flag beside the
+/// variable wins, as every flag does over its variable. Judged in a CHILD of
+/// this test binary (the hazard suite's self-exec pattern), because the
+/// variable is process-wide and this binary's other parse claims run beside
+/// this one.
+#[test]
+fn the_variable_meets_the_same_floor_as_the_flag() {
+    const CHILD: &str = "SKEPD_TEST_WORKERS_CHILD";
+    if std::env::var_os(CHILD).is_some() {
+        // THE CHILD: the parent set `SKEPD_WORKERS` one short of the minimum.
+        let Err(refused) = parse_args(argv(&["--data-dir", "/tmp/x"])) else {
+            panic!("the variable's count below the minimum was not refused");
+        };
+        assert!(refused.starts_with("--workers: "), "the same arm: {refused}");
+        assert!(refused.contains(&format!("below the minimum {MIN_WORKERS}")), "{refused}");
+        assert!(refused.contains("one more than the permit pools' slots together"), "{refused}");
+        let a = parse_args(argv(&["--data-dir", "/tmp/x", "--workers", &MIN_WORKERS.to_string()]))
+            .expect("the flag wins over the variable")
+            .expect("a run, not usage");
+        assert_eq!(a.workers, MIN_WORKERS);
+        return;
+    }
+    let exe = std::env::current_exe().expect("the test binary");
+    let out = std::process::Command::new(exe)
+        .args([
+            "tests::the_variable_meets_the_same_floor_as_the_flag",
+            "--exact",
+            "--nocapture",
+            "--test-threads=1",
+        ])
+        .env(CHILD, "1")
+        .env(SKEPD_WORKERS.var, (MIN_WORKERS - 1).to_string())
+        .output()
+        .expect("run the child");
+    assert!(
+        out.status.success(),
+        "the child's claims failed:\n{}\n{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
     );
 }
 

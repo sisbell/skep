@@ -331,6 +331,14 @@ pub(super) enum TransportError {
     HistoryCorrupt,
     // The class-scan bound (wire v7.9).
     ScanBusy,
+    /// THE WRITE PERMIT POOL's REFUSAL (`operations.md` §4 rows 25, 27; the
+    /// ops lanes' D6): every write permit is in use — the pool bounds the
+    /// workers writes can hold on the write path's guard at once, so an
+    /// inline backstop's run parks at most W writers and the board answers
+    /// `/health` meanwhile. Retry-class, `scan_busy`'s sibling on the same
+    /// route; answered before the credential lock and the guard are taken,
+    /// so nothing was committed and no line was written.
+    WriteBusy,
     // The HTTP layer.
     MalformedHttp,
     PayloadTooLarge,
@@ -412,6 +420,7 @@ impl TransportError {
             TransportError::HistoryReclaimed => "history_reclaimed",
             TransportError::HistoryBusy => "history_busy",
             TransportError::ScanBusy => "scan_busy",
+            TransportError::WriteBusy => "write_busy",
             TransportError::NoJournal => "no_journal",
             TransportError::HistoryIo => "history_io",
             TransportError::HistoryCorrupt => "history_corrupt",
@@ -480,11 +489,12 @@ impl TransportError {
             | TransportError::HistoryCorrupt
             | TransportError::InternalPanic
             | TransportError::BlobIo => 500,
-            // The five retry-class refusals: a pool is momentarily full —
-            // the reconstruction, class-scan, fetch or upload pool — or the
-            // cell index's walk at open is momentarily unfinished.
+            // The six retry-class refusals: a pool is momentarily full —
+            // the reconstruction, class-scan, fetch, upload or write pool —
+            // or the cell index's walk at open is momentarily unfinished.
             TransportError::HistoryBusy
             | TransportError::ScanBusy
+            | TransportError::WriteBusy
             | TransportError::IndexRebuilding
             | TransportError::UploadBusy
             | TransportError::FetchBusy => 503,
@@ -652,6 +662,26 @@ pub(super) fn refuse_scan_busy(kind: OpKind) -> Reply {
         TransportError::ScanBusy,
         vec![
             ("detail", Value::String("all class-scan permits are in use; retry shortly".into())),
+            ("op", Value::String(op_name(kind).into())),
+        ],
+    )
+}
+
+/// The `503 write_busy` refusal (the write permit pool; `operations.md` §4
+/// rows 25, 27): every write permit is in use. Retry-class — the write may
+/// be perfectly good and the pool momentarily full, an inline backstop
+/// holding the guard with W writers parked behind it — and the body names
+/// the `op` it refused in [`refuse_scan_busy`]'s shape, the one sibling
+/// refused on the same route, so a client pairs the refusal with the frame
+/// it answers. A TRANSPORT refusal and not an operation response: it is
+/// answered before the credential lock and the guard are taken, so no `Op`
+/// ran, nothing was committed, and there is no `resp` and no `code` — the
+/// envelope is `{"error": …}`, never `{"resp": "rejected"}`.
+pub(super) fn refuse_write_busy(kind: OpKind) -> Reply {
+    refuse_with(
+        TransportError::WriteBusy,
+        vec![
+            ("detail", Value::String("all write permits are in use; retry shortly".into())),
             ("op", Value::String(op_name(kind).into())),
         ],
     )

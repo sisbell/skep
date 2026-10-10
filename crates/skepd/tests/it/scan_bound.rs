@@ -544,13 +544,14 @@ fn the_guest_and_the_claimant_draw_on_one_pool() {
 
 /// [`skepd::MIN_WORKERS`] is the caller's half of the obligation [`serve`]
 /// states and deliberately does not re-check: leave a worker free of the
-/// four permit pools, or a caller INSIDE every bound occupies the whole pool
+/// five permit pools, or a caller INSIDE every bound occupies the whole pool
 /// and the daemon answers nothing — `/health` and `/session` included —
 /// with every structure inside it healthy (M-I5 (f): the upload pool
-/// counted in the same budget as the three before it).
+/// counted in the same budget as the three before it; `operations.md` §4
+/// rows 25, 27: the write pool counted in after it).
 ///
 /// Named HERE, from outside the library, because that is the whole of what
-/// the constant buys: the four pools' counts are crate-private, so before it
+/// the constant buys: the five pools' counts are crate-private, so before it
 /// an embedder was handed a relation over quantities it could not name,
 /// evaluate, or watch for change. This test fails to COMPILE if the export
 /// is dropped, which is the check the obligation needs.
@@ -562,9 +563,10 @@ fn the_guest_and_the_claimant_draw_on_one_pool() {
 /// does not pin is worker OCCUPANCY: as this file's own header says, a scan
 /// over a test-sized world finishes in microseconds, and a held permit holds
 /// no worker — which is why the pooled-permit relation is a compile-time
-/// assertion beside the constant rather than a test here, and why the one
-/// occupancy test holds real upload streams instead
-/// (`blob_routes::trickling_uploads_fill_the_pool_and_never_the_daemon`).
+/// assertion beside the constant rather than a test here, and why the two
+/// occupancy tests hold real upload streams
+/// (`blob_routes::trickling_uploads_fill_the_pool_and_never_the_daemon`) and
+/// park real writes on the guard (`write_pool.rs`) instead.
 #[test]
 fn the_minimum_worker_count_is_evaluable_and_serves_with_every_pool_drained() {
     assert!(
@@ -595,10 +597,13 @@ fn the_minimum_worker_count_is_evaluable_and_serves_with_every_pool_drained() {
     while let Some(p) = sd.daemon().try_hold_upload_permit() {
         held.push(p);
     }
+    while let Some(p) = sd.daemon().try_hold_write_permit() {
+        held.push(p);
+    }
     assert_eq!(
         held.len(),
         skepd::MIN_WORKERS - 1,
-        "the four pools' permits together are one short of the minimum"
+        "the five pools' permits together are one short of the minimum"
     );
 
     let (st, body) = get(port, "/health");

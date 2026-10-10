@@ -16,8 +16,8 @@ use skep_util::notice::{Class, Moment};
 
 use super::actor::Resolved;
 use super::reply::{
-    credential_refused, media_door_refused, op_answer, refuse_scan_busy, registry_refused,
-    with_signal, Reply,
+    credential_refused, media_door_refused, op_answer, refuse_scan_busy, refuse_write_busy,
+    registry_refused, with_signal, Reply,
 };
 use super::request::HttpRequest;
 use super::scan::ScanBusy;
@@ -136,8 +136,9 @@ impl Daemon {
     /// `POST /op` — one frame in, one marshaled answer out; the HTTP
     /// exchange is the correlation envelope. The frame is either the
     /// daemon-served `key_set` read, an M10 read (no lock, the actor's
-    /// session), or a write, which runs one of the two pinned write
-    /// sequences (AUTH-3.35 / AUTH-3.37) under the credential write lock.
+    /// session), or a write, which runs one of the three pinned write
+    /// sequences (AUTH-3.35 / AUTH-3.37 / the record grade for registry
+    /// records) under a permit of the write pool and the credential lock.
     pub(super) fn post_op(&self, resolved: &Resolved, req: &HttpRequest) -> Reply {
         match self.codec.parse_daemon(&req.body) {
             Err(e) => self.op_reply(&self.codec.unparseable(e)),
@@ -212,19 +213,27 @@ impl Daemon {
     }
 
     /// The REGISTRY sequence (the record grade for registry records, 2b;
-    /// REG-1.86 (e)): the pre-lock actor check, then the credential lock's
-    /// READ arm → the serialization lock → [`Daemon::locked_state`] → the
-    /// registry admission's ordered producers (`policy/registry.rs`: above
-    /// the claim and from a signed session, the home pin, the form, the
-    /// record value by the kind the slot names, the `sig`, the trial under
-    /// the set that opens the home's account) → execute. The READ arm,
-    /// because the sequence reads the fold's key table and steps nothing: a
-    /// registry record enrols no key, so there is no committed tail, no fold
-    /// step and no memo. The marker slot stays EMPTY by route, as the
-    /// credential sequence's does (D26): the record's own `sig`, verified at
-    /// this `make_link`, covers both of the deposit's positions, and the row
-    /// records it — the LINK row signed by its record (`Signed::RecordSig`),
-    /// serving no `key` and no `attest`.
+    /// REG-1.86 (e)): the pre-lock actor check, then the write pool's permit,
+    /// then the credential lock's READ arm → the serialization lock →
+    /// [`Daemon::locked_state`] → the registry admission's ordered producers
+    /// (`policy/registry.rs`: above the claim and from a signed session, the
+    /// home pin, the form, the record value by the kind the slot names, the
+    /// `sig`, the trial under the set that opens the home's account) →
+    /// execute. The READ arm, because the sequence reads the fold's key table
+    /// and steps nothing: a registry record enrols no key, so there is no
+    /// committed tail, no fold step and no memo. The marker slot stays EMPTY
+    /// by route, as the credential sequence's does (D26): the record's own
+    /// `sig`, verified at this `make_link`, covers both of the deposit's
+    /// positions, and the row records it — the LINK row signed by its record
+    /// (`Signed::RecordSig`), serving no `key` and no `attest`.
+    ///
+    /// THE PERMIT, as the other two sequences take theirs (`operations.md`
+    /// §4 row 25): this is a third write path that commits through
+    /// `commit_under` under the same guard an inline backstop holds, so a
+    /// registry write parked behind a run would hold a worker outside the
+    /// pool's bound — the fault the pool closes. Taken before its locks, held
+    /// in this frame through the commit; a write that finds none is refused
+    /// `503 write_busy` before any lock.
     fn registry_sequence(
         &self,
         resolved: &Resolved,
@@ -236,6 +245,12 @@ impl Daemon {
         if let Actor::Guest(_) = resolved.actor {
             return self.guest_reply(frame);
         }
+        // 1b — THE WRITE POOL's PERMIT (§4 rows 25, 27), before the locks:
+        // one of `MAX_CONCURRENT_WRITES`, or the refusal at once. Bound to
+        // this frame, so it returns after the commit below and never earlier.
+        let Some(_permit) = self.write_permits.try_acquire() else {
+            return refuse_write_busy(meta.kind);
+        };
         // 2 — the locks, the locked snapshot, and this site's own resolution.
         let credential_lock = self.auth.credential_lock.read();
         let serial = self.writes.serial_lock();
@@ -292,14 +307,20 @@ impl Daemon {
         self.op_reply(&self.febe.execute(SessionId::GUEST, frame))
     }
 
-    /// The PLAIN sequence (AUTH-3.35): the read lock → the serialization
-    /// lock → [`Daemon::locked_state`] (the head snapshot, the key table it
-    /// carries, and this site's own resolve) → `plain_admission`'s ordered
-    /// producers → the media door → execute. The serial lock is taken before
-    /// the snapshot so the gates' answers and the execute they gate stand on
-    /// one committed state; the producers' ORDER is `plain_admission`'s, not
-    /// this site's, and the media door's place — after every producer, ahead
-    /// of the store — is [`skep_media::door`]'s to state.
+    /// The PLAIN sequence (AUTH-3.35): the write pool's permit → the read
+    /// lock → the serialization lock → [`Daemon::locked_state`] (the head
+    /// snapshot, the key table it carries, and this site's own resolve) →
+    /// `plain_admission`'s ordered producers → the media door → execute. The
+    /// permit is the FIRST act (`operations.md` §4 rows 25, 27): taken before
+    /// either lock, held in this frame through `commit_under`'s return, so a
+    /// write parked on the guard behind an inline backstop holds it the whole
+    /// wait and the pool bounds the workers writes occupy; a write that finds
+    /// none is refused `503 write_busy` at once, no lock taken and nothing
+    /// committed. The serial lock is taken before the snapshot so the gates'
+    /// answers and the execute they gate stand on one committed state; the
+    /// producers' ORDER is `plain_admission`'s, not this site's, and the
+    /// media door's place — after every producer, ahead of the store — is
+    /// [`skep_media::door`]'s to state.
     fn plain_sequence(
         &self,
         meta: FrameMeta,
@@ -307,8 +328,22 @@ impl Daemon {
         presented: Option<Attestation>,
         req: &HttpRequest,
     ) -> Reply {
+        // THE WRITE POOL's PERMIT, FIRST (§4 rows 25, 27): one of
+        // `MAX_CONCURRENT_WRITES`, before the credential lock and the guard,
+        // or the refusal at once. Bound to this frame — declared ahead of the
+        // two guards, so it drops after them, once the answer below is built.
+        let Some(_permit) = self.write_permits.try_acquire() else {
+            return refuse_write_busy(meta.kind);
+        };
         let credential_lock = self.auth.credential_lock.read();
         let serial = self.writes.serial_lock();
+        // THE GUARD's HOLD (test seam): armed, this writer parks HERE with
+        // its permit and both locks held — the shape of the trigger inside an
+        // inline backstop — so a suite parks W − 1 more writers on
+        // `serial_lock()` above, each holding a permit, and meets the pool's
+        // refusal with the one past it.
+        #[cfg(any(test, feature = "test-hooks"))]
+        super::hooks::park_while_the_write_guard_is_held();
         let (snap, Resolved { actor, closed }) = self.locked_state(&serial, req);
         let binding = match actor {
             Actor::Principal(b) => b,
@@ -375,11 +410,14 @@ impl Daemon {
     /// The CREDENTIAL sequence (AUTH-3.37): the pre-lock actor is
     /// `resolve_at_head`'s; `op_shape_refusal` and the verbatim deposit —
     /// both pure functions of the frame — run ahead of the lock; then the
-    /// write lock → serial → [`Daemon::locked_state`] → recall → precheck →
-    /// execute — which steps the World's identity slice inside the commit
-    /// itself (AUTH-2.80) — → the memo and the claim-flip tail, all under the
-    /// write guard, which is what keeps the precheck and the execute it gates
-    /// one atomic step (AUTH-3.3).
+    /// write pool's permit (`operations.md` §4 rows 25, 27 — before the
+    /// lock, the guard and the memo's recall, so a retry that finds no permit
+    /// is refused `write_busy` and meets the memo once it has one: one commit
+    /// either way) → the write lock → serial → [`Daemon::locked_state`] →
+    /// recall → precheck → execute — which steps the World's identity slice
+    /// inside the commit itself (AUTH-2.80) — → the memo and the claim-flip
+    /// tail, all under the write guard, which is what keeps the precheck and
+    /// the execute it gates one atomic step (AUTH-3.3).
     fn credential_sequence(
         &self,
         resolved: &Resolved,
@@ -422,6 +460,15 @@ impl Daemon {
             debug_assert!(false, "a classified deposit is an address-form MakeLink");
             let r = CredentialRefusal::ResolvedFrom;
             return credential_refused(meta.kind, &r);
+        };
+        // 2c — THE WRITE POOL's PERMIT (§4 rows 25, 27): after the two pure
+        // refusals above, which cost no permit, and before the write lock,
+        // the guard and the memo's recall at 5 — one of
+        // `MAX_CONCURRENT_WRITES`, or `503 write_busy` at once. Bound to this
+        // frame, ahead of the two guards, so it drops after them: once the
+        // commit and the tail after it are done.
+        let Some(_permit) = self.write_permits.try_acquire() else {
+            return refuse_write_busy(meta.kind);
         };
         // 3 — the credential write lock, the serialization lock, the locked
         // snapshot, and this site's OWN resolution.

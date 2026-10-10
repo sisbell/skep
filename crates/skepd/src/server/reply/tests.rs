@@ -54,6 +54,7 @@ fn every_transport_error_pairs_its_documented_name_with_its_documented_status() 
         (TransportError::NoJournal, "no_journal", 500),
         (TransportError::HistoryBusy, "history_busy", 503),
         (TransportError::ScanBusy, "scan_busy", 503),
+        (TransportError::WriteBusy, "write_busy", 503),
         (TransportError::MalformedBlob, "malformed_blob", 400),
         (TransportError::UploadRefused, "upload_refused", 403),
         (TransportError::NoUpload, "no_upload", 404),
@@ -204,6 +205,20 @@ fn scan_busy_names_the_op_in_a_transport_refusal() {
     assert_eq!(
         String::from_utf8(r.bytes().to_vec()).expect("json"),
         r#"{"detail":"all class-scan permits are in use; retry shortly","error":"scan_busy","op":"count_ftt"}"#
+    );
+}
+
+/// The `write_busy` refusal's exact body (the write permit pool): a
+/// transport refusal in `scan_busy`'s shape — no `resp`, no `code` — at
+/// 503, naming the op it refused beside the detail — the bytes wire.md
+/// shows for a write past the pool.
+#[test]
+fn write_busy_names_the_op_in_a_transport_refusal() {
+    let r = refuse_write_busy(OpKind::Insert);
+    assert_eq!(r.status, 503);
+    assert_eq!(
+        String::from_utf8(r.bytes().to_vec()).expect("json"),
+        r#"{"detail":"all write permits are in use; retry shortly","error":"write_busy","op":"insert"}"#
     );
 }
 

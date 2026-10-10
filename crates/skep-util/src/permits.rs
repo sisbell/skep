@@ -1,9 +1,10 @@
 //! A counting permit pool — a try-acquire with no queue and no blocking,
 //! whose guard returns its slot on drop — the ONE mechanism behind the
-//! daemon's four bounded pools: the reconstruction budget (`history.rs`),
+//! daemon's five bounded pools: the reconstruction budget (`history.rs`),
 //! the class-scan pool (`server/scan.rs`), the fetch pool (`skep-media`'s
-//! `serve.rs`) and the upload pool (`skep-media`'s `lib.rs`). A permit is a
-//! slot of the pool that minted it, so no bound can spend another's.
+//! `serve.rs`), the upload pool (`skep-media`'s `lib.rs`) and the write pool
+//! (the daemon's `server.rs`). A permit is a slot of the pool that minted
+//! it, so no bound can spend another's.
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -14,7 +15,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 /// The bound behind `history.rs`'s `MAX_CONCURRENT_RECONSTRUCTIONS`, and —
 /// as further, separate instances — behind `server/scan.rs`'s
 /// `MAX_CONCURRENT_CLASS_SCANS` (wire v7.9), the fetch pool of `skep-media`'s
-/// `serve.rs` and the upload pool of its `lib.rs`: one mechanism, four
+/// `serve.rs`, the upload pool of its `lib.rs` and the write pool of the
+/// daemon's `server.rs` (`MAX_CONCURRENT_WRITES`): one mechanism, five
 /// pools. A permit belongs to the pool it came from, so no bound can spend
 /// another's slots.
 #[derive(Debug)]
@@ -27,7 +29,7 @@ pub struct Permits {
 /// can store it, borrow it, and read what it is — the standing every guard
 /// in `std` has, `#[must_use]` included: a permit taken and dropped in one
 /// statement licenses nothing. `#[doc(hidden)]` because the one surface
-/// beyond the pools that names it is the daemon's four test hooks, whose
+/// beyond the pools that names it is the daemon's five test hooks, whose
 /// return type it is; not a stable API.
 #[doc(hidden)]
 #[derive(Debug)]

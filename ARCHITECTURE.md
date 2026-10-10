@@ -53,7 +53,7 @@ above it.
   Its modules and rules: §The blob store.
 - `skep-util` — the support crate below the daemon and the media crate:
   the three utilities both take and neither owns — the counting permit
-  pool behind the daemon's four bounded pools, the operator's notice line
+  pool behind the daemon's five bounded pools, the operator's notice line
   (`skepd: ` on every line; §The support crate says why a library spells
   it), and the JSON determinism helpers — `obj`, the key-sorting object
   builder every JSON object the daemon emits is built through,
@@ -399,14 +399,14 @@ last in `jsonl/tests.rs`.
 
 `skep-util` holds the three utilities `skepd` and `skep-media` both take
 and neither owns, so the media crate's move out of the daemon copies no
-helper and the daemon's four pools keep one permit type. Its modules are
+helper and the daemon's five pools keep one permit type. Its modules are
 declared in `src/lib.rs`, each with a line saying what it holds, and the
 crate doc there states the rule of membership and the program-name
 decision. `permits` — the counting permit pool (`Permits`, `Permit`): a
 try-acquire with no queue and no blocking whose guard returns its slot on
 drop, the one mechanism behind the reconstruction budget, the class-scan
-pool, the fetch pool and the upload pool; a permit is a slot of the pool
-that minted it, so no bound can spend another's. `notice` — the operator's
+pool, the fetch pool, the upload pool and the write pool; a permit is a
+slot of the pool that minted it, so no bound can spend another's. `notice` — the operator's
 stream (`emit` and `emit_lines`, the class word an argument; `line` and
 `lines`, the un-classed door the call sites written before the class
 existed still take): one line, or one notice of several written as one,
@@ -1795,9 +1795,10 @@ the store's install — nothing above their own layer.
    derives it, the local-trust flag with its source, the configured and
    the signed origin sets — then the node prefix and the blocked list,
    before any worker exists — worker threads — the
-   default count and the minimum, one more than the four permit pools'
-   slots together: the reconstruction, the class scan, the fetch and the
-   upload; spawned last, after the open, and `wait`, the binary's
+   default count and the minimum, one more than the five permit pools'
+   slots together: the reconstruction, the class scan, the fetch, the
+   upload and the write pool (`MAX_CONCURRENT_WRITES`, 4); spawned last,
+   after the open, and `wait`, the binary's
    foreground call, returning only when every one has ended, which the
    binary says and exits 1 on — the
    event streams' loop and budget, the pruner's cadence thread — the pass
@@ -1845,9 +1846,11 @@ the store's install — nothing above their own layer.
    `server/hooks.rs`. `/op` runs one of the
    three write sequences — the plain (AUTH-3.35), the credential
    (AUTH-3.37) or the registry (the record grade for registry records),
-   chosen off the op's own type slot before any lock is taken: resolve
-   the caller, run the checks, commit, record, then give the head writer
-   its turn. `/blob/upload` resolves the caller, refuses the creation and
+   chosen off the op's own type slot before any lock is taken: take a
+   permit of the write pool — before the credential lock and the guard,
+   the write refused `write_busy` past it, the head writer's own commits
+   taking none — resolve the caller, run the checks, commit, record, then
+   give the head writer its turn. `/blob/upload` resolves the caller, refuses the creation and
    the resume `uploads_closed` on a board launched with `--no-uploads`,
    refuses the creation, the resume and the deposit read
    `index_rebuilding` until the index's walk at open completes, admits
@@ -1937,7 +1940,8 @@ the store's install — nothing above their own layer.
    header — the base the open loaded, never a skipped header's claim —
    and re-read by the checkpoint thread after any landing, its own or a
    backstop's; and the upload and fetch pools are counted into the
-   worker minimum beside the two pools of the daemon's own.
+   worker minimum beside the three pools of the daemon's own — the
+   reconstruction budget, the class-scan pool and the write pool.
 6. **The leaves** — `codec.rs` with `codec/marshal.rs` (the JSON wire
    format: parse, and marshal — its key-sorting `obj` and the lowercase
    hex pair are `skep-util`'s, taken as every other file takes them),
@@ -1949,7 +1953,7 @@ the store's install — nothing above their own layer.
    counts among them, are `skep-media`'s `limits`, the daemon taking the
    four it reads from there). None of these knows anything about the
    daemon; a leaf imports only leaves — and a leaf in another crate is a
-   leaf: the counting permit the four bounded pools use and the operator's
+   leaf: the counting permit the five bounded pools use and the operator's
    log line are `skep-util`'s `permits` and `notice`, the support crate
    below this one (§The support crate), and the two cells, once leaves
    here, are `skep-media`'s (§The media resource).

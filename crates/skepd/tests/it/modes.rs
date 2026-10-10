@@ -85,18 +85,20 @@ fn copy_tree(src: &Path, dst: &Path) {
     }
 }
 
-/// The binary over `dir` on `--port 0` with one worker, started through
+/// The binary over `dir` on `--port 0` with the floor's workers
+/// (`skepd::MIN_WORKERS`, the count the parse admits), started through
 /// `sh` under `umask 022` — the loose default a login shell gives — with
 /// `exec`, so the child IS the binary and the guard's kill reaches it; both
 /// streams piped.
 fn skepd_under_umask_022(dir: &Path) -> Command {
+    let workers = skepd::MIN_WORKERS.to_string();
     let mut cmd = Command::new("sh");
     cmd.arg("-c")
         .arg("umask 022; exec \"$0\" \"$@\"")
         .arg(env!("CARGO_BIN_EXE_skepd"))
         .arg("--data-dir")
         .arg(dir)
-        .args(["--port", "0", "--workers", "1"])
+        .args(["--port", "0", "--workers", workers.as_str()])
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     cmd
@@ -222,14 +224,15 @@ fn a_loose_data_directory_is_refused_before_the_open_and_a_tight_one_admitted() 
     // ADMITTED at 0700: the open's directory line is stderr's first, the
     // board serves, the lock stands.
     fs::set_permissions(&dir, perms(0o700)).expect("chmod 700");
-    serve_then_kill(&mut skepd(&dir, &["--port", "0", "--workers", "1"]));
+    let workers = skepd::MIN_WORKERS.to_string();
+    serve_then_kill(&mut skepd(&dir, &["--port", "0", "--workers", &workers]));
     assert!(dir.join("kernel.lock").is_file(), "admitted: the open took its lock");
     assert_eq!(mode_of(&dir), 0o700);
 
     // A DIRECTORY THAT DOES NOT EXIST: created 0700 and admitted.
     let fresh = tmp.path().join("fresh");
     assert!(!fresh.exists());
-    serve_then_kill(&mut skepd(&fresh, &["--port", "0", "--workers", "1"]));
+    serve_then_kill(&mut skepd(&fresh, &["--port", "0", "--workers", &workers]));
     assert_eq!(mode_of(&fresh), 0o700, "the kernel created it owner-only");
 }
 

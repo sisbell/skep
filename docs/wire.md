@@ -24,10 +24,13 @@ Versioning begins at the first release.
 
 One `skepd` process owns one world. Any number of local clients speak to it
 concurrently; the daemon serializes writes internally and answers every read
-from a consistent snapshot. Every response reports its position in the one
-committed log: writes carry `at` (the commit that made them true), reads
-carry `as_of` (the snapshot they were answered from). A write is
-acknowledged only after it is durable on disk.
+from a consistent snapshot. At most `MAX_CONCURRENT_WRITES` (4) write
+requests are admitted at once — the write permit pool, taken before the
+credential lock and the guard — and the next is refused `503 write_busy`,
+retry-class, nothing committed (§HTTP status codes). Every response reports
+its position in the one committed log: writes carry `at` (the commit that
+made them true), reads carry `as_of` (the snapshot they were answered from).
+A write is acknowledged only after it is durable on disk.
 
 ### Endpoints
 
@@ -825,6 +828,7 @@ Non-200 statuses are transport-level failures with a body of the shape
 | 410    | `history_reclaimed`         | the position (`/op-at`) or the `since` fence (`/changes`) predates retained history (carries `floor` when known) |
 | 503    | `history_busy`              | all historical-reconstruction permits (`/op-at`, `/dump?at`, `/chain?at`) are in use; retry shortly |
 | 503    | `scan_busy`                 | all class-scan permits are in use — a `find_links_ftt`/`count_ftt`/`window_ftt` on `/op` whose four-set constrains `ty` alone (§Link discovery reads); carries `op`; retry shortly |
+| 503    | `write_busy`                | all write permits are in use — a write on `/op` past the write permit pool, refused before the credential lock and the guard are taken, nothing committed (§The model); carries `op`; retry shortly |
 | 500    | `internal_panic`            | a handler bug; the daemon stays up      |
 | 500    | `history_io` / `history_corrupt` | reading the journal for a historical position failed / found at-rest corruption |
 | 500    | `no_journal`                | the daemon runs without a journal (in-memory mode); history is unavailable |
@@ -3070,9 +3074,10 @@ confirmed at the media round (the board's sm-Q8):
 * the upload pool, 4 (`MAX_CONCURRENT_UPLOADS`) — the most creations and
   resumes streaming a body at once, a bound on worker occupancy and not
   memory (a stream holds one chunk, where a fetch holds its whole file);
-  counted into the worker minimum, `MIN_WORKERS`, 11 — one more than the
-  four pools' slots together — and the default worker count,
-  `DEFAULT_WORKERS`, 12, one above it;
+  counted into the worker minimum, `MIN_WORKERS`, 15 — one more than the
+  five pools' slots together, the write permit pool's 4
+  (`MAX_CONCURRENT_WRITES`, §The model) among them — and the default
+  worker count, `DEFAULT_WORKERS`, 16, one above it;
 * the per-file cap, 64 MiB — the route's own, a venue's below it; sized
   for v1's images (ms5-V1) and bounding disk and transfer, never memory;
 * the chunk, 64 KiB — the streaming arm's one buffer per in-flight upload;

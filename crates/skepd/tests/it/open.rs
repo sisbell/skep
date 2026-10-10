@@ -16,9 +16,9 @@
 //! * THE HOOK: a worker's panic inside its handler's catch is ONE prefixed,
 //!   timed `failure:` line naming `skepd-worker` and the site, nothing of
 //!   Rust's own hook's text, and the worker serves its next request.
-//! * THE WORKERS' END: one worker, a panic past its catch — the hook's
-//!   line, then `failure: every worker thread has ended; the board serves
-//!   nothing`, and exit 1.
+//! * THE WORKERS' END: the floor's workers, a panic past the catch in each
+//!   after its one reply — the hook's line per death, then `failure: every
+//!   worker thread has ended; the board serves nothing`, and exit 1.
 //! * THE SIX LINES SURVIVE A LOST READER: a stdout with no reader costs the
 //!   serving line and never the daemon, which serves on; a stderr with no
 //!   reader costs a refusal's line and never its exit code — 2 stays 2, 1
@@ -37,8 +37,8 @@
 //! child through the variable `main.rs` reads under `test-hooks`, the
 //! feature every test build compiles the binary with.
 
-use std::io::{self, BufRead, BufReader, Read};
-use std::net::TcpListener;
+use std::io::{self, BufRead, BufReader, Read, Write};
+use std::net::{TcpListener, TcpStream};
 use std::os::unix::process::ExitStatusExt;
 use std::path::Path;
 use std::process::{Child, Command, ExitStatus, Stdio};
@@ -47,13 +47,14 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use crate::common::{
-    acked_addr, claim_board, expect_resp, get, json, op, open_session, spawn_unclaimed,
-    T_ENROLL,
+    acked_addr, claim_board, expect_resp, get, json, op, open_session, parse_response,
+    spawn_unclaimed, T_ENROLL,
 };
 
 /// THE WORKER FAULT's VARIABLE — the binary's test door (`main.rs`, read
 /// under `test-hooks` alone): its value names the arm, `inside` the
-/// handler's catch or `outside` it.
+/// handler's catch or `outside` it, once, or `every` — the outside arm's
+/// panic in every worker that reaches it.
 const WORKER_FAULT: &str = "SKEPD_TEST_WORKER_FAULT";
 
 /// How long a claim waits for the binary to serve, to say a line or to
@@ -230,9 +231,10 @@ struct Served {
     recovered_line: String,
 }
 
-/// Spawn the binary over `dir` on `--port 0` with ONE worker and `env` set,
-/// read the serving line off stdout FIRST — the binary writes it only once
-/// the open's report has reached the stream — then the open's two lines off
+/// Spawn the binary over `dir` on `--port 0` with the floor's workers
+/// (`skepd::MIN_WORKERS`, the count the parse admits) and `env` set, read
+/// the serving line off stdout FIRST — the binary writes it only once the
+/// open's report has reached the stream — then the open's two lines off
 /// stderr: the directory's line as the first line of the stream, and the
 /// recovery's landing after it.
 fn serve_and_read_the_open(dir: &Path, env: &[(&str, &str)]) -> Served {
@@ -242,7 +244,8 @@ fn serve_and_read_the_open(dir: &Path, env: &[(&str, &str)]) -> Served {
 /// [`serve_and_read_the_open`] with `flags` after the port and the worker
 /// count — the setting flags whose lines the open's report names.
 fn serve_and_read_the_open_with(dir: &Path, flags: &[&str], env: &[(&str, &str)]) -> Served {
-    let mut args = vec!["--port", "0", "--workers", "1"];
+    let workers = skepd::MIN_WORKERS.to_string();
+    let mut args = vec!["--port", "0", "--workers", workers.as_str()];
     args.extend_from_slice(flags);
     let mut cmd = skepd(dir, &args);
     for (name, value) in env {
@@ -280,11 +283,11 @@ fn await_said(stderr: &mut Stderr, class: &str, prefix: &str) -> String {
 
 /// A binary serving over `dir` on a port RESERVED for it — bound and
 /// released here, so a flag can name it (`--origin` carries the port) —
-/// with ONE worker, `flags(port)` after the port and the count, and `env`
-/// on the command; retried on a fresh port where another process took the
-/// reserved one between the release and the child's bind, as the lost
-/// reader's claim retries. The child, its stderr read up to its first line,
-/// and the port off the serving line.
+/// with the floor's workers, `flags(port)` after the port and the count,
+/// and `env` on the command; retried on a fresh port where another process
+/// took the reserved one between the release and the child's bind, as the
+/// lost reader's claim retries. The child, its stderr read up to its first
+/// line, and the port off the serving line.
 fn serve_on_a_reserved_port(
     dir: &Path,
     flags: impl Fn(u16) -> Vec<String>,
@@ -295,7 +298,12 @@ fn serve_on_a_reserved_port(
         let reserved = TcpListener::bind(("127.0.0.1", 0)).expect("reserve a port");
         let port = reserved.local_addr().expect("the port").port();
         drop(reserved);
-        let mut args = vec!["--port".to_string(), port.to_string(), "--workers".into(), "1".into()];
+        let mut args = vec![
+            "--port".to_string(),
+            port.to_string(),
+            "--workers".into(),
+            skepd::MIN_WORKERS.to_string(),
+        ];
         args.extend(flags(port));
         let args: Vec<&str> = args.iter().map(String::as_str).collect();
         let mut cmd = skepd(dir, &args);
@@ -724,36 +732,92 @@ fn a_workers_panic_inside_its_catch_is_one_prefixed_line_of_the_hooks_and_the_wo
     );
 }
 
-/// m16 — EVERY WORKER GONE → THE LINE AND EXIT 1: the child with ONE worker
-/// and the door's OUTSIDE arm armed answers one request — the fault fires
-/// after the reply — and then exits 1, its stderr carrying the hook's line
-/// and, after it, `failure: every worker thread has ended; the board serves
-/// nothing`.
+/// `GET /health` on a connection of its own, as the harness's `get` makes
+/// it — `Connection: close`, one request — with the CONNECT retried under
+/// `within` where the OS refuses it, which the harness's `get` fails on at
+/// once; the status and the body. For the every-arm claim alone, where a
+/// bare connect is no probe: a connection closed with no request reaches
+/// the outside site and ends a worker with no reply, so the retry is of the
+/// whole request, never of a connect ahead of it.
+fn get_health_retrying_the_connect(port: u16, within: Duration) -> (u16, Vec<u8>) {
+    let deadline = Instant::now() + within;
+    let mut stream = loop {
+        match TcpStream::connect(("127.0.0.1", port)) {
+            Ok(stream) => break stream,
+            Err(e) => {
+                assert!(Instant::now() < deadline, "no connect to skepd within {within:?}: {e}");
+                thread::sleep(Duration::from_millis(5));
+            }
+        }
+    };
+    stream.set_read_timeout(Some(within)).expect("read timeout");
+    stream.set_write_timeout(Some(within)).expect("write timeout");
+    stream
+        .write_all(
+            b"GET /health HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\nContent-Length: 0\r\n\
+              Content-Type: application/json\r\n\r\n",
+        )
+        .expect("write the request");
+    let mut raw = Vec::new();
+    stream.read_to_end(&mut raw).expect("read the reply");
+    let (status, _headers, body) = parse_response(&raw, "GET /health");
+    (status, body)
+}
+
+/// m16 — EVERY WORKER GONE → THE LINE AND EXIT 1, under the real worker
+/// floor: the child spawned with `skepd::MIN_WORKERS` workers and the door's
+/// EVERY arm armed answers `MIN_WORKERS` requests to `/health`, each on a
+/// connection of its own (`Connection: close`) and each 200 — a worker dies
+/// only AFTER its reply, past the catch, and the rest serve the next; an
+/// idle worker never reaches the outside site, so one request per worker is
+/// what ends them all — and after the last reply exits 1 within
+/// [`PATIENCE`], its stderr carrying the hook's line ONCE PER WORKER and,
+/// after the last of them, `failure: every worker thread has ended; the
+/// board serves nothing`. No worker takes two requests: the accept loop
+/// hands each connection to one worker blocked in `accept`, and a worker
+/// that has served is dead before it could accept again — which the count
+/// of the hook's lines pins. A connect the OS refuses while workers remain
+/// — none is expected, the listener standing until the server drops — is
+/// retried within [`PATIENCE`] ([`get_health_retrying_the_connect`]).
 #[test]
 fn every_worker_gone_is_said_after_the_hooks_line_and_the_binary_exits_1() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let dir = tmp.path().join("data");
-    let served = serve_and_read_the_open(&dir, &[(WORKER_FAULT, "outside")]);
-    let (st, body) = get(served.port, "/health");
-    assert_eq!(
-        (st, json(&body)["ok"].as_bool()),
-        (200, Some(true)),
-        "the reply is written before the fault fires: {}",
-        String::from_utf8_lossy(&body)
-    );
+    let served = serve_and_read_the_open(&dir, &[(WORKER_FAULT, "every")]);
+    let workers = skepd::MIN_WORKERS;
+    for n in 1..=workers {
+        let (st, body) = get_health_retrying_the_connect(served.port, PATIENCE);
+        assert_eq!(
+            (st, json(&body)["ok"].as_bool()),
+            (200, Some(true)),
+            "request {n} of {workers}: the reply is written before the fault fires: {}",
+            String::from_utf8_lossy(&body)
+        );
+    }
+    let last_reply = Instant::now();
     let Served { mut child, stderr, .. } = served;
     let status = child.wait_within(PATIENCE);
+    let exit_after = last_reply.elapsed();
     assert_eq!(status.code(), Some(1), "FINDING (m16): the exit is {status:?}, not 1");
     let whole = stderr.whole();
+    let hooks_line = |l: &String| {
+        after_the_head(l, "failure").is_some_and(|said| {
+            said.starts_with("skepd-worker: a thread panicked at ")
+                && said.ends_with(": the test seam's worker fault, outside the handler's catch")
+        })
+    };
     let hook_at = whole
         .iter()
-        .position(|l| {
-            after_the_head(l, "failure").is_some_and(|said| {
-                said.starts_with("skepd-worker: a thread panicked at ")
-                    && said.ends_with(": the test seam's worker fault, outside the handler's catch")
-            })
-        })
+        .position(hooks_line)
         .unwrap_or_else(|| panic!("FINDING (row 41): no hook's line:\n{}", whole.join("\n")));
+    let last_hook_at = whole.iter().rposition(hooks_line).expect("the first hook's line is one");
+    let hook_lines = whole.iter().filter(|l| hooks_line(l)).count();
+    assert_eq!(
+        hook_lines,
+        workers,
+        "one hook's line per worker, {workers} workers:\n{}",
+        whole.join("\n")
+    );
     let exit_at = whole
         .iter()
         .position(|l| {
@@ -762,6 +826,12 @@ fn every_worker_gone_is_said_after_the_hooks_line_and_the_binary_exits_1() {
         })
         .unwrap_or_else(|| panic!("FINDING (m16): no exit line:\n{}", whole.join("\n")));
     assert!(hook_at < exit_at, "the hook's line comes first:\n{}", whole.join("\n"));
+    assert!(last_hook_at < exit_at, "every hook's line comes first:\n{}", whole.join("\n"));
+    println!(
+        "{workers} workers ended on {workers} requests, {hook_lines} hook lines; the exit came \
+         {} ms after the last reply",
+        exit_after.as_millis()
+    );
 }
 
 /// §0 FACT 1 — THE SIX LINES SURVIVE A LOST READER. (i) The serving line's
@@ -783,7 +853,8 @@ fn the_binarys_lines_survive_a_lost_reader_and_the_daemon_serves_on() {
         let reserved = TcpListener::bind(("127.0.0.1", 0)).expect("reserve a port");
         let port = reserved.local_addr().expect("the port").port();
         drop(reserved);
-        let mut cmd = skepd(&dir, &["--port", &port.to_string(), "--workers", "1"]);
+        let workers = skepd::MIN_WORKERS.to_string();
+        let mut cmd = skepd(&dir, &["--port", &port.to_string(), "--workers", &workers]);
         cmd.stdout(reader_less_pipe());
         let mut child = Spawned::launch(&mut cmd);
         let mut stderr = Stderr::of(&mut child.child);

@@ -23,6 +23,7 @@ use std::fs;
 use std::net::IpAddr;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 use common::*;
@@ -914,27 +915,75 @@ impl RecordSigner {
     }
 }
 
+/// How long a write of the generator's keeps retrying the write pool's
+/// refusal before the harness gives up on it, and the pause between two
+/// attempts, doubling from the first to the cap.
+const WRITE_BUSY_PATIENCE: Duration = Duration::from_secs(60);
+const WRITE_BUSY_BACKOFF_FIRST: Duration = Duration::from_millis(1);
+const WRITE_BUSY_BACKOFF_CAP: Duration = Duration::from_millis(64);
+
+/// The writes the generator sent again after the pool refused them, counted
+/// for the report line beside the seeding's wall time, which the retries'
+/// pauses are part of.
+static WRITE_BUSY_RETRIES: AtomicU64 = AtomicU64::new(0);
+
+/// One op frame POSTed as written, THE WRITE POOL's REFUSAL RETRIED: the
+/// daemon admits at most `skepd::MAX_CONCURRENT_WRITES` writes at once and
+/// refuses the next `503 write_busy` before any lock, nothing committed
+/// (`operations.md` §4 rows 25, 27) — a retry-class token, so the frame is
+/// sent again as written after [`WRITE_BUSY_BACKOFF_FIRST`], doubling to
+/// [`WRITE_BUSY_BACKOFF_CAP`], until it is answered otherwise or
+/// [`WRITE_BUSY_PATIENCE`] runs out, as a client copes; any other transport
+/// status fails here as `op_as_written` fails. The generator's door alone:
+/// every other cell of this suite writes serially and never meets the pool,
+/// and the suite's shared `op_as_written` keeps its 200 assertion.
+fn op_as_written_retrying_write_busy(port: u16, token: &str, frame: &str) -> Value {
+    let deadline = Instant::now() + WRITE_BUSY_PATIENCE;
+    let mut backoff = WRITE_BUSY_BACKOFF_FIRST;
+    loop {
+        let (st, body) = http(port, "POST", "/op", Some(token), frame.as_bytes());
+        if st == 200 {
+            return json(&body);
+        }
+        let busy = st == 503 && json(&body)["error"].as_str() == Some("write_busy");
+        assert!(busy, "op transport failed: {}", String::from_utf8_lossy(&body));
+        assert!(
+            Instant::now() < deadline,
+            "write_busy past {WRITE_BUSY_PATIENCE:?}: {}",
+            String::from_utf8_lossy(&body)
+        );
+        WRITE_BUSY_RETRIES.fetch_add(1, Ordering::Relaxed);
+        std::thread::sleep(backoff);
+        backoff = (backoff * 2).min(WRITE_BUSY_BACKOFF_CAP);
+    }
+}
+
 /// A record deposit as the generator makes it: the atom inserted DECLARED
 /// under `ty` at `ordinal` of `home`, then its link to `to` — both frames
-/// sent as written, no entry `attest`.
+/// sent as written, no entry `attest`, the pool's refusal retried.
 fn deposit_as_written(port: u16, token: &str, home: &str, ordinal: u64, ty: &str, to: &[&str], text: &str) -> String {
-    let v = op_as_written(
+    let v = op_as_written_retrying_write_busy(
         port,
-        Some(token),
+        token,
         &format!(
             r#"{{"op":"insert","doc":"{home}","at":{{"subspace":"1","ordinal":"{ordinal}"}},"values":[{{"atom":{}}}],"deposit":"{ty}"}}"#,
             json_atom(text)
         ),
     );
     let atom = acked_addr(&v);
-    let v = op_as_written(port, Some(token), &typed_link_frame(home, &[atom.as_str()], to, ty));
+    let v = op_as_written_retrying_write_busy(port, token, &typed_link_frame(home, &[atom.as_str()], to, ty));
     acked_addr(&v)
 }
 
 /// How many orgs' own doc-1 writes run at once in the generator's second
-/// phase: every org's home is its own, so the writes never meet, and the
-/// client-side signing — the harness's dominant cost in a debug build — runs
-/// on every core.
+/// phase: every org's home is its own, so the writes never meet at a
+/// document, and the client-side signing — the harness's dominant cost in a
+/// debug build — runs on every core. They do meet THE WRITE PERMIT POOL,
+/// of width `skepd::MAX_CONCURRENT_WRITES` (4): at most that many are
+/// admitted at once and the rest are refused `503 write_busy`, which the
+/// generator's door retries ([`op_as_written_retrying_write_busy`]) — the
+/// count stays above the pool's width on purpose, so the signing keeps
+/// every core and the refusal is met and coped with as a client copes.
 const GENERATOR_THREADS: usize = 8;
 
 /// A generated registry board of `n` orgs with `k` key acts each (the
@@ -946,6 +995,7 @@ const GENERATOR_THREADS: usize = 8;
 /// a cap still reports how far it reached.
 fn generate_board(port: u16, console: &str, n: u64, k: usize) -> Vec<Org> {
     let t = Instant::now();
+    let retries_before = WRITE_BUSY_RETRIES.load(Ordering::Relaxed);
     let signer = RecordSigner::at(port);
     let console_key = hybrid_signer(&device_key());
     let boot = open_session(port, 0);
@@ -989,7 +1039,13 @@ fn generate_board(port: u16, console: &str, n: u64, k: usize) -> Vec<Org> {
                     for (principal, prefix, account, binding) in part {
                         let key = org_key(*principal);
                         let node_signed = open_signed_session(port, *principal, &key);
-                        let doc1 = mint_doc_one(port, &node_signed, account);
+                        // The mint through the generator's door: the frame
+                        // `mint_doc_one` sends, the pool's refusal retried.
+                        let doc1 = acked_addr(&op_as_written_retrying_write_busy(
+                            port,
+                            &node_signed,
+                            &create_frame(account, Some(true)),
+                        ));
                         let own = hybrid_signer(&key);
                         // The key acts first, the endpoint signed by the latest
                         // key: so the endpoint's epoch reaches the head, and a
@@ -1035,7 +1091,12 @@ fn generate_board(port: u16, console: &str, n: u64, k: usize) -> Vec<Org> {
     let mut orgs = orgs;
     orgs.sort_by_key(|o| o.principal);
     if n >= 1_000 {
-        report(&format!("  … N={n} k={k}: every org's doc 1, endpoint and key acts written in {}", secs(t.elapsed())));
+        report(&format!(
+            "  … N={n} k={k}: every org's doc 1, endpoint and key acts written in {}, {} writes \
+             retried past the pool",
+            secs(t.elapsed()),
+            WRITE_BUSY_RETRIES.load(Ordering::Relaxed) - retries_before
+        ));
     }
     orgs
 }
@@ -1064,8 +1125,12 @@ fn measure(n: u64, k: usize, chain_walk: bool) {
     let port = sd.port();
     let console = console(port);
     let t = Instant::now();
+    let retries_before = WRITE_BUSY_RETRIES.load(Ordering::Relaxed);
     let orgs = generate_board(port, &console, n, k);
     let generated = t.elapsed();
+    // The seeding's wall time holds the pauses of every write the pool
+    // refused and the generator sent again, so the figure carries the count.
+    let retried = WRITE_BUSY_RETRIES.load(Ordering::Relaxed) - retries_before;
     let feed_rows = head_position(port);
 
     // THE COLD BOOTSTRAP from the hint alone.
@@ -1080,7 +1145,7 @@ fn measure(n: u64, k: usize, chain_walk: bool) {
     assert!(matches!(first, Resolution::Bound { .. }), "{}", first.face());
     let per_record = if s.records > 0 { s.verify_time / s.records as u32 } else { Duration::ZERO };
     report(&format!(
-        "N={n} k={k} | generated in {} ({feed_rows} positions) | COLD: rows={} pages={} bytes={} fetches={} (read_link={} retrieve={} image={} span_set={} key_set={} find_links={} op_at={} chain={} health={}) records={} verify={} total ({} per record) fold={} bootstrap={} first_resolve={} copy_bytes={} suppressed={}",
+        "N={n} k={k} | generated in {} ({feed_rows} positions; {retried} writes retried past the pool) | COLD: rows={} pages={} bytes={} fetches={} (read_link={} retrieve={} image={} span_set={} key_set={} find_links={} op_at={} chain={} health={}) records={} verify={} total ({} per record) fold={} bootstrap={} first_resolve={} copy_bytes={} suppressed={}",
         secs(generated),
         s.rows,
         s.pages,

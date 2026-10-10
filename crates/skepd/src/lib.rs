@@ -130,7 +130,7 @@ mod auth;
 mod write_path;
 
 // The leaves: none knows anything of the daemon. Two more leaves — the
-// permit pool the four bounded pools are built on and the operator's notice
+// permit pool the five bounded pools are built on and the operator's notice
 // line — and the codec's determinism helpers are `skep-util`'s, the support
 // crate below this one, shared with the media crate.
 mod codec;
@@ -215,11 +215,12 @@ pub use skep_kernel::Seq;
 /// far takes from that crate.
 pub use skep_registry::SeedingRefusal;
 
-/// The permit the daemon's four test hooks hand out — one slot of the
+/// The permit the daemon's five test hooks hand out — one slot of the
 /// reconstruction pool, of the class-scan pool (wire v7.9), of the fetch
-/// pool or of the upload pool (wire.md §Media), the same guard type for all
-/// four — `skep-util`'s, the one type every pool mints. Public only because
-/// those hooks' return type must be nameable; not a stable API.
+/// pool or of the upload pool (wire.md §Media), or of the write pool
+/// (`operations.md` §4 rows 25, 27), the same guard type for all five —
+/// `skep-util`'s, the one type every pool mints. Public only because those
+/// hooks' return type must be nameable; not a stable API.
 #[cfg(any(test, feature = "test-hooks"))]
 #[doc(hidden)]
 pub use skep_util::permits::Permit;

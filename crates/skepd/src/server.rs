@@ -118,7 +118,18 @@
 //! which take `serial_lock` themselves so their gates and the execute they
 //! gate stand on one committed state; the ordering the commit stream and
 //! the change feed below rest on is not a thing a handler here can take
-//! apart. Reads execute directly and take no lock.
+//! apart. Reads execute directly and take no lock. EVERY WRITE REQUEST
+//! TAKES A PERMIT OF THE WRITE POOL FIRST (`operations.md` §4 rows 25, 27)
+//! — the fifth instance of [`skep_util::permits::Permits`], of width
+//! [`MAX_CONCURRENT_WRITES`], disjoint from the reconstruction, class-scan,
+//! fetch and upload pools — before the credential lock and the guard, held
+//! through `commit_under`'s return; a write that finds none is refused
+//! `503 write_busy`, retry-class, before any lock, nothing committed. The
+//! head writer's own commits take none: they run inside `commit_under`'s
+//! turn, under the permit the triggering write already holds. So while an
+//! inline backstop holds the guard, writes occupy at most W workers — the
+//! trigger and W − 1 parked — and `/health`, `/session` and every read
+//! stay answered.
 //!
 //! **The commit stream (wire v4)**: `GET /events` is a `text/event-stream`
 //! of committed log positions — one event carrying the last announced
@@ -201,6 +212,7 @@ use skep_media::{MediaOptions, UploadPool};
 #[cfg(feature = "observe")]
 use skep_namespace::PrincipalId;
 use skep_util::notice::{self, Class, Moment};
+use skep_util::permits::Permits;
 use skep_util::source::Source;
 
 use std::sync::Arc;
@@ -428,6 +440,38 @@ fn path_is_known(path: &str) -> bool {
 // live in `crate::auth` (the AUTH session layer). The glue that remains is
 // `actor.rs`.
 
+/// THE WRITE PERMIT POOL's WIDTH — W = 4 (`operations.md` §4 rows 25, 27;
+/// the ops lanes' D6; the spike S25's measurement, the owner's pin): the
+/// most write requests admitted onto the write path at once, every other
+/// refused `503 write_busy` at once, retry-class — a pool and never a queue
+/// (P29), as the four pools before it are.
+///
+/// WHY A POOL ON WRITES AT ALL. The write path serializes writes under one
+/// guard, and the kernel's backstop runs a checkpoint INLINE on the
+/// committing thread when the cadence crosses twice before the checkpoint
+/// thread has serviced the first — seconds at ten million positions. Every
+/// write that arrived during such a run held a worker blocked on the guard,
+/// and no pool bounded them, so twelve writers at once left no worker for
+/// `/health`, `/session` or any read for the run's length: the board DOWN,
+/// not slow. With the pool, writes hold at most W workers through a run —
+/// the trigger and W − 1 parked behind it — and the rest are told so at
+/// once.
+///
+/// WHY FOUR. The upload pool's figure, measured (S25 §5.4): at a shared
+/// venue it refuses almost nothing outside a backstop (≈ 0.3% at fifty
+/// writes a second) and parks three writers through one, each answered
+/// inside a client's ten-second patience on a quiet machine; and it keeps
+/// the default's "two free" with every pool saturated —
+/// [`DEFAULT_WORKERS`] 16 less the five pools' fourteen slots. A width of
+/// one refuses every overlapping write, backstop or none; two moves the
+/// same pins for less.
+///
+/// PUBLIC for one reason: [`MIN_WORKERS`] is DERIVED from the five pools'
+/// counts by path, as this crate's own and `skep-media`'s are named there,
+/// so the minimum moves with this figure and no reader does the sum. The
+/// daemon's own pool, held on [`Daemon`] beside the four.
+pub const MAX_CONCURRENT_WRITES: usize = 4;
+
 /// The daemon's state: the assembled engine, M10's front door, the codec,
 /// and the token → session binding. Socket-free — [`Daemon::route`] is the
 /// entire HTTP surface as a request→reply function over this state, with no
@@ -491,6 +535,21 @@ pub struct Daemon {
     /// the serving path like the fetch pool (D9): the family is asked or
     /// refused, never told.
     uploads: UploadPool,
+    /// THE WRITE PERMIT POOL (`operations.md` §4 rows 25, 27; the ops lanes'
+    /// D6) — the fifth instance of [`skep_util::permits`]'s mechanism, of
+    /// width [`MAX_CONCURRENT_WRITES`], disjoint from the four others by the
+    /// borrow: every write request on `/op` — the plain, the credential and
+    /// the registry sequence alike — takes one permit as its first act
+    /// before the credential lock and the serialization guard (`op.rs`), and
+    /// holds it in the sequence's frame through `commit_under`'s return, so a
+    /// writer parked on the guard behind an inline backstop holds its permit
+    /// the whole wait and the pool bounds the WORKERS writes can occupy; a
+    /// write that finds none is refused `503 write_busy` before any lock. The
+    /// head writer's own commits take none — they run inside the triggering
+    /// write's `commit_under`, under its permit. Its count is the fifth term
+    /// of [`MIN_WORKERS`]. In the serving path like the four (D9): the write
+    /// path is asked or not asked, never told.
+    write_permits: Permits,
     /// THE CHECKPOINT THREAD's MEMORY between its wakes ([`CheckpointMemory`]):
     /// the inline count as it last said it and the position that count is
     /// counted from, the newest checkpoint as it last looked, and the
@@ -814,6 +873,7 @@ impl Daemon {
             media,
             fetches: FetchPool::new(),
             uploads: UploadPool::new(),
+            write_permits: Permits::new(MAX_CONCURRENT_WRITES),
             checkpointer: CheckpointMemory::at_open(start_point, newest_at_open),
             threads: ThreadLiveness {
                 pruner_ended: AtomicBool::new(false),

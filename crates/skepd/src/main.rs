@@ -22,12 +22,15 @@ use std::process::exit;
 
 use skep_util::notice::{self, Class};
 use skep_util::source::Source;
-// `DEFAULT_WORKERS` is the LIBRARY's, not this binary's: it is the fifth
-// term of a relation whose other four are the daemon's permit pools, and the
-// library holds the assertion that keeps the five in step.
+// `DEFAULT_WORKERS` and `MIN_WORKERS` are the LIBRARY's, not this binary's:
+// the default is the sixth term of a relation whose other five are the
+// daemon's permit pools, the minimum is that relation's own floor — one more
+// than the five pools' slots together — and the library holds the assertion
+// that keeps them in step. The parse below refuses a count under the floor,
+// and the help renders both figures from the constants.
 use skepd::{
     bind, serve_bound, tools, AuthOptions, Daemon, MediaOptions, NodePrefix, Origin,
-    DEFAULT_WORKERS,
+    DEFAULT_WORKERS, MIN_WORKERS,
 };
 
 const DEFAULT_PORT: u16 = 8642;
@@ -70,10 +73,12 @@ const SKEPD_ORIGIN: &str = "SKEPD_ORIGIN";
 const SKEPD_BLOCKED_PREFIXES: &str = "SKEPD_BLOCKED_PREFIXES";
 
 /// THE WORKER FAULT's VARIABLE — a TEST SEAM, read by `test-hooks` builds
-/// alone: `inside` or `outside`, the arm `Daemon::panic_the_next_worker` is
-/// handed before the workers spawn, so a suite drives the binary's panic
-/// hook and the workers' end in the real binary. A shipped build reads no
-/// such variable: the read below it does not compile without the feature.
+/// alone: `inside`, `outside` or `every`, the arm `Daemon::panic_the_next_worker`
+/// is handed before the workers spawn, so a suite drives the binary's panic
+/// hook and the workers' end in the real binary — `every` taking each
+/// worker after its one reply, so the end is reached under the worker
+/// floor the parse holds. A shipped build reads no such variable: the read
+/// below it does not compile without the feature.
 #[cfg(feature = "test-hooks")]
 const SKEPD_TEST_WORKER_FAULT: &str = "SKEPD_TEST_WORKER_FAULT";
 
@@ -219,7 +224,7 @@ usage: skepd --data-dir <DIR> [--port <PORT>] [--workers <N>]
                      0 picks an ephemeral port)
   --workers <N>      request worker threads (env: SKEPD_WORKERS; default \
 {DEFAULT_WORKERS};
-                     minimum 1)
+                     minimum {MIN_WORKERS})
   --local-trust      honor bare (unsigned) loopback sessions after the
                      board is claimed (the default — a hosted image must
                      pass --no-local-trust affirmatively)
@@ -536,14 +541,26 @@ fn parse_args(argv: impl Iterator<Item = String>) -> Result<Option<Args>, String
             other => return Err(format!("unknown argument '{other}'")),
         }
     }
-    // Refused, never repaired. `serve` states `workers >= 1` as a
-    // precondition and asserts it, and the wire surface refuses an
-    // out-of-range page size rather than clamping it; a count silently
-    // raised to one here would be the third answer to that one question,
-    // and the one that teaches a caller its zero was fine.
+    // Refused, never repaired (`operations.md` §2.3 F1; op-D7 (a)). `serve`
+    // states `workers >= MIN_WORKERS` as the obligation its count carries —
+    // one more than the permit pools' slots together — and deliberately does
+    // not re-check it, so this parse is where the relation is held, for the
+    // flag and the variable alike: below it a caller holding every permit
+    // leaves no worker for `/health`, `/session` or a write, and the daemon
+    // answers nothing with every structure healthy. Zero is refused by the
+    // same arm — one refusal, one relation. The wire surface refuses an
+    // out-of-range page size rather than clamping it; a count silently raised
+    // to the minimum here would be the third answer to that one question, and
+    // the one that teaches a caller its count was fine. The minimum is
+    // rendered from the constant and never written as a figure: it is
+    // DERIVED from the pools and moves by itself.
     let workers = workers.unwrap_or(DEFAULT_WORKERS);
-    if workers == 0 {
-        return Err("--workers: a server with no workers serves nothing".into());
+    if workers < MIN_WORKERS {
+        return Err(format!(
+            "--workers: {workers} is below the minimum {MIN_WORKERS} — one more than the permit \
+             pools' slots together; below it a caller holding every permit leaves no worker for \
+             /health, /session or a write"
+        ));
     }
     Ok(Some(Args {
         data_dir: data_dir

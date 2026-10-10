@@ -61,3 +61,4 @@ mod vectors;
 mod version_chain;
 mod volume;
 mod wire_doc;
+mod write_pool;

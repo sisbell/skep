@@ -896,8 +896,6 @@ fn doc_states_the_upload_its_pins_and_its_refusals() {
         "THE PERMIT",
         "bounded by a pool, never a queue",
         "the upload pool, 4",
-        "`MIN_WORKERS`, 11",
-        "`DEFAULT_WORKERS`, 12",
         "{\"base\":<bytes>,\"deposits\":[…],\"limits\":null,\"pending\":<bytes>,\"per_account\":<bytes>,\"uploads\":[…]}",
         "`credential_refused`, `detail` `lease_lapsed`",
         "a hash this principal did not deposit under its own lease",
@@ -922,6 +920,15 @@ fn doc_states_the_upload_its_pins_and_its_refusals() {
         "**The H1 rows**",
     ] {
         assert!(media.contains(fact), "§Media says {fact:?}");
+    }
+    // The two worker counts the pool is counted into, read THROUGH the
+    // constants: the pins passage moves with them (the ops lanes' D6, the
+    // write pool's landing moved both) and never ahead of or behind them.
+    for pin in [
+        format!("`MIN_WORKERS`, {}", skepd::MIN_WORKERS),
+        format!("`DEFAULT_WORKERS`, {}", skepd::DEFAULT_WORKERS),
+    ] {
+        assert!(media.contains(&pin), "§Media says {pin:?}");
     }
     let endpoints = prose("\n### Endpoints", &["\n### Transport"]);
     assert!(endpoints.contains("`POST /blob/upload`"), "§Endpoints lists the family");
@@ -960,11 +967,85 @@ fn doc_states_the_upload_its_pins_and_its_refusals() {
     assert_eq!(fixture["pins"]["lease_interval_ms"].as_u64(), Some(7 * 24 * 3600 * 1000));
     assert_eq!(fixture["pins"]["lease_horizon_ms"].as_u64(), Some(30 * 24 * 3600 * 1000));
     assert_eq!(fixture["pins"]["upload_pool"].as_u64(), Some(4));
-    assert_eq!(fixture["pins"]["min_workers"].as_u64(), Some(11));
-    assert_eq!(fixture["pins"]["default_workers"].as_u64(), Some(12));
+    assert_eq!(fixture["pins"]["min_workers"].as_u64(), Some(skepd::MIN_WORKERS as u64));
+    assert_eq!(fixture["pins"]["default_workers"].as_u64(), Some(skepd::DEFAULT_WORKERS as u64));
     assert_eq!(fixture["refusals"]["deposit_refused"].as_u64(), Some(507));
     assert_eq!(fixture["refusals"]["index_rebuilding"].as_u64(), Some(503));
     assert_eq!(fixture["refusals"]["upload_busy"].as_u64(), Some(503));
+}
+
+/// THE WRITE PERMIT POOL (`operations.md` §4 rows 25, 27; the ops lanes' D6,
+/// W1's second token): §The model says a write is admitted under
+/// `MAX_CONCURRENT_WRITES` (4) at once, taken before the credential lock and
+/// the guard, the next refused `503 write_busy`, retry-class, nothing
+/// committed; §HTTP status codes carries the token at 503 in the pool
+/// family's voice — all write permits in use, the `op` carried, retry
+/// shortly; and §Media's pins passage counts the pool into the worker
+/// minimum — `MIN_WORKERS` one more than the FIVE pools' slots together, the
+/// write pool's 4 among them, the default one above it — the two counts
+/// read through the constants, and the vector set pins the same two. The
+/// daemon's answers are pinned end to end in `write_pool.rs`; this pins
+/// that the contract says so.
+#[test]
+fn doc_states_the_write_permit_pool_and_its_token() {
+    let model = prose("\n## The model", &["\n### Endpoints"]);
+    for fact in [
+        "the daemon serializes writes internally",
+        "At most `MAX_CONCURRENT_WRITES` (4) write requests are admitted at once",
+        "the write permit pool, taken before the credential lock and the guard",
+        "the next is refused `503 write_busy`, retry-class, nothing committed",
+    ] {
+        assert!(model.contains(fact), "§The model says {fact:?}");
+    }
+    let statuses = prose("\n### HTTP status codes", &["\n### Determinism"]);
+    assert!(
+        statuses.contains("| 503 | `write_busy` |"),
+        "§HTTP status codes carries the token at 503"
+    );
+    // The row's cell alone: `prose` collapses the table's whitespace, so the
+    // next row opens at the first `| |` after the token's.
+    let row = statuses
+        .split("| 503 | `write_busy` |")
+        .nth(1)
+        .and_then(|rest| rest.split(" | | ").next())
+        .expect("the row's cell");
+    for fact in [
+        "all write permits are in use",
+        "past the write permit pool",
+        "before the credential lock and the guard are taken",
+        "nothing committed",
+        "carries `op`",
+        "retry shortly",
+    ] {
+        assert!(row.contains(fact), "the row says {fact:?}: {row}");
+    }
+    let media = prose("\n### Media — the reference cell and its door", &["\n### Links (writes)"]);
+    for fact in [
+        "five pools' slots together",
+        "the write permit pool's 4",
+        "`MAX_CONCURRENT_WRITES`",
+    ] {
+        assert!(media.contains(fact), "§Media's pins say {fact:?}");
+    }
+    for pin in [
+        format!("`MIN_WORKERS`, {}", skepd::MIN_WORKERS),
+        format!("`DEFAULT_WORKERS`, {}", skepd::DEFAULT_WORKERS),
+    ] {
+        assert!(media.contains(&pin), "§Media's pins say {pin:?}");
+    }
+    let fixture: Value = serde_json::from_str(
+        &std::fs::read_to_string(
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/it/fixtures/media/uploads.json"),
+        )
+        .expect("the vector set exists"),
+    )
+    .expect("the vector set is JSON");
+    assert_eq!(fixture["pins"]["min_workers"].as_u64(), Some(skepd::MIN_WORKERS as u64));
+    assert_eq!(fixture["pins"]["default_workers"].as_u64(), Some(skepd::DEFAULT_WORKERS as u64));
+    assert!(
+        fixture["note"].as_str().is_some_and(|note| note.contains("fetch and write pools")),
+        "the set's note counts the write pool into the minimum"
+    );
 }
 
 /// THE `durability` FACE AND THE FEED's COMPACTION AT THE CHECKPOINT (P10:

@@ -359,6 +359,51 @@ fn a_reclaimed_read_names_a_floor_past_the_position_asked() {
     assert_eq!(gone.op(&frame), Err(BoardError::Status { status: 404, body: "key_set: no such route".into() }));
 }
 
+/// A board whose change feed is being rebuilt behind the listener: the
+/// first `refusals` pages are refused `503 feed_rebuilding`, then every
+/// page is served empty.
+struct Rebuilding {
+    refusals: Cell<u32>,
+}
+
+impl Transport for Rebuilding {
+    fn exchange(&self, method: Method, path: &str, _: &[u8]) -> Result<(u16, Vec<u8>), TransportError> {
+        assert!(method == Method::Get && path.starts_with("/changes?since=0"), "{method} {path}");
+        if self.refusals.get() > 0 {
+            self.refusals.set(self.refusals.get() - 1);
+            let body = json!({ "error": "feed_rebuilding", "detail": "the change feed is being rebuilt behind the listener; retry shortly" });
+            return Ok((503, body.to_string().into_bytes()));
+        }
+        Ok((200, json!({ "changes": [], "last": 0, "more": false }).to_string().into_bytes()))
+    }
+}
+
+/// A REBUILDING FEED IS RETRIED AS A BUSY BOARD IS (the operations design
+/// §3.3 step 2; the ops lanes' D10): a page refused `503 feed_rebuilding`
+/// fewer times than `BUSY_RETRIES` is served at the retry, each retry
+/// counted under `busy_retries` and the page under `changes` once; one
+/// refused past the retries is given up as `BoardError::Busy`; and a `503`
+/// naming another token is `BoardError::Status`, as it always was.
+#[test]
+fn a_rebuilding_feed_is_retried_as_a_busy_board_is_and_given_up_past_the_retries() {
+    let board = Board::new(Box::new(Rebuilding { refusals: Cell::new(3) }));
+    let page = board.changes(0, &mut None).expect("the page after three refusals");
+    assert_eq!((page.rows.len(), page.last, page.more), (0, 0, false));
+    let r = board.reads();
+    assert_eq!((r.changes, r.busy_retries), (4, 3), "every request counted, the retries apart: {r:?}");
+
+    let board = Board::new(Box::new(Rebuilding { refusals: Cell::new(BUSY_RETRIES + 1) }));
+    assert_eq!(board.changes(0, &mut None), Err(BoardError::Busy), "given up past the retries");
+    assert_eq!(board.reads().busy_retries, u64::from(BUSY_RETRIES));
+
+    let other = Board::new(Box::new(Canned(503, json!({ "error": "upload_busy" }).to_string())));
+    assert_eq!(
+        other.changes(0, &mut None),
+        Err(BoardError::Status { status: 503, body: json!({ "error": "upload_busy" }).to_string() }),
+        "a 503 naming no retry-class token of the feed's is refused as it was"
+    );
+}
+
 /// A board whose every answer runs past the transport's cap.
 struct Oversized;
 

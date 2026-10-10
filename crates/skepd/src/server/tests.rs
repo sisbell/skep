@@ -1118,6 +1118,7 @@ fn the_standing_line_carries_each_clause_in_the_rates_words_and_order() {
             StoppedFile { name: "feed-index.log", since: 12 },
         ],
         pruner_gone: true,
+        feed_walk_gone: Some((20, 48)),
         index_failed: true,
         floor: Some(FloorBinding { free_space: 1000, floor: 268_435_456 }),
         claimed_permissive: true,
@@ -1127,14 +1128,16 @@ fn the_standing_line_carries_each_clause_in_the_rates_words_and_order() {
         every.to_string(),
         "the write path is halted since position 17 (feed-attest.log); the kernel is poisoned; \
          commits.log stopped since position 9; feed-index.log stopped since position 12; the \
-         pruner's thread is gone; the cell index failed to build; deposits refused at the \
-         floor (free space 1000 below the floor in force 268435456); CLAIMED-PERMISSIVE"
+         pruner's thread is gone; the feed walk's thread is gone; positions (20, 48] stay \
+         uncovered; the cell index failed to build; deposits refused at the floor (free space \
+         1000 below the floor in force 268435456); CLAIMED-PERMISSIVE"
     );
     let one = StandingLine {
         halted_at: None,
         poisoned: false,
         stopped_files: Vec::new(),
         pruner_gone: true,
+        feed_walk_gone: None,
         index_failed: false,
         floor: None,
         claimed_permissive: false,
@@ -1146,6 +1149,7 @@ fn the_standing_line_carries_each_clause_in_the_rates_words_and_order() {
         poisoned: false,
         stopped_files: Vec::new(),
         pruner_gone: false,
+        feed_walk_gone: None,
         index_failed: false,
         floor: None,
         claimed_permissive: false,

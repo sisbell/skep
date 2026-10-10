@@ -79,6 +79,29 @@ pub(crate) const PRUNE_INTERVAL: Duration = Duration::from_secs(3600);
 /// — and writes nothing.
 pub(crate) const STANDING_INTERVAL: Duration = Duration::from_secs(3600);
 
+/// THE FEED WALK's PROGRESS CADENCE, the boundary half — 1,000 boundaries,
+/// INTERIM (D1: a daemon constant for a cadence, as the pruner's interval
+/// is): where `commits.log` was lost or torn, the walk that re-covers the
+/// uncovered positions runs behind the listener on a thread of its own
+/// (`write_path/feed.rs`) and says one `progress:` line every so many
+/// boundaries it has proved, or every [`FEED_WALK_PROGRESS_INTERVAL`],
+/// whichever comes first (`operations.md` §1.1 m15; §3.3 step 2). What the
+/// cadence bounds is how long a long walk goes unsaid — a walk's line is
+/// what tells it from a hang — against how many lines a walk of the
+/// retained window writes: at a thousand boundaries a line, a window of a
+/// million positions is a thousand lines over the walk's length, and a
+/// boundary costs one whole-world reconstruction, so a thousand of them is
+/// seconds at the least.
+pub(crate) const FEED_WALK_PROGRESS_BOUNDARIES: u64 = 1_000;
+
+/// THE FEED WALK's PROGRESS CADENCE, the time half — ten seconds, INTERIM
+/// (D1): the longest a walk goes without a `progress:` line while it walks,
+/// where fewer than [`FEED_WALK_PROGRESS_BOUNDARIES`] boundaries fit in it —
+/// a large world's boundaries, each a reconstruction of seconds. Ten seconds
+/// is well under a supervisor's patience and well over the stream's own
+/// cost of a line.
+pub(crate) const FEED_WALK_PROGRESS_INTERVAL: Duration = Duration::from_secs(10);
+
 /// THE TRANSFER BOUND of one blob request — 10 minutes, INTERIM: the
 /// deadline on SLOWNESS the idle bound cannot give (a peer pacing one byte
 /// per interval renews the idle bound for as long as it cares to, and the

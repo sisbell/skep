@@ -25,7 +25,7 @@ use crate::common;
 use std::path::Path;
 
 use common::{
-    acked_at, assert_withheld, board_term, ceremony_before_the_claim, claim_frame, claimed,
+    acked_addr, acked_at, assert_withheld, board_term, ceremony_before_the_claim, claim_frame, claimed,
     device_key, doc_metadata, expect_resp, get, head_position, json, op, op_as_written,
     open_session, open_signed_session, spawn, spawn_seeded, spawn_unclaimed, typed_link_frame,
     verdict, CLAIMANT_ACCOUNT, CLAIMANT_DOC1, CLAIMANT_PRINCIPAL, T_GRANT,
@@ -853,17 +853,20 @@ fn the_hour_since_the_last_head_survives_a_restart() {
 
 /// RESUME — a LOST sidecar counts what the journal shows landed (PUB-6.65:
 /// "64 commits that are not the writer's own have landed since the last
-/// head", of the board): `commits.log` deleted, the reopen walk re-covers
-/// every retained position as a BARE entry, and a bare entry COUNTS — the
-/// head's own among them, since with their `"system"` testimony gone nothing
-/// tells them from the rest. So the next head comes EARLY by at most the
-/// head's own commits (three at a first head: the staging draft's mint, the
-/// insert, the publish; two after it) and never late: 40 commits after a head, the loss, a
-/// restart, and the next head comes no sooner than the 21st commit after it
-/// and no later than the 24th — never at the 64th, where a resume that
-/// started the count at zero would put it, 104 commits past the last head.
-/// The heads' own chain is the journal's and survives the loss: the new
-/// head's `prev` is the head before it.
+/// head", of the board): `commits.log` deleted, the reopen's region is every
+/// retained position, walked behind the listener, and the writer resumes
+/// its count OFF THE KERNEL's SEQ while the region is pending (the
+/// operations design §3.3 step 2) — every journal record above the head's
+/// position counts, the head's own among them, since nothing tells them
+/// from the rest until the walk lands. So the next head comes EARLY by at
+/// most the head's own records (seven at a later head: the record's insert,
+/// three, and the publish, four; eight at a first head, the staging draft's
+/// mint beside them) and never late: 40 one-record commits after a head,
+/// the loss, a restart, and the next head comes no sooner than the 17th
+/// commit after it and no later than the 24th — never at the 64th, where a
+/// resume that started the count at zero would put it, 104 commits past the
+/// last head. The heads' own chain is the journal's and survives the loss:
+/// the new head's `prev` is the head before it.
 #[test]
 fn a_lost_sidecar_counts_the_commits_the_journal_shows_landed() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -899,10 +902,10 @@ fn a_lost_sidecar_counts_the_commits_the_journal_shows_landed() {
             break;
         }
     }
-    let (i, at) = next.expect("a head by the 24th commit after the loss: a bare entry counts");
+    let (i, at) = next.expect("a head by the 24th commit after the loss: the seq counts");
     assert!(
-        i >= 64 - 40 - 3,
-        "early by at most the head's own three commits, never more: the head came at +{i}"
+        i >= 64 - 40 - 7,
+        "early by at most the head's own seven records, never more: the head came at +{i}"
     );
     let rec = expect_latest_head(port);
     assert_eq!(rec["position"].as_u64(), Some(at), "it names the commit that brought it: {rec}");
@@ -912,6 +915,83 @@ fn a_lost_sidecar_counts_the_commits_the_journal_shows_landed() {
         "its prev is the head before: {rec}"
     );
     assert!(rec["base"].is_null(), "no checkpoint was taken: the count is what fired: {rec}");
+    sd.shutdown();
+}
+
+/// RESUME WHILE THE WALK's REGION IS PENDING — EARLY, NEVER LATE (the
+/// operations design §3.3 step 2: "the head writer's resume counts commits
+/// off the kernel's seq while entries are pending, an over-count, EARLY and
+/// never late"): a head, then twenty two-value inserts — twenty commits,
+/// a hundred records — the testimony deleted, the reopen with the walk
+/// HELD — every retained position pending, the feed holding none of them
+/// — and the FIRST write after the open brings the next head, the region
+/// still pending: the count resumed off the seq, a hundred records above
+/// the head, is past the bound of 64 where the twenty commits that landed
+/// are not — the over-count, EARLY — and where a resume off the empty feed
+/// would have started at zero and put the head 64 commits away. After the
+/// landing the count is exact: the 63 commits after that head write none,
+/// the 64th writes the next.
+#[test]
+fn a_pending_region_resumes_the_count_off_the_seq_early_and_never_late() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let mut clock = clock_origin();
+    let head_position = {
+        let sd = spawn(dir.path());
+        let port = sd.port();
+        let owner = open_session(port, CLAIMANT_PRINCIPAL);
+        let p = force_head(&sd, &owner, CLAIMANT_ACCOUNT, &mut clock);
+        let v = op(port, Some(&owner), &format!(r#"{{"op":"create_new_document","account":"{CLAIMANT_ACCOUNT}"}}"#));
+        let draft = acked_addr(&v);
+        let before = health(port).0;
+        for _ in 0..20 {
+            let v = op(
+                port,
+                Some(&owner),
+                &format!(r#"{{"op":"insert","doc":"{draft}","at":{{"subspace":"1","ordinal":"1"}},"values":["a","b"]}}"#),
+            );
+            expect_resp(&v, "ack_addr");
+        }
+        assert!(health(port).0 - before >= 64, "a hundred records in twenty commits");
+        assert_eq!(head_record(port, H).unwrap()["position"].as_u64(), Some(p), "21 since the head: none yet");
+        sd.shutdown();
+        p
+    };
+    std::fs::remove_file(dir.path().join("commits.log")).expect("lose the testimony");
+
+    let sd = crate::feed_walk::spawn_holding_the_walk(dir.path());
+    let port = sd.port();
+    assert!(sd.daemon().feed_pending_region().is_some(), "every retained position pending");
+    let owner = open_session(port, CLAIMANT_PRINCIPAL);
+    let at = commit(port, &owner, CLAIMANT_ACCOUNT);
+    assert!(sd.daemon().feed_pending_region().is_some(), "the hold stands: the head came before the landing");
+    let rec = expect_latest_head(port);
+    assert_eq!(
+        rec["position"].as_u64(),
+        Some(at),
+        "EARLY: the first write after the open brings the head, the count resumed off the seq: {rec}"
+    );
+    assert_eq!(rec["prev"]["position"].as_u64(), Some(head_position), "its prev is the head before: {rec}");
+    assert!(rec["base"].is_null(), "no checkpoint: the count is what fired: {rec}");
+
+    skepd::Daemon::release_the_feed_walk();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+    while sd.daemon().feed_pending_region().is_some() {
+        assert!(std::time::Instant::now() < deadline, "the walk did not land");
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    // EXACT after the landing: 63 commits write none, the 64th writes.
+    let mut next = None;
+    for i in 1..=64u64 {
+        let p = commit(port, &owner, CLAIMANT_ACCOUNT);
+        if head_record(port, H).unwrap()["position"].as_u64() != Some(at) {
+            next = Some((i, p));
+            break;
+        }
+    }
+    assert_eq!(next.map(|(i, _)| i), Some(64), "never late, and exact once landed: the 64th commit");
+    let rec = expect_latest_head(port);
+    assert_eq!(rec["position"].as_u64(), next.map(|(_, p)| p), "it names the commit that brought it: {rec}");
+    assert_eq!(rec["prev"]["position"].as_u64(), Some(at), "{rec}");
     sd.shutdown();
 }
 

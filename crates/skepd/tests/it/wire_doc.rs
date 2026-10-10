@@ -974,6 +974,52 @@ fn doc_states_the_upload_its_pins_and_its_refusals() {
     assert_eq!(fixture["refusals"]["upload_busy"].as_u64(), Some(503));
 }
 
+/// THE WALK BEHIND THE LISTENER (`operations.md` §3.3 step 2; §4 row 16;
+/// the ops lanes' D9, W1's third token): §HTTP status codes carries
+/// `feed_rebuilding` at 503 in the retry-class family's voice — the region
+/// a lost or torn `commits.log` left uncovered, re-covered behind the
+/// listener, pages below and above serving, `/events` untouched, retry
+/// shortly — and §The change feed's **Rebuilding.** paragraph says the
+/// walk's shape: the refusal's body, that it is retry-class as
+/// `history_busy` is, that pages above and below serve, `/events` is
+/// untouched, and that one rewrite lands it. The daemon's answers are
+/// pinned end to end in `feed_walk.rs`; this pins that the contract says so.
+#[test]
+fn doc_states_the_feed_walk_behind_the_listener_and_its_token() {
+    let statuses = prose("\n### HTTP status codes", &["\n### Determinism"]);
+    assert!(
+        statuses.contains("| 503 | `feed_rebuilding` |"),
+        "§HTTP status codes carries the token at 503"
+    );
+    let row = statuses
+        .split("| 503 | `feed_rebuilding` |")
+        .nth(1)
+        .and_then(|rest| rest.split(" | | ").next())
+        .expect("the row's cell");
+    for fact in [
+        "lost or torn `commits.log`",
+        "behind the listener",
+        "pages below and above",
+        "`/events` is untouched",
+        "retry shortly",
+        "`history_busy`",
+    ] {
+        assert!(row.contains(fact), "the row says {fact:?}: {row}");
+    }
+    let feed = prose("\n## The change feed", &["\n## The other endpoints"]);
+    for fact in [
+        "**Rebuilding.**",
+        "re-covered behind the listener",
+        "`503 {\"error\": \"feed_rebuilding\", \"detail\": …}`",
+        "retry-class, as `history_busy` is",
+        "above and below the region serve",
+        "`/events` is untouched",
+        "ONE rewrite",
+    ] {
+        assert!(feed.contains(fact), "§The change feed says {fact:?}");
+    }
+}
+
 /// THE WRITE PERMIT POOL (`operations.md` §4 rows 25, 27; the ops lanes' D6,
 /// W1's second token): §The model says a write is admitted under
 /// `MAX_CONCURRENT_WRITES` (4) at once, taken before the credential lock and

@@ -1904,7 +1904,11 @@ the store's install — nothing above their own layer.
      answer naming each file that stood; beneath it,
      `write_path/feed/derived.rs` keeps the feed's derived index files —
      a torn tail is cut at open and said with the last trusted position,
-     the bytes and that the cut part is re-derived; malformed names and
+     the bytes and that the cut part is re-derived — `commits.log`'s own
+     cut part by a walk BEHIND THE LISTENER on a thread of the write
+     path's, reads served and writes admitted meanwhile, `/changes`
+     refusing pages into the uncovered region `feed_rebuilding` until ONE
+     rewrite lands it; malformed names and
      unreadable slots are said once per open with a count and the first
      position; a rewrite that fails past its rename stops its file for the
      uptime, said once per uptime — and `write_path/feed/attest.rs` the
@@ -2048,7 +2052,10 @@ imports it.
   removes at open. The daemon's own files are `commits.log` — its
   testimony about what it committed, for whom, and whether the entry was
   signed — the feed's derived index files, projections of that testimony
-  and the journal, rebuilt from them on loss — `commits.log` and the four
+  and the journal, rebuilt from them on loss, `commits.log`'s own
+  uncovered region walked from the journal behind the listener and landed
+  by one rewrite, pages into it refused `feed_rebuilding` meanwhile —
+  `commits.log` and the four
   compact to the journal's reclaim floor at open and after each checkpoint
   the checkpoint thread lands, the floor moving then and at no other
   moment — and `feed-attest.log`, the attest store: each attested commit's

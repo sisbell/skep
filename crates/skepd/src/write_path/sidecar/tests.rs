@@ -579,6 +579,100 @@ fn a_failed_append_stops_the_log_so_the_reopen_walk_starts_below_the_gap() {
     assert_eq!(claimed, Vec::<u64>::new(), "the file claims no position above the gap");
 }
 
+/// THE LANDING IS ONE REWRITE AND FILE ORDER IS POSITION ORDER (the
+/// operations design §3.3 step 2; "file order is position order"): a log
+/// whose region `(24, 30]` is pending over a file holding entries 20 and
+/// 24 — the state a torn open leaves — takes a write at 31 in memory alone
+/// (HELD, no line appended, no offset, `head_time` answering for the head
+/// in the region: none), takes a checkpoint's compaction to 20 in memory
+/// alone (the fence moved, the file untouched), and LANDS three walked
+/// boundaries with the walk's own fence at 25: one rewrite, a `min_since`
+/// line first at the greatest of the fences, then every entry ascending —
+/// the walked three bare with the journal's answer where it had one, the
+/// held write whole — the entries at or below the fence dropped, every
+/// offset the rewrite assigned naming the byte its line begins at, the
+/// region cleared.
+#[test]
+fn the_landing_is_one_rewrite_in_position_order_with_every_held_position_at_its_offset() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join(SIDECAR_FILE);
+    let e20 = recorded("insert", &["1.0.1.0.1"], 1, Some("bare"));
+    let e24 = recorded("insert", &["1.0.1.0.1"], 2, Some("bare"));
+    std::fs::write(&path, [entry_line(20, &e20), entry_line(24, &e24)].concat()).expect("the torn file");
+    let parsed = std::fs::read(&path).expect("read");
+    let entries = [(20, e20), (24, e24)].into_iter().collect();
+    let mut log = CommitsLog::pending_over(dir.path(), entries, 24, 30);
+    assert_eq!(log.pending_region(), Some((24, 30)));
+    assert_eq!(log.head_time(), None, "the head's record lies in the region");
+    let serial = crate::serial::Serial::new();
+    let serial = serial.lock();
+
+    let held = log.record(&serial, 31, "insert", vec!["1.0.1.0.2".into()], "bare".into(), None, None);
+    assert_eq!(held, Some(Recorded::Held), "a write while the region pends is held");
+    assert_eq!(std::fs::read(&path).expect("read"), parsed, "no line appended");
+    assert!(log.entries.contains_key(&31) && !log.offsets.contains_key(&31), "in memory, no offset");
+    assert!(log.head_time().is_some(), "the held write is above the head: head_time is its");
+
+    assert!(log.compact_to(20).expect("deferred"), "the fence moves");
+    assert_eq!((log.min_since_in_force(), log.entries.contains_key(&20)), (20, false));
+    assert_eq!(std::fs::read(&path).expect("read"), parsed, "the compaction's rewrite is deferred");
+
+    let walked = vec![
+        Walked { at: 26, docs: Some(vec![]), journal: JournalTerms { op: Some("version".into()), terms: None } },
+        Walked { at: 28, docs: None, journal: JournalTerms::default() },
+        Walked { at: 30, docs: Some(vec![]), journal: JournalTerms::default() },
+    ];
+    let fence = log.land(&walked, Some(25), None).expect("the landing's one rewrite");
+    assert_eq!((fence, log.pending_region()), (25, None));
+    let bytes = std::fs::read(&path).expect("read");
+    let (records, valid_end) = parse_records(&bytes);
+    assert_eq!(valid_end, bytes.len(), "every line whole");
+    assert!(matches!(records[0].1, Record::MinSince(25)), "the fence first: {:?}", records[0]);
+    let ats: Vec<u64> = records
+        .iter()
+        .filter_map(|(_, r)| match r {
+            Record::Entry(at, _) => Some(*at),
+            Record::MinSince(_) => None,
+        })
+        .collect();
+    assert_eq!(ats, [26, 28, 30, 31], "position order; 24 dropped at the fence");
+    assert!(matches!(&records[1].1, Record::Entry(26, CommitMeta::Bare { journal }) if journal.op.as_deref() == Some("version")));
+    assert!(matches!(&records[4].1, Record::Entry(31, CommitMeta::Recorded { .. })), "the held write whole");
+    for (offset, record) in &records {
+        if let Record::Entry(at, _) = record {
+            assert_eq!(log.offsets()[at], LineOffset(*offset as u64), "the offset of {at}");
+        }
+    }
+    assert!(log.entries().keys().eq([26, 28, 30, 31].iter()));
+}
+
+/// THE WORDS of the walk's three lines and the landing's refusal, each a
+/// pure value: `open:` with the covered edge, the count and the head;
+/// `progress:` with the position, the head and the elapsed milliseconds;
+/// `landing:` with the walked, the bare and the elapsed; and the rewrite
+/// refused before its rename, naming the edge the next open walks from.
+#[test]
+fn the_walks_three_lines_and_the_landings_refusal_render_the_ruled_words() {
+    assert_eq!(
+        WalkOpenLine { covered: 24, boundaries: 6, head: 30 }.to_string(),
+        "commits.log covers to position 24; walking 6 boundaries to position 30"
+    );
+    assert_eq!(
+        WalkProgressLine { position: 26, head: 30, elapsed_ms: 1_204 }.to_string(),
+        "the walk at position 26 of 30, 1204 ms in"
+    );
+    assert_eq!(
+        WalkLandingLine { walked: 6, bare: 1, elapsed_ms: 2_500 }.to_string(),
+        "6 walked, 1 of them bare, in 2500 ms"
+    );
+    let e = io::Error::new(io::ErrorKind::StorageFull, "no room");
+    assert_eq!(
+        LandingRefusedLine { low: 24, error: &e }.to_string(),
+        "commits.log: the walk's landing rewrite failed before its rename: no room; the file stands \
+         as it was and takes no further line, so the next open walks again from position 24"
+    );
+}
+
 /// THE WORDS of this file's three open-time and once-per-open lines, each
 /// a pure value: row 9's head with the last trusted position and the bytes
 /// ([`CutHead`]), `commits.log`'s own case after it ([`LogCutLine`]), and

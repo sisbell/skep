@@ -402,6 +402,14 @@ pub(super) enum TransportError {
     BlobDamaged,
     /// Every fetch permit is in use: retry-class, `history_busy`'s sibling.
     FetchBusy,
+    /// THE WALK BEHIND THE LISTENER's REFUSAL (`operations.md` §3.3 step 2;
+    /// §4 row 16; the ops lanes' D9): a lost or torn `commits.log` left a
+    /// region of positions uncovered, which the write path's walk thread
+    /// re-covers while the board serves, and this `/changes` page's rows
+    /// would have to come from it. Retry-class, `index_rebuilding`'s shape
+    /// under its own token: pages below and above the region serve,
+    /// `/events` is untouched, and the landing's one rewrite clears it.
+    FeedRebuilding,
 }
 
 impl TransportError {
@@ -444,6 +452,7 @@ impl TransportError {
             TransportError::BlobMissing => "blob_missing",
             TransportError::BlobDamaged => "blob_damaged",
             TransportError::FetchBusy => "fetch_busy",
+            TransportError::FeedRebuilding => "feed_rebuilding",
         }
     }
 
@@ -489,15 +498,17 @@ impl TransportError {
             | TransportError::HistoryCorrupt
             | TransportError::InternalPanic
             | TransportError::BlobIo => 500,
-            // The six retry-class refusals: a pool is momentarily full —
+            // The seven retry-class refusals: a pool is momentarily full —
             // the reconstruction, class-scan, fetch, upload or write pool —
-            // or the cell index's walk at open is momentarily unfinished.
+            // or the cell index's walk at open, or the feed's walk behind
+            // the listener, is momentarily unfinished.
             TransportError::HistoryBusy
             | TransportError::ScanBusy
             | TransportError::WriteBusy
             | TransportError::IndexRebuilding
             | TransportError::UploadBusy
-            | TransportError::FetchBusy => 503,
+            | TransportError::FetchBusy
+            | TransportError::FeedRebuilding => 503,
             // The gate's: the scope it names has no room for these bytes.
             TransportError::DepositRefused => 507,
         }
@@ -828,6 +839,22 @@ pub(super) fn refuse_reclaimed(floor: Option<u64>) -> Reply {
         None => Vec::new(),
     };
     refuse_with(TransportError::HistoryReclaimed, fields)
+}
+
+/// The `503 feed_rebuilding` refusal (`operations.md` §3.3 step 2; §4 row
+/// 16): the page's rows would come from the positions a lost or torn
+/// `commits.log` left uncovered, which the walk behind the listener has yet
+/// to land — `index_rebuilding`'s voice under its own token, the `detail`
+/// naming the region in words and the retry, and NO member beyond `error`
+/// and `detail`: a region member on the wire is a design the record does
+/// not make. Pages below and above the region serve, as the detail says.
+pub(super) fn refuse_feed_rebuilding(low: u64, head: u64) -> Reply {
+    let detail = format!(
+        "the change feed is being rebuilt behind the listener: positions above {low} through \
+         {head} are not yet covered, and this page reaches into them; pages below and above \
+         serve; retry shortly"
+    );
+    refuse(TransportError::FeedRebuilding, Some(&detail))
 }
 
 /// Map an unavailable historical answer onto the wire's transport errors —

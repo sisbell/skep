@@ -170,7 +170,14 @@ impl AttestStore {
     ) -> io::Result<AttestStore> {
         let with_file = |e: io::Error| io::Error::new(e.kind(), format!("{ATTEST_FILE}: {e}"));
         let head = log.open_head();
-        let served_only = |at: u64| log.entries().contains_key(&at);
+        // Served: a position the log holds, or one in the region the walk
+        // behind the listener has yet to land — the log's `(low, head]`,
+        // whose rows this store's slots ride once the landing writes them;
+        // the rebuild's positions are the kernel's markers' either way.
+        let served_only = |at: u64| {
+            log.entries().contains_key(&at)
+                || log.pending_region().is_some_and(|(low, head)| at > low && at <= head)
+        };
         let (mut file, entries, cut) = LineFile::open(dir, ATTEST_FILE, head, served_only, lines)?;
         if let Some(cut) = cut {
             // The floor, one probe, at a cut alone: `None` is a journal that

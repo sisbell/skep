@@ -51,16 +51,26 @@
 //!   ride the bare line under one `journal` member, written by the walk that
 //!   derived them so the two reconstructions are paid once; `null` stays
 //!   where the journal cannot answer.
-//! * Reconstruction uses the one public journal-fed surface the daemon
-//!   already holds — the engine's bounded replay (`Engine::world_at`):
-//!   walking down from the head, an `Ok` probe proves a boundary, a
-//!   `NotABoundary { nearest }` names the next one below, and any other
-//!   error (reclaimed, corrupt, I/O) honestly ends the feed's reach there —
-//!   recorded as the smallest `since` this feed can honor, under which
-//!   `/changes` answers the same 410 discipline as `/op-at`. The kernel's
-//!   own journal reader stays closed. Reconstructed positions are appended
-//!   to the file, so the walk runs once per uncovered region, not once per
-//!   open.
+//! * Reconstruction uses the two public journal-fed surfaces the daemon
+//!   already holds — the kernel's one-scan boundary list
+//!   (`Kernel::boundaries_above`, every committed boundary above the file's
+//!   coverage from one base) and its bounded replay (`Kernel::world_at`):
+//!   the list names the boundaries, an `Ok` replay of each PROVES it, and a
+//!   refusal (reclaimed, corrupt, I/O) honestly ends the feed's reach below
+//!   the boundary it refused — recorded as the smallest `since` this feed
+//!   can honor, under which `/changes` answers the same 410 discipline as
+//!   `/op-at`. The kernel's own journal reader stays closed. THE WALK RUNS
+//!   BEHIND THE LISTENER (`operations.md` §3.3 step 2; §4 row 16): the open
+//!   records the uncovered region `(low, head]` as PENDING and returns with
+//!   the file as parsed; a thread of the write path's walks it while reads
+//!   are served and writes admitted, and lands it by ONE whole rewrite of
+//!   this file ([`CommitsLog::land`]), so the walk runs once per uncovered
+//!   region, not once per open. While the region is pending, a page of
+//!   `/changes` whose rows would have to come from it is refused
+//!   retry-class (`feed_rebuilding`), a write's record is kept in memory
+//!   alone until the landing writes it (a crash before then re-covers it
+//!   BARE at the next open), and a kill mid-walk leaves the file unchanged,
+//!   the next open walking again from `low`.
 //! * A bare position CLASSIFIES FROM THE JOURNAL (PUB-6.45: "a lost sidecar
 //!   never unmasks a draft write"): the walk holds the world at each
 //!   boundary and the one below it, and the diff of the two — the drafts
@@ -102,18 +112,22 @@ use std::collections::BTreeMap;
 use std::fs::{File, OpenOptions};
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+#[cfg(any(test, feature = "test-hooks"))]
+use parking_lot::{Condvar, Mutex};
 use serde_json::Value;
 use skep_address::Address;
 use skep_engine::{Engine, HistoryError, World};
-use skep_kernel::{Attestation, Seq};
+use skep_kernel::{Attestation, Kernel, Seq};
 use skep_util::json::obj;
 use skep_util::notice::Class;
 
 use super::classify::{derived_journal, parse_dotted};
 use super::Lines;
 use crate::codec::{j_attest, to_bytes};
+use crate::limits::{FEED_WALK_PROGRESS_BOUNDARIES, FEED_WALK_PROGRESS_INTERVAL};
 use crate::serial::SerialGuard;
 
 /// The sidecar's file name inside the data dir (beside the kernel's own
@@ -479,6 +493,18 @@ impl CommitMeta {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub(super) struct LineOffset(pub u64);
 
+/// What [`CommitsLog::record`] did with a NEW position: appended its line,
+/// at the [`LineOffset`] it landed at, or HELD it in the resident entries
+/// alone while the walk's region is pending — the line written, and its
+/// offset assigned, by the landing's rewrite ([`CommitsLog::land`]). The
+/// feed folds a held position into its twins and appends nothing to the
+/// four derived files, whose lines the same landing rewrites whole.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Recorded {
+    Appended(LineOffset),
+    Held,
+}
+
 /// One replayed file record.
 #[derive(Debug)]
 enum Record {
@@ -487,13 +513,13 @@ enum Record {
     MinSince(u64),
 }
 
-/// One bare position the reconstruction walk covered this open, with the
-/// journal's classification of it: the documents the commit touched as the
-/// world diff shows them (`Some`, possibly empty), or `None` where the
-/// world below the boundary could not be answered — unclassifiable, served
-/// to every class (the module doc's residue) — and, off the same two
-/// worlds, the journal's terms for its row ([`JournalTerms`]; empty where
-/// the world below could not be answered).
+/// One bare position the reconstruction walk covered, with the journal's
+/// classification of it: the documents the commit touched as the world diff
+/// shows them (`Some`, possibly empty), or `None` where the world below the
+/// boundary could not be answered — unclassifiable, served to every class
+/// (the module doc's residue) — and, off the same two worlds, the journal's
+/// terms for its row ([`JournalTerms`]; empty where the world below could
+/// not be answered).
 #[derive(Debug)]
 pub(super) struct Walked {
     pub at: u64,
@@ -528,10 +554,10 @@ pub(super) struct CommitsLog {
     /// `feed-offsets.log` (`feed/derived.rs`), whose own consumer is the
     /// non-resident reader that file exists for. It is kept because that
     /// file must be right the day one appears, and it costs one `u64` per
-    /// retained commit plus maintenance at five sites: the replay, the
-    /// head clamp, the reconstruction walk, a rewrite, and
-    /// [`CommitsLog::record`]. A reader looking for the lookup will not
-    /// find one.
+    /// retained commit plus maintenance at four sites: the replay, the
+    /// head clamp, a rewrite — the walk's landing among them, which assigns
+    /// every offset at once — and [`CommitsLog::record`]. A reader looking
+    /// for the lookup will not find one.
     ///
     /// Position → [`LineOffset`], which is what keeps the two apart: they
     /// are the same width and mean opposite things, and the map's own key
@@ -562,6 +588,17 @@ pub(super) struct CommitsLog {
     /// retention, or the purge of a foreign fence — so every offset moved
     /// and the derived offset array must be rewritten with it.
     rewritten: bool,
+    /// THE REGION PENDING — `(low, head]`, the positions the file did not
+    /// cover at open, which the walk behind the listener re-covers
+    /// ([`reconstruct`]) and the landing writes ([`CommitsLog::land`]);
+    /// `None` where the file covered the head, and again once the landing
+    /// has written. `low` is COVERED (the highest surviving entry, or the
+    /// fence), `head` UNCOVERED, the last of the region. While it stands:
+    /// `entries` lacks every position in it; [`CommitsLog::record`] keeps a
+    /// new position in memory alone (`Recorded::Held`); the file takes no
+    /// line; and the feed refuses a page whose rows would have to come from
+    /// it. Read outside this file through [`CommitsLog::pending_region`].
+    pending: Option<(u64, u64)>,
     /// Monotone clamp for recorded wall-clock times.
     last_time: u64,
     /// The file's length — the offset the next appended line lands at.
@@ -605,26 +642,28 @@ pub(super) struct CommitsLog {
 impl CommitsLog {
     /// Replay (truncating a torn tail), drop everything the file says about
     /// a journal other than this one — entries beyond the head AND a fence
-    /// above it — reconstruct any uncovered `(last recorded, head]` region
-    /// as bare positions, classifying each from the journal, and persist
-    /// what the reconstruction learned. Returns the replayed log and the
-    /// walk's classified positions for the feed's derived structures.
+    /// above it — and record any uncovered `(last recorded, head]` region as
+    /// PENDING, to be reconstructed as bare positions by the walk behind the
+    /// listener ([`reconstruct`]) and written by its landing
+    /// ([`CommitsLog::land`]). Returns the replayed log with the file AS
+    /// PARSED: no bare line appended, no fence line written.
     ///
-    /// COST — this walk is part of the feed's open, the one step of daemon
-    /// startup [`crate::server::Daemon::open`] names as costing more than
-    /// O(1) in the data dir beyond the engine's own recovery: reconstruction
-    /// spends one whole-world `Engine::world_at` per uncovered
-    /// boundary — a checkpoint deserialize plus a journal fold each — plus
-    /// one world diff per boundary for its classification (`derived_docs`
-    /// states that cost), so a dir with NO coverage (a
+    /// COST — the open's own: O(the file) to replay it, and the floor
+    /// probe. THE WALK IS NOT THE OPEN's (`operations.md` §3.3 step 2; §4
+    /// row 16): reconstruction spends one whole-world `Kernel::world_at` per
+    /// uncovered boundary — a checkpoint deserialize plus a journal fold
+    /// each — plus one world diff per boundary for its classification
+    /// (`derived_docs` states that cost), so a dir with NO coverage (a
     /// sidecar deleted, arrived corrupt, or written before this feature)
-    /// pays that for every boundary the journal still holds, before `open`
-    /// returns. The region is bounded below by journal reclamation, so the
-    /// ceiling is the retained window, which `server.rs` chooses as
-    /// `CHECKPOINT_EVERY_COMMITS × RETAINED_CHECKPOINTS` commits. The
-    /// walk's findings are appended here (and its classifications to the
-    /// feed's position index), so a covered region is walked once ever
-    /// rather than once per open.
+    /// pays that for every boundary the journal still holds; paid INSIDE
+    /// the open it held the listener unbound for the walk's length, so a
+    /// supervisor that killed a slow start restarted the walk from zero. It
+    /// is paid on a thread of the write path's instead, the board serving
+    /// meanwhile, and lands by ONE rewrite, so a covered region is walked
+    /// once ever rather than once per open. The region is bounded below by
+    /// journal reclamation, so the ceiling is the retained window, which
+    /// `server.rs` chooses as `CHECKPOINT_EVERY_COMMITS ×
+    /// RETAINED_CHECKPOINTS` commits.
     ///
     /// COMPACTION runs at the other end, and is what bounds the file and
     /// the resident entries: positions the journal has reclaimed are refused by
@@ -633,7 +672,9 @@ impl CommitsLog {
     /// and the file rewritten around them, leaving retention exactly where
     /// wire.md puts it — the feed's memory is the sidecar plus what the
     /// journal can still reconstruct, and below that the same `410
-    /// history_reclaimed` discipline `/op-at` answers with.
+    /// history_reclaimed` discipline `/op-at` answers with. A region whose
+    /// lower edge the open's compaction passes is narrowed to the fence in
+    /// force, and dropped where the fence passes its head.
     ///
     /// The floor is learned by probing position 0, which costs nothing:
     /// genesis is its own base, so a healthy store folds no journal to
@@ -644,24 +685,21 @@ impl CommitsLog {
     ///
     /// DISPOSITION, deliberately the opposite of [`CommitsLog::record`]'s:
     /// every I/O failure here is fatal and reaches the caller as
-    /// `DaemonError::Sidecar`, including the walk's append, whose loss
-    /// would cost only a repeated walk on a later open. At ack time the ack
-    /// is already owed, so lost testimony degrades to bare; at open nothing
-    /// is owed yet, and a data dir that cannot take a write the kernel just
-    /// performed is an operator condition worth reporting rather than
-    /// limping past. Every failure NAMES THIS FILE, the kind kept
-    /// (`operations.md` §1.1 row 2): one closure wraps each `?` the open
-    /// takes on the file, as the blocked list's read wraps its path, so the
-    /// daemon's `change-feed sidecar: {e}` reads `commits.log: {e}`.
+    /// `DaemonError::Sidecar`. At ack time the ack is already owed, so lost
+    /// testimony degrades to bare; at open nothing is owed yet, and a data
+    /// dir that cannot take a write the kernel just performed is an operator
+    /// condition worth reporting rather than limping past. Every failure
+    /// NAMES THIS FILE, the kind kept (`operations.md` §1.1 row 2): one
+    /// closure wraps each `?` the open takes on the file, as the blocked
+    /// list's read wraps its path, so the daemon's `change-feed sidecar:
+    /// {e}` reads `commits.log: {e}`.
     ///
     /// `lines` is the classed door: a torn tail is said through it once
-    /// ([`LogCutLine`]) and the malformed names once with their count
-    /// ([`demote_malformed_names`]); the log keeps a clone for its stop.
-    pub(super) fn open(
-        dir: &Path,
-        engine: &Engine,
-        lines: &Lines,
-    ) -> io::Result<(CommitsLog, Vec<Walked>)> {
+    /// ([`LogCutLine`]) — at the open, BEFORE the walk, with the walk's own
+    /// fence `low` as the last trusted position — and the malformed names
+    /// once with their count ([`demote_malformed_names`]); the log keeps a
+    /// clone for its stop and its landing.
+    pub(super) fn open(dir: &Path, engine: &Engine, lines: &Lines) -> io::Result<CommitsLog> {
         let with_file = |e: io::Error| io::Error::new(e.kind(), format!("{SIDECAR_FILE}: {e}"));
         let path = dir.join(SIDECAR_FILE);
         let mut file = open_sidecar(&path).map_err(with_file)?;
@@ -678,7 +716,7 @@ impl CommitsLog {
         } else {
             None
         };
-        let mut len = valid_end as u64;
+        let len = valid_end as u64;
         let mut entries = BTreeMap::new();
         let mut offsets = BTreeMap::new();
         let mut min_since = 0u64;
@@ -720,27 +758,10 @@ impl CommitsLog {
             // (or the fence record), from which the cut part is re-derived.
             lines.say(Class::Failure, LogCutLine { cut: Cut { valid_end, len: before, trusted: low } });
         }
-        let mut walked = Vec::new();
-        if head > low {
-            // The walk's own fence, qualified because the accumulator it
-            // folds into holds the plain name.
-            let (boundaries, walk_min_since) = reconstruct(engine, low, head);
-            for w in &boundaries {
-                let meta = CommitMeta::Bare { journal: w.journal.clone() };
-                offsets.insert(w.at, LineOffset(len));
-                let line = entry_line(w.at, &meta);
-                entries.insert(w.at, meta);
-                file.write_all(&line).map_err(with_file)?;
-                len += line.len() as u64;
-            }
-            if let Some(walked_min) = walk_min_since {
-                min_since = min_since.max(walked_min);
-                let line = min_since_line(walked_min);
-                file.write_all(&line).map_err(with_file)?;
-                len += line.len() as u64;
-            }
-            walked = boundaries;
-        }
+        // THE REGION, PENDING: what the file does not cover, `(low, head]`,
+        // is the walk thread's to re-cover and its landing's to write — the
+        // file takes no line here. `None` where the file covers the head.
+        let pending = (head > low).then_some((low, head));
         // Compaction: everything the journal has reclaimed leaves the feed
         // with it. The probe answers the oldest position still answerable,
         // so the smallest admissible `since` is the fence just under it —
@@ -751,6 +772,9 @@ impl CommitsLog {
         // discarding it over a floor nobody can locate would lose the only
         // record of those commits that still exists.
         let floor_fence = reclaim_floor(engine).map(|floor| floor.saturating_sub(1));
+        // Built with no region, so the open's own compaction below REWRITES
+        // the file — it is the open's to write, before the listener — where
+        // the same method defers its rewrite while a region is pending.
         let mut log = CommitsLog {
             file,
             dir: dir.to_path_buf(),
@@ -759,6 +783,7 @@ impl CommitsLog {
             min_since,
             open_head: head,
             rewritten: false,
+            pending: None,
             last_time: 0,
             len,
             lines: lines.clone(),
@@ -774,11 +799,16 @@ impl CommitsLog {
         // unconditional under a discarded fence, so a journal that later
         // grows past that number cannot resurrect it from the file — the one
         // forcing the thread's compaction never makes, since a fence above
-        // the head is a thing only an open meets.
+        // the head is a thing only an open meets. It writes the file WITHOUT
+        // the region, which is what the file held: the region is the walk's.
         log.compact_inner(floor_fence.unwrap_or(0), stale_fence)
             .map_err(|failed| with_file(failed.into_io()))?;
-        if log.rewritten {
-            walked.retain(|w| w.at > log.min_since);
+        // The region's lower edge is the fence in force where the compaction
+        // passed it — a position at or below the fence answers 410 before
+        // any page reaches it — and a fence past the head leaves no region.
+        if let Some((low, head)) = pending {
+            let low = low.max(log.min_since);
+            log.pending = (head > low).then_some((low, head));
         }
         // The entries are final here, and this is where they become ones this
         // file stands behind: a line whose document names are malformed is
@@ -787,7 +817,69 @@ impl CommitsLog {
         // was read: this file is the sole surviving record of those commits.
         demote_malformed_names(&mut log.entries, lines);
         log.last_time = log.entries.values().filter_map(CommitMeta::time).max().unwrap_or(0);
-        Ok((log, walked))
+        Ok(log)
+    }
+
+    /// THE REGION PENDING, as a read: `(low, head]`, the positions the walk
+    /// behind the listener has yet to land, or `None` — the `pending`
+    /// field's card. `low` is covered, `head` the last of the region.
+    pub(super) fn pending_region(&self) -> Option<(u64, u64)> {
+        self.pending
+    }
+
+    /// THE LANDING (`operations.md` §3.3 step 2: "the walk accumulates in
+    /// memory and lands by ONE whole rewrite of `commits.log` under the
+    /// feed's lock"): fold the walk's boundaries into the resident entries as
+    /// BARE positions carrying the journal's answer — beside every position
+    /// recorded in memory while the region was pending — move the fence to
+    /// the greatest of the fence in force, the walk's own (`walk_min_since`,
+    /// where the journal stopped answering) and the reclaim floor's as read
+    /// AT the landing (`floor_fence`, a checkpoint having landed meanwhile),
+    /// drop what lies at or below it, and REWRITE the file whole through
+    /// [`rewrite`]'s path: one `min_since` line, then every entry in position
+    /// order — so file order is position order, and every offset, the
+    /// held positions' among them, is assigned here. Answers the fence the
+    /// file was written behind, which the feed trims its twins to.
+    ///
+    /// The region is CLEARED whatever the rewrite answers: the resident
+    /// entries are complete from here, and this uptime serves them. A
+    /// rewrite that fails BEFORE its rename leaves the old file whole —
+    /// torn at `low`, the held positions unwritten — and STOPS this file,
+    /// said once: a later append would raise the file's highest entry past
+    /// the region, which the next open's walk could then never re-cover
+    /// (the `stopped` field's card), where a stopped file keeps `low` where
+    /// it was and the next open walks again from it. One that fails PAST
+    /// its rename is [`CommitsLog::rewrite_whole`]'s stop, said there.
+    pub(super) fn land(
+        &mut self,
+        walked: &[Walked],
+        walk_min_since: Option<u64>,
+        floor_fence: Option<u64>,
+    ) -> Result<u64, RewriteFail> {
+        let Some((low, _)) = self.pending.take() else {
+            return Ok(self.min_since);
+        };
+        for w in walked {
+            // A position the walk proved; never over one recorded meanwhile,
+            // which cannot share it — the region lies at or below the head
+            // at open, a record above it.
+            self.entries.entry(w.at).or_insert_with(|| CommitMeta::Bare { journal: w.journal.clone() });
+        }
+        let fence = self.min_since.max(walk_min_since.unwrap_or(0)).max(floor_fence.unwrap_or(0));
+        self.min_since = fence;
+        self.entries = self.entries.split_off(&fence.saturating_add(1));
+        match self.rewrite_whole() {
+            Ok(()) => Ok(fence),
+            Err(RewriteFail::BeforeRename(e)) => {
+                let first = self.stopped.is_none();
+                self.stopped = Some(low);
+                if first {
+                    self.lines.say(Class::Failure, LandingRefusedLine { low, error: &e });
+                }
+                Err(RewriteFail::BeforeRename(e))
+            }
+            Err(past) => Err(past),
+        }
     }
 
     /// COMPACT the log to the reclaim floor's fence: drop every entry at or
@@ -826,6 +918,13 @@ impl CommitsLog {
     /// run of positions nobody recorded: a fence below the oldest entry
     /// drops nothing, writes nothing unforced, and is kept as the smallest
     /// `since` the feed honors.
+    ///
+    /// WHILE THE WALK's REGION IS PENDING the rewrite is DEFERRED to the
+    /// landing ([`CommitsLog::land`]): the fence moves and the entries at or
+    /// below it are dropped, in memory, and the file — which the landing
+    /// rewrites whole behind the fence as it then stands — takes nothing.
+    /// The open's own compaction runs before the region is recorded, so it
+    /// writes.
     fn compact_inner(&mut self, min_since: u64, force: bool) -> Result<bool, RewriteFail> {
         let fence = min_since.max(self.min_since);
         let drops = self.entries.keys().next().is_some_and(|&oldest| oldest <= fence);
@@ -834,8 +933,18 @@ impl CommitsLog {
             return Ok(false);
         }
         self.entries = self.entries.split_off(&fence.saturating_add(1));
+        if self.pending.is_some() {
+            return Ok(true);
+        }
         self.rewrite_whole()?;
         Ok(true)
+    }
+
+    /// The fence in force — [`CommitsLog::min_since`]'s number, read by the
+    /// feed's landing where the log's own landing refused, to trim the twins
+    /// to what the entries hold.
+    pub(super) fn min_since_in_force(&self) -> u64 {
+        self.min_since
     }
 
     /// Rewrite the whole file from the resident entries behind the fence in
@@ -877,12 +986,25 @@ impl CommitsLog {
         Ok(())
     }
 
-    /// Record one committed write at ack time; `Some` — the [`LineOffset`]
-    /// the line landed at — when this call recorded a NEW position, `None`
-    /// when it declined. Idempotent against replayed acks: a position at or
-    /// below the open-time head, or one already recorded this uptime, is an
-    /// ack for an OLD commit (idempotency-memo hit, `emit` incumbent) —
-    /// re-recording it would invent a time.
+    /// Record one committed write at ack time; `Some` — [`Recorded`], the
+    /// [`LineOffset`] the line landed at, or that the line is HELD — when
+    /// this call recorded a NEW position, `None` when it declined.
+    /// Idempotent against replayed acks: a position at or below the
+    /// open-time head, or one already recorded this uptime, is an ack for
+    /// an OLD commit (idempotency-memo hit, `emit` incumbent) — re-recording
+    /// it would invent a time.
+    ///
+    /// WHILE THE REGION IS PENDING (`pending`'s card; `operations.md` §3.3
+    /// step 2, "the walk accumulates in memory and lands by ONE whole
+    /// rewrite"): the position enters the resident entries and NOT the file,
+    /// which takes no line until the landing writes it at its offset among
+    /// the rest, in position order. This uptime answers it in full. THE
+    /// COST, stated: a crash before the landing loses the line — the file
+    /// is as the open found it — and the next open's walk re-covers the
+    /// position BARE, classified from the journal (PUB-6.45), its op and
+    /// key null; the attest store's line for it is appended and synced at
+    /// once regardless (`feed/attest.rs`, SO-I5 (d)), the store's file
+    /// being its own.
     ///
     /// CALLER CONTRACT — call only while holding the daemon's
     /// write-serialization guard, between a commit and its ack; the guard
@@ -925,7 +1047,7 @@ impl CommitsLog {
         testimony: String,
         signed: Option<Carrier>,
         terms: Option<OpTerms>,
-    ) -> Option<LineOffset> {
+    ) -> Option<Recorded> {
         if at <= self.open_head || self.entries.contains_key(&at) {
             return None;
         }
@@ -942,6 +1064,12 @@ impl CommitsLog {
             signed,
             terms,
         };
+        if self.pending.is_some() {
+            // The region pending: the entry alone, the file untouched until
+            // the landing's one rewrite writes this line at its offset.
+            self.entries.insert(at, meta);
+            return Some(Recorded::Held);
+        }
         let offset = LineOffset(self.len);
         // Testimony must not fail the op: the write is committed and the
         // ack is owed regardless; a lost append answers BARE after restart,
@@ -964,12 +1092,14 @@ impl CommitsLog {
         }
         self.entries.insert(at, meta);
         self.offsets.insert(at, offset);
-        Some(offset)
+        Some(Recorded::Appended(offset))
     }
 
     /// The HEAD POSITION's recorded wall-clock time — `None` when the head's
-    /// record is bare (lost, or written before the feature) or nothing is
-    /// recorded at all.
+    /// record is bare (lost, or written before the feature), nothing is
+    /// recorded at all, or the head's record lies in the region the walk
+    /// has yet to land (no position above it recorded since the open): an
+    /// older surviving record is not offered in its place.
     ///
     /// Deliberately not "the newest recorded time anywhere in the feed":
     /// this answers FOR THE HEAD, so an older surviving record is not
@@ -993,7 +1123,11 @@ impl CommitsLog {
     /// unrecorded until the reopen walk covers it as a bare entry, after
     /// which this honestly answers `None`.
     pub fn head_time(&self) -> Option<u64> {
-        self.entries.values().next_back().and_then(CommitMeta::time)
+        let (at, meta) = self.entries.iter().next_back()?;
+        if self.pending.is_some_and(|(_, head)| *at <= head) {
+            return None;
+        }
+        meta.time()
     }
 
     /// Whether this log can answer a `/changes` query fenced at `since`:
@@ -1016,8 +1150,23 @@ impl CommitsLog {
     /// and so is the step between them: a caller rendering `floor` asks
     /// rather than deriving it from this type's own state. `None` where
     /// nothing above the fence survives.
+    ///
+    /// WHILE THE WALK's REGION IS PENDING the region's first position above
+    /// the fence — `max(low, min_since) + 1`, the reclaim floor itself where
+    /// the floor passed the region's lower edge — is the floor where it lies
+    /// below the first entry: the region's boundaries are not yet known,
+    /// and a floor named above them would send a reader re-asking from it
+    /// past the region, which the landing then serves to nobody.
     pub fn floor(&self) -> Option<u64> {
-        self.entries.range(self.min_since.saturating_add(1)..).next().map(|(k, _)| *k)
+        let covered = self.entries.range(self.min_since.saturating_add(1)..).next().map(|(k, _)| *k);
+        let region = self
+            .pending
+            .filter(|&(_, head)| head > self.min_since)
+            .map(|(low, _)| low.max(self.min_since).saturating_add(1));
+        match (covered, region) {
+            (Some(c), Some(r)) => Some(c.min(r)),
+            (c, r) => c.or(r),
+        }
     }
 
     /// Every entry ABOVE `position`, in position order — what the PUBLISHED
@@ -1080,7 +1229,13 @@ impl CommitsLog {
 /// unjournaled — reports no floor, so the feed keeps what it has rather
 /// than discarding entries over a fault that may be transient.
 pub(super) fn reclaim_floor(engine: &Engine) -> Option<u64> {
-    match engine.world_at(Seq(0)) {
+    reclaim_floor_of(engine.kernel())
+}
+
+/// [`reclaim_floor`] off the kernel alone — the walk thread's probe at its
+/// landing, which holds the kernel's handle and no engine.
+pub(super) fn reclaim_floor_of(kernel: &Kernel<World>) -> Option<u64> {
+    match kernel.world_at(Seq(0)) {
         Err(HistoryError::Reclaimed { floor, .. }) => Some(floor.map(|f| f.0).unwrap_or(0)),
         _ => None,
     }
@@ -1154,6 +1309,218 @@ impl std::fmt::Display for LogCutLine {
             "{}; the cut part is re-derived as bare entries",
             CutHead { name: SIDECAR_FILE, cut: self.cut }
         )
+    }
+}
+
+/// THE WALK's FIRST LINE (`operations.md` §1.1 m15): `commits.log covers to
+/// position {c}; walking {b} boundaries to position {h}` — `{c}` the
+/// region's lower edge, covered; `{b}` the boundaries the kernel's one scan
+/// listed above it at or below `{h}`, the head at open. A pure value,
+/// pinned by `to_string()` in the unit suite; emitted under `Class::Open`
+/// by [`reconstruct`] at the walk's start, before any boundary is proved.
+pub(super) struct WalkOpenLine {
+    pub covered: u64,
+    pub boundaries: usize,
+    pub head: u64,
+}
+
+impl std::fmt::Display for WalkOpenLine {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "commits.log covers to position {}; walking {} boundaries to position {}",
+            self.covered, self.boundaries, self.head
+        )
+    }
+}
+
+/// THE WALK's CADENCE LINE (m15): `the walk at position {p} of {h}, {d} in`
+/// — `{p}` the boundary last proved, `{h}` the head at open, `{d}` the
+/// time since the walk began, in milliseconds as the stream spells a
+/// duration. A pure value, pinned by `to_string()`; emitted under
+/// `Class::Progress` by [`reconstruct`] every
+/// [`FEED_WALK_PROGRESS_BOUNDARIES`] boundaries or
+/// [`FEED_WALK_PROGRESS_INTERVAL`], whichever comes first — the walk's
+/// tell from a hang.
+pub(super) struct WalkProgressLine {
+    pub position: u64,
+    pub head: u64,
+    pub elapsed_ms: u128,
+}
+
+impl std::fmt::Display for WalkProgressLine {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "the walk at position {} of {}, {} ms in", self.position, self.head, self.elapsed_ms)
+    }
+}
+
+/// THE WALK's LANDING LINE (m15): `{b} walked, {k} of them bare, in {d}` —
+/// `{b}` the boundaries the walk proved, `{k}` those it could not classify
+/// (the world below them unanswerable: served to every class, the module
+/// doc's residue), `{d}` from the walk's start to the landing's rewrite,
+/// in milliseconds. A pure value, pinned by `to_string()`; emitted under
+/// `Class::Landing` by the feed's landing.
+pub(super) struct WalkLandingLine {
+    pub walked: usize,
+    pub bare: usize,
+    pub elapsed_ms: u128,
+}
+
+impl std::fmt::Display for WalkLandingLine {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{} walked, {} of them bare, in {} ms", self.walked, self.bare, self.elapsed_ms)
+    }
+}
+
+/// THE LANDING REFUSED before its rename: the file stands as the open found
+/// it and takes no further line, so the next open walks again from the
+/// region's lower edge — [`CommitsLog::land`] states why the stop is the
+/// honest half. A pure value, pinned by `to_string()`; emitted under
+/// `Class::Failure`, once per uptime.
+pub(super) struct LandingRefusedLine<'a> {
+    pub low: u64,
+    pub error: &'a io::Error,
+}
+
+impl std::fmt::Display for LandingRefusedLine<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "commits.log: the walk's landing rewrite failed before its rename: {}; the file \
+             stands as it was and takes no further line, so the next open walks again from \
+             position {}",
+            self.error, self.low
+        )
+    }
+}
+
+/// THE WALK's CONTROLS, shared between the thread that walks and the write
+/// path that owns it: the stop (read before each boundary and before the
+/// landing — a Daemon dropped mid-walk ends the walk with nothing written,
+/// the crash-stop shape), and the `progress:` cadence — the constants'
+/// figures, or the ones the test seam moved them to
+/// (`crate::Daemon::set_feed_walk_progress_cadence`), read per boundary so
+/// a held walk takes a cadence set while it parks.
+pub(super) struct WalkControl {
+    pub stop: AtomicBool,
+    pub progress_boundaries: AtomicU64,
+    pub progress_millis: AtomicU64,
+}
+
+impl WalkControl {
+    /// The controls at the constants' figures, the stop clear.
+    pub(super) fn new() -> WalkControl {
+        WalkControl {
+            stop: AtomicBool::new(false),
+            progress_boundaries: AtomicU64::new(FEED_WALK_PROGRESS_BOUNDARIES),
+            progress_millis: AtomicU64::new(FEED_WALK_PROGRESS_INTERVAL.as_millis() as u64),
+        }
+    }
+
+    /// Whether the stop has been asked.
+    fn stopped(&self) -> bool {
+        self.stop.load(Ordering::Acquire)
+    }
+
+    /// The cadence in force: the boundary count and the interval.
+    fn cadence(&self) -> (u64, Duration) {
+        (
+            self.progress_boundaries.load(Ordering::Relaxed).max(1),
+            Duration::from_millis(self.progress_millis.load(Ordering::Relaxed)),
+        )
+    }
+}
+
+/// What one walk came to ([`reconstruct`]): the boundaries proved, each
+/// with its classification, in position order; the smallest `since` the
+/// feed can honor from here on where the journal stopped answering
+/// ([`CommitsLog::min_since`]'s number); how many of the proved are bare;
+/// and the walk's start, which the landing line's duration is measured
+/// from.
+pub(super) struct WalkOutcome {
+    pub boundaries: Vec<Walked>,
+    pub min_since: Option<u64>,
+    pub started: Instant,
+}
+
+impl WalkOutcome {
+    /// The boundaries proved but not classified — the world below them
+    /// unanswerable — which the landing line counts as bare.
+    pub(super) fn bare(&self) -> usize {
+        self.boundaries.iter().filter(|w| w.docs.is_none()).count()
+    }
+}
+
+/// The line the feed walk's hold writes on the operator stream as it parks
+/// — what the dirty-crash harness watches a child's stderr for before it
+/// kills. `crate::Daemon::FEED_WALK_HOLD_NOTICE` re-exports it.
+#[cfg(any(test, feature = "test-hooks"))]
+pub(crate) const FEED_WALK_HOLD_NOTICE: &str =
+    "test seam: held before the feed walk's first boundary; kill this process";
+
+/// TEST SEAM: a hold on the feed walk, armed before a daemon opens, so a
+/// suite can serve requests against a daemon whose region is pending and
+/// release the walk at its own moment — the cell index walk's hold's form.
+#[cfg(any(test, feature = "test-hooks"))]
+pub(crate) struct FeedWalkHold {
+    held: Mutex<bool>,
+    released: Condvar,
+}
+
+/// The test seam's one hold on the feed walk — process-wide, since the walk
+/// starts inside the open, before the daemon exists to be asked.
+#[cfg(any(test, feature = "test-hooks"))]
+pub(crate) static FEED_WALK_HOLD: FeedWalkHold =
+    FeedWalkHold { held: Mutex::new(false), released: Condvar::new() };
+
+#[cfg(any(test, feature = "test-hooks"))]
+impl FeedWalkHold {
+    /// Arm: every walk started from here on parks before its first
+    /// boundary, after its `open:` line, writing [`FEED_WALK_HOLD_NOTICE`].
+    pub(crate) fn hold(&self) {
+        *self.held.lock() = true;
+    }
+
+    /// Release: every parked walk proceeds, and later walks never park.
+    pub(crate) fn release(&self) {
+        *self.held.lock() = false;
+        self.released.notify_all();
+    }
+
+    /// The walk's side: park while armed, the notice written as it parks —
+    /// in timed waits, so the stop reaches a held walk: a Daemon dropped
+    /// while its walk parks here ends the walk, nothing written.
+    fn wait(&self, control: &WalkControl) {
+        let mut held = self.held.lock();
+        if *held {
+            skep_util::notice::line(FEED_WALK_HOLD_NOTICE);
+        }
+        while *held && !control.stopped() {
+            self.released.wait_for(&mut held, Duration::from_millis(50));
+        }
+    }
+}
+
+/// TEST SEAM: the feed walk's panic arm (`crate::Daemon::panic_the_feed_walk`)
+/// — process-wide, armed before the open or while the walk is held, fired
+/// ONCE after the hold and before the first boundary, and disarmed as it
+/// fires: the shape the walk thread's death has, which its catch contains.
+#[cfg(any(test, feature = "test-hooks"))]
+static FEED_WALK_FAULT: AtomicBool = AtomicBool::new(false);
+
+/// Arm the walk's panic seam.
+#[cfg(any(test, feature = "test-hooks"))]
+pub(crate) fn arm_the_feed_walks_fault() {
+    FEED_WALK_FAULT.store(true, Ordering::Release);
+}
+
+/// The walk's side of its panic seam: a panic whose payload is a literal,
+/// so the binary's hook carries it, located at the caller's site.
+#[cfg(any(test, feature = "test-hooks"))]
+#[track_caller]
+fn fire_the_feed_walks_fault() {
+    if FEED_WALK_FAULT.swap(false, Ordering::AcqRel) {
+        panic!("the test seam's fault in the feed walk");
     }
 }
 
@@ -1334,37 +1701,60 @@ fn demote_malformed_names(entries: &mut BTreeMap<u64, CommitMeta>, lines: &Lines
     }
 }
 
-/// Enumerate the committed boundaries in `(low, head]`, newest first, via
-/// the engine's public bounded replay — `head` is a boundary by definition;
-/// an `Ok` probe of `b - 1` proves another; `NotABoundary` jumps to
-/// `nearest` — and CLASSIFY each from the journal on the way down: the walk
-/// holds the world at the boundary it stands on and, once the boundary
-/// below is found, diffs the two (`derived_journal`) for the documents that
-/// commit touched and the terms its row can answer. Returns the boundaries
-/// (ascending, each with its classification) and, when the journal stopped
-/// answering (reclaimed / corrupt / I/O), the smallest `since` the feed can
-/// honor from there on — [`CommitsLog::min_since`]'s number, not the wire's
-/// `floor`.
+/// THE WALK (`operations.md` §3.3 step 2; §1.1 m15): enumerate the committed
+/// boundaries in `(low, head]` in ONE scan of the kernel's markers
+/// (`Kernel::boundaries_above`, every boundary above `low` from one base —
+/// the attest store's seam, here a LIST), say the `open:` line with their
+/// count, and PROVE each one ascending by the kernel's bounded replay — an
+/// `Ok` `world_at` proves a boundary — CLASSIFYING each from the journal on
+/// the way up: the walk holds the world at the boundary below and diffs the
+/// two (`derived_journal`) for the documents that commit touched and the
+/// terms its row can answer. Ascending, so the `progress:` line's `{p}`
+/// climbs to `{h}`: the lowest boundary's predecessor is `low` itself where
+/// `low` is a boundary — genesis, or the last recorded position — and where
+/// it is a fence (a previous walk's stopping point) its world refuses and
+/// the boundary above it is unclassifiable (`docs: None`); the head's world
+/// is `head_world`, the open's own snapshot (no replay), since the live root
+/// moves past the head while the board serves.
 ///
-/// The head's world is the live root (no replay); every other world is one
-/// `world_at`. The lowest boundary's predecessor is `low` itself where `low`
-/// is a boundary — genesis, or the last recorded position — and where it is
-/// a fence (a previous walk's stopping point) its world refuses and the
-/// boundary above it is unclassifiable (`docs: None`).
+/// Answers the boundaries proved (ascending, each with its classification)
+/// and, where the journal stopped answering, the smallest `since` the feed
+/// can honor from there on — [`CommitsLog::min_since`]'s number, not the
+/// wire's `floor`: the list refused `Reclaimed` naming a floor above `low`
+/// (the base below `low` reclaimed before the walk reached it) — asked
+/// again AT the floor, whose own boundary the base embodying it answers,
+/// unclassifiable, and the fence one below it; a boundary refused
+/// `Reclaimed` MID-WALK (a checkpoint landing behind the listener took its
+/// base) — the fence one below the floor named, the boundaries below it
+/// skipped, those the walk had proved below it dropped by the landing's
+/// compaction; any other refusal (corrupt, I/O, a listed boundary the
+/// replay will not prove) — the feed reaches down to the boundary above
+/// it and no further. `None` where the stop was asked before the walk
+/// completed: nothing is landed.
 ///
-/// The descent holds its OWN termination: every step strictly decreases
-/// `boundary`, checked here rather than inherited from M2's reading of
-/// `nearest`. A `nearest` that did not descend ends the walk, and the
-/// region it would have covered is covered as bare entries on a later
-/// open — which is the honest outcome, since this runs inside
-/// `Daemon::open`, before the listener is bound, where a loop that did not
-/// terminate would be a daemon that never starts.
-fn reconstruct(engine: &Engine, low: u64, head: u64) -> (Vec<Walked>, Option<u64>) {
-    // The world AT `boundary`: the head's is the installed root.
-    let mut upper: World = engine.kernel().snapshot().world().clone();
-    let mut boundary = head;
-    let mut boundaries: Vec<Walked> = Vec::new();
-    let mut min_since = None;
+/// THE HOLD AND THE FAULT (test seams): the walk parks after its `open:`
+/// line and before its first boundary while the hold is armed, and fires
+/// its panic arm there, so a suite serves against a pending region, kills
+/// a child at the notice, or drives the thread's catch.
+pub(super) fn reconstruct(
+    kernel: &Kernel<World>,
+    head_world: &World,
+    low: u64,
+    head: u64,
+    lines: &Lines,
+    control: &WalkControl,
+) -> Option<WalkOutcome> {
+    let started = Instant::now();
+    let (listed, mut min_since) = list_boundaries(kernel, low, head);
+    lines.say(Class::Open, WalkOpenLine { covered: low, boundaries: listed.len(), head });
+    #[cfg(any(test, feature = "test-hooks"))]
+    {
+        FEED_WALK_HOLD.wait(control);
+        if control.stopped() {
+            return None;
+        }
+        fire_the_feed_walks_fault();
+    }
     // The journal's two answers off the two worlds, or — with no world
     // below — unclassifiable, and no term.
     let classify = |at: u64, below: Option<&World>, upper: &World| match below {
@@ -1374,66 +1764,85 @@ fn reconstruct(engine: &Engine, low: u64, head: u64) -> (Vec<Walked>, Option<u64
         }
         None => Walked { at, docs: None, journal: JournalTerms::default() },
     };
-    loop {
-        // The descent's own guard: `probe` exists only when there is a
-        // position below `boundary` and it is still above `low`, so the step
-        // down cannot leave `u64` — a premise this loop holds rather than
-        // one it inherits from a caller's range check.
-        let Some(probe) = boundary.checked_sub(1).filter(|p| *p > low) else {
-            // Nothing between `low` and `boundary`: the boundary below is
-            // `low` where `low` is one (genesis, or a recorded position);
-            // a fence's world refuses and the position stays unclassified.
-            let below = engine.world_at(Seq(low)).ok();
-            boundaries.push(classify(boundary, below.as_ref(), &upper));
-            break;
+    // The world BELOW the boundary in hand: `low`'s where the journal
+    // answers it, none where the list already stopped below the first.
+    let mut below: Option<World> =
+        if min_since.is_some() { None } else { kernel.world_at(Seq(low)).ok() };
+    // Boundaries below this are known unanswerable (a mid-walk reclamation
+    // named it), and are passed without a replay each.
+    let mut skip_below = 0u64;
+    let mut boundaries: Vec<Walked> = Vec::with_capacity(listed.len());
+    let mut last_said = (0usize, Instant::now());
+    for &at in &listed {
+        if control.stopped() {
+            return None;
+        }
+        if at < skip_below {
+            continue;
+        }
+        // The head's world is the snapshot's; every other boundary's one
+        // replay, which is its proof.
+        let proved: Option<World> = if at == head {
+            None
+        } else {
+            match kernel.world_at(Seq(at)) {
+                Ok(w) => Some(w),
+                Err(HistoryError::Reclaimed { floor: Some(floor), .. }) if floor.0 > at => {
+                    min_since = Some(min_since.map_or(floor.0 - 1, |m| m.max(floor.0 - 1)));
+                    skip_below = floor.0;
+                    below = None;
+                    continue;
+                }
+                Err(_) => {
+                    min_since = Some(min_since.map_or(at, |m| m.max(at)));
+                    below = None;
+                    continue;
+                }
+            }
         };
-        match engine.world_at(Seq(probe)) {
-            Ok(w) => {
-                boundaries.push(classify(boundary, Some(&w), &upper));
-                boundary = probe;
-                upper = w;
-            }
-            Err(HistoryError::NotABoundary { nearest }) => {
-                // M2's `nearest` is the boundary BELOW the probe, which is
-                // what makes this descent terminate. Enforced rather than
-                // relied on: a `nearest` at or above the current boundary
-                // would loop here forever, inside `Daemon::open` and so
-                // before the listener is bound — a daemon that never starts,
-                // with no port to ask and no line to read.
-                let nearest = nearest.0;
-                if nearest >= boundary {
-                    boundaries.push(classify(boundary, None, &upper));
-                    break;
-                }
-                match engine.world_at(Seq(nearest)) {
-                    Ok(w) => {
-                        boundaries.push(classify(boundary, Some(&w), &upper));
-                        if nearest <= low {
-                            break;
-                        }
-                        boundary = nearest;
-                        upper = w;
-                    }
-                    Err(_) => {
-                        // The boundary M2 named cannot be answered: the feed
-                        // reaches down to `boundary` and no further.
-                        boundaries.push(classify(boundary, None, &upper));
-                        if nearest > low {
-                            min_since = Some(nearest);
-                        }
-                        break;
-                    }
-                }
-            }
-            Err(_) => {
-                boundaries.push(classify(boundary, None, &upper));
-                min_since = Some(probe);
-                break;
-            }
+        let upper: &World = proved.as_ref().unwrap_or(head_world);
+        boundaries.push(classify(at, below.as_ref(), upper));
+        below = proved;
+        // THE CADENCE: every so many boundaries, or so long, whichever
+        // comes first — the figures read here, so a cadence set while the
+        // walk parked at the hold is the one it keeps.
+        let (every, interval) = control.cadence();
+        if (boundaries.len() - last_said.0) as u64 >= every || last_said.1.elapsed() >= interval {
+            lines.say(
+                Class::Progress,
+                WalkProgressLine { position: at, head, elapsed_ms: started.elapsed().as_millis() },
+            );
+            last_said = (boundaries.len(), Instant::now());
         }
     }
-    boundaries.reverse();
-    (boundaries, min_since)
+    Some(WalkOutcome { boundaries, min_since, started })
+}
+
+/// The boundaries the walk proves, `(low, head]` ascending, in ONE scan —
+/// and where the scan refused below `low`, the fence the feed honors from
+/// there: `Reclaimed` naming a floor above `low` is the base below `low`
+/// gone, so the list is asked again AT the floor — the floor's own boundary,
+/// which the base embodying it answers, leads the list — and the fence is
+/// one below it; a refusal naming no floor, or at-rest damage, leaves the
+/// head alone to prove, the fence one below it, as the probe-by-probe walk
+/// ended at its first refusal. A floor past the head names an empty list:
+/// everything the region held is reclaimed.
+fn list_boundaries(kernel: &Kernel<World>, low: u64, head: u64) -> (Vec<u64>, Option<u64>) {
+    let at_or_below_head = |list: Vec<(Seq, Option<Attestation>)>| -> Vec<u64> {
+        list.into_iter().map(|(seq, _)| seq.0).filter(|&at| at > low && at <= head).collect()
+    };
+    match kernel.boundaries_above(Seq(low)) {
+        Ok(list) => (at_or_below_head(list), None),
+        Err(HistoryError::Reclaimed { floor: Some(floor), .. }) if floor.0 > low => {
+            let mut list = Vec::new();
+            if floor.0 <= head {
+                list.push(floor.0);
+                list.extend(at_or_below_head(kernel.boundaries_above(floor).unwrap_or_default()));
+            }
+            (list, Some(floor.0 - 1))
+        }
+        Err(_) => (vec![head], Some(head.saturating_sub(1))),
+    }
 }
 
 /// Parse whole newline-terminated records; trust ends at the first line
@@ -1659,8 +2068,36 @@ impl CommitsLog {
             min_since: 0,
             open_head,
             rewritten: false,
+            pending: None,
             last_time: 0,
             len: 0,
+            lines: Lines::new(),
+            stopped: None,
+            fail_next_rewrite_past_rename: false,
+        }
+    }
+
+    /// A [`CommitsLog`] over a WRITABLE file in `dir` holding `entries`, its
+    /// region `(low, head]` PENDING — the state the open leaves a torn file
+    /// in — so the landing's one rewrite is judged on the file's bytes
+    /// without a journal to walk.
+    fn pending_over(dir: &Path, entries: BTreeMap<u64, CommitMeta>, low: u64, head: u64) -> CommitsLog {
+        let file = OpenOptions::new()
+            .append(true)
+            .open(dir.join(SIDECAR_FILE))
+            .expect("a writable handle on the file");
+        let len = file.metadata().expect("the file's length").len();
+        CommitsLog {
+            file,
+            dir: dir.to_path_buf(),
+            entries,
+            offsets: BTreeMap::new(),
+            min_since: 0,
+            open_head: head,
+            rewritten: false,
+            pending: Some((low, head)),
+            last_time: 0,
+            len,
             lines: Lines::new(),
             stopped: None,
             fail_next_rewrite_past_rename: false,

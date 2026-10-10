@@ -21,6 +21,7 @@ mod doc_one;
 mod effective_owner;
 mod events;
 mod feed_class;
+mod feed_walk;
 mod fuzz_codec;
 // Shared plumbing, not a suite: each fuzz suite uses a subset, so the allow
 // that was this file's own crate-level attribute rides its `mod` line here.

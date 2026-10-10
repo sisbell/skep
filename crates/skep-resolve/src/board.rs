@@ -54,13 +54,24 @@ use skep_identity::{BoardTerm, Enrolled, PublicKey};
 use crate::http::{Method, Transport, TransportError};
 use crate::{hex_byte, parse_address};
 
-/// How often a `history_busy` or `scan_busy` answer is retried before the
-/// read is given up — a retry-class refusal, never a queue (wire.md §Reading
-/// history), so the client is the one that waits.
+/// How often a `history_busy`, `scan_busy` or `feed_rebuilding` answer is
+/// retried before the read is given up — a retry-class refusal, never a
+/// queue (wire.md §Reading history; §The change feed), so the client is the
+/// one that waits.
 const BUSY_RETRIES: u32 = 200;
 
 /// The pause between two busy retries.
 const BUSY_PAUSE: Duration = Duration::from_millis(25);
+
+/// Whether a `503` body names a retry-class refusal the board clears by
+/// itself — a pool momentarily full (`history_busy`, `scan_busy`), or the
+/// change feed being rebuilt behind the listener after an open
+/// (`feed_rebuilding`, wire.md §The change feed) — which [`Board::changes`]
+/// and [`Board::post_json`] retry up to [`BUSY_RETRIES`] and give up as
+/// [`BoardError::Busy`].
+fn names_a_busy_refusal(text: &str) -> bool {
+    text.contains("history_busy") || text.contains("scan_busy") || text.contains("feed_rebuilding")
+}
 
 /// `H.1`'s address — the head document's first chain member, the board
 /// term's carrier (wire.md §The other endpoints).
@@ -133,7 +144,7 @@ pub enum BoardError {
     Malformed(String),
     /// A `rejected` answer: the op, its code and its detail.
     Rejected { op: String, code: String, detail: Option<String> },
-    /// `history_busy` or `scan_busy` past the retries.
+    /// `history_busy`, `scan_busy` or `feed_rebuilding` past the retries.
     Busy,
     /// `history_reclaimed`: the position asked (`/op-at`, `/chain`) or the
     /// `since` fence (`/changes`) predates the history the board retains;
@@ -285,8 +296,17 @@ impl Board {
     /// refuses again the page it was re-asked at its own limit is
     /// [`BoardError::Malformed`], and is not asked a third time. Every
     /// request is counted.
+    ///
+    /// A page the board refuses `503 feed_rebuilding` — its change feed
+    /// being rebuilt behind the listener after an open, this page reaching
+    /// into the positions not yet re-covered (wire.md §The change feed,
+    /// Rebuilding) — is retried as a busy board's answer is
+    /// ([`BUSY_RETRIES`], the same pause, each retry counted under
+    /// `busy_retries`) and given up as [`BoardError::Busy`] past them; a
+    /// `503` naming no such token is [`BoardError::Status`], as ever.
     pub(crate) fn changes(&self, since: u64, limit: &mut Option<usize>) -> Result<Page, BoardError> {
         let mut re_asked = false;
+        let mut tries = 0;
         loop {
             self.bump(|r| r.changes += 1);
             let path = match *limit {
@@ -312,6 +332,17 @@ impl Board {
                 410 => {
                     let v = Board::json(&body)?;
                     return Err(BoardError::Reclaimed { floor: v["floor"].as_u64() });
+                }
+                503 => {
+                    let busy = names_a_busy_refusal(&text());
+                    if busy && tries < BUSY_RETRIES {
+                        tries += 1;
+                        self.bump(|r| r.busy_retries += 1);
+                        thread::sleep(BUSY_PAUSE);
+                        continue;
+                    }
+                    let refused = BoardError::Status { status: st, body: text() };
+                    return Err(if busy { BoardError::Busy } else { refused });
                 }
                 _ => return Err(BoardError::Status { status: st, body: text() }),
             }
@@ -401,7 +432,7 @@ impl Board {
                     return Err(BoardError::Reclaimed { floor: v["floor"].as_u64() });
                 }
                 503 => {
-                    let busy = text().contains("history_busy") || text().contains("scan_busy");
+                    let busy = names_a_busy_refusal(&text());
                     if busy && tries < BUSY_RETRIES {
                         tries += 1;
                         self.bump(|r| r.busy_retries += 1);

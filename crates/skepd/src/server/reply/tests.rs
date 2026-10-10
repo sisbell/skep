@@ -72,6 +72,7 @@ fn every_transport_error_pairs_its_documented_name_with_its_documented_status() 
         (TransportError::BlobMissing, "blob_missing", 404),
         (TransportError::BlobDamaged, "blob_damaged", 404),
         (TransportError::FetchBusy, "fetch_busy", 503),
+        (TransportError::FeedRebuilding, "feed_rebuilding", 503),
     ];
     for &(err, name, status) in &table {
         assert_eq!(err.name(), name, "wire name drifted for {err:?}");

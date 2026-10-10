@@ -77,6 +77,28 @@
 //! [`WritePath::compact_feed_below_reclaim_floor`] — the feed's own rewrite,
 //! the one the open runs, under the feed's lock and no guard.
 //!
+//! AND THE WALK BEHIND THE LISTENER (`operations.md` §3.3 step 2; §4 row
+//! 16; §1.1 m15). Where `commits.log` was lost or torn, the feed's open
+//! records the positions it does not cover as a PENDING REGION and
+//! [`WritePath::open`] spawns `skepd-feed-walk` — a thread of this card's
+//! own, holding the feed, the kernel's handle and the open's snapshot of
+//! the head's world — which proves and classifies every boundary of the
+//! region while the board serves, says three lines (`open:`, `progress:`
+//! at a cadence, `landing:`), and lands by ONE rewrite under the feed's
+//! lock ([`feed::Feed::walk_and_land`]). Spawned HERE and not beside the
+//! pruner and the checkpoint thread in `serve`, so an embedder routing by
+//! hand through `Daemon::route` walks too; and STOPPED AND JOINED by this
+//! card's drop, so no thread of the walk's outlives the Daemon that owns
+//! the feed — the thread holds the kernel's handle, and the journal
+//! directory's lock with it, which a reopen of the same directory waits on
+//! — the walk reading the stop before each boundary and before the
+//! landing, so a Daemon dropped mid-walk ends it with nothing written, the
+//! crash-stop shape: the file as the open found it, the next open walking
+//! again. Under the catch (row 41), a panic ends the thread with the
+//! consequence line and the region pending for the uptime, which the
+//! standing line re-says; the OS refusing the thread runs the walk at the
+//! open instead, as the cell index's does, said.
+//!
 //! AND THE CELL INDEX's ENTRY (`media.md` Op inventory 1: "EACH ENTRY IS
 //! ENTERED IN skepd's MEMORY AT EVERY COMMIT THAT MINTS A CELL, whichever
 //! op minted it … before that commit's guard drops"). [`WritePath::record`]
@@ -92,9 +114,11 @@
 
 use std::fmt;
 use std::io;
+use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
+use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 use parking_lot::{Condvar, Mutex};
@@ -102,7 +126,7 @@ use skep_address::{document_of, Address};
 use skep_arrangement::HasM5;
 use skep_engine::{Engine, EngineStores, World};
 use skep_febe::{Op, OpKind, RejectCode, Rejection, Response, Stores};
-use skep_kernel::{Attestation, Seq};
+use skep_kernel::{Attestation, Seq, Snapshot};
 use skep_media::cell::names_kind_by_prefix;
 use skep_media::index::CellIndex;
 use skep_util::notice::{self, Class};
@@ -143,10 +167,18 @@ pub(crate) enum FirstHead {
     /// head owed at the write path's next turn.
     Refused,
 }
-use self::sidecar::OpTerms;
+use self::sidecar::{OpTerms, WalkControl};
 use crate::codec::op_name;
 use crate::serial::{Serial, SerialGuard};
 use feed::Feed;
+
+// The feed walk's test seams, for the daemon's hooks: the hold the walk
+// parks at, the notice it writes as it parks, and its panic arm.
+#[cfg(any(test, feature = "test-hooks"))]
+pub(crate) use self::sidecar::{arm_the_feed_walks_fault, FEED_WALK_HOLD, FEED_WALK_HOLD_NOTICE};
+
+/// The walk thread's name, as `ps` and the hook's line show it.
+const FEED_WALK_THREAD: &str = "skepd-feed-walk";
 
 /// The commit stream's wait bound: a subscriber that has heard nothing for
 /// this long is answered [`StreamStep::Keepalive`], which `server.rs` frames
@@ -186,7 +218,14 @@ pub(crate) struct WritePath {
     /// The change feed behind `GET /changes` and `/health`'s `head_time`
     /// (wire v6; class-gated since v7.8) — `commits.log`, the daemon's
     /// testimony about its own writes, and its four derived sidecars.
-    feed: Feed,
+    /// Behind an `Arc` for one sharer, the walk thread (the module doc's
+    /// WALK BEHIND THE LISTENER), which holds it for the walk's length and
+    /// is joined before this card drops.
+    feed: Arc<Feed>,
+    /// THE WALK THREAD, where the feed's open left a region pending —
+    /// `None` on a board whose log covered the head: its handle, joined at
+    /// the drop, and the state it shares ([`FeedWalk`]).
+    walk: Option<FeedWalk>,
     /// The commit stream behind `GET /events` (wire v4).
     commit_stream: CommitStream,
     /// The engine's store factory — the kernel behind it is where the
@@ -274,7 +313,8 @@ impl WritePath {
         // the daemon will share: a cut, the unreadable slots, the malformed
         // names are said by the files' opens, below any daemon.
         let said = Lines::new();
-        let feed = Feed::open(data_dir, engine, &said)?;
+        let (feed, pending) = Feed::open(data_dir, engine, &said)?;
+        let feed = Arc::new(feed);
         // Opened AFTER the feed, at the same head, and before any febe
         // exists to commit between the two: the stream's first announced
         // position is therefore one `/changes` already carries. That is the
@@ -285,11 +325,20 @@ impl WritePath {
         // The head writer resumes by reading H's latest member off the engine's
         // recovered root (PUB-6.65's I7 (a)) and its cadence's two counters off
         // the feed opened above — the commits landed since that head, and the
-        // head's own recorded time (the chain's open items, item 2).
+        // head's own recorded time (the chain's open items, item 2) — BEFORE
+        // the walk thread spawns, so a pending region is one it reads as
+        // pending and resumes off the kernel's seq (`head.rs`), never a race
+        // against the landing.
         let head_writer = HeadWriter::open(engine.stores(), &feed);
+        // THE WALK, last (the module doc): over the region the feed's open
+        // left pending, on a thread of its own, the board serving meanwhile.
+        let walk = pending.map(|snapshot| {
+            FeedWalk::spawn(Arc::clone(&feed), engine.stores(), snapshot, said.clone())
+        });
         Ok(WritePath {
             serial: Serial::new(),
             feed,
+            walk,
             commit_stream,
             stores: engine.stores(),
             head_writer,
@@ -302,6 +351,39 @@ impl WritePath {
             checkpoint_signal: CheckpointSignal::new(),
             inline_runs_seen: AtomicU64::new(0),
         })
+    }
+
+    /// The test seam behind `crate::Daemon::feed_pending_region`: `(low,
+    /// head]`, the positions a lost or torn `commits.log` left uncovered
+    /// that the walk behind the listener has yet to land, or `None` — the
+    /// feed's own read, under its lock and no guard. Not a stable API.
+    #[cfg(any(test, feature = "test-hooks"))]
+    pub(crate) fn feed_pending_region(&self) -> Option<(u64, u64)> {
+        self.feed.pending_region()
+    }
+
+    /// THE WALK's DEATH, as a read (`operations.md` §1 THE RATES; §1.1 row
+    /// 41): the region `(low, head]` the walk thread left uncovered when it
+    /// ended on a caught panic this uptime, or `None` while it walks, landed
+    /// or never ran — one atomic load, the standing line's clause (`the feed
+    /// walk's thread is gone; positions (low, head] stay uncovered`).
+    pub(crate) fn feed_walk_gone(&self) -> Option<(u64, u64)> {
+        let walk = self.walk.as_ref()?;
+        walk.shared.ended.load(Ordering::Acquire).then_some(walk.shared.region)
+    }
+
+    /// The test seam behind `crate::Daemon::set_feed_walk_progress_cadence`:
+    /// the walk's `progress:` line every `boundaries` boundaries or `millis`
+    /// milliseconds, whichever first, in place of the constants' figures —
+    /// read by the walk per boundary, so a walk parked at the hold takes
+    /// the cadence set meanwhile; nothing where no walk runs. Not a stable
+    /// API.
+    #[cfg(any(test, feature = "test-hooks"))]
+    pub(crate) fn set_feed_walk_progress_cadence(&self, boundaries: u64, millis: u64) {
+        if let Some(walk) = &self.walk {
+            walk.shared.control.progress_boundaries.store(boundaries, Ordering::Relaxed);
+            walk.shared.control.progress_millis.store(millis, Ordering::Relaxed);
+        }
     }
 
     /// THE HALT AS A READ (op-D10 (a); `operations.md` §1 THE RATES): the
@@ -813,6 +895,155 @@ impl WritePath {
             self.halted.store(true, Ordering::Release);
         }
         Some(at)
+    }
+}
+
+/// THE STOP OF THE WALK, at this card's drop (the module doc): the thread
+/// told to stop — read before its next boundary and before the landing,
+/// so nothing is written past this — and joined, at most one boundary's
+/// reconstruction or one landing in flight. Last of the daemon's acts: the
+/// server's stop joins the workers, the streams, the pruner and the
+/// checkpoint thread, and the Daemon — this card with it — drops after
+/// them, so the walk is the last thread let go.
+impl Drop for WritePath {
+    fn drop(&mut self) {
+        if let Some(walk) = self.walk.take() {
+            walk.shared.control.stop.store(true, Ordering::Release);
+            if let Some(handle) = walk.handle.lock().take() {
+                let _ = handle.join();
+            }
+        }
+    }
+}
+
+/// THE WALK THREAD's HANDLE AND ITS SHARED STATE: the join handle the drop
+/// takes, and the state the thread and this card both read
+/// ([`WalkShared`]).
+struct FeedWalk {
+    handle: Mutex<Option<JoinHandle<()>>>,
+    shared: Arc<WalkShared>,
+}
+
+/// What the walk thread and the write path share: the region it walks, the
+/// controls (the stop, the `progress:` cadence) and THE LIVENESS FLAG its
+/// catch sets as it ends on a panic — never cleared, since nothing re-spawns
+/// the walk but a restart, which walks again.
+struct WalkShared {
+    region: (u64, u64),
+    control: WalkControl,
+    ended: AtomicBool,
+}
+
+impl FeedWalk {
+    /// Spawn `skepd-feed-walk` over `feed`'s pending region: the walk and
+    /// its landing ([`Feed::walk_and_land`]) under the catch (row 41) — a
+    /// panic that escapes is the hook's prefixed line, then the consequence
+    /// in the operator's terms ([`FeedWalkEndedLine`]) and the flag the
+    /// standing line reads, the region pending for the uptime. Spawned
+    /// fallibly, as the daemon's other threads are: where the OS refuses
+    /// the thread the walk runs HERE, at the open, as the cell index's does
+    /// — the board serves later rather than never covering — said.
+    fn spawn(
+        feed: Arc<Feed>,
+        stores: EngineStores,
+        snapshot: Snapshot<World>,
+        lines: Lines,
+    ) -> FeedWalk {
+        let region = feed.pending_region().unwrap_or((0, 0));
+        let shared =
+            Arc::new(WalkShared { region, control: WalkControl::new(), ended: AtomicBool::new(false) });
+        let body = {
+            let feed = Arc::clone(&feed);
+            let shared = Arc::clone(&shared);
+            let stores = stores.clone();
+            let lines = lines.clone();
+            move || {
+                let walked = catch_unwind(AssertUnwindSafe(|| {
+                    feed.walk_and_land(stores.kernel(), &snapshot, &shared.control, &lines)
+                }));
+                if let Err(payload) = walked {
+                    shared.ended.store(true, Ordering::Release);
+                    let (low, head) = shared.region;
+                    let payload = payload_text(payload.as_ref());
+                    lines.say(Class::Failure, FeedWalkEndedLine { payload, low, head });
+                }
+            }
+        };
+        let spawned = thread::Builder::new().name(FEED_WALK_THREAD.into()).spawn(body);
+        let handle = match spawned {
+            Ok(handle) => Some(handle),
+            Err(e) => {
+                let (low, head) = region;
+                lines.say(Class::Failure, FeedWalkRefusedLine { error: &e, low, head });
+                // The head's world again: this runs inside the open, before
+                // any writer exists, so the root is the one the feed opened
+                // at. Not under the catch — a panic here is the open's, as
+                // the index walk's inline arm is.
+                let snapshot = stores.kernel().snapshot();
+                feed.walk_and_land(stores.kernel(), &snapshot, &shared.control, &lines);
+                None
+            }
+        };
+        FeedWalk { handle: Mutex::new(handle), shared }
+    }
+}
+
+/// A caught panic's payload as text — the literal where it is one (the
+/// words the code wrote, which the hook carries too), a formatted message
+/// where it is a `String`, and the class alone otherwise: nothing of a
+/// request can ride it.
+fn payload_text(payload: &(dyn std::any::Any + Send)) -> String {
+    if let Some(text) = payload.downcast_ref::<&'static str>() {
+        return (*text).to_string();
+    }
+    if let Some(text) = payload.downcast_ref::<String>() {
+        return text.clone();
+    }
+    "a panic".to_string()
+}
+
+/// THE WALK THREAD's CONSEQUENCE LINE (`operations.md` §1.1 row 41; §3.3
+/// step 2), the ruled words: `the feed walk ended: {payload}; positions
+/// ({low}, {head}] stay uncovered — /changes refuses pages into them until
+/// a restart, which walks again`. A pure value, pinned by `to_string()` in
+/// the unit suite; emitted under `Class::Failure` by the thread's catch,
+/// once, after the hook's line has said the panic itself.
+pub(crate) struct FeedWalkEndedLine {
+    pub(crate) payload: String,
+    pub(crate) low: u64,
+    pub(crate) head: u64,
+}
+
+impl fmt::Display for FeedWalkEndedLine {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "the feed walk ended: {}; positions ({}, {}] stay uncovered — /changes refuses pages \
+             into them until a restart, which walks again",
+            self.payload, self.low, self.head
+        )
+    }
+}
+
+/// THE WALK THREAD REFUSED by the OS (the pruner's and the checkpoint
+/// thread's form, `operations.md` §1.1 rows 21, 22): the cause, and what
+/// happens instead — the walk runs at the open, the board serving once it
+/// lands. A pure value, pinned by `to_string()`; emitted under
+/// `Class::Failure` where `thread::Builder::spawn` refuses.
+pub(crate) struct FeedWalkRefusedLine<'a> {
+    pub(crate) error: &'a io::Error,
+    pub(crate) low: u64,
+    pub(crate) head: u64,
+}
+
+impl fmt::Display for FeedWalkRefusedLine<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "the feed walk: the OS refused its thread ({}); positions ({}, {}] are walked at the \
+             open instead, the board serving once the walk lands",
+            self.error, self.low, self.head
+        )
     }
 }
 

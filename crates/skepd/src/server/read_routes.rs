@@ -10,7 +10,8 @@ use skep_util::json::obj;
 
 use super::actor::Resolved;
 use super::reply::{
-    op_answer, refuse, refuse_over_budget, refuse_reclaimed, refuse_unavailable, Reply,
+    op_answer, refuse, refuse_feed_rebuilding, refuse_over_budget, refuse_reclaimed,
+    refuse_unavailable, Reply,
     TransportError,
 };
 use super::request::{at_most_once, query_pairs, sole_param};
@@ -235,6 +236,11 @@ impl Daemon {
             // The page byte budget (bu7-2; SO-I9): refused whole, with the
             // budget and the largest `limit` that fits from this fence.
             ChangesAnswer::OverBudget { budget, fits } => refuse_over_budget(budget, fits),
+            // The walk behind the listener (`operations.md` §3.3 step 2):
+            // the page's rows would come from the region a lost or torn
+            // `commits.log` left uncovered — refused retry-class until the
+            // walk lands it.
+            ChangesAnswer::Rebuilding { low, head } => refuse_feed_rebuilding(low, head),
             ChangesAnswer::Page { entries, last, more } => Reply::json(
                 200,
                 obj(vec![

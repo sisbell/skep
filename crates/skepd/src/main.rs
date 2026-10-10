@@ -82,6 +82,16 @@ const SKEPD_BLOCKED_PREFIXES: &str = "SKEPD_BLOCKED_PREFIXES";
 #[cfg(feature = "test-hooks")]
 const SKEPD_TEST_WORKER_FAULT: &str = "SKEPD_TEST_WORKER_FAULT";
 
+/// THE FEED WALK HOLD's VARIABLE — a TEST SEAM, read by `test-hooks` builds
+/// alone: set to anything, the hold `Daemon::hold_the_feed_walk` is armed
+/// before the open, so a walk of a lost or torn `commits.log`'s region
+/// parks after its `open:` line, writing `Daemon::FEED_WALK_HOLD_NOTICE`
+/// on the stream, and the dirty-crash harness can SIGKILL the real binary
+/// mid-walk and judge the reopen. A shipped build reads no such variable:
+/// the read below it does not compile without the feature.
+#[cfg(feature = "test-hooks")]
+const SKEPD_TEST_FEED_WALK_HOLD: &str = "SKEPD_TEST_FEED_WALK_HOLD";
+
 /// THE EXIT's LINE (`operations.md` §1.1 m16; §4 row 32): what the binary
 /// says when `wait` returns — every worker thread has ended, a panic past
 /// the handler's catch having taken each — before it exits 1. The class
@@ -639,6 +649,12 @@ fn main() {
     #[cfg(feature = "test-hooks")]
     if let Some(arm) = std::env::var_os(SKEPD_TEST_WORKER_FAULT) {
         Daemon::panic_the_next_worker(arm.to_str().expect("the worker fault's arm is text"));
+    }
+    // THE FEED WALK's HOLD (test seam, `test-hooks` builds alone): armed
+    // before the open, where the walk starts.
+    #[cfg(feature = "test-hooks")]
+    if std::env::var_os(SKEPD_TEST_FEED_WALK_HOLD).is_some() {
+        Daemon::hold_the_feed_walk();
     }
     // THE LOOSE DIRECTORY, REFUSED (unix): a data directory that stands and
     // that other users of this machine can read is refused here — before

@@ -1329,6 +1329,7 @@ impl Daemon {
             poisoned: self.engine.kernel().is_poisoned(),
             stopped_files: self.writes.stopped_feed_files(),
             pruner_gone: self.threads.pruner_ended.load(Ordering::Acquire),
+            feed_walk_gone: self.writes.feed_walk_gone(),
             index_failed: false,
             floor: (free_space < floor).then_some(FloorBinding { free_space, floor }),
             claimed_permissive: self.auth.cfg.claimed_permissive(self.board_is_claimed()),
@@ -2086,7 +2087,10 @@ impl fmt::Display for CheckpointThreadRefusedLine<'_> {
 /// by name with its position or file, joined by `; ` in THE RATES' order —
 /// `the write path is halted since position {p} (feed-attest.log)`; `the
 /// kernel is poisoned`; `{file} stopped since position {p}` once per
-/// stopped file; `the pruner's thread is gone`; `the cell index failed to
+/// stopped file; `the pruner's thread is gone`; `the feed walk's thread is
+/// gone; positions ({low}, {head}] stay uncovered` (the walk behind the
+/// listener dead on a caught panic, its region pending for the uptime —
+/// `operations.md` §3.3 step 2; row 41); `the cell index failed to
 /// build`; `deposits refused at the floor (free space {f} below the floor
 /// in force {F})`; `CLAIMED-PERMISSIVE`. A pure value over the reads
 /// ([`Daemon::say_the_standing_line`] makes them), pinned by `to_string()`
@@ -2104,6 +2108,9 @@ pub(super) struct StandingLine {
     pub(super) stopped_files: Vec<StoppedFile>,
     /// The pruner's liveness flag.
     pub(super) pruner_gone: bool,
+    /// The feed walk's liveness flag, with the region it left uncovered
+    /// (`WritePath::feed_walk_gone`).
+    pub(super) feed_walk_gone: Option<(u64, u64)>,
     /// The cell index's FAILED state — the seventh read, its lane's.
     pub(super) index_failed: bool,
     /// The floor binding: the free space read below the floor in force.
@@ -2126,6 +2133,7 @@ impl StandingLine {
             || self.poisoned
             || !self.stopped_files.is_empty()
             || self.pruner_gone
+            || self.feed_walk_gone.is_some()
             || self.index_failed
             || self.floor.is_some()
             || self.claimed_permissive
@@ -2146,6 +2154,11 @@ impl fmt::Display for StandingLine {
         }
         if self.pruner_gone {
             clauses.push("the pruner's thread is gone".to_string());
+        }
+        if let Some((low, head)) = self.feed_walk_gone {
+            clauses.push(format!(
+                "the feed walk's thread is gone; positions ({low}, {head}] stay uncovered"
+            ));
         }
         if self.index_failed {
             clauses.push("the cell index failed to build".to_string());

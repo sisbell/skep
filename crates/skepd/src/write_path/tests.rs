@@ -206,6 +206,25 @@ fn the_checkpoint_signal_keeps_a_raise_coalesces_a_burst_and_stops_every_wait_fo
 /// THE FULL VOLUME's LINE (`operations.md` §1.1 m1), in the ruled words,
 /// with the position the refused write would have taken — and the door it
 /// goes through keeps it in the record under its class word.
+/// THE WALK THREAD's TWO LINES at fixed inputs: the catch's consequence
+/// (row 41) with the payload and the region, and the OS's refusal of the
+/// thread with the cause and what runs instead.
+#[test]
+fn the_feed_walks_catch_and_refusal_lines_render_the_ruled_words() {
+    assert_eq!(
+        FeedWalkEndedLine { payload: "the test seam's fault in the feed walk".into(), low: 24, head: 30 }
+            .to_string(),
+        "the feed walk ended: the test seam's fault in the feed walk; positions (24, 30] stay \
+         uncovered — /changes refuses pages into them until a restart, which walks again"
+    );
+    let e = io::Error::other("Resource temporarily unavailable");
+    assert_eq!(
+        FeedWalkRefusedLine { error: &e, low: 24, head: 30 }.to_string(),
+        "the feed walk: the OS refused its thread (Resource temporarily unavailable); positions \
+         (24, 30] are walked at the open instead, the board serving once the walk lands"
+    );
+}
+
 #[test]
 fn the_full_volume_line_renders_the_ruled_words_and_the_door_records_it() {
     assert_eq!(

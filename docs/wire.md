@@ -817,6 +817,7 @@ Non-200 statuses are transport-level failures with a body of the shape
 | 507    | `deposit_refused`           | the media gate refused the deposit: `scope` names `own`, `venue`, `floor` or `standing`, `ended` whether the upload was ended (refused as the body was written) or kept (refused before it), `offset` the bytes received (§Media) |
 | 500    | `blob_io`                   | the blob store refused I/O; the upload stands at its last durable point (§Media) |
 | 503    | `index_rebuilding`          | the cell index is being rebuilt from the board after an open, and this request is one of its three readers — the blob upload's creation or resume, or the deposit read; retry shortly (§Media) |
+| 503    | `feed_rebuilding`           | a `/changes` page whose rows would come from the positions a lost or torn `commits.log` left uncovered, which the daemon re-covers behind the listener after an open — pages below and above the region serve, and `/events` is untouched; retry shortly, as `history_busy` is (§The change feed) |
 | 404    | `no_value`                  | the blob fetch's `i` names an element position the document never minted (§Media, THE FETCH) |
 | 404    | `not_a_cell`                | the fetch's `i` holds a value naming no media cell — prose, a def, a record of another kind (§Media, THE FETCH) |
 | 404    | `unknown_cell_schema`       | the fetch's `i` holds a value naming a media kind under no schema this board reads — D13's halt (§Media, THE FETCH) |
@@ -4530,6 +4531,20 @@ is not a dotted-decimal tumbler, a `drafts` that is neither `true` nor
 `false`, a repeated or unknown parameter) is `400 {"error":
 "malformed_changes", "detail": …}` — as is a `limit` whose page would pass
 the byte budget (Paging, above), that body carrying `budget` and `fits`.
+
+**Rebuilding.** A lost or torn `commits.log` is re-covered behind the
+listener: the open records the positions the file does not cover and
+serves, and a thread of the daemon's reconstructs them from the journal
+while reads are served and writes admitted, landing them by ONE rewrite of
+the file. Until it lands, a page whose rows would have to come from the
+uncovered region is `503 {"error": "feed_rebuilding", "detail": …}` —
+retry-class, as `history_busy` is: the page may be perfectly good and the
+walk momentarily unfinished — and not only a page whose `since` lies in
+the region: one starting below it that would reach into it is refused
+too, so no position is skipped in silence. Pages above and below the
+region serve meanwhile, a page served below it answering `more: true`;
+`/events` is untouched, announcing every commit as ever; the landed
+positions are bare entries, as above.
 
 **The feed's files.** Beside `commits.log` the daemon keeps four derived
 sidecars in the data dir — `feed-index.log` (document → positions),

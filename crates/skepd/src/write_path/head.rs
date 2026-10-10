@@ -255,9 +255,11 @@ struct HeadState {
     /// (a)'s count. Resumed at open from the feed's entries above the last
     /// head's position (the module doc's RESUME FROM THE FEED), so a board
     /// restarted every few commits still reaches [`COUNT_BOUND`]; where the
-    /// sidecar was lost, every bare entry the reopen walk re-covered above
-    /// that position counts, the head's own among them — early by at most
-    /// those, never late.
+    /// sidecar was lost or torn and its region is pending at open, resumed
+    /// off the kernel's seq instead — every record above the head's
+    /// position counts, the head's own and the records within a commit
+    /// among them — early by at most those, never late
+    /// ([`HeadWriter::open`]).
     commits_since_head: u64,
     /// The clock reading at the last head — trigger (c)'s base, in
     /// [`wall_clock_millis`]'s domain. Resumed at open from the last head's own
@@ -426,6 +428,20 @@ impl HeadWriter {
     /// module doc's RESUME FROM THE FEED): the entries above that position
     /// resume trigger (a)'s count and trigger (c)'s origin — a lost sidecar's
     /// bare entries counting, and its missing times leaving the origin at open.
+    ///
+    /// WHILE THE WALK's REGION IS PENDING (`operations.md` §3.3 step 2: "the
+    /// head writer's resume counts commits off the kernel's seq while
+    /// entries are pending, an over-count, EARLY and never late, the
+    /// direction its card accepts"): the feed lacks the region's entries,
+    /// so trigger (a)'s count is resumed as `current_seq − last_head.position`
+    /// instead — every journal record above the head counted, the region's
+    /// system commits and the records within a commit among them, so the
+    /// count is at or above the commits that landed and the next head
+    /// comes no later than the feed's exact count would bring it; the
+    /// hour's origin is read off what the feed holds, or open-time, as
+    /// ever. The direction the `commits_since_head` card accepts: a head
+    /// early by at most the over-count, never a duplicate (the position
+    /// gate) and never a changed content (D1).
     pub(super) fn open(stores: EngineStores, feed: &Feed) -> HeadWriter {
         let clock = Clock::new();
         let now = clock.now_millis();
@@ -437,14 +453,18 @@ impl HeadWriter {
         // head, the head's own commits among them, testifying
         // `SYSTEM_TESTIMONY`. No head yet, and every retained entry is
         // "since the last head".
-        let resumed =
-            resume_cadence(&feed.entries_above(last_head.as_ref().map_or(0, |h| h.position)));
+        let last_head_position = last_head.as_ref().map_or(0, |h| h.position);
+        let resumed = resume_cadence(&feed.entries_above(last_head_position));
+        let commits_since_head = match feed.pending_region() {
+            Some(_) => snap.seq().0.saturating_sub(last_head_position),
+            None => resumed.commits_since_head,
+        };
         HeadWriter {
             stores,
             state: Mutex::new(HeadState {
                 last_head,
                 last_seen_position: snap.seq().0,
-                commits_since_head: resumed.commits_since_head,
+                commits_since_head,
                 last_head_millis: resumed.last_head_millis.unwrap_or(now),
                 staging_draft,
                 first_head_owed: false,
@@ -833,7 +853,9 @@ impl std::fmt::Display for DraftMintedElsewhere<'_> {
 
 /// The cadence's two counters as a restart RESUMES them, read off the feed's
 /// entries above the last head's position (the module doc's RESUME FROM THE
-/// FEED).
+/// FEED). The count is EXACT where the feed covers the head; while the
+/// walk's region is pending the writer takes the kernel's seq in its place
+/// ([`HeadWriter::open`]), early and never late, and the origin from here.
 struct ResumedCadence {
     /// Entries whose testimony is not `"system"` — every commit landed since
     /// the head that was not the head's own; a bare entry, its testimony

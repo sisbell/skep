@@ -362,6 +362,74 @@ impl Daemon {
         WALK_HOLD.release();
     }
 
+    /// The line the feed walk's hold writes on the operator stream as it
+    /// parks — what the dirty-crash harness watches the child's stderr for
+    /// before it kills.
+    #[doc(hidden)]
+    pub const FEED_WALK_HOLD_NOTICE: &'static str = crate::write_path::FEED_WALK_HOLD_NOTICE;
+
+    /// TEST HOOK (the same standing): HOLD THE FEED WALK — every walk of a
+    /// lost or torn `commits.log`'s region started from here on, in this
+    /// process, parks after its `open:` line and before its first boundary,
+    /// writing [`Daemon::FEED_WALK_HOLD_NOTICE`], until
+    /// [`Daemon::release_the_feed_walk`]. Armed BEFORE a daemon opens, so a
+    /// suite serves requests against a daemon whose region is pending: the
+    /// refusal on a page into it, every other request served, a write
+    /// admitted, the landing at the release. A process-wide seam, since the
+    /// walk starts inside the open; a child binary arms it by the variable
+    /// `SKEPD_TEST_FEED_WALK_HOLD`, which `main.rs` reads under `test-hooks`.
+    /// A held walk is one the stop ends: the walk parks in timed waits and
+    /// reads the stop between them, so a daemon dropped while its walk is
+    /// held joins it at once, nothing written, the region walked again at
+    /// the next open.
+    #[doc(hidden)]
+    pub fn hold_the_feed_walk() {
+        crate::write_path::FEED_WALK_HOLD.hold();
+    }
+
+    /// TEST HOOK (the same standing): release every held feed walk, and hold
+    /// no later one.
+    #[doc(hidden)]
+    pub fn release_the_feed_walk() {
+        crate::write_path::FEED_WALK_HOLD.release();
+    }
+
+    /// TEST HOOK (the same standing): THE REGION PENDING — `(low, head]`,
+    /// the positions a lost or torn `commits.log` left uncovered that the
+    /// walk behind the listener has yet to land, `low` covered and `head`
+    /// the last of the region, or `None` once the landing wrote it (or
+    /// where the log covered the head) — what a suite waits on before it
+    /// reads a feed the walk is landing, and pins a page's refusal against.
+    #[doc(hidden)]
+    pub fn feed_pending_region(&self) -> Option<(u64, u64)> {
+        self.writes.feed_pending_region()
+    }
+
+    /// TEST HOOK (the same standing): PANIC THE FEED WALK's THREAD after its
+    /// `open:` line and its hold, before its first boundary — once: its
+    /// catch says the consequence line, sets the flag the standing line
+    /// reads (`the feed walk's thread is gone`) and the thread ends, the
+    /// region pending for the uptime, `/changes` refusing pages into it, a
+    /// restart walking again. Process-wide, as the hold is: armed before
+    /// the open, or while the walk parks at the hold; arming again re-arms.
+    #[doc(hidden)]
+    pub fn panic_the_feed_walk() {
+        crate::write_path::arm_the_feed_walks_fault();
+    }
+
+    /// TEST HOOK (the same standing): SET THE FEED WALK's PROGRESS CADENCE —
+    /// its `progress:` line every `boundaries` boundaries or `millis`
+    /// milliseconds, whichever comes first, in place of the shipped
+    /// `FEED_WALK_PROGRESS_BOUNDARIES` and `FEED_WALK_PROGRESS_INTERVAL` —
+    /// read by the walk per boundary, so a walk parked at the hold takes a
+    /// cadence set meanwhile; nothing where this daemon runs no walk. As
+    /// [`Daemon::set_standing_interval_millis`] drives the standing line
+    /// through a seam rather than a wait.
+    #[doc(hidden)]
+    pub fn set_feed_walk_progress_cadence(&self, boundaries: u64, millis: u64) {
+        self.writes.set_feed_walk_progress_cadence(boundaries, millis);
+    }
+
     /// TEST HOOK (the same standing): RUN THE PRUNER's PASS now, on this
     /// thread — the pass the cadence runs, under the credential lock's
     /// write arm one file at a time — and answer what it did; `None` where

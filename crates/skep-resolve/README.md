@@ -61,7 +61,12 @@ parts, each under the design rule it realizes:
   because some link of the retraction's type is found, which any account's
   link of another class overlaps; each standing deposit is asked once a
   pass of the fold. A feed page that re-serves a row or does not advance is
-  refused, as is a limit the feed names and refuses again.
+  refused, as is a limit the feed names and refuses again. A page the
+  board refuses `503 feed_rebuilding` — its change feed being rebuilt
+  behind the listener after an open, the page reaching into positions not
+  yet re-covered — is retried as a busy board's `history_busy` is, up to
+  the same count with the same pause, and given up as `BoardError::Busy`
+  past it.
 - **The verify** — the record grade for registry records, client-side
   (rm-2; REG-1.86 (e)): the body parsed under the canonical rule by
   `skep_registry::parse` — its address members, of any size, the addresses

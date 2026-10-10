@@ -119,6 +119,13 @@ pub const TRANSPORT_ERRORS: &[&str] = &[
     // tokenless exchange, so the name is one no fuzz target is answered
     // today.
     "write_busy",
+    // The walk behind the listener (`operations.md` §3.3 step 2; §4 row
+    // 16): a `/changes` page whose rows would come from the region a lost
+    // or torn `commits.log` left uncovered, before the walk lands it — 503,
+    // retry-class as `history_busy` is, the body `error` and `detail`
+    // alone. A fuzz daemon opens a fresh directory, whose log covers its
+    // head, so the name is one no fuzz target is answered today.
+    "feed_rebuilding",
     "internal_panic",
     "history_io",
     "history_corrupt",

@@ -49,7 +49,7 @@ use std::time::Duration;
 
 use common::{
     acked_addr, acked_at, blob_hex, board_term, cell_of, ceremony_before_the_claim, claim_board,
-    claim_frame, claimed, create_frame, device_key, expect_resp, head_position, json, op,
+    claim_frame, claimed, create_frame, device_key, expect_resp, get, head_position, json, op,
     open_session, open_signed_session, seeded_bytes, spawn_configured, spawn_unclaimed,
     typed_link_frame, verdict, WalkUnheld, BLOB_UPLOAD, CLAIMANT_ACCOUNT, CLAIMANT_DOC1,
     CLAIMANT_PRINCIPAL, HEAD_MEMBER_1, T_ENROLL, T_GRANT,
@@ -154,7 +154,7 @@ fn timed_daemon_open(dir: &Path, ctx: &str) -> Daemon {
     thread::spawn(move || {
         let _ = tx.send(Daemon::open(&d));
     });
-    match rx.recv_timeout(Duration::from_secs(60)) {
+    let d = match rx.recv_timeout(Duration::from_secs(60)) {
         Ok(Ok(d)) => d,
         Ok(Err(e)) => panic!("FINDING ({ctx}): reopen refused where recovery was required: {e}"),
         Err(mpsc::RecvTimeoutError::Timeout) => {
@@ -164,6 +164,25 @@ fn timed_daemon_open(dir: &Path, ctx: &str) -> Daemon {
             "FINDING ({ctx}): Daemon::open PANICKED during reopen — the opener thread's \
              panic message is printed above in this test's captured output"
         ),
+    };
+    await_the_feed_walk(&d, ctx);
+    d
+}
+
+/// THE FEED WALK's LANDING: a reopen over a mutilated `commits.log` leaves
+/// the positions it does not cover pending and walks them behind the
+/// listener (`operations.md` §3.3 step 2), `/changes` refusing a page into
+/// them until the landing. A judgment of the feed after a reopen waits for
+/// it, bounded as the index's walk is waited for, so what it reads is the
+/// landed feed and never the walk's window.
+fn await_the_feed_walk(d: &Daemon, ctx: &str) {
+    let deadline = std::time::Instant::now() + Duration::from_secs(60);
+    while d.feed_pending_region().is_some() {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "FINDING (wedge, {ctx}): the feed walk did not land within 60 s"
+        );
+        thread::sleep(Duration::from_millis(5));
     }
 }
 
@@ -655,6 +674,127 @@ fn f_sidecar_mutilation_never_touches_the_world() {
         "F: 6 sidecar/journal cases judged — world untouched under every sidecar mutation, \
          feed degraded to bare/null, no position claimed beyond the recovered head"
     );
+}
+
+/// F′ — A KILL MID-WALK LEAVES `commits.log` AS THE OPEN FOUND IT; THE NEXT
+/// OPEN WALKS AGAIN (`operations.md` §3.3 step 2: "a kill mid-walk leaves
+/// the file unchanged until the landing rewrite, the next open walking
+/// again from `low`"; PUB-6.45). A fixture of five commits built through
+/// the router, its sidecar's tail torn; THE REAL BINARY opened over it with
+/// the walk's hold armed by `SKEPD_TEST_FEED_WALK_HOLD` — served, the walk
+/// parked after its `open:` line, the notice on stderr — takes one write (a
+/// declared deposit into the published home, F's shape: the one write an
+/// unclaimed board admits past the home's mint), and is SIGKILLed at the
+/// hold: the file's bytes equal the torn file's. The reopen (no hold) walks
+/// again from `low`, says the three lines, and the landed feed carries the
+/// write admitted before the kill at its position as a BARE entry —
+/// `docs`, `key`, `time` null — classified from the journal as the
+/// published home's, so every class serves it (PUB-6.45's class is the
+/// journal's).
+#[test]
+fn f_a_kill_mid_walk_leaves_the_sidecar_unchanged_and_the_next_open_walks_again() {
+    use crate::open::{serving_port, skepd, Spawned, Stderr, PATIENCE};
+
+    let base = tempfile::tempdir().expect("tempdir");
+    let fixture = base.path().join("fixture");
+    let (doc, acks) = {
+        let d = Daemon::open(&fixture).expect("genesis open");
+        let boot = route_session(&d, 0);
+        let v = route_op(&d, Some(&boot), r#"{"op":"next_account_prefix","parent":"1"}"#);
+        let prefix = expect_resp(&v, "maybe_addr")["addr"].as_str().expect("prefix").to_string();
+        let v = route_op(&d, Some(&boot), &format!(r#"{{"op":"delegate","new_prefix":"{prefix}","new_id":1}}"#));
+        let mut acks = vec![v["at"].as_u64().expect("delegate at")];
+        let account = acked_addr(&v);
+        let s1 = route_session(&d, 1);
+        let v = route_op(&d, Some(&s1), &format!(r#"{{"op":"create_new_document","account":"{account}"}}"#));
+        let doc = acked_addr(&v);
+        acks.push(v["at"].as_u64().expect("home at"));
+        // Declared deposits at the published home's fresh positions (PUB-2.59).
+        for i in 1..=2u64 {
+            let v = route_op(
+                &d,
+                Some(&s1),
+                &format!(
+                    r#"{{"op":"insert","doc":"{doc}","at":{{"subspace":"1","ordinal":"{i}"}},"values":["x"],"deposit":"{T_ENROLL}"}}"#
+                ),
+            );
+            acks.push(v["at"].as_u64().expect("insert at"));
+        }
+        (doc, acks)
+    };
+    let sidecar = fixture.join("commits.log");
+    let len = fs::metadata(&sidecar).expect("commits.log").len();
+    let f = fs::OpenOptions::new().write(true).open(&sidecar).expect("open sidecar");
+    f.set_len(len - 3).expect("tear the sidecar tail");
+    drop(f);
+    let torn = fs::read(&sidecar).expect("the torn file");
+    // What the open leaves: the whole lines — the torn tail is CUT at the
+    // open, before the walk (`operations.md` §1.1 row 9), and the walk
+    // writes nothing until its landing.
+    let cut_at = torn.iter().rposition(|&b| b == b'\n').expect("a whole line survives") + 1;
+    let as_opened = torn[..cut_at].to_vec();
+    let low = acks[acks.len() - 2];
+    let head = *acks.last().expect("acks");
+
+    // The real binary, the walk held by the variable; killed at the notice
+    // after one write is admitted.
+    let workers = skepd::MIN_WORKERS.to_string();
+    let mut cmd = skepd(&fixture, &["--port", "0", "--workers", &workers]);
+    cmd.env("SKEPD_TEST_FEED_WALK_HOLD", "1");
+    let mut child = Spawned::launch(&mut cmd);
+    let mut stderr = Stderr::of(&mut child.child);
+    let port = serving_port(&mut child.child, PATIENCE);
+    stderr.wait_for("the walk's hold notice", PATIENCE, |l| l.contains(Daemon::FEED_WALK_HOLD_NOTICE));
+    let s1 = open_session(port, 1);
+    let v = op(
+        port,
+        Some(&s1),
+        &format!(
+            r#"{{"op":"insert","doc":"{doc}","at":{{"subspace":"1","ordinal":"3"}},"values":["y"],"deposit":"{T_ENROLL}"}}"#
+        ),
+    );
+    let admitted = acked_at(&v);
+    assert!(admitted > head, "a write is admitted while the walk is held");
+    let (st, body) = get(port, &format!("/changes?since={low}"));
+    assert_eq!((st, json(&body)["error"].as_str()), (503, Some("feed_rebuilding")), "{}", String::from_utf8_lossy(&body));
+    child.kill();
+    drop(stderr);
+    assert_eq!(
+        fs::read(&sidecar).expect("read"),
+        as_opened,
+        "FINDING (F′): the file changed under the kill — the open's cut alone is owed"
+    );
+
+    // The reopen walks again from `low` and lands; the write is bare.
+    let d = timed_daemon_open(&fixture, "F′ the reopen after the kill");
+    let said = d.lines_said();
+    // The region at the reopen: the torn position and the write admitted
+    // under the kill, both above `low`.
+    let uncovered = acks.iter().filter(|&&p| p > low).count() + 1;
+    assert!(
+        said.iter().any(|l| {
+            l == &format!("open: commits.log covers to position {low}; walking {uncovered} boundaries to position {admitted}")
+        }),
+        "the walk again from low, over the region and the write:\n{}",
+        said.join("\n")
+    );
+    assert!(
+        said.iter().any(|l| l.starts_with(&format!("landing: {uncovered} walked, 0 of them bare, in "))),
+        "landed:\n{}",
+        said.join("\n")
+    );
+    let entries = changes_entries(&d);
+    let positions: Vec<u64> = entries.iter().map(|(at, _)| *at).collect();
+    let mut want = acks.clone();
+    want.push(admitted);
+    assert_eq!(positions, want, "every position, the write admitted under the kill among them");
+    let (_, last) = entries.last().expect("the write");
+    assert!(
+        last["docs"].is_null() && last["key"].is_null() && last["time"].is_null(),
+        "the write admitted before the kill is BARE at the reopen — its record was never written: {last}"
+    );
+    let (_, first) = entries.first().expect("entries");
+    assert_eq!(first["op"].as_str(), Some("delegate"), "the intact prefix keeps its metadata: {first}");
 }
 
 // ── G. Disk exhaustion (best-effort, dedicated tiny volume) ──────────────

@@ -20,6 +20,16 @@
 //! resume, the pruner's pass, the deposit read's base — refuse with one
 //! retry-class token (ms5-R, the narrow reading: every other request is
 //! served throughout, the door's binding reading the lease arm alone).
+//! THE FAILED STATE (`CellIndex::is_failed`; `operations.md` §4 row 26,
+//! §1.1 row 41; PATTERNS P10, P22's honest-null arm): where the walk's
+//! thread DIES, its catch marks the index FAILED — a third state beside
+//! ready and not-ready, the two exclusive by construction: a walk that
+//! completed never fails and a walk that failed never completes — said
+//! once in the operator's terms and re-said by the daemon's standing line;
+//! the three readers then refuse for the life of the process with a token
+//! of its own and no retry hint, the door answers the lease arm's verdict
+//! as final, and the pruner runs no pass. A window that ends, or a state
+//! that stands: never a retry that cannot succeed.
 //!
 //! THE HALT MARK (DOCTRINE D13's carve-out, ms5-T4): a value naming the
 //! cell's kind that parses under no schema this build pins is entered as a
@@ -46,7 +56,10 @@
 //! cells naming it and the size they name, every account's base, every halt
 //! mark — recording nothing (D9).
 
+use std::any::Any;
 use std::collections::{BTreeMap, BTreeSet};
+use std::fmt;
+use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::thread;
@@ -64,7 +77,7 @@ use skep_febe::FebeWorld;
 use skep_kernel::{Kernel, Snapshot};
 use skep_namespace::PrincipalId;
 use skep_util::json::hex_string;
-use skep_util::notice;
+use skep_util::notice::{self, Class};
 
 use crate::cell::{self, names_kind_by_prefix, Cell, DESIGNATION};
 
@@ -157,7 +170,14 @@ pub struct Rebuild {
 /// The index.
 pub struct CellIndex {
     entries: RwLock<Entries>,
+    /// THE READINESS: the walk at open completed. Monotone.
     ready: AtomicBool,
+    /// THE FAILED STATE (`operations.md` §4 row 26): the walk at open DIED
+    /// on its thread, caught. Set by that catch alone ([`CellIndex::fail`])
+    /// and never cleared — nothing re-walks but a restart. Exclusive with
+    /// `ready` by construction: `complete` runs only after a walk returned,
+    /// `fail` only on an unwind out of the walk or its completion.
+    failed: AtomicBool,
     rebuild: Mutex<Option<Rebuild>>,
 }
 
@@ -170,11 +190,13 @@ enum Entered {
 }
 
 impl CellIndex {
-    /// An empty index, NOT READY: the walk makes it ready.
+    /// An empty index, NOT READY and not failed: the walk makes it ready,
+    /// or its death marks it failed.
     pub fn new() -> CellIndex {
         CellIndex {
             entries: RwLock::new(Entries::default()),
             ready: AtomicBool::new(false),
+            failed: AtomicBool::new(false),
             rebuild: Mutex::new(None),
         }
     }
@@ -183,6 +205,17 @@ impl CellIndex {
     /// consult. Monotone: once ready, ready for the life of the process.
     pub(crate) fn is_ready(&self) -> bool {
         self.ready.load(Ordering::Acquire)
+    }
+
+    /// Whether the walk at open DIED — the FAILED state (`operations.md` §4
+    /// row 26), the third beside ready and not-ready: the three readers
+    /// refuse `index_failed` for the life of the process, the door answers
+    /// the lease arm's verdict as final, the pruner runs no pass. Monotone,
+    /// and never true beside `CellIndex::is_ready`. `pub` as the gate's
+    /// `index_failed` read is: the daemon's standing line and its hooks
+    /// reach it through the gate.
+    pub fn is_failed(&self) -> bool {
+        self.failed.load(Ordering::Acquire)
     }
 
     /// The walk's report, once it has completed — the open-cost measure's
@@ -209,6 +242,19 @@ impl CellIndex {
         }
         *self.rebuild.lock() = Some(report);
         self.ready.store(true, Ordering::Release);
+    }
+
+    /// THE WALK's FAILURE (`operations.md` §4 row 26; §1.1 row 41): the
+    /// index marked FAILED, then the catch's line said ONCE under
+    /// `Class::Failure` in the operator's terms ([`WalkFailedLine`]) — the
+    /// panic's text where the code wrote it, what refuses from here and the
+    /// act. The walk thread's catch alone calls it, once per life of the
+    /// process; a test fails an index it built by hand through it. The
+    /// binary's hook has already said the panic's location (row 41: the
+    /// hook's line is the binary's, this one the library's).
+    pub(crate) fn fail(&self, payload: &(dyn Any + Send)) {
+        self.failed.store(true, Ordering::Release);
+        notice::emit(Class::Failure, WalkFailedLine { payload: payload_text(payload) });
     }
 
     /// ENTER one cell at `at`, minted in a document `owner` is seated over
@@ -405,6 +451,42 @@ impl CellIndex {
     }
 }
 
+/// THE CATCH's LINE (`operations.md` §4 row 26; §1.1 row 41), the ruled
+/// words: `cell index: the walk failed ({payload}); the upload family and
+/// the door's index arm refuse for the uptime; the act: a restart, or the
+/// build's fix where it recurs` — the panic's text in the parenthesis
+/// ([`payload_text`]), the hook's line having said the location. A pure
+/// value pinned by `to_string()` in the unit suite; emitted under
+/// `Class::Failure` by [`CellIndex::fail`], once.
+struct WalkFailedLine<'a> {
+    payload: &'a str,
+}
+
+impl fmt::Display for WalkFailedLine<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "cell index: the walk failed ({}); the upload family and the door's index arm refuse \
+             for the uptime; the act: a restart, or the build's fix where it recurs",
+            self.payload
+        )
+    }
+}
+
+/// The panic's text as the catch's line carries it: the `&'static str` a
+/// `panic!` with a literal wrote, or the `String` a formatted one did, else
+/// the words `a panic` — never a `Debug` of a payload the code did not
+/// write, so nothing of `operations.md` §1's NEVER list rides the line.
+fn payload_text(payload: &(dyn Any + Send)) -> &str {
+    if let Some(text) = payload.downcast_ref::<&'static str>() {
+        text
+    } else if let Some(text) = payload.downcast_ref::<String>() {
+        text.as_str()
+    } else {
+        "a panic"
+    }
+}
+
 /// THE WALK AT OPEN: every value of the world `snapshot` holds, through the
 /// prefix test and then the one entry path, into `index` — the one copy
 /// the commits since the open enter their own into. Reads an immutable
@@ -412,6 +494,8 @@ impl CellIndex {
 pub fn walk<W: FebeWorld>(snapshot: &Snapshot<W>, index: &CellIndex) -> Rebuild {
     #[cfg(any(test, feature = "test-hooks"))]
     WALK_HOLD.wait();
+    #[cfg(any(test, feature = "test-hooks"))]
+    WALK_FAULT.fire_if_armed();
     let started = Instant::now();
     let world = snapshot.world();
     let (mut values, mut cells, mut halts) = (0usize, 0usize, 0usize);
@@ -439,12 +523,31 @@ pub fn walk<W: FebeWorld>(snapshot: &Snapshot<W>, index: &CellIndex) -> Rebuild 
 /// thread the walk runs here instead: the daemon then serves later rather
 /// than never readying (P22 — a derived structure's loss is a slower
 /// answer, not an outage).
+///
+/// THE CATCH (`operations.md` §4 row 26; §1.1 row 41 — the same per-thread
+/// catch the daemon's loops run under): the thread's closure runs the walk
+/// AND its completion under `catch_unwind`, and an unwind out of either
+/// marks the index FAILED through `CellIndex::fail` — the third state,
+/// said once — in place of a thread that died unsaid and an index that
+/// never readied, where the three readers would have answered the
+/// retry-class token for the uptime. Unwind-safe by the same argument the
+/// transport makes for its handlers: the index's lock does not poison, an
+/// entry left half-made under FAILED is consulted by no reader the state
+/// does not refuse, and the snapshot is immutable. The OS-refused arm runs
+/// the walk on the OPENING thread, as before, and an unwind THERE is NOT
+/// caught here: it propagates as any panic in the open does, and the open
+/// fails — the catch is the walk thread's.
 pub fn start_walk<W: FebeWorld>(kernel: &Kernel<W>, index: Arc<CellIndex>) {
     let snapshot = kernel.snapshot();
     let shared = Arc::clone(&index);
     let spawned = thread::Builder::new().name("skepd-cell-index".into()).spawn(move || {
-        let report = walk(&snapshot, &shared);
-        shared.complete(report);
+        let walked = catch_unwind(AssertUnwindSafe(|| {
+            let report = walk(&snapshot, &shared);
+            shared.complete(report);
+        }));
+        if let Err(payload) = walked {
+            shared.fail(payload.as_ref());
+        }
     });
     if spawned.is_err() {
         notice::line("cell index: the OS refused the rebuild's thread; the walk runs at open");
@@ -491,8 +594,44 @@ impl WalkHold {
     }
 }
 
+/// TEST SEAM: a fault in the walk, armed before a daemon opens, so a suite
+/// can serve requests against a daemon whose index FAILED: the next walk
+/// in this process PANICS — after the hold's wait and before its first
+/// entry, with a literal payload — which the walk thread's catch contains
+/// and marks the index by. Taken ONCE: the arm is disarmed as it fires, so
+/// a later walk meets no fault.
+#[cfg(any(test, feature = "test-hooks"))]
+#[doc(hidden)]
+pub struct WalkFault {
+    armed: AtomicBool,
+}
+
+/// The test seam's one fault in the walk — process-wide, as the hold is,
+/// since the walk starts inside the open.
+#[cfg(any(test, feature = "test-hooks"))]
+#[doc(hidden)]
+pub static WALK_FAULT: WalkFault = WalkFault { armed: AtomicBool::new(false) };
+
+#[cfg(any(test, feature = "test-hooks"))]
+impl WalkFault {
+    /// Arm: the next walk to pass its hold panics. Arming again re-arms.
+    pub fn arm(&self) {
+        self.armed.store(true, Ordering::Release);
+    }
+
+    /// The walk's side: take the arm where it stands and panic — once per
+    /// arming, the payload a literal the binary's hook carries.
+    fn fire_if_armed(&self) {
+        if self.armed.swap(false, Ordering::AcqRel) {
+            panic!("the test seam's walk fault");
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    use skep_kernel::{CheckpointPolicy, Durability, KernelConfig, SaltSource};
+
     use super::*;
 
     /// A test address from its dotted form, T4-validated.
@@ -554,6 +693,63 @@ mod tests {
         assert_eq!(index.halts().len(), 1);
         index.complete(Rebuild { values: 0, cells: 0, halts: 0, walk: Duration::ZERO, parse: Duration::ZERO });
         assert!(index.is_ready());
+        assert!(!index.is_failed(), "a walk that completed never fails");
         assert_eq!(index.rebuild_report().map(|r| r.values), Some(0));
+    }
+
+    /// Poll until `done`, bounded, naming what never came.
+    fn wait_until(what: &str, done: impl Fn() -> bool) {
+        let deadline = Instant::now() + Duration::from_secs(30);
+        while !done() {
+            assert!(Instant::now() < deadline, "timed out waiting for {what}");
+            thread::sleep(Duration::from_millis(5));
+        }
+    }
+
+    /// THE CATCH (`operations.md` §4 row 26; §1.1 row 41): the walk's thread
+    /// dies under the seam's fault — the index FAILED, never ready, no
+    /// report, the fault spent as it fired — and a second walk over the
+    /// same kernel, meeting no fault, completes an index that is ready and
+    /// not failed: the two states are the walk's own, each set by one
+    /// door. Then the line's words, verbatim, at a literal payload; and the
+    /// payload's rendering — a literal, a formatted `String`, and a payload
+    /// of neither kind as the words `a panic`.
+    #[test]
+    fn a_walk_that_panics_marks_the_index_failed_and_never_ready() {
+        let engine = skep_engine::Engine::open(KernelConfig {
+            durability: Durability::InMemory,
+            checkpoint: CheckpointPolicy::Manual,
+            salt: SaltSource::Seeded(0),
+        })
+        .expect("in-memory genesis cannot fail");
+        let index = Arc::new(CellIndex::new());
+        WALK_FAULT.arm();
+        start_walk(engine.kernel(), Arc::clone(&index));
+        wait_until("the catch to mark the index FAILED", || index.is_failed());
+        assert!(!index.is_ready(), "a walk that failed never completes");
+        assert_eq!(index.rebuild_report(), None, "no report: the walk never returned");
+        assert!(!WALK_FAULT.armed.load(Ordering::Acquire), "taken once: disarmed as it fired");
+        let fresh = Arc::new(CellIndex::new());
+        start_walk(engine.kernel(), Arc::clone(&fresh));
+        wait_until("the second walk to complete", || fresh.is_ready());
+        assert!(!fresh.is_failed(), "the fault was spent on the first walk");
+        assert!(index.is_failed() && !index.is_ready(), "the first index stays FAILED");
+        assert_eq!(
+            WalkFailedLine { payload: "the test seam's walk fault" }.to_string(),
+            "cell index: the walk failed (the test seam's walk fault); the upload family and \
+             the door's index arm refuse for the uptime; the act: a restart, or the build's fix \
+             where it recurs"
+        );
+        let literal: Box<dyn Any + Send> = Box::new("a literal the code wrote");
+        assert_eq!(payload_text(literal.as_ref()), "a literal the code wrote");
+        let formatted: Box<dyn Any + Send> = Box::new(format!("formatted at {}", 7));
+        assert_eq!(payload_text(formatted.as_ref()), "formatted at 7");
+        let other: Box<dyn Any + Send> = Box::new(7u8);
+        assert_eq!(payload_text(other.as_ref()), "a panic");
+        // The door by hand, as the gate's suite takes it: FAILED set, ready
+        // not, nothing entered.
+        let by_hand = CellIndex::new();
+        by_hand.fail(other.as_ref());
+        assert!(by_hand.is_failed() && !by_hand.is_ready());
     }
 }

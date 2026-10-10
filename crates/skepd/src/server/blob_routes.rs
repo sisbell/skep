@@ -38,7 +38,11 @@
 //! 503, retry-class, as the deposit read is (ms5-R: the index's three
 //! readers wait, and nothing else — the progress read, the termination,
 //! every text read and write, the door's own binding arm are served
-//! throughout); THE PERMIT — the creation and the resume, the two acts that
+//! throughout) — or, where that walk DIED, `index_failed`, 503, for the
+//! life of the process, its `detail` naming the operator's act and no
+//! retry (`operations.md` §4 row 26; PATTERNS P10), read AHEAD of the
+//! readiness so a failed index never answers the retry-class token; THE
+//! PERMIT — the creation and the resume, the two acts that
 //! take bytes and no other, are admitted at most the UPLOAD POOL at once
 //! ([`UploadPool`](skep_media::UploadPool),
 //! [`MAX_CONCURRENT_UPLOADS`](skep_media::limits::MAX_CONCURRENT_UPLOADS) slots;
@@ -246,8 +250,11 @@ impl Daemon {
     /// THE PERMIT, then the method. The readiness (ms5-R): the creation, the
     /// resume and the deposit read — the index's three readers at this
     /// family — are refused `index_rebuilding` until the walk at open
-    /// completes; the progress read and the termination read no base and
-    /// are served. The permit (M-I5 (f); P29, P13): the creation and the
+    /// completes, and `index_failed` for the uptime where that walk died
+    /// (`operations.md` §4 row 26), the FAILED state read first so a failed
+    /// index never answers the retry-class token; the progress read and the
+    /// termination read no base and are served. The permit (M-I5 (f); P29,
+    /// P13): the creation and the
     /// resume take one of the upload pool's or are refused `upload_busy` —
     /// after the three refusals above, which spend no permit, and before any
     /// byte, record or partial; held for the request's life.
@@ -282,6 +289,13 @@ impl Daemon {
             (req.method.as_str(), &target),
             ("POST", BlobPath::Family) | ("GET", BlobPath::Family) | ("PATCH", BlobPath::Upload(_))
         );
+        // THE FAILED STATE BEFORE THE NOT-READY ONE (`operations.md` §4 row
+        // 26): a walk that died readies nothing, so a failed index must
+        // never answer the retry-class token — the final refusal is read
+        // first, and the window's only where the walk still runs.
+        if reads_the_index && self.media.index_failed() {
+            return refuse_failed();
+        }
         if reads_the_index && !self.media.index_ready() {
             return refuse_rebuilding();
         }
@@ -718,6 +732,25 @@ fn refuse_rebuilding() -> Reply {
     )
 }
 
+/// THE FAILED REFUSAL (`operations.md` §4 row 26; §1.1 row 41; PATTERNS
+/// P10): the cell index's walk at open DIED on its thread — caught, the
+/// index FAILED for the life of the process — and this request is one of
+/// its three readers. The `detail` states the state and the one act that
+/// exists, elsewhere and another hand's — a restart — and carries NO retry
+/// hint, since no retry can succeed: a client that retries retry-class
+/// tokens stops here. The operator's faces of the same state are the
+/// catch's line, the pruner's `no pass runs` line and the standing line's
+/// clause.
+fn refuse_failed() -> Reply {
+    refuse(
+        TransportError::IndexFailed,
+        Some(
+            "the cell index failed to build at this start; uploads and the deposit read are \
+             refused until a restart",
+        ),
+    )
+}
+
 /// THE PERMIT's REFUSAL (M-I5 (f); P29): every upload permit is in use, and
 /// this request is the creation or the resume — the fetch's `fetch_busy`
 /// twin, its `detail` naming the one act the person holds, the retry
@@ -789,8 +822,9 @@ fn refuse_deposit(scope: DepositScope, at: RefusedAt, offset: u64) -> Reply {
 /// that record's live lease: it lists no deposit of another's, and answers
 /// "this board holds these bytes" of nothing a principal did not deposit
 /// itself. Its base is one of the index's three readers: the route refuses
-/// it `index_rebuilding` until the walk at open completes (ms5-R). The
-/// sweep-3 subtraction of this read was DECLINED (sm-Q10): the records
+/// it `index_rebuilding` until the walk at open completes (ms5-R), and
+/// `index_failed` for the uptime where that walk died (`operations.md` §4
+/// row 26). The sweep-3 subtraction of this read was DECLINED (sm-Q10): the records
 /// exist for the resume and the binding, and the listing is this one
 /// function over them.
 ///
@@ -902,6 +936,21 @@ mod tests {
         let r = refuse_rebuilding();
         assert_eq!(r.status, 503);
         assert!(String::from_utf8_lossy(r.bytes()).contains("\"error\":\"index_rebuilding\""));
+        // The failed refusal (`operations.md` §4 row 26; P10): 503 under its
+        // own name, the detail the state and the operator's act — and no
+        // retry hint, by either word, since none can succeed.
+        let r = refuse_failed();
+        assert_eq!(r.status, 503);
+        let text = String::from_utf8_lossy(r.bytes()).to_string();
+        assert!(text.contains("\"error\":\"index_failed\""), "{text}");
+        assert!(
+            text.contains(
+                "\"detail\":\"the cell index failed to build at this start; uploads and the \
+                 deposit read are refused until a restart\""
+            ),
+            "{text}"
+        );
+        assert!(!text.contains("retry") && !text.contains("shortly"), "no retry hint: {text}");
         // The permit's refusal (M-I5 (f)): retry-class, its detail naming
         // the retry and no figure.
         let r = refuse_upload_busy();

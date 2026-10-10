@@ -977,6 +977,42 @@ pub fn release_the_walk(sd: &Skepd, seam: WalkSeam) {
     drop(seam);
 }
 
+/// Spawn a daemon WITH THE CELL INDEX's WALK FAILED (`operations.md` §4 row
+/// 26): the walk's fault armed before the open (`Daemon::fail_the_index_walk`)
+/// under the walk's fence's WRITE side, as the hold is ([`WalkSeam`]), so no
+/// other spawn's walk takes the fault; the catch's mark waited for, bounded;
+/// the fence given up only then — the fault is taken once, as it fires, so a
+/// walk a later spawn starts meets none — and the board claimed (a text
+/// write, served under FAILED as under the hold). The daemon serves with its
+/// index FAILED for its whole life: the three readers refuse `index_failed`,
+/// the door answers the lease arm as final, the pruner runs no pass, the
+/// standing line carries the clause.
+pub fn spawn_walk_failed(dir: &Path) -> Skepd {
+    /// The fence's write side, the thread's mark cleared as it drops — a
+    /// panicking wait included, so a failing spawn wedges no other test's.
+    struct Fenced {
+        _fence: parking_lot::RwLockWriteGuard<'static, ()>,
+    }
+    impl Drop for Fenced {
+        fn drop(&mut self) {
+            HOLDS_THE_FENCE.set(false);
+        }
+    }
+    enter_the_fence();
+    let fenced = Fenced { _fence: WALK_FENCE.write() };
+    Daemon::fail_the_index_walk();
+    let sd =
+        spawn_under(dir, true, None, None, None, ALLOW_PREVIEW_KEYS_IN_FIXTURES, Walk::CallersOwn);
+    let deadline = Instant::now() + Duration::from_secs(60);
+    while !sd.daemon().index_is_failed() {
+        assert!(Instant::now() < deadline, "the cell index's walk did not fail within 60 s");
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    drop(fenced);
+    claim_board(sd.port());
+    sd
+}
+
 /// [`spawn_configured`] on a board already claimed, returning the moment
 /// the daemon serves and NOT waiting for the index's walk — the open-cost
 /// measure's spawn, whose clock runs from the open's return to the first

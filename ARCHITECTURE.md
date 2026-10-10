@@ -1556,7 +1556,8 @@ first once the index is ready), or one this principal deposited under its
 own live lease over a whole file; refused `unbound_cell` otherwise,
 `lease_lapsed` where the deposit is gone, and `index_rebuilding`,
 retry-class, where the lease arm alone would refuse while the index's walk
-at open runs; a blind document's cell is admitted with no store consulted.
+at open runs — and the lease arm's verdict as final once the walk has
+FAILED; a blind document's cell is admitted with no store consulted.
 It reads the op's values and, for a shot, the staging draft's own runs off
 the locked snapshot, through M5's and M4's public reads and the
 `ReadableWorld` seam, and the index, the lease and the file through the
@@ -1580,9 +1581,11 @@ per hash the cells naming it, per account the distinct hashes its cells
 name at their size (the base); entered by the daemon's write path at every
 commit that mints a cell and rebuilt whole at every open on a thread over
 an immutable snapshot of the content store, its entries added into the one
-copy (an entry is idempotent per cell); its readiness flag is what the
-index's three readers consult, and a value naming the kind under no pinned
-schema stands in it as a halt mark. `pruner.rs` — THE PRUNER's PASS: the
+copy (an entry is idempotent per cell) — that thread's death, caught,
+marks the index FAILED, a third state beside ready and not-ready, said
+once and re-said by the daemon's standing line; its readiness flag is what
+the index's three readers consult, and a value naming the kind under no
+pinned schema stands in it as a halt mark. `pruner.rs` — THE PRUNER's PASS: the
 expired partials removed off the record's expiry and the hold; the halts
 on a foreign designation directory or a halt mark; the unreferenced files
 renamed aside under an exclusive arm the caller hands in (the credential
@@ -1860,7 +1863,8 @@ the store's install — nothing above their own layer.
    give the head writer its turn. `/blob/upload` resolves the caller, refuses the creation and
    the resume `uploads_closed` on a board launched with `--no-uploads`,
    refuses the creation, the resume and the deposit read
-   `index_rebuilding` until the index's walk at open completes, admits
+   `index_rebuilding` until the index's walk at open completes — or
+   `index_failed`, no retry, for the uptime where the walk died — admits
    the creation and the resume under a permit of the upload pool — past
    it `upload_busy`, retry-class, before any body byte — gates the
    declared total and — at the creation, before the partial and the

@@ -374,6 +374,17 @@ pub(super) enum TransportError {
     /// sibling: the request may be perfectly good and the walk momentarily
     /// unfinished. Every other request is served throughout.
     IndexRebuilding,
+    /// THE FAILED REFUSAL (`operations.md` §4 row 26; §1.1 row 41; PATTERNS
+    /// P10): the cell index's walk at open DIED on its thread — caught, the
+    /// index FAILED, a third state beside ready and not-ready — and this is
+    /// one of its three readers. NOT retry-class, though it shares the 503:
+    /// `index_rebuilding` names a window that ends, this a state that stands
+    /// for the life of the process, so the `detail` names the act that
+    /// exists elsewhere — a restart, the operator's — and no retry, and a
+    /// client that retries retry-class tokens stops. The door emits no token
+    /// of its own for the state: under FAILED it answers the lease arm's
+    /// verdict as final. Every other request is served throughout.
+    IndexFailed,
     /// THE PERMIT's REFUSAL (M-I5 (f); PATTERNS P29): every upload permit is
     /// in use, and this is the creation or the resume — refused before any
     /// body byte, a creation making no upload, a resume keeping its upload
@@ -444,6 +455,7 @@ impl TransportError {
             TransportError::DepositRefused => "deposit_refused",
             TransportError::BlobIo => "blob_io",
             TransportError::IndexRebuilding => "index_rebuilding",
+            TransportError::IndexFailed => "index_failed",
             TransportError::UploadBusy => "upload_busy",
             TransportError::NoValue => "no_value",
             TransportError::NotACell => "not_a_cell",
@@ -509,6 +521,13 @@ impl TransportError {
             | TransportError::UploadBusy
             | TransportError::FetchBusy
             | TransportError::FeedRebuilding => 503,
+            // THE FAILED INDEX, 503 in an arm of its own (`operations.md` §4
+            // row 26; PATTERNS P10): the service is unavailable, as above —
+            // and NOT retry-class, so it is not listed with the seven. The
+            // cell index's walk at open died, and no retry can succeed for
+            // the life of the process: the detail names a restart and no
+            // retry, and a client that retries retry-class tokens stops.
+            TransportError::IndexFailed => 503,
             // The gate's: the scope it names has no room for these bytes.
             TransportError::DepositRefused => 507,
         }

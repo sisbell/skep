@@ -578,10 +578,22 @@ fn checkpoint_on_due(daemon: &Daemon, signal: &CheckpointSignal) {
     }
 }
 
+/// THE PRUNER's LINE UNDER A FAILED INDEX (`operations.md` §4 row 26), the
+/// words alone: said ONCE through the daemon's classed door under
+/// `Class::Failure` as the loop ends by choice ([`prune_on_cadence`]);
+/// pinned by the standing suite (`tests/it/standing.rs`).
+const PRUNER_NO_PASS_INDEX_FAILED: &str = "pruner: no pass runs — the cell index failed to build";
+
 /// THE PRUNER's LOOP: wait for the cell index to ready — in short waits, so
 /// the stop reaches it — run the pass, then wait the cadence out or the
 /// stop, whichever comes first. A pass's I/O failure is the operator's
-/// line, and the next pass tries again. THE CATCH (row 41): the whole loop
+/// line, and the next pass tries again. THE FAILED INDEX (`operations.md`
+/// §4 row 26): where the index's walk at open DIED no pass can ever start,
+/// so the loop says so ONCE — [`PRUNER_NO_PASS_INDEX_FAILED`], through the
+/// daemon's classed door — and RETURNS: the thread ends BY CHOICE, not by
+/// a death, so no liveness flag is set and the standing line's `the
+/// pruner's thread is gone` never comes; its index clause says why no pass
+/// runs, and a restart walks again. THE CATCH (row 41): the whole loop
 /// runs under `catch_unwind`, and a panic that escapes a turn ENDS the
 /// thread through its catch (`Daemon::the_pruner_thread_ended`): the
 /// liveness flag the standing line reads hourly, and the consequence line,
@@ -592,6 +604,12 @@ fn prune_on_cadence(daemon: &Daemon, cadence: &Cadence) {
         // thread's death has, which the catch below contains.
         #[cfg(any(test, feature = "test-hooks"))]
         daemon.fire_the_pruners_fault();
+        // THE FAILED INDEX: the walk died, so readiness never comes — said
+        // once, and the loop ends by choice, no flag set.
+        if daemon.media.index_failed() {
+            daemon.say(Class::Failure, PRUNER_NO_PASS_INDEX_FAILED);
+            return;
+        }
         if daemon.index_is_ready_for_pruning() {
             match daemon.prune_pass() {
                 // The pass's own line: its figures, the halt, the logs'

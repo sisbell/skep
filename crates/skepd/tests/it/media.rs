@@ -496,6 +496,70 @@ fn the_three_readers_refuse_index_rebuilding_and_nothing_else_does() {
     sd.shutdown();
 }
 
+/// `operations.md` §4 row 26 — THE FAILED INDEX REACHES THE THREE READERS
+/// AND NOTHING ELSE, FOR THE UPTIME (the fence's I1 and I3): the walk died
+/// under the seam's fault — the index FAILED, never ready — and the PUT's
+/// creation, the resume and the deposit read answer `503 index_failed`,
+/// the `detail` the state and the operator's act, with neither "retry"
+/// nor "shortly" in it (P10) and never `index_rebuilding`; the progress
+/// read and the termination are served (`404 no_upload`), every text read
+/// and write, `/changes` and `/health` are served; the door answers the
+/// lease arm as final (a cell no lease covers is `unbound_cell`, the
+/// window's retry-class token never); and a second round of the three,
+/// after a pause a would-be walk could have used, answers the same — no
+/// readiness ever comes. The catch's line goes to the operator stream,
+/// which no suite reads in-process: its words are the unit suite's
+/// (`skep-media`'s `index.rs`), its once by construction — one walk
+/// thread, one catch.
+#[test]
+fn the_three_readers_refuse_index_failed_for_the_uptime_and_nothing_else_does() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let sd = spawn_walk_failed(dir.path());
+    let port = sd.port();
+    let bare = open_session(port, CLAIMANT_PRINCIPAL);
+    assert!(sd.daemon().index_is_failed(), "the catch marked the index FAILED");
+    assert!(!sd.daemon().index_is_ready(), "a walk that failed never completes");
+    let failed = |answer: (u16, Vec<(String, String)>, Vec<u8>), what: &str| {
+        let text = String::from_utf8_lossy(&answer.2).to_string();
+        assert_eq!(answer.0, 503, "{what}: {text}");
+        let v = json(&answer.2);
+        assert_eq!(v["error"].as_str(), Some("index_failed"), "{what}: {v}");
+        assert_eq!(
+            v["detail"].as_str(),
+            Some("the cell index failed to build at this start; uploads and the deposit read are refused until a restart"),
+            "{what}: the detail is the state and the operator's act: {v}"
+        );
+        assert!(!text.contains("retry") && !text.contains("shortly"), "{what}: no retry hint (P10): {text}");
+        assert!(!text.contains("index_rebuilding"), "{what}: never the retry-class token: {text}");
+    };
+    let id = "0123456789abcdef0123456789abcdef";
+    let three = |round: &str| {
+        failed(blob_exchange_once(port, "POST", &format!("{BLOB_UPLOAD}?length=5"), Some(&bare), b"hello"), &format!("the creation, {round}"));
+        failed(blob_exchange_once(port, "PATCH", &format!("{BLOB_UPLOAD}/{id}?offset=0"), Some(&bare), b"x"), &format!("the resume, {round}"));
+        failed(blob_exchange_once(port, "GET", BLOB_UPLOAD, Some(&bare), b""), &format!("the deposit read, {round}"));
+    };
+    three("the first round");
+    let (st, _, body) = blob_exchange_once(port, "GET", &format!("{BLOB_UPLOAD}/{id}"), Some(&bare), b"");
+    assert_eq!((st, json(&body)["error"].as_str()), (404, Some("no_upload")), "the progress read is served");
+    let (st, _, body) = blob_exchange_once(port, "DELETE", &format!("{BLOB_UPLOAD}/{id}"), Some(&bare), b"");
+    assert_eq!((st, json(&body)["error"].as_str()), (404, Some("no_upload")), "the termination is served");
+    let draft = owner_draft(port, &bare);
+    expect_resp(&insert_text(port, &bare, &draft, 1, "abc"), "ack_addr");
+    assert_eq!(text_of(port, Some(&bare), &draft, 1, 3), "abc", "a text read is served");
+    let (st, _) = get(port, "/changes?since=0");
+    assert_eq!(st, 200, "/changes is served");
+    let (st, body) = get(port, "/health");
+    assert_eq!((st, json(&body)["ok"].as_bool()), (200, Some(true)), "/health is served");
+    // The door under FAILED: the lease arm's verdict is final — a cell no
+    // lease covers and no cell names is `unbound_cell`, PERMANENT, where the
+    // window answered `index_rebuilding`, RETRY.
+    assert_token(&op(port, Some(&bare), &cell_frame(&draft, 4, &canonical_cell(), None)), "insert", "unbound_cell");
+    std::thread::sleep(Duration::from_millis(400));
+    assert!(sd.daemon().index_is_failed() && !sd.daemon().index_is_ready(), "no readiness ever comes");
+    three("the second round");
+    sd.shutdown();
+}
+
 /// ms5-R, THE DOOR NEVER WAITS — THE REBUILD WINDOW's ANSWER (s6-lam-b; the
 /// register M-I5 (b)): a cell whose lease lapsed, named by the owner's own
 /// cell already, its file whole, is answered `index_rebuilding` RETRY-CLASS
@@ -548,6 +612,61 @@ fn the_binding_reads_the_lease_arm_alone_until_the_walk_completes() {
     assert_eq!(delivery(port, None, &m, 1, 1), json!([{"atom": cell}]), "the owner's shot after the lapse, no re-PUT");
     assert_token(&op(port, Some(&bare), &cell_frame(&owner_draft(port, &bare), 1, &never, None)), "insert", "unbound_cell");
     assert_eq!(sd.daemon().index_counts(), (3, 1, 0), "the insert's and the shot's cells entered at commit");
+    sd.shutdown();
+}
+
+/// `operations.md` §4 row 26 — THE DOOR UNDER FAILED ANSWERS THE LEASE ARM
+/// AS FINAL (the fence's I2 at the route; the sibling of the window's claim
+/// above): the owner's cell placed in a first uptime under a lease that
+/// lapses by the media clock; the second uptime's walk DIED before its
+/// first entry, so the index never learns the cell — and the same cell into
+/// a fresh draft is `lease_lapsed`, PERMANENT (the window answered
+/// `index_rebuilding`, RETRY), the owner's shot of the first draft
+/// `lease_lapsed` too, a cell never deposited `unbound_cell`; nothing
+/// commits; and the re-PUT that would cure the lapse is one of the three
+/// readers, refused `index_failed` with no retry hint — so the lapse stands
+/// for the uptime, and the act is a restart.
+#[test]
+fn the_door_answers_the_lease_arm_as_final_where_the_walk_died() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let bytes = b"a picture whose lease lapses before the walk dies";
+    let cell = cell_of(bytes, bytes.len() as u64);
+    let d1 = {
+        let sd = spawn(dir.path());
+        let port = sd.port();
+        let bare = open_session(port, CLAIMANT_PRINCIPAL);
+        put_whole(port, &bare, bytes);
+        let d1 = owner_draft(port, &bare);
+        expect_resp(&op(port, Some(&bare), &cell_frame(&d1, 1, &cell, None)), "ack_addr");
+        sd.shutdown();
+        d1
+    };
+    let sd = spawn_walk_failed(dir.path());
+    let port = sd.port();
+    // Eight days on the reopened daemon's media clock: the lease LAPSED,
+    // inside the horizon, by the clock seam and never by a sleep.
+    sd.daemon().advance_media_clock_ms(LEASE_MS + 24 * 3600 * 1000);
+    let bare = open_session(port, CLAIMANT_PRINCIPAL);
+    let signed = open_signed_session(port, CLAIMANT_PRINCIPAL, &device_key());
+    let d2 = owner_draft(port, &bare);
+    let edition = published_edition(port, &signed);
+    let before = head_position(port);
+    assert_token(&op(port, Some(&bare), &cell_frame(&d2, 1, &cell, None)), "insert", "lease_lapsed");
+    let v = op(port, Some(&signed), &publish_frame(&edition, None, Some(&d1), &[run(&d1, &format!("{d1}.0.1.1"), 1)]));
+    assert_token(&v, "publish", "lease_lapsed");
+    let never = cell_of(b"never deposited here", 20);
+    assert_token(&op(port, Some(&bare), &cell_frame(&d2, 1, &never, None)), "insert", "unbound_cell");
+    assert_eq!(content_extent(port, Some(&bare), &d2), 0, "nothing permanent landed");
+    assert_eq!(content_extent(port, None, &edition), 0);
+    assert_eq!(head_position(port), before, "a refused write commits nothing");
+    assert_eq!(sd.daemon().index_counts(), (0, 0, 0), "the walk died before its first entry: the index never learned d1's cell");
+    // The re-PUT that would cure the lapse is the creation — one of the
+    // three readers — refused `index_failed`, said so, no retry.
+    let (st, _, body) = blob_exchange_once(port, "POST", &format!("{BLOB_UPLOAD}?length={}", bytes.len()), Some(&bare), bytes);
+    let text = String::from_utf8_lossy(&body).to_string();
+    assert_eq!((st, json(&body)["error"].as_str()), (503, Some("index_failed")), "{text}");
+    assert!(!text.contains("retry") && !text.contains("shortly"), "no retry hint (P10): {text}");
+    assert_token(&op(port, Some(&bare), &cell_frame(&d2, 1, &cell, None)), "insert", "lease_lapsed");
     sd.shutdown();
 }
 

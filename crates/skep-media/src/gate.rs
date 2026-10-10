@@ -49,7 +49,11 @@
 //! nothing else"); and where that arm alone would REFUSE, the answer is
 //! `Binding::Rebuilding` — the index arm it has not read may admit the
 //! cell — which the door answers RETRY-CLASS, as the readiness refusal
-//! does, and never a permanent token.
+//! does, and never a permanent token. Where the walk DIED instead
+//! (`CellIndex::is_failed`; `operations.md` §4 row 26) no index arm is
+//! coming, and the lease arm's verdict stands as FINAL — `Lapsed`,
+//! `Unbound` — honest where no wait can succeed; the re-PUT that would
+//! cure a lapse is the family's to refuse, `index_failed`.
 //!
 //! THE LIMITS IN FORCE ([`Limits`]; the register M-I6 (b), (d)): A
 //! PER-ACCOUNT LIMIT IS ALWAYS IN FORCE. THE DAEMON's DEFAULT (the owner's
@@ -279,7 +283,9 @@ pub(crate) enum Binding {
     /// cell (a hash the principal's own cells name, its file whole), so the
     /// state is answered retry-class and never a permanent token. A cell the
     /// lease arm admits in the rebuild window is admitted as it is at any
-    /// time.
+    /// time. A window that ENDS: where the walk DIED (`operations.md` §4 row
+    /// 26) the lease arm's verdict stands as final, and this is never
+    /// answered.
     Rebuilding,
 }
 
@@ -418,6 +424,15 @@ impl MediaGate {
     /// completed.
     pub fn index_ready(&self) -> bool {
         self.index.is_ready()
+    }
+
+    /// Whether the index's walk at open DIED (`operations.md` §4 row 26) —
+    /// the FAILED state, never true beside [`MediaGate::index_ready`]: the
+    /// three readers refuse `index_failed` for the life of the process, the
+    /// binding answers the lease arm's verdict as final, the pruner runs no
+    /// pass, and the daemon's standing line re-says it.
+    pub fn index_failed(&self) -> bool {
+        self.index.is_failed()
     }
 
     /// The limits in force.
@@ -728,7 +743,9 @@ impl MediaGate {
     /// where that record names the hash under a live lease. Until the walk
     /// completes the index arm is skipped — the door never waits on the
     /// index — and where the lease arm alone would refuse, the answer is
-    /// `Binding::Rebuilding`: the arm not yet read may admit the cell.
+    /// `Binding::Rebuilding`: the arm not yet read may admit the cell. Where
+    /// the walk DIED (`operations.md` §4 row 26) the arm not read is never
+    /// coming, and the lease arm's verdict stands as final.
     pub(crate) fn binding(&self, principal: PrincipalId, cell: &Cell) -> Binding {
         let key = Self::key(principal);
         let hex = hex_string(&cell.hash);
@@ -768,8 +785,10 @@ impl MediaGate {
             Binding::Admitted => Binding::Admitted,
             // THE REBUILD WINDOW (ms5-R; the door never waits): a refusal off
             // the lease arm alone, the index arm unread, is the state and no
-            // permanent verdict.
-            _ if !ready => Binding::Rebuilding,
+            // permanent verdict — while the walk RUNS. Where it DIED (§4 row
+            // 26) no arm is coming, and the verdict stands as final: honest
+            // where no wait can succeed.
+            _ if !ready && !self.index.is_failed() => Binding::Rebuilding,
             refused => refused,
         }
     }

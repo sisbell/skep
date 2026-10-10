@@ -24,8 +24,8 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
   `admit_declared`, `admit_creation`, `admit_bytes` and `claim` (its
   `Hold`), each refusal a `DepositScope` (`token`); the reads the routes
   and the deposit read take — `store`, `key`, `now_ms`, `limits`
-  (`Limits`), `index`, `index_ready`, `own_pending`, `uploads_open`,
-  `health_object`, `startup_line`; the floor — `floor_in_force`,
+  (`Limits`), `index`, `index_ready`, `index_failed`, `own_pending`,
+  `uploads_open`, `health_object`, `startup_line`; the floor — `floor_in_force`,
   `set_floor`, `floor`, `free_space`; and THE INVENTORY's two reads, `lease_counted`
   (`Counted`) and `upload_counted`, under the gate's own pending rule and
   its own reading of a store key, with `wall_clock_ms`, its reading of the
@@ -34,7 +34,8 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
   `enter_insert` and `enter_publish`; the reads `base`, `referenced`,
   `references` (`Reference`), `accounts` and `halts` (`HaltMark`); `walk`
   over a snapshot and `start_walk` on a thread of its own, answering a
-  `Rebuild`.
+  `Rebuild` — or, where that thread died, marking the index FAILED, the
+  third state beside ready and not-ready, read by `is_failed`.
 - **The pruner**, `pruner` — `pass(&gate, exclusive)`, answering a
   `PrunePass`; `PINNED_DESIGNATIONS`; `Cadence` (`new`, `wait`, `stop`) and
   `Wake`, the transport's thread's clock and stop.
@@ -53,10 +54,11 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
   the variable), which the daemon's open names; `UploadPool` (`new`,
   `admit`), the fetch pool's twin.
 - **The test seam** (`test-hooks`, default off; every item of it
-  `#[doc(hidden)]`) — the walk hold, the stream hold, the prune hold and its
-  notice, the gate's clock, free-space and limits overrides, the index's
-  report and counts, the pools' `try_hold`; forwards `skep-blobs/test-hooks`,
-  the hazard seam the daemon's hooks reach through the gate's `store`.
+  `#[doc(hidden)]`) — the walk hold and the walk fault, the stream hold,
+  the prune hold and its notice, the gate's clock, free-space and limits
+  overrides, the index's report and counts, the pools' `try_hold`; forwards
+  `skep-blobs/test-hooks`, the hazard seam the daemon's hooks reach through
+  the gate's `store`.
 
 Its modules, each with a line saying what it holds, are declared in
 `src/lib.rs`; the rules that hold across its files, in the workspace's

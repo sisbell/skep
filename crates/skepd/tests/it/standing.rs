@@ -23,6 +23,10 @@
 //! * A STOPPED FILE: `{file} stopped since position {p}` for each of the
 //!   five, `{p}` the position each stop names — the fence for
 //!   `commits.log`'s rewrite, the coverage for the derived files'.
+//! * THE FAILED INDEX (`operations.md` §4 row 26): the walk at open died
+//!   under the seam's fault — `the cell index failed to build` at every
+//!   tick, the pruner's `no pass runs` line once, no pass ever, and no
+//!   `the pruner's thread is gone`: the pruner's loop ended by choice.
 //!
 //! The words are the unit suite's (`server/tests.rs`); the class word and
 //! the figures are read here. Every daemon is shut down before the claim
@@ -38,8 +42,8 @@ use skepd::Skepd;
 use crate::common;
 use common::{
     acked_addr, acked_at, claim_board, device_key, get, json, op, open_session,
-    open_signed_session, spawn, spawn_configured, spawn_unclaimed, CLAIMANT_ACCOUNT,
-    CLAIMANT_DOC1, CLAIMANT_PRINCIPAL,
+    open_signed_session, spawn, spawn_configured, spawn_unclaimed, spawn_walk_failed,
+    CLAIMANT_ACCOUNT, CLAIMANT_DOC1, CLAIMANT_PRINCIPAL,
 };
 
 /// The `standing:` lines the daemon has said, oldest first, as its record
@@ -391,5 +395,44 @@ fn a_stopped_feed_file_is_re_said_with_the_position_its_stop_names() {
         ),
         "FINDING (m11): the five files, each with the position its stop names"
     );
+    sd.shutdown();
+}
+
+/// `operations.md` §4 row 26 — THE FAILED INDEX, RE-SAID AT EVERY TICK, AND
+/// THE PRUNER's ONE LINE (the fence's I4): the walk at open died under the
+/// seam's fault; the pruner's loop says `pruner: no pass runs — the cell
+/// index failed to build` ONCE, as a failure, and ends BY CHOICE — no
+/// death, so its liveness flag stays clear and no pass ever runs — and each
+/// tick says `the cell index failed to build` beside the board's permissive
+/// clause, `the pruner's thread is gone` on no line.
+#[test]
+fn the_failed_index_is_re_said_at_every_tick_and_the_pruner_says_no_pass_runs_once() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let sd = spawn_walk_failed(dir.path());
+    assert!(sd.daemon().index_is_failed() && !sd.daemon().index_is_ready());
+    let no_pass = "failure: pruner: no pass runs — the cell index failed to build";
+    let said = |line: &str| sd.daemon().lines_said().iter().filter(|l| l.as_str() == line).count();
+    wait_until("the pruner's line", || said(no_pass) >= 1);
+    sd.daemon().set_standing_interval_millis(40);
+    wait_until("two ticks", || standing_lines(&sd).len() >= 2);
+    // Two readiness polls more: a loop that had not ended would say it again.
+    std::thread::sleep(Duration::from_millis(600));
+    assert_eq!(
+        said(no_pass),
+        1,
+        "FINDING (§4 row 26): the pruner's line, once:\n{}",
+        sd.daemon().lines_said().join("\n")
+    );
+    assert!(!sd.daemon().pruner_thread_ended(), "the loop ended by choice, not by a death");
+    assert_eq!(sd.daemon().prune_passes_completed(), 0, "no pass ever runs");
+    let lines = standing_lines(&sd);
+    assert!(lines.len() >= 2, "{lines:?}");
+    for line in &lines {
+        assert_eq!(
+            line,
+            "standing: the cell index failed to build; CLAIMED-PERMISSIVE",
+            "FINDING (m11): the index's clause at every tick, the pruner's on none"
+        );
+    }
     sd.shutdown();
 }

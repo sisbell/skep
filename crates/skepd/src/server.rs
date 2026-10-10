@@ -1332,9 +1332,8 @@ impl Daemon {
     /// CLAIMED-PERMISSIVE bit as `log_config_warnings` reads the claim — and
     /// ONE line, [`StandingLine`], under `Class::Standing`, where at least
     /// one clause stands; NOTHING otherwise. The cell index's FAILED state
-    /// is the seventh read, the index's own lane's: the renderer holds its
-    /// place and nothing here reads it yet. No clause for the checkpoint
-    /// thread's own death — it is the carrier.
+    /// is the seventh read, the media gate's (`operations.md` §4 row 26).
+    /// No clause for the checkpoint thread's own death — it is the carrier.
     pub(crate) fn say_the_standing_line(&self) {
         let free_space = self.media.free_space();
         let floor = self.media.floor();
@@ -1344,7 +1343,7 @@ impl Daemon {
             stopped_files: self.writes.stopped_feed_files(),
             pruner_gone: self.threads.pruner_ended.load(Ordering::Acquire),
             feed_walk_gone: self.writes.feed_walk_gone(),
-            index_failed: false,
+            index_failed: self.media.index_failed(),
             floor: (free_space < floor).then_some(FloorBinding { free_space, floor }),
             claimed_permissive: self.auth.cfg.claimed_permissive(self.board_is_claimed()),
         };
@@ -2111,8 +2110,8 @@ impl fmt::Display for CheckpointThreadRefusedLine<'_> {
 /// in the unit suite; emitted under `Class::Standing` at a tick where
 /// [`StandingLine::stands`], and never otherwise. States, positions and
 /// files alone — no principal, token, path, query or reader rides it. The
-/// index's clause has its field and no read yet: the cell index's FAILED
-/// state is its own lane's, which supplies the read.
+/// index's clause reads the media gate's FAILED state (`operations.md` §4
+/// row 26).
 pub(super) struct StandingLine {
     /// The write path's halt and the position it was set at.
     pub(super) halted_at: Option<Seq>,
@@ -2125,7 +2124,8 @@ pub(super) struct StandingLine {
     /// The feed walk's liveness flag, with the region it left uncovered
     /// (`WritePath::feed_walk_gone`).
     pub(super) feed_walk_gone: Option<(u64, u64)>,
-    /// The cell index's FAILED state — the seventh read, its lane's.
+    /// The cell index's FAILED state — the seventh read, the media gate's
+    /// (`MediaGate::index_failed`).
     pub(super) index_failed: bool,
     /// The floor binding: the free space read below the floor in force.
     pub(super) floor: Option<FloorBinding>,

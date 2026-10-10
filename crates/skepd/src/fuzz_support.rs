@@ -130,12 +130,17 @@ pub const TRANSPORT_ERRORS: &[&str] = &[
     "history_io",
     "history_corrupt",
     "no_journal",
-    // The blob upload's ten (wire.md §Media): the PUT's path family
+    // The blob upload's eleven (wire.md §Media): the PUT's path family
     // answers transport refusals alone — no `Op` runs there — the ninth
     // the readiness refusal of the cell index's three readers, 503,
-    // retry-class as `history_busy` is, and the tenth the upload pool's:
-    // a creation or a resume past the pool's permits, 503, retry-class as
-    // `fetch_busy` is, before any body byte.
+    // retry-class as `history_busy` is, the tenth the upload pool's: a
+    // creation or a resume past the pool's permits, 503, retry-class as
+    // `fetch_busy` is, before any body byte — and the eleventh the FAILED
+    // index's (`operations.md` §4 row 26): the three readers' answer for
+    // the life of a process whose index walk at open died, 503 and NOT
+    // retry-class, its detail naming a restart and no retry (P10). A fuzz
+    // daemon's walk over a fresh directory never dies, so the name is one
+    // no fuzz target is answered today.
     "malformed_blob",
     "upload_refused",
     "no_upload",
@@ -146,6 +151,7 @@ pub const TRANSPORT_ERRORS: &[&str] = &[
     "blob_io",
     "index_rebuilding",
     "upload_busy",
+    "index_failed",
     // The blob fetch's seven (wire.md §Media, THE FETCH): what the address
     // holds or the store under it is not a file to serve — six 404s told
     // apart by name — and the fetch pool full, 503, retry-class.

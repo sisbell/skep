@@ -64,6 +64,7 @@ fn every_transport_error_pairs_its_documented_name_with_its_documented_status() 
         (TransportError::DepositRefused, "deposit_refused", 507),
         (TransportError::BlobIo, "blob_io", 500),
         (TransportError::IndexRebuilding, "index_rebuilding", 503),
+        (TransportError::IndexFailed, "index_failed", 503),
         (TransportError::UploadBusy, "upload_busy", 503),
         (TransportError::NoValue, "no_value", 404),
         (TransportError::NotACell, "not_a_cell", 404),

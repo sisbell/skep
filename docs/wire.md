@@ -817,6 +817,7 @@ Non-200 statuses are transport-level failures with a body of the shape
 | 507    | `deposit_refused`           | the media gate refused the deposit: `scope` names `own`, `venue`, `floor` or `standing`, `ended` whether the upload was ended (refused as the body was written) or kept (refused before it), `offset` the bytes received (§Media) |
 | 500    | `blob_io`                   | the blob store refused I/O; the upload stands at its last durable point (§Media) |
 | 503    | `index_rebuilding`          | the cell index is being rebuilt from the board after an open, and this request is one of its three readers — the blob upload's creation or resume, or the deposit read; retry shortly (§Media) |
+| 503    | `index_failed`              | the cell index's rebuild after an open DIED on its thread and the index FAILED for the life of the process, and this request is one of its three readers — the blob upload's creation or resume, or the deposit read; `detail` names the state and the act, a restart, the operator's: no second ask succeeds before it (§Media) |
 | 503    | `feed_rebuilding`           | a `/changes` page whose rows would come from the positions a lost or torn `commits.log` left uncovered, which the daemon re-covers behind the listener after an open — pages below and above the region serve, and `/events` is untouched; retry shortly, as `history_busy` is (§The change feed) |
 | 404    | `no_value`                  | the blob fetch's `i` names an element position the document never minted (§Media, THE FETCH) |
 | 404    | `not_a_cell`                | the fetch's `i` holds a value naming no media cell — prose, a def, a record of another kind (§Media, THE FETCH) |
@@ -2827,6 +2828,7 @@ The family's refusals, each a transport refusal (no `Op` ran):
 | 507 | `deposit_refused` | the gate: `scope` — `own`, `venue`, `floor` or `standing` — `ended`, `offset`; at `standing` a `detail` naming the act |
 | 500 | `blob_io` | the store refused I/O; the upload stands at its last durable point |
 | 503 | `index_rebuilding` | the creation, the resume or the deposit read while the cell index is being rebuilt from the board after an open — retry-class, as `history_busy` is; the progress read, the termination and every other request are served meanwhile |
+| 503 | `index_failed` | the creation, the resume or the deposit read after the cell index's rebuild at open DIED on its thread — the index FAILED for the life of the process, so the answer stands until a restart, the `detail` naming the state and that act, the operator's, and no act of the person's; the progress read, the termination and every other request are served meanwhile |
 | 503 | `upload_busy` | the creation or the resume past the upload permit pool — every permit in use; retry-class, as `fetch_busy` and `history_busy` are, before any body byte: a creation makes no upload, a resume keeps its upload where it stood; the progress read, the deposit read, the termination and every other request are served meanwhile |
 
 THE PERMIT — the fetch's step 5's twin (M-I5 (f): bounded by a pool, never
@@ -2952,7 +2954,18 @@ not start; the progress read and the termination, every text read and
 write, `/changes`, the door's own binding arm — every other request — is
 served throughout (PATTERNS P22: a derived structure's loss is a slower
 answer, never an outage). The readiness is monotone: once ready, ready
-for the life of the process.
+for the life of the process. Where the walk at open DIED — its thread's
+panic caught, the index FAILED, a third state beside ready and not-ready,
+said once on the operator stream and re-said by its standing line — the
+three readers answer `503 {"error":"index_failed","detail":"…"}` for the
+life of the process, the `detail` naming the state and the one act that
+exists, a restart, the operator's, and nothing the person can do, so a
+client that re-asks `503`s stops at this one; the door answers the lease
+arm's own verdict as final — `lease_lapsed` where the deposit is gone, the
+re-PUT that would cure it refused `index_failed` at the family,
+`unbound_cell` where none was made — and the pruner runs no pass
+(PATTERNS P10; P22's honest-null arm for a structure this build cannot
+rebuild).
 
 **The pruner.** THE PASS runs once the index is ready and then on a
 cadence — one hour (the pin below) — and does, in order: (a) THE EXPIRED
@@ -3070,7 +3083,7 @@ confirmed at the media round (the board's sm-Q8):
   whichever comes first;
 * the route's spellings — the family `/blob/upload`, its five method/path
   pairs, the queries `length` and `offset`, the interim header
-  `Upload-Id`, the answers' members, and the ten refusal names with
+  `Upload-Id`, the answers' members, and the eleven refusal names with
   their statuses above;
 * the upload pool, 4 (`MAX_CONCURRENT_UPLOADS`) — the most creations and
   resumes streaming a body at once, a bound on worker occupancy and not
@@ -3114,6 +3127,13 @@ confirmed at the media round (the board's sm-Q8):
 * the readiness token, `index_rebuilding`, 503, retry-class — the one
   refusal of the cell index's three readers — re-used at the door for the
   rebuild window's answer;
+* the failed token, `index_failed`, 503 — the three readers' answer for
+  the life of a process whose index walk at open died, its `detail` the
+  state and the operator's act, a restart; the door emits no token for it,
+  answering the lease arm's verdict as final; and the failed face, not
+  retried: "this board's picture index did not build at this start;
+  uploads and the deposit read wait for a restart" (DRAFT — the
+  FRONTEND's reading face, in the lane's words);
 * the pruner's cadence, one hour between passes, the first once the index
   is ready; the pinned designation set, `blake3` alone; the compaction
   trigger, four times a log's current records, and its minimum, 1,024

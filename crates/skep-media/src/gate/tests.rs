@@ -245,6 +245,52 @@ fn the_rebuild_window_answers_rebuilding_where_the_lease_arm_alone_would_refuse(
     assert_eq!(gate.binding(PrincipalId(6), &cell), Binding::Unbound, "another principal, ready: permanent");
 }
 
+/// THE FAILED INDEX AT THE DOOR (`operations.md` §4 row 26; P10): the walk
+/// died — `failed` set, `ready` not — and the lease arm's verdict stands
+/// as FINAL where the window answered REBUILDING: a lapsed lease is LAPSED,
+/// no lease is UNBOUND, a live lease over a whole file still ADMITS; with
+/// neither state set the same cells answer REBUILDING, as today; and a
+/// ready index answers as today. The gate's two reads never agree.
+#[test]
+fn a_failed_index_answers_the_lease_arm_as_final_where_the_window_answered_rebuilding() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let gate = MediaGate::open_with(dir.path(), MediaOptions::default()).expect("the store opens");
+    let p = PrincipalId(5);
+    let bytes = b"a picture after the walk died";
+    let hash: [u8; HASH_BYTES] = *blake3::hash(bytes).as_bytes();
+    let cell = Cell { hash, size: bytes.len() as u64 };
+    let key = MediaGate::key(p);
+    let store = gate.store();
+    let deposit = |interval: u64| {
+        let now = gate.now_ms();
+        let rec = store.create_upload(&key, HashFunction::Blake3, bytes.len() as u64, Duration::from_millis(interval), now).unwrap();
+        let mut stream = store.resume(&key, &rec.id, 0, now).unwrap();
+        stream.append(bytes, now).unwrap();
+        stream.finish(Duration::from_millis(interval), now).unwrap();
+    };
+    // Neither state: the window, as today.
+    assert!(!gate.index_ready() && !gate.index_failed());
+    assert_eq!(gate.binding(p, &cell), Binding::Rebuilding, "no lease, the walk running: the state");
+    deposit(10_000);
+    gate.advance_clock_ms(10_000);
+    assert_eq!(gate.binding(p, &cell), Binding::Rebuilding, "lapsed, the walk running: the state");
+    // FAILED: the lease arm's verdict is final.
+    let payload: Box<dyn std::any::Any + Send> = Box::new("the walk died");
+    gate.index().fail(payload.as_ref());
+    assert!(gate.index_failed() && !gate.index_ready(), "the two reads never agree");
+    assert_eq!(gate.binding(p, &cell), Binding::Lapsed, "lapsed, the walk dead: LAPSED, not the state");
+    assert_eq!(gate.binding(PrincipalId(6), &cell), Binding::Unbound, "no lease, the walk dead: UNBOUND");
+    deposit(10_000);
+    assert_eq!(gate.binding(p, &cell), Binding::Admitted, "a live lease over a whole file admits under FAILED as at any time");
+    assert_eq!(gate.binding(p, &Cell { hash, size: 1 }), Binding::Unbound, "the size contradicted under FAILED: UNBOUND");
+    // READY, on a second gate: as today.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let gate = MediaGate::open_with(dir.path(), MediaOptions::default()).expect("the store opens");
+    ready(&gate);
+    assert!(gate.index_ready() && !gate.index_failed());
+    assert_eq!(gate.binding(p, &cell), Binding::Unbound, "ready, no lease: permanent");
+}
+
 /// The binding's three answers off the store, the index ready and
 /// holding nothing of the hash: no lease is UNBOUND; a live lease over
 /// a whole file whose length the cell names is ADMITTED; the same lease

@@ -11,7 +11,7 @@ use skep_engine::{HistoryError, Recovery};
 #[cfg(feature = "test-hooks")]
 use skep_kernel::Step;
 use skep_kernel::{Attestation, CheckpointHeader, SaltSource, Seq};
-use skep_media::index::{Rebuild, WALK_HOLD};
+use skep_media::index::{Rebuild, WALK_FAULT, WALK_HOLD};
 use skep_media::pruner::PrunePass;
 use skep_media::serve::STREAM_HOLD;
 use skep_media::MediaOptions;
@@ -328,6 +328,15 @@ impl Daemon {
         self.media.index_ready()
     }
 
+    /// TEST HOOK (the same standing): whether the cell index's walk at open
+    /// DIED — the FAILED state its thread's catch set (`operations.md` §4
+    /// row 26), which the three readers, the door, the pruner's loop and
+    /// the standing line read; never true beside [`Daemon::index_is_ready`].
+    #[doc(hidden)]
+    pub fn index_is_failed(&self) -> bool {
+        self.media.index_failed()
+    }
+
     /// TEST HOOK (the same standing): the walk's report once it has
     /// completed — the values walked, the cells and halt marks entered, its
     /// duration and the time past the prefix test — the open-cost measure.
@@ -360,6 +369,21 @@ impl Daemon {
     #[doc(hidden)]
     pub fn release_the_index_walk() {
         WALK_HOLD.release();
+    }
+
+    /// TEST HOOK (the same standing): FAIL THE WALK — the next cell index
+    /// walk started in this process PANICS after its hold and before its
+    /// first entry, ONCE (the seam disarms as it fires), so a suite serves
+    /// requests against a daemon whose index FAILED (`operations.md` §4 row
+    /// 26): the three readers' `index_failed` for the uptime, the door's
+    /// lease arm as final, the pruner's one line and no pass, the standing
+    /// line's clause. Armed BEFORE a daemon opens, as
+    /// [`Daemon::hold_the_index_walk`] is, since the walk starts inside the
+    /// open — a process-wide seam, as the hold is; armed under the hold, it
+    /// fires at the release. Arming again re-arms.
+    #[doc(hidden)]
+    pub fn fail_the_index_walk() {
+        WALK_FAULT.arm();
     }
 
     /// The line the feed walk's hold writes on the operator stream as it

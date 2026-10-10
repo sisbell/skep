@@ -849,19 +849,22 @@ fn doc_states_the_registry_rows_the_bodies_and_the_refusals() {
 }
 
 /// THE UPLOAD (media lane B; the record's clauses, the H1 rows; the upload
-/// permit pool, M-I5 (f)): §Media states the PUT's path family and its five
-/// method/path pairs, the identifier's two carriers, the seven clauses each
-/// by number, the ten refusals of the family with their statuses — the
-/// permit's `upload_busy` among them — THE PERMIT in the creation's and the
-/// resume's rows, the deposit read's members, the binding's three answers
-/// at the door with `lease_lapsed` the third token, the INTERIM pins the
-/// build carries — the cap, the chunk, the grain, the identifier's bits,
-/// the partial's name, the lease interval and the horizon, the idle and
-/// transfer bounds, the floor, the limits record's default and its owed
-/// channel, the upload pool's count and the two worker counts it is
-/// counted into — and the H1 rows; §Endpoints lists the family, §Transport
-/// the family's cap, §HTTP status codes the ten; and the vector set the
-/// section names pins the same constants.
+/// permit pool, M-I5 (f); the FAILED index, `operations.md` §4 row 26):
+/// §Media states the PUT's path family and its five method/path pairs, the
+/// identifier's two carriers, the seven clauses each by number, the eleven
+/// refusals of the family with their statuses — the permit's `upload_busy`
+/// and the failed index's `index_failed` among them — THE PERMIT in the
+/// creation's and the resume's rows, the deposit read's members, the
+/// binding's three answers at the door with `lease_lapsed` the third
+/// token, the INTERIM pins the build carries — the cap, the chunk, the
+/// grain, the identifier's bits, the partial's name, the lease interval
+/// and the horizon, the idle and transfer bounds, the floor, the limits
+/// record's default and its owed channel, the upload pool's count and the
+/// two worker counts it is counted into, the failed face — and the H1
+/// rows; the readiness paragraph's FAILED arm, which with the token's two
+/// rows names no retry (the fence's I3 and I5); §Endpoints lists the
+/// family, §Transport the family's cap, §HTTP status codes the eleven; and
+/// the vector set the section names pins the same constants.
 #[test]
 fn doc_states_the_upload_its_pins_and_its_refusals() {
     let media = prose("\n### Media — the reference cell and its door", &["\n### Links (writes)"]);
@@ -890,7 +893,10 @@ fn doc_states_the_upload_its_pins_and_its_refusals() {
         "| 507 | `deposit_refused` |",
         "| 500 | `blob_io` |",
         "| 503 | `index_rebuilding` |",
+        "| 503 | `index_failed` |",
         "| 503 | `upload_busy` |",
+        "the eleven refusal names with their statuses above",
+        "the failed face, not retried:",
         "admitted under the upload permit pool",
         "`503 upload_busy`",
         "THE PERMIT",
@@ -952,9 +958,55 @@ fn doc_states_the_upload_its_pins_and_its_refusals() {
         "deposit_refused",
         "blob_io",
         "index_rebuilding",
+        "index_failed",
         "upload_busy",
     ] {
         assert!(statuses.contains(&format!("`{name}`")), "§HTTP status codes lists {name}");
+    }
+    // THE FAILED ARM (`operations.md` §4 row 26; PATTERNS P10): the
+    // readiness paragraph says where the walk died the three readers answer
+    // `index_failed` for the life of the process, the door the lease arm's
+    // verdict as final, the pruner no pass, the act a restart — and neither
+    // it nor the token's two rows names a retry: "retry" and "shortly"
+    // absent from each.
+    let readiness = media
+        .split("**The readiness refusal**")
+        .nth(1)
+        .and_then(|rest| rest.split("**The pruner.**").next())
+        .expect("the readiness paragraph");
+    let failed_arm = readiness
+        .split("Where the walk at open DIED")
+        .nth(1)
+        .expect("the FAILED arm closes the readiness paragraph");
+    for fact in [
+        "`503 {\"error\":\"index_failed\",\"detail\":\"…\"}`",
+        "for the life of the process",
+        "the lease arm's own verdict as final",
+        "`lease_lapsed`",
+        "`unbound_cell`",
+        "the pruner runs no pass",
+        "a restart",
+    ] {
+        assert!(failed_arm.contains(fact), "the FAILED arm says {fact:?}: {failed_arm}");
+    }
+    let row_cell = |table: &str, row: &str| -> String {
+        table
+            .split(row)
+            .nth(1)
+            .and_then(|rest| rest.split(" | | ").next())
+            .unwrap_or_else(|| panic!("the row {row:?} and its cell"))
+            .to_string()
+    };
+    for text in [
+        row_cell(&statuses, "| 503 | `index_failed` |"),
+        row_cell(&media, "| 503 | `index_failed` |"),
+        failed_arm.to_string(),
+    ] {
+        assert!(text.contains("a restart"), "the act, a restart: {text}");
+        assert!(
+            !text.contains("retry") && !text.contains("shortly"),
+            "no retry hint (P10) in a face of the failed index: {text}"
+        );
     }
     let fixture: Value = serde_json::from_str(
         &std::fs::read_to_string(
@@ -971,6 +1023,7 @@ fn doc_states_the_upload_its_pins_and_its_refusals() {
     assert_eq!(fixture["pins"]["default_workers"].as_u64(), Some(skepd::DEFAULT_WORKERS as u64));
     assert_eq!(fixture["refusals"]["deposit_refused"].as_u64(), Some(507));
     assert_eq!(fixture["refusals"]["index_rebuilding"].as_u64(), Some(503));
+    assert_eq!(fixture["refusals"]["index_failed"].as_u64(), Some(503));
     assert_eq!(fixture["refusals"]["upload_busy"].as_u64(), Some(503));
 }
 

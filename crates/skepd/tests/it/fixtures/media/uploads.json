@@ -39,6 +39,7 @@
     "deposit_refused": 507,
     "blob_io": 500,
     "index_rebuilding": 503,
+    "index_failed": 503,
     "upload_busy": 503
   },
   "vectors": [

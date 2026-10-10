@@ -21,7 +21,9 @@
 //! [`index`], THE CELL INDEX — per hash the cells naming it, per account the
 //! distinct hashes its cells name at their size (the base) — entered at
 //! every commit that mints a cell and rebuilt whole at every open on a
-//! thread, its three readers refusing until that walk completes; [`pruner`],
+//! thread, its three readers refusing until that walk completes — or, where
+//! that thread died, FAILED for the life of the process, the third state
+//! beside ready and not-ready (`operations.md` §4 row 26); [`pruner`],
 //! THE PASS that removes expired partials and, under the credential lock's
 //! exclusive arm one file at a time, unlinks the files no cell names and no
 //! live lease holds, halting on a schema it does not know; `blind`, THE

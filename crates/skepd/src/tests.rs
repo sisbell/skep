@@ -19,7 +19,13 @@ fn help_is_an_answer_not_an_exit() {
 
 /// THE UPLOAD SETTING (wire.md §Media): OPEN unless `--no-uploads` is
 /// given, `--uploads` the affirmative default, and the usage text names
-/// both with the variable.
+/// both with the variable. THE DEFAULT LIMIT's WORDS (`operations.md` §2.3
+/// F4; §1.1 row 7): the `--uploads` sentence renders the default from the
+/// two constants that supply it — "a per-account limit of one part in
+/// {DEFAULT_LIMIT_SHARE} of the volume's capacity, never below
+/// {DEFAULT_LIMIT_FLOOR_BYTES} bytes" — read here through the constants and
+/// never a literal, so the help describes no default the daemon does not
+/// use; no word table ("one eighth", "256 MiB") anywhere in it.
 #[test]
 fn the_upload_setting_is_open_unless_closed() {
     let absent = parse_args(argv(&["--data-dir", "/tmp/x"])).expect("valid").expect("a run");
@@ -32,6 +38,15 @@ fn the_upload_setting_is_open_unless_closed() {
     for named in ["--no-uploads", "SKEPD_UPLOADS", "skepd inventory", "skepd pull", "--no-rehash", "--hash"] {
         assert!(text.contains(named), "the usage names {named}");
     }
+    // The help wraps its lines: the sentence is read with its whitespace
+    // folded, through the constants.
+    let folded = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    let sentence = format!(
+        "a per-account limit of one part in {DEFAULT_LIMIT_SHARE} of the volume's capacity, never \
+         below {DEFAULT_LIMIT_FLOOR_BYTES} bytes"
+    );
+    assert!(folded.contains(&sentence), "the --uploads sentence renders the constants: {folded}");
+    assert!(!text.contains("one eighth") && !text.contains("256 MiB"), "no word table: {text}");
 }
 
 /// THE DATA DIRECTORY's SENTENCE (the register's F14): the help names

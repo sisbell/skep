@@ -34,6 +34,7 @@ use std::time::{Duration, Instant};
 
 use serde_json::Value;
 use skep_blobs::Step;
+use skep_media::limits::{DEFAULT_LIMIT_FLOOR_BYTES, DEFAULT_LIMIT_SHARE};
 
 use crate::common;
 use common::*;
@@ -79,11 +80,36 @@ fn finish_step(name: &str) -> Step {
 }
 
 /// THE DEFAULT PER-ACCOUNT LIMIT as the fixture's `per_account: "default"`
-/// expects it: one eighth of the capacity the daemon read at its open,
-/// never below 256 MiB — the suite's own arithmetic over the same read.
+/// expects it: one part in `DEFAULT_LIMIT_SHARE` of the capacity the daemon
+/// read at its open, never below `DEFAULT_LIMIT_FLOOR_BYTES` — the suite's
+/// own arithmetic over the same read, through the two constants.
 fn default_limit(sd: &skepd::Skepd) -> u64 {
-    let floor = 256 * 1024 * 1024;
-    sd.daemon().media_capacity().map_or(floor, |c| (c / 8).max(floor))
+    sd.daemon()
+        .media_capacity()
+        .map_or(DEFAULT_LIMIT_FLOOR_BYTES, |c| (c / DEFAULT_LIMIT_SHARE).max(DEFAULT_LIMIT_FLOOR_BYTES))
+}
+
+/// The lines the MEDIA GATE has said through its own classed door — the
+/// floor's binding and its lift — which the daemon's own record holds none
+/// of (they are said below its door).
+fn media_lines(sd: &skepd::Skepd) -> Vec<String> {
+    sd.daemon().media_lines_said()
+}
+
+/// Wait for the cadence's first pass to have said its line (row 34, a
+/// `landing:` on the daemon's record): the pass runs on the pruner's own
+/// thread as soon as the index is ready, so a claim counting the daemon's
+/// lines from a `before` takes it after the line has landed, not across it.
+fn after_the_first_pass(sd: &skepd::Skepd) {
+    wait_until("the cadence's first pass's line", || {
+        sd.daemon().lines_said().iter().any(|l| l.starts_with("landing: pruner: "))
+    });
+}
+
+/// Whether `line` carries a run of 32 hex digits — an upload's identifier,
+/// or a session token's shape.
+fn names_a_hex_id(line: &str) -> bool {
+    line.split(|c: char| !c.is_ascii_hexdigit()).any(|run| run.len() >= 32)
 }
 
 /// THE PRINCIPALS a vector acts as: the claimant, a stranger seated as an
@@ -326,13 +352,17 @@ fn run_vector(vector: &Value) {
             sd.daemon().advance_media_clock_ms(ms.as_u64().expect("ms"));
         } else if let Some(l) = step.get("limits") {
             // Installed WHOLE, as the channel installs a record: a member
-            // absent from the step is the default, not the value before.
-            sd.daemon().install_media_limits(
-                l["per_account"].as_u64(),
-                l["venue_total"].as_u64(),
-                l["lease_interval_ms"].as_u64(),
-                l["address"].as_str().map(str::to_string),
-            );
+            // absent from the step is the default, not the value before —
+            // the per-file cap the route's own where the step names none.
+            sd.daemon()
+                .install_media_limits(
+                    l["per_account"].as_u64(),
+                    l["venue_total"].as_u64(),
+                    l["lease_interval_ms"].as_u64(),
+                    l["per_file_cap"].as_u64(),
+                    l["address"].as_str().map(str::to_string),
+                )
+                .unwrap_or_else(|e| panic!("{at}: the limits record is refused: {e}"));
         } else if let Some(f) = step.get("free_space") {
             sd.daemon().set_media_free_space(f.as_u64());
         } else if let Some(f) = step.get("fail_finish_at") {
@@ -676,6 +706,7 @@ fn a_failed_aside_unlink_is_said_once_naming_the_aside_and_cleared_once_when_the
     let token = open_session(port, CLAIMANT_PRINCIPAL);
     let bytes = b"the picture's bytes, replaced under the seam";
     assert!(blob_store_lines(&sd).is_empty(), "a healthy board: no line of the blob store's");
+    after_the_first_pass(&sd);
 
     // The first deposit stands alone; the replace, under the seam, queues
     // its aside and the deferred unlink fails at it.
@@ -747,6 +778,7 @@ fn a_replace_with_no_fault_writes_no_line_and_its_aside_goes_after_the_reply() {
     let port = sd.port();
     let token = open_session(port, CLAIMANT_PRINCIPAL);
     let bytes = b"the picture's bytes, replaced in the common case";
+    after_the_first_pass(&sd);
     let before = sd.daemon().lines_said().len();
     put_whole(port, &token, bytes);
     put_whole(port, &token, bytes);
@@ -857,6 +889,132 @@ fn the_upload_familys_log_names_no_principal_no_token_and_no_upload() {
         !whole.split(|c: char| !c.is_ascii_digit()).any(|word| word == principal),
         "FINDING (D9): the principal's number is in the log as a word of its own: {whole}"
     );
+}
+
+/// m9 — THE FLOOR's REFUSAL IS SAID ONCE PER BINDING (`operations.md` §1.1
+/// m9; §4 row 7; §0 THE RATES: once per condition, never per request), the
+/// D9 vector's sibling: the free space pinned one byte below the floor in
+/// force, TWO creations refused `507 deposit_refused` scope `floor` — and
+/// the gate's stream carries ONE `failure:` line, the ruled words with the
+/// two figures as the daemon read them; the daemon's own record holds no
+/// line of it (the family's requests write nothing there); and nothing of
+/// the D9 list rides the line: not the principal's number as a word of its
+/// own, not the session's token, not an upload's identifier (a refused
+/// creation makes none).
+#[test]
+fn the_floors_refusal_is_said_once_per_binding_with_the_figures_and_no_party() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let sd = spawn(dir.path());
+    let port = sd.port();
+    let token = open_session(port, CLAIMANT_PRINCIPAL);
+    after_the_first_pass(&sd);
+    assert!(media_lines(&sd).is_empty(), "a healthy board: no line of the gate's");
+    let floor = sd.daemon().media_floor_in_force();
+    let free = floor - 1;
+    sd.daemon().set_media_free_space(Some(free));
+    let before = sd.daemon().lines_said().len();
+    for attempt in 1..=2 {
+        let (st, _, body) = blob_create(port, Some(&token), 10, b"");
+        assert_eq!(st, 507, "attempt {attempt}: {}", String::from_utf8_lossy(&body));
+        let v = json(&body);
+        assert_eq!(v["error"].as_str(), Some("deposit_refused"), "{v}");
+        assert_eq!(v["scope"].as_str(), Some("floor"), "{v}");
+    }
+    let said = media_lines(&sd);
+    assert_eq!(
+        said,
+        [format!(
+            "failure: deposits refused at the floor: the volume's free space {free} bytes is below \
+             the floor in force {floor}; every write but a deposit serves; the acts: room on the \
+             volume, a pass run early"
+        )],
+        "FINDING (m9): the binding is said once, at its first refusal, in the ruled words"
+    );
+    assert_eq!(sd.daemon().lines_said().len(), before, "the family's requests write nothing on the daemon's record");
+    let line = &said[0];
+    assert!(!line.contains(&token), "FINDING (D9): the token rides the floor's line: {line}");
+    assert!(!names_a_hex_id(line), "FINDING (D9): an identifier rides the floor's line: {line}");
+    let principal = CLAIMANT_PRINCIPAL.to_string();
+    assert!(
+        !line.split(|c: char| !c.is_ascii_digit()).any(|word| word == principal),
+        "FINDING (D9): the principal's number rides the floor's line: {line}"
+    );
+    sd.daemon().set_media_free_space(None);
+    sd.shutdown();
+}
+
+/// m9 — THE LIFT IS SAID AT A FINISH, NEVER AT AN ADMISSION: after a binding
+/// (its one failure line; the standing line re-saying it at each tick
+/// meanwhile, in L9's words), the free space pinned back above the floor: a
+/// creation ADMITTED says nothing — the next chunk may re-refuse — and the
+/// upload that FINISHES says ONE `landing:` line with its size and the two
+/// figures as the daemon read them at the finish; a second finish says
+/// nothing more; and a later binding says the failure again, the flag
+/// cleared by the lift. No party on the lift's line either.
+#[test]
+fn the_lift_is_said_once_at_the_first_finish_above_the_floor_and_never_at_an_admission() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let sd = spawn(dir.path());
+    let port = sd.port();
+    let token = open_session(port, CLAIMANT_PRINCIPAL);
+    let floor = sd.daemon().media_floor_in_force();
+    // THE BINDING, said once; the standing line carries it meanwhile.
+    sd.daemon().set_media_free_space(Some(floor - 1));
+    let (st, _, _) = blob_create(port, Some(&token), 10, b"");
+    assert_eq!(st, 507);
+    assert_eq!(media_lines(&sd).len(), 1, "{:?}", media_lines(&sd));
+    sd.daemon().set_standing_interval_millis(40);
+    // The clause opens the line; a claimed board's `CLAIMED-PERMISSIVE`
+    // clause rides it after.
+    let standing = format!(
+        "standing: deposits refused at the floor (free space {} below the floor in force {floor})",
+        floor - 1
+    );
+    wait_until("the standing line's floor clause", || {
+        sd.daemon().lines_said().iter().any(|l| l.starts_with(&standing))
+    });
+    // ROOM AGAIN: an admission alone says no lift.
+    let room = floor + 1_000_000;
+    sd.daemon().set_media_free_space(Some(room));
+    let (st, _, resp) = blob_create(port, Some(&token), 10, b"hello");
+    assert_eq!(st, 200, "{}", String::from_utf8_lossy(&resp));
+    let id = json(&resp)["upload"].as_str().expect("upload").to_string();
+    assert_eq!(media_lines(&sd).len(), 1, "an admission alone says no lift: {:?}", media_lines(&sd));
+    // THE FINISH: the lift, once.
+    let (st, _, resp) = blob_resume(port, Some(&token), &id, 5, b"world");
+    assert_eq!(st, 200, "{}", String::from_utf8_lossy(&resp));
+    assert_eq!(json(&resp)["size"].as_u64(), Some(10), "the finish: {}", String::from_utf8_lossy(&resp));
+    let said = media_lines(&sd);
+    assert_eq!(said.len(), 2, "{said:?}");
+    assert_eq!(
+        said[1],
+        format!(
+            "landing: deposits admitted again: an upload of 10 bytes finished with the volume's \
+             free space {room} bytes above the floor in force {floor}"
+        ),
+        "FINDING (m9): the lift at the first finish, with the finished size and the figures"
+    );
+    assert!(!said[1].contains(&token) && !names_a_hex_id(&said[1]), "FINDING (D9): a party rides the lift: {}", said[1]);
+    // A second finish: nothing more.
+    put_whole(port, &token, b"another whole picture, finished above the floor");
+    assert_eq!(media_lines(&sd).len(), 2, "a second finish says nothing: {:?}", media_lines(&sd));
+    // A NEW BINDING: said again — the flag cleared by the lift.
+    sd.daemon().set_media_free_space(Some(floor - 2));
+    let (st, _, _) = blob_create(port, Some(&token), 10, b"");
+    assert_eq!(st, 507);
+    let said = media_lines(&sd);
+    assert_eq!(said.len(), 3, "{said:?}");
+    assert!(
+        said[2].starts_with(&format!(
+            "failure: deposits refused at the floor: the volume's free space {} bytes is below the \
+             floor in force {floor};",
+            floor - 2
+        )),
+        "the next binding is said again: {}",
+        said[2]
+    );
+    sd.daemon().set_media_free_space(None);
+    sd.shutdown();
 }
 
 /// (1) THE IDENTIFIER REACHES THE UPLOADER BEFORE THE UPLOAD's FIRST BODY
@@ -1369,7 +1527,7 @@ fn an_expired_uploads_partial_goes_at_the_next_open_and_a_standing_one_survives_
         let sd = spawn(dir.path());
         let port = sd.port();
         let token = open_session(port, CLAIMANT_PRINCIPAL);
-        sd.daemon().install_media_limits(None, None, Some(500), None);
+        sd.daemon().install_media_limits(None, None, Some(500), None, None).expect("installs");
         let (st, _, resp) = blob_create(port, Some(&token), 10, b"hello");
         assert_eq!(st, 200, "{}", String::from_utf8_lossy(&resp));
         let expired = json(&resp)["upload"].as_str().unwrap().to_string();
@@ -1377,7 +1535,7 @@ fn an_expired_uploads_partial_goes_at_the_next_open_and_a_standing_one_survives_
         let (st, _, _) = blob_progress(port, Some(&token), &expired);
         assert_eq!(st, 404, "expired: no upload");
         assert_eq!(json(&blob_deposit_read(port, Some(&token)).2)["pending"].as_u64(), Some(0), "counts nothing");
-        sd.daemon().install_media_limits(None, None, None, None);
+        sd.daemon().install_media_limits(None, None, None, None, None).expect("installs");
         let (st, _, resp) = blob_create(port, Some(&token), 10, b"hello");
         assert_eq!(st, 200);
         let standing = json(&resp)["upload"].as_str().unwrap().to_string();

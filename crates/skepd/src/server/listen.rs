@@ -586,8 +586,11 @@ const PRUNER_NO_PASS_INDEX_FAILED: &str = "pruner: no pass runs — the cell ind
 
 /// THE PRUNER's LOOP: wait for the cell index to ready — in short waits, so
 /// the stop reaches it — run the pass, then wait the cadence out or the
-/// stop, whichever comes first. A pass's I/O failure is the operator's
-/// line, and the next pass tries again. THE FAILED INDEX (`operations.md`
+/// stop, whichever comes first. The pass's line — row 34, or row 35 where a
+/// step failed, naming the failure AND the compaction's state, since the
+/// pass runs its compaction whatever failed before it — goes through the
+/// daemon's classed door (`Daemon::say_the_pass`), and the next pass tries
+/// again. THE FAILED INDEX (`operations.md`
 /// §4 row 26): where the index's walk at open DIED no pass can ever start,
 /// so the loop says so ONCE — [`PRUNER_NO_PASS_INDEX_FAILED`], through the
 /// daemon's classed door — and RETURNS: the thread ends BY CHOICE, not by
@@ -611,13 +614,9 @@ fn prune_on_cadence(daemon: &Daemon, cadence: &Cadence) {
             return;
         }
         if daemon.index_is_ready_for_pruning() {
-            match daemon.prune_pass() {
-                // The pass's own line: its figures, the halt, the logs'
-                // compaction and any log that has stopped.
-                Ok(Some(pass)) => notice::line(pass),
-                Ok(None) => {}
-                Err(e) => notice::line(format_args!("pruner: the pass failed: {e}")),
-            }
+            // The pass's own line — row 34, or row 35 where a step failed —
+            // through the daemon's classed door.
+            daemon.say_the_pass(&daemon.prune_pass());
             if cadence.wait(PRUNE_INTERVAL) == Wake::Stop {
                 return;
             }

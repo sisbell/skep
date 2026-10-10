@@ -206,6 +206,39 @@ fn lines_with(sd: &Skepd, prefix: &str) -> Vec<String> {
     sd.daemon().lines_said().into_iter().filter(|l| l.starts_with(prefix)).collect()
 }
 
+/// THE WALK's LANDING LINES and no other subsystem's: the daemon's record
+/// is shared (`operations.md` §1.1) — the pruner's pass says its own
+/// `landing: pruner: …` (row 34) on it as soon as the cell index is ready,
+/// on a thread of its own, ahead of the walk's `landing: {b} walked, {k}
+/// of them bare, in {d} ms` (m15) — so a claim counting the walk's landing
+/// takes it by its own shape, the figures `landing_figures` reads
+/// (`hazard.rs`'s walk-landing claim names it the same way), rather than
+/// by the pruner's prefix dropped: a landing line a later subsystem puts
+/// on the record cannot re-break these claims.
+fn walk_landings(sd: &Skepd) -> Vec<String> {
+    lines_with(sd, "landing: ").into_iter().filter(|l| is_the_walks_landing(l)).collect()
+}
+
+/// Whether a `landing:` line is the walk's: a count, then ` walked, `,
+/// opens its figures.
+fn is_the_walks_landing(line: &str) -> bool {
+    line.strip_prefix("landing: ")
+        .and_then(|rest| rest.split_once(" walked, "))
+        .is_some_and(|(walked, _)| !walked.is_empty() && walked.bytes().all(|b| b.is_ascii_digit()))
+}
+
+/// Wait for the pruner's first pass to have said its line — row 34, on the
+/// daemon's record once the cell index is ready, from the pruner's own
+/// thread — before a claim counts the walk's landing: nothing in the code
+/// orders that thread against the walk's, so the claim does, and meets the
+/// other subsystem's landing line on every run rather than by timing
+/// (`blob_routes.rs`'s `after_the_first_pass`). Taken before the held
+/// walk's release where the walk lands, so the pruner's line precedes the
+/// walk's on the record too.
+fn after_the_first_pass(sd: &Skepd) {
+    wait_until("the pruner's first pass's line", || !lines_with(sd, "landing: pruner: ").is_empty());
+}
+
 /// The `open:` line of the walk, awaited.
 fn await_the_open_line(sd: &Skepd) -> String {
     wait_until("the walk's open: line", || !lines_with(sd, "open: commits.log covers").is_empty());
@@ -269,7 +302,7 @@ fn assert_offsets_agree(dir: &Path) {
 /// found it; a page into the region is `503 feed_rebuilding` carrying
 /// `error` and `detail` alone, a page from the head is 200; a write commits
 /// and is announced on `/events`, and a page from the head carries it; the
-/// release lands: the `landing:` line once, the region `None`, every
+/// release lands: the walk's `landing:` line once, the region `None`, every
 /// position at or below the head as before — the torn six BARE (`docs`,
 /// `key`, `time` null, the op the journal's: none for a mint), the rest
 /// verbatim — the write recorded whole, the guest's page unchanged (a bare
@@ -321,11 +354,13 @@ fn the_walk_runs_behind_the_listener_and_the_landing_restores_the_feed() {
     assert!(v["changes"][0]["op"].as_str() == Some("create_new_document"), "whole, not bare: {v}");
     assert_eq!(sd.daemon().feed_pending_region(), Some((low, head)), "still pending under the hold");
 
+    // The pruner's own landing line on the record before the walk's.
+    after_the_first_pass(&sd);
     let began = Instant::now();
     release_and_land(&sd);
     let landed_in = began.elapsed();
-    let landing = lines_with(&sd, "landing: ");
-    assert_eq!(landing.len(), 1, "the landing: line once: {landing:?}");
+    let landing = walk_landings(&sd);
+    assert_eq!(landing.len(), 1, "the walk's landing line once: {landing:?}");
     let (walked, bare, ms) = landing_figures(&landing[0]);
     assert_eq!((walked, bare), (6, 0), "six boundaries proved, every one classified: {landing:?}");
     let size = std::fs::metadata(dir.path().join("commits.log")).expect("metadata").len();
@@ -380,9 +415,10 @@ fn the_walk_runs_behind_the_listener_and_the_landing_restores_the_feed() {
 /// T5 — THE THREE LINES AT THE CADENCE (§1.1 m15): over a region of six
 /// boundaries with the cadence set to every two, the stream carries the
 /// `open:` line once, `progress:` lines at the second, fourth and sixth
-/// boundary with `{p}` ascending and `{h}` the head, and the `landing:`
-/// line once naming the six proved; at the shipped cadence (a thousand
-/// boundaries or a minute) the same region yields no `progress:` line.
+/// boundary with `{p}` ascending and `{h}` the head, and the walk's
+/// `landing:` line once naming the six proved; at the shipped cadence (a
+/// thousand boundaries or a minute) the same region yields no `progress:`
+/// line.
 #[test]
 fn the_three_lines_come_at_the_cadence() {
     let _held = hold();
@@ -394,12 +430,14 @@ fn the_three_lines_come_at_the_cadence() {
     let sd = spawn_holding_the_walk(dir.path());
     await_the_open_line(&sd);
     sd.daemon().set_feed_walk_progress_cadence(2, 60_000);
+    // The pruner's own landing line on the record before the walk's.
+    after_the_first_pass(&sd);
     release_and_land(&sd);
     let progress = lines_with(&sd, "progress: ");
     let ps: Vec<u64> = progress.iter().map(|l| progress_position(l, head)).collect();
     assert_eq!(ps, [low + 2, low + 4, low + 6], "every second boundary, ascending to the head: {progress:?}");
-    let landing = lines_with(&sd, "landing: ");
-    assert_eq!(landing.len(), 1, "{landing:?}");
+    let landing = walk_landings(&sd);
+    assert_eq!(landing.len(), 1, "the walk's landing line once: {landing:?}");
     let (walked, bare, ms) = landing_figures(&landing[0]);
     assert_eq!((walked, bare), (6, 0), "{landing:?}");
     println!("feed walk at cadence 2: {walked} boundaries in {ms} ms; lines: {progress:?}");
@@ -410,9 +448,10 @@ fn the_three_lines_come_at_the_cadence() {
     let sd = spawn_holding_the_walk(dir.path());
     await_the_open_line(&sd);
     sd.daemon().set_feed_walk_progress_cadence(1_000, 60_000);
+    after_the_first_pass(&sd);
     release_and_land(&sd);
     assert!(lines_with(&sd, "progress: ").is_empty(), "no progress line within the cadence");
-    assert_eq!(lines_with(&sd, "landing: ").len(), 1);
+    assert_eq!(walk_landings(&sd).len(), 1, "the walk's landing line once");
     sd.shutdown();
 }
 
@@ -505,7 +544,9 @@ fn the_walks_death_is_said_once_and_the_board_serves_with_the_region_pending() {
     wait_until("the catch's line", || !lines_with(&sd, "failure: the feed walk ended").is_empty());
     assert_eq!(lines_with(&sd, "failure: the feed walk ended"), [ended.clone()], "FINDING (row 41)");
     assert_eq!(sd.daemon().feed_pending_region(), Some((low, head)), "the region pends for the uptime");
-    assert!(lines_with(&sd, "landing: ").is_empty(), "nothing landed");
+    // The pruner's own landing line is on the record; the walk's never comes.
+    after_the_first_pass(&sd);
+    assert!(walk_landings(&sd).is_empty(), "no walk landing: the walk died before its first boundary");
     let (st, _) = get(port, "/health");
     assert_eq!(st, 200);
     let owner = open_session(port, CLAIMANT_PRINCIPAL);
@@ -530,7 +571,9 @@ fn the_walks_death_is_said_once_and_the_board_serves_with_the_region_pending() {
     assert_eq!(sd.daemon().feed_pending_region(), None);
     let open = lines_with(&sd, "open: commits.log covers");
     assert_eq!(open, [format!("open: commits.log covers to position {low}; walking 7 boundaries to position {at}")]);
-    let (walked, bare, _) = landing_figures(&lines_with(&sd, "landing: ")[0]);
+    // The spawn waited on the landing; the pruner's line beside it before the count.
+    after_the_first_pass(&sd);
+    let (walked, bare, _) = landing_figures(&walk_landings(&sd)[0]);
     assert_eq!((walked, bare), (7, 0));
     let after = json(&owner_feed_bytes(sd.port(), 0));
     let mut want = positions(&before);
@@ -626,8 +669,10 @@ fn a_checkpoint_during_the_walk_defers_its_rewrite_to_the_landing() {
     let (st, v) = changes(port, Some(&owner), &format!("since={}", b - 1));
     assert_eq!((st, v["error"].as_str()), (503, Some("feed_rebuilding")), "from the floor, into the region: {v}");
 
+    // The pruner's own landing line on the record before the walk's.
+    after_the_first_pass(&sd);
     release_and_land(&sd);
-    let landing = lines_with(&sd, "landing: ");
+    let landing = walk_landings(&sd);
     let (walked, bare, ms) = landing_figures(&landing[0]);
     assert_eq!(bare, 1, "B, the floor's own boundary, is proved from the base embodying it and unclassifiable: {landing:?}");
     // B, the three mints above it and the cadence head the checkpoint

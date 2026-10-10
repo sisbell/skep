@@ -1621,7 +1621,7 @@ fn prune_crash_child(dir: &Path) -> ! {
     claim_board(port);
     let token = open_session(port, CLAIMANT_PRINCIPAL);
     let [referenced, lapsed_a, lapsed_b, live] = prune_crash_files();
-    sd.daemon().install_media_limits(None, None, Some(1_000), None);
+    sd.daemon().install_media_limits(None, None, Some(1_000), None, None).expect("installs");
     for bytes in [&referenced, &lapsed_a, &lapsed_b] {
         try_put(port, &token, bytes).expect("a PUT on a healthy daemon");
     }
@@ -1632,7 +1632,7 @@ fn prune_crash_child(dir: &Path) -> ! {
     })
     .to_string();
     assert_eq!(verdict(&op(port, Some(&token), &frame)), "ok");
-    sd.daemon().install_media_limits(None, None, None, None);
+    sd.daemon().install_media_limits(None, None, None, None, None).expect("installs");
     try_put(port, &token, &live).expect("a PUT on a healthy daemon");
     thread::sleep(Duration::from_millis(1_200));
     sd.daemon().hold_the_prune_pass_after_a_rename();

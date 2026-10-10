@@ -46,6 +46,20 @@
 //! touches a partial whose upload stands, and reads no directory's bytes
 //! as a scope (M-I6: the scopes stay record-derived).
 //!
+//! THE PASS's EXIT (`operations.md` §4 row 5; §1.1 row 35): steps (a)–(c)
+//! run collecting the FIRST error a store call answers — the step it came
+//! from named, that step's loop stopped there and the steps after it
+//! skipped, as the `?` that once ended the pass skipped them — and step (d)
+//! runs on EVERY exit, the halt arm's included. The pass answers the error
+//! BESIDE its report ([`PrunePass::failed`]), never in place of it, so the
+//! compaction that lifts a stopped log runs whatever failed before it: the
+//! retirement a stopped `uploads.log` refuses at (a) was the very failure
+//! that, ending the pass before (d), left the stop standing for the uptime
+//! and the restart its one cure; now the same pass's (d) lifts it. The halt
+//! is the report's too — line 34 carries it, its reason and the expired
+//! partials removed, hourly (§1.1 row 36 RETIRED: the pass writes no
+//! standalone line of its own).
+//!
 //! THE ARM IS THE SESSION LAYER's and is handed in: this module sits
 //! beside the write path and names nothing above it, so the pass takes the
 //! acquisition as a closure and holds whatever guard it answers for
@@ -56,14 +70,16 @@ use std::io;
 use std::time::Duration;
 
 use parking_lot::{Condvar, Mutex};
-use skep_util::notice;
+use skep_blobs::Store;
 
 use crate::cell::DESIGNATION;
 use crate::gate::MediaGate;
 use crate::limits::{COMPACTION_MIN_LINES, COMPACTION_TRIGGER};
 
 /// What one pass did — the test hook's answer, and, rendered through its
-/// [`fmt::Display`], the operator's line.
+/// [`fmt::Display`], the operator's line 34 (`operations.md` §1.1 row 34);
+/// where a step failed, the failure stands beside the figures
+/// ([`PrunePass::failed`]) and the daemon's loop renders line 35 from both.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PrunePass {
     /// Expired uploads retired, their partials removed.
@@ -89,32 +105,94 @@ pub struct PrunePass {
     /// The logs STOPPED after this pass — `(uploads, leases)`: each takes
     /// no append until a compaction completes.
     pub stopped: (bool, bool),
+    /// THE FIRST FAILURE of steps (a)–(c), if one (`operations.md` §4 row
+    /// 5; §1.1 row 35): the step it came from and the cause the store
+    /// answered. The steps after it did not run — as the `?` that once
+    /// ended the pass skipped them — and step (d) ran regardless, so a stop
+    /// this pass met is lifted by its own compaction and not a restart's.
+    /// Line 35's `{e}`, said beside [`PrunePass::compaction`]; `None` is
+    /// line 34.
+    pub failed: Option<PassFailure>,
 }
 
-/// The operator's line for this pass — its figures, the halt, the
-/// compaction and any stopped log — written to the formatter as it is
-/// composed, so the notice that carries it ([`notice::line`]) builds no
-/// string of its own.
-impl fmt::Display for PrunePass {
+/// The first failure of a pass's steps (a)–(c): the step and the cause the
+/// store answered — line 35's `{e}`, `{step}: {cause}`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PassFailure {
+    /// The step the store call failed in.
+    pub step: PassStep,
+    /// The I/O error's text, as the store spelled it.
+    pub cause: String,
+}
+
+impl fmt::Display for PassFailure {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "pruner: {} expired partials removed, {} files unlinked, {} kept, {} asides removed",
-            self.expired_partials, self.unlinked, self.kept, self.asides
-        )?;
-        if let Some(why) = &self.halted {
-            write!(f, " — the unlink pass halted: {why}")?;
-        }
-        match (self.compacted_uploads, self.compacted_leases) {
+        write!(f, "{}: {}", self.step, self.cause)
+    }
+}
+
+/// The steps of a pass a store call can fail in — (a), (b) and (c); (d),
+/// the compaction, answers its failure as the report's own
+/// (`compaction_failed`) and never ends the pass.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PassStep {
+    /// (a) THE EXPIRED PARTIALS: a partial's removal or its record's
+    /// retirement — the retirement an append `uploads.log` refuses while
+    /// it has stopped.
+    ExpiredPartials,
+    /// (b) THE HALTS' READ: the designation directories under `blobs/`.
+    Halts,
+    /// (c) THE UNREFERENCED FILES: a listing, a rename aside, an unlink.
+    UnreferencedFiles,
+}
+
+impl fmt::Display for PassStep {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            PassStep::ExpiredPartials => "step (a), the expired partials",
+            PassStep::Halts => "step (b), the halts' read",
+            PassStep::UnreferencedFiles => "step (c), the unreferenced files",
+        })
+    }
+}
+
+impl PassStep {
+    /// This step's failure for `cause` — what the step's `?` arms map a
+    /// store's error to.
+    fn failed(self) -> impl Fn(io::Error) -> PassFailure {
+        move |e| PassFailure { step: self, cause: e.to_string() }
+    }
+}
+
+impl PrunePass {
+    /// THE COMPACTION HALF of the pass's line — `; uploads.log and
+    /// leases.log compacted`, `; a compaction FAILED: {why}`, `; STOPPED:
+    /// {log} takes no append until a compaction completes`, each where it
+    /// applies and nothing where no log moved and none has stopped — what
+    /// line 34 ends with and line 35 carries after the failure, so the
+    /// stopped-or-compacted half is one rendering on both (`operations.md`
+    /// §1.1 row 35: "names the failure AND the stopped logs").
+    pub fn compaction(&self) -> impl fmt::Display + '_ {
+        Compaction(self)
+    }
+}
+
+/// [`PrunePass::compaction`]'s rendering.
+struct Compaction<'a>(&'a PrunePass);
+
+impl fmt::Display for Compaction<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let pass = self.0;
+        match (pass.compacted_uploads, pass.compacted_leases) {
             (true, true) => f.write_str("; uploads.log and leases.log compacted")?,
             (true, false) => f.write_str("; uploads.log compacted")?,
             (false, true) => f.write_str("; leases.log compacted")?,
             (false, false) => {}
         }
-        if let Some(why) = &self.compaction_failed {
+        if let Some(why) = &pass.compaction_failed {
             write!(f, "; a compaction FAILED: {why}")?;
         }
-        match self.stopped {
+        match pass.stopped {
             (true, true) => f.write_str(
                 "; STOPPED: uploads.log and leases.log take no append until a compaction completes",
             ),
@@ -129,6 +207,26 @@ impl fmt::Display for PrunePass {
     }
 }
 
+/// The operator's line 34 for this pass — its figures, the halt, the
+/// compaction and any stopped log — written to the formatter as it is
+/// composed, so the classed door that carries it (`skep_util::notice::emit`,
+/// through the daemon's `say`) builds no string of its own. The failure, if
+/// one, is not here: line 35 is the daemon's rendering of
+/// [`PrunePass::failed`] beside [`PrunePass::compaction`].
+impl fmt::Display for PrunePass {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "pruner: {} expired partials removed, {} files unlinked, {} kept, {} asides removed",
+            self.expired_partials, self.unlinked, self.kept, self.asides
+        )?;
+        if let Some(why) = &self.halted {
+            write!(f, " — the unlink pass halted: {why}")?;
+        }
+        fmt::Display::fmt(&self.compaction(), f)
+    }
+}
+
 /// THE PINNED DESIGNATION SET: the designations this build's schemas pin
 /// — `blake3`, the one cell schema's. A directory under `blobs/` named
 /// otherwise is a sidecar of a build this one is not, and halts the
@@ -140,13 +238,18 @@ pub const PINNED_DESIGNATIONS: &[&str] = &[DESIGNATION];
 /// once per file, its guard held across that file's re-read and rename
 /// aside and dropped before the aside's unlink and before the next. `None`
 /// where the index is not ready: the pass does not start (ms5-R).
+///
+/// THE EXIT RULE (the module's card): steps (a)–(c) run to their first
+/// store failure or the halt (`steps`), step (d) runs on EVERY exit, and
+/// the answer is the report — a step's failure is its `failed` member,
+/// beside the figures and the compaction's state, never this function's
+/// `Err`. `Err` is answered by no step: the signature keeps the `io::Result`
+/// the daemon's loop and its test seam match on, whose `Err` arm is the
+/// loop's own rendering of a failure nothing of the pass answers today.
 pub fn pass<G>(media_gate: &MediaGate, exclusive: impl Fn() -> G) -> io::Result<Option<PrunePass>> {
-    let index = media_gate.index();
-    if !index.is_ready() {
+    if !media_gate.index().is_ready() {
         return Ok(None);
     }
-    let store = media_gate.store();
-    let now = media_gate.now_ms();
     let mut report = PrunePass {
         expired_partials: 0,
         unlinked: 0,
@@ -157,14 +260,40 @@ pub fn pass<G>(media_gate: &MediaGate, exclusive: impl Fn() -> G) -> io::Result<
         compacted_leases: false,
         compaction_failed: None,
         stopped: (false, false),
+        failed: None,
     };
+    // (a)–(c), to the first failure or the halt; the error kept beside the
+    // figures, the steps after it skipped.
+    report.failed = steps(media_gate, &exclusive, &mut report).err();
+    // (d) THE LOGS' COMPACTION, under no arm — on EVERY exit: the stop a
+    // failed step may have met is lifted here, by this pass.
+    compact_logs(media_gate.store(), &mut report);
+    #[cfg(any(test, feature = "test-hooks"))]
+    media_gate.note_pass_completed();
+    Ok(Some(report))
+}
+
+/// Steps (a)–(c) of the pass, to the FIRST store failure — answered as the
+/// step and its cause, that step's loop stopped there and the steps after
+/// it not run — or the halt, which ends them after (b) with the report's
+/// `halted` set and nothing unlinked. The figures land in `report` as each
+/// act completes, so a failure's report still counts what ran before it.
+fn steps<G>(
+    media_gate: &MediaGate,
+    exclusive: &impl Fn() -> G,
+    report: &mut PrunePass,
+) -> Result<(), PassFailure> {
+    let store = media_gate.store();
+    let index = media_gate.index();
+    let now = media_gate.now_ms();
 
     // (a) THE EXPIRED PARTIALS — the store's own read of expiry, the media
-    // gate's hold; no reference read, no arm.
+    // gate's hold; no reference read, no arm. The retirement is an append:
+    // a stopped `uploads.log` refuses it, and the failure is this step's.
     for record in store.expired_uploads(now) {
         // A stream holds it: left to that stream's end.
         let Some(_hold) = media_gate.claim(record.id) else { continue };
-        if store.expire_upload(&record.id, now)? {
+        if store.expire_upload(&record.id, now).map_err(PassStep::ExpiredPartials.failed())? {
             report.expired_partials += 1;
         }
     }
@@ -172,7 +301,8 @@ pub fn pass<G>(media_gate: &MediaGate, exclusive: impl Fn() -> G) -> io::Result<
     // (b) THE HALTS, before the first unlink.
     let halt = {
         let foreign = store
-            .designation_dirs()?
+            .designation_dirs()
+            .map_err(PassStep::Halts.failed())?
             .into_iter()
             .find(|name| !PINNED_DESIGNATIONS.contains(&name.as_str()));
         match (foreign, index.first_halt()) {
@@ -188,21 +318,17 @@ pub fn pass<G>(media_gate: &MediaGate, exclusive: impl Fn() -> G) -> io::Result<
         }
     };
     if let Some(reason) = halt {
-        notice::line(format_args!(
-            "pruner: the unlink pass is halted — {reason}; {} expired partials removed, no file unlinked",
-            report.expired_partials
-        ));
+        // The report carries the halt; line 34 says it (row 36 RETIRED: no
+        // standalone line here).
         report.halted = Some(reason);
-        compact_logs(store, &mut report);
-        #[cfg(any(test, feature = "test-hooks"))]
-        media_gate.note_pass_completed();
-        return Ok(Some(report));
+        return Ok(());
     }
 
     // (c) THE UNREFERENCED FILES, one per acquisition, under the pinned
     // designations alone.
+    let failed = PassStep::UnreferencedFiles.failed();
     for designation in PINNED_DESIGNATIONS {
-        for hex in store.blobs_of(designation)? {
+        for hex in store.blobs_of(designation).map_err(&failed)? {
             let aside = {
                 let _arm = exclusive();
                 // THE RE-READ under the arm: a cell committed since the
@@ -216,7 +342,7 @@ pub fn pass<G>(media_gate: &MediaGate, exclusive: impl Fn() -> G) -> io::Result<
                 } else {
                     // THE RENAME ASIDE, the arm's one act: the name is taken
                     // here and the blocks freed below, the arm released.
-                    store.rename_aside(designation, &hex)?
+                    store.rename_aside(designation, &hex).map_err(&failed)?
                 }
             };
             let Some(aside) = aside else { continue };
@@ -227,28 +353,26 @@ pub fn pass<G>(media_gate: &MediaGate, exclusive: impl Fn() -> G) -> io::Result<
             media_gate.hold_after_rename_if_armed();
             // THE UNLINK AFTER, under no arm: the freeing's cost lands on
             // this thread alone.
-            store.remove_aside(designation, &aside)?;
+            store.remove_aside(designation, &aside).map_err(&failed)?;
         }
-        for aside in store.asides_of(designation)? {
+        for aside in store.asides_of(designation).map_err(&failed)? {
             let _arm = exclusive();
-            if store.remove_aside(designation, &aside)? {
+            if store.remove_aside(designation, &aside).map_err(&failed)? {
                 report.asides += 1;
             }
         }
     }
-    // (d) THE LOGS' COMPACTION, under no arm.
-    compact_logs(store, &mut report);
-    #[cfg(any(test, feature = "test-hooks"))]
-    media_gate.note_pass_completed();
-    Ok(Some(report))
+    Ok(())
 }
 
 /// (d) THE LOGS' COMPACTION: each log rewritten where it has passed the
-/// trigger, under the store's lock on that log's appends alone — no arm of
-/// the credential lock is held here — and the stopped logs read after it.
-/// A failure is the report's and never the pass's: the next pass tries
-/// again, and a stopped log is rewritten then whatever its count.
-fn compact_logs(store: &skep_blobs::Store, report: &mut PrunePass) {
+/// trigger — or has STOPPED, whatever its count — under the store's lock on
+/// that log's appends alone — no arm of the credential lock is held here —
+/// and the stopped logs read after it. Run on EVERY exit of the pass, a
+/// failed step's included. A failure here is the report's and never the
+/// pass's: the next pass tries again, and a stopped log is rewritten then
+/// whatever its count.
+fn compact_logs(store: &Store, report: &mut PrunePass) {
     match store.compact_logs_if_past(COMPACTION_TRIGGER, COMPACTION_MIN_LINES) {
         Ok((uploads, leases)) => {
             report.compacted_uploads = uploads;

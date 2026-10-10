@@ -26,7 +26,12 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
   and the deposit read take — `store`, `key`, `now_ms`, `limits`
   (`Limits`), `index`, `index_ready`, `index_failed`, `own_pending`,
   `uploads_open`, `health_object`, `startup_line`; the floor — `floor_in_force`,
-  `set_floor`, `floor`, `free_space`; and THE INVENTORY's two reads, `lease_counted`
+  `set_floor`, `floor`, `free_space`, and `note_finish`, the daemon's call
+  at an upload's finish, the one site the floor's lift is said from (the
+  binding's refusal is said once, at its first refusal, by the gate
+  itself); the install's refusal, `LimitsRefused` — a record naming a
+  per-file cap past the route's refused whole, said once, never clamped;
+  and THE INVENTORY's two reads, `lease_counted`
   (`Counted`) and `upload_counted`, under the gate's own pending rule and
   its own reading of a store key, with `wall_clock_ms`, its reading of the
   clock.
@@ -37,8 +42,12 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
   `Rebuild` — or, where that thread died, marking the index FAILED, the
   third state beside ready and not-ready, read by `is_failed`.
 - **The pruner**, `pruner` — `pass(&gate, exclusive)`, answering a
-  `PrunePass`; `PINNED_DESIGNATIONS`; `Cadence` (`new`, `wait`, `stop`) and
-  `Wake`, the transport's thread's clock and stop.
+  `PrunePass`: its figures, the halt, the compaction half of its line
+  (`compaction`) and, where a step failed, the first failure beside them
+  (`PassFailure`, naming its `PassStep` and the cause), step (d) — the
+  compaction — having run on every exit; `PINNED_DESIGNATIONS`; `Cadence`
+  (`new`, `wait`, `stop`) and `Wake`, the transport's thread's clock and
+  stop.
 - **The fetch**, `serve` — `fetch` and `gate_admits` over M10's front door;
   `FetchPool` (`new`); `Admitted` (`i`, `size`, `bytes`), `NamedBlob` and
   `FetchRefusal`; `Progress` (`new`, `advance`, `due`, `reset`), the
@@ -56,7 +65,8 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
 - **The test seam** (`test-hooks`, default off; every item of it
   `#[doc(hidden)]`) — the walk hold and the walk fault, the stream hold,
   the prune hold and its notice, the gate's clock, free-space and limits
-  overrides, the index's report and counts, the pools' `try_hold`; forwards
+  overrides and its record of the lines it has said, the index's report
+  and counts, the pools' `try_hold`; forwards
   `skep-blobs/test-hooks`, the hazard seam the daemon's hooks reach through
   the gate's `store`.
 

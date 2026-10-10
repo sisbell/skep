@@ -11,6 +11,7 @@ use skep_engine::{HistoryError, Recovery};
 #[cfg(feature = "test-hooks")]
 use skep_kernel::Step;
 use skep_kernel::{Attestation, CheckpointHeader, SaltSource, Seq};
+use skep_media::gate::LimitsRefused;
 use skep_media::index::{Rebuild, WALK_FAULT, WALK_HOLD};
 use skep_media::pruner::PrunePass;
 use skep_media::serve::STREAM_HOLD;
@@ -456,13 +457,17 @@ impl Daemon {
 
     /// TEST HOOK (the same standing): RUN THE PRUNER's PASS now, on this
     /// thread — the pass the cadence runs, under the credential lock's
-    /// write arm one file at a time — and answer what it did; `None` where
-    /// the index is not ready and the pass did not start. A pass that
-    /// cannot read or unlink PANICS here: a seam whose act failed fails its
-    /// test here, not at a later assertion.
+    /// write arm one file at a time, ITS LINE SAID as the cadence says it
+    /// (`Daemon::say_the_pass`: row 34, or row 35 where a step failed) — and
+    /// answer what it did; `None` where the index is not ready and the pass
+    /// did not start. A step's failure is the REPORT's (`PrunePass::failed`,
+    /// the step and the cause beside the figures and the compaction's state),
+    /// never a panic here: a suite reads it as the operator's line does.
     #[doc(hidden)]
     pub fn prune_now(&self) -> Option<PrunePass> {
-        self.prune_pass().expect("the test seam's pass")
+        let pass = self.prune_pass();
+        self.say_the_pass(&pass);
+        pass.expect("the test seam's pass")
     }
 
     /// The line the pruner's hold writes on the operator stream as it
@@ -550,18 +555,39 @@ impl Daemon {
     /// TEST HOOK (the same standing): INSTALL a media limits record — the
     /// serving layer's channel (AUTH-4.70) in a suite's hand until that
     /// channel lands: the per-account limit, the venue's total, the lease
-    /// interval (`None` keeps the daemon's default) and the record's
-    /// address the deposit read echoes — the media gate's own hook, the
-    /// per-file cap the route's.
+    /// interval (`None` keeps the daemon's default), the per-file cap
+    /// (`None` is the route's own, `MAX_BLOB_BYTES`) and the record's
+    /// address the deposit read echoes — the media gate's own hook, which
+    /// answers the install's REFUSAL where the cap named exceeds the route's
+    /// (op-D6 (a): refused as malformed, said once, the limits in force
+    /// standing, never clamped), so a suite can present a record past the
+    /// cap and read what the installer is answered.
     #[doc(hidden)]
     pub fn install_media_limits(
         &self,
         per_account: Option<u64>,
         venue_total: Option<u64>,
         lease_interval_ms: Option<u64>,
+        per_file_cap: Option<u64>,
         address: Option<String>,
-    ) {
-        self.media.install_limits(per_account, venue_total, lease_interval_ms, address);
+    ) -> Result<(), LimitsRefused> {
+        self.media.install_limits(
+            per_account,
+            venue_total,
+            lease_interval_ms,
+            per_file_cap,
+            address,
+        )
+    }
+
+    /// TEST HOOK (the same standing): every line the MEDIA GATE has said
+    /// through its own classed door this uptime — the floor's binding and
+    /// its lift, a limits record's refusal — each `{class}: {text}`, oldest
+    /// first. Said below the daemon's door, so [`Daemon::lines_said`] holds
+    /// none of them; the stream itself no in-process suite reads.
+    #[doc(hidden)]
+    pub fn media_lines_said(&self) -> Vec<String> {
+        self.media.lines_said()
     }
 
     /// TEST HOOK (the same standing): advance the media gate's clock by

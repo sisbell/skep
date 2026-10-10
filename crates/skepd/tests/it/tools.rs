@@ -114,7 +114,7 @@ fn the_inventory_lists_the_holes_the_accounts_and_the_venue_total_and_writes_not
         // one expired by the wall clock.
         let (st, _, _) = blob_create(port, Some(&owner), 10, b"hello");
         assert_eq!(st, 200);
-        sd.daemon().install_media_limits(None, None, Some(300), None);
+        sd.daemon().install_media_limits(None, None, Some(300), None, None).expect("installs");
         let (st, _, _) = blob_create(port, Some(&owner), 10, b"xyz");
         assert_eq!(st, 200);
         std::thread::sleep(std::time::Duration::from_millis(500));

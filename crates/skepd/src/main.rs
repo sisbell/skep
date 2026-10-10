@@ -27,10 +27,13 @@ use skep_util::source::Source;
 // daemon's permit pools, the minimum is that relation's own floor — one more
 // than the five pools' slots together — and the library holds the assertion
 // that keeps them in step. The parse below refuses a count under the floor,
-// and the help renders both figures from the constants.
+// and the help renders both figures from the constants. The default
+// per-account limit's two constants are the media resource's, re-exported
+// the same way, so the help's `--uploads` sentence renders the default it
+// describes from the constants that supply it.
 use skepd::{
     bind, serve_bound, tools, AuthOptions, Daemon, MediaOptions, NodePrefix, Origin,
-    DEFAULT_WORKERS, MIN_WORKERS,
+    DEFAULT_LIMIT_FLOOR_BYTES, DEFAULT_LIMIT_SHARE, DEFAULT_WORKERS, MIN_WORKERS,
 };
 
 const DEFAULT_PORT: u16 = 8642;
@@ -241,9 +244,11 @@ usage: skepd --data-dir <DIR> [--port <PORT>] [--workers <N>]
   --no-local-trust   refuse every bare session once the board is claimed
                      (env: SKEPD_LOCAL_TRUST=true|false)
   --uploads          admit the blob upload family (the default), under a
-                     per-account limit of one eighth of the volume's
-                     capacity, never below 256 MiB, until a limits record
-                     is installed; echoed on /health as media.uploads
+                     per-account limit of one part in {DEFAULT_LIMIT_SHARE} of
+                     the volume's capacity, never below \
+{DEFAULT_LIMIT_FLOOR_BYTES} bytes, until
+                     a limits record is installed; echoed on /health as
+                     media.uploads
   --no-uploads       refuse the upload's creation and resume before any
                      body byte (403 upload_refused, detail uploads_closed);
                      the reads, the termination, the door and the pruner

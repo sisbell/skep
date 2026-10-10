@@ -1565,7 +1565,8 @@ gate. `gate.rs` — THE GATE: the blob store opened under `blobs/` in the
 data dir, the limits in force (the daemon's default — one eighth of the
 volume's capacity read once at the open, never below 256 MiB — and the
 install hook the serving layer's channel will call, compiled under
-`test-hooks` until it does), the hold a stream has on its upload, the three
+`test-hooks` until it does, a cap past the route's refused, never
+clamped), the hold a stream has on its upload, the three
 scopes a deposit is refused on (the own scope — the base plus the pending
 bytes — the venue total, the floor — in that order, the requester's own
 record first), the creation's gate (the standing-uploads bound, the floor
@@ -1574,7 +1575,8 @@ twice the newest checkpoint's size plus one maximal segment, set by the
 daemon at open off the start point's header (the base that loaded, never a
 skipped header's claim) and after any landing, the thread's own or a
 backstop's; and the volume's free space as the floor reads it, the one
-figure the daemon's landing line carries too — the binding's read with its
+figure the daemon's landing line carries too, the refusal said once per
+binding and its lift once at a finish — the binding's read with its
 window, and THE INVENTORY's two reads, whose figures the operator's tool
 reports under the gate's own pending rule. `index.rs` — THE CELL INDEX:
 per hash the cells naming it, per account the distinct hashes its cells
@@ -1591,8 +1593,9 @@ on a foreign designation directory or a halt mark; the unreferenced files
 renamed aside under an exclusive arm the caller hands in (the credential
 lock's write arm — named nowhere here), one file per acquisition,
 re-reading the index and the lease log there, each aside unlinked after
-under no arm; the two logs compacted on their trigger under no arm; and
-the cadence the daemon's transport thread waits on. `serve.rs` — THE
+under no arm; the two logs compacted on their trigger under no arm — the
+compaction step runs on every exit, the first error answered beside the
+report; and the cadence the daemon's transport thread waits on. `serve.rs` — THE
 FETCH's composed order: the shape, M10's read by identity as the gate, the
 one classification, the permit of the fetch pool, the whole file checked
 against its cell before its first byte, the stream's two re-check

@@ -533,7 +533,11 @@ impl Daemon {
     /// requester is re-resolved against the head under it: a session killed
     /// mid-transfer is dead at its rename — its token resolves to an actor
     /// other than `principal`, the stream's own — its upload ended, nothing
-    /// kept (clause (6); M-I2 (g)).
+    /// kept (clause (6); M-I2 (g)). A finish is NOTED to the media gate
+    /// (`MediaGate::note_finish`, the finished size; `operations.md` §1.1
+    /// m9): the one site the floor's lift is said from — a finish is proof
+    /// the volume held a whole file above the floor, where an admission
+    /// proves nothing the next chunk cannot undo.
     fn blob_finish(
         &self,
         principal: PrincipalId,
@@ -558,7 +562,10 @@ impl Daemon {
             );
         }
         match stream.finish(Duration::from_millis(self.media.limits().lease_interval_ms), now) {
-            Ok(finished) => finish_reply(&finished),
+            Ok(finished) => {
+                self.media.note_finish(finished.size);
+                finish_reply(&finished)
+            }
             Err(e) => blob_refusal(e),
         }
     }
@@ -649,6 +656,33 @@ impl Daemon {
     /// where the index is not ready — the pass does not start (ms5-R).
     pub(super) fn prune_pass(&self) -> io::Result<Option<PrunePass>> {
         pruner::pass(&self.media, || self.auth.credential_lock.write())
+    }
+
+    /// THE PASS SAID (`operations.md` §1.1 rows 34, 35): one line per pass
+    /// on the daemon's classed door — ROW 34 under `Class::Landing` where no
+    /// step failed, the report's own `Display` (its figures, the halt, the
+    /// compaction half); ROW 35 under `Class::Failure` where one did —
+    /// `pruner: the pass failed: {e}`, the step and the cause — then the SAME
+    /// compaction half (`PrunePass::compaction`: `{log} compacted`, `a
+    /// compaction FAILED`, `STOPPED: {log} takes no append until a compaction
+    /// completes`), so the line names the failure AND whether the stop it may
+    /// have met is lifted or stands. Nothing where the pass did not start
+    /// (`Ok(None)`: the index not ready). The `Err` arm — no step's answer,
+    /// since the pass collects its failures into the report; kept for the
+    /// signature — is row 35 with no half, nothing of the pass having run.
+    /// The cadence's loop and the test seam's pass say it alike.
+    pub(super) fn say_the_pass(&self, pass: &io::Result<Option<PrunePass>>) {
+        match pass {
+            Ok(Some(report)) => match &report.failed {
+                None => self.say(Class::Landing, report),
+                Some(failed) => self.say(
+                    Class::Failure,
+                    format_args!("pruner: the pass failed: {failed}{}", report.compaction()),
+                ),
+            },
+            Ok(None) => {}
+            Err(e) => self.say(Class::Failure, format_args!("pruner: the pass failed: {e}")),
+        }
     }
 
     /// Whether the cell index's walk at open has completed — what the

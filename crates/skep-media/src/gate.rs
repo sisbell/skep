@@ -40,6 +40,18 @@
 //! index's three readers: refused `index_rebuilding` until the walk at open
 //! completes (ms5-R).
 //!
+//! THE FLOOR's LINE (`operations.md` §1.1 m9; §4 row 7): a BINDING — the
+//! free space read below the floor in force at a creation or a chunk — is
+//! said ONCE, at its first refusal, through the classed door with the
+//! host's two figures, what still serves and the two acts; a once-flag on
+//! the gate holds it said, the daemon's standing line re-says the binding
+//! off its own read while `free_space() < floor()` holds, and the first
+//! upload that FINISHES with the free space back at or above the floor says
+//! the lift once ([`MediaGate::note_finish`], the daemon's call at a finish)
+//! and clears the flag — never an admission alone, which the next chunk may
+//! re-refuse. Neither line names a principal, an upload or a token (D9): the
+//! condition is the host's, said in the host's figures.
+//!
 //! THE BINDING reads THE INDEX FIRST (`MediaGate::binding`): a hash the
 //! requester's own cells already name is a REFERENCE, kept by no lease —
 //! admitted where the file is on disk whole at the cell's size, the deposit
@@ -58,23 +70,31 @@
 //! THE LIMITS IN FORCE ([`Limits`]; the register M-I6 (b), (d)): A
 //! PER-ACCOUNT LIMIT IS ALWAYS IN FORCE. THE DAEMON's DEFAULT (the owner's
 //! ruling; `media.md` Op inventory 1, "UPLOADS ARE OPEN BY DEFAULT, WITH A
-//! DEFAULT PER-ACCOUNT LIMIT IN FORCE FROM START") is ONE EIGHTH OF THE
-//! VOLUME's CAPACITY, read once at the open off the same `statvfs` the
-//! floor reads ([`skep_blobs::Store::capacity`]) and never below 256 MiB —
-//! `DEFAULT_LIMIT_SHARE`, `DEFAULT_LIMIT_FLOOR_BYTES` (D1) — the whole
-//! default being the floor on a host that cannot answer its capacity; the
-//! venue total UNSET; the lease interval `LEASE_INTERVAL_DEFAULT_MS`; the
-//! per-file cap `MAX_BLOB_BYTES`; no address. The deposit read ECHOES the
-//! limit in force as `per_account`, whatever its source, beside the
-//! record's address or `null` (P37: a boundary setting is echoed for the
-//! faces that key on it; R68's read-before-refusal holds under the
-//! default). THE LIMITS RECORD (§Recovery: "ONE published, attributed,
-//! supersedable record … installed in the daemon by the serving layer as
-//! AUTH-4.70's list is") — its kind, schema and install channel AUTH's
-//! docket's (RES-208), OWED — OVERRIDES the default WHOLE through the
+//! DEFAULT PER-ACCOUNT LIMIT IN FORCE FROM START") is ONE PART IN
+//! [`DEFAULT_LIMIT_SHARE`] OF THE VOLUME's CAPACITY, read once at the open
+//! off the same `statvfs` the floor reads ([`skep_blobs::Store::capacity`])
+//! and never below [`DEFAULT_LIMIT_FLOOR_BYTES`] (D1) — the whole default
+//! being the floor on a host that cannot answer its capacity; the venue
+//! total UNSET; the lease interval `LEASE_INTERVAL_DEFAULT_MS`; the
+//! per-file cap `MAX_BLOB_BYTES`; no address. The startup line and the
+//! binary's help RENDER the default from the two constants — "one part in
+//! {DEFAULT_LIMIT_SHARE} of the volume's capacity, never below
+//! {DEFAULT_LIMIT_FLOOR_BYTES} bytes" (`operations.md` §1.1 row 7; §2.3 F4)
+//! — the constant being a divisor and a spelled fraction a word table of
+//! one entry, so the program describes no default it does not use. The
+//! deposit read ECHOES the limit in force as `per_account`, whatever its
+//! source, beside the record's address or `null` (P37: a boundary setting
+//! is echoed for the faces that key on it; R68's read-before-refusal holds
+//! under the default). THE LIMITS RECORD (§Recovery: "ONE published,
+//! attributed, supersedable record … installed in the daemon by the serving
+//! layer as AUTH-4.70's list is") — its kind, schema and install channel
+//! AUTH's docket's (RES-208), OWED — OVERRIDES the default WHOLE through the
 //! INSTALL HOOK (`MediaGate::install_limits`, compiled under `test-hooks`
-//! until that channel lands) the serving layer's channel will call; the
-//! startup log names the record in force, or the default and its source.
+//! until that channel lands) the serving layer's channel will call — or is
+//! REFUSED as malformed by its own grammar where its per-file cap exceeds
+//! the route's own, said once, the limits in force standing
+//! ([`LimitsRefused`]; op-D6 (a): never clamped); the startup log names
+//! the record in force, or the default and its source.
 //!
 //! THE UPLOAD SETTING ([`crate::MediaOptions`]) rides here as the
 //! resource's configuration — the switch the routes read
@@ -86,11 +106,10 @@
 //! pins (sm-Q8), handed to the store at open.
 
 use std::collections::HashSet;
+use std::fmt;
 use std::io;
 use std::path::Path;
-#[cfg(any(test, feature = "test-hooks"))]
-use std::sync::atomic::AtomicBool;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -100,8 +119,7 @@ use skep_blobs::{Lease, LeaseState, Store, UploadId, UploadRecord};
 use skep_kernel::MAX_SEGMENT_LEN;
 use skep_namespace::PrincipalId;
 use skep_util::json::{hex_string, obj};
-#[cfg(any(test, feature = "test-hooks"))]
-use skep_util::notice;
+use skep_util::notice::{self, Class};
 
 use crate::cell::{Cell, DESIGNATION};
 use crate::index::CellIndex;
@@ -176,9 +194,10 @@ pub struct Limits {
 impl Limits {
     /// THE DAEMON's DEFAULTS, for a volume of `capacity` bytes (`None`: a
     /// host that could not answer its capacity): the per-account limit one
-    /// eighth of the capacity and never below 256 MiB — the floor alone
-    /// where the host answered nothing — the venue total unset, the lease
-    /// interval and the per-file cap the daemon's, no address.
+    /// part in [`DEFAULT_LIMIT_SHARE`] of the capacity and never below
+    /// [`DEFAULT_LIMIT_FLOOR_BYTES`] — the floor alone where the host
+    /// answered nothing — the venue total unset, the lease interval and the
+    /// per-file cap the daemon's, no address.
     fn defaults_for(capacity: Option<u64>) -> Limits {
         let share = capacity.map_or(0, |c| c / DEFAULT_LIMIT_SHARE);
         Limits {
@@ -190,9 +209,13 @@ impl Limits {
         }
     }
 
-    /// The line the startup log names the limits in force by: the record,
-    /// or the default and its source — the capacity read, or the floor on a
-    /// host that answered none.
+    /// The line the startup log names the limits in force by (`operations.md`
+    /// §1.1 row 7): the record, or the default and its source — the capacity
+    /// read, or the floor on a host that answered none — the default's share
+    /// and floor RENDERED from [`DEFAULT_LIMIT_SHARE`] and
+    /// [`DEFAULT_LIMIT_FLOOR_BYTES`], "one part in {share} of the volume's
+    /// capacity of {c} bytes, never below {floor} bytes", so the line is true
+    /// for any divisor a ruling picks (§2.3 F4: no word table).
     fn log_line(&self, capacity: Option<u64>) -> String {
         let scope = |v: Option<u64>| v.map_or("none".to_string(), |n| n.to_string());
         match &self.address {
@@ -207,8 +230,8 @@ impl Limits {
             None => {
                 let source = match capacity {
                     Some(c) => format!(
-                        "one eighth of the volume's capacity of {c} bytes, never below {} bytes",
-                        DEFAULT_LIMIT_FLOOR_BYTES
+                        "one part in {DEFAULT_LIMIT_SHARE} of the volume's capacity of {c} bytes, \
+                         never below {DEFAULT_LIMIT_FLOOR_BYTES} bytes"
                     ),
                     None => format!(
                         "the {} byte floor alone, the host answering no capacity",
@@ -226,6 +249,42 @@ impl Limits {
         }
     }
 }
+
+/// THE INSTALL's REFUSAL (op-D6 (a), the owner's ruling; `docs/wire.md`
+/// §Media, "a per-file cap at or below the route's"; `operations.md` §2.3
+/// F10): a limits record malformed by its own grammar, refused WHOLE at its
+/// install — the limits in force standing — and said once per attempt
+/// through the classed door, in these words. Answered to the installer: the
+/// serving layer's channel (AUTH-4.70's docket, item 40) answers the
+/// record's writer with it; until that channel lands the hook
+/// (`MediaGate::install_limits`, under `test-hooks`) is its one path. Never a clamp: a cap the
+/// daemon quietly lowered would leave the record's writer believing a figure
+/// the daemon does not use.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum LimitsRefused {
+    /// The record names a per-file cap above the route's own,
+    /// [`MAX_BLOB_BYTES`].
+    PerFileCap {
+        /// The cap the record names.
+        named: u64,
+        /// The route's own cap, the most a record may name.
+        route: u64,
+    },
+}
+
+impl fmt::Display for LimitsRefused {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            LimitsRefused::PerFileCap { named, route } => write!(
+                f,
+                "media limits refused: the record names a per-file cap of {named} bytes, above \
+                 the route's {route}; the limits in force stand"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for LimitsRefused {}
 
 /// The scope a deposit was refused on — what the refusal names, and
 /// nothing of the headroom (M-I6 (h)). Named for the deposit it refuses,
@@ -343,6 +402,13 @@ pub struct MediaGate {
     /// chunk. An atomic rather than a lock: one load per read, and a store
     /// that lands whole.
     floor: AtomicU64,
+    /// THE FLOOR's ONCE-FLAG (`operations.md` §1.1 m9): whether the standing
+    /// binding has been said — set by the binding's first refusal, which
+    /// says the failure line, held through every later refusal, which says
+    /// nothing, and cleared by the first finish above the floor, which says
+    /// the lift ([`MediaGate::note_finish`]). The uptime's: the first
+    /// refusal of the next uptime says it again.
+    floor_said: AtomicBool,
     /// THE HOLD (clause (5)): the uploads a stream holds right now, in
     /// skepd's memory and no store — a PUT naming one is refused while it
     /// is held. Each entry is a [`Hold`]'s, removed as that guard drops, an
@@ -365,6 +431,12 @@ pub struct MediaGate {
     /// the cadence's first pass before it moves the clock.
     #[cfg(any(test, feature = "test-hooks"))]
     passes_completed: AtomicU64,
+    /// The test seam's record of every line the gate said through its
+    /// classed door ([`MediaGate::say`]), each `{class}: {text}`, oldest
+    /// first — the daemon's own record holds none of them, and the stream
+    /// no in-process suite reads.
+    #[cfg(any(test, feature = "test-hooks"))]
+    said: Mutex<Vec<String>>,
 }
 
 impl MediaGate {
@@ -385,6 +457,7 @@ impl MediaGate {
             options,
             capacity,
             floor: AtomicU64::new(FLOOR_BYTES),
+            floor_said: AtomicBool::new(false),
             held: Mutex::new(HashSet::new()),
             index: Arc::new(CellIndex::new()),
             #[cfg(any(test, feature = "test-hooks"))]
@@ -395,6 +468,8 @@ impl MediaGate {
             prune_hold: AtomicBool::new(false),
             #[cfg(any(test, feature = "test-hooks"))]
             passes_completed: AtomicU64::new(0),
+            #[cfg(any(test, feature = "test-hooks"))]
+            said: Mutex::new(Vec::new()),
         })
     }
 
@@ -510,25 +585,37 @@ impl MediaGate {
         obj(vec![("uploads", Value::Bool(self.options.uploads))])
     }
 
-    /// THE INSTALL HOOK (AUTH-4.70's channel, owed): replace the limits in
-    /// force WHOLE. The per-file cap is held at or below the route's own; a
-    /// record naming a larger one is installed at the route's. Compiled
-    /// under `test-hooks` until the serving layer's channel lands and
-    /// reached through [`MediaGate::install_limits`]: no production caller
-    /// exists yet, and a shipped build carries no dead door.
+    /// THE INSTALL (AUTH-4.70's channel, owed; op-D6 (a)): replace the
+    /// limits in force WHOLE — or REFUSE the record as malformed by its own
+    /// grammar where its per-file cap exceeds the route's own,
+    /// [`MAX_BLOB_BYTES`] (`docs/wire.md` §Media, "at or below the
+    /// route's"): the limits in force stand, the refusal is said ONCE per
+    /// attempt through the classed door ([`LimitsRefused`]'s words,
+    /// `Class::Failure`) and answered to the installer. Never clamped.
+    /// Compiled under `test-hooks` until the serving layer's channel lands
+    /// and reached through [`MediaGate::install_limits`]: no production
+    /// caller exists yet, and a shipped build carries no dead door.
     #[cfg(any(test, feature = "test-hooks"))]
-    fn install(&self, mut limits: Limits) {
-        limits.per_file_cap = limits.per_file_cap.min(MAX_BLOB_BYTES);
+    fn install(&self, limits: Limits) -> Result<(), LimitsRefused> {
+        if limits.per_file_cap > MAX_BLOB_BYTES {
+            let refused =
+                LimitsRefused::PerFileCap { named: limits.per_file_cap, route: MAX_BLOB_BYTES };
+            self.say(Class::Failure, &refused);
+            return Err(refused);
+        }
         *self.limits.write() = limits;
+        Ok(())
     }
 
     /// TEST HOOK (the serving layer's channel, AUTH-4.70, in a suite's hand
     /// until that channel lands; reached through
     /// `Daemon::install_media_limits`): INSTALL a limits record whole — the
     /// per-account limit, the venue's total, the lease interval (`None`
-    /// keeps the daemon's default, `LEASE_INTERVAL_DEFAULT_MS`) and the
-    /// record's address the deposit read echoes; the per-file cap the
-    /// route's own, [`MAX_BLOB_BYTES`].
+    /// keeps the daemon's default, `LEASE_INTERVAL_DEFAULT_MS`), the
+    /// per-file cap (`None` is the route's own, [`MAX_BLOB_BYTES`]) and the
+    /// record's address the deposit read echoes — answering the install's
+    /// refusal where the cap named exceeds the route's, the limits in force
+    /// standing, so a suite can present a record past the cap.
     #[cfg(any(test, feature = "test-hooks"))]
     #[doc(hidden)]
     pub fn install_limits(
@@ -536,15 +623,39 @@ impl MediaGate {
         per_account: Option<u64>,
         venue_total: Option<u64>,
         lease_interval_ms: Option<u64>,
+        per_file_cap: Option<u64>,
         address: Option<String>,
-    ) {
+    ) -> Result<(), LimitsRefused> {
         self.install(Limits {
             per_account,
             venue_total,
             lease_interval_ms: lease_interval_ms.unwrap_or(LEASE_INTERVAL_DEFAULT_MS),
-            per_file_cap: MAX_BLOB_BYTES,
+            per_file_cap: per_file_cap.unwrap_or(MAX_BLOB_BYTES),
             address,
-        });
+        })
+    }
+
+    /// One classed line of the gate's own on the operator stream — the
+    /// floor's binding and its lift, a limits record's refusal — through
+    /// `skep_util::notice`'s classed door, as the daemon's own lines go, so
+    /// no line of the gate's goes out without its class word; and, under
+    /// the test seam, kept for the suite (`MediaGate::lines_said`, the hook):
+    /// the stream itself no in-process suite reads.
+    fn say(&self, class: Class, what: impl fmt::Display) {
+        #[cfg(any(test, feature = "test-hooks"))]
+        self.said.lock().push(format!("{class}: {what}"));
+        notice::emit(class, what);
+    }
+
+    /// TEST HOOK (reached through `Daemon::media_lines_said`): every line
+    /// the gate has said through its classed door this uptime, each
+    /// `{class}: {text}`, oldest first — the floor's binding and its lift, a
+    /// limits record's refusal. The daemon's own record (`Daemon::lines_said`)
+    /// holds none of them: they are said below its door.
+    #[cfg(any(test, feature = "test-hooks"))]
+    #[doc(hidden)]
+    pub fn lines_said(&self) -> Vec<String> {
+        self.said.lock().clone()
     }
 
     /// The gate's reading of the clock, unix milliseconds — the one every
@@ -671,8 +782,9 @@ impl MediaGate {
         if self.store.uploads_of(&key, now_ms).len() >= MAX_STANDING_UPLOADS {
             return Err(DepositScope::Standing);
         }
-        if self.free_space() < self.floor() {
-            return Err(DepositScope::Floor);
+        let (free_space, floor) = (self.free_space(), self.floor());
+        if free_space < floor {
+            return Err(self.refused_at_the_floor(free_space, floor));
         }
         Ok(())
     }
@@ -705,10 +817,50 @@ impl MediaGate {
                 return Err(DepositScope::Venue);
             }
         }
-        if self.free_space().saturating_sub(n) < self.floor() {
-            return Err(DepositScope::Floor);
+        // The figure compared is the free space the chunk would leave, and
+        // the line's figure where it refuses.
+        let (left, floor) = (self.free_space().saturating_sub(n), self.floor());
+        if left < floor {
+            return Err(self.refused_at_the_floor(left, floor));
         }
         Ok(())
+    }
+
+    /// THE FLOOR's REFUSAL, SAID ONCE PER BINDING (`operations.md` §1.1 m9;
+    /// §4 row 7): the scope answered for a creation or a chunk the floor
+    /// refuses — and, where this is the binding's FIRST refusal (the
+    /// once-flag was clear), the failure line through the classed door
+    /// ([`FloorBoundLine`]): the two figures as the gate compared them, what
+    /// still serves, the two acts. The flag stays set until a finish above
+    /// the floor ([`MediaGate::note_finish`]) clears it; the daemon's
+    /// standing line re-says the binding meanwhile off its own read. No
+    /// principal, upload or token rides the line (D9): a condition of the
+    /// host's, said in the host's figures.
+    fn refused_at_the_floor(&self, free_space: u64, floor: u64) -> DepositScope {
+        if !self.floor_said.swap(true, Ordering::AcqRel) {
+            self.say(Class::Failure, FloorBoundLine { free_space, floor });
+        }
+        DepositScope::Floor
+    }
+
+    /// A FINISH, NOTED (`operations.md` §1.1 m9): the daemon's call as an
+    /// upload of `bytes` bytes finishes — THE LIFT's one site. Where the
+    /// floor's binding has been said and the volume's free space now stands
+    /// at or above the floor in force, the lift is said ONCE
+    /// (`FloorLiftedLine`: the finished size, the two figures) and the
+    /// once-flag cleared, so the next binding is said again; nothing
+    /// otherwise. A finish and never an admission: a creation admitted can
+    /// still be refused at its next chunk, so an admission proves nothing an
+    /// operator can act on, while a finish is proof the volume held a whole
+    /// file above the floor.
+    pub fn note_finish(&self, bytes: u64) {
+        if !self.floor_said.load(Ordering::Acquire) {
+            return;
+        }
+        let (free_space, floor) = (self.free_space(), self.floor());
+        if free_space >= floor && self.floor_said.swap(false, Ordering::AcqRel) {
+            self.say(Class::Landing, FloorLiftedLine { bytes, free_space, floor });
+        }
     }
 
     /// THE VOLUME's FREE SPACE AS THE FLOOR READS IT — the seam's figure
@@ -849,6 +1001,49 @@ impl MediaGate {
     #[doc(hidden)]
     pub fn passes_completed(&self) -> u64 {
         self.passes_completed.load(Ordering::Acquire)
+    }
+}
+
+/// THE FLOOR's BINDING LINE (`operations.md` §1.1 m9), the ruled words:
+/// the volume's free space as the gate compared it and the floor in force,
+/// what still serves, the two acts. A pure value the unit suite pins by
+/// `to_string()`; said under `Class::Failure` once per binding
+/// ([`MediaGate::refused_at_the_floor`]). No principal, upload or token.
+struct FloorBoundLine {
+    free_space: u64,
+    floor: u64,
+}
+
+impl fmt::Display for FloorBoundLine {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "deposits refused at the floor: the volume's free space {} bytes is below the floor \
+             in force {}; every write but a deposit serves; the acts: room on the volume, a pass \
+             run early",
+            self.free_space, self.floor
+        )
+    }
+}
+
+/// THE LIFT's LINE (m9), the ruled words: the finished upload's size and
+/// the two figures as the gate read them at the finish. A pure value the
+/// unit suite pins by `to_string()`; said under `Class::Landing` once per
+/// binding, at the first finish above the floor ([`MediaGate::note_finish`]).
+struct FloorLiftedLine {
+    bytes: u64,
+    free_space: u64,
+    floor: u64,
+}
+
+impl fmt::Display for FloorLiftedLine {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "deposits admitted again: an upload of {} bytes finished with the volume's free \
+             space {} bytes above the floor in force {}",
+            self.bytes, self.free_space, self.floor
+        )
     }
 }
 

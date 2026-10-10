@@ -131,11 +131,11 @@ fn a_pass_removes_the_expired_partials_and_keeps_the_standing_ones() {
     let (st, _, resp) = blob_create(port, Some(&token), 10, b"hello");
     assert_eq!(st, 200);
     let standing = json(&resp)["upload"].as_str().unwrap().to_string();
-    sd.daemon().install_media_limits(None, None, Some(1_000), None);
+    sd.daemon().install_media_limits(None, None, Some(1_000), None, None).expect("installs");
     let (st, _, resp) = blob_create(port, Some(&token), 10, b"hello");
     assert_eq!(st, 200);
     let expiring = json(&resp)["upload"].as_str().unwrap().to_string();
-    sd.daemon().install_media_limits(None, None, None, None);
+    sd.daemon().install_media_limits(None, None, None, None, None).expect("installs");
     sd.daemon().advance_media_clock_ms(2_000);
     let blobs = blobs_dir(dir.path());
     assert!(blobs.join(format!(".upload-{expiring}")).is_file(), "stands until a pass");
@@ -166,11 +166,11 @@ fn a_foreign_designation_directory_halts_the_unlink_pass_and_the_partials_still_
     let token = open_session(port, CLAIMANT_PRINCIPAL);
     let lapsing = seeded_bytes(2_000, 7);
     put_whole(port, &token, &lapsing);
-    sd.daemon().install_media_limits(None, None, Some(1_000), None);
+    sd.daemon().install_media_limits(None, None, Some(1_000), None, None).expect("installs");
     let (st, _, resp) = blob_create(port, Some(&token), 10, b"hello");
     assert_eq!(st, 200);
     let expiring = json(&resp)["upload"].as_str().unwrap().to_string();
-    sd.daemon().install_media_limits(None, None, None, None);
+    sd.daemon().install_media_limits(None, None, None, None, None).expect("installs");
     let foreign = dir.path().join("blobs").join("sha256-tree");
     fs::create_dir_all(&foreign).expect("the planted directory");
     sd.daemon().advance_media_clock_ms(LEASE_MS);
@@ -390,6 +390,229 @@ fn a_pass_compacts_a_log_past_its_trigger_and_leaves_a_small_one_alone() {
     got.sort();
     assert_eq!(got, want, "every standing upload, the one appended after the rewrite among them, listed after the reopen");
     sd.shutdown();
+}
+
+/// The row 35 lines the daemon has said — `failure: pruner: the pass
+/// failed: …` — in order.
+fn pass_failures(sd: &skepd::Skepd) -> Vec<String> {
+    sd.daemon()
+        .lines_said()
+        .into_iter()
+        .filter(|l| l.starts_with("failure: pruner: the pass failed: "))
+        .collect()
+}
+
+/// `dir` made UNREADABLE — mode `0300`, searched and written but never read
+/// — for the guard's life, its mode restored as the guard drops, a failing
+/// claim's unwind included, so no directory under the temp dir is left
+/// unreadable. The jsonl suite's own injection: a compaction's twin is
+/// created and renamed over the log, and the directory's open for its fsync
+/// fails, so the compaction fails PAST its rename and the log stops.
+#[cfg(unix)]
+struct Unreadable<'a> {
+    dir: &'a Path,
+    mode: fs::Permissions,
+}
+
+#[cfg(unix)]
+impl<'a> Unreadable<'a> {
+    fn new(dir: &'a Path) -> Unreadable<'a> {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = fs::metadata(dir).expect("the directory").permissions();
+        fs::set_permissions(dir, fs::Permissions::from_mode(0o300)).expect("the mode set");
+        Unreadable { dir, mode }
+    }
+}
+
+#[cfg(unix)]
+impl Drop for Unreadable<'_> {
+    fn drop(&mut self) {
+        let _ = fs::set_permissions(self.dir, self.mode.clone());
+    }
+}
+
+/// `operations.md` §4 row 5; §1.1 row 35 (RULED: steps (a)–(c) collect the
+/// first error, step (d) runs on EVERY exit) — A FAILED STEP NEVER SKIPS THE
+/// COMPACTION THAT LIFTS A STOP. THE STOP: the records' log driven past its
+/// trigger (512 creations each ended — 1,024 retired lines over one standing
+/// record, past the minimum and past four times its records), then a pass
+/// run with `blobs/` unreadable: that pass's first failure is step (b)'s
+/// read of the designation directories, its (d) runs regardless and the
+/// compaction fails PAST its rename, so `uploads.log` STOPS — and its line
+/// 35 names the failure AND the stop. THE STANDING EXPIRED UPLOAD: created
+/// before the stop on a ten-minute interval, lapsed by the clock after it,
+/// so step (a)'s retirement is an append the stopped log refuses — the `?`
+/// that once ended the pass there left the stop standing for the uptime,
+/// creations answering `500 blob_io` and a restart the one cure. NOW: the
+/// next pass fails at (a), the step named, and its (d) rewrites the stopped
+/// log whatever its count: the stop LIFTS — the report's members agree
+/// (`failed` step (a), `compacted_uploads`, `stopped` clear), its line 35
+/// names the failure AND `uploads.log compacted` — a creation resumes, and
+/// the pass after owes nothing, under line 34: the store's retirement had
+/// dropped the record in this process before the append the stopped log
+/// refused (its partial removed first), so the compaction wrote the log to
+/// the records as they stand.
+#[cfg(unix)]
+#[test]
+fn a_failed_step_never_skips_the_compaction_that_lifts_a_stop() {
+    use skep_media::limits::{COMPACTION_MIN_LINES, COMPACTION_TRIGGER};
+    use skep_media::pruner::PassStep;
+    let dir = tempfile::tempdir().expect("tempdir");
+    let sd = spawn(dir.path());
+    let port = sd.port();
+    let token = open_session(port, CLAIMANT_PRINCIPAL);
+    let logs = dir.path().join("blobs");
+    let lines = |name: &str| fs::read_to_string(logs.join(name)).unwrap().lines().count();
+    // The upload that will stand expired under the stop.
+    sd.daemon().install_media_limits(None, None, Some(600_000), None, None).expect("installs");
+    let (st, _, resp) = blob_create(port, Some(&token), 10, b"hello");
+    assert_eq!(st, 200, "{}", String::from_utf8_lossy(&resp));
+    let expiring = json(&resp)["upload"].as_str().unwrap().to_string();
+    sd.daemon().install_media_limits(None, None, None, None, None).expect("installs");
+    // The records' log past its trigger: the expiring upload's creation and
+    // its settle's offset line, then a creation and a retirement per pair.
+    for _ in 0..512 {
+        let (st, _, resp) = blob_create(port, Some(&token), 10, b"");
+        assert_eq!(st, 200, "{}", String::from_utf8_lossy(&resp));
+        let id = json(&resp)["upload"].as_str().unwrap().to_string();
+        let (st, _, _) = blob_end(port, Some(&token), &id);
+        assert_eq!(st, 204);
+    }
+    let written = lines("uploads.log");
+    assert!(
+        written >= COMPACTION_MIN_LINES && written > COMPACTION_TRIGGER,
+        "past the minimum, and four times its one record: {written} lines"
+    );
+    assert!(pass_failures(&sd).is_empty(), "no pass has failed yet");
+    // THE STOP: one pass with the directory unreadable.
+    let stopping = {
+        let _unreadable = Unreadable::new(&logs);
+        sd.daemon().prune_now().expect("ready")
+    };
+    let Some(failed) = stopping.failed.clone() else {
+        // A privileged process reads any directory: step (b)'s read passed
+        // under the mode, so nothing was injected and the claim is not run.
+        eprintln!("the directory's mode refused nothing: a privileged process; the claim is not run");
+        sd.shutdown();
+        return;
+    };
+    assert_eq!(failed.step, PassStep::Halts, "{stopping:?}");
+    assert!(
+        stopping.compaction_failed.is_some(),
+        "FINDING (§4 row 5): the failed step skipped the compaction — no stop was met: {stopping:?}"
+    );
+    assert_eq!(stopping.stopped, (true, false), "the records' log stopped past its rename: {stopping:?}");
+    assert!(!stopping.compacted_uploads, "{stopping:?}");
+    let said = pass_failures(&sd);
+    assert_eq!(said.len(), 1, "{said:?}");
+    assert_eq!(
+        said[0],
+        format!(
+            "failure: pruner: the pass failed: {failed}; a compaction FAILED: {}; STOPPED: \
+             uploads.log takes no append until a compaction completes",
+            stopping.compaction_failed.as_ref().unwrap()
+        ),
+        "line 35 names the failure AND the stopped log"
+    );
+    assert!(said[0].contains("step (b), the halts' read: "), "the step named: {}", said[0]);
+    // THE STOP IN FORCE: a creation's record is an append the log refuses.
+    let (st, _, body) = blob_create(port, Some(&token), 10, b"");
+    assert_eq!(st, 500, "{}", String::from_utf8_lossy(&body));
+    assert_eq!(json(&body)["error"].as_str(), Some("blob_io"), "{}", String::from_utf8_lossy(&body));
+    // The expired upload stands, its retirement owed.
+    sd.daemon().advance_media_clock_ms(700_000);
+    // THE PASS THAT LIFTS: (a) fails at the retirement, (d) runs regardless.
+    let lifting = sd.daemon().prune_now().expect("ready");
+    let failed = lifting.failed.clone().expect("step (a)'s retirement is refused by the stopped log");
+    assert_eq!(failed.step, PassStep::ExpiredPartials, "{lifting:?}");
+    assert!(failed.cause.contains("uploads.log takes no append until a compaction completes"), "{failed}");
+    assert_eq!(lifting.expired_partials, 0, "{lifting:?}");
+    assert!(lifting.compacted_uploads, "FINDING (§4 row 5): the failed step skipped the compaction: {lifting:?}");
+    assert_eq!(lifting.compaction_failed, None, "{lifting:?}");
+    assert_eq!(lifting.stopped, (false, false), "the stop lifted by this pass: {lifting:?}");
+    let said = pass_failures(&sd);
+    assert_eq!(said.len(), 2, "{said:?}");
+    assert_eq!(
+        said[1],
+        format!("failure: pruner: the pass failed: {failed}; uploads.log compacted"),
+        "line 35 names the failure AND the compaction that lifted the stop"
+    );
+    // The store's retirement drops the record from its map BEFORE the
+    // append the stopped log refused, its partial removed before that
+    // (`Store::expire_upload`), so the compaction rewrote the log to the
+    // records as they stand in this process: none.
+    assert_eq!(lines("uploads.log"), 0, "rewritten to its current records");
+    assert!(!blobs_dir(dir.path()).join(format!(".upload-{expiring}")).exists(), "the expired partial went before the refused append");
+    // CREATIONS RESUME, without a restart.
+    let (st, _, body) = blob_create(port, Some(&token), 10, b"");
+    assert_eq!(st, 200, "a creation resumes: {}", String::from_utf8_lossy(&body));
+    assert_eq!(lines("uploads.log"), 1, "the creation's record lands in the rewritten log");
+    // The pass after owes nothing and says line 34.
+    let after = sd.daemon().prune_now().expect("ready");
+    assert_eq!(after.failed, None, "{after:?}");
+    assert_eq!(after.expired_partials, 0, "the refused retirement had already retired the record in this process: {after:?}");
+    assert_eq!(pass_failures(&sd).len(), 2, "a pass that failed nothing says line 34");
+    let pruner_lines: Vec<String> =
+        sd.daemon().lines_said().into_iter().filter(|l| l.contains("pruner: ")).collect();
+    assert!(
+        pruner_lines.last().is_some_and(|l| l.starts_with("landing: pruner: 0 expired partials removed, 0 files unlinked, 0 kept, 0 asides removed")),
+        "{pruner_lines:?}"
+    );
+    sd.shutdown();
+}
+
+/// `operations.md` §1.1 row 36 RETIRED (RULED: the standalone write inside
+/// the pass dropped; line 34 carries the halt, its reason and the expired
+/// partials removed) — THE HALT IS SAID IN ONE LINE: the real binary over a
+/// board with a foreign designation directory planted before its start, its
+/// stderr piped: the cadence's first pass halts, and the stream carries
+/// exactly ONE pruner line for it — row 34, a `landing:`, with " — the
+/// unlink pass halted: a designation directory blobs/sha256-tree/ …" — and
+/// no `pruner: the unlink pass is halted` line; the halt claims above pin
+/// the report's `halted`, and stand. The stream is the binary's own: the
+/// standalone write, were it restored, would go to the operator stream and
+/// no record a suite reads in-process.
+#[cfg(unix)]
+#[test]
+fn the_halt_is_said_in_one_line_on_the_stream() {
+    use std::os::unix::fs::DirBuilderExt;
+
+    use crate::open::{after_the_head, serving_port, skepd, Spawned, Stderr, PATIENCE};
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let dir = tmp.path().join("data");
+    // The board's directory as the daemon would make it — owner-only — with
+    // a sidecar of another build's schema already under blobs/.
+    let mut builder = fs::DirBuilder::new();
+    builder.recursive(true).mode(0o700);
+    builder.create(dir.join("blobs").join("sha256-tree")).expect("the planted directory");
+    let workers = skepd::MIN_WORKERS.to_string();
+    let mut cmd = skepd(&dir, &["--port", "0", "--workers", workers.as_str()]);
+    let mut child = Spawned::launch(&mut cmd);
+    let mut stderr = Stderr::of(&mut child.child);
+    let _port = serving_port(&mut child.child, PATIENCE);
+    let first = stderr.wait_for("the first pass's line", PATIENCE, |l| l.contains("pruner: "));
+    // A second pruner line, were one coming, came with the first: the
+    // standalone write sat inside the pass, before its report returned. A
+    // settling wait, then the whole stream.
+    thread::sleep(Duration::from_millis(500));
+    child.kill();
+    let lines = stderr.whole();
+    let pruner: Vec<&String> = lines.iter().filter(|l| l.contains("pruner: ")).collect();
+    assert_eq!(pruner.len(), 1, "FINDING (row 36): the pass said more than one line:\n{}", lines.join("\n"));
+    let said = after_the_head(&first, "landing").unwrap_or_else(|| panic!("row 34 is a landing: {first}"));
+    assert!(
+        said.starts_with(
+            "pruner: 0 expired partials removed, 0 files unlinked, 0 kept, 0 asides removed — the \
+             unlink pass halted: a designation directory blobs/sha256-tree/ is outside the set this \
+             build pins (blake3): a sidecar of another build's schema"
+        ),
+        "line 34 carries the halt and its reason: {said}"
+    );
+    assert!(
+        !lines.iter().any(|l| l.contains("the unlink pass is halted")),
+        "FINDING (row 36): the standalone line is retired:\n{}",
+        lines.join("\n")
+    );
 }
 
 /// §3.2 — THE DRAIN's TIMING (M-I5 (f); `#[ignore]`, the gate's timing

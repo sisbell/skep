@@ -190,6 +190,16 @@ pub use skep_engine::{EngineError, HistoryError, OpenError, World};
 /// `skepd::MediaOptions` and depend on no media crate for it.
 pub use skep_media::MediaOptions;
 
+/// The default per-account limit's two constants — the divisor and the
+/// floor — `skep-media`'s own, re-exported for the reason [`MediaOptions`]
+/// is and the one `DEFAULT_WORKERS` is: the binary's help renders the
+/// default it describes from the constants that supply it ("one part in
+/// {DEFAULT_LIMIT_SHARE} of the volume's capacity, never below
+/// {DEFAULT_LIMIT_FLOOR_BYTES} bytes"; `operations.md` §1.1 row 7, §2.3 F4),
+/// so it cannot describe a default the daemon does not use, and names no
+/// media crate to read them.
+pub use skep_media::limits::{DEFAULT_LIMIT_FLOOR_BYTES, DEFAULT_LIMIT_SHARE};
+
 /// The dump [`Daemon::dump_visible_to`] answers with, re-exported for the
 /// reason the four above are and only where that method exists. Without
 /// it the method's return type is nameable only by depending on

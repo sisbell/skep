@@ -29,21 +29,34 @@ fn ready(gate: &MediaGate) {
 }
 
 /// THE DAEMON's DEFAULTS (M-I6 (b), (d); the owner's ruling): a
-/// per-account limit is ALWAYS in force — one eighth of the volume's
-/// capacity as the opened store reads it, never below 256 MiB, the floor
-/// alone where no capacity is answered — the venue total unset, the
-/// lease interval seven days, the horizon thirty, the per-file cap the
-/// route's; the startup line names the default and its source; an
-/// installed record overrides the default whole, its cap held at the
-/// route's own; and the upload setting rides the gate, open by default
+/// per-account limit is ALWAYS in force — one part in `DEFAULT_LIMIT_SHARE`
+/// of the volume's capacity as the opened store reads it, never below
+/// `DEFAULT_LIMIT_FLOOR_BYTES`, the floor alone where no capacity is
+/// answered — the venue total unset, the lease interval seven days, the
+/// horizon thirty, the per-file cap the route's; the startup line names the
+/// default and its source, THE WORDS RENDERED FROM THE TWO CONSTANTS
+/// (`operations.md` §1.1 row 7; §2.3 F4: "one part in {share} of the
+/// volume's capacity of {c} bytes, never below {floor} bytes", no "one
+/// eighth"); an installed record overrides the default whole, its cap at
+/// the route's own; and the upload setting rides the gate, open by default
 /// and echoed as the `media` object.
 #[test]
 fn the_default_limit_is_a_share_of_the_capacity_and_an_install_overrides_it_whole() {
     assert_eq!(Limits::defaults_for(None).per_account, Some(DEFAULT_LIMIT_FLOOR_BYTES), "no capacity: the floor");
     assert_eq!(Limits::defaults_for(Some(1 << 30)).per_account, Some(DEFAULT_LIMIT_FLOOR_BYTES), "a small volume: the floor");
-    assert_eq!(Limits::defaults_for(Some(16 << 30)).per_account, Some(2 << 30), "one eighth");
-    assert_eq!(Limits::defaults_for(Some(16 << 30)).venue_total, None, "the venue total unset");
+    let sixteen: u64 = 16 << 30;
+    assert_eq!(Limits::defaults_for(Some(sixteen)).per_account, Some(sixteen / DEFAULT_LIMIT_SHARE), "one part in the share");
+    assert_eq!(Limits::defaults_for(Some(sixteen)).venue_total, None, "the venue total unset");
     assert!(Limits::defaults_for(None).log_line(None).contains("the host answering no capacity"));
+    // LINE 7's WORDS, from the constants: the share's divisor and the floor.
+    let line = Limits::defaults_for(Some(sixteen)).log_line(Some(sixteen));
+    let rendered = format!(
+        "per-account {} (one part in {DEFAULT_LIMIT_SHARE} of the volume's capacity of {sixteen} \
+         bytes, never below {DEFAULT_LIMIT_FLOOR_BYTES} bytes), venue total none",
+        sixteen / DEFAULT_LIMIT_SHARE
+    );
+    assert!(line.contains(&rendered), "line 7 renders the constants: {line}");
+    assert!(!line.contains("one eighth") && !line.contains("MiB"), "no word table: {line}");
     let dir = tempfile::tempdir().expect("tempdir");
     let gate = MediaGate::open_with(dir.path(), MediaOptions::default()).expect("the store opens");
     let capacity = gate.store().capacity().expect("statvfs answers");
@@ -55,7 +68,11 @@ fn the_default_limit_is_a_share_of_the_capacity_and_an_install_overrides_it_whol
     assert_eq!(LEASE_HORIZON_MS, 30 * 24 * 3600 * 1000);
     assert_eq!(FLOOR_BYTES, 256 * 1024 * 1024);
     let line = gate.startup_line();
-    assert!(line.contains("one eighth of the volume's capacity") && line.contains(&limit.to_string()), "{line}");
+    assert!(
+        line.contains(&format!("one part in {DEFAULT_LIMIT_SHARE} of the volume's capacity of {capacity} bytes"))
+            && line.contains(&limit.to_string()),
+        "{line}"
+    );
     let now = gate.now_ms();
     let p = PrincipalId(1);
     assert_eq!(gate.admit_declared(p, limit + 1, now), Err(DepositScope::Own), "the default binds");
@@ -66,10 +83,11 @@ fn the_default_limit_is_a_share_of_the_capacity_and_an_install_overrides_it_whol
         per_account: Some(10),
         venue_total: Some(100),
         lease_interval_ms: 1_000,
-        per_file_cap: MAX_BLOB_BYTES * 4,
+        per_file_cap: MAX_BLOB_BYTES,
         address: Some("1.0.1.0.3.1".into()),
-    });
-    assert_eq!(gate.limits().per_file_cap, MAX_BLOB_BYTES, "held at the route's cap");
+    })
+    .expect("a record at the route's cap installs");
+    assert_eq!(gate.limits().per_file_cap, MAX_BLOB_BYTES, "the route's cap");
     assert_eq!(gate.admit_declared(p, 11, now), Err(DepositScope::Own));
     assert_eq!(gate.admit_declared(p, 10, now), Ok(()));
     assert!(!gate.index_ready(), "an opened gate's index is not ready until the walk");
@@ -199,7 +217,146 @@ fn the_floor_in_force_scales_with_the_newest_checkpoint_and_never_below_the_cons
         line.contains("the floor in force") && line.contains(&FLOOR_BYTES.to_string()),
         "the startup line names the floor in force beside the limit: {line}"
     );
-    assert!(line.contains("one eighth of the volume's capacity"), "…beside the default: {line}");
+    assert!(
+        line.contains(&format!("one part in {DEFAULT_LIMIT_SHARE} of the volume's capacity")),
+        "…beside the default: {line}"
+    );
+}
+
+/// THE FLOOR's LINE, ONCE PER BINDING (`operations.md` §1.1 m9; §4 row 7;
+/// §0 THE RATES, once per condition) — the once-flag's three states on the
+/// gate's own record. CLEAR → BOUND: the first refusal at the floor, a
+/// creation's, says the failure line with the two figures as the gate
+/// compared them; BOUND: a second creation refused and a chunk refused say
+/// nothing more, and a finish while the free space stands below the floor
+/// says nothing and leaves the flag set; BOUND → CLEAR: the free space back
+/// above the floor, an ADMISSION alone says nothing (the next chunk may
+/// re-refuse), and the first FINISH says the lift once, with the finished
+/// size and the figures, clearing the flag — a second finish says nothing;
+/// then a new binding says the failure again. The chunk arm's figure is the
+/// free space the chunk would leave, what the gate compared. The two lines
+/// are pure values, pinned by `to_string()`; neither names a principal, an
+/// upload or a token.
+#[test]
+fn the_floors_binding_is_said_once_and_its_lift_once_at_the_first_finish_above_the_floor() {
+    assert_eq!(
+        FloorBoundLine { free_space: 1_000, floor: 268_435_456 }.to_string(),
+        "deposits refused at the floor: the volume's free space 1000 bytes is below the floor in \
+         force 268435456; every write but a deposit serves; the acts: room on the volume, a pass \
+         run early"
+    );
+    assert_eq!(
+        FloorLiftedLine { bytes: 10, free_space: 300_000_000, floor: 268_435_456 }.to_string(),
+        "deposits admitted again: an upload of 10 bytes finished with the volume's free space \
+         300000000 bytes above the floor in force 268435456"
+    );
+    let dir = tempfile::tempdir().expect("tempdir");
+    let gate = MediaGate::open_with(dir.path(), MediaOptions::default()).expect("the store opens");
+    let now = gate.now_ms();
+    let p = PrincipalId(11);
+    let id = UploadId::parse("0123456789abcdef0123456789abcdef").unwrap();
+    let floor = gate.floor();
+    assert!(gate.lines_said().is_empty(), "a gate opens with nothing said");
+    // CLEAR → BOUND, at the first refusal.
+    gate.set_free_space(Some(floor - 1));
+    assert_eq!(gate.admit_creation(p, now), Err(DepositScope::Floor));
+    let bound = format!(
+        "failure: deposits refused at the floor: the volume's free space {} bytes is below the \
+         floor in force {floor}; every write but a deposit serves; the acts: room on the volume, a \
+         pass run early",
+        floor - 1
+    );
+    assert_eq!(gate.lines_said(), [bound.clone()], "said at the first refusal");
+    // BOUND: nothing more, at a creation, at a chunk, at a finish below.
+    assert_eq!(gate.admit_creation(p, now), Err(DepositScope::Floor));
+    assert_eq!(gate.admit_bytes(p, &id, 0, 64 * 1024, now), Err(DepositScope::Floor));
+    gate.note_finish(10);
+    assert_eq!(gate.lines_said().len(), 1, "a binding is said once: {:?}", gate.lines_said());
+    assert!(gate.floor_said.load(Ordering::Acquire), "a finish below the floor lifts nothing");
+    // BOUND → CLEAR: an admission alone says nothing; the first finish says the lift.
+    let room = floor + 1_000_000;
+    gate.set_free_space(Some(room));
+    assert_eq!(gate.admit_creation(p, now), Ok(()));
+    assert_eq!(gate.admit_bytes(p, &id, 0, 64 * 1024, now), Ok(()));
+    assert_eq!(gate.lines_said().len(), 1, "an admission alone says no lift");
+    gate.note_finish(4_096);
+    let lifted = format!(
+        "landing: deposits admitted again: an upload of 4096 bytes finished with the volume's \
+         free space {room} bytes above the floor in force {floor}"
+    );
+    assert_eq!(gate.lines_said(), [bound.clone(), lifted.clone()], "the lift at the first finish");
+    assert!(!gate.floor_said.load(Ordering::Acquire), "the flag cleared by the lift");
+    gate.note_finish(4_096);
+    assert_eq!(gate.lines_said().len(), 2, "a second finish says nothing");
+    // A NEW BINDING, at a chunk: said again, with the figure the gate compared.
+    gate.set_free_space(Some(floor + 10));
+    assert_eq!(gate.admit_creation(p, now), Ok(()), "the creation reads no length");
+    assert_eq!(gate.admit_bytes(p, &id, 0, 64 * 1024, now), Err(DepositScope::Floor));
+    let said = gate.lines_said();
+    assert_eq!(said.len(), 3, "{said:?}");
+    assert_eq!(
+        said[2],
+        format!(
+            "failure: deposits refused at the floor: the volume's free space {} bytes is below the \
+             floor in force {floor}; every write but a deposit serves; the acts: room on the \
+             volume, a pass run early",
+            floor + 10 - 64 * 1024
+        ),
+        "a chunk's refusal names the free space it would leave"
+    );
+    for line in &said {
+        assert!(!line.contains("11") || line.contains("1111"), "no principal rides a floor line: {line}");
+        assert!(!line.contains(&id.to_hex()), "no upload rides a floor line: {line}");
+    }
+}
+
+/// THE INSTALL's REFUSAL (op-D6 (a); `operations.md` §2.3 F10; the
+/// register's `per_file_cap` row): a record naming a per-file cap above
+/// the route's is REFUSED whole — the answer names the cap and the route's,
+/// the limits in force stand as they were, and the refusal is said ONCE per
+/// attempt, in the ruled words; a second attempt is said again. A record at
+/// the route's cap, and one below it, install as before, and the hook's
+/// `None` is the route's own. Never the clamp that once installed the
+/// record at the route's figure.
+#[test]
+fn a_record_naming_a_cap_past_the_routes_is_refused_at_install_and_said_once() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let gate = MediaGate::open_with(dir.path(), MediaOptions::default()).expect("the store opens");
+    let before = gate.limits();
+    let past = Limits {
+        per_account: Some(10),
+        venue_total: Some(100),
+        lease_interval_ms: 1_000,
+        per_file_cap: MAX_BLOB_BYTES + 1,
+        address: Some("1.0.1.0.3.1".into()),
+    };
+    let refused = LimitsRefused::PerFileCap { named: MAX_BLOB_BYTES + 1, route: MAX_BLOB_BYTES };
+    assert_eq!(gate.install(past.clone()), Err(refused.clone()));
+    assert_eq!(gate.limits(), before, "the limits in force stand");
+    let line = format!(
+        "failure: media limits refused: the record names a per-file cap of {} bytes, above the \
+         route's {MAX_BLOB_BYTES}; the limits in force stand",
+        MAX_BLOB_BYTES + 1
+    );
+    assert_eq!(refused.to_string(), line["failure: ".len()..]);
+    assert_eq!(gate.lines_said(), [line.clone()], "said once per attempt");
+    assert_eq!(gate.install(past), Err(refused), "refused again");
+    assert_eq!(gate.lines_said(), [line.clone(), line.clone()], "…and said again");
+    assert_eq!(gate.limits(), before);
+    // Through the hook: a cap past the route's, at it, below it, and none.
+    assert_eq!(
+        gate.install_limits(Some(10), None, None, Some(MAX_BLOB_BYTES * 4), None),
+        Err(LimitsRefused::PerFileCap { named: MAX_BLOB_BYTES * 4, route: MAX_BLOB_BYTES })
+    );
+    assert_eq!(gate.limits(), before);
+    gate.install_limits(Some(10), None, None, Some(MAX_BLOB_BYTES), None).expect("at the route's cap");
+    assert_eq!(gate.limits().per_file_cap, MAX_BLOB_BYTES);
+    assert_eq!(gate.limits().per_account, Some(10), "installed whole");
+    gate.install_limits(Some(20), None, None, Some(MAX_BLOB_BYTES - 1), None).expect("below it");
+    assert_eq!(gate.limits().per_file_cap, MAX_BLOB_BYTES - 1);
+    gate.install_limits(None, None, None, None, None).expect("the defaults again");
+    assert_eq!(gate.limits().per_file_cap, MAX_BLOB_BYTES, "`None` is the route's own");
+    assert_eq!(gate.lines_said().len(), 3, "the installs that landed said nothing");
 }
 
 /// THE REBUILD WINDOW (ms5-R; the register M-I5 (b)): while the index is not

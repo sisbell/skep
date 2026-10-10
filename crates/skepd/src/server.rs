@@ -831,9 +831,10 @@ impl Daemon {
         // reconciliation and compaction complete here, before anything is
         // served (the record: "OPEN's PASSES OVER BOTH STORES … COMPLETE
         // BEFORE THE DAEMON SERVES ITS FIRST REQUEST"). The limits in force
-        // — the daemon's default, one eighth of the volume's capacity read
-        // once here, until the serving layer's channel installs a record
-        // (AUTH-4.70, owed) — are named on the operator stream with their
+        // — the daemon's default, a share of the volume's capacity
+        // (`DEFAULT_LIMIT_SHARE`) read once here, until the serving layer's
+        // channel installs a record (AUTH-4.70, owed) — are named on the
+        // operator stream with their
         // source, the floor in force at start beside them, and the upload
         // setting after, WITH ITS SOURCE (§1.1 row 8): the default, the
         // flag or the variable, as the parse recorded it on the option type

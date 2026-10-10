@@ -33,6 +33,7 @@ use std::path::Path;
 
 use common::*;
 use serde_json::Value;
+use skep_kernel::Step;
 use skepd::{Seq, Skepd};
 
 mod mirror;
@@ -2498,6 +2499,192 @@ fn a_failed_attest_store_line_halts_every_later_write_until_a_restart() {
     let signed = open_signed_session(port, CLAIMANT_PRINCIPAL, &device_key());
     let (at, _) = signed_ghost_link(port, &signed, 3);
     assert!(at > failed_at, "writes are admitted again");
+    sd.shutdown();
+}
+
+/// Read the next announced position from `sse`, draining the opening event
+/// and any lower announces, until `target` is seen or the reads run out.
+fn await_announced(sse: &mut Sse, target: u64) {
+    for _ in 0..6 {
+        if sse.expect_commit() == target {
+            return;
+        }
+    }
+    panic!("the commit stream never announced {target}");
+}
+
+/// P1 — NO FEED HOLE AFTER A PANIC PAST THE COMMIT (`operations.md` §4 row
+/// 34; the third arm (c)): a write that commits and then PANICS — the
+/// kernel's inline backstop checkpoint, armed to panic at its first step,
+/// which runs on the committing thread AFTER the commit installs — answers
+/// `500 internal_panic`, yet the position it committed is on `/changes` as a
+/// classified BARE entry (null `op`/`docs`/`time`/`key`) whose `attest` is
+/// the marker the write admitted and whose `link` the two worlds derive,
+/// ANNOUNCED on `/events`, with no gap before the next commit, NOTHING
+/// HALTED, nothing of the position said, and a REOPEN that walks nothing for
+/// it.
+///
+/// The inline crossing is forced as the backstop suite forces it
+/// (`checkpoint.rs`): the checkpoint thread HELD so it services no flag, the
+/// byte bound at one so every commit crosses — the first commit sets the
+/// flag, the next (here the attested write) finds it set and runs the
+/// checkpoint inline, where the armed panic fires PAST the install.
+/// `park_the_cadence` is the opposite tool — it stops crossings — and is not
+/// used.
+///
+/// Removing the catch holes the feed (M1); recording the position without
+/// announcing it (M2), without its attest (M3), as a RECORDED row with
+/// invented fields rather than bare (M4), or swallowing the panic to answer
+/// `200` (M5) each turns an assertion here red.
+#[test]
+fn a_panic_after_the_commit_leaves_no_feed_hole_and_keeps_the_signature() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let sd = spawn(dir.path());
+    let port = sd.port();
+    let owner = open_session(port, CLAIMANT_PRINCIPAL);
+    let signed = open_signed_session(port, CLAIMANT_PRINCIPAL, &device_key());
+
+    // The thread held and every commit crossing: the first commit sets the
+    // flag and runs nothing, the next runs the checkpoint inline.
+    sd.daemon().hold_the_checkpoint_thread();
+    sd.daemon().set_checkpoint_bytes_bound(1);
+    let create = format!(r#"{{"op":"create_new_document","account":"{CLAIMANT_ACCOUNT}"}}"#);
+    let p1 = acked_at(&op(port, Some(&owner), &create));
+
+    // The attested write will cross with the flag set and run the inline
+    // checkpoint, panicked at its first step — past the commit's install.
+    sd.daemon().panic_at_the_next_kernel_step(Step::CheckpointCreate);
+    let mut sse = Sse::connect(port);
+    let before = head(port);
+    assert_eq!(before, p1, "the first commit is the head before the attested write");
+
+    let frame =
+        link_frame(CLAIMANT_DOC1, r#"{"addrs":[]}"#, r#"{"addrs":[]}"#, &ghost_ty(CLAIMANT_DOC1, 1));
+    let attested = attach_attest(port, &signed, &frame);
+    let (st, body) = http(port, "POST", "/op", Some(&signed), attested.as_bytes());
+    assert_eq!(st, 500, "FINDING (M5): the committed write's execute panicked past its install: {}", text(&body));
+    assert_eq!(json(&body)["error"].as_str(), Some("internal_panic"), "{}", text(&body));
+
+    let p2 = head(port);
+    assert!(p2 > before, "the write committed before it panicked");
+    assert!(!writes_halted(port), "FINDING: a panic past the commit does not halt the write path");
+
+    // /events announced the committed position (the opening event first).
+    await_announced(&mut sse, p2);
+
+    // /changes lists p2 as a classified BARE entry with its marker's attest.
+    let v = changes_ok(port, Some(&signed), &format!("since={before}"));
+    let tail = v["changes"]
+        .as_array()
+        .expect("changes")
+        .iter()
+        .find(|e| e["at"].as_u64() == Some(p2))
+        .expect("FINDING (M1): the panicked position is in the feed")
+        .clone();
+    assert!(
+        tail["docs"].is_null() && tail["time"].is_null() && tail["key"].is_null() && tail["op"].is_null(),
+        "FINDING (M4): the committed position is a BARE entry, null in every testimony field: {tail}"
+    );
+    assert!(
+        tail["link"].is_string(),
+        "FINDING: the bare row's `link` is the journal's, derived off the two worlds: {tail}"
+    );
+    let sig = tail["attest"]["sig"]
+        .as_str()
+        .unwrap_or_else(|| panic!("FINDING (M3): the bare row carries the admitted marker's attest: {tail}"));
+    assert_eq!(
+        attest_store_lines(dir.path()).get(&p2).map(|(_, held)| held.as_str()),
+        Some(sig),
+        "the row's attest is the store's line for the position — the marker mirrored at the record"
+    );
+    assert!(
+        matches!(sd.daemon().attestation_at(Seq(p2)), Ok(Some(_))),
+        "the kernel holds the marker the store mirrored (SO-I5 (d))"
+    );
+
+    // Nothing of the position is said on the operator stream (set 8): the
+    // hook's line is the binary's, said at the panic site; no classed-door
+    // line names the position or the panic.
+    assert!(
+        sd.daemon().lines_said().iter().all(|l| !l.contains(&format!("position {p2}")) && !l.contains("panic")),
+        "FINDING: nothing of the position is said, and the halt is unset:\n{}",
+        sd.daemon().lines_said().join("\n")
+    );
+    let (st, hbody) = get(port, "/health");
+    assert_eq!(st, 200);
+    assert!(json(&hbody)["head_time"].is_null(), "the head's record is bare, so head_time is null");
+
+    // A later commit lands past the panicked position, and the feed runs
+    // straight from the bare entry to it with no gap between the two entries.
+    let p3 = acked_at(&op(port, Some(&owner), &create));
+    assert!(p3 > p2, "FINDING: the next commit lands past the panicked position");
+    assert_eq!(
+        entry_ats(&changes_ok(port, Some(&signed), &format!("since={before}"))),
+        vec![p2, p3],
+        "the feed runs p2 (bare) then p3 (recorded), with no gap between them"
+    );
+
+    let as_served = changes_ok(port, Some(&owner), &format!("since={before}"));
+    sd.shutdown();
+
+    // A REOPEN finds the position already recorded: the open's walk covers
+    // the head, so nothing is pending, and the feed re-derives nothing.
+    let sd = spawn(dir.path());
+    let port = sd.port();
+    assert!(
+        sd.daemon().feed_pending_region().is_none(),
+        "FINDING: the reopen finds the committed position recorded, nothing to walk"
+    );
+    let reopened = changes_ok(port, Some(&open_session(port, CLAIMANT_PRINCIPAL)), &format!("since={before}"));
+    assert_eq!(reopened, as_served, "the feed is unchanged across the reopen: the bare entry re-derives nothing");
+    sd.shutdown();
+}
+
+/// P3 — NOTHING MOVES FOR A PRE-INSTALL PANIC (`operations.md` §4 row 34, the
+/// compare's UNMOVED arm): the kernel's journal append armed to PANIC — an
+/// unwind out of the commit region, BEFORE the install, which the §3 guard
+/// repairs — the write answers `500 internal_panic` and NOTHING is recorded:
+/// no position committed, so the door's catch compares the kernel's seq equal
+/// and writes no bare entry. The feed is unchanged, the write path healthy
+/// (the repair was clean, not a poison), and the next write commits. This is
+/// the companion to `threads.rs`'s own JournalAppend-plus-failed-repair
+/// claim, which drives the SAME seam to the poison path; here the repair
+/// succeeds, so the board serves on.
+#[test]
+fn a_panic_before_the_commit_records_nothing() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let sd = spawn(dir.path());
+    let port = sd.port();
+    let owner = open_session(port, CLAIMANT_PRINCIPAL);
+    let before = head(port);
+    assert_eq!(
+        entry_ats(&changes_ok(port, Some(&owner), &format!("since={before}"))),
+        Vec::<u64>::new(),
+        "nothing above the head yet"
+    );
+
+    sd.daemon().panic_at_the_next_kernel_step(Step::JournalAppend);
+    let create = format!(r#"{{"op":"create_new_document","account":"{CLAIMANT_ACCOUNT}"}}"#);
+    let (st, body) = http(port, "POST", "/op", Some(&owner), create.as_bytes());
+    assert_eq!(st, 500, "the append panicked before the install: {}", text(&body));
+    assert_eq!(json(&body)["error"].as_str(), Some("internal_panic"), "{}", text(&body));
+
+    assert_eq!(
+        head(port),
+        before,
+        "FINDING (the compare's unmoved arm): nothing committed, the kernel's guard repaired the unwind"
+    );
+    assert!(!writes_halted(port), "a clean repair leaves the write path healthy, not poisoned");
+    assert_eq!(
+        entry_ats(&changes_ok(port, Some(&owner), &format!("since={before}"))),
+        Vec::<u64>::new(),
+        "FINDING: no bare entry is invented for a write that committed nothing"
+    );
+    assert!(sd.daemon().feed_pending_region().is_none(), "nothing left pending");
+
+    // The write path is healthy: the next write commits and is recorded.
+    let next = acked_at(&op(port, Some(&owner), &create));
+    assert_eq!(next, before + 1, "the next write commits at the next position");
     sd.shutdown();
 }
 

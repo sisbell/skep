@@ -433,3 +433,85 @@ fn a_raise_wakes_a_parked_wait() {
         "the raise reached the parked wait"
     );
 }
+
+/// THE THIRD ARM's COMPARE (`operations.md` §4 row 34): `commit_recorded`
+/// holds the pre-commit snapshot across `execute` and, on an unwind, records
+/// the position ONLY where the kernel's seq moved. Driven here WITHOUT the
+/// kernel's checkpoint seam — an `execute` closure that commits a real op and
+/// then panics is the committed-then-panic case, one that panics before
+/// committing the unmoved case: the committed position is recorded BARE (no
+/// op/docs/time/key on its line), the unmoved one records nothing.
+#[test]
+fn a_panic_after_the_commit_records_the_position_bare_and_an_unmoved_one_records_nothing() {
+    use std::panic::{catch_unwind, AssertUnwindSafe};
+
+    use skep_kernel::{BurnedSeqPolicy, CheckpointPolicy, Durability, KernelConfig, SaltSource};
+    use skep_namespace::{system_account, SYSTEM_PRINCIPAL};
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let engine = Engine::open(KernelConfig {
+        durability: Durability::Fsync {
+            journal_path: dir.path().to_path_buf(),
+            retain_checkpoints: 2,
+            burned_seq: BurnedSeqPolicy::Rollback,
+        },
+        checkpoint: CheckpointPolicy::Deferred(Box::new(CheckpointPolicy::EveryN(1024))),
+        salt: SaltSource::Os,
+    })
+    .expect("a fresh engine");
+    let wp = WritePath::open(dir.path(), &engine, Arc::new(CellIndex::new())).expect("open");
+    let stores = engine.stores();
+    let account = system_account();
+
+    // COMMITTED THEN PANICKED: the closure commits a real mint, then panics —
+    // the kernel's seq moves, so the catch records the position BARE.
+    let op = Op::CreateNewDocument { account: account.clone(), published: Some(false) };
+    let meta = write_meta(&op).expect("a write").attributed("bare".to_string(), None);
+    let before = engine.kernel().current_seq().0;
+    let serial = wp.serial_lock();
+    let caught = catch_unwind(AssertUnwindSafe(|| {
+        wp.commit_under(&serial, meta, || {
+            stores
+                .namespace()
+                .create_new_document(SYSTEM_PRINCIPAL, &account, Some(false))
+                .expect("the mint commits");
+            panic!("after the commit, before the answer");
+        })
+    }));
+    drop(serial);
+    assert!(caught.is_err(), "the panic rode out of the door");
+    let at = engine.kernel().current_seq().0;
+    assert_eq!(at, before + 1, "the mint committed before the panic");
+    assert_eq!(wp.announced().0, at, "the committed position was announced");
+    assert!(wp.head_time().is_none(), "the head's record is bare, so head_time is None");
+    let line = commits_log_entry(dir.path(), at).expect("the committed position has a line");
+    for k in ["op", "docs", "time", "key"] {
+        assert!(line.get(k).is_none(), "a bare line carries no `{k}`: {line}");
+    }
+
+    // UNMOVED: the closure panics before committing anything — the seq does
+    // not move, so the catch records nothing.
+    let op = Op::CreateNewDocument { account: account.clone(), published: Some(false) };
+    let meta = write_meta(&op).expect("a write").attributed("bare".to_string(), None);
+    let before = engine.kernel().current_seq().0;
+    let serial = wp.serial_lock();
+    let caught = catch_unwind(AssertUnwindSafe(|| {
+        wp.commit_under(&serial, meta, || -> Response { panic!("before any commit") })
+    }));
+    drop(serial);
+    assert!(caught.is_err());
+    assert_eq!(engine.kernel().current_seq().0, before, "nothing committed");
+    assert!(
+        commits_log_entry(dir.path(), before + 1).is_none(),
+        "no bare entry is invented for a write that committed nothing"
+    );
+}
+
+/// The parsed `commits.log` line for position `at`, read off the data dir as
+/// an operator would — `None` where the file holds no line for it.
+fn commits_log_entry(dir: &std::path::Path, at: u64) -> Option<serde_json::Value> {
+    let text = std::fs::read_to_string(dir.join("commits.log")).ok()?;
+    text.lines()
+        .filter_map(|l| serde_json::from_str::<serde_json::Value>(l).ok())
+        .find(|v| v.get("at").and_then(serde_json::Value::as_u64) == Some(at))
+}

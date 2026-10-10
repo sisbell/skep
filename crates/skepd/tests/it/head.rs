@@ -26,11 +26,12 @@ use std::path::Path;
 
 use common::{
     acked_addr, acked_at, assert_withheld, board_term, ceremony_before_the_claim, claim_frame, claimed,
-    device_key, doc_metadata, expect_resp, get, head_position, json, op, op_as_written,
+    device_key, doc_metadata, expect_resp, get, head_position, http, json, op, op_as_written,
     open_session, open_signed_session, spawn, spawn_seeded, spawn_unclaimed, typed_link_frame,
-    verdict, CLAIMANT_ACCOUNT, CLAIMANT_DOC1, CLAIMANT_PRINCIPAL, T_GRANT,
+    verdict, Sse, CLAIMANT_ACCOUNT, CLAIMANT_DOC1, CLAIMANT_PRINCIPAL, T_GRANT,
 };
 use serde_json::Value;
+use skep_kernel::Step;
 use skep_namespace::SYSTEM_PRINCIPAL;
 use skepd::{Seq, Skepd};
 
@@ -1917,4 +1918,114 @@ fn two_production_daemons_over_one_sequence_write_two_chains() {
         assert_ne!(x, y, "two production boards wrote one chain value at position {at}");
     }
     assert_ne!(a.bytes, b.bytes, "two production boards, two head byte strings");
+}
+
+// ── (x) THE PANIC PAST THE COMMIT, ON THE HEAD WRITER'S DOOR ──────────────────
+
+/// `/health`'s `writes.halted`.
+fn head_writes_halted(port: u16) -> bool {
+    let (st, body) = get(port, "/health");
+    assert_eq!(st, 200, "/health");
+    json(&body)["writes"]["halted"].as_bool().expect("writes.halted")
+}
+
+/// Read the next announced position from `sse`, draining the opening event
+/// and any lower announces, until `target` is seen or the reads run out.
+fn await_announced(sse: &mut Sse, target: u64) {
+    for _ in 0..6 {
+        if sse.expect_commit() == target {
+            return;
+        }
+    }
+    panic!("the commit stream never announced {target}");
+}
+
+/// The parsed `commits.log` line for position `at`, read off the data dir as
+/// an operator would — `None` where the file holds no line for it.
+fn commits_log_entry(dir: &Path, at: u64) -> Option<Value> {
+    let text = std::fs::read_to_string(dir.join("commits.log")).ok()?;
+    text.lines()
+        .filter_map(|l| serde_json::from_str::<Value>(l).ok())
+        .find(|v| v.get("at").and_then(Value::as_u64) == Some(at))
+}
+
+/// P2 — THE HEAD WRITER'S COMMIT THROUGH THE SAME DOOR (`operations.md` §4
+/// row 34; the third arm (c)): the published head writer's own commit rides
+/// [`WritePath::commit_recorded`], so a panic PAST its install is caught the
+/// same way as a session write's. With the checkpoint thread held and the
+/// byte bound at one, a session write sets the crossing flag and then its
+/// turn gives the head writer a due head; the head writer's FIRST commit
+/// crosses with the flag set, runs the checkpoint inline, and panics past its
+/// install — so the SESSION write, through whose turn it ran, answers `500
+/// internal_panic`. The head writer's committed position is recorded BARE and
+/// announced, the head's cycle ends with no new `H` member (as a refused head
+/// leaves it), nothing halts, and a reopen walks nothing. The head writer's
+/// path bypassing the catch (M6) would hole the feed here.
+#[test]
+fn the_head_writers_commit_that_panics_past_its_install_is_recorded_bare() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let sd = spawn(dir.path());
+    let port = sd.port();
+    let owner = open_session(port, CLAIMANT_PRINCIPAL);
+    assert!(head_record(port, &head_member(2)).is_none(), "the board starts at H.1");
+
+    sd.daemon().hold_the_checkpoint_thread();
+    sd.daemon().set_checkpoint_bytes_bound(1);
+    sd.daemon().set_head_writer_clock_millis(clock_origin() + WELL_PAST_THE_HOUR_MILLIS);
+    sd.daemon().panic_at_the_next_kernel_step(Step::CheckpointCreate);
+
+    let before = health(port).0;
+    let mut sse = Sse::connect(port);
+    // The session write commits (setting the flag, running nothing); its turn
+    // gives the head writer a due head, whose first commit crosses with the
+    // flag set, runs the checkpoint inline, and panics past its install.
+    let create = format!(r#"{{"op":"create_new_document","account":"{CLAIMANT_ACCOUNT}"}}"#);
+    let (st, body) = http(port, "POST", "/op", Some(&owner), create.as_bytes());
+    assert_eq!(
+        st, 500,
+        "the head writer's panic rides out through the triggering write: {}",
+        String::from_utf8_lossy(&body)
+    );
+    assert_eq!(
+        json(&body)["error"].as_str(),
+        Some("internal_panic"),
+        "{}",
+        String::from_utf8_lossy(&body)
+    );
+
+    let after = health(port).0;
+    assert!(after > before + 1, "the session write AND the head writer's own commit landed: {after} > {before}+1");
+    assert!(!head_writes_halted(port), "FINDING: the head writer's panic does not halt the write path");
+
+    // The head writer's committed position (the kernel's head now) is on the
+    // feed as a BARE entry, and was announced on /events.
+    await_announced(&mut sse, after);
+    let line = commits_log_entry(dir.path(), after)
+        .unwrap_or_else(|| panic!("FINDING (M6): the head writer's committed position is recorded"));
+    for k in ["op", "docs", "time", "key"] {
+        assert!(line.get(k).is_none(), "the head writer's panicked commit is BARE — no `{k}`: {line}");
+    }
+
+    // The head's cycle ended with no new H member — as a refused head leaves
+    // it — and nothing halted.
+    assert!(head_record(port, &head_member(2)).is_none(), "the head-publish never ran: no H.2");
+    assert_eq!(
+        expect_latest_head(port)["position"].as_u64(),
+        Some(CLAIM_POSITION),
+        "H.1 is still the latest head"
+    );
+
+    // A later commit lands and is recorded; the clock reset so no head is due.
+    sd.daemon().set_head_writer_clock_millis(clock_origin());
+    let next = commit(port, &owner, CLAIMANT_ACCOUNT);
+    assert!(next > after, "the next commit lands past the head writer's bare position");
+    sd.shutdown();
+
+    // A REOPEN walks nothing: the bare line covers the head writer's position.
+    let sd = spawn(dir.path());
+    assert!(
+        sd.daemon().feed_pending_region().is_none(),
+        "FINDING: the reopen finds the head writer's position recorded, no hole to walk"
+    );
+    sd.shutdown();
 }

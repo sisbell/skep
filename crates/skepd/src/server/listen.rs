@@ -682,10 +682,13 @@ fn serve_connection(daemon: &Arc<Daemon>, subscribers: &Subscribers, mut stream:
     // inserts, and an upload's hold is a guard its stream drops as it unwinds
     // (`skep_media::gate::Hold`). What a panic can cost is the tail of one write,
     // on two cards, and an M10 session, on a third. `WritePath::commit_under`
-    // runs `execute` under the serialization lock, so a panic inside M10 after
-    // its commit leaves that position unrecorded and unannounced; the reopen
-    // walk re-covers it as a bare entry, and the next commit's announcement
-    // carries the stream past it. A panic after a CREDENTIAL commit costs a
+    // runs `execute` under the serialization lock AND under a catch of its
+    // own (the third arm, `operations.md` §4 row 34): a panic inside M10
+    // after its commit is caught at the record step, the committed position
+    // recorded on the feed as a classified bare entry — its attest line from
+    // the marker the write admitted — and announced, before the panic is
+    // re-raised to this catch; so the feed holds no hole, and what the write
+    // loses is its answer, this `500`. A panic after a CREDENTIAL commit costs a
     // second thing: `credential_sequence`'s tail runs after `commit_under`
     // returns, so the ack goes unmemoized — a retry under the same `id`
     // re-executes and meets the fold's `nothing_changed` or

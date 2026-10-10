@@ -50,7 +50,11 @@
 //!   and extent, so a feed-only mirror's Π is whole across a bare span. They
 //!   ride the bare line under one `journal` member, written by the walk that
 //!   derived them so the two reconstructions are paid once; `null` stays
-//!   where the journal cannot answer.
+//!   where the journal cannot answer. A write that PANICKED after the
+//!   kernel committed it takes the same bare line, written at the commit by
+//!   the write path's door ([`CommitsLog::record_bare`]; `operations.md`
+//!   §4 row 34) and classified the same way off the two worlds the door
+//!   held, so the next open walks nothing for it.
 //! * Reconstruction uses the two public journal-fed surfaces the daemon
 //!   already holds — the kernel's one-scan boundary list
 //!   (`Kernel::boundaries_above`, every committed boundary above the file's
@@ -1064,11 +1068,40 @@ impl CommitsLog {
             signed,
             terms,
         };
+        Some(self.admit(at, meta))
+    }
+
+    /// THE THIRD ARM's LINE (`operations.md` §4 row 34): a BARE entry at
+    /// `at` for a write that committed and then panicked, recorded at once
+    /// by the write path's door under the guard it committed under —
+    /// [`CommitsLog::record`]'s contract, its idempotency and its disposition
+    /// — in the form the walk's landing writes ([`CommitMeta::Bare`]: no op,
+    /// docs, key or time, the journal's answer beside the position), so the
+    /// next open reads the line as it reads a landed boundary and walks
+    /// nothing for it. No time is stamped: the clamp does not move, and
+    /// [`CommitsLog::head_time`] answers `None` while this is the head.
+    pub(super) fn record_bare(
+        &mut self,
+        _serial: &SerialGuard<'_>,
+        at: u64,
+        journal: JournalTerms,
+    ) -> Option<Recorded> {
+        if at <= self.open_head || self.entries.contains_key(&at) {
+            return None;
+        }
+        Some(self.admit(at, CommitMeta::Bare { journal }))
+    }
+
+    /// The two record paths' one tail: the entry into the resident map and,
+    /// the region pending, nothing else ([`Recorded::Held`]); otherwise its
+    /// line appended at the offset the file's length names, under the
+    /// stop's rule.
+    fn admit(&mut self, at: u64, meta: CommitMeta) -> Recorded {
         if self.pending.is_some() {
             // The region pending: the entry alone, the file untouched until
             // the landing's one rewrite writes this line at its offset.
             self.entries.insert(at, meta);
-            return Some(Recorded::Held);
+            return Recorded::Held;
         }
         let offset = LineOffset(self.len);
         // Testimony must not fail the op: the write is committed and the
@@ -1096,7 +1129,7 @@ impl CommitsLog {
         }
         self.entries.insert(at, meta);
         self.offsets.insert(at, offset);
-        Some(Recorded::Appended(offset))
+        Recorded::Appended(offset)
     }
 
     /// The HEAD POSITION's recorded wall-clock time — `None` when the head's
@@ -1115,17 +1148,17 @@ impl CommitsLog {
     /// makes rides [`crate::write_path::WritePath::commit_recorded`], which
     /// records inside the guard its caller holds across the commit. That
     /// premise is this file's RELIANCE, not its check — a `CommitsLog` never
-    /// learns the live head — and two states break it.
+    /// learns the live head — and one state breaks it, transiently: any
+    /// in-flight write. `/health` reads this and the log position
+    /// independently and under no lock, so its pair may straddle one commit
+    /// and report the previous position's time beside the new position's
+    /// number. The next call answers the head again.
     ///
-    /// Transiently: any in-flight write. `/health` reads this and the log
-    /// position independently and under no lock, so its pair may straddle
-    /// one commit and report the previous position's time beside the new
-    /// position's number. The next call answers the head again.
-    ///
-    /// Permanently: a panic between M10's commit and this file's append,
-    /// which `serve_connection`'s unwind note names. That position stays
-    /// unrecorded until the reopen walk covers it as a bare entry, after
-    /// which this honestly answers `None`.
+    /// What used to break it permanently — a panic between M10's commit and
+    /// this file's append — is caught at the write path's door, which
+    /// records the position BARE at once ([`CommitsLog::record_bare`], the
+    /// third arm), so this answers `None` for it honestly from that moment,
+    /// and the next open reads the same line.
     pub fn head_time(&self) -> Option<u64> {
         let (at, meta) = self.entries.iter().next_back()?;
         if self.pending.is_some_and(|(_, head)| *at <= head) {

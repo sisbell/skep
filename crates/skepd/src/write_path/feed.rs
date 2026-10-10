@@ -139,8 +139,8 @@ use self::derived::{
 };
 use super::sidecar::{
     reclaim_floor, reclaim_floor_of, reconstruct, report_malformed_names, Carrier, CommitMeta,
-    CommitsLog, Cut, CutHead, OpTerms, Recorded, RewriteFail, WalkControl, WalkLandingLine,
-    WalkOutcome,
+    CommitsLog, Cut, CutHead, JournalTerms, OpTerms, Recorded, RewriteFail, WalkControl,
+    WalkLandingLine, WalkOutcome,
 };
 use super::classify::{classify, derived_docs, parse_dotted, Doc};
 use super::{Lines, Signed};
@@ -1035,6 +1035,39 @@ impl Feed {
         };
         let Some(recorded) = inner.log.record(serial, at, op, rendered, testimony, carrier, terms)
         else {
+            return Ok(());
+        };
+        inner.fold_position(at, recorded, classify(world, docs), attest)
+    }
+
+    /// THE THIRD ARM's RECORD (`operations.md` §4 row 34): one BARE entry at
+    /// `at` — the position a write committed before it panicked, which the
+    /// write path's door caught — under the same guard and contract as
+    /// [`Feed::record`], between the commit and the re-raise. What the
+    /// recorded row would have carried is lost with the answer, so the entry
+    /// is the walk's own form ([`CommitMeta::Bare`] with the journal's
+    /// answer, `null` for the rest), and its classification the walk's:
+    /// `docs` and `journal` as `classify::derived_journal` read them off the
+    /// two worlds the door held, `docs` classified here against `world` —
+    /// the post-commit head — as a recorded position's are, so the mask, the
+    /// index, the bitmap and the streams take the position as the walk's
+    /// landing would, at the commit rather than at the next open. `attest`
+    /// is the marker slot the write FILLED, where it filled one — the value
+    /// the plain sequence admitted and handed the kernel — mirrored into the
+    /// attest store and synced as every admitted marker is (SO-I5 (d)), the
+    /// store's refusal answered as [`Feed::record`] answers it. Declined
+    /// exactly when the log declines.
+    pub(super) fn record_bare(
+        &self,
+        serial: &SerialGuard<'_>,
+        at: u64,
+        docs: Vec<Address>,
+        journal: JournalTerms,
+        attest: Option<Attestation>,
+        world: &World,
+    ) -> Result<(), AttestStoreFailed> {
+        let mut inner = self.inner.lock();
+        let Some(recorded) = inner.log.record_bare(serial, at, journal) else {
             return Ok(());
         };
         inner.fold_position(at, recorded, classify(world, docs), attest)

@@ -58,6 +58,27 @@
 //! cannot commit, `poisoned` (`halt`). Reads are served throughout, and the
 //! restart's open rebuilds the line from the journal.
 //!
+//! AND THE PANIC PAST THE COMMIT (`operations.md` §4 row 34; SO-I5 (d)'s
+//! carried-by clause). The kernel propagates a panic that comes AFTER its
+//! commit region — the inline backstop's checkpoint, a world's destructor
+//! — with the transaction committed and installed, the lost-ack case. An
+//! unwind out of `execute` there would leave the position unrecorded and
+//! unannounced: a hole in the feed no later open re-covers, since the
+//! reopen walk starts below the HIGHEST surviving entry, and an attested
+//! write's signature lost with its journal segment. So
+//! [`WritePath::commit_recorded`] holds the kernel's snapshot from before
+//! the execute, runs the execute under a catch, and where the kernel's
+//! position MOVED under the unwind records the boundary as a BARE entry —
+//! the walk's own form, classified off the two worlds in hand, its attest
+//! line from the marker the write admitted — announces it, and re-raises;
+//! where the position did not move (the kernel's guard repaired the unwind
+//! out of its commit region, or the panic came before any commit) nothing
+//! is recorded. Nothing halts, and nothing is said twice: the write answers
+//! the transport's `500 internal_panic` as before, the stream carries the
+//! hook's line once (the re-raise runs no hook), and nothing of the
+//! position is said. The head writer's commits ride the same door, so a
+//! head's commit that panics after its install is recorded the same way.
+//!
 //! The read/write partition is M10's own `Op::is_read`. A read is exactly an
 //! `Op` the change feed has nothing to record, so [`write_meta`] answers
 //! `None` for precisely those — an equivalence it asserts against the
@@ -114,7 +135,7 @@
 
 use std::fmt;
 use std::io;
-use std::panic::{catch_unwind, AssertUnwindSafe};
+use std::panic::{catch_unwind, resume_unwind, AssertUnwindSafe};
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
@@ -143,6 +164,7 @@ mod head;
 pub(crate) use feed::{ChangesAnswer, ChangesQuery, FeedClass, FeedCompaction, StoppedFile};
 pub(crate) use head::board_term;
 
+use self::classify::derived_journal;
 use self::head::HeadWriter;
 use crate::limits::STANDING_INTERVAL;
 
@@ -231,7 +253,9 @@ pub(crate) struct WritePath {
     /// The engine's store factory — the kernel behind it is where the
     /// POST-COMMIT snapshot each record is classified against comes from
     /// (`Feed::record` takes the head as it stands after the execute, under
-    /// the serialization guard, so it is this commit's own state).
+    /// the serialization guard, so it is this commit's own state), and the
+    /// PRE-COMMIT snapshot the door holds across each execute (the module
+    /// doc's PANIC PAST THE COMMIT).
     stores: EngineStores,
     /// The PUBLISHED HEAD writer (PUB-6.65), this card's own child: given its
     /// turn by [`WritePath::commit_under`] after every session write, it
@@ -686,6 +710,18 @@ impl WritePath {
     /// and cleared by the next commit that lands; any other `Durability`
     /// kind takes no line here. One match on the answer per write, and
     /// nothing on an ack but the clearing.
+    ///
+    /// AND THE PANIC PAST THE COMMIT (the module doc; `operations.md` §4 row
+    /// 34): `execute` runs under a catch, with the kernel's snapshot from
+    /// before it held across it. An unwind is compared against that
+    /// snapshot ([`WritePath::record_the_commit_an_unwind_left`]): where the
+    /// kernel's position moved, the write committed before it panicked, and
+    /// the position is recorded as a classified bare entry and announced
+    /// before the panic is re-raised to the transport's catch; where it did
+    /// not, nothing is recorded. The panic is re-raised either way, so the
+    /// answer a caller gets is the catch's `500 internal_panic`, as before.
+    /// COST, per commit: one `ArcSwap` load for the snapshot, held until
+    /// this returns.
     fn commit_recorded(
         &self,
         serial: &SerialGuard<'_>,
@@ -696,7 +732,25 @@ impl WritePath {
             let halt = Rejection::classified(meta.kind, RejectCode::Poisoned, None);
             return Response::Rejected(halt);
         }
-        let resp = execute();
+        // THE HOLD (row 34): the kernel's committed state before the
+        // execute — one `ArcSwap` load — kept until this returns. It buys
+        // two things: the compare and the diff the catch below needs, and
+        // the superseded root's destructor MOVED. The kernel releases that
+        // root as `transact` returns, which is where a world's destructor
+        // could surface (the kernel card's second panic site, the lost-ack
+        // case); held here, it drops after the record step and the
+        // announce, where the handler's catch takes it with nothing owed.
+        let pre = self.stores.kernel().snapshot();
+        let resp = match catch_unwind(AssertUnwindSafe(execute)) {
+            Ok(resp) => resp,
+            // THE THIRD ARM: record what the unwind committed, then let the
+            // panic go on to the transport's catch as it did — the hook ran
+            // at the panic site, and `resume_unwind` runs none.
+            Err(payload) => {
+                self.record_the_commit_an_unwind_left(serial, meta, &pre);
+                resume_unwind(payload);
+            }
+        };
         if let Response::Rejected(rejection) = &resp {
             if rejection.code == RejectCode::Poisoned {
                 self.say_the_kernels_halt_once();
@@ -708,23 +762,97 @@ impl WritePath {
             }
         }
         if let Some(at) = self.record(serial, meta, &resp) {
-            // A commit landed: the volume took it, so a full volume said
-            // before this is a condition that cleared, and the next is new.
-            self.volume_full_said.store(false, Ordering::Relaxed);
-            self.commit_stream.announce(at);
+            self.landed(at);
         }
-        // THE CHECKPOINT THREAD's WAKE, after the record step (the module
-        // doc): a crossing inside the execute set the kernel's due flag and
-        // ran nothing; the thread runs it. One atomic load per commit, and
-        // a wake only where the flag stands — once per crossing, a second
-        // while the thread is still on its way coalescing into the one
-        // wait. AND THE BACKSTOP's (m13): a second atomic load beside the
-        // first — the kernel's count of checkpoints run INLINE on a
-        // committing thread, against the count this card last saw — raising
-        // the same signal where it moved, so a checkpoint the backstop ran
-        // inside this execute wakes the thread as a crossing does: the
-        // thread finds no flag, reads the newest checkpoint once and takes
-        // the landing's re-reads and the backstop's line off the count.
+        self.wake_the_checkpoint_thread_where_due();
+        // The superseded root's last reference may be this one (the hold
+        // above): released after the record step, as the hold promises.
+        drop(pre);
+        resp
+    }
+
+    /// THE THIRD ARM (`operations.md` §4 row 34; the module doc's PANIC PAST
+    /// THE COMMIT): what [`WritePath::commit_recorded`] records when
+    /// `execute` UNWOUND — the kernel's committed position compared against
+    /// `pre`, the snapshot the door took before the execute. UNMOVED,
+    /// nothing committed — the kernel's §3 guard repaired the unwind out of
+    /// its commit region, or the panic came before any commit (a read's
+    /// frame, a refusal, an idempotency replay) — and nothing is recorded.
+    /// MOVED, the write committed and the kernel propagated a later panic
+    /// with the transaction installed, the lost-ack case: the boundary is
+    /// recorded as a BARE entry at the post-commit position — no op, docs,
+    /// testimony or time, since the answer that carried them is lost in the
+    /// unwind, and never invented — CLASSIFIED off the two worlds in hand by
+    /// the walk's own derivation ([`derived_journal`]: the documents the
+    /// commit touched, and the op and the terms the journal names), its
+    /// attest line from the ADMITTED MARKER — `meta.signed`'s value, the one
+    /// the plain sequence's check admitted and the kernel wrote into the
+    /// slot: kept, never re-derived and never dropped (SO-I5 (d)) — folded
+    /// into the feed as a recorded position is ([`Feed::record_bare`]), then
+    /// announced as a recorded commit is and the checkpoint thread woken as
+    /// after any record step. An attest line the store cannot make durable
+    /// halts the write path exactly as it does under [`WritePath::record`]:
+    /// the store's own cause, not the panic's. Nothing else moves — no halt
+    /// for the panic, no line of the position's (the hook's line is the
+    /// binary's, said at the panic site; the caller's re-raise runs no
+    /// hook). COST, on this arm alone: one `ArcSwap` load for the post
+    /// snapshot and `derived_journal`'s diff of the two worlds — a
+    /// full-link enumeration per world — under the guard.
+    fn record_the_commit_an_unwind_left(
+        &self,
+        serial: &SerialGuard<'_>,
+        meta: WriteMeta,
+        pre: &Snapshot<World>,
+    ) {
+        let post = self.stores.kernel().snapshot();
+        let at = post.seq();
+        if at == pre.seq() {
+            return;
+        }
+        let (docs, journal) = derived_journal(pre.world(), post.world());
+        let attest = match meta.signed {
+            Some(Signed::Marker(slot)) => Some(slot),
+            Some(Signed::RecordSig) | None => None,
+        };
+        let recorded = self.feed.record_bare(serial, at.0, docs, journal, attest, post.world());
+        if recorded.is_err() {
+            self.halt_at(at);
+        }
+        self.landed(at);
+        self.wake_the_checkpoint_thread_where_due();
+    }
+
+    /// A commit LANDED at `at` and its record is made: the volume took it,
+    /// so a full volume said before this is a condition that cleared and
+    /// the next is new; and the position is answerable, so it is announced
+    /// — behind its record, which is the module doc's STEP.
+    fn landed(&self, at: Seq) {
+        self.volume_full_said.store(false, Ordering::Relaxed);
+        self.commit_stream.announce(at);
+    }
+
+    /// THE HALT, SET (the module doc; SO-I5 (d)): the attest store has said
+    /// it, once — the line's file and position. The position first, then
+    /// the flag that makes it readable: the standing line and `/health`
+    /// read the pair outside the guard.
+    fn halt_at(&self, at: Seq) {
+        self.halted_at.store(at.0, Ordering::Release);
+        self.halted.store(true, Ordering::Release);
+    }
+
+    /// THE CHECKPOINT THREAD's WAKE, after a record step (the module doc):
+    /// a crossing inside the execute set the kernel's due flag and ran
+    /// nothing; the thread runs it. One atomic load per commit, and a wake
+    /// only where the flag stands — once per crossing, a second while the
+    /// thread is still on its way coalescing into the one wait. AND THE
+    /// BACKSTOP's (m13): a second atomic load beside the first — the
+    /// kernel's count of checkpoints run INLINE on a committing thread,
+    /// against the count this card last saw — raising the same signal where
+    /// it moved, so a checkpoint the backstop ran inside this execute wakes
+    /// the thread as a crossing does: the thread finds no flag, reads the
+    /// newest checkpoint once and takes the landing's re-reads and the
+    /// backstop's line off the count.
+    fn wake_the_checkpoint_thread_where_due(&self) {
         let kernel = self.stores.kernel();
         let inline_runs = kernel.inline_checkpoints();
         let moved = inline_runs != self.inline_runs_seen.load(Ordering::Relaxed);
@@ -734,7 +862,6 @@ impl WritePath {
         if kernel.checkpoint_due() || moved {
             self.checkpoint_signal.raise();
         }
-        resp
     }
 
     /// The data behind `GET /changes` at the requester's class — the FEED
@@ -749,8 +876,11 @@ impl WritePath {
     /// The feed answers for the head by answering for its last recorded
     /// position, which is the same position because every commit rides
     /// [`WritePath::commit_recorded`], which records it under the guard it
-    /// committed under. That premise is kept HERE; `CommitsLog::head_time`
-    /// states what relying on it costs.
+    /// committed under — a commit whose execute panicked after the kernel
+    /// installed it included, recorded bare by the door's catch (the module
+    /// doc's PANIC PAST THE COMMIT), for which this answers `None`. That
+    /// premise is kept HERE; `CommitsLog::head_time` states what relying on
+    /// it costs.
     pub fn head_time(&self) -> Option<u64> {
         self.feed.head_time()
     }
@@ -902,12 +1032,7 @@ impl WritePath {
             post.world(),
         );
         if recorded.is_err() {
-            // The attest store has said it, once: the line's file and
-            // position. The position first, then the flag that makes it
-            // readable — the standing line and `/health` read the pair
-            // outside the guard.
-            self.halted_at.store(at.0, Ordering::Release);
-            self.halted.store(true, Ordering::Release);
+            self.halt_at(at);
         }
         Some(at)
     }

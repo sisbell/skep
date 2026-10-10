@@ -1838,8 +1838,11 @@ the store's install — nothing above their own layer.
    same catch, which says what is lost with it (every checkpoint the
    backstop's, unsaid; the bound and the floor frozen); and the kernel's
    own halt said once, at the write path's door where a write answers
-   `poisoned` or at the handler's catch after a panic on a write, which
-   `GET /health`'s `writes.halted` reads beside the write path's halt —
+   `poisoned` or at the handler's catch after a panic on a write (a write
+   that committed before it panicked already recorded and announced by
+   the write path's own catch, so the handler's `500` costs the feed
+   nothing), which `GET /health`'s `writes.halted` reads beside the write
+   path's halt —
    and, after a blob reply is written, the replaced file's deferred
    unlink, under a catch of its own so a panic there costs the aside and
    never the worker, a failed unlink said ONCE per standing fault by a
@@ -1919,7 +1922,11 @@ the store's install — nothing above their own layer.
    signature verification — `skep-signature` is the one crate that links
    the signature libraries; skepd calls its verify.
 5. **The write path** — `write_path.rs`. The single point every write
-   passes through, one at a time, and the head writer
+   passes through, one at a time — each execute under a catch of the
+   door's own, so a write that panics after the kernel committed it is
+   recorded on the feed as a classified bare entry with its signature's
+   line, and announced, before the panic re-raises to the handler's
+   catch: no hole in the feed, nothing halted — and the head writer
    (`write_path/head.rs`, which commits through the write path's own
    door — a refused head said ONCE PER CAUSE with the position its head
    would have named and the refusal as the wire renders a rejection, the

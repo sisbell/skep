@@ -36,11 +36,18 @@
 //! (D9) and writes nothing under `blobs/`. What the engine's open writes to
 //! the directory it is run over — the copy the inventory proves — is the
 //! kernel's own: the lock file `kernel.lock`, created where absent; a torn
-//! tail cut off the last segment where a crash left one; and a stray
-//! `checkpoint.tmp` — a checkpoint a crash or a full volume left
-//! half-written — removed, which the inventory reports as
-//! `journal.stray_checkpoint_removed`; no checkpoint, no commit, no head,
-//! no feed sidecar — the daemon's own open is never run.
+//! tail cut off the last segment where a crash left one, which the
+//! inventory reports as `journal.tail_cut` — the bytes cut, `0` where the
+//! last committed marker ended the journal: a count and never `null`, since
+//! every open runs the cut and a cut that took nothing leaves the journal a
+//! clean close left it; and a stray `checkpoint.tmp` — a checkpoint a crash
+//! or a full volume left half-written — removed, which the inventory
+//! reports as `journal.stray_checkpoint_removed`; no checkpoint, no commit,
+//! no head, no feed sidecar — the daemon's own open is never run. So the
+//! copy is run over WRITABLE: one the open cannot write — a read-only
+//! mount, a directory or a file without its write bit — is refused by name
+//! ([`ToolError::ReadOnlyCopy`]), never read as a journal that would not
+//! open.
 //!
 //! THE PULL ([`pull`]; `skepd pull --data-dir <dir> [--hash <hex>] <file>`):
 //! takes a FILE, hashes it (BLAKE3) and INSTALLS it at
@@ -68,7 +75,9 @@ use std::path::{Path, PathBuf};
 use serde_json::Value;
 use skep_blobs::{HashFunction, Inspection, Store};
 use skep_engine::{Engine, EngineError};
-use skep_kernel::{BurnedSeqPolicy, CheckpointPolicy, Durability, KernelConfig, SaltSource};
+use skep_kernel::{
+    BurnedSeqPolicy, CheckpointPolicy, Durability, KernelConfig, OpenError, SaltSource,
+};
 use skep_media::cell::{DESIGNATION, HASH_BYTES};
 use skep_media::gate::{wall_clock_ms, Counted, MediaGate};
 use skep_media::index::{self, CellIndex};
@@ -85,6 +94,11 @@ pub enum ToolError {
     /// The journal is HELD — a daemon serves the directory, and the
     /// kernel's exclusion lock refused this open.
     JournalHeld(PathBuf),
+    /// The copy cannot be WRITTEN — a read-only mount, a directory or a
+    /// file without its write bit — where the engine's open writes the
+    /// kernel's lock and may cut a torn tail: the operator's copy to make
+    /// writable, told apart from a journal that would not open.
+    ReadOnlyCopy(PathBuf),
     /// The engine's open refused the journal for another reason — a
     /// corrupt journal, a bad checkpoint: the operator's condition.
     Journal(EngineError),
@@ -110,6 +124,12 @@ impl fmt::Display for ToolError {
                 f,
                 "the journal at {} is held by a running daemon: run the inventory over a copy or \
                  a stopped board, and pass --hash <hex> from its listing to pull beside the daemon",
+                dir.display()
+            ),
+            ToolError::ReadOnlyCopy(dir) => write!(
+                f,
+                "the copy at {} is read-only: the inventory's open writes the kernel's lock and may \
+                 cut a torn tail; run it over a writable copy",
                 dir.display()
             ),
             ToolError::Journal(e) => write!(f, "the journal could not be opened: {e}"),
@@ -312,6 +332,11 @@ pub fn inventory(data_dir: &Path, check: HoleCheck) -> Result<Value, ToolError> 
                         .stray_checkpoint_removed()
                         .map_or(Value::Null, |n| Value::Number(n.into())),
                 ),
+                // The tail cut's bytes: a COUNT, `0` for a clean close — the
+                // kernel's member is one, every journaled open running the
+                // cut — and `0` too where the engine gave no account, as the
+                // start point renders the same absence.
+                ("tail_cut", Value::Number(recovery.map_or(0, |r| r.tail_cut).into())),
             ]),
         ),
         ("orphan_partials", Value::Number((orphan_partials as u64).into())),
@@ -373,9 +398,17 @@ fn require_board(dir: &Path) -> Result<(), ToolError> {
 
 /// The engine's ordinary public open over `dir` — the daemon's own
 /// configuration but for the checkpoint cadence, MANUAL here, so no
-/// checkpoint is ever taken: nothing commits through this handle. The
-/// kernel's lock refused is the held journal, told apart from every other
-/// refusal.
+/// checkpoint is ever taken: nothing commits through this handle. Two of
+/// the kernel's I/O refusals are told apart from every other, read off the
+/// open's own I/O arm: the lock refused (`WouldBlock`) is the held journal;
+/// and a write the copy would not take is the read-only copy —
+/// `ReadOnlyFilesystem`, a snapshot mount's answer to every write, and
+/// `PermissionDenied`, what a directory or a file without its write bit
+/// answers the lock's creation, its open or the tail's cut (`chmod a-w`, an
+/// immutable flag). Both are one fault to the operator — the copy is not
+/// theirs to write — and take one remedy. A refusal the open carries as a
+/// base's or a damaged region's cause — a checkpoint that could not be read
+/// — is not the copy's mode and stays the journal's own.
 fn open_journal(dir: &Path) -> Result<Engine, ToolError> {
     let cfg = KernelConfig {
         durability: Durability::Fsync {
@@ -389,9 +422,13 @@ fn open_journal(dir: &Path) -> Result<Engine, ToolError> {
     Engine::open(cfg).map_err(|e| {
         let mut source: Option<&(dyn std::error::Error + 'static)> = Some(&e);
         while let Some(err) = source {
-            if let Some(io) = err.downcast_ref::<io::Error>() {
-                if io.kind() == io::ErrorKind::WouldBlock {
-                    return ToolError::JournalHeld(dir.to_path_buf());
+            if let Some(OpenError::Io(io)) = err.downcast_ref::<OpenError>() {
+                match io.kind() {
+                    io::ErrorKind::WouldBlock => return ToolError::JournalHeld(dir.to_path_buf()),
+                    io::ErrorKind::ReadOnlyFilesystem | io::ErrorKind::PermissionDenied => {
+                        return ToolError::ReadOnlyCopy(dir.to_path_buf())
+                    }
+                    _ => {}
                 }
             }
             source = err.source();

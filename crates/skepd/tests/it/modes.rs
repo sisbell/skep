@@ -20,9 +20,9 @@
 //!   inside it and nothing repaired; `0750` the same, at its mode; the same
 //!   directory set `0700` is admitted; one that does not exist is created
 //!   `0700` and admitted. THE ARM: the refusal is the binary's own door
-//!   before the open ((b-B)), so the line is stderr's FIRST and no `open:
-//!   data-dir` line precedes it — where the directory is admitted, that
-//!   open line is the first.
+//!   before the open ((b-B)), so the line is stderr's FIRST and no `open:`
+//!   line precedes it — where the directory is admitted, the open's
+//!   version line is the first and its directory line the second.
 //! * (b) THE TOOLS' AND THE LIBRARY's STANDING under (b-B): `skepd
 //!   inventory` over a `0755` copy of a board ANSWERS, and `Daemon::open`
 //!   on a `0755` directory SERVES — neither is held to the mode; the binary
@@ -136,10 +136,15 @@ fn serve_then_kill(cmd: &mut Command) -> Vec<String> {
     assert_eq!((st, json(&body)["ok"].as_bool()), (200, Some(true)), "{}", String::from_utf8_lossy(&body));
     child.kill();
     let whole = stderr.whole();
-    let first = whole.first().expect("the open said its directory");
+    let first = whole.first().expect("the open said its version");
     assert!(
-        after_the_head(first, "open").is_some_and(|said| said.starts_with("data-dir ")),
-        "an admitted start's first line is the open's directory line: {first:?}"
+        after_the_head(first, "open").is_some_and(|said| said.starts_with("version ")),
+        "an admitted start's first line is the open's version line: {first:?}"
+    );
+    let second = whole.get(1).expect("the open said its directory");
+    assert!(
+        after_the_head(second, "open").is_some_and(|said| said.starts_with("data-dir ")),
+        "an admitted start's second line is the open's directory line: {second:?}"
     );
     whole
 }
@@ -221,8 +226,8 @@ fn a_loose_data_directory_is_refused_before_the_open_and_a_tight_one_admitted() 
     assert_eq!(stderr.lines().collect::<Vec<_>>(), vec![refusal_line(&dir, 0o750).as_str()]);
     assert!(!dir.join("kernel.lock").exists(), "no lock taken");
 
-    // ADMITTED at 0700: the open's directory line is stderr's first, the
-    // board serves, the lock stands.
+    // ADMITTED at 0700: the open's version line is stderr's first and its
+    // directory line the second, the board serves, the lock stands.
     fs::set_permissions(&dir, perms(0o700)).expect("chmod 700");
     let workers = skepd::MIN_WORKERS.to_string();
     serve_then_kill(&mut skepd(&dir, &["--port", "0", "--workers", &workers]));

@@ -81,6 +81,12 @@ use chain::{slot_digest, ChainLink};
 /// word, is refused BY NAME at `open` ([`first_sync_word`]) rather than read
 /// as this one's; a segment the base embodies is not read, and so not probed.
 pub(crate) const MAGIC: [u8; 4] = *b"SKJ4";
+/// The journal's FORMAT stamp as a caller above the kernel names it — the
+/// daemon's version line, which says at every open which formats the build
+/// reads: `MAGIC`'s four bytes, `SKJ4`, read as ASCII the way the kernel's
+/// own refusal spells a stamp. One value with the sync word, defined from
+/// it; re-exported at the crate root beside [`MAX_SEGMENT_LEN`].
+pub const JOURNAL_FORMAT: [u8; 4] = MAGIC;
 /// The stamp's fixed prefix: what makes four bytes a well-formed journal sync
 /// word of SOME format. [`first_sync_word`] tells such a word (`SKJ` + a
 /// numeral this build does not write) from damage that is not one (anything

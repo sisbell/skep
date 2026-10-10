@@ -171,10 +171,12 @@ mod replay;
 // the applier lock and the history reads beneath it.
 mod kernel;
 
-pub use checkpoint::CheckpointHeader;
+pub use checkpoint::{CheckpointHeader, CHECKPOINT_FORMAT};
 pub use config::{BurnedSeqPolicy, CheckpointPolicy, Durability, KernelConfig, SaltSource};
 pub use error::{CheckpointError, HistoryError, LandedStep, OpenError, RebuildError, TxnError};
-pub use journal::{Attestation, AttestationError, MAX_SEGMENT_LEN, MAX_SIG_BYTES, MAX_TXN_BYTES};
+pub use journal::{
+    Attestation, AttestationError, JOURNAL_FORMAT, MAX_SEGMENT_LEN, MAX_SIG_BYTES, MAX_TXN_BYTES,
+};
 pub use kernel::{Kernel, Recovery, Snapshot, Staging};
 pub use replay::SkippedBase;
 

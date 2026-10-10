@@ -132,7 +132,7 @@ pub use engine::{Engine, EngineError, EngineStores, Recovery};
 pub use grants::{IssuerGrantIndexRow, UniversalGrantIndexRow};
 pub use publication::Draft;
 pub use readable::ReaderClass;
-pub use world::{Record, World};
+pub use world::{Record, World, WORLD_FORMAT};
 
 // The KERNEL types this crate's own public signatures name — `Kernel`,
 // `KernelConfig`, `OpenError`, `HistoryError`, `Seq`, and `Recovery`'s

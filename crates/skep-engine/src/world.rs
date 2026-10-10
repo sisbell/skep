@@ -238,8 +238,11 @@ impl fmt::Debug for World {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct FormatStamp;
 
-/// The word `FormatStamp` writes and demands back.
-pub(crate) const WORLD_FORMAT: u64 = 0x534B_5057_0000_0001;
+/// The World's FORMAT stamp — the word `FormatStamp` writes at the head of
+/// every checkpoint body and demands back. Public for the one caller above
+/// that names it, the daemon's version line, which renders it as the refusal
+/// below does (`{:#018x}`); re-exported at the crate root.
+pub const WORLD_FORMAT: u64 = 0x534B_5057_0000_0001;
 
 impl Serialize for FormatStamp {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {

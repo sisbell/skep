@@ -50,6 +50,12 @@ use crate::{Seam, Seq, Step};
 // naming the stamp found; one written under this stamp before that day
 // fails at the body's decode or at the chain, as corruption.
 const MAGIC: [u8; 4] = *b"SKC4";
+/// The checkpoint's FORMAT stamp as a caller above the kernel names it — the
+/// daemon's version line, which says at every open which formats the build
+/// reads: `MAGIC`'s four bytes, `SKC4`, read as ASCII the way `load`'s
+/// refusal spells the stamp it found. One value with the header's stamp,
+/// defined from it; re-exported at the crate root beside the journal's.
+pub const CHECKPOINT_FORMAT: [u8; 4] = MAGIC;
 /// The header's fields, at the offsets `write` lays them down and
 /// [`parse_header`] reads them at — one spelling of each, so the two cannot
 /// drift.

@@ -340,12 +340,49 @@ fn the_opens_two_lines_carry_the_directory_the_base_the_replay_and_the_duration_
     assert_eq!(Base(Seq(77)).to_string(), "checkpoint.77");
 }
 
-/// THE CLASSED DOOR for the open's own lines (CUT 1 (a)): the directory's,
-/// the recovery's and the upload setting's all go out through
-/// `say_open_line`, which emits under `Class::Open` — read off the source,
-/// since no suite captures the stream in-process; the class word on the
-/// stream itself is pinned by the child-process suite (`tests/it/open.rs`),
-/// which reads `open:` on the binary's stderr.
+/// THE VERSION LINE's WORDS (`operations.md` §3.4 step 6's gap, closed),
+/// pinned whole: the build's version — the workspace's one,
+/// `CARGO_PKG_VERSION` — and the three format stamps this build reads, the
+/// kernel's two as text and the engine's as its refusal renders it. The
+/// stamps are SPELLED here, and the literals asserted to be the crates'
+/// constants beside the line, so a stamp that moves re-spells this pin
+/// rather than passing a line that names the old one — and a render from a
+/// literal in the daemon, one byte off its constant, fails on the first
+/// assertion.
+#[test]
+fn the_version_line_names_the_build_and_the_three_formats_it_reads() {
+    assert_eq!(
+        VersionLine.to_string(),
+        format!(
+            "version {}; this build reads journal format SKJ4, checkpoint format SKC4 and world \
+             format 0x534b505700000001",
+            env!("CARGO_PKG_VERSION")
+        )
+    );
+    assert_eq!(
+        skep_kernel::JOURNAL_FORMAT,
+        *b"SKJ4",
+        "the journal's stamp moved: re-spell the pin"
+    );
+    assert_eq!(
+        skep_kernel::CHECKPOINT_FORMAT,
+        *b"SKC4",
+        "the checkpoint's stamp moved: re-spell the pin"
+    );
+    assert_eq!(
+        skep_engine::WORLD_FORMAT,
+        0x534B_5057_0000_0001,
+        "the World's stamp moved: re-spell the pin"
+    );
+}
+
+/// THE CLASSED DOOR for the open's own lines (CUT 1 (a)): the version's,
+/// the directory's, the recovery's and the upload setting's all go out
+/// through `say_open_line`, which emits under `Class::Open` — read off the
+/// source, since no suite captures the stream in-process; the class word on
+/// the stream itself is pinned by the child-process suite
+/// (`tests/it/open.rs`), which reads `open:` on the binary's stderr. And
+/// the version line is said FIRST, before the directory's.
 #[test]
 fn the_opens_own_lines_go_through_the_classed_door() {
     let source = include_str!("../server.rs");
@@ -355,8 +392,14 @@ fn the_opens_own_lines_go_through_the_classed_door() {
     let open_under = &source[start..end];
     assert_eq!(
         open_under.matches("say_open_line(").count(),
-        3,
-        "the three lines — the directory, the recovery, the upload setting — each through the door"
+        4,
+        "the four lines — the version, the directory, the recovery, the upload setting — each \
+         through the door"
+    );
+    assert!(
+        open_under.find("say_open_line(VersionLine)").expect("the version line")
+            < open_under.find("say_open_line(DataDirLine(").expect("the directory's line"),
+        "the version line comes before the directory's"
     );
     assert!(
         open_under.find("say_open_line(DataDirLine(").expect("the directory's line")

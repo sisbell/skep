@@ -8,11 +8,14 @@
 //! * A HELD PORT refuses before the open: the bind line, exit 1, in
 //!   milliseconds, and the data directory is never created — no
 //!   `kernel.lock`, nothing read, nothing written.
-//! * THE OPEN's TWO LINES, in order: `open: data-dir {path}` is the first
-//!   line on stderr, and `open: recovered from {checkpoint.n | genesis},
-//!   {k} commits replayed, in {d} ms` stands on stderr before the serving
-//!   line — `{k}` the kernel's count across a reopen with no checkpoint
-//!   and one with a checkpoint at a known position.
+//! * THE OPEN's THREE LINES, in order: `open: version {v}; this build reads
+//!   journal format {SKJ4}, checkpoint format {SKC4} and world format
+//!   {0x…}` is the first line on stderr — the build's version and the
+//!   three format stamps, each from its crate's constant — `open: data-dir
+//!   {path}` the second, and `open: recovered from {checkpoint.n |
+//!   genesis}, {k} commits replayed, in {d} ms` stands on stderr before the
+//!   serving line — `{k}` the kernel's count across a reopen with no
+//!   checkpoint and one with a checkpoint at a known position.
 //! * THE HOOK: a worker's panic inside its handler's catch is ONE prefixed,
 //!   timed `failure:` line naming `skepd-worker` and the site, nothing of
 //!   Rust's own hook's text, and the worker serves its next request.
@@ -222,11 +225,12 @@ pub(crate) fn serving_port(child: &mut Child, within: Duration) -> u16 {
 
 /// A binary serving over `dir`, its open read: the child, still running;
 /// its stderr, read up to the recovery's landing; the port; and the open's
-/// two lines after their heads.
+/// three lines after their heads.
 struct Served {
     child: Spawned,
     stderr: Stderr,
     port: u16,
+    version_line: String,
     data_dir_line: String,
     recovered_line: String,
 }
@@ -234,9 +238,9 @@ struct Served {
 /// Spawn the binary over `dir` on `--port 0` with the floor's workers
 /// (`skepd::MIN_WORKERS`, the count the parse admits) and `env` set, read
 /// the serving line off stdout FIRST — the binary writes it only once the
-/// open's report has reached the stream — then the open's two lines off
-/// stderr: the directory's line as the first line of the stream, and the
-/// recovery's landing after it.
+/// open's report has reached the stream — then the open's three lines off
+/// stderr: the version line as the first line of the stream, the
+/// directory's line as the second, and the recovery's landing after them.
 fn serve_and_read_the_open(dir: &Path, env: &[(&str, &str)]) -> Served {
     serve_and_read_the_open_with(dir, &[], env)
 }
@@ -258,15 +262,22 @@ fn serve_and_read_the_open_with(dir: &Path, flags: &[&str], env: &[(&str, &str)]
         after_the_head(l, "open").is_some_and(|said| said.starts_with("recovered from "))
     });
     let first = stderr.seen.first().expect("a line was read").clone();
-    let data_dir_line = after_the_head(&first, "open")
+    let version_line = after_the_head(&first, "open")
+        .filter(|said| said.starts_with("version "))
+        .unwrap_or_else(|| {
+            panic!("the first line on stderr is not the open's version line: {first:?}")
+        })
+        .to_string();
+    let second = stderr.seen.get(1).expect("a second line was read").clone();
+    let data_dir_line = after_the_head(&second, "open")
         .filter(|said| said.starts_with("data-dir "))
         .unwrap_or_else(|| {
-            panic!("the first line on stderr is not the open's directory line: {first:?}")
+            panic!("the second line on stderr is not the open's directory line: {second:?}")
         })
         .to_string();
     let recovered_line =
         after_the_head(&recovered, "open").expect("the landing's head").to_string();
-    Served { child, stderr, port, data_dir_line, recovered_line }
+    Served { child, stderr, port, version_line, data_dir_line, recovered_line }
 }
 
 /// A stderr line of `class` whose text opens with `prefix`.
@@ -457,14 +468,53 @@ fn a_held_port_refuses_in_milliseconds_with_the_bind_line_and_creates_no_directo
     drop(held);
 }
 
-/// §3.1 STEP 3 — THE TWO OPEN LINES, IN ORDER, WITH THE KERNEL's FIGURES:
-/// a fresh board's child writes `open: data-dir {path}` as its FIRST
-/// stderr line and `open: recovered from genesis, 0 commits replayed, in
-/// {d} ms` before the serving line; the same board reopened after N
-/// commits with no checkpoint says `{k} = N`; a board checkpointed at
-/// position P with M commits above it — built in-process through the
-/// checkpoint seam — says `checkpoint.P` and `{k} = M`, the count the
-/// kernel pins. Each child killed by the test.
+/// §3.4 STEP 6's GAP, CLOSED — THE VERSION LINE FIRST: the child's FIRST
+/// stderr line is `open: version {v}; this build reads journal format
+/// {SKJ4}, checkpoint format {SKC4} and world format {0x…}` — `{v}` this
+/// build's `CARGO_PKG_VERSION` and the three stamps spelled FROM THE
+/// CRATES' CONSTANTS, the kernel's two as text and the engine's as its
+/// refusal renders it — `open: data-dir {path}` the second, and `open:
+/// recovered from …` after both; the same three, in the same order, on the
+/// board's reopen. Each child killed by the test.
+#[test]
+fn the_open_says_its_version_and_the_formats_it_reads_first_then_its_directory() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let dir = tmp.path().join("data");
+    let expected = format!(
+        "version {}; this build reads journal format {}, checkpoint format {} and world format \
+         {:#018x}",
+        env!("CARGO_PKG_VERSION"),
+        skep_kernel::JOURNAL_FORMAT.escape_ascii(),
+        skep_kernel::CHECKPOINT_FORMAT.escape_ascii(),
+        skep_engine::WORLD_FORMAT
+    );
+    for life in ["first", "second"] {
+        let mut served = serve_and_read_the_open(&dir, &[]);
+        assert_eq!(
+            served.version_line, expected,
+            "FINDING (§3.4 step 6): the {life} life's version line"
+        );
+        assert_eq!(served.data_dir_line, format!("data-dir {}", dir.display()));
+        let at = |prefix: &str| served.stderr.seen.iter().position(|l| said(l, "open", prefix));
+        let whole = served.stderr.seen.join("\n");
+        assert_eq!(at("version "), Some(0), "the version line is stderr's first:\n{whole}");
+        assert_eq!(at("data-dir "), Some(1), "the directory's line is the second:\n{whole}");
+        assert!(
+            matches!(at("recovered from "), Some(n) if n > 1),
+            "the landing comes after both:\n{whole}"
+        );
+        served.child.kill();
+    }
+}
+
+/// §3.1 STEP 3 — THE TWO RULED OPEN LINES, IN ORDER, WITH THE KERNEL's
+/// FIGURES: a fresh board's child writes `open: data-dir {path}` as its
+/// first stderr line after the version line and `open: recovered from
+/// genesis, 0 commits replayed, in {d} ms` before the serving line; the
+/// same board reopened after N commits with no checkpoint says `{k} = N`;
+/// a board checkpointed at position P with M commits above it — built
+/// in-process through the checkpoint seam — says `checkpoint.P` and
+/// `{k} = M`, the count the kernel pins. Each child killed by the test.
 #[test]
 fn the_open_says_its_directory_first_and_its_recovery_with_the_kernels_figures() {
     let tmp = tempfile::tempdir().expect("tempdir");

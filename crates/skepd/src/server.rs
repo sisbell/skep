@@ -197,12 +197,12 @@ use std::time::Instant;
 use parking_lot::Condvar;
 use parking_lot::Mutex;
 use skep_address::Address;
-use skep_engine::{Engine, EngineError, HistoryError, Recovery, World};
+use skep_engine::{Engine, EngineError, HistoryError, Recovery, World, WORLD_FORMAT};
 use skep_febe::OperationSurface;
 use skep_identity::HasIdentity;
 use skep_kernel::{
     BurnedSeqPolicy, CheckpointError, CheckpointPolicy, Durability, KernelConfig, LandedStep,
-    SaltSource, Seq,
+    SaltSource, Seq, CHECKPOINT_FORMAT, JOURNAL_FORMAT,
 };
 use skep_media::gate::MediaGate;
 use skep_media::index;
@@ -748,10 +748,17 @@ impl Daemon {
         media_opts: MediaOptions,
         salt: SaltSource,
     ) -> Result<Daemon, DaemonError> {
-        // THE OPEN's FIRST LINE (§3.1 step 3; m7): the directory, before the
-        // seeding check and the engine's open — the one line on the operator
-        // stream that names the directory, which a collector keys on, and
-        // the tell that an open has begun where it is long.
+        // THE VERSION LINE, THE OPEN's FIRST (§3.4 step 6's gap): the
+        // build's version and the three format stamps it reads, before the
+        // directory's line and so before anything is read from the
+        // directory — a refusal that names the stamp it found has, above
+        // it, the line that says which stamps this build reads.
+        say_open_line(VersionLine);
+        // THE FIRST OF THE OPEN's TWO RULED LINES (§3.1 step 3; m7): the
+        // directory, before the seeding check and the engine's open — the one
+        // line on the operator stream that names the directory, which a
+        // collector keys on, and the tell that an open has begun where it is
+        // long.
         say_open_line(DataDirLine(data_dir));
         // THE CADENCE (jw-R1, jw-R2): every `CHECKPOINT_EVERY_COMMITS` OR the
         // byte bound, whichever first, DEFERRED — a crossing sets the
@@ -1932,12 +1939,44 @@ impl fmt::Display for Base {
     }
 }
 
-/// THE OPEN's FIRST LINE (`operations.md` §3.1 step 3; m7): the data
-/// directory, as the operator named it — `data-dir {path}` — said before
-/// the seeding check and the engine's open, so the one line that names the
-/// directory stands on the stream before anything is read from it. A pure
+/// THE VERSION LINE — the open's FIRST line (`operations.md` §3.4 step 6's
+/// gap: "no line names the binary's version or the formats it reads at
+/// start; the stamp is said only on refusal"): `version {v}; this build
+/// reads journal format {SKJ4}, checkpoint format {SKC4} and world format
+/// {0x…}` — the build's version (`CARGO_PKG_VERSION`, the workspace's one)
+/// and the three format stamps this build opens under, each FROM ITS
+/// CONSTANT and never a literal here: the kernel's journal and checkpoint
+/// stamps ([`JOURNAL_FORMAT`], [`CHECKPOINT_FORMAT`]) as the kernel's own
+/// refusal spells a stamp, four ASCII bytes, and the engine's World stamp
+/// ([`WORLD_FORMAT`]) as the engine's refusal renders it, `{:#018x}`. Said
+/// before [`DataDirLine`] and so before anything is read from the
+/// directory: an open refused at a stamp has, above its refusal, the line
+/// that says which stamps this build reads, and an operator reading a
+/// board's stream after an upgrade reads which binary opened it. A pure
 /// value the unit suite pins by `to_string()`; emitted under `Class::Open`
 /// through [`say_open_line`].
+struct VersionLine;
+
+impl fmt::Display for VersionLine {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "version {}; this build reads journal format {}, checkpoint format {} and world \
+             format {:#018x}",
+            env!("CARGO_PKG_VERSION"),
+            JOURNAL_FORMAT.escape_ascii(),
+            CHECKPOINT_FORMAT.escape_ascii(),
+            WORLD_FORMAT
+        )
+    }
+}
+
+/// THE FIRST OF THE OPEN's TWO RULED LINES (`operations.md` §3.1 step 3;
+/// m7), after [`VersionLine`]: the data directory, as the operator named it
+/// — `data-dir {path}` — said before the seeding check and the engine's
+/// open, so the one line that names the directory stands on the stream
+/// before anything is read from it. A pure value the unit suite pins by
+/// `to_string()`; emitted under `Class::Open` through [`say_open_line`].
 struct DataDirLine<'a>(&'a Path);
 
 impl fmt::Display for DataDirLine<'_> {

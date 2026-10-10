@@ -12,9 +12,13 @@
 //! cell names refused; beside a serving daemon, held to the inventory's
 //! hash, the daemon's fetch serving the restored file at its next read —
 //! and the two subcommands of the one binary the operator already has.
+//! And what the engine's open DOES to the copy, said: the torn tail it cut,
+//! in bytes, as `journal.tail_cut`; and a copy the open cannot write
+//! refused by name, never as a journal that would not open.
 
 use std::collections::BTreeMap;
 use std::fs;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::SystemTime;
@@ -165,6 +169,7 @@ fn the_inventory_lists_the_holes_the_accounts_and_the_venue_total_and_writes_not
     assert_eq!(segments(dir.path()), segments_before, "a cleanly closed journal's bytes are read and left as found");
     assert!(!stray.exists(), "the open removed the stray checkpoint");
     assert_eq!(v["journal"]["stray_checkpoint_removed"].as_u64(), Some(37), "{v}");
+    assert_eq!(v["journal"]["tail_cut"].as_u64(), Some(0), "a clean close: nothing cut: {v}");
 
     let mut expected_holes = vec![(blob_hex(&a_bytes), "length".to_string()), (blob_hex(&b_bytes), "absent".to_string()), (blob_hex(&d_bytes), "hash".to_string())];
     expected_holes.sort();
@@ -295,6 +300,240 @@ fn the_pull_restores_a_file_a_cell_names_and_deposits_nothing() {
     let (st, _, body) = fetch(port, Some(&owner), &format!("{draft}.0.1.1"));
     assert_eq!((st, body == bytes), (200, true));
     sd.shutdown();
+}
+
+/// The board's ACTIVE segment under `dir`: the `seg-<n>.wal` with the
+/// highest `n`, the one file the open's tail cut can shorten.
+fn active_segment(dir: &Path) -> PathBuf {
+    fs::read_dir(dir)
+        .expect("the board")
+        .map(|e| e.expect("an entry").path())
+        .filter_map(|p| {
+            let name = p.file_name()?.to_str()?.to_string();
+            let n: u64 = name.strip_prefix("seg-")?.strip_suffix(".wal")?.parse().ok()?;
+            Some((n, p))
+        })
+        .max_by_key(|(n, _)| *n)
+        .map(|(_, p)| p)
+        .expect("a segment")
+}
+
+/// `src`'s tree copied into `dst`, which this makes — one moment's copy of
+/// a stopped board, as a backup tool takes it, modes the process umask's.
+fn copy_board(src: &Path, dst: &Path) {
+    fs::create_dir_all(dst).expect("the copy's directory");
+    for entry in fs::read_dir(src).expect("read the board") {
+        let entry = entry.expect("an entry");
+        let to = dst.join(entry.file_name());
+        if entry.file_type().expect("a file type").is_dir() {
+            copy_board(&entry.path(), &to);
+        } else {
+            fs::copy(entry.path(), &to).expect("copy a file");
+        }
+    }
+}
+
+/// A copy made unwritable by a claim, made WRITABLE AGAIN when dropped —
+/// on the claim's return and on its unwind alike, and before the temp
+/// directory holding it is removed — so no red leaves a directory under
+/// the temp root that its cleanup cannot take.
+#[cfg(unix)]
+struct WritableAgain(PathBuf);
+
+#[cfg(unix)]
+impl WritableAgain {
+    /// Every directory under `root` (the root first) `mode_dir`, every file
+    /// `mode_file`.
+    fn set(root: &Path, mode_dir: u32, mode_file: u32) {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(root, fs::Permissions::from_mode(mode_dir)).expect("chmod the copy");
+        for entry in fs::read_dir(root).expect("read the copy") {
+            let path = entry.expect("an entry").path();
+            if path.is_dir() {
+                Self::set(&path, mode_dir, mode_file);
+            } else {
+                fs::set_permissions(&path, fs::Permissions::from_mode(mode_file))
+                    .expect("chmod a file");
+            }
+        }
+    }
+}
+
+#[cfg(unix)]
+impl Drop for WritableAgain {
+    fn drop(&mut self) {
+        Self::set(&self.0, 0o700, 0o600);
+    }
+}
+
+/// `journal.tail_cut` — THE BYTES THE OPEN CUT (`operations.md` §3.5 step
+/// 2; the kernel's `Recovery::tail_cut`): over a board closed cleanly the
+/// inventory reports `0` — the last committed marker ended the journal, the
+/// segment left at its length; over a copy whose active segment carries
+/// bytes past that marker — a copy taken mid-write, here the segment with
+/// garbage appended that spells no frame — the open cuts them and the
+/// inventory reports their count, the segment back at its clean length,
+/// the stray's report `null` beside it (two facts, two members); over a
+/// copy whose last transaction is CLIPPED mid-marker — the crash's shape,
+/// as the hazard suite clips one — the count is the bytes the open took
+/// off the file, more than none; and the open after the cut reports `0`
+/// again. A COUNT and never `null`: every journaled open runs the cut.
+#[test]
+fn the_inventory_counts_the_bytes_the_open_cut_off_a_torn_tail_and_zero_after_a_clean_close() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let bytes = seeded_bytes(1_000, 5);
+    {
+        let sd = spawn(dir.path());
+        let port = sd.port();
+        let owner = open_session(port, CLAIMANT_PRINCIPAL);
+        put_whole(port, &owner, &bytes);
+        assert_eq!(insert_cell(port, &owner, &owner_draft(port, &owner), &bytes, 1_000), "ok");
+        sd.shutdown();
+    }
+    let segment = active_segment(dir.path());
+    let len_of = |segment: &Path| fs::metadata(segment).expect("the segment").len();
+    let clean_len = len_of(&segment);
+
+    // A CLEAN CLOSE: nothing above the last marker, nothing cut, the count 0.
+    let v = tools::inventory(dir.path(), HoleCheck::LengthOnly).expect("the inventory");
+    println!("the journal object after a clean close ({clean_len} bytes): {}", v["journal"]);
+    assert_eq!(
+        v["journal"]["tail_cut"].as_u64(),
+        Some(0),
+        "FINDING (§3.5 step 2): a clean close: {v}"
+    );
+    assert_eq!(len_of(&segment), clean_len, "nothing cut off a clean close");
+
+    // GARBAGE PAST THE LAST MARKER — a copy taken mid-write: bytes that
+    // spell no frame, no sync word among them, so the scan reads one run to
+    // the end of the file above the committed head: the tail, cut whole.
+    const GARBAGE: u64 = 777;
+    let mut f = fs::OpenOptions::new().append(true).open(&segment).expect("open the segment");
+    f.write_all(&vec![0xA5u8; GARBAGE as usize]).expect("append the garbage");
+    drop(f);
+    assert_eq!(len_of(&segment), clean_len + GARBAGE);
+    let v = tools::inventory(dir.path(), HoleCheck::LengthOnly).expect("the inventory");
+    println!(
+        "the journal object under {GARBAGE} bytes of garbage past the last marker: {}",
+        v["journal"]
+    );
+    assert_eq!(
+        v["journal"]["tail_cut"].as_u64(),
+        Some(GARBAGE),
+        "FINDING (§3.5 step 2): the cut's count is the bytes past the last marker: {v}"
+    );
+    assert_eq!(len_of(&segment), clean_len, "the open cut the segment back to its last marker");
+    assert!(v["journal"]["stray_checkpoint_removed"].is_null(), "no stray stood: {v}");
+
+    // A CLIPPED LAST TRANSACTION — the crash's shape: the final commit
+    // marker four bytes short, so the whole last transaction is un-acked
+    // and the cut runs from the marker before it.
+    let f = fs::OpenOptions::new().write(true).open(&segment).expect("open the segment");
+    f.set_len(clean_len - 4).expect("clip the final marker");
+    drop(f);
+    let v = tools::inventory(dir.path(), HoleCheck::LengthOnly).expect("the inventory");
+    let after = len_of(&segment);
+    println!(
+        "the journal object under a clipped last transaction ({} bytes torn to {after}): {}",
+        clean_len - 4,
+        v["journal"]
+    );
+    let cut =
+        v["journal"]["tail_cut"].as_u64().unwrap_or_else(|| panic!("a count, never null: {v}"));
+    assert_eq!(
+        cut,
+        clean_len - 4 - after,
+        "the count is the bytes the open took off the file: {v}"
+    );
+    assert!(
+        cut > 0,
+        "a clipped transaction is cut whole: {cut} bytes, {after} left of {clean_len}"
+    );
+
+    // AND THE OPEN AFTER THE CUT: a clean close's answer.
+    let v = tools::inventory(dir.path(), HoleCheck::LengthOnly).expect("the inventory");
+    assert_eq!(v["journal"]["tail_cut"].as_u64(), Some(0), "{v}");
+    assert_eq!(len_of(&segment), after);
+}
+
+/// THE READ-ONLY COPY (`operations.md` §3.5 step 2, RULED): the inventory's
+/// open writes the kernel's lock and may cut a torn tail, so a copy the open
+/// cannot write is refused BY NAME — `the copy at {dir} is read-only: the
+/// inventory's open writes the kernel's lock and may cut a torn tail; run
+/// it over a writable copy` — and never as "the journal could not be
+/// opened": a copy made without its lock file in a directory without its
+/// write bit (the lock's creation refused), and a copy with every write bit
+/// removed, as `chmod -R a-w` leaves one (the lock's open refused); the
+/// binary's subcommand exits 1 with that one line on stderr, as every tool
+/// refusal exits. What this machine cannot produce — a read-only mount's
+/// `EROFS` — takes the same arm by kind. Every mode is restored before the
+/// claim returns, pass or fail, and before the temp directory is removed.
+#[cfg(unix)]
+#[test]
+fn the_inventory_refuses_a_copy_it_cannot_write_by_name() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().expect("tempdir");
+    let board = dir.path().join("board");
+    {
+        let sd = spawn(&board);
+        sd.shutdown();
+    }
+    let ruled = |copy: &Path| {
+        format!(
+            "the copy at {} is read-only: the inventory's open writes the kernel's lock and may \
+             cut a torn tail; run it over a writable copy",
+            copy.display()
+        )
+    };
+    let refused = |copy: &Path| {
+        let err = tools::inventory(copy, HoleCheck::LengthOnly).expect_err("refused");
+        assert!(
+            matches!(&err, ToolError::ReadOnlyCopy(d) if d == copy),
+            "the read-only arm: {err}"
+        );
+        assert_eq!(err.to_string(), ruled(copy), "FINDING (§3.5 step 2): the ruled words");
+    };
+
+    // (1) THE LOCK's CREATION REFUSED: a copy taken without `kernel.lock`,
+    // its directory without the write bit.
+    let without_lock = dir.path().join("copy-without-lock");
+    copy_board(&board, &without_lock);
+    fs::remove_file(without_lock.join("kernel.lock")).expect("the copy's lock file");
+    let _writable_again = WritableAgain(without_lock.clone());
+    fs::set_permissions(&without_lock, fs::Permissions::from_mode(0o500))
+        .expect("chmod a-w the directory");
+    refused(&without_lock);
+    assert!(!without_lock.join("kernel.lock").exists(), "nothing written to the copy");
+
+    // (2) EVERY WRITE BIT REMOVED — `chmod -R a-w`: the lock stands and its
+    // open for writing is refused.
+    let read_only = dir.path().join("copy-read-only");
+    copy_board(&board, &read_only);
+    let _writable_again = WritableAgain(read_only.clone());
+    WritableAgain::set(&read_only, 0o500, 0o400);
+    refused(&read_only);
+
+    // (3) THE BINARY over the same copy: exit 1, the one line on stderr, as
+    // every tool refusal exits.
+    let out = Command::new(env!("CARGO_BIN_EXE_skepd"))
+        .args(["inventory", "--data-dir"])
+        .arg(&read_only)
+        .output()
+        .expect("run the inventory");
+    assert_eq!(out.status.code(), Some(1), "{}", String::from_utf8_lossy(&out.stderr));
+    assert!(out.stdout.is_empty(), "no object: {}", String::from_utf8_lossy(&out.stdout));
+    assert_eq!(
+        String::from_utf8_lossy(&out.stderr),
+        format!("skepd inventory: {}\n", ruled(&read_only)),
+        "the one line, the ruled words"
+    );
+
+    // A WRITABLE COPY of the same board answers, so the refusal was the
+    // mode's and nothing else's.
+    let writable = dir.path().join("copy-writable");
+    copy_board(&board, &writable);
+    let v = tools::inventory(&writable, HoleCheck::LengthOnly).expect("a writable copy answers");
+    assert_eq!(v["journal"]["tail_cut"].as_u64(), Some(0), "{v}");
 }
 
 /// THE TWO SUBCOMMANDS of the one binary (mt-1): `skepd inventory

@@ -1788,7 +1788,13 @@ to stream — re-resolving the caller between chunks and cutting the stream
 by a reset where the entitlement lapsed. The cell index is entered
 by the write path at every commit that mints a cell and read by the
 media resource; the pruner's pass runs from the routes under the session
-layer's lock, on the transport's cadence. THE TOOLS (`tools.rs`, beside
+layer's lock, on the transport's cadence. THE OPEN (`server.rs`,
+`Daemon::open_configured` and the two doors above it) says its report on
+the operator stream before anything is served, and its first line is the
+version line — the build's version and the three format stamps this build
+reads, the kernel's journal and checkpoint stamps and the engine's World
+stamp, each a public constant of its crate — ahead of the directory's
+line and the recovery's landing. THE TOOLS (`tools.rs`, beside
 the routes) run no server at all: the inventory opens the journal through
 the engine's open, walks the world into a fresh cell index through the
 media resource's walk and reads the store's inspection; the pull reads the
@@ -1884,7 +1890,11 @@ the store's install — nothing above their own layer.
    holes, each account's base and pending bytes, the bytes whose key names
    no account, the venue total under the gate's own pending rule, the
    standing and expired uploads, the halt marks, a foreign designation
-   directory; recording no read, writing nothing under `blobs/`) and the
+   directory, and of the journal what the open did to the copy — the
+   stray checkpoint removed and the torn tail cut, each in bytes;
+   recording no read, writing nothing under `blobs/`; a copy the open
+   cannot write refused by name, since the open writes the lock and may
+   cut a tail) and the
    pull (a file a committed cell names restored by the store's install,
    no lease and no record; beside a serving daemon held to the inventory's
    hash), the two subcommands `main.rs` parses as a leading verb.

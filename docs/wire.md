@@ -3180,7 +3180,11 @@ stopped board, a backup, one moment's copy — opens the journal through
 the engine's ordinary open (a directory a daemon serves is refused at the
 kernel's exclusion lock; a torn tail is cut and a stray `checkpoint.tmp`
 removed, as every open cuts and removes them, and nothing else of the
-daemon's is written: no checkpoint, no commit, no head, no feed sidecar),
+daemon's is written: no checkpoint, no commit, no head, no feed sidecar —
+so the copy must be writable, and one the open cannot write, a read-only
+mount or a directory or file without its write bit, is refused by name:
+`the copy at <dir> is read-only: the inventory's open writes the kernel's
+lock and may cut a torn tail; run it over a writable copy`),
 rebuilds the cell index in memory from the replayed world as the daemon's
 open does, reads the blob store's four stores AS THEY STAND — the logs'
 torn tails cut in memory alone, nothing reconciled, compacted, swept,
@@ -3202,8 +3206,11 @@ written against; `standing_uploads` and `expired_uploads` by count;
 `halts`, the halt marks, each with `at`, `kind` and `fault`;
 `foreign_designations`; `orphan_partials` and `asides`; `references`,
 `cells` and `values_walked`; `journal`, the `log_position`, the
-`start_point`, the `skipped_checkpoints` and `stray_checkpoint_removed`
-(the bytes of a half-written checkpoint the open removed, or `null`); and
+`start_point`, the `skipped_checkpoints`, `stray_checkpoint_removed`
+(the bytes of a half-written checkpoint the open removed, or `null`) and
+`tail_cut` (the bytes of a torn tail the open cut off the last segment —
+a count, `0` where the last committed marker ended the journal, since
+every open runs the cut); and
 `rehashed`. It writes nothing under `blobs/` and RECORDS NO READ
 anywhere (D9).
 `skepd pull --data-dir <dir> [--hash

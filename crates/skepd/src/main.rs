@@ -307,7 +307,9 @@ port, no session — and write no log line of the daemon's:
                      any foreign designation directory. Recording no read.
                      The journal is opened as the daemon opens it: a
                      directory a daemon serves is refused at the kernel's
-                     lock; a torn tail is cut as every open cuts it
+                     lock; a torn tail is cut as every open cuts it and
+                     reported as journal.tail_cut; a copy the open cannot
+                     write is refused by name — run it over a writable copy
   skepd pull --data-dir <DIR> [--hash <HEX>] <FILE>
                      restore <FILE> at blobs/blake3/<its hash> by the PUT's
                      own install order — REPLACE where a file stands — with

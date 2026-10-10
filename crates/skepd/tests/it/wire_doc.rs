@@ -1147,6 +1147,185 @@ fn doc_states_the_write_permit_pool_and_its_token() {
     );
 }
 
+/// THE LARGEST SINGLE ANSWER, THE THREE DEADLINES AND THE HEAD CAP
+/// (`operations.md` §2.4 rows 1, 2 and 12; the ops lanes' W3 and W4):
+/// §Transport states, per route, the largest single answer a reader must
+/// accept as the code bounds it today — the blob fetch at the per-file cap,
+/// a feed page at the page byte budget, a frame answer in items, spans and
+/// pairs and in bytes by no constant, the dump the world, the rest one
+/// object — and never the kernel's per-transaction budget restated; the
+/// transport's three deadlines, 30 s each, with what each bounds; and the
+/// request head's cap with its refusal. The figures the test reaches are
+/// read THROUGH the constants — the per-file cap, the delivery, span and
+/// pair budgets — so the sentence moves with them; the page budget
+/// (`limits.rs`'s `MAX_CHANGES_PAGE_BYTES`), the three deadlines
+/// (`http.rs`'s `REQUEST_READ_TIMEOUT`, `WRITE_TIMEOUT` and
+/// `TRANSFER_DEADLINE`) and the head cap (`http.rs`'s `MAX_REQUEST_HEAD`,
+/// whose refusal `read_request` spells) are the daemon's private
+/// constants, pinned as the literals their cards spell — the page budget
+/// cross-checked against the `budget` §The change feed's refusal carries.
+#[test]
+fn doc_states_the_largest_single_answer_the_three_deadlines_and_the_head_cap() {
+    let transport = prose("\n### Transport", &["\n### Identity"]);
+    for fact in [
+        "THE LARGEST SINGLE ANSWER a reader must accept is the route's".to_string(),
+        "no one figure bounds every route".to_string(),
+        format!(
+            "`GET /blob?i=` streams one file up to the per-file cap, **{} MiB**",
+            skep_media::limits::MAX_BLOB_BYTES >> 20
+        ),
+        "its `Content-Length` the file's size and a RESET the one end short of it".to_string(),
+        // 256 rows × 8 KiB — `MAX_CHANGES_PAGE_BYTES`, crate-private: the literal.
+        "a `GET /changes` page carries at most **2 MiB** of marshaled entries".to_string(),
+        "a page past it refused whole with `400 malformed_changes` carrying `budget` and `fits`"
+            .to_string(),
+        "bounded in ITEMS where it is bounded at all and in bytes by no constant of the daemon's"
+            .to_string(),
+        format!("a delivery at `MAX_DELIVERY_ITEMS` = {} items", skep_retrieval::MAX_DELIVERY_ITEMS),
+        format!(
+            "an endset or projection answer at `MAX_ANSWER_SPANS` = {} spans",
+            skep_discovery::MAX_ANSWER_SPANS
+        ),
+        format!("a compare report at `MAX_COMPARE_PAIRS` = {} pairs", skep_retrieval::MAX_COMPARE_PAIRS),
+        "each item or span as large as the value or the addresses it carries".to_string(),
+        "a list answer — the links or documents found, the claims, the grant rows, the orphan preview — as long as the world makes it".to_string(),
+        "`GET /dump` (`observe` builds) is the whole world at the reader's class".to_string(),
+        "every other route answers one JSON object of a few members or nothing (`204`)".to_string(),
+        "the deposit read's listing the requester's own deposits and standing uploads".to_string(),
+    ] {
+        assert!(transport.contains(&fact), "§Transport says {fact:?}");
+    }
+    assert!(
+        !transport.contains("MAX_TXN_BYTES") && !transport.contains("per-transaction"),
+        "the sentence bounds the answer, never the kernel's transaction budget restated"
+    );
+    let feed = prose("\n## The change feed", &["\n## The other endpoints"]);
+    assert!(
+        feed.contains(&format!("\"budget\": {}", 2 * 1024 * 1024)),
+        "the 2 MiB §Transport spells is the budget §The change feed's refusal carries"
+    );
+    // THE THREE DEADLINES (§2.4 row 1): `Duration::from_secs(30)` each in
+    // `http.rs`, `pub(super)` — the literal, with what each bounds in the
+    // cards' own terms.
+    for fact in [
+        "Every other exchange runs under the transport's three deadlines, 30 s each",
+        "the socket's read deadline and write deadline, per call and renewed by any byte, bound SILENCE",
+        "a request whose bytes stall that long is refused `400 malformed_http`",
+        "an answer whose reader stops draining is dropped",
+        "the transfer deadline, checked between socket calls, bounds SLOWNESS",
+        "the request in (head and body) and the answer out each have 30 s of their own",
+        "a request not delivered within its deadline answered `400 malformed_http` under the reply's own deadline",
+        "an answer not taken within its dropped",
+        "`GET /events`, once open, is written under the write deadline per event and no transfer deadline",
+        "the two blob routes' streamed bodies — the upload's in, the fetch's out — run under the idle and transfer bounds above instead",
+    ] {
+        assert!(transport.contains(fact), "§Transport says {fact:?}");
+    }
+    // THE HEAD CAP (§2.4 row 2): `MAX_REQUEST_HEAD` = `64 * 1024` in
+    // `http.rs`, private — the literal, and the detail `read_request`
+    // formats from it.
+    for fact in [
+        "The request HEAD — the request line and the headers — is capped at **64 KiB**".to_string(),
+        format!(
+            "a longer one is refused `400 malformed_http` with the detail `request head exceeds the {}-byte cap`",
+            64 * 1024
+        ),
+        "before the body is read; frames ride in the body, under the caps above".to_string(),
+    ] {
+        assert!(transport.contains(&fact), "§Transport says {fact:?}");
+    }
+}
+
+/// THE RECONSTRUCTION POOL's WIDTH BESIDE THE CLASS-SCAN POOL's, AND THE
+/// ROOT ROUTE AS THE GUEST READER (`operations.md` §2.4 row 8; the ops
+/// lanes' W4; the sweep's row (e)): §Reading history spells the pool's
+/// width as §Link discovery reads spells the class-scan pool's —
+/// **`MAX_CONCURRENT_RECONSTRUCTIONS` = 2** — where `history_busy`'s
+/// condition is explained, the class-scan paragraph points at it from
+/// "DISJOINT from the reconstruction pool", and the endpoint table's
+/// `GET /` row says of the route what §The other endpoints says: the
+/// embedded GUEST READER, one self-contained HTML file, `client` builds
+/// only — no longer "the embedded authoring client". The width is
+/// `history.rs`'s crate-private constant, pinned as its literal and held
+/// by arithmetic the test CAN reach: `MIN_WORKERS` is one more than the
+/// five pools' slots together, so the two widths this document spells and
+/// the write pool's figure (§The model), with the two media pools'
+/// constants, must sum to it — a pool whose constant moved without its
+/// sentence fails here.
+#[test]
+fn doc_states_the_reconstruction_pools_width_and_the_root_route_as_the_guest_reader() {
+    let history = prose("\n## Reading history", &["\n## The commit stream"]);
+    for fact in [
+        "Reconstruction is bounded: at most **`MAX_CONCURRENT_RECONSTRUCTIONS` = 2** run concurrently",
+        "the pool's width, a daemon constant this document names as it names the class-scan pool's (§Link discovery reads)",
+        "`503 {\"error\": \"history_busy\"}`",
+    ] {
+        assert!(history.contains(fact), "§Reading history says {fact:?}");
+    }
+    assert!(
+        !history.contains("at most **2** run"),
+        "the bare figure gave way to the constant's spelling"
+    );
+    let scans = prose("\n### Link discovery reads", &["\n### Grants"]);
+    for fact in [
+        "**`MAX_CONCURRENT_CLASS_SCANS` = 2**",
+        "The pool is DISJOINT from the reconstruction pool (§Reading history, whose width `MAX_CONCURRENT_RECONSTRUCTIONS` states beside `history_busy`)",
+    ] {
+        assert!(scans.contains(fact), "§Link discovery reads says {fact:?}");
+    }
+    let model = prose("\n## The model", &["\n### Endpoints"]);
+    let reconstructions = figure_after(&history, "**`MAX_CONCURRENT_RECONSTRUCTIONS` = ");
+    let class_scans = figure_after(&scans, "**`MAX_CONCURRENT_CLASS_SCANS` = ");
+    let writes = figure_after(&model, "`MAX_CONCURRENT_WRITES` (");
+    assert_eq!(
+        reconstructions
+            + class_scans
+            + writes
+            + skep_media::limits::MAX_CONCURRENT_FETCHES
+            + skep_media::limits::MAX_CONCURRENT_UPLOADS
+            + 1,
+        skepd::MIN_WORKERS,
+        "the five pools' widths as the document spells them, plus one, are `MIN_WORKERS`"
+    );
+    let endpoints = prose("\n### Endpoints", &["\n### Transport"]);
+    let row = endpoints
+        .split("| `GET /` |")
+        .nth(1)
+        .and_then(|rest| rest.split(" | |").next())
+        .expect("the endpoint table's root-route row");
+    for fact in [
+        "The embedded GUEST READER, one self-contained HTML file",
+        "presents no token and acts on nothing",
+        "only in `client` builds — the feature is default-off",
+        "§The other endpoints",
+    ] {
+        assert!(row.contains(fact), "the root-route row says {fact:?}: {row}");
+    }
+    assert!(
+        !row.contains("authoring client"),
+        "the row no longer calls the route an authoring client: {row}"
+    );
+    let other = prose("\n## The other endpoints", &["\n## A first board, end to end"]);
+    for fact in [
+        "it is the GUEST READER",
+        "the embedded reader, one self-contained HTML file embedded in the binary at build",
+        "It presents no token on any route it dials",
+        "acts on nothing",
+    ] {
+        assert!(other.contains(fact), "§The other endpoints says {fact:?}");
+    }
+}
+
+/// The natural the prose spells right after `marker` — a figure read out of
+/// the document, as `doc_new_id_bound_is_the_codecs_own` reads the delegate
+/// row's bound.
+fn figure_after(text: &str, marker: &str) -> usize {
+    let at = text.find(marker).unwrap_or_else(|| panic!("wire.md no longer carries {marker:?}"));
+    let rest = &text[at + marker.len()..];
+    let digits: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
+    digits.parse().unwrap_or_else(|_| panic!("no figure follows {marker:?}: {rest:.40}"))
+}
+
 /// THE `durability` FACE AND THE FEED's COMPACTION AT THE CHECKPOINT (P10:
 /// no face names a retry that cannot succeed; jw-R3, jw-R4): §Rejections'
 /// `retry` row says what a retry-class answer at a full volume means — the

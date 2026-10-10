@@ -48,7 +48,7 @@ A write is acknowledged only after it is durable on disk.
 | `POST /blob/upload` | Create a blob upload — the PUT — declaring its length, with or without its first bytes; `GET` on the same path is the deposit read (§Media). |
 | `PATCH /blob/upload/<id>` | Resume an upload from its offset; `GET` its progress; `DELETE` ends it (§Media). |
 | `GET /blob?i=<address>` | THE FETCH — serve a picture's whole file by the I-address of its cell, gated as the read is; `HEAD` for the head alone (§Media). |
-| `GET /`          | The embedded authoring client, one HTML file (only in `client` builds — the feature is default-off). |
+| `GET /`          | The embedded GUEST READER, one self-contained HTML file that presents no token and acts on nothing (only in `client` builds — the feature is default-off; §The other endpoints). |
 | `GET /dump`      | Deterministic world dump; `?at=N` for a committed position (only in `observe` builds). |
 
 There are no other routes; every known path additionally answers `OPTIONS`
@@ -81,7 +81,42 @@ larger declared `Content-Length` is refused with `413 payload_too_large`
 before any body byte is read. A streamed body is bounded in time by an
 idle bound of 30 s renewed by any byte and a transfer bound of 10 minutes;
 a connection cut by either keeps its upload at the bytes it had received
-(§Media).
+(§Media). Every other exchange runs under the transport's three
+deadlines, 30 s each: the socket's read deadline and write deadline, per
+call and renewed by any byte, bound SILENCE — a request whose bytes stall
+that long is refused `400 malformed_http`, an answer whose reader stops
+draining is dropped — and the transfer deadline, checked between socket
+calls, bounds SLOWNESS: the request in (head and body) and the answer out
+each have 30 s of their own, so a peer pacing one byte per interval is
+refused rather than served for as long as it likes, a request not
+delivered within its deadline answered `400 malformed_http` under the
+reply's own deadline and an answer not taken within its dropped.
+(`GET /events`, once open, is written under the write deadline per event
+and no transfer deadline; the two blob routes' streamed bodies — the
+upload's in, the fetch's out — run under the idle and transfer bounds
+above instead.) The request HEAD — the request line and the headers — is
+capped at **64 KiB**: a longer one is refused `400 malformed_http` with
+the detail `request head exceeds the 65536-byte cap`, before the body is
+read; frames ride in the body, under the caps above.
+
+THE LARGEST SINGLE ANSWER a reader must accept is the route's, and no one
+figure bounds every route: `GET /blob?i=` streams one file up to the
+per-file cap, **64 MiB**, its `Content-Length` the file's size and a RESET
+the one end short of it; a `GET /changes` page carries at most **2 MiB**
+of marshaled entries — the page byte budget, a page past it refused whole
+with `400 malformed_changes` carrying `budget` and `fits` (§The change
+feed) — under the page's own envelope of a few dozen bytes; a frame
+answer on `/op` or `/op-at` is bounded in ITEMS where it is bounded at all
+and in bytes by no constant of the daemon's — a delivery at
+`MAX_DELIVERY_ITEMS` = 131072 items (§Content & provenance reads), an
+endset or projection answer at `MAX_ANSWER_SPANS` = 65536 spans and a
+compare report at `MAX_COMPARE_PAIRS` = 65536 pairs (§Rejection codes),
+each item or span as large as the value or the addresses it carries, and
+a list answer — the links or documents found, the claims, the grant rows,
+the orphan preview — as long as the world makes it; `GET /dump` (`observe`
+builds) is the whole world at the reader's class; and every other route
+answers one JSON object of a few members or nothing (`204`), the deposit
+read's listing the requester's own deposits and standing uploads (§Media).
 
 ### Identity — modes, principals, credentials
 
@@ -3865,7 +3900,8 @@ be reissued at once, and an admitted scan's answer is byte-for-byte what
 the same frame answers unbounded — the bound admits or refuses a request
 and never alters an answer, and the stores are not told a query is
 bounded. The pool is DISJOINT from the reconstruction pool (§Reading
-history): a scan spends no reconstruction permit and a reconstruction
+history, whose width `MAX_CONCURRENT_RECONSTRUCTIONS` states beside
+`history_busy`): a scan spends no reconstruction permit and a reconstruction
 spends no scan permit, so history panes and mirror bootstraps are never
 starved by directory scans, nor the reverse. A query constraining any
 second slot is not a class scan and takes no permit — the narrowest-slot
@@ -4102,7 +4138,10 @@ is byte-identical to the same frame on `/op`.
 folding the journal forward from the nearest on-disk checkpoint at or
 below it — per request, uncached. This is an observation surface, not a
 serving path: fine for history panes and diff tooling, wrong for a hot
-loop. Reconstruction is bounded: at most **2** run concurrently, and a
+loop. Reconstruction is bounded: at most
+**`MAX_CONCURRENT_RECONSTRUCTIONS` = 2** run concurrently — the pool's
+width, a daemon constant this document names as it names the class-scan
+pool's (§Link discovery reads) — and a
 call that finds every slot taken is refused at once with
 `503 {"error": "history_busy"}` — a retry-class refusal, never a queue —
 so historical reads cannot pin the whole worker pool. Live reads (`/op`,

@@ -4,6 +4,7 @@
 
 mod auth_wire;
 mod authz;
+mod bind;
 mod blob_fetch;
 mod blob_routes;
 mod cascade;

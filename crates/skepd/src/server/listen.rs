@@ -1,7 +1,7 @@
 //! The socket server (`Skepd`, `serve`): the worker budget, the accept loop, the event streams.
 
 use std::io::{self, Write};
-use std::net::{TcpListener, TcpStream};
+use std::net::{Ipv4Addr, TcpListener, TcpStream};
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -162,8 +162,8 @@ const ACCEPT_RETRY_PAUSE: Duration = Duration::from_millis(10);
 /// bounds how long the stop waits on a thread parked here.
 const INDEX_READINESS_POLL: Duration = Duration::from_millis(250);
 
-/// The listener [`bind`] bound, carrying the port it bound — what the open
-/// runs with and [`serve_bound`] serves over. Bound BEFORE the open, so a
+/// The listener [`bind`] bound, carrying the address and the port it bound
+/// — what the open runs with and [`serve_bound`] serves over. Bound BEFORE the open, so a
 /// held port is refused in milliseconds, before the kernel's lock is taken
 /// and before anything is written under the data directory; held THROUGH
 /// it, so no other process takes the port between the bind and the serve —
@@ -176,10 +176,18 @@ const INDEX_READINESS_POLL: Duration = Duration::from_millis(250);
 #[derive(Debug)]
 pub struct Listener {
     listener: TcpListener,
+    addr: Ipv4Addr,
     port: u16,
 }
 
 impl Listener {
+    /// The bound address, read back off the socket — what the binary's
+    /// serving line names, so the line says what was bound and never what
+    /// was asked for.
+    pub fn addr(&self) -> Ipv4Addr {
+        self.addr
+    }
+
     /// The bound port (the number to serve on under `port = 0`, and the one
     /// [`serve_bound`] binds the auth surface to).
     pub fn port(&self) -> u16 {
@@ -187,21 +195,68 @@ impl Listener {
     }
 }
 
-/// Bind `127.0.0.1:port` (`0` = ephemeral) and answer the listener with
-/// the port it bound — the FIRST act of a start, before [`Daemon::open_configured`]:
-/// a port another process holds is a fault decidable before any byte of the
-/// journal is read, so it is refused here, at once, with the open's whole
-/// cost unpaid and no `kernel.lock` taken. Nothing accepts on the listener
-/// until [`serve_bound`] spawns the workers.
+/// Where [`bind`] binds: an address and a port, with two spellings. A bare
+/// port — `bind(port)`, the loopback door `127.0.0.1:port` every suite and
+/// the one-call [`serve`] take — or an `(address, port)` pair,
+/// `bind((addr, port))`, the binary's door under `--bind`. One function
+/// with two spellings rather than two functions, so every caller of the
+/// port form keeps its line and the address-taking form is the same
+/// `bind`, with the same refusals.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ListenAt {
+    addr: Ipv4Addr,
+    port: u16,
+}
+
+impl From<u16> for ListenAt {
+    /// The loopback door at `port`.
+    fn from(port: u16) -> ListenAt {
+        ListenAt { addr: Ipv4Addr::LOCALHOST, port }
+    }
+}
+
+impl From<(Ipv4Addr, u16)> for ListenAt {
+    /// `addr:port` — the binary's `--bind` and `--port`.
+    fn from((addr, port): (Ipv4Addr, u16)) -> ListenAt {
+        ListenAt { addr, port }
+    }
+}
+
+/// Bind `at` — a port, the loopback door `127.0.0.1:port`, or an
+/// `(address, port)` pair; `0` = ephemeral — and answer the listener with
+/// the address and the port it bound — the FIRST act of a start, before
+/// [`Daemon::open_configured`]: a port another process holds is a fault
+/// decidable before any byte of the journal is read, so it is refused here,
+/// at once, with the open's whole cost unpaid and no `kernel.lock` taken.
+/// Nothing accepts on the listener until [`serve_bound`] spawns the workers.
+///
+/// The address is the binary's `--bind`, `127.0.0.1` by default — the
+/// loopback door a notebook, a developer's machine and a self-run board
+/// keep — and the container's address (`0.0.0.0`) in the hosted image,
+/// where the container's network is the boundary. An IPv4 address and
+/// nothing wider: a dual-stack `::` bind would hand the accept path
+/// IPv4-mapped peers (`::ffff:127.0.0.1`), which the peer rule classes
+/// Remote, so every loopback client would lose the bare bind. Widening the
+/// bind widens nothing of the trust model: the peer's loopback-ness is read
+/// off the socket at accept ([`Peer::of`]), whatever address was bound.
 ///
 /// Failure is the socket's or the OS's: binding the address, or reading
-/// back the port it bound — both `io::Error`, which is what lets a caller
-/// dispatch on `ErrorKind` — `AddrInUse` to try the next port,
-/// `PermissionDenied` for a privileged one — without a downcast.
-pub fn bind(port: u16) -> io::Result<Listener> {
-    let listener = TcpListener::bind(("127.0.0.1", port))?;
-    let port = listener.local_addr()?.port();
-    Ok(Listener { listener, port })
+/// back the address and port it bound — both `io::Error`, which is what
+/// lets a caller dispatch on `ErrorKind` — `AddrInUse` to try the next
+/// port, `PermissionDenied` for a privileged one — without a downcast.
+pub fn bind(at: impl Into<ListenAt>) -> io::Result<Listener> {
+    let ListenAt { addr, port } = at.into();
+    let listener = TcpListener::bind((addr, port))?;
+    let bound = listener.local_addr()?;
+    let addr = match bound.ip() {
+        std::net::IpAddr::V4(v4) => v4,
+        // Unreachable for a socket bound by the tuple above, and said so
+        // rather than unwrapped: an IPv4 bind answers an IPv4 address.
+        std::net::IpAddr::V6(_) => {
+            return Err(io::Error::other("an IPv4 bind answered an IPv6 address"));
+        }
+    };
+    Ok(Listener { listener, addr, port: bound.port() })
 }
 
 /// [`bind`] then [`serve_bound`], in sequence — the one-call door for a
@@ -212,7 +267,10 @@ pub fn bind(port: u16) -> io::Result<Listener> {
 /// this door and of `serve_bound` alike.
 ///
 /// Bind `127.0.0.1:port` (`0` = ephemeral) and serve with `workers`
-/// threads. Concurrency policy in full: each worker blocks in `accept`,
+/// threads. The loopback address is the one this one-call door binds; a
+/// caller wanting another, as the binary's `--bind` does, takes
+/// [`bind`]`((addr, port))` and [`serve_bound`] apart. Concurrency policy
+/// in full: each worker blocks in `accept`,
 /// serves the one request on that connection, closes it — one request per
 /// connection, `Connection: close` on every response
 /// (`OperationSurface::execute` is `Sync` and M2's single applier
@@ -293,7 +351,10 @@ pub fn serve(daemon: Daemon, port: u16, workers: usize) -> io::Result<Skepd> {
 pub fn serve_bound(daemon: Daemon, listener: Listener, workers: usize) -> io::Result<Skepd> {
     assert!(workers >= 1, "serve requires at least one worker thread (workers = 0)");
     let daemon = Arc::new(daemon);
-    let Listener { listener, port } = listener;
+    // The address is the serving line's, said by the binary off the
+    // listener before this call; the auth surface derives its sets from the
+    // PORT alone, and the bind enters no set.
+    let Listener { listener, port, .. } = listener;
     let listener = Arc::new(listener);
     // The auth surface derives its origin sets from the BOUND port, and the
     // startup warnings are logged here — the one thing the glue does with
@@ -687,9 +748,11 @@ fn serve_connection(daemon: &Arc<Daemon>, subscribers: &Subscribers, mut stream:
     // The peer's loopback-ness, off the socket itself (AUTH-4.14) — the class
     // is [`Peer::of`]'s, and what this site decides is the unknowable case: a
     // peer whose address cannot be read is REMOTE, never the bare bind's
-    // privilege by default. This daemon binds 127.0.0.1, so every peer is
-    // loopback today; deriving it rather than asserting it is what a
-    // bind-override needs no change for.
+    // privilege by default. The daemon binds `--bind` (127.0.0.1 by default,
+    // so a notebook's every peer is loopback; the container's address in the
+    // hosted image, so every proxied peer is Remote); deriving the class
+    // rather than asserting it is what the bind flag needed no change here
+    // for.
     let peer = stream.peer_addr().map_or(Peer::Remote, |a| Peer::of(a.ip()));
     // One deadline per transfer: the socket's own timeouts bound silence and
     // are renewed by any byte, so this is what bounds a peer that is slow

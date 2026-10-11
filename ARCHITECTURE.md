@@ -13,7 +13,8 @@ content; links connect spans of it. Every change is a transaction appended
 to a journal, and the whole state can be rebuilt from the journal.
 
 A client talks to one process, the daemon `skepd`, over HTTP and JSON on
-the loopback. A write arrives as an operation; the daemon checks who is
+the loopback by default (`--bind` names the address; the hosted image
+binds its container's). A write arrives as an operation; the daemon checks who is
 asking and whether they may do it, applies it to the world through one
 serialized write path, records it, and announces it. A read is answered
 against the current world, or against the world as it stood at an earlier
@@ -1929,7 +1930,10 @@ by M10's read by identity and checked against the cell before the first
 byte. And it carries the operator's two tools over a board directory, the
 inventory and the pull, run with no server. Everything else it delegates
 to the stores through the engine, and the media bytes to `skep-media` and,
-through its gate, `skep-blobs`.
+through its gate, `skep-blobs`. Its listener binds the address `--bind`
+(`SKEPD_BIND`) names — `127.0.0.1` by default, the container's address in
+the hosted image — and the peer rule reads the socket, never the bind, so
+the flag widens who can connect and nothing of who may act.
 
 Its modules form six layers. A module names only modules in its own layer
 or below it, never above; `crates/skepd/tests/it/tidy.rs` checks it. A

@@ -336,9 +336,11 @@ apart.
    The other settings follow, these two among them, each with its
    environment variable where it has one; a flag beats its variable.
 
-   - `--port <PORT>` (`SKEPD_PORT`): the TCP port on 127.0.0.1, the
-     only address the daemon binds. Default 8642; `0` picks a free
-     port.
+   - `--port <PORT>` (`SKEPD_PORT`): the TCP port, on the address
+     `--bind <ADDR>` (`SKEPD_BIND`) names — 127.0.0.1 by default, the
+     only safe value outside a container whose network is the
+     boundary (the hosted image: `README.md`, Running the hosted
+     image). Default 8642; `0` picks a free port.
    - `--workers <N>` (`SKEPD_WORKERS`): request threads. Default
      16, minimum 15.
    - `--local-trust` or `--no-local-trust`
@@ -380,12 +382,13 @@ apart.
    class word; they are quoted whole, from `skepd:`. In the order
    the daemon writes them:
 
-   1. The port is bound first. A port another process holds
-      refuses the start at once, exit 1, before anything in the
-      data directory is read or written:
+   1. The port is bound first, at the address `--bind` names,
+      127.0.0.1 unless another is given. A port another process
+      holds refuses the start at once, exit 1, before anything in
+      the data directory is read or written:
 
       ```
-      skepd: bind 127.0.0.1:{port}: {error}
+      skepd: bind {address}:{port}: {error}
       ```
 
    2. A data directory that other users can read is refused,
@@ -563,10 +566,11 @@ apart.
    `blocked-prefix list:`.
 
 4. **Read the one line on stdout**, written once the report is
-   out. It is the one line that names the port under `--port 0`:
+   out. It is the one line that names the port under `--port 0`,
+   and the address bound:
 
    ```
-   skepd: serving http://127.0.0.1:{port}/ data-dir {path} log-position {position} workers {n}
+   skepd: serving http://{address}:{port}/ data-dir {path} log-position {position} workers {n}
    ```
 
 5. **Expect a wait, not a refusal, while it opens.** The port is
@@ -914,7 +918,7 @@ elsewhere, change both its paths:
 
 ```ini
 [Unit]
-Description=skepd — this machine's skep notebook (loopback only)
+Description=skepd — this machine's skep notebook (loopback, the bind's default)
 After=network.target
 
 [Service]

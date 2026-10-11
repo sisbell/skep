@@ -75,8 +75,10 @@
 //! * [`serve`]/[`Skepd`] — the synchronous accept loop: worker threads over
 //!   one owned `TcpListener` speaking a written-out HTTP/1.1 subset (one
 //!   request per connection, and [`UNIVERSAL_HEADERS`] on every response),
-//!   bound to 127.0.0.1 (the bare bind is loopback-privileged, and that
-//!   privilege does not survive a network). Event-stream subscribers run
+//!   bound to the binary's `--bind`, 127.0.0.1 by default (the bare bind is
+//!   loopback-privileged — the PEER's loopback-ness, read off the socket
+//!   whatever address was bound — and that privilege does not survive a
+//!   network). Event-stream subscribers run
 //!   on dedicated threads off the op pool, fed by write-path notification
 //!   — no polling anywhere.
 //!

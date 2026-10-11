@@ -97,7 +97,8 @@ Build and run the daemon on loopback against a throwaway board:
 cargo run -p skepd -- --data-dir ./board --origin http://127.0.0.1:8642
 ```
 
-The daemon listens on 127.0.0.1:8642 only. The board is UNCLAIMED until you
+The daemon listens on 127.0.0.1:8642 only — `--bind`'s default, which only
+the hosted image below widens. The board is UNCLAIMED until you
 claim it, and while it is unclaimed anything that can reach the port can take
 it: never forward the port before the claim. Claim it from the `skep` command
 (`cargo run -p skep-cli --bin skep -- keygen`, then
@@ -133,6 +134,142 @@ the test fixtures only: a preview key enrolled is enrolled for life.
 
 Throw the board away with `rm -rf ./board`. For a notebook you keep, see
 [RUNBOOK.md](RUNBOOK.md): Start, step 2, and §9, Running it as a service.
+
+## Running the hosted image
+
+This section is for an operator hosting boards for other people: one
+container per board, behind a reverse proxy, a fresh named volume each.
+It is not how a notebook runs — that is the plain binary (RUNBOOK.md,
+Start, and §9) — and not the frontend developer's day-to-day path, which
+is the section above; no end user is ever asked to install Docker.
+
+**Build.** From the repository root, the release image, its debug tag
+and the claim sidecar, three targets of the one `Dockerfile`:
+
+```
+docker build -t skep-hosted --build-arg REVISION=$(git rev-parse HEAD) .
+docker build -t skep-hosted:debug --build-arg REVISION=$(git rev-parse HEAD) \
+    --build-arg RUNTIME="$(sed -n 's/^ARG RUNTIME_DEBUG=//p' Dockerfile)" .
+docker build -t skep-cli --target skep-cli --build-arg REVISION=$(git rev-parse HEAD) .
+```
+
+The daemon is built `--no-default-features`: the image serves no `/dump`
+and no page at `GET /`. The sidecar's `skep` is built without `tls`,
+since it dials loopback and signs nothing. The one file builds for
+`linux/arm64` (an Apple-silicon Mac) and `linux/amd64` (the server) under
+buildx — `docker buildx build --platform linux/amd64 -t skep-hosted .`
+cross-builds under emulation — and every base image is pinned by digest.
+`scripts/docker-smoke.sh` builds all three and proves the image on the
+machine it runs on; run it after every build.
+
+**Run.** Every setting, named once. Baked into the image:
+`SKEPD_DATA_DIR=/var/lib/skepd/board` (one level below the volume's
+root), `SKEPD_LOCAL_TRUST=false`, `SKEPD_BIND=0.0.0.0` and
+`SKEPD_PORT=8642`; the daemon runs as the numeric user `10001:10001`,
+the binary owned by root. Per board, on the run line: `SKEPD_ORIGIN`, the
+origin the board is DIALED at — `https://<name>` behind the proxy — which
+is the origin a signed session signs and the only one accepted once the
+board is claimed; `SKEPD_NODE_PREFIX=1.N` where a registry minted one,
+omitted where none did (the start line then says the off-board test is
+off and a hosted board must supply one: expected, until there is a
+registry); `SKEPD_UPLOADS` (on by default); `SKEPD_WORKERS` (at or above
+the floor `skepd --help` prints); and `SKEPD_BLOCKED_PREFIXES`, naming a
+mounted file replaced by rename, when the serving layer issues one. On
+the `docker run` line: `--init` (the daemon handles no signal, so as PID 1
+without an init it would not take SIGTERM), `--read-only` (the volume is
+the only writable path), `--cap-drop ALL`, `--security-opt
+no-new-privileges`, `--ulimit nofile=1024:1024` (the daemon sizes its 64
+event streams against a 256 soft limit), `--restart on-failure`, a log
+driver with rotation (the operator stream never waits: a full pipe costs
+lines, counted on the next, never service), and ONE named volume per
+board, on a filesystem of its own where the floor must be the board's:
+
+```
+docker volume create alice
+docker run -d --init --name alice --restart on-failure \
+    --read-only --cap-drop ALL --security-opt no-new-privileges \
+    --ulimit nofile=1024:1024 --log-opt max-size=10m --log-opt max-file=5 \
+    -v alice:/var/lib/skepd \
+    -e SKEPD_ORIGIN=https://alice.example \
+    skep-hosted
+```
+
+No port is published: the proxy reaches the daemon at the container's
+address on the bridge, port 8642, and nothing else does. No `HEALTHCHECK`
+is baked and the daemon has no probe mode: the proxy's health-conditioned
+route is the probe, as the next paragraph says.
+
+**Claim the board.** Two runs of the same image on the same volume. The
+claim run binds loopback and publishes nothing, so only a process inside
+the container's own network namespace can reach the unclaimed board; the
+sidecar joins that namespace and runs the claim with the person's record,
+made on their own device (`skep keygen --anchors …`, or `--payload` for a
+one-key account that can never recover); then the serving run above, on
+the baked bind:
+
+```
+docker run -d --init --name alice --read-only --cap-drop ALL \
+    --security-opt no-new-privileges --ulimit nofile=1024:1024 \
+    -v alice:/var/lib/skepd \
+    -e SKEPD_BIND=127.0.0.1 -e SKEPD_ORIGIN=https://alice.example \
+    skep-hosted
+docker run --rm --network container:alice -v ./alice.enroll:/payload:ro \
+    skep-cli skep claim --board http://127.0.0.1:8642 --hosted /payload
+docker stop alice && docker rm alice
+# the serving run above, on the same volume
+```
+
+The sidecar prints `claimant 1.0.1`, then `account 1.0.1`, `principal 1`,
+`origin http://127.0.0.1:8642` and the person's two first acts; relay them
+to the person. On a claimed board it prints `claimed by 1.0.1` and exits
+0. From then on `GET /health` answers `auth.claimant` `"1.0.1"` and
+`auth.local_trust` `false`, and the proxy admits the route only while it
+does, on this start and every restart. The proxy's configuration, its
+health-conditioned route and the sign-up flow around the claim are the
+deployment notes' §4 (`_designs/deployment-notes.md`, in the design
+repository), not this file's.
+
+**What the port gives.** Every connection through the proxy, or through a
+published port, arrives from the bridge: the daemon reads the peer off
+the socket and classes it Remote, and no bare session opens through a
+Remote peer, whatever `SKEPD_LOCAL_TRUST` says — the `401
+session_rejected` IS the handshake. What such a peer gets: reads of
+everything public, and, once the board is claimed, signed writes with a
+key enrolled for the person's account — the key that claimed it, or a
+device added from a signed-in one with `skep enroll`, the hop. Local
+trust on would admit nothing more through the proxy; it would admit every
+process inside the container's namespace, which is why the image bakes
+it off.
+
+**The debug tag.** `skep-hosted:debug` is the same binary, user, volume
+and baked environment on the `:debug` runtime, which adds busybox: a
+shell to read the data directory as the daemon sees it (`docker run --rm
+-v alice:/var/lib/skepd --entrypoint /busybox/sh skep-hosted:debug -c
+'ls -la /var/lib/skepd/board'`) and `wget` to read `/health` from inside
+a container's namespace (`docker run --rm --network container:alice
+--entrypoint /busybox/wget skep-hosted:debug -qO-
+http://127.0.0.1:8642/health`). It never runs behind a customer route.
+
+**On a host.** Without the image, run the daemon as a user of its own
+and let it create the data directory: it sets the directory `0700` and
+every file `0600` itself, whatever the umask, and refuses at start a data
+directory other users can read (RUNBOOK.md, Start, step 2, and §9's
+dedicated-user option). The volume is the same shape: the daemon creates
+`board/` one level below the mount and never the mount itself, whose
+root is the runtime's. A bind mount in place of a named volume is made
+`install -d -m 700 -o 10001 -g 10001 <dir>` beforehand; a directory at
+`0755` is refused with the one line that names the `chmod`.
+
+**Rehearsing the hosted shape on this machine.** The same image published
+on the host's loopback — the claim run and the sidecar as above, then the
+serving run with `-p 127.0.0.1:8642:8642 -e
+SKEPD_ORIGIN=http://127.0.0.1:8642` — gives the dev provider started
+`--session signed --dir <the store holding the record's device key>`
+exactly what the server would: the published port is a Remote peer, so
+`--session bare` is refused with the one 401, and signed sessions open
+because the dialed origin is the configured one. It is not the notebook,
+which is the plain binary of the section above; `scripts/docker-smoke.sh`
+runs this rehearsal end to end and prints what each step found.
 
 ---
 

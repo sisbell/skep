@@ -348,6 +348,145 @@ fn the_preview_keys_flag_is_off_unless_given() {
     );
 }
 
+/// THE BIND's DEFAULT IS LOOPBACK (AUTH-4.57 (a); the deployment ruling —
+/// the flag's default is loopback, so a notebook, a developer's machine and
+/// a self-run board run the plain binary): with no flag and no variable the
+/// parsed address is `127.0.0.1`, pinned as the literal loopback constant
+/// and never through `DEFAULT_BIND`, so a default moved to the wildcard
+/// fails here; and the usage names the flag, its variable, the default and
+/// the one sentence that says why it is the default, with `--port`'s
+/// sentence no longer stating the bind as a constant.
+#[test]
+fn the_bind_defaults_to_loopback_and_the_usage_says_so() {
+    let absent = parse_args(argv(&["--data-dir", "/tmp/x"])).expect("valid").expect("a run");
+    assert_eq!(absent.bind, Ipv4Addr::LOCALHOST, "the default is the loopback address");
+    assert_eq!(absent.bind, Ipv4Addr::new(127, 0, 0, 1), "and that address is 127.0.0.1");
+    let text = usage();
+    for named in ["[--bind <ADDR>]", "\n  --bind <ADDR>      ", "SKEPD_BIND"] {
+        assert!(text.contains(named), "the usage names {named:?}: {text}");
+    }
+    // The help wraps its lines: the sentence is read with its whitespace
+    // folded, the default through the constant's rendering.
+    let folded = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    assert!(
+        folded.contains(
+            "--bind <ADDR> the address to listen on (env: SKEPD_BIND; default 127.0.0.1 — the \
+             only safe value outside a container whose network is the boundary)"
+        ),
+        "the --bind sentence, with its default and its reason: {folded}"
+    );
+    assert!(
+        folded.contains("--port <PORT> TCP port on the address --bind names"),
+        "the --port sentence names the bind: {folded}"
+    );
+    assert!(!text.contains("TCP port on 127.0.0.1"), "the bind is no constant of the help: {text}");
+}
+
+/// THE SETTING PARSES AS THE OTHERS DO — THE FLAG: `--bind` reads an IPv4
+/// address as given, the wildcard, the loopback address and a routable one
+/// alike; a value that is not one — a host name, an IPv6 address (a `::`
+/// bind would class every IPv4 loopback client Remote through its mapped
+/// form, a mapping this daemon does not perform), a bracketed one, an
+/// address with a port, an out-of-range octet, the empty string — is
+/// REFUSED with the flag named and the value quoted, in the message every
+/// setting's refusal has, never defaulted; and the flag without its value
+/// is refused.
+#[test]
+fn the_bind_flag_parses_an_ipv4_address_and_refuses_anything_else() {
+    for (given, want) in [
+        ("0.0.0.0", Ipv4Addr::UNSPECIFIED),
+        ("127.0.0.1", Ipv4Addr::LOCALHOST),
+        ("10.0.0.7", Ipv4Addr::new(10, 0, 0, 7)),
+    ] {
+        let a = parse_args(argv(&["--data-dir", "/tmp/x", "--bind", given]))
+            .expect("valid flags")
+            .expect("a run, not usage");
+        assert_eq!(a.bind, want, "--bind {given} is read as given");
+    }
+    let last =
+        parse_args(argv(&["--data-dir", "/tmp/x", "--bind", "0.0.0.0", "--bind", "127.0.0.1"]))
+            .expect("valid flags")
+            .expect("a run, not usage");
+    assert_eq!(last.bind, Ipv4Addr::LOCALHOST, "the last flag wins, as every pair's does");
+    for bad in ["localhost", "::1", "[::]", "0.0.0.0:8642", "256.0.0.1", "0.0.0", ""] {
+        match parse_args(argv(&["--data-dir", "/tmp/x", "--bind", bad])) {
+            Err(refused) => assert_eq!(
+                refused,
+                format!("--bind: '{bad}' is not an IPv4 address"),
+                "the refusal names the flag and quotes the value"
+            ),
+            Ok(_) => panic!("'{bad}' is not an IPv4 address, and was not refused"),
+        }
+    }
+    assert!(
+        parse_args(argv(&["--data-dir", "/tmp/x", "--bind"])).is_err(),
+        "the flag without its value is refused"
+    );
+}
+
+/// THE SETTING PARSES AS THE OTHERS DO — THE VARIABLE: `SKEPD_BIND` seeds the
+/// address the flag overrides — set to the wildcard with no flag it is
+/// read; beside `--bind 127.0.0.1` the flag wins, as every flag does over
+/// its variable — and set to a value that is not an IPv4 address it is
+/// REFUSED with the variable named, with and without a flag beside it,
+/// never read as absent and never defaulted: the one failure `EnvSetting`
+/// exists to prevent. Judged in CHILDREN of this test binary (the hazard
+/// suite's self-exec pattern), because the variable is process-wide and
+/// this binary's other parse claims run beside this one.
+#[test]
+fn the_bind_variable_seeds_the_flag_and_a_bad_one_is_refused_not_defaulted() {
+    const CHILD: &str = "SKEPD_TEST_BIND_CHILD";
+    match std::env::var(CHILD).as_deref() {
+        Ok("wildcard") => {
+            // THE FIRST CHILD: the parent set `SKEPD_BIND=0.0.0.0`.
+            let a = parse_args(argv(&["--data-dir", "/tmp/x"])).expect("valid").expect("a run");
+            assert_eq!(a.bind, Ipv4Addr::UNSPECIFIED, "the variable seeds the address");
+            let a = parse_args(argv(&["--data-dir", "/tmp/x", "--bind", "127.0.0.1"]))
+                .expect("the flag wins over the variable")
+                .expect("a run, not usage");
+            assert_eq!(a.bind, Ipv4Addr::LOCALHOST, "the flag beats the variable");
+            return;
+        }
+        Ok("bad") => {
+            // THE SECOND CHILD: the parent set `SKEPD_BIND=not-an-address`.
+            let refused = "SKEPD_BIND: 'not-an-address' is not an IPv4 address";
+            match parse_args(argv(&["--data-dir", "/tmp/x"])) {
+                Err(e) => assert_eq!(e, refused, "the variable's refusal names it"),
+                Ok(_) => panic!("the variable's bad value was defaulted, not refused"),
+            }
+            match parse_args(argv(&["--data-dir", "/tmp/x", "--bind", "127.0.0.1"])) {
+                Err(e) => assert_eq!(
+                    e, refused,
+                    "a flag beside it rescues nothing: the variable is read first"
+                ),
+                Ok(_) => panic!("the variable's bad value was passed over for the flag"),
+            }
+            return;
+        }
+        _ => {}
+    }
+    let exe = std::env::current_exe().expect("the test binary");
+    for (arm, value) in [("wildcard", "0.0.0.0"), ("bad", "not-an-address")] {
+        let out = std::process::Command::new(&exe)
+            .args([
+                "tests::the_bind_variable_seeds_the_flag_and_a_bad_one_is_refused_not_defaulted",
+                "--exact",
+                "--nocapture",
+                "--test-threads=1",
+            ])
+            .env(CHILD, arm)
+            .env(SKEPD_BIND.var, value)
+            .output()
+            .expect("run the child");
+        assert!(
+            out.status.success(),
+            "the {arm} child's claims failed:\n{}\n{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+}
+
 /// REG-1.69's `--node-prefix 1.N`: an address under the root `1`, read
 /// as given and optional; the root itself, an address under another
 /// first component, and an account address are refused at the parse

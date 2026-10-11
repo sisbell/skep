@@ -1,0 +1,13 @@
+# THE BUILD CONTEXT IS THE SOURCE AND NOTHING ELSE (no secret in any layer:
+# no key, no origin, no token baked). Everything is kept out by the first
+# line, then the source let back in. Among what the first line keeps out:
+# target/ (the build artifacts), .git/, .idea/, fuzz/ (the nightly corpus),
+# conformance/ (the goldens), the documents, and any board*/ or store*/
+# throwaway directory a developer made at the root — a data directory holds
+# a board, a key store a key.
+*
+!Cargo.toml
+!Cargo.lock
+!rust-toolchain.toml
+!crates
+!clients

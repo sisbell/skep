@@ -55,7 +55,8 @@ There are no other routes; every known path additionally answers `OPTIONS`
 — the CORS preflight (§Cross-origin access): the common one names `GET,
 POST, OPTIONS`, the blob upload's family names its own four methods, and the
 blob fetch `/blob` names its own two (`GET, HEAD, OPTIONS`). The daemon
-listens on **127.0.0.1 only**.
+listens on `--bind` (default `127.0.0.1`); a peer's loopback-ness is read
+off the socket, whatever the bind (§Identity).
 
 ### Transport
 
@@ -159,7 +160,9 @@ is deliberately no `mode` field; clients derive it from the pair):
 The signed session is cryptographic identity — a challenge signed by a
 key enrolled for the account the session authenticates against
 (§Sessions). The bare session is **local trust**, a mode rather than the
-whole model; the daemon binds **127.0.0.1 only**.
+whole model; the daemon binds `--bind` (default `127.0.0.1`), and a bare
+session's loopback is the PEER's, read off the socket whatever the bind,
+so a Remote peer's bare bind is refused in every mode.
 
 **Ownership**: attribution gates. A write into a document's
 space — its content arrangement or its link subspace — is accepted only
@@ -4708,6 +4711,15 @@ healthy board, `true` for the rest of the uptime once either halt stands
 (every write then answers `poisoned` at the `halt` disposition, §Rejection
 codes), and `ok` stays `true` throughout, since the daemon is serving.
 The operator stream names each halt's cause and the act.
+
+The hosted image (the repository's `Dockerfile`; `README.md`, Running the
+hosted image) bakes `SKEPD_LOCAL_TRUST=false` (AUTH-4.57 pin (i)) and
+`SKEPD_BIND=0.0.0.0`, runs the daemon as a user of its own over a data
+directory the daemon itself creates `0700`/`0600`, is CLAIMED on a
+loopback-bound first run before the override is set (AUTH-4.57 (a)) with
+the origin the run command's, and is routed to by its proxy only while
+this endpoint answers `auth.claimant != null` and `auth.local_trust ==
+false` (AUTH-4.57 (d)).
 
 **The published head document** — `1.1.0.1.0.2`, the version-chain document
 `H` (PUB-6.65). The board's OWN daemon writes `H` as

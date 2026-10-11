@@ -16,6 +16,7 @@
 
 use std::fmt;
 use std::io::{self, Write};
+use std::net::Ipv4Addr;
 use std::panic::Location;
 use std::path::{Path, PathBuf};
 use std::process::exit;
@@ -38,6 +39,15 @@ use skepd::{
 
 const DEFAULT_PORT: u16 = 8642;
 
+/// THE BIND's DEFAULT — the loopback address (AUTH-4.57 (a); the deployment
+/// ruling: the flag's default is loopback, so a notebook, a developer's
+/// machine and a self-run board run the plain binary with no container
+/// around it). The hosted image alone sets the variable to the container's
+/// address, where the container's network is the boundary; the peer rule
+/// (`Peer::of`, off the socket at accept) is what makes that widening widen
+/// nothing of the trust model.
+const DEFAULT_BIND: Ipv4Addr = Ipv4Addr::LOCALHOST;
+
 /// One environment setting: the variable's name and what its value must be,
 /// paired so the two cannot be handed over in the wrong order — the same
 /// reason [`skepd::HttpRequest`] is one value rather than five arguments. A
@@ -49,6 +59,11 @@ struct EnvSetting {
 }
 
 const SKEPD_PORT: EnvSetting = EnvSetting { var: "SKEPD_PORT", expected: "a port" };
+/// The bind's variable: an IPv4 address and nothing wider — a dual-stack
+/// `::` bind would class every IPv4 loopback client Remote through its
+/// mapped address (`::ffff:127.0.0.1`), a mapping this daemon does not
+/// perform — so the type is `Ipv4Addr` and `::1` is refused at the parse.
+const SKEPD_BIND: EnvSetting = EnvSetting { var: "SKEPD_BIND", expected: "an IPv4 address" };
 const SKEPD_WORKERS: EnvSetting = EnvSetting { var: "SKEPD_WORKERS", expected: "a count" };
 const SKEPD_LOCAL_TRUST: EnvSetting =
     EnvSetting { var: "SKEPD_LOCAL_TRUST", expected: "true or false" };
@@ -215,9 +230,9 @@ const NODE_PREFIX_FORM: &str =
 fn usage() -> String {
     format!(
         "\
-usage: skepd --data-dir <DIR> [--port <PORT>] [--workers <N>]
-             [--local-trust | --no-local-trust] [--allow-preview-keys]
-             [--uploads | --no-uploads]
+usage: skepd --data-dir <DIR> [--bind <ADDR>] [--port <PORT>]
+             [--workers <N>] [--local-trust | --no-local-trust]
+             [--allow-preview-keys] [--uploads | --no-uploads]
              [--origin <ORIGIN>]... [--blocked-prefixes <FILE>]
              [--node-prefix <PREFIX>]
        skepd inventory --data-dir <DIR> [--no-rehash]
@@ -232,9 +247,11 @@ usage: skepd --data-dir <DIR> [--port <PORT>] [--workers <N>]
                      it 0600, set at creation whatever the umask — and a
                      directory other users of this machine can read is
                      refused at start: chmod 700 it and start again
-  --port <PORT>      TCP port on 127.0.0.1 (env: SKEPD_PORT; default \
-{DEFAULT_PORT};
-                     0 picks an ephemeral port)
+  --port <PORT>      TCP port on the address --bind names (env: SKEPD_PORT;
+                     default {DEFAULT_PORT}; 0 picks an ephemeral port)
+  --bind <ADDR>      the address to listen on (env: SKEPD_BIND; default
+                     {DEFAULT_BIND} — the only safe value outside a
+                     container whose network is the boundary)
   --workers <N>      request worker threads (env: SKEPD_WORKERS; default \
 {DEFAULT_WORKERS};
                      minimum {MIN_WORKERS})
@@ -351,6 +368,11 @@ impl Tool {
 
 struct Args {
     data_dir: PathBuf,
+    /// `--bind` / `SKEPD_BIND`: the address the listener binds, the loopback
+    /// address by default ([`DEFAULT_BIND`]) and the container's in the
+    /// hosted image. It enters no origin set and `/health` echoes nothing of
+    /// it: the serving line is its one echo.
+    bind: Ipv4Addr,
     port: u16,
     workers: usize,
     local_trust: bool,
@@ -486,6 +508,7 @@ fn parse_tool(mut it: impl Iterator<Item = String>, tool: Tool) -> Result<Option
 /// usage text.
 fn parse_args(argv: impl Iterator<Item = String>) -> Result<Option<Args>, String> {
     let mut data_dir = std::env::var_os(SKEPD_DATA_DIR).map(PathBuf::from);
+    let mut bind: Option<Ipv4Addr> = from_env(SKEPD_BIND)?;
     let mut port: Option<u16> = from_env(SKEPD_PORT)?;
     let mut workers: Option<usize> = from_env(SKEPD_WORKERS)?;
     // The three settings the open's report names WITH their source: which
@@ -526,6 +549,11 @@ fn parse_args(argv: impl Iterator<Item = String>) -> Result<Option<Args>, String
             "--port" => {
                 let v = it.next().ok_or("--port needs a value")?;
                 port = Some(v.parse().map_err(|_| format!("--port: '{v}' is not a port"))?);
+            }
+            "--bind" => {
+                let v = it.next().ok_or("--bind needs a value")?;
+                bind =
+                    Some(v.parse().map_err(|_| format!("--bind: '{v}' is not an IPv4 address"))?);
             }
             "--workers" => {
                 let v = it.next().ok_or("--workers needs a value")?;
@@ -582,6 +610,9 @@ fn parse_args(argv: impl Iterator<Item = String>) -> Result<Option<Args>, String
     Ok(Some(Args {
         data_dir: data_dir
             .ok_or_else(|| format!("--data-dir (or {SKEPD_DATA_DIR}) is required"))?,
+        // Loopback unless the flag or the variable names another address: a
+        // notebook, a developer's machine and a self-run board never set it.
+        bind: bind.unwrap_or(DEFAULT_BIND),
         port: port.unwrap_or(DEFAULT_PORT),
         workers,
         // Phase A default ON (AUTH-1.45): a hosted image must set the flag
@@ -643,14 +674,19 @@ fn main() {
     // directory — and not after the open's whole cost. The port is held
     // through the open; a connect meanwhile waits in the backlog for the
     // first worker. No line of the stream's has been said yet, so nothing
-    // waits to be drained before this refusal.
-    let listener = match bind(args.port) {
+    // waits to be drained before this refusal. The address is `--bind`'s,
+    // loopback by default; the refusal names the pair it asked for.
+    let listener = match bind((args.bind, args.port)) {
         Ok(l) => l,
         Err(e) => {
-            refuse(format_args!("skepd: bind 127.0.0.1:{}: {e}", args.port));
+            refuse(format_args!("skepd: bind {}:{}: {e}", args.bind, args.port));
             exit(1);
         }
     };
+    // THE BOUND PAIR, read back off the listener and not off the command
+    // line: the serving line below names what was bound — the port under
+    // `--port 0`, and the address — never what was asked for.
+    let (bound_addr, bound_port) = (listener.addr(), listener.port());
     // THE WORKER FAULT's ARM (test seam, `test-hooks` builds alone): the
     // variable names the arm, before any worker exists.
     #[cfg(feature = "test-hooks")]
@@ -732,16 +768,15 @@ fn main() {
         }
     };
     // THE SERVING LINE, on stdout — the one line that names the port under
-    // `--port 0`, outside the stream's grammar — written once the open's
-    // report has reached the stream, so an operator reads the board's
-    // standing before the line that says it serves; the write's result
-    // DISCARDED: a stdout whose reader is gone costs this line and never
-    // the daemon, which serves on.
+    // `--port 0`, and the one echo of the bound address, outside the
+    // stream's grammar — written once the open's report has reached the
+    // stream, so an operator reads the board's standing before the line
+    // that says it serves; the write's result DISCARDED: a stdout whose
+    // reader is gone costs this line and never the daemon, which serves on.
     notice::drain();
     let _ = writeln!(
         io::stdout(),
-        "skepd: serving http://127.0.0.1:{}/ data-dir {} log-position {} workers {}",
-        running.port(),
+        "skepd: serving http://{bound_addr}:{bound_port}/ data-dir {} log-position {} workers {}",
         args.data_dir.display(),
         seq.0,
         args.workers

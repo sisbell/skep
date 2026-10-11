@@ -299,17 +299,42 @@ apart.
      `test-hooks` daemon IN-PROCESS for a throwaway board on a dev
      machine, serving nothing to others.
 
-2. **Run it** with the one setting it requires:
+2. **Run it**, for a notebook you keep, with its origin set and
+   local trust off:
 
    ```
-   skepd --data-dir <DIR>
+   skepd --data-dir <DIR> --origin http://127.0.0.1:8642 --no-local-trust
    ```
 
-   `<DIR>`, or `SKEPD_DATA_DIR`, is the board's directory. One that
-   does not exist is created readable by you alone, the directory
-   mode 700 and each file 600; one that exists is recovered. The
-   other settings follow, each with its environment variable where
-   it has one; a flag beats its variable.
+   `<DIR>`, or `SKEPD_DATA_DIR`, is the board's directory, the one
+   setting the daemon requires. A notebook you keep lives in the
+   platform's data directory: on macOS
+   `~/Library/Application Support/skep/board/`; on Linux
+   `$XDG_DATA_HOME/skep/board/`, by default
+   `~/.local/share/skep/board/`; on Windows
+   `%LOCALAPPDATA%\skep\board\`, once the daemon builds there
+   (Running it as a service, 9.3). Any other path works, outside a
+   synced folder (Back up, step 1). One that does not exist is
+   created readable by you alone, the directory mode 700 and each
+   file 600; one that exists is recovered.
+
+   `--origin` names the origin a signed session binds to, the
+   loopback address at the daemon's port (8642 unless `--port`
+   names another): once the board is claimed, a signed session is
+   accepted from the configured origins alone, and a claimed board
+   with none refuses every one. `--no-local-trust` closes the door
+   any program on this machine could otherwise walk through as you:
+   once the board is claimed, a bare, unsigned session is refused,
+   where with local trust on any loopback party may write as any
+   principal. Leave local trust on only for a throwaway board you
+   develop against, whose dev provider opens a bare session
+   (`README.md`, Running a daemon for frontend development), or
+   while you run `skep-mcp`, which opens bare sessions only, knowing
+   that every program on this machine, and every other user of it,
+   can then read your drafts and write as you.
+
+   The other settings follow, these two among them, each with its
+   environment variable where it has one; a flag beats its variable.
 
    - `--port <PORT>` (`SKEPD_PORT`): the TCP port on 127.0.0.1, the
      only address the daemon binds. Default 8642; `0` picks a free
@@ -727,6 +752,10 @@ apart.
    journal's head. Both are harmless: the copy's open removes the
    first and says so, and drops the second.
 
+   Never keep the data directory, the key store (`~/.skep/`) or the
+   claim's anchor files under a synced folder (Dropbox, iCloud
+   Drive, OneDrive): sync corrupts journals and copies keys.
+
 2. **Prove the copy with the inventory**, over the copy and never
    over the served directory:
 
@@ -789,3 +818,167 @@ apart.
 
 2. **After that, no act makes a cold mirror possible.** The daemon
    offers none.
+
+## 9. Running it as a service
+
+A notebook you keep can run under the platform's service manager,
+which starts the daemon at login and again after a failure. The two
+units below are written from what the daemon does and are untested:
+neither has been loaded on a machine, and each names what to
+confirm on the first one. What every unit here shares:
+
+- **Your own user.** The daemon runs as you, so the directory is
+  yours to copy (Back up, step 1) and `skepd pull` runs over it
+  without `sudo`.
+- **No secret.** The daemon holds no key, and the unit passes it
+  only a path, a port, an origin and local trust off.
+- **A closed umask**, `077`, so every file the daemon makes is 600
+  under a directory at 700. The daemon sets those modes itself
+  (Start, step 2); the umask is a second guard beside them.
+- **SIGTERM to stop.** The daemon handles no signal, so SIGTERM
+  ends it at once, and the next start recovers (Stop, step 1).
+- **A restart on failure, never after a stop.** An exit other than
+  0, or a crash, starts the daemon again; a stop through the
+  service manager does not. A start the daemon refuses is retried
+  at the unit's pace, its refusal written to the log each time.
+- **Room for descriptors.** The unit sets the open-file limit to
+  1,024; the daemon sizes its 64 live event streams against a
+  limit of 256.
+
+### 9.1 macOS: a launchd agent
+
+Save the agent as `~/Library/LaunchAgents/io.skep.skepd.plist`; it
+starts at login and runs as you. Put your login name for
+`USERNAME`, and the path of the binary you built (Start, step 1)
+for `/usr/local/bin/skepd`:
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>              <string>io.skep.skepd</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/usr/local/bin/skepd</string>
+    <string>--data-dir</string>
+    <string>/Users/USERNAME/Library/Application Support/skep/board</string>
+    <string>--port</string>          <string>8642</string>
+    <string>--origin</string>        <string>http://127.0.0.1:8642</string>
+    <string>--no-local-trust</string>
+  </array>
+  <key>WorkingDirectory</key>   <string>/Users/USERNAME/Library/Application Support/skep</string>
+  <!-- the umask, decimal: 63 = 0o077, so every file the daemon creates is 0600 under 0700 (UNTESTED: the key's integer encoding) -->
+  <key>Umask</key>              <integer>63</integer>
+  <key>RunAtLoad</key>          <true/>
+  <!-- restart on a non-zero exit (a refused open, every worker gone), not on a clean stop -->
+  <key>KeepAlive</key>
+  <dict><key>SuccessfulExit</key><false/></dict>
+  <key>ThrottleInterval</key>   <integer>10</integer>
+  <key>SoftResourceLimits</key>
+  <dict><key>NumberOfFiles</key><integer>1024</integer></dict>
+  <key>StandardOutPath</key>    <string>/Users/USERNAME/Library/Logs/skepd.out.log</string>
+  <key>StandardErrorPath</key>  <string>/Users/USERNAME/Library/Logs/skepd.log</string>
+</dict>
+</plist>
+```
+
+Make its working directory before the first load; the daemon makes
+`board/` inside it:
+
+```
+mkdir -p -m 700 "$HOME/Library/Application Support/skep"
+```
+
+Load the agent, which starts the daemon; restart it; stop it, which
+sends SIGTERM and unloads the agent:
+
+```
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/io.skep.skepd.plist
+launchctl kickstart -k gui/$(id -u)/io.skep.skepd
+launchctl bootout gui/$(id -u)/io.skep.skepd
+```
+
+The daemon's stderr goes to `~/Library/Logs/skepd.log`, and its one
+stdout line to `~/Library/Logs/skepd.out.log`. The `Umask` integer's
+encoding is unverified: after the first start, `ls -l` the directory
+and confirm `-rw-------` and `drwx------`.
+
+### 9.2 Linux: a systemd user unit
+
+Save the unit as `~/.config/systemd/user/skepd.service`; it starts
+at login and runs as you. Put the path of the binary you built
+(Start, step 1) for `/usr/local/bin/skepd`. The unit names
+`~/.local/share` as `%h/.local/share`; where `XDG_DATA_HOME` points
+elsewhere, change both its paths:
+
+```ini
+[Unit]
+Description=skepd — this machine's skep notebook (loopback only)
+After=network.target
+
+[Service]
+ExecStart=/usr/local/bin/skepd --data-dir %h/.local/share/skep/board --port 8642 --origin http://127.0.0.1:8642 --no-local-trust
+WorkingDirectory=%h/.local/share/skep
+# every file the daemon creates is 0600 under 0700
+UMask=0077
+# a restart on exit 1 (a refused open, every worker gone) and on a crash; not on `systemctl stop` (SIGTERM is a clean stop to systemd)
+Restart=on-failure
+RestartSec=5
+# the daemon handles no signal: SIGTERM ends it at once, the next open recovers
+KillSignal=SIGTERM
+TimeoutStopSec=10
+LimitNOFILE=1024
+# the stream carries its own time per line; the journal adds its own
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=default.target
+```
+
+Make its working directory before the first start; the daemon makes
+`board/` inside it:
+
+```
+mkdir -p -m 700 ~/.local/share/skep
+```
+
+Enable it, which starts it now and at each login; restart it; stop
+it, which sends SIGTERM; follow its log:
+
+```
+systemctl --user enable --now skepd
+systemctl --user restart skepd
+systemctl --user stop skepd
+journalctl --user -u skepd -f
+```
+
+A user unit runs while you are logged in, and
+`loginctl enable-linger $USER` keeps it running with no session
+open. Confirm three things on the first machine it runs on, and for
+9.1's agent too: a stop during a checkpoint is followed at the next
+start by the `checkpoint.tmp` line (Start, step 3, item 7); with 64
+`GET /events` streams open, `/health` still answers and the daemon
+closes a 65th; and another user of the machine is refused a bare
+session on the claimed board, and a read of its files.
+
+A dedicated user is an option on Linux, never the recipe: a system
+unit that runs the daemon as a `_skepd` user owning the data
+directory, made with
+`install -d -m 700 -o _skepd -g _skepd /var/lib/skepd`, keeps the
+board's files from every program you run. Its cost: the files are
+no longer yours, so a copy of the directory and `skepd pull` run
+under `sudo -u _skepd`; and the key store stays yours, so whatever
+runs as you still holds your key and still signs as you.
+
+### 9.3 Windows
+
+Windows is a question, and this file gives it no unit. `skepd` does
+not build for Windows: the blob store reads the volume's free space
+and capacity through `rustix::fs::statvfs`, which `rustix` leaves
+out of its Windows build. What settles it: a Windows reading of
+those two figures, or a Windows build without the media resource;
+then `skepd` built for a Windows target; then, on Windows, a second
+daemon refused at the kernel's lock on a directory one already
+serves, and a killed daemon's lock taken by the next start.

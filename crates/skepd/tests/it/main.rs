@@ -46,6 +46,7 @@ mod pruner;
 mod publication_reads;
 mod publish;
 mod read_surface;
+mod readme_doc;
 mod register;
 mod registry;
 mod resolve;

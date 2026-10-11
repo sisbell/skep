@@ -89,6 +89,51 @@ previewed, typed confirmation, `skep recover --anchor-lost` replaces a lost
 paper under the surviving one, and `skep handoff` with `skep accept` give a
 subdivision to another party.
 
+## Running a daemon for frontend development
+
+Build and run the daemon on loopback against a throwaway board:
+
+```
+cargo run -p skepd -- --data-dir ./board --origin http://127.0.0.1:8642
+```
+
+The daemon listens on 127.0.0.1:8642 only. The board is UNCLAIMED until you
+claim it, and while it is unclaimed anything that can reach the port can take
+it: never forward the port before the claim. Claim it from the `skep` command
+(`cargo run -p skep-cli --bin skep -- keygen`, then
+`claim --board http://127.0.0.1:8642`); the claim writes two anchor files to
+directories you name — keep them apart, and never under ~/.skep.
+
+Local trust stays on, the daemon's default, because the dev provider below
+opens a bare session as the claimant, which a claimed board admits only while
+local trust is on. That lets any loopback party write as any principal, as the
+daemon warns at each start once the board is claimed: a cost a throwaway nobody
+else reaches can bear.
+
+Your page never posts /session and never holds a session token. The dev
+provider, `skep-dev serve`, is a process beside your dev server that opens the
+session itself as a loopback peer and carries the page's calls to the daemon:
+
+```
+cargo run -p skep-cli --bin skep-dev -- serve --board http://127.0.0.1:8642 \
+    --session bare --page-origin http://localhost:5173
+```
+
+`--page-origin` is your dev server's origin, the one origin the provider
+admits; `crates/skep-cli/README.md` has the rest. Do NOT pass the dev server's
+origin to the daemon as `--origin`: a configured origin is permanent on that
+board and stays signable after the claim. Bare sessions write drafts and never
+publish; to exercise publishing, start the provider with
+`--session signed --dir ~/.skep`, which signs with the key that claimed the
+board, and the page still holds no token.
+
+To see the daemon's own read-only viewer, build with the `client` feature and
+open http://127.0.0.1:8642/; it opens no session. `--allow-preview-keys` is for
+the test fixtures only: a preview key enrolled is enrolled for life.
+
+Throw the board away with `rm -rf ./board`. For a notebook you keep, see
+[RUNBOOK.md](RUNBOOK.md): Start, step 2, and §9, Running it as a service.
+
 ---
 
 *An independent reimplementation derived from the published Xanadu design

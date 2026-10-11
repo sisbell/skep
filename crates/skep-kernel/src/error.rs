@@ -11,7 +11,7 @@ use crate::Seq;
 /// journal and by the checkpoint's own load refusal for a checkpoint, so the
 /// daemon prints the same sentence whichever file names the foreign stamp.
 pub(crate) const NO_MIGRATION_REMEDY: &str = "there is no migration path — every board is a \
-    development artifact (PUB-1.2): delete the data directory and start over";
+    development artifact: delete the data directory and start over";
 
 /// A four-byte format stamp as an operator reads it: printable ASCII as
 /// itself (`SKJ2`), anything else escaped (`\xff`), so a message naming a
@@ -690,3 +690,6 @@ impl<E: std::error::Error + 'static> std::error::Error for TxnError<E> {
         }
     }
 }
+
+#[cfg(test)]
+mod tests;

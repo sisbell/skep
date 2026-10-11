@@ -227,18 +227,27 @@ impl CellIndex {
     }
 
     /// THE WALK's COMPLETION: the report kept, the readiness flipped, the
-    /// operator told. The walk's own door; a test readies an index it built
-    /// by hand through it.
+    /// operator told — the walk's landing with its figures and durations
+    /// (`operations.md` §1.1 row 13), and, where a value names a kind under
+    /// no schema this build reads, the standing failure that halts the
+    /// pruner's unlink pass (row 14), said once here. The walk's own door; a
+    /// test readies an index it built by hand through it.
     pub(crate) fn complete(&self, report: Rebuild) {
-        notice::line(format_args!(
-            "cell index rebuilt at open: {} values walked, {} cells, {} halt marks, {:?} ({:?} past the prefix test)",
-            report.values, report.cells, report.halts, report.walk, report.parse
-        ));
+        notice::emit(
+            Class::Landing,
+            format_args!(
+                "cell index rebuilt at open: {} values walked, {} cells, {} halt marks, {:?} ({:?} past the prefix test)",
+                report.values, report.cells, report.halts, report.walk, report.parse
+            ),
+        );
         if let Some(mark) = self.first_halt() {
-            notice::line(format_args!(
-                "cell index: a value at {} names the kind {} under no schema this build reads ({}): the pruner's unlink pass halts while it stands",
-                mark.at, mark.kind, mark.fault
-            ));
+            notice::emit(
+                Class::Failure,
+                format_args!(
+                    "cell index: a value at {} names the kind {} under no schema this build reads ({}): the pruner's unlink pass halts while it stands",
+                    mark.at, mark.kind, mark.fault
+                ),
+            );
         }
         *self.rebuild.lock() = Some(report);
         self.ready.store(true, Ordering::Release);
@@ -550,7 +559,10 @@ pub fn start_walk<W: FebeWorld>(kernel: &Kernel<W>, index: Arc<CellIndex>) {
         }
     });
     if spawned.is_err() {
-        notice::line("cell index: the OS refused the rebuild's thread; the walk runs at open");
+        notice::emit(
+            Class::Failure,
+            "cell index: the OS refused the rebuild's thread; the walk runs at open",
+        );
         let snapshot = kernel.snapshot();
         let report = walk(&snapshot, &index);
         index.complete(report);

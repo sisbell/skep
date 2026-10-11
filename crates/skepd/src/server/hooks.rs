@@ -20,7 +20,7 @@ use skep_media::pruner::PrunePass;
 use skep_media::serve::STREAM_HOLD;
 use skep_media::MediaOptions;
 #[cfg(feature = "test-hooks")]
-use skep_util::notice;
+use skep_util::notice::{self, Class};
 use skep_util::permits::Permit;
 
 use super::{Daemon, DaemonError};
@@ -576,7 +576,7 @@ impl Daemon {
     #[doc(hidden)]
     pub fn hold_blob_finish_at(&self, step: skep_blobs::Step) {
         self.media.store().hold_at(step, || {
-            notice::line(Self::BLOB_HOLD_NOTICE);
+            notice::emit(Class::Failure, Self::BLOB_HOLD_NOTICE);
             loop {
                 std::thread::park();
             }

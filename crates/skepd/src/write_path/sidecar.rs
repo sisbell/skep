@@ -1530,7 +1530,7 @@ impl FeedWalkHold {
     fn wait(&self, control: &WalkControl) {
         let mut held = self.held.lock();
         if *held {
-            skep_util::notice::line(FEED_WALK_HOLD_NOTICE);
+            skep_util::notice::emit(Class::Failure, FEED_WALK_HOLD_NOTICE);
         }
         while *held && !control.stopped() {
             self.released.wait_for(&mut held, Duration::from_millis(50));

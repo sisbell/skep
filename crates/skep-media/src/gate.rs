@@ -1031,7 +1031,7 @@ impl MediaGate {
     #[cfg(any(test, feature = "test-hooks"))]
     pub(crate) fn hold_after_rename_if_armed(&self) {
         if self.prune_hold.load(Ordering::Relaxed) {
-            notice::line(Self::PRUNE_HOLD_NOTICE);
+            notice::emit(Class::Failure, Self::PRUNE_HOLD_NOTICE);
             loop {
                 std::thread::park();
             }

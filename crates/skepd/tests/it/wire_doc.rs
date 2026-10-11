@@ -1389,7 +1389,10 @@ fn doc_states_the_durability_faces_words_and_the_compaction_at_the_checkpoint() 
 /// the fourth token and its class. The daemon's answers are pinned in
 /// `blob_routes.rs`, `media.rs`, `pruner.rs`, `hazard.rs` and `tools.rs`;
 /// this pins that the contract says so, and that the vector set names the
-/// same pins.
+/// same pins. The default limit's two words — one eighth of the volume's
+/// capacity, never below 256 MiB — are pinned at EACH of §Media's two sites,
+/// the paragraph and the pins list, as two slices, so an edit to either
+/// alone fails here.
 #[test]
 fn doc_states_the_upload_setting_the_default_limit_the_creations_gate_and_the_tools() {
     let media = prose("\n### Media — the reference cell and its door", &["\n### Links (writes)"]);
@@ -1399,8 +1402,6 @@ fn doc_states_the_upload_setting_the_default_limit_the_creations_gate_and_the_to
         "SKEPD_UPLOADS=false",
         "`media.uploads`",
         "`uploads_closed`",
-        "one eighth of the volume's capacity",
-        "never below 256 MiB",
         "`per_account`",
         "the venue total unset",
         "| 403 | `upload_refused` | `detail` `unauthenticated`, `claim_first`, `node_tier` or `uploads_closed`",
@@ -1428,6 +1429,25 @@ fn doc_states_the_upload_setting_the_default_limit_the_creations_gate_and_the_to
     ] {
         assert!(media.contains(fact), "§Media says {fact:?}");
     }
+    // THE DEFAULT LIMIT AT BOTH SITES: the paragraph that rules it (the
+    // owner's ruling, in capitals there) and the pins list that carries it
+    // — each slice must hold both words, so neither site can lose them
+    // while the other still says them.
+    let paragraph =
+        prose("UNTIL A RECORD IS INSTALLED THE DAEMON's", &["\n**The upload setting.**"]);
+    let pins = prose("**INTERIM PINS**", &["\nThe set's second file"]);
+    for (site, text) in [("the ruling paragraph", &paragraph), ("the pins list", &pins)] {
+        for words in ["one eighth of the volume's capacity", "never below 256 MiB"] {
+            assert!(
+                text.to_lowercase().contains(&words.to_lowercase()),
+                "§Media's {site} says {words:?}: {text}"
+            );
+        }
+    }
+    assert!(
+        pins.contains("the default per-account limit, one eighth of the volume's capacity read once at start and never below 256 MiB"),
+        "the pins list's row, whole: {pins}"
+    );
     // The upload permit pool is CARRIED (M-I5 (f)), so the list of what the
     // build does not carry no longer names it.
     let not_carried = media

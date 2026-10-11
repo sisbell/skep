@@ -132,7 +132,9 @@ fn stream_over(sink: &Arc<Sink>) -> Arc<Stream> {
     Stream::over(Box::new(Writer(Arc::clone(sink))))
 }
 
-/// The un-classed door's shape over `stream`, at the example instant.
+/// A bare line over `stream`, at the example instant — the renderer's
+/// shortest form, no class word, which no door produces: the queue's tests
+/// drive it with these so their pins are the queue's and not a class's.
 fn say(stream: &Stream, what: &str) {
     stream.take(example(), &body(None, what, &[]));
 }
@@ -150,10 +152,10 @@ fn returns_within(within: Duration, act: impl FnOnce() + Send + 'static) -> bool
 
 /// §1 THE HEAD BYTES: a line is the program's name, a colon and a space,
 /// the time, the class word and a colon, the text and a newline —
-/// `skepd: 2026-10-06T22:31:04.512Z landing: x\n` — and nothing else; the
-/// un-classed door the same with no class word. Pinned as the bytes
-/// themselves, never through `PROGRAM`, so a change to the prefix fails
-/// here.
+/// `skepd: 2026-10-06T22:31:04.512Z landing: x\n` — and nothing else; a
+/// bare body, the renderer's own form, the same with no class word. Pinned
+/// as the bytes themselves, never through `PROGRAM`, so a change to the
+/// prefix fails here.
 #[test]
 fn a_line_is_the_program_name_the_time_the_class_the_text_and_a_newline() {
     assert_eq!(
@@ -255,8 +257,8 @@ fn the_civil_date_holds_at_instants_computed_by_hand() {
 }
 
 /// §1 A FULL PIPE NEVER BLOCKS THE DOOR: with a sink that never takes a
-/// byte, every shape of notice — one line, several, classed, un-classed —
-/// returns, three times the queue's bound of them, in bounded time; the
+/// byte, every shape of notice — one line, several, with a class word and
+/// bare — returns, three times the queue's bound of them, in bounded time; the
 /// sink has taken nothing. The write path's serialization guard is the
 /// reason: a door that waited on the stream's reader would hold it.
 #[test]
@@ -408,14 +410,13 @@ fn where_no_thread_drains_each_door_writes_for_itself() {
 }
 
 /// The process's own stream: the drain before any line starts nothing; the
-/// four doors return; the drain after them returns with the queue empty and
-/// every line written by the thread.
+/// two doors — the one line's and the several lines' — return; the drain
+/// after them returns with the queue empty and every line written by the
+/// thread.
 #[test]
-fn the_four_doors_and_the_drain_return_over_the_process_stream() {
+fn the_two_doors_and_the_drain_return_over_the_process_stream() {
     drain();
     assert!(STREAM.get().is_none(), "a drain with no line through starts no stream");
-    line("the un-classed door");
-    lines("the un-classed door, several lines", &["one".to_string()]);
     emit(Class::Open, "the classed door");
     emit_lines(
         Class::Warning(Moment::AtStart),
@@ -428,5 +429,5 @@ fn the_four_doors_and_the_drain_return_over_the_process_stream() {
     assert!(st.queued, "the thread was spawned");
     assert!(st.queue.is_empty());
     assert_eq!(st.written, st.enqueued);
-    assert!(st.written >= 4);
+    assert!(st.written >= 2);
 }

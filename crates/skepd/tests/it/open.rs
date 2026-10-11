@@ -1,6 +1,6 @@
 //! THE OPEN's ORDER AND THE EXITS (`operations.md` §0 facts 1 and 10; §1.1
-//! rows 3 and 41, m7 and m16; §3.1 step 3; §4 rows 22 and 32), judged on
-//! the REAL BINARY: spawned as `hazard.rs` spawns it, on `--port 0` or a
+//! rows 3 and 41, m3, m7 and m16; §3.1 step 3; §4 rows 8, 22 and 32),
+//! judged on the REAL BINARY: spawned as `hazard.rs` spawns it, on `--port 0` or a
 //! port the test holds, its two streams piped and read on threads of the
 //! test's own, and ALWAYS killed and reaped before a claim returns, pass or
 //! fail — the [`Spawned`] guard — so a red leaks no daemon.
@@ -35,19 +35,32 @@
 //! * ROWS 8 AND 19 NAME THEIR SOURCE: `media uploads: … ({source})` and
 //!   `node prefix {p} ({source}): …` read the arm that set each — the flag,
 //!   the variable on the command, or the default.
+//! * EVERY LINE CARRIES ITS CLASS WORD: the whole of a served open's
+//!   stderr — the stray `checkpoint.tmp`'s line and the cell index's
+//!   landing among it — is lines of the grammar's head, `skepd: {time}
+//!   {class}: `, for a class the door spells; no line through no door.
+//! * THE TAIL CUT IS SAID (m3; §4 row 8): bytes past the journal's last
+//!   committed marker are cut at the next open, which says `open: journal
+//!   tail cut ({n} bytes): …` ONCE, `{n}` the inventory's
+//!   `journal.tail_cut` over a copy of the same directory; a clean close
+//!   says none.
 //!
 //! The daemon's fault door (`Daemon::panic_the_next_worker`) reaches the
 //! child through the variable `main.rs` reads under `test-hooks`, the
 //! feature every test build compiles the binary with.
 
+use std::fs;
 use std::io::{self, BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::os::unix::process::ExitStatusExt;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus, Stdio};
 use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, Instant};
+
+use skep_util::notice::{Class, Moment};
+use skepd::tools::{self, HoleCheck};
 
 use crate::common::{
     acked_addr, claim_board, expect_resp, get, json, op, open_session, parse_response,
@@ -402,6 +415,47 @@ fn commits_above(port: u16, position: u64) -> Vec<String> {
         .collect()
 }
 
+/// The board's ACTIVE segment under `dir`: the `seg-<n>.wal` with the
+/// highest `n`, the one file the open's tail cut can shorten.
+fn active_segment(dir: &Path) -> PathBuf {
+    fs::read_dir(dir)
+        .expect("the board")
+        .map(|e| e.expect("an entry").path())
+        .filter_map(|p| {
+            let name = p.file_name()?.to_str()?.to_string();
+            let n: u64 = name.strip_prefix("seg-")?.strip_suffix(".wal")?.parse().ok()?;
+            Some((n, p))
+        })
+        .max_by_key(|(n, _)| *n)
+        .map(|(_, p)| p)
+        .expect("a segment")
+}
+
+/// `src` copied whole under `dst` — the copy the runbook has the inventory
+/// run over, so its open cuts the copy's tail and never the board's.
+fn copy_dir(src: &Path, dst: &Path) {
+    fs::create_dir_all(dst).expect("the copy's directory");
+    for entry in fs::read_dir(src).expect("the board lists") {
+        let entry = entry.expect("an entry");
+        let to = dst.join(entry.file_name());
+        if entry.file_type().expect("a file type").is_dir() {
+            copy_dir(&entry.path(), &to);
+        } else {
+            fs::copy(entry.path(), &to).expect("copy a file");
+        }
+    }
+}
+
+/// The `open:` lines of `whole` that say a tail cut, after their heads.
+fn tail_cut_lines(whole: &[String]) -> Vec<String> {
+    whole
+        .iter()
+        .filter_map(|l| after_the_head(l, "open"))
+        .filter(|text| text.starts_with("journal tail cut ("))
+        .map(str::to_string)
+        .collect()
+}
+
 /// The commits above `position` as the daemon's KERNEL holds them: every
 /// position in `(position, head]` that is a transaction's boundary — the
 /// kernel's own history read, one probe per position — the independent
@@ -578,6 +632,176 @@ fn the_open_says_its_directory_first_and_its_recovery_with_the_kernels_figures()
         third.recovered_line
     );
     third.child.kill();
+}
+
+/// THE CLASSED DOOR IS THE ONLY DOOR: every line on the binary's stderr
+/// carries the grammar's head, `skepd: {time} {class}: `, for a class the
+/// door spells — judged over the WHOLE stream of a served open, the cell
+/// index's landing awaited so the walk thread's line is among the lines
+/// judged, on a fresh board and again on the same board with a stray
+/// `checkpoint.tmp` planted before the open, whose report (`open:
+/// checkpoint.tmp found ({bytes} bytes) and removed: …`) is then judged
+/// too. One claim over every line: a line through no door, or a head spelled
+/// by hand at its site, fails it. The class words come from the door's own
+/// type, so a word the door spells one way and a site another fails here.
+#[test]
+fn every_line_of_a_served_open_carries_a_class_word_the_door_spells() {
+    let classes: Vec<String> = [
+        Class::Failure,
+        Class::Landing,
+        Class::Open,
+        Class::Warning(Moment::AtStart),
+        Class::Warning(Moment::AtClaim),
+        Class::Warning(Moment::AtOpen),
+        Class::Warning(Moment::AtReissue),
+        Class::Standing,
+        Class::Progress,
+    ]
+    .iter()
+    .map(ToString::to_string)
+    .collect();
+    let classed = |line: &str| classes.iter().any(|class| after_the_head(line, class).is_some());
+    let every_line_classed = |whole: &[String], life: &str| {
+        assert!(!whole.is_empty(), "the {life} life said nothing");
+        for line in whole {
+            assert!(
+                classed(line),
+                "FINDING (CUT 1): the {life} life's line carries no class word the door spells: \
+                 {line:?}\n{}",
+                whole.join("\n")
+            );
+        }
+    };
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let dir = tmp.path().join("data");
+
+    // FIRST LIFE: a fresh board, served; the walk's landing awaited, the
+    // media gate's limits line — once un-classed — among the lines read.
+    let mut first = serve_and_read_the_open(&dir, &[]);
+    await_said(&mut first.stderr, "landing", "cell index rebuilt at open: ");
+    first.child.kill();
+    let whole = first.stderr.whole();
+    every_line_classed(&whole, "first");
+    assert!(
+        whole.iter().any(|l| said(l, "open", "media limits")),
+        "the media gate's limits line, under `open:`:\n{}",
+        whole.join("\n")
+    );
+
+    // SECOND LIFE: a checkpoint a crash left half-written, planted; its
+    // report is an `open:` line among the lines judged.
+    let stray = b"a checkpoint a crash left half-written";
+    fs::write(dir.join("checkpoint.tmp"), stray).expect("plant the stray file");
+    let mut second = serve_and_read_the_open(&dir, &[]);
+    let said_stray = await_said(&mut second.stderr, "open", "checkpoint.tmp found (");
+    assert_eq!(
+        said_stray,
+        format!(
+            "checkpoint.tmp found ({} bytes) and removed: a checkpoint a crash or the journal's \
+             own full volume left half-written, no base, its room on the volume reclaimed by the \
+             open",
+            stray.len()
+        )
+    );
+    assert!(!dir.join("checkpoint.tmp").exists(), "the open removed the stray file");
+    await_said(&mut second.stderr, "landing", "cell index rebuilt at open: ");
+    second.child.kill();
+    let whole = second.stderr.whole();
+    every_line_classed(&whole, "second");
+    assert!(
+        !whole.iter().any(|l| l.contains(" warning (at open): warning (at open): ")),
+        "a head spelled twice:\n{}",
+        whole.join("\n")
+    );
+}
+
+/// m3 — THE TAIL CUT IS SAID, ONCE, ONLY WHEN CUT: a board closed cleanly
+/// in-process — its last committed marker ending the journal — is opened by
+/// the binary and says no `journal tail cut` line; killed idle, and bytes
+/// that spell no frame appended past that marker (a copy taken mid-write's
+/// shape, the inventory suite's own fixture), the next open says ONE `open:
+/// journal tail cut ({n} bytes): …` line after the recovery's landing, `{n}`
+/// the bytes appended and the inventory's `journal.tail_cut` over a copy of
+/// the same torn directory, the segment back at its clean length; and the
+/// open after that, the tail gone, says none again. Each child killed by
+/// the test.
+#[test]
+fn the_open_says_the_bytes_it_cut_off_a_torn_tail_once_and_nothing_after_a_clean_close() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let dir = tmp.path().join("data");
+    {
+        let sd = spawn_unclaimed(&dir);
+        let (home, session) = delegate_a_home(sd.port());
+        insert_into_the_home(sd.port(), &session, &home, 1, 2);
+        sd.shutdown();
+    }
+    let segment = active_segment(&dir);
+    let len_of = |segment: &Path| fs::metadata(segment).expect("the segment").len();
+    let clean_len = len_of(&segment);
+
+    // A CLEAN CLOSE: nothing above the last marker, nothing cut, no line.
+    let mut first = serve_and_read_the_open(&dir, &[]);
+    await_said(&mut first.stderr, "open", "media uploads: ");
+    first.child.kill();
+    let whole = first.stderr.whole();
+    assert!(
+        tail_cut_lines(&whole).is_empty(),
+        "FINDING (m3): a clean close, and the open says a cut:\n{}",
+        whole.join("\n")
+    );
+    assert_eq!(len_of(&segment), clean_len, "nothing cut off a clean close");
+
+    // GARBAGE PAST THE LAST MARKER — bytes that spell no frame, no sync word
+    // among them, so the scan reads one run to the end of the file above the
+    // committed head: the tail, cut whole. The inventory's figure is read
+    // over a COPY, as the runbook has it run, since its open cuts too.
+    const GARBAGE: u64 = 777;
+    let mut f = fs::OpenOptions::new().append(true).open(&segment).expect("open the segment");
+    f.write_all(&vec![0xA5u8; GARBAGE as usize]).expect("append the garbage");
+    drop(f);
+    assert_eq!(len_of(&segment), clean_len + GARBAGE);
+    let copy = tmp.path().join("copy");
+    copy_dir(&dir, &copy);
+    let v = tools::inventory(&copy, HoleCheck::LengthOnly).expect("the inventory over the copy");
+    let inventoried = v["journal"]["tail_cut"].as_u64().expect("a count, never null");
+    assert_eq!(
+        inventoried, GARBAGE,
+        "the inventory's count is the bytes past the last marker: {v}"
+    );
+
+    let mut second = serve_and_read_the_open(&dir, &[]);
+    await_said(&mut second.stderr, "open", "media uploads: ");
+    second.child.kill();
+    let whole = second.stderr.whole();
+    let cut = tail_cut_lines(&whole);
+    assert_eq!(cut.len(), 1, "FINDING (m3): ONE line for the cut:\n{}", whole.join("\n"));
+    assert_eq!(
+        cut[0],
+        format!(
+            "journal tail cut ({inventoried} bytes): the un-acked tail a crash or a kill left past \
+             the last committed marker — a write caught before its commit was durable, never \
+             acknowledged — removed by the open; every acknowledged write stands"
+        ),
+        "the line names the inventory's figure"
+    );
+    let at = |prefix: &str| whole.iter().position(|l| said(l, "open", prefix));
+    assert!(
+        at("recovered from ") < at("journal tail cut ("),
+        "the cut is said after the recovery's landing:\n{}",
+        whole.join("\n")
+    );
+    assert_eq!(len_of(&segment), clean_len, "the open cut the segment back to its last marker");
+
+    // THE OPEN AFTER THE CUT: a clean close's answer, no line.
+    let mut third = serve_and_read_the_open(&dir, &[]);
+    await_said(&mut third.stderr, "open", "media uploads: ");
+    third.child.kill();
+    let whole = third.stderr.whole();
+    assert!(
+        tail_cut_lines(&whole).is_empty(),
+        "FINDING (m3): the cut is said again at an open that cut nothing:\n{}",
+        whole.join("\n")
+    );
 }
 
 /// m14 — THE OPEN's-REPORT `auth:` LINE AT EVERY START, on the real binary:

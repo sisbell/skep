@@ -421,11 +421,11 @@ says on the operator stream is two lines per episode and nothing per
 request; the one rendering of a pool's two lines (`PoolEdgeLine`); and
 the one clock the hold-down is judged against (`edge_clock_now`), whose
 offset the daemon's test seam advances. `notice` — the operator's
-stream (`emit` and `emit_lines`, the class word an argument; `line` and
-`lines`, the un-classed door the call sites written before the class
-existed still take): one line, or one notice of several written as one,
-every line prefixed and the head carrying its time, each put on a bounded
-queue that one thread, `skepd-notice`, writes to stderr in order, the
+stream (`emit` and `emit_lines`, the class word an argument of both and
+the two the only doors, so no line goes out without one): one line, or
+one notice of several written as one, every line prefixed and the head
+carrying its time, each put on a bounded queue that one thread,
+`skepd-notice`, writes to stderr in order, the
 write's result discarded so a lost log pipe never fails the work the
 notice is about and a stalled one never waits it; a line a full queue
 cannot take is dropped and counted on the next; `drain` waits the queue
@@ -1842,11 +1842,13 @@ the store's install — nothing above their own layer.
    bound and the media floor re-read from that checkpoint's size and the
    change feed's five files compacted to the journal's reclaim floor; its
    wait on the signal TIMED, so that once an hour, while any standing bad
-   state stands — the write path's halt, the kernel's poison, a stopped
-   feed file, the pruner's thread gone, the floor binding,
-   CLAIMED-PERMISSIVE — it says ONE `standing:` line naming each with its
-   position or file, and nothing on a healthy board; its loop under the
-   same catch, which says what is lost with it (every checkpoint the
+   state stands — the eight, in the order the line says them: the write
+   path's halt, the kernel's poison, a stopped feed file, the pruner's
+   thread gone, the feed walk's thread gone, the cell index failed, the
+   floor binding, CLAIMED-PERMISSIVE — it says ONE `standing:` line naming
+   each with its position or file, and nothing on a healthy board; its
+   loop under the same catch, which says what is lost with it (every
+   checkpoint the
    backstop's, unsaid; the bound and the floor frozen); and the kernel's
    own halt said once, at the write path's door where a write answers
    `poisoned` or at the handler's catch after a panic on a write (a write

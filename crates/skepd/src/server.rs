@@ -806,7 +806,7 @@ impl Daemon {
         // table — said before anything is served, and only where there is
         // something to say.
         for warning in recovery_warnings(engine.recovery()) {
-            notice::line(format_args!("warning (at open): {warning}"));
+            notice::emit(Class::Warning(Moment::AtOpen), warning);
         }
         // THE RECOVERY's LANDING (m7): the base the open loaded, the commits
         // it replayed above it and how long the engine's open took — said on
@@ -818,11 +818,34 @@ impl Daemon {
         // kernel's open found and removed — said here, the kernel answering
         // the fact, so the operator's acts at the floor stay two.
         if let Some(bytes) = engine.kernel().stray_checkpoint_removed() {
-            notice::line(format_args!(
-                "checkpoint.tmp found ({bytes} bytes) and removed: a checkpoint a crash or the \
-                 journal's own full volume left half-written, no base, its room on the volume \
-                 reclaimed by the open"
-            ));
+            notice::emit(
+                Class::Open,
+                format_args!(
+                    "checkpoint.tmp found ({bytes} bytes) and removed: a checkpoint a crash or \
+                     the journal's own full volume left half-written, no base, its room on the \
+                     volume reclaimed by the open"
+                ),
+            );
+        }
+        // THE TAIL CUT (`operations.md` §1.1 m3; §4 row 8): the bytes the
+        // kernel's open took off the journal above its last committed marker
+        // — the un-acked tail a crash or a kill left, a write caught before
+        // its commit was durable and so never acknowledged — said here as the
+        // stray file is, the kernel answering the figure
+        // (`Recovery::tail_cut`), and nothing where nothing was cut, which is
+        // every open after a clean close. The inventory reports the same
+        // figure as `journal.tail_cut`.
+        let tail_cut = engine.recovery().map_or(0, |recovery| recovery.tail_cut);
+        if tail_cut > 0 {
+            notice::emit(
+                Class::Open,
+                format_args!(
+                    "journal tail cut ({tail_cut} bytes): the un-acked tail a crash or a kill \
+                     left past the last committed marker — a write caught before its commit was \
+                     durable, never acknowledged — removed by the open; every acknowledged write \
+                     stands"
+                ),
+            );
         }
         // THE START POINT's SIZE, read once here: the byte bound of the
         // cadence and the floor in force both scale by a checkpoint's size,
@@ -859,7 +882,7 @@ impl Daemon {
         let uploads_source = media_opts.uploads_source;
         let media = MediaGate::open_with(data_dir, media_opts).map_err(DaemonError::Media)?;
         media.set_floor(MediaGate::floor_in_force(start_point_len));
-        notice::line(media.startup_line());
+        notice::emit(Class::Open, media.startup_line());
         say_open_line(UploadsLine { open: media.uploads_open(), source: uploads_source });
         let writes = WritePath::open(data_dir, &engine, Arc::clone(media.index()))
             .map_err(DaemonError::Sidecar)?;
@@ -958,7 +981,8 @@ impl Daemon {
     /// here: no head by a claim that did not happen (A1/A5). A claimed board
     /// with its head finds writing it a no-op, so a clean restart writes none.
     /// The line on the operator stream is I11 (c)'s: a head written for a
-    /// reason other than the cadence's is said, never silent. A head the
+    /// reason other than the cadence's is said, never silent — a landing, as
+    /// the flip's own line is (`operations.md` §1.1 row 12). A head the
     /// driver refuses HERE is surfaced as every refused head is, and fails
     /// nothing: the open returns all the same, and the board answers attested
     /// writes `board_unavailable` until a head lands.
@@ -977,7 +1001,8 @@ impl Daemon {
         }
         let serial = self.writes.serial_lock();
         if self.writes.write_first_head(&serial) == FirstHead::Written {
-            notice::line(
+            notice::emit(
+                Class::Landing,
                 "the board is claimed and its journal held no head: H.1 written at open, \
                  naming the committed pair as it stood",
             );
@@ -1363,17 +1388,20 @@ impl Daemon {
 
     /// THE STANDING LINE's ACT (`operations.md` §1 THE RATES; §1.1 m11) —
     /// what the checkpoint thread runs at each tick of its timed wait
-    /// ([`Woken::Tick`](crate::write_path::Woken::Tick)): the six reads,
+    /// ([`Woken::Tick`](crate::write_path::Woken::Tick)): the EIGHT reads,
     /// each one atomic load or one lock and none under the serialization
-    /// guard — the write path's halt with its position, the kernel's poison,
-    /// the feed's stopped files with theirs, the pruner's liveness flag, the
-    /// media gate's free space against its floor in force (both read fresh
-    /// here, so the floor's clause stops by itself once room stands) and the
-    /// CLAIMED-PERMISSIVE bit as `log_config_warnings` reads the claim — and
-    /// ONE line, [`StandingLine`], under `Class::Standing`, where at least
-    /// one clause stands; NOTHING otherwise. The cell index's FAILED state
-    /// is the seventh read, the media gate's (`operations.md` §4 row 26).
-    /// No clause for the checkpoint thread's own death — it is the carrier.
+    /// guard, in the order the line says them — (1) the write path's halt
+    /// with its position, (2) the kernel's poison, (3) the feed's stopped
+    /// files with theirs, (4) the pruner's liveness flag, (5) the feed
+    /// walk's liveness flag with the region its death left uncovered, (6)
+    /// the cell index's FAILED state, the media gate's (`operations.md` §4
+    /// row 26), (7) the media gate's free space against its floor in force
+    /// (both read fresh here, so the floor's clause stops by itself once
+    /// room stands) and (8) the CLAIMED-PERMISSIVE bit as
+    /// `log_config_warnings` reads the claim — and ONE line,
+    /// [`StandingLine`], under `Class::Standing`, where at least one clause
+    /// stands; NOTHING otherwise. No clause for the checkpoint thread's own
+    /// death — it is the carrier.
     pub(crate) fn say_the_standing_line(&self) {
         let free_space = self.media.free_space();
         let floor = self.media.floor();
@@ -2085,9 +2113,14 @@ impl fmt::Display for RecoveredLine {
     }
 }
 
-/// THE OPEN's OWN LINES, SAID: the classed door for the open's report — one
-/// function, so every line of the open's own goes out under `Class::Open`
-/// and no site spells the class. Through the queue, as every notice is.
+/// THE OPEN's OWN LINES, SAID: the classed door for the open's RULED lines —
+/// the version's, the directory's, the recovery's landing and the upload
+/// setting's, the four the unit suite pins as this door's callers — each a
+/// pure value rendered here under `Class::Open`, so none of those sites
+/// spells the class. The open's three conditional or borrowed report lines
+/// — the stray `checkpoint.tmp`, the tail cut, the media gate's limits —
+/// emit under `Class::Open` at their sites, built as they are said. Through
+/// the queue, as every notice is.
 fn say_open_line(line: impl fmt::Display) {
     notice::emit(Class::Open, line);
 }
@@ -2221,7 +2254,7 @@ pub(super) struct StandingLine {
     /// The feed walk's liveness flag, with the region it left uncovered
     /// (`WritePath::feed_walk_gone`).
     pub(super) feed_walk_gone: Option<(u64, u64)>,
-    /// The cell index's FAILED state — the seventh read, the media gate's
+    /// The cell index's FAILED state — the media gate's read
     /// (`MediaGate::index_failed`).
     pub(super) index_failed: bool,
     /// The floor binding: the free space read below the floor in force.

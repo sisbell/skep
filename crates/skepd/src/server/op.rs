@@ -108,7 +108,7 @@ impl Daemon {
         // claim durable and flipped, no head — for the harness to kill.
         #[cfg(any(test, feature = "test-hooks"))]
         if self.hold_between_claim_and_head.load(Ordering::Relaxed) {
-            notice::line(Self::CLAIM_HOLD_NOTICE);
+            notice::emit(Class::Failure, Self::CLAIM_HOLD_NOTICE);
             loop {
                 thread::park();
             }

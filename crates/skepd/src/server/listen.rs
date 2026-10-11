@@ -407,9 +407,12 @@ pub fn serve_bound(daemon: Daemon, listener: Listener, workers: usize) -> io::Re
     let pruner = match pruner {
         Ok(h) => Some(h),
         Err(e) => {
-            notice::line(format_args!(
-                "pruner: the OS refused its thread ({e}); no pass runs on this daemon's cadence"
-            ));
+            notice::emit(
+                Class::Failure,
+                format_args!(
+                    "pruner: the OS refused its thread ({e}); no pass runs on this daemon's cadence"
+                ),
+            );
             None
         }
     };

@@ -563,8 +563,9 @@ apart.
    - The pruner's pass may leave an aside, a `.retired-` file under
      `blobs/`, which the next open removes. Nothing is said.
    - A write caught before its commit was durable is cut from the
-     journal's tail at the next open. Nothing is said; the
-     inventory reports the bytes cut as `journal.tail_cut`.
+     journal's tail at the next open, which says the bytes it cut
+     (`journal tail cut ({bytes} bytes): …`); the inventory reports
+     them as `journal.tail_cut`.
    - A claim stopped before its first head: the next open writes
      the head and says so (Start, step 3).
    - The walk that re-covers a lost `commits.log` (Restart,

@@ -152,7 +152,7 @@ impl Display for Moment {
 /// drain thread: the call returns at once, whatever the stream's reader is
 /// doing.
 pub fn emit(class: Class, what: impl Display) {
-    submit(Some(class), what, &[]);
+    submit(class, what, &[]);
 }
 
 /// One classed notice spanning several lines: `head` after the class word,
@@ -163,21 +163,7 @@ pub fn emit(class: Class, what: impl Display) {
 /// notice land inside this one, and a notice a reader cannot tell the extent
 /// of is worse than a long line.
 pub fn emit_lines(class: Class, head: impl Display, rest: &[String]) {
-    submit(Some(class), head, rest);
-}
-
-/// The un-classed door: [`emit`] with no class word — `skepd: {time} {what}`.
-/// Kept for the call sites written before the class existed, each of which
-/// moves to [`emit`] with the lane that re-cuts its line; the last of those
-/// lanes removes this door. Through the queue, and timed, as [`emit`] is.
-pub fn line(what: impl Display) {
-    submit(None, what, &[]);
-}
-
-/// The un-classed door for a notice of several lines: [`emit_lines`] with no
-/// class word, the time on the head alone. Kept, and retired, as [`line()`] is.
-pub fn lines(head: impl Display, rest: &[String]) {
-    submit(None, head, rest);
+    submit(class, head, rest);
 }
 
 /// Wait until every line enqueued before this call has reached the sink —
@@ -199,19 +185,22 @@ pub fn drain() {
 /// line, the thread spawned then.
 static STREAM: OnceLock<Arc<Stream>> = OnceLock::new();
 
-/// The one path behind the four doors: the moment read, the body rendered —
-/// the caller's `Display` runs here, outside the lock, so a slow formatter
-/// delays no other thread's line — and the line handed to the stream.
-fn submit(class: Option<Class>, head: impl Display, rest: &[String]) {
+/// The one path behind the two doors, each of which hands it a class: the
+/// moment read, the body rendered — the caller's `Display` runs here,
+/// outside the lock, so a slow formatter delays no other thread's line — and
+/// the line handed to the stream.
+fn submit(class: Class, head: impl Display, rest: &[String]) {
     let at = SystemTime::now();
-    let body = body(class, head, rest);
+    let body = body(Some(class), head, rest);
     STREAM.get_or_init(|| Stream::over(Box::new(std::io::stderr()))).take(at, &body);
 }
 
-/// A notice's body: the class word and its colon where there is one, the
-/// head, each line of `rest` on its own line under the prefix — `skepd:   `,
-/// no time — and one newline at the end. A `Display` that fails leaves the
-/// text where it failed; the notice fails nothing.
+/// A notice's body: the class word and its colon — every door hands one;
+/// the bare form, `None`, is the renderer's own, which the unit suite drives
+/// the queue with and no door reaches — the head, each line of `rest` on
+/// its own line under the prefix — `skepd:   `, no time — and one newline at
+/// the end. A `Display` that fails leaves the text where it failed; the
+/// notice fails nothing.
 fn body(class: Option<Class>, head: impl Display, rest: &[String]) -> String {
     let mut text = String::new();
     if let Some(class) = class {

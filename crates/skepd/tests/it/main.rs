@@ -50,6 +50,7 @@ mod register;
 mod registry;
 mod resolve;
 mod restart;
+mod runbook_doc;
 mod scan_bound;
 mod signed_ops;
 mod source_gate;

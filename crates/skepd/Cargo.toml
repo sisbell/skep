@@ -15,24 +15,16 @@ readme = "README.md"
 default = ["observe"]
 observe = ["skep-engine/dump"]
 # `client` embeds skep/clients/board.html (include_str! at build — the
-# binary is self-contained) and serves it at GET /. **DEFAULT-OFF, and
-# the default is the SAFE state** (owner ruling 2026-08-22): the client
-# served at GET / is an ACTING client — it generates keys and opens
-# signed sessions — and R89 (THE CLIENT RULE, MUST) says a board may
-# serve at most a read-only guest view and never one that acts. Left
-# default-ON, a hosted image built without a deliberate opt-OUT serves a
-# key-generating page at the HOST's origin; a member enrolls a key into
-# their own doc 1 from that key store (the keyless-browser face guides
-# them to), and the host can thereafter open signed sessions as that
-# member — silently, and permanently, since I4 bars the key's removal
-# from ever restoring the prior state. Default-off inverts the failure:
-# forgetting the flag on a hosted image yields a correct board, and
-# forgetting it on a notebook build yields no UI at all, which announces
-# itself the moment anyone opens it. Packaged notebook builds enable it;
-# the hosted image simply does not opt in, so ABSTENTION IS ENOUGH and
-# no build-time obligation has to be remembered. A build without it has
-# no / route (the usual 404 shape) until the guest reader exists, which
-# is what GET / serves by default once it does.
+# binary is self-contained) and serves it at GET /. The page is the GUEST
+# READER: one self-contained file that reads the board and holds no key,
+# token or session — the read-only guest view R89 (THE CLIENT RULE, MUST)
+# permits a board to serve, and never one that acts. DEFAULT-OFF all the
+# same: a hosted image should serve no page unless the operator chose to,
+# so the hosted image simply does not opt in and ABSTENTION IS ENOUGH —
+# forgetting the flag there yields a board with no page, and forgetting
+# it on a notebook build yields no UI at all, which announces itself the
+# moment anyone opens it. Packaged notebook builds enable it. A build
+# without it has no / route (the usual 404 shape).
 # scripts/gate-full.sh compiles skepd with it on and reruns the tests whose
 # answers turn on it, so the route stays exercised.
 client = []

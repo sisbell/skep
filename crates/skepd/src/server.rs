@@ -160,13 +160,15 @@
 //! `head_time`.
 //!
 //! **The served client (wire v6, `client` feature, default OFF)**: `GET /`
-//! answers the embedded authoring client (`skep/clients/board.html`,
+//! answers the embedded GUEST READER (`skep/clients/board.html`,
 //! `include_str!` at build — the binary is self-contained), `text/html`,
 //! same CORS posture as everything else. One file by design; there is no
-//! asset pipeline. The client ACTS — it generates keys and opens signed
-//! sessions — so it is opted into rather than opted out of, and abstention
-//! is the safe state; the feature's note in `Cargo.toml` carries the
-//! ruling. A build without the feature has no `/` route (404).
+//! asset pipeline. The page is read-only — it holds no key, token or
+//! session and acts on nothing, the guest view R89 permits a board to serve
+//! — and the feature is off by default so a hosted image serves no page
+//! unless the operator chose to; the notebook packaging turns it on. The
+//! feature's note in `Cargo.toml` says the same. A build without the
+//! feature has no `/` route (404).
 
 // The transport: sockets, threads, and the HTTP bytes.
 mod http;
@@ -818,14 +820,11 @@ impl Daemon {
         // kernel's open found and removed — said here, the kernel answering
         // the fact, so the operator's acts at the floor stay two.
         if let Some(bytes) = engine.kernel().stray_checkpoint_removed() {
-            notice::emit(
-                Class::Open,
-                format_args!(
-                    "checkpoint.tmp found ({bytes} bytes) and removed: a checkpoint a crash or \
-                     the journal's own full volume left half-written, no base, its room on the \
-                     volume reclaimed by the open"
-                ),
-            );
+            say_open_line(format_args!(
+                "checkpoint.tmp found ({bytes} bytes) and removed: a checkpoint a crash or \
+                 the journal's own full volume left half-written, no base, its room on the \
+                 volume reclaimed by the open"
+            ));
         }
         // THE TAIL CUT (`operations.md` §1.1 m3; §4 row 8): the bytes the
         // kernel's open took off the journal above its last committed marker
@@ -837,15 +836,12 @@ impl Daemon {
         // figure as `journal.tail_cut`.
         let tail_cut = engine.recovery().map_or(0, |recovery| recovery.tail_cut);
         if tail_cut > 0 {
-            notice::emit(
-                Class::Open,
-                format_args!(
-                    "journal tail cut ({tail_cut} bytes): the un-acked tail a crash or a kill \
-                     left past the last committed marker — a write caught before its commit was \
-                     durable, never acknowledged — removed by the open; every acknowledged write \
-                     stands"
-                ),
-            );
+            say_open_line(format_args!(
+                "journal tail cut ({tail_cut} bytes): the un-acked tail a crash or a kill \
+                 left past the last committed marker — a write caught before its commit was \
+                 durable, never acknowledged — removed by the open; every acknowledged write \
+                 stands"
+            ));
         }
         // THE START POINT's SIZE, read once here: the byte bound of the
         // cadence and the floor in force both scale by a checkpoint's size,
@@ -882,7 +878,7 @@ impl Daemon {
         let uploads_source = media_opts.uploads_source;
         let media = MediaGate::open_with(data_dir, media_opts).map_err(DaemonError::Media)?;
         media.set_floor(MediaGate::floor_in_force(start_point_len));
-        notice::emit(Class::Open, media.startup_line());
+        say_open_line(media.startup_line());
         say_open_line(UploadsLine { open: media.uploads_open(), source: uploads_source });
         let writes = WritePath::open(data_dir, &engine, Arc::clone(media.index()))
             .map_err(DaemonError::Sidecar)?;
@@ -2113,14 +2109,14 @@ impl fmt::Display for RecoveredLine {
     }
 }
 
-/// THE OPEN's OWN LINES, SAID: the classed door for the open's RULED lines —
-/// the version's, the directory's, the recovery's landing and the upload
-/// setting's, the four the unit suite pins as this door's callers — each a
-/// pure value rendered here under `Class::Open`, so none of those sites
-/// spells the class. The open's three conditional or borrowed report lines
-/// — the stray `checkpoint.tmp`, the tail cut, the media gate's limits —
-/// emit under `Class::Open` at their sites, built as they are said. Through
-/// the queue, as every notice is.
+/// THE OPEN's OWN LINES, SAID: the one classed door for every line of the
+/// open's report said from `open_under` — the version's, the directory's,
+/// the recovery's landing, the stray `checkpoint.tmp`'s, the tail cut's, the
+/// media gate's limits and the upload setting's, the seven the unit suite
+/// pins as this door's callers — each rendered here under `Class::Open`, the
+/// ruled lines as pure values and the conditional or borrowed ones built as
+/// they are said, so no site in the open spells the class. Through the
+/// queue, as every notice is.
 fn say_open_line(line: impl fmt::Display) {
     notice::emit(Class::Open, line);
 }

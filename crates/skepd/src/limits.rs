@@ -70,15 +70,17 @@ pub(crate) const PRUNE_INTERVAL: Duration = Duration::from_secs(3600);
 /// interval of the checkpoint thread's timed wait on the write path's
 /// signal (`write_path::CheckpointSignal::wait`), at each tick of which the
 /// thread writes ONE `standing:` line re-saying every standing bad state
-/// that stands — the write path's halt, the kernel's poison, a stopped feed
-/// file, the pruner's dead thread, the floor binding, CLAIMED-PERMISSIVE —
-/// and nothing on a healthy board (`operations.md` §1 THE RATES; §1.1 m11).
+/// that stands — the eight, in the line's order: the write path's halt, the
+/// kernel's poison, a stopped feed file, the pruner's thread gone, the feed
+/// walk's thread gone, the cell index failed, the floor binding,
+/// CLAIMED-PERMISSIVE — and nothing on a healthy board (`operations.md` §1
+/// THE RATES; §1.1 m11).
 /// What the interval bounds is how long a standing state goes unsaid past
 /// its transition: each is said once at its transition, so a stream rotated
 /// past that line holds nothing of it, and an hour is the most a reader of
 /// the current stream waits to learn of a state that still stands. A tick
-/// on a healthy board costs the six reads — an atomic load or one lock each
-/// — and writes nothing.
+/// on a healthy board costs the eight reads — an atomic load or one lock
+/// each — and writes nothing.
 pub(crate) const STANDING_INTERVAL: Duration = Duration::from_secs(3600);
 
 /// THE FEED WALK's PROGRESS CADENCE, the boundary half — 1,000 boundaries,

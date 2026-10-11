@@ -376,13 +376,16 @@ fn the_version_line_names_the_build_and_the_three_formats_it_reads() {
     );
 }
 
-/// THE CLASSED DOOR for the open's own lines (CUT 1 (a)): the version's,
-/// the directory's, the recovery's and the upload setting's all go out
-/// through `say_open_line`, which emits under `Class::Open` — read off the
-/// source, since no suite captures the stream in-process; the class word on
-/// the stream itself is pinned by the child-process suite
-/// (`tests/it/open.rs`), which reads `open:` on the binary's stderr. And
-/// the version line is said FIRST, before the directory's.
+/// THE CLASSED DOOR for the open's own lines (CUT 1 (a)): every line of the
+/// open's report said from `open_under` — the version's, the directory's,
+/// the recovery's, the stray `checkpoint.tmp`'s, the tail cut's, the media
+/// limits' and the upload setting's — goes out through `say_open_line`,
+/// which emits under `Class::Open`, and no site in the open spells the
+/// class itself — read off the source, since no suite captures the stream
+/// in-process; the class word on the stream itself is pinned by the
+/// child-process suite (`tests/it/open.rs`), which reads `open:` on the
+/// binary's stderr. And the version line is said FIRST, before the
+/// directory's.
 #[test]
 fn the_opens_own_lines_go_through_the_classed_door() {
     let source = include_str!("../server.rs");
@@ -392,9 +395,13 @@ fn the_opens_own_lines_go_through_the_classed_door() {
     let open_under = &source[start..end];
     assert_eq!(
         open_under.matches("say_open_line(").count(),
-        4,
-        "the four lines — the version, the directory, the recovery, the upload setting — each \
-         through the door"
+        7,
+        "the seven lines — the version, the directory, the recovery, the stray checkpoint.tmp, \
+         the tail cut, the media limits, the upload setting — each through the door"
+    );
+    assert!(
+        !open_under.contains("notice::emit(Class::Open,"),
+        "no line of the open's report spells `Class::Open` at its site: the door is the one emit"
     );
     assert!(
         open_under.find("say_open_line(VersionLine)").expect("the version line")
@@ -415,6 +422,27 @@ fn the_opens_own_lines_go_through_the_classed_door() {
         source[door..door + 160].contains("notice::emit(Class::Open,"),
         "the door emits under Class::Open"
     );
+}
+
+/// THE SERVED PAGE's PARAGRAPH of the module doc says what `GET /` serves:
+/// the read-only GUEST READER — no key, token or session — and no longer an
+/// acting client that generates keys and opens signed sessions, which the
+/// file at `clients/board.html` never did. Read off the source, as the
+/// door's pin is; the wire document's own words are pinned by
+/// `tests/it/wire_doc.rs`.
+#[test]
+fn the_module_doc_says_the_served_page_is_the_guest_reader() {
+    let source = include_str!("../server.rs");
+    let start = source.find("**The served client (wire v6").expect("the served-client paragraph");
+    let end = source[start..].find("\n\n").map_or(source.len(), |n| n + start);
+    let paragraph = source[start..end].to_lowercase();
+    assert!(
+        paragraph.contains("guest reader"),
+        "the paragraph names the guest reader: {paragraph}"
+    );
+    for stale in ["generates keys", "opens signed sessions"] {
+        assert!(!paragraph.contains(stale), "the paragraph no longer says {stale:?}: {paragraph}");
+    }
 }
 
 /// THE GRAMMAR's MOMENTS, as a warning's class word spells each — the four
@@ -1146,7 +1174,7 @@ fn the_checkpoint_threads_lines_go_through_the_classed_door() {
 
 /// THE STANDING LINE's WORDS at fixed reads (`operations.md` §1 THE RATES;
 /// §1.1 m11): every clause standing, each in THE RATES' words with its
-/// position or file, in THE RATES' order, joined by `; ` — the seventh, the
+/// position or file, in THE RATES' order, joined by `; ` — the sixth, the
 /// cell index's, with its place held; one clause alone; and no clause,
 /// which is no line at all (`stands` false).
 #[test]

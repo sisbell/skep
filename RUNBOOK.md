@@ -289,10 +289,10 @@ apart.
    - `observe`, on by default: the `GET /dump` route, a dump of the
      board's world. Build with `--no-default-features` to leave it
      out.
-   - `client`, off by default: a page at `GET /` that makes keys
-     and opens signed sessions at the board's origin. Leave it off
-     for any board other people reach; packaged notebook builds
-     turn it on.
+   - `client`, off by default: the guest reader at `GET /`, one
+     self-contained page that reads the board and holds no key,
+     token or session. It is off so that a hosted image serves no
+     page unless you chose to; packaged notebook builds turn it on.
    - `test-hooks`, off: the test suites' hooks. Never build a
      binary you run with it.
 
@@ -396,24 +396,35 @@ apart.
    7. A checkpoint a crash left half-written, now removed:
 
       ```
-      checkpoint.tmp found ({bytes} bytes) and removed: a checkpoint a crash or the journal's own full volume left half-written, no base, its room on the volume reclaimed by the open
+      open: checkpoint.tmp found ({bytes} bytes) and removed: a checkpoint a crash or the journal's own full volume left half-written, no base, its room on the volume reclaimed by the open
       ```
 
-   8. The media limits and the floor in force:
+   8. A write caught before its commit was durable, cut from the
+      journal's tail. Said only where bytes were cut; an open after
+      a clean stop says nothing here:
 
       ```
-      media limits: no record installed — the daemon's default stands: per-account {bytes} (one part in 8 of the volume's capacity of {bytes} bytes, never below 268435456 bytes), venue total none, lease interval 604800000 ms, per-file cap 67108864; the floor in force {floor} bytes of the volume's free space (never below the constant 268435456 bytes; twice the newest checkpoint's size plus one maximal segment of 134217728 bytes above it, re-read as each checkpoint lands)
+      open: journal tail cut ({bytes} bytes): the un-acked tail a crash or a kill left past the last committed marker — a write caught before its commit was durable, never acknowledged — removed by the open; every acknowledged write stands
       ```
 
-   9. The upload setting, `{source}` being `the default`, the flag
-      as typed, or the variable with its value:
+      The inventory reports them as `journal.tail_cut` (Stop,
+      step 2).
+
+   9. The media limits and the floor in force:
 
       ```
-      open: media uploads: open ({source})
-      open: media uploads: CLOSED ({source}): the creation and the resume are refused uploads_closed
+      open: media limits: no record installed — the daemon's default stands: per-account {bytes} (one part in 8 of the volume's capacity of {bytes} bytes, never below 268435456 bytes), venue total none, lease interval 604800000 ms, per-file cap 67108864; the floor in force {floor} bytes of the volume's free space (never below the constant 268435456 bytes; twice the newest checkpoint's size plus one maximal segment of 134217728 bytes above it, re-read as each checkpoint lands)
       ```
 
-   10. Each change-feed file the open had to cut:
+   10. The upload setting, `{source}` being `the default`, the flag
+       as typed, or the variable with its value:
+
+       ```
+       open: media uploads: open ({source})
+       open: media uploads: CLOSED ({source}): the creation and the resume are refused uploads_closed
+       ```
+
+   11. Each change-feed file the open had to cut:
 
        ```
        failure: {file}: trust ends at position {last} (byte {n} of {length}); the {k} bytes after it are cut; {what follows}
@@ -435,11 +446,11 @@ apart.
        walk that re-covers it while the board serves (Restart,
        step 3).
 
-   11. On a claimed board whose journal holds no head, the board's
+   12. On a claimed board whose journal holds no head, the board's
        first head, written now:
 
        ```
-       the board is claimed and its journal held no head: H.1 written at open, naming the committed pair as it stood
+       landing: the board is claimed and its journal held no head: H.1 written at open, naming the committed pair as it stood
        ```
 
        Where the head writer refuses it, the open goes on and says:
@@ -448,7 +459,7 @@ apart.
        failure: head writer: the head at position {position} was refused ({cause}); no head written this cycle
        ```
 
-   12. With the open done, the configuration warnings, each where
+   13. With the open done, the configuration warnings, each where
        it applies:
 
        ```
@@ -458,7 +469,7 @@ apart.
        warning (at start): the dev setting --allow-preview-keys is on: the enrollment of a preview key (the tag-3 row, fndsa512-preview-ed25519) is admitted, a genesis included — a served board runs without it; drop the flag and restart
        ```
 
-   13. The board's mode and its origins, `{mode}` being
+   14. The board's mode and its origins, `{mode}` being
        `unclaimed`, `CLAIMED-ENFORCING` or `CLAIMED-PERMISSIVE`,
        and an empty list reading `none`:
 
@@ -466,18 +477,18 @@ apart.
        open: auth: {mode} (--local-trust {on|off}, {source}); configured origins {origins}; signed origins {origins}
        ```
 
-   14. The node prefix, or its absence:
+   15. The node prefix, or its absence:
 
        ```
        open: node prefix {prefix} ({source}): egress and assertion config, never journaled; the blocked-prefix list's off-board test runs against it
        open: no --node-prefix: the off-board test is off (every operator account reads as this board's own); a hosted board must supply one
        ```
 
-   15. Where a list was supplied, the blocked-prefix list in force:
+   16. Where a list was supplied, the blocked-prefix list in force:
        `open: blocked-prefix list (at start, {path}):`, and beneath
        it the count of entries in force and each inert entry.
 
-   16. The worker threads, started last. A worker thread the OS
+   17. The worker threads, started last. A worker thread the OS
        refuses stops the start, exit 1:
 
        ```
@@ -488,14 +499,14 @@ apart.
        serves on:
 
        ```
-       pruner: the OS refused its thread ({error}); no pass runs on this daemon's cadence
+       failure: pruner: the OS refused its thread ({error}); no pass runs on this daemon's cadence
        failure: checkpoint thread: the OS refused it ({error}); …
        ```
 
-   17. Later, on a thread of its own, the rebuilt cell index:
+   18. Later, on a thread of its own, the rebuilt cell index:
 
        ```
-       cell index rebuilt at open: {n} values walked, {n} cells, {n} halt marks, {duration} ({duration} past the prefix test)
+       landing: cell index rebuilt at open: {n} values walked, {n} cells, {n} halt marks, {duration} ({duration} past the prefix test)
        ```
 
        Until then an upload's creation and resume, and the listing
@@ -608,7 +619,7 @@ apart.
    `GET /changes` answers `503 feed_rebuilding` for a page that
    reaches into the positions not yet covered; `/events` is
    untouched. A torn file is cut first, said as a `failure:` line
-   (Start, step 3, item 10). The walk then says three things, the
+   (Start, step 3, item 11). The walk then says three things, the
    `progress:` line every 1,000 boundaries or ten seconds, whichever
    comes first:
 

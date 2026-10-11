@@ -43,9 +43,11 @@
 //! A PROMPT HOLDS STDIN FOR ONE LINE. Every touch of stdin under `src/` — a
 //! `stdin(` handle — sits in one of the [`STDIN_READERS`]: `answer`, the one
 //! reader every prompt goes through, locking stdin for its one line alone;
-//! `has_terminal`, which reads nothing; and the whole reads of a `-`
-//! argument, `read_payload`'s and `session --close -`'s. So no prompt holds
-//! stdin while a payload or a token is read.
+//! `has_terminal`, which reads nothing; the whole reads of a `-`
+//! argument, `read_payload`'s and `session --close -`'s; and the dev
+//! provider's `watch_stdin`, which reads stdin to its end for the one stop
+//! the verb has. So no prompt holds stdin while a payload or a token is
+//! read.
 //!
 //! THE SETTINGS ARE `args.rs`'s (§9 item 21). Every `SKEP_*` variable is
 //! named in code in `src/args.rs` alone — the dev binary's
@@ -81,7 +83,7 @@ const STDERR_WRITERS: &[(&str, &str)] = &[("terminal.rs", "has_terminal"), ("ter
 
 /// The functions that may touch stdin: a file under `src/` and the
 /// column-0 function in it.
-const STDIN_READERS: &[(&str, &str)] = &[("terminal.rs", "has_terminal"), ("terminal.rs", "answer"), ("commands.rs", "read_payload"), ("commands/session.rs", "session")];
+const STDIN_READERS: &[(&str, &str)] = &[("terminal.rs", "has_terminal"), ("terminal.rs", "answer"), ("commands.rs", "read_payload"), ("commands/session.rs", "session"), ("dev/serve.rs", "watch_stdin")];
 
 /// The functions that may end the process: a file under `src/` and the
 /// column-0 function in it — each root's `main`.
@@ -205,8 +207,8 @@ fn stdin_is_read_by_answer_and_the_dash_arguments_alone() {
         touches_stdin,
         STDIN_READERS,
         "touches stdin",
-        "every prompt is read through `terminal::answer`, which locks stdin for its one line alone, and a `-` argument is read \
-         whole by `read_payload` or `session --close -`",
+        "every prompt is read through `terminal::answer`, which locks stdin for its one line alone, a `-` argument is read \
+         whole by `read_payload` or `session --close -`, and the dev provider's `watch_stdin` reads stdin to its end for its stop",
     );
 }
 

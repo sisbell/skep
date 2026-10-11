@@ -12,4 +12,5 @@ mod cli;
 mod common;
 mod dev;
 mod hostile;
+mod serve;
 mod tidy;

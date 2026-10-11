@@ -5,7 +5,7 @@ edition.workspace = true
 rust-version.workspace = true
 repository.workspace = true
 license.workspace = true
-description = "skep — the command over skep-client: the thirteen commands of client.md §2.1, flag parsing by hand, one file per command, a Person over the terminal, stdout DATA and stderr TALK (client.md §1.2, §2); and beside it skep-dev, the dev binary whose one verb, seed, fills a running claimed board with a prose corpus"
+description = "skep — the command over skep-client: the thirteen commands of client.md §2.1, flag parsing by hand, one file per command, a Person over the terminal, stdout DATA and stderr TALK (client.md §1.2, §2); and beside it skep-dev, the dev binary whose two verbs seed a running claimed board with a prose corpus and serve the shell's core (skep-shell) to a page over loopback"
 readme = "README.md"
 
 [[bin]]
@@ -14,13 +14,15 @@ path = "src/main.rs"
 
 # The dev binary beside `skep`: `skep-dev seed` fills a running, claimed
 # board with a prose corpus — editions, citation links, second versions,
-# drafts, a second account. The thirteen commands stand; this is no
-# fourteenth. A plain second target, built by every `--bins` and by the
-# package's default build; the sidecar image names `--bin skep`, so its
-# image holds the command alone. `test = false`: the two binaries compile
-# the same `args`, `terminal` and `shared` modules, whose unit suites run
-# once, under `skep`; the dev binary's own claims are its integration
-# fence, `tests/it/dev.rs`, which drives the built binary through argv.
+# drafts, a second account — and `skep-dev serve` serves the shell's core
+# (`skep-shell`) to a page in a browser over loopback. The thirteen
+# commands stand; this is no fourteenth. A plain second target, built by
+# every `--bins` and by the package's default build; the sidecar image
+# names `--bin skep`, so its image holds the command alone. `test = false`:
+# the two binaries compile the same `args`, `terminal` and `shared`
+# modules, whose unit suites run once, under `skep`; the dev binary's own
+# claims are its integration fence, `tests/it/dev.rs` and
+# `tests/it/serve.rs`, which drive the built binary through argv.
 [[bin]]
 name = "skep-dev"
 path = "src/dev/main.rs"
@@ -34,6 +36,14 @@ test = false
 # of the image by the `--bin`.
 default = ["tls"]
 tls = ["skep-client/tls"]
+# `dev-hooks` — OFF, and enabled by no shipped build: `skep-dev serve --own`
+# runs the daemon IN-PROCESS with its `test-hooks` doors, so a page under
+# development meets the daemon's fault states forced live (`write_busy`,
+# `scan_busy`, the head writer's refusal). It turns the regular, OPTIONAL
+# `skepd` dependency below on; the default build and the sidecar's
+# `--no-default-features --bin skep` build carry no `skepd` at all, which
+# `scripts/gate-full.sh`'s isolation line and `tests/it/serve.rs` hold.
+dev-hooks = ["dep:skepd"]
 
 [dependencies]
 # The library, its acting half on: every command is a library call, and
@@ -51,6 +61,16 @@ skep-address = { path = "../skep-address" }
 # the search budgets share (`skep-corpus`'s crate doc states the rule);
 # std and a `git` child process, nothing of skep.
 skep-corpus = { path = "../skep-corpus" }
+# THE SHELL's CORE the dev binary's `serve` verb serves to a page over
+# loopback: the bridge's calls and events, the references, the person
+# seam, the feed consumer, the declarations — written once, the transport
+# alone the verb's.
+skep-shell = { path = "../skep-shell" }
+# The daemon IN-PROCESS with its test hooks, behind `dev-hooks` alone (the
+# feature above): a REGULAR dependency, optional, so `cargo tree -e normal`
+# at the default features names no `skepd`. The dev-dependency below is
+# the suites', unchanged.
+skepd = { path = "../skepd", features = ["test-hooks"], optional = true }
 serde_json.workspace = true
 
 [dev-dependencies]

@@ -14,7 +14,7 @@ workspace's `ARCHITECTURE.md` §The command. The default store is
 default here; the sidecar image builds `--no-default-features --bin skep`.
 
 Beside it the crate builds `skep-dev`, a dev binary over the same
-plumbing with one verb today: `skep-dev seed` dials a RUNNING board the
+plumbing with two verbs. `skep-dev seed` dials a RUNNING board the
 person started per `RUNBOOK.md` §3 and claimed with `skep claim`, opens
 one content-scoped signed session under the person's key, and fills the
 board from a git checkout of prose at a pinned commit (`--repo`, or
@@ -28,6 +28,42 @@ rotation), drafts past the tier (`--drafts`, default 10) with the first
 windowed by the first edition, and a keyless second account with a draft
 the claimant cannot read. One JSON object on stdout; a manifest beside the
 key store (`<store>-seed/<chain>.jsonl`) makes a second run add nothing
-and a killed run resume. The thirteen commands stand: the tool is no
-command of `skep`, and the sidecar image, built `--bin skep`, holds none
-of it.
+and a killed run resume.
+
+`skep-dev serve` is THE DEV PROVIDER: the shell's core (`skep-shell`)
+served to a page in a browser over loopback HTTP and server-sent events —
+`POST /bridge/<call>` for the twenty calls of `client.md` §4b.1 (`{result}`
+or `{refused}` back, HTTP 200 either way; a 4xx is the provider's own
+refusal), `GET /bridge/events` for the six events of §4b.2 (`event:` and
+`data:` lines, a `:ka` comment every fifteen seconds), `POST /bridge/answer`
+and `/bridge/cancel` for a moment's two answers, `GET /bridge/log` (every
+call the page made and every dial the provider made), `GET /bridge/shapes`
+(the TypeScript declarations), `POST /bridge/script` (the next answer of a
+call armed as a named refusal, an event fired by hand), and `POST
+/bridge/fetch`, which streams a blob's bytes. ONE page origin is admitted
+(`--page-origin`, required): every request's `Origin` must equal it,
+`Host` must name the listen address (`--listen`, default 8742), the peer
+must be loopback, and the per-run secret — `--secret`, else generated and
+printed once on stdout — must ride the `Skep-Provider` header, or the
+event stream's URL as `?provider=<secret>`, since an `EventSource` sends no
+custom header (unverified here); the CORS answer names the one origin and
+never `*`. The session is `--session bare` as the principal (`--principal`,
+default 1) on the permissive board, or `--session signed` with the dev key
+in `--dir`; `~/.skep` is never consulted, and a bare run without `--dir`
+takes a throwaway directory under the system temp dir. `--script <file>`
+answers the SECRET and CONSENT moments from a script (`skep-shell`'s
+grammar); absent, the auto arm answers and says so on stderr. The board is
+`--board`, a daemon already running, or — in a build with the `dev-hooks`
+feature, which no shipped build enables — `--own --data-dir <dir> [--port
+<p>]`, the daemon run in-process with its test hooks and its fault doors at
+`POST /bridge/fault/<door>` (`write_busy`, `scan_busy`, `fetch_busy`,
+`release`, `refuse_next_head`, `hold_feed_walk`, `release_feed_walk`,
+`media_free_space`, `panic_checkpoint_thread`). The provider stops cleanly
+when stdin closes (sessions closed, the index saved), exit 0; exit 2 is
+usage, exit 3 a halt before serving.
+
+The thirteen commands stand: the dev binary is no command of `skep`, and
+the sidecar image, built `--no-default-features --bin skep`, holds none of
+it and no `skepd` (the default build neither: `dev-hooks` alone links the
+daemon, which `scripts/gate-full.sh`'s isolation line and
+`tests/it/serve.rs` hold).

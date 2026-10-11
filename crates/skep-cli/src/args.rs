@@ -21,7 +21,8 @@
 //! THE DEV BINARY's grammar is the same machinery over its own rows
 //! ([`dev`]): `skep-dev`'s root declares this file as its `args` too, so a
 //! flag beats its variable in one spelling for both programs, and the
-//! settings stay this file's.
+//! settings stay this file's. Its two verbs: `seed`, and `serve`, the dev
+//! provider over the shell's core.
 
 use std::collections::HashMap;
 use std::env::{self, VarError};
@@ -518,14 +519,18 @@ pub mod dev {
     use std::fmt;
     use std::path::PathBuf;
 
-    use super::{parse_under, Grammar, Line, Parsed, Row, Usage};
+    use skep_client::Origin;
 
-    /// `skep-dev`'s verbs: `seed` today — the fixture recorder a later one,
-    /// in this binary, so the dev tools grow verbs as the daemon's two
-    /// operator tools do.
+    use super::{parse_under, Form, Grammar, Line, Parsed, Row, Usage};
+
+    /// `skep-dev`'s verbs: `seed`, and `serve` — the dev provider, the
+    /// shell's core served to a page over loopback; the fixture recorder a
+    /// later one, in this binary, so the dev tools grow verbs as the
+    /// daemon's two operator tools do.
     #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
     pub enum DevCommand {
         Seed,
+        Serve,
     }
 
     impl DevCommand {
@@ -533,6 +538,7 @@ pub mod dev {
         pub fn verb(self) -> &'static str {
             match self {
                 DevCommand::Seed => "seed",
+                DevCommand::Serve => "serve",
             }
         }
     }
@@ -561,20 +567,46 @@ pub mod dev {
     /// `--drafts`'s default: ten drafts past the tier.
     pub const DEFAULT_DRAFTS: usize = 10;
 
+    /// `serve --listen`'s default: the provider's loopback port, the one
+    /// the dev provider record's example names (its §3.2).
+    pub const DEFAULT_LISTEN: u16 = 8742;
+
+    /// `serve --port`'s default under `--own`: the daemon's own default,
+    /// the local record's recipe (`RUNBOOK.md` §3).
+    pub const DEFAULT_NODE_PORT: u16 = 8642;
+
     /// The settings every verb takes — the `skep` command's four. Not
     /// `--label`, which writes a byline this tool never writes, and not
     /// `--json`: the tool prints one JSON object always.
     const GLOBAL: [&str; 4] = ["--board", "--dir", "--key", "--principal"];
 
     /// THE DEV GRAMMAR: `seed` and its six flags, each taking one value and
-    /// each read in the one form the verb has.
-    const GRAMMAR: [Row<DevCommand>; 1] = [Row {
-        command: DevCommand::Seed,
-        once: &["--repo", "--pin", "--from", "--documents", "--versions", "--drafts"],
-        repeated: &[],
-        switches: &[],
-        forms: &[],
-    }];
+    /// each read in the one form the verb has; `serve` and its flags — the
+    /// one page origin admitted, the listen port, the per-run secret, the
+    /// session mode, the script, and under `--own` the in-process daemon's
+    /// three (`--data-dir`, `--port`, `--no-local-trust`), which belong to
+    /// that form alone and stand apart from `--board`, the running board's.
+    const GRAMMAR: [Row<DevCommand>; 2] = [
+        Row {
+            command: DevCommand::Seed,
+            once: &["--repo", "--pin", "--from", "--documents", "--versions", "--drafts"],
+            repeated: &[],
+            switches: &[],
+            forms: &[],
+        },
+        Row {
+            command: DevCommand::Serve,
+            once: &["--page-origin", "--listen", "--secret", "--session", "--script", "--data-dir", "--port"],
+            repeated: &[],
+            switches: &["--own", "--no-local-trust"],
+            forms: &[
+                Form::Within("--data-dir", "--own"),
+                Form::Within("--port", "--own"),
+                Form::Within("--no-local-trust", "--own"),
+                Form::Apart("--own", "--board"),
+            ],
+        },
+    ];
 
     const DEV: Grammar<DevCommand> = Grammar { rows: &GRAMMAR, global: &GLOBAL, every: &[] };
 
@@ -595,6 +627,16 @@ usage: skep-dev <command> [flags]
                claimant cannot read; one JSON object on stdout; a manifest
                beside the key store makes a second run add nothing and a
                killed run resume
+  serve        serve the shell's core to a page in a browser over loopback
+               HTTP and server-sent events (the dev provider): the bridge's
+               calls at POST /bridge/<call>, its events at GET
+               /bridge/events, the person's answers at /bridge/answer and
+               /bridge/cancel, the log at /bridge/log, the declarations at
+               /bridge/shapes, the script seam at /bridge/script; ONE page
+               origin admitted, with a per-run secret the page carries as
+               ?provider=<secret> and echoes in the Skep-Provider header;
+               the session bare as the claimant, or signed with a dev key;
+               the secret alone on stdout; stops when stdin closes
 
 flags:
   --board <origin>      the board, a canonical origin (env SKEP_BOARD)
@@ -613,9 +655,24 @@ flags:
                                 (default 20)
             [--drafts <n>]      drafts past the tier, the first windowed
                                 (default 10; at least one)
+  serve:    --page-origin <origin>  the ONE origin admitted (required)
+            --session bare|signed   the session mode (required; signed
+                                needs --dir with the principal's key)
+            [--listen <port>]   the provider's loopback port (default 8742)
+            [--secret <text>]   the admission secret, else generated and
+                                printed once on stdout
+            [--script <file>]   the dev arm's answers for the SECRET and
+                                CONSENT moments, one per line; absent, the
+                                auto arm answers and says so
+            and the board: --board <origin>, a running daemon; or, in a
+            build with the dev-hooks feature, --own  [--data-dir <dir>]
+            [--port <p>] (default 8642)  [--no-local-trust] — the daemon
+            run in-process with its test hooks, its fault doors at
+            POST /bridge/fault/<door>
 
 exit codes: 0 done, 1 the board refused, 2 usage, 3 halt and surface,
-4 transport. stdout carries one JSON object; stderr carries talk.
+4 transport. stdout carries one JSON object (seed) or the secret
+(serve); stderr carries talk.
 ";
 
     /// The `skep-dev` command line after the program's name: the one grammar
@@ -674,6 +731,83 @@ exit codes: 0 done, 1 the board refused, 2 usage, 3 halt and surface,
                 }
             }
         }
+
+        /// `--dir` / `SKEP_KEYSTORE` where either is set, and NO default:
+        /// `serve` never consults `~/.skep` — the dev key store is a
+        /// throwaway directory, and a bare run names none.
+        pub fn store_dir_given(&self) -> Result<Option<PathBuf>, Usage> {
+            Ok(self.setting("--dir", "SKEP_KEYSTORE")?.map(PathBuf::from))
+        }
+
+        /// `serve --page-origin`, required: the ONE origin the provider
+        /// admits, a canonical one.
+        pub fn page_origin(&self) -> Result<Origin, Usage> {
+            let text = self.value("--page-origin").ok_or_else(|| Usage("--page-origin is required: the one origin the provider admits".into()))?;
+            text.parse::<Origin>().map_err(|e| Usage(format!("--page-origin: '{text}' is {e}")))
+        }
+
+        /// `serve --listen`, else [`DEFAULT_LISTEN`].
+        pub fn listen(&self) -> Result<u16, Usage> {
+            self.port_flag("--listen", DEFAULT_LISTEN)
+        }
+
+        /// `serve --port` (under `--own`), else [`DEFAULT_NODE_PORT`]; `0`
+        /// an ephemeral port, said on TALK.
+        pub fn node_port(&self) -> Result<u16, Usage> {
+            match self.value("--port") {
+                None => Ok(DEFAULT_NODE_PORT),
+                Some(v) => v.parse::<u16>().map_err(|_| Usage(format!("--port: '{v}' is not a port"))),
+            }
+        }
+
+        fn port_flag(&self, flag: &str, default: u16) -> Result<u16, Usage> {
+            match self.value(flag) {
+                None => Ok(default),
+                Some(v) => v.parse::<u16>().ok().filter(|p| *p > 0).ok_or_else(|| Usage(format!("{flag}: '{v}' is not a port"))),
+            }
+        }
+
+        /// `serve --secret`, where given.
+        pub fn secret(&self) -> Option<&str> {
+            self.value("--secret")
+        }
+
+        /// `serve --session`, required: `bare` or `signed`.
+        pub fn session_mode(&self) -> Result<SessionArm, Usage> {
+            match self.value("--session") {
+                Some("bare") => Ok(SessionArm::Bare),
+                Some("signed") => Ok(SessionArm::Signed),
+                Some(other) => Err(Usage(format!("--session: '{other}' is neither bare nor signed"))),
+                None => Err(Usage("--session bare|signed is required: both arms stand, and a run names one".into())),
+            }
+        }
+
+        /// `serve --script`, where given.
+        pub fn script(&self) -> Option<PathBuf> {
+            self.value("--script").map(PathBuf::from)
+        }
+
+        /// `serve --own`.
+        pub fn own(&self) -> bool {
+            self.switch("--own")
+        }
+
+        /// `serve --data-dir` (under `--own`), required there.
+        pub fn data_dir(&self) -> Result<PathBuf, Usage> {
+            self.value("--data-dir").map(PathBuf::from).ok_or_else(|| Usage("--data-dir is required with --own: the in-process daemon's board directory".into()))
+        }
+
+        /// `serve --no-local-trust` (under `--own`).
+        pub fn no_local_trust(&self) -> bool {
+            self.switch("--no-local-trust")
+        }
+    }
+
+    /// `serve --session`'s two arms.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub enum SessionArm {
+        Bare,
+        Signed,
     }
 }
 

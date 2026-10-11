@@ -1,0 +1,43 @@
+[package]
+name = "skep-shell"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+license.workspace = true
+description = "The shell's core over skep-client, written once for the dev provider and the desktop shell: the bridge's calls and events of client.md §4b — the board and session references the page is handed in a credential's place, the person seam that forwards PUBLIC moments to the page and answers SECRET and CONSENT ones from a dev arm, the feed consumer, the publish-class attest — and the TypeScript declarations of every value that crosses the bridge"
+readme = "README.md"
+
+# No feature: the daemon's doors are the dev verb's (`skep-cli`'s
+# `dev-hooks`), never this crate's, and the scripted person a suite drives
+# is this crate's own dev arm, so no `test-hooks` is needed for the core.
+
+[dependencies]
+# The library every acting client embeds, its `search` feature on: the
+# shell's half of search — the feed consumer, the index directory, the
+# bridge call and the state event's ten arms — is what `feed` and `search`
+# below consume. `acting` (default on) holds the store, the signer, the
+# person seam and the walks.
+skep-client = { path = "../skep-client", features = ["search"] }
+# The entry frame and its body builders, which the publish-class attest a
+# signed session composes is made through (one composer, never a second
+# `entry_frame`), and the enrollment record `keygen` and `fingerprint` print.
+skep-identity = { path = "../skep-identity" }
+# The address vocabulary the attest's slot rows are spelled in: a span is
+# skep-address's value, reached through skep-client and skep-identity and
+# re-exported by neither.
+skep-address = { path = "../skep-address" }
+# The search index's own hit types — the hit, its snippet, a place's
+# standing — which `skep-client`'s search answer carries and this crate
+# spells as the bridge's JSON; no feature.
+skep-search = { path = "../skep-search" }
+# The bridge's values: every call's input and output, every event, is a
+# `serde_json::Value` shaped as client.md §4b.1 and §4b.2 draw it.
+serde_json.workspace = true
+
+[dev-dependencies]
+# The real daemon in-process on an ephemeral port over a temp data dir, as
+# skep-client's own suite takes it: the shell's calls judged against a
+# board, never a fake.
+skepd = { path = "../skepd", features = ["test-hooks"] }
+tempfile.workspace = true

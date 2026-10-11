@@ -1,12 +1,18 @@
-//! `skep-dev` — the dev binary beside `skep`, over the same plumbing: one
-//! verb today, `seed`, which dials a RUNNING board the person started per
-//! `RUNBOOK.md` §3 and claimed with `skep claim`, opens ONE content-scoped
-//! signed session under the person's key, and fills the board from a git
-//! checkout of prose at a pinned commit — editions, citation links, second
-//! versions, drafts with one windowed, a keyless second account — one JSON
-//! object on stdout, a manifest beside the key store for a second run and a
-//! resume. The thirteen commands of `client.md` §2.1 stand: this is no
-//! fourteenth, and the sidecar image, built `--bin skep`, holds none of it.
+//! `skep-dev` — the dev binary beside `skep`, over the same plumbing: two
+//! verbs. `seed` dials a RUNNING board the person started per `RUNBOOK.md`
+//! §3 and claimed with `skep claim`, opens ONE content-scoped signed
+//! session under the person's key, and fills the board from a git checkout
+//! of prose at a pinned commit — editions, citation links, second versions,
+//! drafts with one windowed, a keyless second account — one JSON object on
+//! stdout, a manifest beside the key store for a second run and a resume.
+//! `serve` is THE DEV PROVIDER: the shell's core (`skep-shell`) served to a
+//! page in a browser over loopback HTTP and server-sent events, one page
+//! origin admitted under a per-run secret, the session bare as the
+//! claimant or signed with a dev key, and — behind the `dev-hooks` feature
+//! no shipped build enables — the daemon run in-process with its test
+//! hooks so its fault states are forced live. The thirteen commands of
+//! `client.md` §2.1 stand: this is no fourteenth, and the sidecar image,
+//! built `--bin skep`, holds none of it.
 //!
 //! The root declares `args`, `terminal` and `shared` from the `skep` root's
 //! own files, so the settings (`--board`, `--dir`, `--key`, `--principal`
@@ -58,6 +64,12 @@ mod board;
 // The seed: the inputs and the checks before any write, the cut, the
 // shapes in order, the manifest's writes, the one JSON object.
 mod seed;
+// The dev provider: the loopback listener and the HTTP/1.1 subset it
+// speaks, the admission of the one page origin under the per-run secret,
+// the bridge's routes over the shell's core, the event stream, the script
+// seam, and the daemon's two modes — a running board dialed, or under
+// `dev-hooks` the daemon in-process with its fault doors.
+mod serve;
 
 use std::process::exit;
 
@@ -76,6 +88,7 @@ fn main() {
     };
     let outcome = match line.command {
         DevCommand::Seed => seed::seed(&line),
+        DevCommand::Serve => serve::serve(&line),
     };
     exit(shared::finish(PROGRAM, outcome));
 }

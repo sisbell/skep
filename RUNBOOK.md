@@ -294,7 +294,10 @@ apart.
      token or session. It is off so that a hosted image serves no
      page unless you chose to; packaged notebook builds turn it on.
    - `test-hooks`, off: the test suites' hooks. Never build a
-     binary you run with it.
+     binary you run with it. The one dev exception: `skep-dev serve
+     --own`, under skep-cli's `dev-hooks` feature, links a
+     `test-hooks` daemon IN-PROCESS for a throwaway board on a dev
+     machine, serving nothing to others.
 
 2. **Run it** with the one setting it requires:
 

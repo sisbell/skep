@@ -150,6 +150,15 @@ cargo check -p skep-client --lib --features acting || exit $?
 cargo check -p skep-client --lib --features search || exit $?
 cargo check -p skep-cli --bins --no-default-features || exit $?
 
+# skep-cli's `dev-hooks` build, which no test run below makes at the
+# default features: `skep-dev serve --own` with the daemon in-process and
+# its fault doors. And THE ISOLATION PROOF beside it: the dependency tree
+# of skep-cli at no feature — the sidecar's `--bin skep` build — names no
+# `skepd`, so the shipped binary links no test-hooks daemon; a `skepd`
+# line here is a red before any test runs.
+cargo check -p skep-cli --bins --features dev-hooks || exit $?
+if cargo tree -p skep-cli --no-default-features -e normal --prefix none | grep -q '^skepd '; then echo "gate-full: skep-cli at no feature depends on skepd — the sidecar build would link the daemon"; exit 1; fi
+
 # The feature edges the full run below never compiles: `client` is
 # default-off, and `observe` is on in every test build. The notebook build
 # (`client` on); the build without the dump route (`observe` off), its

@@ -21,7 +21,7 @@ position in the journal.
 
 ## Code map
 
-The workspace is twenty-five crates under `crates/`. Dependencies point
+The workspace is twenty-six crates under `crates/`. Dependencies point
 downward in the list below: a crate may depend only on crates listed
 above it.
 
@@ -196,13 +196,30 @@ foundation and on the stores above it.
   key; `tls` (default off) the `https://` arm; `test-hooks` (default off)
   the scripted person a suite drives; `search` (default off, implies
   `acting`) the `search` module. Its modules and rules: §The client.
+- `skep-shell` — the SHELL's CORE, written once for the dev provider and
+  the desktop shell (the design's `client.md` §4b; the dev provider
+  record, ruled P-1 … P-12): the bridge's twenty calls and six events over
+  `skep-client`, the board and session references the page is handed in a
+  credential's place, the person seam that forwards PUBLIC moments to the
+  page and answers SECRET and CONSENT ones from a dev arm, the feed
+  consumer's thread per board, the publish-class attest a signed session
+  composes, and the TypeScript declarations of every value that crosses
+  the bridge. Of the skep crates it depends on `skep-client` with its
+  `search` feature, `skep-identity`, `skep-address` and `skep-search`
+  alone — never `skepd`, which it reaches over the wire (its suite spawns
+  the daemon as a dev-dependency). No feature, no transport: the loopback
+  server is `skep-cli`'s dev verb's, the native bridge the shell's. Its
+  modules and rules: §The shell's core.
 - `skep-cli` — the `skep` command over `skep-client`, thirteen commands:
   `keygen`, `claim`, `session`, `fingerprint`, `verify`, `health`, `bind`,
   `enroll`, `recover`, `retire`, `rotate`, `handoff`, `accept`; flag
   parsing by hand, a `Person` over the terminal, stdout data and stderr
-  talk — and the dev binary `skep-dev`, whose one verb `seed` fills a
-  running claimed board with a prose corpus (`skep-corpus`) over the same
-  plumbing. Its modules and rules: §The command.
+  talk — and the dev binary `skep-dev`, whose two verbs `seed` a running
+  claimed board with a prose corpus (`skep-corpus`) and `serve` the
+  shell's core (`skep-shell`) to a page over loopback — the dev provider —
+  over the same plumbing; behind its `dev-hooks` feature, which no shipped
+  build enables, `serve --own` links `skepd` with `test-hooks` and runs
+  the daemon in-process. Its modules and rules: §The command.
 - `skep-conformance` — a differential harness against `udanax-green`'s
   goldens.
 
@@ -1015,7 +1032,7 @@ Rules that hold across its files:
 | Feature | Default | Adds | Compiled by the gate |
 |---|---|---|---|
 | `acting` | on | `sign`, `sheet`, `store`, `person`, `derive::records`, `verify`, `resolve`, `ceremony`; `skep-signature`'s `sign` | every default build; `scripts/gate-full.sh` checks the library without it (the reading half) and with it alone |
-| `tls` | off | the dialer's `https://` arm over rustls and the platform verifier | `skep-cli`'s default build (its dev binary `skep-dev` needs none of it — a dev board is loopback, the dialer's plain arm); `scripts/gate-full.sh` checks both of `skep-cli`'s binaries without it, and the sidecar image builds `--bin skep` so the dev binary stays out of it |
+| `tls` | off | the dialer's `https://` arm over rustls and the platform verifier | `skep-cli`'s default build (its dev binary `skep-dev` needs none of it — a dev board is loopback, the dialer's plain arm, for `seed` and for `serve` alike; `serve` takes `search` through `skep-shell` and, under `skep-cli`'s `dev-hooks` alone, the daemon's `test-hooks`); `scripts/gate-full.sh` checks both of `skep-cli`'s binaries without it, and the sidecar image builds `--bin skep` so the dev binary stays out of it |
 | `test-hooks` | off | implies `acting`; `person::scripted` | every test build (the crate's self dev-dependency, and `skep-cli`'s dev-dependency); `scripts/gate-full.sh`'s `--features acting` check builds the library without it, and `tests/it/tidy.rs` checks its gate |
 | `search` | off | implies `acting`; the `search` module and the optional `skep-search` dependency | every test build of this crate (the self dev-dependency turns it on, so the search suites run under the workspace gate); `scripts/gate-full.sh` checks the library with it alone, and `tests/it/tidy.rs` checks that `pub mod search;` is gated and the feature off by default |
 
@@ -1033,6 +1050,85 @@ each answer with no daemon, over `board/fake.rs`'s fake board, which
 answers each request by the test's own closure and keeps every request it
 served; the search module's over a scripted board of its own
 (`search/tests.rs`).
+
+## The shell's core, `skep-shell`
+
+`skep-shell` is the bridge of `client.md` §4b as a library — one method
+per call of §4b.1, every event of §4b.2 on one stream — and the three
+things `skep-client` does not hold and every shell needs, written once so
+the dev provider (`skep-dev serve`) and the desktop shell share them and
+rewrite the transport alone (the dev provider record §2.2, §6; ruled P-1
+(B), P-2 (B1)). Its modules, in the order `src/lib.rs` declares them, each
+naming only those above it:
+
+- `refs.rs` the reference registry's NAMES: a board reference and a
+  session reference minted from OS entropy per process, never a
+  credential, never derived from an origin or a token (THE PIN).
+- `log.rs` the call log and the dial log the page's gate reads, and
+  `LoggingDialer`, the one `PlainHttp` every board dials through — so the
+  bare set is met by the shell and never by the page, and no dial escapes
+  the log; no token, header or body is kept.
+- `events.rs` `EventBus`: the six events as values, fanned out to every
+  subscriber in order.
+- `refusal.rs` `Refusal`: the one shape the page renders — the board's
+  verdict verbatim, a halt's face under the armed name the row spells, the
+  block, the unreachable board, the shell's own — each with ONE `name`.
+- `script.rs` the DEV ARM: the SECRET and CONSENT moments answered from a
+  script's lines in order or by the auto arm, each answer said on TALK and
+  never sent to the page; the sheets a walk shows kept in-process for a
+  scripted re-type.
+- `person.rs` `BridgePerson`: the PUBLIC moments as `moment` events
+  blocking on the page's `answer`/`cancel` through `Pending`, routed to
+  the walk that asked; the SECRET and CONSENT ones to the arm.
+- `attest.rs` `Composer`: the entry frame for the ten kinds, every axis
+  from the shell's own reads — a V-spec slot through `image`, a
+  `publish`'s copied runs read back through the origin's arrangement, a
+  window by address — through `skep-identity`'s builders, as the daemon's
+  verifier composes.
+- `sessions.rs` `Sessions`: the token under its reference; the bare and
+  the signed openings under the armed names; the death's arm from public
+  reads, the restart arm's silent re-open.
+- `feed.rs` `Feed`: two threads per board — the `/events` stream's reader
+  and the consumer's owner — the `feed`, `index`, `mode` and `daemon`
+  events, and the `search` call answered over a channel so the consumer
+  never crosses a thread; `BoardEntry`, one board of the shell.
+- `shell.rs` `Shell`: the boards, the sessions, `SessionMode`, the twenty
+  calls (`call(name, args)` the dispatch), `fetch` as a stream, `answer`,
+  `cancel`, `shutdown`.
+- `shapes.rs` the declarations' table, `declarations()`, pinned by its
+  suite.
+
+Rules that hold across its files:
+
+- **The page holds nothing.** No token, key, seed, path or store location
+  enters a call's answer or an event: the registry's names stand in for
+  the token, the SECRET class stays in the arm, and the log keeps sizes
+  and routes alone. The shell's suite reads every answer and event for a
+  token-shaped run and finds none.
+- **The board's verdict is carried verbatim.** A `rejected` document and a
+  non-200 are `Refusal::Board` with the body whole; the shell names a
+  refusal of its own only where the row arms one (`session_ended`,
+  `unknown_board`, `write_in_guest_form`, `query_too_long`, `not_reached`,
+  `abandoned`) or where it diagnosed the armed name from typed reads
+  (`no_key`, `origin_state`, `retired`, `not_enrolled`, `busy`).
+- **Attach when in doubt.** Under the signed mode every write of the ten
+  kinds carries the attest the shell composed; the daemon drops one
+  outside the class. A frame the composer cannot sign is never sent.
+- **One composer, the daemon's twin.** The bodies are
+  `skep-identity`'s builders; nothing here spells a row.
+- **A moment is answered once, by the party the class names.** `Pending`
+  removes an id at its first answer; a cancel abandons; a walk that ends
+  without its answer is `abandoned` to the page.
+- **The declarations are pinned.** Every shape in the table has a sample
+  the suite round-trips; a required field missing or a built field
+  undeclared is red.
+
+Its suite runs against a daemon spawned in-process (`shell/tests.rs`):
+the bare mode's claim through the shell's own call with the anchor boxes
+answered as the page would, the draft write and its `feed` event, the
+publish-class refusal verbatim, the stale and foreign references; the
+signed mode's mint, shot and V-spec link acked under the composed attest;
+and the declared fields of the real answers.
 
 ## The command, `skep-cli`
 
@@ -1114,12 +1210,31 @@ unclaimed board, `writes.halted`, a stranger's claim), the cut through
 `skep-corpus`, and the shapes in order: editions, citation links with
 ghosts for outside names, rotated second versions with the window on the
 first edition's shot, drafts, a keyless second account — ending in one
-JSON object. `skep-dev seed` dials a RUNNING board the person started per
-`RUNBOOK.md` §3 (with `--origin`, so a signed session is admitted) and
-claimed with `skep claim`; it never claims, and it takes none of `tls`,
-`search` or `test-hooks`. The `[[bin]]` carries `test = false`: the
-shared modules' unit suites run once, under `skep`, and the dev binary's
-own claims are its integration fence, `tests/it/dev.rs`.
+JSON object; and `serve.rs`, THE DEV PROVIDER — `skep-dev serve` — with
+its modules beneath it: `serve/http.rs`, the HTTP/1.1 subset in the shape
+of the daemon's (one request per connection, the timeouts, the head and
+body caps, the event stream's framing, the CORS headers for the one origin
+and never `*`); `serve/admission.rs`, the check every request passes
+before any dial — the peer loopback, `Host` the listen address, `Origin`
+the one page origin, the per-run secret in the `Skep-Provider` header or
+the event stream's `?provider=` query; `serve/node.rs`, the daemon's two
+modes — a running board dialed, or under the crate's `dev-hooks` feature
+the daemon in-process with its test hooks and the fault doors
+`/bridge/fault/<door>` reaches; and `serve/routes.rs`, the routes over
+`skep-shell`'s core — `POST /bridge/<call>`, `GET /bridge/events`, the two
+answers, the log, the shapes, the script seam, the fetch stream. `skep-dev
+seed` dials a RUNNING board the person started per `RUNBOOK.md` §3 (with
+`--origin`, so a signed session is admitted) and claimed with `skep
+claim`; it never claims, and it takes none of `tls`, `search` or
+`test-hooks`. `skep-dev serve` takes `search` through `skep-shell`, and
+`test-hooks` through `skepd` under `dev-hooks` alone — the default build
+and the sidecar's `--no-default-features --bin skep` build carry no
+`skepd`, which `scripts/gate-full.sh`'s isolation line and
+`tests/it/serve.rs` hold; it stops when its stdin closes, the one stop
+the verb has, read by `watch_stdin`. The `[[bin]]` carries `test =
+false`: the shared modules' unit suites run once, under `skep`, and the
+dev binary's own claims are its integration fences, `tests/it/dev.rs` and
+`tests/it/serve.rs`.
 
 Rules that hold across its files:
 
@@ -1224,8 +1339,15 @@ ghost answers `doc_not_registered`, the versions differ as each arm says,
 the drafts answer the claimant and are withheld from a guest with the
 windowed run withheld to the width, a second run adds nothing, a run cut
 short resumes, the refusals halt before any write, and a `--bin skep`
-build yields one binary; and `tidy`, the arrangement above over both
-roots, read off the source. `common` holds the spawn — alone, or behind a tap that keeps what a
+build yields one binary; `serve`, the dev provider driven as the page
+would drive it over loopback HTTP with the admission headers — every call
+of `client.md` §4b.1 in the bare mode, the events on the stream, the
+claim's PUBLIC moments answered and cancelled through the bridge, the
+admission's refusals before any dial, the signed mode's attested
+publish-class write, the fault doors under `dev-hooks`, the isolation of
+the shipped builds from `skepd`, the declarations served, and the
+conformance of the crate and the provider over one sequence; and `tidy`,
+the arrangement above over both roots, read off the source. `common` holds the spawn — alone, or behind a tap that keeps what a
 client put on the wire — a canned board that answers whatever bytes a test
 chose, and the runs, every `SKEP_*` variable and `HOME` scrubbed from them:
 piped, with stdout or stderr closed, from a chosen working directory, or

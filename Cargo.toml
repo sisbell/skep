@@ -25,6 +25,7 @@ members = [
     "crates/skep-corpus",
     "crates/skep-resolve",
     "crates/skep-client",
+    "crates/skep-shell",
     "crates/skep-cli",
 ]
 # The nightly libFuzzer crate (hardening H2, tier 2) is deliberately NOT a

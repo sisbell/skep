@@ -1,26 +1,19 @@
 //! THE THIRTEEN COMMANDS, each exactly as `client.md` §2.2 writes it — one
 //! file per command beneath this one, each a `pub fn` that `main`
 //! dispatches to and that answers `Ok` or the [`Stop`] it came to, every
-//! walk a library call — and what they share, private here and so visible
-//! to each of them: the two streams, stdout DATA (`data`, `data_verbatim`,
-//! `--help`'s text among what they carry) and stderr TALK (`talk`, the
-//! terminal's line writer, which the prompts share) (§2.4) — TALK rendered
-//! inert to the terminal reading it (the terminal's `inert`), and a DATA
-//! line its C0 controls (`c0_inert`); a DATA write stdout refuses a halt
-//! and a TALK line stderr refuses dropped, neither a panic; the stops and
-//! §2.3's exit codes (`Stop`, and `finish`, the one place a stop's block
-//! and its code are chosen — `main`'s refusal of a command line it cannot
-//! parse among them; `require_terminal`, the person doors' check, whose
-//! refusal is a halt naming the [`Door`]'s own moments); the plumbing from
-//! the flags to a board, a store, a payload read to its cap
-//! ([`MAX_PAYLOAD_BYTES`]), a principal and a key — a key file refused
-//! where a walk takes none (`require_no_key_file`); the anchor boxes'
-//! per-run default ([`BoxDefault`]); the three facts' one spelling
+//! walk a library call — and what they share AMONG THEMSELVES ALONE,
+//! private here and so visible to each of them: `require_terminal`, the
+//! person doors' check, whose refusal is a halt naming the [`Door`]'s own
+//! moments; a payload read to its cap ([`MAX_PAYLOAD_BYTES`]); the anchor
+//! boxes' per-run default ([`BoxDefault`]); the three facts' one spelling
 //! (`print_facts`); the outstanding-act line `keygen` and `fingerprint`
 //! share (`OUTSTANDING_ACT`); and the whole-set compare, from the held set
-//! to its halt (`held_set`, `compare_genesis`). A halt is one block on
-//! stderr: the state, its cause, the one act (AUTH-5.66; AUTH-5.67's
-//! key-file cell naming the path and the state).
+//! to its halt (`held_set`, `compare_genesis`). What the dev binary shares
+//! with them — the two streams, the stops and their exit codes, the
+//! plumbing from the flags to a board, a store, a principal and a key —
+//! is `shared.rs`'s, taken here and handed down to the command files under
+//! the names they always had; `finish` and `help` are the `skep`
+//! [`Program`]'s own.
 
 mod accept;
 mod bind;
@@ -50,74 +43,39 @@ pub use rotate::rotate;
 pub use session::session;
 pub use verify::verify;
 
-use std::borrow::Cow;
 use std::fs::File;
-use std::io::{self, Read, Write};
+use std::io::{self, Read};
 use std::path::Path;
 
 use skep_client::board::Board;
 use skep_client::derive::records::{compare_whole_set, credential_records, Difference, Held};
-use skep_client::derive::{Mode, Walk};
-use skep_client::dial::PlainHttp;
+use skep_client::derive::Walk;
 use skep_client::halt::Halt;
 use skep_client::sheet::{render_inert, Facts};
-use skep_client::store::{arm4_face, FileStore, KeyFacts, KeySelector, Purpose, StoreError};
+use skep_client::store::{FileStore, KeyFacts, KeySelector, Purpose};
 use skep_identity::{Fingerprint, LabelError, PublicKey, MAX_RECORD_BYTES};
 
-use crate::args::{CommandLine, Usage, HELP};
+use crate::args::HELP;
+use crate::shared::{
+    self, board_of, data, data_verbatim, principal_or_bound, require_no_key_file, select_key,
+    store_of, Program, Stop,
+};
 use crate::terminal::{has_terminal, talk};
 
-/// Why a command stopped short of exit 0 (§2.3): a usage refusal — the
-/// flag's shape alone — or a member of the halt family (§1.1's `halt` row),
-/// a person door reached without a controlling terminal among its HALT AND
-/// SURFACE members (§2.3's exit-3 row). Commands name their stops with `?`;
-/// [`finish`] is the one place a stop's stderr block and its code are
-/// chosen together.
-#[derive(Debug)]
-pub enum Stop {
-    /// A usage refusal: exit 2, the help beneath it.
-    Usage(Usage),
-    /// A member of the halt family, with the code it carries: 3 halt and
-    /// surface, 1 the board refused, 4 transport.
-    Halt(Halt),
-}
+/// The `skep` program: its name, which every stop's block opens with, and
+/// the help a usage refusal prints beneath it.
+const SKEP: Program = Program { name: "skep", help: HELP };
 
-impl From<Usage> for Stop {
-    fn from(u: Usage) -> Stop {
-        Stop::Usage(u)
-    }
-}
-
-impl From<Halt> for Stop {
-    fn from(h: Halt) -> Stop {
-        Stop::Halt(h)
-    }
-}
-
-/// A store refusal, faced as the library faces it (AUTH-5.67).
-impl From<StoreError> for Stop {
-    fn from(e: StoreError) -> Stop {
-        Stop::Halt(e.into())
-    }
-}
-
-/// A command's outcome finished: a stop's one block said on stderr, and the
-/// exit code answered — 0, or the stop's.
+/// A command's outcome finished under the `skep` program (`shared::finish`):
+/// a stop's one block said on stderr, and the exit code answered — 0, or
+/// the stop's.
 pub fn finish(outcome: Result<(), Stop>) -> i32 {
-    let (block, code) = match outcome {
-        Ok(()) => return 0,
-        Err(Stop::Usage(u)) => (format!("{u}\n\n{HELP}"), 2),
-        Err(Stop::Halt(h)) => (h.to_string(), h.exit_code()),
-    };
-    talk(format!("skep: {block}"));
-    code
+    shared::finish(SKEP, outcome)
 }
 
-/// `--help`: `HELP` on stdout, the DATA the run asked for — a write stdout
-/// refuses a halt, as every command's is.
+/// `--help`: `HELP` on stdout, the DATA the run asked for.
 pub fn help() -> Result<(), Stop> {
-    data_verbatim(HELP.as_bytes())?;
-    Ok(())
+    shared::help(SKEP)
 }
 
 /// A person door (§2.4; `ARCHITECTURE.md` §The command lists the eight):
@@ -155,73 +113,6 @@ fn no_terminal(door: Door) -> Halt {
         ),
         "run it at a terminal; a script that must drive this walk drives the library's scripted Person in-process",
     )
-}
-
-/// DATA, to stdout — ONE line, as [`c0_inert`] renders it, flushed. A
-/// write stdout refuses — its reader gone, its disk full — is a halt
-/// ([`data_refused`]) and the command stops there: never a panic, whose
-/// exit 101 §2.3 does not have, and never a pass with the data lost.
-fn data(line: impl AsRef<str>) -> Result<(), Halt> {
-    let mut out = io::stdout().lock();
-    writeln!(out, "{}", c0_inert(line.as_ref())).and_then(|()| out.flush()).map_err(data_refused)
-}
-
-/// A DATA line as stdout may carry it: every C0 control — the line break
-/// among them — rendered as its code point (`render_inert`'s spelling), so
-/// a byte a board chose forges no second line for the script reading
-/// stdout, and opens no 7-bit escape sequence on the terminal reading it,
-/// ESC being a C0 control. No line this binary composes holds one: a
-/// record's encoder escapes exactly the C0 controls (AUTH-2.130 clause 3),
-/// the three facts are address text, an integer and an origin, hex is hex,
-/// and a fingerprint's two grouped lines are two DATA lines. DEL, a bidi
-/// control and a C1 control stand: a record carries a label's verbatim —
-/// AUTH-1.24 admits all three, and its encoder escapes none — so a
-/// terminal reading stdout that interprets the 8-bit C1 controls, as some
-/// do, meets one a board chose as it came.
-fn c0_inert(line: &str) -> Cow<'_, str> {
-    let c0 = |c: char| c < ' ';
-    if !line.contains(c0) {
-        return Cow::Borrowed(line);
-    }
-    let mut text = String::with_capacity(line.len());
-    for c in line.chars() {
-        if c0(c) {
-            text.push_str(&render_inert(c.encode_utf8(&mut [0; 4])));
-        } else {
-            text.push(c);
-        }
-    }
-    Cow::Owned(text)
-}
-
-/// DATA, to stdout, as the bytes it came in — a body the CLI passes through
-/// untouched (`health`'s, AUTH-5.86; `HELP`) — ended by a newline where it
-/// has none; a write stdout refuses a halt, as at [`data`].
-fn data_verbatim(body: &[u8]) -> Result<(), Halt> {
-    let mut out = io::stdout().lock();
-    let end: &[u8] = if body.ends_with(b"\n") { b"" } else { b"\n" };
-    out.write_all(body).and_then(|()| out.write_all(end)).and_then(|()| out.flush()).map_err(data_refused)
-}
-
-/// The halt a DATA write stdout refused comes to (§2.3's exit 3): what the
-/// command did before the write stands, so its act is the read-back, never
-/// the act again.
-fn data_refused(e: io::Error) -> Halt {
-    Halt::face(
-        "stdout refused this command's data",
-        e.to_string(),
-        "run it again with stdout at a terminal or a file; where it acted on the board or in the store before this write, that act \
-         stands — read it back (`skep fingerprint`, `skep verify`) rather than acting twice",
-    )
-}
-
-fn board_of(c: &CommandLine) -> Result<Board, Usage> {
-    let origin = c.origin()?;
-    Ok(Board::new(origin, PlainHttp::new()))
-}
-
-fn store_of(c: &CommandLine) -> Result<FileStore, Usage> {
-    Ok(FileStore::open(c.store_dir()?))
 }
 
 /// The most bytes a payload argument carries: one record at its cap
@@ -269,57 +160,6 @@ fn record_refused(e: LabelError) -> Halt {
         "AUTH-1.25: the record admits a label inside AUTH-1.24's domain alone, and a key's label is fixed in its file",
         "generate a key named inside the domain (`skep keygen --label <name>`)",
     )
-}
-
-/// The principal: the one `given` — `CommandLine::principal`'s answer, its
-/// refusal already returned as exit 2 by the caller, before any read — else
-/// the board's one binding in the store (§3.5's one-binding test).
-fn principal_or_bound(given: Option<u64>, store: &FileStore, board: &Board) -> Result<u64, Halt> {
-    if let Some(p) = given {
-        return Ok(p);
-    }
-    let ps = store.principals_at(board.dialed())?;
-    match ps.as_slice() {
-        [one] => Ok(*one),
-        [] => Err(Halt::face("no principal", "--principal (or SKEP_PRINCIPAL) is absent and the store holds no binding for this board", "pass --principal")),
-        _ => Err(Halt::face("no principal", "--principal is absent and the store holds bindings for several principals at this board", "pass --principal")),
-    }
-}
-
-/// The check a walk that takes no key file makes (`enroll`'s and
-/// `retire`'s, which select their key from the store's lookup alone):
-/// §3.5 owes `--key` (or `SKEP_KEY`) the lookup's first arm at those
-/// commands, so a key file named there is refused — a usage refusal, ahead
-/// of the door — never dropped for a key the person did not name.
-fn require_no_key_file(c: &CommandLine) -> Result<(), Usage> {
-    match c.key_file()? {
-        Some(_) => Err(Usage(format!(
-            "`--key` (or SKEP_KEY) names a key file, and `skep {}` selects its key from the store's lookup alone in this build: run it without either",
-            c.command
-        ))),
-        None => Ok(()),
-    }
-}
-
-/// The key file `key_file` names — `CommandLine::key_file`'s answer, its
-/// refusal already returned as exit 2 by the caller — else the store's key
-/// for this board and principal (§3.5's lookup), its public facts judged for
-/// `purpose`: an anchor file refused where the key signs and read where it
-/// does not (§2.2's selection test; P11); its signer the store's
-/// (`KeyStore::signer`). Where no key is selected, the arm-4 face forks on
-/// the claimant, a `/health` read of its own (§3.5 arm 4): a board that
-/// does not answer speaks first, its transport halt in place of the store's
-/// face.
-fn select_key(key_file: Option<&Path>, store: &FileStore, board: &Board, principal: u64, purpose: Purpose) -> Result<KeyFacts, Halt> {
-    let sel = match key_file {
-        Some(path) => store.select(&KeySelector::Path(path), purpose),
-        None => store.select(&KeySelector::Board { origin: board.dialed(), principal: Some(principal) }, purpose),
-    };
-    match sel {
-        Ok(key) => Ok(key),
-        Err(StoreError::NoSelection { keys }) => Err(arm4_face(store, &keys, Mode::of(&board.health()?))),
-        Err(e) => Err(e.into()),
-    }
 }
 
 /// The anchor boxes' per-run default (§4.2 step 2), which becomes a
@@ -534,37 +374,15 @@ mod tests {
         assert_eq!((y, m, d), (2243, 10, 17), "the count reached past 2200: day 100 000 is 2243-10-17");
     }
 
-    /// Every stop answers §2.3's code from the one renderer: a usage refusal
-    /// 2, a halt the code its family carries, a store refusal faced as a
-    /// halt, a person door without a terminal a halt of the family, 3, and
-    /// a DATA write stdout refused a halt, 3.
+    /// The commands' own stops answer §2.3's code from the one renderer: a
+    /// person door without a terminal a halt of the family, 3, and a label
+    /// the record refuses a halt, 3 — beside the stops `shared.rs` holds to
+    /// their codes.
     #[test]
-    fn every_stop_finishes_with_its_exit_code() {
+    fn the_commands_own_stops_finish_with_their_exit_codes() {
         assert_eq!(finish(Ok(())), 0);
-        assert_eq!(finish(Err(Usage("a command is required".into()).into())), 2);
-        assert_eq!(finish(Err(Halt::face("state", "cause", "act").into())), 3);
-        let refused = skep_client::Refused { status: 200, code: "credential_refused".into(), detail: None, op: None, body: serde_json::Value::Null };
-        assert_eq!(finish(Err(Halt::Refused(refused).into())), 1);
-        assert_eq!(finish(Err(Halt::Dial(skep_client::DialError::Connect("refused".into())).into())), 4);
-        assert_eq!(finish(Err(StoreError::NotFound { select: "zz".into() }.into())), 3);
         assert_eq!(finish(Err(no_terminal(RETIRE).into())), 3);
-        assert_eq!(finish(Err(data_refused(io::ErrorKind::BrokenPipe.into()).into())), 3);
         assert_eq!(finish(Err(record_refused(LabelError::Newline).into())), 3);
-    }
-
-    /// A DATA line carries no control a board chose: each C0 control — a
-    /// clipboard write's escape and bell, a carriage return, the line break
-    /// that would forge a second line — shown as its code point; and a
-    /// canonical record whose label holds a tab, DEL and a bidi control
-    /// passes byte for byte, its encoder having escaped the tab and left the
-    /// other two standing (AUTH-2.130 clause 3).
-    #[test]
-    fn a_data_line_renders_every_c0_control_and_passes_a_record_whole() {
-        assert_eq!(c0_inert("claimed by 1.0.1\x1b]52;c;cHduZWQ=\x07\r\naccount 1.0.9"), "claimed by 1.0.1<U+001B>]52;c;cHduZWQ=<U+0007><U+000D><U+000A>account 1.0.9");
-        let key = skep_client::sheet::KeyFile::new(skep_client::sheet::Seed::new([7; 32]), false, None, None).public;
-        let record = skep_identity::encode_enroll(&[skep_identity::Enrollment::new(key, false, Some("a\tb\u{7f}c\u{202e}d".into())).unwrap()]);
-        assert!(record.contains('\u{7f}') && record.contains('\u{202e}') && !record.contains('\t'), "{record}");
-        assert!(matches!(c0_inert(&record), Cow::Borrowed(text) if text == record));
     }
 
     /// The person door's refusal is a halt's face — the state, its cause,

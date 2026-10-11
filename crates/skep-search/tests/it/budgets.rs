@@ -48,7 +48,7 @@ use skep_search::{
 };
 
 use board::{parse_addr, DevBoard, Fed};
-use corpus::{corpus, total_bytes, Corpus, Document, RECORDS_BYTES, RECORDS_FILES};
+use corpus::{corpus, records, total_bytes, Corpus, Document, RECORDS_BYTES, RECORDS_FILES};
 use report::{at_most, at_most_ratio, judged, note, reported, Sample, Verdict};
 
 /// The tiers' names in the table.
@@ -100,12 +100,12 @@ fn tier_for(tier: &str) -> Option<&'static str> {
 
 /// The 10³ cut's documents.
 fn cut_3(c: &Corpus) -> Vec<Document> {
-    c.cut(1_000)
+    c.cut(1_000).expect("the design repository at the pin holds the 10³ cut")
 }
 
 /// The 10⁴ cut's documents.
 fn cut_4(c: &Corpus) -> Vec<Document> {
-    c.cut(10_000)
+    c.cut(10_000).expect("the design repository at the pin holds the 10⁴ cut")
 }
 
 /// The records tier entered DIRECTLY: each file one unit of one text item,
@@ -157,9 +157,9 @@ fn units_of(c: &Corpus, tier: &str) -> Option<(Fed, &'static str)> {
         TIER_CUT_3 => (board::fed(tier, || cut_3(c)), TIER_CUT_3),
         TIER_CUT_4 => (board::fed(tier, || cut_4(c)), TIER_CUT_4),
         TIER_RECORDS if std::env::var_os(RECORDS_BOARD_VAR).is_some() => {
-            (board::fed(tier, || c.records()), TIER_RECORDS)
+            (board::fed(tier, || records(c)), TIER_RECORDS)
         }
-        TIER_RECORDS => (direct(c.records()), TIER_RECORDS_DIRECT),
+        TIER_RECORDS => (direct(records(c)), TIER_RECORDS_DIRECT),
         other => panic!("no tier {other}"),
     };
     board_note(name, &fed);
@@ -498,7 +498,7 @@ fn scratch(name: &str) -> PathBuf {
 #[ignore = "timing test - gate-full only"]
 fn the_corpus_is_the_designs_count_and_bytes() {
     let Some(c) = corpus() else { return };
-    let records = c.records();
+    let records = records(&c);
     assert_eq!(records.len(), RECORDS_FILES);
     assert_eq!(total_bytes(&records), RECORDS_BYTES);
     assert_eq!(RECORDS_BYTES, CEILING_BYTES, "the tier is the one the ceiling was sized on");
@@ -507,6 +507,16 @@ fn the_corpus_is_the_designs_count_and_bytes() {
     assert!(cut.iter().all(|d| (corpus::CUT_MIN..=corpus::CUT_MAX).contains(&d.bytes.len())));
     let mut sizes: Vec<usize> = cut.iter().map(|d| d.bytes.len()).collect();
     sizes.sort_unstable();
+    // The 10³ cut's three figures at the pin, as the lane that moved the
+    // cut into `skep-corpus` measured them before and after the move: the
+    // rule reproduced byte for byte, or a STOP.
+    assert_eq!(
+        (total_bytes(&cut), sizes[0], sizes[sizes.len() - 1]),
+        (6_258_909, 1_058, 10_237),
+        "STOP: the 10³ cut at {} is not `{}` as measured: 6,258,909 bytes, the smallest 1,058, the largest 10,237",
+        corpus::PIN,
+        corpus::CUT_RULE
+    );
     let mut records_sizes: Vec<usize> = records.iter().map(|d| d.bytes.len()).collect();
     records_sizes.sort_unstable();
     note(format!(
@@ -898,7 +908,7 @@ fn m2_the_fuzzy_query_at_ten_thousand() {
 /// The 1 MB document: the first MiB of the records tier's largest file, cut
 /// on a character boundary, as one unit of one text item under `key`.
 fn megabyte(c: &Corpus, key: &UnitKey, class: Class) -> Vec<u8> {
-    let records = c.records();
+    let records = records(c);
     let largest = records.iter().max_by_key(|d| d.bytes.len()).expect("the tier");
     let mut end = (MIB as usize).min(largest.bytes.len());
     if let Ok(text) = std::str::from_utf8(&largest.bytes) {

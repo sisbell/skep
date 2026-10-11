@@ -1,0 +1,20 @@
+[package]
+name = "skep-corpus"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+license.workspace = true
+description = "The prose corpus a dev board is seeded from and the search budgets are measured over: a git repository read at one pinned commit through `git` alone — the records tier's filter, the paragraphs of its `.md` files, and the deterministic cut into documents of 1–10 KiB (`cut-v1` over the tier, `cut-v2` over a chosen subtree), each document with the paragraphs it was joined from. std and a `git` child process; nothing of skep, no feature."
+readme = "README.md"
+
+# No dependency: the crate is `std` and a `git` child process. The two
+# callers — skep-search's budgets suite and skep-cli's dev binary — hand it
+# the repository's path and the pin; it names no environment variable.
+[dependencies]
+
+[dev-dependencies]
+# The unit suite builds a repository of its own under the system temp dir —
+# `git init`, one commit — and cuts it; nothing of a real corpus enters the
+# tree, and nothing is written under the workspace.
+tempfile.workspace = true

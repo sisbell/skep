@@ -23,14 +23,20 @@ unicode-segmentation.workspace = true
 unicode-normalization.workspace = true
 
 [dev-dependencies]
+# THE CORPUS the budgets suite measures over (`search.md` §7.3): the design
+# repository at one pin, read through `git`, cut into the 10³ and 10⁴ tiers
+# by the one rule the dev board's seeding tool (`skep-dev seed`) shares —
+# a crate of its own, so the two never spell the rule twice and the cache
+# a tier's units are kept under is keyed by the rule's one name. A
+# dev-dependency alone, as every entry of this table is: the library
+# depends on skep-address and the two Unicode crates and nothing else
+# (§1.3), and a build that compiles no test never reads this table.
+skep-corpus = { path = "../skep-corpus" }
 # THE DEV BOARD the budgets suite feeds (`search.md` §7.3: the corpus
 # "written to a DEV BOARD through the ordinary `insert` path … and read back
 # through `retrieve_v` so the index is fed exactly as the shell feeds it"):
 # the real daemon, in-process on an ephemeral port over a temp data dir, as
 # skep-client's suite takes it — `test-hooks` is what that suite enables too.
-# A dev-dependency alone, pointing up: the library depends on skep-address
-# and the two Unicode crates and nothing else (§1.3), and a build that
-# compiles no test never reads this table.
 skepd = { path = "../skepd", features = ["test-hooks"] }
 # The reads the shell makes, made by the shell's own library: the one
 # dialer, `Board::op` and the wire's frames spelled once (`frames::retrieve_v`,

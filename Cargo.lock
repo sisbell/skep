@@ -1254,7 +1254,9 @@ name = "skep-cli"
 version = "0.1.0"
 dependencies = [
  "serde_json",
+ "skep-address",
  "skep-client",
+ "skep-corpus",
  "skep-identity",
  "skep-signature",
  "skepd",
@@ -1323,6 +1325,13 @@ dependencies = [
  "skep-kernel",
  "skep-links",
  "skep-namespace",
+]
+
+[[package]]
+name = "skep-corpus"
+version = "0.1.0"
+dependencies = [
+ "tempfile",
 ]
 
 [[package]]
@@ -1522,6 +1531,7 @@ dependencies = [
  "serde_json",
  "skep-address",
  "skep-client",
+ "skep-corpus",
  "skep-identity",
  "skepd",
  "tempfile",

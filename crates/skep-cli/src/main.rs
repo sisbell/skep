@@ -11,23 +11,29 @@
 //!
 //! The modules are declared in dependency order, each naming only those
 //! above it (`tests/it/tidy.rs`); `ARCHITECTURE.md` §The command draws how
-//! they fit.
+//! they fit. The crate's second binary, `skep-dev` (`src/dev/main.rs`),
+//! declares `args`, `terminal` and `shared` from the same files.
 
 #![forbid(unsafe_code)]
 
 // The thirteen `Command`s and the grammar — each command's flags and
 // switches and the rules its forms hold them to, one row per command —
 // beside `HELP`, and the settings, each flag beating its environment
-// variable.
+// variable; and, in its `dev` module, the dev binary's grammar over the
+// same machinery.
 mod args;
 // The `Person` over the terminal: `answer`, the one reader every prompt
 // goes through, `talk`, the one writer of a line on stderr, rendering it
 // inert, the sheet's box, and the controlling-terminal check the person
 // doors make.
 mod terminal;
-// The thirteen commands, one file each beneath it, and what they share:
-// DATA's writers, the stops and their exit codes, the three facts'
-// spelling.
+// What both binaries share: the stops and §2.3's exit codes (`Stop`,
+// `finish`), DATA's two writers, and the plumbing from the flags to a
+// board, a store, a principal and a key.
+mod shared;
+// The thirteen commands, one file each beneath it, and what they share
+// among themselves alone: the person doors' check, the payload's read, the
+// anchor boxes' default, the three facts' spelling, the whole-set compare.
 mod commands;
 
 use std::process::exit;

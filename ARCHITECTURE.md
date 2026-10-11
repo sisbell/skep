@@ -21,7 +21,7 @@ position in the journal.
 
 ## Code map
 
-The workspace is twenty-four crates under `crates/`. Dependencies point
+The workspace is twenty-five crates under `crates/`. Dependencies point
 downward in the list below: a crate may depend only on crates listed
 above it.
 
@@ -66,6 +66,17 @@ above it.
   and this one is what two crates of the daemon's lean on. No constant
   lives here: a constant is configuration, not a utility. Its rules: §The
   support crate.
+- `skep-corpus` — the prose corpus a dev board is seeded from and the
+  search budgets are measured over: a git repository read at one pinned
+  commit through `git` alone — the records tier's filter, the paragraphs
+  of its `.md` files, and the one deterministic cut into documents of
+  1–10 KiB (`cut-v1` over the tier, `cut-v2` over a chosen subtree), each
+  document with the paragraphs it was joined from. It depends on no skep
+  crate and on nothing but `std` and a `git` child process, so it may
+  stand anywhere; it stands here beside `skep-util` because, like it, it
+  holds no part of the world — it is what the search budgets suite
+  (`skep-search`, a dev-dependency) and the dev binary (`skep-cli`) lean
+  on. Its rules: §The corpus crate.
 
 **The stores** — each owns one slice of the world and depends only on the
 foundation and on the stores above it.
@@ -189,7 +200,9 @@ foundation and on the stores above it.
   `keygen`, `claim`, `session`, `fingerprint`, `verify`, `health`, `bind`,
   `enroll`, `recover`, `retire`, `rotate`, `handoff`, `accept`; flag
   parsing by hand, a `Person` over the terminal, stdout data and stderr
-  talk. Its modules and rules: §The command.
+  talk — and the dev binary `skep-dev`, whose one verb `seed` fills a
+  running claimed board with a prose corpus (`skep-corpus`) over the same
+  plumbing. Its modules and rules: §The command.
 - `skep-conformance` — a differential harness against `udanax-green`'s
   goldens.
 
@@ -463,6 +476,56 @@ instant, pinned as bytes and never through the constant; the civil date at
 instants computed by hand; the queue over a sink the test owns — a door
 that never waits on it, the bound, the drop and its count, the drain, a
 parked writer's line).
+
+## The corpus crate, `skep-corpus`
+
+`skep-corpus` holds one rule in one place: THE CUT of a git repository's
+prose into documents of 1–10 KiB, read at one pinned commit through `git`
+alone — `ls-tree` for the tier, `cat-file --batch` for the bytes — never
+from the working tree, and nothing of the repository copied anywhere. Its
+one module is its crate root, `src/lib.rs`, whose doc states the rule;
+its unit suite, `src/tests.rs`, cuts a repository it builds under the
+system temp dir. The records tier (`in_tier`, `Corpus::tier`,
+`Corpus::records`): every file tracked at the pin whose basename is not
+`_context.*` and whose extension is not an image's or a video's
+(`MEDIA_EXTENSIONS`) — the set the search index's ceiling was sized on.
+The cut (`Corpus::cut`, `cut-v1`): the tier's `.md` files in `ls-tree`
+order, split at blank lines into paragraphs, each capped at
+`PARAGRAPH_CAP` on a character boundary, joined in order into documents
+whose targets cycle `1 KiB × (1 + 7·i mod 10)` and never pass `CUT_MAX`,
+named `cut-NNNNN`; deterministic, and prefix-stable — the first `n`
+documents of any cut are the first `n` of every longer one. The subtree
+(`Corpus::under`, `cut-v2`): the same rule with the paragraph source
+restricted to the `.md` files under one path, the rule's name following
+the source. The sources (`Corpus::cut_sourced`): each document with the
+paragraphs it was joined from — the file, the byte range, the heading a
+paragraph opens — which the dev binary reads to anchor a citation's link,
+choose a version's paragraph and send a cited section to the document
+holding it.
+
+Rules that hold across its files:
+
+- **The callers name the repository and the pin.** The crate reads no
+  environment variable: the search budgets suite reads its
+  `SKEP_SEARCH_CORPUS` and the dev binary its `--repo` and `--pin`, and
+  each hands the crate a path and a commit. The pin is judged at
+  `Corpus::open` (`cat-file -e <pin>^{commit}`), and every read names it.
+- **Nothing of skep below it, nothing of the world in it.** The crate
+  depends on `std` and a `git` child process alone — no skep crate, no
+  feature, no platform call — and copies nothing of a repository into
+  this one: the budgets suite reads the design repository at its pin at
+  run time, and the dev binary whatever checkout it is handed.
+- **One rule, two names.** `cut-v1` over the whole tier is the budgets
+  suite's cache key, so its documents never change; a subtree is
+  `cut-v2`, another source and another name, and a cache keyed by the
+  rule never mixes the two. The 10³ cut at the design repository's pin is
+  pinned by the budgets suite — 1,000 documents, 6,258,909 bytes, the
+  smallest 1,058, the largest 10,237 — so a change to the rule, the cap
+  or the targets is a STOP there, not a new number.
+- **A shortfall is an `Error`, never a panic.** A `git` that fails, a
+  pin that names no commit, a path that is no blob, a source that runs
+  out before the documents asked for — each is an `Error` the caller
+  renders: the budgets suite skips, the dev binary halts.
 
 ## The registry rows and bodies, `skep-registry`
 
@@ -952,7 +1015,7 @@ Rules that hold across its files:
 | Feature | Default | Adds | Compiled by the gate |
 |---|---|---|---|
 | `acting` | on | `sign`, `sheet`, `store`, `person`, `derive::records`, `verify`, `resolve`, `ceremony`; `skep-signature`'s `sign` | every default build; `scripts/gate-full.sh` checks the library without it (the reading half) and with it alone |
-| `tls` | off | the dialer's `https://` arm over rustls and the platform verifier | `skep-cli`'s default build; `scripts/gate-full.sh` checks the `skep` binary without it |
+| `tls` | off | the dialer's `https://` arm over rustls and the platform verifier | `skep-cli`'s default build (its dev binary `skep-dev` needs none of it — a dev board is loopback, the dialer's plain arm); `scripts/gate-full.sh` checks both of `skep-cli`'s binaries without it, and the sidecar image builds `--bin skep` so the dev binary stays out of it |
 | `test-hooks` | off | implies `acting`; `person::scripted` | every test build (the crate's self dev-dependency, and `skep-cli`'s dev-dependency); `scripts/gate-full.sh`'s `--features acting` check builds the library without it, and `tests/it/tidy.rs` checks its gate |
 | `search` | off | implies `acting`; the `search` module and the optional `skep-search` dependency | every test build of this crate (the self dev-dependency turns it on, so the search suites run under the workspace gate); `scripts/gate-full.sh` checks the library with it alone, and `tests/it/tidy.rs` checks that `pub mod search;` is gated and the feature off by default |
 
@@ -973,8 +1036,9 @@ served; the search module's over a scripted board of its own
 
 ## The command, `skep-cli`
 
-`skep-cli` is the `skep` binary over `skep-client` (`client.md` §1.2, §2):
-it parses the command line, makes the library call — handing a walk the
+`skep-cli` is two binaries over `skep-client` (`client.md` §1.2, §2): the
+`skep` command, and beside it the dev binary `skep-dev`. The command
+parses the command line, makes the library call — handing a walk the
 terminal as its `Person` — and renders the answer, DATA on stdout and TALK
 on stderr, with §2.3's exit code. Every ceremony is a library walk; `bind`
 and `keygen` sequence the library's compositions themselves — `bind`
@@ -987,10 +1051,15 @@ them, each naming only those above it:
   on; the grammar — one row per command, its flags that take one value,
   those that repeat and its switches, and the rules its forms hold them to
   (`Form`), beside the flags every command takes (`GLOBAL`) — with `HELP`,
-  the text that documents it; and `CommandLine`, one parsed command line,
-  its values lent to the commands that read them, its settings each read
-  through `CommandLine::setting`, the one place a flag beats its `SKEP_*`
-  variable, with `session_env` the one setting no flag carries.
+  the text that documents it; and `CommandLine`, one parsed command line
+  (`Line<Command>`), its values lent to the commands that read them, its
+  settings each read through `Line::setting`, the one place a flag beats
+  its `SKEP_*` variable, with `session_env` the one setting no flag
+  carries. Its `dev` module is the dev binary's grammar over the same
+  machinery — `DevCommand`, `seed`'s row, the dev `HELP`, and `DevLine`'s
+  readers of `--repo` (`SKEP_SEARCH_CORPUS`), `--pin`, `--from`,
+  `--documents`, `--versions` and `--drafts` — kept in this file so every
+  `SKEP_*` variable stays its own.
 - `terminal.rs` `Terminal`, the `Person` over the terminal: every prompt on
   stderr, the sheet as a ruled box, the dismissal's clear, the anchor
   import's arm asked of the person and never guessed from what was typed —
@@ -1004,22 +1073,53 @@ them, each naming only those above it:
   and `answer`, the one reader every prompt goes through, stdin locked for
   that one line alone — the `Terminal`'s, and those of `bind`, which is no
   person door: its account paste and its landing question.
-- `commands.rs` what the commands share: DATA's writers (`data`, its line
+- `shared.rs` what both binaries share: DATA's writers (`data`, its line
   rendered by `c0_inert`, and `data_verbatim`), the stops and their exit
-  codes (`Stop` — a usage refusal, or a member of the halt family, a
-  person door reached without a terminal among its halts — which
-  `finish` renders; `require_terminal`, the check each `Door` makes;
-  `help`, `--help`'s DATA), the plumbing from the flags to a board, a
-  store, a payload (`read_payload`, to `MAX_PAYLOAD_BYTES`), a principal
-  and a key — a key file refused where a walk takes none
-  (`require_no_key_file`) — the anchor boxes' per-run default
-  (`BoxDefault`), the three facts' one spelling (`print_facts`, the lines
-  `bind` reads back from a reply), the outstanding-act line `keygen` and
-  `fingerprint` share, and the whole-set compare from the held set to its
-  halt (`held_set`, `compare_genesis`). Beneath it, `commands/<name>.rs`,
-  one file per command, each the
+  codes (`Stop` — a usage refusal, or a member of the halt family — which
+  `finish` renders under a `Program`, the name a stop's block opens with
+  and the help a usage refusal prints beneath it; `help`, `--help`'s
+  DATA), and the plumbing from the flags to a board (`board_of`), a store
+  (`store_of`), a principal (`principal_or_bound`, §3.5's one-binding
+  test) and a key (`select_key`, under `Purpose`) — a key file refused
+  where a walk takes none (`require_no_key_file`).
+- `commands.rs` what the thirteen commands share among themselves alone:
+  the `skep` `Program`'s `finish` and `help`; `require_terminal`, the
+  check each `Door` makes; a payload read to its cap (`read_payload`,
+  `MAX_PAYLOAD_BYTES`); the anchor boxes' per-run default (`BoxDefault`);
+  the three facts' one spelling (`print_facts`, the lines `bind` reads
+  back from a reply); the outstanding-act line `keygen` and `fingerprint`
+  share; and the whole-set compare from the held set to its halt
+  (`held_set`, `compare_genesis`). Beneath it, `commands/<name>.rs`, one
+  file per command, each the
   `pub fn <name>(&CommandLine) -> Result<(), Stop>` that `main`
-  dispatches to.
+  dispatches to, taking the shared names through `super::` as it always
+  did.
+
+The dev binary's root is `src/dev/main.rs`, declared by the manifest's
+second `[[bin]]`, `skep-dev`. It declares `args`, `terminal` and `shared`
+by `#[path]` from the files above — the same modules, compiled into both
+targets, so a flag beats its variable and a stop renders in one spelling —
+and then its own, in dependency order: `manifest.rs`, the manifest beside
+the key store (`<store>-seed/<chain>.jsonl`, keyed by `H.1`'s chain, one
+JSON line per write by its envelope id, appended after the ack, so a
+second run adds nothing and a killed run resumes); `board.rs`, the frames
+over the claimant's ONE content-scoped signed session — the staging
+draft's mint, the chunked per-byte insert, the attested edition mint, the
+shot naming the draft, the attested `make_link` whose V-spec from-end is
+resolved through `image` into the spans the daemon stores, the reads, and
+the retry of `write_busy`, `durability` and
+`attestation_invalid:board_unavailable`; and `seed.rs`, the run — the
+inputs as the command finds them, the checks before any write (an
+unclaimed board, `writes.halted`, a stranger's claim), the cut through
+`skep-corpus`, and the shapes in order: editions, citation links with
+ghosts for outside names, rotated second versions with the window on the
+first edition's shot, drafts, a keyless second account — ending in one
+JSON object. `skep-dev seed` dials a RUNNING board the person started per
+`RUNBOOK.md` §3 (with `--origin`, so a signed session is admitted) and
+claimed with `skep claim`; it never claims, and it takes none of `tls`,
+`search` or `test-hooks`. The `[[bin]]` carries `test = false`: the
+shared modules' unit suites run once, under `skep`, and the dev binary's
+own claims are its integration fence, `tests/it/dev.rs`.
 
 Rules that hold across its files:
 
@@ -1116,8 +1216,16 @@ ceremony commands and the enroll hop, each driving the built `skep`
 through argv, stdin and stdout against a daemon spawned in-process;
 `hostile`, what arrives from outside the person's trust — a board's
 escapes, a reply saying two things, a payload past its cap, a principal
-past the wire's range; and `tidy`, the arrangement above, read off the
-source. `common` holds the spawn — alone, or behind a tap that keeps what a
+past the wire's range; `dev`, the dev binary driven against a corpus the
+suite builds under the system temp dir — a git repository of a few `.md`
+files with cites among them — over a board it spawns and claims: a guest
+reads every edition byte-exact, every link resolves at both ends and the
+ghost answers `doc_not_registered`, the versions differ as each arm says,
+the drafts answer the claimant and are withheld from a guest with the
+windowed run withheld to the width, a second run adds nothing, a run cut
+short resumes, the refusals halt before any write, and a `--bin skep`
+build yields one binary; and `tidy`, the arrangement above over both
+roots, read off the source. `common` holds the spawn — alone, or behind a tap that keeps what a
 client put on the wire — a canned board that answers whatever bytes a test
 chose, and the runs, every `SKEP_*` variable and `HOME` scrubbed from them:
 piped, with stdout or stderr closed, from a chosen working directory, or

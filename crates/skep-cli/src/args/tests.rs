@@ -229,3 +229,116 @@ fn an_argument_that_is_not_text_is_refused_naming_it() {
         }
     }
 }
+
+/// THE DEV GRAMMAR over the same machinery: `seed` parses with its six
+/// flags and the four settings, each default where absent; `--json` and
+/// `--label`, the `skep` command's, are unknown here; a count that is no
+/// count, an unknown verb and a missing value are refused; `--help` is the
+/// help; and every flag `seed` takes is one the dev help documents.
+#[test]
+fn the_dev_grammar_parses_seed_with_its_flags_and_their_defaults() {
+    use dev::{DevCommand, DEFAULT_DOCUMENTS, DEFAULT_DRAFTS, DEFAULT_PIN, DEFAULT_VERSIONS};
+
+    let Parsed::CommandLine(c) = dev::parse(argv(&[
+        "seed",
+        "--board",
+        "http://127.0.0.1:8642",
+        "--repo",
+        "/r",
+        "--dir",
+        "/s",
+        "--principal",
+        "7",
+        "--documents",
+        "12",
+        "--versions",
+        "4",
+        "--drafts",
+        "3",
+        "--pin",
+        "abc1234",
+        "--from",
+        "ux",
+    ]))
+    .unwrap() else {
+        panic!()
+    };
+    assert_eq!(c.command, DevCommand::Seed);
+    assert_eq!(c.origin().unwrap().as_str(), "http://127.0.0.1:8642");
+    assert_eq!(c.repo().unwrap().to_str(), Some("/r"));
+    assert_eq!(c.store_dir().unwrap().to_str(), Some("/s"));
+    assert_eq!(c.principal().unwrap(), Some(7));
+    assert_eq!((c.documents().unwrap(), c.versions().unwrap(), c.drafts().unwrap()), (12, 4, 3));
+    assert_eq!((c.pin(), c.from()), ("abc1234", Some("ux")));
+    let Parsed::CommandLine(c) = dev::parse(argv(&["seed", "--repo", "/r"])).unwrap() else {
+        panic!()
+    };
+    assert_eq!(
+        (c.documents().unwrap(), c.versions().unwrap(), c.drafts().unwrap()),
+        (DEFAULT_DOCUMENTS, DEFAULT_VERSIONS, DEFAULT_DRAFTS)
+    );
+    assert_eq!(
+        (c.pin(), c.from(), c.principal().unwrap(), c.key_file().unwrap()),
+        (DEFAULT_PIN, None, None, None)
+    );
+    assert!(c.origin().is_err(), "the board is required");
+    assert!(matches!(dev::parse(argv(&["--help"])).unwrap(), Parsed::Help));
+    assert!(matches!(dev::parse(argv(&["seed", "-h"])).unwrap(), Parsed::Help));
+    let refused = |a: &[&str]| match dev::parse(argv(a)) {
+        Err(Usage(text)) => text,
+        Ok(_) => panic!("{a:?} parsed"),
+    };
+    assert_eq!(refused(&["frob"]), "unknown command `frob`");
+    assert_eq!(refused(&["seed", "--json"]), "unknown argument `--json`");
+    assert_eq!(refused(&["seed", "--label", "x"]), "unknown argument `--label`");
+    assert_eq!(refused(&["seed", "--repo"]), "--repo needs a value");
+    assert_eq!(
+        refused(&["seed", "--repo", "/a", "--repo", "/b"]),
+        "`--repo` is given at most once at `seed`"
+    );
+    assert_eq!(
+        refused(&["claim"]),
+        "unknown command `claim`",
+        "the skep command's verbs are no verbs here"
+    );
+    for (flag, bad) in [("--documents", "0"), ("--versions", "x"), ("--drafts", "-1")] {
+        let Parsed::CommandLine(c) = dev::parse(argv(&["seed", flag, bad])).unwrap() else {
+            panic!()
+        };
+        let read = match flag {
+            "--documents" => c.documents(),
+            "--versions" => c.versions(),
+            _ => c.drafts(),
+        };
+        assert_eq!(read.unwrap_err().0, format!("{flag}: '{bad}' is not a count of at least one"));
+    }
+    let documented = |flag: &str| {
+        dev::HELP.match_indices(flag).any(|(i, _)| {
+            !dev::HELP[i + flag.len()..]
+                .starts_with(|c: char| c.is_ascii_alphanumeric() || c == '-')
+        })
+    };
+    for flag in [
+        "--repo",
+        "--pin",
+        "--from",
+        "--documents",
+        "--versions",
+        "--drafts",
+        "--board",
+        "--dir",
+        "--key",
+        "--principal",
+    ] {
+        assert!(documented(flag), "`{flag}` is documented in the dev help");
+        let Parsed::CommandLine(_) = dev::parse(argv(&["seed", flag, "x"])).unwrap() else {
+            panic!("{flag} parses at seed")
+        };
+    }
+    assert!(
+        dev::HELP.starts_with("usage: skep-dev <command> [flags]\n")
+            && dev::HELP.contains("\n  seed "),
+        "{}",
+        dev::HELP
+    );
+}

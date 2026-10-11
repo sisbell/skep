@@ -5,30 +5,59 @@ edition.workspace = true
 rust-version.workspace = true
 repository.workspace = true
 license.workspace = true
-description = "skep — the command over skep-client: the thirteen commands of client.md §2.1, flag parsing by hand, one file per command, a Person over the terminal, stdout DATA and stderr TALK (client.md §1.2, §2)"
+description = "skep — the command over skep-client: the thirteen commands of client.md §2.1, flag parsing by hand, one file per command, a Person over the terminal, stdout DATA and stderr TALK (client.md §1.2, §2); and beside it skep-dev, the dev binary whose one verb, seed, fills a running claimed board with a prose corpus"
 readme = "README.md"
 
 [[bin]]
 name = "skep"
 path = "src/main.rs"
 
+# The dev binary beside `skep`: `skep-dev seed` fills a running, claimed
+# board with a prose corpus — editions, citation links, second versions,
+# drafts, a second account. The thirteen commands stand; this is no
+# fourteenth. A plain second target, built by every `--bins` and by the
+# package's default build; the sidecar image names `--bin skep`, so its
+# image holds the command alone. `test = false`: the two binaries compile
+# the same `args`, `terminal` and `shared` modules, whose unit suites run
+# once, under `skep`; the dev binary's own claims are its integration
+# fence, `tests/it/dev.rs`, which drives the built binary through argv.
+[[bin]]
+name = "skep-dev"
+path = "src/dev/main.rs"
+test = false
+
 [features]
 # `tls` ON by default in the binary (client.md §9 item 12): the `skep`
 # command dials a hosted board over `https://` directly. The sidecar image
-# builds `--no-default-features`.
+# builds `--no-default-features --bin skep`: the dev binary needs none of
+# `tls` — a dev board is loopback, the dialer's plain arm — and stays out
+# of the image by the `--bin`.
 default = ["tls"]
 tls = ["skep-client/tls"]
 
 [dependencies]
-# The library, its acting half on: every command is a library call.
+# The library, its acting half on: every command is a library call, and
+# the dev binary's one signed session, its key and its attested writes are
+# the same half's.
 skep-client = { path = "../skep-client" }
 skep-identity = { path = "../skep-identity" }
+# The address vocabulary the dev binary signs with: a citation link's
+# from-end is a V-spec the tool resolves through `image` into the I-extent
+# spans the daemon stores and the signature covers, and a span is
+# skep-address's value — already in the graph through skep-client and
+# skep-identity, neither of which re-exports it.
+skep-address = { path = "../skep-address" }
+# THE CORPUS the dev binary seeds from: the tier's filter and the cut rule
+# the search budgets share (`skep-corpus`'s crate doc states the rule);
+# std and a `git` child process, nothing of skep.
+skep-corpus = { path = "../skep-corpus" }
 serde_json.workspace = true
 
 [dev-dependencies]
 # The library with its test support on: the ceremonies suite drives a walk
 # in-process through the scripted person (`person::scripted`), where no
-# terminal can answer it.
+# terminal can answer it — and the dev suite claims its boards the same way
+# before it drives the built `skep-dev` against them.
 skep-client = { path = "../skep-client", features = ["test-hooks"] }
 # The real daemon in-process, as skep-mcp's suite takes it, driving the
 # built `skep` binary through its argv, stdin and stdout.

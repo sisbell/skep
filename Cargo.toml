@@ -22,6 +22,7 @@ members = [
     "crates/skep-media",
     "crates/skep-registry",
     "crates/skep-search",
+    "crates/skep-corpus",
     "crates/skep-resolve",
     "crates/skep-client",
     "crates/skep-cli",

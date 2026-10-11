@@ -254,8 +254,10 @@ one test each, and `load`'s order — `resume` — the open's judgment over
 a loaded header and the wire's answers — and `budgets` — §7's pins, each
 MEASURED and REPORTED (§7: "TIMING TESTS THAT REPORT, never assert").
 
-THE BUDGETS (`tests/it/budgets.rs`, with `budgets/corpus.rs`,
-`budgets/board.rs` and `budgets/report.rs`): every test of the partition
+THE BUDGETS (`tests/it/budgets.rs`, with `budgets/corpus.rs` — the
+suite's side of the `skep-corpus` crate, which holds the tier's filter and
+the cut rule the dev board's seeding tool shares — `budgets/board.rs` and
+`budgets/report.rs`): every test of the partition
 `#[ignore = "timing test - gate-full only"]`, run by `scripts/gate-full.sh`'s
 `full` profile and by hand with `--run-ignored all`. THE CORPUS is §7.3's,
 read at run time from the design repository at its pin `b17656e9` through

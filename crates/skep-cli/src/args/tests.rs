@@ -342,3 +342,53 @@ fn the_dev_grammar_parses_seed_with_its_flags_and_their_defaults() {
         dev::HELP
     );
 }
+
+/// THE VERSION LINE IS AN ANSWER, as the help is: `--version`, as the
+/// first argument or as a flag of any command, parses to `Parsed::Version`
+/// carrying `<program> <crate version> (<commit>)` — `skep`'s line under
+/// its grammar, `skep-dev`'s under the dev grammar — the version
+/// `CARGO_PKG_VERSION`'s and the commit `SKEP_GIT_SHA`'s at build time,
+/// `unknown` where the build set none, which this suite's build never
+/// does; what follows the flag is unread and what precedes it is judged,
+/// as for `--help`; and both helps name the flag.
+#[test]
+fn version_is_an_answer_for_both_programs_at_both_sites() {
+    let line = |program: &str| {
+        format!(
+            "{program} {} ({})",
+            env!("CARGO_PKG_VERSION"),
+            option_env!("SKEP_GIT_SHA").unwrap_or("unknown")
+        )
+    };
+    let version = |parsed: Result<Parsed, Usage>, at: &[&str]| match parsed {
+        Ok(Parsed::Version(line)) => line,
+        other => panic!("{at:?} parsed as {other:?}, not the version line"),
+    };
+    for at in [
+        &["--version"][..],
+        &["--version", "--frob"],
+        &["health", "--version"],
+        &["claim", "--board", "http://127.0.0.1:8642", "--version", "--frob"],
+    ] {
+        assert_eq!(version(parse(argv(at)), at), line("skep"), "{at:?}");
+    }
+    for at in [&["--version"][..], &["seed", "--version"], &["serve", "--version", "--frob"]] {
+        match dev::parse(argv(at)) {
+            Ok(Parsed::Version(l)) => assert_eq!(l, line("skep-dev"), "{at:?}"),
+            other => panic!("{at:?} parsed as {other:?}, not the version line"),
+        }
+    }
+    assert!(
+        parse(argv(&["--frob", "--version"])).is_err(),
+        "what precedes it is judged: an unknown command"
+    );
+    assert!(
+        parse(argv(&["health", "--frob", "--version"])).is_err(),
+        "what precedes it is judged: an unknown flag"
+    );
+    assert!(
+        HELP.contains("\n  --version             this program's version")
+            && dev::HELP.contains("\n  --version             this program's version"),
+        "both helps name the flag"
+    );
+}

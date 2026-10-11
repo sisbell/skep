@@ -17,6 +17,44 @@ fn help_is_an_answer_not_an_exit() {
     }
 }
 
+/// THE VERSION LINE IS AN ANSWER, NOT AN EXIT, as the usage text is: a
+/// leading `--version` parses to `Command::Version`, which `main` prints,
+/// with what follows it unread as what follows `--help` is; among the
+/// daemon's flags it is refused naming the form, never called unknown; the
+/// line is `skepd <crate version> (<commit>)`, the version
+/// `CARGO_PKG_VERSION`'s and the commit `SKEP_GIT_SHA`'s at build time —
+/// `unknown` where the build set none, which this suite's build never does;
+/// and the usage names the flag.
+#[test]
+fn version_is_an_answer_not_an_exit() {
+    let asked = parse_command(argv(&["--version"])).expect("--version is not an error");
+    assert!(
+        matches!(asked, Some(Command::Version)),
+        "--version asks for the version line, not a run"
+    );
+    let asked = parse_command(argv(&["--version", "--port", "x"])).expect("what follows is unread");
+    assert!(matches!(asked, Some(Command::Version)));
+    match parse_args(argv(&["--data-dir", "/tmp/x", "--version"])) {
+        Err(refused) => {
+            assert_eq!(refused, "--version is read as the first argument: skepd --version")
+        }
+        Ok(_) => panic!("--version among the daemon's flags was not refused"),
+    }
+    assert_eq!(
+        version_line(),
+        format!(
+            "skepd {} ({})",
+            env!("CARGO_PKG_VERSION"),
+            option_env!("SKEP_GIT_SHA").unwrap_or("unknown")
+        )
+    );
+    assert!(
+        usage().contains("\n  --version          this binary's version"),
+        "the usage names it: {}",
+        usage()
+    );
+}
+
 /// THE UPLOAD SETTING (wire.md §Media): OPEN unless `--no-uploads` is
 /// given, `--uploads` the affirmative default, and the usage text names
 /// both with the variable. THE DEFAULT LIMIT's WORDS (`operations.md` §2.3

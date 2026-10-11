@@ -259,6 +259,40 @@ fn run_adapter(args: &[&str], env: &[(&str, &str)]) -> Output {
 
 // ── the tests ────────────────────────────────────────────────────────────
 
+/// `--version` is answered before the catalog, the environment or stdin is
+/// consulted: ONE line on stdout — `skep-mcp <crate version> (<commit>)`,
+/// the version this test's own `CARGO_PKG_VERSION` and the commit
+/// `SKEP_GIT_SHA` named at build time, `unknown` where it named none —
+/// nothing on stderr, exit 0, with no `SKEP_PRINCIPAL` set (a start would
+/// refuse that) and stdin held open by the test, which a read of it would
+/// wait on.
+#[test]
+fn version_is_one_line_on_stdout_before_the_environment_or_stdin_is_read() {
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_skep-mcp"));
+    cmd.arg("--version").stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
+    for var in ["SKEPD_URL", "SKEP_PRINCIPAL", "SKEP_COMMONS"] {
+        cmd.env_remove(var);
+    }
+    let mut child = cmd.spawn().expect("spawn skep-mcp");
+    let held_open = child.stdin.take().expect("child stdin");
+    let status = child.wait().expect("wait for skep-mcp");
+    drop(held_open);
+    let (mut stdout, mut stderr) = (String::new(), String::new());
+    child.stdout.take().expect("child stdout").read_to_string(&mut stdout).expect("read stdout");
+    child.stderr.take().expect("child stderr").read_to_string(&mut stderr).expect("read stderr");
+    assert_eq!(status.code(), Some(0), "exit 0: {stderr}");
+    assert_eq!(
+        stdout,
+        format!(
+            "skep-mcp {} ({})\n",
+            env!("CARGO_PKG_VERSION"),
+            option_env!("SKEP_GIT_SHA").unwrap_or("unknown")
+        ),
+        "the one line"
+    );
+    assert!(stderr.is_empty(), "nothing on stderr: {stderr}");
+}
+
 #[test]
 fn initialize_and_tools_list_serve_the_catalog() {
     // No daemon: nothing below dials skepd.

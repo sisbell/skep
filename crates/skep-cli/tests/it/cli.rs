@@ -81,6 +81,37 @@ fn help_is_data_and_a_refused_command_line_is_exit_2_with_the_help_beneath_on_st
     assert_eq!(r.code, 2, "an unknown flag");
 }
 
+/// `--version` IS DATA on stdout — ONE line, `skep <crate version>
+/// (<commit>)`, the version this test's own `CARGO_PKG_VERSION` and the
+/// commit `SKEP_GIT_SHA` named at build time, `unknown` where it named
+/// none — nothing on stderr, exit 0, as the first argument and as a flag;
+/// and no socket opens: the board set is one nobody answers at, which
+/// would be exit 4 had anything dialed it. The dev binary answers its own
+/// line the same way.
+#[test]
+fn version_is_one_data_line_and_opens_no_socket() {
+    let line = |program: &str| {
+        format!(
+            "{program} {} ({})\n",
+            env!("CARGO_PKG_VERSION"),
+            option_env!("SKEP_GIT_SHA").unwrap_or("unknown")
+        )
+    };
+    let dead = [("SKEP_BOARD", "http://127.0.0.1:1")];
+    for at in [&["--version"][..], &["health", "--version"]] {
+        let r = skep(at, &dead, None);
+        assert_eq!((r.code, r.out.as_str(), r.err.as_str()), (0, line("skep").as_str(), ""), "{at:?}: {r:?}");
+    }
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_skep-dev"))
+        .arg("--version")
+        .env("SKEP_BOARD", "http://127.0.0.1:1")
+        .output()
+        .expect("run skep-dev");
+    assert_eq!(out.status.code(), Some(0), "{out:?}");
+    assert_eq!(String::from_utf8_lossy(&out.stdout), line("skep-dev"));
+    assert!(out.stderr.is_empty(), "nothing on stderr: {:?}", String::from_utf8_lossy(&out.stderr));
+}
+
 #[test]
 fn a_non_canonical_board_exits_2_before_any_socket_and_a_dead_one_exits_4() {
     for bad in ["HTTP://127.0.0.1:1", "http://127.0.0.1:1/", "http://127.0.0.1:080", "http://127.0.0.1:80", "127.0.0.1:1", "http://Example.com"] {

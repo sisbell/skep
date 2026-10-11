@@ -83,6 +83,9 @@ const PROGRAM: Program = Program { name: "skep-dev", help: args::dev::HELP };
 fn main() {
     let line = match args::dev::parse(std::env::args_os().skip(1)) {
         Ok(Parsed::Help) => exit(shared::finish(PROGRAM, shared::help(PROGRAM))),
+        Ok(Parsed::Version(line)) => {
+            exit(shared::finish(PROGRAM, shared::data(line).map_err(Into::into)))
+        }
         Ok(Parsed::CommandLine(line)) => line,
         Err(u) => exit(shared::finish(PROGRAM, Err(u.into()))),
     };

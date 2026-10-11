@@ -271,6 +271,56 @@ because the dialed origin is the configured one. It is not the notebook,
 which is the plain binary of the section above; `scripts/docker-smoke.sh`
 runs this rehearsal end to end and prints what each step found.
 
+## Prebuilt binaries
+
+Each tagged release at https://github.com/sisbell/skep/releases carries
+one archive per platform, `skep-<version>-<triple>.tar.gz`, for
+`aarch64-apple-darwin` (macOS on Apple silicon), `x86_64-apple-darwin`
+(macOS on Intel), `x86_64-unknown-linux-gnu` and
+`aarch64-unknown-linux-gnu`, and one `SHA256SUMS` file naming all four.
+An archive holds three binaries, built from the tag's tree and stripped,
+with a README and the two license texts:
+
+- `skepd`, the daemon: one process over one board directory, the board
+  served over HTTP on loopback;
+- `skep`, the command: the device key, the claim that makes a board
+  yours, sessions, verify, health, bind, and the key ceremonies;
+- `skep-mcp`, the MCP adapter: an agent harness on stdio on one side,
+  the daemon's HTTP wire on the other.
+
+Each answers `--version` with the crate version and the commit it was
+built from — `skepd 0.1.0 (a1b2c3d4e5f6)` — and a developer's own build
+answers `(unknown)` there. Check a download before running anything
+from it:
+
+```
+scripts/release-check.sh skep-0.1.0-aarch64-apple-darwin.tar.gz SHA256SUMS
+```
+
+verifies the archive's checksum against the file (a path, or the release
+page's URL where `curl` is installed), unpacks it to a temporary
+directory, and runs the three binaries' `--version`, holding them to one
+version — the one the archive is named for — and one commit. The script
+needs nothing of the repository but itself. Without it, the checksum
+alone, from the directory holding the archive and the file:
+
+```
+shasum -a 256 --ignore-missing -c SHA256SUMS    # macOS
+sha256sum --ignore-missing -c SHA256SUMS        # Linux
+```
+
+The macOS binaries are not signed or notarized: a copy a browser
+downloaded carries the quarantine attribute and is refused at launch, so
+download with `curl -LO`, or clear the attribute after checking
+(`xattr -d com.apple.quarantine <file>`). There is no Windows archive:
+`skepd` does not build for Windows at this release, because the blob
+store reads the volume's free space through `statvfs`, which rustix
+leaves out of its Windows build. To run a notebook you keep from these
+binaries, see RUNBOOK.md: Start, step 2, and §9, Running it as a
+service. The archives are what `scripts/release-pack.sh` builds, one
+platform per run, which `.github/workflows/release.yml` runs on each
+pushed `v*` tag.
+
 ---
 
 *An independent reimplementation derived from the published Xanadu design

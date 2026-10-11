@@ -43,6 +43,7 @@ use args::{Command, Parsed};
 fn main() {
     let line = match args::parse(std::env::args_os().skip(1)) {
         Ok(Parsed::Help) => exit(commands::finish(commands::help())),
+        Ok(Parsed::Version(line)) => exit(commands::finish(shared::data(line).map_err(Into::into))),
         Ok(Parsed::CommandLine(line)) => line,
         Err(u) => exit(commands::finish(Err(u.into()))),
     };

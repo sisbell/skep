@@ -22,7 +22,9 @@
 //! ([`dev`]): `skep-dev`'s root declares this file as its `args` too, so a
 //! flag beats its variable in one spelling for both programs, and the
 //! settings stay this file's. Its two verbs: `seed`, and `serve`, the dev
-//! provider over the shell's core.
+//! provider over the shell's core. Both grammars answer `--help` and
+//! `--version` where they meet them — as the first argument, or as a flag
+//! — the version line composed here, where the program's name is known.
 
 use std::collections::HashMap;
 use std::env::{self, VarError};
@@ -46,12 +48,30 @@ impl fmt::Display for Usage {
 
 impl std::error::Error for Usage {}
 
-/// The parse's answer: the help, or a command line — the `skep` command's
-/// ([`CommandLine`]) from [`parse`], the dev binary's from [`dev::parse`].
+/// The parse's answer: the help, the version line, or a command line — the
+/// `skep` command's ([`CommandLine`]) from [`parse`], the dev binary's from
+/// [`dev::parse`].
 #[derive(Debug)]
 pub enum Parsed<C = Command> {
     Help,
+    /// `--version`: the line [`version_line`] renders for the program whose
+    /// grammar read it, which the root prints as DATA.
+    Version(String),
     CommandLine(Line<C>),
+}
+
+/// THE VERSION LINE (`--version`): `<program> <crate version> (<commit>)`
+/// — the version Cargo compiled in, and the commit the build named through
+/// `SKEP_GIT_SHA`, `unknown` where it named none, which a developer's own
+/// build never does. Both are read at compile time, so the run consults no
+/// file and no variable; the release scripts set the variable and hold the
+/// shipped binaries to one version and one commit.
+fn version_line(program: &str) -> String {
+    format!(
+        "{program} {} ({})",
+        env!("CARGO_PKG_VERSION"),
+        option_env!("SKEP_GIT_SHA").unwrap_or("unknown")
+    )
 }
 
 /// One of `client.md` §2.1's thirteen commands — the verb a command line
@@ -295,6 +315,8 @@ flags:
   --label <text>        a byline (keygen, rotate, accept)
   --json                one JSON document on stdout (verify, health,
                         fingerprint)
+  --version             this program's version and the commit it was
+                        built from, one line on stdout
   keygen:   [--payload]  [--anchors, and with it  [--paper]
             [--anchor-label <l>]... (two at most)
             [--anchor-out <dir>]... (one per anchor, two at most)]
@@ -321,9 +343,11 @@ exit codes: 0 done, 1 the board refused, 2 usage, 3 halt and surface,
 a retirement's confirmation is typed at the terminal.
 ";
 
-/// One program's GRAMMAR: its rows, the flags every command takes with one
-/// value — the settings among them — and the switches every command takes.
+/// One program's GRAMMAR: its name, as its version line opens; its rows;
+/// the flags every command takes with one value — the settings among them
+/// — and the switches every command takes.
 struct Grammar<C: 'static> {
+    program: &'static str,
     rows: &'static [Row<C>],
     global: &'static [&'static str],
     every: &'static [&'static str],
@@ -331,7 +355,8 @@ struct Grammar<C: 'static> {
 
 /// The `skep` command's grammar: [`GRAMMAR`]'s rows, [`GLOBAL`]'s flags and
 /// `--json`.
-const SKEP: Grammar<Command> = Grammar { rows: &GRAMMAR, global: &GLOBAL, every: &["--json"] };
+const SKEP: Grammar<Command> =
+    Grammar { program: "skep", rows: &GRAMMAR, global: &GLOBAL, every: &["--json"] };
 
 /// The `skep` command line after the program's name, as the platform
 /// carries it: [`parse_under`] the command's own grammar.
@@ -359,6 +384,9 @@ fn parse_under<C: Copy + fmt::Display>(
     if first == "--help" || first == "-h" || first == "help" {
         return Ok(Parsed::Help);
     }
+    if first == "--version" {
+        return Ok(Parsed::Version(version_line(grammar.program)));
+    }
     let Some(row) = grammar.rows.iter().find(|r| r.command.to_string() == first) else {
         return Err(Usage(format!("unknown command `{first}`")));
     };
@@ -367,6 +395,9 @@ fn parse_under<C: Copy + fmt::Display>(
         let flag = arg.as_str();
         if flag == "--help" || flag == "-h" {
             return Ok(Parsed::Help);
+        }
+        if flag == "--version" {
+            return Ok(Parsed::Version(version_line(grammar.program)));
         }
         if grammar.every.contains(&flag) || row.switches.contains(&flag) {
             line.switches.push(arg);
@@ -608,7 +639,8 @@ pub mod dev {
         },
     ];
 
-    const DEV: Grammar<DevCommand> = Grammar { rows: &GRAMMAR, global: &GLOBAL, every: &[] };
+    const DEV: Grammar<DevCommand> =
+        Grammar { program: "skep-dev", rows: &GRAMMAR, global: &GLOBAL, every: &[] };
 
     /// The help text: the one verb, and the flags it takes — the grammar
     /// above, documented beside it.
@@ -645,6 +677,8 @@ flags:
                         SKEP_KEY); an anchor file is refused
   --principal <n>       the principal (env SKEP_PRINCIPAL); may be omitted
                         where the store holds one binding at the board
+  --version             this program's version and the commit it was
+                        built from, one line on stdout
   seed:     --repo <path>       the repository (env SKEP_SEARCH_CORPUS)
             [--pin <commit>]    the commit read (default b17656e9)
             [--from <path>]     cut the `.md` files under this path alone

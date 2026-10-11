@@ -12,7 +12,8 @@
 //! its exit code; the hook's line and the exit's go through the stream's
 //! classed door. And THE OPERATOR's TWO TOOLS over a board directory, run
 //! with no server — `skepd inventory` and `skepd pull` (`skepd::tools`) — a
-//! leading verb parsed before any flag.
+//! leading verb parsed before any flag; and `skepd --version`, read the
+//! same way, the one line a release's check holds the shipped binaries to.
 
 use std::fmt;
 use std::io::{self, Write};
@@ -308,6 +309,7 @@ usage: skepd --data-dir <DIR> [--bind <ADDR>] [--port <PORT>]
                      OFF (every operator reads as this board's own): a
                      hosted board must supply one
   --help             this text
+  --version          this binary's version and the commit it was built from
 
 The operator's two tools run over a board directory with NO server — no
 port, no session — and write no log line of the daemon's:
@@ -341,11 +343,30 @@ The wire protocol is specified in skep/docs/wire.md."
     )
 }
 
-/// What the command line asked for: the daemon, or one of the two tools.
+/// What the command line asked for: the daemon, one of the two tools, or
+/// the version line.
 enum Command {
     Serve(Args),
     Inventory { data_dir: PathBuf, check: tools::HoleCheck },
     Pull { data_dir: PathBuf, hash: Option<String>, file: PathBuf },
+    /// `--version`, the first argument: the line [`version_line`] renders,
+    /// printed by [`main`] as the usage text is.
+    Version,
+}
+
+/// THE VERSION LINE (`--version`): `skepd <crate version> (<commit>)` —
+/// the version Cargo compiled in, and the commit the build named through
+/// `SKEP_GIT_SHA`, `unknown` where it named none, which a developer's own
+/// build never does. Both are read at compile time, so the run consults no
+/// file and no variable; the release scripts set the variable and hold the
+/// three shipped binaries to one version and one commit. A pure value the
+/// unit suite pins.
+fn version_line() -> String {
+    format!(
+        "skepd {} ({})",
+        env!("CARGO_PKG_VERSION"),
+        option_env!("SKEP_GIT_SHA").unwrap_or("unknown")
+    )
 }
 
 /// Which of the operator's two tools a line names — read off its leading
@@ -447,9 +468,10 @@ fn from_env<T: std::str::FromStr>(setting: EnvSetting) -> Result<Option<T>, Stri
 }
 
 /// The command line, or `None` when the caller asked for the usage text:
-/// a leading verb names a tool, read before any flag; anything else is the
-/// daemon's own line. Parsing decides what was asked for; ending the
-/// process is [`main`]'s.
+/// a leading verb names a tool, read before any flag, and a leading
+/// `--version` asks for the version line, what follows it unread as what
+/// follows `--help` is; anything else is the daemon's own line. Parsing
+/// decides what was asked for; ending the process is [`main`]'s.
 fn parse_command(argv: impl Iterator<Item = String>) -> Result<Option<Command>, String> {
     let mut it = argv.peekable();
     match it.peek().map(String::as_str) {
@@ -461,6 +483,11 @@ fn parse_command(argv: impl Iterator<Item = String>) -> Result<Option<Command>, 
             it.next();
             parse_tool(it, Tool::Pull)
         }
+        // Read here, where the verbs are, and not inside `parse_args`: that
+        // parse answers a run or the usage and nothing third, and it reads
+        // the daemon's variables before its flags — where a version check
+        // must answer under any environment, with nothing consulted.
+        Some("--version") => Ok(Some(Command::Version)),
         _ => Ok(parse_args(it)?.map(Command::Serve)),
     }
 }
@@ -583,6 +610,12 @@ fn parse_args(argv: impl Iterator<Item = String>) -> Result<Option<Args>, String
                 );
             }
             "--help" | "-h" => return Ok(None),
+            // Known, and read as the first argument alone (`parse_command`):
+            // this parse answers a run or the usage, so among the daemon's
+            // flags it names the form rather than calling the flag unknown.
+            "--version" => {
+                return Err("--version is read as the first argument: skepd --version".into())
+            }
             other => return Err(format!("unknown argument '{other}'")),
         }
     }
@@ -659,6 +692,12 @@ fn main() {
                 exit(1);
             }
         },
+        // THE VERSION LINE, printed as the usage text is: an answer that
+        // cannot be written fails loudly rather than exiting 0 undelivered.
+        Ok(Some(Command::Version)) => {
+            println!("{}", version_line());
+            exit(0);
+        }
         Ok(None) => {
             println!("{}", usage());
             exit(0);

@@ -274,6 +274,12 @@ fn every_skep_variable_is_named_in_args_alone() {
         let text = read(file);
         let shown = file.strip_prefix(&src).expect("under src").display().to_string();
         for (n, code) in code_lines(&text) {
+            // A compile-time read — `env!`, `option_env!` — is the BUILD's
+            // variable, never a setting the program reads: `SKEP_GIT_SHA`,
+            // the commit the version line carries, is no flag's variable.
+            if code.contains("env!(") {
+                continue;
+            }
             for (i, _) in code.match_indices("\"SKEP_") {
                 let name: String = code[i + 1..].chars().take_while(|c| c.is_ascii_uppercase() || *c == '_').collect();
                 if shown == "args.rs" {

@@ -68,6 +68,7 @@ usage: skep-mcp [--tools-file <PATH>]
   --tools-file <PATH>  override the embedded tool catalog (tools.json:
                        names, descriptions, schemas, server instructions)
   --help               this text
+  --version            this binary's version and the commit it was built from
 
 environment:
   SKEPD_URL       the daemon's origin (default http://127.0.0.1:8642)
@@ -90,6 +91,20 @@ is specified in skep/docs/wire.md.";
 /// `parse_principal` is for the same variable, at the same bound.
 const MAX_PRINCIPAL: u64 = (1 << 53) - 1;
 
+/// THE VERSION LINE (`--version`): `skep-mcp <crate version> (<commit>)`
+/// — the version Cargo compiled in, and the commit the build named through
+/// `SKEP_GIT_SHA`, `unknown` where it named none, which a developer's own
+/// build never does. Both are read at compile time, so the run consults no
+/// file and no variable; the release scripts set the variable and hold the
+/// three shipped binaries to one version and one commit.
+fn version_line() -> String {
+    format!(
+        "skep-mcp {} ({})",
+        env!("CARGO_PKG_VERSION"),
+        option_env!("SKEP_GIT_SHA").unwrap_or("unknown")
+    )
+}
+
 fn main() {
     let mut tools_file: Option<PathBuf> = None;
     let mut args = env::args_os().skip(1);
@@ -102,6 +117,13 @@ fn main() {
             },
             Some("--help" | "-h") => {
                 println!("{USAGE}");
+                return;
+            }
+            // Answered where it is met, as the help is: before the catalog,
+            // the environment or stdin is consulted, so a release's check
+            // runs under any environment; what follows is unread.
+            Some("--version") => {
+                println!("{}", version_line());
                 return;
             }
             _ => die_usage(&format!("unknown argument '{}'", arg.to_string_lossy())),
@@ -274,5 +296,22 @@ mod tests {
             disagreements.len(),
             &disagreements[..disagreements.len().min(5)]
         );
+    }
+
+    /// THE VERSION LINE: `skep-mcp <crate version> (<commit>)`, the version
+    /// `CARGO_PKG_VERSION`'s and the commit `SKEP_GIT_SHA`'s at build time,
+    /// `unknown` where the build set none, which this suite's build never
+    /// does; and the usage names the flag.
+    #[test]
+    fn the_version_line_names_the_binary_its_version_and_the_build_commit() {
+        assert_eq!(
+            version_line(),
+            format!(
+                "skep-mcp {} ({})",
+                env!("CARGO_PKG_VERSION"),
+                option_env!("SKEP_GIT_SHA").unwrap_or("unknown")
+            )
+        );
+        assert!(USAGE.contains("\n  --version            this binary's version"), "{USAGE}");
     }
 }

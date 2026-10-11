@@ -522,6 +522,34 @@ fn a_held_port_refuses_in_milliseconds_with_the_bind_line_and_creates_no_directo
     drop(held);
 }
 
+/// THE VERSION LINE ON THE REAL BINARY: `skepd --version` prints ONE line
+/// on stdout — `skepd <crate version> (<commit>)`, the version this test's
+/// own `CARGO_PKG_VERSION` and the commit `SKEP_GIT_SHA` named at build
+/// time, `unknown` where it named none, which the gate's build never does
+/// — nothing on stderr, exit 0; and it answers under a variable the
+/// daemon's own line refuses (`SKEPD_PORT` set to no port), consulting no
+/// environment, so a release's check runs in whatever environment a person
+/// has.
+#[test]
+fn the_version_line_is_one_line_on_stdout_under_any_environment() {
+    let expected = format!(
+        "skepd {} ({})\n",
+        env!("CARGO_PKG_VERSION"),
+        option_env!("SKEP_GIT_SHA").unwrap_or("unknown")
+    );
+    for refused_port in [None, Some("no port")] {
+        let mut cmd = Command::new(env!("CARGO_BIN_EXE_skepd"));
+        cmd.arg("--version").env_remove("SKEPD_PORT");
+        if let Some(value) = refused_port {
+            cmd.env("SKEPD_PORT", value);
+        }
+        let out = cmd.output().expect("run --version");
+        assert_eq!(out.status.code(), Some(0), "exit 0 (SKEPD_PORT {refused_port:?}): {out:?}");
+        assert_eq!(String::from_utf8_lossy(&out.stdout), expected, "the one line");
+        assert!(out.stderr.is_empty(), "nothing on stderr: {:?}", String::from_utf8_lossy(&out.stderr));
+    }
+}
+
 /// §3.4 STEP 6's GAP, CLOSED — THE VERSION LINE FIRST: the child's FIRST
 /// stderr line is `open: version {v}; this build reads journal format
 /// {SKJ4}, checkpoint format {SKC4} and world format {0x…}` — `{v}` this

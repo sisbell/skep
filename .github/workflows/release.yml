@@ -1,0 +1,129 @@
+# THE TAGGED RELEASE: on a pushed tag v<version> — or a dispatch naming one,
+# so the owner can run a tag again — each platform's job runs
+# scripts/release-pack.sh for its native triple and scripts/release-check.sh
+# on the archive it made, and one last job merges the four SHA256SUMS lines
+# into one file and attaches the four archives and the file to the GitHub
+# release for the tag, with the runner's own gh and GITHUB_TOKEN — no
+# third-party release action. Every build step is one of the two scripts,
+# so what this workflow does is what a person runs by hand (README.md,
+# Prebuilt binaries). The toolchain is rust-toolchain.toml's, which rustup
+# installs on the runner at cargo's first call: nothing here names a Rust
+# version or says `stable`. Windows is not built: skepd does not build for
+# Windows (RUNBOOK.md 9.3), so there is no Windows row.
+#
+# THE OWNER's ITEMS BEFORE THE FIRST TAG. (1) Pin the three actions below to
+# commit SHAs (a major tag moves; a SHA does not): each `uses:` line carries
+# the gh command that answers the SHA for the tag it names — written here
+# without network access, so no SHA is invented. (2) Confirm the four runner
+# labels: GitHub renames and retires them, and the x86_64 macOS one may be
+# gone (see the matrix).
+name: release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'The existing tag to build and attach again, e.g. v0.1.0'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+env:
+  # The tag: the push's, or the dispatch's input. Every job checks out
+  # exactly this ref, so the archives come from the tag's tree alone.
+  TAG: ${{ github.event.inputs.tag || github.ref_name }}
+
+jobs:
+  pack:
+    name: pack ${{ matrix.triple }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      # Every platform reports, whichever fails: a red here names one
+      # triple, and the release job runs only when all four are green.
+      fail-fast: false
+      matrix:
+        include:
+          # Each NATIVE: the runner's own architecture builds its own
+          # triple, so no cross toolchain is installed. The four labels are
+          # TO CONFIRM BY THE OWNER (this file was written offline):
+          #   macos-14         Apple silicon — TO CONFIRM
+          #   macos-13         Intel macOS — TO CONFIRM; likely retired. If
+          #                    gone: macos-15-intel where GitHub offers it,
+          #                    else build this triple on macos-14 after
+          #                    `rustup target add x86_64-apple-darwin`
+          #                    (Apple's toolchain cross-compiles it), or
+          #                    drop the row — a choice, never silence.
+          #   ubuntu-24.04     x86_64 Linux — TO CONFIRM
+          #   ubuntu-24.04-arm arm64 Linux, free for public repositories —
+          #                    TO CONFIRM
+          - triple: aarch64-apple-darwin
+            runner: macos-14
+          - triple: x86_64-apple-darwin
+            runner: macos-13
+          - triple: x86_64-unknown-linux-gnu
+            runner: ubuntu-24.04
+          - triple: aarch64-unknown-linux-gnu
+            runner: ubuntu-24.04-arm
+    steps:
+      # PIN TO A COMMIT SHA at the first tag: gh api repos/actions/checkout/git/ref/tags/v4
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG }}
+      - name: pack
+        run: scripts/release-pack.sh "${{ matrix.triple }}" "${TAG#v}"
+      - name: check
+        run: scripts/release-check.sh "target/release-pack/skep-${TAG#v}-${{ matrix.triple }}.tar.gz" target/release-pack/SHA256SUMS
+      # PIN TO A COMMIT SHA at the first tag: gh api repos/actions/upload-artifact/git/ref/tags/v4
+      - uses: actions/upload-artifact@v4
+        with:
+          name: skep-${{ matrix.triple }}
+          path: |
+            target/release-pack/skep-*.tar.gz
+            target/release-pack/SHA256SUMS
+          if-no-files-found: error
+
+  release:
+    name: attach to the release
+    needs: pack
+    # TO CONFIRM BY THE OWNER, as the matrix's labels are.
+    runs-on: ubuntu-24.04
+    # The one job that writes: it creates the release and uploads to it.
+    permissions:
+      contents: write
+    steps:
+      # PIN TO A COMMIT SHA at the first tag: gh api repos/actions/checkout/git/ref/tags/v4
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG }}
+      # A tag that lies about the version is refused: the version the tag
+      # names, its v stripped, must be the workspace's ([workspace.package]
+      # in Cargo.toml, which every crate inherits and every binary prints).
+      - name: the tag names the workspace's version
+        run: |
+          version="${TAG#v}"
+          grep -qx "version = \"$version\"" Cargo.toml || {
+            echo "the tag $TAG names version $version; Cargo.toml's [workspace.package] says:"
+            grep '^version = ' Cargo.toml
+            exit 1
+          }
+      # PIN TO A COMMIT SHA at the first tag: gh api repos/actions/download-artifact/git/ref/tags/v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: skep-*
+          path: artifacts
+      - name: merge the SHA256SUMS lines into one file
+        run: |
+          cat artifacts/*/SHA256SUMS > SHA256SUMS
+          cat SHA256SUMS
+      - name: attach the archives and SHA256SUMS to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view "$TAG" >/dev/null 2>&1 \
+            || gh release create "$TAG" --verify-tag --title "skep $TAG" \
+                 --notes "Prebuilt skepd, skep and skep-mcp, one archive per platform, with SHA256SUMS. Check a download with scripts/release-check.sh, as README.md's Prebuilt binaries section says."
+          gh release upload "$TAG" --clobber artifacts/*/skep-*.tar.gz SHA256SUMS

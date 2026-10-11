@@ -278,7 +278,9 @@ apart.
    cargo build --release -p skepd
    ```
 
-   It lands at `target/release/skepd`. Name `-p skepd` alone in
+   It lands at `target/release/skepd`. The other way to it is the
+   prebuilt archive for your platform, which README.md's Prebuilt
+   binaries section says how to check. Name `-p skepd` alone in
    that command: Cargo unifies features across one build, and a
    `--workspace` build that compiles the test suites turns the
    signer on for everything it builds, where the daemon's own build

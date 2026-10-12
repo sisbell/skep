@@ -172,16 +172,17 @@ cargo nextest run -p skepd --all-features --profile full \
     || exit $?
 
 # Every intra-doc link in skepd, skep-media, skep-signature, skep-resolve,
-# skep-search, skep-blobs, skep-util and skep-registry resolves — a private
-# item's too, and a link resolves only where its module could name the
-# target in code, so a narrowing that strands a link fails here rather than
-# in a reader's hands. skep-search's docs link its three modules' items
-# through the crate root's re-exports, which this build is what holds
-# together; skep-registry's docs, the crate's map, link across its three
-# private modules and to their crate-private items, which a rename strands
-# without a word from the compiler.
+# skep-search, skep-blobs, skep-util, skep-registry and skep-http resolves —
+# a private item's too, and a link resolves only where its module could
+# name the target in code, so a narrowing that strands a link fails here
+# rather than in a reader's hands. skep-search's docs link its three
+# modules' items through the crate root's re-exports, which this build is
+# what holds together; skep-registry's docs, the crate's map, link across
+# its three private modules and to their crate-private items, which a
+# rename strands without a word from the compiler; skep-http's map links
+# its two private modules' items through the root's re-exports the same way.
 RUSTDOCFLAGS="-D rustdoc::broken_intra_doc_links" \
-    cargo doc -p skepd -p skep-media -p skep-signature -p skep-resolve -p skep-search -p skep-blobs -p skep-util -p skep-registry --lib --no-deps --document-private-items --all-features \
+    cargo doc -p skepd -p skep-media -p skep-signature -p skep-resolve -p skep-search -p skep-blobs -p skep-util -p skep-registry -p skep-http --lib --no-deps --document-private-items --all-features \
     || exit $?
 
 # --run-ignored all re-admits the #[ignore] timing partition. One test is

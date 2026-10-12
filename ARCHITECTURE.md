@@ -240,11 +240,13 @@ foundation and on the stores above it.
   binary: `serve` serves the sign-up page and the claim form over the
   plain HTTP/1.1 subset (`skep-http`), judges the person's record in
   process (`skep-identity`'s `parse_enroll` and the hosted walk's
-  preview-kind test), runs the steps that make a board one at a time
+  preview-kind test), runs the steps that make a board — on a pool of
+  workers, different names at once, the name the unit of exclusion —
   through the host's `docker` command, writes one proxy snippet per board
-  and reloads the proxy, shows the live reply at the post's status
-  address and mails it once the board is live; `invite` mints one invite
-  by the owner's hand. Of the skep crates it depends on `skep-identity`
+  and reloads the proxy, the two serial across every name, shows the live
+  reply at the post's status address and mails it once the board is live,
+  and at its start sweeps away any board a stop left half-made; `invite`
+  mints one invite by the owner's hand. Of the skep crates it depends on `skep-identity`
   and `skep-http` alone — never `skepd` or `skep-client`: the sidecar it
   runs dials the board, and it dials nothing. It holds no key. One
   feature, default off: `test-hooks` compiles in its two fakes — the
@@ -1400,32 +1402,37 @@ the `docker` group, the proxy forwarding the sign-up's domain to it. Its
 sign-up page, which keeps an email address, and the claim form, which
 takes a board's name, the person's record and an invite code — judges a
 post in process before any `docker` call, and provisions each admitted
-post in turn through the host's `docker`: a fresh volume, the claim run
-bound to its own loopback, the sidecar's dark claim in that run's
-namespace, the serving run on the bridge, and the `/health` pair read
-through the sidecar's `skep health`; then one snippet in the proxy's
-directory, the proxy reloaded, the status live, the invite spent and the
-reply mailed. Its `invite` verb mints one invite by the owner's hand and
-prints the claim address that carries it. Its modules, in the order
-`src/main.rs` declares them, each naming only those above it:
+post on one of a pool of workers through the host's `docker`: a fresh
+volume, labelled as this service's, the claim run bound to its own
+loopback, the sidecar's dark claim in that run's namespace, the serving
+run on the bridge, and the `/health` pair read through the sidecar's
+`skep health`; then one snippet in the proxy's directory and the proxy
+reloaded, the status live, the invite spent and the reply mailed. Before
+it listens it sweeps away every board a stop left half-made. Its `invite`
+verb mints one invite by the owner's hand and prints the claim address
+that carries it. Its modules, in the order `src/main.rs` declares them,
+each naming only those above it:
 
 - `urlform.rs` the form's body decoded strictly — `+` a space, `%XX` the
   byte, a `%` without two hex digits refused — its values kept as bytes.
 - `record.rs` the name's grammar, one lowercase label, and the record's
   admission: the hosted walk's trim, `parse_enroll`, the walk's
   preview-kind test copied, the anchorless fact.
-- `docker.rs` the `Docker` trait, one method per call; `Call::argv`,
-  every call's argv as a pure function; `Host`, the host's `docker`
-  through `std::process::Command`; and under `test-hooks`
-  `docker/fake.rs`, the scripted fake.
+- `docker.rs` the `Docker` trait, one method per call, the listing of
+  the labelled volumes among them; `Call::argv`, every call's argv as a
+  pure function, the volume's creation carrying the label; `Host`, the
+  host's `docker` through `std::process::Command`; and under
+  `test-hooks` `docker/fake.rs`, the scripted fake, its order strict per
+  name and free across names.
 - `sidecar.rs` the sidecar's six DATA lines and its one idempotent line,
   read, and its exit codes mapped.
 - `health.rs` the pair off `/health`'s body and the bounded wait.
 - `caddy.rs` the snippet's text, its write by rename, its removal, the
   reload, and the names the snippet directory stands for.
 - `names.rs` the truth about names — the snippet, the volume, the
-  container — the status token, and the status map, rebuilt at start
-  from the snippets.
+  container — the status token, the status map, rebuilt at start from
+  the snippets, and the labelled volumes sorted against the snippets into
+  half-made, routed and unnamed.
 - `signups.rs` the address rule, the state directory's door, the state
   files' one writer, the date, and the sign-up file.
 - `invites.rs` the invite file — mint, look up, spend — under a lock file
@@ -1436,8 +1443,9 @@ prints the claim address that carries it. Its modules, in the order
 - `sender.rs` the `Sender` trait, the mailer it shells out to, the
   message, and the sender's own thread with its retry; under
   `test-hooks` `sender/fake.rs`.
-- `flow.rs` the `Service` — the `Desk` the routes ask, the queue, the one
-  lock, the worker's steps, the cleanup table, the send after the route
+- `flow.rs` the `Service` — the `Desk` the routes ask, the queue, the
+  name as the unit of exclusion, the workers' steps, the serial pair's
+  lock, the cleanup table, the sweep at start, the send after the route
   stands.
 - `args.rs` the verbs and the flags, every default a named constant,
   `version_line` and the usage text.
@@ -1451,12 +1459,29 @@ Rules that hold across its files:
   sign-up addresses; and the invite file — the last two in its state
   directory, owner-only and refused at start where other users can read
   it.
-- **One lock, one worker.** A provisioning — the steps, the snippet, the
-  reload, the invite's spend — runs under one `Mutex` on one worker
-  thread, and a post's reads of what stands are made under the same lock;
-  posts wait in a queue of four. The status map, the queue and the codes
-  a post in flight holds sit under a short lock of their own, so a status
-  page never waits on a provisioning.
+- **The name is the unit of exclusion.** A name is held from its post's
+  admission to its live or failed end, and a second post for a name in
+  flight is refused under the very hold that admits, so no two posts for
+  one name are ever in flight and the worker that takes a post owns its
+  name alone. No lock is held over a provisioning: a pool of worker
+  threads (`--workers`, three by default) makes boards for different
+  names at once, and posts wait in a queue of four.
+- **A post never waits on a provisioning.** Its checks against what is in
+  flight, its three reads of what stands and its admission run under the
+  short lock on the status map, the queue and the held codes — the
+  admission looking at what is in flight again, and at the invite again,
+  under that lock — never behind a board being made; a status page waits
+  on nothing either.
+- **The snippet and the reload are serial.** One lock is held across a
+  snippet's write and its reload, and across a snippet's removal and the
+  reload that follows it, nowhere else, so no reload lands between
+  another name's snippet and its own.
+- **A stop leaves no name taken for good.** Every volume the service
+  creates carries its label, and at `serve`'s start, before the address
+  is bound, every labelled volume under a name of the grammar with no
+  snippet — half-made — is removed by the cleanup table's last two rows;
+  a name whose snippet stands is left, and a listing that fails skips
+  the sweep and never stops the service.
 - **The argv is the documents'.** Every `docker` call's argv is a pure
   function the unit suite pins token by token, and reads back from
   `scripts/docker-smoke.sh` and `README.md` where those spell the line;
@@ -1483,7 +1508,8 @@ Its integration suite is one binary, `tests/it/`, driving the built
 on an ephemeral loopback port over the two fakes and a temp state
 directory; a browser's requests reach the live reply at the status
 address, the snippet written and the one mail sent; every refusal answers
-as the strings say; and SIGTERM ends the process.
+as the strings say; a half-made board is swept before the serving line;
+and SIGTERM ends the process.
 
 ## The name space, `skep-namespace`
 

@@ -3,9 +3,10 @@
 //! combinations, the reads made in the order fixed here and no further than
 //! the first that stands; the map rebuilt from a snippet directory holding
 //! two live names with the constant facts; a token the map does not hold
-//! answering nothing; a post in flight holding its name; the token's form.
-//! (The two posts on one name, and the fifth past the queue, are the
-//! flow's — `flow/tests.rs`.)
+//! answering nothing; a post in flight holding its name; the token's form;
+//! and the labelled volumes sorted against the snippet directory — half-made,
+//! routed, or under no name of the grammar. (The two posts on one name, the
+//! fifth past the queue and the sweep are the flow's — `flow/tests.rs`.)
 
 use std::fs;
 
@@ -96,6 +97,30 @@ fn the_map_answers_its_tokens_and_their_holds() {
     map.set("t3", State::Failed, None);
     assert!(!map.holds(&name("bob")));
     assert!(!map.live().contains_key(&name("bob")));
+}
+
+/// THE LABELLED VOLUMES SORTED: a listing of `alice`, `bob`, `Carol_X`,
+/// `Dave` and a blank line, with `alice.caddy` standing — `bob` half-made
+/// (a name, no snippet), `alice` routed, `Carol_X` under no name of the
+/// grammar and `Dave` likewise (it lowercases to a name that does not spell
+/// it back, as a snippet's stem must); an empty listing sorts to nothing;
+/// a snippet directory that cannot be searched is the error.
+#[test]
+fn the_labelled_volumes_sort_into_half_made_routed_and_unnamed() {
+    let dir = Scratch::new();
+    fs::write(dir.path().join("alice.caddy"), b"").expect("a snippet");
+    let sorted = labelled(b"alice\nbob\nCarol_X\n\nDave\n", dir.path()).expect("sorted");
+    assert_eq!(sorted, Labelled { half_made: vec![name("bob")], routed: vec![name("alice")], unnamed: vec!["Carol_X".into(), "Dave".into()] });
+    assert_eq!(labelled(b"", dir.path()).expect("sorted"), Labelled::default());
+    assert_eq!(labelled(b"bob\r\n", dir.path()).expect("sorted").half_made, vec![name("bob")], "a CRLF listing");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let boards = dir.path().join("boards");
+        fs::create_dir(&boards).expect("a directory");
+        fs::set_permissions(&boards, fs::Permissions::from_mode(0o000)).expect("unsearchable");
+        assert!(labelled(b"bob\n", &boards).is_err(), "the snippet directory's error");
+    }
 }
 
 /// The status token: 128 bits as 32 lowercase hex digits, fresh each time.

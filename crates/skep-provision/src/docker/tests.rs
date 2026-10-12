@@ -3,11 +3,12 @@
 //! `scripts/docker-smoke.sh` itself, so the script's drift is a red test
 //! too), the deployment notes' serving run, the sidecar's run with `-i` and
 //! `--hosted -`, the `skep health` run, the reload, the two inspects, the
-//! two removals; the real `Command` built from that argv and nothing else;
-//! the real runner, over a recording script in `docker`'s place — no Docker
-//! is run — passing the argv, the record on stdin, a null stdin otherwise,
-//! and the two streams apart; and the fake refusing a call it was not
-//! scripted.
+//! two removals, the labelled volume and the listing by its label (T19);
+//! the real `Command` built from that argv and nothing else; the real
+//! runner, over a recording script in `docker`'s place — no Docker is run —
+//! passing the argv, the record on stdin, a null stdin otherwise, and the
+//! two streams apart; and the fake refusing a call it was not scripted,
+//! its order strict per name and free across names.
 
 use std::path::Path;
 
@@ -35,13 +36,14 @@ fn words(line: &str) -> Vec<String> {
 /// in its local one's place; the serving run the deployment notes' step 5
 /// line, in its order, the README's rotation; the sidecar the smoke's run
 /// with the record on stdin; the health run the sidecar's `skep health` on
-/// the bridge; the reload the notes' §4a line.
+/// the bridge; the reload the notes' §4a line; the volume's creation with
+/// this service's label before the name, and the listing by that label.
 #[test]
 fn every_calls_argv_is_the_documents_run_line() {
     let s = settings();
     let n = alice();
-    let pinned: [(Call<'_>, &str); 10] = [
-        (Call::VolumeCreate(&n), "volume create alice"),
+    let pinned: [(Call<'_>, &str); 11] = [
+        (Call::VolumeCreate(&n), "volume create --label skep.provision=1 alice"),
         (Call::VolumeInspect(&n), "volume inspect alice"),
         (Call::ContainerInspect(&n), "container inspect alice"),
         (
@@ -60,10 +62,46 @@ fn every_calls_argv_is_the_documents_run_line() {
         (Call::VolumeRm(&n), "volume rm alice"),
         (Call::Health(&n), "run --rm --network skep skep-cli skep health --board http://alice:8642"),
         (Call::CaddyReload, "exec caddy caddy reload --config /etc/caddy/Caddyfile"),
+        (Call::Volumes, "volume ls -q --filter label=skep.provision=1"),
     ];
     for (call, line) in pinned {
         assert_eq!(call.argv(&s), words(line), "{call:?}");
     }
+}
+
+/// T19: THE LABEL — `volume create` carries `--label skep.provision=1`
+/// BEFORE the name and the name last; `volumes` is `volume ls -q --filter
+/// label=skep.provision=1`, token by token, the same label; the two
+/// constants spell it; neither takes a setting. The claim run and the
+/// sidecar stay the smoke's lines (the two drift tests above), and the
+/// smoke's own `docker volume create "$VOLUME"` carries no label — those
+/// tests read the claim run and the sidecar, never the volume line.
+#[test]
+fn the_volume_is_labelled_before_its_name_and_the_listing_filters_by_the_label() {
+    let n = alice();
+    let create = Call::VolumeCreate(&n).argv(&settings());
+    assert_eq!(create, words("volume create --label skep.provision=1 alice"));
+    assert_eq!(&create[2..4], ["--label", "skep.provision=1"], "the label before the name");
+    assert_eq!(create.last().map(String::as_str), Some("alice"), "the name last");
+    assert_eq!((LABEL_KEY, LABEL_VALUE), ("skep.provision", "1"));
+    assert_eq!(label(), "skep.provision=1");
+    let listing = Call::Volumes.argv(&settings());
+    assert_eq!(listing, words("volume ls -q --filter label=skep.provision=1"));
+    assert_eq!(listing.last().map(String::as_str), Some(&*format!("label={}", label())));
+    let other =
+        Settings { image: "img:2".into(), cli_image: "cli:2".into(), network: "net2".into(), caddy: "proxy2".into(), suffix: "example.org".into(), log_max_size: "50m".into(), log_max_file: 3 };
+    assert_eq!(Call::Volumes.argv(&other), listing, "no setting reaches the listing");
+    assert_eq!(Call::VolumeCreate(&n).argv(&other), create, "no setting reaches the volume's creation");
+    // The fake answers a scripted `volumes` line — its stdout the names,
+    // one per line — and refuses an unscripted one.
+    let fake = FakeDocker::parse(&line("volumes", None, 0, "alice\nbob\n", "")).expect("a script");
+    let exit = fake.volumes().expect("an answer");
+    assert_eq!((exit.code, exit.stdout.as_slice()), (Some(0), &b"alice\nbob\n"[..]));
+    let refused = fake.volumes().expect("an answer");
+    assert_eq!(refused.code, Some(UNEXPECTED));
+    assert!(String::from_utf8_lossy(&refused.stderr).contains("unexpected call volumes -; the script expected nothing more under -"));
+    assert_eq!(fake.said(), vec!["volumes", "volumes"]);
+    assert_eq!(fake.unexpected().len(), 1);
 }
 
 /// The settings reach the words they name and no other: another tag, bridge,

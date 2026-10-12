@@ -54,6 +54,11 @@ pub const DEFAULT_LOG_MAX_SIZE: &str = "10m";
 /// line's `max-file=5` — the operator's to size.
 pub const DEFAULT_LOG_MAX_FILE: u32 = 5;
 
+/// THE WORKERS, by default: three threads, each making one board at a
+/// time, so three names are made at once — the owner's number for the
+/// alpha's VM; `--workers` sets another, never zero.
+pub const DEFAULT_WORKERS: usize = 3;
+
 /// What the command line asked for.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Command {
@@ -80,6 +85,9 @@ pub struct Serve {
     /// The run configuration: `--image`, `--cli-image`, `--network`,
     /// `--caddy`, `--suffix`, `--log-max-size`, `--log-max-file`.
     pub settings: Settings,
+    /// `--workers`: the worker threads — the boards made at once. One or
+    /// more.
+    pub workers: usize,
     /// `--reply-to`: the owner's mailbox, which D-8 names and the mail
     /// replies to. Required.
     pub reply_to: String,
@@ -144,7 +152,7 @@ usage: skep-provision serve --state-dir <DIR> --reply-to <ADDRESS>
                             [--image <TAG>] [--cli-image <TAG>]
                             [--network <BRIDGE>] [--caddy <CONTAINER>]
                             [--suffix <DOMAIN>] [--log-max-size <SIZE>]
-                            [--log-max-file <N>]
+                            [--log-max-file <N>] [--workers <N>]
                             [--mailer <PROGRAM> --from <ADDRESS>]
        skep-provision invite --address <ADDRESS> --state-dir <DIR>
                             [--code <CODE>] [--suffix <DOMAIN>]
@@ -152,7 +160,8 @@ usage: skep-provision serve --state-dir <DIR> --reply-to <ADDRESS>
 
 serve: the hosted board's sign-up service — the sign-up page and the
 claim form over HTTP, each admitted claim provisioned through the host's
-docker, one at a time.
+docker, different names at once and one post per name; at its start, a
+board left half-made by a stop is removed.
 
   --state-dir <DIR>       the sign-up file and the invite file (required):
                           made 0700 where absent; refused at start where
@@ -173,6 +182,8 @@ docker, one at a time.
   --log-max-size <SIZE>   a serving run's log file size, <N>[k|m|g]
                           (default {DEFAULT_LOG_MAX_SIZE})
   --log-max-file <N>      a serving run's log files kept (default {DEFAULT_LOG_MAX_FILE})
+  --workers <N>           the boards made at once: one worker thread each,
+                          one or more (default {DEFAULT_WORKERS})
   --mailer <PROGRAM>      the host's relay client — sendmail or msmtp —
                           run as <PROGRAM> -t with the message on stdin;
                           given with --from or not at all, and without
@@ -256,6 +267,7 @@ fn parse_serve(mut it: impl Iterator<Item = String>) -> Result<Command, String> 
         log_max_size: DEFAULT_LOG_MAX_SIZE.to_owned(),
         log_max_file: DEFAULT_LOG_MAX_FILE,
     };
+    let mut workers = DEFAULT_WORKERS;
     let mut reply_to: Option<String> = None;
     let mut mailer: Option<Mailer> = None;
     let mut from: Option<String> = None;
@@ -286,6 +298,10 @@ fn parse_serve(mut it: impl Iterator<Item = String>) -> Result<Command, String> 
                 let v = value(&mut it, "--log-max-file")?;
                 settings.log_max_file = v.parse().ok().filter(|n| *n > 0).ok_or_else(|| format!("--log-max-file: '{v}' is not a count of one or more"))?;
             }
+            "--workers" => {
+                let v = value(&mut it, "--workers")?;
+                workers = v.parse().ok().filter(|n| *n > 0).ok_or_else(|| format!("--workers: '{v}' is not a count of one or more"))?;
+            }
             "--reply-to" => reply_to = Some(address("--reply-to", value(&mut it, "--reply-to")?)?),
             "--mailer" => mailer = Some(Mailer::Program(PathBuf::from(value(&mut it, "--mailer")?))),
             "--from" => from = Some(address("--from", value(&mut it, "--from")?)?),
@@ -309,6 +325,7 @@ fn parse_serve(mut it: impl Iterator<Item = String>) -> Result<Command, String> 
         state_dir: state_dir.ok_or("serve: --state-dir is required")?,
         boards_dir,
         settings,
+        workers,
         reply_to: reply_to.ok_or("serve: --reply-to is required")?,
         mail,
         #[cfg(feature = "test-hooks")]

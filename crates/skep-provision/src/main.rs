@@ -6,14 +6,18 @@
 //! the sign-up page, where a person leaves an email address, and the claim
 //! form, where an invited person names a board and pastes the record their
 //! own device printed; the record judged in process before any docker run;
-//! FIVE STEPS for an admitted post, one post at a time, through the host's
-//! `docker` command — the fresh volume, the claim run bound to its
+//! FIVE STEPS for an admitted post — different names at once on a pool of
+//! workers, one post per name — through the host's `docker` command: the
+//! fresh volume, labelled as this service's, the claim run bound to its
 //! loopback, the dark claim by the sidecar in its namespace, the serving
 //! run, the `/health` pair; ONE SNIPPET per board in the proxy's directory
-//! and the proxy reloaded; the live page at the post's status address; and
-//! ONE MAIL once the board is live. `skep-provision serve` is the service;
-//! `skep-provision invite` is the owner's hand, minting one invite and
-//! printing its claim address; `skep-provision --version` the version line.
+//! and the proxy reloaded, the two serial across every name; the live page
+//! at the post's status address; and ONE MAIL once the board is live. At
+//! its start, before it listens, A SWEEP removes every board a stop left
+//! half-made — a labelled volume with no snippet. `skep-provision serve` is
+//! the service; `skep-provision invite` is the owner's hand, minting one
+//! invite and printing its claim address; `skep-provision --version` the
+//! version line.
 //!
 //! WHAT IT HOLDS. NO KEY: the record is the person's PUBLIC line, parsed by
 //! `skep-identity`, in which no field type can carry a private key (I1,
@@ -39,12 +43,15 @@
 //! THE STOP is SIGTERM's default disposition: the process ends at once.
 //! Crash-stop, as the daemon's: every file it keeps is replaced whole by a
 //! rename, so no stop tears one; a provisioning cut mid-step leaves what it
-//! made standing, which the truth about names then reads as TAKEN until the
-//! operator clears it (the record §5.2's named gap); the queue, the status
-//! tokens and an unsent mail are memory and end with the process. Its exit
-//! codes: 0, a verb done; 2, a usage refusal; 1, a start refused — a state
-//! directory other users can read, a snippet directory that cannot be read,
-//! an address that cannot be bound — or an invite not minted.
+//! made standing, which the truth about names reads as TAKEN until the next
+//! start's sweep removes it — a volume under the label with no snippet is
+//! half-made, and goes with whatever run stands under its name — or, where
+//! a removal fails, until the operator clears it (the record §5.2's named
+//! gap); the queue, the status tokens and an unsent mail are memory and end
+//! with the process. Its exit codes: 0, a verb done; 2, a usage refusal; 1,
+//! a start refused — a state directory other users can read, a snippet
+//! directory that cannot be read, an address that cannot be bound — or an
+//! invite not minted.
 //!
 //! The modules are declared below in dependency order, each naming only
 //! those above it; `ARCHITECTURE.md` §The provisioning service draws them.
@@ -80,7 +87,8 @@ mod reply;
 // The mail: the trait, the mailer, the sender's thread; the fake under
 // `test-hooks`.
 mod sender;
-// The worker, the one lock, the queue, the steps, the cleanup.
+// The workers, the queue, the name as the unit of exclusion, the steps, the
+// cleanup, the sweep at start.
 mod flow;
 // The verbs and the flags, every default a named constant.
 mod args;
@@ -134,8 +142,9 @@ fn log() -> Log {
 }
 
 /// `serve`: the state directory's door, the snippets read, the runner and
-/// the mail chosen, the worker and the sender started, the address bound,
-/// the serving line — and a thread per connection until the process ends.
+/// the mail chosen, the sender started, THE SWEEP of what a stop left
+/// half-made, then the address bound, the serving line, the workers — and
+/// a thread per connection until the process ends.
 fn serve(cfg: args::Serve) -> i32 {
     let log = log();
     let state = match StateDir::open(&cfg.state_dir) {
@@ -172,6 +181,9 @@ fn serve(cfg: args::Serve) -> i32 {
             return 1;
         }
     };
+    // THE SWEEP, before the address is bound: no post is judged while a
+    // half-made board still stands under its name.
+    let swept = service.sweep();
     let listener = match TcpListener::bind(cfg.listen) {
         Ok(listener) => listener,
         Err(e) => {
@@ -183,17 +195,20 @@ fn serve(cfg: args::Serve) -> i32 {
     // `--listen <addr>:0`, never what was asked for.
     let bound = listener.local_addr().map_or_else(|_| cfg.listen.to_string(), |a| a.to_string());
     say_out(&format!(
-        "skep-provision: serving http://{bound}/ state-dir {} boards-dir {} suffix {} live {} {mailing}",
+        "skep-provision: serving http://{bound}/ state-dir {} boards-dir {} suffix {} live {} swept {swept} workers {} {mailing}",
         cfg.state_dir.display(),
         cfg.boards_dir.display(),
         cfg.settings.suffix,
-        service.live()
+        service.live(),
+        cfg.workers
     ));
     let site = Site { suffix: cfg.settings.suffix.clone(), reply_to: cfg.reply_to.clone() };
-    // THE SERVE: the worker, and a thread per connection beside it; the
-    // scope never closes — SIGTERM ends the process.
+    // THE SERVE: the pool of workers, and a thread per connection beside
+    // them; the scope never closes — SIGTERM ends the process.
     thread::scope(|s| {
-        s.spawn(|| service.work());
+        for _ in 0..cfg.workers {
+            s.spawn(|| service.work());
+        }
         for conn in listener.incoming() {
             let Ok(stream) = conn else { continue };
             let (site, service) = (&site, &service);

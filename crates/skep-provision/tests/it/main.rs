@@ -8,8 +8,10 @@
 //! mail; a second post on the name, a bad record, a preview record, an
 //! unknown code, a status token never minted, a body past the cap — each
 //! answered as the pages say; and THE STOP: SIGTERM, the default
-//! disposition, ending the process. No Docker runs: every call is the
-//! script's, and the calls are read back after.
+//! disposition, ending the process. THE SWEEP (T22): started over a script
+//! whose `volumes` lists one half-made name, the binary removes it before
+//! its serving line, which carries the count. No Docker runs: every call is
+//! the script's, and the calls are read back after.
 
 #![cfg(unix)]
 
@@ -94,10 +96,12 @@ fn minted(state: &Path) -> String {
     line.strip_prefix("https://skep.host/claim?invite=").unwrap_or_else(|| panic!("the claim address: {line}")).to_owned()
 }
 
-/// THE SERVICE RUNNING: the child, its port off the serving line, its log.
+/// THE SERVICE RUNNING: the child, its port off the serving line, the line
+/// itself, its log.
 struct Service {
     child: Child,
     port: u16,
+    serving: String,
     log: Arc<Mutex<String>>,
 }
 
@@ -133,7 +137,7 @@ impl Service {
         let at = serving.strip_prefix("skep-provision: serving http://127.0.0.1:").unwrap_or_else(|| panic!("the serving line: {serving:?}; the log: {}", log.lock().unwrap()));
         let port = at[..at.find('/').expect("the address's end")].parse().expect("a port");
         assert!(serving.contains("mail on"), "{serving}");
-        Service { child, port, log }
+        Service { child, port, serving, log }
     }
 
     /// One request: the status and the body.
@@ -207,6 +211,7 @@ fn the_built_service_runs_a_post_from_the_form_to_the_live_page_over_the_fakes()
     assert_eq!(code.len(), 32);
     let script = dir.path().join("docker.script");
     let steps = [
+        step("volumes", "-", 0, ""),
         step("volume_inspect", "alice", 1, ""),
         step("container_inspect", "alice", 1, ""),
         step("volume_inspect", "alice", 1, ""),
@@ -306,7 +311,7 @@ fn the_built_service_runs_a_post_from_the_form_to_the_live_page_over_the_fakes()
     let methods: Vec<&str> = calls.lines().map(|l| l.split('\t').next().unwrap_or("")).collect();
     assert_eq!(
         methods,
-        ["volume_inspect", "container_inspect", "volume_inspect", "container_inspect", "volume_create", "run_claim", "sidecar_claim", "rm_force", "run_serving", "health", "caddy_reload"],
+        ["volumes", "volume_inspect", "container_inspect", "volume_inspect", "container_inspect", "volume_create", "run_claim", "sidecar_claim", "rm_force", "run_serving", "health", "caddy_reload"],
         "{calls}"
     );
     assert!(!calls.contains("unexpected"), "{calls}");
@@ -324,6 +329,36 @@ fn record_preview() -> String {
     record(ALG_FNDSA512_PREVIEW_ED25519, FNDSA512_PREVIEW_ED25519_KEY_LEN)
 }
 
+/// T22: THE SWEEP AT START — the built binary, over a script whose
+/// `volumes` lists `bob` (no snippet) and `alice` (its snippet standing),
+/// removes `bob` BEFORE its serving line: by the time the line is read the
+/// script's `rm_force bob` and `volume_rm bob` are consumed and recorded,
+/// nothing is called for `alice`, and the line carries `swept 1` beside
+/// `live 1`; then the service serves — the sign-up page answers — and the
+/// log names the name and the steps.
+#[test]
+fn the_built_service_sweeps_a_half_made_board_before_its_serving_line() {
+    let dir = Scratch::new();
+    let boards = dir.path().join("boards");
+    std::fs::create_dir(&boards).expect("the boards directory");
+    std::fs::write(boards.join("alice.caddy"), b"").expect("alice's snippet");
+    let script = dir.path().join("docker.script");
+    std::fs::write(&script, [step("volumes", "-", 0, "alice\\nbob\\n"), step("rm_force", "bob", 1, ""), step("volume_rm", "bob", 0, "")].concat()).expect("the script");
+    let mail = dir.path().join("mail.log");
+    let service = Service::start(dir.path(), &script, &mail);
+    let calls = std::fs::read_to_string(dir.path().join("docker.script.calls")).expect("the calls");
+    assert_eq!(calls, "volumes\t-\t0\nrm_force\tbob\t1\nvolume_rm\tbob\t0\n", "the sweep's calls, all made before the serving line");
+    assert!(service.serving.contains(" live 1 swept 1 "), "{}", service.serving);
+    assert_eq!(service.request("GET", "/", "").0, 200, "the service serves after the sweep");
+    let log = until("the sweep's log", || Some(service.log()).filter(|l| l.contains("bob: sweep: done")));
+    for line in ["skep-provision: bob: half-made at start (a volume, no snippet) — removing", "skep-provision: bob: sweep: rm_force: exit 1", "skep-provision: bob: sweep: volume_rm: exit 0"] {
+        assert!(log.contains(line), "{line}: {log}");
+    }
+    assert!(!log.contains("alice"), "nothing for the routed name: {log}");
+    assert!(!calls.contains("unexpected"), "{calls}");
+    service.terminate();
+}
+
 /// `--version`: the one line in `skepd`'s form, exit 0.
 #[test]
 fn the_version_line() {
@@ -334,12 +369,13 @@ fn the_version_line() {
 }
 
 /// A usage refusal is exit 2 with the usage text: `--mailer` without
-/// `--from`, an unknown flag, a missing required flag.
+/// `--from`, an unknown flag, `--workers 0` (T21), a missing required flag.
 #[test]
 fn a_usage_refusal_is_exit_2() {
     for args in [
         &["serve", "--state-dir", "/nonexistent", "--reply-to", "o@x", "--mailer", "/usr/sbin/sendmail"][..],
         &["serve", "--state-dir", "/nonexistent", "--reply-to", "o@x", "--bogus"],
+        &["serve", "--state-dir", "/nonexistent", "--reply-to", "o@x", "--workers", "0"],
         &["serve", "--reply-to", "o@x"],
         &["invite", "--state-dir", "/nonexistent"],
         &[],

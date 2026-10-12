@@ -9,11 +9,20 @@
 //! T8 (two posts on one name; a fifth past the queue), T9 (a spent, an
 //! unknown and a held code refused; no code in the log), T10 (a sign-up,
 //! its address in no log line) and T12 (no send before live; an outage
-//! with the status live throughout).
+//! with the status live throughout). THE POOL's FENCE: T15 (two workers
+//! make two names at once, and one worker does not), T16 (a post answers
+//! at once while a worker is held inside a step), T17 (a second post for a
+//! name in flight meets D-4 under two workers, and one `volume_create` per
+//! name across a burst), T18 (the snippet's write and the reload serial
+//! across names); and THE SWEEP's, T20 (the half-made board removed, the
+//! routed and the unnamed left, a listing that fails skipped).
 
 use std::fs;
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex, OnceLock, Weak};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{mpsc, Arc, Condvar, Mutex, OnceLock, Weak};
+use std::thread;
+use std::time::{Duration, Instant};
 
 use skep_identity::{encode_enroll, Enrollment, PublicKey, ALG_FNDSA512_PREVIEW_ED25519, ALG_MLDSA65_ED25519, FNDSA512_PREVIEW_ED25519_KEY_LEN, MLDSA65_ED25519_KEY_LEN};
 
@@ -79,6 +88,12 @@ struct Rig {
 }
 
 fn rig(script: &str, mail: Option<Vec<i32>>) -> Rig {
+    rig_with(script, mail, Arc::new(|_| {}))
+}
+
+/// The rig with the sleep hook `sleep` — a gate's hold, where a test holds a
+/// worker inside its sidecar wait.
+fn rig_with(script: &str, mail: Option<Vec<i32>>, sleep: Sleep) -> Rig {
     let dir = Scratch::new();
     let boards = dir.path().join("boards");
     fs::create_dir(&boards).expect("the boards directory");
@@ -91,9 +106,62 @@ fn rig(script: &str, mail: Option<Vec<i32>>) -> Rig {
         Arc::new(Probe { fake: FakeSender::new(dir.path().join("mail.log"), mail.clone().unwrap_or_default()), service: OnceLock::new(), token: Mutex::new(None), seen: Mutex::new(Vec::new()) });
     let mail = mail.map(|_| Mail { outbox: Outbox::inline(Box::new(Arc::clone(&probe)), Arc::clone(&log), Arc::new(|_| {})), from: "noreply@skep.host".into() });
     let config = Config { boards_dir: boards.clone(), suffix: "skep.host".into(), reply_to: "owner@skep.host".into() };
-    let service = Arc::new(Service::new(config, state.clone(), Box::new(Arc::clone(&fake)), mail, log, Arc::new(|_| {})).expect("the service"));
+    let service = Arc::new(Service::new(config, state.clone(), Box::new(Arc::clone(&fake)), mail, log, sleep).expect("the service"));
     probe.service.set(Arc::downgrade(&service)).ok();
     Rig { dir, boards, state, fake, probe, lines, service }
+}
+
+/// A GATE a hook holds at: the hook counts itself in and waits until the
+/// test opens the gate, for good; the test waits for the count.
+#[derive(Default)]
+struct Gate {
+    /// The holds entered, and whether the gate is open.
+    state: Mutex<(u32, bool)>,
+    changed: Condvar,
+}
+
+impl Gate {
+    fn new() -> Arc<Gate> {
+        Arc::new(Gate::default())
+    }
+
+    /// The hook's side: counted in, then held until the gate is open.
+    fn hold(&self) {
+        let mut state = self.state.lock().unwrap();
+        state.0 += 1;
+        self.changed.notify_all();
+        while !state.1 {
+            state = self.changed.wait(state).unwrap();
+        }
+    }
+
+    /// The test's side: waited until `n` holds have been entered.
+    fn entered(&self, n: u32) {
+        let deadline = Instant::now() + Duration::from_secs(30);
+        let mut state = self.state.lock().unwrap();
+        while state.0 < n {
+            assert!(Instant::now() < deadline, "hold {n} never entered");
+            state = self.changed.wait_timeout(state, Duration::from_millis(50)).unwrap().0;
+        }
+    }
+
+    /// The test's side: the gate opened, for good.
+    fn open(&self) {
+        self.state.lock().unwrap().1 = true;
+        self.changed.notify_all();
+    }
+}
+
+/// Polled until `done` answers `Some`, or thirty seconds pass.
+fn until<T>(what: &str, mut done: impl FnMut() -> Option<T>) -> T {
+    let deadline = Instant::now() + Duration::from_secs(30);
+    loop {
+        if let Some(t) = done() {
+            return t;
+        }
+        assert!(Instant::now() < deadline, "{what} never came");
+        thread::sleep(Duration::from_millis(10));
+    }
 }
 
 impl Rig {
@@ -125,6 +193,48 @@ impl Rig {
     fn issued(&self, code: &str) -> bool {
         lookup(&self.state, code).expect("read").expect("held").issued()
     }
+
+    /// THE POOL as `serve` spawns it: `n` workers over this service, each on
+    /// a thread of its own that runs until the test's process ends.
+    fn workers(&self, n: usize) {
+        for _ in 0..n {
+            let service = Arc::clone(&self.service);
+            thread::spawn(move || service.work());
+        }
+    }
+
+    /// Whether `token`'s page shows the live reply.
+    fn live(&self, token: &str) -> bool {
+        matches!(self.service.status(token), Some(Shown::Live(_)))
+    }
+
+    /// Whether the fake has recorded `call`.
+    fn called(&self, call: &str) -> bool {
+        self.fake.said().iter().any(|c| c == call)
+    }
+
+    /// Whether the log holds `line`.
+    fn logged(&self, line: &str) -> bool {
+        self.log().iter().any(|l| l == line)
+    }
+}
+
+/// One name's whole flow but the reload: the post's inspects, the worker's,
+/// `volume_create`, `run_claim`, the dark claim — answering exit 4 once
+/// first where `retry`, which puts the worker into its sidecar wait —
+/// `rm_force`, `run_serving`, one `health` with the pair. The reload is a
+/// line under no name, added apart ([`reloads`]).
+fn flow_of(name: &str, retry: bool) -> String {
+    let mut script = inspects(name) + &inspects(name) + &line("volume_create", Some(name), 0, "", "") + &line("run_claim", Some(name), 0, "", "");
+    if retry {
+        script += &line("sidecar_claim", Some(name), 4, "", "skep: the board could not be dialed\n");
+    }
+    script + &line("sidecar_claim", Some(name), 0, SIX, "") + &line("rm_force", Some(name), 0, "", "") + &line("run_serving", Some(name), 0, "", "") + &line("health", Some(name), 0, PAIRED, "")
+}
+
+/// `n` reloads, each exit 0.
+fn reloads(n: usize) -> String {
+    line("caddy_reload", None, 0, "", "").repeat(n)
 }
 
 /// The two inspects, both answering "not standing".
@@ -515,4 +625,208 @@ fn the_service_starts_with_the_snippets_live_names() {
     let config = Config { boards_dir: rig.boards.clone(), suffix: "skep.host".into(), reply_to: "owner@skep.host".into() };
     let again = Service::new(config, rig.state.clone(), Box::new(Arc::clone(&rig.fake)), None, Arc::new(|_: &str| {}), Arc::new(|_| {})).expect("the service");
     assert_eq!(again.live(), 1);
+}
+
+/// T15: TWO NAMES IN FLIGHT AT ONCE — under two workers, `alice`'s worker
+/// held inside its sidecar wait (exit 4 once, the sleep hook at a gate), a
+/// post for `bob` is admitted and `bob` reaches `run_claim` in the fake's
+/// log BEFORE `alice` reaches `run_serving`; under ONE worker, the same
+/// script, `bob`'s `run_claim` comes only after `alice`'s `run_serving` —
+/// the pool, not luck, is what interleaves.
+#[test]
+fn two_workers_make_two_names_at_once_and_one_worker_does_not() {
+    for workers in [2usize, 1] {
+        let gate = Gate::new();
+        let hold = Arc::clone(&gate);
+        let rig = rig_with(&(flow_of("alice", true) + &flow_of("bob", false) + &reloads(2)), None, Arc::new(move |_| hold.hold()));
+        rig.workers(workers);
+        let alice = rig.admitted("alice", &rig.invite());
+        gate.entered(1);
+        let bob = rig.admitted("bob", &rig.invite());
+        if workers == 2 {
+            until("bob's claim run", || rig.called("run_claim bob").then_some(()));
+            assert!(!rig.called("run_serving alice"), "alice's serving run came first: {:?}", rig.fake.said());
+        } else {
+            thread::sleep(Duration::from_millis(300));
+            assert!(!rig.called("run_claim bob"), "one worker, held, yet bob ran: {:?}", rig.fake.said());
+        }
+        gate.open();
+        until("both live", || (rig.live(&alice) && rig.live(&bob)).then_some(()));
+        rig.fake.assert_done();
+        let said = rig.fake.said();
+        let at = |call: &str| said.iter().position(|c| c == call).unwrap_or_else(|| panic!("{call}: {said:?}"));
+        if workers == 2 {
+            assert!(at("run_claim bob") < at("run_serving alice"), "{workers} workers: {said:?}");
+        } else {
+            assert!(at("run_claim bob") > at("run_serving alice"), "{workers} worker: {said:?}");
+        }
+        assert!(rig.snippet("alice").exists() && rig.snippet("bob").exists());
+    }
+}
+
+/// T16: THE POST NEVER WAITS ON A PROVISIONING — the one worker held inside
+/// `alice`'s sidecar wait, a post for `bob` through the desk's own path
+/// answers within a short bound, admitted, and its status page shows D-7;
+/// the held board goes live after, and `bob`'s turn comes.
+#[test]
+fn a_post_answers_at_once_while_a_worker_is_held_inside_a_step() {
+    let gate = Gate::new();
+    let hold = Arc::clone(&gate);
+    let rig = rig_with(&(flow_of("alice", true) + &flow_of("bob", false) + &reloads(2)), None, Arc::new(move |_| hold.hold()));
+    rig.workers(1);
+    let alice = rig.admitted("alice", &rig.invite());
+    gate.entered(1);
+    let code = rig.invite();
+    let service = Arc::clone(&rig.service);
+    let (tx, rx) = mpsc::channel();
+    let started = Instant::now();
+    thread::spawn(move || {
+        let bob = record(true);
+        let _ = tx.send(service.claim(&Post { name: b"bob", record: bob.as_bytes(), invite: code.as_bytes() }));
+    });
+    let answered = rx.recv_timeout(Duration::from_secs(5)).expect("the post waited on the provisioning");
+    let bob = answered.unwrap_or_else(|r| panic!("bob refused {r:?}: {:?}", rig.log()));
+    assert!(started.elapsed() < Duration::from_secs(5));
+    assert_eq!(rig.service.status(&bob), Some(Shown::BeingMade));
+    assert_eq!(rig.service.status(&alice), Some(Shown::BeingMade), "alice still held");
+    assert!(rig.logged("bob: admitted; 1 waiting"), "{:?}", rig.log());
+    gate.open();
+    until("both live", || (rig.live(&alice) && rig.live(&bob)).then_some(()));
+    rig.fake.assert_done();
+}
+
+/// T17: A SECOND POST FOR THE SAME NAME IN FLIGHT IS REFUSED D-4 under two
+/// workers — `alice`'s worker held, a post for `alice` under another code
+/// meets `Refusal::Name`, no docker call made, the code still issued — and
+/// across a burst of posts (four names, each posted twice, two workers
+/// running) the fake's log shows ONE `volume_create` per name: two workers
+/// never both take a job for one name.
+#[test]
+fn two_workers_never_both_take_a_job_for_one_name() {
+    let names = ["alice", "bob", "carol", "dave"];
+    let gate = Gate::new();
+    let hold = Arc::clone(&gate);
+    let script = flow_of("alice", true) + &flow_of("bob", false) + &flow_of("carol", false) + &flow_of("dave", false) + &reloads(4);
+    let rig = rig_with(&script, None, Arc::new(move |_| hold.hold()));
+    rig.workers(2);
+    let alice = rig.admitted("alice", &rig.invite());
+    gate.entered(1);
+    let again = rig.invite();
+    assert_eq!(rig.post("alice", &record(true), &again), Err(Refusal::Name));
+    assert!(rig.issued(&again));
+    assert!(rig.logged("alice: a post refused: a post in flight holds the name"), "{:?}", rig.log());
+    let mut tokens = vec![alice];
+    for name in &names[1..] {
+        tokens.push(rig.admitted(name, &rig.invite()));
+        assert_eq!(rig.post(name, &record(true), &rig.invite()), Err(Refusal::Name), "{name} posted twice");
+    }
+    gate.open();
+    until("all four live", || tokens.iter().all(|t| rig.live(t)).then_some(()));
+    rig.fake.assert_done();
+    let said = rig.fake.said();
+    for name in names {
+        assert_eq!(said.iter().filter(|c| **c == format!("volume_create {name}")).count(), 1, "{name}: {said:?}");
+    }
+    assert_eq!(said.iter().filter(|c| c.starts_with("volume_create ")).count(), 4, "{said:?}");
+    assert_eq!(said.iter().filter(|c| *c == "caddy_reload").count(), 4, "{said:?}");
+}
+
+/// T18: THE SERIAL PAIR — two names going live at once produce two snippets
+/// and two reloads, and no reload lands between another name's snippet
+/// write and its own reload: `alice`'s reload held at the fake's hook while
+/// `bob` runs to the step before its own snippet, `bob` writes nothing
+/// while `alice`'s reload stands open; then the recorded order shows each
+/// name's write followed at once by its own reload.
+#[test]
+fn the_snippet_write_and_the_reload_are_serial_across_names() {
+    let gate = Gate::new();
+    let hold = Arc::clone(&gate);
+    let first = Arc::new(AtomicBool::new(false));
+    let rig = rig(&(flow_of("alice", false) + &flow_of("bob", false) + &reloads(2)), None);
+    rig.fake.hold(move |method, _| {
+        if method == "caddy_reload" && !first.swap(true, Ordering::SeqCst) {
+            hold.hold();
+        }
+    });
+    rig.workers(2);
+    let alice = rig.admitted("alice", &rig.invite());
+    gate.entered(1);
+    assert!(rig.logged("alice: snippet: written") && !rig.logged("alice: caddy_reload: exit 0"), "alice is inside its reload: {:?}", rig.log());
+    let bob = rig.admitted("bob", &rig.invite());
+    until("bob's health", || rig.called("health bob").then_some(()));
+    thread::sleep(Duration::from_millis(300));
+    assert!(!rig.snippet("bob").exists() && !rig.logged("bob: snippet: written"), "bob wrote its snippet while alice's reload ran: {:?}", rig.log());
+    gate.open();
+    until("both live", || (rig.live(&alice) && rig.live(&bob)).then_some(()));
+    rig.fake.assert_done();
+    assert!(rig.snippet("alice").exists() && rig.snippet("bob").exists());
+    assert_eq!(rig.fake.said().iter().filter(|c| *c == "caddy_reload").count(), 2);
+    let log = rig.log();
+    let pair: Vec<&str> = log.iter().map(String::as_str).filter(|l| l.ends_with(": snippet: written") || l.contains(": caddy_reload: exit")).collect();
+    assert_eq!(pair.len(), 4, "{pair:?}");
+    for write_and_reload in pair.chunks(2) {
+        let name = write_and_reload[0].split(':').next().expect("a name");
+        assert!(write_and_reload[0].ends_with(": snippet: written"), "{pair:?}");
+        assert_eq!(write_and_reload[1], format!("{name}: caddy_reload: exit 0"), "a reload between {name}'s snippet and its own reload: {pair:?}");
+    }
+}
+
+/// T20: THE SWEEP — `volumes` answering `alice`, `bob` and `Carol_X` with
+/// `alice.caddy` standing and no `bob.caddy`: `rm_force bob` then
+/// `volume_rm bob`, nothing for `alice`, nothing for `Carol_X` (logged as
+/// under no name of the grammar), the count 1, the log naming the name and
+/// each step; a `volumes` exit 1 — the sweep skipped, the count 0, the
+/// service standing and taking a post; a `volume_rm` failure — logged, the
+/// name left, not counted; an `rm_force` failure (no container) passed
+/// over, the volume still removed.
+#[test]
+fn the_sweep_removes_a_half_made_board_and_leaves_the_rest() {
+    let script = line("volumes", None, 0, "alice\nbob\nCarol_X\n", "") + &line("rm_force", Some("bob"), 0, "", "") + &line("volume_rm", Some("bob"), 0, "", "");
+    let rig = rig(&script, None);
+    fs::write(rig.snippet("alice"), b"").expect("alice's snippet");
+    assert_eq!(rig.service.sweep(), 1);
+    rig.fake.assert_done();
+    assert_eq!(rig.fake.said(), said(&["volumes", "rm_force bob", "volume_rm bob"]));
+    for line in [
+        "bob: half-made at start (a volume, no snippet) — removing",
+        "bob: sweep: rm_force: exit 0",
+        "bob: sweep: volume_rm: exit 0",
+        "bob: sweep: done — nothing stands under the name",
+        "sweep: a volume under the label is under no name of the grammar, left: Carol_X",
+    ] {
+        assert!(rig.logged(line), "{line}: {:?}", rig.log());
+    }
+    assert!(!rig.log().iter().any(|l| l.starts_with("alice")), "{:?}", rig.log());
+    assert!(rig.snippet("alice").exists());
+
+    // The listing fails: the sweep skipped, and the service still takes a
+    // post.
+    let unlisted = rig_with(&(line("volumes", None, 1, "", "Cannot connect to the Docker daemon\n") + &inspects("erin")), None, Arc::new(|_| {}));
+    assert_eq!(unlisted.service.sweep(), 0);
+    assert!(unlisted.logged("sweep: volumes: exit 1; the sweep is skipped") && unlisted.logged("sweep: volumes: Cannot connect to the Docker daemon"), "{:?}", unlisted.log());
+    unlisted.admitted("erin", &unlisted.invite());
+    unlisted.fake.assert_done();
+
+    // A `volume_rm` that fails leaves the name, logged; an `rm_force` that
+    // fails is passed over.
+    let script = line("volumes", None, 0, "bob\ncarol\n", "")
+        + &line("rm_force", Some("bob"), 1, "", "Error: No such container: bob\n")
+        + &line("volume_rm", Some("bob"), 1, "", "Error: volume is in use\n")
+        + &line("rm_force", Some("carol"), 1, "", "Error: No such container: carol\n")
+        + &line("volume_rm", Some("carol"), 0, "", "");
+    let partly = rig_with(&script, None, Arc::new(|_| {}));
+    assert_eq!(partly.service.sweep(), 1);
+    partly.fake.assert_done();
+    for line in [
+        "bob: sweep: rm_force: exit 1",
+        "bob: sweep: rm_force: Error: No such container: bob",
+        "bob: sweep: volume_rm: exit 1",
+        "bob: sweep: volume_rm: Error: volume is in use",
+        "bob: sweep: INCOMPLETE — the volume stands, and the name refuses posts (D-4) until the operator clears it",
+        "carol: sweep: rm_force: exit 1",
+        "carol: sweep: volume_rm: exit 0",
+        "carol: sweep: done — nothing stands under the name",
+    ] {
+        assert!(partly.logged(line), "{line}: {:?}", partly.log());
+    }
 }

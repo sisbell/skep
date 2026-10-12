@@ -2,10 +2,11 @@
 
 The service behind a hosted skep board's sign-up: the sign-up page and the
 claim form, served over HTTP behind the proxy; the person's record checked
-in process; the steps that make a board run one at a time through the
-host's `docker` command; one proxy snippet per board and a reload; the
-live page at a status address; and a follow-up mail once the board is
-live. It holds no key.
+in process; the steps that make a board run through the host's `docker`
+command, different names at once; one proxy snippet per board and a
+reload; the live page at a status address; and a follow-up mail once the
+board is live. At its start it removes any board a stop left half-made.
+It holds no key.
 
 Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substrate in the Project Xanadu lineage.
 
@@ -20,8 +21,8 @@ skep-provision --version
 - **`serve`** runs the service until the process ends: SIGTERM's default
   disposition stops it at once. Every file it keeps is replaced whole by a
   rename, so no stop tears one; a board cut off mid-step leaves what was
-  made standing, and the service then refuses that name until the
-  operator clears it.
+  made standing, and the next `serve` removes it before it listens (see
+  [The sweep at start](#the-sweep-at-start)).
 - **`invite`** mints one invite into the state directory's invite file
   and prints one line on stdout, the claim page's address carrying the
   code, `https://<suffix>/claim?invite=<code>`. The owner mails that line
@@ -53,6 +54,7 @@ renders it from there.
 | `--suffix <DOMAIN>` | `skep.host` (`DEFAULT_SUFFIX`) | the domain every board stands under, `<name>.<domain>` |
 | `--log-max-size <SIZE>` | `10m` (`DEFAULT_LOG_MAX_SIZE`) | a serving run's log file size |
 | `--log-max-file <N>` | `5` (`DEFAULT_LOG_MAX_FILE`) | a serving run's log files kept |
+| `--workers <N>` | `3` (`DEFAULT_WORKERS`) | the boards made at once: one worker thread each; `0` is a usage refusal |
 | `--mailer <PROGRAM>` | none | the host's relay client, run as `<PROGRAM> -t` with the message on stdin; given with `--from` or not at all, and with neither no mail is sent and the serving line says so |
 | `--from <ADDRESS>` | none | the mail's sending address |
 
@@ -97,11 +99,19 @@ seconds with a `<meta>` refresh. Every status the service writes is one
 
 ## The steps
 
-One worker runs one post at a time under one lock. A post that arrives
-while a board is being made waits for the lock before its own reads.
+A pool of worker threads (`--workers`, three by default) makes boards for
+different names at once. The name is the unit of exclusion: a name is
+held from the moment its post is admitted until the board is live or the
+post has failed, a second post for a name in flight is refused on the
+form (D-4), and so no two workers ever run the steps for one name. A post
+waits on no board being made: its checks and its three reads of what
+stands run under a short lock on the queue and the status map, never
+behind a provisioning, so every post is answered at once. Up to four
+posts wait in the queue; a fifth is answered D-8, "try again later".
 
 1. Look again: no snippet, volume or container stands under the name.
-2. `docker volume create <name>`.
+2. `docker volume create --label skep.provision=1 <name>`: the volume
+   carries the label by which the sweep at start finds it.
 3. The claim run: the image bound to its own loopback, nothing published,
    the board's public origin `https://<name>.<suffix>` configured.
 4. The sidecar's `skep claim --hosted -` in the claim run's network
@@ -111,7 +121,11 @@ while a board is being made waits for the lock before its own reads.
 5. The serving run on the bridge, then the sidecar's `skep health` until
    the board answers a claimant with local trust off.
 6. The snippet written to `<boards-dir>/<name>.caddy`, then the proxy
-   reloaded.
+   reloaded. These two are the one serial pair: one lock is held across a
+   snippet's write and its reload, whichever name a worker is on, so no
+   reload lands between another board's snippet and its own reload. The
+   same lock is held across a snippet's removal and the reload that
+   follows it, and nowhere else.
 
 Then the status turns live, the invite is spent, and the mail goes to the
 sender's own thread. That thread retries a refused send (seven tries, ten
@@ -122,6 +136,23 @@ snippet removed and the proxy reloaded where it was written, the run
 removed, the volume removed. The status turns to D-8, and the invite stays
 issued so the person can post again. If a removal itself fails, the log
 says so and the name stays taken until the operator clears it.
+
+## The sweep at start
+
+A stop in the middle of a board leaves its volume, and perhaps a run,
+standing under a name with no snippet — a name the service would read as
+taken for good. So before `serve` binds its address it lists the volumes
+that carry this service's label (`docker volume ls -q --filter
+label=skep.provision=1`) and, for each whose name is one label of the
+grammar and has no `<name>.caddy` in the snippet directory, runs the last
+two rows of the cleanup: `docker rm -f <name>` (a failure logged and
+passed over, since there may be no run) and `docker volume rm <name>` (a
+failure logged; the name then stays taken, for the operator). A volume
+whose snippet stands is left alone — it is a live board, or a stopped one
+that Docker's `--restart` brings back — and so is a listed volume whose
+name is not one of the grammar, which the log names. If the listing
+itself fails, the log says so, the sweep is skipped, and the service still
+serves. The serving line carries the count, `swept <n>`.
 
 ## The strings
 
@@ -160,6 +191,9 @@ because a board with local trust on fails the `/health` step.
 - `<boards-dir>/<name>.caddy` is one board's proxy snippet, mode `0644`.
   The status map is rebuilt from these files at start: each snippet is a
   live name.
+- Every volume it creates carries the label `skep.provision=1` on the
+  host's Docker, the one mark by which the sweep at start tells its own
+  volumes from every other.
 
 The two state files are written whole and renamed into place, born
 `0600`.

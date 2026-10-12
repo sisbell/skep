@@ -8,9 +8,10 @@
 //!   script — the two inspects of the truth about names, the volume's
 //!   creation and removal, the claim run, the sidecar's dark claim with the
 //!   record on its stdin, the forced removal of a run, the serving run, the
-//!   sidecar's `skep health`, and the proxy's reload. Each answers what the
-//!   call answered ([`Exit`]: its exit code, its stdout and its stderr,
-//!   apart), or the `io::Error` of a `docker` that could not be run.
+//!   sidecar's `skep health`, the proxy's reload, and the listing of the
+//!   volumes this service made. Each answers what the call answered
+//!   ([`Exit`]: its exit code, its stdout and its stderr, apart), or the
+//!   `io::Error` of a `docker` that could not be run.
 //! * [`Call`] — THE ARGV of every call, A PURE FUNCTION of the call and the
 //!   [`Settings`] ([`Call::argv`]), which the unit suite pins token by
 //!   token against the documents' run lines — the smoke's claim run
@@ -30,15 +31,20 @@
 //! volume inspect` and `docker container inspect` exit 0 for an object that
 //! stands and non-zero for one that does not (a non-zero for any other
 //! reason — the Engine unreachable — reads as "not standing", and the
-//! post's own `volume create` then fails, nothing made); `--network
-//! container:<name>` puts the sidecar in the claim run's namespace, where
-//! the daemon's loopback is reachable; `-i` keeps the sidecar's stdin open,
-//! so `skep claim --hosted -` reads the record from it; a user-defined
-//! bridge resolves a container's name, so `skep health --board
-//! http://<name>:8642` dials the serving run from a container on the same
-//! bridge — the same on the Linux VM and on a Mac, whose host does not
-//! reach the bridge; and `docker exec <caddy> caddy reload` reloads Caddy
-//! inside its container.
+//! post's own `volume create` then fails, nothing made); `docker volume
+//! create --label <key>=<value> <name>` makes the volume with that label on
+//! it, the option read before the name, and `docker volume ls -q --filter
+//! label=<key>=<value>` prints the name of every volume so labelled, one
+//! per line and nothing else ([`LABEL_KEY`], [`LABEL_VALUE`]: the mark by
+//! which the sweep at start tells this service's volumes from every other
+//! on the host); `--network container:<name>` puts the sidecar in the claim
+//! run's namespace, where the daemon's loopback is reachable; `-i` keeps the
+//! sidecar's stdin open, so `skep claim --hosted -` reads the record from
+//! it; a user-defined bridge resolves a container's name, so `skep health
+//! --board http://<name>:8642` dials the serving run from a container on
+//! the same bridge — the same on the Linux VM and on a Mac, whose host does
+//! not reach the bridge; and `docker exec <caddy> caddy reload` reloads
+//! Caddy inside its container.
 
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
@@ -69,6 +75,20 @@ pub const VOLUME_MOUNT: &str = "/var/lib/skepd";
 /// The Caddyfile the reload names, inside Caddy's container (the
 /// deployment notes §4a: `/etc/caddy` mounted read-only there).
 pub const CADDYFILE: &str = "/etc/caddy/Caddyfile";
+
+/// THE LABEL's KEY: the mark every volume this service creates carries,
+/// by which the sweep at start lists them and no other volume on the host
+/// (`docker volume create --label`, `docker volume ls --filter label=` —
+/// UNVERIFIED HERE, as the module doc marks).
+pub const LABEL_KEY: &str = "skep.provision";
+
+/// THE LABEL's VALUE: one, a flag — the key's presence is the mark.
+pub const LABEL_VALUE: &str = "1";
+
+/// The label as both calls spell it: `<key>=<value>`.
+pub fn label() -> String {
+    format!("{LABEL_KEY}={LABEL_VALUE}")
+}
 
 /// The run configuration every argv is built from: the operator's flags.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -116,7 +136,8 @@ impl Exit {
 /// THE RUNNER: one method per call the five steps make, each answering what
 /// the call answered.
 pub trait Docker: Send + Sync {
-    /// `docker volume create <name>`: the board's one fresh named volume.
+    /// `docker volume create --label skep.provision=1 <name>`: the board's
+    /// one fresh named volume, labelled as this service's.
     fn volume_create(&self, name: &Name) -> io::Result<Exit>;
     /// `docker volume inspect <name>`: exit 0 iff the volume stands.
     fn volume_inspect(&self, name: &Name) -> io::Result<Exit>;
@@ -140,6 +161,10 @@ pub trait Docker: Send + Sync {
     fn health(&self, name: &Name) -> io::Result<Exit>;
     /// Caddy's reload, inside its container.
     fn caddy_reload(&self) -> io::Result<Exit>;
+    /// `docker volume ls -q --filter label=skep.provision=1`: every volume
+    /// this service made, one name per line on stdout — what the sweep at
+    /// start reads.
+    fn volumes(&self) -> io::Result<Exit>;
 }
 
 /// One call, as data: what [`Call::argv`] renders and the fake matches.
@@ -165,6 +190,8 @@ pub enum Call<'a> {
     Health(&'a Name),
     /// [`Docker::caddy_reload`].
     CaddyReload,
+    /// [`Docker::volumes`].
+    Volumes,
 }
 
 impl Call<'_> {
@@ -172,7 +199,11 @@ impl Call<'_> {
     /// settings, the one place each run line is spelled.
     pub fn argv(&self, s: &Settings) -> Vec<String> {
         match *self {
-            Call::VolumeCreate(n) => vec!["volume".into(), "create".into(), n.to_string()],
+            // THE VOLUME, labelled as this service's before its name — the
+            // one mark the sweep at start lists by. The smoke's own line
+            // (`scripts/docker-smoke.sh`, `docker volume create "$VOLUME"`)
+            // carries no label: the smoke sweeps nothing.
+            Call::VolumeCreate(n) => vec!["volume".into(), "create".into(), "--label".into(), label(), n.to_string()],
             Call::VolumeInspect(n) => vec!["volume".into(), "inspect".into(), n.to_string()],
             Call::ContainerInspect(n) => vec!["container".into(), "inspect".into(), n.to_string()],
             // THE CLAIM RUN — the smoke's line word for word
@@ -262,6 +293,9 @@ impl Call<'_> {
                 vec!["run".into(), "--rm".into(), "--network".into(), s.network.clone(), s.cli_image.clone(), "skep".into(), "health".into(), "--board".into(), format!("http://{n}:{BOARD_PORT}")]
             }
             Call::CaddyReload => vec!["exec".into(), s.caddy.clone(), "caddy".into(), "reload".into(), "--config".into(), CADDYFILE.into()],
+            // THE LISTING — the names alone (`-q`) of the volumes that carry
+            // the label: this service's, and no other volume on the host.
+            Call::Volumes => vec!["volume".into(), "ls".into(), "-q".into(), "--filter".into(), format!("label={}", label())],
         }
     }
 }
@@ -361,6 +395,10 @@ impl Docker for Host {
     fn caddy_reload(&self) -> io::Result<Exit> {
         self.run(Call::CaddyReload, None)
     }
+
+    fn volumes(&self) -> io::Result<Exit> {
+        self.run(Call::Volumes, None)
+    }
 }
 
 /// A shared runner is a runner: a unit suite hands the service an `Arc` of
@@ -405,6 +443,10 @@ impl<D: Docker + ?Sized> Docker for std::sync::Arc<D> {
 
     fn caddy_reload(&self) -> io::Result<Exit> {
         (**self).caddy_reload()
+    }
+
+    fn volumes(&self) -> io::Result<Exit> {
+        (**self).volumes()
     }
 }
 

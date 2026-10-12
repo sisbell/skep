@@ -2,9 +2,10 @@
 //! default is its named constant; `--mailer` and `--from` come together or
 //! not at all; an unknown flag, a missing value, a value of the wrong form
 //! and a missing required flag are each a usage refusal (`main` answers it
-//! exit 2 — the binary's suite runs one); `--docker-fake` and
-//! `--mailer-fake` are flags of a `test-hooks` build alone; and the usage
-//! text names every flag and renders every default from its constant.
+//! exit 2 — the binary's suite runs one); `--workers` defaults to its
+//! constant and refuses zero (T21); `--docker-fake` and `--mailer-fake` are
+//! flags of a `test-hooks` build alone; and the usage text names every flag
+//! and renders every default from its constant.
 
 use std::ffi::OsString;
 
@@ -52,6 +53,7 @@ fn every_default_is_its_named_constant() {
     assert_eq!(s.settings.suffix, DEFAULT_SUFFIX);
     assert_eq!(s.settings.log_max_size, DEFAULT_LOG_MAX_SIZE);
     assert_eq!(s.settings.log_max_file, DEFAULT_LOG_MAX_FILE);
+    assert_eq!(s.workers, DEFAULT_WORKERS);
     assert_eq!(s.mail, None, "no mail without --mailer and --from");
     assert_eq!(s.state_dir, PathBuf::from("/var/lib/skep-provision"));
     assert_eq!(s.reply_to, "owner@skep.host");
@@ -67,6 +69,28 @@ fn every_default_is_its_named_constant() {
     assert!(DEFAULT_LISTEN.ip().is_loopback() && DEFAULT_LISTEN.port() != 8642);
     assert_eq!((DEFAULT_BOARDS_DIR, DEFAULT_IMAGE, DEFAULT_CLI_IMAGE, DEFAULT_NETWORK, DEFAULT_CADDY, DEFAULT_SUFFIX), ("/etc/caddy/boards", "skep-hosted", "skep-cli", "skep", "caddy", "skep.host"));
     assert_eq!((DEFAULT_LOG_MAX_SIZE, DEFAULT_LOG_MAX_FILE), ("10m", 5), "the README's serving line");
+    assert_eq!(DEFAULT_WORKERS, 3, "the owner's number");
+}
+
+/// T21: `--workers` DEFAULTS TO `DEFAULT_WORKERS`; `--workers 0` is a usage
+/// refusal (exit 2 at `main`); `--workers 3` and `--workers 1` parse; a
+/// value that is no count is refused; the usage names the flag and renders
+/// its default from the constant.
+#[test]
+fn the_workers_flag_defaults_to_its_constant_and_refuses_zero() {
+    assert_eq!(served(&[]).workers, DEFAULT_WORKERS);
+    assert_eq!(serve(&["--workers", "0"]), Err("--workers: '0' is not a count of one or more".to_owned()));
+    assert_eq!(served(&["--workers", "3"]).workers, 3);
+    assert_eq!(served(&["--workers", "1"]).workers, 1);
+    assert_eq!(served(&["--workers", "1", "--workers", "2"]).workers, 2, "the last given wins");
+    assert!(serve(&["--workers", "two"]).is_err());
+    assert!(serve(&["--workers", "-1"]).is_err());
+    assert_eq!(serve(&["--workers"]), Err("--workers needs a value".to_owned()));
+    assert!(parse(argv(&["invite", "--address", "a@b", "--state-dir", "/s", "--workers", "2"])).is_err(), "a flag of serve's alone");
+    let text = usage();
+    assert!(text.contains("\n  --workers <N>"), "{text}");
+    assert!(text.contains("[--workers <N>]"), "{text}");
+    assert!(text.split_whitespace().collect::<Vec<_>>().join(" ").contains(&format!("(default {DEFAULT_WORKERS})")), "{text}");
 }
 
 /// Every flag given lands in its own setting.
@@ -182,6 +206,7 @@ fn the_usage_names_every_flag_and_its_default() {
         "--suffix <DOMAIN>",
         "--log-max-size <SIZE>",
         "--log-max-file <N>",
+        "--workers <N>",
         "--mailer <PROGRAM>",
         "--from <ADDRESS>",
         "--address <ADDRESS>",
@@ -202,6 +227,7 @@ fn the_usage_names_every_flag_and_its_default() {
         format!("(default {DEFAULT_SUFFIX})"),
         format!("(default {DEFAULT_LOG_MAX_SIZE})"),
         format!("(default {DEFAULT_LOG_MAX_FILE})"),
+        format!("(default {DEFAULT_WORKERS})"),
     ] {
         assert!(folded.contains(&default), "{default}");
     }

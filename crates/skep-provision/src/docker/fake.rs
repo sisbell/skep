@@ -1,31 +1,49 @@
 //! THE SCRIPTED FAKE — `test-hooks` alone, so no shipped build holds it: a
 //! [`Docker`] answered from a SCRIPT the test writes, one line per call it
-//! expects, in order, each with the exit code and the stdout (and, where
-//! wanted, the stderr) the call answers. It RECORDS every call in order —
-//! the method, the name, the sidecar's stdin — in memory and, where it was
-//! opened from a file (the binary's `--docker-fake <script>`), as one line
-//! per call in the sibling file `<script>.calls`, which a suite driving the
-//! built binary reads after it. A call the script did not expect — another
-//! method or another name than the script's next line, or any call once the
-//! script is spent — is answered with exit [`UNEXPECTED`] and a stderr
-//! saying so, recorded as unexpected, and leaves the script where it was;
-//! `FakeDocker::assert_done` then fails the test, as does a script line
-//! left uncalled.
+//! expects, each with the exit code and the stdout (and, where wanted, the
+//! stderr) the call answers. THE ORDER IS STRICT PER NAME AND FREE ACROSS
+//! NAMES: a call is answered by the first unconsumed line under its own
+//! name — the lines without a name (the reload, the listing) are one name
+//! among them — because the pool makes boards for different names at once,
+//! and which name's call lands first is the scheduler's; a name's own calls
+//! still come in the order its lines are written. It RECORDS every call in
+//! the order received — the method, the name, the sidecar's stdin — in
+//! memory and, where it was opened from a file (the binary's `--docker-fake
+//! <script>`), as one line per call in the sibling file `<script>.calls`,
+//! which a suite driving the built binary reads after it. A call the script
+//! did not expect — another method than the next line under its name, or a
+//! call under a name with no line left — is answered with exit
+//! [`UNEXPECTED`] and a stderr saying so, recorded as unexpected, and
+//! leaves the script where it was; `FakeDocker::assert_done` then fails the
+//! test, as does a script line left uncalled.
 //!
 //! THE SCRIPT's LINE: TAB-separated fields — the method as the trait spells
-//! it, the name (`-` for the reload, which names none), the exit code, then
-//! optionally the stdout and the stderr, in which `\n` is a line break, `\t`
-//! a tab and `\\` a backslash (`line` writes one). A blank line, or one
-//! beginning `#`, is no call.
+//! it, the name (`-` for the reload and the listing, which name none), the
+//! exit code, then optionally the stdout and the stderr, in which `\n` is a
+//! line break, `\t` a tab and `\\` a backslash (`line` writes one). A blank
+//! line, or one beginning `#`, is no call.
 
 use std::collections::VecDeque;
 use std::fs::OpenOptions;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
+#[cfg(test)]
+use std::{
+    panic::{RefUnwindSafe, UnwindSafe},
+    sync::OnceLock,
+};
 
 use super::{Call, Docker, Exit};
 use crate::record::Name;
+
+/// THE HOLD a unit suite puts on the fake: called with every call's method
+/// and name once the call is answered and recorded, and free to block — the
+/// test's way to hold a worker inside one call while another name's flow
+/// runs on. Called with no lock of the fake's held, so a hold on one call
+/// holds no other. Unwind-safe, as a suite catches the fake's own panics.
+#[cfg(test)]
+pub type Hold = Box<dyn Fn(&'static str, Option<&str>) + Send + Sync + UnwindSafe + RefUnwindSafe>;
 
 /// The exit code a call the script did not expect answers: Docker's own
 /// code for an error of the `docker` command itself, as this crate knows
@@ -73,13 +91,21 @@ impl Called {
     }
 }
 
-/// THE FAKE: the script left to answer, the calls received, and where they
-/// are recorded on disk, where anywhere.
-#[derive(Debug)]
+/// THE FAKE: the script left to answer, the calls received, where they are
+/// recorded on disk, where anywhere, and a unit suite's hold.
 pub struct FakeDocker {
     script: Mutex<VecDeque<Step>>,
     calls: Mutex<Vec<Called>>,
     record: Option<PathBuf>,
+    #[cfg(test)]
+    hold: OnceLock<Hold>,
+}
+
+/// The script left and the calls received; the hold is a closure.
+impl std::fmt::Debug for FakeDocker {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("FakeDocker").field("script", &self.script).field("calls", &self.calls).field("record", &self.record).finish_non_exhaustive()
+    }
 }
 
 impl FakeDocker {
@@ -103,7 +129,20 @@ impl FakeDocker {
                 stderr: unescape(fields.get(4).copied().unwrap_or("")).into_bytes(),
             });
         }
-        Ok(FakeDocker { script: Mutex::new(steps), calls: Mutex::new(Vec::new()), record: None })
+        Ok(FakeDocker {
+            script: Mutex::new(steps),
+            calls: Mutex::new(Vec::new()),
+            record: None,
+            #[cfg(test)]
+            hold: OnceLock::new(),
+        })
+    }
+
+    /// THE HOLD set: `hold` is called with every call's method and name once
+    /// the call is answered and recorded, and may block there. Set once.
+    #[cfg(test)]
+    pub fn hold(&self, hold: impl Fn(&'static str, Option<&str>) + Send + Sync + UnwindSafe + RefUnwindSafe + 'static) {
+        assert!(self.hold.set(Box::new(hold)).is_ok(), "the hold is set once");
     }
 
     /// The fake over the script file at `path`, recording every call it
@@ -152,19 +191,21 @@ impl FakeDocker {
         assert!(left.is_empty(), "script lines never called: {left:?}; every call: {:?}", self.said());
     }
 
-    /// One call answered: the script's next line where it expects this
-    /// call, else [`UNEXPECTED`]; either way recorded.
+    /// One call answered: the script's next line UNDER THE CALL's NAME where
+    /// it expects this call, else [`UNEXPECTED`]; either way recorded.
     fn answer(&self, call: Call<'_>, stdin: Option<&[u8]>) -> io::Result<Exit> {
         let method = method(&call);
         let name = name(&call).map(Name::to_string);
         let mut script = self.script.lock().unwrap_or_else(|e| e.into_inner());
-        let expected = script.front().is_some_and(|s| s.method == method && s.name == name);
+        let at = script.iter().position(|s| s.name == name);
+        let expected = at.is_some_and(|i| script[i].method == method);
         let exit = if expected {
-            let step = script.pop_front().expect("the front was read");
+            let step = script.remove(at.expect("the line was found")).expect("the line is in range");
             Exit { code: Some(step.code), stdout: step.stdout, stderr: step.stderr }
         } else {
-            let next = script.front().map_or_else(|| "nothing more".to_owned(), |s| format!("{} {}", s.method, s.name.as_deref().unwrap_or("-")));
-            let stderr = format!("docker-fake: unexpected call {method} {}; the script expected {next}\n", name.as_deref().unwrap_or("-"));
+            let shown = name.as_deref().unwrap_or("-");
+            let next = at.map_or_else(|| format!("nothing more under {shown}"), |i| format!("{} {shown}", script[i].method));
+            let stderr = format!("docker-fake: unexpected call {method} {shown}; the script expected {next}\n");
             Exit { code: Some(UNEXPECTED), stdout: Vec::new(), stderr: stderr.into_bytes() }
         };
         drop(script);
@@ -179,7 +220,11 @@ impl FakeDocker {
             line.push('\n');
             OpenOptions::new().append(true).open(record)?.write_all(line.as_bytes())?;
         }
-        self.calls.lock().unwrap_or_else(|e| e.into_inner()).push(Called { method, name, stdin: stdin.map(<[u8]>::to_vec), expected });
+        self.calls.lock().unwrap_or_else(|e| e.into_inner()).push(Called { method, name: name.clone(), stdin: stdin.map(<[u8]>::to_vec), expected });
+        #[cfg(test)]
+        if let Some(hold) = self.hold.get() {
+            hold(method, name.as_deref());
+        }
         Ok(exit)
     }
 }
@@ -197,6 +242,7 @@ pub fn method(call: &Call<'_>) -> &'static str {
         Call::VolumeRm(_) => "volume_rm",
         Call::Health(_) => "health",
         Call::CaddyReload => "caddy_reload",
+        Call::Volumes => "volumes",
     }
 }
 
@@ -212,7 +258,7 @@ pub fn name<'a>(call: &Call<'a>) -> Option<&'a Name> {
         | Call::RunServing(n)
         | Call::VolumeRm(n)
         | Call::Health(n) => Some(n),
-        Call::CaddyReload => None,
+        Call::CaddyReload | Call::Volumes => None,
     }
 }
 
@@ -299,5 +345,9 @@ impl Docker for FakeDocker {
 
     fn caddy_reload(&self) -> io::Result<Exit> {
         self.answer(Call::CaddyReload, None)
+    }
+
+    fn volumes(&self) -> io::Result<Exit> {
+        self.answer(Call::Volumes, None)
     }
 }

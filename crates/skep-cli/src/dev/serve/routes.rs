@@ -23,9 +23,10 @@ use std::sync::mpsc::RecvTimeoutError;
 use std::time::{Duration, Instant};
 
 use serde_json::{json, Value};
+use skep_http::{read_request, write_head, write_response, Limits, Refused, Request};
 use skep_shell::events;
 
-use super::http::{self, cors_headers, read_request, write_head, write_response, write_sse_event, write_sse_head, write_sse_keepalive, Request, KEEPALIVE, READ_TIMEOUT, WRITE_TIMEOUT};
+use super::http::{cors_headers, write_sse_event, write_sse_head, write_sse_keepalive, KEEPALIVE, MAX_BODY, MAX_HEAD, READ_TIMEOUT, WRITE_TIMEOUT};
 use super::{node, Provider};
 use crate::terminal::talk;
 
@@ -37,14 +38,14 @@ pub fn connection(provider: &Provider<'_>, mut stream: TcpStream) {
     let _ = stream.set_write_timeout(Some(WRITE_TIMEOUT));
     let peer = stream.peer_addr().ok();
     let cors = cors_headers(&provider.admission.page_origin);
-    let req = match read_request(&mut stream) {
+    let req = match read_request(&mut stream, Limits { max_head: MAX_HEAD, max_body: MAX_BODY }) {
         Ok(Some(req)) => req,
         Ok(None) => return,
-        Err(http::Refused::Malformed(detail)) => {
+        Err(Refused::Malformed(detail)) => {
             let _ = write_response(&mut stream, 400, &cors, Some("text/plain; charset=utf-8"), format!("refused: malformed_http: {detail}\n").as_bytes());
             return;
         }
-        Err(http::Refused::TooLarge { declared, cap }) => {
+        Err(Refused::TooLarge { declared, cap }) => {
             let _ = write_response(&mut stream, 413, &cors, Some("text/plain; charset=utf-8"), format!("refused: payload_too_large: {declared} bytes declared against a cap of {cap}\n").as_bytes());
             return;
         }

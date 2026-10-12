@@ -39,7 +39,8 @@ use crate::args::Usage;
 use crate::shared::{data, Stop};
 use crate::terminal::talk;
 
-// The HTTP/1.1 subset and the event stream's framing.
+// The provider's own HTTP over `skep-http`'s subset: the timeouts and the
+// caps, the CORS headers for the one origin, the event stream's framing.
 mod http;
 // The admission: the peer, the host, the one origin, the secret.
 mod admission;

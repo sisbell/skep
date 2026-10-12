@@ -17,7 +17,7 @@
 
 use std::net::SocketAddr;
 
-use super::http::Request;
+use skep_http::Request;
 
 /// The header the page echoes the secret in.
 pub const SECRET_HEADER: &str = "Skep-Provider";

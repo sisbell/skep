@@ -1,0 +1,15 @@
+[package]
+name = "skep-http"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+license.workspace = true
+description = "The plain HTTP/1.1 subset two programs speak over loopback: one request per connection, the head read to its terminator and the body to its Content-Length, each under a cap the caller gives, no chunked bodies, and Connection: close on every answer. It holds no cap of its own, no CORS header and no event stream; std alone, nothing of skep, no feature."
+readme = "README.md"
+
+# No dependency: the subset is `std` alone — `Read` and `Write` over the
+# caller's stream. The caps are each caller's own configuration, handed in
+# at the read, and the crate takes nothing of skep, so any program in the
+# workspace may call it and none reaches a skep crate through it.
+[dependencies]

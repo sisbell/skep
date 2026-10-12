@@ -66,6 +66,11 @@ skep-corpus = { path = "../skep-corpus" }
 # seam, the feed consumer, the declarations — written once, the transport
 # alone the verb's.
 skep-shell = { path = "../skep-shell" }
+# THE HTTP/1.1 SUBSET the `serve` verb speaks over loopback: the request read
+# under the provider's caps and the response written; `std` alone, nothing
+# of skep. The provider's own HTTP — its caps, the CORS headers for the one
+# origin, the event stream's framing — stays in `src/dev/serve/http.rs`.
+skep-http = { path = "../skep-http" }
 # The daemon IN-PROCESS with its test hooks, behind `dev-hooks` alone (the
 # feature above): a REGULAR dependency, optional, so `cargo tree -e normal`
 # at the default features names no `skepd`. The dev-dependency below is

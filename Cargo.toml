@@ -23,6 +23,7 @@ members = [
     "crates/skep-registry",
     "crates/skep-search",
     "crates/skep-corpus",
+    "crates/skep-http",
     "crates/skep-resolve",
     "crates/skep-client",
     "crates/skep-shell",

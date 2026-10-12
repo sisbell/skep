@@ -44,6 +44,7 @@ beside them, the differential-conformance harness.
 | `skep-registry` | the registry's commons rows and binding/endpoint bodies (pure values) |
 | `skep-blobs` | the blob store: deposited files, partial uploads, upload records, leases |
 | `skep-util` | the support crate below the daemon and the media crate: the counting permit pool, the operator's notice line, the JSON determinism helpers |
+| `skep-http` | the plain HTTP/1.1 subset two programs speak over loopback: one request per connection read under the caller's caps, the response written with `Connection: close` — no CORS, no event stream, no cap of its own |
 | `skep-media` | the daemon's media resource: the cell's one parser, the media door, the gate over the blob store, the cell index, the pruner, the fetch — generic over the world, no engine |
 | `skep-engine` | the one assembler: `World`, genesis, recovery, `world_at` |
 | `skepd` | the daemon: HTTP/JSON wire v4, sessions, history, SSE |

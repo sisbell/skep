@@ -1257,6 +1257,7 @@ dependencies = [
  "skep-address",
  "skep-client",
  "skep-corpus",
+ "skep-http",
  "skep-identity",
  "skep-shell",
  "skep-signature",
@@ -1392,6 +1393,10 @@ dependencies = [
  "skep-retrieval",
  "tempfile",
 ]
+
+[[package]]
+name = "skep-http"
+version = "0.1.0"
 
 [[package]]
 name = "skep-identity"

@@ -22,7 +22,7 @@ position in the journal.
 
 ## Code map
 
-The workspace is twenty-six crates under `crates/`. Dependencies point
+The workspace is twenty-seven crates under `crates/`. Dependencies point
 downward in the list below: a crate may depend only on crates listed
 above it.
 
@@ -78,6 +78,20 @@ above it.
   holds no part of the world — it is what the search budgets suite
   (`skep-search`, a dev-dependency) and the dev binary (`skep-cli`) lean
   on. Its rules: §The corpus crate.
+- `skep-http` — the plain HTTP/1.1 subset two programs speak over
+  loopback: one request per connection, the head read to its terminator
+  and the body to its `Content-Length` under the two caps the caller hands
+  in (`Limits`), a `Transfer-Encoding` refused by name, and every answer
+  written with `Cache-Control: no-store` and `Connection: close` —
+  `read_request` with the `Request` it answers and the `Refused` it
+  refuses with, `write_response` and `write_head`. No cap value, no CORS
+  header and no event stream lives here: each is its caller's own. It
+  depends on no other skep crate and on nothing but `std`, so it may stand
+  anywhere; it stands here beside `skep-util` and `skep-corpus` because,
+  like them, it holds no part of the world — it is what the dev provider
+  (`skep-cli`'s `skep-dev serve`) calls today and the provisioning service
+  will call next. The daemon's own reader stays the daemon's and calls
+  nothing here. Its rule of membership is its crate root's.
 
 **The stores** — each owns one slice of the world and depends only on the
 foundation and on the stores above it.
@@ -217,8 +231,9 @@ foundation and on the stores above it.
   parsing by hand, a `Person` over the terminal, stdout data and stderr
   talk — and the dev binary `skep-dev`, whose two verbs `seed` a running
   claimed board with a prose corpus (`skep-corpus`) and `serve` the
-  shell's core (`skep-shell`) to a page over loopback — the dev provider —
-  over the same plumbing; behind its `dev-hooks` feature, which no shipped
+  shell's core (`skep-shell`) to a page over loopback through the plain
+  HTTP/1.1 subset (`skep-http`) — the dev provider — over the same
+  plumbing; behind its `dev-hooks` feature, which no shipped
   build enables, `serve --own` links `skepd` with `test-hooks` and runs
   the daemon in-process. Its modules and rules: §The command.
 - `skep-conformance` — a differential harness against `udanax-green`'s
@@ -1216,15 +1231,17 @@ unclaimed board, `writes.halted`, a stranger's claim), the cut through
 ghosts for outside names, rotated second versions with the window on the
 first edition's shot, drafts, a keyless second account — ending in one
 JSON object; and `serve.rs`, THE DEV PROVIDER — `skep-dev serve` — with
-its modules beneath it: `serve/http.rs`, the HTTP/1.1 subset in the shape
-of the daemon's (one request per connection, the timeouts, the head and
-body caps, the event stream's framing, the CORS headers for the one origin
-and never `*`); `serve/admission.rs`, the check every request passes
-before any dial — the peer loopback, `Host` the listen address, `Origin`
-the one page origin, the per-run secret in the `Skep-Provider` header or
-the event stream's `?provider=` query; `serve/node.rs`, the daemon's two
-modes — a running board dialed, or under the crate's `dev-hooks` feature
-the daemon in-process with its test hooks and the fault doors
+its modules beneath it: `serve/http.rs`, the provider's own HTTP over the
+plain subset `skep-http` serves (one request per connection, the head and
+the body each under a cap its caller hands in) — the timeouts, the two
+caps it reads a request under, the event stream's framing, and the CORS
+headers for the one origin and never `*`; `serve/admission.rs`, the check
+every request passes before any dial — the peer loopback, `Host` the
+listen address, `Origin` the one page origin, the per-run secret in the
+`Skep-Provider` header or the event stream's `?provider=` query;
+`serve/node.rs`, the daemon's two modes — a running board dialed, or
+under the crate's `dev-hooks` feature the daemon in-process with its test
+hooks and the fault doors
 `/bridge/fault/<door>` reaches; and `serve/routes.rs`, the routes over
 `skep-shell`'s core — `POST /bridge/<call>`, `GET /bridge/events`, the two
 answers, the log, the shapes, the script seam, the fetch stream. `skep-dev

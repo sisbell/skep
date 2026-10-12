@@ -24,7 +24,7 @@
 //! conformance — one sequence on the crate and through the provider,
 //! deep-equal results and the same events in order.
 
-use std::io::{BufRead, BufReader, ErrorKind, Read, Write};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{Shutdown, TcpListener, TcpStream, ToSocketAddrs};
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, Command, Stdio};
@@ -43,7 +43,7 @@ use skep_client::store::{FileStore, KeyStore};
 use skep_client::Origin;
 use skep_shell::shell::{ArmConfig, SessionMode, ShellOptions};
 use skep_shell::Shell;
-use skepd::{serve, AuthOptions, Daemon, Skepd, DEFAULT_WORKERS};
+use skepd::{embed, AuthOptions, MediaOptions, Skepd, DEFAULT_WORKERS};
 
 use crate::common::{origin, s, spawn};
 
@@ -67,36 +67,20 @@ fn claim_board(board_origin: &str, store: &Path, anchors: &Path) {
     let ClaimOutcome::Ours(_) = claim::notebook(&board, &store, &mut person, &opts).unwrap_or_else(|h| panic!("{h}\n{}", person.transcript.join("\n"))) else { panic!("a stranger's board") };
 }
 
-/// A daemon at `port` exactly — the restart's twin of `common::spawn`.
+/// A daemon at `port` exactly — the restart's twin of `common::spawn`: the
+/// daemon's own start (`skepd::embed`) at that port, the open retried where
+/// the stopped daemon's lock has yet to release, then the wait for its cell
+/// index.
 fn spawn_at(dir: &Path, local_trust: bool, port: u16) -> Skepd {
-    let origin = skepd::Origin::parse(&format!("http://127.0.0.1:{port}")).unwrap();
-    let mut opts = AuthOptions::default();
-    opts.local_trust = local_trust;
-    opts.configured = vec![origin];
-    let deadline = Instant::now() + Duration::from_secs(30);
-    loop {
-        let daemon = match Daemon::open_with(dir, opts.clone()) {
-            Ok(d) => d,
-            Err(e) => {
-                assert!(Instant::now() < deadline, "the board did not reopen: {e}");
-                thread::sleep(Duration::from_millis(50));
-                continue;
-            }
-        };
-        match serve(daemon, port, DEFAULT_WORKERS) {
-            Ok(sd) => {
-                while !sd.daemon().index_is_ready() {
-                    thread::sleep(Duration::from_millis(5));
-                }
-                return sd;
-            }
-            Err(e) if e.kind() == ErrorKind::AddrInUse => {
-                assert!(Instant::now() < deadline, "the port did not free");
-                thread::sleep(Duration::from_millis(50));
-            }
-            Err(e) => panic!("{e}"),
-        }
-    }
+    let configured = |port: u16| {
+        let mut opts = AuthOptions::default();
+        opts.local_trust = local_trust;
+        opts.configured = vec![skepd::Origin::parse(&format!("http://127.0.0.1:{port}")).unwrap()];
+        opts
+    };
+    let sd = embed(dir, port, configured, MediaOptions::default(), DEFAULT_WORKERS).unwrap_or_else(|e| panic!("the board did not reopen at {port}: {e}"));
+    sd.wait_for_the_index(Duration::from_secs(60)).unwrap_or_else(|e| panic!("{e}"));
+    sd
 }
 
 /// A free loopback port, reserved and released.

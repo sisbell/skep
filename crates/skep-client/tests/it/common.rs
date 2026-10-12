@@ -1,17 +1,16 @@
-//! The fixture: a daemon in-process on an ephemeral port (skepd's own
-//! spawn pattern — the port reserved through the slow open, the rebind race
-//! retried), a `Board` over the one dialer, a recording dialer for the tests
-//! that pin WHAT WAS DIALED AND IN WHAT ORDER, a redirecting one for a board
-//! dialed at a served origin, and the scripts the claim walk's person
-//! answers.
+//! The fixture: a daemon in-process on an ephemeral port (the daemon's own
+//! start, `skepd::embed` — the port bound first and held through the open,
+//! the journal lock's race retried), a `Board` over the one dialer, a
+//! recording dialer for the tests that pin WHAT WAS DIALED AND IN WHAT
+//! ORDER, a redirecting one for a board dialed at a served origin, and the
+//! scripts the claim walk's person answers.
 
 #![allow(dead_code)]
 
-use std::io::{ErrorKind, Read};
-use std::net::TcpListener;
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use serde_json::Value;
 use skep_client::board::Board;
@@ -22,55 +21,23 @@ use skep_client::sheet::Label;
 use skep_client::store::{FileStore, KeyStore};
 use skep_client::Origin;
 use skep_identity::Fingerprint;
-use skepd::{serve, AuthOptions, Daemon, Skepd, DEFAULT_WORKERS};
+use skepd::{embed, AuthOptions, MediaOptions, Skepd, DEFAULT_WORKERS};
 
 /// Spawn a daemon over `dir` with ONE configured origin — its own loopback
 /// port — and `local_trust` as given: `false` flips the board into ENFORCING
-/// at the claim, `true` into CLAIMED-PERMISSIVE.
+/// at the claim, `true` into CLAIMED-PERMISSIVE. The daemon's own start
+/// (`skepd::embed`), the port bound first and named in the origin, then the
+/// wait for its cell index.
 pub fn spawn(dir: &Path, local_trust: bool) -> Skepd {
-    const ATTEMPTS: usize = 12;
-    for _ in 0..ATTEMPTS {
-        let reserved = TcpListener::bind(("127.0.0.1", 0)).expect("reserve an ephemeral port");
-        let port = reserved.local_addr().expect("reserved local addr").port();
-        let origin = skepd::Origin::parse(&format!("http://127.0.0.1:{port}")).expect("a canonical loopback origin");
+    let own = |port: u16| {
         let mut opts = AuthOptions::default();
         opts.local_trust = local_trust;
-        opts.configured = vec![origin];
-        let daemon = match Daemon::open_with(dir, opts) {
-            Ok(d) => d,
-            Err(e) => {
-                let mut source: Option<&(dyn std::error::Error + 'static)> = Some(&e);
-                let mut lock_race = false;
-                while let Some(err) = source {
-                    if let Some(io) = err.downcast_ref::<std::io::Error>() {
-                        lock_race = io.kind() == ErrorKind::WouldBlock;
-                        break;
-                    }
-                    source = err.source();
-                }
-                if lock_race {
-                    drop(reserved);
-                    std::thread::sleep(Duration::from_millis(25));
-                    continue;
-                }
-                panic!("daemon open at {}: {e}", dir.display());
-            }
-        };
-        drop(reserved);
-        match serve(daemon, port, DEFAULT_WORKERS) {
-            Ok(sd) => {
-                let deadline = Instant::now() + Duration::from_secs(60);
-                while !sd.daemon().index_is_ready() {
-                    assert!(Instant::now() < deadline, "the cell index's walk did not complete within 60 s");
-                    std::thread::sleep(Duration::from_millis(5));
-                }
-                return sd;
-            }
-            Err(e) if e.kind() == ErrorKind::AddrInUse => continue,
-            Err(e) => panic!("bind the reserved port: {e}"),
-        }
-    }
-    panic!("spawn: lost the rebind race {ATTEMPTS} times running")
+        opts.configured = vec![skepd::Origin::parse(&format!("http://127.0.0.1:{port}")).expect("a canonical loopback origin")];
+        opts
+    };
+    let sd = embed(dir, 0, own, MediaOptions::default(), DEFAULT_WORKERS).unwrap_or_else(|e| panic!("daemon start at {}: {e}", dir.display()));
+    sd.wait_for_the_index(Duration::from_secs(60)).unwrap_or_else(|e| panic!("{e}"));
+    sd
 }
 
 /// The daemon's own origin.

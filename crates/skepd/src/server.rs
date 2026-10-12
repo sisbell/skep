@@ -170,7 +170,10 @@
 //! feature's note in `Cargo.toml` says the same. A build without the
 //! feature has no `/` route (404).
 
-// The transport: sockets, threads, and the HTTP bytes.
+// The transport: sockets, threads, and the HTTP bytes — and beside them, at
+// their layer, the embedding helper: the start a program that is not the
+// binary takes, and the wait for the cell index's walk.
+mod embed;
 mod http;
 mod listen;
 
@@ -232,6 +235,9 @@ use request::BodySource;
 use scan::ClassScans;
 
 pub use crate::auth::session::Peer;
+#[cfg(any(test, feature = "test-hooks"))]
+pub use embed::embed_seeded;
+pub use embed::{embed, EmbedError, IndexNotReady};
 pub use http::UNIVERSAL_HEADERS;
 pub use listen::{bind, serve, serve_bound, Listener, Skepd, DEFAULT_WORKERS, MIN_WORKERS};
 pub use reply::{Body, Fetch, Reply, Routed};
@@ -1057,6 +1063,21 @@ impl Daemon {
     /// Current log position (M10's `log_position`; never regresses).
     pub fn log_position(&self) -> Seq {
         self.febe.log_position()
+    }
+
+    /// Whether THE CELL INDEX's WALK AT OPEN has completed — the media gate's
+    /// readiness, the one read the index's three readers make. The walk runs
+    /// on a thread of the daemon's from the open on, seconds to a minute on a
+    /// large board, and the daemon serves meanwhile: until this is true, the
+    /// three readers — the PUT's creation and resume and the deposit read —
+    /// refuse `503 index_rebuilding`, retry-class, and the media door answers
+    /// a picture cell's write the same token where the index alone could
+    /// admit it (wire.md §Media; ms5-R); every other request is served.
+    /// [`Skepd::wait_for_the_index`] waits on this read. A walk that DIED
+    /// never completes (`operations.md` §4 row 26): the three readers refuse
+    /// `index_failed` for the uptime instead, and this stays false.
+    pub fn index_is_ready(&self) -> bool {
+        self.media.index_ready()
     }
 
     /// The router — the whole HTTP surface, still socket-free: the two

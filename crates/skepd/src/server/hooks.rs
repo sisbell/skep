@@ -372,18 +372,11 @@ impl Daemon {
     }
 
     /// TEST HOOK (the `fuzz_support` standing: `#[doc(hidden)]`, not a
-    /// stable API): whether the cell index's walk at open has completed —
-    /// what a suite waits on before its first PUT, rather than racing the
-    /// walk's thread.
-    #[doc(hidden)]
-    pub fn index_is_ready(&self) -> bool {
-        self.media.index_ready()
-    }
-
-    /// TEST HOOK (the same standing): whether the cell index's walk at open
-    /// DIED — the FAILED state its thread's catch set (`operations.md` §4
-    /// row 26), which the three readers, the door, the pruner's loop and
-    /// the standing line read; never true beside [`Daemon::index_is_ready`].
+    /// stable API): whether the cell index's walk at open DIED — the FAILED
+    /// state its thread's catch set (`operations.md` §4 row 26), which the
+    /// three readers, the door, the pruner's loop and the standing line
+    /// read; never true beside the production read of the walk's completion,
+    /// [`Daemon::index_is_ready`].
     #[doc(hidden)]
     pub fn index_is_failed(&self) -> bool {
         self.media.index_failed()

@@ -219,18 +219,14 @@ fn the_hosted_arm_closes_its_bare_sessions_where_they_outlive_the_flip() {
 /// and the claim says no warning of an empty signed set.
 #[test]
 fn the_hosted_arm_counts_a_loopback_origin_at_another_port_as_configured() {
-    use skepd::{serve, AuthOptions, Daemon, DEFAULT_WORKERS};
+    use skepd::{embed, AuthOptions, MediaOptions, DEFAULT_WORKERS};
 
     let dir = tempfile::tempdir().unwrap();
     let mut opts = AuthOptions::default();
     opts.local_trust = false;
     opts.configured = vec![skepd::Origin::parse("http://127.0.0.1:9000").unwrap()];
-    let sd = serve(Daemon::open_with(&dir.path().join("board"), opts).unwrap(), 0, DEFAULT_WORKERS).unwrap();
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
-    while !sd.daemon().index_is_ready() {
-        assert!(std::time::Instant::now() < deadline, "the cell index's walk did not complete within 60 s");
-        std::thread::sleep(std::time::Duration::from_millis(5));
-    }
+    let sd = embed(dir.path().join("board"), 0, |_| opts.clone(), MediaOptions::default(), DEFAULT_WORKERS).unwrap();
+    sd.wait_for_the_index(std::time::Duration::from_secs(60)).unwrap_or_else(|e| panic!("{e}"));
     let board = board(sd.port());
     let mut origins: Vec<String> = board.health().unwrap().origins().into_iter().map(str::to_string).collect();
     origins.sort();

@@ -38,7 +38,9 @@ use std::path::{Path, PathBuf};
 const LAYERS: &[(&str, u8)] = &[
     // 0 — the fuzz harness, above the daemon it drives.
     ("fuzz_support", 0),
-    // 1 — the transport.
+    // 1 — the transport, and beside it the embedding helper, which binds and
+    // serves through it over the routes' open.
+    ("server::embed", 1),
     ("server::http", 1),
     ("server::listen", 1),
     // 2 — the routes, and beside them the operator's tools, which read the

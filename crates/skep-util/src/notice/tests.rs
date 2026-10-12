@@ -409,6 +409,24 @@ fn where_no_thread_drains_each_door_writes_for_itself() {
     assert!(returns_within(Duration::from_secs(5), move || stream.drain()));
 }
 
+/// THE SINK SETTER's REFUSAL, over a cell of the test's own and never the
+/// process's stream: the first install makes the stream over its sink; a
+/// second answers `StreamAlreadyMade` and changes nothing — the line said
+/// after it lands in the first sink, and the refused one takes no byte.
+#[test]
+fn a_second_sink_is_refused_and_the_first_keeps_the_stream() {
+    let cell = OnceLock::new();
+    let first = Sink::released();
+    let refused = Sink::released();
+    assert_eq!(install(&cell, Box::new(Writer(Arc::clone(&first)))), Ok(()));
+    assert_eq!(install(&cell, Box::new(Writer(Arc::clone(&refused)))), Err(StreamAlreadyMade));
+    let stream = cell.get().expect("the first install made the stream");
+    say(stream, "after the refusal");
+    stream.drain();
+    assert_eq!(first.text(), "skepd: 2026-10-06T22:31:04.512Z after the refusal\n");
+    assert_eq!(refused.writes(), 0, "the refused sink took nothing");
+}
+
 /// The process's own stream: the drain before any line starts nothing; the
 /// two doors — the one line's and the several lines' — return; the drain
 /// after them returns with the queue empty and every line written by the

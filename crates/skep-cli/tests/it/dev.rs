@@ -23,13 +23,13 @@
 //! yielding one binary, is the gate's and the lane's by hand; F7 the budgets
 //! suite's; F9 `tidy`'s.
 
-use std::io::{ErrorKind, Read, Write};
+use std::io::{Read, Write};
 use std::net::{Shutdown, TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use serde_json::Value;
 use skep_client::board::{frames, Answer, Board, Opened, SessionBody, Token};
@@ -40,7 +40,7 @@ use skep_client::sheet::Label;
 use skep_client::store::{FileStore, KeyStore};
 use skep_client::Origin;
 use skep_corpus::{Corpus, Cut};
-use skepd::{serve, AuthOptions, Daemon, Skepd, DEFAULT_WORKERS};
+use skepd::{embed, AuthOptions, MediaOptions, Skepd, DEFAULT_WORKERS};
 use tempfile::TempDir;
 
 use crate::common::{origin, s, spawn, Run};
@@ -911,37 +911,22 @@ fn the_seed_lands_every_shape_and_a_guest_reads_them() {
 
 /// A daemon over `dir`, CLAIMED-PERMISSIVE, accepting signed sessions at its
 /// own origin and at each of `also` — a proxy's — as `common::spawn` spawns
-/// one at its own alone.
+/// one at its own alone: the daemon's own start (`skepd::embed`), the port
+/// bound first and named in the origin, then the wait for its cell index.
 fn spawn_also_at(dir: &Path, also: &[String]) -> Skepd {
-    for _ in 0..12 {
-        let reserved = TcpListener::bind(("127.0.0.1", 0)).expect("reserve an ephemeral port");
-        let port = reserved.local_addr().unwrap().port();
+    let configured = |port: u16| {
         let mut opts = AuthOptions::default();
         opts.local_trust = true;
         opts.configured = std::iter::once(origin(port))
             .chain(also.iter().cloned())
             .map(|o| skepd::Origin::parse(&o).expect("a canonical origin"))
             .collect();
-        let daemon = Daemon::open_with(dir, opts)
-            .unwrap_or_else(|e| panic!("daemon open at {}: {e}", dir.display()));
-        drop(reserved);
-        match serve(daemon, port, DEFAULT_WORKERS) {
-            Ok(sd) => {
-                let deadline = Instant::now() + Duration::from_secs(60);
-                while !sd.daemon().index_is_ready() {
-                    assert!(
-                        Instant::now() < deadline,
-                        "the cell index's walk did not complete within 60 s"
-                    );
-                    std::thread::sleep(Duration::from_millis(5));
-                }
-                return sd;
-            }
-            Err(e) if e.kind() == ErrorKind::AddrInUse => continue,
-            Err(e) => panic!("bind the reserved port: {e}"),
-        }
-    }
-    panic!("spawn: lost the rebind race 12 times running")
+        opts
+    };
+    let sd = embed(dir, 0, configured, MediaOptions::default(), DEFAULT_WORKERS)
+        .unwrap_or_else(|e| panic!("daemon start at {}: {e}", dir.display()));
+    sd.wait_for_the_index(Duration::from_secs(60)).unwrap_or_else(|e| panic!("{e}"));
+    sd
 }
 
 /// A proxy in front of the daemon that pipes every request whole until, while

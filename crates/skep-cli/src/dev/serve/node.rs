@@ -2,8 +2,9 @@
 //! is already running — the local record's recipe — and the fault route
 //! answers that it is not built in. With `--own`, in a build with the
 //! `dev-hooks` feature, the daemon runs IN-PROCESS with its `test-hooks`
-//! doors (as `tests/it/common.rs`'s spawn runs it: `Daemon::open_with`
-//! then `serve`), and `POST /bridge/fault/<door>` reaches them: the three
+//! doors (started as `tests/it/common.rs`'s spawn starts it and an embedding
+//! app would: `skepd::embed`, then the wait for its cell index), and
+//! `POST /bridge/fault/<door>` reaches them: the three
 //! permit pools held full (`write_busy`, `scan_busy`, `fetch_busy`), the
 //! held permits released, the head writer's next refusal, the feed walk's
 //! hold and release, the media floor's free space, and the checkpoint
@@ -25,12 +26,12 @@ pub const DOORS: [&str; 9] = ["write_busy", "scan_busy", "fetch_busy", "release"
 #[cfg(feature = "dev-hooks")]
 mod built {
     use std::path::Path;
-    use std::time::{Duration, Instant};
+    use std::time::Duration;
 
     use serde_json::{json, Value};
     use skep_client::halt::Halt;
     use skep_client::Origin;
-    use skepd::{bind, serve_bound, AuthOptions, Daemon, Permit, Skepd, DEFAULT_WORKERS};
+    use skepd::{embed, AuthOptions, Daemon, EmbedError, MediaOptions, Permit, Skepd, DEFAULT_WORKERS};
 
     /// The daemon in-process: the server, and the origin it answers at.
     pub struct Node {
@@ -39,27 +40,25 @@ mod built {
     }
 
     impl Node {
-        /// THE START: the port bound first (a held port is refused before
-        /// the journal is read), the daemon opened over `data_dir` with
-        /// `local_trust` and its own origin configured, served, and the
-        /// cell index's walk waited for.
+        /// THE START, the daemon's own (`skepd::embed`): the port bound
+        /// first (a held port is refused before the journal is read), the
+        /// daemon opened over `data_dir` with `local_trust` and its own
+        /// origin configured, served — each step's refusal its own halt —
+        /// and the cell index's walk waited for.
         pub fn start(data_dir: &Path, port: u16, local_trust: bool) -> Result<Node, Halt> {
-            let listener = bind(port).map_err(|e| Halt::face(format!("the daemon's port {port} could not be bound"), e.to_string(), "stop what holds it, or pass --port"))?;
-            let port = listener.port();
-            let origin = skepd::Origin::parse(&format!("http://127.0.0.1:{port}")).expect("a canonical loopback origin");
-            let mut opts = AuthOptions::default();
-            opts.local_trust = local_trust;
-            opts.configured = vec![origin];
-            let daemon = Daemon::open_with(data_dir, opts).map_err(|e| Halt::face(format!("the daemon could not open {}", data_dir.display()), e.to_string(), "check the directory; a board another daemon holds is locked"))?;
-            let skepd = serve_bound(daemon, listener, DEFAULT_WORKERS).map_err(|e| Halt::face("the daemon could not serve", e.to_string(), "check the port"))?;
-            let deadline = Instant::now() + Duration::from_secs(60);
-            while !skepd.daemon().index_is_ready() {
-                if Instant::now() >= deadline {
-                    return Err(Halt::face("the cell index's walk did not complete within 60 s", "the daemon's open is still walking", "check the board directory"));
-                }
-                std::thread::sleep(Duration::from_millis(5));
-            }
-            let origin = Origin::parse(&format!("http://127.0.0.1:{port}")).expect("a canonical loopback origin");
+            let own = |port: u16| {
+                let mut opts = AuthOptions::default();
+                opts.local_trust = local_trust;
+                opts.configured = vec![skepd::Origin::parse(&format!("http://127.0.0.1:{port}")).expect("a canonical loopback origin")];
+                opts
+            };
+            let skepd = embed(data_dir, port, own, MediaOptions::default(), DEFAULT_WORKERS).map_err(|e| match e {
+                EmbedError::Bind(e) => Halt::face(format!("the daemon's port {port} could not be bound"), e.to_string(), "stop what holds it, or pass --port"),
+                EmbedError::Open(e) => Halt::face(format!("the daemon could not open {}", data_dir.display()), e.to_string(), "check the directory; a board another daemon holds is locked"),
+                EmbedError::Serve(e) => Halt::face("the daemon could not serve", e.to_string(), "check the port"),
+            })?;
+            skepd.wait_for_the_index(Duration::from_secs(60)).map_err(|e| Halt::face(e.to_string(), "the daemon's open is still walking", "check the board directory"))?;
+            let origin = Origin::parse(&format!("http://127.0.0.1:{}", skepd.port())).expect("a canonical loopback origin");
             Ok(Node { skepd, origin })
         }
 

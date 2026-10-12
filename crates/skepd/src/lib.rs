@@ -154,9 +154,17 @@ pub mod fuzz_support;
 pub use auth::{AuthOptions, NodePrefix, NotANodePrefix, NotCanonical, Origin, PortAlreadyBound};
 pub use codec::JsonCodec;
 pub use server::{
-    bind, body_cap, serve, serve_bound, Body, Daemon, DaemonError, Fetch, HttpRequest, Listener,
-    Peer, Reply, Routed, Skepd, DEFAULT_WORKERS, MIN_WORKERS, UNIVERSAL_HEADERS,
+    bind, body_cap, embed, serve, serve_bound, Body, Daemon, DaemonError, EmbedError, Fetch,
+    HttpRequest, IndexNotReady, Listener, Peer, Reply, Routed, Skepd, DEFAULT_WORKERS, MIN_WORKERS,
+    UNIVERSAL_HEADERS,
 };
+
+/// The seeded start — [`embed`] under the test seam's seeded salt source —
+/// the suites' door to the one start sequence for the head suite's
+/// determinism pins. A test hook: `#[doc(hidden)]`, not a stable API.
+#[cfg(any(test, feature = "test-hooks"))]
+#[doc(hidden)]
+pub use server::embed_seeded;
 
 /// The engine types this crate's public surface hands out: the world
 /// [`Daemon::world_at`] answers with, why it refused, the failure
@@ -261,6 +269,10 @@ const _: fn() = || {
     assert_send_sync::<Fetch<'static>>();
     #[cfg(any(test, feature = "test-hooks"))]
     assert_send_sync::<Permit<'static>>();
+    // The embedding helper's two refusals, which an embedding program
+    // carries across its own threads as it carries the server.
+    assert_send_sync::<EmbedError>();
+    assert_send_sync::<IndexNotReady>();
     // The AUTH round's arrivals. `AuthOptions` is the value a caller builds
     // and hands to `Daemon::open_with`, plausibly across a thread boundary;
     // the rest ride in and out of that surface.

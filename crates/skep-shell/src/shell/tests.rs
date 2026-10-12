@@ -7,42 +7,29 @@
 //! mode over the same store: a publish-class write acked — the attest the
 //! shell composed — and the same write under the bare mode refused.
 
-use std::net::TcpListener;
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
 use serde_json::{json, Value};
-use skepd::{serve, AuthOptions, Daemon, Skepd, DEFAULT_WORKERS};
+use skepd::{embed, AuthOptions, MediaOptions, Skepd, DEFAULT_WORKERS};
 use tempfile::TempDir;
 
 use super::*;
 use crate::events::Event;
 
+/// The daemon over `dir`, its own loopback origin configured: the daemon's
+/// own start (`skepd::embed`), then the wait for its cell index.
 fn spawn(dir: &Path, local_trust: bool) -> Skepd {
-    for _ in 0..12 {
-        let reserved = TcpListener::bind(("127.0.0.1", 0)).unwrap();
-        let port = reserved.local_addr().unwrap().port();
-        let origin = skepd::Origin::parse(&format!("http://127.0.0.1:{port}")).unwrap();
+    let own = |port: u16| {
         let mut opts = AuthOptions::default();
         opts.local_trust = local_trust;
-        opts.configured = vec![origin];
-        let daemon = Daemon::open_with(dir, opts).expect("the daemon opens");
-        drop(reserved);
-        match serve(daemon, port, DEFAULT_WORKERS) {
-            Ok(sd) => {
-                let deadline = Instant::now() + Duration::from_secs(60);
-                while !sd.daemon().index_is_ready() {
-                    assert!(Instant::now() < deadline);
-                    thread::sleep(Duration::from_millis(5));
-                }
-                return sd;
-            }
-            Err(e) if e.kind() == std::io::ErrorKind::AddrInUse => continue,
-            Err(e) => panic!("{e}"),
-        }
-    }
-    panic!("lost the rebind race")
+        opts.configured = vec![skepd::Origin::parse(&format!("http://127.0.0.1:{port}")).unwrap()];
+        opts
+    };
+    let sd = embed(dir, 0, own, MediaOptions::default(), DEFAULT_WORKERS).expect("the daemon starts");
+    sd.wait_for_the_index(Duration::from_secs(60)).unwrap_or_else(|e| panic!("{e}"));
+    sd
 }
 
 fn talk() -> (Talk, Arc<Mutex<Vec<String>>>) {

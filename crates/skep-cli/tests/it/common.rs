@@ -11,65 +11,33 @@
 
 use std::collections::BTreeMap;
 use std::ffi::OsStr;
-use std::io::{ErrorKind, Read, Write};
+use std::io::{Read, Write};
 use std::net::{Shutdown, TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Output, Stdio};
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
-use skepd::{serve, AuthOptions, Daemon, Skepd, DEFAULT_WORKERS};
+use skepd::{embed, AuthOptions, MediaOptions, Skepd, DEFAULT_WORKERS};
 
 pub fn spawn(dir: &Path, local_trust: bool) -> Skepd {
     spawn_also_at(dir, local_trust, &[])
 }
 
 /// [`spawn`], the daemon accepting signed sessions at each of `also` beside
-/// its own origin — a [`Tap`]'s.
+/// its own origin — a [`Tap`]'s: the daemon's own start (`skepd::embed`),
+/// the port bound first and named in the origin, then the wait for its cell
+/// index.
 fn spawn_also_at(dir: &Path, local_trust: bool, also: &[String]) -> Skepd {
-    const ATTEMPTS: usize = 12;
-    for _ in 0..ATTEMPTS {
-        let reserved = TcpListener::bind(("127.0.0.1", 0)).expect("reserve an ephemeral port");
-        let port = reserved.local_addr().expect("reserved local addr").port();
-        let origin = skepd::Origin::parse(&format!("http://127.0.0.1:{port}")).expect("a canonical loopback origin");
+    let configured = |port: u16| {
         let mut opts = AuthOptions::default();
         opts.local_trust = local_trust;
-        opts.configured = std::iter::once(origin).chain(also.iter().map(|o| skepd::Origin::parse(o).expect("a canonical origin"))).collect();
-        let daemon = match Daemon::open_with(dir, opts) {
-            Ok(d) => d,
-            Err(e) => {
-                let mut source: Option<&(dyn std::error::Error + 'static)> = Some(&e);
-                let mut lock_race = false;
-                while let Some(err) = source {
-                    if let Some(io) = err.downcast_ref::<std::io::Error>() {
-                        lock_race = io.kind() == ErrorKind::WouldBlock;
-                        break;
-                    }
-                    source = err.source();
-                }
-                if lock_race {
-                    drop(reserved);
-                    std::thread::sleep(Duration::from_millis(25));
-                    continue;
-                }
-                panic!("daemon open at {}: {e}", dir.display());
-            }
-        };
-        drop(reserved);
-        match serve(daemon, port, DEFAULT_WORKERS) {
-            Ok(sd) => {
-                let deadline = Instant::now() + Duration::from_secs(60);
-                while !sd.daemon().index_is_ready() {
-                    assert!(Instant::now() < deadline, "the cell index's walk did not complete within 60 s");
-                    std::thread::sleep(Duration::from_millis(5));
-                }
-                return sd;
-            }
-            Err(e) if e.kind() == ErrorKind::AddrInUse => continue,
-            Err(e) => panic!("bind the reserved port: {e}"),
-        }
-    }
-    panic!("spawn: lost the rebind race {ATTEMPTS} times running")
+        opts.configured = std::iter::once(origin(port)).chain(also.iter().cloned()).map(|o| skepd::Origin::parse(&o).expect("a canonical origin")).collect();
+        opts
+    };
+    let sd = embed(dir, 0, configured, MediaOptions::default(), DEFAULT_WORKERS).unwrap_or_else(|e| panic!("daemon start at {}: {e}", dir.display()));
+    sd.wait_for_the_index(Duration::from_secs(60)).unwrap_or_else(|e| panic!("{e}"));
+    sd
 }
 
 pub fn origin(port: u16) -> String {

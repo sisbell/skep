@@ -30,7 +30,7 @@ use skep_identity::{
 };
 use skep_signature::{HybridSigner, Seed as SigningKey};
 use skepd::{
-    bind, serve, serve_bound, AuthOptions, Daemon, MediaOptions, NodePrefix, Origin, Skepd,
+    embed, embed_seeded, AuthOptions, Daemon, MediaOptions, NodePrefix, Origin, Skepd,
     DEFAULT_WORKERS,
 };
 
@@ -695,9 +695,10 @@ pub fn deposit_grant(
 /// A claimed board's signed arm accepts ONLY the configured origins
 /// (AUTH-4.3's claim-time drop), and a production claimed board is launched
 /// with `--origin` naming what it is reachable at — so this spawn mirrors
-/// that shape. Origins carry the port, and configuration happens at open,
-/// before any listener exists: reserve an ephemeral port first, configure
-/// the loopback origin the suites dial, then serve on the reserved port.
+/// that shape. Origins carry the port, and configuration happens at open:
+/// the start binds an ephemeral port first and takes the options at the
+/// port it bound, so the loopback origin the suites dial names the port the
+/// daemon serves on.
 pub fn spawn_configured(dir: &Path, local_trust: bool) -> Skepd {
     spawn_with_blocked_prefixes(dir, local_trust, None, None)
 }
@@ -745,14 +746,14 @@ pub fn spawn_refusing_preview_keys(dir: &Path) -> Skepd {
 }
 
 /// [`spawn_with_blocked_prefixes`] with the kernel's SALT SOURCE named:
-/// `None` is the production door (`Daemon::open_with`, OS entropy per
+/// `None` is the production door (`skepd::embed`, OS entropy per
 /// transaction — every other spawn here), `Some(seed)` the test seam
-/// (`Daemon::open_seeded`, the seeded stream), which the head suite's
+/// (`skepd::embed_seeded`, the seeded stream), which the head suite's
 /// determinism pins need: two daemons over one op sequence write one chain
 /// only under one seed — and the preview-key setting named (AUTH-1.44), and
 /// whether the spawn waits on its index's walk under the walk's fence
 /// ([`Walk`]): every spawn here does but the two that leave the walk to their
-/// caller. The retry loop below is the same either way.
+/// caller. The start is the same either way.
 fn spawn_under(
     dir: &Path,
     local_trust: bool,
@@ -767,81 +768,63 @@ fn spawn_under(
     // THE WALK's FENCE, from before the open until the index is ready
     // ([`WALK_FENCE`]): no test holding the walk parks this daemon's.
     let _unheld = (walk == Walk::Awaited).then(WalkUnheld::take);
-    // THE PORT IS BOUND FIRST and held through the open — the binary's own
-    // order (`bind`, the open, `serve_bound`): the origin names the port, so
-    // it must be known before the open, and the listener bound here is the
-    // one the daemon serves on, so nothing can take the port between. (The
-    // reserve-release-rebind this once did raced: every exchange is one
-    // connection, a run leaves some thirty thousand sockets in TIME_WAIT
-    // against an ephemeral range of 16 384, and a port released here was
-    // one of the few free, handed to the next `connect` anywhere in the
-    // process.) Nothing accepts on it until the workers spawn, and nothing
-    // in this process connects before this returns.
-    //
-    // The ONE race left, bounded: the retry reopens the SAME data dir, and
-    // the kernel's journal-directory flock from the attempt just dropped is
-    // not always re-acquirable the instant `close` returns under the
-    // parallel suite's load — a transient `WouldBlock` at open
-    // ([`open_lost_the_lock_race`]). It is not a bad data dir (a fresh
-    // tempdir, or one this helper itself just held), so it is retried with a
-    // brief backoff to let the release land, on a fresh port each time;
-    // any OTHER open error is a real fault and panics at once.
-    const ATTEMPTS: usize = 12;
-    let mut last_lock_err = None;
-    for _ in 0..ATTEMPTS {
-        let listener = bind(0).expect("bind an ephemeral port");
-        let port = listener.port();
-        let origin = Origin::parse(&format!("http://127.0.0.1:{port}"))
-            .expect("a canonical loopback origin");
+    // THE START, the daemon's own (`skepd::embed`): the port BOUND FIRST and
+    // held through the open — the binary's order — so the origin can name it
+    // and nothing can take it between, and the open retried, bounded, where
+    // the journal-directory lock of a daemon just stopped over the same
+    // directory is not yet re-acquirable, on a fresh port each attempt; any
+    // other refusal panics here at once. (The reserve-release-rebind this
+    // once did raced: every exchange is one connection, a run leaves some
+    // thirty thousand sockets in TIME_WAIT against an ephemeral range of
+    // 16 384, and a port released here was one of the few free, handed to
+    // the next `connect` anywhere in the process — ports recycle across the
+    // daemons one test process serves.) Nothing accepts on the port until
+    // the workers spawn, and nothing in this process connects before this
+    // returns.
+    let fixtures = |port: u16| {
         let mut opts = AuthOptions::default();
         opts.local_trust = local_trust;
-        opts.configured = vec![origin];
+        opts.configured = vec![Origin::parse(&format!("http://127.0.0.1:{port}"))
+            .expect("a canonical loopback origin")];
         opts.blocked_supply_path = blocked_prefixes.map(Path::to_path_buf);
         opts.node_prefix = node_prefix.clone();
         opts.allow_preview_keys = allow_preview_keys;
-        let opened = match salt_seed {
-            None => Daemon::open_with(dir, opts),
-            Some(seed) => Daemon::open_seeded(dir, opts, seed),
-        };
-        let daemon = match opened {
-            Ok(daemon) => daemon,
-            Err(e) if open_lost_the_lock_race(&e) => {
-                last_lock_err = Some(e.to_string());
-                drop(listener);
-                std::thread::sleep(Duration::from_millis(25));
-                continue;
-            }
-            Err(e) => panic!("daemon open (genesis or recover) at {}: {e}", dir.display()),
-        };
-        let sd = serve_bound(daemon, listener, DEFAULT_WORKERS)
-            .expect("spawn the workers over the bound port");
-        forget_port(sd.port());
-        if walk == Walk::Awaited {
-            wait_for_the_index(&sd);
-        }
-        wait_for_the_feed_walk(&sd);
-        return sd;
+        opts
+    };
+    let started = match salt_seed {
+        None => embed(dir, 0, fixtures, MediaOptions::default(), DEFAULT_WORKERS),
+        Some(seed) => embed_seeded(dir, 0, fixtures, DEFAULT_WORKERS, seed),
+    };
+    let sd = started
+        .unwrap_or_else(|e| panic!("daemon start (genesis or recover) at {}: {e}", dir.display()));
+    forget_port(sd.port());
+    if walk == Walk::Awaited {
+        wait_for_the_index(&sd);
     }
-    panic!(
-        "spawn: lost the journal-lock race {ATTEMPTS} times running \
-         (last lock error: {last_lock_err:?})"
-    )
+    wait_for_the_feed_walk(&sd);
+    sd
+}
+
+/// The session layer's options of the spawns that configure no origin, at
+/// whatever port the start bound: the fixtures' preview-key setting on
+/// (AUTH-1.44), every other option the default's.
+fn unconfigured(_port: u16) -> AuthOptions {
+    let mut opts = AuthOptions::default();
+    opts.allow_preview_keys = ALLOW_PREVIEW_KEYS_IN_FIXTURES;
+    opts
 }
 
 /// THE CELL INDEX's WALK AT OPEN runs on a thread of the daemon's, and its
 /// three readers — the PUT's creation and resume, the deposit read — refuse
 /// `index_rebuilding` until it completes (wire.md §Media; ms5-R). Every spawn
-/// here waits for it, bounded, under the walk's fence ([`WALK_FENCE`]), so a
-/// suite's first PUT never races the walk and no other test's hold parks it;
-/// the two spawns that leave the walk to their caller — [`spawn_walk_held`],
-/// which holds it, and [`spawn_not_waiting_for_the_index`], which measures
-/// it — wait, or not, themselves.
+/// here waits for it — the daemon's own wait (`Skepd::wait_for_the_index`),
+/// bounded at 60 s — under the walk's fence ([`WALK_FENCE`]), so a suite's
+/// first PUT never races the walk and no other test's hold parks it; the two
+/// spawns that leave the walk to their caller — [`spawn_walk_held`], which
+/// holds it, and [`spawn_not_waiting_for_the_index`], which measures it —
+/// wait, or not, themselves.
 fn wait_for_the_index(sd: &Skepd) {
-    let deadline = Instant::now() + Duration::from_secs(60);
-    while !sd.daemon().index_is_ready() {
-        assert!(Instant::now() < deadline, "the cell index's walk did not complete within 60 s");
-        std::thread::sleep(Duration::from_millis(5));
-    }
+    sd.wait_for_the_index(Duration::from_secs(60)).unwrap_or_else(|e| panic!("{e}"));
 }
 
 /// THE FEED WALK's LANDING: where `commits.log` was lost or torn, the open
@@ -1068,24 +1051,6 @@ pub fn hold_the_fetch_stream() -> StreamSeam {
     StreamSeam { _fence: fence }
 }
 
-/// Does this `Daemon::open_with` failure carry a transient journal-directory
-/// LOCK contention — the flock from the attempt just dropped not yet
-/// re-acquirable — rather than a real fault? Walks the error's `source`
-/// chain for an [`std::io::Error`] of kind [`ErrorKind::WouldBlock`], which
-/// `Kernel::open` surfaces from `flock(LOCK_EX | LOCK_NB)` (`OpenError::Io`).
-/// Only that one kind is retried; a bad checkpoint, a corrupt journal or any
-/// other I/O failure is a real condition and stops the spawn loudly.
-fn open_lost_the_lock_race(err: &skepd::DaemonError) -> bool {
-    let mut source: Option<&(dyn std::error::Error + 'static)> = Some(err);
-    while let Some(e) = source {
-        if let Some(io) = e.downcast_ref::<std::io::Error>() {
-            return io.kind() == ErrorKind::WouldBlock;
-        }
-        source = e.source();
-    }
-    false
-}
-
 /// The list's two-field HEADER as a suite names it: the configured operator
 /// account and the board's binding-writing account, each optional — `None`
 /// is "the header names none", and the claimant is then the comparand
@@ -1171,12 +1136,10 @@ pub fn spawn_seeded(dir: &Path, seed: u64) -> Skepd {
 pub fn spawn_uploads_closed(dir: &Path) -> Skepd {
     // The walk's fence, from before the open until the index is ready.
     let _unheld = WalkUnheld::take();
-    let mut opts = AuthOptions::default();
-    opts.allow_preview_keys = ALLOW_PREVIEW_KEYS_IN_FIXTURES;
     let mut media = MediaOptions::default();
     media.uploads = false;
-    let daemon = Daemon::open_configured(dir, opts, media).expect("daemon open (genesis or recover)");
-    let sd = serve(daemon, 0, DEFAULT_WORKERS).expect("bind an ephemeral port");
+    let sd = embed(dir, 0, unconfigured, media, DEFAULT_WORKERS)
+        .unwrap_or_else(|e| panic!("daemon start (genesis or recover) at {}: {e}", dir.display()));
     forget_port(sd.port());
     wait_for_the_index(&sd);
     wait_for_the_feed_walk(&sd);
@@ -1193,10 +1156,8 @@ pub fn spawn_uploads_closed(dir: &Path) -> Skepd {
 pub fn spawn_with_workers(dir: &Path, workers: usize) -> Skepd {
     // The walk's fence, from before the open until the index is ready.
     let _unheld = WalkUnheld::take();
-    let mut opts = AuthOptions::default();
-    opts.allow_preview_keys = ALLOW_PREVIEW_KEYS_IN_FIXTURES;
-    let daemon = Daemon::open_with(dir, opts).expect("daemon open (genesis or recover)");
-    let sd = serve(daemon, 0, workers).expect("bind an ephemeral port");
+    let sd = embed(dir, 0, unconfigured, MediaOptions::default(), workers)
+        .unwrap_or_else(|e| panic!("daemon start (genesis or recover) at {}: {e}", dir.display()));
     forget_port(sd.port());
     wait_for_the_index(&sd);
     wait_for_the_feed_walk(&sd);
@@ -1210,10 +1171,8 @@ pub fn spawn_with_workers(dir: &Path, workers: usize) -> Skepd {
 pub fn spawn_unclaimed(dir: &Path) -> Skepd {
     // The walk's fence, from before the open until the index is ready.
     let _unheld = WalkUnheld::take();
-    let mut opts = AuthOptions::default();
-    opts.allow_preview_keys = ALLOW_PREVIEW_KEYS_IN_FIXTURES;
-    let daemon = Daemon::open_with(dir, opts).expect("daemon open (genesis or recover)");
-    let sd = serve(daemon, 0, DEFAULT_WORKERS).expect("bind an ephemeral port");
+    let sd = embed(dir, 0, unconfigured, MediaOptions::default(), DEFAULT_WORKERS)
+        .unwrap_or_else(|e| panic!("daemon start (genesis or recover) at {}: {e}", dir.display()));
     forget_port(sd.port());
     wait_for_the_index(&sd);
     wait_for_the_feed_walk(&sd);

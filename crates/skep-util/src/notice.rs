@@ -47,6 +47,12 @@
 //! refused: the flag sits on the open file description a parent shell or
 //! supervisor shares, and `write_all` on a `WouldBlock` leaves a TORN line.
 //!
+//! THE SINK is the process's stderr, the stream made over it at the first
+//! line — or, in a program that runs the daemon in its own process and takes
+//! the lines itself, the sink that program installed before the first line
+//! ([`set_sink`]); the queue, the thread and the discarded result are the
+//! same over either.
+//!
 //! So a notice never fails, never reports and never waits. A caller wanting
 //! the condition back holds it already.
 
@@ -181,9 +187,64 @@ pub fn drain() {
     }
 }
 
-/// The stream every door goes through, over stderr — made at the first
-/// line, the thread spawned then.
+/// Install `sink` as the operator's stream's sink, in stderr's place — the
+/// door of a program that runs the daemon in its own process and takes the
+/// daemon's lines itself, to a log it keeps or a window it draws, where the
+/// stream would otherwise write that program's own stderr. The stream is
+/// made HERE, over `sink`, as the first line would make it over stderr: the
+/// `skepd-notice` thread spawned now, and every line from here on queued,
+/// prefixed, timed and written to `sink` in order, each write's result
+/// discarded, as every line's is. Call it before the first line, in the
+/// embedding process, once: the stream is made at the first line — any
+/// `emit`, the daemon's open among them — and lives for the process, so a
+/// sink offered after it is refused, [`StreamAlreadyMade`], the stream
+/// unchanged and `sink` dropped.
+pub fn set_sink(sink: Box<dyn Write + Send>) -> Result<(), StreamAlreadyMade> {
+    install(&STREAM, sink)
+}
+
+/// [`set_sink`] refused: the operator's stream was already made — by an
+/// earlier line, or an earlier sink — and lives for the process, so the
+/// sink came too late and the stream writes where it wrote.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct StreamAlreadyMade;
+
+impl Display for StreamAlreadyMade {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(
+            "the operator's stream is already made: a sink is installed before the first line, \
+             once",
+        )
+    }
+}
+
+impl std::error::Error for StreamAlreadyMade {}
+
+/// The stream every door goes through — made at the first line over
+/// stderr, the thread spawned then, or over an embedding program's sink by
+/// [`set_sink`] before it.
 static STREAM: OnceLock<Arc<Stream>> = OnceLock::new();
+
+/// [`set_sink`]'s one act, over `cell`: the stream made over `sink` where the
+/// cell holds none — its thread spawned only then, so a refused sink spawns
+/// nothing — and the refusal where it holds one, which changes nothing. Over
+/// a cell the caller names, so the unit suite judges the refusal on a stream
+/// of its own and never the process's.
+fn install(
+    cell: &OnceLock<Arc<Stream>>,
+    sink: Box<dyn Write + Send>,
+) -> Result<(), StreamAlreadyMade> {
+    let mut made = false;
+    cell.get_or_init(|| {
+        made = true;
+        Stream::over(sink)
+    });
+    if made {
+        Ok(())
+    } else {
+        Err(StreamAlreadyMade)
+    }
+}
 
 /// The one path behind the two doors, each of which hands it a class: the
 /// moment read, the body rendered — the caller's `Display` runs here,

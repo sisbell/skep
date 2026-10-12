@@ -460,7 +460,11 @@ carrying its time, each put on a bounded queue that one thread,
 write's result discarded so a lost log pipe never fails the work the
 notice is about and a stalled one never waits it; a line a full queue
 cannot take is dropped and counted on the next; `drain` waits the queue
-out at the binary's exits. `json` — the determinism
+out at the binary's exits. `set_sink` is the embedding program's door: a
+sink of its own in stderr's place — the stream made over it at the call,
+as the first line would make it — installed before the first line, once;
+the stream lives for the process, so a later install is refused
+(`StreamAlreadyMade`) and changes nothing. `json` — the determinism
 helpers: `obj`, the key-sorting object builder every JSON object the
 daemon emits is built through, under which the last pair given wins;
 `hex_string`, lowercase hex; `parse_lower_hex` and `hex_nibble`, its
@@ -2103,7 +2107,21 @@ the store's install — nothing above their own layer.
    and hands the body back beside the request, a `BodySource` over the
    connection's socket the router's private door takes by value). It
    hands each request to the router and knows nothing of what a request
-   means.
+   means. Beside them, at their layer, `server/embed.rs` — THE EMBEDDING
+   HELPER, the start a program that is not `skepd` takes to run the daemon
+   in its own process: `embed`, the bind, the open and the serve in the
+   binary's order, the session layer's options taken at the port the bind
+   chose so a configured origin can name it, the open retried — twelve
+   attempts, 25 ms apart, the listener bound afresh each time — only where
+   the journal directory's lock of a daemon just stopped over the same
+   directory is not yet re-acquirable, and every other refusal answered at
+   once naming its step (`EmbedError`: the bind, the open, the serve); and
+   `Skepd::wait_for_the_index`, the wait for the cell index's walk at open
+   on `Daemon::index_is_ready`, the production read, a second call so a
+   caller can show the board starting while the walk runs (`IndexNotReady`
+   past its deadline). Feature-free: the suites' seeded start beside it is
+   a test hook. The binary keeps its own sequence — the panic hook, the
+   loose-directory refusal, its exit codes — and calls neither.
 2. **The routes** — `server.rs` (`Daemon` and the router) and the handler
    files beneath it, each an `impl Daemon` block: `server/actor.rs` (who
    the caller is), `server/session_routes.rs`, `server/read_routes.rs`,

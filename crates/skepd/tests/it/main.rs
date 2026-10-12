@@ -22,6 +22,7 @@ mod deposit_class;
 mod doc_one;
 mod edges;
 mod effective_owner;
+mod embed;
 mod events;
 mod feed_class;
 mod feed_walk;

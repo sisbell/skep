@@ -147,9 +147,10 @@ foundation and on the stores above it.
   policy): the reference cell's one parser and the blind cell, the media
   door, the gate over `skep-blobs` — the limits in force, the hold, the
   three scopes, the binding — the cell index and its walk at open, the
-  pruner's pass, the fetch's composed order, and the media limits, the
-  four the daemon reads too among them. It transports nothing: the routes,
-  the replies, the deposit read and the operator's tools are the daemon's.
+  pruner's pass, the fetch's composed order, the two permit pools, and the
+  media limits, each `pub` where another crate reads it. It transports
+  nothing: the routes, the replies, the deposit read and the operator's
+  tools are the daemon's.
   Generic over the world M10 reads (`skep_febe::FebeWorld`), it depends on
   no engine — the daemon instantiates it at its `World` — and so stands
   here, beside `skep-febe` and above the assembler. One feature, default
@@ -1994,10 +1995,14 @@ it holds, and the crate doc there is the tree's charter; its public
 surface is its `README.md`'s list, which `tests/it/tidy.rs` holds every
 `pub` item to.
 
-`lib.rs` holds `MediaOptions`, the upload setting the daemon's routes read
-and `/health` echoes, and THE UPLOAD POOL, the fetch pool's twin — the
-permit the creation and the resume hold for a body's whole stream, counted
-into the daemon's worker minimum beside its three other pools. `door.rs`
+`lib.rs` declares the modules and holds `MediaOptions`, the upload setting
+the daemon's routes read and `/health` echoes; it names no module in code,
+so nothing of the root sits outside the two layers below. `pools.rs` — THE
+TWO PERMIT POOLS: the fetch pool, whose permit a fetch's answer holds, and
+its twin the upload pool, whose permit the creation and the resume hold
+for a body's whole stream, both counted into the daemon's worker minimum
+beside its own three pools, each saying its edge pair through the gate's
+classed door. `door.rs`
 — THE MEDIA DOOR, the one step the plain write sequence takes between its
 admission and the commit for a value naming a media kind:
 `published_target` at a published target whatever the declaration, the
@@ -2052,21 +2057,24 @@ FETCH's composed order: the shape, M10's read by identity as the gate, the
 one classification, the permit of the fetch pool, the whole file checked
 against its cell before its first byte, the stream's two re-check
 intervals; what the daemon's `server/blob_routes.rs` runs for `GET
-/blob?i=` and its transport streams. `limits.rs` — the resource's eleven
-numbers: the per-file cap, the two pools' counts and the standing-uploads
-bound, which the daemon reads too, and the fetch's two intervals, the
-default limit's share and floor, the compaction trigger and the cell's cap.
-Beneath them, the two leaves: `cell.rs` (the picture's reference cell: its
-schema, its one parser under the canonical rule, its encoder, its
-designation, and THE ONE CLASSIFICATION of every media kind) and
-`blind.rs` (the blind document's cell: the second kind, a commitment the
-board holds no byte of a file for).
+/blob?i=` and its transport streams. Beneath them, the leaves: `limits.rs`
+— the resource's eleven numbers, each `pub` where another crate reads it:
+the per-file cap, the two pools' counts, the standing-uploads bound and
+the default limit's share and floor, which the daemon reads, and the
+compaction trigger and its minimum, which its pruner suite reads; the
+fetch's two re-check intervals and the cell's cap are the crate's own.
+`cell.rs` — the picture's reference cell: its schema, its one parser under
+the canonical rule, its encoder, its designation and the set this build
+pins, and THE ONE CLASSIFICATION of every media kind — with its child
+`cell/blind.rs`, the blind document's cell: the second kind, a commitment
+the board holds no byte of a file for, read through that classification
+alone.
 
 Its modules form two layers, which `tests/it/tidy.rs` checks as the
-daemon's six are checked: THE RESOURCE — `door`, `gate`, `index`, `pruner`
-and `serve`, which name one another sideways and the leaves below — over
-THE LEAVES, `cell`, `blind` and `limits`, which name nothing of the
-resource.
+daemon's six are checked: THE RESOURCE — `door`, `gate`, `index`, `pools`,
+`pruner` and `serve`, which name one another sideways and the leaves below
+— over THE LEAVES, `cell` (its child `cell::blind` among it) and `limits`,
+which name nothing of the resource.
 
 Rules that hold across its files:
 
@@ -2076,8 +2084,9 @@ Rules that hold across its files:
   `OperationSurface<W>` under the record lift M10's own `execute` requires,
   the door over `&W` — and the crate's `[dependencies]` name no
   `skep-engine`; `World::visible_to`, the engine's, is rebuilt here over
-  `ReadableWorld::readable`, whose `None` is the guest. Only the door's
-  unit test opens an engine, through a dev-dependency.
+  `ReadableWorld::readable`, whose `None` is the guest. Two unit suites
+  open an engine, through a dev-dependency: the door's (`door/tests.rs`)
+  and the index's walk catch (`index.rs`).
 - **The cell index has one lock of its own, taken innermost.** The write
   path enters it under the daemon's `Serial`, the gate reads it under the
   credential lock's read arm, the pruner under its write arm, the walk at
@@ -2116,7 +2125,8 @@ Rules that hold across its files:
 
 Its unit suites sit beside their code: `cell/tests.rs`, `door/tests.rs`
 (which opens a real engine), `gate/tests.rs`, and the inline suites of
-`blind.rs`, `index.rs`, `pruner.rs` and `serve.rs`. Its integration suites
+`cell/blind.rs`, `index.rs` (whose walk-catch test opens one too),
+`pools.rs`, `pruner.rs` and `serve.rs`. Its integration suites
 — the upload, the fetch, the door and the pruner over a served daemon —
 are `skepd`'s (`tests/it`: `blob_routes`, `blob_fetch`, `media`, `pruner`,
 `deposit_class`, and `hazard`'s media share), which spawn the daemon they
@@ -2463,12 +2473,12 @@ the store's install — nothing above their own layer.
    that are the daemon's — the streaming arm's chunk, its two deadlines,
    the pruner's cadence; the media resource's own numbers, the two pools'
    counts among them, are `skep-media`'s `limits`, the daemon taking the
-   four it reads from there). None of these knows anything about the
-   daemon; a leaf imports only leaves — and a leaf in another crate is a
-   leaf: the counting permit the five bounded pools use and the operator's
-   log line are `skep-util`'s `permits` and `notice`, the support crate
-   below this one (§The support crate), and the two cells, once leaves
-   here, are `skep-media`'s (§The media resource).
+   ones it reads from there, each `pub` for it). None of these knows
+   anything about the daemon; a leaf imports only leaves — and a leaf in
+   another crate is a leaf: the counting permit the five bounded pools use
+   and the operator's log line are `skep-util`'s `permits` and `notice`,
+   the support crate below this one (§The support crate), and the two
+   cells, once leaves here, are `skep-media`'s (§The media resource).
 
 `lib.rs` declares the daemon's modules in layer order, then the fuzz
 harness and the crate's public surface; `main.rs` is the binary — the
@@ -2500,9 +2510,9 @@ imports it.
   order the compiler enforces between libraries; the dev-dependencies
   pointing back up are `skep-kernel`'s, whose integration suites build
   their shared fixture through `skep-engine` and the stores it assembles,
-  `skep-media`'s on `skep-engine`, whose door's unit test opens a real
-  engine to judge generic code against the concrete `World` — the media
-  crate's library never depends on the engine — `skepd`'s on
+  `skep-media`'s on `skep-engine`, whose door's and index's unit suites
+  open a real engine to judge generic code against the concrete `World` —
+  the media crate's library never depends on the engine — `skepd`'s on
   `skep-resolve`, whose end-to-end cells and measurements run where boards
   are spawned — the daemon's library never depends on the resolver — and
   `skep-search`'s on `skepd` and `skep-client`, whose budgets suite writes

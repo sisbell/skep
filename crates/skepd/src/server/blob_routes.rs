@@ -44,7 +44,7 @@
 //! readiness so a failed index never answers the retry-class token; THE
 //! PERMIT — the creation and the resume, the two acts that
 //! take bytes and no other, are admitted at most the UPLOAD POOL at once
-//! ([`UploadPool`](skep_media::UploadPool),
+//! ([`UploadPool`](skep_media::pools::UploadPool),
 //! [`MAX_CONCURRENT_UPLOADS`](skep_media::limits::MAX_CONCURRENT_UPLOADS) slots;
 //! `media.md` Op inventory 1, "AN UPLOAD IS ADMITTED AT MOST AN UPLOAD PERMIT POOL AT
 //! ONCE"; M-I5 (f): bounded by a pool, never a queue; P29, the budget

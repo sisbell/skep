@@ -1,11 +1,11 @@
 //! THE LAYERING, CHECKED: `AGENTS.md`'s "imports point down", kept by this
 //! crate for its own two layers, which `ARCHITECTURE.md` §The media
-//! resource draws — THE RESOURCE: the door, the gate, the index, the pruner
-//! and the serve, which name one another sideways and the leaves below; over
-//! THE LEAVES: the two cells and the limits, which name nothing of the
-//! resource. The daemon, the stores, the blob store and `skep-util` are
-//! other crates: a path into one is a path outside this crate, which this
-//! check reads as it reads any other crate's.
+//! resource draws — THE RESOURCE: the door, the gate, the index, the pools,
+//! the pruner and the serve, which name one another sideways and the leaves
+//! below; over THE LEAVES: the cell with its child the blind cell, and the
+//! limits, which name nothing of the resource. The daemon, the stores, the
+//! blob store and `skep-util` are other crates: a path into one is a path
+//! outside this crate, which this check reads as it reads any other crate's.
 //!
 //! Every in-crate module a `src/` file names in code — the leading module
 //! segments of each `crate::…`, `super::…` and `self::…` path, a brace
@@ -15,7 +15,10 @@
 //! included; and tests — a `tests.rs` file, or everything from an inline
 //! `mod tests {` on — which may reach whatever they test. An inline test
 //! module is its file's last item, where `AGENTS.md` places it, and that is
-//! checked too: a line after one is a line this check never reads.
+//! checked too: a line after one is a line this check never reads. The
+//! crate root is in no layer, so its code names no module at all: an item
+//! of the root's that reached one would sit in no row, and a leaf naming it
+//! through `crate::` would cross the layers unseen.
 //!
 //! Two consequences meet a reader as failures. A module that fits no row of
 //! [`LAYERS`] fails until it is placed, and placing it is the decision
@@ -36,14 +39,16 @@ use std::path::{Path, PathBuf};
 /// Module → layer, top (0) to bottom (1). A module takes the layer of its
 /// LONGEST matching row, on `::` boundaries.
 const LAYERS: &[(&str, u8)] = &[
-    // 0 — the resource: the door, the gate, the index, the pruner, the serve.
+    // 0 — the resource: the door, the gate, the index, the pools, the
+    // pruner, the serve.
     ("door", 0),
     ("gate", 0),
     ("index", 0),
+    ("pools", 0),
     ("pruner", 0),
     ("serve", 0),
-    // 1 — the leaves: the two cells, and the limits.
-    ("blind", 1),
+    // 1 — the leaves: the cell — its child `cell::blind` takes this row —
+    // and the limits.
     ("cell", 1),
     ("limits", 1),
 ];
@@ -67,7 +72,20 @@ fn every_module_names_only_its_own_layer_and_below() {
     let mut faults = Vec::new();
     for (file, module) in files.iter().zip(&modules) {
         let name = file.file_name().unwrap().to_str().unwrap();
-        if matches!(name, "lib.rs" | "tests.rs") {
+        if name == "tests.rs" {
+            continue;
+        }
+        if name == "lib.rs" {
+            // THE ROOT, in no layer: its code names no module.
+            let code: Vec<(usize, &str)> = code_lines(&lib).collect();
+            for (n, named_path) in named_paths(&code) {
+                if let Named::Module(target) = resolve("", &named_path, &top) {
+                    faults.push(format!(
+                        "src/lib.rs:{n}: the root names `{target}` — an item that reaches a \
+                         module belongs in a module, where LAYERS places it"
+                    ));
+                }
+            }
             continue;
         }
         let from = layer(module);
@@ -498,8 +516,8 @@ fn after_test_module(text: &str) -> Option<usize> {
 
 /// The names the crate root re-exports from its OWN modules (`pub use
 /// gate::{…}`), which code outside the root reaches by their home module.
-/// The root's own items (`MediaOptions`, `UploadPool`) and another crate's
-/// re-exports are not among them: those name no layer.
+/// The root's own item (`MediaOptions`, which names nothing of the crate)
+/// and another crate's re-exports are not among them: those name no layer.
 fn root_reexports(lib: &str, top: &HashSet<&str>) -> HashSet<String> {
     let code: String = code_lines(lib).map(|(_, line)| format!("{line}\n")).collect();
     let mut names = HashSet::new();

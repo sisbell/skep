@@ -92,7 +92,7 @@
 //!
 //! THE KIND COLUMN (`media.md` item 4; the blind-document investigation §5
 //! (i); s6-D3): the arms above are read PER KIND. The picture's cell meets
-//! every arm. THE BLIND DOCUMENT's cell (`blind.rs`) meets arms 1, 2
+//! every arm. THE BLIND DOCUMENT's cell (`cell/blind.rs`) meets arms 1, 2
 //! and 4 as the picture's does — `published_target` at a published target,
 //! `not_owner` at a reader's shot, the halt on a malformed body — and
 //! NEVER arms 3 and 5: it is ADMITTED into a draft and at the owner's shot
@@ -205,7 +205,7 @@ impl MediaRefusal {
 /// cell, which the binding is asked about; the BLIND document's cell, which
 /// the target's and the owner's arms judge as the picture's and the
 /// binding never sees — the board holds no byte of its picture, so there is
-/// no deposit to bind and no media gate to ask (`blind.rs`); a value
+/// no deposit to bind and no media gate to ask (`cell/blind.rs`); a value
 /// naming either kind under no pinned schema; or — `None` — nothing it
 /// answers.
 #[derive(Debug, Clone)]

@@ -109,8 +109,8 @@ fn the_insert_arms_and_the_owners_shot_over_the_genesis_world() {
     assert_eq!(door(insert(&draft, vec![0x0b, 1, 0, 1, 2]), SYSTEM_PRINCIPAL), None, "a def");
     // THE BLIND KIND's column: admitted into a draft with no store
     // consulted, `published_target` into H, the halt on its malformed body.
-    let blind =
-        crate::blind::encode(&crate::blind::BlindCell { commitment: [0xcd; 32] }).into_bytes();
+    let blind = crate::cell::blind::encode(&crate::cell::blind::BlindCell { commitment: [0xcd; 32] })
+        .into_bytes();
     let mut blind_sized = blind.clone();
     blind_sized.splice(blind.len() - 1.., br#","size":5}"#.iter().copied());
     assert_eq!(

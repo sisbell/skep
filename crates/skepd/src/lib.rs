@@ -48,7 +48,7 @@
 //!   picture's whole file, gated by M10's read by identity, checked against
 //!   its cell before its first byte, under a permit pool, the requester
 //!   re-resolved mid-stream; the BLIND DOCUMENT's cell (the crate's
-//!   `blind.rs`) is the second kind the door and the fetch classify beside
+//!   `cell/blind.rs`) is the second kind the door and the fetch classify beside
 //!   the picture's, of which the board holds no byte.
 //! * [`Daemon`] — the state and the socket-free router: `GET /challenge`,
 //!   `POST /session`, `POST /session/close`, `POST /op`, `POST /op-at`

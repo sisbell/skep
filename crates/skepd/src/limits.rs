@@ -8,7 +8,8 @@
 //! the per-file cap, the fetch pool and its two intervals, the upload pool,
 //! the default per-account limit's share and floor, the standing-uploads
 //! bound, the logs' compaction trigger and the picture cell's cap — are
-//! `skep_media::limits`'s, the daemon taking the four it reads from there.
+//! `skep_media::limits`'s, the daemon taking the ones it reads from there,
+//! each `pub` there for that reader.
 
 use std::num::NonZeroUsize;
 use std::time::Duration;

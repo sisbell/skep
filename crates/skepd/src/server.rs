@@ -212,8 +212,8 @@ use skep_kernel::{
 use skep_media::gate::MediaGate;
 use skep_media::index;
 use skep_media::limits::MAX_BLOB_BYTES;
-use skep_media::serve::FetchPool;
-use skep_media::{MediaOptions, UploadPool};
+use skep_media::pools::{FetchPool, UploadPool};
+use skep_media::MediaOptions;
 #[cfg(feature = "observe")]
 use skep_namespace::PrincipalId;
 use skep_util::notice::{self, Class, Moment};

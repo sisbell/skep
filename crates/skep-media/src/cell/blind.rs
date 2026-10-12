@@ -12,7 +12,8 @@
 //! THE DAEMON DOES FOR A BLIND CELL READS A FILE, A LEASE OR AN INDEX ENTRY
 //! (the investigation §5). What the daemon learns about the bytes: nothing.
 //! It parses one JSON object and stores it, as it stores a sentence. A leaf,
-//! as `cell.rs` is.
+//! and `cell`'s child: the classification there is its one reader, and the
+//! kind's address and width are seen by `cell` alone.
 //!
 //! THE SCHEMA, v1. One JSON object of exactly two members, in this order:
 //! `type`, a string, the kind's address ([`KIND`]); `commitment`, a string,
@@ -58,11 +59,11 @@ use crate::cell::{CellRefusal, HASH_BYTES};
 /// subspace, taken at the range's top with it so the first natural
 /// allocations meet no squatter; the allocation lands by this one constant
 /// and the fixture's `kind`.
-pub(crate) const KIND: &str = "1.1.0.1.0.1.0.3.88";
+pub(super) const KIND: &str = "1.1.0.1.0.1.0.3.88";
 
 /// The commitment's width: 32 bytes — 64 hex characters — the width of the
 /// keyed hash the owner's client computes (bd-D1), the picture's hash width.
-pub(crate) const COMMITMENT_BYTES: usize = HASH_BYTES;
+pub(super) const COMMITMENT_BYTES: usize = HASH_BYTES;
 
 /// A parsed blind cell: the commitment, and nothing else. Its `type` is no
 /// field — it is the schema's fixed value, which [`encode`] writes and

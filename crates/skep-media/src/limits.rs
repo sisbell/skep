@@ -1,12 +1,17 @@
 //! The media resource's own numbers (wire.md §Media): the per-file cap, the
 //! fetch pool and its two intervals, the upload pool, the default
 //! per-account limit's share and floor, the standing-uploads bound, the
-//! logs' compaction trigger and the picture cell's cap. Four of them the
-//! daemon reads too — the per-file cap on the blob route's request body,
-//! the two pools' counts in its worker minimum, the standing-uploads bound
-//! in a refusal's face — and takes from here; the daemon's own bounds (the
-//! request-body caps, the change feed's page bounds, the streaming arm's
-//! chunk and its two deadlines, the pruner's cadence) stay the daemon's.
+//! logs' compaction trigger and its minimum, and the picture cell's cap. A
+//! number is `pub` where another crate reads it and crate-private where
+//! none does. The daemon reads the per-file cap on the blob route's request
+//! body, the two pools' counts in its worker minimum, the standing-uploads
+//! bound in a refusal's face and the default limit's share and floor in its
+//! binary's help; its pruner suite reads the compaction trigger and its
+//! minimum. The fetch's two intervals are read through `serve::Progress`
+//! alone, and the cell's cap through the one classification. The daemon's
+//! own bounds (the request-body caps, the change feed's page bounds, the
+//! streaming arm's chunk and its two deadlines, the pruner's cadence) stay
+//! the daemon's.
 
 use std::time::Duration;
 
@@ -70,14 +75,14 @@ pub const MAX_CONCURRENT_UPLOADS: usize = 4;
 /// `BLOB_CHUNK`; the re-check is one `authenticate` and one `retrieve_i` of
 /// the span, cheap for a published origin and a guest, the gate's one
 /// re-read for a draft's grantee.
-pub const FETCH_RECHECK_BYTES: u64 = 1024 * 1024;
+pub(crate) const FETCH_RECHECK_BYTES: u64 = 1024 * 1024;
 
 /// THE TIME INTERVAL beside it (the record's "OR AT A TIME INTERVAL PINNED
 /// BESIDE IT, WHICHEVER COMES FIRST"; s6-leak-b) — 5 s, INTERIM: a reader
 /// draining at a trickle holds no interval open past this; the re-check
 /// runs at whichever of the two bounds comes first, judged on the media
 /// gate's clock so a suite drives it through the clock seam.
-pub const FETCH_RECHECK_INTERVAL: Duration = Duration::from_secs(5);
+pub(crate) const FETCH_RECHECK_INTERVAL: Duration = Duration::from_secs(5);
 
 /// THE DEFAULT PER-ACCOUNT LIMIT's SHARE — one eighth of the volume's
 /// capacity (the owner's ruling, "1/8 is fine"; `media.md` Op inventory 1,
@@ -134,4 +139,4 @@ pub const COMPACTION_MIN_LINES: usize = 1024;
 /// record grade's 128 KiB: a cell carries no entry array, and a cap sized
 /// for one would let a hostile insert command a hundred-megabyte tree per
 /// value for nothing a cell can be.
-pub const MAX_CELL_BYTES: usize = 1024;
+pub(crate) const MAX_CELL_BYTES: usize = 1024;

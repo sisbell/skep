@@ -12,11 +12,14 @@ it names no engine; the daemon instantiates it at its `World`.
 Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substrate in the Project Xanadu lineage.
 
 - **The cells**, `cell` — the picture's reference cell: its kind's address
-  `KIND`, its hash function's name `DESIGNATION`, the hash's width
-  `HASH_BYTES`, and `names_kind_by_prefix`, the cheap test the write path
-  runs ahead of a commit. The parser under the canonical rule, the encoder
-  and the one classification of every media kind are the crate's own, the
-  blind document's cell (`blind`) read through them alone.
+  `KIND`, its hash function's name `DESIGNATION` and the set of the names
+  this build pins, `PINNED_DESIGNATIONS`, which the pruner halts outside
+  and the operator's inventory reads, the hash's width `HASH_BYTES`, and
+  `names_kind_by_prefix`, the cheap test the write path runs ahead of a
+  commit. The parser under the canonical rule, the encoder and the one
+  classification of every media kind are the crate's own, the blind
+  document's cell (`cell::blind`, the module's child) read through them
+  alone.
 - **The door**, `door` — `media_door(world, op, principal, &gate)`, the one
   step between the session layer's admission and the commit; `MediaRefusal`
   with its `token` and `disposition`, one variant per arm of the armed set.
@@ -30,8 +33,9 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
   at an upload's finish, the one site the floor's lift is said from (the
   binding's refusal is said once, at its first refusal, by the gate
   itself); the install's refusal, `LimitsRefused` — a record naming a
-  per-file cap past the route's refused whole, said once, never clamped;
-  and THE INVENTORY's two reads, `lease_counted`
+  per-file cap past the route's refused whole, said once, never clamped —
+  compiled with the install under `test-hooks` until the serving layer's
+  channel lands; and THE INVENTORY's two reads, `lease_counted`
   (`Counted`) and `upload_counted`, under the gate's own pending rule and
   its own reading of a store key, with `wall_clock_ms`, its reading of the
   clock.
@@ -40,28 +44,32 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
   `references` (`Reference`), `accounts` and `halts` (`HaltMark`); `walk`
   over a snapshot and `start_walk` on a thread of its own, answering a
   `Rebuild` — or, where that thread died, marking the index FAILED, the
-  third state beside ready and not-ready, read by `is_failed`.
+  third state beside ready and not-ready, read through the gate's
+  `index_failed`.
 - **The pruner**, `pruner` — `pass(&gate, exclusive)`, answering a
   `PrunePass`: its figures, the halt, the compaction half of its line
   (`compaction`) and, where a step failed, the first failure beside them
   (`PassFailure`, naming its `PassStep` and the cause), step (d) — the
-  compaction — having run on every exit; `PINNED_DESIGNATIONS`; `Cadence`
-  (`new`, `wait`, `stop`) and `Wake`, the transport's thread's clock and
-  stop.
+  compaction — having run on every exit; `Cadence` (`new`, `wait`, `stop`)
+  and `Wake`, the transport's thread's clock and stop.
+- **The pools**, `pools` — `FetchPool` (`new`), whose permit a fetch's
+  answer holds, and its twin `UploadPool` (`new`, `admit`), whose permit a
+  creation or a resume holds for the body's whole stream; each says its
+  edge pair through the gate's classed door.
 - **The fetch**, `serve` — `fetch` and `gate_admits` over M10's front door;
-  `FetchPool` (`new`); `Admitted` (`i`, `size`, `bytes`), `NamedBlob` and
-  `FetchRefusal`; `Progress` (`new`, `advance`, `due`, `reset`), the
-  stream's interval arithmetic.
-- **The limits**, `limits` — the resource's eleven numbers, four of them
-  the daemon's readers take too: `MAX_BLOB_BYTES`, `MAX_CONCURRENT_FETCHES`,
-  `MAX_CONCURRENT_UPLOADS`, `MAX_STANDING_UPLOADS`; and seven its own,
-  `FETCH_RECHECK_BYTES`, `FETCH_RECHECK_INTERVAL`, `DEFAULT_LIMIT_SHARE`,
-  `DEFAULT_LIMIT_FLOOR_BYTES`, `COMPACTION_TRIGGER`, `COMPACTION_MIN_LINES`
-  and `MAX_CELL_BYTES`.
+  `Admitted` (`i`, `size`, `bytes`), `NamedBlob` and `FetchRefusal`;
+  `Progress` (`new`, `advance`, `due`, `reset`), the stream's interval
+  arithmetic.
+- **The limits**, `limits` — the resource's numbers another crate reads,
+  each `pub` for that reader: `MAX_BLOB_BYTES`, `MAX_CONCURRENT_FETCHES`,
+  `MAX_CONCURRENT_UPLOADS`, `MAX_STANDING_UPLOADS`, `DEFAULT_LIMIT_SHARE`
+  and `DEFAULT_LIMIT_FLOOR_BYTES` the daemon's, `COMPACTION_TRIGGER` and
+  `COMPACTION_MIN_LINES` its pruner suite's. The fetch's two re-check
+  intervals and the cell's cap are the crate's own, read through
+  `Progress` and the classification.
 - **The root** — `MediaOptions`, the upload setting and, beside it, the
   source it was set from (`skep-util`'s `Source`: the default, the flag,
-  the variable), which the daemon's open names; `UploadPool` (`new`,
-  `admit`), the fetch pool's twin.
+  the variable), which the daemon's open names.
 - **The test seam** (`test-hooks`, default off; every item of it
   `#[doc(hidden)]`) — the walk hold and the walk fault, the stream hold,
   the prune hold and its notice, the gate's clock, free-space and limits

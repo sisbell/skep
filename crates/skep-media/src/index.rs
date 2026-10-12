@@ -211,10 +211,8 @@ impl CellIndex {
     /// row 26), the third beside ready and not-ready: the three readers
     /// refuse `index_failed` for the life of the process, the door answers
     /// the lease arm's verdict as final, the pruner runs no pass. Monotone,
-    /// and never true beside `CellIndex::is_ready`. `pub` as the gate's
-    /// `index_failed` read is: the daemon's standing line and its hooks
-    /// reach it through the gate.
-    pub fn is_failed(&self) -> bool {
+    /// and never true beside `CellIndex::is_ready`.
+    pub(crate) fn is_failed(&self) -> bool {
         self.failed.load(Ordering::Acquire)
     }
 

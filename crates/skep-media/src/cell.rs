@@ -45,23 +45,23 @@
 //!
 //! TWO KINDS, ONE CLASSIFICATION (`media.md` item 4, "TWO SCHEMAS, TWO
 //! VECTOR SETS, ONE CLASSIFICATION, ONE CAP"; the blind-document
-//! investigation §5 (i); s6-D3 RULED): the blind document's cell
-//! (`blind.rs`) is a second kind beside the picture's, and
-//! `classify` reads EITHER kind by its `type` with one generic parse — the
-//! cap, the `{` test, the JSON tree built once, the `type` member read once,
-//! then the kind's own canonical check — so two kinds cost one JSON tree.
-//! `parse` keeps its contract as the PICTURE kind's parser: a value of any
-//! other `type`, the blind kind's included, is `CellRefusal::NotTheKind` to
-//! it, which is what keeps the cell index's one entry path reading the
-//! picture's opening alone; the door and the fetch route read
-//! `classify`.
+//! investigation §5 (i); s6-D3 RULED): the blind document's cell — this
+//! module's child `blind` (`cell/blind.rs`) — is a second kind beside the
+//! picture's, and `classify` reads EITHER kind by its `type` with one
+//! generic parse — the cap, the `{` test, the JSON tree built once, the
+//! `type` member read once, then the kind's own canonical check — so two
+//! kinds cost one JSON tree. `parse` keeps its contract as the PICTURE
+//! kind's parser: a value of any other `type`, the blind kind's included, is
+//! `CellRefusal::NotTheKind` to it, which is what keeps the cell index's one
+//! entry path reading the picture's opening alone; the door and the fetch
+//! route read `classify`.
 //!
 //! THE CAP BOUNDS THE PARSE AND NEVER THE CLASSIFICATION (`media.md` item
-//! 4; the register M-I3 (a)). A body past [`MAX_CELL_BYTES`] is parsed by
-//! no reader of a cell: `serde_json` builds its whole tree before the first
-//! schema check (the record cap's reason, `skep-identity`'s `payload.rs`),
-//! and a canonical cell is under 140 bytes, so the cap bounds the tree a
-//! hostile body can command. But a value NAMES THE KIND by its `type`
+//! 4; the register M-I3 (a)). A body past the cap, `limits::MAX_CELL_BYTES`,
+//! is parsed by no reader of a cell: `serde_json` builds its whole tree
+//! before the first schema check (the record cap's reason, `skep-identity`'s
+//! `payload.rs`), and a canonical cell is under 140 bytes, so the cap bounds
+//! the tree a hostile body can command. But a value NAMES THE KIND by its `type`
 //! member, read by the parse within the cap and, past it, by THE CANONICAL
 //! OPENING every schema's canonical form writes first,
 //! `{"type":"<the kind's address>"` ([`names_kind_by_prefix`], `opens_as`;
@@ -76,12 +76,16 @@
 //! range 3.80–3.89, unallocated as of this lane, and the allocation lands by
 //! this one constant and the fixture's `kind`.
 
+// The blind document's cell: the second kind, a commitment and nothing else,
+// read through this module's classification alone.
+pub(crate) mod blind;
+
 use std::fmt::Write as _;
 
 use serde_json::{Map, Value};
 use skep_util::json::{hex_string, parse_lower_hex};
 
-use crate::blind::{self, BlindCell};
+use self::blind::BlindCell;
 use crate::limits::MAX_CELL_BYTES;
 
 /// The cell kind's address — INTERIM, TEST-ONLY: the last ordinal of the
@@ -104,13 +108,22 @@ pub const KIND: &str = "1.1.0.1.0.1.0.3.89";
 /// and held to the fixture's `designation` by the vector test.
 pub const DESIGNATION: &str = "blake3";
 
+/// THE PINNED DESIGNATION SET: the designations this build's schemas pin —
+/// `blake3`, the one cell schema's [`DESIGNATION`] — pinned beside it, so a
+/// second schema's designation joins the set where that schema lands. A
+/// directory under `blobs/` named otherwise is a sidecar of a build this one
+/// is not: it halts the pruner's unlink pass (`media.md` Op inventory 1,
+/// "ONLY UNDER THE DESIGNATIONS THIS BUILD's SCHEMAS PIN"), and the
+/// operator's inventory lists it as foreign.
+pub const PINNED_DESIGNATIONS: &[&str] = &[DESIGNATION];
+
 /// The hash's width: BLAKE3's default output, 32 bytes — 64 hex characters.
 pub const HASH_BYTES: usize = 32;
 
 /// The largest `size` a cell carries: 2^53 − 1, the bound every machine
 /// integer of the wire keeps (wire.md §Value encodings) so a
 /// JavaScript-backed reader reads the count exactly.
-pub(crate) const MAX_SIZE: u64 = (1 << 53) - 1;
+const MAX_SIZE: u64 = (1 << 53) - 1;
 
 /// A parsed cell: the file's hash and its byte count. Its `type` is no
 /// field — it is the schema's fixed value, which [`encode`] writes and
@@ -248,8 +261,8 @@ fn parse_picture(object: &Map<String, Value>, bytes: &[u8]) -> Result<Cell, Cell
     }
     let cell = Cell { hash, size };
     // THE ADMISSION SENTENCE: admit only where the input is the canonical
-    // re-encoding of what it spells — by the public encoder itself, the
-    // function a signer composes with. A second `hash` member (the generic
+    // re-encoding of what it spells — by the one encoder itself, the
+    // canonical form a signer composes. A second `hash` member (the generic
     // parse keeps one), whitespace and a trailing byte each fail here; an
     // uppercase hash has failed the member's read above.
     if encode(&cell).as_bytes() != bytes {
@@ -277,7 +290,7 @@ pub fn names_kind_by_prefix(bytes: &[u8]) -> bool {
 /// whitespace (RFC 8259's four), exactly `{"type":"<kind>"` — the one
 /// reading of the canonical opening both the prefix test and the past-cap
 /// classification make, so the two cannot disagree on what names a kind.
-pub(crate) fn opens_as(kind: &str, bytes: &[u8]) -> bool {
+fn opens_as(kind: &str, bytes: &[u8]) -> bool {
     let start = bytes
         .iter()
         .position(|b| !matches!(b, b' ' | b'\t' | b'\n' | b'\r'))
@@ -292,7 +305,7 @@ pub(crate) fn opens_as(kind: &str, bytes: &[u8]) -> bool {
 /// whitespace, the members in that order, nothing after the brace. What a
 /// signer composes, what a verifier re-spells, and what `parse` holds its
 /// input to.
-pub(crate) fn encode(cell: &Cell) -> String {
+fn encode(cell: &Cell) -> String {
     let mut out = String::with_capacity(160);
     out.push_str("{\"type\":\"");
     out.push_str(KIND);

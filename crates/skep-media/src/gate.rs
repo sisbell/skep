@@ -93,8 +93,8 @@
 //! until that channel lands) the serving layer's channel will call — or is
 //! REFUSED as malformed by its own grammar where its per-file cap exceeds
 //! the route's own, said once, the limits in force standing
-//! ([`LimitsRefused`]; op-D6 (a): never clamped); the startup log names
-//! the record in force, or the default and its source.
+//! (`LimitsRefused`, compiled with the hook; op-D6 (a): never clamped); the
+//! startup log names the record in force, or the default and its source.
 //!
 //! THE UPLOAD SETTING ([`crate::MediaOptions`]) rides here as the
 //! resource's configuration — the switch the routes read
@@ -257,9 +257,12 @@ impl Limits {
 /// through the classed door, in these words. Answered to the installer: the
 /// serving layer's channel (AUTH-4.70's docket, item 40) answers the
 /// record's writer with it; until that channel lands the hook
-/// (`MediaGate::install_limits`, under `test-hooks`) is its one path. Never a clamp: a cap the
-/// daemon quietly lowered would leave the record's writer believing a figure
-/// the daemon does not use.
+/// (`MediaGate::install_limits`, under `test-hooks`) is its one path, and the
+/// refusal compiles beside it under the same gate — a shipped build carries
+/// no refusal it cannot make. Never a clamp: a cap the daemon quietly
+/// lowered would leave the record's writer believing a figure the daemon
+/// does not use.
+#[cfg(any(test, feature = "test-hooks"))]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum LimitsRefused {
     /// The record names a per-file cap above the route's own,
@@ -272,6 +275,7 @@ pub enum LimitsRefused {
     },
 }
 
+#[cfg(any(test, feature = "test-hooks"))]
 impl fmt::Display for LimitsRefused {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -284,6 +288,7 @@ impl fmt::Display for LimitsRefused {
     }
 }
 
+#[cfg(any(test, feature = "test-hooks"))]
 impl std::error::Error for LimitsRefused {}
 
 /// The scope a deposit was refused on — what the refusal names, and
@@ -431,11 +436,11 @@ pub struct MediaGate {
     /// the cadence's first pass before it moves the clock.
     #[cfg(any(test, feature = "test-hooks"))]
     passes_completed: AtomicU64,
-    /// THE GATE's CLASSED DOOR ([`Door`]): `notice::emit` under a class word
-    /// and, under the test seam, the record of every line said through it
-    /// (`MediaGate::lines_said`, the hook) — the gate's own lines, and the
-    /// two media pools', which hold a clone ([`MediaGate::door`]).
-    door: Door,
+    /// THE GATE's CLASSED DOOR ([`ClassedDoor`]): `notice::emit` under a
+    /// class word and, under the test seam, the record of every line said
+    /// through it (`MediaGate::lines_said`, the hook) — the gate's own lines,
+    /// and the two media pools', which hold a clone ([`MediaGate::door`]).
+    door: ClassedDoor,
 }
 
 /// THE GATE's CLASSED DOOR WITH ITS RECORD — `notice::emit` under a class
@@ -449,15 +454,15 @@ pub struct MediaGate {
 /// record holds none of these lines: they are said below its door, and the
 /// stream itself no in-process suite reads.
 #[derive(Clone)]
-pub(crate) struct Door {
+pub(crate) struct ClassedDoor {
     #[cfg(any(test, feature = "test-hooks"))]
     said: Arc<Mutex<Vec<String>>>,
 }
 
-impl Door {
+impl ClassedDoor {
     /// A door over a fresh, empty record.
-    fn new() -> Door {
-        Door {
+    fn new() -> ClassedDoor {
+        ClassedDoor {
             #[cfg(any(test, feature = "test-hooks"))]
             said: Arc::new(Mutex::new(Vec::new())),
         }
@@ -509,7 +514,7 @@ impl MediaGate {
             prune_hold: AtomicBool::new(false),
             #[cfg(any(test, feature = "test-hooks"))]
             passes_completed: AtomicU64::new(0),
-            door: Door::new(),
+            door: ClassedDoor::new(),
         })
     }
 
@@ -676,9 +681,9 @@ impl MediaGate {
     }
 
     /// One classed line of the gate's own on the operator stream — the
-    /// floor's binding and its lift, a limits record's refusal — through
-    /// the gate's door ([`Door::say`]): `skep_util::notice`'s classed door,
-    /// as the daemon's own lines go, so no line of the gate's goes out
+    /// floor's binding and its lift, a limits record's refusal — through the
+    /// gate's door ([`ClassedDoor::say`]): `skep_util::notice`'s classed
+    /// door, as the daemon's own lines go, so no line of the gate's goes out
     /// without its class word; and, under the test seam, kept for the suite
     /// (`MediaGate::lines_said`, the hook): the stream itself no in-process
     /// suite reads.
@@ -686,11 +691,12 @@ impl MediaGate {
         self.door.say(class, what);
     }
 
-    /// A clone of the gate's classed door ([`Door`]), for the two media
-    /// pools — the fetch pool and the upload pool — to say their edge pairs
-    /// through (`operations.md` §1.1 m12): the same `notice::emit` and, under
-    /// the test seam, the same record `MediaGate::lines_said` answers.
-    pub(crate) fn door(&self) -> Door {
+    /// A clone of the gate's classed door ([`ClassedDoor`]), for the two
+    /// media pools ([`crate::pools`]) — the fetch pool and the upload pool —
+    /// to say their edge pairs through (`operations.md` §1.1 m12): the same
+    /// `notice::emit` and, under the test seam, the same record
+    /// `MediaGate::lines_said` answers.
+    pub(crate) fn door(&self) -> ClassedDoor {
         self.door.clone()
     }
 

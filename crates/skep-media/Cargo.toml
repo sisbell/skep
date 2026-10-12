@@ -76,8 +76,10 @@ blake3.workspace = true
 # skep-client each carry the line).
 skep-media = { path = ".", features = ["test-hooks"] }
 tempfile.workspace = true
-# The door's unit test opens a real engine (`door/tests.rs`): generic code
-# tested against the concrete World — the kernel's precedent, whose suites
-# build their fixture through `skep-engine`. Dev-only, so the edge back up
-# is the dev-dependency cycle cargo permits; the lib graph stays a DAG.
+# Two unit suites open a real engine: the door's (`door/tests.rs`), generic
+# code judged against the concrete World, and the index's walk catch
+# (`index.rs`), a walk started over a real kernel — the kernel's precedent,
+# whose suites build their fixture through `skep-engine`. Dev-only: an edge
+# back up, which cargo permits a dev-dependency; `skep-engine` depends on
+# nothing of this crate's, so the lib graph stays a DAG.
 skep-engine = { path = "../skep-engine" }

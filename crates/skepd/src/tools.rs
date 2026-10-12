@@ -78,10 +78,9 @@ use skep_engine::{Engine, EngineError};
 use skep_kernel::{
     BurnedSeqPolicy, CheckpointPolicy, Durability, KernelConfig, OpenError, SaltSource,
 };
-use skep_media::cell::{DESIGNATION, HASH_BYTES};
+use skep_media::cell::{DESIGNATION, HASH_BYTES, PINNED_DESIGNATIONS};
 use skep_media::gate::{wall_clock_ms, Counted, MediaGate};
 use skep_media::index::{self, CellIndex};
-use skep_media::pruner::PINNED_DESIGNATIONS;
 use skep_namespace::{HasM3, PrincipalId};
 use skep_util::json::{obj, parse_lower_hex};
 

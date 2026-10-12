@@ -175,8 +175,8 @@ fn the_classification_reads_either_kind_once_and_each_parser_refuses_the_other()
 }
 
 /// The kind's interim address is a T4-valid address under the ghost
-/// document's type subspace, in the commons media range; the designation
-/// and the width are the ruled ones.
+/// document's type subspace, in the commons media range; the designation,
+/// the pinned set that holds it alone, and the width are the ruled ones.
 #[test]
 fn the_kind_is_an_address_in_the_commons_media_range() {
     let comps: Vec<Nat> =
@@ -187,6 +187,7 @@ fn the_kind_is_an_address_in_the_commons_media_range() {
     let ordinal: u32 = ordinal.parse().unwrap();
     assert!((80..=89).contains(&ordinal), "under the media range 3.80–3.89: {ordinal}");
     assert_eq!(DESIGNATION, "blake3");
+    assert_eq!(PINNED_DESIGNATIONS, ["blake3"], "the one schema's designation, and no other");
     assert_eq!(HASH_BYTES, 32);
 }
 

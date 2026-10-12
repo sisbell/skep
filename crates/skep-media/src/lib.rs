@@ -26,34 +26,35 @@
 //! beside ready and not-ready (`operations.md` §4 row 26); [`pruner`],
 //! THE PASS that removes expired partials and, under the credential lock's
 //! exclusive arm one file at a time, unlinks the files no cell names and no
-//! live lease holds, halting on a schema it does not know; `blind`, THE
-//! BLIND DOCUMENT's CELL, the second kind beside the picture's — a
-//! commitment and nothing the daemon can read a file by — under the one
-//! classification [`cell`] holds for both; [`limits`], the resource's own
-//! numbers, the four the daemon reads too among them; and [`serve`], THE
-//! FETCH's COMPOSED ORDER (Op inventory 3; the register M-I2 (a)–(d), (g),
-//! M-I3 (b), M-I5 (f), M-I7 (a), (b)): the shape, M10's read by identity as
-//! the gate, the classification, the permit, the whole file checked against
-//! the cell before its first byte, the permit spanning the answer — what
-//! `GET /blob?i=` (`server/blob_routes.rs`) runs and the transport streams,
-//! re-resolving the requester at an interval. And beside the fetch's pool,
-//! THE UPLOAD POOL ([`UploadPool`]; Op inventory 1, "AN UPLOAD IS ADMITTED
-//! AT MOST AN UPLOAD PERMIT POOL AT ONCE"; M-I5 (f)): the fetch pool's twin,
-//! whose permit the PUT's creation and resume hold for a body's whole
-//! stream, counted into the worker budget beside the three other pools. Each
-//! of the two pools says its EDGE PAIR (`operations.md` §1.1 m12) — its
-//! saturation when a request first meets it, its room again once it has
-//! stood clear for the daemon's hold-down — through the gate's classed door,
-//! and nothing per request. The deposit read — the one read of a principal's own deposits and uploads,
-//! its base the index's number — is the daemon's own route helper
-//! (`skepd`'s `server/blob_routes.rs`), built off this gate's reads.
+//! live lease holds, halting on a schema it does not know; `cell::blind`,
+//! THE BLIND DOCUMENT's CELL, the second kind beside the picture's — a
+//! commitment and nothing the daemon can read a file by — a child of
+//! [`cell`], under the one classification it holds for both; [`limits`], the
+//! resource's own numbers, each `pub` where another crate reads it; and
+//! [`serve`], THE FETCH's COMPOSED ORDER (Op inventory 3; the register M-I2
+//! (a)–(d), (g), M-I3 (b), M-I5 (f), M-I7 (a), (b)): the shape, M10's read by
+//! identity as the gate, the classification, the permit, the whole file
+//! checked against the cell before its first byte, the permit spanning the
+//! answer — what `GET /blob?i=` (`server/blob_routes.rs`) runs and the
+//! transport streams, re-resolving the requester at an interval. And
+//! [`pools`], THE TWO PERMIT POOLS: the fetch pool a fetch's permit comes
+//! from, and its twin THE UPLOAD POOL ([`pools::UploadPool`]; Op inventory 1,
+//! "AN UPLOAD IS ADMITTED AT MOST AN UPLOAD PERMIT POOL AT ONCE"; M-I5 (f)),
+//! whose permit the PUT's creation and resume hold for a body's whole stream
+//! — both counted into the daemon's worker minimum beside its own three
+//! pools. Each says its EDGE PAIR (`operations.md` §1.1 m12) — its saturation
+//! when a request first meets it, its room again once it has stood clear for
+//! the daemon's hold-down — through the gate's classed door, and nothing per
+//! request. The deposit read — the one read of a principal's own deposits
+//! and uploads, its base the index's number — is the daemon's own route
+//! helper (`skepd`'s `server/blob_routes.rs`), built off this gate's reads.
 //!
-//! The media gate, the door, the index, the pruner and the serve sit at the
-//! write path's layer (`ARCHITECTURE.md` §The media resource, §The daemon),
-//! the daemon's second resource beside it — A CRATE OF ITS OWN below the
-//! daemon and above the stores, GENERIC OVER THE WORLD M10 reads
-//! (`skep_febe::FebeWorld`, the one bound) and naming no engine, the daemon
-//! instantiating every world parameter at its `World`: the door reads the
+//! The media gate, the door, the index, the pruner, the pools and the serve
+//! sit at the write path's layer (`ARCHITECTURE.md` §The media resource,
+//! §The daemon), the daemon's second resource beside it — A CRATE OF ITS
+//! OWN below the daemon and above the stores, GENERIC OVER THE WORLD M10
+//! reads (`skep_febe::FebeWorld`, the one bound) and naming no engine, the
+//! daemon instantiating every world parameter at its `World`: the door reads the
 //! lease store, `blobs/` and the index through the media gate, which no
 //! producer of the session layer's admission may, so it is a step of its
 //! own; the write path enters the index at commit, a sideways step at its
@@ -80,13 +81,30 @@
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
 
-use std::time::Duration;
+// The cell: its schema, its one parser, its encoder, its designation and the
+// pinned set of them — and the one classification of every media kind, the
+// canonical opening read past the cap among it, with its child `blind`, the
+// blind document's cell, the second kind.
+pub mod cell;
+// The door: the one step, its armed set.
+pub mod door;
+// The media gate: the store, the limits, the hold, the scopes, the binding.
+pub mod gate;
+// The index: per hash the cells, per account the base; the walk at open.
+pub mod index;
+// The limits: the resource's eleven numbers, each `pub` where another crate
+// reads it.
+pub mod limits;
+// The pools: the fetch pool and its twin the upload pool, each saying its
+// edge pair through the gate's classed door.
+pub mod pools;
+// The pruner: the pass, its halts, its cadence.
+pub mod pruner;
+// The serve: the fetch's composed order, its answer and refusals, the
+// stream's interval arithmetic.
+pub mod serve;
 
-use skep_util::permits::{edge_clock_now, EdgeTracker, Permit, Permits, PoolEdgeLine};
 use skep_util::source::Source;
-
-use crate::gate::{Door, MediaGate};
-use crate::limits::MAX_CONCURRENT_UPLOADS;
 
 /// The media resource's configuration, as the operator supplies it — the
 /// upload setting, `--no-uploads` (`SKEPD_UPLOADS=false`): `uploads` OPEN
@@ -126,101 +144,3 @@ impl Default for MediaOptions {
         MediaOptions { uploads: true, uploads_source: Source::Default }
     }
 }
-
-/// The word the upload pool's two lines name it by (`operations.md` §1.1
-/// m12: one word per pool, the same in both lines) — the refusal's own,
-/// `upload_busy`.
-const UPLOAD_POOL: &str = "upload";
-
-/// THE UPLOAD POOL — the fourth instance of [`skep_util::permits`]'s mechanism
-/// and the fetch pool's twin ([`serve::FetchPool`]), disjoint from the
-/// reconstruction, class-scan and fetch pools by the borrow: a [`Permit`]
-/// names the pool that issued it, so no upload spends a slot of theirs and
-/// none of them spends one of these. [`MAX_CONCURRENT_UPLOADS`] slots, one
-/// per creation or resume of `/blob/upload` for the request's whole life —
-/// the body's stream, the finish included (`server/blob_routes.rs`, THE
-/// PERMIT) — so what the pool bounds is how many workers the family holds
-/// at once (M-I5 (f): PICTURES NEVER STARVE OR STALL THE JOURNAL — bounded
-/// by a pool, never a queue). A drained pool REFUSES, never queues (ms5-R:
-/// nothing of the family waits), and is asked or refused, never told (D9).
-///
-/// Beside the pool, ITS EDGE PAIR (`operations.md` §1.1 m12; §4 row 27): an
-/// [`EdgeTracker`] the admission tells of every refusal and every permit
-/// taken, whose edges the pool says at once through the media gate's
-/// classed door, a clone of which it holds — `the upload pool is saturated`
-/// at the first refusal of an episode, and at the first admission a
-/// hold-down past its last refusal `the upload pool has room again after
-/// {n} refusals`, the one line of the eight pairs the ruling lets carry a
-/// count, the episode's refusals; nothing per request, nothing else on a
-/// line. The hold-down is the daemon's one constant for every pair, handed
-/// in at the open.
-pub struct UploadPool {
-    permits: Permits,
-    edge: EdgeTracker,
-    door: Door,
-}
-
-impl UploadPool {
-    /// The pool at its count, [`MAX_CONCURRENT_UPLOADS`], every slot free —
-    /// its edge pair said through `gate`'s door and judged by `hold_down`.
-    pub fn new(gate: &MediaGate, hold_down: Duration) -> UploadPool {
-        UploadPool {
-            permits: Permits::new(MAX_CONCURRENT_UPLOADS),
-            edge: EdgeTracker::new(hold_down),
-            door: gate.door(),
-        }
-    }
-
-    /// One permit for a whole request, or `None` right now — never blocks;
-    /// and the pool's edge pair, judged at this one door at the edge clock's
-    /// instant and said at the edge through the gate's door, the landing
-    /// carrying the episode's refusals. The test hook below takes its
-    /// permits beside this door and crosses no edge: what a suite holds is
-    /// the pool, not a request.
-    #[must_use = "a permit dropped at once returns its slot at once: bind it for the request's \
-                  whole life"]
-    pub fn admit(&self) -> Option<Permit<'_>> {
-        let permit = self.permits.try_acquire();
-        let now = edge_clock_now();
-        let edge = match &permit {
-            Some(_) => self.edge.admitted(now),
-            None => self.edge.refused(now),
-        };
-        if let Some(edge) = edge {
-            self.door.say(edge.class(), PoolEdgeLine::counted(UPLOAD_POOL, edge));
-        }
-        permit
-    }
-
-    /// TEST HOOK, reached through `Daemon::try_hold_upload_permit`: hold one
-    /// permit exactly as an in-flight creation or resume does.
-    #[cfg(any(test, feature = "test-hooks"))]
-    #[doc(hidden)]
-    #[must_use = "a permit dropped at once holds nothing"]
-    pub fn try_hold(&self) -> Option<Permit<'_>> {
-        self.permits.try_acquire()
-    }
-}
-
-// The cell: its schema, its one parser, its encoder, its designation — and
-// the one classification of every media kind, the canonical opening read
-// past the cap among it.
-pub mod cell;
-// The blind document's cell: the second kind, a commitment and nothing else.
-// Reached by no caller outside this crate: the daemon reads a blind cell
-// through the one classification alone.
-pub(crate) mod blind;
-// The door: the one step, its armed set.
-pub mod door;
-// The media gate: the store, the limits, the hold, the scopes, the binding.
-pub mod gate;
-// The index: per hash the cells, per account the base; the walk at open.
-pub mod index;
-// The limits: the resource's eleven numbers, the daemon's four readers
-// among their takers.
-pub mod limits;
-// The pruner: the pass, its halts, its cadence.
-pub mod pruner;
-// The serve: the fetch's composed order, its pool, its answer and refusals,
-// the stream's interval arithmetic.
-pub mod serve;

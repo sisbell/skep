@@ -72,7 +72,7 @@ use std::time::Duration;
 use parking_lot::{Condvar, Mutex};
 use skep_blobs::Store;
 
-use crate::cell::DESIGNATION;
+use crate::cell::PINNED_DESIGNATIONS;
 use crate::gate::MediaGate;
 use crate::limits::{COMPACTION_MIN_LINES, COMPACTION_TRIGGER};
 
@@ -226,12 +226,6 @@ impl fmt::Display for PrunePass {
         fmt::Display::fmt(&self.compaction(), f)
     }
 }
-
-/// THE PINNED DESIGNATION SET: the designations this build's schemas pin
-/// — `blake3`, the one cell schema's. A directory under `blobs/` named
-/// otherwise is a sidecar of a build this one is not, and halts the
-/// unlink pass.
-pub const PINNED_DESIGNATIONS: &[&str] = &[DESIGNATION];
 
 /// ONE PASS over the media gate's store and index (`media_gate`),
 /// `exclusive` the acquisition of the credential lock's write arm — called
@@ -448,7 +442,6 @@ mod tests {
         });
         assert_eq!(waiter, Wake::Stop);
         assert_eq!(cadence.wait(Duration::from_secs(3600)), Wake::Stop, "stopped stays stopped");
-        assert_eq!(PINNED_DESIGNATIONS, ["blake3"]);
     }
 
     /// THE PASS's (a) and the hold (clause (5)): an expired upload a stream

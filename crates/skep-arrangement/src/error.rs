@@ -86,6 +86,38 @@ pub enum CopyError {
     EmptyResult,
 }
 
+/// REINSTATE rejection (the write by identity — the replacement act's
+/// record, E2 (a); `retrieve_i`'s twin as COPY is `retrieve_v`'s).
+/// Destination `at` gets INSERT's `NotContentSubspace`/`OutOfBounds` split
+/// and `PublishedTarget` is PUB-2.11's refusal on the DESTINATION, as
+/// COPY's; `NotOwner` carries the destination, the only document the op
+/// gates. Per run, the shot's own verdicts on a client-supplied run:
+/// `BadRun` (its start is no content element, or the document the client's
+/// `origin` projects to is not the trunk of the document that minted it —
+/// address arithmetic, disclosing nothing), `SourceNotRegistered` (that
+/// origin document is not registered), `DanglingSource` (an address the run
+/// names holds no value — EVERY address probed, as the shot probes a
+/// by-reference run, the run being the client's I-extent and no
+/// arrangement's), `TooManyRuns` (the placement exceeds
+/// [`MAX_PLACED_RUNS`](crate::MAX_PLACED_RUNS)), and `EmptyResult` (`runs`
+/// is empty). Which wins is stated on
+/// [`Vstream::reinstate`](crate::Vstream::reinstate). No `Withheld`: the
+/// origins' readability is the caller's, as COPY's sources' is, discharged
+/// at M10's door.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ReinstateError {
+    DocNotRegistered,
+    NotOwner(Address),
+    PublishedTarget,
+    NotContentSubspace,
+    OutOfBounds,
+    BadRun,
+    SourceNotRegistered,
+    DanglingSource,
+    TooManyRuns,
+    EmptyResult,
+}
+
 /// DELETE rejection (ASN-0117; §4): the doc is registered, the caller is its
 /// owner, its document is not published (`PublishedTarget` — PUB-2.11's
 /// refusal, the face of [`InsertError::PublishedTarget`]), `subspace(p) =
@@ -408,6 +440,40 @@ impl fmt::Display for CopyError {
 }
 impl Error for CopyError {}
 
+impl fmt::Display for ReinstateError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            ReinstateError::DocNotRegistered => "reinstate: doc is not a registered document",
+            ReinstateError::NotOwner(_) => {
+                "reinstate: the caller is not the destination document's effective owner (ω)"
+            }
+            ReinstateError::PublishedTarget => {
+                "reinstate: the destination document is published — it advances by versions; stage the change in a draft, then publish it as the next version"
+            }
+            ReinstateError::NotContentSubspace => {
+                "reinstate: at.subspace is not the content subspace s_C"
+            }
+            ReinstateError::OutOfBounds => {
+                "reinstate: at.ordinal is outside the valid insertion range [1, n_C + 1]"
+            }
+            ReinstateError::BadRun => {
+                "reinstate: a supplied run is not a content run of its stated origin"
+            }
+            ReinstateError::SourceNotRegistered => {
+                "reinstate: a run's origin is not a registered document"
+            }
+            ReinstateError::DanglingSource => {
+                "reinstate: a supplied run names an I-address with no stored value (S3★)"
+            }
+            ReinstateError::TooManyRuns => {
+                "reinstate: the placement exceeds the per-transaction run budget"
+            }
+            ReinstateError::EmptyResult => "reinstate: runs is empty",
+        })
+    }
+}
+impl Error for ReinstateError {}
+
 impl fmt::Display for DeleteError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(match self {
@@ -547,6 +613,7 @@ mod tests {
         assert!(InsertError::EmptyContent.source().is_none());
         assert!(VersionError::NotAPrincipal.source().is_none());
         assert!(CopyError::EmptyResult.source().is_none());
+        assert!(ReinstateError::DanglingSource.source().is_none());
         assert!(InsertError::PublishedTarget.source().is_none());
         assert!(VersionError::PrivateSourceVersionless.source().is_none());
         assert!(VersionError::PrivateVersionOfPublished.source().is_none());
@@ -582,6 +649,7 @@ mod tests {
         for line in [
             InsertError::PublishedTarget.to_string(),
             CopyError::PublishedTarget.to_string(),
+            ReinstateError::PublishedTarget.to_string(),
             DeleteError::PublishedTarget.to_string(),
             RearrangeError::PublishedTarget.to_string(),
         ] {

@@ -3,7 +3,7 @@
 //! read/write partition the lifecycle gates on (§1).
 
 use skep_address::{document_of, Address, Level, Nat, Span, Tumbler};
-use skep_arrangement::{Deposit, Shot, VPos, VSpec};
+use skep_arrangement::{trunk_of, Deposit, Shot, ShotRun, VPos, VSpec};
 use skep_content::Val;
 use skep_discovery::{Cursor, FourSet};
 use skep_kernel::Attestation;
@@ -220,6 +220,20 @@ pub enum Op {
     Delete { doc: Address, p: VPos, width: Nat },
     /// COPY / transclusion (ASN-0118).
     Copy { doc: Address, at: VPos, specs: Vec<VSpec> },
+    /// REINSTATE — the write by identity (the replacement act's record, E2
+    /// (a)): `runs`, content I-runs the client names beside the document
+    /// each states minted it — the publish shot's run form — placed into
+    /// `doc` at `at` BY IDENTITY, whether or not any arrangement holds them
+    /// now, so a run a `delete` un-arranged comes back at its own addresses
+    /// and every link on them returns; `retrieve_i`'s twin as `copy` is
+    /// `retrieve_v`'s. A DRAFT's write, owner-gated on `doc`. THE REACH IS
+    /// WIDE: a run's origin may be any document the session principal may
+    /// read, consulted at the write door per DISTINCT origin in run order
+    /// ([`Op::source_arguments`]), the destination's own I-space excepted,
+    /// as the shot's gate excepts it. M5's gates are the shot's on a
+    /// client-named run — every address probed — and M10 hands the runs
+    /// through verbatim.
+    Reinstate { doc: Address, at: VPos, runs: Vec<ShotRun> },
     /// REARRANGE (pivot/swap).
     Rearrange { doc: Address, cuts: Vec<VPos> },
     /// CREATENEWVERSION (ASN-0123) — the content-sharing, copy-on-write fork.
@@ -616,6 +630,7 @@ pub enum OpKind {
     Insert,
     Delete,
     Copy,
+    Reinstate,
     Rearrange,
     Version,
     Publish,
@@ -714,6 +729,7 @@ impl Op {
             | Op::Insert { .. }
             | Op::Delete { .. }
             | Op::Copy { .. }
+            | Op::Reinstate { .. }
             | Op::Rearrange { .. }
             | Op::Version { .. }
             | Op::Publish { .. }
@@ -745,6 +761,7 @@ impl Op {
             Op::Insert { .. } => OpKind::Insert,
             Op::Delete { .. } => OpKind::Delete,
             Op::Copy { .. } => OpKind::Copy,
+            Op::Reinstate { .. } => OpKind::Reinstate,
             Op::Rearrange { .. } => OpKind::Rearrange,
             Op::Version { .. } => OpKind::Version,
             Op::Publish { .. } => OpKind::Publish,
@@ -863,6 +880,7 @@ impl Op {
             | Op::Insert { .. }
             | Op::Delete { .. }
             | Op::Copy { .. }
+            | Op::Reinstate { .. }
             | Op::Rearrange { .. }
             | Op::Version { .. }
             | Op::Publish { .. }
@@ -951,6 +969,7 @@ impl Op {
             | Op::Insert { .. }
             | Op::Delete { .. }
             | Op::Copy { .. }
+            | Op::Reinstate { .. }
             | Op::Rearrange { .. }
             | Op::Version { .. }
             | Op::Publish { .. }
@@ -966,7 +985,10 @@ impl Op {
     /// PUB-6.24, PUB-6.4; PUB round 2, lane 3.3c §1): the documents whose
     /// ARRANGEMENT the write READS before it writes, so the first unreadable
     /// one is the `site.addr` the write door's WITHHELD rejection carries.
-    /// `copy` names each `specs[].source` by index; `version` its `d_src`;
+    /// `copy` names each `specs[].source` by index; `reinstate` each DISTINCT
+    /// `runs[].origin` in run order, the destination's own I-space excepted
+    /// (the shot's rule: the document's own needs no consult — address
+    /// arithmetic on the stated origin, PUB-2.15); `version` its `d_src`;
     /// `make_link` and `edit_link` the document of every RESOLVE-form slot's
     /// V-spec — slots in the wire's declared order `from`, `to`, `ty`, specs
     /// by index within a slot. An ADDRESS-FORM slot names no source: an
@@ -994,6 +1016,21 @@ impl Op {
         }
         match self {
             Op::Copy { specs, .. } => specs.iter().map(|s| &s.source).collect(),
+            // The DISTINCT origins the runs state, in run order, as the
+            // client states them — the address a `withheld` names — the
+            // destination's own I-space excepted: a stated origin projecting
+            // to `doc`'s trunk (PUB-2.15) is the writer's own, which the
+            // deferral has just found it owns.
+            Op::Reinstate { doc, runs, .. } => {
+                let own = trunk_of(doc);
+                let mut out: Vec<&Address> = Vec::new();
+                for ShotRun { origin, .. } in runs {
+                    if trunk_of(origin) != own && !out.contains(&origin) {
+                        out.push(origin);
+                    }
+                }
+                out
+            }
             Op::Version { d_src, .. } => vec![d_src],
             Op::MakeLink { from, to, ty, .. } => {
                 let mut out = Vec::new();

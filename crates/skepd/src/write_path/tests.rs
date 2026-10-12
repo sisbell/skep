@@ -49,11 +49,14 @@ fn each_write_states_which_addresses_may_hold_a_cell() {
     assert!(
         matches!(write_meta(&prose).expect("a write").minting, Minting::Insert { naming } if naming.is_empty())
     );
-    // A `copy` and a `version` share identity: each arm states no cell.
+    // A `copy`, a `reinstate` and a `version` share identity: each arm
+    // states no cell.
     let copy =
         Op::Copy { doc: doc.clone(), at: VPos::content(Nat::from(1u32)), specs: Vec::new() };
+    let reinstate =
+        Op::Reinstate { doc: doc.clone(), at: VPos::content(Nat::from(1u32)), runs: Vec::new() };
     let version = Op::Version { d_src: doc.clone(), published: None };
-    for op in [copy, version] {
+    for op in [copy, reinstate, version] {
         assert!(matches!(write_meta(&op).expect("a write").minting, Minting::None));
     }
     let publish = Op::Publish { doc, shot: Shot { base: None, draft: None, runs: Vec::new() } };
@@ -65,6 +68,36 @@ fn each_write_states_which_addresses_may_hold_a_cell() {
         write_meta(&Op::Fork { published: None }).expect("a write").minting,
         Minting::None
     ));
+}
+
+/// The write by identity's row (the replacement act's record): `op`
+/// `reinstate`, `docs` its DESTINATION — never a run's origin, which the
+/// row would otherwise disclose to a reader the origin is withheld from —
+/// no term, no cell.
+#[test]
+fn a_reinstate_row_names_its_destination_and_never_a_runs_origin() {
+    use skep_address::Nat;
+    use skep_febe::{Run, ShotRun, VPos};
+
+    let addr = |s: &str| crate::codec::wire_address(s).expect("a test address");
+    let (doc, origin) = (addr("1.0.1.0.1"), addr("1.0.1.0.2"));
+    let op = Op::Reinstate {
+        doc: doc.clone(),
+        at: VPos::content(Nat::from(1u32)),
+        runs: vec![ShotRun {
+            origin: origin.clone(),
+            run: Run::new(addr("1.0.1.0.2.0.1.1"), Nat::from(1u32)).expect("a content run"),
+        }],
+    };
+    let meta = write_meta(&op).expect("a write");
+    assert_eq!(meta.kind, OpKind::Reinstate);
+    assert!(
+        matches!(&meta.docs, AffectedDocs::Named(docs) if docs == &vec![doc.clone()]),
+        "the destination alone: {:?}",
+        meta.docs
+    );
+    assert!(matches!(meta.terms, RowTerms::Absent), "{:?}", meta.terms);
+    assert!(matches!(meta.minting, Minting::None), "{:?}", meta.minting);
 }
 
 /// Each write's arm of the table states the terms its row carries, beside

@@ -59,6 +59,12 @@ impl fmt::Debug for Op {
                 .field("at", at)
                 .field("specs", specs)
                 .finish(),
+            Op::Reinstate { doc, at, runs } => f
+                .debug_struct("Reinstate")
+                .field("doc", doc)
+                .field("at", at)
+                .field("runs", runs)
+                .finish(),
             Op::Rearrange { doc, cuts } => {
                 f.debug_struct("Rearrange").field("doc", doc).field("cuts", cuts).finish()
             }

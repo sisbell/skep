@@ -1586,6 +1586,10 @@ pub(crate) fn write_meta(op: &Op) -> Option<FrameMeta> {
         // publication seam, consequence (b)) — nor does a `version` below: the
         // door judges neither, and the index enters neither.
         Op::Copy { doc, .. } => meta(OpKind::Copy, one(doc), absent, no_cell),
+        // A `reinstate` places the client's I-runs by identity and mints no
+        // cell, as a `copy` does not; its row names the destination and
+        // never a run's origin.
+        Op::Reinstate { doc, .. } => meta(OpKind::Reinstate, one(doc), absent, no_cell),
         Op::Rearrange { doc, .. } => meta(OpKind::Rearrange, one(doc), absent, no_cell),
         Op::Version { .. } => meta(OpKind::Version, AffectedDocs::Minted, absent, no_cell),
         // The shot mints the chain's next member, known only from its ack —

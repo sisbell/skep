@@ -241,6 +241,10 @@ pub(super) fn req_pairs(op: &Op) -> (&'static str, Vec<(&'static str, Value)>) {
             op_name(OpKind::Copy),
             vec![("doc", j_addr(doc)), ("at", j_vpos(at)), ("specs", j_vspecs(specs))],
         ),
+        Op::Reinstate { doc, at, runs } => (
+            op_name(OpKind::Reinstate),
+            vec![("doc", j_addr(doc)), ("at", j_vpos(at)), ("runs", j_shot_runs(runs))],
+        ),
         Op::Rearrange { doc, cuts } => {
             (op_name(OpKind::Rearrange), vec![("doc", j_addr(doc)), ("cuts", j_vposes(cuts))])
         }
@@ -990,6 +994,7 @@ pub(crate) fn op_name(k: OpKind) -> &'static str {
         OpKind::Insert => "insert",
         OpKind::Delete => "delete",
         OpKind::Copy => "copy",
+        OpKind::Reinstate => "reinstate",
         OpKind::Rearrange => "rearrange",
         OpKind::Version => "version",
         OpKind::Publish => "publish",

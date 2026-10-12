@@ -50,6 +50,11 @@ fn a_request_is_built_spelling_one_crate() {
     .expect("well formed");
     let at = VPos { subspace: Nat::from(1u32), ordinal: Nat::from(1u32) };
     let vspec = VSpec { source: doc.clone(), span: span.clone() };
+    // A run of a document's own I-space, as a shot or the write by identity
+    // states it: M5's one foreign constructor, and the refusal it answers.
+    let run: Result<Run, RunError> =
+        Run::new(elem.clone().expect("a content element position"), Nat::from(1u32));
+    let shot_run = ShotRun { origin: doc.clone(), run: run.expect("a content run") };
     let q = FourSet {
         home: SlotSpec::Spans(enc([&doc])),
         from: SlotSpec::Any,
@@ -73,7 +78,8 @@ fn a_request_is_built_spelling_one_crate() {
             values: vec![Val::new(vec![1u8])],
             deposit: Deposit::Undeclared,
         },
-        Op::Copy { doc: doc.clone(), at, specs: vec![vspec.clone()] },                      // M5
+        Op::Copy { doc: doc.clone(), at: at.clone(), specs: vec![vspec.clone()] },          // M5
+        Op::Reinstate { doc: doc.clone(), at, runs: vec![shot_run] },                       // M5
         Op::RetrieveV { specs: vec![Spec { doc: doc.clone(), span: span.clone() }] },       // M6
         Op::Compare {
             rho1: vec![RegionSpec { doc: doc.clone(), spans: vec![span] }],
@@ -104,7 +110,7 @@ fn a_request_is_built_spelling_one_crate() {
             d_a: doc,
         },
     ];
-    assert_eq!(ops.len(), 13, "one request per upstream module, and then some");
+    assert_eq!(ops.len(), 14, "one request per upstream module, and then some");
 
     // The REQUEST itself, all three fields (signed ops): the idempotency
     // key, the op, and the attestation that rides beside `id` — built
@@ -117,7 +123,7 @@ fn a_request_is_built_spelling_one_crate() {
         .into_iter()
         .map(|op| Request { id: Some(ReqId(b"r".to_vec())), op, attest: Some(attest.clone()) })
         .collect();
-    assert_eq!(requests.len(), 13, "every op rides a request with its two companions");
+    assert_eq!(requests.len(), 14, "every op rides a request with its two companions");
 
     // The two budgets a request is held to — one M10's, one M7's — read
     // off the same crate, since a caller that checks both before sending

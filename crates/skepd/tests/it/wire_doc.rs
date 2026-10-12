@@ -65,7 +65,7 @@ fn blocks() -> Vec<(String, String, String)> {
     out
 }
 
-const OP_NAMES: [&str; 45] = [
+const OP_NAMES: [&str; 46] = [
     "create_new_document",
     "delegate",
     "register_node",
@@ -77,6 +77,7 @@ const OP_NAMES: [&str; 45] = [
     "insert",
     "delete",
     "copy",
+    "reinstate",
     "rearrange",
     "version",
     "publish",
@@ -114,7 +115,7 @@ const OP_NAMES: [&str; 45] = [
 ];
 
 /// Every request example parses, is canonical (re-marshal equals the doc
-/// value), is tagged with the marker's own op name — and all 45 ops appear.
+/// value), is tagged with the marker's own op name — and all 46 ops appear.
 #[test]
 fn doc_request_examples_are_canonical_and_complete() {
     let codec = JsonCodec;
@@ -572,7 +573,7 @@ fn doc_states_the_ten_cells_and_the_stored_slot_row() {
     let refusals = prose("\n### Credential refusals", &["\n## Operations"]);
     for fact in [
         "publish-class write of the TEN KINDS that have an entry frame",
-        "`delete`, `copy` and `rearrange` have no frame",
+        "`delete`, `copy`, `reinstate` and `rearrange` have no frame",
         "**The entry frame's rows**",
         "THE PAIR'S ROW, its two homes as an address-list row of two: `0x01 ‖ be64(2) ‖ be32(len) ‖ d_s ‖ be32(len) ‖ d_a`",
         "THE SLOT ROW, a link slot AS THE STORE HOLDS IT",

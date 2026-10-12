@@ -1449,9 +1449,9 @@ it. `tests/it/tidy.rs` checks that, that every declaration under `src/` but a
 the union of a run set's I-extents, in tumbler order, and `run_list.rs` the
 run-list, in V-order — two modules that share no private item. `ops.rs` is the
 `Vstream` handle and what its operations share; beneath it,
-`ops/insert.rs`, `ops/publish.rs`, `ops/copy.rs`, `ops/delete.rs`,
-`ops/rearrange.rs` and `ops/version.rs` each hold one operation's `impl`
-block. Its `test-hooks` feature (default off) compiles in `seat_link`, the
+`ops/insert.rs`, `ops/publish.rs`, `ops/copy.rs`, `ops/reinstate.rs`,
+`ops/delete.rs`, `ops/rearrange.rs` and `ops/version.rs` each hold one
+operation's `impl` block. Its `test-hooks` feature (default off) compiles in `seat_link`, the
 test-only twin of the link seat; `scripts/gate-full.sh` checks the library
 and its docs without it, and runs its doctests — the `compile_fail` pairs on
 `Run` and `M5Rec` that pin the seals a foreign crate meets.

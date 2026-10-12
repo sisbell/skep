@@ -35,6 +35,7 @@ mod published_target;
 mod reads;
 mod rearrange;
 mod recovery;
+mod reinstate;
 mod seat;
 mod shot;
 mod shot_refusals;

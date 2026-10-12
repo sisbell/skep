@@ -654,7 +654,7 @@ fn an_attestation_reaches_every_store_driver_a_write_acquires() {
         assert_eq!(reached, expected, "{kind:?}");
         seen += 1;
     }
-    assert_eq!(seen, 15, "every write, EDITLINK once");
+    assert_eq!(seen, 16, "every write, EDITLINK once");
 }
 
 // ── the store-backed tests of `successor` and `publication` ──

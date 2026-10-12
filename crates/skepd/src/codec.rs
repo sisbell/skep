@@ -500,6 +500,15 @@ fn parse_op(name: &str, fields: &mut Fields) -> PResult<Op> {
             at: fields.vpos("at")?,
             specs: fields.vspecs("specs")?,
         },
+        // The write by identity (wire.md §Arrangement, `reinstate`): the runs
+        // in the shot's own form, through the one run parser, so no
+        // zero-width run and no start that is not a full element position
+        // survives the trust boundary here either.
+        "reinstate" => Op::Reinstate {
+            doc: fields.addr("doc")?,
+            at: fields.vpos("at")?,
+            runs: fields.shot_runs("runs")?,
+        },
         "rearrange" => Op::Rearrange { doc: fields.addr("doc")?, cuts: fields.vposes("cuts")? },
         "version" => Op::Version { d_src: fields.addr("d_src")?, published: fields.published()? },
         "publish" => Op::Publish { doc: fields.addr("doc")?, shot: fields.shot()? },
@@ -588,11 +597,11 @@ fn parse_op(name: &str, fields: &mut Fields) -> PResult<Op> {
 /// owner's term, m2, the design record's round 5 rulings 2026-09-26; the
 /// ten cells D24 pins) — `create_new_document`, `fork`, `version`,
 /// `insert`, `publish`, `make_link`, `emit`, `nullify`, `assert_sup`,
-/// `edit_link`. The three other publish-class-capable kinds — `delete`,
-/// `copy`, `rearrange` — have no cell: the store refuses every one of them
-/// into a published document (`published_target`) and nothing of their kind
-/// commits above the claim, so the gate's thirteen inputs are the check's
-/// ten. The ONE statement of it: the codec admits a request's `attest`
+/// `edit_link`. The four other publish-class-capable kinds — `delete`,
+/// `copy`, `reinstate`, `rearrange` — have no cell: the store refuses every
+/// one of them into a published document (`published_target`) and nothing
+/// of their kind commits above the claim, so the gate's fourteen inputs are
+/// the check's ten. The ONE statement of it: the codec admits a request's `attest`
 /// member exactly on these, the check demands and verifies one exactly on
 /// these, and `auth::entry::compose` has an arm exactly for these. The
 /// acting hand ATTESTS; the check admits or refuses, and signs nothing. The
@@ -739,6 +748,12 @@ impl Fields {
 
     fn vspecs(&mut self, k: &'static str) -> PResult<Vec<VSpec>> {
         self.field(k, |v| p_list(v, p_vspec))
+    }
+
+    /// A `reinstate`'s runs: the shot's run form, as one list under the
+    /// wire's list cap.
+    fn shot_runs(&mut self, k: &'static str) -> PResult<Vec<ShotRun>> {
+        self.field(k, |v| p_list(v, p_shot_run))
     }
 
     fn slotarg(&mut self, k: &'static str) -> PResult<SlotArg> {

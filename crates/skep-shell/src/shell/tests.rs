@@ -143,6 +143,11 @@ fn the_bare_mode_claims_opens_writes_and_names_no_token() {
     let write = shell.call("op", &json!({"guest": true, "board": board, "frame": {"op": "create_new_document", "account": "1.0.1"}})).unwrap_err();
     assert_eq!(write.name(), "write_in_guest_form");
     assert_eq!(position(&shell.call("health", &json!({"board": board})).unwrap()), before, "the refused write committed nothing");
+    // The write by identity is a write of the wire (`reinstate`): the guest
+    // form refuses it without a dial, as it refuses every `WRITE_OPS` member.
+    let reinstate = shell.call("op", &json!({"guest": true, "board": board, "frame": {"op": "reinstate", "doc": draft, "at": {"subspace": "1", "ordinal": "1"}, "runs": [{"origin": draft, "i_start": format!("{draft}.0.1.1"), "width": "1"}]}})).unwrap_err();
+    assert_eq!(reinstate.name(), "write_in_guest_form");
+    assert_eq!(position(&shell.call("health", &json!({"board": board})).unwrap()), before, "the refused reinstate committed nothing");
     // The feed thread dials `/op` for its own reads, so the dial count is
     // no oracle here; the position is (the provider's suite reads the log).
     assert!(shell.log().entries().iter().filter(|e| e["kind"] == "dial" && e["path"] == "/op").count() >= dials);

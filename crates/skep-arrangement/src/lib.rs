@@ -8,7 +8,8 @@
 //! the base extent its copy took (the signed-ops design record's D25, arm
 //! (c′)) — and it is the *only* place in the system where destructive change
 //! lives (ASN-0047 P3). It provides the editing/versioning operations (INSERT
-//! [ASN-0116], DELETE [ASN-0117], COPY [ASN-0118], REARRANGE [ASN-0119/0084],
+//! [ASN-0116], DELETE [ASN-0117], COPY [ASN-0118], REINSTATE [the write by
+//! identity, the replacement act's record], REARRANGE [ASN-0119/0084],
 //! CREATENEWVERSION [ASN-0123], and the publish SHOT [PUB-2.33]), a
 //! semantics-blind link-seating step for M7 (CL-OWN/CL-UNIQ), forward V→I
 //! resolution and reverse I→V projection for readers, the R reads for
@@ -73,9 +74,10 @@
 //!   arrangement stays implicit/empty until M5 first touches it;
 //! * content/link *queries* (M6/M8) — M5 exposes the read primitives;
 //!   RETRIEVEV/SHOWDELETIONS/FINDDOCSCONTAINING are M6's compositions;
-//! * read permission — M5 knows no principal's read rights: `copy` and
-//!   `version` read any registered source and owe their source gate
-//!   (PUB-6.23) to the caller, M10's pre-dispatch consult on the wire route;
+//! * read permission — M5 knows no principal's read rights: `copy`,
+//!   `reinstate` and `version` read any registered source and owe their
+//!   source gate (PUB-6.23) to the caller, M10's pre-dispatch consult on the
+//!   wire route;
 //!   `publish` alone takes the gate's predicate as an argument — the caller's
 //!   `readable`, which the composite asks per origin document inside its
 //!   transaction (PUB-8.1) — and so does [`shot_admission`], `publish`'s
@@ -88,7 +90,7 @@
 //! Owner ruling D2b (2026-09-05): the three write-path refusals of the
 //! version-chain model run HERE, at the transact, as typed errors beside the
 //! ownership gate — the in-place advance refusal `PublishedTarget` on
-//! `insert`/`copy`/`delete`/`rearrange` (PUB-2.11), the private-member
+//! `insert`/`copy`/`reinstate`/`delete`/`rearrange` (PUB-2.11), the private-member
 //! refusal `PrivateVersionOfPublished` and the versionless sibling
 //! `PrivateSourceVersionless` on `version` (PUB-2.7, PUB-2.9) — each
 //! evaluated inside its op's own transaction, off the working state (PUB-6.36
@@ -237,7 +239,8 @@ pub use chain::{
 };
 pub use deposit::{deposit_class_types, Deposit};
 pub use error::{
-    CopyError, DeleteError, InsertError, PublishError, RearrangeError, SeatError, VersionError,
+    CopyError, DeleteError, InsertError, PublishError, RearrangeError, ReinstateError, SeatError,
+    VersionError,
 };
 pub use ops::{
     shot_admission, Vstream, MAX_COPY_RESOLVE_STEPS, MAX_PLACED_RUNS, MAX_REINSERTED_VALUES,

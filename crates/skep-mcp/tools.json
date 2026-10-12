@@ -287,6 +287,64 @@
       }
     },
     {
+      "name": "reinstate",
+      "description": "Place runs of permanent content I-addresses into doc at at, by identity — shared identity, not copied bytes: the bytes a delete un-arranged come back at their own addresses, and every link on them returns. Each run is origin, i_start, width (the form publish's runs take); every address must hold a value, and each origin must be a document you may read. A published doc refuses (published_target). Response: ack.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "doc": {
+            "type": "string",
+            "pattern": "^[0-9]+(\\.[0-9]+)*$",
+            "description": "Destination document address (a draft you own)."
+          },
+          "at": {
+            "type": "object",
+            "description": "Destination V-position: subspace 1 = content, 2 = links; ordinals 1-based.",
+            "properties": {
+              "subspace": {
+                "type": ["string", "integer"],
+                "description": "Subspace natural, decimal string canonically."
+              },
+              "ordinal": {
+                "type": ["string", "integer"],
+                "description": "1-based ordinal natural, decimal string canonically."
+              }
+            },
+            "required": ["subspace", "ordinal"],
+            "additionalProperties": false
+          },
+          "runs": {
+            "type": "array",
+            "description": "The I-runs to place, in order: each the document whose I-space it names, its first content address, and its width. Obtain a span's runs from image before removing it.",
+            "items": {
+              "type": "object",
+              "description": "One run of permanent content I-addresses.",
+              "properties": {
+                "origin": {
+                  "type": "string",
+                  "pattern": "^[0-9]+(\\.[0-9]+)*$",
+                  "description": "The document the run's addresses were minted under (or a member of its chain)."
+                },
+                "i_start": {
+                  "type": "string",
+                  "pattern": "^[0-9]+(\\.[0-9]+)*$",
+                  "description": "The run's first content I-address, a full element position (doc.0.1.ordinal)."
+                },
+                "width": {
+                  "type": ["string", "integer"],
+                  "description": "Number of positions, an unbounded natural: decimal string canonically (\"5\"); a non-negative integer is accepted."
+                }
+              },
+              "required": ["origin", "i_start", "width"],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": ["doc", "at", "runs"],
+        "additionalProperties": false
+      }
+    },
+    {
       "name": "rearrange",
       "description": "Pivot/swap doc's content about the cut positions. Response: ack.",
       "inputSchema": {

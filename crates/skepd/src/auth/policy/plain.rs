@@ -512,9 +512,13 @@ fn publish_class(world: &World, op: &Op, principal: PrincipalId) -> bool {
         // `version(d, published:true)` does. Registration and ω stand ahead
         // (PUB-6.37, PUB-6.36 slot 1), as everywhere.
         Op::Publish { doc, .. } => owned(doc),
+        // The five in-place edits (PUB-2.11): the write by identity among
+        // them — a re-placement into an owned published document lands in
+        // the published world exactly as a `copy` into it would.
         Op::Insert { doc, .. }
         | Op::Delete { doc, .. }
         | Op::Copy { doc, .. }
+        | Op::Reinstate { doc, .. }
         | Op::Rearrange { doc, .. } => homed(doc),
         Op::MakeLink { home, .. } | Op::Emit { home, .. } | Op::AssertSup { home, .. } => {
             homed(home)

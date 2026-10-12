@@ -841,6 +841,16 @@ fn the_affected_docs_convention_holds_for_every_write_kind() {
             serde_json::json!([doc_b]),
         ),
         (
+            // The write by identity: the DESTINATION, never a run's origin —
+            // here doc_a's first address, which the delete row above
+            // un-arranged, placed by identity into doc_b.
+            "reinstate",
+            format!(
+                r#"{{"op":"reinstate","doc":"{doc_b}","at":{{"subspace":"1","ordinal":"1"}},"runs":[{{"origin":"{doc_a}","i_start":"{doc_a}.0.1.1","width":"1"}}]}}"#
+            ),
+            serde_json::json!([doc_b]),
+        ),
+        (
             "rearrange",
             format!(
                 r#"{{"op":"rearrange","doc":"{doc_a}","cuts":[{{"subspace":"1","ordinal":"1"}},{{"subspace":"1","ordinal":"2"}},{{"subspace":"1","ordinal":"3"}}]}}"#

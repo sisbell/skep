@@ -6,7 +6,7 @@
 //! transaction that is M2's guarantee rather than an ordering these ops keep:
 //! `transact` returns `TxnError::Rejected(E)` straight out of the closure
 //! phase, discarding the staging, drawing no `Seq` and appending nothing.
-//! Four of the six ops do reject before staging anything; INSERT and the
+//! Five of the seven ops do reject before staging anything; INSERT and the
 //! publish shot cannot, since each stages a mint and a content write per
 //! fresh value as it goes ([`allocate_for_placement`], J0's one step) and may
 //! reject after them — on a later value, and for the shot on its run budget
@@ -16,11 +16,12 @@
 //! not at all. M10 surfaces the rejection as a typed one and acknowledges
 //! only after commit.
 //!
-//! Ownership: five ops take a [`Caller`](crate::Caller) and open with
+//! Ownership: six ops take a [`Caller`](crate::Caller) and open with
 //! [`gate_write`](crate::ownership::gate_write) — the in-txn ownership gate,
-//! registration then the ω gate — on the address the caller NAMES: the four
-//! edits and the shot (COPY: its destination only; VERSION is ungated,
-//! non-owner versioning being denial-as-fork, O10). The address named is not
+//! registration then the ω gate — on the address the caller NAMES: the five
+//! edits and the shot (COPY and REINSTATE: their destination only; VERSION
+//! is ungated, non-owner versioning being denial-as-fork, O10). The address
+//! named is not
 //! always the arrangement written. A DECLARED DEPOSIT into a published chain
 //! that has a head lands on that head
 //! ([`deposit_surface`](crate::deposit_surface)) rather than in
@@ -45,8 +46,9 @@
 //! budgets, J0's allocation step ([`allocate_for_placement`]) and the head
 //! key ([`head_lock_key`]). Each operation is a child module holding one
 //! `impl` block — `ops/insert.rs`, `ops/publish.rs`, `ops/copy.rs`,
-//! `ops/delete.rs`, `ops/rearrange.rs`, `ops/version.rs` — and sees this
-//! file's private items and none of its siblings'. `ops/publish.rs` holds as
+//! `ops/reinstate.rs`, `ops/delete.rs`, `ops/rearrange.rs`, `ops/version.rs`
+//! — and sees this file's private items and none of its siblings'.
+//! `ops/publish.rs` holds as
 //! well the shot's admission, the checks `publish` opens with, offered as a
 //! pure query ([`shot_admission`]). Each block's trait bounds name exactly
 //! the slices its op reads and the records it stages, so a minimal test world
@@ -56,8 +58,9 @@
 //! Unit tests sit with what they test: `ops/tests.rs` tests this file — the
 //! handle, J0's step, the placement and re-insert budgets against M2's own
 //! accounting — and the bound claim above on `delete`, `rearrange` and the
-//! shot's admission; `ops/copy/tests.rs` and `ops/publish/tests.rs` hold the
-//! two ops' own claims, COPY's walk budget among them, which need a world no
+//! shot's admission; `ops/copy/tests.rs`, `ops/reinstate/tests.rs` and
+//! `ops/publish/tests.rs` hold the three ops' own claims — COPY's walk budget
+//! and REINSTATE's every-address probe among them — which need a world no
 //! engine reaches.
 
 use std::fmt;
@@ -82,14 +85,17 @@ mod insert;
 mod publish;
 // REARRANGE (ASN-0119/0084): the pivot and the swap.
 mod rearrange;
+// REINSTATE (the replacement act, E2 (a)): the write by identity — client-named
+// I-runs placed at a position, allocating nothing.
+mod reinstate;
 // CREATENEWVERSION (ASN-0123): the fork.
 mod version;
 
 pub use publish::shot_admission;
 
-/// The most runs one COPY, or one publish shot, may place — and so the
-/// ceiling on what one request can make M5 hold live while it decides
-/// whether to place anything at all.
+/// The most runs one COPY, one REINSTATE, or one publish shot may place —
+/// and so the ceiling on what one request can make M5 hold live while it
+/// decides whether to place anything at all.
 ///
 /// The budget: a `Run` journals as an element `Address` and a width — about
 /// a hundred bytes as bincode writes them at the shallowest content address,
@@ -112,19 +118,21 @@ pub use publish::shot_admission;
 /// checked against the real encoding rather than restated here
 /// (`the_placement_budget_stays_inside_the_transaction_budget`).
 ///
-/// IT BINDS WHAT ONE COPY OR ONE SHOT PLACES AND HOLDS LIVE, and that is the
-/// whole of what it binds. Both accumulators are measured as each run is
-/// accumulated, and what feeds them is pulled a run at a time — COPY's LAZY
-/// resolution of each spec, the shot's walk of its base's carried tail — so
-/// the cap also stops the walk: an over-budget request is refused at the cap
-/// rather than built in full and measured afterwards. For a shot, what it
+/// IT BINDS WHAT ONE COPY, ONE REINSTATE OR ONE SHOT PLACES AND HOLDS LIVE,
+/// and that is the whole of what it binds. Each accumulator is measured as
+/// each run is accumulated, and what feeds them is pulled a run at a time —
+/// COPY's LAZY resolution of each spec, REINSTATE's walk of the client's
+/// list, the shot's walk of its base's carried tail — so the cap also stops
+/// the walk: an over-budget request is refused at the cap rather than built
+/// in full and measured afterwards. For a shot, what it
 /// places is its WHOLE placement — the client's runs and the base's carried
 /// tail together, counted in runs — and never the shot term
 /// [`placed`](crate::ShotTerms::placed), which counts the client's positions
 /// alone.
 ///
-/// THE REMEDY DIFFERS BETWEEN THE TWO. A copy needing more runs than this is
-/// split by the caller, exactly as an over-budget transaction already is. A
+/// THE REMEDY DIFFERS BETWEEN THE EDITS AND THE SHOT. A copy or a reinstate
+/// needing more runs than this is split by the caller, exactly as an
+/// over-budget transaction already is. A
 /// shot CANNOT be split: the member it produces is born whole, from the
 /// whole arrangement the client rendered plus the base's carried deposits.
 /// For a shot the refusal is therefore a ceiling on the run count of the
@@ -223,9 +231,10 @@ pub const MAX_COPY_RESOLVE_STEPS: usize = 1 << 20;
 
 /// M5's transact-driving op handle over M2 (§B): a thin borrow of the
 /// engine's kernel. The pure reads live on [`M5State`](crate::M5State)
-/// (reached through [`HasM5`](crate::HasM5)); this type owns only the six editing/
-/// versioning operations — INSERT, DELETE, COPY, REARRANGE, VERSION and the
-/// publish SHOT — that M10 (and, for `insert`, M9) dispatches.
+/// (reached through [`HasM5`](crate::HasM5)); this type owns only the seven
+/// editing/versioning operations — INSERT, DELETE, COPY, REINSTATE,
+/// REARRANGE, VERSION and the publish SHOT — that M10 (and, for `insert`,
+/// M9) dispatches.
 ///
 /// THE EDITION IS APPEND-ONLY (PUB-2.43) — the invariant the shot's carried
 /// tail rests on ([`Vstream::publish`]), kept by these operations and by no
@@ -239,7 +248,7 @@ pub const MAX_COPY_RESOLVE_STEPS: usize = 1 << 20;
 /// the document's own while it has no member — and no position of any is
 /// removed, moved, or inserted before. Its gates: `insert`'s published-target
 /// refusal, cleared at that one position alone; the same refusal on `copy`,
-/// `delete` and `rearrange`; `publish` and `version` writing only the
+/// `reinstate`, `delete` and `rearrange`; `publish` and `version` writing only the
 /// arrangement of the document or member they mint; and the `LinkSeat` fold
 /// touching the link run-list alone. An operation that writes a content
 /// arrangement joins this list or breaks the shot.
@@ -258,8 +267,9 @@ pub struct Vstream<'k, W: WorldState> {
     /// other constructor site builds — leaves the slot empty. A BORROW, so
     /// the handle stays `Copy` and the value cannot outlive the caller that
     /// owns it; how many commits it signs is the producer's to hold, as
-    /// [`Vstream::attested`] states. The handle's three other writes —
-    /// `delete`, `copy`, `rearrange` — lie outside the checked set and take
+    /// [`Vstream::attested`] states. The handle's four other writes —
+    /// `delete`, `copy`, `reinstate`, `rearrange` — lie outside the checked
+    /// set and take
     /// the plain arm whatever this field holds: the store refuses each into a
     /// published document (`PublishedTarget`), so no entry of their kind
     /// exists for a frame to cover. Link seating is no write of this handle:
@@ -392,7 +402,8 @@ where
 /// frontier, lands content in the arrangement its declared deposits land in,
 /// or reads the frontier to find the head, joins this list. COPY is not on
 /// it: its source spans are read at the address named, so it never asks the
-/// frontier where the head is.
+/// frontier where the head is; nor is REINSTATE, which reads no arrangement
+/// at all.
 fn head_lock_key(doc: &Address) -> LockKey {
     M3State::version_lock_key(&trunk_of(doc))
 }

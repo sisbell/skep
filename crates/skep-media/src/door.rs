@@ -259,10 +259,12 @@ fn value_arm(
 ///
 /// EXHAUSTIVE with no `_` arm, the treatment `deposits_credential_link`
 /// gives the route: a new `Op` fails to compile here until someone decides
-/// whether it can carry or re-insert a value naming the kind. `copy` and
-/// `version` share identity and mint no cell (`media.md` §The publication
-/// seam, consequence (b): "a `copy` of a cell shares identity and mints no
-/// baptism"), so they take no arm; every other op carries no content value.
+/// whether it can carry or re-insert a value naming the kind. `copy`,
+/// `reinstate` and `version` share identity and mint no cell (`media.md`
+/// §The publication seam, consequence (b): "a `copy` of a cell shares
+/// identity and mints no baptism" — and a re-placement by I-address is the
+/// same sharing), so they take no arm; every other op carries no content
+/// value.
 pub fn media_door<W: FebeWorld>(
     world: &W,
     op: &Op,
@@ -282,6 +284,7 @@ pub fn media_door<W: FebeWorld>(
         | Op::UniversalGrants
         | Op::Delete { .. }
         | Op::Copy { .. }
+        | Op::Reinstate { .. }
         | Op::Rearrange { .. }
         | Op::Version { .. }
         | Op::MakeLink { .. }

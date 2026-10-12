@@ -99,6 +99,10 @@ enum PlanOp {
     Insert { p: u8, d: u8, at: u16, s: u8, atom: bool },
     Delete { p: u8, d: u8, at: u16, w: u8 },
     Copy { p: u8, d: u8, at: u16, sd: u8, f: u16, w: u8 },
+    /// The write by identity: a readable document's span, imaged position
+    /// by position and re-placed by its I-runs — a copy's effect on the
+    /// shadow, the identity the wire's own.
+    Reinstate { p: u8, d: u8, at: u16, sd: u8, f: u16, w: u8 },
     Rearrange { p: u8, d: u8, a: u16, b: u16, c: u16 },
     Version { p: u8, sd: u8 },
     CreateDoc { p: u8 },
@@ -114,8 +118,8 @@ enum PlanOp {
 fn plan_strategy() -> impl Strategy<Value = Vec<PlanOp>> {
     // Grouped (prop_oneof's TupleUnion caps at 10 arms); outer weights are
     // each group's summed inner weights, so the flat distribution is:
-    // insert 6, delete 3, copy 3, rearrange 2, version 2, create 1,
-    // make_link 4, emit 2, assert_sup 2, nullify 2, edit_link 2,
+    // insert 6, delete 3, copy 3, reinstate 2, rearrange 2, version 2,
+    // create 1, make_link 4, emit 2, assert_sup 2, nullify 2, edit_link 2,
     // idem-retry 2, forbidden 2.
     let arrangement = prop_oneof![
         6 => (0..3u8, any::<u8>(), any::<u16>(), any::<u8>(), prop::bool::weighted(0.2))
@@ -124,6 +128,8 @@ fn plan_strategy() -> impl Strategy<Value = Vec<PlanOp>> {
             .prop_map(|(p, d, at, w)| PlanOp::Delete { p, d, at, w }),
         3 => (0..3u8, any::<u8>(), any::<u16>(), any::<u8>(), any::<u16>(), any::<u8>())
             .prop_map(|(p, d, at, sd, f, w)| PlanOp::Copy { p, d, at, sd, f, w }),
+        2 => (0..3u8, any::<u8>(), any::<u16>(), any::<u8>(), any::<u16>(), any::<u8>())
+            .prop_map(|(p, d, at, sd, f, w)| PlanOp::Reinstate { p, d, at, sd, f, w }),
         2 => (0..3u8, any::<u8>(), any::<u16>(), any::<u16>(), any::<u16>())
             .prop_map(|(p, d, a, b, c)| PlanOp::Rearrange { p, d, a, b, c }),
         2 => (0..3u8, any::<u8>()).prop_map(|(p, sd)| PlanOp::Version { p, sd }),
@@ -145,7 +151,7 @@ fn plan_strategy() -> impl Strategy<Value = Vec<PlanOp>> {
         2 => Just(PlanOp::IdemRetry),
         2 => (0..3u8, any::<u8>()).prop_map(|(p, kind)| PlanOp::Forbidden { p, kind }),
     ];
-    let op = prop_oneof![17 => arrangement, 12 => links, 4 => meta];
+    let op = prop_oneof![19 => arrangement, 12 => links, 4 => meta];
     prop::collection::vec(op, ops_len())
 }
 
@@ -480,6 +486,36 @@ fn fallback_insert(shadow: &mut Shadow, state: &mut RunState, pi: usize, op_inde
     shadow.docs[di].content.insert(0, ContentItem::Byte(b));
 }
 
+/// The I-run under each of content ordinals `from ..` of `doc`, as the
+/// wire's `image` answers it to `token` — one position per read, since an
+/// image is a SET of I-spans and a position repeated by transclusion would
+/// collapse in one region's answer — each rendered as a `reinstate` run
+/// stating the origin its start settles: the element address less its
+/// three-component suffix `.0.1.k`, which in this world (account-tier
+/// documents alone) is `document_of` by string arithmetic.
+fn image_runs(port: u16, token: &str, doc: &str, from: u64, width: u64) -> Vec<String> {
+    (from..from + width)
+        .map(|ordinal| {
+            let v = op(
+                port,
+                Some(token),
+                &format!(
+                    r#"{{"op":"image","d":"{doc}","region":[{{"start":"1.{ordinal}","width":"0.1"}}]}}"#
+                ),
+            );
+            let runs = expect_resp(&v, "runs")["runs"].as_array().expect("runs").clone();
+            assert_eq!(runs.len(), 1, "one position, one run: {v}");
+            let i_start = runs[0]["i_start"].as_str().expect("i_start").to_string();
+            let origin = i_start
+                .rsplitn(4, '.')
+                .last()
+                .expect("an element address has a document prefix")
+                .to_string();
+            format!(r#"{{"origin":"{origin}","i_start":"{i_start}","width":"1"}}"#)
+        })
+        .collect()
+}
+
 fn step(op_index: usize, planned: &PlanOp, shadow: &mut Shadow, state: &mut RunState) {
     match planned {
         PlanOp::Insert { p, d, at, s, atom } => {
@@ -549,6 +585,49 @@ fn step(op_index: usize, planned: &PlanOp, shadow: &mut Shadow, state: &mut RunS
             commit(shadow, state, pi, frame, op_index);
             // Resolution precedes staging (a self-copy sees the pre-edit
             // arrangement), so clone the items first.
+            let f0 = (from - 1) as usize;
+            let items: Vec<ContentItem> = shadow.docs[si].content[f0..f0 + width as usize].to_vec();
+            let at0 = (pos - 1) as usize;
+            for (k, it) in items.into_iter().enumerate() {
+                shadow.docs[di].content.insert(at0 + k, it);
+            }
+        }
+        PlanOp::Reinstate { p, d, at, sd, f, w: wd } => {
+            // THE WRITE BY IDENTITY (wire.md §Arrangement, `reinstate`): a
+            // readable document's span, imaged while its arrangement speaks
+            // for it — the page's undo entry — and placed by its I-runs into
+            // the caller's own draft. Every origin is readable to the writer
+            // (the subtree world, [`setup`]); every address is minted, being
+            // arranged somewhere; so the write is valid by construction, the
+            // duplicate edge included, and its effect on the shadow is a
+            // copy's: the same bytes, under the same identity.
+            let pi = *p as usize % 3;
+            let di = own_doc(shadow, pi, *d);
+            let readable = readable_by(shadow, pi);
+            let si = readable[*sd as usize % readable.len()];
+            let srclen = shadow.docs[si].content.len() as u64;
+            if srclen == 0 {
+                return fallback_insert(shadow, state, pi, op_index);
+            }
+            let from = 1 + (*f as u64) % srclen;
+            let maxw = (srclen - from + 1).min(6);
+            let width = 1 + (*wd as u64) % maxw;
+            let dstlen = shadow.docs[di].content.len() as u64;
+            let pos = 1 + (*at as u64) % (dstlen + 1);
+            let runs = image_runs(
+                state.port,
+                &shadow.principals[pi].token,
+                &shadow.docs[si].addr,
+                from,
+                width,
+            );
+            let id = state.next_id();
+            let frame = format!(
+                r#"{{"op":"reinstate","id":"{id}","doc":"{}","at":{{"subspace":"1","ordinal":"{pos}"}},"runs":[{}]}}"#,
+                shadow.docs[di].addr,
+                runs.join(",")
+            );
+            commit(shadow, state, pi, frame, op_index);
             let f0 = (from - 1) as usize;
             let items: Vec<ContentItem> = shadow.docs[si].content[f0..f0 + width as usize].to_vec();
             let at0 = (pos - 1) as usize;

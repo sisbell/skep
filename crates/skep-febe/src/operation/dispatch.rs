@@ -170,6 +170,20 @@ where
                     .map_err(|e| lower_txn(kind, e))?;
                 Ok(Response::Ack { at: committed_at })
             }
+            // THE WRITE BY IDENTITY (the replacement act's record): the
+            // client's I-runs placed as given. Its origins were consulted at
+            // the door above, as `copy`'s sources were (`Op::source_arguments`,
+            // the distinct origins in run order), so the store takes no
+            // predicate; the handle drops the attestation for a kind outside
+            // its three.
+            Op::Reinstate { doc, at, runs } => {
+                let committed_at = self
+                    .stores
+                    .vstream_attested(attest)
+                    .reinstate(wc.caller(), &doc, at, &runs)
+                    .map_err(|e| lower_txn(kind, e))?;
+                Ok(Response::Ack { at: committed_at })
+            }
             Op::Rearrange { doc, cuts } => {
                 let at = self
                     .stores
@@ -641,6 +655,7 @@ where
             | Op::Insert { .. }
             | Op::Delete { .. }
             | Op::Copy { .. }
+            | Op::Reinstate { .. }
             | Op::Rearrange { .. }
             | Op::Version { .. }
             | Op::Publish { .. }

@@ -52,6 +52,7 @@ mod read_surface;
 mod readme_doc;
 mod register;
 mod registry;
+mod reinstate;
 mod resolve;
 mod restart;
 mod runbook_doc;

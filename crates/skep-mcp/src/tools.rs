@@ -35,6 +35,7 @@ const DISPATCH_OPS: &[&str] = &[
     "insert",
     "delete",
     "copy",
+    "reinstate",
     "rearrange",
     "version",
     // Links (writes).
@@ -403,6 +404,6 @@ mod tests {
     fn dispatch_ops_are_distinct_and_counted() {
         let set: std::collections::BTreeSet<_> = DISPATCH_OPS.iter().collect();
         assert_eq!(set.len(), DISPATCH_OPS.len());
-        assert_eq!(DISPATCH_OPS.len(), 38);
+        assert_eq!(DISPATCH_OPS.len(), 39);
     }
 }

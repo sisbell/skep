@@ -16,6 +16,8 @@
 //!
 //! The read path's use of the same predicate is `read_door.rs`.
 
+use std::sync::{Arc, Mutex};
+
 use crate::common;
 
 use common::*;
@@ -107,6 +109,162 @@ fn a_copy_is_withheld_naming_its_first_unreadable_source() {
     // The owner reads its own document, so its copy of the same source lands.
     let user_draft = create_doc(&fx);
     ack(ex(&fx.febe, fx.user, Op::Copy { doc: user_draft, at: vp(1, 1), specs: vec![vspec(&unreadable_doc, 1, 2)] }));
+}
+
+/// THE WIDE REACH at the door (the replacement act's record, Q2 — the owner:
+/// "wide"; PUB-6.23 / PUB-6.4 as `copy` takes them): a `reinstate` whose run
+/// names an origin the caller may not read is WITHHELD naming that origin —
+/// the FIRST unreadable one in run order — while runs of READABLE other
+/// documents are ADMITTED and placed by identity into the caller's own
+/// draft; the consult is asked ONCE per DISTINCT origin, in run order, and
+/// never about the destination's own I-space (the shot's rule); and the
+/// destination's own gate stands ahead of it, as for `copy`. The predicate
+/// here RECORDS what it is asked, so the consult's shape is read off it and
+/// not inferred from the answer.
+#[test]
+fn a_reinstate_is_withheld_naming_its_first_unreadable_origin_and_admits_a_readable_one() {
+    let unreadable: Unreadable = Arc::new(Mutex::new(Vec::new()));
+    let consulted: Arc<Mutex<Vec<Address>>> = Arc::new(Mutex::new(Vec::new()));
+    let predicate = {
+        let (unreadable, consulted) = (Arc::clone(&unreadable), Arc::clone(&consulted));
+        move |principal: Option<PrincipalId>, doc: &Address| {
+            if principal != Some(USER) {
+                consulted.lock().expect("no poisoning").push(doc.clone());
+            }
+            principal == Some(USER) || !unreadable.lock().expect("no poisoning").contains(doc)
+        }
+    };
+    let fx = fixture_on(surface().with_read_predicate(predicate));
+    let unreadable_doc = create_doc(&fx);
+    let (unreadable_start, _) = insert3(&fx, &unreadable_doc);
+    let readable_a = create_doc(&fx);
+    let (a_start, _) = insert3(&fx, &readable_a);
+    let readable_b = create_doc(&fx);
+    let (b_start, _) = insert3(&fx, &readable_b);
+    unreadable.lock().expect("no poisoning").push(unreadable_doc.clone());
+    let (other, their_draft) = stranger(&fx);
+    let (their_start, _) = ack_addr(ex(
+        &fx.febe,
+        other,
+        Op::Insert {
+            doc: their_draft.clone(),
+            at: vp(1, 1),
+            values: vec![skep_content::Val::new(vec![b'x'])],
+            deposit: Deposit::Undeclared,
+        },
+    ));
+    let run = |origin: &Address, start: &Address, width: u32| ShotRun {
+        origin: origin.clone(),
+        run: Run::new(start.clone(), nat(width)).expect("a content run"),
+    };
+    let reinstate =
+        |doc: &Address, at: u32, runs: Vec<ShotRun>| Op::Reinstate { doc: doc.clone(), at: vp(1, at), runs };
+    // What the predicate was asked since the last look, on anyone's behalf
+    // but USER's.
+    let asked = || std::mem::take(&mut *consulted.lock().expect("no poisoning"));
+    asked();
+
+    // One run, its origin unreadable: withheld, the origin named.
+    assert_withheld(
+        ex(&fx.febe, other, reinstate(&their_draft, 2, vec![run(&unreadable_doc, &unreadable_start, 1)])),
+        OpKind::Reinstate,
+        &unreadable_doc,
+    );
+    assert_eq!(asked(), vec![unreadable_doc.clone()]);
+    // Three runs — readable, unreadable, readable: `site.addr` is the
+    // unreadable origin (run order, PUB-6.4), and the consult stopped there.
+    assert_withheld(
+        ex(
+            &fx.febe,
+            other,
+            reinstate(
+                &their_draft,
+                2,
+                vec![
+                    run(&readable_a, &a_start, 1),
+                    run(&unreadable_doc, &unreadable_start, 1),
+                    run(&readable_b, &b_start, 1),
+                ],
+            ),
+        ),
+        OpKind::Reinstate,
+        &unreadable_doc,
+    );
+    assert_eq!(
+        asked(),
+        vec![readable_a.clone(), unreadable_doc.clone()],
+        "in run order, the first unreadable origin ending the consult"
+    );
+    // Nothing was placed by either refusal.
+    let before = fx.febe.log_position();
+    let r = ex(&fx.febe, other, reinstate(&their_draft, 2, vec![run(&unreadable_doc, &unreadable_start, 1)]));
+    assert!(matches!(r, skep_febe::Response::Rejected(_)));
+    assert_eq!(fx.febe.log_position(), before, "a withheld reinstate commits nothing");
+    asked();
+
+    // THE WIDE REACH: runs of two READABLE other documents — one origin
+    // named twice — and a run of the stranger's own draft among them are
+    // ADMITTED and placed by identity; the consult asked once per distinct
+    // origin, in run order, and never about the destination's own.
+    ack(ex(
+        &fx.febe,
+        other,
+        reinstate(
+            &their_draft,
+            2,
+            vec![
+                run(&readable_a, &a_start, 2),
+                run(&readable_b, &b_start, 1),
+                run(&readable_a, &a_start, 1),
+                run(&their_draft, &their_start, 1),
+            ],
+        ),
+    ));
+    assert_eq!(
+        asked(),
+        vec![readable_a.clone(), readable_b.clone()],
+        "once per distinct origin, the destination's own I-space excepted"
+    );
+    // Position by position (an image is a SET of I-spans, so the repeated
+    // address would collapse in one region's answer): every position under
+    // its ORIGIN's own address, the duplicates kept.
+    let element = |doc: &Address, ordinal: u32| {
+        elem_addr(ElemPos { doc: doc.clone(), subspace: nat(1), ordinal: nat(ordinal) })
+            .unwrap_or_else(|_| panic!("valid element position"))
+    };
+    let identities: Vec<Address> = (1..=6)
+        .map(|o| {
+            let r = runs(ex(&fx.febe, other, Op::Image { d: their_draft.clone(), region: vec![vspan(1, o, 1)] }));
+            assert_eq!(r.len(), 1, "one position, one run");
+            r[0].i_start().clone()
+        })
+        .collect();
+    assert_eq!(
+        identities,
+        vec![
+            their_start.clone(),
+            a_start.clone(),
+            element(&readable_a, 2),
+            b_start.clone(),
+            a_start.clone(),
+            their_start.clone(),
+        ],
+        "x, a₁, a₂, b₁, a₁, x — placed by identity, the duplicates kept"
+    );
+    asked();
+
+    // The destination's own gate stands ahead (PUB-6.36 slot 1): the
+    // stranger's reinstate INTO the owner's document is the store's
+    // `not_owner`, and its unreadable origin is never consulted — a session
+    // that may not write here is never told whether it may read there.
+    let rej = rejected(ex(&fx.febe, other, reinstate(&readable_a, 1, vec![run(&unreadable_doc, &unreadable_start, 1)])));
+    assert_eq!(rej.op, OpKind::Reinstate);
+    assert_eq!(rej.code, RejectCode::NotOwner, "slot 1 speaks first: {rej}");
+    assert!(asked().is_empty(), "nothing consulted behind a destination the caller may not write");
+
+    // The OWNER reads its own document: the same run lands in its draft.
+    let user_draft = create_doc(&fx);
+    ack(ex(&fx.febe, fx.user, reinstate(&user_draft, 1, vec![run(&unreadable_doc, &unreadable_start, 3)])));
 }
 
 /// PUB-6.36 slot 1 ahead of slot 6 (PUB-6.38 "after the destination's

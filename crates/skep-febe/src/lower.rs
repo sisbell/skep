@@ -19,7 +19,8 @@
 //! `DocNotRegistered(Address)` established.
 
 use skep_arrangement::{
-    CopyError, DeleteError, InsertError, PublishError, RearrangeError, SeatError, VersionError,
+    CopyError, DeleteError, InsertError, PublishError, RearrangeError, ReinstateError, SeatError,
+    VersionError,
 };
 use skep_content::ContentError;
 use skep_discovery::{OrphanError, QueryError};
@@ -234,6 +235,27 @@ impl Lower for CopyError {
             CopyError::DanglingSource => (RejectCode::DanglingSource, None),
             CopyError::TooManyRuns => (RejectCode::TooManyRuns, None),
             CopyError::EmptyResult => (RejectCode::EmptyResult, None),
+        }
+    }
+}
+
+impl Lower for ReinstateError {
+    /// The write by identity's verdicts, every one a code the wire already
+    /// carries: the destination's five are COPY's, the per-run four are the
+    /// shot's (`bad_run`, `source_not_registered`, `dangling_source`,
+    /// `too_many_runs`), and `empty_result` is COPY's for an empty list.
+    fn lower(self) -> (RejectCode, Option<FaultSite>) {
+        match self {
+            ReinstateError::DocNotRegistered => (RejectCode::DocNotRegistered, None),
+            ReinstateError::NotOwner(a) => not_owner(a),
+            ReinstateError::PublishedTarget => (RejectCode::PublishedTarget, None),
+            ReinstateError::NotContentSubspace => (RejectCode::NotContentSubspace, None),
+            ReinstateError::OutOfBounds => (RejectCode::OutOfBounds, None),
+            ReinstateError::BadRun => (RejectCode::BadRun, None),
+            ReinstateError::SourceNotRegistered => (RejectCode::SourceNotRegistered, None),
+            ReinstateError::DanglingSource => (RejectCode::DanglingSource, None),
+            ReinstateError::TooManyRuns => (RejectCode::TooManyRuns, None),
+            ReinstateError::EmptyResult => (RejectCode::EmptyResult, None),
         }
     }
 }

@@ -111,6 +111,22 @@ fn copy_frame(doc: &str, at: u64, specs: &[(&str, u64, u64)]) -> String {
     )
 }
 
+/// `reinstate` into `doc` at content ordinal `at`, each run `(origin,
+/// i_start, width)` — the write by identity, whose origins the door
+/// consults as it consults `copy`'s sources.
+fn reinstate_frame(doc: &str, at: u64, runs: &[(&str, &str, u64)]) -> String {
+    let runs: Vec<String> = runs
+        .iter()
+        .map(|(origin, i_start, width)| {
+            format!(r#"{{"origin":"{origin}","i_start":"{i_start}","width":"{width}"}}"#)
+        })
+        .collect();
+    format!(
+        r#"{{"op":"reinstate","doc":"{doc}","at":{{"subspace":"1","ordinal":"{at}"}},"runs":[{}]}}"#,
+        runs.join(",")
+    )
+}
+
 fn version_frame(d_src: &str) -> String {
     format!(r#"{{"op":"version","d_src":"{d_src}"}}"#)
 }
@@ -178,6 +194,15 @@ fn assert_not_owner(v: &Value, dest: &str) {
     assert_eq!(v["site"]["addr"].as_str(), Some(dest), "the destination that failed ω: {v}");
 }
 
+/// A PERMANENT refusal of the store's own: `code`, no `detail`, no `site`.
+fn assert_permanent(v: &Value, expected: &str) {
+    let rej = expect_resp(v, "rejected");
+    assert_eq!(rej["code"].as_str(), Some(expected), "{v}");
+    assert_eq!(rej["disposition"].as_str(), Some("permanent"), "{v}");
+    assert!(rej.get("detail").is_none(), "no detail rides the code: {v}");
+    assert!(rej.get("site").is_none() || rej["site"].is_null(), "no site rides the code: {v}");
+}
+
 /// The op's own never-deposited answer for a link named by address
 /// (PUB-6.6): `code`, `reorder`, no site, no detail — nothing that says a
 /// draft-homed link exists.
@@ -237,6 +262,124 @@ fn copy_from_a_private_source_is_withheld_to_the_non_entitled_and_lands_for_the_
     expect_resp(&op(port, Some(&b.session), &copy_frame(&b.draft, 1, &[src_run])), "ack");
     // GUEST: no session — refused at slot 0, ahead of every consult.
     assert_eq!(code(&op(port, None, &copy_frame(&c.draft, 1, &[src_run]))), "unauthenticated");
+
+    sd.shutdown();
+}
+
+/// H1 cell 1 for THE WRITE BY IDENTITY (the replacement act's record, Q2 —
+/// the WIDE reach): `reinstate` of a run of a private draft's I-space ×
+/// class. The OWNER and the SUBTREE reader land; the NON-ENTITLED stranger
+/// is `withheld` naming the origin, and with two runs the SECOND — run
+/// order (PUB-6.4); the GRANT-HOLDER is withheld until granted and lands
+/// after — and lands though the OWNER has by then DELETED the span from
+/// its draft, no arrangement holding those addresses any more: the act is
+/// by identity, and what it asks is that the holder may READ the origin.
+/// The GUEST is `unauthenticated` at slot 0. And slot 1 ahead of slot 6:
+/// the stranger re-placing that run INTO the owner's document is
+/// `not_owner`, never told whether it may read there.
+#[test]
+fn reinstate_from_a_private_origin_is_withheld_to_the_non_entitled_and_lands_for_the_entitled() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let sd = spawn(dir.path());
+    let port = sd.port();
+    let signed = open_signed_session(port, CLAIMANT_PRINCIPAL, &device_key());
+    let owner = open_session(port, CLAIMANT_PRINCIPAL);
+    let src = owner_draft(port, &owner, "secret");
+    let src_i1 = format!("{src}.0.1.1");
+    let secret: (&str, &str, u64) = (src.as_str(), src_i1.as_str(), 2);
+    let sub = sub_account(port, &owner, 1911);
+    let b = stranger(port, 1912);
+    let c = stranger(port, 1913);
+
+    // OWNER, into a second draft of its own.
+    let dst = create_doc(port, &owner, CLAIMANT_ACCOUNT);
+    expect_resp(&op(port, Some(&owner), &reinstate_frame(&dst, 1, &[secret])), "ack");
+    // SUBTREE: reads the owner's draft by containment, so the run lands.
+    expect_resp(&op(port, Some(&sub.session), &reinstate_frame(&sub.draft, 1, &[secret])), "ack");
+    // NON-ENTITLED: withheld, the origin named, nothing placed.
+    assert_withheld(&op(port, Some(&c.session), &reinstate_frame(&c.draft, 1, &[secret])), &src);
+    // Two runs, the stranger's own first and the private origin second:
+    // `site.addr` is the second.
+    expect_resp(&insert_text(port, &c.session, &c.draft, 1, "own"), "ack_addr");
+    let c_i1 = format!("{}.0.1.1", c.draft);
+    assert_withheld(
+        &op(
+            port,
+            Some(&c.session),
+            &reinstate_frame(&c.draft, 4, &[(c.draft.as_str(), c_i1.as_str(), 1), secret]),
+        ),
+        &src,
+    );
+    // …and the refusal placed nothing: the stranger's draft still holds "own".
+    let v = op(port, Some(&c.session), &format!(r#"{{"op":"retrieve_doc_v_span_set","doc":"{}"}}"#, c.draft));
+    assert_eq!(expect_resp(&v, "span_set")["set"][0]["width"].as_str(), Some("0.3"), "{v}");
+    // Slot 1 first: the same run into the OWNER's document is `not_owner`.
+    assert_not_owner(&op(port, Some(&c.session), &reinstate_frame(&dst, 1, &[secret])), &dst);
+    // GRANT-HOLDER: withheld before the grant. The owner then DELETES the
+    // span from its draft, and once granted the holder's reinstate of the
+    // un-arranged addresses lands all the same — by identity.
+    assert_withheld(&op(port, Some(&b.session), &reinstate_frame(&b.draft, 1, &[secret])), &src);
+    expect_resp(&op(port, Some(&owner), &delete_frame(&src, 1, 2)), "ack");
+    deposit_grant(port, &signed, CLAIMANT_DOC1, &src, Some(&b.account));
+    expect_resp(&op(port, Some(&b.session), &reinstate_frame(&b.draft, 1, &[secret])), "ack");
+    let v = op(port, Some(&b.session), &read1_frame(&b.draft));
+    assert_eq!(
+        expect_resp(&v, "delivery")["items"],
+        json!([{"content": "s"}]),
+        "the removed byte, at its own address, in the holder's draft: {v}"
+    );
+    // GUEST: no session — refused at slot 0, ahead of every consult.
+    assert_eq!(code(&op(port, None, &reinstate_frame(&c.draft, 1, &[secret]))), "unauthenticated");
+
+    sd.shutdown();
+}
+
+/// THE WRITE BY IDENTITY's own refusals over the wire, each in its
+/// documented place and none disclosing more than the request said. A run
+/// stated under the wrong origin, or started at a link element, is
+/// `bad_run` — address arithmetic, ahead of any probe, so a never-minted
+/// address under the wrong origin says `bad_run` and not that nothing is
+/// there; an unregistered origin is `source_not_registered`, `reorder`,
+/// never `withheld` (PUB-6.37, the predicate fail-open); an address no
+/// document minted is `dangling_source` — probed at EVERY address, so a
+/// run whose start is minted and whose end is not is refused the same;
+/// an empty run list is `empty_result`; the FIRST defective run in order
+/// decides; and every refusal commits nothing, while a run whose every
+/// address holds a value lands.
+#[test]
+fn a_reinstate_run_is_bad_run_then_source_not_registered_then_dangling_source_at_every_address() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let sd = spawn(dir.path());
+    let port = sd.port();
+    let owner = open_session(port, CLAIMANT_PRINCIPAL);
+    let src = owner_draft(port, &owner, "abc");
+    let dst = create_doc(port, &owner, CLAIMANT_ACCOUNT);
+    let el = |k: u64| format!("{src}.0.1.{k}");
+    let (el1, el2, el9) = (el(1), el(2), el(9));
+    let link_el = format!("{src}.0.2.1");
+    let never = format!("{CLAIMANT_ACCOUNT}.0.99");
+    let never_el = format!("{never}.0.1.1");
+    let send = |runs: &[(&str, &str, u64)]| op(port, Some(&owner), &reinstate_frame(&dst, 1, runs));
+    let before = head_position(port);
+
+    assert_permanent(&send(&[(dst.as_str(), &el1, 1)]), "bad_run");
+    assert_permanent(&send(&[(src.as_str(), &link_el, 1)]), "bad_run");
+    assert_permanent(&send(&[(dst.as_str(), &el9, 1)]), "bad_run");
+    let v = send(&[(never.as_str(), &never_el, 1)]);
+    assert_eq!(code(&v), "source_not_registered", "never withheld: {v}");
+    assert_eq!(v["disposition"].as_str(), Some("reorder"), "{v}");
+    assert_permanent(&send(&[(src.as_str(), &el9, 1)]), "dangling_source");
+    assert_permanent(&send(&[(src.as_str(), &el2, 3)]), "dangling_source");
+    assert_permanent(&send(&[]), "empty_result");
+    // The first defective run decides: a sound run then a mis-stated one;
+    // a dangling run then a mis-stated one.
+    assert_permanent(&send(&[(src.as_str(), &el1, 1), (dst.as_str(), &el2, 1)]), "bad_run");
+    assert_permanent(&send(&[(src.as_str(), &el9, 1), (dst.as_str(), &el2, 1)]), "dangling_source");
+    assert_eq!(head_position(port), before, "every refusal commits nothing");
+    // …while width 2 from the same minted start lands: "bc".
+    expect_resp(&send(&[(src.as_str(), &el2, 2)]), "ack");
+    let v = op(port, Some(&owner), &read1_frame(&dst));
+    assert_eq!(expect_resp(&v, "delivery")["items"], json!([{"content": "b"}]), "{v}");
 
     sd.shutdown();
 }

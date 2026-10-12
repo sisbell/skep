@@ -1476,8 +1476,10 @@ binding or endpoint answers it, spelled and tabled in §Registry under
 §Operations.
 
 Registration/residence: `home_not_registered`, `doc_not_registered`,
-`source_not_registered`, `parent_not_registered`, `not_registered`,
-`original_not_resident`, `endpoint_not_resident`.
+`source_not_registered` (a copy spec's source, a version's source, a
+shot's base, draft or run origin, a reinstate's run origin),
+`parent_not_registered`, `not_registered`, `original_not_resident`,
+`endpoint_not_resident`.
 
 Namespace/authority: `not_owner`, `not_an_account`, `gate` (M3's inc
 gate, which every op that mints an address lowers — create-new-document,
@@ -1497,8 +1499,11 @@ Arrangement: `empty_content`, `content` (insert and publish: M4 refused
 the content write because a value is already stored at the address M3
 just minted — an upstream invariant no sound store breaks, so, like
 `gate`, a defence rather than a well-formed request's refusal),
-`empty_source`, `not_ordinal_vspan`, `dangling_source`, `empty_result`
-(copy: the net placement is empty once the specs are clipped),
+`empty_source`, `not_ordinal_vspan`, `dangling_source` (copy and
+reinstate: an address a placed run names holds no value — a copy probes
+each resolved run's start, a reinstate every address of every run),
+`empty_result` (copy: the net placement is empty once the specs are
+clipped; reinstate: its run list is empty),
 `not_arranged` (delete: the position's ordinal names no arranged content
 position), `out_of_bounds`, `empty_width`, `bad_cut_count`,
 `not_ascending`, `empty_content_subspace` (rearrange: the document's
@@ -1517,20 +1522,22 @@ own (§The publish shot and head-float below): `withheld` — the
 source gate, and every READ's document-argument consult
 (§The read predicate); the one code of this family whose disposition is
 reorder, carrying `site.addr` (the document) and never a `detail` —
-`bad_run`, `base_not_in_chain`, `base_superseded`,
+`bad_run` (a shot's or a reinstate's run: its start is no content
+element, or its stated origin is not the document that minted it),
+`base_not_in_chain`, `base_superseded`,
 `base_extent_too_large`; and three more of M5's — `not_link_address`
 (make-link's seat step, M5 §8: the address it is to seat is not a full
 element position in the home's link subspace — with `not_home_link` and
 `already_seated` above, a defence on the link the same transaction just
 minted, never a well-formed request's refusal), `too_many_runs` (a
-placement past M5's
+placement — a copy's, a reinstate's or a shot's — past M5's
 `MAX_PLACED_RUNS` = 65536 runs, or a copy whose specs command more than
 `MAX_COPY_RESOLVE_STEPS` = 1048576 run-list steps, each spec charged its
 source's whole run count ahead of its walk, so a spec aimed past its
 source's arranged end is refused for the work it would do while keeping
 nothing — one code for both causes, told apart by the store's message;
-permanent, a copy past either is split by its caller; the publish table
-below carries the first) and `too_many_values` (a shot whose draft-native runs
+permanent, a copy or a reinstate past it is split by its caller; the
+publish table below carries the first) and `too_many_values` (a shot whose draft-native runs
 re-insert more than M5's `MAX_REINSERTED_VALUES` = 131072 values, their
 widths summed — arithmetic on the request, asked after the source gate
 and ahead of existence; permanent, a shot cannot be split to meet it;
@@ -1620,7 +1627,7 @@ slot after registration and ownership (PUB-6.36 slot 5, PUB-6.37) and
 before the operation's own shape checks — so they answer from every
 session the daemon's gates admit, signed sessions included, and the
 daemon adds no gate of its own for them. (One qualification: the write
-door pre-evaluates `published_target` on a `copy`'s
+door pre-evaluates `published_target` on a `copy`'s or a `reinstate`'s
 destination ahead of its source consult, in the store's own bytes, so
 the model's refusal speaks ahead of `withheld` — PUB-6.36 slot 5 before
 slot 6, §The read predicate; the store's own refusal stands behind
@@ -1633,7 +1640,7 @@ never reaches these codes on a published document.
 
 | code | op | when |
 | --- | --- | --- |
-| `published_target` | `insert`, `copy`, `delete`, `rearrange` | `doc` is a PUBLISHED document (or a member of one) — the one exemption is a **declared deposit**, `insert` whose `deposit` names a type the deposit class holds, at fresh content positions past the arranged extent; a `deposit` naming any other type answers this code as an undeclared append does (§Arrangement) |
+| `published_target` | `insert`, `copy`, `reinstate`, `delete`, `rearrange` | `doc` is a PUBLISHED document (or a member of one) — the one exemption is a **declared deposit**, `insert` whose `deposit` names a type the deposit class holds, at fresh content positions past the arranged extent; a `deposit` naming any other type answers this code as an undeclared append does (§Arrangement) |
 | `private_version_of_published` | `version` | you own `d_src`, `d_src` is PUBLISHED, and an explicit `published:false` asks for a private member |
 | `private_source_versionless` | `version`, `publish` | you own `d_src` (or the shot's `doc`) and it is PRIVATE — whatever the flag; a private document has no chain to append to (on `publish` this is the flag-`true` face below) |
 
@@ -1810,8 +1817,9 @@ publish-class write of the TEN KINDS that have an entry frame —
 `make_link`, `emit`, `nullify`, `assert_sup`, `edit_link` — ABOVE the
 claim entry, from a signed session, BEFORE the transaction — beside the
 publish-class gate below, after it, and ahead of the store's own gates
-(`delete`, `copy` and `rearrange` have no frame: a published document
-admits none of them, `published_target`); and, at THE RECORD GRADE, on
+(`delete`, `copy`, `reinstate` and `rearrange` have no frame: a published
+document admits none of them, `published_target`); and, at THE RECORD
+GRADE, on
 every credential deposit above the claim, over the record's own `sig` at
 the deposit's `make_link` — §The claim ceremony and credentials):
 
@@ -1997,7 +2005,8 @@ resolves AFTER every token below.
      inputs (PUB-6.43): an **explicit** `published:true` on any mint
      (`create`/`fork`/`version`) except the exempt content-empty home
      mint; a flagless `version` of a **published** source (the inherit
-     resolving published); an `insert`/`delete`/`copy`/`rearrange`
+     resolving published); an
+     `insert`/`delete`/`copy`/`reinstate`/`rearrange`
      whose `doc` is a published document the caller owns — a version
      member reading as its document (PUB-2.15, §Arrangement); a link
      write homed in one (`edit_link` reads BOTH its deposits' homes
@@ -2377,11 +2386,12 @@ lists; an `id` is accepted and ignored, as on every read. → `key_set`.
 ### Arrangement (document editing)
 
 Ownership: `insert`, `delete`, and `rearrange` require the session
-principal to own `doc`; `copy` requires owning the **destination** `doc`
-only — its source spans may read any content the principal may READ
-(transclusion is unrestricted across the published docuverse and
-qualified for drafts: a source you may not read is `withheld`, §The
-read predicate); `publish` requires owning `doc`, and its runs'
+principal to own `doc`; `copy` and `reinstate` require owning the
+**destination** `doc` only — `copy`'s source spans and `reinstate`'s run
+origins may read any content the principal may READ (transclusion is
+unrestricted across the published docuverse and qualified for drafts: a
+source you may not read is `withheld`, §The read predicate); `publish`
+requires owning `doc`, and its runs'
 origins must be READABLE to the principal (§The publish shot and
 head-float). A non-owner gets `not_owner` (permanent) with the document
 in `site.addr`. `version` is deliberately un-owner-gated: forking a
@@ -2395,7 +2405,7 @@ source consult — a `d_src` you may not read is `withheld` (§The read
 predicate).
 
 Publication: a PUBLISHED `doc` — or a version member of one, which
-is judged as its document (PUB-2.15) — refuses the four in-place edits
+is judged as its document (PUB-2.15) — refuses the five in-place edits
 `published_target` (§The version-chain refusals), behind the ownership
 check and ahead of every shape check, from signed sessions too. A draft
 is edited in place. The one thing a published document admits
@@ -2497,6 +2507,54 @@ the specs are clipped is `empty_result`.
 <!-- wire: request copy -->
 ```json
 {"at":{"ordinal":"6","subspace":"1"},"doc":"1.0.1.0.1","op":"copy","specs":[{"source":"1.0.1.0.2","span":{"start":"1.1","width":"0.5"}}]}
+```
+
+**`reinstate`** — place runs of PERMANENT content I-addresses into `doc`
+at V-position `at` (shared identity, not copied bytes): the write by
+identity, `retrieve_i`'s twin as `copy` is `retrieve_v`'s. Each run is
+`origin`, `i_start`, `width` — the form `publish`'s runs take — and
+names content positions some document minted, whether or not any
+arrangement holds them now: a run a `delete` un-arranged is placed back
+at its own addresses, so every link whose endset covers them (§Links
+(writes): the recorded endset is the permanent I-spans) returns with
+them, and `show_origin`, `compare` and `find_docs_containing` read the
+identity they read before the removal. → `ack`. Owner-gated on `doc`,
+and a DRAFT's act: a PUBLISHED `doc`, or a member of one, refuses
+`published_target` as the other four in-place edits do (§The
+version-chain refusals), and on a claimed board a bare session's into
+an owned published document meets `signed_session_required` ahead of it
+(§Credential refusals). It has no entry frame — nothing of its kind
+lands in the published world — so an `attest` member on it is dropped
+unread, as on `copy`.
+
+The reach is WIDE: `origin` may be any document the session principal
+may READ — the source consult of §The read predicate, at the write door
+ahead of the store as `copy`'s is, per DISTINCT origin in run order, the
+first unreadable one `withheld` naming it (reorder, `site.addr` the
+origin); `doc`'s own I-space needs no consult. So a removed window onto
+another document's I-space is restored exactly, and a reader may place
+by identity what `retrieve_i` already serves it.
+
+In the store, behind the destination's own checks
+(`not_content_subspace`; `out_of_bounds`, `1 ≤ at.ordinal ≤ n_C + 1`),
+the runs are judged in the order given, the FIRST defective run
+deciding as `copy`'s first spec does: a run whose `i_start` is no
+content element, or whose stated `origin` is not the document that
+minted it, is `bad_run`; an unregistered `origin` is
+`source_not_registered`; every address a run names must hold a value —
+each is probed, not the run's start alone, a run being the client's
+I-extent and no arrangement's — `dangling_source` otherwise; a placement
+past `MAX_PLACED_RUNS` is `too_many_runs`; an empty `runs` is
+`empty_result`. The runs are placed in the order given, I-adjacent runs
+of one origin coalescing as the arrangement holds them, and a run
+already arranged elsewhere in `doc` is placed again, as `copy` places a
+duplicate. A write: refused `write_at_history` on `/op-at`. On the
+change feed its row carries `op: "reinstate"` and `docs` the
+destination.
+
+<!-- wire: request reinstate -->
+```json
+{"at":{"ordinal":"3","subspace":"1"},"doc":"1.0.1.0.2","op":"reinstate","runs":[{"i_start":"1.0.1.0.2.0.1.4","origin":"1.0.1.0.2","width":"5"}]}
 ```
 
 **`rearrange`** — pivot/swap `doc`'s content about the cut positions.
@@ -4309,8 +4367,8 @@ Each entry:
 * `at` — the committed position (the same coordinate `/op-at` accepts).
 * `op` — the snake_case op kind of the write, or `null` (below).
 * `docs` — the document(s) whose state that commit touched, or `null`:
-  the write's target doc for `insert`/`delete`/`copy`/`rearrange`; a link
-  write names its **home** (`edit_link` both its homes, successor's first;
+  the write's target doc for `insert`/`delete`/`copy`/`reinstate`/`rearrange`;
+  a link write names its **home** (`edit_link` both its homes, successor's first;
   `nullify` — PUB-6.46 — its home AND the target link's home, a
   SET with each document named once, so a same-home retraction carries
   one name); the **minted** document for

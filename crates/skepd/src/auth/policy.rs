@@ -201,6 +201,7 @@ pub(crate) fn deposits_credential_link(op: &Op) -> bool {
         | Op::Insert { .. }
         | Op::Delete { .. }
         | Op::Copy { .. }
+        | Op::Reinstate { .. }
         | Op::Rearrange { .. }
         | Op::Version { .. }
         | Op::Publish { .. }

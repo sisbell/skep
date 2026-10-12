@@ -108,9 +108,11 @@ where
     ///   INSERT and the shot's re-insert write every address they place, in
     ///   the composite that places it (`allocate_for_placement`, J0); the
     ///   shot's by-reference runs are probed at EVERY address before placement
-    ///   (they were not resolved from any arrangement), and its carried tail is
-    ///   read off the base's own arrangement, already inside the induction;
-    ///   VERSION shares an arrangement already inside it. Outside the induction
+    ///   (they were not resolved from any arrangement), and so are REINSTATE's
+    ///   runs, client-named like them (`ops/reinstate.rs`); the shot's carried
+    ///   tail is read off the base's own arrangement, already inside the
+    ///   induction; VERSION shares an arrangement already inside it. Outside
+    ///   the induction
     ///   is a record staged past the ops or decoded from a corrupt store —
     ///   [`M5Rec`]'s seals and
     ///   [`M5State::apply_m5`](crate::M5State::apply_m5)'s input class say

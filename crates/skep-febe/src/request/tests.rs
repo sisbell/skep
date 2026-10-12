@@ -1,5 +1,6 @@
 use super::*;
 use skep_address::{validate, Nat, Span, Tumbler};
+use skep_arrangement::Run;
 use skep_discovery::SlotSpec;
 
 fn tum(comps: &[u32]) -> Tumbler {
@@ -25,6 +26,14 @@ fn doc() -> Address {
 }
 fn ispan(start: &[u32], width: u32) -> ISpan {
     ISpan { start: addr(start), width: Nat::from(width) }
+}
+/// One content run of `origin`'s I-space from `start`, as a shot or a
+/// reinstate states it.
+fn run_of(origin: &Address, start: &[u32]) -> ShotRun {
+    ShotRun {
+        origin: origin.clone(),
+        run: Run::new(addr(start), Nat::from(1u32)).expect("a content run"),
+    }
 }
 
 /// Every variant, paired with its documented partition side (§1's
@@ -53,6 +62,14 @@ pub(crate) fn all_ops() -> Vec<(Op, bool)> {
         ),
         (Op::Delete { doc: doc(), p: vpos(), width: Nat::from(1u32) }, false),
         (Op::Copy { doc: doc(), at: vpos(), specs: vec![vspec()] }, false),
+        (
+            Op::Reinstate {
+                doc: doc(),
+                at: vpos(),
+                runs: vec![run_of(&addr(&[1, 0, 1, 0, 2]), &[1, 0, 1, 0, 2, 0, 1, 1])],
+            },
+            false,
+        ),
         (Op::Rearrange { doc: doc(), cuts: vec![vpos()] }, false),
         (Op::Version { d_src: doc(), published: None }, false),
         (Op::Publish { doc: doc(), shot: Shot { base: None, draft: None, runs: vec![] } }, false),
@@ -123,17 +140,18 @@ pub(crate) fn all_ops() -> Vec<(Op, bool)> {
 }
 
 /// §1: the read/write partition is exhaustive and two-sided
-/// (`is_write == !is_read`), with 30 reads and 15 writes (the publish
-/// shot joining the fourteen of the design, lane 3.2; the doc-metadata
-/// read and the edition-claim lookup joining the twenty-four reads,
-/// lane 3.4; the owner-of-address read the twenty-seventh, AUTH-6.37;
-/// the any-principal discovery read the twenty-eighth, PUB-8.47; the
-/// read by identity and the content-frontier read the twenty-ninth and
-/// thirtieth, AUTH-6.38–6.40).
+/// (`is_write == !is_read`), with 30 reads and 16 writes (the publish
+/// shot joining the fourteen of the design, lane 3.2; the write by
+/// identity, `reinstate`, the sixteenth — the replacement act's record;
+/// the doc-metadata read and the edition-claim lookup joining the
+/// twenty-four reads, lane 3.4; the owner-of-address read the
+/// twenty-seventh, AUTH-6.37; the any-principal discovery read the
+/// twenty-eighth, PUB-8.47; the read by identity and the content-frontier
+/// read the twenty-ninth and thirtieth, AUTH-6.38–6.40).
 #[test]
 fn partition_matches_the_design_grouping() {
     let ops = all_ops();
-    assert_eq!(ops.len(), 45);
+    assert_eq!(ops.len(), 46);
     let reads = ops.iter().filter(|(_, r)| *r).count();
     assert_eq!(reads, 30);
     for (op, expect_read) in &ops {
@@ -157,7 +175,7 @@ fn kind_is_injective_and_never_unparseable() {
         assert_ne!(kind, OpKind::Unparseable);
         assert!(seen.insert(kind), "{kind:?} is produced by two variants");
     }
-    assert_eq!(seen.len(), 45);
+    assert_eq!(seen.len(), 46);
 }
 
 /// [`SuccessorSpec`] is a VALUE, and the comparison macros are what a
@@ -340,11 +358,13 @@ fn only_the_read_by_identity_derives_documents_and_its_shape_is_refused_by_index
 }
 
 /// PUB-6.23 / PUB-6.24 / PUB-6.4, lane 3.3c: the source-argument list
-/// runs in DECLARATION order — `copy`'s specs by index, `version`'s
+/// runs in DECLARATION order — `copy`'s specs by index, `reinstate`'s
+/// DISTINCT run origins in run order with the destination's own I-space
+/// left out (the shot's rule, the replacement act's record), `version`'s
 /// `d_src`, and the two link writes' RESOLVE-form slots in the wire's
 /// declared order `from`, `to`, `ty` with specs by index inside a slot —
 /// while an ADDRESS-FORM slot is ungated and names nothing. Exactly the
-/// four source-reading writes answer a non-empty list; `fork`, every other
+/// five source-reading writes answer a non-empty list; `fork`, every other
 /// write and every read answer the empty one.
 #[test]
 fn source_arguments_run_in_declaration_order_and_skip_address_form_slots() {
@@ -355,6 +375,32 @@ fn source_arguments_run_in_declaration_order_and_skip_address_form_slots() {
 
     let op = Op::Copy { doc: d1.clone(), at: vpos(), specs: vec![spec(&d2), spec(&d3)] };
     assert_eq!(op.source_arguments(), vec![&d2, &d3], "copy: each spec's source, by index");
+    // `reinstate`: each origin ONCE, at its first run, in run order; a run
+    // of the destination's own I-space — stated as the document or as a
+    // member of its chain — is nobody else's to withhold and is left out.
+    let member_of_d1 = addr(&[1, 0, 1, 0, 1, 1]);
+    let op = Op::Reinstate {
+        doc: d1.clone(),
+        at: vpos(),
+        runs: vec![
+            run_of(&d3, &[1, 0, 1, 0, 3, 0, 1, 1]),
+            run_of(&d1, &[1, 0, 1, 0, 1, 0, 1, 1]),
+            run_of(&d2, &[1, 0, 1, 0, 2, 0, 1, 4]),
+            run_of(&d3, &[1, 0, 1, 0, 3, 0, 1, 7]),
+            run_of(&member_of_d1, &[1, 0, 1, 0, 1, 1, 0, 1, 1]),
+        ],
+    };
+    assert_eq!(
+        op.source_arguments(),
+        vec![&d3, &d2],
+        "reinstate: each distinct origin once, in run order, the destination's own excepted"
+    );
+    let own_only = Op::Reinstate {
+        doc: d1.clone(),
+        at: vpos(),
+        runs: vec![run_of(&d1, &[1, 0, 1, 0, 1, 0, 1, 2])],
+    };
+    assert!(own_only.source_arguments().is_empty(), "a document's own I-space needs no consult");
     let op = Op::Version { d_src: d2.clone(), published: None };
     assert_eq!(op.source_arguments(), vec![&d2]);
     let op = Op::MakeLink {
@@ -387,7 +433,11 @@ fn source_arguments_run_in_declaration_order_and_skip_address_form_slots() {
         let expects = !is_read
             && matches!(
                 op,
-                Op::Copy { .. } | Op::Version { .. } | Op::MakeLink { .. } | Op::EditLink { .. }
+                Op::Copy { .. }
+                    | Op::Reinstate { .. }
+                    | Op::Version { .. }
+                    | Op::MakeLink { .. }
+                    | Op::EditLink { .. }
             );
         assert_eq!(reads_a_source, expects, "{:?}: the source-reading-writes row", op.kind());
     }

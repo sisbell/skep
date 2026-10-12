@@ -14,7 +14,8 @@ use common::*;
 use skep_address::{elem_addr, ElemPos, SpanSet};
 use skep_discovery::{FourSet, SlotSpec};
 use skep_febe::{
-    Deposit, Disposition, Op, OpKind, RejectCode, SessionId, SlotArg, SuccessorSpec, FROM,
+    Deposit, Disposition, Op, OpKind, RejectCode, Run, SessionId, ShotRun, SlotArg,
+    SuccessorSpec, FROM,
 };
 use skep_links::{enc, View};
 use skep_namespace::{PrincipalId, BOOTSTRAP_PRINCIPAL};
@@ -261,10 +262,10 @@ fn the_version_chain_refusals_surface_as_their_own_permanent_codes() {
     let edition = create_edition(&fx);
     deposit3(&fx, &edition);
     let draft = create_doc(&fx);
-    insert3(&fx, &draft);
+    let (draft_start, _) = insert3(&fx, &draft);
     let before = fx.febe.log_position();
 
-    // PUB-2.11: the four in-place edits on the edition.
+    // PUB-2.11: the five in-place edits on the edition.
     let undeclared = Op::Insert {
         doc: edition.clone(),
         at: vp(1, 4),
@@ -279,6 +280,23 @@ fn the_version_chain_refusals_surface_as_their_own_permanent_codes() {
                 &fx.febe,
                 fx.user,
                 Op::Copy { doc: edition.clone(), at: vp(1, 4), specs: vec![vspec(&draft, 1, 1)] },
+            ),
+        ),
+        // The write by identity is an in-place edit as `copy` is: a run of
+        // the draft's own bytes, named by address, into the edition.
+        (
+            OpKind::Reinstate,
+            ex(
+                &fx.febe,
+                fx.user,
+                Op::Reinstate {
+                    doc: edition.clone(),
+                    at: vp(1, 4),
+                    runs: vec![ShotRun {
+                        origin: draft.clone(),
+                        run: Run::new(draft_start.clone(), nat(1)).expect("a content run"),
+                    }],
+                },
             ),
         ),
         (
@@ -305,6 +323,7 @@ fn the_version_chain_refusals_surface_as_their_own_permanent_codes() {
         ),
     ];
     let expected = [
+        RejectCode::PublishedTarget,
         RejectCode::PublishedTarget,
         RejectCode::PublishedTarget,
         RejectCode::PublishedTarget,

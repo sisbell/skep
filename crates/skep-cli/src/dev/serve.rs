@@ -7,7 +7,8 @@
 //! session mode (`--session bare|signed`, required — both arms were ruled
 //! selectable, so a run names one); the dev key store (`--dir`, required
 //! under `signed`, a throwaway directory under the system temp dir where
-//! none is named under `bare` — `~/.skep` is never consulted here); the
+//! none is named under `bare`, removed when the provider stops — `~/.skep`
+//! is never consulted here); the
 //! principal (`--principal`, 1 where omitted); the dev arm's script
 //! (`--script`); and the board — `--board`, a daemon already running (the
 //! local record's recipe), or `--own` with `--data-dir` and `--port`, the
@@ -97,15 +98,17 @@ pub fn serve(c: &DevLine) -> Result<(), Stop> {
         }
         None => None,
     };
-    let store_dir = match c.store_dir_given()? {
-        Some(dir) => dir,
+    // The store, and whether THIS run made it — the throwaway, removed at the
+    // clean stop; a `--dir` the person named is theirs, and never removed.
+    let (store_dir, throwaway) = match c.store_dir_given()? {
+        Some(dir) => (dir, false),
         None => {
             if arm == SessionArm::Signed {
                 return Err(Usage("--dir (or SKEP_KEYSTORE) is required under --session signed: the store that holds the dev key".into()).into());
             }
             let dir = std::env::temp_dir().join(format!("skep-dev-serve-{}", hex(&fresh_bytes(4))));
             std::fs::create_dir_all(&dir).map_err(|e| Halt::face("the throwaway store could not be made", e.to_string(), "pass --dir"))?;
-            dir
+            (dir, true)
         }
     };
     let own = c.own();
@@ -187,6 +190,14 @@ pub fn serve(c: &DevLine) -> Result<(), Stop> {
     }
     if let Some(node) = own_node {
         node.shutdown();
+    }
+    // THE THROWAWAY STORE, removed once nothing writes it: only the one this
+    // run made.
+    if throwaway {
+        match std::fs::remove_dir_all(&store_dir) {
+            Ok(()) => talk(format!("the throwaway store {} is removed", store_dir.display())),
+            Err(e) => talk(format!("the throwaway store {} could not be removed: {e}", store_dir.display())),
+        }
     }
     Ok(())
 }

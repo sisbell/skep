@@ -379,7 +379,7 @@ apart.
 3. **Read the open's report** on stderr. After the prefix and the
    time, each line opens with a class word: `open:` for the report,
    `warning (at open):` or `warning (at start):`, `failure:`,
-   `landing:`. A few of the open's lines carry none. The binary's
+   `landing:`. The binary's
    own refusals, written as it exits, carry neither a time nor a
    class word; they are quoted whole, from `skepd:`. In the order
    the daemon writes them:

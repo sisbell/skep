@@ -105,6 +105,35 @@ fn runbook_lists_the_tail_cut_and_classes_the_opens_lines() {
     classed("cell index rebuilt at open:", Class::Landing);
 }
 
+/// §3 START, STEP 3's LEAD — EVERY LINE OF THE OPEN CARRIES A CLASS WORD: the
+/// lead names each class the open's lines are written under, read off the
+/// door's own type as the list's pin reads them, and no longer says that a
+/// few of the open's lines carry none, which stopped being true once the
+/// last of them took its class.
+#[test]
+fn runbook_says_every_line_of_the_open_carries_a_class_word() {
+    use skep_util::notice::Moment;
+
+    let lead = collapsed(&passage(
+        "\n## 3. Start",
+        "3. **Read the open's report**",
+        &["the daemon writes them:"],
+    ));
+    for class in [
+        Class::Open,
+        Class::Warning(Moment::AtOpen),
+        Class::Warning(Moment::AtStart),
+        Class::Failure,
+        Class::Landing,
+    ] {
+        assert!(lead.contains(&format!("`{class}:`")), "step 3's lead names `{class}:`: {lead}");
+    }
+    assert!(
+        !lead.contains("carry none"),
+        "step 3's lead no longer says some of the open's lines carry no class word: {lead}"
+    );
+}
+
 /// §3 START's BUILD NOTE — THE `client` FEATURE's BULLET says what the page
 /// at `GET /` is: the guest reader (`docs/wire.md` §The other endpoints),
 /// read-only — and no longer a page that makes keys and opens signed

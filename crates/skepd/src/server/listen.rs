@@ -127,6 +127,9 @@ pub struct Skepd {
     /// ([`checkpoint_on_due`]); the stop wakes it at once, and the shutdown
     /// joins it — a run in flight is let finish.
     checkpointer: Option<JoinHandle<()>>,
+    /// The address the listener bound, which the stop's wake connect dials
+    /// ([`wake_addr`]).
+    addr: Ipv4Addr,
     port: u16,
 }
 
@@ -352,9 +355,10 @@ pub fn serve_bound(daemon: Daemon, listener: Listener, workers: usize) -> io::Re
     assert!(workers >= 1, "serve requires at least one worker thread (workers = 0)");
     let daemon = Arc::new(daemon);
     // The address is the serving line's, said by the binary off the
-    // listener before this call; the auth surface derives its sets from the
-    // PORT alone, and the bind enters no set.
-    let Listener { listener, port, .. } = listener;
+    // listener before this call, and the stop's wake connect's; the auth
+    // surface derives its sets from the PORT alone, and the bind enters no
+    // set.
+    let Listener { listener, addr, port } = listener;
     let listener = Arc::new(listener);
     // The auth surface derives its origin sets from the BOUND port, and the
     // startup warnings are logged here — the one thing the glue does with
@@ -505,6 +509,7 @@ pub fn serve_bound(daemon: Daemon, listener: Listener, workers: usize) -> io::Re
         pruner,
         cadence,
         checkpointer,
+        addr,
         port,
     };
     match refused {
@@ -588,12 +593,13 @@ impl Skepd {
         if self.stop.swap(true, Ordering::AcqRel) {
             return;
         }
-        // One wake connect per worker: a worker blocked in `accept` returns
-        // and the flag breaks its loop. A worker mid-request exits at its
-        // next loop check instead, leaving its wake connect unclaimed in
-        // the backlog — harmless; the listener drops with the struct.
+        // One wake connect per worker, at the address the listener bound: a
+        // worker blocked in `accept` returns and the flag breaks its loop. A
+        // worker mid-request exits at its next loop check instead, leaving
+        // its wake connect unclaimed in the backlog — harmless; the listener
+        // drops with the struct.
         for _ in 0..self.workers.len() {
-            let _ = TcpStream::connect(("127.0.0.1", self.port));
+            let _ = TcpStream::connect((wake_addr(self.addr), self.port));
         }
         for h in self.workers.drain(..) {
             let _ = h.join();
@@ -613,6 +619,20 @@ impl Skepd {
         if let Some(h) = self.checkpointer.take() {
             let _ = h.join();
         }
+    }
+}
+
+/// Where the stop's wake connect dials a listener bound to `bound`: that
+/// address itself — a listener bound to one specific address answers there
+/// alone, so loopback would miss it — or loopback where the bind was
+/// UNSPECIFIED (`0.0.0.0`, the hosted image's), which names every interface
+/// rather than one to dial, and a listener on every interface answers on
+/// loopback.
+pub(super) fn wake_addr(bound: Ipv4Addr) -> Ipv4Addr {
+    if bound.is_unspecified() {
+        Ipv4Addr::LOCALHOST
+    } else {
+        bound
     }
 }
 

@@ -212,3 +212,61 @@ fn the_hosted_arm_closes_its_bare_sessions_where_they_outlive_the_flip() {
         assert!(close_at.iter().all(|i| *i > claim_link), "closed before the claim stands: {lines:?}");
     }
 }
+
+/// THE CONFIGURED SET, EXACTLY (§4.5 H0): `origins` minus the three loopback
+/// defaults at the port the board answers at, and nothing else — so a
+/// loopback origin the operator configured at ANOTHER port is configured,
+/// and the claim says no warning of an empty signed set.
+#[test]
+fn the_hosted_arm_counts_a_loopback_origin_at_another_port_as_configured() {
+    use skepd::{serve, AuthOptions, Daemon, DEFAULT_WORKERS};
+
+    let dir = tempfile::tempdir().unwrap();
+    let mut opts = AuthOptions::default();
+    opts.local_trust = false;
+    opts.configured = vec![skepd::Origin::parse("http://127.0.0.1:9000").unwrap()];
+    let sd = serve(Daemon::open_with(&dir.path().join("board"), opts).unwrap(), 0, DEFAULT_WORKERS).unwrap();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+    while !sd.daemon().index_is_ready() {
+        assert!(std::time::Instant::now() < deadline, "the cell index's walk did not complete within 60 s");
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    let board = board(sd.port());
+    let mut origins: Vec<String> = board.health().unwrap().origins().into_iter().map(str::to_string).collect();
+    origins.sort();
+    let p = sd.port();
+    let mut expected = vec![format!("http://127.0.0.1:{p}"), format!("http://[::1]:{p}"), format!("http://localhost:{p}"), "http://127.0.0.1:9000".to_string()];
+    expected.sort();
+    assert_eq!(origins, expected, "the premise: the three defaults and the one configured");
+    let lone = signer_from_seed(&[19; 32]);
+    let payload = encode_enroll(&[Enrollment::new(HybridSigner::public_key(&lone).clone(), false, Some("lone".into())).unwrap()]);
+    let HostedOutcome::Claimed(reply) = hosted(&board, payload.as_bytes(), 1).unwrap() else { panic!("the hosted claim") };
+    assert!(!reply.log.iter().any(|l| l.contains("signed set is EMPTY")), "a loopback origin at another port is configured: {:?}", reply.log);
+}
+
+/// THE WARNING's WORDS (§4.5 H0): where `origins` holds the three loopback
+/// defaults alone, the claim warns — and says what its check cannot see, a
+/// default configured on purpose being indistinguishable from the daemon's
+/// own, and where the configured set is read exactly. The fixture is that
+/// case: it configures the daemon's own loopback origin, so the board is
+/// never "configured with no origin".
+#[test]
+fn the_hosted_arm_warns_over_the_defaults_alone_and_names_what_it_cannot_see() {
+    let dir = tempfile::tempdir().unwrap();
+    let sd = spawn(&dir.path().join("board"), false);
+    let board = board(sd.port());
+    let mut origins: Vec<String> = board.health().unwrap().origins().into_iter().map(str::to_string).collect();
+    origins.sort();
+    let p = sd.port();
+    let mut expected = vec![format!("http://127.0.0.1:{p}"), format!("http://[::1]:{p}"), format!("http://localhost:{p}")];
+    expected.sort();
+    assert_eq!(origins, expected, "the premise: the three defaults alone");
+    let lone = signer_from_seed(&[23; 32]);
+    let payload = encode_enroll(&[Enrollment::new(HybridSigner::public_key(&lone).clone(), false, Some("lone".into())).unwrap()]);
+    let HostedOutcome::Claimed(reply) = hosted(&board, payload.as_bytes(), 1).unwrap() else { panic!("the hosted claim") };
+    let warning = reply.log.iter().find(|l| l.contains("signed set is EMPTY")).unwrap_or_else(|| panic!("the three defaults alone warn: {:?}", reply.log));
+    assert!(warning.starts_with("warning: this board answers no origin beyond its three loopback defaults"), "{warning}");
+    assert!(warning.contains("this check cannot tell a default configured on purpose from the daemon's own"), "the check's blind spot: {warning}");
+    assert!(warning.contains("the daemon's `auth:` line at start names its configured origins exactly"), "where the set is read exactly: {warning}");
+    assert!(!warning.contains("configured with no origin"), "the board here is configured, with its own loopback origin: {warning}");
+}

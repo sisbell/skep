@@ -1,7 +1,7 @@
 //! The served client (wire v6): `GET /` answers the embedded board —
 //! `text/html`, the same CORS posture as every other response — in builds
-//! with the `client` feature (DEFAULT-OFF since 2026-08-22 — the acting
-//! client must be opted into, so a hosted image that opts out of nothing
+//! with the `client` feature (DEFAULT-OFF since 2026-08-22 — the read-only
+//! guest reader is opt-in, so a hosted image that opts out of nothing
 //! is still correct; see the feature's note in Cargo.toml); without it
 //! the route does not exist and `/` is the ordinary 404. Both arms are
 //! asserted: the default build runs the 404 arm, and `scripts/gate-full.sh`

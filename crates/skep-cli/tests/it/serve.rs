@@ -905,6 +905,52 @@ fn f9_the_crate_and_the_provider_answer_one_sequence_alike() {
     sd.shutdown();
 }
 
+/// THE THROWAWAY STORE: a bare run that names no `--dir` makes its store
+/// under the system temp dir and removes it at the clean stop — the key made
+/// in it and the index saved there with it — and says so; a run that names
+/// its `--dir` keeps that store, and the key made in it.
+#[test]
+fn the_throwaway_store_is_removed_at_the_clean_stop_and_a_named_one_kept() {
+    let dir = tempfile::tempdir().unwrap();
+    let sd = spawn(&dir.path().join("board"), true);
+    let board = origin(sd.port());
+    // The provider's talk once it holds `needle`, within the deadline: the
+    // stderr reader may trail the exit.
+    let said = |talk: &Arc<Mutex<String>>, needle: &str| -> String {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            let text = talk.lock().unwrap().clone();
+            if text.contains(needle) {
+                return text;
+            }
+            assert!(Instant::now() < deadline, "the provider never said {needle:?}:\n{text}");
+            thread::sleep(Duration::from_millis(20));
+        }
+    };
+    // No `--dir`: the store is the throwaway the bare line names.
+    let provider = Provider::start(&["--board", &board, "--session", "bare", "--principal", "1"]);
+    let talk = Arc::clone(&provider.talk);
+    let store = said(&talk, "; the store is ").lines().find_map(|l| l.split_once("; the store is ")).map(|(_, path)| PathBuf::from(path)).unwrap();
+    let name = store.file_name().and_then(|n| n.to_str()).unwrap_or_default().to_string();
+    assert!(store.starts_with(std::env::temp_dir()) && name.starts_with("skep-dev-serve-"), "a throwaway under the system temp dir: {}", store.display());
+    provider.result("keygen", json!({"label": "phone"}));
+    assert!(store.is_dir(), "the throwaway stands while the provider serves");
+    assert_eq!(provider.stop(), 0, "a clean stop");
+    let gone = !store.exists();
+    // A red run leaves nothing behind either.
+    let _ = std::fs::remove_dir_all(&store);
+    assert!(gone, "the throwaway store is removed at the clean stop: {}", store.display());
+    said(&talk, &format!("the throwaway store {} is removed", store.display()));
+    // `--dir`: the person's store, kept with the key made in it.
+    let named = dir.path().join("named-store");
+    let provider = Provider::start(&["--board", &board, "--session", "bare", "--principal", "1", "--dir", s(&named)]);
+    let fingerprint = provider.result("keygen", json!({"label": "phone"}))["fingerprint"].as_str().unwrap().to_string();
+    assert_eq!(provider.stop(), 0, "a clean stop");
+    assert!(named.is_dir(), "a store the person named is never removed");
+    assert!(FileStore::open(&named).list().unwrap().iter().any(|k| k.fingerprint.to_hex() == fingerprint), "the key made in it stays");
+    sd.shutdown();
+}
+
 /// The usage refusals: an unknown flag, a missing page origin, a missing
 /// session mode, `--own` beside `--board`, a bad script — each exit 2
 /// before any socket; and `--help` lists the verb.

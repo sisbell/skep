@@ -1,2 +1,6 @@
 .DS_Store
 /target
+# The throwaway board a developer runs the daemon over (`--data-dir ./board`).
+/board/
+# The throwaway key store a developer makes (`skep keygen --dir ./store`).
+/store/

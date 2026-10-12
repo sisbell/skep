@@ -50,10 +50,16 @@ pub fn hosted(board: &Board, payload: &[u8], principal: u64) -> Result<HostedOut
     if local_trust {
         log.push("warning: this daemon runs with local trust ON, so the flip will be into CLAIMED-PERMISSIVE: any party reaching its loopback — every process in the container's namespace, this sidecar included — reads every draft this customer writes, writes drafts as them, and mints permanent dead accounts under their prefix, with `key: \"bare\"` testimony and no key anywhere in it (AUTH-4.52; AUTH-4.57 pin (i) is the image's obligation)".into());
     }
-    let loopback: Vec<&str> = health.origins().into_iter().filter(|o| crate::origin::Origin::parse(o).is_some_and(|x| x.names_loopback_host() && !x.is_https())).collect();
-    let configured: Vec<&str> = health.origins().into_iter().filter(|o| !loopback.contains(o)).collect();
+    // The configured set (§4.5 H0): `origins` minus the THREE loopback
+    // defaults EXACTLY — plain `http` over the daemon's three loopback names
+    // at the port the board answers at (AUTH-4.1) — so a loopback origin at
+    // another port is configured, and a default configured on purpose reads
+    // as the daemon's own, which the warning says.
+    let port = board.dialed().port();
+    let is_default = |o: &&str| crate::origin::Origin::parse(o).is_some_and(|x| !x.is_https() && x.port() == port && ["127.0.0.1", "[::1]", "localhost"].contains(&x.host()));
+    let configured: Vec<&str> = health.origins().into_iter().filter(|o| !is_default(o)).collect();
     if configured.is_empty() {
-        log.push("warning: this board is configured with no origin — once claimed its signed set is EMPTY and every signed session will be refused until the daemon is relaunched with `--origin` (wire.md §The claim ceremony and credentials)".into());
+        log.push("warning: this board answers no origin beyond its three loopback defaults — if none of those was configured on purpose, once claimed its signed set is EMPTY and every signed session will be refused until the daemon is relaunched with `--origin`; this check cannot tell a default configured on purpose from the daemon's own, and the daemon's `auth:` line at start names its configured origins exactly (wire.md §The claim ceremony and credentials)".into());
     }
     // H1
     match board.next_account_prefix("1")?.as_deref() {

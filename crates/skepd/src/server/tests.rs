@@ -297,6 +297,30 @@ fn serve_bound_serves_over_the_listener_the_bind_answered_and_a_connect_during_t
     server.shutdown();
 }
 
+/// THE STOP's WAKE CONNECT dials the address the listener bound — a listener
+/// bound to one specific address answers there alone — and loopback where
+/// the bind was unspecified (`0.0.0.0`, the hosted image's), which names no
+/// one address to dial. The rule alone, pinned here; `stop_and_join` dials
+/// through it.
+#[test]
+fn the_stops_wake_connect_dials_the_bound_address_and_loopback_for_an_unspecified_one() {
+    use std::net::Ipv4Addr;
+
+    use super::listen::wake_addr;
+
+    assert_eq!(
+        wake_addr(Ipv4Addr::UNSPECIFIED),
+        Ipv4Addr::LOCALHOST,
+        "0.0.0.0 is woken at loopback"
+    );
+    assert_eq!(
+        wake_addr(Ipv4Addr::new(10, 0, 0, 5)),
+        Ipv4Addr::new(10, 0, 0, 5),
+        "a specific address is woken at itself, where loopback would miss it"
+    );
+    assert_eq!(wake_addr(Ipv4Addr::LOCALHOST), Ipv4Addr::LOCALHOST, "the loopback door at itself");
+}
+
 /// THE OPEN's TWO LINES' WORDS (`operations.md` §1.1 m7; §3.1 step 3),
 /// pinned at fixed figures: the directory as the operator named it; the
 /// base as the two warnings name it — `genesis` at `Seq(0)`, else the

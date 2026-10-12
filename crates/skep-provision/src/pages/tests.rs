@@ -1,0 +1,308 @@
+//! THE PAGES and THE ROUTES over a desk the suite scripts: the strings
+//! table's rows each naming an id, its D-rows the deployment notes' words;
+//! every route's status and page — the sign-up page and its thanks, the
+//! claim form with the link's code, each refusal shown on the form again,
+//! D-7 with the status address and its refresh, the live reply, D-8, 404 —
+//! a bad body 400, a body past the cap 413; plain HTML with no script and
+//! nothing fetched from elsewhere; the text escaped.
+
+use std::io::{Read, Write};
+use std::net::{Shutdown, TcpListener, TcpStream};
+use std::sync::Mutex;
+
+use super::*;
+
+/// The notes' D-table (`_designs/deployment-notes.md` §4 step 1 and §12),
+/// as LITERALS: each row's words with `skep.host` and ⟨the owner's
+/// address⟩ as the notes write them.
+const NOTES: [(&str, &str); 11] = [
+    ("D-1", "A board of your own at a name under skep.host. Your keys stay on your device: this page makes none."),
+    ("D-2", "Your board's name"),
+    ("D-2", "one label: letters, digits and hyphens; it becomes ⟨name⟩.skep.host"),
+    ("D-3", "Your record"),
+    ("D-3", "On your own device run `skep keygen --anchors --anchor-out <a> --anchor-out <b>` (two papers, kept apart) or `skep keygen --payload`, and paste the one line it printed. Paste only what it printed: it holds no private key."),
+    ("D-4", "That name is taken, or is not one label of letters, digits and hyphens. Choose another."),
+    ("D-5", "This is not a record skep keygen printed. Paste the whole line, exactly as printed."),
+    ("D-6", "This record names a preview key. A hosted board enrolls the production kind alone: make the record again with a client that generates it."),
+    ("D-7", "Your board is being made. Keep this page open: it shows your board when it is live."),
+    ("D-8", "Your board could not be made. Nothing stands under your name; try again later, or write to ⟨the owner's address⟩."),
+    ("D-9", "Your invite code"),
+];
+
+/// Every row of the table.
+const TABLE: [Words; 33] = [
+    SIGNUP_LEAD,
+    SIGNUP_KEPT,
+    ADDRESS_LABEL,
+    SIGNUP_BUTTON,
+    SIGNUP_REFUSED,
+    SIGNUP_FAILED,
+    THANKS,
+    LEAD,
+    NAME_LABEL,
+    NAME_HELP,
+    RECORD_LABEL,
+    RECORD_HELP,
+    INVITE_LABEL,
+    CLAIM_BUTTON,
+    NAME_REFUSED,
+    RECORD_REFUSED,
+    PREVIEW_REFUSED,
+    INVITE_REFUSED,
+    BEING_MADE,
+    STATUS_ADDRESS,
+    FAILED,
+    LIVE,
+    OPERATOR,
+    ANCHORLESS,
+    PUBLIC_VENUE,
+    FACTS,
+    FIRST_ACT,
+    SECOND_ACT,
+    REPLY_STATUS,
+    MAIL_SUBJECT,
+    NOT_FOUND,
+    BAD_FORM,
+    TOO_LARGE,
+];
+
+/// A desk that answers what the test set, and keeps what it was asked.
+#[derive(Default)]
+struct Scripted {
+    claim: Mutex<Option<Result<String, Refusal>>>,
+    sign_up: Mutex<Option<Result<(), SignUpRefusal>>>,
+    status: Mutex<Option<Shown>>,
+    asked: Mutex<Vec<String>>,
+}
+
+impl Desk for Scripted {
+    fn sign_up(&self, address: &[u8]) -> Result<(), SignUpRefusal> {
+        self.asked.lock().unwrap().push(format!("sign_up {}", String::from_utf8_lossy(address)));
+        self.sign_up.lock().unwrap().unwrap_or(Ok(()))
+    }
+
+    fn claim(&self, post: &Post<'_>) -> Result<String, Refusal> {
+        self.asked.lock().unwrap().push(format!("claim {} {} {}", String::from_utf8_lossy(post.name), post.record.len(), String::from_utf8_lossy(post.invite)));
+        self.claim.lock().unwrap().clone().unwrap_or(Ok("t0k3n".into()))
+    }
+
+    fn status(&self, token: &str) -> Option<Shown> {
+        self.asked.lock().unwrap().push(format!("status {token}"));
+        self.status.lock().unwrap().clone()
+    }
+}
+
+fn site() -> Site {
+    Site { suffix: "skep.host".into(), reply_to: "owner@skep.host".into() }
+}
+
+/// One request, as the subset reads it.
+fn request(method: &str, target: &str, body: &[u8]) -> Request {
+    let (path, query) = match target.split_once('?') {
+        Some((p, q)) => (p.to_owned(), Some(q.to_owned())),
+        None => (target.to_owned(), None),
+    };
+    Request { method: method.into(), path, query, headers: Vec::new(), body: body.to_vec() }
+}
+
+/// THE STRINGS TABLE: every row names an id of the four kinds, every slot it
+/// holds is one a page fills, and its D-rows are the notes' words — the
+/// notes' `skep.host` the `{suffix}` slot, ⟨the owner's address⟩ the
+/// `{reply_to}` one.
+#[test]
+fn the_strings_table_names_each_rows_id_and_carries_the_notes_words() {
+    for row in TABLE {
+        assert!(["DRAFT", "RULED", "RULED-SUBSTANCE / DRAFT-WORDING"].contains(&row.id) || row.id.starts_with("D-"), "{row:?}");
+        let mut rest = row.text;
+        while let Some(open) = rest.find('{') {
+            let close = rest[open..].find('}').expect("a closed slot") + open;
+            assert!(["suffix", "reply_to", "status", "origin", "principal", "account"].contains(&&rest[open + 1..close]), "{row:?}");
+            rest = &rest[close + 1..];
+        }
+    }
+    let mut d_rows: Vec<(&str, String)> =
+        TABLE.iter().filter(|r| r.id.starts_with("D-")).map(|r| (r.id, r.text.replace("{suffix}", "skep.host").replace("{reply_to}", "⟨the owner's address⟩"))).collect();
+    let mut notes: Vec<(&str, String)> = NOTES.iter().map(|(id, text)| (*id, (*text).to_owned())).collect();
+    d_rows.sort();
+    notes.sort();
+    assert_eq!(d_rows, notes);
+}
+
+/// `GET /`: the sign-up page — the lead, the address field, what is kept,
+/// the button — at 200, plain HTML with no script and nothing fetched.
+#[test]
+fn the_sign_up_page() {
+    let answer = answer(&request("GET", "/", b""), &site(), &Scripted::default());
+    assert_eq!(answer.status, 200);
+    for words in [fill(SIGNUP_LEAD, &[("suffix", "skep.host")]), fill(ADDRESS_LABEL, &[]), fill(SIGNUP_KEPT, &[]), fill(SIGNUP_BUTTON, &[])] {
+        assert!(answer.body.contains(&text(&words)), "{words}");
+    }
+    assert!(answer.body.contains("action=\"/signup\""));
+    for absent in ["<script", "src=", "href=", "<link", "http://", "https://"] {
+        assert!(!answer.body.contains(absent), "{absent}");
+    }
+}
+
+/// `POST /signup`: the desk keeps the address and the thanks page answers;
+/// a refused address shows its DRAFT string on the page again, the field
+/// as sent; a failed write its own.
+#[test]
+fn the_sign_up_post() {
+    let desk = Scripted::default();
+    let thanks = answer(&request("POST", "/signup", b"address=person%40example.com"), &site(), &desk);
+    assert_eq!(thanks.status, 200);
+    assert!(thanks.body.contains(&text(THANKS.text)));
+    assert_eq!(desk.asked.lock().unwrap().as_slice(), ["sign_up person@example.com"]);
+    *desk.sign_up.lock().unwrap() = Some(Err(SignUpRefusal::NotAnAddress));
+    let refused = answer(&request("POST", "/signup", b"address=not+one"), &site(), &desk);
+    assert_eq!(refused.status, 200);
+    assert!(refused.body.contains(&format!("<p class=\"refused\">{}</p>", text(SIGNUP_REFUSED.text))));
+    assert!(refused.body.contains("value=\"not one\""));
+    *desk.sign_up.lock().unwrap() = Some(Err(SignUpRefusal::Failed));
+    assert!(answer(&request("POST", "/signup", b"address=a%40b"), &site(), &desk).body.contains(&text(SIGNUP_FAILED.text)));
+}
+
+/// `GET /claim?invite=<code>`: the claim form — D-1, D-2's label and help,
+/// D-3's label and help, D-9 — the invite field pre-filled with the link's
+/// code, at 200.
+#[test]
+fn the_claim_form_carries_the_ruled_strings_and_the_links_code() {
+    let answer = answer_of("GET", "/claim?invite=1.1.0.1.0.3", b"");
+    assert_eq!(answer.status, 200);
+    for words in [LEAD, NAME_LABEL, NAME_HELP, RECORD_LABEL, RECORD_HELP, INVITE_LABEL, CLAIM_BUTTON] {
+        assert!(answer.body.contains(&text(&fill(words, &[("suffix", "skep.host")]))), "{words:?}");
+    }
+    assert!(answer.body.contains("id=\"invite\" name=\"invite\" required autocomplete=\"off\" spellcheck=\"false\" value=\"1.1.0.1.0.3\""));
+    assert!(answer.body.contains("<code>skep keygen --anchors --anchor-out &lt;a&gt; --anchor-out &lt;b&gt;</code>"), "the commands set as code, escaped");
+    let bare = answer_of("GET", "/claim", b"");
+    assert!(bare.body.contains("value=\"\""), "no code where the link carries none");
+}
+
+fn answer_of(method: &str, target: &str, body: &[u8]) -> Answer {
+    answer(&request(method, target, body), &site(), &Scripted::default())
+}
+
+/// `POST /claim`: the three fields reach the desk; EACH REFUSAL shows its
+/// words on the form again at 200 — D-4, D-5, D-6, the invite's DRAFT row,
+/// D-8 for a full queue and a failure — the fields pre-filled as sent.
+#[test]
+fn each_claim_refusal_is_shown_on_the_form_again() {
+    let desk = Scripted::default();
+    let body = b"name=alice&record=%7B%22type%22%7D%0D%0A&invite=c0de";
+    for (refusal, words) in
+        [(Refusal::Name, NAME_REFUSED), (Refusal::Record, RECORD_REFUSED), (Refusal::Preview, PREVIEW_REFUSED), (Refusal::Invite, INVITE_REFUSED), (Refusal::Busy, FAILED), (Refusal::Failed, FAILED)]
+    {
+        *desk.claim.lock().unwrap() = Some(Err(refusal));
+        let answer = answer(&request("POST", "/claim", body), &site(), &desk);
+        assert_eq!(answer.status, 200, "{refusal:?}");
+        let shown = text(&fill(words, &[("suffix", "skep.host"), ("reply_to", "owner@skep.host")]));
+        assert!(answer.body.contains(&format!("<p class=\"refused\">{shown}</p>")), "{refusal:?}");
+        assert!(answer.body.contains("value=\"alice\"") && answer.body.contains("{\"type\"}\r\n</textarea>") && answer.body.contains("value=\"c0de\""), "{refusal:?}");
+    }
+    assert!(text(&fill(FAILED, &[("reply_to", "owner@skep.host")])).contains("try again later, or write to owner@skep.host."));
+    assert_eq!(desk.asked.lock().unwrap()[0], "claim alice 10 c0de", "the record's ten bytes, its CRLF among them");
+}
+
+/// `POST /claim` ADMITTED: D-7 and the status address, no redirect, the
+/// page refreshing to the status address.
+#[test]
+fn an_admitted_claim_answers_d7_with_its_status_address() {
+    let answer = answer_of("POST", "/claim", b"name=alice&record=x&invite=c0de");
+    assert_eq!(answer.status, 200);
+    assert!(answer.body.contains(&text(BEING_MADE.text)));
+    assert!(answer.body.contains("This page's own address, to come back to: https://skep.host/status/t0k3n"));
+    assert!(answer.body.contains("https://skep.host/status/t0k3n"));
+    assert!(answer.body.contains(&format!("<meta http-equiv=\"refresh\" content=\"{REFRESH_SECS}; url=/status/t0k3n\">")));
+}
+
+/// `GET /status/<token>`: D-7 while queued or running, the live reply once
+/// live, D-8 once failed, 404 for a token the desk does not hold — and for
+/// a path that is no token.
+#[test]
+fn the_status_page_by_state() {
+    let desk = Scripted::default();
+    *desk.status.lock().unwrap() = Some(Shown::BeingMade);
+    let being = answer(&request("GET", "/status/t0k3n", b""), &site(), &desk);
+    assert_eq!(being.status, 200);
+    assert!(being.body.contains(&text(BEING_MADE.text)) && being.body.contains("url=/status/t0k3n"));
+    *desk.status.lock().unwrap() = Some(Shown::Live("Your board is live.\n\naccount 1.0.1\nprincipal 1\n\nrun `skep verify <x>`\n".into()));
+    let live = answer(&request("GET", "/status/t0k3n", b""), &site(), &desk);
+    assert_eq!(live.status, 200);
+    assert!(live.body.contains("<p>Your board is live.</p>\n<p>account 1.0.1<br>\nprincipal 1</p>\n<p>run <code>skep verify &lt;x&gt;</code></p>"), "{}", live.body);
+    assert!(!live.body.contains("http-equiv"), "the live page does not refresh");
+    *desk.status.lock().unwrap() = Some(Shown::Failed);
+    let failed = answer(&request("GET", "/status/t0k3n", b""), &site(), &desk);
+    assert!(failed.body.contains(&text(&fill(FAILED, &[("reply_to", "owner@skep.host")]))));
+    *desk.status.lock().unwrap() = None;
+    assert_eq!(answer(&request("GET", "/status/other", b""), &site(), &desk).status, 404);
+    let asked = desk.asked.lock().unwrap().len();
+    assert_eq!(answer(&request("GET", "/status/", b""), &site(), &desk).status, 404);
+    assert_eq!(answer(&request("GET", "/status/a/b", b""), &site(), &desk).status, 404);
+    assert_eq!(desk.asked.lock().unwrap().len(), asked, "a path that is no token never reaches the desk");
+}
+
+/// Every other route is 404; a body the decoder refuses is 400.
+#[test]
+fn every_other_route_is_404_and_a_bad_body_400() {
+    for (method, target) in [("POST", "/"), ("GET", "/signup"), ("PUT", "/claim"), ("GET", "/status"), ("GET", "/favicon.ico"), ("HEAD", "/")] {
+        let answer = answer_of(method, target, b"");
+        assert_eq!(answer.status, 404, "{method} {target}");
+        assert!(answer.body.contains(&text(NOT_FOUND.text)));
+    }
+    assert_eq!(answer_of("POST", "/claim", b"name=%zz").status, 400);
+    assert_eq!(answer_of("POST", "/signup", b"address=%4").status, 400);
+}
+
+/// The subset's refusals: past the cap 413, anything else 400.
+#[test]
+fn the_subsets_refusals_are_413_and_400() {
+    assert_eq!(refused_answer(&Refused::TooLarge { declared: MAX_BODY + 1, cap: MAX_BODY }, &site()).status, 413);
+    assert_eq!(refused_answer(&Refused::Malformed("x".into()), &site()).status, 400);
+    assert_eq!(MAX_BODY, 397_312, "a record at its cap, every byte percent-encoded, and 4 KiB");
+}
+
+/// THE CONNECTION over a real socket: a page with the headers that say no
+/// script and no referrer; and a declared body past the cap answered 413
+/// before any of it is sent.
+#[test]
+fn a_connection_answers_with_its_headers_and_refuses_a_body_past_the_cap() {
+    let listener = TcpListener::bind(("127.0.0.1", 0)).expect("a port");
+    let port = listener.local_addr().expect("its address").port();
+    let serve = std::thread::spawn(move || {
+        for _ in 0..2 {
+            let (stream, _) = listener.accept().expect("a connection");
+            connection(stream, &site(), &Scripted::default());
+        }
+    });
+    let talk = |head: &str| {
+        let mut stream = TcpStream::connect(("127.0.0.1", port)).expect("connected");
+        stream.write_all(head.as_bytes()).expect("written");
+        let _ = stream.shutdown(Shutdown::Write);
+        let mut raw = String::new();
+        stream.read_to_string(&mut raw).expect("an answer");
+        raw
+    };
+    let page = talk("GET / HTTP/1.1\r\nHost: skep.host\r\n\r\n");
+    assert!(page.starts_with("HTTP/1.1 200 OK\r\n"), "{page}");
+    for header in [
+        "Content-Security-Policy: default-src 'none'; style-src 'unsafe-inline'; form-action 'self'",
+        "Referrer-Policy: no-referrer",
+        "X-Content-Type-Options: nosniff",
+        "Content-Type: text/html; charset=utf-8",
+    ] {
+        assert!(page.contains(header), "{header}");
+    }
+    let too_large = talk(&format!("POST /claim HTTP/1.1\r\nHost: skep.host\r\nContent-Length: {}\r\n\r\n", MAX_BODY + 1));
+    assert!(too_large.starts_with("HTTP/1.1 413 Payload Too Large\r\n"), "{too_large}");
+    serve.join().expect("served");
+}
+
+/// The text escapes: `&`, `<` and `>` in content and the quotes too in an
+/// attribute; paired backticks set as code, an unpaired one kept.
+#[test]
+fn the_text_is_escaped() {
+    assert_eq!(text("a < b & `c > d` \"e\" 'f'"), "a &lt; b &amp; <code>c &gt; d</code> \"e\" 'f'");
+    assert_eq!(text("one ` alone"), "one ` alone");
+    assert_eq!(attr("\"><script>'"), "&quot;&gt;&lt;script&gt;&#39;");
+    assert_eq!(paragraphs("a\nb\n\nc\n"), "<p>a<br>\nb</p>\n<p>c</p>\n");
+}

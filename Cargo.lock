@@ -1496,6 +1496,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "skep-provision"
+version = "0.1.0"
+dependencies = [
+ "getrandom 0.3.4",
+ "serde_json",
+ "skep-http",
+ "skep-identity",
+ "skep-provision",
+]
+
+[[package]]
 name = "skep-registry"
 version = "0.1.0"
 dependencies = [

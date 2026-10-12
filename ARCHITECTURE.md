@@ -22,7 +22,7 @@ position in the journal.
 
 ## Code map
 
-The workspace is twenty-seven crates under `crates/`. Dependencies point
+The workspace is twenty-eight crates under `crates/`. Dependencies point
 downward in the list below: a crate may depend only on crates listed
 above it.
 
@@ -236,6 +236,21 @@ foundation and on the stores above it.
   plumbing; behind its `dev-hooks` feature, which no shipped
   build enables, `serve --own` links `skepd` with `test-hooks` and runs
   the daemon in-process. Its modules and rules: §The command.
+- `skep-provision` — the service behind a hosted board's sign-up, one
+  binary: `serve` serves the sign-up page and the claim form over the
+  plain HTTP/1.1 subset (`skep-http`), judges the person's record in
+  process (`skep-identity`'s `parse_enroll` and the hosted walk's
+  preview-kind test), runs the steps that make a board one at a time
+  through the host's `docker` command, writes one proxy snippet per board
+  and reloads the proxy, shows the live reply at the post's status
+  address and mails it once the board is live; `invite` mints one invite
+  by the owner's hand. Of the skep crates it depends on `skep-identity`
+  and `skep-http` alone — never `skepd` or `skep-client`: the sidecar it
+  runs dials the board, and it dials nothing. It holds no key. One
+  feature, default off: `test-hooks` compiles in its two fakes — the
+  scripted Docker runner and the mailer that appends to a file — and the
+  two flags that select them, which the crate's self dev-dependency turns
+  on for its own suites. Its modules and rules: §The provisioning service.
 - `skep-conformance` — a differential harness against `udanax-green`'s
   goldens.
 
@@ -1375,6 +1390,100 @@ chose, and the runs, every `SKEP_*` variable and `HOME` scrubbed from them:
 piped, with stdout or stderr closed, from a chosen working directory, or
 under a pseudo-terminal; and `tree`, a directory's state, for the commands
 that write nothing.
+
+## The provisioning service, `skep-provision`
+
+`skep-provision` is one binary, the service behind a hosted board's
+sign-up (the deployment notes §4, step 1): a plain program on the VM in
+the `docker` group, the proxy forwarding the sign-up's domain to it. Its
+`serve` verb serves two pages over the plain HTTP/1.1 subset — the
+sign-up page, which keeps an email address, and the claim form, which
+takes a board's name, the person's record and an invite code — judges a
+post in process before any `docker` call, and provisions each admitted
+post in turn through the host's `docker`: a fresh volume, the claim run
+bound to its own loopback, the sidecar's dark claim in that run's
+namespace, the serving run on the bridge, and the `/health` pair read
+through the sidecar's `skep health`; then one snippet in the proxy's
+directory, the proxy reloaded, the status live, the invite spent and the
+reply mailed. Its `invite` verb mints one invite by the owner's hand and
+prints the claim address that carries it. Its modules, in the order
+`src/main.rs` declares them, each naming only those above it:
+
+- `urlform.rs` the form's body decoded strictly — `+` a space, `%XX` the
+  byte, a `%` without two hex digits refused — its values kept as bytes.
+- `record.rs` the name's grammar, one lowercase label, and the record's
+  admission: the hosted walk's trim, `parse_enroll`, the walk's
+  preview-kind test copied, the anchorless fact.
+- `docker.rs` the `Docker` trait, one method per call; `Call::argv`,
+  every call's argv as a pure function; `Host`, the host's `docker`
+  through `std::process::Command`; and under `test-hooks`
+  `docker/fake.rs`, the scripted fake.
+- `sidecar.rs` the sidecar's six DATA lines and its one idempotent line,
+  read, and its exit codes mapped.
+- `health.rs` the pair off `/health`'s body and the bounded wait.
+- `caddy.rs` the snippet's text, its write by rename, its removal, the
+  reload, and the names the snippet directory stands for.
+- `names.rs` the truth about names — the snippet, the volume, the
+  container — the status token, and the status map, rebuilt at start
+  from the snippets.
+- `signups.rs` the address rule, the state directory's door, the state
+  files' one writer, the date, and the sign-up file.
+- `invites.rs` the invite file — mint, look up, spend — under a lock file
+  across processes.
+- `pages.rs` the strings table, the four pages' HTML and the routes'
+  dispatch over `skep-http`, each route asking a `Desk`.
+- `reply.rs` the live reply, one function for the page and the mail.
+- `sender.rs` the `Sender` trait, the mailer it shells out to, the
+  message, and the sender's own thread with its retry; under
+  `test-hooks` `sender/fake.rs`.
+- `flow.rs` the `Service` — the `Desk` the routes ask, the queue, the one
+  lock, the worker's steps, the cleanup table, the send after the route
+  stands.
+- `args.rs` the verbs and the flags, every default a named constant,
+  `version_line` and the usage text.
+
+Rules that hold across its files:
+
+- **It holds no key.** The record it takes is the person's public line,
+  parsed by `skep-identity`, whose types cannot carry a private key (I1,
+  AUTH-2.89), and the sidecar it runs signs nothing. What it does hold is
+  the Docker socket's reach, through the host's `docker` command; the
+  sign-up addresses; and the invite file — the last two in its state
+  directory, owner-only and refused at start where other users can read
+  it.
+- **One lock, one worker.** A provisioning — the steps, the snippet, the
+  reload, the invite's spend — runs under one `Mutex` on one worker
+  thread, and a post's reads of what stands are made under the same lock;
+  posts wait in a queue of four. The status map, the queue and the codes
+  a post in flight holds sit under a short lock of their own, so a status
+  page never waits on a provisioning.
+- **The argv is the documents'.** Every `docker` call's argv is a pure
+  function the unit suite pins token by token, and reads back from
+  `scripts/docker-smoke.sh` and `README.md` where those spell the line;
+  the real runner builds its `Command` from that argv and nothing else.
+- **What stands is the truth about names.** A name is taken iff its
+  snippet, its volume or its container stands; no ledger is kept, and
+  the log carries the history. A failed step's makings are undone in
+  reverse and its status is D-8; a removal that itself fails leaves the
+  name standing, logged.
+- **The log never carries** the record's bytes, a person's address, an
+  invite code or a status token, and the `Debug` of a record, an invite
+  or a message shows none of them.
+- **Every person-facing sentence is in one table** at the top of
+  `pages.rs`, each row naming its id, and the live reply is one function,
+  so the page and the mail cannot say two things.
+- **Two fakes, under `test-hooks` alone.** The scripted Docker runner
+  fails a test on a call it did not expect; the mail fake appends what it
+  accepts to a file. No shipped build enables the feature: `cargo check
+  -p skep-provision --bins` builds the binary without it, and there
+  `--docker-fake` and `--mailer-fake` are unknown arguments.
+
+Its integration suite is one binary, `tests/it/`, driving the built
+`skep-provision` under `test-hooks`: `invite` mints a code; `serve` runs
+on an ephemeral loopback port over the two fakes and a temp state
+directory; a browser's requests reach the live reply at the status
+address, the snippet written and the one mail sent; every refusal answers
+as the strings say; and SIGTERM ends the process.
 
 ## The name space, `skep-namespace`
 

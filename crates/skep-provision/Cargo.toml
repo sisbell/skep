@@ -1,0 +1,50 @@
+[package]
+name = "skep-provision"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+license.workspace = true
+description = "skep-provision — the service behind a hosted skep board's sign-up: the sign-up page and the claim form served over loopback behind the proxy, the person's record checked in process, the five steps run through the host's docker command, one proxy snippet per board and a reload, the live page at a status address, and a follow-up mail. It holds no key."
+readme = "README.md"
+
+# ONE binary: the service (`serve`) and the owner's verb that mints an invite
+# (`invite`). No library: no other crate takes this one.
+[[bin]]
+name = "skep-provision"
+path = "src/main.rs"
+
+[features]
+# `test-hooks` compiles in the two fakes — the scripted Docker runner
+# (`src/docker/fake.rs`) and the mailer that appends to a file
+# (`src/sender/fake.rs`) — and the two flags that select them,
+# `--docker-fake` and `--mailer-fake`. DEFAULT-OFF, and no shipped build
+# enables it: this crate's own tests turn it on through the self
+# dev-dependency below, so a build that compiles no test compiles no fake,
+# and the shipped binary refuses both flags as unknown arguments.
+test-hooks = []
+
+[dependencies]
+# The record's parse and the key kinds: `parse_enroll` over the form's bytes
+# (D-5) and the production kind's token for the hosted walk's H2 (D-6) —
+# public keys alone, no field of which can carry a private key (I1,
+# AUTH-2.89).
+skep-identity = { path = "../skep-identity" }
+# THE HTTP/1.1 SUBSET the pages are served over: one request per
+# connection, read under this crate's two caps; std alone.
+skep-http = { path = "../skep-http" }
+# `/health`'s body, read off the sidecar's stdout for the pair.
+serde_json.workspace = true
+# OS entropy: the status token and the invite code, 128 bits each.
+getrandom.workspace = true
+
+[dev-dependencies]
+# This crate itself with `test-hooks` on, so its unit suites and the
+# integration suite (`tests/it`, which drives the built binary through
+# `--docker-fake` and `--mailer-fake`) compile the fakes under a plain
+# `cargo test` or workspace run, no flag added. The package has no library,
+# so Cargo answers this line with a warning ("ignoring invalid dependency
+# … which is missing a lib target") on every build of its tests, and still
+# turns the feature on in them, the binary the integration suite runs
+# among them.
+skep-provision = { path = ".", features = ["test-hooks"], default-features = false }

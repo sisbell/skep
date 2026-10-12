@@ -53,6 +53,7 @@ beside them, the differential-conformance harness.
 | `skep-search` | the search index: a library a client embeds — the document model, the tokenizer, the inverted index with positions (no engine, no store, never `skepd`) |
 | `skep-client` | the library every acting client embeds: the dialer, sessions, the key store, signing, the reader's verifier, the claim ceremony |
 | `skep-cli` | the `skep` command over `skep-client`: keygen, claim, session, fingerprint, verify, health, bind, and the ceremonies enroll, recover, retire, rotate, handoff, accept |
+| `skep-provision` | the service behind a hosted board's sign-up: the sign-up page and the claim form behind the proxy, the record checked in process, each board made through the host's `docker`, one proxy snippet per board, the live page and the follow-up mail — it holds no key |
 | `skep-conformance` | differential harness vs. `udanax-green` goldens + ratchet |
 
 Conventions: shared metadata and external-dependency versions live in
@@ -228,7 +229,9 @@ to the person. On a claimed board it prints `claimed by 1.0.1` and exits
 does, on this start and every restart. The proxy's configuration, its
 health-conditioned route and the sign-up flow around the claim are the
 deployment notes' §4 (`_designs/deployment-notes.md`, in the design
-repository), not this file's.
+repository), not this file's. The sign-up behind the proxy, which runs
+these steps for each person, is `skep-provision`'s
+([crates/skep-provision/README.md](crates/skep-provision/README.md)).
 
 **What the port gives.** Every connection through the proxy, or through a
 published port, arrives from the bridge: the daemon reads the peer off

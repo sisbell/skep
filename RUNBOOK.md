@@ -3,11 +3,12 @@
 This file is how to run a skep board: one `skepd` process serving
 one board from one data directory. It is for whoever runs a board,
 a self-hosted one included, and it covers the daemon's own acts; it
-is not a guide to hosting one. Every line it quotes is one this
-build of `skepd` writes, and where the daemon says nothing, this
-file says so. Most lines on stderr begin `skepd: ` and the UTC
-time; the quotes here start after the time, and a name in braces
-stands for what the daemon fills in.
+is not a guide to hosting one, save §10, which runs the service
+that makes boards for other people. Every line it quotes is one
+this build of `skepd` writes, or in §10 `skep-provision`, and where
+the daemon says nothing, this file says so. Most lines on stderr
+begin `skepd: ` and the UTC time; the quotes here start after the
+time, and a name in braces stands for what the daemon fills in.
 
 ## 1. The full volume
 
@@ -988,3 +989,197 @@ those two figures, or a Windows build without the media resource;
 then `skepd` built for a Windows target; then, on Windows, a second
 daemon refused at the kernel's lock on a directory one already
 serves, and a killed daemon's lock taken by the next start.
+
+## 10. Hosting boards for other people: the provisioning service
+
+This section is for an operator hosting boards for other people,
+the shape README.md's Running the hosted image describes: one
+container per board, behind Caddy. `skep-provision` is the service
+behind its sign-up. It serves the sign-up page and the claim form,
+judges the record a person pastes, makes the board through the
+host's `docker`, writes the board's proxy snippet and reloads Caddy,
+then shows the person the live reply and mails it to them. It holds
+no key. Its verbs, flags, routes and files are its own README's
+(`crates/skep-provision/README.md`); this section is how to run it
+on the VM. The unit and the steps below are written from what the
+service does and are UNTESTED on a VM: none has run on one, and the
+deployment notes' TO TEST list, in the design repository, names
+them. The service's lines begin `skep-provision: ` and carry no time
+of their own; the journal adds it.
+
+1. **Ready the host.** Before the service's first start:
+
+   - Docker Engine, with its `docker` command and its `docker`
+     group, and the bridge the boards and Caddy share, made once:
+     `docker network create skep`.
+   - The images the service runs, `skep-hosted` and `skep-cli`,
+     built as README.md's Running the hosted image says.
+   - Caddy, run as the deployment notes' §4a runs it: a container on
+     the `skep` bridge publishing 443 alone, its Caddyfile importing
+     `/etc/caddy/boards/*.caddy` for the boards, and its `skep.host`
+     block forwarding to the service with
+     `reverse_proxy <address>:8842`, where `<address>` is the host's
+     address on the `skep` bridge, the gateway
+     `docker network inspect skep` names. UNTESTED: that Caddy
+     reaches the host there.
+   - For the mail, OPTIONAL: a relay client, `msmtp` or `sendmail`,
+     configured for the service's user with the relay's
+     credentials, a second secret on the host beside the socket's
+     reach, and the sending domain's SPF, DKIM and DMARC records, so
+     a mail lands and is not junked. The service runs the client as
+     `<program> -t`, each message on its standard input. Without one
+     no mail is sent, and the person reads the reply on their status
+     page alone.
+
+2. **Make the service's user**, a system user with no home and no
+   login, in the `docker` group (UNTESTED; the forms Debian and
+   Ubuntu take):
+
+   ```
+   sudo useradd --system --no-create-home --shell /usr/sbin/nologin skep-provision
+   sudo usermod -aG docker skep-provision
+   ```
+
+   The unit gives the service the group itself
+   (`SupplementaryGroups=docker`); the membership gives it to a
+   command run as the user by hand, such as
+   `sudo -u skep-provision docker volume ls`, which lists what the
+   service sees. The group is the Engine's socket, the host's root
+   in effect: the user owns the service's two directories and
+   nothing else, and runs the service and nothing else.
+
+3. **Make the snippet directory**, which the service writes and
+   Caddy reads, the service's user its owner:
+
+   ```
+   sudo install -d -m 755 -o skep-provision -g skep-provision /etc/caddy/boards
+   ```
+
+   A start that cannot read it is refused, exit 1. The service
+   writes each board's snippet there `0644`, whatever its umask,
+   because Caddy reads it through its read-only mount of
+   `/etc/caddy`.
+
+4. **Install the binary** from the release archive for the VM's
+   platform, `x86_64-unknown-linux-gnu` on an x86-64 VM, checked
+   first (README.md, Prebuilt binaries):
+
+   ```
+   sudo install -m 755 skep-<version>-x86_64-unknown-linux-gnu/skep-provision /usr/local/bin/
+   skep-provision --version
+   ```
+
+   It answers `skep-provision <version> (<commit>)`, the version and
+   the commit every binary in the archive answers.
+
+5. **Install the unit**, `deploy/skep-provision.service` in the
+   repository at the release's tag. In the installed copy, put the
+   owner's mailbox for `OWNER@EXAMPLE` (the failure page names it,
+   and the mail replies to it) and the mail's sending address for
+   `noreply@skep.host`; to run without mail, drop the `--mailer` and
+   `--from` lines together. Then load it, start it now and at every
+   boot, see its status, and follow its log:
+
+   ```
+   sudo install -m 644 deploy/skep-provision.service /etc/systemd/system/
+   sudoedit /etc/systemd/system/skep-provision.service
+   sudo systemctl daemon-reload
+   sudo systemctl enable --now skep-provision
+   systemctl status skep-provision
+   sudo journalctl -u skep-provision -f
+   ```
+
+   It is a system unit, where §9.2's is a user unit, and it keeps
+   what every unit in §9 shares with three departures: it runs as
+   the service's own user, not yours; it HOLDS A POWER, the `docker`
+   group, where the daemon holds none; and systemd makes its state
+   directory, `/var/lib/skep-provision`, for the user at `0700`
+   (`StateDirectory=`; UNTESTED), the service refusing at start a
+   state directory other users can read. It binds `0.0.0.0:8842`,
+   every interface, because Caddy runs in a container and cannot
+   reach the host's loopback; the VM's firewall admits 443 alone
+   (the deployment notes' §6), so the port is reached from the
+   bridge and never from outside the VM. UNTESTED: that the Engine's
+   unit is `docker.service`, which the unit requires.
+
+6. **Read the serving line.** After its sweep (step 9) the service
+   binds its address and says one line on stdout; with the unit's
+   settings:
+
+   ```
+   skep-provision: serving http://0.0.0.0:8842/ state-dir /var/lib/skep-provision boards-dir /etc/caddy/boards suffix skep.host live 0 swept 0 workers 3 mail on
+   ```
+
+   `live` counts the boards whose snippets it found, `swept` the
+   half-made ones it removed, and `workers` the boards it makes at
+   once. Without the mail lines the line ends `mail OFF (no --mailer
+   and --from): no follow-up mail is sent`. A refused start is one
+   line on stderr and exit 1, naming its cause: a state directory
+   other users can read, a snippet directory it cannot read, an
+   address it cannot bind. The unit retries it every five seconds,
+   the refusal written to the journal each time.
+
+7. **Admit a person.** A sign-up is one line in
+   `/var/lib/skep-provision/signups`, `<address> <date>`, and sends
+   nothing. The owner reads the file and, for each person to admit,
+   mints an invite as the service's user, then mails the one line it
+   prints by hand:
+
+   ```
+   sudo cat /var/lib/skep-provision/signups
+   sudo -u skep-provision skep-provision invite --address <address> --state-dir /var/lib/skep-provision
+   ```
+
+   The line is the claim page's address carrying the code,
+   `https://skep.host/claim?invite=<code>`. Mint as the service's
+   user, never as root: each change replaces the invite file whole,
+   owner-only and owned by whoever made the change, and a file root
+   made is one the service cannot read. Minting while the service
+   runs is safe: the two take turns at `invites.lock`. The person
+   opens the address on their own device, names the board and
+   pastes their record; the service makes the board, and spends the
+   invite once the board is live. A failed board leaves the invite
+   issued, and the person posts again.
+
+8. **Know what it keeps, and what it never logs.** In the state
+   directory, `signups` and `invites`, each born `0600`: one line per
+   sign-up, and one per invite, issued or spent with its board's
+   name; beside them `invites.lock`, held over each rewrite of the
+   invite file. In the snippet directory, one `<name>.caddy` per live
+   board, from which each start rebuilds its list of live boards. On the Engine, every volume it made,
+   labelled `skep.provision=1`. The sign-up address is the one
+   personal datum it keeps; how long it is kept is the operator's to
+   decide and say. Its log names the board, the step, each call's
+   exit code and the sidecar's stderr, and never carries a record's
+   bytes, a person's address, an invite code or a status token.
+
+9. **Know what a stop leaves.** The service handles no signal:
+   SIGTERM, which `systemctl stop` sends, ends it at once. Every file
+   it keeps is replaced whole by a rename, so a stop tears none. A
+   board a stop cuts off mid-step leaves its volume, and perhaps a
+   run, under its name with no snippet. At the next start, before it
+   listens, the service lists the volumes under its label, removes
+   each one with no snippet and any run under its name, and counts
+   them on the serving line as `swept`. A removal that fails is
+   logged, and the name stays taken until the operator clears it
+   (`docker rm -f <name>`, then `docker volume rm <name>`). The
+   queue, the status addresses and a mail not yet sent live in
+   memory and end with the process: a status address from before a
+   stop answers 404.
+
+10. **Know what this version does not do.** It serves no TLS of its
+    own: Caddy terminates TLS for `skep.host`. It has no rate limit:
+    a claim must name an issued invite, and four posts at most wait
+    for a worker, a fifth told to try again later; a sign-up, which
+    needs no invite, is limited by nothing. It sends no mail without
+    the relay client.
+
+Confirm on the first VM what the unit and these steps assume, beside
+the deployment notes' TO TEST list: that the Engine's unit is
+`docker.service`; that `SupplementaryGroups=docker` gives the
+service the socket, so no `sweep: volumes:` refusal precedes the
+first serving line; that systemd makes `/var/lib/skep-provision`
+`0700` and the user's; that Caddy reaches the service at the
+bridge's gateway on port 8842, and nothing outside the VM reaches
+that port; the `useradd` and `usermod` lines on the VM's
+distribution; and a real mail landing in an inbox.

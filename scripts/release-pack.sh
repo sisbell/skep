@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # release-pack — ONE PLATFORM's RELEASE ARCHIVE, built from the tree it runs
-# in: the three binaries a person downloads — `skepd`, `skep` and `skep-mcp`
-# (the development tools ship to no one, so `skep-dev` stays out) — each
-# answering `--version` with the crate version and the commit built from,
-# stripped, beside a README and the two license texts, in
+# in: the four binaries a person downloads — `skepd`, `skep`, `skep-mcp` and
+# `skep-provision` (the development tools ship to no one, so `skep-dev` stays
+# out) — each answering `--version` with the crate version and the commit
+# built from, stripped, beside a README and the two license texts, in
 # `skep-<version>-<triple>.tar.gz`; the archive's SHA-256 line appended to
 # `SHA256SUMS` beside it; and the archive then checked as a download is
 # checked (release-check.sh), which is this script's last step. The release
@@ -40,7 +40,7 @@ if [ "$VERSION" != "$WORKSPACE_VERSION" ]; then
 fi
 
 # THE COMMIT, compiled into each binary's version line through the one
-# variable the three parsers read at build time (`option_env!`): the short
+# variable the four parsers read at build time (`option_env!`): the short
 # hash of the tree built. A developer's own build sets none and prints
 # `unknown`; a release names its commit. A tree with uncommitted changes is
 # still named by its commit, without them — said, never refused, so a
@@ -58,38 +58,42 @@ fi
 # strip, which keeps the linker's ad-hoc signature valid).
 export CARGO_PROFILE_RELEASE_STRIP=symbols
 
-# THE THREE BUILDS, one per crate and never one `cargo build` for all:
+# THE FOUR BUILDS, one per crate and never one `cargo build` for all:
 # Cargo unifies features across one build, and `skep` links the signer
 # (skep-signature's `sign`, through skep-client's acting half) where the
 # daemon's own build holds no signer and only verifies (RUNBOOK.md §3,
 # step 1). Each at its default features: `skepd` with `observe` (a notebook
 # may want /dump; the hosted image is the `--no-default-features` build,
 # the Dockerfile's), `skep` with `tls` (a hosted board is dialed over
-# https://), `skep-mcp` as it is. `--bin skep` keeps `skep-dev` out.
+# https://), `skep-mcp` as it is, and `skep-provision` with none: its
+# `test-hooks` fakes, which only the crate's own tests turn on, are never
+# built, so the shipped binary refuses the fake flags as unknown arguments.
+# `--bin skep` keeps `skep-dev` out.
 build() {
   cargo build --release --target "$TRIPLE" "$@" || { echo "release-pack: cargo build $* failed" >&2; exit 1; }
 }
 build -p skepd
 build -p skep-cli --bin skep
 build -p skep-mcp
+build -p skep-provision
 
 OUT=target/release-pack
 NAME="skep-$VERSION-$TRIPLE"
 BIN="target/$TRIPLE/release"
 rm -rf "$OUT/$NAME" && mkdir -p "$OUT/$NAME" || exit 1
-for b in skepd skep skep-mcp; do
+for b in skepd skep skep-mcp skep-provision; do
   cp "$BIN/$b" "$OUT/$NAME/$b" || { echo "release-pack: no $BIN/$b" >&2; exit 1; }
 done
 cp LICENSE-MIT LICENSE-APACHE "$OUT/$NAME/" || exit 1
 
-# THE ARCHIVE's README: what the three are, the kept notebook's recipe
+# THE ARCHIVE's README: what the four are, the kept notebook's recipe
 # cited to the RUNBOOK and not restated, the Windows sentence, where the
 # checksums are, the license line.
 cat > "$OUT/$NAME/README" <<EOF
 skep $VERSION for $TRIPLE, built from commit $SKEP_GIT_SHA
 https://github.com/sisbell/skep
 
-Three binaries:
+Four binaries:
 
   skepd     the daemon: one process over one board directory, the board
             served over HTTP on loopback. For a notebook you keep, run it
@@ -101,6 +105,10 @@ Three binaries:
             handoff, accept).
   skep-mcp  the MCP adapter: an agent harness on stdio on one side, the
             daemon's HTTP wire on the other.
+  skep-provision
+            the service behind a hosted board's sign-up: run on a host
+            that serves boards for other people, as RUNBOOK.md §10 says —
+            never on a notebook.
 
 Each answers --version with this version and commit:
 skepd $VERSION ($SKEP_GIT_SHA). There is no Windows archive: skepd does
@@ -111,7 +119,7 @@ Checksums: the SHA256SUMS file on the release page,
 https://github.com/sisbell/skep/releases/tag/v$VERSION, carries this
 archive's SHA-256 line; check it with \`sha256sum -c\` or \`shasum -a 256
 -c\`, or with scripts/release-check.sh from the repository, which also
-runs the three binaries' --version and holds them to one version and one
+runs the four binaries' --version and holds them to one version and one
 commit. macOS: these binaries are not signed or notarized, so a copy a
 browser downloaded is quarantined and refused at launch — download with
 curl, or clear the attribute (xattr -d com.apple.quarantine <file>).

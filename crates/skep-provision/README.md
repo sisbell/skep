@@ -205,14 +205,17 @@ and each call's exit code, with the sidecar's stderr kept whole. It never
 carries the record's bytes, a person's address, an invite code or a
 status token. The one line on stdout is the serving line.
 
-## What it holds, and what is not here yet
+## What it holds, and how it ships
 
 It holds no key. The record is the person's public line, and the sidecar
 it runs signs nothing. What it does hold is the reach of the Docker
 socket, through the host's `docker` command and the `docker` group.
 
-The unit file that runs it and its place in the release archive come in
-a later change.
+The release archive carries it beside the daemon
+([README.md](../../README.md), Prebuilt binaries), and the systemd unit
+that runs it is
+[deploy/skep-provision.service](../../deploy/skep-provision.service),
+installed as [RUNBOOK.md](../../RUNBOOK.md) §10 says.
 
 ## License
 

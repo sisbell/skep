@@ -125,5 +125,5 @@ jobs:
         run: |
           gh release view "$TAG" >/dev/null 2>&1 \
             || gh release create "$TAG" --verify-tag --title "skep $TAG" \
-                 --notes "Prebuilt skepd, skep and skep-mcp, one archive per platform, with SHA256SUMS. Check a download with scripts/release-check.sh, as README.md's Prebuilt binaries section says."
+                 --notes "Prebuilt skepd, skep, skep-mcp and skep-provision, one archive per platform, with SHA256SUMS. Check a download with scripts/release-check.sh, as README.md's Prebuilt binaries section says."
           gh release upload "$TAG" --clobber artifacts/*/skep-*.tar.gz SHA256SUMS

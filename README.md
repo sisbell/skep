@@ -15,7 +15,7 @@ and exported here as they converge.
 
 ## Workspace
 
-Twenty-four crates; the boundaries are the architecture. Fourteen domain
+Twenty-eight crates; the boundaries are the architecture. Fourteen domain
 crates realize the spec's converged designs (the M1–M10 modules, the
 AUTH identity layer, signed ops, the registry and the blob store) and
 encode the composition contract's
@@ -44,6 +44,7 @@ beside them, the differential-conformance harness.
 | `skep-registry` | the registry's commons rows and binding/endpoint bodies (pure values) |
 | `skep-blobs` | the blob store: deposited files, partial uploads, upload records, leases |
 | `skep-util` | the support crate below the daemon and the media crate: the counting permit pool, the operator's notice line, the JSON determinism helpers |
+| `skep-corpus` | the prose corpus a dev board is seeded from and the search budgets are measured over: a git repository read at one pinned commit through `git` alone, and the one deterministic cut into documents of 1–10 KiB — no skep crate, nothing but `std` and a `git` child process |
 | `skep-http` | the plain HTTP/1.1 subset two programs speak over loopback: one request per connection read under the caller's caps, the response written with `Connection: close` — no CORS, no event stream, no cap of its own |
 | `skep-media` | the daemon's media resource: the cell's one parser, the media door, the gate over the blob store, the cell index, the pruner, the fetch — generic over the world, no engine |
 | `skep-engine` | the one assembler: `World`, genesis, recovery, `world_at` |
@@ -52,6 +53,7 @@ beside them, the differential-conformance harness.
 | `skep-resolve` | the verifying registry resolver: a library a client embeds (no engine, no store, never `skepd`) |
 | `skep-search` | the search index: a library a client embeds — the document model, the tokenizer, the inverted index with positions (no engine, no store, never `skepd`) |
 | `skep-client` | the library every acting client embeds: the dialer, sessions, the key store, signing, the reader's verifier, the claim ceremony |
+| `skep-shell` | the shell's core, written once for the dev provider and the desktop shell: the bridge's twenty calls and six events over `skep-client`, the board and session references the page is handed in a credential's place, the feed consumer's thread per board, the TypeScript declarations of every value that crosses the bridge — no feature, no transport, never `skepd` |
 | `skep-cli` | the `skep` command over `skep-client`: keygen, claim, session, fingerprint, verify, health, bind, and the ceremonies enroll, recover, retire, rotate, handoff, accept |
 | `skep-provision` | the service behind a hosted board's sign-up: the sign-up page and the claim form behind the proxy, the record checked in process, each board made through the host's `docker`, one proxy snippet per board, the live page and the follow-up mail — it holds no key |
 | `skep-conformance` | differential harness vs. `udanax-green` goldens + ratchet |
@@ -60,7 +62,7 @@ Conventions: shared metadata and external-dependency versions live in
 `[workspace.package]` / `[workspace.dependencies]` (crates add features,
 never different versions); one lockstep version for the family; the
 toolchain is pinned in `rust-toolchain.toml` and bumped only with a full
-gate run. Release binaries are `skepd`, `skep` and `skep-mcp`; library crates
+gate run. Release binaries are `skepd`, `skep`, `skep-mcp` and `skep-provision`; library crates
 publish to crates.io as they stabilize (`skep-address` first). The wire contract clients build against is
 `docs/wire.md` — the contract as it stands; versioning begins at the first
 release, independent of crate versions. License: MIT OR Apache-2.0 (dual, the Rust convention).
@@ -231,7 +233,8 @@ health-conditioned route and the sign-up flow around the claim are the
 deployment notes' §4 (`_designs/deployment-notes.md`, in the design
 repository), not this file's. The sign-up behind the proxy, which runs
 these steps for each person, is `skep-provision`'s
-([crates/skep-provision/README.md](crates/skep-provision/README.md)).
+([crates/skep-provision/README.md](crates/skep-provision/README.md)); the
+operator's steps are RUNBOOK.md §10.
 
 **What the port gives.** Every connection through the proxy, or through a
 published port, arrives from the bridge: the daemon reads the peer off
@@ -282,7 +285,7 @@ one archive per platform, `skep-<version>-<triple>.tar.gz`, for
 `aarch64-apple-darwin` (macOS on Apple silicon), `x86_64-apple-darwin`
 (macOS on Intel), `x86_64-unknown-linux-gnu` and
 `aarch64-unknown-linux-gnu`, and one `SHA256SUMS` file naming all four.
-An archive holds three binaries, built from the tag's tree and stripped,
+An archive holds four binaries, built from the tag's tree and stripped,
 with a README and the two license texts:
 
 - `skepd`, the daemon: one process over one board directory, the board
@@ -290,7 +293,10 @@ with a README and the two license texts:
 - `skep`, the command: the device key, the claim that makes a board
   yours, sessions, verify, health, bind, and the key ceremonies;
 - `skep-mcp`, the MCP adapter: an agent harness on stdio on one side,
-  the daemon's HTTP wire on the other.
+  the daemon's HTTP wire on the other;
+- `skep-provision`, the service behind a hosted board's sign-up: run on
+  a host that serves boards for other people, as RUNBOOK.md §10 says —
+  never on a notebook.
 
 Each answers `--version` with the crate version and the commit it was
 built from — `skepd 0.1.0 (a1b2c3d4e5f6)` — and a developer's own build
@@ -303,7 +309,7 @@ scripts/release-check.sh skep-0.1.0-aarch64-apple-darwin.tar.gz SHA256SUMS
 
 verifies the archive's checksum against the file (a path, or the release
 page's URL where `curl` is installed), unpacks it to a temporary
-directory, and runs the three binaries' `--version`, holding them to one
+directory, and runs the four binaries' `--version`, holding them to one
 version — the one the archive is named for — and one commit. The script
 needs nothing of the repository but itself. Without it, the checksum
 alone, from the directory holding the archive and the file:

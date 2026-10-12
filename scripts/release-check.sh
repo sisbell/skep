@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # release-check — A DOWNLOAD, CHECKED: one release archive against the
 # SHA256SUMS file the release page carries; then the archive opened in a
-# temporary directory and its three binaries run — `--version` from each —
+# temporary directory and its four binaries run — `--version` from each —
 # held to ONE version and ONE commit, the version being the one the
 # archive's own name carries. The person's one command on a download; the
 # pack script's last step against its own output; each release job's, per
@@ -73,13 +73,13 @@ pass "$NAME hashes to $ACTUAL, the SHA256SUMS line"
 tar -xzf "$ARCHIVE" -C "$TMP" || fail "could not unpack $NAME"
 [ -d "$TMP/$STEM" ] || fail "$NAME does not unpack to a directory named $STEM"
 
-# THE THREE, each run: `<binary> <version> (<commit>)` on stdout, exit 0,
+# THE FOUR, each run: `<binary> <version> (<commit>)` on stdout, exit 0,
 # the name its own, and every line's version and commit the first line's.
 # A commit of `unknown` is a build that set no SKEP_GIT_SHA, which no
 # release build is.
 VERSION=""
 COMMIT=""
-for b in skepd skep skep-mcp; do
+for b in skepd skep skep-mcp skep-provision; do
   bin="$TMP/$STEM/$b"
   [ -x "$bin" ] || fail "$STEM holds no executable $b"
   if ! line=$("$bin" --version 2>"$TMP/stderr"); then
@@ -106,4 +106,4 @@ case $STEM in
   *) fail "$NAME is not named for version $VERSION, which its binaries carry" ;;
 esac
 
-pass "$NAME: version $VERSION, commit $COMMIT, three binaries agreeing"
+pass "$NAME: version $VERSION, commit $COMMIT, four binaries agreeing"

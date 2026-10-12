@@ -185,6 +185,11 @@ RUSTDOCFLAGS="-D rustdoc::broken_intra_doc_links" \
     cargo doc -p skepd -p skep-media -p skep-signature -p skep-resolve -p skep-search -p skep-blobs -p skep-util -p skep-registry -p skep-http --lib --no-deps --document-private-items --all-features \
     || exit $?
 
+# skep-provision, a binary alone, cannot join a `--lib` line; its module
+# docs link across its fourteen modules through `main.rs`'s `mod` tree.
+RUSTDOCFLAGS="-D rustdoc::broken_intra_doc_links" \
+    cargo doc -p skep-provision --bins --no-deps --document-private-items || exit $?
+
 # --run-ignored all re-admits the #[ignore] timing partition. One test is
 # excluded BY NAME, not by ignore-ness: hazard G (disk exhaustion) is
 # env-gated by its owners (hdiutil, mount rights, macOS only — "run it

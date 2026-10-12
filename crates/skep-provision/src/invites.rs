@@ -21,7 +21,7 @@
 //! LOGGED, and never shown but in the `invite` verb's one DATA line.
 //!
 //! THE FILE IS REWRITTEN WHOLE ([`crate::signups::write_whole`]) at every
-//! change, under the service's one lock and, across processes, an exclusive
+//! change, within the service and across processes alike, under an exclusive
 //! lock on the sibling `invites.lock` — the service spends while the owner's
 //! `invite` may mint, and neither change may be lost to the other's write.
 //! A lookup reads the file as the last rename left it.

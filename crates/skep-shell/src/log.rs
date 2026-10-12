@@ -77,11 +77,13 @@ impl Log {
     }
 
     /// How many dials the log holds.
+    #[cfg(test)]
     pub fn dials(&self) -> usize {
         self.entries.lock().expect("the log's lock").iter().filter(|e| e["kind"] == "dial").count()
     }
 
     /// How many calls the log holds.
+    #[cfg(test)]
     pub fn calls(&self) -> usize {
         self.entries.lock().expect("the log's lock").iter().filter(|e| e["kind"] == "call").count()
     }

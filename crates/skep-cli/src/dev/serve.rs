@@ -30,12 +30,11 @@ use std::thread;
 use serde_json::{json, Value};
 use skep_client::halt::Halt;
 use skep_client::sign::fresh_bytes;
-use skep_shell::refs::hex;
-use skep_shell::shell::{ArmConfig, NodeState, SessionMode, ShellOptions};
-use skep_shell::{script, Refusal, Shell};
+use skep_shell::{script, ArmConfig, NodeState, Refusal, SessionMode, Shell, ShellOptions};
 
 use crate::args::dev::{DevLine, SessionArm};
 use crate::args::Usage;
+use crate::board::hex;
 use crate::shared::{data, Stop};
 use crate::terminal::talk;
 

@@ -20,7 +20,7 @@ use skep_client::person::{Abandoned, Confirmation, Consent, Destination, HandedP
 
 use crate::events::{EventBus, MOMENT};
 use crate::refs::moment_name;
-use crate::script::{DevArm, Got};
+use crate::dev_arm::{DevArm, Got};
 
 /// What the page sent for a pending moment.
 #[derive(Debug, Clone, PartialEq)]
@@ -78,6 +78,7 @@ impl Pending {
     }
 
     /// The ids waiting, in no order.
+    #[cfg(test)]
     pub fn ids(&self) -> Vec<String> {
         self.waiting.lock().expect("the pending lock").keys().cloned().collect()
     }
@@ -210,7 +211,7 @@ mod tests {
     use super::*;
 
     fn fixture() -> (Arc<EventBus>, Arc<Pending>, Arc<DevArm>) {
-        let talk: crate::script::Talk = Arc::new(|_| {});
+        let talk: crate::Talk = Arc::new(|_| {});
         (Arc::new(EventBus::new()), Arc::new(Pending::new()), Arc::new(DevArm::auto(PathBuf::from("/tmp/x"), talk)))
     }
 

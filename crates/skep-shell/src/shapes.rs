@@ -41,7 +41,7 @@ pub struct Shape {
 
 /// THE TABLE: every value that crosses the bridge, by the name the file
 /// declares it under.
-pub const SHAPES: &[Shape] = &[
+const SHAPES: &[Shape] = &[
     Shape { name: "BoardRow", doc: "`boards()` — one entry per board in the shell's list; `board` the opaque reference every board-touching call takes", fields: &[req("board", "string"), req("name", "string"), req("origin", "string")] },
     Shape { name: "SessionOpened", doc: "`session(board, principal)` — the session's opaque reference in the token's place", fields: &[req("session", "string"), req("principal", "number"), req("account", "string | null")] },
     Shape { name: "Keygen", doc: "`keygen({label?})` — the device key's fingerprint, its enrollment record, and the outstanding act", fields: &[req("fingerprint", "string"), req("payload", "string"), req("outstanding", "string")] },
@@ -82,8 +82,10 @@ pub const SHAPES: &[Shape] = &[
 ];
 
 /// The calls, as the bridge spells them: the name, the argument type and
-/// the result type — the `Bridge` interface's rows.
-pub const CALLS: &[(&str, &str, &str)] = &[
+/// the result type — the `Bridge` interface's rows, one per name of
+/// [`crate::CALLS`], the dispatch's list, in its order (the suite holds the
+/// two lists equal).
+const CALLS: &[(&str, &str, &str)] = &[
     ("boards", "{}", "BoardRow[]"),
     ("session", "{ board: string; principal?: number }", "SessionOpened"),
     ("close", "{ session: string }", "Empty"),
@@ -111,7 +113,7 @@ pub const CALLS: &[(&str, &str, &str)] = &[
 pub fn declarations() -> String {
     let mut out = String::new();
     out.push_str("// skep-shell — the bridge's declarations (client.md §4b), generated from\n");
-    out.push_str("// the crate's table (`skep_shell::shapes::SHAPES`); every field name here\n");
+    out.push_str("// the crate's table (`SHAPES` in `src/shapes.rs`); every field name here\n");
     out.push_str("// is pinned by the crate's own suite against the values its code builds.\n\n");
     out.push_str("export type Mode = 'UNCLAIMED' | 'CLAIMED-PERMISSIVE' | 'ENFORCING';\n");
     out.push_str("export type Empty = Record<string, never>;\n");

@@ -8,16 +8,17 @@
 //!   the one token `Rejection::key` dispatches on;
 //! * `halt` — a halt's face, the state, its cause and the one act, its
 //!   `name` the armed refusal the row spells where the shell diagnosed one
-//!   (`no_key`, `origin_state`, `retired`, `not_enrolled`, `busy`, …) and
-//!   `halt` where the row arms none;
+//!   and `halt` where the row arms none;
 //! * `blocked` — the handshake's `403 prefix_blocked` with its record and
 //!   the ground read as a guest;
 //! * `unreachable` — the board is not answering;
-//! * `shell` — the shell's own refusal: a stale reference (`session_ended`),
-//!   a foreign board reference (`unknown_board`), the query bound
-//!   (`query_too_long`), a write in the guest form, a call's arguments not
-//!   of the row's shape, or a row the library does not reach at this pin
-//!   (`not_reached`), each with its detail.
+//! * `shell` — the shell's own refusal, with its detail.
+//!
+//! THE NAMES the shell spells — the shell's own refusals and the armed names
+//! a halt's face takes — are [`Name`]'s constants and nothing else: its field
+//! is private to this file, so a call site names a refusal only by a
+//! constant declared here, and this list is the one the README and
+//! `ARCHITECTURE.md` point to.
 
 use std::fmt;
 
@@ -31,47 +32,131 @@ pub enum Refusal {
     /// The board's own verdict, verbatim.
     Board(Refused),
     /// A halt's face, under the armed name the row spells where one does.
-    Halt { name: &'static str, face: Face },
+    Halt { name: Name, face: Face },
     /// The block.
     Blocked(Blocked),
     /// The board is not answering.
     Unreachable(DialError),
     /// The shell's own refusal.
-    Shell { name: &'static str, detail: Value },
+    Shell { name: Name, detail: Value },
 }
 
-/// THE PIN's stale-reference refusal: "session ended".
-pub const SESSION_ENDED: &str = "session_ended";
-/// A board reference this shell instance never issued.
-pub const UNKNOWN_BOARD: &str = "unknown_board";
-/// A call's arguments are not the row's shape.
-pub const MALFORMED_ARGS: &str = "malformed_args";
-/// A row the library does not reach at this pin: the detail says where it
-/// stops.
-pub const NOT_REACHED: &str = "not_reached";
-/// A WRITE frame in the guest form, refused without a dial.
-pub const WRITE_IN_GUEST_FORM: &str = "write_in_guest_form";
-/// The walk was abandoned: the page cancelled a moment.
-pub const ABANDONED: &str = "abandoned";
+/// A NAME the shell spells: ONE token, closed to the constants below — the
+/// shell's own refusals first, then the armed names a halt's face takes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Name(&'static str);
+
+impl Name {
+    // ── THE SHELL's OWN: `Refusal::shell` ────────────────────────────────
+
+    /// THE PIN's stale-reference refusal: "session ended" — a reference
+    /// this shell holds no session under, issued or not.
+    pub const SESSION_ENDED: Name = Name("session_ended");
+    /// The call's session met the death signal: the arm its end carried
+    /// beside it.
+    pub const SESSION_DIED: Name = Name("session_died");
+    /// A board reference this shell instance never issued.
+    pub const UNKNOWN_BOARD: Name = Name("unknown_board");
+    /// A call the bridge does not spell.
+    pub const UNKNOWN_CALL: Name = Name("unknown_call");
+    /// `fetch` through the dispatch: it streams, on its transport's own
+    /// route.
+    pub const STREAMED_CALL: Name = Name("streamed_call");
+    /// A call's arguments are not the row's shape.
+    pub const MALFORMED_ARGS: Name = Name("malformed_args");
+    /// A row the library does not reach at this pin: the detail says where
+    /// it stops.
+    pub const NOT_REACHED: Name = Name("not_reached");
+    /// A WRITE frame in the guest form, refused without a dial.
+    pub const WRITE_IN_GUEST_FORM: Name = Name("write_in_guest_form");
+    /// A guest form's origin is not a canonical origin.
+    pub const NOT_CANONICAL: Name = Name("not_canonical");
+    /// A query past the bridge's bound.
+    pub const QUERY_TOO_LONG: Name = Name("query_too_long");
+    /// The board's feed thread has stopped: no search is answered.
+    pub const FEED_STOPPED: Name = Name("feed_stopped");
+    /// The walk was abandoned: the page cancelled a moment, or the dev arm
+    /// left.
+    pub const ABANDONED: Name = Name("abandoned");
+    /// A label refused as empty — `keygen`'s, and `accept`'s box as a
+    /// halt's armed name.
+    pub const EMPTY_LABEL: Name = Name("empty_label");
+    /// A `select` that matches more than one key of the store.
+    pub const AMBIGUOUS: Name = Name("ambiguous");
+    /// A `select` that matches no key of the store.
+    pub const NOT_FOUND: Name = Name("not_found");
+    /// A claim on a board another store's claim stands on.
+    pub const ALREADY_CLAIMED: Name = Name("already_claimed");
+    /// `bind`'s pasted origin is not the board's.
+    pub const ORIGIN_DISAGREES: Name = Name("origin_disagrees");
+    /// `bind`'s pasted account and principal are not a pair the board
+    /// seats.
+    pub const ACCOUNT_DISAGREES: Name = Name("account_disagrees");
+    /// `accept` with no address.
+    pub const NO_ADDRESS: Name = Name("no_address");
+    /// An attest asked of a session the board answered no account for.
+    pub const NO_ACCOUNT: Name = Name("no_account");
+
+    // ── THE HALTS' ARMED NAMES: `Refusal::named`, `Refusal::of_named` ────
+
+    /// A halt the row arms no name for.
+    pub const HALT: Name = Name("halt");
+    /// The store holds no key for (this board, the principal).
+    pub const NO_KEY: Name = Name("no_key");
+    /// The store cannot be read.
+    pub const STORE_UNREADABLE: Name = Name("store_unreadable");
+    /// The store cannot be written.
+    pub const STORE_UNWRITABLE: Name = Name("store_unwritable");
+    /// The origin the shell signs for is not among the board's signed
+    /// origins (AUTH-5.24, AUTH-5.36's origin state).
+    pub const ORIGIN_STATE: Name = Name("origin_state");
+    /// The principal holds no account at the board: `principal_prefix`
+    /// answered none (AUTH-5.67 (2)).
+    pub const NOT_REGISTERED: Name = Name("not_registered");
+    /// The key stands in the retired list.
+    pub const RETIRED: Name = Name("retired");
+    /// The key stands in neither list.
+    pub const NOT_ENROLLED: Name = Name("not_enrolled");
+    /// The handshake halted after a pre-check that passed.
+    pub const BUSY: Name = Name("busy");
+    /// `accept` at an address that already holds a key set.
+    pub const ALREADY_SEEDED: Name = Name("already_seeded");
+    /// `accept` at an address not yet delegated.
+    pub const NOT_DELEGATED: Name = Name("not_delegated");
+    /// The attest a signed session's write needs could not be composed;
+    /// nothing was sent.
+    pub const ATTEST_NOT_COMPOSED: Name = Name("attest_not_composed");
+
+    /// The token.
+    pub fn as_str(self) -> &'static str {
+        self.0
+    }
+}
+
+impl fmt::Display for Name {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.0)
+    }
+}
 
 impl Refusal {
     /// The shell's own refusal named `name`, with its detail object.
-    pub fn shell(name: &'static str, detail: Value) -> Refusal {
+    pub fn shell(name: Name, detail: Value) -> Refusal {
         Refusal::Shell { name, detail }
     }
 
     /// The row's arguments are not its shape: `what` says which member.
     pub fn malformed(what: impl Into<String>) -> Refusal {
-        Refusal::shell(MALFORMED_ARGS, json!({"what": what.into()}))
+        Refusal::shell(Name::MALFORMED_ARGS, json!({"what": what.into()}))
     }
 
     /// A halt the row arms no name for.
     pub fn halt(face: Face) -> Refusal {
-        Refusal::Halt { name: "halt", face }
+        Refusal::Halt { name: Name::HALT, face }
     }
 
     /// A halt under the armed name the row spells.
-    pub fn named(name: &'static str, face: Face) -> Refusal {
+    pub fn named(name: Name, face: Face) -> Refusal {
         Refusal::Halt { name, face }
     }
 
@@ -87,7 +172,7 @@ impl Refusal {
     }
 
     /// [`Refusal::of`], a halt's face taking `name`.
-    pub fn of_named(name: &'static str, h: Halt) -> Refusal {
+    pub fn of_named(name: Name, h: Halt) -> Refusal {
         match h {
             Halt::Halt(face) => Refusal::Halt { name, face },
             other => Refusal::of(other),
@@ -101,10 +186,10 @@ impl Refusal {
                 ("credential_refused" | "registry_refused", Some(d)) => d.to_string(),
                 (code, _) => code.to_string(),
             },
-            Refusal::Halt { name, .. } => (*name).to_string(),
+            Refusal::Halt { name, .. } => name.as_str().to_string(),
             Refusal::Blocked(_) => "blocked".to_string(),
             Refusal::Unreachable(_) => "unreachable".to_string(),
-            Refusal::Shell { name, .. } => (*name).to_string(),
+            Refusal::Shell { name, .. } => name.as_str().to_string(),
         }
     }
 
@@ -188,14 +273,15 @@ mod tests {
         let plain = Refusal::Board(Refused { status: 503, code: "write_busy".into(), detail: None, op: None, body: Value::Null });
         assert_eq!(plain.name(), "write_busy");
         let face = Face { state: "s".into(), cause: "c".into(), act: "a".into() };
-        let named = Refusal::named("no_key", face.clone());
+        let named = Refusal::named(Name::NO_KEY, face.clone());
         assert_eq!((named.name().as_str(), named.to_value()["state"].as_str()), ("no_key", Some("s")));
+        assert_eq!(named.to_string(), format!("no_key: {face}"), "a halt renders as its name and its face");
         assert_eq!(Refusal::of(Halt::Halt(face)).name(), "halt");
         let blocked = Refusal::Blocked(Blocked { record: "1.0.1.0.7.1".into(), named_by: "http://x".into(), ground: None });
         assert_eq!((blocked.name().as_str(), blocked.to_value()["record"].as_str()), ("blocked", Some("1.0.1.0.7.1")));
         let dial = Refusal::of(Halt::Dial(DialError::Connect("refused".into())));
         assert_eq!((dial.name().as_str(), dial.to_value()["kind"].as_str()), ("unreachable", Some("unreachable")));
-        let shell = Refusal::shell(SESSION_ENDED, json!({"session": "s-1"}));
+        let shell = Refusal::shell(Name::SESSION_ENDED, json!({"session": "s-1"}));
         let v = shell.to_value();
         assert_eq!((v["kind"].as_str(), v["name"].as_str(), v["session"].as_str()), (Some("shell"), Some("session_ended"), Some("s-1")));
     }

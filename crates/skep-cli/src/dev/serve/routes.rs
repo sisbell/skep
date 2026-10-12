@@ -163,7 +163,7 @@ fn route(provider: &Provider<'_>, req: &Request, stream: &mut TcpStream, cors: &
         }
         ("POST", path) if path.starts_with("/bridge/") => {
             let call = &path["/bridge/".len()..];
-            if !skep_shell::shell::CALLS.contains(&call) {
+            if !skep_shell::CALLS.contains(&call) {
                 return json(stream, 404, cors, &json!({"refused": {"kind": "shell", "name": "unknown_call", "call": call}}));
             }
             let args = match args_of(req) {
@@ -188,7 +188,7 @@ fn route(provider: &Provider<'_>, req: &Request, stream: &mut TcpStream, cors: &
 /// data}` fires an event by hand.
 fn script(provider: &Provider<'_>, args: &Value, stream: &mut TcpStream, cors: &[(String, String)]) -> io::Result<()> {
     if let Some(call) = args["call"].as_str() {
-        if !skep_shell::shell::CALLS.contains(&call) {
+        if !skep_shell::CALLS.contains(&call) {
             return json(stream, 400, cors, &json!({"refused": {"kind": "shell", "name": "unknown_call", "call": call}}));
         }
         let refusal = match &args["refusal"] {

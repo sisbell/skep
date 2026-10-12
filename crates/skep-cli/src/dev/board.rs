@@ -536,6 +536,6 @@ fn extent_span(i_start: &str, width: u64) -> Option<Span> {
 }
 
 /// Lowercase hex of `bytes`.
-fn hex(bytes: &[u8]) -> String {
+pub fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }

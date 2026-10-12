@@ -15,7 +15,7 @@ use skep_client::DialError;
 use super::*;
 use crate::events;
 use crate::feed::state_json;
-use crate::refusal::Refusal;
+use crate::refusal::{Name, Refusal};
 use crate::sessions;
 
 /// One sample per declared type: the value the crate's code answers or
@@ -47,13 +47,13 @@ fn samples() -> Vec<(&'static str, Value)> {
         ("Matched", json!({"word": "w", "term": "t"})),
         ("Place", json!({"doc": "1.0.1.0.1", "kind": "draft", "label": null, "standing": "yours_to_read"})),
         ("RefusedByBoard", Refusal::Board(Refused { status: 200, code: "credential_refused".into(), detail: Some("signed_session_required".into()), op: Some("publish".into()), body: json!({}) }).to_value()),
-        ("HaltFace", Refusal::named("no_key", Face { state: "s".into(), cause: "c".into(), act: "a".into() }).to_value()),
+        ("HaltFace", Refusal::named(Name::NO_KEY, Face { state: "s".into(), cause: "c".into(), act: "a".into() }).to_value()),
         ("BlockedFace", Refusal::Blocked(Blocked { record: "1.0.1.0.7.1".into(), named_by: "http://x".into(), ground: None }).to_value()),
         ("Unreachable", Refusal::Unreachable(DialError::Connect("refused".into())).to_value()),
-        ("ShellRefusal", Refusal::shell(crate::refusal::SESSION_ENDED, json!({})).to_value()),
+        ("ShellRefusal", Refusal::shell(Name::SESSION_ENDED, json!({})).to_value()),
         ("ModeEvent", json!({"board": "b-0", "mode": "ENFORCING", "claimant": "1.0.1", "local_trust": false})),
-        ("SessionDiedEvent", json!({"session": "s-0", "reason": sessions::closed().reason})),
-        ("DeathReason", sessions::closed().reason),
+        ("SessionDiedEvent", json!({"session": "s-0", "reason": sessions::closed()})),
+        ("DeathReason", sessions::closed()),
         ("DaemonEvent", json!({"board": "b-0", "state": "running"})),
         ("FeedEvent", json!({"board": "b-0", "update": {"position": 3, "at": 3, "op": "insert", "docs": ["1.0.1.0.1"], "class": "published", "key": "bare", "time": 1}})),
         ("FeedUpdate", json!({"position": 3, "at": 3, "op": "insert", "docs": ["1.0.1.0.1"], "class": "drafts", "session": "s-0", "key": "bare", "time": 1, "attest": null, "new_prefix": "1.0.2", "new_id": 2, "link": "1.0.1.0.1.0.2.1", "placed": "3", "base_extent": null})),
@@ -92,8 +92,9 @@ fn every_declared_type_round_trips_its_sample_against_the_table() {
     }
 }
 
-/// The file names every shape, every call of §4b.1, both answers and the
-/// six events; a field's optionality renders as `?`.
+/// The file names every shape, every call of §4b.1 — its rows the
+/// dispatch's calls, in the dispatch's order — both answers and the six
+/// events; a field's optionality renders as `?`.
 #[test]
 fn the_file_names_every_shape_call_and_event() {
     let text = declarations();
@@ -104,6 +105,7 @@ fn the_file_names_every_shape_call_and_event() {
         assert!(text.contains(&format!("  {name}(args: ")), "{name}");
     }
     assert_eq!(CALLS.len(), 20, "the twenty calls");
+    assert_eq!(CALLS.iter().map(|c| c.0).collect::<Vec<_>>(), crate::CALLS, "the declared rows are the dispatch's calls, in its order");
     assert!(text.contains("  answer(args: Answer)") && text.contains("  cancel(args: Cancel)"));
     for event in [events::MODE, events::SESSION_DIED, events::DAEMON, events::FEED, events::INDEX, events::MOMENT] {
         assert!(text.contains(&format!("'{event}'")), "{event}");

@@ -11,7 +11,12 @@
 //! The bridge's `search` call is answered on this thread too, over a
 //! channel, so the consumer never crosses a thread: two threads per board,
 //! the stream's reader and the consumer's owner, each borrowing the board
-//! from the `Arc` it holds.
+//! from the `Arc` it holds. A death signal this thread's reads meet ends
+//! the session by the one sequence the shell runs too (`Sessions::end`).
+//! A session the page closes is read once more here, to the board's head
+//! under its still-standing token, before its close answers
+//! ([`Feed::closing`]): every `feed` row of a session precedes its
+//! `session-died`, however far this thread trails the commits.
 //!
 //! THE `feed` UPDATE's SHAPE — THIS CRATE's DEFINITION (S-24 (b), the
 //! shell's): the `/changes` entry's members VERBATIM (`at`, `op`, `docs`,
@@ -35,13 +40,14 @@ use serde_json::{json, Value};
 use skep_client::board::{ChangesAnswer, ChangesQuery, Token};
 use skep_client::derive::Mode;
 use skep_client::search::{events, Consumer, Lost, Newer, Place, Range, SearchAnswer, SearchDir, SearchOpts, SessionRef, State, Stop, Who};
+use skep_client::store::FileStore;
 use skep_client::{Board, Origin};
 use skep_search::{Hit, MarkKind, Standing};
 
-use crate::events::{EventBus, DAEMON, FEED, INDEX, MODE, SESSION_DIED};
-use crate::refusal::Refusal;
-use crate::script::Talk;
-use crate::sessions::{self, Sessions};
+use crate::events::{EventBus, DAEMON, FEED, INDEX, MODE};
+use crate::refusal::{Name, Refusal};
+use crate::sessions::{SessionEntry, Sessions, Supplements};
+use crate::Talk;
 
 /// One board of the shell: its reference, its origin and the board dialed
 /// through the shell's one logging dialer.
@@ -70,14 +76,15 @@ enum Cmd {
     Tick(u64),
     /// The stream could not connect.
     Unreachable(String),
-    /// A session opened: its supplement mounted.
-    Widen { reference: String, principal: u64, token: Token, account: String },
+    /// A session registered: its supplement mounted.
+    Widen(Arc<SessionEntry>),
     /// A session ended: its supplement unmounted.
     Narrow(u64),
+    /// A session the page is closing, its token still standing: its drafts
+    /// rows read to the head, then its supplement unmounted; answered.
+    Closing(Arc<SessionEntry>, Sender<()>),
     /// The bridge's search call.
     Search { who: Searcher, query: String, opts: SearchOpts, reindex: bool, reply: Sender<Result<Value, Refusal>> },
-    /// The consumer saved.
-    Save(Sender<()>),
     /// The consumer closed; the thread ends.
     Stop(Sender<()>),
 }
@@ -95,8 +102,9 @@ impl std::fmt::Debug for Feed {
 }
 
 impl Feed {
-    /// The two threads for `entry`, the consumer over `data_dir/index/`.
-    pub fn spawn(entry: Arc<BoardEntry>, bus: Arc<EventBus>, sessions: Arc<Sessions>, store: Option<Arc<skep_client::store::FileStore>>, data_dir: PathBuf, talk: Talk) -> Feed {
+    /// The two threads for `entry`, the consumer over `data_dir/index/`;
+    /// `reopen_store` the store the restart arm re-opens a session under.
+    pub fn spawn(entry: Arc<BoardEntry>, bus: Arc<EventBus>, sessions: Arc<Sessions>, reopen_store: Option<Arc<FileStore>>, data_dir: PathBuf, talk: Talk) -> Feed {
         let (tx, rx) = channel();
         // The stream's reader: each commit a tick, a failed connect said.
         // The stream borrows the board from the `Arc` the thread holds, so
@@ -117,13 +125,13 @@ impl Feed {
             }
         });
         let stream_stop = stop_rx.recv().expect("the reader sends its stopper before it reads");
-        thread::spawn(move || Worker::run(entry, bus, sessions, store, data_dir, talk, rx));
+        thread::spawn(move || Worker::run(entry, bus, sessions, reopen_store, data_dir, talk, rx));
         Feed { cmds: tx, stream_stop }
     }
 
-    /// A session opened at this board: its supplement mounted.
-    pub fn widen(&self, reference: &str, principal: u64, token: Token, account: &str) {
-        let _ = self.cmds.send(Cmd::Widen { reference: reference.to_string(), principal, token, account: account.to_string() });
+    /// A session registered at this board: its supplement mounted.
+    pub fn widen(&self, entry: &Arc<SessionEntry>) {
+        let _ = self.cmds.send(Cmd::Widen(Arc::clone(entry)));
     }
 
     /// A session ended: its supplement unmounted.
@@ -131,21 +139,26 @@ impl Feed {
         let _ = self.cmds.send(Cmd::Narrow(principal));
     }
 
+    /// A session the page is closing — out of the table, its token still
+    /// standing at the board: its drafts rows read to the head under that
+    /// token, each a `feed` event, then its supplement unmounted, answered
+    /// once both are done, so every `feed` row of the session precedes the
+    /// `session-died` its close emits next. A thread that has stopped
+    /// answers at once.
+    pub fn closing(&self, entry: &Arc<SessionEntry>) {
+        let (reply, rx) = channel();
+        if self.cmds.send(Cmd::Closing(Arc::clone(entry), reply)).is_ok() {
+            let _ = rx.recv();
+        }
+    }
+
     /// The bridge's search call, answered on the consumer's thread.
     pub fn search(&self, who: Searcher, query: &str, opts: SearchOpts, reindex: bool) -> Result<Value, Refusal> {
         let (reply, rx) = channel();
         if self.cmds.send(Cmd::Search { who, query: query.to_string(), opts, reindex, reply }).is_err() {
-            return Err(Refusal::shell("feed_stopped", json!({})));
+            return Err(Refusal::shell(Name::FEED_STOPPED, json!({})));
         }
-        rx.recv().unwrap_or_else(|_| Err(Refusal::shell("feed_stopped", json!({}))))
-    }
-
-    /// The consumer saved now.
-    pub fn save(&self) {
-        let (reply, rx) = channel();
-        if self.cmds.send(Cmd::Save(reply)).is_ok() {
-            let _ = rx.recv();
-        }
+        rx.recv().unwrap_or_else(|_| Err(Refusal::shell(Name::FEED_STOPPED, json!({}))))
     }
 
     /// The stream ended and the consumer closed — the save at the shell's
@@ -164,7 +177,9 @@ struct Worker<'b> {
     entry: &'b BoardEntry,
     bus: Arc<EventBus>,
     sessions: Arc<Sessions>,
-    store: Option<Arc<skep_client::store::FileStore>>,
+    /// The store the restart arm re-opens a session under: the signed
+    /// mode's, none under the bare mode.
+    reopen_store: Option<Arc<FileStore>>,
     data_dir: PathBuf,
     talk: Talk,
     consumer: Option<Consumer<'b>>,
@@ -178,7 +193,7 @@ struct Worker<'b> {
 }
 
 impl<'b> Worker<'b> {
-    fn run(entry: Arc<BoardEntry>, bus: Arc<EventBus>, sessions: Arc<Sessions>, store: Option<Arc<skep_client::store::FileStore>>, data_dir: PathBuf, talk: Talk, rx: Receiver<Cmd>) {
+    fn run(entry: Arc<BoardEntry>, bus: Arc<EventBus>, sessions: Arc<Sessions>, reopen_store: Option<Arc<FileStore>>, data_dir: PathBuf, talk: Talk, rx: Receiver<Cmd>) {
         let entry_arc = entry;
         let entry: &BoardEntry = &entry_arc;
         let head = entry.board.health().map(|h| h.log_position()).unwrap_or(0);
@@ -186,7 +201,7 @@ impl<'b> Worker<'b> {
             entry,
             bus,
             sessions,
-            store,
+            reopen_store,
             data_dir,
             talk,
             consumer: None,
@@ -204,14 +219,15 @@ impl<'b> Worker<'b> {
             match cmd {
                 Cmd::Tick(position) => worker.tick(position),
                 Cmd::Unreachable(text) => worker.unreachable(&text),
-                Cmd::Widen { reference, principal, token, account } => worker.widen(reference, principal, token, &account),
+                Cmd::Widen(entry) => worker.widen(&entry),
                 Cmd::Narrow(principal) => worker.narrow(principal),
+                Cmd::Closing(entry, reply) => {
+                    worker.read_drafts(&entry);
+                    worker.narrow(entry.facts.principal);
+                    let _ = reply.send(());
+                }
                 Cmd::Search { who, query, opts, reindex, reply } => {
                     let _ = reply.send(worker.search(who, &query, &opts, reindex));
-                }
-                Cmd::Save(reply) => {
-                    worker.save();
-                    let _ = reply.send(());
                 }
                 Cmd::Stop(reply) => {
                     worker.close();
@@ -270,24 +286,28 @@ impl<'b> Worker<'b> {
         // the arm is read when the board answers again.
     }
 
-    /// A principal whose supplement met the death signal: every session of
-    /// that principal at this board is dead.
+    /// A principal whose supplement met the death signal on the consumer's
+    /// read: the session whose token the supplement was widened under is
+    /// ended. Another session of the principal meets its own death on its
+    /// own drafts read, never on this one's.
     fn died(&mut self, principal: u64) {
-        for entry in self.sessions.on_board(&self.entry.reference) {
-            if entry.facts.principal == principal {
-                self.sessions.remove(&entry.reference);
-                let death = sessions::reason(&self.entry.board, self.store.as_deref(), &entry);
-                self.bus.emit(SESSION_DIED, json!({"session": entry.reference, "reason": death.reason}));
-                self.drafts_since.remove(&principal);
-                self.references.remove(&principal);
-            }
-        }
+        let Some(session) = self.references.get(&principal).and_then(|r| self.sessions.get(r)) else { return };
+        self.end(&session);
+    }
+
+    /// A death signal met at this board on `session`'s token: the session
+    /// ended by the one sequence the shell runs too.
+    fn end(&mut self, session: &SessionEntry) {
+        let (sessions, bus, store) = (Arc::clone(&self.sessions), Arc::clone(&self.bus), self.reopen_store.clone());
+        let entry: &'b BoardEntry = self.entry;
+        sessions.end(session, &entry.board, store.as_deref(), self, &bus);
     }
 
     /// THE `feed` EVENTS: the published feed's new rows as a guest, then
     /// each open session's drafts supplement under its token.
     fn read_feed(&mut self) {
-        let board = &self.entry.board;
+        let entry: &'b BoardEntry = self.entry;
+        let board = &entry.board;
         loop {
             match board.changes(None, &ChangesQuery { since: self.published_since, ..ChangesQuery::default() }) {
                 Ok(ChangesAnswer::Page(page)) => {
@@ -315,24 +335,36 @@ impl<'b> Worker<'b> {
                 Ok(_) | Err(_) => break,
             }
         }
-        for session in self.sessions.on_board(&self.entry.reference) {
-            let principal = session.facts.principal;
+        for session in self.sessions.on_board(&entry.reference) {
+            self.read_drafts(&session);
+        }
+    }
+
+    /// `session`'s drafts supplement read to the board's head under its
+    /// token, from where its principal's last read stopped, each row a
+    /// `feed` event of the `drafts` class. The death signal ends the
+    /// session (`Sessions::end`, which answers a session the page already
+    /// closed with that arm and does nothing more).
+    fn read_drafts(&mut self, session: &SessionEntry) {
+        let entry: &'b BoardEntry = self.entry;
+        let principal = session.facts.principal;
+        loop {
             let since = *self.drafts_since.entry(principal).or_insert(self.published_since);
-            match board.changes(Some(&session.token), &ChangesQuery { since, drafts: true, ..ChangesQuery::default() }) {
+            match entry.board.changes(Some(&session.token), &ChangesQuery { since, drafts: true, ..ChangesQuery::default() }) {
                 Ok(ChangesAnswer::Page(page)) => {
-                    for entry in &page.changes {
-                        self.emit_feed(entry, "drafts", Some(&session.reference));
+                    for row in &page.changes {
+                        self.emit_feed(row, "drafts", Some(&session.reference));
                     }
                     self.drafts_since.insert(principal, page.last);
+                    if !page.more {
+                        return;
+                    }
                 }
                 Ok(ChangesAnswer::Closed) => {
-                    if self.sessions.remove(&session.reference).is_some() {
-                        let death = sessions::reason(board, self.store.as_deref(), &session);
-                        self.bus.emit(SESSION_DIED, json!({"session": session.reference, "reason": death.reason}));
-                    }
-                    self.drafts_since.remove(&principal);
+                    self.end(session);
+                    return;
                 }
-                Ok(_) | Err(_) => {}
+                Ok(_) | Err(_) => return,
             }
         }
     }
@@ -382,29 +414,6 @@ impl<'b> Worker<'b> {
         }
     }
 
-    fn widen(&mut self, reference: String, principal: u64, token: Token, account: &str) {
-        self.references.insert(principal, reference);
-        self.drafts_since.entry(principal).or_insert(self.published_since);
-        self.mount();
-        if let Some(c) = &self.consumer {
-            if let Err(h) = c.widen(SessionRef { token: &token, principal, account }) {
-                self.say(format!("the supplement for principal {principal} could not widen: {h}"));
-            }
-        }
-        self.emit_index();
-    }
-
-    fn narrow(&mut self, principal: u64) {
-        if let Some(c) = &self.consumer {
-            if let Err(h) = c.narrow(principal) {
-                self.say(format!("the supplement for principal {principal} could not narrow: {h}"));
-            }
-        }
-        self.references.remove(&principal);
-        self.drafts_since.remove(&principal);
-        self.last_index.remove(&Some(principal));
-    }
-
     fn search(&mut self, who: Searcher, query: &str, opts: &SearchOpts, reindex: bool) -> Result<Value, Refusal> {
         self.mount();
         let Some(c) = &self.consumer else {
@@ -425,18 +434,10 @@ impl<'b> Worker<'b> {
                 c.search(who, query, opts)
             }
         };
-        let answer = answer.map_err(|e| Refusal::shell("query_too_long", json!({"bound": e.bound, "length": e.length})))?;
+        let answer = answer.map_err(|e| Refusal::shell(Name::QUERY_TOO_LONG, json!({"bound": e.bound, "length": e.length})))?;
         let value = answer_json(&answer);
         self.emit_index();
         Ok(value)
-    }
-
-    fn save(&mut self) {
-        if let Some(c) = &self.consumer {
-            if let Err(h) = c.save() {
-                self.say(format!("the index could not save: {h}"));
-            }
-        }
     }
 
     fn close(&mut self) {
@@ -445,6 +446,39 @@ impl<'b> Worker<'b> {
                 self.say(format!("the index could not save at close: {h}"));
             }
         }
+    }
+}
+
+/// The supplements on this thread, reached directly: the sequences of
+/// `sessions` widen and narrow here when this thread meets a session's end,
+/// and the shell's commands land here.
+impl Supplements for Worker<'_> {
+    fn widen(&mut self, entry: &Arc<SessionEntry>) {
+        let Some(account) = entry.facts.account.as_deref() else { return };
+        let principal = entry.facts.principal;
+        self.references.insert(principal, entry.reference.clone());
+        self.drafts_since.entry(principal).or_insert(self.published_since);
+        // The face is announced afresh under the reference it now stands
+        // under — a re-opened session's as much as a new one's.
+        self.last_index.remove(&Some(principal));
+        self.mount();
+        if let Some(c) = &self.consumer {
+            if let Err(h) = c.widen(SessionRef { token: &entry.token, principal, account }) {
+                self.say(format!("the supplement for principal {principal} could not widen: {h}"));
+            }
+        }
+        self.emit_index();
+    }
+
+    fn narrow(&mut self, principal: u64) {
+        if let Some(c) = &self.consumer {
+            if let Err(h) = c.narrow(principal) {
+                self.say(format!("the supplement for principal {principal} could not narrow: {h}"));
+            }
+        }
+        self.references.remove(&principal);
+        self.drafts_since.remove(&principal);
+        self.last_index.remove(&Some(principal));
     }
 }
 

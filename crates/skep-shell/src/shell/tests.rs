@@ -5,8 +5,12 @@
 //! refused `signed_session_required` verbatim, the stale and foreign
 //! references, the token's text in no answer and no event; then the signed
 //! mode over the same store: a publish-class write acked — the attest the
-//! shell composed — and the same write under the bare mode refused.
+//! shell composed — and the same write under the bare mode refused; and the
+//! daemon's restart under the signed mode: the session it ended, ended
+//! once, re-opened under a fresh reference its arm names, and written
+//! under.
 
+use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -18,16 +22,22 @@ use tempfile::TempDir;
 use super::*;
 use crate::events::Event;
 
-/// The daemon over `dir`, its own loopback origin configured: the daemon's
-/// own start (`skepd::embed`), then the wait for its cell index.
+/// The daemon over `dir` at an ephemeral port.
 fn spawn(dir: &Path, local_trust: bool) -> Skepd {
+    spawn_at(dir, local_trust, 0)
+}
+
+/// The daemon over `dir` at `port` (0 for an ephemeral one), its own
+/// loopback origin configured: the daemon's own start (`skepd::embed`),
+/// then the wait for its cell index.
+fn spawn_at(dir: &Path, local_trust: bool, port: u16) -> Skepd {
     let own = |port: u16| {
         let mut opts = AuthOptions::default();
         opts.local_trust = local_trust;
         opts.configured = vec![skepd::Origin::parse(&format!("http://127.0.0.1:{port}")).unwrap()];
         opts
     };
-    let sd = embed(dir, 0, own, MediaOptions::default(), DEFAULT_WORKERS).expect("the daemon starts");
+    let sd = embed(dir, port, own, MediaOptions::default(), DEFAULT_WORKERS).expect("the daemon starts");
     sd.wait_for_the_index(Duration::from_secs(60)).unwrap_or_else(|e| panic!("{e}"));
     sd
 }
@@ -64,6 +74,21 @@ fn answer_moments(rx: std::sync::mpsc::Receiver<Event>, pending: Arc<crate::pers
     })
 }
 
+/// The board at `origin` claimed by the store at `store` through a
+/// bare-mode shell's own `claim` call — the mode names the session kind,
+/// not the walk's.
+fn claim_board(origin: &str, store: &Path) {
+    let (shell, lines) = shell(origin, store, SessionMode::Bare { principal: 1 });
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let answerer = answer_moments(shell.subscribe(), Arc::clone(&shell.pending), seen);
+    shell.call("keygen", &json!({"label": "notebook"})).unwrap();
+    let board = shell.call("boards", &json!({})).unwrap()[0]["board"].as_str().unwrap().to_string();
+    shell.call("claim", &json!({"board": board})).unwrap_or_else(|r| panic!("{r}\n{}", lines.lock().unwrap().join("\n")));
+    shell.shutdown();
+    drop(shell);
+    answerer.join().unwrap();
+}
+
 fn wait_for(seen: &Arc<Mutex<Vec<Event>>>, pred: impl Fn(&Event) -> bool) -> Event {
     let deadline = Instant::now() + Duration::from_secs(30);
     loop {
@@ -84,7 +109,7 @@ fn the_bare_mode_claims_opens_writes_and_names_no_token() {
     let store = dir.path().join("store");
     let (shell, lines) = shell(&origin, &store, SessionMode::Bare { principal: 1 });
     let seen = Arc::new(Mutex::new(Vec::new()));
-    let answerer = answer_moments(shell.subscribe(), Arc::clone(shell.pending()), Arc::clone(&seen));
+    let answerer = answer_moments(shell.subscribe(), Arc::clone(&shell.pending), Arc::clone(&seen));
     // boards(), and the unknown board.
     let boards = shell.call("boards", &json!({})).unwrap();
     let board = boards[0]["board"].as_str().unwrap().to_string();
@@ -174,6 +199,34 @@ fn the_bare_mode_claims_opens_writes_and_names_no_token() {
     sd.shutdown();
 }
 
+/// THE CLOSE's ORDER: the drafts rows a session committed are `feed` events
+/// ahead of the `session-died` its close emits — read under its token at
+/// the close, however far the board's feed thread trails the commits — so a
+/// page that closes straight after a write still sees the write, and every
+/// subscriber sees one sequence.
+#[test]
+fn a_closed_sessions_drafts_rows_precede_its_session_died() {
+    let dir = TempDir::new().unwrap();
+    let sd = spawn(&dir.path().join("board"), true);
+    let origin = format!("http://127.0.0.1:{}", sd.port());
+    let store = dir.path().join("store");
+    claim_board(&origin, &store);
+    let (shell, _) = shell(&origin, &store, SessionMode::Bare { principal: 1 });
+    let rx = shell.subscribe();
+    let board = shell.call("boards", &json!({})).unwrap()[0]["board"].as_str().unwrap().to_string();
+    let session = shell.call("session", &json!({"board": board})).unwrap()["session"].as_str().unwrap().to_string();
+    let draft = shell.call("op", &json!({"session": session, "frame": {"op": "create_new_document", "account": "1.0.1"}})).unwrap()["addr"].as_str().unwrap().to_string();
+    shell.call("op", &json!({"session": session, "frame": {"op": "insert", "doc": draft, "at": {"subspace": "1", "ordinal": "1"}, "values": ["x"]}})).unwrap();
+    shell.call("close", &json!({"session": session})).unwrap();
+    // The close has answered: everything it emitted is on the stream.
+    let seen: Vec<Event> = rx.try_iter().filter(|e| e.name == "feed" || e.name == "session-died").collect();
+    let sequence: Vec<&str> = seen.iter().map(|e| if e.name == "feed" { e.data["update"]["op"].as_str().unwrap_or("?") } else { e.name }).collect();
+    assert_eq!(sequence, ["create_new_document", "insert", "session-died"], "{seen:?}");
+    assert!(seen[..2].iter().all(|e| e.data["update"]["class"] == "drafts" && e.data["update"]["session"] == session), "{seen:?}");
+    shell.shutdown();
+    sd.shutdown();
+}
+
 /// THE SIGNED MODE: the store that claimed the board opens a content-scoped
 /// session and a publish-class write is acked — the attest the shell
 /// composed; the same write under the bare mode is refused.
@@ -183,19 +236,7 @@ fn the_signed_mode_composes_the_attest_a_publish_class_write_needs() {
     let sd = spawn(&dir.path().join("board"), true);
     let origin = format!("http://127.0.0.1:{}", sd.port());
     let store = dir.path().join("store");
-    // The claim, under a bare-mode shell (the mode names the session kind,
-    // not the walk's).
-    {
-        let (shell, lines) = shell(&origin, &store, SessionMode::Bare { principal: 1 });
-        let seen = Arc::new(Mutex::new(Vec::new()));
-        let answerer = answer_moments(shell.subscribe(), Arc::clone(shell.pending()), seen);
-        shell.call("keygen", &json!({"label": "notebook"})).unwrap();
-        let board = shell.call("boards", &json!({})).unwrap()[0]["board"].as_str().unwrap().to_string();
-        shell.call("claim", &json!({"board": board})).unwrap_or_else(|r| panic!("{r}\n{}", lines.lock().unwrap().join("\n")));
-        shell.shutdown();
-        drop(shell);
-        answerer.join().unwrap();
-    }
+    claim_board(&origin, &store);
     let (signed, lines) = shell(&origin, &store, SessionMode::Signed { principal: 1 });
     assert_eq!(signed.check_signed_key().unwrap().len(), 1);
     let board = signed.call("boards", &json!({})).unwrap()[0]["board"].as_str().unwrap().to_string();
@@ -230,6 +271,47 @@ fn the_signed_mode_composes_the_attest_a_publish_class_write_needs() {
     let refused = bare.call("op", &json!({"session": session, "frame": {"op": "create_new_document", "account": "1.0.1", "published": true}})).unwrap_err();
     assert_eq!(refused.name(), "signed_session_required");
     bare.shutdown();
+    sd.shutdown();
+}
+
+/// THE RESTART under the signed mode: the session the daemon's restart
+/// ended is met by the hand that meets it first — the board's feed thread,
+/// here, before any call — and ENDED ONCE: one `session-died` on the
+/// restart arm, re-opened under a fresh reference the arm names and
+/// registered, its supplement widened (an `index` event names it), and a
+/// publish-class write acked under it; the old reference names nothing.
+#[test]
+fn a_session_the_restart_ended_is_reopened_under_a_fresh_reference() {
+    let dir = TempDir::new().unwrap();
+    let sd = spawn(&dir.path().join("board"), true);
+    let port = sd.port();
+    let origin = format!("http://127.0.0.1:{port}");
+    let store = dir.path().join("store");
+    claim_board(&origin, &store);
+    let (signed, lines) = shell(&origin, &store, SessionMode::Signed { principal: 1 });
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let answerer = answer_moments(signed.subscribe(), Arc::clone(&signed.pending), Arc::clone(&seen));
+    let board = signed.call("boards", &json!({})).unwrap()[0]["board"].as_str().unwrap().to_string();
+    let session = signed.call("session", &json!({"board": board})).unwrap()["session"].as_str().unwrap().to_string();
+    wait_for(&seen, |e| e.name == "index" && e.data["session"] == session);
+    sd.shutdown();
+    let sd = spawn_at(&dir.path().join("board"), true, port);
+    let died = wait_for(&seen, |e| e.name == "session-died" && e.data["session"] == session);
+    let reason = &died.data["reason"];
+    assert_eq!((reason["arm"].as_str(), reason["reopened"].as_bool()), (Some("restart"), Some(true)), "{reason}\n{}", lines.lock().unwrap().join("\n"));
+    let reopened = reason["session"].as_str().expect("the arm names the re-opened session").to_string();
+    assert!(reopened.starts_with("s-") && reopened != session, "{reopened}");
+    assert!(signed.sessions.get(&reopened).is_some(), "the re-opened session is registered");
+    wait_for(&seen, |e| e.name == "index" && e.data["session"] == reopened);
+    let edition = signed
+        .call("op", &json!({"session": reopened, "frame": {"op": "create_new_document", "account": "1.0.1", "published": true}}))
+        .unwrap_or_else(|r| panic!("{r}\n{}", lines.lock().unwrap().join("\n")));
+    assert_eq!(edition["resp"], "ack_addr", "{edition}");
+    assert_eq!(signed.call("op", &json!({"session": session, "frame": {"op": "key_set", "account": "1.0.1"}})).unwrap_err().name(), "session_ended");
+    assert_eq!(seen.lock().unwrap().iter().filter(|e| e.name == "session-died").count(), 1, "the session ended once");
+    signed.shutdown();
+    drop(signed);
+    answerer.join().unwrap();
     sd.shutdown();
 }
 

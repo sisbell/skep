@@ -41,8 +41,7 @@ use skep_client::person::scripted::{Script, Scripted};
 use skep_client::sheet::Label;
 use skep_client::store::{FileStore, KeyStore};
 use skep_client::Origin;
-use skep_shell::shell::{ArmConfig, SessionMode, ShellOptions};
-use skep_shell::Shell;
+use skep_shell::{ArmConfig, SessionMode, Shell, ShellOptions};
 use skepd::{embed, AuthOptions, MediaOptions, Skepd, DEFAULT_WORKERS};
 
 use crate::common::{origin, s, spawn};

@@ -206,4 +206,28 @@ mod tests {
         let misplaced = entries.iter().enumerate().filter(|(i, e)| e["seq"].as_u64() != Some(*i as u64)).count();
         assert_eq!(misplaced, 0, "an entry's seq is its place");
     }
+
+    /// THE DIALER's RECORD: a dial no board answers is recorded all the same
+    /// — its method, its route without the query, no status, the body's size
+    /// in and none out — and neither the token its header carries nor the
+    /// body it sent is kept (the mutants that record an answered dial alone,
+    /// or keep the query, or count no body).
+    #[test]
+    fn the_dialers_record_keeps_the_route_and_sizes_answered_or_not() {
+        let log = Arc::new(Log::new());
+        let port = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap().local_addr().unwrap().port();
+        let origin = Origin::parse(&format!("http://127.0.0.1:{port}")).unwrap();
+        let token = "9f".repeat(16);
+        let body = format!("{{\"op\":\"insert\",\"token\":\"{token}\"}}");
+        let req = Request::post("/op?x=1", body.clone().into_bytes()).header("Skepd-Session", &token);
+        assert!(LoggingDialer::new(Arc::clone(&log)).exchange(&origin, &req).is_err(), "no board answers at a released port");
+        let entries = log.entries();
+        assert_eq!(entries.len(), 1, "the unanswered dial is recorded: {entries:?}");
+        let entry = &entries[0];
+        assert_eq!((entry["kind"].as_str(), entry["method"].as_str(), entry["path"].as_str()), (Some("dial"), Some("POST"), Some("/op")), "{entry}");
+        assert!(entry["status"].is_null(), "{entry}");
+        assert_eq!((entry["bytes_in"].as_u64(), entry["bytes_out"].as_u64()), (Some(body.len() as u64), Some(0)), "{entry}");
+        let kept = entry.to_string();
+        assert!(!kept.contains(&token) && !kept.contains("Skepd-Session") && !kept.contains("insert"), "{kept}");
+    }
 }

@@ -164,10 +164,9 @@ pub enum NodeState {
 
 /// The write kinds of the wire (`docs/wire.md` §Operations): a frame of
 /// one of these in the guest form is refused by the shell without a dial.
-pub const WRITE_OPS: [&str; 17] = [
+pub const WRITE_OPS: [&str; 16] = [
     "delegate",
     "register_node",
-    "create_home",
     "create_new_document",
     "fork",
     "version",

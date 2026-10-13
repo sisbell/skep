@@ -314,4 +314,96 @@ mod tests {
         assert!(said.contains("another moment's kind") && said.contains("ImportTyped"), "{said}");
         assert!(!said.contains("5e5e"), "the seed never reaches TALK: {said}");
     }
+
+    /// Two sheets shown to `arm`: seeds `5e5e 5e5e` and `6f6f 6f6f`, under
+    /// fingerprints of `ab` and of `cd`.
+    fn show_two_sheets(arm: &DevArm) {
+        for (seed, fingerprint) in [("5e5e 5e5e", "ab"), ("6f6f 6f6f", "cd")] {
+            let fields = SheetFields { anchor: true, alg: "mldsa65-ed25519".into(), label: None, fingerprint_hex: fingerprint.repeat(32), fingerprint_grouped: fingerprint.repeat(2), seed_grouped: seed.into(), account: None, principal: None, origin: None };
+            arm.sheet(fields);
+        }
+    }
+
+    /// What a moment answered, a typed seed spelled out — never through
+    /// `Debug`, which hides it.
+    #[derive(Debug, PartialEq)]
+    enum Said {
+        Typed(String, String),
+        Declined,
+        Path(PathBuf),
+        Row(String),
+        File(PathBuf),
+        Neither,
+        Kept,
+        Placed,
+        Abandoned,
+    }
+
+    /// The five moments the arm answers.
+    const MOMENTS: [&str; 5] = ["retype", "destination", "confirm", "import", "kept_or_placed"];
+
+    /// `moment` asked of `arm`, its answer spelled.
+    fn ask(arm: &DevArm, moment: &str) -> Said {
+        let said = match moment {
+            "retype" => arm.retype().map(|r| match r {
+                Retyped::Typed { seed_hex, fingerprint_prefix } => Said::Typed(seed_hex, fingerprint_prefix),
+                Retyped::Declined => Said::Declined,
+            }),
+            "destination" => arm.destination(1).map(Said::Path),
+            "confirm" => arm.confirm("retire?", "row").map(Said::Row),
+            "import" => arm.import().map(|i| match i {
+                Imported::File(p) => Said::File(p),
+                Imported::Typed { seed_hex, fingerprint_prefix } => Said::Typed(seed_hex, fingerprint_prefix),
+                Imported::Neither => Said::Neither,
+            }),
+            _ => arm.kept_or_placed(std::path::Path::new("/tmp/k")).map(|k| match k {
+                KeptOrPlaced::Kept => Said::Kept,
+                KeptOrPlaced::Placed => Said::Placed,
+            }),
+        };
+        said.unwrap_or(Said::Abandoned)
+    }
+
+    /// EVERY SCRIPTED ANSWER MEETS EVERY MOMENT as the grammar says, the law
+    /// over the seventeen answers and the five moments: an answer meets its
+    /// own moment as its line reads — a re-type or an import typed off the
+    /// very sheet it names, a sheet never shown abandoning — and abandons
+    /// every other, `abandon` every one; and no seed shown or typed reaches
+    /// TALK (the mutants that answer one kind as another, take another
+    /// moment's answer, or type off the wrong sheet).
+    #[test]
+    fn every_scripted_answer_meets_every_moment_as_the_grammar_says() {
+        let typed = |seed: &str, prefix: &str| Said::Typed(seed.into(), prefix.into());
+        let cells = [
+            (Answer::Confirm(true), "confirm", Said::Row("row".into())),
+            (Answer::Confirm(false), "confirm", Said::Row("no".into())),
+            (Answer::Typed("a wrong row".into()), "confirm", Said::Row("a wrong row".into())),
+            (Answer::RetypeSheet(0), "retype", typed("5e5e5e5e", "abababab")),
+            (Answer::RetypeSheet(1), "retype", typed("6f6f6f6f", "cdcdcdcd")),
+            (Answer::RetypeSheet(2), "retype", Said::Abandoned),
+            (Answer::RetypeWrong, "retype", typed(&"00".repeat(32), "00000000")),
+            (Answer::RetypeDeclined, "retype", Said::Declined),
+            (Answer::Destination("/tmp/a".into()), "destination", Said::Path("/tmp/a".into())),
+            (Answer::ImportFile("/tmp/f".into()), "import", Said::File("/tmp/f".into())),
+            (Answer::ImportSheet(0), "import", typed("5e5e5e5e", "abababab")),
+            (Answer::ImportSheet(2), "import", Said::Abandoned),
+            (Answer::ImportTyped { seed_hex: "7a".repeat(32), fingerprint_prefix: "abcdabcd".into() }, "import", typed(&"7a".repeat(32), "abcdabcd")),
+            (Answer::ImportNeither, "import", Said::Neither),
+            (Answer::Kept, "kept_or_placed", Said::Kept),
+            (Answer::Placed, "kept_or_placed", Said::Placed),
+            (Answer::Abandon, "every moment", Said::Abandoned),
+        ];
+        let abandoned = Said::Abandoned;
+        for (answer, own, said) in &cells {
+            for moment in MOMENTS {
+                let (talk, lines) = talk();
+                let arm = DevArm::script(vec![answer.clone()], talk);
+                show_two_sheets(&arm);
+                let want = if moment == *own { said } else { &abandoned };
+                assert_eq!(&ask(&arm, moment), want, "{answer:?} met at {moment}");
+                let talked = lines.lock().unwrap().join("\n");
+                assert!(!["5e5e", "6f6f", "7a7a"].iter().any(|seed| talked.contains(seed)), "{answer:?} at {moment}, a seed on TALK: {talked}");
+            }
+        }
+    }
 }

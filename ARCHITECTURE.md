@@ -1205,8 +1205,10 @@ Rules that hold across its files:
 - **The page holds nothing.** No token, key, seed, path or store location
   enters a call's answer or an event: the registry's names stand in for
   the token, the SECRET class stays in the arm, and the log keeps sizes
-  and routes alone. The shell's suite reads every answer and event for a
-  token-shaped run and finds none.
+  and routes alone. The shell's suite reads every answer, refusal, event
+  and log entry of its bare walk for the token's own text and finds none;
+  the provider's suite (`skep-cli`'s) reads every answer, event and the
+  log for a token-shaped run.
 - **The board's verdict is carried verbatim.** A `rejected` document and a
   non-200 are `Refusal::Board` with the body whole — a non-200 read once,
   by `Refusal::board`, and an `/op-at` refusal `skep-client` answers as a
@@ -1285,20 +1287,34 @@ Rules that hold across its files:
 
 Its suite runs against a daemon spawned in-process (`shell/tests.rs`):
 the bare mode's claim through the shell's own call with the anchor boxes
-answered as the page would, the draft write and its `feed` event, the
-publish-class refusal verbatim, a history read past the head refused
-`beyond_head` under the board's own status in the session and the guest
-form, `accept`'s armed name off the real walk, the stale and foreign
-references; a close straight after two draft writes, both rows ahead of
-its `session-died`; the signed mode's mint, shot and V-spec link acked
-under the composed attest; the daemon's restart under the signed mode,
-the session it ended re-opened under a fresh reference and written under;
-the own node's state announced at its board, a deliberate stop said once
-with no `unreachable` beside it while a second board's stream failure is
-still announced; the declared fields of the real answers; the dispatch
-naming every call by its own spelling, a shell's options printing no seed,
-a search held at one board holding back no session at another, and a shell
-dropped unstopped freeing its board's held lock. The
+answered as the page would, the draft write and its `feed` update — the
+board's own row, of the `drafts` class under its session, as a signed
+mint's is of the `published` class naming none — the publish-class
+refusal verbatim, a history read past the head refused `beyond_head`
+under the board's own status in the session and the guest form,
+`accept`'s armed name off the real walk, the stale and foreign
+references, and the token's text in no answer, refusal, event or log
+entry of the walk; a close straight after two draft writes, both rows
+ahead of its `session-died`; the signed mode's mint, shot and V-spec link
+acked under the composed attest, and every other kind with an entry frame
+— a shot with a base group and a window, `fork`, `version`, `nullify`,
+`assert_sup`, and `edit_link` with its type in both of the wire's forms —
+refused `signed_session_required` under a bare session, then acked under
+the signed one; a session's open position the board's own, read before it
+opened, under either mode; the daemon's restart under the signed mode, the
+session it ended re-opened under a fresh reference and written under; a
+bare session's death at a restart and at the flip to ENFORCING, the flip
+announced on the `mode` event and the bare bind then refused with the
+board's 401; the own node's state announced at its board, a deliberate
+stop said once with no `unreachable` beside it while a second board's
+stream failure is still announced; the declared fields of the real
+answers; the dispatch naming every call by its own spelling and logging
+each as one entry of its outcome and sizes, the guest form refusing every
+write kind of the wire with no dial a counting listener sees, a shell's
+options printing no seed, a search held at one board holding back no
+session at another, the stop abandoning a walk that waits on the page,
+and a shell dropped unstopped closing its session at the board and
+freeing its board's held lock. The
 HELD-BURST STORE is held there too: a burst held when the daemon is
 stopped and resent `kept` after a restart at the same port, the kernel
 poison holding a burst `poisoned` then `halted`, the poisoned burst of two
@@ -1311,20 +1327,29 @@ open, a relaunch with its board down listing and resending it, the probe
 keeping its cadence while the board keeps committing, a second
 principal's file untouched under the first's session; the store's own
 faces (the header, `v` first, the torn and damaged lines, the aside, the
-lock, compaction, persist-first, a refused copy's line standing in the
-queue, a re-mark read back as one line, a refused `done` settling its
-line) by `held.rs`'s suite, and the classification table, the own hand
-on a read (a signed entry's row, a lost-testimony row), the resend's
-three outcomes, a read the board refuses deciding nothing,
+lock, compaction and the file recreated header first by the next line,
+persist-first, every line form read back as it was held, the store's
+modes its owner's alone, a refused copy's line standing in the queue, a
+re-mark read back as one line, a refused `done` settling its line) by
+`held.rs`'s suite, and the classification table, the own hand on a read
+(a signed entry's row, a lost-testimony row), THE READ's table — every
+answer the resend's read can meet against every answer its site read can,
+cell by cell — a read the board refuses deciding nothing,
 `history_reclaimed` decided by the arrangement, a refusal the table holds
-nowhere leaving its line standing, a second window's burst resent from
-memory, the `base` a hold takes and a drain that unwinds leaving its board
-free by `hold.rs`'s. The end's once-only gate and the supplement's release
-are held by `sessions.rs`'s own suite — two hands at one death, one
+nowhere faced at the first dial and leaving a resent line standing, a
+second window's burst resent from memory, the `base` a hold takes from
+every kind of ack, the own node stopped, `writes.halted` and a third
+`durability` holding a burst over time, P38's halted file refusing every
+act and a line the store cannot copy standing in memory, the stored frame
+without its attest, a drop and a move each on its own document alone, one
+drain per board at a time and a drain that unwinds leaving its board free
+by `hold.rs`'s. The end's once-only gate and the supplement's release are
+held by `sessions.rs`'s own suite — two hands at one death, one
 derivation, one event; a hand that panics mid-end leaving the end to the
 next; a leaving session's supplement handed to the standing one — the
-log's numbering under eight writers at once by `log.rs`'s, and the
-arrangement by `tests/it/tidy.rs`.
+log's numbering under eight writers at once and its dialer's record of a
+dial no board answers by `log.rs`'s, every scripted answer met at every
+moment by `dev_arm.rs`'s, and the arrangement by `tests/it/tidy.rs`.
 
 ## The command, `skep-cli`
 

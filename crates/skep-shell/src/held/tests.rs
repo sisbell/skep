@@ -1,10 +1,12 @@
 //! THE STORE's FENCE (T1–T5): the header written once and read whole with
 //! P38's faces (`v` first), the torn last line ignored and a damaged middle
 //! line halting, the misplaced file moved aside and never overwriting, the
-//! lock a second holder cannot take, compaction once every line is done, and
-//! persist-first — the line on disk before the append returns. And the queue
-//! as the memory with the file its copy: a line the device refused stands in
-//! the queue under its ordinal, a re-mark reads back as the one line it
+//! lock a second holder cannot take, compaction once every line is done and
+//! the file recreated, header first, by the next line, and persist-first —
+//! the line on disk before the append returns. Every line form reads back as
+//! it was held, and the store is its owner's alone. And the queue as the
+//! memory with the file its copy: a line the device refused stands in the
+//! queue under its ordinal, a re-mark reads back as the one line it
 //! re-marks, and a `done` the device refused still settles its line.
 
 use std::cell::{Cell, RefCell};
@@ -303,4 +305,75 @@ fn a_done_the_device_refused_still_settles_its_line() {
     FAIL_SYNC.with(|f| f.set(false));
     assert!(matches!(settled, Err(DoneError::Unwritten(_))), "{settled:?}");
     assert_eq!(ks(&queue), [k2], "the settled line has left the queue");
+}
+
+/// AFTER COMPACTION the next line recreates the file, header first (§3c.3):
+/// the queue emptied and its file removed, the next hold writes T1's header
+/// once more and its line under ordinal 1 — on disk, so a reopen reads it
+/// (the mutant that keeps the removed file marked created appends to a file
+/// that is gone, and every burst held after the first resend is one a crash
+/// would lose).
+#[test]
+fn after_compaction_the_next_line_recreates_the_file_header_first() {
+    let tmp = TempDir::new().unwrap();
+    let d = dir(&tmp);
+    let mut queue = live(d.open_file(1, "1.0.1").unwrap());
+    let k = queue.hold("d1", None, 0, json!({"op": "insert"}), Reason::of("stopped", false)).k;
+    queue.done(k, Done::Dropped).unwrap();
+    assert!(!queue.on_disk(), "the file compacted away");
+    let again = queue.hold("d2", None, 0, json!({"op": "insert"}), Reason::of("behind", false));
+    assert!(again.unwritten.is_none(), "{:?}", again.unwritten);
+    assert_eq!(again.k, 1, "the ordinals start again");
+    let raw = fs::read_to_string(tmp.path().join("held").join(chain().to_string()).join("principal-1.held")).unwrap();
+    let mut lines = raw.lines();
+    assert_eq!(lines.next().unwrap(), format!("{{\"type\":\"skep-held-bursts\",\"v\":1,\"board\":\"{}\",\"principal\":1,\"account\":\"1.0.1\"}}", chain()));
+    assert!(lines.next().unwrap().starts_with("{\"held\":1,\"doc\":\"d2\","), "{raw}");
+    assert_eq!(ks(&live(d.open_file(1, "1.0.1").unwrap())), [1], "a reopen reads the line");
+}
+
+/// EVERY LINE FORM READS BACK AS IT WAS HELD (§3c.2), the law over its
+/// members: a line with no `id`, a plain one, and the page's own `id`
+/// holding a quote, a newline and a backslash — the page's string this file
+/// keeps — each under a hold `sent: false`, one that MAY have landed, and a
+/// REFUSED run's with the board's verdict beside it, over a frame of a
+/// multi-byte value; reopened, the queue is the queue that was held (the
+/// mutant reader that drops `refusal` reads a refused run back as holding,
+/// and the resend then sends what awaits the person's act).
+#[test]
+fn every_line_form_reads_back_as_it_was_held() {
+    let tmp = TempDir::new().unwrap();
+    let d = dir(&tmp);
+    let mut queue = live(d.open_file(1, "1.0.1").unwrap());
+    let verdict = json!({"resp": "rejected", "code": "out_of_bounds", "disposition": "permanent", "detail": "past \"the\" end"});
+    let reasons = [Reason::of("unreachable", false), Reason::of("poisoned", true), Reason::refused("out_of_bounds", verdict)];
+    for id in [None, Some("plain"), Some("a \"quote\", a\nnewline, a \\ backslash")] {
+        for reason in &reasons {
+            let held = queue.hold("1.0.1.0.1", id, 7, json!({"op": "insert", "values": ["é\"x"]}), reason.clone());
+            assert!(held.unwritten.is_none(), "{:?}", held.unwritten);
+        }
+    }
+    let reopened = live(d.open_file(1, "1.0.1").unwrap());
+    assert_eq!(reopened.lines().len(), 9);
+    assert_eq!(reopened.lines(), queue.lines(), "the reopened queue is the queue that was held");
+}
+
+/// THE STORE IS ITS OWNER's ALONE (§3c.1): `held/` and `held/<chain>/` made
+/// `0700`, a principal's file and the lock `0600` — modes set at creation,
+/// which no umask that leaves the owner's own bits can widen (the mutant
+/// that drops one leaves the person's draft text readable by every user of
+/// the machine under the usual umask).
+#[cfg(unix)]
+#[test]
+fn the_store_is_its_owners_alone() {
+    use std::os::unix::fs::PermissionsExt;
+    let tmp = TempDir::new().unwrap();
+    let d = dir(&tmp);
+    let _lock = d.try_lock().unwrap().expect("the lock is free");
+    let mut queue = live(d.open_file(1, "1.0.1").unwrap());
+    assert!(queue.hold("d1", None, 0, json!({"op": "insert"}), Reason::of("stopped", false)).unwritten.is_none());
+    let held = tmp.path().join("held");
+    let board = held.join(chain().to_string());
+    let mode = |p: &Path| fs::metadata(p).unwrap().permissions().mode() & 0o777;
+    let modes = [mode(&held), mode(&board), mode(&board.join("principal-1.held")), mode(&board.join("lock"))];
+    assert_eq!(modes, [0o700, 0o700, 0o600, 0o600], "held/, held/<chain>/, the file, the lock");
 }

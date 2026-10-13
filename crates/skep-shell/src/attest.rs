@@ -225,15 +225,17 @@ impl Composer<'_> {
         }
     }
 
-    /// A slot's spans AS STORED: the address form's unit spans, a V-spec
-    /// list's I-extents resolved through `image`, or a span list verbatim
+    /// A slot's spans AS STORED: the address form's unit spans; a V-spec
+    /// list's I-extents resolved through `image` — bare, as `make_link`'s
+    /// slots spell it, or as `edit_link`'s successor `ty` spells it,
+    /// `{"resolve": […]}` (wire.md §Links (writes)); or a span list verbatim
     /// (`emit`'s `ty`).
     fn slot(&self, slot: &Value, what: &str) -> Result<Vec<Span>, Halt> {
         if let Some(addrs) = slot["addrs"].as_array() {
             return addrs.iter().map(|a| Ok(unit_span(&addr(a.as_str().unwrap_or(""), what)?))).collect();
         }
-        let Some(list) = slot.as_array() else {
-            return Err(fault(format!("the frame's `{what}` slot is neither the address form nor a list"), "a slot is `{\"addrs\": […]}`, a V-spec list, or a span list"));
+        let Some(list) = slot["resolve"].as_array().or_else(|| slot.as_array()) else {
+            return Err(fault(format!("the frame's `{what}` slot is neither the address form nor a list"), "a slot is `{\"addrs\": […]}`, `{\"resolve\": [V-specs]}`, a V-spec list, or a span list"));
         };
         let mut spans = Vec::new();
         for item in list {

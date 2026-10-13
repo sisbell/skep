@@ -1,10 +1,11 @@
 //! T11 — THE REPLY: the operator sentence and the public-venue statement
 //! always; the anchorless sentence iff the record carried no anchor; the
 //! `local_trust` clause never; the public origin everywhere and the dialed
-//! one nowhere; the two acts composed from the `skep` command's own format
-//! strings with the public origin, AUTH-5.87's sentence and the read's
-//! limit in them; the three facts; the status address last; and the mail's
-//! text the page's text with the headers before it.
+//! one nowhere; the two acts the `skep` command's own lines, read back from
+//! `skep-cli`'s `src/commands/claim.rs`, with the public origin, AUTH-5.87's
+//! sentence and the read's limit in them; the three facts; the status
+//! address last; and the mail's text the page's text with the headers
+//! before it.
 
 use super::*;
 use crate::name::Name;
@@ -14,13 +15,22 @@ use crate::strings::{fill, ANCHORLESS, OPERATOR, PUBLIC_VENUE};
 const ORIGIN: &str = "https://alice.skep.host";
 const STATUS: &str = "https://skep.host/status/0123456789abcdef0123456789abcdef";
 
-/// THE `skep` COMMAND's OWN FORMAT STRINGS for the two acts
-/// (`skep-cli`'s `commands/claim.rs`, the hosted arm's fifth and sixth DATA
-/// lines), as LITERALS with the public origin and the principal 1 where the
-/// binary puts the dialed origin and its principal, and where its second
-/// act writes `<origin>`.
-const FIRST_ACT_AS_THE_BINARY_WRITES_IT: &str = "first act: from the device that generated the payload run `skep verify --board https://alice.skep.host --principal 1 --payload <the record it printed>` (or `--anchor <a> --anchor <b>`): the genesis record compared entry for entry, fingerprint and anchor flag, against what that device composed — it confirms the keys on the board, and it cannot tell you the board will open a session for you";
-const SECOND_ACT_AS_THE_BINARY_WRITES_IT: &str = "second act: in your first signed session the setup act runs — `skep claim --board https://alice.skep.host --dir <store>` from that device performs it: creating your account also creates a space for your agents beneath it, and its home";
+/// ONE ACT LINE AS `skep claim --hosted` WRITES IT, read back at test time
+/// from `skep-cli`'s `src/commands/claim.rs` (the hosted arm's fifth and
+/// sixth DATA lines): the string literal that begins `prefix`, its
+/// `\`-continued lines joined as Rust joins them (the line break and the
+/// next line's leading whitespace dropped), its `{}`s filled in the order
+/// the hosted arm passes them — the origin, then the principal — and its
+/// `<origin>` filled, with this suite's public origin and the principal 1.
+/// An edit to either act there is a red test here until the strings table
+/// follows it.
+fn binary_act(prefix: &str) -> String {
+    let source = std::fs::read_to_string(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../skep-cli/src/commands/claim.rs")).expect("skep-cli's claim command");
+    let start = source.find(&format!("\"{prefix}")).unwrap_or_else(|| panic!("claim.rs writes no literal beginning {prefix:?}")) + 1;
+    let literal = &source[start..start + source[start..].find('"').expect("the literal's end")];
+    let joined: String = literal.split("\\\n").enumerate().map(|(i, piece)| if i == 0 { piece } else { piece.trim_start() }).collect();
+    joined.replacen("{}", ORIGIN, 1).replacen("{}", "1", 1).replace("<origin>", ORIGIN)
+}
 
 /// T11: THE OPERATOR SENTENCE AND THE PUBLIC-VENUE STATEMENT ALWAYS — the
 /// latter verbatim — and THE ANCHORLESS SENTENCE IFF `anchorless`.
@@ -61,11 +71,11 @@ fn the_public_origin_everywhere_and_the_dialed_one_nowhere() {
     assert!(!reply.contains('{') && !reply.contains('}'), "every slot filled");
 }
 
-/// T11: THE TWO ACTS, composed from the binary's own format strings with
-/// the public origin: `skep verify --board <public> --principal 1
-/// --payload`, the read's limit in the reply's own words; `skep claim
-/// --board <public> --dir`, AUTH-5.87's sentence — each the binary's line
-/// whole.
+/// T11: THE TWO ACTS, the binary's own lines with the public origin:
+/// `skep verify --board <public> --principal 1 --payload`, the read's limit
+/// in the reply's own words; `skep claim --board <public> --dir`,
+/// AUTH-5.87's sentence — each the line `skep claim --hosted` writes, read
+/// back from its source, whole.
 #[test]
 fn the_two_acts_are_the_binarys_with_the_public_origin() {
     let reply = text(ORIGIN, false, STATUS);
@@ -73,8 +83,9 @@ fn the_two_acts_are_the_binarys_with_the_public_origin() {
     assert!(reply.contains("skep claim --board https://alice.skep.host --dir"));
     assert!(reply.contains("creating your account also creates a space for your agents beneath it, and its home"));
     assert!(reply.contains("it cannot tell you the board will open a session for you"));
-    assert!(reply.contains(FIRST_ACT_AS_THE_BINARY_WRITES_IT));
-    assert!(reply.contains(SECOND_ACT_AS_THE_BINARY_WRITES_IT));
+    let (first, second) = (binary_act("first act: "), binary_act("second act: "));
+    assert!(reply.contains(&first), "the reply's first act is not the binary's: {first}");
+    assert!(reply.contains(&second), "the reply's second act is not the binary's: {second}");
 }
 
 /// The order: the heading, the operator sentence, the anchorless sentence
@@ -83,6 +94,7 @@ fn the_two_acts_are_the_binarys_with_the_public_origin() {
 #[test]
 fn the_reply_in_its_order_with_the_status_address_last() {
     let reply = text(ORIGIN, true, STATUS);
+    let (first, second) = (binary_act("first act: "), binary_act("second act: "));
     let blocks: Vec<&str> = reply.trim_end().split("\n\n").collect();
     assert_eq!(
         blocks,
@@ -92,8 +104,8 @@ fn the_reply_in_its_order_with_the_status_address_last() {
             ANCHORLESS.text,
             PUBLIC_VENUE.text,
             "account 1.0.1\nprincipal 1\norigin https://alice.skep.host",
-            FIRST_ACT_AS_THE_BINARY_WRITES_IT,
-            SECOND_ACT_AS_THE_BINARY_WRITES_IT,
+            first.as_str(),
+            second.as_str(),
             "This reply stays at https://skep.host/status/0123456789abcdef0123456789abcdef",
         ]
     );

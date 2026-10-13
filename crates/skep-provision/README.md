@@ -165,7 +165,8 @@ Each row names where its words come from:
   the reply's heading, the mail's subject and the error pages;
 - `RULED` rows are carried verbatim: the public-venue statement, the
   three facts, and the two acts from the `skep` command's own format
-  strings with the public origin filled in;
+  strings with the public origin filled in — the reply's suite reads the
+  acts back from `skep-cli`'s source, so the two cannot drift apart;
 - `RULED-SUBSTANCE / DRAFT-WORDING` rows are the operator sentence and the
   anchorless sentence, ruled in substance and worded here.
 

@@ -34,7 +34,7 @@ use crate::docker::fake::{line, FakeDocker};
 use crate::invites::{lookup, mint, InviteState};
 use crate::scratch::Scratch;
 use crate::sender::fake::{messages, FakeSender};
-use crate::sender::Sender;
+use crate::sender::{Message, Sender};
 use crate::statedir::MailAddress;
 
 /// The six DATA lines a fresh board's dark claim prints (`sidecar/tests.rs`
@@ -108,8 +108,9 @@ fn rig_with(script: &str, mail: Option<Vec<i32>>, sleep: Sleep) -> Rig {
     let log: Log = Arc::new(move |line: &str| into.lock().unwrap().push(line.to_owned()));
     let probe =
         Arc::new(Probe { fake: FakeSender::new(dir.path().join("mail.log"), mail.clone().unwrap_or_default()), service: OnceLock::new(), token: Mutex::new(None), seen: Mutex::new(Vec::new()) });
-    let mail = mail.map(|_| Mail { outbox: Outbox::inline(Box::new(Arc::clone(&probe)), Arc::clone(&log), Arc::new(|_| {})), from: "noreply@skep.host".into() });
-    let config = Config { boards_dir: boards.clone(), suffix: "skep.host".into(), reply_to: "owner@skep.host".into() };
+    let address = |text: &str| MailAddress::parse(text).expect("an address");
+    let mail = mail.map(|_| Outbox::inline(Box::new(Arc::clone(&probe)), address("noreply@skep.host"), address("owner@skep.host"), Arc::clone(&log), Arc::new(|_| {})));
+    let config = Config { boards_dir: boards.clone(), suffix: "skep.host".into() };
     let service = Arc::new(Service::new(config, state.clone(), Box::new(Arc::clone(&fake)), mail, log, sleep).expect("the service"));
     probe.service.set(Arc::downgrade(&service)).ok();
     Rig { dir, boards, state, fake, probe, lines, service }
@@ -676,7 +677,7 @@ fn with_no_mail_the_board_goes_live_and_nothing_is_sent() {
 fn the_service_starts_with_the_snippets_live_names() {
     let rig = rig("", None);
     fs::write(rig.snippet("alice"), b"").expect("a snippet");
-    let config = Config { boards_dir: rig.boards.clone(), suffix: "skep.host".into(), reply_to: "owner@skep.host".into() };
+    let config = Config { boards_dir: rig.boards.clone(), suffix: "skep.host".into() };
     let again = Service::new(config, rig.state.clone(), Box::new(Arc::clone(&rig.fake)), None, Arc::new(|_: &str| {}), Arc::new(|_| {})).expect("the service");
     assert_eq!(again.live(), 1);
 }

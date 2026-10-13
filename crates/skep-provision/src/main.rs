@@ -122,7 +122,7 @@ use std::thread;
 
 use args::{Command, Mailer};
 use docker::{Docker, Host};
-use flow::{Config, Mail, Service};
+use flow::{Config, Service};
 use pages::Site;
 use sender::{Log, Outbox, Sender, Sleep};
 use statedir::StateDir;
@@ -141,8 +141,9 @@ fn main() {
     exit(code);
 }
 
-/// A line on stdout — DATA — whose write failing is the run's failure:
-/// exit 1, never a panic.
+/// A line on stdout — DATA — answered with the exit code its write earns,
+/// 0 or 1, never a panic: the verbs that end after their one line answer
+/// it; `serve` serves on past its serving line.
 fn say_out(line: &str) -> i32 {
     let mut out = io::stdout().lock();
     match writeln!(out, "{line}").and_then(|()| out.flush()) {
@@ -185,8 +186,8 @@ fn serve(cfg: args::Serve) -> i32 {
     let sleep: Sleep = Arc::new(thread::sleep);
     let mail = match &cfg.mail {
         None => None,
-        Some(m) => match Outbox::spawn(sender_of(&m.mailer), Arc::clone(&log), Arc::clone(&sleep)) {
-            Ok(outbox) => Some(Mail { outbox, from: m.from.as_str().to_owned() }),
+        Some(m) => match Outbox::spawn(sender_of(&m.mailer), m.from.clone(), cfg.reply_to.clone(), Arc::clone(&log), Arc::clone(&sleep)) {
+            Ok(outbox) => Some(outbox),
             Err(e) => {
                 say_err(&format!("skep-provision: the sender's thread could not start: {e}"));
                 return 1;
@@ -194,7 +195,7 @@ fn serve(cfg: args::Serve) -> i32 {
         },
     };
     let mailing = if mail.is_some() { "mail on" } else { "mail OFF (no --mailer and --from): no follow-up mail is sent" };
-    let config = Config { boards_dir: cfg.boards_dir.clone(), suffix: cfg.settings.suffix.clone(), reply_to: cfg.reply_to.as_str().to_owned() };
+    let config = Config { boards_dir: cfg.boards_dir.clone(), suffix: cfg.settings.suffix.clone() };
     let service = match Service::new(config, state, docker, mail, Arc::clone(&log), sleep) {
         Ok(service) => service,
         Err(e) => {
@@ -215,7 +216,9 @@ fn serve(cfg: args::Serve) -> i32 {
     // THE BOUND ADDRESS, read back off the listener: the port under
     // `--listen <addr>:0`, never what was asked for.
     let bound = listener.local_addr().map_or_else(|_| cfg.listen.to_string(), |a| a.to_string());
-    say_out(&format!(
+    // The serving line: a stdout that cannot take it costs the line, never
+    // the service — the address is bound and the run serves on.
+    let _ = say_out(&format!(
         "skep-provision: serving http://{bound}/ state-dir {} boards-dir {} suffix {} live {} swept {swept} workers {} {mailing}",
         cfg.state_dir.display(),
         cfg.boards_dir.display(),
@@ -253,7 +256,7 @@ fn runner(cfg: &args::Serve) -> io::Result<Box<dyn Docker>> {
 /// `--mailer-fake` names.
 fn sender_of(mailer: &Mailer) -> Box<dyn Sender> {
     match mailer {
-        Mailer::Program(program) => Box::new(sender::Mailer::new(program.clone())),
+        Mailer::Program(program) => Box::new(sender::RelaySender::new(program.clone())),
         #[cfg(feature = "test-hooks")]
         Mailer::Fake(log) => Box::new(sender::fake::FakeSender::new(log.clone(), Vec::new())),
     }

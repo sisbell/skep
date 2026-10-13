@@ -70,6 +70,14 @@ impl Name {
         Ok(Name(name))
     }
 
+    /// A NAME AS THIS SERVICE WROTE IT — a snippet's stem, a labelled volume:
+    /// `text` in the grammar AS IT STANDS, never lowercased. A file or a
+    /// volume spelled as no name is spelled — `Upper`, `Dave` — was made by
+    /// no post of this service, and folding it would name another board's.
+    pub fn exact(text: &str) -> Option<Name> {
+        Name::parse(text.as_bytes()).ok().filter(|name| name.as_str() == text)
+    }
+
     /// The name as text.
     pub fn as_str(&self) -> &str {
         &self.0

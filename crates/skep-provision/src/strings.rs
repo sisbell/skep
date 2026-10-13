@@ -12,8 +12,8 @@
 //!
 //! The pages (`pages`) show the sign-up page's rows, the claim form's, the
 //! status page's and the answers outside the routes; the reply (`reply`)
-//! composes its rows for the page and the mail alike; the mail's subject is
-//! the flow's (`flow`).
+//! composes its rows for the page and the mail alike; the follow-up mail's
+//! subject is the sender's (`sender`).
 
 /// One row of the strings table: where its words come from, and the words.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -116,14 +116,16 @@ pub const PUBLIC_VENUE: Words = Words {
 pub const FACTS: Words = Words { id: "RULED", text: "account {account}\nprincipal {principal}\norigin {origin}" };
 /// THE FIRST ACT (AUTH-4.58's detection): the `skep` command's own format
 /// string (`skep claim --hosted`'s fifth DATA line), the public origin in
-/// the dialed one's place.
+/// the dialed one's place — held to that line by `reply`'s suite, which
+/// reads it back from `skep-cli`.
 pub const FIRST_ACT: Words = Words {
     id: "RULED",
     text: "first act: from the device that generated the payload run `skep verify --board {origin} --principal {principal} --payload <the record it printed>` (or `--anchor <a> --anchor <b>`): the genesis record compared entry for entry, fingerprint and anchor flag, against what that device composed — it confirms the keys on the board, and it cannot tell you the board will open a session for you",
 };
 /// THE SECOND ACT, with AUTH-5.87's sentence: the `skep` command's own line
 /// (`skep claim --hosted`'s sixth), its `<origin>` filled with the public
-/// origin.
+/// origin — held to that line by `reply`'s suite, which reads it back from
+/// `skep-cli`.
 pub const SECOND_ACT: Words = Words {
     id: "RULED",
     text: "second act: in your first signed session the setup act runs — `skep claim --board {origin} --dir <store>` from that device performs it: creating your account also creates a space for your agents beneath it, and its home",

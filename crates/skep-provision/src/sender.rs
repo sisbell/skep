@@ -5,19 +5,23 @@
 //! * [`Message`] — PLAIN TEXT: `To:` the invite's address, `From:` the
 //!   `--from` address, `Reply-To:` the owner's `--reply-to`, a DRAFT
 //!   subject, and the body the reply renders for the page too (`reply`), so
-//!   the mail is the page's text and the headers.
+//!   the mail is the page's text and the headers. The board, the recipient
+//!   and the body are each post's; the other three are the outbox's own,
+//!   the same for every board.
 //! * [`Sender`] — the TRAIT, one method: hand one message over.
-//! * [`Mailer`] — its one real implementation, SHELLING OUT to the
-//!   host-installed relay client the operator names (`--mailer`) through
-//!   `process::run`, the runner `docker`'s calls go through too:
-//!   `<mailer> -t`, the message with its headers on standard input — the
-//!   convention `sendmail` and `msmtp` share as this crate knows them
-//!   (UNVERIFIED HERE): `-t` reads the recipients off the `To:` header.
-//!   The relay's credentials are the relay client's configuration on the
-//!   VM, never this program's; no mail or TLS library is linked.
-//! * [`Outbox`] — the SENDER THREAD of its own: the worker hands it a
-//!   message after the status turned live and goes on to the next post; the
-//!   thread sends it, and a refusal — a non-zero exit, a mailer that cannot
+//! * [`RelaySender`] — its one real implementation, SHELLING OUT to the
+//!   host-installed relay client — the mailer the operator names
+//!   (`--mailer`) — through `process::run`, the runner `docker`'s calls go
+//!   through too: `<mailer> -t`, the message with its headers on standard
+//!   input — the convention `sendmail` and `msmtp` share as this crate
+//!   knows them (UNVERIFIED HERE): `-t` reads the recipients off the `To:`
+//!   header. The relay's credentials are the relay client's configuration
+//!   on the VM, never this program's; no mail or TLS library is linked.
+//! * [`Outbox`] — the SENDER THREAD of its own, and the follow-up mail's
+//!   `From:`, `Reply-To:` and subject: the worker hands it a board, the
+//!   invite's address and the live reply after the status turned live and
+//!   goes on to the next post; the outbox makes the message and the thread
+//!   sends it, and a refusal — a non-zero exit, a mailer that cannot
 //!   run — is logged and RETRIED ([`MAIL_TRIES`] tries, [`MAIL_INTERVAL`]
 //!   apart) while the status page stands live, then logged as given up. A
 //!   mail outage never loses a board: its page and its route stand
@@ -32,12 +36,14 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::mpsc::{self, Receiver};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
 use crate::name::Name;
 use crate::process::{self, Exit};
+use crate::statedir::MailAddress;
+use crate::strings::{fill, MAIL_SUBJECT};
 
 /// The tries a message gets: the first and six more — an hour of a
 /// relay's outage at [`MAIL_INTERVAL`].
@@ -97,29 +103,29 @@ pub trait Sender: Send + Sync {
     fn send(&self, message: &Message) -> io::Result<Exit>;
 }
 
-/// THE REAL SENDER: the host's relay client.
+/// THE REAL SENDER: the host's relay client, the mailer `--mailer` names.
 #[derive(Debug, Clone)]
-pub struct Mailer {
+pub struct RelaySender {
     program: PathBuf,
 }
 
-impl Mailer {
-    /// The mailer at `program` — a path, or a name found on `PATH`.
-    pub fn new(program: PathBuf) -> Mailer {
-        Mailer { program }
+impl RelaySender {
+    /// The relay client at `program` — a path, or a name found on `PATH`.
+    pub fn new(program: PathBuf) -> RelaySender {
+        RelaySender { program }
     }
 }
 
-/// THE COMMAND for a mailer: `<program> -t` and nothing else; its streams
-/// are `process::run`'s to set — the message on its stdin, its stdout and
-/// stderr captured apart.
+/// THE COMMAND for a relay client: `<program> -t` and nothing else; its
+/// streams are `process::run`'s to set — the message on its stdin, its
+/// stdout and stderr captured apart.
 fn command(program: &Path) -> Command {
     let mut cmd = Command::new(program);
     cmd.arg(READ_RECIPIENTS);
     cmd
 }
 
-impl Sender for Mailer {
+impl Sender for RelaySender {
     fn send(&self, message: &Message) -> io::Result<Exit> {
         process::run(command(&self.program), Some(message.text().as_bytes()))
     }
@@ -148,14 +154,19 @@ fn deliver(sender: &dyn Sender, message: &Message, tries: u32, interval: Duratio
     false
 }
 
-/// THE OUTBOX: where the worker hands a message.
+/// THE OUTBOX: where the worker hands a follow-up mail — the sender's own
+/// thread, and the three headers every follow-up mail carries alike.
 pub struct Outbox {
     way: Way,
+    /// `--from`: the sending address.
+    from: MailAddress,
+    /// `--reply-to`: the owner's mailbox, where a reply goes.
+    reply_to: MailAddress,
 }
 
 enum Way {
     /// The sender thread's queue.
-    Thread(Mutex<mpsc::Sender<Message>>),
+    Thread(mpsc::Sender<Message>),
     /// Delivered on the caller's own thread: a unit suite's, so the order
     /// of a send against the status is the order of the calls.
     #[cfg(test)]
@@ -163,32 +174,36 @@ enum Way {
 }
 
 impl Outbox {
-    /// THE SENDER THREAD, started: it delivers each message handed over, in
-    /// turn, until the program ends.
-    pub fn spawn(sender: Box<dyn Sender>, log: Log, sleep: Sleep) -> io::Result<Outbox> {
+    /// THE SENDER THREAD, started over the follow-up mail's `From:` and
+    /// `Reply-To:`: it delivers each message handed over, in turn, until the
+    /// program ends.
+    pub fn spawn(sender: Box<dyn Sender>, from: MailAddress, reply_to: MailAddress, log: Log, sleep: Sleep) -> io::Result<Outbox> {
         let (tx, rx): (mpsc::Sender<Message>, Receiver<Message>) = mpsc::channel();
         thread::Builder::new().name("sender".into()).spawn(move || {
             for message in rx {
                 deliver(sender.as_ref(), &message, MAIL_TRIES, MAIL_INTERVAL, sleep.as_ref(), log.as_ref());
             }
         })?;
-        Ok(Outbox { way: Way::Thread(Mutex::new(tx)) })
+        Ok(Outbox { way: Way::Thread(tx), from, reply_to })
     }
 
     /// The outbox a unit suite drives: each message delivered at once, on
     /// the caller's thread.
     #[cfg(test)]
-    pub fn inline(sender: Box<dyn Sender>, log: Log, sleep: Sleep) -> Outbox {
-        Outbox { way: Way::Inline { sender, log, sleep } }
+    pub fn inline(sender: Box<dyn Sender>, from: MailAddress, reply_to: MailAddress, log: Log, sleep: Sleep) -> Outbox {
+        Outbox { way: Way::Inline { sender, log, sleep }, from, reply_to }
     }
 
-    /// One message handed over.
-    pub fn post(&self, message: Message) {
+    /// ONE FOLLOW-UP MAIL handed over: the board, the invite's address and
+    /// the live reply; `From:`, `Reply-To:` and the subject are the outbox's
+    /// own, the same for every board.
+    pub fn post(&self, name: Name, to: String, body: String) {
+        let message = Message { name, to, from: self.from.as_str().to_owned(), reply_to: self.reply_to.as_str().to_owned(), subject: fill(MAIL_SUBJECT, &[]), body };
         match &self.way {
             Way::Thread(tx) => {
                 // The thread ends only with the program; a send that fails
                 // has no reader left to fail to.
-                let _ = tx.lock().unwrap_or_else(|e| e.into_inner()).send(message);
+                let _ = tx.send(message);
             }
             #[cfg(test)]
             Way::Inline { sender, log, sleep } => {

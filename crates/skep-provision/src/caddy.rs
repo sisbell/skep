@@ -91,7 +91,7 @@ pub fn reload(docker: &dyn Docker) -> io::Result<Exit> {
 }
 
 /// Every name a snippet stands for: each `<name>.caddy` file in the
-/// directory whose stem is a name in the grammar — what the status map is
+/// directory whose stem [`Name::exact`] reads — what the status map is
 /// rebuilt from at start. A file of another shape is no board's and is
 /// passed over.
 pub fn names(boards_dir: &Path) -> io::Result<Vec<Name>> {
@@ -103,10 +103,8 @@ pub fn names(boards_dir: &Path) -> io::Result<Vec<Name>> {
         if !entry.file_type()?.is_file() {
             continue;
         }
-        if let Ok(name) = Name::parse(stem.as_bytes()) {
-            if name.as_str() == stem {
-                found.push(name);
-            }
+        if let Some(name) = Name::exact(stem) {
+            found.push(name);
         }
     }
     found.sort();

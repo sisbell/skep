@@ -3,10 +3,13 @@
 //! recording script in the mailer's place; the fake records the headers and
 //! the body; a refused send is retried up to its bound and then given up,
 //! logged with neither the address nor the body; the sender's thread
-//! delivers what the worker hands it. (No send before the status is live,
-//! and the status live throughout an outage, are the flow's — `flow/tests.rs`.)
+//! delivers what the worker hands it, the message made with the outbox's
+//! own `From:`, `Reply-To:` and subject. (No send before the status is
+//! live, and the status live throughout an outage, are the flow's —
+//! `flow/tests.rs`.)
 
 use std::path::Path;
+use std::sync::Mutex;
 
 use super::fake::{messages, FakeSender};
 use super::*;
@@ -51,7 +54,7 @@ fn the_real_mailer_hands_the_message_over_on_stdin() {
     let script = dir.path().join("sendmail");
     std::fs::write(&script, format!("#!/bin/sh\nprintf '%s\\n' \"$@\" > '{0}/argv'\ncat > '{0}/stdin'\nexit 75\n", dir.path().display())).expect("the script");
     std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o700)).expect("executable");
-    let exit = Mailer::new(script).send(&message()).expect("the script ran");
+    let exit = RelaySender::new(script).send(&message()).expect("the script ran");
     assert_eq!(exit.code, Some(75));
     assert_eq!(std::fs::read_to_string(dir.path().join("argv")).expect("the argv"), "-t\n");
     assert_eq!(std::fs::read_to_string(dir.path().join("stdin")).expect("the stdin"), message().text());
@@ -109,20 +112,24 @@ fn a_send_accepted_after_refusals_is_sent() {
     assert_eq!(lines.lock().unwrap().last().map(String::as_str), Some("alice: mail: sent at try 3 of 7"));
 }
 
-/// THE SENDER's THREAD delivers what is handed to it, on its own.
+/// THE SENDER's THREAD delivers what is handed to it, on its own: the
+/// board, the recipient and the body the worker hands over, and the
+/// `From:`, `Reply-To:` and subject the outbox holds for every board.
 #[test]
 fn the_senders_thread_delivers_what_it_is_handed() {
     let dir = Scratch::new();
     let log = dir.path().join("mail.log");
     let (said, _) = kept();
-    let outbox = Outbox::spawn(Box::new(FakeSender::new(log.clone(), Vec::new())), said, Arc::new(|_| {})).expect("the thread");
-    outbox.post(message());
+    let address = |text: &str| MailAddress::parse(text).expect("an address");
+    let outbox = Outbox::spawn(Box::new(FakeSender::new(log.clone(), Vec::new())), address("noreply@skep.host"), address("owner@skep.host"), said, Arc::new(|_| {})).expect("the thread");
+    let handed = message();
+    outbox.post(handed.name.clone(), handed.to.clone(), handed.body.clone());
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
     while messages(&log).expect("the log").is_empty() {
         assert!(std::time::Instant::now() < deadline, "the thread delivered nothing");
         std::thread::sleep(std::time::Duration::from_millis(10));
     }
-    assert_eq!(messages(&log).expect("the log").len(), 1);
+    assert_eq!(messages(&log).expect("the log"), vec![handed.text()]);
 }
 
 /// A message's `Debug` names the board alone.

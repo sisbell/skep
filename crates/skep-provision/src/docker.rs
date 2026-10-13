@@ -4,21 +4,24 @@
 //! shape (ii)) — so this program speaks no Engine API and holds no socket
 //! of its own.
 //!
-//! * [`Docker`] — the TRAIT: ONE METHOD PER CALL and nothing a test cannot
-//!   script — the two inspects of the truth about names, the volume's
+//! * [`Docker`] — the TRAIT: [`Docker::run`], the ONE METHOD A RUNNER
+//!   WRITES, and ONE NAMED METHOD PER CALL provided over it, nothing a test
+//!   cannot script — the two inspects of the truth about names, the volume's
 //!   creation and removal, the claim run, the sidecar's dark claim with the
 //!   record on its stdin, the forced removal of a run, the serving run, the
 //!   sidecar's `skep health`, the proxy's reload, and the listing of the
 //!   volumes this service made. Each answers what the call answered
 //!   ([`Exit`], `process`'s: its exit code, its stdout and its stderr,
 //!   apart), or the `io::Error` of a `docker` that could not be run.
-//! * [`Call`] — THE ARGV of every call, A PURE FUNCTION of the call and the
-//!   [`Settings`] ([`Call::argv`]), which the unit suite pins token by
-//!   token against the documents' run lines — the smoke's claim run
-//!   (`scripts/docker-smoke.sh`) WORD FOR WORD with the public origin in
-//!   the smoke's local one's place, the deployment notes' serving run (§4
-//!   step 5), the sidecar's run (the smoke's, the record on stdin in place
-//!   of a mount) — so drift from them is a red test.
+//! * [`Call`] — ONE CALL AS DATA, whole: the board it names and, for the
+//!   dark claim, the admitted record its child reads. THE ARGV of every call
+//!   is A PURE FUNCTION of the call and the [`Settings`] ([`Call::argv`]),
+//!   which the unit suite pins token by token against the documents' run
+//!   lines — the smoke's claim run (`scripts/docker-smoke.sh`) WORD FOR
+//!   WORD with the public origin in the smoke's local one's place, the
+//!   deployment notes' serving run (§4 step 5), the sidecar's run (the
+//!   smoke's, the record on stdin in place of a mount) — so drift from them
+//!   is a red test.
 //! * [`Host`] — the one real implementation: `docker` from `PATH` through
 //!   `std::process::Command` built from that argv and nothing else
 //!   ([`command`]), run by `process::run` — stdout and stderr captured
@@ -52,6 +55,7 @@ use std::process::Command;
 
 use crate::name::Name;
 use crate::process::{self, Exit};
+use crate::record::Record;
 
 /// The program every call runs: the host's `docker`, found on `PATH`.
 const DOCKER: &str = "docker";
@@ -109,43 +113,86 @@ pub struct Settings {
     pub log_max_file: u32,
 }
 
-/// THE RUNNER: one method per call the five steps make, each answering what
-/// the call answered.
+/// THE RUNNER: one method a runner writes, [`Docker::run`], and one named
+/// method per call the five steps make, each provided over it — so the host
+/// and the fake share one mapping from a step's verb to its [`Call`], and
+/// every suite that drives the fake drives the mapping the host runs.
 pub trait Docker: Send + Sync {
+    /// ONE CALL RUN — the one method a runner writes: what `call` answered,
+    /// the input it carries, where it carries one, on the child's stdin.
+    fn run(&self, call: Call<'_>) -> io::Result<Exit>;
+
     /// `docker volume create --label skep.provision=1 <name>`: the board's
     /// one fresh named volume, labelled as this service's.
-    fn volume_create(&self, name: &Name) -> io::Result<Exit>;
+    fn volume_create(&self, name: &Name) -> io::Result<Exit> {
+        self.run(Call::VolumeCreate(name))
+    }
+
     /// `docker volume inspect <name>`: exit 0 iff the volume stands.
-    fn volume_inspect(&self, name: &Name) -> io::Result<Exit>;
+    fn volume_inspect(&self, name: &Name) -> io::Result<Exit> {
+        self.run(Call::VolumeInspect(name))
+    }
+
     /// `docker container inspect <name>`: exit 0 iff a container stands.
-    fn container_inspect(&self, name: &Name) -> io::Result<Exit>;
+    fn container_inspect(&self, name: &Name) -> io::Result<Exit> {
+        self.run(Call::ContainerInspect(name))
+    }
+
     /// THE CLAIM RUN (step 3): the image bound to its loopback, nothing
     /// published, the public origin configured.
-    fn run_claim(&self, name: &Name) -> io::Result<Exit>;
-    /// THE DARK CLAIM (step 4): the sidecar in the claim run's namespace,
-    /// `record` on its stdin.
-    fn sidecar_claim(&self, name: &Name, record: &[u8]) -> io::Result<Exit>;
+    fn run_claim(&self, name: &Name) -> io::Result<Exit> {
+        self.run(Call::RunClaim(name))
+    }
+
+    /// THE DARK CLAIM (step 4): the sidecar in the claim run's namespace, the
+    /// admitted `record` on its stdin — no bytes the post's judge did not
+    /// admit can reach it.
+    fn sidecar_claim(&self, name: &Name, record: &Record) -> io::Result<Exit> {
+        self.run(Call::SidecarClaim(name, record))
+    }
+
     /// `docker rm -f <name>`: whichever run stands under the name, removed.
-    fn rm_force(&self, name: &Name) -> io::Result<Exit>;
+    fn rm_force(&self, name: &Name) -> io::Result<Exit> {
+        self.run(Call::RmForce(name))
+    }
+
     /// THE SERVING RUN (step 5): the baked bind, the bridge, the route's
     /// label, the same volume.
-    fn run_serving(&self, name: &Name) -> io::Result<Exit>;
+    fn run_serving(&self, name: &Name) -> io::Result<Exit> {
+        self.run(Call::RunServing(name))
+    }
+
     /// `docker volume rm <name>`.
-    fn volume_rm(&self, name: &Name) -> io::Result<Exit>;
+    fn volume_rm(&self, name: &Name) -> io::Result<Exit> {
+        self.run(Call::VolumeRm(name))
+    }
+
     /// The sidecar's `skep health` against the serving run, on the bridge:
     /// stdout the `/health` body verbatim.
-    fn health(&self, name: &Name) -> io::Result<Exit>;
+    fn health(&self, name: &Name) -> io::Result<Exit> {
+        self.run(Call::Health(name))
+    }
+
     /// Caddy's reload, inside its container.
-    fn caddy_reload(&self) -> io::Result<Exit>;
+    fn caddy_reload(&self) -> io::Result<Exit> {
+        self.run(Call::CaddyReload)
+    }
+
     /// `docker volume ls -q --filter label=skep.provision=1`: every volume
     /// this service made, one name per line on stdout — what the sweep at
     /// start reads.
-    fn volumes(&self) -> io::Result<Exit>;
+    fn volumes(&self) -> io::Result<Exit> {
+        self.run(Call::Volumes)
+    }
 }
 
-/// One call, as data: what [`Call::argv`] renders and the fake matches.
+/// ONE CALL, AS DATA, WHOLE: the argument of [`Docker::run`] — the board it
+/// names and, for the dark claim, the admitted record its child reads — what
+/// [`Call::argv`] renders for the host and the fake matches against its
+/// script. A call carries its own input, so no call can be run with another
+/// call's; its `Debug` shows a record's length alone, as [`Record`]'s does.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Call<'a> {
+pub enum Call<'a> {
     /// [`Docker::volume_create`].
     VolumeCreate(&'a Name),
     /// [`Docker::volume_inspect`].
@@ -154,8 +201,8 @@ enum Call<'a> {
     ContainerInspect(&'a Name),
     /// [`Docker::run_claim`].
     RunClaim(&'a Name),
-    /// [`Docker::sidecar_claim`].
-    SidecarClaim(&'a Name),
+    /// [`Docker::sidecar_claim`]: the board, and the record for its stdin.
+    SidecarClaim(&'a Name, &'a Record),
     /// [`Docker::rm_force`].
     RmForce(&'a Name),
     /// [`Docker::run_serving`].
@@ -171,6 +218,15 @@ enum Call<'a> {
 }
 
 impl Call<'_> {
+    /// THE CHILD's INPUT: the dark claim's record, which the sidecar's
+    /// `--hosted -` reads; no other call's child reads its stdin.
+    fn input(&self) -> Option<&[u8]> {
+        match self {
+            Call::SidecarClaim(_, record) => Some(record.bytes()),
+            _ => None,
+        }
+    }
+
     /// THE ARGV, after the program: a pure function of the call and the
     /// settings, the one place each run line is spelled.
     fn argv(&self, s: &Settings) -> Vec<String> {
@@ -212,7 +268,7 @@ impl Call<'_> {
             // THE SIDECAR — the smoke's run with the record on stdin (`-i`,
             // `--hosted -`) in place of a mounted file: no host path, no
             // file mode for its user to read (the provisioning record §2.2).
-            Call::SidecarClaim(n) => vec![
+            Call::SidecarClaim(n, _) => vec![
                 "run".into(),
                 "--rm".into(),
                 "-i".into(),
@@ -296,13 +352,6 @@ impl Host {
     fn with_program(program: PathBuf, settings: Settings) -> Host {
         Host { program, settings }
     }
-
-    /// One call run: the command built from its argv, run by `process::run`
-    /// with the record — the sidecar's input, and no other call's — on its
-    /// stdin.
-    fn run(&self, call: Call<'_>, stdin: Option<&[u8]>) -> io::Result<Exit> {
-        process::run(command(&self.program, &call.argv(&self.settings)), stdin)
-    }
 }
 
 /// THE COMMAND for an argv: the program — `docker` — the argv, and nothing
@@ -315,48 +364,11 @@ fn command(program: &Path, argv: &[String]) -> Command {
 }
 
 impl Docker for Host {
-    fn volume_create(&self, name: &Name) -> io::Result<Exit> {
-        self.run(Call::VolumeCreate(name), None)
-    }
-
-    fn volume_inspect(&self, name: &Name) -> io::Result<Exit> {
-        self.run(Call::VolumeInspect(name), None)
-    }
-
-    fn container_inspect(&self, name: &Name) -> io::Result<Exit> {
-        self.run(Call::ContainerInspect(name), None)
-    }
-
-    fn run_claim(&self, name: &Name) -> io::Result<Exit> {
-        self.run(Call::RunClaim(name), None)
-    }
-
-    fn sidecar_claim(&self, name: &Name, record: &[u8]) -> io::Result<Exit> {
-        self.run(Call::SidecarClaim(name), Some(record))
-    }
-
-    fn rm_force(&self, name: &Name) -> io::Result<Exit> {
-        self.run(Call::RmForce(name), None)
-    }
-
-    fn run_serving(&self, name: &Name) -> io::Result<Exit> {
-        self.run(Call::RunServing(name), None)
-    }
-
-    fn volume_rm(&self, name: &Name) -> io::Result<Exit> {
-        self.run(Call::VolumeRm(name), None)
-    }
-
-    fn health(&self, name: &Name) -> io::Result<Exit> {
-        self.run(Call::Health(name), None)
-    }
-
-    fn caddy_reload(&self) -> io::Result<Exit> {
-        self.run(Call::CaddyReload, None)
-    }
-
-    fn volumes(&self) -> io::Result<Exit> {
-        self.run(Call::Volumes, None)
+    /// One call run: the command built from its argv, run by `process::run`
+    /// with the call's input — the sidecar's record, and no other call's — on
+    /// its stdin.
+    fn run(&self, call: Call<'_>) -> io::Result<Exit> {
+        process::run(command(&self.program, &call.argv(&self.settings)), call.input())
     }
 }
 
@@ -364,48 +376,8 @@ impl Docker for Host {
 /// its fake and keeps one to read the calls after.
 #[cfg(test)]
 impl<D: Docker + ?Sized> Docker for std::sync::Arc<D> {
-    fn volume_create(&self, name: &Name) -> io::Result<Exit> {
-        (**self).volume_create(name)
-    }
-
-    fn volume_inspect(&self, name: &Name) -> io::Result<Exit> {
-        (**self).volume_inspect(name)
-    }
-
-    fn container_inspect(&self, name: &Name) -> io::Result<Exit> {
-        (**self).container_inspect(name)
-    }
-
-    fn run_claim(&self, name: &Name) -> io::Result<Exit> {
-        (**self).run_claim(name)
-    }
-
-    fn sidecar_claim(&self, name: &Name, record: &[u8]) -> io::Result<Exit> {
-        (**self).sidecar_claim(name, record)
-    }
-
-    fn rm_force(&self, name: &Name) -> io::Result<Exit> {
-        (**self).rm_force(name)
-    }
-
-    fn run_serving(&self, name: &Name) -> io::Result<Exit> {
-        (**self).run_serving(name)
-    }
-
-    fn volume_rm(&self, name: &Name) -> io::Result<Exit> {
-        (**self).volume_rm(name)
-    }
-
-    fn health(&self, name: &Name) -> io::Result<Exit> {
-        (**self).health(name)
-    }
-
-    fn caddy_reload(&self) -> io::Result<Exit> {
-        (**self).caddy_reload()
-    }
-
-    fn volumes(&self) -> io::Result<Exit> {
-        (**self).volumes()
+    fn run(&self, call: Call<'_>) -> io::Result<Exit> {
+        (**self).run(call)
     }
 }
 

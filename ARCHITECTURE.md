@@ -1553,17 +1553,20 @@ each naming only those above it:
   apart.
 - `name.rs` a board's name: its grammar, one lowercase label, and the host
   and the public origin it stands at, from which every `docker` call, the
-  snippet and the reply are built.
+  snippet and the reply are built; and `Name::exact`, a name read back as
+  this service wrote it — a snippet's stem, a labelled volume — never
+  lowercased.
 - `record.rs` the record's admission: the hosted walk's trim,
   `parse_enroll`, the walk's preview-kind test copied, the anchorless
   fact.
-- `docker.rs` the `Docker` trait, one method per call, the listing of
-  the labelled volumes among them; `Call::argv`, every call's argv as a
-  pure function, the volume's creation carrying the label; `Host`, the
-  host's `docker`, its `Command` built from that argv and run by
-  `process::run`; and under
-  `test-hooks` `docker/fake.rs`, the scripted fake, its order strict per
-  name and free across names.
+- `docker.rs` the `Docker` trait — `run`, the one method a runner writes,
+  and one named method per call provided over it, the listing of the
+  labelled volumes among them; `Call`, one call as data, whole, the dark
+  claim's admitted record carried with it, and `Call::argv`, every call's
+  argv as a pure function, the volume's creation carrying the label;
+  `Host`, the host's `docker`, its `Command` built from that argv and run
+  by `process::run`; and under `test-hooks` `docker/fake.rs`, the
+  scripted fake, its order strict per name and free across names.
 - `sidecar.rs` the sidecar's six DATA lines and its one idempotent line,
   read, and its exit codes mapped.
 - `health.rs` the pair off `/health`'s body and the bounded wait.
@@ -1587,9 +1590,11 @@ each naming only those above it:
 - `pages.rs` the four pages' HTML and the routes' dispatch over
   `skep-http`, each route asking a `Desk`; and the two addresses the
   service hands out, the claim form's and a post's status page.
-- `sender.rs` the `Sender` trait, the mailer it shells out to, the
-  message, and the sender's own thread with its retry; under
-  `test-hooks` `sender/fake.rs`.
+- `sender.rs` the `Sender` trait, `RelaySender` — the relay client
+  `--mailer` names, shelled out to — the message, and the outbox: the
+  sender's own thread with its retry, and the follow-up mail's `From:`,
+  `Reply-To:` and subject, held for every board; under `test-hooks`
+  `sender/fake.rs`.
 - `reply.rs` the live reply, one function for the page and the mail.
 - `flow.rs` the `Service` — the `Desk` the routes ask; the `Book` of
   what is in flight, keeping its own rules: the queue, the status map and
@@ -1637,6 +1642,13 @@ Rules that hold across its files:
   function the unit suite pins token by token, and reads back from
   `scripts/docker-smoke.sh` and `README.md` where those spell the line;
   the real runner builds its `Command` from that argv and nothing else.
+  The runner and the fake write one method, `run`, and share every named
+  call over it, so each suite that drives the fake drives the mapping the
+  host runs.
+- **The acts are the command's.** The reply's two acts are `skep claim
+  --hosted`'s own act lines with the public origin; the reply's suite
+  reads them back from `skep-cli`'s `src/commands/claim.rs`, so an edit
+  there is a red test here.
 - **One writer, one runner.** Every file it keeps is replaced whole by
   rename, or removed, through `whole`, at the mode its owner names — the
   state files `0600`, the snippets `0644`. Every program of the host's it

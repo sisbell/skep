@@ -90,28 +90,27 @@ pub struct Labelled {
     /// Under a name whose snippet stands: a board routed — live, or stopped
     /// and Docker's `--restart` to bring back — and left.
     pub routed: Vec<Name>,
-    /// Under no name in the grammar — or one that does not spell itself
-    /// back, as a snippet's stem must — as listed; logged and left.
+    /// Under no name [`Name::exact`] reads, as listed; logged and left.
     pub unnamed: Vec<String>,
 }
 
 /// THE LABELLED VOLUMES SORTED: `listing` is the stdout of the volumes
-/// call, one name per line (a blank line no name); each is a name in the
-/// grammar that spells itself back, and then half-made or routed by whether
+/// call, one name per line (a blank line no name); each is a name
+/// [`Name::exact`] reads, and then half-made or routed by whether
 /// `<boards-dir>/<name>.caddy` stands, or unnamed. The error is the snippet
 /// directory's.
 pub fn labelled(listing: &[u8], boards_dir: &Path) -> io::Result<Labelled> {
     let mut sorted = Labelled::default();
     for listed in String::from_utf8_lossy(listing).lines().map(str::trim).filter(|l| !l.is_empty()) {
-        match Name::parse(listed.as_bytes()) {
-            Ok(name) if name.as_str() == listed => {
+        match Name::exact(listed) {
+            Some(name) => {
                 if caddy::stands(boards_dir, &name)? {
                     sorted.routed.push(name);
                 } else {
                     sorted.half_made.push(name);
                 }
             }
-            _ => sorted.unnamed.push(listed.to_owned()),
+            None => sorted.unnamed.push(listed.to_owned()),
         }
     }
     Ok(sorted)

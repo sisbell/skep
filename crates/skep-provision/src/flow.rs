@@ -97,11 +97,10 @@ use crate::pages::{self, Desk, Post, Refusal, Shown, SignUpRefusal};
 use crate::process::Exit;
 use crate::record::{self, Record, RecordRefused};
 use crate::reply;
-use crate::sender::{Log, Message, Outbox, Sleep};
+use crate::sender::{Log, Outbox, Sleep};
 use crate::sidecar::{self, Answer, Failure};
 use crate::signups::{SignUpRefused, SignUps};
 use crate::statedir::StateDir;
-use crate::strings::{fill, MAIL_SUBJECT};
 
 /// THE QUEUE's DEPTH: four posts WAITING for a worker, the ones the workers
 /// run apart (the provisioning record §5.2's figure); a fifth meets D-8,
@@ -119,17 +118,6 @@ pub struct Config {
     pub boards_dir: PathBuf,
     /// `--suffix`: the domain every board stands under.
     pub suffix: String,
-    /// `--reply-to`: the owner's mailbox — D-8 names it, the mail replies to
-    /// it.
-    pub reply_to: String,
-}
-
-/// The follow-up mail's means: the sender's thread and the `From:`.
-pub struct Mail {
-    /// Where a message is handed.
-    pub outbox: Outbox,
-    /// `--from`.
-    pub from: String,
 }
 
 /// One admitted post, waiting or running.
@@ -237,7 +225,9 @@ pub struct Service {
     state: StateDir,
     signups: SignUps,
     docker: Box<dyn Docker>,
-    mail: Option<Mail>,
+    /// Where the follow-up mail is handed: `None` where no mail is
+    /// configured.
+    mail: Option<Outbox>,
     log: Log,
     sleep: Sleep,
     /// THE SERIAL PAIR's LOCK: held across a snippet's write and the
@@ -251,8 +241,9 @@ pub struct Service {
 
 impl Service {
     /// The service over its configuration, its state directory, its runner
-    /// and its mail — the status map REBUILT from the snippet directory.
-    pub fn new(config: Config, state: StateDir, docker: Box<dyn Docker>, mail: Option<Mail>, log: Log, sleep: Sleep) -> io::Result<Service> {
+    /// and its outbox — `None` where no mail is configured — the status map
+    /// REBUILT from the snippet directory.
+    pub fn new(config: Config, state: StateDir, docker: Box<dyn Docker>, mail: Option<Outbox>, log: Log, sleep: Sleep) -> io::Result<Service> {
         let map = StatusMap::rebuild(&config.boards_dir)?;
         let signups = SignUps::new(&state);
         Ok(Service { config, state, signups, docker, mail, log, sleep, caddy: Mutex::new(()), book: Mutex::new(Book::new(map)), ready: Condvar::new() })
@@ -453,7 +444,7 @@ impl Service {
     fn dark_claim(&self, job: &Job) -> Result<(), &'static str> {
         let name = &job.name;
         for at in 1..=SIDECAR_WAIT.tries {
-            let exit = match self.docker.sidecar_claim(name, job.record.bytes()) {
+            let exit = match self.docker.sidecar_claim(name, &job.record) {
                 Ok(exit) => exit,
                 Err(e) => {
                     self.log(&format!("{name}: sidecar_claim: docker could not run: {e}"));
@@ -550,18 +541,11 @@ impl Service {
         self.judged(&format!("{name}: {under}: {step}"), answered).is_some()
     }
 
-    /// THE SEND: the live reply handed to the sender's thread — where mail
-    /// is configured — once the status is live.
+    /// THE SEND: the live reply handed to the outbox — where mail is
+    /// configured — once the status is live.
     fn send(&self, job: &Job) {
-        let Some(mail) = &self.mail else { return };
-        mail.outbox.post(Message {
-            name: job.name.clone(),
-            to: job.address.clone(),
-            from: mail.from.clone(),
-            reply_to: self.config.reply_to.clone(),
-            subject: fill(MAIL_SUBJECT, &[]),
-            body: self.live_reply(&job.name, job.record.anchorless(), &job.token),
-        });
+        let Some(outbox) = &self.mail else { return };
+        outbox.post(job.name.clone(), job.address.clone(), self.live_reply(&job.name, job.record.anchorless(), &job.token));
     }
 
     /// THE LIVE REPLY of a post: what the one renderer, `reply::text`, is

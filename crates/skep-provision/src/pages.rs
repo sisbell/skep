@@ -262,7 +262,7 @@ button{margin-top:1.25rem;font:inherit}";
 /// THE FRAME every page shares: the suffix as its title and heading, the
 /// style, and — on a page showing D-7 — the refresh to the status address.
 fn page(site: &Site, refresh: Option<&str>, body: &str) -> String {
-    let suffix = text(&site.suffix);
+    let suffix = escape(&site.suffix, false);
     let refresh = refresh.map_or_else(String::new, |to| format!("<meta http-equiv=\"refresh\" content=\"{REFRESH_SECS}; url={}\">\n", attr(to)));
     format!(
         "<!doctype html>\n<html lang=\"en\">\n<head>\n<meta charset=\"utf-8\">\n<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n{refresh}<title>{suffix}</title>\n<style>{STYLE}</style>\n</head>\n<body>\n<h1>{suffix}</h1>\n{body}</body>\n</html>\n"
@@ -280,17 +280,20 @@ fn signup_page(site: &Site, refusal: Option<Words>, address: &str) -> String {
     }
     body.push_str(&format!(
         "<form method=\"post\" action=\"/signup\" accept-charset=\"utf-8\">\n<label for=\"address\">{}</label>\n<input id=\"address\" name=\"address\" type=\"email\" autocomplete=\"email\" required value=\"{}\">\n<p class=\"help\">{}</p>\n<button type=\"submit\">{}</button>\n</form>\n",
-        text(&fill(ADDRESS_LABEL, &slots)),
+        row(&fill(ADDRESS_LABEL, &slots)),
         attr(address),
-        text(&fill(SIGNUP_KEPT, &slots)),
-        text(&fill(SIGNUP_BUTTON, &slots)),
+        row(&fill(SIGNUP_KEPT, &slots)),
+        row(&fill(SIGNUP_BUTTON, &slots)),
     ));
     page(site, None, &body)
 }
 
 /// THE CLAIM FORM: D-1, a refusal where one is shown, the three fields —
 /// D-2's name, D-3's record, D-9's invite — each pre-filled with what the
-/// post sent, or the invite with the link's code, and the button.
+/// post sent, or the invite with the link's code, and the button. A field
+/// the person sent comes back escaped and nothing else — [`attr`] in a
+/// value, [`escape`] in the textarea — never through [`row`], so the next
+/// post sends it as it was sent.
 fn claim_page(site: &Site, refusal: Option<Words>, post: &Post<'_>) -> String {
     let slots = [("suffix", site.suffix.as_str()), ("reply_to", site.reply_to.as_str())];
     let mut body = paragraph(&fill(LEAD, &slots));
@@ -306,15 +309,15 @@ fn claim_page(site: &Site, refusal: Option<Words>, post: &Post<'_>) -> String {
          <label for=\"invite\">{}</label>\n\
          <input id=\"invite\" name=\"invite\" required autocomplete=\"off\" spellcheck=\"false\" value=\"{}\">\n\
          <button type=\"submit\">{}</button>\n</form>\n",
-        text(&fill(NAME_LABEL, &slots)),
-        text(&fill(NAME_HELP, &slots)),
+        row(&fill(NAME_LABEL, &slots)),
+        row(&fill(NAME_HELP, &slots)),
         attr(&String::from_utf8_lossy(post.name)),
-        text(&fill(RECORD_LABEL, &slots)),
-        text(&fill(RECORD_HELP, &slots)),
-        text(&String::from_utf8_lossy(post.record)),
-        text(&fill(INVITE_LABEL, &slots)),
+        row(&fill(RECORD_LABEL, &slots)),
+        row(&fill(RECORD_HELP, &slots)),
+        escape(&String::from_utf8_lossy(post.record), false),
+        row(&fill(INVITE_LABEL, &slots)),
         attr(&String::from_utf8_lossy(post.invite)),
-        text(&fill(CLAIM_BUTTON, &slots)),
+        row(&fill(CLAIM_BUTTON, &slots)),
     ));
     page(site, None, &body)
 }
@@ -326,26 +329,30 @@ fn being_made(site: &Site, token: &str) -> String {
     page(site, Some(&format!("/status/{token}")), &body)
 }
 
-/// One paragraph of plain text.
+/// One paragraph of a row's words.
 fn paragraph(words: &str) -> String {
-    format!("<p>{}</p>\n", text(words))
+    format!("<p>{}</p>\n", row(words))
 }
 
-/// One paragraph marked as a refusal.
+/// One paragraph of a row's words, marked as a refusal.
 fn refused_paragraph(words: &str) -> String {
-    format!("<p class=\"refused\">{}</p>\n", text(words))
+    format!("<p class=\"refused\">{}</p>\n", row(words))
 }
 
-/// A reply's text as paragraphs: one per blank-line-separated block, its
-/// lines kept apart by `<br>`, the text's closing line break no line.
+/// The live reply's text as paragraphs: one per blank-line-separated block,
+/// its lines — the table's rows, filled (`reply`) — kept apart by `<br>`,
+/// the text's closing line break no line.
 fn paragraphs(reply: &str) -> String {
-    reply.trim_end_matches('\n').split("\n\n").filter(|block| !block.is_empty()).map(|block| format!("<p>{}</p>\n", block.split('\n').map(text).collect::<Vec<_>>().join("<br>\n"))).collect()
+    reply.trim_end_matches('\n').split("\n\n").filter(|block| !block.is_empty()).map(|block| format!("<p>{}</p>\n", block.split('\n').map(row).collect::<Vec<_>>().join("<br>\n"))).collect()
 }
 
-/// TEXT for an element's content: `&`, `<` and `>` escaped, and a span
-/// between two backticks set as `<code>` — the table's commands — where the
+/// A ROW's WORDS for an element's content — the strings table's, filled, and
+/// the live reply's lines: escaped as [`escape`] escapes, and a span between
+/// two backticks set as `<code>` — the table's commands — where the
 /// backticks pair up; where they do not, every backtick stays as written.
-fn text(words: &str) -> String {
+/// Never a person's field: its backticks are the person's, and `<code>`
+/// inside a `<textarea>` is text the next post sends back.
+fn row(words: &str) -> String {
     let spans: Vec<&str> = words.split('`').collect();
     if spans.len().is_multiple_of(2) {
         return escape(words, false);
@@ -353,11 +360,13 @@ fn text(words: &str) -> String {
     spans.iter().enumerate().map(|(i, span)| if i % 2 == 1 { format!("<code>{}</code>", escape(span, false)) } else { escape(span, false) }).collect()
 }
 
-/// TEXT for an attribute's value: the quotes escaped as well.
+/// AN ATTRIBUTE's VALUE: escaped as [`escape`] escapes, the quotes too.
 fn attr(words: &str) -> String {
     escape(words, true)
 }
 
+/// THE ONE ESCAPER: `&`, `<` and `>`, and with `quotes` the two quotes too;
+/// nothing else changes, so a person's field reads back as sent.
 fn escape(words: &str, quotes: bool) -> String {
     let mut out = String::with_capacity(words.len());
     for c in words.chars() {

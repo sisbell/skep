@@ -4,8 +4,9 @@
 //! status address and its refresh, the live reply, D-8, 404 — a bad body
 //! 400, a body past the cap 413; the claim address an invite carries
 //! opening the claim form with its code; plain HTML with no script and
-//! nothing fetched from elsewhere; the text escaped. (The strings table's
-//! rows are `strings`' suite.)
+//! nothing fetched from elsewhere; a row's words escaped and its commands
+//! set as code, and a person's field — a refused record among them — shown
+//! back as it was sent. (The strings table's rows are `strings`' suite.)
 
 use std::io::{Read, Write};
 use std::net::{Shutdown, TcpListener, TcpStream};
@@ -59,7 +60,7 @@ fn the_sign_up_page() {
     let answer = answer(&request("GET", "/", b""), &site(), &Scripted::default());
     assert_eq!(answer.status, 200);
     for words in [fill(SIGNUP_LEAD, &[("suffix", "skep.host")]), fill(ADDRESS_LABEL, &[]), fill(SIGNUP_KEPT, &[]), fill(SIGNUP_BUTTON, &[])] {
-        assert!(answer.body.contains(&text(&words)), "{words}");
+        assert!(answer.body.contains(&row(&words)), "{words}");
     }
     assert!(answer.body.contains("action=\"/signup\""));
     for absent in ["<script", "src=", "href=", "<link", "http://", "https://"] {
@@ -75,15 +76,15 @@ fn the_sign_up_post() {
     let desk = Scripted::default();
     let thanks = answer(&request("POST", "/signup", b"address=person%40example.com"), &site(), &desk);
     assert_eq!(thanks.status, 200);
-    assert!(thanks.body.contains(&text(THANKS.text)));
+    assert!(thanks.body.contains(&row(THANKS.text)));
     assert_eq!(desk.asked.lock().unwrap().as_slice(), ["sign_up person@example.com"]);
     *desk.sign_up.lock().unwrap() = Some(Err(SignUpRefusal::NotAnAddress));
     let refused = answer(&request("POST", "/signup", b"address=not+one"), &site(), &desk);
     assert_eq!(refused.status, 200);
-    assert!(refused.body.contains(&format!("<p class=\"refused\">{}</p>", text(SIGNUP_REFUSED.text))));
+    assert!(refused.body.contains(&format!("<p class=\"refused\">{}</p>", row(SIGNUP_REFUSED.text))));
     assert!(refused.body.contains("value=\"not one\""));
     *desk.sign_up.lock().unwrap() = Some(Err(SignUpRefusal::Failed));
-    assert!(answer(&request("POST", "/signup", b"address=a%40b"), &site(), &desk).body.contains(&text(SIGNUP_FAILED.text)));
+    assert!(answer(&request("POST", "/signup", b"address=a%40b"), &site(), &desk).body.contains(&row(SIGNUP_FAILED.text)));
 }
 
 /// `GET /claim?invite=<code>`: the claim form — D-1, D-2's label and help,
@@ -94,7 +95,7 @@ fn the_claim_form_carries_the_ruled_strings_and_the_links_code() {
     let answer = answer_of("GET", "/claim?invite=1.1.0.1.0.3", b"");
     assert_eq!(answer.status, 200);
     for words in [LEAD, NAME_LABEL, NAME_HELP, RECORD_LABEL, RECORD_HELP, INVITE_LABEL, CLAIM_BUTTON] {
-        assert!(answer.body.contains(&text(&fill(words, &[("suffix", "skep.host")]))), "{words:?}");
+        assert!(answer.body.contains(&row(&fill(words, &[("suffix", "skep.host")]))), "{words:?}");
     }
     assert!(answer.body.contains("id=\"invite\" name=\"invite\" required autocomplete=\"off\" spellcheck=\"false\" value=\"1.1.0.1.0.3\""));
     assert!(answer.body.contains("<code>skep keygen --anchors --anchor-out &lt;a&gt; --anchor-out &lt;b&gt;</code>"), "the commands set as code, escaped");
@@ -132,11 +133,11 @@ fn each_claim_refusal_is_shown_on_the_form_again() {
         *desk.claim.lock().unwrap() = Some(Err(refusal));
         let answer = answer(&request("POST", "/claim", body), &site(), &desk);
         assert_eq!(answer.status, 200, "{refusal:?}");
-        let shown = text(&fill(words, &[("suffix", "skep.host"), ("reply_to", "owner@skep.host")]));
+        let shown = row(&fill(words, &[("suffix", "skep.host"), ("reply_to", "owner@skep.host")]));
         assert!(answer.body.contains(&format!("<p class=\"refused\">{shown}</p>")), "{refusal:?}");
         assert!(answer.body.contains("value=\"alice\"") && answer.body.contains("{\"type\"}\r\n</textarea>") && answer.body.contains("value=\"c0de\""), "{refusal:?}");
     }
-    assert!(text(&fill(FAILED, &[("reply_to", "owner@skep.host")])).contains("try again later, or write to owner@skep.host."));
+    assert!(row(&fill(FAILED, &[("reply_to", "owner@skep.host")])).contains("try again later, or write to owner@skep.host."));
     assert_eq!(desk.asked.lock().unwrap()[0], "claim alice 10 c0de", "the record's ten bytes, its CRLF among them");
 }
 
@@ -146,7 +147,7 @@ fn each_claim_refusal_is_shown_on_the_form_again() {
 fn an_admitted_claim_answers_d7_with_its_status_address() {
     let answer = answer_of("POST", "/claim", b"name=alice&record=x&invite=c0de");
     assert_eq!(answer.status, 200);
-    assert!(answer.body.contains(&text(BEING_MADE.text)));
+    assert!(answer.body.contains(&row(BEING_MADE.text)));
     assert!(answer.body.contains("This page's own address, to come back to: https://skep.host/status/t0k3n"));
     assert!(answer.body.contains("https://skep.host/status/t0k3n"));
     assert!(answer.body.contains(&format!("<meta http-equiv=\"refresh\" content=\"{REFRESH_SECS}; url=/status/t0k3n\">")));
@@ -161,7 +162,7 @@ fn the_status_page_by_state() {
     *desk.status.lock().unwrap() = Some(Shown::BeingMade);
     let being = answer(&request("GET", "/status/t0k3n", b""), &site(), &desk);
     assert_eq!(being.status, 200);
-    assert!(being.body.contains(&text(BEING_MADE.text)) && being.body.contains("url=/status/t0k3n"));
+    assert!(being.body.contains(&row(BEING_MADE.text)) && being.body.contains("url=/status/t0k3n"));
     *desk.status.lock().unwrap() = Some(Shown::Live("Your board is live.\n\naccount 1.0.1\nprincipal 1\n\nrun `skep verify <x>`\n".into()));
     let live = answer(&request("GET", "/status/t0k3n", b""), &site(), &desk);
     assert_eq!(live.status, 200);
@@ -169,7 +170,7 @@ fn the_status_page_by_state() {
     assert!(!live.body.contains("http-equiv"), "the live page does not refresh");
     *desk.status.lock().unwrap() = Some(Shown::Failed);
     let failed = answer(&request("GET", "/status/t0k3n", b""), &site(), &desk);
-    assert!(failed.body.contains(&text(&fill(FAILED, &[("reply_to", "owner@skep.host")]))));
+    assert!(failed.body.contains(&row(&fill(FAILED, &[("reply_to", "owner@skep.host")]))));
     *desk.status.lock().unwrap() = None;
     assert_eq!(answer(&request("GET", "/status/other", b""), &site(), &desk).status, 404);
     let asked = desk.asked.lock().unwrap().len();
@@ -184,7 +185,7 @@ fn every_other_route_is_404_and_a_bad_body_400() {
     for (method, target) in [("POST", "/"), ("GET", "/signup"), ("PUT", "/claim"), ("GET", "/status"), ("GET", "/favicon.ico"), ("HEAD", "/")] {
         let answer = answer_of(method, target, b"");
         assert_eq!(answer.status, 404, "{method} {target}");
-        assert!(answer.body.contains(&text(NOT_FOUND.text)));
+        assert!(answer.body.contains(&row(NOT_FOUND.text)));
     }
     assert_eq!(answer_of("POST", "/claim", b"name=%zz").status, 400);
     assert_eq!(answer_of("POST", "/signup", b"address=%4").status, 400);
@@ -234,12 +235,24 @@ fn a_connection_answers_with_its_headers_and_refuses_a_body_past_the_cap() {
     serve.join().expect("served");
 }
 
-/// The text escapes: `&`, `<` and `>` in content and the quotes too in an
-/// attribute; paired backticks set as code, an unpaired one kept.
+/// A ROW escapes `&`, `<` and `>` and sets paired backticks as code, an
+/// unpaired one kept; an attribute escapes the quotes too.
 #[test]
-fn the_text_is_escaped() {
-    assert_eq!(text("a < b & `c > d` \"e\" 'f'"), "a &lt; b &amp; <code>c &gt; d</code> \"e\" 'f'");
-    assert_eq!(text("one ` alone"), "one ` alone");
+fn a_row_is_escaped_and_its_commands_set_as_code() {
+    assert_eq!(row("a < b & `c > d` \"e\" 'f'"), "a &lt; b &amp; <code>c &gt; d</code> \"e\" 'f'");
+    assert_eq!(row("one ` alone"), "one ` alone");
     assert_eq!(attr("\"><script>'"), "&quot;&gt;&lt;script&gt;&#39;");
     assert_eq!(paragraphs("a\nb\n\nc\n"), "<p>a<br>\nb</p>\n<p>c</p>\n");
+}
+
+/// A REFUSED POST's RECORD COMES BACK AS SENT: a label's two backticks are
+/// the person's, never the table's code — the form shows the record as it
+/// was posted, and the next post sends it back whole.
+#[test]
+fn a_refused_record_comes_back_as_sent() {
+    let desk = Scripted::default();
+    *desk.claim.lock().unwrap() = Some(Err(Refusal::Name));
+    let answer = answer(&request("POST", "/claim", b"name=alice&record=%7B%22label%22%3A%22%60work%60%22%7D&invite=c0de"), &site(), &desk);
+    assert!(answer.body.contains("{\"label\":\"`work`\"}</textarea>"), "{}", answer.body);
+    assert!(!answer.body.contains("<code>work</code>"), "{}", answer.body);
 }

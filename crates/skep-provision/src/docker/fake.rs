@@ -191,43 +191,6 @@ impl FakeDocker {
         let left: Vec<String> = self.left().iter().map(|s| format!("{} {}", s.method, s.name.as_deref().unwrap_or("-"))).collect();
         assert!(left.is_empty(), "script lines never called: {left:?}; every call: {:?}", self.said());
     }
-
-    /// One call answered: the script's next line UNDER THE CALL's NAME where
-    /// it expects this call, else [`UNEXPECTED`]; either way recorded.
-    fn answer(&self, call: Call<'_>, stdin: Option<&[u8]>) -> io::Result<Exit> {
-        let method = method(&call);
-        let name = name(&call).map(Name::to_string);
-        let mut script = self.script.lock().unwrap_or_else(|e| e.into_inner());
-        let at = script.iter().position(|s| s.name == name);
-        let expected = at.is_some_and(|i| script[i].method == method);
-        let exit = if expected {
-            let step = script.remove(at.expect("the line was found")).expect("the line is in range");
-            Exit { code: Some(step.code), stdout: step.stdout, stderr: step.stderr }
-        } else {
-            let shown = name.as_deref().unwrap_or("-");
-            let next = at.map_or_else(|| format!("nothing more under {shown}"), |i| format!("{} {shown}", script[i].method));
-            let stderr = format!("docker-fake: unexpected call {method} {shown}; the script expected {next}\n");
-            Exit { code: Some(UNEXPECTED), stdout: Vec::new(), stderr: stderr.into_bytes() }
-        };
-        drop(script);
-        if let Some(record) = &self.record {
-            let mut line = format!("{method}\t{}\t{}", name.as_deref().unwrap_or("-"), exit.said());
-            if let Some(bytes) = stdin {
-                line.push_str(&format!("\tstdin={}", bytes.len()));
-            }
-            if !expected {
-                line.push_str("\tunexpected");
-            }
-            line.push('\n');
-            OpenOptions::new().append(true).open(record)?.write_all(line.as_bytes())?;
-        }
-        self.calls.lock().unwrap_or_else(|e| e.into_inner()).push(Called { method, name: name.clone(), stdin: stdin.map(<[u8]>::to_vec), expected });
-        #[cfg(test)]
-        if let Some(hold) = self.hold.get() {
-            hold(method, name.as_deref());
-        }
-        Ok(exit)
-    }
 }
 
 /// A call's method name, as the trait and the script spell it.
@@ -237,7 +200,7 @@ fn method(call: &Call<'_>) -> &'static str {
         Call::VolumeInspect(_) => "volume_inspect",
         Call::ContainerInspect(_) => "container_inspect",
         Call::RunClaim(_) => "run_claim",
-        Call::SidecarClaim(_) => "sidecar_claim",
+        Call::SidecarClaim(..) => "sidecar_claim",
         Call::RmForce(_) => "rm_force",
         Call::RunServing(_) => "run_serving",
         Call::VolumeRm(_) => "volume_rm",
@@ -254,7 +217,7 @@ fn name<'a>(call: &Call<'a>) -> Option<&'a Name> {
         | Call::VolumeInspect(n)
         | Call::ContainerInspect(n)
         | Call::RunClaim(n)
-        | Call::SidecarClaim(n)
+        | Call::SidecarClaim(n, _)
         | Call::RmForce(n)
         | Call::RunServing(n)
         | Call::VolumeRm(n)
@@ -308,47 +271,42 @@ fn unescape(text: &str) -> String {
 }
 
 impl Docker for FakeDocker {
-    fn volume_create(&self, name: &Name) -> io::Result<Exit> {
-        self.answer(Call::VolumeCreate(name), None)
-    }
-
-    fn volume_inspect(&self, name: &Name) -> io::Result<Exit> {
-        self.answer(Call::VolumeInspect(name), None)
-    }
-
-    fn container_inspect(&self, name: &Name) -> io::Result<Exit> {
-        self.answer(Call::ContainerInspect(name), None)
-    }
-
-    fn run_claim(&self, name: &Name) -> io::Result<Exit> {
-        self.answer(Call::RunClaim(name), None)
-    }
-
-    fn sidecar_claim(&self, name: &Name, record: &[u8]) -> io::Result<Exit> {
-        self.answer(Call::SidecarClaim(name), Some(record))
-    }
-
-    fn rm_force(&self, name: &Name) -> io::Result<Exit> {
-        self.answer(Call::RmForce(name), None)
-    }
-
-    fn run_serving(&self, name: &Name) -> io::Result<Exit> {
-        self.answer(Call::RunServing(name), None)
-    }
-
-    fn volume_rm(&self, name: &Name) -> io::Result<Exit> {
-        self.answer(Call::VolumeRm(name), None)
-    }
-
-    fn health(&self, name: &Name) -> io::Result<Exit> {
-        self.answer(Call::Health(name), None)
-    }
-
-    fn caddy_reload(&self) -> io::Result<Exit> {
-        self.answer(Call::CaddyReload, None)
-    }
-
-    fn volumes(&self) -> io::Result<Exit> {
-        self.answer(Call::Volumes, None)
+    /// One call answered: the script's next line UNDER THE CALL's NAME where
+    /// it expects this call, else [`UNEXPECTED`]; either way recorded, with
+    /// the input the call carries.
+    fn run(&self, call: Call<'_>) -> io::Result<Exit> {
+        let stdin = call.input();
+        let method = method(&call);
+        let name = name(&call).map(Name::to_string);
+        let mut script = self.script.lock().unwrap_or_else(|e| e.into_inner());
+        let at = script.iter().position(|s| s.name == name);
+        let expected = at.is_some_and(|i| script[i].method == method);
+        let exit = if expected {
+            let step = script.remove(at.expect("the line was found")).expect("the line is in range");
+            Exit { code: Some(step.code), stdout: step.stdout, stderr: step.stderr }
+        } else {
+            let shown = name.as_deref().unwrap_or("-");
+            let next = at.map_or_else(|| format!("nothing more under {shown}"), |i| format!("{} {shown}", script[i].method));
+            let stderr = format!("docker-fake: unexpected call {method} {shown}; the script expected {next}\n");
+            Exit { code: Some(UNEXPECTED), stdout: Vec::new(), stderr: stderr.into_bytes() }
+        };
+        drop(script);
+        if let Some(record) = &self.record {
+            let mut line = format!("{method}\t{}\t{}", name.as_deref().unwrap_or("-"), exit.said());
+            if let Some(bytes) = stdin {
+                line.push_str(&format!("\tstdin={}", bytes.len()));
+            }
+            if !expected {
+                line.push_str("\tunexpected");
+            }
+            line.push('\n');
+            OpenOptions::new().append(true).open(record)?.write_all(line.as_bytes())?;
+        }
+        self.calls.lock().unwrap_or_else(|e| e.into_inner()).push(Called { method, name: name.clone(), stdin: stdin.map(<[u8]>::to_vec), expected });
+        #[cfg(test)]
+        if let Some(hold) = self.hold.get() {
+            hold(method, name.as_deref());
+        }
+        Ok(exit)
     }
 }

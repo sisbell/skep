@@ -7,13 +7,17 @@
 //! the real `Command` built from that argv and nothing else; the real
 //! runner, over a recording script in `docker`'s place — no Docker is run —
 //! passing the argv, the record on stdin, a null stdin otherwise, and the
-//! two streams apart; and the fake refusing a call it was not scripted,
-//! its order strict per name and free across names.
+//! two streams apart; each named method running its own call through the
+//! one method a runner writes; and the fake refusing a call it was not
+//! scripted, its order strict per name and free across names.
 
 use std::path::Path;
 
+use skep_identity::{encode_enroll, Enrollment, PublicKey, ALG_MLDSA65_ED25519, MLDSA65_ED25519_KEY_LEN};
+
 use super::fake::{line, FakeDocker, UNEXPECTED};
 use super::*;
+use crate::record::admit;
 use crate::scratch::Scratch;
 
 /// The alpha's settings: the README's tags, the notes' bridge and proxy,
@@ -24,6 +28,13 @@ fn settings() -> Settings {
 
 fn alice() -> Name {
     Name::parse(b"alice").expect("a name")
+}
+
+/// An admitted record, the one input a call carries: one production key,
+/// as the person's device prints it.
+fn record() -> Record {
+    let key = PublicKey::parse(ALG_MLDSA65_ED25519, &"9f".repeat(MLDSA65_ED25519_KEY_LEN)).expect("a key");
+    admit(encode_enroll(&[Enrollment::new(key, true, None).expect("no label")]).as_bytes()).expect("an admitted record")
 }
 
 /// A run line as the documents write it, split into its words.
@@ -41,7 +52,7 @@ fn words(line: &str) -> Vec<String> {
 #[test]
 fn every_calls_argv_is_the_documents_run_line() {
     let s = settings();
-    let n = alice();
+    let (n, r) = (alice(), record());
     let pinned: [(Call<'_>, &str); 11] = [
         (Call::VolumeCreate(&n), "volume create --label skep.provision=1 alice"),
         (Call::VolumeInspect(&n), "volume inspect alice"),
@@ -51,7 +62,7 @@ fn every_calls_argv_is_the_documents_run_line() {
             "run -d --init --name alice --read-only --cap-drop ALL --security-opt no-new-privileges --ulimit nofile=1024:1024 \
              -e SKEPD_BIND=127.0.0.1 -e SKEPD_ORIGIN=https://alice.skep.host -v alice:/var/lib/skepd skep-hosted",
         ),
-        (Call::SidecarClaim(&n), "run --rm -i --network container:alice skep-cli skep claim --board http://127.0.0.1:8642 --hosted -"),
+        (Call::SidecarClaim(&n, &r), "run --rm -i --network container:alice skep-cli skep claim --board http://127.0.0.1:8642 --hosted -"),
         (Call::RmForce(&n), "rm -f alice"),
         (
             Call::RunServing(&n),
@@ -109,14 +120,14 @@ fn the_volume_is_labelled_before_its_name_and_the_listing_filters_by_the_label()
 #[test]
 fn the_settings_reach_their_own_words() {
     let s = Settings { image: "img:2".into(), cli_image: "cli:2".into(), network: "net2".into(), caddy: "proxy2".into(), suffix: "example.org".into(), log_max_size: "50m".into(), log_max_file: 3 };
-    let n = Name::parse(b"bob").expect("a name");
+    let (n, r) = (Name::parse(b"bob").expect("a name"), record());
     let serving = Call::RunServing(&n).argv(&s);
     for word in ["max-size=50m", "max-file=3", "net2", "SKEPD_ORIGIN=https://bob.example.org", "host=bob.example.org", "img:2", "bob:/var/lib/skepd"] {
         assert!(serving.contains(&word.to_owned()), "{word}: {serving:?}");
     }
     assert_eq!(Call::Health(&n).argv(&s), words("run --rm --network net2 cli:2 skep health --board http://bob:8642"));
     assert_eq!(Call::CaddyReload.argv(&s), words("exec proxy2 caddy reload --config /etc/caddy/Caddyfile"));
-    assert_eq!(Call::SidecarClaim(&n).argv(&s)[5], "cli:2");
+    assert_eq!(Call::SidecarClaim(&n, &r).argv(&s)[5], "cli:2");
 }
 
 /// The smoke script's own line: from the line that begins `docker run` and
@@ -181,7 +192,7 @@ fn the_sidecars_run_is_the_smoke_scripts_with_the_record_on_stdin() {
     let mount = smoke.iter().position(|w| w == "-v").expect("the smoke mounts the payload");
     smoke.drain(mount..mount + 2);
     smoke.insert(2, "-i".to_owned());
-    assert_eq!(Call::SidecarClaim(&alice()).argv(&settings()), smoke);
+    assert_eq!(Call::SidecarClaim(&alice(), &record()).argv(&settings()), smoke);
 }
 
 /// T4: THE SERVING RUN carries every flag of the README's serving line
@@ -211,7 +222,7 @@ fn the_serving_run_carries_the_readmes_serving_flags() {
 /// set, no directory changed.
 #[test]
 fn the_real_command_is_built_from_the_argv_and_nothing_else() {
-    let argv = Call::SidecarClaim(&alice()).argv(&settings());
+    let argv = Call::SidecarClaim(&alice(), &record()).argv(&settings());
     let cmd = command(Path::new(DOCKER), &argv);
     assert_eq!(cmd.get_program(), "docker");
     assert_eq!(cmd.get_args().map(|a| a.to_str().expect("text").to_owned()).collect::<Vec<_>>(), argv);
@@ -233,14 +244,68 @@ fn the_real_runner_passes_the_argv_the_record_and_a_null_stdin() {
         .expect("the script");
     std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o700)).expect("executable");
     let host = Host::with_program(script, settings());
-    let exit = host.sidecar_claim(&alice(), b"{\"type\":\"skep-enroll\"}").expect("the script ran");
+    let record = record();
+    let exit = host.sidecar_claim(&alice(), &record).expect("the script ran");
     assert_eq!(exit, Exit { code: Some(7), stdout: b"out:run".to_vec(), stderr: b"err:run".to_vec() });
     let argv = std::fs::read_to_string(dir.path().join("argv")).expect("the argv");
-    assert_eq!(argv.lines().map(str::to_owned).collect::<Vec<_>>(), Call::SidecarClaim(&alice()).argv(&settings()));
-    assert_eq!(std::fs::read(dir.path().join("stdin")).expect("the stdin"), b"{\"type\":\"skep-enroll\"}");
+    assert_eq!(argv.lines().map(str::to_owned).collect::<Vec<_>>(), Call::SidecarClaim(&alice(), &record).argv(&settings()));
+    assert_eq!(std::fs::read(dir.path().join("stdin")).expect("the stdin"), record.bytes());
     let exit = host.volume_inspect(&alice()).expect("the script ran");
     assert_eq!(exit.stdout, b"out:volume");
     assert_eq!(std::fs::read(dir.path().join("stdin")).expect("the stdin"), b"", "a call with no input reads a null stdin");
+}
+
+/// THE ONE MAPPING: each named method hands [`Docker::run`] the call its
+/// name says — the mapping the host runs and the fake answers alike,
+/// written once, in the trait — and the dark claim's call alone carries an
+/// input, the record's bytes, which its `Debug` never shows.
+#[test]
+fn each_named_method_runs_its_own_call() {
+    /// A runner that keeps every call it is handed, as its `Debug` spells it.
+    #[derive(Default)]
+    struct Kept(std::sync::Mutex<Vec<String>>);
+    impl Docker for Kept {
+        fn run(&self, call: Call<'_>) -> io::Result<Exit> {
+            self.0.lock().unwrap_or_else(|e| e.into_inner()).push(format!("{call:?}"));
+            Ok(Exit::default())
+        }
+    }
+    let (n, r, kept) = (alice(), record(), Kept::default());
+    for answered in [
+        kept.volume_create(&n),
+        kept.volume_inspect(&n),
+        kept.container_inspect(&n),
+        kept.run_claim(&n),
+        kept.sidecar_claim(&n, &r),
+        kept.rm_force(&n),
+        kept.run_serving(&n),
+        kept.volume_rm(&n),
+        kept.health(&n),
+        kept.caddy_reload(),
+        kept.volumes(),
+    ] {
+        answered.expect("the runner answered");
+    }
+    let calls = [
+        Call::VolumeCreate(&n),
+        Call::VolumeInspect(&n),
+        Call::ContainerInspect(&n),
+        Call::RunClaim(&n),
+        Call::SidecarClaim(&n, &r),
+        Call::RmForce(&n),
+        Call::RunServing(&n),
+        Call::VolumeRm(&n),
+        Call::Health(&n),
+        Call::CaddyReload,
+        Call::Volumes,
+    ];
+    assert_eq!(*kept.0.lock().unwrap_or_else(|e| e.into_inner()), calls.iter().map(|c| format!("{c:?}")).collect::<Vec<_>>());
+    for call in calls {
+        let want = matches!(call, Call::SidecarClaim(..)).then(|| r.bytes());
+        assert_eq!(call.input(), want, "{call:?}");
+    }
+    let shown = format!("{:?}", Call::SidecarClaim(&n, &r));
+    assert!(!shown.contains("9f9f") && shown.contains(&format!("bytes: {}", r.bytes().len())), "{shown}");
 }
 
 /// T4: THE FAKE answers its script in order and REFUSES a call it did not
@@ -270,10 +335,11 @@ fn the_fake_refuses_a_call_it_was_not_scripted() {
 fn the_script_reads_its_escapes_and_refuses_a_bad_line() {
     let text = format!("# a comment\n\n{}", line("sidecar_claim", Some("alice"), 0, "claimant 1.0.1\nback\\slash\ttab", "talk\n"));
     let fake = FakeDocker::parse(&text).expect("a script");
-    let exit = fake.sidecar_claim(&alice(), b"record").expect("an answer");
+    let record = record();
+    let exit = fake.sidecar_claim(&alice(), &record).expect("an answer");
     assert_eq!(exit.stdout, b"claimant 1.0.1\nback\\slash\ttab");
     assert_eq!(exit.stderr, b"talk\n");
-    assert_eq!(fake.calls()[0].stdin.as_deref(), Some(&b"record"[..]));
+    assert_eq!(fake.calls()[0].stdin.as_deref(), Some(record.bytes()));
     fake.assert_done();
     assert!(FakeDocker::parse("volume_inspect\talice\n").expect_err("two fields").contains("line 1"));
     assert!(FakeDocker::parse("volume_inspect\talice\tx\n").expect_err("no code").contains("no exit code"));
@@ -287,8 +353,9 @@ fn the_fake_from_a_file_records_each_call_beside_it() {
     let script = dir.path().join("docker.script");
     std::fs::write(&script, line("sidecar_claim", Some("alice"), 0, "", "")).expect("the script");
     let fake = FakeDocker::open(&script).expect("the fake");
-    fake.sidecar_claim(&alice(), b"12345").expect("an answer");
+    let record = record();
+    fake.sidecar_claim(&alice(), &record).expect("an answer");
     fake.caddy_reload().expect("an answer");
     let calls = std::fs::read_to_string(super::fake::calls_path(&script)).expect("the calls");
-    assert_eq!(calls, "sidecar_claim\talice\t0\tstdin=5\ncaddy_reload\t-\t125\tunexpected\n");
+    assert_eq!(calls, format!("sidecar_claim\talice\t0\tstdin={}\ncaddy_reload\t-\t125\tunexpected\n", record.bytes().len()));
 }

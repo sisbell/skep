@@ -17,6 +17,7 @@ use std::path::PathBuf;
 use std::str::FromStr;
 
 use crate::docker::Settings;
+use crate::domain::{Domain, DOMAIN_ALPHABET};
 use crate::invite_code::{InviteCode, MAX_CODE_BYTES};
 use crate::mail_address::{address_rule, MailAddress};
 
@@ -146,7 +147,7 @@ pub struct InviteArgs {
     /// `--state-dir`: where the invite file lives. Required.
     pub state_dir: PathBuf,
     /// `--suffix`: the invite link's host.
-    pub suffix: String,
+    pub suffix: Domain,
 }
 
 /// THE VERSION LINE (`--version`): `skep-provision <crate version>
@@ -273,15 +274,17 @@ fn word(flag: &str, v: String) -> Result<String, String> {
     Ok(v)
 }
 
-/// A DOMAIN, as `--suffix` takes one: lowercase letters, digits, dots and
-/// hyphens, its labels non-empty and none beginning or ending with a
-/// hyphen — the daemon's origin grammar for the host it closes.
-fn domain(flag: &str, v: String) -> Result<String, String> {
-    let labels_ok = v.split('.').all(|l| !l.is_empty() && !l.starts_with('-') && !l.ends_with('-'));
-    if v.is_empty() || !labels_ok || !v.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'.' || b == b'-') {
-        return Err(format!("{flag}: '{v}' is not a domain of lowercase letters, digits, dots and hyphens"));
-    }
-    Ok(v)
+/// A DOMAIN, as `--suffix` takes one: the value [`Domain::parse`] admits,
+/// or the refusal naming the flag and the grammar's alphabet
+/// ([`DOMAIN_ALPHABET`]).
+fn domain(flag: &str, v: &str) -> Result<Domain, String> {
+    Domain::parse(v).ok_or_else(|| format!("{flag}: '{v}' is not a domain of {DOMAIN_ALPHABET}"))
+}
+
+/// THE SUFFIX's DEFAULT, taken in as a suffix is: [`DEFAULT_SUFFIX`] is in
+/// the grammar, as `every_default_is_its_named_constant` finds it parsed.
+fn default_suffix() -> Domain {
+    Domain::parse(DEFAULT_SUFFIX).expect("`DEFAULT_SUFFIX`, `skep.host`, is in the grammar")
 }
 
 /// A MAIL ADDRESS by the rule: the value `MailAddress::parse` admits, or a
@@ -315,7 +318,7 @@ fn parse_serve(mut argv: impl Iterator<Item = String>) -> Result<Command, String
         cli_image: DEFAULT_CLI_IMAGE.to_owned(),
         network: DEFAULT_NETWORK.to_owned(),
         caddy: DEFAULT_CADDY.to_owned(),
-        suffix: DEFAULT_SUFFIX.to_owned(),
+        suffix: default_suffix(),
         log_max_size: DEFAULT_LOG_MAX_SIZE.to_owned(),
         log_max_file: DEFAULT_LOG_MAX_FILE,
     };
@@ -338,7 +341,7 @@ fn parse_serve(mut argv: impl Iterator<Item = String>) -> Result<Command, String
             flag @ "--cli-image" => settings.cli_image = word(flag, value(&mut argv, flag)?)?,
             flag @ "--network" => settings.network = word(flag, value(&mut argv, flag)?)?,
             flag @ "--caddy" => settings.caddy = word(flag, value(&mut argv, flag)?)?,
-            flag @ "--suffix" => settings.suffix = domain(flag, value(&mut argv, flag)?)?,
+            flag @ "--suffix" => settings.suffix = domain(flag, &value(&mut argv, flag)?)?,
             flag @ "--log-max-size" => {
                 let v = value(&mut argv, flag)?;
                 let digits = v.strip_suffix(['k', 'm', 'g']).unwrap_or(&v);
@@ -387,7 +390,7 @@ fn parse_invite(mut argv: impl Iterator<Item = String>) -> Result<Command, Strin
     let mut address: Option<MailAddress> = None;
     let mut code: Option<InviteCode> = None;
     let mut state_dir: Option<PathBuf> = None;
-    let mut suffix = DEFAULT_SUFFIX.to_owned();
+    let mut suffix = default_suffix();
     while let Some(arg) = argv.next() {
         match arg.as_str() {
             flag @ "--address" => address = Some(mail_address(flag, &value(&mut argv, flag)?)?),
@@ -396,7 +399,7 @@ fn parse_invite(mut argv: impl Iterator<Item = String>) -> Result<Command, Strin
                 code = Some(InviteCode::parse(&v).ok_or_else(|| format!("{flag}: '{v}' is not 1 to {MAX_CODE_BYTES} letters, digits, '-', '.', '_' or '~'"))?);
             }
             flag @ "--state-dir" => state_dir = Some(PathBuf::from(value(&mut argv, flag)?)).filter(|p| !p.as_os_str().is_empty()),
-            flag @ "--suffix" => suffix = domain(flag, value(&mut argv, flag)?)?,
+            flag @ "--suffix" => suffix = domain(flag, &value(&mut argv, flag)?)?,
             "--help" | "-h" => return Ok(Command::Help),
             "--version" => return Err("--version is read as the first argument: skep-provision --version".to_owned()),
             other => return Err(format!("invite: unknown argument '{other}'")),

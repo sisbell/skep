@@ -29,11 +29,11 @@ fn sh(script: &str) -> Command {
 fn the_input_goes_in_and_the_streams_come_back_apart() {
     let exit = run(sh("cat; printf 'err' >&2; exit 7"), Some(b"the record")).expect("ran");
     assert_eq!(exit, Exit { code: Some(7), stdout: b"the record".to_vec(), stderr: b"err".to_vec() });
-    assert!(!exit.ok());
+    assert!(!exit.success());
     assert_eq!(exit.said(), "7");
     let none = run(sh("cat; printf 'read'"), None).expect("ran");
     assert_eq!((none.code, none.stdout.as_slice()), (Some(0), &b"read"[..]));
-    assert!(none.ok());
+    assert!(none.success());
 }
 
 /// A CHILD THAT NEVER READS ITS INPUT: a megabyte it exits without reading

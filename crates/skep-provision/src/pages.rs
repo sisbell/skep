@@ -41,6 +41,7 @@ use std::time::{Duration, Instant};
 use skep_http::{read_request, write_response, Limits, Refused, Request};
 use skep_identity::MAX_RECORD_BYTES;
 
+use crate::domain::Domain;
 use crate::invite_code::InviteCode;
 use crate::strings::{
     fill, Words, ADDRESS_LABEL, BAD_FORM, BEING_MADE, CLAIM_BUTTON, CLAIM_LEAD, FAILED, INVITE_LABEL, INVITE_REFUSED, NAME_HELP, NAME_LABEL, NAME_REFUSED, NOT_FOUND, PREVIEW_REFUSED, RECORD_HELP,
@@ -193,9 +194,8 @@ pub trait Desk: Sync {
 /// page shows ([`Site::fill`]).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Site {
-    /// `--suffix`: `skep.host` in the alpha — a domain by `args`' door, used
-    /// unchanged.
-    pub suffix: String,
+    /// `--suffix`: `skep.host` in the alpha.
+    pub suffix: Domain,
     /// `--reply-to`: the owner's address, which D-8 names.
     pub owner_address: String,
 }
@@ -219,14 +219,14 @@ impl Site {
 /// A POST's STATUS URL (the provisioning record §5.2, THE STATUS URL):
 /// `https://<suffix>/status/<token>`, `token` as [`Desk::admit`] answers it:
 /// one path segment, carried as it is.
-pub fn status_url(suffix: &str, token: &str) -> String {
+pub fn status_url(suffix: &Domain, token: &str) -> String {
     format!("https://{suffix}/status/{token}")
 }
 
 /// THE INVITE LINK an invitation carries (the intake funnel's second arm):
 /// `https://<suffix>/claim?invite=<code>` — the claim form's path, and the
 /// query value its invite field is pre-filled from.
-pub fn invite_link(suffix: &str, code: &InviteCode) -> String {
+pub fn invite_link(suffix: &Domain, code: &InviteCode) -> String {
     format!("https://{suffix}/claim?invite={}", code.as_str())
 }
 
@@ -413,7 +413,7 @@ button{margin-top:1.25rem;font:inherit}";
 /// THE FRAME every page shares: the suffix as its title and heading, the
 /// style, and — on a page showing D-7 — the refresh to the status URL.
 fn page(site: &Site, refresh_to: Option<&str>, body: &str) -> String {
-    let suffix = escape(&site.suffix, Within::Content);
+    let suffix = escape(site.suffix.as_str(), Within::Content);
     let refresh = refresh_to.map_or_else(String::new, |to| format!("<meta http-equiv=\"refresh\" content=\"{REFRESH_SECS}; url={}\">\n", attr(to)));
     format!(
         "<!doctype html>\n<html lang=\"en\">\n<head>\n<meta charset=\"utf-8\">\n<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n{refresh}<title>{suffix}</title>\n<style>{STYLE}</style>\n</head>\n<body>\n<h1>{suffix}</h1>\n{body}</body>\n</html>\n"

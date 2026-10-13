@@ -148,7 +148,7 @@ fn deliver(sender: &dyn Sender, message: &Message, wait: Wait, sleep: &dyn Fn(Du
     let (name, tries) = (&message.name, wait.tries);
     for at in wait.paced(sleep) {
         match sender.send(message) {
-            Ok(exit) if exit.ok() => {
+            Ok(exit) if exit.success() => {
                 log(&format!("{name}: mail: sent at try {at} of {tries}"));
                 return true;
             }

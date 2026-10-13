@@ -72,10 +72,10 @@ pub fn taken(docker: &dyn Docker, boards_dir: &Path, name: &Name) -> io::Result<
     if caddy::stands(boards_dir, name)? {
         return Ok(Some(TakenBy::Snippet));
     }
-    if docker.volume_inspect(name)?.ok() {
+    if docker.volume_inspect(name)?.success() {
         return Ok(Some(TakenBy::Volume));
     }
-    if docker.container_inspect(name)?.ok() {
+    if docker.container_inspect(name)?.success() {
         return Ok(Some(TakenBy::Container));
     }
     Ok(None)

@@ -32,6 +32,11 @@ fn name(n: &str) -> Name {
     Name::parse(n.as_bytes()).expect("a name")
 }
 
+/// A suffix by the grammar.
+fn domain(text: &str) -> Domain {
+    Domain::parse(text).expect("a domain")
+}
+
 /// The directory's file names, sorted.
 fn listing(dir: &Path) -> Vec<String> {
     let mut names: Vec<String> = fs::read_dir(dir).expect("the directory").map(|e| e.expect("an entry").file_name().to_string_lossy().into_owned()).collect();
@@ -43,8 +48,8 @@ fn listing(dir: &Path) -> Vec<String> {
 /// FOR BYTE.
 #[test]
 fn the_snippet_is_the_notes_block_byte_for_byte() {
-    assert_eq!(snippet(&name("alice"), "skep.host"), ALICE);
-    assert_eq!(snippet(&name("alice"), "skep.host").matches('\t').count(), 20, "the notes' tabs");
+    assert_eq!(snippet(&name("alice"), &domain("skep.host")), ALICE);
+    assert_eq!(snippet(&name("alice"), &domain("skep.host")).matches('\t').count(), 20, "the notes' tabs");
 }
 
 /// THE PROXY's PATTERN NAMES THE ACCOUNT THE DARK CLAIM FOUNDS: the
@@ -55,7 +60,7 @@ fn the_snippet_is_the_notes_block_byte_for_byte() {
 #[test]
 fn the_proxys_pattern_names_the_account_the_dark_claim_founds() {
     let escaped = crate::sidecar::ACCOUNT.replace('.', "\\.");
-    let text = snippet(&name("alice"), "skep.host");
+    let text = snippet(&name("alice"), &domain("skep.host"));
     assert!(text.contains(&format!("\thealth_body `\"claimant\":\"{escaped}\",\"local_trust\":false`\n")), "{text}");
 }
 
@@ -63,11 +68,11 @@ fn the_proxys_pattern_names_the_account_the_dark_claim_founds() {
 /// handle, the host and the upstream — and another suffix the host's.
 #[test]
 fn another_name_and_suffix_substitute_every_occurrence() {
-    let bob = snippet(&name("bob"), "skep.host");
+    let bob = snippet(&name("bob"), &domain("skep.host"));
     assert_eq!(bob, ALICE.replace("alice", "bob"));
     assert!(!bob.contains("alice"));
     assert_eq!(bob.matches("bob").count(), 4);
-    let elsewhere = snippet(&name("alice"), "example.org");
+    let elsewhere = snippet(&name("alice"), &domain("example.org"));
     assert_eq!(elsewhere, ALICE.replace("alice.skep.host", "alice.example.org"));
 }
 
@@ -76,7 +81,7 @@ fn another_name_and_suffix_substitute_every_occurrence() {
 #[test]
 fn the_write_leaves_one_file_and_no_temp_file() {
     let dir = Scratch::new();
-    write(dir.path(), &name("alice"), "skep.host").expect("written");
+    write(dir.path(), &name("alice"), &domain("skep.host")).expect("written");
     assert_eq!(listing(dir.path()), vec!["alice.caddy"]);
     assert_eq!(fs::read_to_string(path(dir.path(), &name("alice"))).expect("the snippet"), ALICE);
     #[cfg(unix)]
@@ -84,7 +89,7 @@ fn the_write_leaves_one_file_and_no_temp_file() {
         use std::os::unix::fs::PermissionsExt;
         assert_eq!(fs::metadata(path(dir.path(), &name("alice"))).expect("its mode").permissions().mode() & 0o777, 0o644);
     }
-    write(dir.path(), &name("alice"), "example.org").expect("written again");
+    write(dir.path(), &name("alice"), &domain("example.org")).expect("written again");
     assert_eq!(listing(dir.path()), vec!["alice.caddy"]);
     assert!(fs::read_to_string(path(dir.path(), &name("alice"))).expect("the snippet").contains("alice.example.org"));
 }
@@ -99,10 +104,10 @@ fn an_unwritable_directory_is_an_error() {
     let boards = dir.path().join("boards");
     fs::create_dir(&boards).expect("the snippet directory");
     fs::set_permissions(&boards, fs::Permissions::from_mode(0o555)).expect("read-only");
-    assert!(write(&boards, &name("alice"), "skep.host").is_err());
+    assert!(write(&boards, &name("alice"), &domain("skep.host")).is_err());
     fs::set_permissions(&boards, fs::Permissions::from_mode(0o700)).expect("writable again");
     assert!(listing(&boards).is_empty());
-    assert!(write(dir.path().join("absent").as_path(), &name("alice"), "skep.host").is_err(), "a directory that does not stand");
+    assert!(write(dir.path().join("absent").as_path(), &name("alice"), &domain("skep.host")).is_err(), "a directory that does not stand");
 }
 
 /// A SNIPPET STANDS from its write until its removal: not before its
@@ -111,9 +116,9 @@ fn an_unwritable_directory_is_an_error() {
 #[test]
 fn a_snippet_stands_from_its_write_until_its_removal() {
     let dir = Scratch::new();
-    write(dir.path(), &name("bob"), "skep.host").expect("bob's snippet");
+    write(dir.path(), &name("bob"), &domain("skep.host")).expect("bob's snippet");
     assert!(!stands(dir.path(), &name("alice")).expect("read"));
-    write(dir.path(), &name("alice"), "skep.host").expect("written");
+    write(dir.path(), &name("alice"), &domain("skep.host")).expect("written");
     assert!(stands(dir.path(), &name("alice")).expect("read"));
     remove(dir.path(), &name("alice")).expect("removed");
     assert!(!stands(dir.path(), &name("alice")).expect("read"));
@@ -125,12 +130,12 @@ fn a_snippet_stands_from_its_write_until_its_removal() {
 #[test]
 fn a_removal_answers_whether_one_stood_and_a_reload_is_one_call() {
     let dir = Scratch::new();
-    write(dir.path(), &name("alice"), "skep.host").expect("written");
+    write(dir.path(), &name("alice"), &domain("skep.host")).expect("written");
     assert!(remove(dir.path(), &name("alice")).expect("removed"));
     assert!(!remove(dir.path(), &name("alice")).expect("nothing to remove"));
     assert!(listing(dir.path()).is_empty());
     let fake = FakeDocker::parse(&line("caddy_reload", None, 0, "", "")).expect("a script");
-    assert!(reload(&fake).expect("an answer").ok());
+    assert!(reload(&fake).expect("an answer").success());
     fake.assert_done();
 }
 

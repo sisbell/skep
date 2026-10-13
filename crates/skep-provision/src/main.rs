@@ -96,6 +96,9 @@ mod process;
 // A bounded wait: this many tries, this far apart, a pause before each try
 // but the first.
 mod wait;
+// A domain, as `--suffix` takes one: the grammar a suffix is held to, its
+// alphabet in words, and the one value a suffix is taken in as.
+mod domain;
 // A board's name: one lowercase label, and the board's host and public
 // origin under the suffix.
 mod name;

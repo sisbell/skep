@@ -68,6 +68,7 @@ use std::num::NonZeroU32;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+use crate::domain::Domain;
 use crate::name::Name;
 use crate::process::{self, Exit};
 use crate::record::Record;
@@ -150,9 +151,9 @@ fn image_run(name: &Name, own: Vec<String>, settings: &Settings) -> Vec<String> 
 
 /// The run configuration every argv is built from: the operator's flags,
 /// each value through `args`' doors — the tags, the bridge and the proxy's
-/// container one argv word not beginning with `-`, the suffix a domain,
-/// the size `<N>[k|m|g]` — and used here unchanged: [`Call::argv`] checks
-/// none again.
+/// container one argv word not beginning with `-`, the size `<N>[k|m|g]` —
+/// and used here unchanged: [`Call::argv`] checks none again; the suffix a
+/// [`Domain`], held to its grammar by its type.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Settings {
     /// The hosted image's tag (`--image`).
@@ -165,7 +166,7 @@ pub struct Settings {
     pub caddy: String,
     /// The domain every board's name is under, `<name>.<suffix>`
     /// (`--suffix`).
-    pub suffix: String,
+    pub suffix: Domain,
     /// The serving run's log rotation: one file's size (`--log-max-size`).
     pub log_max_size: String,
     /// The serving run's log rotation: the files kept (`--log-max-file`),

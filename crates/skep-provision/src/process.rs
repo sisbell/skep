@@ -29,8 +29,9 @@ pub struct Exit {
 }
 
 impl Exit {
-    /// Whether it exited 0.
-    pub fn ok(&self) -> bool {
+    /// Whether it exited 0 — `std::process::ExitStatus::success`'s question,
+    /// in its word: an end by a signal is no success.
+    pub fn success(&self) -> bool {
         self.code == Some(0)
     }
 

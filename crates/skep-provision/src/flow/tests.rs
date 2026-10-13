@@ -122,7 +122,7 @@ fn rig_with(script: &str, mail_script: Option<Vec<i32>>, sleep: Sleep) -> Rig {
     let address = |text: &str| MailAddress::parse(text).expect("an address");
     let outbox = mail_script.map(|_| Outbox::inline(Box::new(Arc::clone(&probe)), address("noreply@skep.host"), address("owner@skep.host"), Arc::clone(&log), Arc::new(|_| {})));
     let mailing = outbox.is_some();
-    let config = Config { boards_dir: boards.clone(), suffix: "skep.host".into() };
+    let config = Config { boards_dir: boards.clone(), suffix: suffix() };
     let service = Arc::new(Service::new(config, state_dir.clone(), Box::new(Arc::clone(&fake)), outbox, log, sleep).expect("the service"));
     // The probe reads the service where it is the outbox's sender alone: a
     // rig with no mail hands out no handle on its service, which the sweep
@@ -137,9 +137,15 @@ fn rig_with(script: &str, mail_script: Option<Vec<i32>>, sleep: Sleep) -> Rig {
 /// test opens the gate, for good; the test waits for the count.
 #[derive(Default)]
 struct Gate {
-    /// The pauses entered, and whether the gate is open.
-    state: Mutex<(u32, bool)>,
+    pauses: Mutex<Pauses>,
     changed: Condvar,
+}
+
+/// What a gate has seen: the pauses entered, and whether it is open.
+#[derive(Default)]
+struct Pauses {
+    entered: u32,
+    open: bool,
 }
 
 impl Gate {
@@ -149,27 +155,23 @@ impl Gate {
 
     /// The hook's side: counted in, then paused until the gate is open.
     fn pause(&self) {
-        let mut state = self.state.lock().unwrap();
-        state.0 += 1;
+        let mut pauses = self.pauses.lock().unwrap();
+        pauses.entered += 1;
         self.changed.notify_all();
-        while !state.1 {
-            state = self.changed.wait(state).unwrap();
-        }
+        drop(self.changed.wait_while(pauses, |seen| !seen.open).unwrap());
     }
 
-    /// The test's side: waited until `n` pauses have been entered.
+    /// The test's side: waited until `n` pauses have been entered, thirty
+    /// seconds at most.
     fn entered(&self, n: u32) {
-        let deadline = Instant::now() + Duration::from_secs(30);
-        let mut state = self.state.lock().unwrap();
-        while state.0 < n {
-            assert!(Instant::now() < deadline, "pause {n} never entered");
-            state = self.changed.wait_timeout(state, Duration::from_millis(50)).unwrap().0;
-        }
+        let (pauses, waited) = self.changed.wait_timeout_while(self.pauses.lock().unwrap(), Duration::from_secs(30), |seen| seen.entered < n).unwrap();
+        drop(pauses);
+        assert!(!waited.timed_out(), "pause {n} never entered");
     }
 
     /// The test's side: the gate opened, for good.
     fn open(&self) {
-        self.state.lock().unwrap().1 = true;
+        self.pauses.lock().unwrap().open = true;
         self.changed.notify_all();
     }
 }
@@ -281,6 +283,11 @@ fn inspects(name: &str) -> String {
 
 fn said(calls: &[&str]) -> Vec<String> {
     calls.iter().map(|c| (*c).to_owned()).collect()
+}
+
+/// The suffix every rig's boards are under.
+fn suffix() -> Domain {
+    Domain::parse("skep.host").expect("a domain")
 }
 
 /// The steps that reach the dark claim.

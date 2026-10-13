@@ -53,7 +53,7 @@ impl Desk for Scripted {
 }
 
 fn site() -> Site {
-    Site { suffix: "skep.host".into(), owner_address: "owner@skep.host".into() }
+    Site { suffix: Domain::parse("skep.host").expect("a domain"), owner_address: "owner@skep.host".into() }
 }
 
 /// One request, as the subset reads it.
@@ -126,7 +126,7 @@ fn answer_of(method: &str, target: &str, body: &[u8]) -> Answer {
 /// answer the form, its invite field pre-filled.
 #[test]
 fn the_invite_link_opens_the_claim_form_with_its_code() {
-    let link = invite_link("skep.host", &InviteCode::parse("1.1.0.1.0.3").expect("a code"));
+    let link = invite_link(&site().suffix, &InviteCode::parse("1.1.0.1.0.3").expect("a code"));
     assert_eq!(link, "https://skep.host/claim?invite=1.1.0.1.0.3");
     let target = link.strip_prefix("https://skep.host").expect("the site's own host");
     let form = answer_of("GET", target, b"");
@@ -503,7 +503,7 @@ fn a_persons_field_never_closes_its_attribute() {
 #[test]
 fn the_debug_of_what_the_pages_hold_shows_none_of_it() {
     assert_eq!(format!("{:?}", Post { name: b"alice", record: b"{}", invite: b"c0de" }), "Post { name: 5, record: 2, invite: 4 }");
-    let reply = format!("This reply stays at {}\n", status_url("skep.host", "t0k3n"));
+    let reply = format!("This reply stays at {}\n", status_url(&site().suffix, "t0k3n"));
     assert_eq!(format!("{:?}", Shown::Live(reply.clone())), format!("Live({})", reply.len()));
     assert_eq!(format!("{:?}", Shown::BeingMade), "BeingMade");
     assert_eq!(format!("{:?}", Shown::Failed), "Failed");

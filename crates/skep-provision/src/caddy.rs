@@ -27,6 +27,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 
 use crate::docker::{Docker, BOARD_PORT};
+use crate::domain::Domain;
 use crate::name::Name;
 use crate::process::Exit;
 use crate::whole;
@@ -38,10 +39,9 @@ const SNIPPET_MODE: u32 = 0o644;
 
 /// THE SNIPPET's TEXT for `name` under `suffix`: the deployment notes' block
 /// for `alice` under `skep.host`, byte for byte, every occurrence of either
-/// replaced — the matcher, the host, the upstream. `suffix` is a domain by
-/// `args`' door — no character the Caddyfile reads as its own — used
-/// unchanged.
-pub fn snippet(name: &Name, suffix: &str) -> String {
+/// replaced — the matcher, the host, the upstream. `suffix` a [`Domain`],
+/// so no character the Caddyfile reads as its own reaches the text.
+pub fn snippet(name: &Name, suffix: &Domain) -> String {
     format!(
         "@{name} host {host}\n\
          handle @{name} {{\n\
@@ -80,7 +80,7 @@ pub fn stands(boards_dir: &Path, name: &Name) -> io::Result<bool> {
 /// step for the flow. PRECONDITION, the caller's: no other write or removal
 /// of `name`'s snippet runs at once — the route lock, under which the flow
 /// makes both, keeps it; nothing here checks it.
-pub fn write(boards_dir: &Path, name: &Name, suffix: &str) -> io::Result<()> {
+pub fn write(boards_dir: &Path, name: &Name, suffix: &Domain) -> io::Result<()> {
     whole::replace(&path(boards_dir, name), snippet(name, suffix).as_bytes(), SNIPPET_MODE, &|| Ok(()))
 }
 

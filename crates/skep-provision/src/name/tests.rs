@@ -133,7 +133,7 @@ fn a_name_read_back_as_written_is_never_lowercased() {
 /// it.
 #[test]
 fn the_host_and_the_public_origin_are_the_name_under_the_suffix() {
-    let name = Name::parse(b"alice").expect("a name");
-    assert_eq!(name.host("skep.host"), "alice.skep.host");
-    assert_eq!(name.origin("skep.host"), "https://alice.skep.host");
+    let (name, suffix) = (Name::parse(b"alice").expect("a name"), Domain::parse("skep.host").expect("a domain"));
+    assert_eq!(name.host(&suffix), "alice.skep.host");
+    assert_eq!(name.origin(&suffix), "https://alice.skep.host");
 }

@@ -126,6 +126,7 @@ use std::time::Duration;
 
 use crate::caddy;
 use crate::docker::Docker;
+use crate::domain::Domain;
 use crate::health::{self, Waited, HEALTH_WAIT};
 use crate::invite_code::InviteCode;
 use crate::invites;
@@ -167,9 +168,8 @@ const MAX_LOOKS: usize = QUEUE_DEPTH;
 pub struct Config {
     /// `--boards-dir`: where the snippets live.
     pub boards_dir: PathBuf,
-    /// `--suffix`: the domain every board's name is under — a domain by
-    /// `args`' door, used unchanged.
-    pub suffix: String,
+    /// `--suffix`: the domain every board's name is under.
+    pub suffix: Domain,
 }
 
 /// One admitted post, waiting or running.
@@ -648,7 +648,7 @@ impl Service {
     /// `docker` that could not run logged — each `None`.
     fn judged(&self, prefix: &str, answered: io::Result<Exit>) -> Option<Exit> {
         match answered {
-            Ok(exit) if exit.ok() => {
+            Ok(exit) if exit.success() => {
                 self.log(&format!("{prefix}: exit 0"));
                 Some(exit)
             }

@@ -71,7 +71,7 @@ fn the_fake_records_the_headers_and_the_body() {
     let dir = Scratch::new();
     let mail_log = dir.path().join("mail.log");
     let fake = FakeSender::new(mail_log.clone(), Vec::new());
-    assert!(fake.send(&message()).expect("sent").ok());
+    assert!(fake.send(&message()).expect("sent").success());
     let sent = messages(&mail_log).expect("the mail log");
     assert_eq!(sent.len(), 1);
     let text = &sent[0];

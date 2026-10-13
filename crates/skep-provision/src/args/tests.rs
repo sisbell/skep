@@ -1,18 +1,18 @@
 //! T1 — THE COMMAND LINE: `--version` renders `skepd`'s form; every flag's
 //! default is its named constant; `--mailer` and `--from` come together or
 //! not at all; an unknown flag, a missing value, a value of the wrong form —
-//! an address out of the rule, a code out of the alphabet and an empty word
-//! among them, which this door alone refuses — and a missing required flag
-//! are each a usage refusal (`main` answers it exit 2 — the binary's suite
-//! runs one), where several hold the first met speaking, and what follows a
-//! leading `--version` or `--help` unread; the suffix's grammar at every byte
-//! and at each label's ends; every flag lands in its setting, the address and
-//! the code as their own values; `--workers` defaults to its constant and
-//! refuses zero (T21), and `--connections` likewise; a `test-hooks` build
-//! takes `--docker-fake` and `--mailer-fake` — the shipped build's refusal of
-//! both is `scripts/gate-full.sh`'s to check, every build of this suite
-//! having the feature on; and the usage text names every flag and renders
-//! every default from its constant.
+//! an address out of the rule, a code out of the alphabet, a suffix out of
+//! the grammar and an empty word among them, which this door alone refuses —
+//! and a missing required flag are each a usage refusal (`main` answers it
+//! exit 2 — the binary's suite runs one), where several hold the first met
+//! speaking, and what follows a leading `--version` or `--help` unread; every
+//! flag lands in its setting, the address, the code and the suffix as their
+//! own values; `--workers` defaults to its constant and refuses zero (T21),
+//! and `--connections` likewise; a `test-hooks` build takes `--docker-fake`
+//! and `--mailer-fake` — the shipped build's refusal of both is
+//! `scripts/gate-full.sh`'s to check, every build of this suite having the
+//! feature on; and the usage text names every flag and renders every default
+//! from its constant. (The suffix's grammar itself is `domain`'s suite.)
 
 use std::ffi::OsString;
 
@@ -62,7 +62,7 @@ fn every_default_is_its_named_constant() {
     assert_eq!(s.settings.cli_image, DEFAULT_CLI_IMAGE);
     assert_eq!(s.settings.network, DEFAULT_NETWORK);
     assert_eq!(s.settings.caddy, DEFAULT_CADDY);
-    assert_eq!(s.settings.suffix, DEFAULT_SUFFIX);
+    assert_eq!(s.settings.suffix.as_str(), DEFAULT_SUFFIX);
     assert_eq!(s.settings.log_max_size, DEFAULT_LOG_MAX_SIZE);
     assert_eq!(s.settings.log_max_file, DEFAULT_LOG_MAX_FILE);
     assert_eq!(s.workers, DEFAULT_WORKERS);
@@ -72,7 +72,7 @@ fn every_default_is_its_named_constant() {
     assert_eq!(s.reply_to.as_str(), "owner@skep.host");
     match parse(argv(&["invite", "--address", "person@example.com", "--state-dir", "/s"])) {
         Ok(Command::Invite(i)) => {
-            assert_eq!(i.suffix, DEFAULT_SUFFIX);
+            assert_eq!(i.suffix.as_str(), DEFAULT_SUFFIX);
             assert_eq!(i.code, None);
         }
         other => panic!("{other:?}"),
@@ -161,7 +161,15 @@ fn every_flag_lands_in_its_setting() {
     let three = NonZeroU32::new(3).expect("three is not zero");
     assert_eq!(
         s.settings,
-        Settings { image: "img:2".into(), cli_image: "cli:2".into(), network: "net2".into(), caddy: "proxy2".into(), suffix: "example.org".into(), log_max_size: "50m".into(), log_max_file: three }
+        Settings {
+            image: "img:2".into(),
+            cli_image: "cli:2".into(),
+            network: "net2".into(),
+            caddy: "proxy2".into(),
+            suffix: Domain::parse("example.org").expect("a domain"),
+            log_max_size: "50m".into(),
+            log_max_file: three,
+        }
     );
     assert_eq!(s.mail, Some(MailArgs { mailer: Mailer::Program(PathBuf::from("/usr/bin/msmtp")), from: address("noreply@example.org") }));
     assert_eq!(served(&["--image", "a", "--image", "b"]).settings.image, "b", "the last given wins");
@@ -195,7 +203,7 @@ fn each_bad_command_line_is_a_usage_refusal() {
     assert!(serve(&["--image", "--privileged"]).expect_err("a flag of docker's").contains("not one word that does not begin with '-'"));
     assert!(serve(&["--network", "a b"]).is_err());
     assert!(serve(&["--caddy", ""]).is_err(), "an empty word");
-    assert!(serve(&["--suffix", "Skep.Host"]).is_err());
+    assert_eq!(serve(&["--suffix", "Skep.Host"]), Err("--suffix: 'Skep.Host' is not a domain of lowercase letters, digits, dots and hyphens".to_owned()), "a suffix out of the grammar");
     assert!(serve(&["--suffix", "skep..host"]).is_err());
     assert!(serve(&["--log-max-size", "10x"]).is_err());
     assert!(serve(&["--log-max-file", "0"]).is_err());
@@ -230,25 +238,6 @@ fn each_bad_command_line_is_a_usage_refusal() {
     assert_eq!(parse(argv(&["serve", "--mailer", "m"])), Err("--mailer is given without --from: give both, or neither for no mail".to_owned()), "the pairing before a required flag");
     assert_eq!(parse(argv(&["serve"])), Err("serve: --state-dir is required".to_owned()), "--state-dir before --reply-to");
     assert_eq!(parse(argv(&["invite"])), Err("invite: --address is required".to_owned()), "--address before --state-dir");
-}
-
-/// THE SUFFIX's GRAMMAR, the daemon's own for the host every origin
-/// closes: `a<c>b.host` is a domain iff `c` is a lowercase letter, a digit,
-/// a dot or a hyphen, for every byte `c`; and a label empty, or beginning
-/// or ending with a hyphen — at either end of the suffix or inside it — is
-/// refused, as the empty suffix is.
-#[test]
-fn the_suffix_is_lowercase_labels_none_empty_and_no_hyphen_at_either_end() {
-    for b in 0..=255u8 {
-        let admitted = b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'.' || b == b'-';
-        assert_eq!(domain("--suffix", format!("a{}b.host", char::from(b))).is_ok(), admitted, "{b:#04x}");
-    }
-    for bad in ["", ".", ".skep.host", "skep.host.", "skep..host", "-skep.host", "skep-.host", "skep.-host", "skep.host-"] {
-        assert!(domain("--suffix", bad.to_owned()).is_err(), "{bad:?}");
-    }
-    for good in ["skep.host", "a-b.c-d", "x", "1.2"] {
-        assert_eq!(domain("--suffix", good.to_owned()), Ok(good.to_owned()));
-    }
 }
 
 /// T1: A `test-hooks` BUILD TAKES `--docker-fake` AND `--mailer-fake` —

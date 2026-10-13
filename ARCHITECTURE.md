@@ -1605,6 +1605,10 @@ each naming only those above it:
 - `wait.rs` a bounded wait: `Wait`, this many tries this far apart, and
   the tries paced by it — a sleep before each but the first, never after
   the last — the `/health` read's, the dark claim's and the mail's.
+- `domain.rs` a domain, as `--suffix` takes one — lowercase letters,
+  digits, dots and hyphens, its labels non-empty and none beginning or
+  ending with a hyphen — its alphabet in words for a refusal to name, and
+  `Domain`, the one value a suffix is taken in as.
 - `name.rs` a board's name: its grammar, one lowercase label Docker takes
   as a name alone — two bytes at least, none a container's hosts file
   answers, never hex digits alone, which a container command reads as an
@@ -1747,15 +1751,16 @@ Rules that hold across its files:
   its own or a null stdin, never the service's own. Every try it makes
   again — the `/health` read, the dark claim, the mail — is paced by a
   `Wait`, a sleep before each try but the first and never after the last.
-- **One door per value.** An address is taken in only as a `MailAddress`
-  and an invite code only as an `InviteCode`, each in a module that holds
-  it and its rule alone — as a board's name is a `Name` in `name.rs` — so
-  its rule's one constructor is the only way to one any other module can
-  write; each is made at the door — `args` for the flags, the desk for the
-  claim post's field, the sign-up file for its field — so the file that
-  keeps them is handed nothing its line cannot carry and checks nothing
-  again, and no other string of a code's shape, a status token among them,
-  can stand in for a code.
+- **One door per value.** An address is taken in only as a `MailAddress`,
+  an invite code only as an `InviteCode` and the suffix only as a
+  `Domain`, each in a module that holds it and its rule alone — as a
+  board's name is a `Name` in `name.rs` — so its rule's one constructor is
+  the only way to one any other module can write; each is made at the
+  door — `args` for the flags, the desk for the claim post's field, the
+  sign-up file for its field — so what keeps or carries it — a file's
+  line, the snippet, a URL — is handed nothing it cannot carry and checks
+  nothing again, and no other string of a code's shape, a status token
+  among them, can stand in for a code.
 - **What stands is the truth about names.** A name is taken iff its
   snippet, its volume or its container stands; no ledger is kept, and
   the log carries the history. A failed step's makings are undone in

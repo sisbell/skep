@@ -14,7 +14,7 @@ use crate::docker::Call;
 fn the_service_counts_the_snippets_standing_at_start() {
     let rig = rig("", None);
     fs::write(rig.snippet("alice"), b"").expect("a snippet");
-    let config = Config { boards_dir: rig.boards.clone(), suffix: "skep.host".into() };
+    let config = Config { boards_dir: rig.boards.clone(), suffix: suffix() };
     let again = Service::new(config, rig.state_dir.clone(), Box::new(Arc::clone(&rig.fake)), None, Arc::new(|_: &str| {}), Arc::new(|_| {})).expect("the service");
     assert_eq!(again.routed_at_start_count(), 1);
 }
@@ -39,7 +39,7 @@ fn a_docker_that_cannot_run_skips_the_sweep_and_refuses_a_post_d8() {
     let lines = Arc::new(Mutex::new(Vec::new()));
     let into = Arc::clone(&lines);
     let log: Log = Arc::new(move |line: &str| into.lock().unwrap().push(line.to_owned()));
-    let config = Config { boards_dir: boards, suffix: "skep.host".into() };
+    let config = Config { boards_dir: boards, suffix: suffix() };
     let mut service = Service::new(config, state_dir.clone(), Box::new(NoDocker), None, log, Arc::new(|_| {})).expect("the service");
     assert_eq!(service.sweep(), 0);
     let code = mint(&state_dir, &MailAddress::parse("person@example.com").expect("an address"), None).expect("minted");
@@ -79,7 +79,7 @@ fn a_look_that_cannot_be_made_never_clears_a_name() {
     let lines = Arc::new(Mutex::new(Vec::new()));
     let into = Arc::clone(&lines);
     let log: Log = Arc::new(move |line: &str| into.lock().unwrap().push(line.to_owned()));
-    let config = Config { boards_dir: boards, suffix: "skep.host".into() };
+    let config = Config { boards_dir: boards, suffix: suffix() };
     let mut service = Service::new(config, state_dir, Box::new(ListsThenGone), None, log, Arc::new(|_| {})).expect("the service");
     assert_eq!(service.sweep(), 0, "a board counted cleared though no look was made");
     let log = lines.lock().unwrap().clone();

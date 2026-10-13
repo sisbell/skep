@@ -78,7 +78,7 @@ pub fn wait(docker: &dyn Docker, name: &Name, wait: Wait, sleep: &dyn Fn(Duratio
     let mut last = None;
     for at in wait.paced(sleep) {
         let exit = docker.health(name)?;
-        if exit.ok() && paired(&exit.stdout) {
+        if exit.success() && paired(&exit.stdout) {
             return Ok(Waited::Paired { at });
         }
         last = Some(exit);

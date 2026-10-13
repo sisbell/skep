@@ -77,8 +77,8 @@ fn the_whole_flow_runs_every_step_in_order() {
     );
     let trimmed = record(true).trim_end().to_owned();
     assert_eq!(rig.fake.calls()[6].input.as_deref(), Some(trimmed.as_bytes()), "the record, trimmed, on the sidecar's stdin");
-    assert_eq!(fs::read_to_string(rig.snippet("alice")).expect("the snippet"), crate::caddy::snippet(&Name::parse(b"alice").expect("a name"), "skep.host"));
-    let status_url = crate::pages::status_url("skep.host", &token);
+    assert_eq!(fs::read_to_string(rig.snippet("alice")).expect("the snippet"), crate::caddy::snippet(&Name::parse(b"alice").expect("a name"), &suffix()));
+    let status_url = crate::pages::status_url(&suffix(), &token);
     let page = reply::text("https://alice.skep.host", false, &status_url);
     assert_eq!(rig.service.status(&token), Some(Shown::Live(page.clone())));
     assert!(matches!(lookup(&rig.state_dir, &code).expect("read").expect("held").state, InviteState::Spent { ref name, .. } if name == "alice"));
@@ -124,7 +124,7 @@ fn an_anchorless_records_page_and_mail_carry_the_anchorless_sentence() {
         let token = rig.post("alice", &record(anchor), rig.invite().as_str()).expect("admitted");
         assert!(rig.service.run_next());
         rig.fake.assert_done();
-        let page = reply::text("https://alice.skep.host", !anchor, &crate::pages::status_url("skep.host", &token));
+        let page = reply::text("https://alice.skep.host", !anchor, &crate::pages::status_url(&suffix(), &token));
         assert_eq!(page.contains(crate::strings::ANCHORLESS.text), !anchor, "the reply for anchor {anchor}");
         assert_eq!(rig.service.status(&token), Some(Shown::Live(page.clone())), "the status page, anchor {anchor}");
         let mail = messages(&rig.dir.path().join("mail.log")).expect("the mail log");
@@ -613,7 +613,7 @@ fn a_step_or_a_cleanup_that_panics_costs_its_post_alone() {
         let lines = Arc::new(Mutex::new(Vec::new()));
         let into = Arc::clone(&lines);
         let log: Log = Arc::new(move |line: &str| into.lock().unwrap().push(line.to_owned()));
-        let config = Config { boards_dir: boards, suffix: "skep.host".into() };
+        let config = Config { boards_dir: boards, suffix: suffix() };
         let service = Service::new(config, state_dir.clone(), Box::new(Panics { volume_rm_panics }), None, log, Arc::new(|_| {})).expect("the service");
         let code = mint(&state_dir, &MailAddress::parse("person@example.com").expect("an address"), None).expect("minted");
         let record = record(true);

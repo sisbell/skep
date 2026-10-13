@@ -18,6 +18,8 @@
 
 use std::fmt;
 
+use crate::domain::Domain;
+
 /// THE LABEL's BOUND: a name is at most 63 bytes, one DNS label's limit as
 /// the provisioning record §8 item 6 knows hostnames (UNVERIFIED HERE).
 const MAX_NAME_BYTES: usize = 63;
@@ -141,15 +143,16 @@ impl Name {
     }
 
     /// The board's host under `suffix`: `<name>.<suffix>` — the label the
-    /// serving run carries and the host the snippet routes.
-    pub fn host(&self, suffix: &str) -> String {
+    /// serving run carries and the host the snippet routes, a [`Name`] under
+    /// a [`Domain`], each held to its grammar by its type.
+    pub fn host(&self, suffix: &Domain) -> String {
         format!("{}.{suffix}", self.0)
     }
 
     /// THE PUBLIC ORIGIN, `https://<name>.<suffix>`: the origin both run
     /// lines set as `SKEPD_ORIGIN` and never a loopback one (AUTH-4.57 (b)),
     /// and the one the reply relays — never the sidecar's dialed origin.
-    pub fn origin(&self, suffix: &str) -> String {
+    pub fn origin(&self, suffix: &Domain) -> String {
         format!("https://{}", self.host(suffix))
     }
 }

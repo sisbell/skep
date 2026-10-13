@@ -68,6 +68,12 @@
 mod scratch;
 // The form's body decoded: `application/x-www-form-urlencoded`, strictly.
 mod urlform;
+// A kept file changed durably: replaced whole by rename at its owner's mode,
+// or removed — the directory synced either way.
+mod whole;
+// A child process run to its end: its input fed on a thread of its own, its
+// exit and its two streams apart.
+mod process;
 // A board's name: one lowercase label, and the host and the public origin
 // it stands at.
 mod name;
@@ -80,29 +86,30 @@ mod docker;
 mod sidecar;
 // The `/health` pair and the bounded wait.
 mod health;
-// The proxy's snippet: its text, its write by rename, its removal, the
-// reload.
+// The proxy's snippet: its text, its write by rename, its removal, whether
+// it stands, the reload.
 mod caddy;
 // The truth about names, the status token, the status map.
 mod names;
 // The state directory: its door, its one writer, and what its two files'
-// lines carry — the address rule, the date.
+// lines carry — the address rule and its value, the date.
 mod statedir;
 // The sign-up file.
 mod signups;
-// The invite file: mint, look up, spend.
+// The invite file: mint, look up, spend; the code's alphabet and its value.
 mod invites;
 // Every sentence a person reads: one table, each row naming its id.
 mod strings;
-// The pages' HTML and the routes over `skep-http`, and the desk they ask.
+// The pages' HTML and the routes over `skep-http`, the desk they ask, and
+// the two addresses the service hands out.
 mod pages;
 // The mail: the trait, the mailer, the sender's thread; the fake under
 // `test-hooks`.
 mod sender;
 // The live reply, for the page and the mail alike.
 mod reply;
-// The workers, the queue, the name as the unit of exclusion, the steps, the
-// cleanup, the sweep at start.
+// The workers, the book of what is in flight, the name as the unit of
+// exclusion, the steps, the cleanup, the sweep at start.
 mod flow;
 // The verbs and the flags, every default a named constant.
 mod args;
@@ -179,7 +186,7 @@ fn serve(cfg: args::Serve) -> i32 {
     let mail = match &cfg.mail {
         None => None,
         Some(m) => match Outbox::spawn(sender_of(&m.mailer), Arc::clone(&log), Arc::clone(&sleep)) {
-            Ok(outbox) => Some(Mail { outbox, from: m.from.clone() }),
+            Ok(outbox) => Some(Mail { outbox, from: m.from.as_str().to_owned() }),
             Err(e) => {
                 say_err(&format!("skep-provision: the sender's thread could not start: {e}"));
                 return 1;
@@ -187,7 +194,7 @@ fn serve(cfg: args::Serve) -> i32 {
         },
     };
     let mailing = if mail.is_some() { "mail on" } else { "mail OFF (no --mailer and --from): no follow-up mail is sent" };
-    let config = Config { boards_dir: cfg.boards_dir.clone(), suffix: cfg.settings.suffix.clone(), reply_to: cfg.reply_to.clone() };
+    let config = Config { boards_dir: cfg.boards_dir.clone(), suffix: cfg.settings.suffix.clone(), reply_to: cfg.reply_to.as_str().to_owned() };
     let service = match Service::new(config, state, docker, mail, Arc::clone(&log), sleep) {
         Ok(service) => service,
         Err(e) => {
@@ -216,7 +223,7 @@ fn serve(cfg: args::Serve) -> i32 {
         service.live(),
         cfg.workers
     ));
-    let site = Site { suffix: cfg.settings.suffix.clone(), reply_to: cfg.reply_to.clone() };
+    let site = Site { suffix: cfg.settings.suffix.clone(), reply_to: cfg.reply_to.as_str().to_owned() };
     // THE SERVE: the pool of workers, and a thread per connection beside
     // them; the scope never closes — SIGTERM ends the process.
     thread::scope(|s| {
@@ -262,8 +269,8 @@ fn invite(cfg: args::Invite) -> i32 {
             return 1;
         }
     };
-    match invites::mint(&state, &cfg.address, cfg.code.as_deref()) {
-        Ok(code) => match say_out(&invites::claim_address(&cfg.suffix, &code)) {
+    match invites::mint(&state, &cfg.address, cfg.code.as_ref()) {
+        Ok(code) => match say_out(&pages::claim_address(&cfg.suffix, &code)) {
             0 => 0,
             _ => {
                 say_err("skep-provision: the invite is minted, and its claim address could not be written on stdout");

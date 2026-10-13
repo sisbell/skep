@@ -34,8 +34,9 @@ use std::{
     sync::OnceLock,
 };
 
-use super::{Call, Docker, Exit};
+use super::{Call, Docker};
 use crate::name::Name;
+use crate::process::Exit;
 
 /// THE HOLD a unit suite puts on the fake: called with every call's method
 /// and name once the call is answered and recorded, and free to block — the

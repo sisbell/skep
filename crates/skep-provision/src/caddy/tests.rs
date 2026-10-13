@@ -1,8 +1,8 @@
 //! T7 — THE SNIPPET: byte for byte the deployment notes' block for `alice`
 //! under `skep.host`, tabs included; every occurrence substituted for
 //! another name and another suffix; written whole by rename, one file and
-//! no temp file left; an unwritable directory an error; and the removal,
-//! the reload and the rebuild's read of the directory.
+//! no temp file left; an unwritable directory an error; and whether it
+//! stands, the removal, the reload and the rebuild's read of the directory.
 
 use super::*;
 use crate::docker::fake::{line, FakeDocker};
@@ -90,6 +90,20 @@ fn an_unwritable_directory_is_an_error() {
     fs::set_permissions(&boards, fs::Permissions::from_mode(0o700)).expect("writable again");
     assert!(listing(&boards).is_empty());
     assert!(write(dir.path().join("absent").as_path(), &name("alice"), "skep.host").is_err(), "a directory that does not stand");
+}
+
+/// Whether the snippet stands: not before its write, then after it, and
+/// not after its removal — another name's snippet standing for none of it.
+#[test]
+fn whether_the_snippet_stands() {
+    let dir = Scratch::new();
+    write(dir.path(), &name("bob"), "skep.host").expect("bob's snippet");
+    assert!(!stands(dir.path(), &name("alice")).expect("read"));
+    write(dir.path(), &name("alice"), "skep.host").expect("written");
+    assert!(stands(dir.path(), &name("alice")).expect("read"));
+    remove(dir.path(), &name("alice")).expect("removed");
+    assert!(!stands(dir.path(), &name("alice")).expect("read"));
+    assert!(stands(dir.path(), &name("bob")).expect("read"));
 }
 
 /// The removal: `true` where the snippet stood, `false` after; the reload,

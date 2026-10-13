@@ -1,11 +1,14 @@
 //! T13 — THE FLOW over the two fakes: (a) the whole flow, call by call,
-//! to the snippet, the live status with its facts, the invite spent and ONE
-//! mail sent after the status turned live; (b) THE DECISION TABLE, one case
-//! per failing step as the provisioning record §5.2 tabulates it, each
+//! to the snippet, the live status, its page the reply, the invite spent and
+//! ONE mail sent after the status turned live; (b) THE DECISION TABLE, one
+//! case per failing step as the provisioning record §5.2 tabulates it, each
 //! removing what was made for the name and nothing for any other, the
 //! snippet absent, the reload called where the snippet was written, the
 //! status D-8, the invite still issued and no mail; (c) a cleanup call
-//! failing, logged, the name left taken. Beside them, the flow's halves of
+//! failing, logged, the name left taken; and THE BOOK keeping its own
+//! rules — what blocks a new post, first of three, and what admitting,
+//! taking, going live, letting a code go and failing do. Beside them, the
+//! flow's halves of
 //! T8 (two posts on one name; a fifth past the queue), T9 (a spent, an
 //! unknown and a held code refused; no code in the log), T10 (a sign-up,
 //! its address in no log line) and T12 (no send before live; an outage
@@ -32,6 +35,7 @@ use crate::invites::{lookup, mint, InviteState};
 use crate::scratch::Scratch;
 use crate::sender::fake::{messages, FakeSender};
 use crate::sender::Sender;
+use crate::statedir::MailAddress;
 
 /// The six DATA lines a fresh board's dark claim prints (`sidecar/tests.rs`
 /// holds them whole beside the `skep` command's pins).
@@ -167,7 +171,7 @@ fn until<T>(what: &str, mut done: impl FnMut() -> Option<T>) -> T {
 impl Rig {
     /// One invite minted to the person's address.
     fn invite(&self) -> String {
-        mint(&self.state, "person@example.com", None).expect("minted")
+        mint(&self.state, &MailAddress::parse("person@example.com").expect("an address"), None).expect("minted")
     }
 
     /// One post to the claim form.
@@ -250,7 +254,8 @@ fn said(calls: &[&str]) -> Vec<String> {
 /// inspects, `volume_create`, `run_claim`, `sidecar_claim` with the record
 /// trimmed on its stdin, `rm_force`, `run_serving`, `health` once per try,
 /// `caddy_reload`, in that order and no other call; the snippet on disk;
-/// the status live with its three facts; the invite spent; ONE mail sent,
+/// the status live, its page the reply and its name among the live names;
+/// the invite spent; ONE mail sent,
 /// to the invite's address, after the status turned live, its body the
 /// page's text; and no record byte, address, code or token in the log.
 #[test]
@@ -298,8 +303,7 @@ fn the_whole_flow_runs_every_step_in_order() {
     let status = crate::pages::status_address("skep.host", &token);
     let page = reply::text("https://alice.skep.host", false, &status);
     assert_eq!(rig.service.status(&token), Some(Shown::Live(page.clone())));
-    let facts = rig.service.book().map.live().get(&Name::parse(b"alice").expect("a name")).cloned();
-    assert_eq!(facts, Some(names::Facts { account: "1.0.1", principal: 1, origin: "https://alice.skep.host".into() }));
+    assert!(rig.service.book().map.live().contains(&Name::parse(b"alice").expect("a name")), "alice among the live names");
     assert!(matches!(lookup(&rig.state, &code).expect("read").expect("held").state, InviteState::Spent { ref name, .. } if name == "alice"));
     assert_eq!(rig.probe.seen.lock().unwrap().as_slice(), [Some(Shown::Live(page.clone()))], "one send, made with the status already live");
     let mail = messages(&rig.dir.path().join("mail.log")).expect("the mail log");
@@ -524,6 +528,56 @@ fn a_fifth_post_past_the_queue_meets_d8_and_leaves_no_entry() {
     assert!(!book.map.holds(&Name::parse(b"erin").expect("a name")));
     drop(book);
     assert!(rig.log().join("\n").contains("erin: a post refused: 4 posts already wait"));
+}
+
+/// THE BOOK KEEPS ITS OWN RULES. Admitted, a post waits with its code and
+/// its name held, its page D-7. What blocks a new post is the first of a
+/// full queue, a held code and a held name: four waiting block a fifth even
+/// on a free name and code, and a post on a held code and a held name meets
+/// the code. Taken, the oldest post runs, still holding both. Gone live, it
+/// joins the live names and holds its name no more, and its code stays held
+/// until it is let go of. Failed, it lets its code go at once and holds its
+/// name no more, and no live name is made of it.
+#[test]
+fn the_book_keeps_its_own_rules() {
+    let name = |n: &str| Name::parse(n.as_bytes()).expect("a name");
+    let job = |n: &str, code: &str| Job {
+        token: format!("token-{n}"),
+        name: name(n),
+        record: crate::record::admit(record(true).as_bytes()).expect("a record"),
+        code: code.to_owned(),
+        address: "person@example.com".to_owned(),
+    };
+    let state = |book: &Book, n: &str| book.map.post(&format!("token-{n}")).map(|p| p.state);
+    let mut book = Book::new(StatusMap::default());
+    assert_eq!(book.blocks(&name("alice"), "c1"), None, "nothing in flight");
+    for (at, (n, code)) in [("alice", "c1"), ("bob", "c2"), ("carol", "c3"), ("dave", "c4")].into_iter().enumerate() {
+        assert_eq!(book.admit(job(n, code)), at + 1, "the posts now waiting");
+        assert_eq!(state(&book, n), Some(State::Queued));
+    }
+    assert_eq!(book.blocks(&name("erin"), "c5"), Some(Blocked::QueueFull));
+    assert_eq!(book.blocks(&name("alice"), "c1"), Some(Blocked::QueueFull), "the queue before the code and the name");
+    let alice = book.take().expect("a waiting post");
+    assert_eq!(alice.name, name("alice"), "the oldest post first");
+    assert_eq!(state(&book, "alice"), Some(State::Running));
+    assert_eq!(book.blocks(&name("erin"), "c5"), None, "three waiting");
+    assert_eq!(book.blocks(&name("alice"), "c1"), Some(Blocked::CodeHeld), "the code before the name");
+    assert_eq!(book.blocks(&name("alice"), "c5"), Some(Blocked::NameHeld));
+    book.went_live(&alice.token);
+    assert_eq!(state(&book, "alice"), Some(State::Live));
+    assert!(book.map.live().contains(&name("alice")));
+    assert_eq!(book.blocks(&name("alice"), "c5"), None, "a live name's truth is its snippet's");
+    assert_eq!(book.blocks(&name("erin"), "c1"), Some(Blocked::CodeHeld), "held until its spend is written");
+    book.release(&alice.code);
+    assert_eq!(book.blocks(&name("erin"), "c1"), None);
+    let bob = book.take().expect("a waiting post");
+    assert_eq!(state(&book, "bob"), Some(State::Running));
+    book.failed(&bob);
+    assert_eq!(state(&book, "bob"), Some(State::Failed));
+    assert_eq!(book.blocks(&name("erin"), "c2"), None, "a failed post's code let go of at once");
+    assert_eq!(book.blocks(&name("bob"), "c5"), None, "and its name");
+    assert!(!book.map.live().contains(&name("bob")));
+    assert_eq!(book.queue.len(), 2);
 }
 
 /// T9: A SPENT CODE, AN UNKNOWN CODE, A CODE OF ANOTHER FORM and A CODE A

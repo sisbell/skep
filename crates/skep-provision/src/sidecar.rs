@@ -30,7 +30,8 @@
 //! AND SURFACE, the topology's one halt among them; 1 the board refused; 4
 //! transport — the daemon not yet listening, which the flow retries.
 
-use crate::docker::{Exit, SIDECAR_BOARD};
+use crate::docker::SIDECAR_BOARD;
+use crate::process::Exit;
 
 /// The account the dark claim founds on a fresh board — the alpha's
 /// claimant under the root `1` — and the address fact the reply carries.

@@ -14,7 +14,9 @@
 //! `--code` hands in — so a later mint can hand in a document's address in
 //! a random string's place, the format left open between the two — held to
 //! the URL's unreserved characters ([`code_ok`]), so it rides the claim
-//! address unescaped and a line splits on its spaces. A post naming a code
+//! address unescaped and a line splits on its spaces; the `invite` verb hands
+//! [`mint`] a code in that alphabet as its own value ([`InviteCode`]), and
+//! the address to mint to as an address by the rule. A post naming a code
 //! the file does not hold, or holds spent, is refused (the strings table's
 //! DRAFT row); a code is SPENT on the first live route for a name and NOT
 //! by a failed post, so the person may post again. The code is NEVER
@@ -32,7 +34,7 @@ use std::io;
 
 use crate::name::Name;
 use crate::names::fresh_token;
-use crate::statedir::{address_ok, read_or_empty, today, write_whole_with, StateDir};
+use crate::statedir::{read_or_empty, today, write_whole_with, MailAddress, StateDir};
 
 /// The invite file's name in the state directory.
 const INVITES: &str = "invites";
@@ -113,9 +115,30 @@ pub fn code_ok(code: &str) -> bool {
     !code.is_empty() && code.len() <= MAX_CODE_BYTES && code.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'.' | b'_' | b'~'))
 }
 
-/// THE CLAIM ADDRESS an invite's link carries: `https://<suffix>/claim?invite=<code>`.
-pub fn claim_address(suffix: &str, code: &str) -> String {
-    format!("https://{suffix}/claim?invite={code}")
+/// A CODE IN THE ALPHABET, the value the `invite` verb hands [`mint`]:
+/// [`InviteCode::parse`] is the only way to one, so a code of this type rides
+/// the claim address as it is and keeps the file's line splitting on its
+/// spaces. Its `Debug` shows none of it: a code is never logged.
+#[derive(Clone, PartialEq, Eq)]
+pub struct InviteCode(String);
+
+impl InviteCode {
+    /// `text` as a code, where [`code_ok`] admits it.
+    pub fn parse(text: &str) -> Option<InviteCode> {
+        code_ok(text).then(|| InviteCode(text.to_owned()))
+    }
+
+    /// The code as text.
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+/// Nothing of the code: a `{:?}` can carry none of it.
+impl fmt::Debug for InviteCode {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("InviteCode(…)")
+    }
 }
 
 /// Every invite the file holds, in its order; a line of no shape the file
@@ -150,10 +173,6 @@ pub fn lookup(dir: &StateDir, code: &str) -> io::Result<Option<Invite>> {
 /// Why `invite` mints nothing.
 #[derive(Debug)]
 pub enum MintRefused {
-    /// The address is no address by the rule.
-    Address,
-    /// The `--code` value is outside the code's alphabet.
-    Code,
     /// The file already holds the code.
     Duplicate,
     /// The file could not be read or written.
@@ -163,8 +182,6 @@ pub enum MintRefused {
 impl fmt::Display for MintRefused {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            MintRefused::Address => f.write_str("--address is not an address: one @ with a side each way, at most 254 bytes, no space and no control character"),
-            MintRefused::Code => write!(f, "--code is not a code: 1 to {MAX_CODE_BYTES} letters, digits, '-', '.', '_' or '~'"),
             MintRefused::Duplicate => f.write_str("the invite file already holds that code"),
             MintRefused::Io(e) => write!(f, "the invite file: {e}"),
         }
@@ -173,14 +190,12 @@ impl fmt::Display for MintRefused {
 
 /// THE `invite` VERB's WORK: one invite minted to `address` — under the
 /// code given, or a fresh one — appended `issued` today, the file rewritten
-/// whole; the code answered, for the one DATA line.
-pub fn mint(dir: &StateDir, address: &str, code: Option<&str>) -> Result<String, MintRefused> {
-    if !address_ok(address) {
-        return Err(MintRefused::Address);
-    }
+/// whole; the code answered, for the one DATA line. Both values come in
+/// their own types — an address by the rule, a code in the alphabet — so
+/// nothing reaches the file that its line cannot carry.
+pub fn mint(dir: &StateDir, address: &MailAddress, code: Option<&InviteCode>) -> Result<String, MintRefused> {
     let code = match code {
-        Some(code) if code_ok(code) => code.to_owned(),
-        Some(_) => return Err(MintRefused::Code),
+        Some(code) => code.as_str().to_owned(),
         None => fresh_token().map_err(MintRefused::Io)?,
     };
     update(
@@ -189,7 +204,7 @@ pub fn mint(dir: &StateDir, address: &str, code: Option<&str>) -> Result<String,
             if invites(lines).any(|i| i.code == code) {
                 return Err(MintRefused::Duplicate);
             }
-            lines.push(Line::Invite(Invite { code: code.clone(), address: address.to_owned(), state: InviteState::Issued { date: today() } }));
+            lines.push(Line::Invite(Invite { code: code.clone(), address: address.as_str().to_owned(), state: InviteState::Issued { date: today() } }));
             Ok(())
         },
         MintRefused::Io,

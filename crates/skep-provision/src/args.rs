@@ -15,8 +15,8 @@ use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
 use std::path::PathBuf;
 
 use crate::docker::Settings;
-use crate::invites::{code_ok, MAX_CODE_BYTES};
-use crate::statedir::address_ok;
+use crate::invites::{InviteCode, MAX_CODE_BYTES};
+use crate::statedir::MailAddress;
 
 /// THE LISTEN ADDRESS's DEFAULT: loopback, port 8842 — not the daemon's
 /// 8642 and not the dev provider's 8742. How Caddy, in its container,
@@ -90,7 +90,7 @@ pub struct Serve {
     pub workers: usize,
     /// `--reply-to`: the owner's mailbox, which D-8 names and the mail
     /// replies to. Required.
-    pub reply_to: String,
+    pub reply_to: MailAddress,
     /// `--mailer` with `--from`, or neither: no mail.
     pub mail: Option<MailArgs>,
     /// `--docker-fake <script>`: the scripted runner in the host's place.
@@ -104,7 +104,7 @@ pub struct MailArgs {
     /// Who hands the message over.
     pub mailer: Mailer,
     /// `--from`: the sending address.
-    pub from: String,
+    pub from: MailAddress,
 }
 
 /// Who hands a message over.
@@ -121,9 +121,9 @@ pub enum Mailer {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Invite {
     /// `--address`: where the invitation goes, and the mail after.
-    pub address: String,
+    pub address: MailAddress,
     /// `--code`: the code to mint; a fresh one where none is given.
-    pub code: Option<String>,
+    pub code: Option<InviteCode>,
     /// `--state-dir`: where the invite file lives. Required.
     pub state_dir: PathBuf,
     /// `--suffix`: the claim address's host.
@@ -245,12 +245,9 @@ fn suffix(v: String) -> Result<String, String> {
     Ok(v)
 }
 
-/// An address by the rule.
-fn address(flag: &str, v: String) -> Result<String, String> {
-    if !address_ok(&v) {
-        return Err(format!("{flag}: '{v}' is not an address: one @ with a side each way, at most 254 bytes, no space and no control character"));
-    }
-    Ok(v)
+/// An address by the rule: the value `MailAddress::parse` admits.
+fn address(flag: &str, v: String) -> Result<MailAddress, String> {
+    MailAddress::parse(&v).ok_or_else(|| format!("{flag}: '{v}' is not an address: one @ with a side each way, at most 254 bytes, no space and no control character"))
 }
 
 /// `serve`'s flags.
@@ -268,9 +265,9 @@ fn parse_serve(mut it: impl Iterator<Item = String>) -> Result<Command, String> 
         log_max_file: DEFAULT_LOG_MAX_FILE,
     };
     let mut workers = DEFAULT_WORKERS;
-    let mut reply_to: Option<String> = None;
+    let mut reply_to: Option<MailAddress> = None;
     let mut mailer: Option<Mailer> = None;
-    let mut from: Option<String> = None;
+    let mut from: Option<MailAddress> = None;
     #[cfg(feature = "test-hooks")]
     let mut docker_fake: Option<PathBuf> = None;
     while let Some(arg) = it.next() {
@@ -335,8 +332,8 @@ fn parse_serve(mut it: impl Iterator<Item = String>) -> Result<Command, String> 
 
 /// `invite`'s flags.
 fn parse_invite(mut it: impl Iterator<Item = String>) -> Result<Command, String> {
-    let mut address_given: Option<String> = None;
-    let mut code: Option<String> = None;
+    let mut address_given: Option<MailAddress> = None;
+    let mut code: Option<InviteCode> = None;
     let mut state_dir: Option<PathBuf> = None;
     let mut suffix_given = DEFAULT_SUFFIX.to_owned();
     while let Some(arg) = it.next() {
@@ -344,10 +341,7 @@ fn parse_invite(mut it: impl Iterator<Item = String>) -> Result<Command, String>
             "--address" => address_given = Some(address("--address", value(&mut it, "--address")?)?),
             "--code" => {
                 let v = value(&mut it, "--code")?;
-                if !code_ok(&v) {
-                    return Err(format!("--code: '{v}' is not 1 to {MAX_CODE_BYTES} letters, digits, '-', '.', '_' or '~'"));
-                }
-                code = Some(v);
+                code = Some(InviteCode::parse(&v).ok_or_else(|| format!("--code: '{v}' is not 1 to {MAX_CODE_BYTES} letters, digits, '-', '.', '_' or '~'"))?);
             }
             "--state-dir" => state_dir = Some(PathBuf::from(value(&mut it, "--state-dir")?)).filter(|p| !p.as_os_str().is_empty()),
             "--suffix" => suffix_given = suffix(value(&mut it, "--suffix")?)?,

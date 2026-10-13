@@ -8,13 +8,13 @@
 //!   the mail is the page's text and the headers.
 //! * [`Sender`] — the TRAIT, one method: hand one message over.
 //! * [`Mailer`] — its one real implementation, SHELLING OUT to the
-//!   host-installed relay client the operator names (`--mailer`), as the
-//!   service shells out to `docker`: `<mailer> -t`, the message with its
-//!   headers on standard input — the convention `sendmail` and `msmtp`
-//!   share as this crate knows them (UNVERIFIED HERE): `-t` reads the
-//!   recipients off the `To:` header. The relay's credentials are the relay
-//!   client's configuration on the VM, never this program's; no mail or TLS
-//!   library is linked.
+//!   host-installed relay client the operator names (`--mailer`) through
+//!   `process::run`, the runner `docker`'s calls go through too:
+//!   `<mailer> -t`, the message with its headers on standard input — the
+//!   convention `sendmail` and `msmtp` share as this crate knows them
+//!   (UNVERIFIED HERE): `-t` reads the recipients off the `To:` header.
+//!   The relay's credentials are the relay client's configuration on the
+//!   VM, never this program's; no mail or TLS library is linked.
 //! * [`Outbox`] — the SENDER THREAD of its own: the worker hands it a
 //!   message after the status turned live and goes on to the next post; the
 //!   thread sends it, and a refusal — a non-zero exit, a mailer that cannot
@@ -28,16 +28,16 @@
 //! address or the body, which carries the status token.
 
 use std::fmt;
-use std::io::{self, Write};
+use std::io;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::Command;
 use std::sync::mpsc::{self, Receiver};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
-use crate::docker::Exit;
 use crate::name::Name;
+use crate::process::{self, Exit};
 
 /// The tries a message gets: the first and six more — an hour of a
 /// relay's outage at [`MAIL_INTERVAL`].
@@ -110,23 +110,18 @@ impl Mailer {
     }
 }
 
-/// THE COMMAND for a mailer: `<program> -t` and nothing else, the message
-/// to go on its stdin, its stdout and stderr captured apart.
+/// THE COMMAND for a mailer: `<program> -t` and nothing else; its streams
+/// are `process::run`'s to set — the message on its stdin, its stdout and
+/// stderr captured apart.
 fn command(program: &Path) -> Command {
     let mut cmd = Command::new(program);
-    cmd.arg(READ_RECIPIENTS).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
+    cmd.arg(READ_RECIPIENTS);
     cmd
 }
 
 impl Sender for Mailer {
     fn send(&self, message: &Message) -> io::Result<Exit> {
-        let mut child = command(&self.program).spawn()?;
-        let mut stdin = child.stdin.take().ok_or_else(|| io::Error::other("the mailer's stdin was not piped"))?;
-        let text = message.text().into_bytes();
-        let feeder = thread::spawn(move || stdin.write_all(&text));
-        let out = child.wait_with_output()?;
-        let _ = feeder.join();
-        Ok(Exit { code: out.status.code(), stdout: out.stdout, stderr: out.stderr })
+        process::run(command(&self.program), Some(message.text().as_bytes()))
     }
 }
 

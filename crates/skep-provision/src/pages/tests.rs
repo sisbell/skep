@@ -2,9 +2,10 @@
 //! status and page — the sign-up page and its thanks, the claim form with
 //! the link's code, each refusal shown on the form again, D-7 with the
 //! status address and its refresh, the live reply, D-8, 404 — a bad body
-//! 400, a body past the cap 413; plain HTML with no script and nothing
-//! fetched from elsewhere; the text escaped. (The strings table's rows are
-//! `strings`' suite.)
+//! 400, a body past the cap 413; the claim address an invite carries
+//! opening the claim form with its code; plain HTML with no script and
+//! nothing fetched from elsewhere; the text escaped. (The strings table's
+//! rows are `strings`' suite.)
 
 use std::io::{Read, Write};
 use std::net::{Shutdown, TcpListener, TcpStream};
@@ -103,6 +104,19 @@ fn the_claim_form_carries_the_ruled_strings_and_the_links_code() {
 
 fn answer_of(method: &str, target: &str, body: &[u8]) -> Answer {
     answer(&request(method, target, body), &site(), &Scripted::default())
+}
+
+/// THE CLAIM ADDRESS an invite carries, `https://<suffix>/claim?invite=<code>`,
+/// opens the claim form with its code: the path and the query it names,
+/// asked of the routes, answer the form, its invite field pre-filled.
+#[test]
+fn the_claim_address_opens_the_claim_form_with_its_code() {
+    let address = claim_address("skep.host", "1.1.0.1.0.3");
+    assert_eq!(address, "https://skep.host/claim?invite=1.1.0.1.0.3");
+    let target = address.strip_prefix("https://skep.host").expect("the site's own host");
+    let form = answer_of("GET", target, b"");
+    assert_eq!(form.status, 200);
+    assert!(form.body.contains("id=\"invite\" name=\"invite\" required autocomplete=\"off\" spellcheck=\"false\" value=\"1.1.0.1.0.3\""), "{}", form.body);
 }
 
 /// `POST /claim`: the three fields reach the desk; EACH REFUSAL shows its

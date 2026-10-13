@@ -88,12 +88,13 @@ use std::sync::{Condvar, Mutex, MutexGuard};
 use std::time::Duration;
 
 use crate::caddy;
-use crate::docker::{Docker, Exit};
+use crate::docker::Docker;
 use crate::health::{self, Wait, Waited, HEALTH_WAIT};
 use crate::invites;
 use crate::name::Name;
 use crate::names::{self, State, StatusMap};
 use crate::pages::{self, Desk, Post, Refusal, Shown, SignUpRefusal};
+use crate::process::Exit;
 use crate::record::{self, Record, RecordRefused};
 use crate::reply;
 use crate::sender::{Log, Message, Outbox, Sleep};
@@ -140,12 +141,86 @@ struct Job {
     address: String,
 }
 
-/// What the routes and the workers share under the book's own short lock:
-/// the queue, the status map, and the invite codes a post in flight holds.
+/// THE BOOK: WHAT IS IN FLIGHT, which the routes and the workers share
+/// under its own short lock — the posts waiting for a worker, this run's
+/// posts by token (the status map), and the invite codes the posts in flight
+/// hold — and THE RULES THAT TIE THEM: a post admitted waits with its token
+/// in the map and its code held; a post taken is running; a failed post
+/// lets its code go at once, and a live one keeps it held until the worker
+/// lets it go ([`Book::release`]), once the spend is written; and a new post
+/// is refused by a full queue, a held code or a held name, the first of
+/// them in that order.
 struct Book {
     queue: VecDeque<Job>,
     map: StatusMap,
     codes: HashSet<String>,
+}
+
+/// What in flight refuses a new post.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Blocked {
+    /// [`QUEUE_DEPTH`] posts already wait.
+    QueueFull,
+    /// A post in flight holds the invite code.
+    CodeHeld,
+    /// A post in flight holds the name.
+    NameHeld,
+}
+
+impl Book {
+    /// The book at start: nothing in flight, the status map as rebuilt.
+    fn new(map: StatusMap) -> Book {
+        Book { queue: VecDeque::new(), map, codes: HashSet::new() }
+    }
+
+    /// What refuses a new post for `name` under `code`: the first of a full
+    /// queue, a held code and a held name — `None` where none does.
+    fn blocks(&self, name: &Name, code: &str) -> Option<Blocked> {
+        if self.queue.len() >= QUEUE_DEPTH {
+            Some(Blocked::QueueFull)
+        } else if self.codes.contains(code) {
+            Some(Blocked::CodeHeld)
+        } else if self.map.holds(name) {
+            Some(Blocked::NameHeld)
+        } else {
+            None
+        }
+    }
+
+    /// A post admitted: its code held, its token in the map, the post queued
+    /// — answered with the posts now waiting.
+    fn admit(&mut self, job: Job) -> usize {
+        self.codes.insert(job.code.clone());
+        self.map.admit(job.token.clone(), job.name.clone(), job.record.anchorless());
+        self.queue.push_back(job);
+        self.queue.len()
+    }
+
+    /// The next waiting post, taken by a worker: now running.
+    fn take(&mut self) -> Option<Job> {
+        let job = self.queue.pop_front()?;
+        self.map.set(&job.token, State::Running);
+        Some(job)
+    }
+
+    /// `token`'s post gone live: its name among the live names. Its code
+    /// stays held until its spend is written ([`Book::release`]).
+    fn went_live(&mut self, token: &str) {
+        self.map.set(token, State::Live);
+    }
+
+    /// `code` let go of: a new post may name it — a live post's once the
+    /// file says spent, a failed post's at once.
+    fn release(&mut self, code: &str) {
+        self.codes.remove(code);
+    }
+
+    /// `job`'s post failed: its page D-8, and its code let go of at once —
+    /// the file still holds it issued, so the person may post again.
+    fn failed(&mut self, job: &Job) {
+        self.map.set(&job.token, State::Failed);
+        self.release(&job.code);
+    }
 }
 
 /// What a provisioning has made so far, for the cleanup to undo.
@@ -169,7 +244,7 @@ pub struct Service {
     /// reload, and across a snippet's removal and the reload — nowhere
     /// else.
     caddy: Mutex<()>,
-    /// THE BOOK's SHORT LOCK: the queue, the status map, the held codes.
+    /// THE BOOK's SHORT LOCK: what is in flight, and its rules.
     book: Mutex<Book>,
     ready: Condvar,
 }
@@ -178,9 +253,9 @@ impl Service {
     /// The service over its configuration, its state directory, its runner
     /// and its mail — the status map REBUILT from the snippet directory.
     pub fn new(config: Config, state: StateDir, docker: Box<dyn Docker>, mail: Option<Mail>, log: Log, sleep: Sleep) -> io::Result<Service> {
-        let map = StatusMap::rebuild(&config.boards_dir, &config.suffix)?;
+        let map = StatusMap::rebuild(&config.boards_dir)?;
         let signups = SignUps::new(&state);
-        Ok(Service { config, state, signups, docker, mail, log, sleep, caddy: Mutex::new(()), book: Mutex::new(Book { queue: VecDeque::new(), map, codes: HashSet::new() }), ready: Condvar::new() })
+        Ok(Service { config, state, signups, docker, mail, log, sleep, caddy: Mutex::new(()), book: Mutex::new(Book::new(map)), ready: Condvar::new() })
     }
 
     /// The live names the map holds — at start, the rebuild's.
@@ -251,8 +326,7 @@ impl Service {
             let job = {
                 let mut book = self.book();
                 loop {
-                    if let Some(job) = book.queue.pop_front() {
-                        book.map.set(&job.token, State::Running, None);
+                    if let Some(job) = book.take() {
                         break job;
                     }
                     book = self.ready.wait(book).unwrap_or_else(|e| e.into_inner());
@@ -266,12 +340,7 @@ impl Service {
     /// none waits: one worker's one turn, as a unit suite drives it.
     #[cfg(test)]
     fn run_next(&self) -> bool {
-        let job = {
-            let mut book = self.book();
-            let Some(job) = book.queue.pop_front() else { return false };
-            book.map.set(&job.token, State::Running, None);
-            job
-        };
+        let Some(job) = self.book().take() else { return false };
         self.provision(job);
         true
     }
@@ -295,10 +364,8 @@ impl Service {
         let mut made = Made::default();
         let live = match self.steps(&job, &mut made) {
             Ok(()) => {
-                let facts = names::facts(&name, &self.config.suffix);
-                let origin = facts.origin.clone();
-                self.book().map.set(&job.token, State::Live, Some(facts));
-                self.log(&format!("{name}: LIVE at {origin}"));
+                self.book().went_live(&job.token);
+                self.log(&format!("{name}: LIVE at {}", name.origin(&self.config.suffix)));
                 let spent = invites::spend(&self.state, &job.code, &name);
                 match &spent {
                     Ok(true) => self.log(&format!("{name}: the invite is spent")),
@@ -311,16 +378,14 @@ impl Service {
                 // its code held for this run's life: the file still says
                 // issued.
                 if spent.is_ok() {
-                    self.book().codes.remove(&job.code);
+                    self.book().release(&job.code);
                 }
                 true
             }
             Err(step) => {
                 self.log(&format!("{name}: FAILED at {step}"));
                 self.cleanup(&name, made);
-                let mut book = self.book();
-                book.map.set(&job.token, State::Failed, None);
-                book.codes.remove(&job.code);
+                self.book().failed(&job);
                 false
             }
         };
@@ -418,27 +483,34 @@ impl Service {
         Err("the dark claim")
     }
 
-    /// ONE CALL's answer logged and judged: exit 0 goes on; any other exit,
-    /// or a `docker` that could not run, fails the step `step`, the call's
-    /// stderr logged whole.
-    fn call(&self, name: &Name, step: &'static str, answered: io::Result<Exit>) -> Result<Exit, &'static str> {
+    /// ONE CALL's ANSWER logged and judged under `at` — `<name>: <step>` in a
+    /// step, `<name>: <cleanup|sweep>: <step>` in a removal: exit 0 logged
+    /// and the answer kept; any other exit logged with its stderr whole, or a
+    /// `docker` that could not run logged — each `None`.
+    fn judged(&self, at: &str, answered: io::Result<Exit>) -> Option<Exit> {
         match answered {
             Ok(exit) if exit.ok() => {
-                self.log(&format!("{name}: {step}: exit 0"));
-                Ok(exit)
+                self.log(&format!("{at}: exit 0"));
+                Some(exit)
             }
             Ok(exit) => {
-                self.log(&format!("{name}: {step}: exit {}", exit.said()));
+                self.log(&format!("{at}: exit {}", exit.said()));
                 for line in String::from_utf8_lossy(&exit.stderr).lines() {
-                    self.log(&format!("{name}: {step}: {line}"));
+                    self.log(&format!("{at}: {line}"));
                 }
-                Err(step)
+                None
             }
             Err(e) => {
-                self.log(&format!("{name}: {step}: docker could not run: {e}"));
-                Err(step)
+                self.log(&format!("{at}: docker could not run: {e}"));
+                None
             }
         }
+    }
+
+    /// ONE STEP's CALL judged: exit 0 goes on; any other exit, or a `docker`
+    /// that could not run, fails the step `step`.
+    fn call(&self, name: &Name, step: &'static str, answered: io::Result<Exit>) -> Result<Exit, &'static str> {
+        self.judged(&format!("{name}: {step}"), answered).ok_or(step)
     }
 
     /// THE CLEANUP: what was made, undone in reverse; a removal that fails
@@ -472,62 +544,47 @@ impl Service {
         }
     }
 
-    /// One removal's answer logged under `under` — `cleanup` or `sweep`:
+    /// ONE REMOVAL's CALL judged under `under` — `cleanup` or `sweep`:
     /// `true` where it exited 0.
     fn undone(&self, name: &Name, under: &str, step: &str, answered: io::Result<Exit>) -> bool {
-        match answered {
-            Ok(exit) if exit.ok() => {
-                self.log(&format!("{name}: {under}: {step}: exit 0"));
-                true
-            }
-            Ok(exit) => {
-                self.log(&format!("{name}: {under}: {step}: exit {}", exit.said()));
-                for line in String::from_utf8_lossy(&exit.stderr).lines() {
-                    self.log(&format!("{name}: {under}: {step}: {line}"));
-                }
-                false
-            }
-            Err(e) => {
-                self.log(&format!("{name}: {under}: {step}: docker could not run: {e}"));
-                false
-            }
-        }
+        self.judged(&format!("{name}: {under}: {step}"), answered).is_some()
     }
 
-    /// THE SEND: the reply handed to the sender's thread — where mail is
-    /// configured — once the status is live.
+    /// THE SEND: the live reply handed to the sender's thread — where mail
+    /// is configured — once the status is live.
     fn send(&self, job: &Job) {
         let Some(mail) = &self.mail else { return };
-        let origin = job.name.origin(&self.config.suffix);
-        let status = pages::status_address(&self.config.suffix, &job.token);
         mail.outbox.post(Message {
             name: job.name.clone(),
             to: job.address.clone(),
             from: mail.from.clone(),
             reply_to: self.config.reply_to.clone(),
             subject: fill(MAIL_SUBJECT, &[]),
-            body: reply::text(&origin, job.record.anchorless(), &status),
+            body: self.live_reply(&job.name, job.record.anchorless(), &job.token),
         });
     }
 
-    /// WHAT IS IN FLIGHT, under the book's lock the caller holds: the queue
-    /// full (D-8, "try again later"), the code held by a post in flight, the
-    /// name held by one (D-4) — each logged and refused, no docker call
-    /// made.
+    /// THE LIVE REPLY of a post: what the one renderer, `reply::text`, is
+    /// given — the board's public origin, the record's anchorless fact and
+    /// the post's status address — gathered in this one place for the
+    /// status page and the mail alike, so the two cannot say two things.
+    fn live_reply(&self, name: &Name, anchorless: bool, token: &str) -> String {
+        reply::text(&name.origin(&self.config.suffix), anchorless, &pages::status_address(&self.config.suffix, token))
+    }
+
+    /// WHAT IS IN FLIGHT, under the book's lock the caller holds: what the
+    /// book says blocks the post — the queue full (D-8, "try again later"),
+    /// the code held by a post in flight, the name held by one (D-4) —
+    /// logged and refused, no docker call made.
     fn in_flight(&self, book: &Book, name: &Name, code: &str) -> Result<(), Refusal> {
-        if book.queue.len() >= QUEUE_DEPTH {
-            self.log(&format!("{name}: a post refused: {QUEUE_DEPTH} posts already wait"));
-            return Err(Refusal::Busy);
-        }
-        if book.codes.contains(code) {
-            self.log(&format!("{name}: a post refused: its invite is held by a post in flight"));
-            return Err(Refusal::Invite);
-        }
-        if book.map.holds(name) {
-            self.log(&format!("{name}: a post refused: a post in flight holds the name"));
-            return Err(Refusal::Name);
-        }
-        Ok(())
+        let Some(blocked) = book.blocks(name, code) else { return Ok(()) };
+        let (why, refusal) = match blocked {
+            Blocked::QueueFull => (format!("{QUEUE_DEPTH} posts already wait"), Refusal::Busy),
+            Blocked::CodeHeld => ("its invite is held by a post in flight".to_owned(), Refusal::Invite),
+            Blocked::NameHeld => ("a post in flight holds the name".to_owned(), Refusal::Name),
+        };
+        self.log(&format!("{name}: a post refused: {why}"));
+        Err(refusal)
     }
 }
 
@@ -618,10 +675,7 @@ impl Desk for Service {
                     return Err(Refusal::Failed);
                 }
             }
-            book.codes.insert(code.to_owned());
-            book.map.admit(token.clone(), name.clone(), record.anchorless());
-            book.queue.push_back(Job { token: token.clone(), name: name.clone(), record, code: code.to_owned(), address: invite.address });
-            book.queue.len()
+            book.admit(Job { token: token.clone(), name: name.clone(), record, code: code.to_owned(), address: invite.address })
         };
         self.ready.notify_one();
         self.log(&format!("{name}: admitted; {waiting} waiting"));
@@ -633,7 +687,7 @@ impl Desk for Service {
         let post = book.map.post(token)?;
         Some(match post.state {
             State::Queued | State::Running => Shown::BeingMade,
-            State::Live => Shown::Live(reply::text(&post.name.origin(&self.config.suffix), post.anchorless, &pages::status_address(&self.config.suffix, token))),
+            State::Live => Shown::Live(self.live_reply(&post.name, post.anchorless, token)),
             State::Failed => Shown::Failed,
         })
     }

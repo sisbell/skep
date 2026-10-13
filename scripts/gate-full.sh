@@ -204,7 +204,7 @@ usage=$(cargo run -q -p skep-provision -- --help) || exit $?
 if [[ $usage == *fake* ]]; then echo "gate-full: skep-provision's shipped usage names a fake flag"; exit 1; fi
 
 # skep-provision, a binary alone, cannot join a `--lib` line; its module
-# docs link across its seventeen modules through `main.rs`'s `mod` tree.
+# docs link across its nineteen modules through `main.rs`'s `mod` tree.
 RUSTDOCFLAGS="-D rustdoc::broken_intra_doc_links" \
     cargo doc -p skep-provision --bins --no-deps --document-private-items || exit $?
 

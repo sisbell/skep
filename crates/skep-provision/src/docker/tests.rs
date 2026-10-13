@@ -212,7 +212,7 @@ fn the_serving_run_carries_the_readmes_serving_flags() {
 #[test]
 fn the_real_command_is_built_from_the_argv_and_nothing_else() {
     let argv = Call::SidecarClaim(&alice()).argv(&settings());
-    let cmd = command(Path::new(DOCKER), &argv, true);
+    let cmd = command(Path::new(DOCKER), &argv);
     assert_eq!(cmd.get_program(), "docker");
     assert_eq!(cmd.get_args().map(|a| a.to_str().expect("text").to_owned()).collect::<Vec<_>>(), argv);
     assert_eq!(cmd.get_envs().count(), 0);

@@ -18,7 +18,7 @@ use std::path::PathBuf;
 use std::sync::Mutex;
 
 use super::{Message, Sender};
-use crate::docker::Exit;
+use crate::process::Exit;
 
 /// The line that opens each message in the log.
 const SEPARATOR: &str = "=== skep-provision mail-fake: one message ===";

@@ -1,26 +1,35 @@
 //! T10 — THE STATE DIRECTORY beneath the sign-up file and the invite file:
-//! the address rule; THE DOOR, made `0700` and refused loose in the daemon's
-//! words; THE WRITER, whose failure between the write and the rename leaves
-//! the old file whole and no temp file; and the date a line carries.
+//! the address rule and its value; THE DOOR, made `0700` and refused loose
+//! in the daemon's words; THE WRITER, its files owner-only, whose failure
+//! between the write and the rename leaves the old file whole and no temp
+//! file; and the date a line carries.
 
 use std::fs;
 
 use super::*;
 use crate::scratch::Scratch;
+use crate::whole::temp_of;
 
 /// The address rule: one `@` with a side each way, at most 254 bytes, no
-/// control character and no whitespace.
+/// control character and no whitespace — and [`MailAddress::parse`], its one
+/// door, admits exactly the addresses the rule does, keeping each as given,
+/// its `Debug` showing none of it.
 #[test]
 fn the_address_rule() {
     for ok in ["a@b", "person@example.com", "first.last+tag@sub.example.org"] {
         assert!(address_ok(ok), "{ok}");
+        assert_eq!(MailAddress::parse(ok).as_ref().map(MailAddress::as_str), Some(ok));
     }
     let long = format!("{}@b", "a".repeat(MAX_ADDRESS_BYTES - 2));
     assert!(address_ok(&long));
+    assert!(MailAddress::parse(&long).is_some());
     for bad in ["", "ab", "@b", "a@", "a@b@c", "a b@c", "a@b\n", "a\t@b", "a@b\r", "\u{a0}a@b"] {
         assert!(!address_ok(bad), "{bad:?}");
+        assert!(MailAddress::parse(bad).is_none(), "{bad:?}");
     }
     assert!(!address_ok(&format!("{long}c")), "255 bytes");
+    assert!(MailAddress::parse(&format!("{long}c")).is_none(), "255 bytes");
+    assert_eq!(format!("{:?}", MailAddress::parse("person@example.com").expect("an address")), "MailAddress(…)");
 }
 
 /// THE STATE DIRECTORY's DOOR: made `0700` where absent; refused where it
@@ -50,13 +59,19 @@ fn the_state_directory_is_owner_only_or_refused() {
     assert!(matches!(StateDir::open(&file), Err(StateDirRefused::Io { .. })));
 }
 
-/// THE WRITER: a failure between the write and the rename leaves the old
-/// file whole and no temp file behind; a write that completes replaces it.
+/// THE WRITER: its file owner-only, `0600`; a failure between the write and
+/// the rename leaves the old file whole and no temp file behind; a write
+/// that completes replaces it.
 #[test]
 fn a_failure_before_the_rename_leaves_the_old_file_whole() {
     let dir = Scratch::new();
     let path = dir.path().join("file");
     write_whole(&path, b"old\n").expect("written");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        assert_eq!(fs::metadata(&path).expect("its mode").permissions().mode() & 0o777, 0o600);
+    }
     let failed = write_whole_with(&path, b"new\n", &|| Err(io::Error::other("a failure between the write and the rename")));
     assert!(failed.is_err());
     assert_eq!(fs::read(&path).expect("the file"), b"old\n");

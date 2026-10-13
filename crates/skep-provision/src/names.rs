@@ -24,23 +24,22 @@
 //! THE STATUS MAP ([`StatusMap`]), in memory: each post of this run by its
 //! STATUS TOKEN — 128 bits of OS entropy as lowercase hex ([`fresh_token`]),
 //! shown only to the poster and in the mail, NEVER LOGGED — with its name,
-//! its state ([`State`]) and what the reply needs; and every LIVE name with
-//! its facts. REBUILT AT START from the snippet directory: every
-//! `<name>.caddy` is a live name whose facts are the constants — the
-//! account `1.0.1`, the principal `1`, the origin `https://<name>.<suffix>`.
-//! The map holds NAMES across a restart and no token: a token is never
-//! written anywhere, so a status address minted before a restart answers
-//! 404 after it, though the board it named stands, live, and its mail — if
-//! it was sent — carries the reply.
+//! its state ([`State`]) and what the reply needs that a name does not say,
+//! the record's anchorless fact; and every LIVE name. REBUILT AT START from
+//! the snippet directory: every `<name>.caddy` is a live name. The reply's
+//! three facts are kept nowhere here: they are the constants and the public
+//! origin, and the reply renders them (`reply`). The map holds NAMES across
+//! a restart and no token: a token is never written anywhere, so a status
+//! address minted before a restart answers 404 after it, though the board
+//! it named stands, live, and its mail — if it was sent — carries the reply.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeSet, HashMap};
 use std::io;
 use std::path::Path;
 
 use crate::caddy;
 use crate::docker::Docker;
 use crate::name::Name;
-use crate::sidecar::{ACCOUNT, PRINCIPAL};
 
 /// Which of the three things standing makes a name taken.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -70,7 +69,7 @@ impl Holder {
 /// cannot be reached among them — the volume's own creation then fails, and
 /// nothing is made); a `docker` that cannot be run at all is the error.
 pub fn taken(docker: &dyn Docker, boards_dir: &Path, name: &Name) -> io::Result<Option<Holder>> {
-    if caddy::path(boards_dir, name).try_exists()? {
+    if caddy::stands(boards_dir, name)? {
         return Ok(Some(Holder::Snippet));
     }
     if docker.volume_inspect(name)?.ok() {
@@ -106,7 +105,7 @@ pub fn labelled(listing: &[u8], boards_dir: &Path) -> io::Result<Labelled> {
     for listed in String::from_utf8_lossy(listing).lines().map(str::trim).filter(|l| !l.is_empty()) {
         match Name::parse(listed.as_bytes()) {
             Ok(name) if name.as_str() == listed => {
-                if caddy::path(boards_dir, &name).try_exists()? {
+                if caddy::stands(boards_dir, &name)? {
                     sorted.routed.push(name);
                 } else {
                     sorted.half_made.push(name);
@@ -124,24 +123,6 @@ pub fn fresh_token() -> io::Result<String> {
     let mut raw = [0u8; 16];
     getrandom::fill(&mut raw).map_err(|e| io::Error::other(format!("OS entropy: {e}")))?;
     Ok(raw.iter().map(|b| format!("{b:02x}")).collect())
-}
-
-/// A live board's three facts (AUTH-5.76's channel; the reply carries
-/// them): the account, the principal and the PUBLIC origin.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Facts {
-    /// The account the claim founded: [`ACCOUNT`].
-    pub account: &'static str,
-    /// Its principal: [`PRINCIPAL`].
-    pub principal: u64,
-    /// `https://<name>.<suffix>`.
-    pub origin: String,
-}
-
-/// The facts of `name` under `suffix`: the constants, and the public
-/// origin.
-pub fn facts(name: &Name, suffix: &str) -> Facts {
-    Facts { account: ACCOUNT, principal: PRINCIPAL, origin: name.origin(suffix) }
 }
 
 /// Where a post stands.
@@ -169,20 +150,18 @@ pub struct AdmittedPost {
     pub anchorless: bool,
 }
 
-/// THE STATUS MAP: this run's posts by token, and every live name with its
-/// facts.
+/// THE STATUS MAP: this run's posts by token, and every live name.
 #[derive(Debug, Clone, Default)]
 pub struct StatusMap {
     posts: HashMap<String, AdmittedPost>,
-    live: BTreeMap<Name, Facts>,
+    live: BTreeSet<Name>,
 }
 
 impl StatusMap {
     /// THE REBUILD AT START: every name the snippet directory stands for,
-    /// live, with the constant facts; no post, no token.
-    pub fn rebuild(boards_dir: &Path, suffix: &str) -> io::Result<StatusMap> {
-        let live = caddy::names(boards_dir)?.into_iter().map(|name| (name.clone(), facts(&name, suffix))).collect();
-        Ok(StatusMap { posts: HashMap::new(), live })
+    /// live; no post, no token.
+    pub fn rebuild(boards_dir: &Path) -> io::Result<StatusMap> {
+        Ok(StatusMap { posts: HashMap::new(), live: caddy::names(boards_dir)?.into_iter().collect() })
     }
 
     /// A post admitted under `token`: queued.
@@ -191,12 +170,12 @@ impl StatusMap {
     }
 
     /// `token`'s post moved to `state`; a post gone live joins the live
-    /// names with `facts`.
-    pub fn set(&mut self, token: &str, state: State, facts: Option<Facts>) {
+    /// names.
+    pub fn set(&mut self, token: &str, state: State) {
         if let Some(post) = self.posts.get_mut(token) {
             post.state = state;
-            if let (State::Live, Some(facts)) = (state, facts) {
-                self.live.insert(post.name.clone(), facts);
+            if state == State::Live {
+                self.live.insert(post.name.clone());
             }
         }
     }
@@ -213,8 +192,8 @@ impl StatusMap {
         self.posts.values().any(|p| &p.name == name && matches!(p.state, State::Queued | State::Running))
     }
 
-    /// The live names and their facts.
-    pub fn live(&self) -> &BTreeMap<Name, Facts> {
+    /// The live names.
+    pub fn live(&self) -> &BTreeSet<Name> {
         &self.live
     }
 }

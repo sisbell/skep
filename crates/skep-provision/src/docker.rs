@@ -10,8 +10,8 @@
 //!   record on its stdin, the forced removal of a run, the serving run, the
 //!   sidecar's `skep health`, the proxy's reload, and the listing of the
 //!   volumes this service made. Each answers what the call answered
-//!   ([`Exit`]: its exit code, its stdout and its stderr, apart), or the
-//!   `io::Error` of a `docker` that could not be run.
+//!   ([`Exit`], `process`'s: its exit code, its stdout and its stderr,
+//!   apart), or the `io::Error` of a `docker` that could not be run.
 //! * [`Call`] — THE ARGV of every call, A PURE FUNCTION of the call and the
 //!   [`Settings`] ([`Call::argv`]), which the unit suite pins token by
 //!   token against the documents' run lines — the smoke's claim run
@@ -21,9 +21,9 @@
 //!   of a mount) — so drift from them is a red test.
 //! * [`Host`] — the one real implementation: `docker` from `PATH` through
 //!   `std::process::Command` built from that argv and nothing else
-//!   ([`command`]), stdout and stderr captured apart, the service's own
-//!   stdin never inherited — the sidecar's is a pipe that carries the record
-//!   and closes, every other call's is null.
+//!   ([`command`]), run by `process::run` — stdout and stderr captured
+//!   apart, the service's own stdin never inherited: the sidecar's is a pipe
+//!   that carries the record and closes, every other call's is null.
 //! * `fake` — the scripted fake, under `test-hooks` alone.
 //!
 //! WHAT THE CALLS ASSUME OF DOCKER, as this crate knows Docker and the
@@ -46,12 +46,12 @@
 //! not reach the bridge; and `docker exec <caddy> caddy reload` reloads
 //! Caddy inside its container.
 
-use std::io::{self, Write};
+use std::io;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
-use std::thread;
+use std::process::Command;
 
 use crate::name::Name;
+use crate::process::{self, Exit};
 
 /// The program every call runs: the host's `docker`, found on `PATH`.
 const DOCKER: &str = "docker";
@@ -107,30 +107,6 @@ pub struct Settings {
     pub log_max_size: String,
     /// The serving run's log rotation: the files kept (`--log-max-file`).
     pub log_max_file: u32,
-}
-
-/// What one call answered: its exit code (`None` where it ended by a
-/// signal), its stdout and its stderr, each apart.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct Exit {
-    /// The exit code, or `None` where the process ended by a signal.
-    pub code: Option<i32>,
-    /// Everything it wrote on stdout.
-    pub stdout: Vec<u8>,
-    /// Everything it wrote on stderr.
-    pub stderr: Vec<u8>,
-}
-
-impl Exit {
-    /// Whether it exited 0.
-    pub fn ok(&self) -> bool {
-        self.code == Some(0)
-    }
-
-    /// The exit code as the log spells it: the number, or `signal`.
-    pub fn said(&self) -> String {
-        self.code.map_or_else(|| "signal".to_owned(), |c| c.to_string())
-    }
 }
 
 /// THE RUNNER: one method per call the five steps make, each answering what
@@ -321,37 +297,20 @@ impl Host {
         Host { program, settings }
     }
 
-    /// One call run: the command built from its argv, the record written to
-    /// the sidecar's stdin on a thread of its own and the pipe closed — so a
-    /// child that writes before it has read cannot stall the write — and the
-    /// two streams read to their ends.
+    /// One call run: the command built from its argv, run by `process::run`
+    /// with the record — the sidecar's input, and no other call's — on its
+    /// stdin.
     fn run(&self, call: Call<'_>, stdin: Option<&[u8]>) -> io::Result<Exit> {
-        let mut child = command(&self.program, &call.argv(&self.settings), stdin.is_some()).spawn()?;
-        let feeder = match (stdin, child.stdin.take()) {
-            (Some(bytes), Some(mut pipe)) => {
-                let bytes = bytes.to_vec();
-                Some(thread::spawn(move || pipe.write_all(&bytes)))
-            }
-            _ => None,
-        };
-        let out = child.wait_with_output()?;
-        if let Some(feeder) = feeder {
-            // A child that exits before reading its stdin breaks the pipe;
-            // its exit code says what happened, so the write's error is not
-            // the call's.
-            let _ = feeder.join();
-        }
-        Ok(Exit { code: out.status.code(), stdout: out.stdout, stderr: out.stderr })
+        process::run(command(&self.program, &call.argv(&self.settings)), stdin)
     }
 }
 
 /// THE COMMAND for an argv: the program — `docker` — the argv, and nothing
-/// else — no variable set, no directory changed; stdout and stderr piped
-/// apart; stdin a pipe where the call carries input and null where it does
-/// not, never the service's own.
-fn command(program: &Path, argv: &[String], stdin: bool) -> Command {
+/// else — no variable set, no directory changed; its streams are
+/// `process::run`'s to set.
+fn command(program: &Path, argv: &[String]) -> Command {
     let mut cmd = Command::new(program);
-    cmd.args(argv).stdin(if stdin { Stdio::piped() } else { Stdio::null() }).stdout(Stdio::piped()).stderr(Stdio::piped());
+    cmd.args(argv);
     cmd
 }
 

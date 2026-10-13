@@ -1544,6 +1544,13 @@ each naming only those above it:
   when dropped.
 - `urlform.rs` the form's body decoded strictly — `+` a space, `%XX` the
   byte, a `%` without two hex digits refused — its values kept as bytes.
+- `whole.rs` a kept file changed durably: replaced whole by rename from
+  its `<file>.tmp` at the mode its owner names, set exactly, or removed —
+  the directory synced either way.
+- `process.rs` a child process run to its end: `Exit`, what it answered,
+  and `run`, which sets the child's streams — the input on a pipe written
+  by a thread of its own, or a null stdin — and reads stdout and stderr
+  apart.
 - `name.rs` a board's name: its grammar, one lowercase label, and the host
   and the public origin it stands at, from which every `docker` call, the
   snippet and the reply are built.
@@ -1553,36 +1560,44 @@ each naming only those above it:
 - `docker.rs` the `Docker` trait, one method per call, the listing of
   the labelled volumes among them; `Call::argv`, every call's argv as a
   pure function, the volume's creation carrying the label; `Host`, the
-  host's `docker` through `std::process::Command`; and under
+  host's `docker`, its `Command` built from that argv and run by
+  `process::run`; and under
   `test-hooks` `docker/fake.rs`, the scripted fake, its order strict per
   name and free across names.
 - `sidecar.rs` the sidecar's six DATA lines and its one idempotent line,
   read, and its exit codes mapped.
 - `health.rs` the pair off `/health`'s body and the bounded wait.
-- `caddy.rs` the snippet's text, its write by rename, its removal, the
-  reload, and the names the snippet directory stands for.
+- `caddy.rs` the snippet's text, its write and its removal through
+  `whole` at `0644`, whether it stands, the reload, and the names the
+  snippet directory stands for.
 - `names.rs` the truth about names — the snippet, the volume, the
   container — the status token, the status map, rebuilt at start from
   the snippets, and the labelled volumes sorted against the snippets into
   half-made, routed and unnamed.
-- `statedir.rs` the state directory's door, the state files' one
-  writer, and what the two files' lines carry: the address rule and the
-  date.
+- `statedir.rs` the state directory's door; the state files' one
+  writer, `whole`'s replacement at `0600`; and what the two files' lines
+  carry: the address rule, with `MailAddress`, the one value an address
+  is taken in as, and the date.
 - `signups.rs` the sign-up file.
 - `invites.rs` the invite file — mint, look up, spend — under a lock file
-  across processes.
+  across processes; the code's alphabet, and `InviteCode`, the value the
+  `invite` verb hands the mint.
 - `strings.rs` the strings table: every sentence a person reads, each row
   naming its id.
 - `pages.rs` the four pages' HTML and the routes' dispatch over
-  `skep-http`, each route asking a `Desk`.
+  `skep-http`, each route asking a `Desk`; and the two addresses the
+  service hands out, the claim form's and a post's status page.
 - `sender.rs` the `Sender` trait, the mailer it shells out to, the
   message, and the sender's own thread with its retry; under
   `test-hooks` `sender/fake.rs`.
 - `reply.rs` the live reply, one function for the page and the mail.
-- `flow.rs` the `Service` — the `Desk` the routes ask, the queue, the
-  name as the unit of exclusion, the workers' steps, the serial pair's
-  lock, the cleanup table, the sweep at start, the send after the route
-  stands.
+- `flow.rs` the `Service` — the `Desk` the routes ask; the `Book` of
+  what is in flight, keeping its own rules: the queue, the status map and
+  the held codes, what blocks a new post, what admitting, taking, going
+  live and failing do; the name as the unit of exclusion, the workers'
+  steps, the serial pair's lock, the cleanup table, the sweep at start,
+  and the live reply's inputs gathered in one place for the status page
+  and the mail.
 - `args.rs` the verbs and the flags, every default a named constant,
   `version_line` and the usage text.
 
@@ -1622,17 +1637,28 @@ Rules that hold across its files:
   function the unit suite pins token by token, and reads back from
   `scripts/docker-smoke.sh` and `README.md` where those spell the line;
   the real runner builds its `Command` from that argv and nothing else.
+- **One writer, one runner.** Every file it keeps is replaced whole by
+  rename, or removed, through `whole`, at the mode its owner names — the
+  state files `0600`, the snippets `0644`. Every program of the host's it
+  runs — `docker` and the mailer — runs through `process::run`, which
+  sets the child's streams: the input on a pipe of its own or a null
+  stdin, never the service's own.
+- **One door per value.** An address is taken in only as a `MailAddress`
+  and an invite code by the `invite` verb only as an `InviteCode`, each
+  made by its rule's one constructor at the door — `args` for the flags,
+  the sign-up file for its field — so the file that keeps them is handed
+  nothing its line cannot carry and checks nothing again.
 - **What stands is the truth about names.** A name is taken iff its
   snippet, its volume or its container stands; no ledger is kept, and
   the log carries the history. A failed step's makings are undone in
   reverse and its status is D-8; a removal that itself fails leaves the
   name standing, logged.
 - **The log never carries** the record's bytes, a person's address, an
-  invite code or a status token, and the `Debug` of a record, an invite
-  or a message shows none of them.
+  invite code or a status token, and the `Debug` of a record, an invite,
+  a message, an address or a code shows none of them.
 - **Every person-facing sentence is in one table**, `strings.rs`, each
-  row naming its id, and the live reply is one function, so the page and
-  the mail cannot say two things.
+  row naming its id, and the live reply is one function, its inputs
+  gathered in one place, so the page and the mail cannot say two things.
 - **Two fakes, under `test-hooks` alone.** The scripted Docker runner
   fails a test on a call it did not expect; the mail fake appends what it
   accepts to a file. No shipped build enables the feature, and every test

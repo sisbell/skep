@@ -10,7 +10,7 @@ use std::io;
 use std::path::PathBuf;
 use std::sync::Mutex;
 
-use crate::statedir::{address_ok, read_or_empty, today, write_whole, StateDir};
+use crate::statedir::{read_or_empty, today, write_whole, MailAddress, StateDir};
 
 /// The sign-up file's name in the state directory.
 pub const SIGNUPS: &str = "signups";
@@ -41,13 +41,13 @@ impl SignUps {
     /// as `<address> <date>` — the file read, the line added, the whole
     /// written back; a refused field leaves the file as it was.
     pub fn append(&self, field: &[u8]) -> Result<(), SignUpRefused> {
-        let address = std::str::from_utf8(field).ok().filter(|a| address_ok(a)).ok_or(SignUpRefused::NotAnAddress)?;
+        let address = std::str::from_utf8(field).ok().and_then(MailAddress::parse).ok_or(SignUpRefused::NotAnAddress)?;
         let _one_writer = self.write.lock().unwrap_or_else(|e| e.into_inner());
         let mut text = read_or_empty(&self.path).map_err(SignUpRefused::Io)?;
         if !text.is_empty() && !text.ends_with('\n') {
             text.push('\n');
         }
-        text.push_str(&format!("{address} {}\n", today()));
+        text.push_str(&format!("{} {}\n", address.as_str(), today()));
         write_whole(&self.path, text.as_bytes()).map_err(SignUpRefused::Io)
     }
 }

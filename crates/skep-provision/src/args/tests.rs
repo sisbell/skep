@@ -1,8 +1,11 @@
 //! T1 — THE COMMAND LINE: `--version` renders `skepd`'s form; every flag's
 //! default is its named constant; `--mailer` and `--from` come together or
-//! not at all; an unknown flag, a missing value, a value of the wrong form
-//! and a missing required flag are each a usage refusal (`main` answers it
-//! exit 2 — the binary's suite runs one); `--workers` defaults to its
+//! not at all; an unknown flag, a missing value, a value of the wrong form —
+//! an address out of the rule and a code out of the alphabet among them,
+//! which this door alone refuses — and a missing required flag are each a
+//! usage refusal (`main` answers it exit 2 — the binary's suite runs one);
+//! every flag lands in its setting, the address and the code as their own
+//! values; `--workers` defaults to its
 //! constant and refuses zero (T21); a `test-hooks` build takes
 //! `--docker-fake` and `--mailer-fake` — the shipped build's refusal of both
 //! is `scripts/gate-full.sh`'s to check, every build of this suite having
@@ -20,6 +23,11 @@ fn argv(args: &[&str]) -> Vec<OsString> {
 /// `serve` with the two required flags and `rest`.
 fn serve(rest: &[&str]) -> Result<Command, String> {
     parse(argv(&[&["serve", "--state-dir", "/var/lib/skep-provision", "--reply-to", "owner@skep.host"][..], rest].concat()))
+}
+
+/// An address by the rule, as `MailAddress::parse` admits it.
+fn mail_address(text: &str) -> MailAddress {
+    MailAddress::parse(text).expect("an address")
 }
 
 fn served(rest: &[&str]) -> Serve {
@@ -58,7 +66,7 @@ fn every_default_is_its_named_constant() {
     assert_eq!(s.workers, DEFAULT_WORKERS);
     assert_eq!(s.mail, None, "no mail without --mailer and --from");
     assert_eq!(s.state_dir, PathBuf::from("/var/lib/skep-provision"));
-    assert_eq!(s.reply_to, "owner@skep.host");
+    assert_eq!(s.reply_to.as_str(), "owner@skep.host");
     match parse(argv(&["invite", "--address", "person@example.com", "--state-dir", "/s"])) {
         Ok(Command::Invite(i)) => {
             assert_eq!(i.suffix, DEFAULT_SUFFIX);
@@ -128,8 +136,16 @@ fn every_flag_lands_in_its_setting() {
         s.settings,
         Settings { image: "img:2".into(), cli_image: "cli:2".into(), network: "net2".into(), caddy: "proxy2".into(), suffix: "example.org".into(), log_max_size: "50m".into(), log_max_file: 3 }
     );
-    assert_eq!(s.mail, Some(MailArgs { mailer: Mailer::Program(PathBuf::from("/usr/bin/msmtp")), from: "noreply@example.org".into() }));
+    assert_eq!(s.mail, Some(MailArgs { mailer: Mailer::Program(PathBuf::from("/usr/bin/msmtp")), from: mail_address("noreply@example.org") }));
     assert_eq!(served(&["--image", "a", "--image", "b"]).settings.image, "b", "the last given wins");
+    match parse(argv(&["invite", "--address", "person@example.com", "--state-dir", "/s", "--code", "1.1.0.1.0.3", "--suffix", "example.org"])) {
+        Ok(Command::Invite(i)) => {
+            assert_eq!(i.address.as_str(), "person@example.com");
+            assert_eq!(i.code.as_ref().map(InviteCode::as_str), Some("1.1.0.1.0.3"));
+            assert_eq!((i.state_dir, i.suffix.as_str()), (PathBuf::from("/s"), "example.org"));
+        }
+        other => panic!("{other:?}"),
+    }
 }
 
 /// T1: `--mailer` WITHOUT `--from`, AND THE REVERSE, IS A USAGE REFUSAL.
@@ -158,7 +174,9 @@ fn every_usage_refusal() {
     assert!(parse(argv(&["serve", "--state-dir", "/s"])).expect_err("no reply-to").contains("--reply-to is required"));
     assert!(parse(argv(&["invite", "--state-dir", "/s"])).expect_err("no address").contains("--address is required"));
     assert!(parse(argv(&["invite", "--address", "a@b"])).expect_err("no state dir").contains("--state-dir is required"));
-    assert!(parse(argv(&["invite", "--address", "a@b", "--state-dir", "/s", "--code", "a b"])).is_err());
+    assert!(parse(argv(&["invite", "--address", "a@b", "--state-dir", "/s", "--code", "a b"])).expect_err("a code out of the alphabet").contains("--code: 'a b' is not 1 to 128"));
+    assert!(parse(argv(&["invite", "--address", "not an address", "--state-dir", "/s"])).expect_err("an address out of the rule").contains("--address: 'not an address' is not an address"));
+    assert!(serve(&["--reply-to", "a@b@c"]).is_err());
     assert_eq!(parse(argv(&[])), Err("a verb is required: serve or invite".to_owned()));
     assert_eq!(parse(argv(&["provision"])), Err("unknown verb 'provision': serve or invite".to_owned()));
     #[cfg(unix)]
@@ -182,7 +200,7 @@ fn a_test_hooks_build_takes_the_fakes_flags() {
     {
         let s = served(&["--docker-fake", "/tmp/script", "--mailer-fake", "/tmp/mail.log", "--from", "noreply@skep.host"]);
         assert_eq!(s.docker_fake, Some(PathBuf::from("/tmp/script")));
-        assert_eq!(s.mail, Some(MailArgs { mailer: Mailer::Fake(PathBuf::from("/tmp/mail.log")), from: "noreply@skep.host".into() }));
+        assert_eq!(s.mail, Some(MailArgs { mailer: Mailer::Fake(PathBuf::from("/tmp/mail.log")), from: mail_address("noreply@skep.host") }));
         assert!(usage().contains("--docker-fake <SCRIPT>") && usage().contains("--mailer-fake <LOG>"));
     }
 }

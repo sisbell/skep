@@ -22,6 +22,11 @@
 //! THE DESK ([`Desk`]) is what the routes ask: the sign-up kept, the claim
 //! admitted, the status read — the flow's, which this file does not name,
 //! so the pages are judged here over a desk a test scripts.
+//!
+//! THE TWO ADDRESSES the service hands out are built here, beside the
+//! routes they open: a post's status address ([`status_address`]), and the
+//! claim address an invite carries ([`claim_address`]), which opens the
+//! claim form with its invite field pre-filled.
 
 use std::net::TcpStream;
 use std::time::Duration;
@@ -132,6 +137,13 @@ pub struct Site {
 /// A post's status address: `https://<suffix>/status/<token>`.
 pub fn status_address(suffix: &str, token: &str) -> String {
     format!("https://{suffix}/status/{token}")
+}
+
+/// THE CLAIM ADDRESS an invite carries: `https://<suffix>/claim?invite=<code>`
+/// — the claim form's route, and the query value its invite field is
+/// pre-filled from.
+pub fn claim_address(suffix: &str, code: &str) -> String {
+    format!("https://{suffix}/claim?invite={code}")
 }
 
 // ── THE ANSWERS ──────────────────────────────────────────────────────────

@@ -1615,6 +1615,12 @@ each naming only those above it:
 - `record.rs` the record's admission: the hosted walk's trim,
   `parse_enroll`, the walk's preview-kind test copied, the anchorless
   fact.
+- `mail_address.rs` a mail address by the rule — one `@` with a side each
+  way, at most 254 bytes, ASCII alone, none of RFC 5322's specials but `@`
+  and `.` — its words for a refusal to name, and `MailAddress`, the one
+  value an address is taken in as.
+- `invite_code.rs` an invite code — 1 to 128 of the URL's unreserved
+  characters — and `InviteCode`, the one value a code is taken in as.
 - `docker.rs` the `Docker` trait — `run`, the one method a runner writes,
   and one named method per call provided over it, the listing of the
   labelled volumes among them; `Call`, one call as data, whole, the dark
@@ -1635,13 +1641,10 @@ each naming only those above it:
   half-made, routed and unnamed.
 - `statedir.rs` the state directory's door, and a lock file in it held at
   `0600`; the state files' one writer, `whole`'s replacement at `0600`;
-  and what the two files' lines carry: the address rule and its words for
-  a refusal to name, with `MailAddress`, the one value an address is taken
-  in as, and the date.
+  and the date the two files' lines carry.
 - `signups.rs` the sign-up file, capped at 256 KiB.
 - `invites.rs` the invite file — mint, look up, spend — under a lock file
-  across processes; the code's alphabet, and `InviteCode`, the one value a
-  code is taken in as.
+  across processes.
 - `strings.rs` the strings table: every sentence a person reads, each row
   naming its id.
 - `pages.rs` the four pages' HTML and each request's dispatch, by method
@@ -1743,12 +1746,14 @@ Rules that hold across its files:
   again — the `/health` read, the dark claim, the mail — is paced by a
   `Wait`, a sleep before each try but the first and never after the last.
 - **One door per value.** An address is taken in only as a `MailAddress`
-  and an invite code only as an `InviteCode`, each made by its rule's one
-  constructor at the door — `args` for the flags, the desk for the claim
-  post's field, the sign-up file for its field — so the file that keeps
-  them is handed nothing its line cannot carry and checks nothing again,
-  and no other string of a code's shape, a status token among them, can
-  stand in for a code.
+  and an invite code only as an `InviteCode`, each in a module that holds
+  it and its rule alone — as a board's name is a `Name` in `name.rs` — so
+  its rule's one constructor is the only way to one any other module can
+  write; each is made at the door — `args` for the flags, the desk for the
+  claim post's field, the sign-up file for its field — so the file that
+  keeps them is handed nothing its line cannot carry and checks nothing
+  again, and no other string of a code's shape, a status token among them,
+  can stand in for a code.
 - **What stands is the truth about names.** A name is taken iff its
   snippet, its volume or its container stands; no ledger is kept, and
   the log carries the history. A failed step's makings are undone in

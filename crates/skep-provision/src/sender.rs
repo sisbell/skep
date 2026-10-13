@@ -48,9 +48,9 @@ use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
+use crate::mail_address::MailAddress;
 use crate::name::Name;
 use crate::process::{self, Exit};
-use crate::statedir::MailAddress;
 use crate::strings::{fill, MAIL_SUBJECT};
 use crate::wait::Wait;
 

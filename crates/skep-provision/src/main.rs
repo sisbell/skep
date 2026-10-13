@@ -101,6 +101,12 @@ mod wait;
 mod name;
 // The record's trim and parse, the preview-kind test, the anchorless fact.
 mod record;
+// A mail address by the rule — one `@`, ASCII alone, none of the specials —
+// its words for a refusal, and the one value an address is taken in as.
+mod mail_address;
+// An invite code: 1 to 128 of the URL's unreserved characters, and the one
+// value a code is taken in as.
+mod invite_code;
 // The Docker runner: the trait, the argv of every call, the host's
 // `docker`; the scripted fake under `test-hooks`.
 mod docker;
@@ -115,12 +121,12 @@ mod caddy;
 // The truth about names, the labelled volumes sorted for the sweep, the
 // status token, the status map.
 mod names;
-// The state directory: its door, its one writer, and what its two files'
-// lines carry — the address rule and its value, the date.
+// The state directory: its door, its one writer, and the date its two
+// files' lines carry.
 mod statedir;
 // The sign-up file.
 mod signups;
-// The invite file: mint, look up, spend; the code's alphabet and its value.
+// The invite file: mint, look up, spend, under its lock file.
 mod invites;
 // Every sentence a person reads: one table, each row naming its id.
 mod strings;

@@ -53,11 +53,11 @@ pub struct Claimed {
     pub principal: String,
     /// Line 4's value: THE DIALED ORIGIN, held to [`DIALED_ORIGIN`] — the one
     /// the sidecar was told to dial — and shown nowhere.
-    pub origin: String,
+    origin: String,
     /// Line 5, whole.
-    pub first_act: String,
+    first_act: String,
     /// Line 6, whole.
-    pub second_act: String,
+    second_act: String,
 }
 
 /// What an exit-0 stdout says.

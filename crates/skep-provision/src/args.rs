@@ -17,8 +17,8 @@ use std::path::PathBuf;
 use std::str::FromStr;
 
 use crate::docker::Settings;
-use crate::invites::{InviteCode, MAX_CODE_BYTES};
-use crate::statedir::{self, MailAddress};
+use crate::invite_code::{InviteCode, MAX_CODE_BYTES};
+use crate::mail_address::{address_rule, MailAddress};
 
 /// THE LISTEN ADDRESS's DEFAULT: loopback, port 8842 — not the daemon's
 /// 8642 and not the dev provider's 8742. How Caddy, in its container,
@@ -281,10 +281,10 @@ fn domain(flag: &str, v: String) -> Result<String, String> {
     Ok(v)
 }
 
-/// A MAIL ADDRESS by the rule: the value `MailAddress::parse` admits, a
-/// refusal naming the rule in `statedir`'s own words.
+/// A MAIL ADDRESS by the rule: the value `MailAddress::parse` admits, or a
+/// refusal naming the rule in its own words ([`address_rule`]).
 fn mail_address(flag: &str, v: &str) -> Result<MailAddress, String> {
-    MailAddress::parse(v).ok_or_else(|| format!("{flag}: '{v}' is not an address: {}", statedir::address_rule()))
+    MailAddress::parse(v).ok_or_else(|| format!("{flag}: '{v}' is not an address: {}", address_rule()))
 }
 
 /// A COUNT OF ONE OR MORE, the type a count flag lands in: one whose

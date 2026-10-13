@@ -99,7 +99,7 @@ pub struct Labelled {
     pub half_made: Vec<Name>,
     /// Under a name whose snippet stands: a board routed — live, or stopped
     /// and Docker's `--restart` to bring back — and left.
-    pub routed: Vec<Name>,
+    routed: Vec<Name>,
     /// Under no name [`Name::exact`] reads, as listed; logged and left.
     pub unnamed: Vec<String>,
 }

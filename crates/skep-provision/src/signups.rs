@@ -14,7 +14,8 @@ use std::io;
 use std::path::PathBuf;
 use std::sync::Mutex;
 
-use crate::statedir::{read_or_empty, today, write_whole, MailAddress, StateDir};
+use crate::mail_address::MailAddress;
+use crate::statedir::{read_or_empty, today, write_whole, StateDir};
 
 /// The sign-up file's name in the state directory.
 pub const SIGNUPS: &str = "signups";

@@ -24,10 +24,10 @@ use skep_identity::{encode_enroll, Enrollment, PublicKey, ALG_MLDSA65_ED25519, M
 use super::*;
 use crate::docker::fake::{line, FakeDocker};
 use crate::invites::{lookup, mint};
+use crate::mail_address::MailAddress;
 use crate::scratch::Scratch;
 use crate::sender::fake::FakeSender;
 use crate::sender::{Message, Sender};
-use crate::statedir::MailAddress;
 
 mod desk;
 mod pool;

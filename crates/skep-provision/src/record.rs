@@ -75,7 +75,7 @@ pub enum RecordRefused {
 impl RecordRefused {
     /// The one word the log carries: the payload fault's token
     /// (`PayloadError::token`, AUTH-1.28's one authority), or `preview_key`.
-    pub fn token(&self) -> String {
+    fn token(&self) -> String {
         match self {
             RecordRefused::NotARecord(e) => e.token(),
             RecordRefused::PreviewKey { .. } => "preview_key".to_owned(),
@@ -83,9 +83,9 @@ impl RecordRefused {
     }
 }
 
-/// The one word the log carries, and only it: `Display` is a second entry
-/// to [`RecordRefused::token`], never a second vocabulary — as
-/// `PayloadError`'s is to its own.
+/// The one word the log carries, and only it: `Display` is the word's one
+/// way out of this module — [`RecordRefused::token`] as it stands, never a
+/// second vocabulary, as `PayloadError`'s is to its own.
 impl fmt::Display for RecordRefused {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(&self.token())

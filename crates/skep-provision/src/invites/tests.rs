@@ -1,15 +1,15 @@
 //! T9 — THE INVITE FILE: a mint writes one `issued` line and answers its
-//! code; `--code` is used verbatim; the code's alphabet, at every byte, and
-//! its value admitting exactly the codes the alphabet does; a duplicate
-//! refused, and a file that cannot be reached refused as its own failure,
-//! each an error saying which; a lookup before and after the spend answers
-//! issued, then spent; a spent or an unknown code is not issued; the file is
-//! rewritten whole — a failure between the write and the rename leaves it as
-//! it was — and a line of another shape survives; and changes made at once,
-//! mints beside spends, lose none of each other under the lock file. (The
-//! invite link the code rides is the pages' suite's; a failed flow leaving
-//! the line issued, a post refused on a spent or unknown code, and the code
-//! in no log line are the flow's suite's and the binary's.)
+//! code; `--code` is used verbatim; a duplicate refused, and a file that
+//! cannot be reached refused as its own failure, each an error saying which;
+//! a lookup before and after the spend answers issued, then spent; a spent or
+//! an unknown code is not issued; the file is rewritten whole — a failure
+//! between the write and the rename leaves it as it was — and a line of
+//! another shape survives; and changes made at once, mints beside spends,
+//! lose none of each other under the lock file. (The code's alphabet is
+//! `invite_code`'s suite; the invite link the code rides is the pages'
+//! suite's; a failed flow leaving the line issued, a post refused on a spent
+//! or unknown code, and the code in no log line are the flow's suite's and
+//! the binary's.)
 
 use std::fs;
 
@@ -33,7 +33,7 @@ fn invite_code(text: &str) -> InviteCode {
 }
 
 /// T9: `invite --address` WRITES ONE `issued` LINE — a fresh code, 128 bits
-/// as hex, in the alphabet — and answers the code.
+/// as 32 lowercase hex digits — and answers the code.
 #[test]
 fn a_mint_writes_one_issued_line() {
     let dir = Scratch::new();
@@ -42,7 +42,7 @@ fn a_mint_writes_one_issued_line() {
     let code = mint(&state_dir, &address("person@example.com"), None).expect("minted");
     let after = today();
     assert_eq!(code.as_str().len(), 32);
-    assert!(code_ok(code.as_str()));
+    assert!(code.as_str().bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)), "{}", code.as_str());
     let text = fs::read_to_string(state_dir.file(INVITES)).expect("the file");
     assert!([&before, &after].into_iter().any(|day| text == format!("{} person@example.com issued {day}\n", code.as_str())), "{text:?}, not dated {before} or {after}");
     assert!(state_dir.file(INVITES_LOCK).exists(), "the lock file stands beside it");
@@ -59,42 +59,6 @@ fn a_given_code_is_used_verbatim() {
     assert_eq!(invite.address, "person@example.com");
     assert!(invite.issued());
     assert!(lookup(&state_dir, &invite_code("1.1.0.1.0")).expect("read").is_none(), "compared whole, never by prefix");
-}
-
-/// THE CODE's ALPHABET: a space, `&`, `/`, the empty code and one byte past
-/// [`MAX_CODE_BYTES`] are outside it; a document's address, every
-/// unreserved character and a code at the bound are inside — and
-/// [`InviteCode::parse`], the value's one door, admits exactly the codes the
-/// alphabet does, keeping each as given, its `Debug` showing none of it.
-#[test]
-fn a_code_is_1_to_128_unreserved_characters_and_parse_admits_just_those() {
-    let long = "x".repeat(MAX_CODE_BYTES + 1);
-    for bad in ["has space", "a&b", "a/b", "", long.as_str()] {
-        assert!(!code_ok(bad), "{bad:?}");
-        assert!(InviteCode::parse(bad).is_none(), "{bad:?}");
-    }
-    let longest = "x".repeat(MAX_CODE_BYTES);
-    for good in ["abc", "1.1.0.1.0.3", "A-z_0.9~", longest.as_str()] {
-        assert!(code_ok(good), "{good:?}");
-        assert_eq!(InviteCode::parse(good).as_ref().map(InviteCode::as_str), Some(good));
-    }
-    assert_eq!(format!("{:?}", invite_code("secretcode")), "InviteCode(…)");
-}
-
-/// THE CODE's ALPHABET AT EVERY BYTE: `a`, one character, `a` is a code iff
-/// the character is a letter, a digit, `-`, `.`, `_` or `~` — the URL's
-/// unreserved characters, each riding the invite link as it is — and
-/// refused for every other: `+`, which the link would carry as a space, `%`,
-/// which opens an escape, `#`, which ends the query, and `&`, `=`, a space,
-/// a control character and every character past ASCII.
-#[test]
-fn every_character_but_the_unreserved_is_out_of_the_alphabet() {
-    for b in 0..=255u8 {
-        let code = format!("a{}a", char::from(b));
-        let unreserved = b.is_ascii_alphanumeric() || b"-._~".contains(&b);
-        assert_eq!(code_ok(&code), unreserved, "{b:#04x}");
-        assert_eq!(InviteCode::parse(&code).is_some(), unreserved, "{b:#04x}");
-    }
 }
 
 /// The mint's refusal: a code the file already holds mints nothing, and the

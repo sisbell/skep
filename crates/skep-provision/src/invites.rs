@@ -9,19 +9,15 @@
 //!
 //! — the address the invitation went to (the owner's hand sends it, in the
 //! alpha), and the address the follow-up mail goes to once the board is
-//! live. THE CODE IS AN OPAQUE STRING compared whole: 128 bits of OS
-//! entropy as lowercase hex where `invite` mints one, or the value
-//! `--code` hands in — so a later mint can hand in a document's address in
-//! a random string's place, the format left open between the two — held to
-//! the URL's unreserved characters ([`code_ok`]), so it rides the invite
-//! link unescaped and a line splits on its spaces; every door hands a code
-//! on in that alphabet as its own value ([`InviteCode`]) — the `invite`
-//! verb's `--code` and the claim post's field alike — and the address to
-//! mint to as an address by the rule. A post naming a code
-//! the file does not hold, or holds spent, is refused (the strings table's
-//! DRAFT row); a code is SPENT on the first live route for a name and NOT
-//! by a failed post, so the person may post again. The code is NEVER
-//! LOGGED, and never shown but in the `invite` verb's one DATA line.
+//! live. THE CODE is an [`InviteCode`] (`invite_code`), compared whole, and
+//! every door hands one on as that value — the `invite` verb's `--code` and
+//! the claim post's field alike — and the address to mint to as a
+//! [`MailAddress`], so nothing reaches the file that its line cannot carry.
+//! A post naming a code the file does not hold, or holds spent, is refused
+//! (the strings table's DRAFT row); a code is SPENT on the first live route
+//! for a name and NOT by a failed post, so the person may post again. The
+//! code is NEVER LOGGED, and never shown but in the `invite` verb's one DATA
+//! line.
 //!
 //! THE FILE IS REWRITTEN WHOLE ([`crate::statedir::write_whole`]) at every
 //! change, within the service and across processes alike, under an exclusive
@@ -32,9 +28,11 @@
 use std::fmt;
 use std::io;
 
+use crate::invite_code::InviteCode;
+use crate::mail_address::MailAddress;
 use crate::name::Name;
 use crate::names::unguessable;
-use crate::statedir::{read_or_empty, today, write_whole_with, MailAddress, StateDir};
+use crate::statedir::{read_or_empty, today, write_whole_with, StateDir};
 
 /// The invite file's name in the state directory.
 const INVITES: &str = "invites";
@@ -42,9 +40,6 @@ const INVITES: &str = "invites";
 /// The lock file beside it: held exclusively over each read-and-rewrite,
 /// by the service and by the `invite` verb alike.
 const INVITES_LOCK: &str = "invites.lock";
-
-/// A code's byte bound: room for a document's address, and no more.
-pub const MAX_CODE_BYTES: usize = 128;
 
 /// An invite's state: issued, then spent.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -105,42 +100,6 @@ impl Invite {
     /// Whether a post may still name it.
     pub fn issued(&self) -> bool {
         matches!(self.state, InviteState::Issued { .. })
-    }
-}
-
-/// THE CODE's ALPHABET: 1 to [`MAX_CODE_BYTES`] of the URL's unreserved
-/// characters — letters, digits, `-`, `.`, `_`, `~` — so the code rides the
-/// invite link as it is and the file's line splits on its spaces.
-fn code_ok(code: &str) -> bool {
-    !code.is_empty() && code.len() <= MAX_CODE_BYTES && code.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'.' | b'_' | b'~'))
-}
-
-/// A CODE IN THE ALPHABET, the value every door hands on — `--code` to
-/// [`mint`], the claim post's field to [`lookup`] and [`spend`] — and
-/// [`mint`]'s answer: [`InviteCode::parse`] is the only way to one, so a code
-/// of this type rides the invite link as it is and keeps the file's line
-/// splitting on its spaces, and no other string of a code's shape — a status
-/// token among them — can stand in for one. Its `Debug` shows none of it: a
-/// code is never logged.
-#[derive(Clone, PartialEq, Eq, Hash)]
-pub struct InviteCode(String);
-
-impl InviteCode {
-    /// `text` as a code, where [`code_ok`] admits it.
-    pub fn parse(text: &str) -> Option<InviteCode> {
-        code_ok(text).then(|| InviteCode(text.to_owned()))
-    }
-
-    /// The code as text.
-    pub fn as_str(&self) -> &str {
-        &self.0
-    }
-}
-
-/// Nothing of the code: a `{:?}` can carry none of it.
-impl fmt::Debug for InviteCode {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str("InviteCode(…)")
     }
 }
 

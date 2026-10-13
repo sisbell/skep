@@ -41,7 +41,7 @@ use std::time::{Duration, Instant};
 use skep_http::{read_request, write_response, Limits, Refused, Request};
 use skep_identity::MAX_RECORD_BYTES;
 
-use crate::invites::InviteCode;
+use crate::invite_code::InviteCode;
 use crate::strings::{
     fill, Words, ADDRESS_LABEL, BAD_FORM, BEING_MADE, CLAIM_BUTTON, CLAIM_LEAD, FAILED, INVITE_LABEL, INVITE_REFUSED, NAME_HELP, NAME_LABEL, NAME_REFUSED, NOT_FOUND, PREVIEW_REFUSED, RECORD_HELP,
     RECORD_LABEL, RECORD_REFUSED, SIGNUP_BUTTON, SIGNUP_FAILED, SIGNUP_KEPT, SIGNUP_LEAD, SIGNUP_REFUSED, STATUS_URL, THANKS, TOO_LARGE,

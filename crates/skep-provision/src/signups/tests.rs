@@ -5,9 +5,10 @@
 //! written keeps nothing, and a sign-up past the file's cap keeps nothing,
 //! each refusal an error saying which; and where two refusals hold, the
 //! field's speaks first, then the file's in the order met. (The address
-//! rule, the state directory's door and the writer beneath the file are
-//! `statedir`'s suite; the page's DRAFT refusal and the log's silence about
-//! the address are the pages' and the flow's suites'.)
+//! rule is `mail_address`'s suite, and the state directory's door and the
+//! writer beneath the file are `statedir`'s; the page's DRAFT refusal and
+//! the log's silence about the address are the pages' and the flow's
+//! suites'.)
 
 use std::fs;
 

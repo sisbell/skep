@@ -999,7 +999,7 @@ behind its sign-up. It serves the sign-up page and the claim form,
 judges the record a person pastes, makes the board through the
 host's `docker`, writes the board's proxy snippet and reloads Caddy,
 then shows the person the live reply and mails it to them. It holds
-no key. Its verbs, flags, routes and files are its own README's
+no key. Its verbs, flags, requests and files are its own README's
 (`crates/skep-provision/README.md`); this section is how to run it
 on the VM. The unit and the steps below are written from what the
 service does and are UNTESTED on a VM: none has run on one, and the
@@ -1102,22 +1102,34 @@ of their own; the journal adds it.
    bridge and never from outside the VM. UNTESTED: that the Engine's
    unit is `docker.service`, which the unit requires.
 
+   Run ONE SERVICE PER VM. The label on its volumes is the Engine's,
+   the same on every `skep-provision serve`'s, and the service tells a
+   half-made board by its own snippet directory alone: a second one on
+   the Engine — a staging service, or the binary started by hand beside
+   the unit, whose sweep runs before it finds the address taken — would
+   read this one's boards being made as half-made at its start (step 9)
+   and remove them, and under another snippet directory its live boards
+   too. Nothing in a volume tells two services apart, so the service
+   cannot check this; the operator keeps it.
+
 6. **Read the serving line.** After its sweep (step 9) the service
    binds its address and says one line on stdout; with the unit's
    settings:
 
    ```
-   skep-provision: serving http://0.0.0.0:8842/ state-dir /var/lib/skep-provision boards-dir /etc/caddy/boards suffix skep.host live 0 swept 0 workers 3 mail on
+   skep-provision: serving http://0.0.0.0:8842/ state-dir /var/lib/skep-provision boards-dir /etc/caddy/boards suffix skep.host live 0 swept 0 workers 3 connections 16 mail on
    ```
 
    `live` counts the boards whose snippets it found, `swept` the
-   half-made ones it removed, and `workers` the boards it makes at
-   once. Without the mail lines the line ends `mail OFF (no --mailer
-   and --from): no follow-up mail is sent`. A refused start is one
-   line on stderr and exit 1, naming its cause: a state directory
-   other users can read, a snippet directory it cannot read, an
-   address it cannot bind. The unit retries it every five seconds,
-   the refusal written to the journal each time.
+   half-made ones it removed, `workers` the boards it makes at once,
+   and `connections` the requests it serves at once, a connection past
+   them waiting its turn. Without the mail lines the line ends `mail
+   OFF (no --mailer and --from): no follow-up mail is sent`. A refused
+   start is one line on stderr and exit 1, naming its cause: a state
+   directory other users can read, a snippet directory it cannot read,
+   an address it cannot bind, a thread the machine will not give. The
+   unit retries it every five seconds, the refusal written to the
+   journal each time.
 
 7. **Admit a person.** A sign-up is one line in
    `/var/lib/skep-provision/signups`, `<address> <date>`, and sends
@@ -1130,13 +1142,13 @@ of their own; the journal adds it.
    sudo -u skep-provision skep-provision invite --address <address> --state-dir /var/lib/skep-provision
    ```
 
-   The line is the claim page's address carrying the code,
-   `https://skep.host/claim?invite=<code>`. Mint as the service's
+   The line is the invite link, the claim form's URL carrying the
+   code, `https://skep.host/claim?invite=<code>`. Mint as the service's
    user, never as root: each change replaces the invite file whole,
    owner-only and owned by whoever made the change, and a file root
    made is one the service cannot read. Minting while the service
    runs is safe: the two take turns at `invites.lock`. The person
-   opens the address on their own device, names the board and
+   opens the link on their own device, names the board and
    pastes their record; the service makes the board, and spends the
    invite once the board is live. A failed board leaves the invite
    issued, and the person posts again.
@@ -1160,19 +1172,33 @@ of their own; the journal adds it.
    run, under its name with no snippet. At the next start, before it
    listens, the service lists the volumes under its label, removes
    each one with no snippet and any run under its name, and counts
-   them on the serving line as `swept`. A removal that fails is
-   logged, and the name stays taken until the operator clears it
-   (`docker rm -f <name>`, then `docker volume rm <name>`). The
-   queue, the status addresses and a mail not yet sent live in
-   memory and end with the process: a status address from before a
-   stop answers 404.
+   them on the serving line as `swept`. After the sweep's removals, and
+   after a failed board's cleanup, the service looks at what stands
+   under the name; where something still stands — a removal that
+   itself failed — the log line says INCOMPLETE and names it, and the
+   name stays taken until the operator clears it: the snippet,
+   `sudo rm /etc/caddy/boards/<name>.caddy` and then
+   `docker exec caddy caddy reload --config /etc/caddy/Caddyfile`;
+   the run, `docker rm -f <name>`; the volume,
+   `docker volume rm <name>`. The queue, the status URLs, a mail not
+   yet sent and the invite codes posts in flight hold live in memory
+   and end with the process: a status URL from before a stop answers
+   404, and a live board's code whose spend could not be written —
+   the invite file still says issued — is admitted again at the next
+   start unless the operator has marked it spent.
 
 10. **Know what this version does not do.** It serves no TLS of its
     own: Caddy terminates TLS for `skep.host`. It has no rate limit:
-    a claim must name an issued invite, and four posts at most wait
-    for a worker, a fifth told to try again later; a sign-up, which
-    needs no invite, is limited by nothing. It sends no mail without
-    the relay client.
+    a post must name an issued invite, four posts at most look at
+    what stands under their names at once and four at most wait for
+    a worker, a fifth told to try again later; a sign-up, which needs
+    no invite, is limited by the sign-up file's 256 KiB cap alone:
+    past it a sign-up is refused until the owner trims the file. It
+    serves sixteen requests at once (`--connections`), each request in
+    and each answer out given a minute, so a client that trickles its
+    bytes is cut off; one that holds all sixteen keeps everyone else
+    waiting, and a limit per client is the proxy's to set. It sends
+    no mail without the relay client.
 
 Confirm on the first VM what the unit and these steps assume, beside
 the deployment notes' TO TEST list: that the Engine's unit is

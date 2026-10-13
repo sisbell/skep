@@ -37,7 +37,8 @@ StateDirectoryMode=0700
 # --mailer and --from lines are the two lines to DROP together to run
 # without mail (each line of the command but the last ends in the
 # backslash that joins it to the next). --state-dir is the directory
-# StateDirectory= makes; --workers 3 is the default, said.
+# StateDirectory= makes; --workers 3 and --connections 16 are the defaults,
+# said.
 # --listen 0.0.0.0:8842 binds every interface: Caddy runs in a container
 # and cannot reach the host's loopback, and the VM's firewall admits 443
 # alone, so Caddy reaches the service at the host's address on the bridge
@@ -48,6 +49,7 @@ ExecStart=/usr/local/bin/skep-provision serve \
     --mailer /usr/bin/msmtp \
     --from noreply@skep.host \
     --workers 3 \
+    --connections 16 \
     --listen 0.0.0.0:8842
 # every state file the service makes is 0600 under 0700; each snippet it
 # writes it sets 0644 itself, for Caddy to read
@@ -60,8 +62,10 @@ RestartSec=5
 # stop cuts off mid-step is removed by the sweep at the next start
 KillSignal=SIGTERM
 TimeoutStopSec=10
-# the open-file limit the daemon's units set: a descriptor for each open
-# connection, and a docker call's pipes while it runs
+# the open-file limit the daemon's units set: the sixteen connection
+# threads' sockets, the pipes of a docker call while one runs — four posts'
+# looks at once, the workers' steps, the sender's mailer — some sixty
+# descriptors at most, the rest headroom
 LimitNOFILE=1024
 # the serving line on stdout and the log on stderr carry no time of their
 # own; the journal adds it

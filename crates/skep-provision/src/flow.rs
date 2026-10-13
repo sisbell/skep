@@ -130,7 +130,7 @@ use crate::health::{self, Waited, HEALTH_WAIT};
 use crate::invite_code::InviteCode;
 use crate::invites;
 use crate::name::Name;
-use crate::names::{self, PostState, StatusMap};
+use crate::names;
 use crate::pages::{self, Desk, Post, Refusal, Shown, SignUpRefusal};
 use crate::process::Exit;
 use crate::record::{self, Record, RecordRefused};
@@ -140,6 +140,8 @@ use crate::sidecar::{self, Answer, Failure};
 use crate::signups::{SignUpRefused, SignUps};
 use crate::statedir::StateDir;
 use crate::wait::Wait;
+
+use status_map::{PostState, StatusMap};
 
 /// THE QUEUE's DEPTH: four posts WAITING for a worker, the ones the workers
 /// run apart (the provisioning record §5.2's figure); a fifth meets D-8,
@@ -362,7 +364,8 @@ pub struct Service {
 impl Service {
     /// The service over its configuration, its state directory, its runner
     /// and its outbox — `None` where no mail is configured — the status map
-    /// REBUILT from the snippet directory.
+    /// REBUILT from the snippet directory: the one error, a snippet directory
+    /// that cannot be read, which `serve` names and refuses to start on.
     pub fn new(config: Config, state_dir: StateDir, docker: Box<dyn Docker>, outbox: Option<Outbox>, log: Log, sleep: Sleep) -> io::Result<Service> {
         let map = StatusMap::rebuild(&config.boards_dir)?;
         let signups = SignUps::new(&state_dir);
@@ -570,8 +573,8 @@ impl Service {
         self.done(name, "run_serving", docker.run_serving(name))?;
         match health::wait(docker, name, HEALTH_WAIT, self.sleep.as_ref()) {
             Ok(Waited::Paired { at }) => self.log(&format!("{name}: health: the pair answered at try {at} of {}", HEALTH_WAIT.tries)),
-            Ok(Waited::GaveUp { tries, last_code }) => {
-                self.log(&format!("{name}: health: no pair after {tries} tries (the last exit {})", last_code.map_or_else(|| "signal".to_owned(), |c| c.to_string())));
+            Ok(Waited::GaveUp { last }) => {
+                self.log(&format!("{name}: health: no pair after {} tries (the last exit {})", HEALTH_WAIT.tries, last.said()));
                 return Err("the /health wait");
             }
             Err(e) => {
@@ -898,6 +901,10 @@ impl Desk for Service {
         })
     }
 }
+
+// The book's status map: this process's posts by token, and the names
+// routed at start.
+mod status_map;
 
 #[cfg(test)]
 mod tests;

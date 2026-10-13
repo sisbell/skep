@@ -1625,7 +1625,8 @@ each naming only those above it:
   and one named method per call provided over it, the listing of the
   labelled volumes among them; `Call`, one call as data, whole, the dark
   claim's admitted record carried with it, and `Call::argv`, every call's
-  argv as a pure function, the volume's creation carrying the label;
+  argv as a pure function, both runs of the image opening with one
+  hardened prefix, the volume's creation carrying the label;
   `HostDocker`, the host's `docker`, its `Command` built from that argv
   and run by `process::run`; and under `test-hooks` `docker/fake.rs`, the
   scripted fake, its order strict per name and free across names.
@@ -1636,9 +1637,8 @@ each naming only those above it:
   `whole` at `0644`, whether it stands, the reload, and the routed
   names, read off the snippet directory.
 - `names.rs` the truth about names — the snippet, the volume, the
-  container — the status token, the status map, rebuilt at start from
-  the snippets, and the labelled volumes sorted against the snippets into
-  half-made, routed and unnamed.
+  container — the status token, and the labelled volumes sorted against
+  the snippets into half-made, routed and unnamed.
 - `statedir.rs` the state directory's door, and a lock file in it held at
   `0600`; the state files' one writer, `whole`'s replacement at `0600`;
   and the date the two files' lines carry.
@@ -1661,8 +1661,9 @@ each naming only those above it:
 - `reply.rs` the live reply, one function for the page and the mail.
 - `flow.rs` the `Service` — the `Desk` the pages ask: a sign-up kept, a
   post admitted, a status read; the `Book` of what is in flight, keeping
-  its own rules: the queue, the status map and the held codes, what blocks
-  a new post, what admitting, taking, going live and failing do; the name
+  its own rules: the queue, its status map (`flow/status_map.rs`) —
+  rebuilt at start from the snippets — and the held codes, what blocks a
+  new post, what admitting, taking, going live and failing do; the name
   as the unit of exclusion, the workers' steps, the route lock, the
   cleanup table and the truth asked what stands after it, the sweep at
   start, and the live reply's inputs gathered in one place for the status
@@ -1728,8 +1729,9 @@ Rules that hold across its files:
   while it runs.
 - **The argv is the documents'.** Every `docker` call's argv is a pure
   function the unit suite pins token by token, and reads back from
-  `scripts/docker-smoke.sh` and `README.md` where those spell the line;
-  the real runner builds its `Command` from that argv and nothing else.
+  `scripts/docker-smoke.sh` and `README.md` where those spell the line,
+  and from the `Dockerfile` the port and the volume the image bakes; the
+  real runner builds its `Command` from that argv and nothing else.
   The runner and the fake write one method, `run`, and share every named
   call over it, so each suite that drives the fake drives the mapping the
   host runs.

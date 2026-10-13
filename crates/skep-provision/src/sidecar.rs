@@ -12,7 +12,7 @@
 //! 1. `claimant 1.0.1` — the account that claimed the board;
 //! 2. `account 1.0.1` and 3. `principal 1` — two of the three facts;
 //! 4. `origin http://127.0.0.1:8642` — THE DIALED ORIGIN, the claim run's
-//!    loopback the sidecar was told to dial ([`DIALED_ORIGIN`]): asserted
+//!    loopback the sidecar was told to dial ([`dialed_origin`]): asserted
 //!    here and shown nowhere — the reply relays the public origin
 //!    (AUTH-4.57 (b));
 //! 5. `first act: …` and 6. `second act: …` — checked by their prefixes
@@ -21,7 +21,7 @@
 //!    composes both again with the public origin (`reply`).
 //!
 //! EXACTLY those six lines, each value the one this program expects of a
-//! fresh alpha board ([`ACCOUNT`], [`PRINCIPAL`], [`DIALED_ORIGIN`]), are
+//! fresh alpha board ([`ACCOUNT`], [`PRINCIPAL`], [`dialed_origin`]), are
 //! [`Answer::Claimed`]; the ONE line `claimed by <claimant>` is
 //! [`Answer::AlreadyClaimed`] — the walk's idempotent answer, which on a
 //! volume the flow just made is residue and a failed step; any other shape
@@ -32,7 +32,7 @@
 
 use std::fmt;
 
-use crate::docker::DIALED_ORIGIN;
+use crate::docker::dialed_origin;
 use crate::process::Exit;
 
 /// The account the dark claim founds on a fresh board — the alpha's
@@ -51,7 +51,7 @@ pub struct Claimed {
     pub account: String,
     /// Line 3's value: its principal.
     pub principal: String,
-    /// Line 4's value: THE DIALED ORIGIN, held to [`DIALED_ORIGIN`] — the one
+    /// Line 4's value: THE DIALED ORIGIN, held to [`dialed_origin`] — the one
     /// the sidecar was told to dial — and shown nowhere.
     origin: String,
     /// Line 5, whole.
@@ -137,8 +137,9 @@ pub fn read(exit: &Exit) -> Result<Answer, Failure> {
             if principal != PRINCIPAL.to_string() {
                 return Err(Failure::Shape(format!("line 3 names another principal than {PRINCIPAL}")));
             }
-            if origin != DIALED_ORIGIN {
-                return Err(Failure::Shape(format!("line 4 names another origin than the one dialed, {DIALED_ORIGIN}")));
+            let dialed = dialed_origin();
+            if origin != dialed {
+                return Err(Failure::Shape(format!("line 4 names another origin than the one dialed, {dialed}")));
             }
             if !l5.starts_with("first act: ") {
                 return Err(Failure::Shape("line 5 is not the first act".to_owned()));

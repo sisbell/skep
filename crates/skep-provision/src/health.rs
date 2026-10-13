@@ -23,7 +23,8 @@
 //!
 //! THE WAIT ([`wait`]): the reads made over a [`Wait`] — [`HEALTH_WAIT`],
 //! the smoke's sixty seconds — a non-zero exit of the sidecar counted as
-//! "not yet"; it answers at the first pair and gives up after the bound.
+//! "not yet"; it answers at the first pair, and gives up after the bound
+//! with what the last try answered.
 
 use std::io;
 use std::num::NonZeroU32;
@@ -33,6 +34,7 @@ use serde_json::Value;
 
 use crate::docker::Docker;
 use crate::name::Name;
+use crate::process::Exit;
 use crate::wait::Wait;
 
 /// THE `/health` WAIT's BOUND: sixty tries a second apart, the smoke's own
@@ -52,36 +54,38 @@ fn paired(body: &[u8]) -> bool {
 }
 
 /// How a wait ended.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Waited {
     /// The pair answered, at this try (counted from 1).
     Paired {
         /// The try that answered.
         at: u32,
     },
-    /// The bound passed with no pair; the last try's exit code.
+    /// The bound passed with no pair: what the last try answered.
     GaveUp {
-        /// The tries made — the bound.
-        tries: u32,
-        /// The last try's exit code, `None` for an end by signal.
-        last_code: Option<i32>,
+        /// The last try's answer, its exit spelled for the log by
+        /// [`Exit::said`].
+        last: Exit,
     },
 }
 
 /// THE WAIT FOR THE PAIR: `name`'s `/health` read over `wait`'s tries,
 /// paced by `sleep` ([`Wait::paced`]); an exit other than 0, or a body
-/// without the pair, is "not yet". A `docker` that cannot be run at all is
-/// the error, at once — no try can answer.
+/// without the pair, is "not yet". Given up, it answers what the last try
+/// answered. A `docker` that cannot be run at all is the error, at once —
+/// no try can answer.
 pub fn wait(docker: &dyn Docker, name: &Name, wait: Wait, sleep: &dyn Fn(Duration)) -> io::Result<Waited> {
-    let mut last_code = None;
+    let mut last = None;
     for at in wait.paced(sleep) {
         let exit = docker.health(name)?;
         if exit.ok() && paired(&exit.stdout) {
             return Ok(Waited::Paired { at });
         }
-        last_code = exit.code;
+        last = Some(exit);
     }
-    Ok(Waited::GaveUp { tries: wait.tries.get(), last_code })
+    // `Wait::tries` is one or more, so a wait that gives up has made a try,
+    // and kept what it answered.
+    Ok(Waited::GaveUp { last: last.expect("a wait of one try or more has made a try") })
 }
 
 #[cfg(test)]

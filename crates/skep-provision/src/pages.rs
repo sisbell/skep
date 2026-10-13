@@ -332,7 +332,7 @@ fn connection_within(mut stream: TcpStream, site: &Site, desk: &dyn Desk, deadli
 fn refused_answer(refused: &Refused, site: &Site) -> Answer {
     match refused {
         Refused::TooLarge { .. } => Answer { status: 413, body: page(site, None, &paragraph(&site.fill(TOO_LARGE))) },
-        Refused::Malformed(_) => Answer { status: 400, body: page(site, None, &paragraph(&site.fill(BAD_FORM))) },
+        Refused::Malformed(_) => bad_form(site),
     }
 }
 
@@ -390,6 +390,9 @@ fn not_found(site: &Site) -> Answer {
     Answer { status: 404, body: page(site, None, &paragraph(&site.fill(NOT_FOUND))) }
 }
 
+/// A request the HTTP subset refuses, or a body the form decoder refuses:
+/// 400, one page for both — the strings table's one row for them,
+/// [`BAD_FORM`].
 fn bad_form(site: &Site) -> Answer {
     Answer { status: 400, body: page(site, None, &paragraph(&site.fill(BAD_FORM))) }
 }

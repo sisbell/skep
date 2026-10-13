@@ -16,8 +16,9 @@
 //! finding nothing standing; a snippet whose write failed after its rename,
 //! removed by the cleanup; step 3's second look, a name taken since its post
 //! failing before anything is made; a step or a cleanup that panics, costing
-//! its post alone and never the worker; and the dark claim's retry, thirty
-//! tries two seconds apart, its last exit 4 past them the step's failure.
+//! its post alone and never the worker; the dark claim's retry, thirty tries
+//! two seconds apart, its last exit 4 past them the step's failure; and the
+//! `/health` wait given up, logged by its bound and its last try's exit.
 //! Beside them, T12's flow half: no send before live, an outage with the
 //! status live throughout, and no mail where none is configured.
 
@@ -518,6 +519,29 @@ fn the_dark_claim_retries_exit_4_two_seconds_apart_thirty_times() {
     assert_eq!(past.log().iter().filter(|l| *l == "alice: sidecar_claim: exit 4 (transport)").count(), 1, "{:?}", past.log());
     assert!(past.logged("alice: FAILED at the dark claim"), "{:?}", past.log());
     past.fake.assert_done();
+}
+
+/// THE `/health` WAIT GIVEN UP: the bound's tries with no pair, the last a
+/// failed run, fail the step — logged once with the bound and the last
+/// try's exit, as the runner spells an exit.
+#[test]
+fn a_health_wait_given_up_is_logged_with_its_bound_and_its_last_exit() {
+    let tries = HEALTH_WAIT.tries.get() as usize;
+    let script = inspects("alice")
+        + &inspects("alice")
+        + &to_the_serving_run()
+        + &line("run_serving", Some("alice"), 0, "", "")
+        + &line("health", Some("alice"), 0, UNPAIRED, "").repeat(tries - 1)
+        + &line("health", Some("alice"), 4, "", "the board did not answer\n")
+        + &run_and_volume_removed()
+        + &inspects("alice");
+    let rig = rig(&script, None);
+    let token = rig.admitted("alice", &rig.invite());
+    assert!(rig.service.run_next());
+    assert_eq!(rig.service.status(&token), Some(Shown::Failed));
+    assert_eq!(rig.log().iter().filter(|l| *l == "alice: health: no pair after 60 tries (the last exit 4)").count(), 1, "{:?}", rig.log());
+    assert!(rig.logged("alice: FAILED at the /health wait"), "{:?}", rig.log());
+    rig.fake.assert_done();
 }
 
 /// STEP 3's SECOND LOOK: a name taken since its post — its snippet written,

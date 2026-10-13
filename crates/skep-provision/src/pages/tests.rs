@@ -218,11 +218,13 @@ fn every_other_request_is_404_and_a_bad_body_400() {
     assert!(unfilled.body.contains("id=\"invite\" name=\"invite\" required autocomplete=\"off\" spellcheck=\"false\" value=\"\""), "{}", unfilled.body);
 }
 
-/// The subset's refusals: past the cap 413, anything else 400.
+/// The subset's refusals: past the cap 413, anything else 400 — the very
+/// answer a body the form decoder refuses gets, one page for both.
 #[test]
 fn the_subsets_refusals_are_413_and_400() {
     assert_eq!(refused_answer(&Refused::TooLarge { declared: MAX_BODY + 1, cap: MAX_BODY }, &site()).status, 413);
     assert_eq!(refused_answer(&Refused::Malformed("x".into()), &site()).status, 400);
+    assert_eq!(refused_answer(&Refused::Malformed("x".into()), &site()), bad_form(&site()), "the subset's refusal and the decoder's are one answer");
     assert_eq!(MAX_BODY, 397_312, "a record at its cap, every byte percent-encoded, and 4 KiB");
 }
 

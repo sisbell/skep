@@ -119,7 +119,7 @@ mod health;
 // from.
 mod caddy;
 // The truth about names, the labelled volumes sorted for the sweep, the
-// status token, the status map.
+// status token.
 mod names;
 // The state directory: its door, its one writer, and the date its two
 // files' lines carry.
@@ -139,8 +139,8 @@ mod sender;
 // The live reply, for the page and the mail alike.
 mod reply;
 // The desk the pages ask — a sign-up kept, a post admitted, a status read —
-// the workers, the book of what is in flight, the name as the unit of
-// exclusion, the steps, the cleanup, the sweep at start.
+// the workers, the book of what is in flight and its status map, the name as
+// the unit of exclusion, the steps, the cleanup, the sweep at start.
 mod flow;
 // The verbs and the flags, every default a named constant.
 mod args;

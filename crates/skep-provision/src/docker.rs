@@ -22,7 +22,10 @@
 //!   WORD with the public origin in the smoke's local one's place, the
 //!   deployment notes' serving run (§4 step 5), the sidecar's run (the
 //!   smoke's, the record on stdin in place of a mount) — so drift from them
-//!   is a red test.
+//!   is a red test. The two runs of the image open with one hardened prefix
+//!   ([`image_run`]), and what the image bakes — the port its daemon listens
+//!   on, the volume a board lives on — the suite reads back from the
+//!   `Dockerfile`.
 //! * [`HostDocker`] — the one real implementation: `docker` from `PATH`
 //!   through `std::process::Command` built from that argv and nothing else
 //!   ([`command`]), run by `process::run` — stdout and stderr captured
@@ -72,21 +75,31 @@ use crate::record::Record;
 /// The program every call runs: the host's `docker`, found on `PATH`.
 const DOCKER: &str = "docker";
 
-/// THE DIALED ORIGIN: the board the sidecar dials, the claim run's daemon on
-/// ITS loopback at the image's baked port — reachable from inside the claim
+/// THE CLAIM RUN's BIND: its daemon's loopback (`SKEPD_BIND`, over the
+/// image's baked `0.0.0.0`), so that only a process in its own network
+/// namespace — the sidecar, which joins it — reaches the unclaimed board
+/// (AUTH-4.57 (a), (f)); the host [`dialed_origin`] dials.
+const CLAIM_BIND: &str = "127.0.0.1";
+
+/// The port the image's daemon listens on — the baked `SKEPD_PORT`, the
+/// `Dockerfile`'s, which the unit suite reads back: the claim run's, which
+/// the sidecar dials ([`dialed_origin`]), and the serving run's, reached at
+/// `<name>:8642` on the bridge.
+pub const BOARD_PORT: u16 = 8642;
+
+/// THE DIALED ORIGIN: the board the sidecar dials, the claim run's daemon
+/// at [`CLAIM_BIND`] on [`BOARD_PORT`] — reachable from inside the claim
 /// run's network namespace alone, which the sidecar joins (AUTH-4.57 (a),
 /// (f)). The sidecar's DATA line 4 names it back (`origin …`); this program
 /// asserts it there and shows it nowhere — a person is shown the public
 /// origin, [`Name::origin`] (AUTH-4.57 (b)).
-pub const DIALED_ORIGIN: &str = "http://127.0.0.1:8642";
+pub fn dialed_origin() -> String {
+    format!("http://{CLAIM_BIND}:{BOARD_PORT}")
+}
 
-/// The port the image's daemon listens on (the baked `SKEPD_PORT`); the
-/// serving run is reached at `<name>:8642` on the bridge.
-pub const BOARD_PORT: u16 = 8642;
-
-/// Where a board's volume is mounted: the image's `VOLUME`, whose
-/// `board/` the daemon creates one level below (the baked
-/// `SKEPD_DATA_DIR`).
+/// Where a board's volume is mounted: the image's `VOLUME` — the
+/// `Dockerfile`'s, which the unit suite reads back — whose `board/` the
+/// daemon creates one level below (the baked `SKEPD_DATA_DIR`).
 const VOLUME_MOUNT: &str = "/var/lib/skepd";
 
 /// The Caddyfile the reload names, inside Caddy's container (the
@@ -107,6 +120,32 @@ const LABEL_VALUE: &str = "1";
 /// The label as both calls spell it: `<key>=<value>`.
 fn label() -> String {
     format!("{LABEL_KEY}={LABEL_VALUE}")
+}
+
+/// A RUN OF THE HOSTED IMAGE under `name`: detached, with an init, and
+/// hardened as every run of the image is — a read-only root, no
+/// capabilities, no new privileges, 1,024 descriptors, the words the
+/// deployment notes open both runs with (§4 steps 3 and 5) — then `own`,
+/// the run's own words, and the image last. One spelling, so a run hardened
+/// further is every run hardened further.
+fn image_run(name: &Name, own: Vec<String>, settings: &Settings) -> Vec<String> {
+    let mut argv: Vec<String> = vec![
+        "run".into(),
+        "-d".into(),
+        "--init".into(),
+        "--name".into(),
+        name.to_string(),
+        "--read-only".into(),
+        "--cap-drop".into(),
+        "ALL".into(),
+        "--security-opt".into(),
+        "no-new-privileges".into(),
+        "--ulimit".into(),
+        "nofile=1024:1024".into(),
+    ];
+    argv.extend(own);
+    argv.push(settings.image.clone());
+    argv
 }
 
 /// The run configuration every argv is built from: the operator's flags,
@@ -268,31 +307,16 @@ impl Call<'_> {
             Call::ContainerInspect(name) => vec!["container".into(), "inspect".into(), name.to_string()],
             // THE CLAIM RUN — the smoke's line word for word
             // (`scripts/docker-smoke.sh`, the claim run): loopback-bound by
-            // `SKEPD_BIND=127.0.0.1`, no port published, so only a process in
-            // its own namespace reaches the unclaimed board (AUTH-4.57 (a),
-            // (f)); the public origin configured, never a loopback one
-            // (AUTH-4.57 (b)); the fresh volume at the image's mount.
-            Call::RunClaim(name) => vec![
-                "run".into(),
-                "-d".into(),
-                "--init".into(),
-                "--name".into(),
-                name.to_string(),
-                "--read-only".into(),
-                "--cap-drop".into(),
-                "ALL".into(),
-                "--security-opt".into(),
-                "no-new-privileges".into(),
-                "--ulimit".into(),
-                "nofile=1024:1024".into(),
-                "-e".into(),
-                "SKEPD_BIND=127.0.0.1".into(),
-                "-e".into(),
-                format!("SKEPD_ORIGIN={}", name.origin(&settings.suffix)),
-                "-v".into(),
-                format!("{name}:{VOLUME_MOUNT}"),
-                settings.image.clone(),
-            ],
+            // `SKEPD_BIND` at `CLAIM_BIND`, no port published, so only a
+            // process in its own namespace reaches the unclaimed board
+            // (AUTH-4.57 (a), (f)); the public origin configured, never a
+            // loopback one (AUTH-4.57 (b)); the fresh volume at the image's
+            // mount.
+            Call::RunClaim(name) => image_run(
+                name,
+                vec!["-e".into(), format!("SKEPD_BIND={CLAIM_BIND}"), "-e".into(), format!("SKEPD_ORIGIN={}", name.origin(&settings.suffix)), "-v".into(), format!("{name}:{VOLUME_MOUNT}")],
+                settings,
+            ),
             // THE SIDECAR — the smoke's run with the record on stdin (`-i`,
             // `--hosted -`) in place of a mounted file: no host path, no
             // file mode for its user to read (the provisioning record §2.2).
@@ -306,7 +330,7 @@ impl Call<'_> {
                 "skep".into(),
                 "claim".into(),
                 "--board".into(),
-                DIALED_ORIGIN.into(),
+                dialed_origin(),
                 "--hosted".into(),
                 "-".into(),
             ],
@@ -316,35 +340,26 @@ impl Call<'_> {
             // baked `SKEPD_BIND=0.0.0.0`, the bridge Caddy shares, the same
             // volume, the public origin, the route's label; the rotation
             // the operator's to size.
-            Call::RunServing(name) => vec![
-                "run".into(),
-                "-d".into(),
-                "--init".into(),
-                "--name".into(),
-                name.to_string(),
-                "--read-only".into(),
-                "--cap-drop".into(),
-                "ALL".into(),
-                "--security-opt".into(),
-                "no-new-privileges".into(),
-                "--ulimit".into(),
-                "nofile=1024:1024".into(),
-                "--restart".into(),
-                "on-failure".into(),
-                "--log-opt".into(),
-                format!("max-size={}", settings.log_max_size),
-                "--log-opt".into(),
-                format!("max-file={}", settings.log_max_file),
-                "--network".into(),
-                settings.network.clone(),
-                "-v".into(),
-                format!("{name}:{VOLUME_MOUNT}"),
-                "-e".into(),
-                format!("SKEPD_ORIGIN={}", name.origin(&settings.suffix)),
-                "--label".into(),
-                format!("host={}", name.host(&settings.suffix)),
-                settings.image.clone(),
-            ],
+            Call::RunServing(name) => image_run(
+                name,
+                vec![
+                    "--restart".into(),
+                    "on-failure".into(),
+                    "--log-opt".into(),
+                    format!("max-size={}", settings.log_max_size),
+                    "--log-opt".into(),
+                    format!("max-file={}", settings.log_max_file),
+                    "--network".into(),
+                    settings.network.clone(),
+                    "-v".into(),
+                    format!("{name}:{VOLUME_MOUNT}"),
+                    "-e".into(),
+                    format!("SKEPD_ORIGIN={}", name.origin(&settings.suffix)),
+                    "--label".into(),
+                    format!("host={}", name.host(&settings.suffix)),
+                ],
+                settings,
+            ),
             Call::VolumeRm(name) => vec!["volume".into(), "rm".into(), name.to_string()],
             // THE `/health` READ — the sidecar's `skep health` on the bridge,
             // where the serving run's name resolves; its stdout is the body

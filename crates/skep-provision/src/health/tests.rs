@@ -3,8 +3,9 @@
 //! local trust and a body that is not JSON do not; an eighth member changes
 //! nothing; the wait answers at the first pair — a failed run's stdout never
 //! one, whatever it carries — and gives up after its bound of one or more
-//! tries, the fake called exactly the bound's times; and a `docker` that
-//! cannot be run at all ends the wait at once, the error.
+//! tries, the fake called exactly the bound's times and the last try's
+//! answer kept; and a `docker` that cannot be run at all ends the wait at
+//! once, the error.
 
 use std::cell::Cell;
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -12,7 +13,6 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use super::*;
 use crate::docker::fake::{line, FakeDocker};
 use crate::docker::Call;
-use crate::process::Exit;
 
 /// THE BODY a claimed alpha board answers: the daemon's members, keys
 /// sorted (`get_health` and `auth_object` in `skepd`).
@@ -59,12 +59,14 @@ fn the_wait_answers_at_the_first_pair() {
 }
 
 /// T6: THE WAIT GIVES UP AFTER ITS BOUND, the fake called exactly the
-/// bound's times and slept between — a small bound, and the service's own.
+/// bound's times and slept between, the answer kept the last try's — every
+/// try but the last an unclaimed body, the last a failed run — a small
+/// bound, and the service's own.
 #[test]
 fn the_wait_gives_up_after_its_bound() {
     for bound in [Wait { tries: tries(3), interval: Duration::from_millis(5) }, HEALTH_WAIT] {
         let unclaimed = PAIRED.replace(r#""claimant":"1.0.1""#, r#""claimant":null"#);
-        let script: String = (0..bound.tries.get()).map(|_| line("health", Some("alice"), 0, &unclaimed, "")).collect();
+        let script = (1..bound.tries.get()).map(|_| line("health", Some("alice"), 0, &unclaimed, "")).collect::<String>() + &line("health", Some("alice"), 4, "", "the board did not answer\n");
         let fake = FakeDocker::parse(&script).expect("a script");
         let sleeps = Cell::new(0);
         let waited = wait(&fake, &alice(), bound, &|d| {
@@ -72,7 +74,7 @@ fn the_wait_gives_up_after_its_bound() {
             sleeps.set(sleeps.get() + 1)
         })
         .expect("docker ran");
-        assert_eq!(waited, Waited::GaveUp { tries: bound.tries.get(), last_code: Some(0) });
+        assert_eq!(waited, Waited::GaveUp { last: Exit { code: Some(4), stdout: Vec::new(), stderr: b"the board did not answer\n".to_vec() } });
         assert_eq!(fake.calls().len(), bound.tries.get() as usize, "the fake's call count is the bound");
         assert_eq!(sleeps.get(), bound.tries.get() - 1);
         fake.assert_done();

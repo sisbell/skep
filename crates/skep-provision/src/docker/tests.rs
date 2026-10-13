@@ -4,8 +4,9 @@
 //! too), the deployment notes' serving run, the sidecar's run with `-i` and
 //! `--hosted -`, the `skep health` run, the reload, the two inspects, the
 //! two removals, the labelled volume and the listing by its label (T19);
-//! the real `Command` built from that argv and nothing else; the real
-//! runner, over a recording script in `docker`'s place — no Docker is run —
+//! the image's port and its volume read back from the `Dockerfile`; the
+//! real `Command` built from that argv and nothing else; the real runner,
+//! over a recording script in `docker`'s place — no Docker is run —
 //! passing the argv, the record on stdin, a null stdin otherwise, and the
 //! two streams apart; each named method running its own call through the
 //! one method a runner writes; and the fake refusing a call it was not
@@ -230,6 +231,19 @@ fn the_serving_run_carries_the_readmes_serving_flags() {
     for switch in ["-d", "--init", "--read-only"] {
         assert!(serving.contains(&switch.to_owned()), "{switch}");
     }
+}
+
+/// THE IMAGE's BAKED FACTS ARE THE DOCKERFILE's: the port its daemon
+/// listens on — the claim run's, which the sidecar dials, and the serving
+/// run's on the bridge — and the volume a board's data lives on, read back
+/// from the `Dockerfile` at test time, so a change there is a red test here
+/// until the constants follow it.
+#[test]
+fn the_images_port_and_volume_are_the_dockerfiles() {
+    let dockerfile = std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../Dockerfile")).expect("the Dockerfile");
+    let words: Vec<&str> = dockerfile.split_whitespace().collect();
+    assert!(words.contains(&format!("SKEPD_PORT={BOARD_PORT}").as_str()), "the Dockerfile bakes another port than {BOARD_PORT}");
+    assert!(words.windows(2).any(|w| w == ["VOLUME", VOLUME_MOUNT]), "the Dockerfile's volume is not {VOLUME_MOUNT}");
 }
 
 /// T4: THE REAL COMMAND is `docker` and the argv, nothing else: no variable

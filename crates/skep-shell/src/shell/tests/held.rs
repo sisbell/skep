@@ -239,8 +239,12 @@ fn a_signed_sessions_landed_burst_is_kept_by_the_resend() {
 /// T10: a REFUSED run — `out_of_bounds` (a `permanent` refusal) on a burst, two
 /// bursts behind it on the same document held `behind`, the `held` event
 /// `refused`; a `resolve` on a holding line is `not_resolvable`, an unknown
-/// ordinal `no_such_held`; `resolve(drop)` drops the run and its two behind
-/// lines; `resolve(send)` re-faces the run where the refusal recurs.
+/// ordinal `no_such_held`; an act the row does not spell is refused
+/// `malformed_args` naming `act` — the argument checked before the line, at
+/// an ordinal of the run and at one of no line alike, the run standing whole
+/// (the mutant that reads the act after the line answers the line's
+/// refusal); `resolve(drop)` drops the run and its two behind lines;
+/// `resolve(send)` re-faces the run where the refusal recurs.
 #[test]
 fn a_refused_run_holds_behind_it_and_resolve_acts_on_it() {
     let dir = TempDir::new().unwrap();
@@ -264,6 +268,13 @@ fn a_refused_run_holds_behind_it_and_resolve_acts_on_it() {
     let behind_k = shell.call("held", &json!({"session": session})).unwrap().as_array().unwrap().iter().find(|r| r["cause"] == "behind").unwrap()["held"].as_u64().unwrap();
     assert_eq!(shell.call("resolve", &json!({"session": session, "held": behind_k, "act": "drop"})).unwrap_err().name(), "not_resolvable");
     assert_eq!(shell.call("resolve", &json!({"session": session, "held": 9999, "act": "drop"})).unwrap_err().name(), "no_such_held");
+    // An act the row does not spell is the argument it is, refused before
+    // any line is asked; the run stands whole.
+    for held in [k, 9999] {
+        let refused = shell.call("resolve", &json!({"session": session, "held": held, "act": "dropp"})).unwrap_err().to_value();
+        assert_eq!((refused["name"].as_str(), refused["what"].as_str()), (Some("malformed_args"), Some("act")), "held {held}: {refused}");
+    }
+    assert_eq!(shell.call("held", &json!({"session": session})).unwrap().as_array().unwrap().len(), 3, "an act of no name drops nothing");
     // `send` re-faces the run where the refusal recurs.
     let refused_count = || seen.lock().unwrap().iter().filter(|e| e.name == EventName::Held && e.data["state"] == "refused").count();
     let before_send = refused_count();

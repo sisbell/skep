@@ -30,7 +30,7 @@ modules, and `Shell`'s one door — `call`, which logs each call, with
 | `refusal` | `Refusal`, the one refusal shape the page renders — the board's verdict verbatim, a halt's face, the block, the unreachable board, the shell's own — each named by a constant of `Name`, the one closed list |
 | `wire` | the wire's shared facts: the board's frame cap (`MAX_FRAME_BYTES`) and a frame's compact bytes (`json_len`), the tumbler component budget, `document_address`, a document address in its one spelling, and the wire's value forms both ways (`values_of`, `delivered_values`) within the insert's value budget |
 | `attest` | `Composer`, the attest a signed session composes for every write of the checked set, every axis from the shell's own reads; the board's other budgets, each held before the work it bounds |
-| `held` | the held-burst store (§3c): one append-only file per (board, principal) beside the key store, read line by line with P38's faces, each line synced before `op` answers `held`; `HeldQueue`, a principal's queue — its memory, the file its copy — within its frames' bytes, its lines (`MAX_HELD_LINES`) and its file's re-marks |
+| `held` | the held-burst store (§3c): one append-only file per (board, principal) beside the key store, read line by line with P38's faces, each line synced before `op` answers `held`; `HeldQueue`, a principal's queue — its memory, the file its copy — a hold adding none past its frames' bytes or its lines (`MAX_HELD_LINES`), and its file's re-marks within their budget |
 | `script` | the dev arm's SCRIPT: the grammar a script file's answers are parsed by, one per line in order |
 | `dev_arm` | `DevArm`, the answerer of the SECRET and CONSENT moments (§4b.3): a script's answers in order, or the auto arm, every answer said on TALK and never sent to the page, the NATIVE statements — those naming where key material rests — said there too |
 | `person` | `BridgePerson`: the PUBLIC moments as `moment` events answered through `Pending` in their kind's form, the SECRET and CONSENT ones, and the NATIVE statements (`NATIVE_RULES`), sent to the dev arm |
@@ -70,7 +70,14 @@ file is read at its session's open, and `held(session)` lists its lines.
 The paper path's question whether to destroy an anchor file whose print
 passed its re-type names the file and crosses to the page: `skep-client`
 classes it PUBLIC, and a question carries no rule the shell could route it
-to its own window by, as it routes the NATIVE statements.
+to its own window by, as it routes the NATIVE statements. The faces the
+shell carries from `skep-client` name the store's location or a key, anchor
+or index file — `no_key`'s face, `store_unreadable`'s and
+`store_unwritable`'s, a walk's file halt, the index's I/O halt — and cross
+to the page as they are, `skep-client`'s to build for the bridge; and
+`store_halted` names the held file's path, as §3c.3's face has it against
+§4b.3's rule. What the shell builds itself names no path: `bind`'s warning
+carries the binding line, the bindings file said on TALK alone.
 
 No feature, no async runtime, no HTTP crate: std beside the workspace's
 crates, as `skep-client`'s rule has it. The transport is not here.

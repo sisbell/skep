@@ -17,8 +17,9 @@
 //! its file. THE DOOR: a burst the board takes at no send refused at the
 //! act and held never — past the frame cap as sent, or as a signed resend
 //! would send it, naming no document, an insert a signed session cannot
-//! attest — one the queue has no room for, by its frames' bytes or by its
-//! lines, refused `held_full`; and each
+//! attest — the read of the board's `H.1` an attest signs over halting as
+//! the composer's own refusal; one the queue has no room for, by its frames'
+//! bytes or by its lines, refused `held_full`; and each
 //! board's hold its own, a burst at one board answered while another
 //! board's hold is held, dialed and kept at the board its session stands at.
 
@@ -102,9 +103,7 @@ fn a_hold_takes_the_last_acked_write_or_the_sessions_open_as_its_base() {
 /// none; `drop` on the refused head drops it AND every line held `behind`
 /// it on that document (the mutant that leaves them standing), the `held`
 /// event naming the session that acted; `resolve` on a holding line answers
-/// `not_resolvable`, as an act of no name does on the run, which stands
-/// whole (the mutant whose last arm drops it); an unknown ordinal answers
-/// `no_such_held`.
+/// `not_resolvable`; an unknown ordinal answers `no_such_held`.
 #[test]
 fn a_refused_run_drops_its_behind_lines() {
     let g = ground();
@@ -123,14 +122,11 @@ fn a_refused_run_drops_its_behind_lines() {
     assert_eq!(lines[0]["refusal"], verdict, "the refused run's line carries the board's verdict");
     assert!(lines[1..].iter().all(|l| l.get("refusal").is_none()), "a line behind the run carries no refusal: {lines:?}");
     // A holding line is not resolvable; an unknown ordinal is no_such_held.
-    assert_eq!(g.holds.resolve(&g.session, k2, "drop").unwrap_err().name(), "not_resolvable");
-    assert_eq!(g.holds.resolve(&g.session, 999, "drop").unwrap_err().name(), "no_such_held");
-    // An act of no name is no act: the run stands whole.
-    assert_eq!(g.holds.resolve(&g.session, k1, "dropp").unwrap_err().name(), "not_resolvable");
-    assert_eq!(g.lines().len(), 3, "an act of no name drops nothing");
+    assert_eq!(g.holds.resolve(&g.session, k2, ResolveAct::Drop).unwrap_err().name(), "not_resolvable");
+    assert_eq!(g.holds.resolve(&g.session, 999, ResolveAct::Drop).unwrap_err().name(), "no_such_held");
     // Drop the refused head: the whole run goes.
     let _ = g.rx.try_iter().count();
-    assert_eq!(g.holds.resolve(&g.session, k1, "drop").unwrap(), Resolved::Dropped);
+    assert_eq!(g.holds.resolve(&g.session, k1, ResolveAct::Drop).unwrap(), Resolved::Dropped);
     assert!(g.lines().is_empty(), "the run and its behind lines are dropped");
     assert_eq!(g.fake.sends(), 0, "nothing is dialed on a drop");
     let said: Vec<Event> = g.rx.try_iter().filter(|e| e.name == EventName::Held).collect();
@@ -154,14 +150,14 @@ fn a_drop_says_the_state_of_the_line_that_stands_first() {
     g.holds.probe("b-1");
     assert!(g.lines().iter().all(|l| l["cause"] == "moved"), "the read faces every line moved: {:?}", g.lines());
     let _ = g.rx.try_iter().count();
-    assert_eq!(g.holds.resolve(&g.session, ks[1], "drop").unwrap(), Resolved::Dropped);
+    assert_eq!(g.holds.resolve(&g.session, ks[1], ResolveAct::Drop).unwrap(), Resolved::Dropped);
     let said: Vec<Event> = g.rx.try_iter().filter(|e| e.name == EventName::Held).collect();
     assert_eq!(said.len(), 1, "{said:?}");
     assert_held_event_declared(&said[0].data);
     assert_eq!((said[0].data["state"].as_str(), said[0].data["held"].as_u64()), (Some("moved"), Some(1)), "{said:?}");
     let left: Vec<u64> = g.lines().iter().map(|l| l["held"].as_u64().unwrap()).collect();
     assert_eq!(left, [ks[0]], "the dropped line and the one after it are gone");
-    assert_eq!(g.holds.resolve(&g.session, ks[0], "drop").unwrap(), Resolved::Dropped);
+    assert_eq!(g.holds.resolve(&g.session, ks[0], ResolveAct::Drop).unwrap(), Resolved::Dropped);
     let said: Vec<Event> = g.rx.try_iter().filter(|e| e.name == EventName::Held).collect();
     assert_eq!((said[0].data["state"].as_str(), said[0].data["held"].as_u64()), (Some("kept"), Some(0)), "{said:?}");
 }
@@ -192,7 +188,7 @@ fn a_drop_drops_its_own_documents_run_and_no_other() {
     let k1 = g.holds.hold(&g.session, g.burst(&insert(DOC, json!(["a"]))), Reason::refused("out_of_bounds", verdict)).unwrap()["held"].as_u64().unwrap();
     let OpAnswer::Answered(Ok(behind)) = g.holds.send_burst(&g.session, insert(OTHER, json!(["z"]))) else { panic!("held behind the run") };
     assert_eq!(behind["cause"], "behind", "{behind}");
-    assert_eq!(g.holds.resolve(&g.session, k1, "drop").unwrap(), Resolved::Dropped);
+    assert_eq!(g.holds.resolve(&g.session, k1, ResolveAct::Drop).unwrap(), Resolved::Dropped);
     let docs: Vec<String> = g.lines().iter().map(|l| l["doc"].as_str().unwrap_or("?").to_string()).collect();
     assert_eq!(docs, [OTHER], "the run is dropped, the other document's line stands");
     g.holds.probe("b-1");
@@ -300,7 +296,7 @@ fn resolve_send_answers_once_the_lines_are_handed_back() {
     let g = ground();
     let verdict = json!({"resp": "rejected", "code": "out_of_bounds", "disposition": "permanent"});
     let k = g.holds.hold(&g.session, g.burst(&insert(DOC, json!(["a"]))), Reason::refused("out_of_bounds", verdict)).unwrap()["held"].as_u64().unwrap();
-    assert_eq!(g.holds.resolve(&g.session, k, "send").unwrap(), Resolved::HandedBack);
+    assert_eq!(g.holds.resolve(&g.session, k, ResolveAct::Send).unwrap(), Resolved::HandedBack);
     assert_eq!((g.fake.sends(), g.fake.health_reads.load(Ordering::SeqCst)), (0, 0), "nothing is dialed in the act");
     assert_eq!(g.lines()[0]["cause"], "behind", "the run's line re-marked `behind`");
     g.holds.probe("b-1");
@@ -353,7 +349,7 @@ fn a_halted_file_refuses_every_act_and_dials_nothing() {
     assert_eq!((refused.name(), refused.to_value()["why"].as_str()), ("store_halted", Some("newer")), "{refused}");
     assert_eq!(g.fake.sends(), 0, "nothing is dialed past a halted file");
     assert_eq!(g.holds.lines(&g.session).unwrap_err().name(), "store_halted");
-    assert_eq!(g.holds.resolve(&g.session, 1, "drop").unwrap_err().name(), "store_halted", "an act on a line answers the halt, never no line");
+    assert_eq!(g.holds.resolve(&g.session, 1, ResolveAct::Drop).unwrap_err().name(), "store_halted", "an act on a line answers the halt, never no line");
     let held = g.holds.hold(&g.session, g.burst(&insert(DOC, json!(["x"]))), Reason::of("unreachable", false));
     assert_eq!(held.unwrap_err().name(), "store_halted", "no line is held");
     assert_eq!(std::fs::read_to_string(&file).unwrap(), newer, "the halted file is never rebuilt over");
@@ -509,6 +505,24 @@ fn a_signed_sessions_burst_keeps_room_for_its_attest() {
     let OpAnswer::Answered(Err(refused)) = g.holds.send_burst(&g.session, insert(DOC, json!([7]))) else { panic!("refused at the door") };
     assert_eq!(refused.name(), "attest_not_composed", "{refused}");
     assert_eq!(g.lines().len(), 2, "the one admitted burst held, and nothing else");
+}
+
+/// A HEAD READ THAT HALTS is the composer's refusal: under a session whose
+/// key attests an insert, the read of the board's `H.1` the attest signs
+/// over answered with the death signal — no session's answer, a token-free
+/// read's halt — refuses the burst `attest_not_composed`, nothing dialed and
+/// nothing held (the mutant that converts the read's halt past the
+/// composer's own conversion answers the bare `halt`, a refusal the page
+/// cannot read as the shell's failure to sign).
+#[test]
+fn a_head_read_that_halts_is_the_composers_refusal() {
+    let fake = Fake::new();
+    fake.head_closed.store(true, Ordering::SeqCst);
+    let g = ground_over(fake, TempDir::new().unwrap(), keyed_facts(), 0);
+    let OpAnswer::Answered(Err(refused)) = g.holds.send_burst(&g.session, insert(DOC, json!(["a"]))) else { panic!("refused, nothing sent") };
+    assert_eq!(refused.name(), "attest_not_composed", "{refused}");
+    assert_eq!(g.fake.sends(), 0, "nothing dialed");
+    assert!(g.lines().is_empty() && g.states().is_empty(), "nothing held, nothing said");
 }
 
 /// THE QUEUE's BUDGET at the hold: with the principal's standing frames at

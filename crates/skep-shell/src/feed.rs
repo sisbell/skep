@@ -61,7 +61,7 @@ use std::time::Instant;
 use serde_json::{json, Value};
 use skep_client::board::{ChangesAnswer, ChangesQuery, Token};
 use skep_client::derive::Mode;
-use skep_client::search::{events, Consumer, Lost, Newer, Place, Range, SearchAnswer, SearchDir, SearchOpts, SessionRef, State, Stop, Who};
+use skep_client::search::{events, Consumer, Lost, Newer, Place, QueryTooLong, Range, SearchAnswer, SearchDir, SearchOpts, SessionRef, State, Stop, Who};
 use skep_client::{Board, Origin};
 use skep_search::{GrantKind, Hit, Kind, Mark, MarkKind, Rung, Standing};
 
@@ -230,11 +230,11 @@ impl Ticks {
     }
 }
 
-/// One board's TWO THREADS, the shell's until its stop: the `/events`
-/// stream's reader, and the feed thread, JOINED at [`FeedThreads::stop`] so
-/// its `Arc`s, the held-burst holds among them, which hold the
-/// `held/<chain>/` lock, are dropped before the stop returns; a relaunch in
-/// the same process then takes the lock the first shell held.
+/// One board's TWO THREADS: the `/events` stream's reader, asked to stop at
+/// [`FeedThreads::stop`] and ending at its next read, and the feed thread,
+/// JOINED there so its `Arc`s, the held-burst holds among them, which hold
+/// the `held/<chain>/` lock, are dropped before the stop returns; a relaunch
+/// in the same process then takes the lock the first shell held.
 pub struct FeedThreads {
     feed: Feed,
     stream_stop: Stop,
@@ -282,10 +282,10 @@ impl FeedThreads {
         self.feed.clone()
     }
 
-    /// The stream ended and the consumer closed — the save at the shell's
-    /// exit. The feed thread is JOINED last, so every `Arc` it held (the
-    /// holds, and with them the `held/<chain>/` lock) is dropped before this
-    /// returns.
+    /// The stream's reader asked to stop — it ends at its next read — and
+    /// the consumer closed: the save at the shell's exit. The feed thread is
+    /// JOINED last, so every `Arc` it held (the holds, and with them the
+    /// `held/<chain>/` lock) is dropped before this returns.
     pub fn stop(self) {
         self.stream_stop.stop();
         let (reply, rx) = channel();
@@ -579,14 +579,16 @@ impl<'b> Feeder<'b> {
 
     /// The bridge's search over the board's index pair as `who` reads it —
     /// refreshed first where `opts` asks — or the answer where no index
-    /// stands; `query_too_long` the shell's own bound.
+    /// stands open: the call dials nothing to open one (§4b.1's `search`
+    /// row: "PURE LOCAL"), `tick` and `widen` opening the index. The query's
+    /// bound is the shell's, asked before the call reaches this thread
+    /// (`Shell::search`); the library's own check stands behind it.
     fn search(&mut self, who: Who<'_>, query: &str, opts: BridgeSearchOpts) -> Result<Value, Refusal> {
-        self.open_consumer();
         let Some(c) = &self.consumer else { return Ok(answer_without_index()) };
         if opts.reindex {
             c.reindex(who)?;
         }
-        let answer = c.search(who, query, &opts.bounds).map_err(|e| Refusal::shell(Name::QUERY_TOO_LONG, json!({"bound": e.bound, "length": e.length})))?;
+        let answer = c.search(who, query, &opts.bounds).map_err(query_too_long)?;
         let value = answer_json(&answer);
         self.emit_index();
         Ok(value)
@@ -817,11 +819,17 @@ fn answer_json(a: &SearchAnswer) -> Value {
 }
 
 /// THE ANSWER WHERE NO INDEX STANDS, in the row's whole shape: no hit, no
-/// place, the state `none` — the search of a board whose consumer could
-/// not open its index, and the guest form over an origin this shell holds
-/// no index for.
+/// place, the state `none` — the search of a board whose consumer has not
+/// opened its index, and the guest form over an origin this shell holds no
+/// index for.
 pub fn answer_without_index() -> Value {
     answer_json(&SearchAnswer { hits: Vec::new(), total: 0, truncated: false, more_terms: false, fuzzy_bounded: false, positions_bounded: false, places: Vec::new(), state: State::None })
+}
+
+/// THE QUERY's BOUND refused — the shell's own (§4b.1's `search` row): the
+/// bound and the length, never the query's text.
+pub fn query_too_long(e: QueryTooLong) -> Refusal {
+    Refusal::shell(Name::QUERY_TOO_LONG, json!({"bound": e.bound, "length": e.length}))
 }
 
 #[cfg(test)]

@@ -13,15 +13,17 @@
 //! page may ignore it — save a NATIVE one ([`NATIVE_RULES`]), a statement
 //! naming where key material rests on disk, which goes to the dev arm and
 //! never to the page. AN ANSWER's FORM is its moment's kind's
-//! ([`MomentKind::takes`]): a label box takes a string,
-//! or `null` for the box's default; a question a string; a yes-or-no a
-//! boolean — asked by [`Pending::answer`], the page's one way in, so a
-//! walk never receives a value of another form, and a value of another
-//! form leaves its moment waiting.
+//! ([`MomentKind::takes`]): a label box takes a string, or `null` where the
+//! box offers a default, which the answer then is; a question a string; a
+//! yes-or-no a boolean — asked by [`Pending::answer`], the page's one way
+//! in, so a walk never receives a value of another form, and a value of
+//! another form leaves its moment waiting. The shell's stop closes the
+//! table the answers come back through ([`Pending::cancel_all`]): a walk
+//! that asks the page after it is abandoned at once, its moment never sent.
 
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;
-use std::sync::mpsc::{channel, Sender};
+use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 
 use serde_json::{json, Value};
@@ -44,10 +46,21 @@ enum Reply {
 
 /// THE PENDING MOMENTS: each waiting walk's channel by the moment's id, with
 /// the moment's kind, so an answer is routed to the walk that asked (the dev
-/// provider record §3.3) and held to the form that kind takes.
+/// provider record §3.3) and held to the form that kind takes. The shell's
+/// stop CLOSES the table ([`Pending::cancel_all`]): from then on no moment is
+/// entered, so no walk waits on a page that will never answer.
 #[derive(Debug, Default)]
 pub struct Pending {
-    waiting: Mutex<HashMap<String, (MomentKind, Sender<Reply>)>>,
+    table: Mutex<Table>,
+}
+
+/// The moments waiting, and whether the stop has closed the table — the
+/// one lock over both, so no moment is entered after the stop has drained
+/// the table.
+#[derive(Debug, Default)]
+struct Table {
+    waiting: HashMap<String, (MomentKind, Sender<Reply>)>,
+    closed: bool,
 }
 
 impl Pending {
@@ -56,16 +69,23 @@ impl Pending {
         Pending::default()
     }
 
-    fn register(&self, id: &str, kind: MomentKind) -> std::sync::mpsc::Receiver<Reply> {
+    /// A moment entered under `id`, its answer to come on the receiver — or
+    /// `None` once the stop has closed the table: a moment asked after it is
+    /// entered nowhere.
+    fn register(&self, id: &str, kind: MomentKind) -> Option<Receiver<Reply>> {
+        let mut table = self.table.lock().expect("the pending lock");
+        if table.closed {
+            return None;
+        }
         let (tx, rx) = channel();
-        self.waiting.lock().expect("the pending lock").insert(id.to_string(), (kind, tx));
-        rx
+        table.waiting.insert(id.to_string(), (kind, tx));
+        Some(rx)
     }
 
     /// The moment `id` taken out of the table, where it waits and `admits`
     /// its kind; a moment `admits` refuses keeps waiting.
     fn take(&self, id: &str, admits: impl FnOnce(MomentKind) -> Result<(), Refusal>) -> Result<Sender<Reply>, Refusal> {
-        match self.waiting.lock().expect("the pending lock").entry(id.to_string()) {
+        match self.table.lock().expect("the pending lock").waiting.entry(id.to_string()) {
             Entry::Occupied(moment) => {
                 admits(moment.get().0)?;
                 Ok(moment.remove().1)
@@ -92,10 +112,16 @@ impl Pending {
         tx.send(Reply::Cancel).map_err(|_| no_such_moment(id))
     }
 
-    /// Every pending moment cancelled — the shell's stop.
+    /// Every pending moment cancelled and the table CLOSED — the shell's
+    /// stop: a moment asked after it is abandoned at once, never entered and
+    /// never sent to the page.
     pub fn cancel_all(&self) {
-        let all: Vec<(String, (MomentKind, Sender<Reply>))> = self.waiting.lock().expect("the pending lock").drain().collect();
-        for (_, (_, tx)) in all {
+        let all: Vec<Sender<Reply>> = {
+            let mut table = self.table.lock().expect("the pending lock");
+            table.closed = true;
+            table.waiting.drain().map(|(_, (_, tx))| tx).collect()
+        };
+        for tx in all {
             let _ = tx.send(Reply::Cancel);
         }
     }
@@ -103,16 +129,17 @@ impl Pending {
     /// The ids waiting, in no order.
     #[cfg(test)]
     pub fn ids(&self) -> Vec<String> {
-        self.waiting.lock().expect("the pending lock").keys().cloned().collect()
+        self.table.lock().expect("the pending lock").waiting.keys().cloned().collect()
     }
 }
 
 /// A PUBLIC moment's kind, as `MomentEvent.kind` spells it: a statement
-/// said, or a box or a question the page answers.
+/// said, or a box or a question the page answers — a label box beside
+/// whether it offers a default, which its form turns on.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum MomentKind {
     Statement,
-    Label,
+    Label { default: bool },
     Ask,
     YesNo,
 }
@@ -122,7 +149,7 @@ impl MomentKind {
     fn as_str(self) -> &'static str {
         match self {
             MomentKind::Statement => "statement",
-            MomentKind::Label => "label",
+            MomentKind::Label { .. } => "label",
             MomentKind::Ask => "ask",
             MomentKind::YesNo => "yes_no",
         }
@@ -134,12 +161,13 @@ impl MomentKind {
     }
 
     /// Whether `answer` is of the form this kind takes: a label box a
-    /// string, or `null` for the box's default; a question a string; a
-    /// yes-or-no a boolean. A statement takes none: no answer is owed it.
+    /// string, or `null` where the box offers a default, which the answer
+    /// then is; a question a string; a yes-or-no a boolean. A statement
+    /// takes none: no answer is owed it.
     fn takes(self, answer: &Value) -> bool {
         match self {
             MomentKind::Statement => false,
-            MomentKind::Label => answer.is_string() || answer.is_null(),
+            MomentKind::Label { default } => answer.is_string() || (default && answer.is_null()),
             MomentKind::Ask => answer.is_string(),
             MomentKind::YesNo => answer.is_boolean(),
         }
@@ -149,8 +177,8 @@ impl MomentKind {
     fn form(self) -> &'static str {
         match self {
             MomentKind::Statement => "no answer",
-            MomentKind::Label => "a string, or null for the box's default",
-            MomentKind::Ask => "a string",
+            MomentKind::Label { default: true } => "a string, or null for the box's default",
+            MomentKind::Label { default: false } | MomentKind::Ask => "a string",
             MomentKind::YesNo => "a boolean",
         }
     }
@@ -212,11 +240,21 @@ impl BridgePerson {
     }
 
     /// A PUBLIC moment forwarded: the event, then the wait for the page's
-    /// answer where its kind owes one; a cancel abandons.
+    /// answer where its kind owes one; a cancel abandons, and so does a
+    /// moment the stop's closed table enters no more — abandoned before its
+    /// event, since no page will answer it.
     fn moment(&mut self, kind: MomentKind, data: Value) -> Result<Value, Abandoned> {
         let id = moment_id();
         let answerable = kind.answerable();
-        let rx = answerable.then(|| self.pending.register(&id, kind));
+        let rx = if answerable {
+            let Some(rx) = self.pending.register(&id, kind) else {
+                self.abandoned = true;
+                return Err(Abandoned);
+            };
+            Some(rx)
+        } else {
+            None
+        };
         self.bus.emit(EventName::Moment, json!({
             "id": id,
             "kind": kind.as_str(),
@@ -252,11 +290,12 @@ impl Person for BridgePerson {
     }
 
     fn label(&mut self, m: Public<LabelBox>) -> Result<String, Abandoned> {
-        let v = self.moment(MomentKind::Label, json!({"title": m.0.title, "statements": m.0.statements, "default": m.0.default}))?;
+        let kind = MomentKind::Label { default: m.0.default.is_some() };
+        let v = self.moment(kind, json!({"title": m.0.title, "statements": m.0.statements, "default": m.0.default}))?;
         match v {
             Value::String(s) => Ok(s),
-            Value::Null => Ok(m.0.default.unwrap_or_default()),
-            other => unreachable!("Pending::answer admits a label box's string or null alone, never {other}"),
+            Value::Null => Ok(m.0.default.expect("Pending::answer admits null where the box offers a default alone")),
+            other => unreachable!("Pending::answer admits a label box's string, or null where it offers a default, never {other}"),
         }
     }
 
@@ -358,10 +397,12 @@ mod tests {
     }
 
     /// AN ANSWER's FORM is its moment's kind's: a label box answered `7`, a
-    /// question answered `null` and a yes-or-no answered `"yes"` are each
-    /// refused `malformed_args` naming `value`, the moment still waiting;
-    /// the right form then delivers — a label box's `null` its default — and
-    /// a cancel of no moment answers `no_such_moment`.
+    /// question answered `null`, a yes-or-no answered `"yes"` and a box with
+    /// no default answered `null` are each refused `malformed_args` naming
+    /// `value` and the form, the moment still waiting; the right form then
+    /// delivers — a label box's `null` its default — and a cancel of no
+    /// moment answers `no_such_moment` (the mutant that admits `null` at
+    /// every box turns a box with no default's into an empty byline).
     #[test]
     fn an_answer_of_another_form_is_refused_and_the_moment_waits() {
         let (bus, pending, arm) = fixture();
@@ -369,10 +410,11 @@ mod tests {
         let mut person = BridgePerson::new(Arc::clone(&bus), Arc::clone(&pending), arm, "claim", Some("b-1".into()));
         let page = Arc::clone(&pending);
         let answerer = thread::spawn(move || {
-            for (wrong, right) in [(json!(7), Value::Null), (Value::Null, json!("an answer")), (json!("yes"), json!(true))] {
+            let cells = [(json!(7), "a string, or null for the box's default", Value::Null), (Value::Null, "a string", json!("an answer")), (json!("yes"), "a boolean", json!(true)), (Value::Null, "a string", json!("phone"))];
+            for (wrong, takes, right) in cells {
                 let id = rx.recv().unwrap().data["id"].as_str().unwrap().to_string();
                 let refused = page.answer(&id, wrong).unwrap_err().to_value();
-                assert_eq!((refused["name"].as_str(), refused["what"].as_str()), (Some("malformed_args"), Some("value")), "{refused}");
+                assert_eq!((refused["name"].as_str(), refused["what"].as_str(), refused["takes"].as_str()), (Some("malformed_args"), Some("value"), Some(takes)), "{refused}");
                 assert_eq!(page.ids(), std::slice::from_ref(&id), "the moment still waits");
                 page.answer(&id, right).unwrap();
             }
@@ -381,6 +423,7 @@ mod tests {
         assert_eq!(label, "the default", "a label box's null is its default");
         assert_eq!(person.ask(Public(Question { text: "?".into() })).unwrap(), "an answer");
         assert!(person.yes_no(Public(Question { text: "?".into() })).unwrap());
+        assert_eq!(person.label(Public(LabelBox { title: "name".into(), statements: vec![], default: None })).unwrap(), "phone", "a box with no default takes no null");
         answerer.join().unwrap();
         assert_eq!(pending.cancel("m-gone").unwrap_err().name(), "no_such_moment");
     }
@@ -471,7 +514,7 @@ mod tests {
     /// and a statement alone owes no answer.
     #[test]
     fn the_moment_kinds_are_the_declared_four() {
-        let kinds = [MomentKind::Statement, MomentKind::Label, MomentKind::Ask, MomentKind::YesNo];
+        let kinds = [MomentKind::Statement, MomentKind::Label { default: false }, MomentKind::Ask, MomentKind::YesNo];
         let declared = crate::shapes::shape("MomentEvent").unwrap().fields.iter().find(|f| f.name == "kind").unwrap().ty;
         assert_eq!(declared.matches('\'').count(), 2 * kinds.len(), "{declared}");
         for kind in kinds {
@@ -480,9 +523,12 @@ mod tests {
         assert_eq!(kinds.map(MomentKind::answerable), [false, true, true, true]);
     }
 
-    /// `cancel_all` abandons every waiting walk.
+    /// `cancel_all` abandons every waiting walk and closes the table: a
+    /// moment asked after it is abandoned at once, entered nowhere and sent
+    /// to no page (the mutant that drains the table and leaves it open
+    /// enters the moment and sends it, for no page to answer).
     #[test]
-    fn cancel_all_abandons_every_pending_moment() {
+    fn cancel_all_abandons_every_pending_moment_and_closes_the_table() {
         let (bus, pending, arm) = fixture();
         let rx = bus.subscribe();
         let mut person = BridgePerson::new(Arc::clone(&bus), Arc::clone(&pending), arm, "claim", Some("b-1".into()));
@@ -490,9 +536,11 @@ mod tests {
         let t = thread::spawn(move || {
             let _ = rx.recv().unwrap();
             p.cancel_all();
+            rx
         });
         assert_eq!(person.ask(Public(Question { text: "q".into() })), Err(Abandoned));
-        t.join().unwrap();
-        assert!(pending.ids().is_empty());
+        let rx = t.join().unwrap();
+        assert_eq!(person.ask(Public(Question { text: "after the stop".into() })), Err(Abandoned));
+        assert!(rx.try_recv().is_err() && pending.ids().is_empty(), "a moment after the stop is entered nowhere and sent to no page");
     }
 }

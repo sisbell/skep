@@ -81,8 +81,10 @@ impl Name {
     /// The walk was abandoned: the page cancelled a moment, or the dev arm
     /// left.
     pub const ABANDONED: Name = Name("abandoned");
-    /// A label refused as empty — `keygen`'s, and `accept`'s box as a
-    /// halt's armed name.
+    /// A label refused at the box — empty, holding a line break, or past its
+    /// byte bound (AUTH-1.24's whole domain, one refusal with its `cause`;
+    /// §4b.1's `keygen` row) — `keygen`'s, and `accept`'s box as a halt's
+    /// armed name.
     pub const EMPTY_LABEL: Name = Name("empty_label");
     /// A `select` that matches more than one key of the store.
     pub const AMBIGUOUS: Name = Name("ambiguous");
@@ -100,8 +102,11 @@ impl Name {
     /// An attest asked of a session the board answered no account for.
     pub const NO_ACCOUNT: Name = Name("no_account");
     /// `held(session)`, and every act on the principal's held lines: the
-    /// HELD-BURST store's file was written by a newer skep, or its body is
-    /// damaged — the halt's face naming the path (PATTERNS P38; §3c.3).
+    /// HELD-BURST store's file was written by a newer skep, or is damaged —
+    /// P38's halt (§3c.3), its detail the file's `path` and its `why`, one of
+    /// `newer` (a newer `v`), `unknown_member` (an unknown header member, or
+    /// a header off its spelling) or `damaged` (a line not read whole, the
+    /// header's or a body line's), as `held::HaltWhy::token` spells them.
     pub const STORE_HALTED: Name = Name("store_halted");
     /// `resolve(session, …)`: no held line of that ordinal stands.
     pub const NO_SUCH_HELD: Name = Name("no_such_held");

@@ -3,7 +3,8 @@
 //! once/twice/three times, and an ack, each to exactly its row, the table the
 //! one owner of every reissue's bound; the five kinds are bursts and the
 //! eleven other `WRITE_KINDS` are not; the five held states are the declared
-//! ones. And the ground its two children stand on: a fake board (`Fake`) —
+//! ones, and the two acts of `resolve` the declared words and no other
+//! spelling. And the ground its two children stand on: a fake board (`Fake`) —
 //! its `H.1`, its `/changes` rows, a draft's text, the frames POSTed to `/op`
 //! recorded and a refusal or the death signal armed for a send — the holds
 //! over it with a session opened as the shell opens one (`Ground`), and each
@@ -120,6 +121,19 @@ fn the_held_states_are_the_declared_five() {
     assert_eq!((spelled.len(), spelled), (5, words), "{declared}");
 }
 
+/// The two acts are the declared `Resolve.act` union's words, each naming
+/// its act, and no other spelling names one (the mutant that reads a near
+/// spelling as an act drops a run the page never asked to drop).
+#[test]
+fn the_two_acts_are_the_declared_words_and_no_other() {
+    let declared = crate::shapes::shape("Resolve").unwrap().fields.iter().find(|f| f.name == "act").unwrap().ty;
+    let named: Vec<Option<ResolveAct>> = declared.split(" | ").map(|word| ResolveAct::named(word.trim_matches('\''))).collect();
+    assert_eq!(named, [Some(ResolveAct::Drop), Some(ResolveAct::Send)], "{declared}");
+    for other in ["dropp", "Drop", "", "send "] {
+        assert_eq!(ResolveAct::named(other), None, "{other:?}");
+    }
+}
+
 /// An answer armed at the fake's `/op`: given to every send, or to the
 /// next `n` alone.
 struct Armed<T>(Mutex<Option<(T, Option<usize>)>>);
@@ -161,7 +175,8 @@ impl<T: Clone> Armed<T> {
 }
 
 /// A board under test: the chain `board_term` reads — or no `H.1` at all,
-/// where one is armed missing; the `/changes` rows the read sees, each served
+/// where one is armed missing, or the death signal, where its read is armed
+/// closed; the `/changes` rows the read sees, each served
 /// only past the query's `since` and at or under its `under`, or a refusal
 /// armed in the page's place; the draft's text, of which a `retrieve_v`
 /// answers the positions it names — or no answer, the death signal, or one
@@ -174,6 +189,7 @@ impl<T: Clone> Armed<T> {
 struct Fake {
     chain: String,
     no_head: AtomicBool,
+    head_closed: AtomicBool,
     rows: Mutex<Vec<Value>>,
     changes_refused: Mutex<Option<(u16, Value)>>,
     text: Mutex<String>,
@@ -201,6 +217,7 @@ impl Fake {
         Arc::new(Fake {
             chain: chain.to_string(),
             no_head: AtomicBool::new(false),
+            head_closed: AtomicBool::new(false),
             rows: Mutex::new(Vec::new()),
             changes_refused: Mutex::new(None),
             text: Mutex::new(String::new()),
@@ -304,6 +321,9 @@ impl Dialer for Fake {
             let body: Value = serde_json::from_slice(&req.body).unwrap_or(Value::Null);
             if body["op"].as_str() == Some("retrieve_v") {
                 if body["specs"][0]["doc"].as_str() == Some(HEAD_MEMBER_1) {
+                    if self.head_closed.load(Ordering::SeqCst) {
+                        return Ok(closed());
+                    }
                     if self.no_head.load(Ordering::SeqCst) {
                         return Ok(ok(json!({"resp": "delivery", "items": []})));
                     }

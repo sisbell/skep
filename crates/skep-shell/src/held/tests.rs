@@ -11,8 +11,9 @@
 //! queue under its ordinal, a re-mark reads back as the one line it
 //! re-marks, and a `done` the device refused still settles its line. THE
 //! STORE's BUDGETS: the queue's frames held to the board's frame cap and its
-//! lines to the line budget, an unchanged re-mark writing nothing and a
-//! board flapping between two causes growing the file no further than its
+//! lines to the line budget — a reopened queue past it read whole, holding
+//! nothing more until it drains — an unchanged re-mark writing nothing and
+//! a board flapping between two causes growing the file no further than its
 //! re-mark budget, the ordinals held to the page's, the writer refusing a
 //! line its reader would halt on and copying none past the line bound, and
 //! the reader halting on any line it cannot read whole — no UTF-8, a member
@@ -493,6 +494,28 @@ fn the_queue_holds_no_line_past_its_line_budget() {
     assert_eq!(queue.lines().len(), MAX_HELD_LINES, "the queue stands at the budget");
     queue.done(1, Done::Dropped).unwrap();
     assert!(queue.hold("1.0.1.0.1", None, 0, json!({"op": "delete"}), Reason::of("behind", false)).is_ok(), "a done makes room");
+}
+
+/// A REOPENED QUEUE PAST ITS LINE BUDGET is read whole and holds nothing
+/// more until it drains below it: a file of one line more than
+/// [`MAX_HELD_LINES`] — as a `done` the device refused, or a file another
+/// writer made, leaves one — reopens with every line, refuses the next hold
+/// `Full`, and takes one again once two lines are done (the budget bounds
+/// what a hold ADDS, never what a reader reads; the mutant whose reader
+/// stops at the budget loses the person's text past it).
+#[test]
+fn a_reopened_queue_past_its_line_budget_reads_whole_and_holds_nothing_more() {
+    let tmp = TempDir::new().unwrap();
+    let body: String = (1..=MAX_HELD_LINES + 1)
+        .map(|k| format!("{{\"held\":{k},\"doc\":\"1.0.1.0.1\",\"base\":0,\"frame\":{{\"op\":\"delete\"}},\"cause\":\"behind\",\"sent\":false,\"time\":1}}\n"))
+        .collect();
+    let mut queue = live(opened_over(&tmp, body.as_bytes()));
+    assert_eq!(queue.lines().len(), MAX_HELD_LINES + 1, "the queue is read whole");
+    let refused = queue.hold("1.0.1.0.1", None, 0, json!({"op": "delete"}), Reason::of("behind", false));
+    assert!(matches!(refused, Err(Unheld::Full { held_lines, .. }) if held_lines == MAX_HELD_LINES + 1), "{refused:?}");
+    queue.done(1, Done::Dropped).unwrap();
+    queue.done(2, Done::Dropped).unwrap();
+    assert!(queue.hold("1.0.1.0.1", None, 0, json!({"op": "delete"}), Reason::of("behind", false)).is_ok(), "below the budget a hold is taken again");
 }
 
 /// The ordinals are held to the page's ([`MAX_ORDINAL`]): the last one

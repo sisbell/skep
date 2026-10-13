@@ -67,14 +67,14 @@ use skep_client::board::{AtAnswer, Board, Rejection};
 use skep_client::derive::Mode;
 use skep_client::dial::{Headers, Method, RequestHead};
 use skep_client::halt::Halt;
-use skep_client::search::SearchOpts;
+use skep_client::search::{QueryTooLong, SearchOpts, QUERY_BOUND};
 use skep_client::store::{FileStore, KeyFacts};
 use skep_client::Origin;
 
 use crate::dev_arm::DevArm;
 use crate::events::{Event, EventBus, EventName};
-use crate::feed::{answer_without_index, BoardEntry, BridgeSearchOpts, Feed, FeedThreads, Searcher, Shared};
-use crate::hold::{Holds, OpAnswer, Resolved};
+use crate::feed::{answer_without_index, query_too_long, BoardEntry, BridgeSearchOpts, Feed, FeedThreads, Searcher, Shared};
+use crate::hold::{Holds, OpAnswer, ResolveAct, Resolved};
 use crate::log::{CallOutcome, Log, ShellDialer};
 use crate::person::Pending;
 use crate::refs::board_reference;
@@ -311,8 +311,9 @@ impl fmt::Debug for Fetched {
     }
 }
 
-/// THE SHELL. Dropping it stops it ([`Shell::shutdown`]), so its threads,
-/// its sessions and the held store's locks never outlive it.
+/// THE SHELL. Dropping it stops it ([`Shell::shutdown`]): no feed thread,
+/// open session or `held/<chain>/` lock of it outlives it, and each board's
+/// `/events` reader, asked to stop, ends at its next read.
 pub struct Shell {
     boards: Vec<Arc<BoardEntry>>,
     /// Each board's feed handle by the board's reference, fixed at the open:
@@ -556,8 +557,8 @@ impl Shell {
 
     /// THE CHECK the signed mode makes before serving: the store's key for
     /// the principal at every board, its public facts — `no_key` where the
-    /// store is keyless for one. Under the bare mode, `Ok` with no key: its
-    /// sessions sign nothing.
+    /// store is keyless for one, `store_unreadable` where the store cannot be
+    /// read. Under the bare mode, `Ok` with no key: its sessions sign nothing.
     pub fn check_signed_key(&self) -> Result<Vec<KeyFacts>, Refusal> {
         let SessionMode::Signed { principal } = self.session_mode else { return Ok(Vec::new()) };
         let mut keys = Vec::new();
@@ -602,7 +603,10 @@ impl Shell {
 
     /// ONE CALL by name, the log kept: the row's method dispatched on the
     /// bridge's spelling, one arm per call; a name the bridge does not spell
-    /// is answered `unknown_call` and logged by its length alone.
+    /// is answered `unknown_call` and logged by its length alone; and
+    /// `fetch`, which streams, is answered `streamed_call` — a transport
+    /// serves it on its own route, and a direct caller takes
+    /// [`Shell::fetch`].
     pub fn call(&self, name: &str, args: &Value) -> Result<Value, Refusal> {
         let started = Instant::now();
         let bytes_in = json_len(args);
@@ -869,10 +873,18 @@ impl Shell {
     /// board — a `board` given beside it naming that board, else
     /// `malformed_args` — and the guest form at the board its reference or
     /// its canonical origin names ([`Shell::guest_target`]), an origin this
-    /// shell holds no board at answered with no index (`state: none`);
-    /// `query_too_long` the shell's own bound.
+    /// shell holds no board at answered with no index (`state: none`). Its
+    /// refusals in this order, the first that holds answering:
+    /// `malformed_args` naming `query`; `query_too_long`, the shell's own
+    /// bound on the call's text (§4b.1's `search` row: "length-bounded …
+    /// then parsed"), asked before any other member is read and before any
+    /// index is asked, at every target; `malformed_args` naming an `opts`
+    /// member; then the form's and the target's.
     fn search(&self, args: &Value) -> Result<Value, Refusal> {
         let query = args["query"].as_str().ok_or_else(|| Refusal::malformed("query"))?;
+        if query.len() > QUERY_BOUND {
+            return Err(query_too_long(QueryTooLong { bound: QUERY_BOUND, length: query.len() }));
+        }
         let opts = search_opts(args)?;
         let (board_reference, who) = if guest_form(args)? {
             match self.guest_target(args)? {
@@ -893,7 +905,10 @@ impl Shell {
 
     /// `held(session)` → the acting principal's held bursts at the session's
     /// board in resend order (§4b.1), from THIS principal's file and no other
-    /// (P39); `store_halted` where a newer `v` or a damaged body halted it.
+    /// (P39); `store_halted` where P38 halted it, naming the file's `path`
+    /// and its `why`: `newer` (a newer `v`), `unknown_member` (an unknown
+    /// header member, or a header off its spelling) or `damaged` (a line not
+    /// read whole, the header's or a body line's).
     fn held(&self, args: &Value) -> Result<Value, Refusal> {
         let session = self.session(&args["session"])?;
         self.holds.lines(&session)
@@ -904,12 +919,16 @@ impl Shell {
     /// `"send"` re-enters the automatic machine for that document, the call
     /// answering "once the line is handed to the machine, never after its
     /// ack" — the probe that resends it handed to the board's feed thread
-    /// (`Feed::probe`); `store_halted`, `no_such_held` and `not_resolvable`
-    /// as `Holds::resolve` orders them.
+    /// (`Feed::probe`). Its refusals in this order, the first that holds
+    /// answering: `session_ended`; `malformed_args` naming `held`, then
+    /// `act` — an act the row does not spell (`ResolveAct::named`) the
+    /// argument it is, refused before any line is asked; then
+    /// `store_halted`, `no_such_held` and `not_resolvable` as
+    /// `Holds::resolve` orders them.
     fn resolve(&self, args: &Value) -> Result<Value, Refusal> {
         let session = self.session(&args["session"])?;
         let k = args["held"].as_u64().ok_or_else(|| Refusal::malformed("held"))?;
-        let act = args["act"].as_str().ok_or_else(|| Refusal::malformed("act"))?;
+        let act = args["act"].as_str().and_then(ResolveAct::named).ok_or_else(|| Refusal::malformed("act"))?;
         match self.holds.resolve(&session, k, act)? {
             Resolved::Dropped => {}
             Resolved::HandedBack => self.feed(&session.board_reference).probe(),
@@ -935,28 +954,34 @@ impl Shell {
 
     // ── THE STOP ─────────────────────────────────────────────────────────
 
-    /// THE CLEAN STOP: every pending moment cancelled, every session closed
-    /// at its board, the shell's dialer stopped, every board's feed threads
-    /// stopped — each consumer saved and closed, each feed thread joined, so
-    /// the `held/<chain>/` locks its holds kept are free once this returns.
-    /// The dialer stops after the sessions' closes, which dial, and before
-    /// the threads are asked to stop: from then on every dial is refused as
-    /// one that made no connection (`ShellDialer`), so a feed thread a board
-    /// holds in a read without end — pages whose `more` never ends — is freed
-    /// at its next exchange, and the stop waits on no board past one
-    /// exchange's bound. A second stop finds nothing left to stop, and
-    /// dropping the shell runs it. NOTHING of the held-burst store is written
-    /// here — every held line is already synced at its `op` (persist-first,
-    /// §3c.6's step 3). UNVERIFIED HERE (the record §7 item 1): that the
-    /// desktop framework's close hook runs this, and that the page's last `op`
-    /// reaches the shell before the webview is destroyed, is the framework's
-    /// to prove — no Tauri source is on this machine; a crash loses at most
-    /// the open or in-flight burst (R14).
+    /// THE CLEAN STOP: every pending moment cancelled and the moment table
+    /// closed, so a walk that asks the page after the stop is abandoned at
+    /// once; every session out of the table and its close sent to its board
+    /// — a board that does not answer keeps the token until its restart,
+    /// said on TALK as `close` says it; the shell's dialer stopped; every
+    /// board's feed threads stopped — each `/events` reader asked to stop,
+    /// ending at its next read, each consumer saved and closed, each feed
+    /// thread joined, so the `held/<chain>/` locks its holds kept are free
+    /// once this returns. The dialer stops after the sessions' closes, which
+    /// dial, and before the threads are asked to stop: from then on every
+    /// dial is refused as one that made no connection (`ShellDialer`), so a
+    /// feed thread a board holds in a read without end — pages whose `more`
+    /// never ends — is freed at its next exchange, and the stop waits on no
+    /// board past one exchange's bound. A second stop finds nothing left to
+    /// stop, and dropping the shell runs it. NOTHING of the held-burst store
+    /// is written here — every held line is already synced at its `op`
+    /// (persist-first, §3c.6's step 3). UNVERIFIED HERE (the record §7 item
+    /// 1): that the desktop framework's close hook runs this, and that the
+    /// page's last `op` reaches the shell before the webview is destroyed, is
+    /// the framework's to prove — no Tauri source is on this machine; a crash
+    /// loses at most the open or in-flight burst (R14).
     pub fn shutdown(&self) {
         self.pending.cancel_all();
         for session in self.sessions.all() {
             if self.sessions.close(&session.reference).is_some() {
-                let _ = session.board.session_close(&session.token);
+                if let Err(h) = session.board.session_close(&session.token) {
+                    self.say(format!("stop: the board did not close {}'s token ({h}); it dies at the board's restart", session.reference));
+                }
             }
         }
         self.stopping.store(true, Ordering::SeqCst);
@@ -969,7 +994,9 @@ impl Shell {
 
 impl Drop for Shell {
     /// The clean stop where its owner made none ([`Shell::shutdown`]): no
-    /// thread, session or lock of the shell outlives it.
+    /// feed thread, open session or `held/<chain>/` lock of the shell
+    /// outlives it, and each board's `/events` reader, asked to stop, ends
+    /// at its next read.
     fn drop(&mut self) {
         self.shutdown();
     }

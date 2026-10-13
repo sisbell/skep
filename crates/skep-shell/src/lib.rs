@@ -47,8 +47,9 @@
 //!   forms, the directory lock, the line-by-line read with P38's faces, the
 //!   synced append (persist-first) and the compaction at every line done —
 //!   and a principal's queue, the memory the queue and the file its copy,
-//!   its frames within the board's frame cap, its lines within a line
-//!   budget and its file's re-marks within a re-mark budget.
+//!   a hold adding no line past the board's frame cap in its frames or past
+//!   a line budget in its lines, and its file's re-marks within a re-mark
+//!   budget.
 //! * [`script`] — THE DEV ARM's SCRIPT: the grammar a script file's answers
 //!   are parsed by.
 //! * `dev_arm` — THE DEV ARM for the SECRET and CONSENT moments (§4b.3): a
@@ -93,8 +94,9 @@
 //!   child `ceremony` — each row taking and answering values shaped
 //!   exactly as the row's columns — an argument of another form refused,
 //!   never read as absent; [`Shell::fetch`] is public beside it because it
-//!   streams, and its transport logs it. Dropping a shell stops it: no
-//!   thread, session or lock of it outlives it.
+//!   streams, and its transport logs it. Dropping a shell stops it: no feed
+//!   thread, open session or `held/<chain>/` lock of it outlives it, and
+//!   each board's `/events` reader, asked to stop, ends at its next read.
 //! * [`shapes`] — THE DECLARATIONS: [`shapes::declarations`], a TypeScript
 //!   declaration file for every value that crosses the bridge, pinned by a
 //!   test that round-trips each type's JSON against the declared fields.

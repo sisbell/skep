@@ -1,12 +1,13 @@
 //! THE FEED's FENCE: the index state's ten arms and the search words as
 //! the bridge spells them — every arm, standing and mark a declared word,
 //! and the search answer built as its declarations say; THE FEED THREAD's
-//! START, one `/health` read; and THE COMMIT STREAM COALESCED — the waiting
-//! tick's mark, and a board committing far faster than the feed thread
-//! reads costing it a read per turn, never a read per commit, with a search
-//! queued behind them answered after one read at most. ONE READ TO THE HEAD
-//! meeting every answer as its paging rule says, and A DRAFTS CURSOR THE
-//! RETENTION FLOOR PASSED resumed at the floor, its rows still fed.
+//! START, one `/health` read, and a search where no index stands dialing
+//! nothing; and THE COMMIT STREAM COALESCED — the waiting tick's mark, and a
+//! board committing far faster than the feed thread reads costing it a read
+//! per turn, never a read per commit, with a search queued behind them
+//! answered after one read at most. ONE READ TO THE HEAD meeting every
+//! answer as its paging rule says, and A DRAFTS CURSOR THE RETENTION FLOOR
+//! PASSED resumed at the floor, its rows still fed.
 
 use std::io::{self, Read};
 use std::sync::atomic::AtomicUsize;
@@ -308,6 +309,65 @@ fn the_feed_thread_reads_health_once_at_its_start() {
     threads.stop();
     assert!(announced, "the stream that never connects is announced");
     assert_eq!(reads, 1, "the feed thread's start reads `/health` once");
+}
+
+/// A board whose index cannot open: every `/op` dial — the consumer's read
+/// of the board's head among them — refused as a connection never made, and
+/// counted; `/health` answered as a board with no `H.1` answers it, and its
+/// stream never connecting.
+struct Unopenable {
+    op_dials: AtomicUsize,
+}
+
+impl Dialer for Unopenable {
+    fn exchange(&self, _: &Origin, req: &Request) -> Result<Response, DialError> {
+        if req.method == Method::Post && req.path == "/op" {
+            self.op_dials.fetch_add(1, Ordering::SeqCst);
+            return Err(DialError::Connect("the board's head is not answered".into()));
+        }
+        if req.method == Method::Get && req.path.starts_with("/health") {
+            return Ok(ok(json!({"ok": true, "log_position": 10, "auth": {"claimant": null, "local_trust": true, "origins": [], "signed_origins": []}, "writes": {"halted": false}})));
+        }
+        Ok(ok(json!({"changes": [], "last": 10, "more": false})))
+    }
+
+    fn stream(&self, _: &Origin, _: &RequestHead, _: &mut dyn Read, _: &mut dyn FnMut(&Headers)) -> Result<StreamedResponse, DialError> {
+        Err(DialError::Connect("no stream here".into()))
+    }
+}
+
+/// A SEARCH DIALS NOTHING WHERE NO INDEX STANDS (§4b.1's `search` row:
+/// "PURE LOCAL: no board read on the call's path"): the feed thread's start
+/// tries the index once and the board does not answer, and a guest search
+/// after it answers `state: none` with no dial of its own (the mutant that
+/// opens the index on the call's path reads the board's head again, a
+/// connect timeout on every keystroke while the board is down).
+#[test]
+fn a_search_dials_nothing_where_no_index_stands() {
+    let fake = Arc::new(Unopenable { op_dials: AtomicUsize::new(0) });
+    let origin = Origin::parse("http://127.0.0.1:9").unwrap();
+    let board = Arc::new(Board::new(origin.clone(), Arc::clone(&fake)));
+    let store = TempDir::new().unwrap();
+    let bus = Arc::new(EventBus::new());
+    let rx = bus.subscribe();
+    let threads = FeedThreads::spawn(Arc::new(BoardEntry { reference: "b-1".into(), origin, board: Arc::clone(&board) }), shared_over(&board, &Arc::new(Sessions::new(None)), &bus, &store));
+    // The feed thread's start runs before its first command: once the
+    // stream's failure is announced, the start's one try at the index is made.
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let started = loop {
+        match rx.recv_timeout(deadline.saturating_duration_since(Instant::now())) {
+            Ok(event) if event.name == EventName::Daemon && event.data["state"] == "unreachable" => break true,
+            Ok(_) => {}
+            Err(_) => break false,
+        }
+    };
+    let tried = fake.op_dials.load(Ordering::SeqCst);
+    let answer = threads.feed().search(Searcher::Guest, "x", BridgeSearchOpts::default());
+    let dials = fake.op_dials.load(Ordering::SeqCst);
+    threads.stop();
+    assert!(started && tried == 1, "the start tried the index once: {tried}");
+    assert_eq!(answer.map(|v| v["state"]["arm"].clone()), Ok(json!("none")), "the search answers with no index");
+    assert_eq!(dials, tried, "the search dialed the board");
 }
 
 /// A board whose history below `FLOOR` is reclaimed: a drafts read from

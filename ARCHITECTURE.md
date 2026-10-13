@@ -1166,19 +1166,26 @@ an item the root re-exports counted as the module it is brought from
 
 Rules that hold across its files:
 
-- **The page holds nothing.** No token, key, seed, path or store location
-  enters a call's answer or an event: the registry's names stand in for
-  the token, the SECRET class stays in the arm with the NATIVE statements —
-  each statement whose rule names where key material rests (§4b.3, the
-  anchor file's ladder words among them) — and the log keeps sizes and
-  routes alone. The one moment that names an anchor file to the page is the
-  paper path's question whether to destroy a file whose print passed its
-  re-type, which `skep-client` classes PUBLIC — a question carries no rule
-  the shell could route it by. The shell's suite reads every answer,
-  refusal, event and log entry of its bare walk and its paper claim for the
-  token's own text, every seed the walk made and the store's location, and
-  finds none; the provider's suite (`skep-cli`'s) reads every answer, event
-  and the log for a token-shaped run.
+- **The page holds no token, no seed and nothing of the SECRET class.**
+  The registry's names stand in for the token, the SECRET class stays in
+  the arm with the NATIVE statements — each statement whose rule names
+  where key material rests (§4b.3, the anchor file's ladder words among
+  them) — and the log keeps sizes and routes alone. No answer, event or log
+  entry the shell builds itself names a path or the store's location —
+  `bind`'s warning carries the binding line and never the bindings file
+  (`bind_warning`) — save `store_halted`, whose `path` follows §3c.3's face
+  against §4b.3's rule until the owner rules between them. The faces the
+  shell carries from `skep-client` still name the store's location or a
+  key, anchor or index file — `no_key`'s arm-4 face, `store_unreadable`'s
+  and `store_unwritable`'s, the walks' file halts, the index's I/O halts —
+  and are `skep-client`'s to build for the bridge; and the paper path's
+  question whether to destroy a file whose print passed its re-type names
+  that file, a question `skep-client` classes PUBLIC and the shell cannot
+  route by rule. The shell's suite reads every answer and event, the
+  refusals it binds, and every log entry of its bare walk and its paper
+  claim for the token's own text, every seed the walk made and the store's
+  location, and finds none; the provider's suite (`skep-cli`'s) reads every
+  answer, event and the log for a token-shaped run.
 - **The board's verdict is carried verbatim.** A `rejected` document and a
   non-200 are `Refusal::Board` with the body whole — a non-200 read once,
   by `Refusal::board`, and an `/op-at` refusal `skep-client` answers as a
@@ -1236,13 +1243,16 @@ Rules that hold across its files:
   wire's, an insert
   past its values, a tumbler past its components, a slot past its spans,
   a shot past its re-insert budget or its body, an origin past one
-  delivery, and the held queue past one frame's worth. A frame past one is
-  a frame the board refuses whatever it carries; no budget of these is one
-  the board does not keep. The held store keeps two of its own beside them
-  (`held.rs`): its lines (`MAX_HELD_LINES`), which bound the resend's walk,
-  and its file's re-marks (`MAX_HELD_REMARK_BYTES`), which bound what a
-  board's answers write to the disk — each argued there from the design's
-  outage of hours of typing (§3c.3).
+  delivery, and a hold that would carry the held queue past one frame's
+  worth. A frame past one is a frame the board refuses whatever it carries;
+  no budget of these is one the board does not keep. The held store keeps
+  two of its own beside them (`held.rs`): the lines a hold admits
+  (`MAX_HELD_LINES`), which bound the resend's walk over every queue its
+  holds made, and its file's re-marks (`MAX_HELD_REMARK_BYTES`), which
+  bound what a board's answers write to the disk — each argued there from
+  the design's outage of hours of typing (§3c.3). Both queue budgets bound
+  what a hold ADDS: a reopened queue is read whole, past either where its
+  file is past it, and holds nothing more until it drains below them.
 - **A burst the board takes at no send is never held.** `Burst::admit` is
   the one door a burst enters the hold by: a frame past the board's frame
   cap as sent or as a signed resend sends it, one naming no document in its
@@ -1253,9 +1263,13 @@ Rules that hold across its files:
 - **Dropping a shell stops it.** `Shell`'s `Drop` runs `shutdown`, which a
   second time finds nothing left to stop: no feed thread, open session or
   `held/<chain>/` lock outlives the shell, whether or not its owner stopped
-  it. Once its sessions are closed the stop dials nothing (`ShellDialer`),
-  so a board answering without end — pages whose `more` never ends — holds
-  no stop past one exchange.
+  it, and each board's `/events` reader, asked to stop, ends at its next
+  read. A session's close a board does not answer is said on TALK, the
+  stop's as the page's, its token dying at the board's restart. Once its
+  sessions are closed the stop dials nothing (`ShellDialer`), so a board
+  answering without end — pages whose `more` never ends — holds no stop
+  past one exchange; and the stop closes the moment table, so a walk that
+  asks the page after it is abandoned at once.
 - **A principal's supplement follows its standing sessions.** The consumer
   holds one drafts supplement per (board, principal), and two tabs hold two
   sessions of one principal. A session that leaves the table — its end or
@@ -1270,11 +1284,13 @@ Rules that hold across its files:
   `skep-identity`'s builders; nothing here spells a row.
 - **A moment is answered once, by the party the class names.** `Pending`
   removes an id at its first answer — an answer of the form its moment's
-  kind takes (a label box a string, or `null` for its default; a question a
-  string; a yes-or-no a boolean), one of another form refused with the
-  moment still waiting, so no walk is handed a value it must coerce; a
-  cancel abandons; a walk that ends without its answer is `abandoned` to
-  the page.
+  kind takes (a label box a string, or `null` where the box offers a
+  default, the answer then that default; a question a string; a yes-or-no
+  a boolean), one of another form refused with the moment still waiting,
+  so no walk is handed a value it must coerce; a cancel abandons; a walk
+  that ends without its answer is `abandoned` to the page. The stop closes
+  the table (`Pending::cancel_all`): a walk that asks the page after it is
+  abandoned at once, its moment never sent.
 - **The declarations are pinned.** Every shape in the table has a sample
   the suite round-trips; a required field missing, or a built field
   undeclared on a shape the table does not mark `open`, is red, the

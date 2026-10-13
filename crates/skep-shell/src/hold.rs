@@ -241,6 +241,31 @@ pub enum OpAnswer {
     Died,
 }
 
+/// The person's two acts at a REFUSED run's face or a MOVED document's
+/// (§4b.1's `resolve` row), as the row's `act` spells them — read off the
+/// call's arguments by [`ResolveAct::named`] alone, so no act reaches the
+/// hold that the row does not spell.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ResolveAct {
+    /// `"drop"`: the line, and a refused run's `behind` lines with it, dropped.
+    Drop,
+    /// `"send"`: the document's waiting lines handed back to the automatic
+    /// machine.
+    Send,
+}
+
+impl ResolveAct {
+    /// The act the row spells `act` — `"drop"` or `"send"` — and none for any
+    /// other spelling.
+    pub fn named(act: &str) -> Option<ResolveAct> {
+        match act {
+            "drop" => Some(ResolveAct::Drop),
+            "send" => Some(ResolveAct::Send),
+            _ => None,
+        }
+    }
+}
+
 /// What a `resolve` act did (§4b.1's `resolve` row), the call's answer `{}`
 /// either way.
 #[must_use = "a `HandedBack` document's resend waits on the probe its caller hands the board's feed thread"]
@@ -860,14 +885,14 @@ impl Holds {
     /// under the board's one lock, its refusals in this order, the first
     /// that holds answering: `store_halted` where P38 halted the principal's
     /// file; `no_such_held` where no line of ordinal `k` stands;
-    /// `not_resolvable` where the line awaits no act of the person's (P10),
-    /// or `act` names none. `"drop"` marks the line — and, for a refused
-    /// run, every line held `behind` it on that document — `done …
-    /// dropped`; `"send"` re-marks the document's waiting lines `behind`,
+    /// `not_resolvable` where the line awaits no act of the person's (P10).
+    /// [`ResolveAct::Drop`] marks the line — and, for a refused run, every
+    /// line held `behind` it on that document — `done … dropped`;
+    /// [`ResolveAct::Send`] re-marks the document's waiting lines `behind`,
     /// handing them back to the automatic machine, and answers at once
     /// ([`Resolved::HandedBack`]): the probe that resends them is the
     /// caller's to hand the board's feed thread.
-    pub fn resolve(&self, session: &SessionEntry, k: u64, act: &str) -> Result<Resolved, Refusal> {
+    pub fn resolve(&self, session: &SessionEntry, k: u64, act: ResolveAct) -> Result<Resolved, Refusal> {
         let mut board_hold = self.lock(&session.board_reference);
         let ph = self.principal_hold(&mut board_hold, session)?;
         let Some(line) = ph.queue.lines().iter().find(|l| l.k == k) else { return Err(Refusal::shell(Name::NO_SUCH_HELD, json!({"held": k}))) };
@@ -877,14 +902,14 @@ impl Holds {
         }
         let doc = line.doc.clone();
         match act {
-            "drop" => {
+            ResolveAct::Drop => {
                 let (count, state) = self.drop_run(ph, k, &doc);
                 // `emit_held` touches the bus alone, so it is safe under the
                 // board's lock.
                 self.emit_held(session, &doc, count, state, None);
                 Ok(Resolved::Dropped)
             }
-            "send" => {
+            ResolveAct::Send => {
                 // Re-enter the automatic machine (§3c.4, RULED "button then"):
                 // the document's waiting lines re-marked `behind`, the read run
                 // afresh at the next probe, and the refusal faced again where
@@ -895,7 +920,6 @@ impl Holds {
                 }
                 Ok(Resolved::HandedBack)
             }
-            other => Err(Refusal::shell(Name::NOT_RESOLVABLE, json!({"held": k, "act": other}))),
         }
     }
 

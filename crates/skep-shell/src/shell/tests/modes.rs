@@ -20,15 +20,18 @@
 //! ENFORCING; the declared fields of the real answers; a `write_busy`
 //! reissued once within the call; a death signal met at a read the attest
 //! needs ending the session; a close the board does not answer still the
-//! shell's close; and the codec's private budgets, each the shell's.
+//! shell's close, and the stop's close of one said on TALK as `close` says
+//! it; and the codec's private budgets, each the shell's.
 
 use super::*;
 
-/// THE BARE MODE, end to end — and the page handed nothing: no token, no
-/// seed the walk made, no path under the store, in any answer, refusal,
-/// event or log entry, no seed on TALK, no search's query in the log, on
-/// TALK or in its refusal; and every event, and the claim's answer, held
-/// to its declaration.
+/// THE BARE MODE, end to end — and the page handed nothing the shell
+/// builds: no token, no seed the walk made, no path under the store, in any
+/// answer, event or log entry or in the refusals it binds (the faces carried
+/// from `skep-client`, `no_key`'s among them, name the store as the library
+/// builds them), no seed on TALK, no search's query in the log, on TALK or
+/// in its refusal; and every event, and the claim's answer, held to its
+/// declaration.
 #[test]
 fn the_bare_mode_claims_opens_writes_and_hands_the_page_nothing() {
     let dir = TempDir::new().unwrap();
@@ -570,7 +573,9 @@ fn a_death_met_at_a_read_the_attest_needs_ends_the_session() {
 /// down answers `{}`, its `session-died` names the `closed` arm, the
 /// board's silence is said on TALK, and the reference then names nothing
 /// (the mutant that carries the board's silence back refuses a close that
-/// already took effect).
+/// already took effect); and the stop's close of a session at that board
+/// says the board's silence on TALK as `close` says it (the mutant that
+/// drops it keeps a token the board still holds out of the shell's window).
 #[test]
 fn a_close_the_board_does_not_answer_still_closes() {
     let dir = TempDir::new().unwrap();
@@ -579,6 +584,7 @@ fn a_close_the_board_does_not_answer_still_closes() {
     let (shell, lines) = open_shell(&origin, &dir.path().join("store"), SessionMode::Bare { principal: 1 });
     let board = shell.board_references().remove(0);
     let session = shell.call("session", &json!({"board": board})).unwrap()["session"].as_str().unwrap().to_string();
+    let standing = shell.call("session", &json!({"board": board})).unwrap()["session"].as_str().unwrap().to_string();
     let rx = shell.subscribe();
     sd.shutdown();
     let probe = Board::new(Origin::parse(&origin).unwrap(), skep_client::PlainHttp::new());
@@ -593,6 +599,7 @@ fn a_close_the_board_does_not_answer_still_closes() {
     assert!(lines.lock().unwrap().iter().any(|l| l.contains("did not close") && l.contains(&session)), "{}", lines.lock().unwrap().join("\n"));
     assert_eq!(shell.call("close", &json!({"session": session})).unwrap_err().name(), "session_ended");
     shell.shutdown();
+    assert!(lines.lock().unwrap().iter().any(|l| l.starts_with("stop:") && l.contains("did not close") && l.contains(&standing)), "{}", lines.lock().unwrap().join("\n"));
 }
 
 /// THE CODEC's PRIVATE BUDGETS are the shell's, judged by the board's own

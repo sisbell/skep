@@ -1,14 +1,18 @@
 //! THE SHELL's OWN FRAME, with no daemon behind it: an `/op-at` refusal
 //! rebuilt into the board's verdict under the wire's status; the dispatch
-//! naming every call by its own spelling and logging each as one entry of
-//! its outcome and sizes; a present argument of another form refused before
-//! any dial; the guest form refusing every write kind of the wire undialed
-//! and reading the board its reference or its origin names; a search's
-//! `opts` read as one value; a `select` of two keys or none refused by its
-//! name, and the signed mode's check naming a keyless store; its options
+//! naming every call by its own spelling — `fetch` answered `streamed_call`
+//! through it — and logging each as one entry of its outcome and sizes; a
+//! present argument of another form refused before any dial; the guest form
+//! refusing every write kind of the wire undialed and reading the board its
+//! reference or its origin names; a search's `opts` read as one value, and
+//! its query held to the shell's bound at every target; a `select` of two
+//! keys or none refused by its name, a label the box refuses `empty_label`
+//! naming its cause, and the signed mode's check naming a keyless store;
+//! `bind`'s warning naming its line and never the store; its options
 //! printing no seed and the open's preconditions stopped loudly; every day
 //! dated as the calendar counts it; and the stop abandoning a walk that
-//! waits on the page, a search after it answered `feed_stopped`.
+//! waits on the page, a walk begun after it asking the page nothing, and a
+//! search after it answered `feed_stopped`.
 
 use super::*;
 
@@ -33,7 +37,9 @@ fn an_op_at_refusal_is_the_boards_verdict_under_the_wires_status() {
 
 /// THE DISPATCH's NAMES: every call parses back from its own spelling, so no
 /// two calls share one; `CALLS` is those spellings in §4b.1's order; a name
-/// of no call names none, and `call` answers it `unknown_call`.
+/// of no call names none, and `call` answers it `unknown_call`; and `fetch`,
+/// which streams on its transport's own route, is answered `streamed_call`
+/// through the door, whatever its arguments.
 #[test]
 fn every_call_is_named_by_its_own_spelling() {
     for call in Call::ALL {
@@ -45,6 +51,7 @@ fn every_call_is_named_by_its_own_spelling() {
     let (dir, (talk, _)) = (TempDir::new().unwrap(), talk());
     let shell = Shell::open(ShellOptions::new(Vec::new(), dir.path().join("store"), SessionMode::Bare { principal: 1 }, talk));
     assert_eq!(shell.call("verify", &json!({})).unwrap_err().name(), "unknown_call");
+    assert_eq!(shell.call("fetch", &json!({"session": "s-x", "i": "1.0.1.0.1.0.1.1"})).unwrap_err().name(), "streamed_call");
 }
 
 /// A shell's options print what they name and nothing secret: the boards,
@@ -149,6 +156,28 @@ fn a_guest_search_reads_the_board_its_reference_or_origin_names() {
     assert_eq!(refused.name(), "not_canonical", "{refused}");
     let refused = shell.call("search", &json!({"guest": true, "query": "x"})).unwrap_err();
     assert_eq!((refused.name(), refused.to_value()["what"].as_str()), ("malformed_args", Some("board or origin")), "{refused}");
+}
+
+/// THE QUERY's BOUND is the shell's, asked of the call's text at every
+/// target (§4b.1's `search` row: "length-bounded … then parsed"): a query a
+/// byte past `QUERY_BOUND` is refused `query_too_long`, naming the bound
+/// and the length and nothing of the text, at an origin this shell holds no
+/// index for and at its own board alike, while a query at the bound is
+/// answered (the mutant that leaves the bound to the library's index
+/// answers the first `state: none`).
+#[test]
+fn a_query_past_the_bound_is_refused_at_every_target() {
+    let dir = TempDir::new().unwrap();
+    let (shell, _) = open_shell(&nowhere(), &dir.path().join("store"), SessionMode::Bare { principal: 1 });
+    let board = shell.board_references().remove(0);
+    let past = "x".repeat(QUERY_BOUND + 1);
+    for args in [json!({"guest": true, "origin": "http://127.0.0.1:9", "query": past}), json!({"guest": true, "board": board, "query": past})] {
+        let refused = shell.call("search", &args).unwrap_err().to_value();
+        assert_eq!((refused["name"].as_str(), refused["bound"].as_u64(), refused["length"].as_u64()), (Some("query_too_long"), Some(1024), Some(1025)), "{refused}");
+        assert!(!refused.to_string().contains("xxxxxxxx"), "the refusal holds no query text: {refused}");
+    }
+    let at = shell.call("search", &json!({"guest": true, "origin": "http://127.0.0.1:9", "query": "x".repeat(QUERY_BOUND)})).unwrap();
+    assert_eq!(at["state"]["arm"], "none", "{at}");
 }
 
 /// A `search` call's `opts` are ONE value, as the bridge declares them:
@@ -302,6 +331,53 @@ fn the_stop_abandons_a_walk_waiting_on_the_page() {
     assert_eq!(answer.unwrap_err().name(), "abandoned");
 }
 
+/// A WALK BEGUN AFTER THE STOP asks the page nothing: the stop closes the
+/// moment table, so `keygen` with no label — its device-name box a PUBLIC
+/// moment — is abandoned at once, no `moment` event sent (the mutant whose
+/// stop drains the table and leaves it open enters the box and waits on a
+/// page that will never answer; the deadline cancels it by hand, so the
+/// mutant fails rather than hangs).
+#[test]
+fn a_walk_begun_after_the_stop_asks_the_page_nothing() {
+    let dir = TempDir::new().unwrap();
+    let shell = boardless(&dir);
+    let rx = shell.subscribe();
+    shell.shutdown();
+    let (finished, moments, answer) = thread::scope(|s| {
+        let walk = s.spawn(|| shell.call("keygen", &json!({})));
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !walk.is_finished() && Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(10));
+        }
+        let finished = walk.is_finished();
+        let moments: Vec<Event> = rx.try_iter().filter(|e| e.name == EventName::Moment).collect();
+        for id in moments.iter().filter_map(|m| m.data["id"].as_str()) {
+            let _ = shell.cancel(id);
+        }
+        (finished, moments, walk.join().unwrap())
+    });
+    assert!(finished, "a walk begun after the stop waited on the page");
+    assert!(moments.is_empty(), "a moment after the stop crossed to the page: {moments:?}");
+    assert_eq!(answer.unwrap_err().name(), "abandoned");
+}
+
+/// `bind`'s WARNING names the binding line the page records and the
+/// device's cause, never the key store's path (§4b.3: the store's location
+/// is NATIVE): the `Unappended` the store answers carries its bindings file,
+/// and the warning built from it carries the line alone (the mutant that
+/// answers the store's own text hands the page the store's location).
+#[test]
+fn a_binds_warning_names_the_line_and_never_the_store() {
+    let refused = skep_client::store::Unappended {
+        path: PathBuf::from("/tmp/a-store/bindings"),
+        line: "a binding line".into(),
+        error: std::io::Error::from(std::io::ErrorKind::PermissionDenied),
+    };
+    let warning = ceremony::bind_warning(&refused);
+    assert!(warning.contains("a binding line"), "the line for the page to record: {warning}");
+    assert!(!warning.contains("/tmp/a-store"), "the store's location crossed: {warning}");
+}
+
 /// A `select` MATCHING TWO KEYS, OR NONE, is refused by its name: two keys
 /// under one label answer `ambiguous`, naming each match by its fingerprint
 /// and label; a label of no key answers `not_found`, naming it (the mutants
@@ -318,6 +394,25 @@ fn a_select_of_two_keys_or_none_is_refused_by_its_name() {
     assert!(matches.iter().all(|m| m["label"] == "phone" && fingerprints.contains(&m["fingerprint"])), "each match named by its key: {refused}");
     let refused = shell.call("fingerprint", &json!({"select": "a-label-of-no-key"})).unwrap_err().to_value();
     assert_eq!((refused["name"].as_str(), refused["select"].as_str()), (Some("not_found"), Some("a-label-of-no-key")), "{refused}");
+}
+
+/// A LABEL REFUSED AT THE BOX is `empty_label` over AUTH-1.24's whole
+/// domain, naming its `cause`: an empty label, one holding a line break and
+/// one a byte past the bound, each refused with no key written — and a label
+/// at the bound exactly taken (the mutants that name a line break or a long
+/// label another refusal, drop the `cause`, or write a key for a label the
+/// box refuses).
+#[test]
+fn a_label_refused_at_the_box_is_empty_label_naming_its_cause() {
+    let dir = TempDir::new().unwrap();
+    let shell = boardless(&dir);
+    for (label, cause) in [(String::new(), "a name is required"), ("a\nb".to_string(), "line break"), ("x".repeat(129), "129 bytes")] {
+        let refused = shell.call("keygen", &json!({"label": label})).unwrap_err().to_value();
+        assert_eq!(refused["name"], "empty_label", "{label:?}: {refused}");
+        assert!(refused["cause"].as_str().is_some_and(|c| c.contains(cause)), "{label:?}: the refusal names its cause: {refused}");
+    }
+    assert!(shell.call("fingerprint", &json!({})).unwrap().as_array().unwrap().is_empty(), "no key is written for a label the box refuses");
+    assert!(shell.call("keygen", &json!({"label": "x".repeat(128)})).is_ok(), "a label at the bound exactly is taken");
 }
 
 /// THE SIGNED MODE's CHECK before serving names a keyless store: `no_key`

@@ -121,17 +121,20 @@ impl SessionEntry {
     /// the session, where the session holds one and [`wants_attest`] admits
     /// the frame — the one place the composer's precondition is discharged;
     /// the frame as it stands otherwise, and where the board has no `H.1` to
-    /// sign over (the board judges that write). Refused `attest_not_composed`
-    /// where the composer could not sign — nothing is then to be sent — and
-    /// with the board's refusal, or `unreachable`, where a read it needed was
-    /// refused or not answered; [`Unattested::Died`] where a read it made
-    /// met the session's death signal, whose end is the caller's to run.
+    /// sign over (the board judges that write). Refused — nothing is then to
+    /// be sent — `attest_not_composed` where the composer, or the read of
+    /// the board's `H.1` it signs over, halted; `store_unreadable` where the
+    /// session's key file cannot be read; `no_account` where the board
+    /// answered the session no account; and with the board's refusal, or
+    /// `unreachable`, where a read it needed was refused or not answered;
+    /// [`Unattested::Died`] where a read it made met the session's death
+    /// signal, whose end is the caller's to run.
     pub fn attest(&self, store: &FileStore, frame: &mut Value) -> Result<(), Unattested> {
         let SessionKind::Signed { fingerprint: fp, .. } = &self.facts.kind else { return Ok(()) };
         if !wants_attest(frame) {
             return Ok(());
         }
-        let Some(board_term) = self.board.board_term().map_err(Refusal::from)? else { return Ok(()) };
+        let Some(board_term) = self.board.board_term()? else { return Ok(()) };
         let signer = signer(store, &store.key_path(fp))?;
         let account = self.facts.account.as_deref().ok_or_else(|| Refusal::shell(Name::NO_ACCOUNT, json!({})))?;
         let composer = Composer { board: &self.board, token: &self.token, signer: &*signer, account, board_term };

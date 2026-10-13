@@ -22,7 +22,7 @@ use skep_client::derive::{origin_arm, principal_of, walk_to_set, Mode};
 use skep_client::halt::Halt;
 use skep_client::person::{LabelBox, Person, Public};
 use skep_client::sheet::{render_inert, Label};
-use skep_client::store::{Binding, KeyFacts, KeySelector, KeyStore, Purpose, StoreError};
+use skep_client::store::{Binding, KeyFacts, KeySelector, KeyStore, Purpose, StoreError, Unappended};
 use skep_identity::{encode_enroll, Enrollment};
 
 use super::{optional, principal_arg, Shell};
@@ -47,6 +47,14 @@ const OUTSTANDING_ACT: &str = "Where it ADDS a device: take this payload to a de
 /// The three facts as the bridge spells them.
 fn facts_json(f: &skep_client::sheet::Facts) -> Value {
     json!({"principal": f.principal, "account": f.account, "origin": f.origin.as_str()})
+}
+
+/// `bind`'s warning where the key store refused the binding line (§3.7):
+/// the LINE for the page to show and the device's cause — never the
+/// bindings file's path, the store's location being NATIVE (§4b.3), said on
+/// TALK alone.
+pub(super) fn bind_warning(w: &Unappended) -> String {
+    format!("the binding could not be recorded in the key store ({}); record this line yourself: {}", w.error, w.line)
 }
 
 /// The armed name of an `accept` halt, picked from its TEXT: the one place
@@ -88,7 +96,11 @@ impl Shell {
 
     /// `keygen({label?})` → `{fingerprint, payload, outstanding}`: one
     /// device key into the store, its byline fixed at the box — a PUBLIC
-    /// moment where no label is passed.
+    /// moment where no label is passed. Refused `empty_label` where the
+    /// label is refused at the box — empty, holding a line break, or past its
+    /// byte bound (AUTH-1.24) — naming its `cause`; `abandoned` where the box
+    /// is left; `store_unwritable` and `store_unreadable` where the key store
+    /// refuses the key or its read-back.
     pub(super) fn keygen(&self, args: &Value) -> Result<Value, Refusal> {
         let empty_label = |f: skep_client::sheet::LabelFault| Refusal::shell(Name::EMPTY_LABEL, json!({"cause": f.to_string()}));
         let label = match optional(args, "label", Value::as_str)? {
@@ -212,10 +224,13 @@ impl Shell {
 
     /// `bind(board, {principal, account, origin})` → `{}`: the three facts
     /// confirmed against the board, the key-set compare, the binding line
-    /// appended, the first signed session run where one is owed. The
-    /// whole-set compare against a genesis another hand wrote (the handoff
-    /// landing's anchor files) is not reached here: the shell has no
-    /// window for the files' pick, and the landing is taken as the hop's.
+    /// appended, the first signed session run where one is owed. A line the
+    /// key store could not append is answered as `warning`, the line for the
+    /// page to record ([`bind_warning`]), the store's own words — its path
+    /// among them — said on TALK. The whole-set compare against a genesis
+    /// another hand wrote (the handoff landing's anchor files) is not reached
+    /// here: the shell has no window for the files' pick, and the landing is
+    /// taken as the hop's.
     pub(super) fn bind(&self, args: &Value) -> Result<Value, Refusal> {
         let entry = self.board_entry(&args["board"])?;
         let principal = principal_arg(&args["principal"]).ok_or_else(|| Refusal::malformed("principal"))?;
@@ -253,7 +268,8 @@ impl Shell {
         let line = Binding::Enrollment { origin: entry.origin.clone(), principal, account: account.clone(), fingerprint: key.fingerprint };
         let mut out = Map::new();
         if let Err(w) = self.store.bind(&line) {
-            out.insert("warning".into(), Value::from(w.to_string()));
+            self.say(format!("bind: {w}"));
+            out.insert("warning".into(), Value::from(bind_warning(&w)));
         }
         if !warnings.is_empty() {
             out.insert("warnings".into(), json!(warnings));

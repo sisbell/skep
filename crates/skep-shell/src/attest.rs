@@ -133,8 +133,11 @@ pub struct Composer<'a> {
     pub board_term: BoardTerm,
 }
 
-/// Why the composer attached no attest: the call's REFUSAL — its own halt
-/// as `attest_not_composed`, a board's refusal of a read verbatim,
+/// Why the composer attached no attest: the call's REFUSAL — its own halt,
+/// and the halt of the `H.1` read it signs over, as `attest_not_composed`;
+/// `store_unreadable` where the session's key file cannot be read and
+/// `no_account` where the board answered the session none
+/// (`SessionEntry::attest`); a board's refusal of a read verbatim;
 /// `unreachable` where a read went unanswered — or the session's DEATH
 /// SIGNAL met at one of its reads, which is no refusal of the composer's:
 /// the caller ends the session (`Sessions::end`) and answers

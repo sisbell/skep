@@ -33,12 +33,16 @@
 //! fresh. COMPACTION: once the queue holds no line, the file is REMOVED under
 //! the lock; a file is never rewritten in place.
 //!
-//! THE STORE's BUDGETS: the queue's standing frames within
-//! [`MAX_HELD_FRAME_BYTES`], the board's own frame cap, and its lines within
-//! [`MAX_HELD_LINES`], a line past either refused and kept nowhere; each line
-//! within [`MAX_HELD_LINE_BYTES`] at the writer and the reader alike; the
-//! re-marks one file copies within [`MAX_HELD_REMARK_BYTES`], a re-mark past
-//! them taken in the queue alone; and the file READ LINE BY LINE, keeping the
+//! THE STORE's BUDGETS, on what a HOLD ADDS: no line held that would carry
+//! the queue's standing frames past [`MAX_HELD_FRAME_BYTES`], the board's own
+//! frame cap, or its lines past [`MAX_HELD_LINES`] — a line past either
+//! refused and kept nowhere. A reopened queue is read whole, past either
+//! budget where its file is past it (a `done` the device refused leaves its
+//! line on disk, and a file another writer made may hold any number), and
+//! holds nothing more until it drains below them. Each line within
+//! [`MAX_HELD_LINE_BYTES`] at the writer and the reader alike; the re-marks
+//! one file copies within [`MAX_HELD_REMARK_BYTES`], a re-mark past them
+//! taken in the queue alone; and the file READ LINE BY LINE, keeping the
 //! standing lines alone — so an open holds the queue it reads, never the
 //! file's history of lines done.
 //!
@@ -62,13 +66,15 @@ use crate::wire::{document_address, json_len, MAX_FRAME_BYTES};
 /// The lock file's name, the key store's idiom (`search.md` §5.6).
 const LOCK_NAME: &str = "lock";
 
-/// THE QUEUE's BUDGET — the most bytes a principal's standing lines' frames
-/// may hold together at one board: the board's own frame cap
+/// THE QUEUE's BUDGET — the most bytes a HOLD lets a principal's standing
+/// lines' frames come to at one board: the board's own frame cap
 /// ([`MAX_FRAME_BYTES`]), so a burst the hold admits always fits a queue
 /// holding none. The design's estimate is that hours of typing are kilobytes
 /// (§3c.3), three orders under it; a queue past it is a page holding without
 /// bound — every frame copied to disk and read back at the next open — so
-/// the line that would pass it is refused, and kept nowhere.
+/// the line that would pass it is refused, and kept nowhere. A reopened
+/// queue is read whole, past it where its file is, and holds no line more
+/// until it drains below it.
 pub const MAX_HELD_FRAME_BYTES: usize = MAX_FRAME_BYTES;
 
 /// The most bytes one line of a held file may carry, its `\n` aside — at the
@@ -81,16 +87,18 @@ pub const MAX_HELD_FRAME_BYTES: usize = MAX_FRAME_BYTES;
 /// more of it than one byte past the bound.
 const MAX_HELD_LINE_BYTES: usize = 2 * MAX_HELD_FRAME_BYTES + 64 * 1024;
 
-/// THE QUEUE's LINE BUDGET — the most lines a principal's queue holds at one
-/// board. The resend walks the queue line by line, finding each line's
-/// document among the others, and a line costs its walk the same whatever its
-/// frame holds — so the lines bound the walk's work as the frames' bytes bound
-/// its memory, and the byte budget alone admits a quarter of a million empty
-/// bursts held behind one refused. The design's outage is hours of typing in
-/// kilobytes (§3c.3), the burst machine coalescing each pause's keystrokes
-/// into one burst: at a burst per ten bytes typed, 4096 lines is hours of
-/// continuous typing. Past it a line is refused `held_full`, as one past the
-/// bytes is.
+/// THE QUEUE's LINE BUDGET — the most lines a HOLD lets a principal's queue
+/// come to at one board. The resend walks the queue line by line, finding
+/// each line's document among the others, and a line costs its walk the same
+/// whatever its frame holds — so the lines a hold admits bound the walk's
+/// work as the frames' bytes bound its memory, and the byte budget alone
+/// admits a quarter of a million empty bursts held behind one refused. The
+/// design's outage is hours of typing in kilobytes (§3c.3), the burst machine
+/// coalescing each pause's keystrokes into one burst: at a burst per ten
+/// bytes typed, 4096 lines is hours of continuous typing. Past it a line is
+/// refused `held_full`, as one past the bytes is. A reopened queue is read
+/// whole, past it where its file is, and holds no line more until it drains
+/// below it.
 pub const MAX_HELD_LINES: usize = 4096;
 
 /// THE RE-MARK BUDGET — the most bytes of re-mark lines, each counted as
@@ -487,8 +495,8 @@ pub struct Entered {
 pub enum Unheld {
     /// The queue's standing frames' bytes, `held_bytes`, and the line's,
     /// `frame_bytes`, would pass [`MAX_HELD_FRAME_BYTES`] — or the queue's
-    /// lines, `held_lines`, stand at [`MAX_HELD_LINES`] already, or its next
-    /// ordinal would pass [`MAX_ORDINAL`].
+    /// lines, `held_lines`, stand at [`MAX_HELD_LINES`] already, or past it
+    /// as a reopened file can, or its next ordinal would pass [`MAX_ORDINAL`].
     Full { held_bytes: usize, frame_bytes: usize, held_lines: usize },
     /// The line's `doc` is no document address in its one spelling
     /// (`wire::document_address`), or its `frame` no JSON object: a line

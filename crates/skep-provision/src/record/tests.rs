@@ -1,8 +1,8 @@
-//! T3 — THE NAME's GRAMMAR and THE RECORD's ADMISSION: the label rule after
-//! the lowercase; a canonical record admitted with its anchorless fact; the
-//! hosted walk's trim; ONE VECTOR PER `PayloadError` VARIANT `parse_enroll`
-//! raises over a form's bytes, each D-5 naming its token; and D-6, a preview
-//! key that PARSES and is refused by the alg test alone.
+//! T3 — THE RECORD's ADMISSION: a canonical record admitted with its
+//! anchorless fact; the hosted walk's trim; ONE VECTOR PER `PayloadError`
+//! VARIANT `parse_enroll` raises over a form's bytes, each D-5 naming its
+//! token; and D-6, a preview key that PARSES and is refused by the alg test
+//! alone. (The name's grammar, the post's other field, is `name`'s suite.)
 
 use skep_identity::{encode_enroll, parse_enroll, Enrollment, PublicKey, ALG_FNDSA512_PREVIEW_ED25519, FNDSA512_PREVIEW_ED25519_KEY_LEN, MAX_RECORD_BYTES, MLDSA65_ED25519_KEY_LEN};
 
@@ -30,35 +30,6 @@ fn refused(bytes: &[u8]) -> RecordRefused {
         Err(r) => r,
         Ok(r) => panic!("admitted: {r:?}"),
     }
-}
-
-/// T3: THE GRAMMAR — `Alice` admitted as `alice`; `a` and a 63-byte label
-/// admitted; a hyphen at either end, a 64-byte label, a dot, an underscore
-/// and the empty name refused, each for its reason.
-#[test]
-fn the_name_is_one_lowercase_label_of_letters_digits_and_hyphens() {
-    assert_eq!(Name::parse(b"Alice").expect("lowercased").as_str(), "alice");
-    assert_eq!(Name::parse(b"a").expect("one byte").as_str(), "a");
-    let longest = "a".repeat(MAX_NAME_BYTES);
-    assert_eq!(Name::parse(longest.as_bytes()).expect("63 bytes").as_str(), longest);
-    assert_eq!(Name::parse(b"ALICE-2").expect("digits and an inner hyphen").as_str(), "alice-2");
-    assert_eq!(Name::parse(b"-a"), Err(NameRefused::Hyphen));
-    assert_eq!(Name::parse(b"a-"), Err(NameRefused::Hyphen));
-    assert_eq!(Name::parse("a".repeat(MAX_NAME_BYTES + 1).as_bytes()), Err(NameRefused::TooLong));
-    assert_eq!(Name::parse(b"a.b"), Err(NameRefused::NotALabel));
-    assert_eq!(Name::parse(b"a_b"), Err(NameRefused::NotALabel));
-    assert_eq!(Name::parse(b""), Err(NameRefused::Empty));
-    assert_eq!(Name::parse(b"a b"), Err(NameRefused::NotALabel));
-    assert_eq!(Name::parse("caf\u{e9}".as_bytes()), Err(NameRefused::NotALabel));
-    assert_eq!(Name::parse(&[b'a', 0xff]), Err(NameRefused::NotALabel));
-}
-
-/// The host and the PUBLIC origin a name stands at under a suffix.
-#[test]
-fn the_name_stands_at_its_host_and_its_public_origin() {
-    let name = Name::parse(b"alice").expect("a name");
-    assert_eq!(name.host("skep.host"), "alice.skep.host");
-    assert_eq!(name.origin("skep.host"), "https://alice.skep.host");
 }
 
 /// T3: a CANONICAL one-key record — `encode_enroll` over a production key —

@@ -35,7 +35,7 @@ use std::{
 };
 
 use super::{Call, Docker, Exit};
-use crate::record::Name;
+use crate::name::Name;
 
 /// THE HOLD a unit suite puts on the fake: called with every call's method
 /// and name once the call is answered and recorded, and free to block — the
@@ -43,7 +43,7 @@ use crate::record::Name;
 /// runs on. Called with no lock of the fake's held, so a hold on one call
 /// holds no other. Unwind-safe, as a suite catches the fake's own panics.
 #[cfg(test)]
-pub type Hold = Box<dyn Fn(&'static str, Option<&str>) + Send + Sync + UnwindSafe + RefUnwindSafe>;
+type Hold = Box<dyn Fn(&'static str, Option<&str>) + Send + Sync + UnwindSafe + RefUnwindSafe>;
 
 /// The exit code a call the script did not expect answers: Docker's own
 /// code for an error of the `docker` command itself, as this crate knows
@@ -52,17 +52,17 @@ pub const UNEXPECTED: i32 = 125;
 
 /// One scripted answer: the call it expects and what that call answers.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Step {
+struct Step {
     /// The method expected, as the trait spells it.
-    pub method: String,
+    method: String,
     /// The name expected, `None` for the reload.
-    pub name: Option<String>,
+    name: Option<String>,
     /// The exit code answered.
-    pub code: i32,
+    code: i32,
     /// The stdout answered.
-    pub stdout: Vec<u8>,
+    stdout: Vec<u8>,
     /// The stderr answered.
-    pub stderr: Vec<u8>,
+    stderr: Vec<u8>,
 }
 
 /// One call the fake received.
@@ -83,7 +83,7 @@ impl Called {
     /// The call as `<method> <name>` — `<method>` alone for the reload —
     /// the form a test lists the expected sequence in.
     #[cfg(test)]
-    pub fn said(&self) -> String {
+    fn said(&self) -> String {
         match &self.name {
             Some(name) => format!("{} {name}", self.method),
             None => self.method.to_owned(),
@@ -177,7 +177,7 @@ impl FakeDocker {
 
     /// The script's lines not yet called.
     #[cfg(test)]
-    pub fn left(&self) -> Vec<Step> {
+    fn left(&self) -> Vec<Step> {
         self.script.lock().unwrap_or_else(|e| e.into_inner()).iter().cloned().collect()
     }
 
@@ -230,7 +230,7 @@ impl FakeDocker {
 }
 
 /// A call's method name, as the trait and the script spell it.
-pub fn method(call: &Call<'_>) -> &'static str {
+fn method(call: &Call<'_>) -> &'static str {
     match call {
         Call::VolumeCreate(_) => "volume_create",
         Call::VolumeInspect(_) => "volume_inspect",
@@ -247,7 +247,7 @@ pub fn method(call: &Call<'_>) -> &'static str {
 }
 
 /// The board a call is about, where it names one.
-pub fn name<'a>(call: &Call<'a>) -> Option<&'a Name> {
+fn name<'a>(call: &Call<'a>) -> Option<&'a Name> {
     match *call {
         Call::VolumeCreate(n)
         | Call::VolumeInspect(n)

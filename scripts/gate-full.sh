@@ -185,8 +185,26 @@ RUSTDOCFLAGS="-D rustdoc::broken_intra_doc_links" \
     cargo doc -p skepd -p skep-media -p skep-signature -p skep-resolve -p skep-search -p skep-blobs -p skep-util -p skep-registry -p skep-http --lib --no-deps --document-private-items --all-features \
     || exit $?
 
+# skep-provision's binary without `test-hooks` — every test build turns it on
+# (the crate's self dev-dependency), so this is the build that shows the
+# binary `release-pack.sh` ships compiles without its two fakes; the doc
+# build below type-checks no function body. Run, it refuses the two fakes'
+# flags as unknown arguments, exit 2, and its usage names neither — what
+# `src/args/tests.rs` cannot show, every build of it having the feature on.
+# The output is held and matched whole, never piped to an early-exiting
+# `grep -q`, whose broken pipe `pipefail` would read as no match.
+cargo check -p skep-provision --bins || exit $?
+for flag in --docker-fake --mailer-fake; do
+    out=$(cargo run -q -p skep-provision -- serve --state-dir /nonexistent --reply-to o@x "$flag" x 2>&1); code=$?
+    if [ "$code" -ne 2 ] || [[ $out != *"serve: unknown argument '$flag'"* ]]; then
+        echo "gate-full: skep-provision without test-hooks did not refuse $flag (exit $code)"; exit 1
+    fi
+done
+usage=$(cargo run -q -p skep-provision -- --help) || exit $?
+if [[ $usage == *fake* ]]; then echo "gate-full: skep-provision's shipped usage names a fake flag"; exit 1; fi
+
 # skep-provision, a binary alone, cannot join a `--lib` line; its module
-# docs link across its fourteen modules through `main.rs`'s `mod` tree.
+# docs link across its seventeen modules through `main.rs`'s `mod` tree.
 RUSTDOCFLAGS="-D rustdoc::broken_intra_doc_links" \
     cargo doc -p skep-provision --bins --no-deps --document-private-items || exit $?
 

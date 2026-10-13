@@ -27,7 +27,7 @@ use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
 use crate::docker::{Docker, Exit, BOARD_PORT};
-use crate::record::Name;
+use crate::name::Name;
 
 /// THE SNIPPET's TEXT for `name` under `suffix`: the deployment notes' block
 /// for `alice` under `skep.host`, byte for byte, every occurrence of either

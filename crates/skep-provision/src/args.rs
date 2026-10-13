@@ -16,48 +16,48 @@ use std::path::PathBuf;
 
 use crate::docker::Settings;
 use crate::invites::{code_ok, MAX_CODE_BYTES};
-use crate::signups::address_ok;
+use crate::statedir::address_ok;
 
 /// THE LISTEN ADDRESS's DEFAULT: loopback, port 8842 — not the daemon's
 /// 8642 and not the dev provider's 8742. How Caddy, in its container,
 /// reaches the service on the host is the VM's configuration; `--listen`
 /// takes any address the operator gives.
-pub const DEFAULT_LISTEN: SocketAddr = SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 8842));
+const DEFAULT_LISTEN: SocketAddr = SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 8842));
 
 /// THE SNIPPET DIRECTORY's DEFAULT: the one the Caddyfile imports, `import
 /// /etc/caddy/boards/*.caddy` (the deployment notes §4a).
-pub const DEFAULT_BOARDS_DIR: &str = "/etc/caddy/boards";
+const DEFAULT_BOARDS_DIR: &str = "/etc/caddy/boards";
 
 /// THE HOSTED IMAGE's DEFAULT TAG: the `Dockerfile`'s default target, as
 /// the README builds it.
-pub const DEFAULT_IMAGE: &str = "skep-hosted";
+const DEFAULT_IMAGE: &str = "skep-hosted";
 
 /// THE SIDECAR's DEFAULT TAG: the `Dockerfile`'s `skep-cli` target, the
 /// `skep` command alone.
-pub const DEFAULT_CLI_IMAGE: &str = "skep-cli";
+const DEFAULT_CLI_IMAGE: &str = "skep-cli";
 
 /// THE BRIDGE's DEFAULT: the network Caddy and the boards share (the
 /// deployment notes §4 step 5, `docker network create skep`).
-pub const DEFAULT_NETWORK: &str = "skep";
+const DEFAULT_NETWORK: &str = "skep";
 
 /// CADDY's CONTAINER, by default (the deployment notes §4a's run line).
-pub const DEFAULT_CADDY: &str = "caddy";
+const DEFAULT_CADDY: &str = "caddy";
 
 /// THE SUFFIX's DEFAULT: the alpha's domain, every board `<name>.skep.host`.
-pub const DEFAULT_SUFFIX: &str = "skep.host";
+const DEFAULT_SUFFIX: &str = "skep.host";
 
 /// THE SERVING RUN's LOG FILE SIZE, by default: the README's serving line's
 /// `max-size=10m` — the operator's to size.
-pub const DEFAULT_LOG_MAX_SIZE: &str = "10m";
+const DEFAULT_LOG_MAX_SIZE: &str = "10m";
 
 /// THE SERVING RUN's LOG FILES KEPT, by default: the README's serving
 /// line's `max-file=5` — the operator's to size.
-pub const DEFAULT_LOG_MAX_FILE: u32 = 5;
+const DEFAULT_LOG_MAX_FILE: u32 = 5;
 
 /// THE WORKERS, by default: three threads, each making one board at a
 /// time, so three names are made at once — the owner's number for the
 /// alpha's VM; `--workers` sets another, never zero.
-pub const DEFAULT_WORKERS: usize = 3;
+const DEFAULT_WORKERS: usize = 3;
 
 /// What the command line asked for.
 #[derive(Debug, Clone, PartialEq, Eq)]

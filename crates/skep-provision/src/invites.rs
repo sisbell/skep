@@ -20,7 +20,7 @@
 //! by a failed post, so the person may post again. The code is NEVER
 //! LOGGED, and never shown but in the `invite` verb's one DATA line.
 //!
-//! THE FILE IS REWRITTEN WHOLE ([`crate::signups::write_whole`]) at every
+//! THE FILE IS REWRITTEN WHOLE ([`crate::statedir::write_whole`]) at every
 //! change, within the service and across processes alike, under an exclusive
 //! lock on the sibling `invites.lock` — the service spends while the owner's
 //! `invite` may mint, and neither change may be lost to the other's write.
@@ -30,16 +30,16 @@ use std::fmt;
 use std::fs::OpenOptions;
 use std::io;
 
+use crate::name::Name;
 use crate::names::fresh_token;
-use crate::record::Name;
-use crate::signups::{address_ok, read_or_empty, today, write_whole_with, StateDir};
+use crate::statedir::{address_ok, read_or_empty, today, write_whole_with, StateDir};
 
 /// The invite file's name in the state directory.
-pub const INVITES: &str = "invites";
+const INVITES: &str = "invites";
 
 /// The lock file beside it: held exclusively over each read-and-rewrite,
 /// by the service and by the `invite` verb alike.
-pub const INVITES_LOCK: &str = "invites.lock";
+const INVITES_LOCK: &str = "invites.lock";
 
 /// A code's byte bound: room for a document's address, and no more.
 pub const MAX_CODE_BYTES: usize = 128;
@@ -120,7 +120,7 @@ pub fn claim_address(suffix: &str, code: &str) -> String {
 
 /// Every invite the file holds, in its order; a line of no shape the file
 /// writes is passed over here, and kept as it stands by every rewrite.
-pub fn read_all(dir: &StateDir) -> io::Result<Vec<Invite>> {
+fn read_all(dir: &StateDir) -> io::Result<Vec<Invite>> {
     Ok(read_lines(dir)?
         .into_iter()
         .filter_map(|line| match line {
@@ -215,7 +215,7 @@ pub fn spend(dir: &StateDir, code: &str, name: &Name) -> io::Result<bool> {
 }
 
 /// [`spend`] with the writer's seam between the temp file and the rename.
-pub fn spend_with(dir: &StateDir, code: &str, name: &Name, between: &dyn Fn() -> io::Result<()>) -> io::Result<bool> {
+fn spend_with(dir: &StateDir, code: &str, name: &Name, between: &dyn Fn() -> io::Result<()>) -> io::Result<bool> {
     update(
         dir,
         |lines| {

@@ -51,10 +51,10 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::thread;
 
-use crate::record::Name;
+use crate::name::Name;
 
 /// The program every call runs: the host's `docker`, found on `PATH`.
-pub const DOCKER: &str = "docker";
+const DOCKER: &str = "docker";
 
 /// THE BOARD THE SIDECAR DIALS: the claim run's daemon on ITS loopback, at
 /// the image's baked port — reachable from inside the claim run's network
@@ -70,23 +70,23 @@ pub const BOARD_PORT: u16 = 8642;
 /// Where a board's volume is mounted: the image's `VOLUME`, whose
 /// `board/` the daemon creates one level below (the baked
 /// `SKEPD_DATA_DIR`).
-pub const VOLUME_MOUNT: &str = "/var/lib/skepd";
+const VOLUME_MOUNT: &str = "/var/lib/skepd";
 
 /// The Caddyfile the reload names, inside Caddy's container (the
 /// deployment notes §4a: `/etc/caddy` mounted read-only there).
-pub const CADDYFILE: &str = "/etc/caddy/Caddyfile";
+const CADDYFILE: &str = "/etc/caddy/Caddyfile";
 
 /// THE LABEL's KEY: the mark every volume this service creates carries,
 /// by which the sweep at start lists them and no other volume on the host
 /// (`docker volume create --label`, `docker volume ls --filter label=` —
 /// UNVERIFIED HERE, as the module doc marks).
-pub const LABEL_KEY: &str = "skep.provision";
+const LABEL_KEY: &str = "skep.provision";
 
 /// THE LABEL's VALUE: one, a flag — the key's presence is the mark.
-pub const LABEL_VALUE: &str = "1";
+const LABEL_VALUE: &str = "1";
 
 /// The label as both calls spell it: `<key>=<value>`.
-pub fn label() -> String {
+fn label() -> String {
     format!("{LABEL_KEY}={LABEL_VALUE}")
 }
 
@@ -169,7 +169,7 @@ pub trait Docker: Send + Sync {
 
 /// One call, as data: what [`Call::argv`] renders and the fake matches.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Call<'a> {
+enum Call<'a> {
     /// [`Docker::volume_create`].
     VolumeCreate(&'a Name),
     /// [`Docker::volume_inspect`].
@@ -197,7 +197,7 @@ pub enum Call<'a> {
 impl Call<'_> {
     /// THE ARGV, after the program: a pure function of the call and the
     /// settings, the one place each run line is spelled.
-    pub fn argv(&self, s: &Settings) -> Vec<String> {
+    fn argv(&self, s: &Settings) -> Vec<String> {
         match *self {
             // THE VOLUME, labelled as this service's before its name — the
             // one mark the sweep at start lists by. The smoke's own line
@@ -317,7 +317,7 @@ impl Host {
     /// recording script, so the runner's own process handling is judged
     /// with no Docker run.
     #[cfg(test)]
-    pub fn with_program(program: PathBuf, settings: Settings) -> Host {
+    fn with_program(program: PathBuf, settings: Settings) -> Host {
         Host { program, settings }
     }
 
@@ -349,7 +349,7 @@ impl Host {
 /// else — no variable set, no directory changed; stdout and stderr piped
 /// apart; stdin a pipe where the call carries input and null where it does
 /// not, never the service's own.
-pub fn command(program: &Path, argv: &[String], stdin: bool) -> Command {
+fn command(program: &Path, argv: &[String], stdin: bool) -> Command {
     let mut cmd = Command::new(program);
     cmd.args(argv).stdin(if stdin { Stdio::piped() } else { Stdio::null() }).stdout(Stdio::piped()).stderr(Stdio::piped());
     cmd

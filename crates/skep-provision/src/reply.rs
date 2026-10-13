@@ -4,7 +4,7 @@
 //! board's public origin, the anchorless fact and the status address — so
 //! the page and the mail cannot say two things.
 //!
-//! IN ORDER, each row the strings table's (`pages`): the heading; THE FOUR
+//! IN ORDER, each row the strings table's (`strings`): the heading; THE FOUR
 //! RULED STRINGS by condition — the operator sentence ALWAYS; the
 //! anchorless sentence IFF the record carried no anchor-flagged entry, the
 //! FORM's own parse of it and never a DATA line (the sidecar's reply carries
@@ -20,8 +20,8 @@
 //! embed the dialed origin and a literal `<origin>`, neither fit to show a
 //! person; and THE STATUS ADDRESS last.
 
-use crate::pages::{fill, ANCHORLESS, FACTS, FIRST_ACT, LIVE, OPERATOR, PUBLIC_VENUE, REPLY_STATUS, SECOND_ACT};
 use crate::sidecar::{ACCOUNT, PRINCIPAL};
+use crate::strings::{fill, ANCHORLESS, FACTS, FIRST_ACT, LIVE, OPERATOR, PUBLIC_VENUE, REPLY_STATUS, SECOND_ACT};
 
 /// THE LIVE TEXT: plain text, its paragraphs separated by a blank line,
 /// for the page (`pages::paragraphs`) and the mail's body alike.

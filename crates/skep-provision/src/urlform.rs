@@ -28,7 +28,7 @@ impl Form {
     }
 
     /// Every field, in the order sent.
-    pub fn fields(&self) -> &[(Vec<u8>, Vec<u8>)] {
+    fn fields(&self) -> &[(Vec<u8>, Vec<u8>)] {
         &self.fields
     }
 }

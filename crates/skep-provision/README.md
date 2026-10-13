@@ -156,8 +156,8 @@ serves. The serving line carries the count, `swept <n>`.
 
 ## The strings
 
-Every sentence a person reads lives in one table at the top of
-`src/pages.rs`. Each row names where its words come from:
+Every sentence a person reads lives in one table, `src/strings.rs`.
+Each row names where its words come from:
 
 - `D-1` … `D-9` are the deployment notes' draft rows for the form;
 - `DRAFT` rows are words this crate wrote where no ruled text exists: the

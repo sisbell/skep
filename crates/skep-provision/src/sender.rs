@@ -37,17 +37,17 @@ use std::thread;
 use std::time::Duration;
 
 use crate::docker::Exit;
-use crate::record::Name;
+use crate::name::Name;
 
 /// The tries a message gets: the first and six more — an hour of a
 /// relay's outage at [`MAIL_INTERVAL`].
 pub const MAIL_TRIES: u32 = 7;
 
 /// The sleep between two tries.
-pub const MAIL_INTERVAL: Duration = Duration::from_secs(10 * 60);
+const MAIL_INTERVAL: Duration = Duration::from_secs(10 * 60);
 
 /// The flag the mailer reads its recipients off the headers by.
-pub const READ_RECIPIENTS: &str = "-t";
+const READ_RECIPIENTS: &str = "-t";
 
 /// The log a thread writes to: one line, no line break.
 pub type Log = Arc<dyn Fn(&str) + Send + Sync>;
@@ -112,7 +112,7 @@ impl Mailer {
 
 /// THE COMMAND for a mailer: `<program> -t` and nothing else, the message
 /// to go on its stdin, its stdout and stderr captured apart.
-pub fn command(program: &Path) -> Command {
+fn command(program: &Path) -> Command {
     let mut cmd = Command::new(program);
     cmd.arg(READ_RECIPIENTS).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
     cmd
@@ -134,7 +134,7 @@ impl Sender for Mailer {
 /// `interval` between two, each refusal logged with its exit code; `true`
 /// once a try exits 0. The mailer's stderr is not logged: a relay's refusal
 /// names the recipient, and an address is never a log line's.
-pub fn deliver(sender: &dyn Sender, message: &Message, tries: u32, interval: Duration, sleep: &dyn Fn(Duration), log: &dyn Fn(&str)) -> bool {
+fn deliver(sender: &dyn Sender, message: &Message, tries: u32, interval: Duration, sleep: &dyn Fn(Duration), log: &dyn Fn(&str)) -> bool {
     let name = &message.name;
     for at in 1..=tries {
         match sender.send(message) {

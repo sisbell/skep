@@ -54,15 +54,24 @@
 //! invite not minted.
 //!
 //! The modules are declared below in dependency order, each naming only
-//! those above it; `ARCHITECTURE.md` §The provisioning service draws them.
+//! those above it — `tests/it/tidy.rs` checks it — and `ARCHITECTURE.md`
+//! §The provisioning service draws them.
 
 #![forbid(unsafe_code)]
+// A binary exports nothing, so this holds the crate's own doc alone; every
+// `pub` item and field in a module is held to its doc by `tests/it/tidy.rs`.
 #![deny(missing_docs)]
 
+// Test scaffolding for the unit suites alone: a scratch directory, removed
+// when dropped.
+#[cfg(test)]
+mod scratch;
 // The form's body decoded: `application/x-www-form-urlencoded`, strictly.
 mod urlform;
-// The name's grammar, the record's trim and parse, the preview-kind test,
-// the anchorless fact.
+// A board's name: one lowercase label, and the host and the public origin
+// it stands at.
+mod name;
+// The record's trim and parse, the preview-kind test, the anchorless fact.
 mod record;
 // The Docker runner: the trait, the argv of every call, the host's
 // `docker`; the scripted fake under `test-hooks`.
@@ -76,17 +85,22 @@ mod health;
 mod caddy;
 // The truth about names, the status token, the status map.
 mod names;
-// The address rule, the state directory, its writer, the sign-up file.
+// The state directory: its door, its one writer, and what its two files'
+// lines carry — the address rule, the date.
+mod statedir;
+// The sign-up file.
 mod signups;
 // The invite file: mint, look up, spend.
 mod invites;
-// The strings table, the pages, the routes over `skep-http`.
+// Every sentence a person reads: one table, each row naming its id.
+mod strings;
+// The pages' HTML and the routes over `skep-http`, and the desk they ask.
 mod pages;
-// The live reply, for the page and the mail alike.
-mod reply;
 // The mail: the trait, the mailer, the sender's thread; the fake under
 // `test-hooks`.
 mod sender;
+// The live reply, for the page and the mail alike.
+mod reply;
 // The workers, the queue, the name as the unit of exclusion, the steps, the
 // cleanup, the sweep at start.
 mod flow;
@@ -104,7 +118,7 @@ use docker::{Docker, Host};
 use flow::{Config, Mail, Service};
 use pages::Site;
 use sender::{Log, Outbox, Sender, Sleep};
-use signups::StateDir;
+use statedir::StateDir;
 
 fn main() {
     let code = match args::parse(std::env::args_os().skip(1)) {
@@ -259,56 +273,6 @@ fn invite(cfg: args::Invite) -> i32 {
         Err(refused) => {
             say_err(&format!("skep-provision: invite: {refused}"));
             1
-        }
-    }
-}
-
-#[cfg(test)]
-mod scratch {
-    //! A scratch directory for the unit suites: made under the system temp
-    //! directory, named by OS entropy, removed when dropped.
-
-    use std::path::{Path, PathBuf};
-
-    /// One scratch directory.
-    pub struct Scratch(PathBuf);
-
-    impl Scratch {
-        /// A fresh one, `0700`.
-        pub fn new() -> Scratch {
-            let mut raw = [0u8; 8];
-            getrandom::fill(&mut raw).expect("OS entropy");
-            let name: String = raw.iter().map(|b| format!("{b:02x}")).collect();
-            let path = std::env::temp_dir().join(format!("skep-provision-test-{name}"));
-            let mut builder = std::fs::DirBuilder::new();
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::DirBuilderExt;
-                builder.mode(0o700);
-            }
-            builder.create(&path).expect("a scratch directory");
-            Scratch(path)
-        }
-
-        /// Its path.
-        pub fn path(&self) -> &Path {
-            &self.0
-        }
-    }
-
-    impl Drop for Scratch {
-        fn drop(&mut self) {
-            #[cfg(unix)]
-            {
-                // A test that made a directory unwritable gives it back first.
-                use std::os::unix::fs::PermissionsExt;
-                if let Ok(entries) = std::fs::read_dir(&self.0) {
-                    for entry in entries.flatten() {
-                        let _ = std::fs::set_permissions(entry.path(), std::fs::Permissions::from_mode(0o700));
-                    }
-                }
-            }
-            let _ = std::fs::remove_dir_all(&self.0);
         }
     }
 }

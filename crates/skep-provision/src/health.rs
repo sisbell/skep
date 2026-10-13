@@ -29,7 +29,7 @@ use std::time::Duration;
 use serde_json::Value;
 
 use crate::docker::Docker;
-use crate::record::Name;
+use crate::name::Name;
 
 /// A bounded wait: this many tries, this far apart.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -48,7 +48,7 @@ pub const HEALTH_WAIT: Wait = Wait { tries: 60, interval: Duration::from_secs(1)
 
 /// Whether a `/health` body answers THE PAIR: `auth.claimant` a string and
 /// `auth.local_trust` the boolean `false`; every other member ignored.
-pub fn pair(body: &[u8]) -> bool {
+fn pair(body: &[u8]) -> bool {
     let Ok(body) = serde_json::from_slice::<Value>(body) else {
         return false;
     };

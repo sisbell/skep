@@ -11,9 +11,13 @@
 //! disposition, ending the process. THE SWEEP (T22): started over a script
 //! whose `volumes` lists one half-made name, the binary removes it before
 //! its serving line, which carries the count. No Docker runs: every call is
-//! the script's, and the calls are read back after.
+//! the script's, and the calls are read back after. Beside it, `tidy` reads
+//! the crate's own source and manifest for the arrangement `src/main.rs` and
+//! `ARCHITECTURE.md` §The provisioning service state.
 
 #![cfg(unix)]
+
+mod tidy;
 
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{Shutdown, TcpStream};

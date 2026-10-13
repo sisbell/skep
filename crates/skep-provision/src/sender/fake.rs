@@ -21,7 +21,7 @@ use super::{Message, Sender};
 use crate::docker::Exit;
 
 /// The line that opens each message in the log.
-pub const SEPARATOR: &str = "=== skep-provision mail-fake: one message ===";
+const SEPARATOR: &str = "=== skep-provision mail-fake: one message ===";
 
 /// THE FAKE: the log, the script, every try.
 #[derive(Debug)]

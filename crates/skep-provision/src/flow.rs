@@ -91,22 +91,25 @@ use crate::caddy;
 use crate::docker::{Docker, Exit};
 use crate::health::{self, Wait, Waited, HEALTH_WAIT};
 use crate::invites;
+use crate::name::Name;
 use crate::names::{self, State, StatusMap};
-use crate::pages::{self, Desk, Post, Refusal, Shown, SignUpRefusal, MAIL_SUBJECT};
-use crate::record::{self, Name, Record, RecordRefused};
+use crate::pages::{self, Desk, Post, Refusal, Shown, SignUpRefusal};
+use crate::record::{self, Record, RecordRefused};
 use crate::reply;
 use crate::sender::{Log, Message, Outbox, Sleep};
 use crate::sidecar::{self, Answer, Failure};
-use crate::signups::{SignUpRefused, SignUps, StateDir};
+use crate::signups::{SignUpRefused, SignUps};
+use crate::statedir::StateDir;
+use crate::strings::{fill, MAIL_SUBJECT};
 
 /// THE QUEUE's DEPTH: four posts WAITING for a worker, the ones the workers
 /// run apart (the provisioning record §5.2's figure); a fifth meets D-8,
 /// "try again later".
-pub const QUEUE_DEPTH: usize = 4;
+const QUEUE_DEPTH: usize = 4;
 
 /// THE DARK CLAIM's RETRY: thirty tries two seconds apart while the
 /// sidecar answers exit 4 — the claim run's daemon not yet listening.
-pub const SIDECAR_WAIT: Wait = Wait { tries: 30, interval: Duration::from_secs(2) };
+const SIDECAR_WAIT: Wait = Wait { tries: 30, interval: Duration::from_secs(2) };
 
 /// What the service is configured with.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -262,7 +265,7 @@ impl Service {
     /// The next queued post provisioned now, on this thread — `false` where
     /// none waits: one worker's one turn, as a unit suite drives it.
     #[cfg(test)]
-    pub fn run_next(&self) -> bool {
+    fn run_next(&self) -> bool {
         let job = {
             let mut book = self.book();
             let Some(job) = book.queue.pop_front() else { return false };
@@ -502,7 +505,7 @@ impl Service {
             to: job.address.clone(),
             from: mail.from.clone(),
             reply_to: self.config.reply_to.clone(),
-            subject: pages::fill(MAIL_SUBJECT, &[]),
+            subject: fill(MAIL_SUBJECT, &[]),
             body: reply::text(&origin, job.record.anchorless(), &status),
         });
     }

@@ -97,7 +97,7 @@ fn a_failure_before_the_rename_leaves_the_file_as_it_was() {
     let failed = spend_with(&state, &code, &alice(), &|| Err(io::Error::other("a failure between the write and the rename")));
     assert!(failed.is_err());
     assert_eq!(fs::read(state.file(INVITES)).expect("the file"), before);
-    assert!(!crate::signups::temp_of(&state.file(INVITES)).exists());
+    assert!(!crate::statedir::temp_of(&state.file(INVITES)).exists());
     assert!(lookup(&state, &code).expect("read").expect("held").issued());
 }
 

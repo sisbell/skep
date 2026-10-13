@@ -3,9 +3,11 @@
 //! not at all; an unknown flag, a missing value, a value of the wrong form
 //! and a missing required flag are each a usage refusal (`main` answers it
 //! exit 2 — the binary's suite runs one); `--workers` defaults to its
-//! constant and refuses zero (T21); `--docker-fake` and `--mailer-fake` are
-//! flags of a `test-hooks` build alone; and the usage text names every flag
-//! and renders every default from its constant.
+//! constant and refuses zero (T21); a `test-hooks` build takes
+//! `--docker-fake` and `--mailer-fake` — the shipped build's refusal of both
+//! is `scripts/gate-full.sh`'s to check, every build of this suite having
+//! the feature on; and the usage text names every flag and renders every
+//! default from its constant.
 
 use std::ffi::OsString;
 
@@ -168,24 +170,20 @@ fn every_usage_refusal() {
     assert_eq!(serve(&["--help"]), Ok(Command::Help));
 }
 
-/// T1: `--docker-fake` and `--mailer-fake` ARE FLAGS OF A `test-hooks`
-/// BUILD ALONE — pinned under a `cfg` here: in the build this suite runs
-/// (the self dev-dependency turns the feature on) they parse, and in any
-/// other they are unknown arguments, as the shipped binary refuses them.
+/// T1: A `test-hooks` BUILD TAKES `--docker-fake` AND `--mailer-fake` —
+/// every build of this suite is one (the self dev-dependency turns the
+/// feature on), so here they parse and the usage names them. The shipped
+/// build, which refuses both as unknown arguments and whose usage names
+/// neither, is never one this suite compiles: `scripts/gate-full.sh` builds
+/// the binary without the feature and runs it to check both.
 #[test]
-fn the_fakes_flags_are_a_test_hooks_builds_alone() {
+fn a_test_hooks_build_takes_the_fakes_flags() {
     #[cfg(feature = "test-hooks")]
     {
         let s = served(&["--docker-fake", "/tmp/script", "--mailer-fake", "/tmp/mail.log", "--from", "noreply@skep.host"]);
         assert_eq!(s.docker_fake, Some(PathBuf::from("/tmp/script")));
         assert_eq!(s.mail, Some(MailArgs { mailer: Mailer::Fake(PathBuf::from("/tmp/mail.log")), from: "noreply@skep.host".into() }));
         assert!(usage().contains("--docker-fake <SCRIPT>") && usage().contains("--mailer-fake <LOG>"));
-    }
-    #[cfg(not(feature = "test-hooks"))]
-    {
-        assert_eq!(serve(&["--docker-fake", "/tmp/script"]), Err("serve: unknown argument '--docker-fake'".to_owned()));
-        assert_eq!(serve(&["--mailer-fake", "/tmp/mail.log"]), Err("serve: unknown argument '--mailer-fake'".to_owned()));
-        assert!(!usage().contains("fake"));
     }
 }
 

@@ -7,9 +7,9 @@
 //! text the page's text with the headers before it.
 
 use super::*;
-use crate::pages::{fill, ANCHORLESS, OPERATOR, PUBLIC_VENUE};
-use crate::record::Name;
+use crate::name::Name;
 use crate::sender::Message;
+use crate::strings::{fill, ANCHORLESS, OPERATOR, PUBLIC_VENUE};
 
 const ORIGIN: &str = "https://alice.skep.host";
 const STATUS: &str = "https://skep.host/status/0123456789abcdef0123456789abcdef";
@@ -111,7 +111,7 @@ fn the_mails_text_is_the_pages_with_the_headers() {
         to: "person@example.com".into(),
         from: "noreply@skep.host".into(),
         reply_to: "owner@skep.host".into(),
-        subject: fill(crate::pages::MAIL_SUBJECT, &[]),
+        subject: fill(crate::strings::MAIL_SUBJECT, &[]),
         body: page.clone(),
     };
     let headers = "To: person@example.com\nFrom: noreply@skep.host\nReply-To: owner@skep.host\nSubject: Your board is live\nMIME-Version: 1.0\nContent-Type: text/plain; charset=utf-8\nContent-Transfer-Encoding: 8bit\n";

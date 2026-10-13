@@ -39,7 +39,7 @@ use std::path::Path;
 
 use crate::caddy;
 use crate::docker::Docker;
-use crate::record::Name;
+use crate::name::Name;
 use crate::sidecar::{ACCOUNT, PRINCIPAL};
 
 /// Which of the three things standing makes a name taken.
@@ -157,9 +157,9 @@ pub enum State {
     Failed,
 }
 
-/// One post of this run, as its status page reads it.
+/// One post this run admitted, as its status page reads it.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Post {
+pub struct AdmittedPost {
     /// The board's name.
     pub name: Name,
     /// Where it stands.
@@ -173,7 +173,7 @@ pub struct Post {
 /// facts.
 #[derive(Debug, Clone, Default)]
 pub struct StatusMap {
-    posts: HashMap<String, Post>,
+    posts: HashMap<String, AdmittedPost>,
     live: BTreeMap<Name, Facts>,
 }
 
@@ -187,7 +187,7 @@ impl StatusMap {
 
     /// A post admitted under `token`: queued.
     pub fn admit(&mut self, token: String, name: Name, anchorless: bool) {
-        self.posts.insert(token, Post { name, state: State::Queued, anchorless });
+        self.posts.insert(token, AdmittedPost { name, state: State::Queued, anchorless });
     }
 
     /// `token`'s post moved to `state`; a post gone live joins the live
@@ -202,7 +202,7 @@ impl StatusMap {
     }
 
     /// `token`'s post, where this run admitted one.
-    pub fn post(&self, token: &str) -> Option<&Post> {
+    pub fn post(&self, token: &str) -> Option<&AdmittedPost> {
         self.posts.get(token)
     }
 

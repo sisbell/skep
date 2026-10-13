@@ -1540,11 +1540,16 @@ verb mints one invite by the owner's hand and prints the claim address
 that carries it. Its modules, in the order `src/main.rs` declares them,
 each naming only those above it:
 
+- `scratch.rs`, for the unit suites alone, a scratch directory removed
+  when dropped.
 - `urlform.rs` the form's body decoded strictly — `+` a space, `%XX` the
   byte, a `%` without two hex digits refused — its values kept as bytes.
-- `record.rs` the name's grammar, one lowercase label, and the record's
-  admission: the hosted walk's trim, `parse_enroll`, the walk's
-  preview-kind test copied, the anchorless fact.
+- `name.rs` a board's name: its grammar, one lowercase label, and the host
+  and the public origin it stands at, from which every `docker` call, the
+  snippet and the reply are built.
+- `record.rs` the record's admission: the hosted walk's trim,
+  `parse_enroll`, the walk's preview-kind test copied, the anchorless
+  fact.
 - `docker.rs` the `Docker` trait, one method per call, the listing of
   the labelled volumes among them; `Call::argv`, every call's argv as a
   pure function, the volume's creation carrying the label; `Host`, the
@@ -1560,16 +1565,20 @@ each naming only those above it:
   container — the status token, the status map, rebuilt at start from
   the snippets, and the labelled volumes sorted against the snippets into
   half-made, routed and unnamed.
-- `signups.rs` the address rule, the state directory's door, the state
-  files' one writer, the date, and the sign-up file.
+- `statedir.rs` the state directory's door, the state files' one
+  writer, and what the two files' lines carry: the address rule and the
+  date.
+- `signups.rs` the sign-up file.
 - `invites.rs` the invite file — mint, look up, spend — under a lock file
   across processes.
-- `pages.rs` the strings table, the four pages' HTML and the routes'
-  dispatch over `skep-http`, each route asking a `Desk`.
-- `reply.rs` the live reply, one function for the page and the mail.
+- `strings.rs` the strings table: every sentence a person reads, each row
+  naming its id.
+- `pages.rs` the four pages' HTML and the routes' dispatch over
+  `skep-http`, each route asking a `Desk`.
 - `sender.rs` the `Sender` trait, the mailer it shells out to, the
   message, and the sender's own thread with its retry; under
   `test-hooks` `sender/fake.rs`.
+- `reply.rs` the live reply, one function for the page and the mail.
 - `flow.rs` the `Service` — the `Desk` the routes ask, the queue, the
   name as the unit of exclusion, the workers' steps, the serial pair's
   lock, the cleanup table, the sweep at start, the send after the route
@@ -1621,14 +1630,26 @@ Rules that hold across its files:
 - **The log never carries** the record's bytes, a person's address, an
   invite code or a status token, and the `Debug` of a record, an invite
   or a message shows none of them.
-- **Every person-facing sentence is in one table** at the top of
-  `pages.rs`, each row naming its id, and the live reply is one function,
-  so the page and the mail cannot say two things.
+- **Every person-facing sentence is in one table**, `strings.rs`, each
+  row naming its id, and the live reply is one function, so the page and
+  the mail cannot say two things.
 - **Two fakes, under `test-hooks` alone.** The scripted Docker runner
   fails a test on a call it did not expect; the mail fake appends what it
-  accepts to a file. No shipped build enables the feature: `cargo check
-  -p skep-provision --bins` builds the binary without it, and there
-  `--docker-fake` and `--mailer-fake` are unknown arguments.
+  accepts to a file. No shipped build enables the feature, and every test
+  build does, through the crate's self dev-dependency; so
+  `scripts/gate-full.sh` checks the binary without it (`cargo check -p
+  skep-provision --bins`) and runs it: there `--docker-fake` and
+  `--mailer-fake` are unknown arguments, exit 2, and the usage names
+  neither.
+- **Imports point down.** A module — its fakes and its suite too — names
+  only the modules `src/main.rs` declares above it, and an item by its
+  home module, never through the root; and the crate depends on
+  `getrandom`, `serde_json`, `skep-http` and `skep-identity` alone.
+  `tests/it/tidy.rs` checks both, and that every file is declared.
+- **Every `pub` item says what it is.** `#![deny(missing_docs)]` reaches
+  only what a crate exports, and a binary exports nothing, so
+  `tests/it/tidy.rs` holds every file under `src/` to its `//!` doc and
+  every `pub` item and field to its `///` line.
 
 Its integration suite is one binary, `tests/it/`, driving the built
 `skep-provision` under `test-hooks`: `invite` mints a code; `serve` runs
@@ -1636,7 +1657,9 @@ on an ephemeral loopback port over the two fakes and a temp state
 directory; a browser's requests reach the live reply at the status
 address, the snippet written and the one mail sent; every refusal answers
 as the strings say; a half-made board is swept before the serving line;
-and SIGTERM ends the process.
+and SIGTERM ends the process. Beside it, `tests/it/tidy.rs` reads the
+arrangement off the source and the manifest: the module order, the
+declared files, every `pub` item's doc and the four dependencies.
 
 ## The name space, `skep-namespace`
 

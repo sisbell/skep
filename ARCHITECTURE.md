@@ -1543,14 +1543,17 @@ each naming only those above it:
 - `scratch.rs`, for the unit suites alone, a scratch directory removed
   when dropped.
 - `urlform.rs` the form's body decoded strictly — `+` a space, `%XX` the
-  byte, a `%` without two hex digits refused — its values kept as bytes.
+  byte, a `%` without two hex digits refused, a fourth field refused — its
+  values kept as bytes.
 - `whole.rs` a kept file changed durably: replaced whole by rename from
-  its `<file>.tmp` at the mode its owner names, set exactly, or removed —
-  the directory synced either way.
+  its `<file>.tmp` — made fresh where nothing stands at its name, so the
+  write follows no link — at the mode its owner names, set exactly, or
+  removed — the directory synced either way.
 - `process.rs` a child process run to its end: `Exit`, what it answered,
   and `run`, which sets the child's streams — the input on a pipe written
   by a thread of its own, or a null stdin — and reads stdout and stderr
-  apart.
+  apart; a feeding thread the OS refuses is the call's error, its child
+  ended, never a panic.
 - `name.rs` a board's name: its grammar, one lowercase label, and the host
   and the public origin it stands at, from which every `docker` call, the
   snippet and the reply are built; and `Name::exact`, a name read back as
@@ -1581,15 +1584,16 @@ each naming only those above it:
   writer, `whole`'s replacement at `0600`; and what the two files' lines
   carry: the address rule, with `MailAddress`, the one value an address
   is taken in as, and the date.
-- `signups.rs` the sign-up file.
+- `signups.rs` the sign-up file, capped at 256 KiB.
 - `invites.rs` the invite file — mint, look up, spend — under a lock file
   across processes; the code's alphabet, and `InviteCode`, the one value a
   code is taken in as.
 - `strings.rs` the strings table: every sentence a person reads, each row
   naming its id.
 - `pages.rs` the four pages' HTML and each request's dispatch, by method
-  and path, over `skep-http`, each page asking a `Desk`; and the two URLs
-  the service hands out, the invite link and a post's status URL.
+  and path, over `skep-http`, the request in and the answer out each under
+  a deadline of its own, each page asking a `Desk`; and the two URLs the
+  service hands out, the invite link and a post's status URL.
 - `sender.rs` the `Sender` trait, `RelaySender` — the relay client
   `--mailer` names, shelled out to — the message, and the outbox: the
   sender's own thread with its retry, and the follow-up mail's `From:`,
@@ -1628,8 +1632,20 @@ Rules that hold across its files:
   flight and its admission run under the book's short lock on the status
   map, the queue and the held codes — the admission looking at what is in
   flight again, and at the invite again, under that lock — and its three
-  reads of what stands under no lock at all; none waits behind a board
+  reads of what stands under no lock at all, four posts' at most at once,
+  a fifth answered D-8 with no `docker` call; none waits behind a board
   being made, and a status page waits on nothing either.
+- **Connections are a pool, and slowness ends.** `--connections` threads,
+  sixteen by default, each take the next connection off the listener, a
+  further one waiting in the listener's queue; both pools are made at
+  start, no thread is made per connection, and one the OS will not give
+  ends the start, exit 1. A request in and its answer out each have a
+  minute, checked between socket calls, so a client that trickles its
+  bytes is cut off rather than holding a thread.
+- **A stranger's bytes buy a bounded bill.** A decoded form holds at most
+  three fields, so it never holds more bytes than were sent; and the
+  sign-up file holds at most 256 KiB, past which a sign-up, which needs
+  no invite, is refused with no write.
 - **Route changes are serial.** One lock, the route lock, is held across
   a route change — a snippet's write or its removal, and the reload that
   follows it — and nowhere else, so no reload lands between another
@@ -1701,8 +1717,9 @@ on an ephemeral loopback port over the two fakes and a temp state
 directory; a browser's requests reach the live reply at the status
 URL, the snippet written and the one mail sent; every refusal answers
 as the strings say; a half-made board is swept before the serving line;
-a start refused, or an invite not minted, exits 1 with no DATA line;
-and SIGTERM ends the process. Beside it, `tests/it/tidy.rs` reads the
+a connection past the pool waits in the listener's queue until a thread
+frees; a start refused, or an invite not minted, exits 1 with no DATA
+line; and SIGTERM ends the process. Beside it, `tests/it/tidy.rs` reads the
 arrangement off the source and the manifest: the module order, the
 declared files, every `pub` item's doc and the four dependencies.
 

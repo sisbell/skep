@@ -8,15 +8,16 @@
 //! the book's short lock — the queue's depth ([`QUEUE_DEPTH`]; past it D-8,
 //! "try again later"), the codes and the names the posts in flight hold —
 //! refused with no docker call; then THE TRUTH ABOUT THE NAME
-//! (`names::taken`, D-4), three reads under no lock of this service's; then
-//! THE ADMISSION, under the book's lock again: what is in flight looked at
-//! again — a post for this name or this code may have been admitted while
-//! the reads ran — and the invite looked up again under the same lock — a
-//! board gone live meanwhile may have spent it — then the status token
-//! minted, the post queued, and D-7 answered with its status URL. A refused
-//! post leaves nothing: no docker call past the truth's reads, no file, no
-//! queue entry. A POST NEVER WAITS ON A PROVISIONING: no lock it takes is
-//! held across one.
+//! (`names::taken`, D-4), three reads under no lock of this service's, at
+//! most [`MAX_LOOKS`] posts' at once — past it D-8, "try again later", with
+//! no docker call; then THE ADMISSION, under the book's lock again: what is
+//! in flight looked at again — a post for this name or this code may have
+//! been admitted while the reads ran — and the invite looked up again under
+//! the same lock — a board gone live meanwhile may have spent it — then the
+//! status token minted, the post queued, and D-7 answered with its status
+//! URL. A refused post leaves nothing: no docker call past the truth's
+//! reads, no file, no queue entry. A POST NEVER WAITS ON A PROVISIONING: no
+//! lock it takes is held across one.
 //!
 //! THE NAME IS THE UNIT OF EXCLUSION. A name is HELD from its admission to
 //! its live or failed end (the status map's `holds`) — the owner's lock per
@@ -85,6 +86,7 @@
 use std::collections::{HashSet, VecDeque};
 use std::io;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Condvar, Mutex, MutexGuard};
 use std::time::Duration;
 
@@ -111,6 +113,16 @@ const QUEUE_DEPTH: usize = 4;
 /// THE DARK CLAIM's RETRY: thirty tries two seconds apart while the
 /// sidecar answers exit 4 — the claim run's daemon not yet listening.
 const SIDECAR_WAIT: Wait = Wait { tries: 30, interval: Duration::from_secs(2) };
+
+/// THE LOOKS' CAP: four posts' looks at what stands under their names at
+/// once — [`QUEUE_DEPTH`], the posts that can wait at once. A look is up to
+/// two `docker` processes, Go programs of tens of megabytes each, and a post
+/// refused D-4 off a container — the proxy's own, `caddy`, stands under its
+/// name — leaves its code issued and unheld, so uncapped one issued code
+/// would have the service run two for every connection open at once, for as
+/// long as its holder looped. A post past it meets D-8, "try again later",
+/// with no docker call.
+const MAX_LOOKS: usize = QUEUE_DEPTH;
 
 /// What the service is configured with.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -212,6 +224,25 @@ impl Book {
     }
 }
 
+/// A PLACE UNDER A CAP: taken where fewer than the cap are held, and given
+/// back when dropped — on every return and every unwind alike, so no place
+/// is ever kept by a look that ended.
+struct Slot<'a>(&'a AtomicUsize);
+
+impl<'a> Slot<'a> {
+    /// A place among `held`'s, where fewer than `cap` are held; `None` where
+    /// `cap` are.
+    fn take(held: &'a AtomicUsize, cap: usize) -> Option<Slot<'a>> {
+        held.try_update(Ordering::AcqRel, Ordering::Acquire, |n| (n < cap).then_some(n + 1)).ok().map(|_| Slot(held))
+    }
+}
+
+impl Drop for Slot<'_> {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::AcqRel);
+    }
+}
+
 /// What a provisioning has made so far, for the cleanup to undo.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 struct Made {
@@ -239,6 +270,8 @@ pub struct Service {
     /// THE BOOK's SHORT LOCK: what is in flight, and its rules.
     book: Mutex<Book>,
     ready: Condvar,
+    /// The posts' looks at what stands under way, at most [`MAX_LOOKS`].
+    looks: AtomicUsize,
 }
 
 impl Service {
@@ -248,7 +281,7 @@ impl Service {
     pub fn new(config: Config, state: StateDir, docker: Box<dyn Docker>, mail: Option<Outbox>, log: Log, sleep: Sleep) -> io::Result<Service> {
         let map = StatusMap::rebuild(&config.boards_dir)?;
         let signups = SignUps::new(&state);
-        Ok(Service { config, state, signups, docker, mail, log, sleep, route_lock: Mutex::new(()), book: Mutex::new(Book::new(map)), ready: Condvar::new() })
+        Ok(Service { config, state, signups, docker, mail, log, sleep, route_lock: Mutex::new(()), book: Mutex::new(Book::new(map)), ready: Condvar::new(), looks: AtomicUsize::new(0) })
     }
 
     /// The live names the map holds — at start, the rebuild's.
@@ -587,6 +620,10 @@ impl Desk for Service {
                 self.log("a sign-up refused: no address");
                 Err(SignUpRefusal::NotAnAddress)
             }
+            Err(refused @ SignUpRefused::Full) => {
+                self.log(&format!("a sign-up refused: {refused}; the owner trims the file"));
+                Err(SignUpRefusal::Failed)
+            }
             Err(SignUpRefused::Io(e)) => {
                 self.log(&format!("a sign-up could not be kept: {e}"));
                 Err(SignUpRefusal::Failed)
@@ -626,8 +663,16 @@ impl Desk for Service {
         // costs no docker call.
         self.in_flight(&self.book(), &name, &code)?;
         // THE TRUTH ABOUT THE NAME: three reads under no lock of this
-        // service's — a post waits on no provisioning.
-        match names::taken(self.docker.as_ref(), &self.config.boards_dir, &name) {
+        // service's — a post waits on no provisioning — in one of the
+        // looks' places, given back as the reads end.
+        let taken = {
+            let Some(_looking) = Slot::take(&self.looks, MAX_LOOKS) else {
+                self.log(&format!("{name}: a post refused: {MAX_LOOKS} posts already look at what stands"));
+                return Err(Refusal::Busy);
+            };
+            names::taken(self.docker.as_ref(), &self.config.boards_dir, &name)
+        };
+        match taken {
             Ok(None) => {}
             Ok(Some(by)) => {
                 self.log(&format!("{name}: a post refused: taken — {by}"));

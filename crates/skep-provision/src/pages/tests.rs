@@ -2,7 +2,9 @@
 //! every request's status and page — the sign-up page and its thanks, the
 //! claim form with the link's code, each refusal shown on the form again,
 //! D-7 with the status URL and its refresh, the live reply, D-8, 404 — a
-//! bad body 400, a body past the cap 413; the invite link opening the claim
+//! bad body 400, a fourth field among them, a body past the cap 413; a
+//! request trickled past its deadline answered 400 in the answer's own, and
+//! a trickle cut at its deadline both ways; the invite link opening the claim
 //! form with its code; plain HTML with no script and nothing fetched from
 //! elsewhere, every header that says so checked whole; a row's words
 //! escaped and its commands set as code, and a person's field — a refused
@@ -182,7 +184,9 @@ fn the_status_page_shows_d7_the_live_reply_d8_or_404() {
     assert_eq!(desk.asked.lock().unwrap().len(), asked, "a path that is no token never reaches the desk");
 }
 
-/// Every other request is 404; a body the decoder refuses is 400.
+/// Every other request is 404; a body the decoder refuses is 400 — a bad
+/// escape, or a fourth field, which no form of this site's posts — and a
+/// claim link whose query names a fourth opens the form unfilled.
 #[test]
 fn every_other_request_is_404_and_a_bad_body_400() {
     for (method, target) in [("POST", "/"), ("GET", "/signup"), ("PUT", "/claim"), ("GET", "/status"), ("GET", "/favicon.ico"), ("HEAD", "/")] {
@@ -192,6 +196,16 @@ fn every_other_request_is_404_and_a_bad_body_400() {
     }
     assert_eq!(answer_of("POST", "/claim", b"name=%zz").status, 400);
     assert_eq!(answer_of("POST", "/signup", b"address=%4").status, 400);
+    let desk = Scripted::default();
+    for (path, body) in [("/claim", &b"name=alice&record=x&invite=c0de&x=y"[..]), ("/signup", b"address=a%40b&x&y&z")] {
+        let refused = answer(&request("POST", path, body), &site(), &desk);
+        assert_eq!(refused.status, 400, "{path}");
+        assert!(refused.body.contains(&row(BAD_FORM.text)), "{path}");
+    }
+    assert!(desk.asked.lock().unwrap().is_empty(), "a body of four fields reached the desk");
+    let unfilled = answer_of("GET", "/claim?invite=c0de&a&b&c", b"");
+    assert_eq!(unfilled.status, 200);
+    assert!(unfilled.body.contains("id=\"invite\" name=\"invite\" required autocomplete=\"off\" spellcheck=\"false\" value=\"\""), "{}", unfilled.body);
 }
 
 /// The subset's refusals: past the cap 413, anything else 400.
@@ -236,6 +250,91 @@ fn a_connection_answers_with_its_headers_and_refuses_a_body_past_the_cap() {
     }
     let too_large = talk(&format!("POST /claim HTTP/1.1\r\nHost: skep.host\r\nContent-Length: {}\r\n\r\n", MAX_BODY + 1));
     assert!(too_large.starts_with("HTTP/1.1 413 Payload Too Large\r\n"), "{too_large}");
+    serve.join().expect("served");
+}
+
+/// A peer that trickles: one byte a call, each after a pause — never
+/// silent long enough for a socket's own timeout — the head of a request
+/// that never ends, or a reader that drains an answer a byte at a time.
+struct Trickle {
+    pause: Duration,
+    sent: Vec<u8>,
+    drained: usize,
+}
+
+impl Trickle {
+    fn new(pause: Duration) -> Trickle {
+        Trickle { pause, sent: b"GET / HTTP/1.1\r\nX-Trickle: ".to_vec(), drained: 0 }
+    }
+}
+
+impl Read for Trickle {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        std::thread::sleep(self.pause);
+        let Some(first) = buf.first_mut() else { return Ok(0) };
+        *first = self.sent.get(self.drained).copied().unwrap_or(b'a');
+        self.drained += 1;
+        Ok(1)
+    }
+}
+
+impl Write for Trickle {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        std::thread::sleep(self.pause);
+        Ok(usize::from(!buf.is_empty()))
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+/// THE TRANSFER DEADLINE, BOTH WAYS, over a peer that trickles a byte a
+/// millisecond: a request's head that never ends is refused once its
+/// deadline passes — never read to the head's cap, sixteen seconds on — and
+/// an answer drained a byte at a time is cut at its own, `TimedOut`, never
+/// written whole, twenty seconds on.
+#[test]
+fn a_trickle_is_cut_at_its_deadline_both_ways() {
+    let started = Instant::now();
+    let mut peer = Trickle::new(Duration::from_millis(1));
+    let read = read_request(&mut Deadlined { stream: &mut peer, until: Instant::now() + Duration::from_millis(100) }, Limits { max_head: MAX_HEAD, max_body: MAX_BODY });
+    assert!(matches!(&read, Err(Refused::Malformed(why)) if why.contains("deadline")), "{read:?}");
+    assert!(peer.drained < 4096, "{} bytes read past the deadline", peer.drained);
+    let wrote = Deadlined { stream: &mut peer, until: Instant::now() + Duration::from_millis(100) }.write_all(&[b'x'; 20_000]);
+    assert_eq!(wrote.map_err(|e| e.kind()), Err(std::io::ErrorKind::TimedOut));
+    assert!(started.elapsed() < Duration::from_secs(5), "{:?}", started.elapsed());
+}
+
+/// THE CONNECTION's TWO DEADLINES over a real socket: a head trickled a
+/// byte every 100 ms — each read far inside the socket's own 30-second
+/// timeout — is refused once the request's deadline passes, and the refusal,
+/// 400, is still delivered in the answer's own: one shared window would
+/// leave none in which to say it.
+#[test]
+fn a_trickling_request_is_answered_400_at_its_deadline() {
+    let listener = TcpListener::bind(("127.0.0.1", 0)).expect("a port");
+    let client = TcpStream::connect(listener.local_addr().expect("its address")).expect("connected");
+    let (server, _) = listener.accept().expect("a connection");
+    let serve = std::thread::spawn(move || connection_within(server, &site(), &Scripted::default(), Duration::from_millis(500)));
+    let mut trickle = client.try_clone().expect("a second handle");
+    std::thread::spawn(move || {
+        for b in b"GET / HTTP/1.1\r\nX-Trickle: ".iter().chain(std::iter::repeat(&b'a')) {
+            if trickle.write_all(&[*b]).is_err() {
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        }
+    });
+    let (said, heard) = std::sync::mpsc::channel();
+    let mut reader = client;
+    std::thread::spawn(move || {
+        let mut raw = Vec::new();
+        let _ = reader.read_to_end(&mut raw);
+        let _ = said.send(raw);
+    });
+    let raw = heard.recv_timeout(Duration::from_secs(10)).expect("the trickle was read past its deadline");
+    assert!(raw.starts_with(b"HTTP/1.1 400 Bad Request\r\n"), "{}", String::from_utf8_lossy(&raw));
     serve.join().expect("served");
 }
 

@@ -7,11 +7,23 @@
 //! passed through, so no field reaches a check as bytes other than the
 //! browser meant. Every other byte is kept as given, a CR and an LF among
 //! them. A value stays BYTES: the record field reaches `parse_enroll` as
-//! sent, whose `not_utf8` is the verdict on bytes that are not text. The
-//! claim page's query, `invite=<code>`, is the same encoding and is read
+//! sent, whose `not_utf8` is the verdict on bytes that are not text. AT
+//! MOST [`MAX_FIELDS`] FIELDS, the most any page of this site posts: a body
+//! naming more is no form of this site's, and is refused before its next
+//! field is copied, so a decoded form holds no more bytes than were sent.
+//! The claim page's query, `invite=<code>`, is the same encoding and is read
 //! through the same decoder.
 
 use std::fmt;
+
+/// THE FIELDS' CAP: three — the claim form's named controls, the most any
+/// page of this site posts (the sign-up form posts one; the claim page's
+/// query carries one). A body naming more is no form of this site's,
+/// refused before its fourth field is copied: uncapped, every `a&` of a
+/// body would be a field — a 48-byte pair in a list grown by doubling and a
+/// one-byte allocation — some 19 MB for a body at the pages' cap, 48 times
+/// what was sent, and as many times over as connections are open.
+const MAX_FIELDS: usize = 3;
 
 /// A decoded form: its fields in the order sent, each name and value the
 /// bytes it decodes to.
@@ -57,14 +69,45 @@ impl fmt::Display for BadEscape {
 
 impl std::error::Error for BadEscape {}
 
+/// A body the decoder refuses.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Undecodable {
+    /// A `%` that two hex digits do not follow.
+    Escape(BadEscape),
+    /// More than [`MAX_FIELDS`] fields: no form of this site's.
+    TooManyFields,
+}
+
+/// A bad escape, as `?` meets it.
+impl From<BadEscape> for Undecodable {
+    fn from(e: BadEscape) -> Undecodable {
+        Undecodable::Escape(e)
+    }
+}
+
+impl fmt::Display for Undecodable {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Undecodable::Escape(e) => write!(f, "{e}"),
+            Undecodable::TooManyFields => write!(f, "the body names more than {MAX_FIELDS} fields"),
+        }
+    }
+}
+
+impl std::error::Error for Undecodable {}
+
 /// THE DECODE: `body` split at each `&` and each part at its first `=` —
 /// a part with no `=` is a name with an empty value, an empty part
-/// (`a=1&&b=2`) no field at all — and each side unescaped.
-pub fn decode(body: &[u8]) -> Result<Form, BadEscape> {
+/// (`a=1&&b=2`) no field at all — and each side unescaped; a part past the
+/// [`MAX_FIELDS`]th field refused, whatever its shape, before it is copied.
+pub fn decode(body: &[u8]) -> Result<Form, Undecodable> {
     let mut fields = Vec::new();
     let mut start = 0;
     for part in body.split(|&b| b == b'&') {
         if !part.is_empty() {
+            if fields.len() == MAX_FIELDS {
+                return Err(Undecodable::TooManyFields);
+            }
             let (name, value, value_at) = match part.iter().position(|&b| b == b'=') {
                 Some(i) => (&part[..i], &part[i + 1..], start + i + 1),
                 None => (part, &part[part.len()..], start + part.len()),

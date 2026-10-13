@@ -1,8 +1,9 @@
 //! A KEPT FILE CHANGED DURABLY: the replacement lands whole at exactly the
 //! mode its owner names — a temp file a stop left behind at a wider mode
-//! brought to it, never carried into the file — and replaces the bytes
-//! whole; a failure between the write and the rename leaves the old file
-//! whole and no temp file; the removal answers whether a file stood. (The
+//! never carried into the file — and replaces the bytes whole; a link
+//! planted at the temp file's name is never written through; a failure
+//! between the write and the rename leaves the old file whole and no temp
+//! file; the removal answers whether a file stood. (The
 //! owners' own modes are their suites': the snippet's `0644` in `caddy`'s,
 //! the sign-up file's `0600` in `signups`'.)
 
@@ -32,6 +33,32 @@ fn a_replacement_lands_whole_at_the_mode_its_owner_names() {
         assert_eq!((fs::read(&path).expect("the file"), mode(&path)), (b"new\n".to_vec(), owners), "{owners:o} over a leftover at 666");
         assert!(!temp_of(&path).exists(), "no temp file left");
     }
+}
+
+/// A LINK PLANTED AT THE TEMP FILE's NAME is never written through: the
+/// file it points at keeps its bytes and its mode, and the replacement
+/// lands as a regular file of its own; a link that dangles makes no file
+/// where it points.
+#[cfg(unix)]
+#[test]
+fn a_link_planted_at_the_temp_name_is_never_written_through() {
+    use std::os::unix::fs::{symlink, PermissionsExt};
+    let dir = Scratch::new();
+    let victim = dir.path().join("invites");
+    fs::write(&victim, b"the invite file\n").expect("a victim");
+    fs::set_permissions(&victim, fs::Permissions::from_mode(0o600)).expect("owner-only");
+    let path = dir.path().join("alice.caddy");
+    symlink(&victim, temp_of(&path)).expect("a planted link");
+    replace(&path, b"a snippet\n", 0o644, &|| Ok(())).expect("replaced");
+    assert_eq!(fs::read(&victim).expect("the victim"), b"the invite file\n");
+    assert_eq!(fs::metadata(&victim).expect("its mode").permissions().mode() & 0o777, 0o600);
+    assert!(fs::symlink_metadata(&path).expect("the file").file_type().is_file(), "the replacement is a link");
+    assert_eq!(fs::read(&path).expect("the file"), b"a snippet\n");
+    let elsewhere = dir.path().join("elsewhere");
+    symlink(&elsewhere, temp_of(&path)).expect("a dangling link");
+    replace(&path, b"another\n", 0o644, &|| Ok(())).expect("replaced");
+    assert!(!elsewhere.exists(), "a file made where the dangling link points");
+    assert_eq!(fs::read(&path).expect("the file"), b"another\n");
 }
 
 /// A FAILURE between the write and the rename leaves the old file whole and

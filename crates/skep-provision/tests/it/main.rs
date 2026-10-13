@@ -4,18 +4,20 @@
 //! `invite` verb mints a code; `serve` runs on an ephemeral loopback port
 //! with `--docker-fake` and `--mailer-fake` over a temp state directory; the
 //! sign-up page, the claim form with the link's code, a sign-up, a post
-//! through to the live reply at its status URL, the snippet, the one
-//! mail; a second post on the name, a bad record, a preview record, an
-//! unknown code, a status token never minted, a body past the cap — each
-//! answered as the pages say; and THE STOP: SIGTERM, the default
-//! disposition, ending the process. THE SWEEP (T22): started over a script
-//! whose `volumes` lists one half-made name, the binary removes it before
-//! its serving line, which carries the count. A START REFUSED — a snippet
-//! directory that cannot be read, an address another listener holds — and
-//! an invite not minted each exit 1, with no DATA line. No Docker runs:
-//! every call is the script's, and the calls are read back after. Beside
-//! it, `tidy` reads the crate's own source and manifest for the arrangement
-//! `src/main.rs` and `ARCHITECTURE.md` §The provisioning service state.
+//! through to the live reply at its status URL, the snippet, the one mail; a
+//! second post on the name, a bad record, a preview record, an unknown code,
+//! a status token never minted, a body past the cap — each answered as the
+//! pages say; and THE STOP: SIGTERM, the default disposition, ending the
+//! process. THE CONNECTIONS' POOL: a connection past it waits in the
+//! listener's queue until a thread frees. THE SWEEP (T22): started over a
+//! script whose `volumes` lists one half-made name, the binary removes it
+//! before its serving line, which carries the count. A START REFUSED — a
+//! snippet directory that cannot be read, an address another listener holds
+//! — and an invite not minted each exit 1, with no DATA line. No Docker
+//! runs: every call is the script's, and the calls are read back after.
+//! Beside it, `tidy` reads the crate's own source and manifest for the
+//! arrangement `src/main.rs` and `ARCHITECTURE.md` §The provisioning service
+//! state.
 
 #![cfg(unix)]
 
@@ -112,7 +114,7 @@ struct Service {
 }
 
 impl Service {
-    fn start(dir: &Path, script: &Path, mail: &Path) -> Service {
+    fn start(dir: &Path, script: &Path, mail: &Path, extra: &[&str]) -> Service {
         let mut child = Command::new(BIN)
             .args(["serve", "--listen", "127.0.0.1:0", "--state-dir"])
             .arg(dir.join("state"))
@@ -122,6 +124,7 @@ impl Service {
             .arg(script)
             .arg("--mailer-fake")
             .arg(mail)
+            .args(extra)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -232,7 +235,7 @@ fn the_built_service_runs_a_post_from_the_form_to_the_live_page_over_the_fakes()
     ];
     std::fs::write(&script, steps.concat()).expect("the script");
     let mail = dir.path().join("mail.log");
-    let service = Service::start(dir.path(), &script, &mail);
+    let service = Service::start(dir.path(), &script, &mail, &[]);
 
     // The sign-up page, and the claim form with the link's code: D-1, D-2,
     // D-3 and D-9 in the HTML.
@@ -351,7 +354,7 @@ fn the_built_service_sweeps_a_half_made_board_before_its_serving_line() {
     let script = dir.path().join("docker.script");
     std::fs::write(&script, [step("volumes", "-", 0, "alice\\nbob\\n"), step("rm_force", "bob", 1, ""), step("volume_rm", "bob", 0, "")].concat()).expect("the script");
     let mail = dir.path().join("mail.log");
-    let service = Service::start(dir.path(), &script, &mail);
+    let service = Service::start(dir.path(), &script, &mail, &[]);
     let calls = std::fs::read_to_string(dir.path().join("docker.script.calls")).expect("the calls");
     assert_eq!(calls, "volumes\t-\t0\nrm_force\tbob\t1\nvolume_rm\tbob\t0\n", "the sweep's calls, all made before the serving line");
     assert!(service.serving.contains(" live 1 swept 1 "), "{}", service.serving);
@@ -362,6 +365,31 @@ fn the_built_service_sweeps_a_half_made_board_before_its_serving_line() {
     }
     assert!(!log.contains("alice"), "nothing for the routed name: {log}");
     assert!(!calls.contains("unexpected"), "{calls}");
+    service.terminate();
+}
+
+/// THE CONNECTIONS' POOL: under `--connections 1` a connection that sends
+/// nothing holds the one connection thread, and a second request waits in
+/// the listener's queue, unanswered and with no thread made for it, until
+/// the first closes; then it is answered — and the serving line names the
+/// pool.
+#[test]
+fn a_connection_past_the_pool_waits_until_a_thread_frees() {
+    let dir = Scratch::new();
+    std::fs::create_dir(dir.path().join("boards")).expect("the boards directory");
+    let script = dir.path().join("docker.script");
+    std::fs::write(&script, step("volumes", "-", 0, "")).expect("the script");
+    let service = Service::start(dir.path(), &script, &dir.path().join("mail.log"), &["--connections", "1"]);
+    assert!(service.serving.contains(" workers 3 connections 1 "), "{}", service.serving);
+    let held = TcpStream::connect(("127.0.0.1", service.port)).expect("connected");
+    let mut second = TcpStream::connect(("127.0.0.1", service.port)).expect("connected");
+    second.write_all(b"GET / HTTP/1.1\r\nHost: skep.host\r\n\r\n").expect("the request");
+    second.set_read_timeout(Some(Duration::from_secs(2))).expect("a deadline");
+    let waited = second.read(&mut [0u8; 1]);
+    assert!(matches!(&waited, Err(e) if matches!(e.kind(), std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut)), "answered beside a held connection: {waited:?}");
+    drop(held);
+    second.set_read_timeout(Some(Duration::from_secs(30))).expect("a deadline");
+    assert_eq!(read_answer(second).0, 200);
     service.terminate();
 }
 

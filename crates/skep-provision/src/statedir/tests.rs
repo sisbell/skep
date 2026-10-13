@@ -12,25 +12,64 @@ use crate::scratch::Scratch;
 use crate::whole::temp_of;
 
 /// The address rule: one `@` with a side each way, at most 254 bytes, no
-/// control character and no whitespace — and [`MailAddress::parse`], its one
-/// door, admits exactly the addresses the rule does, keeping each as given,
-/// its `Debug` showing none of it.
+/// control character and no whitespace, none of RFC 5322's specials but `@`
+/// and `.` — a second recipient, a group, a route, a quoted or a commented
+/// form — and no bidi control — and [`MailAddress::parse`], its one door,
+/// admits exactly the addresses the rule does, keeping each as given, its
+/// `Debug` showing none of it.
 #[test]
 fn an_address_is_one_at_with_a_side_each_way_no_space_and_no_control() {
-    for ok in ["a@b", "person@example.com", "first.last+tag@sub.example.org"] {
+    for ok in ["a@b", "person@example.com", "first.last+tag@sub.example.org", "o'brien_x-y@example.org"] {
         assert!(address_ok(ok), "{ok}");
         assert_eq!(MailAddress::parse(ok).as_ref().map(MailAddress::as_str), Some(ok));
     }
     let long = format!("{}@b", "a".repeat(MAX_ADDRESS_BYTES - 2));
     assert!(address_ok(&long));
     assert!(MailAddress::parse(&long).is_some());
-    for bad in ["", "ab", "@b", "a@", "a@b@c", "a b@c", "a@b\n", "a\t@b", "a@b\r", "\u{a0}a@b"] {
+    for bad in [
+        "",
+        "ab",
+        "@b",
+        "a@",
+        "a@b@c",
+        "a b@c",
+        "a@b\n",
+        "a\t@b",
+        "a@b\r",
+        "\u{a0}a@b",
+        "me@x.example,root",
+        "g:me@x.example;",
+        "\"me\"@x.example",
+        "me@[192.0.2.1]",
+        "(c)me@x.example",
+        "<me@x.example>",
+        "me\\@x.example",
+        "me@x.example\u{202E}",
+    ] {
         assert!(!address_ok(bad), "{bad:?}");
         assert!(MailAddress::parse(bad).is_none(), "{bad:?}");
     }
     assert!(!address_ok(&format!("{long}c")), "255 bytes");
     assert!(MailAddress::parse(&format!("{long}c")).is_none(), "255 bytes");
     assert_eq!(format!("{:?}", MailAddress::parse("person@example.com").expect("an address")), "MailAddress(…)");
+}
+
+/// THE RULE's REFUSALS ONE CHARACTER AT A TIME: `a<c>a@x.example` is no
+/// address for each of RFC 5322's specials but `@` and `.`, and for each
+/// bidi control `render_inert` disarms — the format characters no control
+/// test catches; and the punctuation a mailbox carries — `.`, `+`, `-`,
+/// `_`, `'` — stays inside the rule.
+#[test]
+fn each_special_and_each_bidi_control_alone_is_refused() {
+    let bidi = (0x202A..=0x202E).chain(0x2066..=0x2069).chain([0x200E, 0x200F, 0x061C]).map(|code| char::from_u32(code).expect("a scalar value"));
+    for c in "()<>[]:;\\,\"".chars().chain(bidi) {
+        let address = format!("a{c}a@x.example");
+        assert!(!address_ok(&address), "{c:?}");
+        assert!(MailAddress::parse(&address).is_none(), "{c:?}");
+    }
+    for c in ['.', '+', '-', '_', '\''] {
+        assert!(address_ok(&format!("a{c}a@x.example")), "{c:?}");
+    }
 }
 
 /// THE STATE DIRECTORY's DOOR: made `0700` where absent; refused where it

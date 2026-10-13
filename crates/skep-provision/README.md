@@ -33,8 +33,8 @@ skep-provision --version
 A usage refusal (an unknown flag, a missing value, a required flag
 missing, `--mailer` without `--from` or the reverse) exits 2 with the usage
 text; a start refused (a loose state directory, an unreadable snippet
-directory, an address that cannot be bound) or an invite not minted exits
-1.
+directory, an address that cannot be bound, a thread the machine will not
+give) or an invite not minted exits 1.
 
 ## `serve`'s flags
 
@@ -55,6 +55,7 @@ renders it from there.
 | `--log-max-size <SIZE>` | `10m` (`DEFAULT_LOG_MAX_SIZE`) | a serving run's log file size |
 | `--log-max-file <N>` | `5` (`DEFAULT_LOG_MAX_FILE`) | a serving run's log files kept |
 | `--workers <N>` | `3` (`DEFAULT_WORKERS`) | the boards made at once: one worker thread each; `0` is a usage refusal |
+| `--connections <N>` | `16` (`DEFAULT_CONNECTIONS`) | the requests served at once: one thread each, made at start, a further connection waiting in the listener's queue; `0` is a usage refusal |
 | `--mailer <PROGRAM>` | none | the host's relay client, run as `<PROGRAM> -t` with the message on stdin; given with `--from` or not at all, and with neither no mail is sent and the serving line says so |
 | `--from <ADDRESS>` | none | the mail's sending address |
 
@@ -67,13 +68,18 @@ tests turn it on through a dev-dependency on the crate itself.
 
 ## The requests it answers
 
-One request per connection, read and written through `skep-http`. Every
+One request per connection, read and written through `skep-http`. A pool
+of connection threads (`--connections`, sixteen by default), made at
+start, serves them, a connection past the pool waiting in the listener's
+queue; the request in and the answer out have a minute each, so a client
+that trickles its bytes is cut off rather than holding a thread. Every
 page is plain HTML with no script and nothing fetched from elsewhere.
 
 - `GET /` is the sign-up page: one field, an email address.
 - `POST /signup` keeps the address and answers a thanks page. An address
   the rule refuses (one `@` with a side each way, at most 254 bytes, no
-  control character, no whitespace) is shown on the page again.
+  control character, no whitespace, none of `( ) < > [ ] : ; \ , "` and no
+  bidi control) is shown on the page again.
 - `GET /claim` is the claim form: the board's name, the record, and the
   invite code, pre-filled from the `invite` query value.
 - `POST /claim` judges the post before any `docker` call. The invite
@@ -89,8 +95,9 @@ page is plain HTML with no script and nothing fetched from elsewhere.
   reply once the board is routed, and D-8 once it failed. A token the
   service does not hold is 404, and a token from before a restart is one
   of those.
-- Every other request is 404. A body the form decoder refuses is 400; a
-  body past 397,312 bytes (a record at its 128 KiB cap with every byte
+- Every other request is 404. A body the form decoder refuses (a `%`
+  without two hex digits, or more than three fields) is 400; a body past
+  397,312 bytes (a record at its 128 KiB cap with every byte
   percent-encoded, and 4 KiB) is 413.
 
 A page showing D-7 refreshes itself to the status URL every five
@@ -107,7 +114,9 @@ form (D-4), and so no two workers ever run the steps for one name. A post
 waits on no board being made: its checks run under a short lock on the
 queue and the status map, and its three reads of what stands under none,
 never behind a provisioning, so every post is answered at once. Up to four
-posts wait in the queue; a fifth is answered D-8, "try again later".
+posts make those reads at once, and up to four wait in the queue; a fifth
+past either is answered D-8, "try again later", the first with no `docker`
+call.
 
 1. Look again: no snippet, volume or container stands under the name.
 2. `docker volume create --label skep.provision=1 <name>`: the volume
@@ -178,6 +187,8 @@ because a board with local trust on fails the `/health` step.
 
 - `<state-dir>/signups` holds one line per sign-up, `<address> <date>`. A
   repeated address is one more line, and the owner reads the file by hand.
+  The file is capped at 256 KiB: a sign-up that would carry it past is
+  refused, nothing written, until the owner trims the file.
   **The address is the one personal datum this program keeps.** How long
   it is kept is the operator's to decide and say; this crate decides
   none.
@@ -196,8 +207,10 @@ because a board with local trust on fails the `/health` step.
   host's Docker, the one mark by which the sweep at start tells its own
   volumes from every other.
 
-The two state files are written whole and renamed into place, born
-`0600`.
+The two state files are written whole to a temp file and renamed into
+place, born `0600`, and each snippet the same way: the temp file is made
+fresh where nothing stands at its name, so a write follows no link
+planted there.
 
 ## What it never logs
 

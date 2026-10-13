@@ -52,7 +52,7 @@
 //! memory and end with the process. Its exit codes: 0, a verb done; 2, a
 //! usage refusal; 1, a start refused — a state directory other users can
 //! read, a snippet directory that cannot be read, an address that cannot be
-//! bound — or an invite not minted.
+//! bound, a thread the OS will not give — or an invite not minted.
 //!
 //! The modules are declared below in dependency order, each naming only
 //! those above it — `tests/it/tidy.rs` checks it — and `ARCHITECTURE.md`
@@ -120,6 +120,7 @@ use std::net::TcpListener;
 use std::process::exit;
 use std::sync::Arc;
 use std::thread;
+use std::time::Duration;
 
 use args::{Command, Mailer};
 use docker::{Docker, HostDocker};
@@ -127,6 +128,13 @@ use flow::{Config, Service};
 use pages::Site;
 use sender::{Log, Outbox, Sender, Sleep};
 use statedir::StateDir;
+
+/// THE PAUSE after an `accept` that fails: EMFILE and its kin last until a
+/// descriptor is freed, and a connection thread that asked again at once
+/// would spin a core for as long; ten milliseconds — `skepd`'s
+/// `ACCEPT_RETRY_PAUSE`, argued there — costs nothing at the wall and holds
+/// a queued connection little once the wall clears.
+const ACCEPT_PAUSE: Duration = Duration::from_millis(10);
 
 fn main() {
     let code = match args::parse(std::env::args_os().skip(1)) {
@@ -164,8 +172,8 @@ fn log() -> Log {
 
 /// `serve`: the state directory's door, the snippets read, the runner and
 /// the mail chosen, the sender started, THE SWEEP of what a stop left
-/// half-made, then the address bound, the serving line, the workers — and
-/// a thread per connection until the process ends.
+/// half-made, then the address bound, the serving line, and the two pools —
+/// the workers and the connection threads — until the process ends.
 fn serve(cfg: args::ServeArgs) -> i32 {
     let log = log();
     let state = match StateDir::open(&cfg.state_dir) {
@@ -218,27 +226,51 @@ fn serve(cfg: args::ServeArgs) -> i32 {
     // The serving line: a stdout that cannot take it costs the line, never
     // the service — the address is bound and the run serves on.
     let _ = say_out(&format!(
-        "skep-provision: serving http://{bound}/ state-dir {} boards-dir {} suffix {} live {} swept {swept} workers {} {mailing}",
+        "skep-provision: serving http://{bound}/ state-dir {} boards-dir {} suffix {} live {} swept {swept} workers {} connections {} {mailing}",
         cfg.state_dir.display(),
         cfg.boards_dir.display(),
         cfg.settings.suffix,
         service.live(),
-        cfg.workers
+        cfg.workers,
+        cfg.connections
     ));
     let site = Site { suffix: cfg.settings.suffix.clone(), owner_address: cfg.reply_to.as_str().to_owned() };
-    // THE SERVE: the pool of workers, and a thread per connection beside
-    // them; the scope never closes — SIGTERM ends the process.
+    // THE SERVE: the pool of workers and the pool of connection threads,
+    // each of the latter taking the next connection off the listener — one
+    // past them waits in the listener's queue — both pools made here, and
+    // no thread made per connection. The scope never closes: SIGTERM ends
+    // the process.
     thread::scope(|s| {
         for _ in 0..cfg.workers.get() {
-            s.spawn(|| service.work());
+            made(thread::Builder::new().name("worker".into()).spawn_scoped(s, || service.work()), "worker");
         }
-        for conn in listener.incoming() {
-            let Ok(stream) = conn else { continue };
-            let (site, service) = (&site, &service);
-            s.spawn(move || pages::connection(stream, site, service));
+        for _ in 0..cfg.connections.get() {
+            made(thread::Builder::new().name("connection".into()).spawn_scoped(s, || accepting(&listener, &site, &service)), "connection");
         }
     });
     0
+}
+
+/// A THREAD OF THE SERVE's POOLS, made at start: one the OS will not give
+/// ends the start, exit 1 for systemd to restart — never a panic in the
+/// scope, which would wait out the workers already made, and they never end.
+fn made<T>(spawned: io::Result<T>, which: &str) {
+    if let Err(e) = spawned {
+        say_err(&format!("skep-provision: a {which} thread could not start: {e}"));
+        exit(1);
+    }
+}
+
+/// ONE CONNECTION THREAD, for the run's life: the next connection off the
+/// listener served, then the next; an `accept` that fails waits
+/// [`ACCEPT_PAUSE`] before it asks again, never a spin.
+fn accepting(listener: &TcpListener, site: &Site, service: &Service) -> ! {
+    loop {
+        match listener.accept() {
+            Ok((stream, _)) => pages::connection(stream, site, service),
+            Err(_) => thread::sleep(ACCEPT_PAUSE),
+        }
+    }
 }
 
 /// The runner: the host's `docker`, or under `test-hooks` the scripted fake

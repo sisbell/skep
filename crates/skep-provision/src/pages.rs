@@ -3,7 +3,8 @@
 //! the claim form, the status page, the refusals — plain HTML with no script
 //! and no external resource, every sentence on them a row of the strings
 //! table (`strings`); and each request's dispatch, by its method and its
-//! path, over `skep_http`, one request per connection.
+//! path, over `skep_http`, one request per connection, the request in and
+//! the answer out each under a [`TRANSFER_DEADLINE`] of its own.
 //!
 //! THE REQUESTS ANSWERED: `GET /`, the sign-up page; `POST /signup`, the
 //! address kept and a thanks page; `GET /claim`, the claim form, the invite
@@ -29,8 +30,9 @@
 //! code it carries pre-filled.
 
 use std::fmt;
+use std::io::{self, Read, Write};
 use std::net::TcpStream;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use skep_http::{read_request, write_response, Limits, Refused, Request};
 use skep_identity::MAX_RECORD_BYTES;
@@ -56,11 +58,25 @@ const MAX_HEAD: usize = 16 * 1024;
 /// read.
 const MAX_BODY: usize = 3 * MAX_RECORD_BYTES + 4096;
 
-/// The socket's read deadline: a stalled client releases its thread.
+/// A read's own timeout: SILENCE past it ends the read. Any byte renews
+/// it, so it bounds silence alone; slowness is [`TRANSFER_DEADLINE`]'s.
 const READ_TIMEOUT: Duration = Duration::from_secs(30);
 
-/// The socket's write deadline.
+/// A write's own timeout, as [`READ_TIMEOUT`] is a read's.
 const WRITE_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// THE TRANSFER DEADLINE: a minute for the request in and a fresh minute for
+/// the answer out, each checked between socket calls — `skepd`'s
+/// `TRANSFER_DEADLINE`, for its reason: the socket timeouts are renewed by
+/// any byte, and without this a sender trickling one every 29 seconds holds
+/// its connection thread, its descriptor and its body's buffer for as long
+/// as it likes, and as many such senders as there are threads hold every
+/// one. The halves are apart, so a request refused for spending its minute
+/// still has one in which to be told so. The budget is the person's uplink,
+/// as the proxy streams a body as it is sent: the largest record the form
+/// carries, 128 KiB, goes as some 140 KB, under 20 seconds at 64 kbit/s; a
+/// record of one to three keys, under 13 KB, in two.
+const TRANSFER_DEADLINE: Duration = Duration::from_secs(60);
 
 /// How often a page showing D-7 refreshes itself to the status URL.
 const REFRESH_SECS: u32 = 5;
@@ -99,7 +115,8 @@ pub enum Refusal {
     Record,
     /// The record names a preview key: D-6.
     Preview,
-    /// The queue is full: D-8, "try again later".
+    /// The service is busy — the queue full, or as many posts as it looks
+    /// for at once already looking at what stands: D-8, "try again later".
     Busy,
     /// The service could not judge the post: D-8.
     Failed,
@@ -203,17 +220,60 @@ fn headers() -> Vec<(String, String)> {
     ]
 }
 
-/// THE CONNECTION: the deadlines, the one read under the caps, the answer,
-/// the close.
-pub fn connection(mut stream: TcpStream, site: &Site, desk: &dyn Desk) {
+/// A STREAM UNDER ONE TRANSFER's DEADLINE: a read or a write begun once
+/// `until` has passed is `TimedOut`; one begun before runs to its socket
+/// timeout, so a transfer is bounded at its deadline and one timeout more.
+struct Deadlined<'a, S> {
+    stream: &'a mut S,
+    until: Instant,
+}
+
+impl<S> Deadlined<'_, S> {
+    /// `TimedOut` once the deadline has passed.
+    fn check(&self) -> io::Result<()> {
+        if Instant::now() >= self.until {
+            return Err(io::Error::new(io::ErrorKind::TimedOut, "the transfer's deadline passed"));
+        }
+        Ok(())
+    }
+}
+
+impl<S: Read> Read for Deadlined<'_, S> {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        self.check()?;
+        self.stream.read(buf)
+    }
+}
+
+impl<S: Write> Write for Deadlined<'_, S> {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        self.check()?;
+        self.stream.write(buf)
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        self.stream.flush()
+    }
+}
+
+/// THE CONNECTION: the timeouts, the one read under the caps and its
+/// deadline, the answer under a deadline of its own, the close.
+pub fn connection(stream: TcpStream, site: &Site, desk: &dyn Desk) {
+    connection_within(stream, site, desk, TRANSFER_DEADLINE);
+}
+
+/// [`connection`] with `within` for each transfer's deadline: the seam a
+/// suite shortens.
+fn connection_within(mut stream: TcpStream, site: &Site, desk: &dyn Desk, within: Duration) {
     let _ = stream.set_read_timeout(Some(READ_TIMEOUT));
     let _ = stream.set_write_timeout(Some(WRITE_TIMEOUT));
-    let answer = match read_request(&mut stream, Limits { max_head: MAX_HEAD, max_body: MAX_BODY }) {
+    let request = read_request(&mut Deadlined { stream: &mut stream, until: Instant::now() + within }, Limits { max_head: MAX_HEAD, max_body: MAX_BODY });
+    let answer = match request {
         Ok(Some(request)) => answer(&request, site, desk),
         Ok(None) => return,
         Err(refused) => refused_answer(&refused, site),
     };
-    let _ = write_response(&mut stream, answer.status, &headers(), Some("text/html; charset=utf-8"), answer.body.as_bytes());
+    let _ = write_response(&mut Deadlined { stream: &mut stream, until: Instant::now() + within }, answer.status, &headers(), Some("text/html; charset=utf-8"), answer.body.as_bytes());
 }
 
 /// A request the subset refused: 413 past the cap, 400 otherwise.

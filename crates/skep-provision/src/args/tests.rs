@@ -5,12 +5,12 @@
 //! which this door alone refuses — and a missing required flag are each a
 //! usage refusal (`main` answers it exit 2 — the binary's suite runs one);
 //! every flag lands in its setting, the address and the code as their own
-//! values; `--workers` defaults to its
-//! constant and refuses zero (T21); a `test-hooks` build takes
-//! `--docker-fake` and `--mailer-fake` — the shipped build's refusal of both
-//! is `scripts/gate-full.sh`'s to check, every build of this suite having
-//! the feature on; and the usage text names every flag and renders every
-//! default from its constant.
+//! values; `--workers` defaults to its constant and refuses zero (T21), and
+//! `--connections` likewise; a `test-hooks` build takes `--docker-fake` and
+//! `--mailer-fake` — the shipped build's refusal of both is
+//! `scripts/gate-full.sh`'s to check, every build of this suite having the
+//! feature on; and the usage text names every flag and renders every default
+//! from its constant.
 
 use std::ffi::OsString;
 
@@ -64,6 +64,7 @@ fn every_default_is_its_named_constant() {
     assert_eq!(s.settings.log_max_size, DEFAULT_LOG_MAX_SIZE);
     assert_eq!(s.settings.log_max_file, DEFAULT_LOG_MAX_FILE);
     assert_eq!(s.workers, DEFAULT_WORKERS);
+    assert_eq!(s.connections, DEFAULT_CONNECTIONS);
     assert_eq!(s.mail, None, "no mail without --mailer and --from");
     assert_eq!(s.state_dir, PathBuf::from("/var/lib/skep-provision"));
     assert_eq!(s.reply_to.as_str(), "owner@skep.host");
@@ -80,6 +81,26 @@ fn every_default_is_its_named_constant() {
     assert_eq!((DEFAULT_BOARDS_DIR, DEFAULT_IMAGE, DEFAULT_CLI_IMAGE, DEFAULT_NETWORK, DEFAULT_CADDY, DEFAULT_SUFFIX), ("/etc/caddy/boards", "skep-hosted", "skep-cli", "skep", "caddy", "skep.host"));
     assert_eq!((DEFAULT_LOG_MAX_SIZE, DEFAULT_LOG_MAX_FILE.get()), ("10m", 5), "the README's serving line");
     assert_eq!(DEFAULT_WORKERS.get(), 3, "the owner's number");
+    assert_eq!(DEFAULT_CONNECTIONS.get(), 16, "skepd's own pool");
+}
+
+/// `--connections` DEFAULTS TO `DEFAULT_CONNECTIONS`; `--connections 0` is
+/// a usage refusal (exit 2 at `main`) — a service with no connection thread
+/// would accept nothing; a count parses, the last given winning; a value
+/// that is no count is refused; the usage names the flag and renders its
+/// default from the constant.
+#[test]
+fn the_connections_flag_defaults_to_its_constant_and_refuses_zero() {
+    assert_eq!(served(&[]).connections, DEFAULT_CONNECTIONS);
+    assert_eq!(serve(&["--connections", "0"]), Err("--connections: '0' is not a count of one or more".to_owned()));
+    assert_eq!(served(&["--connections", "1"]).connections.get(), 1);
+    assert_eq!(served(&["--connections", "4", "--connections", "64"]).connections.get(), 64, "the last given wins");
+    assert!(serve(&["--connections", "many"]).is_err());
+    assert_eq!(serve(&["--connections"]), Err("--connections needs a value".to_owned()));
+    assert!(parse(argv(&["invite", "--address", "a@b", "--state-dir", "/s", "--connections", "2"])).is_err(), "a flag of serve's alone");
+    let text = usage();
+    assert!(text.contains("[--connections <N>]"), "{text}");
+    assert!(text.split_whitespace().collect::<Vec<_>>().join(" ").contains(&format!("one or more (default {DEFAULT_CONNECTIONS})")), "{text}");
 }
 
 /// T21: `--workers` DEFAULTS TO `DEFAULT_WORKERS`; `--workers 0` is a usage
@@ -125,12 +146,15 @@ fn every_flag_lands_in_its_setting() {
         "50m",
         "--log-max-file",
         "3",
+        "--connections",
+        "4",
         "--mailer",
         "/usr/bin/msmtp",
         "--from",
         "noreply@example.org",
     ]);
     assert_eq!(s.listen.to_string(), "0.0.0.0:9000");
+    assert_eq!(s.connections.get(), 4);
     assert_eq!(s.boards_dir, PathBuf::from("/b"));
     let three = NonZeroU32::new(3).expect("three is not zero");
     assert_eq!(
@@ -224,6 +248,7 @@ fn the_usage_names_every_flag_and_its_default() {
         "--log-max-size <SIZE>",
         "--log-max-file <N>",
         "--workers <N>",
+        "--connections <N>",
         "--mailer <PROGRAM>",
         "--from <ADDRESS>",
         "--address <ADDRESS>",
@@ -245,6 +270,7 @@ fn the_usage_names_every_flag_and_its_default() {
         format!("(default {DEFAULT_LOG_MAX_SIZE})"),
         format!("(default {DEFAULT_LOG_MAX_FILE})"),
         format!("(default {DEFAULT_WORKERS})"),
+        format!("(default {DEFAULT_CONNECTIONS})"),
     ] {
         assert!(folded.contains(&default), "{default}");
     }

@@ -1,7 +1,8 @@
 //! T10 — THE SIGN-UP FILE: a sign-up appends one line, the address and a
 //! date; sign-ups made at once are every one kept, one writer at a time; a
 //! malformed address appends nothing; a file that cannot be written keeps
-//! nothing, each refusal an error saying which. (The address rule, the
+//! nothing, and a sign-up past the file's cap keeps nothing, each refusal an
+//! error saying which. (The address rule, the
 //! state directory's door and the writer beneath the file are `statedir`'s
 //! suite; the page's DRAFT refusal and the log's silence about the address
 //! are the pages' and the flow's suites'.)
@@ -93,4 +94,25 @@ fn each_refusal_is_an_error_saying_what_kept_nothing() {
     let failed = signups.append(b"person@example.com").expect_err("no directory to write in");
     assert!(matches!(failed, SignUpRefused::Io(_)), "{failed:?}");
     assert!(failed.to_string().starts_with("the sign-up file: "), "{failed}");
+}
+
+/// THE CAP: a sign-up that carries the file to `MAX_SIGNUPS_BYTES` exactly
+/// is kept; the next, past it, is refused `Full` and keeps nothing — the
+/// file as it was, no temp file — and the refusal says the cap.
+#[test]
+fn a_sign_up_past_the_cap_is_refused_and_keeps_nothing() {
+    let dir = Scratch::new();
+    let state = StateDir::open(&dir.path().join("state")).expect("the state directory");
+    let signups = SignUps::new(&state);
+    let line = format!("person@example.com {}\n", today()).len();
+    fs::write(state.file(SIGNUPS), format!("{}\n", "#".repeat(MAX_SIGNUPS_BYTES - line - 1))).expect("a file one line short of its cap");
+    signups.append(b"person@example.com").expect("kept, to the cap");
+    let full = fs::read(state.file(SIGNUPS)).expect("the file");
+    assert_eq!(full.len(), MAX_SIGNUPS_BYTES);
+    let refused = signups.append(b"a@b").expect_err("past the cap");
+    assert!(matches!(refused, SignUpRefused::Full), "{refused:?}");
+    assert_eq!(fs::read(state.file(SIGNUPS)).expect("the file"), full, "a refused sign-up wrote");
+    assert!(!crate::whole::temp_of(&state.file(SIGNUPS)).exists());
+    let said: &dyn std::error::Error = &refused;
+    assert_eq!(said.to_string(), "the sign-up file is at its 262144-byte cap");
 }

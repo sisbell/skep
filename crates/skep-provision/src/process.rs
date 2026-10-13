@@ -6,8 +6,10 @@
 //! closes, or null where there is none, never the service's own; stdout and
 //! stderr piped and read to their ends, apart. The input is written on a
 //! thread of its own, so a child that writes before it has read cannot stall
-//! the write; and a child that exits before reading it breaks the pipe
-//! without failing the call, its exit code saying what happened.
+//! the write; a child that exits before reading it breaks the pipe without
+//! failing the call, its exit code saying what happened; and where the OS
+//! gives no such thread, the call is the error and the child is ended
+//! unfed — never a panic in the worker or the sender's thread that called.
 
 use std::io::{self, Write};
 use std::process::{Command, Stdio};
@@ -44,13 +46,38 @@ impl Exit {
 /// read to their ends. The writer is scoped to the call: it borrows the
 /// bytes the caller lends, so none is copied, and it is joined before the
 /// call answers. The error is a child that could not be spawned or waited
-/// for, never its exit.
-pub fn run(mut cmd: Command, stdin: Option<&[u8]>) -> io::Result<Exit> {
+/// for, or one whose input could not be given a thread of its own — that
+/// child ended unfed and reaped — never its exit, and never a panic: the
+/// caller is a worker or the sender's thread, which a panic would end for
+/// the run's life.
+pub fn run(cmd: Command, stdin: Option<&[u8]>) -> io::Result<Exit> {
+    run_fed_by(cmd, stdin, thread::Builder::new())
+}
+
+/// [`run`] with `feeder`, the builder of the thread that writes the input:
+/// the seam a suite hands a builder the OS refuses, to show the call then
+/// answers the error, its child ended.
+fn run_fed_by(mut cmd: Command, stdin: Option<&[u8]>, feeder: thread::Builder) -> io::Result<Exit> {
     cmd.stdin(if stdin.is_some() { Stdio::piped() } else { Stdio::null() }).stdout(Stdio::piped()).stderr(Stdio::piped());
     let mut child = cmd.spawn()?;
     let pipe = child.stdin.take();
     let out = thread::scope(|s| {
-        let feeder = stdin.zip(pipe).map(|(bytes, mut pipe)| s.spawn(move || pipe.write_all(bytes)));
+        let feeder = match stdin.zip(pipe) {
+            None => None,
+            Some((bytes, mut pipe)) => match feeder.spawn_scoped(s, move || pipe.write_all(bytes)) {
+                Ok(feeder) => Some(feeder),
+                Err(e) => {
+                    // No thread to feed the input: the closure the OS
+                    // refused was dropped, the pipe with it, so the child's
+                    // input ends unfed; the child is ended and reaped, and
+                    // the call is the error — a step's "docker could not
+                    // run", the mail's retry.
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return Err(e);
+                }
+            },
+        };
         let out = child.wait_with_output();
         if let Some(feeder) = feeder {
             // A child that exits before reading its stdin breaks the pipe; its

@@ -4,9 +4,11 @@
 //! apart; the input is fed on a thread of its own, so a child that writes
 //! more than a pipe holds before it reads cannot stall it; a child that
 //! exits before reading its input answers its own exit, the broken pipe no
-//! error of the call's; an end by signal answers no code; and a program
-//! that cannot be spawned is the call's error. (The command each caller
-//! builds is pinned in `docker`'s and `sender`'s suites.)
+//! error of the call's; an end by signal answers no code; a program that
+//! cannot be spawned is the call's error; and an input whose thread the OS
+//! refuses is the call's error too, its child ended at once and never a
+//! panic. (The command each caller builds is pinned in `docker`'s and
+//! `sender`'s suites.)
 
 #![cfg(unix)]
 
@@ -73,4 +75,21 @@ fn a_program_that_cannot_be_spawned_is_the_calls_error() {
     for stdin in [None, Some(&b"the record"[..])] {
         assert!(run(Command::new("/nonexistent/skep-provision-test"), stdin).is_err(), "{stdin:?}");
     }
+}
+
+/// A FEEDER THE OS WILL NOT GIVE IS THE CALL's ERROR, never a panic: the
+/// input's thread refused — its builder asking a stack of 32 PiB, which no
+/// machine maps — the call answers the error at once, its child ended
+/// unfed rather than waited out (this `sleep`, which never reads its input,
+/// would hold the call half a minute), so the worker or the sender's thread
+/// that called lives on to its next call.
+#[test]
+fn a_feeder_the_os_refuses_is_the_calls_error_and_its_child_is_ended() {
+    let (answered, answer) = std::sync::mpsc::channel();
+    thread::spawn(move || {
+        let refused = thread::Builder::new().stack_size(1 << 55);
+        let _ = answered.send(run_fed_by(sh("exec sleep 30"), Some(b"the record"), refused).map(|exit| exit.code));
+    });
+    let ran = answer.recv_timeout(std::time::Duration::from_secs(10)).expect("the call panicked, or waited its child out");
+    assert!(ran.is_err(), "{ran:?}");
 }

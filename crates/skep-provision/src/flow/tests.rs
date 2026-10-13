@@ -17,9 +17,11 @@
 //! names; a code spent while a post's reads ran, refused at its admission; a
 //! live board's code held until its spend is written, kept held where the
 //! spend could not be written, and let go of after it; no code in the log),
-//! T10 (a sign-up, its address in no log line) and T12 (no send before live;
-//! an outage with the status live throughout); and a `docker` that cannot
-//! be run at all — the sweep skipped, a post refused D-8. THE POOL's FENCE:
+//! T10 (a sign-up, its address in no log line; one past the file's cap,
+//! refused) and T12 (no send before live; an outage with the status live
+//! throughout); a fifth post past the looks' cap, refused D-8 with no docker
+//! call, and the looks' places given back; and a `docker` that cannot be
+//! run at all — the sweep skipped, a post refused D-8. THE POOL's FENCE:
 //! T15 (two workers make two names at once, and one worker does not), T16
 //! (a post answers at once while a worker is paused inside a step), T17 (a
 //! second post for a name in flight meets D-4 under two workers, and one
@@ -633,6 +635,63 @@ fn a_fifth_post_past_the_queue_meets_d8_and_leaves_no_entry() {
     assert!(rig.log().join("\n").contains("erin: a post refused: 4 posts already wait"));
 }
 
+/// THE LOOKS' CAP: four posts paused inside their looks at what stands, a
+/// fifth meets D-8, "try again later", at once and with no docker call, its
+/// invite still issued; the four, let go, meet D-4 off the volumes standing
+/// under their names, and their places are given back — a sixth post looks
+/// and is admitted.
+#[test]
+fn a_post_past_the_looks_cap_meets_d8_with_no_docker_call() {
+    let names = ["alice", "bob", "carol", "dave"];
+    assert_eq!(MAX_LOOKS, names.len());
+    let gate = Gate::new();
+    let pause = Arc::clone(&gate);
+    let rig = rig(&(names.iter().map(|&n| line("volume_inspect", Some(n), 0, "", "")).collect::<String>() + &inspects("frank")), None);
+    rig.fake.pause(move |method, name| {
+        if method == "volume_inspect" && matches!(name, Some("alice" | "bob" | "carol" | "dave")) {
+            pause.pause();
+        }
+    });
+    let answers: Vec<_> = names
+        .iter()
+        .map(|&name| {
+            let (service, code) = (Arc::clone(&rig.service), rig.invite());
+            let (tx, rx) = mpsc::channel();
+            thread::spawn(move || {
+                let posted = record(true);
+                let _ = tx.send(service.admit(&Post { name: name.as_bytes(), record: posted.as_bytes(), invite: code.as_str().as_bytes() }));
+            });
+            rx
+        })
+        .collect();
+    gate.entered(4);
+    let fifth = rig.invite();
+    assert_eq!(rig.post("erin", &record(true), fifth.as_str()), Err(Refusal::Busy));
+    assert!(rig.logged("erin: a post refused: 4 posts already look at what stands"), "{:?}", rig.log());
+    assert!(rig.issued(&fifth));
+    gate.open();
+    for answered in answers {
+        assert_eq!(answered.recv_timeout(Duration::from_secs(30)).expect("the paused post answered"), Err(Refusal::Name));
+    }
+    rig.admitted("frank", &rig.invite());
+    rig.fake.assert_done();
+}
+
+/// A PLACE UNDER A CAP is taken where fewer than the cap are held, refused
+/// where the cap are, and given back when dropped — the count back at none.
+#[test]
+fn a_slot_is_given_back_when_dropped() {
+    let held = AtomicUsize::new(0);
+    let first = Slot::take(&held, 2).expect("a place");
+    let second = Slot::take(&held, 2).expect("a second place");
+    assert!(Slot::take(&held, 2).is_none(), "a third place under a cap of two");
+    drop(first);
+    let third = Slot::take(&held, 2).expect("the place given back");
+    assert_eq!(held.load(Ordering::SeqCst), 2);
+    drop((second, third));
+    assert_eq!(held.load(Ordering::SeqCst), 0);
+}
+
 /// THE BOOK KEEPS ITS OWN RULES. Admitted, a post waits with its code and
 /// its name held, its page D-7. What blocks a new post is the first of a
 /// full queue, a held code and a held name: four waiting block a fifth even
@@ -822,6 +881,19 @@ fn a_sign_up_is_kept_and_its_address_is_in_no_log_line() {
     assert!(kept.starts_with("someone@example.org "));
     let log = rig.log().join("\n");
     assert_eq!(log, "a sign-up kept\na sign-up refused: no address");
+}
+
+/// T10: A SIGN-UP PAST THE FILE's CAP — the file at its 256 KiB — is
+/// refused as one that could not be kept, nothing written, and logged with
+/// the cap and the owner's act, never the address.
+#[test]
+fn a_sign_up_past_the_files_cap_is_refused_and_logged() {
+    let rig = rig("", None);
+    let full = format!("{}\n", "#".repeat(256 * 1024 - 1));
+    fs::write(rig.state.file(crate::signups::SIGNUPS), &full).expect("a file at its cap");
+    assert_eq!(rig.service.sign_up(b"someone@example.org"), Err(SignUpRefusal::Failed));
+    assert_eq!(fs::read_to_string(rig.state.file(crate::signups::SIGNUPS)).expect("the file"), full);
+    assert_eq!(rig.log(), ["a sign-up refused: the sign-up file is at its 262144-byte cap; the owner trims the file"]);
 }
 
 /// T12: A MAIL OUTAGE — every try refused — is retried to its bound on the

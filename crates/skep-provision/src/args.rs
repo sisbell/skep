@@ -60,6 +60,17 @@ const DEFAULT_LOG_MAX_FILE: NonZeroU32 = NonZeroU32::new(5).expect("five is not 
 /// alpha's VM; `--workers` sets another, never zero.
 const DEFAULT_WORKERS: NonZeroUsize = NonZeroUsize::new(3).expect("three is not zero");
 
+/// THE CONNECTIONS, by default: sixteen threads, each serving one
+/// connection at a time, made at start — `skepd`'s own default pool. At
+/// sixteen the worst bills stay small: a connection holds at most some 10 MB
+/// at once — its half-megabyte read, its form, and a refused post's page
+/// echoing a field of quotes six bytes for each it was sent — so sixteen
+/// hold some 160 MB; and each holds a socket, beside the pipes of the posts'
+/// four looks at once, some fifty descriptors of the unit's 1,024. A
+/// person's open page asks for one connection, for milliseconds, every five
+/// seconds; `--connections` sets another, never zero.
+const DEFAULT_CONNECTIONS: NonZeroUsize = NonZeroUsize::new(16).expect("sixteen is not zero");
+
 /// What the command line asked for.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Command {
@@ -89,6 +100,10 @@ pub struct ServeArgs {
     /// `--workers`: the worker threads — the boards made at once. One or
     /// more: a service with none would admit posts and make no board.
     pub workers: NonZeroUsize,
+    /// `--connections`: the connection threads — the requests served at
+    /// once, a further connection waiting in the listener's queue. One or
+    /// more: a service with none would accept no connection.
+    pub connections: NonZeroUsize,
     /// `--reply-to`: the owner's mailbox, which D-8 names and the mail
     /// replies to. Required.
     pub reply_to: MailAddress,
@@ -154,6 +169,7 @@ usage: skep-provision serve --state-dir <DIR> --reply-to <ADDRESS>
                             [--network <BRIDGE>] [--caddy <CONTAINER>]
                             [--suffix <DOMAIN>] [--log-max-size <SIZE>]
                             [--log-max-file <N>] [--workers <N>]
+                            [--connections <N>]
                             [--mailer <PROGRAM> --from <ADDRESS>]
        skep-provision invite --address <ADDRESS> --state-dir <DIR>
                             [--code <CODE>] [--suffix <DOMAIN>]
@@ -185,6 +201,9 @@ board left half-made by a stop is removed.
   --log-max-file <N>      a serving run's log files kept (default {DEFAULT_LOG_MAX_FILE})
   --workers <N>           the boards made at once: one worker thread each,
                           one or more (default {DEFAULT_WORKERS})
+  --connections <N>       the requests served at once: one thread each,
+                          made at start, a further connection waiting in
+                          the listener's queue; one or more (default {DEFAULT_CONNECTIONS})
   --mailer <PROGRAM>      the host's relay client — sendmail or msmtp —
                           run as <PROGRAM> -t with the message on stdin;
                           given with --from or not at all, and without
@@ -248,7 +267,8 @@ fn suffix(v: String) -> Result<String, String> {
 
 /// An address by the rule: the value `MailAddress::parse` admits.
 fn address(flag: &str, v: String) -> Result<MailAddress, String> {
-    MailAddress::parse(&v).ok_or_else(|| format!("{flag}: '{v}' is not an address: one @ with a side each way, at most 254 bytes, no space and no control character"))
+    MailAddress::parse(&v)
+        .ok_or_else(|| format!("{flag}: '{v}' is not an address: one @ with a side each way, at most 254 bytes, no space, no control character, none of ( ) < > [ ] : ; \\ , \" and no bidi control"))
 }
 
 /// `serve`'s flags.
@@ -266,6 +286,7 @@ fn parse_serve(mut it: impl Iterator<Item = String>) -> Result<Command, String> 
         log_max_file: DEFAULT_LOG_MAX_FILE,
     };
     let mut workers = DEFAULT_WORKERS;
+    let mut connections = DEFAULT_CONNECTIONS;
     let mut reply_to: Option<MailAddress> = None;
     let mut mailer: Option<Mailer> = None;
     let mut from: Option<MailAddress> = None;
@@ -300,6 +321,10 @@ fn parse_serve(mut it: impl Iterator<Item = String>) -> Result<Command, String> 
                 let v = value(&mut it, "--workers")?;
                 workers = v.parse().map_err(|_| format!("--workers: '{v}' is not a count of one or more"))?;
             }
+            "--connections" => {
+                let v = value(&mut it, "--connections")?;
+                connections = v.parse().map_err(|_| format!("--connections: '{v}' is not a count of one or more"))?;
+            }
             "--reply-to" => reply_to = Some(address("--reply-to", value(&mut it, "--reply-to")?)?),
             "--mailer" => mailer = Some(Mailer::Program(PathBuf::from(value(&mut it, "--mailer")?))),
             "--from" => from = Some(address("--from", value(&mut it, "--from")?)?),
@@ -324,6 +349,7 @@ fn parse_serve(mut it: impl Iterator<Item = String>) -> Result<Command, String> 
         boards_dir,
         settings,
         workers,
+        connections,
         reply_to: reply_to.ok_or("serve: --reply-to is required")?,
         mail,
         #[cfg(feature = "test-hooks")]

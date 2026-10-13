@@ -145,15 +145,20 @@ minutes apart) and never holds up the next post.
 
 When a step fails, what the steps made is undone in reverse order: the
 snippet removed and the proxy reloaded where it may stand — a write's
-error can come after its rename — the run removed, the volume removed. The
-status turns to D-8, and the invite stays issued so the person can post
-again. If a removal itself fails, the log says so and the name stays taken
-until the operator clears what stands under it: the snippet with
-`rm <boards-dir>/<name>.caddy` and a reload of the proxy
+error can come after its rename — the run removed, the volume removed.
+Then the service looks again at what stands under the name, as a post
+does, and the log says what it found: done, or INCOMPLETE naming what
+still stands — a removal that itself failed. The status turns to D-8, and
+the invite stays issued so the person can post again. Where something
+still stands, the name stays taken until the operator clears it: the
+snippet with `rm <boards-dir>/<name>.caddy` and a reload of the proxy
 (`docker exec <caddy> caddy reload --config /etc/caddy/Caddyfile`), the
 run with `docker rm -f <name>`, the volume with `docker volume rm <name>`.
-A reload that fails is logged as itself: it leaves nothing standing under
-the name.
+A refused `docker rm -f` of a run that was never made, and a reload that
+fails, leave nothing standing, and the log says done. The look reads an
+Engine that cannot be reached as nothing standing, as a post's look does;
+the removals' log lines above it then name the Engine, and the next
+start's sweep finds the volume it left.
 
 ## The sweep at start
 
@@ -163,14 +168,15 @@ taken for good. So before `serve` binds its address it lists the volumes
 that carry this service's label (`docker volume ls -q --filter
 label=skep.provision=1`) and, for each whose name is one label of the
 grammar and has no `<name>.caddy` in the snippet directory, runs the last
-two rows of the cleanup: `docker rm -f <name>` (a failure logged and
-passed over, since there may be no run) and `docker volume rm <name>` (a
-failure logged; the name then stays taken, for the operator). A volume
-whose snippet stands is left alone — it is a live board, or a stopped one
-that Docker's `--restart` brings back — and so is a listed volume whose
-name is not one of the grammar, which the log names. If the listing
-itself fails, the log says so, the sweep is skipped, and the service still
-serves. The serving line carries the count, `swept <n>`.
+two rows of the cleanup, `docker rm -f <name>` and `docker volume rm
+<name>`, each answer logged, and then looks at what stands: where
+something still stands, the log names it and the name stays taken, for
+the operator. A volume whose snippet stands is left alone — it is a live
+board, or a stopped one that Docker's `--restart` brings back — and so is
+a listed volume whose name is not one of the grammar, which the log
+names. If the listing itself fails, the log says so, the sweep is
+skipped, and the service still serves. The serving line carries the count
+of boards cleared, `swept <n>`.
 
 The sweep asks one thing of the operator: **one `serve` per Docker host**.
 The label is the host's, the same on every `serve`'s volumes, and a volume

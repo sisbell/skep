@@ -56,38 +56,46 @@
 //! THE CLEANUP (the provisioning record §5.2's decision table, D-8 made
 //! literally true): on a failed step, what the flow made is undone in the
 //! reverse of the order it was made — the snippet removed where its write
-//! began, and Caddy reloaded where one stood or may stand, the route
-//! change's undo under the route lock its write took and held since;
-//! `rm_force` where a run stands; `volume_rm` where the volume stands — the
-//! status FAILED (D-8) and the invite NOT spent, so the person may post
-//! again. By the table: `volume_create` failed — nothing; `run_claim`
-//! failed — the volume; the dark claim failed (exit 4 past the bound, 3, 1,
-//! 2, or `claimed by`) — the claim run and the volume; `run_serving`
-//! failed, or the pair never answered — the serving run and the volume; the
-//! snippet's write failed — the snippet, where its rename landed, and a
-//! reload, then the serving run and the volume; the reload failed — the
+//! began, and Caddy reloaded where one stood or may stand, the route change's
+//! undo under the route lock its write took and held since; `rm_force` where a
+//! run may stand; `volume_rm` where the volume stands — and then THE TRUTH
+//! ASKED what stands under the name: the three reads a post makes
+//! (`names::taken`), the ones D-8's "Nothing stands under your name" speaks
+//! of, never the removals' answers. The status FAILED (D-8) and the invite NOT
+//! spent, so the person may post again. By the table: `volume_create` failed —
+//! nothing; `run_claim` failed — the volume; the dark claim failed (exit 4
+//! past the bound, 3, 1, 2, or `claimed by`) — the claim run and the volume;
+//! `run_serving` failed, or the pair never answered — the serving run and the
+//! volume; the snippet's write failed — the snippet, where its rename landed,
+//! and a reload, then the serving run and the volume; the reload failed — the
 //! snippet and a reload, the serving run, the volume. A board whose claim
-//! landed and whose route did not is removed with its volume: no route
-//! ever existed — the route lock kept every other name's reload out while
-//! its snippet stood, and its own reload, where one was made, failed — so
-//! no one wrote to it, and a re-post claims a fresh volume with the same
-//! keys. THE NAMED GAP: a removal that itself fails — the snippet's, the
-//! run's, the volume's — is logged and leaves the name standing, and the
-//! truth then refuses re-posts (D-4) until the operator clears it; a reload
-//! that fails is logged as itself, for it leaves nothing standing that the
-//! truth reads.
+//! landed and whose route did not is removed with its volume: no route ever
+//! existed — the route lock kept every other name's reload out while its
+//! snippet stood, and its own reload, where one was made, failed — so no one
+//! wrote to it, and a re-post claims a fresh volume with the same keys. THE
+//! NAMED GAP: where something still stands after the removals — a removal that
+//! itself failed — the log says INCOMPLETE and names it, and the truth then
+//! refuses re-posts (D-4) until the operator clears it; a refused `rm -f` of a
+//! run that never stood, and a reload that fails, leave nothing the truth
+//! reads, and the verdict is done.
 //!
 //! THE SWEEP AT START ([`Service::sweep`]; `serve` runs it once, before it
 //! listens): a stop mid-board leaves a volume, and perhaps a run, under a
 //! name with no snippet, which the truth would read as TAKEN for good — so
 //! every volume under this service's label is listed, and each under a
 //! name of the grammar with no snippet is removed by the table's last two
-//! rows; a name whose snippet stands is left, a volume under no name of the
-//! grammar is logged and left, and a listing that fails is logged and the
-//! sweep skipped — the sign-up still serves. Its precondition is the
-//! operator's: ONE SERVICE PER DOCKER HOST, for the label and the names
-//! are the host's, and a second service would take the first's boards for
-//! half-made.
+//! rows, the truth asked what stands after; a name whose snippet stands is
+//! left, a volume under no name of the grammar is logged and left, and a
+//! listing that fails is logged and the sweep skipped — the sign-up still
+//! serves. Its precondition is the operator's: ONE SERVICE PER DOCKER HOST,
+//! for the label and the names are the host's, and a second service would
+//! take the first's boards for half-made.
+//!
+//! THE DESK's OTHER TWO ANSWERS: a sign-up (`Desk::sign_up`), the address
+//! kept through `signups` and logged as kept or refused — never the
+//! address — touching nothing of the book; and a status (`Desk::status`),
+//! a query of the book's status map, a live post's page rendered by the
+//! one renderer from the inputs [`Service`]'s `live_reply` gathers.
 //!
 //! THE LOG, on stderr through [`Log`]: one line per step naming the name,
 //! the step and each call's exit code, and the sidecar's stderr whole —
@@ -104,7 +112,7 @@ use std::time::Duration;
 
 use crate::caddy;
 use crate::docker::Docker;
-use crate::health::{self, Wait, Waited, HEALTH_WAIT};
+use crate::health::{self, Waited, HEALTH_WAIT};
 use crate::invites::{self, InviteCode};
 use crate::name::Name;
 use crate::names::{self, PostState, StatusMap};
@@ -116,6 +124,7 @@ use crate::sender::{Log, Outbox, Sleep};
 use crate::sidecar::{self, Answer, Failure};
 use crate::signups::{SignUpRefused, SignUps};
 use crate::statedir::StateDir;
+use crate::wait::Wait;
 
 /// THE QUEUE's DEPTH: four posts WAITING for a worker, the ones the workers
 /// run apart (the provisioning record §5.2's figure); a fifth meets D-8,
@@ -318,14 +327,15 @@ impl Service {
     /// volume under this service's label listed; each under a name of the
     /// grammar with NO snippet is half-made — a stop mid-board left it — and
     /// is removed by the cleanup table's last two rows, whichever run stands
-    /// under the name (`rm_force`; a failure logged and gone past, for there
-    /// may be no run) then the volume (`volume_rm`; a failure logged, and
-    /// the name stays taken, the operator's). A name whose snippet stands is
-    /// left — live, or stopped and Docker's `--restart` to bring back — and
-    /// so is a listed volume under no name of the grammar, logged. A listing
-    /// that fails is logged and the sweep skipped: a listing failure must
-    /// not take the sign-up down. Answers the boards removed, for the
-    /// serving line.
+    /// under the name (`rm_force`) then the volume (`volume_rm`), each
+    /// answer logged, and the truth then asked what stands
+    /// ([`Service::cleared`]): done, or INCOMPLETE naming what stands, the
+    /// name then taken until the operator clears it. A name whose snippet
+    /// stands is left — live, or stopped and Docker's `--restart` to bring
+    /// back — and so is a listed volume under no name of the grammar,
+    /// logged. A listing that fails is logged and the sweep skipped: a
+    /// listing failure must not take the sign-up down. Answers the boards
+    /// cleared, for the serving line.
     ///
     /// ITS PRECONDITION, the operator's: ONE SERVICE PER DOCKER HOST. The
     /// label marks every volume any `serve` on the host made, and a volume
@@ -364,14 +374,11 @@ impl Service {
         let mut swept = 0;
         for name in &labelled.half_made {
             self.log(&format!("{name}: half-made at start (a volume, no snippet) — removing"));
-            // The table's last two rows: a run that does not stand is no
-            // failure of the sweep's, and the volume is tried either way.
+            // The table's last two rows, then the truth asked what stands.
             self.undone(name, "sweep", "rm_force", docker.rm_force(name));
-            if self.undone(name, "sweep", "volume_rm", docker.volume_rm(name)) {
+            self.undone(name, "sweep", "volume_rm", docker.volume_rm(name));
+            if self.cleared(name, "sweep") {
                 swept += 1;
-                self.log(&format!("{name}: sweep: done — nothing stands under the name"));
-            } else {
-                self.log(&format!("{name}: sweep: INCOMPLETE — the volume stands, and the name refuses posts (D-4) until the operator clears it"));
             }
         }
         swept
@@ -517,11 +524,12 @@ impl Service {
         Ok(())
     }
 
-    /// STEP 4: the sidecar run until it answers other than exit 4, or the
-    /// bound passes; its stderr logged whole every try.
+    /// STEP 4: the sidecar run over [`SIDECAR_WAIT`] until it answers other
+    /// than exit 4, or the bound passes — its last exit 4 then the step's
+    /// failure; its stderr logged whole every try.
     fn dark_claim(&self, job: &Job) -> Result<(), &'static str> {
         let name = &job.name;
-        for at in 1..=SIDECAR_WAIT.tries.get() {
+        for at in SIDECAR_WAIT.paced(self.sleep.as_ref()) {
             let exit = match self.docker.sidecar_claim(name, &job.record) {
                 Ok(exit) => exit,
                 Err(e) => {
@@ -542,13 +550,16 @@ impl Service {
                     self.log(&format!("{name}: the volume made for this post answered `claimed by`: residue where none should be"));
                     return Err("the dark claim");
                 }
-                Err(Failure::Transport) if at < SIDECAR_WAIT.tries.get() => (self.sleep)(SIDECAR_WAIT.interval),
+                // The daemon not yet listening: the next try, after the
+                // wait's pause.
+                Err(Failure::Transport) => {}
                 Err(failure) => {
                     self.log(&format!("{name}: sidecar_claim: {failure}"));
                     return Err("the dark claim");
                 }
             }
         }
+        self.log(&format!("{name}: sidecar_claim: {}", Failure::Transport));
         Err("the dark claim")
     }
 
@@ -585,14 +596,12 @@ impl Service {
 
     /// THE CLEANUP: what was made, undone in reverse — the snippet under the
     /// route lock its write took, let go of once its reload is made, then
-    /// the run, then the volume. A removal that fails — the snippet's, the
-    /// run's, the volume's — is logged, the next still tried, and the name
-    /// said to stand; the reload's failure is logged as itself, for it
-    /// leaves nothing standing that the truth about names reads.
+    /// the run, then the volume, each removal logged and the next still
+    /// tried — and then the verdict, [`Service::cleared`]: the truth about
+    /// names asked what stands, never the removals' answers.
     fn cleanup(&self, name: &Name, made: Made<'_>) {
         let docker = self.docker.as_ref();
         let made_anything = made.volume || made.run || made.snippet.is_some();
-        let mut stands = false;
         if let Some(_route_change) = made.snippet {
             // The route change's undo, under the lock its write took, to the
             // end of this block. The removal's answer says whether a reload
@@ -609,34 +618,60 @@ impl Service {
                     false
                 }
                 Err(e) => {
-                    stands = true;
                     self.log(&format!("{name}: cleanup: snippet: not removed: {e}"));
                     true
                 }
             };
             if reload {
-                // The reload's failure is logged as itself: it leaves
-                // nothing standing that the truth about names reads.
                 self.undone(name, "cleanup", "caddy_reload", caddy::reload(docker));
             }
         }
         if made.run {
-            stands |= !self.undone(name, "cleanup", "rm_force", docker.rm_force(name));
+            self.undone(name, "cleanup", "rm_force", docker.rm_force(name));
         }
         if made.volume {
-            stands |= !self.undone(name, "cleanup", "volume_rm", docker.volume_rm(name));
+            self.undone(name, "cleanup", "volume_rm", docker.volume_rm(name));
         }
-        if stands {
-            self.log(&format!("{name}: cleanup: INCOMPLETE — the name stands, and refuses new posts (D-4) until the operator clears it"));
-        } else if made_anything {
-            self.log(&format!("{name}: cleanup: done — nothing stands under the name"));
+        if made_anything {
+            self.cleared(name, "cleanup");
         }
     }
 
-    /// ONE REMOVAL's CALL judged undone under `under` — `cleanup` or
-    /// `sweep`: `true` where it exited 0.
-    fn undone(&self, name: &Name, under: &str, step: &str, answered: io::Result<Exit>) -> bool {
-        self.judged(&format!("{name}: {under}: {step}"), answered).is_some()
+    /// ONE REMOVAL's CALL — a making undone — logged under `under`,
+    /// `cleanup` or `sweep`, as [`Service::judged`] logs it, and nothing
+    /// concluded from its answer: what stands after the removals is
+    /// [`Service::cleared`]'s to ask.
+    fn undone(&self, name: &Name, under: &str, step: &str, answered: io::Result<Exit>) {
+        self.judged(&format!("{name}: {under}: {step}"), answered);
+    }
+
+    /// THE VERDICT AFTER THE REMOVALS, under `under` — `cleanup` or `sweep`:
+    /// whether the name is CLEARED, asked of the truth about names itself
+    /// ([`names::taken`], the three reads a post makes) and never read off
+    /// the removals' answers — a refused `rm -f` may be of a run that never
+    /// stood, and a reload removes nothing the truth reads — then logged:
+    /// done, or INCOMPLETE naming what stands, the operator's to clear.
+    /// `true` where nothing stands. The reads are the post's own, an
+    /// inspect's non-zero exit "not standing" whatever its reason: an Engine
+    /// that cannot be reached reads here as nothing standing, as it does at
+    /// a post, and the removals' lines logged above the verdict then name
+    /// the Engine; a volume so left with no snippet, and any run under its
+    /// name, is the next start's sweep's.
+    fn cleared(&self, name: &Name, under: &str) -> bool {
+        match names::taken(self.docker.as_ref(), &self.config.boards_dir, name) {
+            Ok(None) => {
+                self.log(&format!("{name}: {under}: done — nothing stands under the name"));
+                true
+            }
+            Ok(Some(by)) => {
+                self.log(&format!("{name}: {under}: INCOMPLETE — {by}, and the name refuses posts (D-4) until the operator clears it"));
+                false
+            }
+            Err(e) => {
+                self.log(&format!("{name}: {under}: INCOMPLETE — the look at what stands could not be made: {e}"));
+                false
+            }
+        }
     }
 
     /// THE MAIL HANDED OVER: the live reply handed to the outbox — where

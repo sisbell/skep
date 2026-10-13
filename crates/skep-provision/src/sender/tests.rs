@@ -1,14 +1,14 @@
 //! T12 — THE SENDER: the real mailer's command is `<mailer> -t` and the
-//! message goes on its stdin — pinned from the `Command`, and over a
-//! recording script in the mailer's place; the fake records the headers and
-//! the body; a refused send is retried up to its bound and then given up,
-//! logged with neither the address nor the body — a relay's refusal, its
-//! stderr naming the recipient, by its exit code alone — and a mailer that
-//! cannot run is retried the same; the sender's thread delivers what the
-//! worker hands it, the message made with the outbox's own `From:`,
-//! `Reply-To:` and subject, and a hand-over never waits on a send stuck in
-//! its try. (No send before the status is live, and the status live
-//! throughout an outage, are the flow's — `flow/tests/provision.rs`.)
+//! message goes on its stdin — pinned from the `Command`, and over a recording
+//! script in the mailer's place; the fake records the headers and the body; a
+//! refused send is retried up to its bound — seven tries ten minutes apart —
+//! and then given up, logged with neither the address nor the body — a relay's
+//! refusal, its stderr naming the recipient, by its exit code alone — and a
+//! mailer that cannot run is retried the same; the sender's thread delivers
+//! what the worker hands it, the message made with the outbox's own `From:`,
+//! `Reply-To:` and subject, and a hand-over never waits on a send stuck in its
+//! try. (No send before the status is live, and the status live throughout an
+//! outage, are the flow's — `flow/tests/provision.rs`.)
 
 use std::path::Path;
 use std::sync::Mutex;
@@ -80,24 +80,26 @@ fn the_fake_records_the_headers_and_the_body() {
     assert_eq!(fake.tries().len(), 1);
 }
 
-/// T12: A REFUSED SEND IS RETRIED UP TO ITS BOUND — each try logged with
-/// its exit code — AND THEN GIVEN UP, the sleeps between; nothing appended
-/// to the mail log; neither the address nor the body in any line.
+/// T12: A REFUSED SEND IS RETRIED UP TO ITS BOUND — seven tries ten minutes
+/// apart, each try logged with its exit code — AND THEN GIVEN UP, the sleeps
+/// between; nothing appended to the mail log; neither the address nor the
+/// body in any line.
 #[test]
 fn a_refused_send_is_retried_to_its_bound_then_given_up() {
+    assert_eq!((MAIL_WAIT.tries.get(), MAIL_WAIT.interval), (7, Duration::from_secs(10 * 60)), "seven tries ten minutes apart");
     let dir = Scratch::new();
     let mail_log = dir.path().join("mail.log");
-    let fake = FakeSender::new(mail_log.clone(), vec![75; MAIL_TRIES as usize]);
+    let fake = FakeSender::new(mail_log.clone(), vec![75; MAIL_WAIT.tries.get() as usize]);
     let (log, lines) = kept();
     let sleeps = Arc::new(Mutex::new(Vec::new()));
     let slept = Arc::clone(&sleeps);
-    let sent = deliver(&fake, &message(), MAIL_TRIES, MAIL_INTERVAL, &move |d| slept.lock().unwrap().push(d), log.as_ref());
+    let sent = deliver(&fake, &message(), MAIL_WAIT, &move |d| slept.lock().unwrap().push(d), log.as_ref());
     assert!(!sent);
-    assert_eq!(fake.tries().len(), MAIL_TRIES as usize);
-    assert_eq!(sleeps.lock().unwrap().as_slice(), vec![MAIL_INTERVAL; MAIL_TRIES as usize - 1].as_slice());
+    assert_eq!(fake.tries().len(), MAIL_WAIT.tries.get() as usize);
+    assert_eq!(sleeps.lock().unwrap().as_slice(), vec![MAIL_WAIT.interval; MAIL_WAIT.tries.get() as usize - 1].as_slice());
     let lines = lines.lock().unwrap().clone();
-    assert_eq!(lines.len(), MAIL_TRIES as usize + 1);
-    assert_eq!(lines[0], format!("alice: mail: try 1 of {MAIL_TRIES} refused, exit 75"));
+    assert_eq!(lines.len(), MAIL_WAIT.tries.get() as usize + 1);
+    assert_eq!(lines[0], format!("alice: mail: try 1 of {} refused, exit 75", MAIL_WAIT.tries));
     assert!(lines.last().expect("a line").contains("given up after 7 tries; the board stands live"));
     assert!(lines.iter().all(|l| !l.contains("person@") && !l.contains("status/0123")), "{lines:?}");
     assert!(messages(&mail_log).expect("the mail log").is_empty());
@@ -109,7 +111,7 @@ fn a_send_accepted_after_refusals_is_sent() {
     let dir = Scratch::new();
     let fake = FakeSender::new(dir.path().join("mail.log"), vec![75, 1, 0]);
     let (log, lines) = kept();
-    assert!(deliver(&fake, &message(), MAIL_TRIES, MAIL_INTERVAL, &|_| {}, log.as_ref()));
+    assert!(deliver(&fake, &message(), MAIL_WAIT, &|_| {}, log.as_ref()));
     assert_eq!(fake.tries().len(), 3);
     assert_eq!(lines.lock().unwrap().last().map(String::as_str), Some("alice: mail: sent at try 3 of 7"));
 }
@@ -127,7 +129,8 @@ fn a_relays_refusal_is_logged_by_its_exit_code_alone() {
         }
     }
     let (log, lines) = kept();
-    assert!(!deliver(&Refuses, &message(), 2, MAIL_INTERVAL, &|_| {}, log.as_ref()));
+    let twice = Wait { tries: NonZeroU32::new(2).expect("two is not zero"), interval: MAIL_WAIT.interval };
+    assert!(!deliver(&Refuses, &message(), twice, &|_| {}, log.as_ref()));
     assert_eq!(
         *lines.lock().unwrap(),
         ["alice: mail: try 1 of 2 refused, exit 75", "alice: mail: try 2 of 2 refused, exit 75", "alice: mail: given up after 2 tries; the board stands live and its status page with it"]
@@ -152,7 +155,7 @@ fn a_mailer_that_cannot_run_is_retried() {
     }
     let (log, lines) = kept();
     let slept = Mutex::new(0);
-    assert!(deliver(&Returns(Mutex::new(0)), &message(), MAIL_TRIES, MAIL_INTERVAL, &|_| *slept.lock().unwrap() += 1, log.as_ref()));
+    assert!(deliver(&Returns(Mutex::new(0)), &message(), MAIL_WAIT, &|_| *slept.lock().unwrap() += 1, log.as_ref()));
     let lines = lines.lock().unwrap().clone();
     assert_eq!(lines.len(), 3, "{lines:?}");
     assert!(lines[..2].iter().all(|l| l.contains("failed, the mailer could not run: ")), "{lines:?}");

@@ -8,10 +8,11 @@
 //! inspect <name>` exits 0 ([`taken`]; the order fixed here: the snippet, a
 //! file read with no call, then the volume, then the container, the first
 //! that stands answering). D-4's "taken" and D-8's "Nothing stands under
-//! your name" are statements about exactly these, made true by the same
-//! reads the cleanup answers to. The flow makes the three reads at the post,
-//! under no lock of its own, and again before step 3 on the worker that
-//! owns the name; the log carries the history.
+//! your name" are statements about exactly these, made true — and checked
+//! — by the same reads: the flow makes them at the post, under no lock of
+//! its own, again before step 3 on the worker that owns the name, and once
+//! more after a failed post's cleanup and after each of the sweep's
+//! removals, whose verdict they are; the log carries the history.
 //!
 //! THE LABELLED VOLUMES ([`labelled`]), read at start: every volume this
 //! service made carries one label (`docker.rs`'s `LABEL_KEY`), as any other
@@ -70,9 +71,11 @@ impl fmt::Display for TakenBy {
 
 /// THE TRUTH ABOUT `name`: what stands under it, the first of the snippet,
 /// the volume and the container — `None` where none does. An inspect's
-/// non-zero exit is "not standing" whatever its reason (an Engine that
-/// cannot be reached among them — the volume's own creation then fails, and
-/// nothing is made); a `docker` that cannot be run at all is the error.
+/// non-zero exit is "not standing" whatever its reason, an Engine that
+/// cannot be reached among them: at a post the volume's own creation then
+/// fails, and nothing is made; after a cleanup's or the sweep's removals the
+/// verdict reads done, and what the Engine left the next start's sweep
+/// finds. A `docker` that cannot be run at all is the error.
 pub fn taken(docker: &dyn Docker, boards_dir: &Path, name: &Name) -> io::Result<Option<TakenBy>> {
     if caddy::stands(boards_dir, name)? {
         return Ok(Some(TakenBy::Snippet));

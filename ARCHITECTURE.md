@@ -1555,6 +1555,9 @@ each naming only those above it:
   by a thread of its own, or a null stdin — and reads stdout and stderr
   apart; a feeding thread the OS refuses is the call's error, its child
   ended, never a panic.
+- `wait.rs` a bounded wait: `Wait`, this many tries this far apart, and
+  the tries paced by it — a sleep before each but the first, never after
+  the last — the `/health` read's, the dark claim's and the mail's.
 - `name.rs` a board's name: its grammar, one lowercase label, and the host
   and the public origin it stands at, from which every `docker` call, the
   snippet and the reply are built; and `Name::exact`, a name read back as
@@ -1573,7 +1576,7 @@ each naming only those above it:
   scripted fake, its order strict per name and free across names.
 - `sidecar.rs` the sidecar's six DATA lines and its one idempotent line,
   read, and its exit codes mapped.
-- `health.rs` the pair off `/health`'s body and the bounded wait.
+- `health.rs` the pair off `/health`'s body and its wait, over a `Wait`.
 - `caddy.rs` the snippet's text, its write and its removal through
   `whole` at `0644`, whether it stands, the reload, and the routed
   names, read off the snippet directory.
@@ -1597,18 +1600,20 @@ each naming only those above it:
   service hands out, the invite link and a post's status URL.
 - `sender.rs` the `Sender` trait, `RelaySender` — the relay client
   `--mailer` names, shelled out to — the message, and the outbox: the
-  sender's own thread with its retry, and the follow-up mail's `From:`,
-  `Reply-To:` and subject, held for every board; `Log` and `Sleep`, the
-  log and the sleep every thread of the service is handed, kept here as
-  the first module that takes them; under `test-hooks` `sender/fake.rs`.
+  sender's own thread with its retry, a `Wait`, and the follow-up mail's
+  `From:`, `Reply-To:` and subject, held for every board; `Log` and
+  `Sleep`, the log and the sleep every thread of the service is handed,
+  kept here as the first module that takes them; under `test-hooks`
+  `sender/fake.rs`.
 - `reply.rs` the live reply, one function for the page and the mail.
-- `flow.rs` the `Service` — the `Desk` the pages ask; the `Book` of
-  what is in flight, keeping its own rules: the queue, the status map and
-  the held codes, what blocks a new post, what admitting, taking, going
-  live and failing do; the name as the unit of exclusion, the workers'
-  steps, the route lock, the cleanup table, the sweep at start,
-  and the live reply's inputs gathered in one place for the status page
-  and the mail.
+- `flow.rs` the `Service` — the `Desk` the pages ask: a sign-up kept, a
+  post admitted, a status read; the `Book` of what is in flight, keeping
+  its own rules: the queue, the status map and the held codes, what blocks
+  a new post, what admitting, taking, going live and failing do; the name
+  as the unit of exclusion, the workers' steps, the route lock, the
+  cleanup table and the truth asked what stands after it, the sweep at
+  start, and the live reply's inputs gathered in one place for the status
+  page and the mail.
 - `args.rs` the verbs and the flags, every default a named constant,
   `version_line` and the usage text.
 
@@ -1654,14 +1659,14 @@ Rules that hold across its files:
   undoes it — and nowhere else, so no reload lands between another name's
   snippet and its own, nor loads a snippet whose own route change failed.
 - **A stop leaves no name taken for good.** Every volume the service
-  creates carries its label, and at `serve`'s start, before the address
-  is bound, every labelled volume under a name of the grammar with no
-  snippet — half-made — is removed by the cleanup table's last two rows;
-  a name whose snippet stands is left, and a listing that fails skips
-  the sweep and never stops the service. Its precondition is the
-  operator's, and nothing checks it: one `serve` per Docker host, for the
-  label is the same on every `serve`'s volumes, and a second service would
-  take the first's boards for half-made.
+  creates carries its label, and at `serve`'s start, before the address is
+  bound, every labelled volume under a name of the grammar with no snippet
+  — half-made — is removed by the cleanup table's last two rows, the truth
+  asked what stands after; a name whose snippet stands is left, and a
+  listing that fails skips the sweep and never stops the service. Its
+  precondition is the operator's, and nothing checks it: one `serve` per
+  Docker host, for the label is the same on every `serve`'s volumes, and a
+  second service would take the first's boards for half-made.
 - **The argv is the documents'.** Every `docker` call's argv is a pure
   function the unit suite pins token by token, and reads back from
   `scripts/docker-smoke.sh` and `README.md` where those spell the line;
@@ -1673,12 +1678,14 @@ Rules that hold across its files:
   --hosted`'s own act lines with the public origin; the reply's suite
   reads them back from `skep-cli`'s `src/commands/claim.rs`, so an edit
   there is a red test here.
-- **One writer, one runner.** Every file it keeps is replaced whole by
-  rename, or removed, through `whole`, at the mode its owner names — the
-  state files `0600`, the snippets `0644`. Every program of the host's it
-  runs — `docker` and the mailer — runs through `process::run`, which
-  sets the child's streams: the input on a pipe of its own or a null
-  stdin, never the service's own.
+- **One writer, one runner, one wait.** Every file it keeps is replaced
+  whole by rename, or removed, through `whole`, at the mode its owner
+  names — the state files `0600`, the snippets `0644`. Every program of
+  the host's it runs — `docker` and the mailer — runs through
+  `process::run`, which sets the child's streams: the input on a pipe of
+  its own or a null stdin, never the service's own. Every try it makes
+  again — the `/health` read, the dark claim, the mail — is paced by a
+  `Wait`, a sleep before each try but the first and never after the last.
 - **One door per value.** An address is taken in only as a `MailAddress`
   and an invite code only as an `InviteCode`, each made by its rule's one
   constructor at the door — `args` for the flags, the desk for the claim
@@ -1689,9 +1696,11 @@ Rules that hold across its files:
 - **What stands is the truth about names.** A name is taken iff its
   snippet, its volume or its container stands; no ledger is kept, and
   the log carries the history. A failed step's makings are undone in
-  reverse and its status is D-8; a removal that itself fails leaves the
-  name standing, logged, and a reload that fails is logged as itself,
-  leaving nothing standing.
+  reverse and its status is D-8; then the truth itself is asked what
+  stands, as it is after each of the sweep's removals — never the
+  removals' answers, for a refused `rm -f` may be of a run that never
+  stood — and the log says done, or INCOMPLETE naming what stands, which
+  refuses re-posts until the operator clears it.
 - **The log never carries** the record's bytes, a person's address, an
   invite code or a status token, and the `Debug` of every value that holds
   one — a record, an invite, a message, an address, a code, a post, a

@@ -26,6 +26,7 @@ fn a_failed_route_change_keeps_the_route_lock_across_its_undo() {
         line("run_serving", Some("alice"), 0, "", ""),
         line("health", Some("alice"), 0, PAIRED, ""),
         run_and_volume_removed(),
+        inspects("alice"),
         flow_of("bob", false),
         line("caddy_reload", None, 1, "", "Error: loading new config\n"),
         reloads(2),

@@ -1,8 +1,9 @@
 //! T7 — THE SNIPPET: byte for byte the deployment notes' block for `alice`
-//! under `skep.host`, tabs included; every occurrence substituted for
-//! another name and another suffix; written whole by rename, one file and
-//! no temp file left; an unwritable directory an error; and whether it
-//! stands, the removal, the reload and the rebuild's read of the directory.
+//! under `skep.host`, tabs included; its health pattern naming the account the
+//! dark claim founds; every occurrence substituted for another name and
+//! another suffix; written whole by rename, one file and no temp file left; an
+//! unwritable directory an error; and whether it stands, the removal, the
+//! reload and the rebuild's read of the directory.
 
 use super::*;
 use crate::docker::fake::{line, FakeDocker};
@@ -44,6 +45,18 @@ fn listing(dir: &Path) -> Vec<String> {
 fn the_snippet_is_the_notes_block_byte_for_byte() {
     assert_eq!(snippet(&name("alice"), "skep.host"), ALICE);
     assert_eq!(snippet(&name("alice"), "skep.host").matches('\t').count(), 20, "the notes' tabs");
+}
+
+/// THE PROXY's PATTERN NAMES THE ACCOUNT THE DARK CLAIM FOUNDS: the
+/// snippet's `health_body` holds the claimant to `sidecar::ACCOUNT`, the
+/// account the dark claim's read holds every board this flow makes to — so
+/// the flow's own `/health` guard, which takes any claimant, and the
+/// proxy's narrower pattern agree on every such board.
+#[test]
+fn the_proxys_pattern_names_the_account_the_dark_claim_founds() {
+    let escaped = crate::sidecar::ACCOUNT.replace('.', "\\.");
+    let text = snippet(&name("alice"), "skep.host");
+    assert!(text.contains(&format!("\thealth_body `\"claimant\":\"{escaped}\",\"local_trust\":false`\n")), "{text}");
 }
 
 /// T7: ANOTHER NAME SUBSTITUTES EVERY OCCURRENCE — the matcher, the

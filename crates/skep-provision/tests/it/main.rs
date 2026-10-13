@@ -354,10 +354,11 @@ fn record_preview() -> String {
 /// T22: THE SWEEP AT START — the built binary, over a script whose
 /// `labelled_volumes` lists `bob` (no snippet) and `alice` (its snippet
 /// standing), removes `bob` BEFORE its serving line: by the time the line
-/// is read the script's `rm_force bob` and `volume_rm bob` are consumed and
-/// recorded, nothing is called for `alice`, and the line carries `swept 1`
-/// beside `live 1`; then the service serves — the sign-up page answers —
-/// and the log names the name and the steps.
+/// is read the script's `rm_force bob`, `volume_rm bob` and the look at
+/// what stands under `bob` after them are consumed and recorded, nothing is
+/// called for `alice`, and the line carries `swept 1` beside `live 1`; then
+/// the service serves — the sign-up page answers — and the log names the
+/// name and the steps.
 #[test]
 fn the_built_service_sweeps_a_half_made_board_before_its_serving_line() {
     let dir = Scratch::new();
@@ -365,11 +366,18 @@ fn the_built_service_sweeps_a_half_made_board_before_its_serving_line() {
     std::fs::create_dir(&boards).expect("the boards directory");
     std::fs::write(boards.join("alice.caddy"), b"").expect("alice's snippet");
     let script = dir.path().join("docker.script");
-    std::fs::write(&script, [script_line("labelled_volumes", "-", 0, "alice\\nbob\\n"), script_line("rm_force", "bob", 1, ""), script_line("volume_rm", "bob", 0, "")].concat()).expect("the script");
+    let lines = [
+        script_line("labelled_volumes", "-", 0, "alice\\nbob\\n"),
+        script_line("rm_force", "bob", 1, ""),
+        script_line("volume_rm", "bob", 0, ""),
+        script_line("volume_inspect", "bob", 1, ""),
+        script_line("container_inspect", "bob", 1, ""),
+    ];
+    std::fs::write(&script, lines.concat()).expect("the script");
     let mail = dir.path().join("mail.log");
     let service = Service::start(dir.path(), &script, &mail, &[]);
     let calls = std::fs::read_to_string(dir.path().join("docker.script.calls")).expect("the calls");
-    assert_eq!(calls, "labelled_volumes\t-\t0\nrm_force\tbob\t1\nvolume_rm\tbob\t0\n", "the sweep's calls, all made before the serving line");
+    assert_eq!(calls, "labelled_volumes\t-\t0\nrm_force\tbob\t1\nvolume_rm\tbob\t0\nvolume_inspect\tbob\t1\ncontainer_inspect\tbob\t1\n", "the sweep's calls, all made before the serving line");
     assert!(service.serving.contains(" live 1 swept 1 "), "{}", service.serving);
     assert_eq!(service.request("GET", "/", "").0, 200, "the service serves after the sweep");
     let log = until("the sweep's log", || Some(service.log()).filter(|l| l.contains("bob: sweep: done")));

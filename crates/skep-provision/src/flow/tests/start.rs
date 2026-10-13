@@ -54,20 +54,22 @@ fn a_docker_that_cannot_run_skips_the_sweep_and_refuses_a_post_d8() {
 
 /// T20: THE SWEEP — `labelled_volumes` answering `alice`, `bob` and
 /// `Carol_X` with `alice.caddy` standing and no `bob.caddy`:
-/// `rm_force bob` then `volume_rm bob`, nothing for `alice`, nothing for
-/// `Carol_X` (logged as under no name of the grammar), the count 1, the log
-/// naming the name and each step; a `labelled_volumes` exit 1 — the sweep
-/// skipped, the count 0, the service standing and taking a post; a
-/// `volume_rm` failure — logged, the name left, not counted; an `rm_force`
-/// failure (no container) passed over, the volume still removed.
+/// `rm_force bob` then `volume_rm bob`, then the look at what stands under
+/// `bob`, finding nothing; nothing for `alice`, nothing for `Carol_X`
+/// (logged as under no name of the grammar), the count 1, the log naming
+/// the name and each step; a `labelled_volumes` exit 1 — the sweep skipped,
+/// the count 0, the service standing and taking a post; a `volume_rm`
+/// failure — logged, and the look naming the volume that stands, the name
+/// left, not counted; an `rm_force` failure (no container) logged as
+/// itself, the volume still removed and the look finding nothing.
 #[test]
 fn the_sweep_removes_a_half_made_board_and_leaves_the_rest() {
-    let script = line("labelled_volumes", None, 0, "alice\nbob\nCarol_X\n", "") + &line("rm_force", Some("bob"), 0, "", "") + &line("volume_rm", Some("bob"), 0, "", "");
+    let script = line("labelled_volumes", None, 0, "alice\nbob\nCarol_X\n", "") + &line("rm_force", Some("bob"), 0, "", "") + &line("volume_rm", Some("bob"), 0, "", "") + &inspects("bob");
     let rig = rig(&script, None);
     fs::write(rig.snippet("alice"), b"").expect("alice's snippet");
     assert_eq!(rig.service.sweep(), 1);
     rig.fake.assert_done();
-    assert_eq!(rig.fake.said(), said(&["labelled_volumes", "rm_force bob", "volume_rm bob"]));
+    assert_eq!(rig.fake.said(), said(&["labelled_volumes", "rm_force bob", "volume_rm bob", "volume_inspect bob", "container_inspect bob"]));
     for line in [
         "bob: half-made at start (a volume, no snippet) — removing",
         "bob: sweep: rm_force: exit 0",
@@ -88,13 +90,16 @@ fn the_sweep_removes_a_half_made_board_and_leaves_the_rest() {
     unlisted.admitted("erin", &unlisted.invite());
     unlisted.fake.assert_done();
 
-    // A `volume_rm` that fails leaves the name, logged; an `rm_force` that
-    // fails is passed over.
+    // A `volume_rm` that fails leaves the volume standing, which the look
+    // names; an `rm_force` that fails of a run that never stood leaves
+    // nothing, which the look finds.
     let script = line("labelled_volumes", None, 0, "bob\ncarol\n", "")
         + &line("rm_force", Some("bob"), 1, "", "Error: No such container: bob\n")
         + &line("volume_rm", Some("bob"), 1, "", "Error: volume is in use\n")
+        + &line("volume_inspect", Some("bob"), 0, "", "")
         + &line("rm_force", Some("carol"), 1, "", "Error: No such container: carol\n")
-        + &line("volume_rm", Some("carol"), 0, "", "");
+        + &line("volume_rm", Some("carol"), 0, "", "")
+        + &inspects("carol");
     let partly = rig_with(&script, None, Arc::new(|_| {}));
     assert_eq!(partly.service.sweep(), 1);
     partly.fake.assert_done();
@@ -103,7 +108,7 @@ fn the_sweep_removes_a_half_made_board_and_leaves_the_rest() {
         "bob: sweep: rm_force: Error: No such container: bob",
         "bob: sweep: volume_rm: exit 1",
         "bob: sweep: volume_rm: Error: volume is in use",
-        "bob: sweep: INCOMPLETE — the volume stands, and the name refuses posts (D-4) until the operator clears it",
+        "bob: sweep: INCOMPLETE — a volume stands under it, and the name refuses posts (D-4) until the operator clears it",
         "carol: sweep: rm_force: exit 1",
         "carol: sweep: volume_rm: exit 0",
         "carol: sweep: done — nothing stands under the name",

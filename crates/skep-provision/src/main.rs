@@ -50,16 +50,16 @@
 //! made standing, which the truth about names reads as TAKEN until the next
 //! start's sweep removes it — a volume under the label with no snippet is
 //! half-made, and goes with whatever run stands under its name — or, where
-//! a removal fails, until the operator clears it (the provisioning record
-//! §5.2's named gap); the queue, the status tokens, an unsent mail and the
-//! codes posts in flight hold are memory and end with the process — among
-//! those codes a live board's whose spend could not be written, which the
-//! file still holds issued: the next run admits a post on it unless the
-//! operator has marked it spent. Its exit codes: 0, a verb done; 2, a usage
-//! refusal; 1, a start refused — a state directory other users can read, a
-//! snippet directory that cannot be read, an address that cannot be bound,
-//! a thread the OS will not give — or an `invite` that printed no invite
-//! link.
+//! something still stands after the removals, which the log names, until the
+//! operator clears it (the provisioning record §5.2's named gap); the queue,
+//! the status tokens, an unsent mail and the codes posts in flight hold are
+//! memory and end with the process — among those codes a live board's whose
+//! spend could not be written, which the file still holds issued: the next run
+//! admits a post on it unless the operator has marked it spent. Its exit
+//! codes: 0, a verb done; 2, a usage refusal; 1, a start refused — a state
+//! directory other users can read, a snippet directory that cannot be read, an
+//! address that cannot be bound, a thread the OS will not give — or an
+//! `invite` that printed no invite link.
 //!
 //! The modules are declared below in dependency order, each naming only
 //! those above it — `tests/it/tidy.rs` checks it — and `ARCHITECTURE.md`
@@ -82,6 +82,9 @@ mod whole;
 // A child process run to its end: its input fed on a thread of its own, its
 // exit and its two streams apart.
 mod process;
+// A bounded wait: this many tries, this far apart, a pause before each try
+// but the first.
+mod wait;
 // A board's name: one lowercase label, and the host and the public origin
 // it stands at.
 mod name;
@@ -92,12 +95,14 @@ mod record;
 mod docker;
 // The sidecar's DATA lines and exit code.
 mod sidecar;
-// The `/health` pair and the bounded wait.
+// The `/health` pair and its wait.
 mod health;
 // The proxy's snippet: its text, its write by rename, its removal, whether
-// it stands, the reload.
+// it stands, the reload, and the routed names the status map is rebuilt
+// from.
 mod caddy;
-// The truth about names, the status token, the status map.
+// The truth about names, the labelled volumes sorted for the sweep, the
+// status token, the status map.
 mod names;
 // The state directory: its door, its one writer, and what its two files'
 // lines carry — the address rule and its value, the date.
@@ -116,7 +121,8 @@ mod pages;
 mod sender;
 // The live reply, for the page and the mail alike.
 mod reply;
-// The workers, the book of what is in flight, the name as the unit of
+// The desk the pages ask — a sign-up kept, a post admitted, a status read —
+// the workers, the book of what is in flight, the name as the unit of
 // exclusion, the steps, the cleanup, the sweep at start.
 mod flow;
 // The verbs and the flags, every default a named constant.

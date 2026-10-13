@@ -22,7 +22,7 @@
 //!   invite's address and the live reply after the status turned live and
 //!   goes on to the next post; the outbox makes the message and the thread
 //!   sends it, and a refusal — a non-zero exit, a mailer that cannot
-//!   run — is logged and RETRIED ([`MAIL_TRIES`] tries, [`MAIL_INTERVAL`]
+//!   run — is logged and RETRIED ([`MAIL_WAIT`]: seven tries, ten minutes
 //!   apart) while the status page stands live, then logged as given up. A
 //!   mail outage never loses a board: its page and its route stand
 //!   whatever the mail does.
@@ -38,6 +38,7 @@
 
 use std::fmt;
 use std::io;
+use std::num::NonZeroU32;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::mpsc::{self, Receiver};
@@ -49,13 +50,11 @@ use crate::name::Name;
 use crate::process::{self, Exit};
 use crate::statedir::MailAddress;
 use crate::strings::{fill, MAIL_SUBJECT};
+use crate::wait::Wait;
 
-/// The tries a message gets: the first and six more — an hour of a
-/// relay's outage at [`MAIL_INTERVAL`].
-pub const MAIL_TRIES: u32 = 7;
-
-/// The sleep between two tries.
-const MAIL_INTERVAL: Duration = Duration::from_secs(10 * 60);
+/// THE MAIL's WAIT: seven tries — the first and six more — ten minutes
+/// apart, an hour of a relay's outage.
+pub const MAIL_WAIT: Wait = Wait { tries: NonZeroU32::new(7).expect("seven is not zero"), interval: Duration::from_secs(10 * 60) };
 
 /// The flag the mailer reads its recipients off the headers by.
 const READ_RECIPIENTS: &str = "-t";
@@ -136,13 +135,13 @@ impl Sender for RelaySender {
     }
 }
 
-/// ONE MESSAGE DELIVERED, or given up: up to `tries` tries, `sleep`ing
-/// `interval` between two, each refusal logged with its exit code; `true`
-/// once a try exits 0. The mailer's stderr is not logged: a relay's refusal
-/// names the recipient, and an address is never a log line's.
-fn deliver(sender: &dyn Sender, message: &Message, tries: u32, interval: Duration, sleep: &dyn Fn(Duration), log: &dyn Fn(&str)) -> bool {
-    let name = &message.name;
-    for at in 1..=tries {
+/// ONE MESSAGE DELIVERED, or given up: tried over `wait`, paced by `sleep`
+/// ([`Wait::paced`]), each refusal logged with its exit code; `true` once a
+/// try exits 0. The mailer's stderr is not logged: a relay's refusal names
+/// the recipient, and an address is never a log line's.
+fn deliver(sender: &dyn Sender, message: &Message, wait: Wait, sleep: &dyn Fn(Duration), log: &dyn Fn(&str)) -> bool {
+    let (name, tries) = (&message.name, wait.tries);
+    for at in wait.paced(sleep) {
         match sender.send(message) {
             Ok(exit) if exit.ok() => {
                 log(&format!("{name}: mail: sent at try {at} of {tries}"));
@@ -150,9 +149,6 @@ fn deliver(sender: &dyn Sender, message: &Message, tries: u32, interval: Duratio
             }
             Ok(exit) => log(&format!("{name}: mail: try {at} of {tries} refused, exit {}", exit.said())),
             Err(e) => log(&format!("{name}: mail: try {at} of {tries} failed, the mailer could not run: {}", e.kind())),
-        }
-        if at < tries {
-            sleep(interval);
         }
     }
     log(&format!("{name}: mail: given up after {tries} tries; the board stands live and its status page with it"));
@@ -189,7 +185,7 @@ impl Outbox {
         let (tx, rx): (mpsc::Sender<Message>, Receiver<Message>) = mpsc::channel();
         thread::Builder::new().name("sender".into()).spawn(move || {
             for message in rx {
-                deliver(sender.as_ref(), &message, MAIL_TRIES, MAIL_INTERVAL, sleep.as_ref(), log.as_ref());
+                deliver(sender.as_ref(), &message, MAIL_WAIT, sleep.as_ref(), log.as_ref());
             }
         })?;
         Ok(Outbox { delivered_by: DeliveredBy::Thread(tx), from, reply_to })
@@ -215,7 +211,7 @@ impl Outbox {
             }
             #[cfg(test)]
             DeliveredBy::Caller { sender, log, sleep } => {
-                deliver(sender.as_ref(), &message, MAIL_TRIES, MAIL_INTERVAL, sleep.as_ref(), log.as_ref());
+                deliver(sender.as_ref(), &message, MAIL_WAIT, sleep.as_ref(), log.as_ref());
             }
         }
     }

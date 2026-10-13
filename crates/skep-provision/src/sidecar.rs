@@ -85,7 +85,7 @@ pub enum Failure {
     /// Exit 4: transport — the daemon not yet listening, or gone.
     Transport,
     /// Any other exit code, or `None` for an end by signal.
-    Exit(Option<i32>),
+    OtherExit(Option<i32>),
     /// Exit 0 and a stdout that is neither the six lines nor the one; the
     /// words say which line, never what it held.
     Shape(String),
@@ -99,8 +99,8 @@ impl fmt::Display for Failure {
             Failure::Halt => f.write_str("exit 3 (a halt)"),
             Failure::Refused => f.write_str("exit 1 (the board refused)"),
             Failure::Transport => f.write_str("exit 4 (transport)"),
-            Failure::Exit(Some(code)) => write!(f, "exit {code}"),
-            Failure::Exit(None) => f.write_str("ended by a signal"),
+            Failure::OtherExit(Some(code)) => write!(f, "exit {code}"),
+            Failure::OtherExit(None) => f.write_str("ended by a signal"),
             Failure::Shape(why) => write!(f, "exit 0 and {why}"),
         }
     }
@@ -117,7 +117,7 @@ pub fn read(exit: &Exit) -> Result<Answer, Failure> {
         Some(3) => return Err(Failure::Halt),
         Some(1) => return Err(Failure::Refused),
         Some(4) => return Err(Failure::Transport),
-        other => return Err(Failure::Exit(other)),
+        other => return Err(Failure::OtherExit(other)),
     }
     let text = std::str::from_utf8(&exit.stdout).map_err(|_| Failure::Shape("a stdout that is not text".to_owned()))?;
     // One DATA line per `\n`: the sidecar renders every C0 control inside a

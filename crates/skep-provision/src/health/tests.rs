@@ -27,15 +27,15 @@ fn alice() -> Name {
 /// still answered with one more top-level member (the wire's forward rule).
 #[test]
 fn the_pair_is_a_claimant_and_local_trust_false() {
-    assert!(pair(PAIRED.as_bytes()));
-    assert!(!pair(PAIRED.replace(r#""claimant":"1.0.1""#, r#""claimant":null"#).as_bytes()), "an unclaimed board");
-    assert!(!pair(PAIRED.replace(r#""local_trust":false"#, r#""local_trust":true"#).as_bytes()), "local trust on");
-    assert!(pair(PAIRED.replace(r#","writes""#, r#","zeta":{"x":1},"writes""#).as_bytes()), "an eighth member is ignored");
-    assert!(!pair(b"not json"), "a body that is not JSON");
-    assert!(!pair(br#"{"ok":true}"#), "no auth member");
-    assert!(!pair(br#"{"auth":{"claimant":"1.0.1"}}"#), "no local_trust");
-    assert!(!pair(br#"{"auth":{"local_trust":false}}"#), "no claimant");
-    assert!(!pair(br#"{"auth":{"claimant":1,"local_trust":false}}"#), "a claimant that is no address");
+    assert!(paired(PAIRED.as_bytes()));
+    assert!(!paired(PAIRED.replace(r#""claimant":"1.0.1""#, r#""claimant":null"#).as_bytes()), "an unclaimed board");
+    assert!(!paired(PAIRED.replace(r#""local_trust":false"#, r#""local_trust":true"#).as_bytes()), "local trust on");
+    assert!(paired(PAIRED.replace(r#","writes""#, r#","zeta":{"x":1},"writes""#).as_bytes()), "an eighth member is ignored");
+    assert!(!paired(b"not json"), "a body that is not JSON");
+    assert!(!paired(br#"{"ok":true}"#), "no auth member");
+    assert!(!paired(br#"{"auth":{"claimant":"1.0.1"}}"#), "no local_trust");
+    assert!(!paired(br#"{"auth":{"local_trust":false}}"#), "no claimant");
+    assert!(!paired(br#"{"auth":{"claimant":1,"local_trust":false}}"#), "a claimant that is no address");
 }
 
 /// T6: THE WAIT ANSWERS AT THE FIRST PAIR: a failed run — its stdout the
@@ -67,7 +67,7 @@ fn the_wait_gives_up_after_its_bound() {
             sleeps.set(sleeps.get() + 1)
         })
         .expect("docker ran");
-        assert_eq!(waited, Waited::GaveUp { tries: bound.tries, last: Some(0) });
+        assert_eq!(waited, Waited::GaveUp { tries: bound.tries, last_code: Some(0) });
         assert_eq!(fake.calls().len(), bound.tries as usize, "the fake's call count is the bound");
         assert_eq!(sleeps.get(), bound.tries - 1);
         fake.assert_done();

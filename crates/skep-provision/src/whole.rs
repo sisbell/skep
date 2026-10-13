@@ -48,7 +48,7 @@ pub fn replace(path: &Path, bytes: &[u8], mode: u32, between: &dyn Fn() -> io::R
         file.sync_all()?;
         between()?;
         fs::rename(&tmp, path)?;
-        sync_dir(path)
+        sync_parent(path)
     })();
     if written.is_err() {
         let _ = fs::remove_file(&tmp);
@@ -60,7 +60,7 @@ pub fn replace(path: &Path, bytes: &[u8], mode: u32, between: &dyn Fn() -> io::R
 /// where none did — and its directory synced.
 pub fn remove(path: &Path) -> io::Result<bool> {
     match fs::remove_file(path) {
-        Ok(()) => sync_dir(path).map(|()| true),
+        Ok(()) => sync_parent(path).map(|()| true),
         Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(false),
         Err(e) => Err(e),
     }
@@ -86,9 +86,9 @@ fn set_mode(file: &File, mode: u32) -> io::Result<()> {
     Ok(())
 }
 
-/// The directory holding `path` synced after a rename or a removal, on
-/// unix; elsewhere there is nothing to open a directory with.
-fn sync_dir(path: &Path) -> io::Result<()> {
+/// `path`'s PARENT — the directory holding it — synced after a rename or a
+/// removal, on unix; elsewhere there is nothing to open a directory with.
+fn sync_parent(path: &Path) -> io::Result<()> {
     #[cfg(unix)]
     if let Some(dir) = path.parent() {
         File::open(if dir.as_os_str().is_empty() { Path::new(".") } else { dir })?.sync_all()?;

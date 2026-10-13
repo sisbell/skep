@@ -15,8 +15,8 @@ fn the_name_is_one_lowercase_label_of_letters_digits_and_hyphens() {
     let longest = "a".repeat(MAX_NAME_BYTES);
     assert_eq!(Name::parse(longest.as_bytes()).expect("63 bytes").as_str(), longest);
     assert_eq!(Name::parse(b"ALICE-2").expect("digits and an inner hyphen").as_str(), "alice-2");
-    assert_eq!(Name::parse(b"-a"), Err(NameRefused::Hyphen));
-    assert_eq!(Name::parse(b"a-"), Err(NameRefused::Hyphen));
+    assert_eq!(Name::parse(b"-a"), Err(NameRefused::HyphenAtEitherEnd));
+    assert_eq!(Name::parse(b"a-"), Err(NameRefused::HyphenAtEitherEnd));
     assert_eq!(Name::parse("a".repeat(MAX_NAME_BYTES + 1).as_bytes()), Err(NameRefused::TooLong));
     assert_eq!(Name::parse(b"a.b"), Err(NameRefused::NotALabel));
     assert_eq!(Name::parse(b"a_b"), Err(NameRefused::NotALabel));
@@ -47,7 +47,8 @@ fn every_byte_but_a_letter_a_digit_or_a_hyphen_is_refused() {
 /// may hold anything a person typed.
 #[test]
 fn each_refusal_is_an_error_saying_its_reason() {
-    let said: Vec<String> = [NameRefused::Empty, NameRefused::TooLong, NameRefused::NotALabel, NameRefused::Hyphen].iter().map(|refused| (refused as &dyn std::error::Error).to_string()).collect();
+    let said: Vec<String> =
+        [NameRefused::Empty, NameRefused::TooLong, NameRefused::NotALabel, NameRefused::HyphenAtEitherEnd].iter().map(|refused| (refused as &dyn std::error::Error).to_string()).collect();
     assert_eq!(said, ["the name is empty", "the name is longer than one label's 63 bytes", "the name holds a character outside letters, digits and hyphens", "the name begins or ends with a hyphen"]);
 }
 

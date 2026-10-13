@@ -24,13 +24,13 @@
 //! THE STATUS MAP ([`StatusMap`]), in memory: each post of this run by its
 //! STATUS TOKEN — 128 bits of OS entropy as lowercase hex ([`unguessable`]),
 //! shown only to the poster and in the mail, NEVER LOGGED — with its name,
-//! its state ([`State`]) and what the reply needs that a name does not say,
-//! the record's anchorless fact; and every LIVE name. REBUILT AT START from
-//! the snippet directory: every `<name>.caddy` is a live name. The reply's
-//! three facts are kept nowhere here: they are the constants and the public
-//! origin, and the reply renders them (`reply`). The map holds NAMES across
-//! a restart and no token: a token is never written anywhere, so a status
-//! URL minted before a restart answers 404 after it, though the board
+//! its state ([`PostState`]) and what the reply needs that a name does not
+//! say, the record's anchorless fact; and every LIVE name. REBUILT AT START
+//! from the snippet directory: every `<name>.caddy` is a live name. The
+//! reply's three facts are kept nowhere here: they are the constants and the
+//! public origin, and the reply renders them (`reply`). The map holds NAMES
+//! across a restart and no token: a token is never written anywhere, so a
+//! status URL minted before a restart answers 404 after it, though the board
 //! it named stands, live, and its mail — if it was sent — carries the reply.
 
 use std::collections::{BTreeSet, HashMap};
@@ -132,7 +132,7 @@ pub fn unguessable() -> io::Result<String> {
 
 /// Where a post stands.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum State {
+pub enum PostState {
     /// Admitted, waiting for the worker: D-7.
     Queued,
     /// The worker runs its steps: D-7.
@@ -151,7 +151,7 @@ pub struct AdmittedPost {
     /// The board's name.
     pub name: Name,
     /// Where it stands.
-    pub state: State,
+    pub state: PostState,
     /// Whether its record carried no anchor-flagged entry — the reply's
     /// anchorless sentence.
     pub anchorless: bool,
@@ -173,23 +173,23 @@ impl fmt::Debug for StatusMap {
 }
 
 impl StatusMap {
-    /// THE REBUILD AT START: every name the snippet directory stands for,
-    /// live; no post, no token.
+    /// THE REBUILD AT START: every routed name live — each name whose
+    /// snippet stands; no post, no token.
     pub fn rebuild(boards_dir: &Path) -> io::Result<StatusMap> {
-        Ok(StatusMap { posts: HashMap::new(), live: caddy::names(boards_dir)?.into_iter().collect() })
+        Ok(StatusMap { posts: HashMap::new(), live: caddy::routed(boards_dir)?.into_iter().collect() })
     }
 
     /// A post admitted under `token`: queued.
     pub fn admit(&mut self, token: String, name: Name, anchorless: bool) {
-        self.posts.insert(token, AdmittedPost { name, state: State::Queued, anchorless });
+        self.posts.insert(token, AdmittedPost { name, state: PostState::Queued, anchorless });
     }
 
     /// `token`'s post moved to `state`; a post gone live joins the live
     /// names.
-    pub fn set(&mut self, token: &str, state: State) {
+    pub fn set(&mut self, token: &str, state: PostState) {
         if let Some(post) = self.posts.get_mut(token) {
             post.state = state;
-            if state == State::Live {
+            if state == PostState::Live {
                 self.live.insert(post.name.clone());
             }
         }
@@ -204,7 +204,7 @@ impl StatusMap {
     /// running — names `name`: the name is HELD by it — the owner's lock per
     /// name — though nothing stands under it yet.
     pub fn holds(&self, name: &Name) -> bool {
-        self.posts.values().any(|p| &p.name == name && matches!(p.state, State::Queued | State::Running))
+        self.posts.values().any(|p| &p.name == name && matches!(p.state, PostState::Queued | PostState::Running))
     }
 
     /// The live names.

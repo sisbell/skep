@@ -181,11 +181,11 @@ pub trait Docker: Send + Sync {
         self.run(Call::CaddyReload)
     }
 
-    /// `docker volume ls -q --filter label=skep.provision=1`: every volume
-    /// this service made, one name per line on stdout — what the sweep at
-    /// start reads.
-    fn volumes(&self) -> io::Result<Exit> {
-        self.run(Call::Volumes)
+    /// `docker volume ls -q --filter label=skep.provision=1`: the labelled
+    /// volumes — every volume this service made, and no other — one name
+    /// per line on stdout: what the sweep at start reads.
+    fn labelled_volumes(&self) -> io::Result<Exit> {
+        self.run(Call::LabelledVolumes)
     }
 }
 
@@ -216,8 +216,8 @@ pub enum Call<'a> {
     Health(&'a Name),
     /// [`Docker::caddy_reload`].
     CaddyReload,
-    /// [`Docker::volumes`].
-    Volumes,
+    /// [`Docker::labelled_volumes`].
+    LabelledVolumes,
 }
 
 impl Call<'_> {
@@ -232,27 +232,27 @@ impl Call<'_> {
 
     /// THE ARGV, after the program: a pure function of the call and the
     /// settings, the one place each run line is spelled.
-    fn argv(&self, s: &Settings) -> Vec<String> {
+    fn argv(&self, settings: &Settings) -> Vec<String> {
         match *self {
             // THE VOLUME, labelled as this service's before its name — the
             // one mark the sweep at start lists by. The smoke's own line
             // (`scripts/docker-smoke.sh`, `docker volume create "$VOLUME"`)
             // carries no label: the smoke sweeps nothing.
-            Call::VolumeCreate(n) => vec!["volume".into(), "create".into(), "--label".into(), label(), n.to_string()],
-            Call::VolumeInspect(n) => vec!["volume".into(), "inspect".into(), n.to_string()],
-            Call::ContainerInspect(n) => vec!["container".into(), "inspect".into(), n.to_string()],
+            Call::VolumeCreate(name) => vec!["volume".into(), "create".into(), "--label".into(), label(), name.to_string()],
+            Call::VolumeInspect(name) => vec!["volume".into(), "inspect".into(), name.to_string()],
+            Call::ContainerInspect(name) => vec!["container".into(), "inspect".into(), name.to_string()],
             // THE CLAIM RUN — the smoke's line word for word
             // (`scripts/docker-smoke.sh`, the claim run): loopback-bound by
             // `SKEPD_BIND=127.0.0.1`, no port published, so only a process in
             // its own namespace reaches the unclaimed board (AUTH-4.57 (a),
             // (f)); the public origin configured, never a loopback one
             // (AUTH-4.57 (b)); the fresh volume at the image's mount.
-            Call::RunClaim(n) => vec![
+            Call::RunClaim(name) => vec![
                 "run".into(),
                 "-d".into(),
                 "--init".into(),
                 "--name".into(),
-                n.to_string(),
+                name.to_string(),
                 "--read-only".into(),
                 "--cap-drop".into(),
                 "ALL".into(),
@@ -263,21 +263,21 @@ impl Call<'_> {
                 "-e".into(),
                 "SKEPD_BIND=127.0.0.1".into(),
                 "-e".into(),
-                format!("SKEPD_ORIGIN={}", n.origin(&s.suffix)),
+                format!("SKEPD_ORIGIN={}", name.origin(&settings.suffix)),
                 "-v".into(),
-                format!("{n}:{VOLUME_MOUNT}"),
-                s.image.clone(),
+                format!("{name}:{VOLUME_MOUNT}"),
+                settings.image.clone(),
             ],
             // THE SIDECAR — the smoke's run with the record on stdin (`-i`,
             // `--hosted -`) in place of a mounted file: no host path, no
             // file mode for its user to read (the provisioning record §2.2).
-            Call::SidecarClaim(n, _) => vec![
+            Call::SidecarClaim(name, _) => vec![
                 "run".into(),
                 "--rm".into(),
                 "-i".into(),
                 "--network".into(),
-                format!("container:{n}"),
-                s.cli_image.clone(),
+                format!("container:{name}"),
+                settings.cli_image.clone(),
                 "skep".into(),
                 "claim".into(),
                 "--board".into(),
@@ -285,18 +285,18 @@ impl Call<'_> {
                 "--hosted".into(),
                 "-".into(),
             ],
-            Call::RmForce(n) => vec!["rm".into(), "-f".into(), n.to_string()],
+            Call::RmForce(name) => vec!["rm".into(), "-f".into(), name.to_string()],
             // THE SERVING RUN — the deployment notes' step 5 line in its
             // order, with the README's restart and rotation flags: the
             // baked `SKEPD_BIND=0.0.0.0`, the bridge Caddy shares, the same
             // volume, the public origin, the route's label; the rotation
             // the operator's to size.
-            Call::RunServing(n) => vec![
+            Call::RunServing(name) => vec![
                 "run".into(),
                 "-d".into(),
                 "--init".into(),
                 "--name".into(),
-                n.to_string(),
+                name.to_string(),
                 "--read-only".into(),
                 "--cap-drop".into(),
                 "ALL".into(),
@@ -307,30 +307,38 @@ impl Call<'_> {
                 "--restart".into(),
                 "on-failure".into(),
                 "--log-opt".into(),
-                format!("max-size={}", s.log_max_size),
+                format!("max-size={}", settings.log_max_size),
                 "--log-opt".into(),
-                format!("max-file={}", s.log_max_file),
+                format!("max-file={}", settings.log_max_file),
                 "--network".into(),
-                s.network.clone(),
+                settings.network.clone(),
                 "-v".into(),
-                format!("{n}:{VOLUME_MOUNT}"),
+                format!("{name}:{VOLUME_MOUNT}"),
                 "-e".into(),
-                format!("SKEPD_ORIGIN={}", n.origin(&s.suffix)),
+                format!("SKEPD_ORIGIN={}", name.origin(&settings.suffix)),
                 "--label".into(),
-                format!("host={}", n.host(&s.suffix)),
-                s.image.clone(),
+                format!("host={}", name.host(&settings.suffix)),
+                settings.image.clone(),
             ],
-            Call::VolumeRm(n) => vec!["volume".into(), "rm".into(), n.to_string()],
+            Call::VolumeRm(name) => vec!["volume".into(), "rm".into(), name.to_string()],
             // THE `/health` READ — the sidecar's `skep health` on the bridge,
             // where the serving run's name resolves; its stdout is the body
             // verbatim, so this program needs no dialer of its own.
-            Call::Health(n) => {
-                vec!["run".into(), "--rm".into(), "--network".into(), s.network.clone(), s.cli_image.clone(), "skep".into(), "health".into(), "--board".into(), format!("http://{n}:{BOARD_PORT}")]
-            }
-            Call::CaddyReload => vec!["exec".into(), s.caddy.clone(), "caddy".into(), "reload".into(), "--config".into(), CADDYFILE.into()],
+            Call::Health(name) => vec![
+                "run".into(),
+                "--rm".into(),
+                "--network".into(),
+                settings.network.clone(),
+                settings.cli_image.clone(),
+                "skep".into(),
+                "health".into(),
+                "--board".into(),
+                format!("http://{name}:{BOARD_PORT}"),
+            ],
+            Call::CaddyReload => vec!["exec".into(), settings.caddy.clone(), "caddy".into(), "reload".into(), "--config".into(), CADDYFILE.into()],
             // THE LISTING — the names alone (`-q`) of the volumes that carry
             // the label: this service's, and no other volume on the host.
-            Call::Volumes => vec!["volume".into(), "ls".into(), "-q".into(), "--filter".into(), format!("label={}", label())],
+            Call::LabelledVolumes => vec!["volume".into(), "ls".into(), "-q".into(), "--filter".into(), format!("label={}", label())],
         }
     }
 }

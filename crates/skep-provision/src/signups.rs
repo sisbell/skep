@@ -65,13 +65,13 @@ impl From<io::Error> for SignUpRefused {
 #[derive(Debug)]
 pub struct SignUps {
     path: PathBuf,
-    write: Mutex<()>,
+    write_lock: Mutex<()>,
 }
 
 impl SignUps {
-    /// The sign-up file in `dir`.
-    pub fn new(dir: &StateDir) -> SignUps {
-        SignUps { path: dir.file(SIGNUPS), write: Mutex::new(()) }
+    /// The sign-up file in `state_dir`.
+    pub fn new(state_dir: &StateDir) -> SignUps {
+        SignUps { path: state_dir.file(SIGNUPS), write_lock: Mutex::new(()) }
     }
 
     /// ONE SIGN-UP KEPT: the field's bytes, an address by the rule, appended
@@ -81,7 +81,7 @@ impl SignUps {
     pub fn append(&self, field: &[u8]) -> Result<(), SignUpRefused> {
         let address = std::str::from_utf8(field).ok().and_then(MailAddress::parse).ok_or(SignUpRefused::NotAnAddress)?;
         let line = format!("{} {}\n", address.as_str(), today());
-        let _one_writer = self.write.lock().unwrap_or_else(|e| e.into_inner());
+        let _one_writer = self.write_lock.lock().unwrap_or_else(|e| e.into_inner());
         let mut text = read_or_empty(&self.path)?;
         if !text.is_empty() && !text.ends_with('\n') {
             text.push('\n');

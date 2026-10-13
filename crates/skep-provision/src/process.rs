@@ -40,7 +40,7 @@ impl Exit {
     }
 }
 
-/// ONE CHILD RUN: `cmd` spawned with its streams set — `stdin`'s bytes on a
+/// ONE CHILD RUN: `cmd` spawned with its streams set — `input`'s bytes on a
 /// pipe written by a thread of its own and closed, or a null stdin where
 /// there are none; stdout and stderr piped — and waited for, its two streams
 /// read to their ends. The writer is scoped to the call: it borrows the
@@ -50,21 +50,21 @@ impl Exit {
 /// child ended unfed and reaped — never its exit, and never a panic: the
 /// caller is a worker or the sender's thread, which a panic would end for
 /// the run's life.
-pub fn run(cmd: Command, stdin: Option<&[u8]>) -> io::Result<Exit> {
-    run_fed_by(cmd, stdin, thread::Builder::new())
+pub fn run(cmd: Command, input: Option<&[u8]>) -> io::Result<Exit> {
+    run_fed_by(cmd, input, thread::Builder::new())
 }
 
-/// [`run`] with `feeder`, the builder of the thread that writes the input:
-/// the seam a suite hands a builder the OS refuses, to show the call then
-/// answers the error, its child ended.
-fn run_fed_by(mut cmd: Command, stdin: Option<&[u8]>, feeder: thread::Builder) -> io::Result<Exit> {
-    cmd.stdin(if stdin.is_some() { Stdio::piped() } else { Stdio::null() }).stdout(Stdio::piped()).stderr(Stdio::piped());
+/// [`run`] with its input fed by a thread `builder` makes: the seam a suite
+/// hands a builder the OS refuses, to show the call then answers the
+/// error, its child ended.
+fn run_fed_by(mut cmd: Command, input: Option<&[u8]>, builder: thread::Builder) -> io::Result<Exit> {
+    cmd.stdin(if input.is_some() { Stdio::piped() } else { Stdio::null() }).stdout(Stdio::piped()).stderr(Stdio::piped());
     let mut child = cmd.spawn()?;
     let pipe = child.stdin.take();
     let out = thread::scope(|s| {
-        let feeder = match stdin.zip(pipe) {
+        let feeder = match input.zip(pipe) {
             None => None,
-            Some((bytes, mut pipe)) => match feeder.spawn_scoped(s, move || pipe.write_all(bytes)) {
+            Some((bytes, mut pipe)) => match builder.spawn_scoped(s, move || pipe.write_all(bytes)) {
                 Ok(feeder) => Some(feeder),
                 Err(e) => {
                     // No thread to feed the input: the closure the OS

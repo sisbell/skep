@@ -99,7 +99,7 @@ fn a_sign_up_is_thanked_and_a_refused_address_shown_again_as_sent() {
 fn the_claim_form_carries_the_ruled_strings_and_the_links_code() {
     let answer = answer_of("GET", "/claim?invite=1.1.0.1.0.3", b"");
     assert_eq!(answer.status, 200);
-    for words in [LEAD, NAME_LABEL, NAME_HELP, RECORD_LABEL, RECORD_HELP, INVITE_LABEL, CLAIM_BUTTON] {
+    for words in [CLAIM_LEAD, NAME_LABEL, NAME_HELP, RECORD_LABEL, RECORD_HELP, INVITE_LABEL, CLAIM_BUTTON] {
         assert!(answer.body.contains(&row(&fill(words, &[("suffix", "skep.host")]))), "{words:?}");
     }
     assert!(answer.body.contains("id=\"invite\" name=\"invite\" required autocomplete=\"off\" spellcheck=\"false\" value=\"1.1.0.1.0.3\""));

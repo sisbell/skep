@@ -255,9 +255,10 @@ fn word(flag: &str, v: String) -> Result<String, String> {
     Ok(v)
 }
 
-/// The suffix: a domain of lowercase letters, digits, dots and hyphens, its
-/// labels non-empty — the daemon's origin grammar for the host it closes.
-fn suffix(v: String) -> Result<String, String> {
+/// A DOMAIN, as `--suffix` takes one: lowercase letters, digits, dots and
+/// hyphens, its labels non-empty and none beginning or ending with a
+/// hyphen — the daemon's origin grammar for the host it closes.
+fn domain(v: String) -> Result<String, String> {
     let labels_ok = v.split('.').all(|l| !l.is_empty() && !l.starts_with('-') && !l.ends_with('-'));
     if v.is_empty() || !labels_ok || !v.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'.' || b == b'-') {
         return Err(format!("--suffix: '{v}' is not a domain of lowercase letters, digits, dots and hyphens"));
@@ -265,8 +266,8 @@ fn suffix(v: String) -> Result<String, String> {
     Ok(v)
 }
 
-/// An address by the rule: the value `MailAddress::parse` admits.
-fn address(flag: &str, v: String) -> Result<MailAddress, String> {
+/// A MAIL ADDRESS by the rule: the value `MailAddress::parse` admits.
+fn mail_address(flag: &str, v: String) -> Result<MailAddress, String> {
     MailAddress::parse(&v)
         .ok_or_else(|| format!("{flag}: '{v}' is not an address: one @ with a side each way, at most 254 bytes, no space, no control character, none of ( ) < > [ ] : ; \\ , \" and no bidi control"))
 }
@@ -304,7 +305,7 @@ fn parse_serve(mut it: impl Iterator<Item = String>) -> Result<Command, String> 
             "--cli-image" => settings.cli_image = word("--cli-image", value(&mut it, "--cli-image")?)?,
             "--network" => settings.network = word("--network", value(&mut it, "--network")?)?,
             "--caddy" => settings.caddy = word("--caddy", value(&mut it, "--caddy")?)?,
-            "--suffix" => settings.suffix = suffix(value(&mut it, "--suffix")?)?,
+            "--suffix" => settings.suffix = domain(value(&mut it, "--suffix")?)?,
             "--log-max-size" => {
                 let v = value(&mut it, "--log-max-size")?;
                 let digits = v.strip_suffix(['k', 'm', 'g']).unwrap_or(&v);
@@ -325,9 +326,9 @@ fn parse_serve(mut it: impl Iterator<Item = String>) -> Result<Command, String> 
                 let v = value(&mut it, "--connections")?;
                 connections = v.parse().map_err(|_| format!("--connections: '{v}' is not a count of one or more"))?;
             }
-            "--reply-to" => reply_to = Some(address("--reply-to", value(&mut it, "--reply-to")?)?),
+            "--reply-to" => reply_to = Some(mail_address("--reply-to", value(&mut it, "--reply-to")?)?),
             "--mailer" => mailer = Some(Mailer::Program(PathBuf::from(value(&mut it, "--mailer")?))),
-            "--from" => from = Some(address("--from", value(&mut it, "--from")?)?),
+            "--from" => from = Some(mail_address("--from", value(&mut it, "--from")?)?),
             #[cfg(feature = "test-hooks")]
             "--docker-fake" => docker_fake = Some(PathBuf::from(value(&mut it, "--docker-fake")?)),
             #[cfg(feature = "test-hooks")]
@@ -359,25 +360,25 @@ fn parse_serve(mut it: impl Iterator<Item = String>) -> Result<Command, String> 
 
 /// `invite`'s flags.
 fn parse_invite(mut it: impl Iterator<Item = String>) -> Result<Command, String> {
-    let mut address_given: Option<MailAddress> = None;
+    let mut address: Option<MailAddress> = None;
     let mut code: Option<InviteCode> = None;
     let mut state_dir: Option<PathBuf> = None;
-    let mut suffix_given = DEFAULT_SUFFIX.to_owned();
+    let mut suffix = DEFAULT_SUFFIX.to_owned();
     while let Some(arg) = it.next() {
         match arg.as_str() {
-            "--address" => address_given = Some(address("--address", value(&mut it, "--address")?)?),
+            "--address" => address = Some(mail_address("--address", value(&mut it, "--address")?)?),
             "--code" => {
                 let v = value(&mut it, "--code")?;
                 code = Some(InviteCode::parse(&v).ok_or_else(|| format!("--code: '{v}' is not 1 to {MAX_CODE_BYTES} letters, digits, '-', '.', '_' or '~'"))?);
             }
             "--state-dir" => state_dir = Some(PathBuf::from(value(&mut it, "--state-dir")?)).filter(|p| !p.as_os_str().is_empty()),
-            "--suffix" => suffix_given = suffix(value(&mut it, "--suffix")?)?,
+            "--suffix" => suffix = domain(value(&mut it, "--suffix")?)?,
             "--help" | "-h" => return Ok(Command::Help),
             "--version" => return Err("--version is read as the first argument: skep-provision --version".to_owned()),
             other => return Err(format!("invite: unknown argument '{other}'")),
         }
     }
-    Ok(Command::Invite(InviteArgs { address: address_given.ok_or("invite: --address is required")?, code, state_dir: state_dir.ok_or("invite: --state-dir is required")?, suffix: suffix_given }))
+    Ok(Command::Invite(InviteArgs { address: address.ok_or("invite: --address is required")?, code, state_dir: state_dir.ok_or("invite: --state-dir is required")?, suffix }))
 }
 
 #[cfg(test)]

@@ -26,7 +26,7 @@ fn serve(rest: &[&str]) -> Result<Command, String> {
 }
 
 /// An address by the rule, as `MailAddress::parse` admits it.
-fn mail_address(text: &str) -> MailAddress {
+fn address(text: &str) -> MailAddress {
     MailAddress::parse(text).expect("an address")
 }
 
@@ -161,7 +161,7 @@ fn every_flag_lands_in_its_setting() {
         s.settings,
         Settings { image: "img:2".into(), cli_image: "cli:2".into(), network: "net2".into(), caddy: "proxy2".into(), suffix: "example.org".into(), log_max_size: "50m".into(), log_max_file: three }
     );
-    assert_eq!(s.mail, Some(MailArgs { mailer: Mailer::Program(PathBuf::from("/usr/bin/msmtp")), from: mail_address("noreply@example.org") }));
+    assert_eq!(s.mail, Some(MailArgs { mailer: Mailer::Program(PathBuf::from("/usr/bin/msmtp")), from: address("noreply@example.org") }));
     assert_eq!(served(&["--image", "a", "--image", "b"]).settings.image, "b", "the last given wins");
     match parse(argv(&["invite", "--address", "person@example.com", "--state-dir", "/s", "--code", "1.1.0.1.0.3", "--suffix", "example.org"])) {
         Ok(Command::Invite(i)) => {
@@ -183,7 +183,7 @@ fn mailer_and_from_come_together_or_not_at_all() {
 /// T1: AN UNKNOWN FLAG, a flag without its value, a value of the wrong
 /// form and a missing required flag are each a usage refusal.
 #[test]
-fn every_usage_refusal() {
+fn each_bad_command_line_is_a_usage_refusal() {
     assert_eq!(serve(&["--bogus"]), Err("serve: unknown argument '--bogus'".to_owned()));
     assert_eq!(parse(argv(&["invite", "--bogus"])), Err("invite: unknown argument '--bogus'".to_owned()));
     assert_eq!(serve(&["--listen"]), Err("--listen needs a value".to_owned()));
@@ -225,7 +225,7 @@ fn a_test_hooks_build_takes_the_fakes_flags() {
     {
         let s = served(&["--docker-fake", "/tmp/script", "--mailer-fake", "/tmp/mail.log", "--from", "noreply@skep.host"]);
         assert_eq!(s.docker_fake, Some(PathBuf::from("/tmp/script")));
-        assert_eq!(s.mail, Some(MailArgs { mailer: Mailer::Fake(PathBuf::from("/tmp/mail.log")), from: mail_address("noreply@skep.host") }));
+        assert_eq!(s.mail, Some(MailArgs { mailer: Mailer::Fake(PathBuf::from("/tmp/mail.log")), from: address("noreply@skep.host") }));
         assert!(usage().contains("--docker-fake <SCRIPT>") && usage().contains("--mailer-fake <LOG>"));
     }
 }

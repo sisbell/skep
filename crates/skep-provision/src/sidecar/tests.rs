@@ -112,12 +112,13 @@ fn each_exit_code_maps_to_its_failure() {
     assert_eq!(read(&exit(Some(3))), Err(Failure::Halt));
     assert_eq!(read(&exit(Some(1))), Err(Failure::Refused));
     assert_eq!(read(&exit(Some(4))), Err(Failure::Transport));
-    assert_eq!(read(&exit(Some(125))), Err(Failure::Exit(Some(125))));
-    assert_eq!(read(&exit(None)), Err(Failure::Exit(None)));
-    let said: Vec<String> = [Failure::Usage, Failure::Halt, Failure::Refused, Failure::Transport, Failure::Exit(Some(125)), Failure::Exit(None), Failure::Shape("line 5 is not the first act".into())]
-        .iter()
-        .map(|failure| (failure as &dyn std::error::Error).to_string())
-        .collect();
+    assert_eq!(read(&exit(Some(125))), Err(Failure::OtherExit(Some(125))));
+    assert_eq!(read(&exit(None)), Err(Failure::OtherExit(None)));
+    let said: Vec<String> =
+        [Failure::Usage, Failure::Halt, Failure::Refused, Failure::Transport, Failure::OtherExit(Some(125)), Failure::OtherExit(None), Failure::Shape("line 5 is not the first act".into())]
+            .iter()
+            .map(|failure| (failure as &dyn std::error::Error).to_string())
+            .collect();
     assert_eq!(
         said,
         ["exit 2 (a usage refusal)", "exit 3 (a halt)", "exit 1 (the board refused)", "exit 4 (transport)", "exit 125", "ended by a signal", "exit 0 and line 5 is not the first act"],

@@ -51,9 +51,9 @@ type Pause = Box<dyn Fn(&'static str, Option<&str>) + Send + Sync + UnwindSafe +
 /// Docker (UNVERIFIED HERE) — a code every step reads as a failure.
 pub const UNEXPECTED: i32 = 125;
 
-/// One scripted answer: the call it expects and what that call answers.
+/// ONE SCRIPT LINE: the call it expects and what that call answers.
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct Step {
+struct ScriptLine {
     /// The method expected, as the trait spells it.
     method: String,
     /// The name expected, `None` for the reload.
@@ -96,7 +96,7 @@ impl Called {
 /// they are written to where it was opened from a file, and a unit suite's
 /// pause.
 pub struct FakeDocker {
-    script: Mutex<VecDeque<Step>>,
+    script: Mutex<VecDeque<ScriptLine>>,
     calls: Mutex<Vec<Called>>,
     calls_file: Option<PathBuf>,
     #[cfg(test)]
@@ -114,7 +114,7 @@ impl std::fmt::Debug for FakeDocker {
 impl FakeDocker {
     /// The fake over a script's text.
     pub fn parse(script: &str) -> Result<FakeDocker, String> {
-        let mut steps = VecDeque::new();
+        let mut lines = VecDeque::new();
         for (i, text) in script.lines().enumerate() {
             if text.trim().is_empty() || text.starts_with('#') {
                 continue;
@@ -124,7 +124,7 @@ impl FakeDocker {
                 return Err(format!("script line {}: three to five TAB-separated fields, not {}", i + 1, fields.len()));
             }
             let code = fields[2].parse().map_err(|_| format!("script line {}: `{}` is no exit code", i + 1, fields[2]))?;
-            steps.push_back(Step {
+            lines.push_back(ScriptLine {
                 method: fields[0].to_owned(),
                 name: (fields[1] != "-").then(|| fields[1].to_owned()),
                 code,
@@ -133,7 +133,7 @@ impl FakeDocker {
             });
         }
         Ok(FakeDocker {
-            script: Mutex::new(steps),
+            script: Mutex::new(lines),
             calls: Mutex::new(Vec::new()),
             calls_file: None,
             #[cfg(test)]
@@ -180,7 +180,7 @@ impl FakeDocker {
 
     /// The script's lines not yet called.
     #[cfg(test)]
-    fn left(&self) -> Vec<Step> {
+    fn left(&self) -> Vec<ScriptLine> {
         self.script.lock().unwrap_or_else(|e| e.into_inner()).iter().cloned().collect()
     }
 
@@ -208,7 +208,7 @@ fn method(call: &Call<'_>) -> &'static str {
         Call::VolumeRm(_) => "volume_rm",
         Call::Health(_) => "health",
         Call::CaddyReload => "caddy_reload",
-        Call::Volumes => "volumes",
+        Call::LabelledVolumes => "labelled_volumes",
     }
 }
 
@@ -224,7 +224,7 @@ fn name<'a>(call: &Call<'a>) -> Option<&'a Name> {
         | Call::RunServing(n)
         | Call::VolumeRm(n)
         | Call::Health(n) => Some(n),
-        Call::CaddyReload | Call::Volumes => None,
+        Call::CaddyReload | Call::LabelledVolumes => None,
     }
 }
 
@@ -286,8 +286,8 @@ impl Docker for FakeDocker {
         let expected = hit.is_some();
         let exit = match hit {
             Some(i) => {
-                let step = script.remove(i).expect("`position` found the line, in range");
-                Exit { code: Some(step.code), stdout: step.stdout, stderr: step.stderr }
+                let matched = script.remove(i).expect("`position` found the line, in range");
+                Exit { code: Some(matched.code), stdout: matched.stdout, stderr: matched.stderr }
             }
             None => {
                 let shown = name.as_deref().unwrap_or("-");

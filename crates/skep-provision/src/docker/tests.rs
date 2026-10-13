@@ -86,7 +86,7 @@ fn every_calls_argv_is_the_documents_run_line() {
         (Call::VolumeRm(&n), "volume rm alice"),
         (Call::Health(&n), "run --rm --network skep skep-cli skep health --board http://alice:8642"),
         (Call::CaddyReload, "exec caddy caddy reload --config /etc/caddy/Caddyfile"),
-        (Call::Volumes, "volume ls -q --filter label=skep.provision=1"),
+        (Call::LabelledVolumes, "volume ls -q --filter label=skep.provision=1"),
     ];
     for (call, line) in pinned {
         assert_eq!(call.argv(&s), words(line), "{call:?}");
@@ -94,12 +94,12 @@ fn every_calls_argv_is_the_documents_run_line() {
 }
 
 /// T19: THE LABEL — `volume create` carries `--label skep.provision=1`
-/// BEFORE the name and the name last; `volumes` is `volume ls -q --filter
-/// label=skep.provision=1`, token by token, the same label; the two
-/// constants spell it; neither takes a setting. The claim run and the
-/// sidecar stay the smoke's lines (the two drift tests above), and the
-/// smoke's own `docker volume create "$VOLUME"` carries no label — those
-/// tests read the claim run and the sidecar, never the volume line.
+/// BEFORE the name and the name last; `labelled_volumes` is
+/// `volume ls -q --filter label=skep.provision=1`, token by token, the same
+/// label; the two constants spell it; neither takes a setting. The claim
+/// run and the sidecar stay the smoke's lines (the two drift tests above),
+/// and the smoke's own `docker volume create "$VOLUME"` carries no label —
+/// those tests read the claim run and the sidecar, never the volume line.
 #[test]
 fn the_volume_is_labelled_before_its_name_and_the_listing_filters_by_the_label() {
     let n = alice();
@@ -109,22 +109,22 @@ fn the_volume_is_labelled_before_its_name_and_the_listing_filters_by_the_label()
     assert_eq!(create.last().map(String::as_str), Some("alice"), "the name last");
     assert_eq!((LABEL_KEY, LABEL_VALUE), ("skep.provision", "1"));
     assert_eq!(label(), "skep.provision=1");
-    let listing = Call::Volumes.argv(&settings());
+    let listing = Call::LabelledVolumes.argv(&settings());
     assert_eq!(listing, words("volume ls -q --filter label=skep.provision=1"));
     assert_eq!(listing.last().map(String::as_str), Some(&*format!("label={}", label())));
     let other =
         Settings { image: "img:2".into(), cli_image: "cli:2".into(), network: "net2".into(), caddy: "proxy2".into(), suffix: "example.org".into(), log_max_size: "50m".into(), log_max_file: files(3) };
-    assert_eq!(Call::Volumes.argv(&other), listing, "no setting reaches the listing");
+    assert_eq!(Call::LabelledVolumes.argv(&other), listing, "no setting reaches the listing");
     assert_eq!(Call::VolumeCreate(&n).argv(&other), create, "no setting reaches the volume's creation");
-    // The fake answers a scripted `volumes` line — its stdout the names,
-    // one per line — and refuses an unscripted one.
-    let fake = FakeDocker::parse(&line("volumes", None, 0, "alice\nbob\n", "")).expect("a script");
-    let exit = fake.volumes().expect("an answer");
+    // The fake answers a scripted `labelled_volumes` line — its stdout the
+    // names, one per line — and refuses an unscripted one.
+    let fake = FakeDocker::parse(&line("labelled_volumes", None, 0, "alice\nbob\n", "")).expect("a script");
+    let exit = fake.labelled_volumes().expect("an answer");
     assert_eq!((exit.code, exit.stdout.as_slice()), (Some(0), &b"alice\nbob\n"[..]));
-    let refused = fake.volumes().expect("an answer");
+    let refused = fake.labelled_volumes().expect("an answer");
     assert_eq!(refused.code, Some(UNEXPECTED));
-    assert!(String::from_utf8_lossy(&refused.stderr).contains("unexpected call volumes -; the script expected nothing more under -"));
-    assert_eq!(fake.said(), vec!["volumes", "volumes"]);
+    assert!(String::from_utf8_lossy(&refused.stderr).contains("unexpected call labelled_volumes -; the script expected nothing more under -"));
+    assert_eq!(fake.said(), vec!["labelled_volumes", "labelled_volumes"]);
     assert_eq!(fake.unexpected().len(), 1);
 }
 
@@ -145,16 +145,16 @@ fn the_settings_reach_their_own_words() {
 }
 
 /// The smoke script's own line: from the line that begins `docker run` and
-/// names `name_var` through its `\` continuations, cut at its first
+/// holds `marker` through its `\` continuations, cut at its first
 /// redirect, its quotes dropped.
-fn smoke_line(name_var: &str) -> Vec<String> {
+fn smoke_line(marker: &str) -> Vec<String> {
     let script = std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../scripts/docker-smoke.sh")).expect("the smoke script");
     let lines: Vec<&str> = script.lines().collect();
     let start = lines
         .iter()
-        .position(|l| l.trim_start().starts_with("docker run") && l.contains(name_var) && !l.contains("--entrypoint"))
-        .or_else(|| lines.iter().position(|l| l.trim_start().starts_with("if docker run") && l.contains(name_var)))
-        .unwrap_or_else(|| panic!("the smoke script has no `docker run` naming {name_var}"));
+        .position(|l| l.trim_start().starts_with("docker run") && l.contains(marker) && !l.contains("--entrypoint"))
+        .or_else(|| lines.iter().position(|l| l.trim_start().starts_with("if docker run") && l.contains(marker)))
+        .unwrap_or_else(|| panic!("the smoke script has no `docker run` holding {marker}"));
     let mut joined = String::new();
     for l in &lines[start..] {
         let l = l.trim();
@@ -296,7 +296,7 @@ fn each_named_method_runs_its_own_call() {
         kept.volume_rm(&n),
         kept.health(&n),
         kept.caddy_reload(),
-        kept.volumes(),
+        kept.labelled_volumes(),
     ] {
         answered.expect("the runner answered");
     }
@@ -311,7 +311,7 @@ fn each_named_method_runs_its_own_call() {
         Call::VolumeRm(&n),
         Call::Health(&n),
         Call::CaddyReload,
-        Call::Volumes,
+        Call::LabelledVolumes,
     ];
     assert_eq!(*kept.0.lock().unwrap_or_else(|e| e.into_inner()), calls.iter().map(|c| format!("{c:?}")).collect::<Vec<_>>());
     for call in calls {

@@ -10,14 +10,14 @@
 //! pages say; and THE STOP: SIGTERM, the default disposition, ending the
 //! process. THE CONNECTIONS' POOL: a connection past it waits in the
 //! listener's queue until a thread frees. THE SWEEP (T22): started over a
-//! script whose `volumes` lists one half-made name, the binary removes it
-//! before its serving line, which carries the count. A START REFUSED — a
-//! snippet directory that cannot be read, an address another listener holds
-//! — and an invite not minted each exit 1, with no DATA line. No Docker
-//! runs: every call is the script's, and the calls are read back after.
-//! Beside it, `tidy` reads the crate's own source and manifest for the
-//! arrangement `src/main.rs` and `ARCHITECTURE.md` §The provisioning service
-//! state.
+//! script whose `labelled_volumes` lists one half-made name, the binary
+//! removes it before its serving line, which carries the count. A START
+//! REFUSED — a snippet directory that cannot be read, an address another
+//! listener holds — and an invite not minted each exit 1, with no DATA
+//! line. No Docker runs: every call is the script's, and the calls are read
+//! back after. Beside it, `tidy` reads the crate's own source and manifest
+//! for the arrangement `src/main.rs` and `ARCHITECTURE.md` §The
+//! provisioning service state.
 
 #![cfg(unix)]
 
@@ -85,7 +85,7 @@ fn form_encode(bytes: &[u8]) -> String {
 
 /// One script line for the docker fake: TAB-separated, `\n` escaped by the
 /// caller.
-fn step(method: &str, name: &str, code: i32, stdout: &str) -> String {
+fn script_line(method: &str, name: &str, code: i32, stdout: &str) -> String {
     format!("{method}\t{name}\t{code}\t{stdout}\n")
 }
 
@@ -97,8 +97,8 @@ fn invite(state: &Path) -> (i32, String, String) {
 
 /// A code off the invite verb's one DATA line.
 fn minted(state: &Path) -> String {
-    let (code, out, err) = invite(state);
-    assert_eq!(code, 0, "{err}");
+    let (exit_code, out, err) = invite(state);
+    assert_eq!(exit_code, 0, "{err}");
     let line = out.trim_end();
     assert_eq!(out.lines().count(), 1, "one DATA line: {out}");
     line.strip_prefix("https://skep.host/claim?invite=").unwrap_or_else(|| panic!("the invite link: {line}")).to_owned()
@@ -219,21 +219,21 @@ fn the_built_service_runs_a_post_from_the_form_to_the_live_page_over_the_fakes()
     let code = minted(&state);
     assert_eq!(code.len(), 32);
     let script = dir.path().join("docker.script");
-    let steps = [
-        step("volumes", "-", 0, ""),
-        step("volume_inspect", "alice", 1, ""),
-        step("container_inspect", "alice", 1, ""),
-        step("volume_inspect", "alice", 1, ""),
-        step("container_inspect", "alice", 1, ""),
-        step("volume_create", "alice", 0, "alice\\n"),
-        step("run_claim", "alice", 0, ""),
-        step("sidecar_claim", "alice", 0, SIX),
-        step("rm_force", "alice", 0, ""),
-        step("run_serving", "alice", 0, ""),
-        step("health", "alice", 0, PAIRED),
-        step("caddy_reload", "-", 0, ""),
+    let lines = [
+        script_line("labelled_volumes", "-", 0, ""),
+        script_line("volume_inspect", "alice", 1, ""),
+        script_line("container_inspect", "alice", 1, ""),
+        script_line("volume_inspect", "alice", 1, ""),
+        script_line("container_inspect", "alice", 1, ""),
+        script_line("volume_create", "alice", 0, "alice\\n"),
+        script_line("run_claim", "alice", 0, ""),
+        script_line("sidecar_claim", "alice", 0, SIX),
+        script_line("rm_force", "alice", 0, ""),
+        script_line("run_serving", "alice", 0, ""),
+        script_line("health", "alice", 0, PAIRED),
+        script_line("caddy_reload", "-", 0, ""),
     ];
-    std::fs::write(&script, steps.concat()).expect("the script");
+    std::fs::write(&script, lines.concat()).expect("the script");
     let mail = dir.path().join("mail.log");
     let service = Service::start(dir.path(), &script, &mail, &[]);
 
@@ -320,7 +320,20 @@ fn the_built_service_runs_a_post_from_the_form_to_the_live_page_over_the_fakes()
     let methods: Vec<&str> = calls.lines().map(|l| l.split('\t').next().unwrap_or("")).collect();
     assert_eq!(
         methods,
-        ["volumes", "volume_inspect", "container_inspect", "volume_inspect", "container_inspect", "volume_create", "run_claim", "sidecar_claim", "rm_force", "run_serving", "health", "caddy_reload"],
+        [
+            "labelled_volumes",
+            "volume_inspect",
+            "container_inspect",
+            "volume_inspect",
+            "container_inspect",
+            "volume_create",
+            "run_claim",
+            "sidecar_claim",
+            "rm_force",
+            "run_serving",
+            "health",
+            "caddy_reload"
+        ],
         "{calls}"
     );
     assert!(!calls.contains("unexpected"), "{calls}");
@@ -339,12 +352,12 @@ fn record_preview() -> String {
 }
 
 /// T22: THE SWEEP AT START — the built binary, over a script whose
-/// `volumes` lists `bob` (no snippet) and `alice` (its snippet standing),
-/// removes `bob` BEFORE its serving line: by the time the line is read the
-/// script's `rm_force bob` and `volume_rm bob` are consumed and recorded,
-/// nothing is called for `alice`, and the line carries `swept 1` beside
-/// `live 1`; then the service serves — the sign-up page answers — and the
-/// log names the name and the steps.
+/// `labelled_volumes` lists `bob` (no snippet) and `alice` (its snippet
+/// standing), removes `bob` BEFORE its serving line: by the time the line
+/// is read the script's `rm_force bob` and `volume_rm bob` are consumed and
+/// recorded, nothing is called for `alice`, and the line carries `swept 1`
+/// beside `live 1`; then the service serves — the sign-up page answers —
+/// and the log names the name and the steps.
 #[test]
 fn the_built_service_sweeps_a_half_made_board_before_its_serving_line() {
     let dir = Scratch::new();
@@ -352,11 +365,11 @@ fn the_built_service_sweeps_a_half_made_board_before_its_serving_line() {
     std::fs::create_dir(&boards).expect("the boards directory");
     std::fs::write(boards.join("alice.caddy"), b"").expect("alice's snippet");
     let script = dir.path().join("docker.script");
-    std::fs::write(&script, [step("volumes", "-", 0, "alice\\nbob\\n"), step("rm_force", "bob", 1, ""), step("volume_rm", "bob", 0, "")].concat()).expect("the script");
+    std::fs::write(&script, [script_line("labelled_volumes", "-", 0, "alice\\nbob\\n"), script_line("rm_force", "bob", 1, ""), script_line("volume_rm", "bob", 0, "")].concat()).expect("the script");
     let mail = dir.path().join("mail.log");
     let service = Service::start(dir.path(), &script, &mail, &[]);
     let calls = std::fs::read_to_string(dir.path().join("docker.script.calls")).expect("the calls");
-    assert_eq!(calls, "volumes\t-\t0\nrm_force\tbob\t1\nvolume_rm\tbob\t0\n", "the sweep's calls, all made before the serving line");
+    assert_eq!(calls, "labelled_volumes\t-\t0\nrm_force\tbob\t1\nvolume_rm\tbob\t0\n", "the sweep's calls, all made before the serving line");
     assert!(service.serving.contains(" live 1 swept 1 "), "{}", service.serving);
     assert_eq!(service.request("GET", "/", "").0, 200, "the service serves after the sweep");
     let log = until("the sweep's log", || Some(service.log()).filter(|l| l.contains("bob: sweep: done")));
@@ -378,7 +391,7 @@ fn a_connection_past_the_pool_waits_until_a_thread_frees() {
     let dir = Scratch::new();
     std::fs::create_dir(dir.path().join("boards")).expect("the boards directory");
     let script = dir.path().join("docker.script");
-    std::fs::write(&script, step("volumes", "-", 0, "")).expect("the script");
+    std::fs::write(&script, script_line("labelled_volumes", "-", 0, "")).expect("the script");
     let service = Service::start(dir.path(), &script, &dir.path().join("mail.log"), &["--connections", "1"]);
     assert!(service.serving.contains(" workers 3 connections 1 "), "{}", service.serving);
     let held = TcpStream::connect(("127.0.0.1", service.port)).expect("connected");
@@ -444,7 +457,7 @@ fn a_loose_state_directory_is_refused_at_start() {
 fn a_start_refused_or_an_invite_not_minted_is_exit_1() {
     let dir = Scratch::new();
     let script = dir.path().join("docker.script");
-    std::fs::write(&script, step("volumes", "-", 0, "")).expect("the script");
+    std::fs::write(&script, script_line("labelled_volumes", "-", 0, "")).expect("the script");
     let calls = || std::fs::read_to_string(dir.path().join("docker.script.calls")).expect("the calls");
     let serve = |boards: &Path, listen: &str| {
         Command::new(BIN)
@@ -469,7 +482,7 @@ fn a_start_refused_or_an_invite_not_minted_is_exit_1() {
     assert_eq!(bound.status.code(), Some(1), "{bound:?}");
     assert!(String::from_utf8_lossy(&bound.stderr).contains("skep-provision: bind 127.0.0.1:"), "{bound:?}");
     assert!(bound.stdout.is_empty(), "a serving line for an address never bound");
-    assert_eq!(calls(), "volumes\t-\t0\n", "the sweep made before the bind");
+    assert_eq!(calls(), "labelled_volumes\t-\t0\n", "the sweep made before the bind");
     let mint = || Command::new(BIN).args(["invite", "--address", "person@example.com", "--code", "abc", "--state-dir"]).arg(dir.path().join("state")).stdin(Stdio::null()).output().expect("ran");
     assert_eq!(mint().status.code(), Some(0));
     let again = mint();

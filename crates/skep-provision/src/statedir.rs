@@ -43,22 +43,23 @@ const STATE_FILE_MODE: u32 = 0o600;
 
 /// THE ADDRESS RULE: one `@` with a non-empty side each way, at most
 /// [`MAX_ADDRESS_BYTES`] bytes, no control character, no whitespace, and
-/// nothing [`out_of_rule`] names.
+/// no character [`special_or_bidi`] answers.
 fn address_ok(address: &str) -> bool {
     let Some((local, domain)) = address.split_once('@') else {
         return false;
     };
-    !local.is_empty() && !domain.is_empty() && !domain.contains('@') && address.len() <= MAX_ADDRESS_BYTES && !address.chars().any(|c| c.is_control() || c.is_whitespace() || out_of_rule(c))
+    !local.is_empty() && !domain.is_empty() && !domain.contains('@') && address.len() <= MAX_ADDRESS_BYTES && !address.chars().any(|c| c.is_control() || c.is_whitespace() || special_or_bidi(c))
 }
 
-/// What an address may not hold beyond a control character or whitespace:
-/// RFC 5322's specials but `@` and `.` — any of which lets a `To:` header
-/// name a second recipient (`me@x.example,root`, under the mailer's `-t`)
-/// or read the address as other than one — and the bidi controls
-/// `skep-client`'s `render_inert` disarms, format characters no control
-/// test catches, which let a line of the sign-up file show the owner other
-/// bytes than it holds.
-fn out_of_rule(c: char) -> bool {
+/// Whether `c` is one of RFC 5322's specials but `@` and `.` — any of
+/// which lets a `To:` header name a second recipient (`me@x.example,root`,
+/// under the mailer's `-t`) or read the address as other than one — or one
+/// of the bidi controls `skep-client`'s `render_inert` disarms, format
+/// characters no control test catches, which let a line of the sign-up
+/// file show the owner other bytes than it holds. These are what an
+/// address may not hold beyond a control character and whitespace, which
+/// [`address_ok`] refuses beside them.
+fn special_or_bidi(c: char) -> bool {
     matches!(c, '(' | ')' | '<' | '>' | '[' | ']' | ':' | ';' | '\\' | ',' | '"') || matches!(u32::from(c), 0x202A..=0x202E | 0x2066..=0x2069 | 0x200E | 0x200F | 0x061C)
 }
 

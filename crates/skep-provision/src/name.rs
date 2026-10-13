@@ -36,7 +36,7 @@ pub enum NameRefused {
     /// space, anything not ASCII, or bytes that are not text at all.
     NotALabel,
     /// A hyphen begins or ends it.
-    Hyphen,
+    HyphenAtEitherEnd,
 }
 
 impl fmt::Display for NameRefused {
@@ -45,7 +45,7 @@ impl fmt::Display for NameRefused {
             NameRefused::Empty => "the name is empty",
             NameRefused::TooLong => "the name is longer than one label's 63 bytes",
             NameRefused::NotALabel => "the name holds a character outside letters, digits and hyphens",
-            NameRefused::Hyphen => "the name begins or ends with a hyphen",
+            NameRefused::HyphenAtEitherEnd => "the name begins or ends with a hyphen",
         })
     }
 }
@@ -67,7 +67,7 @@ impl Name {
             return Err(NameRefused::NotALabel);
         }
         if name.starts_with('-') || name.ends_with('-') {
-            return Err(NameRefused::Hyphen);
+            return Err(NameRefused::HyphenAtEitherEnd);
         }
         Ok(Name(name))
     }

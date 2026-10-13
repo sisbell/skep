@@ -69,7 +69,7 @@ fn crlf_inside_a_value_is_kept_as_given() {
 /// The split's edges: a part with no `=` is a name with an empty value, an
 /// empty part no field, a value's own `=` kept, an empty body no field.
 #[test]
-fn the_split_at_its_edges() {
+fn the_split_keeps_its_rule_at_its_edges() {
     let form = decode(b"a&&b=2&").expect("a form");
     assert_eq!(pairs(&form), vec![(&b"a"[..], &b""[..]), (&b"b"[..], &b"2"[..])]);
     assert_eq!(decode(b"a=1=2").expect("a form").get("a"), Some(&b"1=2"[..]));

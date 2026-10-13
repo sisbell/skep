@@ -92,10 +92,11 @@ fn an_unwritable_directory_is_an_error() {
     assert!(write(dir.path().join("absent").as_path(), &name("alice"), "skep.host").is_err(), "a directory that does not stand");
 }
 
-/// Whether the snippet stands: not before its write, then after it, and
-/// not after its removal — another name's snippet standing for none of it.
+/// A SNIPPET STANDS from its write until its removal: not before its
+/// write, then after it, and not after its removal — another name's
+/// snippet standing for none of it.
 #[test]
-fn whether_the_snippet_stands() {
+fn a_snippet_stands_from_its_write_until_its_removal() {
     let dir = Scratch::new();
     write(dir.path(), &name("bob"), "skep.host").expect("bob's snippet");
     assert!(!stands(dir.path(), &name("alice")).expect("read"));
@@ -106,10 +107,10 @@ fn whether_the_snippet_stands() {
     assert!(stands(dir.path(), &name("bob")).expect("read"));
 }
 
-/// The removal: `true` where the snippet stood, `false` after; the reload,
-/// one call through the runner.
+/// The removal answers whether a snippet stood: `true` where one did,
+/// `false` after; the reload is one call through the runner.
 #[test]
-fn the_removal_and_the_reload() {
+fn a_removal_answers_whether_one_stood_and_a_reload_is_one_call() {
     let dir = Scratch::new();
     write(dir.path(), &name("alice"), "skep.host").expect("written");
     assert!(remove(dir.path(), &name("alice")).expect("removed"));
@@ -120,15 +121,15 @@ fn the_removal_and_the_reload() {
     fake.assert_done();
 }
 
-/// The names the directory stands for: each `<name>.caddy` in the grammar,
-/// sorted; a temp file, another file, a stem out of the grammar, passed
-/// over.
+/// THE ROUTED NAMES: each `<name>.caddy` file whose stem is a name in the
+/// grammar, sorted; a temp file, another file, a directory and a stem out
+/// of the grammar passed over.
 #[test]
-fn the_directory_stands_for_its_snippets_names() {
+fn only_a_snippet_file_whose_stem_is_a_name_is_routed() {
     let dir = Scratch::new();
     for file in ["bob.caddy", "alice.caddy", "alice.caddy.tmp", "README", "Upper.caddy", "-x.caddy", "a.b.caddy"] {
         fs::write(dir.path().join(file), b"").expect("a file");
     }
     fs::create_dir(dir.path().join("carol.caddy")).expect("a directory");
-    assert_eq!(names(dir.path()).expect("read"), vec![name("alice"), name("bob")]);
+    assert_eq!(routed(dir.path()).expect("read"), vec![name("alice"), name("bob")]);
 }

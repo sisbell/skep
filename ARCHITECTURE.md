@@ -1574,8 +1574,8 @@ each naming only those above it:
   read, and its exit codes mapped.
 - `health.rs` the pair off `/health`'s body and the bounded wait.
 - `caddy.rs` the snippet's text, its write and its removal through
-  `whole` at `0644`, whether it stands, the reload, and the names the
-  snippet directory stands for.
+  `whole` at `0644`, whether it stands, the reload, and the routed
+  names, read off the snippet directory.
 - `names.rs` the truth about names — the snippet, the volume, the
   container — the status token, the status map, rebuilt at start from
   the snippets, and the labelled volumes sorted against the snippets into

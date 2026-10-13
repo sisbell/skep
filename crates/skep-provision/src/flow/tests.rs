@@ -95,36 +95,40 @@ impl Sender for Probe {
 struct Rig {
     dir: Scratch,
     boards: PathBuf,
-    state: StateDir,
+    state_dir: StateDir,
     fake: Arc<FakeDocker>,
     probe: Arc<Probe>,
     lines: Arc<Mutex<Vec<String>>>,
     service: Arc<Service>,
 }
 
-fn rig(script: &str, mail: Option<Vec<i32>>) -> Rig {
-    rig_with(script, mail, Arc::new(|_| {}))
+fn rig(script: &str, mail_script: Option<Vec<i32>>) -> Rig {
+    rig_with(script, mail_script, Arc::new(|_| {}))
 }
 
 /// The rig with the sleep hook `sleep` — a gate's pause, where a test pauses
 /// a worker inside its sidecar wait.
-fn rig_with(script: &str, mail: Option<Vec<i32>>, sleep: Sleep) -> Rig {
+fn rig_with(script: &str, mail_script: Option<Vec<i32>>, sleep: Sleep) -> Rig {
     let dir = Scratch::new();
     let boards = dir.path().join("boards");
     fs::create_dir(&boards).expect("the boards directory");
-    let state = StateDir::open(&dir.path().join("state")).expect("the state directory");
+    let state_dir = StateDir::open(&dir.path().join("state")).expect("the state directory");
     let fake = Arc::new(FakeDocker::parse(script).expect("a script"));
     let lines = Arc::new(Mutex::new(Vec::new()));
     let into = Arc::clone(&lines);
     let log: Log = Arc::new(move |line: &str| into.lock().unwrap().push(line.to_owned()));
-    let probe =
-        Arc::new(Probe { fake: FakeSender::new(dir.path().join("mail.log"), mail.clone().unwrap_or_default()), service: OnceLock::new(), token: Mutex::new(None), seen: Mutex::new(Vec::new()) });
+    let probe = Arc::new(Probe {
+        fake: FakeSender::new(dir.path().join("mail.log"), mail_script.clone().unwrap_or_default()),
+        service: OnceLock::new(),
+        token: Mutex::new(None),
+        seen: Mutex::new(Vec::new()),
+    });
     let address = |text: &str| MailAddress::parse(text).expect("an address");
-    let mail = mail.map(|_| Outbox::inline(Box::new(Arc::clone(&probe)), address("noreply@skep.host"), address("owner@skep.host"), Arc::clone(&log), Arc::new(|_| {})));
+    let outbox = mail_script.map(|_| Outbox::inline(Box::new(Arc::clone(&probe)), address("noreply@skep.host"), address("owner@skep.host"), Arc::clone(&log), Arc::new(|_| {})));
     let config = Config { boards_dir: boards.clone(), suffix: "skep.host".into() };
-    let service = Arc::new(Service::new(config, state.clone(), Box::new(Arc::clone(&fake)), mail, log, sleep).expect("the service"));
+    let service = Arc::new(Service::new(config, state_dir.clone(), Box::new(Arc::clone(&fake)), outbox, log, sleep).expect("the service"));
     probe.service.set(Arc::downgrade(&service)).ok();
-    Rig { dir, boards, state, fake, probe, lines, service }
+    Rig { dir, boards, state_dir, fake, probe, lines, service }
 }
 
 /// A GATE a hook pauses at: the hook counts itself in and waits until the
@@ -183,7 +187,7 @@ fn until<T>(what: &str, mut done: impl FnMut() -> Option<T>) -> T {
 impl Rig {
     /// One invite minted to the person's address.
     fn invite(&self) -> InviteCode {
-        mint(&self.state, &MailAddress::parse("person@example.com").expect("an address"), None).expect("minted")
+        mint(&self.state_dir, &MailAddress::parse("person@example.com").expect("an address"), None).expect("minted")
     }
 
     /// One post to the claim form.
@@ -207,12 +211,12 @@ impl Rig {
     }
 
     fn issued(&self, code: &InviteCode) -> bool {
-        lookup(&self.state, code).expect("read").expect("held").issued()
+        lookup(&self.state_dir, code).expect("read").expect("held").issued()
     }
 
     /// THE POOL as `serve` spawns it: `n` workers over this service, each on
     /// a thread of its own that runs until the test's process ends.
-    fn workers(&self, n: usize) {
+    fn spawn_workers(&self, n: usize) {
         for _ in 0..n {
             let service = Arc::clone(&self.service);
             thread::spawn(move || service.work());
@@ -312,11 +316,11 @@ fn the_whole_flow_runs_every_step_in_order() {
     let trimmed = record(true).trim_end().to_owned();
     assert_eq!(rig.fake.calls()[6].stdin.as_deref(), Some(trimmed.as_bytes()), "the record, trimmed, on the sidecar's stdin");
     assert_eq!(fs::read_to_string(rig.snippet("alice")).expect("the snippet"), crate::caddy::snippet(&Name::parse(b"alice").expect("a name"), "skep.host"));
-    let status = crate::pages::status_url("skep.host", &token);
-    let page = reply::text("https://alice.skep.host", false, &status);
+    let status_url = crate::pages::status_url("skep.host", &token);
+    let page = reply::text("https://alice.skep.host", false, &status_url);
     assert_eq!(rig.service.status(&token), Some(Shown::Live(page.clone())));
     assert!(rig.service.book().map.live().contains(&Name::parse(b"alice").expect("a name")), "alice among the live names");
-    assert!(matches!(lookup(&rig.state, &code).expect("read").expect("held").state, InviteState::Spent { ref name, .. } if name == "alice"));
+    assert!(matches!(lookup(&rig.state_dir, &code).expect("read").expect("held").state, InviteState::Spent { ref name, .. } if name == "alice"));
     assert_eq!(rig.probe.seen.lock().unwrap().as_slice(), [Some(Shown::Live(page.clone()))], "one send, made with the status already live");
     let mail = messages(&rig.dir.path().join("mail.log")).expect("the mail log");
     assert_eq!(mail.len(), 1);
@@ -338,12 +342,12 @@ fn the_whole_flow_runs_every_step_in_order() {
     }
 }
 
-/// One case of the decision table: its worker steps through the failure
-/// and the cleanup, the calls that follow the four inspects, and what the
-/// case does to the rig before the worker's turn.
+/// One case of the decision table: the script its worker runs through the
+/// failure and the cleanup, the calls that follow the four inspects, and
+/// what the case does to the rig before the worker's turn.
 struct Case {
     what: &'static str,
-    steps: String,
+    script: String,
     calls: Vec<&'static str>,
     reloads: bool,
     before: fn(&Rig),
@@ -374,17 +378,17 @@ fn run_and_volume_removed() -> String {
 
 fn cases() -> Vec<Case> {
     let mut cases = vec![
-        Case { what: "volume_create fails", steps: line("volume_create", Some("alice"), 1, "", "Error response from daemon\n"), calls: vec!["volume_create alice"], reloads: false, before: nothing },
+        Case { what: "volume_create fails", script: line("volume_create", Some("alice"), 1, "", "Error response from daemon\n"), calls: vec!["volume_create alice"], reloads: false, before: nothing },
         Case {
             what: "run_claim fails",
-            steps: line("volume_create", Some("alice"), 0, "", "") + &line("run_claim", Some("alice"), 125, "", "Unable to find image\n") + &line("volume_rm", Some("alice"), 0, "", ""),
+            script: line("volume_create", Some("alice"), 0, "", "") + &line("run_claim", Some("alice"), 125, "", "Unable to find image\n") + &line("volume_rm", Some("alice"), 0, "", ""),
             calls: vec!["volume_create alice", "run_claim alice", "volume_rm alice"],
             reloads: false,
             before: nothing,
         },
         Case {
             what: "sidecar_claim exits 4 past the bound",
-            steps: to_the_claim()
+            script: to_the_claim()
                 + &(0..SIDECAR_WAIT.tries).map(|_| line("sidecar_claim", Some("alice"), 4, "", "skep: the board could not be dialed\n")).collect::<String>()
                 + &run_and_volume_removed(),
             calls: [vec!["volume_create alice", "run_claim alice"], vec!["sidecar_claim alice"; SIDECAR_WAIT.tries as usize], vec!["rm_force alice", "volume_rm alice"]].concat(),
@@ -392,15 +396,15 @@ fn cases() -> Vec<Case> {
             before: nothing,
         },
     ];
-    for (code, stdout) in [(3, ""), (1, ""), (2, ""), (0, "claimed by 1.0.1\n")] {
+    for (exit_code, stdout) in [(3, ""), (1, ""), (2, ""), (0, "claimed by 1.0.1\n")] {
         cases.push(Case {
-            what: match code {
+            what: match exit_code {
                 3 => "sidecar_claim exits 3",
                 1 => "sidecar_claim exits 1",
                 2 => "sidecar_claim exits 2",
                 _ => "sidecar_claim answers `claimed by` on the fresh volume",
             },
-            steps: to_the_claim() + &line("sidecar_claim", Some("alice"), code, stdout, "skep: a halt\n") + &run_and_volume_removed(),
+            script: to_the_claim() + &line("sidecar_claim", Some("alice"), exit_code, stdout, "skep: a halt\n") + &run_and_volume_removed(),
             calls: vec!["volume_create alice", "run_claim alice", "sidecar_claim alice", "rm_force alice", "volume_rm alice"],
             reloads: false,
             before: nothing,
@@ -409,14 +413,14 @@ fn cases() -> Vec<Case> {
     let serving = vec!["volume_create alice", "run_claim alice", "sidecar_claim alice", "rm_force alice", "run_serving alice"];
     cases.push(Case {
         what: "run_serving fails",
-        steps: to_the_serving_run() + &line("run_serving", Some("alice"), 125, "", "Conflict\n") + &run_and_volume_removed(),
+        script: to_the_serving_run() + &line("run_serving", Some("alice"), 125, "", "Conflict\n") + &run_and_volume_removed(),
         calls: [serving.clone(), vec!["rm_force alice", "volume_rm alice"]].concat(),
         reloads: false,
         before: nothing,
     });
     cases.push(Case {
         what: "health never pairs",
-        steps: to_the_serving_run()
+        script: to_the_serving_run()
             + &line("run_serving", Some("alice"), 0, "", "")
             + &(0..HEALTH_WAIT.tries).map(|_| line("health", Some("alice"), 0, UNPAIRED, "")).collect::<String>()
             + &run_and_volume_removed(),
@@ -427,14 +431,14 @@ fn cases() -> Vec<Case> {
     #[cfg(unix)]
     cases.push(Case {
         what: "the snippet's write fails",
-        steps: to_the_serving_run() + &line("run_serving", Some("alice"), 0, "", "") + &line("health", Some("alice"), 0, PAIRED, "") + &run_and_volume_removed(),
+        script: to_the_serving_run() + &line("run_serving", Some("alice"), 0, "", "") + &line("health", Some("alice"), 0, PAIRED, "") + &run_and_volume_removed(),
         calls: [serving.clone(), vec!["health alice", "rm_force alice", "volume_rm alice"]].concat(),
         reloads: false,
         before: boards_read_only,
     });
     cases.push(Case {
         what: "caddy_reload fails",
-        steps: to_the_serving_run()
+        script: to_the_serving_run()
             + &line("run_serving", Some("alice"), 0, "", "")
             + &line("health", Some("alice"), 0, PAIRED, "")
             + &line("caddy_reload", None, 1, "", "Error: loading new config\n")
@@ -455,7 +459,7 @@ fn cases() -> Vec<Case> {
 #[test]
 fn each_failed_step_removes_what_was_made_and_nothing_else() {
     for case in cases() {
-        let rig = rig(&(inspects("alice") + &inspects("alice") + &case.steps), Some(Vec::new()));
+        let rig = rig(&(inspects("alice") + &inspects("alice") + &case.script), Some(Vec::new()));
         let code = rig.invite();
         let token = rig.admitted("alice", &code);
         (case.before)(&rig);
@@ -716,27 +720,27 @@ fn the_book_keeps_its_own_rules() {
     assert_eq!(book.blocks(&name("alice"), &invite_code("c1")), None, "nothing in flight");
     for (at, (n, code)) in [("alice", "c1"), ("bob", "c2"), ("carol", "c3"), ("dave", "c4")].into_iter().enumerate() {
         assert_eq!(book.admit(job(n, code)), at + 1, "the posts now waiting");
-        assert_eq!(state(&book, n), Some(State::Queued));
+        assert_eq!(state(&book, n), Some(PostState::Queued));
     }
     assert_eq!(book.blocks(&name("erin"), &invite_code("c5")), Some(Blocked::QueueFull));
     assert_eq!(book.blocks(&name("alice"), &invite_code("c1")), Some(Blocked::QueueFull), "the queue before the code and the name");
     let alice = book.take().expect("a waiting post");
     assert_eq!(alice.name, name("alice"), "the oldest post first");
-    assert_eq!(state(&book, "alice"), Some(State::Running));
+    assert_eq!(state(&book, "alice"), Some(PostState::Running));
     assert_eq!(book.blocks(&name("erin"), &invite_code("c5")), None, "three waiting");
     assert_eq!(book.blocks(&name("alice"), &invite_code("c1")), Some(Blocked::CodeHeld), "the code before the name");
     assert_eq!(book.blocks(&name("alice"), &invite_code("c5")), Some(Blocked::NameHeld));
-    book.went_live(&alice.token);
-    assert_eq!(state(&book, "alice"), Some(State::Live));
+    book.mark_live(&alice.token);
+    assert_eq!(state(&book, "alice"), Some(PostState::Live));
     assert!(book.map.live().contains(&name("alice")));
     assert_eq!(book.blocks(&name("alice"), &invite_code("c5")), None, "a live name's truth is its snippet's");
     assert_eq!(book.blocks(&name("erin"), &invite_code("c1")), Some(Blocked::CodeHeld), "held until its spend is written");
     book.release(&alice.code);
     assert_eq!(book.blocks(&name("erin"), &invite_code("c1")), None);
     let bob = book.take().expect("a waiting post");
-    assert_eq!(state(&book, "bob"), Some(State::Running));
-    book.failed(&bob);
-    assert_eq!(state(&book, "bob"), Some(State::Failed));
+    assert_eq!(state(&book, "bob"), Some(PostState::Running));
+    book.mark_failed(&bob);
+    assert_eq!(state(&book, "bob"), Some(PostState::Failed));
     assert_eq!(book.blocks(&name("erin"), &invite_code("c2")), None, "a failed post's code let go of at once");
     assert_eq!(book.blocks(&name("bob"), &invite_code("c5")), None, "and its name");
     assert!(!book.map.live().contains(&name("bob")));
@@ -748,7 +752,7 @@ fn the_book_keeps_its_own_rules() {
 /// D-5 and D-6 refuse a record before any — the log naming the fault's
 /// token, never the record.
 #[test]
-fn the_posts_refusals_before_any_docker_call() {
+fn the_posts_refusals_come_before_any_docker_call() {
     let rig = rig(&inspects("alice"), Some(Vec::new()));
     let code = rig.invite();
     rig.admitted("alice", &code);
@@ -756,7 +760,7 @@ fn the_posts_refusals_before_any_docker_call() {
     assert_eq!(rig.post("bob", &record(true), "0123456789abcdef0123456789abcdef"), Err(Refusal::Invite), "unknown");
     assert_eq!(rig.post("bob", &record(true), "not a code"), Err(Refusal::Invite), "another form");
     let spent = rig.invite();
-    crate::invites::spend(&rig.state, &spent, &Name::parse(b"carol").expect("a name")).expect("spent");
+    crate::invites::spend(&rig.state_dir, &spent, &Name::parse(b"carol").expect("a name")).expect("spent");
     assert_eq!(rig.post("bob", &record(true), spent.as_str()), Err(Refusal::Invite), "spent");
     let fresh = rig.invite();
     assert_eq!(rig.post("bob", "{\"type\":\"skep-enroll\"}", fresh.as_str()), Err(Refusal::Record));
@@ -833,9 +837,9 @@ fn a_live_boards_code_is_held_until_its_spend_is_written() {
     let alice = rig.admitted("alice", &code);
     // The lock file beside the invite file, `invites.lock`, held as the
     // `invite` verb holds it: an open of its own, locked exclusively.
-    let lock = fs::OpenOptions::new().write(true).open(rig.state.file("invites.lock")).expect("the invite file's lock");
+    let lock = fs::OpenOptions::new().write(true).open(rig.state_dir.file("invites.lock")).expect("the invite file's lock");
     lock.lock().expect("held");
-    rig.workers(1);
+    rig.spawn_workers(1);
     until("alice live", || rig.live(&alice).then_some(()));
     thread::sleep(Duration::from_millis(300));
     assert!(rig.service.book().codes.contains(&code), "the code let go of before its spend was written");
@@ -876,7 +880,7 @@ fn a_sign_up_is_kept_and_its_address_is_in_no_log_line() {
     let rig = rig("", None);
     assert_eq!(rig.service.sign_up(b"someone@example.org"), Ok(()));
     assert_eq!(rig.service.sign_up(b"no address"), Err(SignUpRefusal::NotAnAddress));
-    let kept = fs::read_to_string(rig.state.file(crate::signups::SIGNUPS)).expect("the file");
+    let kept = fs::read_to_string(rig.state_dir.file(crate::signups::SIGNUPS)).expect("the file");
     assert_eq!(kept.lines().count(), 1);
     assert!(kept.starts_with("someone@example.org "));
     let log = rig.log().join("\n");
@@ -890,9 +894,9 @@ fn a_sign_up_is_kept_and_its_address_is_in_no_log_line() {
 fn a_sign_up_past_the_files_cap_is_refused_and_logged() {
     let rig = rig("", None);
     let full = format!("{}\n", "#".repeat(256 * 1024 - 1));
-    fs::write(rig.state.file(crate::signups::SIGNUPS), &full).expect("a file at its cap");
+    fs::write(rig.state_dir.file(crate::signups::SIGNUPS), &full).expect("a file at its cap");
     assert_eq!(rig.service.sign_up(b"someone@example.org"), Err(SignUpRefusal::Failed));
-    assert_eq!(fs::read_to_string(rig.state.file(crate::signups::SIGNUPS)).expect("the file"), full);
+    assert_eq!(fs::read_to_string(rig.state_dir.file(crate::signups::SIGNUPS)).expect("the file"), full);
     assert_eq!(rig.log(), ["a sign-up refused: the sign-up file is at its 262144-byte cap; the owner trims the file"]);
 }
 
@@ -950,8 +954,8 @@ fn the_service_starts_with_the_snippets_live_names() {
     let rig = rig("", None);
     fs::write(rig.snippet("alice"), b"").expect("a snippet");
     let config = Config { boards_dir: rig.boards.clone(), suffix: "skep.host".into() };
-    let again = Service::new(config, rig.state.clone(), Box::new(Arc::clone(&rig.fake)), None, Arc::new(|_: &str| {}), Arc::new(|_| {})).expect("the service");
-    assert_eq!(again.live(), 1);
+    let again = Service::new(config, rig.state_dir.clone(), Box::new(Arc::clone(&rig.fake)), None, Arc::new(|_: &str| {}), Arc::new(|_| {})).expect("the service");
+    assert_eq!(again.live_count(), 1);
 }
 
 /// A `docker` THAT CANNOT BE RUN AT ALL: the sweep's listing cannot be made,
@@ -970,20 +974,20 @@ fn a_docker_that_cannot_run_skips_the_sweep_and_refuses_a_post_d8() {
     let dir = Scratch::new();
     let boards = dir.path().join("boards");
     fs::create_dir(&boards).expect("the boards directory");
-    let state = StateDir::open(&dir.path().join("state")).expect("the state directory");
+    let state_dir = StateDir::open(&dir.path().join("state")).expect("the state directory");
     let lines = Arc::new(Mutex::new(Vec::new()));
     let into = Arc::clone(&lines);
     let log: Log = Arc::new(move |line: &str| into.lock().unwrap().push(line.to_owned()));
     let config = Config { boards_dir: boards, suffix: "skep.host".into() };
-    let service = Service::new(config, state.clone(), Box::new(NoDocker), None, log, Arc::new(|_| {})).expect("the service");
+    let service = Service::new(config, state_dir.clone(), Box::new(NoDocker), None, log, Arc::new(|_| {})).expect("the service");
     assert_eq!(service.sweep(), 0);
-    let code = mint(&state, &MailAddress::parse("person@example.com").expect("an address"), None).expect("minted");
+    let code = mint(&state_dir, &MailAddress::parse("person@example.com").expect("an address"), None).expect("minted");
     let alice = record(true);
     assert_eq!(service.admit(&Post { name: b"alice", record: alice.as_bytes(), invite: code.as_str().as_bytes() }), Err(Refusal::Failed));
     let book = service.book();
     assert!(book.queue.is_empty() && book.codes.is_empty() && !book.map.holds(&Name::parse(b"alice").expect("a name")));
     drop(book);
-    assert!(lookup(&state, &code).expect("read").expect("held").issued());
+    assert!(lookup(&state_dir, &code).expect("read").expect("held").issued());
     let log = lines.lock().unwrap().clone();
     assert!(log.iter().any(|l| l.starts_with("sweep: volumes: docker could not run: ") && l.ends_with("; the sweep is skipped")), "{log:?}");
     assert!(log.iter().any(|l| l.starts_with("alice: a post could not be judged: the look at the name: ")), "{log:?}");
@@ -1001,7 +1005,7 @@ fn two_workers_make_two_names_at_once_and_one_worker_does_not() {
         let gate = Gate::new();
         let pause = Arc::clone(&gate);
         let rig = rig_with(&(flow_of("alice", true) + &flow_of("bob", false) + &reloads(2)), None, Arc::new(move |_| pause.pause()));
-        rig.workers(workers);
+        rig.spawn_workers(workers);
         let alice = rig.admitted("alice", &rig.invite());
         gate.entered(1);
         let bob = rig.admitted("bob", &rig.invite());
@@ -1035,7 +1039,7 @@ fn a_post_answers_at_once_while_a_worker_is_paused_inside_a_step() {
     let gate = Gate::new();
     let pause = Arc::clone(&gate);
     let rig = rig_with(&(flow_of("alice", true) + &flow_of("bob", false) + &reloads(2)), None, Arc::new(move |_| pause.pause()));
-    rig.workers(1);
+    rig.spawn_workers(1);
     let alice = rig.admitted("alice", &rig.invite());
     gate.entered(1);
     let code = rig.invite();
@@ -1070,7 +1074,7 @@ fn two_workers_never_both_take_a_job_for_one_name() {
     let pause = Arc::clone(&gate);
     let script = flow_of("alice", true) + &flow_of("bob", false) + &flow_of("carol", false) + &flow_of("dave", false) + &reloads(4);
     let rig = rig_with(&script, None, Arc::new(move |_| pause.pause()));
-    rig.workers(2);
+    rig.spawn_workers(2);
     let alice = rig.admitted("alice", &rig.invite());
     gate.entered(1);
     let again = rig.invite();
@@ -1179,7 +1183,7 @@ fn the_snippet_write_and_the_reload_are_serial_across_names() {
             pause.pause();
         }
     });
-    rig.workers(2);
+    rig.spawn_workers(2);
     let alice = rig.admitted("alice", &rig.invite());
     gate.entered(1);
     assert!(rig.logged("alice: snippet: written") && !rig.logged("alice: caddy_reload: exit 0"), "alice is inside its reload: {:?}", rig.log());
@@ -1193,31 +1197,31 @@ fn the_snippet_write_and_the_reload_are_serial_across_names() {
     assert!(rig.snippet("alice").exists() && rig.snippet("bob").exists());
     assert_eq!(rig.fake.said().iter().filter(|c| *c == "caddy_reload").count(), 2);
     let log = rig.log();
-    let pair: Vec<&str> = log.iter().map(String::as_str).filter(|l| l.ends_with(": snippet: written") || l.contains(": caddy_reload: exit")).collect();
-    assert_eq!(pair.len(), 4, "{pair:?}");
-    for write_and_reload in pair.chunks(2) {
+    let route_changes: Vec<&str> = log.iter().map(String::as_str).filter(|l| l.ends_with(": snippet: written") || l.contains(": caddy_reload: exit")).collect();
+    assert_eq!(route_changes.len(), 4, "{route_changes:?}");
+    for write_and_reload in route_changes.chunks(2) {
         let name = write_and_reload[0].split(':').next().expect("a name");
-        assert!(write_and_reload[0].ends_with(": snippet: written"), "{pair:?}");
-        assert_eq!(write_and_reload[1], format!("{name}: caddy_reload: exit 0"), "a reload between {name}'s snippet and its own reload: {pair:?}");
+        assert!(write_and_reload[0].ends_with(": snippet: written"), "{route_changes:?}");
+        assert_eq!(write_and_reload[1], format!("{name}: caddy_reload: exit 0"), "a reload between {name}'s snippet and its own reload: {route_changes:?}");
     }
 }
 
-/// T20: THE SWEEP — `volumes` answering `alice`, `bob` and `Carol_X` with
-/// `alice.caddy` standing and no `bob.caddy`: `rm_force bob` then
-/// `volume_rm bob`, nothing for `alice`, nothing for `Carol_X` (logged as
-/// under no name of the grammar), the count 1, the log naming the name and
-/// each step; a `volumes` exit 1 — the sweep skipped, the count 0, the
-/// service standing and taking a post; a `volume_rm` failure — logged, the
-/// name left, not counted; an `rm_force` failure (no container) passed
-/// over, the volume still removed.
+/// T20: THE SWEEP — `labelled_volumes` answering `alice`, `bob` and
+/// `Carol_X` with `alice.caddy` standing and no `bob.caddy`:
+/// `rm_force bob` then `volume_rm bob`, nothing for `alice`, nothing for
+/// `Carol_X` (logged as under no name of the grammar), the count 1, the log
+/// naming the name and each step; a `labelled_volumes` exit 1 — the sweep
+/// skipped, the count 0, the service standing and taking a post; a
+/// `volume_rm` failure — logged, the name left, not counted; an `rm_force`
+/// failure (no container) passed over, the volume still removed.
 #[test]
 fn the_sweep_removes_a_half_made_board_and_leaves_the_rest() {
-    let script = line("volumes", None, 0, "alice\nbob\nCarol_X\n", "") + &line("rm_force", Some("bob"), 0, "", "") + &line("volume_rm", Some("bob"), 0, "", "");
+    let script = line("labelled_volumes", None, 0, "alice\nbob\nCarol_X\n", "") + &line("rm_force", Some("bob"), 0, "", "") + &line("volume_rm", Some("bob"), 0, "", "");
     let rig = rig(&script, None);
     fs::write(rig.snippet("alice"), b"").expect("alice's snippet");
     assert_eq!(rig.service.sweep(), 1);
     rig.fake.assert_done();
-    assert_eq!(rig.fake.said(), said(&["volumes", "rm_force bob", "volume_rm bob"]));
+    assert_eq!(rig.fake.said(), said(&["labelled_volumes", "rm_force bob", "volume_rm bob"]));
     for line in [
         "bob: half-made at start (a volume, no snippet) — removing",
         "bob: sweep: rm_force: exit 0",
@@ -1232,7 +1236,7 @@ fn the_sweep_removes_a_half_made_board_and_leaves_the_rest() {
 
     // The listing fails: the sweep skipped, and the service still takes a
     // post.
-    let unlisted = rig_with(&(line("volumes", None, 1, "", "Cannot connect to the Docker daemon\n") + &inspects("erin")), None, Arc::new(|_| {}));
+    let unlisted = rig_with(&(line("labelled_volumes", None, 1, "", "Cannot connect to the Docker daemon\n") + &inspects("erin")), None, Arc::new(|_| {}));
     assert_eq!(unlisted.service.sweep(), 0);
     assert!(unlisted.logged("sweep: volumes: exit 1; the sweep is skipped") && unlisted.logged("sweep: volumes: Cannot connect to the Docker daemon"), "{:?}", unlisted.log());
     unlisted.admitted("erin", &unlisted.invite());
@@ -1240,7 +1244,7 @@ fn the_sweep_removes_a_half_made_board_and_leaves_the_rest() {
 
     // A `volume_rm` that fails leaves the name, logged; an `rm_force` that
     // fails is passed over.
-    let script = line("volumes", None, 0, "bob\ncarol\n", "")
+    let script = line("labelled_volumes", None, 0, "bob\ncarol\n", "")
         + &line("rm_force", Some("bob"), 1, "", "Error: No such container: bob\n")
         + &line("volume_rm", Some("bob"), 1, "", "Error: volume is in use\n")
         + &line("rm_force", Some("carol"), 1, "", "Error: No such container: carol\n")

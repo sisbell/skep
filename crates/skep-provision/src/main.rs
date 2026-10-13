@@ -129,19 +129,19 @@ use pages::Site;
 use sender::{Log, Outbox, Sender, Sleep};
 use statedir::StateDir;
 
-/// THE PAUSE after an `accept` that fails: EMFILE and its kin last until a
-/// descriptor is freed, and a connection thread that asked again at once
-/// would spin a core for as long; ten milliseconds — `skepd`'s
-/// `ACCEPT_RETRY_PAUSE`, argued there — costs nothing at the wall and holds
-/// a queued connection little once the wall clears.
-const ACCEPT_PAUSE: Duration = Duration::from_millis(10);
+/// THE PAUSE after an `accept` that fails, before it is asked again —
+/// `skepd`'s pause of this name, for its reason: EMFILE and its kin last
+/// until a descriptor is freed, and a connection thread that asked again
+/// at once would spin a core for as long; ten milliseconds costs nothing
+/// at the wall and holds a queued connection little once the wall clears.
+const ACCEPT_RETRY_PAUSE: Duration = Duration::from_millis(10);
 
 fn main() {
     let code = match args::parse(std::env::args_os().skip(1)) {
         Ok(Command::Version) => say_out(&args::version_line()).map_or(1, |()| 0),
         Ok(Command::Help) => say_out(&args::usage()).map_or(1, |()| 0),
-        Ok(Command::Serve(cfg)) => serve(*cfg),
-        Ok(Command::Invite(cfg)) => invite(cfg),
+        Ok(Command::Serve(flags)) => serve(*flags),
+        Ok(Command::Invite(flags)) => invite(flags),
         Err(refused) => {
             say_err(&format!("skep-provision: {refused}\n\n{}", args::usage()));
             2
@@ -174,16 +174,16 @@ fn log() -> Log {
 /// the mail chosen, the sender started, THE SWEEP of what a stop left
 /// half-made, then the address bound, the serving line, and the two pools —
 /// the workers and the connection threads — until the process ends.
-fn serve(cfg: args::ServeArgs) -> i32 {
+fn serve(flags: args::ServeArgs) -> i32 {
     let log = log();
-    let state = match StateDir::open(&cfg.state_dir) {
-        Ok(state) => state,
+    let state_dir = match StateDir::open(&flags.state_dir) {
+        Ok(state_dir) => state_dir,
         Err(refused) => {
             say_err(&format!("skep-provision: {refused}"));
             return 1;
         }
     };
-    let docker: Box<dyn Docker> = match runner(&cfg) {
+    let docker: Box<dyn Docker> = match runner_of(&flags) {
         Ok(docker) => docker,
         Err(e) => {
             say_err(&format!("skep-provision: the docker fake: {e}"));
@@ -191,9 +191,9 @@ fn serve(cfg: args::ServeArgs) -> i32 {
         }
     };
     let sleep: Sleep = Arc::new(thread::sleep);
-    let mail = match &cfg.mail {
+    let outbox = match &flags.mail {
         None => None,
-        Some(m) => match Outbox::spawn(sender_of(&m.mailer), m.from.clone(), cfg.reply_to.clone(), Arc::clone(&log), Arc::clone(&sleep)) {
+        Some(m) => match Outbox::spawn(sender_of(&m.mailer), m.from.clone(), flags.reply_to.clone(), Arc::clone(&log), Arc::clone(&sleep)) {
             Ok(outbox) => Some(outbox),
             Err(e) => {
                 say_err(&format!("skep-provision: the sender's thread could not start: {e}"));
@@ -201,51 +201,51 @@ fn serve(cfg: args::ServeArgs) -> i32 {
             }
         },
     };
-    let mailing = if mail.is_some() { "mail on" } else { "mail OFF (no --mailer and --from): no follow-up mail is sent" };
-    let config = Config { boards_dir: cfg.boards_dir.clone(), suffix: cfg.settings.suffix.clone() };
-    let service = match Service::new(config, state, docker, mail, Arc::clone(&log), sleep) {
+    let mailing = if outbox.is_some() { "mail on" } else { "mail OFF (no --mailer and --from): no follow-up mail is sent" };
+    let config = Config { boards_dir: flags.boards_dir.clone(), suffix: flags.settings.suffix.clone() };
+    let service = match Service::new(config, state_dir, docker, outbox, Arc::clone(&log), sleep) {
         Ok(service) => service,
         Err(e) => {
-            say_err(&format!("skep-provision: the boards directory {} could not be read: {e}", cfg.boards_dir.display()));
+            say_err(&format!("skep-provision: the boards directory {} could not be read: {e}", flags.boards_dir.display()));
             return 1;
         }
     };
     // THE SWEEP, before the address is bound: no post is judged while a
     // half-made board still stands under its name.
     let swept = service.sweep();
-    let listener = match TcpListener::bind(cfg.listen) {
+    let listener = match TcpListener::bind(flags.listen) {
         Ok(listener) => listener,
         Err(e) => {
-            say_err(&format!("skep-provision: bind {}: {e}", cfg.listen));
+            say_err(&format!("skep-provision: bind {}: {e}", flags.listen));
             return 1;
         }
     };
     // THE BOUND ADDRESS, read back off the listener: the port under
     // `--listen <addr>:0`, never what was asked for.
-    let bound = listener.local_addr().map_or_else(|_| cfg.listen.to_string(), |a| a.to_string());
+    let bound = listener.local_addr().map_or_else(|_| flags.listen.to_string(), |a| a.to_string());
     // The serving line: a stdout that cannot take it costs the line, never
     // the service — the address is bound and the run serves on.
     let _ = say_out(&format!(
         "skep-provision: serving http://{bound}/ state-dir {} boards-dir {} suffix {} live {} swept {swept} workers {} connections {} {mailing}",
-        cfg.state_dir.display(),
-        cfg.boards_dir.display(),
-        cfg.settings.suffix,
-        service.live(),
-        cfg.workers,
-        cfg.connections
+        flags.state_dir.display(),
+        flags.boards_dir.display(),
+        flags.settings.suffix,
+        service.live_count(),
+        flags.workers,
+        flags.connections
     ));
-    let site = Site { suffix: cfg.settings.suffix.clone(), owner_address: cfg.reply_to.as_str().to_owned() };
+    let site = Site { suffix: flags.settings.suffix.clone(), owner_address: flags.reply_to.as_str().to_owned() };
     // THE SERVE: the pool of workers and the pool of connection threads,
     // each of the latter taking the next connection off the listener — one
     // past them waits in the listener's queue — both pools made here, and
     // no thread made per connection. The scope never closes: SIGTERM ends
     // the process.
     thread::scope(|s| {
-        for _ in 0..cfg.workers.get() {
-            made(thread::Builder::new().name("worker".into()).spawn_scoped(s, || service.work()), "worker");
+        for _ in 0..flags.workers.get() {
+            made_or_exit(thread::Builder::new().name("worker".into()).spawn_scoped(s, || service.work()), "worker");
         }
-        for _ in 0..cfg.connections.get() {
-            made(thread::Builder::new().name("connection".into()).spawn_scoped(s, || accepting(&listener, &site, &service)), "connection");
+        for _ in 0..flags.connections.get() {
+            made_or_exit(thread::Builder::new().name("connection".into()).spawn_scoped(s, || accepting(&listener, &site, &service)), "connection");
         }
     });
     0
@@ -254,7 +254,7 @@ fn serve(cfg: args::ServeArgs) -> i32 {
 /// A THREAD OF THE SERVE's POOLS, made at start: one the OS will not give
 /// ends the start, exit 1 for systemd to restart — never a panic in the
 /// scope, which would wait out the workers already made, and they never end.
-fn made<T>(spawned: io::Result<T>, which: &str) {
+fn made_or_exit<T>(spawned: io::Result<T>, which: &str) {
     if let Err(e) = spawned {
         say_err(&format!("skep-provision: a {which} thread could not start: {e}"));
         exit(1);
@@ -263,24 +263,24 @@ fn made<T>(spawned: io::Result<T>, which: &str) {
 
 /// ONE CONNECTION THREAD, for the run's life: the next connection off the
 /// listener served, then the next; an `accept` that fails waits
-/// [`ACCEPT_PAUSE`] before it asks again, never a spin.
+/// [`ACCEPT_RETRY_PAUSE`] before it asks again, never a spin.
 fn accepting(listener: &TcpListener, site: &Site, service: &Service) -> ! {
     loop {
         match listener.accept() {
             Ok((stream, _)) => pages::connection(stream, site, service),
-            Err(_) => thread::sleep(ACCEPT_PAUSE),
+            Err(_) => thread::sleep(ACCEPT_RETRY_PAUSE),
         }
     }
 }
 
-/// The runner: the host's `docker`, or under `test-hooks` the scripted fake
-/// `--docker-fake` names.
-fn runner(cfg: &args::ServeArgs) -> io::Result<Box<dyn Docker>> {
+/// The runner the flags name: the host's `docker`, or under `test-hooks`
+/// the scripted fake `--docker-fake` names.
+fn runner_of(flags: &args::ServeArgs) -> io::Result<Box<dyn Docker>> {
     #[cfg(feature = "test-hooks")]
-    if let Some(script) = &cfg.docker_fake {
+    if let Some(script) = &flags.docker_fake {
         return Ok(Box::new(docker::fake::FakeDocker::open(script)?));
     }
-    Ok(Box::new(HostDocker::new(cfg.settings.clone())))
+    Ok(Box::new(HostDocker::new(flags.settings.clone())))
 }
 
 /// The sender: the host's relay client, or under `test-hooks` the fake
@@ -289,22 +289,22 @@ fn sender_of(mailer: &Mailer) -> Box<dyn Sender> {
     match mailer {
         Mailer::Program(program) => Box::new(sender::RelaySender::new(program.clone())),
         #[cfg(feature = "test-hooks")]
-        Mailer::Fake(log) => Box::new(sender::fake::FakeSender::new(log.clone(), Vec::new())),
+        Mailer::Fake(mail_log) => Box::new(sender::fake::FakeSender::new(mail_log.clone(), Vec::new())),
     }
 }
 
 /// `invite`: the state directory's door, one invite minted, its invite
 /// link the one DATA line.
-fn invite(cfg: args::InviteArgs) -> i32 {
-    let state = match StateDir::open(&cfg.state_dir) {
-        Ok(state) => state,
+fn invite(flags: args::InviteArgs) -> i32 {
+    let state_dir = match StateDir::open(&flags.state_dir) {
+        Ok(state_dir) => state_dir,
         Err(refused) => {
             say_err(&format!("skep-provision: {refused}"));
             return 1;
         }
     };
-    match invites::mint(&state, &cfg.address, cfg.code) {
-        Ok(code) => match say_out(&pages::invite_link(&cfg.suffix, &code)) {
+    match invites::mint(&state_dir, &flags.address, flags.code) {
+        Ok(code) => match say_out(&pages::invite_link(&flags.suffix, &code)) {
             Ok(()) => 0,
             Err(_) => {
                 say_err("skep-provision: the invite is minted, and its invite link could not be written on stdout");

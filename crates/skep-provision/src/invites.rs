@@ -145,10 +145,11 @@ impl fmt::Debug for InviteCode {
     }
 }
 
-/// Every invite the file holds, in its order; a line of no shape the file
-/// writes is passed over here, and kept as it stands by every rewrite.
-fn read_all(dir: &StateDir) -> io::Result<Vec<Invite>> {
-    Ok(read_lines(dir)?
+/// Every invite the file holds, in its order — its invites alone: a line
+/// of no shape the file writes is passed over here, and kept as it stands
+/// by every rewrite.
+fn read_invites(state_dir: &StateDir) -> io::Result<Vec<Invite>> {
+    Ok(read_lines(state_dir)?
         .into_iter()
         .filter_map(|line| match line {
             Line::Invite(invite) => Some(invite),
@@ -165,13 +166,13 @@ enum Line {
 }
 
 /// The file's lines, read.
-fn read_lines(dir: &StateDir) -> io::Result<Vec<Line>> {
-    Ok(read_or_empty(&dir.file(INVITES))?.lines().map(|text| Invite::parse(text).map_or_else(|| Line::Other(text.to_owned()), Line::Invite)).collect())
+fn read_lines(state_dir: &StateDir) -> io::Result<Vec<Line>> {
+    Ok(read_or_empty(&state_dir.file(INVITES))?.lines().map(|text| Invite::parse(text).map_or_else(|| Line::Other(text.to_owned()), Line::Invite)).collect())
 }
 
 /// THE LOOKUP: the invite `code` names, compared whole, as the file stands.
-pub fn lookup(dir: &StateDir, code: &InviteCode) -> io::Result<Option<Invite>> {
-    Ok(read_all(dir)?.into_iter().find(|i| i.code == code.as_str()))
+pub fn lookup(state_dir: &StateDir, code: &InviteCode) -> io::Result<Option<Invite>> {
+    Ok(read_invites(state_dir)?.into_iter().find(|i| i.code == code.as_str()))
 }
 
 /// Why `invite` mints nothing.
@@ -207,13 +208,13 @@ impl From<io::Error> for MintRefused {
 /// whole; the code answered as its own value, for the one DATA line. Both
 /// values come in their own types — an address by the rule, a code in the
 /// alphabet — so nothing reaches the file that its line cannot carry.
-pub fn mint(dir: &StateDir, address: &MailAddress, code: Option<InviteCode>) -> Result<InviteCode, MintRefused> {
+pub fn mint(state_dir: &StateDir, address: &MailAddress, code: Option<InviteCode>) -> Result<InviteCode, MintRefused> {
     let code = match code {
         Some(code) => code,
         None => InviteCode::parse(&unguessable()?).expect("an unguessable value, 32 lowercase hex digits, is in the alphabet"),
     };
     update(
-        dir,
+        state_dir,
         |lines| {
             if invites(lines).any(|i| i.code == code.as_str()) {
                 return Err(MintRefused::Duplicate);
@@ -238,14 +239,14 @@ fn invites(lines: &mut [Line]) -> impl Iterator<Item = &mut Invite> {
 /// board's route stands, and never otherwise. `false` where the file holds
 /// no such code issued (a hand edit since the post); the board stands
 /// either way.
-pub fn spend(dir: &StateDir, code: &InviteCode, name: &Name) -> io::Result<bool> {
-    spend_with(dir, code, name, &|| Ok(()))
+pub fn spend(state_dir: &StateDir, code: &InviteCode, name: &Name) -> io::Result<bool> {
+    spend_with(state_dir, code, name, &|| Ok(()))
 }
 
 /// [`spend`] with the writer's seam between the temp file and the rename.
-fn spend_with(dir: &StateDir, code: &InviteCode, name: &Name, between: &dyn Fn() -> io::Result<()>) -> io::Result<bool> {
+fn spend_with(state_dir: &StateDir, code: &InviteCode, name: &Name, between: &dyn Fn() -> io::Result<()>) -> io::Result<bool> {
     update(
-        dir,
+        state_dir,
         |lines| {
             let Some(invite) = invites(lines).find(|i| i.code == code.as_str() && i.issued()) else {
                 return Ok(false);
@@ -262,10 +263,10 @@ fn spend_with(dir: &StateDir, code: &InviteCode, name: &Name, between: &dyn Fn()
 /// line written back through the state files' writer, a line of another
 /// shape as it stood. The file's own failure reaches the caller's `E`
 /// through its `From<io::Error>`.
-fn update<T, E: From<io::Error>>(dir: &StateDir, change: impl FnOnce(&mut Vec<Line>) -> Result<T, E>, between: &dyn Fn() -> io::Result<()>) -> Result<T, E> {
-    let lock = OpenOptions::new().create(true).truncate(false).write(true).open(dir.file(INVITES_LOCK))?;
+fn update<T, E: From<io::Error>>(state_dir: &StateDir, change: impl FnOnce(&mut Vec<Line>) -> Result<T, E>, between: &dyn Fn() -> io::Result<()>) -> Result<T, E> {
+    let lock = OpenOptions::new().create(true).truncate(false).write(true).open(state_dir.file(INVITES_LOCK))?;
     lock.lock()?;
-    let mut lines = read_lines(dir)?;
+    let mut lines = read_lines(state_dir)?;
     let answer = change(&mut lines)?;
     let text: String = lines
         .iter()
@@ -274,7 +275,7 @@ fn update<T, E: From<io::Error>>(dir: &StateDir, change: impl FnOnce(&mut Vec<Li
             Line::Other(text) => format!("{text}\n"),
         })
         .collect();
-    write_whole_with(&dir.file(INVITES), text.as_bytes(), between)?;
+    write_whole_with(&state_dir.file(INVITES), text.as_bytes(), between)?;
     // The lock is the open file's: closing it releases it.
     drop(lock);
     Ok(answer)

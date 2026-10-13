@@ -39,7 +39,7 @@ use skep_identity::MAX_RECORD_BYTES;
 
 use crate::invites::InviteCode;
 use crate::strings::{
-    fill, Words, ADDRESS_LABEL, BAD_FORM, BEING_MADE, CLAIM_BUTTON, FAILED, INVITE_LABEL, INVITE_REFUSED, LEAD, NAME_HELP, NAME_LABEL, NAME_REFUSED, NOT_FOUND, PREVIEW_REFUSED, RECORD_HELP,
+    fill, Words, ADDRESS_LABEL, BAD_FORM, BEING_MADE, CLAIM_BUTTON, CLAIM_LEAD, FAILED, INVITE_LABEL, INVITE_REFUSED, NAME_HELP, NAME_LABEL, NAME_REFUSED, NOT_FOUND, PREVIEW_REFUSED, RECORD_HELP,
     RECORD_LABEL, RECORD_REFUSED, SIGNUP_BUTTON, SIGNUP_FAILED, SIGNUP_KEPT, SIGNUP_LEAD, SIGNUP_REFUSED, STATUS_URL, THANKS, TOO_LARGE,
 };
 use crate::urlform;
@@ -390,7 +390,7 @@ fn signup_page(site: &Site, refusal: Option<Words>, address: &str) -> String {
 /// post sends it as it was sent.
 fn claim_page(site: &Site, refusal: Option<Words>, post: &Post<'_>) -> String {
     let slots = [("suffix", site.suffix.as_str()), ("owner_address", site.owner_address.as_str())];
-    let mut body = paragraph(&fill(LEAD, &slots));
+    let mut body = paragraph(&fill(CLAIM_LEAD, &slots));
     if let Some(words) = refusal {
         body.push_str(&refused_paragraph(&fill(words, &slots)));
     }
@@ -419,7 +419,7 @@ fn claim_page(site: &Site, refusal: Option<Words>, post: &Post<'_>) -> String {
 /// D-7's PAGE: D-7 and the status URL, refreshing to it.
 fn being_made(site: &Site, token: &str) -> String {
     let url = status_url(&site.suffix, token);
-    let body = paragraph(&fill(BEING_MADE, &[])) + &paragraph(&fill(STATUS_URL, &[("status", &url)]));
+    let body = paragraph(&fill(BEING_MADE, &[])) + &paragraph(&fill(STATUS_URL, &[("status_url", &url)]));
     page(site, Some(&format!("/status/{token}")), &body)
 }
 
@@ -455,15 +455,15 @@ fn row(words: &str) -> String {
 }
 
 /// AN ATTRIBUTE's VALUE: escaped as [`escape`] escapes, the quotes too.
-fn attr(words: &str) -> String {
-    escape(words, true)
+fn attr(text: &str) -> String {
+    escape(text, true)
 }
 
 /// THE ONE ESCAPER: `&`, `<` and `>`, and with `quotes` the two quotes too;
 /// nothing else changes, so a person's field reads back as sent.
-fn escape(words: &str, quotes: bool) -> String {
-    let mut out = String::with_capacity(words.len());
-    for c in words.chars() {
+fn escape(text: &str, quotes: bool) -> String {
+    let mut out = String::with_capacity(text.len());
+    for c in text.chars() {
         match c {
             '&' => out.push_str("&amp;"),
             '<' => out.push_str("&lt;"),

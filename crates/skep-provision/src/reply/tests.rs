@@ -35,7 +35,7 @@ fn binary_act(prefix: &str) -> String {
 /// T11: THE OPERATOR SENTENCE AND THE PUBLIC-VENUE STATEMENT ALWAYS — the
 /// latter verbatim — and THE ANCHORLESS SENTENCE IFF `anchorless`.
 #[test]
-fn the_ruled_strings_by_condition() {
+fn each_ruled_string_shows_by_its_condition() {
     for anchorless in [false, true] {
         let reply = text(ORIGIN, anchorless, STATUS);
         assert!(reply.contains(OPERATOR.text), "{anchorless}");
@@ -50,7 +50,7 @@ fn the_ruled_strings_by_condition() {
 /// party reaching the loopback, writing with no key at all, reading every
 /// draft — appear under neither input.
 #[test]
-fn the_local_trust_clause_never() {
+fn the_local_trust_clause_never_shows() {
     for anchorless in [false, true] {
         let reply = text(ORIGIN, anchorless, STATUS).to_lowercase();
         for words in ["local trust", "local_trust", "loopback", "no key at all", "every draft", "with local trust on"] {
@@ -62,7 +62,7 @@ fn the_local_trust_clause_never() {
 /// T11: THE PUBLIC ORIGIN EVERYWHERE — the facts and both acts — and the
 /// DIALED `127.0.0.1:8642` NOWHERE, the binary's `<origin>` filled.
 #[test]
-fn the_public_origin_everywhere_and_the_dialed_one_nowhere() {
+fn the_public_origin_shows_everywhere_and_the_dialed_one_nowhere() {
     let reply = text(ORIGIN, true, STATUS);
     assert_eq!(reply.matches(ORIGIN).count(), 3, "the origin fact and the two acts");
     assert!(!reply.contains("127.0.0.1"));
@@ -92,7 +92,7 @@ fn the_two_acts_are_the_binarys_with_the_public_origin() {
 /// where it stands, the public-venue statement, the three facts as the
 /// command spells them, the two acts, and the status URL LAST.
 #[test]
-fn the_reply_in_its_order_with_the_status_url_last() {
+fn the_reply_keeps_its_order_with_the_status_url_last() {
     let reply = text(ORIGIN, true, STATUS);
     let (first, second) = (binary_act("first act: "), binary_act("second act: "));
     let blocks: Vec<&str> = reply.trim_end().split("\n\n").collect();

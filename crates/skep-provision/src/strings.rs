@@ -7,7 +7,7 @@
 //! and the copy inventory; `RULED`, ruled words carried verbatim; and
 //! `RULED-SUBSTANCE / DRAFT-WORDING`, a ruled sentence the notes give as a
 //! bullet, put in this crate's words. A `{slot}` is filled where the row is
-//! shown ([`fill`]): `{suffix}`, `{owner_address}`, `{status}`,
+//! shown ([`fill`]): `{suffix}`, `{owner_address}`, `{status_url}`,
 //! `{origin}`, `{principal}`, `{account}`.
 //!
 //! The pages (`pages`) show the sign-up page's rows, the claim form's, the
@@ -44,7 +44,7 @@ pub const THANKS: Words = Words { id: "DRAFT", text: "Thank you: your address is
 // The claim form.
 
 /// The claim form's lead.
-pub const LEAD: Words = Words { id: "D-1", text: "A board of your own at a name under {suffix}. Your keys stay on your device: this page makes none." };
+pub const CLAIM_LEAD: Words = Words { id: "D-1", text: "A board of your own at a name under {suffix}. Your keys stay on your device: this page makes none." };
 /// The name field's label.
 pub const NAME_LABEL: Words = Words { id: "D-2", text: "Your board's name" };
 /// The name field's help.
@@ -78,7 +78,7 @@ pub const INVITE_REFUSED: Words = Words { id: "DRAFT", text: "That invite code i
 /// While the post waits or its steps run.
 pub const BEING_MADE: Words = Words { id: "D-7", text: "Your board is being made. Keep this page open: it shows your board when it is live." };
 /// The status URL, shown with D-7.
-pub const STATUS_URL: Words = Words { id: "DRAFT", text: "This page's own address, to come back to: {status}" };
+pub const STATUS_URL: Words = Words { id: "DRAFT", text: "This page's own address, to come back to: {status_url}" };
 /// The post failed, or the queue was full.
 pub const FAILED: Words = Words { id: "D-8", text: "Your board could not be made. Nothing stands under your name; try again later, or write to {owner_address}." };
 
@@ -131,7 +131,7 @@ pub const SECOND_ACT: Words = Words {
     text: "second act: in your first signed session the setup act runs — `skep claim --board {origin} --dir <store>` from that device performs it: creating your account also creates a space for your agents beneath it, and its home",
 };
 /// The status URL, last in the reply.
-pub const REPLY_STATUS: Words = Words { id: "DRAFT", text: "This reply stays at {status}" };
+pub const REPLY_STATUS_URL: Words = Words { id: "DRAFT", text: "This reply stays at {status_url}" };
 /// The follow-up mail's subject.
 pub const MAIL_SUBJECT: Words = Words { id: "DRAFT", text: "Your board is live" };
 

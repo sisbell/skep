@@ -30,7 +30,7 @@ const TABLE: [Words; 33] = [
     SIGNUP_REFUSED,
     SIGNUP_FAILED,
     THANKS,
-    LEAD,
+    CLAIM_LEAD,
     NAME_LABEL,
     NAME_HELP,
     RECORD_LABEL,
@@ -51,7 +51,7 @@ const TABLE: [Words; 33] = [
     FACTS,
     FIRST_ACT,
     SECOND_ACT,
-    REPLY_STATUS,
+    REPLY_STATUS_URL,
     MAIL_SUBJECT,
     NOT_FOUND,
     BAD_FORM,
@@ -69,7 +69,7 @@ fn the_strings_table_names_each_rows_id_and_carries_the_notes_words() {
         let mut rest = row.text;
         while let Some(open) = rest.find('{') {
             let close = rest[open..].find('}').expect("a closed slot") + open;
-            assert!(["suffix", "owner_address", "status", "origin", "principal", "account"].contains(&&rest[open + 1..close]), "{row:?}");
+            assert!(["suffix", "owner_address", "status_url", "origin", "principal", "account"].contains(&&rest[open + 1..close]), "{row:?}");
             rest = &rest[close + 1..];
         }
     }

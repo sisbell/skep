@@ -21,13 +21,13 @@
 //! person; and THE STATUS URL last.
 
 use crate::sidecar::{ACCOUNT, PRINCIPAL};
-use crate::strings::{fill, ANCHORLESS, FACTS, FIRST_ACT, LIVE, OPERATOR, PUBLIC_VENUE, REPLY_STATUS, SECOND_ACT};
+use crate::strings::{fill, ANCHORLESS, FACTS, FIRST_ACT, LIVE, OPERATOR, PUBLIC_VENUE, REPLY_STATUS_URL, SECOND_ACT};
 
 /// THE LIVE TEXT: plain text, its paragraphs separated by a blank line,
 /// for the page (`pages::paragraphs`) and the mail's body alike.
-pub fn text(origin: &str, anchorless: bool, status: &str) -> String {
+pub fn text(origin: &str, anchorless: bool, status_url: &str) -> String {
     let principal = PRINCIPAL.to_string();
-    let slots = [("origin", origin), ("principal", principal.as_str()), ("account", ACCOUNT), ("status", status)];
+    let slots = [("origin", origin), ("principal", principal.as_str()), ("account", ACCOUNT), ("status_url", status_url)];
     let mut blocks = vec![fill(LIVE, &slots), fill(OPERATOR, &slots)];
     if anchorless {
         blocks.push(fill(ANCHORLESS, &slots));
@@ -36,7 +36,7 @@ pub fn text(origin: &str, anchorless: bool, status: &str) -> String {
     blocks.push(fill(FACTS, &slots));
     blocks.push(fill(FIRST_ACT, &slots));
     blocks.push(fill(SECOND_ACT, &slots));
-    blocks.push(fill(REPLY_STATUS, &slots));
+    blocks.push(fill(REPLY_STATUS_URL, &slots));
     let mut text = blocks.join("\n\n");
     text.push('\n');
     text

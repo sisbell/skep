@@ -90,11 +90,11 @@ pub fn reload(docker: &dyn Docker) -> io::Result<Exit> {
     docker.caddy_reload()
 }
 
-/// Every name a snippet stands for: each `<name>.caddy` file in the
-/// directory whose stem [`Name::exact`] reads — what the status map is
-/// rebuilt from at start. A file of another shape is no board's and is
-/// passed over.
-pub fn names(boards_dir: &Path) -> io::Result<Vec<Name>> {
+/// THE ROUTED NAMES: each name whose snippet stands — a `<name>.caddy`
+/// file in the directory whose stem [`Name::exact`] reads — what the
+/// status map is rebuilt from at start. A file of another shape is no
+/// board's and is passed over.
+pub fn routed(boards_dir: &Path) -> io::Result<Vec<Name>> {
     let mut found = Vec::new();
     for entry in fs::read_dir(boards_dir)? {
         let entry = entry?;

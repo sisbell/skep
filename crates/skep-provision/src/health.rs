@@ -48,7 +48,7 @@ pub const HEALTH_WAIT: Wait = Wait { tries: 60, interval: Duration::from_secs(1)
 
 /// Whether a `/health` body answers THE PAIR: `auth.claimant` a string and
 /// `auth.local_trust` the boolean `false`; every other member ignored.
-fn pair(body: &[u8]) -> bool {
+fn paired(body: &[u8]) -> bool {
     let Ok(body) = serde_json::from_slice::<Value>(body) else {
         return false;
     };
@@ -69,7 +69,7 @@ pub enum Waited {
         /// The tries made — the bound.
         tries: u32,
         /// The last try's exit code, `None` for an end by signal.
-        last: Option<i32>,
+        last_code: Option<i32>,
     },
 }
 
@@ -78,18 +78,18 @@ pub enum Waited {
 /// pair, is "not yet". A `docker` that cannot be run at all is the error,
 /// at once — no try can answer.
 pub fn wait(docker: &dyn Docker, name: &Name, wait: Wait, sleep: &dyn Fn(Duration)) -> io::Result<Waited> {
-    let mut last = None;
+    let mut last_code = None;
     for at in 1..=wait.tries {
         let exit = docker.health(name)?;
-        if exit.ok() && pair(&exit.stdout) {
+        if exit.ok() && paired(&exit.stdout) {
             return Ok(Waited::Paired { at });
         }
-        last = exit.code;
+        last_code = exit.code;
         if at < wait.tries {
             sleep(wait.interval);
         }
     }
-    Ok(Waited::GaveUp { tries: wait.tries, last })
+    Ok(Waited::GaveUp { tries: wait.tries, last_code })
 }
 
 #[cfg(test)]

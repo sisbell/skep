@@ -17,24 +17,24 @@ use crate::scratch::Scratch;
 #[test]
 fn a_sign_up_appends_one_line_with_the_address_and_a_date() {
     let dir = Scratch::new();
-    let state = StateDir::open(&dir.path().join("state")).expect("the state directory");
-    let signups = SignUps::new(&state);
+    let state_dir = StateDir::open(&dir.path().join("state")).expect("the state directory");
+    let signups = SignUps::new(&state_dir);
     let before = today();
     signups.append(b"person@example.com").expect("kept");
     let after = today();
-    let text = fs::read_to_string(state.file(SIGNUPS)).expect("the file");
+    let text = fs::read_to_string(state_dir.file(SIGNUPS)).expect("the file");
     let (address, date) = text.trim_end().split_once(' ').expect("two fields");
     assert_eq!(address, "person@example.com");
     assert!(date == before || date == after, "{date}, not {before} or {after}");
     assert_eq!(date.len(), 10);
     signups.append(b"other@example.org").expect("kept");
     signups.append(b"person@example.com").expect("kept again");
-    let lines: Vec<String> = fs::read_to_string(state.file(SIGNUPS)).expect("the file").lines().map(|l| l.split(' ').next().unwrap_or("").to_owned()).collect();
+    let lines: Vec<String> = fs::read_to_string(state_dir.file(SIGNUPS)).expect("the file").lines().map(|l| l.split(' ').next().unwrap_or("").to_owned()).collect();
     assert_eq!(lines, vec!["person@example.com", "other@example.org", "person@example.com"]);
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        assert_eq!(fs::metadata(state.file(SIGNUPS)).expect("its mode").permissions().mode() & 0o777, 0o600);
+        assert_eq!(fs::metadata(state_dir.file(SIGNUPS)).expect("its mode").permissions().mode() & 0o777, 0o600);
     }
 }
 
@@ -44,8 +44,8 @@ fn a_sign_up_appends_one_line_with_the_address_and_a_date() {
 #[test]
 fn sign_ups_made_at_once_are_every_one_kept() {
     let dir = Scratch::new();
-    let state = StateDir::open(&dir.path().join("state")).expect("the state directory");
-    let signups = SignUps::new(&state);
+    let state_dir = StateDir::open(&dir.path().join("state")).expect("the state directory");
+    let signups = SignUps::new(&state_dir);
     std::thread::scope(|s| {
         for t in 0..4 {
             let signups = &signups;
@@ -56,7 +56,7 @@ fn sign_ups_made_at_once_are_every_one_kept() {
             });
         }
     });
-    let mut kept: Vec<String> = fs::read_to_string(state.file(SIGNUPS)).expect("the file").lines().map(|l| l.split(' ').next().unwrap_or("").to_owned()).collect();
+    let mut kept: Vec<String> = fs::read_to_string(state_dir.file(SIGNUPS)).expect("the file").lines().map(|l| l.split(' ').next().unwrap_or("").to_owned()).collect();
     let mut sent: Vec<String> = (0..4).flat_map(|t| (0..8).map(move |n| format!("person{t}.{n}@example.com"))).collect();
     assert_eq!(kept.len(), sent.len(), "a sign-up lost to another's rewrite");
     kept.sort();
@@ -69,15 +69,15 @@ fn sign_ups_made_at_once_are_every_one_kept() {
 #[test]
 fn a_malformed_address_appends_nothing() {
     let dir = Scratch::new();
-    let state = StateDir::open(&dir.path().join("state")).expect("the state directory");
-    let signups = SignUps::new(&state);
+    let state_dir = StateDir::open(&dir.path().join("state")).expect("the state directory");
+    let signups = SignUps::new(&state_dir);
     assert!(matches!(signups.append(b"not an address"), Err(SignUpRefused::NotAnAddress)));
     assert!(matches!(signups.append(&[0xff, b'@', b'b']), Err(SignUpRefused::NotAnAddress)));
-    assert!(!state.file(SIGNUPS).exists());
+    assert!(!state_dir.file(SIGNUPS).exists());
     signups.append(b"person@example.com").expect("kept");
-    let before = fs::read(state.file(SIGNUPS)).expect("the file");
+    let before = fs::read(state_dir.file(SIGNUPS)).expect("the file");
     assert!(matches!(signups.append(b"a@b@c"), Err(SignUpRefused::NotAnAddress)));
-    assert_eq!(fs::read(state.file(SIGNUPS)).expect("the file"), before);
+    assert_eq!(fs::read(state_dir.file(SIGNUPS)).expect("the file"), before);
 }
 
 /// EACH REFUSAL IS AN ERROR saying what kept nothing: no address by the
@@ -86,8 +86,8 @@ fn a_malformed_address_appends_nothing() {
 #[test]
 fn each_refusal_is_an_error_saying_what_kept_nothing() {
     let dir = Scratch::new();
-    let state = StateDir::open(&dir.path().join("state")).expect("the state directory");
-    let signups = SignUps::new(&state);
+    let state_dir = StateDir::open(&dir.path().join("state")).expect("the state directory");
+    let signups = SignUps::new(&state_dir);
     let refused: &dyn std::error::Error = &signups.append(b"not an address").expect_err("no address");
     assert_eq!(refused.to_string(), "the field is no address by the rule");
     fs::remove_dir(dir.path().join("state")).expect("the state directory removed");
@@ -102,17 +102,17 @@ fn each_refusal_is_an_error_saying_what_kept_nothing() {
 #[test]
 fn a_sign_up_past_the_cap_is_refused_and_keeps_nothing() {
     let dir = Scratch::new();
-    let state = StateDir::open(&dir.path().join("state")).expect("the state directory");
-    let signups = SignUps::new(&state);
+    let state_dir = StateDir::open(&dir.path().join("state")).expect("the state directory");
+    let signups = SignUps::new(&state_dir);
     let line = format!("person@example.com {}\n", today()).len();
-    fs::write(state.file(SIGNUPS), format!("{}\n", "#".repeat(MAX_SIGNUPS_BYTES - line - 1))).expect("a file one line short of its cap");
+    fs::write(state_dir.file(SIGNUPS), format!("{}\n", "#".repeat(MAX_SIGNUPS_BYTES - line - 1))).expect("a file one line short of its cap");
     signups.append(b"person@example.com").expect("kept, to the cap");
-    let full = fs::read(state.file(SIGNUPS)).expect("the file");
+    let full = fs::read(state_dir.file(SIGNUPS)).expect("the file");
     assert_eq!(full.len(), MAX_SIGNUPS_BYTES);
     let refused = signups.append(b"a@b").expect_err("past the cap");
     assert!(matches!(refused, SignUpRefused::Full), "{refused:?}");
-    assert_eq!(fs::read(state.file(SIGNUPS)).expect("the file"), full, "a refused sign-up wrote");
-    assert!(!crate::whole::temp_of(&state.file(SIGNUPS)).exists());
+    assert_eq!(fs::read(state_dir.file(SIGNUPS)).expect("the file"), full, "a refused sign-up wrote");
+    assert!(!crate::whole::temp_of(&state_dir.file(SIGNUPS)).exists());
     let said: &dyn std::error::Error = &refused;
     assert_eq!(said.to_string(), "the sign-up file is at its 262144-byte cap");
 }

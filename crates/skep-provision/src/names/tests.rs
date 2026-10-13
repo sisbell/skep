@@ -77,19 +77,19 @@ fn the_map_rebuilt_from_the_snippets_holds_their_live_names() {
 fn the_map_answers_its_tokens_and_their_holds() {
     let mut map = StatusMap::default();
     map.admit("t1".into(), name("alice"), true);
-    assert_eq!(map.post("t1").map(|p| p.state), Some(State::Queued));
+    assert_eq!(map.post("t1").map(|p| p.state), Some(PostState::Queued));
     assert!(map.post("t2").is_none());
     assert!(map.holds(&name("alice")));
     assert!(!map.holds(&name("bob")));
-    map.set("t1", State::Running);
+    map.set("t1", PostState::Running);
     assert!(map.holds(&name("alice")));
     assert!(!map.live().contains(&name("alice")), "a running post is no live name");
-    map.set("t1", State::Live);
+    map.set("t1", PostState::Live);
     assert!(!map.holds(&name("alice")), "a live name's truth is its snippet's");
     assert!(map.live().contains(&name("alice")), "a post gone live joins the live names");
     assert!(map.post("t1").expect("the post").anchorless);
     map.admit("t3".into(), name("bob"), false);
-    map.set("t3", State::Failed);
+    map.set("t3", PostState::Failed);
     assert!(!map.holds(&name("bob")));
     assert!(!map.live().contains(&name("bob")));
 }
@@ -130,7 +130,7 @@ fn an_unguessable_value_is_32_lowercase_hex_digits() {
 
 /// What took a name, as the log says it.
 #[test]
-fn what_took_a_name_as_the_log_says_it() {
+fn what_took_a_name_displays_as_the_log_says_it() {
     let said = [TakenBy::Snippet, TakenBy::Volume, TakenBy::Container].map(|by| by.to_string());
     assert_eq!(said, ["its snippet stands", "a volume stands under it", "a container stands under it"]);
 }
@@ -141,6 +141,6 @@ fn what_took_a_name_as_the_log_says_it() {
 fn the_maps_debug_shows_no_token() {
     let mut map = StatusMap::default();
     map.admit("t0k3n".into(), name("alice"), true);
-    map.set("t0k3n", State::Live);
+    map.set("t0k3n", PostState::Live);
     assert_eq!(format!("{map:?}"), "StatusMap { posts: 1, live: {Name(\"alice\")} }");
 }

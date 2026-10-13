@@ -157,20 +157,23 @@ fn deliver(sender: &dyn Sender, message: &Message, tries: u32, interval: Duratio
 /// THE OUTBOX: where the worker hands a follow-up mail — the sender's own
 /// thread, and the three headers every follow-up mail carries alike.
 pub struct Outbox {
-    way: Way,
+    /// What delivers each message handed over.
+    delivered_by: DeliveredBy,
     /// `--from`: the sending address.
     from: MailAddress,
     /// `--reply-to`: the owner's mailbox, where an answer to the mail goes.
     reply_to: MailAddress,
 }
 
-enum Way {
-    /// The sender thread's queue.
+/// WHAT DELIVERS each message handed over: the sender's own thread, or —
+/// in a unit suite's outbox — the caller.
+enum DeliveredBy {
+    /// The sender's own thread, through its queue.
     Thread(mpsc::Sender<Message>),
-    /// Delivered on the caller's own thread: a unit suite's, so the order
-    /// of a send against the status is the order of the calls.
+    /// The caller, on its own thread: a unit suite's, so the order of a
+    /// send against the status is the order of the calls.
     #[cfg(test)]
-    Inline { sender: Box<dyn Sender>, log: Log, sleep: Sleep },
+    Caller { sender: Box<dyn Sender>, log: Log, sleep: Sleep },
 }
 
 impl Outbox {
@@ -184,14 +187,14 @@ impl Outbox {
                 deliver(sender.as_ref(), &message, MAIL_TRIES, MAIL_INTERVAL, sleep.as_ref(), log.as_ref());
             }
         })?;
-        Ok(Outbox { way: Way::Thread(tx), from, reply_to })
+        Ok(Outbox { delivered_by: DeliveredBy::Thread(tx), from, reply_to })
     }
 
     /// The outbox a unit suite drives: each message delivered at once, on
     /// the caller's thread.
     #[cfg(test)]
     pub fn inline(sender: Box<dyn Sender>, from: MailAddress, reply_to: MailAddress, log: Log, sleep: Sleep) -> Outbox {
-        Outbox { way: Way::Inline { sender, log, sleep }, from, reply_to }
+        Outbox { delivered_by: DeliveredBy::Caller { sender, log, sleep }, from, reply_to }
     }
 
     /// ONE FOLLOW-UP MAIL handed over: the board, the invite's address and
@@ -199,14 +202,14 @@ impl Outbox {
     /// own, the same for every board.
     pub fn hand_over(&self, name: Name, to: String, body: String) {
         let message = Message { name, to, from: self.from.as_str().to_owned(), reply_to: self.reply_to.as_str().to_owned(), subject: fill(MAIL_SUBJECT, &[]), body };
-        match &self.way {
-            Way::Thread(tx) => {
+        match &self.delivered_by {
+            DeliveredBy::Thread(tx) => {
                 // The thread ends only with the program; a send that fails
                 // has no reader left to fail to.
                 let _ = tx.send(message);
             }
             #[cfg(test)]
-            Way::Inline { sender, log, sleep } => {
+            DeliveredBy::Caller { sender, log, sleep } => {
                 deliver(sender.as_ref(), &message, MAIL_TRIES, MAIL_INTERVAL, sleep.as_ref(), log.as_ref());
             }
         }

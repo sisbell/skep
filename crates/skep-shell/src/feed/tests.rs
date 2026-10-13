@@ -172,7 +172,7 @@ fn a_board_committing_faster_than_the_feed_thread_reads_costs_a_read_per_turn() 
     }
     assert!(drained.load(Ordering::SeqCst), "the stream was read to its end");
     let started = Instant::now();
-    assert!(threads.feed().search(Searcher::Guest, "x", SearchOpts::default(), false).is_ok());
+    assert!(threads.feed().search(Searcher::Guest, "x", BridgeSearchOpts::default()).is_ok());
     let waited = started.elapsed();
     let reads = fake.changes_reads.load(Ordering::SeqCst);
     threads.stop();

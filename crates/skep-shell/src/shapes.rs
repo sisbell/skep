@@ -19,7 +19,7 @@ use crate::events::EventName;
 
 /// One field of a declared type: its name, its TypeScript type, and
 /// whether every value carries it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub struct Field {
     pub name: &'static str,
@@ -37,7 +37,7 @@ const fn opt(name: &'static str, ty: &'static str) -> Field {
 
 /// One declared type: an interface over its fields, with the line of doc
 /// the file carries above it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub struct Shape {
     pub name: &'static str,

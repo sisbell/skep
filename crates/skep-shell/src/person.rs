@@ -7,10 +7,11 @@
 //! the page. The trait is synchronous — `label(&mut self, …) -> Result<String,
 //! Abandoned>` — so each walk runs on its own thread and the person it
 //! holds waits here; a `cancel` answers `Abandoned`, which takes the walk's
-//! own abandonment exit, and the shell names the call's refusal
-//! `abandoned`. A statement needs no answer and is forwarded as a moment
-//! whose `answerable` is false; the page may ignore it. AN ANSWER's FORM is
-//! its moment's kind's ([`MomentKind::takes`]): a label box takes a string,
+//! own abandonment exit, and the person names the walk's halt as the call's
+//! refusal `abandoned` ([`BridgePerson::walk_refusal`]). A statement needs
+//! no answer and is forwarded as a moment whose `answerable` is false; the
+//! page may ignore it. AN ANSWER's FORM is its moment's kind's
+//! ([`MomentKind::takes`]): a label box takes a string,
 //! or `null` for the box's default; a question a string; a yes-or-no a
 //! boolean — asked by [`Pending::answer`], the page's one way in, so a
 //! walk never receives a value of another form, and a value of another
@@ -22,6 +23,7 @@ use std::sync::mpsc::{channel, Sender};
 use std::sync::{Arc, Mutex};
 
 use serde_json::{json, Value};
+use skep_client::halt::Halt;
 use skep_client::person::{Abandoned, Confirmation, Consent, Destination, HandedPath, Import, Imported, KeptOrPlaced, LabelBox, Person, Public, Question, Retype, Retyped, Secret, Sheet, Statement};
 
 use crate::events::{EventBus, EventName};
@@ -170,14 +172,28 @@ pub struct BridgePerson {
     /// no board (`keygen`'s box).
     board_reference: Option<String>,
     /// A moment was cancelled by the page or left by the dev arm: the
-    /// walk's halt is the abandonment's.
-    pub abandoned: bool,
+    /// walk's halt is the abandonment's ([`BridgePerson::walk_refusal`]).
+    abandoned: bool,
 }
 
 impl BridgePerson {
     /// The person for `walk` at the board `board_reference` names.
     pub fn new(bus: Arc<EventBus>, pending: Arc<Pending>, arm: Arc<DevArm>, walk: &'static str, board_reference: Option<String>) -> BridgePerson {
         BridgePerson { bus, pending, arm, walk, board_reference, abandoned: false }
+    }
+
+    /// The walk's halt `h` as the call's refusal: the abandonment where a
+    /// moment of the walk was cancelled by the page or left by the dev arm,
+    /// else the family's member — a halt's face under `armed` where the row
+    /// diagnosed its armed name.
+    pub fn walk_refusal(&self, h: Halt, armed: Option<Name>) -> Refusal {
+        if self.abandoned {
+            return Refusal::shell(Name::ABANDONED, json!({"halt": h.to_string()}));
+        }
+        match armed {
+            Some(name) => Refusal::of_named(name, h),
+            None => Refusal::from(h),
+        }
     }
 
     /// A PUBLIC moment forwarded: the event, then the wait for the page's
@@ -261,7 +277,7 @@ impl Person for BridgePerson {
     }
 
     fn confirm_typed(&mut self, m: Consent<Confirmation>) -> Result<String, Abandoned> {
-        let answer = self.arm.confirm(&m.0.text, &m.0.expected);
+        let answer = self.arm.confirm(&m.0);
         self.mark_if_abandoned(answer)
     }
 
@@ -383,6 +399,25 @@ mod tests {
         let mut person = BridgePerson::new(Arc::new(EventBus::new()), Arc::new(Pending::new()), arm, "retire", Some("b-1".into()));
         assert_eq!(person.confirm_typed(Consent(Confirmation { text: "retire?".into(), expected: "abcd".into() })), Err(Abandoned));
         assert!(person.abandoned);
+    }
+
+    /// THE WALK's HALT as the call's refusal is the person's to name: before
+    /// any moment is cancelled, the halt's face under the row's armed name,
+    /// or the halt's own member where the row arms none; once one is, the
+    /// abandonment, whatever the row armed.
+    #[test]
+    fn a_walks_halt_is_the_abandonment_once_a_moment_was_cancelled() {
+        let (bus, pending, arm) = fixture();
+        let rx = bus.subscribe();
+        let mut person = BridgePerson::new(Arc::clone(&bus), Arc::clone(&pending), arm, "accept", Some("b-1".into()));
+        let halt = || Halt::face("s", "c", "a");
+        assert_eq!(person.walk_refusal(halt(), Some(Name::NOT_DELEGATED)).name(), "not_delegated");
+        assert_eq!(person.walk_refusal(halt(), None).name(), "halt");
+        let page = Arc::clone(&pending);
+        let canceller = thread::spawn(move || page.cancel(rx.recv().unwrap().data["id"].as_str().unwrap()));
+        assert_eq!(person.ask(Public(Question { text: "?".into() })), Err(Abandoned));
+        canceller.join().unwrap().unwrap();
+        assert_eq!(person.walk_refusal(halt(), Some(Name::NOT_DELEGATED)).name(), "abandoned");
     }
 
     /// The four kinds are the declared `MomentEvent.kind` union's words,

@@ -160,7 +160,7 @@ fn the_nodes_running_hands_its_probe_to_the_boards_feed_thread() {
     let facts = Facts { principal: 1, account: Some("1.0.1".into()), kind: SessionKind::Bare };
     let session = shell.sessions.register(&board, Arc::clone(&shell.boards[0].board), Open { token: Token::parse(&"9f".repeat(16)).unwrap(), facts, opened_at: 0 }, &mut shell.feed(&board));
     let frame = json!({"op": "insert", "doc": "1.0.1.0.1", "at": {"subspace": "1", "ordinal": "1"}, "values": ["a"]});
-    let held = shell.holds.hold(&session, &Burst::admit(frame, &session).unwrap(), Reason::of("stopped", false)).unwrap();
+    let held = shell.holds.hold(&session, Burst::admit(frame, &session).unwrap(), Reason::of("stopped", false)).unwrap();
     assert_eq!(held["resp"], "held", "{held}");
     let started = Instant::now();
     shell.set_node_state(NodeState::Running);

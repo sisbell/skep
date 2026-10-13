@@ -369,7 +369,7 @@ impl Ground {
 
     /// A burst held for `cause`, `sent` as a lost answer's would be.
     fn hold(&self, frame: &Value, cause: &str, sent: bool) -> Value {
-        self.holds.hold(&self.session, &self.burst(frame), Reason::of(cause, sent)).unwrap()
+        self.holds.hold(&self.session, self.burst(frame), Reason::of(cause, sent)).unwrap()
     }
 }
 

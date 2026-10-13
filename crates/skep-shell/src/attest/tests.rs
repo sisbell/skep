@@ -302,7 +302,7 @@ fn a_read_back_is_held_to_its_extent_its_map_and_the_body_budget() {
     let read = |origin: &'static str, spent: &mut usize| {
         let mut wanted = Wanted::new(origin);
         wanted.want(if origin == "1.0.1.0.3" { "1.0.1.0.3.0.1" } else { "1.0.1.0.2.0.1" }, 1, 3);
-        c.read_back(&mut wanted, spent).map(|()| wanted)
+        c.read_back(wanted, spent)
     };
     assert!(read("1.0.1.0.4", &mut 0).unwrap_err().to_string().contains("more than one delivery"));
     assert_eq!(g.fake.dialed(), ["retrieve_doc_v_span_set"], "no image asked past the answer cap");
@@ -312,8 +312,8 @@ fn a_read_back_is_held_to_its_extent_its_map_and_the_body_budget() {
     let mut spent = MAX_FRAME_BYTES - 2 * (4 + 1) - 1;
     assert!(read("1.0.1.0.2", &mut spent).is_err(), "the third value passes the body budget");
     let mut spent = 0;
-    let wanted = read("1.0.1.0.2", &mut spent).unwrap();
-    assert_eq!((wanted.value("1.0.1.0.2.0.1", 2), spent), (Some(&b"b"[..]), 3 * (4 + 1)));
+    let read_back = read("1.0.1.0.2", &mut spent).unwrap();
+    assert_eq!((read_back.value("1.0.1.0.2.0.1", 2), spent), (Some(&b"b"[..]), 3 * (4 + 1)));
 }
 
 /// THE SHOT's BODY, the positive control: runs copied in from the staging

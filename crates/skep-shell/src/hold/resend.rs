@@ -14,6 +14,7 @@
 //! write's answer, as a first dial does.
 
 use std::borrow::Cow;
+use std::ops::ControlFlow;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use serde_json::Value;
@@ -264,7 +265,7 @@ impl Holds {
     /// is not taken.
     fn send_rest(&self, session: &SessionEntry, doc: &str) {
         while let Some(line) = self.head_of(&session.board_reference, session.facts.principal, doc) {
-            if awaits_act(&line) || !self.send_line(session, &line) {
+            if awaits_act(&line) || self.send_line(session, &line).is_break() {
                 break;
             }
         }
@@ -277,9 +278,10 @@ impl Holds {
     /// and reissued at the next probe, so its third `durability` holds it; a
     /// refusal the table holds nowhere left standing for the next probe,
     /// never `done`; the death signal left to the hand that ends the
-    /// session — the session that stands resends after its read. Whether
-    /// sending may go on to the document's next line.
-    fn send_line(&self, session: &SessionEntry, line: &HeldLine) -> bool {
+    /// session — the session that stands resends after its read. `Continue`
+    /// where sending goes on to the document's next line, `Break` where it
+    /// stops at this one.
+    fn send_line(&self, session: &SessionEntry, line: &HeldLine) -> ControlFlow<()> {
         let (board_reference, principal) = (session.board_reference.as_str(), session.facts.principal);
         let given = self.with_principal(board_reference, principal, |ph| ph.reissues.get(&line.k).copied()).flatten().unwrap_or_default();
         let dialed = match self.attest_where_owed(session, &line.frame) {
@@ -292,27 +294,27 @@ impl Holds {
                 self.done(board_reference, principal, line.k, Done::Kept { at: acked_at(&ack) });
                 let rest = self.count(board_reference, principal, &line.doc);
                 self.emit_held(session, &line.doc, rest, if rest == 0 { HeldState::Kept } else { HeldState::Sending }, None);
-                true
+                ControlFlow::Continue(())
             }
             Dialed::Held { reason, .. } => {
                 let state = line_state(&reason);
                 let said = reason.cause.clone();
                 self.with_principal(board_reference, principal, |ph| self.remark_line(ph, line.k, reason));
                 self.emit_held(session, &line.doc, self.count(board_reference, principal, &line.doc), state, Some(&said));
-                false
+                ControlFlow::Break(())
             }
             Dialed::Reissue { kind, refusal } => {
                 // The rider's count (§3c.4), per line across its probes: the
                 // third `durability` holds it.
                 self.with_principal(board_reference, principal, |ph| ph.reissues.entry(line.k).or_default().note(kind));
                 self.say(format!("held: line {} on {} was not taken ({refusal}); it is sent again at the next probe", line.k, line.doc));
-                false
+                ControlFlow::Break(())
             }
             Dialed::Faced(refusal) => {
                 self.say(format!("held: line {} on {} was not taken ({refusal}); it is sent again at the next probe", line.k, line.doc));
-                false
+                ControlFlow::Break(())
             }
-            Dialed::Died => false,
+            Dialed::Died => ControlFlow::Break(()),
         }
     }
 

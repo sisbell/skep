@@ -310,9 +310,15 @@ impl Burst {
         &self.frame
     }
 
-    /// The frame's document, in its one spelling.
-    fn doc(&self) -> &str {
-        &self.doc
+    /// The burst as a held line stores it (§3c.2): its document in its one
+    /// spelling, and its frame with any `attest` stripped — the resend
+    /// composes its own when it sends.
+    fn into_stored(self) -> (String, Value) {
+        let Burst { mut frame, doc } = self;
+        if let Some(members) = frame.as_object_mut() {
+            members.remove("attest");
+        }
+        (doc, frame)
     }
 }
 
@@ -339,10 +345,10 @@ impl Dialed {
     /// A refusal read through the table: held for its cause, held as a
     /// REFUSED run with the board's `token` and verdict, reissued, or faced —
     /// each beside the refusal the answer is.
-    fn refused(decision: Decision, token: &str, verdict: &Value, refusal: Refusal) -> Dialed {
+    fn refused(decision: Decision, token: &str, verdict: Value, refusal: Refusal) -> Dialed {
         match decision {
             Decision::Hold { cause, sent } => Dialed::Held { reason: Reason::of(cause, sent), refusal },
-            Decision::Refused => Dialed::Held { reason: Reason::refused(token, verdict.clone()), refusal },
+            Decision::Refused => Dialed::Held { reason: Reason::refused(token, verdict), refusal },
             Decision::Reissue(kind) => Dialed::Reissue { kind, refusal },
             Decision::Neither => Dialed::Faced(refusal),
         }
@@ -422,6 +428,7 @@ fn awaits_act(line: &HeldLine) -> bool {
 }
 
 /// The board's `held/<chain>/` (§3c.1) as this shell stands to it.
+#[derive(Debug)]
 enum Directory {
     /// Not this shell's yet — why: `H.1` not read, or the directory or its
     /// lock refused. Tried again at a session's open and at the probe.
@@ -455,6 +462,7 @@ impl Directory {
 }
 
 /// Where a principal's held lines are kept at a board (§3c.3).
+#[derive(Debug)]
 enum Custody {
     /// Not yet opened: the next touch under a session of the principal opens
     /// its file.
@@ -485,6 +493,7 @@ impl Custody {
 /// the `at` of its last ACKED write per document — the `base` a hold on
 /// that document takes (§3c.2) — and the reissues each line's resend has
 /// been given, counted across its probes.
+#[derive(Debug)]
 struct PrincipalHold {
     custody: Custody,
     queue: HeldQueue,
@@ -505,6 +514,7 @@ impl PrincipalHold {
 
 /// One board's hold: its directory, the two states that hold every burst
 /// before any dial, and each principal's queue.
+#[derive(Debug)]
 struct BoardHold {
     directory: Directory,
     /// Whether the last read of `/health.writes.halted` — the feed's tick, or
@@ -522,6 +532,7 @@ struct BoardHold {
 /// One board of the holds: the board dialed, outside any lock, and its hold
 /// under a lock of its own — held for a burst's line, its synced append and a
 /// file's read at a session's open, and never across a dial.
+#[derive(Debug)]
 struct BoardSlot {
     board: Arc<Board>,
     hold: Mutex<BoardHold>,
@@ -734,7 +745,7 @@ impl Holds {
                 None
             };
             if let Some(cause) = hold_cause {
-                return OpAnswer::Answered(self.hold_line(&mut board_hold, session, &burst, Reason::of(cause, false)));
+                return OpAnswer::Answered(self.hold_line(&mut board_hold, session, burst, Reason::of(cause, false)));
             }
         }
         match self.dial_within_call(session, burst.frame()) {
@@ -742,7 +753,7 @@ impl Holds {
                 self.note_ack(session, burst.frame(), &ack);
                 OpAnswer::Answered(Ok(ack))
             }
-            Dialed::Held { reason, .. } => OpAnswer::Answered(self.hold(session, &burst, reason)),
+            Dialed::Held { reason, .. } => OpAnswer::Answered(self.hold(session, burst, reason)),
             Dialed::Reissue { refusal, .. } | Dialed::Faced(refusal) => OpAnswer::Answered(Err(refusal)),
             Dialed::Died => OpAnswer::Died,
         }
@@ -773,30 +784,32 @@ impl Holds {
         }
     }
 
-    /// HOLD an admitted burst for `reason`, as a dial's answer held it: the
-    /// `held` answer ([`Holds::hold_line`]), or `store_halted` where P38
-    /// halted the file.
-    pub fn hold(&self, session: &SessionEntry, burst: &Burst, reason: Reason) -> Result<Value, Refusal> {
+    /// HOLD an admitted burst for `reason`, as a dial's answer held it — the
+    /// burst taken, its frame the held line's own: the `held` answer
+    /// ([`Holds::hold_line`]), or `store_halted` where P38 halted the file.
+    pub fn hold(&self, session: &SessionEntry, burst: Burst, reason: Reason) -> Result<Value, Refusal> {
         self.hold_line(&mut self.lock(&session.board_reference), session, burst, reason)
     }
 
     /// One line entered in the principal's queue at the session's board,
-    /// `board_hold` that board's hold — copied to its file where it has one,
-    /// its `base` the `at` of the last acked write on the document or else
-    /// the session's open position (§3c.2) — the `held` event emitted, and
-    /// the answer: `{resp: held, held: <k>, cause}`, the cause `other_window`
+    /// `board_hold` that board's hold — the burst as stored, its frame
+    /// carrying no attest, copied to its file where it has one, its `base`
+    /// the `at` of the last acked write on the document or else the
+    /// session's open position (§3c.2) — the `held` event emitted, and the
+    /// answer: `{resp: held, held: <k>, cause}`, the cause `other_window`
     /// where another window's lock keeps the line in memory alone, and
     /// `unwritable` beside it — why — where the device refused its copy or
     /// the file is out of reach (§3c.3); `held_full` where the principal's
     /// queue holds its budget already (`held::MAX_HELD_FRAME_BYTES`), and
     /// nothing held.
-    fn hold_line(&self, board_hold: &mut BoardHold, session: &SessionEntry, burst: &Burst, reason: Reason) -> Result<Value, Refusal> {
+    fn hold_line(&self, board_hold: &mut BoardHold, session: &SessionEntry, burst: Burst, reason: Reason) -> Result<Value, Refusal> {
         let ph = self.principal_hold(board_hold, session)?;
-        let doc = burst.doc();
-        let base = ph.last_acked.get(doc).copied().unwrap_or(session.opened_at);
+        let (doc, frame) = burst.into_stored();
+        let id = frame["id"].as_str().map(str::to_owned);
+        let base = ph.last_acked.get(&doc).copied().unwrap_or(session.opened_at);
         let state = line_state(&reason);
         let mut said = reason.cause.clone();
-        let entered = ph.queue.hold(doc, burst.frame()["id"].as_str(), base, strip_attest(burst.frame()), reason).map_err(unheld)?;
+        let entered = ph.queue.hold(&doc, id.as_deref(), base, frame, reason).map_err(unheld)?;
         let unwritable = match &ph.custody {
             Custody::OtherWindow => {
                 said = cause::OTHER_WINDOW.to_string();
@@ -812,7 +825,7 @@ impl Holds {
         }
         // `emit_held` touches the bus alone, so it is safe under the board's
         // lock.
-        self.emit_held(session, doc, ph.count(doc), state, Some(&said));
+        self.emit_held(session, &doc, ph.count(&doc), state, Some(&said));
         Ok(answer)
     }
 
@@ -933,7 +946,8 @@ impl Holds {
                 None => Dialed::Acked(v),
                 Some(r) => {
                     let decision = classify(DialOutcome::Rejected { code: r.key(), disposition: v["disposition"].as_str().unwrap_or("") }, given);
-                    Dialed::refused(decision, &r.token(), &v, Refusal::from(r.refused(&v)))
+                    let refusal = Refusal::from(r.refused(&v));
+                    Dialed::refused(decision, &r.token(), v, refusal)
                 }
             },
             Err(Halt::Dial(e)) => match classify(DialOutcome::Dial(&e), given) {
@@ -942,8 +956,10 @@ impl Holds {
             },
             Err(Halt::Refused(r)) => {
                 let decision = classify(DialOutcome::Rejected { code: &r.code, disposition: r.body["disposition"].as_str().unwrap_or("") }, given);
+                // A REFUSED run's line keeps the verdict, and the refusal the
+                // body it was read from: two owners, one copy.
                 let (token, verdict) = (r.token(), r.body.clone());
-                Dialed::refused(decision, &token, &verdict, Refusal::Board(r))
+                Dialed::refused(decision, &token, verdict, Refusal::Board(r))
             }
             Err(h) => Dialed::Faced(Refusal::from(h)),
         }
@@ -1013,15 +1029,6 @@ fn written_docs<'a>(frame: &'a Value, ack: &'a Value) -> Vec<&'a str> {
         _ => &["doc"],
     };
     members.iter().filter_map(|m| frame[*m].as_str()).collect()
-}
-
-/// A frame with any `attest` stripped — the stored form carries none (§3c.2).
-fn strip_attest(frame: &Value) -> Value {
-    let mut frame = frame.clone();
-    if let Some(obj) = frame.as_object_mut() {
-        obj.remove("attest");
-    }
-    frame
 }
 
 #[cfg(test)]

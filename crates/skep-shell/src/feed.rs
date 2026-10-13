@@ -92,6 +92,25 @@ pub enum Searcher {
     Session { principal: u64, token: Token, account: String },
 }
 
+impl Searcher {
+    /// Who searches, as the consumer takes it: a view of this owned twin.
+    fn as_who(&self) -> Who<'_> {
+        match self {
+            Searcher::Guest => Who::Guest,
+            Searcher::Session { principal, token, account } => Who::Session(SessionRef { token, principal: *principal, account }),
+        }
+    }
+}
+
+/// A `search` call's `opts` as the bridge declares them (`shapes`'
+/// `SearchOpts`): the library's bounds on the list, and whether the index
+/// pair is refreshed before it answers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct BridgeSearchOpts {
+    pub bounds: SearchOpts,
+    pub reindex: bool,
+}
+
 /// What the feed thread is asked.
 enum Cmd {
     /// Commits the stream yielded, read off [`Ticks`].
@@ -108,7 +127,7 @@ enum Cmd {
     /// THE PROBE handed over: run at the feed thread's next turn, unanswered.
     Probe,
     /// The bridge's search call.
-    Search { who: Searcher, query: String, opts: SearchOpts, reindex: bool, reply: Sender<Result<Value, Refusal>> },
+    Search { who: Searcher, query: String, opts: BridgeSearchOpts, reply: Sender<Result<Value, Refusal>> },
     /// The consumer closed; the thread ends.
     Stop(Sender<()>),
 }
@@ -161,9 +180,9 @@ impl Feed {
 
     /// The bridge's search call, answered on the feed thread;
     /// `feed_stopped` once the thread has stopped.
-    pub fn search(&self, who: Searcher, query: &str, opts: SearchOpts, reindex: bool) -> Result<Value, Refusal> {
+    pub fn search(&self, who: Searcher, query: &str, opts: BridgeSearchOpts) -> Result<Value, Refusal> {
         let (reply, rx) = channel();
-        if self.cmds.send(Cmd::Search { who, query: query.to_string(), opts, reindex, reply }).is_err() {
+        if self.cmds.send(Cmd::Search { who, query: query.to_string(), opts, reply }).is_err() {
             return Err(Refusal::shell(Name::FEED_STOPPED, json!({})));
         }
         rx.recv().unwrap_or_else(|_| Err(Refusal::shell(Name::FEED_STOPPED, json!({}))))
@@ -357,8 +376,8 @@ impl<'b> Feeder<'b> {
                     feeder.holds.probe(&feeder.entry.reference);
                     next_probe = Instant::now() + PROBE_CADENCE;
                 }
-                Ok(Cmd::Search { who, query, opts, reindex, reply }) => {
-                    let _ = reply.send(feeder.search(who, &query, &opts, reindex));
+                Ok(Cmd::Search { who, query, opts, reply }) => {
+                    let _ = reply.send(feeder.search(who.as_who(), &query, opts));
                 }
                 Ok(Cmd::Stop(reply)) => {
                     feeder.close_consumer();
@@ -376,7 +395,7 @@ impl<'b> Feeder<'b> {
         feeder.close_consumer();
     }
 
-    fn say(&self, line: String) {
+    fn say(&self, line: impl std::fmt::Display) {
         (self.talk)(&format!("feed {}: {line}", self.entry.reference));
     }
 
@@ -388,7 +407,7 @@ impl<'b> Feeder<'b> {
         }
         match Consumer::open(&self.entry.board, SearchDir::new(self.data_dir.clone())) {
             Ok(c) => self.consumer = Some(c),
-            Err(h) => self.say(format!("the index could not open: {h}")),
+            Err(h) => self.say(format_args!("the index could not open: {h}")),
         }
     }
 
@@ -410,7 +429,7 @@ impl<'b> Feeder<'b> {
                         self.died(principal);
                     }
                 }
-                Err(h) => self.say(format!("the poll at {position} failed: {h}")),
+                Err(h) => self.say(format_args!("the poll at {position} failed: {h}")),
             }
         }
         self.read_feed();
@@ -439,7 +458,7 @@ impl<'b> Feeder<'b> {
         }
         if !self.down {
             self.down = true;
-            self.say(format!("the commit stream is not answering: {text}"));
+            self.say(format_args!("the commit stream is not answering: {text}"));
         }
         if self.holds.node_stopped(&self.entry.reference) {
             return;
@@ -555,25 +574,16 @@ impl<'b> Feeder<'b> {
         }
     }
 
-    fn search(&mut self, who: Searcher, query: &str, opts: &SearchOpts, reindex: bool) -> Result<Value, Refusal> {
+    /// The bridge's search over the board's index pair as `who` reads it —
+    /// refreshed first where `opts` asks — or the answer where no index
+    /// stands; `query_too_long` the shell's own bound.
+    fn search(&mut self, who: Who<'_>, query: &str, opts: BridgeSearchOpts) -> Result<Value, Refusal> {
         self.open_consumer();
         let Some(c) = &self.consumer else { return Ok(answer_without_index()) };
-        let answer = match &who {
-            Searcher::Guest => {
-                if reindex {
-                    c.reindex(Who::Guest)?;
-                }
-                c.search(Who::Guest, query, opts)
-            }
-            Searcher::Session { principal, token, account } => {
-                let who = Who::Session(SessionRef { token, principal: *principal, account });
-                if reindex {
-                    c.reindex(who)?;
-                }
-                c.search(who, query, opts)
-            }
-        };
-        let answer = answer.map_err(|e| Refusal::shell(Name::QUERY_TOO_LONG, json!({"bound": e.bound, "length": e.length})))?;
+        if opts.reindex {
+            c.reindex(who)?;
+        }
+        let answer = c.search(who, query, &opts.bounds).map_err(|e| Refusal::shell(Name::QUERY_TOO_LONG, json!({"bound": e.bound, "length": e.length})))?;
         let value = answer_json(&answer);
         self.emit_index();
         Ok(value)
@@ -583,7 +593,7 @@ impl<'b> Feeder<'b> {
     fn close_consumer(&mut self) {
         if let Some(c) = self.consumer.take() {
             if let Err(h) = c.close() {
-                self.say(format!("the index could not save at close: {h}"));
+                self.say(format_args!("the index could not save at close: {h}"));
             }
         }
     }
@@ -667,7 +677,7 @@ impl Supplements for Feeder<'_> {
         self.open_consumer();
         if let Some(c) = &self.consumer {
             if let Err(h) = c.widen(SessionRef { token: &session.token, principal, account }) {
-                self.say(format!("the supplement for principal {principal} could not widen: {h}"));
+                self.say(format_args!("the supplement for principal {principal} could not widen: {h}"));
             }
         }
         self.emit_index();
@@ -676,7 +686,7 @@ impl Supplements for Feeder<'_> {
     fn narrow(&mut self, principal: u64) {
         if let Some(c) = &self.consumer {
             if let Err(h) = c.narrow(principal) {
-                self.say(format!("the supplement for principal {principal} could not narrow: {h}"));
+                self.say(format_args!("the supplement for principal {principal} could not narrow: {h}"));
             }
         }
         self.session_references.remove(&principal);

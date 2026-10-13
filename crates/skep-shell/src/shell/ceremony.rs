@@ -75,19 +75,6 @@ impl Shell {
         BridgePerson::new(Arc::clone(&self.bus), Arc::clone(&self.pending), Arc::clone(&self.arm), walk, board_reference.map(str::to_string))
     }
 
-    /// A walk's halt as the call's refusal: the abandonment where the page
-    /// cancelled a moment or the arm left one, else the family's member —
-    /// a halt's face under `armed` where the row diagnosed its armed name.
-    fn walk_refusal(&self, person: &BridgePerson, h: Halt, armed: Option<Name>) -> Refusal {
-        if person.abandoned {
-            return Refusal::shell(Name::ABANDONED, json!({"halt": h.to_string()}));
-        }
-        match armed {
-            Some(name) => Refusal::of_named(name, h),
-            None => Refusal::from(h),
-        }
-    }
-
     /// The principal a ceremonial row runs as: the row's own where it names
     /// one, else the session mode's.
     fn principal_for(&self, args: &Value) -> Result<u64, Refusal> {
@@ -201,7 +188,7 @@ impl Shell {
                 "warnings": c.warnings,
             })),
             Ok(ClaimOutcome::Stranger { claimant }) => Err(Refusal::shell(Name::ALREADY_CLAIMED, json!({"claimant": claimant}))),
-            Err(h) => Err(self.walk_refusal(&person, h, None)),
+            Err(h) => Err(person.walk_refusal(h, None)),
         }
     }
 
@@ -219,7 +206,7 @@ impl Shell {
                 "reconciled": e.reconciled,
                 "warnings": e.warnings,
             })),
-            Err(h) => Err(self.walk_refusal(&person, h, None)),
+            Err(h) => Err(person.walk_refusal(h, None)),
         }
     }
 
@@ -303,7 +290,7 @@ impl Shell {
                 "recovery_read": r.recovery_read,
                 "warnings": r.warnings,
             })),
-            Err(h) => Err(self.walk_refusal(&person, h, None)),
+            Err(h) => Err(person.walk_refusal(h, None)),
         }
     }
 
@@ -324,7 +311,7 @@ impl Shell {
                 "trail": r.trail,
                 "warnings": r.warnings,
             })),
-            Err(h) => Err(self.walk_refusal(&person, h, None)),
+            Err(h) => Err(person.walk_refusal(h, None)),
         }
     }
 
@@ -337,7 +324,7 @@ impl Shell {
         let mut person = self.person("retire", Some(&entry.reference));
         match retire::retire(&entry.board, &self.store, &mut person, &opts) {
             Ok(_) => Ok(json!({})),
-            Err(h) => Err(self.walk_refusal(&person, h, None)),
+            Err(h) => Err(person.walk_refusal(h, None)),
         }
     }
 
@@ -356,7 +343,7 @@ impl Shell {
         match handoff::handoff(&entry.board, &self.store, &mut person, &opts) {
             Ok(handoff::HandoffOutcome::Delegated { account, principal, already }) => Ok(json!({"address": account, "principal": principal, "already": already})),
             Ok(handoff::HandoffOutcome::Seeded { .. }) => Ok(json!({})),
-            Err(h) => Err(self.walk_refusal(&person, h, None)),
+            Err(h) => Err(person.walk_refusal(h, None)),
         }
     }
 
@@ -385,7 +372,7 @@ impl Shell {
             Ok(a) => Ok(json!({"payload": a.record})),
             Err(h) => {
                 let armed = accept_arm(&h);
-                Err(self.walk_refusal(&person, h, armed))
+                Err(person.walk_refusal(h, armed))
             }
         }
     }

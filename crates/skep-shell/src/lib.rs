@@ -136,11 +136,15 @@ pub type Talk = Arc<dyn Fn(&str) + Send + Sync>;
 /// threads and shares its log; an event crosses to the thread that writes
 /// it out; a shell's options cross to the thread that opens it, and a
 /// fetched body to the thread that reads it; and every error the crate
-/// answers is a `std::error::Error` a caller's `?` carries.
+/// answers is a `std::error::Error` a caller's `?` carries. Beside them,
+/// every plain value a transport compares or counts by — an outcome, a
+/// mode, an arm, a node's state, a scripted answer, an event's or a
+/// refusal's name, a declared shape — is a key: `Eq + Hash`.
 const _: fn() = || {
     fn assert_send_sync<T: Send + Sync>() {}
     fn assert_send<T: Send>() {}
     fn assert_error<E: std::error::Error + Send + Sync + 'static>() {}
+    fn assert_key<K: Eq + std::hash::Hash>() {}
     assert_send_sync::<Shell>();
     assert_send_sync::<ShellOptions>();
     assert_send_sync::<Log>();
@@ -151,4 +155,13 @@ const _: fn() = || {
     assert_error::<Refusal>();
     assert_error::<script::ScriptError>();
     assert_error::<UnknownEventName>();
+    assert_key::<CallOutcome>();
+    assert_key::<SessionMode>();
+    assert_key::<ArmConfig>();
+    assert_key::<NodeState>();
+    assert_key::<script::Answer>();
+    assert_key::<EventName>();
+    assert_key::<Name>();
+    assert_key::<shapes::Shape>();
+    assert_key::<shapes::Field>();
 };

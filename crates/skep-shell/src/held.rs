@@ -141,6 +141,7 @@ pub struct HeldLine {
 }
 
 /// What opening a principal's file yields.
+#[derive(Debug)]
 pub enum Opened {
     /// The queue read whole from the file, or a fresh one: its un-done `held`
     /// lines in `k` order; `aside` the path a MISPLACED file was moved to, for
@@ -177,6 +178,7 @@ impl HaltWhy {
 
 /// THE DIRECTORY `held/<chain>/`: ensured `0700`, locked once for the shell's
 /// life, a principal's file opened under it.
+#[derive(Debug)]
 pub struct HeldDir {
     path: PathBuf,
     chain: Chain,
@@ -263,27 +265,18 @@ impl HeldDir {
         HeldDir { path: data_dir.join("held").join(chain.to_string()), chain }
     }
 
-    /// The directory and `held/` above it, each `0700`, created once (§3c.1).
+    /// The directory and `held/` above it, each `0700`, created once (§3c.1):
+    /// one recursive create, which makes every missing parent with the mode
+    /// it makes the directory with, and leaves a standing one as it stands.
     pub fn ensure(&self) -> io::Result<()> {
-        let mut dirs = Vec::new();
-        if let Some(parent) = self.path.parent() {
-            dirs.push(parent.to_path_buf());
+        let mut builder = fs::DirBuilder::new();
+        builder.recursive(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::DirBuilderExt;
+            builder.mode(0o700);
         }
-        dirs.push(self.path.clone());
-        for dir in dirs {
-            if dir.is_dir() {
-                continue;
-            }
-            let mut builder = fs::DirBuilder::new();
-            builder.recursive(true);
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::DirBuilderExt;
-                builder.mode(0o700);
-            }
-            builder.create(&dir)?;
-        }
-        Ok(())
+        builder.create(&self.path)
     }
 
     /// THE LOCK (`BoardDir::try_lock`'s idiom, copied): `held/<chain>/lock`
@@ -415,6 +408,7 @@ impl HeldDir {
 /// `held` lines in `k` order, the next ordinal, the bytes its lines' frames
 /// hold ([`MAX_HELD_FRAME_BYTES`]'s count), and the file the lines are
 /// copied to — `None` where the store keeps them in memory alone (§3c.3).
+#[derive(Debug)]
 pub struct HeldQueue {
     disk: Option<Disk>,
     lines: Vec<HeldLine>,
@@ -425,6 +419,7 @@ pub struct HeldQueue {
 /// The file a queue's lines are copied to: its path, the header's facts, and
 /// whether the header is on disk yet (created lazily on the first append,
 /// under `create_new`, and again after a compaction).
+#[derive(Debug)]
 struct Disk {
     path: PathBuf,
     chain: Chain,
@@ -673,7 +668,7 @@ fn done_line_bytes(k: u64, done: Done) -> Vec<u8> {
 
 /// A string as a JSON string literal — the one escaper the forms share.
 fn json_str(s: &str) -> String {
-    serde_json::to_string(s).unwrap_or_else(|_| "\"\"".to_string())
+    serde_json::to_string(s).expect("a `str` always serializes: it is no map key to refuse, and the in-memory writer never fails")
 }
 
 #[cfg(test)]

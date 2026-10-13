@@ -180,6 +180,16 @@ enum OwnedDocTerm {
     Pair { d_s: Address, d_a: Address },
 }
 
+impl OwnedDocTerm {
+    /// The term as [`entry_frame`] takes it: a view of this owned term.
+    fn as_doc_term(&self) -> DocTerm<'_> {
+        match self {
+            OwnedDocTerm::One(a) => DocTerm::One(a),
+            OwnedDocTerm::Pair { d_s, d_a } => DocTerm::Pair { d_s, d_a },
+        }
+    }
+}
+
 /// One run of a shot as its body takes it, in the shot's V-order: a COPIED
 /// run by the I-addresses whose values it brings in — its origin, and the
 /// prefix, first last component and width of its I-addresses — or a WINDOW
@@ -189,20 +199,43 @@ enum ShotPart<'f> {
     Window { start: Address, width: NonZeroU64 },
 }
 
-/// The positions a shot copies in from ONE origin document, and their
-/// values once read back. `ranges` holds the wanted I-ranges of each
-/// I-address prefix, merged and sorted, each with the INDEX its first
-/// position takes — a dense numbering of the wanted positions; `seen` marks
-/// each index read, and `kept` holds each read index's value as an offset
-/// and a length in `bytes`, sorted by index once the read is done. Built
-/// from the shot's runs before any read, so a read holds the values the shot
-/// names: never one per position the origin holds beside them, and never a
-/// stored value per position a run's width claims, only one bit.
+/// The positions a shot copies in from ONE origin document, WANTED: the
+/// I-ranges of each I-address prefix the shot's runs name, gathered before
+/// any read, so the read that follows holds the values the shot names and
+/// never one per position the origin holds beside them. The read-back's
+/// first phase of three, each a type of its own so no phase's step is taken
+/// out of turn: [`Wanted::seal`] numbers the wanted positions and begins the
+/// [`Reading`], whose [`Reading::finish`] answers the [`ReadBack`].
 #[derive(Debug)]
 struct Wanted<'f> {
     origin: &'f str,
     ranges: HashMap<&'f str, Vec<WantedRange>>,
+}
+
+/// The wanted I-ranges of each prefix, MERGED AND SORTED, each with the
+/// INDEX its first position takes — a dense numbering of the wanted
+/// positions. Made by [`Wanted::seal`] alone, so every lookup through it
+/// stands on ranges its binary search can read.
+#[derive(Debug)]
+struct WantedIndex<'f>(HashMap<&'f str, Vec<WantedRange>>);
+
+/// One origin's read under way: the wanted positions' index, a bit per
+/// wanted position marking it read — never a stored value per position a
+/// run's width claims, only one bit — and each read position's value kept
+/// once, as an offset and a length in `bytes`.
+#[derive(Debug)]
+struct Reading<'f> {
+    wanted: WantedIndex<'f>,
     seen: Vec<u64>,
+    kept: Vec<Kept>,
+    bytes: Vec<u8>,
+}
+
+/// One origin's values READ BACK: each kept value sorted by its index, for
+/// [`ReadBack::value`] to find.
+#[derive(Debug)]
+struct ReadBack<'f> {
+    wanted: WantedIndex<'f>,
     kept: Vec<Kept>,
     bytes: Vec<u8>,
 }
@@ -217,9 +250,9 @@ struct WantedRange {
     index: u64,
 }
 
-/// One value read back: its index, and its offset and length in
-/// [`Wanted`]'s `bytes` — each under 2^32, the shot's positions and its kept
-/// bytes both being held under [`MAX_FRAME_BYTES`].
+/// One value read back: its index, and its offset and length in its read's
+/// `bytes` — each under 2^32, the shot's positions and its kept bytes both
+/// being held under [`MAX_FRAME_BYTES`].
 #[derive(Debug, Clone, Copy)]
 struct Kept {
     index: u32,
@@ -359,7 +392,7 @@ fn image_run<'v>(run: &'v Value, origin: &str) -> Result<(&'v str, u64, u64), Ha
 
 impl<'f> Wanted<'f> {
     fn new(origin: &'f str) -> Wanted<'f> {
-        Wanted { origin, ranges: HashMap::new(), seen: Vec::new(), kept: Vec::new(), bytes: Vec::new() }
+        Wanted { origin, ranges: HashMap::new() }
     }
 
     /// The run of `width` positions from `prefix.first` wanted. PRECONDITION:
@@ -368,15 +401,17 @@ impl<'f> Wanted<'f> {
         self.ranges.entry(prefix).or_default().push(WantedRange { first, reach: first + width, index: 0 });
     }
 
-    /// The wanted ranges of each prefix merged and sorted, and every wanted
-    /// position given an index — under [`MAX_COPIED_POSITIONS`] in all, the
-    /// widths summed having been held to it — and a bit to mark it read.
-    fn seal(&mut self) {
+    /// THE READ BEGUN: the wanted ranges of each prefix merged and sorted,
+    /// every wanted position given an index — under [`MAX_COPIED_POSITIONS`]
+    /// in all, the widths summed having been held to it — and a bit to mark
+    /// it read.
+    fn seal(self) -> Reading<'f> {
+        let mut ranges = self.ranges;
         let mut positions = 0u64;
-        for ranges in self.ranges.values_mut() {
-            ranges.sort_unstable_by_key(|r| r.first);
-            let mut merged: Vec<WantedRange> = Vec::with_capacity(ranges.len());
-            for r in ranges.drain(..) {
+        for prefix_ranges in ranges.values_mut() {
+            prefix_ranges.sort_unstable_by_key(|r| r.first);
+            let mut merged: Vec<WantedRange> = Vec::with_capacity(prefix_ranges.len());
+            for r in prefix_ranges.drain(..) {
                 match merged.last_mut() {
                     Some(last) if r.first <= last.reach => last.reach = last.reach.max(r.reach),
                     _ => merged.push(r),
@@ -386,25 +421,29 @@ impl<'f> Wanted<'f> {
                 r.index = positions;
                 positions += r.reach - r.first;
             }
-            *ranges = merged;
+            *prefix_ranges = merged;
         }
-        self.seen = vec![0; positions.div_ceil(64) as usize];
+        Reading { wanted: WantedIndex(ranges), seen: vec![0; positions.div_ceil(64) as usize], kept: Vec::new(), bytes: Vec::new() }
     }
+}
 
+impl WantedIndex<'_> {
     /// The index of the wanted position `prefix.n`, where one is wanted.
     fn index(&self, prefix: &str, n: u64) -> Option<u64> {
-        let ranges = self.ranges.get(prefix)?;
-        let r = ranges[ranges.partition_point(|r| r.reach <= n)..].first()?;
+        let ranges = self.0.get(prefix)?;
+        let r = ranges.get(ranges.partition_point(|r| r.reach <= n))?;
         (r.first <= n).then(|| r.index + (n - r.first))
     }
+}
 
+impl<'f> Reading<'f> {
     /// The value read at `prefix.n`, kept where the shot wants it and the
     /// first time it is read — and counted against `spent`, the body budget
     /// every origin's kept values share: a distinct value the shot copies in
     /// is one its body carries at least once, at its length and its
     /// four-byte prefix, so the kept values never pass [`MAX_FRAME_BYTES`].
     fn keep(&mut self, prefix: &str, n: u64, value: &[u8], spent: &mut usize) -> Result<(), Halt> {
-        let Some(index) = self.index(prefix, n) else { return Ok(()) };
+        let Some(index) = self.wanted.index(prefix, n) else { return Ok(()) };
         let (word, bit) = ((index / 64) as usize, 1u64 << (index % 64));
         if self.seen[word] & bit != 0 {
             return Ok(());
@@ -418,15 +457,20 @@ impl<'f> Wanted<'f> {
         Ok(())
     }
 
-    /// The read done: the kept values sorted by index, for [`Wanted::value`].
-    fn finish(&mut self) {
-        self.kept.sort_unstable_by_key(|k| k.index);
+    /// THE READ DONE: the kept values sorted by index, the marks of what was
+    /// read let go.
+    fn finish(self) -> ReadBack<'f> {
+        let Reading { wanted, mut kept, bytes, .. } = self;
+        kept.sort_unstable_by_key(|k| k.index);
+        ReadBack { wanted, kept, bytes }
     }
+}
 
+impl ReadBack<'_> {
     /// The value read back at `prefix.n`, where the shot wants it and the
     /// origin holds it.
     fn value(&self, prefix: &str, n: u64) -> Option<&[u8]> {
-        let index = u32::try_from(self.index(prefix, n)?).ok()?;
+        let index = u32::try_from(self.wanted.index(prefix, n)?).ok()?;
         let kept = self.kept[self.kept.binary_search_by_key(&index, |k| k.index).ok()?];
         let offset = kept.offset as usize;
         self.bytes.get(offset..offset + kept.len as usize)
@@ -493,9 +537,9 @@ impl Composer<'_> {
     /// summed to that extent before the values are asked for; and the
     /// values through `retrieve_v`, walked beside the map position by
     /// position, each position the shot copies in kept once against `spent`.
-    fn read_back(&self, wanted: &mut Wanted<'_>, spent: &mut usize) -> Result<(), Unattested> {
+    fn read_back<'f>(&self, wanted: Wanted<'f>, spent: &mut usize) -> Result<ReadBack<'f>, Unattested> {
         let origin = wanted.origin;
-        wanted.seal();
+        let mut reading = wanted.seal();
         let set = self.read(&frames::span_set(origin))?;
         let extent = set["set"]
             .as_array()
@@ -526,7 +570,7 @@ impl Composer<'_> {
                 let (prefix, first, width) = image_run(run, origin)?;
                 for n in first..first + width {
                     match positions.next() {
-                        Some(Ok(value)) => wanted.keep(prefix, n, &value, spent)?,
+                        Some(Ok(value)) => reading.keep(prefix, n, &value, spent)?,
                         Some(Err(item)) => {
                             return Err(fault(
                                 format!("a position of {origin} cannot be read back for the shot's body"),
@@ -542,8 +586,7 @@ impl Composer<'_> {
                 return Err(disagree(origin, "is delivered past its extent").into());
             }
         }
-        wanted.finish();
-        Ok(())
+        Ok(reading.finish())
     }
 
     /// The `publish` body, under the board's frame budget ([`MAX_FRAME_BYTES`],
@@ -614,16 +657,14 @@ impl Composer<'_> {
             _ => return Err(fault("the shot names `base` without `base_extent`, or the reverse", "either both or neither (wire.md §The publish shot)").into()),
         };
         let mut spent = 0usize;
-        for wanted in &mut wants {
-            self.read_back(wanted, &mut spent)?;
-        }
+        let read_backs: Vec<ReadBack<'_>> = wants.into_iter().map(|wanted| self.read_back(wanted, &mut spent)).collect::<Result<_, _>>()?;
         let mut body = PublishBody::within(MAX_FRAME_BYTES, base).map_err(body_refused)?;
         for part in &parts {
             match part {
                 ShotPart::Copied { origin, prefix, first, width } => {
-                    let wanted = &wants[origins[origin]];
+                    let read_back = &read_backs[origins[origin]];
                     for n in *first..*first + *width {
-                        let value = wanted.value(prefix, n).ok_or_else(|| {
+                        let value = read_back.value(prefix, n).ok_or_else(|| {
                             fault(
                                 format!("the shot copies in {prefix}.{n}, which {origin}'s arrangement does not hold"),
                                 "a copied run's values are read back through its origin's own arrangement; a position outside it cannot be composed",
@@ -710,11 +751,8 @@ impl Composer<'_> {
         assert!(wants_attest(frame), "Composer::attach's precondition: wants_attest admitted the frame");
         let (doc_term, body) = self.doc_term_and_body(frame)?;
         let account = addr(self.account, "account")?;
-        let alg = self.signer.public_key().alg().to_string();
-        let bytes = match &doc_term {
-            OwnedDocTerm::One(a) => entry_frame(&alg, self.board_term, &account, DocTerm::One(a), &body),
-            OwnedDocTerm::Pair { d_s, d_a } => entry_frame(&alg, self.board_term, &account, DocTerm::Pair { d_s, d_a }, &body),
-        };
+        let alg = self.signer.public_key().alg();
+        let bytes = entry_frame(alg, self.board_term, &account, doc_term.as_doc_term(), &body);
         frame["attest"] = json!({"alg": alg, "sig": sig_hex(&self.signer.sign(&bytes))});
         Ok(())
     }

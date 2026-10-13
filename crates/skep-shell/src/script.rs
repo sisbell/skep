@@ -23,7 +23,7 @@ use std::path::PathBuf;
 /// One scripted answer. Its `Debug` shows a typed import's seed as `…`, as
 /// `skep-client`'s `Imported` does, so no TALK line that names an answer
 /// carries a seed.
-#[derive(Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum Answer {
     Confirm(bool),

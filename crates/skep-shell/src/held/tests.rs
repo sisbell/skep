@@ -527,7 +527,7 @@ fn a_line_the_reader_cannot_read_whole_halts_the_file() {
         body.extend_from_slice(&valid);
         match opened_over(&tmp, &body) {
             Opened::Halted { why, .. } => assert_eq!(why, HaltWhy::Damaged, "{cell}"),
-            Opened::Live { queue, .. } => panic!("{cell}: read live, {} lines", queue.lines().len()),
+            Opened::Live { queue, .. } => panic!("{cell}: read live: {queue:?}"),
         }
     }
 }

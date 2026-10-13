@@ -3,9 +3,10 @@
 //! naming every call by its own spelling and logging each as one entry of
 //! its outcome and sizes; a present argument of another form refused before
 //! any dial; the guest form refusing every write kind of the wire undialed
-//! and reading the board its reference or its origin names; its options
-//! printing no seed and the open's preconditions stopped loudly; and the
-//! stop abandoning a walk that waits on the page.
+//! and reading the board its reference or its origin names; a search's
+//! `opts` read as one value; its options printing no seed and the open's
+//! preconditions stopped loudly; and the stop abandoning a walk that waits
+//! on the page.
 
 use super::*;
 
@@ -146,6 +147,18 @@ fn a_guest_search_reads_the_board_its_reference_or_origin_names() {
     assert_eq!(refused.name(), "not_canonical", "{refused}");
     let refused = shell.call("search", &json!({"guest": true, "query": "x"})).unwrap_err();
     assert_eq!((refused.name(), refused.to_value()["what"].as_str()), ("malformed_args", Some("board or origin")), "{refused}");
+}
+
+/// A `search` call's `opts` are ONE value, as the bridge declares them:
+/// absent, the defaults — the library's bounds and no refresh; present, each
+/// member read into its place, the bounds the library takes and the refresh
+/// beside them (the mutant that reads `reindex` as absent searches an index
+/// the page asked to refresh first).
+#[test]
+fn a_searchs_opts_are_one_value_as_the_bridge_declares_them() {
+    assert_eq!(search_opts(&json!({"query": "x"})).unwrap(), BridgeSearchOpts::default());
+    let opts = search_opts(&json!({"query": "x", "opts": {"limit": 5, "offset": 10, "reindex": true}})).unwrap();
+    assert_eq!(opts, BridgeSearchOpts { bounds: SearchOpts { limit: 5, offset: 10 }, reindex: true });
 }
 
 /// A shell over no board, its store a throwaway directory: no feed thread,

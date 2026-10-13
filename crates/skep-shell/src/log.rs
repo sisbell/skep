@@ -14,6 +14,7 @@
 //! kept by its length, never its bytes.
 
 use std::collections::VecDeque;
+use std::fmt;
 use std::io::Read;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -24,7 +25,7 @@ use skep_client::Origin;
 
 /// How a CALL the log records was answered, as its entry's `outcome`
 /// spells it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum CallOutcome {
     /// The call's result.
@@ -39,13 +40,19 @@ pub enum CallOutcome {
 
 impl CallOutcome {
     /// The outcome as the log spells it.
-    pub fn as_str(self) -> &'static str {
+    pub const fn as_str(self) -> &'static str {
         match self {
             CallOutcome::Result => "result",
             CallOutcome::Refused => "refused",
             CallOutcome::Stream => "stream",
             CallOutcome::Canned => "canned",
         }
+    }
+}
+
+impl fmt::Display for CallOutcome {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
     }
 }
 
@@ -229,6 +236,17 @@ mod tests {
         assert_eq!(outcomes, ["result", "refused", "stream", "canned"]);
         assert_eq!((log.calls(), log.dials()), (4, 1));
         assert!(entries.iter().all(|e| e["at_ms"].as_u64().is_some()));
+    }
+
+    /// An outcome displays as the log spells it, and the four are four keys
+    /// a transport counts its calls by.
+    #[test]
+    fn an_outcome_displays_as_the_log_spells_it() {
+        let outcomes = [CallOutcome::Result, CallOutcome::Refused, CallOutcome::Stream, CallOutcome::Canned];
+        for outcome in outcomes {
+            assert_eq!(outcome.to_string(), outcome.as_str());
+        }
+        assert_eq!(outcomes.into_iter().collect::<std::collections::HashSet<_>>().len(), outcomes.len());
     }
 
     /// Entries placed from many threads at once are numbered by their

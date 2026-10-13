@@ -72,7 +72,7 @@ use skep_client::Origin;
 
 use crate::dev_arm::DevArm;
 use crate::events::{Event, EventBus, EventName};
-use crate::feed::{answer_without_index, BoardEntry, Feed, FeedThreads, Searcher, Shared};
+use crate::feed::{answer_without_index, BoardEntry, BridgeSearchOpts, Feed, FeedThreads, Searcher, Shared};
 use crate::hold::{Holds, OpAnswer, Resolved};
 use crate::log::{CallOutcome, Log, LoggingDialer};
 use crate::person::Pending;
@@ -88,7 +88,7 @@ mod ceremony;
 /// THE SESSION MODE a run names (P-5: both arms selectable per run): bare
 /// as the principal on the permissive board, or signed content-scoped with
 /// the store's key for the principal.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum SessionMode {
     Bare { principal: u64 },
     Signed { principal: u64 },
@@ -113,7 +113,7 @@ impl SessionMode {
 
 /// The dev arm a run names: the auto-answer, the default, or a script's
 /// answers.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Hash)]
 pub enum ArmConfig {
     #[default]
     Auto,
@@ -166,7 +166,7 @@ impl fmt::Debug for ShellOptions {
 }
 
 /// The own node's state as the verb that owns it reports it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum NodeState {
     Running,
     Stopped,
@@ -379,7 +379,7 @@ fn guest_form(args: &Value) -> Result<bool, Refusal> {
 /// present, each member of its form — `malformed_args` naming
 /// `opts.<member>` where one is not — and where absent the defaults: the
 /// bound limit, no offset, no reindex.
-fn search_opts(args: &Value) -> Result<(SearchOpts, bool), Refusal> {
+fn search_opts(args: &Value) -> Result<BridgeSearchOpts, Refusal> {
     optional(args, "opts", |v| v.is_object().then_some(()))?;
     let opts = &args["opts"];
     let in_opts = |member: &'static str| move |_: Refusal| Refusal::malformed(format!("opts.{member}"));
@@ -387,8 +387,8 @@ fn search_opts(args: &Value) -> Result<(SearchOpts, bool), Refusal> {
     let offset = optional(opts, "offset", Value::as_u64).map_err(in_opts("offset"))?;
     let reindex = optional(opts, "reindex", Value::as_bool).map_err(in_opts("reindex"))?;
     let defaults = SearchOpts::default();
-    let opts = SearchOpts { limit: limit.map_or(defaults.limit, |n| n as usize), offset: offset.map_or(defaults.offset, |n| n as usize) };
-    Ok((opts, reindex.unwrap_or(false)))
+    let bounds = SearchOpts { limit: limit.map_or(defaults.limit, |n| n as usize), offset: offset.map_or(defaults.offset, |n| n as usize) };
+    Ok(BridgeSearchOpts { bounds, reindex: reindex.unwrap_or(false) })
 }
 
 /// Where a guest form reads (§4b.1): one of this shell's boards, or a
@@ -496,7 +496,7 @@ impl Shell {
     }
 
     /// The bus, for a transport's event stream.
-    pub fn bus(&self) -> &Arc<EventBus> {
+    pub fn bus(&self) -> &EventBus {
         &self.bus
     }
 
@@ -506,7 +506,7 @@ impl Shell {
     }
 
     /// The log, for `GET /bridge/log`.
-    pub fn log(&self) -> &Arc<Log> {
+    pub fn log(&self) -> &Log {
         &self.log
     }
 
@@ -833,16 +833,13 @@ impl Shell {
         if !is_address_text(i) {
             return Err(Refusal::malformed("i"));
         }
-        let (board, token, session) = if guest_form(args)? {
-            (Arc::new(self.guest_board(args)?), None, None)
+        let (board, session) = if guest_form(args)? {
+            (Arc::new(self.guest_board(args)?), None)
         } else {
             let session = self.session(&args["session"])?;
-            (Arc::clone(&session.board), Some(session.token.clone()), Some(session))
+            (Arc::clone(&session.board), Some(session))
         };
-        let mut headers = Vec::new();
-        if let Some(t) = &token {
-            headers.push(("Skepd-Session".to_string(), t.as_str().to_string()));
-        }
+        let headers = session.iter().map(|s| ("Skepd-Session".to_string(), s.token.as_str().to_string())).collect();
         let head = RequestHead { method: Method::Get, path: format!("/blob?i={i}"), headers, content_length: None };
         let mut empty = std::io::empty();
         let resp = board.dialer().stream(board.dialed(), &head, &mut empty, &mut |_| {}).map_err(Refusal::Unreachable)?;
@@ -869,7 +866,7 @@ impl Shell {
     /// `query_too_long` the shell's own bound.
     fn search(&self, args: &Value) -> Result<Value, Refusal> {
         let query = args["query"].as_str().ok_or_else(|| Refusal::malformed("query"))?;
-        let (opts, reindex) = search_opts(args)?;
+        let opts = search_opts(args)?;
         let (board_reference, who) = if guest_form(args)? {
             match self.guest_target(args)? {
                 GuestTarget::Board(entry) => (entry.reference.clone(), Searcher::Guest),
@@ -884,7 +881,7 @@ impl Shell {
             let who = Searcher::Session { principal: session.facts.principal, token: session.token.clone(), account: session.facts.account.clone().unwrap_or_default() };
             (session.board_reference.clone(), who)
         };
-        self.feed(&board_reference).search(who, query, opts, reindex)
+        self.feed(&board_reference).search(who, query, opts)
     }
 
     /// `held(session)` → the acting principal's held bursts at the session's

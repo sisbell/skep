@@ -67,7 +67,9 @@ pub enum Outcome<'a> {
 /// What the shell does with a burst's outcome (§3c.4's table).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Decision {
-    /// HOLD the burst with this cause; `sent` whether a dial's answer was lost.
+    /// HOLD the burst with this cause; `sent` whether the burst MAY have
+    /// landed (§3c.2): a dial made whose answer was lost, or a `poisoned`
+    /// answer, whose frames the board's journal keeps for its restart.
     Hold { cause: &'static str, sent: bool },
     /// A REFUSED run — a `permanent` or `reorder` refusal: the caller fills the
     /// `cause` with the board's token and the `refusal` with the body verbatim.
@@ -95,7 +97,13 @@ pub fn classify(outcome: Outcome<'_>, durability_seen: u32) -> Decision {
             _ => Decision::Hold { cause: "unreachable", sent: true },
         },
         Outcome::Rejected { code, disposition } => match code {
-            "poisoned" => Decision::Hold { cause: "poisoned", sent: false },
+            // `poisoned` MAY have landed (§3c.2): the board's write path failed
+            // AFTER the burst's frames reached its journal, and a restart's open
+            // "rebuilds the line from the journal" (wire.md §Rejection codes) —
+            // the burst lands at the restart, so the resend READS before it
+            // sends, as after a lost answer. A `halted` hold (the feed's
+            // `writes.halted` read, before any dial) stays `sent: false`.
+            "poisoned" => Decision::Hold { cause: "poisoned", sent: true },
             "write_busy" => Decision::Reissue,
             // The rider (§3c.4): a THIRD `durability` on the same burst HOLDS it.
             "durability" => {
@@ -235,6 +243,15 @@ impl Holds {
         if let Some(board) = self.boards.lock().expect("the holds' lock").get_mut(reference) {
             board.node_stopped = stopped;
         }
+    }
+
+    /// Whether the board's node stands STOPPED by its owner's act
+    /// ([`Holds::set_node_stopped`]) — what the feed reads when the board's
+    /// stream fails, so a deliberate stop is announced `stopped` once and
+    /// never `unreachable` beside it. A board that is not the own node, or
+    /// one the holds never registered, answers false.
+    pub fn node_stopped(&self, reference: &str) -> bool {
+        self.boards.lock().expect("the holds' lock").get(reference).is_some_and(|b| b.node_stopped)
     }
 
     /// THE LAUNCH READ (§3c.7 item 1), BEFORE the node is up for writing: the
@@ -594,6 +611,10 @@ impl Holds {
 
     /// THE READ (§3c.5): `GET /changes?since=<base>&under=<doc>&drafts=true`
     /// under the session, all pages collected, to one of the three outcomes.
+    /// A `sent` head's one row is its own landing by the session's hand
+    /// ([`own_row`]) or by a hand the board LOST ([`testimony_lost`], the
+    /// `poisoned` burst a restart replays), the latter judged by the
+    /// arrangement alone.
     fn read_outcome(&self, entry: &BoardEntry, session: &SessionEntry, doc: &str, base: u64, head: &HeldLine) -> ReadOutcome {
         let mut rows: Vec<Value> = Vec::new();
         let mut since = base;
@@ -617,12 +638,25 @@ impl Holds {
         if rows.is_empty() {
             return ReadOutcome::SendFromHead;
         }
-        let own = own_hand(session);
         // AT MOST ONE held burst can have landed without its ack (§7b's single
         // writer): exactly one row, of the session's own hand, consistent with
         // the head → (ii); anything else → (iii) MOVED.
-        if head.sent && rows.len() == 1 && rows[0]["key"].as_str() == Some(own.as_str()) && rows[0]["op"].as_str() == head.frame["op"].as_str() && self.content_agrees(entry, session, doc, head) {
-            return ReadOutcome::Landed { at: rows[0]["at"].as_u64() };
+        if head.sent && rows.len() == 1 {
+            let row = &rows[0];
+            if own_row(session, row) && row["op"].as_str() == head.frame["op"].as_str() && self.content_confirmed(entry, session, doc, head) != Some(false) {
+                return ReadOutcome::Landed { at: row["at"].as_u64() };
+            }
+            // A row whose TESTIMONY THE BOARD LOST — `docs`, `key` and `op` the
+            // reserved null (wire.md §`/changes`): a commit the daemon never
+            // recorded, re-derived from the journal at its open — which is what
+            // a `poisoned` burst's landing at the restart is (§3c.2): the write
+            // path records acks alone. The feed cannot say whose it is, so THE
+            // ARRANGEMENT ALONE decides, as on `history_reclaimed` (§3c.5), and
+            // decisively: an `insert` whose values read back equal is (ii); a
+            // kind the site read cannot confirm faces the person (iii).
+            if testimony_lost(row) && self.content_confirmed(entry, session, doc, head) == Some(true) {
+                return ReadOutcome::Landed { at: row["at"].as_u64() };
+            }
         }
         ReadOutcome::Moved
     }
@@ -642,19 +676,27 @@ impl Holds {
     /// of another kind trusts the op-and-hand match (its site read is the
     /// editor lane's to pin). A read that fails trusts the match.
     fn content_agrees(&self, entry: &BoardEntry, session: &SessionEntry, doc: &str, head: &HeldLine) -> bool {
+        self.content_confirmed(entry, session, doc, head) != Some(false)
+    }
+
+    /// The content confirm's three answers: `Some(true)` an `insert` whose
+    /// values read back equal at its site, `Some(false)` one whose values
+    /// differ, `None` where the read cannot decide — a burst of another kind,
+    /// a frame with no site, or a read that failed. [`Holds::content_agrees`]
+    /// trusts `None`; the lost-testimony arm of the read does not.
+    fn content_confirmed(&self, entry: &BoardEntry, session: &SessionEntry, doc: &str, head: &HeldLine) -> Option<bool> {
         if head.frame["op"].as_str() != Some("insert") {
-            return true;
+            return None;
         }
-        let Some(values) = head.frame["values"].as_array() else { return true };
-        let ordinal = head.frame["at"]["ordinal"].as_str().and_then(|o| o.parse::<u64>().ok());
-        let Some(from) = ordinal else { return true };
+        let values = head.frame["values"].as_array()?;
+        let from = head.frame["at"]["ordinal"].as_str().and_then(|o| o.parse::<u64>().ok())?;
         let width = values.len() as u64;
         match entry.board.op(Some(&session.token), &frames::retrieve_v(doc, from, width)) {
             Ok(Answer::Document(v)) => {
                 let read: Vec<&Value> = v["items"].as_array().map(|a| a.iter().map(|it| &it["content"]).collect()).unwrap_or_default();
-                read.len() == values.len() && read.iter().zip(values).all(|(a, b)| *a == b)
+                Some(read.len() == values.len() && read.iter().zip(values).all(|(a, b)| *a == b))
             }
-            _ => true,
+            _ => None,
         }
     }
 
@@ -927,12 +969,42 @@ impl Holds {
     }
 }
 
-/// The session's own hand on the feed (§3c.5): its key's fingerprint, or `bare`.
+/// The session's own hand on the feed (§3c.5), as an UNSIGNED entry's `key`
+/// names it: its key's fingerprint, or `bare`.
 fn own_hand(session: &SessionEntry) -> String {
     match session.facts.fingerprint {
         Some(fp) => fp.to_hex(),
         None => "bare".to_string(),
     }
+}
+
+/// Whether a `/changes` row is of the session's OWN hand (§3c.5). An
+/// unsigned entry carries `key` — [`own_hand`]'s value. A SIGNED entry
+/// carries NO `key` (wire.md §`/changes`: `key` is present iff the entry is
+/// unsigned) and `attest` in its place, and is the session's own where the
+/// session holds a key — §3c.5's "its `key` the session's fingerprint" reads
+/// the unsigned form alone. The shell attests every `insert` ("Attach when in
+/// doubt"), but the daemon keeps an attest on a publish-class write alone and
+/// DROPS it on a draft's (wire.md §The two attestation codes), so a burst's
+/// row is the unsigned form today, its `key` the signing key's fingerprint;
+/// the signed form stands for a row the wire's rule admits. The read's other
+/// two guards (`op` equal, the content confirmed) stand beside this one, so
+/// another key's signed row still reads as (iii).
+fn own_row(session: &SessionEntry, row: &Value) -> bool {
+    if row["key"].as_str() == Some(own_hand(session).as_str()) {
+        return true;
+    }
+    session.facts.fingerprint.is_some() && row.get("key").is_none() && row.get("attest").is_some()
+}
+
+/// Whether a `/changes` row's testimony is LOST — `docs`, `key` and `op` the
+/// reserved null (wire.md §`/changes`: "`null` ONLY for lost metadata"): a
+/// commit the daemon never recorded, re-derived from the journal at its open
+/// and classified to its documents, whose hand and kind the feed cannot name.
+/// A signed row has no `key` but names its `op`; a bare session's row says
+/// `bare`; neither is this.
+fn testimony_lost(row: &Value) -> bool {
+    row["docs"].is_null() && row["key"].is_null() && row["op"].is_null()
 }
 
 /// A frame with any `attest` stripped — the stored form carries none (§3c.2).

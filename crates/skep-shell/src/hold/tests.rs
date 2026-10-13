@@ -60,8 +60,9 @@ fn every_outcome_classifies_to_exactly_its_row() {
     for e in [DialError::NotHeld("https".into()), DialError::Request("x".into())] {
         assert_eq!(classify(Outcome::Dial(&e), 0), Decision::Neither, "{e}");
     }
-    // The codes.
-    assert_eq!(rej("poisoned", "halt"), Decision::Hold { cause: "poisoned", sent: false });
+    // The codes. `poisoned` MAY have landed (§3c.2): the frames reached the
+    // journal and a restart replays them, so its line says `sent: true`.
+    assert_eq!(rej("poisoned", "halt"), Decision::Hold { cause: "poisoned", sent: true });
     assert_eq!(rej("write_busy", "retry"), Decision::Reissue);
     // `durability` once, twice → reissue; a THIRD on the same burst → hold.
     assert_eq!(classify(Outcome::Rejected { code: "durability", disposition: "retry" }, 0), Decision::Reissue);
@@ -152,6 +153,13 @@ impl Supplements for NoSupp {
 /// resend walk runs against.
 #[allow(clippy::type_complexity)]
 fn fixture() -> (Arc<Holds>, Arc<Fake>, Arc<SessionEntry>, Arc<EventBus>, Receiver<Event>, TempDir) {
+    fixture_as(Facts { principal: 1, account: Some("1.0.1".into()), kind: Kind::Bare, fingerprint: None, set_account: None })
+}
+
+/// The fixture under a session of the given facts — a bare one, or one that
+/// holds a key (the signed mode's).
+#[allow(clippy::type_complexity)]
+fn fixture_as(facts: Facts) -> (Arc<Holds>, Arc<Fake>, Arc<SessionEntry>, Arc<EventBus>, Receiver<Event>, TempDir) {
     let tmp = TempDir::new().unwrap();
     let fake = Fake::new();
     let origin = Origin::parse("http://127.0.0.1:1").unwrap();
@@ -162,10 +170,15 @@ fn fixture() -> (Arc<Holds>, Arc<Fake>, Arc<SessionEntry>, Arc<EventBus>, Receiv
     let store = Arc::new(FileStore::open(tmp.path().join("store")));
     let holds = Holds::new(Arc::clone(&sessions), Arc::clone(&bus), store, tmp.path().to_path_buf(), Arc::new(|_: &str| {}));
     holds.register_board("b-1", Arc::clone(&entry));
-    let facts = Facts { principal: 1, account: Some("1.0.1".into()), kind: Kind::Bare, fingerprint: None, set_account: None };
     let open = Open { token: Token::parse(&"9f".repeat(16)).unwrap(), facts };
     let session = sessions.register("b-1", open, &mut NoSupp);
     (holds, fake, session, bus, rx, tmp)
+}
+
+/// The facts of a session that holds a key — the signed mode's.
+fn keyed_facts() -> Facts {
+    let fingerprint = skep_identity::Fingerprint::parse_hex(&"5a".repeat(32)).unwrap();
+    Facts { principal: 1, account: Some("1.0.1".into()), kind: Kind::Content, fingerprint: Some(fingerprint), set_account: None }
 }
 
 fn insert(doc: &str, values: Value) -> Value {
@@ -220,6 +233,77 @@ fn outcome_iii_a_foreign_row_moves_the_document() {
     let rows = holds.rows("b-1", 1).unwrap();
     assert_eq!(rows[0]["cause"], "moved", "the line is faced moved: {rows}");
     assert!(held_states(&rx).contains(&"moved".to_string()));
+}
+
+/// THE OWN HAND on a read (§3c.5; wire.md §`/changes`): a SIGNED entry's row
+/// carries `attest` and NO `key`, and is the session's own under a session
+/// that holds a key — the head `done kept`, nothing re-sent — and NOT own
+/// under a bare session (the mutant that keys the test on `key` alone faces
+/// the signed row `moved`); a row with `key: "bare"` is own under a bare
+/// session alone, never under a keyed one.
+#[test]
+fn a_signed_row_is_own_under_a_keyed_session_alone() {
+    let signed_row = json!({"at": 77, "op": "insert", "docs": ["1.0.1.0.1"], "attest": {"alg": "x", "sig": "y"}});
+    let bare_row = json!({"at": 77, "op": "insert", "docs": ["1.0.1.0.1"], "key": "bare"});
+    let walk = |facts: Facts, row: Value| -> (Vec<String>, usize) {
+        let (holds, fake, session, _bus, rx, _tmp) = fixture_as(facts);
+        *fake.content.lock().unwrap() = vec![json!({"content": "hello"})];
+        *fake.rows.lock().unwrap() = vec![row];
+        holds.hold_after_dial("b-1", &session, &insert("1.0.1.0.1", json!(["hello"])), &Decision::Hold { cause: "unreachable", sent: true }, "", None);
+        holds.service("b-1");
+        let sent = fake.sent.lock().unwrap().len();
+        (held_states(&rx), sent)
+    };
+    let (states, sent) = walk(keyed_facts(), signed_row.clone());
+    assert!(states.contains(&"kept".to_string()) && !states.contains(&"moved".to_string()), "the signed row is the keyed session's own: {states:?}");
+    assert_eq!(sent, 0, "the landed head is not re-sent");
+    let (states, _) = walk(Facts { fingerprint: None, kind: Kind::Bare, ..keyed_facts() }, signed_row);
+    assert!(states.contains(&"moved".to_string()), "a signed row is foreign to a bare session: {states:?}");
+    let (states, _) = walk(keyed_facts(), bare_row);
+    assert!(states.contains(&"moved".to_string()), "a bare hand's row is foreign to a keyed session: {states:?}");
+}
+
+/// A ROW WHOSE TESTIMONY THE BOARD LOST (`docs`, `key`, `op` the reserved
+/// null — the `poisoned` burst a restart replays, §3c.2) is judged by the
+/// arrangement alone, decisively: a `sent` insert whose values read back
+/// equal is kept and not re-sent (the mutant that reads it as a foreign hand
+/// faces the person's own text `moved`); values that differ are `moved`; a
+/// kind the site read cannot confirm is `moved` too, the person's act; and a
+/// head that was never sent reads any row as `moved`.
+#[test]
+fn a_lost_testimony_row_is_judged_by_the_arrangement_alone() {
+    let lost = json!({"at": 77, "docs": null, "key": null, "time": null, "op": null, "new_prefix": null, "new_id": null, "link": null, "placed": null, "base_extent": null});
+    let walk = |frame: Value, content: &str, sent: bool| -> (Vec<String>, usize) {
+        let (holds, fake, session, _bus, rx, _tmp) = fixture();
+        *fake.content.lock().unwrap() = vec![json!({"content": content})];
+        *fake.rows.lock().unwrap() = vec![lost.clone()];
+        holds.hold_after_dial("b-1", &session, &frame, &Decision::Hold { cause: "poisoned", sent }, "", None);
+        holds.service("b-1");
+        let sent = fake.sent.lock().unwrap().len();
+        (held_states(&rx), sent)
+    };
+    let (states, sent) = walk(insert("1.0.1.0.1", json!(["hello"])), "hello", true);
+    assert!(states.contains(&"kept".to_string()) && !states.contains(&"moved".to_string()), "the landed insert is kept: {states:?}");
+    assert_eq!(sent, 0, "the landed head is not re-sent");
+    let (states, sent) = walk(insert("1.0.1.0.1", json!(["hello"])), "other", true);
+    assert!(states.contains(&"moved".to_string()) && sent == 0, "values that differ: moved, nothing sent: {states:?}");
+    let (states, sent) = walk(json!({"op": "delete", "doc": "1.0.1.0.1", "at": {"subspace": "1", "ordinal": "1"}, "width": 1}), "hello", true);
+    assert!(states.contains(&"moved".to_string()) && sent == 0, "a kind the site read cannot confirm: moved: {states:?}");
+    let (states, sent) = walk(insert("1.0.1.0.1", json!(["hello"])), "hello", false);
+    assert!(states.contains(&"moved".to_string()) && sent == 0, "a head never sent reads any row as moved: {states:?}");
+}
+
+/// A `halted` hold — the feed's `writes.halted` read, before any dial — is
+/// `sent: false`: no dial was made, so nothing of it can have landed.
+#[test]
+fn a_halted_hold_before_any_dial_is_sent_false() {
+    let (holds, fake, session, _bus, _rx, _tmp) = fixture();
+    holds.note_health("b-1", true, 10);
+    let answer = holds.before_dial("b-1", &session, &insert("1.0.1.0.1", json!(["hello"]))).expect("held before the dial").unwrap();
+    assert_eq!(answer["cause"], "halted", "{answer}");
+    let rows = holds.rows("b-1", 1).unwrap();
+    assert_eq!((rows[0]["cause"].as_str(), rows[0]["sent"].as_bool()), (Some("halted"), Some(false)), "{rows}");
+    assert!(fake.sent.lock().unwrap().is_empty(), "no dial was made");
 }
 
 /// `history_reclaimed` on the read: the arrangement alone decides — content at

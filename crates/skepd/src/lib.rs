@@ -166,6 +166,15 @@ pub use server::{
 #[doc(hidden)]
 pub use server::embed_seeded;
 
+/// The kernel's `Step` — what the daemon's `fail_the_next_checkpoint_step`
+/// hook and its panic twin take — the suites' and the dev provider's door to
+/// the kernel's halt line, re-exported for the reason [`Seq`] is: a caller
+/// arming a step would otherwise depend on `skep-kernel` itself. A test
+/// hook: `#[doc(hidden)]`, not a stable API, and absent from a shipped build.
+#[cfg(any(test, feature = "test-hooks"))]
+#[doc(hidden)]
+pub use skep_kernel::Step;
+
 /// The engine types this crate's public surface hands out: the world
 /// [`Daemon::world_at`] answers with, why it refused, the failure
 /// [`Daemon::open`] reports, and the kernel refusal that failure carries —

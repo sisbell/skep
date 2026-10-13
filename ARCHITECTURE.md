@@ -1147,22 +1147,30 @@ in the order `src/lib.rs` declares them, each naming only those above it
   registers or ends a session reaches them.
 - `feed.rs` `Feed`: two threads per board — the `/events` stream's reader
   and the consumer's owner — the `feed`, `index`, `mode` and `daemon`
-  events, a death its reads meet ended by `Sessions::end`, and the
-  `search` call answered over a channel so the consumer never crosses a
-  thread; `BoardEntry`, one board of the shell; it also reads
-  `writes.halted` per tick and drives the held-burst probe on a timed wake.
+  events (the `daemon` event for EVERY board the shell dials, each naming
+  its board; silent for the own node's deliberate stop, which the shell
+  announces `stopped` once), a death its reads meet ended by
+  `Sessions::end`, and the `search` call answered over a channel so the
+  consumer never crosses a thread; `BoardEntry`, one board of the shell;
+  it also reads `writes.halted` per tick and drives the held-burst probe
+  on a timed wake.
 - `hold.rs` the HELD-BURST HOLD (`client.md` §3c.4, §3c.5): the per-(board,
   principal) queue over `held`'s file, the classification table over what a
-  dial answers, and the resend walk — one `/changes` read per document
-  before its first resend, with §3c.5's three outcomes — the feed worker's
-  probe drains it; the backing of `held` and `resolve`.
+  dial answers (a `poisoned` answer held as one that MAY have landed: its
+  frames stay in the journal and land at the restart), and the resend walk
+  — one `/changes` read per document before its first resend, with §3c.5's
+  three outcomes, a landed row of the session's own hand kept, and one
+  whose testimony the board lost (the replayed poisoned commit's) kept by
+  the arrangement alone — the feed worker's probe drains it; the backing of
+  `held` and `resolve`.
 - `shell.rs` `Shell`: the boards, the sessions, `SessionMode`, the
   twenty-two calls as private methods behind `call(name, args)`, the
   dispatch, which logs each; the `op` burst branch answers `held` where the
   board cannot take a burst; `fetch`, public as a stream; `answer`,
   `cancel`, `shutdown`; `set_node_state`, the own node's state its owner
   reports, which `probe` answers and the `daemon` event announces at that
-  node's board.
+  node's board — a deliberate stop said there ONCE, the board's feed adding
+  no `unreachable` while it stands, and `Running` the one `running`.
 - `shapes.rs` the declarations' table, `declarations()`, pinned by its
   suite.
 
@@ -1241,16 +1249,21 @@ references; a close straight after two draft writes, both rows ahead of
 its `session-died`; the signed mode's mint, shot and V-spec link acked
 under the composed attest; the daemon's restart under the signed mode,
 the session it ended re-opened under a fresh reference and written under;
-the own node's state announced at its board; and the declared fields of
-the real answers. The HELD-BURST STORE is held there too: a burst held
-when the daemon is stopped and resent `kept` after a restart at the same
-port, the kernel poison holding a burst `poisoned` then `halted`, a
-refused run with its `behind` lines and `resolve`'s two acts, the close
-order and the relaunch's launch read, a second principal's file untouched
-under the first's session; the store's own faces (the header, `v` first,
-the torn and damaged lines, the aside, the lock, compaction, persist-first)
-by `held.rs`'s suite and the classification table and the resend's three
-outcomes by `hold.rs`'s. The end's once-only gate and the supplement's
+the own node's state announced at its board, a deliberate stop said once
+with no `unreachable` beside it while a second board's stream failure is
+still announced; and the declared fields of the real answers. The
+HELD-BURST STORE is held there too: a burst held when the daemon is
+stopped and resent `kept` after a restart at the same port, the kernel
+poison holding a burst `poisoned` then `halted`, the poisoned burst
+landing at the restart and kept — never faced `moved` — with its row on
+the board once, the signed mode's landed burst kept under the session the
+restart re-opened, a refused run with its `behind` lines and `resolve`'s
+two acts, the close order and the relaunch's launch read, a second
+principal's file untouched under the first's session; the store's own
+faces (the header, `v` first, the torn and damaged lines, the aside, the
+lock, compaction, persist-first) by `held.rs`'s suite and the
+classification table, the own hand on a read (a signed entry's row, a
+lost-testimony row) and the resend's three outcomes by `hold.rs`'s. The end's once-only gate and the supplement's
 release are held by `sessions.rs`'s own suite — two hands at one death, one
 derivation, one event; a leaving session's supplement handed to the
 standing one — and the arrangement by `tests/it/tidy.rs`.

@@ -6,8 +6,11 @@
 //! beside it this crate's own read of the `/changes` pages for the `feed`
 //! events — the published feed as a guest, and each open session's drafts
 //! supplement under its token — the `/health` pair read per tick for the
-//! `mode` event, the stream's state for the `daemon` event, and the
-//! consumer's state for the `index` event, each emitted where it moved.
+//! `mode` event, the stream's state for the `daemon` event (every board the
+//! shell dials, each event naming its board; silent under the own node's
+//! DELIBERATE STOP, which the shell announces `stopped` once —
+//! [`Worker::unreachable`]), and the consumer's state for the `index` event,
+//! each emitted where it moved.
 //! The bridge's `search` call is answered on this thread too, over a
 //! channel, so the consumer never crosses a thread: two threads per board,
 //! the stream's reader and the consumer's owner, each borrowing the board
@@ -208,7 +211,12 @@ struct Worker<'b> {
     last_index: BTreeMap<Option<u64>, Value>,
     /// The session reference per mounted principal, for the `index` event.
     references: HashMap<u64, String>,
+    /// `unreachable` was announced on the `daemon` event for this board, and
+    /// its `running` is owed at the next tick.
     unreachable: bool,
+    /// The stream is down — said on TALK once per outage, announced or not
+    /// ([`Worker::unreachable`]); cleared by the next tick.
+    down: bool,
 }
 
 impl<'b> Worker<'b> {
@@ -233,6 +241,7 @@ impl<'b> Worker<'b> {
             last_index: BTreeMap::new(),
             references: HashMap::new(),
             unreachable: false,
+            down: false,
         };
         worker.mount();
         worker.read_mode();
@@ -286,6 +295,7 @@ impl<'b> Worker<'b> {
 
     fn tick(&mut self, position: u64) {
         let was_unreachable = self.unreachable;
+        self.down = false;
         if self.unreachable {
             self.unreachable = false;
             self.bus.emit(DAEMON, json!({"board": self.entry.reference, "state": "running"}));
@@ -311,12 +321,30 @@ impl<'b> Worker<'b> {
         }
     }
 
+    /// The stream could not connect, or dropped: said on TALK once per
+    /// outage (the shell's own window), and announced `unreachable` on the
+    /// `daemon` event ONCE — for every board the shell dials, each event
+    /// naming its board — EXCEPT under the own node's DELIBERATE STOP
+    /// (`Holds::node_stopped`, set by `Shell::set_node_state`): a stop the
+    /// person made is announced `stopped` once by the shell, this thread adds
+    /// no `unreachable` while the stop stands, and `self.unreachable` stays
+    /// false, so the next tick says no `running` of its own either —
+    /// `set_node_state(Running)` is the one `running`. Where the stop is
+    /// lifted while the stream is still down, the next failure here is
+    /// announced as built.
     fn unreachable(&mut self, text: &str) {
-        if !self.unreachable {
-            self.unreachable = true;
-            self.say(format!("the commit stream is not answering: {text}"));
-            self.bus.emit(DAEMON, json!({"board": self.entry.reference, "state": "unreachable"}));
+        if self.unreachable {
+            return;
         }
+        if !self.down {
+            self.down = true;
+            self.say(format!("the commit stream is not answering: {text}"));
+        }
+        if self.holds.node_stopped(&self.entry.reference) {
+            return;
+        }
+        self.unreachable = true;
+        self.bus.emit(DAEMON, json!({"board": self.entry.reference, "state": "unreachable"}));
         // Every session at this board is dead where the board restarted;
         // the arm is read when the board answers again.
     }

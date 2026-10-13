@@ -8,15 +8,18 @@
 //! permit pools held full (`write_busy`, `scan_busy`, `fetch_busy`), the
 //! held permits released, the head writer's next refusal, the feed walk's
 //! hold and release, the media floor's free space, the checkpoint thread's
-//! next panic, and `halt_writes` — the attest store's next write failed, so a
+//! next panic, `halt_writes` — the attest store's next write failed, so a
 //! signed commit below the reclaim floor halts the write path and every write
-//! after answers `poisoned` (the shell then holds the burst; §3c.4). The
-//! kernel's `fail_the_next` POISON door is NOT offered here: it takes
-//! `skep-kernel`'s `Step`, a type this binary does not name and cannot without
-//! a `skepd` re-export or a `skep-kernel` dependency, neither this lane's — the
-//! shell's own suite drives the kernel poison in-process instead (reported).
-//! Without the feature every door of this module is the one refusal,
-//! `not_built_in`, and `--own` halts before serving.
+//! after answers `poisoned` (the shell then holds the burst; §3c.4) — and
+//! `poison`, the kernel's own halt: the next commit's barrier fails and so
+//! does the truncation that would repair it, so the kernel is POISONED and
+//! that write answers `poisoned` — the burst held `sent: true`, since its
+//! frames stay in the journal and land at the restart (§3c.2). The door arms
+//! the daemon's `fail_the_next_checkpoint_step` at `JournalBarrier` and
+//! `JournalRepair`, naming the steps by `skep_kernel::Step` as `skepd`
+//! re-exports it under `test-hooks`; eleven doors in all. Without the feature
+//! every door of this module is the one refusal, `not_built_in`, and `--own`
+//! halts before serving.
 
 use std::path::Path;
 
@@ -25,7 +28,7 @@ use skep_client::halt::Halt;
 use skep_client::Origin;
 
 /// The doors by name, as the route spells them.
-pub const DOORS: [&str; 10] = ["write_busy", "scan_busy", "fetch_busy", "release", "refuse_next_head", "hold_feed_walk", "release_feed_walk", "media_free_space", "panic_checkpoint_thread", "halt_writes"];
+pub const DOORS: [&str; 11] = ["write_busy", "scan_busy", "fetch_busy", "release", "refuse_next_head", "hold_feed_walk", "release_feed_walk", "media_free_space", "panic_checkpoint_thread", "halt_writes", "poison"];
 
 #[cfg(feature = "dev-hooks")]
 mod built {
@@ -35,7 +38,7 @@ mod built {
     use serde_json::{json, Value};
     use skep_client::halt::Halt;
     use skep_client::Origin;
-    use skepd::{embed, AuthOptions, Daemon, EmbedError, MediaOptions, Permit, Skepd, DEFAULT_WORKERS};
+    use skepd::{embed, AuthOptions, Daemon, EmbedError, MediaOptions, Permit, Skepd, Step, DEFAULT_WORKERS};
 
     /// The daemon in-process: the server, and the origin it answers at.
     pub struct Node {
@@ -142,9 +145,35 @@ mod built {
                 daemon.fail_the_attest_stores_next_write();
                 json!({"door": door})
             }
+            "poison" => {
+                // The kernel's halt (§3c.2's `poisoned`): the next commit's
+                // barrier fails, then the truncation that would repair it, so
+                // the kernel is POISONED — the write answers `poisoned`, the
+                // burst's frames stay in the journal, and a restart lands
+                // them. Each arm fires once; both are armed before the write,
+                // the barrier's first, as the shell's own suite arms them.
+                let kind = io_kind(args["kind"].as_str());
+                daemon.fail_the_next_checkpoint_step(Step::JournalBarrier, kind);
+                daemon.fail_the_next_checkpoint_step(Step::JournalRepair, kind);
+                json!({"door": door})
+            }
             other => return Err(format!("no door named `{other}`: the doors are {}", super::DOORS.join(", "))),
         };
         Ok(answer)
+    }
+
+    /// The I/O kind the `poison` door's arms fail with, as the route's
+    /// `kind` spells it; `Other` where absent or unknown.
+    fn io_kind(name: Option<&str>) -> std::io::ErrorKind {
+        use std::io::ErrorKind;
+        match name {
+            Some("storage_full") => ErrorKind::StorageFull,
+            Some("permission_denied") => ErrorKind::PermissionDenied,
+            Some("interrupted") => ErrorKind::Interrupted,
+            Some("not_found") => ErrorKind::NotFound,
+            Some("write_zero") => ErrorKind::WriteZero,
+            _ => ErrorKind::Other,
+        }
     }
 }
 

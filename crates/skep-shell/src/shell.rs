@@ -366,7 +366,10 @@ impl Shell {
     /// The own node's state as the verb that owns it reports it: what
     /// `probe` answers for that node, announced on the `daemon` event at its
     /// board (`client.md` §4b.2: "the shell owns the child process"); a
-    /// shell that runs no node has none to report.
+    /// shell that runs no node has none to report. A DELIBERATE STOP is
+    /// said here ONCE: while it stands the board's feed announces no
+    /// `unreachable` of its own, and `Running` here is the one `running`
+    /// (`feed.rs`'s `unreachable`).
     pub fn set_node_state(&self, state: NodeState) {
         let Some(board) = &self.own_node else { return };
         self.node_state.store(matches!(state, NodeState::Stopped) as u8, Ordering::SeqCst);

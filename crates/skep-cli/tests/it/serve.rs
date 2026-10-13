@@ -740,7 +740,11 @@ fn f6_without_dev_hooks_the_fault_door_is_not_built_in() {
 }
 
 /// F6 under the feature: the daemon in-process with `--own`, the fault
-/// doors forcing `write_busy` and `scan_busy` live, the `daemon` event.
+/// doors forcing `write_busy` and `scan_busy` live, the `daemon` event; the
+/// `poison` door poisoning the kernel, so a burst `op` answers `held` with
+/// `cause: poisoned` — its line `sent: true`, since the frames land at a
+/// restart — and `held(session)` lists it; a door that is no door refused
+/// naming the eleven.
 #[cfg(feature = "dev-hooks")]
 #[test]
 fn f6_under_dev_hooks_the_fault_doors_force_the_daemons_states_live() {
@@ -776,7 +780,19 @@ fn f6_under_dev_hooks_the_fault_doors_force_the_daemons_states_live() {
     // suite drives the write-path halt in-process, and the stop/restart test
     // below drives a live hold through the provider.)
     assert_eq!(provider.result("fault/halt_writes", json!({}))["door"], "halt_writes");
-    assert_eq!(provider.refused("fault/no_such_door", json!({}))["name"], "not_built_in");
+    let refused = provider.refused("fault/no_such_door", json!({}));
+    assert_eq!(refused["name"], "not_built_in");
+    assert!(refused["detail"].as_str().unwrap().contains("poison"), "the refusal names the doors, `poison` among them: {refused}");
+    // The poison door: the kernel's next commit poisoned, so a burst on the
+    // draft minted above answers `held` with `cause: poisoned` (§3c.4), its
+    // line `sent: true` (§3c.2: the frames stay in the journal and land at a
+    // restart), and `held(session)` lists it.
+    assert_eq!(provider.result("fault/poison", json!({}))["door"], "poison");
+    let held = provider.result("op", json!({"session": session, "frame": {"op": "insert", "doc": minted["addr"], "at": {"subspace": "1", "ordinal": "1"}, "values": ["p"]}}));
+    assert_eq!((held["resp"].as_str(), held["cause"].as_str()), (Some("held"), Some("poisoned")), "{held}");
+    let rows = provider.result("held", json!({"session": session}));
+    assert_eq!(rows.as_array().unwrap().len(), 1, "held(session) lists the burst: {rows}");
+    assert_eq!((rows[0]["cause"].as_str(), rows[0]["sent"].as_bool()), (Some("poisoned"), Some(true)), "{rows}");
     let said = provider.talk();
     assert_eq!(provider.stop(), 0, "{said}");
 }

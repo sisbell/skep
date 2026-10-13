@@ -10,14 +10,18 @@
 //! — and the same write under the bare mode refused; the daemon's restart
 //! under the signed mode: the session it ended, ended once, re-opened under
 //! a fresh reference its arm names, and written under; and the own node's
-//! state announced at its board.
+//! state announced at its board — a deliberate stop said once, its feed
+//! adding no `unreachable` while it stands. Then the HELD-BURST STORE: the
+//! holds against the real daemon, the poisoned burst that lands at the
+//! restart and is kept, and the signed session's own attested row.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
 use serde_json::{json, Value};
+use skep_client::board::{Answer, Board, ChangesAnswer, ChangesQuery, Token};
 use skep_kernel::Step;
 use skepd::{embed, AuthOptions, MediaOptions, Skepd, DEFAULT_WORKERS};
 use tempfile::TempDir;
@@ -380,6 +384,62 @@ fn the_own_nodes_state_is_announced_at_its_board() {
     sd.shutdown();
 }
 
+/// A DELIBERATE STOP IS SAID ONCE: with the own node running and its feed
+/// live, `set_node_state(Stopped)` and then the node's shutdown — within
+/// three probe cadences the board's `daemon` events are EXACTLY one `stopped`
+/// and no `unreachable` (the mutant that keeps the feed's emit under the
+/// stop); the node back at the same port and `set_node_state(Running)`:
+/// exactly one `running`, the feed's first tick after the restart adding none
+/// of its own (the mutant that marks the stream unreachable under the stop
+/// and so says `running` twice). A second board that is NOT the own node,
+/// shut down the same way, still announces `unreachable`: the `daemon` event
+/// reaches every board the shell dials, each naming its board.
+#[test]
+fn a_deliberate_stop_of_the_own_node_is_said_once() {
+    let dir = TempDir::new().unwrap();
+    let own_sd = spawn(&dir.path().join("own"), true);
+    let other_sd = spawn(&dir.path().join("other"), true);
+    let port = own_sd.port();
+    let own_origin = format!("http://127.0.0.1:{port}");
+    let other_origin = format!("http://127.0.0.1:{}", other_sd.port());
+    let store = dir.path().join("store");
+    claim_board(&own_origin, &store);
+    let (talk, lines) = talk();
+    let boards = vec![Origin::parse(&own_origin).unwrap(), Origin::parse(&other_origin).unwrap()];
+    let shell = Shell::open(ShellOptions { boards, store_dir: store, mode: SessionMode::Bare { principal: 1 }, arm: ArmConfig::Auto, talk, own_node: Some(Origin::parse(&own_origin).unwrap()) });
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let _answerer = answer_moments(shell.subscribe(), Arc::clone(&shell.pending), Arc::clone(&seen));
+    let refs = shell.board_references();
+    let (own, other) = (refs[0].clone(), refs[1].clone());
+    let daemon_states = |board: &str| -> Vec<String> { seen.lock().unwrap().iter().filter(|e| e.name == "daemon" && e.data["board"] == board).map(|e| e.data["state"].as_str().unwrap_or("?").to_string()).collect() };
+    // The own node's feed is live: a session's supplement widened on its thread.
+    let session = shell.call("session", &json!({"board": own})).unwrap()["session"].as_str().unwrap().to_string();
+    wait_for(&seen, |e| e.name == "index" && e.data["session"] == session);
+    // The stop, deliberate: said once; then both nodes go down.
+    shell.set_node_state(NodeState::Stopped);
+    let stopped_at = Instant::now();
+    own_sd.shutdown();
+    other_sd.shutdown();
+    // The other board's stream fails: `unreachable`, as every board's does.
+    wait_for(&seen, |e| e.name == "daemon" && e.data["board"] == other && e.data["state"] == "unreachable");
+    thread::sleep((stopped_at + PROBE_CADENCE * 3).saturating_duration_since(Instant::now()));
+    assert_eq!(daemon_states(&own), ["stopped"], "a deliberate stop is said once, no unreachable beside it:\n{}", lines.lock().unwrap().join("\n"));
+    assert!(lines.lock().unwrap().iter().any(|l| l.contains("the commit stream is not answering")), "TALK still says the stream is down:\n{}", lines.lock().unwrap().join("\n"));
+    // The node back at the same port, `running` said once by its owner; the
+    // old session dies, a fresh one's write makes the stream tick, and the
+    // tick adds no `running` of its own.
+    let own_sd = spawn_at(&dir.path().join("own"), true, port);
+    shell.set_node_state(NodeState::Running);
+    wait_for(&seen, |e| e.name == "session-died" && e.data["session"] == session);
+    let session2 = shell.call("session", &json!({"board": own})).unwrap()["session"].as_str().unwrap().to_string();
+    shell.call("op", &json!({"session": session2, "frame": {"op": "create_new_document", "account": "1.0.1"}})).unwrap();
+    wait_for(&seen, |e| e.name == "feed" && e.data["board"] == own && e.data["update"]["class"] == "drafts");
+    assert_eq!(daemon_states(&own), ["stopped", "running"], "the restart's running is said once");
+    assert_eq!(daemon_states(&other), ["unreachable"], "the other board's stream failure is announced, and nothing more");
+    shell.shutdown();
+    own_sd.shutdown();
+}
+
 /// The declarations name the shell's own answers: every field a real
 /// `boards`, `session`, `health` and `probe` answer carries is declared.
 #[test]
@@ -496,6 +556,146 @@ fn the_poisoned_write_path_holds_bursts_poisoned_then_halted() {
     };
     assert_eq!(halted["resp"], "held", "{halted}");
     shell.shutdown();
+    sd.shutdown();
+}
+
+/// The acting principal's held file under `store`, where one stands.
+fn held_path(store: &Path) -> Option<PathBuf> {
+    std::fs::read_dir(store.join("held")).ok()?.flatten().map(|e| e.path().join("principal-1.held")).find(|p| p.is_file())
+}
+
+/// A delivery's text, its items joined (adjacent text comes as one item).
+fn text_of(delivery: &Value) -> String {
+    delivery["items"].as_array().unwrap().iter().map(|i| i["content"].as_str().unwrap_or("")).collect()
+}
+
+/// The rows of `doc`'s drafts supplement since `since`, read under `token`.
+fn changes_under(board: &Board, token: &Token, doc: &str, since: u64) -> Vec<Value> {
+    match board.changes(Some(token), &ChangesQuery { since, under: Some(doc), drafts: true, limit: None }).unwrap() {
+        ChangesAnswer::Page(page) => page.changes,
+        _ => panic!("no page under {doc} since {since}"),
+    }
+}
+
+/// THE POISONED BURST LANDS AND IS KEPT (§3c.2): the kernel poisoned as the
+/// cell above poisons it, a burst held `poisoned` — its line on disk `sent:
+/// true`, since the failed repair keeps its frames in the journal — then the
+/// daemon restarted at the same port, whose open replays them: the resend's
+/// read finds the landed row, the `held` event reaches `kept` and never
+/// `moved`, the board holds the burst's row exactly once, and the file
+/// compacts away (the mutant that leaves `poisoned` at `sent: false` faces
+/// the person's own text `moved`).
+#[test]
+fn a_poisoned_burst_lands_at_the_restart_and_is_kept() {
+    let dir = TempDir::new().unwrap();
+    let sd = spawn(&dir.path().join("board"), true);
+    let port = sd.port();
+    let (shell, seen, board, session, draft) = held_ground(&dir, &sd);
+    let store = dir.path().join("store");
+    sd.daemon().fail_the_next_checkpoint_step(Step::JournalBarrier, std::io::ErrorKind::Other);
+    sd.daemon().fail_the_next_checkpoint_step(Step::JournalRepair, std::io::ErrorKind::Other);
+    let held = shell.call("op", &json!({"session": session, "frame": {"op": "insert", "doc": draft, "at": {"subspace": "1", "ordinal": "2"}, "values": ["b"]}})).unwrap();
+    assert_eq!((held["resp"].as_str(), held["cause"].as_str()), (Some("held"), Some("poisoned")), "{held}");
+    let rows = shell.call("held", &json!({"session": session})).unwrap();
+    assert_eq!(rows.as_array().unwrap().len(), 1, "held(session) lists it: {rows}");
+    assert_eq!(rows[0]["sent"], true, "a poisoned burst may have landed: {rows}");
+    let line = std::fs::read_to_string(held_path(&store).expect("the held file stands")).unwrap();
+    assert!(line.contains("\"cause\":\"poisoned\"") && line.contains("\"sent\":true"), "the line on disk says so: {line}");
+    // The restart at the same port replays the journal: the burst lands.
+    sd.shutdown();
+    let sd = spawn_at(&dir.path().join("board"), true, port);
+    wait_for(&seen, |e| e.name == "session-died" && e.data["session"] == session);
+    let session2 = shell.call("session", &json!({"board": board})).unwrap()["session"].as_str().unwrap().to_string();
+    wait_for(&seen, |e| e.name == "held" && e.data["doc"] == draft && e.data["state"] == "kept");
+    let states: Vec<String> = seen.lock().unwrap().iter().filter(|e| e.name == "held" && e.data["doc"] == draft).map(|e| e.data["state"].as_str().unwrap_or("?").to_string()).collect();
+    assert!(!states.contains(&"moved".to_string()), "the own burst is never faced moved: {states:?}");
+    assert!(shell.call("held", &json!({"session": session2})).unwrap().as_array().unwrap().is_empty(), "the lines are done");
+    assert!(held_path(&store).is_none(), "the file compacted away");
+    // The board holds the burst ONCE: the draft reads `a`, `b` and the rows
+    // under it since genesis are the mint, the first insert and the burst.
+    let read = shell.call("op", &json!({"session": session2, "frame": skep_client::board::frames::retrieve_v(&draft, 1, 2)})).unwrap();
+    assert_eq!(text_of(&read), "ab", "{read}");
+    let token = shell.sessions.get(&session2).unwrap().token.clone();
+    let rows = changes_under(&shell.boards[0].board, &token, &draft, 0);
+    assert_eq!(rows.len(), 3, "the mint, the first insert, the burst once: {rows:?}");
+    assert_eq!((rows[0]["op"].as_str(), rows[1]["op"].as_str()), (Some("create_new_document"), Some("insert")), "{rows:?}");
+    // The daemon fact the read rests on: the write path records acks alone,
+    // so the replayed commit's row carries LOST testimony — its hand and kind
+    // the reserved null — and the arrangement alone could keep it.
+    assert!(rows[2]["key"].is_null() && rows[2]["op"].is_null() && rows[2]["docs"].is_null(), "the replayed commit's testimony is lost: {:?}", rows[2]);
+    shell.shutdown();
+    sd.shutdown();
+}
+
+/// THE SIGNED MODE's OWN ROW: a held burst whose line says `sent: true` has
+/// LANDED by the signed session's own hand, and the resend's read after the
+/// daemon's restart — under the session the restart arm re-opened —
+/// recognises it: the `held` event reaches `kept`, never `moved`, nothing is
+/// re-sent, and the board holds the row once. The row's shape is pinned as
+/// the daemon serves it: the shell attests every insert, but the daemon
+/// DROPS an attest on a write outside the publish class (wire.md §The two
+/// attestation codes), and a burst lands on a draft, so its row is an
+/// UNSIGNED entry whose `key` is the session key's fingerprint — no burst
+/// row is a signed entry on a conforming daemon; the own-row test's signed
+/// arm (`attest`, no `key`) is fenced by `hold`'s suite over a fake board.
+/// The in-flight landing is forced by hand: the attested burst written
+/// through the board under the session's token, so the shell saw no ack,
+/// then held `sent: true` as a lost answer is.
+#[test]
+fn a_signed_sessions_landed_burst_is_kept_by_the_resend() {
+    let dir = TempDir::new().unwrap();
+    let sd = spawn(&dir.path().join("board"), true);
+    let port = sd.port();
+    let origin = format!("http://127.0.0.1:{port}");
+    let store = dir.path().join("store");
+    claim_board(&origin, &store);
+    let (signed, lines) = shell(&origin, &store, SessionMode::Signed { principal: 1 });
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let answerer = answer_moments(signed.subscribe(), Arc::clone(&signed.pending), Arc::clone(&seen));
+    let board = signed.call("boards", &json!({})).unwrap()[0]["board"].as_str().unwrap().to_string();
+    let session = signed.call("session", &json!({"board": board})).unwrap()["session"].as_str().unwrap().to_string();
+    let draft = signed.call("op", &json!({"session": session, "frame": {"op": "create_new_document", "account": "1.0.1"}})).unwrap()["addr"].as_str().unwrap().to_string();
+    let first = signed.call("op", &json!({"session": session, "frame": {"op": "insert", "doc": draft, "at": {"subspace": "1", "ordinal": "1"}, "values": ["a"]}})).unwrap_or_else(|r| panic!("{r}\n{}", lines.lock().unwrap().join("\n")));
+    let base = first["at"].as_u64().expect("the ack's position");
+    // The in-flight burst: composed and signed as the shell composes it,
+    // written under the session's token through the board itself.
+    let entry = signed.sessions.get(&session).unwrap();
+    let fp = entry.facts.fingerprint.expect("a signed session holds a key");
+    let frame = json!({"op": "insert", "doc": draft, "at": {"subspace": "1", "ordinal": "2"}, "values": ["b"]});
+    let board_entry = Arc::clone(&signed.boards[0]);
+    let term = board_entry.board.board_term().unwrap().expect("H.1 stands on a claimed board");
+    let signer = sessions::signer(&signed.store, &signed.store.key_path(&fp)).unwrap();
+    let mut attested = frame.clone();
+    Composer { board: &board_entry.board, token: &entry.token, signer: &*signer, account: entry.facts.account.as_deref().unwrap(), term }.attach(&mut attested).unwrap();
+    assert!(attested.get("attest").is_some(), "the shell attests every insert");
+    let Answer::Document(landed) = board_entry.board.op(Some(&entry.token), &attested).unwrap() else { panic!("the dial closed") };
+    assert!(landed["resp"].as_str().is_some_and(|r| r.starts_with("ack")), "the burst landed by the own hand: {landed}");
+    let rows = changes_under(&board_entry.board, &entry.token, &draft, base);
+    assert_eq!(rows.len(), 1, "{rows:?}");
+    assert_eq!(rows[0]["key"].as_str(), Some(fp.to_hex().as_str()), "a draft's insert is outside the publish class: the attest dropped, the row unsigned under the key's fingerprint: {rows:?}");
+    assert!(rows[0].get("attest").is_none(), "{rows:?}");
+    // Held as a lost answer is: the line `sent: true`.
+    let held = signed.holds.hold_after_dial(&board_entry.reference, &entry, &frame, &Decision::Hold { cause: "unreachable", sent: true }, "", None);
+    assert_eq!(held["resp"], "held", "{held}");
+    assert_eq!(signed.call("held", &json!({"session": session})).unwrap()[0]["sent"], true);
+    // The restart: the session re-opened under a fresh reference, the resend
+    // run under it — the read recognises the row, nothing is re-sent.
+    sd.shutdown();
+    let sd = spawn_at(&dir.path().join("board"), true, port);
+    let died = wait_for(&seen, |e| e.name == "session-died" && e.data["session"] == session);
+    let reopened = died.data["reason"]["session"].as_str().expect("the restart arm names the re-opened session").to_string();
+    wait_for(&seen, |e| e.name == "held" && e.data["doc"] == draft && e.data["state"] == "kept");
+    let states: Vec<String> = seen.lock().unwrap().iter().filter(|e| e.name == "held" && e.data["doc"] == draft).map(|e| e.data["state"].as_str().unwrap_or("?").to_string()).collect();
+    assert!(!states.contains(&"moved".to_string()), "the own signed row is never faced moved: {states:?}");
+    assert!(signed.call("held", &json!({"session": reopened})).unwrap().as_array().unwrap().is_empty(), "the line is done kept");
+    let token = signed.sessions.get(&reopened).unwrap().token.clone();
+    let rows = changes_under(&board_entry.board, &token, &draft, base);
+    assert_eq!(rows.len(), 1, "the burst's row once, nothing re-sent: {rows:?}");
+    let read = signed.call("op", &json!({"session": reopened, "frame": skep_client::board::frames::retrieve_v(&draft, 1, 2)})).unwrap();
+    assert_eq!(text_of(&read), "ab", "{read}");
+    signed.shutdown();
+    drop(signed);
+    answerer.join().unwrap();
     sd.shutdown();
 }
 

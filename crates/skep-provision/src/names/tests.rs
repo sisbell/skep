@@ -2,16 +2,16 @@
 //! snippet, the volume and the container stands — every one of the eight
 //! combinations, the reads made in the order fixed here and no further than
 //! the first that stands; the map rebuilt from a snippet directory holding
-//! two live names; a token the map does not hold answering nothing; a post
-//! gone live joining the live names; a post in flight holding its name; a
-//! move of a token never admitted, or of an ended post, and a token admitted
-//! twice, each the caller's bug, panicking — the last before the map changes;
-//! an unguessable value's form; what took a name, as the log says it; the
-//! map's `Debug` showing no token; and the labelled volumes sorted against
-//! the snippet directory — half-made, routed, or under no name of the
-//! grammar. (The two posts on one name and the fifth past the queue are the
-//! desk's — `flow/tests/desk.rs`; the sweep is the start's —
-//! `flow/tests/start.rs`.)
+//! two routed names; a token the map does not hold answering nothing; a post
+//! in flight holding its name, and a post that ends adding no name to those
+//! routed at start; a move of a token never admitted, or of an ended post,
+//! and a token admitted twice, each the caller's bug, panicking — the last
+//! before the map changes; an unguessable value's form; what took a name, as
+//! the log says it; the map's `Debug` showing no token; and the labelled
+//! volumes sorted against the snippet directory — half-made, routed, or
+//! under no name of the grammar. (The two posts on one name and the fifth
+//! past the queue are the desk's — `flow/tests/desk.rs`; the sweep is the
+//! start's — `flow/tests/start.rs`.)
 
 use std::fs;
 
@@ -62,20 +62,20 @@ fn a_name_is_taken_iff_any_one_of_the_three_stands() {
 }
 
 /// T8: THE MAP REBUILT from a directory holding `alice.caddy` and
-/// `bob.caddy` holds two live names — and no post, no token.
+/// `bob.caddy` holds the two names routed at start — and no post, no token.
 #[test]
-fn the_map_rebuilt_from_the_snippets_holds_their_live_names() {
+fn the_map_rebuilt_from_the_snippets_holds_the_names_routed_at_start() {
     let dir = Scratch::new();
     fs::write(dir.path().join("alice.caddy"), b"").expect("a snippet");
     fs::write(dir.path().join("bob.caddy"), b"").expect("a snippet");
     let map = StatusMap::rebuild(dir.path()).expect("rebuilt");
-    assert_eq!(map.live().iter().collect::<Vec<_>>(), vec![&name("alice"), &name("bob")]);
+    assert_eq!(map.routed_at_start().iter().collect::<Vec<_>>(), vec![&name("alice"), &name("bob")]);
     assert!(map.post("anything").is_none(), "a token minted before a restart answers nothing");
 }
 
-/// T8: A TOKEN NOT IN THE MAP is `None`; a post's state moves, and one gone
-/// live joins the live names; a queued or running post holds its name, a
-/// finished one does not.
+/// T8: A TOKEN NOT IN THE MAP is `None`; a post's state moves; a queued or
+/// running post holds its name, a finished one does not; and a post's end,
+/// live or failed, adds no name to those routed at start.
 #[test]
 fn the_map_answers_its_tokens_and_their_holds() {
     let mut map = StatusMap::default();
@@ -86,15 +86,13 @@ fn the_map_answers_its_tokens_and_their_holds() {
     assert!(!map.holds(&name("bob")));
     map.set("t1", PostState::Running);
     assert!(map.holds(&name("alice")));
-    assert!(!map.live().contains(&name("alice")), "a running post is no live name");
     map.set("t1", PostState::Live);
     assert!(!map.holds(&name("alice")), "a live name's truth is its snippet's");
-    assert!(map.live().contains(&name("alice")), "a post gone live joins the live names");
     assert!(map.post("t1").expect("the post").anchorless);
     map.admit("t3".into(), name("bob"), false);
     map.set("t3", PostState::Failed);
     assert!(!map.holds(&name("bob")));
-    assert!(!map.live().contains(&name("bob")));
+    assert!(map.routed_at_start().is_empty(), "a post that ends is live or failed by its own state, never a name added to those routed at start");
 }
 
 /// SETTING A TOKEN THIS PROCESS NEVER ADMITTED IS THE CALLER's BUG: `set`
@@ -107,8 +105,8 @@ fn setting_a_token_never_admitted_is_the_callers_bug() {
 }
 
 /// AN ENDED POST's STATE IS FINAL: moving a live or a failed post again is
-/// the caller's bug, and panics naming the precondition — the live names
-/// never shrink, and an ended post holds no name.
+/// the caller's bug, and panics naming the precondition — its page says how
+/// it ended, and an ended post holds no name.
 #[test]
 fn moving_an_ended_post_is_the_callers_bug() {
     for ended in [PostState::Live, PostState::Failed] {
@@ -189,12 +187,13 @@ fn what_took_a_name_displays_as_the_log_says_it() {
     assert_eq!(said, ["its snippet stands", "a volume stands under it", "a container stands under it"]);
 }
 
-/// The map's `Debug` shows how many posts it holds and the live names —
-/// never a status token, the key it holds a post by.
+/// The map's `Debug` shows how many posts it holds and the names routed at
+/// start — never a status token, the key it holds a post by.
 #[test]
 fn the_maps_debug_shows_no_token() {
-    let mut map = StatusMap::default();
-    map.admit("t0k3n".into(), name("alice"), true);
-    map.set("t0k3n", PostState::Live);
-    assert_eq!(format!("{map:?}"), "StatusMap { posts: 1, live: {Name(\"alice\")} }");
+    let dir = Scratch::new();
+    fs::write(dir.path().join("alice.caddy"), b"").expect("a snippet");
+    let mut map = StatusMap::rebuild(dir.path()).expect("rebuilt");
+    map.admit("t0k3n".into(), name("bob"), true);
+    assert_eq!(format!("{map:?}"), "StatusMap { posts: 1, routed_at_start: {Name(\"alice\")} }");
 }

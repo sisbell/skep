@@ -32,10 +32,9 @@ use crate::sender::fake::messages;
 /// inspects, `volume_create`, `run_claim`, `sidecar_claim` with the record
 /// trimmed on its stdin, `rm_force`, `run_serving`, `health` once per try,
 /// `caddy_reload`, in that order and no other call; the snippet on disk;
-/// the status live, its page the reply and its name among the live names;
-/// the invite spent; ONE mail sent,
-/// to the invite's address, after the status turned live, its body the
-/// page's text; and no record byte, address, code or token in the log.
+/// the status live, its page the reply; the invite spent; ONE mail sent, to
+/// the invite's address, after the status turned live, its body the page's
+/// text; and no record byte, address, code or token in the log.
 #[test]
 fn the_whole_flow_runs_every_step_in_order() {
     let script = [
@@ -81,7 +80,6 @@ fn the_whole_flow_runs_every_step_in_order() {
     let status_url = crate::pages::status_url("skep.host", &token);
     let page = reply::text("https://alice.skep.host", false, &status_url);
     assert_eq!(rig.service.status(&token), Some(Shown::Live(page.clone())));
-    assert!(rig.service.book().map.live().contains(&Name::parse(b"alice").expect("a name")), "alice among the live names");
     assert!(matches!(lookup(&rig.state_dir, &code).expect("read").expect("held").state, InviteState::Spent { ref name, .. } if name == "alice"));
     assert_eq!(rig.probe.seen.lock().unwrap().as_slice(), [Some(Shown::Live(page.clone()))], "one send, made with the status already live");
     let mail = messages(&rig.dir.path().join("mail.log")).expect("the mail log");

@@ -261,7 +261,7 @@ fn serve(flags: args::ServeArgs) -> i32 {
         flags.state_dir.display(),
         flags.boards_dir.display(),
         flags.settings.suffix,
-        service.live_count(),
+        service.routed_at_start_count(),
         flags.workers,
         flags.connections
     ));

@@ -1,21 +1,22 @@
 //! THE SERVICE's START: the status map rebuilt from the snippets standing;
-//! THE SWEEP, T20 (the half-made board removed, the routed and the unnamed
-//! left, a listing that fails skipped); a `docker` that cannot be run at all
+//! THE SWEEP, T20 (its listing's answer logged as every call's is, the
+//! half-made board removed, the routed and the unnamed left, a listing that
+//! fails skipped on a line of its own); a `docker` that cannot be run at all
 //! — the sweep skipped, a post refused D-8; and a `docker` that lists and
 //! then cannot run — the half-made board left INCOMPLETE, never cleared.
 
 use super::*;
 use crate::docker::Call;
 
-/// The rebuild at the service's start: the snippets standing are its live
-/// names.
+/// The rebuild at the service's start: the snippets standing are the names
+/// routed at start, which the serving line counts as `live`.
 #[test]
-fn the_service_starts_with_the_snippets_live_names() {
+fn the_service_counts_the_snippets_standing_at_start() {
     let rig = rig("", None);
     fs::write(rig.snippet("alice"), b"").expect("a snippet");
     let config = Config { boards_dir: rig.boards.clone(), suffix: "skep.host".into() };
     let again = Service::new(config, rig.state_dir.clone(), Box::new(Arc::clone(&rig.fake)), None, Arc::new(|_: &str| {}), Arc::new(|_| {})).expect("the service");
-    assert_eq!(again.live_count(), 1);
+    assert_eq!(again.routed_at_start_count(), 1);
 }
 
 /// A `docker` THAT CANNOT BE RUN AT ALL: the sweep's listing cannot be made,
@@ -49,7 +50,8 @@ fn a_docker_that_cannot_run_skips_the_sweep_and_refuses_a_post_d8() {
     drop(book);
     assert!(lookup(&state_dir, &code).expect("read").expect("held").issued());
     let log = lines.lock().unwrap().clone();
-    assert!(log.iter().any(|l| l.starts_with("sweep: volumes: docker could not run: ") && l.ends_with("; the sweep is skipped")), "{log:?}");
+    assert!(log.iter().any(|l| l.starts_with("sweep: volumes: docker could not run: ")), "{log:?}");
+    assert!(log.iter().any(|l| l == "sweep: the volumes under the label could not be listed; the sweep is skipped"), "{log:?}");
     assert!(log.iter().any(|l| l.starts_with("alice: a post could not be judged: the look at the name: ")), "{log:?}");
 }
 
@@ -88,15 +90,17 @@ fn a_look_that_cannot_be_made_never_clears_a_name() {
 }
 
 /// T20: THE SWEEP — `labelled_volumes` answering `alice`, `bob` and
-/// `Carol_X` with `alice.caddy` standing and no `bob.caddy`:
-/// `rm_force bob` then `volume_rm bob`, then the look at what stands under
-/// `bob`, finding nothing; nothing for `alice`, nothing for `Carol_X`
-/// (logged as under no name of the grammar), the count 1, the log naming
-/// the name and each step; a `labelled_volumes` exit 1 — the sweep skipped,
-/// the count 0, the service standing and taking a post; a `volume_rm`
-/// failure — logged, and the look naming the volume that stands, the name
-/// left, not counted; an `rm_force` failure (no container) logged as
-/// itself, the volume still removed and the look finding nothing.
+/// `Carol_X` with `alice.caddy` standing and no `bob.caddy`: the listing's
+/// answer logged as every call's is, then `rm_force bob` and `volume_rm
+/// bob`, then the look at what stands under `bob`, finding nothing; nothing
+/// for `alice`, nothing for `Carol_X` (logged as under no name of the
+/// grammar), the count 1, the log naming the name and each step; a
+/// `labelled_volumes` exit 1 — logged with its stderr as every call's is,
+/// the skip on a line of its own, the count 0, the service standing and
+/// taking a post; a `volume_rm` failure — logged, and the look naming the
+/// volume that stands, the name left, not counted; an `rm_force` failure
+/// (no container) logged as itself, the volume still removed and the look
+/// finding nothing.
 #[test]
 fn the_sweep_removes_a_half_made_board_and_leaves_the_rest() {
     let script = line("labelled_volumes", None, 0, "alice\nbob\nCarol_X\n", "") + &line("rm_force", Some("bob"), 0, "", "") + &line("volume_rm", Some("bob"), 0, "", "") + &inspects("bob");
@@ -106,6 +110,7 @@ fn the_sweep_removes_a_half_made_board_and_leaves_the_rest() {
     rig.fake.assert_done();
     assert_eq!(rig.fake.said(), said(&["labelled_volumes", "rm_force bob", "volume_rm bob", "volume_inspect bob", "container_inspect bob"]));
     for logged in [
+        "sweep: volumes: exit 0",
         "bob: half-made at start (a volume, no snippet) — removing",
         "bob: sweep: rm_force: exit 0",
         "bob: sweep: volume_rm: exit 0",
@@ -121,7 +126,9 @@ fn the_sweep_removes_a_half_made_board_and_leaves_the_rest() {
     // post.
     let mut unlisted = rig_with(&(line("labelled_volumes", None, 1, "", "Cannot connect to the Docker daemon\n") + &inspects("erin")), None, Arc::new(|_| {}));
     assert_eq!(unlisted.sweep(), 0);
-    assert!(unlisted.logged("sweep: volumes: exit 1; the sweep is skipped") && unlisted.logged("sweep: volumes: Cannot connect to the Docker daemon"), "{:?}", unlisted.log());
+    for logged in ["sweep: volumes: exit 1", "sweep: volumes: Cannot connect to the Docker daemon", "sweep: the volumes under the label could not be listed; the sweep is skipped"] {
+        assert!(unlisted.logged(logged), "{logged}: {:?}", unlisted.log());
+    }
     unlisted.admitted("erin", &unlisted.invite());
     unlisted.fake.assert_done();
 

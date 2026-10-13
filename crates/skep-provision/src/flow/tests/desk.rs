@@ -118,9 +118,8 @@ fn a_permit_is_given_back_when_dropped() {
 /// full queue, a held code and a held name: four waiting block a fifth even
 /// on a free name and code, and a post on a held code and a held name meets
 /// the code. Taken, the oldest post runs, still holding both. Gone live, it
-/// joins the live names and holds its name no more, and its code stays held
-/// until it is let go of. Failed, it lets its code go at once and holds its
-/// name no more, and no live name is made of it.
+/// holds its name no more, and its code stays held until it is let go of.
+/// Failed, it lets its code go at once and holds its name no more.
 #[test]
 fn the_book_keeps_its_own_rules() {
     let name = |n: &str| Name::parse(n.as_bytes()).expect("a name");
@@ -149,7 +148,6 @@ fn the_book_keeps_its_own_rules() {
     assert_eq!(book.blocks(&name("alice"), &invite_code("c5")), Some(Blocked::NameHeld));
     book.mark_live(&alice.token);
     assert_eq!(state(&book, "alice"), Some(PostState::Live));
-    assert!(book.map.live().contains(&name("alice")));
     assert_eq!(book.blocks(&name("alice"), &invite_code("c5")), None, "a live name's truth is its snippet's");
     assert_eq!(book.blocks(&name("erin"), &invite_code("c1")), Some(Blocked::CodeHeld), "held until its spend is written");
     book.release(&alice.code);
@@ -160,7 +158,6 @@ fn the_book_keeps_its_own_rules() {
     assert_eq!(state(&book, "bob"), Some(PostState::Failed));
     assert_eq!(book.blocks(&name("erin"), &invite_code("c2")), None, "a failed post's code let go of at once");
     assert_eq!(book.blocks(&name("bob"), &invite_code("c5")), None, "and its name");
-    assert!(!book.map.live().contains(&name("bob")));
     assert_eq!(book.queue.len(), 2);
 }
 

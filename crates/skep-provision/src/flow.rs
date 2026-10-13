@@ -248,8 +248,8 @@ impl Book {
         Some(job)
     }
 
-    /// `token`'s post marked live: its name among the live names. Its code
-    /// stays held until its spend is written ([`Book::release`]).
+    /// `token`'s post marked live: its page the live reply. Its code stays
+    /// held until its spend is written ([`Book::release`]).
     fn mark_live(&mut self, token: &str) {
         self.map.set(token, PostState::Live);
     }
@@ -369,10 +369,12 @@ impl Service {
         Ok(Service { config, state_dir, signups, docker, outbox, log, sleep, route_lock: Mutex::new(()), book: Mutex::new(Book::new(map)), queued: Condvar::new(), looks: AtomicUsize::new(0) })
     }
 
-    /// HOW MANY live names the map holds — at start, the rebuild's: the
-    /// serving line's `live`.
-    pub fn live_count(&self) -> usize {
-        self.book().map.live().len()
+    /// HOW MANY boards stood routed at start — the names the status map was
+    /// rebuilt with (Q5 (a)): the serving line's `live`. A board made live
+    /// since is not among them; whether a board is live now is what stands
+    /// under its name ([`names::taken`]).
+    pub fn routed_at_start_count(&self) -> usize {
+        self.book().map.routed_at_start().len()
     }
 
     /// THE SWEEP AT START, run once before the service listens: every volume
@@ -386,9 +388,10 @@ impl Service {
     /// the name then taken until the operator clears it. A name whose snippet
     /// stands is left — live, or stopped and Docker's `--restart` to bring
     /// back — and so is a listed volume under no name of the grammar, logged.
-    /// A listing that fails is logged and the sweep skipped: a listing failure
-    /// must not take the sign-up down. Answers the boards cleared, for the
-    /// serving line.
+    /// The listing's answer is logged as every call's is
+    /// ([`Service::judged`]); one that fails skips the sweep, said on a line
+    /// of its own: a listing failure must not take the sign-up down. Answers
+    /// the boards cleared, for the serving line.
     ///
     /// ITS PRECONDITION, the operator's: ONE SERVICE PER DOCKER HOST. The
     /// label marks every volume any `serve` on the host made, and a volume
@@ -406,20 +409,9 @@ impl Service {
     /// connection thread holds the service while it runs — `serve` sweeps
     /// before it shares the service with either.
     pub fn sweep(&mut self) -> usize {
-        let docker = self.docker.as_ref();
-        let listing = match docker.labelled_volumes() {
-            Ok(exit) if exit.ok() => exit,
-            Ok(exit) => {
-                self.log(&format!("sweep: volumes: exit {}; the sweep is skipped", exit.said()));
-                for line in String::from_utf8_lossy(&exit.stderr).lines() {
-                    self.log(&format!("sweep: volumes: {line}"));
-                }
-                return 0;
-            }
-            Err(e) => {
-                self.log(&format!("sweep: volumes: docker could not run: {e}; the sweep is skipped"));
-                return 0;
-            }
+        let Some(listing) = self.judged("sweep: volumes", self.docker.labelled_volumes()) else {
+            self.log("sweep: the volumes under the label could not be listed; the sweep is skipped");
+            return 0;
         };
         let labelled = match names::labelled(&listing.stdout, &self.config.boards_dir) {
             Ok(labelled) => labelled,
@@ -644,9 +636,9 @@ impl Service {
 
     /// ONE CALL's ANSWER logged and judged, each line opening `prefix` —
     /// `<name>: <step>` in a step, `<name>: <cleanup|sweep>: <step>` in a
-    /// removal: exit 0 logged and the answer kept; any other exit logged
-    /// with its stderr whole, or a `docker` that could not run logged —
-    /// each `None`.
+    /// removal, `sweep: volumes` for the sweep's listing: exit 0 logged and
+    /// the answer kept; any other exit logged with its stderr whole, or a
+    /// `docker` that could not run logged — each `None`.
     fn judged(&self, prefix: &str, answered: io::Result<Exit>) -> Option<Exit> {
         match answered {
             Ok(exit) if exit.ok() => {

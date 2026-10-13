@@ -6,11 +6,13 @@
 //! refusal, its stderr naming the recipient, by its exit code alone — and a
 //! mailer that cannot run is retried the same; the sender's thread delivers
 //! what the worker hands it, the message made with the outbox's own `From:`,
-//! `Reply-To:` and subject, and a hand-over never waits on a send stuck in its
-//! try. (No send before the status is live, and the status live throughout an
+//! `Reply-To:` and subject, a hand-over never waits on a send stuck in its
+//! try, and a send that panics costs its own mail alone, never the thread.
+//! (No send before the status is live, and the status live throughout an
 //! outage, are the flow's — `flow/tests/provision.rs`.)
 
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 
 use super::fake::{messages, FakeSender};
@@ -224,6 +226,43 @@ fn a_hand_over_never_waits_on_a_send() {
         thread::sleep(Duration::from_millis(10));
     }
     assert_eq!(*sent.lock().unwrap(), ["first@example.com", "second@example.com", "third@example.com"]);
+}
+
+/// A SEND THAT PANICS COSTS ITS OWN MAIL ALONE: the sender's thread, the
+/// first try it makes panicking, gives that mail up — logged so by its
+/// board — and delivers the next, never ended by the panic and every mail
+/// after it lost with it.
+#[test]
+fn a_send_that_panics_costs_its_own_mail_alone() {
+    /// A sender whose first try panics and whose every later try is
+    /// accepted.
+    struct PanicsOnce {
+        panicked: AtomicBool,
+        sent: Arc<Mutex<Vec<String>>>,
+    }
+    impl Sender for PanicsOnce {
+        fn send(&self, message: &Message) -> io::Result<Exit> {
+            if !self.panicked.swap(true, Ordering::SeqCst) {
+                panic!("a send that panics");
+            }
+            self.sent.lock().unwrap().push(message.to.clone());
+            Ok(Exit { code: Some(0), stdout: Vec::new(), stderr: Vec::new() })
+        }
+    }
+    let sent = Arc::new(Mutex::new(Vec::new()));
+    let (log, lines) = kept();
+    let address = |text: &str| MailAddress::parse(text).expect("an address");
+    let panics_once = PanicsOnce { panicked: AtomicBool::new(false), sent: Arc::clone(&sent) };
+    let outbox = Outbox::spawn(Box::new(panics_once), address("noreply@skep.host"), address("owner@skep.host"), log, Arc::new(|_| {})).expect("the thread");
+    outbox.hand_over(Name::parse(b"alice").expect("a name"), "first@example.com".to_owned(), "Your board is live.\n".to_owned());
+    outbox.hand_over(Name::parse(b"bob").expect("a name"), "second@example.com".to_owned(), "Your board is live.\n".to_owned());
+    let deadline = std::time::Instant::now() + Duration::from_secs(30);
+    while !lines.lock().unwrap().iter().any(|l| l.starts_with("bob: mail: ")) {
+        assert!(std::time::Instant::now() < deadline, "the mail after the panic was never delivered");
+        thread::sleep(Duration::from_millis(10));
+    }
+    assert_eq!(*sent.lock().unwrap(), ["second@example.com"]);
+    assert_eq!(*lines.lock().unwrap(), ["alice: mail: given up, a try having panicked; the board stands live and its status page with it", "bob: mail: sent at try 1 of 7"]);
 }
 
 /// A message's `Debug` names the board alone.

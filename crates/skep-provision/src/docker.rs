@@ -35,9 +35,14 @@
 //! volume inspect` and `docker container inspect` exit 0 for an object that
 //! stands and non-zero for one that does not (a non-zero for any other
 //! reason — the Engine unreachable — reads as "not standing", and the
-//! post's own `volume create` then fails, nothing made); `docker volume
-//! create --label <key>=<value> <name>` makes the volume with that label on
-//! it, the option read before the name, and `docker volume ls -q --filter
+//! post's own `volume create` then fails, nothing made), where `<name>` is
+//! no container's ID prefix: a container command reads its argument as a
+//! whole ID, then a name, then the unique prefix of an ID, so a name of hex
+//! digits alone would name another container — which the name's grammar
+//! refuses; a container's name and a volume's are two bytes at least,
+//! which the grammar holds a name to as well; `docker volume create
+//! --label <key>=<value> <name>` makes the volume with that label on it,
+//! the option read before the name, and `docker volume ls -q --filter
 //! label=<key>=<value>` prints the name of every volume so labelled, one
 //! per line and nothing else ([`LABEL_KEY`], [`LABEL_VALUE`]: the mark by
 //! which the sweep at start tells this service's volumes from every volume
@@ -48,7 +53,9 @@
 //! record from it; a user-defined bridge resolves a container's name, so
 //! `skep health --board http://<name>:8642` dials the serving run from a
 //! container on the same bridge — the same on the Linux VM and on a Mac,
-//! whose host does not reach the bridge; and `docker exec <caddy> caddy
+//! whose host does not reach the bridge — but a container's own
+//! `/etc/hosts`, read first, answers `localhost` and six `ip6-` names,
+//! which the name's grammar refuses; and `docker exec <caddy> caddy
 //! reload` reloads Caddy inside its container.
 
 use std::io;

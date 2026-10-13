@@ -14,14 +14,17 @@
 //! never stood, and a cleanup's reload failing, each logged as itself, the
 //! look finding nothing standing; a snippet whose write failed after its
 //! rename, removed by the cleanup; step 3's second look, a name taken since
-//! its post failing before anything is made; and the dark claim's retry,
-//! thirty tries two seconds apart, its last exit 4 past them the step's
-//! failure. Beside them, T12's flow half: no send before live, an outage
-//! with the status live throughout, and no mail where none is configured.
+//! its post failing before anything is made; a step or a cleanup that
+//! panics, costing its post alone and never the worker; and the dark
+//! claim's retry, thirty tries two seconds apart, its last exit 4 past them
+//! the step's failure. Beside them, T12's flow half: no send before live,
+//! an outage with the status live throughout, and no mail where none is
+//! configured.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use super::*;
+use crate::docker::Call;
 use crate::invites::InviteState;
 use crate::sender::fake::messages;
 
@@ -550,6 +553,62 @@ fn a_name_taken_since_its_post_fails_before_anything_is_made() {
         if written {
             assert_eq!(fs::read(rig.snippet("alice")).expect("the snippet stands"), b"a snippet written by hand");
         }
+    }
+}
+
+/// T13 (c): A STEP OR A CLEANUP THAT PANICS costs its post alone, never the
+/// worker: a step that panics is a failed step — `run_claim` panicking once
+/// the volume is made, the volume removed by the cleanup and the look after
+/// it finding nothing — and a cleanup that panics too — its `volume rm`
+/// panicking — is logged INCOMPLETE; either way the worker's turn ends, the
+/// post is D-8, its invite still issued and its code let go of: the post
+/// made again on it is admitted.
+#[test]
+fn a_step_or_a_cleanup_that_panics_costs_its_post_alone() {
+    /// A runner that panics at the claim run, and at the volume's removal
+    /// where `volume_rm_panics`: the volume's creation and its removal
+    /// otherwise exit 0, and every other call exit 1 — nothing standing.
+    struct Panics {
+        volume_rm_panics: bool,
+    }
+    impl Docker for Panics {
+        fn run(&self, call: Call<'_>) -> io::Result<Exit> {
+            let code = match call {
+                Call::RunClaim(_) => panic!("a step's call that panics"),
+                Call::VolumeRm(_) if self.volume_rm_panics => panic!("a cleanup's call that panics"),
+                Call::VolumeCreate(_) | Call::VolumeRm(_) => 0,
+                _ => 1,
+            };
+            Ok(Exit { code: Some(code), stdout: Vec::new(), stderr: Vec::new() })
+        }
+    }
+    for volume_rm_panics in [false, true] {
+        let dir = Scratch::new();
+        let boards = dir.path().join("boards");
+        fs::create_dir(&boards).expect("the snippet directory");
+        let state_dir = StateDir::open(&dir.path().join("state")).expect("the state directory");
+        let lines = Arc::new(Mutex::new(Vec::new()));
+        let into = Arc::clone(&lines);
+        let log: Log = Arc::new(move |line: &str| into.lock().unwrap().push(line.to_owned()));
+        let config = Config { boards_dir: boards, suffix: "skep.host".into() };
+        let service = Service::new(config, state_dir.clone(), Box::new(Panics { volume_rm_panics }), None, log, Arc::new(|_| {})).expect("the service");
+        let code = mint(&state_dir, &MailAddress::parse("person@example.com").expect("an address"), None).expect("minted");
+        let alice = record(true);
+        let post = Post { name: b"alice", record: alice.as_bytes(), invite: code.as_str().as_bytes() };
+        let token = service.admit(&post).expect("admitted");
+        assert!(service.run_next(), "{volume_rm_panics}");
+        assert_eq!(service.status(&token), Some(Shown::Failed), "{volume_rm_panics}");
+        assert!(lookup(&state_dir, &code).expect("read").expect("held").issued(), "{volume_rm_panics}: the invite was spent");
+        let cleaned = if volume_rm_panics {
+            "alice: cleanup: INCOMPLETE — the cleanup panicked, and what it had not undone stands until the operator clears it"
+        } else {
+            "alice: cleanup: done — nothing stands under the name"
+        };
+        let log = lines.lock().unwrap().clone();
+        for logged in ["alice: FAILED at a step that panicked", cleaned] {
+            assert!(log.iter().any(|l| l == logged), "{logged}: {log:?}");
+        }
+        assert!(service.admit(&post).is_ok(), "{volume_rm_panics}: the code, or the name, held past the post's end");
     }
 }
 

@@ -72,25 +72,30 @@ One request per connection, read and written through `skep-http`. A pool
 of connection threads (`--connections`, sixteen by default), made at
 start, serves them, a connection past the pool waiting in the listener's
 queue; the request in and the answer out have a minute each, so a client
-that trickles its bytes is cut off rather than holding a thread. Every
-page is plain HTML with no script and nothing fetched from elsewhere.
+that trickles its bytes is cut off rather than holding a thread. A panic
+answering one request costs that connection alone, closed unanswered,
+never its thread. Every page is plain HTML with no script and nothing
+fetched from elsewhere.
 
 - `GET /` is the sign-up page: one field, an email address.
 - `POST /signup` keeps the address and answers a thanks page. An address
-  the rule refuses (one `@` with a side each way, at most 254 bytes, no
-  control character, no whitespace, none of `( ) < > [ ] : ; \ , "` and no
-  bidi control) is shown on the page again.
+  the rule refuses (one `@` with a side each way, at most 254 bytes, ASCII
+  alone, no control character, no whitespace, none of
+  `( ) < > [ ] : ; \ , "`) is shown on the page again.
 - `GET /claim` is the claim form: the board's name, the record, and the
   invite code, pre-filled from the `invite` query value.
 - `POST /claim` judges the post before any `docker` call. The invite
   code must be one the file holds issued. The name must be one label
-  after lowercasing: `[a-z0-9-]`, 1 to 63 bytes, no hyphen at either
-  end. The record goes to `skep_identity::parse_enroll`, trimmed of its
-  trailing line breaks, and every key must be the production kind. Then
-  the name must be free: not taken — no snippet, no volume and no
-  container stands under it — and not held by a post in flight. A refused
-  post is shown on the form again, and leaves no file and no queue entry.
-  An admitted post is queued and answered with D-7 and its status URL.
+  after lowercasing: `[a-z0-9-]`, 2 to 63 bytes, no hyphen at either
+  end — never hex digits alone, which a container command reads as the
+  prefix of a container's ID, nor `localhost` or one of the `ip6-` names
+  every container's hosts file answers. The record goes to
+  `skep_identity::parse_enroll`, trimmed of its trailing line breaks, and
+  every key must be the production kind. Then the name must be free: not
+  taken — no snippet, no volume and no container stands under it — and
+  not held by a post in flight. A refused post is shown on the form
+  again, and leaves no file and no queue entry. An admitted post is
+  queued and answered with D-7 and its status URL.
 - `GET /status/<token>` shows D-7 while the post waits or runs, the live
   reply once the board is routed, and D-8 once it failed. A token the
   service does not hold is 404, and a token from before a restart is one
@@ -146,7 +151,8 @@ order:
 
 Then the status turns live, the invite is spent, and the mail goes to the
 sender's own thread. That thread retries a refused send (seven tries, ten
-minutes apart) and never holds up the next post.
+minutes apart) and never holds up the next post; a send that panics gives
+up its own mail, and no other.
 
 When a step fails, what the steps made is undone in reverse order: the
 snippet removed and the proxy reloaded where it may stand — a write's
@@ -163,7 +169,9 @@ A refused `docker rm -f` of a run that was never made, and a reload that
 fails, leave nothing standing, and the log says done. The look reads an
 Engine that cannot be reached as nothing standing, as a post's look does;
 the removals' log lines above it then name the Engine, and the next
-start's sweep finds the volume it left.
+start's sweep finds the volume it left. A step that panics is a failed
+step, and a cleanup that panics fails its post all the same, the log
+saying INCOMPLETE: a panic costs its post, never the worker.
 
 ## The sweep at start
 

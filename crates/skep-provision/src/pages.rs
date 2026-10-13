@@ -35,6 +35,7 @@
 use std::fmt;
 use std::io::{self, Read, Write};
 use std::net::TcpStream;
+use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::time::{Duration, Instant};
 
 use skep_http::{read_request, write_response, Limits, Refused, Request};
@@ -289,9 +290,17 @@ impl<S: Write> Write for Deadlined<S> {
 }
 
 /// THE CONNECTION: the timeouts, the one read under the caps and its
-/// deadline, the answer under a deadline of its own, the close.
+/// deadline, the answer under a deadline of its own, the close. A panic
+/// anywhere in it costs this connection alone — closed unanswered, the
+/// panic said on stderr by the hook — never the thread, which the pool made
+/// at start and never makes again.
 pub fn connection(stream: TcpStream, site: &Site, desk: &dyn Desk) {
-    connection_within(stream, site, desk, TRANSFER_DEADLINE);
+    // AssertUnwindSafe, and sound: the desk changes the book under its lock
+    // alone, and nothing between the book's three inserts can unwind; every
+    // mutex it takes is taken poison-recovering; the invite file's lock is
+    // let go of as its file closes; and a look's permit is given back by its
+    // `Drop` as the frame unwinds.
+    let _ = catch_unwind(AssertUnwindSafe(|| connection_within(stream, site, desk, TRANSFER_DEADLINE)));
 }
 
 /// [`connection`] with `within` for each transfer's deadline: the seam a

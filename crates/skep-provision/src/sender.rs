@@ -23,9 +23,10 @@
 //!   goes on to the next post; the outbox makes the message and the thread
 //!   sends it, and a refusal — a non-zero exit, a mailer that cannot
 //!   run — is logged and RETRIED ([`MAIL_WAIT`]: seven tries, ten minutes
-//!   apart) while the status page stands live, then logged as given up. A
-//!   mail outage never loses a board: its page and its route stand
-//!   whatever the mail does.
+//!   apart) while the status page stands live, then logged as given up; a
+//!   send that panics gives up its own mail, and no other. A mail outage
+//!   never loses a board: its page and its route stand whatever the mail
+//!   does.
 //! * [`Log`] and [`Sleep`] — the two hooks every thread of the service is
 //!   handed: the log it writes a line to, and the sleep a wait takes. They
 //!   live here, in the first module that takes them — the sender's thread
@@ -39,6 +40,7 @@
 use std::fmt;
 use std::io;
 use std::num::NonZeroU32;
+use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::mpsc::{self, Receiver};
@@ -180,12 +182,19 @@ enum DeliveredBy {
 impl Outbox {
     /// THE SENDER THREAD, started over the follow-up mail's `From:` and
     /// `Reply-To:`: it delivers each message handed over, in turn, until the
-    /// process ends.
+    /// process ends. A send that panics costs its own mail alone — given up,
+    /// and logged so by its board — never the thread, which nothing would
+    /// start again, and every mail after it with it.
     pub fn spawn(sender: Box<dyn Sender>, from: MailAddress, reply_to: MailAddress, log: Log, sleep: Sleep) -> io::Result<Outbox> {
         let (tx, rx): (mpsc::Sender<Message>, Receiver<Message>) = mpsc::channel();
         thread::Builder::new().name("sender".into()).spawn(move || {
             for message in rx {
-                deliver(sender.as_ref(), &message, MAIL_WAIT, sleep.as_ref(), log.as_ref());
+                // AssertUnwindSafe, and sound: a sender keeps nothing a send
+                // can leave half-changed — the relay client nothing at all —
+                // so the next message meets it as the last did.
+                if catch_unwind(AssertUnwindSafe(|| deliver(sender.as_ref(), &message, MAIL_WAIT, sleep.as_ref(), log.as_ref()))).is_err() {
+                    log(&format!("{}: mail: given up, a try having panicked; the board stands live and its status page with it", message.name));
+                }
             }
         })?;
         Ok(Outbox { delivered_by: DeliveredBy::Thread(tx), from, reply_to })

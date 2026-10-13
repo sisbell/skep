@@ -1,6 +1,7 @@
 //! THE DESK, what the pages ask, over the two fakes: the flow's halves of
 //! T8 (two posts on one name; a fifth past the queue; a post for a name
-//! admitted while its reads ran, refused at its own admission), T9 (a
+//! admitted while its reads ran, refused at its own admission; a name
+//! Docker cannot take as a name alone, refused with no docker call), T9 (a
 //! spent, an unknown and a held code refused; the invite first, so an
 //! uninvited post learns nothing about names; a code spent while a post's
 //! reads ran, refused at its admission; a live board's code held until its
@@ -18,6 +19,7 @@ use std::sync::mpsc;
 use skep_identity::{ALG_FNDSA512_PREVIEW_ED25519, FNDSA512_PREVIEW_ED25519_KEY_LEN};
 
 use super::*;
+use crate::name::NameRefused;
 
 /// T8: TWO POSTS ON ONE NAME — the second meets D-4 at the post, held by
 /// the first in flight, with no docker call made for it.
@@ -163,9 +165,12 @@ fn the_book_keeps_its_own_rules() {
 }
 
 /// T9: A SPENT CODE, AN UNKNOWN CODE, A CODE OF ANOTHER FORM and A CODE A
-/// POST IN FLIGHT HOLDS are refused at the post, no docker call made; and
-/// D-5 and D-6 refuse a record before any — the log naming the fault's
-/// token, never the record.
+/// POST IN FLIGHT HOLDS are refused at the post, no docker call made; D-5
+/// and D-6 refuse a record before any — the log naming the fault's token,
+/// never the record; and D-4 a name Docker cannot take as a name alone —
+/// one byte, a hosts-file name, hex digits alone — its code still issued,
+/// never let go of by a post that fails at `docker volume create` or the
+/// health wait to be posted again.
 #[test]
 fn the_posts_refusals_come_before_any_docker_call() {
     let rig = rig(&inspects("alice"), Some(Vec::new()));
@@ -182,10 +187,16 @@ fn the_posts_refusals_come_before_any_docker_call() {
     let preview = encode_enroll(&[Enrollment::new(PublicKey::parse(ALG_FNDSA512_PREVIEW_ED25519, &"9f".repeat(FNDSA512_PREVIEW_ED25519_KEY_LEN)).expect("a key"), true, None).expect("no label")]);
     assert_eq!(rig.post("bob", &preview, fresh.as_str()), Err(Refusal::Preview));
     assert_eq!(rig.post("b_b", &record(true), fresh.as_str()), Err(Refusal::Name));
+    for never in ["x", "localhost", "ab"] {
+        assert_eq!(rig.post(never, &record(true), fresh.as_str()), Err(Refusal::Name), "{never}");
+    }
     rig.fake.assert_done();
     assert!(rig.issued(&fresh));
     let log = rig.log().join("\n");
     assert!(log.contains("bob: a post refused: the record, bad_record") && log.contains("bob: a post refused: the record, preview_key"), "{log}");
+    for why in [NameRefused::TooShort, NameRefused::HostsFileName, NameRefused::HexDigitsAlone] {
+        assert!(log.contains(&format!("a post refused: {why}")), "{why:?}: {log}");
+    }
     for never in [code.as_str(), spent.as_str(), fresh.as_str(), "skep-enroll", "9f9f", "b_b"] {
         assert!(!log.contains(never), "the log carries {never:?}: {log}");
     }

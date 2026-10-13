@@ -51,7 +51,9 @@
 //! then THE STATUS LIVE, then THE INVITE SPENT under the invite file's own
 //! lock and its code let go of, in that order, then THE MAIL handed to the
 //! sender's own thread, after the page and never ahead of it, so a mail
-//! outage holds up no next post.
+//! outage holds up no next post. A step that panics is a failed step, and
+//! a cleanup that panics fails its post all the same: a panic costs its
+//! post, never the worker.
 //!
 //! THE CLEANUP (the provisioning record §5.2's decision table, D-8 made
 //! literally true): on a failed step, what the flow made is undone in the
@@ -107,6 +109,7 @@ use std::collections::{HashSet, VecDeque};
 use std::fmt;
 use std::io;
 use std::num::NonZeroU32;
+use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Condvar, Mutex, MutexGuard};
@@ -456,11 +459,23 @@ impl Service {
     /// ONE POST PROVISIONED on the worker that owns its name: the steps,
     /// then live — the route lock let go of first — and the mail after it;
     /// or cleaned up, the route lock held on into the cleanup where the steps
-    /// took it, and no mail.
+    /// took it, and no mail. A step or a cleanup that panics costs this post
+    /// alone, never the worker, which the pool made at start and never makes
+    /// again: a step that panics is a failed step, what `made` recorded
+    /// undone and a making whose record the panic cut off left standing, as
+    /// a stop mid-board leaves one; a cleanup that panics leaves what it had
+    /// not undone standing, logged INCOMPLETE; and the post fails either
+    /// way, its code let go of.
     fn provision(&self, job: Job) {
         let name = &job.name;
         let mut made = Made::default();
-        match self.steps(&job, &mut made) {
+        // `made` stands outside the catch, with the route lock it may hold,
+        // so a panicking step's makings are undone under that lock as after
+        // any failed step. AssertUnwindSafe, and sound: `made` records a
+        // making only once it is made, and every lock is taken
+        // poison-recovering.
+        let stepped = catch_unwind(AssertUnwindSafe(|| self.steps(&job, &mut made))).unwrap_or(Err("a step that panicked"));
+        match stepped {
             Ok(()) => {
                 // The route change is done: its lock let go of before the
                 // spend and the mail, which change no route.
@@ -486,7 +501,9 @@ impl Service {
             }
             Err(step) => {
                 self.log(&format!("{name}: FAILED at {step}"));
-                self.cleanup(name, made, CleanupOn::Failure);
+                if catch_unwind(AssertUnwindSafe(|| self.cleanup(name, made, CleanupOn::Failure))).is_err() {
+                    self.log(&format!("{name}: cleanup: INCOMPLETE — the cleanup panicked, and what it had not undone stands until the operator clears it"));
+                }
                 self.book().mark_failed(&job);
             }
         }

@@ -7,17 +7,18 @@
 //! a 16 KiB head, a minute each way — its two socket timeouts set before it
 //! reads, thirty seconds each, so a silent peer is let go, a request
 //! trickled past its deadline answered 400 in the answer's own, and a
-//! trickle cut at its deadline both ways; the invite link opening the claim
-//! form with its code; plain HTML with no script and nothing fetched from
-//! elsewhere, every header that says so checked whole; every row a page shows
-//! filled with the site's two slots, the suffix and the owner's address,
-//! whichever page shows it; a row's words escaped and its commands set as
-//! code; the one escaper keeping the quotes within an element's content and
-//! escaping them within an attribute's value; a person's field — a refused
-//! record among them — shown back as it was sent, a quote in it never closing
-//! its attribute; and the `Debug` of a post, a status page and an answer
-//! showing none of what they hold. (The strings table's rows are `strings`'
-//! suite.)
+//! trickle cut at its deadline both ways; a panic answering one request
+//! costing that connection alone, never the thread; the invite link opening
+//! the claim form with its code; plain HTML with no script and nothing
+//! fetched from elsewhere, every header that says so checked whole; every
+//! row a page shows filled with the site's two slots, the suffix and the
+//! owner's address, whichever page shows it; a row's words escaped and its
+//! commands set as code; the one escaper keeping the quotes within an
+//! element's content and escaping them within an attribute's value; a
+//! person's field — a refused record among them — shown back as it was
+//! sent, a quote in it never closing its attribute; and the `Debug` of a
+//! post, a status page and an answer showing none of what they hold. (The
+//! strings table's rows are `strings`' suite.)
 
 use std::io::{Read, Write};
 use std::net::{Shutdown, TcpListener, TcpStream};
@@ -270,6 +271,49 @@ fn a_connection_answers_with_its_headers_and_refuses_a_body_past_the_cap() {
     let too_large = talk(&format!("POST /claim HTTP/1.1\r\nHost: skep.host\r\nContent-Length: {}\r\n\r\n", MAX_BODY + 1));
     assert!(too_large.starts_with("HTTP/1.1 413 Payload Too Large\r\n"), "{too_large}");
     serve.join().expect("served");
+}
+
+/// A PANIC COSTS ITS CONNECTION ALONE: a desk that panics answering one
+/// request leaves that connection closed unanswered, and the thread that
+/// served it serves the next — a thread of the pool, which makes its
+/// threads at start and none again, so one it lost would be lost for good.
+#[test]
+fn a_panic_costs_its_connection_alone() {
+    /// A desk whose status page panics, and nothing else it answers.
+    struct Panics;
+    impl Desk for Panics {
+        fn sign_up(&self, _: &[u8]) -> Result<(), SignUpRefusal> {
+            Err(SignUpRefusal::Failed)
+        }
+
+        fn admit(&self, _: &Post<'_>) -> Result<String, Refusal> {
+            Err(Refusal::Failed)
+        }
+
+        fn status(&self, _: &str) -> Option<Shown> {
+            panic!("a desk that panics");
+        }
+    }
+    let listener = TcpListener::bind(("127.0.0.1", 0)).expect("a port");
+    let port = listener.local_addr().expect("its address").port();
+    let serve = std::thread::spawn(move || {
+        for _ in 0..2 {
+            let (stream, _) = listener.accept().expect("a connection");
+            connection(stream, &site(), &Panics);
+        }
+    });
+    let talk = |head: &str| {
+        let mut stream = TcpStream::connect(("127.0.0.1", port)).expect("connected");
+        stream.write_all(head.as_bytes()).expect("written");
+        let _ = stream.shutdown(Shutdown::Write);
+        let mut raw = String::new();
+        let _ = stream.read_to_string(&mut raw);
+        raw
+    };
+    assert_eq!(talk("GET /status/t0k3n HTTP/1.1\r\nHost: skep.host\r\n\r\n"), "", "an answer written from a panic");
+    let page = talk("GET / HTTP/1.1\r\nHost: skep.host\r\n\r\n");
+    assert!(page.starts_with("HTTP/1.1 200 OK\r\n"), "the thread a panic would have ended answered nothing more: {page:?}");
+    serve.join().expect("the thread that served lives on");
 }
 
 /// A peer that trickles: one byte a call, each after a pause — never

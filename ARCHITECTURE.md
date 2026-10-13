@@ -1605,11 +1605,13 @@ each naming only those above it:
 - `wait.rs` a bounded wait: `Wait`, this many tries this far apart, and
   the tries paced by it — a sleep before each but the first, never after
   the last — the `/health` read's, the dark claim's and the mail's.
-- `name.rs` a board's name: its grammar, one lowercase label, and the host
-  and the public origin it stands at, from which every `docker` call, the
-  snippet and the reply are built; and `Name::exact`, a name read back as
-  this service wrote it — a snippet's stem, a labelled volume — never
-  lowercased.
+- `name.rs` a board's name: its grammar, one lowercase label Docker takes
+  as a name alone — two bytes at least, none a container's hosts file
+  answers, never hex digits alone, which a container command reads as an
+  ID's prefix — and the host and the public origin it stands at, from
+  which every `docker` call, the snippet and the reply are built; and
+  `Name::exact`, a name read back as this service wrote it — a snippet's
+  stem, a labelled volume — never lowercased.
 - `record.rs` the record's admission: the hosted walk's trim,
   `parse_enroll`, the walk's preview-kind test copied, the anchorless
   fact.
@@ -1696,7 +1698,10 @@ Rules that hold across its files:
   start, no thread is made per connection, and one the OS will not give
   ends the start, exit 1. A request in and its answer out each have a
   minute, checked between socket calls, so a client that trickles its
-  bytes is cut off rather than holding a thread.
+  bytes is cut off rather than holding a thread. A panic answering one
+  request costs that connection alone, a step or a cleanup that panics
+  fails its post, and a send that panics gives up its own mail: no thread
+  either pool or the sender made is ever lost to one.
 - **A stranger's bytes buy a bounded bill.** A decoded form holds at most
   three fields, so it never holds more bytes than were sent; and the
   sign-up file holds at most 256 KiB, past which a sign-up, which needs

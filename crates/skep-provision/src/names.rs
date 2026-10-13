@@ -22,7 +22,7 @@
 //! the rest.
 //!
 //! THE STATUS MAP ([`StatusMap`]), in memory: each post of this run by its
-//! STATUS TOKEN — 128 bits of OS entropy as lowercase hex ([`fresh_token`]),
+//! STATUS TOKEN — 128 bits of OS entropy as lowercase hex ([`unguessable`]),
 //! shown only to the poster and in the mail, NEVER LOGGED — with its name,
 //! its state ([`State`]) and what the reply needs that a name does not say,
 //! the record's anchorless fact; and every LIVE name. REBUILT AT START from
@@ -30,7 +30,7 @@
 //! three facts are kept nowhere here: they are the constants and the public
 //! origin, and the reply renders them (`reply`). The map holds NAMES across
 //! a restart and no token: a token is never written anywhere, so a status
-//! address minted before a restart answers 404 after it, though the board
+//! URL minted before a restart answers 404 after it, though the board
 //! it named stands, live, and its mail — if it was sent — carries the reply.
 
 use std::collections::{BTreeSet, HashMap};
@@ -41,9 +41,12 @@ use crate::caddy;
 use crate::docker::Docker;
 use crate::name::Name;
 
-/// Which of the three things standing makes a name taken.
+/// What a name is TAKEN by (Q5 (a)): the first of the three things a
+/// provisioning leaves that [`taken`] finds standing under it. A name a post
+/// in flight holds ([`StatusMap::holds`]) has nothing standing under it yet;
+/// both meet D-4.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Holder {
+pub enum TakenBy {
     /// `<boards-dir>/<name>.caddy` exists.
     Snippet,
     /// `docker volume inspect <name>` exited 0.
@@ -52,13 +55,13 @@ pub enum Holder {
     Container,
 }
 
-impl Holder {
-    /// The holder as the log names it.
+impl TakenBy {
+    /// What took the name, as the log says it.
     pub fn said(self) -> &'static str {
         match self {
-            Holder::Snippet => "its snippet stands",
-            Holder::Volume => "a volume stands under it",
-            Holder::Container => "a container stands under it",
+            TakenBy::Snippet => "its snippet stands",
+            TakenBy::Volume => "a volume stands under it",
+            TakenBy::Container => "a container stands under it",
         }
     }
 }
@@ -68,15 +71,15 @@ impl Holder {
 /// non-zero exit is "not standing" whatever its reason (an Engine that
 /// cannot be reached among them — the volume's own creation then fails, and
 /// nothing is made); a `docker` that cannot be run at all is the error.
-pub fn taken(docker: &dyn Docker, boards_dir: &Path, name: &Name) -> io::Result<Option<Holder>> {
+pub fn taken(docker: &dyn Docker, boards_dir: &Path, name: &Name) -> io::Result<Option<TakenBy>> {
     if caddy::stands(boards_dir, name)? {
-        return Ok(Some(Holder::Snippet));
+        return Ok(Some(TakenBy::Snippet));
     }
     if docker.volume_inspect(name)?.ok() {
-        return Ok(Some(Holder::Volume));
+        return Ok(Some(TakenBy::Volume));
     }
     if docker.container_inspect(name)?.ok() {
-        return Ok(Some(Holder::Container));
+        return Ok(Some(TakenBy::Container));
     }
     Ok(None)
 }
@@ -116,9 +119,11 @@ pub fn labelled(listing: &[u8], boards_dir: &Path) -> io::Result<Labelled> {
     Ok(sorted)
 }
 
-/// A FRESH TOKEN: 128 bits of OS entropy as 32 lowercase hex digits — the
-/// status token, and the invite code `invite` mints where none is given.
-pub fn fresh_token() -> io::Result<String> {
+/// AN UNGUESSABLE VALUE: 128 bits of OS entropy as 32 lowercase hex digits
+/// — a status token, minted at the post so that the status URL is the
+/// poster's and not guessable (the provisioning record §5.2), and the invite
+/// code `invite` mints where none is given.
+pub fn unguessable() -> io::Result<String> {
     let mut raw = [0u8; 16];
     getrandom::fill(&mut raw).map_err(|e| io::Error::other(format!("OS entropy: {e}")))?;
     Ok(raw.iter().map(|b| format!("{b:02x}")).collect())
@@ -133,7 +138,9 @@ pub enum State {
     Running,
     /// The route stands: the live reply.
     Live,
-    /// A step failed and what it made was removed: D-8.
+    /// A step failed and the cleanup ran: D-8 — what the post made removed,
+    /// or, where a removal itself failed, the name left standing and logged
+    /// (the provisioning record §5.2's named gap).
     Failed,
 }
 
@@ -185,8 +192,8 @@ impl StatusMap {
     }
 
     /// Whether a post of this run that is not yet finished — queued or
-    /// running — names `name`: the name is held by it, though nothing stands
-    /// under it yet.
+    /// running — names `name`: the name is HELD by it — the owner's lock per
+    /// name — though nothing stands under it yet.
     pub fn holds(&self, name: &Name) -> bool {
         self.posts.values().any(|p| &p.name == name && matches!(p.state, State::Queued | State::Running))
     }

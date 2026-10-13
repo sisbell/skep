@@ -1,12 +1,12 @@
-//! THE PAGES and THE ROUTES over a desk the suite scripts: every route's
-//! status and page — the sign-up page and its thanks, the claim form with
-//! the link's code, each refusal shown on the form again, D-7 with the
-//! status address and its refresh, the live reply, D-8, 404 — a bad body
-//! 400, a body past the cap 413; the claim address an invite carries
-//! opening the claim form with its code; plain HTML with no script and
-//! nothing fetched from elsewhere; a row's words escaped and its commands
-//! set as code, and a person's field — a refused record among them — shown
-//! back as it was sent. (The strings table's rows are `strings`' suite.)
+//! THE PAGES and THE REQUESTS THEY ANSWER over a desk the suite scripts:
+//! every request's status and page — the sign-up page and its thanks, the
+//! claim form with the link's code, each refusal shown on the form again,
+//! D-7 with the status URL and its refresh, the live reply, D-8, 404 — a
+//! bad body 400, a body past the cap 413; the invite link opening the claim
+//! form with its code; plain HTML with no script and nothing fetched from
+//! elsewhere; a row's words escaped and its commands set as code, and a
+//! person's field — a refused record among them — shown back as it was
+//! sent. (The strings table's rows are `strings`' suite.)
 
 use std::io::{Read, Write};
 use std::net::{Shutdown, TcpListener, TcpStream};
@@ -17,7 +17,7 @@ use super::*;
 /// A desk that answers what the test set, and keeps what it was asked.
 #[derive(Default)]
 struct Scripted {
-    claim: Mutex<Option<Result<String, Refusal>>>,
+    admit: Mutex<Option<Result<String, Refusal>>>,
     sign_up: Mutex<Option<Result<(), SignUpRefusal>>>,
     status: Mutex<Option<Shown>>,
     asked: Mutex<Vec<String>>,
@@ -29,9 +29,9 @@ impl Desk for Scripted {
         self.sign_up.lock().unwrap().unwrap_or(Ok(()))
     }
 
-    fn claim(&self, post: &Post<'_>) -> Result<String, Refusal> {
-        self.asked.lock().unwrap().push(format!("claim {} {} {}", String::from_utf8_lossy(post.name), post.record.len(), String::from_utf8_lossy(post.invite)));
-        self.claim.lock().unwrap().clone().unwrap_or(Ok("t0k3n".into()))
+    fn admit(&self, post: &Post<'_>) -> Result<String, Refusal> {
+        self.asked.lock().unwrap().push(format!("admit {} {} {}", String::from_utf8_lossy(post.name), post.record.len(), String::from_utf8_lossy(post.invite)));
+        self.admit.lock().unwrap().clone().unwrap_or(Ok("t0k3n".into()))
     }
 
     fn status(&self, token: &str) -> Option<Shown> {
@@ -41,7 +41,7 @@ impl Desk for Scripted {
 }
 
 fn site() -> Site {
-    Site { suffix: "skep.host".into(), reply_to: "owner@skep.host".into() }
+    Site { suffix: "skep.host".into(), owner_address: "owner@skep.host".into() }
 }
 
 /// One request, as the subset reads it.
@@ -107,14 +107,14 @@ fn answer_of(method: &str, target: &str, body: &[u8]) -> Answer {
     answer(&request(method, target, body), &site(), &Scripted::default())
 }
 
-/// THE CLAIM ADDRESS an invite carries, `https://<suffix>/claim?invite=<code>`,
-/// opens the claim form with its code: the path and the query it names,
-/// asked of the routes, answer the form, its invite field pre-filled.
+/// THE INVITE LINK, `https://<suffix>/claim?invite=<code>`, opens the claim
+/// form with its code: the path and the query it names, asked of the pages,
+/// answer the form, its invite field pre-filled.
 #[test]
-fn the_claim_address_opens_the_claim_form_with_its_code() {
-    let address = claim_address("skep.host", "1.1.0.1.0.3");
-    assert_eq!(address, "https://skep.host/claim?invite=1.1.0.1.0.3");
-    let target = address.strip_prefix("https://skep.host").expect("the site's own host");
+fn the_invite_link_opens_the_claim_form_with_its_code() {
+    let link = invite_link("skep.host", "1.1.0.1.0.3");
+    assert_eq!(link, "https://skep.host/claim?invite=1.1.0.1.0.3");
+    let target = link.strip_prefix("https://skep.host").expect("the site's own host");
     let form = answer_of("GET", target, b"");
     assert_eq!(form.status, 200);
     assert!(form.body.contains("id=\"invite\" name=\"invite\" required autocomplete=\"off\" spellcheck=\"false\" value=\"1.1.0.1.0.3\""), "{}", form.body);
@@ -130,21 +130,21 @@ fn each_claim_refusal_is_shown_on_the_form_again() {
     for (refusal, words) in
         [(Refusal::Name, NAME_REFUSED), (Refusal::Record, RECORD_REFUSED), (Refusal::Preview, PREVIEW_REFUSED), (Refusal::Invite, INVITE_REFUSED), (Refusal::Busy, FAILED), (Refusal::Failed, FAILED)]
     {
-        *desk.claim.lock().unwrap() = Some(Err(refusal));
+        *desk.admit.lock().unwrap() = Some(Err(refusal));
         let answer = answer(&request("POST", "/claim", body), &site(), &desk);
         assert_eq!(answer.status, 200, "{refusal:?}");
-        let shown = row(&fill(words, &[("suffix", "skep.host"), ("reply_to", "owner@skep.host")]));
+        let shown = row(&fill(words, &[("suffix", "skep.host"), ("owner_address", "owner@skep.host")]));
         assert!(answer.body.contains(&format!("<p class=\"refused\">{shown}</p>")), "{refusal:?}");
         assert!(answer.body.contains("value=\"alice\"") && answer.body.contains("{\"type\"}\r\n</textarea>") && answer.body.contains("value=\"c0de\""), "{refusal:?}");
     }
-    assert!(row(&fill(FAILED, &[("reply_to", "owner@skep.host")])).contains("try again later, or write to owner@skep.host."));
-    assert_eq!(desk.asked.lock().unwrap()[0], "claim alice 10 c0de", "the record's ten bytes, its CRLF among them");
+    assert!(row(&fill(FAILED, &[("owner_address", "owner@skep.host")])).contains("try again later, or write to owner@skep.host."));
+    assert_eq!(desk.asked.lock().unwrap()[0], "admit alice 10 c0de", "the record's ten bytes, its CRLF among them");
 }
 
-/// `POST /claim` ADMITTED: D-7 and the status address, no redirect, the
-/// page refreshing to the status address.
+/// `POST /claim` ADMITTED: D-7 and the status URL, no redirect, the page
+/// refreshing to the status URL.
 #[test]
-fn an_admitted_claim_answers_d7_with_its_status_address() {
+fn an_admitted_post_answers_d7_with_its_status_url() {
     let answer = answer_of("POST", "/claim", b"name=alice&record=x&invite=c0de");
     assert_eq!(answer.status, 200);
     assert!(answer.body.contains(&row(BEING_MADE.text)));
@@ -170,7 +170,7 @@ fn the_status_page_by_state() {
     assert!(!live.body.contains("http-equiv"), "the live page does not refresh");
     *desk.status.lock().unwrap() = Some(Shown::Failed);
     let failed = answer(&request("GET", "/status/t0k3n", b""), &site(), &desk);
-    assert!(failed.body.contains(&row(&fill(FAILED, &[("reply_to", "owner@skep.host")]))));
+    assert!(failed.body.contains(&row(&fill(FAILED, &[("owner_address", "owner@skep.host")]))));
     *desk.status.lock().unwrap() = None;
     assert_eq!(answer(&request("GET", "/status/other", b""), &site(), &desk).status, 404);
     let asked = desk.asked.lock().unwrap().len();
@@ -179,9 +179,9 @@ fn the_status_page_by_state() {
     assert_eq!(desk.asked.lock().unwrap().len(), asked, "a path that is no token never reaches the desk");
 }
 
-/// Every other route is 404; a body the decoder refuses is 400.
+/// Every other request is 404; a body the decoder refuses is 400.
 #[test]
-fn every_other_route_is_404_and_a_bad_body_400() {
+fn every_other_request_is_404_and_a_bad_body_400() {
     for (method, target) in [("POST", "/"), ("GET", "/signup"), ("PUT", "/claim"), ("GET", "/status"), ("GET", "/favicon.ico"), ("HEAD", "/")] {
         let answer = answer_of(method, target, b"");
         assert_eq!(answer.status, 404, "{method} {target}");
@@ -251,7 +251,7 @@ fn a_row_is_escaped_and_its_commands_set_as_code() {
 #[test]
 fn a_refused_record_comes_back_as_sent() {
     let desk = Scripted::default();
-    *desk.claim.lock().unwrap() = Some(Err(Refusal::Name));
+    *desk.admit.lock().unwrap() = Some(Err(Refusal::Name));
     let answer = answer(&request("POST", "/claim", b"name=alice&record=%7B%22label%22%3A%22%60work%60%22%7D&invite=c0de"), &site(), &desk);
     assert!(answer.body.contains("{\"label\":\"`work`\"}</textarea>"), "{}", answer.body);
     assert!(!answer.body.contains("<code>work</code>"), "{}", answer.body);

@@ -68,14 +68,14 @@ pub enum Command {
     Help,
     /// `serve`: the service — boxed, its settings many times the other
     /// arms' size.
-    Serve(Box<Serve>),
+    Serve(Box<ServeArgs>),
     /// `invite`: one invite minted.
-    Invite(Invite),
+    Invite(InviteArgs),
 }
 
 /// `serve`'s settings.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Serve {
+pub struct ServeArgs {
     /// `--listen`: the address and port the pages are served on.
     pub listen: SocketAddr,
     /// `--state-dir`: the sign-up file and the invite file. Required.
@@ -119,14 +119,14 @@ pub enum Mailer {
 
 /// `invite`'s settings.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Invite {
+pub struct InviteArgs {
     /// `--address`: where the invitation goes, and the mail after.
     pub address: MailAddress,
     /// `--code`: the code to mint; a fresh one where none is given.
     pub code: Option<InviteCode>,
     /// `--state-dir`: where the invite file lives. Required.
     pub state_dir: PathBuf,
-    /// `--suffix`: the claim address's host.
+    /// `--suffix`: the invite link's host.
     pub suffix: String,
 }
 
@@ -159,7 +159,7 @@ usage: skep-provision serve --state-dir <DIR> --reply-to <ADDRESS>
        skep-provision --version
 
 serve: the hosted board's sign-up service — the sign-up page and the
-claim form over HTTP, each admitted claim provisioned through the host's
+claim form over HTTP, each admitted post provisioned through the host's
 docker, different names at once and one post per name; at its start, a
 board left half-made by a stop is removed.
 
@@ -191,14 +191,14 @@ board left half-made by a stop is removed.
   --from <ADDRESS>        the follow-up mail's sending address
 {fakes}
 invite: one invite minted into the state directory's invite file; its
-claim address printed on stdout, the one line to mail by hand.
+invite link printed on stdout, the one line to mail by hand.
 
   --address <ADDRESS>     where the invitation goes (required)
   --state-dir <DIR>       as serve's (required)
   --code <CODE>           the code to mint: 1 to {MAX_CODE_BYTES} letters, digits,
                           '-', '.', '_' or '~'; a fresh random code where
                           none is given
-  --suffix <DOMAIN>       the claim address's host (default {DEFAULT_SUFFIX})
+  --suffix <DOMAIN>       the invite link's host (default {DEFAULT_SUFFIX})
 
   --help                  this text
   --version               this binary's version and the commit it was
@@ -317,7 +317,7 @@ fn parse_serve(mut it: impl Iterator<Item = String>) -> Result<Command, String> 
         (Some(_), None) => return Err("--mailer is given without --from: give both, or neither for no mail".to_owned()),
         (None, Some(_)) => return Err("--from is given without --mailer: give both, or neither for no mail".to_owned()),
     };
-    Ok(Command::Serve(Box::new(Serve {
+    Ok(Command::Serve(Box::new(ServeArgs {
         listen,
         state_dir: state_dir.ok_or("serve: --state-dir is required")?,
         boards_dir,
@@ -350,7 +350,7 @@ fn parse_invite(mut it: impl Iterator<Item = String>) -> Result<Command, String>
             other => return Err(format!("invite: unknown argument '{other}'")),
         }
     }
-    Ok(Command::Invite(Invite { address: address_given.ok_or("invite: --address is required")?, code, state_dir: state_dir.ok_or("invite: --state-dir is required")?, suffix: suffix_given }))
+    Ok(Command::Invite(InviteArgs { address: address_given.ok_or("invite: --address is required")?, code, state_dir: state_dir.ok_or("invite: --state-dir is required")?, suffix: suffix_given }))
 }
 
 #[cfg(test)]

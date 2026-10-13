@@ -12,11 +12,11 @@
 //! loopback, the dark claim by the sidecar in its namespace, the serving
 //! run, the `/health` pair; ONE SNIPPET per board in the proxy's directory
 //! and the proxy reloaded, the two serial across every name; the live page
-//! at the post's status address; and ONE MAIL once the board is live. At
+//! at the post's status URL; and ONE MAIL once the board is live. At
 //! its start, before it listens, A SWEEP removes every board a stop left
 //! half-made — a labelled volume with no snippet. `skep-provision serve` is
 //! the service; `skep-provision invite` is the owner's hand, minting one
-//! invite and printing its claim address; `skep-provision --version` the
+//! invite and printing its invite link; `skep-provision --version` the
 //! version line.
 //!
 //! WHAT IT HOLDS. NO KEY: the record is the person's PUBLIC line, parsed by
@@ -24,21 +24,22 @@
 //! AUTH-2.89); the sidecar it runs signs nothing; there is no store and no
 //! `--dir`. What it does hold: THE DOCKER SOCKET's REACH, through the
 //! host's `docker` command and the `docker` group — the VM's root, the
-//! record §4's one power; THE SIGN-UP ADDRESSES, the one personal datum it
-//! keeps; and THE INVITE FILE — the two files in its state directory,
-//! owner-only, which it refuses to start on where other users can read it.
+//! provisioning record §4's one power; THE SIGN-UP ADDRESSES, the one
+//! personal datum it keeps; and THE INVITE FILE — the two files in its
+//! state directory, owner-only, which it refuses to start on where other
+//! users can read it.
 //!
-//! WHAT IT NEVER LOGS (the record §4): the record's bytes, a requester's
-//! address, an invite code, a status token. Its log — stderr, one line per
-//! step — names the board, the step, each call's exit code and the
-//! sidecar's stderr whole; its one stdout line is the serving line, and
-//! `invite`'s is the claim address.
+//! WHAT IT NEVER LOGS (the provisioning record §4): the record's bytes, a
+//! requester's address, an invite code, a status token. Its log — stderr,
+//! one line per step — names the board, the step, each call's exit code and
+//! the sidecar's stderr whole; its one stdout line is the serving line, and
+//! `invite`'s is the invite link.
 //!
 //! THE ANSWERS it writes carry statuses `skep-http`'s reason table holds,
 //! and no other — 200 for every page and every refusal shown on a page, 404
-//! for a route or a status token it does not hold, 400 for a body the form
-//! decoder refuses, 413 for a body past the cap — so the subset is called
-//! as it stands.
+//! for a request no page takes or a status token it does not hold, 400 for
+//! a body the form decoder refuses, 413 for a body past the cap — so the
+//! subset is called as it stands.
 //!
 //! THE STOP is SIGTERM's default disposition: the process ends at once.
 //! Crash-stop, as the daemon's: every file it keeps is replaced whole by a
@@ -46,12 +47,12 @@
 //! made standing, which the truth about names reads as TAKEN until the next
 //! start's sweep removes it — a volume under the label with no snippet is
 //! half-made, and goes with whatever run stands under its name — or, where
-//! a removal fails, until the operator clears it (the record §5.2's named
-//! gap); the queue, the status tokens and an unsent mail are memory and end
-//! with the process. Its exit codes: 0, a verb done; 2, a usage refusal; 1,
-//! a start refused — a state directory other users can read, a snippet
-//! directory that cannot be read, an address that cannot be bound — or an
-//! invite not minted.
+//! a removal fails, until the operator clears it (the provisioning record
+//! §5.2's named gap); the queue, the status tokens and an unsent mail are
+//! memory and end with the process. Its exit codes: 0, a verb done; 2, a
+//! usage refusal; 1, a start refused — a state directory other users can
+//! read, a snippet directory that cannot be read, an address that cannot be
+//! bound — or an invite not minted.
 //!
 //! The modules are declared below in dependency order, each naming only
 //! those above it — `tests/it/tidy.rs` checks it — and `ARCHITECTURE.md`
@@ -100,8 +101,8 @@ mod signups;
 mod invites;
 // Every sentence a person reads: one table, each row naming its id.
 mod strings;
-// The pages' HTML and the routes over `skep-http`, the desk they ask, and
-// the two addresses the service hands out.
+// The pages' HTML and the requests they answer over `skep-http`, the desk
+// they ask, and the two URLs the service hands out.
 mod pages;
 // The mail: the trait, the mailer, the sender's thread; the fake under
 // `test-hooks`.
@@ -121,7 +122,7 @@ use std::sync::Arc;
 use std::thread;
 
 use args::{Command, Mailer};
-use docker::{Docker, Host};
+use docker::{Docker, HostDocker};
 use flow::{Config, Service};
 use pages::Site;
 use sender::{Log, Outbox, Sender, Sleep};
@@ -167,7 +168,7 @@ fn log() -> Log {
 /// the mail chosen, the sender started, THE SWEEP of what a stop left
 /// half-made, then the address bound, the serving line, the workers — and
 /// a thread per connection until the process ends.
-fn serve(cfg: args::Serve) -> i32 {
+fn serve(cfg: args::ServeArgs) -> i32 {
     let log = log();
     let state = match StateDir::open(&cfg.state_dir) {
         Ok(state) => state,
@@ -226,7 +227,7 @@ fn serve(cfg: args::Serve) -> i32 {
         service.live(),
         cfg.workers
     ));
-    let site = Site { suffix: cfg.settings.suffix.clone(), reply_to: cfg.reply_to.as_str().to_owned() };
+    let site = Site { suffix: cfg.settings.suffix.clone(), owner_address: cfg.reply_to.as_str().to_owned() };
     // THE SERVE: the pool of workers, and a thread per connection beside
     // them; the scope never closes — SIGTERM ends the process.
     thread::scope(|s| {
@@ -244,12 +245,12 @@ fn serve(cfg: args::Serve) -> i32 {
 
 /// The runner: the host's `docker`, or under `test-hooks` the scripted fake
 /// `--docker-fake` names.
-fn runner(cfg: &args::Serve) -> io::Result<Box<dyn Docker>> {
+fn runner(cfg: &args::ServeArgs) -> io::Result<Box<dyn Docker>> {
     #[cfg(feature = "test-hooks")]
     if let Some(script) = &cfg.docker_fake {
         return Ok(Box::new(docker::fake::FakeDocker::open(script)?));
     }
-    Ok(Box::new(Host::new(cfg.settings.clone())))
+    Ok(Box::new(HostDocker::new(cfg.settings.clone())))
 }
 
 /// The sender: the host's relay client, or under `test-hooks` the fake
@@ -262,9 +263,9 @@ fn sender_of(mailer: &Mailer) -> Box<dyn Sender> {
     }
 }
 
-/// `invite`: the state directory's door, one invite minted, its claim
-/// address the one DATA line.
-fn invite(cfg: args::Invite) -> i32 {
+/// `invite`: the state directory's door, one invite minted, its invite
+/// link the one DATA line.
+fn invite(cfg: args::InviteArgs) -> i32 {
     let state = match StateDir::open(&cfg.state_dir) {
         Ok(state) => state,
         Err(refused) => {
@@ -273,10 +274,10 @@ fn invite(cfg: args::Invite) -> i32 {
         }
     };
     match invites::mint(&state, &cfg.address, cfg.code.as_ref()) {
-        Ok(code) => match say_out(&pages::claim_address(&cfg.suffix, &code)) {
+        Ok(code) => match say_out(&pages::invite_link(&cfg.suffix, &code)) {
             0 => 0,
             _ => {
-                say_err("skep-provision: the invite is minted, and its claim address could not be written on stdout");
+                say_err("skep-provision: the invite is minted, and its invite link could not be written on stdout");
                 1
             }
         },

@@ -1,7 +1,7 @@
 //! THE REPLY, "Your board is live." (the deployment notes §4, "The
 //! customer's reply, the one carrier"; cs6-S2): ONE FUNCTION ([`text`])
 //! renders it for the status page and the follow-up mail alike, from the
-//! board's public origin, the anchorless fact and the status address — so
+//! board's public origin, the anchorless fact and the status URL — so
 //! the page and the mail cannot say two things.
 //!
 //! IN ORDER, each row the strings table's (`strings`): the heading; THE FOUR
@@ -18,7 +18,7 @@
 //! (AUTH-4.58), and the setup act `skep claim --board <origin> --dir
 //! <store>` with AUTH-5.87's sentence — because the sidecar's two act lines
 //! embed the dialed origin and a literal `<origin>`, neither fit to show a
-//! person; and THE STATUS ADDRESS last.
+//! person; and THE STATUS URL last.
 
 use crate::sidecar::{ACCOUNT, PRINCIPAL};
 use crate::strings::{fill, ANCHORLESS, FACTS, FIRST_ACT, LIVE, OPERATOR, PUBLIC_VENUE, REPLY_STATUS, SECOND_ACT};

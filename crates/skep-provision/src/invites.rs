@@ -13,8 +13,8 @@
 //! entropy as lowercase hex where `invite` mints one, or the value
 //! `--code` hands in — so a later mint can hand in a document's address in
 //! a random string's place, the format left open between the two — held to
-//! the URL's unreserved characters ([`code_ok`]), so it rides the claim
-//! address unescaped and a line splits on its spaces; the `invite` verb hands
+//! the URL's unreserved characters ([`code_ok`]), so it rides the invite
+//! link unescaped and a line splits on its spaces; the `invite` verb hands
 //! [`mint`] a code in that alphabet as its own value ([`InviteCode`]), and
 //! the address to mint to as an address by the rule. A post naming a code
 //! the file does not hold, or holds spent, is refused (the strings table's
@@ -33,7 +33,7 @@ use std::fs::OpenOptions;
 use std::io;
 
 use crate::name::Name;
-use crate::names::fresh_token;
+use crate::names::unguessable;
 use crate::statedir::{read_or_empty, today, write_whole_with, MailAddress, StateDir};
 
 /// The invite file's name in the state directory.
@@ -110,14 +110,14 @@ impl Invite {
 
 /// THE CODE's ALPHABET: 1 to [`MAX_CODE_BYTES`] of the URL's unreserved
 /// characters — letters, digits, `-`, `.`, `_`, `~` — so the code rides the
-/// claim address as it is and the file's line splits on its spaces.
+/// invite link as it is and the file's line splits on its spaces.
 pub fn code_ok(code: &str) -> bool {
     !code.is_empty() && code.len() <= MAX_CODE_BYTES && code.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'.' | b'_' | b'~'))
 }
 
 /// A CODE IN THE ALPHABET, the value the `invite` verb hands [`mint`]:
 /// [`InviteCode::parse`] is the only way to one, so a code of this type rides
-/// the claim address as it is and keeps the file's line splitting on its
+/// the invite link as it is and keeps the file's line splitting on its
 /// spaces. Its `Debug` shows none of it: a code is never logged.
 #[derive(Clone, PartialEq, Eq)]
 pub struct InviteCode(String);
@@ -196,7 +196,7 @@ impl fmt::Display for MintRefused {
 pub fn mint(dir: &StateDir, address: &MailAddress, code: Option<&InviteCode>) -> Result<String, MintRefused> {
     let code = match code {
         Some(code) => code.as_str().to_owned(),
-        None => fresh_token().map_err(MintRefused::Io)?,
+        None => unguessable().map_err(MintRefused::Io)?,
     };
     update(
         dir,

@@ -123,7 +123,7 @@ fn the_senders_thread_delivers_what_it_is_handed() {
     let address = |text: &str| MailAddress::parse(text).expect("an address");
     let outbox = Outbox::spawn(Box::new(FakeSender::new(log.clone(), Vec::new())), address("noreply@skep.host"), address("owner@skep.host"), said, Arc::new(|_| {})).expect("the thread");
     let handed = message();
-    outbox.post(handed.name.clone(), handed.to.clone(), handed.body.clone());
+    outbox.hand_over(handed.name.clone(), handed.to.clone(), handed.body.clone());
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
     while messages(&log).expect("the log").is_empty() {
         assert!(std::time::Instant::now() < deadline, "the thread delivered nothing");

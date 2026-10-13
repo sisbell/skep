@@ -3,8 +3,8 @@
 //! combinations, the reads made in the order fixed here and no further than
 //! the first that stands; the map rebuilt from a snippet directory holding
 //! two live names; a token the map does not hold answering nothing; a post
-//! gone live joining the live names; a post in flight holding its name; the
-//! token's form;
+//! gone live joining the live names; a post in flight holding its name; an
+//! unguessable value's form;
 //! and the labelled volumes sorted against the snippet directory — half-made,
 //! routed, or under no name of the grammar. (The two posts on one name, the
 //! fifth past the queue and the sweep are the flow's — `flow/tests.rs`.)
@@ -40,17 +40,17 @@ fn a_name_is_taken_iff_any_one_of_the_three_stands() {
                     }
                 }
                 let fake = FakeDocker::parse(&script).expect("a script");
-                let holder = taken(&fake, dir.path(), &name("alice")).expect("docker ran");
+                let taken_by = taken(&fake, dir.path(), &name("alice")).expect("docker ran");
                 let want = if snippet {
-                    Some(Holder::Snippet)
+                    Some(TakenBy::Snippet)
                 } else if volume {
-                    Some(Holder::Volume)
+                    Some(TakenBy::Volume)
                 } else if container {
-                    Some(Holder::Container)
+                    Some(TakenBy::Container)
                 } else {
                     None
                 };
-                assert_eq!(holder, want, "snippet {snippet}, volume {volume}, container {container}");
+                assert_eq!(taken_by, want, "snippet {snippet}, volume {volume}, container {container}");
                 fake.assert_done();
             }
         }
@@ -117,10 +117,11 @@ fn the_labelled_volumes_sort_into_half_made_routed_and_unnamed() {
     }
 }
 
-/// The status token: 128 bits as 32 lowercase hex digits, fresh each time.
+/// An unguessable value — a status token, a minted invite code: 128 bits as
+/// 32 lowercase hex digits, fresh each time.
 #[test]
-fn a_fresh_token_is_32_lowercase_hex_digits() {
-    let (a, b) = (fresh_token().expect("entropy"), fresh_token().expect("entropy"));
+fn an_unguessable_value_is_32_lowercase_hex_digits() {
+    let (a, b) = (unguessable().expect("entropy"), unguessable().expect("entropy"));
     assert_eq!(a.len(), 32);
     assert!(a.bytes().all(|c| c.is_ascii_digit() || (b'a'..=b'f').contains(&c)), "{a}");
     assert_ne!(a, b);

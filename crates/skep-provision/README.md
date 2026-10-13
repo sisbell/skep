@@ -4,7 +4,7 @@ The service behind a hosted skep board's sign-up: the sign-up page and the
 claim form, served over HTTP behind the proxy; the person's record checked
 in process; the steps that make a board run through the host's `docker`
 command, different names at once; one proxy snippet per board and a
-reload; the live page at a status address; and a follow-up mail once the
+reload; the live page at a status URL; and a follow-up mail once the
 board is live. At its start it removes any board a stop left half-made.
 It holds no key.
 
@@ -24,9 +24,9 @@ skep-provision --version
   made standing, and the next `serve` removes it before it listens (see
   [The sweep at start](#the-sweep-at-start)).
 - **`invite`** mints one invite into the state directory's invite file
-  and prints one line on stdout, the claim page's address carrying the
-  code, `https://<suffix>/claim?invite=<code>`. The owner mails that line
-  by hand.
+  and prints one line on stdout, the invite link: the claim form's URL
+  carrying the code, `https://<suffix>/claim?invite=<code>`. The owner
+  mails that line by hand.
 - **`--version`**, the first argument, prints `skep-provision <version>
   (<commit>)`, the form `skepd --version` prints.
 
@@ -65,7 +65,7 @@ feature is off by default and no shipped build enables it, so a
 shipped binary refuses both flags as unknown arguments. The crate's own
 tests turn it on through a dev-dependency on the crate itself.
 
-## The routes
+## The requests it answers
 
 One request per connection, read and written through `skep-http`. Every
 page is plain HTML with no script and nothing fetched from elsewhere.
@@ -84,16 +84,16 @@ page is plain HTML with no script and nothing fetched from elsewhere.
   the name must not be taken: no snippet, no volume and no container
   stands under it, and no post in flight holds it. A refused post is
   shown on the form again, and leaves no file and no queue entry. An
-  admitted post is queued and answered with D-7 and its status address.
+  admitted post is queued and answered with D-7 and its status URL.
 - `GET /status/<token>` shows D-7 while the post waits or runs, the live
   reply once the board is routed, and D-8 once it failed. A token the
   service does not hold is 404, and a token from before a restart is one
   of those.
-- Every other route is 404. A body the form decoder refuses is 400; a
+- Every other request is 404. A body the form decoder refuses is 400; a
   body past 397,312 bytes (a record at its 128 KiB cap with every byte
   percent-encoded, and 4 KiB) is 413.
 
-A page showing D-7 refreshes itself to the status address every five
+A page showing D-7 refreshes itself to the status URL every five
 seconds with a `<meta>` refresh. Every status the service writes is one
 `skep-http`'s reason table holds.
 
@@ -104,9 +104,9 @@ different names at once. The name is the unit of exclusion: a name is
 held from the moment its post is admitted until the board is live or the
 post has failed, a second post for a name in flight is refused on the
 form (D-4), and so no two workers ever run the steps for one name. A post
-waits on no board being made: its checks and its three reads of what
-stands run under a short lock on the queue and the status map, never
-behind a provisioning, so every post is answered at once. Up to four
+waits on no board being made: its checks run under a short lock on the
+queue and the status map, and its three reads of what stands under none,
+never behind a provisioning, so every post is answered at once. Up to four
 posts wait in the queue; a fifth is answered D-8, "try again later".
 
 1. Look again: no snippet, volume or container stands under the name.
@@ -121,11 +121,11 @@ posts wait in the queue; a fifth is answered D-8, "try again later".
 5. The serving run on the bridge, then the sidecar's `skep health` until
    the board answers a claimant with local trust off.
 6. The snippet written to `<boards-dir>/<name>.caddy`, then the proxy
-   reloaded. These two are the one serial pair: one lock is held across a
-   snippet's write and its reload, whichever name a worker is on, so no
-   reload lands between another board's snippet and its own reload. The
-   same lock is held across a snippet's removal and the reload that
-   follows it, and nowhere else.
+   reloaded. These two are a route change: one lock, the route lock, is
+   held across a snippet's write and its reload, whichever name a worker
+   is on, so route changes are serial and no reload lands between another
+   board's snippet and its own reload. The same lock is held across a
+   snippet's removal and the reload that follows it, and nowhere else.
 
 Then the status turns live, the invite is spent, and the mail goes to the
 sender's own thread. That thread retries a refused send (seven tries, ten
@@ -161,7 +161,7 @@ Each row names where its words come from:
 
 - `D-1` … `D-9` are the deployment notes' draft rows for the form;
 - `DRAFT` rows are words this crate wrote where no ruled text exists: the
-  sign-up page, the thanks page, the invite refusal, the status address,
+  sign-up page, the thanks page, the invite refusal, the status URL,
   the reply's heading, the mail's subject and the error pages;
 - `RULED` rows are carried verbatim: the public-venue statement, the
   three facts, and the two acts from the `skep` command's own format

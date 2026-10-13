@@ -71,11 +71,11 @@ pub struct Message {
     pub to: String,
     /// `--from`.
     pub from: String,
-    /// `--reply-to`: where a reply goes.
+    /// `--reply-to`: the owner's mailbox, where an answer to this mail goes.
     pub reply_to: String,
     /// The subject.
     pub subject: String,
-    /// The reply's text.
+    /// The live reply's text.
     pub body: String,
 }
 
@@ -160,7 +160,7 @@ pub struct Outbox {
     way: Way,
     /// `--from`: the sending address.
     from: MailAddress,
-    /// `--reply-to`: the owner's mailbox, where a reply goes.
+    /// `--reply-to`: the owner's mailbox, where an answer to the mail goes.
     reply_to: MailAddress,
 }
 
@@ -197,7 +197,7 @@ impl Outbox {
     /// ONE FOLLOW-UP MAIL handed over: the board, the invite's address and
     /// the live reply; `From:`, `Reply-To:` and the subject are the outbox's
     /// own, the same for every board.
-    pub fn post(&self, name: Name, to: String, body: String) {
+    pub fn hand_over(&self, name: Name, to: String, body: String) {
         let message = Message { name, to, from: self.from.as_str().to_owned(), reply_to: self.reply_to.as_str().to_owned(), subject: fill(MAIL_SUBJECT, &[]), body };
         match &self.way {
             Way::Thread(tx) => {

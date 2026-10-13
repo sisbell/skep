@@ -1,32 +1,32 @@
-//! THE PAGES and THE ROUTES (the deployment notes §4 step 1; the
-//! provisioning record §5.2): the four pages' HTML — the sign-up page, the
-//! claim form, the status page, the refusals — plain HTML with no script and
-//! no external resource, every sentence on them a row of the strings table
-//! (`strings`); and the routes' dispatch over `skep_http`, one request per
-//! connection.
+//! THE PAGES and THE REQUESTS THEY ANSWER (the deployment notes §4 step 1;
+//! the provisioning record §5.2): the four pages' HTML — the sign-up page,
+//! the claim form, the status page, the refusals — plain HTML with no script
+//! and no external resource, every sentence on them a row of the strings
+//! table (`strings`); and each request's dispatch, by its method and its
+//! path, over `skep_http`, one request per connection.
 //!
-//! THE ROUTES: `GET /`, the sign-up page; `POST /signup`, the address kept
-//! and a thanks page; `GET /claim`, the claim form, the invite field
-//! pre-filled from the `invite` query value where one is given; `POST
-//! /claim`, the three fields handed to the [`Desk`] — a refusal shown on
-//! the form again at 200, an admission answered with D-7 and the post's
-//! status address, no redirect; `GET /status/<token>`, D-7 while the post
-//! waits or runs, the live reply once the route stands, D-8 once it failed,
-//! 404 for a token the desk does not hold; every other route 404. A body
-//! the form decoder refuses is 400, a body past [`MAX_BODY`] 413 — so every
-//! status written is one `skep-http`'s reason table holds. A page that
-//! shows D-7 refreshes itself to the status address every few seconds (a
+//! THE REQUESTS ANSWERED: `GET /`, the sign-up page; `POST /signup`, the
+//! address kept and a thanks page; `GET /claim`, the claim form, the invite
+//! field pre-filled from the `invite` query value where one is given; `POST
+//! /claim`, the post's three fields handed to the [`Desk`] — a refusal shown
+//! on the form again at 200, an admission answered with D-7 and the post's
+//! status URL, no redirect; `GET /status/<token>`, D-7 while the post waits
+//! or runs, the live reply once the board's route stands, D-8 once it
+//! failed, 404 for a token the desk does not hold; every other request 404.
+//! A body the form decoder refuses is 400, a body past [`MAX_BODY`] 413 — so
+//! every status written is one `skep-http`'s reason table holds. A page that
+//! shows D-7 refreshes itself to the status URL every few seconds (a
 //! `<meta>` refresh, no script), which is how D-7's "it shows your board
 //! when it is live" comes true.
 //!
-//! THE DESK ([`Desk`]) is what the routes ask: the sign-up kept, the claim
-//! admitted, the status read — the flow's, which this file does not name,
-//! so the pages are judged here over a desk a test scripts.
+//! THE DESK ([`Desk`]) is what the pages ask: the sign-up kept, the post
+//! admitted or refused, the status read — the flow's, which this file does
+//! not name, so the pages are judged here over a desk a test scripts.
 //!
-//! THE TWO ADDRESSES the service hands out are built here, beside the
-//! routes they open: a post's status address ([`status_address`]), and the
-//! claim address an invite carries ([`claim_address`]), which opens the
-//! claim form with its invite field pre-filled.
+//! THE TWO URLS the service hands out are built here, beside the pages they
+//! open: a post's status URL ([`status_url`]), and the invite link an
+//! invitation carries ([`invite_link`]), which opens the claim form with the
+//! code it carries pre-filled.
 
 use std::net::TcpStream;
 use std::time::Duration;
@@ -36,7 +36,7 @@ use skep_identity::MAX_RECORD_BYTES;
 
 use crate::strings::{
     fill, Words, ADDRESS_LABEL, BAD_FORM, BEING_MADE, CLAIM_BUTTON, FAILED, INVITE_LABEL, INVITE_REFUSED, LEAD, NAME_HELP, NAME_LABEL, NAME_REFUSED, NOT_FOUND, PREVIEW_REFUSED, RECORD_HELP,
-    RECORD_LABEL, RECORD_REFUSED, SIGNUP_BUTTON, SIGNUP_FAILED, SIGNUP_KEPT, SIGNUP_LEAD, SIGNUP_REFUSED, STATUS_ADDRESS, THANKS, TOO_LARGE,
+    RECORD_LABEL, RECORD_REFUSED, SIGNUP_BUTTON, SIGNUP_FAILED, SIGNUP_KEPT, SIGNUP_LEAD, SIGNUP_REFUSED, STATUS_URL, THANKS, TOO_LARGE,
 };
 use crate::urlform;
 
@@ -60,7 +60,7 @@ const READ_TIMEOUT: Duration = Duration::from_secs(30);
 /// The socket's write deadline.
 const WRITE_TIMEOUT: Duration = Duration::from_secs(30);
 
-/// How often a page showing D-7 refreshes itself to the status address.
+/// How often a page showing D-7 refreshes itself to the status URL.
 const REFRESH_SECS: u32 = 5;
 
 // ── THE DESK ─────────────────────────────────────────────────────────────
@@ -114,12 +114,13 @@ pub enum Shown {
     Failed,
 }
 
-/// WHAT THE ROUTES ASK.
+/// WHAT THE PAGES ASK.
 pub trait Desk: Sync {
     /// A sign-up: the address field's bytes kept, or refused.
     fn sign_up(&self, address: &[u8]) -> Result<(), SignUpRefusal>;
-    /// A claim post judged and, where admitted, queued: its status token.
-    fn claim(&self, post: &Post<'_>) -> Result<String, Refusal>;
+    /// A claim post judged: admitted — queued, and answered with its status
+    /// token — or refused.
+    fn admit(&self, post: &Post<'_>) -> Result<String, Refusal>;
     /// A status token's page; `None` for a token the desk does not hold.
     fn status(&self, token: &str) -> Option<Shown>;
 }
@@ -130,19 +131,20 @@ pub trait Desk: Sync {
 pub struct Site {
     /// `--suffix`: `skep.host` in the alpha.
     pub suffix: String,
-    /// `--reply-to`: the owner's mailbox.
-    pub reply_to: String,
+    /// `--reply-to`: the owner's address, which D-8 names.
+    pub owner_address: String,
 }
 
-/// A post's status address: `https://<suffix>/status/<token>`.
-pub fn status_address(suffix: &str, token: &str) -> String {
+/// A POST's STATUS URL (the provisioning record §5.2, THE STATUS URL):
+/// `https://<suffix>/status/<token>`.
+pub fn status_url(suffix: &str, token: &str) -> String {
     format!("https://{suffix}/status/{token}")
 }
 
-/// THE CLAIM ADDRESS an invite carries: `https://<suffix>/claim?invite=<code>`
-/// — the claim form's route, and the query value its invite field is
-/// pre-filled from.
-pub fn claim_address(suffix: &str, code: &str) -> String {
+/// THE INVITE LINK an invitation carries (the intake funnel's second arm):
+/// `https://<suffix>/claim?invite=<code>` — the claim form's path, and the
+/// query value its invite field is pre-filled from.
+pub fn invite_link(suffix: &str, code: &str) -> String {
     format!("https://{suffix}/claim?invite={code}")
 }
 
@@ -160,7 +162,7 @@ struct Answer {
 /// THE HEADERS every page carries: no script and nothing from elsewhere,
 /// stated to the browser as the page is written — a style in the page
 /// alone, a form posting here alone, no frame — no referrer, so a status
-/// address never rides a request off this site, and no type sniffing.
+/// URL never rides a request off this site, and no type sniffing.
 fn headers() -> Vec<(String, String)> {
     vec![
         ("Content-Security-Policy".into(), "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'".into()),
@@ -210,7 +212,7 @@ fn answer(request: &Request, site: &Site, desk: &dyn Desk) -> Answer {
         ("POST", "/claim") => {
             let Ok(form) = urlform::decode(&request.body) else { return bad_form(site) };
             let post = Post { name: form.get("name").unwrap_or_default(), record: form.get("record").unwrap_or_default(), invite: form.get("invite").unwrap_or_default() };
-            match desk.claim(&post) {
+            match desk.admit(&post) {
                 Ok(token) => ok(being_made(site, &token)),
                 Err(refusal) => ok(claim_page(site, Some(refusal_words(refusal)), &post)),
             }
@@ -218,14 +220,14 @@ fn answer(request: &Request, site: &Site, desk: &dyn Desk) -> Answer {
         ("GET", path) => match path.strip_prefix("/status/").filter(|t| !t.is_empty() && !t.contains('/')).and_then(|token| desk.status(token).map(|shown| (token, shown))) {
             Some((token, Shown::BeingMade)) => ok(being_made(site, token)),
             Some((_, Shown::Live(text))) => ok(page(site, None, &paragraphs(&text))),
-            Some((_, Shown::Failed)) => ok(page(site, None, &refused_paragraph(&fill(FAILED, &[("reply_to", &site.reply_to)])))),
+            Some((_, Shown::Failed)) => ok(page(site, None, &refused_paragraph(&fill(FAILED, &[("owner_address", &site.owner_address)])))),
             None => not_found(site),
         },
         _ => not_found(site),
     }
 }
 
-/// The words a claim refusal is shown in.
+/// The words a claim post's refusal is shown in.
 fn refusal_words(refusal: Refusal) -> Words {
     match refusal {
         Refusal::Invite => INVITE_REFUSED,
@@ -260,7 +262,7 @@ textarea{font-family:ui-monospace,monospace;font-size:.85rem}\
 button{margin-top:1.25rem;font:inherit}";
 
 /// THE FRAME every page shares: the suffix as its title and heading, the
-/// style, and — on a page showing D-7 — the refresh to the status address.
+/// style, and — on a page showing D-7 — the refresh to the status URL.
 fn page(site: &Site, refresh: Option<&str>, body: &str) -> String {
     let suffix = escape(&site.suffix, false);
     let refresh = refresh.map_or_else(String::new, |to| format!("<meta http-equiv=\"refresh\" content=\"{REFRESH_SECS}; url={}\">\n", attr(to)));
@@ -295,7 +297,7 @@ fn signup_page(site: &Site, refusal: Option<Words>, address: &str) -> String {
 /// value, [`escape`] in the textarea — never through [`row`], so the next
 /// post sends it as it was sent.
 fn claim_page(site: &Site, refusal: Option<Words>, post: &Post<'_>) -> String {
-    let slots = [("suffix", site.suffix.as_str()), ("reply_to", site.reply_to.as_str())];
+    let slots = [("suffix", site.suffix.as_str()), ("owner_address", site.owner_address.as_str())];
     let mut body = paragraph(&fill(LEAD, &slots));
     if let Some(words) = refusal {
         body.push_str(&refused_paragraph(&fill(words, &slots)));
@@ -322,10 +324,10 @@ fn claim_page(site: &Site, refusal: Option<Words>, post: &Post<'_>) -> String {
     page(site, None, &body)
 }
 
-/// D-7's PAGE: D-7 and the status address, refreshing to it.
+/// D-7's PAGE: D-7 and the status URL, refreshing to it.
 fn being_made(site: &Site, token: &str) -> String {
-    let address = status_address(&site.suffix, token);
-    let body = paragraph(&fill(BEING_MADE, &[])) + &paragraph(&fill(STATUS_ADDRESS, &[("status", &address)]));
+    let url = status_url(&site.suffix, token);
+    let body = paragraph(&fill(BEING_MADE, &[])) + &paragraph(&fill(STATUS_URL, &[("status", &url)]));
     page(site, Some(&format!("/status/{token}")), &body)
 }
 

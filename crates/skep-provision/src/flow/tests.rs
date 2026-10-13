@@ -14,7 +14,7 @@
 //! its address in no log line) and T12 (no send before live; an outage
 //! with the status live throughout). THE POOL's FENCE: T15 (two workers
 //! make two names at once, and one worker does not), T16 (a post answers
-//! at once while a worker is held inside a step), T17 (a second post for a
+//! at once while a worker is paused inside a step), T17 (a second post for a
 //! name in flight meets D-4 under two workers, and one `volume_create` per
 //! name across a burst), T18 (the snippet's write and the reload serial
 //! across names); and THE SWEEP's, T20 (the half-made board removed, the
@@ -95,8 +95,8 @@ fn rig(script: &str, mail: Option<Vec<i32>>) -> Rig {
     rig_with(script, mail, Arc::new(|_| {}))
 }
 
-/// The rig with the sleep hook `sleep` — a gate's hold, where a test holds a
-/// worker inside its sidecar wait.
+/// The rig with the sleep hook `sleep` — a gate's pause, where a test pauses
+/// a worker inside its sidecar wait.
 fn rig_with(script: &str, mail: Option<Vec<i32>>, sleep: Sleep) -> Rig {
     let dir = Scratch::new();
     let boards = dir.path().join("boards");
@@ -116,11 +116,11 @@ fn rig_with(script: &str, mail: Option<Vec<i32>>, sleep: Sleep) -> Rig {
     Rig { dir, boards, state, fake, probe, lines, service }
 }
 
-/// A GATE a hook holds at: the hook counts itself in and waits until the
+/// A GATE a hook pauses at: the hook counts itself in and waits until the
 /// test opens the gate, for good; the test waits for the count.
 #[derive(Default)]
 struct Gate {
-    /// The holds entered, and whether the gate is open.
+    /// The pauses entered, and whether the gate is open.
     state: Mutex<(u32, bool)>,
     changed: Condvar,
 }
@@ -130,8 +130,8 @@ impl Gate {
         Arc::new(Gate::default())
     }
 
-    /// The hook's side: counted in, then held until the gate is open.
-    fn hold(&self) {
+    /// The hook's side: counted in, then paused until the gate is open.
+    fn pause(&self) {
         let mut state = self.state.lock().unwrap();
         state.0 += 1;
         self.changed.notify_all();
@@ -140,12 +140,12 @@ impl Gate {
         }
     }
 
-    /// The test's side: waited until `n` holds have been entered.
+    /// The test's side: waited until `n` pauses have been entered.
     fn entered(&self, n: u32) {
         let deadline = Instant::now() + Duration::from_secs(30);
         let mut state = self.state.lock().unwrap();
         while state.0 < n {
-            assert!(Instant::now() < deadline, "hold {n} never entered");
+            assert!(Instant::now() < deadline, "pause {n} never entered");
             state = self.changed.wait_timeout(state, Duration::from_millis(50)).unwrap().0;
         }
     }
@@ -177,7 +177,7 @@ impl Rig {
 
     /// One post to the claim form.
     fn post(&self, name: &str, record: &str, code: &str) -> Result<String, Refusal> {
-        self.service.claim(&Post { name: name.as_bytes(), record: record.as_bytes(), invite: code.as_bytes() })
+        self.service.admit(&Post { name: name.as_bytes(), record: record.as_bytes(), invite: code.as_bytes() })
     }
 
     /// A post admitted, its token the probe's.
@@ -301,7 +301,7 @@ fn the_whole_flow_runs_every_step_in_order() {
     let trimmed = record(true).trim_end().to_owned();
     assert_eq!(rig.fake.calls()[6].stdin.as_deref(), Some(trimmed.as_bytes()), "the record, trimmed, on the sidecar's stdin");
     assert_eq!(fs::read_to_string(rig.snippet("alice")).expect("the snippet"), crate::caddy::snippet(&Name::parse(b"alice").expect("a name"), "skep.host"));
-    let status = crate::pages::status_address("skep.host", &token);
+    let status = crate::pages::status_url("skep.host", &token);
     let page = reply::text("https://alice.skep.host", false, &status);
     assert_eq!(rig.service.status(&token), Some(Shown::Live(page.clone())));
     assert!(rig.service.book().map.live().contains(&Name::parse(b"alice").expect("a name")), "alice among the live names");
@@ -683,7 +683,7 @@ fn the_service_starts_with_the_snippets_live_names() {
 }
 
 /// T15: TWO NAMES IN FLIGHT AT ONCE — under two workers, `alice`'s worker
-/// held inside its sidecar wait (exit 4 once, the sleep hook at a gate), a
+/// paused inside its sidecar wait (exit 4 once, the sleep hook at a gate), a
 /// post for `bob` is admitted and `bob` reaches `run_claim` in the fake's
 /// log BEFORE `alice` reaches `run_serving`; under ONE worker, the same
 /// script, `bob`'s `run_claim` comes only after `alice`'s `run_serving` —
@@ -692,8 +692,8 @@ fn the_service_starts_with_the_snippets_live_names() {
 fn two_workers_make_two_names_at_once_and_one_worker_does_not() {
     for workers in [2usize, 1] {
         let gate = Gate::new();
-        let hold = Arc::clone(&gate);
-        let rig = rig_with(&(flow_of("alice", true) + &flow_of("bob", false) + &reloads(2)), None, Arc::new(move |_| hold.hold()));
+        let pause = Arc::clone(&gate);
+        let rig = rig_with(&(flow_of("alice", true) + &flow_of("bob", false) + &reloads(2)), None, Arc::new(move |_| pause.pause()));
         rig.workers(workers);
         let alice = rig.admitted("alice", &rig.invite());
         gate.entered(1);
@@ -703,7 +703,7 @@ fn two_workers_make_two_names_at_once_and_one_worker_does_not() {
             assert!(!rig.called("run_serving alice"), "alice's serving run came first: {:?}", rig.fake.said());
         } else {
             thread::sleep(Duration::from_millis(300));
-            assert!(!rig.called("run_claim bob"), "one worker, held, yet bob ran: {:?}", rig.fake.said());
+            assert!(!rig.called("run_claim bob"), "one worker, paused, yet bob ran: {:?}", rig.fake.said());
         }
         gate.open();
         until("both live", || (rig.live(&alice) && rig.live(&bob)).then_some(()));
@@ -719,15 +719,15 @@ fn two_workers_make_two_names_at_once_and_one_worker_does_not() {
     }
 }
 
-/// T16: THE POST NEVER WAITS ON A PROVISIONING — the one worker held inside
-/// `alice`'s sidecar wait, a post for `bob` through the desk's own path
-/// answers within a short bound, admitted, and its status page shows D-7;
-/// the held board goes live after, and `bob`'s turn comes.
+/// T16: THE POST NEVER WAITS ON A PROVISIONING — the one worker paused
+/// inside `alice`'s sidecar wait, a post for `bob` through the desk's own
+/// path answers within a short bound, admitted, and its status page shows
+/// D-7; the paused board goes live after, and `bob`'s turn comes.
 #[test]
-fn a_post_answers_at_once_while_a_worker_is_held_inside_a_step() {
+fn a_post_answers_at_once_while_a_worker_is_paused_inside_a_step() {
     let gate = Gate::new();
-    let hold = Arc::clone(&gate);
-    let rig = rig_with(&(flow_of("alice", true) + &flow_of("bob", false) + &reloads(2)), None, Arc::new(move |_| hold.hold()));
+    let pause = Arc::clone(&gate);
+    let rig = rig_with(&(flow_of("alice", true) + &flow_of("bob", false) + &reloads(2)), None, Arc::new(move |_| pause.pause()));
     rig.workers(1);
     let alice = rig.admitted("alice", &rig.invite());
     gate.entered(1);
@@ -737,13 +737,13 @@ fn a_post_answers_at_once_while_a_worker_is_held_inside_a_step() {
     let started = Instant::now();
     thread::spawn(move || {
         let bob = record(true);
-        let _ = tx.send(service.claim(&Post { name: b"bob", record: bob.as_bytes(), invite: code.as_bytes() }));
+        let _ = tx.send(service.admit(&Post { name: b"bob", record: bob.as_bytes(), invite: code.as_bytes() }));
     });
     let answered = rx.recv_timeout(Duration::from_secs(5)).expect("the post waited on the provisioning");
     let bob = answered.unwrap_or_else(|r| panic!("bob refused {r:?}: {:?}", rig.log()));
     assert!(started.elapsed() < Duration::from_secs(5));
     assert_eq!(rig.service.status(&bob), Some(Shown::BeingMade));
-    assert_eq!(rig.service.status(&alice), Some(Shown::BeingMade), "alice still held");
+    assert_eq!(rig.service.status(&alice), Some(Shown::BeingMade), "alice still paused");
     assert!(rig.logged("bob: admitted; 1 waiting"), "{:?}", rig.log());
     gate.open();
     until("both live", || (rig.live(&alice) && rig.live(&bob)).then_some(()));
@@ -751,18 +751,18 @@ fn a_post_answers_at_once_while_a_worker_is_held_inside_a_step() {
 }
 
 /// T17: A SECOND POST FOR THE SAME NAME IN FLIGHT IS REFUSED D-4 under two
-/// workers — `alice`'s worker held, a post for `alice` under another code
-/// meets `Refusal::Name`, no docker call made, the code still issued — and
-/// across a burst of posts (four names, each posted twice, two workers
-/// running) the fake's log shows ONE `volume_create` per name: two workers
-/// never both take a job for one name.
+/// workers — `alice`'s worker paused and its name held, a post for `alice`
+/// under another code meets `Refusal::Name`, no docker call made, the code
+/// still issued — and across a burst of posts (four names, each posted
+/// twice, two workers running) the fake's log shows ONE `volume_create` per
+/// name: two workers never both take a job for one name.
 #[test]
 fn two_workers_never_both_take_a_job_for_one_name() {
     let names = ["alice", "bob", "carol", "dave"];
     let gate = Gate::new();
-    let hold = Arc::clone(&gate);
+    let pause = Arc::clone(&gate);
     let script = flow_of("alice", true) + &flow_of("bob", false) + &flow_of("carol", false) + &flow_of("dave", false) + &reloads(4);
-    let rig = rig_with(&script, None, Arc::new(move |_| hold.hold()));
+    let rig = rig_with(&script, None, Arc::new(move |_| pause.pause()));
     rig.workers(2);
     let alice = rig.admitted("alice", &rig.invite());
     gate.entered(1);
@@ -786,21 +786,21 @@ fn two_workers_never_both_take_a_job_for_one_name() {
     assert_eq!(said.iter().filter(|c| *c == "caddy_reload").count(), 4, "{said:?}");
 }
 
-/// T18: THE SERIAL PAIR — two names going live at once produce two snippets
-/// and two reloads, and no reload lands between another name's snippet
-/// write and its own reload: `alice`'s reload held at the fake's hook while
-/// `bob` runs to the step before its own snippet, `bob` writes nothing
-/// while `alice`'s reload stands open; then the recorded order shows each
-/// name's write followed at once by its own reload.
+/// T18: ROUTE CHANGES ARE SERIAL — two names going live at once produce two
+/// snippets and two reloads, and no reload lands between another name's
+/// snippet write and its own reload: `alice`'s reload paused inside the
+/// fake while `bob` runs to the step before its own snippet, `bob` writes
+/// nothing while `alice`'s reload stands open; then the recorded order shows
+/// each name's write followed at once by its own reload.
 #[test]
 fn the_snippet_write_and_the_reload_are_serial_across_names() {
     let gate = Gate::new();
-    let hold = Arc::clone(&gate);
+    let pause = Arc::clone(&gate);
     let first = Arc::new(AtomicBool::new(false));
     let rig = rig(&(flow_of("alice", false) + &flow_of("bob", false) + &reloads(2)), None);
-    rig.fake.hold(move |method, _| {
+    rig.fake.pause(move |method, _| {
         if method == "caddy_reload" && !first.swap(true, Ordering::SeqCst) {
-            hold.hold();
+            pause.pause();
         }
     });
     rig.workers(2);

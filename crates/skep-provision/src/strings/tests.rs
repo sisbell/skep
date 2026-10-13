@@ -42,7 +42,7 @@ const TABLE: [Words; 33] = [
     PREVIEW_REFUSED,
     INVITE_REFUSED,
     BEING_MADE,
-    STATUS_ADDRESS,
+    STATUS_URL,
     FAILED,
     LIVE,
     OPERATOR,
@@ -61,7 +61,7 @@ const TABLE: [Words; 33] = [
 /// THE STRINGS TABLE: every row names an id of the four kinds, every slot it
 /// holds is one a page fills, and its D-rows are the notes' words — the
 /// notes' `skep.host` the `{suffix}` slot, ⟨the owner's address⟩ the
-/// `{reply_to}` one.
+/// `{owner_address}` one.
 #[test]
 fn the_strings_table_names_each_rows_id_and_carries_the_notes_words() {
     for row in TABLE {
@@ -69,12 +69,12 @@ fn the_strings_table_names_each_rows_id_and_carries_the_notes_words() {
         let mut rest = row.text;
         while let Some(open) = rest.find('{') {
             let close = rest[open..].find('}').expect("a closed slot") + open;
-            assert!(["suffix", "reply_to", "status", "origin", "principal", "account"].contains(&&rest[open + 1..close]), "{row:?}");
+            assert!(["suffix", "owner_address", "status", "origin", "principal", "account"].contains(&&rest[open + 1..close]), "{row:?}");
             rest = &rest[close + 1..];
         }
     }
     let mut d_rows: Vec<(&str, String)> =
-        TABLE.iter().filter(|r| r.id.starts_with("D-")).map(|r| (r.id, r.text.replace("{suffix}", "skep.host").replace("{reply_to}", "⟨the owner's address⟩"))).collect();
+        TABLE.iter().filter(|r| r.id.starts_with("D-")).map(|r| (r.id, r.text.replace("{suffix}", "skep.host").replace("{owner_address}", "⟨the owner's address⟩"))).collect();
     let mut notes: Vec<(&str, String)> = NOTES.iter().map(|(id, text)| (*id, (*text).to_owned())).collect();
     d_rows.sort();
     notes.sort();

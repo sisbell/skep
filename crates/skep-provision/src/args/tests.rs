@@ -30,7 +30,7 @@ fn mail_address(text: &str) -> MailAddress {
     MailAddress::parse(text).expect("an address")
 }
 
-fn served(rest: &[&str]) -> Serve {
+fn served(rest: &[&str]) -> ServeArgs {
     match serve(rest) {
         Ok(Command::Serve(s)) => *s,
         other => panic!("{rest:?}: {other:?}"),

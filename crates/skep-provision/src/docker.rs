@@ -22,8 +22,8 @@
 //!   deployment notes' serving run (§4 step 5), the sidecar's run (the
 //!   smoke's, the record on stdin in place of a mount) — so drift from them
 //!   is a red test.
-//! * [`Host`] — the one real implementation: `docker` from `PATH` through
-//!   `std::process::Command` built from that argv and nothing else
+//! * [`HostDocker`] — the one real implementation: `docker` from `PATH`
+//!   through `std::process::Command` built from that argv and nothing else
 //!   ([`command`]), run by `process::run` — stdout and stderr captured
 //!   apart, the service's own stdin never inherited: the sidecar's is a pipe
 //!   that carries the record and closes, every other call's is null.
@@ -60,12 +60,13 @@ use crate::record::Record;
 /// The program every call runs: the host's `docker`, found on `PATH`.
 const DOCKER: &str = "docker";
 
-/// THE BOARD THE SIDECAR DIALS: the claim run's daemon on ITS loopback, at
-/// the image's baked port — reachable from inside the claim run's network
-/// namespace alone, which the sidecar joins (AUTH-4.57 (a), (f)). The
-/// sidecar's DATA line 4 names it back (`origin …`); this program asserts it
-/// there and shows it nowhere.
-pub const SIDECAR_BOARD: &str = "http://127.0.0.1:8642";
+/// THE DIALED ORIGIN: the board the sidecar dials, the claim run's daemon on
+/// ITS loopback at the image's baked port — reachable from inside the claim
+/// run's network namespace alone, which the sidecar joins (AUTH-4.57 (a),
+/// (f)). The sidecar's DATA line 4 names it back (`origin …`); this program
+/// asserts it there and shows it nowhere — a person is shown the public
+/// origin, [`Name::origin`] (AUTH-4.57 (b)).
+pub const DIALED_ORIGIN: &str = "http://127.0.0.1:8642";
 
 /// The port the image's daemon listens on (the baked `SKEPD_PORT`); the
 /// serving run is reached at `<name>:8642` on the bridge.
@@ -278,7 +279,7 @@ impl Call<'_> {
                 "skep".into(),
                 "claim".into(),
                 "--board".into(),
-                SIDECAR_BOARD.into(),
+                DIALED_ORIGIN.into(),
                 "--hosted".into(),
                 "-".into(),
             ],
@@ -334,23 +335,23 @@ impl Call<'_> {
 
 /// THE REAL RUNNER: the host's `docker`, one process per call.
 #[derive(Debug, Clone)]
-pub struct Host {
+pub struct HostDocker {
     program: PathBuf,
     settings: Settings,
 }
 
-impl Host {
+impl HostDocker {
     /// The runner over the operator's settings: `docker` from `PATH`.
-    pub fn new(settings: Settings) -> Host {
-        Host { program: PathBuf::from(DOCKER), settings }
+    pub fn new(settings: Settings) -> HostDocker {
+        HostDocker { program: PathBuf::from(DOCKER), settings }
     }
 
     /// The runner with another program in `docker`'s place: a unit suite's
     /// recording script, so the runner's own process handling is judged
     /// with no Docker run.
     #[cfg(test)]
-    fn with_program(program: PathBuf, settings: Settings) -> Host {
-        Host { program, settings }
+    fn with_program(program: PathBuf, settings: Settings) -> HostDocker {
+        HostDocker { program, settings }
     }
 }
 
@@ -363,7 +364,7 @@ fn command(program: &Path, argv: &[String]) -> Command {
     cmd
 }
 
-impl Docker for Host {
+impl Docker for HostDocker {
     /// One call run: the command built from its argv, run by `process::run`
     /// with the call's input — the sidecar's record, and no other call's — on
     /// its stdin.

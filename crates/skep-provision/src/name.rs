@@ -3,13 +3,13 @@
 //! before any docker run (the provisioning record §2.1; Q6 (a)): lowercased
 //! first (a DNS name is case-insensitive, as this crate knows DNS —
 //! UNVERIFIED HERE), then `[a-z0-9-]` alone, 1 to 63 bytes, no hyphen at
-//! either end (a hostname label's limits as the record §8 item 6 knows them
-//! — UNVERIFIED HERE). The alphabet is the daemon's own origin grammar
-//! narrowed to one label: `SKEPD_ORIGIN=https://<name>.<suffix>` must parse
-//! at the daemon, whose host admits lowercase letters, digits, `.` and `-`
-//! (the client's `host_is_canonical` reproduces it). Anything else is D-4's
-//! second clause. The post's other field, the person's record, is
-//! `record`'s.
+//! either end (a hostname label's limits, as the provisioning record §8
+//! item 6 knows them — UNVERIFIED HERE). The alphabet is the daemon's own
+//! origin grammar narrowed to one label:
+//! `SKEPD_ORIGIN=https://<name>.<suffix>` must parse at the daemon, whose
+//! host admits lowercase letters, digits, `.` and `-` (the client's
+//! `host_is_canonical` reproduces it). Anything else is D-4's second clause.
+//! The post's other field, the person's record, is `record`'s.
 
 use std::fmt;
 

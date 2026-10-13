@@ -248,7 +248,7 @@ foundation and on the stores above it.
   workers, different names at once, the name the unit of exclusion —
   through the host's `docker` command, writes one proxy snippet per board
   and reloads the proxy, the two serial across every name, shows the live
-  reply at the post's status address and mails it once the board is live,
+  reply at the post's status URL and mails it once the board is live,
   and at its start sweeps away any board a stop left half-made; `invite`
   mints one invite by the owner's hand. Of the skep crates it depends on `skep-identity`
   and `skep-http` alone — never `skepd` or `skep-client`: the sidecar it
@@ -1536,7 +1536,7 @@ run on the bridge, and the `/health` pair read through the sidecar's
 `skep health`; then one snippet in the proxy's directory and the proxy
 reloaded, the status live, the invite spent and the reply mailed. Before
 it listens it sweeps away every board a stop left half-made. Its `invite`
-verb mints one invite by the owner's hand and prints the claim address
+verb mints one invite by the owner's hand and prints the invite link
 that carries it. Its modules, in the order `src/main.rs` declares them,
 each naming only those above it:
 
@@ -1564,8 +1564,8 @@ each naming only those above it:
   labelled volumes among them; `Call`, one call as data, whole, the dark
   claim's admitted record carried with it, and `Call::argv`, every call's
   argv as a pure function, the volume's creation carrying the label;
-  `Host`, the host's `docker`, its `Command` built from that argv and run
-  by `process::run`; and under `test-hooks` `docker/fake.rs`, the
+  `HostDocker`, the host's `docker`, its `Command` built from that argv
+  and run by `process::run`; and under `test-hooks` `docker/fake.rs`, the
   scripted fake, its order strict per name and free across names.
 - `sidecar.rs` the sidecar's six DATA lines and its one idempotent line,
   read, and its exit codes mapped.
@@ -1587,20 +1587,20 @@ each naming only those above it:
   `invite` verb hands the mint.
 - `strings.rs` the strings table: every sentence a person reads, each row
   naming its id.
-- `pages.rs` the four pages' HTML and the routes' dispatch over
-  `skep-http`, each route asking a `Desk`; and the two addresses the
-  service hands out, the claim form's and a post's status page.
+- `pages.rs` the four pages' HTML and each request's dispatch, by method
+  and path, over `skep-http`, each page asking a `Desk`; and the two URLs
+  the service hands out, the invite link and a post's status URL.
 - `sender.rs` the `Sender` trait, `RelaySender` — the relay client
   `--mailer` names, shelled out to — the message, and the outbox: the
   sender's own thread with its retry, and the follow-up mail's `From:`,
   `Reply-To:` and subject, held for every board; under `test-hooks`
   `sender/fake.rs`.
 - `reply.rs` the live reply, one function for the page and the mail.
-- `flow.rs` the `Service` — the `Desk` the routes ask; the `Book` of
+- `flow.rs` the `Service` — the `Desk` the pages ask; the `Book` of
   what is in flight, keeping its own rules: the queue, the status map and
   the held codes, what blocks a new post, what admitting, taking, going
   live and failing do; the name as the unit of exclusion, the workers'
-  steps, the serial pair's lock, the cleanup table, the sweep at start,
+  steps, the route lock, the cleanup table, the sweep at start,
   and the live reply's inputs gathered in one place for the status page
   and the mail.
 - `args.rs` the verbs and the flags, every default a named constant,
@@ -1616,22 +1616,24 @@ Rules that hold across its files:
   directory, owner-only and refused at start where other users can read
   it.
 - **The name is the unit of exclusion.** A name is held from its post's
-  admission to its live or failed end, and a second post for a name in
-  flight is refused under the very hold that admits, so no two posts for
-  one name are ever in flight and the worker that takes a post owns its
-  name alone. No lock is held over a provisioning: a pool of worker
-  threads (`--workers`, three by default) makes boards for different
-  names at once, and posts wait in a queue of four.
+  admission to its live or failed end — the owner's lock per name, an
+  entry in the book that no thread waits on — and a second post for a
+  name in flight is refused under the book's lock, the very lock that
+  admits, so no two posts for one name are ever in flight and the worker
+  that takes a post owns its name alone. No mutex is held over a
+  provisioning: a pool of worker threads (`--workers`, three by default)
+  makes boards for different names at once, and posts wait in a queue of
+  four.
 - **A post never waits on a provisioning.** Its checks against what is in
-  flight, its three reads of what stands and its admission run under the
-  short lock on the status map, the queue and the held codes — the
-  admission looking at what is in flight again, and at the invite again,
-  under that lock — never behind a board being made; a status page waits
-  on nothing either.
-- **The snippet and the reload are serial.** One lock is held across a
-  snippet's write and its reload, and across a snippet's removal and the
-  reload that follows it, nowhere else, so no reload lands between
-  another name's snippet and its own.
+  flight and its admission run under the book's short lock on the status
+  map, the queue and the held codes — the admission looking at what is in
+  flight again, and at the invite again, under that lock — and its three
+  reads of what stands under no lock at all; none waits behind a board
+  being made, and a status page waits on nothing either.
+- **Route changes are serial.** One lock, the route lock, is held across
+  a route change — a snippet's write or its removal, and the reload that
+  follows it — and nowhere else, so no reload lands between another
+  name's snippet and its own.
 - **A stop leaves no name taken for good.** Every volume the service
   creates carries its label, and at `serve`'s start, before the address
   is bound, every labelled volume under a name of the grammar with no
@@ -1693,7 +1695,7 @@ Its integration suite is one binary, `tests/it/`, driving the built
 `skep-provision` under `test-hooks`: `invite` mints a code; `serve` runs
 on an ephemeral loopback port over the two fakes and a temp state
 directory; a browser's requests reach the live reply at the status
-address, the snippet written and the one mail sent; every refusal answers
+URL, the snippet written and the one mail sent; every refusal answers
 as the strings say; a half-made board is swept before the serving line;
 and SIGTERM ends the process. Beside it, `tests/it/tidy.rs` reads the
 arrangement off the source and the manifest: the module order, the

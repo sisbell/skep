@@ -7,13 +7,13 @@
 //! and the copy inventory; `RULED`, ruled words carried verbatim; and
 //! `RULED-SUBSTANCE / DRAFT-WORDING`, a ruled sentence the notes give as a
 //! bullet, put in this crate's words. A `{slot}` is filled where the row is
-//! shown ([`fill`]): `{suffix}`, `{reply_to}`, `{status}`, `{origin}`,
-//! `{principal}`, `{account}`.
+//! shown ([`fill`]): `{suffix}`, `{owner_address}`, `{status}`,
+//! `{origin}`, `{principal}`, `{account}`.
 //!
 //! The pages (`pages`) show the sign-up page's rows, the claim form's, the
-//! status page's and the answers outside the routes; the reply (`reply`)
-//! composes its rows for the page and the mail alike; the follow-up mail's
-//! subject is the sender's (`sender`).
+//! status page's and the answers to a request no page takes; the reply
+//! (`reply`) composes its rows for the page and the mail alike; the
+//! follow-up mail's subject is the sender's (`sender`).
 
 /// One row of the strings table: where its words come from, and the words.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -61,7 +61,7 @@ pub const INVITE_LABEL: Words = Words { id: "D-9", text: "Your invite code" };
 /// The claim form's button.
 pub const CLAIM_BUTTON: Words = Words { id: "DRAFT", text: "Make my board" };
 
-// The claim's refusals, each shown on the form again.
+// A claim post's refusals, each shown on the form again.
 
 /// The name refused: taken, or not one label.
 pub const NAME_REFUSED: Words = Words { id: "D-4", text: "That name is taken, or is not one label of letters, digits and hyphens. Choose another." };
@@ -77,15 +77,15 @@ pub const INVITE_REFUSED: Words = Words { id: "DRAFT", text: "That invite code i
 
 /// While the post waits or its steps run.
 pub const BEING_MADE: Words = Words { id: "D-7", text: "Your board is being made. Keep this page open: it shows your board when it is live." };
-/// The status address, shown with D-7.
-pub const STATUS_ADDRESS: Words = Words { id: "DRAFT", text: "This page's own address, to come back to: {status}" };
+/// The status URL, shown with D-7.
+pub const STATUS_URL: Words = Words { id: "DRAFT", text: "This page's own address, to come back to: {status}" };
 /// The post failed, or the queue was full.
-pub const FAILED: Words = Words { id: "D-8", text: "Your board could not be made. Nothing stands under your name; try again later, or write to {reply_to}." };
+pub const FAILED: Words = Words { id: "D-8", text: "Your board could not be made. Nothing stands under your name; try again later, or write to {owner_address}." };
 
 // THE REPLY — "Your board is live." (the notes §4: "The customer's reply,
 // the one carrier", cs6-S2), composed by `reply` for the page and the mail
 // alike: the four ruled strings, the three facts, the two acts, the status
-// address last. Of the four, the `local_trust` clause (AUTH-4.52's reach,
+// URL last. Of the four, the `local_trust` clause (AUTH-4.52's reach,
 // the notes' third bullet) has NO ROW: this service never shows it — its
 // `/health` guard refuses `local_trust: true` as a failed step (D-8), so no
 // reply it renders can carry the clause, and no words are written for it.
@@ -130,14 +130,15 @@ pub const SECOND_ACT: Words = Words {
     id: "RULED",
     text: "second act: in your first signed session the setup act runs — `skep claim --board {origin} --dir <store>` from that device performs it: creating your account also creates a space for your agents beneath it, and its home",
 };
-/// The status address, last in the reply.
+/// The status URL, last in the reply.
 pub const REPLY_STATUS: Words = Words { id: "DRAFT", text: "This reply stays at {status}" };
 /// The follow-up mail's subject.
 pub const MAIL_SUBJECT: Words = Words { id: "DRAFT", text: "Your board is live" };
 
-// The answers outside the routes.
+// The answers to a request no page takes.
 
-/// A route or a status token this program does not hold (404).
+/// A request no page takes, or a status token this program does not hold
+/// (404).
 pub const NOT_FOUND: Words = Words { id: "DRAFT", text: "There is no page here." };
 /// A body the form decoder refused, or a request outside the subset (400).
 pub const BAD_FORM: Words = Words { id: "DRAFT", text: "This form could not be read. Go back and send it again." };

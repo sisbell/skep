@@ -3,8 +3,8 @@
 //! dev-dependency turns the feature on for the suite, no flag added): the
 //! `invite` verb mints a code; `serve` runs on an ephemeral loopback port
 //! with `--docker-fake` and `--mailer-fake` over a temp state directory; the
-//! sign-up page, the claim form with the link's code, a sign-up, a claim
-//! through to the live reply at its status address, the snippet, the one
+//! sign-up page, the claim form with the link's code, a sign-up, a post
+//! through to the live reply at its status URL, the snippet, the one
 //! mail; a second post on the name, a bad record, a preview record, an
 //! unknown code, a status token never minted, a body past the cap — each
 //! answered as the pages say; and THE STOP: SIGTERM, the default
@@ -97,7 +97,7 @@ fn minted(state: &Path) -> String {
     assert_eq!(code, 0, "{err}");
     let line = out.trim_end();
     assert_eq!(out.lines().count(), 1, "one DATA line: {out}");
-    line.strip_prefix("https://skep.host/claim?invite=").unwrap_or_else(|| panic!("the claim address: {line}")).to_owned()
+    line.strip_prefix("https://skep.host/claim?invite=").unwrap_or_else(|| panic!("the invite link: {line}")).to_owned()
 }
 
 /// THE SERVICE RUNNING: the child, its port off the serving line, the line
@@ -259,13 +259,13 @@ fn the_built_service_runs_a_post_from_the_form_to_the_live_page_over_the_fakes()
     let signups = std::fs::read_to_string(state.join("signups")).expect("the sign-up file");
     assert!(signups.starts_with("someone@example.org ") && signups.lines().count() == 1, "{signups}");
 
-    // THE CLAIM: D-7 and the status address, then the live reply there.
+    // THE POST: D-7 and the status URL, then the live reply there.
     let record = record(ALG_MLDSA65_ED25519, MLDSA65_ED25519_KEY_LEN);
     let body = format!("name=alice&record={}%0D%0A&invite={code}", form_encode(record.as_bytes()));
     let (status, made) = service.request("POST", "/claim", &body);
     assert_eq!(status, 200, "{made}");
     assert!(made.contains("Your board is being made. Keep this page open: it shows your board when it is live."), "{made}");
-    let at = made.find("https://skep.host/status/").expect("the status address");
+    let at = made.find("https://skep.host/status/").expect("the status URL");
     let token: String = made[at + "https://skep.host/status/".len()..].chars().take_while(char::is_ascii_hexdigit).collect();
     assert_eq!(token.len(), 32);
     let live = until("the live reply", || {

@@ -4,7 +4,7 @@
 //! lookup before and after the spend answers issued, then spent; a spent or
 //! an unknown code is not issued; the file is rewritten whole — a failure
 //! between the write and the rename leaves it as it was — and a line of
-//! another shape survives. (The claim address the code rides is the pages'
+//! another shape survives. (The invite link the code rides is the pages'
 //! suite's; a failed flow leaving the line issued, a post refused on a spent
 //! or unknown code, and the code in no log line are the flow's suite's and
 //! the binary's.)

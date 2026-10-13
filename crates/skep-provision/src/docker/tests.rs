@@ -243,7 +243,7 @@ fn the_real_runner_passes_the_argv_the_record_and_a_null_stdin() {
     std::fs::write(&script, format!("#!/bin/sh\nprintf '%s\\n' \"$@\" > '{0}/argv'\ncat > '{0}/stdin'\nprintf 'out:%s' \"$1\"\nprintf 'err:%s' \"$1\" >&2\nexit 7\n", dir.path().display()))
         .expect("the script");
     std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o700)).expect("executable");
-    let host = Host::with_program(script, settings());
+    let host = HostDocker::with_program(script, settings());
     let record = record();
     let exit = host.sidecar_claim(&alice(), &record).expect("the script ran");
     assert_eq!(exit, Exit { code: Some(7), stdout: b"out:run".to_vec(), stderr: b"err:run".to_vec() });

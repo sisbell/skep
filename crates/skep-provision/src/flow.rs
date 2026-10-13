@@ -2,7 +2,7 @@
 //! §2 and §5.2): the [`Service`] the pages' desk is — A POOL OF WORKERS,
 //! THE NAME THE UNIT OF EXCLUSION.
 //!
-//! THE POST ([`Service`]'s `Desk::claim`): the invite looked up — a code the
+//! THE POST ([`Service`]'s `Desk::admit`): the invite looked up — a code the
 //! file holds issued; the name's grammar; the record admitted (D-5, D-6) —
 //! each in process, before any docker call; then WHAT IS IN FLIGHT, under
 //! the book's short lock — the queue's depth ([`QUEUE_DEPTH`]; past it D-8,
@@ -11,19 +11,20 @@
 //! (`names::taken`, D-4), three reads under no lock of this service's; then
 //! THE ADMISSION, under the book's lock again: what is in flight looked at
 //! again — a post for this name or this code may have been admitted while
-//! the reads ran — and the invite looked up again under the same hold — a
+//! the reads ran — and the invite looked up again under the same lock — a
 //! board gone live meanwhile may have spent it — then the status token
-//! minted, the post queued, and D-7 answered with its status address. A
-//! refused post leaves nothing: no docker call past the truth's reads, no
-//! file, no queue entry. A POST NEVER WAITS ON A PROVISIONING: nothing it
-//! takes is held across one.
+//! minted, the post queued, and D-7 answered with its status URL. A refused
+//! post leaves nothing: no docker call past the truth's reads, no file, no
+//! queue entry. A POST NEVER WAITS ON A PROVISIONING: no lock it takes is
+//! held across one.
 //!
-//! THE NAME IS THE UNIT OF EXCLUSION. A name is held from its admission to
-//! its live or failed end (the status map's `holds`), and a second post for
-//! a name in flight is refused (D-4) under the very hold that admits — so
-//! no two posts for one name are ever in flight, and the worker that takes
-//! a post owns its name alone to the end. No lock is held over a
-//! provisioning: two workers make two names at once.
+//! THE NAME IS THE UNIT OF EXCLUSION. A name is HELD from its admission to
+//! its live or failed end (the status map's `holds`) — the owner's lock per
+//! name, an entry in the book that no thread waits on — and a second post
+//! for a name in flight is refused (D-4) under the book's lock, the very
+//! lock that admits — so no two posts for one name are ever in flight, and
+//! the worker that takes a post owns its name alone to the end. No mutex is
+//! held over a provisioning: two workers make two names at once.
 //!
 //! THE WORKERS ([`Service::work`]), `--workers` threads, each taking the
 //! next queued post and running it to its end:
@@ -40,32 +41,32 @@
 //!    the claim run;
 //! 5. `run_serving`; the `/health` wait for the PAIR (`health`) — the
 //!    first-start guard beside the proxy's own check (AUTH-4.57 (d)); then
-//!    THE SERIAL PAIR under the one `caddy` lock, across every name: the
-//!    snippet written (`caddy`, AUTH-4.57 (c)) and `caddy_reload` — so no
-//!    reload lands between another name's snippet and its own;
+//!    A ROUTE CHANGE under the one route lock, serial across every name:
+//!    the snippet written (`caddy`, AUTH-4.57 (c)) and `caddy_reload` — so
+//!    no reload lands between another name's snippet and its own;
 //!
 //! then THE STATUS LIVE, then THE INVITE SPENT under the invite file's own
 //! lock and its code let go of, in that order, then THE MAIL handed to the
 //! sender's own thread, after the page and never ahead of it, so a mail
 //! outage holds up no next post.
 //!
-//! THE CLEANUP (the record §5.2's decision table, D-8 made literally true):
-//! on a failed step, what the flow made is undone in the reverse of the
-//! order it was made — the snippet removed and Caddy reloaded where the
-//! snippet was written, the two under the `caddy` lock as the write was;
-//! `rm_force` where a run stands; `volume_rm` where the volume stands — the
-//! status FAILED (D-8) and the invite NOT spent, so the person may post
-//! again. By the table: `volume_create` failed — nothing; `run_claim`
-//! failed — the volume; the dark claim failed (exit 4 past the bound, 3, 1,
-//! 2, or `claimed by`) — the claim run and the volume; `run_serving`
-//! failed, or the pair never answered, or the snippet's write failed — the
-//! serving run and the volume; the reload failed — the snippet and a
-//! reload, the serving run, the volume. A board whose claim landed and
-//! whose route did not is removed with its volume: no route ever existed,
-//! so no one wrote to it, and a re-post claims a fresh volume with the same
-//! keys. THE NAMED GAP: a cleanup call that itself fails is logged and
-//! leaves the name standing — the truth then refuses re-posts (D-4) until
-//! the operator clears it.
+//! THE CLEANUP (the provisioning record §5.2's decision table, D-8 made
+//! literally true): on a failed step, what the flow made is undone in the
+//! reverse of the order it was made — the snippet removed and Caddy
+//! reloaded where the snippet was written, a route change too, under the
+//! route lock as the write was; `rm_force` where a run stands; `volume_rm`
+//! where the volume stands — the status FAILED (D-8) and the invite NOT
+//! spent, so the person may post again. By the table: `volume_create`
+//! failed — nothing; `run_claim` failed — the volume; the dark claim failed
+//! (exit 4 past the bound, 3, 1, 2, or `claimed by`) — the claim run and
+//! the volume; `run_serving` failed, or the pair never answered, or the
+//! snippet's write failed — the serving run and the volume; the reload
+//! failed — the snippet and a reload, the serving run, the volume. A board
+//! whose claim landed and whose route did not is removed with its volume:
+//! no route ever existed, so no one wrote to it, and a re-post claims a
+//! fresh volume with the same keys. THE NAMED GAP: a cleanup call that
+//! itself fails is logged and leaves the name standing — the truth then
+//! refuses re-posts (D-4) until the operator clears it.
 //!
 //! THE SWEEP AT START ([`Service::sweep`]; `serve` runs it once, before it
 //! listens): a stop mid-board leaves a volume, and perhaps a run, under a
@@ -79,7 +80,7 @@
 //! THE LOG, on stderr through [`Log`]: one line per step naming the name,
 //! the step and each call's exit code, and the sidecar's stderr whole —
 //! NEVER the record's bytes, an address, an invite code or a status token
-//! (the record §4).
+//! (the provisioning record §4).
 
 use std::collections::{HashSet, VecDeque};
 use std::io;
@@ -129,7 +130,7 @@ struct Job {
     address: String,
 }
 
-/// THE BOOK: WHAT IS IN FLIGHT, which the routes and the workers share
+/// THE BOOK: WHAT IS IN FLIGHT, which the pages and the workers share
 /// under its own short lock — the posts waiting for a worker, this run's
 /// posts by token (the status map), and the invite codes the posts in flight
 /// hold — and THE RULES THAT TIE THEM: a post admitted waits with its token
@@ -219,7 +220,7 @@ struct Made {
     snippet: bool,
 }
 
-/// THE SERVICE: the desk the routes ask, and the workers' shared state.
+/// THE SERVICE: the desk the pages ask, and the workers' shared state.
 pub struct Service {
     config: Config,
     state: StateDir,
@@ -230,10 +231,11 @@ pub struct Service {
     mail: Option<Outbox>,
     log: Log,
     sleep: Sleep,
-    /// THE SERIAL PAIR's LOCK: held across a snippet's write and the
-    /// reload, and across a snippet's removal and the reload — nowhere
-    /// else.
-    caddy: Mutex<()>,
+    /// THE ROUTE LOCK: held across a route change — a snippet's write or
+    /// its removal, and the reload that follows it — and nowhere else, so
+    /// route changes are serial across every name: no reload of another
+    /// name's lands between a snippet and its own reload.
+    route_lock: Mutex<()>,
     /// THE BOOK's SHORT LOCK: what is in flight, and its rules.
     book: Mutex<Book>,
     ready: Condvar,
@@ -246,7 +248,7 @@ impl Service {
     pub fn new(config: Config, state: StateDir, docker: Box<dyn Docker>, mail: Option<Outbox>, log: Log, sleep: Sleep) -> io::Result<Service> {
         let map = StatusMap::rebuild(&config.boards_dir)?;
         let signups = SignUps::new(&state);
-        Ok(Service { config, state, signups, docker, mail, log, sleep, caddy: Mutex::new(()), book: Mutex::new(Book::new(map)), ready: Condvar::new() })
+        Ok(Service { config, state, signups, docker, mail, log, sleep, route_lock: Mutex::new(()), book: Mutex::new(Book::new(map)), ready: Condvar::new() })
     }
 
     /// The live names the map holds — at start, the rebuild's.
@@ -340,8 +342,8 @@ impl Service {
         self.book.lock().unwrap_or_else(|e| e.into_inner())
     }
 
-    fn caddy(&self) -> MutexGuard<'_, ()> {
-        self.caddy.lock().unwrap_or_else(|e| e.into_inner())
+    fn route_lock(&self) -> MutexGuard<'_, ()> {
+        self.route_lock.lock().unwrap_or_else(|e| e.into_inner())
     }
 
     fn log(&self, line: &str) {
@@ -392,8 +394,8 @@ impl Service {
         // 3. The truth again: a name made since the post is not this post's.
         match names::taken(docker, &self.config.boards_dir, name) {
             Ok(None) => {}
-            Ok(Some(holder)) => {
-                self.log(&format!("{name}: taken since the post: {}", holder.said()));
+            Ok(Some(by)) => {
+                self.log(&format!("{name}: taken since the post: {}", by.said()));
                 return Err("the second look at the name");
             }
             Err(e) => {
@@ -425,10 +427,10 @@ impl Service {
                 return Err("the /health wait");
             }
         }
-        // THE SERIAL PAIR: the snippet's write and the reload under the one
-        // `caddy` hold, to the end of this function, so no reload of another
-        // name's lands between this snippet and its own reload.
-        let _caddy = self.caddy();
+        // A ROUTE CHANGE: the snippet's write and the reload under the route
+        // lock, to the end of this function, so no reload of another name's
+        // lands between this snippet and its own reload.
+        let _route_change = self.route_lock();
         if let Err(e) = caddy::write(&self.config.boards_dir, name, &self.config.suffix) {
             self.log(&format!("{name}: snippet: not written: {e}"));
             return Err("the snippet's write");
@@ -510,9 +512,9 @@ impl Service {
         let docker = self.docker.as_ref();
         let mut stands = false;
         if made.snippet {
-            // The serial pair again: the removal and the reload under the
-            // one `caddy` hold, to the end of this block.
-            let _caddy = self.caddy();
+            // A route change again: the removal and the reload under the
+            // route lock, to the end of this block.
+            let _route_change = self.route_lock();
             match caddy::remove(&self.config.boards_dir, name) {
                 Ok(_) => self.log(&format!("{name}: cleanup: snippet: removed")),
                 Err(e) => {
@@ -545,15 +547,15 @@ impl Service {
     /// configured — once the status is live.
     fn send(&self, job: &Job) {
         let Some(outbox) = &self.mail else { return };
-        outbox.post(job.name.clone(), job.address.clone(), self.live_reply(&job.name, job.record.anchorless(), &job.token));
+        outbox.hand_over(job.name.clone(), job.address.clone(), self.live_reply(&job.name, job.record.anchorless(), &job.token));
     }
 
     /// THE LIVE REPLY of a post: what the one renderer, `reply::text`, is
     /// given — the board's public origin, the record's anchorless fact and
-    /// the post's status address — gathered in this one place for the
+    /// the post's status URL — gathered in this one place for the
     /// status page and the mail alike, so the two cannot say two things.
     fn live_reply(&self, name: &Name, anchorless: bool, token: &str) -> String {
-        reply::text(&name.origin(&self.config.suffix), anchorless, &pages::status_address(&self.config.suffix, token))
+        reply::text(&name.origin(&self.config.suffix), anchorless, &pages::status_url(&self.config.suffix, token))
     }
 
     /// WHAT IS IN FLIGHT, under the book's lock the caller holds: what the
@@ -590,7 +592,7 @@ impl Desk for Service {
         }
     }
 
-    fn claim(&self, post: &Post<'_>) -> Result<String, Refusal> {
+    fn admit(&self, post: &Post<'_>) -> Result<String, Refusal> {
         // The invite, first: an uninvited post learns nothing about names.
         let Some(code) = std::str::from_utf8(post.invite).ok().filter(|c| invites::code_ok(c)) else {
             self.log("a post refused: no invite code of the code's form");
@@ -625,8 +627,8 @@ impl Desk for Service {
         // service's — a post waits on no provisioning.
         match names::taken(self.docker.as_ref(), &self.config.boards_dir, &name) {
             Ok(None) => {}
-            Ok(Some(holder)) => {
-                self.log(&format!("{name}: a post refused: taken — {}", holder.said()));
+            Ok(Some(by)) => {
+                self.log(&format!("{name}: a post refused: taken — {}", by.said()));
                 return Err(Refusal::Name);
             }
             Err(e) => {
@@ -634,14 +636,14 @@ impl Desk for Service {
                 return Err(Refusal::Failed);
             }
         }
-        let token = names::fresh_token().map_err(|e| {
+        let token = names::unguessable().map_err(|e| {
             self.log(&format!("{name}: a post could not be admitted: {e}"));
             Refusal::Failed
         })?;
         // THE ADMISSION, under the book's lock: what is in flight looked at
         // again — a post for this name or this code may have been admitted
         // while the reads ran — and the invite looked up again under the
-        // same hold. A worker spends a code and then lets go of it, in that
+        // same lock. A worker spends a code and then lets go of it, in that
         // order, so a code the book does not hold and the file holds issued
         // is one no board has spent; and the name is held from here, so no
         // second post for it is admitted while this one is in flight.

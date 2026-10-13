@@ -4,7 +4,7 @@
 //! one nowhere; the two acts the `skep` command's own lines, read back from
 //! `skep-cli`'s `src/commands/claim.rs`, with the public origin, AUTH-5.87's
 //! sentence and the read's limit in them; the three facts; the status
-//! address last; and the mail's text the page's text with the headers
+//! URL last; and the mail's text the page's text with the headers
 //! before it.
 
 use super::*;
@@ -90,9 +90,9 @@ fn the_two_acts_are_the_binarys_with_the_public_origin() {
 
 /// The order: the heading, the operator sentence, the anchorless sentence
 /// where it stands, the public-venue statement, the three facts as the
-/// command spells them, the two acts, and the status address LAST.
+/// command spells them, the two acts, and the status URL LAST.
 #[test]
-fn the_reply_in_its_order_with_the_status_address_last() {
+fn the_reply_in_its_order_with_the_status_url_last() {
     let reply = text(ORIGIN, true, STATUS);
     let (first, second) = (binary_act("first act: "), binary_act("second act: "));
     let blocks: Vec<&str> = reply.trim_end().split("\n\n").collect();

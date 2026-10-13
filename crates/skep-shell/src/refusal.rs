@@ -26,8 +26,9 @@ use serde_json::{json, Map, Value};
 use skep_client::halt::{Blocked, Face, Halt, Refused};
 use skep_client::DialError;
 
-/// The refusal.
-#[derive(Debug, Clone, PartialEq)]
+/// The refusal: the error every call answers, a `Halt` converting into its
+/// member by `From`, so `?` carries a walk's halt to the row's refusal.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Refusal {
     /// The board's own verdict, verbatim.
     Board(Refused),
@@ -43,7 +44,7 @@ pub enum Refusal {
 
 /// A NAME the shell spells: ONE token, closed to the constants below — the
 /// shell's own refusals first, then the armed names a halt's face takes.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Name(&'static str);
 
 impl Name {
@@ -183,36 +184,24 @@ impl Refusal {
         Refusal::Halt { name, face }
     }
 
-    /// The family's member as the row carries it: the board's verdict
-    /// verbatim, a halt's face, the block, the unreachable board.
-    pub fn of(h: Halt) -> Refusal {
-        match h {
-            Halt::Refused(r) => Refusal::Board(r),
-            Halt::Halt(face) => Refusal::halt(face),
-            Halt::Blocked(b) => Refusal::Blocked(b),
-            Halt::Dial(d) => Refusal::Unreachable(d),
-        }
-    }
-
-    /// [`Refusal::of`], a halt's face taking `name`.
+    /// The conversion `From<Halt>` makes, a halt's face taking `name`.
     pub fn of_named(name: Name, h: Halt) -> Refusal {
         match h {
             Halt::Halt(face) => Refusal::Halt { name, face },
-            other => Refusal::of(other),
+            other => Refusal::from(other),
         }
     }
 
     /// The one token the page faces on.
-    pub fn name(&self) -> String {
+    pub fn name(&self) -> &str {
         match self {
             Refusal::Board(r) => match (r.code.as_str(), r.detail.as_deref()) {
-                ("credential_refused" | "registry_refused", Some(d)) => d.to_string(),
-                (code, _) => code.to_string(),
+                ("credential_refused" | "registry_refused", Some(detail)) => detail,
+                (code, _) => code,
             },
-            Refusal::Halt { name, .. } => name.as_str().to_string(),
-            Refusal::Blocked(_) => "blocked".to_string(),
-            Refusal::Unreachable(_) => "unreachable".to_string(),
-            Refusal::Shell { name, .. } => name.as_str().to_string(),
+            Refusal::Halt { name, .. } | Refusal::Shell { name, .. } => name.as_str(),
+            Refusal::Blocked(_) => "blocked",
+            Refusal::Unreachable(_) => "unreachable",
         }
     }
 
@@ -275,9 +264,18 @@ impl fmt::Display for Refusal {
     }
 }
 
+impl std::error::Error for Refusal {}
+
+/// The family's member as the row carries it: the board's verdict verbatim,
+/// a halt's face under `halt`, the block, the unreachable board.
 impl From<Halt> for Refusal {
     fn from(h: Halt) -> Refusal {
-        Refusal::of(h)
+        match h {
+            Halt::Refused(r) => Refusal::Board(r),
+            Halt::Halt(face) => Refusal::halt(face),
+            Halt::Blocked(b) => Refusal::Blocked(b),
+            Halt::Dial(d) => Refusal::Unreachable(d),
+        }
     }
 }
 
@@ -297,13 +295,13 @@ mod tests {
         assert_eq!(plain.name(), "write_busy");
         let face = Face { state: "s".into(), cause: "c".into(), act: "a".into() };
         let named = Refusal::named(Name::NO_KEY, face.clone());
-        assert_eq!((named.name().as_str(), named.to_value()["state"].as_str()), ("no_key", Some("s")));
+        assert_eq!((named.name(), named.to_value()["state"].as_str()), ("no_key", Some("s")));
         assert_eq!(named.to_string(), format!("no_key: {face}"), "a halt renders as its name and its face");
-        assert_eq!(Refusal::of(Halt::Halt(face)).name(), "halt");
+        assert_eq!(Refusal::from(Halt::Halt(face)).name(), "halt");
         let blocked = Refusal::Blocked(Blocked { record: "1.0.1.0.7.1".into(), named_by: "http://x".into(), ground: None });
-        assert_eq!((blocked.name().as_str(), blocked.to_value()["record"].as_str()), ("blocked", Some("1.0.1.0.7.1")));
-        let dial = Refusal::of(Halt::Dial(DialError::Connect("refused".into())));
-        assert_eq!((dial.name().as_str(), dial.to_value()["kind"].as_str()), ("unreachable", Some("unreachable")));
+        assert_eq!((blocked.name(), blocked.to_value()["record"].as_str()), ("blocked", Some("1.0.1.0.7.1")));
+        let dial = Refusal::from(Halt::Dial(DialError::Connect("refused".into())));
+        assert_eq!((dial.name(), dial.to_value()["kind"].as_str()), ("unreachable", Some("unreachable")));
         let shell = Refusal::shell(Name::SESSION_ENDED, json!({"session": "s-1"}));
         let v = shell.to_value();
         assert_eq!((v["kind"].as_str(), v["name"].as_str(), v["session"].as_str()), (Some("shell"), Some("session_ended"), Some("s-1")));
@@ -316,9 +314,9 @@ mod tests {
     fn a_non_200_is_the_boards_verdict_under_its_status() {
         let r = Refusal::board(400, json!({"error": "beyond_head", "head": 12}));
         let v = r.to_value();
-        assert_eq!((r.name().as_str(), v["kind"].as_str(), v["status"].as_u64(), v["body"]["head"].as_u64()), ("beyond_head", Some("refused"), Some(400), Some(12)));
+        assert_eq!((r.name(), v["kind"].as_str(), v["status"].as_u64(), v["body"]["head"].as_u64()), ("beyond_head", Some("refused"), Some(400), Some(12)));
         let named = Refusal::board(200, json!({"error": "credential_refused", "detail": "retired", "op": "publish"}));
-        assert_eq!((named.name().as_str(), named.to_value()["op"].as_str()), ("retired", Some("publish")));
+        assert_eq!((named.name(), named.to_value()["op"].as_str()), ("retired", Some("publish")));
         assert_eq!(Refusal::board(502, Value::Null).name(), "http_error");
     }
 }

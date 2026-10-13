@@ -51,7 +51,7 @@ use skep_client::store::FileStore;
 use skep_client::{Board, Origin};
 use skep_search::{GrantKind, Hit, Kind, Mark, MarkKind, Rung, Standing};
 
-use crate::events::{EventBus, DAEMON, FEED, INDEX, MODE};
+use crate::events::{EventBus, EventName};
 use crate::hold::{Holds, PROBE_CADENCE};
 use crate::refusal::{Name, Refusal};
 use crate::sessions::{SessionEntry, Sessions, Supplements};
@@ -97,53 +97,32 @@ enum Cmd {
     Stop(Sender<()>),
 }
 
-/// The handle the shell holds per board.
-pub struct Feed {
-    cmds: Sender<Cmd>,
-    stream_stop: Stop,
-    /// The consumer-owner thread, JOINED at [`Feed::stop`] so its `Arc`s — the
-    /// held-burst holds among them, which hold the `held/<chain>/` lock — are
-    /// dropped before the stop returns; a relaunch in the same process then
-    /// takes the lock the first shell held.
-    worker: Option<thread::JoinHandle<()>>,
+/// What every board's feed thread shares with the shell: the bus its events
+/// go out on, the session table, the store the restart arm re-opens a
+/// session under (the signed mode's, none under the bare mode), the data
+/// directory the index sits under, the TALK sink, and the held-burst holds
+/// the worker drives — the `writes.halted` read at each tick and THE PROBE
+/// every `PROBE_CADENCE`.
+#[derive(Clone)]
+pub struct Shared {
+    pub bus: Arc<EventBus>,
+    pub sessions: Arc<Sessions>,
+    pub reopen_store: Option<Arc<FileStore>>,
+    pub data_dir: PathBuf,
+    pub talk: Talk,
+    pub holds: Arc<Holds>,
 }
 
-impl std::fmt::Debug for Feed {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str("Feed")
-    }
+/// THE HANDLE to one board's feed thread: each command sent on the thread's
+/// own channel and answered there, so a caller waiting on one board's
+/// worker holds nothing another caller needs. A handle is cloned freely;
+/// once the thread has stopped, every command answers at once.
+#[derive(Debug, Clone)]
+pub struct Feed {
+    cmds: Sender<Cmd>,
 }
 
 impl Feed {
-    /// The two threads for `entry`, the consumer over `data_dir/index/`;
-    /// `reopen_store` the store the restart arm re-opens a session under;
-    /// `holds` the held-burst holds the worker drives — the `writes.halted`
-    /// read at each tick and THE PROBE every `PROBE_CADENCE`.
-    pub fn spawn(entry: Arc<BoardEntry>, bus: Arc<EventBus>, sessions: Arc<Sessions>, reopen_store: Option<Arc<FileStore>>, data_dir: PathBuf, talk: Talk, holds: Arc<Holds>) -> Feed {
-        let (tx, rx) = channel();
-        // The stream's reader: each commit a tick, a failed connect said.
-        // The stream borrows the board from the `Arc` the thread holds, so
-        // its stopper comes back over a channel before the first read.
-        let (stop_tx, stop_rx) = channel();
-        let (reader_entry, reader_tx) = (Arc::clone(&entry), tx.clone());
-        thread::spawn(move || {
-            let mut stream = events(&reader_entry.board);
-            let _ = stop_tx.send(stream.stopper());
-            while let Some(next) = stream.next() {
-                let cmd = match next {
-                    Ok(position) => Cmd::Tick(position),
-                    Err(h) => Cmd::Unreachable(h.to_string()),
-                };
-                if reader_tx.send(cmd).is_err() {
-                    return;
-                }
-            }
-        });
-        let stream_stop = stop_rx.recv().expect("the reader sends its stopper before it reads");
-        let worker = thread::spawn(move || Worker::run(entry, bus, sessions, reopen_store, data_dir, talk, holds, rx));
-        Feed { cmds: tx, stream_stop, worker: Some(worker) }
-    }
-
     /// A session registered at this board: its supplement mounted.
     pub fn widen(&self, entry: &Arc<SessionEntry>) {
         let _ = self.cmds.send(Cmd::Widen(Arc::clone(entry)));
@@ -167,7 +146,8 @@ impl Feed {
         }
     }
 
-    /// The bridge's search call, answered on the consumer's thread.
+    /// The bridge's search call, answered on the consumer's thread;
+    /// `feed_stopped` once the thread has stopped.
     pub fn search(&self, who: Searcher, query: &str, opts: SearchOpts, reindex: bool) -> Result<Value, Refusal> {
         let (reply, rx) = channel();
         if self.cmds.send(Cmd::Search { who, query: query.to_string(), opts, reindex, reply }).is_err() {
@@ -175,20 +155,81 @@ impl Feed {
         }
         rx.recv().unwrap_or_else(|_| Err(Refusal::shell(Name::FEED_STOPPED, json!({}))))
     }
+}
+
+/// The supplements as the shell reaches them, through a board's handle:
+/// each widen and narrow a command the board's thread runs — a shared
+/// handle, as `&File` is a `Write`.
+impl Supplements for &Feed {
+    fn widen(&mut self, entry: &Arc<SessionEntry>) {
+        Feed::widen(self, entry);
+    }
+
+    fn narrow(&mut self, principal: u64) {
+        Feed::narrow(self, principal);
+    }
+}
+
+/// One board's TWO THREADS, the shell's until its stop: the stream's
+/// reader, and the consumer-owner — JOINED at [`FeedThreads::stop`] so its
+/// `Arc`s, the held-burst holds among them, which hold the `held/<chain>/`
+/// lock, are dropped before the stop returns; a relaunch in the same
+/// process then takes the lock the first shell held.
+pub struct FeedThreads {
+    feed: Feed,
+    stream_stop: Stop,
+    worker: thread::JoinHandle<()>,
+}
+
+impl std::fmt::Debug for FeedThreads {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("FeedThreads")
+    }
+}
+
+impl FeedThreads {
+    /// The two threads for `entry`, the consumer over `data_dir/index/`.
+    pub fn spawn(entry: Arc<BoardEntry>, shared: Shared) -> FeedThreads {
+        let (tx, rx) = channel();
+        // The stream's reader: each commit a tick, a failed connect said.
+        // The stream borrows the board from the `Arc` the thread holds, so
+        // its stopper comes back over a channel before the first read.
+        let (stop_tx, stop_rx) = channel();
+        let (reader_entry, reader_tx) = (Arc::clone(&entry), tx.clone());
+        thread::spawn(move || {
+            let mut stream = events(&reader_entry.board);
+            let _ = stop_tx.send(stream.stopper());
+            while let Some(next) = stream.next() {
+                let cmd = match next {
+                    Ok(position) => Cmd::Tick(position),
+                    Err(h) => Cmd::Unreachable(h.to_string()),
+                };
+                if reader_tx.send(cmd).is_err() {
+                    return;
+                }
+            }
+        });
+        let stream_stop = stop_rx.recv().expect("the reader sends its stopper before it reads");
+        let worker = thread::spawn(move || Worker::run(entry, shared, rx));
+        FeedThreads { feed: Feed { cmds: tx }, stream_stop, worker }
+    }
+
+    /// A handle to the board's worker.
+    pub fn feed(&self) -> Feed {
+        self.feed.clone()
+    }
 
     /// The stream ended and the consumer closed — the save at the shell's
     /// exit. The worker thread is JOINED last, so every `Arc` it held (the
     /// holds, and with them the `held/<chain>/` lock) is dropped before this
     /// returns.
-    pub fn stop(mut self) {
+    pub fn stop(self) {
         self.stream_stop.stop();
         let (reply, rx) = channel();
-        if self.cmds.send(Cmd::Stop(reply)).is_ok() {
+        if self.feed.cmds.send(Cmd::Stop(reply)).is_ok() {
             let _ = rx.recv();
         }
-        if let Some(worker) = self.worker.take() {
-            let _ = worker.join();
-        }
+        let _ = self.worker.join();
     }
 }
 
@@ -220,11 +261,11 @@ struct Worker<'b> {
 }
 
 impl<'b> Worker<'b> {
-    #[allow(clippy::too_many_arguments)]
-    fn run(entry: Arc<BoardEntry>, bus: Arc<EventBus>, sessions: Arc<Sessions>, reopen_store: Option<Arc<FileStore>>, data_dir: PathBuf, talk: Talk, holds: Arc<Holds>, rx: Receiver<Cmd>) {
+    fn run(entry: Arc<BoardEntry>, shared: Shared, rx: Receiver<Cmd>) {
         let entry_arc = entry;
         let entry: &BoardEntry = &entry_arc;
         let head = entry.board.health().map(|h| h.log_position()).unwrap_or(0);
+        let Shared { bus, sessions, reopen_store, data_dir, talk, holds } = shared;
         let mut worker = Worker {
             entry,
             bus,
@@ -304,7 +345,7 @@ impl<'b> Worker<'b> {
         self.down = false;
         if self.unreachable {
             self.unreachable = false;
-            self.bus.emit(DAEMON, json!({"board": self.entry.reference, "state": "running"}));
+            self.bus.emit(EventName::Daemon, json!({"board": self.entry.reference, "state": "running"}));
         }
         self.mount();
         if let Some(c) = &self.consumer {
@@ -350,7 +391,7 @@ impl<'b> Worker<'b> {
             return;
         }
         self.unreachable = true;
-        self.bus.emit(DAEMON, json!({"board": self.entry.reference, "state": "unreachable"}));
+        self.bus.emit(EventName::Daemon, json!({"board": self.entry.reference, "state": "unreachable"}));
         // Every session at this board is dead where the board restarted;
         // the arm is read when the board answers again.
     }
@@ -445,7 +486,7 @@ impl<'b> Worker<'b> {
         if let Some(s) = session {
             update["session"] = Value::from(s);
         }
-        self.bus.emit(FEED, json!({"board": self.entry.reference, "update": update}));
+        self.bus.emit(EventName::Feed, json!({"board": self.entry.reference, "update": update}));
     }
 
     /// THE `mode` EVENT where the pair moved (the claim's landing, a
@@ -460,7 +501,7 @@ impl<'b> Worker<'b> {
             let first = self.last_mode.is_none();
             self.last_mode = Some(mode);
             if !first {
-                self.bus.emit(MODE, json!({"board": self.entry.reference, "mode": mode.name(), "claimant": health.claimant(), "local_trust": health.local_trust()}));
+                self.bus.emit(EventName::Mode, json!({"board": self.entry.reference, "mode": mode.name(), "claimant": health.claimant(), "local_trust": health.local_trust()}));
             }
         }
     }
@@ -480,7 +521,7 @@ impl<'b> Worker<'b> {
         for (principal, state) in faces {
             if self.last_index.get(&principal) != Some(&state) {
                 let session = principal.and_then(|p| self.references.get(&p).cloned());
-                self.bus.emit(INDEX, json!({"board": self.entry.reference, "session": session, "state": state}));
+                self.bus.emit(EventName::Index, json!({"board": self.entry.reference, "session": session, "state": state}));
                 self.last_index.insert(principal, state);
             }
         }
@@ -492,14 +533,14 @@ impl<'b> Worker<'b> {
         let answer = match &who {
             Searcher::Guest => {
                 if reindex {
-                    c.reindex(Who::Guest).map_err(Refusal::of)?;
+                    c.reindex(Who::Guest)?;
                 }
                 c.search(Who::Guest, query, opts)
             }
             Searcher::Session { principal, token, account } => {
                 let who = Who::Session(SessionRef { token, principal: *principal, account });
                 if reindex {
-                    c.reindex(who).map_err(Refusal::of)?;
+                    c.reindex(who)?;
                 }
                 c.search(who, query, opts)
             }

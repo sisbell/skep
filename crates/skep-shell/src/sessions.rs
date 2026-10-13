@@ -18,9 +18,11 @@
 //! board's feed thread, when its consumer's read or a drafts page does —
 //! and both run the one sequence here, so the arm is derived once, the
 //! restart arm's re-open is registered whichever hand met it, and one
-//! `session-died` goes out. The entry's own lock is the gate: the hand that
-//! takes it first ends the session, a hand that comes second answers the
-//! first's arm. An entry leaves the table by that sequence or by a close —
+//! `session-died` goes out. The entry's `OnceLock` is the gate: the hand
+//! whose initializer runs ends the session, a hand that comes while it runs
+//! waits and answers that arm, and a hand that panics mid-end leaves the
+//! cell unset for the next to take the end over. An entry leaves the table
+//! by that sequence or by a close —
 //! the page's own, or the shell's stop ([`Sessions::close`]) — and no
 //! other way.
 //!
@@ -44,7 +46,7 @@
 
 use std::collections::HashMap;
 use std::path::Path;
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::{Arc, Mutex, OnceLock};
 
 use serde_json::{json, Value};
 use skep_client::board::{KeySetAnswer, Opened, Scope, SessionBody, Token};
@@ -58,7 +60,7 @@ use skep_client::{Board, Origin};
 use skep_identity::Fingerprint;
 
 use crate::attest::{wants_attest, Composer};
-use crate::events::{EventBus, SESSION_DIED};
+use crate::events::{EventBus, EventName};
 use crate::refs::session_reference;
 use crate::refusal::{Name, Refusal};
 
@@ -102,9 +104,9 @@ pub struct SessionEntry {
     /// burst's `base` on a document no acked write of this session names
     /// (§3c.2), so the resend's read sees every row that could have moved it.
     pub opened_at: u64,
-    /// The arm its end carried, once a hand has ended it — held locked
-    /// while a hand derives it, so a second hand waits for that arm.
-    end: Mutex<Option<Value>>,
+    /// The arm its end carried, set once by the hand that ended it — a
+    /// second hand waits while the first derives it, then answers it.
+    end: OnceLock<Value>,
 }
 
 impl SessionEntry {
@@ -120,7 +122,7 @@ impl SessionEntry {
         if !wants_attest(frame) {
             return Ok(());
         }
-        let Some(term) = board.board_term().map_err(Refusal::of)? else { return Ok(()) };
+        let Some(term) = board.board_term()? else { return Ok(()) };
         let signer = signer(store, &store.key_path(key))?;
         let account = self.facts.account.as_deref().ok_or_else(|| Refusal::shell(Name::NO_ACCOUNT, json!({})))?;
         let composer = Composer { board, token: &self.token, signer: &*signer, account, term };
@@ -181,7 +183,7 @@ impl Sessions {
     }
 
     /// THE END of a session whose token met the death signal, run by
-    /// whichever hand met it (the module doc). Under the entry's lock the
+    /// whichever hand met it (the module doc). In the entry's `OnceLock` the
     /// session leaves the table and its arm is derived from public reads;
     /// on the restart arm the re-opened session enters under a fresh
     /// reference, named in the arm as `session`. Then `session-died` goes
@@ -192,22 +194,25 @@ impl Sessions {
     /// handed to one that does. A hand that finds the arm already derived
     /// answers it and does nothing else. The arm.
     pub fn end(&self, entry: &SessionEntry, board: &Board, store: Option<&FileStore>, supplements: &mut dyn Supplements, bus: &EventBus) -> Value {
-        // A hand that panicked mid-end left the lock poisoned and the arm
-        // unset: the next hand takes the end over rather than wait on it.
-        let mut end = entry.end.lock().unwrap_or_else(PoisonError::into_inner);
-        if let Some(arm) = &*end {
-            return arm.clone();
+        let (mut ended_here, mut reopened) = (false, None);
+        let arm = entry
+            .end
+            .get_or_init(|| {
+                ended_here = true;
+                self.remove(&entry.reference);
+                let death = reason(board, store, entry);
+                let mut arm = death.reason;
+                reopened = death.reopened.map(|open| self.enter(&entry.board_reference, open));
+                if let Some(r) = &reopened {
+                    arm["session"] = Value::from(r.reference.as_str());
+                }
+                arm
+            })
+            .clone();
+        if !ended_here {
+            return arm;
         }
-        self.remove(&entry.reference);
-        let death = reason(board, store, entry);
-        let mut arm = death.reason;
-        let reopened = death.reopened.map(|open| self.enter(&entry.board_reference, open));
-        if let Some(r) = &reopened {
-            arm["session"] = Value::from(r.reference.as_str());
-        }
-        *end = Some(arm.clone());
-        drop(end);
-        bus.emit(SESSION_DIED, json!({"session": entry.reference, "reason": arm}));
+        bus.emit(EventName::SessionDied, json!({"session": entry.reference, "reason": arm}));
         match &reopened {
             Some(r) => supplements.widen(r),
             None => self.release(&entry.board_reference, entry.facts.principal, supplements),
@@ -227,25 +232,20 @@ impl Sessions {
         }
     }
 
-    /// A CLOSE — the page's own, or the shell's stop: the session out of
-    /// the table, its end settled as the `closed` arm under the entry's
-    /// lock; the entry, or `None` where this shell holds no session under
-    /// `reference` any more — a death met first, or a close before.
+    /// A CLOSE — the page's own, or the shell's stop: the session's end
+    /// settled as the `closed` arm — waiting, as a second hand's `end` does,
+    /// for a hand deriving another — and the session out of the table; the
+    /// entry, or `None` where this shell holds no session under `reference`
+    /// any more — a death met first, or a close before.
     pub fn close(&self, reference: &str) -> Option<Arc<SessionEntry>> {
         let entry = self.get(reference)?;
-        {
-            let mut end = entry.end.lock().unwrap_or_else(PoisonError::into_inner);
-            if end.is_some() {
-                return None;
-            }
-            self.remove(reference);
-            *end = Some(closed());
-        }
+        entry.end.set(closed()).ok()?;
+        self.remove(reference);
         Some(entry)
     }
 
     fn enter(&self, board_reference: &str, open: Open) -> Arc<SessionEntry> {
-        let entry = Arc::new(SessionEntry { reference: session_reference(), board_reference: board_reference.to_string(), token: open.token, facts: open.facts, opened_at: open.opened_at, end: Mutex::new(None) });
+        let entry = Arc::new(SessionEntry { reference: session_reference(), board_reference: board_reference.to_string(), token: open.token, facts: open.facts, opened_at: open.opened_at, end: OnceLock::new() });
         self.map.lock().expect("the sessions' lock").insert(entry.reference.clone(), Arc::clone(&entry));
         entry
     }
@@ -270,13 +270,13 @@ pub struct Open {
 /// between that read and the open is one a resend's read sees, never one it
 /// skips.
 pub fn open_bare(board: &Board, principal: u64) -> Result<Open, Refusal> {
-    let opened_at = board.health().map_err(Refusal::of)?.log_position();
-    let token = match board.session_open(SessionBody::Bare { principal }).map_err(Refusal::of)? {
+    let opened_at = board.health()?.log_position();
+    let token = match board.session_open(SessionBody::Bare { principal })? {
         Opened::Token(t) => t,
         Opened::Rejected => return Err(Refusal::board(401, json!({"error": "session_rejected"}))),
         Opened::Blocked { record } => return Err(Refusal::Blocked(skep_client::Blocked { record, named_by: board.dialed().as_str().to_string(), ground: None })),
     };
-    let account = board.principal_prefix(principal).map_err(Refusal::of)?;
+    let account = board.principal_prefix(principal)?;
     Ok(Open { token, facts: Facts { principal, account, kind: Kind::Bare }, opened_at })
 }
 
@@ -303,7 +303,7 @@ pub fn signer(store: &FileStore, path: &Path) -> Result<Box<dyn Signer>, Refusal
 /// pre-check, each refusal under the armed name the `session` row spells;
 /// the board's position taken from the `/health` read it makes first.
 pub fn open_signed(board: &Board, store: &FileStore, principal: u64) -> Result<Open, Refusal> {
-    let health = board.health().map_err(Refusal::of)?;
+    let health = board.health()?;
     let key = signing_key(store, board.dialed(), principal, || Mode::of(&health))?;
     let signer = signer(store, &key.path)?;
     if let Err(h) = origin_arm(board.signed(), &health) {
@@ -509,7 +509,7 @@ mod tests {
         assert!(sessions.get(&entry.reference).is_none());
         let died: Vec<_> = rx.try_iter().collect();
         assert_eq!(died.len(), 1);
-        assert_eq!((died[0].name, died[0].data["session"].as_str()), ("session-died", Some(entry.reference.as_str())));
+        assert_eq!((died[0].name, died[0].data["session"].as_str()), (EventName::SessionDied, Some(entry.reference.as_str())));
         assert_eq!(died[0].data["reason"], arm);
         assert_eq!(supplements.0.last().map(String::as_str), Some("narrow 1"));
         let touched = supplements.0.len();
@@ -576,7 +576,35 @@ mod tests {
         assert_eq!(first["arm"], "unreachable", "{first}");
         assert_eq!(second, first);
         assert_eq!(held.calls.load(Ordering::SeqCst), 1, "the arm was derived once");
-        assert_eq!(rx.try_iter().filter(|e| e.name == "session-died").count(), 1);
+        assert_eq!(rx.try_iter().filter(|e| e.name == EventName::SessionDied).count(), 1);
         assert_eq!((first_hand.0, second_hand.0), (vec!["narrow 1".to_string()], vec![]));
+    }
+
+    /// A dialer whose first exchange panics, every later one unanswered.
+    struct PanicsOnce(AtomicUsize);
+
+    impl Dialer for PanicsOnce {
+        fn exchange(&self, _: &Origin, _: &Request) -> Result<Response, DialError> {
+            assert!(self.0.fetch_add(1, Ordering::SeqCst) > 0, "the first dial panics");
+            Err(DialError::Connect("unanswered".into()))
+        }
+
+        fn stream(&self, _: &Origin, _: &RequestHead, _: &mut dyn Read, _: &mut dyn FnMut(&Headers)) -> Result<StreamedResponse, DialError> {
+            Err(DialError::Connect("no stream here".into()))
+        }
+    }
+
+    /// A hand that panics mid-end ends nothing, and the next hand derives
+    /// the arm and says the one `session-died`.
+    #[test]
+    fn a_hand_that_panics_mid_end_leaves_the_end_to_the_next() {
+        let board = Board::new(Origin::parse("http://127.0.0.1:9").unwrap(), PanicsOnce(AtomicUsize::new(0)));
+        let (sessions, bus) = (Sessions::new(), EventBus::new());
+        let rx = bus.subscribe();
+        let entry = sessions.register("b-1", open(1, "1.0.1", "1.0.1"), &mut Recorded::default());
+        let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| sessions.end(&entry, &board, None, &mut Recorded::default(), &bus)));
+        assert!(panicked.is_err() && rx.try_recv().is_err(), "the first hand ended nothing");
+        assert_eq!(sessions.end(&entry, &board, None, &mut Recorded::default(), &bus)["arm"], "unreachable");
+        assert_eq!(rx.try_iter().filter(|e| e.name == EventName::SessionDied).count(), 1);
     }
 }

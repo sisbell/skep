@@ -133,14 +133,10 @@ pub fn serve(c: &DevLine) -> Result<(), Stop> {
         None => ArmConfig::Auto,
     };
     let talk_sink: skep_shell::Talk = Arc::new(|line: &str| talk(line));
-    let shell = Shell::open(ShellOptions {
-        boards: vec![board_origin.clone()],
-        store_dir: store_dir.clone(),
-        session_mode,
-        arm: arm_config,
-        talk: talk_sink,
-        own_node: own.then(|| board_origin.clone()),
-    });
+    let mut options = ShellOptions::new(vec![board_origin.clone()], store_dir.clone(), session_mode, talk_sink);
+    options.arm = arm_config;
+    options.own_node = own.then(|| board_origin.clone());
+    let shell = Shell::open(options);
     // THE CHECKS: the board answers; the key under `signed`; the port binds.
     let board = shell.board_references().into_iter().next().expect("one board");
     let health = shell.call("health", &json!({"board": board})).map_err(halt_of)?;

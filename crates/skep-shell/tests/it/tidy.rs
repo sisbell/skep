@@ -30,10 +30,10 @@
 //! each, and `fetch`, which streams and its transport logs: every row
 //! method is private, so no call is served past the log. Its public methods
 //! are listed in [`SHELL_PUBLIC`]: a row method made public fails, and a
-//! new public method is a decision that list records. And `call`'s
-//! dispatch has one arm per name of `CALLS`, in its order: a transport
-//! admits a call by that list, so a name listed and never dispatched would
-//! pass the transport's check and answer `unknown_call`.
+//! new public method is a decision that list records. That `call` answers
+//! every name of `CALLS` is the compiler's to hold, not this file's: the
+//! dispatch matches `src/shell.rs`'s `Call` with one arm per variant, and
+//! `CALLS` is spelled from that enum's list.
 
 use std::path::{Path, PathBuf};
 
@@ -124,24 +124,6 @@ fn the_shell_answers_calls_through_one_door() {
         "`Shell`'s public methods: a call's row reaches the page through `call`, which logs it — keep the row private, or record a new door here"
     );
     assert!(skep_shell::CALLS.contains(&"fetch") && skep_shell::CALLS.iter().filter(|c| SHELL_PUBLIC.contains(c)).eq([&"fetch"]), "of the calls, `fetch` alone is a public method");
-}
-
-#[test]
-fn the_dispatch_answers_every_call_it_lists() {
-    let text = std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("src/shell.rs")).unwrap();
-    let body: Vec<&str> = text
-        .lines()
-        .skip_while(|line| !line.starts_with("    pub fn call("))
-        .skip(1)
-        .take_while(|line| *line != "    }")
-        .collect();
-    assert!(!body.is_empty(), "src/shell.rs holds no `pub fn call(`: the dispatch this check reads has moved");
-    let dispatched: Vec<&str> = body.iter().filter_map(|line| line.trim_start().strip_prefix('"')?.split_once("\" =>").map(|(name, _)| name)).collect();
-    assert_eq!(
-        dispatched,
-        skep_shell::CALLS,
-        "`call`'s arms, in order, are the names `CALLS` lists: a call listed and never dispatched passes a transport's check and answers `unknown_call`"
-    );
 }
 
 /// The modules `src/lib.rs` declares, in order, each with whether it is

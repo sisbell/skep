@@ -10,12 +10,17 @@
 //! it, is round-tripped through `serde_json` and its field names held equal
 //! to the table's. No generator crate: the table is the one source, and a
 //! field renamed in the table alone, or in the code alone, fails the pin.
+//! The event names are rendered from `events::EventName` itself, the type
+//! every event carries.
 
 use std::fmt::Write;
+
+use crate::events::EventName;
 
 /// One field of a declared type: its name, its TypeScript type, and
 /// whether every value carries it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct Field {
     pub name: &'static str,
     pub ty: &'static str,
@@ -33,6 +38,7 @@ const fn opt(name: &'static str, ty: &'static str) -> Field {
 /// One declared type: an interface over its fields, with the line of doc
 /// the file carries above it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct Shape {
     pub name: &'static str,
     /// Whether a value carries members beyond the declared fields — the
@@ -147,7 +153,8 @@ pub fn declarations() -> String {
     out.push_str("export interface SearchOpts { limit?: number; offset?: number; reindex?: boolean }\n");
     out.push_str("export type Refusal = RefusedByBoard | HaltFace | BlockedFace | Unreachable | ShellRefusal;\n");
     out.push_str("export type Outcome<T> = { result: T } | { refused: Refusal };\n");
-    out.push_str("export type EventName = 'mode' | 'session-died' | 'daemon' | 'feed' | 'index' | 'moment' | 'held';\n\n");
+    let event_names: Vec<String> = EventName::ALL.iter().map(|name| format!("'{name}'")).collect();
+    let _ = writeln!(out, "export type EventName = {};\n", event_names.join(" | "));
     for shape in SHAPES {
         let _ = writeln!(out, "/** {} */", shape.doc);
         let _ = writeln!(out, "export interface {} {{", shape.name);

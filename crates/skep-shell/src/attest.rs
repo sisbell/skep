@@ -23,6 +23,7 @@
 //! term it cannot spell — halts naming what stopped it, and nothing is
 //! sent: the shell never sends a frame it could not sign.
 
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::num::NonZeroU64;
 
@@ -82,6 +83,14 @@ struct ReadBack {
     values: HashMap<String, Vec<u8>>,
 }
 
+/// One run of a shot as its body takes it, in the shot's V-order: the
+/// values a COPIED run brings in, or a WINDOW onto another document's
+/// I-space.
+enum ShotPart {
+    Copied(Vec<Vec<u8>>),
+    Window { start: Address, width: NonZeroU64 },
+}
+
 fn fault(state: impl Into<String>, cause: impl Into<String>) -> Halt {
     Halt::face(state, cause, "this is the shell's frame and never your act; nothing was sent")
 }
@@ -138,20 +147,21 @@ fn i_addr_at(i_start: &str, k: u64) -> Option<String> {
 /// The wire's `values` as the entry body's value sequence — the value at each
 /// position the frame fills: a string and a `{"hex"}` mint one value per
 /// byte, an `{"atom"}` and an `{"atom_hex"}` one composite value (wire.md
-/// §Value encodings).
-pub fn values_of(values: &Value) -> Result<Vec<Vec<u8>>, Halt> {
+/// §Value encodings). A text's and an atom's values are borrowed from the
+/// frame; a hex's are decoded, and so owned.
+pub fn values_of(values: &Value) -> Result<Vec<Cow<'_, [u8]>>, Halt> {
     let bad = || fault("the frame's `values` are not the wire's forms", "a value is a string, `{\"hex\"}`, `{\"atom\"}` or `{\"atom_hex\"}`");
     let mut out = Vec::new();
     for v in values.as_array().ok_or_else(bad)? {
         match v {
-            Value::String(s) => out.extend(s.bytes().map(|b| vec![b])),
+            Value::String(s) => out.extend(s.as_bytes().chunks(1).map(Cow::Borrowed)),
             Value::Object(m) => {
                 if let Some(h) = m.get("hex").and_then(Value::as_str) {
-                    out.extend(decode_hex(h).ok_or_else(bad)?.into_iter().map(|b| vec![b]));
+                    out.extend(decode_hex(h).ok_or_else(bad)?.into_iter().map(|b| Cow::Owned(vec![b])));
                 } else if let Some(a) = m.get("atom").and_then(Value::as_str) {
-                    out.push(a.as_bytes().to_vec());
+                    out.push(Cow::Borrowed(a.as_bytes()));
                 } else if let Some(h) = m.get("atom_hex").and_then(Value::as_str) {
-                    out.push(decode_hex(h).ok_or_else(bad)?);
+                    out.push(Cow::Owned(decode_hex(h).ok_or_else(bad)?));
                 } else {
                     return Err(bad());
                 }
@@ -165,20 +175,22 @@ pub fn values_of(values: &Value) -> Result<Vec<Vec<u8>>, Halt> {
 /// A delivery's items as the value at each position they deliver, the
 /// inverse of [`values_of`]: a `content` text and a `hex` item one value per
 /// byte (adjacent text arrives as one item), an `atom` and an `atom_hex` one
-/// composite value. An item no value spells — a withheld run, a reference, a
-/// `hex` that does not decode, one this shell does not know — is the error.
-pub fn delivered_values(delivery: &Value) -> Result<Vec<Vec<u8>>, Value> {
+/// composite value — borrowed from the delivery where it spells them, owned
+/// where a hex is decoded. An item no value spells — a withheld run, a
+/// reference, a `hex` that does not decode, one this shell does not know —
+/// is the error.
+pub fn delivered_values(delivery: &Value) -> Result<Vec<Cow<'_, [u8]>>, Value> {
     let mut positions = Vec::new();
     for item in delivery["items"].as_array().into_iter().flatten() {
         let unread = || item.clone();
         if let Some(text) = item["content"].as_str() {
-            positions.extend(text.bytes().map(|b| vec![b]));
+            positions.extend(text.as_bytes().chunks(1).map(Cow::Borrowed));
         } else if let Some(h) = item["hex"].as_str() {
-            positions.extend(decode_hex(h).ok_or_else(unread)?.into_iter().map(|b| vec![b]));
+            positions.extend(decode_hex(h).ok_or_else(unread)?.into_iter().map(|b| Cow::Owned(vec![b])));
         } else if let Some(a) = item["atom"].as_str() {
-            positions.push(a.as_bytes().to_vec());
+            positions.push(Cow::Borrowed(a.as_bytes()));
         } else if let Some(h) = item["atom_hex"].as_str() {
-            positions.push(decode_hex(h).ok_or_else(unread)?);
+            positions.push(Cow::Owned(decode_hex(h).ok_or_else(unread)?));
         } else {
             return Err(unread());
         }
@@ -186,12 +198,18 @@ pub fn delivered_values(delivery: &Value) -> Result<Vec<Vec<u8>>, Value> {
     Ok(positions)
 }
 
-/// Lowercase or uppercase hex decoded, `None` where it is none.
+/// Lowercase or uppercase hex decoded, `None` where it is none: an odd
+/// length, or any byte that is no ASCII hex digit — a sign, or a byte of a
+/// multi-byte character. The text is read byte by byte, so no character
+/// boundary can be cut.
 fn decode_hex(h: &str) -> Option<Vec<u8>> {
-    if h.len() % 2 != 0 {
+    let digit = |b: u8| char::from(b).to_digit(16);
+    let (pairs, odd) = h.as_bytes().as_chunks::<2>();
+    if !odd.is_empty() {
         return None;
     }
-    (0..h.len() / 2).map(|i| u8::from_str_radix(&h[2 * i..2 * i + 2], 16).ok()).collect()
+    // Two hex digits make a value below 256, so the cast keeps every bit.
+    pairs.iter().map(|&[hi, lo]| Some(((digit(hi)? << 4) | digit(lo)?) as u8)).collect()
 }
 
 impl Composer<'_> {
@@ -272,7 +290,7 @@ impl Composer<'_> {
             return Err(fault(format!("{origin}'s delivery and its image disagree on its extent"), format!("{} positions delivered against {} addresses imaged", positions.len(), addrs.len())));
         }
         for (a, v) in addrs.into_iter().zip(positions) {
-            values.insert(a, v);
+            values.insert(a, v.into_owned());
         }
         Ok(ReadBack { values })
     }
@@ -284,9 +302,8 @@ impl Composer<'_> {
         let draft = frame["draft"].as_str();
         let runs = frame["runs"].as_array().ok_or_else(|| fault("the shot names no `runs`", "a `publish` frame carries its runs in V-order"))?;
         let mut read_backs: HashMap<String, ReadBack> = HashMap::new();
-        let mut copied: Vec<(usize, Vec<Vec<u8>>)> = Vec::new();
-        let mut windows: Vec<(usize, Address, NonZeroU64)> = Vec::new();
-        for (i, run) in runs.iter().enumerate() {
+        let mut parts: Vec<ShotPart> = Vec::with_capacity(runs.len());
+        for run in runs {
             let origin = member(run, "origin")?;
             let i_start = member(run, "i_start")?;
             let width: u64 = run["width"].as_str().and_then(|w| w.parse().ok()).ok_or_else(|| fault("a run's `width` is not a count", run.to_string()))?;
@@ -303,26 +320,25 @@ impl Composer<'_> {
                     let v = read.values.get(&a).ok_or_else(|| fault(format!("the shot copies in {a}, which {origin}'s arrangement does not hold"), "a copied run's values are read back through its origin's own arrangement; a position outside it cannot be composed"))?;
                     values.push(v.clone());
                 }
-                copied.push((i, values));
+                parts.push(ShotPart::Copied(values));
             } else {
                 let start = addr(i_start, "runs[].i_start")?;
                 let width = NonZeroU64::new(width).ok_or_else(|| fault("a window of width 0", run.to_string()))?;
-                windows.push((i, start, width));
+                parts.push(ShotPart::Window { start, width });
             }
         }
         let base_member = frame["base"].as_str().map(|b| addr(b, "base")).transpose()?;
-        let base_extent: Option<u64> = frame["base_extent"].as_str().map(|e| e.parse().ok()).flatten();
+        let base_extent: Option<u64> = frame["base_extent"].as_str().and_then(|e| e.parse().ok());
         let base = match (&base_member, base_extent) {
             (Some(member), Some(extent)) => Some(ShotBase { member, extent }),
             (None, None) => None,
             _ => return Err(fault("the shot names `base` without `base_extent`, or the reverse", "either both or neither (wire.md §The publish shot)")),
         };
         let mut pieces: Vec<ShotSegmentPiece<'_>> = Vec::new();
-        for i in 0..runs.len() {
-            if let Some((_, values)) = copied.iter().find(|(j, _)| *j == i) {
-                pieces.extend(values.iter().map(|v| ShotSegmentPiece::Value(v.as_slice())));
-            } else if let Some((_, start, width)) = windows.iter().find(|(j, _, _)| *j == i) {
-                pieces.push(ShotSegmentPiece::Window { start, width: *width });
+        for part in &parts {
+            match part {
+                ShotPart::Copied(values) => pieces.extend(values.iter().map(|v| ShotSegmentPiece::Value(v))),
+                ShotPart::Window { start, width } => pieces.push(ShotSegmentPiece::Window { start, width: *width }),
             }
         }
         Ok(entry_body_publish(pieces, base))
@@ -340,7 +356,7 @@ impl Composer<'_> {
                 let trunk = trunk_text(doc).ok_or_else(|| fault(format!("the frame's `doc` has no trunk: `{doc}`"), "an insert's doc term is the document's trunk"))?;
                 let declared = frame["deposit"].as_str().map(|t| addr(t, "deposit")).transpose()?;
                 let values = values_of(&frame["values"])?;
-                (one(&trunk, "doc")?, entry_body_insert(declared.as_ref(), values.iter().map(Vec::as_slice)))
+                (one(&trunk, "doc")?, entry_body_insert(declared.as_ref(), values.iter().map(AsRef::as_ref)))
             }
             "make_link" => {
                 let home = member(frame, "home")?;
@@ -434,14 +450,24 @@ mod tests {
     }
 
     /// The wire's four value forms mint the body's values: per byte for a
-    /// string and a `hex`, one composite for an `atom` and an `atom_hex`;
-    /// a V-spec's span reads as `(from, width)`; an I-address advances by
-    /// its last component; the ten kinds are the checked set.
+    /// string and a `hex`, one composite for an `atom` and an `atom_hex`,
+    /// the text's and the atom's borrowed from the frame; a hex of either
+    /// case decodes, and one with a sign or a multi-byte character is no
+    /// value (never a panic at a character boundary); a V-spec's span reads
+    /// as `(from, width)`; an I-address advances by its last component; the
+    /// ten kinds are the checked set.
     #[test]
     fn the_values_the_v_spec_and_the_i_address_read_as_the_wire_spells_them() {
-        let values = values_of(&json!(["ab", {"hex": "c328"}, {"atom": "one"}, {"atom_hex": "00ff"}])).unwrap();
+        let frame = json!(["ab", {"hex": "c328"}, {"atom": "one"}, {"atom_hex": "00ff"}]);
+        let values = values_of(&frame).unwrap();
         assert_eq!(values, vec![b"a".to_vec(), b"b".to_vec(), vec![0xc3], vec![0x28], b"one".to_vec(), vec![0x00, 0xff]]);
+        assert!(matches!((&values[0], &values[4], &values[2]), (Cow::Borrowed(_), Cow::Borrowed(_), Cow::Owned(_))), "text and atoms borrowed, hex decoded: {values:?}");
         assert!(values_of(&json!([7])).is_err());
+        assert_eq!(values_of(&json!([{"hex": "C3"}, {"atom_hex": "Ab"}])).unwrap(), vec![vec![0xc3], vec![0xab]]);
+        assert!(values_of(&json!([{"hex": "+a"}])).is_err(), "a sign is no hex digit");
+        assert!(values_of(&json!([{"atom_hex": "+a+b"}])).is_err());
+        assert!(values_of(&json!([{"hex": "aé0"}])).is_err(), "a multi-byte character is no hex digit, and cuts no boundary");
+        assert!(values_of(&json!([{"hex": "abc"}])).is_err(), "an odd length");
         assert_eq!(v_spec(&json!({"start": "1.6", "width": "0.2"})), Some((6, 2)));
         assert_eq!(v_spec(&json!({"start": "2.6", "width": "0.2"})), None);
         assert_eq!(i_addr_at("1.0.1.0.1.0.1.4", 3).as_deref(), Some("1.0.1.0.1.0.1.7"));
@@ -466,5 +492,7 @@ mod tests {
         let withheld = json!({"withheld": {"width": "3"}});
         assert_eq!(delivered_values(&json!({"items": [{"content": "a"}, withheld]})), Err(withheld));
         assert_eq!(delivered_values(&json!({"items": [{"hex": "zz"}]})), Err(json!({"hex": "zz"})));
+        assert_eq!(delivered_values(&json!({"items": [{"hex": "+a"}]})), Err(json!({"hex": "+a"})));
+        assert_eq!(delivered_values(&json!({"items": [{"atom_hex": "aé0"}]})), Err(json!({"atom_hex": "aé0"})));
     }
 }

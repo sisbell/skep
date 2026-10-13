@@ -41,7 +41,7 @@ use skep_client::person::scripted::{Script, Scripted};
 use skep_client::sheet::Label;
 use skep_client::store::{FileStore, KeyStore};
 use skep_client::Origin;
-use skep_shell::{ArmConfig, SessionMode, Shell, ShellOptions};
+use skep_shell::{SessionMode, Shell, ShellOptions};
 use skepd::{embed, AuthOptions, MediaOptions, Skepd, DEFAULT_WORKERS};
 
 use crate::common::{origin, s, spawn};
@@ -928,7 +928,7 @@ fn f9_the_crate_and_the_provider_answer_one_sequence_alike() {
     }
     // (a) directly on the crate.
     let talk: skep_shell::Talk = Arc::new(|_| {});
-    let shell = Shell::open(ShellOptions { boards: vec![Origin::parse(&board_origin).unwrap()], store_dir: dir.path().join("direct-store"), session_mode: SessionMode::Bare { principal: 1 }, arm: ArmConfig::Auto, talk, own_node: None });
+    let shell = Shell::open(ShellOptions::new(vec![Origin::parse(&board_origin).unwrap()], dir.path().join("direct-store"), SessionMode::Bare { principal: 1 }, talk));
     let direct_rx = shell.subscribe();
     let direct = sequence(&|name, args| match shell.call(name, &args) {
         Ok(v) => json!({"result": v}),

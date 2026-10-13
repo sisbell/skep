@@ -1100,8 +1100,9 @@ things `skep-client` does not hold and every shell needs, written once so
 the dev provider (`skep-dev serve`) and the desktop shell share them and
 rewrite the transport alone (the dev provider record §2.2, §6; ruled P-1
 (B), P-2 (B1)). A transport reaches it through the crate root — `Shell` and
-what opens it, `Refusal`, `Log`, `Talk`, `CALLS` — and three public
-modules, `events`, `script` and `shapes`; the rest is private. Its modules,
+what opens it, `Refusal` and its `Name`, `Log` and its `CallOutcome`,
+`Event` and its `EventName`, `Talk`, `CALLS` — and three public modules,
+`events`, `script` and `shapes`; the rest is private. Its modules,
 in the order `src/lib.rs` declares them, each naming only those above it —
 an item the root re-exports counted as the module it is brought from
 (`tests/it/tidy.rs` holds the order and the three public modules):
@@ -1109,16 +1110,20 @@ an item the root re-exports counted as the module it is brought from
 - `refs.rs` the reference registry's NAMES: a board reference and a
   session reference minted from OS entropy per process, never a
   credential, never derived from an origin or a token (THE PIN).
-- `log.rs` the call log and the dial log the page's gate reads, and
-  `LoggingDialer`, the one `PlainHttp` every board dials through — so the
-  bare set is met by the shell and never by the page, and no dial escapes
-  the log; no token, header or body is kept.
-- `events.rs` `EventBus`: the seven events as values, fanned out to every
-  subscriber in order.
+- `log.rs` the call log and the dial log the page's gate reads — each entry
+  numbered by its place under the one lock that places it, a call's
+  outcome a `CallOutcome` — and `LoggingDialer`, the one `PlainHttp` every
+  board dials through, the log's one maker of dial entries — so the bare
+  set is met by the shell and never by the page, and no dial escapes the
+  log; no token, header or body is kept.
+- `events.rs` `EventBus`: the seven events as values, each named by an
+  `EventName` — the closed list, parsed from and spelled as the contract's
+  words — fanned out to every subscriber in order.
 - `refusal.rs` `Refusal`: the one shape the page renders — the board's
   verdict verbatim, a halt's face under the armed name the row spells, the
-  block, the unreachable board, the shell's own — each with ONE `name`;
-  `Name`, the closed list of every name the shell spells.
+  block, the unreachable board, the shell's own — each with ONE `name`, a
+  `std::error::Error`, and a `Halt`'s member by `From`; `Name`, the closed
+  list of every name the shell spells.
 - `held.rs` the HELD-BURST STORE (`client.md` §3c): one append-only file per
   (board, principal) beside the key store — a header and two line forms (a
   `held` line of a standing ordinal its re-mark), the `flock` on
@@ -1127,7 +1132,8 @@ an item the root re-exports counted as the module it is brought from
   `HeldQueue`, a principal's queue — its memory, the file its copy, a queue
   in memory alone writing none.
 - `script.rs` the dev arm's SCRIPT: the grammar a script file's answers are
-  parsed by, one per line in order.
+  parsed by, one per line in order; a typed import's seed printed by no
+  `Debug` of an answer and no refusal of a line.
 - `dev_arm.rs` the DEV ARM: the SECRET and CONSENT moments answered from a
   script's answers in order or by the auto arm, each answer said on TALK
   and never sent to the page; the sheets a walk shows kept in-process for a
@@ -1167,8 +1173,10 @@ an item the root re-exports counted as the module it is brought from
   values read back as the frame spelled them, and a read the board refused
   deciding nothing — the feed worker's probe drains it; the own node's
   stopped state; the backing of `held` and `resolve`.
-- `feed.rs` `Feed`: two threads per board — the `/events` stream's reader
-  and the consumer's owner — the `feed`, `index`, `mode` and `daemon`
+- `feed.rs` `FeedThreads`: two threads per board — the `/events` stream's
+  reader and the consumer's owner, joined at the stop — and `Feed`, the
+  handle every call reaches the owner through, its channel cloned; the
+  `feed`, `index`, `mode` and `daemon`
   events (the `daemon` event for EVERY board the shell dials, each naming
   its board; silent for the own node's deliberate stop, which the shell
   announces `stopped` once), a death its reads meet ended by
@@ -1179,15 +1187,18 @@ an item the root re-exports counted as the module it is brought from
   probe whatever wakes the thread between.
 - `shell.rs` `Shell`: the boards, the sessions, `SessionMode`, the
   twenty-two calls as private methods behind `call(name, args)`, the
-  dispatch, which logs each; the `op` row hands a burst to the hold's write
-  path and notes every other write's ack for the hold's `base`; `fetch`,
-  public as a stream; `answer`, `cancel`, `shutdown`; `set_node_state`, the
+  dispatch — one arm per variant of the private `Call`, which `CALLS` is
+  spelled from — which logs each; the `op` row hands a burst to the hold's
+  write path and notes every other write's ack for the hold's `base`;
+  `fetch`, public as a stream; `answer`, `cancel`, `shutdown`, which
+  dropping a shell runs too; `ShellOptions::new`, a shell's four needs,
+  its arm and own node set beside them; `set_node_state`, the
   own node's state its owner reports — kept by the holds — which `probe`
   answers and the `daemon` event announces at that node's board — a
   deliberate stop said there ONCE, the board's feed adding no `unreachable`
   while it stands, and `Running` the one `running`.
 - `shapes.rs` the declarations' table, `declarations()`, pinned by its
-  suite.
+  suite; the event names rendered from `EventName` itself.
 
 Rules that hold across its files:
 
@@ -1210,20 +1221,30 @@ Rules that hold across its files:
   which logs it; the row methods are private, so a transport cannot serve
   a call the log never saw. `Shell::fetch` is the one public row, because
   it streams: its transport logs it. `tests/it/tidy.rs` pins `Shell`'s
-  public methods, and holds `call`'s dispatch to `CALLS`, the list a
-  transport admits a call by.
+  public methods; the compiler holds `call`'s dispatch to one arm per call,
+  and `CALLS`, the list a transport admits a call by, is spelled from the
+  same enum, so no name is listed that the dispatch does not answer.
 - **A session ends once.** A death signal is met by two hands — the shell
   on a call's thread, the board's feed on its own — and both run
-  `Sessions::end`. The entry's own lock is the gate: the hand that takes it
-  first derives the arm, registers the restart arm's re-open and emits the
-  one `session-died`; a hand that comes second answers that arm and does
-  nothing else. An entry leaves the table by that sequence or by `close`,
-  and `Sessions` exposes no other removal.
+  `Sessions::end`. The entry's `OnceLock` is the gate: the hand whose
+  initializer runs derives the arm, registers the restart arm's re-open and
+  emits the one `session-died`; a hand that comes while it runs waits,
+  answers that arm and does nothing else; a hand that panics mid-end leaves
+  the cell unset for the next. An entry leaves the table by that sequence
+  or by `close`, and `Sessions` exposes no other removal.
 - **A session's rows precede its death.** `close` takes the session out of
   the table, then has the board's feed read its drafts to the head under
   its still-standing token (`Feed::closing`, a round-trip to the feed's
   thread) before the token closes and `session-died` goes out: every
   subscriber sees one sequence, however far the feed trails the commits.
+- **One board's wait holds no other.** A call reaches a board's feed thread
+  through that board's own handle, a channel, and waits on its own reply:
+  no lock is held across the wait, so a search queued behind a board that
+  is not answering holds back no call at another.
+- **Dropping a shell stops it.** `Shell`'s `Drop` runs `shutdown`, which a
+  second time finds nothing left to stop: no feed thread, open session or
+  `held/<chain>/` lock outlives the shell, whether or not its owner stopped
+  it.
 - **A principal's supplement follows its standing sessions.** The consumer
   holds one drafts supplement per (board, principal), and two tabs hold two
   sessions of one principal. A session that leaves the table — its end or
@@ -1241,8 +1262,9 @@ Rules that hold across its files:
   without its answer is `abandoned` to the page.
 - **The declarations are pinned.** Every shape in the table has a sample
   the suite round-trips; a required field missing, or a built field
-  undeclared on a shape the table does not mark `open`, is red, and the
-  declared call rows are the dispatch's `CALLS`.
+  undeclared on a shape the table does not mark `open`, is red, the
+  declared call rows are the dispatch's `CALLS`, and the declared event
+  names are rendered from `EventName`.
 - **Persist first.** A `held` answer is a promise the disk already keeps:
   the burst's line is written and synced before `op` answers `held`
   (§3c.3, J1), so a crash after the answer loses nothing of it. A second
@@ -1273,7 +1295,10 @@ under the composed attest; the daemon's restart under the signed mode,
 the session it ended re-opened under a fresh reference and written under;
 the own node's state announced at its board, a deliberate stop said once
 with no `unreachable` beside it while a second board's stream failure is
-still announced; and the declared fields of the real answers. The
+still announced; the declared fields of the real answers; the dispatch
+naming every call by its own spelling, a shell's options printing no seed,
+a search held at one board holding back no session at another, and a shell
+dropped unstopped freeing its board's held lock. The
 HELD-BURST STORE is held there too: a burst held when the daemon is
 stopped and resent `kept` after a restart at the same port, the kernel
 poison holding a burst `poisoned` then `halted`, the poisoned burst of two
@@ -1293,11 +1318,13 @@ on a read (a signed entry's row, a lost-testimony row), the resend's
 three outcomes, a read the board refuses deciding nothing,
 `history_reclaimed` decided by the arrangement, a refusal the table holds
 nowhere leaving its line standing, a second window's burst resent from
-memory and the `base` a hold takes by `hold.rs`'s. The end's once-only
-gate and the supplement's release are held by `sessions.rs`'s own suite —
-two hands at one death, one derivation, one event; a leaving session's
-supplement handed to the standing one — and the arrangement by
-`tests/it/tidy.rs`.
+memory, the `base` a hold takes and a drain that unwinds leaving its board
+free by `hold.rs`'s. The end's once-only gate and the supplement's release
+are held by `sessions.rs`'s own suite — two hands at one death, one
+derivation, one event; a hand that panics mid-end leaving the end to the
+next; a leaving session's supplement handed to the standing one — the
+log's numbering under eight writers at once by `log.rs`'s, and the
+arrangement by `tests/it/tidy.rs`.
 
 ## The command, `skep-cli`
 

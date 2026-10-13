@@ -7,7 +7,8 @@
 //! library does not hold and every shell needs are written here once, so
 //! the dev provider (`skep-dev serve`) and the desktop shell share them and
 //! rewrite the transport alone. A transport reaches the crate through this
-//! root — [`Shell`] and what opens it, [`Refusal`], [`Log`], [`Talk`],
+//! root — [`Shell`] and what opens it, [`Refusal`] and its [`Name`], [`Log`]
+//! and its [`CallOutcome`], [`Event`] and its [`EventName`], [`Talk`],
 //! [`CALLS`] — and three public modules, [`events`], [`script`] and
 //! [`shapes`]; the rest is private. The modules, in the order they are
 //! declared, each naming only those above it:
@@ -19,8 +20,8 @@
 //! * `log` — [`Log`], the call log and the dial log the page's gate reads
 //!   (the structure record §6.3's class 5): every call the page made and
 //!   every dial the shell made, sizes and timing, never a token or a body.
-//! * [`events`] — THE EVENT STREAM: every §4b.2 event as a value, fanned
-//!   out to every subscriber.
+//! * [`events`] — THE EVENT STREAM: every §4b.2 event as a value, named by
+//!   an [`EventName`] of the seven, fanned out to every subscriber.
 //! * `refusal` — [`Refusal`], the one refusal shape the page renders: the
 //!   board's own verdict verbatim, a halt's face, the block, the
 //!   unreachable board, and the shell's own armed refusals, each named by
@@ -63,9 +64,11 @@
 //!   `writes.halted` per tick and runs THE PROBE on a deadline of its own.
 //! * `shell` — [`Shell`]: the boards, the sessions, the session mode
 //!   (bare as the claimant, or signed with a dev key), and one private
-//!   method per §4b.1 row behind [`Shell::call`], each taking and answering
+//!   method per §4b.1 row behind [`Shell::call`], whose dispatch the
+//!   compiler holds to one arm per call, each row taking and answering
 //!   values shaped exactly as the row's columns; [`Shell::fetch`] is public
-//!   beside it because it streams, and its transport logs it.
+//!   beside it because it streams, and its transport logs it. Dropping a
+//!   shell stops it: no thread, session or lock of it outlives it.
 //! * [`shapes`] — THE DECLARATIONS: [`shapes::declarations`], a TypeScript
 //!   declaration file for every value that crosses the bridge, pinned by a
 //!   test that round-trips each type's JSON against the declared fields.
@@ -97,21 +100,32 @@ mod feed;
 mod shell;
 pub mod shapes;
 
-pub use events::{Event, EventBus};
-pub use log::Log;
-pub use refusal::Refusal;
+pub use events::{Event, EventBus, EventName};
+pub use log::{CallOutcome, Log};
+pub use refusal::{Name, Refusal};
 pub use shell::{ArmConfig, Fetched, NodeState, SessionMode, Shell, ShellOptions, CALLS};
 
 /// Where the shell's TALK lines go: the verb's stderr, a suite's vector.
 pub type Talk = Arc<dyn Fn(&str) + Send + Sync>;
 
-/// The auto-traits this crate promises without saying so: a transport holds
-/// the shell behind an `Arc` across its connection threads, and an event
-/// crosses to the thread that writes it out.
+/// The auto-traits and the error trait this crate promises without saying
+/// so: a transport holds the shell behind an `Arc` across its connection
+/// threads and shares its log; an event crosses to the thread that writes
+/// it out; a shell's options cross to the thread that opens it, and a
+/// fetched body to the thread that reads it; and every error the crate
+/// answers is a `std::error::Error` a caller's `?` carries.
 const _: fn() = || {
     fn assert_send_sync<T: Send + Sync>() {}
+    fn assert_send<T: Send>() {}
+    fn assert_error<E: std::error::Error + Send + Sync + 'static>() {}
     assert_send_sync::<Shell>();
+    assert_send_sync::<ShellOptions>();
+    assert_send_sync::<Log>();
     assert_send_sync::<Event>();
     assert_send_sync::<EventBus>();
     assert_send_sync::<Refusal>();
+    assert_send::<Fetched>();
+    assert_error::<Refusal>();
+    assert_error::<script::ScriptError>();
+    assert_error::<events::UnknownEventName>();
 };

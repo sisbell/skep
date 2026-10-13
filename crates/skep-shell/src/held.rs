@@ -35,6 +35,7 @@
 //! NOTHING. No size bound of the store's own: the wire's 8 MiB per frame is the
 //! bound, and hours of typing are kilobytes (§3c.3).
 
+use std::fmt::Write as _;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
@@ -503,14 +504,14 @@ fn header_bytes(chain: &Chain, principal: u64, account: &str) -> Vec<u8> {
 fn held_line_bytes(l: &HeldLine) -> Vec<u8> {
     let mut s = format!("{{\"held\":{},\"doc\":{}", l.k, json_str(&l.doc));
     if let Some(id) = &l.id {
-        s.push_str(&format!(",\"id\":{}", json_str(id)));
+        let _ = write!(s, ",\"id\":{}", json_str(id));
     }
-    s.push_str(&format!(",\"base\":{},\"frame\":{}", l.base, l.frame));
-    s.push_str(&format!(",\"cause\":{}", json_str(&l.reason.cause)));
+    let _ = write!(s, ",\"base\":{},\"frame\":{}", l.base, l.frame);
+    let _ = write!(s, ",\"cause\":{}", json_str(&l.reason.cause));
     if let Some(r) = &l.reason.refusal {
-        s.push_str(&format!(",\"refusal\":{r}"));
+        let _ = write!(s, ",\"refusal\":{r}");
     }
-    s.push_str(&format!(",\"sent\":{},\"time\":{}}}\n", l.reason.sent, l.time));
+    let _ = writeln!(s, ",\"sent\":{},\"time\":{}}}", l.reason.sent, l.time);
     s.into_bytes()
 }
 
@@ -523,9 +524,9 @@ fn done_line_bytes(k: u64, done: Done) -> Vec<u8> {
     };
     let mut s = format!("{{\"done\":{k},\"as\":\"{resolved}\"");
     if let Some(at) = at {
-        s.push_str(&format!(",\"at\":{at}"));
+        let _ = write!(s, ",\"at\":{at}");
     }
-    s.push_str(&format!(",\"time\":{}}}\n", now_ms()));
+    let _ = writeln!(s, ",\"time\":{}}}", now_ms());
     s.into_bytes()
 }
 

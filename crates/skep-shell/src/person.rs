@@ -18,9 +18,9 @@ use std::sync::{Arc, Mutex};
 use serde_json::{json, Value};
 use skep_client::person::{Abandoned, Confirmation, Consent, Destination, HandedPath, Import, Imported, KeptOrPlaced, LabelBox, Person, Public, Question, Retype, Retyped, Secret, Sheet, Statement};
 
-use crate::events::{EventBus, MOMENT};
+use crate::events::{EventBus, EventName};
 use crate::refs::moment_id;
-use crate::dev_arm::{DevArm, Got};
+use crate::dev_arm::DevArm;
 
 /// What the page sent for a pending moment.
 #[derive(Debug, Clone, PartialEq)]
@@ -84,6 +84,33 @@ impl Pending {
     }
 }
 
+/// A PUBLIC moment's kind, as `MomentEvent.kind` spells it: a statement
+/// said, or a box or a question the page answers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MomentKind {
+    Statement,
+    Label,
+    Ask,
+    YesNo,
+}
+
+impl MomentKind {
+    /// The kind as the event spells it.
+    fn as_str(self) -> &'static str {
+        match self {
+            MomentKind::Statement => "statement",
+            MomentKind::Label => "label",
+            MomentKind::Ask => "ask",
+            MomentKind::YesNo => "yes_no",
+        }
+    }
+
+    /// Whether the page owes an answer: every kind but a statement.
+    fn answerable(self) -> bool {
+        self != MomentKind::Statement
+    }
+}
+
 /// The person a walk is handed: the bus its PUBLIC moments go out on, the
 /// pending table their answers come back through, the dev arm the SECRET
 /// and CONSENT moments go to, and the walk's name and board reference for
@@ -108,13 +135,14 @@ impl BridgePerson {
     }
 
     /// A PUBLIC moment forwarded: the event, then the wait for the page's
-    /// answer where one is owed; a cancel abandons.
-    fn moment(&mut self, kind: &str, data: Value, answerable: bool) -> Result<Value, Abandoned> {
+    /// answer where its kind owes one; a cancel abandons.
+    fn moment(&mut self, kind: MomentKind, data: Value) -> Result<Value, Abandoned> {
         let id = moment_id();
+        let answerable = kind.answerable();
         let rx = answerable.then(|| self.pending.register(&id));
-        self.bus.emit(MOMENT, json!({
+        self.bus.emit(EventName::Moment, json!({
             "id": id,
-            "kind": kind,
+            "kind": kind.as_str(),
             "data": data,
             "walk": self.walk,
             "board": self.board_reference,
@@ -130,24 +158,20 @@ impl BridgePerson {
         }
     }
 
-    fn got<T>(&mut self, got: Got<T>) -> Result<T, Abandoned> {
-        match got {
-            Got::Answer(t) => Ok(t),
-            Got::Abandoned => {
-                self.abandoned = true;
-                Err(Abandoned)
-            }
-        }
+    /// The dev arm's answer passed on, the person marked abandoned where
+    /// the arm left the moment.
+    fn got<T>(&mut self, got: Result<T, Abandoned>) -> Result<T, Abandoned> {
+        got.inspect_err(|_| self.abandoned = true)
     }
 }
 
 impl Person for BridgePerson {
     fn say(&mut self, m: Public<Statement>) {
-        let _ = self.moment("statement", json!({"rule": m.0.rule, "text": m.0.text}), false);
+        let _ = self.moment(MomentKind::Statement, json!({"rule": m.0.rule, "text": m.0.text}));
     }
 
     fn label(&mut self, m: Public<LabelBox>) -> Result<String, Abandoned> {
-        let v = self.moment("label", json!({"title": m.0.title, "statements": m.0.statements, "default": m.0.default}), true)?;
+        let v = self.moment(MomentKind::Label, json!({"title": m.0.title, "statements": m.0.statements, "default": m.0.default}))?;
         match v {
             Value::String(s) => Ok(s),
             Value::Null => Ok(m.0.default.unwrap_or_default()),
@@ -156,7 +180,7 @@ impl Person for BridgePerson {
     }
 
     fn ask(&mut self, m: Public<Question>) -> Result<String, Abandoned> {
-        let v = self.moment("ask", json!({"text": m.0.text}), true)?;
+        let v = self.moment(MomentKind::Ask, json!({"text": m.0.text}))?;
         match v {
             Value::String(s) => Ok(s),
             other => Ok(other.to_string()),
@@ -164,7 +188,7 @@ impl Person for BridgePerson {
     }
 
     fn yes_no(&mut self, m: Public<Question>) -> Result<bool, Abandoned> {
-        let v = self.moment("yes_no", json!({"text": m.0.text}), true)?;
+        let v = self.moment(MomentKind::YesNo, json!({"text": m.0.text}))?;
         Ok(match v {
             Value::Bool(b) => b,
             Value::String(s) => matches!(s.trim().to_ascii_lowercase().as_str(), "y" | "yes" | "true"),
@@ -229,7 +253,7 @@ mod tests {
         let mut person = BridgePerson::new(Arc::clone(&bus), Arc::clone(&pending), arm, "claim", Some("b-1".into()));
         person.say(Public(Statement { rule: "AUTH-5.74", text: "local forever".into() }));
         let statement = rx.recv().unwrap();
-        assert_eq!((statement.name, statement.data["kind"].as_str(), statement.data["answerable"].as_bool()), ("moment", Some("statement"), Some(false)));
+        assert_eq!((statement.name, statement.data["kind"].as_str(), statement.data["answerable"].as_bool()), (EventName::Moment, Some("statement"), Some(false)));
         assert_eq!(statement.data["board"], "b-1");
         assert!(pending.ids().is_empty(), "a statement waits for nothing");
         let pending_b = Arc::clone(&pending);
@@ -275,6 +299,30 @@ mod tests {
         assert_eq!(person.import(Secret(Import { prompt: "import".into() })).unwrap(), Imported::Neither);
         assert_eq!(person.kept_or_placed(Secret(HandedPath { path: PathBuf::from("/k"), text: "?".into() })).unwrap(), KeptOrPlaced::Kept);
         assert!(rx.try_recv().is_err(), "no event crossed to the page");
+    }
+
+    /// A moment the dev arm leaves abandons the walk and marks the person,
+    /// as a page's cancel does.
+    #[test]
+    fn a_moment_the_arm_leaves_marks_the_person_abandoned() {
+        let talk: crate::Talk = Arc::new(|_| {});
+        let arm = Arc::new(DevArm::script(vec![crate::script::Answer::Abandon], talk));
+        let mut person = BridgePerson::new(Arc::new(EventBus::new()), Arc::new(Pending::new()), arm, "retire", Some("b-1".into()));
+        assert_eq!(person.confirm_typed(Consent(Confirmation { text: "retire?".into(), expected: "abcd".into() })), Err(Abandoned));
+        assert!(person.abandoned);
+    }
+
+    /// The four kinds are the declared `MomentEvent.kind` union's words,
+    /// and a statement alone owes no answer.
+    #[test]
+    fn the_moment_kinds_are_the_declared_four() {
+        let kinds = [MomentKind::Statement, MomentKind::Label, MomentKind::Ask, MomentKind::YesNo];
+        let declared = crate::shapes::shape("MomentEvent").unwrap().fields.iter().find(|f| f.name == "kind").unwrap().ty;
+        assert_eq!(declared.matches('\'').count(), 2 * kinds.len(), "{declared}");
+        for kind in kinds {
+            assert!(declared.contains(&format!("'{}'", kind.as_str())), "{declared}");
+        }
+        assert_eq!(kinds.map(MomentKind::answerable), [false, true, true, true]);
     }
 
     /// `cancel_all` abandons every waiting walk.

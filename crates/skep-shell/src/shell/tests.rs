@@ -16,7 +16,10 @@
 //! restart and is kept, the signed session's own attested row, a burst on a
 //! draft just minted kept across a restart, a relaunch with its board down
 //! listing and resending its held line, and the probe keeping its cadence
-//! while the board keeps committing.
+//! while the board keeps committing. And the shell's own frame: the dispatch
+//! naming every call by its spelling, its options printing no seed, a
+//! search held at one board holding back no call at another, and a shell
+//! dropped unstopped freeing its board's held lock.
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -33,7 +36,7 @@ use tempfile::TempDir;
 use super::*;
 use crate::attest::Composer;
 use crate::events::Event;
-use crate::held::Reason;
+use crate::held::{HeldDir, Reason};
 use crate::hold::PROBE_CADENCE;
 use crate::sessions::Kind;
 
@@ -65,8 +68,7 @@ fn talk() -> (Talk, Arc<Mutex<Vec<String>>>) {
 
 fn shell(origin: &str, store: &Path, session_mode: SessionMode) -> (Shell, Arc<Mutex<Vec<String>>>) {
     let (talk, lines) = talk();
-    let opts = ShellOptions { boards: vec![Origin::parse(origin).unwrap()], store_dir: store.to_path_buf(), session_mode, arm: ArmConfig::Auto, talk, own_node: None };
-    (Shell::open(opts), lines)
+    (Shell::open(ShellOptions::new(vec![Origin::parse(origin).unwrap()], store.to_path_buf(), session_mode, talk)), lines)
 }
 
 /// The page's side of a walk: every answerable moment answered — a label
@@ -76,7 +78,7 @@ fn answer_moments(rx: std::sync::mpsc::Receiver<Event>, pending: Arc<crate::pers
     thread::spawn(move || {
         while let Ok(event) = rx.recv() {
             seen.lock().unwrap().push(event.clone());
-            if event.name == "moment" && event.data["answerable"] == true {
+            if event.name == EventName::Moment && event.data["answerable"] == true {
                 let id = event.data["id"].as_str().unwrap();
                 let answer = match event.data["kind"].as_str() {
                     Some("label") => event.data["data"]["default"].as_str().map(Value::from).unwrap_or(Value::from("phone")),
@@ -145,11 +147,11 @@ fn the_bare_mode_claims_opens_writes_and_names_no_token() {
     let health = shell.call("health", &json!({"board": board})).unwrap();
     assert_eq!(health["mode"], "CLAIMED-PERMISSIVE");
     assert_eq!(health["health"]["auth"]["claimant"], "1.0.1");
-    let moments: Vec<Event> = seen.lock().unwrap().iter().filter(|e| e.name == "moment").cloned().collect();
+    let moments: Vec<Event> = seen.lock().unwrap().iter().filter(|e| e.name == EventName::Moment).cloned().collect();
     assert!(moments.iter().any(|m| m.data["kind"] == "label"), "the anchor boxes crossed as moments");
     assert!(moments.iter().all(|m| m.data["walk"] == "claim"));
     assert!(!lines.lock().unwrap().iter().any(|l| l.contains("seed")), "nothing of a seed on TALK");
-    wait_for(&seen, |e| e.name == "mode" && e.data["mode"] == "CLAIMED-PERMISSIVE");
+    wait_for(&seen, |e| e.name == EventName::Mode && e.data["mode"] == "CLAIMED-PERMISSIVE");
     // A second claim on the claimed board, this store's: the idempotent answer.
     let again = shell.call("claim", &json!({"board": board})).unwrap();
     assert_eq!(again["account"], "1.0.1");
@@ -166,7 +168,7 @@ fn the_bare_mode_claims_opens_writes_and_names_no_token() {
     let draft = minted["addr"].as_str().unwrap().to_string();
     let acked = shell.call("op", &json!({"session": session, "frame": {"op": "insert", "doc": draft, "at": {"subspace": "1", "ordinal": "1"}, "values": ["hello"]}})).unwrap();
     assert!(acked["resp"].as_str().unwrap().starts_with("ack"), "{acked}");
-    let feed = wait_for(&seen, |e| e.name == "feed" && e.data["update"]["op"] == "insert");
+    let feed = wait_for(&seen, |e| e.name == EventName::Feed && e.data["update"]["op"] == "insert");
     assert_eq!(feed.data["board"], board);
     assert_eq!(feed.data["update"]["position"], feed.data["update"]["at"]);
     assert!(feed.data["update"]["class"].is_string());
@@ -199,7 +201,7 @@ fn the_bare_mode_claims_opens_writes_and_names_no_token() {
     for args in [json!({"session": session, "frame": {"at": past, "frame": key_set}}), json!({"guest": true, "board": board, "frame": {"at": past, "frame": key_set}})] {
         let refused = shell.call("op", &args).unwrap_err();
         let v = refused.to_value();
-        assert_eq!((refused.name().as_str(), v["kind"].as_str(), v["status"].as_u64()), ("beyond_head", Some("refused"), Some(400)), "{v}");
+        assert_eq!((refused.name(), v["kind"].as_str(), v["status"].as_u64()), ("beyond_head", Some("refused"), Some(400)), "{v}");
         assert!(v["body"]["head"].is_u64(), "the head the board named rides its verdict: {v}");
     }
     // `accept` at an address the giver has not delegated: the armed name,
@@ -211,7 +213,7 @@ fn the_bare_mode_claims_opens_writes_and_names_no_token() {
     assert_eq!(shell.call("search", &json!({"session": session, "query": "x".repeat(2000)})).unwrap_err().name(), "query_too_long");
     // Close: `{}`, the event, then the stale reference.
     assert_eq!(shell.call("close", &json!({"session": session})).unwrap(), json!({}));
-    let died = wait_for(&seen, |e| e.name == "session-died");
+    let died = wait_for(&seen, |e| e.name == EventName::SessionDied);
     assert_eq!(died.data["session"], session);
     assert_eq!(died.data["reason"]["arm"], "closed");
     assert_eq!(shell.call("op", &json!({"session": session, "frame": {"op": "doc_metadata", "doc": draft}})).unwrap_err().name(), "session_ended");
@@ -248,8 +250,8 @@ fn a_closed_sessions_drafts_rows_precede_its_session_died() {
     shell.call("op", &json!({"session": session, "frame": {"op": "insert", "doc": draft, "at": {"subspace": "1", "ordinal": "1"}, "values": ["x"]}})).unwrap();
     shell.call("close", &json!({"session": session})).unwrap();
     // The close has answered: everything it emitted is on the stream.
-    let seen: Vec<Event> = rx.try_iter().filter(|e| e.name == "feed" || e.name == "session-died").collect();
-    let sequence: Vec<&str> = seen.iter().map(|e| if e.name == "feed" { e.data["update"]["op"].as_str().unwrap_or("?") } else { e.name }).collect();
+    let seen: Vec<Event> = rx.try_iter().filter(|e| e.name == EventName::Feed || e.name == EventName::SessionDied).collect();
+    let sequence: Vec<&str> = seen.iter().map(|e| if e.name == EventName::Feed { e.data["update"]["op"].as_str().unwrap_or("?") } else { e.name.as_str() }).collect();
     assert_eq!(sequence, ["create_new_document", "insert", "session-died"], "{seen:?}");
     assert!(seen[..2].iter().all(|e| e.data["update"]["class"] == "drafts" && e.data["update"]["session"] == session), "{seen:?}");
     shell.shutdown();
@@ -322,22 +324,22 @@ fn a_session_the_restart_ended_is_reopened_under_a_fresh_reference() {
     let answerer = answer_moments(signed.subscribe(), Arc::clone(&signed.pending), Arc::clone(&seen));
     let board = signed.call("boards", &json!({})).unwrap()[0]["board"].as_str().unwrap().to_string();
     let session = signed.call("session", &json!({"board": board})).unwrap()["session"].as_str().unwrap().to_string();
-    wait_for(&seen, |e| e.name == "index" && e.data["session"] == session);
+    wait_for(&seen, |e| e.name == EventName::Index && e.data["session"] == session);
     sd.shutdown();
     let sd = spawn_at(&dir.path().join("board"), true, port);
-    let died = wait_for(&seen, |e| e.name == "session-died" && e.data["session"] == session);
+    let died = wait_for(&seen, |e| e.name == EventName::SessionDied && e.data["session"] == session);
     let reason = &died.data["reason"];
     assert_eq!((reason["arm"].as_str(), reason["reopened"].as_bool()), (Some("restart"), Some(true)), "{reason}\n{}", lines.lock().unwrap().join("\n"));
     let reopened = reason["session"].as_str().expect("the arm names the re-opened session").to_string();
     assert!(reopened.starts_with("s-") && reopened != session, "{reopened}");
     assert!(signed.sessions.get(&reopened).is_some(), "the re-opened session is registered");
-    wait_for(&seen, |e| e.name == "index" && e.data["session"] == reopened);
+    wait_for(&seen, |e| e.name == EventName::Index && e.data["session"] == reopened);
     let edition = signed
         .call("op", &json!({"session": reopened, "frame": {"op": "create_new_document", "account": "1.0.1", "published": true}}))
         .unwrap_or_else(|r| panic!("{r}\n{}", lines.lock().unwrap().join("\n")));
     assert_eq!(edition["resp"], "ack_addr", "{edition}");
     assert_eq!(signed.call("op", &json!({"session": session, "frame": {"op": "key_set", "account": "1.0.1"}})).unwrap_err().name(), "session_ended");
-    assert_eq!(seen.lock().unwrap().iter().filter(|e| e.name == "session-died").count(), 1, "the session ended once");
+    assert_eq!(seen.lock().unwrap().iter().filter(|e| e.name == EventName::SessionDied).count(), 1, "the session ended once");
     signed.shutdown();
     drop(signed);
     answerer.join().unwrap();
@@ -375,7 +377,7 @@ fn the_own_nodes_state_is_announced_at_its_board() {
     let own = Shell::open(ShellOptions { boards: vec![Origin::parse(&origin).unwrap()], store_dir: dir.path().join("own-store"), session_mode: SessionMode::Bare { principal: 1 }, arm: ArmConfig::Auto, talk, own_node: Some(Origin::parse(&origin).unwrap()) });
     let rx = own.subscribe();
     let board = own.board_references().remove(0);
-    let daemon = |rx: &Receiver<Event>| -> Vec<Value> { rx.try_iter().filter(|e| e.name == "daemon").map(|e| e.data).collect() };
+    let daemon = |rx: &Receiver<Event>| -> Vec<Value> { rx.try_iter().filter(|e| e.name == EventName::Daemon).map(|e| e.data).collect() };
     own.set_node_state(NodeState::Stopped);
     assert_eq!(daemon(&rx), [json!({"board": board, "state": "stopped"})]);
     assert_eq!(own.call("probe", &json!({})).unwrap()["daemon"], "stopped");
@@ -419,17 +421,17 @@ fn a_deliberate_stop_of_the_own_node_is_said_once() {
     let _answerer = answer_moments(shell.subscribe(), Arc::clone(&shell.pending), Arc::clone(&seen));
     let refs = shell.board_references();
     let (own, other) = (refs[0].clone(), refs[1].clone());
-    let daemon_states = |board: &str| -> Vec<String> { seen.lock().unwrap().iter().filter(|e| e.name == "daemon" && e.data["board"] == board).map(|e| e.data["state"].as_str().unwrap_or("?").to_string()).collect() };
+    let daemon_states = |board: &str| -> Vec<String> { seen.lock().unwrap().iter().filter(|e| e.name == EventName::Daemon && e.data["board"] == board).map(|e| e.data["state"].as_str().unwrap_or("?").to_string()).collect() };
     // The own node's feed is live: a session's supplement widened on its thread.
     let session = shell.call("session", &json!({"board": own})).unwrap()["session"].as_str().unwrap().to_string();
-    wait_for(&seen, |e| e.name == "index" && e.data["session"] == session);
+    wait_for(&seen, |e| e.name == EventName::Index && e.data["session"] == session);
     // The stop, deliberate: said once; then both nodes go down.
     shell.set_node_state(NodeState::Stopped);
     let stopped_at = Instant::now();
     own_sd.shutdown();
     other_sd.shutdown();
     // The other board's stream fails: `unreachable`, as every board's does.
-    wait_for(&seen, |e| e.name == "daemon" && e.data["board"] == other && e.data["state"] == "unreachable");
+    wait_for(&seen, |e| e.name == EventName::Daemon && e.data["board"] == other && e.data["state"] == "unreachable");
     thread::sleep((stopped_at + PROBE_CADENCE * 3).saturating_duration_since(Instant::now()));
     assert_eq!(daemon_states(&own), ["stopped"], "a deliberate stop is said once, no unreachable beside it:\n{}", lines.lock().unwrap().join("\n"));
     assert!(lines.lock().unwrap().iter().any(|l| l.contains("the commit stream is not answering")), "TALK still says the stream is down:\n{}", lines.lock().unwrap().join("\n"));
@@ -438,10 +440,10 @@ fn a_deliberate_stop_of_the_own_node_is_said_once() {
     // tick adds no `running` of its own.
     let own_sd = spawn_at(&dir.path().join("own"), true, port);
     shell.set_node_state(NodeState::Running);
-    wait_for(&seen, |e| e.name == "session-died" && e.data["session"] == session);
+    wait_for(&seen, |e| e.name == EventName::SessionDied && e.data["session"] == session);
     let session2 = shell.call("session", &json!({"board": own})).unwrap()["session"].as_str().unwrap().to_string();
     shell.call("op", &json!({"session": session2, "frame": {"op": "create_new_document", "account": "1.0.1"}})).unwrap();
-    wait_for(&seen, |e| e.name == "feed" && e.data["board"] == own && e.data["update"]["class"] == "drafts");
+    wait_for(&seen, |e| e.name == EventName::Feed && e.data["board"] == own && e.data["update"]["class"] == "drafts");
     assert_eq!(daemon_states(&own), ["stopped", "running"], "the restart's running is said once");
     assert_eq!(daemon_states(&other), ["unreachable"], "the other board's stream failure is announced, and nothing more");
     shell.shutdown();
@@ -468,6 +470,102 @@ fn the_real_answers_carry_the_declared_fields() {
     assert_eq!(keys(&shell.call("keygen", &json!({"label": "k"})).unwrap()), fields("Keygen"));
     assert_eq!(keys(&shell.call("fingerprint", &json!({})).unwrap()[0]), fields("FingerprintRow"));
     shell.shutdown();
+    sd.shutdown();
+}
+
+/// THE DISPATCH's NAMES: every call parses back from its own spelling, so no
+/// two calls share one; `CALLS` is those spellings in §4b.1's order; a name
+/// of no call names none, and `call` answers it `unknown_call`.
+#[test]
+fn every_call_is_named_by_its_own_spelling() {
+    for call in Call::ALL {
+        assert_eq!(Call::named(call.as_str()), Some(call));
+    }
+    assert_eq!(CALLS.map(Call::named), Call::ALL.map(Some));
+    assert_eq!((CALLS.len(), CALLS[0], CALLS[21]), (22, "boards", "resolve"));
+    assert_eq!(Call::named("verify"), None);
+    let (dir, (talk, _)) = (TempDir::new().unwrap(), talk());
+    let shell = Shell::open(ShellOptions::new(Vec::new(), dir.path().join("store"), SessionMode::Bare { principal: 1 }, talk));
+    assert_eq!(shell.call("verify", &json!({})).unwrap_err().name(), "unknown_call");
+}
+
+/// A shell's options print what they name and nothing secret: the boards,
+/// the store, the mode, the arm — a script's typed seed as `…` — and the own
+/// node, the TALK sink left out.
+#[test]
+fn a_shells_options_print_no_seed() {
+    let (talk, _) = talk();
+    let mut opts = ShellOptions::new(vec![Origin::parse("http://127.0.0.1:8642").unwrap()], PathBuf::from("/tmp/store"), SessionMode::Signed { principal: 3 }, talk);
+    opts.arm = ArmConfig::Script(vec![script::Answer::ImportTyped { seed_hex: "5e".repeat(32), fingerprint_prefix: "abcd".into() }]);
+    let shown = format!("{opts:?}");
+    assert!(shown.starts_with("ShellOptions { boards: [") && shown.contains("Signed { principal: 3 }") && shown.contains("ImportTyped") && shown.ends_with(", .. }"), "{shown}");
+    assert!(!shown.contains("5e5e"), "{shown}");
+}
+
+/// A listener that accepts every connection and holds it `hold` before
+/// letting it go unanswered: a board each of whose dials takes that long
+/// and answers nothing.
+fn tarpit(hold: Duration) -> String {
+    let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
+    let origin = format!("http://127.0.0.1:{}", listener.local_addr().unwrap().port());
+    thread::spawn(move || {
+        for stream in listener.incoming().flatten() {
+            thread::spawn(move || {
+                thread::sleep(hold);
+                drop(stream);
+            });
+        }
+    });
+    origin
+}
+
+/// ONE BOARD's WAIT HOLDS NO OTHER: a guest `search` queued behind a board
+/// whose feed thread waits out dial after dial does not hold back a
+/// `session` at another board, which is answered while the search still
+/// waits (the mutant that runs a board's command under one lock over every
+/// board's handle makes the session wait the search out).
+#[test]
+fn a_search_waiting_on_one_board_holds_back_no_call_at_another() {
+    let dir = TempDir::new().unwrap();
+    let sd = spawn(&dir.path().join("board"), true);
+    let origin = format!("http://127.0.0.1:{}", sd.port());
+    let slow = tarpit(Duration::from_secs(2));
+    let (talk, _) = talk();
+    let boards = vec![Origin::parse(&origin).unwrap(), Origin::parse(&slow).unwrap()];
+    let shell = Shell::open(ShellOptions::new(boards, dir.path().join("store"), SessionMode::Bare { principal: 0 }, talk));
+    let refs = shell.board_references();
+    thread::scope(|s| {
+        let searching = s.spawn(|| shell.call("search", &json!({"guest": true, "board": refs[1], "query": "x"})));
+        thread::sleep(Duration::from_millis(300));
+        let opened = shell.call("session", &json!({"board": refs[0], "principal": 0}));
+        assert!(opened.is_ok(), "{opened:?}");
+        assert!(!searching.is_finished(), "the session is answered while the search still waits");
+        let answer = searching.join().unwrap().unwrap();
+        assert_eq!(answer["state"]["arm"], "none", "a board whose index never opened answers none: {answer}");
+    });
+    shell.shutdown();
+    sd.shutdown();
+}
+
+/// THE DROP is the stop: a shell dropped with a session open and never
+/// stopped joins its threads and frees its board's held lock, so a second
+/// holder takes it (the mutant whose feed threads outlive their shell holds
+/// the lock for the process's life).
+#[test]
+fn a_dropped_shell_frees_its_boards_held_lock() {
+    let dir = TempDir::new().unwrap();
+    let sd = spawn(&dir.path().join("board"), true);
+    let origin = format!("http://127.0.0.1:{}", sd.port());
+    let store = dir.path().join("store");
+    claim_board(&origin, &store);
+    let (shell, _) = shell(&origin, &store, SessionMode::Bare { principal: 1 });
+    let board = shell.board_references().remove(0);
+    shell.call("session", &json!({"board": board})).unwrap();
+    let term = shell.boards[0].board.board_term().unwrap().expect("H.1 stands on a claimed board");
+    let held = HeldDir::new(&store, skep_search::Chain::from_bytes(term.chain));
+    assert!(held.try_lock().unwrap().is_none(), "the open shell holds the board's held text");
+    drop(shell);
+    assert!(held.try_lock().unwrap().is_some(), "the dropped shell freed it");
     sd.shutdown();
 }
 
@@ -512,14 +610,14 @@ fn a_held_burst_is_resent_after_a_restart_and_kept() {
     assert_eq!((rows[0]["doc"].as_str(), rows[0]["cause"].as_str()), (Some(draft.as_str()), Some("unreachable")));
     // Restart at the same port; the bare session dies, a fresh one re-acquired.
     let sd = spawn_at(&dir.path().join("board"), true, port);
-    wait_for(&seen, |e| e.name == "session-died" && e.data["session"] == session);
+    wait_for(&seen, |e| e.name == EventName::SessionDied && e.data["session"] == session);
     let session2 = shell.call("session", &json!({"board": board})).unwrap()["session"].as_str().unwrap().to_string();
     // The resend runs under the fresh session (the feed's probe/daemon-running):
     // the held event reaches `kept`.
     let deadline = Instant::now() + Duration::from_secs(20);
-    while !seen.lock().unwrap().iter().any(|e| e.name == "held" && e.data["doc"] == draft && e.data["state"] == "kept") {
+    while !seen.lock().unwrap().iter().any(|e| e.name == EventName::Held && e.data["doc"] == draft && e.data["state"] == "kept") {
         if Instant::now() >= deadline {
-            let held: Vec<Value> = seen.lock().unwrap().iter().filter(|e| e.name == "held").map(|e| e.data.clone()).collect();
+            let held: Vec<Value> = seen.lock().unwrap().iter().filter(|e| e.name == EventName::Held).map(|e| e.data.clone()).collect();
             let rows = shell.call("held", &json!({"session": session2})).unwrap();
             panic!("no kept; held events {held:?}; held(session2) {rows}");
         }
@@ -614,10 +712,10 @@ fn a_poisoned_burst_lands_at_the_restart_and_is_kept() {
     // The restart at the same port replays the journal: the burst lands.
     sd.shutdown();
     let sd = spawn_at(&dir.path().join("board"), true, port);
-    wait_for(&seen, |e| e.name == "session-died" && e.data["session"] == session);
+    wait_for(&seen, |e| e.name == EventName::SessionDied && e.data["session"] == session);
     let session2 = shell.call("session", &json!({"board": board})).unwrap()["session"].as_str().unwrap().to_string();
-    wait_for(&seen, |e| e.name == "held" && e.data["doc"] == draft && e.data["state"] == "kept");
-    let states: Vec<String> = seen.lock().unwrap().iter().filter(|e| e.name == "held" && e.data["doc"] == draft).map(|e| e.data["state"].as_str().unwrap_or("?").to_string()).collect();
+    wait_for(&seen, |e| e.name == EventName::Held && e.data["doc"] == draft && e.data["state"] == "kept");
+    let states: Vec<String> = seen.lock().unwrap().iter().filter(|e| e.name == EventName::Held && e.data["doc"] == draft).map(|e| e.data["state"].as_str().unwrap_or("?").to_string()).collect();
     assert!(!states.contains(&"moved".to_string()), "the own burst is never faced moved: {states:?}");
     assert!(shell.call("held", &json!({"session": session2})).unwrap().as_array().unwrap().is_empty(), "the lines are done");
     assert!(held_path(&store).is_none(), "the file compacted away");
@@ -692,10 +790,10 @@ fn a_signed_sessions_landed_burst_is_kept_by_the_resend() {
     // run under it — the read recognises the row, nothing is re-sent.
     sd.shutdown();
     let sd = spawn_at(&dir.path().join("board"), true, port);
-    let died = wait_for(&seen, |e| e.name == "session-died" && e.data["session"] == session);
+    let died = wait_for(&seen, |e| e.name == EventName::SessionDied && e.data["session"] == session);
     let reopened = died.data["reason"]["session"].as_str().expect("the restart arm names the re-opened session").to_string();
-    wait_for(&seen, |e| e.name == "held" && e.data["doc"] == draft && e.data["state"] == "kept");
-    let states: Vec<String> = seen.lock().unwrap().iter().filter(|e| e.name == "held" && e.data["doc"] == draft).map(|e| e.data["state"].as_str().unwrap_or("?").to_string()).collect();
+    wait_for(&seen, |e| e.name == EventName::Held && e.data["doc"] == draft && e.data["state"] == "kept");
+    let states: Vec<String> = seen.lock().unwrap().iter().filter(|e| e.name == EventName::Held && e.data["doc"] == draft).map(|e| e.data["state"].as_str().unwrap_or("?").to_string()).collect();
     assert!(!states.contains(&"moved".to_string()), "the own signed row is never faced moved: {states:?}");
     assert!(signed.call("held", &json!({"session": reopened})).unwrap().as_array().unwrap().is_empty(), "the line is done kept");
     let token = signed.sessions.get(&reopened).unwrap().token.clone();
@@ -726,7 +824,7 @@ fn a_refused_run_holds_behind_it_and_resolve_acts_on_it() {
     assert_eq!(refused["resp"], "held", "a permanent refusal is a refused run: {refused}");
     let k = refused["held"].as_u64().unwrap();
     assert!(refused["cause"].as_str().unwrap().starts_with("out_of_bounds"), "{refused}");
-    wait_for(&seen, |e| e.name == "held" && e.data["doc"] == draft && e.data["state"] == "refused");
+    wait_for(&seen, |e| e.name == EventName::Held && e.data["doc"] == draft && e.data["state"] == "refused");
     // Two more bursts on the document while the run stands → held `behind`.
     for v in ["s", "t"] {
         let behind = shell.call("op", &json!({"session": session, "frame": {"op": "insert", "doc": draft, "at": {"subspace": "1", "ordinal": "900001"}, "values": [v]}})).unwrap();
@@ -738,7 +836,7 @@ fn a_refused_run_holds_behind_it_and_resolve_acts_on_it() {
     assert_eq!(shell.call("resolve", &json!({"session": session, "held": behind_k, "act": "drop"})).unwrap_err().name(), "not_resolvable");
     assert_eq!(shell.call("resolve", &json!({"session": session, "held": 9999, "act": "drop"})).unwrap_err().name(), "no_such_held");
     // `send` re-faces the run where the refusal recurs.
-    let refused_count = || seen.lock().unwrap().iter().filter(|e| e.name == "held" && e.data["state"] == "refused").count();
+    let refused_count = || seen.lock().unwrap().iter().filter(|e| e.name == EventName::Held && e.data["state"] == "refused").count();
     let before_send = refused_count();
     shell.call("resolve", &json!({"session": session, "held": k, "act": "send"})).unwrap();
     let deadline = Instant::now() + Duration::from_secs(30);
@@ -880,10 +978,10 @@ fn a_burst_held_on_a_draft_just_minted_is_kept_after_a_restart() {
     let held = shell.call("op", &json!({"session": session, "frame": {"op": "insert", "doc": draft, "at": {"subspace": "1", "ordinal": "1"}, "values": ["hi"]}})).unwrap();
     assert_eq!((held["resp"].as_str(), held["cause"].as_str()), (Some("held"), Some("unreachable")), "{held}");
     let sd = spawn_at(&dir.path().join("board"), true, port);
-    wait_for(&seen, |e| e.name == "session-died" && e.data["session"] == session);
+    wait_for(&seen, |e| e.name == EventName::SessionDied && e.data["session"] == session);
     let session2 = shell.call("session", &json!({"board": board})).unwrap()["session"].as_str().unwrap().to_string();
-    wait_for(&seen, |e| e.name == "held" && e.data["doc"] == draft && e.data["state"] == "kept");
-    let states: Vec<String> = seen.lock().unwrap().iter().filter(|e| e.name == "held" && e.data["doc"] == draft).map(|e| e.data["state"].as_str().unwrap_or("?").to_string()).collect();
+    wait_for(&seen, |e| e.name == EventName::Held && e.data["doc"] == draft && e.data["state"] == "kept");
+    let states: Vec<String> = seen.lock().unwrap().iter().filter(|e| e.name == EventName::Held && e.data["doc"] == draft).map(|e| e.data["state"].as_str().unwrap_or("?").to_string()).collect();
     assert!(!states.contains(&"moved".to_string()), "the burst is never faced moved: {states:?}");
     let read = shell.call("op", &json!({"session": session2, "frame": skep_client::board::frames::retrieve_v(&draft, 1, 2)})).unwrap();
     assert_eq!(text_of(&read), "hi", "{read}");
@@ -925,7 +1023,7 @@ fn a_relaunch_with_its_board_down_lists_and_resends_the_held_line() {
     let rows = relaunched.call("held", &json!({"session": session})).unwrap();
     assert_eq!(rows.as_array().unwrap().len(), 1, "the session's open lists the held line: {rows}\n{}", lines.lock().unwrap().join("\n"));
     assert_eq!(rows[0]["doc"], draft);
-    wait_for(&seen, |e| e.name == "held" && e.data["doc"] == draft && e.data["state"] == "kept");
+    wait_for(&seen, |e| e.name == EventName::Held && e.data["doc"] == draft && e.data["state"] == "kept");
     let read = relaunched.call("op", &json!({"session": session, "frame": skep_client::board::frames::retrieve_v(&draft, 1, 2)})).unwrap();
     assert_eq!(text_of(&read), "ab", "the resent burst is on the board: {read}");
     relaunched.shutdown();
@@ -969,7 +1067,7 @@ fn the_probe_keeps_its_cadence_while_the_board_keeps_committing() {
         shell.holds.hold(&shell.boards[0].reference, &entry, &frame, Reason::of("unreachable", true)).unwrap();
         let deadline = Instant::now() + PROBE_CADENCE * 3;
         let kept = loop {
-            if seen.lock().unwrap().iter().any(|e| e.name == "held" && e.data["doc"] == draft && e.data["state"] == "kept") {
+            if seen.lock().unwrap().iter().any(|e| e.name == EventName::Held && e.data["doc"] == draft && e.data["state"] == "kept") {
                 break true;
             }
             if Instant::now() >= deadline {

@@ -8,8 +8,9 @@
 //! nothing, `history_reclaimed` decided by the arrangement alone, a refusal
 //! the table holds nowhere leaving its line standing, a second window's
 //! burst resent from memory, the `base` a hold takes, the refused run's
-//! `resolve(drop)` dropping it and every line held behind it, and a drop's
-//! `held` event saying the state of the line that stands first after it.
+//! `resolve(drop)` dropping it and every line held behind it, a drop's
+//! `held` event saying the state of the line that stands first after it,
+//! and a drain that unwinds leaving the board free to drain again.
 
 use std::io::Read;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -84,8 +85,8 @@ fn every_outcome_classifies_to_exactly_its_row() {
 /// read sees, each served only past the query's `since`, or a refusal armed
 /// in the page's place; the draft's text, of which a `retrieve_v` answers
 /// the positions it names — or no answer, where the site is armed unread;
-/// the frames POSTed to `/op` recorded; and a scripted rejection where one is
-/// armed.
+/// the frames POSTed to `/op` recorded; a scripted rejection where one is
+/// armed; and a `/health` read armed to panic, once.
 struct Fake {
     chain: String,
     rows: Mutex<Vec<Value>>,
@@ -96,6 +97,7 @@ struct Fake {
     reject: Mutex<Option<Value>>,
     next_at: AtomicU64,
     writes_halted: AtomicBool,
+    panic_next_health: AtomicBool,
 }
 
 impl Fake {
@@ -110,6 +112,7 @@ impl Fake {
             reject: Mutex::new(None),
             next_at: AtomicU64::new(50),
             writes_halted: AtomicBool::new(false),
+            panic_next_health: AtomicBool::new(false),
         })
     }
 
@@ -141,6 +144,7 @@ fn span(spec: &Value) -> Option<(usize, usize)> {
 impl Dialer for Fake {
     fn exchange(&self, _origin: &Origin, req: &Request) -> Result<Response, DialError> {
         if req.method == Method::Get && req.path.starts_with("/health") {
+            assert!(!self.panic_next_health.swap(false, Ordering::SeqCst), "the health read is made to panic");
             let halted = self.writes_halted.load(Ordering::SeqCst);
             return Ok(ok(
                 json!({"ok": true, "log_position": 10, "chain_head": self.chain, "auth": {"claimant": "1.0.1", "local_trust": true, "origins": [], "signed_origins": []}, "media": {"uploads": true}, "head_time": 1, "writes": {"halted": halted}}),
@@ -226,7 +230,7 @@ impl Ground {
     fn states(&self) -> Vec<String> {
         self.rx
             .try_iter()
-            .filter(|e| e.name == "held")
+            .filter(|e| e.name == EventName::Held)
             .map(|e| {
                 declared(&e.data);
                 e.data["state"].as_str().unwrap_or("?").to_string()
@@ -565,7 +569,7 @@ fn a_refused_run_drops_its_behind_lines() {
     g.holds.resolve("b-1", &g.session, k1, "drop").unwrap();
     assert!(g.lines().is_empty(), "the run and its behind lines are dropped");
     assert_eq!(g.fake.sent(), 0, "nothing is dialed on a drop");
-    let said: Vec<Event> = g.rx.try_iter().filter(|e| e.name == "held").collect();
+    let said: Vec<Event> = g.rx.try_iter().filter(|e| e.name == EventName::Held).collect();
     assert_eq!(said.len(), 1, "{said:?}");
     let said = &said[0].data;
     declared(said);
@@ -587,14 +591,14 @@ fn a_drop_says_the_state_of_the_line_that_stands_first() {
     assert!(g.lines().iter().all(|l| l["cause"] == "moved"), "the read faces every line moved: {:?}", g.lines());
     let _ = g.rx.try_iter().count();
     g.holds.resolve("b-1", &g.session, ks[1], "drop").unwrap();
-    let said: Vec<Event> = g.rx.try_iter().filter(|e| e.name == "held").collect();
+    let said: Vec<Event> = g.rx.try_iter().filter(|e| e.name == EventName::Held).collect();
     assert_eq!(said.len(), 1, "{said:?}");
     declared(&said[0].data);
     assert_eq!((said[0].data["state"].as_str(), said[0].data["held"].as_u64()), (Some("moved"), Some(1)), "{said:?}");
     let left: Vec<u64> = g.lines().iter().map(|l| l["held"].as_u64().unwrap()).collect();
     assert_eq!(left, [ks[0]], "the dropped line and the one after it are gone");
     g.holds.resolve("b-1", &g.session, ks[0], "drop").unwrap();
-    let said: Vec<Event> = g.rx.try_iter().filter(|e| e.name == "held").collect();
+    let said: Vec<Event> = g.rx.try_iter().filter(|e| e.name == EventName::Held).collect();
     assert_eq!((said[0].data["state"].as_str(), said[0].data["held"].as_u64()), (Some("kept"), Some(0)), "{said:?}");
 }
 
@@ -608,4 +612,21 @@ fn a_held_line_lands_under_the_boards_own_directory() {
     let file = g.store.path().join("held").join("ab".repeat(32)).join("principal-1.held");
     let text = std::fs::read_to_string(&file).unwrap();
     assert!(text.lines().next().unwrap().contains("\"account\":\"1.0.1\""), "the header names the session's account: {text}");
+}
+
+/// A DRAIN THAT UNWINDS leaves no mark (§3c.4): a probe whose `/health`
+/// dial panics leaves the board free to drain, and the next probe sends and
+/// keeps the line (the mutant whose mark outlives an unwinding drain sends
+/// nothing for the shell's life).
+#[test]
+fn a_drain_that_unwinds_leaves_the_board_free_to_drain() {
+    let g = ground();
+    g.hold(&insert(DOC, json!(["hello"])), "unreachable", false);
+    g.fake.panic_next_health.store(true, Ordering::SeqCst);
+    let unwound = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| g.holds.probe("b-1")));
+    assert!(unwound.is_err(), "the health read panicked");
+    assert_eq!(g.fake.sent(), 0, "nothing was sent while it unwound");
+    g.holds.probe("b-1");
+    assert_eq!(g.fake.sent(), 1, "the next probe drains");
+    assert!(g.lines().is_empty() && g.states().contains(&"kept".to_string()));
 }

@@ -13,7 +13,6 @@ use skep_client::search::{Range, State};
 use skep_client::DialError;
 
 use super::*;
-use crate::events;
 use crate::feed::{answer_without_index, state_json};
 use crate::refusal::{Name, Refusal};
 use crate::sessions;
@@ -111,9 +110,10 @@ fn the_file_names_every_shape_call_and_event() {
     assert_eq!(CALLS.len(), 22, "the twenty-two calls");
     assert_eq!(CALLS.iter().map(|c| c.0).collect::<Vec<_>>(), crate::CALLS, "the declared rows are the dispatch's calls, in its order");
     assert!(text.contains("  answer(args: Answer)") && text.contains("  cancel(args: Cancel)"));
-    for event in [events::MODE, events::SESSION_DIED, events::DAEMON, events::FEED, events::INDEX, events::MOMENT, events::HELD] {
-        assert!(text.contains(&format!("'{event}'")), "{event}");
-    }
+    assert!(
+        text.contains("export type EventName = 'mode' | 'session-died' | 'daemon' | 'feed' | 'index' | 'moment' | 'held';\n\n"),
+        "the seven event names render from the enum, in the contract's order"
+    );
     assert!(text.contains("  warning?: string;"), "an optional field renders with `?`");
     assert!(text.contains("  position: number;"), "a required field renders bare");
     let open = SHAPES.iter().filter(|s| s.open).count();

@@ -24,7 +24,7 @@ use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::sync::Mutex;
 
-use skep_client::person::{Imported, KeptOrPlaced, Retyped};
+use skep_client::person::{Abandoned, Imported, KeptOrPlaced, Retyped};
 use skep_client::sheet::SheetFields;
 
 use crate::script::Answer;
@@ -53,14 +53,6 @@ impl std::fmt::Debug for DevArm {
     }
 }
 
-/// What a SECRET or CONSENT moment got: an answer of the moment's own kind,
-/// or the person leaving.
-#[derive(Debug)]
-pub enum Got<T> {
-    Answer(T),
-    Abandoned,
-}
-
 impl DevArm {
     /// The AUTO arm: anchor files under `anchors`, every answer said on
     /// `talk`.
@@ -84,28 +76,27 @@ impl DevArm {
 
     /// The script's next answer, or `None` on the auto arm; `Abandon` and
     /// an exhausted script answer the abandonment.
-    fn next(&self, moment: &str) -> Option<Got<Answer>> {
-        match &self.kind {
-            Kind::Auto { .. } => None,
-            Kind::Script(answers) => match answers.lock().expect("the script's lock").pop_front() {
-                None => {
-                    self.say(format!("{moment}: the script has no answer left — the walk is abandoned"));
-                    Some(Got::Abandoned)
-                }
-                Some(Answer::Abandon) => {
-                    self.say(format!("{moment}: the script says abandon"));
-                    Some(Got::Abandoned)
-                }
-                Some(a) => Some(Got::Answer(a)),
-            },
-        }
+    fn next(&self, moment: &str) -> Option<Result<Answer, Abandoned>> {
+        let Kind::Script(answers) = &self.kind else { return None };
+        let next = answers.lock().expect("the script's lock").pop_front();
+        Some(match next {
+            None => {
+                self.say(format!("{moment}: the script has no answer left — the walk is abandoned"));
+                Err(Abandoned)
+            }
+            Some(Answer::Abandon) => {
+                self.say(format!("{moment}: the script says abandon"));
+                Err(Abandoned)
+            }
+            Some(a) => Ok(a),
+        })
     }
 
     /// A script answer of another moment's kind: said, and the walk
     /// abandoned — whatever answer the moment asked for.
-    fn wrong_kind<T>(&self, moment: &str, got: &Answer) -> Got<T> {
+    fn wrong_kind<T>(&self, moment: &str, got: &Answer) -> Result<T, Abandoned> {
         self.say(format!("{moment}: the script's next answer {got:?} is of another moment's kind — the walk is abandoned"));
-        Got::Abandoned
+        Err(Abandoned)
     }
 
     /// THE SHEET (SECRET): kept here for a `retype sheet`, shown to no one.
@@ -127,137 +118,126 @@ impl DevArm {
 
     /// THE RE-TYPE (SECRET): the auto arm declines it; a script types it off
     /// a sheet shown, types it wrong, or declines.
-    pub fn retype(&self) -> Got<Retyped> {
-        match self.next("the re-type") {
-            None => {
-                self.say("the re-type is declined (the auto arm types no seed)".to_string());
-                Got::Answer(Retyped::Declined)
-            }
-            Some(Got::Abandoned) => Got::Abandoned,
-            Some(Got::Answer(a)) => match a {
-                Answer::RetypeSheet(n) => match self.off_sheet(n) {
-                    Some((seed_hex, fingerprint_prefix)) => {
-                        self.say(format!("the re-type is typed off sheet {n}"));
-                        Got::Answer(Retyped::Typed { seed_hex, fingerprint_prefix })
-                    }
-                    None => {
-                        self.say(format!("the re-type names sheet {n}, which was never shown — the walk is abandoned"));
-                        Got::Abandoned
-                    }
-                },
-                Answer::RetypeWrong => {
-                    self.say("the re-type is typed wrong, on purpose".to_string());
-                    Got::Answer(Retyped::Typed { seed_hex: "00".repeat(32), fingerprint_prefix: "00000000".into() })
+    pub fn retype(&self) -> Result<Retyped, Abandoned> {
+        let Some(next) = self.next("the re-type") else {
+            self.say("the re-type is declined (the auto arm types no seed)".to_string());
+            return Ok(Retyped::Declined);
+        };
+        match next? {
+            Answer::RetypeSheet(n) => match self.off_sheet(n) {
+                Some((seed_hex, fingerprint_prefix)) => {
+                    self.say(format!("the re-type is typed off sheet {n}"));
+                    Ok(Retyped::Typed { seed_hex, fingerprint_prefix })
                 }
-                Answer::RetypeDeclined => {
-                    self.say("the re-type is declined".to_string());
-                    Got::Answer(Retyped::Declined)
+                None => {
+                    self.say(format!("the re-type names sheet {n}, which was never shown — the walk is abandoned"));
+                    Err(Abandoned)
                 }
-                other => self.wrong_kind("the re-type", &other),
             },
+            Answer::RetypeWrong => {
+                self.say("the re-type is typed wrong, on purpose".to_string());
+                Ok(Retyped::Typed { seed_hex: "00".repeat(32), fingerprint_prefix: "00000000".into() })
+            }
+            Answer::RetypeDeclined => {
+                self.say("the re-type is declined".to_string());
+                Ok(Retyped::Declined)
+            }
+            other => self.wrong_kind("the re-type", &other),
         }
     }
 
     /// ONE ANCHOR FILE's DESTINATION (SECRET): the auto arm places anchor
     /// `which` under its own directory; a script names a path.
-    pub fn destination(&self, which: usize) -> Got<PathBuf> {
-        match self.next("the destination") {
-            None => {
-                let Kind::Auto { anchors } = &self.kind else { unreachable!("the auto arm answers no script") };
-                let dir = anchors.join(format!("anchor-{which}"));
-                self.say(format!("anchor {which} is placed under {}", dir.display()));
-                Got::Answer(dir)
-            }
-            Some(Got::Abandoned) => Got::Abandoned,
-            Some(Got::Answer(Answer::Destination(p))) => {
+    pub fn destination(&self, which: usize) -> Result<PathBuf, Abandoned> {
+        let Some(next) = self.next("the destination") else {
+            let Kind::Auto { anchors } = &self.kind else { unreachable!("the auto arm answers no script") };
+            let dir = anchors.join(format!("anchor-{which}"));
+            self.say(format!("anchor {which} is placed under {}", dir.display()));
+            return Ok(dir);
+        };
+        match next? {
+            Answer::Destination(p) => {
                 self.say(format!("anchor {which} is placed under {}", p.display()));
-                Got::Answer(p)
+                Ok(p)
             }
-            Some(Got::Answer(other)) => self.wrong_kind("the destination", &other),
+            other => self.wrong_kind("the destination", &other),
         }
     }
 
     /// A TYPED CONFIRMATION (CONSENT): the auto arm types the row asked
     /// for; a script types the row, `no`, or its own text.
-    pub fn confirm(&self, text: &str, expected: &str) -> Got<String> {
-        match self.next("the confirmation") {
-            None => {
+    pub fn confirm(&self, text: &str, expected: &str) -> Result<String, Abandoned> {
+        let Some(next) = self.next("the confirmation") else {
+            self.say(format!("the confirmation `{text}` is typed as asked ({expected})"));
+            return Ok(expected.to_string());
+        };
+        match next? {
+            Answer::Confirm(true) => {
                 self.say(format!("the confirmation `{text}` is typed as asked ({expected})"));
-                Got::Answer(expected.to_string())
+                Ok(expected.to_string())
             }
-            Some(Got::Abandoned) => Got::Abandoned,
-            Some(Got::Answer(a)) => match a {
-                Answer::Confirm(true) => {
-                    self.say(format!("the confirmation `{text}` is typed as asked ({expected})"));
-                    Got::Answer(expected.to_string())
-                }
-                Answer::Confirm(false) => {
-                    self.say(format!("the confirmation `{text}` is answered no"));
-                    Got::Answer("no".to_string())
-                }
-                Answer::Typed(t) => {
-                    self.say(format!("the confirmation `{text}` is answered `{t}`"));
-                    Got::Answer(t)
-                }
-                other => self.wrong_kind("the confirmation", &other),
-            },
+            Answer::Confirm(false) => {
+                self.say(format!("the confirmation `{text}` is answered no"));
+                Ok("no".to_string())
+            }
+            Answer::Typed(t) => {
+                self.say(format!("the confirmation `{text}` is answered `{t}`"));
+                Ok(t)
+            }
+            other => self.wrong_kind("the confirmation", &other),
         }
     }
 
     /// THE ANCHOR IMPORT (SECRET): the auto arm holds neither; a script
     /// hands a file, types off a sheet, types its own, or holds neither.
-    pub fn import(&self) -> Got<Imported> {
-        match self.next("the import") {
-            None => {
-                self.say("the import answers neither (the auto arm holds no artifact)".to_string());
-                Got::Answer(Imported::Neither)
+    pub fn import(&self) -> Result<Imported, Abandoned> {
+        let Some(next) = self.next("the import") else {
+            self.say("the import answers neither (the auto arm holds no artifact)".to_string());
+            return Ok(Imported::Neither);
+        };
+        match next? {
+            Answer::ImportFile(p) => {
+                self.say(format!("the import hands the file {}", p.display()));
+                Ok(Imported::File(p))
             }
-            Some(Got::Abandoned) => Got::Abandoned,
-            Some(Got::Answer(a)) => match a {
-                Answer::ImportFile(p) => {
-                    self.say(format!("the import hands the file {}", p.display()));
-                    Got::Answer(Imported::File(p))
+            Answer::ImportSheet(n) => match self.off_sheet(n) {
+                Some((seed_hex, fingerprint_prefix)) => {
+                    self.say(format!("the import is typed off sheet {n}"));
+                    Ok(Imported::Typed { seed_hex, fingerprint_prefix })
                 }
-                Answer::ImportSheet(n) => match self.off_sheet(n) {
-                    Some((seed_hex, fingerprint_prefix)) => {
-                        self.say(format!("the import is typed off sheet {n}"));
-                        Got::Answer(Imported::Typed { seed_hex, fingerprint_prefix })
-                    }
-                    None => {
-                        self.say(format!("the import names sheet {n}, which was never shown — the walk is abandoned"));
-                        Got::Abandoned
-                    }
-                },
-                Answer::ImportTyped { seed_hex, fingerprint_prefix } => {
-                    self.say("the import is typed from the script".to_string());
-                    Got::Answer(Imported::Typed { seed_hex, fingerprint_prefix })
+                None => {
+                    self.say(format!("the import names sheet {n}, which was never shown — the walk is abandoned"));
+                    Err(Abandoned)
                 }
-                Answer::ImportNeither => {
-                    self.say("the import answers neither".to_string());
-                    Got::Answer(Imported::Neither)
-                }
-                other => self.wrong_kind("the import", &other),
             },
+            Answer::ImportTyped { seed_hex, fingerprint_prefix } => {
+                self.say("the import is typed from the script".to_string());
+                Ok(Imported::Typed { seed_hex, fingerprint_prefix })
+            }
+            Answer::ImportNeither => {
+                self.say("the import answers neither".to_string());
+                Ok(Imported::Neither)
+            }
+            other => self.wrong_kind("the import", &other),
         }
     }
 
     /// KEPT OR PLACED (SECRET): the auto arm answers kept; a script says.
-    pub fn kept_or_placed(&self, path: &std::path::Path) -> Got<KeptOrPlaced> {
-        match self.next("kept-or-placed") {
-            None => {
+    pub fn kept_or_placed(&self, path: &std::path::Path) -> Result<KeptOrPlaced, Abandoned> {
+        let Some(next) = self.next("kept-or-placed") else {
+            self.say(format!("{} is answered kept", path.display()));
+            return Ok(KeptOrPlaced::Kept);
+        };
+        match next? {
+            Answer::Kept => {
                 self.say(format!("{} is answered kept", path.display()));
-                Got::Answer(KeptOrPlaced::Kept)
+                Ok(KeptOrPlaced::Kept)
             }
-            Some(Got::Abandoned) => Got::Abandoned,
-            Some(Got::Answer(Answer::Kept)) => {
-                self.say(format!("{} is answered kept", path.display()));
-                Got::Answer(KeptOrPlaced::Kept)
-            }
-            Some(Got::Answer(Answer::Placed)) => {
+            Answer::Placed => {
                 self.say(format!("{} is answered placed", path.display()));
-                Got::Answer(KeptOrPlaced::Placed)
+                Ok(KeptOrPlaced::Placed)
             }
-            Some(Got::Answer(other)) => self.wrong_kind("kept-or-placed", &other),
+            other => self.wrong_kind("kept-or-placed", &other),
         }
     }
 }
@@ -282,11 +262,11 @@ mod tests {
         let arm = DevArm::auto(PathBuf::from("/tmp/anchors"), talk);
         let fields = SheetFields { anchor: true, alg: "mldsa65-ed25519".into(), label: None, fingerprint_hex: "ab".repeat(32), fingerprint_grouped: "abab abab".into(), seed_grouped: "5e5e 5e5e".into(), account: None, principal: None, origin: None };
         arm.sheet(fields);
-        assert!(matches!(arm.retype(), Got::Answer(Retyped::Declined)));
-        assert!(matches!(arm.destination(1), Got::Answer(p) if p == PathBuf::from("/tmp/anchors/anchor-1")));
-        assert!(matches!(arm.confirm("retire?", "abcd efgh"), Got::Answer(row) if row == "abcd efgh"));
-        assert!(matches!(arm.import(), Got::Answer(Imported::Neither)));
-        assert!(matches!(arm.kept_or_placed(std::path::Path::new("/tmp/k")), Got::Answer(KeptOrPlaced::Kept)));
+        assert!(matches!(arm.retype(), Ok(Retyped::Declined)));
+        assert!(matches!(arm.destination(1), Ok(p) if p == PathBuf::from("/tmp/anchors/anchor-1")));
+        assert!(matches!(arm.confirm("retire?", "abcd efgh"), Ok(row) if row == "abcd efgh"));
+        assert!(matches!(arm.import(), Ok(Imported::Neither)));
+        assert!(matches!(arm.kept_or_placed(std::path::Path::new("/tmp/k")), Ok(KeptOrPlaced::Kept)));
         arm.dismiss();
         let said = lines.lock().unwrap().join("\n");
         assert!(said.contains("dev arm: the sheet for fingerprint abab abab"), "{said}");
@@ -305,21 +285,33 @@ mod tests {
         assert!(arm.is_script());
         let fields = SheetFields { anchor: true, alg: "mldsa65-ed25519".into(), label: None, fingerprint_hex: "ab".repeat(32), fingerprint_grouped: "abab".into(), seed_grouped: "5e5e 5e5e".into(), account: None, principal: None, origin: None };
         arm.sheet(fields);
-        assert!(matches!(arm.confirm("x", "row"), Got::Answer(a) if a == "no"));
+        assert!(matches!(arm.confirm("x", "row"), Ok(a) if a == "no"));
         match arm.retype() {
-            Got::Answer(Retyped::Typed { seed_hex, fingerprint_prefix }) => {
+            Ok(Retyped::Typed { seed_hex, fingerprint_prefix }) => {
                 assert_eq!(seed_hex, "5e5e5e5e");
                 assert_eq!(fingerprint_prefix, "abababab");
             }
             other => panic!("{other:?}"),
         }
-        assert!(matches!(arm.import(), Got::Abandoned), "a `kept` where an import is asked");
-        assert!(matches!(arm.destination(0), Got::Abandoned), "`abandon`");
-        assert!(matches!(arm.confirm("y", "r"), Got::Abandoned), "exhausted");
+        assert!(matches!(arm.import(), Err(Abandoned)), "a `kept` where an import is asked");
+        assert!(matches!(arm.destination(0), Err(Abandoned)), "`abandon`");
+        assert!(matches!(arm.confirm("y", "r"), Err(Abandoned)), "exhausted");
         let said = lines.lock().unwrap().join("\n");
         assert!(said.contains("another moment's kind"), "{said}");
         assert!(said.contains("the script says abandon"), "{said}");
         assert!(said.contains("no answer left"), "{said}");
         assert!(!said.contains("5e5e"), "{said}");
+    }
+
+    /// A script's typed import met by another moment abandons the walk, and
+    /// the answer it names on TALK carries no seed.
+    #[test]
+    fn a_typed_import_of_the_wrong_kind_says_no_seed() {
+        let (talk, lines) = talk();
+        let arm = DevArm::script(vec![Answer::ImportTyped { seed_hex: "5e".repeat(32), fingerprint_prefix: "abcdabcd".into() }], talk);
+        assert_eq!(arm.confirm("retire?", "abcd"), Err(Abandoned));
+        let said = lines.lock().unwrap().join("\n");
+        assert!(said.contains("another moment's kind") && said.contains("ImportTyped"), "{said}");
+        assert!(!said.contains("5e5e"), "the seed never reaches TALK: {said}");
     }
 }

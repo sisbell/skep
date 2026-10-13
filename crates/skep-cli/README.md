@@ -32,9 +32,10 @@ and a killed run resume.
 
 `skep-dev serve` is THE DEV PROVIDER: the shell's core (`skep-shell`)
 served to a page in a browser over loopback HTTP and server-sent events —
-`POST /bridge/<call>` for the twenty calls of `client.md` §4b.1 (`{result}`
-or `{refused}` back, HTTP 200 either way; a 4xx is the provider's own
-refusal), `GET /bridge/events` for the six events of §4b.2 (`event:` and
+`POST /bridge/<call>` for the twenty-two calls of `client.md` §4b.1
+(`{result}` or `{refused}` back, HTTP 200 either way; a 4xx is the
+provider's own refusal), `GET /bridge/events` for the seven events of
+§4b.2 (`event:` and
 `data:` lines, a `:ka` comment every fifteen seconds), `POST /bridge/answer`
 and `/bridge/cancel` for a moment's two answers, `GET /bridge/log` (every
 call the page made and every dial the provider made), `GET /bridge/shapes`

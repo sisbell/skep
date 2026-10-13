@@ -32,7 +32,7 @@
 use std::collections::{HashMap, HashSet};
 use std::fs::File;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
 use serde_json::{json, Value};
@@ -44,7 +44,7 @@ use skep_identity::BoardTerm;
 use skep_search::Chain;
 
 use crate::attest::{delivered_values, values_of};
-use crate::events::{EventBus, HELD};
+use crate::events::{EventBus, EventName};
 use crate::held::{Done, DoneError, HaltWhy, HeldDir, HeldLine, HeldQueue, Opened, Reason};
 use crate::refusal::{Name, Refusal};
 use crate::sessions::{Kind, SessionEntry, Sessions};
@@ -371,6 +371,34 @@ pub struct Holds {
     resending: Mutex<HashSet<String>>,
 }
 
+/// A board's mark in [`Holds`]'s `resending` set, held for one drain and
+/// cleared when the drain ends — however it ends, a dial that unwinds
+/// included — so no board stays marked by a drain that never finished.
+struct Draining<'h> {
+    resending: &'h Mutex<HashSet<String>>,
+    board_reference: &'h str,
+}
+
+impl<'h> Draining<'h> {
+    /// The mark taken for `board_reference`, or `None` where a drain of it
+    /// already runs.
+    fn begin(resending: &'h Mutex<HashSet<String>>, board_reference: &'h str) -> Option<Draining<'h>> {
+        // No guard is built where no mark was taken: dropped, it would clear
+        // the mark of the drain that holds it.
+        if !resending.lock().expect("the resend lock").insert(board_reference.to_string()) {
+            return None;
+        }
+        Some(Draining { resending, board_reference })
+    }
+}
+
+impl Drop for Draining<'_> {
+    fn drop(&mut self) {
+        // Run while a drain unwinds too: a poisoned set is still the set.
+        self.resending.lock().unwrap_or_else(PoisonError::into_inner).remove(self.board_reference);
+    }
+}
+
 impl Holds {
     /// The holds for a shell: no board yet.
     pub fn new(sessions: Arc<Sessions>, bus: Arc<EventBus>, store: Arc<FileStore>, data_dir: PathBuf, talk: Talk) -> Arc<Holds> {
@@ -675,12 +703,9 @@ impl Holds {
         if !due {
             return;
         }
-        // One drain per board at a time.
-        if !self.resending.lock().expect("the resend lock").insert(board_reference.to_string()) {
-            return;
-        }
+        // One drain per board at a time, its mark cleared however it ends.
+        let Some(_draining) = Draining::begin(&self.resending, board_reference) else { return };
         self.drain(board_reference);
-        self.resending.lock().expect("the resend lock").remove(board_reference);
     }
 
     /// The probe's dial and the resend (the body of [`Holds::probe`], run
@@ -928,7 +953,7 @@ impl Holds {
                 None => Dialed::Acked(v),
                 Some(r) => {
                     let decision = classify(Outcome::Rejected { code: r.key(), disposition: v["disposition"].as_str().unwrap_or("") }, durability_seen);
-                    Dialed::refused(decision, &r.token(), &v, Refusal::of(r.refused(&v)))
+                    Dialed::refused(decision, &r.token(), &v, Refusal::from(r.refused(&v)))
                 }
             },
             Err(Halt::Dial(e)) => match classify(Outcome::Dial(&e), 0) {
@@ -940,7 +965,7 @@ impl Holds {
                 let (token, verdict) = (r.token(), r.body.clone());
                 Dialed::refused(decision, &token, &verdict, Refusal::Board(r))
             }
-            Err(h) => Dialed::Faced(Refusal::of(h)),
+            Err(h) => Dialed::Faced(Refusal::from(h)),
         }
     }
 
@@ -1007,7 +1032,7 @@ impl Holds {
         if let Some(c) = cause {
             data["cause"] = Value::from(c);
         }
-        self.bus.emit(HELD, data);
+        self.bus.emit(EventName::Held, data);
     }
 }
 

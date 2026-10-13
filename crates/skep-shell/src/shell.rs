@@ -9,7 +9,8 @@
 //! answering the row's output or a [`Refusal`] under the row's armed name,
 //! the board's own refusals carried verbatim. The row methods are private
 //! behind ONE DOOR, [`Shell::call`], which dispatches on the bridge's
-//! spelling and logs every call, so no call reaches a row past the log;
+//! spelling — one arm per call, the compiler holding the match exhaustive —
+//! and logs every call, so no call reaches a row past the log;
 //! [`Shell::fetch`] alone is public beside it, because it streams and its
 //! transport logs it. A ceremonial row runs the library's walk over the
 //! person of `person` — its PUBLIC moments the page's, its SECRET and
@@ -40,7 +41,8 @@
 //! `fetch` reaches the dialer's streamed form and no further (the
 //! §Recovery order of the media design is not run here).
 
-use std::io::Read;
+use std::fmt;
+use std::io::{self, Read};
 use std::path::PathBuf;
 use std::sync::mpsc::Receiver;
 use std::sync::{Arc, Mutex};
@@ -64,15 +66,15 @@ use skep_client::Origin;
 use skep_identity::{encode_enroll, Enrollment};
 
 use crate::dev_arm::DevArm;
-use crate::events::{Event, EventBus, DAEMON, SESSION_DIED};
-use crate::feed::{answer_without_index, BoardEntry, Feed, Searcher};
+use crate::events::{Event, EventBus, EventName};
+use crate::feed::{answer_without_index, BoardEntry, Feed, FeedThreads, Searcher, Shared};
 use crate::hold::{self, BurstAnswer, Holds};
-use crate::log::{Log, LoggingDialer};
+use crate::log::{CallOutcome, Log, LoggingDialer};
 use crate::person::{BridgePerson, Pending};
 use crate::refs::board_reference;
 use crate::refusal::{Name, Refusal};
 use crate::script;
-use crate::sessions::{self, SessionEntry, Sessions, Supplements};
+use crate::sessions::{self, SessionEntry, Sessions};
 use crate::Talk;
 
 /// THE SESSION MODE a run names (P-5: both arms selectable per run): bare
@@ -101,15 +103,20 @@ impl SessionMode {
     }
 }
 
-/// The dev arm a run names: the auto-answer, or a script's answers.
-#[derive(Debug, Clone)]
+/// The dev arm a run names: the auto-answer, the default, or a script's
+/// answers.
+#[derive(Debug, Clone, Default)]
 pub enum ArmConfig {
+    #[default]
     Auto,
     Script(Vec<script::Answer>),
 }
 
-/// What a shell is opened over.
+/// What a shell is opened over: [`ShellOptions::new`]'s four, and the two
+/// a run may set beside them. Its `Debug` leaves out the TALK sink, a
+/// closure.
 #[derive(Clone)]
+#[non_exhaustive]
 pub struct ShellOptions {
     /// The boards, each a canonical origin dialed and signed at itself.
     pub boards: Vec<Origin>,
@@ -125,6 +132,27 @@ pub struct ShellOptions {
     /// The board that is the shell's OWN node, where the verb runs one:
     /// `probe()`'s subject.
     pub own_node: Option<Origin>,
+}
+
+impl ShellOptions {
+    /// A shell over `boards`, its key store at `store_dir`, its sessions
+    /// opened in `session_mode` and its TALK lines on `talk`: the dev arm
+    /// answering itself, and no own node.
+    pub fn new(boards: Vec<Origin>, store_dir: PathBuf, session_mode: SessionMode, talk: Talk) -> ShellOptions {
+        ShellOptions { boards, store_dir, session_mode, arm: ArmConfig::default(), talk, own_node: None }
+    }
+}
+
+impl fmt::Debug for ShellOptions {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ShellOptions")
+            .field("boards", &self.boards)
+            .field("store_dir", &self.store_dir)
+            .field("session_mode", &self.session_mode)
+            .field("arm", &self.arm)
+            .field("own_node", &self.own_node)
+            .finish_non_exhaustive()
+    }
 }
 
 /// The own node's state as the verb that owns it reports it.
@@ -156,11 +184,109 @@ pub const WRITE_OPS: [&str; 17] = [
     "edit_link",
 ];
 
-/// The twenty-two calls of §4b.1, as the bridge spells them.
-pub const CALLS: [&str; 22] = [
-    "boards", "session", "close", "keygen", "fingerprint", "claim", "enroll", "bind", "recover", "rotate", "retire", "handoff", "accept",
-    "health", "probe", "op", "upload", "fetch", "restore", "search", "held", "resolve",
-];
+/// One CALL of §4b.1, as [`Shell::call`] dispatches it: one arm per call,
+/// which the compiler holds exhaustive, and the list a transport admits a
+/// call by, [`CALLS`], spelled from `Call::ALL` — so no call is listed that
+/// the dispatch does not answer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Call {
+    Boards,
+    Session,
+    Close,
+    Keygen,
+    Fingerprint,
+    Claim,
+    Enroll,
+    Bind,
+    Recover,
+    Rotate,
+    Retire,
+    Handoff,
+    Accept,
+    Health,
+    Probe,
+    Op,
+    Upload,
+    Fetch,
+    Restore,
+    Search,
+    Held,
+    Resolve,
+}
+
+impl Call {
+    /// Every call, in §4b.1's order.
+    const ALL: [Call; 22] = [
+        Call::Boards,
+        Call::Session,
+        Call::Close,
+        Call::Keygen,
+        Call::Fingerprint,
+        Call::Claim,
+        Call::Enroll,
+        Call::Bind,
+        Call::Recover,
+        Call::Rotate,
+        Call::Retire,
+        Call::Handoff,
+        Call::Accept,
+        Call::Health,
+        Call::Probe,
+        Call::Op,
+        Call::Upload,
+        Call::Fetch,
+        Call::Restore,
+        Call::Search,
+        Call::Held,
+        Call::Resolve,
+    ];
+
+    /// The call as the bridge spells it.
+    const fn as_str(self) -> &'static str {
+        match self {
+            Call::Boards => "boards",
+            Call::Session => "session",
+            Call::Close => "close",
+            Call::Keygen => "keygen",
+            Call::Fingerprint => "fingerprint",
+            Call::Claim => "claim",
+            Call::Enroll => "enroll",
+            Call::Bind => "bind",
+            Call::Recover => "recover",
+            Call::Rotate => "rotate",
+            Call::Retire => "retire",
+            Call::Handoff => "handoff",
+            Call::Accept => "accept",
+            Call::Health => "health",
+            Call::Probe => "probe",
+            Call::Op => "op",
+            Call::Upload => "upload",
+            Call::Fetch => "fetch",
+            Call::Restore => "restore",
+            Call::Search => "search",
+            Call::Held => "held",
+            Call::Resolve => "resolve",
+        }
+    }
+
+    /// The call the bridge spells `name`.
+    fn named(name: &str) -> Option<Call> {
+        Call::ALL.into_iter().find(|call| call.as_str() == name)
+    }
+}
+
+/// The twenty-two calls of §4b.1, as the bridge spells them, in its order:
+/// the list a transport admits a call by, every name of it one
+/// [`Shell::call`] answers.
+pub const CALLS: [&str; Call::ALL.len()] = {
+    let mut names = [""; Call::ALL.len()];
+    let mut i = 0;
+    while i < names.len() {
+        names[i] = Call::ALL[i].as_str();
+        i += 1;
+    }
+    names
+};
 
 /// AUTH-5.42's statements at the device-name box, the notebook's venue.
 fn device_box_statements() -> Vec<String> {
@@ -176,17 +302,28 @@ fn device_box_statements() -> Vec<String> {
 /// `keygen` answers and `fingerprint` carries beside every UNBOUND key.
 pub const OUTSTANDING_ACT: &str = "Where it ADDS a device: take this payload to a device already signed in, run `enroll` there, and bring its three facts back to `bind` here. Where it REPLACES a machine: `rotate` with the payload there instead, then `bind` here.";
 
-/// A fetched blob: the streamed answer's head and its body, read to close.
+/// A fetched blob: the head of the board's `200` — every other status is a
+/// refusal — and its body, read to close.
 pub struct Fetched {
-    pub status: u16,
     pub headers: Headers,
     pub body: Box<dyn Read + Send>,
 }
 
-/// THE SHELL.
+impl fmt::Debug for Fetched {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "Fetched({} headers)", self.headers.0.len())
+    }
+}
+
+/// THE SHELL. Dropping it stops it ([`Shell::shutdown`]), so its threads,
+/// its sessions and the held store's locks never outlive it.
 pub struct Shell {
     boards: Vec<Arc<BoardEntry>>,
-    feeds: Mutex<Vec<(String, Option<Feed>)>>,
+    /// Each board's feed handle by the board's reference, fixed at the open:
+    /// a call waiting on one board's thread holds nothing another call needs.
+    feeds: Vec<(String, Feed)>,
+    /// Each board's two feed threads, taken and stopped at the shell's stop.
+    threads: Mutex<Vec<FeedThreads>>,
     sessions: Arc<Sessions>,
     bus: Arc<EventBus>,
     pending: Arc<Pending>,
@@ -209,8 +346,8 @@ pub struct Shell {
     date: String,
 }
 
-impl std::fmt::Debug for Shell {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl fmt::Debug for Shell {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "Shell({} boards, {} sessions, {})", self.boards.len(), self.sessions.len(), self.session_mode.name())
     }
 }
@@ -248,6 +385,26 @@ fn host_name() -> String {
             (!name.is_empty()).then_some(name)
         })
         .unwrap_or_else(|| "dev-machine".to_string())
+}
+
+/// The length of `v`'s compact JSON text — the bytes a call carries, as
+/// the log counts them — counted as it is written and never kept.
+fn json_len(v: &Value) -> usize {
+    /// A writer that keeps nothing but the count.
+    struct Count(usize);
+    impl io::Write for Count {
+        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+            self.0 += buf.len();
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+    let mut count = Count(0);
+    serde_json::to_writer(&mut count, v).expect("a `Value` has string keys and finite numbers, and the count's writer never fails");
+    count.0
 }
 
 /// The three facts as the bridge spells them.
@@ -311,14 +468,14 @@ impl Shell {
         for entry in &boards {
             holds.register_board(&entry.reference, Arc::clone(&entry.board));
         }
-        let feeds = boards
-            .iter()
-            .map(|entry| (entry.reference.clone(), Some(Feed::spawn(Arc::clone(entry), Arc::clone(&bus), Arc::clone(&sessions), reopen_store.clone(), opts.store_dir.clone(), Arc::clone(&opts.talk), Arc::clone(&holds)))))
-            .collect();
+        let shared = Shared { bus: Arc::clone(&bus), sessions: Arc::clone(&sessions), reopen_store: reopen_store.clone(), data_dir: opts.store_dir.clone(), talk: Arc::clone(&opts.talk), holds: Arc::clone(&holds) };
+        let threads: Vec<FeedThreads> = boards.iter().map(|entry| FeedThreads::spawn(Arc::clone(entry), shared.clone())).collect();
+        let feeds = boards.iter().zip(&threads).map(|(entry, threads)| (entry.reference.clone(), threads.feed())).collect();
         let secs = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
         Shell {
             boards,
-            feeds: Mutex::new(feeds),
+            feeds,
+            threads: Mutex::new(threads),
             sessions,
             bus,
             pending: Arc::new(Pending::new()),
@@ -375,7 +532,7 @@ impl Shell {
             NodeState::Running => "running",
             NodeState::Stopped => "stopped",
         };
-        self.bus.emit(DAEMON, json!({"board": board_reference, "state": state}));
+        self.bus.emit(EventName::Daemon, json!({"board": board_reference, "state": state}));
         // The own node's STOPPED state is the hold's (§3c.4): every burst at
         // its board holds `stopped` without a dial, `probe` answers it, and
         // `Running` ends the hold and runs the resend where a session stands.
@@ -402,9 +559,9 @@ impl Shell {
         (self.talk)(line.as_ref());
     }
 
-    fn feed<R>(&self, board_reference: &str, f: impl FnOnce(&Feed) -> R) -> Option<R> {
-        let feeds = self.feeds.lock().expect("the feeds' lock");
-        feeds.iter().find(|(r, _)| r == board_reference).and_then(|(_, feed)| feed.as_ref()).map(f)
+    /// The feed handle of the board `board_reference` names.
+    fn feed(&self, board_reference: &str) -> &Feed {
+        self.feeds.iter().find(|(r, _)| r == board_reference).map(|(_, feed)| feed).expect("every board of this shell has its feed, fixed at the open")
     }
 
     /// The board a reference names, or THE PIN's unknown-board refusal.
@@ -439,7 +596,7 @@ impl Shell {
         }
         match armed {
             Some(name) => Refusal::of_named(name, h),
-            None => Refusal::of(h),
+            None => Refusal::from(h),
         }
     }
 
@@ -459,48 +616,47 @@ impl Shell {
     /// whichever hand came first; the call's refusal, carrying the arm.
     fn died(&self, entry: &SessionEntry) -> Refusal {
         let board = self.board_of_session(entry);
-        let mut supplements = BoardFeed { shell: self, board_reference: &entry.board_reference };
-        let reason = self.sessions.end(entry, &board.board, self.reopen_store.as_deref(), &mut supplements, &self.bus);
+        let reason = self.sessions.end(entry, &board.board, self.reopen_store.as_deref(), &mut self.feed(&entry.board_reference), &self.bus);
         Refusal::shell(Name::SESSION_DIED, json!({"session": entry.reference, "reason": reason}))
     }
 
     // ── THE CALLS ────────────────────────────────────────────────────────
 
     /// ONE CALL by name, the log kept: the row's method dispatched on the
-    /// bridge's spelling.
+    /// bridge's spelling, one arm per call.
     pub fn call(&self, name: &str, args: &Value) -> Result<Value, Refusal> {
         let started = Instant::now();
-        let bytes_in = args.to_string().len();
-        let outcome = match name {
-            "boards" => Ok(self.boards()),
-            "session" => self.session_call(args),
-            "close" => self.close(args),
-            "keygen" => self.keygen(args),
-            "fingerprint" => self.fingerprint(args),
-            "claim" => self.claim(args),
-            "enroll" => self.enroll(args),
-            "bind" => self.bind(args),
-            "recover" => self.recover(args),
-            "rotate" => self.rotate(args),
-            "retire" => self.retire(args),
-            "handoff" => self.handoff(args),
-            "accept" => self.accept(args),
-            "health" => self.health(args),
-            "probe" => Ok(self.probe()),
-            "op" => self.op(args),
-            "upload" => self.upload(args),
-            "fetch" => Err(Refusal::shell(Name::STREAMED_CALL, json!({"call": "fetch", "detail": "fetch streams its bytes: a transport serves it on its own route, and a direct caller takes `Shell::fetch`"}))),
-            "restore" => self.restore(args),
-            "search" => self.search(args),
-            "held" => self.held(args),
-            "resolve" => self.resolve(args),
-            _ => Err(Refusal::shell(Name::UNKNOWN_CALL, json!({"call": name}))),
+        let bytes_in = json_len(args);
+        let outcome = match Call::named(name) {
+            Some(Call::Boards) => Ok(self.boards()),
+            Some(Call::Session) => self.session_call(args),
+            Some(Call::Close) => self.close(args),
+            Some(Call::Keygen) => self.keygen(args),
+            Some(Call::Fingerprint) => self.fingerprint(args),
+            Some(Call::Claim) => self.claim(args),
+            Some(Call::Enroll) => self.enroll(args),
+            Some(Call::Bind) => self.bind(args),
+            Some(Call::Recover) => self.recover(args),
+            Some(Call::Rotate) => self.rotate(args),
+            Some(Call::Retire) => self.retire(args),
+            Some(Call::Handoff) => self.handoff(args),
+            Some(Call::Accept) => self.accept(args),
+            Some(Call::Health) => self.health(args),
+            Some(Call::Probe) => Ok(self.probe()),
+            Some(Call::Op) => self.op(args),
+            Some(Call::Upload) => self.upload(args),
+            Some(Call::Fetch) => Err(Refusal::shell(Name::STREAMED_CALL, json!({"call": "fetch", "detail": "fetch streams its bytes: a transport serves it on its own route, and a direct caller takes `Shell::fetch`"}))),
+            Some(Call::Restore) => self.restore(args),
+            Some(Call::Search) => self.search(args),
+            Some(Call::Held) => self.held(args),
+            Some(Call::Resolve) => self.resolve(args),
+            None => Err(Refusal::shell(Name::UNKNOWN_CALL, json!({"call": name}))),
         };
-        let (bytes_out, kind) = match &outcome {
-            Ok(v) => (v.to_string().len(), "result"),
-            Err(r) => (r.to_value().to_string().len(), "refused"),
+        let (bytes_out, answered) = match &outcome {
+            Ok(v) => (json_len(v), CallOutcome::Result),
+            Err(r) => (json_len(&r.to_value()), CallOutcome::Refused),
         };
-        self.log.call(name, bytes_in, bytes_out, started.elapsed(), kind);
+        self.log.call(name, bytes_in, bytes_out, started.elapsed(), answered);
         outcome
     }
 
@@ -521,7 +677,7 @@ impl Shell {
             SessionMode::Bare { .. } => sessions::open_bare(&board.board, principal)?,
             SessionMode::Signed { .. } => sessions::open_signed(&board.board, &self.store, principal)?,
         };
-        let entry = self.sessions.register(&board.reference, open, &mut BoardFeed { shell: self, board_reference: &board.reference });
+        let entry = self.sessions.register(&board.reference, open, &mut self.feed(&board.reference));
         // The principal's held file read whole at its session's open (§3c.7),
         // so `held(session)` lists its lines at once. The resend is NOT run
         // here: the page reads `held(session)` right after opening, and a
@@ -541,10 +697,10 @@ impl Shell {
     fn close(&self, args: &Value) -> Result<Value, Refusal> {
         let Some(session_reference) = args["session"].as_str() else { return Err(Refusal::malformed("session")) };
         let entry = self.sessions.close(session_reference).ok_or_else(|| Refusal::shell(Name::SESSION_ENDED, json!({"session": session_reference})))?;
-        self.feed(&entry.board_reference, |f| f.closing(&entry));
+        self.feed(&entry.board_reference).closing(&entry);
         let board = self.board_of_session(&entry);
-        let answer = board.board.session_close(&entry.token).map_err(Refusal::of);
-        self.bus.emit(SESSION_DIED, json!({"session": entry.reference, "reason": sessions::closed()}));
+        let answer = board.board.session_close(&entry.token).map_err(Refusal::from);
+        self.bus.emit(EventName::SessionDied, json!({"session": entry.reference, "reason": sessions::closed()}));
         answer.map(|_| json!({}))
     }
 
@@ -625,7 +781,7 @@ impl Shell {
         let board = self.board(&args["board"])?;
         let principal = principal_of_value(&args["principal"]);
         if self.store.list().is_ok_and(|keys| keys.is_empty()) {
-            let mode = board.board.health().map(|h| Mode::of(&h)).map_err(Refusal::of)?;
+            let mode = Mode::of(&board.board.health()?);
             return Err(Refusal::of_named(Name::NO_KEY, skep_client::store::arm4_face(&self.store, &[], mode)));
         }
         let opts = NotebookOptions {
@@ -687,18 +843,18 @@ impl Shell {
             return Err(Refusal::shell(Name::ORIGIN_DISAGREES, json!({"pasted": origin, "dialed": board.origin.as_str()})));
         }
         let b = &board.board;
-        let health = b.health().map_err(Refusal::of)?;
+        let health = b.health()?;
         origin_arm(b.signed(), &health).map_err(|h| Refusal::of_named(Name::ORIGIN_STATE, h))?;
-        match principal_of(b, &account).map_err(Refusal::of)? {
+        match principal_of(b, &account)? {
             Some(p) if p == principal => {}
             other => return Err(Refusal::shell(Name::ACCOUNT_DISAGREES, json!({"pasted_principal": principal, "seated": other, "account": account}))),
         }
-        match b.principal_prefix(principal).map_err(Refusal::of)? {
+        match b.principal_prefix(principal)? {
             Some(a) if a == account => {}
             other => return Err(Refusal::shell(Name::ACCOUNT_DISAGREES, json!({"pasted_account": account, "principal_prefix": other}))),
         }
         let key = sessions::signing_key(&self.store, &board.origin, principal, || Mode::of(&health))?;
-        let walk = walk_to_set(b, &account).map_err(Refusal::of)?;
+        let walk = walk_to_set(b, &account)?;
         let own = [(key.fingerprint, key.public.clone())];
         if let Err(h) = key_face(b, &walk, &key.fingerprint, &own, Site::Tail) {
             let name = match KeyDiagnosis::of(&walk.set, &key.fingerprint) {
@@ -707,14 +863,14 @@ impl Shell {
             };
             return Err(Refusal::of_named(name, h));
         }
-        let reads = FirstSessionReads::take(b, &account, &key.fingerprint, Some(&self.store)).map_err(Refusal::of)?;
+        let reads = FirstSessionReads::take(b, &account, &key.fingerprint, Some(&self.store))?;
         let mut warnings: Vec<String> = Vec::new();
         if reads.anything_owed() {
             let signer = sessions::signer(&self.store, &key.path)?;
-            let session = handshake(b, Scope::Content, &*signer, principal, Site::Tail).map_err(Refusal::of)?;
+            let session = handshake(b, Scope::Content, &*signer, principal, Site::Tail)?;
             let done = first_session(b, &reads, &session, &*signer, Some(&self.store));
             let _ = session.close();
-            warnings.extend(done.map_err(Refusal::of)?.warnings);
+            warnings.extend(done?.warnings);
         }
         let line = Binding::Enrollment { origin: board.origin.clone(), principal, account: account.clone(), fingerprint: key.fingerprint };
         let mut out = Map::new();
@@ -842,7 +998,7 @@ impl Shell {
     /// and the derived mode.
     fn health(&self, args: &Value) -> Result<Value, Refusal> {
         let board = self.board(&args["board"])?;
-        let health = board.board.health().map_err(Refusal::of)?;
+        let health = board.board.health()?;
         Ok(json!({"health": health.body, "mode": Mode::of(&health).name()}))
     }
 
@@ -896,7 +1052,7 @@ impl Shell {
     /// the board's refusal verbatim.
     fn document(v: Value) -> Result<Value, Refusal> {
         match Rejection::of(&v) {
-            Some(r) => Err(Refusal::of(r.refused(&v))),
+            Some(r) => Err(Refusal::from(r.refused(&v))),
             None => Ok(v),
         }
     }
@@ -917,11 +1073,11 @@ impl Shell {
                 return Err(Refusal::shell(Name::WRITE_IN_GUEST_FORM, json!({"op": op})));
             }
             return match at {
-                Some(at) => match board.op_at(None, at, &frame).map_err(Refusal::of)? {
+                Some(at) => match board.op_at(None, at, &frame)? {
                     AtAnswer::Document(v) => Self::document(v),
                     other => Err(at_refusal(other)),
                 },
-                None => Self::document(board.guest(&frame).map_err(Refusal::of)?),
+                None => Self::document(board.guest(&frame)?),
             };
         }
         let entry = self.session(&args["session"])?;
@@ -938,12 +1094,12 @@ impl Shell {
             entry.attest(&board.board, &self.store, &mut frame)?;
         }
         let answer = match at {
-            Some(at) => match board.board.op_at(Some(&entry.token), at, &frame).map_err(Refusal::of)? {
+            Some(at) => match board.board.op_at(Some(&entry.token), at, &frame)? {
                 AtAnswer::Document(v) => Answer::Document(v),
                 AtAnswer::Closed => Answer::Closed,
                 other => return Err(at_refusal(other)),
             },
-            None => board.board.op(Some(&entry.token), &frame).map_err(Refusal::of)?,
+            None => board.board.op(Some(&entry.token), &frame)?,
         };
         match answer {
             Answer::Document(v) => {
@@ -997,7 +1153,7 @@ impl Shell {
         }
         let head = RequestHead { method: Method::Get, path: format!("/blob?i={i}"), headers, content_length: None };
         let mut empty = std::io::empty();
-        let resp = board.dialer().stream(board.dialed(), &head, &mut empty, &mut |_| {}).map_err(|e| Refusal::of(Halt::Dial(e)))?;
+        let resp = board.dialer().stream(board.dialed(), &head, &mut empty, &mut |_| {}).map_err(Refusal::Unreachable)?;
         if resp.headers.get("Skepd-Session").is_some_and(|v| v.trim() == "closed") {
             if let Some(entry) = &entry {
                 return Err(self.died(entry));
@@ -1009,7 +1165,7 @@ impl Shell {
             let _ = reader.take(64 * 1024).read_to_end(&mut body);
             return Err(Refusal::board(resp.status, serde_json::from_slice(&body).unwrap_or(Value::Null)));
         }
-        Ok(Fetched { status: resp.status, headers: resp.headers, body: resp.body })
+        Ok(Fetched { headers: resp.headers, body: resp.body })
     }
 
     /// `search(session|guest, board, query, opts)` → `{hits, places, state}`
@@ -1033,7 +1189,7 @@ impl Shell {
             let who = Searcher::Session { principal: entry.facts.principal, token: entry.token.clone(), account: entry.facts.account.clone().unwrap_or_default() };
             (entry.board_reference.clone(), who)
         };
-        self.feed(&board_reference, |f| f.search(who, query, opts, reindex)).unwrap_or_else(|| Err(Refusal::shell(Name::FEED_STOPPED, json!({}))))
+        self.feed(&board_reference).search(who, query, opts, reindex)
     }
 
     /// `held(session)` → the acting principal's held bursts at the session's
@@ -1070,10 +1226,12 @@ impl Shell {
     // ── THE STOP ─────────────────────────────────────────────────────────
 
     /// THE CLEAN STOP: every pending moment cancelled, every session closed
-    /// at its board, every consumer saved and closed. NOTHING of the held-burst
-    /// store is written here — every held line is already synced at its `op`
-    /// (persist-first, §3c.6's step 3); dropping the shell frees the
-    /// `held/<chain>/` locks (the feeds joined first). UNVERIFIED HERE (the
+    /// at its board, every board's feed threads stopped — each consumer
+    /// saved and closed, each worker joined, so the `held/<chain>/` locks
+    /// its holds kept are free once this returns. A second stop finds
+    /// nothing left to stop, and dropping the shell runs it. NOTHING of the
+    /// held-burst store is written here — every held line is already synced
+    /// at its `op` (persist-first, §3c.6's step 3). UNVERIFIED HERE (the
     /// record §7 item 1): that the desktop framework's close hook runs this,
     /// and that the page's last `op` reaches the shell before the webview is
     /// destroyed, is the framework's to prove — no Tauri source is on this
@@ -1086,27 +1244,18 @@ impl Shell {
                 let _ = board.board.session_close(&entry.token);
             }
         }
-        let feeds: Vec<Feed> = self.feeds.lock().expect("the feeds' lock").iter_mut().filter_map(|(_, f)| f.take()).collect();
-        for feed in feeds {
-            feed.stop();
+        let threads = std::mem::take(&mut *self.threads.lock().expect("the feed threads' lock"));
+        for board_threads in threads {
+            board_threads.stop();
         }
     }
 }
 
-/// One board's drafts supplements as the shell reaches them: through the
-/// board's feed handle, each widen and narrow a command its thread runs.
-struct BoardFeed<'s> {
-    shell: &'s Shell,
-    board_reference: &'s str,
-}
-
-impl Supplements for BoardFeed<'_> {
-    fn widen(&mut self, entry: &Arc<SessionEntry>) {
-        self.shell.feed(self.board_reference, |f| f.widen(entry));
-    }
-
-    fn narrow(&mut self, principal: u64) {
-        self.shell.feed(self.board_reference, |f| f.narrow(principal));
+impl Drop for Shell {
+    /// The clean stop where its owner made none ([`Shell::shutdown`]): no
+    /// thread, session or lock of the shell outlives it.
+    fn drop(&mut self) {
+        self.shutdown();
     }
 }
 
@@ -1131,7 +1280,7 @@ fn at_refusal(a: AtAnswer) -> Refusal {
         AtAnswer::Busy => (503, json!({"error": "history_busy"})),
         other => {
             let state = format!("the board answered `/op-at` with {other:?}, which is no refusal the shell reads");
-            return Refusal::of(Halt::face(state, "`skep-client` read an `/op-at` answer this shell does not carry", "report it: the shell's `op` row is behind the library"));
+            return Refusal::from(Halt::face(state, "`skep-client` read an `/op-at` answer this shell does not carry", "report it: the shell's `op` row is behind the library"));
         }
     };
     Refusal::board(status, body)

@@ -24,7 +24,7 @@ use std::time::{Duration, Instant};
 
 use serde_json::{json, Value};
 use skep_http::{read_request, write_head, write_response, Limits, Refused, Request};
-use skep_shell::events;
+use skep_shell::{CallOutcome, EventName};
 
 use super::http::{cors_headers, write_sse_event, write_sse_head, write_sse_keepalive, KEEPALIVE, MAX_BODY, MAX_HEAD, READ_TIMEOUT, WRITE_TIMEOUT};
 use super::{node, Provider};
@@ -137,11 +137,11 @@ fn route(provider: &Provider<'_>, req: &Request, stream: &mut TcpStream, cors: &
                     let length = fetched.headers.get("Content-Length").and_then(|l| l.parse::<usize>().ok());
                     write_head(stream, 200, cors, Some(&content_type), length)?;
                     let copied = io::copy(&mut fetched.body, stream)?;
-                    shell.log().call("fetch", req.body.len(), copied as usize, started.elapsed(), "stream");
+                    shell.log().call("fetch", req.body.len(), copied as usize, started.elapsed(), CallOutcome::Stream);
                     stream.flush()
                 }
                 Err(r) => {
-                    shell.log().call("fetch", req.body.len(), 0, started.elapsed(), "refused");
+                    shell.log().call("fetch", req.body.len(), 0, started.elapsed(), CallOutcome::Refused);
                     json(stream, 200, cors, &json!({"refused": r.to_value()}))
                 }
             }
@@ -172,7 +172,7 @@ fn route(provider: &Provider<'_>, req: &Request, stream: &mut TcpStream, cors: &
             };
             if let Some(canned) = provider.canned.lock().expect("the canned lock").remove(call) {
                 talk(format!("script: `{call}` answers the canned refusal {}", canned["name"]));
-                shell.log().call(call, req.body.len(), canned.to_string().len(), Duration::ZERO, "canned");
+                shell.log().call(call, req.body.len(), canned.to_string().len(), Duration::ZERO, CallOutcome::Canned);
                 return json(stream, 200, cors, &json!({"refused": canned}));
             }
             match shell.call(call, &args) {
@@ -208,18 +208,12 @@ fn script(provider: &Provider<'_>, args: &Value, stream: &mut TcpStream, cors: &
         return json(stream, 200, cors, &json!({"result": {"armed": call}}));
     }
     if let Some(event) = args["event"].as_str() {
-        let name = match event {
-            events::MODE => events::MODE,
-            events::SESSION_DIED => events::SESSION_DIED,
-            events::DAEMON => events::DAEMON,
-            events::FEED => events::FEED,
-            events::INDEX => events::INDEX,
-            events::MOMENT => events::MOMENT,
-            other => return json(stream, 400, cors, &json!({"refused": {"kind": "shell", "name": "unknown_event", "event": other}})),
+        let Ok(name) = event.parse::<EventName>() else {
+            return json(stream, 400, cors, &json!({"refused": {"kind": "shell", "name": "unknown_event", "event": event}}));
         };
         talk(format!("script: the event `{name}` is fired by hand"));
         provider.shell.bus().emit(name, args["data"].clone());
-        return json(stream, 200, cors, &json!({"result": {"fired": name}}));
+        return json(stream, 200, cors, &json!({"result": {"fired": name.as_str()}}));
     }
     json(stream, 400, cors, &json!({"refused": {"kind": "shell", "name": "malformed_args", "what": "call or event"}}))
 }
@@ -234,7 +228,7 @@ fn events(provider: &Provider<'_>, stream: &mut TcpStream, cors: &[(String, Stri
     loop {
         match rx.recv_timeout(Duration::from_secs(1)) {
             Ok(event) => {
-                write_sse_event(stream, event.name, &event.data.to_string())?;
+                write_sse_event(stream, event.name.as_str(), &event.data.to_string())?;
                 last = Instant::now();
             }
             Err(RecvTimeoutError::Timeout) => {

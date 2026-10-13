@@ -10,7 +10,7 @@
 //! capture could use. [`LoggingDialer`] is the one `Dialer` every board of
 //! the shell dials through — `PlainHttp` behind the record — so no dial
 //! escapes the log. THE LOG IS BOUNDED: it keeps the latest
-//! [`LOG_ENTRIES`], and a call under a name the bridge does not spell is
+//! [`MAX_LOG_ENTRIES`], and a call under a name the bridge does not spell is
 //! kept by its length, never its bytes.
 
 use std::collections::VecDeque;
@@ -56,7 +56,7 @@ impl CallOutcome {
 /// under a kilobyte held, so the log's bill stays under 64 MiB however long
 /// the shell runs. Every entry's `seq` counts on past the bound, so a reader
 /// sees where the kept entries start by the first `seq` it reads.
-pub const LOG_ENTRIES: usize = 1 << 16;
+pub const MAX_LOG_ENTRIES: usize = 1 << 16;
 
 /// The log: its latest entries in arrival order — 2^16 of them, the oldest
 /// dropped as each new one comes — each numbered by its place in the whole
@@ -82,13 +82,13 @@ impl Log {
     /// One entry placed, numbered and stamped under the lock that places
     /// it — its `seq` its place in the whole sequence, so the order the
     /// entries are read in is the order they were numbered in — and the
-    /// oldest dropped where the log holds [`LOG_ENTRIES`] already.
+    /// oldest dropped where the log holds [`MAX_LOG_ENTRIES`] already.
     fn push(&self, mut entry: Value) {
         let mut entries = self.entries.lock().expect("the log's lock");
         entry["seq"] = Value::from(entries.next_seq);
         entries.next_seq += 1;
         entry["at_ms"] = Value::from(SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0));
-        if entries.kept.len() == LOG_ENTRIES {
+        if entries.kept.len() == MAX_LOG_ENTRIES {
             entries.kept.pop_front();
         }
         entries.kept.push_back(entry);
@@ -294,20 +294,20 @@ mod tests {
         assert!(!kept.contains(&token) && !kept.contains("Skepd-Session") && !kept.contains("insert"), "{kept}");
     }
 
-    /// THE LOG IS BOUNDED: past [`LOG_ENTRIES`] the oldest go, the latest
-    /// [`LOG_ENTRIES`] kept in order, their `seq` counting on — so the first
-    /// kept says where the kept entries start (the mutant that keeps every
-    /// entry grows the log for the shell's life; the one that renumbers from
-    /// the kept entries hides the drop).
+    /// THE LOG IS BOUNDED: past [`MAX_LOG_ENTRIES`] the oldest go, the
+    /// latest [`MAX_LOG_ENTRIES`] kept in order, their `seq` counting on — so
+    /// the first kept says where the kept entries start (the mutant that keeps
+    /// every entry grows the log for the shell's life; the one that renumbers
+    /// from the kept entries hides the drop).
     #[test]
     fn the_log_keeps_its_latest_entries() {
         let log = Log::new();
-        for _ in 0..LOG_ENTRIES + 10 {
+        for _ in 0..MAX_LOG_ENTRIES + 10 {
             log.call("probe", 2, 2, Duration::ZERO, CallOutcome::Result);
         }
         let entries = log.entries();
-        assert_eq!(entries.len(), LOG_ENTRIES);
-        assert_eq!((entries[0]["seq"].as_u64(), entries[LOG_ENTRIES - 1]["seq"].as_u64()), (Some(10), Some(LOG_ENTRIES as u64 + 9)));
+        assert_eq!(entries.len(), MAX_LOG_ENTRIES);
+        assert_eq!((entries[0]["seq"].as_u64(), entries[MAX_LOG_ENTRIES - 1]["seq"].as_u64()), (Some(10), Some(MAX_LOG_ENTRIES as u64 + 9)));
     }
 
     /// A call under a name the bridge does not spell is kept by the name's

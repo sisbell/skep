@@ -118,12 +118,12 @@ impl SessionEntry {
     /// could not sign — nothing is then to be sent — and the board's refusal,
     /// or `unreachable`, where a read it needed was refused or not answered.
     pub fn attest(&self, board: &Board, store: &FileStore, frame: &mut Value) -> Result<(), Refusal> {
-        let Kind::Signed { fingerprint: key, .. } = &self.facts.kind else { return Ok(()) };
+        let Kind::Signed { fingerprint: fp, .. } = &self.facts.kind else { return Ok(()) };
         if !wants_attest(frame) {
             return Ok(());
         }
         let Some(term) = board.board_term()? else { return Ok(()) };
-        let signer = signer(store, &store.key_path(key))?;
+        let signer = signer(store, &store.key_path(fp))?;
         let account = self.facts.account.as_deref().ok_or_else(|| Refusal::shell(Name::NO_ACCOUNT, json!({})))?;
         let composer = Composer { board, token: &self.token, signer: &*signer, account, term };
         composer.attach(frame).map_err(|h| Refusal::of_named(Name::ATTEST_NOT_COMPOSED, h))
@@ -134,9 +134,9 @@ impl SessionEntry {
 /// session reaches them (`client.md` §4e.3's WIDEN and NARROW): the shell
 /// through the board's feed handle, the feed's thread directly.
 pub trait Supplements {
-    /// `entry`'s supplement mounted under its token — a principal's
+    /// `session`'s supplement mounted under its token — a principal's
     /// mounted supplement taking the new token.
-    fn widen(&mut self, entry: &Arc<SessionEntry>);
+    fn widen(&mut self, session: &Arc<SessionEntry>);
     /// `principal`'s supplement saved and unmounted.
     fn narrow(&mut self, principal: u64);
 }
@@ -200,7 +200,7 @@ impl Sessions {
             .get_or_init(|| {
                 ended_here = true;
                 self.remove(&entry.reference);
-                let death = reason(board, store, entry);
+                let death = derive_death(board, store, entry);
                 let mut arm = death.reason;
                 reopened = death.reopened.map(|open| self.enter(&entry.board_reference, open));
                 if let Some(r) = &reopened {
@@ -343,11 +343,12 @@ pub fn closed() -> Value {
     json!({"arm": "closed"})
 }
 
-/// THE ARM for a death signal met on `entry`'s token (the module doc), the
-/// reads made now; `store` where the shell holds a key store for the
-/// restart arm's re-open. Run inside [`Sessions::end`] alone, under the
+/// THE DEATH of `entry`, whose token met the death signal: its arm derived
+/// from the reads made now (the module doc), and on the restart arm the
+/// session re-opened in its place; `store` where the shell holds a key store
+/// for that re-open. Run inside [`Sessions::end`] alone, under the
 /// entry's lock: the re-open it makes is a session no other hand registers.
-fn reason(board: &Board, store: Option<&FileStore>, entry: &SessionEntry) -> Death {
+fn derive_death(board: &Board, store: Option<&FileStore>, entry: &SessionEntry) -> Death {
     let none = |reason: Value| Death { reason, reopened: None };
     let health = match board.health() {
         Ok(h) => h,
@@ -430,8 +431,8 @@ mod tests {
     struct Recorded(Vec<String>);
 
     impl Supplements for Recorded {
-        fn widen(&mut self, entry: &Arc<SessionEntry>) {
-            self.0.push(format!("widen {}", entry.reference));
+        fn widen(&mut self, session: &Arc<SessionEntry>) {
+            self.0.push(format!("widen {}", session.reference));
         }
 
         fn narrow(&mut self, principal: u64) {
@@ -451,15 +452,15 @@ mod tests {
         Board::new(Origin::parse(&format!("http://127.0.0.1:{port}")).unwrap(), PlainHttp::new())
     }
 
-    /// A dialer that holds each exchange until the test opens it, counting
-    /// them, then answers that the board did not answer.
-    struct Held {
+    /// A dialer that holds each exchange at its gate until the test opens it,
+    /// counting them, then answers that the board did not answer.
+    struct Gated {
         calls: AtomicUsize,
         entered: Mutex<Sender<()>>,
         open: (Mutex<bool>, Condvar),
     }
 
-    impl Dialer for Held {
+    impl Dialer for Gated {
         fn exchange(&self, _: &Origin, _: &Request) -> Result<Response, DialError> {
             self.calls.fetch_add(1, Ordering::SeqCst);
             let _ = self.entered.lock().unwrap().send(());
@@ -517,10 +518,10 @@ mod tests {
         assert!(rx.try_recv().is_err(), "and emits nothing");
         assert_eq!(supplements.0.len(), touched, "and touches no supplement");
         assert!(sessions.close(&entry.reference).is_none(), "nothing is left to close");
-        let closed = sessions.register("b-1", open(1, "1.0.1", "1.0.1"), &mut supplements);
-        assert!(sessions.close(&closed.reference).is_some());
-        assert!(sessions.close(&closed.reference).is_none(), "closed once");
-        assert_eq!(sessions.end(&closed, &board, None, &mut supplements, &bus), super::closed(), "a death met after the close answers its arm");
+        let closed_first = sessions.register("b-1", open(1, "1.0.1", "1.0.1"), &mut supplements);
+        assert!(sessions.close(&closed_first.reference).is_some());
+        assert!(sessions.close(&closed_first.reference).is_none(), "closed once");
+        assert_eq!(sessions.end(&closed_first, &board, None, &mut supplements, &bus), closed(), "a death met after the close answers its arm");
         assert!(rx.try_recv().is_err());
     }
 
@@ -558,8 +559,8 @@ mod tests {
     #[test]
     fn a_second_hand_waits_for_the_arm_the_first_derives() {
         let (entered, at_the_dial) = channel();
-        let held = Arc::new(Held { calls: AtomicUsize::new(0), entered: Mutex::new(entered), open: (Mutex::new(false), Condvar::new()) });
-        let board = Board::new(Origin::parse("http://127.0.0.1:9").unwrap(), Arc::clone(&held));
+        let gated = Arc::new(Gated { calls: AtomicUsize::new(0), entered: Mutex::new(entered), open: (Mutex::new(false), Condvar::new()) });
+        let board = Board::new(Origin::parse("http://127.0.0.1:9").unwrap(), Arc::clone(&gated));
         let (sessions, bus) = (Sessions::new(), EventBus::new());
         let rx = bus.subscribe();
         let entry = sessions.register("b-1", open(1, "1.0.1", "1.0.1"), &mut Recorded::default());
@@ -569,13 +570,13 @@ mod tests {
             at_the_dial.recv().unwrap();
             let second = s.spawn(|| sessions.end(&entry, &board, None, &mut second_hand, &bus));
             thread::sleep(Duration::from_millis(50));
-            *held.open.0.lock().unwrap() = true;
-            held.open.1.notify_all();
+            *gated.open.0.lock().unwrap() = true;
+            gated.open.1.notify_all();
             (first.join().unwrap(), second.join().unwrap())
         });
         assert_eq!(first["arm"], "unreachable", "{first}");
         assert_eq!(second, first);
-        assert_eq!(held.calls.load(Ordering::SeqCst), 1, "the arm was derived once");
+        assert_eq!(gated.calls.load(Ordering::SeqCst), 1, "the arm was derived once");
         assert_eq!(rx.try_iter().filter(|e| e.name == EventName::SessionDied).count(), 1);
         assert_eq!((first_hand.0, second_hand.0), (vec!["narrow 1".to_string()], vec![]));
     }

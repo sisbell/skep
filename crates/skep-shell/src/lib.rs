@@ -33,7 +33,7 @@
 //!   reads and never from a preimage the page supplies — and THE BOARD's
 //!   BUDGETS the composer, the held store and the hold's door keep as the
 //!   board keeps them: its frame cap, its wire lists, an insert's values,
-//!   an address's components, a slot's spans, a shot's re-inserted values,
+//!   a tumbler's components, a slot's spans, a shot's re-inserted values,
 //!   and the document address in its one spelling.
 //! * `held` — THE HELD-BURST STORE (`client.md` §3c): one append-only file
 //!   per (board, principal) beside the key store — a header and two line

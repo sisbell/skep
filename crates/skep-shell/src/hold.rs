@@ -96,7 +96,7 @@ mod cause {
 /// here: a stop holds the burst before any dial, an ack is carried as any
 /// `op`'s, the death signal ends the session, and a non-burst never comes.
 #[derive(Debug, Clone, Copy)]
-pub enum Outcome<'a> {
+pub enum DialOutcome<'a> {
     /// The dial failed at the transport.
     Dial(&'a DialError),
     /// The board refused: a `rejected` document's key, or a non-200's error,
@@ -122,9 +122,9 @@ pub enum Decision {
 
 /// THE CLASSIFICATION TABLE (§3c.4): a burst's outcome, and how many prior
 /// `durability` refusals the SAME burst has met, to exactly one row.
-pub fn classify(outcome: Outcome<'_>, durability_seen: u32) -> Decision {
+pub fn classify(outcome: DialOutcome<'_>, durability_seen: u32) -> Decision {
     match outcome {
-        Outcome::Dial(e) => match e {
+        DialOutcome::Dial(e) => match e {
             // No connection was made — the burst did not leave.
             DialError::Connect(_) | DialError::Resolve(_) | DialError::Tls(_) => Decision::Hold { cause: cause::UNREACHABLE, sent: false },
             // The request left and its answer was no answer — it MAY have landed.
@@ -138,7 +138,7 @@ pub fn classify(outcome: Outcome<'_>, durability_seen: u32) -> Decision {
             // may have left, so hold `sent: true` — the resend reads first.
             _ => Decision::Hold { cause: cause::UNREACHABLE, sent: true },
         },
-        Outcome::Rejected { code, disposition } => match code {
+        DialOutcome::Rejected { code, disposition } => match code {
             // `poisoned` MAY have landed (§3c.2): the board's write path failed
             // AFTER the burst's frames reached its journal, and a restart's open
             // "rebuilds the line from the journal" (wire.md §Rejection codes) —
@@ -205,13 +205,13 @@ impl Burst {
         }
         let doc = frame["doc"].as_str().filter(|d| document_address(d).is_some()).ok_or_else(|| Refusal::malformed("frame.doc"))?.to_string();
         let attested = matches!(session.facts.kind, Kind::Signed { .. }) && frame["op"].as_str().is_some_and(in_checked_set);
-        let sent = json_len(&frame);
+        let sent_bytes = json_len(&frame);
         // The attest a page supplied is never stored, so a resend's frame is
         // the frame without its member — `,"attest":` and the value.
-        let stripped = sent.saturating_sub(frame.get("attest").map_or(0, |a| r#","attest":"#.len() + json_len(a)));
-        let resent = stripped + if attested { attest_room() } else { 0 };
-        if sent.max(resent) > MAX_FRAME_BYTES {
-            return Err(Refusal::shell(Name::FRAME_TOO_LARGE, json!({"bytes": sent.max(resent), "cap": MAX_FRAME_BYTES})));
+        let stripped_bytes = sent_bytes.saturating_sub(frame.get("attest").map_or(0, |a| r#","attest":"#.len() + json_len(a)));
+        let resent_bytes = stripped_bytes + if attested { attest_room() } else { 0 };
+        if sent_bytes.max(resent_bytes) > MAX_FRAME_BYTES {
+            return Err(Refusal::shell(Name::FRAME_TOO_LARGE, json!({"bytes": sent_bytes.max(resent_bytes), "cap": MAX_FRAME_BYTES})));
         }
         if attested && frame["op"] == "insert" {
             insert_terms(&frame).map_err(|h| Refusal::of_named(Name::ATTEST_NOT_COMPOSED, h))?;
@@ -393,12 +393,12 @@ struct PrincipalHold {
     custody: Custody,
     queue: HeldQueue,
     last_acked: HashMap<String, u64>,
-    durability: HashMap<u64, u32>,
+    durability_seen: HashMap<u64, u32>,
 }
 
 impl PrincipalHold {
     fn new() -> PrincipalHold {
-        PrincipalHold { custody: Custody::Unopened, queue: HeldQueue::in_memory(), last_acked: HashMap::new(), durability: HashMap::new() }
+        PrincipalHold { custody: Custody::Unopened, queue: HeldQueue::in_memory(), last_acked: HashMap::new(), durability_seen: HashMap::new() }
     }
 
     /// How many lines stand on `doc`.
@@ -546,7 +546,7 @@ impl Holds {
     pub fn open_session(&self, board_reference: &str, session: &SessionEntry) {
         let Some(slot) = self.slot(board_reference) else { return };
         self.establish(slot);
-        self.principal(&mut slot.lock(), session);
+        self.principal_hold(&mut slot.lock(), session);
     }
 
     /// The board's directory established where it is not yet: `H.1` read
@@ -571,18 +571,18 @@ impl Holds {
     /// its file where the board's directory is this shell's, memory alone
     /// otherwise. Under the session that stands, so the restart arm's re-open
     /// is covered too.
-    fn principal<'b>(&self, board_hold: &'b mut BoardHold, session: &SessionEntry) -> &'b mut PrincipalHold {
+    fn principal_hold<'b>(&self, board_hold: &'b mut BoardHold, session: &SessionEntry) -> &'b mut PrincipalHold {
         let BoardHold { directory, principals, .. } = board_hold;
-        let n = session.facts.principal;
-        let ph = principals.entry(n).or_insert_with(PrincipalHold::new);
+        let principal = session.facts.principal;
+        let ph = principals.entry(principal).or_insert_with(PrincipalHold::new);
         if ph.custody.settled() || !ph.queue.lines().is_empty() {
             return ph;
         }
         match directory {
-            Directory::ThisWindow { dir, .. } => match dir.open_file(n, session.facts.account.as_deref().unwrap_or("")) {
+            Directory::ThisWindow { dir, .. } => match dir.open_file(principal, session.facts.account.as_deref().unwrap_or("")) {
                 Ok(Opened::Live { queue, aside }) => {
                     if let Some(aside) = aside {
-                        self.say(format!("held: principal {n}'s held file named another board or principal, and is set aside at {}", aside.display()));
+                        self.say(format!("held: principal {principal}'s held file named another board or principal, and is set aside at {}", aside.display()));
                     }
                     ph.queue = queue;
                     ph.custody = Custody::File;
@@ -613,21 +613,21 @@ impl Holds {
         {
             let mut board_hold = slot.lock();
             let (node_stopped, writes_halted) = (board_hold.node_stopped, board_hold.writes_halted);
-            let ph = self.principal(&mut board_hold, session);
+            let ph = self.principal_hold(&mut board_hold, session);
             if let Custody::Halted { path, why } = &ph.custody {
                 return BurstAnswer::Answered(Err(store_halted(path, *why)));
             }
-            let standing = !ph.queue.lines().is_empty();
-            let stands = if node_stopped {
+            let line_stands = !ph.queue.lines().is_empty();
+            let hold_cause = if node_stopped {
                 Some(cause::STOPPED)
             } else if writes_halted {
                 Some(cause::HALTED)
-            } else if standing {
+            } else if line_stands {
                 Some(cause::BEHIND)
             } else {
                 None
             };
-            if let Some(cause) = stands {
+            if let Some(cause) = hold_cause {
                 return BurstAnswer::Answered(self.hold_line(board_reference, &mut board_hold, session, &burst, Reason::of(cause, false)));
             }
         }
@@ -652,7 +652,7 @@ impl Holds {
 
     /// One line entered in the principal's queue — copied to its file where
     /// it has one, its `base` the `at` of the last acked write on the document
-    /// or else the session's open position (§3c.2) — the `held` event fired,
+    /// or else the session's open position (§3c.2) — the `held` event emitted,
     /// and the answer: `{resp: held, held: <k>, cause}`, the cause
     /// `other_window` where another window's lock keeps the line in memory
     /// alone, and `unwritable` beside it — why — where the device refused its
@@ -660,7 +660,7 @@ impl Holds {
     /// principal's queue holds its budget already
     /// (`held::MAX_HELD_FRAME_BYTES`), and nothing held.
     fn hold_line(&self, board_reference: &str, board_hold: &mut BoardHold, session: &SessionEntry, burst: &Burst, reason: Reason) -> Result<Value, Refusal> {
-        let ph = self.principal(board_hold, session);
+        let ph = self.principal_hold(board_hold, session);
         if let Custody::Halted { path, why } = &ph.custody {
             return Err(store_halted(path, *why));
         }
@@ -668,7 +668,7 @@ impl Holds {
         let base = ph.last_acked.get(doc).copied().unwrap_or(session.opened_at);
         let state = line_state(&reason);
         let mut said = reason.cause.clone();
-        let appended = ph.queue.hold(doc, burst.frame()["id"].as_str(), base, strip_attest(burst.frame()), reason).map_err(unheld)?;
+        let entered = ph.queue.hold(doc, burst.frame()["id"].as_str(), base, strip_attest(burst.frame()), reason).map_err(unheld)?;
         let unwritable = match &ph.custody {
             Custody::OtherWindow => {
                 said = cause::OTHER_WINDOW.to_string();
@@ -676,14 +676,14 @@ impl Holds {
                 None
             }
             Custody::Unwritable(why) => Some(why.clone()),
-            _ => appended.unwritten.map(|e| e.to_string()),
+            _ => entered.unwritten.map(|e| e.to_string()),
         };
-        let mut answer = json!({"resp": "held", "held": appended.k, "cause": said});
+        let mut answer = json!({"resp": "held", "held": entered.k, "cause": said});
         if let Some(why) = unwritable {
             answer["unwritable"] = Value::from(why);
         }
-        // `fire` touches the bus alone, so it is safe under the holds' lock.
-        self.fire(board_reference, session, doc, ph.count(doc), state, Some(&said));
+        // `emit_held` touches the bus alone, so it is safe under the holds' lock.
+        self.emit_held(board_reference, session, doc, ph.count(doc), state, Some(&said));
         Ok(answer)
     }
 
@@ -710,7 +710,7 @@ impl Holds {
     /// other (P39); `store_halted` where P38 halted the file.
     pub fn lines(&self, board_reference: &str, session: &SessionEntry) -> Result<Value, Refusal> {
         let Some(mut board_hold) = self.lock(board_reference) else { return Ok(Value::Array(Vec::new())) };
-        let ph = self.principal(&mut board_hold, session);
+        let ph = self.principal_hold(&mut board_hold, session);
         if let Custody::Halted { path, why } = &ph.custody {
             return Err(store_halted(path, *why));
         }
@@ -725,7 +725,7 @@ impl Holds {
     pub fn resolve(&self, board_reference: &str, session: &SessionEntry, k: u64, act: &str) -> Result<Value, Refusal> {
         let doc = {
             let Some(mut board_hold) = self.lock(board_reference) else { return Err(Refusal::shell(Name::NO_SUCH_HELD, json!({"held": k}))) };
-            let ph = self.principal(&mut board_hold, session);
+            let ph = self.principal_hold(&mut board_hold, session);
             let Some(line) = ph.queue.lines().iter().find(|l| l.k == k) else { return Err(Refusal::shell(Name::NO_SUCH_HELD, json!({"held": k}))) };
             // A line awaiting the person's act alone takes one (P10).
             if !awaits_act(line) {
@@ -772,7 +772,7 @@ impl Holds {
         }) else {
             return;
         };
-        self.fire(board_reference, session, doc, count, state, None);
+        self.emit_held(board_reference, session, doc, count, state, None);
     }
 
     /// THE PROBE (§3c.4), and the RESEND it lets run (§3c.5): reached by the
@@ -859,20 +859,20 @@ impl Holds {
             ReadOutcome::Unread => {}
             ReadOutcome::Moved => {
                 self.mark_moved(board_reference, principal, doc);
-                self.fire(board_reference, session, doc, self.count(board_reference, principal, doc), HeldState::Moved, None);
+                self.emit_held(board_reference, session, doc, self.count(board_reference, principal, doc), HeldState::Moved, None);
             }
             ReadOutcome::Landed { at } => {
                 self.done(board_reference, principal, head.k, Done::Kept { at });
                 match self.count(board_reference, principal, doc) {
-                    0 => self.fire(board_reference, session, doc, 0, HeldState::Kept, None),
+                    0 => self.emit_held(board_reference, session, doc, 0, HeldState::Kept, None),
                     rest => {
-                        self.fire(board_reference, session, doc, rest, HeldState::Sending, None);
+                        self.emit_held(board_reference, session, doc, rest, HeldState::Sending, None);
                         self.send_rest(board_reference, board, session, doc);
                     }
                 }
             }
             ReadOutcome::SendFromHead => {
-                self.fire(board_reference, session, doc, self.count(board_reference, principal, doc), HeldState::Sending, None);
+                self.emit_held(board_reference, session, doc, self.count(board_reference, principal, doc), HeldState::Sending, None);
                 self.send_rest(board_reference, board, session, doc);
             }
         }
@@ -986,26 +986,26 @@ impl Holds {
     /// read. Whether sending may go on to the document's next line.
     fn send_line(&self, board_reference: &str, board: &Board, session: &SessionEntry, line: &HeldLine) -> bool {
         let principal = session.facts.principal;
-        let seen = self.with_principal(board_reference, principal, |ph| ph.durability.get(&line.k).copied()).flatten().unwrap_or(0);
-        match self.dial(board, session, &line.frame, seen) {
+        let durability_seen = self.with_principal(board_reference, principal, |ph| ph.durability_seen.get(&line.k).copied()).flatten().unwrap_or(0);
+        match self.dial(board, session, &line.frame, durability_seen) {
             Dialed::Acked(ack) => {
                 self.note_ack(board_reference, session, &line.frame, &ack);
                 self.done(board_reference, principal, line.k, Done::Kept { at: acked_at(&ack) });
                 let rest = self.count(board_reference, principal, &line.doc);
-                self.fire(board_reference, session, &line.doc, rest, if rest == 0 { HeldState::Kept } else { HeldState::Sending }, None);
+                self.emit_held(board_reference, session, &line.doc, rest, if rest == 0 { HeldState::Kept } else { HeldState::Sending }, None);
                 true
             }
             Dialed::Held(reason) => {
                 let state = line_state(&reason);
                 let said = reason.cause.clone();
                 self.with_principal(board_reference, principal, |ph| self.remark_line(ph, line.k, reason));
-                self.fire(board_reference, session, &line.doc, self.count(board_reference, principal, &line.doc), state, Some(&said));
+                self.emit_held(board_reference, session, &line.doc, self.count(board_reference, principal, &line.doc), state, Some(&said));
                 false
             }
             Dialed::Faced(refusal) => {
                 // The rider's count (§3c.4): the third `durability` holds.
                 if matches!(&refusal, Refusal::Board(r) if r.code == "durability") {
-                    self.with_principal(board_reference, principal, |ph| *ph.durability.entry(line.k).or_insert(0) += 1);
+                    self.with_principal(board_reference, principal, |ph| *ph.durability_seen.entry(line.k).or_insert(0) += 1);
                 }
                 self.say(format!("held: line {} on {} was not taken ({refusal}); it is sent again at the next wake", line.k, line.doc));
                 false
@@ -1025,7 +1025,7 @@ impl Holds {
         match session.attest(board, &self.store, &mut frame) {
             Ok(()) => {}
             Err(Refusal::Unreachable(e)) => {
-                return match classify(Outcome::Dial(&e), 0) {
+                return match classify(DialOutcome::Dial(&e), 0) {
                     Decision::Hold { cause, .. } => Dialed::Held(Reason::of(cause, false)),
                     _ => Dialed::Faced(Refusal::Unreachable(e)),
                 };
@@ -1037,16 +1037,16 @@ impl Holds {
             Ok(Answer::Document(v)) => match Rejection::of(&v) {
                 None => Dialed::Acked(v),
                 Some(r) => {
-                    let decision = classify(Outcome::Rejected { code: r.key(), disposition: v["disposition"].as_str().unwrap_or("") }, durability_seen);
+                    let decision = classify(DialOutcome::Rejected { code: r.key(), disposition: v["disposition"].as_str().unwrap_or("") }, durability_seen);
                     Dialed::refused(decision, &r.token(), &v, Refusal::from(r.refused(&v)))
                 }
             },
-            Err(Halt::Dial(e)) => match classify(Outcome::Dial(&e), 0) {
+            Err(Halt::Dial(e)) => match classify(DialOutcome::Dial(&e), 0) {
                 Decision::Hold { cause, sent } => Dialed::Held(Reason::of(cause, sent)),
                 _ => Dialed::Faced(Refusal::Unreachable(e)),
             },
             Err(Halt::Refused(r)) => {
-                let decision = classify(Outcome::Rejected { code: &r.code, disposition: r.body["disposition"].as_str().unwrap_or("") }, durability_seen);
+                let decision = classify(DialOutcome::Rejected { code: &r.code, disposition: r.body["disposition"].as_str().unwrap_or("") }, durability_seen);
                 let (token, verdict) = (r.token(), r.body.clone());
                 Dialed::refused(decision, &token, &verdict, Refusal::Board(r))
             }
@@ -1092,7 +1092,7 @@ impl Holds {
         if let Err(DoneError::Unwritten(e)) = ph.queue.done(k, done) {
             self.say(format!("held: line {k} is settled, and its `done` could not be written ({e}); a reopen reads it as held, and its read decides it"));
         }
-        ph.durability.remove(&k);
+        ph.durability_seen.remove(&k);
     }
 
     /// The document's head: its first standing line in `k` order.
@@ -1105,9 +1105,9 @@ impl Holds {
         self.with_principal(board_reference, principal, |ph| ph.count(doc)).unwrap_or(0)
     }
 
-    /// Fire the `held` event (§4b.2): `{board, session, doc, held, state,
+    /// Emit the `held` event (§4b.2): `{board, session, doc, held, state,
     /// cause?}`, under the session the change was made for.
-    fn fire(&self, board_reference: &str, session: &SessionEntry, doc: &str, held: u64, state: HeldState, cause: Option<&str>) {
+    fn emit_held(&self, board_reference: &str, session: &SessionEntry, doc: &str, held: u64, state: HeldState, cause: Option<&str>) {
         let mut data = json!({"board": board_reference, "session": session.reference, "doc": doc, "held": held, "state": state.as_str()});
         if let Some(c) = cause {
             data["cause"] = Value::from(c);
@@ -1130,7 +1130,7 @@ fn delivers(delivery: &Value, want: &[Cow<'_, [u8]>]) -> bool {
 /// a line no reader of the file reads.
 fn unheld(unheld: Unheld) -> Refusal {
     match unheld {
-        Unheld::Full { held, adding } => Refusal::shell(Name::HELD_FULL, json!({"held_bytes": held, "frame_bytes": adding, "cap": MAX_HELD_FRAME_BYTES})),
+        Unheld::Full { held_bytes, frame_bytes } => Refusal::shell(Name::HELD_FULL, json!({"held_bytes": held_bytes, "frame_bytes": frame_bytes, "cap": MAX_HELD_FRAME_BYTES})),
         Unheld::Unreadable => Refusal::malformed("frame.doc"),
     }
 }

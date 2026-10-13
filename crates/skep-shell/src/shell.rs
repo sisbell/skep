@@ -164,7 +164,7 @@ pub enum NodeState {
 
 /// The write kinds of the wire (`docs/wire.md` §Operations): a frame of
 /// one of these in the guest form is refused by the shell without a dial.
-pub const WRITE_OPS: [&str; 16] = [
+pub const WRITE_KINDS: [&str; 16] = [
     "delegate",
     "register_node",
     "create_new_document",
@@ -340,7 +340,8 @@ pub struct Shell {
     anchors: PathBuf,
     session_mode: SessionMode,
     talk: Talk,
-    own_node: Option<String>,
+    /// The own node's board reference, where the shell runs one.
+    own_node_reference: Option<String>,
     host_name: String,
     date: String,
 }
@@ -351,9 +352,9 @@ impl fmt::Debug for Shell {
     }
 }
 
-/// A principal from a value: a non-negative integer no greater than
-/// 2^53 − 1 (AUTH-6.36).
-fn principal_of_value(v: &Value) -> Option<u64> {
+/// A principal argument as a call passes it: a non-negative integer no
+/// greater than 2^53 − 1 (AUTH-6.36).
+fn principal_arg(v: &Value) -> Option<u64> {
     v.as_u64().filter(|n| *n <= (1u64 << 53) - 1)
 }
 
@@ -433,21 +434,21 @@ impl Shell {
             ArmConfig::Script(answers) => DevArm::script(answers, Arc::clone(&opts.talk)),
         });
         let mut boards = Vec::new();
-        let mut own_node = None;
+        let mut own_node_reference = None;
         for origin in &opts.boards {
             let board = Arc::new(Board::new(origin.clone(), LoggingDialer::new(Arc::clone(&log))));
             let entry = Arc::new(BoardEntry { reference: board_reference(), origin: origin.clone(), board });
             if opts.own_node.as_ref() == Some(origin) {
-                own_node = Some(entry.reference.clone());
+                own_node_reference = Some(entry.reference.clone());
             }
             boards.push(entry);
         }
         let reopen_store = matches!(opts.session_mode, SessionMode::Signed { .. }).then(|| Arc::clone(&store));
-        let held_boards = boards.iter().map(|entry| (entry.reference.clone(), Arc::clone(&entry.board)));
-        let holds = Holds::new(Arc::clone(&sessions), Arc::clone(&bus), Arc::clone(&store), opts.store_dir.clone(), Arc::clone(&opts.talk), held_boards);
+        let boards_by_reference = boards.iter().map(|entry| (entry.reference.clone(), Arc::clone(&entry.board)));
+        let holds = Holds::new(Arc::clone(&sessions), Arc::clone(&bus), Arc::clone(&store), opts.store_dir.clone(), Arc::clone(&opts.talk), boards_by_reference);
         let shared = Shared { bus: Arc::clone(&bus), sessions: Arc::clone(&sessions), reopen_store: reopen_store.clone(), data_dir: opts.store_dir.clone(), talk: Arc::clone(&opts.talk), holds: Arc::clone(&holds) };
         let threads: Vec<FeedThreads> = boards.iter().map(|entry| FeedThreads::spawn(Arc::clone(entry), shared.clone())).collect();
-        let feeds = boards.iter().zip(&threads).map(|(entry, threads)| (entry.reference.clone(), threads.feed())).collect();
+        let feeds = boards.iter().zip(&threads).map(|(entry, board_threads)| (entry.reference.clone(), board_threads.feed())).collect();
         let secs = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
         Shell {
             boards,
@@ -464,7 +465,7 @@ impl Shell {
             anchors,
             session_mode: opts.session_mode,
             talk: opts.talk,
-            own_node,
+            own_node_reference,
             host_name: host_name(),
             date: civil_date(secs),
         }
@@ -492,7 +493,7 @@ impl Shell {
 
     /// The board references issued, in the list's order.
     pub fn board_references(&self) -> Vec<String> {
-        self.boards.iter().map(|b| b.reference.clone()).collect()
+        self.boards.iter().map(|entry| entry.reference.clone()).collect()
     }
 
     /// The own node's state as the verb that owns it reports it: what
@@ -503,7 +504,7 @@ impl Shell {
     /// `unreachable` of its own, and `Running` here is the one `running`
     /// (`feed.rs`'s `unreachable`).
     pub fn set_node_state(&self, state: NodeState) {
-        let Some(board_reference) = &self.own_node else { return };
+        let Some(board_reference) = &self.own_node_reference else { return };
         let running = matches!(state, NodeState::Running);
         let state = match state {
             NodeState::Running => "running",
@@ -541,10 +542,11 @@ impl Shell {
         self.feeds.iter().find(|(r, _)| r == board_reference).map(|(_, feed)| feed).expect("every board of this shell has its feed, fixed at the open")
     }
 
-    /// The board a reference names, or THE PIN's unknown-board refusal.
-    fn board(&self, board_reference: &Value) -> Result<Arc<BoardEntry>, Refusal> {
+    /// The entry of the board a reference names, or THE PIN's unknown-board
+    /// refusal.
+    fn board_entry(&self, board_reference: &Value) -> Result<Arc<BoardEntry>, Refusal> {
         let Some(board_reference) = board_reference.as_str() else { return Err(Refusal::malformed("board")) };
-        self.boards.iter().find(|b| b.reference == board_reference).cloned().ok_or_else(|| Refusal::shell(Name::UNKNOWN_BOARD, json!({"board": board_reference})))
+        self.boards.iter().find(|entry| entry.reference == board_reference).cloned().ok_or_else(|| Refusal::shell(Name::UNKNOWN_BOARD, json!({"board": board_reference})))
     }
 
     /// The session a reference names, or THE PIN's "session ended".
@@ -553,9 +555,9 @@ impl Shell {
         self.sessions.get(session_reference).ok_or_else(|| Refusal::shell(Name::SESSION_ENDED, json!({"session": session_reference})))
     }
 
-    /// The board a session stands at.
-    fn board_of_session(&self, session: &SessionEntry) -> Arc<BoardEntry> {
-        self.boards.iter().find(|b| b.reference == session.board_reference).cloned().expect("a session stands at a board of this shell")
+    /// The entry of the board a session stands at.
+    fn board_entry_of(&self, session: &SessionEntry) -> Arc<BoardEntry> {
+        self.boards.iter().find(|entry| entry.reference == session.board_reference).cloned().expect("a session stands at a board of this shell")
     }
 
     /// A person for `walk` at the board `board_reference` names, the
@@ -580,7 +582,7 @@ impl Shell {
     /// The principal a ceremonial row runs as: the row's own where it names
     /// one, else the session mode's.
     fn principal_for(&self, args: &Value) -> u64 {
-        principal_of_value(&args["principal"]).unwrap_or(self.session_mode.principal())
+        principal_arg(&args["principal"]).unwrap_or(self.session_mode.principal())
     }
 
     /// Two anchor destinations under the shell's own directory for `walk`.
@@ -588,13 +590,13 @@ impl Shell {
         vec![self.anchors.join(format!("{walk}-a")), self.anchors.join(format!("{walk}-b"))]
     }
 
-    /// A death signal met on `entry`'s token under the shell's hands: the
+    /// A death signal met on `session`'s token under the shell's hands: the
     /// session ended by the one sequence the board's feed thread runs too,
     /// whichever hand came first; the call's refusal, carrying the arm.
-    fn died(&self, entry: &SessionEntry) -> Refusal {
-        let board = self.board_of_session(entry);
-        let reason = self.sessions.end(entry, &board.board, self.reopen_store.as_deref(), &mut self.feed(&entry.board_reference), &self.bus);
-        Refusal::shell(Name::SESSION_DIED, json!({"session": entry.reference, "reason": reason}))
+    fn died(&self, session: &SessionEntry) -> Refusal {
+        let entry = self.board_entry_of(session);
+        let reason = self.sessions.end(session, &entry.board, self.reopen_store.as_deref(), &mut self.feed(&session.board_reference), &self.bus);
+        Refusal::shell(Name::SESSION_DIED, json!({"session": session.reference, "reason": reason}))
     }
 
     // ── THE CALLS ────────────────────────────────────────────────────────
@@ -606,7 +608,7 @@ impl Shell {
         let started = Instant::now();
         let bytes_in = json_len(args);
         let call = Call::named(name);
-        let outcome = match call {
+        let answer = match call {
             Some(Call::Boards) => Ok(self.boards()),
             Some(Call::Session) => self.session_call(args),
             Some(Call::Close) => self.close(args),
@@ -631,42 +633,42 @@ impl Shell {
             Some(Call::Resolve) => self.resolve(args),
             None => Err(Refusal::shell(Name::UNKNOWN_CALL, json!({"call": name}))),
         };
-        let (bytes_out, answered) = match &outcome {
+        let (bytes_out, outcome) = match &answer {
             Ok(v) => (json_len(v), CallOutcome::Result),
             Err(r) => (json_len(&r.to_value()), CallOutcome::Refused),
         };
         match call {
-            Some(call) => self.log.call(call.as_str(), bytes_in, bytes_out, started.elapsed(), answered),
+            Some(call) => self.log.call(call.as_str(), bytes_in, bytes_out, started.elapsed(), outcome),
             None => self.log.unknown_call(name.len(), bytes_in, bytes_out, started.elapsed()),
         }
-        outcome
+        answer
     }
 
     /// `boards()` → `[{board, name, origin}]`: `name` the origin, v1's
     /// fallback (ps3-4: every board takes it while no board publishes a
     /// display name).
     fn boards(&self) -> Value {
-        Value::Array(self.boards.iter().map(|b| json!({"board": b.reference, "name": b.origin.as_str(), "origin": b.origin.as_str()})).collect())
+        Value::Array(self.boards.iter().map(|entry| json!({"board": entry.reference, "name": entry.origin.as_str(), "origin": entry.origin.as_str()})).collect())
     }
 
     /// `session(board, principal)` → `{session, principal, account}`: the
     /// mode's opening as `principal`, the reference issued in the token's
     /// place.
     fn session_call(&self, args: &Value) -> Result<Value, Refusal> {
-        let board = self.board(&args["board"])?;
-        let principal = principal_of_value(&args["principal"]).unwrap_or(self.session_mode.principal());
+        let entry = self.board_entry(&args["board"])?;
+        let principal = principal_arg(&args["principal"]).unwrap_or(self.session_mode.principal());
         let open = match self.session_mode {
-            SessionMode::Bare { .. } => sessions::open_bare(&board.board, principal)?,
-            SessionMode::Signed { .. } => sessions::open_signed(&board.board, &self.store, principal)?,
+            SessionMode::Bare { .. } => sessions::open_bare(&entry.board, principal)?,
+            SessionMode::Signed { .. } => sessions::open_signed(&entry.board, &self.store, principal)?,
         };
-        let entry = self.sessions.register(&board.reference, open, &mut self.feed(&board.reference));
+        let session = self.sessions.register(&entry.reference, open, &mut self.feed(&entry.reference));
         // The principal's held file read whole at its session's open (§3c.7),
         // so `held(session)` lists its lines at once. The resend is NOT run
         // here: the page reads `held(session)` right after opening, and a
         // synchronous resend would clear the lines before it; the feed's probe
         // and its daemon-running tick drive it once a session stands (§3c.5).
-        self.holds.open_session(&board.reference, &entry);
-        Ok(json!({"session": entry.reference, "principal": principal, "account": entry.facts.account}))
+        self.holds.open_session(&entry.reference, &session);
+        Ok(json!({"session": session.reference, "principal": principal, "account": session.facts.account}))
     }
 
     /// `close(session)` → `{}`: the session out of the table; its drafts
@@ -678,11 +680,11 @@ impl Shell {
     /// first — answers "session ended".
     fn close(&self, args: &Value) -> Result<Value, Refusal> {
         let Some(session_reference) = args["session"].as_str() else { return Err(Refusal::malformed("session")) };
-        let entry = self.sessions.close(session_reference).ok_or_else(|| Refusal::shell(Name::SESSION_ENDED, json!({"session": session_reference})))?;
-        self.feed(&entry.board_reference).closing(&entry);
-        let board = self.board_of_session(&entry);
-        let answer = board.board.session_close(&entry.token).map_err(Refusal::from);
-        self.bus.emit(EventName::SessionDied, json!({"session": entry.reference, "reason": sessions::closed()}));
+        let session = self.sessions.close(session_reference).ok_or_else(|| Refusal::shell(Name::SESSION_ENDED, json!({"session": session_reference})))?;
+        self.feed(&session.board_reference).closing(&session);
+        let entry = self.board_entry_of(&session);
+        let answer = entry.board.session_close(&session.token).map_err(Refusal::from);
+        self.bus.emit(EventName::SessionDied, json!({"session": session.reference, "reason": sessions::closed()}));
         answer.map(|_| json!({}))
     }
 
@@ -704,9 +706,9 @@ impl Shell {
         let id = self.store.generate(Some(label.clone())).map_err(|e| Refusal::of_named(Name::STORE_UNWRITABLE, e.into()))?;
         let path = self.store.key_path(&id.0);
         let key = self.store.select(&KeySelector::Path(&path), Purpose::Read).map_err(|e| Refusal::of_named(Name::STORE_UNREADABLE, e.into()))?;
-        let entry = Enrollment::new(key.public.clone(), false, Some(label.as_str().to_string())).map_err(|e| Refusal::shell(Name::EMPTY_LABEL, json!({"cause": e.to_string()})))?;
+        let enrollment = Enrollment::new(key.public.clone(), false, Some(label.as_str().to_string())).map_err(|e| Refusal::shell(Name::EMPTY_LABEL, json!({"cause": e.to_string()})))?;
         self.say(format!("keygen: the key {} is written to the store under the byline `{}`", key.fingerprint, render_inert(label.as_str())));
-        Ok(json!({"fingerprint": key.fingerprint.to_hex(), "payload": encode_enroll(&[entry]), "outstanding": OUTSTANDING_ACT}))
+        Ok(json!({"fingerprint": key.fingerprint.to_hex(), "payload": encode_enroll(&[enrollment]), "outstanding": OUTSTANDING_ACT}))
     }
 
     /// `fingerprint({select?, payload?})` → `[{fingerprint, label,
@@ -732,7 +734,7 @@ impl Shell {
         for key in &keys {
             let bound: Vec<String> = bindings
                 .iter()
-                .filter_map(|b| match b {
+                .filter_map(|binding| match binding {
                     Binding::Enrollment { origin, principal, account, fingerprint } if *fingerprint == key.fingerprint => Some(format!("{origin} principal {principal} account {account}")),
                     _ => None,
                 })
@@ -760,10 +762,10 @@ impl Shell {
     /// notebook door is two calls, `keygen` then `claim` — and
     /// `already_claimed` where another store's claim stands.
     fn claim(&self, args: &Value) -> Result<Value, Refusal> {
-        let board = self.board(&args["board"])?;
-        let principal = principal_of_value(&args["principal"]);
+        let entry = self.board_entry(&args["board"])?;
+        let principal = principal_arg(&args["principal"]);
         if self.store.list().is_ok_and(|keys| keys.is_empty()) {
-            let mode = Mode::of(&board.board.health()?);
+            let mode = Mode::of(&entry.board.health()?);
             return Err(Refusal::of_named(Name::NO_KEY, skep_client::store::arm4_face(&self.store, &[], mode)));
         }
         let opts = NotebookOptions {
@@ -774,8 +776,8 @@ impl Shell {
             host_name: self.host_name.clone(),
             date: self.date.clone(),
         };
-        let mut person = self.person("claim", Some(&board.reference));
-        match claim::notebook(&board.board, &self.store, &mut person, &opts) {
+        let mut person = self.person("claim", Some(&entry.reference));
+        match claim::notebook(&entry.board, &self.store, &mut person, &opts) {
             Ok(ClaimOutcome::Ours(c)) => Ok(json!({
                 "account": c.account,
                 "principal": c.principal,
@@ -792,11 +794,11 @@ impl Shell {
     /// `enroll(board, payload)` → the three facts: the hop's signed-in half
     /// run by the shell in its own full session as the mode's principal.
     fn enroll(&self, args: &Value) -> Result<Value, Refusal> {
-        let board = self.board(&args["board"])?;
+        let entry = self.board_entry(&args["board"])?;
         let payload = args["payload"].as_str().ok_or_else(|| Refusal::malformed("payload"))?;
         let opts = enroll::EnrollOptions { principal: self.principal_for(args), payload: format!("{payload}\n").into_bytes() };
-        let mut person = self.person("enroll", Some(&board.reference));
-        match enroll::enroll(&board.board, &self.store, &mut person, &opts) {
+        let mut person = self.person("enroll", Some(&entry.reference));
+        match enroll::enroll(&entry.board, &self.store, &mut person, &opts) {
             Ok(e) => Ok(json!({
                 "facts": facts_json(&e.facts),
                 "fingerprints": e.fingerprints.iter().map(|f| f.to_hex()).collect::<Vec<_>>(),
@@ -814,47 +816,47 @@ impl Shell {
     /// landing's anchor files) is not reached here: the shell has no
     /// window for the files' pick, and the landing is taken as the hop's.
     fn bind(&self, args: &Value) -> Result<Value, Refusal> {
-        let board = self.board(&args["board"])?;
-        let principal = principal_of_value(&args["principal"]).ok_or_else(|| Refusal::malformed("principal"))?;
+        let entry = self.board_entry(&args["board"])?;
+        let principal = principal_arg(&args["principal"]).ok_or_else(|| Refusal::malformed("principal"))?;
         let account = args["account"].as_str().ok_or_else(|| Refusal::malformed("account"))?.trim().to_string();
         let origin = args["origin"].as_str().ok_or_else(|| Refusal::malformed("origin"))?;
         if !is_address_text(&account) {
             return Err(Refusal::malformed("account"));
         }
-        if origin != board.origin.as_str() {
-            return Err(Refusal::shell(Name::ORIGIN_DISAGREES, json!({"pasted": origin, "dialed": board.origin.as_str()})));
+        if origin != entry.origin.as_str() {
+            return Err(Refusal::shell(Name::ORIGIN_DISAGREES, json!({"pasted": origin, "dialed": entry.origin.as_str()})));
         }
-        let b = &board.board;
-        let health = b.health()?;
-        origin_arm(b.signed(), &health).map_err(|h| Refusal::of_named(Name::ORIGIN_STATE, h))?;
-        match principal_of(b, &account)? {
+        let board = &entry.board;
+        let health = board.health()?;
+        origin_arm(board.signed(), &health).map_err(|h| Refusal::of_named(Name::ORIGIN_STATE, h))?;
+        match principal_of(board, &account)? {
             Some(p) if p == principal => {}
             other => return Err(Refusal::shell(Name::ACCOUNT_DISAGREES, json!({"pasted_principal": principal, "seated": other, "account": account}))),
         }
-        match b.principal_prefix(principal)? {
+        match board.principal_prefix(principal)? {
             Some(a) if a == account => {}
             other => return Err(Refusal::shell(Name::ACCOUNT_DISAGREES, json!({"pasted_account": account, "principal_prefix": other}))),
         }
-        let key = sessions::signing_key(&self.store, &board.origin, principal, || Mode::of(&health))?;
-        let walk = walk_to_set(b, &account)?;
+        let key = sessions::signing_key(&self.store, &entry.origin, principal, || Mode::of(&health))?;
+        let walk = walk_to_set(board, &account)?;
         let own = [(key.fingerprint, key.public.clone())];
-        if let Err(h) = key_face(b, &walk, &key.fingerprint, &own, Site::Tail) {
+        if let Err(h) = key_face(board, &walk, &key.fingerprint, &own, Site::Tail) {
             let name = match KeyDiagnosis::of(&walk.set, &key.fingerprint) {
                 KeyDiagnosis::Retired { .. } => Name::RETIRED,
                 _ => Name::NOT_ENROLLED,
             };
             return Err(Refusal::of_named(name, h));
         }
-        let reads = FirstSessionReads::take(b, &account, &key.fingerprint, Some(&self.store))?;
+        let reads = FirstSessionReads::take(board, &account, &key.fingerprint, Some(&self.store))?;
         let mut warnings: Vec<String> = Vec::new();
         if reads.anything_owed() {
             let signer = sessions::signer(&self.store, &key.path)?;
-            let session = handshake(b, Scope::Content, &*signer, principal, Site::Tail)?;
-            let done = first_session(b, &reads, &session, &*signer, Some(&self.store));
+            let session = handshake(board, Scope::Content, &*signer, principal, Site::Tail)?;
+            let done = first_session(board, &reads, &session, &*signer, Some(&self.store));
             let _ = session.close();
             warnings.extend(done?.warnings);
         }
-        let line = Binding::Enrollment { origin: board.origin.clone(), principal, account: account.clone(), fingerprint: key.fingerprint };
+        let line = Binding::Enrollment { origin: entry.origin.clone(), principal, account: account.clone(), fingerprint: key.fingerprint };
         let mut out = Map::new();
         if let Err(w) = self.store.bind(&line) {
             out.insert("warning".into(), Value::from(w.to_string()));
@@ -869,7 +871,7 @@ impl Shell {
     /// three facts: the device arm, or the loss arm; the import SECRET,
     /// the dev arm's.
     fn recover(&self, args: &Value) -> Result<Value, Refusal> {
-        let board = self.board(&args["board"])?;
+        let entry = self.board_entry(&args["board"])?;
         let lost: Vec<String> = args["lost"].as_array().into_iter().flatten().filter_map(|v| v.as_str().map(str::to_string)).collect();
         let opts = recover::RecoverOptions {
             principal: self.principal_for(args),
@@ -882,8 +884,8 @@ impl Shell {
             host_name: self.host_name.clone(),
             date: self.date.clone(),
         };
-        let mut person = self.person("recover", Some(&board.reference));
-        match recover::recover(&board.board, &self.store, &mut person, &opts) {
+        let mut person = self.person("recover", Some(&entry.reference));
+        match recover::recover(&entry.board, &self.store, &mut person, &opts) {
             Ok(r) => Ok(json!({
                 "facts": facts_json(&r.facts),
                 "enrolled": r.enrolled.iter().map(|f| f.to_hex()).collect::<Vec<_>>(),
@@ -898,14 +900,14 @@ impl Shell {
 
     /// `rotate(board, {principal, label?, payload?})` → the three facts.
     fn rotate(&self, args: &Value) -> Result<Value, Refusal> {
-        let board = self.board(&args["board"])?;
+        let entry = self.board_entry(&args["board"])?;
         let opts = rotate::RotateOptions {
             principal: self.principal_for(args),
             label: args["label"].as_str().map(str::to_string),
             payload: args["payload"].as_str().map(|p| format!("{p}\n").into_bytes()),
         };
-        let mut person = self.person("rotate", Some(&board.reference));
-        match rotate::rotate(&board.board, &self.store, &mut person, &opts) {
+        let mut person = self.person("rotate", Some(&entry.reference));
+        match rotate::rotate(&entry.board, &self.store, &mut person, &opts) {
             Ok(r) => Ok(json!({
                 "facts": facts_json(&r.facts),
                 "old": r.old.to_hex(),
@@ -920,11 +922,11 @@ impl Shell {
     /// `retire(board, principal, fingerprint)` → `{}`: the preview and its
     /// typed confirmation the dev arm's.
     fn retire(&self, args: &Value) -> Result<Value, Refusal> {
-        let board = self.board(&args["board"])?;
+        let entry = self.board_entry(&args["board"])?;
         let fingerprint = args["fingerprint"].as_str().ok_or_else(|| Refusal::malformed("fingerprint"))?;
         let opts = retire::RetireOptions { principal: self.principal_for(args), fingerprint_prefix: fingerprint.to_string() };
-        let mut person = self.person("retire", Some(&board.reference));
-        match retire::retire(&board.board, &self.store, &mut person, &opts) {
+        let mut person = self.person("retire", Some(&entry.reference));
+        match retire::retire(&entry.board, &self.store, &mut person, &opts) {
             Ok(_) => Ok(json!({})),
             Err(h) => Err(self.walk_refusal(&person, h, None)),
         }
@@ -933,7 +935,7 @@ impl Shell {
     /// `handoff(board, {account, payload?})`: beat (a) alone without a
     /// payload, answering the address; the genesis with one, `{}`.
     fn handoff(&self, args: &Value) -> Result<Value, Refusal> {
-        let board = self.board(&args["board"])?;
+        let entry = self.board_entry(&args["board"])?;
         let account = args["account"].as_str().ok_or_else(|| Refusal::malformed("account"))?;
         let opts = handoff::HandoffOptions {
             principal: self.principal_for(args),
@@ -941,8 +943,8 @@ impl Shell {
             payload: args["payload"].as_str().map(|p| format!("{p}\n").into_bytes()),
             anchor: None,
         };
-        let mut person = self.person("handoff", Some(&board.reference));
-        match handoff::handoff(&board.board, &self.store, &mut person, &opts) {
+        let mut person = self.person("handoff", Some(&entry.reference));
+        match handoff::handoff(&entry.board, &self.store, &mut person, &opts) {
             Ok(handoff::HandoffOutcome::Delegated { account, principal, already }) => Ok(json!({"address": account, "principal": principal, "already": already})),
             Ok(handoff::HandoffOutcome::Seeded { .. }) => Ok(json!({})),
             Err(h) => Err(self.walk_refusal(&person, h, None)),
@@ -952,7 +954,7 @@ impl Shell {
     /// `accept(board, {address, label?, paper?, noAnchors?})` →
     /// `{payload}`: the recipient's beat; `no_address` where none is given.
     fn accept(&self, args: &Value) -> Result<Value, Refusal> {
-        let board = self.board(&args["board"])?;
+        let entry = self.board_entry(&args["board"])?;
         let Some(address) = args["address"].as_str().filter(|a| !a.trim().is_empty()) else {
             return Err(Refusal::shell(Name::NO_ADDRESS, json!({})));
         };
@@ -966,8 +968,8 @@ impl Shell {
             host_name: self.host_name.clone(),
             date: self.date.clone(),
         };
-        let mut person = self.person("accept", Some(&board.reference));
-        match accept::accept(&board.board, &self.store, &mut person, &opts) {
+        let mut person = self.person("accept", Some(&entry.reference));
+        match accept::accept(&entry.board, &self.store, &mut person, &opts) {
             Ok(a) => Ok(json!({"payload": a.record})),
             Err(h) => {
                 let armed = accept_arm(&h);
@@ -979,8 +981,8 @@ impl Shell {
     /// `health(board)` → `{health, mode}`: the `/health` document verbatim
     /// and the derived mode.
     fn health(&self, args: &Value) -> Result<Value, Refusal> {
-        let board = self.board(&args["board"])?;
-        let health = board.board.health()?;
+        let entry = self.board_entry(&args["board"])?;
+        let health = entry.board.health()?;
         Ok(json!({"health": health.body, "mode": Mode::of(&health).name()}))
     }
 
@@ -989,8 +991,8 @@ impl Shell {
     /// `unreachable` where it does not answer, `running` else — and the
     /// first board's reachability where it runs none.
     fn probe(&self) -> Value {
-        let entry = match &self.own_node {
-            Some(board_reference) => self.boards.iter().find(|b| &b.reference == board_reference),
+        let entry = match &self.own_node_reference {
+            Some(board_reference) => self.boards.iter().find(|entry| &entry.reference == board_reference),
             None => self.boards.first(),
         };
         let Some(entry) = entry else { return json!({"daemon": "unreachable", "dialed": null, "signed": null}) };
@@ -1008,7 +1010,7 @@ impl Shell {
     /// canonical origin dialed token-free.
     fn guest_board(&self, args: &Value) -> Result<Board, Refusal> {
         if let Some(board_reference) = args["board"].as_str() {
-            let entry = self.board(&Value::from(board_reference))?;
+            let entry = self.board_entry(&Value::from(board_reference))?;
             return Ok(Board::new(entry.origin.clone(), LoggingDialer::new(Arc::clone(&self.log))));
         }
         let origin = args["origin"].as_str().ok_or_else(|| Refusal::malformed("board or origin"))?;
@@ -1051,7 +1053,7 @@ impl Shell {
         if guest {
             let board = self.guest_board(args)?;
             let op = frame["op"].as_str().unwrap_or("");
-            if WRITE_OPS.contains(&op) {
+            if WRITE_KINDS.contains(&op) {
                 return Err(Refusal::shell(Name::WRITE_IN_GUEST_FORM, json!({"op": op})));
             }
             return match at {
@@ -1062,36 +1064,36 @@ impl Shell {
                 None => Self::document(board.guest(&frame)?),
             };
         }
-        let entry = self.session(&args["session"])?;
-        let board = self.board_of_session(&entry);
+        let session = self.session(&args["session"])?;
+        let entry = self.board_entry_of(&session);
         // A BURST (§3c.4) — an `/op` under a session of one of the five kinds,
         // never the guest form, never `/op-at` — takes the hold's write path.
         if at.is_none() && hold::is_burst(&frame) {
-            return match self.holds.send_burst(&board.reference, &entry, frame) {
+            return match self.holds.send_burst(&entry.reference, &session, frame) {
                 BurstAnswer::Answered(answer) => answer,
-                BurstAnswer::Died => Err(self.died(&entry)),
+                BurstAnswer::Died => Err(self.died(&session)),
             };
         }
         if at.is_none() {
-            entry.attest(&board.board, &self.store, &mut frame)?;
+            session.attest(&entry.board, &self.store, &mut frame)?;
         }
         let answer = match at {
-            Some(at) => match board.board.op_at(Some(&entry.token), at, &frame)? {
+            Some(at) => match entry.board.op_at(Some(&session.token), at, &frame)? {
                 AtAnswer::Document(v) => Answer::Document(v),
                 AtAnswer::Closed => Answer::Closed,
                 other => return Err(at_refusal(other)),
             },
-            None => board.board.op(Some(&entry.token), &frame)?,
+            None => entry.board.op(Some(&session.token), &frame)?,
         };
         match answer {
             Answer::Document(v) => {
                 let v = Self::document(v)?;
                 if at.is_none() {
-                    self.holds.note_ack(&board.reference, &entry, &frame, &v);
+                    self.holds.note_ack(&entry.reference, &session, &frame, &v);
                 }
                 Ok(v)
             }
-            Answer::Closed => Err(self.died(&entry)),
+            Answer::Closed => Err(self.died(&session)),
         }
     }
 
@@ -1122,12 +1124,12 @@ impl Shell {
             return Err(Refusal::malformed("i"));
         }
         let guest = args["guest"].as_bool().unwrap_or(false) || args.get("session").is_none();
-        let (board, token, entry) = if guest {
+        let (board, token, session) = if guest {
             (self.guest_board(args)?, None, None)
         } else {
-            let entry = self.session(&args["session"])?;
-            let board = self.board_of_session(&entry);
-            (Board::new(board.origin.clone(), LoggingDialer::new(Arc::clone(&self.log))), Some(entry.token.clone()), Some(entry))
+            let session = self.session(&args["session"])?;
+            let entry = self.board_entry_of(&session);
+            (Board::new(entry.origin.clone(), LoggingDialer::new(Arc::clone(&self.log))), Some(session.token.clone()), Some(session))
         };
         let mut headers = Vec::new();
         if let Some(t) = &token {
@@ -1137,8 +1139,8 @@ impl Shell {
         let mut empty = std::io::empty();
         let resp = board.dialer().stream(board.dialed(), &head, &mut empty, &mut |_| {}).map_err(Refusal::Unreachable)?;
         if resp.headers.get("Skepd-Session").is_some_and(|v| v.trim() == "closed") {
-            if let Some(entry) = &entry {
-                return Err(self.died(entry));
+            if let Some(session) = &session {
+                return Err(self.died(session));
             }
         }
         if resp.status != 200 {
@@ -1165,11 +1167,11 @@ impl Shell {
                 // A followed link's origin the shell holds no index for.
                 return Ok(answer_without_index());
             }
-            (self.board(&args["board"])?.reference.clone(), Searcher::Guest)
+            (self.board_entry(&args["board"])?.reference.clone(), Searcher::Guest)
         } else {
-            let entry = self.session(&args["session"])?;
-            let who = Searcher::Session { principal: entry.facts.principal, token: entry.token.clone(), account: entry.facts.account.clone().unwrap_or_default() };
-            (entry.board_reference.clone(), who)
+            let session = self.session(&args["session"])?;
+            let who = Searcher::Session { principal: session.facts.principal, token: session.token.clone(), account: session.facts.account.clone().unwrap_or_default() };
+            (session.board_reference.clone(), who)
         };
         self.feed(&board_reference).search(who, query, opts, reindex)
     }
@@ -1178,8 +1180,8 @@ impl Shell {
     /// board in resend order (§4b.1), from THIS principal's file and no other
     /// (P39); `store_halted` where a newer `v` or a damaged body halted it.
     fn held(&self, args: &Value) -> Result<Value, Refusal> {
-        let entry = self.session(&args["session"])?;
-        self.holds.lines(&entry.board_reference, &entry)
+        let session = self.session(&args["session"])?;
+        self.holds.lines(&session.board_reference, &session)
     }
 
     /// `resolve(session, {held, act})` → `{}` (§4b.1): `"drop"` on a `refused`
@@ -1187,10 +1189,10 @@ impl Shell {
     /// `"send"` re-enters the automatic machine for that document;
     /// `no_such_held` / `not_resolvable` otherwise.
     fn resolve(&self, args: &Value) -> Result<Value, Refusal> {
-        let entry = self.session(&args["session"])?;
+        let session = self.session(&args["session"])?;
         let k = args["held"].as_u64().ok_or_else(|| Refusal::malformed("held"))?;
         let act = args["act"].as_str().ok_or_else(|| Refusal::malformed("act"))?;
-        self.holds.resolve(&entry.board_reference, &entry, k, act)
+        self.holds.resolve(&session.board_reference, &session, k, act)
     }
 
     // ── THE TWO ANSWERS ──────────────────────────────────────────────────
@@ -1220,10 +1222,10 @@ impl Shell {
     /// machine; a crash loses at most the open or in-flight burst (R14).
     pub fn shutdown(&self) {
         self.pending.cancel_all();
-        for entry in self.sessions.all() {
-            if self.sessions.close(&entry.reference).is_some() {
-                let board = self.board_of_session(&entry);
-                let _ = board.board.session_close(&entry.token);
+        for session in self.sessions.all() {
+            if self.sessions.close(&session.reference).is_some() {
+                let entry = self.board_entry_of(&session);
+                let _ = entry.board.session_close(&session.token);
             }
         }
         let threads = std::mem::take(&mut *self.threads.lock().expect("the feed threads' lock"));

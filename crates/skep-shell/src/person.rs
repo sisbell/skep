@@ -160,8 +160,8 @@ impl BridgePerson {
 
     /// The dev arm's answer passed on, the person marked abandoned where
     /// the arm left the moment.
-    fn got<T>(&mut self, got: Result<T, Abandoned>) -> Result<T, Abandoned> {
-        got.inspect_err(|_| self.abandoned = true)
+    fn mark_if_abandoned<T>(&mut self, answer: Result<T, Abandoned>) -> Result<T, Abandoned> {
+        answer.inspect_err(|_| self.abandoned = true)
     }
 }
 
@@ -206,28 +206,28 @@ impl Person for BridgePerson {
     }
 
     fn retype(&mut self, _m: Secret<Retype>) -> Result<Retyped, Abandoned> {
-        let got = self.arm.retype();
-        self.got(got)
+        let answer = self.arm.retype();
+        self.mark_if_abandoned(answer)
     }
 
     fn destination(&mut self, m: Secret<Destination>) -> Result<std::path::PathBuf, Abandoned> {
-        let got = self.arm.destination(m.0.which);
-        self.got(got)
+        let answer = self.arm.destination(m.0.which);
+        self.mark_if_abandoned(answer)
     }
 
     fn confirm_typed(&mut self, m: Consent<Confirmation>) -> Result<String, Abandoned> {
-        let got = self.arm.confirm(&m.0.text, &m.0.expected);
-        self.got(got)
+        let answer = self.arm.confirm(&m.0.text, &m.0.expected);
+        self.mark_if_abandoned(answer)
     }
 
     fn import(&mut self, _m: Secret<Import>) -> Result<Imported, Abandoned> {
-        let got = self.arm.import();
-        self.got(got)
+        let answer = self.arm.import();
+        self.mark_if_abandoned(answer)
     }
 
     fn kept_or_placed(&mut self, m: Secret<HandedPath>) -> Result<KeptOrPlaced, Abandoned> {
-        let got = self.arm.kept_or_placed(&m.0.path);
-        self.got(got)
+        let answer = self.arm.kept_or_placed(&m.0.path);
+        self.mark_if_abandoned(answer)
     }
 }
 

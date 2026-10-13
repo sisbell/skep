@@ -115,7 +115,7 @@ const SHAPES: &[Shape] = &[
 /// the result type — the `Bridge` interface's rows, one per name of
 /// [`crate::CALLS`], the dispatch's list, in its order (the suite holds the
 /// two lists equal).
-const CALLS: &[(&str, &str, &str)] = &[
+const CALL_ROWS: &[(&str, &str, &str)] = &[
     ("boards", "{}", "BoardRow[]"),
     ("session", "{ board: string; principal?: number }", "SessionOpened"),
     ("close", "{ session: string }", "Empty"),
@@ -168,7 +168,7 @@ pub fn declarations() -> String {
     }
     out.push_str("/** The calls (client.md §4b.1): `POST /bridge/<name>` with the argument object; `{result}` or `{refused}` back. */\n");
     out.push_str("export interface Bridge {\n");
-    for (name, args, result) in CALLS {
+    for (name, args, result) in CALL_ROWS {
         let _ = writeln!(out, "  {name}(args: {args}): Promise<Outcome<{result}>>;");
     }
     out.push_str("  answer(args: Answer): Promise<Outcome<Empty>>;\n");

@@ -74,12 +74,12 @@ impl DevArm {
         (self.talk)(&format!("dev arm: {line}"));
     }
 
-    /// The script's next answer, or `None` on the auto arm; `Abandon` and
-    /// an exhausted script answer the abandonment.
-    fn next(&self, moment: &str) -> Option<Result<Answer, Abandoned>> {
+    /// The script's answer for `moment`, or `None` where no script runs (the
+    /// auto arm); `Abandon` and an exhausted script answer the abandonment.
+    fn scripted(&self, moment: &str) -> Option<Result<Answer, Abandoned>> {
         let Kind::Script(answers) = &self.kind else { return None };
-        let next = answers.lock().expect("the script's lock").pop_front();
-        Some(match next {
+        let answer = answers.lock().expect("the script's lock").pop_front();
+        Some(match answer {
             None => {
                 self.say(format!("{moment}: the script has no answer left — the walk is abandoned"));
                 Err(Abandoned)
@@ -123,11 +123,11 @@ impl DevArm {
     /// THE RE-TYPE (SECRET): the auto arm declines it; a script types it off
     /// a sheet shown, types it wrong, or declines.
     pub fn retype(&self) -> Result<Retyped, Abandoned> {
-        let Some(next) = self.next("the re-type") else {
+        let Some(scripted) = self.scripted("the re-type") else {
             self.say("the re-type is declined (the auto arm types no seed)".to_string());
             return Ok(Retyped::Declined);
         };
-        match next? {
+        match scripted? {
             Answer::RetypeSheet(n) => match self.off_sheet(n) {
                 Some((seed_hex, fingerprint_prefix)) => {
                     self.say(format!("the re-type is typed off sheet {n}"));
@@ -153,13 +153,13 @@ impl DevArm {
     /// ONE ANCHOR FILE's DESTINATION (SECRET): the auto arm places anchor
     /// `which` under its own directory; a script names a path.
     pub fn destination(&self, which: usize) -> Result<PathBuf, Abandoned> {
-        let Some(next) = self.next("the destination") else {
+        let Some(scripted) = self.scripted("the destination") else {
             let Kind::Auto { anchors } = &self.kind else { unreachable!("the auto arm answers no script") };
             let dir = anchors.join(format!("anchor-{which}"));
             self.say(format!("anchor {which} is placed under {}", dir.display()));
             return Ok(dir);
         };
-        match next? {
+        match scripted? {
             Answer::Destination(p) => {
                 self.say(format!("anchor {which} is placed under {}", p.display()));
                 Ok(p)
@@ -171,11 +171,11 @@ impl DevArm {
     /// A TYPED CONFIRMATION (CONSENT): the auto arm types the row asked
     /// for; a script types the row, `no`, or its own text.
     pub fn confirm(&self, text: &str, expected: &str) -> Result<String, Abandoned> {
-        let Some(next) = self.next("the confirmation") else {
+        let Some(scripted) = self.scripted("the confirmation") else {
             self.say(format!("the confirmation `{text}` is typed as asked ({expected})"));
             return Ok(expected.to_string());
         };
-        match next? {
+        match scripted? {
             Answer::Confirm(true) => {
                 self.say(format!("the confirmation `{text}` is typed as asked ({expected})"));
                 Ok(expected.to_string())
@@ -195,11 +195,11 @@ impl DevArm {
     /// THE ANCHOR IMPORT (SECRET): the auto arm holds neither; a script
     /// hands a file, types off a sheet, types its own, or holds neither.
     pub fn import(&self) -> Result<Imported, Abandoned> {
-        let Some(next) = self.next("the import") else {
+        let Some(scripted) = self.scripted("the import") else {
             self.say("the import answers neither (the auto arm holds no artifact)".to_string());
             return Ok(Imported::Neither);
         };
-        match next? {
+        match scripted? {
             Answer::ImportFile(p) => {
                 self.say(format!("the import hands the file {}", p.display()));
                 Ok(Imported::File(p))
@@ -228,11 +228,11 @@ impl DevArm {
 
     /// KEPT OR PLACED (SECRET): the auto arm answers kept; a script says.
     pub fn kept_or_placed(&self, path: &std::path::Path) -> Result<KeptOrPlaced, Abandoned> {
-        let Some(next) = self.next("kept-or-placed") else {
+        let Some(scripted) = self.scripted("kept-or-placed") else {
             self.say(format!("{} is answered kept", path.display()));
             return Ok(KeptOrPlaced::Kept);
         };
-        match next? {
+        match scripted? {
             Answer::Kept => {
                 self.say(format!("{} is answered kept", path.display()));
                 Ok(KeptOrPlaced::Kept)

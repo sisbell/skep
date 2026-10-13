@@ -182,7 +182,7 @@ fn a_misplaced_file_is_moved_aside_without_overwriting() {
 /// THE LOCK: a second holder's `try_lock` on `held/<chain>/lock` fails while
 /// the first stands and succeeds after it is dropped.
 #[test]
-fn the_lock_is_held_for_the_shells_life() {
+fn the_lock_admits_one_holder_at_a_time() {
     let tmp = TempDir::new().unwrap();
     let d = dir(&tmp);
     let first = d.try_lock().unwrap().expect("the first shell takes the lock");
@@ -385,7 +385,7 @@ fn the_store_is_its_owners_alone() {
 }
 
 /// A frame whose JSON spelling is exactly `bytes` long.
-fn frame_of(bytes: usize) -> Value {
+fn sized_frame(bytes: usize) -> Value {
     let overhead = json_len(&json!({"op": "insert", "values": [""]}));
     json!({"op": "insert", "values": ["x".repeat(bytes - overhead)]})
 }
@@ -405,14 +405,14 @@ fn the_queue_holds_its_frames_within_its_budget_and_writes_nothing_past_it() {
     let tmp = TempDir::new().unwrap();
     let d = dir(&tmp);
     let mut queue = live(d.open_file(1, "1.0.1").unwrap());
-    let first = queue.hold("1.0.1.0.1", None, 0, frame_of(MAX_HELD_FRAME_BYTES - 100), Reason::of("stopped", false)).unwrap().k;
+    let first = queue.hold("1.0.1.0.1", None, 0, sized_frame(MAX_HELD_FRAME_BYTES - 100), Reason::of("stopped", false)).unwrap().k;
     let written = file_len(&tmp);
-    let refused = queue.hold("1.0.1.0.1", None, 0, frame_of(200), Reason::of("behind", false));
-    assert_eq!(refused.unwrap_err(), Unheld::Full { held: MAX_HELD_FRAME_BYTES - 100, adding: 200 });
+    let refused = queue.hold("1.0.1.0.1", None, 0, sized_frame(200), Reason::of("behind", false));
+    assert_eq!(refused.unwrap_err(), Unheld::Full { held_bytes: MAX_HELD_FRAME_BYTES - 100, frame_bytes: 200 });
     assert_eq!((file_len(&tmp), ks(&queue)), (written, vec![first]), "nothing of the refused line is kept");
-    assert!(queue.hold("1.0.1.0.1", None, 0, frame_of(100), Reason::of("behind", false)).is_ok(), "a frame at the budget exactly");
+    assert!(queue.hold("1.0.1.0.1", None, 0, sized_frame(100), Reason::of("behind", false)).is_ok(), "a frame at the budget exactly");
     queue.done(first, Done::Kept { at: Some(3) }).unwrap();
-    assert!(queue.hold("1.0.1.0.1", None, 0, frame_of(200), Reason::of("behind", false)).is_ok(), "a done makes room");
+    assert!(queue.hold("1.0.1.0.1", None, 0, sized_frame(200), Reason::of("behind", false)).is_ok(), "a done makes room");
 }
 
 /// The ordinals are held to the page's ([`MAX_ORDINAL`]): the last one

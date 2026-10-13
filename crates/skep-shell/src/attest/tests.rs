@@ -35,7 +35,7 @@ fn the_trunk_is_the_document_field_cut_to_its_first_component() {
     assert_eq!(trunk_text("1.0.1.0.1.0.1.7").as_deref(), Some("1.0.1.0.1"));
     assert_eq!(trunk_text("1.0.1"), None);
     assert_eq!(trunk_text("1"), None);
-    let deep = format!("1.0.1.0.1{}", ".1".repeat(MAX_ADDRESS_COMPONENTS - 5));
+    let deep = format!("1.0.1.0.1{}", ".1".repeat(MAX_TUMBLER_COMPONENTS - 5));
     assert_eq!(trunk_text(&deep).as_deref(), Some("1.0.1.0.1"), "a member at the budget");
     assert_eq!(trunk_text(&format!("{deep}.1")), None, "one component past it");
 }
@@ -101,7 +101,7 @@ fn the_budgets_are_the_boards() {
     assert_eq!(MAX_FRAME_BYTES, skepd::body_cap("POST", "/op"));
     assert_eq!(MAX_SLOT_SPANS, skep_links::MAX_SLOT_SPANS);
     assert_eq!(MAX_REINSERTED_VALUES, skep_arrangement::MAX_REINSERTED_VALUES as u64);
-    assert_eq!(MAX_SHOT_POSITIONS, (MAX_FRAME_BYTES / 4) as u64);
+    assert_eq!(MAX_COPIED_POSITIONS, (MAX_FRAME_BYTES / 4) as u64);
 }
 
 /// The room a burst keeps for its attest holds the attest of every row a
@@ -138,9 +138,9 @@ fn the_values_are_held_to_the_insert_budget_before_they_mint() {
 /// sign, no leading zero, of the document level.
 #[test]
 fn an_address_is_recognized_within_its_budget_and_a_document_in_its_one_spelling() {
-    let at = format!("1{}", ".1".repeat(MAX_ADDRESS_COMPONENTS - 1));
-    assert!(address(&at).is_some(), "a node address at the budget");
-    assert!(address(&format!("{at}.1")).is_none(), "one component past it");
+    let at = format!("1{}", ".1".repeat(MAX_TUMBLER_COMPONENTS - 1));
+    assert!(bounded_address(&at).is_some(), "a node address at the budget");
+    assert!(bounded_address(&format!("{at}.1")).is_none(), "one component past it");
     assert!(tumbler(&at).is_some() && tumbler(&format!("{at}.1")).is_none());
     assert!(addr(&format!("{at}.1"), "home").is_err());
     assert!(document_address("1.0.1.0.1").is_some());
@@ -148,15 +148,15 @@ fn an_address_is_recognized_within_its_budget_and_a_document_in_its_one_spelling
     for refused in ["01.0.1.0.1", "+1.0.1.0.1", "1.00.1.0.1", "1.0.1", "1.0.1.0.1.0.1.1", "1..0.1", "", "1.0.1.0.1 "] {
         assert!(document_address(refused).is_none(), "`{refused}`");
     }
-    let deep = format!("1.0.1.0.1{}", ".1".repeat(MAX_ADDRESS_COMPONENTS - 5));
+    let deep = format!("1.0.1.0.1{}", ".1".repeat(MAX_TUMBLER_COMPONENTS - 5));
     assert!(document_address(&deep).is_some() && document_address(&format!("{deep}.1")).is_none());
 }
 
 // ── THE COMPOSER's READS, against a fake board ──────────────────────────────
 
-/// One origin document as the fake holds it: its positions' I-addresses, a
+/// One origin document as the fake stores it: its positions' I-addresses, a
 /// prefix and a first last component, and the item delivered at each.
-struct Held {
+struct Stored {
     prefix: &'static str,
     first: u64,
     items: Vec<Value>,
@@ -168,7 +168,7 @@ struct Held {
 /// dialed, recorded by its name.
 #[derive(Default)]
 struct Fake {
-    origins: HashMap<&'static str, Held>,
+    origins: HashMap<&'static str, Stored>,
     extents: HashMap<&'static str, u64>,
     images: HashMap<&'static str, Value>,
     dialed: Mutex<Vec<String>>,
@@ -179,7 +179,7 @@ impl Fake {
     /// from `prefix.first`.
     fn text(mut self, doc: &'static str, prefix: &'static str, first: u64, text: &str) -> Fake {
         let items = text.chars().map(|c| json!({"content": c.to_string()})).collect();
-        self.origins.insert(doc, Held { prefix, first, items });
+        self.origins.insert(doc, Stored { prefix, first, items });
         self
     }
 
@@ -189,8 +189,9 @@ impl Fake {
     }
 }
 
-/// `"0.<n>"` and `"1.<n>"` read back as `n`.
-fn ordinal_of(text: &str) -> usize {
+/// The last component of a dotted text: `"0.<n>"` and `"1.<n>"` read back
+/// as `n`.
+fn last_component(text: &str) -> usize {
     text.rsplit('.').next().and_then(|n| n.parse().ok()).unwrap_or(0)
 }
 
@@ -207,7 +208,7 @@ impl Dialer for Fake {
         Ok(match op.as_str() {
             "retrieve_doc_v_span_set" => {
                 let doc = frame["doc"].as_str().unwrap_or("");
-                let extent = self.extents.get(doc).copied().or_else(|| self.origins.get(doc).map(|h| h.items.len() as u64));
+                let extent = self.extents.get(doc).copied().or_else(|| self.origins.get(doc).map(|stored| stored.items.len() as u64));
                 match extent {
                     Some(n) => ok(json!({"resp": "span_set", "set": [{"start": "1.1", "width": format!("0.{n}")}]})),
                     None => unknown(),
@@ -215,19 +216,19 @@ impl Dialer for Fake {
             }
             "image" => {
                 let doc = frame["d"].as_str().unwrap_or("");
-                let (from, width) = (ordinal_of(frame["region"][0]["start"].as_str().unwrap_or("")), ordinal_of(frame["region"][0]["width"].as_str().unwrap_or("")));
+                let (from, width) = (last_component(frame["region"][0]["start"].as_str().unwrap_or("")), last_component(frame["region"][0]["width"].as_str().unwrap_or("")));
                 match (self.images.get(doc), self.origins.get(doc)) {
                     (Some(runs), _) => ok(json!({"resp": "image", "runs": runs})),
-                    (None, Some(h)) => ok(json!({"resp": "image", "runs": [{"i_start": format!("{}.{}", h.prefix, h.first + from as u64 - 1), "width": width.to_string()}]})),
+                    (None, Some(stored)) => ok(json!({"resp": "image", "runs": [{"i_start": format!("{}.{}", stored.prefix, stored.first + from as u64 - 1), "width": width.to_string()}]})),
                     _ => unknown(),
                 }
             }
             "retrieve_v" => {
                 let spec = &frame["specs"][0];
                 let doc = spec["doc"].as_str().unwrap_or("");
-                let (from, width) = (ordinal_of(spec["span"]["start"].as_str().unwrap_or("")), ordinal_of(spec["span"]["width"].as_str().unwrap_or("")));
+                let (from, width) = (last_component(spec["span"]["start"].as_str().unwrap_or("")), last_component(spec["span"]["width"].as_str().unwrap_or("")));
                 match self.origins.get(doc) {
-                    Some(h) => ok(json!({"resp": "delivery", "items": h.items.iter().skip(from - 1).take(width).collect::<Vec<_>>()})),
+                    Some(stored) => ok(json!({"resp": "delivery", "items": stored.items.iter().skip(from - 1).take(width).collect::<Vec<_>>()})),
                     None => unknown(),
                 }
             }
@@ -316,7 +317,7 @@ fn a_shot_is_held_to_its_arithmetic_before_any_read() {
     let cells = [
         ("runs past the wire's list", shot(vec![draft_run(1); MAX_WIRE_LIST + 1]), "elements"),
         ("the draft past the re-insert budget", shot(vec![draft_run(MAX_REINSERTED_VALUES), draft_run(1)]), "re-inserts"),
-        ("the copied positions past a body", shot(vec![run("1.0.1.0.1.1", "1.0.1.0.1.1.0.1.1", MAX_SHOT_POSITIONS + 1)]), "copies in"),
+        ("the copied positions past a body", shot(vec![run("1.0.1.0.1.1", "1.0.1.0.1.1.0.1.1", MAX_COPIED_POSITIONS + 1)]), "copies in"),
         ("a count past be64", shot(vec![run("1.0.9.0.1", "1.0.9.0.1.0.1.1", u64::MAX), run("1.0.9.0.1", "1.0.9.0.1.0.1.1", 1)]), "2^64"),
     ];
     for (cell, frame, says) in cells {

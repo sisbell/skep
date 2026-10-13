@@ -228,7 +228,7 @@ fn ordinal(v: &Value) -> Option<u64> {
 /// A `held` line's members, every one of its type — `doc` a document
 /// address, `id` a string where present, `frame` an object, `refusal`
 /// anything but `null` where present — or `None`.
-fn held_line(k: u64, mut m: Map<String, Value>) -> Option<HeldLine> {
+fn parse_held_line(k: u64, mut m: Map<String, Value>) -> Option<HeldLine> {
     let doc = m.get("doc")?.as_str().filter(|d| document_address(d).is_some())?.to_string();
     let id = match m.remove("id") {
         None => None,
@@ -246,7 +246,7 @@ fn held_line(k: u64, mut m: Map<String, Value>) -> Option<HeldLine> {
 
 /// Whether a `done` line's members are each of its type: `as` `kept` with
 /// an optional `at`, or `dropped` with none, and a `time`.
-fn done_line(m: &Map<String, Value>) -> bool {
+fn is_done_line(m: &Map<String, Value>) -> bool {
     let at = m.get("at");
     let resolved = match m.get("as").and_then(Value::as_str) {
         Some("kept") => at.is_none_or(Value::is_u64),
@@ -321,7 +321,7 @@ impl HeldDir {
     pub fn open_file(&self, principal: u64, account: &str) -> io::Result<Opened> {
         let path = self.path.join(Self::file_name(principal));
         let disk = Disk { path: path.clone(), chain: self.chain, principal, account: account.to_string(), created: false };
-        let fresh = |disk: Disk, aside: Option<PathBuf>| Opened::Live { queue: HeldQueue { disk: Some(disk), lines: Vec::new(), next_k: 1, frame_bytes: 0 }, aside };
+        let fresh = |disk: Disk, aside: Option<PathBuf>| Opened::Live { queue: HeldQueue { disk: Some(disk), lines: Vec::new(), next_k: 1, held_bytes: 0 }, aside };
         let file = match File::open(&path) {
             Ok(f) => f,
             Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(fresh(disk, None)),
@@ -370,13 +370,13 @@ impl HeldDir {
             let Some(m) = object(&buf) else { return halted(HaltWhy::Damaged) };
             if let Some(held) = m.get("held") {
                 let Some(k) = ordinal(held) else { return halted(HaltWhy::Damaged) };
-                let Some(line) = held_line(k, m) else { return halted(HaltWhy::Damaged) };
+                let Some(line) = parse_held_line(k, m) else { return halted(HaltWhy::Damaged) };
                 max_k = max_k.max(k);
                 // A `held` line of a standing ordinal is its RE-MARK
                 // ([`HeldQueue::remark`]): it takes the earlier line's place.
                 standing.insert(k, line);
             } else if let Some(done) = m.get("done") {
-                let Some(k) = ordinal(done).filter(|_| done_line(&m)) else { return halted(HaltWhy::Damaged) };
+                let Some(k) = ordinal(done).filter(|_| is_done_line(&m)) else { return halted(HaltWhy::Damaged) };
                 max_k = max_k.max(k);
                 standing.remove(&k);
             } else {
@@ -384,10 +384,10 @@ impl HeldDir {
             }
         }
         let lines: Vec<HeldLine> = standing.into_values().collect();
-        let frame_bytes = lines.iter().map(|l| json_len(&l.frame)).sum();
+        let held_bytes = lines.iter().map(|l| json_len(&l.frame)).sum();
         let disk = Disk { created: true, ..disk };
         // `max_k` is within MAX_ORDINAL, so its successor is a `u64`.
-        Ok(Opened::Live { queue: HeldQueue { disk: Some(disk), lines, next_k: max_k + 1, frame_bytes }, aside: None })
+        Ok(Opened::Live { queue: HeldQueue { disk: Some(disk), lines, next_k: max_k + 1, held_bytes }, aside: None })
     }
 
     /// THE ASIDE (`aside_name`'s form, the index's idiom): `name` renamed to
@@ -420,7 +420,7 @@ pub struct HeldQueue {
     disk: Option<Disk>,
     lines: Vec<HeldLine>,
     next_k: u64,
-    frame_bytes: usize,
+    held_bytes: usize,
 }
 
 /// The file a queue's lines are copied to: its path, the header's facts, and
@@ -434,11 +434,12 @@ struct Disk {
     created: bool,
 }
 
-/// One line held: the ordinal it took, and — where its copy could not be
-/// written (`store_unwritable`: a full disk, a read-only volume, a line past
-/// [`MAX_HELD_LINE_BYTES`]) — why. The line stands in the queue either way.
+/// One line entered in the queue: the ordinal it took, and — where its copy
+/// could not be written (`store_unwritable`: a full disk, a read-only volume,
+/// a line past [`MAX_HELD_LINE_BYTES`]) — why. The line stands in the queue
+/// either way.
 #[derive(Debug)]
-pub struct Appended {
+pub struct Entered {
     pub k: u64,
     pub unwritten: Option<io::Error>,
 }
@@ -446,10 +447,10 @@ pub struct Appended {
 /// Why a line was not held, and is kept nowhere.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Unheld {
-    /// The queue's standing frames, `held` bytes, and the line's, `adding`,
-    /// would pass [`MAX_HELD_FRAME_BYTES`] — or the queue's next ordinal
-    /// would pass [`MAX_ORDINAL`].
-    Full { held: usize, adding: usize },
+    /// The queue's standing frames' bytes, `held_bytes`, and the line's,
+    /// `frame_bytes`, would pass [`MAX_HELD_FRAME_BYTES`] — or the queue's
+    /// next ordinal would pass [`MAX_ORDINAL`].
+    Full { held_bytes: usize, frame_bytes: usize },
     /// The line's `doc` is no document address in its one spelling
     /// (`attest::document_address`), or its `frame` no JSON object: a line
     /// no reader of the file reads.
@@ -479,7 +480,7 @@ impl HeldQueue {
     /// A queue kept in memory alone (§3c.3): its lines enter and leave as a
     /// file's do, and no copy is written — a close loses them.
     pub fn in_memory() -> HeldQueue {
-        HeldQueue { disk: None, lines: Vec::new(), next_k: 1, frame_bytes: 0 }
+        HeldQueue { disk: None, lines: Vec::new(), next_k: 1, held_bytes: 0 }
     }
 
     /// The un-done `held` lines, in `k` order.
@@ -502,21 +503,21 @@ impl HeldQueue {
     /// ordinal would pass [`MAX_ORDINAL`], or its `doc` or `frame` is one the
     /// reader refuses — and the line kept nowhere: the writer holds no line
     /// the file's reader would halt on.
-    pub fn hold(&mut self, doc: &str, id: Option<&str>, base: u64, frame: Value, reason: Reason) -> Result<Appended, Unheld> {
+    pub fn hold(&mut self, doc: &str, id: Option<&str>, base: u64, frame: Value, reason: Reason) -> Result<Entered, Unheld> {
         if document_address(doc).is_none() || !frame.is_object() {
             return Err(Unheld::Unreadable);
         }
-        let adding = json_len(&frame);
-        if self.next_k > MAX_ORDINAL || self.frame_bytes.saturating_add(adding) > MAX_HELD_FRAME_BYTES {
-            return Err(Unheld::Full { held: self.frame_bytes, adding });
+        let frame_bytes = json_len(&frame);
+        if self.next_k > MAX_ORDINAL || self.held_bytes.saturating_add(frame_bytes) > MAX_HELD_FRAME_BYTES {
+            return Err(Unheld::Full { held_bytes: self.held_bytes, frame_bytes });
         }
         let line = HeldLine { k: self.next_k, doc: doc.to_string(), id: id.map(str::to_string), base, frame, reason, time: now_ms() };
         self.next_k += 1;
-        self.frame_bytes += adding;
+        self.held_bytes += frame_bytes;
         let unwritten = self.disk.as_mut().and_then(|d| d.write_line(&held_line_bytes(&line)).err());
         let k = line.k;
         self.lines.push(line);
-        Ok(Appended { k, unwritten })
+        Ok(Entered { k, unwritten })
     }
 
     /// RE-MARK a standing line — its cause, refusal and `sent` — by appending a
@@ -546,9 +547,9 @@ impl HeldQueue {
     /// (§3c.3) and the ordinals start again. A `done` for an ordinal with no
     /// `held` line is REFUSED (T4).
     pub fn done(&mut self, k: u64, done: Done) -> Result<(), DoneError> {
-        let Some(at) = self.lines.iter().position(|l| l.k == k) else { return Err(DoneError::NoSuchLine) };
-        let line = self.lines.remove(at);
-        self.frame_bytes = self.frame_bytes.saturating_sub(json_len(&line.frame));
+        let Some(index) = self.lines.iter().position(|l| l.k == k) else { return Err(DoneError::NoSuchLine) };
+        let line = self.lines.remove(index);
+        self.held_bytes = self.held_bytes.saturating_sub(json_len(&line.frame));
         // A file never created holds no line to resolve.
         let written = match self.disk.as_mut() {
             Some(d) if d.created => d.append(&done_line_bytes(k, done)),
@@ -559,7 +560,7 @@ impl HeldQueue {
                 d.remove();
             }
             self.next_k = 1;
-            self.frame_bytes = 0;
+            self.held_bytes = 0;
         }
         written.map_err(DoneError::Unwritten)
     }

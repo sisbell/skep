@@ -66,7 +66,7 @@ fn the_ticks_owe_one_read_while_one_waits() {
 struct Committing {
     events: Mutex<Option<Vec<u8>>>,
     drained: Arc<AtomicBool>,
-    changes: AtomicUsize,
+    changes_reads: AtomicUsize,
     delay: Duration,
 }
 
@@ -96,7 +96,7 @@ impl Dialer for Committing {
             return Ok(answer(json!({"ok": true, "log_position": 10, "auth": {"claimant": null, "local_trust": true, "origins": [], "signed_origins": []}, "writes": {"halted": false}})));
         }
         if req.method == Method::Get && req.path.starts_with("/changes") {
-            self.changes.fetch_add(1, Ordering::SeqCst);
+            self.changes_reads.fetch_add(1, Ordering::SeqCst);
             std::thread::sleep(self.delay);
             return Ok(answer(json!({"changes": [], "last": 10, "more": false})));
         }
@@ -121,7 +121,7 @@ fn a_board_committing_faster_than_the_worker_reads_costs_a_read_per_turn() {
     let commits = 2000;
     let events: String = (1..=commits).map(|n| format!("event: commit\ndata: {{\"log_position\": {n}}}\n\n")).collect();
     let drained = Arc::new(AtomicBool::new(false));
-    let fake = Arc::new(Committing { events: Mutex::new(Some(events.into_bytes())), drained: Arc::clone(&drained), changes: AtomicUsize::new(0), delay: Duration::from_millis(2) });
+    let fake = Arc::new(Committing { events: Mutex::new(Some(events.into_bytes())), drained: Arc::clone(&drained), changes_reads: AtomicUsize::new(0), delay: Duration::from_millis(2) });
     let origin = Origin::parse("http://127.0.0.1:9").unwrap();
     let board = Arc::new(Board::new(origin.clone(), Arc::clone(&fake)));
     let store = TempDir::new().unwrap();
@@ -138,7 +138,7 @@ fn a_board_committing_faster_than_the_worker_reads_costs_a_read_per_turn() {
     let started = Instant::now();
     assert!(threads.feed().search(Searcher::Guest, "x", SearchOpts::default(), false).is_ok());
     let waited = started.elapsed();
-    let reads = fake.changes.load(Ordering::SeqCst);
+    let reads = fake.changes_reads.load(Ordering::SeqCst);
     threads.stop();
     assert!(reads < commits / 20, "{reads} reads for {commits} commits");
     assert!(waited < Duration::from_secs(1), "the search waited {waited:?} behind the reads queued");

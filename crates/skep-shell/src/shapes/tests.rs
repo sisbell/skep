@@ -104,11 +104,11 @@ fn the_file_names_every_shape_call_and_event() {
     for shape in SHAPES {
         assert!(text.contains(&format!("export interface {} {{", shape.name)), "{}", shape.name);
     }
-    for (name, _, _) in CALLS {
+    for (name, _, _) in CALL_ROWS {
         assert!(text.contains(&format!("  {name}(args: ")), "{name}");
     }
-    assert_eq!(CALLS.len(), 22, "the twenty-two calls");
-    assert_eq!(CALLS.iter().map(|c| c.0).collect::<Vec<_>>(), crate::CALLS, "the declared rows are the dispatch's calls, in its order");
+    assert_eq!(CALL_ROWS.len(), 22, "the twenty-two calls");
+    assert_eq!(CALL_ROWS.iter().map(|c| c.0).collect::<Vec<_>>(), crate::CALLS, "the declared rows are the dispatch's calls, in its order");
     assert!(text.contains("  answer(args: Answer)") && text.contains("  cancel(args: Cancel)"));
     assert!(
         text.contains("export type EventName = 'mode' | 'session-died' | 'daemon' | 'feed' | 'index' | 'moment' | 'held';\n\n"),

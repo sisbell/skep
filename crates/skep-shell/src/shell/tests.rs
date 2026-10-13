@@ -204,7 +204,7 @@ fn the_bare_mode_claims_opens_writes_and_names_no_token() {
     assert_eq!(write.name(), "write_in_guest_form");
     assert_eq!(position(&shell.call("health", &json!({"board": board})).unwrap()), before, "the refused write committed nothing");
     // The write by identity is a write of the wire (`reinstate`): the guest
-    // form refuses it, as it refuses every `WRITE_OPS` member — undialed,
+    // form refuses it, as it refuses every `WRITE_KINDS` member — undialed,
     // which a listener that counts its connections holds
     // (`the_guest_form_refuses_every_write_kind_of_the_wire_without_a_dial`).
     let reinstate = shell.call("op", &json!({"guest": true, "board": board, "frame": {"op": "reinstate", "doc": draft, "at": {"subspace": "1", "ordinal": "1"}, "runs": [{"origin": draft, "i_start": format!("{draft}.0.1.1"), "width": "1"}]}})).unwrap_err();
@@ -366,9 +366,9 @@ fn every_kind_with_an_entry_frame_is_judged_and_acked_under_the_signed_session()
         let board = shell.call("boards", &json!({})).unwrap()[0]["board"].as_str().unwrap().to_string();
         shell.call("session", &json!({"board": board})).unwrap()["session"].as_str().unwrap().to_string()
     };
-    let (s, b) = (open(&signed), open(&bare));
+    let (signed_session, bare_session) = (open(&signed), open(&bare));
     let talk = || lines.lock().unwrap().join("\n");
-    let write = |frame: Value| -> Value { signed.call("op", &json!({"session": s, "frame": frame})).unwrap_or_else(|r| panic!("{r}\n{}", talk())) };
+    let write = |frame: Value| -> Value { signed.call("op", &json!({"session": signed_session, "frame": frame})).unwrap_or_else(|r| panic!("{r}\n{}", talk())) };
     let addr = |v: Value| v["addr"].as_str().unwrap_or_else(|| panic!("no addr: {v}")).to_string();
     let first_run = |doc: &str, width: u64| write(skep_client::board::frames::image(doc, 1, width))["runs"][0].clone();
     // An edition born of a draft of `text` by its shot: (the edition, the
@@ -408,9 +408,9 @@ fn every_kind_with_an_entry_frame_is_judged_and_acked_under_the_signed_session()
         ),
     ];
     for (kind, frame) in cells {
-        let refused = bare.call("op", &json!({"session": b, "frame": frame})).unwrap_err();
+        let refused = bare.call("op", &json!({"session": bare_session, "frame": frame})).unwrap_err();
         assert_eq!(refused.name(), "signed_session_required", "{kind}: the bare session's write is publish-class: {refused}");
-        let acked = signed.call("op", &json!({"session": s, "frame": frame})).unwrap_or_else(|r| panic!("{kind}: {r}\n{}", talk()));
+        let acked = signed.call("op", &json!({"session": signed_session, "frame": frame})).unwrap_or_else(|r| panic!("{kind}: {r}\n{}", talk()));
         assert!(acked["resp"].as_str().is_some_and(|resp| resp.starts_with("ack")), "{kind}: {acked}");
     }
     signed.shutdown();
@@ -745,14 +745,14 @@ fn counting_listener() -> (String, Arc<AtomicUsize>) {
 }
 
 /// THE GUEST FORM REFUSES EVERY WRITE KIND OF THE WIRE WITHOUT A DIAL (ps3-5):
-/// `WRITE_OPS` is the wire's sixteen write kinds (`docs/wire.md`
+/// `WRITE_KINDS` is the wire's sixteen write kinds (`docs/wire.md`
 /// §Operations; skepd's `parse_op`), each refused `write_in_guest_form`
 /// naming its op while a listener at the named origin counts no connection
 /// — and a guest READ there is dialed, so the listener sees what a dial
 /// would be (the mutant that dials first and refuses after).
 #[test]
 fn the_guest_form_refuses_every_write_kind_of_the_wire_without_a_dial() {
-    let mut listed = WRITE_OPS.to_vec();
+    let mut listed = WRITE_KINDS.to_vec();
     listed.sort_unstable();
     let mut wire = [
         "create_new_document",
@@ -777,7 +777,7 @@ fn the_guest_form_refuses_every_write_kind_of_the_wire_without_a_dial() {
     let dir = TempDir::new().unwrap();
     let shell = boardless(&dir);
     let (origin, dials) = counting_listener();
-    for op in WRITE_OPS {
+    for op in WRITE_KINDS {
         let refused = shell.call("op", &json!({"guest": true, "origin": origin, "frame": {"op": op}})).unwrap_err();
         let v = refused.to_value();
         assert_eq!((refused.name(), v["op"].as_str()), ("write_in_guest_form", Some(op)), "{v}");
@@ -1415,7 +1415,7 @@ fn the_probe_keeps_its_cadence_while_the_board_keeps_committing() {
 
 /// THE CODEC's PRIVATE BUDGETS are the composer's, judged by the board's own
 /// parse: an array at [`MAX_WIRE_LIST`] elements, an address at
-/// [`MAX_ADDRESS_COMPONENTS`] components and an insert of
+/// [`MAX_TUMBLER_COMPONENTS`] components and an insert of
 /// [`MAX_INSERT_VALUES`] values each parse — refused past the parse, if at
 /// all, for what they name — and one more of each is refused at the parse,
 /// `malformed` with the frame unparsed (`op: unparseable`) (a budget the
@@ -1423,7 +1423,7 @@ fn the_probe_keeps_its_cadence_while_the_board_keeps_committing() {
 /// it composes what the board refuses).
 #[test]
 fn the_codecs_budgets_are_the_composers() {
-    use crate::attest::{MAX_ADDRESS_COMPONENTS, MAX_INSERT_VALUES, MAX_WIRE_LIST};
+    use crate::attest::{MAX_INSERT_VALUES, MAX_TUMBLER_COMPONENTS, MAX_WIRE_LIST};
     use skep_client::board::{Opened, Rejection, SessionBody};
     let dir = TempDir::new().unwrap();
     let sd = spawn(&dir.path().join("board"), true);
@@ -1438,7 +1438,7 @@ fn the_codecs_budgets_are_the_composers() {
     let insert = |values: usize| json!({"op": "insert", "doc": "1.0.1.0.9", "at": {"subspace": "1", "ordinal": "1"}, "values": ["a".repeat(values)]});
     let cells = [
         ("a list", json!({"op": "retrieve_v", "specs": vec![spec.clone(); MAX_WIRE_LIST]}), json!({"op": "retrieve_v", "specs": vec![spec; MAX_WIRE_LIST + 1]})),
-        ("an address", json!({"op": "doc_metadata", "doc": deep(MAX_ADDRESS_COMPONENTS)}), json!({"op": "doc_metadata", "doc": deep(MAX_ADDRESS_COMPONENTS + 1)})),
+        ("an address", json!({"op": "doc_metadata", "doc": deep(MAX_TUMBLER_COMPONENTS)}), json!({"op": "doc_metadata", "doc": deep(MAX_TUMBLER_COMPONENTS + 1)})),
         ("an insert's values", insert(MAX_INSERT_VALUES), insert(MAX_INSERT_VALUES + 1)),
     ];
     for (cell, at, past) in cells {

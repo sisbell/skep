@@ -131,8 +131,8 @@ pub struct Feed {
 
 impl Feed {
     /// A session registered at this board: its supplement mounted.
-    pub fn widen(&self, entry: &Arc<SessionEntry>) {
-        let _ = self.cmds.send(Cmd::Widen(Arc::clone(entry)));
+    pub fn widen(&self, session: &Arc<SessionEntry>) {
+        let _ = self.cmds.send(Cmd::Widen(Arc::clone(session)));
     }
 
     /// A session ended: its supplement unmounted.
@@ -146,9 +146,9 @@ impl Feed {
     /// (`Sessions::release`), answered once both are done, so every `feed`
     /// row of the session precedes the `session-died` its close emits next.
     /// A thread that has stopped answers at once.
-    pub fn closing(&self, entry: &Arc<SessionEntry>) {
+    pub fn closing(&self, session: &Arc<SessionEntry>) {
         let (reply, rx) = channel();
-        if self.cmds.send(Cmd::Closing(Arc::clone(entry), reply)).is_ok() {
+        if self.cmds.send(Cmd::Closing(Arc::clone(session), reply)).is_ok() {
             let _ = rx.recv();
         }
     }
@@ -168,8 +168,8 @@ impl Feed {
 /// each widen and narrow a command the board's thread runs — a shared
 /// handle, as `&File` is a `Write`.
 impl Supplements for &Feed {
-    fn widen(&mut self, entry: &Arc<SessionEntry>) {
-        Feed::widen(self, entry);
+    fn widen(&mut self, session: &Arc<SessionEntry>) {
+        Feed::widen(self, session);
     }
 
     fn narrow(&mut self, principal: u64) {
@@ -293,10 +293,10 @@ struct Worker<'b> {
     last_mode: Option<Mode>,
     last_index: BTreeMap<Option<u64>, Value>,
     /// The session reference per mounted principal, for the `index` event.
-    references: HashMap<u64, String>,
-    /// `unreachable` was announced on the `daemon` event for this board, and
-    /// its `running` is owed at the next tick.
-    unreachable: bool,
+    session_references: HashMap<u64, String>,
+    /// Whether `unreachable` was announced on the `daemon` event for this
+    /// board, its `running` then owed at the next tick.
+    announced_unreachable: bool,
     /// The stream is down — said on TALK once per outage, announced or not
     /// ([`Worker::unreachable`]); cleared by the next tick.
     down: bool,
@@ -321,12 +321,12 @@ impl<'b> Worker<'b> {
             drafts_since: HashMap::new(),
             last_mode: None,
             last_index: BTreeMap::new(),
-            references: HashMap::new(),
-            unreachable: false,
+            session_references: HashMap::new(),
+            announced_unreachable: false,
             down: false,
         };
         worker.mount();
-        worker.read_mode();
+        worker.read_health();
         worker.emit_index();
         // THE PROBE (§3c.4) has a deadline of its own: the loop wakes on each
         // command and at the deadline, and probes once the deadline has
@@ -339,12 +339,12 @@ impl<'b> Worker<'b> {
             match rx.recv_timeout(next_probe.saturating_duration_since(Instant::now())) {
                 Ok(Cmd::Tick) => worker.tick(ticks.take()),
                 Ok(Cmd::Unreachable(text)) => worker.unreachable(&text),
-                Ok(Cmd::Widen(entry)) => worker.widen(&entry),
+                Ok(Cmd::Widen(session)) => worker.widen(&session),
                 Ok(Cmd::Narrow(principal)) => worker.narrow(principal),
-                Ok(Cmd::Closing(entry, reply)) => {
-                    worker.read_drafts(&entry);
+                Ok(Cmd::Closing(session, reply)) => {
+                    worker.read_drafts(&session);
                     let sessions = Arc::clone(&worker.sessions);
-                    sessions.release(&entry.board_reference, entry.facts.principal, &mut worker);
+                    sessions.release(&session.board_reference, session.facts.principal, &mut worker);
                     let _ = reply.send(());
                 }
                 Ok(Cmd::Search { who, query, opts, reindex, reply }) => {
@@ -383,15 +383,15 @@ impl<'b> Worker<'b> {
     }
 
     fn tick(&mut self, position: u64) {
-        let was_unreachable = self.unreachable;
+        let announced = self.announced_unreachable;
         self.down = false;
-        if self.unreachable {
-            self.unreachable = false;
+        if announced {
+            self.announced_unreachable = false;
             self.bus.emit(EventName::Daemon, json!({"board": self.entry.reference, "state": "running"}));
         }
-        // The pair read first: where the board did not answer before, its
-        // head is where the published feed starts.
-        self.read_mode();
+        // The `/health` read first: where the board did not answer before,
+        // its head is where the published feed starts.
+        self.read_health();
         self.mount();
         if let Some(c) = &self.consumer {
             match c.poll() {
@@ -407,7 +407,7 @@ impl<'b> Worker<'b> {
         self.emit_index();
         // The `running` emit ends an unreachable hold at this board (§3c.4):
         // the resend runs where the board is back and a session stands.
-        if was_unreachable {
+        if announced {
             self.holds.probe(&self.entry.reference);
         }
     }
@@ -418,13 +418,13 @@ impl<'b> Worker<'b> {
     /// naming its board — EXCEPT under the own node's DELIBERATE STOP
     /// (`Holds::node_stopped`, set by `Shell::set_node_state`): a stop the
     /// person made is announced `stopped` once by the shell, this thread adds
-    /// no `unreachable` while the stop stands, and `self.unreachable` stays
-    /// false, so the next tick says no `running` of its own either —
+    /// no `unreachable` while the stop stands, and `self.announced_unreachable`
+    /// stays false, so the next tick says no `running` of its own either —
     /// `set_node_state(Running)` is the one `running`. Where the stop is
     /// lifted while the stream is still down, the next failure here is
     /// announced as built.
     fn unreachable(&mut self, text: &str) {
-        if self.unreachable {
+        if self.announced_unreachable {
             return;
         }
         if !self.down {
@@ -434,7 +434,7 @@ impl<'b> Worker<'b> {
         if self.holds.node_stopped(&self.entry.reference) {
             return;
         }
-        self.unreachable = true;
+        self.announced_unreachable = true;
         self.bus.emit(EventName::Daemon, json!({"board": self.entry.reference, "state": "unreachable"}));
         // Every session at this board is dead where the board restarted;
         // the arm is read when the board answers again.
@@ -445,7 +445,7 @@ impl<'b> Worker<'b> {
     /// ended. Another session of the principal meets its own death on its
     /// own drafts read, never on this one's.
     fn died(&mut self, principal: u64) {
-        let Some(session) = self.references.get(&principal).and_then(|r| self.sessions.get(r)) else { return };
+        let Some(session) = self.session_references.get(&principal).and_then(|r| self.sessions.get(r)) else { return };
         self.end(&session);
     }
 
@@ -535,10 +535,11 @@ impl<'b> Worker<'b> {
         self.bus.emit(EventName::Feed, json!({"board": self.entry.reference, "update": update}));
     }
 
-    /// THE `mode` EVENT where the pair moved (the claim's landing, a
-    /// restart with the flag changed) — and, the first time the board
-    /// answers, its head as the published feed's start.
-    fn read_mode(&mut self) {
+    /// THE `/health` READ of a tick: the `mode` event where the pair moved
+    /// (the claim's landing, a restart with the flag changed), `writes.halted`
+    /// told the hold, and — the first time the board answers — its head as
+    /// the published feed's start.
+    fn read_health(&mut self) {
         let Ok(health) = self.entry.board.health() else { return };
         self.published_since.get_or_insert(health.log_position());
         // ONE member more read per tick (§3c.4): `writes.halted` tells the hold,
@@ -568,7 +569,7 @@ impl<'b> Worker<'b> {
         }
         for (principal, state) in faces {
             if self.last_index.get(&principal) != Some(&state) {
-                let session = principal.and_then(|p| self.references.get(&p).cloned());
+                let session = principal.and_then(|p| self.session_references.get(&p).cloned());
                 self.bus.emit(EventName::Index, json!({"board": self.entry.reference, "session": session, "state": state}));
                 self.last_index.insert(principal, state);
             }
@@ -612,17 +613,17 @@ impl<'b> Worker<'b> {
 /// `sessions` widen and narrow here when this thread meets a session's end,
 /// and the shell's commands land here.
 impl Supplements for Worker<'_> {
-    fn widen(&mut self, entry: &Arc<SessionEntry>) {
-        let Some(account) = entry.facts.account.as_deref() else { return };
-        let principal = entry.facts.principal;
-        self.references.insert(principal, entry.reference.clone());
-        self.drafts_since.entry(principal).or_insert(entry.opened_at);
+    fn widen(&mut self, session: &Arc<SessionEntry>) {
+        let Some(account) = session.facts.account.as_deref() else { return };
+        let principal = session.facts.principal;
+        self.session_references.insert(principal, session.reference.clone());
+        self.drafts_since.entry(principal).or_insert(session.opened_at);
         // The face is announced afresh under the reference it now stands
         // under — a re-opened session's as much as a new one's.
         self.last_index.remove(&Some(principal));
         self.mount();
         if let Some(c) = &self.consumer {
-            if let Err(h) = c.widen(SessionRef { token: &entry.token, principal, account }) {
+            if let Err(h) = c.widen(SessionRef { token: &session.token, principal, account }) {
                 self.say(format!("the supplement for principal {principal} could not widen: {h}"));
             }
         }
@@ -635,7 +636,7 @@ impl Supplements for Worker<'_> {
                 self.say(format!("the supplement for principal {principal} could not narrow: {h}"));
             }
         }
-        self.references.remove(&principal);
+        self.session_references.remove(&principal);
         self.drafts_since.remove(&principal);
         self.last_index.remove(&Some(principal));
     }

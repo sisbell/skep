@@ -1112,7 +1112,7 @@ an item the root re-exports counted as the module it is brought from
   credential, never derived from an origin or a token (THE PIN).
 - `log.rs` the call log and the dial log the page's gate reads — each entry
   numbered by its place in the whole sequence under the one lock that
-  places it, the latest `LOG_ENTRIES` kept, a call's outcome a
+  places it, the latest `MAX_LOG_ENTRIES` kept, a call's outcome a
   `CallOutcome`, a call of no name the bridge spells kept by the name's
   length — and `LoggingDialer`, the one `PlainHttp` every board dials
   through, the log's one maker of dial entries — so the bare set is met by
@@ -1134,7 +1134,7 @@ an item the root re-exports counted as the module it is brought from
   through `skep-identity`'s builders, as the daemon's verifier composes; and
   THE BOARD's BUDGETS, the numbers the composer, the held store and the
   hold's door keep as the board keeps them — the frame cap
-  (`MAX_FRAME_BYTES`), a wire list, an insert's values, an address's
+  (`MAX_FRAME_BYTES`), a wire list, an insert's values, a tumbler's
   components, a slot's spans, a shot's re-inserted values — and
   `document_address`, the document address in its one spelling.
 - `held.rs` the HELD-BURST STORE (`client.md` §3c): one append-only file per
@@ -1269,7 +1269,7 @@ Rules that hold across its files:
   holds the same frame to (`attest.rs`'s constants, each pinned to the
   board's — by its export where it exports one, by its behaviour where it
   does not): a burst past the frame cap, a list past the wire's, an insert
-  past its values, an address past its components, a slot past its spans,
+  past its values, a tumbler past its components, a slot past its spans,
   a shot past its re-insert budget or its body, an origin past one
   delivery, and the held queue past one frame's worth. A frame past one is
   a frame the board refuses whatever it carries; no budget here is one the

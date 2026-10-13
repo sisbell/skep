@@ -1,7 +1,7 @@
 //! THE HOLD's FENCE: the classification table (T6) — every `DialError`, every
 //! disposition, `poisoned`, `write_busy`, `durability` once/twice/three times,
 //! and an ack, each to exactly its row; the five kinds are bursts and the
-//! eleven other `WRITE_OPS` are not. And THE RESEND WALK over a fake board:
+//! eleven other `WRITE_KINDS` are not. And THE RESEND WALK over a fake board:
 //! THE READ's TABLE (§3c.5), every answer the read can meet against every
 //! answer its site read can — no row (send from the head), one own row its
 //! site does not contradict (the head `done kept`, nothing re-sent), a lost
@@ -41,13 +41,13 @@ use super::*;
 use crate::events::Event;
 use crate::sessions::{Facts, Kind, Open, Supplements};
 
-/// The five burst kinds are bursts; the eleven other write ops are not.
+/// The five burst kinds are bursts; the eleven other write kinds are not.
 #[test]
-fn the_five_kinds_are_bursts_and_no_other_write_op_is() {
+fn the_five_kinds_are_bursts_and_no_other_write_kind_is() {
     for op in BURST_KINDS {
         assert!(is_burst(&json!({"op": op})), "{op}");
     }
-    for op in crate::shell::WRITE_OPS {
+    for op in crate::shell::WRITE_KINDS {
         let burst = BURST_KINDS.contains(&op);
         assert_eq!(is_burst(&json!({"op": op})), burst, "{op}");
     }
@@ -57,7 +57,7 @@ fn the_five_kinds_are_bursts_and_no_other_write_op_is() {
 }
 
 fn rej(code: &str, disposition: &str) -> Decision {
-    classify(Outcome::Rejected { code, disposition }, 0)
+    classify(DialOutcome::Rejected { code, disposition }, 0)
 }
 
 /// THE CLASSIFICATION TABLE (§3c.4): each outcome to exactly its row. The own
@@ -67,25 +67,25 @@ fn rej(code: &str, disposition: &str) -> Decision {
 fn every_outcome_classifies_to_exactly_its_row() {
     // No connection made — the burst did not leave (`sent: false`).
     for e in [DialError::Connect("x".into()), DialError::Resolve("x".into()), DialError::Tls("x".into())] {
-        assert_eq!(classify(Outcome::Dial(&e), 0), Decision::Hold { cause: "unreachable", sent: false }, "{e}");
+        assert_eq!(classify(DialOutcome::Dial(&e), 0), Decision::Hold { cause: "unreachable", sent: false }, "{e}");
     }
     // The request left, its answer lost — it MAY have landed (`sent: true`).
     for e in [DialError::Timeout("x".into()), DialError::Io("x".into()), DialError::Truncated { declared: 9, got: 1 }, DialError::Response("x".into()), DialError::TooLarge { cap: 1 }] {
-        assert_eq!(classify(Outcome::Dial(&e), 0), Decision::Hold { cause: "unreachable", sent: true }, "{e}");
+        assert_eq!(classify(DialOutcome::Dial(&e), 0), Decision::Hold { cause: "unreachable", sent: true }, "{e}");
     }
     // The scheme this build does not hold, or a request refused before any
     // connection — faced as built, no probe ends either.
     for e in [DialError::NotHeld("https".into()), DialError::Request("x".into())] {
-        assert_eq!(classify(Outcome::Dial(&e), 0), Decision::Neither, "{e}");
+        assert_eq!(classify(DialOutcome::Dial(&e), 0), Decision::Neither, "{e}");
     }
     // The codes. `poisoned` MAY have landed (§3c.2): the frames reached the
     // journal and a restart replays them, so its line says `sent: true`.
     assert_eq!(rej("poisoned", "halt"), Decision::Hold { cause: "poisoned", sent: true });
     assert_eq!(rej("write_busy", "retry"), Decision::Reissue);
     // `durability` once, twice → reissue; a THIRD on the same burst → hold.
-    assert_eq!(classify(Outcome::Rejected { code: "durability", disposition: "retry" }, 0), Decision::Reissue);
-    assert_eq!(classify(Outcome::Rejected { code: "durability", disposition: "retry" }, 1), Decision::Reissue);
-    assert_eq!(classify(Outcome::Rejected { code: "durability", disposition: "retry" }, 2), Decision::Hold { cause: "durability", sent: false });
+    assert_eq!(classify(DialOutcome::Rejected { code: "durability", disposition: "retry" }, 0), Decision::Reissue);
+    assert_eq!(classify(DialOutcome::Rejected { code: "durability", disposition: "retry" }, 1), Decision::Reissue);
+    assert_eq!(classify(DialOutcome::Rejected { code: "durability", disposition: "retry" }, 2), Decision::Hold { cause: "durability", sent: false });
     // A `permanent` or `reorder` refusal → a REFUSED run.
     assert_eq!(rej("out_of_bounds", "permanent"), Decision::Refused);
     assert_eq!(rej("not_registered", "reorder"), Decision::Refused);
@@ -110,9 +110,9 @@ struct Fake {
     changes_refused: Mutex<Option<(u16, Value)>>,
     text: Mutex<String>,
     site_unread: AtomicBool,
-    sent: Mutex<Vec<Value>>,
-    reject: Mutex<Option<Value>>,
-    refuse_op: Mutex<Option<(u16, Value)>>,
+    sends: Mutex<Vec<Value>>,
+    op_rejected: Mutex<Option<Value>>,
+    op_refused: Mutex<Option<(u16, Value)>>,
     next_at: AtomicU64,
     writes_halted: AtomicBool,
     panic_next_health: AtomicBool,
@@ -134,9 +134,9 @@ impl Fake {
             changes_refused: Mutex::new(None),
             text: Mutex::new(String::new()),
             site_unread: AtomicBool::new(false),
-            sent: Mutex::new(Vec::new()),
-            reject: Mutex::new(None),
-            refuse_op: Mutex::new(None),
+            sends: Mutex::new(Vec::new()),
+            op_rejected: Mutex::new(None),
+            op_refused: Mutex::new(None),
             next_at: AtomicU64::new(50),
             writes_halted: AtomicBool::new(false),
             panic_next_health: AtomicBool::new(false),
@@ -145,8 +145,8 @@ impl Fake {
         })
     }
 
-    fn sent(&self) -> usize {
-        self.sent.lock().unwrap().len()
+    fn sends(&self) -> usize {
+        self.sends.lock().unwrap().len()
     }
 
     /// The `/health` gate shut: each read waits there until it opens.
@@ -241,11 +241,11 @@ impl Dialer for Fake {
                     _ => ok(json!({"resp": "rejected", "code": "out_of_bounds", "disposition": "permanent", "op": "retrieve_v"})),
                 });
             }
-            self.sent.lock().unwrap().push(body.clone());
-            if let Some((status, refusal)) = self.refuse_op.lock().unwrap().clone() {
+            self.sends.lock().unwrap().push(body.clone());
+            if let Some((status, refusal)) = self.op_refused.lock().unwrap().clone() {
                 return Ok(respond(status, refusal));
             }
-            if let Some(r) = self.reject.lock().unwrap().clone() {
+            if let Some(r) = self.op_rejected.lock().unwrap().clone() {
                 return Ok(ok(r));
             }
             let at = self.next_at.fetch_add(1, Ordering::SeqCst);
@@ -259,8 +259,8 @@ impl Dialer for Fake {
     }
 }
 
-struct NoSupp;
-impl Supplements for NoSupp {
+struct NoSupplements;
+impl Supplements for NoSupplements {
     fn widen(&mut self, _: &Arc<SessionEntry>) {}
     fn narrow(&mut self, _: u64) {}
 }
@@ -279,7 +279,7 @@ struct Ground {
 /// A `held` event held to its declaration (`shapes`' `HeldEvent`): every
 /// required member present, none outside the table, and `session` a
 /// reference — never null, as the declared type says.
-fn declared(event: &Value) {
+fn assert_declared(event: &Value) {
     let shape = crate::shapes::shape("HeldEvent").expect("HeldEvent is declared");
     let members = event.as_object().expect("an event's data is an object");
     for field in shape.fields {
@@ -298,7 +298,7 @@ impl Ground {
             .try_iter()
             .filter(|e| e.name == EventName::Held)
             .map(|e| {
-                declared(&e.data);
+                assert_declared(&e.data);
                 e.data["state"].as_str().unwrap_or("?").to_string()
             })
             .collect()
@@ -354,7 +354,7 @@ fn ground_over(fake: Arc<Fake>, store: TempDir, facts: Facts, opened_at: u64) ->
     let keys = Arc::new(FileStore::open(store.path().join("store")));
     let holds = Holds::new(Arc::clone(&sessions), bus, keys, store.path().to_path_buf(), Arc::new(|_: &str| {}), [("b-1".to_string(), board)]);
     let open = Open { token: Token::parse(&"9f".repeat(16)).unwrap(), facts, opened_at };
-    let session = sessions.register("b-1", open, &mut NoSupp);
+    let session = sessions.register("b-1", open, &mut NoSupplements);
     holds.open_session("b-1", &session);
     Ground { holds, fake, session, rx, store }
 }
@@ -388,8 +388,8 @@ fn outcome_i_no_row_sends_from_the_head() {
     let g = ground();
     g.hold(&insert(DOC, json!(["hello"])), "unreachable", false);
     g.holds.probe("b-1");
-    assert_eq!(g.fake.sent(), 1, "the head is sent once");
-    assert_eq!(g.fake.sent.lock().unwrap()[0]["op"], "insert");
+    assert_eq!(g.fake.sends(), 1, "the head is sent once");
+    assert_eq!(g.fake.sends.lock().unwrap()[0]["op"], "insert");
     assert!(g.lines().is_empty(), "the line is kept and gone");
     assert!(g.states().contains(&"kept".to_string()));
 }
@@ -406,7 +406,7 @@ fn outcome_ii_a_landed_burst_is_kept_not_resent() {
     *g.fake.rows.lock().unwrap() = vec![json!({"at": 77, "op": "insert", "key": "bare", "docs": [DOC]})];
     g.hold(&insert(DOC, json!(["hello"])), "unreachable", true);
     g.holds.probe("b-1");
-    assert_eq!(g.fake.sent(), 0, "the landed head is NOT re-sent: {:?}", g.fake.sent.lock().unwrap());
+    assert_eq!(g.fake.sends(), 0, "the landed head is NOT re-sent: {:?}", g.fake.sends.lock().unwrap());
     assert!(g.lines().is_empty(), "the line is done kept");
     let states = g.states();
     assert!(states.contains(&"kept".to_string()) && !states.contains(&"moved".to_string()), "{states:?}");
@@ -421,7 +421,7 @@ fn outcome_iii_a_foreign_row_moves_the_document() {
     *g.fake.rows.lock().unwrap() = vec![json!({"at": 77, "op": "insert", "key": "ff".repeat(32), "docs": [DOC]})];
     g.hold(&insert(DOC, json!(["hello"])), "unreachable", true);
     g.holds.probe("b-1");
-    assert_eq!(g.fake.sent(), 0, "no line of a moved document is sent");
+    assert_eq!(g.fake.sends(), 0, "no line of a moved document is sent");
     let lines = g.lines();
     assert_eq!(lines[0]["cause"], "moved", "the line is faced moved: {lines:?}");
     let states = g.states();
@@ -444,11 +444,11 @@ fn a_signed_row_is_own_under_a_keyed_session_alone() {
         *g.fake.rows.lock().unwrap() = vec![row];
         g.hold(&insert(DOC, json!(["hello"])), "unreachable", true);
         g.holds.probe("b-1");
-        (g.states(), g.fake.sent())
+        (g.states(), g.fake.sends())
     };
-    let (states, sent) = walk(keyed_facts(), signed_row.clone());
+    let (states, sends) = walk(keyed_facts(), signed_row.clone());
     assert!(states.contains(&"kept".to_string()) && !states.contains(&"moved".to_string()), "the signed row is the keyed session's own: {states:?}");
-    assert_eq!(sent, 0, "the landed head is not re-sent");
+    assert_eq!(sends, 0, "the landed head is not re-sent");
     let (states, _) = walk(Facts { kind: Kind::Bare, ..keyed_facts() }, signed_row);
     assert!(states.contains(&"moved".to_string()), "a signed row is foreign to a bare session: {states:?}");
     let (states, _) = walk(keyed_facts(), bare_row);
@@ -471,17 +471,17 @@ fn a_lost_testimony_row_is_judged_by_the_arrangement_alone() {
         *g.fake.rows.lock().unwrap() = vec![lost.clone()];
         g.hold(&frame, "poisoned", sent);
         g.holds.probe("b-1");
-        (g.states(), g.fake.sent())
+        (g.states(), g.fake.sends())
     };
-    let (states, sent) = walk(insert(DOC, json!(["hello"])), "hello", true);
+    let (states, sends) = walk(insert(DOC, json!(["hello"])), "hello", true);
     assert!(states.contains(&"kept".to_string()) && !states.contains(&"moved".to_string()), "the landed insert is kept: {states:?}");
-    assert_eq!(sent, 0, "the landed head is not re-sent");
-    let (states, sent) = walk(insert(DOC, json!(["hello"])), "other", true);
-    assert!(states.contains(&"moved".to_string()) && sent == 0, "values that differ: moved, nothing sent: {states:?}");
-    let (states, sent) = walk(delete(DOC), "hello", true);
-    assert!(states.contains(&"moved".to_string()) && sent == 0, "a kind the site read cannot confirm: moved: {states:?}");
-    let (states, sent) = walk(insert(DOC, json!(["hello"])), "hello", false);
-    assert!(states.contains(&"moved".to_string()) && sent == 0, "a head never sent reads any row as moved: {states:?}");
+    assert_eq!(sends, 0, "the landed head is not re-sent");
+    let (states, sends) = walk(insert(DOC, json!(["hello"])), "other", true);
+    assert!(states.contains(&"moved".to_string()) && sends == 0, "values that differ: moved, nothing sent: {states:?}");
+    let (states, sends) = walk(delete(DOC), "hello", true);
+    assert!(states.contains(&"moved".to_string()) && sends == 0, "a kind the site read cannot confirm: moved: {states:?}");
+    let (states, sends) = walk(insert(DOC, json!(["hello"])), "hello", false);
+    assert!(states.contains(&"moved".to_string()) && sends == 0, "a head never sent reads any row as moved: {states:?}");
 }
 
 /// A `halted` hold — the feed's `writes.halted` read, before any dial — is
@@ -494,7 +494,7 @@ fn a_halted_hold_before_any_dial_is_sent_false() {
     assert_eq!(answer["cause"], "halted", "{answer}");
     let lines = g.lines();
     assert_eq!((lines[0]["cause"].as_str(), lines[0]["sent"].as_bool()), (Some("halted"), Some(false)), "{lines:?}");
-    assert_eq!(g.fake.sent(), 0, "no dial was made");
+    assert_eq!(g.fake.sends(), 0, "no dial was made");
 }
 
 /// A READ THE BOARD REFUSES DECIDES NOTHING (§3c.5): a `/changes` answered
@@ -509,13 +509,13 @@ fn a_read_the_board_refuses_decides_nothing() {
     *g.fake.changes_refused.lock().unwrap() = Some((503, json!({"error": "feed_rebuilding", "detail": "the feed is being re-covered"})));
     g.hold(&insert(DOC, json!(["hello"])), "unreachable", true);
     g.holds.probe("b-1");
-    assert_eq!(g.fake.sent(), 0, "nothing is sent on a read the board refused");
+    assert_eq!(g.fake.sends(), 0, "nothing is sent on a read the board refused");
     assert_eq!(g.lines()[0]["cause"], "unreachable", "the line stands as it was");
     let states = g.states();
     assert!(!states.contains(&"sending".to_string()), "an unread document is not said `sending`: {states:?}");
     *g.fake.changes_refused.lock().unwrap() = None;
     g.holds.probe("b-1");
-    assert_eq!(g.fake.sent(), 1, "the next wake reads the page and sends");
+    assert_eq!(g.fake.sends(), 1, "the next wake reads the page and sends");
     assert!(g.lines().is_empty());
 }
 
@@ -532,7 +532,7 @@ fn history_reclaimed_decides_by_the_arrangement() {
     *g.fake.text.lock().unwrap() = "hello".into();
     g.hold(&insert(DOC, json!(["hello"])), "unreachable", true);
     g.holds.probe("b-1");
-    assert_eq!(g.fake.sent(), 0, "the landed head is not re-sent");
+    assert_eq!(g.fake.sends(), 0, "the landed head is not re-sent");
     assert!(g.lines().is_empty(), "the values at the site keep it");
     assert!(g.states().contains(&"kept".to_string()));
 
@@ -541,14 +541,14 @@ fn history_reclaimed_decides_by_the_arrangement() {
     *g.fake.text.lock().unwrap() = "other".into();
     g.hold(&insert(DOC, json!(["hello"])), "unreachable", true);
     g.holds.probe("b-1");
-    assert_eq!((g.fake.sent(), g.lines()[0]["cause"].as_str()), (0, Some("moved")), "values that differ: moved");
+    assert_eq!((g.fake.sends(), g.lines()[0]["cause"].as_str()), (0, Some("moved")), "values that differ: moved");
 
     let g = ground();
     *g.fake.changes_refused.lock().unwrap() = reclaimed();
     g.fake.site_unread.store(true, Ordering::SeqCst);
     g.hold(&insert(DOC, json!(["hello"])), "unreachable", true);
     g.holds.probe("b-1");
-    assert_eq!(g.fake.sent(), 0);
+    assert_eq!(g.fake.sends(), 0);
     assert_eq!(g.lines()[0]["cause"], "unreachable", "an unread site decides nothing: the line stands");
     assert!(!g.states().contains(&"kept".to_string()));
 }
@@ -561,15 +561,15 @@ fn history_reclaimed_decides_by_the_arrangement() {
 #[test]
 fn a_refusal_the_table_holds_nowhere_leaves_the_line_standing() {
     let g = ground();
-    *g.fake.reject.lock().unwrap() = Some(json!({"resp": "rejected", "code": "credential_refused", "detail": "index_rebuilding", "disposition": "retry", "op": "insert"}));
+    *g.fake.op_rejected.lock().unwrap() = Some(json!({"resp": "rejected", "code": "credential_refused", "detail": "index_rebuilding", "disposition": "retry", "op": "insert"}));
     g.hold(&insert(DOC, json!(["hello"])), "unreachable", false);
     g.holds.probe("b-1");
-    assert_eq!(g.fake.sent(), 1, "the line was sent");
+    assert_eq!(g.fake.sends(), 1, "the line was sent");
     assert_eq!(g.lines().len(), 1, "and stands: the board did not take it");
     assert!(!g.states().contains(&"kept".to_string()));
-    *g.fake.reject.lock().unwrap() = None;
+    *g.fake.op_rejected.lock().unwrap() = None;
     g.holds.probe("b-1");
-    assert_eq!(g.fake.sent(), 2, "the next wake sends it again");
+    assert_eq!(g.fake.sends(), 2, "the next wake sends it again");
     assert!(g.lines().is_empty() && g.states().contains(&"kept".to_string()));
 }
 
@@ -592,7 +592,7 @@ fn a_second_windows_burst_is_held_in_memory_and_resent() {
     assert!(!held_dir.join("principal-1.held").exists(), "a second window writes nothing");
     assert_eq!(g.lines().len(), 1, "the line stands in memory");
     g.holds.probe("b-1");
-    assert_eq!(g.fake.sent(), 1, "the line is resent");
+    assert_eq!(g.fake.sends(), 1, "the line is resent");
     assert!(g.lines().is_empty() && g.states().contains(&"kept".to_string()));
     let BurstAnswer::Answered(Ok(next)) = g.holds.send_burst("b-1", &g.session, insert(DOC, json!(["!"]))) else { panic!("the burst was answered") };
     assert_eq!(next["resp"], "ack", "no line stands, so the next burst is dialed: {next}");
@@ -615,7 +615,7 @@ fn a_hold_takes_the_last_acked_write_or_the_sessions_open_as_its_base() {
     g.hold(&insert(DOC, json!(["hello"])), "unreachable", false);
     assert_eq!(g.lines()[0]["base"], 60, "no ack names the document: the session's open");
     g.holds.probe("b-1");
-    assert_eq!(g.fake.sent(), 1);
+    assert_eq!(g.fake.sends(), 1);
     assert!(g.lines().is_empty() && g.states().contains(&"kept".to_string()), "the row before the open moves nothing");
 
     let g = ground_in(TempDir::new().unwrap(), bare_facts(), 60);
@@ -692,11 +692,11 @@ fn a_refused_run_drops_its_behind_lines() {
     let _ = g.rx.try_iter().count();
     g.holds.resolve("b-1", &g.session, k1, "drop").unwrap();
     assert!(g.lines().is_empty(), "the run and its behind lines are dropped");
-    assert_eq!(g.fake.sent(), 0, "nothing is dialed on a drop");
+    assert_eq!(g.fake.sends(), 0, "nothing is dialed on a drop");
     let said: Vec<Event> = g.rx.try_iter().filter(|e| e.name == EventName::Held).collect();
     assert_eq!(said.len(), 1, "{said:?}");
     let said = &said[0].data;
-    declared(said);
+    assert_declared(said);
     assert_eq!((said["session"].as_str(), said["held"].as_u64(), said["state"].as_str()), (Some(g.session.reference.as_str()), Some(0), Some("kept")), "the drop is said under the session that acted");
 }
 
@@ -717,7 +717,7 @@ fn a_drop_says_the_state_of_the_line_that_stands_first() {
     g.holds.resolve("b-1", &g.session, ks[1], "drop").unwrap();
     let said: Vec<Event> = g.rx.try_iter().filter(|e| e.name == EventName::Held).collect();
     assert_eq!(said.len(), 1, "{said:?}");
-    declared(&said[0].data);
+    assert_declared(&said[0].data);
     assert_eq!((said[0].data["state"].as_str(), said[0].data["held"].as_u64()), (Some("moved"), Some(1)), "{said:?}");
     let left: Vec<u64> = g.lines().iter().map(|l| l["held"].as_u64().unwrap()).collect();
     assert_eq!(left, [ks[0]], "the dropped line and the one after it are gone");
@@ -749,9 +749,9 @@ fn a_drain_that_unwinds_leaves_the_board_free_to_drain() {
     g.fake.panic_next_health.store(true, Ordering::SeqCst);
     let unwound = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| g.holds.probe("b-1")));
     assert!(unwound.is_err(), "the health read panicked");
-    assert_eq!(g.fake.sent(), 0, "nothing was sent while it unwound");
+    assert_eq!(g.fake.sends(), 0, "nothing was sent while it unwound");
     g.holds.probe("b-1");
-    assert_eq!(g.fake.sent(), 1, "the next probe drains");
+    assert_eq!(g.fake.sends(), 1, "the next probe drains");
     assert!(g.lines().is_empty() && g.states().contains(&"kept".to_string()));
 }
 
@@ -787,7 +787,7 @@ fn a_probe_while_a_drain_runs_dials_nothing() {
         reads
     });
     assert_eq!(reads, 1, "a second probe read `/health` while the first drained the board");
-    assert_eq!(g.fake.sent(), 1, "the line is sent once");
+    assert_eq!(g.fake.sends(), 1, "the line is sent once");
     assert!(g.lines().is_empty());
 }
 
@@ -795,7 +795,7 @@ fn a_probe_while_a_drain_runs_dials_nothing() {
 
 /// What the board answers THE READ of the held head's document.
 #[derive(Debug, Clone, Copy)]
-enum TheRead {
+enum ReadAnswer {
     /// A page holding no row since the head's `base`.
     NoRow,
     /// A page of one row of the session's own hand, of the `op` named.
@@ -825,7 +825,7 @@ enum Head {
 /// What a read of the head's site answers: the head's own values, other
 /// values, or no answer.
 #[derive(Debug, Clone, Copy)]
-enum AtTheSite {
+enum SiteAnswer {
     Equal,
     Differs,
     Unread,
@@ -860,10 +860,10 @@ enum Settles {
 /// confirms kept (17), and a page too large read as none or as unread (20).
 #[test]
 fn every_read_answer_meets_every_site_answer_as_the_table_says() {
-    use AtTheSite::{Differs, Equal, Unread};
     use Head::{Delete, Insert};
+    use ReadAnswer::{ForeignRow, LostRow, NoRow, OwnRow, Reclaimed, Refused, TooLarge, TwoOwnRows};
     use Settles::{Kept, Moved, Resent, Standing};
-    use TheRead::{ForeignRow, LostRow, NoRow, OwnRow, Reclaimed, Refused, TooLarge, TwoOwnRows};
+    use SiteAnswer::{Differs, Equal, Unread};
     let table = [
         (NoRow, Insert, None, true, Resent),
         (OwnRow("insert"), Insert, Some(Equal), true, Kept),
@@ -927,7 +927,7 @@ fn every_read_answer_meets_every_site_answer_as_the_table_says() {
         let said: Vec<&str> = states.iter().map(String::as_str).skip(1).collect();
         assert_eq!(states.first().map(String::as_str), Some("holding"), "row {}: the hold says `holding` first: {states:?}", n + 1);
         assert_eq!(
-            (g.fake.sent(), causes, said),
+            (g.fake.sends(), causes, said),
             (sends, standing.to_vec(), says.to_vec()),
             "row {}: {read:?}, a held {head:?} head, its site {site:?}, sent {sent} — {settles:?} (sends, causes standing, states said)",
             n + 1
@@ -953,7 +953,7 @@ fn a_drop_drops_its_own_documents_run_and_no_other() {
     let docs: Vec<String> = g.lines().iter().map(|l| l["doc"].as_str().unwrap_or("?").to_string()).collect();
     assert_eq!(docs, [OTHER], "the run is dropped, the other document's line stands");
     g.holds.probe("b-1");
-    assert_eq!(g.fake.sent(), 1, "the other document's line is sent");
+    assert_eq!(g.fake.sends(), 1, "the other document's line is sent");
     assert!(g.lines().is_empty() && g.states().contains(&"kept".to_string()));
 }
 
@@ -973,8 +973,8 @@ fn a_moved_document_faces_its_own_lines_alone() {
     let lines = g.lines();
     let standing: Vec<(&str, &str)> = lines.iter().map(|l| (l["doc"].as_str().unwrap_or("?"), l["cause"].as_str().unwrap_or("?"))).collect();
     assert_eq!(standing, [(DOC, "moved")], "the moved document's line alone stands");
-    let sent: Vec<Value> = g.fake.sent.lock().unwrap().iter().map(|f| f["doc"].clone()).collect();
-    assert_eq!(sent, [json!(OTHER)], "the other document's line is sent");
+    let sent_docs: Vec<Value> = g.fake.sends.lock().unwrap().iter().map(|f| f["doc"].clone()).collect();
+    assert_eq!(sent_docs, [json!(OTHER)], "the other document's line is sent");
 }
 
 /// THE OWN NODE STOPPED (§3c.4): while its owner's stop stands, a burst is
@@ -990,10 +990,10 @@ fn a_stopped_node_holds_every_burst_until_it_runs() {
     assert_eq!((held["resp"].as_str(), held["cause"].as_str()), (Some("held"), Some("stopped")), "{held}");
     assert_eq!(g.lines()[0]["sent"], false);
     g.holds.probe("b-1");
-    assert_eq!((g.fake.sent(), g.fake.health_reads.load(Ordering::SeqCst)), (0, 0), "nothing is dialed while the stop stands");
+    assert_eq!((g.fake.sends(), g.fake.health_reads.load(Ordering::SeqCst)), (0, 0), "nothing is dialed while the stop stands");
     g.holds.set_node_stopped("b-1", false);
     g.holds.probe("b-1");
-    assert_eq!(g.fake.sent(), 1, "the running node takes the line");
+    assert_eq!(g.fake.sends(), 1, "the running node takes the line");
     assert!(g.lines().is_empty() && g.states().contains(&"kept".to_string()));
 }
 
@@ -1010,10 +1010,10 @@ fn the_halted_hold_ends_at_the_first_read_that_says_writes_go() {
     let BurstAnswer::Answered(Ok(held)) = g.holds.send_burst("b-1", &g.session, insert(DOC, json!(["hello"]))) else { panic!("held before the dial") };
     assert_eq!(held["cause"], "halted", "{held}");
     g.holds.probe("b-1");
-    assert_eq!(g.fake.sent(), 0, "a board whose writes are halted is sent nothing");
+    assert_eq!(g.fake.sends(), 0, "a board whose writes are halted is sent nothing");
     g.fake.writes_halted.store(false, Ordering::SeqCst);
     g.holds.probe("b-1");
-    assert_eq!(g.fake.sent(), 1, "the read that says writes go ends the hold");
+    assert_eq!(g.fake.sends(), 1, "the read that says writes go ends the hold");
     assert!(g.lines().is_empty());
     let BurstAnswer::Answered(Ok(next)) = g.holds.send_burst("b-1", &g.session, insert(DOC, json!(["!"]))) else { panic!("the burst was answered") };
     assert_eq!(next["resp"], "ack", "the hold has ended: {next}");
@@ -1026,15 +1026,15 @@ fn the_halted_hold_ends_at_the_first_read_that_says_writes_go() {
 #[test]
 fn a_third_durability_on_a_resent_line_holds_it() {
     let g = ground();
-    *g.fake.reject.lock().unwrap() = Some(json!({"resp": "rejected", "code": "durability", "disposition": "retry", "op": "insert"}));
+    *g.fake.op_rejected.lock().unwrap() = Some(json!({"resp": "rejected", "code": "durability", "disposition": "retry", "op": "insert"}));
     g.hold(&insert(DOC, json!(["hello"])), "unreachable", false);
     for (wake, cause) in [(1, "unreachable"), (2, "unreachable"), (3, "durability")] {
         g.holds.probe("b-1");
-        assert_eq!((g.fake.sent(), g.lines()[0]["cause"].as_str()), (wake, Some(cause)), "wake {wake}");
+        assert_eq!((g.fake.sends(), g.lines()[0]["cause"].as_str()), (wake, Some(cause)), "wake {wake}");
     }
-    *g.fake.reject.lock().unwrap() = None;
+    *g.fake.op_rejected.lock().unwrap() = None;
     g.holds.probe("b-1");
-    assert_eq!(g.fake.sent(), 4);
+    assert_eq!(g.fake.sends(), 4);
     assert!(g.lines().is_empty() && g.states().contains(&"kept".to_string()));
 }
 
@@ -1046,16 +1046,16 @@ fn a_third_durability_on_a_resent_line_holds_it() {
 #[test]
 fn a_refusal_the_table_holds_nowhere_is_faced_at_the_first_dial() {
     let g = ground();
-    *g.fake.reject.lock().unwrap() = Some(json!({"resp": "rejected", "code": "credential_refused", "detail": "index_rebuilding", "disposition": "retry", "op": "insert"}));
+    *g.fake.op_rejected.lock().unwrap() = Some(json!({"resp": "rejected", "code": "credential_refused", "detail": "index_rebuilding", "disposition": "retry", "op": "insert"}));
     let BurstAnswer::Answered(Err(refused)) = g.holds.send_burst("b-1", &g.session, insert(DOC, json!(["a"]))) else { panic!("faced at the act") };
     assert_eq!(refused.name(), "index_rebuilding", "{refused}");
-    *g.fake.reject.lock().unwrap() = None;
-    *g.fake.refuse_op.lock().unwrap() = Some((503, json!({"error": "write_busy"})));
+    *g.fake.op_rejected.lock().unwrap() = None;
+    *g.fake.op_refused.lock().unwrap() = Some((503, json!({"error": "write_busy"})));
     let BurstAnswer::Answered(Err(busy)) = g.holds.send_burst("b-1", &g.session, insert(DOC, json!(["b"]))) else { panic!("faced at the act") };
     let v = busy.to_value();
     assert_eq!((busy.name(), v["status"].as_u64()), ("write_busy", Some(503)), "{v}");
     assert!(g.lines().is_empty(), "neither burst is held");
-    assert_eq!(g.fake.sent(), 2, "each was dialed once");
+    assert_eq!(g.fake.sends(), 2, "each was dialed once");
 }
 
 /// THE STORED FRAME carries no `attest` (§3c.2): a burst held with one is
@@ -1090,7 +1090,7 @@ fn a_halted_file_refuses_every_act_and_dials_nothing() {
     let g = ground_in(store, bare_facts(), 0);
     let BurstAnswer::Answered(Err(refused)) = g.holds.send_burst("b-1", &g.session, insert(DOC, json!(["hello"]))) else { panic!("a burst at a halted file is refused") };
     assert_eq!((refused.name(), refused.to_value()["why"].as_str()), ("store_halted", Some("newer")), "{refused}");
-    assert_eq!(g.fake.sent(), 0, "nothing is dialed past a halted file");
+    assert_eq!(g.fake.sends(), 0, "nothing is dialed past a halted file");
     assert_eq!(g.holds.lines("b-1", &g.session).unwrap_err().name(), "store_halted");
     let held = g.holds.hold("b-1", &g.session, &g.burst(&insert(DOC, json!(["x"]))), Reason::of("unreachable", false));
     assert_eq!(held.unwrap_err().name(), "store_halted", "no line is held");
@@ -1117,7 +1117,7 @@ fn a_line_the_store_cannot_copy_says_why_and_stands() {
     assert!(!g.store.path().join("held").exists(), "nothing is written");
     assert_eq!(g.lines().len(), 1, "the line stands");
     g.holds.probe("b-1");
-    assert_eq!(g.fake.sent(), 1, "the line is resent");
+    assert_eq!(g.fake.sends(), 1, "the line is resent");
     assert!(g.lines().is_empty() && g.states().contains(&"kept".to_string()));
 
     let g = ground();
@@ -1129,7 +1129,7 @@ fn a_line_the_store_cannot_copy_says_why_and_stands() {
     assert_eq!(g.lines().len(), 1, "the line stands");
     std::fs::remove_dir(&file).unwrap();
     g.holds.probe("b-1");
-    assert_eq!(g.fake.sent(), 1, "the line is resent");
+    assert_eq!(g.fake.sends(), 1, "the line is resent");
     assert!(g.lines().is_empty() && g.states().contains(&"kept".to_string()));
 }
 
@@ -1137,7 +1137,7 @@ fn a_line_the_store_cannot_copy_says_why_and_stands() {
 
 /// An insert of one atom, its frame's JSON spelling exactly `bytes` long —
 /// one value, so no value budget speaks before the frame's own.
-fn sized(bytes: usize) -> Value {
+fn sized_frame(bytes: usize) -> Value {
     let overhead = json_len(&insert(DOC, json!([{"atom": ""}])));
     insert(DOC, json!([{"atom": "x".repeat(bytes - overhead)}]))
 }
@@ -1156,10 +1156,10 @@ fn a_burst_the_board_takes_at_no_send_is_refused_at_the_door() {
     let g = ground();
     for stopped in [false, true] {
         g.holds.set_node_stopped("b-1", stopped);
-        let BurstAnswer::Answered(Err(refused)) = g.holds.send_burst("b-1", &g.session, sized(MAX_FRAME_BYTES + 1)) else { panic!("refused at the door") };
+        let BurstAnswer::Answered(Err(refused)) = g.holds.send_burst("b-1", &g.session, sized_frame(MAX_FRAME_BYTES + 1)) else { panic!("refused at the door") };
         let v = refused.to_value();
         assert_eq!((refused.name(), v["bytes"].as_u64(), v["cap"].as_u64()), ("frame_too_large", Some(MAX_FRAME_BYTES as u64 + 1), Some(MAX_FRAME_BYTES as u64)), "{v}");
-        assert!(g.lines().is_empty() && g.fake.sent() == 0, "stopped {stopped}: nothing held, nothing sent");
+        assert!(g.lines().is_empty() && g.fake.sends() == 0, "stopped {stopped}: nothing held, nothing sent");
     }
     g.holds.set_node_stopped("b-1", false);
     let undocumented = [json!({"op": "insert", "values": ["b"]}), insert("1.0.1.0.1.0.1.1", json!(["b"])), insert("01.0.1.0.1", json!(["b"]))];
@@ -1167,9 +1167,9 @@ fn a_burst_the_board_takes_at_no_send_is_refused_at_the_door() {
         let BurstAnswer::Answered(Err(refused)) = g.holds.send_burst("b-1", &g.session, frame.clone()) else { panic!("refused at the door: {frame}") };
         assert_eq!(refused.name(), "malformed_args", "{frame}");
     }
-    assert_eq!(g.fake.sent(), 0, "no burst the door refuses is dialed");
-    let BurstAnswer::Answered(Ok(ack)) = g.holds.send_burst("b-1", &g.session, sized(MAX_FRAME_BYTES)) else { panic!("a frame at the cap is sent") };
-    assert_eq!((ack["resp"].as_str(), g.fake.sent()), (Some("ack"), 1));
+    assert_eq!(g.fake.sends(), 0, "no burst the door refuses is dialed");
+    let BurstAnswer::Answered(Ok(ack)) = g.holds.send_burst("b-1", &g.session, sized_frame(MAX_FRAME_BYTES)) else { panic!("a frame at the cap is sent") };
+    assert_eq!((ack["resp"].as_str(), g.fake.sends()), (Some("ack"), 1));
     g.hold(&insert(DOC, json!(["a"])), "unreachable", false);
     for frame in &undocumented {
         let BurstAnswer::Answered(Err(refused)) = g.holds.send_burst("b-1", &g.session, frame.clone()) else { panic!("refused at the door: {frame}") };
@@ -1189,9 +1189,9 @@ fn a_burst_the_board_takes_at_no_send_is_refused_at_the_door() {
 fn a_signed_sessions_burst_keeps_room_for_its_attest() {
     let g = ground_in(TempDir::new().unwrap(), keyed_facts(), 0);
     g.hold(&insert(DOC, json!(["a"])), "unreachable", false);
-    let BurstAnswer::Answered(Err(refused)) = g.holds.send_burst("b-1", &g.session, sized(MAX_FRAME_BYTES)) else { panic!("refused at the door") };
+    let BurstAnswer::Answered(Err(refused)) = g.holds.send_burst("b-1", &g.session, sized_frame(MAX_FRAME_BYTES)) else { panic!("refused at the door") };
     assert_eq!(refused.name(), "frame_too_large", "{refused}");
-    let BurstAnswer::Answered(Ok(held)) = g.holds.send_burst("b-1", &g.session, sized(MAX_FRAME_BYTES - attest_room())) else { panic!("held behind") };
+    let BurstAnswer::Answered(Ok(held)) = g.holds.send_burst("b-1", &g.session, sized_frame(MAX_FRAME_BYTES - attest_room())) else { panic!("held behind") };
     assert_eq!(held["cause"], "behind", "{held}");
     let BurstAnswer::Answered(Err(refused)) = g.holds.send_burst("b-1", &g.session, insert(DOC, json!([7]))) else { panic!("refused at the door") };
     assert_eq!(refused.name(), "attest_not_composed", "{refused}");
@@ -1205,14 +1205,14 @@ fn a_signed_sessions_burst_keeps_room_for_its_attest() {
 #[test]
 fn a_burst_the_queue_has_no_room_for_is_refused_held_full() {
     let g = ground();
-    g.hold(&sized(MAX_HELD_FRAME_BYTES - 10), "unreachable", false);
+    g.hold(&sized_frame(MAX_HELD_FRAME_BYTES - 10), "unreachable", false);
     let _ = g.states();
     let BurstAnswer::Answered(Err(refused)) = g.holds.send_burst("b-1", &g.session, insert(DOC, json!(["b"]))) else { panic!("refused, not held") };
     let v = refused.to_value();
     assert_eq!((refused.name(), v["held_bytes"].as_u64(), v["cap"].as_u64()), ("held_full", Some(MAX_HELD_FRAME_BYTES as u64 - 10), Some(MAX_HELD_FRAME_BYTES as u64)), "{v}");
     assert_eq!(g.lines().len(), 1, "nothing more held");
     assert!(g.states().is_empty(), "no `held` event for a burst not held");
-    assert_eq!(g.fake.sent(), 0);
+    assert_eq!(g.fake.sends(), 0);
 }
 
 /// Holds over two boards of their own chains, a bare session of principal 1
@@ -1228,7 +1228,7 @@ fn two_boards() -> (Arc<Holds>, Vec<Arc<SessionEntry>>, TempDir) {
     let opened: Vec<Arc<SessionEntry>> = ["b-1", "b-2"]
         .iter()
         .map(|board| {
-            let session = sessions.register(board, Open { token: Token::parse(&"9f".repeat(16)).unwrap(), facts: bare_facts(), opened_at: 0 }, &mut NoSupp);
+            let session = sessions.register(board, Open { token: Token::parse(&"9f".repeat(16)).unwrap(), facts: bare_facts(), opened_at: 0 }, &mut NoSupplements);
             holds.open_session(board, &session);
             session
         })

@@ -113,7 +113,8 @@ pub struct HaltMark {
     pub at: Address,
     /// The kind the value names.
     pub kind: String,
-    /// The schema fault, as the door's token spells it.
+    /// The schema fault: `unknown_cell_schema`, the name of the cell's own
+    /// verdict, as the door's arm 4 answers it.
     pub fault: String,
 }
 
@@ -294,16 +295,21 @@ impl CellIndex {
         true
     }
 
-    /// ENTER A HALT MARK at `at`. Idempotent per address. `true` where new.
-    fn halt(&self, at: &Address, fault: &str) -> bool {
+    /// ENTER A HALT MARK at `at`: the picture kind named under no pinned
+    /// schema, its fault the verdict's own name
+    /// ([`cell::UNKNOWN_SCHEMA_TOKEN`]). Idempotent per address. `true`
+    /// where new.
+    fn halt(&self, at: &Address) -> bool {
         let mut entries = self.entries.write();
         if entries.halts.contains_key(at.tumbler()) {
             return false;
         }
-        entries.halts.insert(
-            at.tumbler().clone(),
-            HaltMark { at: at.clone(), kind: cell::KIND.to_string(), fault: fault.to_string() },
-        );
+        let mark = HaltMark {
+            at: at.clone(),
+            kind: cell::KIND.to_string(),
+            fault: cell::UNKNOWN_SCHEMA_TOKEN.to_string(),
+        };
+        entries.halts.insert(at.tumbler().clone(), mark);
         true
     }
 
@@ -401,7 +407,7 @@ impl CellIndex {
                 Entered::Cell
             }
             Err(refusal) if refusal.names_kind() => {
-                self.halt(at, "unknown_cell_schema");
+                self.halt(at);
                 Entered::Halt
             }
             Err(_) => Entered::Nothing,
@@ -686,8 +692,8 @@ mod tests {
         assert!(index.enter(&addr("1.0.1.0.5.0.1.1"), Some(a), &Cell { hash, size: 11 }));
         assert_eq!(index.base(a), 12);
         assert_eq!(index.first_halt(), None);
-        assert!(index.halt(&addr("1.0.1.0.6.0.1.1"), "unknown_cell_schema"));
-        assert!(!index.halt(&addr("1.0.1.0.6.0.1.1"), "unknown_cell_schema"));
+        assert!(index.halt(&addr("1.0.1.0.6.0.1.1")));
+        assert!(!index.halt(&addr("1.0.1.0.6.0.1.1")));
         let mark = index.first_halt().expect("a halt mark");
         assert_eq!(mark.fault, "unknown_cell_schema");
         assert_eq!(mark.kind, cell::KIND);

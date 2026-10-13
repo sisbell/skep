@@ -146,8 +146,9 @@ foundation and on the stores above it.
 - `skep-media` — the daemon's media resource (media lane A and lane B's
   policy): the reference cell's one parser and the blind cell, the media
   door, the gate over `skep-blobs` — the limits in force, the hold, the
-  three scopes, the binding — the cell index and its walk at open, the
-  pruner's pass, the fetch's composed order, the two permit pools, and the
+  three scopes, the deposit's terms, the floor, the binding — the cell
+  index and its walk at open, the pruner and its pass, the fetch's composed
+  order, the two permit pools, and the
   media limits, each `pub` where another crate reads it. It transports
   nothing: the routes, the replies, the deposit read and the operator's
   tools are the daemon's.
@@ -2028,14 +2029,20 @@ scopes a deposit is refused on (the own scope — the base plus the pending
 bytes — the venue total, the floor — in that order, the requester's own
 record first), the creation's gate (the standing-uploads bound, the floor
 on no length), THE FLOOR IN FORCE — the larger of the constant 256 MiB and
-twice the newest checkpoint's size plus one maximal segment, set by the
-daemon at open off the start point's header (the base that loaded, never a
-skipped header's claim) and after any landing, the thread's own or a
-backstop's; and the volume's free space as the floor reads it, the one
-figure the daemon's landing line carries too, the refusal said once per
-binding and its lift once at a finish — the binding's read with its
-window, and THE INVENTORY's two reads, whose figures the operator's tool
-reports under the gate's own pending rule. `index.rs` — THE CELL INDEX:
+twice the newest checkpoint's size plus one maximal segment, kept by the
+gate from the checkpoint sizes the daemon notes, at open the start point's
+(the base that loaded, never a skipped header's claim) and after any
+landing, the thread's own or a backstop's, and answered binding or not to
+the daemon's standing line by the creation's own test; and the volume's
+free space as the floor reads it, the one figure the daemon's landing line
+carries too, the refusal said once per binding and its lift once at a
+finish — THE DEPOSIT's TERMS, the creation and the finish of an upload
+under the principal's key, the deposit's function (the store's for the
+schema's designation, the pairing checked at compile time) and the lease
+interval in force; the binding's read with its window, and the deposit's
+wholeness the deposit read reports by; and THE INVENTORY's two reads,
+whose figures the operator's tool reports under the gate's own pending
+rule. `index.rs` — THE CELL INDEX:
 per hash the cells naming it, per account the distinct hashes its cells
 name at their size (the base); entered by the daemon's write path at every
 commit that mints a cell and rebuilt whole at every open on a thread over
@@ -2044,7 +2051,8 @@ copy (an entry is idempotent per cell) — that thread's death, caught,
 marks the index FAILED, a third state beside ready and not-ready, said
 once and re-said by the daemon's standing line; its readiness flag is what
 the index's three readers consult, and a value naming the kind under no
-pinned schema stands in it as a halt mark. `pruner.rs` — THE PRUNER's PASS: the
+pinned schema stands in it as a halt mark. `pruner.rs` — THE PRUNER, one
+per daemon beside its gate, and its PASS: the
 expired partials removed off the record's expiry and the hold; the halts
 on a foreign designation directory or a halt mark; the unreferenced files
 renamed aside under an exclusive arm the caller hands in (the credential
@@ -2094,11 +2102,13 @@ Rules that hold across its files:
   no caller holds it while taking one.
 - **The store knows no policy.** `skep-blobs` is handed a root and
   principals as opaque strings; who a principal is, what bounds its bytes,
-  the interval an upload and a lease are given, and which lock a finish
-  runs under are this crate's (`gate.rs`) and the daemon's, never the
-  store's. The gate's key for a principal is its own spelling: the routes
-  drive the store by it and the inventory reads it back through the gate's
-  two reads, never by a second spelling.
+  the interval an upload and a lease are given and the function a deposit
+  is hashed under are the gate's, applied by its own creation and finish
+  (`gate.rs`), and which lock a finish runs under is the daemon's — never
+  the store's. The gate's key for a principal is its own spelling: the
+  routes drive the store by it for the acts that name an upload, and the
+  inventory reads it back through the gate's two reads, never by a second
+  spelling.
 - **The cell's parser is the one parser; the door is the one media
   step.** `cell.rs`'s `parse` is the one reading of a picture cell's
   bytes, under the canonical rule (`parse(b)` answers a cell only where
@@ -2108,7 +2118,7 @@ Rules that hold across its files:
   the one place the daemon acts on that reading: no producer of the
   session layer's admission reads a value's bytes for the cell, and no
   route serves one.
-- **The lock arm is handed in.** `pruner::pass` takes the exclusive arm as
+- **The lock arm is handed in.** `Pruner::pass` takes the exclusive arm as
   a closure and holds whatever guard it answers for exactly one file; the
   crate names no lock of the daemon's.
 - **The surface is the daemon's need.** Every `pub` item is one the
@@ -2116,8 +2126,9 @@ Rules that hold across its files:
   `test-hooks`; the parsers, the binding and the gate's rules stay the
   crate's own. `tests/it/tidy.rs` checks it.
 - **The test seam is a feature.** `test-hooks` (default off) compiles in
-  the walk and stream holds, the prune hold and its notice, the gate's
-  clock, free-space and limits overrides, the index's report and counts
+  the walk and stream holds, the pruner's prune hold, its notice and its
+  count, the gate's clock, free-space, floor and limits overrides, the
+  index's report and counts
   and the pools' `try_hold`, and forwards `skep-blobs/test-hooks`; the
   daemon's hooks (`server/hooks.rs`) are the doors a suite reaches them
   through, and `scripts/gate-full.sh` builds the library and its docs

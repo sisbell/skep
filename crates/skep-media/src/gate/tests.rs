@@ -10,11 +10,67 @@ fn addr(s: &str) -> Address {
     validate(Tumbler::new(comps).expect("a tumbler")).expect("a test address")
 }
 
-/// The gate deposits under the cell schema's own designation: the two
-/// spellings — the cell schema's and the store's function's — are one.
+/// THE DEPOSIT's FUNCTION is the cell schema's (the pairing the build holds
+/// at compile time, read here as the suite reads it), and THE DEPOSIT's
+/// TERMS are the gate's: an upload created through the gate is filed under
+/// that designation, keyed to its principal, and given the lease interval in
+/// force — the daemon's default, then an installed record's.
 #[test]
-fn the_designation_is_the_cell_schemas() {
-    assert_eq!(DESIGNATION, HashFunction::Blake3.designation(), "the store files every deposit under it");
+fn the_deposit_function_is_the_cell_schemas_and_a_creation_takes_the_gates_terms() {
+    assert_eq!(DEPOSIT_FUNCTION.designation(), DESIGNATION, "the store files every deposit under it");
+    let dir = tempfile::tempdir().expect("tempdir");
+    let gate = MediaGate::open_with(dir.path(), MediaOptions::default()).expect("the store opens");
+    let p = PrincipalId(2);
+    let now = gate.now_ms();
+    let record = gate.create_upload(p, 5, now).expect("a creation");
+    assert_eq!(record.designation, DESIGNATION, "filed under the schema's designation");
+    assert_eq!(record.principal, MediaGate::key(p), "keyed to the principal, by the gate's spelling");
+    assert_eq!((record.length, record.offset), (5, 0));
+    assert_eq!(record.interval, Duration::from_millis(LEASE_INTERVAL_DEFAULT_MS), "the default");
+    assert_eq!(record.expires, now + LEASE_INTERVAL_DEFAULT_MS);
+    gate.install_limits(None, None, Some(1_000), None, None).expect("a record installs");
+    let record = gate.create_upload(p, 5, now).expect("a creation");
+    assert_eq!(record.interval, Duration::from_millis(1_000), "the record's interval, once installed");
+    assert_eq!(record.expires, now + 1_000);
+}
+
+/// THE FINISH through the gate (clause (7); `operations.md` §1.1 m9): the
+/// lease it takes runs the lease interval in force, and the finish is
+/// NOTED — with the floor's binding said and room back above the floor, the
+/// one finish says the lift, the flag cleared; a finish with no binding
+/// standing says nothing.
+#[test]
+fn a_finish_through_the_gate_takes_the_interval_in_force_and_says_the_lift() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let gate = MediaGate::open_with(dir.path(), MediaOptions::default()).expect("the store opens");
+    gate.install_limits(None, None, Some(5_000), None, None).expect("a record installs");
+    let p = PrincipalId(12);
+    let key = MediaGate::key(p);
+    let finish = |bytes: &[u8]| {
+        let now = gate.now_ms();
+        let record = gate.create_upload(p, bytes.len() as u64, now).expect("a creation");
+        let mut stream = gate.store().resume(&key, &record.id, 0, now).expect("a resume");
+        stream.append(bytes, now).expect("the bytes");
+        (gate.finish_upload(stream, now).expect("a finish"), now)
+    };
+    let (finished, now) = finish(b"a picture finished");
+    assert_eq!(finished.designation, DESIGNATION);
+    assert_eq!(finished.size, 18);
+    assert_eq!(
+        gate.store().lease_state(&key, DESIGNATION, &finished.hex, now),
+        LeaseState::Live { size: 18, expires: now + 5_000 },
+        "the lease runs the interval in force"
+    );
+    assert!(gate.lines_said().is_empty(), "no binding standing: the finish says nothing");
+    let floor = gate.floor();
+    gate.set_free_space(Some(floor - 1));
+    assert_eq!(gate.admit_creation(p, gate.now_ms()), Err(DepositScope::Floor), "the binding");
+    gate.set_free_space(Some(floor + 1_000_000));
+    finish(b"another picture");
+    let said = gate.lines_said();
+    assert_eq!(said.len(), 2, "{said:?}");
+    assert!(said[1].starts_with("landing: deposits admitted again: an upload of 15 bytes"), "{said:?}");
+    assert!(!gate.floor_said.load(Ordering::Acquire), "the flag cleared by the finish's note");
 }
 
 /// A ready index, built by hand: the walk's door, with nothing walked.
@@ -164,11 +220,13 @@ fn the_creation_is_refused_at_the_standing_bound_and_at_the_floor_before_any_rec
 /// constant, and never below twice the newest checkpoint's size plus one
 /// maximal segment — the constant alone with no checkpoint and under a
 /// small one, the scaling half above the crossover — saturating on a
-/// length no volume holds. A gate opens at the constant; the floor set
-/// from a 300 MiB checkpoint refuses a creation and a chunk the constant
-/// would admit, naming the scope and no figure; a landed checkpoint
-/// small again moves it back. The startup line names the floor in force
-/// beside the default limit.
+/// length no volume holds. A gate opens at the constant; a 300 MiB
+/// checkpoint NOTED moves the floor it keeps, answered for the landing's
+/// line, and the floor then refuses a creation and a chunk the constant
+/// would admit, naming the scope and no figure — the binding answered
+/// standing as the creation refuses, and cleared as it admits; a landed
+/// checkpoint small again moves it back. The startup line names the floor
+/// in force beside the default limit.
 #[test]
 fn the_floor_in_force_scales_with_the_newest_checkpoint_and_never_below_the_constant() {
     let mib = 1024 * 1024;
@@ -196,19 +254,24 @@ fn the_floor_in_force_scales_with_the_newest_checkpoint_and_never_below_the_cons
     let now = gate.now_ms();
     let p = PrincipalId(9);
     let id = UploadId::parse("0123456789abcdef0123456789abcdef").unwrap();
+    assert_eq!(gate.note_checkpoint(None), FLOOR_BYTES, "genesis noted: the constant");
     gate.set_free_space(Some(400 * mib));
+    assert_eq!(gate.floor_binding(), None, "no binding stands");
     assert_eq!(gate.admit_creation(p, now), Ok(()), "400 MiB free clears the constant");
     assert_eq!(gate.admit_bytes(p, &id, 0, 64 * 1024, now), Ok(()));
-    gate.set_floor(MediaGate::floor_in_force(Some(300 * mib)));
-    assert_eq!(gate.floor(), 600 * mib + MAX_SEGMENT_LEN);
+    let scaled = 600 * mib + MAX_SEGMENT_LEN;
+    assert_eq!(gate.note_checkpoint(Some(300 * mib)), scaled, "noted: the floor it keeps, answered");
+    assert_eq!(gate.floor(), scaled);
+    assert_eq!(gate.floor_binding(), Some((400 * mib, scaled)), "the binding, the two figures");
     assert_eq!(gate.admit_creation(p, now), Err(DepositScope::Floor), "the floor in force refuses it");
     assert_eq!(gate.admit_bytes(p, &id, 0, 64 * 1024, now), Err(DepositScope::Floor), "…and a chunk");
     assert_eq!(DepositScope::Floor.token(), "floor", "the scope, and no figure");
-    gate.set_free_space(Some(600 * mib + MAX_SEGMENT_LEN + 64 * 1024));
+    gate.set_free_space(Some(scaled + 64 * 1024));
+    assert_eq!(gate.floor_binding(), None, "room above the floor: no binding");
     assert_eq!(gate.admit_creation(p, now), Ok(()), "room above the floor in force admits");
     assert_eq!(gate.admit_bytes(p, &id, 0, 64 * 1024, now), Ok(()), "a chunk that leaves it at the floor");
     assert_eq!(gate.admit_bytes(p, &id, 0, 64 * 1024 + 1, now), Err(DepositScope::Floor), "one byte more");
-    gate.set_floor(MediaGate::floor_in_force(Some(1 * mib)));
+    assert_eq!(gate.note_checkpoint(Some(1 * mib)), FLOOR_BYTES);
     assert_eq!(gate.floor(), FLOOR_BYTES, "a small checkpoint landed: the constant again");
     gate.set_free_space(Some(400 * mib));
     assert_eq!(gate.admit_creation(p, now), Ok(()));
@@ -457,7 +520,10 @@ fn a_failed_index_answers_the_lease_arm_as_final_where_the_window_answered_rebui
 /// cells already name is ADMITTED past every lapse while the file is
 /// whole at the cell's size, LAPSED where it is not; another principal's
 /// cells admit nothing of this one's; and the own scope counts a named
-/// hash in the base and not in the pending bytes.
+/// hash in the base and not in the pending bytes. Throughout, THE
+/// DEPOSIT's WHOLENESS — what the deposit read reports `lapsed` by — is the
+/// binding's own reading of the file: whole where the deposit is as
+/// written, not whole short or gone.
 #[test]
 fn the_binding_reads_the_principals_own_lease_first_and_the_file_only_under_it() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -490,7 +556,11 @@ fn the_binding_reads_the_principals_own_lease_first_and_the_file_only_under_it()
     stream.append(bytes, now).unwrap();
     stream.finish(Duration::from_millis(10_000), now).unwrap();
     assert_eq!(gate.binding(p, &cell), Binding::Admitted);
-    std::fs::remove_file(store.blob_path(DESIGNATION, &hex_string(&hash)).unwrap()).unwrap();
+    let hex = hex_string(&hash);
+    assert!(gate.deposit_whole(DESIGNATION, &hex, 9), "the deposit as written: whole");
+    assert!(!gate.deposit_whole(DESIGNATION, &hex, 8), "at another size: not whole");
+    std::fs::remove_file(store.blob_path(DESIGNATION, &hex).unwrap()).unwrap();
+    assert!(!gate.deposit_whole(DESIGNATION, &hex, 9), "the file gone: not whole");
     assert_eq!(gate.binding(p, &cell), Binding::Lapsed, "a live lease over no file reads as lapsed");
 
     // THE INDEX ARM. The file re-deposited, the cell entered as p's.
@@ -512,10 +582,13 @@ fn the_binding_reads_the_principals_own_lease_first_and_the_file_only_under_it()
     assert_eq!(gate.binding(p, &cell), Binding::Admitted, "named by p's own cell: admitted past the lease's horizon");
     assert_eq!(gate.binding(p, &Cell { hash, size: 8 }), Binding::Unbound, "named, the file whole at the named size, the cell contradicting it: the size check's answer");
     assert_eq!(gate.binding(PrincipalId(8), &cell), Binding::Unbound, "another principal's cells admit nothing of this one's");
-    let path = store.blob_path(DESIGNATION, &hex_string(&hash)).unwrap();
+    let path = store.blob_path(DESIGNATION, &hex).unwrap();
+    assert!(gate.deposit_whole(DESIGNATION, &hex, 9), "re-deposited: whole");
     std::fs::write(&path, b"a pictur").unwrap();
+    assert!(!gate.deposit_whole(DESIGNATION, &hex, 9), "the short write: not whole");
     assert_eq!(gate.binding(p, &cell), Binding::Lapsed, "named, the file not whole: the deposit is gone");
     std::fs::remove_file(&path).unwrap();
+    assert!(!gate.deposit_whole(DESIGNATION, &hex, 9), "the removal: not whole");
     assert_eq!(gate.binding(p, &cell), Binding::Lapsed, "named, the file gone: the deposit is gone");
     assert_eq!(gate.own_scope(p, gate.now_ms()), 9, "the base stands whatever the directory holds");
 }

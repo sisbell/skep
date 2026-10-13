@@ -162,6 +162,13 @@ impl CellRefusal {
     }
 }
 
+/// THE NAME OF D13's HALT — `unknown_cell_schema`, the token of the verdict
+/// [`CellRefusal::UnknownSchema`] (wire.md §Media, INTERIM in spelling,
+/// sm-Q8): what the door answers a value naming a media kind under no
+/// pinned schema (its arm 4) and what the index's halt mark records as its
+/// fault. Spelled here, beside the verdict it names, and nowhere else.
+pub(crate) const UNKNOWN_SCHEMA_TOKEN: &str = "unknown_cell_schema";
+
 /// What a value is to the media kinds — `classify`'s answer: one kind
 /// named, with that kind's own verdict under its schema (`Err` is always
 /// `CellRefusal::UnknownSchema` there: the value named the kind and parsed

@@ -23,8 +23,9 @@
 //! its refusal's offset is that figure PRICED at the headroom's transfer —
 //! ms4-E1, accepted and named); THE FLOOR, the volume's free space held
 //! above the floor IN FORCE — the larger of the constant `FLOOR_BYTES`
-//! and twice the newest checkpoint's size plus one maximal segment, re-read
-//! as each checkpoint lands ([`MediaGate::floor_in_force`]) — so a deposit
+//! and twice the newest checkpoint's size plus one maximal segment, kept by
+//! the gate from the checkpoint sizes the daemon notes
+//! ([`MediaGate::note_checkpoint`]) — so a deposit
 //! never takes the journal's last bytes, read off the host and showing no
 //! figure — AT THE CREATION, on no declared length, before the partial and
 //! the record, and per chunk as the body is written
@@ -45,10 +46,11 @@
 //! said ONCE, at its first refusal, through the classed door with the
 //! host's two figures, what still serves and the two acts; a once-flag on
 //! the gate holds it said, the daemon's standing line re-says the binding
-//! off its own read while `free_space() < floor()` holds, and the first
-//! upload that FINISHES with the free space back at or above the floor says
-//! the lift once ([`MediaGate::note_finish`], the daemon's call at a finish)
-//! and clears the flag — never an admission alone, which the next chunk may
+//! while the gate answers it standing ([`MediaGate::floor_binding`], the
+//! creation's own test), and the first upload that FINISHES with the free
+//! space back at or above the floor says the lift once
+//! ([`MediaGate::finish_upload`], the one door every finish takes) and
+//! clears the flag — never an admission alone, which the next chunk may
 //! re-refuse. Neither line names a principal, an upload or a token (D9): the
 //! condition is the host's, said in the host's figures.
 //!
@@ -100,10 +102,20 @@
 //! resource's configuration — the switch the routes read
 //! ([`MediaGate::uploads_open`]) and `/health` echoes ([`MediaGate::health_object`]).
 //!
+//! THE DEPOSIT's TERMS are the gate's (M-I6 (b); M-I5 (a)): an upload is
+//! CREATED ([`MediaGate::create_upload`]) under the principal's key,
+//! [`DEPOSIT_FUNCTION`] — the store's function for the schema's
+//! designation, held to it at compile time — and the lease interval in
+//! force as its expiry, and FINISHED ([`MediaGate::finish_upload`]) under
+//! the same interval as its lease's, the finish noted for the floor's lift.
+//! The routes sequence the checks and stream the body; no term of the
+//! store's creation or finish is theirs to name.
+//!
 //! THE LEASE INTERVAL and ITS HORIZON (Op inventory 1, "THE INTERVAL HAS A
 //! DEFAULT, A GATE CONSTANT OF THE DAEMON's"; "a lease lapsed past a
 //! HORIZON … answers as no lease") are the two constants below, INTERIM
-//! pins (sm-Q8), handed to the store at open.
+//! pins (sm-Q8): the horizon handed to the store at open, the interval the
+//! gate's creation and finish apply wherever no record sets one.
 
 use std::collections::HashSet;
 use std::fmt;
@@ -115,7 +127,9 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use parking_lot::{Mutex, RwLock};
 use serde_json::Value;
-use skep_blobs::{Lease, LeaseState, Store, UploadId, UploadRecord};
+use skep_blobs::{
+    BlobError, Finished, HashFunction, Lease, LeaseState, Store, Stream, UploadId, UploadRecord,
+};
 use skep_kernel::MAX_SEGMENT_LEN;
 use skep_namespace::PrincipalId;
 use skep_util::json::{hex_string, obj};
@@ -141,18 +155,50 @@ const LEASE_INTERVAL_DEFAULT_MS: u64 = 7 * 24 * 3600 * 1000;
 /// compacts it away at open.
 const LEASE_HORIZON_MS: u64 = 30 * 24 * 3600 * 1000;
 
+/// THE DEPOSIT's FUNCTION — the store's hash function for the cell schema's
+/// designation, [`DESIGNATION`] (`media.md` item 4, "EVERY SIDECAR KEY
+/// NAMES ITS FUNCTION, FROM THE FIRST FILE"): every upload the gate creates
+/// ([`MediaGate::create_upload`]) and every file the operator's pull
+/// installs is hashed and filed under it, so a deposit lands under the
+/// designation the binding, the index, the pruner and the fetch read. The
+/// pairing is checked at compile time below: a schema pinned under another
+/// designation fails the build until its function is named here.
+pub const DEPOSIT_FUNCTION: HashFunction = HashFunction::Blake3;
+
+// THE PAIRING, CHECKED AT COMPILE TIME: the deposit's function files under
+// the schema's own designation, byte for byte.
+const _: () = assert!(same_str(DEPOSIT_FUNCTION.designation(), DESIGNATION));
+
+/// `a == b` in a const context, where `str`'s `PartialEq` cannot run — the
+/// one comparison the pairing above makes.
+const fn same_str(a: &str, b: &str) -> bool {
+    let (a, b) = (a.as_bytes(), b.as_bytes());
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut i = 0;
+    while i < a.len() {
+        if a[i] != b[i] {
+            return false;
+        }
+        i += 1;
+    }
+    true
+}
+
 /// THE FLOOR's CONSTANT HALF — 256 MiB of the volume's free space, INTERIM
 /// (`media.md` Op inventory 1, "THE LARGER OF 256 MiB AND TWICE THE NEWEST
 /// CHECKPOINT's SIZE PLUS ONE MAXIMAL SEGMENT"; the register M-I5 (f)): the
 /// least room the journal's next segments and checkpoints are kept, which
 /// no deposit may take. THE FLOOR IN FORCE is the larger of this and the
 /// scaling half — twice the newest checkpoint's size plus one maximal
-/// segment ([`MAX_SEGMENT_LEN`]) — re-read as each checkpoint lands
-/// ([`MediaGate::floor_in_force`]; the daemon's checkpoint thread sets it
-/// through [`MediaGate::set_floor`], and the open reads it once off the
-/// newest checkpoint on disk): a checkpoint is written WHOLE beside the two
-/// retained before the oldest is pruned, and the segment in flight is
-/// written beside it. A PUT is refused at its creation where the free space
+/// segment ([`MAX_SEGMENT_LEN`]) — re-read as each checkpoint lands: the
+/// daemon notes the checkpoint its open loaded from and every one that
+/// lands after it ([`MediaGate::note_checkpoint`]), and the gate keeps the
+/// floor from that size ([`MediaGate::floor_in_force`]): a checkpoint is
+/// written WHOLE beside the two retained before the oldest is pruned, and
+/// the segment in flight is written beside it. A PUT is refused at its
+/// creation where the free space
 /// already stands below the floor in force, and as its body is written once
 /// a chunk would take the volume below it. The floor reads the host and
 /// shows no figure (M-I6 (h)).
@@ -402,10 +448,10 @@ pub struct MediaGate {
     capacity: Option<u64>,
     /// THE FLOOR IN FORCE (`FLOOR_BYTES`'s card): the larger of the
     /// constant and twice the newest checkpoint's size plus one maximal
-    /// segment — set at the open off the newest checkpoint on disk and by
-    /// the checkpoint thread as each lands, read at every creation and every
-    /// chunk. An atomic rather than a lock: one load per read, and a store
-    /// that lands whole.
+    /// segment — kept from the checkpoint sizes the daemon notes
+    /// ([`MediaGate::note_checkpoint`]), its open's and each landing's, and
+    /// read at every creation and every chunk. An atomic rather than a lock:
+    /// one load per read, and a store that lands whole.
     floor: AtomicU64,
     /// THE FLOOR's ONCE-FLAG (`operations.md` §1.1 m9): whether the standing
     /// binding has been said — set by the binding's first refusal, which
@@ -429,13 +475,6 @@ pub struct MediaGate {
     /// The test seam's free-space reading, in place of the host's.
     #[cfg(any(test, feature = "test-hooks"))]
     free_space_override: Mutex<Option<u64>>,
-    /// The test seam's hold inside the pruner's pass, after an unlink.
-    #[cfg(any(test, feature = "test-hooks"))]
-    prune_hold: AtomicBool,
-    /// The test seam's count of pruner passes completed — a suite waits for
-    /// the cadence's first pass before it moves the clock.
-    #[cfg(any(test, feature = "test-hooks"))]
-    passes_completed: AtomicU64,
     /// THE GATE's CLASSED DOOR ([`ClassedDoor`]): `notice::emit` under a
     /// class word and, under the test seam, the record of every line said
     /// through it (`MediaGate::lines_said`, the hook) — the gate's own lines,
@@ -510,10 +549,6 @@ impl MediaGate {
             clock_offset_ms: AtomicU64::new(0),
             #[cfg(any(test, feature = "test-hooks"))]
             free_space_override: Mutex::new(None),
-            #[cfg(any(test, feature = "test-hooks"))]
-            prune_hold: AtomicBool::new(false),
-            #[cfg(any(test, feature = "test-hooks"))]
-            passes_completed: AtomicU64::new(0),
             door: ClassedDoor::new(),
         })
     }
@@ -560,6 +595,12 @@ impl MediaGate {
         self.limits.read().clone()
     }
 
+    /// The lease interval in force — the record's, or the daemon's default —
+    /// as an upload's expiry at its creation and its lease's at its finish.
+    fn lease_interval(&self) -> Duration {
+        Duration::from_millis(self.limits.read().lease_interval_ms)
+    }
+
     /// The line the startup log names the limits in force by — the record,
     /// or the default and the capacity it was read from — and the floor in
     /// force beside them, with its two halves.
@@ -574,8 +615,9 @@ impl MediaGate {
     /// segment in flight beside it (`media.md` Op inventory 1; M-I5 (f)).
     /// Saturating: a length no volume could hold answers a floor no volume
     /// could clear, which refuses every deposit rather than admitting one
-    /// the arithmetic wrapped.
-    pub fn floor_in_force(newest_checkpoint_len: Option<u64>) -> u64 {
+    /// the arithmetic wrapped. The gate's own rule, applied where a
+    /// checkpoint is noted ([`MediaGate::note_checkpoint`]).
+    fn floor_in_force(newest_checkpoint_len: Option<u64>) -> u64 {
         let scaled = newest_checkpoint_len
             .map_or(0, |c| c.saturating_mul(2).saturating_add(MAX_SEGMENT_LEN));
         FLOOR_BYTES.max(scaled)
@@ -587,12 +629,28 @@ impl MediaGate {
         self.floor.load(Ordering::Acquire)
     }
 
-    /// Set the floor in force — the daemon's, at the open off the newest
-    /// checkpoint on disk and by the checkpoint thread as each lands
-    /// ([`MediaGate::floor_in_force`] computes it). The next creation and
-    /// the next chunk read it.
-    pub fn set_floor(&self, bytes: u64) {
-        self.floor.store(bytes, Ordering::Release);
+    /// A CHECKPOINT, NOTED (M-I5 (f)): the newest checkpoint's size as the
+    /// daemon read it — at its open the start point's, the base the world
+    /// loaded from (`None` at genesis), and after every landing the newest
+    /// header's — and the floor in force kept from it by the gate's own
+    /// rule (`MediaGate::floor_in_force`), answered for the landing's line.
+    /// The next creation and the next chunk read it.
+    pub fn note_checkpoint(&self, newest_checkpoint_len: Option<u64>) -> u64 {
+        let floor = Self::floor_in_force(newest_checkpoint_len);
+        self.floor.store(floor, Ordering::Release);
+        floor
+    }
+
+    /// THE FLOOR's BINDING, as it stands now (`operations.md` §1.1 m9; §4
+    /// row 7): `(free_space, floor)` — the volume's free space as the floor
+    /// reads it ([`MediaGate::free_space`]) and the floor in force — where
+    /// the free space stands below the floor, `None` where it does not. The
+    /// creation's own test ([`MediaGate::admit_creation`]), and the one the
+    /// daemon's standing line re-says the binding by, so the line and the
+    /// creation's refusal cannot disagree on whether the floor binds.
+    pub fn floor_binding(&self) -> Option<(u64, u64)> {
+        let (free_space, floor) = (self.free_space(), self.floor());
+        (free_space < floor).then_some((free_space, floor))
     }
 
     /// The floor's half of the startup line: the floor in force and the
@@ -829,19 +887,35 @@ impl MediaGate {
     /// record (P13; M-I5 (f), M-I6 (b)): THE STANDING-UPLOADS BOUND first —
     /// the principal's own record, counted off its standing uploads — then
     /// THE FLOOR, read on no declared length: the volume's free space
-    /// already below the floor in force ([`MediaGate::floor`], never the
-    /// constant alone) refuses the creation that would append a record no
-    /// scope counts. The resume reads neither: it creates nothing.
+    /// already below the floor in force ([`MediaGate::floor_binding`], never
+    /// the constant alone) refuses the creation that would append a record
+    /// no scope counts. The resume reads neither: it creates nothing.
     pub fn admit_creation(&self, principal: PrincipalId, now_ms: u64) -> Result<(), DepositScope> {
         let key = Self::key(principal);
         if self.store.uploads_of(&key, now_ms).len() >= MAX_STANDING_UPLOADS {
             return Err(DepositScope::Standing);
         }
-        let (free_space, floor) = (self.free_space(), self.floor());
-        if free_space < floor {
+        if let Some((free_space, floor)) = self.floor_binding() {
             return Err(self.refused_at_the_floor(free_space, floor));
         }
         Ok(())
+    }
+
+    /// THE CREATION (clause (1); M-I6 (b)): `principal`'s upload of `length`
+    /// bytes, its partial and its record made under THE DEPOSIT's TERMS —
+    /// the principal's key ([`MediaGate::key`]), [`DEPOSIT_FUNCTION`], and
+    /// the lease interval in force as its expiry. The caller asks
+    /// [`MediaGate::admit_declared`] and [`MediaGate::admit_creation`] first,
+    /// in the wire's order; this makes what they admitted. An I/O failure is
+    /// the store's, and no upload is made.
+    pub fn create_upload(
+        &self,
+        principal: PrincipalId,
+        length: u64,
+        now_ms: u64,
+    ) -> io::Result<UploadRecord> {
+        let key = Self::key(principal);
+        self.store.create_upload(&key, DEPOSIT_FUNCTION, length, self.lease_interval(), now_ms)
     }
 
     /// THE GATE AS THE BODY IS WRITTEN: would the next `n` bytes of the
@@ -888,9 +962,10 @@ impl MediaGate {
     /// ([`FloorBoundLine`]): the two figures as the gate compared them, what
     /// still serves, the two acts. The flag stays set until a finish above
     /// the floor ([`MediaGate::note_finish`]) clears it; the daemon's
-    /// standing line re-says the binding meanwhile off its own read. No
-    /// principal, upload or token rides the line (D9): a condition of the
-    /// host's, said in the host's figures.
+    /// standing line re-says the binding meanwhile, off the gate's own
+    /// answer ([`MediaGate::floor_binding`]). No principal, upload or token
+    /// rides the line (D9): a condition of the host's, said in the host's
+    /// figures.
     fn refused_at_the_floor(&self, free_space: u64, floor: u64) -> DepositScope {
         if !self.floor_said.swap(true, Ordering::AcqRel) {
             self.say(Class::Failure, FloorBoundLine { free_space, floor });
@@ -898,17 +973,33 @@ impl MediaGate {
         DepositScope::Floor
     }
 
-    /// A FINISH, NOTED (`operations.md` §1.1 m9): the daemon's call as an
-    /// upload of `bytes` bytes finishes — THE LIFT's one site. Where the
-    /// floor's binding has been said and the volume's free space now stands
-    /// at or above the floor in force, the lift is said ONCE
+    /// THE FINISH (clause (7); M-I5 (a)): `stream` — an upload of this
+    /// gate's store whose bytes written reach its length, `Stream::finish`'s
+    /// precondition, which the caller discharges — finished under THE
+    /// DEPOSIT's TERMS, its lease taken for the lease interval in force, and
+    /// the finish NOTED (`MediaGate::note_finish`), so the floor's lift is
+    /// said from the one door every finish takes. The caller holds, around
+    /// the call, the exclusion `Stream::finish` names — the daemon's
+    /// credential lock's read arm, which keeps the pruner's unlink out. A
+    /// finish refused is the store's answer, and notes nothing.
+    pub fn finish_upload(&self, stream: Stream<'_>, now_ms: u64) -> Result<Finished, BlobError> {
+        let finished = stream.finish(self.lease_interval(), now_ms)?;
+        self.note_finish(finished.size);
+        Ok(finished)
+    }
+
+    /// A FINISH, NOTED (`operations.md` §1.1 m9): the finish's own note, as
+    /// an upload of `bytes` bytes finishes ([`MediaGate::finish_upload`]) —
+    /// THE LIFT's one site. Where the floor's binding has been said and the
+    /// volume's free space now stands at or above the floor in force, the
+    /// lift is said ONCE
     /// (`FloorLiftedLine`: the finished size, the two figures) and the
     /// once-flag cleared, so the next binding is said again; nothing
     /// otherwise. A finish and never an admission: a creation admitted can
     /// still be refused at its next chunk, so an admission proves nothing an
     /// operator can act on, while a finish is proof the volume held a whole
     /// file above the floor.
-    pub fn note_finish(&self, bytes: u64) {
+    fn note_finish(&self, bytes: u64) {
         if !self.floor_said.load(Ordering::Acquire) {
             return;
         }
@@ -939,6 +1030,24 @@ impl MediaGate {
         self.store.free_space().unwrap_or(0)
     }
 
+    /// THE FILE's LENGTH AS THE BINDING READS IT: the bytes on disk under
+    /// `<designation>/<hex>`, or `None` where no file stands. A size that
+    /// cannot be read is read as no file: the binding has no I/O answer of
+    /// its own, and a deposit whose bytes it cannot see is not one it admits.
+    fn file_len(&self, designation: &str, hex: &str) -> Option<u64> {
+        self.store.blob_size(designation, hex).ok().flatten()
+    }
+
+    /// Whether the deposit `<designation>/<hex>` of `size` bytes is WHOLE on
+    /// disk — a file there at exactly that length, as THE BINDING reads it
+    /// (Op inventory 2, "A LIVE LEASE OVER A FILE THAT IS NOT THERE READS AS
+    /// LAPSED"): the binding's lease arm asks it of a live lease, and the
+    /// deposit read reports each deposit's `lapsed` by it, so the two are
+    /// one reading of the file and never two (M-I5 (c)).
+    pub fn deposit_whole(&self, designation: &str, hex: &str, size: u64) -> bool {
+        self.file_len(designation, hex) == Some(size)
+    }
+
     /// THE BINDING (Op inventory 2): THE INDEX FIRST, where its walk has
     /// completed — a hash the principal's own cells already name is a
     /// reference, kept by no lease: admitted where the file is on disk
@@ -959,10 +1068,7 @@ impl MediaGate {
         let ready = self.index.is_ready();
         if ready {
             if let Some(named) = self.index.size_named(principal, DESIGNATION, &hex) {
-                // A size that cannot be read is read as no file: the
-                // binding has no I/O answer of its own, and a deposit whose
-                // bytes it cannot see is not one it admits.
-                return match self.store.blob_size(DESIGNATION, &hex).ok().flatten() {
+                return match self.file_len(DESIGNATION, &hex) {
                     Some(len) if len == cell.size => Binding::Admitted,
                     Some(len) if len == named => Binding::Unbound,
                     _ => Binding::Lapsed,
@@ -972,21 +1078,15 @@ impl MediaGate {
         let lease_arm = match self.store.lease_state(&key, DESIGNATION, &hex, self.now_ms()) {
             LeaseState::None => Binding::Unbound,
             LeaseState::Lapsed { .. } => Binding::Lapsed,
-            LeaseState::Live { size, .. } => match self.store.blob_size(DESIGNATION, &hex).ok().flatten() {
-                // The file absent, unreadable, or not the length the lease
-                // recorded: the deposit is gone.
-                Some(len) if len == size => {
-                    if cell.size == len {
-                        Binding::Admitted
-                    } else {
-                        // The deposit is whole and the cell contradicts it:
-                        // no deposit of this principal's is the cell as
-                        // written.
-                        Binding::Unbound
-                    }
-                }
-                _ => Binding::Lapsed,
-            },
+            // The file absent, unreadable, or not the length the lease
+            // recorded: the deposit is gone.
+            LeaseState::Live { size, .. } if !self.deposit_whole(DESIGNATION, &hex, size) => {
+                Binding::Lapsed
+            }
+            LeaseState::Live { size, .. } if cell.size == size => Binding::Admitted,
+            // The deposit is whole and the cell contradicts it: no deposit of
+            // this principal's is the cell as written.
+            LeaseState::Live { .. } => Binding::Unbound,
         };
         match lease_arm {
             Binding::Admitted => Binding::Admitted,
@@ -1016,46 +1116,14 @@ impl MediaGate {
         *self.free_space_override.lock() = bytes;
     }
 
-    /// The line the pruner's hold writes on the operator stream as it
-    /// parks — what the dirty-crash harness watches for before it kills.
+    /// TEST SEAM: move the floor in force to `bytes`, past the rule — so a
+    /// suite pins that the next noted checkpoint restores the floor the
+    /// rule sizes (`MediaGate::note_checkpoint`), which a floor already at
+    /// its constant cannot show.
     #[cfg(any(test, feature = "test-hooks"))]
     #[doc(hidden)]
-    pub const PRUNE_HOLD_NOTICE: &'static str =
-        "test seam: held inside the pruner's pass after a rename aside; kill this process";
-
-    /// TEST SEAM: arm the hold inside the pruner's pass — after the next
-    /// rename aside, the arm released and the aside not yet unlinked, the
-    /// pass writes [`MediaGate::PRUNE_HOLD_NOTICE`] and parks its thread
-    /// for good. Not disarmable.
-    #[cfg(any(test, feature = "test-hooks"))]
-    #[doc(hidden)]
-    pub fn arm_prune_hold(&self) {
-        self.prune_hold.store(true, Ordering::Relaxed);
-    }
-
-    /// The pass's side of the seam: park here where the hold is armed.
-    #[cfg(any(test, feature = "test-hooks"))]
-    pub(crate) fn hold_after_rename_if_armed(&self) {
-        if self.prune_hold.load(Ordering::Relaxed) {
-            notice::emit(Class::Failure, Self::PRUNE_HOLD_NOTICE);
-            loop {
-                std::thread::park();
-            }
-        }
-    }
-
-    /// TEST SEAM: a pass completed — counted, so a suite can wait for the
-    /// cadence's first pass before moving the clock under it.
-    #[cfg(any(test, feature = "test-hooks"))]
-    pub(crate) fn note_pass_completed(&self) {
-        self.passes_completed.fetch_add(1, Ordering::Release);
-    }
-
-    /// TEST SEAM: the passes completed so far.
-    #[cfg(any(test, feature = "test-hooks"))]
-    #[doc(hidden)]
-    pub fn passes_completed(&self) -> u64 {
-        self.passes_completed.load(Ordering::Acquire)
+    pub fn set_floor(&self, bytes: u64) {
+        self.floor.store(bytes, Ordering::Release);
     }
 }
 

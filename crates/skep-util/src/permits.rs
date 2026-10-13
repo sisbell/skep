@@ -1,9 +1,9 @@
 //! A counting permit pool — a try-acquire with no queue and no blocking,
 //! whose guard returns its slot on drop — the ONE mechanism behind the
 //! daemon's five bounded pools: the reconstruction budget (`history.rs`),
-//! the class-scan pool (`server/scan.rs`), the fetch pool (`skep-media`'s
-//! `serve.rs`), the upload pool (`skep-media`'s `lib.rs`) and the write pool
-//! (the daemon's `server.rs`). A permit is a slot of the pool that minted
+//! the class-scan pool (`server/scan.rs`), the fetch pool and the upload
+//! pool (`skep-media`'s `pools.rs`) and the write pool (the daemon's
+//! `server.rs`). A permit is a slot of the pool that minted
 //! it, so no bound can spend another's.
 //!
 //! Beside it, THE EDGE TRACKER ([`EdgeTracker`]; `operations.md` §1.1 m12):
@@ -30,9 +30,9 @@ use crate::notice::Class;
 ///
 /// The bound behind `history.rs`'s `MAX_CONCURRENT_RECONSTRUCTIONS`, and —
 /// as further, separate instances — behind `server/scan.rs`'s
-/// `MAX_CONCURRENT_CLASS_SCANS` (wire v7.9), the fetch pool of `skep-media`'s
-/// `serve.rs`, the upload pool of its `lib.rs` and the write pool of the
-/// daemon's `server.rs` (`MAX_CONCURRENT_WRITES`): one mechanism, five
+/// `MAX_CONCURRENT_CLASS_SCANS` (wire v7.9), the fetch pool and the upload
+/// pool of `skep-media`'s `pools.rs` and the write pool of the daemon's
+/// `server.rs` (`MAX_CONCURRENT_WRITES`): one mechanism, five
 /// pools. A permit belongs to the pool it came from, so no bound can spend
 /// another's slots.
 #[derive(Debug)]

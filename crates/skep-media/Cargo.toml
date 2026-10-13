@@ -5,13 +5,14 @@ edition.workspace = true
 rust-version.workspace = true
 repository.workspace = true
 license.workspace = true
-description = "The daemon's media resource (media lane A and the policy of lane B): the reference cell's one parser and the blind cell beside it, the media door the plain write sequence takes, the media gate over the blob store — the limits in force, the hold, the three scopes, the binding — the cell index with its walk at open, the pruner's pass, and the fetch's composed order. It transports nothing: the routes, the replies and the operator's tools are the daemon's."
+description = "The daemon's media resource (media lane A and the policy of lane B): the reference cell's one parser and the blind cell beside it, the media door the plain write sequence takes, the media gate over the blob store — the limits in force, the hold, the three scopes, the deposit's terms, the floor, the binding — the cell index with its walk at open, the pruner and its pass, and the fetch's composed order. It transports nothing: the routes, the replies and the operator's tools are the daemon's."
 readme = "README.md"
 
 [features]
 # `test-hooks` compiles in the test seam: the walk hold, the stream hold,
-# the prune hold and its notice, the gate's clock and free-space overrides
-# and its limits install, the index's report and counts, the pools'
+# the pruner's prune hold, its notice and its count of passes, the gate's
+# clock, free-space and floor overrides and its limits install, the
+# index's report and counts, the pools'
 # `try_hold` — each `#[doc(hidden)]`, the surface the daemon's own hooks
 # (`skepd`'s `server/hooks.rs`) call — and turns on ONE thing in another
 # crate: skep-blobs's hazard seam, which the daemon's `hold_blob_finish_at`

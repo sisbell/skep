@@ -17,14 +17,17 @@
 //! live lease; [`gate`], the media gate, the daemon's media resource — the blob store
 //! (`skep-blobs`, the four stores under `blobs/`), the limits in force with
 //! their daemon default and install hook, the hold a stream has on its
-//! upload, the three scopes a PUT is refused on, and the binding's read;
+//! upload, the three scopes a PUT is refused on, the deposit's terms its
+//! creation and finish apply, the floor it keeps from the checkpoints the
+//! daemon notes, and the binding's read;
 //! [`index`], THE CELL INDEX — per hash the cells naming it, per account the
 //! distinct hashes its cells name at their size (the base) — entered at
 //! every commit that mints a cell and rebuilt whole at every open on a
 //! thread, its three readers refusing until that walk completes — or, where
 //! that thread died, FAILED for the life of the process, the third state
 //! beside ready and not-ready (`operations.md` §4 row 26); [`pruner`],
-//! THE PASS that removes expired partials and, under the credential lock's
+//! THE PRUNER, one per daemon, and its PASS that removes expired partials
+//! and, under the credential lock's
 //! exclusive arm one file at a time, unlinks the files no cell names and no
 //! live lease holds, halting on a schema it does not know; `cell::blind`,
 //! THE BLIND DOCUMENT's CELL, the second kind beside the picture's — a
@@ -98,7 +101,7 @@ pub mod limits;
 // The pools: the fetch pool and its twin the upload pool, each saying its
 // edge pair through the gate's classed door.
 pub mod pools;
-// The pruner: the pass, its halts, its cadence.
+// The pruner: the pass as one daemon runs it, its halts, its cadence.
 pub mod pruner;
 // The serve: the fetch's composed order, its answer and refusals, the
 // stream's interval arithmetic.

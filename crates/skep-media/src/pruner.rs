@@ -64,13 +64,22 @@
 //! beside the write path and names nothing above it, so the pass takes the
 //! acquisition as a closure and holds whatever guard it answers for
 //! exactly one file.
+//!
+//! THE PRUNER ([`Pruner`]) is the pass as one daemon runs it, beside that
+//! daemon's media gate: the gate holds the store and the index the pass
+//! reads, and the pruner what is the pass's own — under the test seam its
+//! hold and its count, and nothing outside it.
 
 use std::fmt;
 use std::io;
+#[cfg(any(test, feature = "test-hooks"))]
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::Duration;
 
 use parking_lot::{Condvar, Mutex};
 use skep_blobs::Store;
+#[cfg(any(test, feature = "test-hooks"))]
+use skep_util::notice::{self, Class};
 
 use crate::cell::PINNED_DESIGNATIONS;
 use crate::gate::MediaGate;
@@ -227,136 +236,198 @@ impl fmt::Display for PrunePass {
     }
 }
 
-/// ONE PASS over the media gate's store and index (`media_gate`),
-/// `exclusive` the acquisition of the credential lock's write arm — called
-/// once per file, its guard held across that file's re-read and rename
-/// aside and dropped before the aside's unlink and before the next. `None`
-/// where the index is not ready: the pass does not start (ms5-R).
-///
-/// THE EXIT RULE (the module's card): steps (a)–(c) run to their first
-/// store failure or the halt (`steps`), step (d) runs on EVERY exit, and
-/// the answer is the report — a step's failure is its `failed` member,
-/// beside the figures and the compaction's state, never this function's
-/// `Err`. `Err` is answered by no step: the signature keeps the `io::Result`
-/// the daemon's loop and its test seam match on, whose `Err` arm is the
-/// loop's own rendering of a failure nothing of the pass answers today.
-pub fn pass<G>(media_gate: &MediaGate, exclusive: impl Fn() -> G) -> io::Result<Option<PrunePass>> {
-    if !media_gate.index().is_ready() {
-        return Ok(None);
-    }
-    let mut report = PrunePass {
-        expired_partials: 0,
-        unlinked: 0,
-        kept: 0,
-        asides: 0,
-        halted: None,
-        compacted_uploads: false,
-        compacted_leases: false,
-        compaction_failed: None,
-        stopped: (false, false),
-        failed: None,
-    };
-    // (a)–(c), to the first failure or the halt; the error kept beside the
-    // figures, the steps after it skipped.
-    report.failed = steps(media_gate, &exclusive, &mut report).err();
-    // (d) THE LOGS' COMPACTION, under no arm — on EVERY exit: the stop a
-    // failed step may have met is lifted here, by this pass.
-    compact_logs(media_gate.store(), &mut report);
+/// THE PRUNER — the pass as one daemon runs it ([`Pruner::pass`]), one per
+/// daemon beside its media gate. The pass reads the gate's store and index
+/// and the exclusive arm it is handed; what is the pass's own stands here —
+/// under the test seam, the hold the dirty-crash harness parks a pass in
+/// between a rename aside and its unlink, and the count of passes completed
+/// a suite waits on; outside the seam, nothing.
+#[derive(Default)]
+pub struct Pruner {
+    /// The test seam's hold inside the pass, after a rename aside.
     #[cfg(any(test, feature = "test-hooks"))]
-    media_gate.note_pass_completed();
-    Ok(Some(report))
+    hold: AtomicBool,
+    /// The test seam's count of passes completed — a suite waits for the
+    /// cadence's first pass before it moves the clock.
+    #[cfg(any(test, feature = "test-hooks"))]
+    passes_completed: AtomicU64,
 }
 
-/// Steps (a)–(c) of the pass, to the FIRST store failure — answered as the
-/// step and its cause, that step's loop stopped there and the steps after
-/// it not run — or the halt, which ends them after (b) with the report's
-/// `halted` set and nothing unlinked. The figures land in `report` as each
-/// act completes, so a failure's report still counts what ran before it.
-fn steps<G>(
-    media_gate: &MediaGate,
-    exclusive: &impl Fn() -> G,
-    report: &mut PrunePass,
-) -> Result<(), PassFailure> {
-    let store = media_gate.store();
-    let index = media_gate.index();
-    let now = media_gate.now_ms();
-
-    // (a) THE EXPIRED PARTIALS — the store's own read of expiry, the media
-    // gate's hold; no reference read, no arm. The retirement is an append:
-    // a stopped `uploads.log` refuses it, and the failure is this step's.
-    for record in store.expired_uploads(now) {
-        // A stream holds it: left to that stream's end.
-        let Some(_hold) = media_gate.claim(record.id) else { continue };
-        if store.expire_upload(&record.id, now).map_err(PassStep::ExpiredPartials.failed())? {
-            report.expired_partials += 1;
-        }
+impl Pruner {
+    /// A pruner that has run no pass — its hold unarmed and its count
+    /// nought, under the test seam.
+    pub fn new() -> Pruner {
+        Pruner::default()
     }
 
-    // (b) THE HALTS, before the first unlink.
-    let halt = {
-        let foreign = store
-            .designation_dirs()
-            .map_err(PassStep::Halts.failed())?
-            .into_iter()
-            .find(|name| !PINNED_DESIGNATIONS.contains(&name.as_str()));
-        match (foreign, index.first_halt()) {
-            (Some(dir), _) => Some(format!(
-                "a designation directory blobs/{dir}/ is outside the set this build pins ({}): a sidecar of another build's schema",
-                PINNED_DESIGNATIONS.join(", ")
-            )),
-            (None, Some(mark)) => Some(format!(
-                "a value at {} names the kind {} under no schema this build reads ({})",
-                mark.at, mark.kind, mark.fault
-            )),
-            (None, None) => None,
+    /// ONE PASS over the media gate's store and index (`media_gate`),
+    /// `exclusive` the acquisition of the credential lock's write arm —
+    /// called once per file, its guard held across that file's re-read and
+    /// rename aside and dropped before the aside's unlink and before the
+    /// next. `None` where the index is not ready: the pass does not start
+    /// (ms5-R).
+    ///
+    /// THE EXIT RULE (the module's card): steps (a)–(c) run to their first
+    /// store failure or the halt (`steps`), step (d) runs on EVERY exit, and
+    /// the answer is the report — a step's failure is its `failed` member,
+    /// beside the figures and the compaction's state, so no pass answers a
+    /// failure that skipped its compaction.
+    pub fn pass<G>(&self, media_gate: &MediaGate, exclusive: impl Fn() -> G) -> Option<PrunePass> {
+        if !media_gate.index().is_ready() {
+            return None;
         }
-    };
-    if let Some(reason) = halt {
-        // The report carries the halt; line 34 says it (row 36 RETIRED: no
-        // standalone line here).
-        report.halted = Some(reason);
-        return Ok(());
+        let mut report = PrunePass {
+            expired_partials: 0,
+            unlinked: 0,
+            kept: 0,
+            asides: 0,
+            halted: None,
+            compacted_uploads: false,
+            compacted_leases: false,
+            compaction_failed: None,
+            stopped: (false, false),
+            failed: None,
+        };
+        // (a)–(c), to the first failure or the halt; the error kept beside
+        // the figures, the steps after it skipped.
+        report.failed = self.steps(media_gate, &exclusive, &mut report).err();
+        // (d) THE LOGS' COMPACTION, under no arm — on EVERY exit: the stop a
+        // failed step may have met is lifted here, by this pass.
+        compact_logs(media_gate.store(), &mut report);
+        #[cfg(any(test, feature = "test-hooks"))]
+        self.passes_completed.fetch_add(1, Ordering::Release);
+        Some(report)
     }
 
-    // (c) THE UNREFERENCED FILES, one per acquisition, under the pinned
-    // designations alone.
-    let failed = PassStep::UnreferencedFiles.failed();
-    for designation in PINNED_DESIGNATIONS {
-        for hex in store.blobs_of(designation).map_err(&failed)? {
-            let aside = {
-                let _arm = exclusive();
-                // THE RE-READ under the arm: a cell committed since the
-                // listing, a halt mark entered since, a lease taken since.
-                let referenced = index.referenced(designation, &hex)
-                    || index.first_halt().is_some()
-                    || store.any_live_lease(designation, &hex, media_gate.now_ms());
-                if referenced {
-                    report.kept += 1;
-                    None
-                } else {
-                    // THE RENAME ASIDE, the arm's one act: the name is taken
-                    // here and the blocks freed below, the arm released.
-                    store.rename_aside(designation, &hex).map_err(&failed)?
-                }
-            };
-            let Some(aside) = aside else { continue };
-            report.unlinked += 1;
-            // The arm released, the aside not yet unlinked: the dirty-crash
-            // harness's seam — a crash here leaves an aside open removes.
-            #[cfg(any(test, feature = "test-hooks"))]
-            media_gate.hold_after_rename_if_armed();
-            // THE UNLINK AFTER, under no arm: the freeing's cost lands on
-            // this thread alone.
-            store.remove_aside(designation, &aside).map_err(&failed)?;
-        }
-        for aside in store.asides_of(designation).map_err(&failed)? {
-            let _arm = exclusive();
-            if store.remove_aside(designation, &aside).map_err(&failed)? {
-                report.asides += 1;
+    /// The line the pruner's hold writes on the operator stream as it
+    /// parks — what the dirty-crash harness watches for before it kills.
+    #[cfg(any(test, feature = "test-hooks"))]
+    #[doc(hidden)]
+    pub const PRUNE_HOLD_NOTICE: &'static str =
+        "test seam: held inside the pruner's pass after a rename aside; kill this process";
+
+    /// TEST SEAM: arm the hold inside this pruner's pass — after the next
+    /// rename aside, the arm released and the aside not yet unlinked, the
+    /// pass writes [`Pruner::PRUNE_HOLD_NOTICE`] and parks its thread for
+    /// good. Not disarmable.
+    #[cfg(any(test, feature = "test-hooks"))]
+    #[doc(hidden)]
+    pub fn arm_prune_hold(&self) {
+        self.hold.store(true, Ordering::Relaxed);
+    }
+
+    /// The pass's side of the seam: park here where the hold is armed.
+    #[cfg(any(test, feature = "test-hooks"))]
+    fn hold_after_rename_if_armed(&self) {
+        if self.hold.load(Ordering::Relaxed) {
+            notice::emit(Class::Failure, Self::PRUNE_HOLD_NOTICE);
+            loop {
+                std::thread::park();
             }
         }
     }
-    Ok(())
+
+    /// TEST SEAM: the passes this pruner has completed so far — the
+    /// cadence's and a hook's alike; a pass that did not start counts none.
+    #[cfg(any(test, feature = "test-hooks"))]
+    #[doc(hidden)]
+    pub fn passes_completed(&self) -> u64 {
+        self.passes_completed.load(Ordering::Acquire)
+    }
+
+    /// Steps (a)–(c) of the pass, to the FIRST store failure — answered as
+    /// the step and its cause, that step's loop stopped there and the steps
+    /// after it not run — or the halt, which ends them after (b) with the
+    /// report's `halted` set and nothing unlinked. The figures land in
+    /// `report` as each act completes, so a failure's report still counts
+    /// what ran before it.
+    fn steps<G>(
+        &self,
+        media_gate: &MediaGate,
+        exclusive: &impl Fn() -> G,
+        report: &mut PrunePass,
+    ) -> Result<(), PassFailure> {
+        let store = media_gate.store();
+        let index = media_gate.index();
+        let now = media_gate.now_ms();
+
+        // (a) THE EXPIRED PARTIALS — the store's own read of expiry, the media
+        // gate's hold; no reference read, no arm. The retirement is an append:
+        // a stopped `uploads.log` refuses it, and the failure is this step's.
+        for record in store.expired_uploads(now) {
+            // A stream holds it: left to that stream's end.
+            let Some(_hold) = media_gate.claim(record.id) else { continue };
+            if store.expire_upload(&record.id, now).map_err(PassStep::ExpiredPartials.failed())? {
+                report.expired_partials += 1;
+            }
+        }
+
+        // (b) THE HALTS, before the first unlink.
+        let halt = {
+            let foreign = store
+                .designation_dirs()
+                .map_err(PassStep::Halts.failed())?
+                .into_iter()
+                .find(|name| !PINNED_DESIGNATIONS.contains(&name.as_str()));
+            match (foreign, index.first_halt()) {
+                (Some(dir), _) => Some(format!(
+                    "a designation directory blobs/{dir}/ is outside the set this build pins ({}): a sidecar of another build's schema",
+                    PINNED_DESIGNATIONS.join(", ")
+                )),
+                (None, Some(mark)) => Some(format!(
+                    "a value at {} names the kind {} under no schema this build reads ({})",
+                    mark.at, mark.kind, mark.fault
+                )),
+                (None, None) => None,
+            }
+        };
+        if let Some(reason) = halt {
+            // The report carries the halt; line 34 says it (row 36 RETIRED: no
+            // standalone line here).
+            report.halted = Some(reason);
+            return Ok(());
+        }
+
+        // (c) THE UNREFERENCED FILES, one per acquisition, under the pinned
+        // designations alone.
+        let failed = PassStep::UnreferencedFiles.failed();
+        for designation in PINNED_DESIGNATIONS {
+            for hex in store.blobs_of(designation).map_err(&failed)? {
+                let aside = {
+                    let _arm = exclusive();
+                    // THE RE-READ under the arm: a cell committed since the
+                    // listing, a halt mark entered since, a lease taken since.
+                    let referenced = index.referenced(designation, &hex)
+                        || index.first_halt().is_some()
+                        || store.any_live_lease(designation, &hex, media_gate.now_ms());
+                    if referenced {
+                        report.kept += 1;
+                        None
+                    } else {
+                        // THE RENAME ASIDE, the arm's one act: the name is taken
+                        // here and the blocks freed below, the arm released.
+                        store.rename_aside(designation, &hex).map_err(&failed)?
+                    }
+                };
+                let Some(aside) = aside else { continue };
+                report.unlinked += 1;
+                // The arm released, the aside not yet unlinked: the dirty-crash
+                // harness's seam — a crash here leaves an aside open removes.
+                #[cfg(any(test, feature = "test-hooks"))]
+                self.hold_after_rename_if_armed();
+                // THE UNLINK AFTER, under no arm: the freeing's cost lands on
+                // this thread alone.
+                store.remove_aside(designation, &aside).map_err(&failed)?;
+            }
+            for aside in store.asides_of(designation).map_err(&failed)? {
+                let _arm = exclusive();
+                if store.remove_aside(designation, &aside).map_err(&failed)? {
+                    report.asides += 1;
+                }
+            }
+        }
+        Ok(())
+    }
 }
 
 /// (d) THE LOGS' COMPACTION: each log rewritten where it has passed the
@@ -447,13 +518,20 @@ mod tests {
     /// THE PASS's (a) and the hold (clause (5)): an expired upload a stream
     /// still holds is left to that stream's end — its partial and its record
     /// untouched by the pass — and, the hold released, the next pass retires
-    /// it.
+    /// it. The pruner counts the passes it ran, and a pass over an index not
+    /// yet ready does not start: it answers nothing and counts none.
     #[test]
     fn an_expired_upload_a_stream_holds_is_left_to_that_streams_end() {
         use skep_blobs::HashFunction;
         use skep_namespace::PrincipalId;
 
         use crate::index::Rebuild;
+
+        let pruner = Pruner::new();
+        let unready_dir = tempfile::tempdir().expect("tempdir");
+        let unready = MediaGate::open(unready_dir.path()).expect("the store opens");
+        assert_eq!(pruner.pass(&unready, || ()), None, "the index not ready: no pass starts");
+        assert_eq!(pruner.passes_completed(), 0, "…and none is counted");
 
         let dir = tempfile::tempdir().expect("tempdir");
         let gate = MediaGate::open(dir.path()).expect("the store opens");
@@ -473,11 +551,12 @@ mod tests {
             .expect("an upload");
         gate.advance_clock_ms(2_000);
         let hold = gate.claim(record.id).expect("a fresh upload is claimable");
-        let pass_now = || pass(&gate, || ()).expect("a pass").expect("the index is ready");
+        let pass_now = || pruner.pass(&gate, || ()).expect("the index is ready");
         assert_eq!(pass_now().expired_partials, 0, "held: left to its stream");
         assert!(gate.store().expired_uploads(gate.now_ms()).iter().any(|r| r.id == record.id));
         drop(hold);
         assert_eq!(pass_now().expired_partials, 1, "released: the next pass retires it");
         assert!(gate.store().expired_uploads(gate.now_ms()).is_empty(), "…its record with it");
+        assert_eq!(pruner.passes_completed(), 2, "the two passes that ran");
     }
 }

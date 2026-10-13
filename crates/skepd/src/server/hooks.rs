@@ -511,14 +511,14 @@ impl Daemon {
     pub fn prune_now(&self) -> Option<PrunePass> {
         let pass = self.prune_pass();
         self.say_the_pass(&pass);
-        pass.expect("the test seam's pass")
+        pass
     }
 
     /// The line the pruner's hold writes on the operator stream as it
     /// parks — what the harness watches the child's stderr for before it
     /// kills.
     #[doc(hidden)]
-    pub const PRUNE_HOLD_NOTICE: &'static str = skep_media::gate::MediaGate::PRUNE_HOLD_NOTICE;
+    pub const PRUNE_HOLD_NOTICE: &'static str = skep_media::pruner::Pruner::PRUNE_HOLD_NOTICE;
 
     /// TEST HOOK (the same standing): HOLD THE PASS after its next rename
     /// aside — the arm released, the aside not yet unlinked, the next file's
@@ -528,7 +528,7 @@ impl Daemon {
     /// reopen: an aside open removes. Not disarmable.
     #[doc(hidden)]
     pub fn hold_the_prune_pass_after_a_rename(&self) {
-        self.media.arm_prune_hold();
+        self.pruner.arm_prune_hold();
     }
 
     /// TEST HOOK (the same standing): run the replaced files' deferred step
@@ -545,7 +545,7 @@ impl Daemon {
     /// before it lapses their leases, rather than racing it.
     #[doc(hidden)]
     pub fn prune_passes_completed(&self) -> u64 {
-        self.media.passes_completed()
+        self.pruner.passes_completed()
     }
 
     /// The line [`Daemon::hold_blob_finish_at`]'s hold writes on the

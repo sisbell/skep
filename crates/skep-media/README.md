@@ -25,14 +25,21 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
   with its `token` and `disposition`, one variant per arm of the armed set.
 - **The gate**, `gate` — `MediaGate`: `open_with`; the admission API
   `admit_declared`, `admit_creation`, `admit_bytes` and `claim` (its
-  `Hold`), each refusal a `DepositScope` (`token`); the reads the routes
-  and the deposit read take — `store`, `key`, `now_ms`, `limits`
-  (`Limits`), `index`, `index_ready`, `index_failed`, `own_pending`,
-  `uploads_open`, `health_object`, `startup_line`; the floor — `floor_in_force`,
-  `set_floor`, `floor`, `free_space`, and `note_finish`, the daemon's call
-  at an upload's finish, the one site the floor's lift is said from (the
-  binding's refusal is said once, at its first refusal, by the gate
-  itself); the install's refusal, `LimitsRefused` — a record naming a
+  `Hold`), each refusal a `DepositScope` (`token`); THE DEPOSIT's TERMS —
+  `create_upload` and `finish_upload`, the creation and the finish under
+  the principal's key, `DEPOSIT_FUNCTION` (the store's function for the
+  schema's designation, held to it at compile time) and the lease interval
+  in force, the finish noting the floor's lift; the reads the routes and
+  the deposit read take — `store`, `key`, `now_ms`, `limits` (`Limits`),
+  `index`, `index_ready`, `index_failed`, `own_pending`, `deposit_whole`
+  (the binding's own reading of a deposit's file, which the deposit read
+  reports `lapsed` by), `uploads_open`, `health_object`, `startup_line`;
+  the floor — `note_checkpoint`, the daemon's note of the newest
+  checkpoint's size, from which the gate keeps the floor in force, `floor`,
+  `floor_binding`, the creation's own test the standing line re-says, and
+  `free_space` (the binding's refusal is said once, at its first refusal,
+  and its lift once, at a finish, by the gate itself); the install's
+  refusal, `LimitsRefused` — a record naming a
   per-file cap past the route's refused whole, said once, never clamped —
   compiled with the install under `test-hooks` until the serving layer's
   channel lands; and THE INVENTORY's two reads, `lease_counted`
@@ -46,12 +53,13 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
   `Rebuild` — or, where that thread died, marking the index FAILED, the
   third state beside ready and not-ready, read through the gate's
   `index_failed`.
-- **The pruner**, `pruner` — `pass(&gate, exclusive)`, answering a
-  `PrunePass`: its figures, the halt, the compaction half of its line
-  (`compaction`) and, where a step failed, the first failure beside them
-  (`PassFailure`, naming its `PassStep` and the cause), step (d) — the
-  compaction — having run on every exit; `Cadence` (`new`, `wait`, `stop`)
-  and `Wake`, the transport's thread's clock and stop.
+- **The pruner**, `pruner` — `Pruner` (`new`), one per daemon beside its
+  gate, whose `pass(&gate, exclusive)` answers a `PrunePass` — or nothing
+  where the index is not ready: its figures, the halt, the compaction half
+  of its line (`compaction`) and, where a step failed, the first failure
+  beside them (`PassFailure`, naming its `PassStep` and the cause), step
+  (d) — the compaction — having run on every exit; `Cadence` (`new`,
+  `wait`, `stop`) and `Wake`, the transport's thread's clock and stop.
 - **The pools**, `pools` — `FetchPool` (`new`), whose permit a fetch's
   answer holds, and its twin `UploadPool` (`new`, `admit`), whose permit a
   creation or a resume holds for the body's whole stream; each says its
@@ -72,9 +80,10 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
   the variable), which the daemon's open names.
 - **The test seam** (`test-hooks`, default off; every item of it
   `#[doc(hidden)]`) — the walk hold and the walk fault, the stream hold,
-  the prune hold and its notice, the gate's clock, free-space and limits
-  overrides and its record of the lines it has said, the index's report
-  and counts, the pools' `try_hold`; forwards
+  the pruner's prune hold, its notice and its count of passes, the gate's
+  clock, free-space, floor and limits overrides and its record of the
+  lines it has said, the index's report and counts, the pools'
+  `try_hold`; forwards
   `skep-blobs/test-hooks`, the hazard seam the daemon's hooks reach through
   the gate's `store`.
 

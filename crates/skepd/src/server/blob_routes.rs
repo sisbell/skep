@@ -109,16 +109,14 @@
 //! its own: a guest reads a published picture as a guest reads its cell,
 //! and what the guest may not read M10's gate withholds (M-I2 (a)).
 
-use std::io;
 use std::sync::atomic::Ordering;
-use std::time::Duration;
 
 use serde_json::Value;
 use skep_address::Address;
-use skep_blobs::{BlobError, Finished, HashFunction, Stream, UploadId, UploadRecord};
+use skep_blobs::{BlobError, Finished, Stream, UploadId, UploadRecord};
 use skep_media::gate::{DepositScope, MediaGate};
 use skep_media::limits::MAX_STANDING_UPLOADS;
-use skep_media::pruner::{self, PrunePass};
+use skep_media::pruner::PrunePass;
 use skep_media::serve;
 use skep_namespace::PrincipalId;
 use skep_util::json::obj;
@@ -339,9 +337,11 @@ impl Daemon {
     /// own scope on it BEFORE the body, then the standing-uploads bound and
     /// the floor on no declared length (`MediaGate::admit_creation`) — each
     /// refusal before the partial and the record, no upload made — the
-    /// identifier minted and the record written; with no body the answer is
-    /// the record; with one — the creation-with-upload — the identifier is
-    /// held and the body streamed.
+    /// identifier minted and the record written under the gate's terms
+    /// (`MediaGate::create_upload`: the key, the deposit's function, the
+    /// lease interval in force); with no body the answer is the record; with
+    /// one — the creation-with-upload — the identifier is held and the body
+    /// streamed.
     fn blob_create(
         &self,
         principal: PrincipalId,
@@ -378,14 +378,7 @@ impl Daemon {
         if let Err(scope) = self.media.admit_creation(principal, now) {
             return refuse_deposit(scope, RefusedAt::BeforeTheBody, 0);
         }
-        let interval = Duration::from_millis(limits.lease_interval_ms);
-        let record = match self.media.store().create_upload(
-            &MediaGate::key(principal),
-            HashFunction::Blake3,
-            length,
-            interval,
-            now,
-        ) {
+        let record = match self.media.create_upload(principal, length, now) {
             Ok(r) => r,
             Err(e) => return refuse(TransportError::BlobIo, Some(&e.to_string())),
         };
@@ -533,11 +526,12 @@ impl Daemon {
     /// requester is re-resolved against the head under it: a session killed
     /// mid-transfer is dead at its rename — its token resolves to an actor
     /// other than `principal`, the stream's own — its upload ended, nothing
-    /// kept (clause (6); M-I2 (g)). A finish is NOTED to the media gate
-    /// (`MediaGate::note_finish`, the finished size; `operations.md` §1.1
-    /// m9): the one site the floor's lift is said from — a finish is proof
-    /// the volume held a whole file above the floor, where an admission
-    /// proves nothing the next chunk cannot undo.
+    /// kept (clause (6); M-I2 (g)). The finish is the media gate's
+    /// (`MediaGate::finish_upload`): the lease taken for the lease interval
+    /// in force, and the finished size noted (`operations.md` §1.1 m9), the
+    /// one site the floor's lift is said from — a finish is proof the volume
+    /// held a whole file above the floor, where an admission proves nothing
+    /// the next chunk cannot undo.
     fn blob_finish(
         &self,
         principal: PrincipalId,
@@ -561,11 +555,8 @@ impl Daemon {
                 resolved.closed,
             );
         }
-        match stream.finish(Duration::from_millis(self.media.limits().lease_interval_ms), now) {
-            Ok(finished) => {
-                self.media.note_finish(finished.size);
-                finish_reply(&finished)
-            }
+        match self.media.finish_upload(stream, now) {
+            Ok(finished) => finish_reply(&finished),
             Err(e) => blob_refusal(e),
         }
     }
@@ -651,11 +642,12 @@ impl Daemon {
         }
     }
 
-    /// THE PRUNER's PASS, as the daemon runs it (`skep-media`'s `pruner.rs`): the
-    /// credential lock's WRITE arm taken for one file at a time. `None`
-    /// where the index is not ready — the pass does not start (ms5-R).
-    pub(super) fn prune_pass(&self) -> io::Result<Option<PrunePass>> {
-        pruner::pass(&self.media, || self.auth.credential_lock.write())
+    /// THE PRUNER's PASS, as the daemon runs it (`skep-media`'s `pruner.rs`,
+    /// `Pruner::pass`, through the daemon's one pruner): the credential
+    /// lock's WRITE arm taken for one file at a time. `None` where the index
+    /// is not ready — the pass does not start (ms5-R).
+    pub(super) fn prune_pass(&self) -> Option<PrunePass> {
+        self.pruner.pass(&self.media, || self.auth.credential_lock.write())
     }
 
     /// THE PASS SAID (`operations.md` §1.1 rows 34, 35): one line per pass
@@ -667,21 +659,16 @@ impl Daemon {
     /// compaction FAILED`, `STOPPED: {log} takes no append until a compaction
     /// completes`), so the line names the failure AND whether the stop it may
     /// have met is lifted or stands. Nothing where the pass did not start
-    /// (`Ok(None)`: the index not ready). The `Err` arm — no step's answer,
-    /// since the pass collects its failures into the report; kept for the
-    /// signature — is row 35 with no half, nothing of the pass having run.
-    /// The cadence's loop and the test seam's pass say it alike.
-    pub(super) fn say_the_pass(&self, pass: &io::Result<Option<PrunePass>>) {
-        match pass {
-            Ok(Some(report)) => match &report.failed {
-                None => self.say(Class::Landing, report),
-                Some(failed) => self.say(
-                    Class::Failure,
-                    format_args!("pruner: the pass failed: {failed}{}", report.compaction()),
-                ),
-            },
-            Ok(None) => {}
-            Err(e) => self.say(Class::Failure, format_args!("pruner: the pass failed: {e}")),
+    /// (`None`: the index not ready). The cadence's loop and the test seam's
+    /// pass say it alike.
+    pub(super) fn say_the_pass(&self, pass: &Option<PrunePass>) {
+        let Some(report) = pass else { return };
+        match &report.failed {
+            None => self.say(Class::Landing, report),
+            Some(failed) => self.say(
+                Class::Failure,
+                format_args!("pruner: the pass failed: {failed}{}", report.compaction()),
+            ),
         }
     }
 
@@ -873,10 +860,11 @@ fn deposit_read(media_gate: &MediaGate, principal: PrincipalId) -> Value {
         .live_leases_of(&key, now)
         .into_iter()
         .map(|l| {
-            // Exact of what is on disk: a lease over a file that is absent
-            // or not whole reads as LAPSED here as at the insert — and so,
-            // as the binding takes it, does one whose size cannot be read.
-            let whole = store.blob_size(&l.designation, &l.hex).ok().flatten() == Some(l.size);
+            // Exact of what is on disk, by the binding's own reading
+            // (`MediaGate::deposit_whole`): a lease over a file that is
+            // absent, not whole, or whose size cannot be read reads as
+            // LAPSED here as at the insert.
+            let whole = media_gate.deposit_whole(&l.designation, &l.hex, l.size);
             obj(vec![
                 ("designation", Value::String(l.designation)),
                 ("expires", Value::Number(l.expires.into())),

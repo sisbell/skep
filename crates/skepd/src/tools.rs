@@ -73,13 +73,13 @@ use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 
 use serde_json::Value;
-use skep_blobs::{HashFunction, Inspection, Store};
+use skep_blobs::{Inspection, Store};
 use skep_engine::{Engine, EngineError};
 use skep_kernel::{
     BurnedSeqPolicy, CheckpointPolicy, Durability, KernelConfig, OpenError, SaltSource,
 };
 use skep_media::cell::{DESIGNATION, HASH_BYTES, PINNED_DESIGNATIONS};
-use skep_media::gate::{wall_clock_ms, Counted, MediaGate};
+use skep_media::gate::{wall_clock_ms, Counted, MediaGate, DEPOSIT_FUNCTION};
 use skep_media::index::{self, CellIndex};
 use skep_namespace::{HasM3, PrincipalId};
 use skep_util::json::{obj, parse_lower_hex};
@@ -371,8 +371,11 @@ pub fn pull(data_dir: &Path, file: &Path, expected: Option<&str>) -> Result<Pull
             hex
         }
     };
+    // The gate's function for the schema's designation — the designation
+    // the index read above names — so the file lands where the binding and
+    // the fetch read it.
     let root = data_dir.join("blobs");
-    let finished = Store::install_file(&root, HashFunction::Blake3, file, Some(&hex)).map_err(ToolError::Install)?;
+    let finished = Store::install_file(&root, DEPOSIT_FUNCTION, file, Some(&hex)).map_err(ToolError::Install)?;
     Ok(Pulled { path: root.join(&finished.designation).join(&finished.hex), hex: finished.hex, size: finished.size })
 }
 

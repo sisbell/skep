@@ -213,6 +213,7 @@ use skep_media::gate::MediaGate;
 use skep_media::index;
 use skep_media::limits::MAX_BLOB_BYTES;
 use skep_media::pools::{FetchPool, UploadPool};
+use skep_media::pruner::Pruner;
 use skep_media::MediaOptions;
 #[cfg(feature = "observe")]
 use skep_namespace::PrincipalId;
@@ -525,6 +526,11 @@ pub struct Daemon {
     /// pass reads it under the credential lock's write arm. It commits
     /// nothing to the journal and takes no `Serial`.
     media: MediaGate,
+    /// THE PRUNER beside it (`skep-media`'s `pruner.rs`): the pass the
+    /// cadence and the test seam run over `media`, handed the credential
+    /// lock's write arm one file at a time (`Daemon::prune_pass`), and,
+    /// under the test seam, the pass's own hold and count.
+    pruner: Pruner,
     /// The fetch pool behind `GET /blob?i=` (wire.md §Media, THE FETCH;
     /// M-I5 (f)) — the third instance of [`skep_util::permits`]'s mechanism,
     /// disjoint from the reconstruction and class-scan pools by the borrow:
@@ -883,7 +889,7 @@ impl Daemon {
         // gate's cell index to enter at every commit from here on.
         let uploads_source = media_opts.uploads_source;
         let media = MediaGate::open_with(data_dir, media_opts).map_err(DaemonError::Media)?;
-        media.set_floor(MediaGate::floor_in_force(start_point_len));
+        media.note_checkpoint(start_point_len);
         say_open_line(media.startup_line());
         say_open_line(UploadsLine { open: media.uploads_open(), source: uploads_source });
         let writes = WritePath::open(data_dir, &engine, Arc::clone(media.index()))
@@ -931,6 +937,7 @@ impl Daemon {
             history: History::new(),
             scans: ClassScans::new(),
             media,
+            pruner: Pruner::new(),
             fetches,
             uploads,
             write_permits: Permits::new(MAX_CONCURRENT_WRITES),
@@ -1412,16 +1419,15 @@ impl Daemon {
     /// files with theirs, (4) the pruner's liveness flag, (5) the feed
     /// walk's liveness flag with the region its death left uncovered, (6)
     /// the cell index's FAILED state, the media gate's (`operations.md` §4
-    /// row 26), (7) the media gate's free space against its floor in force
-    /// (both read fresh here, so the floor's clause stops by itself once
-    /// room stands) and (8) the CLAIMED-PERMISSIVE bit as
+    /// row 26), (7) the media gate's floor binding — its free space below
+    /// its floor in force, the creation's own test (`MediaGate::floor_binding`,
+    /// both figures read fresh, so the floor's clause stops by itself once
+    /// room stands) — and (8) the CLAIMED-PERMISSIVE bit as
     /// `log_config_warnings` reads the claim — and ONE line,
     /// [`StandingLine`], under `Class::Standing`, where at least one clause
     /// stands; NOTHING otherwise. No clause for the checkpoint thread's own
     /// death — it is the carrier.
     pub(crate) fn say_the_standing_line(&self) {
-        let free_space = self.media.free_space();
-        let floor = self.media.floor();
         let line = StandingLine {
             halted_at: self.writes.halted_at(),
             poisoned: self.engine.kernel().is_poisoned(),
@@ -1429,7 +1435,10 @@ impl Daemon {
             pruner_gone: self.threads.pruner_ended.load(Ordering::Acquire),
             feed_walk_gone: self.writes.feed_walk_gone(),
             index_failed: self.media.index_failed(),
-            floor: (free_space < floor).then_some(FloorBinding { free_space, floor }),
+            floor: self
+                .media
+                .floor_binding()
+                .map(|(free_space, floor)| FloorBinding { free_space, floor }),
             claimed_permissive: self.auth.cfg.claimed_permissive(self.board_is_claimed()),
         };
         if line.stands() {
@@ -1642,8 +1651,9 @@ impl Daemon {
     /// THE LANDING's RE-READS, after ANY checkpoint — the thread's own, a
     /// base that landed before its run failed, or a backstop's found on a
     /// wake with no flag: the cadence's byte bound ([`cadence_bytes_for`])
-    /// and the media floor (`MediaGate::floor_in_force`) set from the newest
-    /// checkpoint's size, then the change feed's five files compacted to the
+    /// and the media floor, kept by the gate from the newest checkpoint's
+    /// size as it is noted (`MediaGate::note_checkpoint`), then the change
+    /// feed's five files compacted to the
     /// journal's reclaim floor (`WritePath::compact_feed_below_reclaim_floor`).
     /// ONE function, so the three arms cannot disagree about what follows a
     /// landing; the newest header is the caller's one read of it, its length
@@ -1653,8 +1663,7 @@ impl Daemon {
     fn re_read_after_a_landing(&self, newest_len: Option<u64>) -> ReRead {
         let bytes_bound = cadence_bytes_for(newest_len);
         self.engine.kernel().set_cadence_bytes(bytes_bound);
-        let floor = MediaGate::floor_in_force(newest_len);
-        self.media.set_floor(floor);
+        let floor = self.media.note_checkpoint(newest_len);
         let compaction = self.writes.compact_feed_below_reclaim_floor(&self.engine);
         ReRead { bytes_bound, floor, compaction }
     }
@@ -2280,7 +2289,8 @@ pub(super) struct StandingLine {
     pub(super) claimed_permissive: bool,
 }
 
-/// The floor's two figures at the tick, both the media gate's own reads.
+/// The floor's two figures at the tick, as the media gate answered its
+/// binding standing (`MediaGate::floor_binding`).
 pub(super) struct FloorBinding {
     pub(super) free_space: u64,
     pub(super) floor: u64,

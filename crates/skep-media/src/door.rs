@@ -134,7 +134,7 @@
 use skep_address::{Address, Nat};
 use skep_arrangement::{published_target, shot_admission, Caller, Shot, MAX_REINSERTED_VALUES};
 use skep_content::Val;
-use skep_febe::{Disposition, FebeWorld, Op, ReadableWorld};
+use skep_febe::{Disposition, FebeWorld, Op, ReadableWorld, RejectCode};
 use skep_namespace::PrincipalId;
 
 use crate::cell;
@@ -172,30 +172,39 @@ pub enum MediaRefusal {
 impl MediaRefusal {
     /// The `detail` token of the four refusals that ride
     /// `credential_refused`; `None` for the two that are M10's own codes.
-    /// Spelled here and only here.
+    /// Spelled here, but for arm 4's: `unknown_cell_schema` is the name of
+    /// the cell's own verdict on a value naming a media kind under no pinned
+    /// schema, spelled with that verdict in `cell` (`UNKNOWN_SCHEMA_TOKEN`),
+    /// where the index's halt marks record it too.
     pub fn token(&self) -> Option<&'static str> {
         match self {
             MediaRefusal::PublishedTarget | MediaRefusal::NotOwner { .. } => None,
             MediaRefusal::UnboundCell => Some("unbound_cell"),
-            MediaRefusal::UnknownCellSchema => Some("unknown_cell_schema"),
+            MediaRefusal::UnknownCellSchema => Some(cell::UNKNOWN_SCHEMA_TOKEN),
             MediaRefusal::LeaseLapsed => Some("lease_lapsed"),
             MediaRefusal::IndexRebuilding => Some("index_rebuilding"),
         }
     }
 
-    /// The class of the tokens: PERMANENT for three — for the request AS
-    /// SENT no act admits it: a value under an unknown schema is never
-    /// admitted, and an unbound or lapsed cell is admitted only after a
-    /// PUT, which is another act (the lease re-taken by it), never a retry
-    /// of this one — and RETRY for the rebuild window's answer alone, the
-    /// class the reply layer gives the readiness refusal: the same request
-    /// may be admitted once the walk completes. The two M10 codes take M10's
-    /// own classification, `RejectCode::disposition`, where the reply is
-    /// built.
+    /// The class of each refusal. The two M10 codes are ASKED of M10's own
+    /// classification ([`RejectCode::disposition`]) — the row
+    /// `Rejection::classified` applies to the reply built for them — so this
+    /// answer and that reply cannot drift. The tokens: PERMANENT for three — for the request AS SENT no act
+    /// admits it: a value under an unknown schema is never admitted, and an
+    /// unbound or lapsed cell is admitted only after a PUT, which is another
+    /// act (the lease re-taken by it), never a retry of this one — and RETRY
+    /// for the rebuild window's answer alone, the class the reply layer
+    /// gives the readiness refusal: the same request may be admitted once
+    /// the walk completes. Exhaustive, so a new arm is classed where it is
+    /// added.
     pub fn disposition(&self) -> Disposition {
         match self {
+            MediaRefusal::PublishedTarget => RejectCode::PublishedTarget.disposition(),
+            MediaRefusal::NotOwner { .. } => RejectCode::NotOwner.disposition(),
+            MediaRefusal::UnboundCell
+            | MediaRefusal::UnknownCellSchema
+            | MediaRefusal::LeaseLapsed => Disposition::Permanent,
             MediaRefusal::IndexRebuilding => Disposition::Retry,
-            _ => Disposition::Permanent,
         }
     }
 }

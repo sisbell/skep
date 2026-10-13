@@ -2,9 +2,9 @@
 //! a claimed, enforcing board answers it; a `null` claimant, a `true`
 //! local trust and a body that is not JSON do not; an eighth member changes
 //! nothing; the wait answers at the first pair — a failed run's stdout never
-//! one, whatever it carries — and gives up after its bound, the fake called
-//! exactly the bound's times; and a `docker` that cannot be run at all ends
-//! the wait at once, the error.
+//! one, whatever it carries — and gives up after its bound of one or more
+//! tries, the fake called exactly the bound's times; and a `docker` that
+//! cannot be run at all ends the wait at once, the error.
 
 use std::cell::Cell;
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -20,6 +20,11 @@ const PAIRED: &str = r#"{"auth":{"claimant":"1.0.1","local_trust":false,"origins
 
 fn alice() -> Name {
     Name::parse(b"alice").expect("a name")
+}
+
+/// A wait's tries: one or more.
+fn tries(n: u32) -> NonZeroU32 {
+    NonZeroU32::new(n).expect("one or more tries")
 }
 
 /// T6: THE PAIR — answered by the claimed, enforcing body; not by a `null`
@@ -47,7 +52,7 @@ fn the_wait_answers_at_the_first_pair() {
     let script = [line("health", Some("alice"), 4, PAIRED, "the board did not answer\n"), line("health", Some("alice"), 0, &unclaimed, ""), line("health", Some("alice"), 0, PAIRED, "")].concat();
     let fake = FakeDocker::parse(&script).expect("a script");
     let sleeps = Cell::new(0);
-    let waited = wait(&fake, &alice(), Wait { tries: 5, interval: Duration::from_secs(1) }, &|_| sleeps.set(sleeps.get() + 1)).expect("docker ran");
+    let waited = wait(&fake, &alice(), Wait { tries: tries(5), interval: Duration::from_secs(1) }, &|_| sleeps.set(sleeps.get() + 1)).expect("docker ran");
     assert_eq!(waited, Waited::Paired { at: 3 });
     assert_eq!(sleeps.get(), 2);
     fake.assert_done();
@@ -57,9 +62,9 @@ fn the_wait_answers_at_the_first_pair() {
 /// bound's times and slept between — a small bound, and the service's own.
 #[test]
 fn the_wait_gives_up_after_its_bound() {
-    for bound in [Wait { tries: 3, interval: Duration::from_millis(5) }, HEALTH_WAIT] {
+    for bound in [Wait { tries: tries(3), interval: Duration::from_millis(5) }, HEALTH_WAIT] {
         let unclaimed = PAIRED.replace(r#""claimant":"1.0.1""#, r#""claimant":null"#);
-        let script: String = (0..bound.tries).map(|_| line("health", Some("alice"), 0, &unclaimed, "")).collect();
+        let script: String = (0..bound.tries.get()).map(|_| line("health", Some("alice"), 0, &unclaimed, "")).collect();
         let fake = FakeDocker::parse(&script).expect("a script");
         let sleeps = Cell::new(0);
         let waited = wait(&fake, &alice(), bound, &|d| {
@@ -67,12 +72,12 @@ fn the_wait_gives_up_after_its_bound() {
             sleeps.set(sleeps.get() + 1)
         })
         .expect("docker ran");
-        assert_eq!(waited, Waited::GaveUp { tries: bound.tries, last_code: Some(0) });
-        assert_eq!(fake.calls().len(), bound.tries as usize, "the fake's call count is the bound");
-        assert_eq!(sleeps.get(), bound.tries - 1);
+        assert_eq!(waited, Waited::GaveUp { tries: bound.tries.get(), last_code: Some(0) });
+        assert_eq!(fake.calls().len(), bound.tries.get() as usize, "the fake's call count is the bound");
+        assert_eq!(sleeps.get(), bound.tries.get() - 1);
         fake.assert_done();
     }
-    assert_eq!(HEALTH_WAIT, Wait { tries: 60, interval: Duration::from_secs(1) }, "the smoke's sixty seconds");
+    assert_eq!((HEALTH_WAIT.tries.get(), HEALTH_WAIT.interval), (60, Duration::from_secs(1)), "the smoke's sixty seconds");
 }
 
 /// T6: A `docker` THAT CANNOT BE RUN AT ALL ends the wait at once, the

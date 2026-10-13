@@ -72,14 +72,17 @@ pub fn stands(boards_dir: &Path, name: &Name) -> io::Result<bool> {
 }
 
 /// THE WRITE, WHOLE-THEN-RENAME: the snippet in place at [`SNIPPET_MODE`],
-/// or an error with the directory as it was — no temp file left. An error
-/// is a failed step for the flow.
+/// or an error — before the rename with the directory as it was and no temp
+/// file left, from the directory's sync after it with the snippet STANDING:
+/// the flow reads every error as a snippet that may stand. An error is a
+/// failed step for the flow.
 pub fn write(boards_dir: &Path, name: &Name, suffix: &str) -> io::Result<()> {
     whole::replace(&path(boards_dir, name), snippet(name, suffix).as_bytes(), SNIPPET_MODE, &|| Ok(()))
 }
 
 /// THE REMOVAL: `name`'s snippet gone — `true` where one stood, `false`
-/// where none did — and the directory synced.
+/// where none did — and the directory synced; an error from that sync
+/// arrives after the unlink, the snippet already gone.
 pub fn remove(boards_dir: &Path, name: &Name) -> io::Result<bool> {
     whole::remove(&path(boards_dir, name))
 }

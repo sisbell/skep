@@ -14,12 +14,13 @@
 //! owns the name; the log carries the history.
 //!
 //! THE LABELLED VOLUMES ([`labelled`]), read at start: every volume this
-//! service made carries one label (`docker.rs`'s `LABEL_KEY`), and the
-//! listing by it, sorted here against the snippet directory, tells a
-//! HALF-MADE board — a volume under a name in the grammar with no snippet,
-//! what a stop mid-board leaves — from a routed one and from a volume under
-//! no name of this grammar; the flow's sweep removes the first and leaves
-//! the rest.
+//! service made carries one label (`docker.rs`'s `LABEL_KEY`), as any other
+//! service's on the host would — one service per Docker host is the
+//! sweep's precondition — and the listing by it, sorted here against the
+//! snippet directory, tells a HALF-MADE board — a volume under a name in
+//! the grammar with no snippet, what a stop mid-board leaves — from a
+//! routed one and from a volume under no name of this grammar; the flow's
+//! sweep removes the first and leaves the rest.
 //!
 //! THE STATUS MAP ([`StatusMap`]), in memory: each post of this run by its
 //! STATUS TOKEN — 128 bits of OS entropy as lowercase hex ([`unguessable`]),
@@ -185,13 +186,17 @@ impl StatusMap {
     }
 
     /// `token`'s post moved to `state`; a post gone live joins the live
-    /// names.
+    /// names. PRECONDITION, the caller's: `token` is one this run admitted,
+    /// and its post has not ended — a live or a failed post's state is
+    /// final, for the live names never shrink and an ended post holds no
+    /// name — as the book's rules alone move a post. Either broken is the
+    /// caller's bug, and panics naming it.
     pub fn set(&mut self, token: &str, state: PostState) {
-        if let Some(post) = self.posts.get_mut(token) {
-            post.state = state;
-            if state == PostState::Live {
-                self.live.insert(post.name.clone());
-            }
+        let post = self.posts.get_mut(token).expect("`set` names a token this run admitted: the book moves only its own jobs' posts");
+        assert!(matches!(post.state, PostState::Queued | PostState::Running), "`set` moves a post that has not ended — an ended post's state is final — and this one is {:?}", post.state);
+        post.state = state;
+        if state == PostState::Live {
+            self.live.insert(post.name.clone());
         }
     }
 

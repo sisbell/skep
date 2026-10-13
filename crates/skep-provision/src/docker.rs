@@ -39,15 +39,16 @@
 //! it, the option read before the name, and `docker volume ls -q --filter
 //! label=<key>=<value>` prints the name of every volume so labelled, one
 //! per line and nothing else ([`LABEL_KEY`], [`LABEL_VALUE`]: the mark by
-//! which the sweep at start tells this service's volumes from every other
-//! on the host); `--network container:<name>` puts the sidecar in the claim
-//! run's namespace, where the daemon's loopback is reachable; `-i` keeps the
-//! sidecar's stdin open, so `skep claim --hosted -` reads the record from
-//! it; a user-defined bridge resolves a container's name, so `skep health
-//! --board http://<name>:8642` dials the serving run from a container on
-//! the same bridge — the same on the Linux VM and on a Mac, whose host does
-//! not reach the bridge; and `docker exec <caddy> caddy reload` reloads
-//! Caddy inside its container.
+//! which the sweep at start tells this service's volumes from every volume
+//! of another making — one service per host, for every `serve` marks its
+//! volumes alike); `--network container:<name>` puts the sidecar in the
+//! claim run's namespace, where the daemon's loopback is reachable; `-i`
+//! keeps the sidecar's stdin open, so `skep claim --hosted -` reads the
+//! record from it; a user-defined bridge resolves a container's name, so
+//! `skep health --board http://<name>:8642` dials the serving run from a
+//! container on the same bridge — the same on the Linux VM and on a Mac,
+//! whose host does not reach the bridge; and `docker exec <caddy> caddy
+//! reload` reloads Caddy inside its container.
 
 use std::io;
 use std::num::NonZeroU32;
@@ -83,9 +84,11 @@ const VOLUME_MOUNT: &str = "/var/lib/skepd";
 const CADDYFILE: &str = "/etc/caddy/Caddyfile";
 
 /// THE LABEL's KEY: the mark every volume this service creates carries,
-/// by which the sweep at start lists them and no other volume on the host
+/// by which the sweep at start lists them and no volume of another making
 /// (`docker volume create --label`, `docker volume ls --filter label=` —
-/// UNVERIFIED HERE, as the module doc marks).
+/// UNVERIFIED HERE, as the module doc marks). Every `serve` on a host marks
+/// its volumes alike, so the sweep cannot tell two services' apart: one
+/// service per host.
 const LABEL_KEY: &str = "skep.provision";
 
 /// THE LABEL's VALUE: one, a flag — the key's presence is the mark.
@@ -96,7 +99,11 @@ fn label() -> String {
     format!("{LABEL_KEY}={LABEL_VALUE}")
 }
 
-/// The run configuration every argv is built from: the operator's flags.
+/// The run configuration every argv is built from: the operator's flags,
+/// each value through `args`' doors — the tags, the bridge and the proxy's
+/// container one argv word not beginning with `-`, the suffix a domain,
+/// the size `<N>[k|m|g]` — and used here as it stands: [`Call::argv`]
+/// checks none again.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Settings {
     /// The hosted image's tag (`--image`).

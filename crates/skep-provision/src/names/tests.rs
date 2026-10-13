@@ -3,9 +3,10 @@
 //! combinations, the reads made in the order fixed here and no further than
 //! the first that stands; the map rebuilt from a snippet directory holding
 //! two live names; a token the map does not hold answering nothing; a post
-//! gone live joining the live names; a post in flight holding its name; an
-//! unguessable value's form; what took a name, as the log says it; the
-//! map's `Debug` showing no token;
+//! gone live joining the live names; a post in flight holding its name; a
+//! move of a token never admitted, or of an ended post, the caller's bug,
+//! panicking; an unguessable value's form; what took a name, as the log
+//! says it; the map's `Debug` showing no token;
 //! and the labelled volumes sorted against the snippet directory — half-made,
 //! routed, or under no name of the grammar. (The two posts on one name, the
 //! fifth past the queue and the sweep are the flow's — `flow/tests.rs`.)
@@ -92,6 +93,34 @@ fn the_map_answers_its_tokens_and_their_holds() {
     map.set("t3", PostState::Failed);
     assert!(!map.holds(&name("bob")));
     assert!(!map.live().contains(&name("bob")));
+}
+
+/// SETTING A TOKEN THIS RUN NEVER ADMITTED IS THE CALLER's BUG: `set`
+/// panics naming the precondition — never a quiet no-op, which would leave
+/// the caller's post at D-7 with its name held for good.
+#[test]
+#[should_panic(expected = "`set` names a token this run admitted")]
+fn setting_a_token_never_admitted_is_the_callers_bug() {
+    StatusMap::default().set("never-admitted", PostState::Running);
+}
+
+/// AN ENDED POST's STATE IS FINAL: moving a live or a failed post again is
+/// the caller's bug, and panics naming the precondition — the live names
+/// never shrink, and an ended post holds no name.
+#[test]
+fn moving_an_ended_post_is_the_callers_bug() {
+    for ended in [PostState::Live, PostState::Failed] {
+        let moved = std::panic::catch_unwind(|| {
+            let mut map = StatusMap::default();
+            map.admit("t0k3n".into(), name("alice"), true);
+            map.set("t0k3n", PostState::Running);
+            map.set("t0k3n", ended);
+            map.set("t0k3n", PostState::Running);
+        });
+        let payload = moved.expect_err("an ended post moved again");
+        let said = payload.downcast_ref::<String>().map(String::as_str).or_else(|| payload.downcast_ref::<&str>().copied()).unwrap_or_default();
+        assert!(said.contains("an ended post's state is final"), "{ended:?}: {said}");
+    }
 }
 
 /// THE LABELLED VOLUMES SORTED: a listing of `alice`, `bob`, `Carol_X`,

@@ -1,7 +1,8 @@
 //! T3 — THE NAME's GRAMMAR: the label rule after the lowercase, each
-//! refusal for its reason — an error saying it — and the alphabet at every
-//! byte; a name read back as this service wrote it, never lowercased; and
-//! the host and the public origin a name stands at under a suffix.
+//! refusal for its reason — an error saying it — which refusal speaks where
+//! two faults hold, and the alphabet at every byte; a name read back as
+//! this service wrote it, never lowercased; and the host and the public
+//! origin a name stands at under a suffix.
 
 use super::*;
 
@@ -24,6 +25,20 @@ fn the_name_is_one_lowercase_label_of_letters_digits_and_hyphens() {
     assert_eq!(Name::parse(b"a b"), Err(NameRefused::NotALabel));
     assert_eq!(Name::parse("caf\u{e9}".as_bytes()), Err(NameRefused::NotALabel));
     assert_eq!(Name::parse(&[b'a', 0xff]), Err(NameRefused::NotALabel));
+}
+
+/// WHICH REFUSAL SPEAKS where two faults hold: the first in the grammar's
+/// order — bytes that are not text before a field too long, a field too
+/// long before a byte outside the alphabet, a byte outside the alphabet
+/// before a hyphen at an end — one case for each pair that can hold at
+/// once (an empty field is text, and no longer than a label).
+#[test]
+fn where_two_faults_hold_the_first_in_the_grammars_order_speaks() {
+    let not_text_and_too_long = [&[0xff][..], "a".repeat(MAX_NAME_BYTES).as_bytes()].concat();
+    assert_eq!(Name::parse(&not_text_and_too_long), Err(NameRefused::NotALabel));
+    let too_long_and_out_of_the_alphabet = format!("{}_", "a".repeat(MAX_NAME_BYTES));
+    assert_eq!(Name::parse(too_long_and_out_of_the_alphabet.as_bytes()), Err(NameRefused::TooLong));
+    assert_eq!(Name::parse(b"-a_"), Err(NameRefused::NotALabel), "out of the alphabet and a hyphen at an end");
 }
 
 /// THE ALPHABET AT EVERY BYTE: `a`, one byte, `a` is a name iff the byte is

@@ -54,6 +54,10 @@ impl std::error::Error for NameRefused {}
 
 impl Name {
     /// THE GRAMMAR over the name field's bytes: lowercased, then one label.
+    /// Where two faults hold, the first of these speaks: bytes that are not
+    /// text (`NotALabel`), an empty field, more than [`MAX_NAME_BYTES`], a
+    /// byte outside `[a-z0-9-]` (`NotALabel`), a hyphen at either end — so
+    /// 64 bytes with an underscore are `TooLong`.
     pub fn parse(field: &[u8]) -> Result<Name, NameRefused> {
         let text = std::str::from_utf8(field).map_err(|_| NameRefused::NotALabel)?;
         let name = text.to_ascii_lowercase();

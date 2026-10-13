@@ -14,11 +14,13 @@
 //! status URL, no redirect; `GET /status/<token>`, D-7 while the post waits
 //! or runs, the live reply once the board's route stands, D-8 once it
 //! failed, 404 for a token the desk does not hold; every other request 404.
-//! A body the form decoder refuses is 400, a body past [`MAX_BODY`] 413 — so
-//! every status written is one `skep-http`'s reason table holds. A page that
-//! shows D-7 refreshes itself to the status URL every few seconds (a
-//! `<meta>` refresh, no script), which is how D-7's "it shows your board
-//! when it is live" comes true.
+//! A request the HTTP subset refuses — a head past [`MAX_HEAD`] or
+//! malformed, one cut off early, one that spent its [`TRANSFER_DEADLINE`] —
+//! is 400, and so is a body the form decoder refuses; a body past
+//! [`MAX_BODY`] is 413 — so every status written is one `skep-http`'s
+//! reason table holds. A page that shows D-7 refreshes itself to the status
+//! URL every few seconds (a `<meta>` refresh, no script), which is how
+//! D-7's "it shows your board when it is live" comes true.
 //!
 //! THE DESK ([`Desk`]) is what the pages ask: the sign-up kept, the post
 //! admitted or refused, the status read — the flow's, which this file does
@@ -106,8 +108,8 @@ impl fmt::Debug for Post<'_> {
 /// Why a claim post is refused — each shown on the form again.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Refusal {
-    /// The invite code is not in the file, or spent, or held by a post in
-    /// flight: the DRAFT refusal.
+    /// The field is no code of the code's form, or the code is not in the
+    /// file, or spent, or held by a post in flight: the DRAFT refusal.
     Invite,
     /// The name is not one label, or is taken: D-4.
     Name,
@@ -127,7 +129,8 @@ pub enum Refusal {
 pub enum SignUpRefusal {
     /// The field is no address.
     NotAnAddress,
-    /// The file could not be written.
+    /// The sign-up could not be kept: the file could not be read or
+    /// written, or is at its cap.
     Failed,
 }
 
@@ -157,12 +160,19 @@ impl fmt::Debug for Shown {
 
 /// WHAT THE PAGES ASK.
 pub trait Desk: Sync {
-    /// A sign-up: the address field's bytes kept, or refused.
+    /// A sign-up: the address field's bytes kept, or refused. `Ok`: the
+    /// address kept. `NotAnAddress`: nothing kept. `Failed`: nothing kept —
+    /// or, where the file's rewrite failed at its directory's sync, after
+    /// its rename, the address kept, not known durable.
     fn sign_up(&self, address: &[u8]) -> Result<(), SignUpRefusal>;
     /// A claim post judged: admitted — queued, and answered with its status
-    /// token — or refused.
+    /// token — or refused. `Ok(token)`: the post queued, and `token` one
+    /// [`Desk::status`] answers for the rest of the run — D-7 until the post
+    /// ends. A refusal leaves nothing: no token, nothing queued, no file
+    /// changed.
     fn admit(&self, post: &Post<'_>) -> Result<String, Refusal>;
-    /// A status token's page; `None` for a token the desk does not hold.
+    /// A status token's page; `None` for a token the desk does not hold. A
+    /// query: it changes nothing.
     fn status(&self, token: &str) -> Option<Shown>;
 }
 

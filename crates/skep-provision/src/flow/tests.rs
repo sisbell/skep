@@ -6,7 +6,9 @@
 //! snippet absent, the reload called where the snippet was written, the
 //! status D-8, the invite still issued and no mail; (c) a cleanup's removal
 //! failing — a docker call's or the snippet's — logged, the name left
-//! taken; step 3's second look, a name taken since its post failing before
+//! taken; a cleanup's reload failing, logged as itself, nothing left
+//! standing; a snippet whose write failed after its rename, removed by the
+//! cleanup; step 3's second look, a name taken since its post failing before
 //! anything is made; the dark claim's retry, thirty tries two seconds
 //! apart; and THE BOOK keeping its own rules — what blocks a new post, first
 //! of three, and what admitting, taking, going live, letting a code go and
@@ -26,7 +28,8 @@
 //! (a post answers at once while a worker is paused inside a step), T17 (a
 //! second post for a name in flight meets D-4 under two workers, and one
 //! `volume_create` per name across a burst), T18 (the snippet's write and
-//! the reload serial across names); and THE SWEEP's, T20 (the half-made
+//! the reload serial across names, and a failed route change's lock held
+//! across its undo); and THE SWEEP's, T20 (the half-made
 //! board removed, the routed and the unnamed left, a listing that fails
 //! skipped).
 
@@ -90,8 +93,11 @@ impl Sender for Probe {
     }
 }
 
-/// The service over the two fakes, its log kept, its mail through the
-/// probe on the worker's own thread.
+/// A test's tap on the log: called with every line once it is kept.
+type Tap = Box<dyn Fn(&str) + Send + Sync>;
+
+/// The service over the two fakes, its log kept — and tapped, where a test
+/// sets a tap — its mail through the probe on the worker's own thread.
 struct Rig {
     dir: Scratch,
     boards: PathBuf,
@@ -99,6 +105,7 @@ struct Rig {
     fake: Arc<FakeDocker>,
     probe: Arc<Probe>,
     lines: Arc<Mutex<Vec<String>>>,
+    tap: Arc<OnceLock<Tap>>,
     service: Arc<Service>,
 }
 
@@ -115,8 +122,14 @@ fn rig_with(script: &str, mail_script: Option<Vec<i32>>, sleep: Sleep) -> Rig {
     let state_dir = StateDir::open(&dir.path().join("state")).expect("the state directory");
     let fake = Arc::new(FakeDocker::parse(script).expect("a script"));
     let lines = Arc::new(Mutex::new(Vec::new()));
-    let into = Arc::clone(&lines);
-    let log: Log = Arc::new(move |line: &str| into.lock().unwrap().push(line.to_owned()));
+    let tap: Arc<OnceLock<Tap>> = Arc::new(OnceLock::new());
+    let (into, tapped) = (Arc::clone(&lines), Arc::clone(&tap));
+    let log: Log = Arc::new(move |line: &str| {
+        into.lock().unwrap().push(line.to_owned());
+        if let Some(tap) = tapped.get() {
+            tap(line);
+        }
+    });
     let probe = Arc::new(Probe {
         fake: FakeSender::new(dir.path().join("mail.log"), mail_script.clone().unwrap_or_default()),
         service: OnceLock::new(),
@@ -128,7 +141,7 @@ fn rig_with(script: &str, mail_script: Option<Vec<i32>>, sleep: Sleep) -> Rig {
     let config = Config { boards_dir: boards.clone(), suffix: "skep.host".into() };
     let service = Arc::new(Service::new(config, state_dir.clone(), Box::new(Arc::clone(&fake)), outbox, log, sleep).expect("the service"));
     probe.service.set(Arc::downgrade(&service)).ok();
-    Rig { dir, boards, state_dir, fake, probe, lines, service }
+    Rig { dir, boards, state_dir, fake, probe, lines, tap, service }
 }
 
 /// A GATE a hook pauses at: the hook counts itself in and waits until the
@@ -236,6 +249,14 @@ impl Rig {
     /// Whether the log holds `line`.
     fn logged(&self, line: &str) -> bool {
         self.log().iter().any(|l| l == line)
+    }
+
+    /// THE TAP set: `tap` is called with every log line once it is kept,
+    /// no lock of the rig's held — the test's way to pause a worker, or
+    /// change what it meets, between two steps no docker call separates.
+    /// Set once.
+    fn on_log(&self, tap: impl Fn(&str) + Send + Sync + 'static) {
+        assert!(self.tap.set(Box::new(tap)).is_ok(), "the tap is set once");
     }
 }
 
@@ -389,9 +410,9 @@ fn cases() -> Vec<Case> {
         Case {
             what: "sidecar_claim exits 4 past the bound",
             script: to_the_claim()
-                + &(0..SIDECAR_WAIT.tries).map(|_| line("sidecar_claim", Some("alice"), 4, "", "skep: the board could not be dialed\n")).collect::<String>()
+                + &(0..SIDECAR_WAIT.tries.get()).map(|_| line("sidecar_claim", Some("alice"), 4, "", "skep: the board could not be dialed\n")).collect::<String>()
                 + &run_and_volume_removed(),
-            calls: [vec!["volume_create alice", "run_claim alice"], vec!["sidecar_claim alice"; SIDECAR_WAIT.tries as usize], vec!["rm_force alice", "volume_rm alice"]].concat(),
+            calls: [vec!["volume_create alice", "run_claim alice"], vec!["sidecar_claim alice"; SIDECAR_WAIT.tries.get() as usize], vec!["rm_force alice", "volume_rm alice"]].concat(),
             reloads: false,
             before: nothing,
         },
@@ -422,9 +443,9 @@ fn cases() -> Vec<Case> {
         what: "health never pairs",
         script: to_the_serving_run()
             + &line("run_serving", Some("alice"), 0, "", "")
-            + &(0..HEALTH_WAIT.tries).map(|_| line("health", Some("alice"), 0, UNPAIRED, "")).collect::<String>()
+            + &(0..HEALTH_WAIT.tries.get()).map(|_| line("health", Some("alice"), 0, UNPAIRED, "")).collect::<String>()
             + &run_and_volume_removed(),
-        calls: [serving.clone(), vec!["health alice"; HEALTH_WAIT.tries as usize], vec!["rm_force alice", "volume_rm alice"]].concat(),
+        calls: [serving.clone(), vec!["health alice"; HEALTH_WAIT.tries.get() as usize], vec!["rm_force alice", "volume_rm alice"]].concat(),
         reloads: false,
         before: nothing,
     });
@@ -553,12 +574,147 @@ fn a_snippet_the_cleanup_cannot_remove_leaves_the_name_taken_and_is_logged() {
     rig.fake.assert_done();
 }
 
+/// T13 (c): A CLEANUP WHOSE RELOAD FAILS LEAVES NOTHING STANDING: the
+/// reload's failure is logged as itself — the snippet removed, the run and
+/// the volume removed — and the cleanup said done, never INCOMPLETE, for
+/// nothing the truth about names reads stands: a re-post for the name is
+/// admitted.
+#[test]
+fn a_cleanup_whose_reload_fails_leaves_nothing_standing() {
+    let script = [
+        inspects("alice"),
+        inspects("alice"),
+        to_the_serving_run(),
+        line("run_serving", Some("alice"), 0, "", ""),
+        line("health", Some("alice"), 0, PAIRED, ""),
+        line("caddy_reload", None, 1, "", "Error: loading new config\n"),
+        line("caddy_reload", None, 1, "", "Error: loading new config\n"),
+        run_and_volume_removed(),
+        inspects("alice"),
+    ]
+    .concat();
+    let rig = rig(&script, None);
+    let token = rig.admitted("alice", &rig.invite());
+    assert!(rig.service.run_next());
+    assert_eq!(rig.service.status(&token), Some(Shown::Failed));
+    assert!(!rig.snippet("alice").exists(), "the snippet stands");
+    for logged in [
+        "alice: cleanup: snippet: removed",
+        "alice: cleanup: caddy_reload: exit 1",
+        "alice: cleanup: rm_force: exit 0",
+        "alice: cleanup: volume_rm: exit 0",
+        "alice: cleanup: done — nothing stands under the name",
+    ] {
+        assert!(rig.logged(logged), "{logged}: {:?}", rig.log());
+    }
+    assert!(!rig.log().iter().any(|l| l.contains("INCOMPLETE")), "{:?}", rig.log());
+    rig.admitted("alice", &rig.invite());
+    rig.fake.assert_done();
+}
+
+/// T13 (c): THE SNIPPET's WRITE FAILING AFTER ITS RENAME — the directory's
+/// sync refused, the snippet standing — is a failed step whose cleanup
+/// removes the snippet and reloads: the snippet is the cleanup's from its
+/// write's first act, so the write's error is read as a snippet that may
+/// stand, and nothing stands under the name after.
+#[cfg(unix)]
+#[test]
+fn a_snippet_whose_write_failed_after_its_rename_is_removed_by_the_cleanup() {
+    use std::os::unix::fs::PermissionsExt;
+    let script = [
+        inspects("alice"),
+        inspects("alice"),
+        to_the_serving_run(),
+        line("run_serving", Some("alice"), 0, "", ""),
+        line("health", Some("alice"), 0, PAIRED, ""),
+        line("caddy_reload", None, 0, "", ""),
+        run_and_volume_removed(),
+    ]
+    .concat();
+    let rig = rig(&script, None);
+    // The boards directory writable and searchable but not readable: the
+    // snippet's rename lands and the directory's sync, an open of the
+    // directory, is refused. Once the write's failure is logged the
+    // directory is readable again, so the cleanup's removal is made whole.
+    let boards = rig.boards.clone();
+    rig.on_log(move |line| {
+        if line.starts_with("alice: snippet: the write failed: ") {
+            fs::set_permissions(&boards, fs::Permissions::from_mode(0o700)).expect("readable again");
+        }
+    });
+    let code = rig.invite();
+    let token = rig.admitted("alice", &code);
+    fs::set_permissions(&rig.boards, fs::Permissions::from_mode(0o300)).expect("not readable");
+    assert!(rig.service.run_next());
+    rig.fake.assert_done();
+    let after = ["volume_create alice", "run_claim alice", "sidecar_claim alice", "rm_force alice", "run_serving alice", "health alice", "caddy_reload", "rm_force alice", "volume_rm alice"];
+    assert_eq!(rig.fake.said()[4..], said(&after)[..]);
+    assert!(!rig.snippet("alice").exists(), "the snippet stands");
+    assert_eq!(rig.service.status(&token), Some(Shown::Failed));
+    assert!(rig.issued(&code));
+    for logged in ["alice: FAILED at the snippet's write", "alice: cleanup: snippet: removed", "alice: cleanup: caddy_reload: exit 0", "alice: cleanup: done — nothing stands under the name"] {
+        assert!(rig.logged(logged), "{logged}: {:?}", rig.log());
+    }
+}
+
+/// T18: A FAILED ROUTE CHANGE KEEPS THE ROUTE LOCK ACROSS ITS UNDO —
+/// `alice`'s reload refused and her worker paused between her failed step
+/// and her cleanup, the snippet she wrote standing, `bob`, his board paired
+/// and at the route lock, writes nothing; let go, `alice`'s snippet is
+/// removed and her reload made before `bob`'s snippet is written, so no
+/// reload of `bob`'s loads a snippet whose own route change failed.
+#[test]
+fn a_failed_route_change_keeps_the_route_lock_across_its_undo() {
+    let script = [
+        inspects("alice"),
+        inspects("alice"),
+        to_the_serving_run(),
+        line("run_serving", Some("alice"), 0, "", ""),
+        line("health", Some("alice"), 0, PAIRED, ""),
+        run_and_volume_removed(),
+        flow_of("bob", false),
+        line("caddy_reload", None, 1, "", "Error: loading new config\n"),
+        reloads(2),
+    ]
+    .concat();
+    let rig = rig(&script, None);
+    let (inside, between) = (Gate::new(), Gate::new());
+    let (pause, first) = (Arc::clone(&inside), Arc::new(AtomicBool::new(false)));
+    rig.fake.pause(move |method, _| {
+        if method == "caddy_reload" && !first.swap(true, Ordering::SeqCst) {
+            pause.pause();
+        }
+    });
+    let pause = Arc::clone(&between);
+    rig.on_log(move |line| {
+        if line == "alice: FAILED at caddy_reload" {
+            pause.pause();
+        }
+    });
+    rig.spawn_workers(2);
+    let alice = rig.admitted("alice", &rig.invite());
+    inside.entered(1);
+    let bob = rig.admitted("bob", &rig.invite());
+    until("bob's health", || rig.called("health bob").then_some(()));
+    inside.open();
+    between.entered(1);
+    thread::sleep(Duration::from_millis(300));
+    assert!(!rig.logged("bob: snippet: written"), "bob wrote his snippet while alice's failed one stood: {:?}", rig.log());
+    between.open();
+    until("bob live, alice's cleanup done", || (rig.live(&bob) && rig.service.status(&alice) == Some(Shown::Failed)).then_some(()));
+    rig.fake.assert_done();
+    let log = rig.log();
+    let at = |wanted: &str| log.iter().position(|l| l == wanted).unwrap_or_else(|| panic!("{wanted}: {log:?}"));
+    assert!(at("alice: cleanup: caddy_reload: exit 0") < at("bob: snippet: written"), "{log:?}");
+    assert!(!rig.snippet("alice").exists() && rig.snippet("bob").exists());
+}
+
 /// THE DARK CLAIM's RETRY: exit 4 — the claim run's daemon not yet
 /// listening — is tried again after a sleep of the bound's interval, and
 /// the bound is the one the flow states, thirty tries two seconds apart.
 #[test]
 fn the_dark_claim_retries_exit_4_two_seconds_apart_thirty_times() {
-    assert_eq!(SIDECAR_WAIT, Wait { tries: 30, interval: Duration::from_secs(2) }, "thirty tries two seconds apart");
+    assert_eq!((SIDECAR_WAIT.tries.get(), SIDECAR_WAIT.interval), (30, Duration::from_secs(2)), "thirty tries two seconds apart");
     let slept = Arc::new(Mutex::new(Vec::new()));
     let into = Arc::clone(&slept);
     let rig = rig_with(&(flow_of("alice", true) + &reloads(1)), None, Arc::new(move |d: Duration| into.lock().unwrap().push(d)));

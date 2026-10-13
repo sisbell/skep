@@ -10,20 +10,31 @@
 //! written, so the umask neither widens nor narrows it; synced, then renamed
 //! over the file (`std::fs::rename` is atomic within one filesystem, as this
 //! crate knows POSIX — UNVERIFIED HERE), and the directory synced: a reader
-//! finds the old file whole or the new one whole, and a failure anywhere
-//! leaves the old file whole and no temp file behind. THE REMOVAL
-//! ([`remove`]) removes a file and syncs its directory. The owners name the
-//! modes: the state files `0600`, owner-only (`statedir`); the snippets
-//! `0644`, readable by the proxy (`caddy`).
+//! finds the old file whole or the new one whole. A failure before the
+//! rename leaves the old file whole and no temp file behind; the directory's
+//! sync comes after the rename, so a failure there answers an error with
+//! the new file in place, not known durable — an error is "the old file, or
+//! the new one not known durable", never "the old file". THE REMOVAL
+//! ([`remove`]) removes a file and syncs its directory, an error from that
+//! sync arriving with the file gone. ONE WRITER PER PATH is the caller's:
+//! every replacement of a file shares its temp sibling — the sign-up file's
+//! mutex, the invite file's lock file and the one worker that holds a
+//! board's name each keep it. The owners name the modes: the state files
+//! `0600`, owner-only (`statedir`); the snippets `0644`, readable by the
+//! proxy (`caddy`).
 
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
-/// THE REPLACEMENT: `bytes` become the file at `path`, whole, at `mode` —
-/// or an error with the file as it was and no temp file left. `between`
-/// runs after the temp file is written and synced and before the rename:
-/// the seam a test fails, to show a failure there leaves the old file whole.
+/// THE REPLACEMENT: `bytes` become the file at `path`, whole, at `mode`.
+/// An error before the rename leaves the file as it was and no temp file of
+/// this call's; an error from the directory's sync, after the rename,
+/// leaves the new file in place, not known durable. PRECONDITION, the
+/// caller's: no other replacement or removal of `path` runs at once.
+/// `between` runs after the temp file is written and synced and before the
+/// rename: the seam a test fails, to show a failure there leaves the old
+/// file whole.
 pub fn replace(path: &Path, bytes: &[u8], mode: u32, between: &dyn Fn() -> io::Result<()>) -> io::Result<()> {
     let tmp = temp_of(path);
     let written = (|| {
@@ -57,7 +68,8 @@ pub fn replace(path: &Path, bytes: &[u8], mode: u32, between: &dyn Fn() -> io::R
 }
 
 /// THE REMOVAL: the file at `path` gone — `true` where one stood, `false`
-/// where none did — and its directory synced.
+/// where none did — and its directory synced; an error from that sync
+/// arrives with the file already gone.
 pub fn remove(path: &Path) -> io::Result<bool> {
     match fs::remove_file(path) {
         Ok(()) => sync_parent(path).map(|()| true),

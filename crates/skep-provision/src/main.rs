@@ -14,7 +14,8 @@
 //! and the proxy reloaded, the two serial across every name; the live page
 //! at the post's status URL; and ONE MAIL once the board is live. At
 //! its start, before it listens, A SWEEP removes every board a stop left
-//! half-made — a labelled volume with no snippet. `skep-provision serve` is
+//! half-made — a labelled volume with no snippet. One `serve` per Docker
+//! host: the label and the names are the host's. `skep-provision serve` is
 //! the service; `skep-provision invite` is the owner's hand, minting one
 //! invite and printing its invite link; `skep-provision --version` the
 //! version line.
@@ -38,8 +39,10 @@
 //! THE ANSWERS it writes carry statuses `skep-http`'s reason table holds,
 //! and no other — 200 for every page and every refusal shown on a page, 404
 //! for a request no page takes or a status token it does not hold, 400 for
-//! a body the form decoder refuses, 413 for a body past the cap — so the
-//! subset is called as it stands.
+//! a request the HTTP subset refuses — a head past 16 KiB or malformed, one
+//! cut off early, one that spent its minute — or a body the form decoder
+//! refuses, 413 for a body past the cap — so the subset is called as it
+//! stands.
 //!
 //! THE STOP is SIGTERM's default disposition: the process ends at once.
 //! Crash-stop, as the daemon's: every file it keeps is replaced whole by a
@@ -48,11 +51,15 @@
 //! start's sweep removes it — a volume under the label with no snippet is
 //! half-made, and goes with whatever run stands under its name — or, where
 //! a removal fails, until the operator clears it (the provisioning record
-//! §5.2's named gap); the queue, the status tokens and an unsent mail are
-//! memory and end with the process. Its exit codes: 0, a verb done; 2, a
-//! usage refusal; 1, a start refused — a state directory other users can
-//! read, a snippet directory that cannot be read, an address that cannot be
-//! bound, a thread the OS will not give — or an invite not minted.
+//! §5.2's named gap); the queue, the status tokens, an unsent mail and the
+//! codes posts in flight hold are memory and end with the process — among
+//! those codes a live board's whose spend could not be written, which the
+//! file still holds issued: the next run admits a post on it unless the
+//! operator has marked it spent. Its exit codes: 0, a verb done; 2, a usage
+//! refusal; 1, a start refused — a state directory other users can read, a
+//! snippet directory that cannot be read, an address that cannot be bound,
+//! a thread the OS will not give — or an `invite` that printed no invite
+//! link.
 //!
 //! The modules are declared below in dependency order, each naming only
 //! those above it — `tests/it/tidy.rs` checks it — and `ARCHITECTURE.md`

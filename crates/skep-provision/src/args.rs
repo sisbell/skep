@@ -178,7 +178,8 @@ usage: skep-provision serve --state-dir <DIR> --reply-to <ADDRESS>
 serve: the hosted board's sign-up service — the sign-up page and the
 claim form over HTTP, each admitted post provisioned through the host's
 docker, different names at once and one post per name; at its start, a
-board left half-made by a stop is removed.
+board left half-made by a stop is removed — every volume under its label
+whose snippet --boards-dir lacks, so one serve per Docker host.
 
   --state-dir <DIR>       the sign-up file and the invite file (required):
                           made 0700 where absent; refused at start where

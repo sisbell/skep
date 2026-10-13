@@ -44,7 +44,9 @@
 //!    first-start guard beside the proxy's own check (AUTH-4.57 (d)); then
 //!    A ROUTE CHANGE under the one route lock, serial across every name:
 //!    the snippet written (`caddy`, AUTH-4.57 (c)) and `caddy_reload` — so
-//!    no reload lands between another name's snippet and its own;
+//!    no reload lands between another name's snippet and its own reload,
+//!    and, where the write or the reload fails, none between that snippet
+//!    and the reload that undoes it: the lock is held on into the cleanup;
 //!
 //! then THE STATUS LIVE, then THE INVITE SPENT under the invite file's own
 //! lock and its code let go of, in that order, then THE MAIL handed to the
@@ -53,21 +55,27 @@
 //!
 //! THE CLEANUP (the provisioning record §5.2's decision table, D-8 made
 //! literally true): on a failed step, what the flow made is undone in the
-//! reverse of the order it was made — the snippet removed and Caddy
-//! reloaded where the snippet was written, a route change too, under the
-//! route lock as the write was; `rm_force` where a run stands; `volume_rm`
-//! where the volume stands — the status FAILED (D-8) and the invite NOT
-//! spent, so the person may post again. By the table: `volume_create`
-//! failed — nothing; `run_claim` failed — the volume; the dark claim failed
-//! (exit 4 past the bound, 3, 1, 2, or `claimed by`) — the claim run and
-//! the volume; `run_serving` failed, or the pair never answered, or the
-//! snippet's write failed — the serving run and the volume; the reload
-//! failed — the snippet and a reload, the serving run, the volume. A board
-//! whose claim landed and whose route did not is removed with its volume:
-//! no route ever existed, so no one wrote to it, and a re-post claims a
-//! fresh volume with the same keys. THE NAMED GAP: a cleanup call that
-//! itself fails is logged and leaves the name standing — the truth then
-//! refuses re-posts (D-4) until the operator clears it.
+//! reverse of the order it was made — the snippet removed where its write
+//! began, and Caddy reloaded where one stood or may stand, the route
+//! change's undo under the route lock its write took and held since;
+//! `rm_force` where a run stands; `volume_rm` where the volume stands — the
+//! status FAILED (D-8) and the invite NOT spent, so the person may post
+//! again. By the table: `volume_create` failed — nothing; `run_claim`
+//! failed — the volume; the dark claim failed (exit 4 past the bound, 3, 1,
+//! 2, or `claimed by`) — the claim run and the volume; `run_serving`
+//! failed, or the pair never answered — the serving run and the volume; the
+//! snippet's write failed — the snippet, where its rename landed, and a
+//! reload, then the serving run and the volume; the reload failed — the
+//! snippet and a reload, the serving run, the volume. A board whose claim
+//! landed and whose route did not is removed with its volume: no route
+//! ever existed — the route lock kept every other name's reload out while
+//! its snippet stood, and its own reload, where one was made, failed — so
+//! no one wrote to it, and a re-post claims a fresh volume with the same
+//! keys. THE NAMED GAP: a removal that itself fails — the snippet's, the
+//! run's, the volume's — is logged and leaves the name standing, and the
+//! truth then refuses re-posts (D-4) until the operator clears it; a reload
+//! that fails is logged as itself, for it leaves nothing standing that the
+//! truth reads.
 //!
 //! THE SWEEP AT START ([`Service::sweep`]; `serve` runs it once, before it
 //! listens): a stop mid-board leaves a volume, and perhaps a run, under a
@@ -76,7 +84,10 @@
 //! name of the grammar with no snippet is removed by the table's last two
 //! rows; a name whose snippet stands is left, a volume under no name of the
 //! grammar is logged and left, and a listing that fails is logged and the
-//! sweep skipped — the sign-up still serves.
+//! sweep skipped — the sign-up still serves. Its precondition is the
+//! operator's: ONE SERVICE PER DOCKER HOST, for the label and the names
+//! are the host's, and a second service would take the first's boards for
+//! half-made.
 //!
 //! THE LOG, on stderr through [`Log`]: one line per step naming the name,
 //! the step and each call's exit code, and the sidecar's stderr whole —
@@ -85,6 +96,7 @@
 
 use std::collections::{HashSet, VecDeque};
 use std::io;
+use std::num::NonZeroU32;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Condvar, Mutex, MutexGuard};
@@ -112,7 +124,7 @@ const QUEUE_DEPTH: usize = 4;
 
 /// THE DARK CLAIM's RETRY: thirty tries two seconds apart while the
 /// sidecar answers exit 4 — the claim run's daemon not yet listening.
-const SIDECAR_WAIT: Wait = Wait { tries: 30, interval: Duration::from_secs(2) };
+const SIDECAR_WAIT: Wait = Wait { tries: NonZeroU32::new(30).expect("thirty is not zero"), interval: Duration::from_secs(2) };
 
 /// THE LOOKS' CAP: four posts' looks at what stands under their names at
 /// once — [`QUEUE_DEPTH`], the posts that can wait at once. A look is up to
@@ -243,12 +255,22 @@ impl Drop for Slot<'_> {
     }
 }
 
-/// What a provisioning has made so far, for the cleanup to undo.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-struct Made {
+/// What a provisioning has made so far, for the cleanup to undo — and,
+/// once its snippet's write has begun, the route lock that write took, so
+/// a failed route change is undone under the lock it was made under.
+#[derive(Debug, Default)]
+struct Made<'s> {
+    /// The board's volume, created.
     volume: bool,
+    /// A run that may stand under the name: the claim run, then the
+    /// serving run.
     run: bool,
-    snippet: bool,
+    /// THE SNIPPET, from its write's first act: the route lock that write
+    /// took — the write's error may come after its rename, the snippet
+    /// standing — let go of once the reload succeeds, and otherwise held
+    /// on into the cleanup, across the snippet's removal and the reload
+    /// that undoes it.
+    snippet: Option<MutexGuard<'s, ()>>,
 }
 
 /// THE SERVICE: the desk the pages ask, and the workers' shared state.
@@ -262,10 +284,12 @@ pub struct Service {
     outbox: Option<Outbox>,
     log: Log,
     sleep: Sleep,
-    /// THE ROUTE LOCK: held across a route change — a snippet's write or
-    /// its removal, and the reload that follows it — and nowhere else, so
-    /// route changes are serial across every name: no reload of another
-    /// name's lands between a snippet and its own reload.
+    /// THE ROUTE LOCK: held across a route change — a snippet's write and
+    /// the reload that follows it, and where either fails, on across the
+    /// snippet's removal and the reload that undoes it — and nowhere else,
+    /// so route changes are serial across every name: no reload of another
+    /// name's lands between a snippet and its own reload, nor loads a
+    /// snippet whose own route change failed.
     route_lock: Mutex<()>,
     /// THE BOOK's SHORT LOCK: what is in flight, and its rules.
     book: Mutex<Book>,
@@ -302,6 +326,15 @@ impl Service {
     /// that fails is logged and the sweep skipped: a listing failure must
     /// not take the sign-up down. Answers the boards removed, for the
     /// serving line.
+    ///
+    /// ITS PRECONDITION, the operator's: ONE SERVICE PER DOCKER HOST. The
+    /// label marks every volume any `serve` on the host made, and a volume
+    /// is half-made by this service's snippet directory alone — so a second
+    /// service on the host would read the first's boards in flight, and
+    /// under another `--boards-dir` its live boards too, as half-made, and
+    /// remove them; the host's volume and container names are one namespace
+    /// besides. Nothing in a volume tells two services apart, so nothing
+    /// here checks it: it is the operator's to keep.
     pub fn sweep(&self) -> usize {
         let docker = self.docker.as_ref();
         let listing = match docker.labelled_volumes() {
@@ -385,12 +418,17 @@ impl Service {
     }
 
     /// ONE POST PROVISIONED on the worker that owns its name: the steps,
-    /// then live or cleaned up; the mail after.
+    /// then live — the route lock let go of first — or cleaned up, the
+    /// route lock held on into the cleanup where the steps took it; the mail
+    /// after.
     fn provision(&self, job: Job) {
         let name = &job.name;
         let mut made = Made::default();
         let live = match self.steps(&job, &mut made) {
             Ok(()) => {
+                // The route change is done: its lock let go of before the
+                // spend and the mail, which change no route.
+                drop(made);
                 self.book().mark_live(&job.token);
                 self.log(&format!("{name}: LIVE at {}", name.origin(&self.config.suffix)));
                 let spent = invites::spend(&self.state_dir, &job.code, name);
@@ -421,8 +459,10 @@ impl Service {
         }
     }
 
-    /// STEPS 3 TO 5, in order; the first that fails is named.
-    fn steps(&self, job: &Job, made: &mut Made) -> Result<(), &'static str> {
+    /// STEPS 3 TO 5, in order; the first that fails is named, and `made`
+    /// says what the cleanup undoes — from the snippet's write on, under
+    /// the route lock it holds.
+    fn steps<'s>(&'s self, job: &Job, made: &mut Made<'s>) -> Result<(), &'static str> {
         let name = &job.name;
         let docker = self.docker.as_ref();
         // 3. The truth again: a name made since the post is not this post's.
@@ -462,14 +502,16 @@ impl Service {
             }
         }
         // A ROUTE CHANGE: the snippet's write and the reload under the route
-        // lock, to the end of this function, so no reload of another name's
-        // lands between this snippet and its own reload.
-        let _route_change = self.route_lock();
+        // lock, which `made` holds from the write's first act — the write's
+        // error may come after its rename, the snippet standing — so no
+        // reload of another name's lands between this snippet and its own
+        // reload, and where either fails, the cleanup undoes the snippet
+        // under the same lock.
+        made.snippet = Some(self.route_lock());
         if let Err(e) = caddy::write(&self.config.boards_dir, name, &self.config.suffix) {
-            self.log(&format!("{name}: snippet: not written: {e}"));
+            self.log(&format!("{name}: snippet: the write failed: {e}"));
             return Err("the snippet's write");
         }
-        made.snippet = true;
         self.log(&format!("{name}: snippet: written"));
         self.done(name, "caddy_reload", caddy::reload(docker))?;
         Ok(())
@@ -479,7 +521,7 @@ impl Service {
     /// bound passes; its stderr logged whole every try.
     fn dark_claim(&self, job: &Job) -> Result<(), &'static str> {
         let name = &job.name;
-        for at in 1..=SIDECAR_WAIT.tries {
+        for at in 1..=SIDECAR_WAIT.tries.get() {
             let exit = match self.docker.sidecar_claim(name, &job.record) {
                 Ok(exit) => exit,
                 Err(e) => {
@@ -500,7 +542,7 @@ impl Service {
                     self.log(&format!("{name}: the volume made for this post answered `claimed by`: residue where none should be"));
                     return Err("the dark claim");
                 }
-                Err(Failure::Transport) if at < SIDECAR_WAIT.tries => (self.sleep)(SIDECAR_WAIT.interval),
+                Err(Failure::Transport) if at < SIDECAR_WAIT.tries.get() => (self.sleep)(SIDECAR_WAIT.interval),
                 Err(failure) => {
                     self.log(&format!("{name}: sidecar_claim: {failure}"));
                     return Err("the dark claim");
@@ -541,23 +583,42 @@ impl Service {
         self.judged(&format!("{name}: {step}"), answered).ok_or(step)
     }
 
-    /// THE CLEANUP: what was made, undone in reverse; a removal that fails
-    /// is logged, the next still tried, and the name said to stand.
-    fn cleanup(&self, name: &Name, made: Made) {
+    /// THE CLEANUP: what was made, undone in reverse — the snippet under the
+    /// route lock its write took, let go of once its reload is made, then
+    /// the run, then the volume. A removal that fails — the snippet's, the
+    /// run's, the volume's — is logged, the next still tried, and the name
+    /// said to stand; the reload's failure is logged as itself, for it
+    /// leaves nothing standing that the truth about names reads.
+    fn cleanup(&self, name: &Name, made: Made<'_>) {
         let docker = self.docker.as_ref();
+        let made_anything = made.volume || made.run || made.snippet.is_some();
         let mut stands = false;
-        if made.snippet {
-            // A route change again: the removal and the reload under the
-            // route lock, to the end of this block.
-            let _route_change = self.route_lock();
-            match caddy::remove(&self.config.boards_dir, name) {
-                Ok(_) => self.log(&format!("{name}: cleanup: snippet: removed")),
+        if let Some(_route_change) = made.snippet {
+            // The route change's undo, under the lock its write took, to the
+            // end of this block. The removal's answer says whether a reload
+            // is owed: none where no snippet stood; on an error, which may
+            // follow the unlink, the snippet is read as standing and the
+            // reload follows.
+            let reload = match caddy::remove(&self.config.boards_dir, name) {
+                Ok(true) => {
+                    self.log(&format!("{name}: cleanup: snippet: removed"));
+                    true
+                }
+                Ok(false) => {
+                    self.log(&format!("{name}: cleanup: snippet: none stood"));
+                    false
+                }
                 Err(e) => {
                     stands = true;
                     self.log(&format!("{name}: cleanup: snippet: not removed: {e}"));
+                    true
                 }
+            };
+            if reload {
+                // The reload's failure is logged as itself: it leaves
+                // nothing standing that the truth about names reads.
+                self.undone(name, "cleanup", "caddy_reload", caddy::reload(docker));
             }
-            stands |= !self.undone(name, "cleanup", "caddy_reload", caddy::reload(docker));
         }
         if made.run {
             stands |= !self.undone(name, "cleanup", "rm_force", docker.rm_force(name));
@@ -567,7 +628,7 @@ impl Service {
         }
         if stands {
             self.log(&format!("{name}: cleanup: INCOMPLETE — the name stands, and refuses new posts (D-4) until the operator clears it"));
-        } else if made != Made::default() {
+        } else if made_anything {
             self.log(&format!("{name}: cleanup: done — nothing stands under the name"));
         }
     }

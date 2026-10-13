@@ -79,7 +79,8 @@ pub const INVITE_REFUSED: Words = Words { id: "DRAFT", text: "That invite code i
 pub const BEING_MADE: Words = Words { id: "D-7", text: "Your board is being made. Keep this page open: it shows your board when it is live." };
 /// The status URL, shown with D-7.
 pub const STATUS_URL: Words = Words { id: "DRAFT", text: "This page's own address, to come back to: {status_url}" };
-/// The post failed, or the queue was full.
+/// The post failed; or the service was busy — the queue full, or four
+/// posts already looking at what stands — or could not judge the post.
 pub const FAILED: Words = Words { id: "D-8", text: "Your board could not be made. Nothing stands under your name; try again later, or write to {owner_address}." };
 
 // THE REPLY — "Your board is live." (the notes §4: "The customer's reply,

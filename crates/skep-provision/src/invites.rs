@@ -175,12 +175,14 @@ pub fn lookup(state_dir: &StateDir, code: &InviteCode) -> io::Result<Option<Invi
     Ok(read_invites(state_dir)?.into_iter().find(|i| i.code == code.as_str()))
 }
 
-/// Why `invite` mints nothing.
+/// Why `invite` answers no invite link.
 #[derive(Debug)]
 pub enum MintRefused {
-    /// The file already holds the code.
+    /// The file already holds the code: no invite minted.
     Duplicate,
-    /// The file could not be read or written.
+    /// The file could not be locked, read or written: no invite minted —
+    /// or, the error coming from the directory's sync after the rename, the
+    /// invite minted and its link unprinted; `invite` again mints another.
     Io(io::Error),
 }
 
@@ -238,7 +240,8 @@ fn invites(lines: &mut [Line]) -> impl Iterator<Item = &mut Invite> {
 /// THE SPEND: `code`'s line rewritten `spent <name> <date>` — once the
 /// board's route stands, and never otherwise. `false` where the file holds
 /// no such code issued (a hand edit since the post); the board stands
-/// either way.
+/// either way. An error is "not spent, or spent and not known durable": the
+/// directory's sync comes after the rename.
 pub fn spend(state_dir: &StateDir, code: &InviteCode, name: &Name) -> io::Result<bool> {
     spend_with(state_dir, code, name, &|| Ok(()))
 }

@@ -34,7 +34,7 @@ A usage refusal (an unknown flag, a missing value, a required flag
 missing, `--mailer` without `--from` or the reverse) exits 2 with the usage
 text; a start refused (a loose state directory, an unreadable snippet
 directory, an address that cannot be bound, a thread the machine will not
-give) or an invite not minted exits 1.
+give) or an `invite` that printed no invite link exits 1.
 
 ## `serve`'s flags
 
@@ -95,10 +95,11 @@ page is plain HTML with no script and nothing fetched from elsewhere.
   reply once the board is routed, and D-8 once it failed. A token the
   service does not hold is 404, and a token from before a restart is one
   of those.
-- Every other request is 404. A body the form decoder refuses (a `%`
-  without two hex digits, or more than three fields) is 400; a body past
-  397,312 bytes (a record at its 128 KiB cap with every byte
-  percent-encoded, and 4 KiB) is 413.
+- Every other request is 404. A request the HTTP subset refuses — a head
+  past 16 KiB or malformed, one cut off early, one that spent its minute —
+  is 400, and so is a body the form decoder refuses (a `%` without two hex
+  digits, or more than three fields); a body past 397,312 bytes (a record
+  at its 128 KiB cap with every byte percent-encoded, and 4 KiB) is 413.
 
 A page showing D-7 refreshes itself to the status URL every five
 seconds with a `<meta>` refresh. Every status the service writes is one
@@ -133,18 +134,26 @@ call.
    reloaded. These two are a route change: one lock, the route lock, is
    held across a snippet's write and its reload, whichever name a worker
    is on, so route changes are serial and no reload lands between another
-   board's snippet and its own reload. The same lock is held across a
-   snippet's removal and the reload that follows it, and nowhere else.
+   board's snippet and its own reload. Where the write or the reload
+   fails, the lock is held on across the snippet's removal and the reload
+   that undoes it, so no other board's reload loads a snippet whose own
+   route change failed. The lock is held nowhere else.
 
 Then the status turns live, the invite is spent, and the mail goes to the
 sender's own thread. That thread retries a refused send (seven tries, ten
 minutes apart) and never holds up the next post.
 
 When a step fails, what the steps made is undone in reverse order: the
-snippet removed and the proxy reloaded where it was written, the run
-removed, the volume removed. The status turns to D-8, and the invite stays
-issued so the person can post again. If a removal itself fails, the log
-says so and the name stays taken until the operator clears it.
+snippet removed and the proxy reloaded where it may stand — a write's
+error can come after its rename — the run removed, the volume removed. The
+status turns to D-8, and the invite stays issued so the person can post
+again. If a removal itself fails, the log says so and the name stays taken
+until the operator clears what stands under it: the snippet with
+`rm <boards-dir>/<name>.caddy` and a reload of the proxy
+(`docker exec <caddy> caddy reload --config /etc/caddy/Caddyfile`), the
+run with `docker rm -f <name>`, the volume with `docker volume rm <name>`.
+A reload that fails is logged as itself: it leaves nothing standing under
+the name.
 
 ## The sweep at start
 
@@ -162,6 +171,14 @@ that Docker's `--restart` brings back — and so is a listed volume whose
 name is not one of the grammar, which the log names. If the listing
 itself fails, the log says so, the sweep is skipped, and the service still
 serves. The serving line carries the count, `swept <n>`.
+
+The sweep asks one thing of the operator: **one `serve` per Docker host**.
+The label is the host's, the same on every `serve`'s volumes, and a volume
+is half-made by this service's snippet directory alone — so a second
+service on the host, a staging one or a binary started by hand beside the
+unit, would read the first's boards in flight, and under another
+`--boards-dir` its live boards too, as half-made, and remove them. Nothing
+in a volume tells two services apart, so the service cannot check it.
 
 ## The strings
 
@@ -204,8 +221,9 @@ because a board with local trust on fails the `/health` step.
   The status map is rebuilt from these files at start: each snippet is a
   live name.
 - Every volume it creates carries the label `skep.provision=1` on the
-  host's Docker, the one mark by which the sweep at start tells its own
-  volumes from every other.
+  host's Docker, the one mark by which the sweep at start tells its
+  volumes from every volume of another making; every `serve` marks its
+  volumes alike, so one service per Docker host.
 
 The two state files are written whole to a temp file and renamed into
 place, born `0600`, and each snippet the same way: the temp file is made

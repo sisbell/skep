@@ -24,6 +24,7 @@
 //! 4).
 
 use std::io;
+use std::num::NonZeroU32;
 use std::time::Duration;
 
 use serde_json::Value;
@@ -34,8 +35,9 @@ use crate::name::Name;
 /// A bounded wait: this many tries, this far apart.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Wait {
-    /// The tries, the first included.
-    pub tries: u32,
+    /// The tries, the first included: one or more, so a wait that gives up
+    /// has made a try whose exit it names.
+    pub tries: NonZeroU32,
     /// The sleep between two tries.
     pub interval: Duration,
 }
@@ -44,7 +46,7 @@ pub struct Wait {
 /// sixty seconds (`scripts/docker-smoke.sh`, the claim run's wait) — each
 /// try one `docker run --rm` of the sidecar, so the whole wait runs longer
 /// than its sleeps.
-pub const HEALTH_WAIT: Wait = Wait { tries: 60, interval: Duration::from_secs(1) };
+pub const HEALTH_WAIT: Wait = Wait { tries: NonZeroU32::new(60).expect("sixty is not zero"), interval: Duration::from_secs(1) };
 
 /// Whether a `/health` body answers THE PAIR: `auth.claimant` a string and
 /// `auth.local_trust` the boolean `false`; every other member ignored.
@@ -79,17 +81,17 @@ pub enum Waited {
 /// at once — no try can answer.
 pub fn wait(docker: &dyn Docker, name: &Name, wait: Wait, sleep: &dyn Fn(Duration)) -> io::Result<Waited> {
     let mut last_code = None;
-    for at in 1..=wait.tries {
+    for at in 1..=wait.tries.get() {
         let exit = docker.health(name)?;
         if exit.ok() && paired(&exit.stdout) {
             return Ok(Waited::Paired { at });
         }
         last_code = exit.code;
-        if at < wait.tries {
+        if at < wait.tries.get() {
             sleep(wait.interval);
         }
     }
-    Ok(Waited::GaveUp { tries: wait.tries, last_code })
+    Ok(Waited::GaveUp { tries: wait.tries.get(), last_code })
 }
 
 #[cfg(test)]

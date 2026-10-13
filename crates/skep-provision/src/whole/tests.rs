@@ -3,9 +3,10 @@
 //! never carried into the file — and replaces the bytes whole; a link
 //! planted at the temp file's name is never written through; a failure
 //! between the write and the rename leaves the old file whole and no temp
-//! file; the removal answers whether a file stood. (The
-//! owners' own modes are their suites': the snippet's `0644` in `caddy`'s,
-//! the sign-up file's `0600` in `signups`'.)
+//! file, and an error from the directory's sync comes after the act — the
+//! new file in place, the removed one gone; the removal answers whether a
+//! file stood. (The owners' own modes are their suites': the snippet's
+//! `0644` in `caddy`'s, the sign-up file's `0600` in `signups`'.)
 
 use std::fs;
 
@@ -72,6 +73,28 @@ fn a_failure_before_the_rename_leaves_the_old_file_whole() {
     assert!(failed.is_err());
     assert_eq!(fs::read(&path).expect("the file"), b"old\n");
     assert!(!temp_of(&path).exists(), "no temp file left");
+}
+
+/// AN ERROR FROM THE DIRECTORY's SYNC COMES AFTER THE ACT: in a directory
+/// its owner may write and search but not read — the rename lands, and the
+/// directory's open for its sync is refused — the replacement answers an
+/// error with the new file in place and no temp file, and the removal an
+/// error with the file gone: an error is never "the old file".
+#[cfg(unix)]
+#[test]
+fn an_error_from_the_directorys_sync_comes_after_the_act() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = Scratch::new();
+    let boards = dir.path().join("boards");
+    fs::create_dir(&boards).expect("a directory");
+    let path = boards.join("file");
+    replace(&path, b"old\n", 0o600, &|| Ok(())).expect("replaced");
+    fs::set_permissions(&boards, fs::Permissions::from_mode(0o300)).expect("writable and searchable, not readable");
+    assert!(replace(&path, b"new\n", 0o600, &|| Ok(())).is_err(), "the directory's sync was refused");
+    assert_eq!(fs::read(&path).expect("the file"), b"new\n", "the new file in place");
+    assert!(!temp_of(&path).exists(), "no temp file left");
+    assert!(remove(&path).is_err(), "the directory's sync was refused");
+    assert!(!path.exists(), "the file gone");
 }
 
 /// THE REMOVAL answers whether a file stood: `true` once, then `false`.

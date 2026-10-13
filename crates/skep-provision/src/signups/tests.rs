@@ -2,10 +2,11 @@
 //! date; sign-ups made at once are every one kept, one writer at a time; a
 //! malformed address appends nothing; a file that cannot be written keeps
 //! nothing, and a sign-up past the file's cap keeps nothing, each refusal an
-//! error saying which. (The address rule, the
-//! state directory's door and the writer beneath the file are `statedir`'s
-//! suite; the page's DRAFT refusal and the log's silence about the address
-//! are the pages' and the flow's suites'.)
+//! error saying which; and where two refusals hold, the field's speaks
+//! first, then the file's in the order met. (The address rule, the state
+//! directory's door and the writer beneath the file are `statedir`'s suite;
+//! the page's DRAFT refusal and the log's silence about the address are the
+//! pages' and the flow's suites'.)
 
 use std::fs;
 
@@ -115,4 +116,28 @@ fn a_sign_up_past_the_cap_is_refused_and_keeps_nothing() {
     assert!(!crate::whole::temp_of(&state_dir.file(SIGNUPS)).exists());
     let said: &dyn std::error::Error = &refused;
     assert_eq!(said.to_string(), "the sign-up file is at its 262144-byte cap");
+}
+
+/// WHICH REFUSAL SPEAKS where two hold: the field's first — no address by
+/// the rule, the file untouched — then the file's in the order met, a read
+/// that fails before the cap, the cap before a rewrite that fails; one case
+/// for each pair, the file at its cap in each, and left as it was.
+#[cfg(unix)]
+#[test]
+fn where_two_refusals_hold_the_field_speaks_then_the_file_in_its_order() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = Scratch::new();
+    let state_dir = StateDir::open(&dir.path().join("state")).expect("the state directory");
+    let signups = SignUps::new(&state_dir);
+    let file = state_dir.file(SIGNUPS);
+    fs::write(&file, format!("{}\n", "#".repeat(MAX_SIGNUPS_BYTES - 1))).expect("a file at its cap");
+    let full = fs::read(&file).expect("the file");
+    assert!(matches!(signups.append(b"not an address"), Err(SignUpRefused::NotAnAddress)), "the field before the cap");
+    fs::set_permissions(&file, fs::Permissions::from_mode(0o000)).expect("unreadable");
+    assert!(matches!(signups.append(b"person@example.com"), Err(SignUpRefused::Io(_))), "a read that fails before the cap");
+    fs::set_permissions(&file, fs::Permissions::from_mode(0o600)).expect("readable again");
+    fs::set_permissions(dir.path().join("state"), fs::Permissions::from_mode(0o500)).expect("unwritable");
+    assert!(matches!(signups.append(b"person@example.com"), Err(SignUpRefused::Full)), "the cap before a rewrite that fails");
+    fs::set_permissions(dir.path().join("state"), fs::Permissions::from_mode(0o700)).expect("writable again");
+    assert_eq!(fs::read(&file).expect("the file"), full, "a refused sign-up wrote");
 }

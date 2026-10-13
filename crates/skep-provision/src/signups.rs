@@ -37,7 +37,9 @@ pub enum SignUpRefused {
     NotAnAddress,
     /// The file is at its cap ([`MAX_SIGNUPS_BYTES`]): nothing kept.
     Full,
-    /// The file could not be written: nothing kept.
+    /// The file could not be read or written: nothing kept — or, the error
+    /// coming from the directory's sync after the rename, the line kept,
+    /// not known durable.
     Io(io::Error),
 }
 
@@ -77,7 +79,10 @@ impl SignUps {
     /// ONE SIGN-UP KEPT: the field's bytes, an address by the rule, appended
     /// as `<address> <date>` — the file read, the line added, the whole
     /// written back; a refused field, or a line that would carry the file
-    /// past [`MAX_SIGNUPS_BYTES`], leaves the file as it was.
+    /// past [`MAX_SIGNUPS_BYTES`], leaves the file as it was. Where two
+    /// refusals hold, the field's speaks first — no address by the rule,
+    /// the file untouched — then the file's, in the order met: a read that
+    /// fails, the cap, a rewrite that fails.
     pub fn append(&self, field: &[u8]) -> Result<(), SignUpRefused> {
         let address = std::str::from_utf8(field).ok().and_then(MailAddress::parse).ok_or(SignUpRefused::NotAnAddress)?;
         let line = format!("{} {}\n", address.as_str(), today());

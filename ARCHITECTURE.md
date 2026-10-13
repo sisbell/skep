@@ -1548,7 +1548,8 @@ each naming only those above it:
 - `whole.rs` a kept file changed durably: replaced whole by rename from
   its `<file>.tmp` — made fresh where nothing stands at its name, so the
   write follows no link — at the mode its owner names, set exactly, or
-  removed — the directory synced either way.
+  removed — the directory synced either way, an error from that sync
+  coming after the rename or the removal, never before it.
 - `process.rs` a child process run to its end: `Exit`, what it answered,
   and `run`, which sets the child's streams — the input on a pipe written
   by a thread of its own, or a null stdin — and reads stdout and stderr
@@ -1647,15 +1648,19 @@ Rules that hold across its files:
   sign-up file holds at most 256 KiB, past which a sign-up, which needs
   no invite, is refused with no write.
 - **Route changes are serial.** One lock, the route lock, is held across
-  a route change — a snippet's write or its removal, and the reload that
-  follows it — and nowhere else, so no reload lands between another
-  name's snippet and its own.
+  a route change — a snippet's write and the reload that follows it, and
+  where either fails, on across the snippet's removal and the reload that
+  undoes it — and nowhere else, so no reload lands between another name's
+  snippet and its own, nor loads a snippet whose own route change failed.
 - **A stop leaves no name taken for good.** Every volume the service
   creates carries its label, and at `serve`'s start, before the address
   is bound, every labelled volume under a name of the grammar with no
   snippet — half-made — is removed by the cleanup table's last two rows;
   a name whose snippet stands is left, and a listing that fails skips
-  the sweep and never stops the service.
+  the sweep and never stops the service. Its precondition is the
+  operator's, and nothing checks it: one `serve` per Docker host, for the
+  label is the same on every `serve`'s volumes, and a second service would
+  take the first's boards for half-made.
 - **The argv is the documents'.** Every `docker` call's argv is a pure
   function the unit suite pins token by token, and reads back from
   `scripts/docker-smoke.sh` and `README.md` where those spell the line;
@@ -1684,7 +1689,8 @@ Rules that hold across its files:
   snippet, its volume or its container stands; no ledger is kept, and
   the log carries the history. A failed step's makings are undone in
   reverse and its status is D-8; a removal that itself fails leaves the
-  name standing, logged.
+  name standing, logged, and a reload that fails is logged as itself,
+  leaving nothing standing.
 - **The log never carries** the record's bytes, a person's address, an
   invite code or a status token, and the `Debug` of every value that holds
   one — a record, an invite, a message, an address, a code, a post, a

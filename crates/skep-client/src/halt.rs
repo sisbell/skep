@@ -95,6 +95,20 @@ pub struct Blocked {
     pub ground: Option<String>,
 }
 
+/// The longest prefix of `text` at most `max` bytes long that ends on a
+/// character boundary — a board's text named in a face without its whole
+/// length: a face is read by a person, and an answer may run to megabytes.
+pub(crate) fn clipped(text: &str, max: usize) -> &str {
+    if text.len() <= max {
+        return text;
+    }
+    let mut end = max;
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    &text[..end]
+}
+
 impl Halt {
     /// A HALT AND SURFACE face from its three parts.
     pub fn face(state: impl Into<String>, cause: impl Into<String>, act: impl Into<String>) -> Halt {
@@ -193,5 +207,15 @@ mod tests {
         let blocked = Blocked { record: "1.0.1.0.7.1".into(), named_by: "http://x".into(), ground: None };
         assert_eq!(Halt::Blocked(blocked).exit_code(), 3);
         assert_eq!(Halt::Dial(DialError::Connect("refused".into())).exit_code(), 4);
+    }
+
+    /// A board's text clipped for a face: whole where it fits, else cut on
+    /// the last character boundary at or before the bound.
+    #[test]
+    fn a_clipped_text_ends_on_a_character_boundary() {
+        assert_eq!(clipped("1.0.1", 64), "1.0.1");
+        assert_eq!(clipped(&"9".repeat(100), 64).len(), 64);
+        assert_eq!(clipped("aé", 2), "a", "the two-byte é does not fit beside the a");
+        assert_eq!(clipped("é", 0), "");
     }
 }

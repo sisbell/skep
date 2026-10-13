@@ -29,7 +29,7 @@ use crate::address::first_child;
 use crate::derive::Mode;
 use crate::halt::Halt;
 use crate::origin::Origin;
-use crate::sheet::{render_inert, KeyFile, KeyFileError, Label, Seed};
+use crate::sheet::{read_key_file, render_inert, KeyFile, KeyFileError, Label, Seed};
 use crate::sign::Signer;
 
 #[cfg(test)]
@@ -397,7 +397,7 @@ impl FileStore {
     /// for a key another party holds; a walk reads [`FileStore::select`]'s
     /// facts and signs through [`KeyStore::signer`].
     pub fn load(&self, path: &Path) -> Result<KeyFile, StoreError> {
-        let bytes = fs::read(path).map_err(|error| StoreError::Io { path: path.to_path_buf(), error })?;
+        let bytes = read_key_file(path).map_err(|error| StoreError::Io { path: path.to_path_buf(), error })?;
         KeyFile::parse(&bytes).map_err(|error| StoreError::KeyFile { path: path.to_path_buf(), error })
     }
 

@@ -18,9 +18,19 @@
 //! origin string it is handed (§1.4): a transport that changed the origin
 //! under its caller would sign one string and dial another.
 //!
-//! Timeouts: connect 5 s, read/write 10 s for the FRAMES (skep-mcp's
-//! constants — a skepd op is milliseconds even under fsync); the STREAMED
-//! form's read timeout scales with the declared size (ps3-14 (c)).
+//! Timeouts: connect 5 s, read/write 10 s a call for the FRAMES (skep-mcp's
+//! constants — a skepd op is milliseconds even under fsync), and a frame's
+//! whole EXCHANGE held to a deadline besides — the per-call bound plus the
+//! time its request body and the largest answer take at the streamed form's
+//! rate — re-armed on the socket before every read and write, so a board
+//! that trickles a byte inside each per-call bound cannot hold an exchange
+//! past it; the STREAMED form's read timeout scales with the declared size
+//! (ps3-14 (c)) and its body, read by its caller, keeps that per-call bound
+//! alone.
+//!
+//! The request target and the headers are written as given, so each is
+//! checked first for what would end the request line or a header early —
+//! refused as [`DialError::Request`] before any connection opens.
 //!
 //! `https://` is the `tls` feature's arm — rustls with the platform verifier
 //! (§9 item 12) — OFF in the library and ON in the `skep` binary; without
@@ -31,9 +41,12 @@ use std::fmt;
 use std::io::{self, Read, Write};
 use std::net::{SocketAddr, TcpStream, ToSocketAddrs};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use crate::origin::Origin;
+
+#[cfg(test)]
+mod tests;
 
 /// A dead local daemon answers `connection refused` at once; this bounds
 /// the pathological cases — an unroutable address, a filtered port.
@@ -53,6 +66,14 @@ pub const MAX_ANSWER_BYTES: usize = 8 * 1024 * 1024 + 64 * 1024;
 /// [`IO_TIMEOUT`]: one second per 256 KiB declared (the scale's constant is
 /// the build's, ps3-14 (c)).
 const STREAM_BYTES_PER_SECOND: u64 = 256 * 1024;
+
+/// A frame exchange's deadline before its request body's allowance, from
+/// the connection's open: [`IO_TIMEOUT`], and the time an answer at
+/// [`MAX_ANSWER_BYTES`] takes at [`STREAM_BYTES_PER_SECOND`] — 42.25 s, the
+/// rate the streamed form already demands of a board. The body adds its own
+/// bytes at the same rate.
+const EXCHANGE_BOUND: Duration =
+    Duration::from_millis(IO_TIMEOUT.as_millis() as u64 + MAX_ANSWER_BYTES as u64 * 1000 / STREAM_BYTES_PER_SECOND);
 
 /// The method of one exchange — a type of its own so the method and the
 /// path, both text on the request line, cannot trade places in a call.
@@ -185,6 +206,9 @@ pub enum DialError {
     TooLarge { cap: usize },
     /// The TLS handshake or record layer refused.
     Tls(String),
+    /// The request's target or a header holds what would end the request
+    /// line or a header early — refused before any connection opened.
+    Request(String),
 }
 
 impl fmt::Display for DialError {
@@ -194,6 +218,7 @@ impl fmt::Display for DialError {
                 f,
                 "no transport held for {scheme} origins in this build (the `tls` feature is off)"
             ),
+            DialError::Request(e) => write!(f, "malformed request: {e}"),
             DialError::Resolve(e) => write!(f, "resolve: {e}"),
             DialError::Connect(e) => write!(f, "connect: {e}"),
             DialError::Timeout(e) => write!(f, "timed out: {e}"),
@@ -309,11 +334,14 @@ pub fn plaintext_non_loopback_warning(origin: &Origin) -> Option<String> {
 pub struct PlainHttp {
     connect_timeout: Duration,
     io_timeout: Duration,
+    /// A frame exchange's deadline before its body's allowance
+    /// ([`EXCHANGE_BOUND`]).
+    exchange_bound: Duration,
 }
 
 impl Default for PlainHttp {
     fn default() -> PlainHttp {
-        PlainHttp { connect_timeout: CONNECT_TIMEOUT, io_timeout: IO_TIMEOUT }
+        PlainHttp { connect_timeout: CONNECT_TIMEOUT, io_timeout: IO_TIMEOUT, exchange_bound: EXCHANGE_BOUND }
     }
 }
 
@@ -328,8 +356,10 @@ impl PlainHttp {
     }
 
     /// The TCP connection to `origin`'s host, every address the name yields
-    /// tried in order within the connect bound, the timeouts set.
-    fn tcp(&self, origin: &Origin, read_timeout: Duration) -> Result<TcpStream, DialError> {
+    /// tried in order within the connect bound, the timeouts set — and,
+    /// where `budget` is given, the exchange's deadline that far from the
+    /// open ([`Socket`]).
+    fn tcp(&self, origin: &Origin, read_timeout: Duration, budget: Option<Duration>) -> Result<Socket, DialError> {
         let addrs: Vec<SocketAddr> = (origin.dial_host(), origin.port())
             .to_socket_addrs()
             .map_err(|e| DialError::Resolve(Self::fail(origin, "resolve", e)))?
@@ -364,17 +394,40 @@ impl PlainHttp {
             .set_write_timeout(Some(self.io_timeout))
             .map_err(|e| DialError::Io(Self::fail(origin, "socket", e)))?;
         let _ = stream.set_nodelay(true);
-        Ok(stream)
+        let deadline = budget.map(|b| Instant::now() + b);
+        Ok(Socket { tcp: stream, read_bound: read_timeout, write_bound: self.io_timeout, deadline })
     }
 
     /// The connection to `origin`: plain TCP for `http://`; an `https://`
     /// origin is the `tls` module's whole — TLS over TCP where the build
     /// holds the arm, refused before any connection opens where it does not.
-    fn connect(&self, origin: &Origin, read_timeout: Duration) -> Result<Box<dyn Conn>, DialError> {
+    fn connect(&self, origin: &Origin, read_timeout: Duration, budget: Option<Duration>) -> Result<Box<dyn Conn>, DialError> {
         if origin.is_https() {
-            return tls::connect(self, origin, read_timeout);
+            return tls::connect(self, origin, read_timeout, budget);
         }
-        Ok(Box::new(self.tcp(origin, read_timeout)?))
+        Ok(Box::new(self.tcp(origin, read_timeout, budget)?))
+    }
+
+    /// The request's target and headers held to what this dialer writes as
+    /// given (RFC 9112 §3.2, §5): the target visible ASCII alone, a header's
+    /// name a token, its value free of CR, LF and NUL — else
+    /// [`DialError::Request`], before any connection opens. A target or a
+    /// value carrying a line break would end the request line or the header
+    /// early and write a header of the bytes' own choosing.
+    fn well_formed(path: &str, headers: &[(String, String)]) -> Result<(), DialError> {
+        if let Some(b) = path.bytes().find(|b| !(0x21..=0x7e).contains(b)) {
+            return Err(DialError::Request(format!("the request target holds the byte {b:#04x}")));
+        }
+        let token = |name: &str| !name.is_empty() && name.bytes().all(|b| b.is_ascii_alphanumeric() || b"!#$%&'*+-.^_`|~".contains(&b));
+        for (name, value) in headers {
+            if !token(name) {
+                return Err(DialError::Request("a header's name is not a token".into()));
+            }
+            if value.bytes().any(|b| matches!(b, b'\r' | b'\n' | 0)) {
+                return Err(DialError::Request(format!("the value of the header `{name}` holds a line break or a NUL")));
+            }
+        }
+        Ok(())
     }
 
     /// The request head's bytes: the daemon refuses a `Content-Length` with
@@ -411,13 +464,60 @@ impl PlainHttp {
 }
 
 /// A connection the dialer writes a request to and reads an answer from —
-/// a `TcpStream`, or a TLS stream over one.
+/// a [`Socket`], or a TLS stream over one.
 trait Conn: Read + Write + Send {}
-impl Conn for TcpStream {}
+impl Conn for Socket {}
+
+/// A TCP connection under the dialer's bounds: each read and each write
+/// carries the per-call bound, and — where the connection serves a frame
+/// exchange — the socket's timeout is re-armed before every call to that
+/// bound or the time left before the exchange's DEADLINE, whichever is
+/// less, a call past the deadline answering `TimedOut` unmade. A TLS stream
+/// rides over it, so every read and write the TLS layer makes of the
+/// socket is held to the same deadline.
+struct Socket {
+    tcp: TcpStream,
+    read_bound: Duration,
+    write_bound: Duration,
+    deadline: Option<Instant>,
+}
+
+impl Socket {
+    /// The timeout for the next call, set where a deadline stands: the
+    /// per-call `bound`, cut to the time left.
+    fn arm(&self, bound: Duration, set: fn(&TcpStream, Option<Duration>) -> io::Result<()>) -> io::Result<()> {
+        let Some(deadline) = self.deadline else { return Ok(()) };
+        let left = deadline.saturating_duration_since(Instant::now());
+        if left.is_zero() {
+            return Err(io::Error::new(io::ErrorKind::TimedOut, "the exchange ran past its deadline"));
+        }
+        set(&self.tcp, Some(bound.min(left)))
+    }
+}
+
+impl Read for Socket {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        self.arm(self.read_bound, TcpStream::set_read_timeout)?;
+        self.tcp.read(buf)
+    }
+}
+
+impl Write for Socket {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        self.arm(self.write_bound, TcpStream::set_write_timeout)?;
+        self.tcp.write(buf)
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        self.tcp.flush()
+    }
+}
 
 impl Dialer for PlainHttp {
     fn exchange(&self, origin: &Origin, req: &Request) -> Result<Response, DialError> {
-        let mut conn = self.connect(origin, self.io_timeout)?;
+        Self::well_formed(&req.path, &req.headers)?;
+        let body_allowance = Duration::from_millis((req.body.len() as u64).saturating_mul(1000) / STREAM_BYTES_PER_SECOND);
+        let mut conn = self.connect(origin, self.io_timeout, Some(self.exchange_bound.saturating_add(body_allowance)))?;
         let head = Self::head_bytes(
             origin,
             req.method,
@@ -450,9 +550,10 @@ impl Dialer for PlainHttp {
         body: &mut dyn Read,
         on_interim: &mut dyn FnMut(&Headers),
     ) -> Result<StreamedResponse, DialError> {
+        Self::well_formed(&head.path, &head.headers)?;
         let declared = head.content_length.unwrap_or(0);
         let read_timeout = self.io_timeout + Duration::from_secs(declared / STREAM_BYTES_PER_SECOND);
-        let mut conn = self.connect(origin, read_timeout)?;
+        let mut conn = self.connect(origin, read_timeout, None)?;
         let has_body = head.content_length.is_some();
         let bytes = Self::head_bytes(origin, head.method, &head.path, &head.headers, head.content_length, has_body, has_body);
         conn.write_all(&bytes).map_err(|e| io_fault(origin, "write", e))?;
@@ -581,10 +682,9 @@ mod tls {
     use rustls::{ClientConfig, ClientConnection, StreamOwned};
     use rustls_platform_verifier::BuilderVerifierExt;
 
-    use super::{Conn, DialError, Origin, PlainHttp};
-    use std::net::TcpStream;
+    use super::{Conn, DialError, Origin, PlainHttp, Socket};
 
-    impl Conn for StreamOwned<ClientConnection, TcpStream> {}
+    impl Conn for StreamOwned<ClientConnection, Socket> {}
 
     fn config() -> Result<Arc<ClientConfig>, DialError> {
         static CONFIG: OnceLock<Result<Arc<ClientConfig>, String>> = OnceLock::new();
@@ -602,9 +702,10 @@ mod tls {
             .map_err(DialError::Tls)
     }
 
-    /// The TCP connection to `origin`, rustls over it.
-    pub(super) fn connect(dialer: &PlainHttp, origin: &Origin, read_timeout: Duration) -> Result<Box<dyn Conn>, DialError> {
-        let tcp = dialer.tcp(origin, read_timeout)?;
+    /// The TCP connection to `origin`, rustls over it — every socket call the
+    /// TLS layer makes held to the connection's deadline, where one stands.
+    pub(super) fn connect(dialer: &PlainHttp, origin: &Origin, read_timeout: Duration, budget: Option<Duration>) -> Result<Box<dyn Conn>, DialError> {
+        let tcp = dialer.tcp(origin, read_timeout, budget)?;
         let name = ServerName::try_from(origin.dial_host().to_string())
             .map_err(|e| DialError::Tls(PlainHttp::fail(origin, "server name", e)))?;
         let conn = ClientConnection::new(config()?, name).map_err(|e| DialError::Tls(PlainHttp::fail(origin, "tls", e)))?;
@@ -622,199 +723,7 @@ mod tls {
 
     use super::{Conn, DialError, Origin, PlainHttp};
 
-    pub(super) fn connect(_dialer: &PlainHttp, _origin: &Origin, _read_timeout: Duration) -> Result<Box<dyn Conn>, DialError> {
+    pub(super) fn connect(_dialer: &PlainHttp, _origin: &Origin, _read_timeout: Duration, _budget: Option<Duration>) -> Result<Box<dyn Conn>, DialError> {
         Err(DialError::NotHeld("https".into()))
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use std::io::Write;
-    use std::net::TcpListener;
-    use std::thread;
-
-    use super::*;
-
-    /// A response splits into status, headers and body; a body short of its
-    /// `Content-Length` is a broken connection; garbage is no response.
-    #[test]
-    fn a_response_parses_and_a_short_body_is_a_break() {
-        let (st, headers, at) = parse_head(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nSkepd-Session: closed\r\n\r\n{}").expect("parse");
-        assert_eq!((st, at), (200, 61));
-        assert_eq!(headers.get("skepd-session"), Some("closed"));
-        assert!(parse_head(b"garbage").is_err());
-        let resp = Response { status: 200, headers, body: b"{}".to_vec() };
-        assert!(resp.session_closed());
-    }
-
-    /// The answer cap: read no further than the byte past it.
-    #[test]
-    fn an_answer_past_the_cap_is_read_no_further() {
-        assert_eq!(read_to_close(&mut &[7u8; 10][..], 10).unwrap(), Some(vec![7u8; 10]));
-        assert_eq!(read_to_close(&mut &[7u8; 11][..], 10).unwrap(), None);
-    }
-
-    /// One whole request off `s`: the head to its blank line, then exactly
-    /// the body its `Content-Length` declares. The dialer writes the head
-    /// and the body in two calls, so a single `read` may answer with the
-    /// head alone and the body still in flight.
-    fn read_request(s: &mut TcpStream) -> String {
-        let mut got = Vec::new();
-        let mut buf = [0u8; 4096];
-        let body_at = loop {
-            let n = s.read(&mut buf).unwrap();
-            assert!(n > 0, "the peer closed before the head's blank line");
-            got.extend_from_slice(&buf[..n]);
-            if let Some(i) = got.windows(4).position(|w| w == b"\r\n\r\n") {
-                break i + 4;
-            }
-        };
-        let declared: usize = String::from_utf8_lossy(&got[..body_at])
-            .lines()
-            .find_map(|l| l.strip_prefix("Content-Length: ").map(|v| v.trim().parse().unwrap()))
-            .unwrap_or(0);
-        while got.len() < body_at + declared {
-            let n = s.read(&mut buf).unwrap();
-            assert!(n > 0, "the peer closed before the declared body was in");
-            got.extend_from_slice(&buf[..n]);
-        }
-        String::from_utf8_lossy(&got).to_string()
-    }
-
-    /// One request, one connection, `Connection: close`, the `Host` the
-    /// authority with brackets kept, no redirect followed — against a
-    /// listener that answers a redirect and a short body.
-    #[test]
-    fn the_plain_arm_writes_one_head_and_checks_the_length() {
-        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-        let port = listener.local_addr().unwrap().port();
-        let server = thread::spawn(move || {
-            let mut heads = Vec::new();
-            for answer in [
-                "HTTP/1.1 302 Found\r\nLocation: http://127.0.0.1:1/\r\nContent-Length: 2\r\n\r\nok".to_string(),
-                "HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\n{}".to_string(),
-            ] {
-                let (mut s, _) = listener.accept().unwrap();
-                heads.push(read_request(&mut s));
-                s.write_all(answer.as_bytes()).unwrap();
-            }
-            heads
-        });
-        let origin = Origin::parse(&format!("http://127.0.0.1:{port}")).unwrap();
-        let dialer = PlainHttp::new();
-        let resp = dialer.exchange(&origin, &Request::post("/op", b"{}".to_vec()).header("Skepd-Session", "abc")).unwrap();
-        assert_eq!((resp.status, resp.body.as_slice()), (302, &b"ok"[..]), "a redirect is an answer, never followed");
-        let err = dialer.exchange(&origin, &Request::get("/health")).unwrap_err();
-        assert_eq!(err, DialError::Truncated { declared: 5, got: 2 });
-        let heads = server.join().unwrap();
-        assert!(heads[0].starts_with("POST /op HTTP/1.1\r\n"), "{}", heads[0]);
-        assert!(heads[0].contains(&format!("Host: 127.0.0.1:{port}\r\n")));
-        assert!(heads[0].contains("Connection: close\r\n"));
-        assert!(heads[0].contains("Content-Length: 2\r\n"));
-        assert!(heads[0].contains("Skepd-Session: abc\r\n"));
-        assert!(heads[0].ends_with("\r\n\r\n{}"));
-        assert!(heads[1].starts_with("GET /health HTTP/1.1\r\n"));
-        assert!(!heads[1].contains("Content-Type"), "a bodiless GET declares no content type");
-    }
-
-    /// The streamed form: `Expect: 100-continue` on the head where a body
-    /// follows, the interim head handed on before any body byte, the body
-    /// written after it, the final head returned with a reader over its body.
-    #[test]
-    fn the_streamed_form_waits_for_the_interim_head_before_the_body() {
-        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-        let port = listener.local_addr().unwrap().port();
-        let server = thread::spawn(move || {
-            let (mut s, _) = listener.accept().unwrap();
-            let mut buf = vec![0u8; 4096];
-            let mut got = Vec::new();
-            loop {
-                let n = s.read(&mut buf).unwrap();
-                got.extend_from_slice(&buf[..n]);
-                if got.windows(4).any(|w| w == b"\r\n\r\n") {
-                    break;
-                }
-            }
-            let head = String::from_utf8_lossy(&got).to_string();
-            assert!(!head.contains("hello"), "no body byte before the interim head");
-            s.write_all(b"HTTP/1.1 100 Continue\r\nUpload-Id: u1\r\n\r\n").unwrap();
-            let mut body = vec![0u8; 5];
-            s.read_exact(&mut body).unwrap();
-            assert_eq!(&body, b"hello");
-            s.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 4\r\n\r\ndone").unwrap();
-            head
-        });
-        let origin = Origin::parse(&format!("http://127.0.0.1:{port}")).unwrap();
-        let head = RequestHead { method: Method::Post, path: "/blob/upload?length=5".into(), headers: vec![], content_length: Some(5) };
-        let mut interim = Vec::new();
-        let mut body = &b"hello"[..];
-        let resp = PlainHttp::new().stream(&origin, &head, &mut body, &mut |h: &Headers| interim.push(h.get("Upload-Id").map(str::to_string))).unwrap();
-        assert_eq!(resp.status, 200);
-        let mut out = String::new();
-        let mut reader = resp.body;
-        reader.read_to_string(&mut out).unwrap();
-        assert_eq!(out, "done");
-        assert_eq!(interim, vec![Some("u1".to_string())]);
-        let sent = server.join().unwrap();
-        assert!(sent.contains("Expect: 100-continue\r\n"), "{sent}");
-    }
-
-    /// The plaintext warning fires on a plaintext non-loopback origin alone.
-    #[test]
-    fn the_plaintext_warning_keys_on_scheme_and_host() {
-        assert!(plaintext_non_loopback_warning(&Origin::parse("http://127.0.0.1:8642").unwrap()).is_none());
-        assert!(plaintext_non_loopback_warning(&Origin::parse("https://board.example").unwrap()).is_none());
-        assert!(plaintext_non_loopback_warning(&Origin::parse("http://board.example:8642").unwrap()).is_some());
-    }
-
-    /// Without the `tls` arm an `https` origin is refused BY NAME BEFORE ANY
-    /// CONNECTION OPENS: a listening port and a closed one answer the same
-    /// refusal in both forms of the dial, and nothing reaches the listener.
-    #[cfg(not(feature = "tls"))]
-    #[test]
-    fn an_https_origin_without_the_tls_arm_is_refused_before_any_connection() {
-        let listening = TcpListener::bind("127.0.0.1:0").unwrap();
-        listening.set_nonblocking(true).unwrap();
-        let open = listening.local_addr().unwrap().port();
-        let closed = TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
-        let https = |port: u16| Origin::parse(&format!("https://127.0.0.1:{port}")).unwrap();
-        let not_held = DialError::NotHeld("https".into());
-        for port in [open, closed] {
-            assert_eq!(PlainHttp::new().exchange(&https(port), &Request::get("/health")).unwrap_err(), not_held, "port {port}");
-        }
-        let head = RequestHead { method: Method::Get, path: "/events".into(), headers: Vec::new(), content_length: None };
-        assert_eq!(PlainHttp::new().stream(&https(open), &head, &mut io::empty(), &mut |_: &Headers| {}).unwrap_err(), not_held);
-        let deadline = std::time::Instant::now() + Duration::from_millis(200);
-        while std::time::Instant::now() < deadline {
-            match listening.accept() {
-                Ok((_, peer)) => panic!("a connection from {peer} reached the listener"),
-                Err(e) if e.kind() == io::ErrorKind::WouldBlock => thread::sleep(Duration::from_millis(10)),
-                Err(e) => panic!("accept: {e}"),
-            }
-        }
-    }
-
-    /// With the `tls` arm an `https` origin puts no plaintext on the wire:
-    /// what reaches a plain listener is a TLS record or nothing — never a
-    /// request line, never the session header.
-    #[cfg(feature = "tls")]
-    #[test]
-    fn an_https_origin_puts_no_plaintext_request_on_the_wire() {
-        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-        let port = listener.local_addr().unwrap().port();
-        let server = thread::spawn(move || {
-            let (mut s, _) = listener.accept().unwrap();
-            s.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
-            let mut got = vec![0u8; 16 * 1024];
-            let n = s.read(&mut got).unwrap_or(0);
-            got.truncate(n);
-            got
-        });
-        let origin = Origin::parse(&format!("https://127.0.0.1:{port}")).unwrap();
-        let req = Request::post("/op", b"{}".to_vec()).header("Skepd-Session", "9f3a6c21d4b8e07a5c1b2d4e6f708192");
-        PlainHttp::new().exchange(&origin, &req).expect_err("no TLS server answers");
-        let got = server.join().unwrap();
-        assert!(!got.windows(8).any(|w| w == b"HTTP/1.1") && !got.windows(13).any(|w| w == b"Skepd-Session"), "plaintext on the wire: {got:?}");
-        assert!(got.first().is_none_or(|b| *b == 0x16), "not a TLS handshake record: {got:?}");
     }
 }

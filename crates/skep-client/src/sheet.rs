@@ -10,6 +10,9 @@
 //! (§9 item 13).
 
 use std::fmt;
+use std::fs;
+use std::io::{self, Read};
+use std::path::Path;
 
 use serde_json::Value;
 use skep_identity::{Fingerprint, PublicKey, SigAlgRow, ALGS};
@@ -19,6 +22,37 @@ use crate::address::is_address_text;
 use crate::hex;
 use crate::origin::Origin;
 use crate::sign::signer_from_seed_under;
+
+/// The most bytes a key file holds (§3.2): its largest canonical spelling —
+/// the production kind's 3,968-hex key beside its 64-hex seed and
+/// fingerprint, a 128-byte label escaped six-fold, a 64-component account
+/// of twenty-digit components, an origin of a host name's length — runs
+/// under 7 KiB, and this is nine times that, room for an editor's
+/// whitespace. A file past it is no key file this client wrote:
+/// [`KeyFile::parse`] refuses it, and the store's reader reads no further
+/// than the byte past it.
+pub const MAX_KEY_FILE_BYTES: u64 = 64 * 1024;
+
+/// A key file's bytes off `path` — the store's, an anchor handed in, an
+/// export read back — read no further than one byte past
+/// [`MAX_KEY_FILE_BYTES`], so [`KeyFile::parse`] refuses an oversized file
+/// without its whole length read; and a path naming no regular file refused
+/// before it is opened, and the file opened held to the same test: a device
+/// answers bytes forever, a FIFO with no writer blocks its open, and neither
+/// is a key file.
+pub(crate) fn read_key_file(path: &Path) -> io::Result<Vec<u8>> {
+    let not_a_file = || io::Error::new(io::ErrorKind::InvalidInput, "not a regular file");
+    if !fs::metadata(path)?.is_file() {
+        return Err(not_a_file());
+    }
+    let file = fs::File::open(path)?;
+    if !file.metadata()?.is_file() {
+        return Err(not_a_file());
+    }
+    let mut bytes = Vec::new();
+    file.take(MAX_KEY_FILE_BYTES + 1).read_to_end(&mut bytes)?;
+    Ok(bytes)
+}
 
 /// AUTH-5.1 — 64 hex as EIGHT GROUPS OF EIGHT, a single space between
 /// groups, FOUR GROUPS TO A LINE (R42; RES-62 item 9, pick A).
@@ -444,8 +478,12 @@ impl KeyFile {
     /// READ by a standard parser under the schema (§3.2): whitespace, member
     /// order, escape spelling, a CRLF or a missing newline all ADMITTED; the
     /// refusals the store's own — `NotKeyFile`, `Newer{v}`, `Schema{member}`,
-    /// `Disagrees` — each a state a face names beside the path.
+    /// `Disagrees` — each a state a face names beside the path. Bytes past
+    /// [`MAX_KEY_FILE_BYTES`] are no key file, whatever they spell.
     pub fn parse(bytes: &[u8]) -> Result<KeyFile, KeyFileError> {
+        if bytes.len() as u64 > MAX_KEY_FILE_BYTES {
+            return Err(KeyFileError::NotKeyFile);
+        }
         let value: Value = serde_json::from_slice(bytes).map_err(|_| KeyFileError::NotKeyFile)?;
         let obj = value.as_object().ok_or(KeyFileError::NotKeyFile)?;
         if obj.get("type").and_then(Value::as_str) != Some("skep-key") {
@@ -515,6 +553,8 @@ impl KeyFile {
 
 #[cfg(test)]
 mod tests {
+    use skep_identity::Enrollment;
+
     use super::*;
 
     /// AUTH-5.1 — eight groups of eight, four to a line.
@@ -572,6 +612,34 @@ mod tests {
         assert_eq!(Label::new(&"€".repeat(43)).unwrap_err(), LabelFault::TooLong { bytes: 129 });
         let fault: &dyn std::error::Error = &LabelFault::Empty;
         assert!(fault.to_string().contains("a name is required"));
+    }
+
+    /// One byline domain, the box's and the record's (AUTH-1.24, AUTH-1.25):
+    /// every text the box admits `Enrollment::new` keeps as it is, and every
+    /// text the box refuses — save the empty one, which the record maps to
+    /// none — `Enrollment::new` refuses too, over labels of 0 to 131 bytes
+    /// of one- to four-byte characters, a line break at the start, the
+    /// middle, the end or none. The walks' `expect`s on a label the box
+    /// admitted stand on this.
+    #[test]
+    fn the_box_and_the_record_hold_one_label_domain() {
+        let key = KeyFile::new(Seed::new([11u8; 32]), false, None, None).public;
+        for ch in ['a', 'é', '€', '𝄞'] {
+            for lead in ["", "a", "aa", "aaa"] {
+                for k in 0..=131 / ch.len_utf8() {
+                    let body = format!("{lead}{}", ch.to_string().repeat(k));
+                    let middle = body.len() / 2;
+                    let middle = (0..=middle).rev().find(|i| body.is_char_boundary(*i)).unwrap_or(0);
+                    for text in [body.clone(), format!("\n{body}"), format!("{body}\n"), format!("{}\n{}", &body[..middle], &body[middle..])] {
+                        let record = Enrollment::new(key.clone(), false, Some(text.clone()));
+                        assert_eq!(Label::new(&text).is_ok(), !text.is_empty() && record.is_ok(), "{} bytes: {text:?}", text.len());
+                        if Label::new(&text).is_ok() {
+                            assert_eq!(record.unwrap().label(), Some(text.as_str()));
+                        }
+                    }
+                }
+            }
+        }
     }
 
     /// §9 item 35's typed prefix, one rule: at least one R42 group, a prefix

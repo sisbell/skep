@@ -964,9 +964,10 @@ each ceremony:
 - The reading half, in every build. `origin.rs` the canonical origin;
   `address.rs` the address grammar over the wire's dotted spelling (an
   account's parent, first child and doc 1, the document an address lies
-  in, the parse); `hex.rs` (private) lowercase hex; `dial.rs` the one
-  outbound `Dialer`, its plain-HTTP arm and, under `tls`, the `https://`
-  arm; `halt.rs` the one error family and its exit codes; `board.rs` the
+  in, the parse, the namespace's principal depth); `hex.rs` (private)
+  lowercase hex; `dial.rs` the one outbound `Dialer`, its plain-HTTP arm
+  and, under `tls`, the `https://` arm, its unit suite in `dial/tests.rs`;
+  `halt.rs` the one error family and its exit codes; `board.rs` the
   wire's endpoints over a dialer, `H.1`'s pair and the one token a refusal
   is dispatched on, `board/frames.rs`, which spells every frame the crate
   sends, and `board/answers.rs`, which decodes every read answer it reads —
@@ -983,7 +984,8 @@ each ceremony:
   suite in `store/tests.rs`; `person.rs` the `Person` seam,
   and under `test-hooks` `person/scripted.rs`, the scripted person a suite
   drives; `derive/records.rs` the one admitted read of an account's
-  credential records, their positions and hands; `verify.rs` the reader's
+  credential records, their positions and hands, its unit suite in
+  `derive/records/tests.rs`; `verify.rs` the reader's
   verifier over the signature-filtered set, its unit suite in
   `verify/tests.rs`; `resolve.rs` the registry walk's `Transport` over a
   dialer.

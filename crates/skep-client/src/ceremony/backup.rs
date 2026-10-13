@@ -27,7 +27,7 @@ use skep_signature::HybridSigner;
 use super::say;
 use crate::halt::Halt;
 use crate::person::{Abandoned, Destination, LabelBox, Person, Public, Question, Retype, Retyped, Secret, Sheet};
-use crate::sheet::{typed_prefix_matches, Facts, KeyFile, Label, Seed};
+use crate::sheet::{read_key_file, typed_prefix_matches, Facts, KeyFile, Label, Seed};
 use crate::sign::{fresh_bytes, Signer};
 use crate::store::FileStore;
 
@@ -457,7 +457,7 @@ fn retype_from_print(person: &mut dyn Person, label: &Label, i: usize, fp: &Fing
 /// client-local sign-and-verify; `None` where it does not read back as the
 /// key it names.
 fn read_back_from_file(path: &Path, public: &PublicKey, fp: &Fingerprint) -> Option<HybridSigner> {
-    let file = KeyFile::parse(&std::fs::read(path).ok()?).ok()?;
+    let file = KeyFile::parse(&read_key_file(path).ok()?).ok()?;
     if file.fingerprint != *fp || file.public != *public {
         return None;
     }

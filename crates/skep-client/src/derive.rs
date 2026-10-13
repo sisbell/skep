@@ -11,9 +11,9 @@ use std::fmt;
 
 use skep_identity::Fingerprint;
 
-use crate::address::parent_account;
+use crate::address::{parent_account, within_principal_depth, MAX_PRINCIPAL_COMPONENTS};
 use crate::board::{Board, Health, KeySet, KeySetAnswer};
-use crate::halt::Halt;
+use crate::halt::{clipped, Halt};
 use crate::origin::Origin;
 
 #[cfg(feature = "acting")]
@@ -88,8 +88,14 @@ impl Walk {
     }
 }
 
-/// Run the walk from `account`.
+/// Run the walk from `account` — an account within the namespace's
+/// principal depth, which no conforming board names past: one deeper is
+/// refused before the first read (`too_deep`), so the walk makes at most
+/// [`MAX_PRINCIPAL_COMPONENTS`] reads and holds as many short prefixes.
 pub fn walk_to_set(board: &Board, account: &str) -> Result<Walk, Halt> {
+    if !within_principal_depth(account) {
+        return Err(too_deep(account));
+    }
     let mut at = account.to_string();
     let mut visited = Vec::new();
     loop {
@@ -114,6 +120,22 @@ pub fn walk_to_set(board: &Board, account: &str) -> Result<Walk, Halt> {
             None => return Ok(Walk { account: account.to_string(), set_account: account.to_string(), set, visited }),
         }
     }
+}
+
+/// The face of an account deeper than the namespace delegates — named by
+/// the board (`principal_prefix`, a session's account, ω's prefix), never by
+/// the person, so the fault is the board's: the walk upward from it would
+/// climb one component a read and keep each prefix. The account is named
+/// by its first 64 bytes alone.
+pub(crate) fn too_deep(account: &str) -> Halt {
+    Halt::face(
+        format!("the board named an account deeper than any it can delegate: {}…", clipped(account, 64)),
+        format!(
+            "an account has at most {MAX_PRINCIPAL_COMPONENTS} components — the namespace refuses a deeper principal prefix as \
+             `too_deep` (wire.md §Operations, `delegate`) — and this one has more"
+        ),
+        "this is a fault in the board, not in your keys; nothing was written",
+    )
 }
 
 /// THE THREE-STATE KEY DIAGNOSIS — `key_set` publishing both lists
@@ -257,6 +279,7 @@ pub fn on_closed(loaded: &Fingerprint, signed: &Origin, health: &Health, walk: &
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::board::fake::{self, Fake};
     use serde_json::json;
 
     fn health(claimant: Option<&str>, local_trust: bool, signed: &[&str]) -> Health {
@@ -320,5 +343,50 @@ mod tests {
                 assert_eq!(on_closed(&fp, &signed, &health(Some("1.0.1"), false, answered), &walk), expected, "the key {diagnosis}, the origin listed: {listed}");
             }
         }
+    }
+
+    /// The account `1.0.1` deepened to `n` components, each added one a 1.
+    fn deep(n: usize) -> String {
+        format!("1.0.1{}", ".1".repeat(n - 3))
+    }
+
+    /// The namespace's depth holds the walk (wire.md §Operations,
+    /// `delegate`): an account deeper than any board delegates — four
+    /// million components, the eight megabytes a `principal_prefix` answer
+    /// may carry inside the dialer's cap — is refused before its first read,
+    /// its face naming no more than its first 64 bytes.
+    #[test]
+    fn a_walk_from_an_account_deeper_than_the_namespace_delegates_reads_nothing() {
+        let halt = walk_to_set(&fake::board(&Fake::unread()), &deep(4_000_000)).expect_err("too deep");
+        assert_eq!(halt.exit_code(), 3);
+        let text = halt.to_string();
+        assert!(text.contains("deeper than any it can delegate") && text.len() < 4096, "{}", clipped(&text, 512));
+    }
+
+    /// From an account at the namespace's depth the walk climbs one account a
+    /// read to the top-level account — 62 reads from 64 components — and
+    /// keeps one prefix a read.
+    #[test]
+    fn the_walk_climbs_at_most_the_namespaces_depth() {
+        let fake = Fake::new(|_| fake::json(200, json!({"as_of": 9, "enrolled": [], "resp": "key_set", "retired": []})));
+        let walk = walk_to_set(&fake::board(&fake), &deep(64)).expect("a walk");
+        assert!(walk.terminus_empty());
+        assert_eq!((walk.visited.len(), fake.log().len()), (62, 62));
+    }
+
+    /// The pre-check holds the board's `principal_prefix` answer to the depth
+    /// before it walks: `/health`, the prefix, and the halt.
+    #[test]
+    fn the_precheck_refuses_a_principal_prefix_past_the_bound() {
+        let origin = fake::origin().as_str().to_string();
+        let account = deep(4_000_000);
+        let fake = Fake::new(move |req| match req.path.as_str() {
+            "/health" => fake::json(200, json!({"auth": {"claimant": "1.0.1", "local_trust": false, "origins": [origin], "signed_origins": [origin]}, "log_position": 9})),
+            _ => fake::json(200, json!({"addr": account, "as_of": 9, "resp": "addr"})),
+        });
+        let fp = Fingerprint::parse_hex(&"ab".repeat(32)).unwrap();
+        let halt = precheck(&fake::board(&fake), 7, &fp).expect_err("too deep");
+        assert!(halt.to_string().contains("deeper than any it can delegate"), "{}", clipped(&halt.to_string(), 512));
+        assert_eq!(fake.log(), ["GET /health", "POST /op principal_prefix"]);
     }
 }

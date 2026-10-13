@@ -27,7 +27,7 @@ use crate::ceremony::trail::Trail;
 use crate::derive::records::{credential_records, Hand};
 use crate::halt::Halt;
 use crate::person::{LabelBox, Person, Public, Question};
-use crate::sheet::{render_inert, Facts, KeyFile, Label};
+use crate::sheet::{read_key_file, render_inert, Facts, KeyFile, Label};
 use crate::store::{FileStore};
 
 /// THE LOSS ARM, L0–L7 (`client.md` §4a.6; AUTH-5.59's LOSS arm; AUTH-5.47).
@@ -62,7 +62,7 @@ pub(super) fn loss_arm(board: &Board, store: &FileStore, person: &mut dyn Person
     say(person, "AUTH-5.59 step 1", format!("ENROLLED ANCHORS:\n  {}", shown.join("\n  ")));
     // The surviving file's fingerprint, peeked off its public members for
     // the default.
-    let surviving_peek: Option<KeyFile> = opts.anchor.as_deref().and_then(|p| std::fs::read(p).ok()).and_then(|b| KeyFile::parse(&b).ok());
+    let surviving_peek: Option<KeyFile> = opts.anchor.as_deref().and_then(|p| read_key_file(p).ok()).and_then(|b| KeyFile::parse(&b).ok());
     let lost_fp: Fingerprint = if let Some(prefix) = opts.lost.first() {
         let prefix = prefix.trim().to_ascii_lowercase();
         let matches: Vec<&Fingerprint> = anchors.iter().filter(|f| f.to_hex().starts_with(&prefix)).collect();

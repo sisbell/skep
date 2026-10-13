@@ -21,10 +21,14 @@
 //! member a minting row named, `moved_head`, or the trunk PROBED with
 //! `doc_metadata` until `doc_not_registered` where the feed names none,
 //! §2.4), a draft in sequence, a straddled draft's join held PENDING until
-//! the next page settles it (§2.1); a BARE row whose `op` is `null` or
-//! `publish` is COUNTED against its range; a range's `held` advances only
-//! behind a WHOLE page — every document indexed or its refusal RECORDED
-//! (`withheld`, `too_many_items`), a transport error holding it — and is
+//! the next page settles it (§2.1); each document LANDS as its read
+//! returns, so a page holds one unit at a time, and a unit whose extent or
+//! resident charge would pass the ceiling is refused before it is read
+//! whole, the refusal counted in the state's `seen` (§7.4); a BARE row
+//! whose `op` is `null` or `publish` is COUNTED against its range; a
+//! range's `held` advances only behind a WHOLE page — every document indexed
+//! or its refusal RECORDED (`withheld`, `too_many_items`,
+//! `unit_past_the_ceiling`), a transport error holding it — and is
 //! fixed as the `/health` pair where the poll drained to `more: false`, by
 //! `GET /chain?at=<position>` alone at a save no draining poll fenced (§5.1);
 //! the newest `H.k` the feed delivered is kept as the header's head record,
@@ -70,25 +74,26 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use serde_json::Value;
-use skep_address::{Address, Level};
+use skep_address::{Address, Level, Nat};
 use skep_identity::Fingerprint;
 use skep_search::header;
 use skep_search::{
     moved_head, Chain, ChainAnswer, ChainAt, Class, GapKind, Grant, GrantKind, HeadRecord, Header,
     Index, IndexError, Item, Kind, LoadError, Prefix, Prepared, RangeRecord, Refusal, Resume, Unit,
-    UnitKey,
+    UnitKey, CEILING_BYTES,
 };
 
-use crate::address::{parent_account, parse_address};
+use crate::address::{parent_account, parse_address, within_principal_depth};
 use crate::board::answers::{self, Delivered};
 use crate::board::{frames, Answer, Board, ChainAtAnswer, ChangesAnswer, ChangesPage, ChangesQuery, KeySetAnswer, Rejection, Token, HEAD_DOCUMENT};
+use crate::derive::too_deep;
 use crate::dial::{Method, RequestHead};
 use crate::halt::Halt;
 
 use super::bridge::{SessionRef, Who};
 use super::directory::{BoardDir, SearchDir};
 use super::places::{account_of, bare_document, member_of, node_of, PlaceRecord, Places};
-use super::state::{Facts, Lost, Newer, Part, Range, State};
+use super::state::{Facts, Lost, Newer, Part, Range, State, PAST_THE_CEILING};
 
 /// THE SAVE's cadence in changed units (`client.md` §4e.2; `search.md`
 /// §7.1): "every 64 changed units or 30 seconds and at the shell's exit
@@ -121,8 +126,31 @@ const RESUME_RETRY_WAIT: Duration = Duration::from_millis(100);
 /// dense, so a probe ends at the first unregistered; the bound is a guard.
 const PROBE_BOUND: u64 = 1 << 20;
 
-/// The wait before the `/events` stream is reconnected after it ended.
+/// The reason recorded for a part that delivers past the span it asked, or
+/// no delivery at all — the shell's own word.
+const NOT_A_DELIVERY: &str = "not_a_delivery";
+
+/// The reason recorded for a board's refusal off the wire's spelling.
+const UNRECOGNIZED_REFUSAL: &str = "unrecognized_refusal";
+
+/// The longest refusal recorded as the board spelled it.
+const REFUSAL_BOUND: usize = 64;
+
+/// The wait before the `/events` stream is dialed again after an attempt —
+/// a stream that ended, or a connect the board refused.
 const RECONNECT_WAIT: Duration = Duration::from_millis(250);
+
+/// The longest line the `/events` stream reads (wire.md §The commit
+/// stream): an event is its position alone, at most 47 bytes, and 8 KiB is
+/// the bound the wire puts on a feed row; a line past it ends the stream as
+/// a close does.
+pub(crate) const EVENT_LINE_BOUND: u64 = 8 * 1024;
+
+/// The silence past which the `/events` stream is dead (wire.md §The commit
+/// stream: "After 15 seconds of silence the daemon writes the comment line
+/// `:ka` … Treat a stream silent well past that as dead, and reconnect"):
+/// two keepalive intervals with no line.
+pub(crate) const SILENCE_BOUND: Duration = Duration::from_secs(30);
 
 /// THE CONSUMER, one per board (the module doc). Every method takes `&self`:
 /// the mutating ones — `poll`, `widen`, `narrow`, `reindex`, `forget`,
@@ -683,24 +711,31 @@ impl<'b> Consumer<'b> {
                 }
             }
             let mut limit: Option<u64> = None;
+            let mut reclaimed = false;
+            let mut fenced = true;
             let under_text = under.as_ref().map(ToString::to_string);
             loop {
                 let query = ChangesQuery { since: cursor, under: under_text.as_deref(), drafts, limit };
                 match self.board.changes(token.as_ref(), &query)? {
                     ChangesAnswer::Page(page) => {
                         outcome.pages += 1;
-                        let plan = self.plan(face, i, &page, &recent);
-                        let mut reads = Vec::with_capacity(plan.reads.len());
+                        let mut plan = self.plan(face, i, &page, &recent);
+                        self.settle_page(face, &mut plan);
+                        // Each document LANDS as its read returns, so a page
+                        // holds one unit at a time and a read that fails
+                        // keeps what the reads before it landed; the cursor
+                        // and `held` still move behind the whole page alone.
                         for read in &plan.reads {
-                            let outcome_of = self.read_document(token.as_ref(), class, read)?;
-                            if let Fetched::Closed = outcome_of {
-                                return Ok(Drained::Closed);
-                            }
-                            if let Fetched::Unit { last, .. } = &outcome_of {
-                                recent.insert(read.doc.clone(), *last);
+                            let fetched = self.read_document(token.as_ref(), class, read)?;
+                            match &fetched {
+                                Fetched::Closed => return Ok(Drained::Closed),
+                                Fetched::Unit { last, .. } => {
+                                    recent.insert(read.doc.clone(), *last);
+                                }
+                                Fetched::Refused(_) => {}
                             }
                             outcome.documents += 1;
-                            reads.push(outcome_of);
+                            self.land_read(face, i, read, fetched);
                         }
                         let mut head_records = Vec::new();
                         for member in &plan.head_rows {
@@ -709,7 +744,7 @@ impl<'b> Consumer<'b> {
                                 head_records.push(HeadRecord { member: member.clone(), at: ChainAt { position, chain: Chain::from_bytes(chain) } });
                             }
                         }
-                        self.apply(face, i, &page, plan, reads, head_records);
+                        self.close_page(face, i, &page, plan.bare, head_records);
                         cursor = page.last;
                         if !page.more {
                             break;
@@ -738,16 +773,26 @@ impl<'b> Consumer<'b> {
                             break;
                         }
                         cursor = floor;
+                        if reclaimed {
+                            // A second floor within one range's drain: the
+                            // board reclaimed history while the drain ran. The
+                            // range ends at this floor, held there, and the
+                            // next poll drains on from it.
+                            fenced = false;
+                            break;
+                        }
+                        reclaimed = true;
                     }
-                    ChangesAnswer::TooLarge { fits } => limit = Some(fits.max(1)),
+                    ChangesAnswer::TooLarge { fits } => limit = Some(fits),
                     ChangesAnswer::Closed => return Ok(Drained::Closed),
                 }
             }
             // THE FENCE (`search.md` §5.1): every entry at or below the pair's
             // position lay on the pages that drained, so `held` is that pair —
-            // unless a pending join still holds the range at its last page.
+            // unless a pending join still holds the range at its last page, or
+            // the drain ended at a floor short of the pair.
             self.with_engine(face, |e| {
-                if !e.pending.iter().any(|p| p.range == i) {
+                if fenced && !e.pending.iter().any(|p| p.range == i) {
                     e.header.ranges[i].held = *pair;
                     e.dirty = true;
                 }
@@ -755,7 +800,7 @@ impl<'b> Consumer<'b> {
                     e.cursors[i] = cursor;
                 }
                 e.widening = None;
-                if e.building.is_some() && face == Face::Published {
+                if fenced && e.building.is_some() && face == Face::Published {
                     e.building = None;
                 }
             });
@@ -800,7 +845,7 @@ impl<'b> Consumer<'b> {
                     if let Some(member) = &member {
                         e.heads.insert(doc.clone(), member.clone());
                     }
-                    e.merge(prepared, range, kind, member);
+                    e.merge(prepared, kind, member);
                 }
                 Fetched::Refused(reason) => {
                     if let Some(record) = e.header.ranges.get_mut(range) {
@@ -905,7 +950,16 @@ impl<'b> Consumer<'b> {
     /// head is unknown, then `span_set` and `retrieve_v` in parts over the
     /// extent — token-free at guest class for the published index, under the
     /// session's token at the principal's class for the supplement — and
-    /// `prepare` outside every lock.
+    /// `prepare` outside every lock. The board's word bounds nothing the read
+    /// holds: an extent past the ceiling is refused unread — a position holds
+    /// at most one byte of text, so such a document holds more text than the
+    /// index admits or is that much gap, and reading it would take more parts
+    /// than any unit within the ceiling needs; no part may deliver past the
+    /// positions it asked; and the unit's resident charge is counted as its
+    /// items are made and refused past the ceiling ([`items_of`]). A document
+    /// refused so is never held whole to learn it, and its refusal, recorded
+    /// beside its range, is a unit the state's `seen` counts: the index says
+    /// what it left out.
     fn read_document(&self, token: Option<&Token>, class: Class, read: &ReadPlan) -> Result<Fetched, Halt> {
         let mut member = read.member.clone();
         if read.probe {
@@ -921,10 +975,14 @@ impl<'b> Consumer<'b> {
             Answer::Document(v) => v,
         };
         if let Some(r) = Rejection::of(&extent_answer) {
-            return Ok(Fetched::Refused(r.key().to_string()));
+            return Ok(Fetched::Refused(refusal_reason(r.key())));
         }
         let extent = answers::content_extent(&extent_answer);
+        if extent > CEILING_BYTES {
+            return Ok(Fetched::Refused(PAST_THE_CEILING.to_string()));
+        }
         let mut items: Vec<Item> = Vec::new();
+        let mut charge: u64 = 0;
         let mut first: Option<u64> = None;
         let mut last = extent_answer["as_of"].as_u64().unwrap_or(0);
         let mut parts = 0;
@@ -936,12 +994,14 @@ impl<'b> Consumer<'b> {
                 Answer::Document(v) => v,
             };
             if let Some(r) = Rejection::of(&v) {
-                return Ok(Fetched::Refused(r.key().to_string()));
+                return Ok(Fetched::Refused(refusal_reason(r.key())));
             }
             let Some((delivered, as_of)) = answers::delivery(&v) else {
-                return Ok(Fetched::Refused("not_a_delivery".to_string()));
+                return Ok(Fetched::Refused(NOT_A_DELIVERY.to_string()));
             };
-            items.extend(items_of(delivered, from));
+            if let Err(reason) = items_of(delivered, from, width, &mut charge, &mut items) {
+                return Ok(Fetched::Refused(reason.to_string()));
+            }
             first.get_or_insert(as_of);
             last = as_of;
             parts += 1;
@@ -954,61 +1014,99 @@ impl<'b> Consumer<'b> {
         Ok(Fetched::Unit { prepared: Index::prepare(unit), member, kind: read.kind, first: first.unwrap_or(last), last, parts })
     }
 
-    /// THE TRUNK PROBE (`search.md` §2.4): `doc_metadata` over `D.1`, `D.2`,
-    /// … until `doc_not_registered`; the last registered member is the head,
-    /// `None` for a published document without a member.
+    /// THE TRUNK PROBE (`search.md` §2.4): the members are dense, so the head
+    /// is the last registered member before the first `doc_not_registered` —
+    /// found by `doc_metadata` over `D.1`, `D.2`, `D.4`, … doubling to the
+    /// first unregistered, then bisecting between the two, in at most
+    /// 2·log₂ [`PROBE_BOUND`] + 1 reads where a member at a time would read
+    /// as many as the board claims; `None` for a published document without
+    /// a member.
     fn probe_head(&self, doc: &Address) -> Result<Option<Address>, Halt> {
-        let mut head = None;
-        for k in 1..=PROBE_BOUND {
-            let Some(member) = member_of(doc, k) else { break };
-            let v = self.board.guest(&frames::doc_metadata(&member.to_string()))?;
-            if Rejection::of(&v).is_some() || answers::published(&v).is_none() {
+        if !self.registered(doc, 1)? {
+            return Ok(None);
+        }
+        // `lo` registered, `hi` not (or past the bound).
+        let (mut lo, mut hi) = (1u64, PROBE_BOUND + 1);
+        let mut k = 2u64;
+        while k <= PROBE_BOUND {
+            if !self.registered(doc, k)? {
+                hi = k;
                 break;
             }
-            head = Some(member);
+            lo = k;
+            k *= 2;
         }
-        Ok(head)
+        while hi - lo > 1 {
+            let mid = lo + (hi - lo) / 2;
+            if self.registered(doc, mid)? {
+                lo = mid;
+            } else {
+                hi = mid;
+            }
+        }
+        Ok(member_of(doc, lo))
     }
 
-    /// THE PAGE APPLIED under the write side: the pending joins settled, each
-    /// read merged or its refusal recorded, the bare rows counted, the head
-    /// record kept, the cursor advanced.
-    fn apply(&self, face: Face, range: usize, page: &ChangesPage, plan: Plan, reads: Vec<Fetched>, head_records: Vec<HeadRecord>) {
+    /// Whether the trunk member `D.k` of `doc` is registered, off one
+    /// `doc_metadata` read as a guest.
+    fn registered(&self, doc: &Address, k: u64) -> Result<bool, Halt> {
+        let Some(member) = member_of(doc, k) else { return Ok(false) };
+        let v = self.board.guest(&frames::doc_metadata(&member.to_string()))?;
+        Ok(Rejection::of(&v).is_none() && answers::published(&v).is_some())
+    }
+
+    /// THE PAGE's SETTLEMENT under the write side, ahead of its reads: the
+    /// pending joins it settles — installed where no row straddled the
+    /// parts, discarded, and re-read by this page's own plan, where one did —
+    /// and the heads its rows moved.
+    fn settle_page(&self, face: Face, plan: &mut Plan) {
         let mut guard = self.write();
         let Mount::Live(live) = &mut *guard else { return };
         let Some(engine) = Self::engine_of_mut(live, face) else { return };
-        // The pending joins this page settles: installed where no row straddled
-        // the parts, discarded — and re-read by this page's own plan — where
-        // one did.
         let mut settled: Vec<usize> = plan.install.iter().chain(&plan.discard).copied().collect();
         settled.sort_unstable();
         for i in settled.into_iter().rev() {
             let pending = engine.pending.remove(i);
             if plan.install.contains(&i) {
-                engine.merge(pending.prepared, pending.range, Kind::Draft, Some(pending.doc.clone()));
+                engine.merge(pending.prepared, Kind::Draft, Some(pending.doc.clone()));
             }
         }
-        for (doc, head) in plan.head_moves {
+        for (doc, head) in std::mem::take(&mut plan.head_moves) {
             engine.heads.insert(doc, head);
         }
-        for (read, planned) in reads.into_iter().zip(plan.reads) {
-            match read {
-                Fetched::Unit { prepared, member, kind, first, last, parts } => {
-                    if kind == Kind::Draft && parts > 1 && first != last {
-                        engine.pending.push(PendingJoin { range, doc: planned.doc, prepared, first, last });
-                        continue;
-                    }
-                    if let Some(member) = &member {
-                        engine.heads.insert(planned.doc.clone(), member.clone());
-                    }
-                    engine.merge(prepared, range, kind, member);
+    }
+
+    /// ONE READ LANDED under the write side as it returns: merged, held
+    /// pending where a draft's parts straddled a commit, or its refusal
+    /// recorded.
+    fn land_read(&self, face: Face, range: usize, planned: &ReadPlan, read: Fetched) {
+        let mut guard = self.write();
+        let Mount::Live(live) = &mut *guard else { return };
+        let Some(engine) = Self::engine_of_mut(live, face) else { return };
+        match read {
+            Fetched::Unit { prepared, member, kind, first, last, parts } => {
+                if kind == Kind::Draft && parts > 1 && first != last {
+                    engine.pending.push(PendingJoin { range, doc: planned.doc.clone(), prepared, first, last });
+                    return;
                 }
-                Fetched::Refused(reason) => engine.refuse(range, planned.doc, reason),
-                Fetched::Closed => {}
+                if let Some(member) = &member {
+                    engine.heads.insert(planned.doc.clone(), member.clone());
+                }
+                engine.merge(prepared, kind, member);
             }
+            Fetched::Refused(reason) => engine.refuse(range, planned.doc.clone(), reason),
+            Fetched::Closed => {}
         }
-        if plan.bare > 0 {
-            engine.header.ranges[range].bare_rows += plan.bare;
+    }
+
+    /// THE PAGE's CLOSE under the write side, behind its last read: the bare
+    /// rows counted, the head record kept, the cursor advanced.
+    fn close_page(&self, face: Face, range: usize, page: &ChangesPage, bare: u64, head_records: Vec<HeadRecord>) {
+        let mut guard = self.write();
+        let Mount::Live(live) = &mut *guard else { return };
+        let Some(engine) = Self::engine_of_mut(live, face) else { return };
+        if bare > 0 {
+            engine.header.ranges[range].bare_rows += bare;
             engine.dirty = true;
         }
         for record in head_records {
@@ -1042,7 +1140,9 @@ impl<'b> Consumer<'b> {
         };
         let mut named: Vec<Honored> = Vec::new();
         if Rejection::of(&v).is_none() {
-            let addrs: Vec<String> = answers::addrs(&v).into_iter().map(str::to_string).collect();
+            // The discovery's answer as a set: every link the supplement ever
+            // read is tested against it once, in log time.
+            let addrs: BTreeSet<String> = answers::addrs(&v).into_iter().map(str::to_string).collect();
             for link in &addrs {
                 if links.contains_key(link) {
                     continue;
@@ -1106,9 +1206,11 @@ impl<'b> Consumer<'b> {
         let Mount::Live(live) = &mut *guard else { return };
         let Some(s) = live.supplements.get_mut(&principal) else { return };
         if let Slot::Engine(engine) = &mut s.slot {
+            // The ranges' prefixes as a set: each honored prefix is tested
+            // once, in log time, whatever count of grants the board names.
+            let mut known: BTreeSet<Address> = engine.header.ranges.iter().filter_map(|r| r.under.clone()).collect();
             for h in &honored {
-                let known = engine.header.ranges.iter().any(|r| r.under.as_ref() == Some(&h.prefix));
-                if !known {
+                if known.insert(h.prefix.clone()) {
                     engine.add_range(Some(h.prefix.clone()), Some(h.grant.clone()));
                 }
             }
@@ -1124,6 +1226,12 @@ impl<'b> Consumer<'b> {
     /// while each fetches and `Complete` after.
     pub fn widen(&self, session: SessionRef<'_>) -> Result<(), Halt> {
         let _feed = self.feed.lock().expect("the feed mutex");
+        // The session's account is `principal_prefix`'s answer: one deeper
+        // than the namespace delegates is the board's fault, refused before
+        // its ancestors become ranges.
+        if !within_principal_depth(session.account) {
+            return Err(too_deep(session.account));
+        }
         if matches!(&*self.read(), Mount::Unclaimed) {
             self.mount()?;
         }
@@ -1266,7 +1374,7 @@ impl<'b> Consumer<'b> {
                     if let Some(member) = &member {
                         e.heads.insert(doc.clone(), member.clone());
                     }
-                    e.merge(prepared, range, kind, member);
+                    e.merge(prepared, kind, member);
                 }
                 Fetched::Refused(reason) => e.refuse(range, doc.clone(), reason),
                 Fetched::Closed => {}
@@ -1303,6 +1411,12 @@ impl<'b> Consumer<'b> {
                 orphans.push(Orphan { principal, account: None });
                 continue;
             };
+            // An account deeper than the namespace delegates is the board's
+            // fault, never the person's: no walk climbs it, and no forget is
+            // offered on it.
+            if !within_principal_depth(&account) {
+                continue;
+            }
             let mut at = account.clone();
             let opened = loop {
                 match self.board.key_set(&at)? {
@@ -1490,8 +1604,11 @@ impl Engine {
 
     /// A prepared unit merged under the write side (`search.md` §1.4): the
     /// class check and the ceiling the crate's; the places row written from
-    /// the same delivery; a recorded refusal of the document cleared.
-    fn merge(&mut self, prepared: Prepared, range: usize, kind: Kind, member: Option<Address>) {
+    /// the same delivery; every recorded refusal of the document cleared,
+    /// whichever range recorded it — the index reads at its one class, so a
+    /// unit it holds is a refusal no range still stands behind, and none of
+    /// them composes a state after it.
+    fn merge(&mut self, prepared: Prepared, kind: Kind, member: Option<Address>) {
         let doc = prepared.key().doc().clone();
         let label = Places::first_line(prepared.unit());
         match self.index.merge(prepared) {
@@ -1499,7 +1616,7 @@ impl Engine {
                 self.changed += 1;
                 self.dirty = true;
                 self.places.record(doc.clone(), PlaceRecord { kind, member, label });
-                if let Some(record) = self.header.ranges.get_mut(range) {
+                for record in &mut self.header.ranges {
                     record.refusals.retain(|r| r.doc != doc);
                 }
             }
@@ -1566,12 +1683,38 @@ fn first_line(bytes: &[u8]) -> Option<&[u8]> {
     bytes.iter().position(|&b| b == b'\n').map(|at| &bytes[..=at])
 }
 
-/// The wire's items typed as the index takes them (`search.md` §2.1), from
-/// `from`, each at its start ordinal.
-fn items_of(delivered: Vec<Delivered>, from: u64) -> Vec<Item> {
+/// One part's items typed as the index takes them (`search.md` §2.1), each
+/// at its start ordinal from `from`, pushed onto the unit's `items`. A part
+/// delivers the span it asked as the document stands at the part's own
+/// position — `width` positions from `from`, fewer where the extent shrank
+/// under the read, the span within the extent being what a delivery holds
+/// (wire.md §Content values; M6's `retrieve_v`) — and never more: a part
+/// past its span is [`NOT_A_DELIVERY`], refused at the item that passes it.
+/// The unit's resident `charge` grows by each item as the index will hold
+/// it — its text, its own slot, a withheld run's origin a component at a
+/// time — counted BEFORE the item is made, and past [`CEILING_BYTES`], the
+/// most text the whole index holds (`search.md` §7.4), the unit is
+/// [`PAST_THE_CEILING`]: its item table rests resident beside the text it
+/// counts, so one read holds no more for one unit than the index holds for
+/// all.
+fn items_of(delivered: Vec<Delivered>, from: u64, width: u64, charge: &mut u64, items: &mut Vec<Item>) -> Result<(), &'static str> {
+    const SLOT: u64 = std::mem::size_of::<Item>() as u64;
+    const COMPONENT: u64 = std::mem::size_of::<Nat>() as u64 + 8;
+    let end = from.checked_add(width).ok_or(NOT_A_DELIVERY)?;
     let mut start = from;
-    let mut items = Vec::with_capacity(delivered.len());
     for d in delivered {
+        let held = match &d {
+            Delivered::Text(bytes) => SLOT.saturating_add(bytes.len() as u64),
+            Delivered::Withheld { origin, .. } => {
+                let components = origin.bytes().filter(|b| *b == b'.').count() as u64 + 1;
+                SLOT.saturating_add(components.saturating_mul(COMPONENT))
+            }
+            Delivered::Atom | Delivered::Unknown { .. } => SLOT,
+        };
+        *charge = charge.saturating_add(held);
+        if *charge > CEILING_BYTES {
+            return Err(PAST_THE_CEILING);
+        }
         let item = match d {
             Delivered::Text(bytes) => Item::Text { start, bytes },
             Delivered::Atom => Item::Gap { start, width: 1, kind: GapKind::Atom },
@@ -1585,10 +1728,25 @@ fn items_of(delivered: Vec<Delivered>, from: u64) -> Vec<Item> {
             },
             Delivered::Unknown { width } => Item::Gap { start, width, kind: GapKind::Unknown },
         };
-        start += item.width();
+        start = start.checked_add(item.width()).filter(|s| *s <= end).ok_or(NOT_A_DELIVERY)?;
         items.push(item);
     }
-    items
+    Ok(())
+}
+
+/// The reason a board's refusal is recorded under beside its range — the
+/// wire's word where it is one (codes of `[a-z0-9_]`, a family's detail
+/// after a `:`, at most [`REFUSAL_BOUND`] bytes, the longest wire.md names
+/// being 28), else [`UNRECOGNIZED_REFUSAL`]: the record is saved with every
+/// save and survives restarts, so it never holds a board's text of its
+/// own choosing.
+fn refusal_reason(key: &str) -> String {
+    let word = |segment: &str| !segment.is_empty() && segment.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_');
+    if key.len() <= REFUSAL_BOUND && key.split(':').all(word) {
+        key.to_string()
+    } else {
+        UNRECOGNIZED_REFUSAL.to_string()
+    }
 }
 
 // ── THE LOOP's INPUT: `GET /events` ──────────────────────────────────────
@@ -1609,21 +1767,39 @@ impl Stop {
 /// wire.md §The commit stream): `GET /events` on the dialer's streamed form,
 /// each `commit` event's `log_position` yielded — "React to movement by
 /// re-querying", the shell's `poll` the reaction — the stream reconnected
-/// where it closes or falls silent past the dialer's read bound, the initial
-/// event after a reconnect "potentially having skipped history" and so a
-/// poll like any other. The consumer is the shell's: this iterator carries
-/// the transport alone and the THREAD it runs on is the embedder's.
+/// where it closes, falls silent past `SILENCE_BOUND` (a read that times
+/// out short of it is silence on a live stream, which the stream survives),
+/// or writes a line past `EVENT_LINE_BOUND`; every attempt after the first
+/// waits `RECONNECT_WAIT`, so a board that refuses the stream is dialed
+/// four times a second at most. The initial event after a reconnect is
+/// "potentially having skipped history" and so a poll like any other. The
+/// consumer is the shell's: this iterator carries the transport alone and
+/// the THREAD it runs on is the embedder's.
 pub struct Events<'b> {
     board: &'b Board,
     body: Option<Box<dyn BufRead + Send>>,
     stop: Arc<AtomicBool>,
     event: Option<String>,
-    connected_once: bool,
+    /// The line read so far — kept across a read that timed out, so a line
+    /// the board writes slowly is read whole.
+    line: Vec<u8>,
+    /// When the stream last answered a line, or opened.
+    heard: Instant,
+    /// A connect was attempted: every later one waits [`RECONNECT_WAIT`].
+    attempted: bool,
 }
 
 /// The stream over `board`'s `/events`.
 pub fn events(board: &Board) -> Events<'_> {
-    Events { board, body: None, stop: Arc::new(AtomicBool::new(false)), event: None, connected_once: false }
+    Events {
+        board,
+        body: None,
+        stop: Arc::new(AtomicBool::new(false)),
+        event: None,
+        line: Vec::new(),
+        heard: Instant::now(),
+        attempted: false,
+    }
 }
 
 impl Events<'_> {
@@ -1641,8 +1817,16 @@ impl Events<'_> {
         }
         let body: Box<dyn Read + Send> = resp.body;
         self.body = Some(Box::new(BufReader::new(body)));
-        self.connected_once = true;
+        self.heard = Instant::now();
         Ok(())
+    }
+
+    /// The stream dropped, to be dialed again: the line and the event read
+    /// on it are the old stream's.
+    fn hang_up(&mut self) {
+        self.body = None;
+        self.line.clear();
+        self.event = None;
     }
 }
 
@@ -1655,28 +1839,48 @@ impl Iterator for Events<'_> {
                 return None;
             }
             if self.body.is_none() {
-                if self.connected_once {
+                if self.attempted {
                     thread::sleep(RECONNECT_WAIT);
                 }
+                self.attempted = true;
                 if let Err(halt) = self.connect() {
                     return Some(Err(halt));
                 }
             }
             let body = self.body.as_mut().expect("connected above");
-            let mut line = String::new();
-            match body.read_line(&mut line) {
+            let room = EVENT_LINE_BOUND.saturating_sub(self.line.len() as u64);
+            let read = Read::take(&mut **body, room).read_until(b'\n', &mut self.line);
+            match read {
                 Ok(0) => {
-                    self.body = None;
+                    // The stream closed.
+                    self.hang_up();
+                    continue;
+                }
+                Ok(_) if self.line.last() != Some(&b'\n') => {
+                    if self.line.len() as u64 >= EVENT_LINE_BOUND {
+                        // A line past the bound: no event is that long.
+                        self.hang_up();
+                    }
                     continue;
                 }
                 Ok(_) => {}
+                Err(e) if matches!(e.kind(), io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut) => {
+                    // A read that timed out: silence on a live stream, dead
+                    // past the bound.
+                    if self.heard.elapsed() >= SILENCE_BOUND {
+                        self.hang_up();
+                    }
+                    continue;
+                }
                 Err(_) => {
-                    // Silence past the dialer's read bound, or a broken
-                    // connection: reconnected.
-                    self.body = None;
+                    // A broken connection: dialed again.
+                    self.hang_up();
                     continue;
                 }
             }
+            self.heard = Instant::now();
+            let line = std::mem::take(&mut self.line);
+            let line = String::from_utf8_lossy(&line);
             let line = line.trim_end_matches(['\r', '\n']);
             if let Some(event) = line.strip_prefix("event:") {
                 self.event = Some(event.trim().to_string());

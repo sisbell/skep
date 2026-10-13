@@ -37,7 +37,7 @@ use crate::derive::records::{Hand, Records};
 use crate::derive::KeyDiagnosis;
 use crate::halt::Halt;
 use crate::person::{HandedPath, Import, Imported, KeptOrPlaced, Person, Public, Question, Secret};
-use crate::sheet::{render_inert, typed_prefix_matches, KeyFile, Seed};
+use crate::sheet::{read_key_file, render_inert, typed_prefix_matches, KeyFile, Seed};
 use crate::sign::Signer;
 use crate::store::FileStore;
 
@@ -394,7 +394,7 @@ fn import_file(person: &mut dyn Person, cx: &ImportContext<'_>, path: &Path) -> 
     let kept_or_placed = person
         .kept_or_placed(Secret(HandedPath { path: path.to_path_buf(), text: "is this the KEPT artifact (retained), or a PLACED copy (destroyed when this ceremony ends)?".into() }))
         .map_err(|_| abandoned())?;
-    let bytes = std::fs::read(path).map_err(|e| {
+    let bytes = read_key_file(path).map_err(|e| {
         Halt::face(format!("the anchor file {} is missing, unreadable or mis-pathed: {e}", path.display()), "AUTH-5.67: HALT AND SURFACE naming the path, never a fallback", "check the path")
     })?;
     let file = KeyFile::parse(&bytes).map_err(|e| Halt::face(format!("the anchor file {} is refused: {e}", path.display()), "the file's own contents decide this (§3.2)", "hand in the anchor file the backup moment wrote"))?;

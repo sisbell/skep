@@ -177,7 +177,9 @@ pub fn next_content_ordinal(board: &Board, token: Option<&Token>, doc: &str) -> 
     ordinal_at(board, token, doc).map_err(Halt::from)
 }
 
-/// [`next_content_ordinal`], its death signal the deposit's own arm.
+/// [`next_content_ordinal`], its death signal the deposit's own arm; an
+/// extent at the top of the ordinal range, which leaves no ordinal after it,
+/// is the board's fault and halts before the insert.
 fn ordinal_at(board: &Board, token: Option<&Token>, doc: &str) -> Result<u64, DepositHalt> {
     match board.op(token, &frames::span_set(doc))? {
         Answer::Closed => Err(DepositHalt::SessionClosed(closed_face("reading the home's extent"))),
@@ -185,7 +187,14 @@ fn ordinal_at(board: &Board, token: Option<&Token>, doc: &str) -> Result<u64, De
             if let Some(r) = Rejection::of(&v) {
                 return Err(r.refused(&v).into());
             }
-            Ok(answers::content_extent(&v) + 1)
+            answers::content_extent(&v).checked_add(1).ok_or_else(|| {
+                DepositHalt::Other(Halt::face(
+                    format!("{doc} answered an extent with no ordinal after it"),
+                    "`retrieve_doc_v_span_set` named a content extent at the top of the ordinal range, so no position \
+                     stands where the record could land",
+                    "this is a fault in the board, not in your keys; nothing was written",
+                ))
+            })
         }
     }
 }
@@ -204,18 +213,25 @@ fn closed_face(during: &str) -> Halt {
 /// written — the I→V inversion over `image`, then `retrieve_v` (AUTH-2.114);
 /// an atom the arrangement does not hold, or an I-map that does not read
 /// whole, does not read back (AUTH-2.115). The death signal on any of its
-/// three reads is the session's end and never a mismatch.
+/// three reads is the session's end and never a mismatch, and a refusal of
+/// any of them is the board's, surfaced as it answered — never a record
+/// that did not read back.
 fn read_back(board: &Board, token: Option<&Token>, home: &str, atom: &str, expected: &str) -> Result<bool, DepositHalt> {
     let closed = || DepositHalt::SessionClosed(closed_face("reading the record back"));
-    let Answer::Document(set) = board.op(token, &frames::span_set(home))? else { return Err(closed()) };
-    let extent = answers::content_extent(&set);
+    let answered = |answer: Answer| -> Result<Value, DepositHalt> {
+        let Answer::Document(v) = answer else { return Err(closed()) };
+        match Rejection::of(&v) {
+            Some(r) => Err(r.refused(&v).into()),
+            None => Ok(v),
+        }
+    };
+    let extent = answers::content_extent(&answered(board.op(token, &frames::span_set(home))?)?);
     if extent == 0 {
         return Ok(false);
     }
-    let Answer::Document(image) = board.op(token, &frames::image(home, 1, extent))? else { return Err(closed()) };
-    let held = answers::i_map(&image).and_then(|map| map.into_iter().find(|(a, _)| a == atom));
-    let Some((_, ordinal)) = held else { return Ok(false) };
-    let Answer::Document(v) = board.op(token, &frames::retrieve_v(home, ordinal, 1))? else { return Err(closed()) };
+    let image = answered(board.op(token, &frames::image(home, 1, extent))?)?;
+    let Some(ordinal) = answers::i_runs(&image, extent).and_then(|runs| answers::ordinal_of(&runs, atom)) else { return Ok(false) };
+    let v = answered(board.op(token, &frames::retrieve_v(home, ordinal, 1))?)?;
     Ok(answers::first_atom(&v).as_deref() == Some(expected.as_bytes()))
 }
 
@@ -587,6 +603,38 @@ mod tests {
         for closed_at in ["retrieve_doc_v_span_set", "image", "retrieve_v"] {
             assert!(matches!(read(&reading(3, held.clone(), third, Some(closed_at))), Err(DepositHalt::SessionClosed(_))), "the death signal at `{closed_at}`");
         }
+    }
+
+    /// The I-map a read-back holds is its runs' size and never the widths'
+    /// the board names: a run 2^63 wide over an extent of 3 is no map, read
+    /// at once with nothing read after it; and a refused `image` is the
+    /// board's refusal as it answered, never a record that did not read back.
+    #[test]
+    fn a_read_back_holds_runs_and_surfaces_a_refused_image() {
+        let read = |fake: &Arc<Fake>| read_back(&fake::board(fake), Some(&token()), HOME, ATOM, "REC");
+        let fake = reading(3, json!([{"i_start": ATOM, "width": "9223372036854775808"}]), |_| "REC", None);
+        assert_eq!(read(&fake), Ok(false));
+        assert_eq!(fake.log(), ["POST /op retrieve_doc_v_span_set", "POST /op image"]);
+        let refused = Fake::new(|req| match fake::frame(req)["op"].as_str() {
+            Some("retrieve_doc_v_span_set") => fake::json(200, span_set(3)),
+            _ => fake::json(200, json!({"code": "image_too_large", "disposition": "permanent", "op": "image", "resp": "rejected"})),
+        });
+        let halt = Halt::from(read(&refused).expect_err("the board refused"));
+        assert!(matches!(&halt, Halt::Refused(r) if r.token() == "image_too_large"), "{halt}");
+    }
+
+    /// An extent at the top of the ordinal range leaves no ordinal after it:
+    /// the deposit halts in the board's fault, exit 3, and sends no insert.
+    #[test]
+    fn an_extent_at_the_top_of_the_range_halts_before_the_insert() {
+        let fake = Fake::new(|req| match fake::frame(req)["op"].as_str() {
+            Some("retrieve_doc_v_span_set") => fake::json(200, json!({"as_of": 9, "resp": "span_set", "set": [{"start": "1.1", "width": "0.18446744073709551615"}]})),
+            other => panic!("the deposit sends no {other:?} past an extent with no ordinal after it"),
+        });
+        let halt = Halt::from(deposit(&fake::board(&fake), &token(), &retirement("x")).expect_err("no ordinal"));
+        assert_eq!(halt.exit_code(), 3, "{halt}");
+        assert!(halt.to_string().contains("an extent with no ordinal after it"), "{halt}");
+        assert_eq!(fake.log(), ["POST /op retrieve_doc_v_span_set"]);
     }
 
     /// AUTH-5.5: a record that does not read back is NEVER LINKED — the

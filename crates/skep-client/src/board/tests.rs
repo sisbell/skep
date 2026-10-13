@@ -213,3 +213,30 @@ fn the_changes_key_reads_the_rows_own_testimony() {
         assert_eq!(fake.log(), ["GET /changes?since=4&limit=1"], "{expected:?}: the one point query");
     }
 }
+
+/// wire.md §The change feed, Paging: an answer that would not move its
+/// reader on is no answer the wire gives — a page whose `last` falls below
+/// `since`, a page claiming `more` without passing `since`, a `fits` of
+/// none or not below the limit asked — and halts as the transport's fault;
+/// an empty page at `since` and a `fits` below the limit are answers.
+#[test]
+fn a_page_or_a_fits_that_moves_its_reader_nowhere_is_refused() {
+    let page = |body: Value| {
+        let fake = fake::Fake::new(move |_| fake::json(200, body.clone()));
+        fake::board(&fake).changes(None, &ChangesQuery { since: 5, ..ChangesQuery::default() })
+    };
+    for stale in [json!({"changes": [], "last": 5, "more": true}), json!({"changes": [], "last": 4, "more": false}), json!({"changes": [], "more": true})] {
+        let halt = page(stale.clone()).expect_err("a page that moves nothing");
+        assert_eq!(halt.exit_code(), 4, "{stale}: {halt}");
+    }
+    assert_eq!(page(json!({"changes": [], "last": 5, "more": false})).unwrap(), ChangesAnswer::Page(ChangesPage { changes: Vec::new(), last: 5, more: false }));
+    let fits = |fits: u64, limit: Option<u64>| {
+        let fake = fake::Fake::new(move |_| fake::json(400, json!({"budget": 2097152, "detail": "the page passes its budget", "error": "malformed_changes", "fits": fits})));
+        fake::board(&fake).changes(None, &ChangesQuery { since: 5, limit, ..ChangesQuery::default() })
+    };
+    for (n, limit) in [(256, None), (0, None), (100, Some(100)), (101, Some(100))] {
+        assert_eq!(fits(n, limit).expect_err("a fits that shrinks nothing").exit_code(), 4, "fits {n} at limit {limit:?}");
+    }
+    assert_eq!(fits(99, Some(100)).unwrap(), ChangesAnswer::TooLarge { fits: 99 });
+    assert_eq!(fits(255, None).unwrap(), ChangesAnswer::TooLarge { fits: 255 });
+}

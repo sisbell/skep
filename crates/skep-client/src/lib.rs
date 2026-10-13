@@ -15,15 +15,19 @@
 //!   test over the daemon's own admitted and refused strings (P5).
 //! * [`address`] — the address grammar over the wire's dotted spelling: an
 //!   account's parent, first child and doc 1, the document an address lies
-//!   in, the parse into `skep_address`'s `Address`.
+//!   in, the parse into `skep_address`'s `Address`, and the namespace's
+//!   principal depth every walk upward from a board-named account is held
+//!   to.
 //! * `hex` (private) — lowercase hex, the one spelling every hex this crate
 //!   emits takes.
 //! * [`dial`] — the ONE outbound dialer (`Dialer`) and its plain-HTTP arm:
 //!   one `TcpStream` per request, `Connection: close`, `Content-Length`
-//!   checked, no redirects, no proxy environment (wire.md §Transport); the
-//!   streamed form for the blob routes and `/events`; `https://` behind the
-//!   `tls` feature. A dialer behind a reference, a box or an `Arc` is one,
-//!   so a shell shares ONE between its boards and the resolver.
+//!   checked, no redirects, no proxy environment (wire.md §Transport), a
+//!   frame exchange held to a deadline and its target and headers checked
+//!   before any connection opens; the streamed form for the blob routes and
+//!   `/events`; `https://` behind the `tls` feature. A dialer behind a
+//!   reference, a box or an `Arc` is one, so a shell shares ONE between its
+//!   boards and the resolver.
 //! * [`halt`] — the one error family: `Halt`, `Refused`, `Blocked`, `Dial`,
 //!   with §2.3's exit codes as the binary's mapping (AUTH-5.66).
 //! * [`board`] — `Board { dialed, signed, dialer }`: the wire's endpoints,
@@ -49,10 +53,10 @@
 //!   the bytes a signer signs: the session payload under `SESSION_TAG` /
 //!   `SESSION_TAG_V2` (AUTH-6.4) and a credential record's `record` frame,
 //!   `RecordFrame`, its rows named.
-//! * [`sheet`] — the key file's one JSON spelling and its refusals,
-//!   `KeyFileError` (§3.2), the byline `Label` and its domain (AUTH-1.24),
-//!   the `Seed` every secret is born into, the R42 grouping (AUTH-5.1) and
-//!   the sheet's field list (AUTH-5.38).
+//! * [`sheet`] — the key file's one JSON spelling, its size bound and its
+//!   refusals, `KeyFileError` (§3.2), the byline `Label` and its domain
+//!   (AUTH-1.24), the `Seed` every secret is born into, the R42 grouping
+//!   (AUTH-5.1) and the sheet's field list (AUTH-5.38).
 //! * [`store`] — the `KeyStore` seam and `FileStore` (§3), the seed's
 //!   custodian: a lookup answers a key's public facts and a stored key signs
 //!   through `KeyStore::signer` alone (§3a); the halts the store's refusals

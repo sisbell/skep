@@ -7,16 +7,17 @@
 //! sentence it fences. The suites that need the daemon itself are
 //! `tests/it/search/`.
 
-use std::collections::{BTreeMap, BTreeSet};
-use std::io::Read as _;
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::io::{self, Read};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use serde_json::{json, Value};
 use skep_address::Address;
 use skep_search::{
-    Chain, ChainAt, Class, Grant, GrantKind, Header, Index, Kind, RangeRecord, Rung, Span, Standing,
-    Stats, CEILING_BYTES,
+    Chain, ChainAt, Class, Grant, GrantKind, Header, Index, Kind, RangeRecord, Refusal, Rung, Span,
+    Standing, Stats, CEILING_BYTES,
 };
 
 use crate::address::parse_address;
@@ -24,12 +25,12 @@ use crate::board::{Board, Token, HEAD_DOCUMENT, HEAD_MEMBER_1};
 use crate::dial::{DialError, Dialer, Headers, Request, RequestHead, Response, StreamedResponse};
 use crate::origin::Origin;
 
-use super::consumer::MAX_DELIVERY_ITEMS;
+use super::consumer::{EVENT_LINE_BOUND, MAX_DELIVERY_ITEMS};
 use super::directory::{BoardDir, SearchDir};
 use super::jump::{land, landing_of, Correspondence, Landing};
 use super::places::{PlaceRecord, Places};
 use super::state::{Facts, Lost, Newer, Part, Range, State};
-use super::{Consumer, QueryTooLong, SearchDir as _SearchDir, SearchOpts, SessionRef, Who, QUERY_BOUND};
+use super::{events, Consumer, QueryTooLong, SearchDir as _SearchDir, SearchOpts, SessionRef, Who, QUERY_BOUND};
 
 // ── THE SCRIPTED BOARD ───────────────────────────────────────────────────
 
@@ -85,6 +86,23 @@ struct World {
     transport_fail: BTreeSet<String>,
     grants: Vec<GrantRow>,
     universal: Vec<(String, Vec<String>)>,
+    /// `span_set` answers this extent for a document, whatever its text.
+    extents: BTreeMap<String, u64>,
+    /// `retrieve_v` answers a document's whole text, whatever width it asks.
+    deliver_whole: BTreeSet<String>,
+    /// `/changes` answers `410 history_reclaimed` with each of these floors in
+    /// turn, ahead of any page.
+    reclaim: VecDeque<u64>,
+    /// `/changes` answers a page that moves nothing: empty, `last` the
+    /// `since` asked, `more` true.
+    stale: bool,
+    /// The `/changes` requests served.
+    changes_asked: usize,
+    /// `principal_prefix` answers, by principal.
+    principals: BTreeMap<u64, String>,
+    /// `retrieve_v` answers each part of a document as ONE withheld run of
+    /// the width asked, its origin this text.
+    withheld_by: BTreeMap<String, String>,
 }
 
 /// The chain at `position` as the world computes it: distinct per position.
@@ -166,7 +184,9 @@ impl World {
                "auth": {"claimant": self.head.as_ref().map(|_| ACCOUNT), "local_trust": true, "origins": [], "signed_origins": []}})
     }
 
-    fn changes(&self, path: &str) -> Response {
+    fn changes(&mut self, path: &str) -> Response {
+        self.changes_asked += 1;
+        assert!(self.changes_asked <= 50, "the consumer asked the feed past 50 pages");
         let query = path.splitn(2, '?').nth(1).unwrap_or("");
         let mut since = 0u64;
         let mut under: Option<String> = None;
@@ -180,6 +200,12 @@ impl World {
                 Some(("limit", v)) => limit = v.parse().unwrap(),
                 _ => panic!("an unknown `/changes` member: {pair}"),
             }
+        }
+        if let Some(floor) = self.reclaim.pop_front() {
+            return reply(410, json!({"error": "history_reclaimed", "floor": floor}));
+        }
+        if self.stale {
+            return reply(200, json!({"changes": [], "last": since, "more": true}));
         }
         if let Some(floor) = self.floor {
             if since < floor {
@@ -254,8 +280,18 @@ impl World {
                 if let Some(code) = d.refuse {
                     return Ok(rejected(code));
                 }
-                let lo = (from - 1) as usize;
-                let hi = (lo + width as usize).min(d.text.len());
+                if let Some(origin) = self.withheld_by.get(&doc) {
+                    return Ok(reply(200, json!({"resp": "delivery", "as_of": self.position, "items": [{"withheld": {"origin": origin, "width": width.to_string()}}]})));
+                }
+                let (lo, hi) = if self.deliver_whole.contains(&doc) {
+                    (0, d.text.len())
+                } else {
+                    let lo = ((from - 1) as usize).min(d.text.len());
+                    (lo, (lo + width as usize).min(d.text.len()))
+                };
+                // Past the text the span delivers nothing, as a board's
+                // delivery is the span within the document's extent at the
+                // read's position (skep-retrieval's `retrieve_v`).
                 let slice = &d.text[lo..hi];
                 let items = match std::str::from_utf8(slice) {
                     Ok(text) => json!([{"content": text}]),
@@ -279,7 +315,8 @@ impl World {
                 if let Some(code) = d.refuse {
                     return Ok(rejected(code));
                 }
-                let set = if d.text.is_empty() { json!([]) } else { json!([{"start": "1.1", "width": format!("0.{}", d.text.len())}]) };
+                let extent = self.extents.get(doc).copied().unwrap_or(d.text.len() as u64);
+                let set = if extent == 0 { json!([]) } else { json!([{"start": "1.1", "width": format!("0.{extent}")}]) };
                 Ok(reply(200, json!({"resp": "span_set", "as_of": self.position, "set": set})))
             }
             "doc_metadata" => {
@@ -307,6 +344,11 @@ impl World {
                 let rows: Vec<Value> = self.universal.iter().map(|(p, i)| json!({"prefix": p, "issuers": i})).collect();
                 Ok(reply(200, json!({"resp": "universal_grants", "as_of": self.position, "rows": rows})))
             }
+            "principal_prefix" => {
+                let addr = frame["principal"].as_u64().and_then(|n| self.principals.get(&n)).cloned();
+                Ok(reply(200, json!({"resp": "addr", "as_of": self.position, "addr": addr})))
+            }
+            "key_set" => Ok(reply(200, json!({"resp": "key_set", "as_of": self.position, "enrolled": [], "retired": []}))),
             other => panic!("the consumer sent an op the scripted board does not answer: {other}"),
         }
     }
@@ -511,7 +553,7 @@ fn a_minting_row_moves_the_head_a_daughter_moves_none_and_an_unnamed_trunk_is_pr
     let answer = consumer.search(Who::Guest, "probed", &SearchOpts::default()).unwrap();
     assert_eq!(answer.hits[0].member.as_ref().map(ToString::to_string).as_deref(), Some("1.0.1.0.4.3"));
     let probes: Vec<String> = dialer.served.lock().unwrap().iter().filter(|s| s.line == "POST /op doc_metadata").map(|s| serde_json::from_slice::<Value>(&s.body).unwrap()["doc"].as_str().unwrap().to_string()).collect();
-    assert_eq!(probes, ["1.0.1.0.1.1", "1.0.1.0.4.1", "1.0.1.0.4.2", "1.0.1.0.4.3", "1.0.1.0.4.4"], "the trunk probed once per such document, until `doc_not_registered`: {probes:?}");
+    assert_eq!(probes, ["1.0.1.0.1.1", "1.0.1.0.4.1", "1.0.1.0.4.2", "1.0.1.0.4.4", "1.0.1.0.4.3"], "the trunk probed once per such document, doubling to `doc_not_registered` then bisecting: {probes:?}");
     let reads: Vec<String> = dialer.served.lock().unwrap().iter().filter(|s| s.line == "POST /op retrieve_v").map(|s| serde_json::from_slice::<Value>(&s.body).unwrap()["specs"][0]["doc"].as_str().unwrap().to_string()).collect();
     assert!(reads.contains(&"1.0.1.0.2.2".to_string()) && !reads.contains(&"1.0.1.0.2".to_string()), "{reads:?}");
 }
@@ -690,6 +732,37 @@ fn past_the_ceiling_composes_from_seen_with_units_and_the_limit_in_bytes() {
     let stats = Stats { units: 10, terms: 0, postings: 0, bytes: 5, tombstones: 0, dead_postings: 0, ceiling: CEILING_BYTES, seen: 3 };
     let facts = Facts { stats, header: &header, building: None, widening: None, resumed: None, lost: None, aside: false };
     assert_eq!(State::compose(&[Part::Index(facts)]), State::PastTheCeiling { held: 10, seen: 3, limit: CEILING_BYTES });
+}
+
+/// `search.md` §7.4 at the composition, the consumer's half: a document the
+/// consumer refused past the ceiling before reading it whole is a unit
+/// `seen` beside the crate's own count — once, whichever ranges recorded it
+/// — and a refusal of another word composes nothing.
+#[test]
+fn past_the_ceiling_counts_the_consumers_own_refusals_once_a_document() {
+    let refusal = |doc: &str, reason: &str| Refusal { doc: addr(doc), reason: reason.to_string() };
+    let range = |under: Option<&str>, refusals: Vec<Refusal>| RangeRecord {
+        under: under.map(addr),
+        held: ChainAt { position: 40, chain: Chain::from_bytes([2; 32]) },
+        refusals,
+        bare_rows: 0,
+        grant: None,
+    };
+    let header = Header {
+        board: Chain::from_bytes([1; 32]),
+        floor: None,
+        ranges: vec![
+            range(Some(SUB_ACCOUNT), vec![refusal("1.0.1.2.0.1", "unit_past_the_ceiling"), refusal("1.0.1.2.0.2", "withheld")]),
+            range(Some(ACCOUNT), vec![refusal("1.0.1.2.0.1", "unit_past_the_ceiling")]),
+        ],
+        head: None,
+    };
+    let withheld = Header { ranges: vec![range(None, vec![refusal("1.0.1.0.2", "withheld")])], ..header.clone() };
+    let stats = |seen: u64| Stats { units: 4, terms: 0, postings: 0, bytes: 0, tombstones: 0, dead_postings: 0, ceiling: CEILING_BYTES, seen };
+    let facts = |header, seen| Facts { stats: stats(seen), header, building: None, widening: None, resumed: None, lost: None, aside: false };
+    assert_eq!(State::compose(&[Part::Index(facts(&header, 0))]), State::PastTheCeiling { held: 4, seen: 1, limit: CEILING_BYTES });
+    assert_eq!(State::compose(&[Part::Index(facts(&header, 2))]), State::PastTheCeiling { held: 4, seen: 3, limit: CEILING_BYTES });
+    assert_eq!(State::compose(&[Part::Index(facts(&withheld, 0))]), State::Complete { as_of: 40, floor: None });
 }
 
 // ── THE RESUME's DISPOSITIONS ────────────────────────────────────────────
@@ -1366,4 +1439,414 @@ fn the_search_dir_is_the_index_directory_under_the_data_directory() {
     assert_eq!(QUERY_BOUND, 1024);
     let mut buf = String::new();
     let _ = std::io::empty().read_to_string(&mut buf);
+}
+
+// ── THE BOARD's WORD BOUNDS NOTHING THE CONSUMER HOLDS ───────────────────
+
+/// The refusals recorded beside the published index's one range, as saved.
+fn published_refusals(consumer: &Consumer<'_>, world: &Arc<Mutex<World>>) -> Vec<(String, String)> {
+    consumer.save().unwrap();
+    let header = load_header(&board_dir(consumer.dir(), world).file(&BoardDir::published_name()), Class::Guest);
+    header.ranges[0].refusals.iter().map(|r| (r.doc.to_string(), r.reason.clone())).collect()
+}
+
+/// The `retrieve_v` reads the board served naming `doc`.
+fn reads_naming(dialer: &Scripted, doc: &str) -> usize {
+    dialer.served.lock().unwrap().iter().filter(|s| s.line == "POST /op retrieve_v" && serde_json::from_slice::<Value>(&s.body).unwrap()["specs"][0]["doc"] == doc).count()
+}
+
+/// `search.md` §7.4: a position holds at most one byte of text, so a
+/// document whose extent passes the ceiling holds more text than the index
+/// admits or is that much gap — refused UNREAD, its refusal recorded beside
+/// the range, where every part of it would otherwise be read to learn it —
+/// and the index SAYS SO: the state is `past_the_ceiling`, the document one
+/// unit `seen`, after a restart as before it.
+#[test]
+fn a_document_whose_extent_passes_the_ceiling_is_refused_unread() {
+    let mut w = World::claimed();
+    w.publish("1.0.1.0.2", "a short text");
+    w.extents.insert("1.0.1.0.2".to_string(), CEILING_BYTES + 1);
+    let world = shared(w);
+    let (b, dialer) = board(&world);
+    let tmp = tempfile::tempdir().unwrap();
+    let consumer = Consumer::open(&b, SearchDir::new(tmp.path())).unwrap();
+    consumer.poll().unwrap();
+    assert_eq!(reads_naming(&dialer, "1.0.1.0.2"), 0, "no part read");
+    assert!(hits(&consumer, Who::Guest, "short").is_empty());
+    assert_eq!(published_refusals(&consumer, &world), [("1.0.1.0.2".to_string(), "unit_past_the_ceiling".to_string())]);
+    assert!(matches!(consumer.state(Who::Guest), State::PastTheCeiling { seen: 1, limit: CEILING_BYTES, .. }), "{:?}", consumer.state(Who::Guest));
+    consumer.close().unwrap();
+    let (b, _) = board(&world);
+    let reopened = Consumer::open(&b, SearchDir::new(tmp.path())).unwrap();
+    assert!(matches!(reopened.state(Who::Guest), State::PastTheCeiling { seen: 1, .. }), "after a restart: {:?}", reopened.state(Who::Guest));
+}
+
+/// wire.md §Content values: a delivery is the span it asked, one item per
+/// position and one per withheld run — a part that delivers more is no
+/// delivery, refused and recorded, its text never held as the document's.
+#[test]
+fn a_delivery_past_the_width_asked_is_refused() {
+    let mut w = World::claimed();
+    w.publish("1.0.1.0.2", &"overflowing words ".repeat(2_800));
+    w.extents.insert("1.0.1.0.2".to_string(), 5);
+    w.deliver_whole.insert("1.0.1.0.2".to_string());
+    let world = shared(w);
+    let (b, _) = board(&world);
+    let tmp = tempfile::tempdir().unwrap();
+    let consumer = Consumer::open(&b, SearchDir::new(tmp.path())).unwrap();
+    consumer.poll().unwrap();
+    assert!(hits(&consumer, Who::Guest, "overflowing").is_empty(), "the over-delivered text is never indexed");
+    assert_eq!(published_refusals(&consumer, &world), [("1.0.1.0.2".to_string(), "not_a_delivery".to_string())]);
+}
+
+/// A part that delivers FEWER positions than it asked — the document shrank
+/// between its extent and the part's read, a board delivering the span
+/// within the extent at the part's position — is a delivery all the same:
+/// the shorter text is indexed and nothing is refused.
+#[test]
+fn a_part_short_of_the_width_asked_is_indexed_as_delivered() {
+    let mut w = World::claimed();
+    w.publish("1.0.1.0.2", "shrunken words");
+    w.extents.insert("1.0.1.0.2".to_string(), 50);
+    let world = shared(w);
+    let (b, _) = board(&world);
+    let tmp = tempfile::tempdir().unwrap();
+    let consumer = Consumer::open(&b, SearchDir::new(tmp.path())).unwrap();
+    consumer.poll().unwrap();
+    assert_eq!(hits(&consumer, Who::Guest, "shrunken"), ["1.0.1.0.2"]);
+    assert!(published_refusals(&consumer, &world).is_empty());
+}
+
+/// The unit's resident charge counts an item as the index holds it — here a
+/// withheld run, the slot and its origin a component at a time — and passes
+/// the ceiling long before the extent would: the document is refused as
+/// past the ceiling, its parts read no further than the charge allowed.
+#[test]
+fn a_unit_whose_items_pass_the_ceiling_is_refused_as_its_charge_grows() {
+    let mut w = World::claimed();
+    // Every part a withheld run of the width asked, its origin 60,000
+    // components: each item charges ~1.9 MB, so the unit passes the ceiling
+    // within fifty parts of the extent's sixty-four.
+    let origin = format!("1{}", ".1".repeat(59_999));
+    w.publish("1.0.1.0.2", "");
+    w.extents.insert("1.0.1.0.2".to_string(), 64 * MAX_DELIVERY_ITEMS);
+    w.withheld_by.insert("1.0.1.0.2".to_string(), origin);
+    let world = shared(w);
+    let (b, dialer) = board(&world);
+    let tmp = tempfile::tempdir().unwrap();
+    let consumer = Consumer::open(&b, SearchDir::new(tmp.path())).unwrap();
+    consumer.poll().unwrap();
+    let parts = reads_naming(&dialer, "1.0.1.0.2");
+    assert!(parts > 1 && parts < 64, "{parts} parts read");
+    assert_eq!(published_refusals(&consumer, &world), [("1.0.1.0.2".to_string(), "unit_past_the_ceiling".to_string())]);
+    assert!(matches!(consumer.state(Who::Guest), State::PastTheCeiling { seen: 1, .. }), "{:?}", consumer.state(Who::Guest));
+}
+
+/// The consumer's ceiling refusal is ONE unit `seen` whichever ranges record
+/// it: a supplement's draft beneath the account is refused under the
+/// account's range and again under its ancestor's. Once the board cuts it
+/// down and the account's page reads it whole, its merge clears the refusal
+/// under EVERY range — the ancestor's page, coalesced, reads it not at all —
+/// and the state is `complete` again.
+#[test]
+fn a_ceiling_refusal_is_one_unit_whichever_ranges_record_it_and_clears_with_its_merge() {
+    let mut w = World::claimed();
+    w.draft("1.0.1.2.0.1", b"a vast draft");
+    w.extents.insert("1.0.1.2.0.1".to_string(), CEILING_BYTES + 1);
+    let world = shared(w);
+    let (b, _) = board(&world);
+    let tmp = tempfile::tempdir().unwrap();
+    let consumer = Consumer::open(&b, SearchDir::new(tmp.path())).unwrap();
+    consumer.poll().unwrap();
+    let tok = token();
+    let who = Who::Session(session(&tok));
+    consumer.widen(session(&tok)).unwrap();
+    assert!(matches!(consumer.state(who), State::PastTheCeiling { seen: 1, limit: CEILING_BYTES, .. }), "{:?}", consumer.state(who));
+    let path = board_dir(consumer.dir(), &world).file(&BoardDir::supplement_name(7));
+    let recorded = |consumer: &Consumer<'_>| {
+        consumer.save().unwrap();
+        load_header(&path, Class::Principal(7)).ranges.iter().filter(|r| r.refusals.iter().any(|f| f.reason == "unit_past_the_ceiling")).count()
+    };
+    assert_eq!(recorded(&consumer), 2, "recorded under the account's range and its ancestor's");
+    {
+        let mut w = world.lock().unwrap();
+        w.extents.clear();
+        w.draft("1.0.1.2.0.1", b"a draft cut down");
+    }
+    consumer.poll().unwrap();
+    assert_eq!(hits(&consumer, who, "cut"), ["1.0.1.2.0.1"]);
+    assert_eq!(recorded(&consumer), 0, "cleared under every range");
+    assert!(matches!(consumer.state(who), State::Complete { .. }), "{:?}", consumer.state(who));
+}
+
+/// Each document a page names LANDS as its read returns: a read that fails
+/// at the transport keeps what the reads before it landed, while the
+/// cursor and `held` still wait for the whole page.
+#[test]
+fn a_page_lands_each_document_before_reading_the_next() {
+    let mut w = World::claimed();
+    w.publish("1.0.1.0.2", "landed first");
+    w.publish("1.0.1.0.3", "never reached");
+    w.transport_fail.insert("1.0.1.0.3".to_string());
+    let world = shared(w);
+    let (b, _) = board(&world);
+    let tmp = tempfile::tempdir().unwrap();
+    let consumer = Consumer::open(&b, SearchDir::new(tmp.path())).unwrap();
+    let err = consumer.poll().expect_err("the transport broke");
+    assert_eq!(err.exit_code(), 4, "{err}");
+    assert_eq!(hits(&consumer, Who::Guest, "landed"), ["1.0.1.0.2"]);
+    assert!(matches!(consumer.state(Who::Guest), State::Building { .. }), "the page is not whole: {:?}", consumer.state(Who::Guest));
+}
+
+/// A board's refusal is recorded under the wire's word only where it is
+/// one — every save writes it and every restart reads it — and under
+/// `unrecognized_refusal` where the board spelled its own.
+#[test]
+fn a_refusal_off_the_wires_spelling_is_recorded_as_unrecognized() {
+    let mut w = World::claimed();
+    w.publish("1.0.1.0.2", "refused at length");
+    w.publish("1.0.1.0.3", "refused by a word");
+    w.docs.get_mut("1.0.1.0.2").unwrap().refuse = Some(Box::leak("x".repeat(64 * 1024).into_boxed_str()));
+    w.docs.get_mut("1.0.1.0.3").unwrap().refuse = Some("withheld");
+    let world = shared(w);
+    let (b, _) = board(&world);
+    let tmp = tempfile::tempdir().unwrap();
+    let consumer = Consumer::open(&b, SearchDir::new(tmp.path())).unwrap();
+    consumer.poll().unwrap();
+    assert_eq!(
+        published_refusals(&consumer, &world),
+        [("1.0.1.0.2".to_string(), "unrecognized_refusal".to_string()), ("1.0.1.0.3".to_string(), "withheld".to_string())]
+    );
+}
+
+/// `search.md` §2.4's trunk probe over a dense trunk of a thousand members:
+/// the head found by doubling to the first unregistered member and
+/// bisecting, in twenty-one reads where a member at a time reads a
+/// thousand and one.
+#[test]
+fn a_dense_trunk_is_probed_by_doubling_then_bisecting() {
+    let mut w = World::claimed();
+    for k in 1..=1000 {
+        w.registered.insert(format!("1.0.1.0.4.{k}"));
+    }
+    w.docs.insert("1.0.1.0.4.1000".to_string(), Doc { text: b"the thousandth edition".to_vec(), refuse: None });
+    w.publish("1.0.1.0.4", "the bare address floats");
+    let world = shared(w);
+    let (b, dialer) = board(&world);
+    let tmp = tempfile::tempdir().unwrap();
+    let consumer = Consumer::open(&b, SearchDir::new(tmp.path())).unwrap();
+    consumer.poll().unwrap();
+    let answer = consumer.search(Who::Guest, "thousandth", &SearchOpts::default()).unwrap();
+    assert_eq!(answer.hits[0].member.as_ref().map(ToString::to_string).as_deref(), Some("1.0.1.0.4.1000"));
+    let probes = dialer.served.lock().unwrap().iter().filter(|s| s.line == "POST /op doc_metadata" && serde_json::from_slice::<Value>(&s.body).unwrap()["doc"].as_str().unwrap().starts_with("1.0.1.0.4.")).count();
+    assert!(probes <= 21, "{probes} probes");
+}
+
+/// A session's account is `principal_prefix`'s answer: one deeper than the
+/// namespace delegates is the board's fault, refused before anything is read
+/// or mounted, its ancestors never made ranges.
+#[test]
+fn a_session_account_deeper_than_the_namespace_widens_nothing() {
+    let world = shared(World::claimed());
+    let (b, dialer) = board(&world);
+    let tmp = tempfile::tempdir().unwrap();
+    let consumer = Consumer::open(&b, SearchDir::new(tmp.path())).unwrap();
+    dialer.clear();
+    let tok = token();
+    let deep = format!("1.0.1{}", ".1".repeat(100));
+    let halt = consumer.widen(SessionRef { token: &tok, principal: 7, account: &deep }).expect_err("too deep");
+    assert_eq!(halt.exit_code(), 3);
+    assert!(dialer.lines().is_empty(), "{:?}", dialer.lines());
+    assert!(!consumer.mounted(7));
+}
+
+/// The orphan test walks only an account within the namespace's depth: a
+/// supplement whose principal the board now names past it is no orphan the
+/// shell offers to forget — the board's fault, never the person's — and no
+/// `key_set` is read for it; the same supplement at its own account is one.
+#[test]
+fn the_orphan_test_offers_no_forget_on_an_account_named_past_the_depth() {
+    let mut w = World::claimed();
+    w.principals.insert(7, SUB_ACCOUNT.to_string());
+    let world = shared(w);
+    let (b, dialer) = board(&world);
+    let tmp = tempfile::tempdir().unwrap();
+    let consumer = Consumer::open(&b, SearchDir::new(tmp.path())).unwrap();
+    consumer.poll().unwrap();
+    let tok = token();
+    consumer.widen(session(&tok)).unwrap();
+    consumer.narrow(7).unwrap();
+    assert_eq!(consumer.orphans(&[]).unwrap().iter().map(|o| o.principal).collect::<Vec<_>>(), [7], "keyless at its own account");
+    world.lock().unwrap().principals.insert(7, format!("1.0.1{}", ".1".repeat(100)));
+    dialer.clear();
+    assert!(consumer.orphans(&[]).unwrap().is_empty());
+    assert_eq!(dialer.reads_of("key_set"), 0, "{:?}", dialer.lines());
+}
+
+// ── THE FEED's PAGES MOVE THE DRAIN ON ───────────────────────────────────
+
+/// wire.md §The change feed, Paging: a page that moves nothing — empty,
+/// its `last` the `since` asked, `more` true — is no answer the wire
+/// gives; the poll fails on it at once, never asking again for ever.
+#[test]
+fn a_feed_page_that_moves_nothing_fails_the_poll() {
+    let mut w = World::claimed();
+    w.stale = true;
+    let world = shared(w);
+    let (b, _) = board(&world);
+    let tmp = tempfile::tempdir().unwrap();
+    let consumer = Consumer::open(&b, SearchDir::new(tmp.path())).unwrap();
+    let err = consumer.poll().expect_err("a page that moves nothing");
+    assert_eq!(err.exit_code(), 4, "{err}");
+    assert_eq!(world.lock().unwrap().changes_asked, 1);
+}
+
+/// `search.md` §5.1: a second `history_reclaimed` within one range's drain
+/// — the board reclaiming while the drain runs — ends that range's drain at
+/// the floor it named, `held` there and never the `/health` pair, and the
+/// next poll drains on from it.
+#[test]
+fn a_second_floor_within_one_drain_ends_the_range_there() {
+    let mut w = World::claimed();
+    w.publish("1.0.1.0.2", "beyond the second floor");
+    w.reclaim.extend([5, 9]);
+    let world = shared(w);
+    let (b, dialer) = board(&world);
+    let tmp = tempfile::tempdir().unwrap();
+    let consumer = Consumer::open(&b, SearchDir::new(tmp.path())).unwrap();
+    consumer.poll().unwrap();
+    assert_eq!(world.lock().unwrap().changes_asked, 2, "two floors, then the range ended");
+    consumer.save().unwrap();
+    let header = load_header(&board_dir(consumer.dir(), &world).file(&BoardDir::published_name()), Class::Guest);
+    assert_eq!(header.ranges[0].held.position, 9, "held at the second floor");
+    dialer.clear();
+    consumer.poll().unwrap();
+    let pages: Vec<String> = dialer.lines().into_iter().filter(|l| l.starts_with("GET /changes?")).collect();
+    assert!(pages[0].starts_with("GET /changes?since=9"), "{pages:?}");
+    assert_eq!(hits(&consumer, Who::Guest, "beyond"), ["1.0.1.0.2"]);
+    assert_eq!(consumer.state(Who::Guest), State::AtTheFloor { floor: 9 }, "complete from the floor the drain ended at");
+}
+
+// ── THE COMMIT STREAM ────────────────────────────────────────────────────
+
+/// One chunk a scripted stream body answers: bytes, or a read's error.
+type Chunk = Result<Vec<u8>, io::ErrorKind>;
+
+/// A stream body answering its chunks in turn, then the close.
+struct Chunks(VecDeque<Chunk>);
+
+impl Read for Chunks {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        match self.0.pop_front() {
+            None => Ok(0),
+            Some(Err(kind)) => Err(kind.into()),
+            Some(Ok(mut bytes)) => {
+                let n = bytes.len().min(buf.len());
+                buf[..n].copy_from_slice(&bytes[..n]);
+                if n < bytes.len() {
+                    self.0.push_front(Ok(bytes.split_off(n)));
+                }
+                Ok(n)
+            }
+        }
+    }
+}
+
+/// A body counting the bytes read off it.
+struct Counted {
+    inner: Box<dyn Read + Send>,
+    taken: Arc<AtomicU64>,
+}
+
+impl Read for Counted {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        let n = self.inner.read(buf)?;
+        self.taken.fetch_add(n as u64, Ordering::SeqCst);
+        Ok(n)
+    }
+}
+
+/// A dialer whose `/events` answers come off a queue — a body, or the
+/// connect's refusal — each `stream` call counted.
+struct Streams {
+    bodies: Mutex<VecDeque<Result<Box<dyn Read + Send>, DialError>>>,
+    dialed: AtomicUsize,
+}
+
+impl Streams {
+    fn board(bodies: Vec<Result<Box<dyn Read + Send>, DialError>>) -> (Board, Arc<Streams>) {
+        let streams = Arc::new(Streams { bodies: Mutex::new(bodies.into()), dialed: AtomicUsize::new(0) });
+        (Board::new(Origin::parse("http://127.0.0.1:8642").unwrap(), streams.clone()), streams)
+    }
+}
+
+impl Dialer for Streams {
+    fn exchange(&self, _: &Origin, req: &Request) -> Result<Response, DialError> {
+        panic!("the stream sends no {} {}", req.method.as_str(), req.path)
+    }
+
+    fn stream(&self, _: &Origin, head: &RequestHead, _: &mut dyn std::io::Read, _: &mut dyn FnMut(&Headers)) -> Result<StreamedResponse, DialError> {
+        assert_eq!(head.path, "/events");
+        self.dialed.fetch_add(1, Ordering::SeqCst);
+        let body = self.bodies.lock().unwrap().pop_front().unwrap_or_else(|| Err(DialError::Connect("no stream left".into())))?;
+        Ok(StreamedResponse { status: 200, headers: Headers::default(), body })
+    }
+}
+
+fn commit(position: u64) -> Chunk {
+    Ok(format!("event: commit\ndata: {{\"log_position\":{position}}}\n\n").into_bytes())
+}
+
+/// wire.md §The commit stream: an event is its position alone, so a line
+/// past `EVENT_LINE_BOUND` ends the stream as a close does — read no
+/// further than the bound, never to the end of a board's sixty-four
+/// megabytes — and the stream dialed again answers its event.
+#[test]
+fn an_events_line_past_its_bound_ends_the_stream_unread() {
+    let taken = Arc::new(AtomicU64::new(0));
+    let flood: Box<dyn Read + Send> = Box::new(Counted { inner: Box::new(io::repeat(b'a').take(64 << 20)), taken: taken.clone() });
+    let calm: Box<dyn Read + Send> = Box::new(Chunks(VecDeque::from([commit(7)])));
+    let (b, _) = Streams::board(vec![Ok(flood), Ok(calm)]);
+    let mut stream = events(&b);
+    assert_eq!(stream.next().map(|r| r.unwrap()), Some(7));
+    assert!(taken.load(Ordering::SeqCst) <= 2 * EVENT_LINE_BOUND, "{} bytes taken", taken.load(Ordering::SeqCst));
+}
+
+/// A read that times out is silence on a live stream, which the stream
+/// survives — the line it was part-way through kept whole across it — and
+/// never a reconnect short of the silence bound.
+#[test]
+fn a_read_that_times_out_is_silence_and_the_stream_survives_it() {
+    let chunks = VecDeque::from([Ok(b"event: com".to_vec()), Err(io::ErrorKind::WouldBlock), Ok(b"mit\ndata: {\"log_position\":9}\n\n".to_vec())]);
+    let slow: Box<dyn Read + Send> = Box::new(Chunks(chunks));
+    let (b, streams) = Streams::board(vec![Ok(slow)]);
+    let mut stream = events(&b);
+    assert_eq!(stream.next().map(|r| r.unwrap()), Some(9));
+    assert_eq!(streams.dialed.load(Ordering::SeqCst), 1, "one stream, never dialed again");
+}
+
+/// A board that refuses the stream is dialed again no sooner than the
+/// reconnect wait: three attempts take two waits, never a spin.
+#[test]
+fn a_refused_stream_waits_before_it_is_dialed_again() {
+    let (b, streams) = Streams::board(Vec::new());
+    let mut stream = events(&b);
+    let began = Instant::now();
+    for _ in 0..3 {
+        assert!(matches!(stream.next(), Some(Err(_))));
+    }
+    assert!(began.elapsed() >= Duration::from_millis(500), "three attempts in {:?}", began.elapsed());
+    assert_eq!(streams.dialed.load(Ordering::SeqCst), 3);
+}
+
+// ── THE JUMP AT THE TOP OF THE ORDINALS ──────────────────────────────────
+
+/// The landing rule's ordinals are the board's word: at the top of the
+/// range every sum saturates rather than wrap or panic, and a hostile
+/// answer lands at the range's edge.
+#[test]
+fn the_jump_lands_at_the_top_of_the_ordinals_without_wrapping() {
+    assert_eq!(land(Span { start: u64::MAX - 1, width: 1 }, &[pair(u64::MAX - 1, u64::MAX, u64::MAX)]), Landing::Carried { at: u64::MAX });
+    assert_eq!(land(Span { start: 10, width: 6 }, &[pair(0, u64::MAX, 20)]), Landing::Carried { at: u64::MAX });
+    assert_eq!(land(Span { start: 10, width: 6 }, &[pair(8, u64::MAX - 1, 4), pair(12, u64::MAX, 10)]), Landing::Carried { at: u64::MAX });
 }

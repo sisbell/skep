@@ -328,3 +328,27 @@ fn an_anchor_is_refused_for_signing_at_every_arm() {
         assert!(facts.anchor && facts.fingerprint == anchor.fingerprint, "{sel:?}");
     }
 }
+
+/// §3.2's reader takes no file at a hostile path's size: a key file past
+/// `MAX_KEY_FILE_BYTES` is no key file, however valid its JSON — one at the
+/// bound loads — and a path naming no regular file is refused before it is
+/// opened, so a device answers at once rather than fill memory.
+#[test]
+fn a_key_file_past_its_bound_or_no_regular_file_is_refused_unread() {
+    use crate::sheet::MAX_KEY_FILE_BYTES;
+    let (dir, store) = store();
+    let id = store.generate(None).unwrap();
+    let text = fs::read_to_string(store.key_path(&id.0)).unwrap();
+    let padded = |total: usize, name: &str| -> PathBuf {
+        let path = dir.path().join(name);
+        fs::write(&path, format!("{text}{}", " ".repeat(total - text.len()))).unwrap();
+        path
+    };
+    assert_eq!(store.load(&padded(MAX_KEY_FILE_BYTES as usize, "at.key")).unwrap().fingerprint, id.0, "a file at the bound");
+    assert!(matches!(store.load(&padded(MAX_KEY_FILE_BYTES as usize + 1, "past.key")), Err(StoreError::KeyFile { error: KeyFileError::NotKeyFile, .. })));
+    let sparse = dir.path().join("sparse.key");
+    fs::File::create(&sparse).unwrap().set_len(64 << 20).unwrap();
+    assert_eq!(crate::sheet::read_key_file(&sparse).unwrap().len() as u64, MAX_KEY_FILE_BYTES + 1, "read no further than the byte past the bound");
+    #[cfg(unix)]
+    assert!(matches!(store.load(Path::new("/dev/zero")), Err(StoreError::Io { .. })), "a device is no key file");
+}

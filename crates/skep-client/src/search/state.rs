@@ -17,7 +17,9 @@
 //! 3. a part still BUILDING — the first build or a rebuild, the whole
 //!    published board read from the floor — is `Building`;
 //! 4. a part WIDENING — R90's fetch running over a range — is `Widening`;
-//! 5. a part past the ceiling — `seen > 0` — is `PastTheCeiling`;
+//! 5. a part past the ceiling — `seen > 0`, or a document the consumer
+//!    refused past it before reading it whole, as a range records it — is
+//!    `PastTheCeiling`;
 //! 6. a range whose bare-row count stands withholds `complete`: `Unplaced`;
 //! 7. a part that met `history_reclaimed` at this open and kept its file is
 //!    `ResumedFromTheFloor`;
@@ -28,8 +30,16 @@
 //! process holds the feeder's lock (`search.md` §5.6, RULED refuse for v1).
 //! Nothing in any arm names a file, a path or a principal's directory.
 
+use std::collections::BTreeSet;
+
 use skep_address::Address;
 use skep_search::{ChainAt, Header, Revision, Stats};
+
+/// The reason recorded beside its range for a document whose unit the
+/// consumer refused past [`skep_search::CEILING_BYTES`] before reading it
+/// whole (`search.md` §7.4) — the shell's own word, written by the consumer
+/// and counted here, so the one spelling serves both.
+pub(super) const PAST_THE_CEILING: &str = "unit_past_the_ceiling";
 
 /// A range of a feed, as the state names it: the board's whole feed — the
 /// published index's one range — or the prefix a widening named as `under=`.
@@ -154,9 +164,13 @@ pub enum State {
         /// How many changes on it could not be placed.
         count: u64,
     },
-    /// The crate's typed refusal past its stated limit (`search.md` §7.4):
-    /// `held` and `seen` in UNITS, `limit` in BYTES; `seen` persisted in the
-    /// file so the arm composes after a restart as before it.
+    /// The typed refusal past the stated limit (`search.md` §7.4): `held` and
+    /// `seen` in UNITS, `limit` in BYTES. `seen` counts the units the crate
+    /// refused at its merge and the documents the consumer refused before
+    /// reading them whole — an extent, or a resident charge, past the
+    /// ceiling — each persisted in the file, the crate's count in the body
+    /// and the consumer's as `unit_past_the_ceiling` refusals beside the
+    /// ranges, so the arm composes after a restart as before it.
     PastTheCeiling {
         /// The units the index holds.
         held: usize,
@@ -237,12 +251,9 @@ impl State {
         if let Some(range) = live.iter().find_map(|f| f.widening.clone()) {
             return State::Widening { range };
         }
-        if let Some(facts) = live.iter().find(|f| f.stats.seen > 0) {
-            return State::PastTheCeiling {
-                held: facts.stats.units,
-                seen: facts.stats.seen,
-                limit: facts.stats.ceiling,
-            };
+        let past = |f: &Facts<'_>| f.stats.seen.saturating_add(refused_past_the_ceiling(f.header));
+        if let Some((facts, seen)) = live.iter().map(|f| (f, past(f))).find(|(_, seen)| *seen > 0) {
+            return State::PastTheCeiling { held: facts.stats.units, seen, limit: facts.stats.ceiling };
         }
         for facts in &live {
             if let Some(range) = facts.header.ranges.iter().find(|r| r.bare_rows > 0) {
@@ -259,4 +270,12 @@ impl State {
         let floor = live.iter().find_map(|f| f.header.floor);
         State::Complete { as_of, floor }
     }
+}
+
+/// The documents the consumer refused past the ceiling before reading them
+/// whole, as the header's ranges record them — each once, whichever ranges
+/// recorded it.
+fn refused_past_the_ceiling(header: &Header) -> u64 {
+    let docs: BTreeSet<&Address> = header.ranges.iter().flat_map(|r| &r.refusals).filter(|r| r.reason == PAST_THE_CEILING).map(|r| &r.doc).collect();
+    docs.len() as u64
 }

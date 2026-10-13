@@ -57,7 +57,10 @@ pub enum Landing {
 
 /// THE ONE LANDING RULE over the band's pairs: `span` the hit's span at
 /// `member` in V-ordinals, `pairs` the `compare` answer's — each a shared
-/// run at `u1` in the member and `u2` in the head. Pure; no read.
+/// run at `u1` in the member and `u2` in the head. Pure; no read. The
+/// ordinals are the board's word, so every sum saturates at the top of the
+/// range rather than wrap: no conforming answer reaches it, and a hostile
+/// one lands at its edge.
 pub fn land(span: Span, pairs: &[Correspondence]) -> Landing {
     let end = span.start.saturating_add(span.width);
     let mut overlapping: Vec<&Correspondence> = pairs
@@ -70,7 +73,7 @@ pub fn land(span: Span, pairs: &[Correspondence]) -> Landing {
     // The pair covering the span's first byte — of several, the first in
     // the head's order — else the first pair in the head's order.
     let at = match overlapping.iter().filter(|p| p.u1 <= span.start).min_by_key(|p| p.u2) {
-        Some(p) => p.u2 + (span.start - p.u1),
+        Some(p) => p.u2.saturating_add(span.start - p.u1),
         None => overlapping.iter().min_by_key(|p| p.u2).map(|p| p.u2).unwrap_or(0),
     };
     // Whole and contiguous, in order: walk the pairs by their member start,
@@ -89,16 +92,16 @@ pub fn land(span: Span, pairs: &[Correspondence]) -> Landing {
             break;
         }
         let clipped_start = p.u1.max(cursor);
-        let clipped_end = (p.u1 + p.width).min(end);
+        let clipped_end = p.u1.saturating_add(p.width).min(end);
         if clipped_end <= clipped_start {
             continue;
         }
-        let head_at = p.u2 + (clipped_start - p.u1);
+        let head_at = p.u2.saturating_add(clipped_start - p.u1);
         if head_cursor.is_some_and(|h| h != head_at) {
             whole = false;
             break;
         }
-        head_cursor = Some(head_at + (clipped_end - clipped_start));
+        head_cursor = Some(head_at.saturating_add(clipped_end - clipped_start));
         cursor = clipped_end;
     }
     if whole && cursor >= end {

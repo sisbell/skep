@@ -199,28 +199,77 @@ pub(crate) fn content_extent(v: &Value) -> u64 {
         .unwrap_or(0)
 }
 
-/// THE I-MAP of an `image` answer over content ordinals `1 ..`: every
-/// content I-address the region arranges, beside its V-ordinal, in V order —
-/// AUTH-2.114's I→V inversion, the deposit's read-back and the admitted read
-/// alike. `None` where a run does not parse: one unreadable run would shift
-/// every ordinal after it onto another position's bytes, so the map is whole
-/// or absent. Both readers reach a record's bytes THROUGH the arrangement
-/// and never by identity (`retrieve_i`): an atom a later edit un-arranged
-/// must fail the read-back (AUTH-2.115).
-pub(crate) fn i_map(v: &Value) -> Option<Vec<(String, u64)>> {
-    let mut map = Vec::new();
-    let mut ordinal: u64 = 1;
-    for run in v["runs"].as_array().into_iter().flatten() {
-        let start = run["i_start"].as_str()?;
-        let width: u64 = run["width"].as_str()?.parse().ok()?;
-        let (prefix, last) = start.rsplit_once('.')?;
-        let first: u64 = last.parse().ok()?;
-        for k in 0..width {
-            map.push((format!("{prefix}.{}", first + k), ordinal));
-            ordinal += 1;
-        }
+/// The most runs an `image` answer carries — M8's run budget,
+/// `MAX_IMAGE_RUNS` (wire.md §Rejection codes: a read past it is
+/// `image_too_large`). The number alone is mirrored here, as the delivery
+/// budget is beside the feed consumer.
+pub(crate) const MAX_IMAGE_RUNS: usize = 1 << 12;
+
+/// One run of an `image` answer: `width` content I-addresses from `first` —
+/// each the run's `prefix` and one ordinal — arranged from V-ordinal
+/// `ordinal` on, in order.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct IRun {
+    /// The I-addresses' components before their last.
+    pub(crate) prefix: String,
+    /// The first I-address's last component.
+    pub(crate) first: u64,
+    /// The I-addresses the run holds.
+    pub(crate) width: u64,
+    /// The V-ordinal the run's first I-address is arranged at.
+    pub(crate) ordinal: u64,
+}
+
+/// THE I-MAP of an `image` answer over content ordinals `1 ..= extent`, as
+/// its RUNS in V order — AUTH-2.114's I→V inversion, the deposit's read-back
+/// and the admitted read alike; [`ordinal_of`] answers an I-address's
+/// V-ordinal off it. `None` for a document that is no `runs` answer, a run
+/// that does not parse, more runs than the run budget, a run whose last
+/// I-address passes the range, or widths that arrange more positions than
+/// the extent asked: one unreadable run would shift every ordinal after it
+/// onto another position's bytes, so the map is whole or absent, and its
+/// size is the runs' whatever widths the board names. Both readers reach a
+/// record's bytes THROUGH the arrangement and never by identity
+/// (`retrieve_i`): an atom a later edit un-arranged must fail the read-back
+/// (AUTH-2.115).
+pub(crate) fn i_runs(v: &Value, extent: u64) -> Option<Vec<IRun>> {
+    if v["resp"].as_str() != Some("runs") {
+        return None;
     }
-    Some(map)
+    let runs = v["runs"].as_array()?;
+    if runs.len() > MAX_IMAGE_RUNS {
+        return None;
+    }
+    let mut arranged: u64 = 0;
+    let mut out = Vec::with_capacity(runs.len());
+    for run in runs {
+        let (prefix, last) = run["i_start"].as_str()?.rsplit_once('.')?;
+        let first = natural(last)?;
+        let width = natural(run["width"].as_str()?)?;
+        // The run's last I-address, `first + width - 1`, within the range.
+        first.checked_add(width.saturating_sub(1))?;
+        let ordinal = arranged.checked_add(1)?;
+        arranged = arranged.checked_add(width).filter(|a| *a <= extent)?;
+        out.push(IRun { prefix: prefix.to_string(), first, width, ordinal });
+    }
+    Some(out)
+}
+
+/// The V-ordinal `atom` is arranged at among `runs`, in V order — the first
+/// run holding it — or `None` where no run does.
+pub(crate) fn ordinal_of(runs: &[IRun], atom: &str) -> Option<u64> {
+    let (prefix, last) = atom.rsplit_once('.')?;
+    let n = natural(last)?;
+    runs.iter()
+        .find(|r| r.prefix == prefix && r.first <= n && n - r.first < r.width)
+        .and_then(|r| r.ordinal.checked_add(n - r.first))
+}
+
+/// A natural in its one spelling — decimal digits, no sign, no leading zero
+/// — within `u64`; any other text `None`.
+fn natural(text: &str) -> Option<u64> {
+    let canonical = !text.is_empty() && text.bytes().all(|b| b.is_ascii_digit()) && (text == "0" || !text.starts_with('0'));
+    canonical.then(|| text.parse().ok()).flatten()
 }
 
 #[cfg(test)]
@@ -259,14 +308,35 @@ mod tests {
     #[test]
     fn the_i_map_is_whole_or_absent() {
         let one = json!({"as_of":9,"resp":"runs","runs":[{"i_start":"1.0.1.0.1.0.1.1","width":"5"}]});
-        let map = i_map(&one).expect("a whole map");
-        assert_eq!(map.len(), 5);
-        assert_eq!(map[0], ("1.0.1.0.1.0.1.1".to_string(), 1));
-        assert_eq!(map[4], ("1.0.1.0.1.0.1.5".to_string(), 5));
+        let runs = i_runs(&one, 5).expect("a whole map");
+        assert_eq!((ordinal_of(&runs, "1.0.1.0.1.0.1.1"), ordinal_of(&runs, "1.0.1.0.1.0.1.5")), (Some(1), Some(5)));
+        assert_eq!((ordinal_of(&runs, "1.0.1.0.1.0.1.6"), ordinal_of(&runs, "1.0.1.0.1.0.2.1")), (None, None));
         let two = json!({"resp":"runs","runs":[{"i_start":"1.0.1.0.1.0.1.4","width":"1"},{"i_start":"1.0.1.0.1.0.1.9","width":"2"}]});
-        assert_eq!(i_map(&two).expect("a whole map"), [("1.0.1.0.1.0.1.4".to_string(), 1), ("1.0.1.0.1.0.1.9".to_string(), 2), ("1.0.1.0.1.0.1.10".to_string(), 3)]);
+        let runs = i_runs(&two, 3).expect("a whole map");
+        let ordinals: Vec<Option<u64>> = ["1.0.1.0.1.0.1.4", "1.0.1.0.1.0.1.9", "1.0.1.0.1.0.1.10", "1.0.1.0.1.0.1.5"].iter().map(|a| ordinal_of(&runs, a)).collect();
+        assert_eq!(ordinals, [Some(1), Some(2), Some(3), None]);
         let broken = json!({"resp":"runs","runs":[{"i_start":"1.0.1.0.1.0.1.1","width":"x"},{"i_start":"1.0.1.0.1.0.1.9","width":"1"}]});
-        assert_eq!(i_map(&broken), None);
-        assert_eq!(i_map(&json!({"resp":"runs","runs":[]})), Some(Vec::new()));
+        assert_eq!(i_runs(&broken, 5), None);
+        assert_eq!(i_runs(&json!({"resp":"runs","runs":[]}), 5), Some(Vec::new()));
+    }
+
+    /// The map's size is its runs' and never the widths' a board names: a
+    /// run past the extent asked, a run whose last I-address passes the
+    /// range, more runs than the run budget and a refusal each answer no map,
+    /// and a run as wide as the range answers its ordinal at once.
+    #[test]
+    fn the_i_map_is_bounded_by_its_runs_and_the_extent_asked() {
+        let wide = json!({"resp":"runs","runs":[{"i_start":"1.0.1.0.1.0.1.1","width":"18446744073709551615"}]});
+        assert_eq!(i_runs(&wide, 5), None, "a run past the extent asked");
+        let runs = i_runs(&wide, u64::MAX).expect("one run");
+        assert_eq!(runs.len(), 1);
+        assert_eq!(ordinal_of(&runs, "1.0.1.0.1.0.1.3"), Some(3));
+        let top = json!({"resp":"runs","runs":[{"i_start":"1.0.1.0.1.0.1.18446744073709551615","width":"2"}]});
+        assert_eq!(i_runs(&top, 5), None, "the run's last I-address past the range");
+        let many: Vec<Value> = (1..=MAX_IMAGE_RUNS as u64 + 1).map(|k| json!({"i_start": format!("1.0.1.0.1.0.1.{}", 2 * k), "width": "1"})).collect();
+        assert_eq!(i_runs(&json!({"resp":"runs","runs":many}), u64::MAX), None, "past the run budget");
+        assert_eq!(i_runs(&json!({"code":"image_too_large","op":"image","resp":"rejected"}), 5), None);
+        let padded = json!({"resp":"runs","runs":[{"i_start":"1.0.1.0.1.0.1.01","width":"1"}]});
+        assert_eq!(i_runs(&padded, 5), None, "a component off its one spelling");
     }
 }

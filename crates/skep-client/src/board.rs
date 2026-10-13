@@ -144,10 +144,14 @@ impl Health {
     }
 }
 
+/// The page a `GET /changes` serves where no `limit` is sent (wire.md §The
+/// change feed, Paging: "default 256").
+pub const DEFAULT_CHANGES_LIMIT: u64 = 256;
+
 /// One `GET /changes` page query (wire.md §The change feed): the fence,
 /// the two narrowings and the page's cap. `limit` is sent only where set —
-/// the route's default is 256 — so a `fits` answered on `malformed_changes`
-/// is re-asked with that limit.
+/// the route's default is [`DEFAULT_CHANGES_LIMIT`] — so a `fits` answered
+/// on `malformed_changes` is re-asked with that limit.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct ChangesQuery<'a> {
     /// `since=<position>`: the page is `(since, head]`.
@@ -779,9 +783,14 @@ impl Board {
     /// one caller in this crate; `changes_key` above stays the fence's one
     /// point query. The retention floor and the page budget's refusal are
     /// answers; a token-free read halts on the death signal (the module's
-    /// doc).
+    /// doc). Every answer moves its reader on, or is no answer the wire
+    /// gives (§The change feed, Paging): a page's `last` is never below
+    /// `since` and passes it wherever `more` stands, and a `fits` is a limit
+    /// of at least one row below the one asked — so a reader re-asking as
+    /// each answer says advances or shrinks every time.
     pub fn changes(&self, token: Option<&Token>, query: &ChangesQuery<'_>) -> Result<ChangesAnswer, Halt> {
         let req = Request::get(query.path());
+        let off_the_wire = |what: String| Halt::Dial(crate::dial::DialError::Response(format!("not a `/changes` answer: {what}")));
         match self.authed(token, req)? {
             Authed::Closed(_) if token.is_none() => Err(guest_closed()),
             Authed::Closed(_) => Ok(ChangesAnswer::Closed),
@@ -793,11 +802,19 @@ impl Board {
                         let changes = v["changes"].as_array().cloned().unwrap_or_default();
                         let last = v["last"].as_u64().unwrap_or(query.since);
                         let more = v["more"].as_bool().unwrap_or(false);
+                        if last < query.since || (more && last <= query.since) {
+                            return Err(off_the_wire(format!("a page from {} whose `last` is {last} with `more` {more}", query.since)));
+                        }
                         Ok(ChangesAnswer::Page(ChangesPage { changes, last, more }))
                     }
                     (410, Some("history_reclaimed")) => Ok(ChangesAnswer::HistoryReclaimed { floor: v["floor"].as_u64() }),
                     (400, Some("malformed_changes")) if v["fits"].as_u64().is_some() => {
-                        Ok(ChangesAnswer::TooLarge { fits: v["fits"].as_u64().unwrap_or(1) })
+                        let fits = v["fits"].as_u64().unwrap_or(0);
+                        let asked = query.limit.unwrap_or(DEFAULT_CHANGES_LIMIT);
+                        if fits == 0 || fits >= asked {
+                            return Err(off_the_wire(format!("a `fits` of {fits} for a page of {asked}")));
+                        }
+                        Ok(ChangesAnswer::TooLarge { fits })
                     }
                     _ => Err(transport_refused(&resp)),
                 }
@@ -908,7 +925,7 @@ impl Board {
 
 /// The death signal on a request that presented no token — no session's
 /// answer, so a fault of the board or the transport (wire.md §Sessions).
-fn guest_closed() -> Halt {
+pub(crate) fn guest_closed() -> Halt {
     Halt::face(
         "a token-free read met the death signal",
         "the board answered `Skepd-Session: closed` to a request that presented no token",

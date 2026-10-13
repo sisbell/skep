@@ -30,10 +30,14 @@ use std::time::Duration;
 use serde_json::Value;
 use skep_identity::{parse_record_value, BoardTerm, Enrollment, Fingerprint, HybridBlob, PublicKey};
 
-use crate::address::{document_of, parent_account};
-use crate::board::{answers, frames, AtAnswer, Board, ChangeKey, KeySet, KeySetAnswer, T_CLAIM, T_ENROLL, T_RETIRE};
+use crate::address::{document_of, parent_account, within_principal_depth};
+use crate::board::answers::IRun;
+use crate::board::{answers, frames, guest_closed, AtAnswer, Board, ChangeKey, KeySet, KeySetAnswer, T_CLAIM, T_ENROLL, T_RETIRE};
 use crate::halt::Halt;
 use crate::sign::RecordFrame;
+
+#[cfg(test)]
+mod tests;
 
 /// A credential record's kind.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -276,7 +280,9 @@ fn probe(board: &Board, at: u64, frame: &Value, link: &str) -> Result<Probe, Hal
             AtAnswer::HistoryReclaimed { floor } => return Ok(Probe::Reclaimed { floor }),
             AtAnswer::NotAPosition { nearest } => return Ok(Probe::NotAPosition { nearest }),
             AtAnswer::BeyondHead { .. } => return Ok(Probe::Absent),
-            AtAnswer::Closed => unreachable!("a token-free `op_at` halts on the death signal and never answers it"),
+            // A token-free `op_at` halts on the death signal itself; the arm
+            // answers the same halt rather than trust that it never comes.
+            AtAnswer::Closed => return Err(guest_closed()),
             AtAnswer::Busy => thread::sleep(Duration::from_millis(20 * (attempt + 1))),
         }
     }
@@ -288,7 +294,12 @@ fn probe(board: &Board, at: u64, frame: &Value, link: &str) -> Result<Probe, Hal
 }
 
 /// THE BISECTION (AUTH-5.68): the least position at which `find_links_ftt`
-/// returns the link, or `None` below the floor; the floor met, if any.
+/// returns the link, or `None` below the floor; the floor met, if any. A
+/// `nearest` the board answers — the greatest position at or below the one
+/// sent (wire.md §Reading history) — is taken only inside the range it was
+/// asked of, `(lo, mid]` in the loop and `(lo, head]` at the head, so every
+/// step halves the open range whatever the board answers and the read ends
+/// in at most 2·⌈log₂ head⌉ + 3 probes.
 fn position_of(board: &Board, frame: &Value, link: &str, head: u64) -> Result<(Option<u64>, Option<u64>), Halt> {
     // The lowest readable position first: a 410 names the floor.
     let mut floor: Option<u64> = None;
@@ -309,10 +320,15 @@ fn position_of(board: &Board, frame: &Value, link: &str, head: u64) -> Result<(O
     let mut hi = head;
     match probe(board, hi, frame, link)? {
         Probe::Present => {}
-        Probe::NotAPosition { nearest: Some(n) } => hi = n,
+        Probe::NotAPosition { nearest: Some(n) } if n > lo && n <= head => hi = n,
         _ => return Ok((None, floor)),
     }
-    while hi > lo + 1 {
+    // A floor at or past the head the board answered for: no position above
+    // it to bisect.
+    if lo >= hi {
+        return Ok((None, floor));
+    }
+    while hi - lo > 1 {
         let mid = lo + (hi - lo) / 2;
         match probe(board, mid, frame, link)? {
             Probe::Present => hi = mid,
@@ -322,7 +338,7 @@ fn position_of(board: &Board, frame: &Value, link: &str, head: u64) -> Result<(O
                 lo = mid;
             }
             Probe::NotAPosition { nearest } => match nearest {
-                Some(n) if n > lo => match probe(board, n, frame, link)? {
+                Some(n) if n > lo && n <= mid => match probe(board, n, frame, link)? {
                     Probe::Present => hi = n,
                     _ => lo = mid,
                 },
@@ -356,7 +372,12 @@ fn base_of(board: &Board, position: u64) -> Result<Option<u64>, Halt> {
 
 /// The set that opens `account` AS OF `at`: `key_set` at the account and,
 /// while empty, at each account above it (AUTH-4.30 (i)), at that position.
+/// The account is ω's prefix as the board named it; one deeper than the
+/// namespace delegates is unreadable here, never climbed.
 fn set_opening_at(board: &Board, account: &str, at: u64) -> Result<Option<KeySet>, Halt> {
+    if !within_principal_depth(account) {
+        return Ok(None);
+    }
     let mut acc = account.to_string();
     loop {
         match board.key_set_at(&acc, at)? {
@@ -370,23 +391,24 @@ fn set_opening_at(board: &Board, account: &str, at: u64) -> Result<Option<KeySet
     }
 }
 
-/// A home's I→V inversion (AUTH-2.114): every content I-address of the
-/// document, keyed to its V-ordinal, off `retrieve_doc_v_span_set` and
-/// `image` — empty where the I-map does not read whole, so the home's
-/// records read as unreadable and never as another position's bytes.
-fn inversion(board: &Board, home: &str) -> Result<HashMap<String, u64>, Halt> {
+/// A home's I→V inversion (AUTH-2.114): the runs its content I-addresses
+/// are arranged in, off `retrieve_doc_v_span_set` and `image` — at most the
+/// run budget's, whatever widths the board names — and none where the I-map
+/// does not read whole, so the home's records read as unreadable and never
+/// as another position's bytes.
+fn inversion(board: &Board, home: &str) -> Result<Vec<IRun>, Halt> {
     let extent = answers::content_extent(&board.guest(&frames::span_set(home))?);
     if extent == 0 {
-        return Ok(HashMap::new());
+        return Ok(Vec::new());
     }
     let image = board.guest(&frames::image(home, 1, extent))?;
-    Ok(answers::i_map(&image).unwrap_or_default().into_iter().collect())
+    Ok(answers::i_runs(&image, extent).unwrap_or_default())
 }
 
 /// The record atom's bytes at `atom` in `home`, through the inversion.
-fn atom_bytes(board: &Board, home: &str, inv: &HashMap<String, u64>, atom: &str) -> Result<Option<Vec<u8>>, Halt> {
-    let Some(ordinal) = inv.get(atom) else { return Ok(None) };
-    Ok(answers::first_atom(&board.guest(&frames::retrieve_v(home, *ordinal, 1))?))
+fn atom_bytes(board: &Board, home: &str, runs: &[IRun], atom: &str) -> Result<Option<Vec<u8>>, Halt> {
+    let Some(ordinal) = answers::ordinal_of(runs, atom) else { return Ok(None) };
+    Ok(answers::first_atom(&board.guest(&frames::retrieve_v(home, ordinal, 1))?))
 }
 
 /// The deposit's link addresses of `ty` naming `account`, in address order.
@@ -427,7 +449,7 @@ pub fn credential_records(board: &Board, account: &str, own: &[(Fingerprint, Pub
         }
     }
 
-    let mut inversions: HashMap<String, HashMap<String, u64>> = HashMap::new();
+    let mut inversions: HashMap<String, Vec<IRun>> = HashMap::new();
     let mut owners: HashMap<String, String> = HashMap::new();
     let mut records = Vec::new();
     for kind in [Kind::Enroll, Kind::Retire] {
@@ -558,168 +580,5 @@ fn hand_of(board: &Board, record: &Record, term: Option<BoardTerm>, own: &[(Fing
                 ChangeKey::HistoryReclaimed { .. } => Hand::Unreadable("below the feed's floor".into()),
             }),
         },
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use std::sync::Arc;
-
-    use serde_json::json;
-    use skep_identity::{canonical_record, SIG_ALGS};
-    use skep_signature::HybridSigner;
-
-    use super::*;
-    use crate::board::fake::{self, Fake};
-
-    const LINK: &str = "1.0.1.0.1.0.2.7";
-
-    /// A board's history over the committed positions `committed`, the
-    /// genesis at 0 beside them, its retention floor at `floor`, a link
-    /// committed at `p`: `/op-at` answers as the wire does — `410
-    /// history_reclaimed` below the floor, `400 not_a_position` naming the
-    /// nearest position under a gap, and otherwise the discovery, holding
-    /// the link from `p` on.
-    fn history(committed: Vec<u64>, floor: Option<u64>, p: u64) -> Arc<Fake> {
-        Fake::new(move |req| {
-            assert_eq!(req.path, "/op-at", "the bisection reads history alone");
-            let at = serde_json::from_slice::<Value>(&req.body).unwrap()["at"].as_u64().unwrap();
-            if floor.is_some_and(|f| at < f) {
-                return fake::json(410, json!({"error": "history_reclaimed", "floor": floor}));
-            }
-            if at == 0 || committed.contains(&at) {
-                let addrs: Vec<&str> = if at >= p { vec![LINK] } else { Vec::new() };
-                return fake::json(200, json!({"addrs": addrs, "as_of": at, "resp": "addrs"}));
-            }
-            let nearest = committed.iter().copied().filter(|c| *c <= at).max().unwrap_or(0);
-            fake::json(400, json!({"error": "not_a_position", "nearest": nearest}))
-        })
-    }
-
-    /// THE BISECTION (AUTH-5.68) as a law over generated histories — every
-    /// gapless history to 20 positions and two with gaps, every position the
-    /// link commits at, every retention floor or none: the answer is the
-    /// LEAST position at which the discovery returns the link where that lies
-    /// above the floor, and NONE where it lies at or below it — an answer,
-    /// never an exit, and no position asserted (§9 item 50) — in at most
-    /// 2·⌈log₂ head⌉ + 3 reads.
-    #[test]
-    fn the_bisection_finds_the_least_position_and_asserts_none_below_the_floor() {
-        let mut histories: Vec<Vec<u64>> = (1..=20).map(|head| (1..=head).collect()).collect();
-        histories.push(vec![1, 4, 5, 9, 12]);
-        histories.push(vec![2, 3, 7, 8, 15, 16]);
-        let frame = frames::find_links_ftt(T_ENROLL, "1.0.1");
-        let mut cases = 0;
-        for committed in histories {
-            let head = *committed.last().unwrap();
-            let bound = 2 * u64::from(head.next_power_of_two().trailing_zeros()) + 3;
-            for &p in &committed {
-                for floor in std::iter::once(None).chain(committed.iter().copied().map(Some)) {
-                    let fake = history(committed.clone(), floor, p);
-                    let found = position_of(&fake::board(&fake), &frame, LINK, head).expect("an answer, never an exit");
-                    let expected = match floor {
-                        Some(f) if p <= f => (None, Some(f)),
-                        _ => (Some(p), floor),
-                    };
-                    assert_eq!(found, expected, "{committed:?}, the link at {p}, the floor at {floor:?}");
-                    let reads = fake.sent.lock().unwrap().len() as u64;
-                    assert!(reads <= bound, "{reads} reads past {bound}: {committed:?}, the link at {p}, the floor at {floor:?}");
-                    cases += 1;
-                }
-            }
-        }
-        assert!(cases > 3000, "the family holds {cases} cases");
-    }
-
-    /// Below the retention floor neither a record's position nor its hand is
-    /// derivable, and the read ASSERTS NEITHER (§9 item 50), reading neither
-    /// the feed nor the set to try: an unsigned record read position-free,
-    /// and a signed one whose base is unreadable and which no key of this
-    /// store verifies, each answer `Unreadable`.
-    #[test]
-    fn below_the_floor_no_hand_is_asserted_and_no_read_is_made() {
-        let board = fake::board(&Fake::unread());
-        let key = |b: u8| HybridSigner::public_key(&crate::sign::signer_from_seed(&[b; 32])).clone();
-        let own = [(Fingerprint::of(&key(4)), key(4))];
-        let term = Some(BoardTerm { log_position: 12, chain: [7; 32] });
-        let unsigned = enrollment("1.0.1.0.1.0.2.1", vec![Enrollment::new(key(1), true, Some("paper".into())).unwrap()]);
-        let mut signed = enrollment("1.0.1.0.1.0.2.2", vec![Enrollment::new(key(2), false, Some("phone".into())).unwrap()]);
-        // A hybrid blob of a row's width, which no key of this store verifies.
-        signed.sig = Some("ab".repeat(SIG_ALGS[0].sig_len()));
-        for record in [unsigned, signed] {
-            let hand = hand_of(&board, &record, term, &own, None).expect("no read, so no fault");
-            assert!(matches!(hand, Hand::Unreadable(_)), "{}: {hand:?}", record.link);
-        }
-    }
-
-    /// A `sig` of no row's width — the classical 64 bytes, here — is no hybrid
-    /// blob (skep-identity's `HybridBlob::parse_hex`), so no key could verify
-    /// it: its hand is `NoKeyVerifies`, answered before the set as of its base
-    /// is read, where a blob of a row's width would read that set to try.
-    #[test]
-    fn a_sig_of_no_rows_width_is_verified_by_no_key_and_reads_nothing() {
-        let board = fake::board(&Fake::unread());
-        let key = |b: u8| HybridSigner::public_key(&crate::sign::signer_from_seed(&[b; 32])).clone();
-        let own = [(Fingerprint::of(&key(4)), key(4))];
-        let term = Some(BoardTerm { log_position: 12, chain: [7; 32] });
-        let mut classical = enrollment("1.0.1.0.1.0.2.2", vec![Enrollment::new(key(2), false, None).unwrap()]);
-        classical.sig = Some("ab".repeat(64));
-        let hand = hand_of(&board, &classical, term, &own, Some(19)).expect("no read, so no fault");
-        assert_eq!(hand, Hand::NoKeyVerifies);
-    }
-
-    #[test]
-    fn addresses_order_by_component() {
-        let mut v = vec!["1.0.1.0.1.0.2.10".to_string(), "1.0.1.0.1.0.2.2".to_string()];
-        v.sort_by_cached_key(|a| components(a));
-        assert_eq!(v, ["1.0.1.0.1.0.2.2", "1.0.1.0.1.0.2.10"]);
-    }
-
-    /// An enrollment record of `entries` at `link`.
-    fn enrollment(link: &str, entries: Vec<Enrollment>) -> Record {
-        let sigless = canonical_record(&entries, None);
-        Record {
-            kind: Kind::Enroll,
-            link: link.into(),
-            home: "1.0.1.0.1".into(),
-            home_account: "1.0.1".into(),
-            subject: "1.0.1".into(),
-            atom: format!("{link}.1"),
-            bytes: sigless.clone().into_bytes(),
-            sigless,
-            sig: None,
-            enrolled: entries,
-            retired: Vec::new(),
-            position: None,
-            base: None,
-            hand: Hand::Bare,
-            anchor_grade: false,
-        }
-    }
-
-    /// AUTH-5.69 — a key's label is the one on the record that FIRST enrolled
-    /// it, and `None` — never an empty string — where that record carried
-    /// none, whatever a later record names it.
-    #[test]
-    fn a_label_is_the_first_enrolling_records_and_none_where_it_carried_none() {
-        let key = |b: u8| HybridSigner::public_key(&crate::sign::signer_from_seed(&[b; 32])).clone();
-        let (labelled, bare) = (key(1), key(2));
-        let records = Records {
-            account: "1.0.1".into(),
-            records: vec![
-                enrollment("1.0.1.0.1.0.2.1", vec![Enrollment::new(labelled.clone(), true, Some("paper".into())).unwrap(), Enrollment::new(bare.clone(), false, None).unwrap()]),
-                enrollment("1.0.1.0.1.0.2.2", vec![Enrollment::new(bare.clone(), false, Some("named later".into())).unwrap()]),
-            ],
-            head: 9,
-            floor: None,
-            claim_entry: None,
-            claimed: false,
-        };
-        assert_eq!(records.label_of(&Fingerprint::of(&labelled)).as_deref(), Some("paper"));
-        assert_eq!(records.enrollment_of(&Fingerprint::of(&bare)).map(|r| r.link.as_str()), Some("1.0.1.0.1.0.2.1"), "the record that FIRST enrolled it");
-        assert!(records.enrollment_of(&Fingerprint::of(&key(3))).is_none());
-        assert_eq!(records.label_of(&Fingerprint::of(&bare)), None);
-        assert_eq!(records.label_of_hand(&Hand::Key(Fingerprint::of(&bare))), None);
-        assert_eq!(records.label_of(&Fingerprint::of(&key(3))), None, "a key no record enrolled");
     }
 }

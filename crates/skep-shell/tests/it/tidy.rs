@@ -7,8 +7,11 @@
 //! path, a brace group's members each read joined to the path before it —
 //! is declared ABOVE that file's own module in `src/lib.rs`, so the modules
 //! stand in the one order the root's map lists them in and no edge between
-//! two of them runs upward. A path to an item of the root (`crate::Talk`)
-//! names no module. Exempt: `lib.rs` itself (the tree, not an import);
+//! two of them runs upward. A path to an item the root DEFINES
+//! (`crate::Talk`) names no module; a path to one the root RE-EXPORTS
+//! (`crate::Shell`, brought in by `pub use shell::…`) names the module it is
+//! brought from, so a re-export is no way around the order. Exempt:
+//! `lib.rs` itself (the tree, not an import);
 //! comments, doc links included; and tests — a `tests.rs` file, or
 //! everything from an inline `mod tests {` on, which may reach whatever
 //! they test. An inline test module is its file's last item, where
@@ -61,6 +64,7 @@ const SHELL_PUBLIC: &[&str] = &[
 fn every_module_names_only_modules_declared_above_it() {
     let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
     let order: Vec<String> = declared(&src).into_iter().map(|(module, _)| module).collect();
+    let reexports = reexported(&src);
     let mut files = Vec::new();
     rust_files(&src, &mut files);
     files.sort();
@@ -82,7 +86,7 @@ fn every_module_names_only_modules_declared_above_it() {
         }
         let code: Vec<(usize, &str)> = code_lines(&text).collect();
         for (n, named_path) in named_paths(&code) {
-            let Some(target) = resolve(&module, &named_path) else { continue };
+            let Some(target) = resolve(&module, &named_path, &reexports) else { continue };
             let Some(named) = target.split("::").next().filter(|m| !m.is_empty() && *m != own) else { continue };
             match order.iter().position(|m| m == named) {
                 Some(r) if r < rank => {}
@@ -160,14 +164,44 @@ fn declared(src: &Path) -> Vec<(String, bool)> {
     declared
 }
 
+/// The items `src/lib.rs` re-exports, each with the module it is brought
+/// from: `pub use events::{Event, EventBus};` gives `Event` and `EventBus` in
+/// `events`, and `use a::B as C;` gives `C` in `a`. A `use` of no module
+/// `src/lib.rs` declares (`std::…`) gives nothing.
+fn reexported(src: &Path) -> Vec<(String, String)> {
+    let declared: Vec<String> = declared(src).into_iter().map(|(module, _)| module).collect();
+    let text = std::fs::read_to_string(src.join("lib.rs")).unwrap();
+    let mut out = Vec::new();
+    for line in text.lines() {
+        let line = line.trim();
+        let Some(rest) = ["pub use ", "pub(crate) use ", "use "].iter().find_map(|p| line.strip_prefix(p)) else { continue };
+        let Some((module, items)) = rest.trim_end_matches(';').split_once("::") else { continue };
+        if !declared.iter().any(|m| m == module) {
+            continue;
+        }
+        let items = items.trim_start_matches('{').trim_end_matches('}');
+        for item in items.split(',').map(str::trim).filter(|i| !i.is_empty()) {
+            let name = item.rsplit(" as ").next().unwrap_or(item).rsplit("::").next().unwrap_or(item);
+            out.push((name.trim().to_string(), module.to_string()));
+        }
+    }
+    out
+}
+
 /// One path as written in `module`, resolved to the in-crate module path it
 /// names: `crate::` starts at the root, `self::` at `module`, each `super::`
-/// one step up; the leading lowercase segments after that name the module.
-/// `None` for a path outside this crate.
-fn resolve(module: &str, named_path: &str) -> Option<String> {
+/// one step up; the leading lowercase segments after that name the module,
+/// and an item the root re-exports (`reexports`) names the module it is
+/// brought from. `None` for a path outside this crate.
+fn resolve(module: &str, named_path: &str, reexports: &[(String, String)]) -> Option<String> {
     let mut segments = named_path.split("::").filter(|s| !s.is_empty()).peekable();
     let mut base: Vec<&str> = match segments.next() {
-        Some("crate") => Vec::new(),
+        Some("crate") => {
+            if let Some((_, from)) = segments.peek().and_then(|item| reexports.iter().find(|(name, _)| name == item)) {
+                return Some(from.clone());
+            }
+            Vec::new()
+        }
         Some("self") => module.split("::").collect(),
         Some("super") => {
             let mut up: Vec<&str> = module.split("::").collect();

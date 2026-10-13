@@ -19,7 +19,10 @@
 //! A session the page closes is read once more here, to the board's head
 //! under its still-standing token, before its close answers
 //! ([`Feed::closing`]): every `feed` row of a session precedes its
-//! `session-died`, however far this thread trails the commits.
+//! `session-died`, however far this thread trails the commits. The board's
+//! held bursts are serviced here too: `writes.halted` read at each tick, and
+//! THE PROBE (`Holds::service`) every `PROBE_CADENCE`, measured from the
+//! last probe whatever woke the thread between.
 //!
 //! THE `feed` UPDATE's SHAPE — THIS CRATE's DEFINITION (S-24 (b), the
 //! shell's): the `/changes` entry's members VERBATIM (`at`, `op`, `docs`,
@@ -38,7 +41,7 @@ use std::path::PathBuf;
 use std::sync::mpsc::{channel, Receiver, RecvTimeoutError, Sender};
 use std::sync::Arc;
 use std::thread;
-use std::time::Duration;
+use std::time::Instant;
 
 use serde_json::{json, Value};
 use skep_client::board::{ChangesAnswer, ChangesQuery, Token};
@@ -49,16 +52,17 @@ use skep_client::{Board, Origin};
 use skep_search::{GrantKind, Hit, Kind, Mark, MarkKind, Rung, Standing};
 
 use crate::events::{EventBus, DAEMON, FEED, INDEX, MODE};
+use crate::hold::{Holds, PROBE_CADENCE};
 use crate::refusal::{Name, Refusal};
 use crate::sessions::{SessionEntry, Sessions, Supplements};
 use crate::Talk;
 
 /// One board of the shell: its reference, its origin and the board dialed
-/// through the shell's one logging dialer.
+/// through the shell's one logging dialer — shared with the board's holds.
 pub struct BoardEntry {
     pub reference: String,
     pub origin: Origin,
-    pub board: Board,
+    pub board: Arc<Board>,
 }
 
 impl std::fmt::Debug for BoardEntry {
@@ -114,9 +118,8 @@ impl Feed {
     /// The two threads for `entry`, the consumer over `data_dir/index/`;
     /// `reopen_store` the store the restart arm re-opens a session under;
     /// `holds` the held-burst holds the worker drives — the `writes.halted`
-    /// read at each tick and THE PROBE on a timed wake every `cadence`.
-    #[allow(clippy::too_many_arguments)]
-    pub fn spawn(entry: Arc<BoardEntry>, bus: Arc<EventBus>, sessions: Arc<Sessions>, reopen_store: Option<Arc<FileStore>>, data_dir: PathBuf, talk: Talk, holds: Arc<crate::Holds>, cadence: Duration) -> Feed {
+    /// read at each tick and THE PROBE every `PROBE_CADENCE`.
+    pub fn spawn(entry: Arc<BoardEntry>, bus: Arc<EventBus>, sessions: Arc<Sessions>, reopen_store: Option<Arc<FileStore>>, data_dir: PathBuf, talk: Talk, holds: Arc<Holds>) -> Feed {
         let (tx, rx) = channel();
         // The stream's reader: each commit a tick, a failed connect said.
         // The stream borrows the board from the `Arc` the thread holds, so
@@ -137,7 +140,7 @@ impl Feed {
             }
         });
         let stream_stop = stop_rx.recv().expect("the reader sends its stopper before it reads");
-        let worker = thread::spawn(move || Worker::run(entry, bus, sessions, reopen_store, data_dir, talk, holds, cadence, rx));
+        let worker = thread::spawn(move || Worker::run(entry, bus, sessions, reopen_store, data_dir, talk, holds, rx));
         Feed { cmds: tx, stream_stop, worker: Some(worker) }
     }
 
@@ -200,10 +203,7 @@ struct Worker<'b> {
     data_dir: PathBuf,
     talk: Talk,
     /// The held-burst holds this worker drives.
-    holds: Arc<crate::Holds>,
-    /// THE PROBE's cadence (`hold::PROBE_CADENCE`): the recv timeout that wakes
-    /// the worker to service held bursts even when no commit ticks.
-    cadence: Duration,
+    holds: Arc<Holds>,
     consumer: Option<Consumer<'b>>,
     published_since: u64,
     drafts_since: HashMap<u64, u64>,
@@ -221,7 +221,7 @@ struct Worker<'b> {
 
 impl<'b> Worker<'b> {
     #[allow(clippy::too_many_arguments)]
-    fn run(entry: Arc<BoardEntry>, bus: Arc<EventBus>, sessions: Arc<Sessions>, reopen_store: Option<Arc<FileStore>>, data_dir: PathBuf, talk: Talk, holds: Arc<crate::Holds>, cadence: Duration, rx: Receiver<Cmd>) {
+    fn run(entry: Arc<BoardEntry>, bus: Arc<EventBus>, sessions: Arc<Sessions>, reopen_store: Option<Arc<FileStore>>, data_dir: PathBuf, talk: Talk, holds: Arc<Holds>, rx: Receiver<Cmd>) {
         let entry_arc = entry;
         let entry: &BoardEntry = &entry_arc;
         let head = entry.board.health().map(|h| h.log_position()).unwrap_or(0);
@@ -233,7 +233,6 @@ impl<'b> Worker<'b> {
             data_dir,
             talk,
             holds,
-            cadence,
             consumer: None,
             published_since: head,
             drafts_since: HashMap::new(),
@@ -246,12 +245,15 @@ impl<'b> Worker<'b> {
         worker.mount();
         worker.read_mode();
         worker.emit_index();
-        // The loop wakes on each command, and on a timeout every `cadence` to
-        // SERVICE held bursts — the probe (§3c.4): a poisoned, halted, stopped
+        // THE PROBE (§3c.4) has a deadline of its own: the loop wakes on each
+        // command and at the deadline, and services the held bursts once the
+        // deadline has passed, whatever woke it — a poisoned, halted, stopped
         // or unreachable board commits nothing, so `Cmd::Tick` alone never
-        // ends such a hold.
+        // ends such a hold, and a board that keeps committing must not starve
+        // the probe either.
+        let mut next_probe = Instant::now() + PROBE_CADENCE;
         loop {
-            match rx.recv_timeout(worker.cadence) {
+            match rx.recv_timeout(next_probe.saturating_duration_since(Instant::now())) {
                 Ok(Cmd::Tick(position)) => worker.tick(position),
                 Ok(Cmd::Unreachable(text)) => worker.unreachable(&text),
                 Ok(Cmd::Widen(entry)) => worker.widen(&entry),
@@ -270,8 +272,12 @@ impl<'b> Worker<'b> {
                     let _ = reply.send(());
                     return;
                 }
-                Err(RecvTimeoutError::Timeout) => worker.holds.service(&worker.entry.reference),
+                Err(RecvTimeoutError::Timeout) => {}
                 Err(RecvTimeoutError::Disconnected) => break,
+            }
+            if Instant::now() >= next_probe {
+                worker.holds.service(&worker.entry.reference);
+                next_probe = Instant::now() + PROBE_CADENCE;
             }
         }
         worker.close();
@@ -448,7 +454,7 @@ impl<'b> Worker<'b> {
         let Ok(health) = self.entry.board.health() else { return };
         // ONE member more read per tick (§3c.4): `writes.halted` tells the hold,
         // a hold `halted` beginning at the first `true`.
-        self.holds.note_health(&self.entry.reference, health.body["writes"]["halted"].as_bool().unwrap_or(false), health.log_position());
+        self.holds.note_health(&self.entry.reference, health.body["writes"]["halted"].as_bool().unwrap_or(false));
         let mode = Mode::of(&health);
         if self.last_mode != Some(mode) {
             let first = self.last_mode.is_none();

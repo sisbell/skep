@@ -135,10 +135,11 @@ fn i_addr_at(i_start: &str, k: u64) -> Option<String> {
     Some(format!("{prefix}.{}", first.checked_add(k)?))
 }
 
-/// The wire's `values` as the entry body's value sequence: a string and a
-/// `{"hex"}` mint one value per byte, an `{"atom"}` and an `{"atom_hex"}`
-/// one composite value (wire.md §Value encodings).
-fn values_of(values: &Value) -> Result<Vec<Vec<u8>>, Halt> {
+/// The wire's `values` as the entry body's value sequence — the value at each
+/// position the frame fills: a string and a `{"hex"}` mint one value per
+/// byte, an `{"atom"}` and an `{"atom_hex"}` one composite value (wire.md
+/// §Value encodings).
+pub fn values_of(values: &Value) -> Result<Vec<Vec<u8>>, Halt> {
     let bad = || fault("the frame's `values` are not the wire's forms", "a value is a string, `{\"hex\"}`, `{\"atom\"}` or `{\"atom_hex\"}`");
     let mut out = Vec::new();
     for v in values.as_array().ok_or_else(bad)? {
@@ -159,6 +160,30 @@ fn values_of(values: &Value) -> Result<Vec<Vec<u8>>, Halt> {
         }
     }
     Ok(out)
+}
+
+/// A delivery's items as the value at each position they deliver, the
+/// inverse of [`values_of`]: a `content` text and a `hex` item one value per
+/// byte (adjacent text arrives as one item), an `atom` and an `atom_hex` one
+/// composite value. An item no value spells — a withheld run, a reference, a
+/// `hex` that does not decode, one this shell does not know — is the error.
+pub fn delivered_values(delivery: &Value) -> Result<Vec<Vec<u8>>, Value> {
+    let mut positions = Vec::new();
+    for item in delivery["items"].as_array().into_iter().flatten() {
+        let unread = || item.clone();
+        if let Some(text) = item["content"].as_str() {
+            positions.extend(text.bytes().map(|b| vec![b]));
+        } else if let Some(h) = item["hex"].as_str() {
+            positions.extend(decode_hex(h).ok_or_else(unread)?.into_iter().map(|b| vec![b]));
+        } else if let Some(a) = item["atom"].as_str() {
+            positions.push(a.as_bytes().to_vec());
+        } else if let Some(h) = item["atom_hex"].as_str() {
+            positions.push(decode_hex(h).ok_or_else(unread)?);
+        } else {
+            return Err(unread());
+        }
+    }
+    Ok(positions)
 }
 
 /// Lowercase or uppercase hex decoded, `None` where it is none.
@@ -237,23 +262,12 @@ impl Composer<'_> {
             }
         }
         let delivery = self.read(&frames::retrieve_v(origin, 1, extent))?;
-        let mut positions: Vec<Vec<u8>> = Vec::new();
-        for item in delivery["items"].as_array().into_iter().flatten() {
-            if let Some(text) = item["content"].as_str() {
-                positions.extend(text.bytes().map(|b| vec![b]));
-            } else if let Some(h) = item["hex"].as_str() {
-                positions.extend(decode_hex(h).ok_or_else(|| fault("a `hex` item did not decode", item.to_string()))?.into_iter().map(|b| vec![b]));
-            } else if let Some(a) = item["atom"].as_str() {
-                positions.push(a.as_bytes().to_vec());
-            } else if let Some(h) = item["atom_hex"].as_str() {
-                positions.push(decode_hex(h).ok_or_else(|| fault("an `atom_hex` item did not decode", item.to_string()))?);
-            } else {
-                return Err(fault(
-                    format!("a position of {origin} cannot be read back for the shot's body"),
-                    format!("the delivery holds an item of a kind the composer cannot spell — a withheld run, a reference, or one it does not know: {item}"),
-                ));
-            }
-        }
+        let positions = delivered_values(&delivery).map_err(|item| {
+            fault(
+                format!("a position of {origin} cannot be read back for the shot's body"),
+                format!("the delivery holds an item the composer cannot spell as values — a withheld run, a reference, a hex that does not decode, or one it does not know: {item}"),
+            )
+        })?;
         if positions.len() != addrs.len() {
             return Err(fault(format!("{origin}'s delivery and its image disagree on its extent"), format!("{} positions delivered against {} addresses imaged", positions.len(), addrs.len())));
         }
@@ -438,5 +452,19 @@ mod tests {
         assert!(!wants_attest(&json!({"op": "delete"})) && !wants_attest(&json!({})));
         let span = extent_span("1.0.1.0.1.0.1.4", 3).unwrap();
         assert_eq!((span.start().to_string(), span.width().to_string()), ("1.0.1.0.1.0.1.4".to_string(), "0.0.0.0.0.0.0.3".to_string()));
+    }
+
+    /// A delivery reads back as the values a frame spells them in: adjacent
+    /// text arrives as ONE item and is one value per byte, as the frame's
+    /// string was; a withheld run, or a `hex` that does not decode, is no
+    /// value and is answered as the item that stopped the read.
+    #[test]
+    fn a_delivery_reads_back_as_the_values_its_frame_spelled() {
+        let frame = json!(["he", "llo", {"hex": "c328"}, {"atom": "one"}, {"atom_hex": "00ff"}]);
+        let delivery = json!({"resp": "delivery", "items": [{"content": "hello"}, {"hex": "c328"}, {"atom": "one"}, {"atom_hex": "00ff"}]});
+        assert_eq!(delivered_values(&delivery).unwrap(), values_of(&frame).unwrap());
+        let withheld = json!({"withheld": {"width": "3"}});
+        assert_eq!(delivered_values(&json!({"items": [{"content": "a"}, withheld]})), Err(withheld));
+        assert_eq!(delivered_values(&json!({"items": [{"hex": "zz"}]})), Err(json!({"hex": "zz"})));
     }
 }

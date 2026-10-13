@@ -8,7 +8,10 @@
 //! shell's `session` call and the restart arm's silent re-open (AUTH-5.31)
 //! share one: the BARE bind as the claimant on the permissive board, and
 //! the SIGNED content-scoped handshake behind AUTH-5.65's pre-check, each
-//! refusal under the armed name the row spells.
+//! refusal under the armed name the row spells. A write under a session
+//! that holds a key carries the attest that key signs
+//! ([`SessionEntry::attest`]), whichever hand sends it — a call's `op`, or
+//! the held-burst resend's.
 //!
 //! THE END ([`Sessions::end`]): a death signal is met by two hands — the
 //! shell, when a call's token answers `Skepd-Session: closed`, and the
@@ -54,6 +57,7 @@ use skep_client::store::{FileStore, KeyFacts, KeySelector, KeyStore, Purpose, St
 use skep_client::{Board, Origin};
 use skep_identity::Fingerprint;
 
+use crate::attest::{wants_attest, Composer};
 use crate::events::{EventBus, SESSION_DIED};
 use crate::refs::session_name;
 use crate::refusal::{Name, Refusal};
@@ -108,9 +112,34 @@ pub struct SessionEntry {
     /// The token — this process's alone.
     pub token: Token,
     pub facts: Facts,
+    /// The board's log position read BEFORE the session opened: a held
+    /// burst's `base` on a document no acked write of this session names
+    /// (§3c.2), so the resend's read sees every row that could have moved it.
+    pub opened_at: u64,
     /// The arm its end carried, once a hand has ended it — held locked
     /// while a hand derives it, so a second hand waits for that arm.
     end: Mutex<Option<Value>>,
+}
+
+impl SessionEntry {
+    /// THE ATTEST a write under this session carries (`attest`'s rule):
+    /// composed and signed by the key that opened the session, where the
+    /// session holds one and [`wants_attest`] admits the frame; the frame as
+    /// it stands otherwise, and where the board has no `H.1` to sign over (the
+    /// board judges that write). `attest_not_composed` where the composer
+    /// could not sign — nothing is then to be sent — and the board's refusal,
+    /// or `unreachable`, where a read it needed was refused or not answered.
+    pub fn attest(&self, board: &Board, store: &FileStore, frame: &mut Value) -> Result<(), Refusal> {
+        let Some(key) = self.facts.fingerprint else { return Ok(()) };
+        if !wants_attest(frame) {
+            return Ok(());
+        }
+        let Some(term) = board.board_term().map_err(Refusal::of)? else { return Ok(()) };
+        let signer = signer(store, &store.key_path(&key))?;
+        let account = self.facts.account.as_deref().ok_or_else(|| Refusal::shell(Name::NO_ACCOUNT, json!({})))?;
+        let composer = Composer { board, token: &self.token, signer: &*signer, account, term };
+        composer.attach(frame).map_err(|h| Refusal::of_named(Name::ATTEST_NOT_COMPOSED, h))
+    }
 }
 
 /// A board's drafts supplements as the hand that registers or ends a
@@ -230,7 +259,7 @@ impl Sessions {
     }
 
     fn enter(&self, board: &str, open: Open) -> Arc<SessionEntry> {
-        let entry = Arc::new(SessionEntry { reference: session_name(), board: board.to_string(), token: open.token, facts: open.facts, end: Mutex::new(None) });
+        let entry = Arc::new(SessionEntry { reference: session_name(), board: board.to_string(), token: open.token, facts: open.facts, opened_at: open.opened_at, end: Mutex::new(None) });
         self.map.lock().expect("the sessions' lock").insert(entry.reference.clone(), Arc::clone(&entry));
         entry
     }
@@ -240,24 +269,29 @@ impl Sessions {
     }
 }
 
-/// A session opened: the token and its facts.
+/// A session opened: the token, its facts, and the board's log position
+/// read before the open ([`SessionEntry::opened_at`]).
 pub struct Open {
     pub token: Token,
     pub facts: Facts,
+    pub opened_at: u64,
 }
 
 /// THE BARE BIND as `principal` (`client.md` §4b.4; AUTH-4.26): honoured on
 /// the unclaimed and the CLAIMED-PERMISSIVE board from this loopback peer,
 /// which sends no `Origin`; refused on ENFORCING with the board's one 401,
-/// carried verbatim.
+/// carried verbatim. The board's position is read first, so a row landing
+/// between that read and the open is one a resend's read sees, never one it
+/// skips.
 pub fn open_bare(board: &Board, principal: u64) -> Result<Open, Refusal> {
+    let opened_at = board.health().map_err(Refusal::of)?.log_position();
     let token = match board.session_open(SessionBody::Bare { principal }).map_err(Refusal::of)? {
         Opened::Token(t) => t,
         Opened::Rejected => return Err(Refusal::board(401, json!({"error": "session_rejected"}))),
         Opened::Blocked { record } => return Err(Refusal::Blocked(skep_client::Blocked { record, named_by: board.dialed().as_str().to_string(), ground: None })),
     };
     let account = board.principal_prefix(principal).map_err(Refusal::of)?;
-    Ok(Open { token, facts: Facts { principal, account, kind: Kind::Bare, fingerprint: None, set_account: None } })
+    Ok(Open { token, facts: Facts { principal, account, kind: Kind::Bare, fingerprint: None, set_account: None }, opened_at })
 }
 
 /// THE STORE's KEY for (`origin`, `principal`) to sign with — §3.5's
@@ -280,7 +314,8 @@ pub fn signer(store: &FileStore, path: &Path) -> Result<Box<dyn Signer>, Refusal
 
 /// THE SIGNED CONTENT-SCOPED HANDSHAKE as `principal` with the store's key
 /// for (this board, the principal) — [`signing_key`] — behind AUTH-5.65's
-/// pre-check, each refusal under the armed name the `session` row spells.
+/// pre-check, each refusal under the armed name the `session` row spells;
+/// the board's position taken from the `/health` read it makes first.
 pub fn open_signed(board: &Board, store: &FileStore, principal: u64) -> Result<Open, Refusal> {
     let health = board.health().map_err(Refusal::of)?;
     let key = signing_key(store, board.dialed(), principal, || Mode::of(&health))?;
@@ -309,7 +344,7 @@ pub fn open_signed(board: &Board, store: &FileStore, principal: u64) -> Result<O
         fingerprint: Some(session.fingerprint()),
         set_account: Some(pre.walk.set_account.clone()),
     };
-    Ok(Open { token: session.into_token(), facts })
+    Ok(Open { token: session.into_token(), facts, opened_at: health.log_position() })
 }
 
 /// Why a session died, and — on the restart arm under a key this store
@@ -424,7 +459,7 @@ mod tests {
 
     fn open(principal: u64, account: &str, set_account: &str) -> Open {
         let facts = Facts { principal, account: Some(account.into()), kind: Kind::Content, fingerprint: None, set_account: Some(set_account.into()) };
-        Open { token: Token::parse(&"9f".repeat(16)).unwrap(), facts }
+        Open { token: Token::parse(&"9f".repeat(16)).unwrap(), facts, opened_at: 0 }
     }
 
     /// A board nothing answers at: a port bound and let go.

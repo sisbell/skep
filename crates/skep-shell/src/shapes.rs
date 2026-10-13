@@ -87,7 +87,7 @@ const SHAPES: &[Shape] = &[
     Shape {
         name: "HeldAnswer",
         open: false,
-        doc: "the `op` answer where the burst's board is HELD (§3c): the shell's own answer, never `ack` — the page takes it as accepted and not acked; `unwritable` where the device refused the line and the burst is held in memory alone",
+        doc: "the `op` answer where the burst's board is HELD (§3c): the shell's own answer, never `ack` — the page takes it as accepted and not acked; `cause` `other_window` where another window holds the board's held text and the burst is held in this one's memory alone, and `unwritable` — why — where the device refused the line or the held file is out of reach, the burst held in memory alone",
         fields: &[req("resp", "'held'"), req("held", "number"), req("cause", "string"), opt("unwritable", "string")],
     },
     Shape {

@@ -2,7 +2,10 @@
 //! P38's faces (`v` first), the torn last line ignored and a damaged middle
 //! line halting, the misplaced file moved aside and never overwriting, the
 //! lock a second holder cannot take, compaction once every line is done, and
-//! persist-first — the line on disk before the append returns.
+//! persist-first — the line on disk before the append returns. And the queue
+//! as the memory with the file its copy: a line the device refused stands in
+//! the queue under its ordinal, a re-mark reads back as the one line it
+//! re-marks, and a `done` the device refused still settles its line.
 
 use std::cell::{Cell, RefCell};
 use std::fs;
@@ -51,9 +54,14 @@ fn dir(tmp: &TempDir) -> HeldDir {
 
 fn live(opened: Opened) -> HeldFile {
     match opened {
-        Opened::Live(f) => f,
+        Opened::Live { file, .. } => file,
         Opened::Halted { why, .. } => panic!("expected a live file, halted {why:?}"),
     }
+}
+
+/// The ordinals standing in a queue, in order.
+fn ks(file: &HeldFile) -> Vec<u64> {
+    file.lines().iter().map(|l| l.k).collect()
 }
 
 // ── T1 ──────────────────────────────────────────────────────────────────────
@@ -69,8 +77,9 @@ fn the_header_is_written_once_v_read_first_and_the_forms_are_byte_equal() {
     let d = dir(&tmp);
     let mut file = live(d.open_file(7, "1.0.7").unwrap());
     assert!(!file.on_disk(), "no file until the first append");
-    let k = file.hold("1.0.7.0.1", None, 5, json!({"op": "insert"}), "unreachable", None, false).unwrap();
-    assert_eq!(k, 1);
+    let held = file.hold("1.0.7.0.1", None, 5, json!({"op": "insert"}), Reason::of("unreachable", false));
+    assert!(held.unwritten.is_none(), "{:?}", held.unwritten);
+    assert_eq!(held.k, 1);
     assert!(file.on_disk(), "the first hold writes the header and the line");
 
     // The exact byte forms (§3c.2), the one line's `time` apart.
@@ -100,7 +109,7 @@ fn the_header_is_written_once_v_read_first_and_the_forms_are_byte_equal() {
     .unwrap();
     match d2.open_file(1, "1.0.1").unwrap() {
         Opened::Halted { why, .. } => assert_eq!(why, HaltWhy::Newer, "v read before the unknown member"),
-        Opened::Live(_) => panic!("a newer v must halt"),
+        Opened::Live { .. } => panic!("a newer v must halt"),
     }
 
     // An unknown member on a `v: 1` header refuses the file.
@@ -123,8 +132,9 @@ fn the_header_is_written_once_v_read_first_and_the_forms_are_byte_equal() {
 
 /// A MISPLACED file — header `board` another chain, or `principal` not the
 /// file's name — is moved aside under `aside_name`'s form by a rename that
-/// never overwrites an existing aside (`.1`, then `.2`); this principal's file
-/// is started fresh, the aside byte-equal to the original.
+/// never overwrites an existing aside (`.1`, then `.2`), the open naming the
+/// aside for the shell's own window to say; this principal's file is started
+/// fresh, the aside byte-equal to the original.
 #[test]
 fn a_misplaced_file_is_moved_aside_without_overwriting() {
     let tmp = TempDir::new().unwrap();
@@ -135,9 +145,15 @@ fn a_misplaced_file_is_moved_aside_without_overwriting() {
 
     let misplaced = format!("{{\"type\":\"skep-held-bursts\",\"v\":1,\"board\":\"{other}\",\"principal\":3,\"account\":\"1.0.3\"}}\n");
     fs::write(&p, &misplaced).unwrap();
-    let fresh = live(d.open_file(3, "1.0.3").unwrap());
-    assert!(fresh.lines().is_empty() && !fresh.on_disk(), "the file is started fresh");
     let aside1 = board_dir.join(aside_name("principal-3.held", &other, 1));
+    let fresh = match d.open_file(3, "1.0.3").unwrap() {
+        Opened::Live { file, aside } => {
+            assert_eq!(aside.as_deref(), Some(aside1.as_path()), "the open names the aside");
+            file
+        }
+        Opened::Halted { why, .. } => panic!("a misplaced file is set aside, never halted: {why:?}"),
+    };
+    assert!(fresh.lines().is_empty() && !fresh.on_disk(), "the file is started fresh");
     assert_eq!(fs::read_to_string(&aside1).unwrap(), misplaced, "the aside is byte-equal to the original");
 
     // A second misplaced file of the same board lands beside the first at `.2`.
@@ -177,8 +193,8 @@ fn the_file_compacts_once_every_line_is_done() {
     let tmp = TempDir::new().unwrap();
     let d = dir(&tmp);
     let mut file = live(d.open_file(1, "1.0.1").unwrap());
-    let k1 = file.hold("d1", None, 0, json!({"op": "insert"}), "stopped", None, false).unwrap();
-    let k2 = file.hold("d2", None, 0, json!({"op": "delete"}), "behind", None, false).unwrap();
+    let k1 = file.hold("d1", None, 0, json!({"op": "insert"}), Reason::of("stopped", false)).k;
+    let k2 = file.hold("d2", None, 0, json!({"op": "delete"}), Reason::of("behind", false)).k;
     assert!(matches!(file.done(99, true, None), Err(DoneError::NoSuchLine)), "a done for no line is refused");
     file.done(k1, true, Some(42)).unwrap();
     assert!(file.on_disk(), "one line still held keeps the file");
@@ -190,10 +206,13 @@ fn the_file_compacts_once_every_line_is_done() {
 
 // ── T5 ──────────────────────────────────────────────────────────────────────
 
-/// PERSIST-FIRST: an append whose `sync_data` is made to fail answers
-/// `store_unwritable` (an I/O error the caller carries); a successful append's
-/// line is ON DISK before the append returns — pinned by reading the file in
-/// the seam the answer is built after.
+/// PERSIST-FIRST: a successful append's line is ON DISK before the append
+/// returns — pinned by reading the file in the seam the answer is built
+/// after; an append whose `sync_data` is made to fail answers
+/// `store_unwritable` (the device's I/O error) BESIDE a line that stands in
+/// the queue under its ordinal, the next line taking the ordinal after it
+/// (the mutant that keeps the refused line out of the queue loses the burst
+/// its `held` answer promised).
 #[test]
 fn an_appends_line_is_on_disk_before_its_answer() {
     let tmp = TempDir::new().unwrap();
@@ -209,13 +228,72 @@ fn an_appends_line_is_on_disk_before_its_answer() {
             *probe.lock().unwrap() = on_disk;
         }))
     });
-    file.hold("d1", None, 0, json!({"op": "insert"}), "stopped", None, false).unwrap();
+    let first = file.hold("d1", None, 0, json!({"op": "insert"}), Reason::of("stopped", false));
+    assert!(first.unwritten.is_none(), "{:?}", first.unwritten);
     assert!(*seen.lock().unwrap(), "the line is on disk when the append's seam runs, before the answer");
     AFTER_SYNC.with(|s| *s.borrow_mut() = None);
 
-    // The forced sync failure: the append answers an I/O error.
+    // The forced sync failure: the device's refusal beside a line that stands.
     FAIL_SYNC.with(|f| f.set(true));
-    let err = file.hold("d2", None, 0, json!({"op": "insert"}), "stopped", None, false).unwrap_err();
+    let refused = file.hold("d2", None, 0, json!({"op": "insert"}), Reason::of("stopped", false));
     FAIL_SYNC.with(|f| f.set(false));
-    assert_eq!(err.kind(), std::io::ErrorKind::StorageFull, "store_unwritable");
+    assert_eq!(refused.unwritten.expect("the device refused the copy").kind(), std::io::ErrorKind::StorageFull, "store_unwritable");
+    assert_eq!(refused.k, 2);
+    assert_eq!(ks(&file), [1, 2], "the refused line stands in the queue");
+    let next = file.hold("d3", None, 0, json!({"op": "insert"}), Reason::of("behind", false));
+    assert!(next.unwritten.is_none());
+    assert_eq!((next.k, ks(&file)), (3, vec![1, 2, 3]), "the next line takes the ordinal after it");
+}
+
+/// A QUEUE IN MEMORY ALONE (§3c.3) enters, re-marks and settles lines as a
+/// file's does, under the same ordinals, and writes nothing.
+#[test]
+fn a_queue_in_memory_alone_keeps_its_lines_and_writes_nothing() {
+    let mut file = HeldFile::in_memory();
+    let k1 = file.hold("d1", None, 0, json!({"op": "insert"}), Reason::of("unreachable", true));
+    let k2 = file.hold("d1", None, 0, json!({"op": "insert"}), Reason::of("behind", false));
+    assert!(k1.unwritten.is_none() && k2.unwritten.is_none());
+    assert_eq!((k1.k, k2.k), (1, 2));
+    file.remark(1, Reason::refused("out_of_bounds", json!({"code": "out_of_bounds"}))).unwrap();
+    assert_eq!(file.lines()[0].reason, Reason::refused("out_of_bounds", json!({"code": "out_of_bounds"})));
+    file.done(1, false, None).unwrap();
+    assert_eq!(ks(&file), [2]);
+    assert!(!file.on_disk());
+}
+
+/// A RE-MARK reads back as the line it re-marks: a line held, re-marked
+/// `moved`, and the file opened again holds ONE line, of that ordinal and
+/// the new cause (the mutant reader that takes every `held` line as a new
+/// one lists the burst twice and re-projects the person's text twice).
+#[test]
+fn a_remarked_line_reads_back_once_with_its_new_cause() {
+    let tmp = TempDir::new().unwrap();
+    let d = dir(&tmp);
+    let mut file = live(d.open_file(1, "1.0.1").unwrap());
+    let k = file.hold("d1", None, 4, json!({"op": "insert"}), Reason::of("unreachable", true)).k;
+    file.hold("d2", None, 4, json!({"op": "insert"}), Reason::of("behind", false));
+    file.remark(k, Reason::of("moved", false)).unwrap();
+    file.remark(k, Reason::of("moved", false)).unwrap();
+    let reopened = live(d.open_file(1, "1.0.1").unwrap());
+    assert_eq!(ks(&reopened), [k, k + 1], "one line per ordinal, in `k` order");
+    assert_eq!((reopened.lines()[0].reason.cause.as_str(), reopened.lines()[0].reason.sent), ("moved", false));
+    assert_eq!(reopened.lines()[0].base, 4, "the re-mark keeps the line's own members");
+}
+
+/// A `done` THE DEVICE REFUSED still settles its line: the line leaves the
+/// queue, so the resend that acked it never sends it again (the mutant that
+/// keeps the line standing resends the acked burst at once), and the
+/// refusal is answered for the shell's own window to say.
+#[test]
+fn a_done_the_device_refused_still_settles_its_line() {
+    let tmp = TempDir::new().unwrap();
+    let d = dir(&tmp);
+    let mut file = live(d.open_file(1, "1.0.1").unwrap());
+    let k1 = file.hold("d1", None, 0, json!({"op": "insert"}), Reason::of("unreachable", false)).k;
+    let k2 = file.hold("d1", None, 0, json!({"op": "insert"}), Reason::of("behind", false)).k;
+    FAIL_SYNC.with(|f| f.set(true));
+    let settled = file.done(k1, true, Some(9));
+    FAIL_SYNC.with(|f| f.set(false));
+    assert!(matches!(settled, Err(DoneError::Unwritten(_))), "{settled:?}");
+    assert_eq!(ks(&file), [k2], "the settled line has left the queue");
 }

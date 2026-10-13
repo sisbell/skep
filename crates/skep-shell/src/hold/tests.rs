@@ -4,8 +4,11 @@
 //! twelve other `WRITE_OPS` are not. And THE RESEND WALK over a fake board in
 //! its three outcomes (§3c.5) — no row (send from the head), one own row
 //! confirmed by content (the head `done kept`, nothing re-sent), a foreign row
-//! (MOVED, nothing sent, never rebased) — `history_reclaimed`, and the refused
-//! run's `resolve(drop)` dropping it and every line held behind it.
+//! (MOVED, nothing sent, never rebased) — a read the board refuses deciding
+//! nothing, `history_reclaimed` decided by the arrangement alone, a refusal
+//! the table holds nowhere leaving its line standing, a second window's
+//! burst resent from memory, the `base` a hold takes, and the refused run's
+//! `resolve(drop)` dropping it and every line held behind it.
 
 use std::io::Read;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -13,15 +16,14 @@ use std::sync::mpsc::Receiver;
 use std::sync::{Arc, Mutex};
 
 use serde_json::json;
-use skep_client::board::{Board, Token, HEAD_MEMBER_1};
+use skep_client::board::{Token, HEAD_MEMBER_1};
 use skep_client::dial::{DialError, Dialer, Headers, Method, Request, RequestHead, Response, StreamedResponse};
-use skep_client::store::FileStore;
 use skep_client::Origin;
 use tempfile::TempDir;
 
 use super::*;
-use crate::events::{Event, EventBus};
-use crate::sessions::{Facts, Kind, Open, SessionEntry, Sessions, Supplements};
+use crate::events::Event;
+use crate::sessions::{Facts, Kind, Open, Supplements};
 
 /// The five burst kinds are bursts; the twelve other write ops are not.
 #[test]
@@ -77,13 +79,18 @@ fn every_outcome_classifies_to_exactly_its_row() {
 
 // ── THE RESEND WALK (a fake board, §3c.5) ────────────────────────────────────
 
-/// A board under test: the chain `board_term` reads, the `/changes` rows the
-/// read sees, the content a `retrieve_v` answers, the frames POSTed to `/op`
-/// recorded, and a scripted rejection where one is armed.
+/// A board under test: the chain `board_term` reads; the `/changes` rows the
+/// read sees, each served only past the query's `since`, or a refusal armed
+/// in the page's place; the draft's text, of which a `retrieve_v` answers
+/// the positions it names — or no answer, where the site is armed unread;
+/// the frames POSTed to `/op` recorded; and a scripted rejection where one is
+/// armed.
 struct Fake {
     chain: String,
     rows: Mutex<Vec<Value>>,
-    content: Mutex<Vec<Value>>,
+    changes_refused: Mutex<Option<(u16, Value)>>,
+    text: Mutex<String>,
+    site_unread: AtomicBool,
     sent: Mutex<Vec<Value>>,
     reject: Mutex<Option<Value>>,
     next_at: AtomicU64,
@@ -95,17 +102,39 @@ impl Fake {
         Arc::new(Fake {
             chain: "ab".repeat(32),
             rows: Mutex::new(Vec::new()),
-            content: Mutex::new(Vec::new()),
+            changes_refused: Mutex::new(None),
+            text: Mutex::new(String::new()),
+            site_unread: AtomicBool::new(false),
             sent: Mutex::new(Vec::new()),
             reject: Mutex::new(None),
             next_at: AtomicU64::new(50),
             writes_halted: AtomicBool::new(false),
         })
     }
+
+    fn sent(&self) -> usize {
+        self.sent.lock().unwrap().len()
+    }
+}
+
+fn respond(status: u16, v: Value) -> Response {
+    Response { status, headers: Headers::default(), body: v.to_string().into_bytes() }
 }
 
 fn ok(v: Value) -> Response {
-    Response { status: 200, headers: Headers::default(), body: v.to_string().into_bytes() }
+    respond(200, v)
+}
+
+/// The number a query names under `key`, where it names one.
+fn query(path: &str, key: &str) -> Option<u64> {
+    path.split_once('?')?.1.split('&').find_map(|kv| kv.strip_prefix(key)?.strip_prefix('=')?.parse().ok())
+}
+
+/// A V-spec's `1.<from>` and `0.<width>`, as numbers.
+fn span(spec: &Value) -> Option<(usize, usize)> {
+    let from = spec["span"]["start"].as_str()?.strip_prefix("1.")?.parse().ok()?;
+    let width = spec["span"]["width"].as_str()?.strip_prefix("0.")?.parse().ok()?;
+    Some((from, width))
 }
 
 impl Dialer for Fake {
@@ -117,7 +146,15 @@ impl Dialer for Fake {
             ));
         }
         if req.method == Method::Get && req.path.starts_with("/changes") {
-            return Ok(ok(json!({"changes": self.rows.lock().unwrap().clone(), "last": 100, "more": false})));
+            if let Some((status, body)) = self.changes_refused.lock().unwrap().clone() {
+                return Ok(respond(status, body));
+            }
+            let since = query(&req.path, "since").unwrap_or(0);
+            let limit = query(&req.path, "limit").unwrap_or(256) as usize;
+            let past: Vec<Value> = self.rows.lock().unwrap().iter().filter(|r| r["at"].as_u64().unwrap_or(0) > since).cloned().collect();
+            let page: Vec<Value> = past.iter().take(limit).cloned().collect();
+            let last = page.last().and_then(|r| r["at"].as_u64()).unwrap_or(since);
+            return Ok(ok(json!({"changes": page, "last": last, "more": past.len() > limit})));
         }
         if req.method == Method::Post && req.path == "/op" {
             let body: Value = serde_json::from_slice(&req.body).unwrap_or(Value::Null);
@@ -126,7 +163,15 @@ impl Dialer for Fake {
                     let head = json!({"type": "skep-head", "position": 1, "chain": self.chain}).to_string();
                     return Ok(ok(json!({"resp": "delivery", "items": [{"atom": head}]})));
                 }
-                return Ok(ok(json!({"resp": "delivery", "items": self.content.lock().unwrap().clone()})));
+                if self.site_unread.load(Ordering::SeqCst) {
+                    return Err(DialError::Connect("the site read is not answered".into()));
+                }
+                let text = self.text.lock().unwrap().clone();
+                let (from, width) = span(&body["specs"][0]).unwrap_or((0, 0));
+                return Ok(match text.get(from.saturating_sub(1)..from.saturating_sub(1) + width) {
+                    Some(cut) if from > 0 => ok(json!({"resp": "delivery", "items": [{"content": cut}]})),
+                    _ => ok(json!({"resp": "rejected", "code": "out_of_bounds", "disposition": "permanent", "op": "retrieve_v"})),
+                });
             }
             self.sent.lock().unwrap().push(body.clone());
             if let Some(r) = self.reject.lock().unwrap().clone() {
@@ -149,30 +194,37 @@ impl Supplements for NoSupp {
     fn narrow(&mut self, _: u64) {}
 }
 
-/// Holds over the fake board, a bare session registered — the fixture the
-/// resend walk runs against.
-#[allow(clippy::type_complexity)]
-fn fixture() -> (Arc<Holds>, Arc<Fake>, Arc<SessionEntry>, Arc<EventBus>, Receiver<Event>, TempDir) {
-    fixture_as(Facts { principal: 1, account: Some("1.0.1".into()), kind: Kind::Bare, fingerprint: None, set_account: None })
+/// The holds over the fake board, a session registered and its open read as
+/// the shell reads it — the ground every resend cell stands on; the store
+/// directory kept for the ground's life.
+struct Ground {
+    holds: Arc<Holds>,
+    fake: Arc<Fake>,
+    session: Arc<SessionEntry>,
+    rx: Receiver<Event>,
+    store: TempDir,
 }
 
-/// The fixture under a session of the given facts — a bare one, or one that
-/// holds a key (the signed mode's).
-#[allow(clippy::type_complexity)]
-fn fixture_as(facts: Facts) -> (Arc<Holds>, Arc<Fake>, Arc<SessionEntry>, Arc<EventBus>, Receiver<Event>, TempDir) {
-    let tmp = TempDir::new().unwrap();
-    let fake = Fake::new();
-    let origin = Origin::parse("http://127.0.0.1:1").unwrap();
-    let entry = Arc::new(BoardEntry { reference: "b-1".to_string(), origin: origin.clone(), board: Board::new(origin, Arc::clone(&fake)) });
-    let sessions = Arc::new(Sessions::new());
-    let bus = Arc::new(EventBus::new());
-    let rx = bus.subscribe();
-    let store = Arc::new(FileStore::open(tmp.path().join("store")));
-    let holds = Holds::new(Arc::clone(&sessions), Arc::clone(&bus), store, tmp.path().to_path_buf(), Arc::new(|_: &str| {}));
-    holds.register_board("b-1", Arc::clone(&entry));
-    let open = Open { token: Token::parse(&"9f".repeat(16)).unwrap(), facts };
-    let session = sessions.register("b-1", open, &mut NoSupp);
-    (holds, fake, session, bus, rx, tmp)
+impl Ground {
+    /// The `held` event states seen since the last look.
+    fn states(&self) -> Vec<String> {
+        self.rx.try_iter().filter(|e| e.name == "held").map(|e| e.data["state"].as_str().unwrap_or("?").to_string()).collect()
+    }
+
+    /// `held(session)`'s rows.
+    fn rows(&self) -> Vec<Value> {
+        self.holds.rows("b-1", &self.session).unwrap().as_array().unwrap().clone()
+    }
+
+    /// A burst held for `cause`, `sent` as a lost answer's would be.
+    fn hold(&self, frame: &Value, cause: &str, sent: bool) -> Value {
+        self.holds.hold("b-1", &self.session, frame, Reason::of(cause, sent)).unwrap()
+    }
+}
+
+/// The facts of a bare session as principal 1.
+fn bare_facts() -> Facts {
+    Facts { principal: 1, account: Some("1.0.1".into()), kind: Kind::Bare, fingerprint: None, set_account: None }
 }
 
 /// The facts of a session that holds a key — the signed mode's.
@@ -181,42 +233,62 @@ fn keyed_facts() -> Facts {
     Facts { principal: 1, account: Some("1.0.1".into()), kind: Kind::Content, fingerprint: Some(fingerprint), set_account: None }
 }
 
+/// The ground under a bare session opened at position 0.
+fn ground() -> Ground {
+    ground_in(TempDir::new().unwrap(), bare_facts(), 0)
+}
+
+/// The ground over `store`, under a session of `facts` opened at `opened_at`.
+fn ground_in(store: TempDir, facts: Facts, opened_at: u64) -> Ground {
+    let fake = Fake::new();
+    let board = Arc::new(Board::new(Origin::parse("http://127.0.0.1:1").unwrap(), Arc::clone(&fake)));
+    let sessions = Arc::new(Sessions::new());
+    let bus = Arc::new(EventBus::new());
+    let rx = bus.subscribe();
+    let keys = Arc::new(FileStore::open(store.path().join("store")));
+    let holds = Holds::new(Arc::clone(&sessions), bus, keys, store.path().to_path_buf(), Arc::new(|_: &str| {}));
+    holds.register_board("b-1", board);
+    let open = Open { token: Token::parse(&"9f".repeat(16)).unwrap(), facts, opened_at };
+    let session = sessions.register("b-1", open, &mut NoSupp);
+    holds.open_session("b-1", &session);
+    Ground { holds, fake, session, rx, store }
+}
+
 fn insert(doc: &str, values: Value) -> Value {
     json!({"op": "insert", "doc": doc, "at": {"subspace": "1", "ordinal": "1"}, "values": values})
 }
 
-fn held_states(rx: &Receiver<Event>) -> Vec<String> {
-    rx.try_iter().filter(|e| e.name == "held").map(|e| e.data["state"].as_str().unwrap_or("?").to_string()).collect()
-}
+const DOC: &str = "1.0.1.0.1";
 
 /// OUTCOME (i): no row since `base` — the held burst is sent from the head and
 /// acked, the line resolved, the document's state `kept`.
 #[test]
 fn outcome_i_no_row_sends_from_the_head() {
-    let (holds, fake, session, _bus, rx, _tmp) = fixture();
-    let frame = insert("1.0.1.0.1", json!(["hello"]));
-    holds.hold_after_dial("b-1", &session, &frame, &Decision::Hold { cause: "unreachable", sent: false }, "", None);
-    holds.service("b-1");
-    assert_eq!(fake.sent.lock().unwrap().len(), 1, "the head is sent once");
-    assert_eq!(fake.sent.lock().unwrap()[0]["op"], "insert");
-    assert_eq!(holds.rows("b-1", 1).unwrap().as_array().unwrap().len(), 0, "the line is kept and gone");
-    assert!(held_states(&rx).contains(&"kept".to_string()));
+    let g = ground();
+    g.hold(&insert(DOC, json!(["hello"])), "unreachable", false);
+    g.holds.service("b-1");
+    assert_eq!(g.fake.sent(), 1, "the head is sent once");
+    assert_eq!(g.fake.sent.lock().unwrap()[0]["op"], "insert");
+    assert!(g.rows().is_empty(), "the line is kept and gone");
+    assert!(g.states().contains(&"kept".to_string()));
 }
 
 /// OUTCOME (ii): the in-flight burst (its line `sent: true`) landed — one row
-/// of the session's own hand, consistent, confirmed by content — so the head
-/// is `done kept` and NOTHING is re-sent (the mutant that resends the head).
+/// of the session's own hand, consistent, its five values read back equal at
+/// the site — so the head is `done kept` and NOTHING is re-sent (the mutant
+/// that resends the head; the mutant that compares the frame's one string
+/// with one position's value faces the person's own text `moved`).
 #[test]
 fn outcome_ii_a_landed_burst_is_kept_not_resent() {
-    let (holds, fake, session, _bus, rx, _tmp) = fixture();
-    *fake.content.lock().unwrap() = vec![json!({"content": "hello"})];
-    *fake.rows.lock().unwrap() = vec![json!({"at": 77, "op": "insert", "key": "bare", "docs": ["1.0.1.0.1"]})];
-    let frame = insert("1.0.1.0.1", json!(["hello"]));
-    holds.hold_after_dial("b-1", &session, &frame, &Decision::Hold { cause: "unreachable", sent: true }, "", None);
-    holds.service("b-1");
-    assert!(fake.sent.lock().unwrap().is_empty(), "the landed head is NOT re-sent: {:?}", fake.sent.lock().unwrap());
-    assert_eq!(holds.rows("b-1", 1).unwrap().as_array().unwrap().len(), 0, "the line is done kept");
-    assert!(held_states(&rx).contains(&"kept".to_string()));
+    let g = ground();
+    *g.fake.text.lock().unwrap() = "hello".into();
+    *g.fake.rows.lock().unwrap() = vec![json!({"at": 77, "op": "insert", "key": "bare", "docs": [DOC]})];
+    g.hold(&insert(DOC, json!(["hello"])), "unreachable", true);
+    g.holds.service("b-1");
+    assert_eq!(g.fake.sent(), 0, "the landed head is NOT re-sent: {:?}", g.fake.sent.lock().unwrap());
+    assert!(g.rows().is_empty(), "the line is done kept");
+    let states = g.states();
+    assert!(states.contains(&"kept".to_string()) && !states.contains(&"moved".to_string()), "{states:?}");
 }
 
 /// OUTCOME (iii): a foreign row on the document since `base` — the site MOVED:
@@ -224,15 +296,15 @@ fn outcome_ii_a_landed_burst_is_kept_not_resent() {
 /// that sends the moved line at its old base).
 #[test]
 fn outcome_iii_a_foreign_row_moves_the_document() {
-    let (holds, fake, session, _bus, rx, _tmp) = fixture();
-    *fake.rows.lock().unwrap() = vec![json!({"at": 77, "op": "insert", "key": "ff".repeat(32), "docs": ["1.0.1.0.1"]})];
-    let frame = insert("1.0.1.0.1", json!(["hello"]));
-    holds.hold_after_dial("b-1", &session, &frame, &Decision::Hold { cause: "unreachable", sent: true }, "", None);
-    holds.service("b-1");
-    assert!(fake.sent.lock().unwrap().is_empty(), "no line of a moved document is sent");
-    let rows = holds.rows("b-1", 1).unwrap();
-    assert_eq!(rows[0]["cause"], "moved", "the line is faced moved: {rows}");
-    assert!(held_states(&rx).contains(&"moved".to_string()));
+    let g = ground();
+    *g.fake.rows.lock().unwrap() = vec![json!({"at": 77, "op": "insert", "key": "ff".repeat(32), "docs": [DOC]})];
+    g.hold(&insert(DOC, json!(["hello"])), "unreachable", true);
+    g.holds.service("b-1");
+    assert_eq!(g.fake.sent(), 0, "no line of a moved document is sent");
+    let rows = g.rows();
+    assert_eq!(rows[0]["cause"], "moved", "the line is faced moved: {rows:?}");
+    let states = g.states();
+    assert!(states.contains(&"moved".to_string()) && !states.contains(&"sending".to_string()), "a moved document is never said `sending`: {states:?}");
 }
 
 /// THE OWN HAND on a read (§3c.5; wire.md §`/changes`): a SIGNED entry's row
@@ -243,16 +315,15 @@ fn outcome_iii_a_foreign_row_moves_the_document() {
 /// session alone, never under a keyed one.
 #[test]
 fn a_signed_row_is_own_under_a_keyed_session_alone() {
-    let signed_row = json!({"at": 77, "op": "insert", "docs": ["1.0.1.0.1"], "attest": {"alg": "x", "sig": "y"}});
-    let bare_row = json!({"at": 77, "op": "insert", "docs": ["1.0.1.0.1"], "key": "bare"});
+    let signed_row = json!({"at": 77, "op": "insert", "docs": [DOC], "attest": {"alg": "x", "sig": "y"}});
+    let bare_row = json!({"at": 77, "op": "insert", "docs": [DOC], "key": "bare"});
     let walk = |facts: Facts, row: Value| -> (Vec<String>, usize) {
-        let (holds, fake, session, _bus, rx, _tmp) = fixture_as(facts);
-        *fake.content.lock().unwrap() = vec![json!({"content": "hello"})];
-        *fake.rows.lock().unwrap() = vec![row];
-        holds.hold_after_dial("b-1", &session, &insert("1.0.1.0.1", json!(["hello"])), &Decision::Hold { cause: "unreachable", sent: true }, "", None);
-        holds.service("b-1");
-        let sent = fake.sent.lock().unwrap().len();
-        (held_states(&rx), sent)
+        let g = ground_in(TempDir::new().unwrap(), facts, 0);
+        *g.fake.text.lock().unwrap() = "hello".into();
+        *g.fake.rows.lock().unwrap() = vec![row];
+        g.hold(&insert(DOC, json!(["hello"])), "unreachable", true);
+        g.holds.service("b-1");
+        (g.states(), g.fake.sent())
     };
     let (states, sent) = walk(keyed_facts(), signed_row.clone());
     assert!(states.contains(&"kept".to_string()) && !states.contains(&"moved".to_string()), "the signed row is the keyed session's own: {states:?}");
@@ -273,23 +344,22 @@ fn a_signed_row_is_own_under_a_keyed_session_alone() {
 #[test]
 fn a_lost_testimony_row_is_judged_by_the_arrangement_alone() {
     let lost = json!({"at": 77, "docs": null, "key": null, "time": null, "op": null, "new_prefix": null, "new_id": null, "link": null, "placed": null, "base_extent": null});
-    let walk = |frame: Value, content: &str, sent: bool| -> (Vec<String>, usize) {
-        let (holds, fake, session, _bus, rx, _tmp) = fixture();
-        *fake.content.lock().unwrap() = vec![json!({"content": content})];
-        *fake.rows.lock().unwrap() = vec![lost.clone()];
-        holds.hold_after_dial("b-1", &session, &frame, &Decision::Hold { cause: "poisoned", sent }, "", None);
-        holds.service("b-1");
-        let sent = fake.sent.lock().unwrap().len();
-        (held_states(&rx), sent)
+    let walk = |frame: Value, text: &str, sent: bool| -> (Vec<String>, usize) {
+        let g = ground();
+        *g.fake.text.lock().unwrap() = text.into();
+        *g.fake.rows.lock().unwrap() = vec![lost.clone()];
+        g.hold(&frame, "poisoned", sent);
+        g.holds.service("b-1");
+        (g.states(), g.fake.sent())
     };
-    let (states, sent) = walk(insert("1.0.1.0.1", json!(["hello"])), "hello", true);
+    let (states, sent) = walk(insert(DOC, json!(["hello"])), "hello", true);
     assert!(states.contains(&"kept".to_string()) && !states.contains(&"moved".to_string()), "the landed insert is kept: {states:?}");
     assert_eq!(sent, 0, "the landed head is not re-sent");
-    let (states, sent) = walk(insert("1.0.1.0.1", json!(["hello"])), "other", true);
+    let (states, sent) = walk(insert(DOC, json!(["hello"])), "other", true);
     assert!(states.contains(&"moved".to_string()) && sent == 0, "values that differ: moved, nothing sent: {states:?}");
-    let (states, sent) = walk(json!({"op": "delete", "doc": "1.0.1.0.1", "at": {"subspace": "1", "ordinal": "1"}, "width": 1}), "hello", true);
+    let (states, sent) = walk(json!({"op": "delete", "doc": DOC, "at": {"subspace": "1", "ordinal": "1"}, "width": 1}), "hello", true);
     assert!(states.contains(&"moved".to_string()) && sent == 0, "a kind the site read cannot confirm: moved: {states:?}");
-    let (states, sent) = walk(insert("1.0.1.0.1", json!(["hello"])), "hello", false);
+    let (states, sent) = walk(insert(DOC, json!(["hello"])), "hello", false);
     assert!(states.contains(&"moved".to_string()) && sent == 0, "a head never sent reads any row as moved: {states:?}");
 }
 
@@ -297,53 +367,193 @@ fn a_lost_testimony_row_is_judged_by_the_arrangement_alone() {
 /// `sent: false`: no dial was made, so nothing of it can have landed.
 #[test]
 fn a_halted_hold_before_any_dial_is_sent_false() {
-    let (holds, fake, session, _bus, _rx, _tmp) = fixture();
-    holds.note_health("b-1", true, 10);
-    let answer = holds.before_dial("b-1", &session, &insert("1.0.1.0.1", json!(["hello"]))).expect("held before the dial").unwrap();
+    let g = ground();
+    g.holds.note_health("b-1", true);
+    let Sent::Answered(Ok(answer)) = g.holds.send_burst("b-1", &g.session, insert(DOC, json!(["hello"]))) else { panic!("held before the dial") };
     assert_eq!(answer["cause"], "halted", "{answer}");
-    let rows = holds.rows("b-1", 1).unwrap();
-    assert_eq!((rows[0]["cause"].as_str(), rows[0]["sent"].as_bool()), (Some("halted"), Some(false)), "{rows}");
-    assert!(fake.sent.lock().unwrap().is_empty(), "no dial was made");
+    let rows = g.rows();
+    assert_eq!((rows[0]["cause"].as_str(), rows[0]["sent"].as_bool()), (Some("halted"), Some(false)), "{rows:?}");
+    assert_eq!(g.fake.sent(), 0, "no dial was made");
 }
 
-/// `history_reclaimed` on the read: the arrangement alone decides — content at
-/// the head's site that agrees is (ii), kept and not re-sent.
+/// A READ THE BOARD REFUSES DECIDES NOTHING (§3c.5): a `/changes` answered
+/// `503 feed_rebuilding` — the daemon re-covering a lost `commits.log` behind
+/// its listener after an open, exactly when a resend runs — leaves a `sent`
+/// head held and unsent (the mutant that reads the refusal as "no row" sends
+/// a burst that may have landed a second time); once the board serves the
+/// page, the next wake reads it and sends.
+#[test]
+fn a_read_the_board_refuses_decides_nothing() {
+    let g = ground();
+    *g.fake.changes_refused.lock().unwrap() = Some((503, json!({"error": "feed_rebuilding", "detail": "the feed is being re-covered"})));
+    g.hold(&insert(DOC, json!(["hello"])), "unreachable", true);
+    g.holds.service("b-1");
+    assert_eq!(g.fake.sent(), 0, "nothing is sent on a read the board refused");
+    assert_eq!(g.rows()[0]["cause"], "unreachable", "the line stands as it was");
+    let states = g.states();
+    assert!(!states.contains(&"sending".to_string()), "an unread document is not said `sending`: {states:?}");
+    *g.fake.changes_refused.lock().unwrap() = None;
+    g.holds.service("b-1");
+    assert_eq!(g.fake.sent(), 1, "the next wake reads the page and sends");
+    assert!(g.rows().is_empty());
+}
+
+/// `history_reclaimed` on the read (§3c.5): the arrangement alone decides — a
+/// `sent` head whose values read back equal at its site is (ii), kept and not
+/// re-sent; values that differ are (iii); a site read the board does not
+/// answer decides nothing and the line stands (the mutant that trusts an
+/// unread site keeps a burst that never landed).
 #[test]
 fn history_reclaimed_decides_by_the_arrangement() {
-    let (holds, fake, session, _bus, _rx, _tmp) = fixture();
-    *fake.content.lock().unwrap() = vec![json!({"content": "hello"})];
-    // A `/changes` that answers the reclaim floor.
-    *fake.rows.lock().unwrap() = Vec::new();
-    // Make `/changes` answer history_reclaimed by a reject body the client reads
-    // as such is not simple through this fake; instead confirm the content path
-    // directly: a landed, content-agreeing head is kept.
-    let frame = insert("1.0.1.0.1", json!(["hello"]));
-    *fake.rows.lock().unwrap() = vec![json!({"at": 77, "op": "insert", "key": "bare", "docs": ["1.0.1.0.1"]})];
-    holds.hold_after_dial("b-1", &session, &frame, &Decision::Hold { cause: "unreachable", sent: true }, "", None);
-    holds.service("b-1");
-    assert!(fake.sent.lock().unwrap().is_empty());
-    assert_eq!(holds.rows("b-1", 1).unwrap().as_array().unwrap().len(), 0);
+    let reclaimed = || Some((410, json!({"error": "history_reclaimed", "floor": 90})));
+    let g = ground();
+    *g.fake.changes_refused.lock().unwrap() = reclaimed();
+    *g.fake.text.lock().unwrap() = "hello".into();
+    g.hold(&insert(DOC, json!(["hello"])), "unreachable", true);
+    g.holds.service("b-1");
+    assert_eq!(g.fake.sent(), 0, "the landed head is not re-sent");
+    assert!(g.rows().is_empty(), "the values at the site keep it");
+    assert!(g.states().contains(&"kept".to_string()));
+
+    let g = ground();
+    *g.fake.changes_refused.lock().unwrap() = reclaimed();
+    *g.fake.text.lock().unwrap() = "other".into();
+    g.hold(&insert(DOC, json!(["hello"])), "unreachable", true);
+    g.holds.service("b-1");
+    assert_eq!((g.fake.sent(), g.rows()[0]["cause"].as_str()), (0, Some("moved")), "values that differ: moved");
+
+    let g = ground();
+    *g.fake.changes_refused.lock().unwrap() = reclaimed();
+    g.fake.site_unread.store(true, Ordering::SeqCst);
+    g.hold(&insert(DOC, json!(["hello"])), "unreachable", true);
+    g.holds.service("b-1");
+    assert_eq!(g.fake.sent(), 0);
+    assert_eq!(g.rows()[0]["cause"], "unreachable", "an unread site decides nothing: the line stands");
+    assert!(!g.states().contains(&"kept".to_string()));
+}
+
+/// A REFUSAL THE TABLE HOLDS NOWHERE leaves a resent line standing: the board
+/// answering `credential_refused`/`index_rebuilding`, retry-class — the cell
+/// index rebuilding after an open, when resends run — is faced to no one and
+/// never makes the line `done` (the mutant that writes `done kept` loses text
+/// the board refused); the next wake, the index ready, sends and keeps it.
+#[test]
+fn a_refusal_the_table_holds_nowhere_leaves_the_line_standing() {
+    let g = ground();
+    *g.fake.reject.lock().unwrap() = Some(json!({"resp": "rejected", "code": "credential_refused", "detail": "index_rebuilding", "disposition": "retry", "op": "insert"}));
+    g.hold(&insert(DOC, json!(["hello"])), "unreachable", false);
+    g.holds.service("b-1");
+    assert_eq!(g.fake.sent(), 1, "the line was sent");
+    assert_eq!(g.rows().len(), 1, "and stands: the board did not take it");
+    assert!(!g.states().contains(&"kept".to_string()));
+    *g.fake.reject.lock().unwrap() = None;
+    g.holds.service("b-1");
+    assert_eq!(g.fake.sent(), 2, "the next wake sends it again");
+    assert!(g.rows().is_empty() && g.states().contains(&"kept".to_string()));
+}
+
+/// A SECOND WINDOW (§3c.3): with the board's `held/<chain>/lock` held by
+/// another shell, a burst is held in this shell's memory alone — answered
+/// `other_window`, nothing written under the directory — and RESENT like any
+/// line once the board answers (the mutant that skips another window's
+/// queue holds every later burst `behind` it for the uptime); after it is
+/// kept, the next burst is dialed.
+#[test]
+fn a_second_windows_burst_is_held_in_memory_and_resent() {
+    let store = TempDir::new().unwrap();
+    let dir = HeldDir::new(store.path(), Chain::parse(&"ab".repeat(32)).unwrap());
+    dir.ensure().unwrap();
+    let _first_window = dir.try_lock().unwrap().expect("the first window holds the lock");
+    let held_dir = store.path().join("held").join("ab".repeat(32));
+    let g = ground_in(store, bare_facts(), 0);
+    let answer = g.hold(&insert(DOC, json!(["hello"])), "unreachable", false);
+    assert_eq!((answer["resp"].as_str(), answer["cause"].as_str()), (Some("held"), Some("other_window")), "{answer}");
+    assert!(!held_dir.join("principal-1.held").exists(), "a second window writes nothing");
+    assert_eq!(g.rows().len(), 1, "the line stands in memory");
+    g.holds.service("b-1");
+    assert_eq!(g.fake.sent(), 1, "the line is resent");
+    assert!(g.rows().is_empty() && g.states().contains(&"kept".to_string()));
+    let Sent::Answered(Ok(next)) = g.holds.send_burst("b-1", &g.session, insert(DOC, json!(["!"]))) else { panic!("the burst was answered") };
+    assert_eq!(next["resp"], "ack", "no line stands, so the next burst is dialed: {next}");
+}
+
+/// THE BASE a hold takes (§3c.2): the `at` of the last ACKED write on its
+/// document — whatever its kind: a mint's at its minted `addr`, a link's at
+/// its `home`, a burst's at its `doc` — and where none, the session's OPEN
+/// POSITION: a burst held on a document no ack names, its mint's row at 50
+/// below the session's open at 60, reads past it, is sent, and kept (the
+/// mutant whose base falls back to 0 faces the person's own text `moved`).
+#[test]
+fn a_hold_takes_the_last_acked_write_or_the_sessions_open_as_its_base() {
+    let g = ground_in(TempDir::new().unwrap(), bare_facts(), 60);
+    *g.fake.rows.lock().unwrap() = vec![json!({"at": 50, "op": "create_new_document", "key": "bare", "docs": [DOC]})];
+    g.hold(&insert(DOC, json!(["hello"])), "unreachable", false);
+    assert_eq!(g.rows()[0]["base"], 60, "no ack names the document: the session's open");
+    g.holds.service("b-1");
+    assert_eq!(g.fake.sent(), 1);
+    assert!(g.rows().is_empty() && g.states().contains(&"kept".to_string()), "the row before the open moves nothing");
+
+    let g = ground();
+    let mint = json!({"op": "create_new_document", "account": "1.0.1"});
+    g.holds.note_ack("b-1", &g.session, &mint, &json!({"resp": "ack_addr", "addr": "1.0.1.0.2", "at": 70}));
+    let link = json!({"op": "make_link", "home": "1.0.1.0.3", "from": {"addrs": []}, "to": {"addrs": []}, "ty": {"addrs": []}});
+    g.holds.note_ack("b-1", &g.session, &link, &json!({"resp": "ack_addr", "addr": "1.0.1.0.3.0.2.1", "at": 71}));
+    g.holds.note_ack("b-1", &g.session, &insert("1.0.1.0.4", json!(["x"])), &json!({"resp": "delivery", "items": []}));
+    for (doc, base) in [("1.0.1.0.2", 70), ("1.0.1.0.3", 71), ("1.0.1.0.4", 0)] {
+        let held = g.hold(&insert(doc, json!(["x"])), "unreachable", false);
+        let k = held["held"].as_u64().unwrap();
+        let row = g.rows().into_iter().find(|r| r["held"] == k).unwrap();
+        assert_eq!(row["base"], base, "{doc}: {row}");
+    }
+
+    // A burst dialed and acked notes its own `at`.
+    let g = ground();
+    let Sent::Answered(Ok(ack)) = g.holds.send_burst("b-1", &g.session, insert(DOC, json!(["a"]))) else { panic!("acked") };
+    let at = ack["at"].as_u64().unwrap();
+    g.hold(&insert(DOC, json!(["b"])), "unreachable", false);
+    assert_eq!(g.rows()[0]["base"], at);
 }
 
 /// A REFUSED run and `resolve`: `drop` on the refused head drops it AND every
 /// line held `behind` it on that document (the mutant that leaves them
-/// standing); `resolve` on a holding line answers `not_resolvable`; an unknown
-/// ordinal answers `no_such_held`.
+/// standing), the `held` event naming the session that acted; `resolve` on a
+/// holding line answers `not_resolvable`; an unknown ordinal answers
+/// `no_such_held`.
 #[test]
 fn a_refused_run_drops_its_behind_lines() {
-    let (holds, fake, session, _bus, _rx, _tmp) = fixture();
-    let body = json!({"resp": "rejected", "code": "out_of_bounds", "disposition": "permanent"});
-    let head = insert("1.0.1.0.1", json!(["a"]));
-    let k1 = holds.hold_after_dial("b-1", &session, &head, &Decision::Refused, "out_of_bounds", Some(&body))["held"].as_u64().unwrap();
+    let g = ground();
+    let verdict = json!({"resp": "rejected", "code": "out_of_bounds", "disposition": "permanent"});
+    let head = insert(DOC, json!(["a"]));
+    let k1 = g.holds.hold("b-1", &g.session, &head, Reason::refused("out_of_bounds", verdict)).unwrap()["held"].as_u64().unwrap();
     // Two more bursts on the same document arrive while the run stands → behind.
-    let k2 = holds.before_dial("b-1", &session, &insert("1.0.1.0.1", json!(["b"]))).unwrap().unwrap()["held"].as_u64().unwrap();
-    holds.before_dial("b-1", &session, &insert("1.0.1.0.1", json!(["c"]))).unwrap().unwrap();
-    assert_eq!(holds.rows("b-1", 1).unwrap().as_array().unwrap().len(), 3, "the run and its two behind lines stand");
+    let behind = |values: Value| -> Value {
+        let Sent::Answered(Ok(answer)) = g.holds.send_burst("b-1", &g.session, insert(DOC, values)) else { panic!("held behind the run") };
+        answer
+    };
+    let k2 = behind(json!(["b"]))["held"].as_u64().unwrap();
+    assert_eq!(behind(json!(["c"]))["cause"], "behind");
+    assert_eq!(g.rows().len(), 3, "the run and its two behind lines stand");
     // A holding line is not resolvable; an unknown ordinal is no_such_held.
-    assert_eq!(holds.resolve("b-1", &session, k2, "drop").unwrap_err().name(), "not_resolvable");
-    assert_eq!(holds.resolve("b-1", &session, 999, "drop").unwrap_err().name(), "no_such_held");
+    assert_eq!(g.holds.resolve("b-1", &g.session, k2, "drop").unwrap_err().name(), "not_resolvable");
+    assert_eq!(g.holds.resolve("b-1", &g.session, 999, "drop").unwrap_err().name(), "no_such_held");
     // Drop the refused head: the whole run goes.
-    holds.resolve("b-1", &session, k1, "drop").unwrap();
-    assert_eq!(holds.rows("b-1", 1).unwrap().as_array().unwrap().len(), 0, "the run and its behind lines are dropped");
-    assert!(fake.sent.lock().unwrap().is_empty(), "nothing is dialed on a drop");
+    let _ = g.rx.try_iter().count();
+    g.holds.resolve("b-1", &g.session, k1, "drop").unwrap();
+    assert!(g.rows().is_empty(), "the run and its behind lines are dropped");
+    assert_eq!(g.fake.sent(), 0, "nothing is dialed on a drop");
+    let said: Vec<Event> = g.rx.try_iter().filter(|e| e.name == "held").collect();
+    assert_eq!(said.len(), 1, "{said:?}");
+    assert_eq!((said[0].data["session"].as_str(), said[0].data["held"].as_u64()), (Some(g.session.reference.as_str()), Some(0)), "the drop is said under the session that acted");
+}
+
+/// No line is written outside the board's own directory: a burst held at a
+/// board whose directory is this shell's lands in `held/<chain>/`.
+#[test]
+fn a_held_line_lands_under_the_boards_own_directory() {
+    let g = ground();
+    let answer = g.hold(&insert(DOC, json!(["hello"])), "unreachable", false);
+    assert!(answer.get("unwritable").is_none(), "{answer}");
+    let file = g.store.path().join("held").join("ab".repeat(32)).join("principal-1.held");
+    let text = std::fs::read_to_string(&file).unwrap();
+    assert!(text.lines().next().unwrap().contains("\"account\":\"1.0.1\""), "the header names the session's account: {text}");
 }

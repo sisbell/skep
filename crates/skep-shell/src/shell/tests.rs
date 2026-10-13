@@ -13,9 +13,13 @@
 //! state announced at its board — a deliberate stop said once, its feed
 //! adding no `unreachable` while it stands. Then the HELD-BURST STORE: the
 //! holds against the real daemon, the poisoned burst that lands at the
-//! restart and is kept, and the signed session's own attested row.
+//! restart and is kept, the signed session's own attested row, a burst on a
+//! draft just minted kept across a restart, a relaunch with its board down
+//! listing and resending its held line, and the probe keeping its cadence
+//! while the board keeps committing.
 
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -27,7 +31,10 @@ use skepd::{embed, AuthOptions, MediaOptions, Skepd, DEFAULT_WORKERS};
 use tempfile::TempDir;
 
 use super::*;
+use crate::attest::Composer;
 use crate::events::Event;
+use crate::held::Reason;
+use crate::hold::PROBE_CADENCE;
 
 /// The daemon over `dir` at an ephemeral port.
 fn spawn(dir: &Path, local_trust: bool) -> Skepd {
@@ -578,13 +585,15 @@ fn changes_under(board: &Board, token: &Token, doc: &str, since: u64) -> Vec<Val
 }
 
 /// THE POISONED BURST LANDS AND IS KEPT (§3c.2): the kernel poisoned as the
-/// cell above poisons it, a burst held `poisoned` — its line on disk `sent:
-/// true`, since the failed repair keeps its frames in the journal — then the
-/// daemon restarted at the same port, whose open replays them: the resend's
-/// read finds the landed row, the `held` event reaches `kept` and never
-/// `moved`, the board holds the burst's row exactly once, and the file
-/// compacts away (the mutant that leaves `poisoned` at `sent: false` faces
-/// the person's own text `moved`).
+/// cell above poisons it, a burst of two characters held `poisoned` — its
+/// line on disk `sent: true`, since the failed repair keeps its frames in the
+/// journal — then the daemon restarted at the same port, whose open replays
+/// them: the resend's read finds the landed row, the site holds the burst's
+/// two values, the `held` event reaches `kept` and never `moved`, the board
+/// holds the burst's row exactly once, and the file compacts away (the
+/// mutant that leaves `poisoned` at `sent: false`, and the one that holds the
+/// frame's one string to one position's value, face the person's own text
+/// `moved`).
 #[test]
 fn a_poisoned_burst_lands_at_the_restart_and_is_kept() {
     let dir = TempDir::new().unwrap();
@@ -594,7 +603,7 @@ fn a_poisoned_burst_lands_at_the_restart_and_is_kept() {
     let store = dir.path().join("store");
     sd.daemon().fail_the_next_checkpoint_step(Step::JournalBarrier, std::io::ErrorKind::Other);
     sd.daemon().fail_the_next_checkpoint_step(Step::JournalRepair, std::io::ErrorKind::Other);
-    let held = shell.call("op", &json!({"session": session, "frame": {"op": "insert", "doc": draft, "at": {"subspace": "1", "ordinal": "2"}, "values": ["b"]}})).unwrap();
+    let held = shell.call("op", &json!({"session": session, "frame": {"op": "insert", "doc": draft, "at": {"subspace": "1", "ordinal": "2"}, "values": ["bc"]}})).unwrap();
     assert_eq!((held["resp"].as_str(), held["cause"].as_str()), (Some("held"), Some("poisoned")), "{held}");
     let rows = shell.call("held", &json!({"session": session})).unwrap();
     assert_eq!(rows.as_array().unwrap().len(), 1, "held(session) lists it: {rows}");
@@ -611,10 +620,10 @@ fn a_poisoned_burst_lands_at_the_restart_and_is_kept() {
     assert!(!states.contains(&"moved".to_string()), "the own burst is never faced moved: {states:?}");
     assert!(shell.call("held", &json!({"session": session2})).unwrap().as_array().unwrap().is_empty(), "the lines are done");
     assert!(held_path(&store).is_none(), "the file compacted away");
-    // The board holds the burst ONCE: the draft reads `a`, `b` and the rows
+    // The board holds the burst ONCE: the draft reads `a`, `bc` and the rows
     // under it since genesis are the mint, the first insert and the burst.
-    let read = shell.call("op", &json!({"session": session2, "frame": skep_client::board::frames::retrieve_v(&draft, 1, 2)})).unwrap();
-    assert_eq!(text_of(&read), "ab", "{read}");
+    let read = shell.call("op", &json!({"session": session2, "frame": skep_client::board::frames::retrieve_v(&draft, 1, 3)})).unwrap();
+    assert_eq!(text_of(&read), "abc", "{read}");
     let token = shell.sessions.get(&session2).unwrap().token.clone();
     let rows = changes_under(&shell.boards[0].board, &token, &draft, 0);
     assert_eq!(rows.len(), 3, "the mint, the first insert, the burst once: {rows:?}");
@@ -638,9 +647,9 @@ fn a_poisoned_burst_lands_at_the_restart_and_is_kept() {
 /// UNSIGNED entry whose `key` is the session key's fingerprint — no burst
 /// row is a signed entry on a conforming daemon; the own-row test's signed
 /// arm (`attest`, no `key`) is fenced by `hold`'s suite over a fake board.
-/// The in-flight landing is forced by hand: the attested burst written
-/// through the board under the session's token, so the shell saw no ack,
-/// then held `sent: true` as a lost answer is.
+/// The in-flight landing is forced by hand: the attested burst of two
+/// characters written through the board under the session's token, so the
+/// shell saw no ack, then held `sent: true` as a lost answer is.
 #[test]
 fn a_signed_sessions_landed_burst_is_kept_by_the_resend() {
     let dir = TempDir::new().unwrap();
@@ -661,7 +670,7 @@ fn a_signed_sessions_landed_burst_is_kept_by_the_resend() {
     // written under the session's token through the board itself.
     let entry = signed.sessions.get(&session).unwrap();
     let fp = entry.facts.fingerprint.expect("a signed session holds a key");
-    let frame = json!({"op": "insert", "doc": draft, "at": {"subspace": "1", "ordinal": "2"}, "values": ["b"]});
+    let frame = json!({"op": "insert", "doc": draft, "at": {"subspace": "1", "ordinal": "2"}, "values": ["bc"]});
     let board_entry = Arc::clone(&signed.boards[0]);
     let term = board_entry.board.board_term().unwrap().expect("H.1 stands on a claimed board");
     let signer = sessions::signer(&signed.store, &signed.store.key_path(&fp)).unwrap();
@@ -675,7 +684,7 @@ fn a_signed_sessions_landed_burst_is_kept_by_the_resend() {
     assert_eq!(rows[0]["key"].as_str(), Some(fp.to_hex().as_str()), "a draft's insert is outside the publish class: the attest dropped, the row unsigned under the key's fingerprint: {rows:?}");
     assert!(rows[0].get("attest").is_none(), "{rows:?}");
     // Held as a lost answer is: the line `sent: true`.
-    let held = signed.holds.hold_after_dial(&board_entry.reference, &entry, &frame, &Decision::Hold { cause: "unreachable", sent: true }, "", None);
+    let held = signed.holds.hold(&board_entry.reference, &entry, &frame, Reason::of("unreachable", true)).unwrap();
     assert_eq!(held["resp"], "held", "{held}");
     assert_eq!(signed.call("held", &json!({"session": session})).unwrap()[0]["sent"], true);
     // The restart: the session re-opened under a fresh reference, the resend
@@ -691,8 +700,8 @@ fn a_signed_sessions_landed_burst_is_kept_by_the_resend() {
     let token = signed.sessions.get(&reopened).unwrap().token.clone();
     let rows = changes_under(&board_entry.board, &token, &draft, base);
     assert_eq!(rows.len(), 1, "the burst's row once, nothing re-sent: {rows:?}");
-    let read = signed.call("op", &json!({"session": reopened, "frame": skep_client::board::frames::retrieve_v(&draft, 1, 2)})).unwrap();
-    assert_eq!(text_of(&read), "ab", "{read}");
+    let read = signed.call("op", &json!({"session": reopened, "frame": skep_client::board::frames::retrieve_v(&draft, 1, 3)})).unwrap();
+    assert_eq!(text_of(&read), "abc", "{read}");
     signed.shutdown();
     drop(signed);
     answerer.join().unwrap();
@@ -746,8 +755,8 @@ fn a_refused_run_holds_behind_it_and_resolve_acts_on_it() {
 
 /// T11: the close order — a held burst's line is on disk and listed by
 /// `held(session)` before `shutdown`, which writes nothing of the store; the
-/// next `Shell::open` lists its lines and fires the `held` event per document
-/// (the launch read) before any dial.
+/// next `Shell::open` over the same store lists the line at its first
+/// session's open.
 #[test]
 fn the_close_persists_the_held_line_and_the_relaunch_lists_it() {
     let dir = TempDir::new().unwrap();
@@ -773,14 +782,12 @@ fn the_close_persists_the_held_line_and_the_relaunch_lists_it() {
         assert_eq!(dir_signature(&path), before, "shutdown writes nothing of the store");
         drop(shell);
     }
-    // A fresh daemon and a fresh shell over the same store: the launch read
-    // lists the held line and fires the `held` event per document.
+    // A fresh daemon and a fresh shell over the same store: the first
+    // session's open reads the principal's file and lists its line.
     let sd = spawn_at(&dir.path().join("board"), true, port);
     let (shell, _lines) = shell(&origin, &store, SessionMode::Bare { principal: 1 });
     let seen = Arc::new(Mutex::new(Vec::new()));
     let _answerer = answer_moments(shell.subscribe(), Arc::clone(&shell.pending), Arc::clone(&seen));
-    // The launch fired the held event at open (before the node was dialed for a
-    // write); a subscriber that opened after it still reads the store.
     let board = shell.call("boards", &json!({})).unwrap()[0]["board"].as_str().unwrap().to_string();
     let session = shell.call("session", &json!({"board": board})).unwrap()["session"].as_str().unwrap().to_string();
     let rows = shell.call("held", &json!({"session": session})).unwrap();
@@ -846,4 +853,135 @@ fn a_second_principals_file_is_untouched_and_unlisted() {
     let text = format!("{rows1}{h1}");
     assert!(!text.contains("principal-2") && !text.contains("principal-1") && !text.contains("/held/") && !text.contains(&store.display().to_string()), "no path, directory or principal file name crosses: {text}");
     shell.shutdown();
+}
+
+/// A BURST ON A DRAFT JUST MINTED (§3c.2's `base`): the mint's ack is noted
+/// as every write's is, so a burst held on the draft before any burst of it
+/// was acked reads from the mint's position — the daemon stopped under it,
+/// restarted at the same port, a fresh session re-acquired: the burst is
+/// resent and kept, never faced `moved` (the mutant that notes a burst's
+/// acks alone reads the mint's own row and faces the person's text).
+#[test]
+fn a_burst_held_on_a_draft_just_minted_is_kept_after_a_restart() {
+    let dir = TempDir::new().unwrap();
+    let sd = spawn(&dir.path().join("board"), true);
+    let port = sd.port();
+    let origin = format!("http://127.0.0.1:{port}");
+    let store = dir.path().join("store");
+    claim_board(&origin, &store);
+    let (shell, _lines) = shell(&origin, &store, SessionMode::Bare { principal: 1 });
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let _answerer = answer_moments(shell.subscribe(), Arc::clone(&shell.pending), Arc::clone(&seen));
+    let board = shell.call("boards", &json!({})).unwrap()[0]["board"].as_str().unwrap().to_string();
+    let session = shell.call("session", &json!({"board": board})).unwrap()["session"].as_str().unwrap().to_string();
+    let draft = shell.call("op", &json!({"session": session, "frame": {"op": "create_new_document", "account": "1.0.1"}})).unwrap()["addr"].as_str().unwrap().to_string();
+    sd.shutdown();
+    let held = shell.call("op", &json!({"session": session, "frame": {"op": "insert", "doc": draft, "at": {"subspace": "1", "ordinal": "1"}, "values": ["hi"]}})).unwrap();
+    assert_eq!((held["resp"].as_str(), held["cause"].as_str()), (Some("held"), Some("unreachable")), "{held}");
+    let sd = spawn_at(&dir.path().join("board"), true, port);
+    wait_for(&seen, |e| e.name == "session-died" && e.data["session"] == session);
+    let session2 = shell.call("session", &json!({"board": board})).unwrap()["session"].as_str().unwrap().to_string();
+    wait_for(&seen, |e| e.name == "held" && e.data["doc"] == draft && e.data["state"] == "kept");
+    let states: Vec<String> = seen.lock().unwrap().iter().filter(|e| e.name == "held" && e.data["doc"] == draft).map(|e| e.data["state"].as_str().unwrap_or("?").to_string()).collect();
+    assert!(!states.contains(&"moved".to_string()), "the burst is never faced moved: {states:?}");
+    let read = shell.call("op", &json!({"session": session2, "frame": skep_client::board::frames::retrieve_v(&draft, 1, 2)})).unwrap();
+    assert_eq!(text_of(&read), "hi", "{read}");
+    shell.shutdown();
+    sd.shutdown();
+}
+
+/// A RELAUNCH WITH ITS BOARD DOWN (§3c.7): the held file is read at a
+/// session's open, never only at the shell's — a shell opened while its
+/// board's port is closed, the daemon started there before the first
+/// `session`: `held(session)` lists the line the store already holds, and the
+/// probe resends it `kept` (the mutant that reads the store at the shell's
+/// open alone lists nothing and resends nothing). And a file written after
+/// a relaunch whose board was up names the session's account in its header,
+/// never an empty one.
+#[test]
+fn a_relaunch_with_its_board_down_lists_and_resends_the_held_line() {
+    let dir = TempDir::new().unwrap();
+    let sd = spawn(&dir.path().join("board"), true);
+    let port = sd.port();
+    let origin = format!("http://127.0.0.1:{port}");
+    let store = dir.path().join("store");
+    let draft;
+    {
+        let (shell, _seen, _board, session, d) = held_ground(&dir, &sd);
+        draft = d;
+        sd.shutdown();
+        let held = shell.call("op", &json!({"session": session, "frame": {"op": "insert", "doc": draft, "at": {"subspace": "1", "ordinal": "2"}, "values": ["b"]}})).unwrap();
+        assert_eq!(held["cause"], "unreachable", "{held}");
+        shell.shutdown();
+    }
+    // The relaunch: the shell opened over the store while its board is down.
+    let (relaunched, lines) = shell(&origin, &store, SessionMode::Bare { principal: 1 });
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let _answerer = answer_moments(relaunched.subscribe(), Arc::clone(&relaunched.pending), Arc::clone(&seen));
+    let sd = spawn_at(&dir.path().join("board"), true, port);
+    let board = relaunched.call("boards", &json!({})).unwrap()[0]["board"].as_str().unwrap().to_string();
+    let session = relaunched.call("session", &json!({"board": board})).unwrap()["session"].as_str().unwrap().to_string();
+    let rows = relaunched.call("held", &json!({"session": session})).unwrap();
+    assert_eq!(rows.as_array().unwrap().len(), 1, "the session's open lists the held line: {rows}\n{}", lines.lock().unwrap().join("\n"));
+    assert_eq!(rows[0]["doc"], draft);
+    wait_for(&seen, |e| e.name == "held" && e.data["doc"] == draft && e.data["state"] == "kept");
+    let read = relaunched.call("op", &json!({"session": session, "frame": skep_client::board::frames::retrieve_v(&draft, 1, 2)})).unwrap();
+    assert_eq!(text_of(&read), "ab", "the resent burst is on the board: {read}");
+    relaunched.shutdown();
+    drop(relaunched);
+    // A relaunch with the board up, then a burst held: its file's header
+    // names the session's account.
+    let (again, _lines) = shell(&origin, &store, SessionMode::Bare { principal: 1 });
+    let board = again.call("boards", &json!({})).unwrap()[0]["board"].as_str().unwrap().to_string();
+    let session = again.call("session", &json!({"board": board})).unwrap()["session"].as_str().unwrap().to_string();
+    sd.shutdown();
+    let held = again.call("op", &json!({"session": session, "frame": {"op": "insert", "doc": draft, "at": {"subspace": "1", "ordinal": "3"}, "values": ["c"]}})).unwrap();
+    assert_eq!(held["resp"], "held", "{held}");
+    let file = std::fs::read_to_string(held_path(&store).expect("the held file stands")).unwrap();
+    let header = file.lines().next().unwrap();
+    assert!(header.contains("\"account\":\"1.0.1\""), "the header names the session's account: {header}");
+    again.shutdown();
+}
+
+/// THE PROBE KEEPS ITS CADENCE while the board keeps committing (§3c.4): a
+/// line held `unreachable`, `sent: true` — a lost answer's — at a board that
+/// answers, while a second session mints a draft every 500 ms and each
+/// commit wakes the board's feed, is resent and kept within three cadences
+/// (the mutant that counts the cadence from the feed's last wake never
+/// probes while the commits come).
+#[test]
+fn the_probe_keeps_its_cadence_while_the_board_keeps_committing() {
+    let dir = TempDir::new().unwrap();
+    let sd = spawn(&dir.path().join("board"), true);
+    let (shell, seen, board, session, draft) = held_ground(&dir, &sd);
+    let writer = shell.call("session", &json!({"board": board})).unwrap()["session"].as_str().unwrap().to_string();
+    let entry = shell.sessions.get(&session).unwrap();
+    let stop = AtomicBool::new(false);
+    let kept = thread::scope(|s| {
+        s.spawn(|| {
+            while !stop.load(Ordering::SeqCst) {
+                let _ = shell.call("op", &json!({"session": writer, "frame": {"op": "create_new_document", "account": "1.0.1"}}));
+                thread::sleep(Duration::from_millis(500));
+            }
+        });
+        let frame = json!({"op": "insert", "doc": draft, "at": {"subspace": "1", "ordinal": "2"}, "values": ["b"]});
+        shell.holds.hold(&shell.boards[0].reference, &entry, &frame, Reason::of("unreachable", true)).unwrap();
+        let deadline = Instant::now() + PROBE_CADENCE * 3;
+        let kept = loop {
+            if seen.lock().unwrap().iter().any(|e| e.name == "held" && e.data["doc"] == draft && e.data["state"] == "kept") {
+                break true;
+            }
+            if Instant::now() >= deadline {
+                break false;
+            }
+            thread::sleep(Duration::from_millis(50));
+        };
+        stop.store(true, Ordering::SeqCst);
+        kept
+    });
+    assert!(kept, "the line was not kept within three probe cadences while the board kept committing");
+    let read = shell.call("op", &json!({"session": session, "frame": skep_client::board::frames::retrieve_v(&draft, 1, 2)})).unwrap();
+    assert_eq!(text_of(&read), "ab", "{read}");
+    shell.shutdown();
+    sd.shutdown();
 }

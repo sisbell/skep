@@ -13,12 +13,12 @@ use super::*;
 fn the_name_is_one_lowercase_label_of_letters_digits_and_hyphens() {
     assert_eq!(Name::parse(b"Alice").expect("lowercased").as_str(), "alice");
     assert_eq!(Name::parse(b"a").expect("one byte").as_str(), "a");
-    let longest = "a".repeat(MAX_NAME_BYTES);
+    let longest = "a".repeat(63);
     assert_eq!(Name::parse(longest.as_bytes()).expect("63 bytes").as_str(), longest);
     assert_eq!(Name::parse(b"ALICE-2").expect("digits and an inner hyphen").as_str(), "alice-2");
     assert_eq!(Name::parse(b"-a"), Err(NameRefused::HyphenAtEitherEnd));
     assert_eq!(Name::parse(b"a-"), Err(NameRefused::HyphenAtEitherEnd));
-    assert_eq!(Name::parse("a".repeat(MAX_NAME_BYTES + 1).as_bytes()), Err(NameRefused::TooLong));
+    assert_eq!(Name::parse("a".repeat(64).as_bytes()), Err(NameRefused::TooLong), "64 bytes");
     assert_eq!(Name::parse(b"a.b"), Err(NameRefused::NotALabel));
     assert_eq!(Name::parse(b"a_b"), Err(NameRefused::NotALabel));
     assert_eq!(Name::parse(b""), Err(NameRefused::Empty));

@@ -13,7 +13,9 @@
 //! is not the production kind (`e.key.alg() != ALG_MLDSA65_ED25519`) is D-6,
 //! a PREVIEW key parsing cleanly and being refused by this test alone; and
 //! the anchorless fact — no entry anchor-flagged — kept for the reply's
-//! sentence (AUTH-5.62).
+//! sentence (AUTH-5.62). The trim and the kind test are held to the walk's
+//! own spellings by this module's suite, which reads them back from
+//! `skep-client`.
 //!
 //! THE RECORD HOLDS NO KEY THAT SIGNS: `parse_enroll` yields `PublicKey`s,
 //! and no field type in `skep-identity` can carry a private key (I1,

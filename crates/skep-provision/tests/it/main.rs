@@ -2,22 +2,24 @@
 //! over the two fakes its `test-hooks` build takes (this crate's self
 //! dev-dependency turns the feature on for the suite, no flag added): the
 //! `invite` verb mints a code; `serve` runs on an ephemeral loopback port
-//! with `--docker-fake` and `--mailer-fake` over a temp state directory; the
-//! sign-up page, the claim form with the link's code, a sign-up, a post
-//! through to the live reply at its status URL, the snippet, the one mail; a
-//! second post on the name, a bad record, a preview record, an unknown code,
-//! a status token never minted, a body past the cap — each answered as the
-//! pages say; and THE STOP: SIGTERM, the default disposition, ending the
-//! process. THE CONNECTIONS' POOL: a connection past it waits in the
-//! listener's queue until a thread frees. THE SWEEP (T22): started over a
-//! script whose `labelled_volumes` lists one half-made name, the binary
-//! removes it before its serving line, which carries the count. A START
-//! REFUSED — a snippet directory that cannot be read, an address another
-//! listener holds — and an invite not minted each exit 1, with no DATA
-//! line. No Docker runs: every call is the script's, and the calls are read
-//! back after. Beside it, `tidy` reads the crate's own source and manifest
-//! for the arrangement `src/main.rs` and `ARCHITECTURE.md` §The
-//! provisioning service state.
+//! with `--docker-fake` and `--mailer-fake` over a temp state directory,
+//! under its unit's umask; the sign-up page, the claim form with the link's
+//! code, a sign-up, a post through to the live reply at its status URL, the
+//! snippet `0644` whatever that umask, the one mail; a second post on the
+//! name, a bad record, a preview record, an unknown code, a status token
+//! never minted, a body past the cap — each answered as the pages say; and
+//! THE STOP: SIGTERM, the default disposition, ending the process. THE
+//! CONNECTIONS' POOL: a connection past it waits in the listener's queue
+//! until a thread frees. THE SWEEP (T22): started over a script whose
+//! `labelled_volumes` lists one half-made name, the binary removes it before
+//! its serving line, which carries the count. A START REFUSED — a snippet
+//! directory that cannot be read, an address another listener holds — and an
+//! invite not minted each exit 1, with no DATA line. THE STATE FILES: the
+//! `invite` verb under a shell's `022` leaves every file in the state
+//! directory `0600`, its lock file among them. No Docker runs: every call is
+//! the script's, and the calls are read back after. Beside it, `tidy` reads
+//! the crate's own source and manifest for the arrangement `src/main.rs` and
+//! `ARCHITECTURE.md` §The provisioning service state.
 
 #![cfg(unix)]
 
@@ -36,6 +38,21 @@ use skep_identity::{encode_enroll, Enrollment, PublicKey, ALG_FNDSA512_PREVIEW_E
 
 /// The binary under test, built with `test-hooks`.
 const BIN: &str = env!("CARGO_BIN_EXE_skep-provision");
+
+/// The umask the service's unit runs it under: `UMask=0077`
+/// (`deploy/skep-provision.service`). `Service::start` runs every service
+/// under it, as the unit runs the service on the VM.
+const UNIT_UMASK: &str = "077";
+
+/// The built binary as a shell runs it under `umask`: the umask set, then
+/// the binary `exec`'d in the shell's place — the pid the stop signals, the
+/// streams and the exit all the binary's own; the command's arguments
+/// follow.
+fn under_umask(umask: &str) -> Command {
+    let mut command = Command::new("/bin/sh");
+    command.args(["-c", "umask \"$1\" && shift && exec \"$0\" \"$@\"", BIN, umask]);
+    command
+}
 
 /// The six DATA lines a fresh board's dark claim prints.
 const SIX: &str = "claimant 1.0.1\\naccount 1.0.1\\nprincipal 1\\norigin http://127.0.0.1:8642\\nfirst act: from the device that generated the payload run `skep verify --board http://127.0.0.1:8642 --principal 1 --payload <the record it printed>`\\nsecond act: in your first signed session the setup act runs\\n";
@@ -104,8 +121,8 @@ fn minted(state: &Path) -> String {
     line.strip_prefix("https://skep.host/claim?invite=").unwrap_or_else(|| panic!("the invite link: {line}")).to_owned()
 }
 
-/// THE SERVICE RUNNING: the child, its port off the serving line, the line
-/// itself, its log.
+/// THE SERVICE RUNNING, under its unit's umask: the child, its port off the
+/// serving line, the line itself, its log.
 struct Service {
     child: Child,
     port: u16,
@@ -115,7 +132,7 @@ struct Service {
 
 impl Service {
     fn start(dir: &Path, script: &Path, mail: &Path, extra: &[&str]) -> Service {
-        let mut child = Command::new(BIN)
+        let mut child = under_umask(UNIT_UMASK)
             .args(["serve", "--listen", "127.0.0.1:0", "--state-dir"])
             .arg(dir.join("state"))
             .arg("--boards-dir")
@@ -208,11 +225,13 @@ fn until<T>(what: &str, mut done: impl FnMut() -> Option<T>) -> T {
     }
 }
 
-/// T14: THE SERVICE, FROM THE FORM's POST TO THE LIVE PAGE, over the fakes —
-/// and every refusal a post can meet, a status token never minted, a body
-/// past the cap, and the stop.
+/// T14: THE SERVICE, FROM THE FORM's POST TO THE LIVE PAGE, over the fakes
+/// and under its unit's umask — the snippet it writes `0644`, that umask
+/// notwithstanding — and every refusal a post can meet, a status token never
+/// minted, a body past the cap, and the stop.
 #[test]
 fn the_built_service_runs_a_post_from_the_form_to_the_live_page_over_the_fakes() {
+    use std::os::unix::fs::PermissionsExt;
     let dir = Scratch::new();
     std::fs::create_dir(dir.path().join("boards")).expect("the snippet directory");
     let state = dir.path().join("state");
@@ -281,7 +300,8 @@ fn the_built_service_runs_a_post_from_the_form_to_the_live_page_over_the_fakes()
     });
     assert!(live.contains("skep verify --board https://alice.skep.host --principal 1 --payload"), "{live}");
     assert!(live.contains("origin https://alice.skep.host") && !live.contains("127.0.0.1"), "{live}");
-    assert!(dir.path().join("boards/alice.caddy").exists(), "the snippet");
+    let snippet = std::fs::metadata(dir.path().join("boards/alice.caddy")).expect("the snippet");
+    assert_eq!(snippet.permissions().mode() & 0o777, 0o644, "the snippet readable by the proxy's container, the unit's umask notwithstanding");
     let mailed = until("the one mail", || std::fs::read_to_string(&mail).ok().filter(|m| m.contains("To: ")));
     assert_eq!(mailed.matches("=== skep-provision mail-fake: one message ===").count(), 1);
     assert!(mailed.contains("To: person@example.com\nFrom: noreply@skep.host\nReply-To: owner@skep.host\nSubject: Your board is live\n"), "{mailed}");
@@ -454,6 +474,31 @@ fn a_loose_state_directory_is_refused_at_start() {
     assert_eq!(out.status.code(), Some(1));
     assert!(String::from_utf8_lossy(&out.stderr).contains("is mode 755: other users of this machine can read the sign-up addresses and the invite codes; chmod 700"));
     assert_eq!(std::fs::read_dir(&state).expect("listed").count(), 0);
+}
+
+/// EVERY FILE IN THE STATE DIRECTORY IS BORN `0600`, the lock file among
+/// them, whatever the umask that makes it: the owner's `invite`, run as
+/// RUNBOOK §10 step 7 runs it — `sudo -u`, under a shell's usual `022` —
+/// makes the directory `0700` and the invite file and `invites.lock` beside
+/// it each `0600`: nothing there another user of the machine can read.
+#[test]
+fn the_invite_verb_makes_every_state_file_0600_under_a_shells_umask() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = Scratch::new();
+    let state = dir.path().join("state");
+    let out = under_umask("022").args(["invite", "--address", "person@example.com", "--state-dir"]).arg(&state).stdin(Stdio::null()).output().expect("ran");
+    assert_eq!(out.status.code(), Some(0), "{out:?}");
+    let mode = |path: &Path| std::fs::metadata(path).expect("its mode").permissions().mode() & 0o777;
+    assert_eq!(mode(&state), 0o700);
+    let mut born: Vec<(String, u32)> = std::fs::read_dir(&state)
+        .expect("listed")
+        .map(|entry| {
+            let entry = entry.expect("an entry");
+            (entry.file_name().to_string_lossy().into_owned(), mode(&entry.path()))
+        })
+        .collect();
+    born.sort();
+    assert_eq!(born, [("invites".to_owned(), 0o600), ("invites.lock".to_owned(), 0o600)]);
 }
 
 /// A START REFUSED, OR AN INVITE NOT MINTED, IS EXIT 1, the reason on

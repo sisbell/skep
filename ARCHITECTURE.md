@@ -1631,10 +1631,11 @@ each naming only those above it:
   container — the status token, the status map, rebuilt at start from
   the snippets, and the labelled volumes sorted against the snippets into
   half-made, routed and unnamed.
-- `statedir.rs` the state directory's door; the state files' one writer,
-  `whole`'s replacement at `0600`; and what the two files' lines carry:
-  the address rule and its words for a refusal to name, with
-  `MailAddress`, the one value an address is taken in as, and the date.
+- `statedir.rs` the state directory's door, and a lock file in it held at
+  `0600`; the state files' one writer, `whole`'s replacement at `0600`;
+  and what the two files' lines carry: the address rule and its words for
+  a refusal to name, with `MailAddress`, the one value an address is taken
+  in as, and the date.
 - `signups.rs` the sign-up file, capped at 256 KiB.
 - `invites.rs` the invite file — mint, look up, spend — under a lock file
   across processes; the code's alphabet, and `InviteCode`, the one value a

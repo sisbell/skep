@@ -1,10 +1,13 @@
 //! THE PAGES and THE REQUESTS THEY ANSWER over a desk the suite scripts:
 //! every request's status and page — the sign-up page and its thanks, the
 //! claim form with the link's code, each refusal shown on the form again,
-//! D-7 with the status URL and its refresh, the live reply, D-8, 404 — a
-//! bad body 400, a fourth field among them, a body past the cap 413; a
-//! request trickled past its deadline answered 400 in the answer's own, and
-//! a trickle cut at its deadline both ways; the invite link opening the claim
+//! D-7 with the status URL and its refresh every five seconds, the live
+//! reply, D-8, 404 — a bad body 400, a fourth field among them, a body past
+//! the cap 413; the connection's budgets the figures the operator is told —
+//! a 16 KiB head, a minute each way — its two socket timeouts set before it
+//! reads, thirty seconds each, so a silent peer is let go, a request
+//! trickled past its deadline answered 400 in the answer's own, and a
+//! trickle cut at its deadline both ways; the invite link opening the claim
 //! form with its code; plain HTML with no script and nothing fetched from
 //! elsewhere, every header that says so checked whole; every row a page shows
 //! filled with the site's two slots, the suffix and the owner's address,
@@ -92,7 +95,9 @@ fn a_sign_up_is_thanked_and_a_refused_address_shown_again_as_sent() {
     assert!(refused.body.contains(&format!("<p class=\"refused\">{}</p>", row(&site().fill(SIGNUP_REFUSED)))));
     assert!(refused.body.contains("value=\"not one\""));
     *desk.sign_up.lock().unwrap() = Some(Err(SignUpRefusal::Failed));
-    assert!(answer(&request("POST", "/signup", b"address=a%40b"), &site(), &desk).body.contains(&row(&site().fill(SIGNUP_FAILED))));
+    let failed = answer(&request("POST", "/signup", b"address=a%40b"), &site(), &desk);
+    assert_eq!(failed.status, 200);
+    assert!(failed.body.contains(&row(&site().fill(SIGNUP_FAILED))));
 }
 
 /// `GET /claim?invite=<code>`: the claim form — D-1, D-2's label and help,
@@ -150,7 +155,7 @@ fn each_claim_refusal_is_shown_on_the_form_again() {
 }
 
 /// `POST /claim` ADMITTED: D-7 and the status URL, no redirect, the page
-/// refreshing to the status URL.
+/// refreshing to the status URL every five seconds — the README's figure.
 #[test]
 fn an_admitted_post_answers_d7_with_its_status_url() {
     let answer = answer_of("POST", "/claim", b"name=alice&record=x&invite=c0de");
@@ -158,7 +163,7 @@ fn an_admitted_post_answers_d7_with_its_status_url() {
     assert!(answer.body.contains(&row(&site().fill(BEING_MADE))));
     assert!(answer.body.contains("This page's own address, to come back to: https://skep.host/status/t0k3n"));
     assert!(answer.body.contains("https://skep.host/status/t0k3n"));
-    assert!(answer.body.contains(&format!("<meta http-equiv=\"refresh\" content=\"{REFRESH_SECS}; url=/status/t0k3n\">")));
+    assert!(answer.body.contains("<meta http-equiv=\"refresh\" content=\"5; url=/status/t0k3n\">"), "{}", answer.body);
 }
 
 /// `GET /status/<token>`: D-7 while queued or running, the live reply once
@@ -178,6 +183,7 @@ fn the_status_page_shows_d7_the_live_reply_d8_or_404() {
     assert!(!live.body.contains("http-equiv"), "the live page does not refresh");
     *desk.status.lock().unwrap() = Some(Shown::Failed);
     let failed = answer(&request("GET", "/status/t0k3n", b""), &site(), &desk);
+    assert_eq!(failed.status, 200);
     assert!(failed.body.contains(&row(&site().fill(FAILED))));
     *desk.status.lock().unwrap() = None;
     assert_eq!(answer(&request("GET", "/status/other", b""), &site(), &desk).status, 404);
@@ -217,6 +223,16 @@ fn the_subsets_refusals_are_413_and_400() {
     assert_eq!(refused_answer(&Refused::TooLarge { declared: MAX_BODY + 1, cap: MAX_BODY }, &site()).status, 413);
     assert_eq!(refused_answer(&Refused::Malformed("x".into()), &site()).status, 400);
     assert_eq!(MAX_BODY, 397_312, "a record at its cap, every byte percent-encoded, and 4 KiB");
+}
+
+/// THE CONNECTION's BUDGETS ARE THE DOCUMENTS' FIGURES: a head refused past
+/// 16 KiB and a minute for each transfer, as the crate's README tells the
+/// operator — and RUNBOOK §10 step 10 the minute — so a change to either
+/// figure is a change to what the operator is told.
+#[test]
+fn the_connections_budgets_are_the_documents_figures() {
+    assert_eq!(MAX_HEAD, 16 * 1024, "a head past 16 KiB is 400");
+    assert_eq!(TRANSFER_DEADLINE, Duration::from_secs(60), "a minute in and a minute out");
 }
 
 /// THE CONNECTION over a real socket: a page with the headers that say no
@@ -339,6 +355,38 @@ fn a_trickling_request_is_answered_400_at_its_deadline() {
     let raw = heard.recv_timeout(Duration::from_secs(10)).expect("the trickle was read past its deadline");
     assert!(raw.starts_with(b"HTTP/1.1 400 Bad Request\r\n"), "{}", String::from_utf8_lossy(&raw));
     serve.join().expect("served");
+}
+
+/// SILENCE ENDS A READ: before it reads a byte the connection sets its
+/// socket's own timeouts — thirty seconds of a peer's silence ends a read,
+/// thirty of a stalled write a write — so a peer that connects and sends
+/// nothing holds a connection thread thirty seconds and no longer; the
+/// transfer deadline, checked only between socket calls, cannot end a read
+/// that never returns. Read off a second handle on the socket, which shares
+/// its options, while the client is still silent.
+#[test]
+fn a_connection_sets_its_sockets_timeouts_before_it_reads() {
+    let listener = TcpListener::bind(("127.0.0.1", 0)).expect("a port");
+    let mut client = TcpStream::connect(listener.local_addr().expect("its address")).expect("connected");
+    let (server, _) = listener.accept().expect("a connection");
+    let watch = server.try_clone().expect("a second handle on the socket");
+    let serve = std::thread::spawn(move || connection_within(server, &site(), &Scripted::default(), Duration::from_secs(5)));
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let timeouts = loop {
+        let timeouts = (watch.read_timeout().expect("its read timeout"), watch.write_timeout().expect("its write timeout"));
+        if timeouts.0.is_some() && timeouts.1.is_some() {
+            break timeouts;
+        }
+        assert!(Instant::now() < deadline, "the connection waits on a silent peer with no timeout of its own, {timeouts:?}: one would hold its thread for good");
+        std::thread::sleep(Duration::from_millis(10));
+    };
+    assert_eq!(timeouts, (Some(Duration::from_secs(30)), Some(Duration::from_secs(30))), "thirty seconds of silence, each way");
+    client.write_all(b"GET / HTTP/1.1\r\nHost: skep.host\r\n\r\n").expect("the request");
+    serve.join().expect("served");
+    drop(watch);
+    let mut raw = String::new();
+    client.read_to_string(&mut raw).expect("the answer");
+    assert!(raw.starts_with("HTTP/1.1 200 OK\r\n"), "{raw}");
 }
 
 /// A ROW escapes `&`, `<` and `>` and sets paired backticks as code, an

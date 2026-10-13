@@ -1,7 +1,8 @@
 //! THE SERVICE's START: the status map rebuilt from the snippets standing;
 //! THE SWEEP, T20 (the half-made board removed, the routed and the unnamed
-//! left, a listing that fails skipped); and a `docker` that cannot be run
-//! at all — the sweep skipped, a post refused D-8.
+//! left, a listing that fails skipped); a `docker` that cannot be run at all
+//! — the sweep skipped, a post refused D-8; and a `docker` that lists and
+//! then cannot run — the half-made board left INCOMPLETE, never cleared.
 
 use super::*;
 use crate::docker::Call;
@@ -50,6 +51,40 @@ fn a_docker_that_cannot_run_skips_the_sweep_and_refuses_a_post_d8() {
     let log = lines.lock().unwrap().clone();
     assert!(log.iter().any(|l| l.starts_with("sweep: volumes: docker could not run: ") && l.ends_with("; the sweep is skipped")), "{log:?}");
     assert!(log.iter().any(|l| l.starts_with("alice: a post could not be judged: the look at the name: ")), "{log:?}");
+}
+
+/// THE VERDICT WHERE NO LOOK CAN BE MADE: a `docker` that answers the
+/// sweep's listing and then cannot be run at all — the run's and the
+/// volume's removals each logged as one that could not run, the look after
+/// them unmade — leaves the half-made board INCOMPLETE, the look named as
+/// what could not be made: never said done, never counted cleared.
+#[test]
+fn a_look_that_cannot_be_made_never_clears_a_name() {
+    /// A runner that lists `bob` and can run nothing after it.
+    struct ListsThenGone;
+    impl Docker for ListsThenGone {
+        fn run(&self, call: Call<'_>) -> io::Result<Exit> {
+            match call {
+                Call::LabelledVolumes => Ok(Exit { code: Some(0), stdout: b"bob\n".to_vec(), stderr: Vec::new() }),
+                _ => Err(io::Error::from(io::ErrorKind::NotFound)),
+            }
+        }
+    }
+    let dir = Scratch::new();
+    let boards = dir.path().join("boards");
+    fs::create_dir(&boards).expect("the snippet directory");
+    let state_dir = StateDir::open(&dir.path().join("state")).expect("the state directory");
+    let lines = Arc::new(Mutex::new(Vec::new()));
+    let into = Arc::clone(&lines);
+    let log: Log = Arc::new(move |line: &str| into.lock().unwrap().push(line.to_owned()));
+    let config = Config { boards_dir: boards, suffix: "skep.host".into() };
+    let service = Service::new(config, state_dir, Box::new(ListsThenGone), None, log, Arc::new(|_| {})).expect("the service");
+    assert_eq!(service.sweep(), 0, "a board counted cleared though no look was made");
+    let log = lines.lock().unwrap().clone();
+    for opens in ["bob: sweep: rm_force: docker could not run: ", "bob: sweep: volume_rm: docker could not run: ", "bob: sweep: INCOMPLETE — the look at what stands could not be made: "] {
+        assert!(log.iter().any(|l| l.starts_with(opens)), "{opens}: {log:?}");
+    }
+    assert!(!log.iter().any(|l| l.ends_with("done — nothing stands under the name")), "{log:?}");
 }
 
 /// T20: THE SWEEP — `labelled_volumes` answering `alice`, `bob` and

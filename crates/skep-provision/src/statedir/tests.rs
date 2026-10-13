@@ -2,8 +2,9 @@
 //! address rule, its words and its value; THE DOOR, made `0700` and refused
 //! loose in the daemon's words — any group or other bit, each one alone; THE
 //! WRITER, its files owner-only, whose failure between the write and the
-//! rename leaves the old file whole and no temp file; and the date a line
-//! carries.
+//! rename leaves the old file whole and no temp file; a lock file in it made
+//! owner-only and held there; and the date a line carries, over a whole
+//! Gregorian cycle.
 
 use std::fs;
 
@@ -153,6 +154,24 @@ fn a_failure_before_the_rename_leaves_the_old_file_whole() {
     assert!(!temp_of(&path).exists());
 }
 
+/// A LOCK FILE IN IT is made owner-only and held there: opened where none
+/// stands it is born `0600`, and opened again where one stands at another
+/// mode it is brought back to `0600` exactly — its lock to take either way.
+#[cfg(unix)]
+#[test]
+fn a_lock_file_is_made_owner_only_and_held_there() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = Scratch::new();
+    let state_dir = StateDir::open(&dir.path().join("state")).expect("the state directory");
+    let path = state_dir.file("a.lock");
+    let mode = || fs::metadata(&path).expect("its mode").permissions().mode() & 0o777;
+    state_dir.lock_file("a.lock").expect("made").lock().expect("locked");
+    assert_eq!(mode(), 0o600);
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).expect("loosened");
+    state_dir.lock_file("a.lock").expect("opened again").lock().expect("locked");
+    assert_eq!(mode(), 0o600, "held at the state files' mode");
+}
+
 /// The date: `yyyy-mm-dd` in UTC, from unix seconds.
 #[test]
 fn the_date_is_yyyy_mm_dd_in_utc() {
@@ -161,4 +180,35 @@ fn the_date_is_yyyy_mm_dd_in_utc() {
     assert_eq!(civil_date(86_400), "1970-01-02");
     assert_eq!(civil_date(951_782_400), "2000-02-29");
     assert_eq!(civil_date(1_791_763_200), "2026-10-12");
+}
+
+/// THE DATE OVER A WHOLE GREGORIAN CYCLE: every day of the 146,097 from
+/// 1970-01-01 — 2000's leap day, 2100's, 2200's and 2300's missing ones,
+/// every month's last day — is the calendar's next day after the one before
+/// it, at the day's first second and at its last.
+#[test]
+fn every_day_of_a_gregorian_cycle_is_dated_in_turn() {
+    let leap = |y: i64| y % 4 == 0 && (y % 100 != 0 || y % 400 == 0);
+    let days_in = |y: i64, m: u32| match m {
+        2 if leap(y) => 29,
+        2 => 28,
+        4 | 6 | 9 | 11 => 30,
+        _ => 31,
+    };
+    let (mut y, mut m, mut d) = (1970i64, 1u32, 1u32);
+    for day in 0..146_097u64 {
+        let want = format!("{y:04}-{m:02}-{d:02}");
+        assert_eq!(civil_date(day * 86_400), want, "day {day}'s first second");
+        assert_eq!(civil_date(day * 86_400 + 86_399), want, "day {day}'s last second");
+        d += 1;
+        if d > days_in(y, m) {
+            d = 1;
+            m += 1;
+            if m > 12 {
+                m = 1;
+                y += 1;
+            }
+        }
+    }
+    assert_eq!((y, m, d), (2370, 1, 1), "four hundred years are 146,097 days");
 }

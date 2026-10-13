@@ -233,7 +233,8 @@ because a board with local trust on fails the `/health` step.
   invite's address is where the mail goes.
 - `<state-dir>/invites.lock` is held over each rewrite of the invite file,
   so the service's spend and the owner's `invite` never lose each other's
-  change.
+  change. It is made `0600` and held there, as every file in the state
+  directory is.
 - `<boards-dir>/<name>.caddy` is one board's proxy snippet, mode `0644`.
   The status map is rebuilt from these files at start: each snippet is a
   live name.

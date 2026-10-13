@@ -1,12 +1,13 @@
 //! T10 — THE SIGN-UP FILE: a sign-up appends one line, the address and a
-//! date; sign-ups made at once are every one kept, one writer at a time; a
-//! malformed address appends nothing; a file that cannot be written keeps
-//! nothing, and a sign-up past the file's cap keeps nothing, each refusal an
-//! error saying which; and where two refusals hold, the field's speaks
-//! first, then the file's in the order met. (The address rule, the state
-//! directory's door and the writer beneath the file are `statedir`'s suite;
-//! the page's DRAFT refusal and the log's silence about the address are the
-//! pages' and the flow's suites'.)
+//! date — a line of its own after the owner's trim too, the file saved with
+//! no last line break; sign-ups made at once are every one kept, one writer
+//! at a time; a malformed address appends nothing; a file that cannot be
+//! written keeps nothing, and a sign-up past the file's cap keeps nothing,
+//! each refusal an error saying which; and where two refusals hold, the
+//! field's speaks first, then the file's in the order met. (The address
+//! rule, the state directory's door and the writer beneath the file are
+//! `statedir`'s suite; the page's DRAFT refusal and the log's silence about
+//! the address are the pages' and the flow's suites'.)
 
 use std::fs;
 
@@ -37,6 +38,24 @@ fn a_sign_up_appends_one_line_with_the_address_and_a_date() {
         use std::os::unix::fs::PermissionsExt;
         assert_eq!(fs::metadata(state_dir.file(SIGNUPS)).expect("its mode").permissions().mode() & 0o777, 0o600);
     }
+}
+
+/// ONE LINE PER ADDRESS, after the owner's trim too: a file the owner cut
+/// down by hand and saved with no last line break — a shell's `$(…)` drops
+/// it — takes the next sign-up on a line of its own, the owner's last line
+/// kept whole: never two addresses glued into one line.
+#[test]
+fn a_sign_up_after_a_trim_with_no_last_line_break_is_a_line_of_its_own() {
+    let dir = Scratch::new();
+    let state_dir = StateDir::open(&dir.path().join("state")).expect("the state directory");
+    let signups = SignUps::new(&state_dir);
+    fs::write(state_dir.file(SIGNUPS), "kept@example.org 2026-10-01").expect("a file trimmed by hand, its last line break gone");
+    signups.append(b"person@example.com").expect("kept");
+    let text = fs::read_to_string(state_dir.file(SIGNUPS)).expect("the file");
+    let lines: Vec<&str> = text.lines().collect();
+    assert_eq!(lines.len(), 2, "{text:?}");
+    assert_eq!(lines[0], "kept@example.org 2026-10-01", "{text:?}");
+    assert!(lines[1].starts_with("person@example.com ") && text.ends_with('\n'), "{text:?}");
 }
 
 /// T10: ONE WRITER AT A TIME — sign-ups made at once, each on a thread of

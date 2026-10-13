@@ -1,21 +1,23 @@
 //! T13 — ONE POST PROVISIONED on the test's own thread, a worker's one turn
 //! (`Service::run_next`): (a) the whole flow, call by call, to the snippet,
 //! the live status, its page the reply, the invite spent and ONE mail sent
-//! after the status turned live; (b) THE DECISION TABLE, one case per failing
-//! step as the provisioning record §5.2 tabulates it, each removing what was
-//! made for the name and nothing for any other, then looking at what stands
-//! and saying done, the snippet absent, the reload called where the snippet
-//! was written, the status D-8, the invite still issued and no mail; (c) a
-//! cleanup's removal failing — a docker call's or the snippet's — logged, and
-//! the look after the removals naming what stands, the name left taken; a
-//! refused `rm -f` of a run that never stood, and a cleanup's reload failing,
-//! each logged as itself, the look finding nothing standing; a snippet whose
-//! write failed after its rename, removed by the cleanup; step 3's second
-//! look, a name taken since its post failing before anything is made; and the
-//! dark claim's retry, thirty tries two seconds apart, its last exit 4 past
-//! them the step's failure. Beside them, T12's flow half: no send before live,
-//! an outage with the status live throughout, and no mail where none is
-//! configured.
+//! after the status turned live, and an anchorless record's page and mail
+//! carrying the anchorless sentence, an anchored one's none; (b) THE DECISION
+//! TABLE, one case per failing step as the provisioning record §5.2
+//! tabulates it — the dark claim's every refusal, a shape the read refuses
+//! among them — each removing what was made for the name and nothing for any
+//! other, then looking at what stands and saying done, the snippet absent,
+//! the reload called where the snippet was written, the status D-8, the
+//! invite still issued and no mail; (c) a cleanup's removal failing — a
+//! docker call's or the snippet's — logged, and the look after the removals
+//! naming what stands, the name left taken; a refused `rm -f` of a run that
+//! never stood, and a cleanup's reload failing, each logged as itself, the
+//! look finding nothing standing; a snippet whose write failed after its
+//! rename, removed by the cleanup; step 3's second look, a name taken since
+//! its post failing before anything is made; and the dark claim's retry,
+//! thirty tries two seconds apart, its last exit 4 past them the step's
+//! failure. Beside them, T12's flow half: no send before live, an outage
+//! with the status live throughout, and no mail where none is configured.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -99,6 +101,36 @@ fn the_whole_flow_runs_every_step_in_order() {
     }
 }
 
+/// THE ANCHORLESS FACT REACHES THE PERSON: a post whose record carries no
+/// anchor-flagged entry — `skep keygen --payload`'s — goes live with the
+/// anchorless sentence (AUTH-5.62) on its status page and in its mail, the
+/// two one text, and an anchored post's carry none: the record's own fact,
+/// carried from the post through the book to the page and the mail.
+#[test]
+fn an_anchorless_records_page_and_mail_carry_the_anchorless_sentence() {
+    for anchor in [false, true] {
+        let script = [
+            inspects("alice"),
+            inspects("alice"),
+            to_the_serving_run(),
+            line("run_serving", Some("alice"), 0, "", ""),
+            line("health", Some("alice"), 0, PAIRED, ""),
+            line("caddy_reload", None, 0, "", ""),
+        ]
+        .concat();
+        let rig = rig(&script, Some(Vec::new()));
+        let token = rig.post("alice", &record(anchor), rig.invite().as_str()).expect("admitted");
+        assert!(rig.service.run_next());
+        rig.fake.assert_done();
+        let page = reply::text("https://alice.skep.host", !anchor, &crate::pages::status_url("skep.host", &token));
+        assert_eq!(page.contains(crate::strings::ANCHORLESS.text), !anchor, "the reply for anchor {anchor}");
+        assert_eq!(rig.service.status(&token), Some(Shown::Live(page.clone())), "the status page, anchor {anchor}");
+        let mail = messages(&rig.dir.path().join("mail.log")).expect("the mail log");
+        assert_eq!(mail.len(), 1, "anchor {anchor}");
+        assert!(mail[0].ends_with(&format!("\n\n{page}")), "the mail, anchor {anchor}: {}", mail[0]);
+    }
+}
+
 /// One case of the decision table: the script its worker runs through the
 /// failure, the cleanup and the look after it, the calls that follow the
 /// four inspects, and what the case does to the rig before the worker's
@@ -160,6 +192,13 @@ fn cases() -> Vec<Case> {
             before: nothing,
         });
     }
+    cases.push(Case {
+        what: "sidecar_claim answers six lines naming another account",
+        script: to_the_claim() + &line("sidecar_claim", Some("alice"), 0, &SIX.replace("account 1.0.1", "account 1.0.2"), "") + &run_and_volume_removed() + &inspects("alice"),
+        calls: [vec!["volume_create alice", "run_claim alice", "sidecar_claim alice", "rm_force alice", "volume_rm alice"], looked()].concat(),
+        reloads: false,
+        before: nothing,
+    });
     let serving = vec!["volume_create alice", "run_claim alice", "sidecar_claim alice", "rm_force alice", "run_serving alice"];
     cases.push(Case {
         what: "run_serving fails",

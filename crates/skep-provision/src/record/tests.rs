@@ -1,8 +1,11 @@
 //! T3 — THE RECORD's ADMISSION: a canonical record admitted with its
-//! anchorless fact; the hosted walk's trim; ONE VECTOR PER `PayloadError`
-//! VARIANT `parse_enroll` raises over a form's bytes, each D-5 naming its
-//! token; and D-6, a preview key that PARSES and is refused by the alg test
-//! alone. (The name's grammar, the post's other field, is `name`'s suite.)
+//! anchorless fact; the hosted walk's trim exactly — every trailing run of
+//! line breaks, and nothing else — and its two spellings read back from
+//! `skep-client`; ONE VECTOR PER `PayloadError` VARIANT `parse_enroll`
+//! raises over a form's bytes, each D-5 naming its token, and the cap first
+//! over a body that is also not text; and D-6, a preview key that PARSES and
+//! is refused by the alg test alone. (The name's grammar, the post's other
+//! field, is `name`'s suite.)
 
 use skep_identity::{encode_enroll, parse_enroll, Enrollment, PublicKey, ALG_FNDSA512_PREVIEW_ED25519, FNDSA512_PREVIEW_ED25519_KEY_LEN, MAX_RECORD_BYTES, MLDSA65_ED25519_KEY_LEN};
 
@@ -51,14 +54,45 @@ fn a_canonical_record_is_admitted_with_its_anchorless_fact() {
     assert!(!admit(three.as_bytes()).expect("the --anchors record's shape").anchorless(), "one anchor-flagged entry is enough");
 }
 
-/// T3: THE TRIM — one trailing `\n`, and a `\r\n`, admitted, the record
-/// handed on without them — exactly as the hosted walk trims.
+/// T3: THE TRIM IS H2's EXACTLY, over every run: a record followed by any
+/// run of `\r` and `\n` — each of the thirty of one to four, `\n`, `\r\n`
+/// and `\r\n\r\n` among them — is admitted and handed on without it; the
+/// same run holding a space or a tab at any place, and the run set BEFORE
+/// the record, are none of the walk's to trim and are refused `bad_record`:
+/// the form admits no record the walk would refuse.
 #[test]
-fn a_trailing_line_break_is_trimmed_as_the_hosted_walk_trims() {
+fn the_trim_takes_trailing_line_breaks_in_any_mix_and_nothing_else() {
     let canonical = one_key(true);
-    for ending in ["\n", "\r\n", "\r\n\r\n"] {
-        let record = admit(format!("{canonical}{ending}").as_bytes()).unwrap_or_else(|e| panic!("{ending:?}: {e:?}"));
-        assert_eq!(record.bytes(), canonical.as_bytes(), "{ending:?}");
+    let mut runs = Vec::new();
+    for n in 1..=4u32 {
+        for bits in 0..1u32 << n {
+            runs.push((0..n).map(|i| if (bits >> i) & 1 == 1 { '\r' } else { '\n' }).collect::<String>());
+        }
+    }
+    assert_eq!(runs.len(), 30);
+    for run in &runs {
+        let record = admit(format!("{canonical}{run}").as_bytes()).unwrap_or_else(|e| panic!("{run:?}: {e:?}"));
+        assert_eq!(record.bytes(), canonical.as_bytes(), "{run:?}");
+        for at in 0..=run.len() {
+            for other in [' ', '\t'] {
+                let mut spoiled = run.clone();
+                spoiled.insert(at, other);
+                assert_eq!(refused(format!("{canonical}{spoiled}").as_bytes()).token(), "bad_record", "{spoiled:?}");
+            }
+        }
+        assert_eq!(refused(format!("{run}{canonical}").as_bytes()).token(), "bad_record", "{run:?} before the record");
+    }
+}
+
+/// THE WALK's H2, READ BACK at test time from `skep-client`'s
+/// `src/ceremony/claim/hosted.rs`: its trim and its production-kind test in
+/// the spellings `admit` copies, so an edit to either there is a red test
+/// here until the copy follows it.
+#[test]
+fn the_admission_copies_the_hosted_walks_h2_as_it_stands() {
+    let walk = std::fs::read_to_string(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../skep-client/src/ceremony/claim/hosted.rs")).expect("skep-client's hosted walk");
+    for spelling in [".trim_end_matches(['\\n', '\\r'])", "e.key.alg() != skep_identity::ALG_MLDSA65_ED25519"] {
+        assert!(walk.contains(spelling), "the hosted walk no longer spells H2 as `record::admit` copies it: `{spelling}`");
     }
 }
 
@@ -67,7 +101,8 @@ fn a_trailing_line_break_is_trimmed_as_the_hosted_walk_trims() {
 /// member, a trailing byte and the deleted `ed25519` token (`bad_record`
 /// each); two entries of one key (`duplicate_key:2`); zero entries
 /// (`empty`); a byte that is not UTF-8 (`not_utf8`); one byte past the
-/// record cap (`too_large`).
+/// record cap (`too_large`) — and the cap first, `parse_enroll`'s own order,
+/// over a body past it whose first byte is not UTF-8 too.
 #[test]
 fn each_reachable_payload_fault_is_refused_naming_its_token() {
     let canonical = one_key(true);
@@ -88,6 +123,7 @@ fn each_reachable_payload_fault_is_refused_naming_its_token() {
         ("zero entries", encode_enroll(&[]).into_bytes(), "empty"),
         ("a byte that is not UTF-8", not_utf8, "not_utf8"),
         ("one byte past the cap", vec![b'a'; MAX_RECORD_BYTES + 1], "too_large"),
+        ("one byte past the cap, and not UTF-8: the cap first", [vec![0xff], vec![b'a'; MAX_RECORD_BYTES]].concat(), "too_large"),
     ];
     for (what, bytes, token) in vectors {
         let refusal = refused(&bytes);

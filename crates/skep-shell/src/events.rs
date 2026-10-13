@@ -125,7 +125,7 @@ impl EventBus {
 
     /// How many subscribers stand.
     #[cfg(test)]
-    pub fn subscribers(&self) -> usize {
+    fn subscribers(&self) -> usize {
         self.subscribers.lock().expect("the bus's lock").len()
     }
 }

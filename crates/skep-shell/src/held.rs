@@ -537,7 +537,7 @@ impl HeldQueue {
 
     /// Whether the queue's file is on disk (a header has been written).
     #[cfg(test)]
-    pub fn on_disk(&self) -> bool {
+    fn on_disk(&self) -> bool {
         self.disk.as_ref().is_some_and(|d| d.path.exists())
     }
 

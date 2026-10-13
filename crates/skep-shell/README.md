@@ -18,9 +18,7 @@ it (`ShellOptions::new`), `Refusal` and its `Name`, `Log` and its
 `CallOutcome`, `Event`, its `EventName` and `UnknownEventName`, `Talk`,
 `CALLS` — and two public modules, `script` and `shapes`; the rest is
 private. The modules, in the order `src/lib.rs` declares them, each naming
-only those above it (`tests/it/tidy.rs` holds the order, the two public
-modules, and `Shell`'s one door — `call`, which logs each call, with
-`fetch` public beside it):
+only those above it (held by `tests/it/tidy.rs`):
 
 | module | holds |
 |---|---|
@@ -72,12 +70,11 @@ passed its re-type names the file and crosses to the page: `skep-client`
 classes it PUBLIC, and a question carries no rule the shell could route it
 to its own window by, as it routes the NATIVE statements. The faces the
 shell carries from `skep-client` name the store's location or a key, anchor
-or index file — `no_key`'s face, `store_unreadable`'s and
+or index file — `no_key`'s arm-4 face, `store_unreadable`'s and
 `store_unwritable`'s, a walk's file halt, the index's I/O halt — and cross
 to the page as they are, `skep-client`'s to build for the bridge; and
 `store_halted` names the held file's path, as §3c.3's face has it against
-§4b.3's rule. What the shell builds itself names no path: `bind`'s warning
-carries the binding line, the bindings file said on TALK alone.
+§4b.3's rule.
 
 No feature, no async runtime, no HTTP crate: std beside the workspace's
 crates, as `skep-client`'s rule has it. The transport is not here.

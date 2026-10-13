@@ -1106,7 +1106,7 @@ what opens it, `Refusal` and its `Name`, `Log` and its `CallOutcome`,
 public modules, `script` and `shapes`; the rest is private. Its modules,
 in the order `src/lib.rs` declares them, each naming only those above it —
 an item the root re-exports counted as the module it is brought from
-(`tests/it/tidy.rs` holds the order and the two public modules):
+(held by `tests/it/tidy.rs`):
 
 - `refs.rs` the reference registry's NAMES: board and session references
   minted from OS entropy per process, never a credential, never derived
@@ -1175,17 +1175,15 @@ Rules that hold across its files:
   `bind`'s warning carries the binding line and never the bindings file
   (`bind_warning`) — save `store_halted`, whose `path` follows §3c.3's face
   against §4b.3's rule until the owner rules between them. The faces the
-  shell carries from `skep-client` still name the store's location or a
-  key, anchor or index file — `no_key`'s arm-4 face, `store_unreadable`'s
-  and `store_unwritable`'s, the walks' file halts, the index's I/O halts —
-  and are `skep-client`'s to build for the bridge; and the paper path's
-  question whether to destroy a file whose print passed its re-type names
-  that file, a question `skep-client` classes PUBLIC and the shell cannot
-  route by rule. The shell's suite reads every answer and event, the
-  refusals it binds, and every log entry of its bare walk and its paper
-  claim for the token's own text, every seed the walk made and the store's
-  location, and finds none; the provider's suite (`skep-cli`'s) reads every
-  answer, event and the log for a token-shaped run.
+  shell carries from `skep-client`, and the paper path's question whether
+  to destroy an anchor file, still name the store's location or a key,
+  anchor or index file — `skep-client`'s to build for the bridge, and
+  listed once, in the crate README's §Where the library stops at this pin.
+  The shell's suite reads every answer and event, the refusals it binds,
+  and every log entry of its bare walk and its paper claim for the token's
+  own text, every seed the walk made and the store's location, and finds
+  none; the provider's suite (`skep-cli`'s) reads every answer, event and
+  the log for a token-shaped run.
 - **The board's verdict is carried verbatim.** A `rejected` document and a
   non-200 are `Refusal::Board` with the body whole — a non-200 read once,
   by `Refusal::board`, and an `/op-at` refusal `skep-client` answers as a
@@ -1264,12 +1262,14 @@ Rules that hold across its files:
   second time finds nothing left to stop: no feed thread, open session or
   `held/<chain>/` lock outlives the shell, whether or not its owner stopped
   it, and each board's `/events` reader, asked to stop, ends at its next
-  read. A session's close a board does not answer is said on TALK, the
-  stop's as the page's, its token dying at the board's restart. Once its
-  sessions are closed the stop dials nothing (`ShellDialer`), so a board
-  answering without end — pages whose `more` never ends — holds no stop
-  past one exchange; and the stop closes the moment table, so a walk that
-  asks the page after it is abandoned at once.
+  read. The stop closes the moment table (`Pending::cancel_all`), so a walk
+  that asks the page after it is abandoned at once, its moment never sent;
+  then it closes the sessions and stops the feeds (§3c.6's order). A
+  session's close a board does not answer is said on TALK, the stop's as
+  the page's, its token dying at the board's restart. Once its sessions are
+  closed the stop dials nothing (`ShellDialer`), so a board answering
+  without end — pages whose `more` never ends — holds no stop past one
+  exchange.
 - **A principal's supplement follows its standing sessions.** The consumer
   holds one drafts supplement per (board, principal), and two tabs hold two
   sessions of one principal. A session that leaves the table — its end or
@@ -1280,17 +1280,15 @@ Rules that hold across its files:
   that holds a key — the signed mode's — carries the attest the shell
   composed, signed by the key that opened the session; the daemon drops
   one outside the class. A frame the composer cannot sign is never sent.
-- **One composer, the daemon's twin.** The bodies are
-  `skep-identity`'s builders; nothing here spells a row.
+  One composer, the daemon's twin: the bodies are `skep-identity`'s
+  builders, and nothing here spells a row.
 - **A moment is answered once, by the party the class names.** `Pending`
   removes an id at its first answer — an answer of the form its moment's
   kind takes (a label box a string, or `null` where the box offers a
   default, the answer then that default; a question a string; a yes-or-no
   a boolean), one of another form refused with the moment still waiting,
   so no walk is handed a value it must coerce; a cancel abandons; a walk
-  that ends without its answer is `abandoned` to the page. The stop closes
-  the table (`Pending::cancel_all`): a walk that asks the page after it is
-  abandoned at once, its moment never sent.
+  that ends without its answer is `abandoned` to the page.
 - **The declarations are pinned.** Every shape in the table has a sample
   the suite round-trips; a required field missing, or a built field
   undeclared on a shape the table does not mark `open`, is red, the
@@ -1298,7 +1296,9 @@ Rules that hold across its files:
   names are rendered from `EventName`.
 - **Persist first.** A `held` answer is a promise the disk already keeps:
   the burst's line is written and synced before `op` answers `held`
-  (§3c.3, J1), so a crash after the answer loses nothing of it. A second
+  (§3c.3, J1), so a crash after the answer loses nothing of it, and
+  `shutdown` writes nothing of the store: a crash between any two steps of
+  the stop loses at most the open or in-flight burst, R14's bound. A second
   shell on the same data directory finds the `held/<chain>/` lock held and
   writes nothing — its bursts answer `held` with `cause: other_window`, kept
   in memory alone and resent like any held line; a line whose copy the
@@ -1310,11 +1310,10 @@ Rules that hold across its files:
   disagree on what a refusal means: a refusal the table holds nowhere is
   faced at the act and, on a resend, leaves its line standing — never
   `done`; a write the hold never holds faces what a burst's would hold;
-  every ack is noted for the base where it is read.
-- **A reissue-class answer is the shell's to reissue.** `write_busy` and a
-  first and second `durability` are reissued within the call, every
-  `/op` under a session alike — the page meets the ack or the next
-  refusal, never `held` for one of them (§4b.1's `op` row) — and a third
+  every ack is noted for the base where it is read. `write_busy` and a
+  first and second `durability` are reissued within the call, every `/op`
+  under a session alike — the page meets the ack or the next refusal,
+  never `held` for one of them (§4b.1's `op` row) — and a third
   `durability` holds a burst; `classify` alone bounds them, so every
   reissue moves a write toward its bound.
 - **An argument is its row's.** A call's required member absent or of
@@ -1322,10 +1321,6 @@ Rules that hold across its files:
   refused `malformed_args` naming it before any dial; absent or `null`, an
   optional member is the row's default. Nothing a page sends is read as
   absent because it was spelled wrong.
-- **The close finishes the dial, then keeps.** `shutdown` writes nothing of
-  the store — every held line is already on disk — and closes the sessions
-  and stops the feeds (§3c.6's order); a crash between any two steps loses
-  at most one burst (the open or in-flight one), R14's bound.
 
 Its suites are unit modules beside the code they test. `shell/tests.rs` and
 its children run the shell against a daemon spawned in-process over a temp
@@ -1333,8 +1328,10 @@ data dir: `door` the shell's own frame, `modes` the two session modes,
 `boards` each board's node, wait and stop, `held` the held-burst store.
 `hold/tests.rs` and its children `write` and `resend` drive the hold over a
 fake board; the other modules test themselves over fakes and temp dirs;
-and `tests/it/tidy.rs` holds the arrangement. Each suite's module doc says
-what it holds.
+and `tests/it/tidy.rs` holds the arrangement — the declaration order, every
+file under `src/` declared by its parent's `mod` line, an inline test
+module as its file's last item, the two public modules, and `Shell`'s
+public methods. Each suite's module doc says what it holds.
 
 ## The command, `skep-cli`
 

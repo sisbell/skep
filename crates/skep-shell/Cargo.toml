@@ -15,21 +15,26 @@ readme = "README.md"
 [dependencies]
 # The library every acting client embeds, its `search` feature on: the
 # shell's half of search — the feed consumer, the index directory, the
-# bridge call and the state event's ten arms — is what `feed` and `search`
-# below consume. `acting` (default on) holds the store, the signer, the
-# person seam and the walks.
+# bridge call and the state event's ten arms — is what `feed` consumes,
+# `shell`'s `search` row reading the call's bound and options beside it.
+# `acting` (default on) holds the store, the signer, the person seam and
+# the walks.
 skep-client = { path = "../skep-client", features = ["search"] }
 # The entry frame and its body builders, which the attest a signed session
 # composes is made through (one composer, never a second `entry_frame`), and
 # the enrollment record `keygen` and `fingerprint` print.
 skep-identity = { path = "../skep-identity" }
-# The address vocabulary the attest's slot rows are spelled in: a span is
-# skep-address's value, reached through skep-client and skep-identity and
-# re-exported by neither.
+# The address vocabulary the composer's terms and slot rows are spelled in
+# (`Address`, `Span`, `Tumbler`) and `wire`'s document check reads
+# (`Level`): skep-address's values, reached through skep-client and
+# skep-identity and re-exported by neither.
 skep-address = { path = "../skep-address" }
-# The search index's own hit types — the hit, its snippet, a place's
-# standing — which `skep-client`'s search answer carries and this crate
-# spells as the bridge's JSON; no feature.
+# The search index's own types: the hit, its snippet, a place's standing
+# and an index state's saved pair (`ChainAt`), which `skep-client`'s search
+# answer and state carry and `feed` spells as the bridge's JSON; and the
+# board's chain (`Chain`) and the non-overwriting aside's name
+# (`aside_name`), which the held store's directory is keyed and set aside
+# by. No feature.
 skep-search = { path = "../skep-search" }
 # The bridge's values: every call's input and output, every event, is a
 # `serde_json::Value` shaped as client.md §4b.1 and §4b.2 draw it.
@@ -37,8 +42,9 @@ serde_json.workspace = true
 
 [dev-dependencies]
 # The real daemon in-process on an ephemeral port over a temp data dir, as
-# skep-client's own suite takes it: the shell's calls judged against a
-# board, never a fake.
+# skep-client's own suite takes it: the shell's calls judged against a real
+# board; the hold, the feed, the composer and the session table are driven
+# over fakes in their own suites.
 skepd = { path = "../skepd", features = ["test-hooks"] }
 # The `Step` enum the daemon's `fail_the_next_checkpoint_step` hook takes, so
 # the shell's suite can poison the kernel (`JournalBarrier` + `JournalRepair`)

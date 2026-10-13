@@ -106,8 +106,7 @@
 //! crates — and holds no transport: the loopback server is the dev verb's,
 //! the native bridge the shell's. `ARCHITECTURE.md` §The shell's core draws
 //! how the modules fit and the rules that cross them, and `tests/it/tidy.rs`
-//! holds the declaration order — an item the root re-exports read as the
-//! module it is brought from — and the two public modules to it.
+//! holds the crate to that arrangement.
 
 #![forbid(unsafe_code)]
 

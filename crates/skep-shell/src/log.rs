@@ -138,9 +138,10 @@ impl Log {
     /// One DIAL the shell made: the method and the path (its query cut off
     /// — a query may name a position and nothing else, but the record keeps
     /// the route alone), the status answered or the transport's refusal,
-    /// the sizes and the time. Made by [`ShellDialer`] alone, so every
-    /// dial is the shell's own.
-    pub(crate) fn dial(&self, method: Method, path: &str, status: Option<u16>, bytes_in: usize, bytes_out: usize, elapsed: Duration) {
+    /// the sizes and the time. Private to the dialer's file, so
+    /// [`ShellDialer`] alone writes one, and every dial the log keeps is one
+    /// the shell made.
+    fn dial(&self, method: Method, path: &str, status: Option<u16>, bytes_in: usize, bytes_out: usize, elapsed: Duration) {
         let route = path.split('?').next().unwrap_or(path);
         self.push(json!({
             "kind": "dial",
@@ -160,13 +161,13 @@ impl Log {
 
     /// How many dials the log holds.
     #[cfg(test)]
-    pub fn dials(&self) -> usize {
+    fn dials(&self) -> usize {
         self.entries.lock().expect("the log's lock").kept.iter().filter(|e| e["kind"] == "dial").count()
     }
 
     /// How many calls the log holds.
     #[cfg(test)]
-    pub fn calls(&self) -> usize {
+    fn calls(&self) -> usize {
         self.entries.lock().expect("the log's lock").kept.iter().filter(|e| e["kind"] == "call").count()
     }
 }

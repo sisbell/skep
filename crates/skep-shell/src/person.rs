@@ -128,7 +128,7 @@ impl Pending {
 
     /// The ids waiting, in no order.
     #[cfg(test)]
-    pub fn ids(&self) -> Vec<String> {
+    fn ids(&self) -> Vec<String> {
         self.table.lock().expect("the pending lock").waiting.keys().cloned().collect()
     }
 }

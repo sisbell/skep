@@ -53,7 +53,7 @@ fn facts_json(f: &skep_client::sheet::Facts) -> Value {
 /// the LINE for the page to show and the device's cause — never the
 /// bindings file's path, the store's location being NATIVE (§4b.3), said on
 /// TALK alone.
-pub(super) fn bind_warning(w: &Unappended) -> String {
+fn bind_warning(w: &Unappended) -> String {
     format!("the binding could not be recorded in the key store ({}); record this line yourself: {}", w.error, w.line)
 }
 
@@ -391,5 +391,27 @@ impl Shell {
                 Err(person.walk_refusal(h, armed))
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `bind`'s WARNING names the binding line the page records and the
+    /// device's cause, never the key store's path (§4b.3: the store's location
+    /// is NATIVE): the `Unappended` the store answers carries its bindings file,
+    /// and the warning built from it carries the line alone (the mutant that
+    /// answers the store's own text hands the page the store's location).
+    #[test]
+    fn a_binds_warning_names_the_line_and_never_the_store() {
+        let refused = Unappended {
+            path: PathBuf::from("/tmp/a-store/bindings"),
+            line: "a binding line".into(),
+            error: std::io::Error::from(std::io::ErrorKind::PermissionDenied),
+        };
+        let warning = bind_warning(&refused);
+        assert!(warning.contains("a binding line"), "the line for the page to record: {warning}");
+        assert!(!warning.contains("/tmp/a-store"), "the store's location crossed: {warning}");
     }
 }

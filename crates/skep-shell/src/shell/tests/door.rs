@@ -7,12 +7,11 @@
 //! reference or its origin names; a search's `opts` read as one value, and
 //! its query held to the shell's bound at every target; a `select` of two
 //! keys or none refused by its name, a label the box refuses `empty_label`
-//! naming its cause, and the signed mode's check naming a keyless store;
-//! `bind`'s warning naming its line and never the store; its options
-//! printing no seed and the open's preconditions stopped loudly; every day
-//! dated as the calendar counts it; and the stop abandoning a walk that
-//! waits on the page, a walk begun after it asking the page nothing, and a
-//! search after it answered `feed_stopped`.
+//! naming its cause, and the signed mode's check naming a keyless store; the
+//! shell's options printing no seed and the open's preconditions stopped
+//! loudly; every day dated as the calendar counts it; and the stop
+//! abandoning a walk that waits on the page, a walk begun after it asking
+//! the page nothing, and a search after it answered `feed_stopped`.
 
 use super::*;
 
@@ -359,23 +358,6 @@ fn a_walk_begun_after_the_stop_asks_the_page_nothing() {
     assert!(finished, "a walk begun after the stop waited on the page");
     assert!(moments.is_empty(), "a moment after the stop crossed to the page: {moments:?}");
     assert_eq!(answer.unwrap_err().name(), "abandoned");
-}
-
-/// `bind`'s WARNING names the binding line the page records and the
-/// device's cause, never the key store's path (§4b.3: the store's location
-/// is NATIVE): the `Unappended` the store answers carries its bindings file,
-/// and the warning built from it carries the line alone (the mutant that
-/// answers the store's own text hands the page the store's location).
-#[test]
-fn a_binds_warning_names_the_line_and_never_the_store() {
-    let refused = skep_client::store::Unappended {
-        path: PathBuf::from("/tmp/a-store/bindings"),
-        line: "a binding line".into(),
-        error: std::io::Error::from(std::io::ErrorKind::PermissionDenied),
-    };
-    let warning = ceremony::bind_warning(&refused);
-    assert!(warning.contains("a binding line"), "the line for the page to record: {warning}");
-    assert!(!warning.contains("/tmp/a-store"), "the store's location crossed: {warning}");
 }
 
 /// A `select` MATCHING TWO KEYS, OR NONE, is refused by its name: two keys

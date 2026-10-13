@@ -31,7 +31,9 @@ pub const SIGNUPS: &str = "signups";
 /// 6,500 sign-ups, the owner's to trim as they invite.
 const MAX_SIGNUPS_BYTES: usize = 256 * 1024;
 
-/// A sign-up refused.
+/// Why a sign-up is refused, AS THE LOG NAMES IT: the field, the file's cap,
+/// or the file itself — three reasons the page shows as two answers
+/// (`pages`' `SignUpRefusal`).
 #[derive(Debug)]
 pub enum SignUpRefused {
     /// The field is no address by the rule: nothing kept.

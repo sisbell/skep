@@ -36,7 +36,8 @@ use crate::docker::dialed_origin;
 use crate::process::Exit;
 
 /// The account the dark claim founds on a fresh board — the alpha's
-/// claimant under the root `1` — and the address fact the reply carries.
+/// claimant under the root `1` — and the account fact the reply carries, the
+/// first of the three, which the deployment notes §4 call the address.
 pub const ACCOUNT: &str = "1.0.1";
 
 /// The principal the dark claim binds: `skep claim --hosted`'s default, 1.

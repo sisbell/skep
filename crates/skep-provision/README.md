@@ -26,8 +26,8 @@ skep-provision --version
   board cut off after its snippet is written and before its invite is
   spent stands, routed — or routed at the proxy's next reload — and the
   next `serve` counts it live and leaves it, its invite still issued: a
-  post on that invite is admitted again unless the owner marks it spent.
-  The log names such a board, its `snippet: written` with no
+  post on that invite is admitted again unless the operator marks it
+  spent. The log names such a board, its `snippet: written` with no
   `the invite is spent` after it.
 - **`invite`** mints one invite into the state directory's invite file
   and prints one line on stdout, the invite link: the claim form's URL
@@ -51,14 +51,14 @@ renders it from there.
 | flag | default | what it sets |
 |---|---|---|
 | `--state-dir <DIR>` | required | the sign-up file and the invite file; made `0700` where absent, refused at start where any group or other bit is set |
-| `--reply-to <ADDRESS>` | required | the owner's mailbox: the failure page names it, and the mail replies to it |
+| `--reply-to <ADDRESS>` | required | the owner's mailbox: the failure page names it, and an answer to the mail goes to it |
 | `--listen <ADDR:PORT>` | `127.0.0.1:8842` (`DEFAULT_LISTEN`) | where the pages are served; how the proxy reaches it is the VM's configuration |
 | `--boards-dir <DIR>` | `/etc/caddy/boards` (`DEFAULT_BOARDS_DIR`) | the proxy's snippet directory |
 | `--image <TAG>` | `skep-hosted` (`DEFAULT_IMAGE`) | the hosted image |
 | `--cli-image <TAG>` | `skep-cli` (`DEFAULT_CLI_IMAGE`) | the claim sidecar's image |
 | `--network <BRIDGE>` | `skep` (`DEFAULT_NETWORK`) | the bridge the boards and the proxy share |
 | `--caddy <CONTAINER>` | `caddy` (`DEFAULT_CADDY`) | the proxy's container |
-| `--suffix <DOMAIN>` | `skep.host` (`DEFAULT_SUFFIX`) | the domain every board stands under, `<name>.<domain>` |
+| `--suffix <DOMAIN>` | `skep.host` (`DEFAULT_SUFFIX`) | the domain every board's name is under, `<name>.<domain>` |
 | `--log-max-size <SIZE>` | `10m` (`DEFAULT_LOG_MAX_SIZE`) | a serving run's log file size |
 | `--log-max-file <N>` | `5` (`DEFAULT_LOG_MAX_FILE`) | a serving run's log files kept |
 | `--workers <N>` | `3` (`DEFAULT_WORKERS`) | the boards made at once: one worker thread each; `0` is a usage refusal |
@@ -125,11 +125,11 @@ held from the moment its post is admitted until the board is live or the
 post has failed, a second post for a name in flight is refused on the
 form (D-4), and so no two workers ever run the steps for one name. A post
 waits on no board being made: its checks run under a short lock on the
-queue and the status map, and its three reads of what stands under none,
-never behind a provisioning, so every post is answered at once. Up to four
-posts make those reads at once, and up to four wait in the queue; a fifth
-past either is answered D-8, "try again later", the first with no `docker`
-call.
+queue and the status map, and its three reads of what stands under its
+name take no lock at all and never wait behind a provisioning, so every
+post is answered at once. Up to four posts make those reads at once, and
+up to four wait in the queue; a fifth past either is answered D-8, "try
+again later", the first with no `docker` call.
 
 A worker runs the deployment notes' §4 steps 3 to 5 for each post, in
 order:

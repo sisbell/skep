@@ -56,7 +56,7 @@ pub const UNEXPECTED: i32 = 125;
 struct ScriptLine {
     /// The method expected, as the trait spells it.
     method: String,
-    /// The name expected, `None` for the reload.
+    /// The name expected, `None` for the reload and the listing.
     name: Option<String>,
     /// The exit code answered.
     code: i32,
@@ -71,7 +71,7 @@ struct ScriptLine {
 pub struct Called {
     /// The method called.
     pub method: &'static str,
-    /// The name it named, `None` for the reload.
+    /// The name it named, `None` for the reload and the listing.
     pub name: Option<String>,
     /// The input it carried — the sidecar's record, on the child's stdin —
     /// where it carried any.
@@ -81,8 +81,8 @@ pub struct Called {
 }
 
 impl Called {
-    /// The call as `<method> <name>` — `<method>` alone for the reload —
-    /// the form a test lists the expected sequence in.
+    /// The call as `<method> <name>` — `<method>` alone for the reload and
+    /// the listing — the form a test lists the expected sequence in.
     #[cfg(test)]
     fn said(&self) -> String {
         match &self.name {

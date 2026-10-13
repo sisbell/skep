@@ -105,8 +105,8 @@ pub struct ServeArgs {
     /// once, a further connection waiting in the listener's queue. One or
     /// more: a service with none would accept no connection.
     pub connections: NonZeroUsize,
-    /// `--reply-to`: the owner's mailbox, which D-8 names and the mail
-    /// replies to. Required.
+    /// `--reply-to`: the owner's mailbox, which D-8 names and where an
+    /// answer to the mail goes. Required.
     pub reply_to: MailAddress,
     /// `--mailer` with `--from`, or neither: no mail.
     pub mail: Option<MailArgs>,
@@ -118,13 +118,15 @@ pub struct ServeArgs {
 /// The follow-up mail's settings.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MailArgs {
-    /// Who hands the message over.
+    /// The mailer the flags name.
     pub mailer: Mailer,
     /// `--from`: the sending address.
     pub from: MailAddress,
 }
 
-/// Who hands a message over.
+/// The mailer the flags name, which `main` makes a sender of: the host's
+/// relay client (`--mailer`), or under `test-hooks` the mail fake
+/// (`--mailer-fake`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Mailer {
     /// `--mailer <program>`: the host's relay client, `<program> -t`.
@@ -186,7 +188,8 @@ whose snippet --boards-dir lacks, so one serve per Docker host.
                           made 0700 where absent; refused at start where
                           other users of this machine can read it
   --reply-to <ADDRESS>    the owner's mailbox (required): the failure page
-                          names it, and the follow-up mail replies to it
+                          names it, and an answer to the follow-up mail
+                          goes to it
   --listen <ADDR:PORT>    the address the pages are served on (default
                           {DEFAULT_LISTEN})
   --boards-dir <DIR>      the proxy's snippet directory, one <NAME>.caddy
@@ -196,8 +199,8 @@ whose snippet --boards-dir lacks, so one serve per Docker host.
   --network <BRIDGE>      the bridge the boards and the proxy share
                           (default {DEFAULT_NETWORK})
   --caddy <CONTAINER>     the proxy's container (default {DEFAULT_CADDY})
-  --suffix <DOMAIN>       the domain every board stands under, <NAME>.<DOMAIN>
-                          (default {DEFAULT_SUFFIX})
+  --suffix <DOMAIN>       the domain every board's name is under,
+                          <NAME>.<DOMAIN> (default {DEFAULT_SUFFIX})
   --log-max-size <SIZE>   a serving run's log file size, <N>[k|m|g]
                           (default {DEFAULT_LOG_MAX_SIZE})
   --log-max-file <N>      a serving run's log files kept (default {DEFAULT_LOG_MAX_FILE})

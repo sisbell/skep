@@ -249,7 +249,7 @@ fn an_uninvited_post_learns_nothing_about_names() {
 
 /// T9: A LIVE BOARD's CODE IS LET GO OF once its spend is written: the book
 /// holds it no more, and a post naming it again is refused as spent — the
-/// file's word — never as held by a post in flight.
+/// file's word — never as held by another post.
 #[test]
 fn a_live_boards_code_is_let_go_of_and_refused_as_spent() {
     let script = [
@@ -294,7 +294,7 @@ fn a_live_boards_code_is_held_until_its_spend_is_written() {
     thread::sleep(Duration::from_millis(300));
     assert!(rig.service.book().codes.contains(&code), "the code let go of before its spend was written");
     assert_eq!(rig.post("bob", &record(true), code.as_str()), Err(Refusal::Invite));
-    assert!(rig.logged("bob: a post refused: its invite is held by a post in flight"), "{:?}", rig.log());
+    assert!(rig.logged("bob: a post refused: its invite is held by another post"), "{:?}", rig.log());
     assert!(rig.issued(&code), "a spend written past the lock");
     assert!(rig.snippet("alice").exists(), "the snippet stands while the file says issued: what a stop here leaves");
     assert!(rig.logged("alice: snippet: written") && !rig.logged("alice: the invite is spent"), "the log names the board, its spend not yet written: {:?}", rig.log());

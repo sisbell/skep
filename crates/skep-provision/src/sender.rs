@@ -174,7 +174,7 @@ pub struct Outbox {
 /// WHAT DELIVERS each message handed over: the sender's own thread, or —
 /// in a unit suite's outbox — the caller.
 enum DeliveredBy {
-    /// The sender's own thread, through its queue.
+    /// The sender's own thread, through its channel.
     Thread(mpsc::Sender<Message>),
     /// The caller, on its own thread: a unit suite's, so the order of a
     /// send against the status is the order of the calls.
@@ -218,8 +218,9 @@ impl Outbox {
         let message = Message { name, to, from: self.from.as_str().to_owned(), reply_to: self.reply_to.as_str().to_owned(), subject: fill(MAIL_SUBJECT, &[]), body };
         match &self.delivered_by {
             DeliveredBy::Thread(tx) => {
-                // The thread ends only with the process; a send that fails
-                // has no reader left to fail to.
+                // The channel's send fails only where its reader, the
+                // sender's thread, has ended — and the thread ends only with
+                // the process.
                 let _ = tx.send(message);
             }
             #[cfg(test)]

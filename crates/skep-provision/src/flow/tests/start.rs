@@ -1,8 +1,8 @@
 //! THE SERVICE's START: the status map rebuilt from the snippets standing;
 //! THE SWEEP, T20 (its listing's answer logged as every call's is, the
-//! half-made board removed, the routed and the unnamed left, a listing that
-//! fails skipped on a line of its own); a `docker` that cannot be run at all
-//! — the sweep skipped, a post refused D-8; and a `docker` that lists and
+//! half-made board removed, the routed and the ungrammatical left, a listing
+//! that fails skipped on a line of its own); a `docker` that cannot be run at
+//! all — the sweep skipped, a post refused D-8; and a `docker` that lists and
 //! then cannot run — the half-made board left INCOMPLETE, never cleared.
 
 use super::*;

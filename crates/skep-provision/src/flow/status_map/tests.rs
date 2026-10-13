@@ -1,5 +1,6 @@
 //! T8 — THE STATUS MAP: rebuilt from a snippet directory holding two routed
 //! names; a token the map does not hold answering nothing; a post in flight
+//! while queued or running and ended once live or failed; a post in flight
 //! holding its name, and a post that ends adding no name to those routed at
 //! start; a move of a token never admitted, or of an ended post, and a token
 //! admitted twice, each the caller's bug, panicking — the last before the
@@ -28,7 +29,7 @@ fn the_map_rebuilt_from_the_snippets_holds_the_names_routed_at_start() {
 }
 
 /// T8: A TOKEN NOT IN THE MAP is `None`; a post's state moves; a queued or
-/// running post holds its name, a finished one does not; and a post's end,
+/// running post holds its name, an ended one does not; and a post's end,
 /// live or failed, adds no name to those routed at start.
 #[test]
 fn the_map_answers_its_tokens_and_their_holds() {
@@ -47,6 +48,15 @@ fn the_map_answers_its_tokens_and_their_holds() {
     map.set("t3", PostState::Failed);
     assert!(!map.holds(&name("bob")));
     assert!(map.routed_at_start().is_empty(), "a post that ends is live or failed by its own state, never a name added to those routed at start");
+}
+
+/// A POST IS IN FLIGHT while queued or running, and ENDED once live or
+/// failed: its state final, its name held no more.
+#[test]
+fn a_post_is_in_flight_until_it_ends_live_or_failed() {
+    for (state, ended) in [(PostState::Queued, false), (PostState::Running, false), (PostState::Live, true), (PostState::Failed, true)] {
+        assert_eq!(state.ended(), ended, "{state:?}");
+    }
 }
 
 /// SETTING A TOKEN THIS PROCESS NEVER ADMITTED IS THE CALLER's BUG: `set`

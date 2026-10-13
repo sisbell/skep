@@ -39,8 +39,8 @@ const SNIPPET_MODE: u32 = 0o644;
 /// THE SNIPPET's TEXT for `name` under `suffix`: the deployment notes' block
 /// for `alice` under `skep.host`, byte for byte, every occurrence of either
 /// replaced — the matcher, the host, the upstream. `suffix` is a domain by
-/// `args`' door — no character the Caddyfile reads as its own — used as it
-/// stands.
+/// `args`' door — no character the Caddyfile reads as its own — used
+/// unchanged.
 pub fn snippet(name: &Name, suffix: &str) -> String {
     format!(
         "@{name} host {host}\n\

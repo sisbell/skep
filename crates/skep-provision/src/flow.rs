@@ -6,7 +6,7 @@
 //! file holds issued; the name's grammar; the record admitted (D-5, D-6) —
 //! each in process, before any docker call; then WHAT IS IN FLIGHT, under
 //! the book's short lock — the queue's depth ([`QUEUE_DEPTH`]; past it D-8,
-//! "try again later"), the codes and the names the posts in flight hold —
+//! "try again later"), the codes held and the names the posts in flight hold —
 //! refused with no docker call; then THE TRUTH ABOUT THE NAME
 //! (`names::taken`, D-4), three reads under no lock of this service's, at
 //! most [`MAX_LOOKS`] posts' at once — past it D-8, "try again later", with
@@ -111,8 +111,8 @@
 //! THE LOG, on stderr through [`Log`]: one line per step naming the name, the
 //! step and each call's exit code, and the sidecar's stderr whole, which
 //! names each record entry by its fingerprint and its label — NEVER the
-//! record whole or a key of it, an address, an invite code or a status token
-//! (the provisioning record §4).
+//! record whole or a key of it, a person's address, an invite code or a
+//! status token (the provisioning record §4).
 
 use std::collections::{HashSet, VecDeque};
 use std::fmt;
@@ -167,8 +167,8 @@ const MAX_LOOKS: usize = QUEUE_DEPTH;
 pub struct Config {
     /// `--boards-dir`: where the snippets live.
     pub boards_dir: PathBuf,
-    /// `--suffix`: the domain every board stands under — a domain by
-    /// `args`' door, used as it stands.
+    /// `--suffix`: the domain every board's name is under — a domain by
+    /// `args`' door, used unchanged.
     pub suffix: String,
 }
 
@@ -181,11 +181,12 @@ struct Job {
     address: String,
 }
 
-/// THE BOOK: WHAT IS IN FLIGHT, which the pages and the workers share under
-/// its own short lock — the posts waiting for a worker, this process's posts
-/// by token (the status map), and the invite codes the posts in flight hold —
-/// and THE RULES THAT TIE THEM: a post admitted waits with its token in the
-/// map and its code held; a post taken is running; a failed post lets its
+/// THE BOOK, which the pages and the workers share under its own short lock:
+/// WHAT IS IN FLIGHT — the posts waiting for a worker and the invite codes
+/// held — and every post this process admitted, by token, in flight or ended
+/// (the status map); and THE RULES THAT TIE THEM: a post admitted waits with
+/// its token in the map and its code held; a post taken is running; a post
+/// in flight, waiting or running, holds its name; a failed post lets its
 /// code go at once, and a live one keeps it held until the worker lets it go
 /// ([`Book::release`]), once the spend is written; and a new post is admitted
 /// only where none of a full queue, a held code and a held name blocks it —
@@ -202,7 +203,8 @@ struct Book {
 enum Blocked {
     /// [`QUEUE_DEPTH`] posts already wait.
     QueueFull,
-    /// A post in flight holds the invite code.
+    /// The invite code is held: by a post in flight, or by one gone live
+    /// until its spend is written.
     CodeHeld,
     /// A post in flight holds the name.
     NameHeld,
@@ -353,11 +355,13 @@ pub struct Service {
     /// name's lands between a snippet and its own reload, nor loads a
     /// snippet whose own route change failed.
     route_lock: Mutex<()>,
-    /// THE BOOK's SHORT LOCK: what is in flight, and its rules.
+    /// THE BOOK's SHORT LOCK: what is in flight, every post's state, and the
+    /// rules that tie them.
     book: Mutex<Book>,
     /// Woken when a post is queued, for a worker waiting at the book.
     queued: Condvar,
-    /// The posts' looks at what stands under way, at most [`MAX_LOOKS`].
+    /// How many posts are looking at what stands under their names, at most
+    /// [`MAX_LOOKS`].
     looks: AtomicUsize,
 }
 
@@ -423,7 +427,7 @@ impl Service {
                 return 0;
             }
         };
-        for listed in &labelled.unnamed {
+        for listed in &labelled.ungrammatical {
             self.log(&format!("sweep: a volume under the label is under no name of the grammar, left: {listed}"));
         }
         let mut swept = 0;
@@ -440,8 +444,8 @@ impl Service {
     }
 
     /// ONE WORKER: the next post waited for and provisioned, forever — the
-    /// name it took is its alone until the post ends live or failed, for no
-    /// second post for a name in flight is ever admitted. `serve` runs
+    /// post's name is the worker's alone until the post ends live or failed,
+    /// for no second post for a name in flight is ever admitted. `serve` runs
     /// `--workers` of these over one service.
     pub fn work(&self) -> ! {
         loop {
@@ -752,7 +756,7 @@ impl Service {
 
     /// THE MAIL HANDED OVER: the live reply handed to the outbox — where
     /// mail is configured — once the status is live, for the sender's own
-    /// thread to send; the post ends here, and its name and address go with
+    /// thread to send; the job ends here, its name and address going with
     /// the mail.
     fn hand_over_mail(&self, job: Job) {
         let Some(outbox) = &self.outbox else { return };
@@ -770,13 +774,13 @@ impl Service {
 
     /// WHAT IS IN FLIGHT, under the book's lock the caller holds: what the
     /// book says blocks the post — the queue full (D-8, "try again later"),
-    /// the code held by a post in flight, the name held by one (D-4) —
-    /// logged and refused, no docker call made.
+    /// the code held (the invite's refusal), the name held by a post in
+    /// flight (D-4) — logged and refused, no docker call made.
     fn in_flight(&self, book: &Book, name: &Name, code: &InviteCode) -> Result<(), Refusal> {
         let Some(blocked) = book.blocks(name, code) else { return Ok(()) };
         let (why, refusal) = match blocked {
             Blocked::QueueFull => (format!("{QUEUE_DEPTH} posts already wait"), Refusal::Busy),
-            Blocked::CodeHeld => ("its invite is held by a post in flight".to_owned(), Refusal::Invite),
+            Blocked::CodeHeld => ("its invite is held by another post".to_owned(), Refusal::Invite),
             Blocked::NameHeld => ("a post in flight holds the name".to_owned(), Refusal::Name),
         };
         self.log(&format!("{name}: a post refused: {why}"));

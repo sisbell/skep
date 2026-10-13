@@ -3,8 +3,8 @@
 //! two faults hold, and the alphabet at every byte; a name Docker cannot
 //! take as a name alone refused — one byte, a hosts-file name, hex digits
 //! alone — at the form and read back alike; a name read back as this
-//! service wrote it, never lowercased; and the host and the public origin a
-//! name stands at under a suffix.
+//! service wrote it, never lowercased; and a name's host and public origin
+//! under a suffix.
 
 use super::*;
 
@@ -117,7 +117,7 @@ fn each_refusal_is_an_error_saying_its_reason() {
 }
 
 /// A NAME AS THIS SERVICE WROTE IT: `alice` and an inner hyphen read back
-/// as they stand; `Alice`, which a post's field would lowercase, is no name
+/// as written; `Alice`, which a post's field would lowercase, is no name
 /// this service wrote, and neither is anything out of the grammar — one
 /// byte, a hosts-file name and hex digits alone among it.
 #[test]
@@ -129,9 +129,10 @@ fn a_name_read_back_as_written_is_never_lowercased() {
     }
 }
 
-/// The host and the PUBLIC origin a name stands at under a suffix.
+/// A name's host and PUBLIC origin under a suffix: the name, one label under
+/// it.
 #[test]
-fn the_name_stands_at_its_host_and_its_public_origin() {
+fn the_host_and_the_public_origin_are_the_name_under_the_suffix() {
     let name = Name::parse(b"alice").expect("a name");
     assert_eq!(name.host("skep.host"), "alice.skep.host");
     assert_eq!(name.origin("skep.host"), "https://alice.skep.host");

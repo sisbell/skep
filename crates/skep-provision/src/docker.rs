@@ -78,7 +78,7 @@ const DOCKER: &str = "docker";
 /// THE CLAIM RUN's BIND: its daemon's loopback (`SKEPD_BIND`, over the
 /// image's baked `0.0.0.0`), so that only a process in its own network
 /// namespace — the sidecar, which joins it — reaches the unclaimed board
-/// (AUTH-4.57 (a), (f)); the host [`dialed_origin`] dials.
+/// (AUTH-4.57 (a), (f)); [`dialed_origin`] dials it.
 const CLAIM_BIND: &str = "127.0.0.1";
 
 /// The port the image's daemon listens on — the baked `SKEPD_PORT`, the
@@ -151,8 +151,8 @@ fn image_run(name: &Name, own: Vec<String>, settings: &Settings) -> Vec<String> 
 /// The run configuration every argv is built from: the operator's flags,
 /// each value through `args`' doors — the tags, the bridge and the proxy's
 /// container one argv word not beginning with `-`, the suffix a domain,
-/// the size `<N>[k|m|g]` — and used here as it stands: [`Call::argv`]
-/// checks none again.
+/// the size `<N>[k|m|g]` — and used here unchanged: [`Call::argv`] checks
+/// none again.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Settings {
     /// The hosted image's tag (`--image`).
@@ -163,7 +163,8 @@ pub struct Settings {
     pub network: String,
     /// Caddy's container (`--caddy`).
     pub caddy: String,
-    /// The domain every board's name stands under (`--suffix`).
+    /// The domain every board's name is under, `<name>.<suffix>`
+    /// (`--suffix`).
     pub suffix: String,
     /// The serving run's log rotation: one file's size (`--log-max-size`).
     pub log_max_size: String,

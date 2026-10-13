@@ -40,7 +40,7 @@ fn the_pair_is_a_claimant_and_local_trust_false() {
     assert!(!paired(br#"{"ok":true}"#), "no auth member");
     assert!(!paired(br#"{"auth":{"claimant":"1.0.1"}}"#), "no local_trust");
     assert!(!paired(br#"{"auth":{"local_trust":false}}"#), "no claimant");
-    assert!(!paired(br#"{"auth":{"claimant":1,"local_trust":false}}"#), "a claimant that is no address");
+    assert!(!paired(br#"{"auth":{"claimant":1,"local_trust":false}}"#), "a claimant that is no string");
 }
 
 /// T6: THE WAIT ANSWERS AT THE FIRST PAIR: a failed run — its stdout the

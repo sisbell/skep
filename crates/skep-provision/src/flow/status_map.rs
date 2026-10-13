@@ -28,7 +28,9 @@ use std::path::Path;
 use crate::caddy;
 use crate::name::Name;
 
-/// A post's state, from its admission to its end.
+/// A post's state, from its admission to its end: IN FLIGHT while queued or
+/// running — its name held, its page D-7 — then ENDED, live or failed, its
+/// state final.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PostState {
     /// Admitted, waiting for the worker: D-7.
@@ -38,9 +40,17 @@ pub enum PostState {
     /// The route stands: the live reply.
     Live,
     /// A step failed and the cleanup ran: D-8 — what the post made removed,
-    /// or, where a removal itself failed, the name left standing and logged
-    /// (the provisioning record §5.2's named gap).
+    /// or, where a removal itself failed, what it left standing under the
+    /// name, logged (the provisioning record §5.2's named gap).
     Failed,
+}
+
+impl PostState {
+    /// Whether the post has ENDED — live or failed: its state final, its
+    /// name held no more. A post that has not is in flight.
+    fn ended(self) -> bool {
+        matches!(self, PostState::Live | PostState::Failed)
+    }
 }
 
 /// One post this process admitted, as its status page reads it.
@@ -95,7 +105,7 @@ impl StatusMap {
     /// Either broken is the caller's bug, and panics naming it.
     pub fn set(&mut self, token: &str, state: PostState) {
         let post = self.posts.get_mut(token).expect("`set` names a token this process admitted: the book moves only its own jobs' posts");
-        assert!(matches!(post.state, PostState::Queued | PostState::Running), "`set` moves a post that has not ended — an ended post's state is final — and this one is {:?}", post.state);
+        assert!(!post.state.ended(), "`set` moves a post that has not ended — an ended post's state is final — and this one is {:?}", post.state);
         post.state = state;
     }
 
@@ -104,11 +114,11 @@ impl StatusMap {
         self.posts.get(token)
     }
 
-    /// Whether a post this process admitted, not yet finished — queued or
-    /// running — names `name`: the name is HELD by it — the owner's lock per
-    /// name — though nothing stands under it yet.
+    /// Whether a post this process admitted that has not ended — in flight,
+    /// queued or running — names `name`: the name is HELD by it — the owner's
+    /// lock per name — though nothing stands under it yet.
     pub fn holds(&self, name: &Name) -> bool {
-        self.posts.values().any(|p| &p.name == name && matches!(p.state, PostState::Queued | PostState::Running))
+        self.posts.values().any(|p| &p.name == name && !p.state.ended())
     }
 
     /// The names routed at start, as the rebuild found them: what the

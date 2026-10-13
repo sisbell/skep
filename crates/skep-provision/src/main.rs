@@ -31,7 +31,7 @@
 //! users can read it.
 //!
 //! WHAT IT NEVER LOGS (the provisioning record §4): the record whole or a key
-//! of it, a requester's address, an invite code, a status token. Its log —
+//! of it, a person's address, an invite code, a status token. Its log —
 //! stderr, one line per step — names the board, the step, each call's exit
 //! code and the sidecar's stderr whole — its TALK, which names each entry of
 //! the record by its fingerprint and its label, the person's own words,
@@ -57,11 +57,11 @@
 //! Cut from its snippet's write until its spend is written, it is a board
 //! whose snippet stands — routed, or routed at the proxy's next reload —
 //! which the next start counts live and its sweep leaves, its invite still
-//! issued. The queue, the status tokens, an unsent mail and the codes posts
-//! in flight hold are memory and end with the process — among those codes two
-//! the file still holds issued under a live board: one whose spend could not
-//! be written, and one whose post the stop cut off between its snippet's
-//! write and its spend. The next start admits a post on either unless the
+//! issued. The queue, the status tokens, an unsent mail and the codes its
+//! posts hold are memory and end with the process — among those codes two the
+//! file still holds issued under a live board: one whose spend could not be
+//! written, and one whose post the stop cut off between its snippet's write
+//! and its spend. The next start admits a post on either unless the
 //! operator has marked it spent; the log names the board —
 //! `the invite could not be marked spent`, or `snippet: written` with no
 //! `the invite is spent` after it — and never the code. Its exit codes: 0, an
@@ -96,8 +96,8 @@ mod process;
 // A bounded wait: this many tries, this far apart, a pause before each try
 // but the first.
 mod wait;
-// A board's name: one lowercase label, and the host and the public origin
-// it stands at.
+// A board's name: one lowercase label, and the board's host and public
+// origin under the suffix.
 mod name;
 // The record's trim and parse, the preview-kind test, the anchorless fact.
 mod record;

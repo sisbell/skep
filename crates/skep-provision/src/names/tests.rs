@@ -63,11 +63,11 @@ fn a_name_is_taken_iff_any_one_of_the_three_stands() {
 /// it back, as a snippet's stem must); an empty listing sorts to nothing;
 /// a snippet directory that cannot be searched is the error.
 #[test]
-fn the_labelled_volumes_sort_into_half_made_routed_and_unnamed() {
+fn the_labelled_volumes_sort_into_half_made_routed_and_ungrammatical() {
     let dir = Scratch::new();
     fs::write(dir.path().join("alice.caddy"), b"").expect("a snippet");
     let sorted = labelled(b"alice\nbob\nCarol_X\n\nDave\n", dir.path()).expect("sorted");
-    assert_eq!(sorted, Labelled { half_made: vec![name("bob")], routed: vec![name("alice")], unnamed: vec!["Carol_X".into(), "Dave".into()] });
+    assert_eq!(sorted, Labelled { half_made: vec![name("bob")], routed: vec![name("alice")], ungrammatical: vec!["Carol_X".into(), "Dave".into()] });
     assert_eq!(labelled(b"", dir.path()).expect("sorted"), Labelled::default());
     assert_eq!(labelled(b"bob\r\n", dir.path()).expect("sorted").half_made, vec![name("bob")], "a CRLF listing");
     #[cfg(unix)]

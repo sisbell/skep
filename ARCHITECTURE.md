@@ -1608,8 +1608,8 @@ each naming only those above it:
 - `name.rs` a board's name: its grammar, one lowercase label Docker takes
   as a name alone — two bytes at least, none a container's hosts file
   answers, never hex digits alone, which a container command reads as an
-  ID's prefix — and the host and the public origin it stands at, from
-  which every `docker` call, the snippet and the reply are built; and
+  ID's prefix — and the board's host and public origin under the suffix,
+  from which every `docker` call, the snippet and the reply are built; and
   `Name::exact`, a name read back as this service wrote it — a snippet's
   stem, a labelled volume — never lowercased.
 - `record.rs` the record's admission: the hosted walk's trim,
@@ -1638,7 +1638,7 @@ each naming only those above it:
   names, read off the snippet directory.
 - `names.rs` the truth about names — the snippet, the volume, the
   container — the status token, and the labelled volumes sorted against
-  the snippets into half-made, routed and unnamed.
+  the snippets into half-made, routed and ungrammatical.
 - `statedir.rs` the state directory's door, and a lock file in it held at
   `0600`; the state files' one writer, `whole`'s replacement at `0600`;
   and the date the two files' lines carry.
@@ -1660,14 +1660,14 @@ each naming only those above it:
   `sender/fake.rs`.
 - `reply.rs` the live reply, one function for the page and the mail.
 - `flow.rs` the `Service` — the `Desk` the pages ask: a sign-up kept, a
-  post admitted, a status read; the `Book` of what is in flight, keeping
-  its own rules: the queue, its status map (`flow/status_map.rs`) —
-  rebuilt at start from the snippets — and the held codes, what blocks a
-  new post, what admitting, taking, going live and failing do; the name
-  as the unit of exclusion, the workers' steps, the route lock, the
-  cleanup table and the truth asked what stands after it, the sweep at
-  start, and the live reply's inputs gathered in one place for the status
-  page and the mail.
+  post admitted, a status read; the `Book` of what is in flight and of
+  every post's state, keeping its own rules: the queue, its status map
+  (`flow/status_map.rs`) — rebuilt at start from the snippets — and the
+  held codes, what blocks a new post, what admitting, taking, going live
+  and failing do; the name as the unit of exclusion, the workers' steps,
+  the route lock, the cleanup table and the truth asked what stands after
+  it, the sweep at start, and the live reply's inputs gathered in one
+  place for the status page and the mail.
 - `args.rs` the verbs and the flags, every default a named constant,
   `version_line` and the usage text.
 
@@ -1693,9 +1693,9 @@ Rules that hold across its files:
   flight and its admission run under the book's short lock on the status
   map, the queue and the held codes — the admission checking what is in
   flight again, and the invite again, under that lock — and its three
-  reads of what stands under no lock at all, four posts' at most at once,
-  a fifth answered D-8 with no `docker` call; none waits behind a board
-  being made, and a status page waits on nothing either.
+  reads of what stands under its name take no lock at all, four posts' at
+  most at once, a fifth answered D-8 with no `docker` call; none waits
+  behind a board being made, and a status page waits on nothing either.
 - **Connections are a pool, and slowness ends.** `--connections` threads,
   sixteen by default, each take the next connection off the listener, a
   further one waiting in the listener's queue; both pools are made at

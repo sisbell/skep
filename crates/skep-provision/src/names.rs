@@ -90,15 +90,16 @@ pub struct Labelled {
     /// Under a name whose snippet stands: a board routed — live, or stopped
     /// and Docker's `--restart` to bring back — and left.
     routed: Vec<Name>,
-    /// Under no name [`Name::exact`] reads, as listed; logged and left.
-    pub unnamed: Vec<String>,
+    /// Under no name of the grammar — none [`Name::exact`] reads — as
+    /// listed; logged and left.
+    pub ungrammatical: Vec<String>,
 }
 
-/// THE LABELLED VOLUMES SORTED: `listing` is the stdout of the volumes
-/// call, one name per line (a blank line no name); each is a name
+/// THE LABELLED VOLUMES SORTED: `listing` is [`Docker::labelled_volumes`]'s
+/// stdout, one name per line (a blank line no name); each is a name
 /// [`Name::exact`] reads, and then half-made or routed by whether
-/// `<boards-dir>/<name>.caddy` stands, or unnamed. The error is the snippet
-/// directory's.
+/// `<boards-dir>/<name>.caddy` stands, or ungrammatical. The error is the
+/// snippet directory's.
 pub fn labelled(listing: &[u8], boards_dir: &Path) -> io::Result<Labelled> {
     let mut sorted = Labelled::default();
     for listed in String::from_utf8_lossy(listing).lines().map(str::trim).filter(|l| !l.is_empty()) {
@@ -110,7 +111,7 @@ pub fn labelled(listing: &[u8], boards_dir: &Path) -> io::Result<Labelled> {
                     sorted.half_made.push(name);
                 }
             }
-            None => sorted.unnamed.push(listed.to_owned()),
+            None => sorted.ungrammatical.push(listed.to_owned()),
         }
     }
     Ok(sorted)

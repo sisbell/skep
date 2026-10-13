@@ -111,7 +111,7 @@ impl fmt::Debug for Post<'_> {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Refusal {
     /// The field is no code of the code's form, or the code is not in the
-    /// file, or spent, or held by a post in flight: the DRAFT refusal.
+    /// file, or spent, or held by another post: the DRAFT refusal.
     Invite,
     /// The name is not one label, is taken — something stands under it —
     /// or is held by a post in flight: D-4.
@@ -127,7 +127,9 @@ pub enum Refusal {
     Failed,
 }
 
-/// Why a sign-up is refused.
+/// A sign-up refused, AS ITS PAGE SHOWS IT: the address refused by the rule,
+/// or one that could not be kept — two answers where the file has three
+/// reasons (`signups`' `SignUpRefused`), which the log names.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SignUpRefusal {
     /// The field is no address.
@@ -186,13 +188,13 @@ pub trait Desk: Sync {
     fn status(&self, token: &str) -> Option<Shown>;
 }
 
-/// What every page fills its slots from: the suffix the boards stand
+/// What every page fills its slots from: the suffix every board's name is
 /// under, and the owner's address D-8 names — both filled into every row a
 /// page shows ([`Site::fill`]).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Site {
     /// `--suffix`: `skep.host` in the alpha — a domain by `args`' door, used
-    /// as it stands.
+    /// unchanged.
     pub suffix: String,
     /// `--reply-to`: the owner's address, which D-8 names.
     pub owner_address: String,

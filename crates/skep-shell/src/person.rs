@@ -10,7 +10,9 @@
 //! own abandonment exit, and the person names the walk's halt as the call's
 //! refusal `abandoned` ([`BridgePerson::walk_refusal`]). A statement needs
 //! no answer and is forwarded as a moment whose `answerable` is false; the
-//! page may ignore it. AN ANSWER's FORM is its moment's kind's
+//! page may ignore it — save a NATIVE one ([`NATIVE_RULES`]), a statement
+//! naming where key material rests on disk, which goes to the dev arm and
+//! never to the page. AN ANSWER's FORM is its moment's kind's
 //! ([`MomentKind::takes`]): a label box takes a string,
 //! or `null` for the box's default; a question a string; a yes-or-no a
 //! boolean — asked by [`Pending::answer`], the page's one way in, so a
@@ -154,6 +156,19 @@ impl MomentKind {
     }
 }
 
+/// THE RULES WHOSE STATEMENTS ARE NATIVE — the shell's own window's and
+/// never the page's (`client.md` §4b.3: an anchor file's destination is
+/// NATIVE, "its copy the ladder words" with it, and "a key file's path, the
+/// store's location, an anchor file's path or contents: the same"). Each
+/// is a rule whose statements name where key material rests, or what was
+/// done with it there: AUTH-5.40's ladder words at the anchor file written;
+/// AUTH-5.41's line on the print, naming the file kept; §4.1 S3's
+/// read-back of an anchor file; AUTH-5.54 step 3's placed copy and kept
+/// artifact; §3a's key file written into the store; and §9 item 36's key
+/// file a retirement leaves in place. A statement is classed by its rule,
+/// the one handle a `Public<Statement>` carries.
+const NATIVE_RULES: [&str; 6] = ["AUTH-5.40", "AUTH-5.41", "§4.1 S3", "AUTH-5.54 step 3", "§3a", "§9 item 36"];
+
 /// The refusal for an `answer` or a `cancel` no moment waits for.
 fn no_such_moment(id: &str) -> Refusal {
     Refusal::shell(Name::NO_SUCH_MOMENT, json!({"id": id}))
@@ -229,6 +244,10 @@ impl BridgePerson {
 
 impl Person for BridgePerson {
     fn say(&mut self, m: Public<Statement>) {
+        if NATIVE_RULES.contains(&m.0.rule) {
+            self.arm.native(&m.0);
+            return;
+        }
         let _ = self.moment(MomentKind::Statement, json!({"rule": m.0.rule, "text": m.0.text}));
     }
 
@@ -377,7 +396,9 @@ mod tests {
         assert_eq!(rx.recv().unwrap().data["board"], Value::Null);
     }
 
-    /// A SECRET and a CONSENT moment never reach the bus: the arm answers.
+    /// A SECRET and a CONSENT moment never reach the bus — every one of the
+    /// seven, the sheet, its dismissal and an anchor's destination among
+    /// them: the arm answers.
     #[test]
     fn secret_and_consent_moments_go_to_the_arm_and_never_to_the_page() {
         let (bus, pending, arm) = fixture();
@@ -387,7 +408,33 @@ mod tests {
         assert_eq!(person.retype(Secret(Retype { prompt: "type".into() })).unwrap(), Retyped::Declined);
         assert_eq!(person.import(Secret(Import { prompt: "import".into() })).unwrap(), Imported::Neither);
         assert_eq!(person.kept_or_placed(Secret(HandedPath { path: PathBuf::from("/k"), text: "?".into() })).unwrap(), KeptOrPlaced::Kept);
+        let fields = skep_client::sheet::SheetFields { anchor: true, alg: "mldsa65-ed25519".into(), label: None, fingerprint_hex: "ab".repeat(32), fingerprint_grouped: "abab".into(), seed_grouped: "5e5e 5e5e".into(), account: None, principal: None, origin: None };
+        person.sheet(Secret(Sheet { fields })).unwrap();
+        person.dismiss();
+        assert_eq!(person.destination(Secret(Destination { prompt: "where".into(), which: 1 })).unwrap(), PathBuf::from("/tmp/x/anchor-1"));
         assert!(rx.try_recv().is_err(), "no event crossed to the page");
+    }
+
+    /// A NATIVE STATEMENT — one naming where key material rests (§4b.3) — is
+    /// said on TALK under its rule and never reaches the bus, under each of
+    /// the six rules spelled here; a statement of another rule crosses as a
+    /// moment (the mutant that drops a rule from `NATIVE_RULES` hands the
+    /// page an anchor file's path, or the store's location).
+    #[test]
+    fn a_native_statement_goes_to_the_arm_and_never_to_the_page() {
+        let lines = Arc::new(Mutex::new(Vec::new()));
+        let kept = Arc::clone(&lines);
+        let talk: crate::Talk = Arc::new(move |l: &str| kept.lock().unwrap().push(l.to_string()));
+        let bus = Arc::new(EventBus::new());
+        let rx = bus.subscribe();
+        let mut person = BridgePerson::new(bus, Arc::new(Pending::new()), Arc::new(DevArm::auto(PathBuf::from("/tmp/x"), talk)), "claim", Some("b-1".into()));
+        for rule in ["AUTH-5.40", "AUTH-5.41", "§4.1 S3", "AUTH-5.54 step 3", "§3a", "§9 item 36"] {
+            person.say(Public(Statement { rule, text: "anchor file written: /store-anchors/a".into() }));
+            assert!(rx.try_recv().is_err(), "{rule}: a native statement crossed to the page");
+            assert_eq!(lines.lock().unwrap().last().map(String::as_str), Some(format!("dev arm: {rule}: anchor file written: /store-anchors/a").as_str()), "{rule}");
+        }
+        person.say(Public(Statement { rule: "AUTH-5.44 (notebook)", text: "keep the anchor files apart".into() }));
+        assert_eq!(rx.try_recv().map(|e| e.data["data"]["rule"].clone()), Ok(json!("AUTH-5.44 (notebook)")), "a public statement crosses");
     }
 
     /// A moment the dev arm leaves abandons the walk and marks the person,

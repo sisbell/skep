@@ -3,10 +3,14 @@
 //! as the page would), a session in the token's place, a draft write acked
 //! and its `feed` update the board's own row, a publish-class write refused
 //! `signed_session_required` verbatim, a history read past the head refused
-//! `beyond_head` under the board's own status, `accept`'s armed name read
-//! off the real walk, the stale and foreign references, the token's text in
-//! no answer, no event and no log entry, and a closed session's drafts rows
-//! ahead of its `session-died`; then the signed mode over the same store: a
+//! `beyond_head` under the board's own status, `accept`'s armed names read
+//! off the real walk, the stale and foreign references, the token's text, a
+//! seed the walk made and the store's location in no answer, no event and
+//! no log entry — a paper claim's among them — a search's query recorded
+//! nowhere, every event held to its declaration, and a closed session's
+//! drafts rows ahead of its `session-died`; a death signal at a call's own
+//! dial ending its session, and a released supplement keeping its drafts
+//! cursor; then the signed mode over the same store: a
 //! publish-class write acked — the attest the shell composed — and the same
 //! write under the bare mode refused, and every kind with an entry frame
 //! judged and acked; a session's open position the board's own, read before
@@ -20,9 +24,13 @@
 
 use super::*;
 
-/// THE BARE MODE, end to end.
+/// THE BARE MODE, end to end — and the page handed nothing: no token, no
+/// seed the walk made, no path under the store, in any answer, refusal,
+/// event or log entry, no seed on TALK, no search's query in the log, on
+/// TALK or in its refusal; and every event, and the claim's answer, held
+/// to its declaration.
 #[test]
-fn the_bare_mode_claims_opens_writes_and_names_no_token() {
+fn the_bare_mode_claims_opens_writes_and_hands_the_page_nothing() {
     let dir = TempDir::new().unwrap();
     let sd = spawn(&dir.path().join("board"), true);
     let origin = format!("http://127.0.0.1:{}", sd.port());
@@ -47,6 +55,14 @@ fn the_bare_mode_claims_opens_writes_and_names_no_token() {
     let claimed = shell.call("claim", &json!({"board": board, "name": "a name"})).unwrap_or_else(|r| panic!("{r}\n{}", lines.lock().unwrap().join("\n")));
     assert_eq!(claimed["account"], "1.0.1");
     assert_eq!(claimed["principal"], 1);
+    assert_eq!(claimed["agent_space"], "1.0.1.1");
+    crate::shapes::assert_declared("Claimed", &claimed);
+    // The claimant key is bound now: its row names the binding the claim
+    // appended, and no outstanding act.
+    let bound = shell.call("fingerprint", &json!({})).unwrap();
+    let claimant = bound.as_array().unwrap().iter().find(|row| row["fingerprint"] == keygen["fingerprint"]).expect("the claimant key is listed");
+    assert_eq!(claimant["unbound"], false, "{claimant}");
+    assert!(claimant["bindings"].as_array().unwrap().contains(&json!(format!("{origin} principal 1 account 1.0.1"))), "{claimant}");
     let health = shell.call("health", &json!({"board": board})).unwrap();
     assert_eq!(health["mode"], "CLAIMED-PERMISSIVE");
     assert_eq!(health["health"]["auth"]["claimant"], "1.0.1");
@@ -119,13 +135,19 @@ fn the_bare_mode_claims_opens_writes_and_names_no_token() {
         assert_eq!((refused.name(), v["kind"].as_str(), v["status"].as_u64()), ("beyond_head", Some("refused"), Some(400)), "{v}");
         assert!(v["body"]["head"].is_u64(), "the head the board named rides its verdict: {v}");
     }
-    // `accept` at an address the giver has not delegated: the armed name,
-    // read off the real walk's halt.
+    // `accept`'s armed names, read off the real walk's halt: an address the
+    // giver has not delegated, and the claim's agent space — delegated, no
+    // set of its own — under an empty label, refused at the box.
     assert_eq!(shell.call("accept", &json!({"board": board, "address": "1.0.1.7"})).unwrap_err().name(), "not_delegated");
-    // Search: the index is the consumer's; the guest form over the board.
-    let answer = shell.call("search", &json!({"session": session, "board": board, "query": "hello", "opts": {"limit": 5}})).unwrap();
+    assert_eq!(shell.call("accept", &json!({"board": board, "address": "1.0.1.1", "label": ""})).unwrap_err().name(), "empty_label");
+    // Search: the index is the consumer's; the guest form over the board. A
+    // query is recorded nowhere: no log entry, no TALK line, no refusal.
+    let query = "zqxjvk";
+    let answer = shell.call("search", &json!({"session": session, "board": board, "query": query, "opts": {"limit": 5}})).unwrap();
     assert!(answer["state"]["arm"].is_string());
-    assert_eq!(shell.call("search", &json!({"session": session, "query": "x".repeat(2000)})).unwrap_err().name(), "query_too_long");
+    let too_long = shell.call("search", &json!({"session": session, "query": "x".repeat(2000)})).unwrap_err();
+    assert_eq!(too_long.name(), "query_too_long");
+    assert!(!too_long.to_value().to_string().contains("xxxxxxxx"), "the refusal holds no query text: {too_long}");
     let elsewhere = shell.call("search", &json!({"session": session, "board": "b-elsewhere", "query": "hello"})).unwrap_err();
     assert_eq!((elsewhere.name(), elsewhere.to_value()["what"].as_str()), ("malformed_args", Some("board")), "a session searches its own board");
     // Close: `{}`, the event, then the stale reference.
@@ -135,12 +157,27 @@ fn the_bare_mode_claims_opens_writes_and_names_no_token() {
     assert_eq!(died.data["reason"]["arm"], "closed");
     assert_eq!(shell.call("op", &json!({"session": session, "frame": {"op": "doc_metadata", "doc": draft}})).unwrap_err().name(), "session_ended");
     assert_eq!(shell.call("close", &json!({"session": session})).unwrap_err().name(), "session_ended");
-    // The token's text in no answer, no refusal, no event and no log entry:
-    // the page holds nothing.
-    let answers = [&boards, &keygen, &rows, &claimed, &health, &again, &opened, &minted, &acked, &answer];
-    let refusals = [&refused, &guest, &write, &reinstate].map(Refusal::to_value);
+    // The token's text, a seed the walk made, a path under the store: in no
+    // answer, no refusal, no event and no log entry — the page holds
+    // nothing — and no seed on TALK, the shell's own window.
+    let answers = [&boards, &keygen, &rows, &claimed, &bound, &health, &again, &opened, &minted, &acked, &answer];
+    let refusals = [&refused, &guest, &write, &reinstate, &too_long].map(Refusal::to_value);
     let all = format!("{answers:?}{refusals:?}{:?}{:?}{:?}", died.data, seen.lock().unwrap(), shell.log().entries());
     assert!(!all.contains(&token), "the token never crosses");
+    let seeds = seeds_of(&store);
+    assert_eq!(seeds.len(), 3, "the device key and the two anchors");
+    let talked = lines.lock().unwrap().join("\n");
+    for seed in &seeds {
+        assert!(!all.contains(seed.as_str()) && !talked.contains(seed.as_str()), "a seed crossed");
+    }
+    let store_text = store.display().to_string();
+    let leaked: Vec<String> = seen.lock().unwrap().iter().map(|e| e.data.to_string()).filter(|data| data.contains(&store_text)).collect();
+    assert!(leaked.is_empty() && !all.contains(&store_text), "a path under the store crossed: {leaked:?}");
+    let logged = Value::from(shell.log().entries()).to_string();
+    for text in [query, "xxxxxxxx"] {
+        assert!(!logged.contains(text) && !talked.contains(text), "a search's query is recorded: `{text}`");
+    }
+    assert_events_declared(&seen.lock().unwrap());
     assert_eq!(shell.call("upload", &json!({"session": "s-gone"})).unwrap_err().name(), "session_ended");
     shell.shutdown();
     drop(shell);
@@ -591,5 +628,138 @@ fn the_codecs_budgets_are_the_composers() {
         assert!(!unparsed(at), "{cell} at the budget parses");
         assert!(unparsed(past), "{cell} past the budget is refused at the parse");
     }
+    sd.shutdown();
+}
+
+/// A PAPER CLAIM HANDS THE PAGE NO SEED AND NO PATH (§4b.3: the anchor
+/// file's destination is NATIVE, "its copy the ladder words" with it): the
+/// notebook claim with its anchors printed — the sheets the dev arm's, the
+/// re-type declined, so AUTH-5.41's line on the unverified print is said
+/// beside AUTH-5.40's ladder words — carries none of its three seeds, nor a
+/// path under the store, in any answer, event or log entry, and no seed on
+/// TALK, where the two native lines are said (the mutant that forwards a
+/// native statement hands the page the anchor file's path).
+#[test]
+fn a_paper_claim_hands_the_page_no_seed_and_no_path() {
+    let dir = TempDir::new().unwrap();
+    let sd = spawn(&dir.path().join("board"), true);
+    let origin = format!("http://127.0.0.1:{}", sd.port());
+    let store = dir.path().join("store");
+    let (shell, lines) = shell(&origin, &store, SessionMode::Bare { principal: 1 });
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let answerer = answer_moments(shell.subscribe(), Arc::clone(&shell.pending), Arc::clone(&seen));
+    let board = shell.board_references().remove(0);
+    let keygen = shell.call("keygen", &json!({"label": "notebook"})).unwrap();
+    let claimed = shell.call("claim", &json!({"board": board, "name": "a name", "paper": true})).unwrap_or_else(|r| panic!("{r}\n{}", lines.lock().unwrap().join("\n")));
+    assert_eq!(claimed["account"], "1.0.1");
+    let talked = lines.lock().unwrap().join("\n");
+    assert!(talked.contains("dev arm: the sheet for fingerprint"), "the SECRET sheets went to the dev arm:\n{talked}");
+    assert!(talked.contains("dev arm: AUTH-5.40: anchor file written: ") && talked.contains("dev arm: AUTH-5.41: "), "the native lines are said on TALK:\n{talked}");
+    let all = format!("{keygen:?}{claimed:?}{:?}{:?}", seen.lock().unwrap(), shell.log().entries());
+    let seeds = seeds_of(&store);
+    assert_eq!(seeds.len(), 3, "the device key and the two anchors");
+    for seed in &seeds {
+        assert!(!all.contains(seed.as_str()) && !talked.contains(seed.as_str()), "a seed crossed");
+    }
+    let store_text = store.display().to_string();
+    let leaked: Vec<String> = seen.lock().unwrap().iter().map(|e| e.data.to_string()).filter(|data| data.contains(&store_text)).collect();
+    assert!(leaked.is_empty() && !all.contains(&store_text), "a path under the store crossed: {leaked:?}");
+    assert_events_declared(&seen.lock().unwrap());
+    shell.shutdown();
+    drop(shell);
+    answerer.join().unwrap();
+    sd.shutdown();
+}
+
+/// A DEATH SIGNAL AT A CALL's OWN DIAL ends the session by the shell's hand
+/// (`Sessions::end`) at each dial a call makes under its token — an `op`'s
+/// `/op`, an `/op-at` read's, and `fetch`'s `/blob`: three sessions as
+/// principals the board seats no account for, so no supplement presents
+/// their tokens, the board quiet and each token closed at it; each call
+/// answers `session_died` with the reason its end derived, its reference
+/// then names nothing, and one `session-died` goes out per session (the
+/// mutants that drop a call's death arm leave the session standing behind
+/// a refusal the page cannot read as the restart).
+#[test]
+fn a_death_signal_at_a_calls_own_dial_ends_the_session() {
+    let dir = TempDir::new().unwrap();
+    let sd = spawn(&dir.path().join("board"), true);
+    let origin = format!("http://127.0.0.1:{}", sd.port());
+    let store = dir.path().join("store");
+    claim_board(&origin, &store);
+    let (shell, lines) = shell(&origin, &store, SessionMode::Bare { principal: 1 });
+    let rx = shell.subscribe();
+    let board = shell.board_references().remove(0);
+    let sessions: Vec<String> = (2..=4).map(|principal| shell.call("session", &json!({"board": board, "principal": principal})).unwrap()["session"].as_str().unwrap().to_string()).collect();
+    // The board falls quiet: nothing commits, so each call is the first
+    // hand to meet its session's death.
+    let deadline = Instant::now() + Duration::from_secs(30);
+    let mut quiet_since = Instant::now();
+    while quiet_since.elapsed() < Duration::from_millis(500) {
+        assert!(Instant::now() < deadline, "the board never fell quiet");
+        if rx.try_iter().count() > 0 {
+            quiet_since = Instant::now();
+        }
+        thread::sleep(Duration::from_millis(20));
+    }
+    let fresh = Board::new(Origin::parse(&origin).unwrap(), skep_client::PlainHttp::new());
+    for session in &sessions {
+        fresh.session_close(&shell.sessions.get(session).unwrap().token).unwrap();
+    }
+    let head = shell.call("health", &json!({"board": board})).unwrap()["health"]["log_position"].as_u64().unwrap();
+    let answers = [
+        shell.call("op", &json!({"session": sessions[0], "frame": {"op": "doc_metadata", "doc": "1.0.1.0.1"}})),
+        shell.call("op", &json!({"session": sessions[1], "frame": {"at": head, "frame": {"op": "key_set", "account": "1.0.1"}}})),
+        shell.fetch(&json!({"session": sessions[2], "i": "1.0.1.0.1.0.1.1"})).map(|_| json!({})),
+    ];
+    for (session, answer) in sessions.iter().zip(answers) {
+        let v = answer.expect_err("the death is the call's answer").to_value();
+        assert_eq!((v["name"].as_str(), v["reason"]["arm"].as_str()), (Some("session_died"), Some("restart")), "{v}\n{}", lines.lock().unwrap().join("\n"));
+        assert_eq!(shell.call("held", &json!({"session": session})).unwrap_err().name(), "session_ended", "{session} names nothing");
+    }
+    let died: Vec<String> = rx.try_iter().filter(|e| e.name == EventName::SessionDied).map(|e| e.data["session"].as_str().unwrap_or("?").to_string()).collect();
+    assert_eq!(died, sessions, "one `session-died` per session");
+    shell.shutdown();
+    sd.shutdown();
+}
+
+/// A RELEASED SUPPLEMENT KEEPS ITS DRAFTS CURSOR (`Sessions::release`): two
+/// sessions of one principal — two tabs — and the first, having minted a
+/// draft and written it, closes; the supplement handed to the second reads
+/// on from where the reads left it, so each drafts row reaches the page
+/// once (the mutant whose widen resets the cursor to the second session's
+/// open feeds the first's rows again — a duplicate at every subscriber
+/// whenever one of two tabs closes).
+#[test]
+fn a_released_supplement_keeps_its_drafts_cursor() {
+    let dir = TempDir::new().unwrap();
+    let sd = spawn(&dir.path().join("board"), true);
+    let origin = format!("http://127.0.0.1:{}", sd.port());
+    let store = dir.path().join("store");
+    claim_board(&origin, &store);
+    let (shell, _) = shell(&origin, &store, SessionMode::Bare { principal: 1 });
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let _answerer = answer_moments(shell.subscribe(), Arc::clone(&shell.pending), Arc::clone(&seen));
+    let board = shell.board_references().remove(0);
+    let open = || shell.call("session", &json!({"board": board})).unwrap()["session"].as_str().unwrap().to_string();
+    let (first, second) = (open(), open());
+    let drafts_row = |at: &Value| {
+        let at = at.clone();
+        move |e: &Event| e.name == EventName::Feed && e.data["update"]["class"] == "drafts" && e.data["update"]["at"] == at
+    };
+    let minted = shell.call("op", &json!({"session": first, "frame": {"op": "create_new_document", "account": "1.0.1"}})).unwrap();
+    let draft = minted["addr"].as_str().unwrap().to_string();
+    let inserted = shell.call("op", &json!({"session": first, "frame": {"op": "insert", "doc": draft, "at": {"subspace": "1", "ordinal": "1"}, "values": ["a"]}})).unwrap();
+    wait_for(&seen, drafts_row(&minted["at"]));
+    wait_for(&seen, drafts_row(&inserted["at"]));
+    assert_eq!(shell.call("close", &json!({"session": first})).unwrap(), json!({}));
+    let again = shell.call("op", &json!({"session": second, "frame": {"op": "insert", "doc": draft, "at": {"subspace": "1", "ordinal": "2"}, "values": ["b"]}})).unwrap();
+    wait_for(&seen, drafts_row(&again["at"]));
+    let fed: Vec<u64> = seen.lock().unwrap().iter().filter(|e| e.name == EventName::Feed && e.data["update"]["class"] == "drafts").filter_map(|e| e.data["update"]["at"].as_u64()).collect();
+    for at in [&minted["at"], &inserted["at"], &again["at"]] {
+        let at = at.as_u64().unwrap();
+        assert_eq!(fed.iter().filter(|row| **row == at).count(), 1, "the drafts row at {at} reaches the page once: {fed:?}");
+    }
+    shell.shutdown();
     sd.shutdown();
 }

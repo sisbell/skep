@@ -4,7 +4,9 @@
 //! transport opens one (`shell`), the board claimed through the shell's own
 //! `claim` call (`claim_board`), the page's side of a walk — every
 //! answerable moment answered in its own form (`answer_moments`) — the wait
-//! for an event, and a drafts page read under a token (`changes_under`).
+//! for an event, a drafts page read under a token (`changes_under`), every
+//! seed a walk made (`seeds_of`), and every event held to its declaration
+//! (`assert_events_declared`).
 //! `door` holds the shell's own frame, with no daemon behind it; `modes`
 //! the bare and the signed session modes end to end; `boards` each board's
 //! own node, wait and stop beside another's; `held` the held-burst store
@@ -119,5 +121,46 @@ fn changes_under(board: &Board, token: &Token, doc: &str, since: u64) -> Vec<Val
     match board.changes(Some(token), &ChangesQuery { since, under: Some(doc), drafts: true, limit: None }).unwrap() {
         ChangesAnswer::Page(page) => page.changes,
         _ => panic!("no page under {doc} since {since}"),
+    }
+}
+
+/// Every seed the walks under `store` made, in hex: each key file's in the
+/// store, and each anchor file's under `<store>-anchors/` — what no answer,
+/// event or log entry the page reads, and no TALK line, may carry.
+fn seeds_of(store: &Path) -> Vec<String> {
+    let keys = skep_client::store::FileStore::open(store);
+    let mut seeds: Vec<String> = keys.list().unwrap().iter().map(|key| keys.load(&key.path).unwrap().seed_hex()).collect();
+    let mut anchors = store.as_os_str().to_owned();
+    anchors.push("-anchors");
+    for dir in std::fs::read_dir(PathBuf::from(anchors)).into_iter().flatten().flatten() {
+        for file in std::fs::read_dir(dir.path()).into_iter().flatten().flatten() {
+            seeds.push(skep_client::sheet::KeyFile::parse(&std::fs::read(file.path()).unwrap()).unwrap().seed_hex());
+        }
+    }
+    seeds
+}
+
+/// Every event in `seen` held to its declaration (`shapes`): the event's own
+/// shape by its name — a match the compiler holds to every name — and the
+/// value its data carries: a `feed` update to `FeedUpdate`, a death's reason
+/// to `DeathReason`, an index's state to `IndexState`.
+fn assert_events_declared(seen: &[Event]) {
+    for event in seen {
+        let shape = match event.name {
+            EventName::Mode => "ModeEvent",
+            EventName::SessionDied => "SessionDiedEvent",
+            EventName::Daemon => "DaemonEvent",
+            EventName::Feed => "FeedEvent",
+            EventName::Index => "IndexEvent",
+            EventName::Moment => "MomentEvent",
+            EventName::Held => "HeldEvent",
+        };
+        crate::shapes::assert_declared(shape, &event.data);
+        match event.name {
+            EventName::Feed => crate::shapes::assert_declared("FeedUpdate", &event.data["update"]),
+            EventName::SessionDied => crate::shapes::assert_declared("DeathReason", &event.data["reason"]),
+            EventName::Index => crate::shapes::assert_declared("IndexState", &event.data["state"]),
+            _ => {}
+        }
     }
 }

@@ -7,17 +7,19 @@
 //! `write_busy` and a first and second `durability` reissued within the
 //! first dial's call and a third holding the burst; a write the hold never
 //! holds taking the same path, faced where a burst is held and its ack
-//! noted for the base; `resolve(send)`
-//! answering once the lines are handed back, before any dial; a board the
-//! holds were not opened over stopped as the caller's bug; the stored frame
-//! without its attest; P38's halted file refusing every act, `resolve`
-//! among them, and a copy the store cannot make. THE DOOR: a burst the board
-//! takes at no send refused at the act and held never — past the frame cap
-//! as sent, or as a signed resend would send it, naming no document, an
-//! insert a signed session cannot attest — one the queue has no room for
-//! refused `held_full`; and each board's hold its own, a burst at one board
-//! answered while another board's hold is held, dialed and kept at the board
-//! its session stands at.
+//! noted for the base; the death signal at a write's dial holding nothing;
+//! `resolve(send)` answering once the lines are handed back, before any
+//! dial; a board the holds were not opened over stopped as the caller's
+//! bug; the stored frame without its attest; P38's halted file refusing
+//! every act, `resolve` among them, a copy the store cannot make, and a
+//! queue kept in memory for want of its file taking the file once it
+//! empties and never before; no `held` event when a session's open reads
+//! its file. THE DOOR: a burst the board takes at no send refused at the
+//! act and held never — past the frame cap as sent, or as a signed resend
+//! would send it, naming no document, an insert a signed session cannot
+//! attest — one the queue has no room for refused `held_full`; and each
+//! board's hold its own, a burst at one board answered while another
+//! board's hold is held, dialed and kept at the board its session stands at.
 
 use super::*;
 
@@ -270,6 +272,22 @@ fn a_write_the_hold_never_holds_is_faced_and_its_ack_noted() {
     assert_eq!(line["base"], ack["at"], "the ack is noted for the base of the next hold on its home: {line}");
 }
 
+/// THE DEATH SIGNAL at a write's dial holds nothing (§3c.4: the death is
+/// neither held nor faced): a burst and a write the hold never holds each
+/// answer `OpAnswer::Died`, the session's end the caller's to run, and no
+/// line is held and no `held` event said (the mutant that holds the burst
+/// at the death keeps a line behind a session nobody ends).
+#[test]
+fn a_death_signal_at_a_writes_dial_holds_nothing() {
+    let g = ground();
+    g.fake.op_closed.store(true, Ordering::SeqCst);
+    let link = json!({"op": "make_link", "home": OTHER, "from": {"addrs": [OTHER]}, "to": {"addrs": [DOC]}, "ty": {"addrs": ["1.1.0.1.0.1.0.3.13"]}});
+    assert!(matches!(g.holds.send_burst(&g.session, insert(DOC, json!(["a"]))), OpAnswer::Died), "a burst's dial meets the death");
+    assert!(matches!(g.holds.send(&g.session, link), OpAnswer::Died), "and a write the hold never holds");
+    assert_eq!(g.fake.sends(), 2, "each dialed once");
+    assert!(g.lines().is_empty() && g.states().is_empty(), "nothing held, nothing said");
+}
+
 /// `resolve(send)` HANDS the document back to the automatic machine and
 /// answers at once (§4b.1: "the call answers once the line is handed to
 /// the machine, never after its ack"): nothing is dialed in the act and the
@@ -374,6 +392,59 @@ fn a_line_the_store_cannot_copy_says_why_and_stands() {
     g.holds.probe("b-1");
     assert_eq!(g.fake.sends(), 1, "the line is resent");
     assert!(g.lines().is_empty() && g.states().contains(&"kept".to_string()));
+}
+
+/// A QUEUE KEPT IN MEMORY FOR WANT OF ITS FILE takes the file once it
+/// empties, and never before (§3c.3; `Custody::Unwritable`): at a board with
+/// no `H.1`, a line held in memory alone and refused at its resend still
+/// stands when the probe — the board now naming its `H.1` — establishes the
+/// directory, so the next burst is held `behind` it, still `unwritable`,
+/// under the next ordinal; once both are kept, the next line is copied to
+/// the board's file (the mutant that opens the file while lines stand
+/// replaces the queue and dials the next burst past a line it lost; the
+/// ones that never re-open the file, or never establish the directory, keep
+/// every later line in memory alone, for a crash to lose).
+#[test]
+fn an_unwritable_queue_takes_its_file_once_it_empties_and_never_before() {
+    let fake = Fake::new();
+    fake.no_head.store(true, Ordering::SeqCst);
+    let g = ground_over(fake, TempDir::new().unwrap(), bare_facts(), 0);
+    let first = g.hold(&insert(DOC, json!(["a"])), "unreachable", false);
+    assert!(first["unwritable"].is_string(), "{first}");
+    g.fake.no_head.store(false, Ordering::SeqCst);
+    g.fake.op_rejected.every(json!({"resp": "rejected", "code": "credential_refused", "detail": "index_rebuilding", "disposition": "retry", "op": "insert"}));
+    g.holds.probe("b-1");
+    assert_eq!((g.fake.sends(), g.lines().len()), (1, 1), "the line stands, not taken at its resend");
+    let OpAnswer::Answered(Ok(behind)) = g.holds.send_burst(&g.session, insert(DOC, json!(["b"]))) else { panic!("held behind the standing line") };
+    assert_eq!(behind["cause"], "behind", "{behind}");
+    assert!(behind["unwritable"].is_string(), "in memory alone while a line stands: {behind}");
+    let ks: Vec<u64> = g.lines().iter().map(|l| l["held"].as_u64().unwrap()).collect();
+    assert_eq!(ks, [1, 2], "no line renumbered");
+    g.fake.op_rejected.clear();
+    g.holds.probe("b-1");
+    assert!(g.lines().is_empty(), "both kept");
+    let next = g.hold(&insert(DOC, json!(["c"])), "unreachable", false);
+    assert!(next.get("unwritable").is_none(), "{next}");
+    let file = g.store.path().join("held").join("ab".repeat(32)).join("principal-1.held");
+    assert!(std::fs::read_to_string(&file).unwrap().contains("\"values\":[\"c\"]"), "the line is copied to the board's file");
+}
+
+/// NO `held` EVENT GOES OUT when a session's open reads its principal's
+/// file (§4b.2; `EventName::Held`): the line the file holds is listed by
+/// `held(session)` at once, and nothing of it is said on the bus (the
+/// mutant that announces each document at the open says a state no act of
+/// the page's moved).
+#[test]
+fn no_held_event_goes_out_when_a_sessions_open_reads_its_file() {
+    let store = TempDir::new().unwrap();
+    let dir = HeldDir::new(store.path(), Chain::parse(&"ab".repeat(32)).unwrap());
+    dir.ensure().unwrap();
+    let Opened::Live { mut queue, .. } = dir.open_file(1, "1.0.1").unwrap() else { panic!("a fresh file") };
+    assert!(queue.hold(DOC, None, 0, insert(DOC, json!(["a"])), Reason::of("unreachable", false)).unwrap().unwritten.is_none());
+    drop(queue);
+    let g = ground_in(store, bare_facts(), 0);
+    assert_eq!(g.lines().len(), 1, "the session's open lists the line");
+    assert!(g.states().is_empty(), "and says nothing of it");
 }
 
 /// An insert of one atom, its frame's JSON spelling exactly `bytes` long —

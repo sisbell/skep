@@ -182,5 +182,20 @@ pub fn shape(name: &str) -> Option<&'static Shape> {
     SHAPES.iter().find(|s| s.name == name)
 }
 
+/// `value` held to the shape `name` declares: an object, every required
+/// field present, and — the shape not `open` — no member outside the table.
+/// The pin every suite holds a value the crate's code built to.
+#[cfg(test)]
+pub(crate) fn assert_declared(name: &str, value: &serde_json::Value) {
+    let shape = shape(name).unwrap_or_else(|| panic!("`{name}` is declared"));
+    let members = value.as_object().unwrap_or_else(|| panic!("a `{name}` is an object: {value}"));
+    for field in shape.fields.iter().filter(|f| f.required) {
+        assert!(members.contains_key(field.name), "{name}: `{}` is required: {value}", field.name);
+    }
+    if !shape.open {
+        assert!(members.keys().all(|k| shape.fields.iter().any(|f| f.name == k)), "{name}: a member the table does not declare: {value}");
+    }
+}
+
 #[cfg(test)]
 mod tests;

@@ -4,9 +4,12 @@
 //! kept`, nothing re-sent), a lost testimony and `history_reclaimed`
 //! decided by the site alone, a foreign row, two rows and a page too large
 //! (MOVED, nothing sent, never rebased), a read or a site the board does not
-//! answer deciding nothing — with the narrative cells beside it; the own
-//! hand on a read; a refusal the table holds nowhere leaving a resent line
-//! standing; a second window's burst resent from memory; one drain per
+//! answer — the death signal among its answers — deciding nothing, and a
+//! delivery past the values asked differing — with the narrative cells
+//! beside it; THE ORDER, the lines sent in `k` order across the documents;
+//! the own hand on a read; a refusal the table holds nowhere, and the death
+//! signal, leaving a resent line standing; a second window's burst resent
+//! from memory; every principal's lines resent by one probe; one drain per
 //! board at a time, and a drain that unwinds leaving the board free to drain
 //! again; a move facing its own document alone; and the own node stopped,
 //! `writes.halted` and a third `durability` holding a burst over time.
@@ -42,6 +45,67 @@ fn outcome_ii_a_landed_burst_is_kept_not_resent() {
     assert!(g.lines().is_empty(), "the line is done kept");
     let states = g.states();
     assert!(states.contains(&"kept".to_string()) && !states.contains(&"moved".to_string()), "{states:?}");
+}
+
+/// THE ORDER (§3c.5: "lines in `k` order across the board's documents, which
+/// keeps each document's order"): three lines held on two documents — one on
+/// `DOC`, one on `OTHER`, one more on `DOC` — go out as they were held, so a
+/// `copy` held between two bursts on its source transcludes the source as
+/// the person wrote it (the mutant that sends each document's whole run in
+/// turn sends the second `DOC` line before the `OTHER` one, and the copy
+/// lands the wrong text with no refusal to say so).
+#[test]
+fn the_resend_sends_its_lines_in_k_order_across_the_documents() {
+    let g = ground();
+    for (doc, value) in [(DOC, "a"), (OTHER, "b"), (DOC, "c")] {
+        g.hold(&insert(doc, json!([value])), "unreachable", false);
+    }
+    g.holds.probe("b-1");
+    let sent: Vec<String> = g.fake.sends.lock().unwrap().iter().map(|f| format!("{} {}", f["doc"].as_str().unwrap_or("?"), f["values"][0].as_str().unwrap_or("?"))).collect();
+    assert_eq!(sent, [format!("{DOC} a"), format!("{OTHER} b"), format!("{DOC} c")], "the lines in `k` order");
+    assert!(g.lines().is_empty(), "each kept");
+}
+
+/// THE DEATH SIGNAL at a resend's dial leaves its line standing (§3c.4: the
+/// death is neither held nor faced): the session's end is the hand's that
+/// meets it, and the line waits for the session that stands — never `done`,
+/// never re-marked; the next probe, the token answering again, sends and
+/// keeps it (the mutant that settles the line at the death marks the
+/// person's text kept although it never landed).
+#[test]
+fn a_death_signal_at_a_resend_leaves_its_line_standing() {
+    let g = ground();
+    g.hold(&insert(DOC, json!(["hello"])), "unreachable", false);
+    g.fake.op_closed.store(true, Ordering::SeqCst);
+    g.holds.probe("b-1");
+    assert_eq!(g.fake.sends(), 1, "the line was dialed");
+    assert_eq!(g.lines()[0]["cause"], "unreachable", "and stands as it was");
+    assert_eq!(g.states(), ["holding", "sending"], "never kept, never faced");
+    g.fake.op_closed.store(false, Ordering::SeqCst);
+    g.holds.probe("b-1");
+    assert_eq!(g.fake.sends(), 2, "the next probe sends it again");
+    assert!(g.lines().is_empty() && g.states().contains(&"kept".to_string()));
+}
+
+/// THE PROBE RESENDS EVERY PRINCIPAL's LINES (§3c.4): two principals hold a
+/// line each at one board — two tabs of the bare mode, opened as two
+/// principals — and one probe sends both, each under its own session (the
+/// mutant that drains its first principal alone leaves the second's text
+/// unsent, and every later burst of that principal behind it).
+#[test]
+fn a_probe_resends_every_principals_lines() {
+    let g = ground();
+    let facts = Facts { principal: 2, account: Some("1.0.2".into()), kind: SessionKind::Bare };
+    let open = Open { token: Token::parse(&"8e".repeat(16)).unwrap(), facts, opened_at: 0 };
+    let second = g.holds.sessions.register("b-1", Arc::clone(&g.session.board), open, &mut NoSupplements);
+    g.holds.open_session(&second);
+    g.hold(&insert(DOC, json!(["a"])), "unreachable", false);
+    g.holds.hold(&second, Burst::admit(insert("1.0.2.0.1", json!(["b"])), &second).unwrap(), Reason::of("unreachable", false)).unwrap();
+    g.holds.probe("b-1");
+    let mut sent: Vec<String> = g.fake.sends.lock().unwrap().iter().map(|f| f["doc"].as_str().unwrap_or("?").to_string()).collect();
+    sent.sort();
+    assert_eq!(sent, [DOC, "1.0.2.0.1"], "each principal's line is sent");
+    assert!(g.lines().is_empty() && g.holds.lines(&second).unwrap().as_array().unwrap().is_empty(), "and each kept");
 }
 
 /// OUTCOME (iii): a foreign row on the document since `base` — the site MOVED:
@@ -299,12 +363,15 @@ enum Head {
 }
 
 /// What a read of the head's site answers: the head's own values, other
-/// values, or no answer.
+/// values, no answer, the death signal, or the head's values and one more
+/// position than the read asked.
 #[derive(Debug, Clone, Copy)]
 enum SiteAnswer {
     Equal,
     Differs,
     Unread,
+    Closed,
+    OverDelivers,
 }
 
 /// How one probe settles the head.
@@ -327,19 +394,23 @@ enum Settles {
 /// trusted on its hand; a row whose testimony the board lost, and
 /// `history_reclaimed`, are decided by the site alone, a kind no read
 /// confirms faced `moved`; a foreign row, two rows and a page too large to
-/// serve are `moved`; a read or a site read the board does not answer
-/// decides nothing. The mutants the cells hold off: a second tab's own-hand
-/// row landing a head whose site says otherwise (3), a delete faced on its
-/// own hand (4), an unread site taken as either answer (5, 11, 18), a head
-/// never sent kept off a row (6, 19), another `op` of the own hand (7), the
-/// first of two rows taken as the landing (14), a reclaimed kind no read
-/// confirms kept (17), and a page too large read as none or as unread (20).
+/// serve are `moved`; a read or a site read the board does not answer — its
+/// answer the death signal among them — decides nothing; a site read
+/// delivering past the values asked differs. The mutants the cells hold
+/// off: a second tab's own-hand row landing a head whose site says otherwise
+/// (3), a delete faced on its own hand (4), an unread site taken as either
+/// answer (5, 11, 18), a head never sent kept off a row (6, 19), another
+/// `op` of the own hand (7), the first of two rows taken as the landing
+/// (14), a reclaimed kind no read confirms kept (17), a page too large read
+/// as none or as unread (20), the death signal at the site read taken as an
+/// answer (22–24), and a delivery past the values asked read as theirs
+/// (25–27).
 #[test]
 fn every_read_answer_meets_every_site_answer_as_the_table_says() {
     use Head::{Delete, Insert};
     use ReadAnswer::{ForeignRow, LostRow, NoRow, OwnRow, Reclaimed, Refused, TooLarge, TwoOwnRows};
     use Settles::{Kept, Moved, Resent, Standing};
-    use SiteAnswer::{Differs, Equal, Unread};
+    use SiteAnswer::{Closed, Differs, Equal, OverDelivers, Unread};
     let table = [
         (NoRow, Insert, None, true, Resent),
         (OwnRow("insert"), Insert, Some(Equal), true, Kept),
@@ -362,6 +433,12 @@ fn every_read_answer_meets_every_site_answer_as_the_table_says() {
         (Reclaimed, Insert, Some(Equal), false, Moved),
         (TooLarge, Insert, Some(Equal), true, Moved),
         (Refused, Insert, Some(Equal), true, Standing),
+        (OwnRow("insert"), Insert, Some(Closed), true, Standing),
+        (LostRow, Insert, Some(Closed), true, Standing),
+        (Reclaimed, Insert, Some(Closed), true, Standing),
+        (OwnRow("insert"), Insert, Some(OverDelivers), true, Moved),
+        (LostRow, Insert, Some(OverDelivers), true, Moved),
+        (Reclaimed, Insert, Some(OverDelivers), true, Moved),
     ];
     for (n, (read, head, site, sent, settles)) in table.into_iter().enumerate() {
         let g = ground();
@@ -381,6 +458,11 @@ fn every_read_answer_meets_every_site_answer_as_the_table_says() {
             Some(Equal) => *g.fake.text.lock().unwrap() = "hello".into(),
             Some(Differs) => *g.fake.text.lock().unwrap() = "other".into(),
             Some(Unread) => g.fake.site_unread.store(true, Ordering::SeqCst),
+            Some(Closed) => g.fake.site_closed.store(true, Ordering::SeqCst),
+            Some(OverDelivers) => {
+                *g.fake.text.lock().unwrap() = "hello!".into();
+                g.fake.over_deliver.store(true, Ordering::SeqCst);
+            }
             None => {}
         }
         let frame = match head {

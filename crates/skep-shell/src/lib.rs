@@ -50,12 +50,13 @@
 //!   are parsed by.
 //! * `dev_arm` — THE DEV ARM for the SECRET and CONSENT moments (§4b.3): a
 //!   script's answers in order, or an auto-answer, each answer said on the
-//!   TALK stream and never sent to the page.
+//!   TALK stream and never sent to the page — the NATIVE statements, naming
+//!   where key material rests, said there too.
 //! * `person` — THE PERSON OVER THE BRIDGE: a `Person` whose PUBLIC
 //!   moments become `moment(id, kind, data)` events and block on a channel
 //!   the page's `answer(id, …)` — of the form the moment's kind takes — or
-//!   `cancel(id)` fills, and whose SECRET and CONSENT moments go to the dev
-//!   arm.
+//!   `cancel(id)` fills, and whose SECRET and CONSENT moments, and NATIVE
+//!   statements, go to the dev arm.
 //! * `sessions` — THE SESSION TABLE: every token this shell holds, beside
 //!   the board it is valid at, under the reference the page holds, the two
 //!   openings (bare, signed), the attest a session's key signs, and a
@@ -72,7 +73,7 @@
 //!   take it; the per-(board, principal) queue over `held`'s file, each
 //!   board's under its own lock; its child `resend` holds the walk the feed
 //!   thread's probe drains: one read per document, with §3c.5's three
-//!   outcomes.
+//!   outcomes, the lines then sent in `k` order across the documents.
 //! * `feed` — THE FEED THREAD per board, its state the feeder:
 //!   `search::Consumer` polled on the `/events` commits, coalesced into one
 //!   waiting read, the published feed read from the head the board first

@@ -1,10 +1,12 @@
 //! THE FEED's FENCE: the index state's ten arms and the search words as
-//! the bridge spells them; THE FEED THREAD's START, one `/health` read; and
-//! THE COMMIT STREAM COALESCED — the waiting tick's mark, and a board
-//! committing far faster than the feed thread reads costing it a read per
-//! turn, never a read per commit, with a search queued behind them answered
-//! after one read at most. And A DRAFTS CURSOR THE RETENTION FLOOR PASSED
-//! resumed at the floor, its rows still fed.
+//! the bridge spells them — every arm, standing and mark a declared word,
+//! and the search answer built as its declarations say; THE FEED THREAD's
+//! START, one `/health` read; and THE COMMIT STREAM COALESCED — the waiting
+//! tick's mark, and a board committing far faster than the feed thread
+//! reads costing it a read per turn, never a read per commit, with a search
+//! queued behind them answered after one read at most. ONE READ TO THE HEAD
+//! meeting every answer as its paging rule says, and A DRAFTS CURSOR THE
+//! RETENTION FLOOR PASSED resumed at the floor, its rows still fed.
 
 use std::io::{self, Read};
 use std::sync::atomic::AtomicUsize;
@@ -53,6 +55,106 @@ fn the_search_words_are_the_bridges_own() {
     assert_eq!(mark_json(&Mark { offset: 4, len: 0, kind: MarkKind::Gap { width: 3 } }), json!({"offset": 4, "len": 0, "kind": {"gap": {"width": 3}}}));
     assert_eq!(mark_json(&Mark { offset: 0, len: 2, kind: MarkKind::Term { term: "ab".into() } })["kind"], json!({"term": "ab"}));
     assert_eq!((kind_name(Kind::Edition), kind_name(Kind::Draft)), ("edition", "draft"));
+}
+
+/// EVERY INDEX STATE ARM is a declared word: the ten arms built, each
+/// spelled as `state_json` spells it, are exactly `IndexState.arm`'s ten
+/// (the mutant that misspells an arm, or spells one the table lacks, sends
+/// the page a state it cannot name).
+#[test]
+fn every_index_state_arm_is_a_declared_word() {
+    let held = ChainAt { position: 3, chain: Chain::from_bytes([0xab; 32]) };
+    let under = Range::Under(skep_client::address::parse_address("1.0.1").unwrap());
+    let states = [
+        State::None,
+        State::Building { position: 3, units: 4, lost: Some(Lost::Diverged { held }), aside: false },
+        State::Widening { range: under.clone() },
+        State::Complete { as_of: 9, floor: None },
+        State::AtTheFloor { floor: 5 },
+        State::ResumedFromTheFloor { floor: 5, held },
+        State::Unplaced { range: under, count: 2 },
+        State::PastTheCeiling { held: 1, seen: 2, limit: 3 },
+        State::NewerSkep { v: Newer::Tokenizer { revision: skep_search::REVISION } },
+        State::Busy,
+    ];
+    let spelled: std::collections::BTreeSet<String> = states.iter().map(|s| format!("'{}'", state_json(s)["arm"].as_str().unwrap_or("?"))).collect();
+    let declared = crate::shapes::shape("IndexState").unwrap().fields.iter().find(|f| f.name == "arm").unwrap().ty;
+    let words: std::collections::BTreeSet<String> = declared.split(" | ").map(str::to_string).collect();
+    assert_eq!((spelled.len(), spelled), (10, words), "{declared}");
+}
+
+/// EVERY STANDING AND MARK spells a declared word: the standings' words — a
+/// held one's kind and rung over every cell of PUB-5.115's KIND × RUNG — are
+/// exactly the quoted words of the declared `Standing`, and each mark kind's
+/// one key is an arm `Mark.kind` declares (the mutant that misspells a word
+/// sends the page a standing or a mark it cannot render).
+#[test]
+fn every_standing_and_mark_spells_a_declared_word() {
+    let issuer = skep_client::address::parse_address("1.0.1").unwrap();
+    let mut spelled = std::collections::BTreeSet::new();
+    for standing in [Standing::Public, Standing::YoursToRead] {
+        spelled.insert(standing_json(&standing).as_str().unwrap_or("?").to_string());
+    }
+    for kind in [GrantKind::Named, GrantKind::AnyPrincipal] {
+        for rung in [Rung::Document, Rung::Account] {
+            let held = standing_json(&Standing::Held { kind, rung, issuer: issuer.clone() });
+            spelled.insert(held["held"]["kind"].as_str().unwrap_or("?").to_string());
+            spelled.insert(held["held"]["rung"].as_str().unwrap_or("?").to_string());
+        }
+    }
+    let declarations = crate::shapes::declarations();
+    let line = declarations.lines().find(|l| l.starts_with("export type Standing")).expect("`Standing` is declared");
+    let declared: std::collections::BTreeSet<String> = line.split('\'').skip(1).step_by(2).map(str::to_string).collect();
+    assert_eq!(spelled, declared, "{line}");
+    let mark = crate::shapes::shape("Mark").unwrap().fields.iter().find(|f| f.name == "kind").unwrap().ty;
+    for kind in [MarkKind::Span, MarkKind::Term { term: "ab".into() }, MarkKind::Gap { width: 3 }] {
+        let spelled = mark_json(&Mark { offset: 0, len: 0, kind });
+        let key = spelled["kind"].as_object().and_then(|k| k.keys().next()).cloned().unwrap_or_default();
+        assert!(mark.contains(&format!("{{ {key}:")), "`{key}` is no arm of {mark}");
+    }
+}
+
+/// THE SEARCH ANSWER is built as its declarations say: an answer holding a
+/// hit with every optional member present — a member, a snippet carrying a
+/// span, a term and a gap mark, a correction, a held standing — and a place
+/// with its label, held member by member to `SearchAnswer`, `Hit`,
+/// `SpanText`, `Snippet`, `Mark`, `Matched` and `Place` (the mutant that
+/// renames a member in the code alone breaks the page and no other test).
+#[test]
+fn the_search_answer_is_built_as_its_declarations_say() {
+    let address = |text: &str| skep_client::address::parse_address(text).unwrap();
+    let marks = vec![
+        Mark { offset: 0, len: 5, kind: MarkKind::Span },
+        Mark { offset: 6, len: 2, kind: MarkKind::Term { term: "ab".into() } },
+        Mark { offset: 9, len: 0, kind: MarkKind::Gap { width: 3 } },
+    ];
+    let hit = Hit {
+        doc: address("1.0.1.0.1"),
+        member: Some(address("1.0.1.0.1.1")),
+        as_of: 7,
+        span: skep_search::Span { start: 1, width: 5 },
+        score: 1.5,
+        snippet: Some(skep_search::Snippet { text: "hello ab world".into(), start: 1, marks }),
+        kind: Kind::Edition,
+        standing: Standing::Held { kind: GrantKind::Named, rung: Rung::Document, issuer: address("1.0.1") },
+        occurrences: 2,
+        matched: vec![skep_search::Matched { word: "ac".into(), term: "ab".into() }],
+    };
+    let place = Place { doc: address("1.0.1.0.2"), kind: Kind::Draft, label: Some("a first line".into()), standing: Standing::YoursToRead };
+    let answer = SearchAnswer { hits: vec![hit], total: 1, truncated: false, more_terms: false, fuzzy_bounded: false, positions_bounded: false, places: vec![place], state: State::Complete { as_of: 7, floor: None } };
+    let answer = answer_json(&answer);
+    crate::shapes::assert_declared("SearchAnswer", &answer);
+    let hit = &answer["hits"][0];
+    crate::shapes::assert_declared("Hit", hit);
+    crate::shapes::assert_declared("SpanText", &hit["span"]);
+    crate::shapes::assert_declared("Snippet", &hit["snippet"]);
+    let marks = hit["snippet"]["marks"].as_array().expect("the snippet's marks");
+    assert_eq!(marks.len(), 3);
+    for mark in marks {
+        crate::shapes::assert_declared("Mark", mark);
+    }
+    crate::shapes::assert_declared("Matched", &hit["matched"][0]);
+    crate::shapes::assert_declared("Place", &answer["places"][0]);
 }
 
 /// A `feed` update's class spells S-24 (b)'s two words: `published` for a
@@ -290,4 +392,100 @@ fn a_drafts_cursor_the_floor_passed_reads_on_from_the_floor() {
     threads.stop();
     let fed = fed.expect("the drafts row past the floor was fed");
     assert_eq!((fed["update"]["position"].as_u64(), fed["update"]["session"].as_str()), (Some(DRAFT_ROW_AT), Some(session.reference.as_str())), "{fed}");
+}
+
+/// A board whose `/changes` answers each `(since, limit)` it is asked as
+/// `script` says, every query recorded.
+struct Paging {
+    script: Box<dyn Fn(u64, Option<u64>) -> Response + Send + Sync>,
+    asked: Mutex<Vec<(u64, Option<u64>)>>,
+}
+
+/// The `limit` a `/changes` path names, where it names one.
+fn limit_of(path: &str) -> Option<u64> {
+    path.split_once("limit=").and_then(|(_, rest)| rest.split('&').next()).and_then(|n| n.parse().ok())
+}
+
+/// A page of rows at `ats`, with its `last` and its `more`.
+fn page(ats: &[u64], last: u64, more: bool) -> Response {
+    let rows: Vec<Value> = ats.iter().map(|at| json!({"at": at, "op": "insert", "docs": ["1.0.1.0.1"], "key": "bare"})).collect();
+    answer(json!({"changes": rows, "last": last, "more": more}))
+}
+
+/// A non-200 answer of `body`.
+fn refused(status: u16, body: Value) -> Response {
+    Response { status, headers: Headers::default(), body: body.to_string().into_bytes() }
+}
+
+impl Dialer for Paging {
+    fn exchange(&self, _: &Origin, req: &Request) -> Result<Response, DialError> {
+        let (since, limit) = (since_of(&req.path), limit_of(&req.path));
+        self.asked.lock().unwrap().push((since, limit));
+        Ok((self.script)(since, limit))
+    }
+
+    fn stream(&self, _: &Origin, _: &RequestHead, _: &mut dyn Read, _: &mut dyn FnMut(&Headers)) -> Result<StreamedResponse, DialError> {
+        Err(DialError::Connect("no stream here".into()))
+    }
+}
+
+/// What one read to the head over a board scripted by `script` made of its
+/// feed from `since` — the published feed's, or a session's drafts under
+/// its token where `drafts`: the rows it handed on, where it left the
+/// cursor (`None` for the death signal), and the queries it asked. Run on a
+/// thread of its own, so a read that never ends fails at the deadline
+/// rather than hanging the suite.
+fn read_over(script: impl Fn(u64, Option<u64>) -> Response + Send + Sync + 'static, since: u64, drafts: bool) -> (Vec<u64>, Option<u64>, Vec<(u64, Option<u64>)>) {
+    let fake = Arc::new(Paging { script: Box::new(script), asked: Mutex::new(Vec::new()) });
+    let board = Arc::new(Board::new(Origin::parse("http://127.0.0.1:9").unwrap(), Arc::clone(&fake)));
+    let session = drafts.then(|| {
+        let facts = crate::sessions::Facts { principal: 1, account: Some("1.0.1".into()), kind: crate::sessions::SessionKind::Bare };
+        let open = crate::sessions::Open { token: Token::parse(&"9f".repeat(16)).unwrap(), facts, opened_at: 0 };
+        Sessions::new(None).register("b-1", Arc::clone(&board), open, &mut NoSupplements)
+    });
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let class = session.as_deref().map_or(UpdateClass::Published, UpdateClass::Drafts);
+        let mut rows = Vec::new();
+        let to = read_to_head(&board, class, since, |row| rows.push(row["at"].as_u64().unwrap_or(0)));
+        let _ = tx.send((rows, match to { ReadTo::At(at) => Some(at), ReadTo::Died => None }));
+    });
+    let (rows, to) = rx.recv_timeout(Duration::from_secs(5)).expect("the read to the head ends");
+    let asked = fake.asked.lock().unwrap().clone();
+    (rows, to, asked)
+}
+
+/// ONE READ TO THE HEAD meets every answer as its paging rule says (wire.md
+/// §The change feed, Paging), cell by cell: a page whose `more` stands read
+/// on from its `last`; a page past the budget re-asked at the `fits` it
+/// names, the next page at the route's default again; a reclaim resumed at a
+/// floor past the cursor, while one at the cursor, or naming no floor, stops
+/// where it stands — never spinning; a refusal stopping where it stands; and
+/// the death signal on a session's token answered as the death (the mutants
+/// that ignore `more`, stop at a page too large or never reset its limit,
+/// stop at a reclaim, drop the floor's guard, or read the death as a stop —
+/// the first feeding a closing session nothing past its first page, the
+/// guard's spinning the board's feed thread for good).
+#[test]
+fn a_read_to_the_head_meets_every_answer_as_its_paging_rule_says() {
+    let (rows, to, _) = read_over(|since, _| if since == 10 { page(&[11], 11, true) } else { page(&[12], 12, false) }, 10, false);
+    assert_eq!((rows, to), (vec![11, 12], Some(12)), "a page whose `more` stands is read on");
+    let too_large = |since: u64, limit: Option<u64>| match limit {
+        Some(1) => page(&[since + 1], since + 1, since == 10),
+        _ => refused(400, json!({"error": "malformed_changes", "fits": 1})),
+    };
+    let (rows, to, asked) = read_over(too_large, 10, false);
+    assert_eq!((rows, to), (vec![11, 12], Some(12)), "a page too large is re-asked");
+    assert_eq!(asked, [(10, None), (10, Some(1)), (11, None), (11, Some(1))], "at `fits`, the next page at the default again");
+    let (rows, to, _) = read_over(|since, _| if since < 5 { refused(410, json!({"error": "history_reclaimed", "floor": 5})) } else { page(&[6], 6, false) }, 3, false);
+    assert_eq!((rows, to), (vec![6], Some(6)), "a floor past the cursor is resumed at");
+    let (rows, to, _) = read_over(|_, _| refused(410, json!({"error": "history_reclaimed", "floor": 5})), 5, false);
+    assert_eq!((rows, to), (vec![], Some(5)), "a floor at the cursor stops the read where it stands");
+    let (rows, to, _) = read_over(|_, _| refused(410, json!({"error": "history_reclaimed"})), 5, false);
+    assert_eq!((rows, to), (vec![], Some(5)), "a reclaim naming no floor stops it too");
+    let (rows, to, _) = read_over(|_, _| refused(503, json!({"error": "feed_rebuilding"})), 10, false);
+    assert_eq!((rows, to), (vec![], Some(10)), "a refusal stops it where it stands");
+    let closed = |_: u64, _: Option<u64>| Response { status: 200, headers: Headers(vec![("Skepd-Session".into(), "closed".into())]), body: Vec::new() };
+    let (rows, to, _) = read_over(closed, 10, true);
+    assert_eq!((rows, to), (vec![], None), "the death signal on a session's token is the death");
 }

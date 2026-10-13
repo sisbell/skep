@@ -344,4 +344,24 @@ mod tests {
         assert_eq!((named.name(), named.to_value()["op"].as_str()), ("retired", Some("publish")));
         assert_eq!(Refusal::board(502, Value::Null).name(), "http_error");
     }
+
+    /// A VERDICT's NAME is the token its rejection dispatches on (wire.md
+    /// §Rejections: "key client behavior on the token, never on prose"), the
+    /// law over the families: `credential_refused` and `registry_refused`
+    /// with a detail named by it, without one by their code, and any other
+    /// code by itself, its detail prose (the mutant that drops a family from
+    /// `name` faces `registry_refused` where the walk keys on its detail).
+    #[test]
+    fn a_verdicts_name_is_the_token_its_rejection_dispatches_on() {
+        for code in ["credential_refused", "registry_refused", "out_of_bounds"] {
+            for detail in [Some("a_token"), None] {
+                let mut v = json!({"resp": "rejected", "code": code, "disposition": "permanent", "op": "insert"});
+                if let Some(detail) = detail {
+                    v["detail"] = json!(detail);
+                }
+                let r = skep_client::board::Rejection::of(&v).expect("a rejected document");
+                assert_eq!(Refusal::from(r.refused(&v)).name(), r.key(), "{v}");
+            }
+        }
+    }
 }

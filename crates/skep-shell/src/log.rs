@@ -293,6 +293,30 @@ mod tests {
         assert!(!kept.contains(&token) && !kept.contains("Skepd-Session") && !kept.contains("insert"), "{kept}");
     }
 
+    /// THE DIALER's STREAMED RECORD: a streamed dial — `/events` and `/blob`
+    /// go out so — no board answers is recorded as an exchange is: its
+    /// method, its route without the query, no status, the body its head
+    /// declares in and none out — never the token its header carries nor
+    /// the address its query names (the mutants that drop the streamed
+    /// record, or count no declared body).
+    #[test]
+    fn the_dialers_streamed_record_keeps_the_route_and_sizes() {
+        let log = Arc::new(Log::new());
+        let port = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap().local_addr().unwrap().port();
+        let origin = Origin::parse(&format!("http://127.0.0.1:{port}")).unwrap();
+        let token = "9f".repeat(16);
+        let head = RequestHead { method: Method::Get, path: "/blob?i=1.0.1.0.1.0.1.1".into(), headers: vec![("Skepd-Session".into(), token.clone())], content_length: Some(7) };
+        let streamed = LoggingDialer::new(Arc::clone(&log)).stream(&origin, &head, &mut std::io::empty(), &mut |_| {});
+        assert!(streamed.is_err(), "no board answers at a released port");
+        let entries = log.entries();
+        assert_eq!(entries.len(), 1, "the unanswered stream is recorded: {entries:?}");
+        let entry = &entries[0];
+        assert_eq!((entry["kind"].as_str(), entry["method"].as_str(), entry["path"].as_str(), entry["status"].is_null()), (Some("dial"), Some("GET"), Some("/blob"), true), "{entry}");
+        assert_eq!((entry["bytes_in"].as_u64(), entry["bytes_out"].as_u64()), (Some(7), Some(0)), "{entry}");
+        let kept = entry.to_string();
+        assert!(!kept.contains(&token) && !kept.contains("Skepd-Session") && !kept.contains("1.0.1.0.1"), "{kept}");
+    }
+
     /// THE LOG IS BOUNDED: past [`MAX_LOG_ENTRIES`] the oldest go, the
     /// latest [`MAX_LOG_ENTRIES`] kept in order, their `seq` counting on — so
     /// the first kept says where the kept entries start (the mutant that keeps

@@ -4,9 +4,11 @@
 //! its outcome and sizes; a present argument of another form refused before
 //! any dial; the guest form refusing every write kind of the wire undialed
 //! and reading the board its reference or its origin names; a search's
-//! `opts` read as one value; its options printing no seed and the open's
-//! preconditions stopped loudly; and the stop abandoning a walk that waits
-//! on the page.
+//! `opts` read as one value; a `select` of two keys or none refused by its
+//! name, and the signed mode's check naming a keyless store; its options
+//! printing no seed and the open's preconditions stopped loudly; every day
+//! dated as the calendar counts it; and the stop abandoning a walk that
+//! waits on the page, a search after it answered `feed_stopped`.
 
 use super::*;
 
@@ -298,4 +300,80 @@ fn the_stop_abandons_a_walk_waiting_on_the_page() {
     assert_eq!(moment.map(|m| m.data["kind"].clone()), Some(json!("label")), "the walk waited on its device-name box");
     assert!(finished, "the stop left the walk waiting on the page");
     assert_eq!(answer.unwrap_err().name(), "abandoned");
+}
+
+/// A `select` MATCHING TWO KEYS, OR NONE, is refused by its name: two keys
+/// under one label answer `ambiguous`, naming each match by its fingerprint
+/// and label; a label of no key answers `not_found`, naming it (the mutants
+/// that read either as the store's own fault, `store_unreadable`, or list
+/// every key for a select that names none).
+#[test]
+fn a_select_of_two_keys_or_none_is_refused_by_its_name() {
+    let dir = TempDir::new().unwrap();
+    let shell = boardless(&dir);
+    let fingerprints: Vec<Value> = (0..2).map(|_| shell.call("keygen", &json!({"label": "phone"})).unwrap()["fingerprint"].clone()).collect();
+    let refused = shell.call("fingerprint", &json!({"select": "phone"})).unwrap_err().to_value();
+    let matches = refused["matches"].as_array().cloned().unwrap_or_default();
+    assert_eq!((refused["name"].as_str(), matches.len()), (Some("ambiguous"), 2), "{refused}");
+    assert!(matches.iter().all(|m| m["label"] == "phone" && fingerprints.contains(&m["fingerprint"])), "each match named by its key: {refused}");
+    let refused = shell.call("fingerprint", &json!({"select": "a-label-of-no-key"})).unwrap_err().to_value();
+    assert_eq!((refused["name"].as_str(), refused["select"].as_str()), (Some("not_found"), Some("a-label-of-no-key")), "{refused}");
+}
+
+/// THE SIGNED MODE's CHECK before serving names a keyless store: `no_key`
+/// under the signed mode, the board's mode read for the face alone — a
+/// board nothing answers at taken as unclaimed — and, under the bare mode,
+/// `Ok` with no key, its sessions signing nothing (the mutant that answers
+/// a keyless signed check `Ok` serves a signed page that can sign nothing).
+#[test]
+fn the_signed_modes_check_names_a_keyless_store() {
+    let dir = TempDir::new().unwrap();
+    let (signed, _) = shell(&nowhere(), &dir.path().join("signed"), SessionMode::Signed { principal: 1 });
+    assert_eq!(signed.check_signed_key().unwrap_err().name(), "no_key");
+    let (bare, _) = shell(&nowhere(), &dir.path().join("bare"), SessionMode::Bare { principal: 1 });
+    assert!(bare.check_signed_key().unwrap().is_empty(), "the bare mode's sessions sign nothing");
+}
+
+/// A SEARCH AFTER THE STOP answers `feed_stopped` at once: the board's feed
+/// thread joined, its handle's send meets no receiver, and the call is
+/// refused — never a panic at the send, never a wait (the mutant that
+/// unwraps the send panics the transport's connection thread).
+#[test]
+fn a_search_after_the_stop_answers_feed_stopped() {
+    let dir = TempDir::new().unwrap();
+    let (shell, _) = shell(&nowhere(), &dir.path().join("store"), SessionMode::Bare { principal: 1 });
+    let board = shell.board_references().remove(0);
+    shell.shutdown();
+    let started = Instant::now();
+    let refused = shell.call("search", &json!({"guest": true, "board": board, "query": "x"})).unwrap_err();
+    assert_eq!(refused.name(), "feed_stopped", "{refused}");
+    assert!(started.elapsed() < Duration::from_secs(1), "answered at once, not after {:?}", started.elapsed());
+}
+
+/// EVERY DAY IS DATED as the calendar counts it: `civil_date` over every day
+/// from 1970-01-01 through 2400-12-31, at its first second and at its last,
+/// against a day-by-day count with the Gregorian leap rule spelled out — the
+/// date an anchor box's default label carries, which AUTH-5.42 makes
+/// permanent (the mutants in the algorithm's constants, its month fold or
+/// its year carry misdate some day of the four centuries).
+#[test]
+fn every_day_is_dated_as_the_calendar_counts_it() {
+    let leap = |year: u64| (year.is_multiple_of(4) && !year.is_multiple_of(100)) || year.is_multiple_of(400);
+    let mut day = 0u64;
+    for year in 1970..=2400u64 {
+        for month in 1..=12u64 {
+            let days = match month {
+                2 if leap(year) => 29,
+                2 => 28,
+                4 | 6 | 9 | 11 => 30,
+                _ => 31,
+            };
+            for date in 1..=days {
+                let counted = format!("{year:04}-{month:02}-{date:02}");
+                assert_eq!(civil_date(day * 86_400), counted, "the first second of day {day}");
+                assert_eq!(civil_date(day * 86_400 + 86_399), counted, "the last second of day {day}");
+                day += 1;
+            }
+        }
+    }
 }

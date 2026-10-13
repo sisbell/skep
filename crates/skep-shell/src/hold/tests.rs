@@ -2,13 +2,15 @@
 //! disposition, `poisoned`, `write_busy` once/twice, `durability`
 //! once/twice/three times, and an ack, each to exactly its row, the table the
 //! one owner of every reissue's bound; the five kinds are bursts and the
-//! eleven other `WRITE_KINDS` are not. And the ground its two children stand
-//! on: a fake board (`Fake`) — its `H.1`, its `/changes` rows, a draft's
-//! text, the frames POSTed to `/op` recorded and a refusal armed for a send
-//! — the holds over it with a session opened as the shell opens one
-//! (`Ground`), and each `held` event held to its declaration. `write` holds
-//! the one path of a session's `op` — a burst's door and its hold, and a
-//! write the hold never holds; `resend` the probe and the resend walk.
+//! eleven other `WRITE_KINDS` are not; the five held states are the declared
+//! ones. And the ground its two children stand on: a fake board (`Fake`) —
+//! its `H.1`, its `/changes` rows, a draft's text, the frames POSTed to `/op`
+//! recorded and a refusal or the death signal armed for a send — the holds
+//! over it with a session opened as the shell opens one (`Ground`), and each
+//! `held` event, `held` row and `held` answer held to its declaration.
+//! `write` holds the one path of a session's `op` — a burst's door and its
+//! hold, and a write the hold never holds; `resend` the probe and the resend
+//! walk.
 
 use std::io::Read;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
@@ -106,6 +108,18 @@ fn every_outcome_classifies_to_exactly_its_row() {
     assert_eq!(rej("history_busy", "retry"), Decision::Neither);
 }
 
+/// The five held states are the declared `HeldEvent.state` union's words,
+/// each spelled as the event carries it (the mutant that misspells one says
+/// a state no page renders).
+#[test]
+fn the_held_states_are_the_declared_five() {
+    let states = [HeldState::Holding, HeldState::Sending, HeldState::Kept, HeldState::Refused, HeldState::Moved];
+    let declared = crate::shapes::shape("HeldEvent").unwrap().fields.iter().find(|f| f.name == "state").unwrap().ty;
+    let spelled: std::collections::BTreeSet<String> = states.iter().map(|s| format!("'{}'", s.as_str())).collect();
+    let words: std::collections::BTreeSet<String> = declared.split(" | ").map(str::to_string).collect();
+    assert_eq!((spelled.len(), spelled), (5, words), "{declared}");
+}
+
 /// An answer armed at the fake's `/op`: given to every send, or to the
 /// next `n` alone.
 struct Armed<T>(Mutex<Option<(T, Option<usize>)>>);
@@ -150,11 +164,13 @@ impl<T: Clone> Armed<T> {
 /// where one is armed missing; the `/changes` rows the read sees, each served
 /// only past the query's `since` and at or under its `under`, or a refusal
 /// armed in the page's place; the draft's text, of which a `retrieve_v`
-/// answers the positions it names — or no answer, where the site is armed
-/// unread; the frames POSTed to `/op` recorded, and a scripted rejection or
-/// a non-200 answered where one is armed — to every send, or to the next
-/// few alone, the non-200 first; and the `/health` reads counted,
-/// one armed to panic once, and each held at a gate while it is shut.
+/// answers the positions it names — or no answer, the death signal, or one
+/// position more than it names, where the site is armed so; the frames
+/// POSTed to `/op` recorded, and the death signal, a scripted rejection or a
+/// non-200 answered where one is armed — to every send, or to the next few
+/// alone, the death first and the non-200 next; and the `/health` reads
+/// counted, one armed to panic once, and each held at a gate while it is
+/// shut.
 struct Fake {
     chain: String,
     no_head: AtomicBool,
@@ -162,7 +178,10 @@ struct Fake {
     changes_refused: Mutex<Option<(u16, Value)>>,
     text: Mutex<String>,
     site_unread: AtomicBool,
+    site_closed: AtomicBool,
+    over_deliver: AtomicBool,
     sends: Mutex<Vec<Value>>,
+    op_closed: AtomicBool,
     op_rejected: Armed<Value>,
     op_refused: Armed<(u16, Value)>,
     next_at: AtomicU64,
@@ -186,7 +205,10 @@ impl Fake {
             changes_refused: Mutex::new(None),
             text: Mutex::new(String::new()),
             site_unread: AtomicBool::new(false),
+            site_closed: AtomicBool::new(false),
+            over_deliver: AtomicBool::new(false),
             sends: Mutex::new(Vec::new()),
+            op_closed: AtomicBool::new(false),
             op_rejected: Armed::none(),
             op_refused: Armed::none(),
             next_at: AtomicU64::new(50),
@@ -219,6 +241,11 @@ fn respond(status: u16, v: Value) -> Response {
 
 fn ok(v: Value) -> Response {
     respond(200, v)
+}
+
+/// The death signal: an answer whose `Skepd-Session` says `closed`.
+fn closed() -> Response {
+    Response { status: 200, headers: Headers(vec![("Skepd-Session".into(), "closed".into())]), body: Vec::new() }
 }
 
 /// The text a query names under `key`, where it names one.
@@ -286,14 +313,21 @@ impl Dialer for Fake {
                 if self.site_unread.load(Ordering::SeqCst) {
                     return Err(DialError::Connect("the site read is not answered".into()));
                 }
+                if self.site_closed.load(Ordering::SeqCst) {
+                    return Ok(closed());
+                }
                 let text = self.text.lock().unwrap().clone();
                 let (from, width) = span(&body["specs"][0]).unwrap_or((0, 0));
+                let width = width + usize::from(self.over_deliver.load(Ordering::SeqCst));
                 return Ok(match text.get(from.saturating_sub(1)..from.saturating_sub(1) + width) {
                     Some(cut) if from > 0 => ok(json!({"resp": "delivery", "items": [{"content": cut}]})),
                     _ => ok(json!({"resp": "rejected", "code": "out_of_bounds", "disposition": "permanent", "op": "retrieve_v"})),
                 });
             }
             self.sends.lock().unwrap().push(body.clone());
+            if self.op_closed.load(Ordering::SeqCst) {
+                return Ok(closed());
+            }
             if let Some((status, refusal)) = self.op_refused.take() {
                 return Ok(respond(status, refusal));
             }
@@ -332,12 +366,8 @@ struct Ground {
 /// required member present, none outside the table, and `session` a
 /// reference — never null, as the declared type says.
 fn assert_declared(event: &Value) {
+    crate::shapes::assert_declared("HeldEvent", event);
     let shape = crate::shapes::shape("HeldEvent").expect("HeldEvent is declared");
-    let members = event.as_object().expect("an event's data is an object");
-    for field in shape.fields {
-        assert!(!field.required || members.contains_key(field.name), "{event}: `{}` is required", field.name);
-    }
-    assert!(members.keys().all(|k| shape.fields.iter().any(|f| f.name == k)), "{event}: a member the table does not declare");
     let session = shape.fields.iter().find(|f| f.name == "session").expect("`session` is declared");
     assert!(session.required && !session.ty.contains("null") && event["session"].is_string(), "{event}: the session is named, never null");
 }
@@ -356,9 +386,13 @@ impl Ground {
             .collect()
     }
 
-    /// `held(session)`'s lines.
+    /// `held(session)`'s lines, each held to its declaration (`HeldRow`).
     fn lines(&self) -> Vec<Value> {
-        self.holds.lines(&self.session).unwrap().as_array().unwrap().clone()
+        let lines = self.holds.lines(&self.session).unwrap().as_array().unwrap().clone();
+        for line in &lines {
+            crate::shapes::assert_declared("HeldRow", line);
+        }
+        lines
     }
 
     /// `frame` admitted at the ground's session — a test's own frame, which
@@ -367,9 +401,12 @@ impl Ground {
         Burst::admit(frame.clone(), &self.session).unwrap()
     }
 
-    /// A burst held for `cause`, `sent` as a lost answer's would be.
+    /// A burst held for `cause`, `sent` as a lost answer's would be: the
+    /// `held` answer, held to its declaration (`HeldAnswer`).
     fn hold(&self, frame: &Value, cause: &str, sent: bool) -> Value {
-        self.holds.hold(&self.session, self.burst(frame), Reason::of(cause, sent)).unwrap()
+        let answer = self.holds.hold(&self.session, self.burst(frame), Reason::of(cause, sent)).unwrap();
+        crate::shapes::assert_declared("HeldAnswer", &answer);
+        answer
     }
 }
 

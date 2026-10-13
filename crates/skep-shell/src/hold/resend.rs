@@ -10,7 +10,11 @@
 //! the head; (ii) the in-flight burst landed, the head `done kept`; (iii)
 //! the site MOVED, no line sent and the lines faced `moved`, NEVER rebased
 //! (J3) — and a read the board did not answer decides nothing: the next
-//! probe reads again. Each line goes out through the hold's one reader of a
+//! probe reads again. Every document is read first, and the lines of those
+//! its reads let go then go out in `k` ORDER ACROSS THE DOCUMENTS (§3c.5's
+//! ORDER, "which keeps each document's order"), so a `copy` held between
+//! two bursts on its source transcludes the source as it stood when the
+//! person wrote it. Each line goes out through the hold's one reader of a
 //! write's answer, as a first dial does.
 
 use std::borrow::Cow;
@@ -121,8 +125,9 @@ impl Holds {
 
     /// THE RESEND for one session (§3c.5), RESUMED BY READ — wire.md's
     /// RESUME-BY-READ (PUB-8.32) — at the board it stands at: each document
-    /// with held lines read once, then its lines sent in `k` order from where
-    /// the read left them.
+    /// with held lines read once, then the lines of every document its read
+    /// lets go sent in `k` order across the documents
+    /// ([`Holds::send_in_order`]).
     fn resume(&self, session: &SessionEntry) {
         let Some(docs) = self.with_principal(&session.board_reference, session.facts.principal, |ph| {
             let mut docs: Vec<String> = Vec::new();
@@ -135,39 +140,45 @@ impl Holds {
         }) else {
             return;
         };
-        for doc in docs {
-            self.resume_doc(session, &doc);
-        }
+        let sending: Vec<String> = docs.into_iter().filter(|doc| self.resume_doc(session, doc)).collect();
+        self.send_in_order(session, sending);
     }
 
-    /// One document resumed by its read (RESUME-BY-READ, §3c.5): the read,
-    /// then its outcome — a head awaiting the person's act read and sent
-    /// never.
-    fn resume_doc(&self, session: &SessionEntry, doc: &str) {
+    /// One document resumed by its read (RESUME-BY-READ, §3c.5): the read
+    /// and its outcome — a moved document faced, a landed head kept — and
+    /// whether the document's lines go out now: a document the read sends
+    /// from the head, or whose landed head leaves lines behind it; never one
+    /// whose head awaits the person's act, which is read never, nor one the
+    /// read left undecided.
+    fn resume_doc(&self, session: &SessionEntry, doc: &str) -> bool {
         let (board_reference, principal) = (session.board_reference.as_str(), session.facts.principal);
-        let Some(head) = self.head_of(board_reference, principal, doc) else { return };
+        let Some(head) = self.head_of(board_reference, principal, doc) else { return false };
         if awaits_act(&head) {
-            return;
+            return false;
         }
         match self.read_outcome(session, doc, &head) {
-            ReadOutcome::Unread => {}
+            ReadOutcome::Unread => false,
             ReadOutcome::Moved => {
                 self.mark_moved(board_reference, principal, doc);
                 self.emit_held(session, doc, self.count(board_reference, principal, doc), HeldState::Moved, None);
+                false
             }
             ReadOutcome::Landed { at } => {
                 self.done(board_reference, principal, head.k, Done::Kept { at });
                 match self.count(board_reference, principal, doc) {
-                    0 => self.emit_held(session, doc, 0, HeldState::Kept, None),
+                    0 => {
+                        self.emit_held(session, doc, 0, HeldState::Kept, None);
+                        false
+                    }
                     rest => {
                         self.emit_held(session, doc, rest, HeldState::Sending, None);
-                        self.send_rest(session, doc);
+                        true
                     }
                 }
             }
             ReadOutcome::SendFromHead => {
                 self.emit_held(session, doc, self.count(board_reference, principal, doc), HeldState::Sending, None);
-                self.send_rest(session, doc);
+                true
             }
         }
     }
@@ -260,13 +271,19 @@ impl Holds {
         }
     }
 
-    /// Send the document's lines from its head in `k` order, each a normal
-    /// `op` under the session; stop at a line that awaits the person's act or
-    /// is not taken.
-    fn send_rest(&self, session: &SessionEntry, doc: &str) {
-        while let Some(line) = self.head_of(&session.board_reference, session.facts.principal, doc) {
+    /// THE ORDER (§3c.5: "lines in `k` order across the board's documents,
+    /// which keeps each document's order"): the standing lines of `docs`
+    /// sent in `k` order, each a normal `op` under the session — a document
+    /// stopping at a line that awaits the person's act or is not taken, the
+    /// others going on. Every turn settles its line (an ack, the one
+    /// `Continue`, takes it out of the queue) or drops its document, so the
+    /// walk ends.
+    fn send_in_order(&self, session: &SessionEntry, mut docs: Vec<String>) {
+        let (board_reference, principal) = (session.board_reference.as_str(), session.facts.principal);
+        let next = |docs: &[String]| self.with_principal(board_reference, principal, |ph| ph.queue.lines().iter().find(|l| docs.contains(&l.doc)).cloned()).flatten();
+        while let Some(line) = next(&docs) {
             if awaits_act(&line) || self.send_line(session, &line).is_break() {
-                break;
+                docs.retain(|doc| *doc != line.doc);
             }
         }
     }
@@ -279,8 +296,8 @@ impl Holds {
     /// refusal the table holds nowhere left standing for the next probe,
     /// never `done`; the death signal left to the hand that ends the
     /// session — the session that stands resends after its read. `Continue`
-    /// where sending goes on to the document's next line, `Break` where it
-    /// stops at this one.
+    /// where the line is settled and sending goes on, `Break` where the
+    /// line's document stops at it.
     fn send_line(&self, session: &SessionEntry, line: &HeldLine) -> ControlFlow<()> {
         let (board_reference, principal) = (session.board_reference.as_str(), session.facts.principal);
         let given = self.with_principal(board_reference, principal, |ph| ph.reissues.get(&line.k).copied()).flatten().unwrap_or_default();

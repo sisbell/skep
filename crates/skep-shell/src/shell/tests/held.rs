@@ -347,8 +347,11 @@ fn dir_signature(root: &Path) -> Vec<(String, u64)> {
 }
 
 /// T12: a second principal's file is untouched and unlisted under the first's
-/// session — no answer and no event names a path, a directory or the other
-/// principal.
+/// session — the first's own acts, a burst held behind its line and a
+/// `resolve` among them, leave its bytes as they were — and no answer and no
+/// event names a path, a directory or the other principal (the mutant that
+/// opens the first principal's acts on the second's file writes the
+/// person's text into another principal's store).
 #[test]
 fn a_second_principals_file_is_untouched_and_unlisted() {
     let dir = TempDir::new().unwrap();
@@ -372,6 +375,9 @@ fn a_second_principals_file_is_untouched_and_unlisted() {
     let h2 = shell.call("op", &json!({"session": s2, "frame": {"op": "insert", "doc": d1, "at": {"subspace": "1", "ordinal": "3"}, "values": ["two"]}})).unwrap();
     assert_eq!(h2["resp"], "held");
     assert!(store.join("held").exists(), "the directory stands");
+    let p2 = std::fs::read_dir(store.join("held")).unwrap().flatten().map(|e| e.path().join("principal-2.held")).find(|p| p.is_file()).expect("principal 2's file stands");
+    let p2_bytes = std::fs::read(&p2).unwrap();
+    let rx = shell.subscribe();
     // Principal 1's `held(session)` lists principal 1's line alone; no answer
     // names a path, a directory or principal 2 (the token-/path-shaped run).
     let rows1 = shell.call("held", &json!({"session": s1})).unwrap();
@@ -380,6 +386,13 @@ fn a_second_principals_file_is_untouched_and_unlisted() {
     assert_eq!(rows2.as_array().unwrap().len(), 1, "principal 2's own line, read under principal 2 alone");
     let text = format!("{rows1}{h1}");
     assert!(!text.contains("principal-2") && !text.contains("principal-1") && !text.contains("/held/") && !text.contains(&store.display().to_string()), "no path, directory or principal file name crosses: {text}");
+    // Principal 1's own acts touch principal 1's file alone.
+    let behind = shell.call("op", &json!({"session": s1, "frame": {"op": "insert", "doc": d1, "at": {"subspace": "1", "ordinal": "4"}, "values": ["three"]}})).unwrap();
+    assert_eq!(behind["cause"], "behind", "{behind}");
+    assert_eq!(shell.call("resolve", &json!({"session": s1, "held": 1, "act": "drop"})).unwrap_err().name(), "not_resolvable");
+    assert_eq!(std::fs::read(&p2).unwrap(), p2_bytes, "principal 2's file is untouched by principal 1's acts");
+    let said: Vec<String> = rx.try_iter().map(|e| e.data.to_string()).collect();
+    assert!(said.iter().all(|data| !data.contains("principal-2") && !data.contains(&store.display().to_string())), "no event names the other principal's file: {said:?}");
     shell.shutdown();
 }
 

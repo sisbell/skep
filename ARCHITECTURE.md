@@ -1133,9 +1133,11 @@ an item the root re-exports counted as the module it is brought from
   parsed by.
 - `dev_arm.rs` `DevArm`: the SECRET and CONSENT moments answered from a
   script or by the auto arm, each answer said on TALK, never sent to the
-  page.
+  page; the NATIVE statements said there too.
 - `person.rs` `BridgePerson`: the PUBLIC moments as `moment` events
-  answered through `Pending`, the SECRET and CONSENT ones sent to the arm.
+  answered through `Pending`, the SECRET and CONSENT ones and the NATIVE
+  statements (`NATIVE_RULES`: those naming where key material rests) sent
+  to the arm.
 - `sessions.rs` `Sessions`: the token beside the board it stands at, under
   its reference, the two openings, `SessionEntry::attest`, a session's END
   (`Sessions::end`, under the key store the table holds) and the release of
@@ -1147,7 +1149,8 @@ an item the root re-exports counted as the module it is brought from
   board's hold under its own lock.
 - `hold/resend.rs` THE PROBE (`Holds::probe`) and THE RESEND: one
   `/changes` read per document before its first resend, §3c.5's three
-  outcomes, each line sent through the hold's one reader.
+  outcomes, the lines then sent in `k` order across the documents, each
+  through the hold's one reader.
 - `feed.rs` `FeedThreads` and `Feed`: per board, the `/events` reader and
   the feed thread, its state the `Feeder` — the `feed`, `index`, `mode` and
   `daemon` events, the `search` call, the held-burst probe on its cadence
@@ -1164,11 +1167,17 @@ Rules that hold across its files:
 
 - **The page holds nothing.** No token, key, seed, path or store location
   enters a call's answer or an event: the registry's names stand in for
-  the token, the SECRET class stays in the arm, and the log keeps sizes
-  and routes alone. The shell's suite reads every answer, refusal, event
-  and log entry of its bare walk for the token's own text and finds none;
-  the provider's suite (`skep-cli`'s) reads every answer, event and the
-  log for a token-shaped run.
+  the token, the SECRET class stays in the arm with the NATIVE statements —
+  each statement whose rule names where key material rests (§4b.3, the
+  anchor file's ladder words among them) — and the log keeps sizes and
+  routes alone. The one moment that names an anchor file to the page is the
+  paper path's question whether to destroy a file whose print passed its
+  re-type, which `skep-client` classes PUBLIC — a question carries no rule
+  the shell could route it by. The shell's suite reads every answer,
+  refusal, event and log entry of its bare walk and its paper claim for the
+  token's own text, every seed the walk made and the store's location, and
+  finds none; the provider's suite (`skep-cli`'s) reads every answer, event
+  and the log for a token-shaped run.
 - **The board's verdict is carried verbatim.** A `rejected` document and a
   non-200 are `Refusal::Board` with the body whole — a non-200 read once,
   by `Refusal::board`, and an `/op-at` refusal `skep-client` answers as a

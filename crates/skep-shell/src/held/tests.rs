@@ -1,10 +1,12 @@
 //! THE STORE's FENCE (T1–T5): the header written once and read whole with
-//! P38's faces (`v` first), the torn last line ignored and a damaged middle
-//! line halting, the misplaced file moved aside and never overwriting, the
-//! lock a second holder cannot take, compaction once every line is done and
-//! the file recreated, header first, by the next line, and persist-first —
-//! the line on disk before the append returns. Every line form reads back as
-//! it was held, and the store is its owner's alone. And the queue as the
+//! P38's faces (`v` first) — a header of every other form halting with its
+//! own — the torn last line ignored and a damaged middle line halting, the
+//! misplaced file moved aside and never overwriting, the lock a second
+//! holder cannot take, compaction once every line is done and the file
+//! recreated, header first, by the next line, a reopened queue taking an
+//! ordinal past every one its file names, and persist-first — the line on
+//! disk before the append returns. Every line form reads back as it was
+//! held, and the store is its owner's alone. And the queue as the
 //! memory with the file its copy: a line the device refused stands in the
 //! queue under its ordinal, a re-mark reads back as the one line it
 //! re-marks, and a `done` the device refused still settles its line. THE
@@ -135,6 +137,35 @@ fn the_header_is_written_once_v_read_first_and_the_forms_are_byte_equal() {
     // A damaged MIDDLE line halts the file.
     fs::write(&p2, format!("{{\"type\":\"skep-held-bursts\",\"v\":1,\"board\":\"{chain2}\",\"principal\":1,\"account\":\"1.0.1\"}}\n{{not json}}\n{{\"held\":2,\"doc\":\"x\",\"base\":0,\"frame\":{{}},\"cause\":\"stopped\",\"sent\":false,\"time\":1}}\n")).unwrap();
     assert!(matches!(d2.open_file(1, "1.0.1").unwrap(), Opened::Halted { why: HaltWhy::Damaged, .. }));
+}
+
+/// A HEADER OF ANOTHER FORM halts with its own face (§3c.2, P38): a `type`
+/// not the store's, or none, no `v`, a `v` of 0 or of a string — each the
+/// unknown-member face; a newer `v` the newer face whatever its `type`, `v`
+/// read first; a header that is no JSON object the damaged face (the
+/// mutants that drop the `type` check, read a missing `v` as 1, take any
+/// `v` but 1 as newer, or read `type` before `v`).
+#[test]
+fn a_header_of_another_form_halts_with_its_face() {
+    let header = |members: &str| format!("{{{members}\"board\":\"{}\",\"principal\":1,\"account\":\"1.0.1\"}}\n", chain());
+    let cells = [
+        ("a type not the store's", header("\"type\":\"skep-other\",\"v\":1,"), HaltWhy::UnknownMember),
+        ("no type", header("\"v\":1,"), HaltWhy::UnknownMember),
+        ("no v", header("\"type\":\"skep-held-bursts\","), HaltWhy::UnknownMember),
+        ("a v of 0", header("\"type\":\"skep-held-bursts\",\"v\":0,"), HaltWhy::UnknownMember),
+        ("a v of a string", header("\"type\":\"skep-held-bursts\",\"v\":\"1\","), HaltWhy::UnknownMember),
+        ("a newer v of another type", header("\"type\":\"skep-other\",\"v\":3,"), HaltWhy::Newer),
+        ("no object", "[1]\n".to_string(), HaltWhy::Damaged),
+    ];
+    for (cell, header, why) in cells {
+        let tmp = TempDir::new().unwrap();
+        let d = dir(&tmp);
+        fs::write(tmp.path().join("held").join(chain().to_string()).join("principal-1.held"), header).unwrap();
+        match d.open_file(1, "1.0.1").unwrap() {
+            Opened::Halted { why: halted, .. } => assert_eq!(halted, why, "{cell}"),
+            Opened::Live { .. } => panic!("{cell}: read live"),
+        }
+    }
 }
 
 // ── T2 ──────────────────────────────────────────────────────────────────────
@@ -337,6 +368,32 @@ fn after_compaction_the_next_line_recreates_the_file_header_first() {
     assert_eq!(lines.next().unwrap(), format!("{{\"type\":\"skep-held-bursts\",\"v\":1,\"board\":\"{}\",\"principal\":1,\"account\":\"1.0.1\"}}", chain()));
     assert!(lines.next().unwrap().starts_with("{\"held\":1,\"doc\":\"1.0.1.0.2\","), "{raw}");
     assert_eq!(ks(&live(d.open_file(1, "1.0.1").unwrap())), [1], "a reopen reads the line");
+}
+
+/// A REOPENED QUEUE takes an ordinal past every one its file names (§3c.2:
+/// `k`, the file's monotone ordinal): three lines held and the last two
+/// `done`, the file reopened holds the first alone, and the next line held
+/// takes ordinal 4 — never one a line or a `done` of the file already names
+/// — so a second reopen reads both (the mutants that start the ordinals
+/// over, or count from the standing lines, reuse an ordinal, and the next
+/// open reads the new line as a RE-MARK of the old one: the person's first
+/// burst gone).
+#[test]
+fn a_reopened_queue_takes_an_ordinal_past_every_one_its_file_names() {
+    let tmp = TempDir::new().unwrap();
+    let d = dir(&tmp);
+    let mut queue = live(d.open_file(1, "1.0.1").unwrap());
+    for doc in ["1.0.1.0.1", "1.0.1.0.2", "1.0.1.0.3"] {
+        queue.hold(doc, None, 0, json!({"op": "insert"}), Reason::of("unreachable", false)).unwrap();
+    }
+    queue.done(2, Done::Dropped).unwrap();
+    queue.done(3, Done::Kept { at: Some(9) }).unwrap();
+    let mut reopened = live(d.open_file(1, "1.0.1").unwrap());
+    assert_eq!(ks(&reopened), [1]);
+    let next = reopened.hold("1.0.1.0.4", None, 0, json!({"op": "insert"}), Reason::of("behind", false)).unwrap();
+    assert_eq!(next.k, 4, "past every ordinal the file names");
+    let read: Vec<(u64, String)> = live(d.open_file(1, "1.0.1").unwrap()).lines().iter().map(|l| (l.k, l.doc.clone())).collect();
+    assert_eq!(read, [(1, "1.0.1.0.1".to_string()), (4, "1.0.1.0.4".to_string())], "both lines read back");
 }
 
 /// EVERY LINE FORM READS BACK AS IT WAS HELD (§3c.2), the law over its

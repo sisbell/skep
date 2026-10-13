@@ -11,7 +11,10 @@
 //! declined, no artifact held. Every answer is SAID on the TALK stream,
 //! naming the moment and what was done and never the seed: the sheet a
 //! walk shows is kept in this process so a script's `retype sheet` can type
-//! it back, and leaves the process nowhere.
+//! it back, and leaves the process nowhere. The NATIVE statements — those
+//! naming where key material rests on disk (§4b.3; `person`'s
+//! `NATIVE_RULES`) — are said there too, in the place of the shell's own
+//! window, and sent to no page.
 //!
 //! A script's answers are `script`'s grammar, parsed by the transport that
 //! read the file and handed in as `ArmConfig::Script`.
@@ -25,7 +28,7 @@ use std::fmt;
 use std::path::PathBuf;
 use std::sync::Mutex;
 
-use skep_client::person::{Abandoned, Confirmation, Imported, KeptOrPlaced, Retyped};
+use skep_client::person::{Abandoned, Confirmation, Imported, KeptOrPlaced, Retyped, Statement};
 use skep_client::sheet::SheetFields;
 
 use crate::script::Answer;
@@ -109,6 +112,12 @@ impl DevArm {
     /// THE DISMISSAL (SECRET): nothing was displayed, nothing to clear.
     pub fn dismiss(&self) {
         self.say("the sheet is dismissed (nothing was displayed)");
+    }
+
+    /// A NATIVE STATEMENT (`client.md` §4b.3): the shell's own window's, so
+    /// said on TALK under its rule and sent to no page.
+    pub fn native(&self, statement: &Statement) {
+        self.say(format_args!("{}: {}", statement.rule, statement.text));
     }
 
     /// The seed and the fingerprint's first eight hex digits off the `n`-th

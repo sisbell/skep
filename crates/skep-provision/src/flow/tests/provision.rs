@@ -406,7 +406,7 @@ fn a_snippet_whose_write_failed_after_its_rename_is_removed_by_the_cleanup() {
     ]
     .concat();
     let rig = rig(&script, None);
-    // The boards directory writable and searchable but not readable: the
+    // The snippet directory writable and searchable but not readable: the
     // snippet's rename lands and the directory's sync, an open of the
     // directory, is refused. Once the write's failure is logged the
     // directory is readable again, so the cleanup's removal is made whole.

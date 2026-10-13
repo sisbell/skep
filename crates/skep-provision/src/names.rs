@@ -23,17 +23,18 @@
 //! routed one and from a volume under no name of this grammar; the flow's
 //! sweep removes the first and leaves the rest.
 //!
-//! THE STATUS MAP ([`StatusMap`]), in memory: each post of this run by its
-//! STATUS TOKEN — 128 bits of OS entropy as lowercase hex ([`unguessable`]),
-//! shown only to the poster and in the mail, NEVER LOGGED — with its name,
-//! its state ([`PostState`]) and what the reply needs that a name does not
-//! say, the record's anchorless fact; and every LIVE name. REBUILT AT START
-//! from the snippet directory: every `<name>.caddy` is a live name. The
-//! reply's three facts are kept nowhere here: they are the constants and the
-//! public origin, and the reply renders them (`reply`). The map holds NAMES
-//! across a restart and no token: a token is never written anywhere, so a
-//! status URL minted before a restart answers 404 after it, though the board
-//! it named stands, live, and its mail — if it was sent — carries the reply.
+//! THE STATUS MAP ([`StatusMap`]), in memory: each post this process
+//! admitted, by its STATUS TOKEN — 128 bits of OS entropy as lowercase hex
+//! ([`unguessable`]), shown only to the poster and in the mail, NEVER
+//! LOGGED — with its name, its state ([`PostState`]) and what the reply needs
+//! that a name does not say, the record's anchorless fact; and every LIVE
+//! name. REBUILT AT START from the snippet directory: every `<name>.caddy` is
+//! a live name. The reply's three facts are kept nowhere here: they are the
+//! constants and the public origin, and the reply renders them (`reply`). The
+//! map holds NAMES across a restart and no token: a token is never written
+//! anywhere, so a status URL minted before a restart answers 404 after it,
+//! though the board it named stands, live, and its mail — if it was sent —
+//! carries the reply.
 
 use std::collections::{BTreeSet, HashMap};
 use std::fmt;
@@ -134,7 +135,7 @@ pub fn unguessable() -> io::Result<String> {
     Ok(raw.iter().map(|b| format!("{b:02x}")).collect())
 }
 
-/// Where a post stands.
+/// A post's state, from its admission to its end.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PostState {
     /// Admitted, waiting for the worker: D-7.
@@ -149,19 +150,19 @@ pub enum PostState {
     Failed,
 }
 
-/// One post this run admitted, as its status page reads it.
+/// One post this process admitted, as its status page reads it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AdmittedPost {
     /// The board's name.
     pub name: Name,
-    /// Where it stands.
+    /// Its state.
     pub state: PostState,
     /// Whether its record carried no anchor-flagged entry — the reply's
     /// anchorless sentence.
     pub anchorless: bool,
 }
 
-/// THE STATUS MAP: this run's posts by token, and every live name.
+/// THE STATUS MAP: this process's posts by token, and every live name.
 #[derive(Clone, Default)]
 pub struct StatusMap {
     posts: HashMap<String, AdmittedPost>,
@@ -189,13 +190,13 @@ impl StatusMap {
     }
 
     /// `token`'s post moved to `state`; a post gone live joins the live
-    /// names. PRECONDITION, the caller's: `token` is one this run admitted,
-    /// and its post has not ended — a live or a failed post's state is
-    /// final, for the live names never shrink and an ended post holds no
-    /// name — as the book's rules alone move a post. Either broken is the
-    /// caller's bug, and panics naming it.
+    /// names. PRECONDITION, the caller's: `token` is one this process
+    /// admitted, and its post has not ended — a live or a failed post's
+    /// state is final, for the live names never shrink and an ended post
+    /// holds no name — as the book's rules alone move a post. Either broken
+    /// is the caller's bug, and panics naming it.
     pub fn set(&mut self, token: &str, state: PostState) {
-        let post = self.posts.get_mut(token).expect("`set` names a token this run admitted: the book moves only its own jobs' posts");
+        let post = self.posts.get_mut(token).expect("`set` names a token this process admitted: the book moves only its own jobs' posts");
         assert!(matches!(post.state, PostState::Queued | PostState::Running), "`set` moves a post that has not ended — an ended post's state is final — and this one is {:?}", post.state);
         post.state = state;
         if state == PostState::Live {
@@ -203,12 +204,12 @@ impl StatusMap {
         }
     }
 
-    /// `token`'s post, where this run admitted one.
+    /// `token`'s post, where this process admitted one.
     pub fn post(&self, token: &str) -> Option<&AdmittedPost> {
         self.posts.get(token)
     }
 
-    /// Whether a post of this run that is not yet finished — queued or
+    /// Whether a post this process admitted, not yet finished — queued or
     /// running — names `name`: the name is HELD by it — the owner's lock per
     /// name — though nothing stands under it yet.
     pub fn holds(&self, name: &Name) -> bool {

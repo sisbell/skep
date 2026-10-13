@@ -97,7 +97,7 @@ fn an_unwritable_directory_is_an_error() {
     use std::os::unix::fs::PermissionsExt;
     let dir = Scratch::new();
     let boards = dir.path().join("boards");
-    fs::create_dir(&boards).expect("the boards directory");
+    fs::create_dir(&boards).expect("the snippet directory");
     fs::set_permissions(&boards, fs::Permissions::from_mode(0o555)).expect("read-only");
     assert!(write(&boards, &name("alice"), "skep.host").is_err());
     fs::set_permissions(&boards, fs::Permissions::from_mode(0o700)).expect("writable again");

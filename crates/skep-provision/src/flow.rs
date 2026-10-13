@@ -11,7 +11,7 @@
 //! (`names::taken`, D-4), three reads under no lock of this service's, at
 //! most [`MAX_LOOKS`] posts' at once — past it D-8, "try again later", with
 //! no docker call; then THE ADMISSION, under the book's lock again: what is
-//! in flight looked at again — a post for this name or this code may have
+//! in flight checked again — a post for this name or this code may have
 //! been admitted while the reads ran — and the invite looked up again under
 //! the same lock — a board gone live meanwhile may have spent it — then the
 //! status token minted, the post queued, and D-7 answered with its status
@@ -104,6 +104,7 @@
 //! (the provisioning record §4).
 
 use std::collections::{HashSet, VecDeque};
+use std::fmt;
 use std::io;
 use std::num::NonZeroU32;
 use std::path::PathBuf;
@@ -165,14 +166,14 @@ struct Job {
 }
 
 /// THE BOOK: WHAT IS IN FLIGHT, which the pages and the workers share
-/// under its own short lock — the posts waiting for a worker, this run's
-/// posts by token (the status map), and the invite codes the posts in flight
-/// hold — and THE RULES THAT TIE THEM: a post admitted waits with its token
-/// in the map and its code held; a post taken is running; a failed post
-/// lets its code go at once, and a live one keeps it held until the worker
-/// lets it go ([`Book::release`]), once the spend is written; and a new post
-/// is refused by a full queue, a held code or a held name, the first of
-/// them in that order.
+/// under its own short lock — the posts waiting for a worker, this
+/// process's posts by token (the status map), and the invite codes the
+/// posts in flight hold — and THE RULES THAT TIE THEM: a post admitted waits
+/// with its token in the map and its code held; a post taken is running; a
+/// failed post lets its code go at once, and a live one keeps it held until
+/// the worker lets it go ([`Book::release`]), once the spend is written; and
+/// a new post is refused by a full queue, a held code or a held name, the
+/// first of them in that order.
 struct Book {
     queue: VecDeque<Job>,
     map: StatusMap,
@@ -246,20 +247,22 @@ impl Book {
     }
 }
 
-/// A PLACE UNDER A CAP: taken where fewer than the cap are held, and given
-/// back when dropped — on every return and every unwind alike, so no place
-/// is ever kept by a look that ended.
-struct Slot<'a>(&'a AtomicUsize);
+/// A PERMIT UNDER A CAP — the workspace's word for it, `skep-util`'s
+/// `Permit`, which this crate's four dependencies leave out: taken where
+/// fewer than the cap are held, and given back when dropped — on every
+/// return and every unwind alike, so no permit is ever kept by a look that
+/// ended.
+struct Permit<'a>(&'a AtomicUsize);
 
-impl<'a> Slot<'a> {
-    /// A place among `held`'s, where fewer than `cap` are held; `None` where
-    /// `cap` are.
-    fn take(held: &'a AtomicUsize, cap: usize) -> Option<Slot<'a>> {
-        held.try_update(Ordering::AcqRel, Ordering::Acquire, |n| (n < cap).then_some(n + 1)).ok().map(|_| Slot(held))
+impl<'a> Permit<'a> {
+    /// A permit among `held`'s, where fewer than `cap` are held; `None`
+    /// where `cap` are.
+    fn take(held: &'a AtomicUsize, cap: usize) -> Option<Permit<'a>> {
+        held.try_update(Ordering::AcqRel, Ordering::Acquire, |n| (n < cap).then_some(n + 1)).ok().map(|_| Permit(held))
     }
 }
 
-impl Drop for Slot<'_> {
+impl Drop for Permit<'_> {
     fn drop(&mut self) {
         self.0.fetch_sub(1, Ordering::AcqRel);
     }
@@ -284,6 +287,27 @@ struct Made<'s> {
     /// on into the cleanup, across the snippet's removal and the reload
     /// that undoes it.
     snippet: Option<MutexGuard<'s, ()>>,
+}
+
+/// WHERE A CLEANUP RUNS: on a failed step — the provisioning record §5.2's
+/// FAILURE CLEANUP — or at start, on a board a stop left half-made — the
+/// owner's CLEANUP ON START, the sweep; and the word its log lines carry.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CleanupOn {
+    /// A step failed: its lines say `cleanup`.
+    Failure,
+    /// The sweep at start: its lines say `sweep`.
+    Start,
+}
+
+/// The word a cleanup's lines carry after the name: `cleanup` or `sweep`.
+impl fmt::Display for CleanupOn {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            CleanupOn::Failure => "cleanup",
+            CleanupOn::Start => "sweep",
+        })
+    }
 }
 
 /// THE SERVICE: the desk the pages ask, and the workers' shared state.
@@ -382,7 +406,7 @@ impl Service {
             // What a stop mid-board leaves — the volume, and a run that may
             // stand under the name — undone by the cleanup: its table's last
             // two rows, then the truth asked what stands.
-            if self.cleanup(name, Made { volume: true, run: true, snippet: None }, "sweep") {
+            if self.cleanup(name, Made { volume: true, run: true, snippet: None }, CleanupOn::Start) {
                 swept += 1;
             }
         }
@@ -447,12 +471,12 @@ impl Service {
                 match &spent {
                     Ok(true) => self.log(&format!("{name}: the invite is spent")),
                     Ok(false) => self.log(&format!("{name}: the invite was not found issued at the spend; the board stands")),
-                    Err(e) => self.log(&format!("{name}: the invite could not be marked spent ({e}); this run refuses it, and the operator marks it")),
+                    Err(e) => self.log(&format!("{name}: the invite could not be marked spent ({e}); this process refuses it, and the operator marks it")),
                 }
                 // The code is let go of AFTER the spend is written: a post
                 // that finds the book not holding it then finds the file
                 // holding it spent. A spend that could not be written keeps
-                // its code held for this run's life: the file still says
+                // its code held for the process's life: the file still says
                 // issued.
                 if spent.is_ok() {
                     self.book().release(&job.code);
@@ -461,7 +485,7 @@ impl Service {
             }
             Err(step) => {
                 self.log(&format!("{name}: FAILED at {step}"));
-                self.cleanup(name, made, "cleanup");
+                self.cleanup(name, made, CleanupOn::Failure);
                 self.book().mark_failed(&job);
                 false
             }
@@ -599,17 +623,16 @@ impl Service {
         self.judged(&format!("{name}: {step}"), answered).ok_or(step)
     }
 
-    /// THE CLEANUP, under `under` — `cleanup` after a failed step, `sweep`
-    /// for a board a stop left half-made: what was made, undone in reverse —
-    /// the snippet under the route lock its write took, let go of once its
-    /// reload is made, then the run, then the volume, each removal logged and
-    /// the next still tried — and then the verdict, [`Service::cleared`]: the
-    /// truth about names asked what stands, never the removals' answers.
-    /// `true` where the name is cleared: the look finds nothing standing, or
-    /// no look is owed, nothing having been made. `made` is taken apart
-    /// whole, so a making added to [`Made`] is a compile error here until it
-    /// is undone.
-    fn cleanup(&self, name: &Name, made: Made<'_>, under: &str) -> bool {
+    /// THE CLEANUP, on a failure or at start ([`CleanupOn`]): what was made,
+    /// undone in reverse — the snippet under the route lock its write took,
+    /// let go of once its reload is made, then the run, then the volume, each
+    /// removal logged and the next still tried — and then the verdict,
+    /// [`Service::cleared`]: the truth about names asked what stands, never
+    /// the removals' answers. `true` where the name is cleared: the look
+    /// finds nothing standing, or no look is owed, nothing having been made.
+    /// `made` is taken apart whole, so a making added to [`Made`] is a
+    /// compile error here until it is undone.
+    fn cleanup(&self, name: &Name, made: Made<'_>, on: CleanupOn) -> bool {
         let docker = self.docker.as_ref();
         let Made { volume, run, snippet } = made;
         let made_anything = volume || run || snippet.is_some();
@@ -621,63 +644,62 @@ impl Service {
             // reload follows.
             let reload = match caddy::remove(&self.config.boards_dir, name) {
                 Ok(true) => {
-                    self.log(&format!("{name}: {under}: snippet: removed"));
+                    self.log(&format!("{name}: {on}: snippet: removed"));
                     true
                 }
                 Ok(false) => {
-                    self.log(&format!("{name}: {under}: snippet: none stood"));
+                    self.log(&format!("{name}: {on}: snippet: none stood"));
                     false
                 }
                 Err(e) => {
-                    self.log(&format!("{name}: {under}: snippet: not removed: {e}"));
+                    self.log(&format!("{name}: {on}: snippet: not removed: {e}"));
                     true
                 }
             };
             if reload {
-                self.undone(name, under, "caddy_reload", caddy::reload(docker));
+                self.undone(name, on, "caddy_reload", caddy::reload(docker));
             }
         }
         if run {
-            self.undone(name, under, "rm_force", docker.rm_force(name));
+            self.undone(name, on, "rm_force", docker.rm_force(name));
         }
         if volume {
-            self.undone(name, under, "volume_rm", docker.volume_rm(name));
+            self.undone(name, on, "volume_rm", docker.volume_rm(name));
         }
-        !made_anything || self.cleared(name, under)
+        !made_anything || self.cleared(name, on)
     }
 
-    /// ONE REMOVAL's CALL — a making undone — logged under `under`,
-    /// `cleanup` or `sweep`, as [`Service::judged`] logs it, and nothing
-    /// concluded from its answer: what stands after the removals is
-    /// [`Service::cleared`]'s to ask.
-    fn undone(&self, name: &Name, under: &str, step: &str, answered: io::Result<Exit>) {
-        self.judged(&format!("{name}: {under}: {step}"), answered);
+    /// ONE REMOVAL's CALL — a making undone — logged under `on`'s word as
+    /// [`Service::judged`] logs it, and nothing concluded from its answer:
+    /// what stands after the removals is [`Service::cleared`]'s to ask.
+    fn undone(&self, name: &Name, on: CleanupOn, step: &str, answered: io::Result<Exit>) {
+        self.judged(&format!("{name}: {on}: {step}"), answered);
     }
 
-    /// THE VERDICT AFTER THE REMOVALS, under `under` — `cleanup` or `sweep`:
-    /// whether the name is CLEARED, asked of the truth about names itself
+    /// THE VERDICT AFTER THE REMOVALS, on a failure or at start: whether the
+    /// name is CLEARED, asked of the truth about names itself
     /// ([`names::taken`], the three reads a post makes) and never read off
     /// the removals' answers — a refused `rm -f` may be of a run that never
-    /// stood, and a reload removes nothing the truth reads — then logged:
-    /// done, or INCOMPLETE naming what stands, the operator's to clear.
-    /// `true` where nothing stands. The reads are the post's own, an
-    /// inspect's non-zero exit "not standing" whatever its reason: an Engine
-    /// that cannot be reached reads here as nothing standing, as it does at
-    /// a post, and the removals' lines logged above the verdict then name
-    /// the Engine; a volume so left with no snippet, and any run under its
-    /// name, is the next start's sweep's.
-    fn cleared(&self, name: &Name, under: &str) -> bool {
+    /// stood, and a reload removes nothing the truth reads — then logged
+    /// under `on`'s word: done, or INCOMPLETE naming what stands, the
+    /// operator's to clear. `true` where nothing stands. The reads are the
+    /// post's own, an inspect's non-zero exit "not standing" whatever its
+    /// reason: an Engine that cannot be reached reads here as nothing
+    /// standing, as it does at a post, and the removals' lines logged above
+    /// the verdict then name the Engine; a volume so left with no snippet,
+    /// and any run under its name, is the next start's sweep's.
+    fn cleared(&self, name: &Name, on: CleanupOn) -> bool {
         match names::taken(self.docker.as_ref(), &self.config.boards_dir, name) {
             Ok(None) => {
-                self.log(&format!("{name}: {under}: done — nothing stands under the name"));
+                self.log(&format!("{name}: {on}: done — nothing stands under the name"));
                 true
             }
             Ok(Some(by)) => {
-                self.log(&format!("{name}: {under}: INCOMPLETE — {by}, and the name refuses posts (D-4) until the operator clears it"));
+                self.log(&format!("{name}: {on}: INCOMPLETE — {by}, and the name refuses posts (D-4) until the operator clears it"));
                 false
             }
             Err(e) => {
-                self.log(&format!("{name}: {under}: INCOMPLETE — the look at what stands could not be made: {e}"));
+                self.log(&format!("{name}: {on}: INCOMPLETE — the look at what stands could not be made: {e}"));
                 false
             }
         }
@@ -761,7 +783,7 @@ impl Desk for Service {
             Refusal::Name
         })?;
         let record = record::admit(post.record).map_err(|refused| {
-            self.log(&format!("{name}: a post refused: the record, {}", refused.token()));
+            self.log(&format!("{name}: a post refused: the record, {refused}"));
             match refused {
                 RecordRefused::NotARecord(_) => Refusal::Record,
                 RecordRefused::PreviewKey { .. } => Refusal::Preview,
@@ -771,10 +793,10 @@ impl Desk for Service {
         // costs no docker call.
         self.in_flight(&self.book(), &name, &code)?;
         // THE TRUTH ABOUT THE NAME: three reads under no lock of this
-        // service's — a post waits on no provisioning — in one of the
-        // looks' places, given back as the reads end.
+        // service's — a post waits on no provisioning — under one of the
+        // looks' permits, given back as the reads end.
         let taken = {
-            let Some(_looking) = Slot::take(&self.looks, MAX_LOOKS) else {
+            let Some(_looking) = Permit::take(&self.looks, MAX_LOOKS) else {
                 self.log(&format!("{name}: a post refused: {MAX_LOOKS} posts already look at what stands"));
                 return Err(Refusal::Busy);
             };
@@ -795,7 +817,7 @@ impl Desk for Service {
             self.log(&format!("{name}: a post could not be admitted: {e}"));
             Refusal::Failed
         })?;
-        // THE ADMISSION, under the book's lock: what is in flight looked at
+        // THE ADMISSION, under the book's lock: what is in flight checked
         // again — a post for this name or this code may have been admitted
         // while the reads ran — and the invite looked up again under the
         // same lock. A worker spends a code and then lets go of it, in that

@@ -6,19 +6,19 @@
 //! the sign-up page, where a person leaves an email address, and the claim
 //! form, where an invited person names a board and pastes the record their
 //! own device printed; the record judged in process before any docker run;
-//! FIVE STEPS for an admitted post — different names at once on a pool of
-//! workers, one post per name — through the host's `docker` command: the
-//! fresh volume, labelled as this service's, the claim run bound to its
-//! loopback, the dark claim by the sidecar in its namespace, the serving
-//! run, the `/health` pair; ONE SNIPPET per board in the proxy's directory
-//! and the proxy reloaded, the two serial across every name; the live page
-//! at the post's status URL; and ONE MAIL once the board is live. At
-//! its start, before it listens, A SWEEP removes every board a stop left
-//! half-made — a labelled volume with no snippet. One `serve` per Docker
-//! host: the label and the names are the host's. `skep-provision serve` is
-//! the service; `skep-provision invite` is the owner's hand, minting one
-//! invite and printing its invite link; `skep-provision --version` the
-//! version line.
+//! THE NOTES' STEPS 3 TO 5 for an admitted post — different names at once
+//! on a pool of workers, one post per name — through the host's `docker`
+//! command: step 3, the claim run, bound to its loopback, on a fresh volume
+//! labelled as this service's; step 4, the dark claim by the sidecar in its
+//! namespace; step 5, the serving run, the `/health` pair, and ONE SNIPPET
+//! per board in the proxy's directory with the proxy reloaded, the snippet
+//! and the reload serial across every name; the live page at the post's
+//! status URL; and ONE MAIL once the board is live. At its start, before it
+//! listens, A SWEEP removes every board a stop left half-made — a labelled
+//! volume with no snippet. One `serve` per Docker host: the label and the
+//! names are the host's. `skep-provision serve` is the service;
+//! `skep-provision invite` is the owner's hand, minting one invite and
+//! printing its invite link; `skep-provision --version` the version line.
 //!
 //! WHAT IT HOLDS. NO KEY: the record is the person's PUBLIC line, parsed by
 //! `skep-identity`, in which no field type can carry a private key (I1,
@@ -54,8 +54,8 @@
 //! operator clears it (the provisioning record §5.2's named gap); the queue,
 //! the status tokens, an unsent mail and the codes posts in flight hold are
 //! memory and end with the process — among those codes a live board's whose
-//! spend could not be written, which the file still holds issued: the next run
-//! admits a post on it unless the operator has marked it spent. Its exit
+//! spend could not be written, which the file still holds issued: the next
+//! start admits a post on it unless the operator has marked it spent. Its exit
 //! codes: 0, a verb done; 2, a usage refusal; 1, a start refused — a state
 //! directory other users can read, a snippet directory that cannot be read, an
 //! address that cannot be bound, a thread the OS will not give — or an
@@ -219,7 +219,7 @@ fn serve(flags: args::ServeArgs) -> i32 {
     let service = match Service::new(config, state_dir, docker, outbox, Arc::clone(&log), sleep) {
         Ok(service) => service,
         Err(e) => {
-            say_err(&format!("skep-provision: the boards directory {} could not be read: {e}", flags.boards_dir.display()));
+            say_err(&format!("skep-provision: the snippet directory {} could not be read: {e}", flags.boards_dir.display()));
             return 1;
         }
     };
@@ -237,7 +237,7 @@ fn serve(flags: args::ServeArgs) -> i32 {
     // `--listen <addr>:0`, never what was asked for.
     let bound = listener.local_addr().map_or_else(|_| flags.listen.to_string(), |a| a.to_string());
     // The serving line: a stdout that cannot take it costs the line, never
-    // the service — the address is bound and the run serves on.
+    // the service — the address is bound and the service serves on.
     let _ = say_out(&format!(
         "skep-provision: serving http://{bound}/ state-dir {} boards-dir {} suffix {} live {} swept {swept} workers {} connections {} {mailing}",
         flags.state_dir.display(),
@@ -274,7 +274,7 @@ fn made_or_exit<T>(spawned: io::Result<T>, which: &str) {
     }
 }
 
-/// ONE CONNECTION THREAD, for the run's life: the next connection off the
+/// ONE CONNECTION THREAD, for the process's life: the next connection off the
 /// listener served, then the next; an `accept` that fails waits
 /// [`ACCEPT_RETRY_PAUSE`] before it asks again, never a spin.
 fn accepting(listener: &TcpListener, site: &Site, service: &Service) -> ! {

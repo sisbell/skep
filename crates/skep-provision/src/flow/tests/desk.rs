@@ -7,7 +7,7 @@
 //! spend is written, kept held where the spend could not be written, and
 //! let go of after it; no code in the log) and T10 (a sign-up, its address
 //! in no log line; one past the file's cap, refused); a fifth post past the
-//! looks' cap, refused D-8 with no docker call, and the looks' places given
+//! looks' cap, refused D-8 with no docker call, and the looks' permits given
 //! back; and THE BOOK keeping its own rules — what blocks a new post, first
 //! of three, and what admitting, taking, going live, letting a code go and
 //! failing do.
@@ -57,7 +57,7 @@ fn a_fifth_post_past_the_queue_meets_d8_and_leaves_no_entry() {
 /// THE LOOKS' CAP: four posts paused inside their looks at what stands, a
 /// fifth meets D-8, "try again later", at once and with no docker call, its
 /// invite still issued; the four, let go, meet D-4 off the volumes standing
-/// under their names, and their places are given back — a sixth post looks
+/// under their names, and their permits are given back — a sixth post looks
 /// and is admitted.
 #[test]
 fn a_post_past_the_looks_cap_meets_d8_with_no_docker_call() {
@@ -96,16 +96,16 @@ fn a_post_past_the_looks_cap_meets_d8_with_no_docker_call() {
     rig.fake.assert_done();
 }
 
-/// A PLACE UNDER A CAP is taken where fewer than the cap are held, refused
+/// A PERMIT UNDER A CAP is taken where fewer than the cap are held, refused
 /// where the cap are, and given back when dropped — the count back at none.
 #[test]
-fn a_slot_is_given_back_when_dropped() {
+fn a_permit_is_given_back_when_dropped() {
     let held = AtomicUsize::new(0);
-    let first = Slot::take(&held, 2).expect("a place");
-    let second = Slot::take(&held, 2).expect("a second place");
-    assert!(Slot::take(&held, 2).is_none(), "a third place under a cap of two");
+    let first = Permit::take(&held, 2).expect("a permit");
+    let second = Permit::take(&held, 2).expect("a second permit");
+    assert!(Permit::take(&held, 2).is_none(), "a third permit under a cap of two");
     drop(first);
-    let third = Slot::take(&held, 2).expect("the place given back");
+    let third = Permit::take(&held, 2).expect("the permit given back");
     assert_eq!(held.load(Ordering::SeqCst), 2);
     drop((second, third));
     assert_eq!(held.load(Ordering::SeqCst), 0);
@@ -267,10 +267,10 @@ fn a_live_boards_code_is_held_until_its_spend_is_written() {
     rig.fake.assert_done();
 }
 
-/// T9: A SPEND THAT COULD NOT BE WRITTEN KEEPS ITS CODE HELD for the run's
-/// life: the file still says issued, so a post naming the code meets the
-/// invite's refusal — never a second board on one invite — while the board
-/// stands live and the log says the operator marks it.
+/// T9: A SPEND THAT COULD NOT BE WRITTEN KEEPS ITS CODE HELD for the
+/// process's life: the file still says issued, so a post naming the code
+/// meets the invite's refusal — never a second board on one invite — while
+/// the board stands live and the log says the operator marks it.
 #[cfg(unix)]
 #[test]
 fn a_spend_that_could_not_be_written_keeps_its_code_held() {
@@ -285,7 +285,7 @@ fn a_spend_that_could_not_be_written_keeps_its_code_held() {
     assert!(rig.service.book().codes.contains(&code), "the code let go of though its spend was never written");
     assert_eq!(rig.post("bob", &record(true), code.as_str()), Err(Refusal::Invite));
     rig.fake.assert_done();
-    assert!(rig.log().iter().any(|l| l.starts_with("alice: the invite could not be marked spent (") && l.ends_with("; this run refuses it, and the operator marks it")), "{:?}", rig.log());
+    assert!(rig.log().iter().any(|l| l.starts_with("alice: the invite could not be marked spent (") && l.ends_with("; this process refuses it, and the operator marks it")), "{:?}", rig.log());
 }
 
 /// T10: A SIGN-UP through the service is kept and logged — its address in

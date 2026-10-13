@@ -1,8 +1,9 @@
-//! THE DOCKER RUNNER: every call the five steps make on the host's Docker
-//! Engine, made through the host's own `docker` command (Q1 (b): a plain
-//! program on the VM in the `docker` group; the provisioning record §4,
-//! shape (ii)) — so this program speaks no Engine API and holds no socket
-//! of its own.
+//! THE DOCKER RUNNER: every call this service makes on the host's Docker
+//! Engine — the post's look at what stands, steps 3 to 5's, the cleanup's
+//! and the sweep's — made through the host's own `docker` command (Q1 (b):
+//! a plain program on the VM in the `docker` group; the provisioning record
+//! §4, shape (ii)) — so this program speaks no Engine API and holds no
+//! socket of its own.
 //!
 //! * [`Docker`] — the TRAIT: [`Docker::run`], the ONE METHOD A RUNNER
 //!   WRITES, and ONE NAMED METHOD PER CALL provided over it, nothing a test
@@ -124,9 +125,9 @@ pub struct Settings {
 }
 
 /// THE RUNNER: one method a runner writes, [`Docker::run`], and one named
-/// method per call the five steps make, each provided over it — so the host
-/// and the fake share one mapping from a step's verb to its [`Call`], and
-/// every suite that drives the fake drives the mapping the host runs.
+/// method per call the service makes, each provided over it — so the host
+/// and the fake share one mapping from each named method to its [`Call`],
+/// and every suite that drives the fake drives the mapping the host runs.
 pub trait Docker: Send + Sync {
     /// ONE CALL RUN — the one method a runner writes: what `call` answered,
     /// the input it carries, where it carries one, on the child's stdin.

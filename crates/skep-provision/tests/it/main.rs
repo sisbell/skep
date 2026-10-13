@@ -214,7 +214,7 @@ fn until<T>(what: &str, mut done: impl FnMut() -> Option<T>) -> T {
 #[test]
 fn the_built_service_runs_a_post_from_the_form_to_the_live_page_over_the_fakes() {
     let dir = Scratch::new();
-    std::fs::create_dir(dir.path().join("boards")).expect("the boards directory");
+    std::fs::create_dir(dir.path().join("boards")).expect("the snippet directory");
     let state = dir.path().join("state");
     let code = minted(&state);
     assert_eq!(code.len(), 32);
@@ -363,7 +363,7 @@ fn record_preview() -> String {
 fn the_built_service_sweeps_a_half_made_board_before_its_serving_line() {
     let dir = Scratch::new();
     let boards = dir.path().join("boards");
-    std::fs::create_dir(&boards).expect("the boards directory");
+    std::fs::create_dir(&boards).expect("the snippet directory");
     std::fs::write(boards.join("alice.caddy"), b"").expect("alice's snippet");
     let script = dir.path().join("docker.script");
     let lines = [
@@ -397,7 +397,7 @@ fn the_built_service_sweeps_a_half_made_board_before_its_serving_line() {
 #[test]
 fn a_connection_past_the_pool_waits_until_a_thread_frees() {
     let dir = Scratch::new();
-    std::fs::create_dir(dir.path().join("boards")).expect("the boards directory");
+    std::fs::create_dir(dir.path().join("boards")).expect("the snippet directory");
     let script = dir.path().join("docker.script");
     std::fs::write(&script, script_line("labelled_volumes", "-", 0, "")).expect("the script");
     let service = Service::start(dir.path(), &script, &dir.path().join("mail.log"), &["--connections", "1"]);
@@ -484,7 +484,7 @@ fn a_start_refused_or_an_invite_not_minted_is_exit_1() {
     assert!(String::from_utf8_lossy(&absent.stderr).contains("could not be read"), "{absent:?}");
     assert!(absent.stdout.is_empty(), "a serving line for a start refused");
     assert_eq!(calls(), "", "a docker call before the snippets were read");
-    std::fs::create_dir(dir.path().join("boards")).expect("the boards directory");
+    std::fs::create_dir(dir.path().join("boards")).expect("the snippet directory");
     let held = std::net::TcpListener::bind("127.0.0.1:0").expect("a port");
     let bound = serve(&dir.path().join("boards"), &held.local_addr().expect("its address").to_string());
     assert_eq!(bound.status.code(), Some(1), "{bound:?}");

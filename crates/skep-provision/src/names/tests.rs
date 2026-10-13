@@ -96,11 +96,11 @@ fn the_map_answers_its_tokens_and_their_holds() {
     assert!(!map.live().contains(&name("bob")));
 }
 
-/// SETTING A TOKEN THIS RUN NEVER ADMITTED IS THE CALLER's BUG: `set`
+/// SETTING A TOKEN THIS PROCESS NEVER ADMITTED IS THE CALLER's BUG: `set`
 /// panics naming the precondition — never a quiet no-op, which would leave
 /// the caller's post at D-7 with its name held for good.
 #[test]
-#[should_panic(expected = "`set` names a token this run admitted")]
+#[should_panic(expected = "`set` names a token this process admitted")]
 fn setting_a_token_never_admitted_is_the_callers_bug() {
     StatusMap::default().set("never-admitted", PostState::Running);
 }

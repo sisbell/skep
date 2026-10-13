@@ -23,8 +23,8 @@
 use crate::sidecar::{ACCOUNT, PRINCIPAL};
 use crate::strings::{fill, ANCHORLESS, FACTS, FIRST_ACT, LIVE, OPERATOR, PUBLIC_VENUE, REPLY_STATUS_URL, SECOND_ACT};
 
-/// THE LIVE TEXT: plain text, its paragraphs separated by a blank line,
-/// for the page (`pages::paragraphs`) and the mail's body alike.
+/// THE LIVE REPLY's TEXT: plain text, its paragraphs separated by a blank
+/// line, for the page (`pages::paragraphs`) and the mail's body alike.
 pub fn text(origin: &str, anchorless: bool, status_url: &str) -> String {
     let principal = PRINCIPAL.to_string();
     let slots = [("origin", origin), ("principal", principal.as_str()), ("account", ACCOUNT), ("status_url", status_url)];

@@ -87,10 +87,10 @@ page is plain HTML with no script and nothing fetched from elsewhere.
   after lowercasing: `[a-z0-9-]`, 1 to 63 bytes, no hyphen at either
   end. The record goes to `skep_identity::parse_enroll`, trimmed of its
   trailing line breaks, and every key must be the production kind. Then
-  the name must not be taken: no snippet, no volume and no container
-  stands under it, and no post in flight holds it. A refused post is
-  shown on the form again, and leaves no file and no queue entry. An
-  admitted post is queued and answered with D-7 and its status URL.
+  the name must be free: not taken — no snippet, no volume and no
+  container stands under it — and not held by a post in flight. A refused
+  post is shown on the form again, and leaves no file and no queue entry.
+  An admitted post is queued and answered with D-7 and its status URL.
 - `GET /status/<token>` shows D-7 while the post waits or runs, the live
   reply once the board is routed, and D-8 once it failed. A token the
   service does not hold is 404, and a token from before a restart is one
@@ -119,25 +119,30 @@ posts make those reads at once, and up to four wait in the queue; a fifth
 past either is answered D-8, "try again later", the first with no `docker`
 call.
 
-1. Look again: no snippet, volume or container stands under the name.
-2. `docker volume create --label skep.provision=1 <name>`: the volume
-   carries the label by which the sweep at start finds it.
-3. The claim run: the image bound to its own loopback, nothing published,
-   the board's public origin `https://<name>.<suffix>` configured.
-4. The sidecar's `skep claim --hosted -` in the claim run's network
-   namespace, the record on its stdin, retried while the daemon is not yet
-   listening. The six lines it prints are the claim; any other answer is a
-   failure. Then `docker rm -f` the claim run.
-5. The serving run on the bridge, then the sidecar's `skep health` until
-   the board answers a claimant with local trust off.
-6. The snippet written to `<boards-dir>/<name>.caddy`, then the proxy
-   reloaded. These two are a route change: one lock, the route lock, is
-   held across a snippet's write and its reload, whichever name a worker
-   is on, so route changes are serial and no reload lands between another
-   board's snippet and its own reload. Where the write or the reload
-   fails, the lock is held on across the snippet's removal and the reload
-   that undoes it, so no other board's reload loads a snippet whose own
-   route change failed. The lock is held nowhere else.
+A worker runs the deployment notes' §4 steps 3 to 5 for each post, in
+order:
+
+- **Step 3, the claim run.** Look again: no snippet, volume or container
+  stands under the name. Then the volume,
+  `docker volume create --label skep.provision=1 <name>`, labelled so the
+  sweep at start finds it, and the claim run on it: the image bound to its
+  own loopback, nothing published, the board's public origin
+  `https://<name>.<suffix>` configured.
+- **Step 4, the dark claim.** The sidecar's `skep claim --hosted -` in the
+  claim run's network namespace, the record on its stdin, retried while
+  the daemon is not yet listening. The six lines it prints are the claim;
+  any other answer is a failure. Then `docker rm -f` the claim run.
+- **Step 5, the serving run and the route.** The serving run on the
+  bridge, then the sidecar's `skep health` until the board answers a
+  claimant with local trust off. Then the snippet written to
+  `<boards-dir>/<name>.caddy`, then the proxy reloaded. These two are a
+  route change: one lock, the route lock, is held across a snippet's write
+  and its reload, whichever name a worker is on, so route changes are
+  serial and no reload lands between another board's snippet and its own
+  reload. Where the write or the reload fails, the lock is held on across
+  the snippet's removal and the reload that undoes it, so no other board's
+  reload loads a snippet whose own route change failed. The lock is held
+  nowhere else.
 
 Then the status turns live, the invite is spent, and the mail goes to the
 sender's own thread. That thread retries a refused send (seven tries, ten
@@ -227,7 +232,7 @@ because a board with local trust on fails the `/health` step.
   characters: 128 random bits as hex, or the `--code` value given. The
   invite's address is where the mail goes.
 - `<state-dir>/invites.lock` is held over each rewrite of the invite file,
-  so the service's spend and an `invite` run never lose each other's
+  so the service's spend and the owner's `invite` never lose each other's
   change.
 - `<boards-dir>/<name>.caddy` is one board's proxy snippet, mode `0644`.
   The status map is rebuilt from these files at start: each snippet is a

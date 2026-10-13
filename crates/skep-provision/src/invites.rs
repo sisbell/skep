@@ -47,7 +47,7 @@ const INVITES_LOCK: &str = "invites.lock";
 /// A code's byte bound: room for a document's address, and no more.
 pub const MAX_CODE_BYTES: usize = 128;
 
-/// Where an invite stands.
+/// An invite's state: issued, then spent.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum InviteState {
     /// Issued on `date`, not yet spent.
@@ -71,7 +71,7 @@ pub struct Invite {
     code: String,
     /// The address it went to.
     pub address: String,
-    /// Where it stands.
+    /// Its state.
     pub state: InviteState,
 }
 

@@ -101,7 +101,7 @@ fn rig(script: &str, mail_script: Option<Vec<i32>>) -> Rig {
 fn rig_with(script: &str, mail_script: Option<Vec<i32>>, sleep: Sleep) -> Rig {
     let dir = Scratch::new();
     let boards = dir.path().join("boards");
-    fs::create_dir(&boards).expect("the boards directory");
+    fs::create_dir(&boards).expect("the snippet directory");
     let state_dir = StateDir::open(&dir.path().join("state")).expect("the state directory");
     let fake = Arc::new(FakeDocker::parse(script).expect("a script"));
     let lines = Arc::new(Mutex::new(Vec::new()));

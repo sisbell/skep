@@ -112,7 +112,8 @@ pub enum Refusal {
     /// The field is no code of the code's form, or the code is not in the
     /// file, or spent, or held by a post in flight: the DRAFT refusal.
     Invite,
-    /// The name is not one label, or is taken: D-4.
+    /// The name is not one label, is taken — something stands under it —
+    /// or is held by a post in flight: D-4.
     Name,
     /// The record is not one `skep keygen` printed: D-5.
     Record,
@@ -168,9 +169,9 @@ pub trait Desk: Sync {
     fn sign_up(&self, address: &[u8]) -> Result<(), SignUpRefusal>;
     /// A claim post judged: admitted — queued, and answered with its status
     /// token — or refused. `Ok(token)`: the post queued, and `token` one
-    /// [`Desk::status`] answers for the rest of the run — D-7 until the post
-    /// ends. A refusal leaves nothing: no token, nothing queued, no file
-    /// changed.
+    /// [`Desk::status`] answers for the rest of the process's life — D-7
+    /// until the post ends. A refusal leaves nothing: no token, nothing
+    /// queued, no file changed.
     fn admit(&self, post: &Post<'_>) -> Result<String, Refusal>;
     /// A status token's page; `None` for a token the desk does not hold. A
     /// query: it changes nothing.

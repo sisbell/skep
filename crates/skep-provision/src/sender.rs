@@ -180,7 +180,7 @@ enum DeliveredBy {
 impl Outbox {
     /// THE SENDER THREAD, started over the follow-up mail's `From:` and
     /// `Reply-To:`: it delivers each message handed over, in turn, until the
-    /// program ends.
+    /// process ends.
     pub fn spawn(sender: Box<dyn Sender>, from: MailAddress, reply_to: MailAddress, log: Log, sleep: Sleep) -> io::Result<Outbox> {
         let (tx, rx): (mpsc::Sender<Message>, Receiver<Message>) = mpsc::channel();
         thread::Builder::new().name("sender".into()).spawn(move || {
@@ -205,7 +205,7 @@ impl Outbox {
         let message = Message { name, to, from: self.from.as_str().to_owned(), reply_to: self.reply_to.as_str().to_owned(), subject: fill(MAIL_SUBJECT, &[]), body };
         match &self.delivered_by {
             DeliveredBy::Thread(tx) => {
-                // The thread ends only with the program; a send that fails
+                // The thread ends only with the process; a send that fails
                 // has no reader left to fail to.
                 let _ = tx.send(message);
             }

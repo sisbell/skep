@@ -1684,8 +1684,8 @@ Rules that hold across its files:
   four.
 - **A post never waits on a provisioning.** Its checks against what is in
   flight and its admission run under the book's short lock on the status
-  map, the queue and the held codes — the admission looking at what is in
-  flight again, and at the invite again, under that lock — and its three
+  map, the queue and the held codes — the admission checking what is in
+  flight again, and the invite again, under that lock — and its three
   reads of what stands under no lock at all, four posts' at most at once,
   a fifth answered D-8 with no `docker` call; none waits behind a board
   being made, and a status page waits on nothing either.

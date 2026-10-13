@@ -5,7 +5,7 @@ edition.workspace = true
 rust-version.workspace = true
 repository.workspace = true
 license.workspace = true
-description = "skep-provision — the service behind a hosted skep board's sign-up: the sign-up page and the claim form served over loopback behind the proxy, the person's record checked in process, the five steps run through the host's docker command, one proxy snippet per board and a reload, the live page at a status URL, and a follow-up mail. It holds no key."
+description = "skep-provision — the service behind a hosted skep board's sign-up: the sign-up page and the claim form served over loopback behind the proxy, the person's record checked in process, each board made through the host's docker command, one proxy snippet per board and a reload, the live page at a status URL, and a follow-up mail. It holds no key."
 readme = "README.md"
 
 # ONE binary: the service (`serve`) and the owner's verb that mints an invite

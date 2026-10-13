@@ -49,7 +49,7 @@ impl Exit {
 /// for, or one whose input could not be given a thread of its own — that
 /// child ended unfed and reaped — never its exit, and never a panic: the
 /// caller is a worker or the sender's thread, which a panic would end for
-/// the run's life.
+/// the process's life.
 pub fn run(cmd: Command, input: Option<&[u8]>) -> io::Result<Exit> {
     run_fed_by(cmd, input, thread::Builder::new())
 }

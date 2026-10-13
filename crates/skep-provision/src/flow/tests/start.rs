@@ -32,7 +32,7 @@ fn a_docker_that_cannot_run_skips_the_sweep_and_refuses_a_post_d8() {
     }
     let dir = Scratch::new();
     let boards = dir.path().join("boards");
-    fs::create_dir(&boards).expect("the boards directory");
+    fs::create_dir(&boards).expect("the snippet directory");
     let state_dir = StateDir::open(&dir.path().join("state")).expect("the state directory");
     let lines = Arc::new(Mutex::new(Vec::new()));
     let into = Arc::clone(&lines);

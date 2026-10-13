@@ -353,7 +353,7 @@ fn the_script_reads_its_escapes_and_refuses_a_bad_line() {
     let exit = fake.sidecar_claim(&alice(), &record).expect("an answer");
     assert_eq!(exit.stdout, b"claimant 1.0.1\nback\\slash\ttab");
     assert_eq!(exit.stderr, b"talk\n");
-    assert_eq!(fake.calls()[0].stdin.as_deref(), Some(record.bytes()));
+    assert_eq!(fake.calls()[0].input.as_deref(), Some(record.bytes()));
     fake.assert_done();
     assert!(FakeDocker::parse("volume_inspect\talice\n").expect_err("two fields").contains("line 1"));
     assert!(FakeDocker::parse("volume_inspect\talice\tx\n").expect_err("no code").contains("no exit code"));

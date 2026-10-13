@@ -42,8 +42,8 @@ fn a_docker_that_cannot_run_skips_the_sweep_and_refuses_a_post_d8() {
     let service = Service::new(config, state_dir.clone(), Box::new(NoDocker), None, log, Arc::new(|_| {})).expect("the service");
     assert_eq!(service.sweep(), 0);
     let code = mint(&state_dir, &MailAddress::parse("person@example.com").expect("an address"), None).expect("minted");
-    let alice = record(true);
-    assert_eq!(service.admit(&Post { name: b"alice", record: alice.as_bytes(), invite: code.as_str().as_bytes() }), Err(Refusal::Failed));
+    let record = record(true);
+    assert_eq!(service.admit(&Post { name: b"alice", record: record.as_bytes(), invite: code.as_str().as_bytes() }), Err(Refusal::Failed));
     let book = service.book();
     assert!(book.queue.is_empty() && book.codes.is_empty() && !book.map.holds(&Name::parse(b"alice").expect("a name")));
     drop(book);
@@ -105,14 +105,14 @@ fn the_sweep_removes_a_half_made_board_and_leaves_the_rest() {
     assert_eq!(rig.service.sweep(), 1);
     rig.fake.assert_done();
     assert_eq!(rig.fake.said(), said(&["labelled_volumes", "rm_force bob", "volume_rm bob", "volume_inspect bob", "container_inspect bob"]));
-    for line in [
+    for logged in [
         "bob: half-made at start (a volume, no snippet) — removing",
         "bob: sweep: rm_force: exit 0",
         "bob: sweep: volume_rm: exit 0",
         "bob: sweep: done — nothing stands under the name",
         "sweep: a volume under the label is under no name of the grammar, left: Carol_X",
     ] {
-        assert!(rig.logged(line), "{line}: {:?}", rig.log());
+        assert!(rig.logged(logged), "{logged}: {:?}", rig.log());
     }
     assert!(!rig.log().iter().any(|l| l.starts_with("alice")), "{:?}", rig.log());
     assert!(rig.snippet("alice").exists());
@@ -138,7 +138,7 @@ fn the_sweep_removes_a_half_made_board_and_leaves_the_rest() {
     let partly = rig_with(&script, None, Arc::new(|_| {}));
     assert_eq!(partly.service.sweep(), 1);
     partly.fake.assert_done();
-    for line in [
+    for logged in [
         "bob: sweep: rm_force: exit 1",
         "bob: sweep: rm_force: Error: No such container: bob",
         "bob: sweep: volume_rm: exit 1",
@@ -148,6 +148,6 @@ fn the_sweep_removes_a_half_made_board_and_leaves_the_rest() {
         "carol: sweep: volume_rm: exit 0",
         "carol: sweep: done — nothing stands under the name",
     ] {
-        assert!(partly.logged(line), "{line}: {:?}", partly.log());
+        assert!(partly.logged(logged), "{logged}: {:?}", partly.log());
     }
 }

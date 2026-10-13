@@ -34,9 +34,9 @@ fn a_failed_route_change_keeps_the_route_lock_across_its_undo() {
     .concat();
     let rig = rig(&script, None);
     let (inside, between) = (Gate::new(), Gate::new());
-    let (pause, first) = (Arc::clone(&inside), Arc::new(AtomicBool::new(false)));
+    let (pause, seen) = (Arc::clone(&inside), Arc::new(AtomicBool::new(false)));
     rig.fake.pause(move |method, _| {
-        if method == "caddy_reload" && !first.swap(true, Ordering::SeqCst) {
+        if method == "caddy_reload" && !seen.swap(true, Ordering::SeqCst) {
             pause.pause();
         }
     });
@@ -118,8 +118,8 @@ fn a_post_answers_at_once_while_a_worker_is_paused_inside_a_step() {
     let (tx, rx) = mpsc::channel();
     let started = Instant::now();
     thread::spawn(move || {
-        let bob = record(true);
-        let _ = tx.send(service.admit(&Post { name: b"bob", record: bob.as_bytes(), invite: code.as_str().as_bytes() }));
+        let record = record(true);
+        let _ = tx.send(service.admit(&Post { name: b"bob", record: record.as_bytes(), invite: code.as_str().as_bytes() }));
     });
     let answered = rx.recv_timeout(Duration::from_secs(5)).expect("the post waited on the provisioning");
     let bob = answered.unwrap_or_else(|r| panic!("bob refused {r:?}: {:?}", rig.log()));
@@ -178,10 +178,10 @@ fn two_workers_never_both_take_a_job_for_one_name() {
 fn the_snippet_write_and_the_reload_are_serial_across_names() {
     let gate = Gate::new();
     let pause = Arc::clone(&gate);
-    let first = Arc::new(AtomicBool::new(false));
+    let seen = Arc::new(AtomicBool::new(false));
     let rig = rig(&(flow_of("alice", false) + &flow_of("bob", false) + &reloads(2)), None);
     rig.fake.pause(move |method, _| {
-        if method == "caddy_reload" && !first.swap(true, Ordering::SeqCst) {
+        if method == "caddy_reload" && !seen.swap(true, Ordering::SeqCst) {
             pause.pause();
         }
     });

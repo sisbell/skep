@@ -7,7 +7,7 @@
 //! among them — because the pool makes boards for different names at once,
 //! and which name's call lands first is the scheduler's; a name's own calls
 //! still come in the order its lines are written. It RECORDS every call in
-//! the order received — the method, the name, the sidecar's stdin — in
+//! the order received — the method, the name, the input it carries — in
 //! memory and, where it was opened from a file (the binary's
 //! `--docker-fake <script>`), as one line per call in its CALLS FILE, the
 //! sibling `<script>.calls`, which a suite driving the built binary reads
@@ -73,9 +73,9 @@ pub struct Called {
     pub method: &'static str,
     /// The name it named, `None` for the reload.
     pub name: Option<String>,
-    /// What it carried on stdin — the sidecar's record — where it carried
-    /// anything.
-    pub stdin: Option<Vec<u8>>,
+    /// The input it carried — the sidecar's record, on the child's stdin —
+    /// where it carried any.
+    pub input: Option<Vec<u8>>,
     /// Whether the script's next line expected it.
     pub expected: bool,
 }
@@ -277,7 +277,7 @@ impl Docker for FakeDocker {
     /// it expects this call, else [`UNEXPECTED`]; either way recorded, with
     /// the input the call carries.
     fn run(&self, call: Call<'_>) -> io::Result<Exit> {
-        let stdin = call.input();
+        let input = call.input();
         let method = method(&call);
         let name = name(&call).map(Name::to_string);
         let mut script = self.script.lock().unwrap_or_else(|e| e.into_inner());
@@ -299,7 +299,7 @@ impl Docker for FakeDocker {
         drop(script);
         if let Some(calls_file) = &self.calls_file {
             let mut line = format!("{method}\t{}\t{}", name.as_deref().unwrap_or("-"), exit.said());
-            if let Some(bytes) = stdin {
+            if let Some(bytes) = input {
                 line.push_str(&format!("\tstdin={}", bytes.len()));
             }
             if !expected {
@@ -308,7 +308,7 @@ impl Docker for FakeDocker {
             line.push('\n');
             OpenOptions::new().append(true).open(calls_file)?.write_all(line.as_bytes())?;
         }
-        self.calls.lock().unwrap_or_else(|e| e.into_inner()).push(Called { method, name: name.clone(), stdin: stdin.map(<[u8]>::to_vec), expected });
+        self.calls.lock().unwrap_or_else(|e| e.into_inner()).push(Called { method, name: name.clone(), input: input.map(<[u8]>::to_vec), expected });
         #[cfg(test)]
         if let Some(pause) = self.pause.get() {
             pause(method, name.as_deref());

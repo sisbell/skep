@@ -250,7 +250,7 @@ fn a_connection_answers_with_its_headers_and_refuses_a_body_past_the_cap() {
             connection(stream, &site(), &Scripted::default());
         }
     });
-    let talk = |head: &str| {
+    let exchange = |head: &str| {
         let mut stream = TcpStream::connect(("127.0.0.1", port)).expect("connected");
         stream.write_all(head.as_bytes()).expect("written");
         let _ = stream.shutdown(Shutdown::Write);
@@ -258,7 +258,7 @@ fn a_connection_answers_with_its_headers_and_refuses_a_body_past_the_cap() {
         stream.read_to_string(&mut raw).expect("an answer");
         raw
     };
-    let page = talk("GET / HTTP/1.1\r\nHost: skep.host\r\n\r\n");
+    let page = exchange("GET / HTTP/1.1\r\nHost: skep.host\r\n\r\n");
     assert!(page.starts_with("HTTP/1.1 200 OK\r\n"), "{page}");
     for header in [
         "Content-Security-Policy: default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'",
@@ -268,7 +268,7 @@ fn a_connection_answers_with_its_headers_and_refuses_a_body_past_the_cap() {
     ] {
         assert!(page.contains(&format!("\r\n{header}\r\n")), "{header}: {page}");
     }
-    let too_large = talk(&format!("POST /claim HTTP/1.1\r\nHost: skep.host\r\nContent-Length: {}\r\n\r\n", MAX_BODY + 1));
+    let too_large = exchange(&format!("POST /claim HTTP/1.1\r\nHost: skep.host\r\nContent-Length: {}\r\n\r\n", MAX_BODY + 1));
     assert!(too_large.starts_with("HTTP/1.1 413 Payload Too Large\r\n"), "{too_large}");
     serve.join().expect("served");
 }
@@ -302,7 +302,7 @@ fn a_panic_costs_its_connection_alone() {
             connection(stream, &site(), &Panics);
         }
     });
-    let talk = |head: &str| {
+    let exchange = |head: &str| {
         let mut stream = TcpStream::connect(("127.0.0.1", port)).expect("connected");
         stream.write_all(head.as_bytes()).expect("written");
         let _ = stream.shutdown(Shutdown::Write);
@@ -310,8 +310,8 @@ fn a_panic_costs_its_connection_alone() {
         let _ = stream.read_to_string(&mut raw);
         raw
     };
-    assert_eq!(talk("GET /status/t0k3n HTTP/1.1\r\nHost: skep.host\r\n\r\n"), "", "an answer written from a panic");
-    let page = talk("GET / HTTP/1.1\r\nHost: skep.host\r\n\r\n");
+    assert_eq!(exchange("GET /status/t0k3n HTTP/1.1\r\nHost: skep.host\r\n\r\n"), "", "an answer written from a panic");
+    let page = exchange("GET / HTTP/1.1\r\nHost: skep.host\r\n\r\n");
     assert!(page.starts_with("HTTP/1.1 200 OK\r\n"), "the thread a panic would have ended answered nothing more: {page:?}");
     serve.join().expect("the thread that served lives on");
 }

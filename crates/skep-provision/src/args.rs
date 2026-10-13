@@ -231,20 +231,20 @@ invite link printed on stdout, the one line to mail by hand.
 /// THE PARSE: a leading `--version` or `--help`, or a verb and its flags.
 pub fn parse(argv: impl IntoIterator<Item = OsString>) -> Result<Command, String> {
     let argv: Vec<String> = argv.into_iter().map(|a| a.into_string().map_err(|_| "an argument is not UTF-8 text".to_owned())).collect::<Result<_, _>>()?;
-    let mut it = argv.into_iter();
-    match it.next().as_deref() {
+    let mut argv = argv.into_iter();
+    match argv.next().as_deref() {
         Some("--version") => Ok(Command::Version),
         Some("--help" | "-h") => Ok(Command::Help),
-        Some("serve") => parse_serve(it),
-        Some("invite") => parse_invite(it),
+        Some("serve") => parse_serve(argv),
+        Some("invite") => parse_invite(argv),
         Some(other) => Err(format!("unknown verb '{other}': serve or invite")),
         None => Err("a verb is required: serve or invite".to_owned()),
     }
 }
 
 /// One flag's value, or the refusal naming the flag.
-fn value(it: &mut impl Iterator<Item = String>, flag: &str) -> Result<String, String> {
-    it.next().ok_or_else(|| format!("{flag} needs a value"))
+fn value(argv: &mut impl Iterator<Item = String>, flag: &str) -> Result<String, String> {
+    argv.next().ok_or_else(|| format!("{flag} needs a value"))
 }
 
 /// A value that becomes one word of a docker argv: not empty, no
@@ -290,7 +290,7 @@ fn count<N: OneOrMore>(flag: &str, v: &str) -> Result<N, String> {
 }
 
 /// `serve`'s flags.
-fn parse_serve(mut it: impl Iterator<Item = String>) -> Result<Command, String> {
+fn parse_serve(mut argv: impl Iterator<Item = String>) -> Result<Command, String> {
     let mut listen = DEFAULT_LISTEN;
     let mut state_dir: Option<PathBuf> = None;
     let mut boards_dir = PathBuf::from(DEFAULT_BOARDS_DIR);
@@ -310,37 +310,37 @@ fn parse_serve(mut it: impl Iterator<Item = String>) -> Result<Command, String> 
     let mut from: Option<MailAddress> = None;
     #[cfg(feature = "test-hooks")]
     let mut docker_fake: Option<PathBuf> = None;
-    while let Some(arg) = it.next() {
+    while let Some(arg) = argv.next() {
         match arg.as_str() {
             flag @ "--listen" => {
-                let v = value(&mut it, flag)?;
+                let v = value(&mut argv, flag)?;
                 listen = v.parse().map_err(|_| format!("{flag}: '{v}' is not an address and a port"))?;
             }
-            flag @ "--state-dir" => state_dir = Some(PathBuf::from(value(&mut it, flag)?)).filter(|p| !p.as_os_str().is_empty()),
-            flag @ "--boards-dir" => boards_dir = PathBuf::from(value(&mut it, flag)?),
-            flag @ "--image" => settings.image = word(flag, value(&mut it, flag)?)?,
-            flag @ "--cli-image" => settings.cli_image = word(flag, value(&mut it, flag)?)?,
-            flag @ "--network" => settings.network = word(flag, value(&mut it, flag)?)?,
-            flag @ "--caddy" => settings.caddy = word(flag, value(&mut it, flag)?)?,
-            flag @ "--suffix" => settings.suffix = domain(flag, value(&mut it, flag)?)?,
+            flag @ "--state-dir" => state_dir = Some(PathBuf::from(value(&mut argv, flag)?)).filter(|p| !p.as_os_str().is_empty()),
+            flag @ "--boards-dir" => boards_dir = PathBuf::from(value(&mut argv, flag)?),
+            flag @ "--image" => settings.image = word(flag, value(&mut argv, flag)?)?,
+            flag @ "--cli-image" => settings.cli_image = word(flag, value(&mut argv, flag)?)?,
+            flag @ "--network" => settings.network = word(flag, value(&mut argv, flag)?)?,
+            flag @ "--caddy" => settings.caddy = word(flag, value(&mut argv, flag)?)?,
+            flag @ "--suffix" => settings.suffix = domain(flag, value(&mut argv, flag)?)?,
             flag @ "--log-max-size" => {
-                let v = value(&mut it, flag)?;
+                let v = value(&mut argv, flag)?;
                 let digits = v.strip_suffix(['k', 'm', 'g']).unwrap_or(&v);
                 if digits.is_empty() || !digits.bytes().all(|b| b.is_ascii_digit()) {
                     return Err(format!("{flag}: '{v}' is not a size, <N>[k|m|g]"));
                 }
                 settings.log_max_size = v;
             }
-            flag @ "--log-max-file" => settings.log_max_file = count(flag, &value(&mut it, flag)?)?,
-            flag @ "--workers" => workers = count(flag, &value(&mut it, flag)?)?,
-            flag @ "--connections" => connections = count(flag, &value(&mut it, flag)?)?,
-            flag @ "--reply-to" => reply_to = Some(mail_address(flag, &value(&mut it, flag)?)?),
-            flag @ "--mailer" => mailer = Some(Mailer::Program(PathBuf::from(value(&mut it, flag)?))),
-            flag @ "--from" => from = Some(mail_address(flag, &value(&mut it, flag)?)?),
+            flag @ "--log-max-file" => settings.log_max_file = count(flag, &value(&mut argv, flag)?)?,
+            flag @ "--workers" => workers = count(flag, &value(&mut argv, flag)?)?,
+            flag @ "--connections" => connections = count(flag, &value(&mut argv, flag)?)?,
+            flag @ "--reply-to" => reply_to = Some(mail_address(flag, &value(&mut argv, flag)?)?),
+            flag @ "--mailer" => mailer = Some(Mailer::Program(PathBuf::from(value(&mut argv, flag)?))),
+            flag @ "--from" => from = Some(mail_address(flag, &value(&mut argv, flag)?)?),
             #[cfg(feature = "test-hooks")]
-            flag @ "--docker-fake" => docker_fake = Some(PathBuf::from(value(&mut it, flag)?)),
+            flag @ "--docker-fake" => docker_fake = Some(PathBuf::from(value(&mut argv, flag)?)),
             #[cfg(feature = "test-hooks")]
-            flag @ "--mailer-fake" => mailer = Some(Mailer::Fake(PathBuf::from(value(&mut it, flag)?))),
+            flag @ "--mailer-fake" => mailer = Some(Mailer::Fake(PathBuf::from(value(&mut argv, flag)?))),
             "--help" | "-h" => return Ok(Command::Help),
             "--version" => return Err("--version is read as the first argument: skep-provision --version".to_owned()),
             other => return Err(format!("serve: unknown argument '{other}'")),
@@ -367,20 +367,20 @@ fn parse_serve(mut it: impl Iterator<Item = String>) -> Result<Command, String> 
 }
 
 /// `invite`'s flags.
-fn parse_invite(mut it: impl Iterator<Item = String>) -> Result<Command, String> {
+fn parse_invite(mut argv: impl Iterator<Item = String>) -> Result<Command, String> {
     let mut address: Option<MailAddress> = None;
     let mut code: Option<InviteCode> = None;
     let mut state_dir: Option<PathBuf> = None;
     let mut suffix = DEFAULT_SUFFIX.to_owned();
-    while let Some(arg) = it.next() {
+    while let Some(arg) = argv.next() {
         match arg.as_str() {
-            flag @ "--address" => address = Some(mail_address(flag, &value(&mut it, flag)?)?),
+            flag @ "--address" => address = Some(mail_address(flag, &value(&mut argv, flag)?)?),
             flag @ "--code" => {
-                let v = value(&mut it, flag)?;
+                let v = value(&mut argv, flag)?;
                 code = Some(InviteCode::parse(&v).ok_or_else(|| format!("{flag}: '{v}' is not 1 to {MAX_CODE_BYTES} letters, digits, '-', '.', '_' or '~'"))?);
             }
-            flag @ "--state-dir" => state_dir = Some(PathBuf::from(value(&mut it, flag)?)).filter(|p| !p.as_os_str().is_empty()),
-            flag @ "--suffix" => suffix = domain(flag, value(&mut it, flag)?)?,
+            flag @ "--state-dir" => state_dir = Some(PathBuf::from(value(&mut argv, flag)?)).filter(|p| !p.as_os_str().is_empty()),
+            flag @ "--suffix" => suffix = domain(flag, value(&mut argv, flag)?)?,
             "--help" | "-h" => return Ok(Command::Help),
             "--version" => return Err("--version is read as the first argument: skep-provision --version".to_owned()),
             other => return Err(format!("invite: unknown argument '{other}'")),

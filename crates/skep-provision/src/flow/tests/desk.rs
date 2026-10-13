@@ -79,8 +79,8 @@ fn a_post_past_the_looks_cap_meets_d8_with_no_docker_call() {
             let (service, code) = (Arc::clone(&rig.service), rig.invite());
             let (tx, rx) = mpsc::channel();
             thread::spawn(move || {
-                let posted = record(true);
-                let _ = tx.send(service.admit(&Post { name: name.as_bytes(), record: posted.as_bytes(), invite: code.as_str().as_bytes() }));
+                let record = record(true);
+                let _ = tx.send(service.admit(&Post { name: name.as_bytes(), record: record.as_bytes(), invite: code.as_str().as_bytes() }));
             });
             rx
         })
@@ -194,8 +194,8 @@ fn the_posts_refusals_come_before_any_docker_call() {
     assert!(rig.issued(&fresh));
     let log = rig.log().join("\n");
     assert!(log.contains("bob: a post refused: the record, bad_record") && log.contains("bob: a post refused: the record, preview_key"), "{log}");
-    for why in [NameRefused::TooShort, NameRefused::HostsFileName, NameRefused::HexDigitsAlone] {
-        assert!(log.contains(&format!("a post refused: {why}")), "{why:?}: {log}");
+    for refused in [NameRefused::TooShort, NameRefused::HostsFileName, NameRefused::HexDigitsAlone] {
+        assert!(log.contains(&format!("a post refused: {refused}")), "{refused:?}: {log}");
     }
     for never in [code.as_str(), spent.as_str(), fresh.as_str(), "skep-enroll", "9f9f", "b_b"] {
         assert!(!log.contains(never), "the log carries {never:?}: {log}");
@@ -335,10 +335,10 @@ fn a_sign_up_past_the_files_cap_is_refused_and_logged() {
 fn a_post_for_a_name_admitted_while_its_reads_ran_meets_d4() {
     let gate = Gate::new();
     let pause = Arc::clone(&gate);
-    let first = Arc::new(AtomicBool::new(false));
+    let seen = Arc::new(AtomicBool::new(false));
     let rig = rig(&(inspects("alice") + &inspects("alice")), None);
     rig.fake.pause(move |method, _| {
-        if method == "container_inspect" && !first.swap(true, Ordering::SeqCst) {
+        if method == "container_inspect" && !seen.swap(true, Ordering::SeqCst) {
             pause.pause();
         }
     });
@@ -346,8 +346,8 @@ fn a_post_for_a_name_admitted_while_its_reads_ran_meets_d4() {
     let (service, code) = (Arc::clone(&rig.service), paused.clone());
     let (tx, rx) = mpsc::channel();
     thread::spawn(move || {
-        let alice = record(true);
-        let _ = tx.send(service.admit(&Post { name: b"alice", record: alice.as_bytes(), invite: code.as_str().as_bytes() }));
+        let record = record(true);
+        let _ = tx.send(service.admit(&Post { name: b"alice", record: record.as_bytes(), invite: code.as_str().as_bytes() }));
     });
     gate.entered(1);
     let admitted = rig.admitted("alice", &other);
@@ -381,8 +381,8 @@ fn a_post_whose_code_was_spent_while_its_reads_ran_is_refused() {
     let (service, posted) = (Arc::clone(&rig.service), code.clone());
     let (tx, rx) = mpsc::channel();
     thread::spawn(move || {
-        let bob = record(true);
-        let _ = tx.send(service.admit(&Post { name: b"bob", record: bob.as_bytes(), invite: posted.as_str().as_bytes() }));
+        let record = record(true);
+        let _ = tx.send(service.admit(&Post { name: b"bob", record: record.as_bytes(), invite: posted.as_str().as_bytes() }));
     });
     gate.entered(1);
     let alice = rig.admitted("alice", &code);

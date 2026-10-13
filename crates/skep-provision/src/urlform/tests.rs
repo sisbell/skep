@@ -42,7 +42,7 @@ fn every_byte_decodes_from_its_escape_and_passes_through_as_itself() {
 fn a_percent_without_two_hex_digits_is_refused_at_its_offset() {
     let cases: [(&[u8], usize); 7] = [(b"a=%4", 2), (b"a=%zz", 2), (b"a=%", 2), (b"a=1&b=%G1", 6), (b"%2=x", 0), (b"a=%4g", 2), (b"a=1&&b=%", 7)];
     for (body, at) in cases {
-        assert_eq!(decode(body), Err(Undecodable::Escape(BadEscape { at })), "{}", String::from_utf8_lossy(body));
+        assert_eq!(decode(body), Err(FormRefused::Escape(BadEscape { at })), "{}", String::from_utf8_lossy(body));
     }
     assert_eq!(decode(b"a=%7b%7B").expect("both cases").get("a"), Some(&b"{{"[..]));
     let refused: &dyn std::error::Error = &BadEscape { at: 6 };
@@ -101,10 +101,10 @@ fn a_fourth_field_is_refused() {
     assert_eq!(decode(b"a&b&c").map(|form| form.fields().len()), Ok(MAX_FIELDS));
     assert_eq!(decode(b"a&&b&&c&&").map(|form| form.fields().len()), Ok(MAX_FIELDS), "an empty part is no field");
     for body in [&b"a&b&c&d"[..], b"=&=&=&=", b"a=1&b=2&c=3&%zz"] {
-        assert_eq!(decode(body), Err(Undecodable::TooManyFields), "{}", String::from_utf8_lossy(body));
+        assert_eq!(decode(body), Err(FormRefused::TooManyFields), "{}", String::from_utf8_lossy(body));
     }
-    assert_eq!(decode(&b"a&".repeat(198_656)), Err(Undecodable::TooManyFields));
-    assert_eq!(decode(b"a=%zz&b&c&d"), Err(Undecodable::Escape(BadEscape { at: 2 })), "a bad escape in a field within the cap speaks first");
-    let refused: &dyn std::error::Error = &Undecodable::TooManyFields;
+    assert_eq!(decode(&b"a&".repeat(198_656)), Err(FormRefused::TooManyFields));
+    assert_eq!(decode(b"a=%zz&b&c&d"), Err(FormRefused::Escape(BadEscape { at: 2 })), "a bad escape in a field within the cap speaks first");
+    let refused: &dyn std::error::Error = &FormRefused::TooManyFields;
     assert_eq!(refused.to_string(), "the body names more than 3 fields");
 }

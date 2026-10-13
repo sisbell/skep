@@ -72,8 +72,8 @@ fn a_child_that_writes_before_it_reads_cannot_stall_its_input() {
 /// with an input to feed and without.
 #[test]
 fn a_program_that_cannot_be_spawned_is_the_calls_error() {
-    for stdin in [None, Some(&b"the record"[..])] {
-        assert!(run(Command::new("/nonexistent/skep-provision-test"), stdin).is_err(), "{stdin:?}");
+    for input in [None, Some(&b"the record"[..])] {
+        assert!(run(Command::new("/nonexistent/skep-provision-test"), input).is_err(), "{input:?}");
     }
 }
 

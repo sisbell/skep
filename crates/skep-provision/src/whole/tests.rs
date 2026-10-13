@@ -23,15 +23,15 @@ fn a_replacement_lands_whole_at_the_mode_its_owner_names() {
     use std::os::unix::fs::PermissionsExt;
     let dir = Scratch::new();
     let mode = |path: &Path| fs::metadata(path).expect("its mode").permissions().mode() & 0o777;
-    for owners in [0o600, 0o644] {
-        let path = dir.path().join(format!("file-{owners:o}"));
-        replace(&path, b"old\n", owners, &|| Ok(())).expect("replaced");
-        assert_eq!((fs::read(&path).expect("the file"), mode(&path)), (b"old\n".to_vec(), owners));
+    for owner_mode in [0o600, 0o644] {
+        let path = dir.path().join(format!("file-{owner_mode:o}"));
+        replace(&path, b"old\n", owner_mode, &|| Ok(())).expect("replaced");
+        assert_eq!((fs::read(&path).expect("the file"), mode(&path)), (b"old\n".to_vec(), owner_mode));
         assert!(!temp_of(&path).exists(), "no temp file left");
         fs::write(temp_of(&path), b"a stop's leftover").expect("a leftover temp file");
         fs::set_permissions(temp_of(&path), fs::Permissions::from_mode(0o666)).expect("widened");
-        replace(&path, b"new\n", owners, &|| Ok(())).expect("replaced again");
-        assert_eq!((fs::read(&path).expect("the file"), mode(&path)), (b"new\n".to_vec(), owners), "{owners:o} over a leftover at 666");
+        replace(&path, b"new\n", owner_mode, &|| Ok(())).expect("replaced again");
+        assert_eq!((fs::read(&path).expect("the file"), mode(&path)), (b"new\n".to_vec(), owner_mode), "{owner_mode:o} over a leftover at 666");
         assert!(!temp_of(&path).exists(), "no temp file left");
     }
 }

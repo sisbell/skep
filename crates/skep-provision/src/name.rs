@@ -53,9 +53,10 @@ pub enum NameRefused {
     Empty,
     /// The field is longer than [`MAX_NAME_BYTES`].
     TooLong,
-    /// A byte outside `[a-z0-9-]` once lowercased — a dot, an underscore, a
-    /// space, anything not ASCII, or bytes that are not text at all.
-    NotALabel,
+    /// Out of the alphabet: a byte outside `[a-z0-9-]` once lowercased — a
+    /// dot, an underscore, a space, anything not ASCII, or bytes that are
+    /// not text at all.
+    OutOfTheAlphabet,
     /// A hyphen begins or ends it.
     HyphenAtEitherEnd,
     /// Fewer than [`MIN_NAME_BYTES`]: no container or volume of Docker's can
@@ -74,7 +75,7 @@ impl fmt::Display for NameRefused {
         f.write_str(match self {
             NameRefused::Empty => "the name is empty",
             NameRefused::TooLong => "the name is longer than one label's 63 bytes",
-            NameRefused::NotALabel => "the name holds a character outside letters, digits and hyphens",
+            NameRefused::OutOfTheAlphabet => "the name holds a character outside letters, digits and hyphens",
             NameRefused::HyphenAtEitherEnd => "the name begins or ends with a hyphen",
             NameRefused::TooShort => "the name is one character, too short for a Docker name",
             NameRefused::HostsFileName => "the name is one every container's hosts file answers, which never reaches the board",
@@ -88,13 +89,13 @@ impl std::error::Error for NameRefused {}
 impl Name {
     /// THE GRAMMAR over the name field's bytes: lowercased, then one label
     /// Docker takes as a name alone. Where two faults hold, the first of
-    /// these speaks: bytes that are not text (`NotALabel`), an empty field,
-    /// more than [`MAX_NAME_BYTES`], a byte outside `[a-z0-9-]`
-    /// (`NotALabel`), a hyphen at either end, fewer than [`MIN_NAME_BYTES`],
-    /// one of [`HOSTS_FILE_NAMES`], hex digits alone — so 64 bytes with an
-    /// underscore are `TooLong`, and `a` is `TooShort`.
+    /// these speaks: bytes that are not text (`OutOfTheAlphabet`), an empty
+    /// field, more than [`MAX_NAME_BYTES`], a byte outside `[a-z0-9-]`
+    /// (`OutOfTheAlphabet`), a hyphen at either end, fewer than
+    /// [`MIN_NAME_BYTES`], one of [`HOSTS_FILE_NAMES`], hex digits alone —
+    /// so 64 bytes with an underscore are `TooLong`, and `a` is `TooShort`.
     pub fn parse(field: &[u8]) -> Result<Name, NameRefused> {
-        let text = std::str::from_utf8(field).map_err(|_| NameRefused::NotALabel)?;
+        let text = std::str::from_utf8(field).map_err(|_| NameRefused::OutOfTheAlphabet)?;
         let name = text.to_ascii_lowercase();
         if name.is_empty() {
             return Err(NameRefused::Empty);
@@ -103,7 +104,7 @@ impl Name {
             return Err(NameRefused::TooLong);
         }
         if !name.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-') {
-            return Err(NameRefused::NotALabel);
+            return Err(NameRefused::OutOfTheAlphabet);
         }
         if name.starts_with('-') || name.ends_with('-') {
             return Err(NameRefused::HyphenAtEitherEnd);

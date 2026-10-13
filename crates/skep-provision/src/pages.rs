@@ -194,15 +194,15 @@ impl Site {
     /// A ROW's WORDS AS EVERY PAGE SHOWS THEM: the site's two slots filled,
     /// `{suffix}` and `{owner_address}`, so any row a page shows may name
     /// either, and no page chooses.
-    fn fill(&self, row: Words) -> String {
-        self.fill_with(row, &[])
+    fn fill(&self, words: Words) -> String {
+        self.fill_with(words, &[])
     }
 
     /// [`Site::fill`] with a page's own slots beside the site's two: the
     /// status URL on D-7's page.
-    fn fill_with(&self, row: Words, more: &[(&str, &str)]) -> String {
-        let site = [("suffix", self.suffix.as_str()), ("owner_address", self.owner_address.as_str())];
-        fill(row, &[more, &site[..]].concat())
+    fn fill_with(&self, words: Words, page_slots: &[(&str, &str)]) -> String {
+        let site_slots = [("suffix", self.suffix.as_str()), ("owner_address", self.owner_address.as_str())];
+        fill(words, &[page_slots, &site_slots[..]].concat())
     }
 }
 
@@ -303,18 +303,18 @@ pub fn connection(stream: TcpStream, site: &Site, desk: &dyn Desk) {
     let _ = catch_unwind(AssertUnwindSafe(|| connection_within(stream, site, desk, TRANSFER_DEADLINE)));
 }
 
-/// [`connection`] with `within` for each transfer's deadline: the seam a
-/// suite shortens.
-fn connection_within(mut stream: TcpStream, site: &Site, desk: &dyn Desk, within: Duration) {
+/// [`connection`] with `deadline` for each transfer's, in
+/// [`TRANSFER_DEADLINE`]'s place: the seam a suite shortens.
+fn connection_within(mut stream: TcpStream, site: &Site, desk: &dyn Desk, deadline: Duration) {
     let _ = stream.set_read_timeout(Some(READ_TIMEOUT));
     let _ = stream.set_write_timeout(Some(WRITE_TIMEOUT));
-    let request = read_request(&mut Deadlined { stream: &mut stream, until: Instant::now() + within }, Limits { max_head: MAX_HEAD, max_body: MAX_BODY });
+    let request = read_request(&mut Deadlined { stream: &mut stream, until: Instant::now() + deadline }, Limits { max_head: MAX_HEAD, max_body: MAX_BODY });
     let answer = match request {
         Ok(Some(request)) => answer(&request, site, desk),
         Ok(None) => return,
         Err(refused) => refused_answer(&refused, site),
     };
-    let _ = write_response(&mut Deadlined { stream: &mut stream, until: Instant::now() + within }, answer.status, &headers(), Some("text/html; charset=utf-8"), answer.body.as_bytes());
+    let _ = write_response(&mut Deadlined { stream: &mut stream, until: Instant::now() + deadline }, answer.status, &headers(), Some("text/html; charset=utf-8"), answer.body.as_bytes());
 }
 
 /// A request the subset refused: 413 past the cap, 400 otherwise.
@@ -396,9 +396,9 @@ button{margin-top:1.25rem;font:inherit}";
 
 /// THE FRAME every page shares: the suffix as its title and heading, the
 /// style, and — on a page showing D-7 — the refresh to the status URL.
-fn page(site: &Site, refresh: Option<&str>, body: &str) -> String {
+fn page(site: &Site, refresh_to: Option<&str>, body: &str) -> String {
     let suffix = escape(&site.suffix, Within::Content);
-    let refresh = refresh.map_or_else(String::new, |to| format!("<meta http-equiv=\"refresh\" content=\"{REFRESH_SECS}; url={}\">\n", attr(to)));
+    let refresh = refresh_to.map_or_else(String::new, |to| format!("<meta http-equiv=\"refresh\" content=\"{REFRESH_SECS}; url={}\">\n", attr(to)));
     format!(
         "<!doctype html>\n<html lang=\"en\">\n<head>\n<meta charset=\"utf-8\">\n<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n{refresh}<title>{suffix}</title>\n<style>{STYLE}</style>\n</head>\n<body>\n<h1>{suffix}</h1>\n{body}</body>\n</html>\n"
     )

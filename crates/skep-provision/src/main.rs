@@ -150,7 +150,7 @@ use statedir::StateDir;
 const ACCEPT_RETRY_PAUSE: Duration = Duration::from_millis(10);
 
 fn main() {
-    let code = match args::parse(std::env::args_os().skip(1)) {
+    let exit_code = match args::parse(std::env::args_os().skip(1)) {
         Ok(Command::Version) => say_out(&args::version_line()).map_or(1, |()| 0),
         Ok(Command::Help) => say_out(&args::usage()).map_or(1, |()| 0),
         Ok(Command::Serve(flags)) => serve(*flags),
@@ -160,7 +160,7 @@ fn main() {
             2
         }
     };
-    exit(code);
+    exit(exit_code);
 }
 
 /// A line on stdout — DATA — written and flushed, never a panic: a verb
@@ -258,7 +258,7 @@ fn serve(flags: args::ServeArgs) -> i32 {
             made_or_exit(thread::Builder::new().name("worker".into()).spawn_scoped(s, || service.work()), "worker");
         }
         for _ in 0..flags.connections.get() {
-            made_or_exit(thread::Builder::new().name("connection".into()).spawn_scoped(s, || accepting(&listener, &site, &service)), "connection");
+            made_or_exit(thread::Builder::new().name("connection".into()).spawn_scoped(s, || serve_connections(&listener, &site, &service)), "connection");
         }
     });
     0
@@ -277,7 +277,7 @@ fn made_or_exit<T>(spawned: io::Result<T>, which: &str) {
 /// ONE CONNECTION THREAD, for the process's life: the next connection off the
 /// listener served, then the next; an `accept` that fails waits
 /// [`ACCEPT_RETRY_PAUSE`] before it asks again, never a spin.
-fn accepting(listener: &TcpListener, site: &Site, service: &Service) -> ! {
+fn serve_connections(listener: &TcpListener, site: &Site, service: &Service) -> ! {
     loop {
         match listener.accept() {
             Ok((stream, _)) => pages::connection(stream, site, service),

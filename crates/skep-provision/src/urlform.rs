@@ -71,7 +71,7 @@ impl std::error::Error for BadEscape {}
 
 /// A body the decoder refuses.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Undecodable {
+pub enum FormRefused {
     /// A `%` that two hex digits do not follow.
     Escape(BadEscape),
     /// More than [`MAX_FIELDS`] fields: no form of this site's.
@@ -79,34 +79,34 @@ pub enum Undecodable {
 }
 
 /// A bad escape, as `?` meets it.
-impl From<BadEscape> for Undecodable {
-    fn from(e: BadEscape) -> Undecodable {
-        Undecodable::Escape(e)
+impl From<BadEscape> for FormRefused {
+    fn from(e: BadEscape) -> FormRefused {
+        FormRefused::Escape(e)
     }
 }
 
-impl fmt::Display for Undecodable {
+impl fmt::Display for FormRefused {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Undecodable::Escape(e) => write!(f, "{e}"),
-            Undecodable::TooManyFields => write!(f, "the body names more than {MAX_FIELDS} fields"),
+            FormRefused::Escape(e) => write!(f, "{e}"),
+            FormRefused::TooManyFields => write!(f, "the body names more than {MAX_FIELDS} fields"),
         }
     }
 }
 
-impl std::error::Error for Undecodable {}
+impl std::error::Error for FormRefused {}
 
 /// THE DECODE: `body` split at each `&` and each part at its first `=` —
 /// a part with no `=` is a name with an empty value, an empty part
 /// (`a=1&&b=2`) no field at all — and each side unescaped; a part past the
 /// [`MAX_FIELDS`]th field refused, whatever its shape, before it is copied.
-pub fn decode(body: &[u8]) -> Result<Form, Undecodable> {
+pub fn decode(body: &[u8]) -> Result<Form, FormRefused> {
     let mut fields = Vec::new();
     let mut start = 0;
     for part in body.split(|&b| b == b'&') {
         if !part.is_empty() {
             if fields.len() == MAX_FIELDS {
-                return Err(Undecodable::TooManyFields);
+                return Err(FormRefused::TooManyFields);
             }
             let (name, value, value_at) = match part.iter().position(|&b| b == b'=') {
                 Some(i) => (&part[..i], &part[i + 1..], start + i + 1),

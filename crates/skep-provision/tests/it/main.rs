@@ -102,19 +102,19 @@ fn form_encode(bytes: &[u8]) -> String {
 
 /// One script line for the docker fake: TAB-separated, `\n` escaped by the
 /// caller.
-fn script_line(method: &str, name: &str, code: i32, stdout: &str) -> String {
-    format!("{method}\t{name}\t{code}\t{stdout}\n")
+fn script_line(method: &str, name: &str, exit_code: i32, stdout: &str) -> String {
+    format!("{method}\t{name}\t{exit_code}\t{stdout}\n")
 }
 
 /// `skep-provision invite`: its exit code, its stdout, its stderr.
-fn invite(state: &Path) -> (i32, String, String) {
-    let out = Command::new(BIN).args(["invite", "--address", "person@example.com", "--state-dir"]).arg(state).stdin(Stdio::null()).output().expect("the invite verb ran");
+fn invite(state_dir: &Path) -> (i32, String, String) {
+    let out = Command::new(BIN).args(["invite", "--address", "person@example.com", "--state-dir"]).arg(state_dir).stdin(Stdio::null()).output().expect("the invite verb ran");
     (out.status.code().unwrap_or(-1), String::from_utf8_lossy(&out.stdout).into_owned(), String::from_utf8_lossy(&out.stderr).into_owned())
 }
 
 /// A code off the invite verb's one DATA line.
-fn minted(state: &Path) -> String {
-    let (exit_code, out, err) = invite(state);
+fn minted(state_dir: &Path) -> String {
+    let (exit_code, out, err) = invite(state_dir);
     assert_eq!(exit_code, 0, "{err}");
     let line = out.trim_end();
     assert_eq!(out.lines().count(), 1, "one DATA line: {out}");
@@ -131,7 +131,7 @@ struct Service {
 }
 
 impl Service {
-    fn start(dir: &Path, script: &Path, mail: &Path, extra: &[&str]) -> Service {
+    fn start(dir: &Path, script: &Path, mail_log: &Path, extra: &[&str]) -> Service {
         let mut child = under_umask(UNIT_UMASK)
             .args(["serve", "--listen", "127.0.0.1:0", "--state-dir"])
             .arg(dir.join("state"))
@@ -140,7 +140,7 @@ impl Service {
             .args(["--reply-to", "owner@skep.host", "--from", "noreply@skep.host", "--docker-fake"])
             .arg(script)
             .arg("--mailer-fake")
-            .arg(mail)
+            .arg(mail_log)
             .args(extra)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
@@ -234,8 +234,8 @@ fn the_built_service_runs_a_post_from_the_form_to_the_live_page_over_the_fakes()
     use std::os::unix::fs::PermissionsExt;
     let dir = Scratch::new();
     std::fs::create_dir(dir.path().join("boards")).expect("the snippet directory");
-    let state = dir.path().join("state");
-    let code = minted(&state);
+    let state_dir = dir.path().join("state");
+    let code = minted(&state_dir);
     assert_eq!(code.len(), 32);
     let script = dir.path().join("docker.script");
     let lines = [
@@ -253,8 +253,8 @@ fn the_built_service_runs_a_post_from_the_form_to_the_live_page_over_the_fakes()
         script_line("caddy_reload", "-", 0, ""),
     ];
     std::fs::write(&script, lines.concat()).expect("the script");
-    let mail = dir.path().join("mail.log");
-    let service = Service::start(dir.path(), &script, &mail, &[]);
+    let mail_log = dir.path().join("mail.log");
+    let service = Service::start(dir.path(), &script, &mail_log, &[]);
 
     // The sign-up page, and the claim form with the link's code: D-1, D-2,
     // D-3 and D-9 in the HTML.
@@ -280,7 +280,7 @@ fn the_built_service_runs_a_post_from_the_form_to_the_live_page_over_the_fakes()
     let (status, thanks) = service.request("POST", "/signup", "address=someone%40example.org");
     assert_eq!(status, 200);
     assert!(thanks.contains("Thank you"), "{thanks}");
-    let signups = std::fs::read_to_string(state.join("signups")).expect("the sign-up file");
+    let signups = std::fs::read_to_string(state_dir.join("signups")).expect("the sign-up file");
     assert!(signups.starts_with("someone@example.org ") && signups.lines().count() == 1, "{signups}");
 
     // THE POST: D-7 and the status URL, then the live reply there.
@@ -302,14 +302,14 @@ fn the_built_service_runs_a_post_from_the_form_to_the_live_page_over_the_fakes()
     assert!(live.contains("origin https://alice.skep.host") && !live.contains("127.0.0.1"), "{live}");
     let snippet = std::fs::metadata(dir.path().join("boards/alice.caddy")).expect("the snippet");
     assert_eq!(snippet.permissions().mode() & 0o777, 0o644, "the snippet readable by the proxy's container, the unit's umask notwithstanding");
-    let mailed = until("the one mail", || std::fs::read_to_string(&mail).ok().filter(|m| m.contains("To: ")));
+    let mailed = until("the one mail", || std::fs::read_to_string(&mail_log).ok().filter(|m| m.contains("To: ")));
     assert_eq!(mailed.matches("=== skep-provision mail-fake: one message ===").count(), 1);
     assert!(mailed.contains("To: person@example.com\nFrom: noreply@skep.host\nReply-To: owner@skep.host\nSubject: Your board is live\n"), "{mailed}");
 
     // The refusals, each on the form at 200: a second post on the name (D-4,
     // off the snippet, no docker call); a bad record (D-5); a preview
     // record (D-6); an unknown code (the DRAFT row).
-    let second = minted(&state);
+    let second = minted(&state_dir);
     let (status, page) = service.request("POST", "/claim", &format!("name=alice&record={}&invite={second}", form_encode(record.as_bytes())));
     assert_eq!(status, 200);
     assert!(page.contains("That name is taken, or is not one label of letters, digits and hyphens. Choose another."), "{page}");
@@ -394,8 +394,8 @@ fn the_built_service_sweeps_a_half_made_board_before_its_serving_line() {
         script_line("container_inspect", "bob", 1, ""),
     ];
     std::fs::write(&script, lines.concat()).expect("the script");
-    let mail = dir.path().join("mail.log");
-    let service = Service::start(dir.path(), &script, &mail, &[]);
+    let mail_log = dir.path().join("mail.log");
+    let service = Service::start(dir.path(), &script, &mail_log, &[]);
     let calls = std::fs::read_to_string(dir.path().join("docker.script.calls")).expect("the calls");
     assert_eq!(calls, "labelled_volumes\t-\t0\nrm_force\tbob\t1\nvolume_rm\tbob\t0\nvolume_inspect\tbob\t1\ncontainer_inspect\tbob\t1\n", "the sweep's calls, all made before the serving line");
     assert!(service.serving.contains(" live 1 swept 1 "), "{}", service.serving);
@@ -467,13 +467,13 @@ fn a_usage_refusal_is_exit_2() {
 fn a_loose_state_directory_is_refused_at_start() {
     use std::os::unix::fs::PermissionsExt;
     let dir = Scratch::new();
-    let state = dir.path().join("state");
-    std::fs::create_dir(&state).expect("a directory");
-    std::fs::set_permissions(&state, std::fs::Permissions::from_mode(0o755)).expect("loosened");
-    let out = Command::new(BIN).args(["invite", "--address", "person@example.com", "--state-dir"]).arg(&state).output().expect("ran");
+    let state_dir = dir.path().join("state");
+    std::fs::create_dir(&state_dir).expect("a directory");
+    std::fs::set_permissions(&state_dir, std::fs::Permissions::from_mode(0o755)).expect("loosened");
+    let out = Command::new(BIN).args(["invite", "--address", "person@example.com", "--state-dir"]).arg(&state_dir).output().expect("ran");
     assert_eq!(out.status.code(), Some(1));
     assert!(String::from_utf8_lossy(&out.stderr).contains("is mode 755: other users of this machine can read the sign-up addresses and the invite codes; chmod 700"));
-    assert_eq!(std::fs::read_dir(&state).expect("listed").count(), 0);
+    assert_eq!(std::fs::read_dir(&state_dir).expect("listed").count(), 0);
 }
 
 /// EVERY FILE IN THE STATE DIRECTORY IS BORN `0600`, the lock file among
@@ -485,12 +485,12 @@ fn a_loose_state_directory_is_refused_at_start() {
 fn the_invite_verb_makes_every_state_file_0600_under_a_shells_umask() {
     use std::os::unix::fs::PermissionsExt;
     let dir = Scratch::new();
-    let state = dir.path().join("state");
-    let out = under_umask("022").args(["invite", "--address", "person@example.com", "--state-dir"]).arg(&state).stdin(Stdio::null()).output().expect("ran");
+    let state_dir = dir.path().join("state");
+    let out = under_umask("022").args(["invite", "--address", "person@example.com", "--state-dir"]).arg(&state_dir).stdin(Stdio::null()).output().expect("ran");
     assert_eq!(out.status.code(), Some(0), "{out:?}");
     let mode = |path: &Path| std::fs::metadata(path).expect("its mode").permissions().mode() & 0o777;
-    assert_eq!(mode(&state), 0o700);
-    let mut born: Vec<(String, u32)> = std::fs::read_dir(&state)
+    assert_eq!(mode(&state_dir), 0o700);
+    let mut born: Vec<(String, u32)> = std::fs::read_dir(&state_dir)
         .expect("listed")
         .map(|entry| {
             let entry = entry.expect("an entry");

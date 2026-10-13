@@ -333,7 +333,8 @@ pub struct Service {
     route_lock: Mutex<()>,
     /// THE BOOK's SHORT LOCK: what is in flight, and its rules.
     book: Mutex<Book>,
-    ready: Condvar,
+    /// Woken when a post is queued, for a worker waiting at the book.
+    queued: Condvar,
     /// The posts' looks at what stands under way, at most [`MAX_LOOKS`].
     looks: AtomicUsize,
 }
@@ -345,7 +346,7 @@ impl Service {
     pub fn new(config: Config, state_dir: StateDir, docker: Box<dyn Docker>, outbox: Option<Outbox>, log: Log, sleep: Sleep) -> io::Result<Service> {
         let map = StatusMap::rebuild(&config.boards_dir)?;
         let signups = SignUps::new(&state_dir);
-        Ok(Service { config, state_dir, signups, docker, outbox, log, sleep, route_lock: Mutex::new(()), book: Mutex::new(Book::new(map)), ready: Condvar::new(), looks: AtomicUsize::new(0) })
+        Ok(Service { config, state_dir, signups, docker, outbox, log, sleep, route_lock: Mutex::new(()), book: Mutex::new(Book::new(map)), queued: Condvar::new(), looks: AtomicUsize::new(0) })
     }
 
     /// HOW MANY live names the map holds — at start, the rebuild's: the
@@ -428,7 +429,7 @@ impl Service {
                     if let Some(job) = book.take() {
                         break job;
                     }
-                    book = self.ready.wait(book).unwrap_or_else(|e| e.into_inner());
+                    book = self.queued.wait(book).unwrap_or_else(|e| e.into_inner());
                 }
             };
             self.provision(job);
@@ -792,8 +793,8 @@ impl Desk for Service {
                 return Err(Refusal::Failed);
             }
         };
-        let name = Name::parse(post.name).map_err(|why| {
-            self.log(&format!("a post refused: {why}"));
+        let name = Name::parse(post.name).map_err(|refused| {
+            self.log(&format!("a post refused: {refused}"));
             Refusal::Name
         })?;
         let record = record::admit(post.record).map_err(|refused| {
@@ -854,7 +855,7 @@ impl Desk for Service {
             }
             book.admit(Job { token: token.clone(), name: name.clone(), record, code, address: invite.address })
         };
-        self.ready.notify_one();
+        self.queued.notify_one();
         self.log(&format!("{name}: admitted; {waiting} waiting"));
         Ok(token)
     }

@@ -21,7 +21,7 @@ use crate::whole::temp_of;
 /// [`MailAddress::parse`], its one door, admits exactly the addresses the
 /// rule does, keeping each as given, its `Debug` showing none of it.
 #[test]
-fn an_address_is_one_at_with_a_side_each_way_no_space_and_no_control() {
+fn an_address_is_ascii_with_one_at_a_side_each_way_and_no_space_control_or_special() {
     for ok in ["a@b", "person@example.com", "first.last+tag@sub.example.org", "o'brien_x-y@example.org"] {
         assert!(address_ok(ok), "{ok}");
         assert_eq!(MailAddress::parse(ok).as_ref().map(MailAddress::as_str), Some(ok));
@@ -190,10 +190,10 @@ fn a_lock_file_is_made_owner_only_and_held_there() {
     let state_dir = StateDir::open(&dir.path().join("state")).expect("the state directory");
     let path = state_dir.file("a.lock");
     let mode = || fs::metadata(&path).expect("its mode").permissions().mode() & 0o777;
-    state_dir.lock_file("a.lock").expect("made").lock().expect("locked");
+    state_dir.open_lock_file("a.lock").expect("made").lock().expect("locked");
     assert_eq!(mode(), 0o600);
     fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).expect("loosened");
-    state_dir.lock_file("a.lock").expect("opened again").lock().expect("locked");
+    state_dir.open_lock_file("a.lock").expect("opened again").lock().expect("locked");
     assert_eq!(mode(), 0o600, "held at the state files' mode");
 }
 

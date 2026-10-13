@@ -20,7 +20,7 @@
 //!   directory (`skepd`'s `LooseDataDir`): the path, the mode found and the
 //!   one act that fixes it, nothing repaired. Every file in it is born
 //!   `0600`: the two files through the one writer below, and a lock file
-//!   beside them through [`StateDir::lock_file`], held at that mode.
+//!   beside them through [`StateDir::open_lock_file`], held at that mode.
 //! * THE STATE FILES' ONE WRITER ([`write_whole`]) — `whole`'s replacement
 //!   at [`STATE_FILE_MODE`], so every file in the directory is replaced
 //!   whole by rename and born owner-only; the sign-up file and the invite
@@ -188,20 +188,20 @@ impl StateDir {
         self.path.join(name)
     }
 
-    /// A LOCK FILE in it, by name: opened for writing — made where it does
-    /// not stand, at [`STATE_FILE_MODE`], so never wider for an instant —
-    /// and held at that mode exactly, whatever this process's umask, as
-    /// every file in the directory is. Its lock is the caller's to take, and
-    /// closing the file releases it.
-    pub fn lock_file(&self, name: &str) -> io::Result<fs::File> {
-        let mut opening = fs::OpenOptions::new();
-        opening.write(true).create(true).truncate(false);
+    /// A LOCK FILE in it, by name, OPENED AND NOT LOCKED — its lock the
+    /// caller's to take, and closing the file releases it: open for
+    /// writing, made where it does not stand at [`STATE_FILE_MODE`], so never
+    /// wider for an instant, and held at that mode exactly, whatever this
+    /// process's umask, as every file in the directory is.
+    pub fn open_lock_file(&self, name: &str) -> io::Result<fs::File> {
+        let mut opts = fs::OpenOptions::new();
+        opts.write(true).create(true).truncate(false);
         #[cfg(unix)]
         {
             use std::os::unix::fs::OpenOptionsExt;
-            opening.mode(STATE_FILE_MODE);
+            opts.mode(STATE_FILE_MODE);
         }
-        let file = opening.open(self.file(name))?;
+        let file = opts.open(self.file(name))?;
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;

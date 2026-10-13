@@ -266,7 +266,7 @@ fn spend_with(state_dir: &StateDir, code: &InviteCode, name: &Name, between: &dy
 /// shape as it stood. The file's own failure reaches the caller's `E`
 /// through its `From<io::Error>`.
 fn update<T, E: From<io::Error>>(state_dir: &StateDir, change: impl FnOnce(&mut Vec<Line>) -> Result<T, E>, between: &dyn Fn() -> io::Result<()>) -> Result<T, E> {
-    let lock = state_dir.lock_file(INVITES_LOCK)?;
+    let lock = state_dir.open_lock_file(INVITES_LOCK)?;
     lock.lock()?;
     let mut lines = read_lines(state_dir)?;
     let answer = change(&mut lines)?;

@@ -76,7 +76,7 @@ fn the_whole_flow_runs_every_step_in_order() {
         ])
     );
     let trimmed = record(true).trim_end().to_owned();
-    assert_eq!(rig.fake.calls()[6].stdin.as_deref(), Some(trimmed.as_bytes()), "the record, trimmed, on the sidecar's stdin");
+    assert_eq!(rig.fake.calls()[6].input.as_deref(), Some(trimmed.as_bytes()), "the record, trimmed, on the sidecar's stdin");
     assert_eq!(fs::read_to_string(rig.snippet("alice")).expect("the snippet"), crate::caddy::snippet(&Name::parse(b"alice").expect("a name"), "skep.host"));
     let status_url = crate::pages::status_url("skep.host", &token);
     let page = reply::text("https://alice.skep.host", false, &status_url);
@@ -89,7 +89,7 @@ fn the_whole_flow_runs_every_step_in_order() {
     assert!(mail[0].starts_with("To: person@example.com\nFrom: noreply@skep.host\nReply-To: owner@skep.host\nSubject: Your board is live\n"));
     assert!(mail[0].ends_with(&format!("\n\n{page}")), "the mail's body is the page's text");
     let log = rig.log().join("\n");
-    for line in [
+    for logged in [
         "alice: admitted; 1 waiting",
         "alice: sidecar: payload entry: 9f86d081884c7d65 anchor=true label=(none)",
         "alice: sidecar: the genesis stands: committed",
@@ -97,7 +97,7 @@ fn the_whole_flow_runs_every_step_in_order() {
         "alice: the invite is spent",
         "alice: mail: sent at try 1 of 7",
     ] {
-        assert!(log.contains(line), "{line}: {log}");
+        assert!(log.contains(logged), "{logged}: {log}");
     }
     for never in [code.as_str(), token.as_str(), "person@example.com", "9f9f9f9f", "skep-enroll"] {
         assert!(!log.contains(never), "the log carries {never:?}: {log}");
@@ -334,9 +334,9 @@ fn a_snippet_the_cleanup_cannot_remove_leaves_the_name_taken_and_is_logged() {
     ]
     .concat();
     let rig = rig(&script, None);
-    let (boards, first) = (rig.boards.clone(), Arc::new(AtomicBool::new(false)));
+    let (boards, seen) = (rig.boards.clone(), Arc::new(AtomicBool::new(false)));
     rig.fake.pause(move |method, _| {
-        if method == "caddy_reload" && !first.swap(true, Ordering::SeqCst) {
+        if method == "caddy_reload" && !seen.swap(true, Ordering::SeqCst) {
             fs::set_permissions(&boards, fs::Permissions::from_mode(0o555)).expect("read-only");
         }
     });
@@ -573,13 +573,13 @@ fn a_step_or_a_cleanup_that_panics_costs_its_post_alone() {
     }
     impl Docker for Panics {
         fn run(&self, call: Call<'_>) -> io::Result<Exit> {
-            let code = match call {
+            let exit_code = match call {
                 Call::RunClaim(_) => panic!("a step's call that panics"),
                 Call::VolumeRm(_) if self.volume_rm_panics => panic!("a cleanup's call that panics"),
                 Call::VolumeCreate(_) | Call::VolumeRm(_) => 0,
                 _ => 1,
             };
-            Ok(Exit { code: Some(code), stdout: Vec::new(), stderr: Vec::new() })
+            Ok(Exit { code: Some(exit_code), stdout: Vec::new(), stderr: Vec::new() })
         }
     }
     for volume_rm_panics in [false, true] {
@@ -593,8 +593,8 @@ fn a_step_or_a_cleanup_that_panics_costs_its_post_alone() {
         let config = Config { boards_dir: boards, suffix: "skep.host".into() };
         let service = Service::new(config, state_dir.clone(), Box::new(Panics { volume_rm_panics }), None, log, Arc::new(|_| {})).expect("the service");
         let code = mint(&state_dir, &MailAddress::parse("person@example.com").expect("an address"), None).expect("minted");
-        let alice = record(true);
-        let post = Post { name: b"alice", record: alice.as_bytes(), invite: code.as_str().as_bytes() };
+        let record = record(true);
+        let post = Post { name: b"alice", record: record.as_bytes(), invite: code.as_str().as_bytes() };
         let token = service.admit(&post).expect("admitted");
         assert!(service.run_next(), "{volume_rm_panics}");
         assert_eq!(service.status(&token), Some(Shown::Failed), "{volume_rm_panics}");

@@ -21,12 +21,12 @@ fn the_name_is_one_lowercase_label_of_letters_digits_and_hyphens() {
     assert_eq!(Name::parse(b"-a"), Err(NameRefused::HyphenAtEitherEnd));
     assert_eq!(Name::parse(b"a-"), Err(NameRefused::HyphenAtEitherEnd));
     assert_eq!(Name::parse("a".repeat(64).as_bytes()), Err(NameRefused::TooLong), "64 bytes");
-    assert_eq!(Name::parse(b"a.b"), Err(NameRefused::NotALabel));
-    assert_eq!(Name::parse(b"a_b"), Err(NameRefused::NotALabel));
+    assert_eq!(Name::parse(b"a.b"), Err(NameRefused::OutOfTheAlphabet));
+    assert_eq!(Name::parse(b"a_b"), Err(NameRefused::OutOfTheAlphabet));
     assert_eq!(Name::parse(b""), Err(NameRefused::Empty));
-    assert_eq!(Name::parse(b"a b"), Err(NameRefused::NotALabel));
-    assert_eq!(Name::parse("caf\u{e9}".as_bytes()), Err(NameRefused::NotALabel));
-    assert_eq!(Name::parse(&[b'a', 0xff]), Err(NameRefused::NotALabel));
+    assert_eq!(Name::parse(b"a b"), Err(NameRefused::OutOfTheAlphabet));
+    assert_eq!(Name::parse("caf\u{e9}".as_bytes()), Err(NameRefused::OutOfTheAlphabet));
+    assert_eq!(Name::parse(&[b'a', 0xff]), Err(NameRefused::OutOfTheAlphabet));
 }
 
 /// WHICH REFUSAL SPEAKS where two faults hold: the first in the grammar's
@@ -39,19 +39,19 @@ fn the_name_is_one_lowercase_label_of_letters_digits_and_hyphens() {
 #[test]
 fn where_two_faults_hold_the_first_in_the_grammars_order_speaks() {
     let not_text_and_too_long = [&[0xff][..], "a".repeat(MAX_NAME_BYTES).as_bytes()].concat();
-    assert_eq!(Name::parse(&not_text_and_too_long), Err(NameRefused::NotALabel));
+    assert_eq!(Name::parse(&not_text_and_too_long), Err(NameRefused::OutOfTheAlphabet));
     let too_long_and_out_of_the_alphabet = format!("{}_", "a".repeat(MAX_NAME_BYTES));
     assert_eq!(Name::parse(too_long_and_out_of_the_alphabet.as_bytes()), Err(NameRefused::TooLong));
-    assert_eq!(Name::parse(b"-a_"), Err(NameRefused::NotALabel), "out of the alphabet and a hyphen at an end");
+    assert_eq!(Name::parse(b"-a_"), Err(NameRefused::OutOfTheAlphabet), "out of the alphabet and a hyphen at an end");
     assert_eq!(Name::parse(b"-"), Err(NameRefused::HyphenAtEitherEnd), "a hyphen at an end and one byte");
     assert_eq!(Name::parse(b"a"), Err(NameRefused::TooShort), "one byte and hex digits alone");
 }
 
 /// THE ALPHABET AT EVERY BYTE: `x`, one byte, `x` is a name iff the byte is
-/// a letter, a digit or a hyphen — a capital lowercased — and `NotALabel`
-/// for every other: a brace, a slash, a colon, an `@`, a quote, a control
-/// character and every byte past ASCII among them. (`x` frames the byte,
-/// so that no name of the three is hex digits alone.)
+/// a letter, a digit or a hyphen — a capital lowercased — and
+/// `OutOfTheAlphabet` for every other: a brace, a slash, a colon, an `@`, a
+/// quote, a control character and every byte past ASCII among them. (`x`
+/// frames the byte, so that no name of the three is hex digits alone.)
 #[test]
 fn every_byte_but_a_letter_a_digit_or_a_hyphen_is_refused() {
     for b in 0..=255u8 {
@@ -60,7 +60,7 @@ fn every_byte_but_a_letter_a_digit_or_a_hyphen_is_refused() {
             let lowered = format!("x{}x", char::from(b.to_ascii_lowercase()));
             assert_eq!(answered.as_ref().map(Name::as_str), Ok(lowered.as_str()), "{b:#04x}");
         } else {
-            assert_eq!(answered, Err(NameRefused::NotALabel), "{b:#04x}");
+            assert_eq!(answered, Err(NameRefused::OutOfTheAlphabet), "{b:#04x}");
         }
     }
 }
@@ -98,7 +98,7 @@ fn a_name_docker_cannot_take_as_a_name_alone_is_refused() {
 #[test]
 fn each_refusal_is_an_error_saying_its_reason() {
     let said: Vec<String> =
-        [NameRefused::Empty, NameRefused::TooLong, NameRefused::NotALabel, NameRefused::HyphenAtEitherEnd, NameRefused::TooShort, NameRefused::HostsFileName, NameRefused::HexDigitsAlone]
+        [NameRefused::Empty, NameRefused::TooLong, NameRefused::OutOfTheAlphabet, NameRefused::HyphenAtEitherEnd, NameRefused::TooShort, NameRefused::HostsFileName, NameRefused::HexDigitsAlone]
             .iter()
             .map(|refused| (refused as &dyn std::error::Error).to_string())
             .collect();

@@ -96,7 +96,10 @@ impl Log {
 
     /// One CALL the page made: `call` its name, `bytes_in` the request's
     /// body, `bytes_out` the answer's, `elapsed` its time, `outcome` how it
-    /// was answered.
+    /// was answered. PRECONDITION, the caller's: `call` is one of the
+    /// bridge's spellings (`CALLS`), so the log keeps no name the page
+    /// chose — a name of no call is `Log::unknown_call`'s, kept by its
+    /// length alone.
     pub fn call(&self, call: &str, bytes_in: usize, bytes_out: usize, elapsed: Duration, outcome: CallOutcome) {
         self.push(json!({
             "kind": "call",

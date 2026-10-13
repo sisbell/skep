@@ -568,6 +568,7 @@ fn f3_the_person_over_the_bridge_claims_and_a_cancel_abandons() {
                 if v["answerable"] == true {
                     let answer = match v["kind"].as_str() {
                         Some("label") => v["data"]["default"].clone(),
+                        Some("yes_no") => Value::from(true),
                         _ => Value::from("yes"),
                     };
                     let id = v["id"].as_str().unwrap();

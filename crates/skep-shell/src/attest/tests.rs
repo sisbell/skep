@@ -6,9 +6,13 @@
 //! past its spans, a shot past its re-insert budget or its body, an origin
 //! past one delivery, an `image` that maps more than its extent — and, the
 //! positive control beside them, a shot's body composed from the values it
-//! copies in, run for run, as the signer's own builder spells it.
+//! copies in, run for run, as the signer's own builder spells it. And THE
+//! COMPOSER's CONTRACT: a death signal at one of its reads the session's
+//! end, never its own refusal; a frame past its precondition stopped
+//! loudly.
 
 use std::io::Read;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use skep_client::dial::{DialError, Dialer, Headers, Request, RequestHead, Response, StreamedResponse};
@@ -164,13 +168,14 @@ struct Stored {
 
 /// A board under test for the composer's reads: each origin's positions,
 /// answered by `retrieve_doc_v_span_set`, `image` and `retrieve_v` — or,
-/// where armed, an extent or an `image` answer of its own — and every op
-/// dialed, recorded by its name.
+/// where armed, an extent or an `image` answer of its own, or the death
+/// signal on every answer — and every op dialed, recorded by its name.
 #[derive(Default)]
 struct Fake {
     origins: HashMap<&'static str, Stored>,
     extents: HashMap<&'static str, u64>,
     images: HashMap<&'static str, Value>,
+    closed: AtomicBool,
     dialed: Mutex<Vec<String>>,
 }
 
@@ -204,6 +209,9 @@ impl Dialer for Fake {
         let frame: Value = serde_json::from_slice(&req.body).unwrap_or(Value::Null);
         let op = frame["op"].as_str().unwrap_or("").to_string();
         self.dialed.lock().unwrap().push(op.clone());
+        if self.closed.load(Ordering::SeqCst) {
+            return Ok(Response { status: 200, headers: Headers(vec![("Skepd-Session".into(), "closed".into())]), body: Vec::new() });
+        }
         let unknown = || ok(json!({"resp": "rejected", "code": "doc_not_registered", "disposition": "reorder"}));
         Ok(match op.as_str() {
             "retrieve_doc_v_span_set" => {
@@ -388,4 +396,44 @@ fn a_shots_body_is_composed_from_the_values_it_copies_in() {
     assert_eq!(body.as_bytes(), spelled.as_bytes());
     let reads = g.fake.dialed();
     assert_eq!(reads.iter().filter(|op| *op == "retrieve_v").count(), 2, "one read per origin: {reads:?}");
+}
+
+/// THE DEATH SIGNAL at a read the composer makes is the session's end and
+/// no refusal of its own: a V-spec slot's `image` and a copied run's
+/// read-back each answer [`Unattested::Closed`], stopped at that first read
+/// (the mutant that reads the death as the composer's halt answers it
+/// `attest_not_composed`, and the page is told the shell could not sign).
+#[test]
+fn a_death_signal_at_a_read_is_the_sessions_end() {
+    let fake = Fake::default().text("1.0.1.0.2", "1.0.1.0.2.0.1", 1, "abc");
+    fake.closed.store(true, Ordering::SeqCst);
+    let g = Ground::over(fake);
+    let c = g.composer();
+    assert!(matches!(c.slot(&json!([vspec("1.0.1.0.2")]), "from"), Err(Unattested::Closed)));
+    let shot = json!({"op": "publish", "doc": "1.0.1.0.1", "draft": "1.0.1.0.2", "runs": [run("1.0.1.0.2", "1.0.1.0.2.0.1.1", 2)]});
+    assert!(matches!(c.publish_body(&shot, "1.0.1.0.1"), Err(Unattested::Closed)));
+    assert_eq!(g.fake.dialed(), ["image", "retrieve_doc_v_span_set"], "each stopped at its first read");
+}
+
+/// THE COMPOSER's PRECONDITION is its caller's — discharged by
+/// `SessionEntry::attest` through `wants_attest` — so a frame outside the
+/// ten kinds reaching `attach` is a bug of this crate's, stopped loudly and
+/// never answered as attached.
+#[test]
+#[should_panic(expected = "wants_attest")]
+fn attach_stops_a_frame_past_its_precondition() {
+    let g = Ground::over(Fake::default());
+    let _ = g.composer().attach(&mut json!({"op": "delete", "doc": "1.0.1.0.1"}));
+}
+
+/// THE COMPOSER's PRECONDITION's other half: an `attest` already riding a
+/// frame of the ten kinds is the page's, the board's to judge, so a frame
+/// carrying one reaching `attach` is stopped as loudly — never signed over
+/// (the mutant that drops the precondition's check composes and replaces
+/// the page's attest with the shell's).
+#[test]
+#[should_panic(expected = "wants_attest")]
+fn attach_stops_a_frame_whose_attest_rides_already() {
+    let g = Ground::over(Fake::default());
+    let _ = g.composer().attach(&mut json!({"op": "insert", "doc": "1.0.1.0.1", "values": ["a"], "attest": {"alg": "x", "sig": "00"}}));
 }

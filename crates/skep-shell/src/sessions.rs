@@ -59,7 +59,7 @@ use skep_client::store::{FileStore, KeyFacts, KeySelector, KeyStore, Purpose, St
 use skep_client::{Board, Origin};
 use skep_identity::Fingerprint;
 
-use crate::attest::{wants_attest, Composer};
+use crate::attest::{wants_attest, Composer, Unattested};
 use crate::events::{EventBus, EventName};
 use crate::refs::session_reference;
 use crate::refusal::{Name, Refusal};
@@ -112,21 +112,24 @@ pub struct SessionEntry {
 impl SessionEntry {
     /// THE ATTEST a write under this session carries (`attest`'s rule):
     /// composed and signed by the key that opened the session, where the
-    /// session holds one and [`wants_attest`] admits the frame; the frame as
-    /// it stands otherwise, and where the board has no `H.1` to sign over (the
-    /// board judges that write). `attest_not_composed` where the composer
-    /// could not sign — nothing is then to be sent — and the board's refusal,
-    /// or `unreachable`, where a read it needed was refused or not answered.
-    pub fn attest(&self, board: &Board, store: &FileStore, frame: &mut Value) -> Result<(), Refusal> {
+    /// session holds one and [`wants_attest`] admits the frame — the one
+    /// place the composer's precondition is discharged; the frame as it
+    /// stands otherwise, and where the board has no `H.1` to sign over (the
+    /// board judges that write). Refused `attest_not_composed` where the
+    /// composer could not sign — nothing is then to be sent — and with the
+    /// board's refusal, or `unreachable`, where a read it needed was refused
+    /// or not answered; [`Unattested::Closed`] where a read it made met the
+    /// session's death signal, whose end is the caller's to run.
+    pub fn attest(&self, board: &Board, store: &FileStore, frame: &mut Value) -> Result<(), Unattested> {
         let Kind::Signed { fingerprint: fp, .. } = &self.facts.kind else { return Ok(()) };
         if !wants_attest(frame) {
             return Ok(());
         }
-        let Some(term) = board.board_term()? else { return Ok(()) };
+        let Some(term) = board.board_term().map_err(Refusal::from)? else { return Ok(()) };
         let signer = signer(store, &store.key_path(fp))?;
         let account = self.facts.account.as_deref().ok_or_else(|| Refusal::shell(Name::NO_ACCOUNT, json!({})))?;
         let composer = Composer { board, token: &self.token, signer: &*signer, account, term };
-        composer.attach(frame).map_err(|h| Refusal::of_named(Name::ATTEST_NOT_COMPOSED, h))
+        composer.attach(frame)
     }
 }
 
@@ -192,7 +195,10 @@ impl Sessions {
     /// every arm but the shell's own restart" (`client.md` §4e.3) where no
     /// other session of the principal stands at the board, the supplement
     /// handed to one that does. A hand that finds the arm already derived
-    /// answers it and does nothing else. The arm.
+    /// answers it and does nothing else. The arm. PRECONDITION, the
+    /// caller's: `board` is the board `entry` stands at, and `store` the
+    /// signed mode's key store — `None` under the bare mode, whose sessions
+    /// no end re-opens.
     pub fn end(&self, entry: &SessionEntry, board: &Board, store: Option<&FileStore>, supplements: &mut dyn Supplements, bus: &EventBus) -> Value {
         let (mut ended_here, mut reopened) = (false, None);
         let arm = entry

@@ -87,8 +87,8 @@ const SHAPES: &[Shape] = &[
     Shape { name: "FeedUpdate", open: false, doc: "the `/changes` row verbatim, with `position` and `class` — THIS CRATE's definition of the update's shape", fields: &[req("position", "number"), req("at", "number"), req("op", "string | null"), req("docs", "string[] | null"), req("class", "'published' | 'drafts'"), opt("session", "string"), opt("key", "string | null"), opt("time", "number | null"), opt("attest", "{ alg: string; sig: string } | null"), opt("new_prefix", "string"), opt("new_id", "number"), opt("link", "string"), opt("placed", "string"), opt("base_extent", "string | null")] },
     Shape { name: "IndexEvent", open: false, doc: "`index(board, session?, state)`", fields: &[req("board", "string"), req("session", "string | null"), req("state", "IndexState")] },
     Shape { name: "IndexState", open: true, doc: "the index's ten arms; the arm's own members beside it", fields: &[req("arm", "'none' | 'building' | 'widening' | 'complete' | 'at_the_floor' | 'resumed_from_the_floor' | 'unplaced' | 'past_the_ceiling' | 'newer_skep' | 'busy'")] },
-    Shape { name: "MomentEvent", open: false, doc: "`moment(id, kind, data)` — a PUBLIC moment of a walk; answered by `answer(id, value)` or declined by `cancel(id)` where `answerable`", fields: &[req("id", "string"), req("kind", "'statement' | 'label' | 'ask' | 'yes_no'"), req("data", "unknown"), req("walk", "string"), req("board", "string | null"), req("answerable", "boolean")] },
-    Shape { name: "Answer", open: false, doc: "`answer(id, value)`", fields: &[req("id", "string"), req("value", "unknown")] },
+    Shape { name: "MomentEvent", open: false, doc: "`moment(id, kind, data)` — a PUBLIC moment of a walk; answered by `answer(id, value)` — a string for a `label`, or `null` for the box's default; a string for an `ask`; a boolean for a `yes_no` — or declined by `cancel(id)` where `answerable`", fields: &[req("id", "string"), req("kind", "'statement' | 'label' | 'ask' | 'yes_no'"), req("data", "unknown"), req("walk", "string"), req("board", "string | null"), req("answerable", "boolean")] },
+    Shape { name: "Answer", open: false, doc: "`answer(id, value)` — `value` of the form its moment's kind takes (`MomentEvent`), else `malformed_args` naming `value`, the moment still waiting; `no_such_moment` where no moment of that id waits", fields: &[req("id", "string"), req("value", "unknown")] },
     Shape { name: "Cancel", open: false, doc: "`cancel(id)`", fields: &[req("id", "string")] },
     Shape {
         name: "HeldAnswer",
@@ -105,7 +105,7 @@ const SHAPES: &[Shape] = &[
     Shape {
         name: "HeldEvent",
         open: false,
-        doc: "`held(board, session, {doc, held, state, cause?})` (§4b.2) — a document's held state as it moves, always under the session it is about (never the guest face, P39); `held` the count of lines still held on the document, `cause` the line's cause — the hold's token while `holding`, the refusal's token while `refused`",
+        doc: "`held(board, session, {doc, held, state, cause?})` (§4b.2) — a document's held state as it moves, always under the session it is about (never the guest face, P39); `held` the count of lines still held on the document, `cause` the line's cause — the hold's token while `holding`, the refusal's token while `refused`; emitted at a hold's start, at each line's resolution or drop, and at each state the resend moves the document through — never when a principal's file is read at its session's open, whose lines `held(session)` lists",
         fields: &[req("board", "string"), req("session", "string"), req("doc", "string"), req("held", "number"), req("state", "'holding' | 'sending' | 'kept' | 'refused' | 'moved'"), opt("cause", "string")],
     },
     Shape { name: "Resolve", open: false, doc: "`resolve(session, {held, act})` — the person's act at a REFUSED run's face or a MOVED document's", fields: &[req("session", "string"), req("held", "number"), req("act", "'drop' | 'send'")] },
@@ -135,7 +135,7 @@ const CALL_ROWS: &[(&str, &str, &str)] = &[
     ("upload", "{ session: string; target: string; path: string }", "never"),
     ("fetch", "{ session: string; i: string } | { guest: true; board?: string; origin?: string; i: string }", "Uint8Array"),
     ("restore", "{ session: string; i: string }", "never"),
-    ("search", "{ session: string; board?: string; query: string; opts?: SearchOpts } | { guest: true; board: string; query: string; opts?: SearchOpts }", "SearchAnswer"),
+    ("search", "{ session: string; board?: string; query: string; opts?: SearchOpts } | { guest: true; board?: string; origin?: string; query: string; opts?: SearchOpts }", "SearchAnswer"),
     ("held", "{ session: string }", "HeldRow[]"),
     ("resolve", "{ session: string; held: number; act: 'drop' | 'send' }", "Empty"),
 ];

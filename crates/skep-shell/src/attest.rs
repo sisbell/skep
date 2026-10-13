@@ -21,7 +21,9 @@
 //! the session's own token, a window by its address. A frame the composer
 //! cannot make — a value it cannot read, a slot source it may not read, a
 //! term it cannot spell — halts naming what stopped it, and nothing is
-//! sent: the shell never sends a frame it could not sign.
+//! sent: the shell never sends a frame it could not sign. A death signal
+//! met at one of those reads is no halt of the composer's but the
+//! session's end ([`Unattested::Closed`]), which its caller runs.
 //!
 //! THE BOARD's BUDGETS, KEPT AS THE BOARD KEEPS THEM. Every read the
 //! composer makes is one a page's frame names, and every value it holds is
@@ -39,6 +41,7 @@
 
 use std::borrow::Cow;
 use std::collections::HashMap;
+use std::fmt;
 use std::num::NonZeroU64;
 
 use serde_json::{json, Value};
@@ -53,6 +56,8 @@ use skep_identity::{
     entry_body_make_link_replacing, entry_body_nullify, entry_frame, unit_span, BoardTerm, ContentFreeOp, DocTerm, EntryBody,
     EntrySlot, LinkSlots, PublishBody, PublishRefusal, ShotBase, SIG_ALGS,
 };
+
+use crate::refusal::{Name, Refusal};
 
 /// THE RETRACTION CLASS's reserved ghost tumbler — `[R]`, the fifth of the
 /// format's five (`1.1.0.1.0.1.0.1.x`, x = 1..=5: pred_def, pred_stable,
@@ -148,6 +153,47 @@ pub struct Composer<'a> {
     pub account: &'a str,
     pub term: BoardTerm,
 }
+
+/// Why the composer attached no attest: the call's REFUSAL — its own halt
+/// as `attest_not_composed`, a board's refusal of a read verbatim,
+/// `unreachable` where a read went unanswered — or the session's DEATH
+/// SIGNAL met at one of its reads, which is no refusal of the composer's:
+/// the caller ends the session (`Sessions::end`) and answers
+/// `session_died` with the arm the end derives.
+#[derive(Debug)]
+pub enum Unattested {
+    /// The call's refusal: nothing was sent.
+    Refused(Refusal),
+    /// The death signal on the session's token, met at a read the composer
+    /// made: nothing was sent.
+    Closed,
+}
+
+/// The composer's own halt named `attest_not_composed`; a halt of another
+/// member — a board's refusal of a read, a read unanswered — carried as
+/// that member.
+impl From<Halt> for Unattested {
+    fn from(h: Halt) -> Unattested {
+        Unattested::Refused(Refusal::of_named(Name::ATTEST_NOT_COMPOSED, h))
+    }
+}
+
+impl From<Refusal> for Unattested {
+    fn from(r: Refusal) -> Unattested {
+        Unattested::Refused(r)
+    }
+}
+
+impl fmt::Display for Unattested {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Unattested::Refused(r) => r.fmt(f),
+            Unattested::Closed => f.write_str("the session ended at a read the attest's composer made"),
+        }
+    }
+}
+
+impl std::error::Error for Unattested {}
 
 /// The frame's `doc` term, owned.
 enum OwnedDocTerm {
@@ -523,13 +569,13 @@ impl<'f> Wanted<'f> {
 }
 
 impl Composer<'_> {
-    /// One READ under the session: the document, a rejection the board's
-    /// refusal, the death signal a halt.
-    fn read(&self, frame: &Value) -> Result<Value, Halt> {
+    /// One READ under the session: the document; a rejection the board's
+    /// refusal, verbatim; the death signal [`Unattested::Closed`].
+    fn read(&self, frame: &Value) -> Result<Value, Unattested> {
         match self.board.op(Some(self.token), frame)? {
-            Answer::Closed => Err(fault("the session ended while the attest was being composed", "the board answered `Skepd-Session: closed` to a read the composer made")),
+            Answer::Closed => Err(Unattested::Closed),
             Answer::Document(v) => match Rejection::of(&v) {
-                Some(r) => Err(r.refused(&v)),
+                Some(r) => Err(r.refused(&v).into()),
                 None => Ok(v),
             },
         }
@@ -542,13 +588,15 @@ impl Composer<'_> {
     /// (`emit`'s `ty`). The list within [`MAX_WIRE_LIST`] before its first
     /// element is read, and its spans within [`MAX_SLOT_SPANS`] as they
     /// resolve.
-    fn slot(&self, slot: &Value, what: &str) -> Result<Vec<Span>, Halt> {
+    fn slot(&self, slot: &Value, what: &str) -> Result<Vec<Span>, Unattested> {
         if let Some(addrs) = slot["addrs"].as_array() {
             check_wire_list(addrs, what)?;
             return addrs.iter().map(|a| Ok(unit_span(&addr(a.as_str().unwrap_or(""), what)?))).collect();
         }
         let Some(list) = slot["resolve"].as_array().or_else(|| slot.as_array()) else {
-            return Err(fault(format!("the frame's `{what}` slot is neither the address form nor a list"), "a slot is `{\"addrs\": […]}`, `{\"resolve\": [V-specs]}`, a V-spec list, or a span list"));
+            return Err(
+                fault(format!("the frame's `{what}` slot is neither the address form nor a list"), "a slot is `{\"addrs\": […]}`, `{\"resolve\": [V-specs]}`, a V-spec list, or a span list").into()
+            );
         };
         check_wire_list(list, what)?;
         let mut spans = Vec::new();
@@ -567,7 +615,7 @@ impl Composer<'_> {
                 let span = tumbler(start).zip(tumbler(width)).and_then(|(s, w)| Span::new(s, w).ok());
                 push_span(&mut spans, span.ok_or_else(|| fault(format!("the frame's `{what}` span does not parse"), item.to_string()))?, what)?;
             } else {
-                return Err(fault(format!("the frame's `{what}` slot holds an element of no known form"), item.to_string()));
+                return Err(fault(format!("the frame's `{what}` slot holds an element of no known form"), item.to_string()).into());
             }
         }
         Ok(spans)
@@ -580,7 +628,7 @@ impl Composer<'_> {
     /// summed to that extent before the values are asked for; and the
     /// values through `retrieve_v`, walked beside the map position by
     /// position, each position the shot copies in kept once against `spent`.
-    fn read_back(&self, wanted: &mut Wanted<'_>, spent: &mut usize) -> Result<(), Halt> {
+    fn read_back(&self, wanted: &mut Wanted<'_>, spent: &mut usize) -> Result<(), Unattested> {
         let origin = wanted.origin;
         wanted.seal();
         let set = self.read(&frames::span_set(origin))?;
@@ -593,7 +641,8 @@ impl Composer<'_> {
             return Err(fault(
                 format!("{origin} holds {extent} positions, more than one delivery can carry"),
                 format!("a delivery answers at most {MAX_ANSWER_BYTES} bytes, and every position costs it one at least"),
-            ));
+            )
+            .into());
         }
         if extent > 0 {
             let image = self.read(&frames::image(origin, 1, extent))?;
@@ -604,7 +653,7 @@ impl Composer<'_> {
                 mapped = mapped.checked_add(width).filter(|m| *m <= extent).ok_or_else(|| disagree(origin, "maps more positions than its extent"))?;
             }
             if mapped != extent {
-                return Err(disagree(origin, "maps fewer positions than its extent"));
+                return Err(disagree(origin, "maps fewer positions than its extent").into());
             }
             let delivery = self.read(&frames::retrieve_v(origin, 1, extent))?;
             let mut positions = delivered_values(&delivery);
@@ -617,14 +666,15 @@ impl Composer<'_> {
                             return Err(fault(
                                 format!("a position of {origin} cannot be read back for the shot's body"),
                                 format!("the delivery holds an item the composer cannot spell as values — a withheld run, a reference, a hex that does not decode, or one it does not know: {item}"),
-                            ))
+                            )
+                            .into())
                         }
-                        None => return Err(disagree(origin, "is delivered short of its extent")),
+                        None => return Err(disagree(origin, "is delivered short of its extent").into()),
                     }
                 }
             }
             if positions.next().is_some() {
-                return Err(disagree(origin, "is delivered past its extent"));
+                return Err(disagree(origin, "is delivered past its extent").into());
             }
         }
         wanted.finish();
@@ -641,7 +691,7 @@ impl Composer<'_> {
     /// store's re-insert budget, and the copied ones within what a body
     /// under the budget can carry. Then each origin's values read back,
     /// keeping the positions the shot copies in, and the body built.
-    fn publish_body(&self, frame: &Value, trunk: &str) -> Result<EntryBody, Halt> {
+    fn publish_body(&self, frame: &Value, trunk: &str) -> Result<EntryBody, Unattested> {
         let draft = frame["draft"].as_str();
         let draft_trunk = draft.and_then(trunk_text);
         let runs = frame["runs"].as_array().ok_or_else(|| fault("the shot names no `runs`", "a `publish` frame carries its runs in V-order"))?;
@@ -681,20 +731,22 @@ impl Composer<'_> {
             return Err(fault(
                 format!("the shot re-inserts {reinserted} values from its draft, past the store's {MAX_REINSERTED_VALUES}"),
                 "the board refuses such a shot `too_many_values`, by its request's arithmetic",
-            ));
+            )
+            .into());
         }
         if copied > MAX_COPIED_POSITIONS {
             return Err(fault(
                 format!("the shot copies in {copied} positions, more than a body of {MAX_FRAME_BYTES} bytes can carry"),
                 "every value a shot copies in costs its body four bytes at least; the board refuses a longer body",
-            ));
+            )
+            .into());
         }
         let base_member = frame["base"].as_str().map(|b| addr(b, "base")).transpose()?;
         let base_extent: Option<u64> = frame["base_extent"].as_str().and_then(|e| e.parse().ok());
         let base = match (&base_member, base_extent) {
             (Some(member), Some(extent)) => Some(ShotBase { member, extent }),
             (None, None) => None,
-            _ => return Err(fault("the shot names `base` without `base_extent`, or the reverse", "either both or neither (wire.md §The publish shot)")),
+            _ => return Err(fault("the shot names `base` without `base_extent`, or the reverse", "either both or neither (wire.md §The publish shot)").into()),
         };
         let mut spent = 0usize;
         for wanted in &mut wants {
@@ -721,18 +773,19 @@ impl Composer<'_> {
         Ok(body.finish())
     }
 
-    /// The frame's `doc` term and body for `op`, or `None` outside the ten.
-    fn doc_term_and_body(&self, op: &str, frame: &Value) -> Result<Option<(OwnedDocTerm, EntryBody)>, Halt> {
+    /// The frame's `doc` term and body, its kind one of the ten
+    /// ([`Composer::attach`]'s precondition).
+    fn doc_term_and_body(&self, frame: &Value) -> Result<(OwnedDocTerm, EntryBody), Unattested> {
         let one = |text: &str, what: &str| -> Result<OwnedDocTerm, Halt> { Ok(OwnedDocTerm::One(addr(text, what)?)) };
-        let out = match op {
-            "create_new_document" => (one(member(frame, "account")?, "account")?, entry_body_empty(ContentFreeOp::CreateNewDocument)),
-            "fork" => (one(self.account, "account")?, entry_body_empty(ContentFreeOp::Fork)),
-            "version" => (one(self.account, "account")?, entry_body_empty(ContentFreeOp::Version)),
-            "insert" => {
+        Ok(match frame["op"].as_str() {
+            Some("create_new_document") => (one(member(frame, "account")?, "account")?, entry_body_empty(ContentFreeOp::CreateNewDocument)),
+            Some("fork") => (one(self.account, "account")?, entry_body_empty(ContentFreeOp::Fork)),
+            Some("version") => (one(self.account, "account")?, entry_body_empty(ContentFreeOp::Version)),
+            Some("insert") => {
                 let (trunk, body) = insert_terms(frame)?;
                 (OwnedDocTerm::One(trunk), body)
             }
-            "make_link" => {
+            Some("make_link") => {
                 let home = member(frame, "home")?;
                 let (from, to, ty) = (self.slot(&frame["from"], "from")?, self.slot(&frame["to"], "to")?, self.slot(&frame["ty"], "ty")?);
                 let slots = LinkSlots { from: EntrySlot(&from), to: EntrySlot(&to), ty: EntrySlot(&ty) };
@@ -742,7 +795,7 @@ impl Composer<'_> {
                 };
                 (one(home, "home")?, body)
             }
-            "emit" => {
+            Some("emit") => {
                 let home = member(frame, "home")?;
                 let from = [unit_span(&addr(member(frame, "from")?, "from")?)];
                 let to_list = frame["to"].as_array().map(Vec::as_slice).unwrap_or_default();
@@ -751,44 +804,46 @@ impl Composer<'_> {
                 let ty = self.slot(&frame["ty"], "ty")?;
                 (one(home, "home")?, entry_body_emit(LinkSlots { from: EntrySlot(&from), to: EntrySlot(&to), ty: EntrySlot(&ty) }))
             }
-            "nullify" => {
+            Some("nullify") => {
                 let home = member(frame, "home")?;
                 let from = [unit_span(&addr(home, "home")?)];
                 let to = [unit_span(&addr(member(frame, "target")?, "target")?)];
                 let ty = [unit_span(&addr(T_RETRACTION, "retraction")?)];
                 (one(home, "home")?, entry_body_nullify(LinkSlots { from: EntrySlot(&from), to: EntrySlot(&to), ty: EntrySlot(&ty) }))
             }
-            "assert_sup" => {
+            Some("assert_sup") => {
                 let home = member(frame, "home")?;
                 let from = [unit_span(&addr(member(frame, "old")?, "old")?)];
                 let to = [unit_span(&addr(member(frame, "new")?, "new")?)];
                 let ty = [unit_span(&addr(T_SUPERSEDES, "supersedes")?)];
                 (one(home, "home")?, entry_body_assert_sup(LinkSlots { from: EntrySlot(&from), to: EntrySlot(&to), ty: EntrySlot(&ty) }))
             }
-            "edit_link" => {
+            Some("edit_link") => {
                 let successor = &frame["successor"];
                 let (from, to, ty) = (self.slot(&successor["from"], "successor.from")?, self.slot(&successor["to"], "successor.to")?, self.slot(&successor["ty"], "successor.ty")?);
                 let original = unit_span(&addr(member(frame, "original")?, "original")?);
                 let body = entry_body_edit_link(LinkSlots { from: EntrySlot(&from), to: EntrySlot(&to), ty: EntrySlot(&ty) }, &original);
                 (OwnedDocTerm::Pair { d_s: addr(member(frame, "d_s")?, "d_s")?, d_a: addr(member(frame, "d_a")?, "d_a")? }, body)
             }
-            "publish" => {
+            Some("publish") => {
                 let doc = member(frame, "doc")?;
                 let trunk = trunk_text(doc).ok_or_else(|| fault(format!("the frame's `doc` has no trunk: `{doc}`"), "a publish's doc term is the document's trunk"))?;
                 let body = self.publish_body(frame, &trunk)?;
                 (one(&trunk, "doc")?, body)
             }
-            _ => return Ok(None),
-        };
-        Ok(Some(out))
+            _ => unreachable!("Composer::attach's precondition: wants_attest admitted the frame, its op one of the ten kinds"),
+        })
     }
 
-    /// THE ATTEST for `frame`, which [`wants_attest`] admitted: its entry
-    /// frame composed, signed by the session's key and attached as the
-    /// frame's `attest`.
-    pub fn attach(&self, frame: &mut Value) -> Result<(), Halt> {
-        let Some(op) = frame["op"].as_str().map(str::to_string) else { return Ok(()) };
-        let Some((doc_term, body)) = self.doc_term_and_body(&op, frame)? else { return Ok(()) };
+    /// THE ATTEST for `frame`: its entry frame composed, signed by the
+    /// session's key and attached as the frame's `attest`. PRECONDITION, the
+    /// caller's — discharged by `SessionEntry::attest` through
+    /// [`wants_attest`]: the frame's op one of the ten kinds, no `attest`
+    /// riding it; a frame outside it is a bug of this crate's, and `attach`
+    /// panics naming the obligation.
+    pub fn attach(&self, frame: &mut Value) -> Result<(), Unattested> {
+        assert!(wants_attest(frame), "Composer::attach's precondition: wants_attest admitted the frame");
+        let (doc_term, body) = self.doc_term_and_body(frame)?;
         let account = addr(self.account, "account")?;
         let alg = self.signer.public_key().alg().to_string();
         let bytes = match &doc_term {

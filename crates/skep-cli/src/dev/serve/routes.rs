@@ -98,10 +98,9 @@ fn route(provider: &Provider<'_>, req: &Request, stream: &mut TcpStream, cors: &
             let Some(id) = args["id"].as_str() else {
                 return json(stream, 400, cors, &json!({"refused": {"kind": "shell", "name": "malformed_args", "what": "id"}}));
             };
-            if shell.answer(id, args["value"].clone()) {
-                json(stream, 200, cors, &json!({"result": {}}))
-            } else {
-                json(stream, 200, cors, &json!({"refused": {"kind": "shell", "name": "no_such_moment", "id": id}}))
+            match shell.answer(id, args["value"].clone()) {
+                Ok(()) => json(stream, 200, cors, &json!({"result": {}})),
+                Err(refused) => json(stream, 200, cors, &json!({"refused": refused.to_value()})),
             }
         }
         ("POST", "/bridge/cancel") => {
@@ -112,10 +111,9 @@ fn route(provider: &Provider<'_>, req: &Request, stream: &mut TcpStream, cors: &
             let Some(id) = args["id"].as_str() else {
                 return json(stream, 400, cors, &json!({"refused": {"kind": "shell", "name": "malformed_args", "what": "id"}}));
             };
-            if shell.cancel(id) {
-                json(stream, 200, cors, &json!({"result": {}}))
-            } else {
-                json(stream, 200, cors, &json!({"refused": {"kind": "shell", "name": "no_such_moment", "id": id}}))
+            match shell.cancel(id) {
+                Ok(()) => json(stream, 200, cors, &json!({"result": {}})),
+                Err(refused) => json(stream, 200, cors, &json!({"refused": refused.to_value()})),
             }
         }
         ("POST", "/bridge/script") => {

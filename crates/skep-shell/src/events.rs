@@ -42,7 +42,10 @@ pub enum EventName {
     Moment,
     /// A document's HELD state as it moves (`client.md` §4b.2; §3c):
     /// `holding`, `sending`, `kept`, `refused` or `moved`, with the count of
-    /// lines still held: `held`.
+    /// lines still held: `held`. Emitted at a hold's start, at each line's
+    /// resolution or drop, and at each state the resend moves a document
+    /// through — never when a principal's file is read at its session's
+    /// open, whose lines `held(session)` lists.
     Held,
 }
 

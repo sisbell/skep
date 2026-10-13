@@ -48,8 +48,9 @@
 //!   TALK stream and never sent to the page.
 //! * `person` — THE PERSON OVER THE BRIDGE: a `Person` whose PUBLIC
 //!   moments become `moment(id, kind, data)` events and block on a channel
-//!   the page's `answer(id, …)` or `cancel(id)` fills, and whose SECRET and
-//!   CONSENT moments go to the dev arm.
+//!   the page's `answer(id, …)` — of the form the moment's kind takes — or
+//!   `cancel(id)` fills, and whose SECRET and CONSENT moments go to the dev
+//!   arm.
 //! * `sessions` — THE SESSION TABLE: every token this shell holds under
 //!   the reference the page holds, the two openings (bare, signed), the
 //!   attest a session's key signs, and a session's END — one sequence,
@@ -59,23 +60,25 @@
 //!   session of its principal.
 //! * `hold` — THE HOLD (`client.md` §3c.4, §3c.5): a burst's door and its
 //!   write path — admitted where some send of it the board can take, held
-//!   without a dial where a hold stands, else dialed once and its answer
-//!   read through the classification table — the per-(board, principal)
-//!   queue over `held`'s file, each board's under its own lock, and the
-//!   resend walk the feed worker's probe drains: one read per document,
-//!   with §3c.5's three outcomes.
+//!   without a dial where a hold stands, else dialed and each answer read
+//!   through the classification table, the one owner of every reissue's
+//!   bound — the per-(board, principal) queue over `held`'s file, each
+//!   board's under its own lock, and the resend walk the feed worker's
+//!   probe drains: one read per document, with §3c.5's three outcomes.
 //! * `feed` — THE FEED CONSUMER's thread per board: `search::Consumer`
 //!   polled on the `/events` commits, coalesced into one waiting read, the
 //!   published feed read from the head the board first answers with, the
-//!   `/changes` pages re-read for the
-//!   `feed` events, the `index`, `mode` and `daemon` events as the state
-//!   moves, and the bridge's `search` call answered off it; it also reads
-//!   `writes.halted` per tick and runs THE PROBE on a deadline of its own.
+//!   `/changes` pages re-read to the head by one reader for the `feed`
+//!   events, the `index`, `mode` and `daemon` events as the state moves,
+//!   and the bridge's `search` call answered off it; it also reads
+//!   `writes.halted` per tick and runs THE PROBE on a deadline of its own
+//!   and at a hand-over.
 //! * `shell` — [`Shell`]: the boards, the sessions, the session mode
 //!   (bare as the claimant, or signed with a dev key), and one private
 //!   method per §4b.1 row behind [`Shell::call`], whose dispatch the
 //!   compiler holds to one arm per call, each row taking and answering
-//!   values shaped exactly as the row's columns; [`Shell::fetch`] is public
+//!   values shaped exactly as the row's columns — an argument of another
+//!   form refused, never read as absent; [`Shell::fetch`] is public
 //!   beside it because it streams, and its transport logs it. Dropping a
 //!   shell stops it: no thread, session or lock of it outlives it.
 //! * [`shapes`] — THE DECLARATIONS: [`shapes::declarations`], a TypeScript

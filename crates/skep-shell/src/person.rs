@@ -9,8 +9,14 @@
 //! holds waits here; a `cancel` answers `Abandoned`, which takes the walk's
 //! own abandonment exit, and the shell names the call's refusal
 //! `abandoned`. A statement needs no answer and is forwarded as a moment
-//! whose `answerable` is false; the page may ignore it.
+//! whose `answerable` is false; the page may ignore it. AN ANSWER's FORM is
+//! its moment's kind's ([`MomentKind::takes`]): a label box takes a string,
+//! or `null` for the box's default; a question a string; a yes-or-no a
+//! boolean — asked by [`Pending::answer`], the page's one way in, so a
+//! walk never receives a value of another form, and a value of another
+//! form leaves its moment waiting.
 
+use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 use std::sync::mpsc::{channel, Sender};
 use std::sync::{Arc, Mutex};
@@ -21,6 +27,7 @@ use skep_client::person::{Abandoned, Confirmation, Consent, Destination, HandedP
 use crate::events::{EventBus, EventName};
 use crate::refs::moment_id;
 use crate::dev_arm::DevArm;
+use crate::refusal::{Name, Refusal};
 
 /// What the page sent for a pending moment.
 #[derive(Debug, Clone, PartialEq)]
@@ -31,12 +38,12 @@ pub enum Reply {
     Cancel,
 }
 
-/// THE PENDING MOMENTS: each waiting walk's channel by the moment's id, so
-/// an answer is routed to the walk that asked (the dev provider record
-/// §3.3).
+/// THE PENDING MOMENTS: each waiting walk's channel by the moment's id, with
+/// the moment's kind, so an answer is routed to the walk that asked (the dev
+/// provider record §3.3) and held to the form that kind takes.
 #[derive(Debug, Default)]
 pub struct Pending {
-    waiting: Mutex<HashMap<String, Sender<Reply>>>,
+    waiting: Mutex<HashMap<String, (MomentKind, Sender<Reply>)>>,
 }
 
 impl Pending {
@@ -45,34 +52,46 @@ impl Pending {
         Pending::default()
     }
 
-    fn register(&self, id: &str) -> std::sync::mpsc::Receiver<Reply> {
+    fn register(&self, id: &str, kind: MomentKind) -> std::sync::mpsc::Receiver<Reply> {
         let (tx, rx) = channel();
-        self.waiting.lock().expect("the pending lock").insert(id.to_string(), tx);
+        self.waiting.lock().expect("the pending lock").insert(id.to_string(), (kind, tx));
         rx
     }
 
-    fn deliver(&self, id: &str, reply: Reply) -> bool {
-        let tx = self.waiting.lock().expect("the pending lock").remove(id);
-        match tx {
-            Some(tx) => tx.send(reply).is_ok(),
-            None => false,
+    /// The moment `id` taken out of the table, where it waits and `admits`
+    /// its kind; a moment `admits` refuses keeps waiting.
+    fn take(&self, id: &str, admits: impl FnOnce(MomentKind) -> Result<(), Refusal>) -> Result<Sender<Reply>, Refusal> {
+        match self.waiting.lock().expect("the pending lock").entry(id.to_string()) {
+            Entry::Occupied(moment) => {
+                admits(moment.get().0)?;
+                Ok(moment.remove().1)
+            }
+            Entry::Vacant(_) => Err(no_such_moment(id)),
         }
     }
 
-    /// `answer(id, value)`: `true` where a moment with that id was waiting.
-    pub fn answer(&self, id: &str, value: Value) -> bool {
-        self.deliver(id, Reply::Answer(value))
+    /// `answer(id, value)`: `value` handed to the walk that asked, of the
+    /// form its moment's kind takes ([`MomentKind::takes`]) — else
+    /// `malformed_args` naming `value` and the form, the moment still
+    /// waiting for one; `no_such_moment` where no moment of that id waits.
+    pub fn answer(&self, id: &str, value: Value) -> Result<(), Refusal> {
+        let tx = self.take(id, |kind| if kind.takes(&value) { Ok(()) } else { Err(Refusal::shell(Name::MALFORMED_ARGS, json!({"what": "value", "takes": kind.form()}))) })?;
+        // A walk that ended without its answer dropped its receiver: no
+        // moment waits there.
+        tx.send(Reply::Answer(value)).map_err(|_| no_such_moment(id))
     }
 
-    /// `cancel(id)`: `true` where a moment with that id was waiting.
-    pub fn cancel(&self, id: &str) -> bool {
-        self.deliver(id, Reply::Cancel)
+    /// `cancel(id)`: the walk that asked abandoned at that moment;
+    /// `no_such_moment` where no moment of that id waits.
+    pub fn cancel(&self, id: &str) -> Result<(), Refusal> {
+        let tx = self.take(id, |_| Ok(()))?;
+        tx.send(Reply::Cancel).map_err(|_| no_such_moment(id))
     }
 
     /// Every pending moment cancelled — the shell's stop.
     pub fn cancel_all(&self) {
-        let all: Vec<(String, Sender<Reply>)> = self.waiting.lock().expect("the pending lock").drain().collect();
-        for (_, tx) in all {
+        let all: Vec<(String, (MomentKind, Sender<Reply>))> = self.waiting.lock().expect("the pending lock").drain().collect();
+        for (_, (_, tx)) in all {
             let _ = tx.send(Reply::Cancel);
         }
     }
@@ -109,6 +128,33 @@ impl MomentKind {
     fn answerable(self) -> bool {
         self != MomentKind::Statement
     }
+
+    /// Whether `answer` is of the form this kind takes: a label box a
+    /// string, or `null` for the box's default; a question a string; a
+    /// yes-or-no a boolean. A statement takes none: no answer is owed it.
+    fn takes(self, answer: &Value) -> bool {
+        match self {
+            MomentKind::Statement => false,
+            MomentKind::Label => answer.is_string() || answer.is_null(),
+            MomentKind::Ask => answer.is_string(),
+            MomentKind::YesNo => answer.is_boolean(),
+        }
+    }
+
+    /// The form this kind takes, as a refused answer names it.
+    fn form(self) -> &'static str {
+        match self {
+            MomentKind::Statement => "no answer",
+            MomentKind::Label => "a string, or null for the box's default",
+            MomentKind::Ask => "a string",
+            MomentKind::YesNo => "a boolean",
+        }
+    }
+}
+
+/// The refusal for an `answer` or a `cancel` no moment waits for.
+fn no_such_moment(id: &str) -> Refusal {
+    Refusal::shell(Name::NO_SUCH_MOMENT, json!({"id": id}))
 }
 
 /// The person a walk is handed: the bus its PUBLIC moments go out on, the
@@ -139,7 +185,7 @@ impl BridgePerson {
     fn moment(&mut self, kind: MomentKind, data: Value) -> Result<Value, Abandoned> {
         let id = moment_id();
         let answerable = kind.answerable();
-        let rx = answerable.then(|| self.pending.register(&id));
+        let rx = answerable.then(|| self.pending.register(&id, kind));
         self.bus.emit(EventName::Moment, json!({
             "id": id,
             "kind": kind.as_str(),
@@ -175,7 +221,7 @@ impl Person for BridgePerson {
         match v {
             Value::String(s) => Ok(s),
             Value::Null => Ok(m.0.default.unwrap_or_default()),
-            other => Ok(other.to_string()),
+            other => unreachable!("Pending::answer admits a label box's string or null alone, never {other}"),
         }
     }
 
@@ -183,17 +229,16 @@ impl Person for BridgePerson {
         let v = self.moment(MomentKind::Ask, json!({"text": m.0.text}))?;
         match v {
             Value::String(s) => Ok(s),
-            other => Ok(other.to_string()),
+            other => unreachable!("Pending::answer admits a question's string alone, never {other}"),
         }
     }
 
     fn yes_no(&mut self, m: Public<Question>) -> Result<bool, Abandoned> {
         let v = self.moment(MomentKind::YesNo, json!({"text": m.0.text}))?;
-        Ok(match v {
-            Value::Bool(b) => b,
-            Value::String(s) => matches!(s.trim().to_ascii_lowercase().as_str(), "y" | "yes" | "true"),
-            _ => false,
-        })
+        match v {
+            Value::Bool(b) => Ok(b),
+            other => unreachable!("Pending::answer admits a yes-or-no's boolean alone, never {other}"),
+        }
     }
 
     fn sheet(&mut self, m: Secret<Sheet>) -> Result<(), Abandoned> {
@@ -262,12 +307,12 @@ mod tests {
             assert_eq!(event.data["kind"], "label");
             assert_eq!(event.data["walk"], "claim");
             let id = event.data["id"].as_str().unwrap().to_string();
-            assert!(pending_b.answer(&id, Value::from("phone")));
-            assert!(!pending_b.answer(&id, Value::from("again")), "answered once");
+            pending_b.answer(&id, Value::from("phone")).unwrap();
+            assert_eq!(pending_b.answer(&id, Value::from("again")).unwrap_err().name(), "no_such_moment", "answered once");
             let event = rx.recv().unwrap();
             assert_eq!(event.data["kind"], "yes_no");
             let id = event.data["id"].as_str().unwrap().to_string();
-            assert!(pending_b.cancel(&id));
+            pending_b.cancel(&id).unwrap();
         });
         let label = person.label(Public(LabelBox { title: "name".into(), statements: vec![], default: None })).unwrap();
         assert_eq!(label, "phone");
@@ -275,6 +320,34 @@ mod tests {
         assert_eq!(person.yes_no(Public(Question { text: "?".into() })), Err(Abandoned));
         assert!(person.abandoned);
         answerer.join().unwrap();
+    }
+
+    /// AN ANSWER's FORM is its moment's kind's: a label box answered `7`, a
+    /// question answered `null` and a yes-or-no answered `"yes"` are each
+    /// refused `malformed_args` naming `value`, the moment still waiting;
+    /// the right form then delivers — a label box's `null` its default — and
+    /// a cancel of no moment answers `no_such_moment`.
+    #[test]
+    fn an_answer_of_another_form_is_refused_and_the_moment_waits() {
+        let (bus, pending, arm) = fixture();
+        let rx = bus.subscribe();
+        let mut person = BridgePerson::new(Arc::clone(&bus), Arc::clone(&pending), arm, "claim", Some("b-1".into()));
+        let page = Arc::clone(&pending);
+        let answerer = thread::spawn(move || {
+            for (wrong, right) in [(json!(7), Value::Null), (Value::Null, json!("an answer")), (json!("yes"), json!(true))] {
+                let id = rx.recv().unwrap().data["id"].as_str().unwrap().to_string();
+                let refused = page.answer(&id, wrong).unwrap_err().to_value();
+                assert_eq!((refused["name"].as_str(), refused["what"].as_str()), (Some("malformed_args"), Some("value")), "{refused}");
+                assert_eq!(page.ids(), std::slice::from_ref(&id), "the moment still waits");
+                page.answer(&id, right).unwrap();
+            }
+        });
+        let label = person.label(Public(LabelBox { title: "name".into(), statements: vec![], default: Some("the default".into()) })).unwrap();
+        assert_eq!(label, "the default", "a label box's null is its default");
+        assert_eq!(person.ask(Public(Question { text: "?".into() })).unwrap(), "an answer");
+        assert!(person.yes_no(Public(Question { text: "?".into() })).unwrap());
+        answerer.join().unwrap();
+        assert_eq!(pending.cancel("m-gone").unwrap_err().name(), "no_such_moment");
     }
 
     /// A walk that touches no board names none: its moment's `board` is

@@ -38,7 +38,9 @@ pub enum Refusal {
     Blocked(Blocked),
     /// The board is not answering.
     Unreachable(DialError),
-    /// The shell's own refusal.
+    /// The shell's own refusal: its `detail` an object whose members ride
+    /// beside `kind` and `name`, never in their place; a detail of another
+    /// type renders no member.
     Shell { name: Name, detail: Value },
 }
 
@@ -112,6 +114,8 @@ impl Name {
     /// A burst the principal's held queue has no room for: its standing
     /// frames hold the queue's budget already — refused, and kept nowhere.
     pub const HELD_FULL: Name = Name("held_full");
+    /// `answer(id, …)` or `cancel(id)` where no moment of that id waits.
+    pub const NO_SUCH_MOMENT: Name = Name("no_such_moment");
 
     // ── THE HALTS' ARMED NAMES: `Refusal::named`, `Refusal::of_named` ────
 
@@ -156,7 +160,8 @@ impl fmt::Display for Name {
 }
 
 impl Refusal {
-    /// The shell's own refusal named `name`, with its detail object.
+    /// The shell's own refusal named `name`, with its detail object — its
+    /// members rendered beside `kind` and `name`, never in their place.
     pub fn shell(name: Name, detail: Value) -> Refusal {
         Refusal::Shell { name, detail }
     }
@@ -250,7 +255,7 @@ impl Refusal {
                 out.insert("name".into(), Value::from(name));
                 if let Value::Object(members) = detail {
                     for (k, v) in members {
-                        out.insert(k.clone(), v.clone());
+                        out.entry(k.clone()).or_insert_with(|| v.clone());
                     }
                 }
                 Value::Object(out)
@@ -312,6 +317,16 @@ mod tests {
         let shell = Refusal::shell(Name::SESSION_ENDED, json!({"session": "s-1"}));
         let v = shell.to_value();
         assert_eq!((v["kind"].as_str(), v["name"].as_str(), v["session"].as_str()), (Some("shell"), Some("session_ended"), Some("s-1")));
+    }
+
+    /// A shell refusal's `kind` and `name` are its own, whatever its detail
+    /// holds: a detail naming either rides beside them, never in their
+    /// place, and a detail of no object renders no member.
+    #[test]
+    fn a_shell_refusals_detail_never_overwrites_its_token() {
+        let v = Refusal::shell(Name::SESSION_ENDED, json!({"kind": "x", "name": "y", "session": "s-1"})).to_value();
+        assert_eq!(v, json!({"kind": "shell", "name": "session_ended", "session": "s-1"}));
+        assert_eq!(Refusal::shell(Name::SESSION_ENDED, json!("a string")).to_value(), json!({"kind": "shell", "name": "session_ended"}));
     }
 
     /// A non-200 is the board's verdict under its own status: the error its

@@ -22,7 +22,12 @@
 //! `session-died`, however far this thread trails the commits. The board's
 //! held bursts are watched here too: `writes.halted` read at each tick, and
 //! THE PROBE (`Holds::probe`) every `PROBE_CADENCE`, measured from the last
-//! probe whatever woke the thread between. The commits the stream yields
+//! probe whatever woke the thread between, and at a hand-over
+//! ([`Feed::probe`], `resolve(send)`'s). Both feeds are read to the board's
+//! head by ONE reader ([`read_to_head`]), the published feed and every
+//! drafts supplement alike: a page past the retention floor resumed at the
+//! floor, a page past the page budget re-asked at the limit that fits. The
+//! commits the stream yields
 //! are COALESCED ([`Ticks`]): one tick waits in the worker's queue at most,
 //! so a board committing faster than the worker reads costs one read to the
 //! head per turn, never a read per commit, and a call queued behind them
@@ -98,6 +103,8 @@ enum Cmd {
     /// A session the page is closing, its token still standing: its drafts
     /// rows read to the head, then its supplement released; answered.
     Closing(Arc<SessionEntry>, Sender<()>),
+    /// THE PROBE handed over: run at the worker's next turn, unanswered.
+    Probe,
     /// The bridge's search call.
     Search { who: Searcher, query: String, opts: SearchOpts, reindex: bool, reply: Sender<Result<Value, Refusal>> },
     /// The consumer closed; the thread ends.
@@ -151,6 +158,15 @@ impl Feed {
         if self.cmds.send(Cmd::Closing(Arc::clone(session), reply)).is_ok() {
             let _ = rx.recv();
         }
+    }
+
+    /// THE PROBE handed to the board's worker (`Holds::probe`), run on its
+    /// thread at its next turn and the probe's cadence counted from it — the
+    /// caller does not wait: `resolve(send)`'s hand-over, so the call answers
+    /// once the lines are handed back, never after a resend's ack (§4b.1). A
+    /// thread that has stopped takes nothing.
+    pub fn probe(&self) {
+        let _ = self.cmds.send(Cmd::Probe);
     }
 
     /// The bridge's search call, answered on the consumer's thread;
@@ -347,6 +363,10 @@ impl<'b> Worker<'b> {
                     sessions.release(&session.board_reference, session.facts.principal, &mut worker);
                     let _ = reply.send(());
                 }
+                Ok(Cmd::Probe) => {
+                    worker.holds.probe(&worker.entry.reference);
+                    next_probe = Instant::now() + PROBE_CADENCE;
+                }
                 Ok(Cmd::Search { who, query, opts, reindex, reply }) => {
                     let _ = reply.send(worker.search(who, &query, &opts, reindex));
                 }
@@ -462,32 +482,9 @@ impl<'b> Worker<'b> {
     /// — then each open session's drafts supplement under its token.
     fn read_feed(&mut self) {
         let entry: &'b BoardEntry = self.entry;
-        let board = &entry.board;
-        while let Some(since) = self.published_since {
-            match board.changes(None, &ChangesQuery { since, ..ChangesQuery::default() }) {
-                Ok(ChangesAnswer::Page(page)) => {
-                    for row in &page.changes {
-                        self.emit_feed(row, "published", None);
-                    }
-                    self.published_since = Some(page.last);
-                    if !page.more {
-                        break;
-                    }
-                }
-                Ok(ChangesAnswer::HistoryReclaimed { floor }) => {
-                    self.published_since = Some(floor.unwrap_or(since));
-                    break;
-                }
-                Ok(ChangesAnswer::TooLarge { fits }) => {
-                    if let Ok(ChangesAnswer::Page(page)) = board.changes(None, &ChangesQuery { since, limit: Some(fits), ..ChangesQuery::default() }) {
-                        for row in &page.changes {
-                            self.emit_feed(row, "published", None);
-                        }
-                        self.published_since = Some(page.last);
-                    }
-                    break;
-                }
-                Ok(_) | Err(_) => break,
+        if let Some(since) = self.published_since {
+            if let ReadTo::At(at) = read_to_head(&entry.board, None, since, false, |row| self.emit_feed(row, "published", None)) {
+                self.published_since = Some(at);
             }
         }
         for session in self.sessions.on_board(&entry.reference) {
@@ -496,32 +493,22 @@ impl<'b> Worker<'b> {
     }
 
     /// `session`'s drafts supplement read to the board's head under its
-    /// token, from where its principal's last read stopped — at first, the
-    /// position the session opened at — each row a `feed` event of the
-    /// `drafts` class. The death signal ends the session (`Sessions::end`,
-    /// which answers a session the page already closed with that arm and
-    /// does nothing more).
+    /// token ([`read_to_head`]), from where its principal's last read
+    /// stopped — at first, the position the session opened at — each row a
+    /// `feed` event of the `drafts` class; a cursor the board's retention
+    /// floor passed, as a long-open session's with no drafts row of its own
+    /// is, resumed at the floor. The death signal ends the session
+    /// (`Sessions::end`, which answers a session the page already closed
+    /// with that arm and does nothing more).
     fn read_drafts(&mut self, session: &SessionEntry) {
         let entry: &'b BoardEntry = self.entry;
         let principal = session.facts.principal;
-        loop {
-            let since = *self.drafts_since.entry(principal).or_insert(session.opened_at);
-            match entry.board.changes(Some(&session.token), &ChangesQuery { since, drafts: true, ..ChangesQuery::default() }) {
-                Ok(ChangesAnswer::Page(page)) => {
-                    for row in &page.changes {
-                        self.emit_feed(row, "drafts", Some(&session.reference));
-                    }
-                    self.drafts_since.insert(principal, page.last);
-                    if !page.more {
-                        return;
-                    }
-                }
-                Ok(ChangesAnswer::Closed) => {
-                    self.end(session);
-                    return;
-                }
-                Ok(_) | Err(_) => return,
+        let since = *self.drafts_since.entry(principal).or_insert(session.opened_at);
+        match read_to_head(&entry.board, Some(&session.token), since, true, |row| self.emit_feed(row, "drafts", Some(&session.reference))) {
+            ReadTo::At(at) => {
+                self.drafts_since.insert(principal, at);
             }
+            ReadTo::Closed => self.end(session),
         }
     }
 
@@ -605,6 +592,46 @@ impl<'b> Worker<'b> {
             if let Err(h) = c.close() {
                 self.say(format!("the index could not save at close: {h}"));
             }
+        }
+    }
+}
+
+/// Where one read to the head left its feed.
+enum ReadTo {
+    /// The position the next read starts at: the head where every page was
+    /// read, or where the read stopped on an answer it cannot read past.
+    At(u64),
+    /// The death signal on the token the read presented.
+    Closed,
+}
+
+/// ONE FEED READ TO THE BOARD's HEAD — the published feed's (no token) or
+/// a session's drafts supplement (its token, `drafts`) — from `since`, each
+/// row handed to `emit` in order (wire.md §The change feed, Paging): a page
+/// whose `more` stands read on from its `last`; a `history_reclaimed`
+/// resumed at the floor it names, where that floor passes the cursor — a
+/// reclaimed cursor is no read's to wait out; a page past the page budget
+/// re-asked at the limit that `fits`, every later page at the route's
+/// default again. Every answer moves the cursor on or shrinks the page
+/// (`Board::changes`'s own guarantee), so the read ends. Any other answer —
+/// a refusal, no answer — stops it where it stands, for the next tick to
+/// read again.
+fn read_to_head(board: &Board, token: Option<&Token>, since: u64, drafts: bool, mut emit: impl FnMut(&Value)) -> ReadTo {
+    let (mut since, mut limit) = (since, None);
+    loop {
+        match board.changes(token, &ChangesQuery { since, under: None, drafts, limit }) {
+            Ok(ChangesAnswer::Page(page)) => {
+                page.changes.iter().for_each(&mut emit);
+                since = page.last;
+                limit = None;
+                if !page.more {
+                    return ReadTo::At(since);
+                }
+            }
+            Ok(ChangesAnswer::HistoryReclaimed { floor: Some(floor) }) if floor > since => since = floor,
+            Ok(ChangesAnswer::TooLarge { fits }) => limit = Some(fits),
+            Ok(ChangesAnswer::Closed) => return ReadTo::Closed,
+            Ok(_) | Err(_) => return ReadTo::At(since),
         }
     }
 }

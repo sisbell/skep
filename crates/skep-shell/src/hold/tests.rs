@@ -1,6 +1,7 @@
 //! THE HOLD's FENCE: the classification table (T6) — every `DialError`, every
-//! disposition, `poisoned`, `write_busy`, `durability` once/twice/three times,
-//! and an ack, each to exactly its row; the five kinds are bursts and the
+//! disposition, `poisoned`, `write_busy` once/twice, `durability`
+//! once/twice/three times, and an ack, each to exactly its row, the table the
+//! one owner of every reissue's bound; the five kinds are bursts and the
 //! eleven other `WRITE_KINDS` are not. And THE RESEND WALK over a fake board:
 //! THE READ's TABLE (§3c.5), every answer the read can meet against every
 //! answer its site read can — no row (send from the head), one own row its
@@ -9,10 +10,15 @@
 //! row, two rows and a page too large (MOVED, nothing sent, never rebased),
 //! a read or a site the board does not answer deciding nothing — with the
 //! narrative cells beside it; a refusal the table holds nowhere faced at the
-//! first dial and leaving a resent line standing; a second window's burst
+//! first dial and leaving a resent line standing, a `write_busy` and a first
+//! and second `durability` reissued within the first dial's call and a third
+//! holding the burst; `resolve(send)` answering once the lines are handed
+//! back, before any dial; a board the holds were not opened over stopped as
+//! the caller's bug; a second window's burst
 //! resent from memory; the `base` a hold takes; the own node stopped,
 //! `writes.halted` and a third `durability` holding a burst over time; P38's
-//! halted file and a copy the store cannot make; the stored frame without
+//! halted file refusing every act, `resolve` among them, and a copy the
+//! store cannot make; the stored frame without
 //! its attest; the refused run's `resolve(drop)` dropping it and every line
 //! held behind it on its own document alone, a move facing its own document
 //! alone, and a drop's `held` event saying the state of the line that stands
@@ -57,7 +63,18 @@ fn the_five_kinds_are_bursts_and_no_other_write_kind_is() {
 }
 
 fn rej(code: &str, disposition: &str) -> Decision {
-    classify(DialOutcome::Rejected { code, disposition }, 0)
+    classify(DialOutcome::Rejected { code, disposition }, Reissues::default())
+}
+
+/// The reissues a burst has been given: `write_busy` ones and `durability`
+/// ones.
+fn given(write_busy: u32, durability: u32) -> Reissues {
+    Reissues { write_busy, durability }
+}
+
+/// A `rejected` document of `code` at the retry disposition.
+fn retry(code: &str) -> Value {
+    json!({"resp": "rejected", "code": code, "disposition": "retry", "op": "insert"})
 }
 
 /// THE CLASSIFICATION TABLE (§3c.4): each outcome to exactly its row. The own
@@ -67,25 +84,37 @@ fn rej(code: &str, disposition: &str) -> Decision {
 fn every_outcome_classifies_to_exactly_its_row() {
     // No connection made — the burst did not leave (`sent: false`).
     for e in [DialError::Connect("x".into()), DialError::Resolve("x".into()), DialError::Tls("x".into())] {
-        assert_eq!(classify(DialOutcome::Dial(&e), 0), Decision::Hold { cause: "unreachable", sent: false }, "{e}");
+        assert_eq!(classify(DialOutcome::Dial(&e), Reissues::default()), Decision::Hold { cause: "unreachable", sent: false }, "{e}");
     }
     // The request left, its answer lost — it MAY have landed (`sent: true`).
     for e in [DialError::Timeout("x".into()), DialError::Io("x".into()), DialError::Truncated { declared: 9, got: 1 }, DialError::Response("x".into()), DialError::TooLarge { cap: 1 }] {
-        assert_eq!(classify(DialOutcome::Dial(&e), 0), Decision::Hold { cause: "unreachable", sent: true }, "{e}");
+        assert_eq!(classify(DialOutcome::Dial(&e), Reissues::default()), Decision::Hold { cause: "unreachable", sent: true }, "{e}");
     }
     // The scheme this build does not hold, or a request refused before any
     // connection — faced as built, no probe ends either.
     for e in [DialError::NotHeld("https".into()), DialError::Request("x".into())] {
-        assert_eq!(classify(DialOutcome::Dial(&e), 0), Decision::Neither, "{e}");
+        assert_eq!(classify(DialOutcome::Dial(&e), Reissues::default()), Decision::Neither, "{e}");
     }
     // The codes. `poisoned` MAY have landed (§3c.2): the frames reached the
     // journal and a restart replays them, so its line says `sent: true`.
     assert_eq!(rej("poisoned", "halt"), Decision::Hold { cause: "poisoned", sent: true });
-    assert_eq!(rej("write_busy", "retry"), Decision::Reissue);
-    // `durability` once, twice → reissue; a THIRD on the same burst → hold.
-    assert_eq!(classify(DialOutcome::Rejected { code: "durability", disposition: "retry" }, 0), Decision::Reissue);
-    assert_eq!(classify(DialOutcome::Rejected { code: "durability", disposition: "retry" }, 1), Decision::Reissue);
-    assert_eq!(classify(DialOutcome::Rejected { code: "durability", disposition: "retry" }, 2), Decision::Hold { cause: "durability", sent: false });
+    // `write_busy` once → reissue, after the short wait; the reissue's own →
+    // the next refusal, faced.
+    let busy = DialOutcome::Rejected { code: "write_busy", disposition: "retry" };
+    assert_eq!(classify(busy, given(0, 0)), Decision::Reissue(Reissue::WriteBusy));
+    assert_eq!(classify(busy, given(1, 0)), Decision::Neither);
+    // `durability` once, twice → reissue as-is; a THIRD on the same burst →
+    // hold; a `write_busy` given beside counts nothing toward the rider.
+    let durability = DialOutcome::Rejected { code: "durability", disposition: "retry" };
+    assert_eq!(classify(durability, given(0, 0)), Decision::Reissue(Reissue::Durability));
+    assert_eq!(classify(durability, given(1, 1)), Decision::Reissue(Reissue::Durability));
+    assert_eq!(classify(durability, given(0, 2)), Decision::Hold { cause: "durability", sent: false });
+    assert_eq!((Reissue::WriteBusy.wait(), Reissue::Durability.wait()), (WRITE_BUSY_WAIT, Duration::ZERO));
+    let mut noted = Reissues::default();
+    for kind in [Reissue::WriteBusy, Reissue::Durability, Reissue::Durability] {
+        noted.note(kind);
+    }
+    assert_eq!(noted, given(1, 2), "each reissue counted under its own kind");
     // A `permanent` or `reorder` refusal → a REFUSED run.
     assert_eq!(rej("out_of_bounds", "permanent"), Decision::Refused);
     assert_eq!(rej("not_registered", "reorder"), Decision::Refused);
@@ -101,8 +130,49 @@ fn every_outcome_classifies_to_exactly_its_row() {
 /// armed in the page's place; the draft's text, of which a `retrieve_v`
 /// answers the positions it names — or no answer, where the site is armed
 /// unread; the frames POSTed to `/op` recorded, and a scripted rejection or
-/// a non-200 answered where one is armed; and the `/health` reads counted,
+/// a non-200 answered where one is armed — to every send, or to the next
+/// few alone, the non-200 first; and the `/health` reads counted,
 /// one armed to panic once, and each held at a gate while it is shut.
+/// An answer armed at the fake's `/op`: given to every send, or to the
+/// next `n` alone.
+struct Armed<T>(Mutex<Option<(T, Option<usize>)>>);
+
+impl<T: Clone> Armed<T> {
+    fn none() -> Armed<T> {
+        Armed(Mutex::new(None))
+    }
+
+    /// `answer` given to every send from now on.
+    fn every(&self, answer: T) {
+        *self.0.lock().unwrap() = Some((answer, None));
+    }
+
+    /// `answer` given to the next `n` sends alone.
+    fn next(&self, n: usize, answer: T) {
+        *self.0.lock().unwrap() = Some((answer, Some(n)));
+    }
+
+    /// Nothing armed.
+    fn clear(&self) {
+        *self.0.lock().unwrap() = None;
+    }
+
+    /// The answer armed for this send, where one is — one fewer left.
+    fn take(&self) -> Option<T> {
+        let mut armed = self.0.lock().unwrap();
+        let (answer, left) = armed.as_mut()?;
+        let answer = answer.clone();
+        let spent = left.as_mut().is_some_and(|n| {
+            *n -= 1;
+            *n == 0
+        });
+        if spent {
+            *armed = None;
+        }
+        Some(answer)
+    }
+}
+
 struct Fake {
     chain: String,
     no_head: AtomicBool,
@@ -111,8 +181,8 @@ struct Fake {
     text: Mutex<String>,
     site_unread: AtomicBool,
     sends: Mutex<Vec<Value>>,
-    op_rejected: Mutex<Option<Value>>,
-    op_refused: Mutex<Option<(u16, Value)>>,
+    op_rejected: Armed<Value>,
+    op_refused: Armed<(u16, Value)>,
     next_at: AtomicU64,
     writes_halted: AtomicBool,
     panic_next_health: AtomicBool,
@@ -135,8 +205,8 @@ impl Fake {
             text: Mutex::new(String::new()),
             site_unread: AtomicBool::new(false),
             sends: Mutex::new(Vec::new()),
-            op_rejected: Mutex::new(None),
-            op_refused: Mutex::new(None),
+            op_rejected: Armed::none(),
+            op_refused: Armed::none(),
             next_at: AtomicU64::new(50),
             writes_halted: AtomicBool::new(false),
             panic_next_health: AtomicBool::new(false),
@@ -242,10 +312,10 @@ impl Dialer for Fake {
                 });
             }
             self.sends.lock().unwrap().push(body.clone());
-            if let Some((status, refusal)) = self.op_refused.lock().unwrap().clone() {
+            if let Some((status, refusal)) = self.op_refused.take() {
                 return Ok(respond(status, refusal));
             }
-            if let Some(r) = self.op_rejected.lock().unwrap().clone() {
+            if let Some(r) = self.op_rejected.take() {
                 return Ok(ok(r));
             }
             let at = self.next_at.fetch_add(1, Ordering::SeqCst);
@@ -561,13 +631,13 @@ fn history_reclaimed_decides_by_the_arrangement() {
 #[test]
 fn a_refusal_the_table_holds_nowhere_leaves_the_line_standing() {
     let g = ground();
-    *g.fake.op_rejected.lock().unwrap() = Some(json!({"resp": "rejected", "code": "credential_refused", "detail": "index_rebuilding", "disposition": "retry", "op": "insert"}));
+    g.fake.op_rejected.every(json!({"resp": "rejected", "code": "credential_refused", "detail": "index_rebuilding", "disposition": "retry", "op": "insert"}));
     g.hold(&insert(DOC, json!(["hello"])), "unreachable", false);
     g.holds.probe("b-1");
     assert_eq!(g.fake.sends(), 1, "the line was sent");
     assert_eq!(g.lines().len(), 1, "and stands: the board did not take it");
     assert!(!g.states().contains(&"kept".to_string()));
-    *g.fake.op_rejected.lock().unwrap() = None;
+    g.fake.op_rejected.clear();
     g.holds.probe("b-1");
     assert_eq!(g.fake.sends(), 2, "the next wake sends it again");
     assert!(g.lines().is_empty() && g.states().contains(&"kept".to_string()));
@@ -690,7 +760,7 @@ fn a_refused_run_drops_its_behind_lines() {
     assert_eq!(g.lines().len(), 3, "an act of no name drops nothing");
     // Drop the refused head: the whole run goes.
     let _ = g.rx.try_iter().count();
-    g.holds.resolve("b-1", &g.session, k1, "drop").unwrap();
+    assert_eq!(g.holds.resolve("b-1", &g.session, k1, "drop").unwrap(), Resolved::Dropped);
     assert!(g.lines().is_empty(), "the run and its behind lines are dropped");
     assert_eq!(g.fake.sends(), 0, "nothing is dialed on a drop");
     let said: Vec<Event> = g.rx.try_iter().filter(|e| e.name == EventName::Held).collect();
@@ -714,14 +784,14 @@ fn a_drop_says_the_state_of_the_line_that_stands_first() {
     g.holds.probe("b-1");
     assert!(g.lines().iter().all(|l| l["cause"] == "moved"), "the read faces every line moved: {:?}", g.lines());
     let _ = g.rx.try_iter().count();
-    g.holds.resolve("b-1", &g.session, ks[1], "drop").unwrap();
+    assert_eq!(g.holds.resolve("b-1", &g.session, ks[1], "drop").unwrap(), Resolved::Dropped);
     let said: Vec<Event> = g.rx.try_iter().filter(|e| e.name == EventName::Held).collect();
     assert_eq!(said.len(), 1, "{said:?}");
     assert_declared(&said[0].data);
     assert_eq!((said[0].data["state"].as_str(), said[0].data["held"].as_u64()), (Some("moved"), Some(1)), "{said:?}");
     let left: Vec<u64> = g.lines().iter().map(|l| l["held"].as_u64().unwrap()).collect();
     assert_eq!(left, [ks[0]], "the dropped line and the one after it are gone");
-    g.holds.resolve("b-1", &g.session, ks[0], "drop").unwrap();
+    assert_eq!(g.holds.resolve("b-1", &g.session, ks[0], "drop").unwrap(), Resolved::Dropped);
     let said: Vec<Event> = g.rx.try_iter().filter(|e| e.name == EventName::Held).collect();
     assert_eq!((said[0].data["state"].as_str(), said[0].data["held"].as_u64()), (Some("kept"), Some(0)), "{said:?}");
 }
@@ -949,7 +1019,7 @@ fn a_drop_drops_its_own_documents_run_and_no_other() {
     let k1 = g.holds.hold("b-1", &g.session, &g.burst(&insert(DOC, json!(["a"]))), Reason::refused("out_of_bounds", verdict)).unwrap()["held"].as_u64().unwrap();
     let BurstAnswer::Answered(Ok(behind)) = g.holds.send_burst("b-1", &g.session, insert(OTHER, json!(["z"]))) else { panic!("held behind the run") };
     assert_eq!(behind["cause"], "behind", "{behind}");
-    g.holds.resolve("b-1", &g.session, k1, "drop").unwrap();
+    assert_eq!(g.holds.resolve("b-1", &g.session, k1, "drop").unwrap(), Resolved::Dropped);
     let docs: Vec<String> = g.lines().iter().map(|l| l["doc"].as_str().unwrap_or("?").to_string()).collect();
     assert_eq!(docs, [OTHER], "the run is dropped, the other document's line stands");
     g.holds.probe("b-1");
@@ -1026,36 +1096,92 @@ fn the_halted_hold_ends_at_the_first_read_that_says_writes_go() {
 #[test]
 fn a_third_durability_on_a_resent_line_holds_it() {
     let g = ground();
-    *g.fake.op_rejected.lock().unwrap() = Some(json!({"resp": "rejected", "code": "durability", "disposition": "retry", "op": "insert"}));
+    g.fake.op_rejected.every(retry("durability"));
     g.hold(&insert(DOC, json!(["hello"])), "unreachable", false);
     for (wake, cause) in [(1, "unreachable"), (2, "unreachable"), (3, "durability")] {
         g.holds.probe("b-1");
         assert_eq!((g.fake.sends(), g.lines()[0]["cause"].as_str()), (wake, Some(cause)), "wake {wake}");
     }
-    *g.fake.op_rejected.lock().unwrap() = None;
+    g.fake.op_rejected.clear();
     g.holds.probe("b-1");
     assert_eq!(g.fake.sends(), 4);
     assert!(g.lines().is_empty() && g.states().contains(&"kept".to_string()));
 }
 
 /// A REFUSAL THE TABLE HOLDS NOWHERE is faced at the burst's first dial
-/// (§3c.4's NEITHER and REISSUE): a retry-class refusal of no row, and a
-/// `write_busy` the board answers as a 503 — read by its code, the table's
-/// REISSUE row — each answer the act as its own refusal, and neither burst
-/// is held (the mutants that hold either, as if the board had not answered).
+/// (§3c.4's NEITHER), and a `write_busy` — read by its code off the 503 the
+/// board answers it as — is REISSUED within the call, once, after the short
+/// wait (§4b.1's `op` row: "reissued by the shell and reach the page as the
+/// ack or the next refusal, never as `held`"): a `write_busy` the reissue
+/// meets again is the next refusal, faced; one the reissue clears is the
+/// ack; no burst is held (the mutants that hold either, that face the first
+/// `write_busy`, or that reissue it without bound).
 #[test]
-fn a_refusal_the_table_holds_nowhere_is_faced_at_the_first_dial() {
+fn a_refusal_the_table_holds_nowhere_is_faced_and_a_write_busy_reissued_once() {
     let g = ground();
-    *g.fake.op_rejected.lock().unwrap() = Some(json!({"resp": "rejected", "code": "credential_refused", "detail": "index_rebuilding", "disposition": "retry", "op": "insert"}));
+    g.fake.op_rejected.every(json!({"resp": "rejected", "code": "credential_refused", "detail": "index_rebuilding", "disposition": "retry", "op": "insert"}));
     let BurstAnswer::Answered(Err(refused)) = g.holds.send_burst("b-1", &g.session, insert(DOC, json!(["a"]))) else { panic!("faced at the act") };
-    assert_eq!(refused.name(), "index_rebuilding", "{refused}");
-    *g.fake.op_rejected.lock().unwrap() = None;
-    *g.fake.op_refused.lock().unwrap() = Some((503, json!({"error": "write_busy"})));
-    let BurstAnswer::Answered(Err(busy)) = g.holds.send_burst("b-1", &g.session, insert(DOC, json!(["b"]))) else { panic!("faced at the act") };
+    assert_eq!((refused.name(), g.fake.sends()), ("index_rebuilding", 1), "{refused}");
+    g.fake.op_rejected.clear();
+    g.fake.op_refused.every((503, json!({"error": "write_busy"})));
+    let BurstAnswer::Answered(Err(busy)) = g.holds.send_burst("b-1", &g.session, insert(DOC, json!(["b"]))) else { panic!("the reissue's refusal faced") };
     let v = busy.to_value();
-    assert_eq!((busy.name(), v["status"].as_u64()), ("write_busy", Some(503)), "{v}");
-    assert!(g.lines().is_empty(), "neither burst is held");
-    assert_eq!(g.fake.sends(), 2, "each was dialed once");
+    assert_eq!((busy.name(), v["status"].as_u64(), g.fake.sends()), ("write_busy", Some(503), 3), "reissued once: {v}");
+    g.fake.op_refused.next(1, (503, json!({"error": "write_busy"})));
+    let BurstAnswer::Answered(Ok(ack)) = g.holds.send_burst("b-1", &g.session, insert(DOC, json!(["c"]))) else { panic!("the reissue acked") };
+    assert_eq!((ack["resp"].as_str(), g.fake.sends()), (Some("ack"), 5), "{ack}");
+    assert!(g.lines().is_empty(), "no burst is held");
+}
+
+/// A FIRST AND SECOND `durability` are reissued within the first dial's
+/// call as-is, and a THIRD holds the burst `durability` (§3c.4's rider), its
+/// line `sent: false`: two the reissues clear are the ack, and a
+/// `write_busy` met beside them counts nothing toward the rider (the
+/// mutants that face the first `durability`, hold it before its third, or
+/// count every reissue as one).
+#[test]
+fn a_first_and_second_durability_are_reissued_at_the_first_dial_and_a_third_holds() {
+    let g = ground();
+    g.fake.op_rejected.next(2, retry("durability"));
+    let BurstAnswer::Answered(Ok(ack)) = g.holds.send_burst("b-1", &g.session, insert(DOC, json!(["a"]))) else { panic!("the second reissue acked") };
+    assert_eq!((ack["resp"].as_str(), g.fake.sends()), (Some("ack"), 3), "{ack}");
+    g.fake.op_refused.next(1, (503, json!({"error": "write_busy"})));
+    g.fake.op_rejected.next(2, retry("durability"));
+    let BurstAnswer::Answered(Ok(ack)) = g.holds.send_burst("b-1", &g.session, insert(DOC, json!(["b"]))) else { panic!("a write_busy counts nothing toward the rider") };
+    assert_eq!((ack["resp"].as_str(), g.fake.sends()), (Some("ack"), 7), "{ack}");
+    g.fake.op_rejected.every(retry("durability"));
+    let BurstAnswer::Answered(Ok(held)) = g.holds.send_burst("b-1", &g.session, insert(DOC, json!(["c"]))) else { panic!("held at the third") };
+    assert_eq!((held["resp"].as_str(), held["cause"].as_str(), g.fake.sends()), (Some("held"), Some("durability"), 10), "{held}");
+    assert_eq!(g.lines()[0]["sent"], false);
+}
+
+/// `resolve(send)` HANDS the document back to the automatic machine and
+/// answers at once (§4b.1: "the call answers once the line is handed to
+/// the machine, never after its ack"): nothing is dialed in the act and the
+/// run's lines stand re-armed `behind`; the probe its caller hands the
+/// board's worker then sends and keeps them (the mutant that probes inside
+/// the act dials the board before the call answers).
+#[test]
+fn resolve_send_answers_once_the_lines_are_handed_back() {
+    let g = ground();
+    let verdict = json!({"resp": "rejected", "code": "out_of_bounds", "disposition": "permanent"});
+    let k = g.holds.hold("b-1", &g.session, &g.burst(&insert(DOC, json!(["a"]))), Reason::refused("out_of_bounds", verdict)).unwrap()["held"].as_u64().unwrap();
+    assert_eq!(g.holds.resolve("b-1", &g.session, k, "send").unwrap(), Resolved::Rearmed);
+    assert_eq!((g.fake.sends(), g.fake.health_reads.load(Ordering::SeqCst)), (0, 0), "nothing is dialed in the act");
+    assert_eq!(g.lines()[0]["cause"], "behind", "the run's line re-armed");
+    g.holds.probe("b-1");
+    assert_eq!(g.fake.sends(), 1, "the handed probe sends it");
+    assert!(g.lines().is_empty() && g.states().contains(&"kept".to_string()));
+}
+
+/// THE ONE PRECONDITION of the holds — a board reference names a board they
+/// were opened over — is the caller's, asked in one place: a reference
+/// outside them is a bug of this crate's, stopped loudly, never read as a
+/// board with nothing held.
+#[test]
+#[should_panic(expected = "PRECONDITION of `Holds`")]
+fn a_board_the_holds_were_not_opened_over_is_the_callers_bug() {
+    ground().holds.probe("b-nowhere");
 }
 
 /// THE STORED FRAME carries no `attest` (§3c.2): a burst held with one is
@@ -1076,9 +1202,10 @@ fn a_held_frame_is_stored_without_its_attest() {
 
 /// P38's HALT at the hold (§3c.3): a principal's file written by a newer skep
 /// stands untouched, and every act on it answers `store_halted` naming why —
-/// the burst is not dialed, no line is held, `held(session)` lists nothing —
-/// so no burst is sent past a file this shell may not write and none is
-/// rebuilt over (the mutant that dials past a halted file).
+/// the burst is not dialed, no line is held, `held(session)` lists nothing,
+/// `resolve` acts on no line — so no burst is sent past a file this shell
+/// may not write and none is rebuilt over (the mutants that dial past a
+/// halted file, or answer an act on it as no line).
 #[test]
 fn a_halted_file_refuses_every_act_and_dials_nothing() {
     let store = TempDir::new().unwrap();
@@ -1092,6 +1219,7 @@ fn a_halted_file_refuses_every_act_and_dials_nothing() {
     assert_eq!((refused.name(), refused.to_value()["why"].as_str()), ("store_halted", Some("newer")), "{refused}");
     assert_eq!(g.fake.sends(), 0, "nothing is dialed past a halted file");
     assert_eq!(g.holds.lines("b-1", &g.session).unwrap_err().name(), "store_halted");
+    assert_eq!(g.holds.resolve("b-1", &g.session, 1, "drop").unwrap_err().name(), "store_halted", "an act on a line answers the halt, never no line");
     let held = g.holds.hold("b-1", &g.session, &g.burst(&insert(DOC, json!(["x"]))), Reason::of("unreachable", false));
     assert_eq!(held.unwrap_err().name(), "store_halted", "no line is held");
     assert_eq!(std::fs::read_to_string(&file).unwrap(), newer, "the halted file is never rebuilt over");
@@ -1243,7 +1371,7 @@ fn two_boards() -> (Arc<Holds>, Vec<Arc<SessionEntry>>, TempDir) {
 #[test]
 fn a_burst_at_one_board_waits_on_no_other_boards_hold() {
     let (holds, sessions, _store) = two_boards();
-    let parked = holds.lock("b-1").expect("b-1 is a board of the holds");
+    let parked = holds.lock("b-1");
     let (finished, answer) = thread::scope(|s| {
         let other = s.spawn(|| holds.send_burst("b-2", &sessions[1], insert(DOC, json!(["z"]))));
         let deadline = Instant::now() + Duration::from_secs(5);

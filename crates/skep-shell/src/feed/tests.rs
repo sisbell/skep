@@ -2,7 +2,8 @@
 //! the bridge spells them; and THE COMMIT STREAM COALESCED — the waiting
 //! tick's mark, and a board committing far faster than the worker reads
 //! costing it a read per turn, never a read per commit, with a search queued
-//! behind them answered after one read at most.
+//! behind them answered after one read at most. And A DRAFTS CURSOR THE
+//! RETENTION FLOOR PASSED resumed at the floor, its rows still fed.
 
 use std::io::{self, Read};
 use std::sync::atomic::AtomicUsize;
@@ -142,4 +143,90 @@ fn a_board_committing_faster_than_the_worker_reads_costs_a_read_per_turn() {
     threads.stop();
     assert!(reads < commits / 20, "{reads} reads for {commits} commits");
     assert!(waited < Duration::from_secs(1), "the search waited {waited:?} behind the reads queued");
+}
+
+/// A board whose history below `FLOOR` is reclaimed: a drafts read from
+/// below it answered `410 history_reclaimed` naming the floor, one from at
+/// or above it a page holding the drafts row at `DRAFT_ROW_AT` where the
+/// cursor stands before it; the published feed empty at its head; one
+/// commit streamed, so one tick reads.
+struct Reclaiming {
+    events: Mutex<Option<Vec<u8>>>,
+}
+
+const FLOOR: u64 = 5;
+const DRAFT_ROW_AT: u64 = 6;
+
+/// The `since` a `/changes` path names.
+fn since_of(path: &str) -> u64 {
+    path.split_once("since=").and_then(|(_, rest)| rest.split('&').next()).and_then(|n| n.parse().ok()).unwrap_or(0)
+}
+
+impl Dialer for Reclaiming {
+    fn exchange(&self, _: &Origin, req: &Request) -> Result<Response, DialError> {
+        if req.method == Method::Get && req.path.starts_with("/health") {
+            return Ok(answer(json!({"ok": true, "log_position": 10, "auth": {"claimant": null, "local_trust": true, "origins": [], "signed_origins": []}, "writes": {"halted": false}})));
+        }
+        if req.method == Method::Get && req.path.starts_with("/changes") {
+            let since = since_of(&req.path);
+            if !req.path.contains("drafts=true") {
+                return Ok(answer(json!({"changes": [], "last": since.max(10), "more": false})));
+            }
+            if since < FLOOR {
+                return Ok(Response { status: 410, headers: Headers::default(), body: json!({"error": "history_reclaimed", "floor": FLOOR}).to_string().into_bytes() });
+            }
+            let rows: Vec<Value> = if since < DRAFT_ROW_AT { vec![json!({"at": DRAFT_ROW_AT, "op": "insert", "docs": ["1.0.1.0.1"], "key": "bare"})] } else { Vec::new() };
+            return Ok(answer(json!({"changes": rows, "last": since.max(DRAFT_ROW_AT), "more": false})));
+        }
+        Ok(answer(json!({"resp": "delivery", "items": []})))
+    }
+
+    fn stream(&self, _: &Origin, _: &RequestHead, _: &mut dyn Read, _: &mut dyn FnMut(&Headers)) -> Result<StreamedResponse, DialError> {
+        match self.events.lock().unwrap().take() {
+            Some(body) => Ok(StreamedResponse { status: 200, headers: Headers::default(), body: Box::new(io::Cursor::new(body)) }),
+            None => Err(DialError::Connect("the stream is served once".into())),
+        }
+    }
+}
+
+struct NoSupplements;
+impl Supplements for NoSupplements {
+    fn widen(&mut self, _: &Arc<SessionEntry>) {}
+    fn narrow(&mut self, _: u64) {}
+}
+
+/// A DRAFTS CURSOR THE RETENTION FLOOR PASSED is resumed at the floor, its
+/// rows still fed (wire.md §The change feed: an empty page echoes `since`,
+/// so a long-open session with no drafts row of its own keeps its open
+/// position while the floor rises): a session opened at 0 below a floor at
+/// 5, one commit — the tick's drafts read answered `history_reclaimed`,
+/// then read on from the floor — and the row at 6 arrives as a `drafts`
+/// `feed` event under the session (the mutant that stops at the reclaim
+/// feeds that session nothing for the rest of its life).
+#[test]
+fn a_drafts_cursor_the_floor_passed_reads_on_from_the_floor() {
+    let fake = Arc::new(Reclaiming { events: Mutex::new(Some(b"event: commit\ndata: {\"log_position\": 11}\n\n".to_vec())) });
+    let origin = Origin::parse("http://127.0.0.1:9").unwrap();
+    let board = Arc::new(Board::new(origin.clone(), Arc::clone(&fake)));
+    let store = TempDir::new().unwrap();
+    let (sessions, bus, talk): (Arc<Sessions>, Arc<EventBus>, Talk) = (Arc::new(Sessions::new()), Arc::new(EventBus::new()), Arc::new(|_: &str| {}));
+    let rx = bus.subscribe();
+    let facts = crate::sessions::Facts { principal: 1, account: Some("1.0.1".into()), kind: crate::sessions::Kind::Bare };
+    let session = sessions.register("b-1", crate::sessions::Open { token: Token::parse(&"9f".repeat(16)).unwrap(), facts, opened_at: 0 }, &mut NoSupplements);
+    let keys = Arc::new(FileStore::open(store.path().join("store")));
+    let holds = Holds::new(Arc::clone(&sessions), Arc::clone(&bus), keys, store.path().to_path_buf(), Arc::clone(&talk), [("b-1".to_string(), Arc::clone(&board))]);
+    let shared = Shared { bus, sessions, reopen_store: None, data_dir: store.path().to_path_buf(), talk, holds };
+    let threads = FeedThreads::spawn(Arc::new(BoardEntry { reference: "b-1".into(), origin, board }), shared);
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let fed = loop {
+        let wait = deadline.saturating_duration_since(Instant::now());
+        match rx.recv_timeout(wait) {
+            Ok(event) if event.name == EventName::Feed && event.data["update"]["class"] == "drafts" => break Some(event.data),
+            Ok(_) => {}
+            Err(_) => break None,
+        }
+    };
+    threads.stop();
+    let fed = fed.expect("the drafts row past the floor was fed");
+    assert_eq!((fed["update"]["position"].as_u64(), fed["update"]["session"].as_str()), (Some(DRAFT_ROW_AT), Some(session.reference.as_str())), "{fed}");
 }

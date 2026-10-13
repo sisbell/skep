@@ -14,17 +14,23 @@
 //! names, and written under; a bare session's death at a restart and at
 //! the flip to ENFORCING; and the own node's state announced at its board —
 //! a deliberate stop said once, its feed adding no `unreachable` while it
-//! stands. Then the HELD-BURST STORE: the holds against the real daemon,
+//! stands; a `write_busy` reissued once within the call; a death signal met
+//! at a read the attest needs ending the session; a close the board does
+//! not answer still the shell's close. Then the HELD-BURST STORE: the holds
+//! against the real daemon,
 //! the poisoned burst that lands at the restart and is kept, the signed
 //! session's own attested row, a burst on a draft just minted kept across a
 //! restart, a relaunch with its board down listing and resending its held
 //! line, and the probe keeping its cadence while the board keeps
 //! committing. And the shell's own frame: the dispatch naming every call by
-//! its spelling and logging each as one entry, the guest form refusing every
-//! write kind of the wire undialed, its options printing no seed, a search
-//! held at one board holding back no call at another, the stop abandoning a
-//! walk that waits on the page, and a shell dropped unstopped closing its
-//! sessions and freeing its board's held lock.
+//! its spelling and logging each as one entry, a present argument of
+//! another form refused before any dial, the guest form refusing every
+//! write kind of the wire undialed and reading the board its reference or
+//! its origin names, its options printing no seed and the open's
+//! preconditions stopped loudly, a search held at one board holding back
+//! no call at another, the stop abandoning a walk that waits on the page,
+//! and a shell dropped unstopped closing its sessions and freeing its
+//! board's held lock.
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -90,7 +96,11 @@ fn answer_moments(rx: std::sync::mpsc::Receiver<Event>, pending: Arc<crate::pers
                     Some("yes_no") => Value::from(true),
                     _ => Value::from("yes"),
                 };
-                pending.answer(id, answer);
+                // The page answers in its moment's own form; a moment the
+                // shell's stop cancelled first waits no more.
+                if let Err(refused) = pending.answer(id, answer) {
+                    assert_eq!(refused.name(), "no_such_moment", "{refused}");
+                }
             }
         }
     })
@@ -228,6 +238,8 @@ fn the_bare_mode_claims_opens_writes_and_names_no_token() {
     let answer = shell.call("search", &json!({"session": session, "board": board, "query": "hello", "opts": {"limit": 5}})).unwrap();
     assert!(answer["state"]["arm"].is_string());
     assert_eq!(shell.call("search", &json!({"session": session, "query": "x".repeat(2000)})).unwrap_err().name(), "query_too_long");
+    let elsewhere = shell.call("search", &json!({"session": session, "board": "b-elsewhere", "query": "hello"})).unwrap_err();
+    assert_eq!((elsewhere.name(), elsewhere.to_value()["what"].as_str()), ("malformed_args", Some("board")), "a session searches its own board");
     // Close: `{}`, the event, then the stale reference.
     assert_eq!(shell.call("close", &json!({"session": session})).unwrap(), json!({}));
     let died = wait_for(&seen, |e| e.name == EventName::SessionDied);
@@ -683,6 +695,97 @@ fn a_shells_options_print_no_seed() {
     assert!(!shown.contains("5e5e"), "{shown}");
 }
 
+/// THE OPEN's PRECONDITIONS are its caller's, stopped loudly before
+/// anything starts: an own node outside the boards.
+#[test]
+#[should_panic(expected = "own_node")]
+fn an_own_node_outside_the_boards_is_the_callers_bug() {
+    let (talk, _) = talk();
+    let mut opts = ShellOptions::new(Vec::new(), PathBuf::from("/nonexistent/store"), SessionMode::Bare { principal: 1 }, talk);
+    opts.own_node = Some(Origin::parse("http://127.0.0.1:9").unwrap());
+    let _ = Shell::open(opts);
+}
+
+/// THE OPEN's PRECONDITIONS: a board listed twice — two feeds and two held
+/// stores over one chain — is the caller's bug.
+#[test]
+#[should_panic(expected = "distinct")]
+fn a_board_listed_twice_is_the_callers_bug() {
+    let (talk, _) = talk();
+    let origin = Origin::parse("http://127.0.0.1:9").unwrap();
+    let _ = Shell::open(ShellOptions::new(vec![origin.clone(), origin], PathBuf::from("/nonexistent/store"), SessionMode::Bare { principal: 1 }, talk));
+}
+
+/// An origin nothing answers at: a port bound and let go.
+fn nowhere() -> String {
+    let port = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap().local_addr().unwrap().port();
+    format!("http://127.0.0.1:{port}")
+}
+
+/// A PRESENT ARGUMENT OF ANOTHER FORM is refused `malformed_args` naming it,
+/// never read as absent and so never the row's default: a principal spelled
+/// as a string or past 2^53 − 1, a label, a select, a paper flag, a lost
+/// fingerprint, a search limit of another type, and an `op` naming neither
+/// form or both — each before any dial, the shell's board one nothing
+/// answers at, where a dial would answer `unreachable`, and the guest
+/// origin a listener counting every dial (the mutants that read such a
+/// member as absent act as the mode's principal, open the label box, list
+/// every key, or dial a guest read the page never asked for). A `null` is
+/// the row's default: the session opens as the mode's principal and meets
+/// the board's silence.
+#[test]
+fn a_present_argument_of_another_form_is_refused_never_read_as_absent() {
+    let dir = TempDir::new().unwrap();
+    let (shell, _) = shell(&nowhere(), &dir.path().join("store"), SessionMode::Bare { principal: 1 });
+    let _answerer = answer_moments(shell.subscribe(), Arc::clone(&shell.pending), Arc::new(Mutex::new(Vec::new())));
+    let board = shell.board_references().remove(0);
+    let (listener, dials) = counting_listener();
+    let read = json!({"op": "doc_metadata", "doc": "1.0.1.0.1"});
+    let cases = [
+        ("session", json!({"board": board, "principal": "1"}), "principal"),
+        ("session", json!({"board": board, "principal": 1u64 << 53}), "principal"),
+        ("keygen", json!({"label": 7}), "label"),
+        ("fingerprint", json!({"select": 7}), "select"),
+        ("claim", json!({"board": board, "paper": "yes"}), "paper"),
+        ("recover", json!({"board": board, "lost": [7]}), "lost"),
+        ("search", json!({"guest": true, "board": board, "query": "x", "opts": {"limit": "5"}}), "opts.limit"),
+        ("op", json!({"origin": listener, "frame": read}), "session"),
+        ("op", json!({"guest": true, "session": "s-x", "origin": listener, "frame": read}), "session"),
+    ];
+    for (call, args, member) in cases {
+        let refused = shell.call(call, &args).unwrap_err();
+        let v = refused.to_value();
+        assert_eq!((refused.name(), v["what"].as_str()), ("malformed_args", Some(member)), "{call} {args}: {v}");
+    }
+    assert_eq!(dials.load(Ordering::SeqCst), 0, "no dial for a refused argument");
+    let defaulted = shell.call("session", &json!({"board": board, "principal": null})).unwrap_err();
+    assert_eq!(defaulted.name(), "unreachable", "a null is the row's default, and the call goes on to the board");
+}
+
+/// THE GUEST FORM's SEARCH reads the board its reference or its canonical
+/// origin names (§4b.1's `search` row): the shell's own board's origin is
+/// that board — the target its reference is — an origin the shell holds no
+/// board at answers with no index, a non-canonical one is refused
+/// `not_canonical`, and a guest form naming neither is refused
+/// `malformed_args` (the mutants that answer every origin with no index, or
+/// read a missing target as a search with no index).
+#[test]
+fn a_guest_search_reads_the_board_its_reference_or_origin_names() {
+    let dir = TempDir::new().unwrap();
+    let own = nowhere();
+    let (shell, _) = shell(&own, &dir.path().join("store"), SessionMode::Bare { principal: 1 });
+    let board = shell.board_references().remove(0);
+    for args in [json!({"guest": true, "board": board}), json!({"guest": true, "origin": own})] {
+        assert!(matches!(shell.guest_target(&args), Ok(GuestTarget::Board(entry)) if entry.reference == board), "{args}");
+    }
+    let answer = shell.call("search", &json!({"guest": true, "origin": "http://127.0.0.1:9", "query": "x"})).unwrap();
+    assert_eq!(answer["state"]["arm"], "none", "{answer}");
+    let refused = shell.call("search", &json!({"guest": true, "origin": "not an origin", "query": "x"})).unwrap_err();
+    assert_eq!(refused.name(), "not_canonical", "{refused}");
+    let refused = shell.call("search", &json!({"guest": true, "query": "x"})).unwrap_err();
+    assert_eq!((refused.name(), refused.to_value()["what"].as_str()), ("malformed_args", Some("board or origin")), "{refused}");
+}
+
 /// A shell over no board, its store a throwaway directory: no feed thread,
 /// so nothing of its own dials.
 fn boardless(dir: &TempDir) -> Shell {
@@ -813,7 +916,7 @@ fn the_stop_abandons_a_walk_waiting_on_the_page() {
         }
         let finished = walk.is_finished();
         if let Some(id) = moment.as_ref().and_then(|m| m.data["id"].as_str()) {
-            shell.cancel(id);
+            let _ = shell.cancel(id);
         }
         (moment, finished, walk.join().unwrap())
     });
@@ -893,6 +996,114 @@ fn a_dropped_shell_frees_its_boards_held_lock() {
     let answer = fresh.op(Some(&token), &skep_client::board::frames::key_set("1.0.1")).unwrap();
     assert!(matches!(answer, Answer::Closed), "the dropped shell closed its session at the board");
     sd.shutdown();
+}
+
+/// A `write_busy` IS REISSUED within the call, once, after the short wait
+/// (§4b.1's `op` row: "reissued by the shell and reach the page as the ack
+/// or the next refusal"): the daemon's write permits all held, a
+/// `create_new_document` is dialed twice — the log's two `POST /op` answered
+/// `503` at the frame's own size — and the reissue's `write_busy` is the
+/// refusal the page meets; the permits let go, the next mint is acked at its
+/// first dial (the mutants that face the first `write_busy`, or reissue it
+/// without bound).
+#[test]
+fn a_write_busy_is_reissued_once_within_the_call() {
+    let dir = TempDir::new().unwrap();
+    let sd = spawn(&dir.path().join("board"), true);
+    let origin = format!("http://127.0.0.1:{}", sd.port());
+    let store = dir.path().join("store");
+    claim_board(&origin, &store);
+    let (shell, _) = shell(&origin, &store, SessionMode::Bare { principal: 1 });
+    let board = shell.board_references().remove(0);
+    let session = shell.call("session", &json!({"board": board})).unwrap()["session"].as_str().unwrap().to_string();
+    let frame = json!({"op": "create_new_document", "account": "1.0.1"});
+    let busy_dials = || shell.log().entries().iter().filter(|e| e["kind"] == "dial" && e["path"] == "/op" && e["status"] == 503 && e["bytes_in"] == frame.to_string().len()).count();
+    let mut permits = Vec::new();
+    while let Some(permit) = sd.daemon().try_hold_write_permit() {
+        permits.push(permit);
+    }
+    let refused = shell.call("op", &json!({"session": session, "frame": frame})).unwrap_err();
+    assert_eq!((refused.name(), refused.to_value()["status"].as_u64()), ("write_busy", Some(503)), "{refused}");
+    assert_eq!(busy_dials(), 2, "the write and its one reissue");
+    drop(permits);
+    let minted = shell.call("op", &json!({"session": session, "frame": frame})).unwrap();
+    assert_eq!((minted["resp"].as_str(), busy_dials()), (Some("ack_addr"), 2), "{minted}");
+    shell.shutdown();
+    sd.shutdown();
+}
+
+/// A DEATH SIGNAL MET AT A READ THE ATTEST NEEDS ends the session by the
+/// shell's own hand (`Sessions::end`) and is no refusal of the composer's: a
+/// signed session's token closed at the board while its feed stands quiet,
+/// then a `make_link` whose V-spec slot the composer resolves through
+/// `image` under that token — the call answers `session_died` with the
+/// restart's re-open, and the old reference names nothing (the mutant that
+/// reads the death as the composer's halt tells the page the shell could
+/// not sign).
+#[test]
+fn a_death_met_at_a_read_the_attest_needs_ends_the_session() {
+    let dir = TempDir::new().unwrap();
+    let sd = spawn(&dir.path().join("board"), true);
+    let origin = format!("http://127.0.0.1:{}", sd.port());
+    let store = dir.path().join("store");
+    claim_board(&origin, &store);
+    let (signed, lines) = shell(&origin, &store, SessionMode::Signed { principal: 1 });
+    let rx = signed.subscribe();
+    let board = signed.board_references().remove(0);
+    let session = signed.call("session", &json!({"board": board})).unwrap()["session"].as_str().unwrap().to_string();
+    // The feed widens the session's supplement, then falls quiet: nothing
+    // commits, so the call is the first hand to meet the death.
+    let deadline = Instant::now() + Duration::from_secs(30);
+    let mut widened = false;
+    let mut quiet_since = Instant::now();
+    while !(widened && quiet_since.elapsed() > Duration::from_millis(500)) {
+        assert!(Instant::now() < deadline, "the session's supplement was never widened");
+        for event in rx.try_iter() {
+            widened |= event.name == EventName::Index && event.data["session"] == session;
+            quiet_since = Instant::now();
+        }
+        thread::sleep(Duration::from_millis(20));
+    }
+    let token = signed.sessions.get(&session).unwrap().token.clone();
+    Board::new(Origin::parse(&origin).unwrap(), skep_client::PlainHttp::new()).session_close(&token).unwrap();
+    let vspec = json!({"source": "1.0.1.0.1", "span": {"start": "1.1", "width": "0.1"}});
+    let frame = json!({"op": "make_link", "home": "1.0.1.0.1", "from": [vspec], "to": {"addrs": ["1.0.1.0.1"]}, "ty": {"addrs": ["1.1.0.1.0.1.0.3.13"]}});
+    let refused = signed.call("op", &json!({"session": session, "frame": frame})).unwrap_err();
+    let v = refused.to_value();
+    assert_eq!((refused.name(), v["reason"]["arm"].as_str()), ("session_died", Some("restart")), "{v}\n{}", lines.lock().unwrap().join("\n"));
+    assert_eq!(signed.call("held", &json!({"session": session})).unwrap_err().name(), "session_ended");
+    signed.shutdown();
+    sd.shutdown();
+}
+
+/// THE CLOSE is the shell's act, whatever the board says (§4b.1's `close`
+/// row arms no refusal at the board): a session closed while its board is
+/// down answers `{}`, its `session-died` names the `closed` arm, the
+/// board's silence is said on TALK, and the reference then names nothing
+/// (the mutant that carries the board's silence back refuses a close that
+/// already took effect).
+#[test]
+fn a_close_the_board_does_not_answer_still_closes() {
+    let dir = TempDir::new().unwrap();
+    let sd = spawn(&dir.path().join("board"), true);
+    let origin = format!("http://127.0.0.1:{}", sd.port());
+    let (shell, lines) = shell(&origin, &dir.path().join("store"), SessionMode::Bare { principal: 1 });
+    let board = shell.board_references().remove(0);
+    let session = shell.call("session", &json!({"board": board})).unwrap()["session"].as_str().unwrap().to_string();
+    let rx = shell.subscribe();
+    sd.shutdown();
+    let probe = Board::new(Origin::parse(&origin).unwrap(), skep_client::PlainHttp::new());
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while probe.health().is_ok() {
+        assert!(Instant::now() < deadline, "the stopped board still answers");
+        thread::sleep(Duration::from_millis(20));
+    }
+    assert_eq!(shell.call("close", &json!({"session": session})).unwrap(), json!({}));
+    let died: Vec<Value> = rx.try_iter().filter(|e| e.name == EventName::SessionDied).map(|e| e.data).collect();
+    assert_eq!(died, [json!({"session": session, "reason": {"arm": "closed"}})]);
+    assert!(lines.lock().unwrap().iter().any(|l| l.contains("did not close") && l.contains(&session)), "{}", lines.lock().unwrap().join("\n"));
+    assert_eq!(shell.call("close", &json!({"session": session})).unwrap_err().name(), "session_ended");
+    shell.shutdown();
 }
 
 // ── THE HELD-BURST STORE, against the real daemon in-process ─────────────────

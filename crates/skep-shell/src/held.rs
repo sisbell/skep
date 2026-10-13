@@ -498,11 +498,12 @@ impl HeldQueue {
     /// queue has a file, copied to it — one `write` then `sync_data`
     /// (PERSIST-FIRST, J1), the header written once first where the file is
     /// new. The ordinal the line took, and why its copy failed where it did,
-    /// for the caller's answer to say (§3c.3); or [`Unheld`] — the line's
-    /// frame would carry the queue's past [`MAX_HELD_FRAME_BYTES`], its
-    /// ordinal would pass [`MAX_ORDINAL`], or its `doc` or `frame` is one the
-    /// reader refuses — and the line kept nowhere: the writer holds no line
-    /// the file's reader would halt on.
+    /// for the caller's answer to say (§3c.3); or [`Unheld`], checked in this
+    /// order, the first that holds answering — its `doc` or `frame` one the
+    /// reader refuses ([`Unheld::Unreadable`]), else its ordinal past
+    /// [`MAX_ORDINAL`] or its frame carrying the queue's past
+    /// [`MAX_HELD_FRAME_BYTES`] ([`Unheld::Full`]) — and the line kept
+    /// nowhere: the writer holds no line the file's reader would halt on.
     pub fn hold(&mut self, doc: &str, id: Option<&str>, base: u64, frame: Value, reason: Reason) -> Result<Entered, Unheld> {
         if document_address(doc).is_none() || !frame.is_object() {
             return Err(Unheld::Unreadable);

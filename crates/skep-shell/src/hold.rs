@@ -10,13 +10,15 @@
 //! held line of it could be sent and resolved never, and would hold every
 //! later burst of its principal `behind` it. Its WRITE PATH is this module's,
 //! at the first dial and at every resend alike: [`Holds::send_burst`] holds
-//! it WITHOUT a dial where a hold
-//! stands — the own node stopped, the board halted, a line of the
-//! principal's already held — and else attests it, dials it ONCE and reads
-//! the answer once, through THE CLASSIFICATION TABLE ([`classify`]: §3c.4's
-//! HOLD(cause) / REISSUE / NEITHER): an ack carried and its `at` noted, a
-//! hold-class answer or a REFUSED run held, anything else faced at the act.
-//! The resend sends each held line through the same reader.
+//! it WITHOUT a dial where a hold stands — the own node stopped, the board
+//! halted, a line of the principal's already held — and else attests it and
+//! dials it, each answer read through THE CLASSIFICATION TABLE
+//! ([`classify`]: §3c.4's HOLD(cause) / REISSUE / NEITHER): an ack carried
+//! and its `at` noted, a hold-class answer or a REFUSED run held, a
+//! reissue-class answer reissued within the call — a `write_busy` once after
+//! [`WRITE_BUSY_WAIT`], a first and second `durability` as-is — and anything
+//! else faced at the act. The resend sends each held line through the same
+//! reader, a reissue-class answer there reissued at the next wake.
 //!
 //! THE QUEUE is each principal's [`HeldQueue`], in `k` order across the
 //! board's documents: copied to `held/<chain>/principal-<n>.held` where this
@@ -24,9 +26,10 @@
 //! another window holds it or the directory is out of reach (§3c.3), and
 //! opened only under a session as its principal (P39) — at the session's
 //! open, or at the first touch after it. THE PROBE ([`Holds::probe`]) runs on
-//! the feed worker's thread every [`PROBE_CADENCE`] while a line stands,
-//! because `Cmd::Tick` is driven by COMMITTED writes and a poisoned, halted,
-//! stopped or unreachable board commits nothing. THE RESEND it lets run is
+//! the feed worker's thread every [`PROBE_CADENCE`] while a line stands, and
+//! there too at `resolve(send)`'s hand-over, because `Cmd::Tick` is driven by
+//! COMMITTED writes and a poisoned, halted, stopped or unreachable board
+//! commits nothing. THE RESEND it lets run is
 //! AUTOMATIC at the hold's end and at reopen (J2): one READ per document
 //! (`GET /changes`) before its first resend, with §3c.5's three outcomes —
 //! (i) nothing landed, send from the head; (ii) the in-flight burst landed,
@@ -44,6 +47,7 @@ use std::collections::{HashMap, HashSet};
 use std::fs::File;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::thread;
 use std::time::Duration;
 
 use serde_json::{json, Value};
@@ -54,7 +58,7 @@ use skep_client::DialError;
 use skep_identity::BoardTerm;
 use skep_search::Chain;
 
-use crate::attest::{attest_room, delivered_values, document_address, in_checked_set, insert_terms, values_of, MAX_FRAME_BYTES};
+use crate::attest::{attest_room, delivered_values, document_address, in_checked_set, insert_terms, values_of, Unattested, MAX_FRAME_BYTES};
 use crate::events::{EventBus, EventName};
 use crate::held::{Done, DoneError, HaltWhy, HeldDir, HeldLine, HeldQueue, Opened, Reason, Unheld, MAX_HELD_FRAME_BYTES};
 use crate::log::json_len;
@@ -65,6 +69,11 @@ use crate::Talk;
 /// THE INTERIM PROBE CADENCE (§3c.4): `GET /health` at this interval while a
 /// burst is held at a board — the lane's to tune.
 pub const PROBE_CADENCE: Duration = Duration::from_secs(2);
+
+/// THE SHORT WAIT before a `write_busy` is reissued (§3c.4: "a silent
+/// reissue after a short wait") — INTERIM, the lane's to tune, as
+/// [`PROBE_CADENCE`] is.
+pub const WRITE_BUSY_WAIT: Duration = Duration::from_millis(50);
 
 /// The burst machine's five kinds (§3c.4) — the ops the store holds.
 pub const BURST_KINDS: [&str; 5] = ["insert", "delete", "copy", "reinstate", "rearrange"];
@@ -114,15 +123,60 @@ pub enum Decision {
     /// A REFUSED run — a `permanent` or `reorder` refusal, held with the
     /// board's token for its cause and its verdict beside it.
     Refused,
-    /// REISSUE — `write_busy`, or a first or second `durability` (silent).
-    Reissue,
+    /// REISSUE, silently, of this kind — within the first dial's call; on a
+    /// resend, at the next wake.
+    Reissue(Reissue),
     /// NEITHER held nor reissued — faced at its act.
     Neither,
 }
 
-/// THE CLASSIFICATION TABLE (§3c.4): a burst's outcome, and how many prior
-/// `durability` refusals the SAME burst has met, to exactly one row.
-pub fn classify(outcome: DialOutcome<'_>, durability_seen: u32) -> Decision {
+/// A REISSUE-class refusal (§3c.4's REISSUE row): its kind names the wait
+/// before the reissue and the count [`classify`] bounds it by.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Reissue {
+    /// `503 write_busy`, the board's write permits all held: reissued ONCE,
+    /// after [`WRITE_BUSY_WAIT`].
+    WriteBusy,
+    /// `durability`, the board's durability barrier failed: reissued as-is,
+    /// a first and a second time.
+    Durability,
+}
+
+impl Reissue {
+    /// The wait before the reissue.
+    pub fn wait(self) -> Duration {
+        match self {
+            Reissue::WriteBusy => WRITE_BUSY_WAIT,
+            Reissue::Durability => Duration::ZERO,
+        }
+    }
+}
+
+/// The reissues ONE write has been given so far, by kind — what
+/// [`classify`] bounds the next by: a `write_busy` reissued once, a
+/// `durability` twice, its third HOLDING a burst (§3c.4's rider). Counted by
+/// the caller as it reissues ([`Reissues::note`]), so every reissue moves
+/// the write toward its bound: a write is dialed four times at most.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct Reissues {
+    write_busy: u32,
+    durability: u32,
+}
+
+impl Reissues {
+    /// One reissue of `kind` given.
+    pub fn note(&mut self, kind: Reissue) {
+        match kind {
+            Reissue::WriteBusy => self.write_busy += 1,
+            Reissue::Durability => self.durability += 1,
+        }
+    }
+}
+
+/// THE CLASSIFICATION TABLE (§3c.4): a burst's outcome, and the reissues
+/// the SAME burst has been given, to exactly one row — the one owner of
+/// every reissue's bound.
+pub fn classify(outcome: DialOutcome<'_>, given: Reissues) -> Decision {
     match outcome {
         DialOutcome::Dial(e) => match e {
             // No connection was made — the burst did not leave.
@@ -146,13 +200,21 @@ pub fn classify(outcome: DialOutcome<'_>, durability_seen: u32) -> Decision {
             // sends, as after a lost answer. A `halted` hold (the feed's
             // `writes.halted` read, before any dial) stays `sent: false`.
             "poisoned" => Decision::Hold { cause: cause::POISONED, sent: true },
-            "write_busy" => Decision::Reissue,
+            // "A silent reissue after a short wait" (§3c.4), once: the
+            // reissue's own `write_busy` is the next refusal, faced.
+            "write_busy" => {
+                if given.write_busy == 0 {
+                    Decision::Reissue(Reissue::WriteBusy)
+                } else {
+                    Decision::Neither
+                }
+            }
             // The rider (§3c.4): a THIRD `durability` on the same burst HOLDS it.
             "durability" => {
-                if durability_seen >= 2 {
+                if given.durability >= 2 {
                     Decision::Hold { cause: cause::DURABILITY, sent: false }
                 } else {
-                    Decision::Reissue
+                    Decision::Reissue(Reissue::Durability)
                 }
             }
             _ => match disposition {
@@ -163,6 +225,27 @@ pub fn classify(outcome: DialOutcome<'_>, durability_seen: u32) -> Decision {
     }
 }
 
+/// THE REISSUE ROW alone, for a write the hold never holds — any `/op`
+/// under a session but a burst's (§3c.4: "a non-burst write that fails … is
+/// faced at its act"): the reissue `answer` owes, given the reissues the
+/// write has been given; `None` where the answer is the write's to carry or
+/// to face as it stands — its third `durability` among them, which a burst's
+/// hold alone keeps.
+pub fn reissue_of(answer: &Result<Answer, Halt>, given: Reissues) -> Option<Reissue> {
+    let decision = match answer {
+        Ok(Answer::Document(v)) => {
+            let r = Rejection::of(v)?;
+            classify(DialOutcome::Rejected { code: r.key(), disposition: v["disposition"].as_str().unwrap_or("") }, given)
+        }
+        Err(Halt::Refused(r)) => classify(DialOutcome::Rejected { code: &r.code, disposition: r.body["disposition"].as_str().unwrap_or("") }, given),
+        _ => return None,
+    };
+    match decision {
+        Decision::Reissue(kind) => Some(kind),
+        _ => None,
+    }
+}
+
 /// What a burst's `op` answers the page (§3c.4).
 pub enum BurstAnswer {
     /// The board's ack, the shell's `held`, or the refusal faced at the act.
@@ -170,6 +253,21 @@ pub enum BurstAnswer {
     /// The death signal on the session's token: the caller ends the session,
     /// and the burst is not held (§3c.4: the death signal is neither).
     Died,
+}
+
+/// What a `resolve` act did (§4b.1's `resolve` row), the call's answer `{}`
+/// either way.
+#[must_use = "a `Rearmed` document's resend waits on the probe its caller hands the board's worker"]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Resolved {
+    /// `"drop"`: the line, and a refused run's `behind` lines with it,
+    /// `done … dropped`.
+    Dropped,
+    /// `"send"`: the document's waiting lines re-armed `behind`, back in the
+    /// automatic machine — the caller hands the board's worker its probe, so
+    /// the call answers once the lines are handed back, never after a
+    /// resend's ack.
+    Rearmed,
 }
 
 /// A BURST ADMITTED: a frame of [`BURST_KINDS`] some send of which the board
@@ -185,7 +283,8 @@ impl Burst {
     /// THE DOOR a burst enters the hold by, the refusal faced at the act where
     /// the board would refuse the frame at EVERY send — each such frame, held,
     /// would be sent and resolved never, and hold every later burst of its
-    /// principal `behind` it for the shell's life and past it on disk:
+    /// principal `behind` it for the shell's life and past it on disk —
+    /// checked in this order, the first unmet answering:
     ///
     /// * its op one of the five kinds, else `malformed_args`;
     /// * its `doc` a document address in its one spelling
@@ -236,21 +335,26 @@ enum Dialed {
     Acked(Value),
     /// A hold-class answer, or a REFUSED run: the line's reason.
     Held(Reason),
-    /// Faced at the act: a reissue-class answer, one the table holds nowhere,
-    /// or the shell's own refusal where the attest could not be composed.
+    /// A reissue-class answer: its kind, and the refusal it is where no
+    /// reissue follows.
+    Reissue { kind: Reissue, refusal: Refusal },
+    /// Faced at the act: an answer the table holds and reissues nowhere, or
+    /// the shell's own refusal where the attest could not be composed.
     Faced(Refusal),
-    /// The death signal on the session's token.
+    /// The death signal on the session's token, at the dial or at a read the
+    /// attest's composer made.
     Died,
 }
 
 impl Dialed {
     /// A refusal read through the table: held for its cause, held as a
-    /// REFUSED run with the board's `token` and verdict, or faced.
-    fn refused(decision: Decision, token: &str, verdict: &Value, faced: Refusal) -> Dialed {
+    /// REFUSED run with the board's `token` and verdict, reissued, or faced.
+    fn refused(decision: Decision, token: &str, verdict: &Value, refusal: Refusal) -> Dialed {
         match decision {
             Decision::Hold { cause, sent } => Dialed::Held(Reason::of(cause, sent)),
             Decision::Refused => Dialed::Held(Reason::refused(token, verdict.clone())),
-            Decision::Reissue | Decision::Neither => Dialed::Faced(faced),
+            Decision::Reissue(kind) => Dialed::Reissue { kind, refusal },
+            Decision::Neither => Dialed::Faced(refusal),
         }
     }
 }
@@ -387,18 +491,18 @@ impl Custody {
 
 /// One principal's hold at one board: where its lines are kept, the queue,
 /// the `at` of its last ACKED write per document — the `base` a hold on
-/// that document takes (§3c.2) — and the `durability` refusals each line's
-/// resend has met.
+/// that document takes (§3c.2) — and the reissues each line's resend has
+/// been given, counted across its wakes.
 struct PrincipalHold {
     custody: Custody,
     queue: HeldQueue,
     last_acked: HashMap<String, u64>,
-    durability_seen: HashMap<u64, u32>,
+    reissues: HashMap<u64, Reissues>,
 }
 
 impl PrincipalHold {
     fn new() -> PrincipalHold {
-        PrincipalHold { custody: Custody::Unopened, queue: HeldQueue::in_memory(), last_acked: HashMap::new(), durability_seen: HashMap::new() }
+        PrincipalHold { custody: Custody::Unopened, queue: HeldQueue::in_memory(), last_acked: HashMap::new(), reissues: HashMap::new() }
     }
 
     /// How many lines stand on `doc`.
@@ -442,6 +546,11 @@ impl BoardSlot {
 /// `held` and `resolve`, a session's open, `set_node_state`) and the feed
 /// workers (the probe, the `writes.halted` read, the daemon-running end).
 /// The boards are the shell's, fixed at its open, each under its own lock.
+/// PRECONDITION of every method taking a `board_reference`, the caller's: it
+/// names a board the holds were opened over — held by construction, a
+/// session standing at one of the shell's boards and each feed worker
+/// probing its own; a reference outside them is a bug of this crate's, and
+/// the method panics naming the obligation.
 pub struct Holds {
     sessions: Arc<Sessions>,
     bus: Arc<EventBus>,
@@ -450,9 +559,9 @@ pub struct Holds {
     talk: Talk,
     boards: HashMap<String, BoardSlot>,
     /// The boards a resend is draining now. [`Holds::probe`] is reached at
-    /// the feed's cadence and its daemon-running tick,
-    /// `set_node_state(Running)` and `resolve(send)`; one drain per board at
-    /// a time, so none double-sends.
+    /// the feed's cadence, its daemon-running tick and `resolve(send)`'s
+    /// hand-over, and at `set_node_state(Running)`; one drain per board at a
+    /// time, so none double-sends.
     resending: Mutex<HashSet<String>>,
 }
 
@@ -503,38 +612,36 @@ impl Holds {
         (self.talk)(line.as_ref());
     }
 
-    /// The board `board_reference` names.
-    fn slot(&self, board_reference: &str) -> Option<&BoardSlot> {
-        self.boards.get(board_reference)
+    /// The board `board_reference` names — the one place the type's
+    /// precondition is asked, every method reaching a board through here.
+    fn slot(&self, board_reference: &str) -> &BoardSlot {
+        self.boards.get(board_reference).unwrap_or_else(|| panic!("PRECONDITION of `Holds`: `{board_reference}` names a board the holds were opened over"))
     }
 
     /// The hold of the board `board_reference` names, under that board's lock.
-    fn lock(&self, board_reference: &str) -> Option<MutexGuard<'_, BoardHold>> {
-        self.slot(board_reference).map(BoardSlot::lock)
+    fn lock(&self, board_reference: &str) -> MutexGuard<'_, BoardHold> {
+        self.slot(board_reference).lock()
     }
 
     /// `f` over `principal`'s hold at the board, under the board's lock,
     /// where the principal has one there.
     fn with_principal<T>(&self, board_reference: &str, principal: u64, f: impl FnOnce(&mut PrincipalHold) -> T) -> Option<T> {
-        self.lock(board_reference)?.principals.get_mut(&principal).map(f)
+        self.lock(board_reference).principals.get_mut(&principal).map(f)
     }
 
     /// The own node's STOPPED state as its owner reports it (§3c.4): every
     /// burst holds `stopped`, and the probe waits for `Running` to resend.
     pub fn set_node_stopped(&self, board_reference: &str, stopped: bool) {
-        if let Some(mut board_hold) = self.lock(board_reference) {
-            board_hold.node_stopped = stopped;
-        }
+        self.lock(board_reference).node_stopped = stopped;
     }
 
     /// Whether the board's node stands STOPPED by its owner's act
     /// ([`Holds::set_node_stopped`]) — what `probe` answers for the own node,
     /// and what the feed reads when the board's stream fails, so a deliberate
     /// stop is announced `stopped` once and never `unreachable` beside it. A
-    /// board that is not the own node, or one the holds never registered,
-    /// answers false.
+    /// board that is not the own node answers false.
     pub fn node_stopped(&self, board_reference: &str) -> bool {
-        self.lock(board_reference).is_some_and(|b| b.node_stopped)
+        self.lock(board_reference).node_stopped
     }
 
     /// A SESSION OPENED at the board (§3c.7 items 1 and 4): the board's
@@ -544,7 +651,7 @@ impl Holds {
     /// `held(session)` lists its lines at once and the probe's next wake
     /// resends them. No other principal's file is opened (P39).
     pub fn open_session(&self, board_reference: &str, session: &SessionEntry) {
-        let Some(slot) = self.slot(board_reference) else { return };
+        let slot = self.slot(board_reference);
         self.establish(slot);
         self.principal_hold(&mut slot.lock(), session);
     }
@@ -596,20 +703,26 @@ impl Holds {
         ph
     }
 
-    /// THE BURST's WRITE PATH (§3c.4), the `op` row's for a burst: ADMITTED
-    /// first ([`Burst::admit`]), the refusal faced at the act; HELD WITHOUT A
-    /// DIAL where a hold stands at the board — the own node stopped, the
-    /// board halted, a line of the principal's already held — and refused
-    /// `store_halted` where P38 halted the principal's file; else attested,
-    /// dialed ONCE and its answer read through the table: an ack carried and
-    /// its `at` noted, a hold-class answer or a REFUSED run held and answered
-    /// `held`, anything else faced at the act.
+    /// THE BURST's WRITE PATH (§3c.4), the `op` row's for a burst, its
+    /// checks in this order, the first that holds answering: ADMITTED
+    /// ([`Burst::admit`]), its refusal faced at the act; refused
+    /// `store_halted` where P38 halted the principal's file; HELD WITHOUT A
+    /// DIAL where a hold stands at the board — the own node stopped, else the
+    /// board halted, else a line of the principal's already held (`behind`);
+    /// else attested and dialed, each answer read through the table: an ack
+    /// carried and its `at` noted; a hold-class answer or a REFUSED run held
+    /// and answered `held`; a reissue-class answer reissued within the call —
+    /// a `write_busy` once after [`WRITE_BUSY_WAIT`], a first and second
+    /// `durability` as-is — the reissue's own answer read as any dial's, so
+    /// the page meets the ack or the next refusal, never `held` for a
+    /// reissue-class one, save a third `durability`, which holds the burst
+    /// (§4b.1's `op` row; §3c.4's rider); anything else faced at the act.
     pub fn send_burst(&self, board_reference: &str, session: &SessionEntry, frame: Value) -> BurstAnswer {
         let burst = match Burst::admit(frame, session) {
             Ok(burst) => burst,
             Err(refusal) => return BurstAnswer::Answered(Err(refusal)),
         };
-        let slot = self.slot(board_reference).expect("a session stands at a board the holds were opened over");
+        let slot = self.slot(board_reference);
         {
             let mut board_hold = slot.lock();
             let (node_stopped, writes_halted) = (board_hold.node_stopped, board_hold.writes_halted);
@@ -631,14 +744,22 @@ impl Holds {
                 return BurstAnswer::Answered(self.hold_line(board_reference, &mut board_hold, session, &burst, Reason::of(cause, false)));
             }
         }
-        match self.dial(&slot.board, session, burst.frame(), 0) {
-            Dialed::Acked(ack) => {
-                self.note_ack(board_reference, session, burst.frame(), &ack);
-                BurstAnswer::Answered(Ok(ack))
-            }
-            Dialed::Held(reason) => BurstAnswer::Answered(self.hold(board_reference, session, &burst, reason)),
-            Dialed::Faced(refusal) => BurstAnswer::Answered(Err(refusal)),
-            Dialed::Died => BurstAnswer::Died,
+        let mut given = Reissues::default();
+        loop {
+            return match self.dial(&slot.board, session, burst.frame(), given) {
+                Dialed::Acked(ack) => {
+                    self.note_ack(board_reference, session, burst.frame(), &ack);
+                    BurstAnswer::Answered(Ok(ack))
+                }
+                Dialed::Held(reason) => BurstAnswer::Answered(self.hold(board_reference, session, &burst, reason)),
+                Dialed::Reissue { kind, .. } => {
+                    given.note(kind);
+                    thread::sleep(kind.wait());
+                    continue;
+                }
+                Dialed::Faced(refusal) => BurstAnswer::Answered(Err(refusal)),
+                Dialed::Died => BurstAnswer::Died,
+            };
         }
     }
 
@@ -646,8 +767,7 @@ impl Holds {
     /// `held` answer ([`Holds::hold_line`]), or `store_halted` where P38
     /// halted the file.
     pub fn hold(&self, board_reference: &str, session: &SessionEntry, burst: &Burst, reason: Reason) -> Result<Value, Refusal> {
-        let mut board_hold = self.lock(board_reference).expect("a session stands at a board the holds were opened over");
-        self.hold_line(board_reference, &mut board_hold, session, burst, reason)
+        self.hold_line(board_reference, &mut self.lock(board_reference), session, burst, reason)
     }
 
     /// One line entered in the principal's queue — copied to its file where
@@ -697,11 +817,10 @@ impl Holds {
         if docs.is_empty() {
             return;
         }
-        if let Some(mut board_hold) = self.lock(board_reference) {
-            let ph = board_hold.principals.entry(session.facts.principal).or_insert_with(PrincipalHold::new);
-            for doc in docs {
-                ph.last_acked.insert(doc.to_string(), at);
-            }
+        let mut board_hold = self.lock(board_reference);
+        let ph = board_hold.principals.entry(session.facts.principal).or_insert_with(PrincipalHold::new);
+        for doc in docs {
+            ph.last_acked.insert(doc.to_string(), at);
         }
     }
 
@@ -709,7 +828,7 @@ impl Holds {
     /// board in resend order (§4b.1), from this principal's file and no
     /// other (P39); `store_halted` where P38 halted the file.
     pub fn lines(&self, board_reference: &str, session: &SessionEntry) -> Result<Value, Refusal> {
-        let Some(mut board_hold) = self.lock(board_reference) else { return Ok(Value::Array(Vec::new())) };
+        let mut board_hold = self.lock(board_reference);
         let ph = self.principal_hold(&mut board_hold, session);
         if let Custody::Halted { path, why } = &ph.custody {
             return Err(store_halted(path, *why));
@@ -717,15 +836,23 @@ impl Holds {
         Ok(Value::Array(ph.queue.lines().iter().map(line_json).collect()))
     }
 
-    /// `resolve(session, {held, act})` (§3c.4): `"drop"` on a line that awaits
-    /// the person's act marks it — and, for a refused run, every line held
-    /// `behind` it on that document — `done … dropped`; `"send"` re-enters the
-    /// automatic machine for that document. `no_such_held` / `not_resolvable`
-    /// else.
-    pub fn resolve(&self, board_reference: &str, session: &SessionEntry, k: u64, act: &str) -> Result<Value, Refusal> {
+    /// `resolve(session, {held, act})` (§3c.4, §4b.1), its refusals in this
+    /// order, the first that holds answering: `store_halted` where P38
+    /// halted the principal's file; `no_such_held` where no line of ordinal
+    /// `k` stands; `not_resolvable` where the line awaits no act of the
+    /// person's (P10), or `act` names none. `"drop"` marks the line — and,
+    /// for a refused run, every line held `behind` it on that document —
+    /// `done … dropped`; `"send"` re-arms the document's waiting lines
+    /// `behind`, back in the automatic machine, and answers at once
+    /// ([`Resolved::Rearmed`]): the probe that resends them is the caller's
+    /// to hand the board's worker.
+    pub fn resolve(&self, board_reference: &str, session: &SessionEntry, k: u64, act: &str) -> Result<Resolved, Refusal> {
         let doc = {
-            let Some(mut board_hold) = self.lock(board_reference) else { return Err(Refusal::shell(Name::NO_SUCH_HELD, json!({"held": k}))) };
+            let mut board_hold = self.lock(board_reference);
             let ph = self.principal_hold(&mut board_hold, session);
+            if let Custody::Halted { path, why } = &ph.custody {
+                return Err(store_halted(path, *why));
+            }
             let Some(line) = ph.queue.lines().iter().find(|l| l.k == k) else { return Err(Refusal::shell(Name::NO_SUCH_HELD, json!({"held": k}))) };
             // A line awaiting the person's act alone takes one (P10).
             if !awaits_act(line) {
@@ -736,20 +863,20 @@ impl Holds {
         match act {
             "drop" => {
                 self.drop_run(board_reference, session, k, &doc);
-                Ok(json!({}))
+                Ok(Resolved::Dropped)
             }
             "send" => {
                 // Re-enter the automatic machine (§3c.4, RULED "button then"):
                 // the document's waiting lines re-armed `behind`, the read run
-                // afresh, and the refusal faced again where it recurs.
+                // afresh at the next probe, and the refusal faced again where
+                // it recurs.
                 self.with_principal(board_reference, session.facts.principal, |ph| {
                     let ks: Vec<u64> = ph.queue.lines().iter().filter(|l| l.doc == doc && awaits_act(l)).map(|l| l.k).collect();
                     for k in ks {
                         self.remark_line(ph, k, Reason::of(cause::BEHIND, false));
                     }
                 });
-                self.probe(board_reference);
-                Ok(json!({}))
+                Ok(Resolved::Rearmed)
             }
             other => Err(Refusal::shell(Name::NOT_RESOLVABLE, json!({"held": k, "act": other}))),
         }
@@ -775,16 +902,17 @@ impl Holds {
         self.emit_held(board_reference, session, doc, count, state, None);
     }
 
-    /// THE PROBE (§3c.4), and the RESEND it lets run (§3c.5): reached by the
-    /// feed every [`PROBE_CADENCE`] and at its daemon-running tick,
-    /// `set_node_state(Running)` and `resolve(send)`. While a line stands at
+    /// THE PROBE (§3c.4), and the RESEND it lets run (§3c.5): reached on the
+    /// board's feed worker every [`PROBE_CADENCE`], at its daemon-running
+    /// tick and at `resolve(send)`'s hand-over, and by
+    /// `set_node_state(Running)`. While a line stands at
     /// a board whose own node is not stopped, `/health` is read; where the
     /// board answers and takes writes, each standing session of a principal
     /// with lines resends them.
     pub fn probe(&self, board_reference: &str) {
         // Gathered under the lock and dialed outside it, so `op` never waits
         // on a dead board's connect timeout.
-        let Some(slot) = self.slot(board_reference) else { return };
+        let slot = self.slot(board_reference);
         let due = {
             let board_hold = slot.lock();
             !board_hold.node_stopped && board_hold.principals.values().any(|ph| !ph.queue.lines().is_empty())
@@ -823,9 +951,7 @@ impl Holds {
     /// `writes.halted` as the feed's tick or the probe read it (§3c.4): every
     /// burst holds `halted` from the first `true` to the next `false`.
     pub fn note_health(&self, board_reference: &str, writes_halted: bool) {
-        if let Some(mut board_hold) = self.lock(board_reference) {
-            board_hold.writes_halted = writes_halted;
-        }
+        self.lock(board_reference).writes_halted = writes_halted;
     }
 
     /// THE RESEND for one session (§3c.5): each document with held lines read
@@ -980,14 +1106,16 @@ impl Holds {
     /// ONE held line sent as the `op` it is, under the session that stands —
     /// its attest composed NOW (§3c.2) — and settled by what the dial
     /// answered: an ack `done kept`; a hold-class answer or a REFUSED run
-    /// re-marked and faced; a refusal the table holds nowhere left standing
-    /// for the next wake, never `done`; the death signal left to the hand
-    /// that ends the session — the session that stands resends after its
-    /// read. Whether sending may go on to the document's next line.
+    /// re-marked and faced; a reissue-class answer counted against the line
+    /// and reissued at the next wake, so its third `durability` holds it; a
+    /// refusal the table holds nowhere left standing for the next wake,
+    /// never `done`; the death signal left to the hand that ends the
+    /// session — the session that stands resends after its read. Whether
+    /// sending may go on to the document's next line.
     fn send_line(&self, board_reference: &str, board: &Board, session: &SessionEntry, line: &HeldLine) -> bool {
         let principal = session.facts.principal;
-        let durability_seen = self.with_principal(board_reference, principal, |ph| ph.durability_seen.get(&line.k).copied()).flatten().unwrap_or(0);
-        match self.dial(board, session, &line.frame, durability_seen) {
+        let given = self.with_principal(board_reference, principal, |ph| ph.reissues.get(&line.k).copied()).flatten().unwrap_or_default();
+        match self.dial(board, session, &line.frame, given) {
             Dialed::Acked(ack) => {
                 self.note_ack(board_reference, session, &line.frame, &ack);
                 self.done(board_reference, principal, line.k, Done::Kept { at: acked_at(&ack) });
@@ -1002,11 +1130,14 @@ impl Holds {
                 self.emit_held(board_reference, session, &line.doc, self.count(board_reference, principal, &line.doc), state, Some(&said));
                 false
             }
+            Dialed::Reissue { kind, refusal } => {
+                // The rider's count (§3c.4), per line across its wakes: the
+                // third `durability` holds it.
+                self.with_principal(board_reference, principal, |ph| ph.reissues.entry(line.k).or_default().note(kind));
+                self.say(format!("held: line {} on {} was not taken ({refusal}); it is sent again at the next wake", line.k, line.doc));
+                false
+            }
             Dialed::Faced(refusal) => {
-                // The rider's count (§3c.4): the third `durability` holds.
-                if matches!(&refusal, Refusal::Board(r) if r.code == "durability") {
-                    self.with_principal(board_reference, principal, |ph| *ph.durability_seen.entry(line.k).or_insert(0) += 1);
-                }
                 self.say(format!("held: line {} on {} was not taken ({refusal}); it is sent again at the next wake", line.k, line.doc));
                 false
             }
@@ -1016,37 +1147,39 @@ impl Holds {
 
     /// ONE DIAL of a burst under `session` — a copy of `frame` attested by
     /// the session's key ([`SessionEntry::attest`]) — and its answer read ONCE
-    /// through [`classify`], `durability_seen` the rider's count for this
-    /// burst. A non-200 is read by its code, so `write_busy`'s 503 meets its
-    /// row. A read the attest needed that did not reach the board is held
-    /// like the dial's own failure, `sent: false`: the burst never left.
-    fn dial(&self, board: &Board, session: &SessionEntry, frame: &Value, durability_seen: u32) -> Dialed {
+    /// through [`classify`], `given` the reissues this burst has been given.
+    /// A non-200 is read by its code, so `write_busy`'s 503 meets its row. A
+    /// read the attest needed that did not reach the board is held like the
+    /// dial's own failure, `sent: false`: the burst never left; one that met
+    /// the death signal is the dial's own death signal.
+    fn dial(&self, board: &Board, session: &SessionEntry, frame: &Value, given: Reissues) -> Dialed {
         let mut frame = frame.clone();
         match session.attest(board, &self.store, &mut frame) {
             Ok(()) => {}
-            Err(Refusal::Unreachable(e)) => {
-                return match classify(DialOutcome::Dial(&e), 0) {
+            Err(Unattested::Closed) => return Dialed::Died,
+            Err(Unattested::Refused(Refusal::Unreachable(e))) => {
+                return match classify(DialOutcome::Dial(&e), given) {
                     Decision::Hold { cause, .. } => Dialed::Held(Reason::of(cause, false)),
                     _ => Dialed::Faced(Refusal::Unreachable(e)),
                 };
             }
-            Err(refusal) => return Dialed::Faced(refusal),
+            Err(Unattested::Refused(refusal)) => return Dialed::Faced(refusal),
         }
         match board.op(Some(&session.token), &frame) {
             Ok(Answer::Closed) => Dialed::Died,
             Ok(Answer::Document(v)) => match Rejection::of(&v) {
                 None => Dialed::Acked(v),
                 Some(r) => {
-                    let decision = classify(DialOutcome::Rejected { code: r.key(), disposition: v["disposition"].as_str().unwrap_or("") }, durability_seen);
+                    let decision = classify(DialOutcome::Rejected { code: r.key(), disposition: v["disposition"].as_str().unwrap_or("") }, given);
                     Dialed::refused(decision, &r.token(), &v, Refusal::from(r.refused(&v)))
                 }
             },
-            Err(Halt::Dial(e)) => match classify(DialOutcome::Dial(&e), 0) {
+            Err(Halt::Dial(e)) => match classify(DialOutcome::Dial(&e), given) {
                 Decision::Hold { cause, sent } => Dialed::Held(Reason::of(cause, sent)),
                 _ => Dialed::Faced(Refusal::Unreachable(e)),
             },
             Err(Halt::Refused(r)) => {
-                let decision = classify(DialOutcome::Rejected { code: &r.code, disposition: r.body["disposition"].as_str().unwrap_or("") }, durability_seen);
+                let decision = classify(DialOutcome::Rejected { code: &r.code, disposition: r.body["disposition"].as_str().unwrap_or("") }, given);
                 let (token, verdict) = (r.token(), r.body.clone());
                 Dialed::refused(decision, &token, &verdict, Refusal::Board(r))
             }
@@ -1092,7 +1225,7 @@ impl Holds {
         if let Err(DoneError::Unwritten(e)) = ph.queue.done(k, done) {
             self.say(format!("held: line {k} is settled, and its `done` could not be written ({e}); a reopen reads it as held, and its read decides it"));
         }
-        ph.durability_seen.remove(&k);
+        ph.reissues.remove(&k);
     }
 
     /// The document's head: its first standing line in `k` order.

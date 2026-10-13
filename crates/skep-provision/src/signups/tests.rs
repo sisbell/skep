@@ -1,8 +1,9 @@
 //! T10 — THE SIGN-UP FILE: a sign-up appends one line, the address and a
-//! date; a malformed address appends nothing. (The address rule, the state
-//! directory's door and the writer beneath the file are `statedir`'s suite;
-//! the page's DRAFT refusal and the log's silence about the address are the
-//! pages' and the flow's suites'.)
+//! date; a malformed address appends nothing; a file that cannot be written
+//! keeps nothing, each refusal an error saying which. (The address rule,
+//! the state directory's door and the writer beneath the file are
+//! `statedir`'s suite; the page's DRAFT refusal and the log's silence about
+//! the address are the pages' and the flow's suites'.)
 
 use std::fs;
 
@@ -47,4 +48,20 @@ fn a_malformed_address_appends_nothing() {
     let before = fs::read(state.file(SIGNUPS)).expect("the file");
     assert!(matches!(signups.append(b"a@b@c"), Err(SignUpRefused::NotAnAddress)));
     assert_eq!(fs::read(state.file(SIGNUPS)).expect("the file"), before);
+}
+
+/// EACH REFUSAL IS AN ERROR saying what kept nothing: no address by the
+/// rule; or the file's own failure — a directory gone from under it — which
+/// reaches the refusal through `?`, never as no address.
+#[test]
+fn each_refusal_is_an_error_saying_what_kept_nothing() {
+    let dir = Scratch::new();
+    let state = StateDir::open(&dir.path().join("state")).expect("the state directory");
+    let signups = SignUps::new(&state);
+    let refused: &dyn std::error::Error = &signups.append(b"not an address").expect_err("no address");
+    assert_eq!(refused.to_string(), "the field is no address by the rule");
+    fs::remove_dir(dir.path().join("state")).expect("the state directory removed");
+    let failed = signups.append(b"person@example.com").expect_err("no directory to write in");
+    assert!(matches!(failed, SignUpRefused::Io(_)), "{failed:?}");
+    assert!(failed.to_string().starts_with("the sign-up file: "), "{failed}");
 }

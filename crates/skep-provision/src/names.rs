@@ -34,6 +34,7 @@
 //! it named stands, live, and its mail — if it was sent — carries the reply.
 
 use std::collections::{BTreeSet, HashMap};
+use std::fmt;
 use std::io;
 use std::path::Path;
 
@@ -55,14 +56,14 @@ pub enum TakenBy {
     Container,
 }
 
-impl TakenBy {
-    /// What took the name, as the log says it.
-    pub fn said(self) -> &'static str {
-        match self {
+/// What took the name, as the log says it.
+impl fmt::Display for TakenBy {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
             TakenBy::Snippet => "its snippet stands",
             TakenBy::Volume => "a volume stands under it",
             TakenBy::Container => "a container stands under it",
-        }
+        })
     }
 }
 
@@ -157,10 +158,18 @@ pub struct AdmittedPost {
 }
 
 /// THE STATUS MAP: this run's posts by token, and every live name.
-#[derive(Debug, Clone, Default)]
+#[derive(Clone, Default)]
 pub struct StatusMap {
     posts: HashMap<String, AdmittedPost>,
     live: BTreeSet<Name>,
+}
+
+/// The posts' count and the live names: the map's keys are status tokens,
+/// never a log line's.
+impl fmt::Debug for StatusMap {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("StatusMap").field("posts", &self.posts.len()).field("live", &self.live).finish()
+    }
 }
 
 impl StatusMap {

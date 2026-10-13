@@ -14,9 +14,10 @@
 //! `--code` hands in — so a later mint can hand in a document's address in
 //! a random string's place, the format left open between the two — held to
 //! the URL's unreserved characters ([`code_ok`]), so it rides the invite
-//! link unescaped and a line splits on its spaces; the `invite` verb hands
-//! [`mint`] a code in that alphabet as its own value ([`InviteCode`]), and
-//! the address to mint to as an address by the rule. A post naming a code
+//! link unescaped and a line splits on its spaces; every door hands a code
+//! on in that alphabet as its own value ([`InviteCode`]) — the `invite`
+//! verb's `--code` and the claim post's field alike — and the address to
+//! mint to as an address by the rule. A post naming a code
 //! the file does not hold, or holds spent, is refused (the strings table's
 //! DRAFT row); a code is SPENT on the first live route for a name and NOT
 //! by a failed post, so the person may post again. The code is NEVER
@@ -111,15 +112,18 @@ impl Invite {
 /// THE CODE's ALPHABET: 1 to [`MAX_CODE_BYTES`] of the URL's unreserved
 /// characters — letters, digits, `-`, `.`, `_`, `~` — so the code rides the
 /// invite link as it is and the file's line splits on its spaces.
-pub fn code_ok(code: &str) -> bool {
+fn code_ok(code: &str) -> bool {
     !code.is_empty() && code.len() <= MAX_CODE_BYTES && code.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'.' | b'_' | b'~'))
 }
 
-/// A CODE IN THE ALPHABET, the value the `invite` verb hands [`mint`]:
-/// [`InviteCode::parse`] is the only way to one, so a code of this type rides
-/// the invite link as it is and keeps the file's line splitting on its
-/// spaces. Its `Debug` shows none of it: a code is never logged.
-#[derive(Clone, PartialEq, Eq)]
+/// A CODE IN THE ALPHABET, the value every door hands on — `--code` to
+/// [`mint`], the claim post's field to [`lookup`] and [`spend`] — and
+/// [`mint`]'s answer: [`InviteCode::parse`] is the only way to one, so a code
+/// of this type rides the invite link as it is and keeps the file's line
+/// splitting on its spaces, and no other string of a code's shape — a status
+/// token among them — can stand in for one. Its `Debug` shows none of it: a
+/// code is never logged.
+#[derive(Clone, PartialEq, Eq, Hash)]
 pub struct InviteCode(String);
 
 impl InviteCode {
@@ -166,8 +170,8 @@ fn read_lines(dir: &StateDir) -> io::Result<Vec<Line>> {
 }
 
 /// THE LOOKUP: the invite `code` names, compared whole, as the file stands.
-pub fn lookup(dir: &StateDir, code: &str) -> io::Result<Option<Invite>> {
-    Ok(read_all(dir)?.into_iter().find(|i| i.code == code))
+pub fn lookup(dir: &StateDir, code: &InviteCode) -> io::Result<Option<Invite>> {
+    Ok(read_all(dir)?.into_iter().find(|i| i.code == code.as_str()))
 }
 
 /// Why `invite` mints nothing.
@@ -188,26 +192,35 @@ impl fmt::Display for MintRefused {
     }
 }
 
+impl std::error::Error for MintRefused {}
+
+/// The file's own failure — a lock, a read or a rewrite that could not be
+/// made — as `?` meets it.
+impl From<io::Error> for MintRefused {
+    fn from(e: io::Error) -> MintRefused {
+        MintRefused::Io(e)
+    }
+}
+
 /// THE `invite` VERB's WORK: one invite minted to `address` — under the
 /// code given, or a fresh one — appended `issued` today, the file rewritten
-/// whole; the code answered, for the one DATA line. Both values come in
-/// their own types — an address by the rule, a code in the alphabet — so
-/// nothing reaches the file that its line cannot carry.
-pub fn mint(dir: &StateDir, address: &MailAddress, code: Option<&InviteCode>) -> Result<String, MintRefused> {
+/// whole; the code answered as its own value, for the one DATA line. Both
+/// values come in their own types — an address by the rule, a code in the
+/// alphabet — so nothing reaches the file that its line cannot carry.
+pub fn mint(dir: &StateDir, address: &MailAddress, code: Option<InviteCode>) -> Result<InviteCode, MintRefused> {
     let code = match code {
-        Some(code) => code.as_str().to_owned(),
-        None => unguessable().map_err(MintRefused::Io)?,
+        Some(code) => code,
+        None => InviteCode::parse(&unguessable()?).expect("an unguessable value, 32 lowercase hex digits, is in the alphabet"),
     };
     update(
         dir,
         |lines| {
-            if invites(lines).any(|i| i.code == code) {
+            if invites(lines).any(|i| i.code == code.as_str()) {
                 return Err(MintRefused::Duplicate);
             }
-            lines.push(Line::Invite(Invite { code: code.clone(), address: address.as_str().to_owned(), state: InviteState::Issued { date: today() } }));
+            lines.push(Line::Invite(Invite { code: code.as_str().to_owned(), address: address.as_str().to_owned(), state: InviteState::Issued { date: today() } }));
             Ok(())
         },
-        MintRefused::Io,
         &|| Ok(()),
     )?;
     Ok(code)
@@ -225,22 +238,21 @@ fn invites(lines: &mut [Line]) -> impl Iterator<Item = &mut Invite> {
 /// board's route stands, and never otherwise. `false` where the file holds
 /// no such code issued (a hand edit since the post); the board stands
 /// either way.
-pub fn spend(dir: &StateDir, code: &str, name: &Name) -> io::Result<bool> {
+pub fn spend(dir: &StateDir, code: &InviteCode, name: &Name) -> io::Result<bool> {
     spend_with(dir, code, name, &|| Ok(()))
 }
 
 /// [`spend`] with the writer's seam between the temp file and the rename.
-fn spend_with(dir: &StateDir, code: &str, name: &Name, between: &dyn Fn() -> io::Result<()>) -> io::Result<bool> {
+fn spend_with(dir: &StateDir, code: &InviteCode, name: &Name, between: &dyn Fn() -> io::Result<()>) -> io::Result<bool> {
     update(
         dir,
         |lines| {
-            let Some(invite) = invites(lines).find(|i| i.code == code && i.issued()) else {
+            let Some(invite) = invites(lines).find(|i| i.code == code.as_str() && i.issued()) else {
                 return Ok(false);
             };
             invite.state = InviteState::Spent { name: name.to_string(), date: today() };
             Ok(true)
         },
-        |e| e,
         between,
     )
 }
@@ -248,11 +260,12 @@ fn spend_with(dir: &StateDir, code: &str, name: &Name, between: &dyn Fn() -> io:
 /// ONE CHANGE to the file, made whole: the lock file held exclusively, the
 /// file's lines read, `change` applied, and — where it answers `Ok` — every
 /// line written back through the state files' writer, a line of another
-/// shape as it stood.
-fn update<T, E>(dir: &StateDir, change: impl FnOnce(&mut Vec<Line>) -> Result<T, E>, io_err: impl Fn(io::Error) -> E, between: &dyn Fn() -> io::Result<()>) -> Result<T, E> {
-    let lock = OpenOptions::new().create(true).truncate(false).write(true).open(dir.file(INVITES_LOCK)).map_err(&io_err)?;
-    lock.lock().map_err(&io_err)?;
-    let mut lines = read_lines(dir).map_err(&io_err)?;
+/// shape as it stood. The file's own failure reaches the caller's `E`
+/// through its `From<io::Error>`.
+fn update<T, E: From<io::Error>>(dir: &StateDir, change: impl FnOnce(&mut Vec<Line>) -> Result<T, E>, between: &dyn Fn() -> io::Result<()>) -> Result<T, E> {
+    let lock = OpenOptions::new().create(true).truncate(false).write(true).open(dir.file(INVITES_LOCK))?;
+    lock.lock()?;
+    let mut lines = read_lines(dir)?;
     let answer = change(&mut lines)?;
     let text: String = lines
         .iter()
@@ -261,7 +274,7 @@ fn update<T, E>(dir: &StateDir, change: impl FnOnce(&mut Vec<Line>) -> Result<T,
             Line::Other(text) => format!("{text}\n"),
         })
         .collect();
-    write_whole_with(&dir.file(INVITES), text.as_bytes(), between).map_err(&io_err)?;
+    write_whole_with(&dir.file(INVITES), text.as_bytes(), between)?;
     // The lock is the open file's: closing it releases it.
     drop(lock);
     Ok(answer)

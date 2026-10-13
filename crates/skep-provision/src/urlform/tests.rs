@@ -1,6 +1,7 @@
 //! T2 — THE FORM's DECODE: the fields in order, `+` a space, `%XX` the
-//! byte, a bad escape refused, the first of a field given twice, a CRLF
-//! kept as given, a value kept as bytes.
+//! byte, a bad escape refused — an error saying where — the first of a
+//! field given twice, a CRLF kept as given, a value kept as bytes, and none
+//! of them in the form's `Debug`.
 
 use super::*;
 
@@ -26,7 +27,8 @@ fn a_percent_without_two_hex_digits_is_refused_at_its_offset() {
         assert_eq!(decode(body), Err(BadEscape { at }), "{}", String::from_utf8_lossy(body));
     }
     assert_eq!(decode(b"a=%7b%7B").expect("both cases").get("a"), Some(&b"{{"[..]));
-    assert_eq!(BadEscape { at: 6 }.to_string(), "the `%` at byte 6 is not followed by two hex digits");
+    let refused: &dyn std::error::Error = &BadEscape { at: 6 };
+    assert_eq!(refused.to_string(), "the `%` at byte 6 is not followed by two hex digits");
 }
 
 /// T2: a field given twice yields THE FIRST, both kept in the order sent.
@@ -63,4 +65,11 @@ fn the_split_at_its_edges() {
 #[test]
 fn a_value_stays_bytes() {
     assert_eq!(decode(b"record=%FF%FE").expect("a form").get("record"), Some(&[0xff_u8, 0xfe][..]));
+}
+
+/// A form's `Debug` shows the count of its fields alone: a value may be a
+/// record, an invite code or an address.
+#[test]
+fn a_forms_debug_shows_none_of_its_values() {
+    assert_eq!(format!("{:?}", decode(b"record=%7B%7D&invite=c0de").expect("a form")), "Form { fields: 2 }");
 }

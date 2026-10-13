@@ -10,7 +10,8 @@
 //! taking, going live, letting a code go and failing do. Beside them, the
 //! flow's halves of
 //! T8 (two posts on one name; a fifth past the queue), T9 (a spent, an
-//! unknown and a held code refused; no code in the log), T10 (a sign-up,
+//! unknown and a held code refused; a live board's code let go of after its
+//! spend; no code in the log), T10 (a sign-up,
 //! its address in no log line) and T12 (no send before live; an outage
 //! with the status live throughout). THE POOL's FENCE: T15 (two workers
 //! make two names at once, and one worker does not), T16 (a post answers
@@ -171,7 +172,7 @@ fn until<T>(what: &str, mut done: impl FnMut() -> Option<T>) -> T {
 
 impl Rig {
     /// One invite minted to the person's address.
-    fn invite(&self) -> String {
+    fn invite(&self) -> InviteCode {
         mint(&self.state, &MailAddress::parse("person@example.com").expect("an address"), None).expect("minted")
     }
 
@@ -181,8 +182,8 @@ impl Rig {
     }
 
     /// A post admitted, its token the probe's.
-    fn admitted(&self, name: &str, code: &str) -> String {
-        let token = self.post(name, &record(true), code).unwrap_or_else(|r| panic!("{name}: refused {r:?}: {:?}", self.log()));
+    fn admitted(&self, name: &str, code: &InviteCode) -> String {
+        let token = self.post(name, &record(true), code.as_str()).unwrap_or_else(|r| panic!("{name}: refused {r:?}: {:?}", self.log()));
         *self.probe.token.lock().unwrap() = Some(token.clone());
         token
     }
@@ -195,7 +196,7 @@ impl Rig {
         self.boards.join(format!("{name}.caddy"))
     }
 
-    fn issued(&self, code: &str) -> bool {
+    fn issued(&self, code: &InviteCode) -> bool {
         lookup(&self.state, code).expect("read").expect("held").issued()
     }
 
@@ -461,7 +462,7 @@ fn each_failed_step_removes_what_was_made_and_nothing_else() {
         let log = rig.log().join("\n");
         assert!(log.contains("alice: FAILED at "), "{}: {log}", case.what);
         assert!(!log.contains("INCOMPLETE"), "{}: {log}", case.what);
-        assert!(!log.contains(&code) && !log.contains(&token), "{}", case.what);
+        assert!(!log.contains(code.as_str()) && !log.contains(&token), "{}", case.what);
     }
 }
 
@@ -491,7 +492,7 @@ fn a_failed_cleanup_call_leaves_the_name_taken_and_is_logged() {
     assert!(log.contains("alice: cleanup: volume_rm: exit 0"), "the next removal still made: {log}");
     assert!(log.contains("alice: cleanup: INCOMPLETE — the name stands"), "{log}");
     let second = rig.invite();
-    assert_eq!(rig.post("alice", &record(true), &second), Err(Refusal::Name));
+    assert_eq!(rig.post("alice", &record(true), second.as_str()), Err(Refusal::Name));
     assert!(rig.log().join("\n").contains("alice: a post refused: taken — a container stands under it"));
     rig.fake.assert_done();
 }
@@ -504,7 +505,7 @@ fn a_second_post_on_one_name_meets_d4_at_the_post() {
     let first = rig.invite();
     rig.admitted("alice", &first);
     let second = rig.invite();
-    assert_eq!(rig.post("ALICE", &record(true), &second), Err(Refusal::Name));
+    assert_eq!(rig.post("ALICE", &record(true), second.as_str()), Err(Refusal::Name));
     rig.fake.assert_done();
     assert!(rig.issued(&second));
 }
@@ -520,7 +521,7 @@ fn a_fifth_post_past_the_queue_meets_d8_and_leaves_no_entry() {
         rig.admitted(name, &code);
     }
     let fifth = rig.invite();
-    assert_eq!(rig.post("erin", &record(true), &fifth), Err(Refusal::Busy));
+    assert_eq!(rig.post("erin", &record(true), fifth.as_str()), Err(Refusal::Busy));
     rig.fake.assert_done();
     let book = rig.service.book();
     assert_eq!(book.queue.len(), QUEUE_DEPTH);
@@ -542,41 +543,42 @@ fn a_fifth_post_past_the_queue_meets_d8_and_leaves_no_entry() {
 #[test]
 fn the_book_keeps_its_own_rules() {
     let name = |n: &str| Name::parse(n.as_bytes()).expect("a name");
+    let invite_code = |c: &str| InviteCode::parse(c).expect("a code");
     let job = |n: &str, code: &str| Job {
         token: format!("token-{n}"),
         name: name(n),
         record: crate::record::admit(record(true).as_bytes()).expect("a record"),
-        code: code.to_owned(),
+        code: invite_code(code),
         address: "person@example.com".to_owned(),
     };
     let state = |book: &Book, n: &str| book.map.post(&format!("token-{n}")).map(|p| p.state);
     let mut book = Book::new(StatusMap::default());
-    assert_eq!(book.blocks(&name("alice"), "c1"), None, "nothing in flight");
+    assert_eq!(book.blocks(&name("alice"), &invite_code("c1")), None, "nothing in flight");
     for (at, (n, code)) in [("alice", "c1"), ("bob", "c2"), ("carol", "c3"), ("dave", "c4")].into_iter().enumerate() {
         assert_eq!(book.admit(job(n, code)), at + 1, "the posts now waiting");
         assert_eq!(state(&book, n), Some(State::Queued));
     }
-    assert_eq!(book.blocks(&name("erin"), "c5"), Some(Blocked::QueueFull));
-    assert_eq!(book.blocks(&name("alice"), "c1"), Some(Blocked::QueueFull), "the queue before the code and the name");
+    assert_eq!(book.blocks(&name("erin"), &invite_code("c5")), Some(Blocked::QueueFull));
+    assert_eq!(book.blocks(&name("alice"), &invite_code("c1")), Some(Blocked::QueueFull), "the queue before the code and the name");
     let alice = book.take().expect("a waiting post");
     assert_eq!(alice.name, name("alice"), "the oldest post first");
     assert_eq!(state(&book, "alice"), Some(State::Running));
-    assert_eq!(book.blocks(&name("erin"), "c5"), None, "three waiting");
-    assert_eq!(book.blocks(&name("alice"), "c1"), Some(Blocked::CodeHeld), "the code before the name");
-    assert_eq!(book.blocks(&name("alice"), "c5"), Some(Blocked::NameHeld));
+    assert_eq!(book.blocks(&name("erin"), &invite_code("c5")), None, "three waiting");
+    assert_eq!(book.blocks(&name("alice"), &invite_code("c1")), Some(Blocked::CodeHeld), "the code before the name");
+    assert_eq!(book.blocks(&name("alice"), &invite_code("c5")), Some(Blocked::NameHeld));
     book.went_live(&alice.token);
     assert_eq!(state(&book, "alice"), Some(State::Live));
     assert!(book.map.live().contains(&name("alice")));
-    assert_eq!(book.blocks(&name("alice"), "c5"), None, "a live name's truth is its snippet's");
-    assert_eq!(book.blocks(&name("erin"), "c1"), Some(Blocked::CodeHeld), "held until its spend is written");
+    assert_eq!(book.blocks(&name("alice"), &invite_code("c5")), None, "a live name's truth is its snippet's");
+    assert_eq!(book.blocks(&name("erin"), &invite_code("c1")), Some(Blocked::CodeHeld), "held until its spend is written");
     book.release(&alice.code);
-    assert_eq!(book.blocks(&name("erin"), "c1"), None);
+    assert_eq!(book.blocks(&name("erin"), &invite_code("c1")), None);
     let bob = book.take().expect("a waiting post");
     assert_eq!(state(&book, "bob"), Some(State::Running));
     book.failed(&bob);
     assert_eq!(state(&book, "bob"), Some(State::Failed));
-    assert_eq!(book.blocks(&name("erin"), "c2"), None, "a failed post's code let go of at once");
-    assert_eq!(book.blocks(&name("bob"), "c5"), None, "and its name");
+    assert_eq!(book.blocks(&name("erin"), &invite_code("c2")), None, "a failed post's code let go of at once");
+    assert_eq!(book.blocks(&name("bob"), &invite_code("c5")), None, "and its name");
     assert!(!book.map.live().contains(&name("bob")));
     assert_eq!(book.queue.len(), 2);
 }
@@ -590,17 +592,17 @@ fn the_posts_refusals_before_any_docker_call() {
     let rig = rig(&inspects("alice"), Some(Vec::new()));
     let code = rig.invite();
     rig.admitted("alice", &code);
-    assert_eq!(rig.post("bob", &record(true), &code), Err(Refusal::Invite), "held by the post in flight");
+    assert_eq!(rig.post("bob", &record(true), code.as_str()), Err(Refusal::Invite), "held by the post in flight");
     assert_eq!(rig.post("bob", &record(true), "0123456789abcdef0123456789abcdef"), Err(Refusal::Invite), "unknown");
     assert_eq!(rig.post("bob", &record(true), "not a code"), Err(Refusal::Invite), "another form");
     let spent = rig.invite();
     crate::invites::spend(&rig.state, &spent, &Name::parse(b"carol").expect("a name")).expect("spent");
-    assert_eq!(rig.post("bob", &record(true), &spent), Err(Refusal::Invite), "spent");
+    assert_eq!(rig.post("bob", &record(true), spent.as_str()), Err(Refusal::Invite), "spent");
     let fresh = rig.invite();
-    assert_eq!(rig.post("bob", "{\"type\":\"skep-enroll\"}", &fresh), Err(Refusal::Record));
+    assert_eq!(rig.post("bob", "{\"type\":\"skep-enroll\"}", fresh.as_str()), Err(Refusal::Record));
     let preview = encode_enroll(&[Enrollment::new(PublicKey::parse(ALG_FNDSA512_PREVIEW_ED25519, &"9f".repeat(FNDSA512_PREVIEW_ED25519_KEY_LEN)).expect("a key"), true, None).expect("no label")]);
-    assert_eq!(rig.post("bob", &preview, &fresh), Err(Refusal::Preview));
-    assert_eq!(rig.post("b_b", &record(true), &fresh), Err(Refusal::Name));
+    assert_eq!(rig.post("bob", &preview, fresh.as_str()), Err(Refusal::Preview));
+    assert_eq!(rig.post("b_b", &record(true), fresh.as_str()), Err(Refusal::Name));
     rig.fake.assert_done();
     assert!(rig.issued(&fresh));
     let log = rig.log().join("\n");
@@ -608,6 +610,30 @@ fn the_posts_refusals_before_any_docker_call() {
     for never in [code.as_str(), spent.as_str(), fresh.as_str(), "skep-enroll", "9f9f", "b_b"] {
         assert!(!log.contains(never), "the log carries {never:?}: {log}");
     }
+}
+
+/// T9: A LIVE BOARD's CODE IS LET GO OF once its spend is written: the book
+/// holds it no more, and a post naming it again is refused as spent — the
+/// file's word — never as held by a post in flight.
+#[test]
+fn a_live_boards_code_is_let_go_of_and_refused_as_spent() {
+    let script = [
+        inspects("alice"),
+        inspects("alice"),
+        to_the_serving_run(),
+        line("run_serving", Some("alice"), 0, "", ""),
+        line("health", Some("alice"), 0, PAIRED, ""),
+        line("caddy_reload", None, 0, "", ""),
+    ]
+    .concat();
+    let rig = rig(&script, None);
+    let code = rig.invite();
+    rig.admitted("alice", &code);
+    assert!(rig.service.run_next());
+    assert!(!rig.service.book().codes.contains(&code), "the code held past its spend");
+    assert_eq!(rig.post("bob", &record(true), code.as_str()), Err(Refusal::Invite));
+    assert!(rig.logged("a post refused: its invite code is not one the file holds issued"), "{:?}", rig.log());
+    rig.fake.assert_done();
 }
 
 /// T10: A SIGN-UP through the service is kept and logged — its address in
@@ -737,7 +763,7 @@ fn a_post_answers_at_once_while_a_worker_is_paused_inside_a_step() {
     let started = Instant::now();
     thread::spawn(move || {
         let bob = record(true);
-        let _ = tx.send(service.admit(&Post { name: b"bob", record: bob.as_bytes(), invite: code.as_bytes() }));
+        let _ = tx.send(service.admit(&Post { name: b"bob", record: bob.as_bytes(), invite: code.as_str().as_bytes() }));
     });
     let answered = rx.recv_timeout(Duration::from_secs(5)).expect("the post waited on the provisioning");
     let bob = answered.unwrap_or_else(|r| panic!("bob refused {r:?}: {:?}", rig.log()));
@@ -767,13 +793,13 @@ fn two_workers_never_both_take_a_job_for_one_name() {
     let alice = rig.admitted("alice", &rig.invite());
     gate.entered(1);
     let again = rig.invite();
-    assert_eq!(rig.post("alice", &record(true), &again), Err(Refusal::Name));
+    assert_eq!(rig.post("alice", &record(true), again.as_str()), Err(Refusal::Name));
     assert!(rig.issued(&again));
     assert!(rig.logged("alice: a post refused: a post in flight holds the name"), "{:?}", rig.log());
     let mut tokens = vec![alice];
     for name in &names[1..] {
         tokens.push(rig.admitted(name, &rig.invite()));
-        assert_eq!(rig.post(name, &record(true), &rig.invite()), Err(Refusal::Name), "{name} posted twice");
+        assert_eq!(rig.post(name, &record(true), rig.invite().as_str()), Err(Refusal::Name), "{name} posted twice");
     }
     gate.open();
     until("all four live", || tokens.iter().all(|t| rig.live(t)).then_some(()));

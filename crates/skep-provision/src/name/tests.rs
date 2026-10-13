@@ -1,7 +1,7 @@
 //! T3 — THE NAME's GRAMMAR: the label rule after the lowercase, each
-//! refusal for its reason; a name read back as this service wrote it,
-//! never lowercased; and the host and the public origin a name stands at
-//! under a suffix.
+//! refusal for its reason — an error saying it; a name read back as this
+//! service wrote it, never lowercased; and the host and the public origin a
+//! name stands at under a suffix.
 
 use super::*;
 
@@ -24,6 +24,14 @@ fn the_name_is_one_lowercase_label_of_letters_digits_and_hyphens() {
     assert_eq!(Name::parse(b"a b"), Err(NameRefused::NotALabel));
     assert_eq!(Name::parse("caf\u{e9}".as_bytes()), Err(NameRefused::NotALabel));
     assert_eq!(Name::parse(&[b'a', 0xff]), Err(NameRefused::NotALabel));
+}
+
+/// EACH REFUSAL IS AN ERROR saying its reason — and never the field, which
+/// may hold anything a person typed.
+#[test]
+fn each_refusal_is_an_error_saying_its_reason() {
+    let said: Vec<String> = [NameRefused::Empty, NameRefused::TooLong, NameRefused::NotALabel, NameRefused::Hyphen].iter().map(|refused| (refused as &dyn std::error::Error).to_string()).collect();
+    assert_eq!(said, ["the name is empty", "the name is longer than one label's 63 bytes", "the name holds a character outside letters, digits and hyphens", "the name begins or ends with a hyphen"]);
 }
 
 /// A NAME AS THIS SERVICE WROTE IT: `alice` and an inner hyphen read back

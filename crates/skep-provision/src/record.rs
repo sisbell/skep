@@ -80,6 +80,17 @@ impl RecordRefused {
     }
 }
 
+/// The one word the log carries, and only it: `Display` is a second entry
+/// to [`RecordRefused::token`], never a second vocabulary — as
+/// `PayloadError`'s is to its own.
+impl fmt::Display for RecordRefused {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.token())
+    }
+}
+
+impl std::error::Error for RecordRefused {}
+
 /// THE RECORD's ADMISSION: the field trimmed as the hosted walk trims it,
 /// `parse_enroll` on the bytes, then H2 — every entry the production kind —
 /// and the anchorless fact.

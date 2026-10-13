@@ -4,7 +4,8 @@
 //! the first that stands; the map rebuilt from a snippet directory holding
 //! two live names; a token the map does not hold answering nothing; a post
 //! gone live joining the live names; a post in flight holding its name; an
-//! unguessable value's form;
+//! unguessable value's form; what took a name, as the log says it; the
+//! map's `Debug` showing no token;
 //! and the labelled volumes sorted against the snippet directory — half-made,
 //! routed, or under no name of the grammar. (The two posts on one name, the
 //! fifth past the queue and the sweep are the flow's — `flow/tests.rs`.)
@@ -125,4 +126,21 @@ fn an_unguessable_value_is_32_lowercase_hex_digits() {
     assert_eq!(a.len(), 32);
     assert!(a.bytes().all(|c| c.is_ascii_digit() || (b'a'..=b'f').contains(&c)), "{a}");
     assert_ne!(a, b);
+}
+
+/// What took a name, as the log says it.
+#[test]
+fn what_took_a_name_as_the_log_says_it() {
+    let said = [TakenBy::Snippet, TakenBy::Volume, TakenBy::Container].map(|by| by.to_string());
+    assert_eq!(said, ["its snippet stands", "a volume stands under it", "a container stands under it"]);
+}
+
+/// The map's `Debug` shows how many posts it holds and the live names —
+/// never a status token, the key it holds a post by.
+#[test]
+fn the_maps_debug_shows_no_token() {
+    let mut map = StatusMap::default();
+    map.admit("t0k3n".into(), name("alice"), true);
+    map.set("t0k3n", State::Live);
+    assert_eq!(format!("{map:?}"), "StatusMap { posts: 1, live: {Name(\"alice\")} }");
 }

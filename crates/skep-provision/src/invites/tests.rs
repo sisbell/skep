@@ -1,13 +1,14 @@
 //! T9 — THE INVITE FILE: a mint writes one `issued` line and answers its
 //! code; `--code` is used verbatim; the code's alphabet, and its value
-//! admitting exactly the codes the alphabet does; a duplicate refused; a
-//! lookup before and after the spend answers issued, then spent; a spent or
-//! an unknown code is not issued; the file is rewritten whole — a failure
-//! between the write and the rename leaves it as it was — and a line of
-//! another shape survives. (The invite link the code rides is the pages'
-//! suite's; a failed flow leaving the line issued, a post refused on a spent
-//! or unknown code, and the code in no log line are the flow's suite's and
-//! the binary's.)
+//! admitting exactly the codes the alphabet does; a duplicate refused, and a
+//! file that cannot be reached refused as its own failure, each an error
+//! saying which; a lookup before and after the spend answers issued, then
+//! spent; a spent or an unknown code is not issued; the file is rewritten
+//! whole — a failure between the write and the rename leaves it as it was —
+//! and a line of another shape survives. (The invite link the code rides is
+//! the pages' suite's; a failed flow leaving the line issued, a post refused
+//! on a spent or unknown code, and the code in no log line are the flow's
+//! suite's and the binary's.)
 
 use std::fs;
 
@@ -37,10 +38,10 @@ fn a_mint_writes_one_issued_line() {
     let dir = Scratch::new();
     let state = state(&dir);
     let code = mint(&state, &address("person@example.com"), None).expect("minted");
-    assert_eq!(code.len(), 32);
-    assert!(code_ok(&code));
+    assert_eq!(code.as_str().len(), 32);
+    assert!(code_ok(code.as_str()));
     let text = fs::read_to_string(state.file(INVITES)).expect("the file");
-    assert_eq!(text, format!("{code} person@example.com issued {}\n", today()));
+    assert_eq!(text, format!("{} person@example.com issued {}\n", code.as_str(), today()));
     assert!(state.file(INVITES_LOCK).exists(), "the lock file stands beside it");
 }
 
@@ -50,11 +51,11 @@ fn a_mint_writes_one_issued_line() {
 fn a_given_code_is_used_verbatim() {
     let dir = Scratch::new();
     let state = state(&dir);
-    assert_eq!(mint(&state, &address("person@example.com"), Some(&invite_code("1.1.0.1.0.3"))).expect("minted"), "1.1.0.1.0.3");
-    let invite = lookup(&state, "1.1.0.1.0.3").expect("read").expect("held");
+    assert_eq!(mint(&state, &address("person@example.com"), Some(invite_code("1.1.0.1.0.3"))).expect("minted").as_str(), "1.1.0.1.0.3");
+    let invite = lookup(&state, &invite_code("1.1.0.1.0.3")).expect("read").expect("held");
     assert_eq!(invite.address, "person@example.com");
     assert!(invite.issued());
-    assert!(lookup(&state, "1.1.0.1.0").expect("read").is_none(), "compared whole, never by prefix");
+    assert!(lookup(&state, &invite_code("1.1.0.1.0")).expect("read").is_none(), "compared whole, never by prefix");
 }
 
 /// THE CODE's ALPHABET: a space, `&`, `/`, the empty code and one byte past
@@ -83,9 +84,25 @@ fn the_codes_alphabet() {
 fn a_mint_refuses_a_duplicate() {
     let dir = Scratch::new();
     let state = state(&dir);
-    mint(&state, &address("person@example.com"), Some(&invite_code("abc"))).expect("minted");
-    assert!(matches!(mint(&state, &address("other@example.com"), Some(&invite_code("abc"))), Err(MintRefused::Duplicate)));
+    mint(&state, &address("person@example.com"), Some(invite_code("abc"))).expect("minted");
+    let refused = mint(&state, &address("other@example.com"), Some(invite_code("abc"))).expect_err("a duplicate");
+    assert!(matches!(refused, MintRefused::Duplicate), "{refused:?}");
+    let said: &dyn std::error::Error = &refused;
+    assert_eq!(said.to_string(), "the invite file already holds that code");
     assert_eq!(read_all(&state).expect("read").len(), 1);
+}
+
+/// A FILE THAT CANNOT BE REACHED refuses the mint as the file's own failure
+/// — the lock, the read or the rewrite reaching the refusal through `?` —
+/// never as a duplicate.
+#[test]
+fn a_mint_over_a_directory_gone_is_the_files_failure() {
+    let dir = Scratch::new();
+    let state = state(&dir);
+    fs::remove_dir(dir.path().join("state")).expect("the state directory removed");
+    let refused = mint(&state, &address("person@example.com"), None).expect_err("no directory to write in");
+    assert!(matches!(refused, MintRefused::Io(_)), "{refused:?}");
+    assert!(refused.to_string().starts_with("the invite file: "), "{refused}");
 }
 
 /// T9: A LOOKUP BEFORE AND AFTER THE SPEND answers issued, then spent by
@@ -102,11 +119,11 @@ fn a_code_answers_issued_then_spent() {
     assert_eq!(spent.state, InviteState::Spent { name: "alice".into(), date: today() });
     assert!(!spent.issued());
     assert!(!spend(&state, &code, &alice()).expect("read"), "spent once");
-    assert!(!spend(&state, "unknown", &alice()).expect("read"), "an unknown code");
-    assert!(lookup(&state, "unknown").expect("read").is_none());
+    assert!(!spend(&state, &invite_code("unknown"), &alice()).expect("read"), "an unknown code");
+    assert!(lookup(&state, &invite_code("unknown")).expect("read").is_none());
     assert!(lookup(&state, &other).expect("read").expect("held").issued(), "the other invite untouched");
     let text = fs::read_to_string(state.file(INVITES)).expect("the file");
-    assert_eq!(text.lines().next(), Some(format!("{code} person@example.com spent alice {}", today()).as_str()));
+    assert_eq!(text.lines().next(), Some(format!("{} person@example.com spent alice {}", code.as_str(), today()).as_str()));
 }
 
 /// T9: THE FILE IS REWRITTEN WHOLE — a failure between the write and the

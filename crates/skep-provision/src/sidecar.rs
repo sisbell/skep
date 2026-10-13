@@ -30,6 +30,8 @@
 //! AND SURFACE, the topology's one halt among them; 1 the board refused; 4
 //! transport — the daemon not yet listening, which the flow retries.
 
+use std::fmt;
+
 use crate::docker::DIALED_ORIGIN;
 use crate::process::Exit;
 
@@ -89,20 +91,22 @@ pub enum Failure {
     Shape(String),
 }
 
-impl Failure {
-    /// The failure as the log says it.
-    pub fn said(&self) -> String {
+/// The failure as the log says it.
+impl fmt::Display for Failure {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Failure::Usage => "exit 2 (a usage refusal)".to_owned(),
-            Failure::Halt => "exit 3 (a halt)".to_owned(),
-            Failure::Refused => "exit 1 (the board refused)".to_owned(),
-            Failure::Transport => "exit 4 (transport)".to_owned(),
-            Failure::Exit(Some(code)) => format!("exit {code}"),
-            Failure::Exit(None) => "ended by a signal".to_owned(),
-            Failure::Shape(why) => format!("exit 0 and {why}"),
+            Failure::Usage => f.write_str("exit 2 (a usage refusal)"),
+            Failure::Halt => f.write_str("exit 3 (a halt)"),
+            Failure::Refused => f.write_str("exit 1 (the board refused)"),
+            Failure::Transport => f.write_str("exit 4 (transport)"),
+            Failure::Exit(Some(code)) => write!(f, "exit {code}"),
+            Failure::Exit(None) => f.write_str("ended by a signal"),
+            Failure::Shape(why) => write!(f, "exit 0 and {why}"),
         }
     }
 }
+
+impl std::error::Error for Failure {}
 
 /// THE READ: the exit code mapped, and an exit-0 stdout held to the six
 /// lines or the one.

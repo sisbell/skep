@@ -1583,8 +1583,8 @@ each naming only those above it:
   is taken in as, and the date.
 - `signups.rs` the sign-up file.
 - `invites.rs` the invite file — mint, look up, spend — under a lock file
-  across processes; the code's alphabet, and `InviteCode`, the value the
-  `invite` verb hands the mint.
+  across processes; the code's alphabet, and `InviteCode`, the one value a
+  code is taken in as.
 - `strings.rs` the strings table: every sentence a person reads, each row
   naming its id.
 - `pages.rs` the four pages' HTML and each request's dispatch, by method
@@ -1658,18 +1658,22 @@ Rules that hold across its files:
   sets the child's streams: the input on a pipe of its own or a null
   stdin, never the service's own.
 - **One door per value.** An address is taken in only as a `MailAddress`
-  and an invite code by the `invite` verb only as an `InviteCode`, each
-  made by its rule's one constructor at the door — `args` for the flags,
-  the sign-up file for its field — so the file that keeps them is handed
-  nothing its line cannot carry and checks nothing again.
+  and an invite code only as an `InviteCode`, each made by its rule's one
+  constructor at the door — `args` for the flags, the desk for the claim
+  post's field, the sign-up file for its field — so the file that keeps
+  them is handed nothing its line cannot carry and checks nothing again,
+  and no other string of a code's shape, a status token among them, can
+  stand in for a code.
 - **What stands is the truth about names.** A name is taken iff its
   snippet, its volume or its container stands; no ledger is kept, and
   the log carries the history. A failed step's makings are undone in
   reverse and its status is D-8; a removal that itself fails leaves the
   name standing, logged.
 - **The log never carries** the record's bytes, a person's address, an
-  invite code or a status token, and the `Debug` of a record, an invite,
-  a message, an address or a code shows none of them.
+  invite code or a status token, and the `Debug` of every value that holds
+  one — a record, an invite, a message, an address, a code, a post, a
+  decoded form, the status map, a status page's reply, a page — shows none
+  of them.
 - **Every person-facing sentence is in one table**, `strings.rs`, each
   row naming its id, and the live reply is one function, its inputs
   gathered in one place, so the page and the mail cannot say two things.

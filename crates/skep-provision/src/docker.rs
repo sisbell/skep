@@ -50,6 +50,7 @@
 //! Caddy inside its container.
 
 use std::io;
+use std::num::NonZeroU32;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -110,8 +111,9 @@ pub struct Settings {
     pub suffix: String,
     /// The serving run's log rotation: one file's size (`--log-max-size`).
     pub log_max_size: String,
-    /// The serving run's log rotation: the files kept (`--log-max-file`).
-    pub log_max_file: u32,
+    /// The serving run's log rotation: the files kept (`--log-max-file`),
+    /// never none.
+    pub log_max_file: NonZeroU32,
 }
 
 /// THE RUNNER: one method a runner writes, [`Docker::run`], and one named

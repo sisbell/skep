@@ -28,12 +28,14 @@
 //! invitation carries ([`invite_link`]), which opens the claim form with the
 //! code it carries pre-filled.
 
+use std::fmt;
 use std::net::TcpStream;
 use std::time::Duration;
 
 use skep_http::{read_request, write_response, Limits, Refused, Request};
 use skep_identity::MAX_RECORD_BYTES;
 
+use crate::invites::InviteCode;
 use crate::strings::{
     fill, Words, ADDRESS_LABEL, BAD_FORM, BEING_MADE, CLAIM_BUTTON, FAILED, INVITE_LABEL, INVITE_REFUSED, LEAD, NAME_HELP, NAME_LABEL, NAME_REFUSED, NOT_FOUND, PREVIEW_REFUSED, RECORD_HELP,
     RECORD_LABEL, RECORD_REFUSED, SIGNUP_BUTTON, SIGNUP_FAILED, SIGNUP_KEPT, SIGNUP_LEAD, SIGNUP_REFUSED, STATUS_URL, THANKS, TOO_LARGE,
@@ -66,7 +68,7 @@ const REFRESH_SECS: u32 = 5;
 // ── THE DESK ─────────────────────────────────────────────────────────────
 
 /// The claim form's three fields as posted, bytes as decoded.
-#[derive(Debug, Clone, Copy)]
+#[derive(Clone, Copy)]
 pub struct Post<'a> {
     /// The `name` field.
     pub name: &'a [u8],
@@ -74,6 +76,15 @@ pub struct Post<'a> {
     pub record: &'a [u8],
     /// The `invite` field.
     pub invite: &'a [u8],
+}
+
+/// The fields' lengths alone: a post carries a record's bytes and an invite
+/// code, never a log line's, and a name field that may hold anything a
+/// person typed.
+impl fmt::Debug for Post<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Post").field("name", &self.name.len()).field("record", &self.record.len()).field("invite", &self.invite.len()).finish()
+    }
 }
 
 /// Why a claim post is refused — each shown on the form again.
@@ -104,7 +115,7 @@ pub enum SignUpRefusal {
 }
 
 /// What a status token's page shows.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub enum Shown {
     /// D-7: queued or running.
     BeingMade,
@@ -112,6 +123,19 @@ pub enum Shown {
     Live(String),
     /// D-8.
     Failed,
+}
+
+/// The page's state, the live reply by its length alone: its last line is
+/// the status URL, and a status token is never a log line's — as a
+/// message keeps its body.
+impl fmt::Debug for Shown {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Shown::BeingMade => f.write_str("BeingMade"),
+            Shown::Live(text) => f.debug_tuple("Live").field(&text.len()).finish(),
+            Shown::Failed => f.write_str("Failed"),
+        }
+    }
 }
 
 /// WHAT THE PAGES ASK.
@@ -144,19 +168,27 @@ pub fn status_url(suffix: &str, token: &str) -> String {
 /// THE INVITE LINK an invitation carries (the intake funnel's second arm):
 /// `https://<suffix>/claim?invite=<code>` — the claim form's path, and the
 /// query value its invite field is pre-filled from.
-pub fn invite_link(suffix: &str, code: &str) -> String {
-    format!("https://{suffix}/claim?invite={code}")
+pub fn invite_link(suffix: &str, code: &InviteCode) -> String {
+    format!("https://{suffix}/claim?invite={}", code.as_str())
 }
 
 // ── THE ANSWERS ──────────────────────────────────────────────────────────
 
 /// One answer: its status and its page.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 struct Answer {
     /// 200, 400, 404 or 413.
     status: u16,
     /// The page's HTML.
     body: String,
+}
+
+/// The status and the page's length alone: a page carries a refused post's
+/// record and invite code back to the form, or a status URL.
+impl fmt::Debug for Answer {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Answer").field("status", &self.status).field("body", &self.body.len()).finish()
+    }
 }
 
 /// THE HEADERS every page carries: no script and nothing from elsewhere,

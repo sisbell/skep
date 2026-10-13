@@ -12,6 +12,7 @@
 
 use std::ffi::OsString;
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
+use std::num::{NonZeroU32, NonZeroUsize};
 use std::path::PathBuf;
 
 use crate::docker::Settings;
@@ -52,12 +53,12 @@ const DEFAULT_LOG_MAX_SIZE: &str = "10m";
 
 /// THE SERVING RUN's LOG FILES KEPT, by default: the README's serving
 /// line's `max-file=5` — the operator's to size.
-const DEFAULT_LOG_MAX_FILE: u32 = 5;
+const DEFAULT_LOG_MAX_FILE: NonZeroU32 = NonZeroU32::new(5).expect("five is not zero");
 
 /// THE WORKERS, by default: three threads, each making one board at a
 /// time, so three names are made at once — the owner's number for the
 /// alpha's VM; `--workers` sets another, never zero.
-const DEFAULT_WORKERS: usize = 3;
+const DEFAULT_WORKERS: NonZeroUsize = NonZeroUsize::new(3).expect("three is not zero");
 
 /// What the command line asked for.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -86,8 +87,8 @@ pub struct ServeArgs {
     /// `--caddy`, `--suffix`, `--log-max-size`, `--log-max-file`.
     pub settings: Settings,
     /// `--workers`: the worker threads — the boards made at once. One or
-    /// more.
-    pub workers: usize,
+    /// more: a service with none would admit posts and make no board.
+    pub workers: NonZeroUsize,
     /// `--reply-to`: the owner's mailbox, which D-8 names and the mail
     /// replies to. Required.
     pub reply_to: MailAddress,
@@ -293,11 +294,11 @@ fn parse_serve(mut it: impl Iterator<Item = String>) -> Result<Command, String> 
             }
             "--log-max-file" => {
                 let v = value(&mut it, "--log-max-file")?;
-                settings.log_max_file = v.parse().ok().filter(|n| *n > 0).ok_or_else(|| format!("--log-max-file: '{v}' is not a count of one or more"))?;
+                settings.log_max_file = v.parse().map_err(|_| format!("--log-max-file: '{v}' is not a count of one or more"))?;
             }
             "--workers" => {
                 let v = value(&mut it, "--workers")?;
-                workers = v.parse().ok().filter(|n| *n > 0).ok_or_else(|| format!("--workers: '{v}' is not a count of one or more"))?;
+                workers = v.parse().map_err(|_| format!("--workers: '{v}' is not a count of one or more"))?;
             }
             "--reply-to" => reply_to = Some(address("--reply-to", value(&mut it, "--reply-to")?)?),
             "--mailer" => mailer = Some(Mailer::Program(PathBuf::from(value(&mut it, "--mailer")?))),

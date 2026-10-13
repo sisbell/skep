@@ -78,8 +78,8 @@ fn every_default_is_its_named_constant() {
     assert_eq!(DEFAULT_LISTEN.to_string(), "127.0.0.1:8842");
     assert!(DEFAULT_LISTEN.ip().is_loopback() && DEFAULT_LISTEN.port() != 8642);
     assert_eq!((DEFAULT_BOARDS_DIR, DEFAULT_IMAGE, DEFAULT_CLI_IMAGE, DEFAULT_NETWORK, DEFAULT_CADDY, DEFAULT_SUFFIX), ("/etc/caddy/boards", "skep-hosted", "skep-cli", "skep", "caddy", "skep.host"));
-    assert_eq!((DEFAULT_LOG_MAX_SIZE, DEFAULT_LOG_MAX_FILE), ("10m", 5), "the README's serving line");
-    assert_eq!(DEFAULT_WORKERS, 3, "the owner's number");
+    assert_eq!((DEFAULT_LOG_MAX_SIZE, DEFAULT_LOG_MAX_FILE.get()), ("10m", 5), "the README's serving line");
+    assert_eq!(DEFAULT_WORKERS.get(), 3, "the owner's number");
 }
 
 /// T21: `--workers` DEFAULTS TO `DEFAULT_WORKERS`; `--workers 0` is a usage
@@ -90,9 +90,9 @@ fn every_default_is_its_named_constant() {
 fn the_workers_flag_defaults_to_its_constant_and_refuses_zero() {
     assert_eq!(served(&[]).workers, DEFAULT_WORKERS);
     assert_eq!(serve(&["--workers", "0"]), Err("--workers: '0' is not a count of one or more".to_owned()));
-    assert_eq!(served(&["--workers", "3"]).workers, 3);
-    assert_eq!(served(&["--workers", "1"]).workers, 1);
-    assert_eq!(served(&["--workers", "1", "--workers", "2"]).workers, 2, "the last given wins");
+    assert_eq!(served(&["--workers", "3"]).workers.get(), 3);
+    assert_eq!(served(&["--workers", "1"]).workers.get(), 1);
+    assert_eq!(served(&["--workers", "1", "--workers", "2"]).workers.get(), 2, "the last given wins");
     assert!(serve(&["--workers", "two"]).is_err());
     assert!(serve(&["--workers", "-1"]).is_err());
     assert_eq!(serve(&["--workers"]), Err("--workers needs a value".to_owned()));
@@ -132,9 +132,10 @@ fn every_flag_lands_in_its_setting() {
     ]);
     assert_eq!(s.listen.to_string(), "0.0.0.0:9000");
     assert_eq!(s.boards_dir, PathBuf::from("/b"));
+    let three = NonZeroU32::new(3).expect("three is not zero");
     assert_eq!(
         s.settings,
-        Settings { image: "img:2".into(), cli_image: "cli:2".into(), network: "net2".into(), caddy: "proxy2".into(), suffix: "example.org".into(), log_max_size: "50m".into(), log_max_file: 3 }
+        Settings { image: "img:2".into(), cli_image: "cli:2".into(), network: "net2".into(), caddy: "proxy2".into(), suffix: "example.org".into(), log_max_size: "50m".into(), log_max_file: three }
     );
     assert_eq!(s.mail, Some(MailArgs { mailer: Mailer::Program(PathBuf::from("/usr/bin/msmtp")), from: mail_address("noreply@example.org") }));
     assert_eq!(served(&["--image", "a", "--image", "b"]).settings.image, "b", "the last given wins");

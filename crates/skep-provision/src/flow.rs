@@ -91,7 +91,7 @@ use std::time::Duration;
 use crate::caddy;
 use crate::docker::Docker;
 use crate::health::{self, Wait, Waited, HEALTH_WAIT};
-use crate::invites;
+use crate::invites::{self, InviteCode};
 use crate::name::Name;
 use crate::names::{self, State, StatusMap};
 use crate::pages::{self, Desk, Post, Refusal, Shown, SignUpRefusal};
@@ -126,7 +126,7 @@ struct Job {
     token: String,
     name: Name,
     record: Record,
-    code: String,
+    code: InviteCode,
     address: String,
 }
 
@@ -142,7 +142,7 @@ struct Job {
 struct Book {
     queue: VecDeque<Job>,
     map: StatusMap,
-    codes: HashSet<String>,
+    codes: HashSet<InviteCode>,
 }
 
 /// What in flight refuses a new post.
@@ -164,7 +164,7 @@ impl Book {
 
     /// What refuses a new post for `name` under `code`: the first of a full
     /// queue, a held code and a held name — `None` where none does.
-    fn blocks(&self, name: &Name, code: &str) -> Option<Blocked> {
+    fn blocks(&self, name: &Name, code: &InviteCode) -> Option<Blocked> {
         if self.queue.len() >= QUEUE_DEPTH {
             Some(Blocked::QueueFull)
         } else if self.codes.contains(code) {
@@ -200,7 +200,7 @@ impl Book {
 
     /// `code` let go of: a new post may name it — a live post's once the
     /// file says spent, a failed post's at once.
-    fn release(&mut self, code: &str) {
+    fn release(&mut self, code: &InviteCode) {
         self.codes.remove(code);
     }
 
@@ -353,13 +353,13 @@ impl Service {
     /// ONE POST PROVISIONED on the worker that owns its name: the steps,
     /// then live or cleaned up; the mail after.
     fn provision(&self, job: Job) {
-        let name = job.name.clone();
+        let name = &job.name;
         let mut made = Made::default();
         let live = match self.steps(&job, &mut made) {
             Ok(()) => {
                 self.book().went_live(&job.token);
                 self.log(&format!("{name}: LIVE at {}", name.origin(&self.config.suffix)));
-                let spent = invites::spend(&self.state, &job.code, &name);
+                let spent = invites::spend(&self.state, &job.code, name);
                 match &spent {
                     Ok(true) => self.log(&format!("{name}: the invite is spent")),
                     Ok(false) => self.log(&format!("{name}: the invite was not found issued at the spend; the board stands")),
@@ -377,13 +377,13 @@ impl Service {
             }
             Err(step) => {
                 self.log(&format!("{name}: FAILED at {step}"));
-                self.cleanup(&name, made);
+                self.cleanup(name, made);
                 self.book().failed(&job);
                 false
             }
         };
         if live {
-            self.send(&job);
+            self.send(job);
         }
     }
 
@@ -395,7 +395,7 @@ impl Service {
         match names::taken(docker, &self.config.boards_dir, name) {
             Ok(None) => {}
             Ok(Some(by)) => {
-                self.log(&format!("{name}: taken since the post: {}", by.said()));
+                self.log(&format!("{name}: taken since the post: {by}"));
                 return Err("the second look at the name");
             }
             Err(e) => {
@@ -468,7 +468,7 @@ impl Service {
                 }
                 Err(Failure::Transport) if at < SIDECAR_WAIT.tries => (self.sleep)(SIDECAR_WAIT.interval),
                 Err(failure) => {
-                    self.log(&format!("{name}: sidecar_claim: {}", failure.said()));
+                    self.log(&format!("{name}: sidecar_claim: {failure}"));
                     return Err("the dark claim");
                 }
             }
@@ -544,10 +544,12 @@ impl Service {
     }
 
     /// THE SEND: the live reply handed to the outbox — where mail is
-    /// configured — once the status is live.
-    fn send(&self, job: &Job) {
+    /// configured — once the status is live; the post ends here, and its
+    /// name and address go with the mail.
+    fn send(&self, job: Job) {
         let Some(outbox) = &self.mail else { return };
-        outbox.hand_over(job.name.clone(), job.address.clone(), self.live_reply(&job.name, job.record.anchorless(), &job.token));
+        let reply = self.live_reply(&job.name, job.record.anchorless(), &job.token);
+        outbox.hand_over(job.name, job.address, reply);
     }
 
     /// THE LIVE REPLY of a post: what the one renderer, `reply::text`, is
@@ -562,7 +564,7 @@ impl Service {
     /// book says blocks the post — the queue full (D-8, "try again later"),
     /// the code held by a post in flight, the name held by one (D-4) —
     /// logged and refused, no docker call made.
-    fn in_flight(&self, book: &Book, name: &Name, code: &str) -> Result<(), Refusal> {
+    fn in_flight(&self, book: &Book, name: &Name, code: &InviteCode) -> Result<(), Refusal> {
         let Some(blocked) = book.blocks(name, code) else { return Ok(()) };
         let (why, refusal) = match blocked {
             Blocked::QueueFull => (format!("{QUEUE_DEPTH} posts already wait"), Refusal::Busy),
@@ -594,11 +596,11 @@ impl Desk for Service {
 
     fn admit(&self, post: &Post<'_>) -> Result<String, Refusal> {
         // The invite, first: an uninvited post learns nothing about names.
-        let Some(code) = std::str::from_utf8(post.invite).ok().filter(|c| invites::code_ok(c)) else {
+        let Some(code) = std::str::from_utf8(post.invite).ok().and_then(InviteCode::parse) else {
             self.log("a post refused: no invite code of the code's form");
             return Err(Refusal::Invite);
         };
-        let invite = match invites::lookup(&self.state, code) {
+        let invite = match invites::lookup(&self.state, &code) {
             Ok(Some(invite)) if invite.issued() => invite,
             Ok(_) => {
                 self.log("a post refused: its invite code is not one the file holds issued");
@@ -622,13 +624,13 @@ impl Desk for Service {
         })?;
         // WHAT IS IN FLIGHT, under the book's short lock: a refusal here
         // costs no docker call.
-        self.in_flight(&self.book(), &name, code)?;
+        self.in_flight(&self.book(), &name, &code)?;
         // THE TRUTH ABOUT THE NAME: three reads under no lock of this
         // service's — a post waits on no provisioning.
         match names::taken(self.docker.as_ref(), &self.config.boards_dir, &name) {
             Ok(None) => {}
             Ok(Some(by)) => {
-                self.log(&format!("{name}: a post refused: taken — {}", by.said()));
+                self.log(&format!("{name}: a post refused: taken — {by}"));
                 return Err(Refusal::Name);
             }
             Err(e) => {
@@ -649,8 +651,8 @@ impl Desk for Service {
         // second post for it is admitted while this one is in flight.
         let waiting = {
             let mut book = self.book();
-            self.in_flight(&book, &name, code)?;
-            match invites::lookup(&self.state, code) {
+            self.in_flight(&book, &name, &code)?;
+            match invites::lookup(&self.state, &code) {
                 Ok(Some(again)) if again.issued() => {}
                 Ok(_) => {
                     self.log(&format!("{name}: a post refused: its invite was spent while the post was judged"));
@@ -661,7 +663,7 @@ impl Desk for Service {
                     return Err(Refusal::Failed);
                 }
             }
-            book.admit(Job { token: token.clone(), name: name.clone(), record, code: code.to_owned(), address: invite.address })
+            book.admit(Job { token: token.clone(), name: name.clone(), record, code, address: invite.address })
         };
         self.ready.notify_one();
         self.log(&format!("{name}: admitted; {waiting} waiting"));

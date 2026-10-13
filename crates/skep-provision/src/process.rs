@@ -14,8 +14,9 @@ use std::process::{Command, Stdio};
 use std::thread;
 
 /// What one child answered: its exit code (`None` where it ended by a
-/// signal), its stdout and its stderr, each apart.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+/// signal), its stdout and its stderr, each apart. It has no `Default`: an
+/// empty one would claim a child ended by a signal where none did.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Exit {
     /// The exit code, or `None` where the process ended by a signal.
     pub code: Option<i32>,
@@ -40,25 +41,25 @@ impl Exit {
 /// ONE CHILD RUN: `cmd` spawned with its streams set — `stdin`'s bytes on a
 /// pipe written by a thread of its own and closed, or a null stdin where
 /// there are none; stdout and stderr piped — and waited for, its two streams
-/// read to their ends. The error is a child that could not be spawned or
-/// waited for, never its exit.
+/// read to their ends. The writer is scoped to the call: it borrows the
+/// bytes the caller lends, so none is copied, and it is joined before the
+/// call answers. The error is a child that could not be spawned or waited
+/// for, never its exit.
 pub fn run(mut cmd: Command, stdin: Option<&[u8]>) -> io::Result<Exit> {
     cmd.stdin(if stdin.is_some() { Stdio::piped() } else { Stdio::null() }).stdout(Stdio::piped()).stderr(Stdio::piped());
     let mut child = cmd.spawn()?;
-    let feeder = match (stdin, child.stdin.take()) {
-        (Some(bytes), Some(mut pipe)) => {
-            let bytes = bytes.to_vec();
-            Some(thread::spawn(move || pipe.write_all(&bytes)))
+    let pipe = child.stdin.take();
+    let out = thread::scope(|s| {
+        let feeder = stdin.zip(pipe).map(|(bytes, mut pipe)| s.spawn(move || pipe.write_all(bytes)));
+        let out = child.wait_with_output();
+        if let Some(feeder) = feeder {
+            // A child that exits before reading its stdin breaks the pipe; its
+            // exit code says what happened, so the write's error is not the
+            // call's.
+            let _ = feeder.join();
         }
-        _ => None,
-    };
-    let out = child.wait_with_output()?;
-    if let Some(feeder) = feeder {
-        // A child that exits before reading its stdin breaks the pipe; its
-        // exit code says what happened, so the write's error is not the
-        // call's.
-        let _ = feeder.join();
-    }
+        out
+    })?;
     Ok(Exit { code: out.status.code(), stdout: out.stdout, stderr: out.stderr })
 }
 

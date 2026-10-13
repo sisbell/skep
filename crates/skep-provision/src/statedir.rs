@@ -113,6 +113,8 @@ impl fmt::Display for StateDirRefused {
     }
 }
 
+impl std::error::Error for StateDirRefused {}
+
 impl StateDir {
     /// THE DOOR: `path` made `0700` where it does not stand; where it
     /// stands, refused if any group or other bit is set — refuse, never

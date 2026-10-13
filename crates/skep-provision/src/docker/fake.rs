@@ -282,15 +282,19 @@ impl Docker for FakeDocker {
         let name = name(&call).map(Name::to_string);
         let mut script = self.script.lock().unwrap_or_else(|e| e.into_inner());
         let at = script.iter().position(|s| s.name == name);
-        let expected = at.is_some_and(|i| script[i].method == method);
-        let exit = if expected {
-            let step = script.remove(at.expect("the line was found")).expect("the line is in range");
-            Exit { code: Some(step.code), stdout: step.stdout, stderr: step.stderr }
-        } else {
-            let shown = name.as_deref().unwrap_or("-");
-            let next = at.map_or_else(|| format!("nothing more under {shown}"), |i| format!("{} {shown}", script[i].method));
-            let stderr = format!("docker-fake: unexpected call {method} {shown}; the script expected {next}\n");
-            Exit { code: Some(UNEXPECTED), stdout: Vec::new(), stderr: stderr.into_bytes() }
+        let hit = at.filter(|&i| script[i].method == method);
+        let expected = hit.is_some();
+        let exit = match hit {
+            Some(i) => {
+                let step = script.remove(i).expect("`position` found the line, in range");
+                Exit { code: Some(step.code), stdout: step.stdout, stderr: step.stderr }
+            }
+            None => {
+                let shown = name.as_deref().unwrap_or("-");
+                let next = at.map_or_else(|| format!("nothing more under {shown}"), |i| format!("{} {shown}", script[i].method));
+                let stderr = format!("docker-fake: unexpected call {method} {shown}; the script expected {next}\n");
+                Exit { code: Some(UNEXPECTED), stdout: Vec::new(), stderr: stderr.into_bytes() }
+            }
         };
         drop(script);
         if let Some(calls_file) = &self.calls_file {

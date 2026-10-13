@@ -130,8 +130,8 @@ use statedir::StateDir;
 
 fn main() {
     let code = match args::parse(std::env::args_os().skip(1)) {
-        Ok(Command::Version) => say_out(&args::version_line()),
-        Ok(Command::Help) => say_out(&args::usage()),
+        Ok(Command::Version) => say_out(&args::version_line()).map_or(1, |()| 0),
+        Ok(Command::Help) => say_out(&args::usage()).map_or(1, |()| 0),
         Ok(Command::Serve(cfg)) => serve(*cfg),
         Ok(Command::Invite(cfg)) => invite(cfg),
         Err(refused) => {
@@ -142,15 +142,13 @@ fn main() {
     exit(code);
 }
 
-/// A line on stdout — DATA — answered with the exit code its write earns,
-/// 0 or 1, never a panic: the verbs that end after their one line answer
-/// it; `serve` serves on past its serving line.
-fn say_out(line: &str) -> i32 {
+/// A line on stdout — DATA — written and flushed, never a panic: a verb
+/// that ends after its one line answers exit 1 where this fails; `serve`
+/// serves on past its serving line.
+fn say_out(line: &str) -> io::Result<()> {
     let mut out = io::stdout().lock();
-    match writeln!(out, "{line}").and_then(|()| out.flush()) {
-        Ok(()) => 0,
-        Err(_) => 1,
-    }
+    writeln!(out, "{line}")?;
+    out.flush()
 }
 
 /// A line on stderr, its write's result discarded: a lost reader costs the
@@ -231,7 +229,7 @@ fn serve(cfg: args::ServeArgs) -> i32 {
     // THE SERVE: the pool of workers, and a thread per connection beside
     // them; the scope never closes — SIGTERM ends the process.
     thread::scope(|s| {
-        for _ in 0..cfg.workers {
+        for _ in 0..cfg.workers.get() {
             s.spawn(|| service.work());
         }
         for conn in listener.incoming() {
@@ -273,10 +271,10 @@ fn invite(cfg: args::InviteArgs) -> i32 {
             return 1;
         }
     };
-    match invites::mint(&state, &cfg.address, cfg.code.as_ref()) {
+    match invites::mint(&state, &cfg.address, cfg.code) {
         Ok(code) => match say_out(&pages::invite_link(&cfg.suffix, &code)) {
-            0 => 0,
-            _ => {
+            Ok(()) => 0,
+            Err(_) => {
                 say_err("skep-provision: the invite is minted, and its invite link could not be written on stdout");
                 1
             }

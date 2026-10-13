@@ -46,7 +46,7 @@ fn the_state_directory_is_owner_only_or_refused() {
     let loose = dir.path().join("loose");
     fs::create_dir(&loose).expect("a directory");
     fs::set_permissions(&loose, fs::Permissions::from_mode(0o755)).expect("loosened");
-    let refused = StateDir::open(&loose).expect_err("loose");
+    let refused: &dyn std::error::Error = &StateDir::open(&loose).expect_err("loose");
     assert_eq!(
         refused.to_string(),
         format!("the state directory {0} is mode 755: other users of this machine can read the sign-up addresses and the invite codes; chmod 700 {0} and start again", loose.display())

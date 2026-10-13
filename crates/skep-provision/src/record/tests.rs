@@ -93,6 +93,8 @@ fn each_reachable_payload_fault_is_refused_naming_its_token() {
         let refusal = refused(&bytes);
         assert!(matches!(refusal, RecordRefused::NotARecord(_)), "{what}: D-5, not {refusal:?}");
         assert_eq!(refusal.token(), token, "{what}");
+        let said: &dyn std::error::Error = &refusal;
+        assert_eq!(said.to_string(), token, "{what}: Display is the token, never a second vocabulary");
     }
 }
 
@@ -106,6 +108,7 @@ fn a_preview_key_parses_and_is_refused_by_the_alg_test_alone() {
     let refusal = refused(preview.as_bytes());
     assert_eq!(refusal, RecordRefused::PreviewKey { alg: ALG_FNDSA512_PREVIEW_ED25519 });
     assert_eq!(refusal.token(), "preview_key");
+    assert_eq!(refusal.to_string(), "preview_key");
     let mixed = encode_enroll(&[
         Enrollment::new(production(1), true, None).expect("no label"),
         Enrollment::new(key(ALG_FNDSA512_PREVIEW_ED25519, FNDSA512_PREVIEW_ED25519_KEY_LEN, 2), false, None).expect("no label"),

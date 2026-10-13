@@ -6,7 +6,8 @@
 //! form with its code; plain HTML with no script and nothing fetched from
 //! elsewhere; a row's words escaped and its commands set as code, and a
 //! person's field — a refused record among them — shown back as it was
-//! sent. (The strings table's rows are `strings`' suite.)
+//! sent; and the `Debug` of a post, a status page and an answer showing
+//! none of what they hold. (The strings table's rows are `strings`' suite.)
 
 use std::io::{Read, Write};
 use std::net::{Shutdown, TcpListener, TcpStream};
@@ -112,7 +113,7 @@ fn answer_of(method: &str, target: &str, body: &[u8]) -> Answer {
 /// answer the form, its invite field pre-filled.
 #[test]
 fn the_invite_link_opens_the_claim_form_with_its_code() {
-    let link = invite_link("skep.host", "1.1.0.1.0.3");
+    let link = invite_link("skep.host", &InviteCode::parse("1.1.0.1.0.3").expect("a code"));
     assert_eq!(link, "https://skep.host/claim?invite=1.1.0.1.0.3");
     let target = link.strip_prefix("https://skep.host").expect("the site's own host");
     let form = answer_of("GET", target, b"");
@@ -255,4 +256,26 @@ fn a_refused_record_comes_back_as_sent() {
     let answer = answer(&request("POST", "/claim", b"name=alice&record=%7B%22label%22%3A%22%60work%60%22%7D&invite=c0de"), &site(), &desk);
     assert!(answer.body.contains("{\"label\":\"`work`\"}</textarea>"), "{}", answer.body);
     assert!(!answer.body.contains("<code>work</code>"), "{}", answer.body);
+}
+
+/// WHAT THE PAGES HOLD, `Debug`ged, shows none of it: a post by its fields'
+/// lengths, a status page by its state and the live reply's length — its
+/// last line the status URL — and an answer by its status and its page's
+/// length, a refused post's record and code and a status URL among what the
+/// page carries.
+#[test]
+fn the_debug_of_what_the_pages_hold_shows_none_of_it() {
+    assert_eq!(format!("{:?}", Post { name: b"alice", record: b"{}", invite: b"c0de" }), "Post { name: 5, record: 2, invite: 4 }");
+    let reply = format!("This reply stays at {}\n", status_url("skep.host", "t0k3n"));
+    assert_eq!(format!("{:?}", Shown::Live(reply.clone())), format!("Live({})", reply.len()));
+    assert_eq!(format!("{:?}", Shown::BeingMade), "BeingMade");
+    assert_eq!(format!("{:?}", Shown::Failed), "Failed");
+    let made = answer_of("POST", "/claim", b"name=alice&record=x&invite=c0de");
+    assert!(made.body.contains("t0k3n"), "the page carries the status URL");
+    assert_eq!(format!("{made:?}"), format!("Answer {{ status: 200, body: {} }}", made.body.len()));
+    let desk = Scripted::default();
+    *desk.admit.lock().unwrap() = Some(Err(Refusal::Name));
+    let refused = answer(&request("POST", "/claim", b"name=alice&record=%7B%22k%22%7D&invite=c0de"), &site(), &desk);
+    assert!(refused.body.contains("value=\"c0de\"") && refused.body.contains("{\"k\"}</textarea>"), "the form carries the post back");
+    assert_eq!(format!("{refused:?}"), format!("Answer {{ status: 200, body: {} }}", refused.body.len()));
 }

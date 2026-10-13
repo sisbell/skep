@@ -15,9 +15,17 @@ use std::fmt;
 
 /// A decoded form: its fields in the order sent, each name and value the
 /// bytes it decodes to.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Clone, Default, PartialEq, Eq)]
 pub struct Form {
     fields: Vec<(Vec<u8>, Vec<u8>)>,
+}
+
+/// The count of fields alone: a form carries a record, an invite code or an
+/// address, none of them a log line's.
+impl fmt::Debug for Form {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Form").field("fields", &self.fields.len()).finish()
+    }
 }
 
 impl Form {
@@ -46,6 +54,8 @@ impl fmt::Display for BadEscape {
         write!(f, "the `%` at byte {} is not followed by two hex digits", self.at)
     }
 }
+
+impl std::error::Error for BadEscape {}
 
 /// THE DECODE: `body` split at each `&` and each part at its first `=` —
 /// a part with no `=` is a name with an empty value, an empty part

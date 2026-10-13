@@ -50,6 +50,8 @@ impl fmt::Display for NameRefused {
     }
 }
 
+impl std::error::Error for NameRefused {}
+
 impl Name {
     /// THE GRAMMAR over the name field's bytes: lowercased, then one label.
     pub fn parse(field: &[u8]) -> Result<Name, NameRefused> {

@@ -23,7 +23,20 @@ use crate::scratch::Scratch;
 /// The alpha's settings: the README's tags, the notes' bridge and proxy,
 /// the README's rotation.
 fn settings() -> Settings {
-    Settings { image: "skep-hosted".into(), cli_image: "skep-cli".into(), network: "skep".into(), caddy: "caddy".into(), suffix: "skep.host".into(), log_max_size: "10m".into(), log_max_file: 5 }
+    Settings {
+        image: "skep-hosted".into(),
+        cli_image: "skep-cli".into(),
+        network: "skep".into(),
+        caddy: "caddy".into(),
+        suffix: "skep.host".into(),
+        log_max_size: "10m".into(),
+        log_max_file: files(5),
+    }
+}
+
+/// A count of log files kept: one or more.
+fn files(n: u32) -> NonZeroU32 {
+    NonZeroU32::new(n).expect("a count of one or more")
 }
 
 fn alice() -> Name {
@@ -100,7 +113,7 @@ fn the_volume_is_labelled_before_its_name_and_the_listing_filters_by_the_label()
     assert_eq!(listing, words("volume ls -q --filter label=skep.provision=1"));
     assert_eq!(listing.last().map(String::as_str), Some(&*format!("label={}", label())));
     let other =
-        Settings { image: "img:2".into(), cli_image: "cli:2".into(), network: "net2".into(), caddy: "proxy2".into(), suffix: "example.org".into(), log_max_size: "50m".into(), log_max_file: 3 };
+        Settings { image: "img:2".into(), cli_image: "cli:2".into(), network: "net2".into(), caddy: "proxy2".into(), suffix: "example.org".into(), log_max_size: "50m".into(), log_max_file: files(3) };
     assert_eq!(Call::Volumes.argv(&other), listing, "no setting reaches the listing");
     assert_eq!(Call::VolumeCreate(&n).argv(&other), create, "no setting reaches the volume's creation");
     // The fake answers a scripted `volumes` line — its stdout the names,
@@ -119,7 +132,8 @@ fn the_volume_is_labelled_before_its_name_and_the_listing_filters_by_the_label()
 /// proxy, suffix and rotation each move their own tokens.
 #[test]
 fn the_settings_reach_their_own_words() {
-    let s = Settings { image: "img:2".into(), cli_image: "cli:2".into(), network: "net2".into(), caddy: "proxy2".into(), suffix: "example.org".into(), log_max_size: "50m".into(), log_max_file: 3 };
+    let s =
+        Settings { image: "img:2".into(), cli_image: "cli:2".into(), network: "net2".into(), caddy: "proxy2".into(), suffix: "example.org".into(), log_max_size: "50m".into(), log_max_file: files(3) };
     let (n, r) = (Name::parse(b"bob").expect("a name"), record());
     let serving = Call::RunServing(&n).argv(&s);
     for word in ["max-size=50m", "max-file=3", "net2", "SKEPD_ORIGIN=https://bob.example.org", "host=bob.example.org", "img:2", "bob:/var/lib/skepd"] {
@@ -267,7 +281,7 @@ fn each_named_method_runs_its_own_call() {
     impl Docker for Kept {
         fn run(&self, call: Call<'_>) -> io::Result<Exit> {
             self.0.lock().unwrap_or_else(|e| e.into_inner()).push(format!("{call:?}"));
-            Ok(Exit::default())
+            Ok(Exit { code: Some(0), stdout: Vec::new(), stderr: Vec::new() })
         }
     }
     let (n, r, kept) = (alice(), record(), Kept::default());

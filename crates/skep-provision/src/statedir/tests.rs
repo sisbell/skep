@@ -1,6 +1,6 @@
-//! T10 — THE STATE DIRECTORY beneath the sign-up file and the invite file:
-//! the address rule and its value; THE DOOR, made `0700` and refused loose
-//! in the daemon's words — any group or other bit, each one alone; THE
+//! T10 — THE STATE DIRECTORY beneath the sign-up file and the invite file: the
+//! address rule, its words and its value; THE DOOR, made `0700` and refused
+//! loose in the daemon's words — any group or other bit, each one alone; THE
 //! WRITER, its files owner-only, whose failure between the write and the
 //! rename leaves the old file whole and no temp file; and the date a line
 //! carries.
@@ -70,6 +70,19 @@ fn each_special_and_each_bidi_control_alone_is_refused() {
     for c in ['.', '+', '-', '_', '\''] {
         assert!(address_ok(&format!("a{c}a@x.example")), "{c:?}");
     }
+}
+
+/// THE RULE IN WORDS names what the rule refuses: every one of RFC 5322's
+/// specials but `@` and `.` — this suite's own list, never the rule's — and
+/// the byte bound, in the sentence a refusal shows the operator.
+#[test]
+fn the_rules_words_name_its_bound_and_every_special() {
+    let words = address_rule();
+    for c in "()<>[]:;\\,\"".chars() {
+        assert!(words.contains(&format!(" {c} ")), "{c:?}: {words}");
+    }
+    assert!(words.contains(&format!("at most {MAX_ADDRESS_BYTES} bytes")), "{words}");
+    assert_eq!(words, "one @ with a side each way, at most 254 bytes, no space, no control character, none of ( ) < > [ ] : ; \\ , \" and no bidi control");
 }
 
 /// THE STATE DIRECTORY's DOOR: made `0700` where absent; refused where it

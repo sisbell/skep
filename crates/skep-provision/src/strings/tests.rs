@@ -1,6 +1,8 @@
-//! THE STRINGS TABLE: every row names an id of the four kinds, every slot
-//! it holds is one a page fills, and its D-rows are the deployment notes'
-//! words.
+//! THE STRINGS TABLE: every row names an id of the four kinds, every slot it
+//! names is one of the six the program fills, every `{` opening one, and its
+//! D-rows are the deployment notes' words; and a row shown where a slot it
+//! names is not filled is the showing code's bug, caught in every test
+//! build.
 
 use super::*;
 
@@ -59,19 +61,17 @@ const TABLE: [Words; 33] = [
 ];
 
 /// THE STRINGS TABLE: every row names an id of the four kinds, every slot it
-/// holds is one a page fills, and its D-rows are the notes' words — the
-/// notes' `skep.host` the `{suffix}` slot, ⟨the owner's address⟩ the
-/// `{owner_address}` one.
+/// names is one of the six the program fills, every `{` opening one, and its
+/// D-rows are the notes' words — the notes' `skep.host` the `{suffix}` slot,
+/// ⟨the owner's address⟩ the `{owner_address}` one.
 #[test]
 fn the_strings_table_names_each_rows_id_and_carries_the_notes_words() {
     for row in TABLE {
         assert!(["DRAFT", "RULED", "RULED-SUBSTANCE / DRAFT-WORDING"].contains(&row.id) || row.id.starts_with("D-"), "{row:?}");
-        let mut rest = row.text;
-        while let Some(open) = rest.find('{') {
-            let close = rest[open..].find('}').expect("a closed slot") + open;
-            assert!(["suffix", "owner_address", "status_url", "origin", "principal", "account"].contains(&&rest[open + 1..close]), "{row:?}");
-            rest = &rest[close + 1..];
+        for slot in row.slots() {
+            assert!(["suffix", "owner_address", "status_url", "origin", "principal", "account"].contains(&slot), "{row:?}");
         }
+        assert_eq!(row.slots().count(), row.text.matches('{').count(), "{row:?}: a `{{` that no `}}` closes");
     }
     let mut d_rows: Vec<(&str, String)> =
         TABLE.iter().filter(|r| r.id.starts_with("D-")).map(|r| (r.id, r.text.replace("{suffix}", "skep.host").replace("{owner_address}", "⟨the owner's address⟩"))).collect();
@@ -79,4 +79,14 @@ fn the_strings_table_names_each_rows_id_and_carries_the_notes_words() {
     d_rows.sort();
     notes.sort();
     assert_eq!(d_rows, notes);
+}
+
+/// A ROW SHOWN WITHOUT A SLOT IT NAMES IS THE SHOWING CODE's BUG: D-8
+/// filled with no owner's address fails in every debug build — every test
+/// build.
+#[cfg(debug_assertions)]
+#[test]
+#[should_panic(expected = "is shown where a slot it names is not filled")]
+fn a_row_shown_without_a_slot_it_names_is_the_callers_bug() {
+    fill(FAILED, &[]);
 }

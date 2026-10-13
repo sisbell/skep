@@ -6,14 +6,20 @@
 //! words this crate wrote where no ruled text exists, each for the notes' §12
 //! and the copy inventory; `RULED`, ruled words carried verbatim; and
 //! `RULED-SUBSTANCE / DRAFT-WORDING`, a ruled sentence the notes give as a
-//! bullet, put in this crate's words. A `{slot}` is filled where the row is
-//! shown ([`fill`]): `{suffix}`, `{owner_address}`, `{status_url}`,
-//! `{origin}`, `{principal}`, `{account}`.
+//! bullet, put in this crate's words. A `{slot}` in a row's words —
+//! `{suffix}`, `{owner_address}`, `{status_url}`, `{origin}`, `{principal}`
+//! or `{account}` — is filled where the row is shown ([`fill`]).
 //!
-//! The pages (`pages`) show the sign-up page's rows, the claim form's, the
-//! status page's and the answers to a request no page takes; the reply
-//! (`reply`) composes its rows for the page and the mail alike; the
-//! follow-up mail's subject is the sender's (`sender`).
+//! What is filled depends on where. The pages (`pages`) show the sign-up
+//! page's rows, the claim form's, the status page's and the answers to a
+//! request no page takes, every one with the site's two slots filled — the
+//! suffix and the owner's address (`Site::fill`) — and D-7's page the status
+//! URL beside them; the reply (`reply`) composes its rows for the page and
+//! the mail alike, filling its own four; the follow-up mail's subject is the
+//! sender's (`sender`), and names none. A row shown where a slot it names is
+//! not filled is the showing code's bug, which [`fill`] catches in every
+//! debug build — every test build — so the test that renders the row goes
+//! red.
 
 /// One row of the strings table: where its words come from, and the words.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -22,6 +28,14 @@ pub struct Words {
     pub id: &'static str,
     /// The words, slots unfilled.
     pub text: &'static str,
+}
+
+impl Words {
+    /// The slots this row names: each `{name}` in its words, in order; a
+    /// `{` that no `}` closes names none.
+    fn slots(self) -> impl Iterator<Item = &'static str> {
+        self.text.split('{').skip(1).filter_map(|after| after.split_once('}').map(|(slot, _)| slot))
+    }
 }
 
 // The sign-up page — no ruled string exists for it.
@@ -146,8 +160,14 @@ pub const BAD_FORM: Words = Words { id: "DRAFT", text: "This form could not be r
 /// A body past the cap (413).
 pub const TOO_LARGE: Words = Words { id: "DRAFT", text: "This form is too large to read. Go back and check what you pasted: a record is one line." };
 
-/// A row's words with its slots filled; a slot not named stays as written.
+/// A ROW's WORDS with its slots filled. A slot the row names and the caller
+/// does not supply is the showing code's bug — the row shown where that
+/// slot is not known — caught in every debug build, so the test that
+/// renders the row goes red; a release build shows the slot as written
+/// rather than end the thread that renders the row — a connection thread or
+/// a worker, neither of which is ever made again.
 pub fn fill(words: Words, slots: &[(&str, &str)]) -> String {
+    debug_assert!(words.slots().all(|named| slots.iter().any(|(slot, _)| *slot == named)), "{words:?} is shown where a slot it names is not filled");
     let mut text = words.text.to_owned();
     for (slot, value) in slots {
         text = text.replace(&format!("{{{slot}}}"), value);

@@ -2,16 +2,17 @@
 //! (`signups`) and the invite file (`invites`), whose every line carries an
 //! address and a date:
 //!
-//! * THE ADDRESS RULE ([`address_ok`]) — the minimum the files and the
-//!   mail's header need, and no more: one `@` with a non-empty side each
-//!   way, at most 254 bytes, no control character, no whitespace, none of
-//!   RFC 5322's specials but `@` and `.` and no bidi control — so an address
-//!   is one line's one field, shows the owner the bytes it holds, and is one
-//!   header's one recipient. It checks no domain and sends nothing. ITS
-//!   VALUE ([`MailAddress`]) is the rule's one door: every address that
-//!   comes in — the three flags that take one, `--reply-to`, `--from` and
-//!   `--address`, and the sign-up field — is one only once
-//!   [`MailAddress::parse`] admits it.
+//! * THE ADDRESS RULE ([`address_ok`]) — the minimum the files and the mail's
+//!   header need, and no more: one `@` with a non-empty side each way, at most
+//!   254 bytes, no control character, no whitespace, none of RFC 5322's
+//!   specials but `@` and `.` and no bidi control — so an address is one
+//!   line's one field, shows the owner the bytes it holds, and is one header's
+//!   one recipient. It checks no domain and sends nothing. Its words, for a
+//!   refusal to name, are [`address_rule`]'s, built beside it from the bound
+//!   and the specials it reads. ITS VALUE ([`MailAddress`]) is the rule's one
+//!   door: every address that comes in — the three flags that take one,
+//!   `--reply-to`, `--from` and `--address`, and the sign-up field — is one
+//!   only once [`MailAddress::parse`] admits it.
 //! * THE STATE DIRECTORY ([`StateDir`]) — `--state-dir`, owner-only: made
 //!   `0700` where it does not stand, and REFUSED at start where it stands
 //!   with any group or other bit set, as the daemon refuses its data
@@ -51,16 +52,20 @@ fn address_ok(address: &str) -> bool {
     !local.is_empty() && !domain.is_empty() && !domain.contains('@') && address.len() <= MAX_ADDRESS_BYTES && !address.chars().any(|c| c.is_control() || c.is_whitespace() || special_or_bidi(c))
 }
 
-/// Whether `c` is one of RFC 5322's specials but `@` and `.` — any of
-/// which lets a `To:` header name a second recipient (`me@x.example,root`,
-/// under the mailer's `-t`) or read the address as other than one — or one
-/// of the bidi controls `skep-client`'s `render_inert` disarms, format
-/// characters no control test catches, which let a line of the sign-up
-/// file show the owner other bytes than it holds. These are what an
-/// address may not hold beyond a control character and whitespace, which
-/// [`address_ok`] refuses beside them.
+/// RFC 5322's SPECIALS but `@` and `.`: any of them lets a `To:` header name
+/// a second recipient (`me@x.example,root`, under the mailer's `-t`) or read
+/// the address as other than one. Read by the rule ([`special_or_bidi`]) and
+/// by its words ([`address_rule`]) alike.
+const SPECIALS: [char; 11] = ['(', ')', '<', '>', '[', ']', ':', ';', '\\', ',', '"'];
+
+/// Whether `c` is one of the [`SPECIALS`], or one of the bidi controls
+/// `skep-client`'s `render_inert` disarms — format characters no control
+/// test catches, which let a line of the sign-up file show the owner other
+/// bytes than it holds. These are what an address may not hold beyond a
+/// control character and whitespace, which [`address_ok`] refuses beside
+/// them.
 fn special_or_bidi(c: char) -> bool {
-    matches!(c, '(' | ')' | '<' | '>' | '[' | ']' | ':' | ';' | '\\' | ',' | '"') || matches!(u32::from(c), 0x202A..=0x202E | 0x2066..=0x2069 | 0x200E | 0x200F | 0x061C)
+    SPECIALS.contains(&c) || matches!(u32::from(c), 0x202A..=0x202E | 0x2066..=0x2069 | 0x200E | 0x200F | 0x061C)
 }
 
 /// AN ADDRESS BY THE RULE: [`MailAddress::parse`] is the only way to one,
@@ -87,6 +92,15 @@ impl fmt::Debug for MailAddress {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str("MailAddress(…)")
     }
+}
+
+/// THE RULE IN WORDS, for a refusal to name: kept here beside
+/// [`address_ok`], its bound and its specials read from the constants the
+/// rule reads, so a change to the rule is made in one place and its words
+/// with it.
+pub fn address_rule() -> String {
+    let specials: Vec<String> = SPECIALS.iter().map(char::to_string).collect();
+    format!("one @ with a side each way, at most {MAX_ADDRESS_BYTES} bytes, no space, no control character, none of {} and no bidi control", specials.join(" "))
 }
 
 /// THE STATE DIRECTORY, opened: owner-only, standing.

@@ -80,16 +80,17 @@
 //! reads, and the verdict is done.
 //!
 //! THE SWEEP AT START ([`Service::sweep`]; `serve` runs it once, before it
-//! listens): a stop mid-board leaves a volume, and perhaps a run, under a
-//! name with no snippet, which the truth would read as TAKEN for good — so
-//! every volume under this service's label is listed, and each under a
-//! name of the grammar with no snippet is removed by the table's last two
-//! rows, the truth asked what stands after; a name whose snippet stands is
-//! left, a volume under no name of the grammar is logged and left, and a
-//! listing that fails is logged and the sweep skipped — the sign-up still
-//! serves. Its precondition is the operator's: ONE SERVICE PER DOCKER HOST,
-//! for the label and the names are the host's, and a second service would
-//! take the first's boards for half-made.
+//! listens): a stop mid-board leaves a volume, and perhaps a run, under a name
+//! with no snippet, which the truth would read as TAKEN for good — so every
+//! volume under this service's label is listed, and each under a name of the
+//! grammar with no snippet is handed to the cleanup itself as what a stop
+//! leaves, and so undone by the table's last two rows, the truth asked what
+//! stands after; a name whose snippet stands is left, a volume under no name
+//! of the grammar is logged and left, and a listing that fails is logged and
+//! the sweep skipped — the sign-up still serves. Its precondition is the
+//! operator's: ONE SERVICE PER DOCKER HOST, for the label and the names are
+//! the host's, and a second service would take the first's boards for
+//! half-made.
 //!
 //! THE DESK's OTHER TWO ANSWERS: a sign-up (`Desk::sign_up`), the address
 //! kept through `signups` and logged as kept or refused — never the
@@ -264,9 +265,12 @@ impl Drop for Slot<'_> {
     }
 }
 
-/// What a provisioning has made so far, for the cleanup to undo — and,
-/// once its snippet's write has begun, the route lock that write took, so
-/// a failed route change is undone under the lock it was made under.
+/// What a provisioning has made so far — or, handed to the sweep, what a
+/// stop mid-board may have left — for the cleanup to undo; and, once its
+/// snippet's write has begun, the route lock that write took, so a failed
+/// route change is undone under the lock it was made under. The cleanup
+/// takes it apart whole and the sweep builds it whole, so a making added here
+/// is a compile error at both until each says what it does with it.
 #[derive(Debug, Default)]
 struct Made<'s> {
     /// The board's volume, created.
@@ -323,19 +327,20 @@ impl Service {
         self.book().map.live().len()
     }
 
-    /// THE SWEEP AT START, run once before the service listens: every
-    /// volume under this service's label listed; each under a name of the
-    /// grammar with NO snippet is half-made — a stop mid-board left it — and
-    /// is removed by the cleanup table's last two rows, whichever run stands
-    /// under the name (`rm_force`) then the volume (`volume_rm`), each
-    /// answer logged, and the truth then asked what stands
-    /// ([`Service::cleared`]): done, or INCOMPLETE naming what stands, the
-    /// name then taken until the operator clears it. A name whose snippet
+    /// THE SWEEP AT START, run once before the service listens: every volume
+    /// under this service's label listed; each under a name of the grammar
+    /// with NO snippet is half-made — a stop mid-board left it — and is undone
+    /// by [`Service::cleanup`], handed what such a stop leaves: the volume,
+    /// and a run that may stand under the name. So the table's last two rows
+    /// undo it — whichever run stands (`rm_force`), then the volume
+    /// (`volume_rm`), each answer logged — and the truth is then asked what
+    /// stands ([`Service::cleared`]): done, or INCOMPLETE naming what stands,
+    /// the name then taken until the operator clears it. A name whose snippet
     /// stands is left — live, or stopped and Docker's `--restart` to bring
-    /// back — and so is a listed volume under no name of the grammar,
-    /// logged. A listing that fails is logged and the sweep skipped: a
-    /// listing failure must not take the sign-up down. Answers the boards
-    /// cleared, for the serving line.
+    /// back — and so is a listed volume under no name of the grammar, logged.
+    /// A listing that fails is logged and the sweep skipped: a listing failure
+    /// must not take the sign-up down. Answers the boards cleared, for the
+    /// serving line.
     ///
     /// ITS PRECONDITION, the operator's: ONE SERVICE PER DOCKER HOST. The
     /// label marks every volume any `serve` on the host made, and a volume
@@ -374,10 +379,10 @@ impl Service {
         let mut swept = 0;
         for name in &labelled.half_made {
             self.log(&format!("{name}: half-made at start (a volume, no snippet) — removing"));
-            // The table's last two rows, then the truth asked what stands.
-            self.undone(name, "sweep", "rm_force", docker.rm_force(name));
-            self.undone(name, "sweep", "volume_rm", docker.volume_rm(name));
-            if self.cleared(name, "sweep") {
+            // What a stop mid-board leaves — the volume, and a run that may
+            // stand under the name — undone by the cleanup: its table's last
+            // two rows, then the truth asked what stands.
+            if self.cleanup(name, Made { volume: true, run: true, snippet: None }, "sweep") {
                 swept += 1;
             }
         }
@@ -456,7 +461,7 @@ impl Service {
             }
             Err(step) => {
                 self.log(&format!("{name}: FAILED at {step}"));
-                self.cleanup(name, made);
+                self.cleanup(name, made, "cleanup");
                 self.book().mark_failed(&job);
                 false
             }
@@ -594,15 +599,21 @@ impl Service {
         self.judged(&format!("{name}: {step}"), answered).ok_or(step)
     }
 
-    /// THE CLEANUP: what was made, undone in reverse — the snippet under the
-    /// route lock its write took, let go of once its reload is made, then
-    /// the run, then the volume, each removal logged and the next still
-    /// tried — and then the verdict, [`Service::cleared`]: the truth about
-    /// names asked what stands, never the removals' answers.
-    fn cleanup(&self, name: &Name, made: Made<'_>) {
+    /// THE CLEANUP, under `under` — `cleanup` after a failed step, `sweep`
+    /// for a board a stop left half-made: what was made, undone in reverse —
+    /// the snippet under the route lock its write took, let go of once its
+    /// reload is made, then the run, then the volume, each removal logged and
+    /// the next still tried — and then the verdict, [`Service::cleared`]: the
+    /// truth about names asked what stands, never the removals' answers.
+    /// `true` where the name is cleared: the look finds nothing standing, or
+    /// no look is owed, nothing having been made. `made` is taken apart
+    /// whole, so a making added to [`Made`] is a compile error here until it
+    /// is undone.
+    fn cleanup(&self, name: &Name, made: Made<'_>, under: &str) -> bool {
         let docker = self.docker.as_ref();
-        let made_anything = made.volume || made.run || made.snippet.is_some();
-        if let Some(_route_change) = made.snippet {
+        let Made { volume, run, snippet } = made;
+        let made_anything = volume || run || snippet.is_some();
+        if let Some(_route_change) = snippet {
             // The route change's undo, under the lock its write took, to the
             // end of this block. The removal's answer says whether a reload
             // is owed: none where no snippet stood; on an error, which may
@@ -610,31 +621,29 @@ impl Service {
             // reload follows.
             let reload = match caddy::remove(&self.config.boards_dir, name) {
                 Ok(true) => {
-                    self.log(&format!("{name}: cleanup: snippet: removed"));
+                    self.log(&format!("{name}: {under}: snippet: removed"));
                     true
                 }
                 Ok(false) => {
-                    self.log(&format!("{name}: cleanup: snippet: none stood"));
+                    self.log(&format!("{name}: {under}: snippet: none stood"));
                     false
                 }
                 Err(e) => {
-                    self.log(&format!("{name}: cleanup: snippet: not removed: {e}"));
+                    self.log(&format!("{name}: {under}: snippet: not removed: {e}"));
                     true
                 }
             };
             if reload {
-                self.undone(name, "cleanup", "caddy_reload", caddy::reload(docker));
+                self.undone(name, under, "caddy_reload", caddy::reload(docker));
             }
         }
-        if made.run {
-            self.undone(name, "cleanup", "rm_force", docker.rm_force(name));
+        if run {
+            self.undone(name, under, "rm_force", docker.rm_force(name));
         }
-        if made.volume {
-            self.undone(name, "cleanup", "volume_rm", docker.volume_rm(name));
+        if volume {
+            self.undone(name, under, "volume_rm", docker.volume_rm(name));
         }
-        if made_anything {
-            self.cleared(name, "cleanup");
-        }
+        !made_anything || self.cleared(name, under)
     }
 
     /// ONE REMOVAL's CALL — a making undone — logged under `under`,

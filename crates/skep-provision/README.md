@@ -202,6 +202,12 @@ Each row names where its words come from:
 - `RULED-SUBSTANCE / DRAFT-WORDING` rows are the operator sentence and the
   anchorless sentence, ruled in substance and worded here.
 
+A row's `{slot}` is filled where the row is shown: every page fills the
+site's two, the suffix and the owner's address, into any row it shows,
+D-7's page the status URL beside them, and the reply its own four. A row
+shown where a slot it names is not filled fails the test that renders
+it, in every debug build; a release build shows the slot as written.
+
 The live reply is rendered by one function for the page and the mail
 alike. The `local_trust` clause has no row: the service never shows it,
 because a board with local trust on fails the `/health` step.

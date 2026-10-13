@@ -200,7 +200,11 @@ fn each_bad_command_line_is_a_usage_refusal() {
     assert!(parse(argv(&["invite", "--state-dir", "/s"])).expect_err("no address").contains("--address is required"));
     assert!(parse(argv(&["invite", "--address", "a@b"])).expect_err("no state dir").contains("--state-dir is required"));
     assert!(parse(argv(&["invite", "--address", "a@b", "--state-dir", "/s", "--code", "a b"])).expect_err("a code out of the alphabet").contains("--code: 'a b' is not 1 to 128"));
-    assert!(parse(argv(&["invite", "--address", "not an address", "--state-dir", "/s"])).expect_err("an address out of the rule").contains("--address: 'not an address' is not an address"));
+    assert_eq!(
+        parse(argv(&["invite", "--address", "not an address", "--state-dir", "/s"])),
+        Err(format!("--address: 'not an address' is not an address: {}", statedir::address_rule())),
+        "an address out of the rule"
+    );
     assert!(serve(&["--reply-to", "a@b@c"]).is_err());
     assert_eq!(parse(argv(&[])), Err("a verb is required: serve or invite".to_owned()));
     assert_eq!(parse(argv(&["provision"])), Err("unknown verb 'provision': serve or invite".to_owned()));

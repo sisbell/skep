@@ -2,7 +2,8 @@
 //! the provisioning record §5.2): the four pages' HTML — the sign-up page,
 //! the claim form, the status page, the refusals — plain HTML with no script
 //! and no external resource, every sentence on them a row of the strings
-//! table (`strings`); and each request's dispatch, by its method and its
+//! table (`strings`), shown with the site's two slots filled
+//! ([`Site::fill`]); and each request's dispatch, by its method and its
 //! path, over `skep_http`, one request per connection, the request in and
 //! the answer out each under a [`TRANSFER_DEADLINE`] of its own.
 //!
@@ -177,13 +178,30 @@ pub trait Desk: Sync {
 }
 
 /// What every page fills its slots from: the suffix the boards stand
-/// under, and the owner's address D-8 names.
+/// under, and the owner's address D-8 names — both filled into every row a
+/// page shows ([`Site::fill`]).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Site {
     /// `--suffix`: `skep.host` in the alpha.
     pub suffix: String,
     /// `--reply-to`: the owner's address, which D-8 names.
     pub owner_address: String,
+}
+
+impl Site {
+    /// A ROW's WORDS AS EVERY PAGE SHOWS THEM: the site's two slots filled,
+    /// `{suffix}` and `{owner_address}`, so any row a page shows may name
+    /// either, and no page chooses.
+    fn fill(&self, row: Words) -> String {
+        self.fill_with(row, &[])
+    }
+
+    /// [`Site::fill`] with a page's own slots beside the site's two: the
+    /// status URL on D-7's page.
+    fn fill_with(&self, row: Words, more: &[(&str, &str)]) -> String {
+        let site = [("suffix", self.suffix.as_str()), ("owner_address", self.owner_address.as_str())];
+        fill(row, &[more, &site[..]].concat())
+    }
 }
 
 /// A POST's STATUS URL (the provisioning record §5.2, THE STATUS URL):
@@ -289,8 +307,8 @@ fn connection_within(mut stream: TcpStream, site: &Site, desk: &dyn Desk, within
 /// A request the subset refused: 413 past the cap, 400 otherwise.
 fn refused_answer(refused: &Refused, site: &Site) -> Answer {
     match refused {
-        Refused::TooLarge { .. } => Answer { status: 413, body: page(site, None, &paragraph(&fill(TOO_LARGE, &[]))) },
-        Refused::Malformed(_) => Answer { status: 400, body: page(site, None, &paragraph(&fill(BAD_FORM, &[]))) },
+        Refused::TooLarge { .. } => Answer { status: 413, body: page(site, None, &paragraph(&site.fill(TOO_LARGE))) },
+        Refused::Malformed(_) => Answer { status: 400, body: page(site, None, &paragraph(&site.fill(BAD_FORM))) },
     }
 }
 
@@ -302,7 +320,7 @@ fn answer(request: &Request, site: &Site, desk: &dyn Desk) -> Answer {
             let Ok(form) = urlform::decode(&request.body) else { return bad_form(site) };
             let address = form.get("address").unwrap_or_default();
             match desk.sign_up(address) {
-                Ok(()) => ok(page(site, None, &paragraph(&fill(THANKS, &[])))),
+                Ok(()) => ok(page(site, None, &paragraph(&site.fill(THANKS)))),
                 Err(SignUpRefusal::NotAnAddress) => ok(signup_page(site, Some(SIGNUP_REFUSED), &String::from_utf8_lossy(address))),
                 Err(SignUpRefusal::Failed) => ok(signup_page(site, Some(SIGNUP_FAILED), &String::from_utf8_lossy(address))),
             }
@@ -322,7 +340,7 @@ fn answer(request: &Request, site: &Site, desk: &dyn Desk) -> Answer {
         ("GET", path) => match path.strip_prefix("/status/").filter(|t| !t.is_empty() && !t.contains('/')).and_then(|token| desk.status(token).map(|shown| (token, shown))) {
             Some((token, Shown::BeingMade)) => ok(being_made(site, token)),
             Some((_, Shown::Live(text))) => ok(page(site, None, &paragraphs(&text))),
-            Some((_, Shown::Failed)) => ok(page(site, None, &refused_paragraph(&fill(FAILED, &[("owner_address", &site.owner_address)])))),
+            Some((_, Shown::Failed)) => ok(page(site, None, &refused_paragraph(&site.fill(FAILED)))),
             None => not_found(site),
         },
         _ => not_found(site),
@@ -345,11 +363,11 @@ fn ok(body: String) -> Answer {
 }
 
 fn not_found(site: &Site) -> Answer {
-    Answer { status: 404, body: page(site, None, &paragraph(&fill(NOT_FOUND, &[]))) }
+    Answer { status: 404, body: page(site, None, &paragraph(&site.fill(NOT_FOUND))) }
 }
 
 fn bad_form(site: &Site) -> Answer {
-    Answer { status: 400, body: page(site, None, &paragraph(&fill(BAD_FORM, &[]))) }
+    Answer { status: 400, body: page(site, None, &paragraph(&site.fill(BAD_FORM))) }
 }
 
 // ── THE PAGES ────────────────────────────────────────────────────────────
@@ -377,17 +395,16 @@ fn page(site: &Site, refresh: Option<&str>, body: &str) -> String {
 /// field — pre-filled with what was sent where it was refused — what is
 /// kept, the button.
 fn signup_page(site: &Site, refusal: Option<Words>, address: &str) -> String {
-    let slots = [("suffix", site.suffix.as_str())];
-    let mut body = paragraph(&fill(SIGNUP_LEAD, &slots));
+    let mut body = paragraph(&site.fill(SIGNUP_LEAD));
     if let Some(words) = refusal {
-        body.push_str(&refused_paragraph(&fill(words, &slots)));
+        body.push_str(&refused_paragraph(&site.fill(words)));
     }
     body.push_str(&format!(
         "<form method=\"post\" action=\"/signup\" accept-charset=\"utf-8\">\n<label for=\"address\">{}</label>\n<input id=\"address\" name=\"address\" type=\"email\" autocomplete=\"email\" required value=\"{}\">\n<p class=\"help\">{}</p>\n<button type=\"submit\">{}</button>\n</form>\n",
-        row(&fill(ADDRESS_LABEL, &slots)),
+        row(&site.fill(ADDRESS_LABEL)),
         attr(address),
-        row(&fill(SIGNUP_KEPT, &slots)),
-        row(&fill(SIGNUP_BUTTON, &slots)),
+        row(&site.fill(SIGNUP_KEPT)),
+        row(&site.fill(SIGNUP_BUTTON)),
     ));
     page(site, None, &body)
 }
@@ -399,10 +416,9 @@ fn signup_page(site: &Site, refusal: Option<Words>, address: &str) -> String {
 /// value, [`escape`] in the textarea — never through [`row`], so the next
 /// post sends it as it was sent.
 fn claim_page(site: &Site, refusal: Option<Words>, post: &Post<'_>) -> String {
-    let slots = [("suffix", site.suffix.as_str()), ("owner_address", site.owner_address.as_str())];
-    let mut body = paragraph(&fill(CLAIM_LEAD, &slots));
+    let mut body = paragraph(&site.fill(CLAIM_LEAD));
     if let Some(words) = refusal {
-        body.push_str(&refused_paragraph(&fill(words, &slots)));
+        body.push_str(&refused_paragraph(&site.fill(words)));
     }
     body.push_str(&format!(
         "<form method=\"post\" action=\"/claim\" accept-charset=\"utf-8\">\n\
@@ -413,15 +429,15 @@ fn claim_page(site: &Site, refusal: Option<Words>, post: &Post<'_>) -> String {
          <label for=\"invite\">{}</label>\n\
          <input id=\"invite\" name=\"invite\" required autocomplete=\"off\" spellcheck=\"false\" value=\"{}\">\n\
          <button type=\"submit\">{}</button>\n</form>\n",
-        row(&fill(NAME_LABEL, &slots)),
-        row(&fill(NAME_HELP, &slots)),
+        row(&site.fill(NAME_LABEL)),
+        row(&site.fill(NAME_HELP)),
         attr(&String::from_utf8_lossy(post.name)),
-        row(&fill(RECORD_LABEL, &slots)),
-        row(&fill(RECORD_HELP, &slots)),
+        row(&site.fill(RECORD_LABEL)),
+        row(&site.fill(RECORD_HELP)),
         escape(&String::from_utf8_lossy(post.record), false),
-        row(&fill(INVITE_LABEL, &slots)),
+        row(&site.fill(INVITE_LABEL)),
         attr(&String::from_utf8_lossy(post.invite)),
-        row(&fill(CLAIM_BUTTON, &slots)),
+        row(&site.fill(CLAIM_BUTTON)),
     ));
     page(site, None, &body)
 }
@@ -429,7 +445,7 @@ fn claim_page(site: &Site, refusal: Option<Words>, post: &Post<'_>) -> String {
 /// D-7's PAGE: D-7 and the status URL, refreshing to it.
 fn being_made(site: &Site, token: &str) -> String {
     let url = status_url(&site.suffix, token);
-    let body = paragraph(&fill(BEING_MADE, &[])) + &paragraph(&fill(STATUS_URL, &[("status_url", &url)]));
+    let body = paragraph(&site.fill(BEING_MADE)) + &paragraph(&site.fill_with(STATUS_URL, &[("status_url", &url)]));
     page(site, Some(&format!("/status/{token}")), &body)
 }
 

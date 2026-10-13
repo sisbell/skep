@@ -1584,10 +1584,10 @@ each naming only those above it:
   container — the status token, the status map, rebuilt at start from
   the snippets, and the labelled volumes sorted against the snippets into
   half-made, routed and unnamed.
-- `statedir.rs` the state directory's door; the state files' one
-  writer, `whole`'s replacement at `0600`; and what the two files' lines
-  carry: the address rule, with `MailAddress`, the one value an address
-  is taken in as, and the date.
+- `statedir.rs` the state directory's door; the state files' one writer,
+  `whole`'s replacement at `0600`; and what the two files' lines carry:
+  the address rule and its words for a refusal to name, with
+  `MailAddress`, the one value an address is taken in as, and the date.
 - `signups.rs` the sign-up file, capped at 256 KiB.
 - `invites.rs` the invite file — mint, look up, spend — under a lock file
   across processes; the code's alphabet, and `InviteCode`, the one value a
@@ -1709,6 +1709,9 @@ Rules that hold across its files:
 - **Every person-facing sentence is in one table**, `strings.rs`, each
   row naming its id, and the live reply is one function, its inputs
   gathered in one place, so the page and the mail cannot say two things.
+  A row names only slots the place that shows it fills — every page the
+  site's two, the suffix and the owner's address — and one shown where a
+  slot it names is not filled fails the test that renders it.
 - **Two fakes, under `test-hooks` alone.** The scripted Docker runner
   fails a test on a call it did not expect; the mail fake appends what it
   accepts to a file. No shipped build enables the feature, and every test

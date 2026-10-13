@@ -139,8 +139,8 @@ impl Shell {
                 })
                 .collect();
             let payload = if with_payload {
-                let e = Enrollment::new(key.public.clone(), key.anchor, key.label.clone()).map_err(|e| Refusal::shell(Name::EMPTY_LABEL, json!({"cause": e.to_string()})))?;
-                Value::from(encode_enroll(&[e]))
+                let enrollment = Enrollment::new(key.public.clone(), key.anchor, key.label.clone()).map_err(|e| Refusal::shell(Name::EMPTY_LABEL, json!({"cause": e.to_string()})))?;
+                Value::from(encode_enroll(&[enrollment]))
             } else {
                 Value::Null
             };

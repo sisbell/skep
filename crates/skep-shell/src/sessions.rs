@@ -156,34 +156,34 @@ pub trait Supplements {
 /// whose own keys name a retirement's own hand.
 #[derive(Debug)]
 pub struct Sessions {
-    map: Mutex<HashMap<String, Arc<SessionEntry>>>,
+    entries: Mutex<HashMap<String, Arc<SessionEntry>>>,
     reopen_store: Option<Arc<FileStore>>,
 }
 
 impl Sessions {
     /// No session, every end derived under `reopen_store`.
     pub fn new(reopen_store: Option<Arc<FileStore>>) -> Sessions {
-        Sessions { map: Mutex::new(HashMap::new()), reopen_store }
+        Sessions { entries: Mutex::new(HashMap::new()), reopen_store }
     }
 
     /// The session `reference` names, where this shell holds one.
     pub fn get(&self, reference: &str) -> Option<Arc<SessionEntry>> {
-        self.map.lock().expect("the sessions' lock").get(reference).cloned()
+        self.entries.lock().expect("the sessions' lock").get(reference).cloned()
     }
 
     /// Every session at the board `board_reference` names, in no order.
     pub fn on_board(&self, board_reference: &str) -> Vec<Arc<SessionEntry>> {
-        self.map.lock().expect("the sessions' lock").values().filter(|e| e.board_reference == board_reference).cloned().collect()
+        self.entries.lock().expect("the sessions' lock").values().filter(|e| e.board_reference == board_reference).cloned().collect()
     }
 
     /// Every session, in no order.
     pub fn all(&self) -> Vec<Arc<SessionEntry>> {
-        self.map.lock().expect("the sessions' lock").values().cloned().collect()
+        self.entries.lock().expect("the sessions' lock").values().cloned().collect()
     }
 
     /// How many sessions stand.
     pub fn len(&self) -> usize {
-        self.map.lock().expect("the sessions' lock").len()
+        self.entries.lock().expect("the sessions' lock").len()
     }
 
     /// A session opened at `board`, REGISTERED: entered under a fresh
@@ -272,12 +272,12 @@ impl Sessions {
             opened_at: open.opened_at,
             end: OnceLock::new(),
         });
-        self.map.lock().expect("the sessions' lock").insert(entry.reference.clone(), Arc::clone(&entry));
+        self.entries.lock().expect("the sessions' lock").insert(entry.reference.clone(), Arc::clone(&entry));
         entry
     }
 
     fn remove(&self, reference: &str) -> Option<Arc<SessionEntry>> {
-        self.map.lock().expect("the sessions' lock").remove(reference)
+        self.entries.lock().expect("the sessions' lock").remove(reference)
     }
 }
 
@@ -378,22 +378,22 @@ pub fn closed() -> Value {
 /// derived from the reads made now at its board (the module doc), and on the
 /// restart arm the session re-opened in its place; `store` where the shell
 /// holds a key store for that re-open. Run inside [`Sessions::end`] alone,
-/// under the entry's lock: the re-open it makes is a session no other hand
-/// registers.
+/// in the entry's `OnceLock`: the re-open it makes is a session no other
+/// hand registers.
 fn derive_death(store: Option<&FileStore>, entry: &SessionEntry) -> Death {
     let board: &Board = &entry.board;
-    let none = |reason: Value| Death { reason, reopened: None };
+    let not_reopened = |reason: Value| Death { reason, reopened: None };
     let health = match board.health() {
         Ok(h) => h,
-        Err(h) => return none(json!({"arm": "unreachable", "text": h.to_string()})),
+        Err(h) => return not_reopened(json!({"arm": "unreachable", "text": h.to_string()})),
     };
     let mode = Mode::of(&health);
     let facts = &entry.facts;
     let SessionKind::Signed { fingerprint: fp, set_account } = &facts.kind else {
         if mode == Mode::Enforcing {
-            return none(json!({"arm": "mode", "mode": mode.name()}));
+            return not_reopened(json!({"arm": "mode", "mode": mode.name()}));
         }
-        return none(json!({"arm": "restart", "reopened": false}));
+        return not_reopened(json!({"arm": "restart", "reopened": false}));
     };
     // A signed session: the retirement, read off the set it authenticated
     // against and the admitted record read.
@@ -412,7 +412,7 @@ fn derive_death(store: Option<&FileStore>, entry: &SessionEntry) -> Death {
                 Some((Hand::Bare, position)) => (Some("bare".to_string()), position, None, false),
                 _ => (None, None, None, false),
             };
-            return none(json!({
+            return not_reopened(json!({
                 "arm": "retired",
                 "fingerprint": fp.to_string(),
                 "own": own_hand,
@@ -429,17 +429,17 @@ fn derive_death(store: Option<&FileStore>, entry: &SessionEntry) -> Death {
             if let Ok(KeySetAnswer::Set(set)) = board.key_set(account) {
                 if !set.is_empty() {
                     let writer = set.enrolled.first().map(|e| e.fingerprint.to_string());
-                    return none(json!({"arm": "seeded", "account": account, "as_of": set.as_of, "writer": writer}));
+                    return not_reopened(json!({"arm": "seeded", "account": account, "as_of": set.as_of, "writer": writer}));
                 }
             }
         }
     }
     // The restart arm, or the block met at the re-open.
-    let Some(store) = store else { return none(json!({"arm": "restart", "reopened": false})) };
+    let Some(store) = store else { return not_reopened(json!({"arm": "restart", "reopened": false})) };
     match open_signed(board, store, facts.principal) {
         Ok(open) => Death { reason: json!({"arm": "restart", "reopened": true}), reopened: Some(open) },
-        Err(Refusal::Blocked(b)) => none(json!({"arm": "blocked", "record": b.record, "ground": b.ground})),
-        Err(other) => none(json!({"arm": "restart", "reopened": false, "refused": other.name()})),
+        Err(Refusal::Blocked(b)) => not_reopened(json!({"arm": "blocked", "record": b.record, "ground": b.ground})),
+        Err(other) => not_reopened(json!({"arm": "restart", "reopened": false, "refused": other.name()})),
     }
 }
 

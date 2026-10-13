@@ -1,12 +1,12 @@
 //! THE SHELL's SUITE, its cells in four children over the ground shared
 //! here: a real daemon spawned in-process over a temp data dir and started
 //! again at its port (`spawn`, `spawn_at`), a shell opened over it as a
-//! transport opens one (`shell`), the board claimed through the shell's own
-//! `claim` call (`claim_board`), the page's side of a walk — every
-//! answerable moment answered in its own form (`answer_moments`) — the wait
-//! for an event, a drafts page read under a token (`changes_under`), every
-//! seed a walk made (`seeds_of`), and every event held to its declaration
-//! (`assert_events_declared`).
+//! transport opens one (`open_shell`), the board claimed through the
+//! shell's own `claim` call (`claim_board`), the page's side of a walk —
+//! every answerable moment answered in its own form (`answer_moments`) —
+//! the wait for an event, a drafts page read under a token
+//! (`changes_under`), every seed a walk made (`seeds_of`), and every event
+//! held to its declaration (`assert_events_declared`).
 //! `door` holds the shell's own frame, with no daemon behind it; `modes`
 //! the bare and the signed session modes end to end; `boards` each board's
 //! own node, wait and stop beside another's; `held` the held-burst store
@@ -61,7 +61,9 @@ fn talk() -> (Talk, Arc<Mutex<Vec<String>>>) {
     (Arc::new(move |l: &str| kept.lock().unwrap().push(l.to_string())), lines)
 }
 
-fn shell(origin: &str, store: &Path, session_mode: SessionMode) -> (Shell, Arc<Mutex<Vec<String>>>) {
+/// A shell opened over the board at `origin`, its key store at `store`, in
+/// `session_mode`, and its TALK lines beside it.
+fn open_shell(origin: &str, store: &Path, session_mode: SessionMode) -> (Shell, Arc<Mutex<Vec<String>>>) {
     let (talk, lines) = talk();
     (Shell::open(ShellOptions::new(vec![Origin::parse(origin).unwrap()], store.to_path_buf(), session_mode, talk)), lines)
 }
@@ -94,7 +96,7 @@ fn answer_moments(rx: std::sync::mpsc::Receiver<Event>, pending: Arc<crate::pers
 /// bare-mode shell's own `claim` call — the mode names the session kind,
 /// not the walk's.
 fn claim_board(origin: &str, store: &Path) {
-    let (shell, lines) = shell(origin, store, SessionMode::Bare { principal: 1 });
+    let (shell, lines) = open_shell(origin, store, SessionMode::Bare { principal: 1 });
     let seen = Arc::new(Mutex::new(Vec::new()));
     let answerer = answer_moments(shell.subscribe(), Arc::clone(&shell.pending), seen);
     shell.call("keygen", &json!({"label": "notebook"})).unwrap();

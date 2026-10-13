@@ -75,7 +75,7 @@ use crate::dev_arm::DevArm;
 use crate::events::{Event, EventBus, EventName};
 use crate::feed::{answer_without_index, BoardEntry, BridgeSearchOpts, Feed, FeedThreads, Searcher, Shared};
 use crate::hold::{Holds, OpAnswer, Resolved};
-use crate::log::{CallOutcome, Log, LoggingDialer};
+use crate::log::{CallOutcome, Log, ShellDialer};
 use crate::person::Pending;
 use crate::refs::board_reference;
 use crate::refusal::{Name, Refusal};
@@ -327,7 +327,7 @@ pub struct Shell {
     arm: Arc<DevArm>,
     log: Arc<Log>,
     /// THE STOP, set by [`Shell::shutdown`] and read by every board's dialer
-    /// (`LoggingDialer`): once it stands no dial is made, so a feed thread a
+    /// (`ShellDialer`): once it stands no dial is made, so a feed thread a
     /// board holds in a read without end is freed at its next exchange.
     stopping: Arc<AtomicBool>,
     store: Arc<FileStore>,
@@ -468,7 +468,7 @@ impl Shell {
         let mut boards = Vec::new();
         let mut own_node_reference = None;
         for origin in &opts.boards {
-            let board = Arc::new(Board::new(origin.clone(), LoggingDialer::new(Arc::clone(&log), Arc::clone(&stopping))));
+            let board = Arc::new(Board::new(origin.clone(), ShellDialer::new(Arc::clone(&log), Arc::clone(&stopping))));
             let entry = Arc::new(BoardEntry { reference: board_reference(), origin: origin.clone(), board });
             if opts.own_node.as_ref() == Some(origin) {
                 own_node_reference = Some(entry.reference.clone());
@@ -743,7 +743,7 @@ impl Shell {
             GuestTarget::Board(entry) => entry.origin.clone(),
             GuestTarget::Origin(origin) => origin,
         };
-        Ok(Board::new(origin, LoggingDialer::new(Arc::clone(&self.log), Arc::clone(&self.stopping))))
+        Ok(Board::new(origin, ShellDialer::new(Arc::clone(&self.log), Arc::clone(&self.stopping))))
     }
 
     /// The frame, and its `at` where the page sent the `/op-at` form.
@@ -760,9 +760,9 @@ impl Shell {
         Ok((frame.clone(), None))
     }
 
-    /// A response document: the board's answer whole, a `rejected` document
-    /// the board's refusal verbatim.
-    fn document(v: Value) -> Result<Value, Refusal> {
+    /// A response document as the call's answer: the board's answer whole, a
+    /// `rejected` document the board's refusal verbatim.
+    fn document_answer(v: Value) -> Result<Value, Refusal> {
         match Rejection::of(&v) {
             Some(r) => Err(Refusal::from(r.refused(&v))),
             None => Ok(v),
@@ -790,10 +790,10 @@ impl Shell {
             }
             return match at {
                 Some(at) => match board.op_at(None, at, &frame)? {
-                    AtAnswer::Document(v) => Self::document(v),
+                    AtAnswer::Document(v) => Self::document_answer(v),
                     other => Err(at_refusal(other)),
                 },
-                None => Self::document(board.guest(&frame)?),
+                None => Self::document_answer(board.guest(&frame)?),
             };
         }
         let session = self.session(&args["session"])?;
@@ -804,7 +804,7 @@ impl Shell {
             };
         };
         match session.board.op_at(Some(&session.token), at, &frame)? {
-            AtAnswer::Document(v) => Self::document(v),
+            AtAnswer::Document(v) => Self::document_answer(v),
             AtAnswer::Closed => Err(self.died(&session)),
             other => Err(at_refusal(other)),
         }
@@ -941,7 +941,7 @@ impl Shell {
     /// the `held/<chain>/` locks its holds kept are free once this returns.
     /// The dialer stops after the sessions' closes, which dial, and before
     /// the threads are asked to stop: from then on every dial is refused as
-    /// one that made no connection (`LoggingDialer`), so a feed thread a board
+    /// one that made no connection (`ShellDialer`), so a feed thread a board
     /// holds in a read without end — pages whose `more` never ends — is freed
     /// at its next exchange, and the stop waits on no board past one
     /// exchange's bound. A second stop finds nothing left to stop, and
@@ -982,7 +982,7 @@ impl Drop for Shell {
 /// death signal are the caller's to read before this; an answer of any
 /// other kind halts naming it.
 fn at_refusal(a: AtAnswer) -> Refusal {
-    let document = |error: &str, member: &str, known: Option<u64>| {
+    let error_document = |error: &str, member: &str, known: Option<u64>| {
         let mut body = json!({"error": error});
         if let Some(n) = known {
             body[member] = Value::from(n);
@@ -990,9 +990,9 @@ fn at_refusal(a: AtAnswer) -> Refusal {
         body
     };
     let (status, body) = match a {
-        AtAnswer::HistoryReclaimed { floor } => (410, document("history_reclaimed", "floor", floor)),
-        AtAnswer::BeyondHead { head } => (400, document("beyond_head", "head", head)),
-        AtAnswer::NotAPosition { nearest } => (400, document("not_a_position", "nearest", nearest)),
+        AtAnswer::HistoryReclaimed { floor } => (410, error_document("history_reclaimed", "floor", floor)),
+        AtAnswer::BeyondHead { head } => (400, error_document("beyond_head", "head", head)),
+        AtAnswer::NotAPosition { nearest } => (400, error_document("not_a_position", "nearest", nearest)),
         AtAnswer::Busy => (503, json!({"error": "history_busy"})),
         other => {
             let state = format!("the board answered `/op-at` with {other:?}, which is no refusal the shell reads");

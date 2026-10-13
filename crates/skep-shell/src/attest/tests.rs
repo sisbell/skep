@@ -41,12 +41,14 @@ fn the_trunk_is_the_document_field_cut_to_its_first_component() {
     assert_eq!(trunk_text(&format!("{deep}.1")), None, "one component past it");
 }
 
-/// A V-spec's span reads as `(from, width)`; an I-address splits at its
-/// last component; the ten kinds are the checked set; and an insert's
-/// `values` the wire's forms refuse are the composer's halt, each fault
-/// faced in its own words.
+/// THE COMPOSER reads a frame as the wire spells it: an insert's `values`
+/// the wire's forms refuse are its halt, each fault faced in its own words;
+/// a V-spec's span reads as `(from, width)`; an I-address splits at its last
+/// component; the ten kinds are the checked set, a frame of them wanting the
+/// shell's attest where none rides it; and a run `image` answers is a
+/// content extent, its width zeros but at its last component.
 #[test]
-fn the_v_spec_and_the_i_address_read_as_the_wire_spells_them() {
+fn the_composer_reads_a_frame_as_the_wire_spells_it() {
     let insert = |values: Value| insert_terms(&json!({"op": "insert", "doc": "1.0.1.0.1", "values": values})).map(drop).unwrap_err().to_string();
     assert!(insert(json!([7])).contains("not the wire's forms"), "{}", insert(json!([7])));
     assert!(insert(json!(["a".repeat(MAX_INSERT_VALUES + 1)])).contains(&format!("more than {MAX_INSERT_VALUES} values")));
@@ -63,11 +65,11 @@ fn the_v_spec_and_the_i_address_read_as_the_wire_spells_them() {
     assert_eq!((span.start().to_string(), span.width().to_string()), ("1.0.1.0.1.0.1.4".to_string(), "0.0.0.0.0.0.0.3".to_string()));
 }
 
-/// THE BOARD's BUDGETS the board exports are the composer's: the frame cap
-/// the daemon's transport refuses a longer `/op` body by, M7's per-slot span
+/// THE BOARD's BUDGETS the board exports are the shell's: the frame cap the
+/// daemon's transport refuses a longer `/op` body by, M7's per-slot span
 /// budget and M5's re-insert budget. The codec's own three — a wire list, an
-/// insert's values, an address's components — are private to the daemon,
-/// and pinned by its behaviour in the shell's suite.
+/// insert's values, a tumbler's components — are private to the daemon, and
+/// pinned by its behaviour in the shell's suite.
 #[test]
 fn the_budgets_are_the_boards() {
     assert_eq!(MAX_FRAME_BYTES, skepd::body_cap("POST", "/op"));
@@ -218,7 +220,7 @@ impl Ground {
 }
 
 /// `n` runs of an `image` answer, each one position wide.
-fn runs(n: usize) -> Value {
+fn image_runs(n: usize) -> Value {
     Value::Array((1..=n).map(|k| json!({"i_start": format!("1.0.1.0.1.0.1.{k}"), "width": "1"})).collect())
 }
 
@@ -236,8 +238,8 @@ fn vspec(source: &str) -> Value {
 #[test]
 fn a_slot_is_held_to_the_wire_list_and_its_span_budget() {
     let mut fake = Fake::default();
-    fake.images.insert("1.0.1.0.8", runs(MAX_SLOT_SPANS + 1));
-    fake.images.insert("1.0.1.0.9", runs(MAX_SLOT_SPANS));
+    fake.images.insert("1.0.1.0.8", image_runs(MAX_SLOT_SPANS + 1));
+    fake.images.insert("1.0.1.0.9", image_runs(MAX_SLOT_SPANS));
     let g = Ground::over(fake);
     let c = g.composer();
     let past = Value::Array(vec![vspec("1.0.1.0.9"); MAX_WIRE_LIST + 1]);

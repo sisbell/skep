@@ -226,7 +226,7 @@ impl Read for Marked {
     }
 }
 
-fn answer(v: Value) -> Response {
+fn ok(v: Value) -> Response {
     Response { status: 200, headers: Headers::default(), body: v.to_string().into_bytes() }
 }
 
@@ -234,14 +234,14 @@ impl Dialer for Committing {
     fn exchange(&self, _: &Origin, req: &Request) -> Result<Response, DialError> {
         if req.method == Method::Get && req.path.starts_with("/health") {
             self.health_reads.fetch_add(1, Ordering::SeqCst);
-            return Ok(answer(json!({"ok": true, "log_position": 10, "auth": {"claimant": null, "local_trust": true, "origins": [], "signed_origins": []}, "writes": {"halted": false}})));
+            return Ok(ok(json!({"ok": true, "log_position": 10, "auth": {"claimant": null, "local_trust": true, "origins": [], "signed_origins": []}, "writes": {"halted": false}})));
         }
         if req.method == Method::Get && req.path.starts_with("/changes") {
             self.changes_reads.fetch_add(1, Ordering::SeqCst);
             std::thread::sleep(self.delay);
-            return Ok(answer(json!({"changes": [], "last": 10, "more": false})));
+            return Ok(ok(json!({"changes": [], "last": 10, "more": false})));
         }
-        Ok(answer(json!({"resp": "delivery", "items": []})))
+        Ok(ok(json!({"resp": "delivery", "items": []})))
     }
 
     fn stream(&self, _: &Origin, _: &RequestHead, _: &mut dyn Read, _: &mut dyn FnMut(&Headers)) -> Result<StreamedResponse, DialError> {
@@ -330,20 +330,20 @@ fn since_of(path: &str) -> u64 {
 impl Dialer for Reclaiming {
     fn exchange(&self, _: &Origin, req: &Request) -> Result<Response, DialError> {
         if req.method == Method::Get && req.path.starts_with("/health") {
-            return Ok(answer(json!({"ok": true, "log_position": 10, "auth": {"claimant": null, "local_trust": true, "origins": [], "signed_origins": []}, "writes": {"halted": false}})));
+            return Ok(ok(json!({"ok": true, "log_position": 10, "auth": {"claimant": null, "local_trust": true, "origins": [], "signed_origins": []}, "writes": {"halted": false}})));
         }
         if req.method == Method::Get && req.path.starts_with("/changes") {
             let since = since_of(&req.path);
             if !req.path.contains("drafts=true") {
-                return Ok(answer(json!({"changes": [], "last": since.max(10), "more": false})));
+                return Ok(ok(json!({"changes": [], "last": since.max(10), "more": false})));
             }
             if since < FLOOR {
                 return Ok(Response { status: 410, headers: Headers::default(), body: json!({"error": "history_reclaimed", "floor": FLOOR}).to_string().into_bytes() });
             }
             let rows: Vec<Value> = if since < DRAFT_ROW_AT { vec![json!({"at": DRAFT_ROW_AT, "op": "insert", "docs": ["1.0.1.0.1"], "key": "bare"})] } else { Vec::new() };
-            return Ok(answer(json!({"changes": rows, "last": since.max(DRAFT_ROW_AT), "more": false})));
+            return Ok(ok(json!({"changes": rows, "last": since.max(DRAFT_ROW_AT), "more": false})));
         }
-        Ok(answer(json!({"resp": "delivery", "items": []})))
+        Ok(ok(json!({"resp": "delivery", "items": []})))
     }
 
     fn stream(&self, _: &Origin, _: &RequestHead, _: &mut dyn Read, _: &mut dyn FnMut(&Headers)) -> Result<StreamedResponse, DialError> {
@@ -409,7 +409,7 @@ fn limit_of(path: &str) -> Option<u64> {
 /// A page of rows at `ats`, with its `last` and its `more`.
 fn page(ats: &[u64], last: u64, more: bool) -> Response {
     let rows: Vec<Value> = ats.iter().map(|at| json!({"at": at, "op": "insert", "docs": ["1.0.1.0.1"], "key": "bare"})).collect();
-    answer(json!({"changes": rows, "last": last, "more": more}))
+    ok(json!({"changes": rows, "last": last, "more": more}))
 }
 
 /// A non-200 answer of `body`.

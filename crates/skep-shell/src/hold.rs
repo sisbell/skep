@@ -432,7 +432,7 @@ fn awaits_act(line: &HeldLine) -> bool {
 enum Directory {
     /// Not this shell's yet — why: `H.1` not read, or the directory or its
     /// lock refused. Tried again at a session's open and at the probe.
-    Unknown(String),
+    NotYet(String),
     /// This shell's for its life: the directory, and the `flock` on its lock.
     ThisWindow { dir: HeldDir, _lock: File },
     /// Another window holds the lock: every line here is kept in this
@@ -442,21 +442,21 @@ enum Directory {
 
 impl Directory {
     /// The directory `H.1`'s read names (§3c.1): made `0700` and locked where
-    /// the term stands, another window's where its lock is held, and not yet
-    /// this shell's — why said — where the board has no `H.1` (an unclaimed
-    /// board keeps no held text) or the read, the directory or the lock
-    /// refused.
-    fn of(data_dir: &Path, term: Result<Option<BoardTerm>, Halt>) -> Directory {
-        let term = match term {
-            Ok(Some(term)) => term,
-            Ok(None) => return Directory::Unknown("the board has no H.1 yet, and an unclaimed board keeps no held text".to_string()),
-            Err(h) => return Directory::Unknown(format!("the board's H.1 could not be read: {h}")),
+    /// the board term stands, another window's where its lock is held, and
+    /// not yet this shell's — why said — where the board has no `H.1` (an
+    /// unclaimed board keeps no held text) or the read, the directory or the
+    /// lock refused.
+    fn of(data_dir: &Path, board_term: Result<Option<BoardTerm>, Halt>) -> Directory {
+        let board_term = match board_term {
+            Ok(Some(board_term)) => board_term,
+            Ok(None) => return Directory::NotYet("the board has no H.1 yet, and an unclaimed board keeps no held text".to_string()),
+            Err(h) => return Directory::NotYet(format!("the board's H.1 could not be read: {h}")),
         };
-        let dir = HeldDir::new(data_dir, Chain::from_bytes(term.chain));
+        let dir = HeldDir::new(data_dir, Chain::from_bytes(board_term.chain));
         match dir.ensure().and_then(|()| dir.try_lock()) {
             Ok(Some(lock)) => Directory::ThisWindow { dir, _lock: lock },
             Ok(None) => Directory::OtherWindow,
-            Err(e) => Directory::Unknown(format!("the held store could not be made or locked: {e}")),
+            Err(e) => Directory::NotYet(format!("the held store could not be made or locked: {e}")),
         }
     }
 }
@@ -584,7 +584,7 @@ impl Holds {
         let boards = boards
             .into_iter()
             .map(|(reference, board)| {
-                let hold = BoardHold { directory: Directory::Unknown("no session has opened at this board yet".to_string()), writes_halted: false, node_stopped: false, principals: HashMap::new() };
+                let hold = BoardHold { directory: Directory::NotYet("no session has opened at this board yet".to_string()), writes_halted: false, node_stopped: false, principals: HashMap::new() };
                 (reference, BoardSlot { board, hold: Mutex::new(hold), draining: AtomicBool::new(false) })
             })
             .collect();
@@ -645,13 +645,13 @@ impl Holds {
     /// then made and locked under it. A hold never comes here: it never
     /// dials to learn where to write.
     fn establish(&self, slot: &BoardSlot) {
-        if !matches!(slot.lock().directory, Directory::Unknown(_)) {
+        if !matches!(slot.lock().directory, Directory::NotYet(_)) {
             return;
         }
-        let term = slot.board.board_term();
+        let board_term = slot.board.board_term();
         let mut board_hold = slot.lock();
-        if matches!(board_hold.directory, Directory::Unknown(_)) {
-            board_hold.directory = Directory::of(&self.data_dir, term);
+        if matches!(board_hold.directory, Directory::NotYet(_)) {
+            board_hold.directory = Directory::of(&self.data_dir, board_term);
         }
     }
 
@@ -682,7 +682,7 @@ impl Holds {
                     Err(e) => ph.custody = Custody::Unwritable(format!("the held file could not be read: {e}")),
                 },
                 Directory::OtherWindow => ph.custody = Custody::OtherWindow,
-                Directory::Unknown(why) => ph.custody = Custody::Unwritable(why.clone()),
+                Directory::NotYet(why) => ph.custody = Custody::Unwritable(why.clone()),
             }
         }
         if let Custody::Halted { path, why } = &ph.custody {
@@ -809,7 +809,7 @@ impl Holds {
         let base = ph.last_acked.get(&doc).copied().unwrap_or(session.opened_at);
         let state = line_state(&reason);
         let mut said = reason.cause.clone();
-        let entered = ph.queue.hold(&doc, id.as_deref(), base, frame, reason).map_err(unheld)?;
+        let entered = ph.queue.hold(&doc, id.as_deref(), base, frame, reason).map_err(queue_refused)?;
         let unwritable = match &ph.custody {
             Custody::OtherWindow => {
                 said = cause::OTHER_WINDOW.to_string();
@@ -899,17 +899,17 @@ impl Holds {
         }
     }
 
-    /// `"drop"`: the line and every line after it on that document — a
-    /// refused run's `behind` lines — marked `done … dropped`, the file
+    /// `"drop"`: the line `from` and every line after it on that document —
+    /// a refused run's `behind` lines — marked `done … dropped`, the file
     /// compacting where the queue empties; answered for the `held` event its
     /// caller emits under the session that acted: the lines that stand on
     /// the document, and the state of the one that stands first now — a
     /// MOVED line held before the dropped one keeps the document `moved` —
     /// `kept` only where no line stands.
-    fn drop_run(&self, ph: &mut PrincipalHold, k: u64, doc: &str) -> (u64, HeldState) {
-        let ks: Vec<u64> = ph.queue.lines().iter().filter(|l| l.doc == doc && l.k >= k).map(|l| l.k).collect();
-        for d in ks {
-            self.done_line(ph, d, Done::Dropped);
+    fn drop_run(&self, ph: &mut PrincipalHold, from: u64, doc: &str) -> (u64, HeldState) {
+        let ks: Vec<u64> = ph.queue.lines().iter().filter(|l| l.doc == doc && l.k >= from).map(|l| l.k).collect();
+        for k in ks {
+            self.done_line(ph, k, Done::Dropped);
         }
         let head = ph.queue.lines().iter().find(|l| l.doc == doc);
         (ph.count(doc), head.map_or(HeldState::Kept, |l| line_state(&l.reason)))
@@ -994,11 +994,11 @@ impl Holds {
     }
 }
 
-/// The refusal for a line the queue would not hold (`held::Unheld`): the
-/// principal's queue full — its frames' bytes or its lines — or — never for
-/// a burst [`Burst::admit`] let in — a line no reader of the file reads.
-fn unheld(unheld: Unheld) -> Refusal {
-    match unheld {
+/// The refusal for what the queue refused (`held::Unheld`): the principal's
+/// queue full — its frames' bytes or its lines — or — never for a burst
+/// [`Burst::admit`] let in — a line no reader of the file reads.
+fn queue_refused(why: Unheld) -> Refusal {
+    match why {
         Unheld::Full { held_bytes, frame_bytes, held_lines } => Refusal::shell(
             Name::HELD_FULL,
             json!({"held_bytes": held_bytes, "frame_bytes": frame_bytes, "cap": MAX_HELD_FRAME_BYTES, "held_lines": held_lines, "line_cap": MAX_HELD_LINES}),

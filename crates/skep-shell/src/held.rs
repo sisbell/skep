@@ -344,7 +344,7 @@ impl HeldDir {
     /// open writes one.
     pub fn open_file(&self, principal: u64, account: &str) -> io::Result<Opened> {
         let path = self.path.join(Self::file_name(principal));
-        let disk = Disk { path: path.clone(), chain: self.chain, principal, account: account.to_string(), created: false, remarked: 0 };
+        let disk = Disk { path: path.clone(), chain: self.chain, principal, account: account.to_string(), created: false, remark_bytes: 0 };
         let fresh = |disk: Disk, aside: Option<PathBuf>| Opened::Live { queue: HeldQueue { disk: Some(disk), lines: Vec::new(), next_k: 1, held_bytes: 0 }, aside };
         let file = match File::open(&path) {
             Ok(f) => f,
@@ -385,7 +385,7 @@ impl HeldDir {
         // halted as damaged (§3c.3); a torn last line ignored.
         let mut standing: BTreeMap<u64, HeldLine> = BTreeMap::new();
         let mut max_k = 0u64;
-        let mut remarked = 0usize;
+        let mut remark_bytes = 0usize;
         loop {
             match next_line(&mut reader, &mut buf)? {
                 Line::Complete => {}
@@ -404,7 +404,7 @@ impl HeldDir {
                 // ([`HeldQueue::remark`]): it takes the earlier line's place,
                 // and its bytes count against the file's re-mark budget.
                 if standing.insert(k, line).is_some() {
-                    remarked = remarked.saturating_add(line_bytes);
+                    remark_bytes = remark_bytes.saturating_add(line_bytes);
                 }
             } else if let Some(done) = m.get("done") {
                 let Some(k) = ordinal(done).filter(|_| is_done_line(&m)) else { return halted(HaltWhy::Damaged) };
@@ -416,7 +416,7 @@ impl HeldDir {
         }
         let lines: Vec<HeldLine> = standing.into_values().collect();
         let held_bytes = lines.iter().map(|l| json_len(&l.frame)).sum();
-        let disk = Disk { created: true, remarked, ..disk };
+        let disk = Disk { created: true, remark_bytes, ..disk };
         // `max_k` is within MAX_ORDINAL, so its successor is a `u64`.
         Ok(Opened::Live { queue: HeldQueue { disk: Some(disk), lines, next_k: max_k + 1, held_bytes }, aside: None })
     }
@@ -468,7 +468,7 @@ struct Disk {
     principal: u64,
     account: String,
     created: bool,
-    remarked: usize,
+    remark_bytes: usize,
 }
 
 /// One line entered in the queue: the ordinal it took, and — where its copy
@@ -625,15 +625,15 @@ impl Disk {
     /// never written. Its bytes count as the copy is tried, so a device that
     /// takes a line and refuses its sync spends the budget all the same.
     fn write_remark(&mut self, bytes: &[u8]) -> io::Result<()> {
-        let line = bytes.len().saturating_sub(1);
-        let remarked = self.remarked.saturating_add(line);
-        if remarked > MAX_HELD_REMARK_BYTES {
+        let line_bytes = bytes.len().saturating_sub(1);
+        let remark_bytes = self.remark_bytes.saturating_add(line_bytes);
+        if remark_bytes > MAX_HELD_REMARK_BYTES {
             return Err(io::Error::new(
                 io::ErrorKind::FileTooLarge,
-                format!("the held file's re-marks hold {} bytes; this one's {line} would pass its {MAX_HELD_REMARK_BYTES}", self.remarked),
+                format!("the held file's re-marks hold {} bytes; this one's {line_bytes} would pass its {MAX_HELD_REMARK_BYTES}", self.remark_bytes),
             ));
         }
-        self.remarked = remarked;
+        self.remark_bytes = remark_bytes;
         self.write_line(bytes)
     }
 
@@ -690,7 +690,7 @@ impl Disk {
     fn remove(&mut self) {
         let _ = fs::remove_file(&self.path);
         self.created = false;
-        self.remarked = 0;
+        self.remark_bytes = 0;
     }
 }
 

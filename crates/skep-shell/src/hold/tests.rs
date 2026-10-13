@@ -365,7 +365,7 @@ struct Ground {
 /// A `held` event held to its declaration (`shapes`' `HeldEvent`): every
 /// required member present, none outside the table, and `session` a
 /// reference — never null, as the declared type says.
-fn assert_declared(event: &Value) {
+fn assert_held_event_declared(event: &Value) {
     crate::shapes::assert_declared("HeldEvent", event);
     let shape = crate::shapes::shape("HeldEvent").expect("HeldEvent is declared");
     let session = shape.fields.iter().find(|f| f.name == "session").expect("`session` is declared");
@@ -380,7 +380,7 @@ impl Ground {
             .try_iter()
             .filter(|e| e.name == EventName::Held)
             .map(|e| {
-                assert_declared(&e.data);
+                assert_held_event_declared(&e.data);
                 e.data["state"].as_str().unwrap_or("?").to_string()
             })
             .collect()

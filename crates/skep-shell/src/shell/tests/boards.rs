@@ -32,7 +32,7 @@ fn the_own_nodes_state_is_announced_at_its_board() {
     assert_eq!(daemon(&rx), [json!({"board": board, "state": "running"})]);
     assert_eq!(own.call("probe", &json!({})).unwrap()["daemon"], "running");
     own.shutdown();
-    let (other, _) = shell(&origin, &dir.path().join("store"), SessionMode::Bare { principal: 1 });
+    let (other, _) = open_shell(&origin, &dir.path().join("store"), SessionMode::Bare { principal: 1 });
     let rx = other.subscribe();
     other.set_node_state(NodeState::Stopped);
     assert!(daemon(&rx).is_empty(), "a shell that runs no node announces none");
@@ -97,16 +97,16 @@ fn a_deliberate_stop_of_the_own_node_is_said_once() {
     own_sd.shutdown();
 }
 
-/// A listener that accepts every connection and holds it `hold` before
+/// A listener that accepts every connection and holds it for `delay` before
 /// letting it go unanswered: a board each of whose dials takes that long
 /// and answers nothing.
-fn tarpit(hold: Duration) -> String {
+fn tarpit(delay: Duration) -> String {
     let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
     let origin = format!("http://127.0.0.1:{}", listener.local_addr().unwrap().port());
     thread::spawn(move || {
         for stream in listener.incoming().flatten() {
             thread::spawn(move || {
-                thread::sleep(hold);
+                thread::sleep(delay);
                 drop(stream);
             });
         }
@@ -129,7 +129,7 @@ fn endless_pages() -> (String, Arc<AtomicUsize>) {
     thread::spawn(move || {
         for stream in listener.incoming().flatten() {
             let counted = Arc::clone(&counted);
-            thread::spawn(move || answer_endlessly(stream, &counted));
+            thread::spawn(move || answer_one_request(stream, &counted));
         }
     });
     (origin, pages)
@@ -137,7 +137,7 @@ fn endless_pages() -> (String, Arc<AtomicUsize>) {
 
 /// One request off `stream` — its head through the blank line, its body as
 /// long as its `Content-Length` says — answered as `endless_pages`' board.
-fn answer_endlessly(mut stream: std::net::TcpStream, pages: &AtomicUsize) {
+fn answer_one_request(mut stream: std::net::TcpStream, pages: &AtomicUsize) {
     let mut head = Vec::new();
     let mut byte = [0u8; 1];
     while !head.ends_with(b"\r\n\r\n") {
@@ -273,7 +273,7 @@ fn a_dropped_shell_frees_its_boards_held_lock() {
     let origin = format!("http://127.0.0.1:{}", sd.port());
     let store = dir.path().join("store");
     claim_board(&origin, &store);
-    let (shell, _) = shell(&origin, &store, SessionMode::Bare { principal: 1 });
+    let (shell, _) = open_shell(&origin, &store, SessionMode::Bare { principal: 1 });
     let board = shell.board_references().remove(0);
     let session = shell.call("session", &json!({"board": board})).unwrap()["session"].as_str().unwrap().to_string();
     let token = shell.sessions.get(&session).unwrap().token.clone();
@@ -312,7 +312,7 @@ fn a_board_down_at_the_open_is_fed_from_its_first_answer() {
         assert!(Instant::now() < deadline, "the stopped board still answers");
         thread::sleep(Duration::from_millis(20));
     }
-    let (shell, _) = shell(&origin, &store, SessionMode::Bare { principal: 1 });
+    let (shell, _) = open_shell(&origin, &store, SessionMode::Bare { principal: 1 });
     let seen = Arc::new(Mutex::new(Vec::new()));
     let _answerer = answer_moments(shell.subscribe(), Arc::clone(&shell.pending), Arc::clone(&seen));
     // The feed thread reads `/health` once before it takes its first

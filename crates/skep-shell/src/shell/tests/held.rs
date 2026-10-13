@@ -17,7 +17,7 @@ fn held_ground(dir: &TempDir, sd: &Skepd) -> (Shell, Arc<Mutex<Vec<Event>>>, Str
     let origin = format!("http://127.0.0.1:{}", sd.port());
     let store = dir.path().join("store");
     claim_board(&origin, &store);
-    let (shell, _lines) = shell(&origin, &store, SessionMode::Bare { principal: 1 });
+    let (shell, _lines) = open_shell(&origin, &store, SessionMode::Bare { principal: 1 });
     let seen = Arc::new(Mutex::new(Vec::new()));
     let _answerer = answer_moments(shell.subscribe(), Arc::clone(&shell.pending), Arc::clone(&seen));
     let board = shell.call("boards", &json!({})).unwrap()[0]["board"].as_str().unwrap().to_string();
@@ -189,7 +189,7 @@ fn a_signed_sessions_landed_burst_is_kept_by_the_resend() {
     let origin = format!("http://127.0.0.1:{port}");
     let store = dir.path().join("store");
     claim_board(&origin, &store);
-    let (signed, lines) = shell(&origin, &store, SessionMode::Signed { principal: 1 });
+    let (signed, lines) = open_shell(&origin, &store, SessionMode::Signed { principal: 1 });
     let seen = Arc::new(Mutex::new(Vec::new()));
     let answerer = answer_moments(signed.subscribe(), Arc::clone(&signed.pending), Arc::clone(&seen));
     let board = signed.call("boards", &json!({})).unwrap()[0]["board"].as_str().unwrap().to_string();
@@ -313,7 +313,7 @@ fn the_close_persists_the_held_line_and_the_relaunch_lists_it() {
     // A fresh daemon and a fresh shell over the same store: the first
     // session's open reads the principal's file and lists its line.
     let sd = spawn_at(&dir.path().join("board"), true, port);
-    let (shell, _lines) = shell(&origin, &store, SessionMode::Bare { principal: 1 });
+    let (shell, _lines) = open_shell(&origin, &store, SessionMode::Bare { principal: 1 });
     let seen = Arc::new(Mutex::new(Vec::new()));
     let _answerer = answer_moments(shell.subscribe(), Arc::clone(&shell.pending), Arc::clone(&seen));
     let board = shell.call("boards", &json!({})).unwrap()[0]["board"].as_str().unwrap().to_string();
@@ -362,7 +362,7 @@ fn a_second_principals_file_is_untouched_and_unlisted() {
     // ONE shell (so one lock on `held/<chain>/`) opening a session for each of
     // two principals; principal 1 owns the draft, principal 2 holds its own
     // burst against it while the board is down.
-    let (shell, _lines) = shell(&origin, &store, SessionMode::Bare { principal: 1 });
+    let (shell, _lines) = open_shell(&origin, &store, SessionMode::Bare { principal: 1 });
     let board = shell.call("boards", &json!({})).unwrap()[0]["board"].as_str().unwrap().to_string();
     let s1 = shell.call("session", &json!({"board": board, "principal": 1})).unwrap()["session"].as_str().unwrap().to_string();
     let s2 = shell.call("session", &json!({"board": board, "principal": 2})).unwrap()["session"].as_str().unwrap().to_string();
@@ -410,7 +410,7 @@ fn a_burst_held_on_a_draft_just_minted_is_kept_after_a_restart() {
     let origin = format!("http://127.0.0.1:{port}");
     let store = dir.path().join("store");
     claim_board(&origin, &store);
-    let (shell, _lines) = shell(&origin, &store, SessionMode::Bare { principal: 1 });
+    let (shell, _lines) = open_shell(&origin, &store, SessionMode::Bare { principal: 1 });
     let seen = Arc::new(Mutex::new(Vec::new()));
     let _answerer = answer_moments(shell.subscribe(), Arc::clone(&shell.pending), Arc::clone(&seen));
     let board = shell.call("boards", &json!({})).unwrap()[0]["board"].as_str().unwrap().to_string();
@@ -456,7 +456,7 @@ fn a_relaunch_with_its_board_down_lists_and_resends_the_held_line() {
         shell.shutdown();
     }
     // The relaunch: the shell opened over the store while its board is down.
-    let (relaunched, lines) = shell(&origin, &store, SessionMode::Bare { principal: 1 });
+    let (relaunched, lines) = open_shell(&origin, &store, SessionMode::Bare { principal: 1 });
     let seen = Arc::new(Mutex::new(Vec::new()));
     let _answerer = answer_moments(relaunched.subscribe(), Arc::clone(&relaunched.pending), Arc::clone(&seen));
     let sd = spawn_at(&dir.path().join("board"), true, port);
@@ -472,7 +472,7 @@ fn a_relaunch_with_its_board_down_lists_and_resends_the_held_line() {
     drop(relaunched);
     // A relaunch with the board up, then a burst held: its file's header
     // names the session's account.
-    let (again, _lines) = shell(&origin, &store, SessionMode::Bare { principal: 1 });
+    let (again, _lines) = open_shell(&origin, &store, SessionMode::Bare { principal: 1 });
     let board = again.call("boards", &json!({})).unwrap()[0]["board"].as_str().unwrap().to_string();
     let session = again.call("session", &json!({"board": board})).unwrap()["session"].as_str().unwrap().to_string();
     sd.shutdown();

@@ -238,7 +238,7 @@ impl Ticks {
 pub struct FeedThreads {
     feed: Feed,
     stream_stop: Stop,
-    feeder: thread::JoinHandle<()>,
+    feed_thread: thread::JoinHandle<()>,
 }
 
 impl std::fmt::Debug for FeedThreads {
@@ -273,8 +273,8 @@ impl FeedThreads {
             }
         });
         let stream_stop = stop_rx.recv().expect("the reader sends its stopper before it reads");
-        let feeder = thread::spawn(move || Feeder::run(entry, shared, rx, &ticks));
-        FeedThreads { feed: Feed { cmds: tx }, stream_stop, feeder }
+        let feed_thread = thread::spawn(move || Feeder::run(entry, shared, rx, &ticks));
+        FeedThreads { feed: Feed { cmds: tx }, stream_stop, feed_thread }
     }
 
     /// A handle to the board's feed thread.
@@ -292,7 +292,7 @@ impl FeedThreads {
         if self.feed.cmds.send(Cmd::Stop(reply)).is_ok() {
             let _ = rx.recv();
         }
-        let _ = self.feeder.join();
+        let _ = self.feed_thread.join();
     }
 }
 
@@ -316,7 +316,10 @@ struct Feeder<'b> {
     /// position, then each page's last.
     drafts_since: HashMap<u64, u64>,
     last_mode: Option<Mode>,
-    last_index: BTreeMap<Option<u64>, Value>,
+    /// The `index` state last emitted per face, the guest's under `None` and
+    /// each mounted principal's under its own, so the event goes out only
+    /// where the state moved.
+    last_index_state: BTreeMap<Option<u64>, Value>,
     /// The session reference per mounted principal, for the `index` event.
     session_references: HashMap<u64, String>,
     /// Whether `unreachable` was announced on the `daemon` event for this
@@ -343,7 +346,7 @@ impl<'b> Feeder<'b> {
             published_since: None,
             drafts_since: HashMap::new(),
             last_mode: None,
-            last_index: BTreeMap::new(),
+            last_index_state: BTreeMap::new(),
             session_references: HashMap::new(),
             announced_unreachable: false,
             down: false,
@@ -566,10 +569,10 @@ impl<'b> Feeder<'b> {
             }
         }
         for (principal, state) in faces {
-            if self.last_index.get(&principal) != Some(&state) {
+            if self.last_index_state.get(&principal) != Some(&state) {
                 let session = principal.and_then(|p| self.session_references.get(&p).cloned());
                 self.bus.emit(EventName::Index, json!({"board": self.entry.reference, "session": session, "state": state}));
-                self.last_index.insert(principal, state);
+                self.last_index_state.insert(principal, state);
             }
         }
     }
@@ -673,7 +676,7 @@ impl Supplements for Feeder<'_> {
         self.drafts_since.entry(principal).or_insert(session.opened_at);
         // The face is announced afresh under the reference it now stands
         // under — a re-opened session's as much as a new one's.
-        self.last_index.remove(&Some(principal));
+        self.last_index_state.remove(&Some(principal));
         self.open_consumer();
         if let Some(c) = &self.consumer {
             if let Err(h) = c.widen(SessionRef { token: &session.token, principal, account }) {
@@ -691,7 +694,7 @@ impl Supplements for Feeder<'_> {
         }
         self.session_references.remove(&principal);
         self.drafts_since.remove(&principal);
-        self.last_index.remove(&Some(principal));
+        self.last_index_state.remove(&Some(principal));
     }
 }
 

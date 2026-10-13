@@ -7,7 +7,7 @@
 //! sequence, so a driver reads which calls caused which dials. NO TOKEN, NO
 //! HEADER AND NO BODY is kept: the dial's record is the request line's two
 //! words and the answer's status, which is what a count needs and nothing a
-//! capture could use. [`LoggingDialer`] is the one `Dialer` every board of
+//! capture could use. [`ShellDialer`] is the one `Dialer` every board of
 //! the shell dials through — `PlainHttp` behind the record — so no dial
 //! escapes the log, and the shell's STOP is its one door: once the stop
 //! stands no dial is made at all. THE LOG IS BOUNDED: it keeps the latest
@@ -138,7 +138,7 @@ impl Log {
     /// One DIAL the shell made: the method and the path (its query cut off
     /// — a query may name a position and nothing else, but the record keeps
     /// the route alone), the status answered or the transport's refusal,
-    /// the sizes and the time. Made by [`LoggingDialer`] alone, so every
+    /// the sizes and the time. Made by [`ShellDialer`] alone, so every
     /// dial is the shell's own.
     pub(crate) fn dial(&self, method: Method, path: &str, status: Option<u16>, bytes_in: usize, bytes_out: usize, elapsed: Duration) {
         let route = path.split('?').next().unwrap_or(path);
@@ -180,28 +180,28 @@ impl Log {
 /// ends at its next exchange, whatever a board answers. Cloned into every
 /// board; one record, one stop.
 #[derive(Debug, Clone)]
-pub struct LoggingDialer {
+pub struct ShellDialer {
     inner: PlainHttp,
     log: Arc<Log>,
     stopping: Arc<AtomicBool>,
 }
 
-impl LoggingDialer {
+impl ShellDialer {
     /// The plain arm behind `log`, dialing until `stopping` stands.
-    pub fn new(log: Arc<Log>, stopping: Arc<AtomicBool>) -> LoggingDialer {
-        LoggingDialer { inner: PlainHttp::new(), log, stopping }
+    pub fn new(log: Arc<Log>, stopping: Arc<AtomicBool>) -> ShellDialer {
+        ShellDialer { inner: PlainHttp::new(), log, stopping }
     }
 
     /// The refusal of a dial once the stop stands: a connection never made,
     /// which `hold`'s table reads as a burst that did not leave.
-    fn stopped(&self) -> Option<DialError> {
+    fn stop_refusal(&self) -> Option<DialError> {
         self.stopping.load(Ordering::SeqCst).then(|| DialError::Connect("the shell is stopping: no dial is made".into()))
     }
 }
 
-impl Dialer for LoggingDialer {
+impl Dialer for ShellDialer {
     fn exchange(&self, origin: &Origin, req: &Request) -> Result<Response, DialError> {
-        if let Some(refused) = self.stopped() {
+        if let Some(refused) = self.stop_refusal() {
             return Err(refused);
         }
         let started = Instant::now();
@@ -221,7 +221,7 @@ impl Dialer for LoggingDialer {
         body: &mut dyn Read,
         on_interim: &mut dyn FnMut(&Headers),
     ) -> Result<StreamedResponse, DialError> {
-        if let Some(refused) = self.stopped() {
+        if let Some(refused) = self.stop_refusal() {
             return Err(refused);
         }
         let started = Instant::now();
@@ -302,7 +302,7 @@ mod tests {
         let token = "9f".repeat(16);
         let body = format!("{{\"op\":\"insert\",\"token\":\"{token}\"}}");
         let req = Request::post("/op?x=1", body.clone().into_bytes()).header("Skepd-Session", &token);
-        assert!(LoggingDialer::new(Arc::clone(&log), Arc::default()).exchange(&origin, &req).is_err(), "no board answers at a released port");
+        assert!(ShellDialer::new(Arc::clone(&log), Arc::default()).exchange(&origin, &req).is_err(), "no board answers at a released port");
         let entries = log.entries();
         assert_eq!(entries.len(), 1, "the unanswered dial is recorded: {entries:?}");
         let entry = &entries[0];
@@ -326,7 +326,7 @@ mod tests {
         let origin = Origin::parse(&format!("http://127.0.0.1:{port}")).unwrap();
         let token = "9f".repeat(16);
         let head = RequestHead { method: Method::Get, path: "/blob?i=1.0.1.0.1.0.1.1".into(), headers: vec![("Skepd-Session".into(), token.clone())], content_length: Some(7) };
-        let streamed = LoggingDialer::new(Arc::clone(&log), Arc::default()).stream(&origin, &head, &mut std::io::empty(), &mut |_| {});
+        let streamed = ShellDialer::new(Arc::clone(&log), Arc::default()).stream(&origin, &head, &mut std::io::empty(), &mut |_| {});
         assert!(streamed.is_err(), "no board answers at a released port");
         let entries = log.entries();
         assert_eq!(entries.len(), 1, "the unanswered stream is recorded: {entries:?}");
@@ -349,7 +349,7 @@ mod tests {
         let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
         listener.set_nonblocking(true).unwrap();
         let origin = Origin::parse(&format!("http://127.0.0.1:{}", listener.local_addr().unwrap().port())).unwrap();
-        let dialer = LoggingDialer::new(Arc::clone(&log), Arc::new(AtomicBool::new(true)));
+        let dialer = ShellDialer::new(Arc::clone(&log), Arc::new(AtomicBool::new(true)));
         let started = Instant::now();
         assert!(matches!(dialer.exchange(&origin, &Request::get("/health")), Err(DialError::Connect(_))));
         let head = RequestHead { method: Method::Get, path: "/events".into(), headers: Vec::new(), content_length: None };

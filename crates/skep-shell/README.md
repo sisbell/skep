@@ -25,7 +25,7 @@ modules, and `Shell`'s one door — `call`, which logs each call, with
 | module | holds |
 |---|---|
 | `refs` | the reference registry's NAMES: a board reference (`b-…`) and a session reference (`s-…`) minted from OS entropy per process, never a credential, never derived from an origin or a token (§4b.1, THE PIN) |
-| `log` | `Log`, the call log and the dial log the page's gate reads — sizes, routes and timing, never a token or a body, the latest `MAX_LOG_ENTRIES` kept — and `LoggingDialer`, the one `PlainHttp` every board dials through, which dials nothing once the shell's stop stands |
+| `log` | `Log`, the call log and the dial log the page's gate reads — sizes, routes and timing, never a token or a body, the latest `MAX_LOG_ENTRIES` kept — and `ShellDialer`, the one `PlainHttp` every board dials through, which dials nothing once the shell's stop stands |
 | `events` | `EventBus`: the seven events of §4b.2 as values, each named by an `EventName`, fanned out to every subscriber in order |
 | `refusal` | `Refusal`, the one refusal shape the page renders — the board's verdict verbatim, a halt's face, the block, the unreachable board, the shell's own — each named by a constant of `Name`, the one closed list |
 | `wire` | the wire's shared facts: the board's frame cap (`MAX_FRAME_BYTES`) and a frame's compact bytes (`json_len`), the tumbler component budget, `document_address`, a document address in its one spelling, and the wire's value forms both ways (`values_of`, `delivered_values`) within the insert's value budget |

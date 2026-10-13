@@ -101,7 +101,7 @@ fn nowhere() -> String {
 #[test]
 fn a_present_argument_of_another_form_is_refused_never_read_as_absent() {
     let dir = TempDir::new().unwrap();
-    let (shell, _) = shell(&nowhere(), &dir.path().join("store"), SessionMode::Bare { principal: 1 });
+    let (shell, _) = open_shell(&nowhere(), &dir.path().join("store"), SessionMode::Bare { principal: 1 });
     let _answerer = answer_moments(shell.subscribe(), Arc::clone(&shell.pending), Arc::new(Mutex::new(Vec::new())));
     let board = shell.board_references().remove(0);
     let (listener, dials) = counting_listener();
@@ -138,7 +138,7 @@ fn a_present_argument_of_another_form_is_refused_never_read_as_absent() {
 fn a_guest_search_reads_the_board_its_reference_or_origin_names() {
     let dir = TempDir::new().unwrap();
     let own = nowhere();
-    let (shell, _) = shell(&own, &dir.path().join("store"), SessionMode::Bare { principal: 1 });
+    let (shell, _) = open_shell(&own, &dir.path().join("store"), SessionMode::Bare { principal: 1 });
     let board = shell.board_references().remove(0);
     for args in [json!({"guest": true, "board": board}), json!({"guest": true, "origin": own})] {
         assert!(matches!(shell.guest_target(&args), Ok(GuestTarget::Board(entry)) if entry.reference == board), "{args}");
@@ -328,9 +328,9 @@ fn a_select_of_two_keys_or_none_is_refused_by_its_name() {
 #[test]
 fn the_signed_modes_check_names_a_keyless_store() {
     let dir = TempDir::new().unwrap();
-    let (signed, _) = shell(&nowhere(), &dir.path().join("signed"), SessionMode::Signed { principal: 1 });
+    let (signed, _) = open_shell(&nowhere(), &dir.path().join("signed"), SessionMode::Signed { principal: 1 });
     assert_eq!(signed.check_signed_key().unwrap_err().name(), "no_key");
-    let (bare, _) = shell(&nowhere(), &dir.path().join("bare"), SessionMode::Bare { principal: 1 });
+    let (bare, _) = open_shell(&nowhere(), &dir.path().join("bare"), SessionMode::Bare { principal: 1 });
     assert!(bare.check_signed_key().unwrap().is_empty(), "the bare mode's sessions sign nothing");
 }
 
@@ -341,7 +341,7 @@ fn the_signed_modes_check_names_a_keyless_store() {
 #[test]
 fn a_search_after_the_stop_answers_feed_stopped() {
     let dir = TempDir::new().unwrap();
-    let (shell, _) = shell(&nowhere(), &dir.path().join("store"), SessionMode::Bare { principal: 1 });
+    let (shell, _) = open_shell(&nowhere(), &dir.path().join("store"), SessionMode::Bare { principal: 1 });
     let board = shell.board_references().remove(0);
     shell.shutdown();
     let started = Instant::now();

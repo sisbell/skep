@@ -136,7 +136,7 @@ fn a_refused_run_drops_its_behind_lines() {
     let said: Vec<Event> = g.rx.try_iter().filter(|e| e.name == EventName::Held).collect();
     assert_eq!(said.len(), 1, "{said:?}");
     let said = &said[0].data;
-    assert_declared(said);
+    assert_held_event_declared(said);
     assert_eq!((said["session"].as_str(), said["held"].as_u64(), said["state"].as_str()), (Some(g.session.reference.as_str()), Some(0), Some("kept")), "the drop is said under the session that acted");
 }
 
@@ -157,7 +157,7 @@ fn a_drop_says_the_state_of_the_line_that_stands_first() {
     assert_eq!(g.holds.resolve(&g.session, ks[1], "drop").unwrap(), Resolved::Dropped);
     let said: Vec<Event> = g.rx.try_iter().filter(|e| e.name == EventName::Held).collect();
     assert_eq!(said.len(), 1, "{said:?}");
-    assert_declared(&said[0].data);
+    assert_held_event_declared(&said[0].data);
     assert_eq!((said[0].data["state"].as_str(), said[0].data["held"].as_u64()), (Some("moved"), Some(1)), "{said:?}");
     let left: Vec<u64> = g.lines().iter().map(|l| l["held"].as_u64().unwrap()).collect();
     assert_eq!(left, [ks[0]], "the dropped line and the one after it are gone");

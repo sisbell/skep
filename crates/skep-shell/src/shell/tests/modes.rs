@@ -20,7 +20,7 @@
 //! ENFORCING; the declared fields of the real answers; a `write_busy`
 //! reissued once within the call; a death signal met at a read the attest
 //! needs ending the session; a close the board does not answer still the
-//! shell's close; and the codec's private budgets, each the composer's.
+//! shell's close; and the codec's private budgets, each the shell's.
 
 use super::*;
 
@@ -35,7 +35,7 @@ fn the_bare_mode_claims_opens_writes_and_hands_the_page_nothing() {
     let sd = spawn(&dir.path().join("board"), true);
     let origin = format!("http://127.0.0.1:{}", sd.port());
     let store = dir.path().join("store");
-    let (shell, lines) = shell(&origin, &store, SessionMode::Bare { principal: 1 });
+    let (shell, lines) = open_shell(&origin, &store, SessionMode::Bare { principal: 1 });
     let seen = Arc::new(Mutex::new(Vec::new()));
     let answerer = answer_moments(shell.subscribe(), Arc::clone(&shell.pending), Arc::clone(&seen));
     // boards(), and the unknown board.
@@ -197,7 +197,7 @@ fn a_closed_sessions_drafts_rows_precede_its_session_died() {
     let origin = format!("http://127.0.0.1:{}", sd.port());
     let store = dir.path().join("store");
     claim_board(&origin, &store);
-    let (shell, _) = shell(&origin, &store, SessionMode::Bare { principal: 1 });
+    let (shell, _) = open_shell(&origin, &store, SessionMode::Bare { principal: 1 });
     let rx = shell.subscribe();
     let board = shell.call("boards", &json!({})).unwrap()[0]["board"].as_str().unwrap().to_string();
     let session = shell.call("session", &json!({"board": board})).unwrap()["session"].as_str().unwrap().to_string();
@@ -225,7 +225,7 @@ fn the_signed_mode_composes_the_attest_a_publish_class_write_needs() {
     let origin = format!("http://127.0.0.1:{}", sd.port());
     let store = dir.path().join("store");
     claim_board(&origin, &store);
-    let (signed, lines) = shell(&origin, &store, SessionMode::Signed { principal: 1 });
+    let (signed, lines) = open_shell(&origin, &store, SessionMode::Signed { principal: 1 });
     let seen = Arc::new(Mutex::new(Vec::new()));
     let _answerer = answer_moments(signed.subscribe(), Arc::clone(&signed.pending), Arc::clone(&seen));
     assert_eq!(signed.check_signed_key().unwrap().len(), 1);
@@ -269,7 +269,7 @@ fn the_signed_mode_composes_the_attest_a_publish_class_write_needs() {
     signed.call("close", &json!({"session": session})).unwrap();
     signed.shutdown();
     // The same write under the bare mode: refused.
-    let (bare, _) = shell(&origin, &store, SessionMode::Bare { principal: 1 });
+    let (bare, _) = open_shell(&origin, &store, SessionMode::Bare { principal: 1 });
     let board = bare.call("boards", &json!({})).unwrap()[0]["board"].as_str().unwrap().to_string();
     let session = bare.call("session", &json!({"board": board})).unwrap()["session"].as_str().unwrap().to_string();
     let refused = bare.call("op", &json!({"session": session, "frame": {"op": "create_new_document", "account": "1.0.1", "published": true}})).unwrap_err();
@@ -297,8 +297,8 @@ fn every_kind_with_an_entry_frame_is_judged_and_acked_under_the_signed_session()
     let origin = format!("http://127.0.0.1:{}", sd.port());
     let store = dir.path().join("store");
     claim_board(&origin, &store);
-    let (signed, lines) = shell(&origin, &store, SessionMode::Signed { principal: 1 });
-    let (bare, _) = shell(&origin, &store, SessionMode::Bare { principal: 1 });
+    let (signed, lines) = open_shell(&origin, &store, SessionMode::Signed { principal: 1 });
+    let (bare, _) = open_shell(&origin, &store, SessionMode::Bare { principal: 1 });
     let open = |shell: &Shell| -> String {
         let board = shell.call("boards", &json!({})).unwrap()[0]["board"].as_str().unwrap().to_string();
         shell.call("session", &json!({"board": board})).unwrap()["session"].as_str().unwrap().to_string()
@@ -369,7 +369,7 @@ fn a_sessions_open_position_is_the_boards_position_read_before_it_opened() {
     let store = dir.path().join("store");
     claim_board(&origin, &store);
     for session_mode in [SessionMode::Bare { principal: 1 }, SessionMode::Signed { principal: 1 }] {
-        let (shell, _) = shell(&origin, &store, session_mode);
+        let (shell, _) = open_shell(&origin, &store, session_mode);
         let board = shell.call("boards", &json!({})).unwrap()[0]["board"].as_str().unwrap().to_string();
         let position = || shell.call("health", &json!({"board": board})).unwrap()["health"]["log_position"].as_u64().unwrap();
         let before = position();
@@ -396,7 +396,7 @@ fn a_session_the_restart_ended_is_reopened_under_a_fresh_reference() {
     let origin = format!("http://127.0.0.1:{port}");
     let store = dir.path().join("store");
     claim_board(&origin, &store);
-    let (signed, lines) = shell(&origin, &store, SessionMode::Signed { principal: 1 });
+    let (signed, lines) = open_shell(&origin, &store, SessionMode::Signed { principal: 1 });
     let seen = Arc::new(Mutex::new(Vec::new()));
     let answerer = answer_moments(signed.subscribe(), Arc::clone(&signed.pending), Arc::clone(&seen));
     let board = signed.call("boards", &json!({})).unwrap()[0]["board"].as_str().unwrap().to_string();
@@ -438,7 +438,7 @@ fn a_bare_sessions_death_names_the_restart_or_the_flip() {
     let origin = format!("http://127.0.0.1:{port}");
     let store = dir.path().join("store");
     claim_board(&origin, &store);
-    let (shell, _) = shell(&origin, &store, SessionMode::Bare { principal: 1 });
+    let (shell, _) = open_shell(&origin, &store, SessionMode::Bare { principal: 1 });
     let seen = Arc::new(Mutex::new(Vec::new()));
     let _answerer = answer_moments(shell.subscribe(), Arc::clone(&shell.pending), Arc::clone(&seen));
     let board = shell.call("boards", &json!({})).unwrap()[0]["board"].as_str().unwrap().to_string();
@@ -471,7 +471,7 @@ fn the_real_answers_carry_the_declared_fields() {
     let dir = TempDir::new().unwrap();
     let sd = spawn(&dir.path().join("board"), true);
     let origin = format!("http://127.0.0.1:{}", sd.port());
-    let (shell, _) = shell(&origin, &dir.path().join("store"), SessionMode::Bare { principal: 0 });
+    let (shell, _) = open_shell(&origin, &dir.path().join("store"), SessionMode::Bare { principal: 0 });
     let fields = |name: &str| -> std::collections::BTreeSet<String> { crate::shapes::shape(name).unwrap().fields.iter().map(|f| f.name.to_string()).collect() };
     let keys = |v: &Value| -> std::collections::BTreeSet<String> { v.as_object().unwrap().keys().cloned().collect() };
     let boards = shell.call("boards", &json!({})).unwrap();
@@ -502,7 +502,7 @@ fn a_write_busy_is_reissued_once_within_the_call() {
     let origin = format!("http://127.0.0.1:{}", sd.port());
     let store = dir.path().join("store");
     claim_board(&origin, &store);
-    let (shell, _) = shell(&origin, &store, SessionMode::Bare { principal: 1 });
+    let (shell, _) = open_shell(&origin, &store, SessionMode::Bare { principal: 1 });
     let board = shell.board_references().remove(0);
     let session = shell.call("session", &json!({"board": board})).unwrap()["session"].as_str().unwrap().to_string();
     let frame = json!({"op": "create_new_document", "account": "1.0.1"});
@@ -536,7 +536,7 @@ fn a_death_met_at_a_read_the_attest_needs_ends_the_session() {
     let origin = format!("http://127.0.0.1:{}", sd.port());
     let store = dir.path().join("store");
     claim_board(&origin, &store);
-    let (signed, lines) = shell(&origin, &store, SessionMode::Signed { principal: 1 });
+    let (signed, lines) = open_shell(&origin, &store, SessionMode::Signed { principal: 1 });
     let rx = signed.subscribe();
     let board = signed.board_references().remove(0);
     let session = signed.call("session", &json!({"board": board})).unwrap()["session"].as_str().unwrap().to_string();
@@ -576,7 +576,7 @@ fn a_close_the_board_does_not_answer_still_closes() {
     let dir = TempDir::new().unwrap();
     let sd = spawn(&dir.path().join("board"), true);
     let origin = format!("http://127.0.0.1:{}", sd.port());
-    let (shell, lines) = shell(&origin, &dir.path().join("store"), SessionMode::Bare { principal: 1 });
+    let (shell, lines) = open_shell(&origin, &dir.path().join("store"), SessionMode::Bare { principal: 1 });
     let board = shell.board_references().remove(0);
     let session = shell.call("session", &json!({"board": board})).unwrap()["session"].as_str().unwrap().to_string();
     let rx = shell.subscribe();
@@ -595,7 +595,7 @@ fn a_close_the_board_does_not_answer_still_closes() {
     shell.shutdown();
 }
 
-/// THE CODEC's PRIVATE BUDGETS are the composer's, judged by the board's own
+/// THE CODEC's PRIVATE BUDGETS are the shell's, judged by the board's own
 /// parse: an array at [`MAX_WIRE_LIST`] elements, an address at
 /// [`MAX_TUMBLER_COMPONENTS`] components and an insert of
 /// [`MAX_INSERT_VALUES`] values each parse — refused past the parse, if at
@@ -604,7 +604,7 @@ fn a_close_the_board_does_not_answer_still_closes() {
 /// shell keeps past the board's refuses what the board takes; one short of
 /// it composes what the board refuses).
 #[test]
-fn the_codecs_budgets_are_the_composers() {
+fn the_codecs_budgets_are_the_shells() {
     use crate::attest::MAX_WIRE_LIST;
     use crate::wire::{MAX_INSERT_VALUES, MAX_TUMBLER_COMPONENTS};
     use skep_client::board::{Opened, Rejection, SessionBody};
@@ -645,7 +645,7 @@ fn a_paper_claim_hands_the_page_no_seed_and_no_path() {
     let sd = spawn(&dir.path().join("board"), true);
     let origin = format!("http://127.0.0.1:{}", sd.port());
     let store = dir.path().join("store");
-    let (shell, lines) = shell(&origin, &store, SessionMode::Bare { principal: 1 });
+    let (shell, lines) = open_shell(&origin, &store, SessionMode::Bare { principal: 1 });
     let seen = Arc::new(Mutex::new(Vec::new()));
     let answerer = answer_moments(shell.subscribe(), Arc::clone(&shell.pending), Arc::clone(&seen));
     let board = shell.board_references().remove(0);
@@ -687,7 +687,7 @@ fn a_death_signal_at_a_calls_own_dial_ends_the_session() {
     let origin = format!("http://127.0.0.1:{}", sd.port());
     let store = dir.path().join("store");
     claim_board(&origin, &store);
-    let (shell, lines) = shell(&origin, &store, SessionMode::Bare { principal: 1 });
+    let (shell, lines) = open_shell(&origin, &store, SessionMode::Bare { principal: 1 });
     let rx = shell.subscribe();
     let board = shell.board_references().remove(0);
     let sessions: Vec<String> = (2..=4).map(|principal| shell.call("session", &json!({"board": board, "principal": principal})).unwrap()["session"].as_str().unwrap().to_string()).collect();
@@ -737,7 +737,7 @@ fn a_released_supplement_keeps_its_drafts_cursor() {
     let origin = format!("http://127.0.0.1:{}", sd.port());
     let store = dir.path().join("store");
     claim_board(&origin, &store);
-    let (shell, _) = shell(&origin, &store, SessionMode::Bare { principal: 1 });
+    let (shell, _) = open_shell(&origin, &store, SessionMode::Bare { principal: 1 });
     let seen = Arc::new(Mutex::new(Vec::new()));
     let _answerer = answer_moments(shell.subscribe(), Arc::clone(&shell.pending), Arc::clone(&seen));
     let board = shell.board_references().remove(0);

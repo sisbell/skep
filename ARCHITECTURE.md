@@ -1112,7 +1112,7 @@ an item the root re-exports counted as the module it is brought from
   minted from OS entropy per process, never a credential, never derived
   from an origin or a token (THE PIN).
 - `log.rs` `Log`, the call and dial log the page's gate reads — sizes,
-  routes and timing, never a token or a body — and `LoggingDialer`, the
+  routes and timing, never a token or a body — and `ShellDialer`, the
   one `PlainHttp` every board dials through, so no dial escapes the log,
   and none is made once the shell's stop stands.
 - `events.rs` `EventBus`: the seven events as values, each named by an
@@ -1253,7 +1253,7 @@ Rules that hold across its files:
 - **Dropping a shell stops it.** `Shell`'s `Drop` runs `shutdown`, which a
   second time finds nothing left to stop: no feed thread, open session or
   `held/<chain>/` lock outlives the shell, whether or not its owner stopped
-  it. Once its sessions are closed the stop dials nothing (`LoggingDialer`),
+  it. Once its sessions are closed the stop dials nothing (`ShellDialer`),
   so a board answering without end — pages whose `more` never ends — holds
   no stop past one exchange.
 - **A principal's supplement follows its standing sessions.** The consumer

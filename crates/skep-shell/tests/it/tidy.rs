@@ -35,23 +35,22 @@
 //! module that holds the ceremonial rows — so no call is served past the
 //! log. Its public methods, read off every `impl Shell` block of
 //! `src/shell.rs` and of its non-test children under `src/shell/`, are
-//! listed in [`SHELL_PUBLIC`]: a row method made public fails, wherever it
-//! is written, and a new public method is a decision that list records.
-//! That `call` answers
-//! every name of `CALLS` is the compiler's to hold, not this file's: the
-//! dispatch matches `src/shell.rs`'s `Call` with one arm per variant, and
-//! `CALLS` is spelled from that enum's list.
+//! listed in [`SHELL_PUBLIC_METHODS`]: a row method made public fails,
+//! wherever it is written, and a new public method is a decision that list
+//! records. That `call` answers every name of `CALLS` is the compiler's to
+//! hold, not this file's: the dispatch matches `src/shell.rs`'s `Call` with
+//! one arm per variant, and `CALLS` is spelled from that enum's list.
 
 use std::path::{Path, PathBuf};
 
 /// The public modules: the script's grammar, the declarations.
-const PUBLIC: &[&str] = &["script", "shapes"];
+const PUBLIC_MODULES: &[&str] = &["script", "shapes"];
 
 /// `Shell`'s public methods, in their order in `src/shell.rs`, the first of
 /// the files that hold an `impl Shell` block: the open,
 /// the stream and the log a transport serves, the run's facts, the one
 /// door and the stream beside it, the page's two answers, and the stop.
-const SHELL_PUBLIC: &[&str] = &[
+const SHELL_PUBLIC_METHODS: &[&str] = &[
     "open",
     "bus",
     "subscribe",
@@ -118,7 +117,7 @@ fn the_public_modules_are_script_and_shapes() {
     let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
     let public: Vec<String> = declared(&src).into_iter().filter(|(_, public)| *public).map(|(module, _)| module).collect();
     assert_eq!(
-        public, PUBLIC,
+        public, PUBLIC_MODULES,
         "src/lib.rs's public modules: a module made public is surface a dependent grows onto — re-export the item it needs from the root instead"
     );
 }
@@ -134,10 +133,10 @@ fn the_shell_answers_calls_through_one_door() {
     assert!(!impl_shell_lines(&texts[0]).is_empty(), "src/shell.rs holds no `impl Shell {{` block: the block this check reads has moved");
     let public: Vec<&str> = texts.iter().flat_map(|text| impl_shell_lines(text)).filter_map(|line| line.strip_prefix("    pub fn ")?.split(['(', '<']).next()).collect();
     assert_eq!(
-        public, SHELL_PUBLIC,
+        public, SHELL_PUBLIC_METHODS,
         "`Shell`'s public methods: a call's row reaches the page through `call`, which logs it — keep the row private, or record a new door here"
     );
-    assert!(skep_shell::CALLS.contains(&"fetch") && skep_shell::CALLS.iter().filter(|c| SHELL_PUBLIC.contains(c)).eq([&"fetch"]), "of the calls, `fetch` alone is a public method");
+    assert!(skep_shell::CALLS.contains(&"fetch") && skep_shell::CALLS.iter().filter(|c| SHELL_PUBLIC_METHODS.contains(c)).eq([&"fetch"]), "of the calls, `fetch` alone is a public method");
 }
 
 /// The file whose `mod` line declares `module`, and the name it declares:

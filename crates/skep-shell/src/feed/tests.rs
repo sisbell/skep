@@ -1,10 +1,10 @@
 //! THE FEED's FENCE: the index state's ten arms and the search words as
-//! the bridge spells them; THE WORKER's START, one `/health` read; and THE
-//! COMMIT STREAM COALESCED — the waiting tick's mark, and a board committing
-//! far faster than the worker reads costing it a read per turn, never a read
-//! per commit, with a search queued behind them answered after one read at
-//! most. And A DRAFTS CURSOR THE RETENTION FLOOR PASSED resumed at the
-//! floor, its rows still fed.
+//! the bridge spells them; THE FEED THREAD's START, one `/health` read; and
+//! THE COMMIT STREAM COALESCED — the waiting tick's mark, and a board
+//! committing far faster than the feed thread reads costing it a read per
+//! turn, never a read per commit, with a search queued behind them answered
+//! after one read at most. And A DRAFTS CURSOR THE RETENTION FLOOR PASSED
+//! resumed at the floor, its rows still fed.
 
 use std::io::{self, Read};
 use std::sync::atomic::AtomicUsize;
@@ -53,6 +53,17 @@ fn the_search_words_are_the_bridges_own() {
     assert_eq!(mark_json(&Mark { offset: 4, len: 0, kind: MarkKind::Gap { width: 3 } }), json!({"offset": 4, "len": 0, "kind": {"gap": {"width": 3}}}));
     assert_eq!(mark_json(&Mark { offset: 0, len: 2, kind: MarkKind::Term { term: "ab".into() } })["kind"], json!({"term": "ab"}));
     assert_eq!((kind_name(Kind::Edition), kind_name(Kind::Draft)), ("edition", "draft"));
+}
+
+/// A `feed` update's class spells S-24 (b)'s two words: `published` for a
+/// row of the guest's feed, `drafts` for a row of a session's supplement.
+#[test]
+fn an_updates_class_is_published_or_a_sessions_drafts() {
+    let board = Arc::new(Board::new(Origin::parse("http://127.0.0.1:9").unwrap(), skep_client::PlainHttp::new()));
+    let facts = crate::sessions::Facts { principal: 1, account: Some("1.0.1".into()), kind: crate::sessions::SessionKind::Bare };
+    let open = crate::sessions::Open { token: Token::parse(&"9f".repeat(16)).unwrap(), facts, opened_at: 0 };
+    let session = Sessions::new(None).register("b-1", board, open, &mut NoSupplements);
+    assert_eq!((UpdateClass::Published.as_str(), UpdateClass::Drafts(&session).as_str()), ("published", "drafts"));
 }
 
 /// THE WAITING TICK's MARK: the first commit owes a tick and the ones after
@@ -140,12 +151,12 @@ impl Dialer for Committing {
 }
 
 /// THE COMMIT STREAM COALESCED: a board committing two thousand times faster
-/// than the worker reads `/changes` costs the worker a read per turn — a few
-/// — never one per commit, and a search queued as the stream ends is
+/// than the feed thread reads `/changes` costs the feed thread a read per
+/// turn — a few — never one per commit, and a search queued as the stream ends is
 /// answered after one read at most (the mutant that queues a tick per commit
 /// reads two thousand times, the search waiting every one of them out).
 #[test]
-fn a_board_committing_faster_than_the_worker_reads_costs_a_read_per_turn() {
+fn a_board_committing_faster_than_the_feed_thread_reads_costs_a_read_per_turn() {
     let commits = 2000;
     let events: String = (1..=commits).map(|n| format!("event: commit\ndata: {{\"log_position\": {n}}}\n\n")).collect();
     let drained = Arc::new(AtomicBool::new(false));
@@ -169,13 +180,13 @@ fn a_board_committing_faster_than_the_worker_reads_costs_a_read_per_turn() {
     assert!(waited < Duration::from_secs(1), "the search waited {waited:?} behind the reads queued");
 }
 
-/// THE WORKER's START reads `/health` ONCE: the published feed's start, the
-/// mode and `writes.halted` all from the one read, made before the worker
-/// takes its first command — a stream that never connects is announced
+/// THE FEED THREAD's START reads `/health` ONCE: the published feed's start,
+/// the mode and `writes.halted` all from the one read, made before the feed
+/// thread takes its first command — a stream that never connects is announced
 /// `unreachable` after it, and no second read was made (the mutant that
 /// reads the head apart from the start's `/health` read reads it twice).
 #[test]
-fn the_worker_reads_health_once_at_its_start() {
+fn the_feed_thread_reads_health_once_at_its_start() {
     let fake = Committing::new(None, &Arc::new(AtomicBool::new(false)), Duration::ZERO);
     let origin = Origin::parse("http://127.0.0.1:9").unwrap();
     let board = Arc::new(Board::new(origin.clone(), Arc::clone(&fake)));
@@ -194,7 +205,7 @@ fn the_worker_reads_health_once_at_its_start() {
     let reads = fake.health_reads.load(Ordering::SeqCst);
     threads.stop();
     assert!(announced, "the stream that never connects is announced");
-    assert_eq!(reads, 1, "the worker's start reads `/health` once");
+    assert_eq!(reads, 1, "the feed thread's start reads `/health` once");
 }
 
 /// A board whose history below `FLOOR` is reclaimed: a drafts read from
@@ -263,7 +274,7 @@ fn a_drafts_cursor_the_floor_passed_reads_on_from_the_floor() {
     let store = TempDir::new().unwrap();
     let (sessions, bus) = (Arc::new(Sessions::new(None)), Arc::new(EventBus::new()));
     let rx = bus.subscribe();
-    let facts = crate::sessions::Facts { principal: 1, account: Some("1.0.1".into()), kind: crate::sessions::Kind::Bare };
+    let facts = crate::sessions::Facts { principal: 1, account: Some("1.0.1".into()), kind: crate::sessions::SessionKind::Bare };
     let session = sessions.register("b-1", Arc::clone(&board), crate::sessions::Open { token: Token::parse(&"9f".repeat(16)).unwrap(), facts, opened_at: 0 }, &mut NoSupplements);
     let shared = shared_over(&board, &sessions, &bus, &store);
     let threads = FeedThreads::spawn(Arc::new(BoardEntry { reference: "b-1".into(), origin, board }), shared);

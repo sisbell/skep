@@ -81,7 +81,7 @@ fn a_signed_row_is_own_under_a_keyed_session_alone() {
     let (states, sends) = walk(keyed_facts(), signed_row.clone());
     assert!(states.contains(&"kept".to_string()) && !states.contains(&"moved".to_string()), "the signed row is the keyed session's own: {states:?}");
     assert_eq!(sends, 0, "the landed head is not re-sent");
-    let (states, _) = walk(Facts { kind: Kind::Bare, ..keyed_facts() }, signed_row);
+    let (states, _) = walk(Facts { kind: SessionKind::Bare, ..keyed_facts() }, signed_row);
     assert!(states.contains(&"moved".to_string()), "a signed row is foreign to a bare session: {states:?}");
     let (states, _) = walk(keyed_facts(), bare_row);
     assert!(states.contains(&"moved".to_string()), "a bare hand's row is foreign to a keyed session: {states:?}");
@@ -121,7 +121,7 @@ fn a_lost_testimony_row_is_judged_by_the_arrangement_alone() {
 /// its listener after an open, exactly when a resend runs — leaves a `sent`
 /// head held and unsent (the mutant that reads the refusal as "no row" sends
 /// a burst that may have landed a second time); once the board serves the
-/// page, the next wake reads it and sends.
+/// page, the next probe reads it and sends.
 #[test]
 fn a_read_the_board_refuses_decides_nothing() {
     let g = ground();
@@ -134,7 +134,7 @@ fn a_read_the_board_refuses_decides_nothing() {
     assert!(!states.contains(&"sending".to_string()), "an unread document is not said `sending`: {states:?}");
     *g.fake.changes_refused.lock().unwrap() = None;
     g.holds.probe("b-1");
-    assert_eq!(g.fake.sends(), 1, "the next wake reads the page and sends");
+    assert_eq!(g.fake.sends(), 1, "the next probe reads the page and sends");
     assert!(g.lines().is_empty());
 }
 
@@ -176,7 +176,7 @@ fn history_reclaimed_decides_by_the_arrangement() {
 /// answering `credential_refused`/`index_rebuilding`, retry-class — the cell
 /// index rebuilding after an open, when resends run — is faced to no one and
 /// never makes the line `done` (the mutant that writes `done kept` loses text
-/// the board refused); the next wake, the index ready, sends and keeps it.
+/// the board refused); the next probe, the index ready, sends and keeps it.
 #[test]
 fn a_refusal_the_table_holds_nowhere_leaves_the_line_standing() {
     let g = ground();
@@ -188,7 +188,7 @@ fn a_refusal_the_table_holds_nowhere_leaves_the_line_standing() {
     assert!(!g.states().contains(&"kept".to_string()));
     g.fake.op_rejected.clear();
     g.holds.probe("b-1");
-    assert_eq!(g.fake.sends(), 2, "the next wake sends it again");
+    assert_eq!(g.fake.sends(), 2, "the next probe sends it again");
     assert!(g.lines().is_empty() && g.states().contains(&"kept".to_string()));
 }
 
@@ -474,7 +474,7 @@ fn the_halted_hold_ends_at_the_first_read_that_says_writes_go() {
 }
 
 /// THE RIDER (§3c.4): a resent line's first and second `durability` are
-/// reissued at the next wake, its THIRD holds it `durability` — counted per
+/// reissued at the next probe, its THIRD holds it `durability` — counted per
 /// line across the resends — and the board taking writes again keeps it
 /// (the mutant that never counts reissues the line forever).
 #[test]
@@ -482,9 +482,9 @@ fn a_third_durability_on_a_resent_line_holds_it() {
     let g = ground();
     g.fake.op_rejected.every(retry("durability"));
     g.hold(&insert(DOC, json!(["hello"])), "unreachable", false);
-    for (wake, cause) in [(1, "unreachable"), (2, "unreachable"), (3, "durability")] {
+    for (probe, cause) in [(1, "unreachable"), (2, "unreachable"), (3, "durability")] {
         g.holds.probe("b-1");
-        assert_eq!((g.fake.sends(), g.lines()[0]["cause"].as_str()), (wake, Some(cause)), "wake {wake}");
+        assert_eq!((g.fake.sends(), g.lines()[0]["cause"].as_str()), (probe, Some(cause)), "probe {probe}");
     }
     g.fake.op_rejected.clear();
     g.holds.probe("b-1");

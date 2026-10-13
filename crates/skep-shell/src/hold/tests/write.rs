@@ -273,17 +273,17 @@ fn a_write_the_hold_never_holds_is_faced_and_its_ack_noted() {
 /// `resolve(send)` HANDS the document back to the automatic machine and
 /// answers at once (§4b.1: "the call answers once the line is handed to
 /// the machine, never after its ack"): nothing is dialed in the act and the
-/// run's lines stand re-armed `behind`; the probe its caller hands the
-/// board's worker then sends and keeps them (the mutant that probes inside
-/// the act dials the board before the call answers).
+/// run's lines stand re-marked `behind`; the probe its caller hands the
+/// board's feed thread then sends and keeps them (the mutant that probes
+/// inside the act dials the board before the call answers).
 #[test]
 fn resolve_send_answers_once_the_lines_are_handed_back() {
     let g = ground();
     let verdict = json!({"resp": "rejected", "code": "out_of_bounds", "disposition": "permanent"});
     let k = g.holds.hold(&g.session, &g.burst(&insert(DOC, json!(["a"]))), Reason::refused("out_of_bounds", verdict)).unwrap()["held"].as_u64().unwrap();
-    assert_eq!(g.holds.resolve(&g.session, k, "send").unwrap(), Resolved::Rearmed);
+    assert_eq!(g.holds.resolve(&g.session, k, "send").unwrap(), Resolved::HandedBack);
     assert_eq!((g.fake.sends(), g.fake.health_reads.load(Ordering::SeqCst)), (0, 0), "nothing is dialed in the act");
-    assert_eq!(g.lines()[0]["cause"], "behind", "the run's line re-armed");
+    assert_eq!(g.lines()[0]["cause"], "behind", "the run's line re-marked `behind`");
     g.holds.probe("b-1");
     assert_eq!(g.fake.sends(), 1, "the handed probe sends it");
     assert!(g.lines().is_empty() && g.states().contains(&"kept".to_string()));

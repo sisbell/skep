@@ -219,16 +219,15 @@ foundation and on the stores above it.
   events over `skep-client`, the board and session references the page is
   handed in a credential's place, the person seam that forwards PUBLIC
   moments to the page and answers SECRET and CONSENT ones from a dev arm,
-  the feed consumer's thread per board, the attest a signed session
-  composes for the checked set, the held-burst store and the hold that
-  resends what a board could not take (`client.md` §3c), and the
-  TypeScript declarations of every value that crosses the bridge. Of the
-  skep crates it depends on `skep-client` with its `search` feature,
-  `skep-identity`, `skep-address` and `skep-search` alone — never
-  `skepd`, which it reaches over the wire (its suite spawns the daemon as
-  a dev-dependency). No feature, no transport: the loopback server is
-  `skep-cli`'s dev verb's, the native bridge the shell's. Its modules and
-  rules: §The shell's core.
+  the feed thread per board, the attest a signed session composes for the
+  checked set, the held-burst store and the hold that resends what a board
+  could not take (`client.md` §3c), and the TypeScript declarations of
+  every value that crosses the bridge. Of the skep crates it depends on
+  `skep-client` with its `search` feature, `skep-identity`, `skep-address`
+  and `skep-search` alone — never `skepd`, which it reaches over the wire
+  (its suite spawns the daemon as a dev-dependency). No feature, no
+  transport: the loopback server is `skep-cli`'s dev verb's, the native
+  bridge the shell's. Its modules and rules: §The shell's core.
 - `skep-cli` — the `skep` command over `skep-client`, thirteen commands:
   `keygen`, `claim`, `session`, `fingerprint`, `verify`, `health`, `bind`,
   `enroll`, `recover`, `retire`, `rotate`, `handoff`, `accept`; flag
@@ -1150,9 +1149,9 @@ an item the root re-exports counted as the module it is brought from
   `/changes` read per document before its first resend, §3c.5's three
   outcomes, each line sent through the hold's one reader.
 - `feed.rs` `FeedThreads` and `Feed`: per board, the `/events` reader and
-  the consumer's owner — the `feed`, `index`, `mode` and `daemon` events,
-  the `search` call, the held-burst probe on its cadence and at every
-  hand-over; `BoardEntry`.
+  the feed thread, its state the `Feeder` — the `feed`, `index`, `mode` and
+  `daemon` events, the `search` call, the held-burst probe on its cadence
+  and at every hand-over; `BoardEntry`.
 - `shell.rs` `Shell`: the boards, the sessions, `SessionMode`, the private
   row methods behind `call`, which logs each; `fetch`, `answer`, `cancel`,
   `shutdown`; `ShellOptions` and `set_node_state`.
@@ -1191,30 +1190,33 @@ Rules that hold across its files:
   same enum, so no name is listed that the dispatch does not answer.
 - **A session ends once.** A death signal is met by two hands that end
   sessions — the shell on a call's thread, at its dial or at a read its
-  attest composer made (`Unattested::Closed`, no refusal of the composer's),
-  and the board's feed on its own — and both run `Sessions::end`; the resend
-  meets it too and runs no end, leaving its line standing for the session
-  the end leaves behind. The entry's `OnceLock` is the gate: the hand whose
-  initializer runs derives the arm, registers the restart arm's re-open and
-  emits the one `session-died`; a hand that comes while it runs waits,
-  answers that arm and does nothing else; a hand that panics mid-end leaves
-  the cell unset for the next. An entry leaves the table by that sequence or
-  by `close`, and `Sessions` exposes no other removal.
+  attest composer made (`Unattested::Died`, no refusal of the composer's),
+  and the board's feed thread on its own — and both run `Sessions::end`;
+  the resend meets it too and runs no end, leaving its line standing for
+  the session the end leaves behind. The entry's `OnceLock` is the gate:
+  the hand whose initializer runs derives the reason, registers the
+  restart arm's re-open and emits the one `session-died`; a hand that
+  comes while it runs waits, answers that reason and does nothing else; a
+  hand that panics mid-end leaves the cell unset for the next. An entry
+  leaves the table by that sequence or by `close`, and `Sessions` exposes
+  no other removal.
 - **A session's rows precede its death.** `close` takes the session out of
-  the table, then has the board's feed read its drafts to the head under
-  its still-standing token (`Feed::closing`, a round-trip to the feed's
+  the table, then has the board's feed thread read its drafts to the head
+  under its still-standing token (`Feed::closing`, a round-trip to the feed
   thread) before the token closes and `session-died` goes out: every
-  subscriber sees one sequence, however far the feed trails the commits.
+  subscriber sees one sequence, however far the feed thread trails the
+  commits.
 - **One board's wait holds no other.** A call reaches a board's feed thread
   through that board's own handle, a channel, and waits on its own reply:
   no lock is held across the wait, so a search queued behind a board that
   is not answering holds back no call at another. The holds keep each
   board's hold under its own lock, so one board's synced appends and file
   reads hold back no burst at another; and a board's commits coalesce into
-  one waiting read, so a board committing faster than its feed reads holds
-  a call queued behind them to one read at most. A board's probe, and the
-  resend it lets run, go on that board's worker alone — `resolve(send)` and
-  `set_node_state(Running)` hand it over — so no caller waits on a resend.
+  one waiting read, so a board committing faster than its feed thread reads
+  holds a call queued behind them to one read at most. A board's probe, and
+  the resend it lets run, go on that board's feed thread alone —
+  `resolve(send)` and `set_node_state(Running)` hand it over — so no caller
+  waits on a resend.
 - **The board's budgets, kept as the board keeps them.** Every cost the
   shell pays for a page's frame or a board's answer is held, before the
   work it bounds, to the budget the board's own parse, store or composer

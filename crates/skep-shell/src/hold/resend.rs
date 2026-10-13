@@ -1,6 +1,6 @@
 //! THE PROBE and THE RESEND (`client.md` §3c.4, §3c.5): the hold's walk
 //! that drains a board's queue once the board returns. THE PROBE
-//! ([`Holds::probe`]) runs on the feed worker's thread every
+//! ([`Holds::probe`]) runs on the board's feed thread every
 //! [`PROBE_CADENCE`](super::PROBE_CADENCE) while a line stands, and there
 //! too at the hand-overs of `resolve(send)` and `set_node_state(Running)`,
 //! because `Cmd::Tick` is driven by COMMITTED writes and a poisoned,
@@ -10,7 +10,7 @@
 //! the head; (ii) the in-flight burst landed, the head `done kept`; (iii)
 //! the site MOVED, no line sent and the lines faced `moved`, NEVER rebased
 //! (J3) — and a read the board did not answer decides nothing: the next
-//! wake reads again. Each line goes out through the hold's one reader of a
+//! probe reads again. Each line goes out through the hold's one reader of a
 //! write's answer, as a first dial does.
 
 use std::borrow::Cow;
@@ -22,7 +22,7 @@ use skep_client::board::{acked_at, frames, Answer, ChangesAnswer, ChangesQuery, 
 use super::{awaits_act, cause, line_state, BoardSlot, Dialed, HeldState, Holds};
 use crate::wire::{delivered_values, values_of};
 use crate::held::{Done, HeldLine, Reason};
-use crate::sessions::{Kind, SessionEntry};
+use crate::sessions::{SessionEntry, SessionKind};
 
 /// THE OUTCOME of the resend's one read per document (§3c.5).
 enum ReadOutcome {
@@ -33,7 +33,7 @@ enum ReadOutcome {
     /// The site MOVED — no line sent, the lines faced `moved` (J3).
     Moved,
     /// The board answered no page — a refusal (`feed_rebuilding`), the
-    /// death signal, no answer: nothing is decided, and the next wake reads
+    /// death signal, no answer: nothing is decided, and the next probe reads
     /// again.
     Unread,
 }
@@ -74,7 +74,7 @@ impl Drop for Draining<'_> {
 
 impl Holds {
     /// THE PROBE (§3c.4), and the RESEND it lets run (§3c.5): run on the
-    /// board's feed worker alone — every
+    /// board's feed thread alone — every
     /// [`PROBE_CADENCE`](super::PROBE_CADENCE), at its daemon-running tick,
     /// and at the hand-overs of `resolve(send)` and `set_node_state(Running)`.
     /// While a line stands at a board whose own node is not stopped,
@@ -101,7 +101,7 @@ impl Holds {
     fn drain(&self, board_reference: &str, slot: &BoardSlot) {
         let board = &slot.board;
         // THE PROBE's one `/health` read (§3c.4): a board that does not answer
-        // is read again at the next wake, and one whose writes are halted
+        // is read again at the next probe, and one whose writes are halted
         // holds every line.
         let Ok(health) = board.health() else { return };
         if self.note_health(board_reference, &health) {
@@ -118,9 +118,10 @@ impl Holds {
         }
     }
 
-    /// THE RESEND for one session (§3c.5), at the board it stands at: each
-    /// document with held lines read once, then its lines sent in `k` order
-    /// from where the read left them.
+    /// THE RESEND for one session (§3c.5), RESUMED BY READ — wire.md's
+    /// RESUME-BY-READ (PUB-8.32) — at the board it stands at: each document
+    /// with held lines read once, then its lines sent in `k` order from where
+    /// the read left them.
     fn resume(&self, session: &SessionEntry) {
         let Some(docs) = self.with_principal(&session.board_reference, session.facts.principal, |ph| {
             let mut docs: Vec<String> = Vec::new();
@@ -138,8 +139,9 @@ impl Holds {
         }
     }
 
-    /// One document's resend: the read (§3c.5), then its outcome — a head
-    /// awaiting the person's act read and sent never.
+    /// One document resumed by its read (RESUME-BY-READ, §3c.5): the read,
+    /// then its outcome — a head awaiting the person's act read and sent
+    /// never.
     fn resume_doc(&self, session: &SessionEntry, doc: &str) {
         let (board_reference, principal) = (session.board_reference.as_str(), session.facts.principal);
         let Some(head) = self.head_of(board_reference, principal, doc) else { return };
@@ -272,15 +274,15 @@ impl Holds {
     /// its attest composed NOW (§3c.2) — and settled by what the dial
     /// answered: an ack `done kept`; a hold-class answer or a REFUSED run
     /// re-marked and faced; a reissue-class answer counted against the line
-    /// and reissued at the next wake, so its third `durability` holds it; a
-    /// refusal the table holds nowhere left standing for the next wake,
+    /// and reissued at the next probe, so its third `durability` holds it; a
+    /// refusal the table holds nowhere left standing for the next probe,
     /// never `done`; the death signal left to the hand that ends the
     /// session — the session that stands resends after its read. Whether
     /// sending may go on to the document's next line.
     fn send_line(&self, session: &SessionEntry, line: &HeldLine) -> bool {
         let (board_reference, principal) = (session.board_reference.as_str(), session.facts.principal);
         let given = self.with_principal(board_reference, principal, |ph| ph.reissues.get(&line.k).copied()).flatten().unwrap_or_default();
-        let dialed = match self.attested(session, &line.frame) {
+        let dialed = match self.attest_where_owed(session, &line.frame) {
             Ok(frame) => self.dial(session, &frame, given),
             Err(why) => Dialed::from(why),
         };
@@ -300,14 +302,14 @@ impl Holds {
                 false
             }
             Dialed::Reissue { kind, refusal } => {
-                // The rider's count (§3c.4), per line across its wakes: the
+                // The rider's count (§3c.4), per line across its probes: the
                 // third `durability` holds it.
                 self.with_principal(board_reference, principal, |ph| ph.reissues.entry(line.k).or_default().note(kind));
-                self.say(format!("held: line {} on {} was not taken ({refusal}); it is sent again at the next wake", line.k, line.doc));
+                self.say(format!("held: line {} on {} was not taken ({refusal}); it is sent again at the next probe", line.k, line.doc));
                 false
             }
             Dialed::Faced(refusal) => {
-                self.say(format!("held: line {} on {} was not taken ({refusal}); it is sent again at the next wake", line.k, line.doc));
+                self.say(format!("held: line {} on {} was not taken ({refusal}); it is sent again at the next probe", line.k, line.doc));
                 false
             }
             Dialed::Died => false,
@@ -362,8 +364,8 @@ fn delivers(delivery: &Value, want: &[Cow<'_, [u8]>]) -> bool {
 /// names it: its key's fingerprint, or `bare`.
 fn own_hand(session: &SessionEntry) -> String {
     match &session.facts.kind {
-        Kind::Signed { fingerprint, .. } => fingerprint.to_hex(),
-        Kind::Bare => "bare".to_string(),
+        SessionKind::Signed { fingerprint, .. } => fingerprint.to_hex(),
+        SessionKind::Bare => "bare".to_string(),
     }
 }
 
@@ -383,7 +385,7 @@ fn own_row(session: &SessionEntry, row: &Value) -> bool {
     if row["key"].as_str() == Some(own_hand(session).as_str()) {
         return true;
     }
-    matches!(session.facts.kind, Kind::Signed { .. }) && row.get("key").is_none() && row.get("attest").is_some()
+    matches!(session.facts.kind, SessionKind::Signed { .. }) && row.get("key").is_none() && row.get("attest").is_some()
 }
 
 /// Whether a `/changes` row's testimony is LOST — `docs`, `key` and `op` the

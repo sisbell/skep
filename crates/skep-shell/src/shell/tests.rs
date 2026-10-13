@@ -26,7 +26,7 @@ use super::*;
 use crate::events::Event;
 use crate::held::{HeldDir, Reason};
 use crate::hold::{Burst, PROBE_CADENCE};
-use crate::sessions::Kind;
+use crate::sessions::SessionKind;
 
 mod boards;
 mod door;

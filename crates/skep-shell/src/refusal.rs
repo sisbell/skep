@@ -55,7 +55,7 @@ impl Name {
     /// THE PIN's stale-reference refusal: "session ended" — a reference
     /// this shell holds no session under, issued or not.
     pub const SESSION_ENDED: Name = Name("session_ended");
-    /// The call's session met the death signal: the arm its end carried
+    /// The call's session met the death signal: the reason its end carried
     /// beside it.
     pub const SESSION_DIED: Name = Name("session_died");
     /// A board reference this shell instance never issued.
@@ -99,8 +99,9 @@ impl Name {
     pub const NO_ADDRESS: Name = Name("no_address");
     /// An attest asked of a session the board answered no account for.
     pub const NO_ACCOUNT: Name = Name("no_account");
-    /// `held(session)`: the held-burst file was written by a newer skep, or its
-    /// body is damaged — the halt's face naming the path (PATTERNS P38; §3c.3).
+    /// `held(session)`, and every act on the principal's held lines: the
+    /// HELD-BURST store's file was written by a newer skep, or its body is
+    /// damaged — the halt's face naming the path (PATTERNS P38; §3c.3).
     pub const STORE_HALTED: Name = Name("store_halted");
     /// `resolve(session, …)`: no held line of that ordinal stands.
     pub const NO_SUCH_HELD: Name = Name("no_such_held");
@@ -121,11 +122,13 @@ impl Name {
 
     /// A halt the row arms no name for.
     pub const HALT: Name = Name("halt");
-    /// The store holds no key for (this board, the principal).
+    /// The KEY store holds no key for (this board, the principal).
     pub const NO_KEY: Name = Name("no_key");
-    /// The store cannot be read.
+    /// The KEY store cannot be read — the shell's own data directory, its
+    /// act and never a page act (`client.md` §4b.1).
     pub const STORE_UNREADABLE: Name = Name("store_unreadable");
-    /// The store cannot be written.
+    /// The KEY store cannot be written — the shell's own data directory, its
+    /// act and never a page act (`client.md` §4b.1, §3.7).
     pub const STORE_UNWRITABLE: Name = Name("store_unwritable");
     /// The origin the shell signs for is not among the board's signed
     /// origins (AUTH-5.24, AUTH-5.36's origin state).

@@ -23,7 +23,7 @@
 //! term it cannot spell — halts naming what stopped it, and nothing is
 //! sent: the shell never sends a frame it could not sign. A death signal
 //! met at one of those reads is no halt of the composer's but the
-//! session's end ([`Unattested::Closed`]), which its caller runs. The
+//! session's end ([`Unattested::Died`]), which its caller runs. The
 //! wire's value forms, both ways, are `wire`'s: the composer spells a
 //! frame's `values` and reads a delivery back through them, and faces what
 //! they refuse as its own halt.
@@ -124,13 +124,13 @@ pub fn attest_room() -> usize {
 }
 
 /// The composer: the board the reads are made at under `token`, the key
-/// that signs, the session's account, and `H.1`'s pair.
+/// that signs, the session's account, and the board term, `H.1`'s pair.
 pub struct Composer<'a> {
     pub board: &'a Board,
     pub token: &'a Token,
     pub signer: &'a dyn Signer,
     pub account: &'a str,
-    pub term: BoardTerm,
+    pub board_term: BoardTerm,
 }
 
 /// Why the composer attached no attest: the call's REFUSAL — its own halt
@@ -138,14 +138,14 @@ pub struct Composer<'a> {
 /// `unreachable` where a read went unanswered — or the session's DEATH
 /// SIGNAL met at one of its reads, which is no refusal of the composer's:
 /// the caller ends the session (`Sessions::end`) and answers
-/// `session_died` with the arm the end derives.
+/// `session_died` with the reason the end derives.
 #[derive(Debug)]
 pub enum Unattested {
     /// The call's refusal: nothing was sent.
     Refused(Refusal),
     /// The death signal on the session's token, met at a read the composer
     /// made: nothing was sent.
-    Closed,
+    Died,
 }
 
 /// The composer's own halt named `attest_not_composed`; a halt of another
@@ -167,7 +167,7 @@ impl fmt::Display for Unattested {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Unattested::Refused(r) => r.fmt(f),
-            Unattested::Closed => f.write_str("the session ended at a read the attest's composer made"),
+            Unattested::Died => f.write_str("the session died at a read the attest's composer made"),
         }
     }
 }
@@ -435,10 +435,10 @@ impl<'f> Wanted<'f> {
 
 impl Composer<'_> {
     /// One READ under the session: the document; a rejection the board's
-    /// refusal, verbatim; the death signal [`Unattested::Closed`].
+    /// refusal, verbatim; the death signal [`Unattested::Died`].
     fn read(&self, frame: &Value) -> Result<Value, Unattested> {
         match self.board.op(Some(self.token), frame)? {
-            Answer::Closed => Err(Unattested::Closed),
+            Answer::Closed => Err(Unattested::Died),
             Answer::Document(v) => match Rejection::of(&v) {
                 Some(r) => Err(r.refused(&v).into()),
                 None => Ok(v),
@@ -712,8 +712,8 @@ impl Composer<'_> {
         let account = addr(self.account, "account")?;
         let alg = self.signer.public_key().alg().to_string();
         let bytes = match &doc_term {
-            OwnedDocTerm::One(a) => entry_frame(&alg, self.term, &account, DocTerm::One(a), &body),
-            OwnedDocTerm::Pair { d_s, d_a } => entry_frame(&alg, self.term, &account, DocTerm::Pair { d_s, d_a }, &body),
+            OwnedDocTerm::One(a) => entry_frame(&alg, self.board_term, &account, DocTerm::One(a), &body),
+            OwnedDocTerm::Pair { d_s, d_a } => entry_frame(&alg, self.board_term, &account, DocTerm::Pair { d_s, d_a }, &body),
         };
         frame["attest"] = json!({"alg": alg, "sig": sig_hex(&self.signer.sign(&bytes))});
         Ok(())

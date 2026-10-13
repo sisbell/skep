@@ -36,7 +36,7 @@ modules, and `Shell`'s one door — `call`, which logs each call, with
 | `person` | `BridgePerson`: the PUBLIC moments as `moment` events answered through `Pending` in their kind's form, the SECRET and CONSENT ones sent to the dev arm |
 | `sessions` | `Sessions`, the session table: each session's token beside the board it stands at, the two openings, the attest a session's key signs, a session's end run once whichever hand met the death signal, under the key store the table holds, and a leaving session's drafts supplement released to another of its principal |
 | `hold` | `Holds`: the one path of every `/op` under a session (`Holds::send`) — a burst's door (`Burst::admit`) and its hold among it — each answer read through the classification table (`classify`), and the per-(board, principal) queue over `held`'s file; `hold/resend.rs`, the probe and the resend walk |
-| `feed` | `FeedThreads` and `Feed`: per board, the consumer's thread — the `feed`, `index`, `mode` and `daemon` events, the `search` call, the held-burst probe on its cadence |
+| `feed` | `FeedThreads`, `Feed` and the `Feeder`: per board, the feed thread — the `feed`, `index`, `mode` and `daemon` events, the `search` call, the held-burst probe on its cadence |
 | `shell` | `Shell`: the boards, the sessions, and one private method per §4b.1 row behind `call`, which logs every call, `fetch` public beside it; `shell/ceremony.rs`, the ten ceremonial rows |
 | `shapes` | `declarations()`, the TypeScript declaration file for every value that crosses the bridge, pinned by a round-trip of each type's sample |
 

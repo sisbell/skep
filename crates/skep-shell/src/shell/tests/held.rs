@@ -200,7 +200,7 @@ fn a_signed_sessions_landed_burst_is_kept_by_the_resend() {
     // The in-flight burst: attested as the shell attests it, written under
     // the session's token through the board itself.
     let entry = signed.sessions.get(&session).unwrap();
-    let Kind::Signed { fingerprint: fp, .. } = entry.facts.kind.clone() else { panic!("a signed session holds a key") };
+    let SessionKind::Signed { fingerprint: fp, .. } = entry.facts.kind.clone() else { panic!("a signed session holds a key") };
     let frame = json!({"op": "insert", "doc": draft, "at": {"subspace": "1", "ordinal": "2"}, "values": ["bc"]});
     let mut attested = frame.clone();
     entry.attest(&signed.store, &mut attested).unwrap();

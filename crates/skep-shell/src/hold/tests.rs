@@ -25,7 +25,7 @@ use tempfile::TempDir;
 
 use super::*;
 use crate::events::Event;
-use crate::sessions::{Facts, Kind, Open, Supplements};
+use crate::sessions::{Facts, Open, SessionKind, Supplements};
 
 mod resend;
 mod write;
@@ -375,14 +375,14 @@ impl Ground {
 
 /// The facts of a bare session as principal 1.
 fn bare_facts() -> Facts {
-    Facts { principal: 1, account: Some("1.0.1".into()), kind: Kind::Bare }
+    Facts { principal: 1, account: Some("1.0.1".into()), kind: SessionKind::Bare }
 }
 
 /// The facts of a session that holds a key — the signed mode's, its set the
 /// account's own.
 fn keyed_facts() -> Facts {
     let fingerprint = skep_identity::Fingerprint::parse_hex(&"5a".repeat(32)).unwrap();
-    Facts { principal: 1, account: Some("1.0.1".into()), kind: Kind::Signed { fingerprint, set_account: "1.0.1".into() } }
+    Facts { principal: 1, account: Some("1.0.1".into()), kind: SessionKind::Signed { fingerprint, set_account: "1.0.1".into() } }
 }
 
 /// The ground under a bare session opened at position 0.

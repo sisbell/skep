@@ -1,21 +1,22 @@
-//! THE FEED CONSUMER's THREAD, one per board (`client.md` §4b.2: "THE
-//! CONSUMER LIVES IN THE SHELL, which holds the session, and the page reads
-//! it through this event" — ps3-6; the dev provider record §3.3): the
-//! library's `search::Consumer` opened over the board's directory beside
-//! the key store, polled on each commit the `/events` stream yields, and
-//! beside it this crate's own read of the `/changes` pages for the `feed`
-//! events — the published feed as a guest, and each open session's drafts
-//! supplement under its token — the `/health` pair read per tick for the
-//! `mode` event, the stream's state for the `daemon` event (every board the
-//! shell dials, each event naming its board; silent under the own node's
-//! DELIBERATE STOP, which the shell announces `stopped` once —
-//! [`Worker::unreachable`]), and the consumer's state for the `index` event,
-//! each emitted where it moved.
+//! THE FEED THREAD, one per board (`search.md` §5.6: "one feed thread per
+//! index"; `client.md` §4b.2: "THE CONSUMER LIVES IN THE SHELL, which holds
+//! the session, and the page reads it through this event" — ps3-6; the dev
+//! provider record §3.3): the library's `search::Consumer` opened over the
+//! board's directory beside the key store, polled on each commit the
+//! `/events` stream yields, and beside it this crate's own read of the
+//! `/changes` pages for the `feed` events — the published feed as a guest,
+//! and each open session's drafts supplement under its token — the
+//! `/health` pair read per tick for the `mode` event, the stream's state
+//! for the `daemon` event (every board the shell dials, each event naming
+//! its board; silent under the own node's DELIBERATE STOP, which the shell
+//! announces `stopped` once — [`Feeder::unreachable`]), and the consumer's
+//! state for the `index` event, each emitted where it moved. The thread's
+//! state is THE FEEDER ([`Feeder`]), the board index's one writer.
 //! The bridge's `search` call is answered on this thread too, over a
 //! channel, so the consumer never crosses a thread: two threads per board,
-//! the stream's reader and the consumer's owner, each borrowing the board
-//! from the `Arc` it holds. A death signal this thread's reads meet ends
-//! the session by the one sequence the shell runs too (`Sessions::end`).
+//! the `/events` stream's reader and the feed thread, each borrowing the
+//! board from the `Arc` it holds. A death signal this thread's reads meet
+//! ends the session by the one sequence the shell runs too (`Sessions::end`).
 //! A session the page closes is read once more here, to the board's head
 //! under its still-standing token, before its close answers
 //! ([`Feed::closing`]): every `feed` row of a session precedes its
@@ -30,10 +31,10 @@
 //! drafts supplement alike: a page past the retention floor resumed at the
 //! floor, a page past the page budget re-asked at the limit that fits. The
 //! commits the stream yields
-//! are COALESCED ([`Ticks`]): one tick waits in the worker's queue at most,
-//! so a board committing faster than the worker reads costs one read to the
-//! head per turn, never a read per commit, and a call queued behind them
-//! waits one read at most.
+//! are COALESCED ([`Ticks`]): one tick waits in the feed thread's queue at
+//! most, so a board committing faster than the feed thread reads costs one
+//! read to the head per turn, never a read per commit, and a call queued
+//! behind them waits one read at most.
 //!
 //! THE `feed` UPDATE's SHAPE — THIS CRATE's DEFINITION (S-24 (b), the
 //! shell's): the `/changes` row's members VERBATIM (`at`, `op`, `docs`,
@@ -104,7 +105,7 @@ enum Cmd {
     /// A session the page is closing, its token still standing: its drafts
     /// rows read to the head, then its supplement released; answered.
     Closing(Arc<SessionEntry>, Sender<()>),
-    /// THE PROBE handed over: run at the worker's next turn, unanswered.
+    /// THE PROBE handed over: run at the feed thread's next turn, unanswered.
     Probe,
     /// The bridge's search call.
     Search { who: Searcher, query: String, opts: SearchOpts, reindex: bool, reply: Sender<Result<Value, Refusal>> },
@@ -114,8 +115,8 @@ enum Cmd {
 
 /// What every board's feed thread shares with the shell: the bus its events
 /// go out on, the session table, the data directory the index sits under,
-/// the TALK sink, and the held-burst holds the worker drives — each tick's
-/// `/health` read handed over, and THE PROBE every `PROBE_CADENCE`.
+/// the TALK sink, and the held-burst holds the feed thread drives — each
+/// tick's `/health` read handed over, and THE PROBE every `PROBE_CADENCE`.
 #[derive(Clone)]
 pub struct Shared {
     pub bus: Arc<EventBus>,
@@ -126,8 +127,8 @@ pub struct Shared {
 }
 
 /// THE HANDLE to one board's feed thread: each command sent on the thread's
-/// own channel and answered there, so a caller waiting on one board's
-/// worker holds nothing another caller needs. A handle is cloned freely;
+/// own channel and answered there, so a caller waiting on one board's feed
+/// thread holds nothing another caller needs. A handle is cloned freely;
 /// once the thread has stopped, every command answers at once.
 #[derive(Debug, Clone)]
 pub struct Feed {
@@ -148,8 +149,8 @@ impl Feed {
         }
     }
 
-    /// THE PROBE handed to the board's worker (`Holds::probe`), run on its
-    /// thread at its next turn and the probe's cadence counted from it — the
+    /// THE PROBE handed to the board's feed thread (`Holds::probe`), run
+    /// there at its next turn and the probe's cadence counted from it — the
     /// caller does not wait: `resolve(send)`'s hand-over, so the call answers
     /// once the lines are handed back, never after a resend's ack (§4b.1),
     /// and `set_node_state(Running)`'s, so the verb that owns the node is
@@ -158,7 +159,7 @@ impl Feed {
         let _ = self.cmds.send(Cmd::Probe);
     }
 
-    /// The bridge's search call, answered on the consumer's thread;
+    /// The bridge's search call, answered on the feed thread;
     /// `feed_stopped` once the thread has stopped.
     pub fn search(&self, who: Searcher, query: &str, opts: SearchOpts, reindex: bool) -> Result<Value, Refusal> {
         let (reply, rx) = channel();
@@ -170,7 +171,7 @@ impl Feed {
 }
 
 /// The supplements as the shell reaches them, through a board's handle:
-/// each widen and narrow a command the board's thread runs — a shared
+/// each widen and narrow a command the board's feed thread runs — a shared
 /// handle, as `&File` is a `Write`.
 impl Supplements for &Feed {
     fn widen(&mut self, session: &Arc<SessionEntry>) {
@@ -183,12 +184,12 @@ impl Supplements for &Feed {
 }
 
 /// THE COMMITS NOT YET READ: the latest position the `/events` stream
-/// yielded, and whether a [`Cmd::Tick`] waits in the worker's queue for
-/// them. The reader sends a tick only where none waits, and the worker
-/// clears the mark as it takes one — BEFORE it reads — so a board committing
-/// faster than the worker reads leaves one tick queued, never one per
-/// commit, and a commit landing mid-read queues exactly the one more read
-/// that sees it.
+/// yielded, and whether a [`Cmd::Tick`] waits in the feed thread's queue
+/// for them. The reader sends a tick only where none waits, and the feed
+/// thread clears the mark as it takes one — BEFORE it reads — so a board
+/// committing faster than the feed thread reads leaves one tick queued,
+/// never one per commit, and a commit landing mid-read queues exactly the
+/// one more read that sees it.
 #[derive(Debug, Default)]
 struct Ticks {
     waiting: AtomicBool,
@@ -210,15 +211,15 @@ impl Ticks {
     }
 }
 
-/// One board's TWO THREADS, the shell's until its stop: the stream's
-/// reader, and the consumer-owner — JOINED at [`FeedThreads::stop`] so its
-/// `Arc`s, the held-burst holds among them, which hold the `held/<chain>/`
-/// lock, are dropped before the stop returns; a relaunch in the same
-/// process then takes the lock the first shell held.
+/// One board's TWO THREADS, the shell's until its stop: the `/events`
+/// stream's reader, and the feed thread, JOINED at [`FeedThreads::stop`] so
+/// its `Arc`s, the held-burst holds among them, which hold the
+/// `held/<chain>/` lock, are dropped before the stop returns; a relaunch in
+/// the same process then takes the lock the first shell held.
 pub struct FeedThreads {
     feed: Feed,
     stream_stop: Stop,
-    worker: thread::JoinHandle<()>,
+    feeder: thread::JoinHandle<()>,
 }
 
 impl std::fmt::Debug for FeedThreads {
@@ -253,17 +254,17 @@ impl FeedThreads {
             }
         });
         let stream_stop = stop_rx.recv().expect("the reader sends its stopper before it reads");
-        let worker = thread::spawn(move || Worker::run(entry, shared, rx, &ticks));
-        FeedThreads { feed: Feed { cmds: tx }, stream_stop, worker }
+        let feeder = thread::spawn(move || Feeder::run(entry, shared, rx, &ticks));
+        FeedThreads { feed: Feed { cmds: tx }, stream_stop, feeder }
     }
 
-    /// A handle to the board's worker.
+    /// A handle to the board's feed thread.
     pub fn feed(&self) -> Feed {
         self.feed.clone()
     }
 
     /// The stream ended and the consumer closed — the save at the shell's
-    /// exit. The worker thread is JOINED last, so every `Arc` it held (the
+    /// exit. The feed thread is JOINED last, so every `Arc` it held (the
     /// holds, and with them the `held/<chain>/` lock) is dropped before this
     /// returns.
     pub fn stop(self) {
@@ -272,18 +273,21 @@ impl FeedThreads {
         if self.feed.cmds.send(Cmd::Stop(reply)).is_ok() {
             let _ = rx.recv();
         }
-        let _ = self.worker.join();
+        let _ = self.feeder.join();
     }
 }
 
-/// The consumer's owner.
-struct Worker<'b> {
+/// THE FEEDER (`search.md` §5.6: the board index's ONE WRITER, holding the
+/// lock on the board's directory for the life of its consumer — "the
+/// feeder's lock" of `client.md` §4b.2's `busy`): the feed thread's own
+/// state.
+struct Feeder<'b> {
     entry: &'b BoardEntry,
     bus: Arc<EventBus>,
     sessions: Arc<Sessions>,
     data_dir: PathBuf,
     talk: Talk,
-    /// The held-burst holds this worker drives.
+    /// The held-burst holds this feeder drives.
     holds: Arc<Holds>,
     consumer: Option<Consumer<'b>>,
     /// Where the published feed's next read starts: the head the board first
@@ -300,16 +304,16 @@ struct Worker<'b> {
     /// board, its `running` then owed at the next tick.
     announced_unreachable: bool,
     /// The stream is down — said on TALK once per outage, announced or not
-    /// ([`Worker::unreachable`]); cleared by the next tick.
+    /// ([`Feeder::unreachable`]); cleared by the next tick.
     down: bool,
 }
 
-impl<'b> Worker<'b> {
+impl<'b> Feeder<'b> {
     fn run(entry: Arc<BoardEntry>, shared: Shared, rx: Receiver<Cmd>, ticks: &Ticks) {
         let entry_arc = entry;
         let entry: &BoardEntry = &entry_arc;
         let Shared { bus, sessions, data_dir, talk, holds } = shared;
-        let mut worker = Worker {
+        let mut feeder = Feeder {
             entry,
             bus,
             sessions,
@@ -327,9 +331,9 @@ impl<'b> Worker<'b> {
         };
         // ONE `/health` read at the thread's start: the published feed's
         // start where the board answers, the mode, and `writes.halted`.
-        worker.read_health();
-        worker.mount();
-        worker.emit_index();
+        feeder.read_health();
+        feeder.open_consumer();
+        feeder.emit_index();
         // THE PROBE (§3c.4) has a deadline of its own: the loop wakes on each
         // command and at the deadline, and probes once the deadline has
         // passed, whatever woke it — a poisoned, halted, stopped
@@ -339,25 +343,25 @@ impl<'b> Worker<'b> {
         let mut next_probe = Instant::now() + PROBE_CADENCE;
         loop {
             match rx.recv_timeout(next_probe.saturating_duration_since(Instant::now())) {
-                Ok(Cmd::Tick) => worker.tick(ticks.take()),
-                Ok(Cmd::Unreachable(text)) => worker.unreachable(&text),
-                Ok(Cmd::Widen(session)) => worker.widen(&session),
-                Ok(Cmd::Narrow(principal)) => worker.narrow(principal),
+                Ok(Cmd::Tick) => feeder.tick(ticks.take()),
+                Ok(Cmd::Unreachable(text)) => feeder.unreachable(&text),
+                Ok(Cmd::Widen(session)) => feeder.widen(&session),
+                Ok(Cmd::Narrow(principal)) => feeder.narrow(principal),
                 Ok(Cmd::Closing(session, reply)) => {
-                    worker.read_drafts(&session);
-                    let sessions = Arc::clone(&worker.sessions);
-                    sessions.release(&session.board_reference, session.facts.principal, &mut worker);
+                    feeder.read_drafts(&session);
+                    let sessions = Arc::clone(&feeder.sessions);
+                    sessions.release(&session.board_reference, session.facts.principal, &mut feeder);
                     let _ = reply.send(());
                 }
                 Ok(Cmd::Probe) => {
-                    worker.holds.probe(&worker.entry.reference);
+                    feeder.holds.probe(&feeder.entry.reference);
                     next_probe = Instant::now() + PROBE_CADENCE;
                 }
                 Ok(Cmd::Search { who, query, opts, reindex, reply }) => {
-                    let _ = reply.send(worker.search(who, &query, &opts, reindex));
+                    let _ = reply.send(feeder.search(who, &query, &opts, reindex));
                 }
                 Ok(Cmd::Stop(reply)) => {
-                    worker.close();
+                    feeder.close_consumer();
                     let _ = reply.send(());
                     return;
                 }
@@ -365,11 +369,11 @@ impl<'b> Worker<'b> {
                 Err(RecvTimeoutError::Disconnected) => break,
             }
             if Instant::now() >= next_probe {
-                worker.holds.probe(&worker.entry.reference);
+                feeder.holds.probe(&feeder.entry.reference);
                 next_probe = Instant::now() + PROBE_CADENCE;
             }
         }
-        worker.close();
+        feeder.close_consumer();
     }
 
     fn say(&self, line: String) {
@@ -378,7 +382,7 @@ impl<'b> Worker<'b> {
 
     /// The consumer opened, where it is not yet; a failed open said and
     /// tried again at the next tick.
-    fn mount(&mut self) {
+    fn open_consumer(&mut self) {
         if self.consumer.is_some() {
             return;
         }
@@ -398,7 +402,7 @@ impl<'b> Worker<'b> {
         // The `/health` read first: where the board did not answer before,
         // its head is where the published feed starts.
         self.read_health();
-        self.mount();
+        self.open_consumer();
         if let Some(c) = &self.consumer {
             match c.poll() {
                 Ok(poll) => {
@@ -468,7 +472,7 @@ impl<'b> Worker<'b> {
     fn read_feed(&mut self) {
         let entry: &'b BoardEntry = self.entry;
         if let Some(since) = self.published_since {
-            if let ReadTo::At(at) = read_to_head(&entry.board, None, since, false, |row| self.emit_feed(row, "published", None)) {
+            if let ReadTo::At(at) = read_to_head(&entry.board, UpdateClass::Published, since, |row| self.emit_feed(row, UpdateClass::Published)) {
                 self.published_since = Some(at);
             }
         }
@@ -488,20 +492,23 @@ impl<'b> Worker<'b> {
     fn read_drafts(&mut self, session: &SessionEntry) {
         let principal = session.facts.principal;
         let since = *self.drafts_since.entry(principal).or_insert(session.opened_at);
-        match read_to_head(&session.board, Some(&session.token), since, true, |row| self.emit_feed(row, "drafts", Some(&session.reference))) {
+        let class = UpdateClass::Drafts(session);
+        match read_to_head(&session.board, class, since, |row| self.emit_feed(row, class)) {
             ReadTo::At(at) => {
                 self.drafts_since.insert(principal, at);
             }
-            ReadTo::Closed => self.end(session),
+            ReadTo::Died => self.end(session),
         }
     }
 
-    fn emit_feed(&self, row: &Value, class: &str, session: Option<&str>) {
+    /// One row as a `feed` event: the row verbatim, its `position`, its
+    /// `class`, and — a drafts row's — the `session` it was read under.
+    fn emit_feed(&self, row: &Value, class: UpdateClass<'_>) {
         let mut update = row.clone();
         update["position"] = row["at"].clone();
-        update["class"] = Value::from(class);
-        if let Some(s) = session {
-            update["session"] = Value::from(s);
+        update["class"] = Value::from(class.as_str());
+        if let UpdateClass::Drafts(session) = class {
+            update["session"] = Value::from(session.reference.as_str());
         }
         self.bus.emit(EventName::Feed, json!({"board": self.entry.reference, "update": update}));
     }
@@ -549,7 +556,7 @@ impl<'b> Worker<'b> {
     }
 
     fn search(&mut self, who: Searcher, query: &str, opts: &SearchOpts, reindex: bool) -> Result<Value, Refusal> {
-        self.mount();
+        self.open_consumer();
         let Some(c) = &self.consumer else { return Ok(answer_without_index()) };
         let answer = match &who {
             Searcher::Guest => {
@@ -572,7 +579,8 @@ impl<'b> Worker<'b> {
         Ok(value)
     }
 
-    fn close(&mut self) {
+    /// The consumer closed and saved, at the stop; a failed save said.
+    fn close_consumer(&mut self) {
         if let Some(c) = self.consumer.take() {
             if let Err(h) = c.close() {
                 self.say(format!("the index could not save at close: {h}"));
@@ -587,21 +595,44 @@ enum ReadTo {
     /// read, or where the read stopped on an answer it cannot read past.
     At(u64),
     /// The death signal on the token the read presented.
-    Closed,
+    Died,
 }
 
-/// ONE FEED READ TO THE BOARD's HEAD — the published feed's (no token) or
-/// a session's drafts supplement (its token, `drafts`) — from `since`, each
-/// row handed to `emit` in order (wire.md §The change feed, Paging): a page
-/// whose `more` stands read on from its `last`; a `history_reclaimed`
-/// resumed at the floor it names, where that floor passes the cursor — a
-/// reclaimed cursor is no read's to wait out; a page past the page budget
-/// re-asked at the limit that `fits`, every later page at the route's
-/// default again. Every answer moves the cursor on or shrinks the page
-/// (`Board::changes`'s own guarantee), so the read ends. Any other answer —
-/// a refusal, no answer — stops it where it stands, for the next tick to
-/// read again.
-fn read_to_head(board: &Board, token: Option<&Token>, since: u64, drafts: bool, mut emit: impl FnMut(&Value)) -> ReadTo {
+/// A `feed` update's CLASS (S-24 (b), the module doc): a row of the guest's
+/// feed, `published`, read token-free; or a row of a session's drafts
+/// supplement, `drafts`, read under its token and carrying its reference.
+#[derive(Clone, Copy)]
+enum UpdateClass<'s> {
+    Published,
+    Drafts(&'s SessionEntry),
+}
+
+impl UpdateClass<'_> {
+    /// The class as the update spells it.
+    fn as_str(self) -> &'static str {
+        match self {
+            UpdateClass::Published => "published",
+            UpdateClass::Drafts(_) => "drafts",
+        }
+    }
+}
+
+/// ONE FEED READ TO THE BOARD's HEAD — `class`'s feed: the published feed's,
+/// token-free, or a session's drafts supplement under its token, at the
+/// board that token is valid at — from `since`, each row handed to `emit`
+/// in order (wire.md §The change feed, Paging): a page whose `more` stands
+/// read on from its `last`; a `history_reclaimed` resumed at the floor it
+/// names, where that floor passes the cursor — a reclaimed cursor is no
+/// read's to wait out; a page past the page budget re-asked at the limit
+/// that `fits`, every later page at the route's default again. Every answer
+/// moves the cursor on or shrinks the page (`Board::changes`'s own
+/// guarantee), so the read ends. Any other answer — a refusal, no answer —
+/// stops it where it stands, for the next tick to read again.
+fn read_to_head(board: &Board, class: UpdateClass<'_>, since: u64, mut emit: impl FnMut(&Value)) -> ReadTo {
+    let (token, drafts) = match class {
+        UpdateClass::Published => (None, false),
+        UpdateClass::Drafts(session) => (Some(&session.token), true),
+    };
     let (mut since, mut limit) = (since, None);
     loop {
         match board.changes(token, &ChangesQuery { since, under: None, drafts, limit }) {
@@ -615,7 +646,7 @@ fn read_to_head(board: &Board, token: Option<&Token>, since: u64, drafts: bool, 
             }
             Ok(ChangesAnswer::HistoryReclaimed { floor: Some(floor) }) if floor > since => since = floor,
             Ok(ChangesAnswer::TooLarge { fits }) => limit = Some(fits),
-            Ok(ChangesAnswer::Closed) => return ReadTo::Closed,
+            Ok(ChangesAnswer::Closed) => return ReadTo::Died,
             Ok(_) | Err(_) => return ReadTo::At(since),
         }
     }
@@ -624,7 +655,7 @@ fn read_to_head(board: &Board, token: Option<&Token>, since: u64, drafts: bool, 
 /// The supplements on this thread, reached directly: the sequences of
 /// `sessions` widen and narrow here when this thread meets a session's end,
 /// and the shell's commands land here.
-impl Supplements for Worker<'_> {
+impl Supplements for Feeder<'_> {
     fn widen(&mut self, session: &Arc<SessionEntry>) {
         let Some(account) = session.facts.account.as_deref() else { return };
         let principal = session.facts.principal;
@@ -633,7 +664,7 @@ impl Supplements for Worker<'_> {
         // The face is announced afresh under the reference it now stands
         // under — a re-opened session's as much as a new one's.
         self.last_index.remove(&Some(principal));
-        self.mount();
+        self.open_consumer();
         if let Some(c) = &self.consumer {
             if let Err(h) = c.widen(SessionRef { token: &session.token, principal, account }) {
                 self.say(format!("the supplement for principal {principal} could not widen: {h}"));

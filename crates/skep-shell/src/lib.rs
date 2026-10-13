@@ -60,7 +60,7 @@
 //!   the board it is valid at, under the reference the page holds, the two
 //!   openings (bare, signed), the attest a session's key signs, and a
 //!   session's END — one sequence, whichever hand met the death signal —
-//!   with the arm a `session-died` carries, derived from public reads as
+//!   with the reason a `session-died` carries, derived from public reads as
 //!   §4b.2 says under the key store the table holds; a leaving session's
 //!   drafts supplement, one per principal, released to another standing
 //!   session of its principal.
@@ -71,16 +71,17 @@
 //!   some send of it the board can take and held where the board cannot
 //!   take it; the per-(board, principal) queue over `held`'s file, each
 //!   board's under its own lock; its child `resend` holds the walk the feed
-//!   worker's probe drains: one read per document, with §3c.5's three
+//!   thread's probe drains: one read per document, with §3c.5's three
 //!   outcomes.
-//! * `feed` — THE FEED CONSUMER's thread per board: `search::Consumer`
-//!   polled on the `/events` commits, coalesced into one waiting read, the
-//!   published feed read from the head the board first answers with, the
-//!   `/changes` pages re-read to the head by one reader for the `feed`
-//!   events, the `index`, `mode` and `daemon` events as the state moves,
-//!   and the bridge's `search` call answered off it; it also hands each
-//!   tick's `/health` read to the hold, which reads its `writes.halted`,
-//!   and runs THE PROBE on a deadline of its own and at a hand-over.
+//! * `feed` — THE FEED THREAD per board, its state the feeder:
+//!   `search::Consumer` polled on the `/events` commits, coalesced into one
+//!   waiting read, the published feed read from the head the board first
+//!   answers with, the `/changes` pages re-read to the head by one reader
+//!   for the `feed` events, the `index`, `mode` and `daemon` events as the
+//!   state moves, and the bridge's `search` call answered off it; it also
+//!   hands each tick's `/health` read to the hold, which reads its
+//!   `writes.halted`, and runs THE PROBE on a deadline of its own and at a
+//!   hand-over.
 //! * `shell` — [`Shell`]: the boards, the sessions, the session mode
 //!   (bare as the claimant, or signed with a dev key), and one private
 //!   method per §4b.1 row behind [`Shell::call`], whose dispatch the

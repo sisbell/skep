@@ -213,7 +213,7 @@ impl Ground {
     }
 
     fn composer(&self) -> Composer<'_> {
-        Composer { board: &self.board, token: &self.token, signer: &*self.signer, account: "1.0.1", term: BoardTerm { log_position: 1, chain: [0xab; 32] } }
+        Composer { board: &self.board, token: &self.token, signer: &*self.signer, account: "1.0.1", board_term: BoardTerm { log_position: 1, chain: [0xab; 32] } }
     }
 }
 
@@ -347,7 +347,7 @@ fn a_shots_body_is_composed_from_the_values_it_copies_in() {
 
 /// THE DEATH SIGNAL at a read the composer makes is the session's end and
 /// no refusal of its own: a V-spec slot's `image` and a copied run's
-/// read-back each answer [`Unattested::Closed`], stopped at that first read
+/// read-back each answer [`Unattested::Died`], stopped at that first read
 /// (the mutant that reads the death as the composer's halt answers it
 /// `attest_not_composed`, and the page is told the shell could not sign).
 #[test]
@@ -356,9 +356,9 @@ fn a_death_signal_at_a_read_is_the_sessions_end() {
     fake.closed.store(true, Ordering::SeqCst);
     let g = Ground::over(fake);
     let c = g.composer();
-    assert!(matches!(c.slot(&json!([vspec("1.0.1.0.2")]), "from"), Err(Unattested::Closed)));
+    assert!(matches!(c.slot(&json!([vspec("1.0.1.0.2")]), "from"), Err(Unattested::Died)));
     let shot = json!({"op": "publish", "doc": "1.0.1.0.1", "draft": "1.0.1.0.2", "runs": [run("1.0.1.0.2", "1.0.1.0.2.0.1.1", 2)]});
-    assert!(matches!(c.publish_body(&shot, "1.0.1.0.1"), Err(Unattested::Closed)));
+    assert!(matches!(c.publish_body(&shot, "1.0.1.0.1"), Err(Unattested::Died)));
     assert_eq!(g.fake.dialed(), ["image", "retrieve_doc_v_span_set"], "each stopped at its first read");
 }
 

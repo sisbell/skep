@@ -18,12 +18,12 @@
 //! THE END ([`Sessions::end`]): a death signal is met by two hands — the
 //! shell, when a call's token answers `Skepd-Session: closed`, and the
 //! board's feed thread, when its consumer's read or a drafts page does —
-//! and both run the one sequence here, so the arm is derived once, the
+//! and both run the one sequence here, so the reason is derived once, the
 //! restart arm's re-open is registered whichever hand met it — at the dying
 //! session's board, under the key store the table holds for it — and one
 //! `session-died` goes out. The entry's `OnceLock` is the gate: the hand
 //! whose initializer runs ends the session, a hand that comes while it runs
-//! waits and answers that arm, and a hand that panics mid-end leaves the
+//! waits and answers that reason, and a hand that panics mid-end leaves the
 //! cell unset for the next to take the end over. An entry leaves the table
 //! by that sequence or by a close —
 //! the page's own, or the shell's stop ([`Sessions::close`]) — and no
@@ -71,7 +71,7 @@ use crate::refusal::{Name, Refusal};
 /// the key that opened it, and the account whose set it authenticated
 /// against (the account itself, or the nearest above it that holds one).
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Kind {
+pub enum SessionKind {
     Bare,
     Signed { fingerprint: Fingerprint, set_account: String },
 }
@@ -82,14 +82,14 @@ pub struct Facts {
     pub principal: u64,
     /// `principal_prefix(principal)`, where the board answered one.
     pub account: Option<String>,
-    pub kind: Kind,
+    pub kind: SessionKind,
 }
 
 impl Facts {
     /// Whether the session opened BY REFERENCE — a signed session whose set
     /// stands above its own account.
     fn by_reference(&self) -> bool {
-        matches!((&self.account, &self.kind), (Some(account), Kind::Signed { set_account, .. }) if account != set_account)
+        matches!((&self.account, &self.kind), (Some(account), SessionKind::Signed { set_account, .. }) if account != set_account)
     }
 }
 
@@ -110,7 +110,7 @@ pub struct SessionEntry {
     /// burst's `base` on a document no acked write of this session names
     /// (§3c.2), so the resend's read sees every row that could have moved it.
     pub opened_at: u64,
-    /// The arm its end carried, set once by the hand that ended it — a
+    /// The reason its end carried, set once by the hand that ended it — a
     /// second hand waits while the first derives it, then answers it.
     end: OnceLock<Value>,
 }
@@ -124,24 +124,24 @@ impl SessionEntry {
     /// sign over (the board judges that write). Refused `attest_not_composed`
     /// where the composer could not sign — nothing is then to be sent — and
     /// with the board's refusal, or `unreachable`, where a read it needed was
-    /// refused or not answered; [`Unattested::Closed`] where a read it made
+    /// refused or not answered; [`Unattested::Died`] where a read it made
     /// met the session's death signal, whose end is the caller's to run.
     pub fn attest(&self, store: &FileStore, frame: &mut Value) -> Result<(), Unattested> {
-        let Kind::Signed { fingerprint: fp, .. } = &self.facts.kind else { return Ok(()) };
+        let SessionKind::Signed { fingerprint: fp, .. } = &self.facts.kind else { return Ok(()) };
         if !wants_attest(frame) {
             return Ok(());
         }
-        let Some(term) = self.board.board_term().map_err(Refusal::from)? else { return Ok(()) };
+        let Some(board_term) = self.board.board_term().map_err(Refusal::from)? else { return Ok(()) };
         let signer = signer(store, &store.key_path(fp))?;
         let account = self.facts.account.as_deref().ok_or_else(|| Refusal::shell(Name::NO_ACCOUNT, json!({})))?;
-        let composer = Composer { board: &self.board, token: &self.token, signer: &*signer, account, term };
+        let composer = Composer { board: &self.board, token: &self.token, signer: &*signer, account, board_term };
         composer.attach(frame)
     }
 }
 
 /// A board's drafts supplements as the hand that registers or ends a
 /// session reaches them (`client.md` §4e.3's WIDEN and NARROW): the shell
-/// through the board's feed handle, the feed's thread directly.
+/// through the board's feed handle, the feed thread directly.
 pub trait Supplements {
     /// `session`'s supplement mounted under its token — a principal's
     /// mounted supplement taking the new token.
@@ -201,40 +201,41 @@ impl Sessions {
 
     /// THE END of a session whose token met the death signal, run by
     /// whichever hand met it (the module doc). In the entry's `OnceLock` the
-    /// session leaves the table and its arm is derived from public reads at
-    /// its board; on the restart arm the re-opened session enters under a
-    /// fresh reference at the same board, named in the arm as `session`.
+    /// session leaves the table and its reason is derived from public reads
+    /// at its board; on the restart arm the re-opened session enters under a
+    /// fresh reference at the same board, named in the reason as `session`.
     /// Then `session-died` goes out and the drafts supplement is widened
     /// under the re-opened token, or RELEASED ([`Sessions::release`]) —
     /// NARROW "at `session-died` in every arm but the shell's own restart"
     /// (`client.md` §4e.3) where no other session of the principal stands at
     /// the board, the supplement handed to one that does. A hand that finds
-    /// the arm already derived answers it and does nothing else. The arm.
+    /// the reason already derived answers it and does nothing else. The
+    /// reason.
     pub fn end(&self, entry: &SessionEntry, supplements: &mut dyn Supplements, bus: &EventBus) -> Value {
         let (mut ended_here, mut reopened) = (false, None);
-        let arm = entry
+        let reason = entry
             .end
             .get_or_init(|| {
                 ended_here = true;
                 self.remove(&entry.reference);
                 let death = derive_death(self.reopen_store.as_deref(), entry);
-                let mut arm = death.reason;
+                let mut reason = death.reason;
                 reopened = death.reopened.map(|open| self.enter(&entry.board_reference, Arc::clone(&entry.board), open));
                 if let Some(r) = &reopened {
-                    arm["session"] = Value::from(r.reference.as_str());
+                    reason["session"] = Value::from(r.reference.as_str());
                 }
-                arm
+                reason
             })
             .clone();
         if !ended_here {
-            return arm;
+            return reason;
         }
-        bus.emit(EventName::SessionDied, json!({"session": entry.reference, "reason": arm}));
+        bus.emit(EventName::SessionDied, json!({"session": entry.reference, "reason": reason}));
         match &reopened {
             Some(r) => supplements.widen(r),
             None => self.release(&entry.board_reference, entry.facts.principal, supplements),
         }
-        arm
+        reason
     }
 
     /// A principal's supplement at the board `board_reference` names, given
@@ -302,7 +303,7 @@ pub fn open_bare(board: &Board, principal: u64) -> Result<Open, Refusal> {
         Opened::Blocked { record } => return Err(Refusal::Blocked(skep_client::Blocked { record, named_by: board.dialed().as_str().to_string(), ground: None })),
     };
     let account = board.principal_prefix(principal)?;
-    Ok(Open { token, facts: Facts { principal, account, kind: Kind::Bare }, opened_at })
+    Ok(Open { token, facts: Facts { principal, account, kind: SessionKind::Bare }, opened_at })
 }
 
 /// THE STORE's KEY for (`origin`, `principal`) to sign with — §3.5's
@@ -356,7 +357,7 @@ pub fn open_signed(board: &Board, store: &FileStore, principal: u64) -> Result<O
     let facts = Facts {
         principal,
         account: Some(session.account().to_string()),
-        kind: Kind::Signed { fingerprint: session.fingerprint(), set_account: pre.walk.set_account.clone() },
+        kind: SessionKind::Signed { fingerprint: session.fingerprint(), set_account: pre.walk.set_account.clone() },
     };
     Ok(Open { token: session.into_token(), facts, opened_at: health.log_position() })
 }
@@ -368,13 +369,13 @@ struct Death {
     reopened: Option<Open>,
 }
 
-/// The page's own `close`: its own arm.
+/// The reason the page's own `close` carries: its own arm, `closed`.
 pub fn closed() -> Value {
     json!({"arm": "closed"})
 }
 
-/// THE DEATH of `entry`, whose token met the death signal: its arm derived
-/// from the reads made now at its board (the module doc), and on the
+/// THE DEATH of `entry`, whose token met the death signal: its reason
+/// derived from the reads made now at its board (the module doc), and on the
 /// restart arm the session re-opened in its place; `store` where the shell
 /// holds a key store for that re-open. Run inside [`Sessions::end`] alone,
 /// under the entry's lock: the re-open it makes is a session no other hand
@@ -388,7 +389,7 @@ fn derive_death(store: Option<&FileStore>, entry: &SessionEntry) -> Death {
     };
     let mode = Mode::of(&health);
     let facts = &entry.facts;
-    let Kind::Signed { fingerprint: fp, set_account } = &facts.kind else {
+    let SessionKind::Signed { fingerprint: fp, set_account } = &facts.kind else {
         if mode == Mode::Enforcing {
             return none(json!({"arm": "mode", "mode": mode.name()}));
         }

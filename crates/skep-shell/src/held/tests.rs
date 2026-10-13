@@ -35,7 +35,8 @@ thread_local! {
     static AFTER_SYNC: RefCell<Option<Seam>> = const { RefCell::new(None) };
 }
 
-/// Whether the next `sync_data` is forced to fail (T5's `store_unwritable`).
+/// Whether the next `sync_data` is forced to fail (T5's `store_unwritable`,
+/// which the `held` answer carries as `unwritable`).
 pub(super) fn fail_sync() -> bool {
     FAIL_SYNC.with(Cell::get)
 }
@@ -223,11 +224,12 @@ fn the_file_compacts_once_every_line_is_done() {
 
 /// PERSIST-FIRST: a successful append's line is ON DISK before the append
 /// returns — pinned by reading the file in the seam the answer is built
-/// after; an append whose `sync_data` is made to fail answers
-/// `store_unwritable` (the device's I/O error) BESIDE a line that stands in
-/// the queue under its ordinal, the next line taking the ordinal after it
-/// (the mutant that keeps the refused line out of the queue loses the burst
-/// its `held` answer promised).
+/// after; an append whose `sync_data` is made to fail answers §3c.3's
+/// `store_unwritable` (the device's I/O error, which the `held` answer
+/// carries as `unwritable`) BESIDE a line that stands in the queue under
+/// its ordinal, the next line taking the ordinal after it (the mutant that
+/// keeps the refused line out of the queue loses the burst its `held` answer
+/// promised).
 #[test]
 fn an_appends_line_is_on_disk_before_its_answer() {
     let tmp = TempDir::new().unwrap();
@@ -252,7 +254,7 @@ fn an_appends_line_is_on_disk_before_its_answer() {
     FAIL_SYNC.with(|f| f.set(true));
     let refused = queue.hold("1.0.1.0.2", None, 0, json!({"op": "insert"}), Reason::of("stopped", false)).unwrap();
     FAIL_SYNC.with(|f| f.set(false));
-    assert_eq!(refused.unwritten.expect("the device refused the copy").kind(), std::io::ErrorKind::StorageFull, "store_unwritable");
+    assert_eq!(refused.unwritten.expect("the device refused the copy").kind(), std::io::ErrorKind::StorageFull, "store_unwritable, answered `unwritable`");
     assert_eq!(refused.k, 2);
     assert_eq!(ks(&queue), [1, 2], "the refused line stands in the queue");
     let next = queue.hold("1.0.1.0.3", None, 0, json!({"op": "insert"}), Reason::of("behind", false)).unwrap();
@@ -440,7 +442,7 @@ fn the_writer_holds_no_line_its_reader_refuses() {
 }
 
 /// A RE-MARK THAT CHANGES NOTHING WRITES NOTHING: a board answering the
-/// same hold at every wake grows no file (the mutant that appends every
+/// same hold at every probe grows no file (the mutant that appends every
 /// re-mark copies the frame once a probe cadence for as long as the board
 /// says so); a new reason is written as before.
 #[test]

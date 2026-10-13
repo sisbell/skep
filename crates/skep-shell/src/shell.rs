@@ -18,8 +18,8 @@
 //! the connection's thread. The page's two answers, [`Shell::answer`] and
 //! [`Shell::cancel`], route to the walk that asked. A death signal a call
 //! meets ends the session by the one sequence the board's feed thread runs
-//! too (`Sessions::end`), and the call answers `session_died` with the arm
-//! that sequence derived.
+//! too (`Sessions::end`), and the call answers `session_died` with the
+//! reason that sequence derived.
 //!
 //! WHAT THE SHELL REFUSES WITHOUT ASKING (ps3-5): a WRITE frame in the
 //! guest form (the board would answer `unauthenticated`; no dial is made);
@@ -315,7 +315,8 @@ impl fmt::Debug for Fetched {
 pub struct Shell {
     boards: Vec<Arc<BoardEntry>>,
     /// Each board's feed handle by the board's reference, fixed at the open:
-    /// a call waiting on one board's thread holds nothing another call needs.
+    /// a call waiting on one board's feed thread holds nothing another call
+    /// needs.
     feeds: Vec<(String, Feed)>,
     /// Each board's two feed threads, taken and stopped at the shell's stop.
     threads: Mutex<Vec<FeedThreads>>,
@@ -327,7 +328,7 @@ pub struct Shell {
     store: Arc<FileStore>,
     /// THE HELD-BURST HOLDS (§3c): the one path of every `/op` under a
     /// session, the queue `held` and `resolve` read and act on, the own
-    /// node's stopped state, and the resend the feed workers drive.
+    /// node's stopped state, and the resend the boards' feed threads drive.
     holds: Arc<Holds>,
     anchors: PathBuf,
     session_mode: SessionMode,
@@ -526,8 +527,8 @@ impl Shell {
     /// said here ONCE: while it stands the board's feed announces no
     /// `unreachable` of its own, and `Running` here is the one `running`
     /// (`feed.rs`'s `unreachable`). `Running` ends the hold at the node's
-    /// board and hands the board's worker its probe, as `resolve(send)`
-    /// hands it: the caller waits on no dial.
+    /// board and hands the board's feed thread its probe, as
+    /// `resolve(send)` hands it: the caller waits on no dial.
     pub fn set_node_state(&self, state: NodeState) {
         let Some(board_reference) = &self.own_node_reference else { return };
         let running = matches!(state, NodeState::Running);
@@ -538,8 +539,8 @@ impl Shell {
         self.bus.emit(EventName::Daemon, json!({"board": board_reference, "state": state}));
         // The own node's STOPPED state is the hold's (§3c.4): every burst at
         // its board holds `stopped` without a dial, `probe` answers it, and
-        // `Running` ends the hold, the resend run on the board's worker where
-        // a session stands.
+        // `Running` ends the hold, the resend run on the board's feed thread
+        // where a session stands.
         self.holds.set_node_stopped(board_reference, !running);
         if running {
             self.feed(board_reference).probe();
@@ -584,7 +585,7 @@ impl Shell {
 
     /// A death signal met on `session`'s token under the shell's hands: the
     /// session ended by the one sequence the board's feed thread runs too,
-    /// whichever hand came first; the call's refusal, carrying the arm.
+    /// whichever hand came first; the call's refusal, carrying the reason.
     fn died(&self, session: &SessionEntry) -> Refusal {
         let reason = self.sessions.end(session, &mut self.feed(&session.board_reference), &self.bus);
         Refusal::shell(Name::SESSION_DIED, json!({"session": session.reference, "reason": reason}))
@@ -898,7 +899,7 @@ impl Shell {
     /// or `moved` line marks it (and a refused run's `behind` lines) dropped;
     /// `"send"` re-enters the automatic machine for that document, the call
     /// answering "once the line is handed to the machine, never after its
-    /// ack" — the probe that resends it handed to the board's worker
+    /// ack" — the probe that resends it handed to the board's feed thread
     /// (`Feed::probe`); `store_halted`, `no_such_held` and `not_resolvable`
     /// as `Holds::resolve` orders them.
     fn resolve(&self, args: &Value) -> Result<Value, Refusal> {
@@ -907,7 +908,7 @@ impl Shell {
         let act = args["act"].as_str().ok_or_else(|| Refusal::malformed("act"))?;
         match self.holds.resolve(&session, k, act)? {
             Resolved::Dropped => {}
-            Resolved::Rearmed => self.feed(&session.board_reference).probe(),
+            Resolved::HandedBack => self.feed(&session.board_reference).probe(),
         }
         Ok(json!({}))
     }
@@ -932,8 +933,8 @@ impl Shell {
 
     /// THE CLEAN STOP: every pending moment cancelled, every session closed
     /// at its board, every board's feed threads stopped — each consumer
-    /// saved and closed, each worker joined, so the `held/<chain>/` locks
-    /// its holds kept are free once this returns. A second stop finds
+    /// saved and closed, each feed thread joined, so the `held/<chain>/`
+    /// locks its holds kept are free once this returns. A second stop finds
     /// nothing left to stop, and dropping the shell runs it. NOTHING of the
     /// held-burst store is written here — every held line is already synced
     /// at its `op` (persist-first, §3c.6's step 3). UNVERIFIED HERE (the

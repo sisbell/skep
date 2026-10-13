@@ -434,9 +434,10 @@ struct Disk {
 }
 
 /// One line entered in the queue: the ordinal it took, and — where its copy
-/// could not be written (`store_unwritable`: a full disk, a read-only volume,
-/// a line past [`MAX_HELD_LINE_BYTES`]) — why. The line stands in the queue
-/// either way.
+/// could not be written (§3c.3's `store_unwritable`, which the `held`
+/// answer carries as `unwritable`: a full disk, a read-only volume, a line
+/// past [`MAX_HELD_LINE_BYTES`]) — why. The line stands in the queue either
+/// way.
 #[derive(Debug)]
 pub struct Entered {
     pub k: u64,
@@ -600,8 +601,9 @@ impl Disk {
 
     /// ONE `write` of the whole line, then `sync_data` BEFORE the caller builds
     /// its answer (PERSIST-FIRST). A `#[cfg(test)]` seam forces the sync to
-    /// fail (T5's `store_unwritable`) and interposes a read of the file after
-    /// the sync, so a suite pins the line ON DISK before the answer is built.
+    /// fail (T5's `store_unwritable`, which the `held` answer carries as
+    /// `unwritable`) and interposes a read of the file after the sync, so a
+    /// suite pins the line ON DISK before the answer is built.
     ///
     /// UNVERIFIED HERE (§3c.3, the record §7 items 2–3): that one small
     /// `write_all` is one `write(2)` (and may split for a large buffer — the

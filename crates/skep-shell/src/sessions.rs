@@ -21,6 +21,12 @@
 //! the page's own, or the shell's stop ([`Sessions::close`]) — and no
 //! other way.
 //!
+//! ONE SUPPLEMENT PER PRINCIPAL ([`Sessions::release`]): the consumer holds
+//! one drafts supplement per (board, principal), and two tabs open two
+//! sessions of one principal; a session that leaves the table hands the
+//! supplement to another session of its principal standing at its board,
+//! and only where none stands is it narrowed.
+//!
 //! THE ARM (`session-died(session, reason)`, "ONE ARM PER E2 TRIGGER,
 //! derived by the shell from public reads"): a bare session on a board now
 //! ENFORCING died at the FLIP; a signed session whose key now stands in
@@ -34,6 +40,7 @@
 //! answer is said so. The page's own `close` is its own arm.
 
 use std::collections::HashMap;
+use std::path::Path;
 use std::sync::{Arc, Mutex, PoisonError};
 
 use serde_json::{json, Value};
@@ -42,8 +49,9 @@ use skep_client::ceremony::handshake::{handshake_prechecked, Site};
 use skep_client::derive::records::{credential_records, Hand};
 use skep_client::derive::{origin_arm, precheck, KeyDiagnosis, Mode};
 use skep_client::sheet::render_inert;
-use skep_client::store::{FileStore, KeySelector, KeyStore, Purpose, StoreError};
-use skep_client::Board;
+use skep_client::sign::Signer;
+use skep_client::store::{FileStore, KeyFacts, KeySelector, KeyStore, Purpose, StoreError};
+use skep_client::{Board, Origin};
 use skep_identity::Fingerprint;
 
 use crate::events::{EventBus, SESSION_DIED};
@@ -163,9 +171,11 @@ impl Sessions {
     /// on the restart arm the re-opened session enters under a fresh
     /// reference, named in the arm as `session`. Then `session-died` goes
     /// out and the drafts supplement is widened under the re-opened token,
-    /// or narrowed — NARROW "at `session-died` in every arm but the shell's
-    /// own restart" (`client.md` §4e.3). A hand that finds the arm already
-    /// derived answers it and does nothing else. The arm.
+    /// or RELEASED ([`Sessions::release`]) — NARROW "at `session-died` in
+    /// every arm but the shell's own restart" (`client.md` §4e.3) where no
+    /// other session of the principal stands at the board, the supplement
+    /// handed to one that does. A hand that finds the arm already derived
+    /// answers it and does nothing else. The arm.
     pub fn end(&self, entry: &SessionEntry, board: &Board, store: Option<&FileStore>, supplements: &mut dyn Supplements, bus: &EventBus) -> Value {
         // A hand that panicked mid-end left the lock poisoned and the arm
         // unset: the next hand takes the end over rather than wait on it.
@@ -185,9 +195,21 @@ impl Sessions {
         bus.emit(SESSION_DIED, json!({"session": entry.reference, "reason": arm}));
         match &reopened {
             Some(r) => supplements.widen(r),
-            None => supplements.narrow(entry.facts.principal),
+            None => self.release(&entry.board, entry.facts.principal, supplements),
         }
         arm
+    }
+
+    /// A principal's supplement at `board`, given up by a session that has
+    /// left the table: the consumer holds ONE supplement per principal, so
+    /// it is handed to another session of the principal standing there —
+    /// that session's token widened in — and narrowed (`client.md` §4e.3's
+    /// NARROW) where none stands.
+    pub fn release(&self, board: &str, principal: u64, supplements: &mut dyn Supplements) {
+        match self.on_board(board).into_iter().find(|s| s.facts.principal == principal) {
+            Some(standing) => supplements.widen(&standing),
+            None => supplements.narrow(principal),
+        }
     }
 
     /// A CLOSE — the page's own, or the shell's stop: the session out of
@@ -231,34 +253,38 @@ pub struct Open {
 pub fn open_bare(board: &Board, principal: u64) -> Result<Open, Refusal> {
     let token = match board.session_open(SessionBody::Bare { principal }).map_err(Refusal::of)? {
         Opened::Token(t) => t,
-        Opened::Rejected => {
-            return Err(Refusal::Board(skep_client::Refused {
-                status: 401,
-                code: "session_rejected".into(),
-                detail: None,
-                op: None,
-                body: json!({"error": "session_rejected"}),
-            }))
-        }
+        Opened::Rejected => return Err(Refusal::board(401, json!({"error": "session_rejected"}))),
         Opened::Blocked { record } => return Err(Refusal::Blocked(skep_client::Blocked { record, named_by: board.dialed().as_str().to_string(), ground: None })),
     };
     let account = board.principal_prefix(principal).map_err(Refusal::of)?;
     Ok(Open { token, facts: Facts { principal, account, kind: Kind::Bare, fingerprint: None, set_account: None } })
 }
 
+/// THE STORE's KEY for (`origin`, `principal`) to sign with — §3.5's
+/// lookup — under the armed names every row that signs spells: `no_key`
+/// under arm 4's face where the store selects none (`mode` read for that
+/// face alone), `store_unreadable` where the store cannot be read.
+pub fn signing_key(store: &FileStore, origin: &Origin, principal: u64, mode: impl FnOnce() -> Mode) -> Result<KeyFacts, Refusal> {
+    match store.select(&KeySelector::Board { origin, principal: Some(principal) }, Purpose::Sign) {
+        Ok(key) => Ok(key),
+        Err(StoreError::NoSelection { keys }) => Err(Refusal::of_named(Name::NO_KEY, skep_client::store::arm4_face(store, &keys, mode()))),
+        Err(e) => Err(Refusal::of_named(Name::STORE_UNREADABLE, e.into())),
+    }
+}
+
+/// The signer of the store's key at `path`: `store_unreadable` where its
+/// file cannot be read.
+pub fn signer(store: &FileStore, path: &Path) -> Result<Box<dyn Signer>, Refusal> {
+    store.signer(&KeySelector::Path(path)).map_err(|e| Refusal::of_named(Name::STORE_UNREADABLE, e.into()))
+}
+
 /// THE SIGNED CONTENT-SCOPED HANDSHAKE as `principal` with the store's key
-/// for (this board, the principal) — §3.5's lookup — behind AUTH-5.65's
+/// for (this board, the principal) — [`signing_key`] — behind AUTH-5.65's
 /// pre-check, each refusal under the armed name the `session` row spells.
 pub fn open_signed(board: &Board, store: &FileStore, principal: u64) -> Result<Open, Refusal> {
     let health = board.health().map_err(Refusal::of)?;
-    let key = match store.select(&KeySelector::Board { origin: board.dialed(), principal: Some(principal) }, Purpose::Sign) {
-        Ok(key) => key,
-        Err(StoreError::NoSelection { keys }) => {
-            return Err(Refusal::of_named(Name::NO_KEY, skep_client::store::arm4_face(store, &keys, Mode::of(&health))));
-        }
-        Err(e) => return Err(Refusal::of_named(Name::STORE_UNREADABLE, e.into())),
-    };
-    let signer = store.signer(&KeySelector::Path(&key.path)).map_err(|e| Refusal::of_named(Name::STORE_UNREADABLE, e.into()))?;
+    let key = signing_key(store, board.dialed(), principal, || Mode::of(&health))?;
+    let signer = signer(store, &key.path)?;
     if let Err(h) = origin_arm(board.signed(), &health) {
         return Err(Refusal::of_named(Name::ORIGIN_STATE, h));
     }
@@ -477,6 +503,34 @@ mod tests {
         assert!(sessions.close(&closed.reference).is_none(), "closed once");
         assert_eq!(sessions.end(&closed, &board, None, &mut supplements, &bus), super::closed(), "a death met after the close answers its arm");
         assert!(rx.try_recv().is_err());
+    }
+
+    /// ONE SUPPLEMENT PER PRINCIPAL: a session that ends hands its
+    /// principal's supplement to another session of the principal standing
+    /// at its board, and narrows it where none stands there — a session of
+    /// the principal at another board takes nothing; a close releases it the
+    /// same way.
+    #[test]
+    fn a_principals_supplement_follows_its_standing_sessions() {
+        let (board, sessions, bus) = (nowhere(), Sessions::new(), EventBus::new());
+        let mut supplements = Recorded::default();
+        let first = sessions.register("b-1", open(1, "1.0.1", "1.0.1"), &mut supplements);
+        let second = sessions.register("b-1", open(1, "1.0.1", "1.0.1"), &mut supplements);
+        sessions.register("b-2", open(1, "1.0.1", "1.0.1"), &mut supplements);
+        supplements.0.clear();
+        sessions.end(&first, &board, None, &mut supplements, &bus);
+        assert_eq!(supplements.0, [format!("widen {}", second.reference)], "the session standing at the board takes the supplement");
+        sessions.end(&second, &board, None, &mut supplements, &bus);
+        assert_eq!(supplements.0.last().map(String::as_str), Some("narrow 1"), "none stands at b-1, and the session at b-2 takes nothing");
+        let third = sessions.register("b-1", open(1, "1.0.1", "1.0.1"), &mut supplements);
+        let fourth = sessions.register("b-1", open(1, "1.0.1", "1.0.1"), &mut supplements);
+        supplements.0.clear();
+        assert!(sessions.close(&third.reference).is_some());
+        sessions.release("b-1", 1, &mut supplements);
+        assert_eq!(supplements.0, [format!("widen {}", fourth.reference)]);
+        assert!(sessions.close(&fourth.reference).is_some());
+        sessions.release("b-1", 1, &mut supplements);
+        assert_eq!(supplements.0.last().map(String::as_str), Some("narrow 1"));
     }
 
     /// Two hands meet one death at once: the second waits on the entry's

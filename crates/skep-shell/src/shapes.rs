@@ -35,6 +35,11 @@ const fn opt(name: &'static str, ty: &'static str) -> Field {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Shape {
     pub name: &'static str,
+    /// Whether a value carries members beyond the declared fields — the
+    /// arm's own members beside `arm`, the detail beside a shell refusal's
+    /// `name` — declared as an index signature, and held by the pin to its
+    /// required fields alone.
+    pub open: bool,
     pub doc: &'static str,
     pub fields: &'static [Field],
 }
@@ -42,43 +47,43 @@ pub struct Shape {
 /// THE TABLE: every value that crosses the bridge, by the name the file
 /// declares it under.
 const SHAPES: &[Shape] = &[
-    Shape { name: "BoardRow", doc: "`boards()` — one entry per board in the shell's list; `board` the opaque reference every board-touching call takes", fields: &[req("board", "string"), req("name", "string"), req("origin", "string")] },
-    Shape { name: "SessionOpened", doc: "`session(board, principal)` — the session's opaque reference in the token's place", fields: &[req("session", "string"), req("principal", "number"), req("account", "string | null")] },
-    Shape { name: "Keygen", doc: "`keygen({label?})` — the device key's fingerprint, its enrollment record, and the outstanding act", fields: &[req("fingerprint", "string"), req("payload", "string"), req("outstanding", "string")] },
-    Shape { name: "FingerprintRow", doc: "`fingerprint({select?, payload?})` — one key of the store, its bindings, the pending state", fields: &[req("fingerprint", "string"), req("label", "string | null"), req("bindings", "string[]"), req("unbound", "boolean"), req("payload", "string | null")] },
-    Shape { name: "Claimed", doc: "`claim(board, opts)` — the three facts and the agent space; the display name held", fields: &[req("account", "string"), req("principal", "number"), req("fingerprint", "string"), req("agent_space", "string | null"), req("display_name", "string | null"), req("warnings", "string[]")] },
-    Shape { name: "Facts", doc: "the three facts of a return leg", fields: &[req("principal", "number"), req("account", "string"), req("origin", "string")] },
-    Shape { name: "Enrolled", doc: "`enroll(board, payload)`", fields: &[req("facts", "Facts"), req("fingerprints", "string[]"), req("reconciled", "boolean"), req("warnings", "string[]")] },
-    Shape { name: "Bound", doc: "`bind(board, facts)` — empty, or the warning an unwritable store returns", fields: &[opt("warning", "string"), opt("warnings", "string[]")] },
-    Shape { name: "Recovered", doc: "`recover(board, opts)`", fields: &[req("facts", "Facts"), req("enrolled", "string[]"), req("retired", "string[]"), req("containment", "boolean"), req("recovery_read", "string[]"), req("warnings", "string[]")] },
-    Shape { name: "Rotated", doc: "`rotate(board, opts)`", fields: &[req("facts", "Facts"), req("old", "string"), req("new", "string"), req("trail", "string"), req("warnings", "string[]")] },
-    Shape { name: "HandoffDelegated", doc: "`handoff(board, {account})` without a payload — beat (a)'s address", fields: &[req("address", "string"), req("principal", "number"), req("already", "boolean")] },
-    Shape { name: "Accepted", doc: "`accept(board, opts)` — the enrollment record for the giver", fields: &[req("payload", "string")] },
-    Shape { name: "Health", doc: "`health(board)` — the `/health` document verbatim and the derived mode", fields: &[req("health", "unknown"), req("mode", "Mode")] },
-    Shape { name: "Probe", doc: "`probe()` — the own node's state", fields: &[req("daemon", "'running' | 'stopped' | 'unreachable'"), req("dialed", "string | null"), req("signed", "string | null")] },
-    Shape { name: "SearchAnswer", doc: "`search(…)` — the hits, the places, the pair's state", fields: &[req("hits", "Hit[]"), req("places", "Place[]"), req("state", "IndexState"), req("total", "number"), req("truncated", "boolean"), req("more_terms", "boolean"), req("fuzzy_bounded", "boolean"), req("positions_bounded", "boolean")] },
-    Shape { name: "Hit", doc: "one hit (search.md §3.1)", fields: &[req("doc", "string"), req("member", "string | null"), req("as_of", "number"), req("span", "SpanText"), req("score", "number"), req("snippet", "Snippet | null"), req("kind", "'edition' | 'draft'"), req("standing", "Standing"), req("occurrences", "number"), req("matched", "Matched[]")] },
-    Shape { name: "SpanText", doc: "a hit's passage: the V-ordinal of its first byte and its width in positions", fields: &[req("start", "number"), req("width", "number")] },
-    Shape { name: "Snippet", doc: "the paragraph window around a hit's span", fields: &[req("text", "string"), req("start", "number"), req("marks", "Mark[]")] },
-    Shape { name: "Mark", doc: "one mark of a snippet", fields: &[req("offset", "number"), req("len", "number"), req("kind", "unknown")] },
-    Shape { name: "Matched", doc: "a query word matched by one edit", fields: &[req("word", "string"), req("term", "string")] },
-    Shape { name: "Place", doc: "one exact address or label match of the document index", fields: &[req("doc", "string"), req("kind", "'edition' | 'draft'"), req("label", "string | null"), req("standing", "Standing")] },
-    Shape { name: "RefusedByBoard", doc: "a refusal: the board's own verdict, verbatim", fields: &[req("kind", "'refused'"), req("name", "string"), req("status", "number"), req("code", "string"), req("detail", "string | null"), req("op", "string | null"), req("body", "unknown")] },
-    Shape { name: "HaltFace", doc: "a refusal: a halt's face under the armed name", fields: &[req("kind", "'halt'"), req("name", "string"), req("state", "string"), req("cause", "string"), req("act", "string")] },
-    Shape { name: "BlockedFace", doc: "a refusal: the block", fields: &[req("kind", "'blocked'"), req("name", "'blocked'"), req("record", "string"), req("named_by", "string"), req("ground", "string | null")] },
-    Shape { name: "Unreachable", doc: "a refusal: the board is not answering", fields: &[req("kind", "'unreachable'"), req("name", "'unreachable'"), req("text", "string")] },
-    Shape { name: "ShellRefusal", doc: "a refusal: the shell's own, its detail beside the name", fields: &[req("kind", "'shell'"), req("name", "string")] },
-    Shape { name: "ModeEvent", doc: "`mode(board, …)` — the pair moved", fields: &[req("board", "string"), req("mode", "Mode"), req("claimant", "string | null"), req("local_trust", "boolean")] },
-    Shape { name: "SessionDiedEvent", doc: "`session-died(session, reason)`", fields: &[req("session", "string"), req("reason", "DeathReason")] },
-    Shape { name: "DeathReason", doc: "the arm a death carries; the arm's own members beside it", fields: &[req("arm", "'closed' | 'mode' | 'retired' | 'seeded' | 'blocked' | 'restart' | 'unreachable'")] },
-    Shape { name: "DaemonEvent", doc: "`daemon(board, state)`", fields: &[req("board", "string"), req("state", "'running' | 'stopped' | 'unreachable'")] },
-    Shape { name: "FeedEvent", doc: "`feed(board, update)`", fields: &[req("board", "string"), req("update", "FeedUpdate")] },
-    Shape { name: "FeedUpdate", doc: "the `/changes` entry verbatim, with `position` and `class` — THIS CRATE's definition of the update's shape", fields: &[req("position", "number"), req("at", "number"), req("op", "string | null"), req("docs", "string[] | null"), req("class", "'published' | 'drafts'"), opt("session", "string"), opt("key", "string | null"), opt("time", "number | null"), opt("attest", "{ alg: string; sig: string } | null"), opt("new_prefix", "string"), opt("new_id", "number"), opt("link", "string"), opt("placed", "string"), opt("base_extent", "string | null")] },
-    Shape { name: "IndexEvent", doc: "`index(board, session?, state)`", fields: &[req("board", "string"), req("session", "string | null"), req("state", "IndexState")] },
-    Shape { name: "IndexState", doc: "the index's ten arms; the arm's own members beside it", fields: &[req("arm", "'none' | 'building' | 'widening' | 'complete' | 'at_the_floor' | 'resumed_from_the_floor' | 'unplaced' | 'past_the_ceiling' | 'newer_skep' | 'busy'")] },
-    Shape { name: "MomentEvent", doc: "`moment(id, kind, data)` — a PUBLIC moment of a walk; answered by `answer(id, value)` or declined by `cancel(id)` where `answerable`", fields: &[req("id", "string"), req("kind", "'statement' | 'label' | 'ask' | 'yes_no'"), req("data", "unknown"), req("walk", "string"), req("board", "string"), req("answerable", "boolean")] },
-    Shape { name: "Answer", doc: "`answer(id, value)`", fields: &[req("id", "string"), req("value", "unknown")] },
-    Shape { name: "Cancel", doc: "`cancel(id)`", fields: &[req("id", "string")] },
+    Shape { name: "BoardRow", open: false, doc: "`boards()` — one entry per board in the shell's list; `board` the opaque reference every board-touching call takes", fields: &[req("board", "string"), req("name", "string"), req("origin", "string")] },
+    Shape { name: "SessionOpened", open: false, doc: "`session(board, principal)` — the session's opaque reference in the token's place", fields: &[req("session", "string"), req("principal", "number"), req("account", "string | null")] },
+    Shape { name: "Keygen", open: false, doc: "`keygen({label?})` — the device key's fingerprint, its enrollment record, and the outstanding act", fields: &[req("fingerprint", "string"), req("payload", "string"), req("outstanding", "string")] },
+    Shape { name: "FingerprintRow", open: false, doc: "`fingerprint({select?, payload?})` — one key of the store, its bindings, the pending state", fields: &[req("fingerprint", "string"), req("label", "string | null"), req("bindings", "string[]"), req("unbound", "boolean"), req("payload", "string | null")] },
+    Shape { name: "Claimed", open: false, doc: "`claim(board, opts)` — the three facts and the agent space; the display name held", fields: &[req("account", "string"), req("principal", "number"), req("fingerprint", "string"), req("agent_space", "string | null"), req("display_name", "string | null"), req("warnings", "string[]")] },
+    Shape { name: "Facts", open: false, doc: "the three facts of a return leg", fields: &[req("principal", "number"), req("account", "string"), req("origin", "string")] },
+    Shape { name: "Enrolled", open: false, doc: "`enroll(board, payload)`", fields: &[req("facts", "Facts"), req("fingerprints", "string[]"), req("reconciled", "boolean"), req("warnings", "string[]")] },
+    Shape { name: "Bound", open: false, doc: "`bind(board, facts)` — empty, or the warning an unwritable store returns", fields: &[opt("warning", "string"), opt("warnings", "string[]")] },
+    Shape { name: "Recovered", open: false, doc: "`recover(board, opts)`", fields: &[req("facts", "Facts"), req("enrolled", "string[]"), req("retired", "string[]"), req("containment", "boolean"), req("recovery_read", "string[]"), req("warnings", "string[]")] },
+    Shape { name: "Rotated", open: false, doc: "`rotate(board, opts)`", fields: &[req("facts", "Facts"), req("old", "string"), req("new", "string"), req("trail", "string"), req("warnings", "string[]")] },
+    Shape { name: "HandoffDelegated", open: false, doc: "`handoff(board, {account})` without a payload — beat (a)'s address", fields: &[req("address", "string"), req("principal", "number"), req("already", "boolean")] },
+    Shape { name: "Accepted", open: false, doc: "`accept(board, opts)` — the enrollment record for the giver", fields: &[req("payload", "string")] },
+    Shape { name: "Health", open: false, doc: "`health(board)` — the `/health` document verbatim and the derived mode", fields: &[req("health", "unknown"), req("mode", "Mode")] },
+    Shape { name: "Probe", open: false, doc: "`probe()` — the own node's state", fields: &[req("daemon", "'running' | 'stopped' | 'unreachable'"), req("dialed", "string | null"), req("signed", "string | null")] },
+    Shape { name: "SearchAnswer", open: false, doc: "`search(…)` — the hits, the places, the pair's state", fields: &[req("hits", "Hit[]"), req("places", "Place[]"), req("state", "IndexState"), req("total", "number"), req("truncated", "boolean"), req("more_terms", "boolean"), req("fuzzy_bounded", "boolean"), req("positions_bounded", "boolean")] },
+    Shape { name: "Hit", open: false, doc: "one hit (search.md §3.1)", fields: &[req("doc", "string"), req("member", "string | null"), req("as_of", "number"), req("span", "SpanText"), req("score", "number"), req("snippet", "Snippet | null"), req("kind", "'edition' | 'draft'"), req("standing", "Standing"), req("occurrences", "number"), req("matched", "Matched[]")] },
+    Shape { name: "SpanText", open: false, doc: "a hit's passage: the V-ordinal of its first byte and its width in positions", fields: &[req("start", "number"), req("width", "number")] },
+    Shape { name: "Snippet", open: false, doc: "the paragraph window around a hit's span", fields: &[req("text", "string"), req("start", "number"), req("marks", "Mark[]")] },
+    Shape { name: "Mark", open: false, doc: "one mark of a snippet", fields: &[req("offset", "number"), req("len", "number"), req("kind", "{ span: true } | { term: string } | { gap: { width: number } }")] },
+    Shape { name: "Matched", open: false, doc: "a query word matched by one edit", fields: &[req("word", "string"), req("term", "string")] },
+    Shape { name: "Place", open: false, doc: "one exact address or label match of the document index", fields: &[req("doc", "string"), req("kind", "'edition' | 'draft'"), req("label", "string | null"), req("standing", "Standing")] },
+    Shape { name: "RefusedByBoard", open: false, doc: "a refusal: the board's own verdict, verbatim", fields: &[req("kind", "'refused'"), req("name", "string"), req("status", "number"), req("code", "string"), req("detail", "string | null"), req("op", "string | null"), req("body", "unknown")] },
+    Shape { name: "HaltFace", open: false, doc: "a refusal: a halt's face under the armed name", fields: &[req("kind", "'halt'"), req("name", "string"), req("state", "string"), req("cause", "string"), req("act", "string")] },
+    Shape { name: "BlockedFace", open: false, doc: "a refusal: the block", fields: &[req("kind", "'blocked'"), req("name", "'blocked'"), req("record", "string"), req("named_by", "string"), req("ground", "string | null")] },
+    Shape { name: "Unreachable", open: false, doc: "a refusal: the board is not answering", fields: &[req("kind", "'unreachable'"), req("name", "'unreachable'"), req("text", "string")] },
+    Shape { name: "ShellRefusal", open: true, doc: "a refusal: the shell's own, its detail beside the name", fields: &[req("kind", "'shell'"), req("name", "string")] },
+    Shape { name: "ModeEvent", open: false, doc: "`mode(board, …)` — the pair moved", fields: &[req("board", "string"), req("mode", "Mode"), req("claimant", "string | null"), req("local_trust", "boolean")] },
+    Shape { name: "SessionDiedEvent", open: false, doc: "`session-died(session, reason)`", fields: &[req("session", "string"), req("reason", "DeathReason")] },
+    Shape { name: "DeathReason", open: true, doc: "the arm a death carries; the arm's own members beside it", fields: &[req("arm", "'closed' | 'mode' | 'retired' | 'seeded' | 'blocked' | 'restart' | 'unreachable'")] },
+    Shape { name: "DaemonEvent", open: false, doc: "`daemon(board, state)`", fields: &[req("board", "string"), req("state", "'running' | 'stopped' | 'unreachable'")] },
+    Shape { name: "FeedEvent", open: false, doc: "`feed(board, update)`", fields: &[req("board", "string"), req("update", "FeedUpdate")] },
+    Shape { name: "FeedUpdate", open: false, doc: "the `/changes` entry verbatim, with `position` and `class` — THIS CRATE's definition of the update's shape", fields: &[req("position", "number"), req("at", "number"), req("op", "string | null"), req("docs", "string[] | null"), req("class", "'published' | 'drafts'"), opt("session", "string"), opt("key", "string | null"), opt("time", "number | null"), opt("attest", "{ alg: string; sig: string } | null"), opt("new_prefix", "string"), opt("new_id", "number"), opt("link", "string"), opt("placed", "string"), opt("base_extent", "string | null")] },
+    Shape { name: "IndexEvent", open: false, doc: "`index(board, session?, state)`", fields: &[req("board", "string"), req("session", "string | null"), req("state", "IndexState")] },
+    Shape { name: "IndexState", open: true, doc: "the index's ten arms; the arm's own members beside it", fields: &[req("arm", "'none' | 'building' | 'widening' | 'complete' | 'at_the_floor' | 'resumed_from_the_floor' | 'unplaced' | 'past_the_ceiling' | 'newer_skep' | 'busy'")] },
+    Shape { name: "MomentEvent", open: false, doc: "`moment(id, kind, data)` — a PUBLIC moment of a walk; answered by `answer(id, value)` or declined by `cancel(id)` where `answerable`", fields: &[req("id", "string"), req("kind", "'statement' | 'label' | 'ask' | 'yes_no'"), req("data", "unknown"), req("walk", "string"), req("board", "string | null"), req("answerable", "boolean")] },
+    Shape { name: "Answer", open: false, doc: "`answer(id, value)`", fields: &[req("id", "string"), req("value", "unknown")] },
+    Shape { name: "Cancel", open: false, doc: "`cancel(id)`", fields: &[req("id", "string")] },
 ];
 
 /// The calls, as the bridge spells them: the name, the argument type and
@@ -117,7 +122,7 @@ pub fn declarations() -> String {
     out.push_str("// is pinned by the crate's own suite against the values its code builds.\n\n");
     out.push_str("export type Mode = 'UNCLAIMED' | 'CLAIMED-PERMISSIVE' | 'ENFORCING';\n");
     out.push_str("export type Empty = Record<string, never>;\n");
-    out.push_str("export type Standing = 'public' | 'yours_to_read' | { held: { kind: string; rung: string; issuer: string } };\n");
+    out.push_str("export type Standing = 'public' | 'yours_to_read' | { held: { kind: 'named' | 'any_principal'; rung: 'document' | 'account'; issuer: string } };\n");
     out.push_str("export interface SearchOpts { limit?: number; offset?: number; reindex?: boolean }\n");
     out.push_str("export type Refusal = RefusedByBoard | HaltFace | BlockedFace | Unreachable | ShellRefusal;\n");
     out.push_str("export type Outcome<T> = { result: T } | { refused: Refusal };\n");
@@ -128,7 +133,7 @@ pub fn declarations() -> String {
         for f in shape.fields {
             let _ = writeln!(out, "  {}{}: {};", f.name, if f.required { "" } else { "?" }, f.ty);
         }
-        if shape.name == "ShellRefusal" || shape.name == "DeathReason" || shape.name == "IndexState" {
+        if shape.open {
             out.push_str("  [member: string]: unknown;\n");
         }
         out.push_str("}\n\n");

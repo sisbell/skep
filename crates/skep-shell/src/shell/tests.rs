@@ -2,13 +2,15 @@
 //! the shell's own `claim` call (every PUBLIC moment answered as the page
 //! would), a session in the token's place, a draft write acked and its
 //! `feed` event seen with the board's reference, a publish-class write
-//! refused `signed_session_required` verbatim, the stale and foreign
-//! references, the token's text in no answer and no event; then the signed
-//! mode over the same store: a publish-class write acked — the attest the
-//! shell composed — and the same write under the bare mode refused; and the
-//! daemon's restart under the signed mode: the session it ended, ended
-//! once, re-opened under a fresh reference its arm names, and written
-//! under.
+//! refused `signed_session_required` verbatim, a history read past the head
+//! refused `beyond_head` under the board's own status, `accept`'s armed
+//! name read off the real walk, the stale and foreign references, the
+//! token's text in no answer and no event; then the signed mode over the
+//! same store: a publish-class write acked — the attest the shell composed
+//! — and the same write under the bare mode refused; the daemon's restart
+//! under the signed mode: the session it ended, ended once, re-opened under
+//! a fresh reference its arm names, and written under; and the own node's
+//! state announced at its board.
 
 use std::path::Path;
 use std::sync::{Arc, Mutex};
@@ -51,7 +53,7 @@ fn talk() -> (Talk, Arc<Mutex<Vec<String>>>) {
 fn shell(origin: &str, store: &Path, mode: SessionMode) -> (Shell, Arc<Mutex<Vec<String>>>) {
     let (talk, lines) = talk();
     let opts = ShellOptions { boards: vec![Origin::parse(origin).unwrap()], store_dir: store.to_path_buf(), mode, arm: ArmConfig::Auto, talk, own_node: None };
-    (Shell::open(opts).unwrap(), lines)
+    (Shell::open(opts), lines)
 }
 
 /// The page's side of a walk: every answerable moment answered — a label
@@ -176,6 +178,20 @@ fn the_bare_mode_claims_opens_writes_and_names_no_token() {
     // The feed thread dials `/op` for its own reads, so the dial count is
     // no oracle here; the position is (the provider's suite reads the log).
     assert!(shell.log().entries().iter().filter(|e| e["kind"] == "dial" && e["path"] == "/op").count() >= dials);
+    // History past the head: the board's own `beyond_head` under its own
+    // status, in the session form and the guest form alike — a refusal,
+    // never a result.
+    let past = before + 1_000_000;
+    let key_set = json!({"op": "key_set", "account": "1.0.1"});
+    for args in [json!({"session": session, "frame": {"at": past, "frame": key_set}}), json!({"guest": true, "board": board, "frame": {"at": past, "frame": key_set}})] {
+        let refused = shell.call("op", &args).unwrap_err();
+        let v = refused.to_value();
+        assert_eq!((refused.name().as_str(), v["kind"].as_str(), v["status"].as_u64()), ("beyond_head", Some("refused"), Some(400)), "{v}");
+        assert!(v["body"]["head"].is_u64(), "the head the board named rides its verdict: {v}");
+    }
+    // `accept` at an address the giver has not delegated: the armed name,
+    // read off the real walk's halt.
+    assert_eq!(shell.call("accept", &json!({"board": board, "address": "1.0.1.7"})).unwrap_err().name(), "not_delegated");
     // Search: the index is the consumer's; the guest form over the board.
     let answer = shell.call("search", &json!({"session": session, "board": board, "query": "hello", "opts": {"limit": 5}})).unwrap();
     assert!(answer["state"]["arm"].is_string());
@@ -312,6 +328,54 @@ fn a_session_the_restart_ended_is_reopened_under_a_fresh_reference() {
     signed.shutdown();
     drop(signed);
     answerer.join().unwrap();
+    sd.shutdown();
+}
+
+/// The `/op-at` refusals `skep-client` answers as values are the board's
+/// verdicts again, each under the status and error document the wire
+/// gives it, a member the variant knows riding the body and one it does
+/// not left out.
+#[test]
+fn an_op_at_refusal_is_the_boards_verdict_under_the_wires_status() {
+    let verdict = |a: AtAnswer| {
+        let v = at_refusal(a).to_value();
+        (v["kind"].as_str().map(str::to_string), v["status"].as_u64(), v["body"].clone())
+    };
+    let refused = |status: u64, body: Value| (Some("refused".to_string()), Some(status), body);
+    assert_eq!(verdict(AtAnswer::HistoryReclaimed { floor: Some(5) }), refused(410, json!({"error": "history_reclaimed", "floor": 5})));
+    assert_eq!(verdict(AtAnswer::HistoryReclaimed { floor: None }), refused(410, json!({"error": "history_reclaimed"})));
+    assert_eq!(verdict(AtAnswer::BeyondHead { head: Some(12) }), refused(400, json!({"error": "beyond_head", "head": 12})));
+    assert_eq!(verdict(AtAnswer::NotAPosition { nearest: Some(7) }), refused(400, json!({"error": "not_a_position", "nearest": 7})));
+    assert_eq!(verdict(AtAnswer::Busy), refused(503, json!({"error": "history_busy"})));
+    assert_eq!(at_refusal(AtAnswer::Busy).name(), "history_busy");
+}
+
+/// THE OWN NODE's STATE: a shell that runs the node announces each state
+/// its owner reports on the `daemon` event at the node's board, and `probe`
+/// answers it; a shell that runs none has none to report.
+#[test]
+fn the_own_nodes_state_is_announced_at_its_board() {
+    let dir = TempDir::new().unwrap();
+    let sd = spawn(&dir.path().join("board"), true);
+    let origin = format!("http://127.0.0.1:{}", sd.port());
+    let (talk, _) = talk();
+    let own = Shell::open(ShellOptions { boards: vec![Origin::parse(&origin).unwrap()], store_dir: dir.path().join("own-store"), mode: SessionMode::Bare { principal: 1 }, arm: ArmConfig::Auto, talk, own_node: Some(Origin::parse(&origin).unwrap()) });
+    let rx = own.subscribe();
+    let board = own.board_references().remove(0);
+    let daemon = |rx: &Receiver<Event>| -> Vec<Value> { rx.try_iter().filter(|e| e.name == "daemon").map(|e| e.data).collect() };
+    own.set_node_state(NodeState::Stopped);
+    assert_eq!(daemon(&rx), [json!({"board": board, "state": "stopped"})]);
+    assert_eq!(own.call("probe", &json!({})).unwrap()["daemon"], "stopped");
+    own.set_node_state(NodeState::Running);
+    assert_eq!(daemon(&rx), [json!({"board": board, "state": "running"})]);
+    assert_eq!(own.call("probe", &json!({})).unwrap()["daemon"], "running");
+    own.shutdown();
+    let (other, _) = shell(&origin, &dir.path().join("store"), SessionMode::Bare { principal: 1 });
+    let rx = other.subscribe();
+    other.set_node_state(NodeState::Stopped);
+    assert!(daemon(&rx).is_empty(), "a shell that runs no node announces none");
+    assert_eq!(other.call("probe", &json!({})).unwrap()["daemon"], "running", "its probe reads the first board, and no stop it was told of");
+    other.shutdown();
     sd.shutdown();
 }
 

@@ -92,15 +92,18 @@ pub struct BridgePerson {
     pending: Arc<Pending>,
     arm: Arc<DevArm>,
     walk: &'static str,
-    board: String,
-    /// The page cancelled a moment: the walk's halt is the abandonment's.
-    pub cancelled: bool,
+    /// The board reference the walk runs at; none for a walk that touches
+    /// no board (`keygen`'s box).
+    board: Option<String>,
+    /// A moment was cancelled by the page or left by the dev arm: the
+    /// walk's halt is the abandonment's.
+    pub abandoned: bool,
 }
 
 impl BridgePerson {
     /// The person for `walk` at `board`.
-    pub fn new(bus: Arc<EventBus>, pending: Arc<Pending>, arm: Arc<DevArm>, walk: &'static str, board: String) -> BridgePerson {
-        BridgePerson { bus, pending, arm, walk, board, cancelled: false }
+    pub fn new(bus: Arc<EventBus>, pending: Arc<Pending>, arm: Arc<DevArm>, walk: &'static str, board: Option<String>) -> BridgePerson {
+        BridgePerson { bus, pending, arm, walk, board, abandoned: false }
     }
 
     /// A PUBLIC moment forwarded: the event, then the wait for the page's
@@ -120,7 +123,7 @@ impl BridgePerson {
         match rx.recv() {
             Ok(Reply::Answer(v)) => Ok(v),
             Ok(Reply::Cancel) | Err(_) => {
-                self.cancelled = true;
+                self.abandoned = true;
                 Err(Abandoned)
             }
         }
@@ -130,7 +133,7 @@ impl BridgePerson {
         match got {
             Got::Answer(t) => Ok(t),
             Got::Abandoned => {
-                self.cancelled = true;
+                self.abandoned = true;
                 Err(Abandoned)
             }
         }
@@ -222,10 +225,11 @@ mod tests {
     fn a_public_moment_waits_for_the_pages_answer_and_a_cancel_abandons() {
         let (bus, pending, arm) = fixture();
         let rx = bus.subscribe();
-        let mut person = BridgePerson::new(Arc::clone(&bus), Arc::clone(&pending), arm, "claim", "b-1".into());
+        let mut person = BridgePerson::new(Arc::clone(&bus), Arc::clone(&pending), arm, "claim", Some("b-1".into()));
         person.say(Public(Statement { rule: "AUTH-5.74", text: "local forever".into() }));
         let statement = rx.recv().unwrap();
         assert_eq!((statement.name, statement.data["kind"].as_str(), statement.data["answerable"].as_bool()), ("moment", Some("statement"), Some(false)));
+        assert_eq!(statement.data["board"], "b-1");
         assert!(pending.ids().is_empty(), "a statement waits for nothing");
         let pending_b = Arc::clone(&pending);
         let answerer = thread::spawn(move || {
@@ -242,10 +246,21 @@ mod tests {
         });
         let label = person.label(Public(LabelBox { title: "name".into(), statements: vec![], default: None })).unwrap();
         assert_eq!(label, "phone");
-        assert!(!person.cancelled);
+        assert!(!person.abandoned);
         assert_eq!(person.yes_no(Public(Question { text: "?".into() })), Err(Abandoned));
-        assert!(person.cancelled);
+        assert!(person.abandoned);
         answerer.join().unwrap();
+    }
+
+    /// A walk that touches no board names none: its moment's `board` is
+    /// `null`, never an empty reference.
+    #[test]
+    fn a_walk_at_no_board_names_none() {
+        let (bus, pending, arm) = fixture();
+        let rx = bus.subscribe();
+        let mut person = BridgePerson::new(bus, pending, arm, "keygen", None);
+        person.say(Public(Statement { rule: "AUTH-5.42", text: "a byline".into() }));
+        assert_eq!(rx.recv().unwrap().data["board"], Value::Null);
     }
 
     /// A SECRET and a CONSENT moment never reach the bus: the arm answers.
@@ -253,7 +268,7 @@ mod tests {
     fn secret_and_consent_moments_go_to_the_arm_and_never_to_the_page() {
         let (bus, pending, arm) = fixture();
         let rx = bus.subscribe();
-        let mut person = BridgePerson::new(bus, pending, arm, "retire", "b-1".into());
+        let mut person = BridgePerson::new(bus, pending, arm, "retire", Some("b-1".into()));
         assert_eq!(person.confirm_typed(Consent(Confirmation { text: "retire?".into(), expected: "abcd".into() })).unwrap(), "abcd");
         assert_eq!(person.retype(Secret(Retype { prompt: "type".into() })).unwrap(), Retyped::Declined);
         assert_eq!(person.import(Secret(Import { prompt: "import".into() })).unwrap(), Imported::Neither);
@@ -266,7 +281,7 @@ mod tests {
     fn cancel_all_abandons_every_pending_moment() {
         let (bus, pending, arm) = fixture();
         let rx = bus.subscribe();
-        let mut person = BridgePerson::new(Arc::clone(&bus), Arc::clone(&pending), arm, "claim", "b-1".into());
+        let mut person = BridgePerson::new(Arc::clone(&bus), Arc::clone(&pending), arm, "claim", Some("b-1".into()));
         let p = Arc::clone(&pending);
         let t = thread::spawn(move || {
             let _ = rx.recv().unwrap();

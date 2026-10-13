@@ -52,6 +52,14 @@ pub fn in_checked_set(op: &str) -> bool {
     CHECKED_SET.contains(&op)
 }
 
+/// Whether the shell composes an attest for `frame`: its op is one of the
+/// ten kinds and no `attest` rides it already — a page-supplied attest is
+/// left as it stands, the board's to judge, since the shell signs only what
+/// it composed.
+pub fn wants_attest(frame: &Value) -> bool {
+    frame["op"].as_str().is_some_and(in_checked_set) && frame.get("attest").is_none()
+}
+
 /// The composer: the board the reads are made at under `token`, the key
 /// that signs, the session's account, and `H.1`'s pair.
 pub struct Composer<'a> {
@@ -369,18 +377,12 @@ impl Composer<'_> {
         Ok(Some(out))
     }
 
-    /// THE ATTEST for `frame`, where its op is one of the ten and no
-    /// `attest` already rides: `Ok(true)` where one was composed and
-    /// attached, `Ok(false)` where the op has no entry frame or the page's
-    /// frame already carries one (left as it stands: the shell signs only
-    /// what it composed, and a page-supplied attest is the board's to
-    /// judge).
-    pub fn attach(&self, frame: &mut Value) -> Result<bool, Halt> {
-        let Some(op) = frame["op"].as_str().map(str::to_string) else { return Ok(false) };
-        if frame.get("attest").is_some() {
-            return Ok(false);
-        }
-        let Some((doc, body)) = self.doc_and_body(&op, frame)? else { return Ok(false) };
+    /// THE ATTEST for `frame`, which [`wants_attest`] admitted: its entry
+    /// frame composed, signed by the session's key and attached as the
+    /// frame's `attest`.
+    pub fn attach(&self, frame: &mut Value) -> Result<(), Halt> {
+        let Some(op) = frame["op"].as_str().map(str::to_string) else { return Ok(()) };
+        let Some((doc, body)) = self.doc_and_body(&op, frame)? else { return Ok(()) };
         let account = addr(self.account, "account")?;
         let alg = self.signer.public_key().alg().to_string();
         let bytes = match &doc {
@@ -388,7 +390,7 @@ impl Composer<'_> {
             Doc::Pair { d_s, d_a } => entry_frame(&alg, self.term, &account, DocTerm::Pair { d_s, d_a }, &body),
         };
         frame["attest"] = json!({"alg": alg, "sig": sig_hex(&self.signer.sign(&bytes))});
-        Ok(true)
+        Ok(())
     }
 }
 
@@ -431,6 +433,9 @@ mod tests {
         assert_eq!(i_addr_at("1.0.1.0.1.0.1.4", 3).as_deref(), Some("1.0.1.0.1.0.1.7"));
         assert!(in_checked_set("publish") && !in_checked_set("delete"));
         assert_eq!(CHECKED_SET.len(), 10);
+        assert!(wants_attest(&json!({"op": "publish"})));
+        assert!(!wants_attest(&json!({"op": "publish", "attest": {"alg": "x", "sig": "00"}})), "a page-supplied attest stands as it is");
+        assert!(!wants_attest(&json!({"op": "delete"})) && !wants_attest(&json!({})));
         let span = extent_span("1.0.1.0.1.0.1.4", 3).unwrap();
         assert_eq!((span.start().to_string(), span.width().to_string()), ("1.0.1.0.1.0.1.4".to_string(), "0.0.0.0.0.0.0.3".to_string()));
     }

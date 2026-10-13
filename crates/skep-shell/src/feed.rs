@@ -42,7 +42,7 @@ use skep_client::derive::Mode;
 use skep_client::search::{events, Consumer, Lost, Newer, Place, Range, SearchAnswer, SearchDir, SearchOpts, SessionRef, State, Stop, Who};
 use skep_client::store::FileStore;
 use skep_client::{Board, Origin};
-use skep_search::{Hit, MarkKind, Standing};
+use skep_search::{GrantKind, Hit, Kind, Mark, MarkKind, Rung, Standing};
 
 use crate::events::{EventBus, DAEMON, FEED, INDEX, MODE};
 use crate::refusal::{Name, Refusal};
@@ -81,7 +81,7 @@ enum Cmd {
     /// A session ended: its supplement unmounted.
     Narrow(u64),
     /// A session the page is closing, its token still standing: its drafts
-    /// rows read to the head, then its supplement unmounted; answered.
+    /// rows read to the head, then its supplement released; answered.
     Closing(Arc<SessionEntry>, Sender<()>),
     /// The bridge's search call.
     Search { who: Searcher, query: String, opts: SearchOpts, reindex: bool, reply: Sender<Result<Value, Refusal>> },
@@ -141,10 +141,10 @@ impl Feed {
 
     /// A session the page is closing — out of the table, its token still
     /// standing at the board: its drafts rows read to the head under that
-    /// token, each a `feed` event, then its supplement unmounted, answered
-    /// once both are done, so every `feed` row of the session precedes the
-    /// `session-died` its close emits next. A thread that has stopped
-    /// answers at once.
+    /// token, each a `feed` event, then its supplement released
+    /// (`Sessions::release`), answered once both are done, so every `feed`
+    /// row of the session precedes the `session-died` its close emits next.
+    /// A thread that has stopped answers at once.
     pub fn closing(&self, entry: &Arc<SessionEntry>) {
         let (reply, rx) = channel();
         if self.cmds.send(Cmd::Closing(Arc::clone(entry), reply)).is_ok() {
@@ -223,7 +223,8 @@ impl<'b> Worker<'b> {
                 Cmd::Narrow(principal) => worker.narrow(principal),
                 Cmd::Closing(entry, reply) => {
                     worker.read_drafts(&entry);
-                    worker.narrow(entry.facts.principal);
+                    let sessions = Arc::clone(&worker.sessions);
+                    sessions.release(&entry.board, entry.facts.principal, &mut worker);
                     let _ = reply.send(());
                 }
                 Cmd::Search { who, query, opts, reindex, reply } => {
@@ -416,9 +417,7 @@ impl<'b> Worker<'b> {
 
     fn search(&mut self, who: Searcher, query: &str, opts: &SearchOpts, reindex: bool) -> Result<Value, Refusal> {
         self.mount();
-        let Some(c) = &self.consumer else {
-            return Ok(json!({"hits": [], "places": [], "state": {"arm": "none"}}));
-        };
+        let Some(c) = &self.consumer else { return Ok(answer_without_index()) };
         let answer = match &who {
             Searcher::Guest => {
                 if reindex {
@@ -524,32 +523,48 @@ pub fn state_json(state: &State) -> Value {
     }
 }
 
-/// A standing as the bridge spells it.
+/// Edition or draft, as the bridge spells a hit's and a place's `kind`.
+fn kind_name(kind: Kind) -> &'static str {
+    match kind {
+        Kind::Edition => "edition",
+        Kind::Draft => "draft",
+    }
+}
+
+/// A standing as the bridge spells it; a held one names its departed
+/// grant's kind and rung (PUB-5.115's KIND × RUNG) in the bridge's words.
 fn standing_json(s: &Standing) -> Value {
     match s {
         Standing::Public => Value::from("public"),
         Standing::YoursToRead => Value::from("yours_to_read"),
-        Standing::Held { kind, rung, issuer } => json!({"held": {"kind": format!("{kind:?}").to_lowercase(), "rung": format!("{rung:?}").to_lowercase(), "issuer": issuer.to_string()}}),
+        Standing::Held { kind, rung, issuer } => {
+            let kind = match kind {
+                GrantKind::Named => "named",
+                GrantKind::AnyPrincipal => "any_principal",
+            };
+            let rung = match rung {
+                Rung::Document => "document",
+                Rung::Account => "account",
+            };
+            json!({"held": {"kind": kind, "rung": rung, "issuer": issuer.to_string()}})
+        }
     }
+}
+
+/// One mark of a snippet as the bridge spells it: the hit's span, a
+/// matched term, or a gap at its width in positions.
+fn mark_json(m: &Mark) -> Value {
+    let kind = match &m.kind {
+        MarkKind::Span => json!({"span": true}),
+        MarkKind::Term { term } => json!({"term": term}),
+        MarkKind::Gap { width } => json!({"gap": {"width": width}}),
+    };
+    json!({"offset": m.offset, "len": m.len, "kind": kind})
 }
 
 /// A hit as `search.md` §3.1 shapes it, the bridge's `search` row.
 pub fn hit_json(h: &Hit) -> Value {
-    let snippet = h.snippet.as_ref().map(|s| {
-        let marks: Vec<Value> = s
-            .marks
-            .iter()
-            .map(|m| {
-                let kind = match &m.kind {
-                    MarkKind::Span => json!({"span": true}),
-                    MarkKind::Term { term } => json!({"term": term}),
-                    other => json!({"gap": format!("{other:?}")}),
-                };
-                json!({"offset": m.offset, "len": m.len, "kind": kind})
-            })
-            .collect();
-        json!({"text": s.text, "start": s.start, "marks": marks})
-    });
+    let snippet = h.snippet.as_ref().map(|s| json!({"text": s.text, "start": s.start, "marks": s.marks.iter().map(mark_json).collect::<Vec<_>>()}));
     json!({
         "doc": h.doc.to_string(),
         "member": h.member.as_ref().map(|m| m.to_string()),
@@ -557,7 +572,7 @@ pub fn hit_json(h: &Hit) -> Value {
         "span": {"start": h.span.start, "width": h.span.width},
         "score": h.score,
         "snippet": snippet,
-        "kind": format!("{:?}", h.kind).to_lowercase(),
+        "kind": kind_name(h.kind),
         "standing": standing_json(&h.standing),
         "occurrences": h.occurrences,
         "matched": h.matched.iter().map(|m| json!({"word": m.word, "term": m.term})).collect::<Vec<_>>(),
@@ -566,7 +581,7 @@ pub fn hit_json(h: &Hit) -> Value {
 
 /// A place.
 pub fn place_json(p: &Place) -> Value {
-    json!({"doc": p.doc.to_string(), "kind": format!("{:?}", p.kind).to_lowercase(), "label": p.label, "standing": standing_json(&p.standing)})
+    json!({"doc": p.doc.to_string(), "kind": kind_name(p.kind), "label": p.label, "standing": standing_json(&p.standing)})
 }
 
 /// THE SEARCH ANSWER as the row shapes it: `{hits, places, state}` with the
@@ -582,6 +597,14 @@ pub fn answer_json(a: &SearchAnswer) -> Value {
         "fuzzy_bounded": a.fuzzy_bounded,
         "positions_bounded": a.positions_bounded,
     })
+}
+
+/// THE ANSWER WHERE NO INDEX STANDS, in the row's whole shape: no hit, no
+/// place, the state `none` — the search of a board whose consumer could
+/// not open its index, and the guest form over an origin this shell holds
+/// no index for.
+pub fn answer_without_index() -> Value {
+    answer_json(&SearchAnswer { hits: Vec::new(), total: 0, truncated: false, more_terms: false, fuzzy_bounded: false, positions_bounded: false, places: Vec::new(), state: State::None })
 }
 
 #[cfg(test)]
@@ -604,5 +627,19 @@ mod tests {
         assert_eq!(state_json(&State::AtTheFloor { floor: 5 })["floor"], 5);
         assert_eq!(state_json(&State::NewerSkep { v: Newer::Version { v: 9 } })["v"]["version"], 9);
         assert_eq!(standing_json(&Standing::Public), "public");
+    }
+
+    /// The search words are the bridge's own, never a Rust spelling: a held
+    /// standing names its grant's kind and rung in snake case, a gap mark
+    /// its width, a hit's and a place's kind the two words declared.
+    #[test]
+    fn the_search_words_are_the_bridges_own() {
+        let issuer = skep_client::address::parse_address("1.0.1").unwrap();
+        let held = standing_json(&Standing::Held { kind: GrantKind::AnyPrincipal, rung: Rung::Account, issuer });
+        assert_eq!(held, json!({"held": {"kind": "any_principal", "rung": "account", "issuer": "1.0.1"}}));
+        assert_eq!(standing_json(&Standing::YoursToRead), "yours_to_read");
+        assert_eq!(mark_json(&Mark { offset: 4, len: 0, kind: MarkKind::Gap { width: 3 } }), json!({"offset": 4, "len": 0, "kind": {"gap": {"width": 3}}}));
+        assert_eq!(mark_json(&Mark { offset: 0, len: 2, kind: MarkKind::Term { term: "ab".into() } })["kind"], json!({"term": "ab"}));
+        assert_eq!((kind_name(Kind::Edition), kind_name(Kind::Draft)), ("edition", "draft"));
     }
 }

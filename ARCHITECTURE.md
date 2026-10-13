@@ -1129,11 +1129,14 @@ in the order `src/lib.rs` declares them, each naming only those above it
   window by address — through `skep-identity`'s builders, as the daemon's
   verifier composes.
 - `sessions.rs` `Sessions`: the token under its reference; the bare and
-  the signed openings under the armed names; a session's END,
-  `Sessions::end` — the death's arm from public reads, the restart arm's
-  silent re-open registered under a fresh reference — and the page's own
-  `close`; `Supplements`, the drafts supplements as the hand that registers
-  or ends a session reaches them.
+  the signed openings under the armed names, and the store's key and
+  signer every row that signs looks up (`signing_key`, `signer`); a
+  session's END, `Sessions::end` — the death's arm from public reads, the
+  restart arm's silent re-open registered under a fresh reference — and
+  the page's own `close`; `Sessions::release`, a leaving session's drafts
+  supplement handed to another standing session of its principal or
+  narrowed; `Supplements`, the drafts supplements as the hand that
+  registers or ends a session reaches them.
 - `feed.rs` `Feed`: two threads per board — the `/events` stream's reader
   and the consumer's owner — the `feed`, `index`, `mode` and `daemon`
   events, a death its reads meet ended by `Sessions::end`, and the
@@ -1141,7 +1144,9 @@ in the order `src/lib.rs` declares them, each naming only those above it
   thread; `BoardEntry`, one board of the shell.
 - `shell.rs` `Shell`: the boards, the sessions, `SessionMode`, the twenty
   calls as private methods behind `call(name, args)`, the dispatch, which
-  logs each; `fetch`, public as a stream; `answer`, `cancel`, `shutdown`.
+  logs each; `fetch`, public as a stream; `answer`, `cancel`, `shutdown`;
+  `set_node_state`, the own node's state its owner reports, which `probe`
+  answers and the `daemon` event announces at that node's board.
 - `shapes.rs` the declarations' table, `declarations()`, pinned by its
   suite.
 
@@ -1153,16 +1158,21 @@ Rules that hold across its files:
   and routes alone. The shell's suite reads every answer and event for a
   token-shaped run and finds none.
 - **The board's verdict is carried verbatim.** A `rejected` document and a
-  non-200 are `Refusal::Board` with the body whole; the shell names a
-  refusal of its own only where the row arms one or where it diagnosed the
-  armed name from typed reads, and every such name is a constant of
-  `refusal::Name` — the one list, closed by a private field, so a name
-  spelled anywhere else does not compile.
+  non-200 are `Refusal::Board` with the body whole — a non-200 read once,
+  by `Refusal::board`, and an `/op-at` refusal `skep-client` answers as a
+  value rebuilt into its status and error document and carried the same
+  way. The shell names a refusal of its own only where the row arms one or
+  where it diagnosed the armed name from typed reads — save `accept`,
+  whose walk reports its three armed cases in its halt's words alone, read
+  by one matcher (`accept_arm`) the suite runs against the real walk — and
+  every such name is a constant of `refusal::Name`: the one list, closed
+  by a private field, so a name spelled anywhere else does not compile.
 - **One door per call.** Every call reaches its row through `Shell::call`,
   which logs it; the row methods are private, so a transport cannot serve
   a call the log never saw. `Shell::fetch` is the one public row, because
   it streams: its transport logs it. `tests/it/tidy.rs` pins `Shell`'s
-  public methods.
+  public methods, and holds `call`'s dispatch to `CALLS`, the list a
+  transport admits a call by.
 - **A session ends once.** A death signal is met by two hands — the shell
   on a call's thread, the board's feed on its own — and both run
   `Sessions::end`. The entry's own lock is the gate: the hand that takes it
@@ -1175,29 +1185,41 @@ Rules that hold across its files:
   its still-standing token (`Feed::closing`, a round-trip to the feed's
   thread) before the token closes and `session-died` goes out: every
   subscriber sees one sequence, however far the feed trails the commits.
-- **Attach when in doubt.** Under the signed mode every write of the ten
-  kinds carries the attest the shell composed; the daemon drops one
-  outside the class. A frame the composer cannot sign is never sent.
+- **A principal's supplement follows its standing sessions.** The consumer
+  holds one drafts supplement per (board, principal), and two tabs hold two
+  sessions of one principal. A session that leaves the table — its end or
+  its close — RELEASES the supplement (`Sessions::release`): handed to
+  another session of the principal standing at the board, its token
+  widened in, and narrowed only where none stands.
+- **Attach when in doubt.** Every write of the ten kinds under a session
+  that holds a key — the signed mode's — carries the attest the shell
+  composed, signed by the key that opened the session; the daemon drops
+  one outside the class. A frame the composer cannot sign is never sent.
 - **One composer, the daemon's twin.** The bodies are
   `skep-identity`'s builders; nothing here spells a row.
 - **A moment is answered once, by the party the class names.** `Pending`
   removes an id at its first answer; a cancel abandons; a walk that ends
   without its answer is `abandoned` to the page.
 - **The declarations are pinned.** Every shape in the table has a sample
-  the suite round-trips; a required field missing or a built field
-  undeclared is red, and the declared call rows are the dispatch's `CALLS`.
+  the suite round-trips; a required field missing, or a built field
+  undeclared on a shape the table does not mark `open`, is red, and the
+  declared call rows are the dispatch's `CALLS`.
 
 Its suite runs against a daemon spawned in-process (`shell/tests.rs`):
 the bare mode's claim through the shell's own call with the anchor boxes
 answered as the page would, the draft write and its `feed` event, the
-publish-class refusal verbatim, the stale and foreign references; a close
-straight after two draft writes, both rows ahead of its `session-died`; the
-signed mode's mint, shot and V-spec link acked under the composed attest;
-the daemon's restart under the signed mode, the session it ended
-re-opened under a fresh reference and written under; and the declared
-fields of the real answers. The end's once-only gate is held by
-`sessions.rs`'s own suite — two hands at one death, one derivation, one
-event — and the arrangement by `tests/it/tidy.rs`.
+publish-class refusal verbatim, a history read past the head refused
+`beyond_head` under the board's own status in the session and the guest
+form, `accept`'s armed name off the real walk, the stale and foreign
+references; a close straight after two draft writes, both rows ahead of
+its `session-died`; the signed mode's mint, shot and V-spec link acked
+under the composed attest; the daemon's restart under the signed mode,
+the session it ended re-opened under a fresh reference and written under;
+the own node's state announced at its board; and the declared fields of
+the real answers. The end's once-only gate and the supplement's release
+are held by `sessions.rs`'s own suite — two hands at one death, one
+derivation, one event; a leaving session's supplement handed to the
+standing one — and the arrangement by `tests/it/tidy.rs`.
 
 ## The command, `skep-cli`
 

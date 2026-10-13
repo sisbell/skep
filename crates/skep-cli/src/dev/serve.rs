@@ -140,7 +140,7 @@ pub fn serve(c: &DevLine) -> Result<(), Stop> {
         arm: arm_config,
         talk: talk_sink,
         own_node: own.then(|| board_origin.clone()),
-    })?;
+    });
     // THE CHECKS: the board answers; the key under `signed`; the port binds.
     let board = shell.board_references().into_iter().next().expect("one board");
     let health = shell.call("health", &json!({"board": board})).map_err(halt_of)?;
@@ -168,7 +168,6 @@ pub fn serve(c: &DevLine) -> Result<(), Stop> {
     ));
     if own {
         shell.set_node_state(NodeState::Running);
-        shell.bus().emit(skep_shell::events::DAEMON, json!({"board": board, "state": "running"}));
     }
     {
         let provider = Provider { shell, admission, stop: AtomicBool::new(false), canned: Mutex::new(HashMap::new()), node: own_node.as_ref(), doors: Mutex::new(node::Doors::default()) };

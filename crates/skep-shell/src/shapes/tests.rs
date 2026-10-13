@@ -14,14 +14,15 @@ use skep_client::DialError;
 
 use super::*;
 use crate::events;
-use crate::feed::state_json;
+use crate::feed::{answer_without_index, state_json};
 use crate::refusal::{Name, Refusal};
 use crate::sessions;
 
 /// One sample per declared type: the value the crate's code answers or
-/// emits for it — the refusals through `Refusal::to_value`, the index
-/// state through `feed::state_json`, the death through `sessions`, the
-/// rest in the shape `shell`'s `json!` spells.
+/// emits for it — the refusals through `Refusal::to_value`, the search
+/// answer through `feed::answer_without_index`, the index state through
+/// `feed::state_json`, the death through `sessions`, the rest in the shape
+/// `shell`'s `json!` spells.
 fn samples() -> Vec<(&'static str, Value)> {
     let facts = json!({"principal": 1, "account": "1.0.1", "origin": "http://127.0.0.1:8642"});
     vec![
@@ -39,7 +40,7 @@ fn samples() -> Vec<(&'static str, Value)> {
         ("Accepted", json!({"payload": "{}"})),
         ("Health", json!({"health": {"ok": true}, "mode": "UNCLAIMED"})),
         ("Probe", json!({"daemon": "running", "dialed": "http://127.0.0.1:8642", "signed": "http://127.0.0.1:8642"})),
-        ("SearchAnswer", json!({"hits": [], "places": [], "state": {"arm": "none"}, "total": 0, "truncated": false, "more_terms": false, "fuzzy_bounded": false, "positions_bounded": false})),
+        ("SearchAnswer", answer_without_index()),
         ("Hit", json!({"doc": "1.0.1.0.1", "member": null, "as_of": 3, "span": {"start": 1, "width": 5}, "score": 1.5, "snippet": null, "kind": "edition", "standing": "public", "occurrences": 1, "matched": []})),
         ("SpanText", json!({"start": 1, "width": 5})),
         ("Snippet", json!({"text": "t", "start": 1, "marks": []})),
@@ -84,9 +85,8 @@ fn every_declared_type_round_trips_its_sample_against_the_table() {
         let got = keys(&back);
         let all: BTreeSet<String> = shape.fields.iter().map(|f| f.name.to_string()).collect();
         let required: BTreeSet<String> = shape.fields.iter().filter(|f| f.required).map(|f| f.name.to_string()).collect();
-        let open = matches!(*name, "ShellRefusal" | "DeathReason" | "IndexState");
         assert!(required.is_subset(&got), "{name}: a required field is missing — declared {required:?}, built {got:?}");
-        if !open {
+        if !shape.open {
             assert!(got.is_subset(&all), "{name}: a built field is not declared — declared {all:?}, built {got:?}");
         }
     }
@@ -112,5 +112,8 @@ fn the_file_names_every_shape_call_and_event() {
     }
     assert!(text.contains("  warning?: string;"), "an optional field renders with `?`");
     assert!(text.contains("  position: number;"), "a required field renders bare");
+    let open = SHAPES.iter().filter(|s| s.open).count();
+    assert_eq!(open, 3, "the shell refusal, the death's reason and the index state carry their own members");
+    assert_eq!(text.matches("  [member: string]: unknown;\n").count(), open, "an open shape, and it alone, renders its index signature");
     assert!(text.starts_with("// skep-shell — the bridge's declarations"));
 }

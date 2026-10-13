@@ -42,7 +42,8 @@
 //!   the reference the page holds, the two openings (bare, signed), and a
 //!   session's END — one sequence, whichever hand met the death signal —
 //!   with the arm a `session-died` carries, derived from public reads as
-//!   §4b.2 says.
+//!   §4b.2 says; a leaving session's drafts supplement, one per principal,
+//!   released to another standing session of its principal.
 //! * `feed` — THE FEED CONSUMER's thread per board: `search::Consumer`
 //!   polled on each `/events` commit, the `/changes` pages re-read for the
 //!   `feed` events, the `index`, `mode` and `daemon` events as the state

@@ -145,6 +145,21 @@ impl Refusal {
         Refusal::Shell { name, detail }
     }
 
+    /// THE BOARD's VERDICT on a non-200 answer: its status, the error
+    /// document's `error` as the code (`http_error` where the body names
+    /// none), its `detail` and `op` where they ride, and the body whole —
+    /// read as `skep-client` reads every non-200 it does not answer as a
+    /// value.
+    pub fn board(status: u16, body: Value) -> Refusal {
+        Refusal::Board(Refused {
+            status,
+            code: body["error"].as_str().unwrap_or("http_error").to_string(),
+            detail: body["detail"].as_str().map(str::to_string),
+            op: body["op"].as_str().map(str::to_string),
+            body,
+        })
+    }
+
     /// The row's arguments are not its shape: `what` says which member.
     pub fn malformed(what: impl Into<String>) -> Refusal {
         Refusal::shell(Name::MALFORMED_ARGS, json!({"what": what.into()}))
@@ -284,5 +299,18 @@ mod tests {
         let shell = Refusal::shell(Name::SESSION_ENDED, json!({"session": "s-1"}));
         let v = shell.to_value();
         assert_eq!((v["kind"].as_str(), v["name"].as_str(), v["session"].as_str()), (Some("shell"), Some("session_ended"), Some("s-1")));
+    }
+
+    /// A non-200 is the board's verdict under its own status: the error its
+    /// token, the members it carries kept in the body; a body that names no
+    /// error is `http_error`.
+    #[test]
+    fn a_non_200_is_the_boards_verdict_under_its_status() {
+        let r = Refusal::board(400, json!({"error": "beyond_head", "head": 12}));
+        let v = r.to_value();
+        assert_eq!((r.name().as_str(), v["kind"].as_str(), v["status"].as_u64(), v["body"]["head"].as_u64()), ("beyond_head", Some("refused"), Some(400), Some(12)));
+        let named = Refusal::board(200, json!({"error": "credential_refused", "detail": "retired", "op": "publish"}));
+        assert_eq!((named.name().as_str(), named.to_value()["op"].as_str()), ("retired", Some("publish")));
+        assert_eq!(Refusal::board(502, Value::Null).name(), "http_error");
     }
 }

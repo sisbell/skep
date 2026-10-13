@@ -102,8 +102,8 @@ impl DevArm {
     }
 
     /// A script answer of another moment's kind: said, and the walk
-    /// abandoned.
-    fn wrong_kind(&self, moment: &str, got: &Answer) -> Got<Answer> {
+    /// abandoned — whatever answer the moment asked for.
+    fn wrong_kind<T>(&self, moment: &str, got: &Answer) -> Got<T> {
         self.say(format!("{moment}: the script's next answer {got:?} is of another moment's kind — the walk is abandoned"));
         Got::Abandoned
     }
@@ -153,10 +153,7 @@ impl DevArm {
                     self.say("the re-type is declined".to_string());
                     Got::Answer(Retyped::Declined)
                 }
-                other => match self.wrong_kind("the re-type", &other) {
-                    Got::Abandoned => Got::Abandoned,
-                    Got::Answer(_) => unreachable!("wrong_kind answers the abandonment"),
-                },
+                other => self.wrong_kind("the re-type", &other),
             },
         }
     }
@@ -176,10 +173,7 @@ impl DevArm {
                 self.say(format!("anchor {which} is placed under {}", p.display()));
                 Got::Answer(p)
             }
-            Some(Got::Answer(other)) => match self.wrong_kind("the destination", &other) {
-                Got::Abandoned => Got::Abandoned,
-                Got::Answer(_) => unreachable!("wrong_kind answers the abandonment"),
-            },
+            Some(Got::Answer(other)) => self.wrong_kind("the destination", &other),
         }
     }
 
@@ -205,10 +199,7 @@ impl DevArm {
                     self.say(format!("the confirmation `{text}` is answered `{t}`"));
                     Got::Answer(t)
                 }
-                other => match self.wrong_kind("the confirmation", &other) {
-                    Got::Abandoned => Got::Abandoned,
-                    Got::Answer(_) => unreachable!("wrong_kind answers the abandonment"),
-                },
+                other => self.wrong_kind("the confirmation", &other),
             },
         }
     }
@@ -245,10 +236,7 @@ impl DevArm {
                     self.say("the import answers neither".to_string());
                     Got::Answer(Imported::Neither)
                 }
-                other => match self.wrong_kind("the import", &other) {
-                    Got::Abandoned => Got::Abandoned,
-                    Got::Answer(_) => unreachable!("wrong_kind answers the abandonment"),
-                },
+                other => self.wrong_kind("the import", &other),
             },
         }
     }
@@ -269,10 +257,7 @@ impl DevArm {
                 self.say(format!("{} is answered placed", path.display()));
                 Got::Answer(KeptOrPlaced::Placed)
             }
-            Some(Got::Answer(other)) => match self.wrong_kind("kept-or-placed", &other) {
-                Got::Abandoned => Got::Abandoned,
-                Got::Answer(_) => unreachable!("wrong_kind answers the abandonment"),
-            },
+            Some(Got::Answer(other)) => self.wrong_kind("kept-or-placed", &other),
         }
     }
 }

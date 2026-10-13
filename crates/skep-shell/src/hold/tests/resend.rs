@@ -213,7 +213,7 @@ fn a_second_windows_burst_is_held_in_memory_and_resent() {
     g.holds.probe("b-1");
     assert_eq!(g.fake.sends(), 1, "the line is resent");
     assert!(g.lines().is_empty() && g.states().contains(&"kept".to_string()));
-    let BurstAnswer::Answered(Ok(next)) = g.holds.send_burst(&g.session, insert(DOC, json!(["!"]))) else { panic!("the burst was answered") };
+    let OpAnswer::Answered(Ok(next)) = g.holds.send_burst(&g.session, insert(DOC, json!(["!"]))) else { panic!("the burst was answered") };
     assert_eq!(next["resp"], "ack", "no line stands, so the next burst is dialed: {next}");
 }
 
@@ -421,7 +421,7 @@ fn a_moved_document_faces_its_own_lines_alone() {
     let g = ground();
     *g.fake.rows.lock().unwrap() = vec![json!({"at": 77, "op": "insert", "key": "ff".repeat(32), "docs": [DOC]})];
     g.hold(&insert(DOC, json!(["a"])), "unreachable", false);
-    let BurstAnswer::Answered(Ok(behind)) = g.holds.send_burst(&g.session, insert(OTHER, json!(["z"]))) else { panic!("held behind the line") };
+    let OpAnswer::Answered(Ok(behind)) = g.holds.send_burst(&g.session, insert(OTHER, json!(["z"]))) else { panic!("held behind the line") };
     assert_eq!(behind["cause"], "behind", "{behind}");
     g.holds.probe("b-1");
     let lines = g.lines();
@@ -440,7 +440,7 @@ fn a_moved_document_faces_its_own_lines_alone() {
 fn a_stopped_node_holds_every_burst_until_it_runs() {
     let g = ground();
     g.holds.set_node_stopped("b-1", true);
-    let BurstAnswer::Answered(Ok(held)) = g.holds.send_burst(&g.session, insert(DOC, json!(["hello"]))) else { panic!("held before the dial") };
+    let OpAnswer::Answered(Ok(held)) = g.holds.send_burst(&g.session, insert(DOC, json!(["hello"]))) else { panic!("held before the dial") };
     assert_eq!((held["resp"].as_str(), held["cause"].as_str()), (Some("held"), Some("stopped")), "{held}");
     assert_eq!(g.lines()[0]["sent"], false);
     g.holds.probe("b-1");
@@ -460,8 +460,8 @@ fn a_stopped_node_holds_every_burst_until_it_runs() {
 fn the_halted_hold_ends_at_the_first_read_that_says_writes_go() {
     let g = ground();
     g.fake.writes_halted.store(true, Ordering::SeqCst);
-    g.holds.note_health("b-1", true);
-    let BurstAnswer::Answered(Ok(held)) = g.holds.send_burst(&g.session, insert(DOC, json!(["hello"]))) else { panic!("held before the dial") };
+    g.holds.note_health("b-1", &g.session.board.health().unwrap());
+    let OpAnswer::Answered(Ok(held)) = g.holds.send_burst(&g.session, insert(DOC, json!(["hello"]))) else { panic!("held before the dial") };
     assert_eq!(held["cause"], "halted", "{held}");
     g.holds.probe("b-1");
     assert_eq!(g.fake.sends(), 0, "a board whose writes are halted is sent nothing");
@@ -469,7 +469,7 @@ fn the_halted_hold_ends_at_the_first_read_that_says_writes_go() {
     g.holds.probe("b-1");
     assert_eq!(g.fake.sends(), 1, "the read that says writes go ends the hold");
     assert!(g.lines().is_empty());
-    let BurstAnswer::Answered(Ok(next)) = g.holds.send_burst(&g.session, insert(DOC, json!(["!"]))) else { panic!("the burst was answered") };
+    let OpAnswer::Answered(Ok(next)) = g.holds.send_burst(&g.session, insert(DOC, json!(["!"]))) else { panic!("the burst was answered") };
     assert_eq!(next["resp"], "ack", "the hold has ended: {next}");
 }
 

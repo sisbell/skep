@@ -16,9 +16,9 @@ use skep_client::address::is_address_text;
 use skep_client::board::Scope;
 use skep_client::ceremony::claim::{self, ClaimOutcome, NotebookOptions};
 use skep_client::ceremony::first_session::{first_session, FirstSessionReads};
-use skep_client::ceremony::handshake::{handshake, key_face, Site};
+use skep_client::ceremony::handshake::{handshake, Site};
 use skep_client::ceremony::{accept, enroll, handoff, recover, retire, rotate};
-use skep_client::derive::{origin_arm, principal_of, walk_to_set, KeyDiagnosis, Mode};
+use skep_client::derive::{origin_arm, principal_of, walk_to_set, Mode};
 use skep_client::halt::Halt;
 use skep_client::person::{LabelBox, Person, Public};
 use skep_client::sheet::{render_inert, Label};
@@ -253,14 +253,7 @@ impl Shell {
         }
         let key = sessions::signing_key(&self.store, &entry.origin, principal, || Mode::of(&health))?;
         let walk = walk_to_set(board, &account)?;
-        let own = [(key.fingerprint, key.public.clone())];
-        if let Err(h) = key_face(board, &walk, &key.fingerprint, &own, Site::Tail) {
-            let name = match KeyDiagnosis::of(&walk.set, &key.fingerprint) {
-                KeyDiagnosis::Retired { .. } => Name::RETIRED,
-                _ => Name::NOT_ENROLLED,
-            };
-            return Err(Refusal::of_named(name, h));
-        }
+        sessions::key_standing(board, &walk, &key, Site::Tail)?;
         let reads = FirstSessionReads::take(board, &account, &key.fingerprint, Some(&self.store))?;
         let mut warnings: Vec<String> = Vec::new();
         if reads.anything_owed() {

@@ -1141,10 +1141,11 @@ an item the root re-exports counted as the module it is brought from
   its reference, the two openings, `SessionEntry::attest`, a session's END
   (`Sessions::end`, under the key store the table holds) and the release of
   its drafts supplement (`Sessions::release`).
-- `hold.rs` `Holds`: a burst's DOOR (`Burst::admit`) and WRITE PATH
-  (`Holds::send_burst`), its answers read through `classify`, the one owner
-  of every reissue's bound, and the per-(board, principal) queue over
-  `held.rs`'s file, each board's hold under its own lock.
+- `hold.rs` `Holds`: the one path of every `/op` under a session
+  (`Holds::send`) — a burst's DOOR (`Burst::admit`) and its hold among it —
+  its answers read through `classify`, the one owner of every reissue's
+  bound, and the per-(board, principal) queue over `held.rs`'s file, each
+  board's hold under its own lock.
 - `hold/resend.rs` THE PROBE (`Holds::probe`) and THE RESEND: one
   `/changes` read per document before its first resend, §3c.5's three
   outcomes, each line sent through the hold's one reader.
@@ -1269,11 +1270,13 @@ Rules that hold across its files:
   in memory alone and resent like any held line; a line whose copy the
   device refused, or whose file is out of reach, stands in the queue the
   same way, its answer saying why as `unwritable`.
-- **One write path for a burst.** The first dial and every resend read a
-  burst's answer through the one reader in `hold.rs`, so the two never
+- **One path for every session write.** Every `/op` under a session,
+  `/op-at`'s aside, goes through `Holds::send`, and its first dial and every
+  resend read the answer through `hold.rs`'s one reader, so they never
   disagree on what a refusal means: a refusal the table holds nowhere is
   faced at the act and, on a resend, leaves its line standing — never
-  `done`.
+  `done`; a write the hold never holds faces what a burst's would hold;
+  every ack is noted for the base where it is read.
 - **A reissue-class answer is the shell's to reissue.** `write_busy` and a
   first and second `durability` are reissued within the call, every
   `/op` under a session alike — the page meets the ack or the next

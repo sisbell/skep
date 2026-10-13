@@ -20,7 +20,8 @@
 //! under its still-standing token, before its close answers
 //! ([`Feed::closing`]): every `feed` row of a session precedes its
 //! `session-died`, however far this thread trails the commits. The board's
-//! held bursts are watched here too: `writes.halted` read at each tick, and
+//! held bursts are watched here too: each tick's `/health` read handed to
+//! the hold, which reads its `writes.halted` (`Holds::note_health`), and
 //! THE PROBE (`Holds::probe`) on this thread alone — every `PROBE_CADENCE`,
 //! measured from the last probe whatever woke the thread between, and at a
 //! hand-over ([`Feed::probe`], `resolve(send)`'s and
@@ -113,8 +114,8 @@ enum Cmd {
 
 /// What every board's feed thread shares with the shell: the bus its events
 /// go out on, the session table, the data directory the index sits under,
-/// the TALK sink, and the held-burst holds the worker drives — the
-/// `writes.halted` read at each tick and THE PROBE every `PROBE_CADENCE`.
+/// the TALK sink, and the held-burst holds the worker drives — each tick's
+/// `/health` read handed over, and THE PROBE every `PROBE_CADENCE`.
 #[derive(Clone)]
 pub struct Shared {
     pub bus: Arc<EventBus>,
@@ -134,16 +135,6 @@ pub struct Feed {
 }
 
 impl Feed {
-    /// A session registered at this board: its supplement mounted.
-    fn widen(&self, session: &Arc<SessionEntry>) {
-        let _ = self.cmds.send(Cmd::Widen(Arc::clone(session)));
-    }
-
-    /// A session ended: its supplement unmounted.
-    fn narrow(&self, principal: u64) {
-        let _ = self.cmds.send(Cmd::Narrow(principal));
-    }
-
     /// A session the page is closing — out of the table, its token still
     /// standing at the board: its drafts rows read to the head under that
     /// token, each a `feed` event, then its supplement released
@@ -183,11 +174,11 @@ impl Feed {
 /// handle, as `&File` is a `Write`.
 impl Supplements for &Feed {
     fn widen(&mut self, session: &Arc<SessionEntry>) {
-        Feed::widen(self, session);
+        let _ = self.cmds.send(Cmd::Widen(Arc::clone(session)));
     }
 
     fn narrow(&mut self, principal: u64) {
-        Feed::narrow(self, principal);
+        let _ = self.cmds.send(Cmd::Narrow(principal));
     }
 }
 
@@ -517,15 +508,15 @@ impl<'b> Worker<'b> {
 
     /// THE `/health` READ of the thread's start and of each tick: the `mode`
     /// event where the pair moved (the claim's landing, a restart with the
-    /// flag changed), `writes.halted` told the hold, and — the first time the
-    /// board answers — its head as the published feed's start, which no
-    /// other read sets.
+    /// flag changed), the read handed to the hold for its `writes.halted`,
+    /// and — the first time the board answers — its head as the published
+    /// feed's start, which no other read sets.
     fn read_health(&mut self) {
         let Ok(health) = self.entry.board.health() else { return };
         self.published_since.get_or_insert(health.log_position());
-        // ONE member more read per tick (§3c.4): `writes.halted` tells the hold,
-        // a hold `halted` beginning at the first `true`.
-        self.holds.note_health(&self.entry.reference, health.body["writes"]["halted"].as_bool().unwrap_or(false));
+        // The hold reads its `writes.halted` off the same read (§3c.4), a hold
+        // `halted` beginning at the first `true`.
+        self.holds.note_health(&self.entry.reference, &health);
         let mode = Mode::of(&health);
         if self.last_mode != Some(mode) {
             let first = self.last_mode.is_none();

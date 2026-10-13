@@ -53,9 +53,9 @@ use std::sync::{Arc, Mutex, OnceLock};
 
 use serde_json::{json, Value};
 use skep_client::board::{KeySetAnswer, Opened, Scope, SessionBody, Token};
-use skep_client::ceremony::handshake::{handshake_prechecked, Site};
+use skep_client::ceremony::handshake::{handshake_prechecked, key_face, Site};
 use skep_client::derive::records::{credential_records, Hand};
-use skep_client::derive::{origin_arm, precheck, KeyDiagnosis, Mode};
+use skep_client::derive::{origin_arm, precheck, KeyDiagnosis, Mode, Walk};
 use skep_client::sheet::render_inert;
 use skep_client::sign::Signer;
 use skep_client::store::{FileStore, KeyFacts, KeySelector, KeyStore, Purpose, StoreError};
@@ -323,6 +323,22 @@ pub fn signer(store: &FileStore, path: &Path) -> Result<Box<dyn Signer>, Refusal
     store.signer(&KeySelector::Path(path)).map_err(|e| Refusal::of_named(Name::STORE_UNREADABLE, e.into()))
 }
 
+/// THE KEY's STANDING in the set `walk` reached (AUTH-5.25), under the armed
+/// names every row that signs spells: `Ok` where the key is enrolled;
+/// `retired` where it stands in the retired list (AUTH-2.98), `not_enrolled`
+/// where it stands in neither — each with the face `key_face` composes at
+/// `site`.
+pub fn key_standing(board: &Board, walk: &Walk, key: &KeyFacts, site: Site) -> Result<(), Refusal> {
+    let own = [(key.fingerprint, key.public.clone())];
+    key_face(board, walk, &key.fingerprint, &own, site).map_err(|h| {
+        let name = match KeyDiagnosis::of(&walk.set, &key.fingerprint) {
+            KeyDiagnosis::Retired { .. } => Name::RETIRED,
+            _ => Name::NOT_ENROLLED,
+        };
+        Refusal::of_named(name, h)
+    })
+}
+
 /// THE SIGNED CONTENT-SCOPED HANDSHAKE as `principal` with the store's key
 /// for (this board, the principal) — [`signing_key`] — behind AUTH-5.65's
 /// pre-check, each refusal under the armed name the `session` row spells;
@@ -335,18 +351,7 @@ pub fn open_signed(board: &Board, store: &FileStore, principal: u64) -> Result<O
         return Err(Refusal::of_named(Name::ORIGIN_STATE, h));
     }
     let pre = precheck(board, principal, &key.fingerprint).map_err(|h| Refusal::of_named(Name::NOT_REGISTERED, h))?;
-    let own = [(key.fingerprint, key.public.clone())];
-    match pre.diagnosis {
-        KeyDiagnosis::Enrolled { .. } => {}
-        KeyDiagnosis::Retired { .. } => {
-            let h = skep_client::ceremony::handshake::key_face(board, &pre.walk, &key.fingerprint, &own, Site::Session).expect_err("a retired key is faced");
-            return Err(Refusal::of_named(Name::RETIRED, h));
-        }
-        KeyDiagnosis::Neither => {
-            let h = skep_client::ceremony::handshake::key_face(board, &pre.walk, &key.fingerprint, &own, Site::Session).expect_err("a key in neither list is faced");
-            return Err(Refusal::of_named(Name::NOT_ENROLLED, h));
-        }
-    }
+    key_standing(board, &pre.walk, &key, Site::Session)?;
     let session = handshake_prechecked(board, Scope::Content, &*signer, &pre, Site::Session).map_err(|h| Refusal::of_named(Name::BUSY, h))?;
     let facts = Facts {
         principal,

@@ -1,8 +1,9 @@
 //! THE SESSION TABLE's FENCE: a session registered under a fresh reference,
 //! beside the board it stands at; its END run once whichever hand meets the
 //! death — a second hand answering the first's arm, two hands at once one
-//! derivation, a hand that panics mid-end leaving the end to the next — and
-//! a principal's supplement following its standing sessions.
+//! derivation, a hand that panics mid-end leaving the end to the next — a
+//! principal's supplement following its standing sessions, and a key's
+//! standing named by the list it stands in.
 
 use std::io::Read;
 use std::net::TcpListener;
@@ -201,4 +202,26 @@ fn a_hand_that_panics_mid_end_leaves_the_end_to_the_next() {
     assert!(panicked.is_err() && rx.try_recv().is_err(), "the first hand ended nothing");
     assert_eq!(sessions.end(&entry, &mut Recorded::default(), &bus)["arm"], "unreachable");
     assert_eq!(rx.try_iter().filter(|e| e.name == EventName::SessionDied).count(), 1);
+}
+
+/// THE KEY's STANDING names a key face by the list the key stands in — the
+/// one rule `session`'s and `bind`'s refusals share: an enrolled key
+/// answers `Ok`, and no read is made; a retired key is `retired`, its face
+/// composed without the records a board that does not answer withholds; a
+/// key in neither list is `not_enrolled` (the mutants that name every face
+/// one name, or one list's face the other's).
+#[test]
+fn a_keys_standing_is_named_by_the_list_it_stands_in() {
+    let public = skep_client::sign::signer_from_seed(&[7; 32]).public_key().clone();
+    let fingerprint = Fingerprint::of(&public);
+    let key = KeyFacts { path: std::path::PathBuf::from("/nowhere/key"), fingerprint, public: public.clone(), label: None, anchor: false };
+    let walk = |set: skep_client::KeySet| Walk { account: "1.0.1".into(), set_account: "1.0.1".into(), set, visited: vec!["1.0.1".into()] };
+    let enrolled = skep_client::KeySet { as_of: 1, enrolled: vec![skep_client::board::EnrolledKey { fingerprint, key: public, anchor: false }], retired: Vec::new() };
+    let retired = skep_client::KeySet { as_of: 1, enrolled: Vec::new(), retired: vec![skep_client::board::RetiredKey { fingerprint, anchor: false }] };
+    let board = nowhere();
+    assert!(key_standing(&board, &walk(enrolled), &key, Site::Session).is_ok(), "an enrolled key stands");
+    let refused = key_standing(&board, &walk(retired), &key, Site::Session).unwrap_err();
+    assert_eq!((refused.name(), refused.to_value()["kind"].as_str()), ("retired", Some("halt")), "{refused}");
+    let refused = key_standing(&board, &walk(skep_client::KeySet::default()), &key, Site::Tail).unwrap_err();
+    assert_eq!((refused.name(), refused.to_value()["kind"].as_str()), ("not_enrolled", Some("halt")), "{refused}");
 }

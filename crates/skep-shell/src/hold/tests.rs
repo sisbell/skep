@@ -6,8 +6,9 @@
 //! on: a fake board (`Fake`) — its `H.1`, its `/changes` rows, a draft's
 //! text, the frames POSTed to `/op` recorded and a refusal armed for a send
 //! — the holds over it with a session opened as the shell opens one
-//! (`Ground`), and each `held` event held to its declaration. `write` holds a
-//! burst's door and write path; `resend` the probe and the resend walk.
+//! (`Ground`), and each `held` event held to its declaration. `write` holds
+//! the one path of a session's `op` — a burst's door and its hold, and a
+//! write the hold never holds; `resend` the probe and the resend walk.
 
 use std::io::Read;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
@@ -60,8 +61,9 @@ fn retry(code: &str) -> Value {
 }
 
 /// THE CLASSIFICATION TABLE (§3c.4): each outcome to exactly its row. The own
-/// node stopped, an ack, the death signal and a non-burst write sit outside
-/// `classify` (the module doc) and are pinned by the shell's suite.
+/// node stopped, an ack and the death signal sit outside `classify`
+/// (`DialOutcome`'s doc); a write the hold never holds is read through it as
+/// a burst is, and faced where a burst is held (`write`'s suite).
 #[test]
 fn every_outcome_classifies_to_exactly_its_row() {
     // No connection made — the burst did not leave (`sent: false`).

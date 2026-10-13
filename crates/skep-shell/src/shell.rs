@@ -39,14 +39,14 @@
 //! mode's — every write of the ten kinds that have an entry frame, the
 //! attest composed by `attest` from the shell's own reads, never from a
 //! preimage the page supplies, and signed by the key that opened the
-//! session (`SessionEntry::attest`). A BURST — an `op` of the burst
-//! machine's five kinds under a session — takes the hold's write path
-//! (`Holds::send_burst`, §3c.4), which answers `held` where the board
-//! cannot take it; every other write's ack is noted for the hold's `base`
-//! (§3c.2); and every `/op` under a session reissues within the call what
-//! §3c.4 reissues — a `write_busy` once after a short wait, a first and
-//! second `durability` as-is — so the page meets the ack or the next
-//! refusal (§4b.1's `op` row). Where the
+//! session (`SessionEntry::attest`). Every `/op` under a session, `/op-at`'s
+//! aside, takes the hold's one path (`Holds::send`, §3c.4): a BURST — one of
+//! the burst machine's five kinds — answered `held` where the board cannot
+//! take it, every other write faced where a burst's would be held; each ack
+//! noted for the hold's `base` (§3c.2), and every reissue-class answer
+//! reissued within the call — a `write_busy` once after a short wait, a
+//! first and second `durability` as-is — so the page meets the ack or the
+//! next refusal (§4b.1's `op` row). Where the
 //! library does not reach a row at this pin — `upload` and `restore`, whose
 //! media walk is the shell's lane's and not in `skep-client` — the call
 //! answers `not_reached` naming where it stops, never a silent stub;
@@ -58,12 +58,11 @@ use std::io::Read;
 use std::path::PathBuf;
 use std::sync::mpsc::Receiver;
 use std::sync::{Arc, Mutex};
-use std::thread;
 use std::time::Instant;
 
 use serde_json::{json, Value};
 use skep_client::address::is_address_text;
-use skep_client::board::{Answer, AtAnswer, Board, Rejection};
+use skep_client::board::{AtAnswer, Board, Rejection};
 use skep_client::derive::Mode;
 use skep_client::dial::{Headers, Method, RequestHead};
 use skep_client::halt::Halt;
@@ -71,11 +70,10 @@ use skep_client::search::SearchOpts;
 use skep_client::store::{FileStore, KeyFacts};
 use skep_client::Origin;
 
-use crate::attest::Unattested;
 use crate::dev_arm::DevArm;
 use crate::events::{Event, EventBus, EventName};
 use crate::feed::{answer_without_index, BoardEntry, Feed, FeedThreads, Searcher, Shared};
-use crate::hold::{self, BurstAnswer, Holds, Reissues, Resolved};
+use crate::hold::{Holds, OpAnswer, Resolved};
 use crate::log::{CallOutcome, Log, LoggingDialer};
 use crate::person::Pending;
 use crate::refs::board_reference;
@@ -327,9 +325,9 @@ pub struct Shell {
     arm: Arc<DevArm>,
     log: Arc<Log>,
     store: Arc<FileStore>,
-    /// THE HELD-BURST HOLDS (§3c): a burst's write path, the queue `held`
-    /// and `resolve` read and act on, the own node's stopped state, and the
-    /// resend the feed workers drive.
+    /// THE HELD-BURST HOLDS (§3c): the one path of every `/op` under a
+    /// session, the queue `held` and `resolve` read and act on, the own
+    /// node's stopped state, and the resend the feed workers drive.
     holds: Arc<Holds>,
     anchors: PathBuf,
     session_mode: SessionMode,
@@ -764,17 +762,18 @@ impl Shell {
     }
 
     /// `op(session, frame)` and the guest forms: ONE frame to the board the
-    /// session stands at under its token — the attest composed where the
-    /// session holds a key and the kind has an entry frame, a burst sent by
-    /// the hold's write path, a reissue-class answer reissued within the
-    /// call ([`Shell::op_reissuing`]), and an ack noted for the hold's
-    /// `base` — or token-free at guest class, the board or origin named read
-    /// first (`unknown_board`, `not_canonical`, `malformed_args`), then a
-    /// write refused without a dial (`write_in_guest_form`). An `/op-at`
+    /// session stands at under its token, by the hold's one path
+    /// ([`Holds::send`]) — the attest composed where the session holds a key
+    /// and the kind has an entry frame, a burst held where the board cannot
+    /// take it, a reissue-class answer reissued within the call, and an ack
+    /// noted for the hold's `base` — an `/op-at` frame aside, its answer the
+    /// board's own; or token-free at guest class, the board or origin named
+    /// read first (`unknown_board`, `not_canonical`, `malformed_args`), then
+    /// a write refused without a dial (`write_in_guest_form`). An `/op-at`
     /// refusal is the board's verdict, as every other is; a death signal met
     /// at the dial or at a read the attest needed ends the session.
     fn op(&self, args: &Value) -> Result<Value, Refusal> {
-        let (mut frame, at) = Self::frame_of(args)?;
+        let (frame, at) = Self::frame_of(args)?;
         if guest_form(args)? {
             let board = self.guest_board(args)?;
             let op = frame["op"].as_str().unwrap_or("");
@@ -790,54 +789,16 @@ impl Shell {
             };
         }
         let session = self.session(&args["session"])?;
-        // A BURST (§3c.4) — an `/op` under a session of one of the five kinds,
-        // never the guest form, never `/op-at` — takes the hold's write path.
-        if at.is_none() && hold::is_burst(&frame) {
-            return match self.holds.send_burst(&session, frame) {
-                BurstAnswer::Answered(answer) => answer,
-                BurstAnswer::Died => Err(self.died(&session)),
+        let Some(at) = at else {
+            return match self.holds.send(&session, frame) {
+                OpAnswer::Answered(answer) => answer,
+                OpAnswer::Died => Err(self.died(&session)),
             };
-        }
-        if at.is_none() {
-            match session.attest(&self.store, &mut frame) {
-                Ok(()) => {}
-                Err(Unattested::Closed) => return Err(self.died(&session)),
-                Err(Unattested::Refused(refusal)) => return Err(refusal),
-            }
-        }
-        let answer = match at {
-            Some(at) => match session.board.op_at(Some(&session.token), at, &frame)? {
-                AtAnswer::Document(v) => Answer::Document(v),
-                AtAnswer::Closed => Answer::Closed,
-                other => return Err(at_refusal(other)),
-            },
-            None => self.op_reissuing(&session, &frame)?,
         };
-        match answer {
-            Answer::Document(v) => {
-                let v = Self::document(v)?;
-                if at.is_none() {
-                    self.holds.note_ack(&session, &frame, &v);
-                }
-                Ok(v)
-            }
-            Answer::Closed => Err(self.died(&session)),
-        }
-    }
-
-    /// ONE `/op` under `session` at the board it stands at, a reissue-class
-    /// answer reissued within the call as §3c.4 reissues it
-    /// (`hold::reissue_of`, the table's one owner): a `write_busy` once after
-    /// a short wait, a first and second `durability` as-is — the page meeting
-    /// the ack or the next refusal (§4b.1's `op` row), never a held line: the
-    /// hold keeps bursts alone.
-    fn op_reissuing(&self, session: &SessionEntry, frame: &Value) -> Result<Answer, Halt> {
-        let mut given = Reissues::default();
-        loop {
-            let answer = session.board.op(Some(&session.token), frame);
-            let Some(kind) = hold::reissue_of(&answer, given) else { return answer };
-            given.note(kind);
-            thread::sleep(kind.wait());
+        match session.board.op_at(Some(&session.token), at, &frame)? {
+            AtAnswer::Document(v) => Self::document(v),
+            AtAnswer::Closed => Err(self.died(&session)),
+            other => Err(at_refusal(other)),
         }
     }
 

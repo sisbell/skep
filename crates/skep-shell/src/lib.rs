@@ -64,11 +64,12 @@
 //!   §4b.2 says under the key store the table holds; a leaving session's
 //!   drafts supplement, one per principal, released to another standing
 //!   session of its principal.
-//! * `hold` — THE HOLD (`client.md` §3c.4, §3c.5): a burst's door and its
-//!   write path — admitted where some send of it the board can take, held
-//!   without a dial where a hold stands, else dialed and each answer read
-//!   through the classification table, the one owner of every reissue's
-//!   bound — and the per-(board, principal) queue over `held`'s file, each
+//! * `hold` — THE HOLD (`client.md` §3c.4, §3c.5): the one path of every
+//!   `/op` under a session — attested, dialed, each answer read through the
+//!   classification table, the one owner of every reissue's bound, and each
+//!   ack noted for the base — and among it a burst's door, admitted where
+//!   some send of it the board can take and held where the board cannot
+//!   take it; the per-(board, principal) queue over `held`'s file, each
 //!   board's under its own lock; its child `resend` holds the walk the feed
 //!   worker's probe drains: one read per document, with §3c.5's three
 //!   outcomes.
@@ -77,9 +78,9 @@
 //!   published feed read from the head the board first answers with, the
 //!   `/changes` pages re-read to the head by one reader for the `feed`
 //!   events, the `index`, `mode` and `daemon` events as the state moves,
-//!   and the bridge's `search` call answered off it; it also reads
-//!   `writes.halted` per tick and runs THE PROBE on a deadline of its own
-//!   and at a hand-over.
+//!   and the bridge's `search` call answered off it; it also hands each
+//!   tick's `/health` read to the hold, which reads its `writes.halted`,
+//!   and runs THE PROBE on a deadline of its own and at a hand-over.
 //! * `shell` — [`Shell`]: the boards, the sessions, the session mode
 //!   (bare as the claimant, or signed with a dev key), and one private
 //!   method per §4b.1 row behind [`Shell::call`], whose dispatch the

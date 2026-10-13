@@ -160,10 +160,10 @@ fn route(provider: &Provider<'_>, req: &Request, stream: &mut TcpStream, cors: &
             }
         }
         ("POST", path) if path.starts_with("/bridge/") => {
-            let call = &path["/bridge/".len()..];
-            if !skep_shell::CALLS.contains(&call) {
-                return json(stream, 404, cors, &json!({"refused": {"kind": "shell", "name": "unknown_call", "call": call}}));
-            }
+            let named = &path["/bridge/".len()..];
+            let Some(&call) = skep_shell::CALLS.iter().find(|c| **c == named) else {
+                return json(stream, 404, cors, &json!({"refused": {"kind": "shell", "name": "unknown_call", "call": named}}));
+            };
             let args = match args_of(req) {
                 Ok(a) => a,
                 Err(detail) => return json(stream, 400, cors, &json!({"refused": {"kind": "shell", "name": "malformed_body", "detail": detail}})),

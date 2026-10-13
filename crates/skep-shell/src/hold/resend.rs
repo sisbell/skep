@@ -11,11 +11,10 @@
 //! the site MOVED, no line sent and the lines faced `moved`, NEVER rebased
 //! (J3) — and a read the board did not answer decides nothing: the next
 //! wake reads again. Each line goes out through the hold's one reader of a
-//! burst's answer, as a first dial does.
+//! write's answer, as a first dial does.
 
 use std::borrow::Cow;
-use std::collections::HashSet;
-use std::sync::{Mutex, PoisonError};
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use serde_json::Value;
 use skep_client::board::{acked_at, frames, Answer, ChangesAnswer, ChangesQuery, Rejection};
@@ -53,31 +52,23 @@ enum Site {
     Unread,
 }
 
-/// A board's mark in [`Holds`]'s `resending` set, held for one drain and
+/// A board's drain mark (`BoardSlot`'s `draining`), held for one drain and
 /// cleared when the drain ends — however it ends, a dial that unwinds
 /// included — so no board stays marked by a drain that never finished.
-struct Draining<'h> {
-    resending: &'h Mutex<HashSet<String>>,
-    board_reference: &'h str,
-}
+struct Draining<'h>(&'h AtomicBool);
 
 impl<'h> Draining<'h> {
-    /// The mark taken for `board_reference`, or `None` where a drain of it
-    /// already runs.
-    fn begin(resending: &'h Mutex<HashSet<String>>, board_reference: &'h str) -> Option<Draining<'h>> {
+    /// The mark taken, or `None` where a drain of the board already runs.
+    fn begin(mark: &'h AtomicBool) -> Option<Draining<'h>> {
         // No guard is built where no mark was taken: dropped, it would clear
         // the mark of the drain that holds it.
-        if !resending.lock().expect("the resend lock").insert(board_reference.to_string()) {
-            return None;
-        }
-        Some(Draining { resending, board_reference })
+        (!mark.swap(true, Ordering::SeqCst)).then_some(Draining(mark))
     }
 }
 
 impl Drop for Draining<'_> {
     fn drop(&mut self) {
-        // Run while a drain unwinds too: a poisoned set is still the set.
-        self.resending.lock().unwrap_or_else(PoisonError::into_inner).remove(self.board_reference);
+        self.0.store(false, Ordering::SeqCst);
     }
 }
 
@@ -101,7 +92,7 @@ impl Holds {
             return;
         }
         // One drain per board at a time, its mark cleared however it ends.
-        let Some(_draining) = Draining::begin(&self.resending, board_reference) else { return };
+        let Some(_draining) = Draining::begin(&slot.draining) else { return };
         self.drain(board_reference, slot);
     }
 
@@ -110,11 +101,10 @@ impl Holds {
     fn drain(&self, board_reference: &str, slot: &BoardSlot) {
         let board = &slot.board;
         // THE PROBE's one `/health` read (§3c.4): a board that does not answer
-        // is read again at the next wake.
+        // is read again at the next wake, and one whose writes are halted
+        // holds every line.
         let Ok(health) = board.health() else { return };
-        let writes_halted = health.body["writes"]["halted"].as_bool().unwrap_or(false);
-        self.note_health(board_reference, writes_halted);
-        if writes_halted {
+        if self.note_health(board_reference, &health) {
             return;
         }
         // The board answers and takes writes: the hold ends. A directory no
@@ -290,7 +280,11 @@ impl Holds {
     fn send_line(&self, session: &SessionEntry, line: &HeldLine) -> bool {
         let (board_reference, principal) = (session.board_reference.as_str(), session.facts.principal);
         let given = self.with_principal(board_reference, principal, |ph| ph.reissues.get(&line.k).copied()).flatten().unwrap_or_default();
-        match self.dial(session, &line.frame, given) {
+        let dialed = match self.attested(session, &line.frame) {
+            Ok(frame) => self.dial(session, &frame, given),
+            Err(why) => Dialed::from(why),
+        };
+        match dialed {
             Dialed::Acked(ack) => {
                 self.note_ack(session, &line.frame, &ack);
                 self.done(board_reference, principal, line.k, Done::Kept { at: acked_at(&ack) });
@@ -298,7 +292,7 @@ impl Holds {
                 self.emit_held(session, &line.doc, rest, if rest == 0 { HeldState::Kept } else { HeldState::Sending }, None);
                 true
             }
-            Dialed::Held(reason) => {
+            Dialed::Held { reason, .. } => {
                 let state = line_state(&reason);
                 let said = reason.cause.clone();
                 self.with_principal(board_reference, principal, |ph| self.remark_line(ph, line.k, reason));

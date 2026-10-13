@@ -23,7 +23,6 @@ use skepd::{embed, AuthOptions, MediaOptions, Skepd, DEFAULT_WORKERS};
 use tempfile::TempDir;
 
 use super::*;
-use crate::attest::Composer;
 use crate::events::Event;
 use crate::held::{HeldDir, Reason};
 use crate::hold::{Burst, PROBE_CADENCE};

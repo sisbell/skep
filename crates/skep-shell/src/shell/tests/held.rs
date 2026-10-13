@@ -197,20 +197,17 @@ fn a_signed_sessions_landed_burst_is_kept_by_the_resend() {
     let draft = signed.call("op", &json!({"session": session, "frame": {"op": "create_new_document", "account": "1.0.1"}})).unwrap()["addr"].as_str().unwrap().to_string();
     let first = signed.call("op", &json!({"session": session, "frame": {"op": "insert", "doc": draft, "at": {"subspace": "1", "ordinal": "1"}, "values": ["a"]}})).unwrap_or_else(|r| panic!("{r}\n{}", lines.lock().unwrap().join("\n")));
     let base = first["at"].as_u64().expect("the ack's position");
-    // The in-flight burst: composed and signed as the shell composes it,
-    // written under the session's token through the board itself.
+    // The in-flight burst: attested as the shell attests it, written under
+    // the session's token through the board itself.
     let entry = signed.sessions.get(&session).unwrap();
     let Kind::Signed { fingerprint: fp, .. } = entry.facts.kind.clone() else { panic!("a signed session holds a key") };
     let frame = json!({"op": "insert", "doc": draft, "at": {"subspace": "1", "ordinal": "2"}, "values": ["bc"]});
-    let board_entry = Arc::clone(&signed.boards[0]);
-    let term = board_entry.board.board_term().unwrap().expect("H.1 stands on a claimed board");
-    let signer = sessions::signer(&signed.store, &signed.store.key_path(&fp)).unwrap();
     let mut attested = frame.clone();
-    Composer { board: &board_entry.board, token: &entry.token, signer: &*signer, account: entry.facts.account.as_deref().unwrap(), term }.attach(&mut attested).unwrap();
+    entry.attest(&signed.store, &mut attested).unwrap();
     assert!(attested.get("attest").is_some(), "the shell attests every insert");
-    let Answer::Document(landed) = board_entry.board.op(Some(&entry.token), &attested).unwrap() else { panic!("the dial closed") };
+    let Answer::Document(landed) = entry.board.op(Some(&entry.token), &attested).unwrap() else { panic!("the dial closed") };
     assert!(landed["resp"].as_str().is_some_and(|r| r.starts_with("ack")), "the burst landed by the own hand: {landed}");
-    let rows = changes_under(&board_entry.board, &entry.token, &draft, base);
+    let rows = changes_under(&entry.board, &entry.token, &draft, base);
     assert_eq!(rows.len(), 1, "{rows:?}");
     assert_eq!(rows[0]["key"].as_str(), Some(fp.to_hex().as_str()), "a draft's insert is outside the publish class: the attest dropped, the row unsigned under the key's fingerprint: {rows:?}");
     assert!(rows[0].get("attest").is_none(), "{rows:?}");
@@ -229,7 +226,7 @@ fn a_signed_sessions_landed_burst_is_kept_by_the_resend() {
     assert!(!states.contains(&"moved".to_string()), "the own signed row is never faced moved: {states:?}");
     assert!(signed.call("held", &json!({"session": reopened})).unwrap().as_array().unwrap().is_empty(), "the line is done kept");
     let token = signed.sessions.get(&reopened).unwrap().token.clone();
-    let rows = changes_under(&board_entry.board, &token, &draft, base);
+    let rows = changes_under(&entry.board, &token, &draft, base);
     assert_eq!(rows.len(), 1, "the burst's row once, nothing re-sent: {rows:?}");
     let read = signed.call("op", &json!({"session": reopened, "frame": skep_client::board::frames::retrieve_v(&draft, 1, 3)})).unwrap();
     assert_eq!(text_of(&read), "abc", "{read}");

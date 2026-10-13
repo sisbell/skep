@@ -94,13 +94,12 @@ impl Log {
         entries.kept.push_back(entry);
     }
 
-    /// One CALL the page made: `call` its name, `bytes_in` the request's
-    /// body, `bytes_out` the answer's, `elapsed` its time, `outcome` how it
-    /// was answered. PRECONDITION, the caller's: `call` is one of the
-    /// bridge's spellings (`CALLS`), so the log keeps no name the page
-    /// chose — a name of no call is `Log::unknown_call`'s, kept by its
-    /// length alone.
-    pub fn call(&self, call: &str, bytes_in: usize, bytes_out: usize, elapsed: Duration, outcome: CallOutcome) {
+    /// One CALL the page made: `call` its name — one of the bridge's
+    /// spellings (`CALLS`), and `'static`, so the bytes of a page's request
+    /// cannot reach the log; a name of no call is `Log::unknown_call`'s,
+    /// kept by its length alone — `bytes_in` the request's body, `bytes_out`
+    /// the answer's, `elapsed` its time, `outcome` how it was answered.
+    pub fn call(&self, call: &'static str, bytes_in: usize, bytes_out: usize, elapsed: Duration, outcome: CallOutcome) {
         self.push(json!({
             "kind": "call",
             "call": call,

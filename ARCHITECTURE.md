@@ -1113,7 +1113,8 @@ an item the root re-exports counted as the module it is brought from
   from an origin or a token (THE PIN).
 - `log.rs` `Log`, the call and dial log the page's gate reads — sizes,
   routes and timing, never a token or a body — and `LoggingDialer`, the
-  one `PlainHttp` every board dials through, so no dial escapes the log.
+  one `PlainHttp` every board dials through, so no dial escapes the log,
+  and none is made once the shell's stop stands.
 - `events.rs` `EventBus`: the seven events as values, each named by an
   `EventName`, fanned out to every subscriber in order.
 - `refusal.rs` `Refusal`, the one shape the page renders, each refusal
@@ -1128,7 +1129,7 @@ an item the root re-exports counted as the module it is brought from
 - `held.rs` the HELD-BURST STORE (`client.md` §3c): one append-only file per
   (board, principal), read line by line with P38's faces, each line synced
   before `op` answers `held`; `HeldQueue`, a principal's queue — its
-  memory, the file its copy.
+  memory, the file its copy — within its lines' and its re-marks' budgets.
 - `script.rs` the dev arm's SCRIPT: the grammar a script file's answers are
   parsed by.
 - `dev_arm.rs` `DevArm`: the SECRET and CONSENT moments answered from a
@@ -1236,8 +1237,12 @@ Rules that hold across its files:
   past its values, a tumbler past its components, a slot past its spans,
   a shot past its re-insert budget or its body, an origin past one
   delivery, and the held queue past one frame's worth. A frame past one is
-  a frame the board refuses whatever it carries; no budget here is one the
-  board does not keep.
+  a frame the board refuses whatever it carries; no budget of these is one
+  the board does not keep. The held store keeps two of its own beside them
+  (`held.rs`): its lines (`MAX_HELD_LINES`), which bound the resend's walk,
+  and its file's re-marks (`MAX_HELD_REMARK_BYTES`), which bound what a
+  board's answers write to the disk — each argued there from the design's
+  outage of hours of typing (§3c.3).
 - **A burst the board takes at no send is never held.** `Burst::admit` is
   the one door a burst enters the hold by: a frame past the board's frame
   cap as sent or as a signed resend sends it, one naming no document in its
@@ -1248,7 +1253,9 @@ Rules that hold across its files:
 - **Dropping a shell stops it.** `Shell`'s `Drop` runs `shutdown`, which a
   second time finds nothing left to stop: no feed thread, open session or
   `held/<chain>/` lock outlives the shell, whether or not its owner stopped
-  it.
+  it. Once its sessions are closed the stop dials nothing (`LoggingDialer`),
+  so a board answering without end — pages whose `more` never ends — holds
+  no stop past one exchange.
 - **A principal's supplement follows its standing sessions.** The consumer
   holds one drafts supplement per (board, principal), and two tabs hold two
   sessions of one principal. A session that leaves the table — its end or

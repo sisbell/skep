@@ -56,6 +56,7 @@
 use std::fmt;
 use std::io::Read;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::Receiver;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
@@ -325,6 +326,10 @@ pub struct Shell {
     pending: Arc<Pending>,
     arm: Arc<DevArm>,
     log: Arc<Log>,
+    /// THE STOP, set by [`Shell::shutdown`] and read by every board's dialer
+    /// (`LoggingDialer`): once it stands no dial is made, so a feed thread a
+    /// board holds in a read without end is freed at its next exchange.
+    stopping: Arc<AtomicBool>,
     store: Arc<FileStore>,
     /// THE HELD-BURST HOLDS (§3c): the one path of every `/op` under a
     /// session, the queue `held` and `resolve` read and act on, the own
@@ -441,6 +446,7 @@ impl Shell {
         assert!(opts.boards.iter().enumerate().all(|(i, origin)| !opts.boards[..i].contains(origin)), "ShellOptions' precondition: the boards are distinct");
         assert!(opts.own_node.as_ref().is_none_or(|own| opts.boards.contains(own)), "ShellOptions' precondition: own_node, where set, is one of the boards");
         let log = Arc::new(Log::new());
+        let stopping = Arc::new(AtomicBool::new(false));
         let bus = Arc::new(EventBus::new());
         let store = Arc::new(FileStore::open(&opts.store_dir));
         // The store the restart arm re-opens a session under: the signed
@@ -462,7 +468,7 @@ impl Shell {
         let mut boards = Vec::new();
         let mut own_node_reference = None;
         for origin in &opts.boards {
-            let board = Arc::new(Board::new(origin.clone(), LoggingDialer::new(Arc::clone(&log))));
+            let board = Arc::new(Board::new(origin.clone(), LoggingDialer::new(Arc::clone(&log), Arc::clone(&stopping))));
             let entry = Arc::new(BoardEntry { reference: board_reference(), origin: origin.clone(), board });
             if opts.own_node.as_ref() == Some(origin) {
                 own_node_reference = Some(entry.reference.clone());
@@ -484,6 +490,7 @@ impl Shell {
             pending: Arc::new(Pending::new()),
             arm,
             log,
+            stopping,
             store,
             holds,
             anchors,
@@ -736,7 +743,7 @@ impl Shell {
             GuestTarget::Board(entry) => entry.origin.clone(),
             GuestTarget::Origin(origin) => origin,
         };
-        Ok(Board::new(origin, LoggingDialer::new(Arc::clone(&self.log))))
+        Ok(Board::new(origin, LoggingDialer::new(Arc::clone(&self.log), Arc::clone(&self.stopping))))
     }
 
     /// The frame, and its `at` where the page sent the `/op-at` form.
@@ -929,16 +936,22 @@ impl Shell {
     // ── THE STOP ─────────────────────────────────────────────────────────
 
     /// THE CLEAN STOP: every pending moment cancelled, every session closed
-    /// at its board, every board's feed threads stopped — each consumer
-    /// saved and closed, each feed thread joined, so the `held/<chain>/`
-    /// locks its holds kept are free once this returns. A second stop finds
-    /// nothing left to stop, and dropping the shell runs it. NOTHING of the
-    /// held-burst store is written here — every held line is already synced
-    /// at its `op` (persist-first, §3c.6's step 3). UNVERIFIED HERE (the
-    /// record §7 item 1): that the desktop framework's close hook runs this,
-    /// and that the page's last `op` reaches the shell before the webview is
-    /// destroyed, is the framework's to prove — no Tauri source is on this
-    /// machine; a crash loses at most the open or in-flight burst (R14).
+    /// at its board, the shell's dialer stopped, every board's feed threads
+    /// stopped — each consumer saved and closed, each feed thread joined, so
+    /// the `held/<chain>/` locks its holds kept are free once this returns.
+    /// The dialer stops after the sessions' closes, which dial, and before
+    /// the threads are asked to stop: from then on every dial is refused as
+    /// one that made no connection (`LoggingDialer`), so a feed thread a board
+    /// holds in a read without end — pages whose `more` never ends — is freed
+    /// at its next exchange, and the stop waits on no board past one
+    /// exchange's bound. A second stop finds nothing left to stop, and
+    /// dropping the shell runs it. NOTHING of the held-burst store is written
+    /// here — every held line is already synced at its `op` (persist-first,
+    /// §3c.6's step 3). UNVERIFIED HERE (the record §7 item 1): that the
+    /// desktop framework's close hook runs this, and that the page's last `op`
+    /// reaches the shell before the webview is destroyed, is the framework's
+    /// to prove — no Tauri source is on this machine; a crash loses at most
+    /// the open or in-flight burst (R14).
     pub fn shutdown(&self) {
         self.pending.cancel_all();
         for session in self.sessions.all() {
@@ -946,6 +959,7 @@ impl Shell {
                 let _ = session.board.session_close(&session.token);
             }
         }
+        self.stopping.store(true, Ordering::SeqCst);
         let threads = std::mem::take(&mut *self.threads.lock().expect("the feed threads' lock"));
         for board_threads in threads {
             board_threads.stop();

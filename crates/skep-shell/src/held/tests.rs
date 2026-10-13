@@ -10,12 +10,14 @@
 //! memory with the file its copy: a line the device refused stands in the
 //! queue under its ordinal, a re-mark reads back as the one line it
 //! re-marks, and a `done` the device refused still settles its line. THE
-//! STORE's BUDGETS: the queue's frames held to the board's frame cap, an
-//! unchanged re-mark writing nothing, the ordinals held to the page's, the
-//! writer refusing a line its reader would halt on and copying none past the
-//! line bound, and the reader halting on any line it cannot read whole — no
-//! UTF-8, a member missing or of another type, an ordinal past the page's, a
-//! line past the bound — while ignoring a torn last line cut mid-character.
+//! STORE's BUDGETS: the queue's frames held to the board's frame cap and its
+//! lines to the line budget, an unchanged re-mark writing nothing and a
+//! board flapping between two causes growing the file no further than its
+//! re-mark budget, the ordinals held to the page's, the writer refusing a
+//! line its reader would halt on and copying none past the line bound, and
+//! the reader halting on any line it cannot read whole — no UTF-8, a member
+//! missing or of another type, an ordinal past the page's, a line past the
+//! bound — while ignoring a torn last line cut mid-character.
 
 use std::cell::{Cell, RefCell};
 use std::fs;
@@ -467,11 +469,30 @@ fn the_queue_holds_its_frames_within_its_budget_and_writes_nothing_past_it() {
     let first = queue.hold("1.0.1.0.1", None, 0, sized_frame(MAX_HELD_FRAME_BYTES - 100), Reason::of("stopped", false)).unwrap().k;
     let written = file_len(&tmp);
     let refused = queue.hold("1.0.1.0.1", None, 0, sized_frame(200), Reason::of("behind", false));
-    assert_eq!(refused.unwrap_err(), Unheld::Full { held_bytes: MAX_HELD_FRAME_BYTES - 100, frame_bytes: 200 });
+    assert_eq!(refused.unwrap_err(), Unheld::Full { held_bytes: MAX_HELD_FRAME_BYTES - 100, frame_bytes: 200, held_lines: 1 });
     assert_eq!((file_len(&tmp), ks(&queue)), (written, vec![first]), "nothing of the refused line is kept");
     assert!(queue.hold("1.0.1.0.1", None, 0, sized_frame(100), Reason::of("behind", false)).is_ok(), "a frame at the budget exactly");
     queue.done(first, Done::Kept { at: Some(3) }).unwrap();
     assert!(queue.hold("1.0.1.0.1", None, 0, sized_frame(200), Reason::of("behind", false)).is_ok(), "a done makes room");
+}
+
+/// THE QUEUE's LINE BUDGET: [`MAX_HELD_LINES`] lines of empty bursts held —
+/// their bytes far under the frames' budget — and the next refused `Full`,
+/// naming the lines it holds, the queue standing at the budget; a `done`
+/// makes room for one more (the mutant that counts bytes alone holds a
+/// quarter of a million such bursts, and the resend walks them past one
+/// another for days).
+#[test]
+fn the_queue_holds_no_line_past_its_line_budget() {
+    let mut queue = HeldQueue::in_memory();
+    for _ in 0..MAX_HELD_LINES {
+        assert!(queue.hold("1.0.1.0.1", None, 0, json!({"op": "delete"}), Reason::of("behind", false)).is_ok());
+    }
+    let refused = queue.hold("1.0.1.0.1", None, 0, json!({"op": "delete"}), Reason::of("behind", false));
+    assert!(matches!(refused, Err(Unheld::Full { held_lines: MAX_HELD_LINES, .. })), "{refused:?}");
+    assert_eq!(queue.lines().len(), MAX_HELD_LINES, "the queue stands at the budget");
+    queue.done(1, Done::Dropped).unwrap();
+    assert!(queue.hold("1.0.1.0.1", None, 0, json!({"op": "delete"}), Reason::of("behind", false)).is_ok(), "a done makes room");
 }
 
 /// The ordinals are held to the page's ([`MAX_ORDINAL`]): the last one
@@ -515,6 +536,44 @@ fn an_unchanged_remark_writes_nothing() {
     assert_eq!(file_len(&tmp), written, "the same reason again writes nothing");
     queue.remark(k, Reason::of("durability", false)).unwrap();
     assert!(file_len(&tmp) > written, "a new reason is written");
+}
+
+/// THE RE-MARK BUDGET: a board flapping between two hold-class causes — the
+/// line re-marked at every probe, each re-mark a whole line of a large frame
+/// — grows the file by at most [`MAX_HELD_REMARK_BYTES`]: the re-marks past
+/// it refused their copy, the queue taking each reason all the same; a
+/// reopen reads one line under a reason the file copied and keeps the
+/// budget spent, refusing the next copy; and a compaction gives the file
+/// that replaces it a budget of its own (the mutant that copies every
+/// re-mark fills the disk at a frame per probe for as long as the board
+/// flaps; the one that counts afresh at each open fills it a budget per
+/// relaunch).
+#[test]
+fn a_board_flapping_between_two_causes_grows_no_file_past_its_remark_budget() {
+    let tmp = TempDir::new().unwrap();
+    let d = dir(&tmp);
+    let mut queue = live(d.open_file(1, "1.0.1").unwrap());
+    let k = queue.hold("1.0.1.0.1", None, 0, sized_frame(MAX_HELD_REMARK_BYTES / 4), Reason::of("unreachable", false)).unwrap().k;
+    let written = file_len(&tmp);
+    let flaps = [Reason::of("poisoned", true), Reason::of("durability", false)];
+    let copied = (0..8).filter(|i| queue.remark(k, flaps[i % 2].clone()).is_ok()).count();
+    assert!((1..8).contains(&copied), "some re-marks are copied and the rest refused: {copied} of 8");
+    let grown = (file_len(&tmp) - written) as usize;
+    assert!(grown <= MAX_HELD_REMARK_BYTES + copied, "the file grew {grown} bytes past its budget of {MAX_HELD_REMARK_BYTES}");
+    assert_eq!(queue.lines()[0].reason, flaps[1], "the queue takes the last reason given");
+    let mut reopened = live(d.open_file(1, "1.0.1").unwrap());
+    assert_eq!(reopened.lines().len(), 1);
+    let reason = reopened.lines()[0].reason.clone();
+    assert!(flaps.contains(&reason), "a reason the file copied: {reason:?}");
+    let other = flaps.iter().find(|f| **f != reason).unwrap().clone();
+    assert!(reopened.remark(k, other).is_err(), "the reopen keeps the budget spent");
+    drop(reopened);
+    queue.done(k, Done::Dropped).unwrap();
+    assert!(!queue.on_disk(), "the file compacted away");
+    let k = queue.hold("1.0.1.0.1", None, 0, json!({"op": "insert"}), Reason::of("unreachable", false)).unwrap().k;
+    let written = file_len(&tmp);
+    queue.remark(k, Reason::of("durability", false)).unwrap();
+    assert!(file_len(&tmp) > written, "the file that replaces it copies its re-marks afresh");
 }
 
 /// The header T1 writes for principal 1, then `body`, as the principal's

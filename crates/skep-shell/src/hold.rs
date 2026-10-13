@@ -59,7 +59,7 @@ use skep_search::Chain;
 
 use crate::attest::{attest_room, in_checked_set, insert_terms, Unattested};
 use crate::events::{EventBus, EventName};
-use crate::held::{Done, DoneError, HaltWhy, HeldDir, HeldLine, HeldQueue, Opened, Reason, Unheld, MAX_HELD_FRAME_BYTES};
+use crate::held::{Done, DoneError, HaltWhy, HeldDir, HeldLine, HeldQueue, Opened, Reason, Unheld, MAX_HELD_FRAME_BYTES, MAX_HELD_LINES};
 use crate::refusal::{Name, Refusal};
 use crate::sessions::{SessionEntry, SessionKind, Sessions};
 use crate::wire::{document_address, json_len, MAX_FRAME_BYTES};
@@ -800,8 +800,8 @@ impl Holds {
     /// where another window's lock keeps the line in memory alone, and
     /// `unwritable` beside it — why — where the device refused its copy or
     /// the file is out of reach (§3c.3); `held_full` where the principal's
-    /// queue holds its budget already (`held::MAX_HELD_FRAME_BYTES`), and
-    /// nothing held.
+    /// queue holds its budget already (`held::MAX_HELD_FRAME_BYTES`'s bytes,
+    /// or `held::MAX_HELD_LINES`'s lines), and nothing held.
     fn hold_line(&self, board_hold: &mut BoardHold, session: &SessionEntry, burst: Burst, reason: Reason) -> Result<Value, Refusal> {
         let ph = self.principal_hold(board_hold, session)?;
         let (doc, frame) = burst.into_stored();
@@ -966,7 +966,8 @@ impl Holds {
     }
 
     /// Re-mark one line in place — a hold that recurs, a refused run, a moved
-    /// re-facing — its ordinal kept; a copy the device refused said on TALK.
+    /// re-facing — its ordinal kept; a copy refused, by the device or past
+    /// the file's re-mark budget, said on TALK.
     fn remark_line(&self, ph: &mut PrincipalHold, k: u64, reason: Reason) {
         if let Err(e) = ph.queue.remark(k, reason) {
             self.say(format!("held: line {k}'s new cause could not be written ({e}); a reopen reads its earlier one"));
@@ -994,11 +995,14 @@ impl Holds {
 }
 
 /// The refusal for a line the queue would not hold (`held::Unheld`): the
-/// principal's queue full, or — never for a burst [`Burst::admit`] let in —
-/// a line no reader of the file reads.
+/// principal's queue full — its frames' bytes or its lines — or — never for
+/// a burst [`Burst::admit`] let in — a line no reader of the file reads.
 fn unheld(unheld: Unheld) -> Refusal {
     match unheld {
-        Unheld::Full { held_bytes, frame_bytes } => Refusal::shell(Name::HELD_FULL, json!({"held_bytes": held_bytes, "frame_bytes": frame_bytes, "cap": MAX_HELD_FRAME_BYTES})),
+        Unheld::Full { held_bytes, frame_bytes, held_lines } => Refusal::shell(
+            Name::HELD_FULL,
+            json!({"held_bytes": held_bytes, "frame_bytes": frame_bytes, "cap": MAX_HELD_FRAME_BYTES, "held_lines": held_lines, "line_cap": MAX_HELD_LINES}),
+        ),
         Unheld::Unreadable => Refusal::malformed("frame.doc"),
     }
 }

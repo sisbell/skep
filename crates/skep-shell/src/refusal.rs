@@ -113,7 +113,8 @@ impl Name {
     /// every send — refused at the act and never held.
     pub const FRAME_TOO_LARGE: Name = Name("frame_too_large");
     /// A burst the principal's held queue has no room for: its standing
-    /// frames hold the queue's budget already — refused, and kept nowhere.
+    /// frames, or its lines, hold the queue's budget already — refused, and
+    /// kept nowhere.
     pub const HELD_FULL: Name = Name("held_full");
     /// `answer(id, …)` or `cancel(id)` where no moment of that id waits.
     pub const NO_SUCH_MOMENT: Name = Name("no_such_moment");

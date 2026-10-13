@@ -34,11 +34,13 @@
 //! the lock; a file is never rewritten in place.
 //!
 //! THE STORE's BUDGETS: the queue's standing frames within
-//! [`MAX_HELD_FRAME_BYTES`], the board's own frame cap, refused past it and
-//! kept nowhere; each line within [`MAX_HELD_LINE_BYTES`] at the writer and
-//! the reader alike; and the file READ LINE BY LINE, keeping the standing
-//! lines alone — so an open holds the queue it reads, never the file's
-//! history of lines done.
+//! [`MAX_HELD_FRAME_BYTES`], the board's own frame cap, and its lines within
+//! [`MAX_HELD_LINES`], a line past either refused and kept nowhere; each line
+//! within [`MAX_HELD_LINE_BYTES`] at the writer and the reader alike; the
+//! re-marks one file copies within [`MAX_HELD_REMARK_BYTES`], a re-mark past
+//! them taken in the queue alone; and the file READ LINE BY LINE, keeping the
+//! standing lines alone — so an open holds the queue it reads, never the
+//! file's history of lines done.
 //!
 //! THE LOCK `held/<chain>/lock` (the key store's `flock` idiom, copied from
 //! `search::directory::BoardDir::try_lock` — the index directory's type is the
@@ -78,6 +80,34 @@ pub const MAX_HELD_FRAME_BYTES: usize = MAX_FRAME_BYTES;
 /// the device refused — and the reader halts on one as damaged, reading no
 /// more of it than one byte past the bound.
 const MAX_HELD_LINE_BYTES: usize = 2 * MAX_HELD_FRAME_BYTES + 64 * 1024;
+
+/// THE QUEUE's LINE BUDGET — the most lines a principal's queue holds at one
+/// board. The resend walks the queue line by line, finding each line's
+/// document among the others, and a line costs its walk the same whatever its
+/// frame holds — so the lines bound the walk's work as the frames' bytes bound
+/// its memory, and the byte budget alone admits a quarter of a million empty
+/// bursts held behind one refused. The design's outage is hours of typing in
+/// kilobytes (§3c.3), the burst machine coalescing each pause's keystrokes
+/// into one burst: at a burst per ten bytes typed, 4096 lines is hours of
+/// continuous typing. Past it a line is refused `held_full`, as one past the
+/// bytes is.
+pub const MAX_HELD_LINES: usize = 4096;
+
+/// THE RE-MARK BUDGET — the most bytes of re-mark lines, each counted as
+/// [`MAX_HELD_LINE_BYTES`] counts a line, one file copies between its
+/// creation and its compaction. A re-mark copies its whole line, frame and
+/// all, under the new reason, and the board's answers choose the reasons: a
+/// board answering each probe with another hold-class cause would grow the
+/// file by a synced line at every probe for as long as it answers so, for a
+/// few hundred bytes of answer each. An honest outage re-marks a document's
+/// head a handful of times as the board's state and the person's acts move
+/// it, and its text is kilobytes (§3c.3), so one line bound holds its
+/// re-marks many times over — a head of kilobytes re-marked thousands of
+/// times, the largest line the writer copies re-marked once. Past it a
+/// re-mark is taken in the queue alone, its copy refused as a copy the device
+/// refused is ([`HeldQueue::remark`]): a reopen reads the reason copied last,
+/// and the resend's read decides the line from there.
+const MAX_HELD_REMARK_BYTES: usize = MAX_HELD_LINE_BYTES;
 
 /// The largest ordinal a line may carry: `2^53 − 1`, the top of the range a
 /// JSON number carries EXACTLY (AUTH-6.36's clause) — the page names a line
@@ -308,11 +338,13 @@ impl HeldDir {
     /// not a whole line of the two forms HALTS; a MISPLACED file is moved
     /// aside and this principal's file started fresh. Only the standing lines
     /// are held as the file is read, each re-mark in its line's place and each
-    /// `done` taking its line out. `account` is the header's where this open
-    /// writes one.
+    /// `done` taking its line out, and the re-mark lines' bytes counted
+    /// against [`MAX_HELD_REMARK_BYTES`], so a relaunch keeps the file's
+    /// budget where its writer left it. `account` is the header's where this
+    /// open writes one.
     pub fn open_file(&self, principal: u64, account: &str) -> io::Result<Opened> {
         let path = self.path.join(Self::file_name(principal));
-        let disk = Disk { path: path.clone(), chain: self.chain, principal, account: account.to_string(), created: false };
+        let disk = Disk { path: path.clone(), chain: self.chain, principal, account: account.to_string(), created: false, remarked: 0 };
         let fresh = |disk: Disk, aside: Option<PathBuf>| Opened::Live { queue: HeldQueue { disk: Some(disk), lines: Vec::new(), next_k: 1, held_bytes: 0 }, aside };
         let file = match File::open(&path) {
             Ok(f) => f,
@@ -353,20 +385,27 @@ impl HeldDir {
         // halted as damaged (§3c.3); a torn last line ignored.
         let mut standing: BTreeMap<u64, HeldLine> = BTreeMap::new();
         let mut max_k = 0u64;
+        let mut remarked = 0usize;
         loop {
             match next_line(&mut reader, &mut buf)? {
                 Line::Complete => {}
                 Line::Torn | Line::End => break,
                 Line::Long => return halted(HaltWhy::Damaged),
             }
+            // The line's bytes, its `\n` dropped, as MAX_HELD_REMARK_BYTES
+            // counts a re-mark.
+            let line_bytes = buf.len();
             let Some(m) = object(&buf) else { return halted(HaltWhy::Damaged) };
             if let Some(held) = m.get("held") {
                 let Some(k) = ordinal(held) else { return halted(HaltWhy::Damaged) };
                 let Some(line) = parse_held_line(k, m) else { return halted(HaltWhy::Damaged) };
                 max_k = max_k.max(k);
                 // A `held` line of a standing ordinal is its RE-MARK
-                // ([`HeldQueue::remark`]): it takes the earlier line's place.
-                standing.insert(k, line);
+                // ([`HeldQueue::remark`]): it takes the earlier line's place,
+                // and its bytes count against the file's re-mark budget.
+                if standing.insert(k, line).is_some() {
+                    remarked = remarked.saturating_add(line_bytes);
+                }
             } else if let Some(done) = m.get("done") {
                 let Some(k) = ordinal(done).filter(|_| is_done_line(&m)) else { return halted(HaltWhy::Damaged) };
                 max_k = max_k.max(k);
@@ -377,7 +416,7 @@ impl HeldDir {
         }
         let lines: Vec<HeldLine> = standing.into_values().collect();
         let held_bytes = lines.iter().map(|l| json_len(&l.frame)).sum();
-        let disk = Disk { created: true, ..disk };
+        let disk = Disk { created: true, remarked, ..disk };
         // `max_k` is within MAX_ORDINAL, so its successor is a `u64`.
         Ok(Opened::Live { queue: HeldQueue { disk: Some(disk), lines, next_k: max_k + 1, held_bytes }, aside: None })
     }
@@ -405,9 +444,10 @@ impl HeldDir {
 }
 
 /// ONE PRINCIPAL's QUEUE (J1: "THE SHELL holds the queue"): its un-done
-/// `held` lines in `k` order, the next ordinal, the bytes its lines' frames
-/// hold ([`MAX_HELD_FRAME_BYTES`]'s count), and the file the lines are
-/// copied to — `None` where the store keeps them in memory alone (§3c.3).
+/// `held` lines in `k` order — a hold adding none past [`MAX_HELD_LINES`] —
+/// the next ordinal, the bytes its lines' frames hold
+/// ([`MAX_HELD_FRAME_BYTES`]'s count), and the file the lines are copied to
+/// — `None` where the store keeps them in memory alone (§3c.3).
 #[derive(Debug)]
 pub struct HeldQueue {
     disk: Option<Disk>,
@@ -416,9 +456,11 @@ pub struct HeldQueue {
     held_bytes: usize,
 }
 
-/// The file a queue's lines are copied to: its path, the header's facts, and
+/// The file a queue's lines are copied to: its path, the header's facts,
 /// whether the header is on disk yet (created lazily on the first append,
-/// under `create_new`, and again after a compaction).
+/// under `create_new`, and again after a compaction), and the bytes of the
+/// re-mark lines it holds ([`MAX_HELD_REMARK_BYTES`]'s count, from its
+/// creation).
 #[derive(Debug)]
 struct Disk {
     path: PathBuf,
@@ -426,6 +468,7 @@ struct Disk {
     principal: u64,
     account: String,
     created: bool,
+    remarked: usize,
 }
 
 /// One line entered in the queue: the ordinal it took, and — where its copy
@@ -444,8 +487,9 @@ pub struct Entered {
 pub enum Unheld {
     /// The queue's standing frames' bytes, `held_bytes`, and the line's,
     /// `frame_bytes`, would pass [`MAX_HELD_FRAME_BYTES`] — or the queue's
-    /// next ordinal would pass [`MAX_ORDINAL`].
-    Full { held_bytes: usize, frame_bytes: usize },
+    /// lines, `held_lines`, stand at [`MAX_HELD_LINES`] already, or its next
+    /// ordinal would pass [`MAX_ORDINAL`].
+    Full { held_bytes: usize, frame_bytes: usize, held_lines: usize },
     /// The line's `doc` is no document address in its one spelling
     /// (`wire::document_address`), or its `frame` no JSON object: a line
     /// no reader of the file reads.
@@ -496,16 +540,17 @@ impl HeldQueue {
     /// for the caller's answer to say (§3c.3); or [`Unheld`], checked in this
     /// order, the first that holds answering — its `doc` or `frame` one the
     /// reader refuses ([`Unheld::Unreadable`]), else its ordinal past
-    /// [`MAX_ORDINAL`] or its frame carrying the queue's past
-    /// [`MAX_HELD_FRAME_BYTES`] ([`Unheld::Full`]) — and the line kept
-    /// nowhere: the writer holds no line the file's reader would halt on.
+    /// [`MAX_ORDINAL`], the queue at [`MAX_HELD_LINES`] lines, or its frame
+    /// carrying the queue's past [`MAX_HELD_FRAME_BYTES`] ([`Unheld::Full`])
+    /// — and the line kept nowhere: the writer holds no line the file's
+    /// reader would halt on.
     pub fn hold(&mut self, doc: &str, id: Option<&str>, base: u64, frame: Value, reason: Reason) -> Result<Entered, Unheld> {
         if document_address(doc).is_none() || !frame.is_object() {
             return Err(Unheld::Unreadable);
         }
         let frame_bytes = json_len(&frame);
-        if self.next_k > MAX_ORDINAL || self.held_bytes.saturating_add(frame_bytes) > MAX_HELD_FRAME_BYTES {
-            return Err(Unheld::Full { held_bytes: self.held_bytes, frame_bytes });
+        if self.next_k > MAX_ORDINAL || self.lines.len() >= MAX_HELD_LINES || self.held_bytes.saturating_add(frame_bytes) > MAX_HELD_FRAME_BYTES {
+            return Err(Unheld::Full { held_bytes: self.held_bytes, frame_bytes, held_lines: self.lines.len() });
         }
         let line = HeldLine { k: self.next_k, doc: doc.to_string(), id: id.map(str::to_string), base, frame, reason, time: now_ms() };
         self.next_k += 1;
@@ -520,8 +565,9 @@ impl HeldQueue {
     /// `held` line of its ordinal, which the reader takes in its place; no
     /// `done` is owed. A reason the line already has changes nothing and
     /// writes nothing. The queue takes the reason whatever the disk did, and
-    /// the device's refusal is answered for the caller to say (a reopen then
-    /// reads the earlier reason). A line not standing is left alone.
+    /// a copy refused — by the device, or past the file's
+    /// [`MAX_HELD_REMARK_BYTES`] — is answered for the caller to say (a reopen
+    /// then reads the earlier reason). A line not standing is left alone.
     pub fn remark(&mut self, k: u64, reason: Reason) -> io::Result<()> {
         let Some(line) = self.lines.iter_mut().find(|l| l.k == k) else { return Ok(()) };
         if line.reason == reason {
@@ -531,7 +577,7 @@ impl HeldQueue {
         line.time = now_ms();
         let bytes = held_line_bytes(line);
         match self.disk.as_mut() {
-            Some(d) => d.write_line(&bytes),
+            Some(d) => d.write_remark(&bytes),
             None => Ok(()),
         }
     }
@@ -572,6 +618,23 @@ impl Disk {
         }
         self.ensure_header()?;
         self.append(bytes)
+    }
+
+    /// One RE-MARK line copied, within [`MAX_HELD_REMARK_BYTES`]: a re-mark
+    /// that would pass it refused as the device's refusal is answered, and
+    /// never written. Its bytes count as the copy is tried, so a device that
+    /// takes a line and refuses its sync spends the budget all the same.
+    fn write_remark(&mut self, bytes: &[u8]) -> io::Result<()> {
+        let line = bytes.len().saturating_sub(1);
+        let remarked = self.remarked.saturating_add(line);
+        if remarked > MAX_HELD_REMARK_BYTES {
+            return Err(io::Error::new(
+                io::ErrorKind::FileTooLarge,
+                format!("the held file's re-marks hold {} bytes; this one's {line} would pass its {MAX_HELD_REMARK_BYTES}", self.remarked),
+            ));
+        }
+        self.remarked = remarked;
+        self.write_line(bytes)
     }
 
     /// The header written once under `create_new` (`store.rs`'s idiom), mode
@@ -622,10 +685,12 @@ impl Disk {
         Ok(())
     }
 
-    /// The file removed — the directory stays, and the next line recreates it.
+    /// The file removed — the directory stays, and the next line recreates it
+    /// with a re-mark budget of its own.
     fn remove(&mut self) {
         let _ = fs::remove_file(&self.path);
         self.created = false;
+        self.remarked = 0;
     }
 }
 

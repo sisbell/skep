@@ -25,12 +25,12 @@ modules, and `Shell`'s one door — `call`, which logs each call, with
 | module | holds |
 |---|---|
 | `refs` | the reference registry's NAMES: a board reference (`b-…`) and a session reference (`s-…`) minted from OS entropy per process, never a credential, never derived from an origin or a token (§4b.1, THE PIN) |
-| `log` | `Log`, the call log and the dial log the page's gate reads — sizes, routes and timing, never a token or a body, the latest `MAX_LOG_ENTRIES` kept — and `LoggingDialer`, the one `PlainHttp` every board dials through |
+| `log` | `Log`, the call log and the dial log the page's gate reads — sizes, routes and timing, never a token or a body, the latest `MAX_LOG_ENTRIES` kept — and `LoggingDialer`, the one `PlainHttp` every board dials through, which dials nothing once the shell's stop stands |
 | `events` | `EventBus`: the seven events of §4b.2 as values, each named by an `EventName`, fanned out to every subscriber in order |
 | `refusal` | `Refusal`, the one refusal shape the page renders — the board's verdict verbatim, a halt's face, the block, the unreachable board, the shell's own — each named by a constant of `Name`, the one closed list |
 | `wire` | the wire's shared facts: the board's frame cap (`MAX_FRAME_BYTES`) and a frame's compact bytes (`json_len`), the tumbler component budget, `document_address`, a document address in its one spelling, and the wire's value forms both ways (`values_of`, `delivered_values`) within the insert's value budget |
 | `attest` | `Composer`, the attest a signed session composes for every write of the checked set, every axis from the shell's own reads; the board's other budgets, each held before the work it bounds |
-| `held` | the held-burst store (§3c): one append-only file per (board, principal) beside the key store, read line by line with P38's faces, each line synced before `op` answers `held`; `HeldQueue`, a principal's queue — its memory, the file its copy |
+| `held` | the held-burst store (§3c): one append-only file per (board, principal) beside the key store, read line by line with P38's faces, each line synced before `op` answers `held`; `HeldQueue`, a principal's queue — its memory, the file its copy — within its frames' bytes, its lines (`MAX_HELD_LINES`) and its file's re-marks |
 | `script` | the dev arm's SCRIPT: the grammar a script file's answers are parsed by, one per line in order |
 | `dev_arm` | `DevArm`, the answerer of the SECRET and CONSENT moments (§4b.3): a script's answers in order, or the auto arm, every answer said on TALK and never sent to the page, the NATIVE statements — those naming where key material rests — said there too |
 | `person` | `BridgePerson`: the PUBLIC moments as `moment` events answered through `Pending` in their kind's form, the SECRET and CONSENT ones, and the NATIVE statements (`NATIVE_RULES`), sent to the dev arm |

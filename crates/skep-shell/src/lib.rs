@@ -21,7 +21,9 @@
 //! * `log` — [`Log`], the call log and the dial log the page's gate reads
 //!   (the structure record §6.3's class 5): every call the page made and
 //!   every dial the shell made, sizes and timing, never a token or a body,
-//!   the latest entries kept and a call of no name kept by its length.
+//!   the latest entries kept and a call of no name kept by its length — and
+//!   the one dialer every board dials through, which dials nothing once the
+//!   shell's stop stands.
 //! * `events` — THE EVENT STREAM: every §4b.2 event as a value, named by
 //!   an [`EventName`] of the seven, fanned out to every subscriber.
 //! * `refusal` — [`Refusal`], the one refusal shape the page renders: the
@@ -45,7 +47,8 @@
 //!   forms, the directory lock, the line-by-line read with P38's faces, the
 //!   synced append (persist-first) and the compaction at every line done —
 //!   and a principal's queue, the memory the queue and the file its copy,
-//!   its frames within the board's frame cap.
+//!   its frames within the board's frame cap, its lines within a line
+//!   budget and its file's re-marks within a re-mark budget.
 //! * [`script`] — THE DEV ARM's SCRIPT: the grammar a script file's answers
 //!   are parsed by.
 //! * `dev_arm` — THE DEV ARM for the SECRET and CONSENT moments (§4b.3): a

@@ -3,9 +3,11 @@
 //! stands, while another board's stream failure is still announced, and its
 //! `Running` handing the probe to the board's feed thread; a search held at
 //! one board holding back no call at another; a shell dropped unstopped
-//! closing its sessions and freeing its board's held lock; and a board down
-//! at the open fed from its first answer, never replaying the history
-//! before it.
+//! closing its sessions and freeing its board's held lock; a board paging
+//! without end holding no stop; and a board down at the open fed from its
+//! first answer, never replaying the history before it.
+
+use std::io::{Read, Write};
 
 use super::*;
 use crate::sessions::{Facts, Open};
@@ -110,6 +112,95 @@ fn tarpit(hold: Duration) -> String {
         }
     });
     origin
+}
+
+/// A board that pages without end: every `/changes` read answered with an
+/// empty page whose `last` passes its `since` by one and whose `more` stands
+/// — each read counted — its `/events` stream one commit and then silence,
+/// its `/health` a board at position 10 that takes writes, and every `/op`
+/// an empty delivery (no `H.1`, so no index opens). Each page moves its
+/// reader on as the wire's paging rule asks, so no reader refuses one, and
+/// a read to the head never ends.
+fn endless_pages() -> (String, Arc<AtomicUsize>) {
+    let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
+    let origin = format!("http://127.0.0.1:{}", listener.local_addr().unwrap().port());
+    let pages = Arc::new(AtomicUsize::new(0));
+    let counted = Arc::clone(&pages);
+    thread::spawn(move || {
+        for stream in listener.incoming().flatten() {
+            let counted = Arc::clone(&counted);
+            thread::spawn(move || answer_endlessly(stream, &counted));
+        }
+    });
+    (origin, pages)
+}
+
+/// One request off `stream` — its head through the blank line, its body as
+/// long as its `Content-Length` says — answered as `endless_pages`' board.
+fn answer_endlessly(mut stream: std::net::TcpStream, pages: &AtomicUsize) {
+    let mut head = Vec::new();
+    let mut byte = [0u8; 1];
+    while !head.ends_with(b"\r\n\r\n") {
+        match stream.read(&mut byte) {
+            Ok(1) => head.push(byte[0]),
+            _ => return,
+        }
+    }
+    let head = String::from_utf8_lossy(&head).into_owned();
+    let declared = head.lines().filter_map(|line| line.split_once(':')).find(|(name, _)| name.eq_ignore_ascii_case("content-length")).and_then(|(_, n)| n.trim().parse().ok()).unwrap_or(0);
+    if stream.read_exact(&mut vec![0u8; declared]).is_err() {
+        return;
+    }
+    let path = head.split_whitespace().nth(1).unwrap_or("").to_string();
+    if path.starts_with("/events") {
+        let _ = stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\n\r\nevent: commit\ndata: {\"log_position\": 11}\n\n");
+        thread::sleep(Duration::from_secs(60));
+        return;
+    }
+    let answer = if path.starts_with("/changes") {
+        pages.fetch_add(1, Ordering::SeqCst);
+        thread::sleep(Duration::from_millis(2));
+        let since = path.split_once("since=").and_then(|(_, rest)| rest.split('&').next()).and_then(|n| n.parse::<u64>().ok()).unwrap_or(0);
+        json!({"changes": [], "last": since + 1, "more": true})
+    } else if path.starts_with("/health") {
+        json!({"ok": true, "log_position": 10, "auth": {"claimant": null, "local_trust": true, "origins": [], "signed_origins": []}, "writes": {"halted": false}})
+    } else {
+        json!({"resp": "delivery", "items": []})
+    };
+    let body = answer.to_string();
+    let _ = write!(stream, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len());
+}
+
+/// A BOARD PAGING WITHOUT END HOLDS NO STOP: the board's feed thread reads
+/// pages that never end — each one's `more` standing, its `last` one past
+/// its `since`, as the wire's paging rule admits — and the shell's stop
+/// returns all the same, the dialer refusing every dial once the stop
+/// stands so the read ends at its next exchange; once the stop returns no
+/// page is read (the mutant that dials past the stop waits for a feed
+/// thread that never takes its `Stop`, and the shell's `Drop` with it).
+#[test]
+fn a_board_paging_without_end_holds_no_stop() {
+    let dir = TempDir::new().unwrap();
+    let (origin, pages) = endless_pages();
+    let (talk, _) = talk();
+    let shell = Arc::new(Shell::open(ShellOptions::new(vec![Origin::parse(&origin).unwrap()], dir.path().join("store"), SessionMode::Bare { principal: 1 }, talk)));
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while pages.load(Ordering::SeqCst) < 64 {
+        assert!(Instant::now() < deadline, "the feed thread never read the board's pages");
+        thread::sleep(Duration::from_millis(10));
+    }
+    // The stop on a thread of its own, so a stop that never returns fails
+    // the cell at its deadline rather than hanging the suite.
+    let (stopped, rx) = std::sync::mpsc::channel();
+    let stopping = Arc::clone(&shell);
+    thread::spawn(move || {
+        stopping.shutdown();
+        let _ = stopped.send(());
+    });
+    assert!(rx.recv_timeout(Duration::from_secs(30)).is_ok(), "the stop waited on a board paging without end");
+    let read = pages.load(Ordering::SeqCst);
+    thread::sleep(Duration::from_millis(200));
+    assert_eq!(pages.load(Ordering::SeqCst), read, "no page is read once the stop returns");
 }
 
 /// ONE BOARD's WAIT HOLDS NO OTHER: a guest `search` queued behind a board

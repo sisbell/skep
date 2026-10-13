@@ -18,6 +18,7 @@
 //! write's answer, as a first dial does.
 
 use std::borrow::Cow;
+use std::collections::HashSet;
 use std::ops::ControlFlow;
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -125,22 +126,19 @@ impl Holds {
 
     /// THE RESEND for one session (§3c.5), RESUMED BY READ — wire.md's
     /// RESUME-BY-READ (PUB-8.32) — at the board it stands at: each document
-    /// with held lines read once, then the lines of every document its read
-    /// lets go sent in `k` order across the documents
-    /// ([`Holds::send_in_order`]).
+    /// with held lines read once, in the order its first line was held, then
+    /// the lines of every document its read lets go sent in `k` order across
+    /// the documents ([`Holds::send_in_order`]). The documents are gathered
+    /// by one pass over the queue, each found among those already seen by a
+    /// set's lookup, never a scan of them.
     fn resume(&self, session: &SessionEntry) {
         let Some(docs) = self.with_principal(&session.board_reference, session.facts.principal, |ph| {
-            let mut docs: Vec<String> = Vec::new();
-            for l in ph.queue.lines() {
-                if !docs.contains(&l.doc) {
-                    docs.push(l.doc.clone());
-                }
-            }
-            docs
+            let mut seen = HashSet::new();
+            ph.queue.lines().iter().filter(|l| seen.insert(l.doc.as_str())).map(|l| l.doc.clone()).collect::<Vec<String>>()
         }) else {
             return;
         };
-        let sending: Vec<String> = docs.into_iter().filter(|doc| self.resume_doc(session, doc)).collect();
+        let sending: HashSet<String> = docs.into_iter().filter(|doc| self.resume_doc(session, doc)).collect();
         self.send_in_order(session, sending);
     }
 
@@ -277,13 +275,15 @@ impl Holds {
     /// stopping at a line that awaits the person's act or is not taken, the
     /// others going on. Every turn settles its line (an ack, the one
     /// `Continue`, takes it out of the queue) or drops its document, so the
-    /// walk ends.
-    fn send_in_order(&self, session: &SessionEntry, mut docs: Vec<String>) {
+    /// walk ends; a turn finds its line by one set lookup per line it passes,
+    /// so the walk's work is the queue's lines — a hold adds none past
+    /// `held::MAX_HELD_LINES` — times its turns.
+    fn send_in_order(&self, session: &SessionEntry, mut docs: HashSet<String>) {
         let (board_reference, principal) = (session.board_reference.as_str(), session.facts.principal);
-        let next = |docs: &[String]| self.with_principal(board_reference, principal, |ph| ph.queue.lines().iter().find(|l| docs.contains(&l.doc)).cloned()).flatten();
+        let next = |docs: &HashSet<String>| self.with_principal(board_reference, principal, |ph| ph.queue.lines().iter().find(|l| docs.contains(&l.doc)).cloned()).flatten();
         while let Some(line) = next(&docs) {
             if awaits_act(&line) || self.send_line(session, &line).is_break() {
-                docs.retain(|doc| *doc != line.doc);
+                docs.remove(&line.doc);
             }
         }
     }

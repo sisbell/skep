@@ -17,7 +17,8 @@
 //! its file. THE DOOR: a burst the board takes at no send refused at the
 //! act and held never — past the frame cap as sent, or as a signed resend
 //! would send it, naming no document, an insert a signed session cannot
-//! attest — one the queue has no room for refused `held_full`; and each
+//! attest — one the queue has no room for, by its frames' bytes or by its
+//! lines, refused `held_full`; and each
 //! board's hold its own, a burst at one board answered while another
 //! board's hold is held, dialed and kept at the board its session stands at.
 
@@ -525,6 +526,32 @@ fn a_burst_the_queue_has_no_room_for_is_refused_held_full() {
     assert_eq!(g.lines().len(), 1, "nothing more held");
     assert!(g.states().is_empty(), "no `held` event for a burst not held");
     assert_eq!(g.fake.sends(), 0);
+}
+
+/// THE QUEUE's LINE BUDGET at the hold: behind one refused run, small
+/// bursts on as many documents held `behind` until the principal's queue
+/// stands at `held::MAX_HELD_LINES` — their bytes a few hundred kilobytes,
+/// far under the frames' budget — and the next burst refused `held_full`,
+/// naming the lines held and the line budget: no line, no `held` event,
+/// nothing dialed (the mutant that counts bytes alone holds a quarter of a
+/// million such bursts, and the resend walks each past the others).
+#[test]
+fn a_burst_past_the_queues_line_budget_is_refused_held_full() {
+    let fake = Fake::new();
+    fake.no_head.store(true, Ordering::SeqCst);
+    let g = ground_over(fake, TempDir::new().unwrap(), bare_facts(), 0);
+    let verdict = json!({"resp": "rejected", "code": "out_of_bounds", "disposition": "permanent"});
+    g.holds.hold(&g.session, g.burst(&insert(DOC, json!(["a"]))), Reason::refused("out_of_bounds", verdict)).unwrap();
+    for n in 1..MAX_HELD_LINES {
+        g.hold(&delete(&format!("1.0.1.0.{}", 100 + n)), "behind", false);
+    }
+    let _ = g.rx.try_iter().count();
+    let OpAnswer::Answered(Err(refused)) = g.holds.send_burst(&g.session, delete("1.0.1.0.99")) else { panic!("refused, not held") };
+    let v = refused.to_value();
+    assert_eq!((refused.name(), v["held_lines"].as_u64(), v["line_cap"].as_u64()), ("held_full", Some(MAX_HELD_LINES as u64), Some(MAX_HELD_LINES as u64)), "{v}");
+    assert_eq!(g.lines().len(), MAX_HELD_LINES, "nothing more held");
+    assert!(g.states().is_empty(), "no `held` event for a burst not held");
+    assert_eq!(g.fake.sends(), 0, "nothing dialed");
 }
 
 /// The ground over two boards, `b-1` and `b-2`, of their own chains: the

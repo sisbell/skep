@@ -32,9 +32,10 @@
 
 use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
-use std::sync::mpsc::{channel, Receiver, Sender};
+use std::sync::mpsc::{channel, Receiver, RecvTimeoutError, Sender};
 use std::sync::Arc;
 use std::thread;
+use std::time::Duration;
 
 use serde_json::{json, Value};
 use skep_client::board::{ChangesAnswer, ChangesQuery, Token};
@@ -93,6 +94,11 @@ enum Cmd {
 pub struct Feed {
     cmds: Sender<Cmd>,
     stream_stop: Stop,
+    /// The consumer-owner thread, JOINED at [`Feed::stop`] so its `Arc`s — the
+    /// held-burst holds among them, which hold the `held/<chain>/` lock — are
+    /// dropped before the stop returns; a relaunch in the same process then
+    /// takes the lock the first shell held.
+    worker: Option<thread::JoinHandle<()>>,
 }
 
 impl std::fmt::Debug for Feed {
@@ -103,8 +109,11 @@ impl std::fmt::Debug for Feed {
 
 impl Feed {
     /// The two threads for `entry`, the consumer over `data_dir/index/`;
-    /// `reopen_store` the store the restart arm re-opens a session under.
-    pub fn spawn(entry: Arc<BoardEntry>, bus: Arc<EventBus>, sessions: Arc<Sessions>, reopen_store: Option<Arc<FileStore>>, data_dir: PathBuf, talk: Talk) -> Feed {
+    /// `reopen_store` the store the restart arm re-opens a session under;
+    /// `holds` the held-burst holds the worker drives — the `writes.halted`
+    /// read at each tick and THE PROBE on a timed wake every `cadence`.
+    #[allow(clippy::too_many_arguments)]
+    pub fn spawn(entry: Arc<BoardEntry>, bus: Arc<EventBus>, sessions: Arc<Sessions>, reopen_store: Option<Arc<FileStore>>, data_dir: PathBuf, talk: Talk, holds: Arc<crate::Holds>, cadence: Duration) -> Feed {
         let (tx, rx) = channel();
         // The stream's reader: each commit a tick, a failed connect said.
         // The stream borrows the board from the `Arc` the thread holds, so
@@ -125,8 +134,8 @@ impl Feed {
             }
         });
         let stream_stop = stop_rx.recv().expect("the reader sends its stopper before it reads");
-        thread::spawn(move || Worker::run(entry, bus, sessions, reopen_store, data_dir, talk, rx));
-        Feed { cmds: tx, stream_stop }
+        let worker = thread::spawn(move || Worker::run(entry, bus, sessions, reopen_store, data_dir, talk, holds, cadence, rx));
+        Feed { cmds: tx, stream_stop, worker: Some(worker) }
     }
 
     /// A session registered at this board: its supplement mounted.
@@ -162,12 +171,17 @@ impl Feed {
     }
 
     /// The stream ended and the consumer closed — the save at the shell's
-    /// exit.
-    pub fn stop(self) {
+    /// exit. The worker thread is JOINED last, so every `Arc` it held (the
+    /// holds, and with them the `held/<chain>/` lock) is dropped before this
+    /// returns.
+    pub fn stop(mut self) {
         self.stream_stop.stop();
         let (reply, rx) = channel();
         if self.cmds.send(Cmd::Stop(reply)).is_ok() {
             let _ = rx.recv();
+        }
+        if let Some(worker) = self.worker.take() {
+            let _ = worker.join();
         }
     }
 }
@@ -182,6 +196,11 @@ struct Worker<'b> {
     reopen_store: Option<Arc<FileStore>>,
     data_dir: PathBuf,
     talk: Talk,
+    /// The held-burst holds this worker drives.
+    holds: Arc<crate::Holds>,
+    /// THE PROBE's cadence (`hold::PROBE_CADENCE`): the recv timeout that wakes
+    /// the worker to service held bursts even when no commit ticks.
+    cadence: Duration,
     consumer: Option<Consumer<'b>>,
     published_since: u64,
     drafts_since: HashMap<u64, u64>,
@@ -193,7 +212,8 @@ struct Worker<'b> {
 }
 
 impl<'b> Worker<'b> {
-    fn run(entry: Arc<BoardEntry>, bus: Arc<EventBus>, sessions: Arc<Sessions>, reopen_store: Option<Arc<FileStore>>, data_dir: PathBuf, talk: Talk, rx: Receiver<Cmd>) {
+    #[allow(clippy::too_many_arguments)]
+    fn run(entry: Arc<BoardEntry>, bus: Arc<EventBus>, sessions: Arc<Sessions>, reopen_store: Option<Arc<FileStore>>, data_dir: PathBuf, talk: Talk, holds: Arc<crate::Holds>, cadence: Duration, rx: Receiver<Cmd>) {
         let entry_arc = entry;
         let entry: &BoardEntry = &entry_arc;
         let head = entry.board.health().map(|h| h.log_position()).unwrap_or(0);
@@ -204,6 +224,8 @@ impl<'b> Worker<'b> {
             reopen_store,
             data_dir,
             talk,
+            holds,
+            cadence,
             consumer: None,
             published_since: head,
             drafts_since: HashMap::new(),
@@ -215,26 +237,32 @@ impl<'b> Worker<'b> {
         worker.mount();
         worker.read_mode();
         worker.emit_index();
-        while let Ok(cmd) = rx.recv() {
-            match cmd {
-                Cmd::Tick(position) => worker.tick(position),
-                Cmd::Unreachable(text) => worker.unreachable(&text),
-                Cmd::Widen(entry) => worker.widen(&entry),
-                Cmd::Narrow(principal) => worker.narrow(principal),
-                Cmd::Closing(entry, reply) => {
+        // The loop wakes on each command, and on a timeout every `cadence` to
+        // SERVICE held bursts — the probe (§3c.4): a poisoned, halted, stopped
+        // or unreachable board commits nothing, so `Cmd::Tick` alone never
+        // ends such a hold.
+        loop {
+            match rx.recv_timeout(worker.cadence) {
+                Ok(Cmd::Tick(position)) => worker.tick(position),
+                Ok(Cmd::Unreachable(text)) => worker.unreachable(&text),
+                Ok(Cmd::Widen(entry)) => worker.widen(&entry),
+                Ok(Cmd::Narrow(principal)) => worker.narrow(principal),
+                Ok(Cmd::Closing(entry, reply)) => {
                     worker.read_drafts(&entry);
                     let sessions = Arc::clone(&worker.sessions);
                     sessions.release(&entry.board, entry.facts.principal, &mut worker);
                     let _ = reply.send(());
                 }
-                Cmd::Search { who, query, opts, reindex, reply } => {
+                Ok(Cmd::Search { who, query, opts, reindex, reply }) => {
                     let _ = reply.send(worker.search(who, &query, &opts, reindex));
                 }
-                Cmd::Stop(reply) => {
+                Ok(Cmd::Stop(reply)) => {
                     worker.close();
                     let _ = reply.send(());
                     return;
                 }
+                Err(RecvTimeoutError::Timeout) => worker.holds.service(&worker.entry.reference),
+                Err(RecvTimeoutError::Disconnected) => break,
             }
         }
         worker.close();
@@ -257,6 +285,7 @@ impl<'b> Worker<'b> {
     }
 
     fn tick(&mut self, position: u64) {
+        let was_unreachable = self.unreachable;
         if self.unreachable {
             self.unreachable = false;
             self.bus.emit(DAEMON, json!({"board": self.entry.reference, "state": "running"}));
@@ -275,6 +304,11 @@ impl<'b> Worker<'b> {
         self.read_feed();
         self.read_mode();
         self.emit_index();
+        // The `running` emit ends an unreachable hold at this board (§3c.4):
+        // the resend runs where the board is back and a session stands.
+        if was_unreachable {
+            self.holds.service(&self.entry.reference);
+        }
     }
 
     fn unreachable(&mut self, text: &str) {
@@ -384,6 +418,9 @@ impl<'b> Worker<'b> {
     /// restart with the flag changed).
     fn read_mode(&mut self) {
         let Ok(health) = self.entry.board.health() else { return };
+        // ONE member more read per tick (§3c.4): `writes.halted` tells the hold,
+        // a hold `halted` beginning at the first `true`.
+        self.holds.note_health(&self.entry.reference, health.body["writes"]["halted"].as_bool().unwrap_or(false), health.log_position());
         let mode = Mode::of(&health);
         if self.last_mode != Some(mode) {
             let first = self.last_mode.is_none();

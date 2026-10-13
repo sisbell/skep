@@ -20,13 +20,16 @@ pub struct Event {
     pub data: Value,
 }
 
-/// The six names, as the contract spells them.
+/// The seven names, as the contract spells them.
 pub const MODE: &str = "mode";
 pub const SESSION_DIED: &str = "session-died";
 pub const DAEMON: &str = "daemon";
 pub const FEED: &str = "feed";
 pub const INDEX: &str = "index";
 pub const MOMENT: &str = "moment";
+/// A document's HELD state as it moves (`client.md` §4b.2; §3c): `holding`,
+/// `sending`, `kept`, `refused` or `moved`, with the count of lines still held.
+pub const HELD: &str = "held";
 
 /// The bus: the subscribers, each a channel's sending half.
 #[derive(Debug, Default)]

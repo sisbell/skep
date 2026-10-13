@@ -84,6 +84,25 @@ const SHAPES: &[Shape] = &[
     Shape { name: "MomentEvent", open: false, doc: "`moment(id, kind, data)` — a PUBLIC moment of a walk; answered by `answer(id, value)` or declined by `cancel(id)` where `answerable`", fields: &[req("id", "string"), req("kind", "'statement' | 'label' | 'ask' | 'yes_no'"), req("data", "unknown"), req("walk", "string"), req("board", "string | null"), req("answerable", "boolean")] },
     Shape { name: "Answer", open: false, doc: "`answer(id, value)`", fields: &[req("id", "string"), req("value", "unknown")] },
     Shape { name: "Cancel", open: false, doc: "`cancel(id)`", fields: &[req("id", "string")] },
+    Shape {
+        name: "HeldAnswer",
+        open: false,
+        doc: "the `op` answer where the burst's board is HELD (§3c): the shell's own answer, never `ack` — the page takes it as accepted and not acked; `unwritable` where the device refused the line and the burst is held in memory alone",
+        fields: &[req("resp", "'held'"), req("held", "number"), req("cause", "string"), opt("unwritable", "string")],
+    },
+    Shape {
+        name: "HeldRow",
+        open: false,
+        doc: "`held(session)` — one held burst of the acting principal at the session's board, in resend order (§3c.2): `held` the ordinal, `doc` the draft, `base` the resend's read start, `frame` the page's frame as composed (no attest), `sent` whether a dial's answer was lost, `refusal` the board's verdict for a REFUSED run",
+        fields: &[req("held", "number"), req("doc", "string"), req("base", "number"), req("frame", "unknown"), req("cause", "string"), req("sent", "boolean"), req("time", "number"), opt("refusal", "unknown")],
+    },
+    Shape {
+        name: "HeldEvent",
+        open: false,
+        doc: "`held(board, session, {doc, held, state, cause?})` (§4b.2) — a document's held state as it moves; `held` the count of lines still held on the document, `cause` the hold's token while `holding`",
+        fields: &[req("board", "string"), req("session", "string | null"), req("doc", "string"), req("held", "number"), req("state", "'holding' | 'sending' | 'kept' | 'refused' | 'moved'"), opt("cause", "string")],
+    },
+    Shape { name: "Resolve", open: false, doc: "`resolve(session, {held, act})` — the person's act at a REFUSED run's face or a MOVED document's", fields: &[req("session", "string"), req("held", "number"), req("act", "'drop' | 'send'")] },
 ];
 
 /// The calls, as the bridge spells them: the name, the argument type and
@@ -111,6 +130,8 @@ const CALLS: &[(&str, &str, &str)] = &[
     ("fetch", "{ session: string; i: string } | { guest: true; board?: string; origin?: string; i: string }", "Uint8Array"),
     ("restore", "{ session: string; i: string }", "never"),
     ("search", "{ session: string; board?: string; query: string; opts?: SearchOpts } | { guest: true; board: string; query: string; opts?: SearchOpts }", "SearchAnswer"),
+    ("held", "{ session: string }", "HeldRow[]"),
+    ("resolve", "{ session: string; held: number; act: 'drop' | 'send' }", "Empty"),
 ];
 
 /// THE FILE: the preamble, the aliases, every shape, the refusal union,
@@ -126,7 +147,7 @@ pub fn declarations() -> String {
     out.push_str("export interface SearchOpts { limit?: number; offset?: number; reindex?: boolean }\n");
     out.push_str("export type Refusal = RefusedByBoard | HaltFace | BlockedFace | Unreachable | ShellRefusal;\n");
     out.push_str("export type Outcome<T> = { result: T } | { refused: Refusal };\n");
-    out.push_str("export type EventName = 'mode' | 'session-died' | 'daemon' | 'feed' | 'index' | 'moment';\n\n");
+    out.push_str("export type EventName = 'mode' | 'session-died' | 'daemon' | 'feed' | 'index' | 'moment' | 'held';\n\n");
     for shape in SHAPES {
         let _ = writeln!(out, "/** {} */", shape.doc);
         let _ = writeln!(out, "export interface {} {{", shape.name);

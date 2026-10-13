@@ -25,6 +25,10 @@
 //!   board's own verdict verbatim, a halt's face, the block, the
 //!   unreachable board, and the shell's own armed refusals, each named by
 //!   ONE token from one closed list.
+//! * `held` — THE HELD-BURST STORE (`client.md` §3c): one append-only file
+//!   per (board, principal) beside the key store — a header and two line
+//!   forms, the directory lock, the read-whole with P38's faces, the synced
+//!   append (persist-first) and the compaction at every line done.
 //! * [`script`] — THE DEV ARM's SCRIPT: the grammar a script file's answers
 //!   are parsed by.
 //! * `dev_arm` — THE DEV ARM for the SECRET and CONSENT moments (§4b.3): a
@@ -47,7 +51,12 @@
 //! * `feed` — THE FEED CONSUMER's thread per board: `search::Consumer`
 //!   polled on each `/events` commit, the `/changes` pages re-read for the
 //!   `feed` events, the `index`, `mode` and `daemon` events as the state
-//!   moves, and the bridge's `search` call answered off it.
+//!   moves, and the bridge's `search` call answered off it; it also reads
+//!   `writes.halted` per tick and runs THE PROBE on a timed wake.
+//! * `hold` — THE HOLD (`client.md` §3c.4, §3c.5): the per-(board, principal)
+//!   queue over `held`'s file, the classification table over what a dial
+//!   answers, and the resend walk the feed worker's probe drains — one read
+//!   per document, with §3c.5's three outcomes.
 //! * `shell` — [`Shell`]: the boards, the sessions, the session mode
 //!   (bare as the claimant, or signed with a dev key), and one private
 //!   method per §4b.1 row behind [`Shell::call`], each taking and answering
@@ -72,12 +81,14 @@ mod refs;
 mod log;
 pub mod events;
 mod refusal;
+mod held;
 pub mod script;
 mod dev_arm;
 mod person;
 mod attest;
 mod sessions;
 mod feed;
+mod hold;
 mod shell;
 pub mod shapes;
 
@@ -85,6 +96,11 @@ pub use events::{Event, EventBus};
 pub use log::Log;
 pub use refusal::Refusal;
 pub use shell::{ArmConfig, Fetched, NodeState, SessionMode, Shell, ShellOptions, CALLS};
+
+/// The held-burst holds, reached by the feed worker (the probe wake, the
+/// `writes.halted` read) through the crate root so `feed` names no module
+/// `src/lib.rs` declares below it — the `crate::Talk` rule (`tests/it/tidy.rs`).
+pub(crate) use hold::Holds;
 
 /// Where the shell's TALK lines go: the verb's stderr, a suite's vector.
 pub type Talk = Arc<dyn Fn(&str) + Send + Sync>;

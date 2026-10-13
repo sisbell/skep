@@ -63,6 +63,10 @@ fn samples() -> Vec<(&'static str, Value)> {
         ("MomentEvent", json!({"id": "m-0", "kind": "label", "data": {}, "walk": "claim", "board": "b-0", "answerable": true})),
         ("Answer", json!({"id": "m-0", "value": "phone"})),
         ("Cancel", json!({"id": "m-0"})),
+        ("HeldAnswer", json!({"resp": "held", "held": 1, "cause": "unreachable"})),
+        ("HeldRow", json!({"held": 1, "doc": "1.0.1.0.1", "base": 5, "frame": {"op": "insert"}, "cause": "unreachable", "sent": false, "time": 1})),
+        ("HeldEvent", json!({"board": "b-0", "session": "s-0", "doc": "1.0.1.0.1", "held": 2, "state": "holding", "cause": "unreachable"})),
+        ("Resolve", json!({"session": "s-0", "held": 1, "act": "drop"})),
     ]
 }
 
@@ -104,10 +108,10 @@ fn the_file_names_every_shape_call_and_event() {
     for (name, _, _) in CALLS {
         assert!(text.contains(&format!("  {name}(args: ")), "{name}");
     }
-    assert_eq!(CALLS.len(), 20, "the twenty calls");
+    assert_eq!(CALLS.len(), 22, "the twenty-two calls");
     assert_eq!(CALLS.iter().map(|c| c.0).collect::<Vec<_>>(), crate::CALLS, "the declared rows are the dispatch's calls, in its order");
     assert!(text.contains("  answer(args: Answer)") && text.contains("  cancel(args: Cancel)"));
-    for event in [events::MODE, events::SESSION_DIED, events::DAEMON, events::FEED, events::INDEX, events::MOMENT] {
+    for event in [events::MODE, events::SESSION_DIED, events::DAEMON, events::FEED, events::INDEX, events::MOMENT, events::HELD] {
         assert!(text.contains(&format!("'{event}'")), "{event}");
     }
     assert!(text.contains("  warning?: string;"), "an optional field renders with `?`");

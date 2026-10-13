@@ -1564,6 +1564,7 @@ dependencies = [
  "skep-address",
  "skep-client",
  "skep-identity",
+ "skep-kernel",
  "skep-search",
  "skepd",
  "tempfile",

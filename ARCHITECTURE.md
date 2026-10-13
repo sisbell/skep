@@ -1112,12 +1112,16 @@ in the order `src/lib.rs` declares them, each naming only those above it
   `LoggingDialer`, the one `PlainHttp` every board dials through — so the
   bare set is met by the shell and never by the page, and no dial escapes
   the log; no token, header or body is kept.
-- `events.rs` `EventBus`: the six events as values, fanned out to every
+- `events.rs` `EventBus`: the seven events as values, fanned out to every
   subscriber in order.
 - `refusal.rs` `Refusal`: the one shape the page renders — the board's
   verdict verbatim, a halt's face under the armed name the row spells, the
   block, the unreachable board, the shell's own — each with ONE `name`;
   `Name`, the closed list of every name the shell spells.
+- `held.rs` the HELD-BURST STORE (`client.md` §3c): one append-only file per
+  (board, principal) beside the key store — a header and two line forms, the
+  `flock` on `held/<chain>/lock`, the read-whole with P38's faces, each line
+  synced before `op` answers `held`, the file removed once every line is done.
 - `script.rs` the dev arm's SCRIPT: the grammar a script file's answers are
   parsed by, one per line in order.
 - `dev_arm.rs` the DEV ARM: the SECRET and CONSENT moments answered from a
@@ -1145,12 +1149,20 @@ in the order `src/lib.rs` declares them, each naming only those above it
   and the consumer's owner — the `feed`, `index`, `mode` and `daemon`
   events, a death its reads meet ended by `Sessions::end`, and the
   `search` call answered over a channel so the consumer never crosses a
-  thread; `BoardEntry`, one board of the shell.
-- `shell.rs` `Shell`: the boards, the sessions, `SessionMode`, the twenty
-  calls as private methods behind `call(name, args)`, the dispatch, which
-  logs each; `fetch`, public as a stream; `answer`, `cancel`, `shutdown`;
-  `set_node_state`, the own node's state its owner reports, which `probe`
-  answers and the `daemon` event announces at that node's board.
+  thread; `BoardEntry`, one board of the shell; it also reads
+  `writes.halted` per tick and drives the held-burst probe on a timed wake.
+- `hold.rs` the HELD-BURST HOLD (`client.md` §3c.4, §3c.5): the per-(board,
+  principal) queue over `held`'s file, the classification table over what a
+  dial answers, and the resend walk — one `/changes` read per document
+  before its first resend, with §3c.5's three outcomes — the feed worker's
+  probe drains it; the backing of `held` and `resolve`.
+- `shell.rs` `Shell`: the boards, the sessions, `SessionMode`, the
+  twenty-two calls as private methods behind `call(name, args)`, the
+  dispatch, which logs each; the `op` burst branch answers `held` where the
+  board cannot take a burst; `fetch`, public as a stream; `answer`,
+  `cancel`, `shutdown`; `set_node_state`, the own node's state its owner
+  reports, which `probe` answers and the `daemon` event announces at that
+  node's board.
 - `shapes.rs` the declarations' table, `declarations()`, pinned by its
   suite.
 
@@ -1208,6 +1220,16 @@ Rules that hold across its files:
   the suite round-trips; a required field missing, or a built field
   undeclared on a shape the table does not mark `open`, is red, and the
   declared call rows are the dispatch's `CALLS`.
+- **Persist first.** A `held` answer is a promise the disk already keeps:
+  the burst's line is written and synced before `op` answers `held`
+  (§3c.3, J1), so a crash after the answer loses nothing of it. A second
+  shell on the same data directory finds the `held/<chain>/` lock held and
+  holds nothing — its bursts answer `held` with `cause: other_window`, kept
+  in memory alone.
+- **The close finishes the dial, then keeps.** `shutdown` writes nothing of
+  the store — every held line is already on disk — and closes the sessions
+  and stops the feeds (§3c.6's order); a crash between any two steps loses
+  at most one burst (the open or in-flight one), R14's bound.
 
 Its suite runs against a daemon spawned in-process (`shell/tests.rs`):
 the bare mode's claim through the shell's own call with the anchor boxes
@@ -1220,8 +1242,16 @@ its `session-died`; the signed mode's mint, shot and V-spec link acked
 under the composed attest; the daemon's restart under the signed mode,
 the session it ended re-opened under a fresh reference and written under;
 the own node's state announced at its board; and the declared fields of
-the real answers. The end's once-only gate and the supplement's release
-are held by `sessions.rs`'s own suite — two hands at one death, one
+the real answers. The HELD-BURST STORE is held there too: a burst held
+when the daemon is stopped and resent `kept` after a restart at the same
+port, the kernel poison holding a burst `poisoned` then `halted`, a
+refused run with its `behind` lines and `resolve`'s two acts, the close
+order and the relaunch's launch read, a second principal's file untouched
+under the first's session; the store's own faces (the header, `v` first,
+the torn and damaged lines, the aside, the lock, compaction, persist-first)
+by `held.rs`'s suite and the classification table and the resend's three
+outcomes by `hold.rs`'s. The end's once-only gate and the supplement's
+release are held by `sessions.rs`'s own suite — two hands at one death, one
 derivation, one event; a leaving session's supplement handed to the
 standing one — and the arrangement by `tests/it/tidy.rs`.
 

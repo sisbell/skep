@@ -40,4 +40,8 @@ serde_json.workspace = true
 # skep-client's own suite takes it: the shell's calls judged against a
 # board, never a fake.
 skepd = { path = "../skepd", features = ["test-hooks"] }
+# The `Step` enum the daemon's `fail_the_next_checkpoint_step` hook takes, so
+# the shell's suite can poison the kernel (`JournalBarrier` + `JournalRepair`)
+# and watch a burst held `poisoned`, resent after a restart (§3c.4).
+skep-kernel = { path = "../skep-kernel" }
 tempfile.workspace = true

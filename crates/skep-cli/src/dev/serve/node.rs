@@ -7,12 +7,16 @@
 //! `POST /bridge/fault/<door>` reaches them: the three
 //! permit pools held full (`write_busy`, `scan_busy`, `fetch_busy`), the
 //! held permits released, the head writer's next refusal, the feed walk's
-//! hold and release, the media floor's free space, and the checkpoint
-//! thread's next panic. The kernel's `fail_the_next` is reached through
-//! `Daemon::fail_the_next_checkpoint_step`, which takes `skep-kernel`'s
-//! `Step` — a type this binary does not name — so that door is not
-//! offered here (reported). Without the feature every door of this module
-//! is the one refusal, `not_built_in`, and `--own` halts before serving.
+//! hold and release, the media floor's free space, the checkpoint thread's
+//! next panic, and `halt_writes` — the attest store's next write failed, so a
+//! signed commit below the reclaim floor halts the write path and every write
+//! after answers `poisoned` (the shell then holds the burst; §3c.4). The
+//! kernel's `fail_the_next` POISON door is NOT offered here: it takes
+//! `skep-kernel`'s `Step`, a type this binary does not name and cannot without
+//! a `skepd` re-export or a `skep-kernel` dependency, neither this lane's — the
+//! shell's own suite drives the kernel poison in-process instead (reported).
+//! Without the feature every door of this module is the one refusal,
+//! `not_built_in`, and `--own` halts before serving.
 
 use std::path::Path;
 
@@ -21,7 +25,7 @@ use skep_client::halt::Halt;
 use skep_client::Origin;
 
 /// The doors by name, as the route spells them.
-pub const DOORS: [&str; 9] = ["write_busy", "scan_busy", "fetch_busy", "release", "refuse_next_head", "hold_feed_walk", "release_feed_walk", "media_free_space", "panic_checkpoint_thread"];
+pub const DOORS: [&str; 10] = ["write_busy", "scan_busy", "fetch_busy", "release", "refuse_next_head", "hold_feed_walk", "release_feed_walk", "media_free_space", "panic_checkpoint_thread", "halt_writes"];
 
 #[cfg(feature = "dev-hooks")]
 mod built {
@@ -129,6 +133,13 @@ mod built {
             }
             "panic_checkpoint_thread" => {
                 daemon.panic_the_checkpoint_thread_next();
+                json!({"door": door})
+            }
+            "halt_writes" => {
+                // The attest store's next write fails: a signed commit below the
+                // reclaim floor halts the write path, and every write after it
+                // answers `poisoned` (§3c.4; the shell holds the burst).
+                daemon.fail_the_attest_stores_next_write();
                 json!({"door": door})
             }
             other => return Err(format!("no door named `{other}`: the doors are {}", super::DOORS.join(", "))),

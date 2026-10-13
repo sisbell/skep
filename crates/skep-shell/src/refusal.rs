@@ -96,6 +96,14 @@ impl Name {
     pub const NO_ADDRESS: Name = Name("no_address");
     /// An attest asked of a session the board answered no account for.
     pub const NO_ACCOUNT: Name = Name("no_account");
+    /// `held(session)`: the held-burst file was written by a newer skep, or its
+    /// body is damaged — the halt's face naming the path (PATTERNS P38; §3c.3).
+    pub const STORE_HALTED: Name = Name("store_halted");
+    /// `resolve(session, …)`: no held line of that ordinal stands.
+    pub const NO_SUCH_HELD: Name = Name("no_such_held");
+    /// `resolve(session, …)`: the line is `holding` or `sending`, not refused
+    /// or moved — no act exists until the board answers (P10).
+    pub const NOT_RESOLVABLE: Name = Name("not_resolvable");
 
     // ── THE HALTS' ARMED NAMES: `Refusal::named`, `Refusal::of_named` ────
 

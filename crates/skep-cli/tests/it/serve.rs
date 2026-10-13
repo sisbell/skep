@@ -413,6 +413,10 @@ fn f1_every_call_over_http_in_the_bare_mode() {
     let guest_search = keep(provider.result("search", json!({"guest": true, "board": board, "query": "hello"})));
     assert!(guest_search["hits"].is_array());
     assert_eq!(keep(provider.refused("search", json!({"session": session, "query": "x".repeat(1025)})))["name"], "query_too_long");
+    // held and resolve: no burst is held on this up board, so `held` is empty
+    // and `resolve` of an ordinal that does not stand is `no_such_held`.
+    assert_eq!(keep(provider.result("held", json!({"session": session}))), json!([]));
+    assert_eq!(keep(provider.refused("resolve", json!({"session": session, "held": 1, "act": "drop"})))["name"], "no_such_held");
     // The ceremonial calls, each to its first refusal or its first moment:
     // the claim on a board another store claimed.
     let claimed_by_another = keep(first_refusal(&provider, &rx, "claim", json!({"board": board})));
@@ -766,9 +770,51 @@ fn f6_under_dev_hooks_the_fault_doors_force_the_daemons_states_live() {
     let scan = provider.refused("op", json!({"guest": true, "board": board, "frame": skep_client::board::frames::find_links_ftt("1.1.0.1.0.1.0.3.13", "1.0.1")}));
     assert_eq!(scan["name"], "scan_busy", "{scan}");
     provider.result("fault/release", json!({}));
+    // The hold door `halt_writes` arms the attest store's next-write failure:
+    // the door answers its name. (A hold from it needs a signed commit below
+    // the reclaim floor, which this fresh board does not reach; the shell's own
+    // suite drives the write-path halt in-process, and the stop/restart test
+    // below drives a live hold through the provider.)
+    assert_eq!(provider.result("fault/halt_writes", json!({}))["door"], "halt_writes");
     assert_eq!(provider.refused("fault/no_such_door", json!({}))["name"], "not_built_in");
     let said = provider.talk();
     assert_eq!(provider.stop(), 0, "{said}");
+}
+
+// ── THE HELD-BURST STORE through the provider ────────────────────────────────
+
+/// A burst held `unreachable` when the daemon the provider dials stops, the
+/// daemon restarted at the same port, and the held burst resent and `kept` —
+/// the `held` event on the provider's stream and the row read back.
+#[test]
+fn a_held_burst_is_resent_through_the_provider_after_a_restart() {
+    let dir = tempfile::tempdir().unwrap();
+    let sd = spawn(&dir.path().join("board"), true);
+    let port = sd.port();
+    let board_origin = origin(port);
+    claim_board(&board_origin, &dir.path().join("claimant"), &dir.path().join("anchors"));
+    let provider = Provider::start(&["--board", &board_origin, "--session", "bare", "--principal", "1", "--dir", s(&dir.path().join("store"))]);
+    let rx = provider.events();
+    let board = provider.result("boards", json!({}))[0]["board"].as_str().unwrap().to_string();
+    let session = provider.result("session", json!({"board": board}))["session"].as_str().unwrap().to_string();
+    let draft = provider.result("op", json!({"session": session, "frame": {"op": "create_new_document", "account": "1.0.1"}}))["addr"].as_str().unwrap().to_string();
+    provider.result("op", json!({"session": session, "frame": {"op": "insert", "doc": draft, "at": {"subspace": "1", "ordinal": "1"}, "values": ["a"]}}));
+    // The daemon stops: the next burst is held `unreachable`.
+    sd.shutdown();
+    let held = provider.result("op", json!({"session": session, "frame": {"op": "insert", "doc": draft, "at": {"subspace": "1", "ordinal": "2"}, "values": ["b"]}}));
+    assert_eq!((held["resp"].as_str(), held["cause"].as_str()), (Some("held"), Some("unreachable")), "{held}");
+    assert_eq!(provider.result("held", json!({"session": session})).as_array().unwrap().len(), 1);
+    // Restart at the same port; a fresh session re-acquired; the resend `kept`.
+    let sd = spawn_at(&dir.path().join("board"), true, port);
+    next_event(&rx, "session-died", |v| v["session"] == session);
+    let session2 = provider.result("session", json!({"board": board}))["session"].as_str().unwrap().to_string();
+    let kept = next_event(&rx, "held", |v| v["doc"] == draft && v["state"] == "kept");
+    assert_eq!(kept["board"], board);
+    assert_eq!(provider.result("held", json!({"session": session2})), json!([]), "the file compacted away");
+    let read = provider.result("op", json!({"session": session2, "frame": skep_client::board::frames::retrieve_v(&draft, 2, 1)}));
+    assert_eq!(read["items"][0]["content"], "b", "the resent burst is on the board: {read}");
+    assert_eq!(provider.stop(), 0);
+    sd.shutdown();
 }
 
 // ── F7 ─────────────────────────────────────────────────────────────────────

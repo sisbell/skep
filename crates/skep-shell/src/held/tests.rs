@@ -7,7 +7,13 @@
 //! it was held, and the store is its owner's alone. And the queue as the
 //! memory with the file its copy: a line the device refused stands in the
 //! queue under its ordinal, a re-mark reads back as the one line it
-//! re-marks, and a `done` the device refused still settles its line.
+//! re-marks, and a `done` the device refused still settles its line. THE
+//! STORE's BUDGETS: the queue's frames held to the board's frame cap, an
+//! unchanged re-mark writing nothing, the ordinals held to the page's, the
+//! writer refusing a line its reader would halt on and copying none past the
+//! line bound, and the reader halting on any line it cannot read whole — no
+//! UTF-8, a member missing or of another type, an ordinal past the page's, a
+//! line past the bound — while ignoring a torn last line cut mid-character.
 
 use std::cell::{Cell, RefCell};
 use std::fs;
@@ -79,7 +85,7 @@ fn the_header_is_written_once_v_read_first_and_the_forms_are_byte_equal() {
     let d = dir(&tmp);
     let mut queue = live(d.open_file(7, "1.0.7").unwrap());
     assert!(!queue.on_disk(), "no file until the first append");
-    let held = queue.hold("1.0.7.0.1", None, 5, json!({"op": "insert"}), Reason::of("unreachable", false));
+    let held = queue.hold("1.0.7.0.1", None, 5, json!({"op": "insert"}), Reason::of("unreachable", false)).unwrap();
     assert!(held.unwritten.is_none(), "{:?}", held.unwritten);
     assert_eq!(held.k, 1);
     assert!(queue.on_disk(), "the first hold writes the header and the line");
@@ -196,9 +202,9 @@ fn the_file_compacts_once_every_line_is_done() {
     let tmp = TempDir::new().unwrap();
     let d = dir(&tmp);
     let mut queue = live(d.open_file(1, "1.0.1").unwrap());
-    let k1 = queue.hold("d1", None, 0, json!({"op": "insert"}), Reason::of("stopped", false)).k;
-    let k2 = queue.hold("d2", None, 0, json!({"op": "delete"}), Reason::of("behind", false)).k;
-    let k3 = queue.hold("d3", None, 0, json!({"op": "insert"}), Reason::of("behind", false)).k;
+    let k1 = queue.hold("1.0.1.0.1", None, 0, json!({"op": "insert"}), Reason::of("stopped", false)).unwrap().k;
+    let k2 = queue.hold("1.0.1.0.2", None, 0, json!({"op": "delete"}), Reason::of("behind", false)).unwrap().k;
+    let k3 = queue.hold("1.0.1.0.3", None, 0, json!({"op": "insert"}), Reason::of("behind", false)).unwrap().k;
     assert!(matches!(queue.done(99, Done::Kept { at: None }), Err(DoneError::NoSuchLine)), "a done for no line is refused");
     queue.done(k1, Done::Kept { at: Some(42) }).unwrap();
     queue.done(k2, Done::Dropped).unwrap();
@@ -233,23 +239,23 @@ fn an_appends_line_is_on_disk_before_its_answer() {
     let probe = Arc::clone(&seen);
     AFTER_SYNC.with(|s| {
         *s.borrow_mut() = Some(Box::new(move |p: &Path| {
-            let on_disk = fs::read_to_string(p).unwrap_or_default().contains("\"doc\":\"d1\"");
+            let on_disk = fs::read_to_string(p).unwrap_or_default().contains("\"doc\":\"1.0.1.0.1\"");
             *probe.lock().unwrap() = on_disk;
         }))
     });
-    let first = queue.hold("d1", None, 0, json!({"op": "insert"}), Reason::of("stopped", false));
+    let first = queue.hold("1.0.1.0.1", None, 0, json!({"op": "insert"}), Reason::of("stopped", false)).unwrap();
     assert!(first.unwritten.is_none(), "{:?}", first.unwritten);
     assert!(*seen.lock().unwrap(), "the line is on disk when the append's seam runs, before the answer");
     AFTER_SYNC.with(|s| *s.borrow_mut() = None);
 
     // The forced sync failure: the device's refusal beside a line that stands.
     FAIL_SYNC.with(|f| f.set(true));
-    let refused = queue.hold("d2", None, 0, json!({"op": "insert"}), Reason::of("stopped", false));
+    let refused = queue.hold("1.0.1.0.2", None, 0, json!({"op": "insert"}), Reason::of("stopped", false)).unwrap();
     FAIL_SYNC.with(|f| f.set(false));
     assert_eq!(refused.unwritten.expect("the device refused the copy").kind(), std::io::ErrorKind::StorageFull, "store_unwritable");
     assert_eq!(refused.k, 2);
     assert_eq!(ks(&queue), [1, 2], "the refused line stands in the queue");
-    let next = queue.hold("d3", None, 0, json!({"op": "insert"}), Reason::of("behind", false));
+    let next = queue.hold("1.0.1.0.3", None, 0, json!({"op": "insert"}), Reason::of("behind", false)).unwrap();
     assert!(next.unwritten.is_none());
     assert_eq!((next.k, ks(&queue)), (3, vec![1, 2, 3]), "the next line takes the ordinal after it");
 }
@@ -259,8 +265,8 @@ fn an_appends_line_is_on_disk_before_its_answer() {
 #[test]
 fn a_queue_in_memory_alone_keeps_its_lines_and_writes_nothing() {
     let mut queue = HeldQueue::in_memory();
-    let k1 = queue.hold("d1", None, 0, json!({"op": "insert"}), Reason::of("unreachable", true));
-    let k2 = queue.hold("d1", None, 0, json!({"op": "insert"}), Reason::of("behind", false));
+    let k1 = queue.hold("1.0.1.0.1", None, 0, json!({"op": "insert"}), Reason::of("unreachable", true)).unwrap();
+    let k2 = queue.hold("1.0.1.0.1", None, 0, json!({"op": "insert"}), Reason::of("behind", false)).unwrap();
     assert!(k1.unwritten.is_none() && k2.unwritten.is_none());
     assert_eq!((k1.k, k2.k), (1, 2));
     queue.remark(1, Reason::refused("out_of_bounds", json!({"code": "out_of_bounds"}))).unwrap();
@@ -279,8 +285,8 @@ fn a_remarked_line_reads_back_once_with_its_new_cause() {
     let tmp = TempDir::new().unwrap();
     let d = dir(&tmp);
     let mut queue = live(d.open_file(1, "1.0.1").unwrap());
-    let k = queue.hold("d1", None, 4, json!({"op": "insert"}), Reason::of("unreachable", true)).k;
-    queue.hold("d2", None, 4, json!({"op": "insert"}), Reason::of("behind", false));
+    let k = queue.hold("1.0.1.0.1", None, 4, json!({"op": "insert"}), Reason::of("unreachable", true)).unwrap().k;
+    queue.hold("1.0.1.0.2", None, 4, json!({"op": "insert"}), Reason::of("behind", false)).unwrap();
     queue.remark(k, Reason::of("moved", false)).unwrap();
     queue.remark(k, Reason::of("moved", false)).unwrap();
     let reopened = live(d.open_file(1, "1.0.1").unwrap());
@@ -298,8 +304,8 @@ fn a_done_the_device_refused_still_settles_its_line() {
     let tmp = TempDir::new().unwrap();
     let d = dir(&tmp);
     let mut queue = live(d.open_file(1, "1.0.1").unwrap());
-    let k1 = queue.hold("d1", None, 0, json!({"op": "insert"}), Reason::of("unreachable", false)).k;
-    let k2 = queue.hold("d1", None, 0, json!({"op": "insert"}), Reason::of("behind", false)).k;
+    let k1 = queue.hold("1.0.1.0.1", None, 0, json!({"op": "insert"}), Reason::of("unreachable", false)).unwrap().k;
+    let k2 = queue.hold("1.0.1.0.1", None, 0, json!({"op": "insert"}), Reason::of("behind", false)).unwrap().k;
     FAIL_SYNC.with(|f| f.set(true));
     let settled = queue.done(k1, Done::Kept { at: Some(9) });
     FAIL_SYNC.with(|f| f.set(false));
@@ -318,16 +324,16 @@ fn after_compaction_the_next_line_recreates_the_file_header_first() {
     let tmp = TempDir::new().unwrap();
     let d = dir(&tmp);
     let mut queue = live(d.open_file(1, "1.0.1").unwrap());
-    let k = queue.hold("d1", None, 0, json!({"op": "insert"}), Reason::of("stopped", false)).k;
+    let k = queue.hold("1.0.1.0.1", None, 0, json!({"op": "insert"}), Reason::of("stopped", false)).unwrap().k;
     queue.done(k, Done::Dropped).unwrap();
     assert!(!queue.on_disk(), "the file compacted away");
-    let again = queue.hold("d2", None, 0, json!({"op": "insert"}), Reason::of("behind", false));
+    let again = queue.hold("1.0.1.0.2", None, 0, json!({"op": "insert"}), Reason::of("behind", false)).unwrap();
     assert!(again.unwritten.is_none(), "{:?}", again.unwritten);
     assert_eq!(again.k, 1, "the ordinals start again");
     let raw = fs::read_to_string(tmp.path().join("held").join(chain().to_string()).join("principal-1.held")).unwrap();
     let mut lines = raw.lines();
     assert_eq!(lines.next().unwrap(), format!("{{\"type\":\"skep-held-bursts\",\"v\":1,\"board\":\"{}\",\"principal\":1,\"account\":\"1.0.1\"}}", chain()));
-    assert!(lines.next().unwrap().starts_with("{\"held\":1,\"doc\":\"d2\","), "{raw}");
+    assert!(lines.next().unwrap().starts_with("{\"held\":1,\"doc\":\"1.0.1.0.2\","), "{raw}");
     assert_eq!(ks(&live(d.open_file(1, "1.0.1").unwrap())), [1], "a reopen reads the line");
 }
 
@@ -348,7 +354,7 @@ fn every_line_form_reads_back_as_it_was_held() {
     let reasons = [Reason::of("unreachable", false), Reason::of("poisoned", true), Reason::refused("out_of_bounds", verdict)];
     for id in [None, Some("plain"), Some("a \"quote\", a\nnewline, a \\ backslash")] {
         for reason in &reasons {
-            let held = queue.hold("1.0.1.0.1", id, 7, json!({"op": "insert", "values": ["é\"x"]}), reason.clone());
+            let held = queue.hold("1.0.1.0.1", id, 7, json!({"op": "insert", "values": ["é\"x"]}), reason.clone()).unwrap();
             assert!(held.unwritten.is_none(), "{:?}", held.unwritten);
         }
     }
@@ -370,10 +376,191 @@ fn the_store_is_its_owners_alone() {
     let d = dir(&tmp);
     let _lock = d.try_lock().unwrap().expect("the lock is free");
     let mut queue = live(d.open_file(1, "1.0.1").unwrap());
-    assert!(queue.hold("d1", None, 0, json!({"op": "insert"}), Reason::of("stopped", false)).unwritten.is_none());
+    assert!(queue.hold("1.0.1.0.1", None, 0, json!({"op": "insert"}), Reason::of("stopped", false)).unwrap().unwritten.is_none());
     let held = tmp.path().join("held");
     let board = held.join(chain().to_string());
     let mode = |p: &Path| fs::metadata(p).unwrap().permissions().mode() & 0o777;
     let modes = [mode(&held), mode(&board), mode(&board.join("principal-1.held")), mode(&board.join("lock"))];
     assert_eq!(modes, [0o700, 0o700, 0o600, 0o600], "held/, held/<chain>/, the file, the lock");
+}
+
+/// A frame whose JSON spelling is exactly `bytes` long.
+fn frame_of(bytes: usize) -> Value {
+    let overhead = json_len(&json!({"op": "insert", "values": [""]}));
+    json!({"op": "insert", "values": ["x".repeat(bytes - overhead)]})
+}
+
+/// The principal-1 file's length on disk, 0 where there is none.
+fn file_len(tmp: &TempDir) -> u64 {
+    fs::metadata(tmp.path().join("held").join(chain().to_string()).join("principal-1.held")).map_or(0, |m| m.len())
+}
+
+/// THE QUEUE's BUDGET: the standing frames held to [`MAX_HELD_FRAME_BYTES`]
+/// — a frame that would pass it refused `Full`, naming the bytes held and
+/// the frame's, and NOTHING of it written; one at the budget exactly held;
+/// and room made by a `done` (the mutant that never counts, or never
+/// uncounts, holds a page's frames without bound, or refuses for good).
+#[test]
+fn the_queue_holds_its_frames_within_its_budget_and_writes_nothing_past_it() {
+    let tmp = TempDir::new().unwrap();
+    let d = dir(&tmp);
+    let mut queue = live(d.open_file(1, "1.0.1").unwrap());
+    let first = queue.hold("1.0.1.0.1", None, 0, frame_of(MAX_HELD_FRAME_BYTES - 100), Reason::of("stopped", false)).unwrap().k;
+    let written = file_len(&tmp);
+    let refused = queue.hold("1.0.1.0.1", None, 0, frame_of(200), Reason::of("behind", false));
+    assert_eq!(refused.unwrap_err(), Unheld::Full { held: MAX_HELD_FRAME_BYTES - 100, adding: 200 });
+    assert_eq!((file_len(&tmp), ks(&queue)), (written, vec![first]), "nothing of the refused line is kept");
+    assert!(queue.hold("1.0.1.0.1", None, 0, frame_of(100), Reason::of("behind", false)).is_ok(), "a frame at the budget exactly");
+    queue.done(first, Done::Kept { at: Some(3) }).unwrap();
+    assert!(queue.hold("1.0.1.0.1", None, 0, frame_of(200), Reason::of("behind", false)).is_ok(), "a done makes room");
+}
+
+/// The ordinals are held to the page's ([`MAX_ORDINAL`]): the last one
+/// held, and the queue holding no line past it.
+#[test]
+fn the_queue_holds_no_ordinal_past_the_pages() {
+    let mut queue = HeldQueue::in_memory();
+    queue.next_k = MAX_ORDINAL;
+    assert_eq!(queue.hold("1.0.1.0.1", None, 0, json!({"op": "insert"}), Reason::of("stopped", false)).unwrap().k, MAX_ORDINAL);
+    assert!(matches!(queue.hold("1.0.1.0.1", None, 0, json!({"op": "insert"}), Reason::of("stopped", false)), Err(Unheld::Full { .. })));
+}
+
+/// THE WRITER holds no line its reader would halt on: a `doc` that is no
+/// document address in its one spelling, and a frame that is no object,
+/// refused `Unreadable` and written nowhere.
+#[test]
+fn the_writer_holds_no_line_its_reader_refuses() {
+    let tmp = TempDir::new().unwrap();
+    let d = dir(&tmp);
+    let mut queue = live(d.open_file(1, "1.0.1").unwrap());
+    for (doc, frame) in [("d1", json!({"op": "insert"})), ("01.0.1.0.1", json!({"op": "insert"})), ("1.0.1", json!({"op": "insert"})), ("1.0.1.0.1", json!(["insert"]))] {
+        assert_eq!(queue.hold(doc, None, 0, frame, Reason::of("stopped", false)).unwrap_err(), Unheld::Unreadable, "{doc}");
+    }
+    assert!(queue.lines().is_empty() && !queue.on_disk());
+}
+
+/// A RE-MARK THAT CHANGES NOTHING WRITES NOTHING: a board answering the
+/// same hold at every wake grows no file (the mutant that appends every
+/// re-mark copies the frame once a probe cadence for as long as the board
+/// says so); a new reason is written as before.
+#[test]
+fn an_unchanged_remark_writes_nothing() {
+    let tmp = TempDir::new().unwrap();
+    let d = dir(&tmp);
+    let mut queue = live(d.open_file(1, "1.0.1").unwrap());
+    let k = queue.hold("1.0.1.0.1", None, 0, json!({"op": "insert"}), Reason::of("unreachable", true)).unwrap().k;
+    let written = file_len(&tmp);
+    for _ in 0..3 {
+        queue.remark(k, Reason::of("unreachable", true)).unwrap();
+    }
+    assert_eq!(file_len(&tmp), written, "the same reason again writes nothing");
+    queue.remark(k, Reason::of("durability", false)).unwrap();
+    assert!(file_len(&tmp) > written, "a new reason is written");
+}
+
+/// The header T1 writes for principal 1, then `body`, as the principal's
+/// file — opened.
+fn opened_over(tmp: &TempDir, body: &[u8]) -> Opened {
+    let d = dir(tmp);
+    let mut bytes = format!("{{\"type\":\"skep-held-bursts\",\"v\":1,\"board\":\"{}\",\"principal\":1,\"account\":\"1.0.1\"}}\n", chain()).into_bytes();
+    bytes.extend_from_slice(body);
+    fs::write(tmp.path().join("held").join(chain().to_string()).join("principal-1.held"), bytes).unwrap();
+    d.open_file(1, "1.0.1").unwrap()
+}
+
+/// A whole `held` line of ordinal 1, `member` set to `value` (or removed,
+/// where `value` is `None`).
+fn line_with(member: &str, value: Option<Value>) -> Vec<u8> {
+    let mut line = json!({"held": 1, "doc": "1.0.1.0.1", "base": 0, "frame": {"op": "insert"}, "cause": "stopped", "sent": false, "time": 1});
+    match value {
+        Some(v) => line[member] = v,
+        None => {
+            line.as_object_mut().unwrap().remove(member);
+        }
+    }
+    format!("{line}\n").into_bytes()
+}
+
+/// THE READER reads every line WHOLE or halts the file as damaged (P38): a
+/// line that is no UTF-8 or no JSON object, a `held` line missing a member
+/// or holding one of another type — a `doc` that is no document address, a
+/// frame that is no object, a `sent` that is no boolean — an ordinal past
+/// the page's (the largest a `u64` holds among them, whose successor no
+/// longer panics), and a `done` line of another form; the same file with
+/// the line whole reads live (the mutants that default a missing member,
+/// read text lossily, or take any ordinal, rebuild the person's text out
+/// of a file no writer of this format wrote).
+#[test]
+fn a_line_the_reader_cannot_read_whole_halts_the_file() {
+    let valid = line_with("sent", Some(json!(false)));
+    let tmp = TempDir::new().unwrap();
+    assert_eq!(live(opened_over(&tmp, &valid)).lines().len(), 1, "the line whole reads live");
+    // The bytes no UTF-8 holds sit inside a string member, so a lossy read
+    // would make a whole line of them.
+    let mut not_utf8 = valid.clone();
+    let cause = valid.windows(7).position(|w| w == b"stopped").expect("the line names its cause") + 7;
+    not_utf8.splice(cause..cause, [0xff, 0xfe]);
+    let damaged: Vec<(&str, Vec<u8>)> = vec![
+        ("no UTF-8", not_utf8),
+        ("a JSON array", b"[1, 2]\n".to_vec()),
+        ("no doc", line_with("doc", None)),
+        ("a doc of no document", line_with("doc", Some(json!("d1")))),
+        ("a doc in another spelling", line_with("doc", Some(json!("01.0.1.0.1")))),
+        ("a frame of no object", line_with("frame", Some(json!("insert")))),
+        ("no frame", line_with("frame", None)),
+        ("a sent of no boolean", line_with("sent", Some(json!("no")))),
+        ("no cause", line_with("cause", None)),
+        ("no time", line_with("time", None)),
+        ("an id of no string", line_with("id", Some(json!(7)))),
+        ("an ordinal past the page's", line_with("held", Some(json!(MAX_ORDINAL + 1)))),
+        ("the largest ordinal a u64 holds", line_with("held", Some(json!(u64::MAX)))),
+        ("a done of another resolution", b"{\"done\":1,\"as\":\"lost\",\"time\":1}\n".to_vec()),
+        ("a dropped done naming a position", b"{\"done\":1,\"as\":\"dropped\",\"at\":4,\"time\":1}\n".to_vec()),
+        ("a done with no time", b"{\"done\":1,\"as\":\"kept\"}\n".to_vec()),
+        ("a done past the page's ordinals", format!("{{\"done\":{},\"as\":\"kept\",\"time\":1}}\n", MAX_ORDINAL + 1).into_bytes()),
+    ];
+    for (cell, line) in damaged {
+        let tmp = TempDir::new().unwrap();
+        let mut body = line;
+        body.extend_from_slice(&valid);
+        match opened_over(&tmp, &body) {
+            Opened::Halted { why, .. } => assert_eq!(why, HaltWhy::Damaged, "{cell}"),
+            Opened::Live { queue, .. } => panic!("{cell}: read live, {} lines", queue.lines().len()),
+        }
+    }
+}
+
+/// A TORN LAST LINE cut in the middle of a character is the burst a crash
+/// caught, ignored like any torn line — never decoded, never a halt — and
+/// the lines before it read.
+#[test]
+fn a_torn_last_line_cut_mid_character_is_ignored() {
+    let tmp = TempDir::new().unwrap();
+    let mut body = line_with("sent", Some(json!(true)));
+    body.extend_from_slice("{\"held\":2,\"doc\":\"1.0.1.0.1\",\"frame\":{\"values\":[\"é".as_bytes());
+    body.pop();
+    let queue = live(opened_over(&tmp, &body));
+    assert_eq!(ks(&queue), [1], "the torn line ignored, the line before it read");
+}
+
+/// THE LINE BOUND, at the reader and the writer: a line past
+/// [`MAX_HELD_LINE_BYTES`] halts the file as damaged, read no further than
+/// one byte past the bound; and a line the writer would make past it — a
+/// board's verdict past any a daemon answers — is held in the queue,
+/// answered `unwritten`, and never copied, so the file stays one its reader
+/// reads.
+#[test]
+fn a_line_past_the_line_bound_halts_the_reader_and_is_never_written() {
+    let tmp = TempDir::new().unwrap();
+    let mut long = vec![b'x'; MAX_HELD_LINE_BYTES + 1];
+    long.push(b'\n');
+    assert!(matches!(opened_over(&tmp, &long), Opened::Halted { why: HaltWhy::Damaged, .. }));
+    let tmp = TempDir::new().unwrap();
+    let d = dir(&tmp);
+    let mut queue = live(d.open_file(1, "1.0.1").unwrap());
+    let verdict = json!({"resp": "rejected", "code": "out_of_bounds", "detail": "x".repeat(MAX_HELD_LINE_BYTES)});
+    let held = queue.hold("1.0.1.0.1", None, 0, json!({"op": "insert"}), Reason::refused("out_of_bounds", verdict)).unwrap();
+    assert_eq!(held.unwritten.map(|e| e.kind()), Some(std::io::ErrorKind::InvalidInput), "the line is answered unwritten");
+    assert_eq!(ks(&queue), [held.k], "and stands in the queue");
+    assert!(!queue.on_disk(), "and is copied nowhere");
 }

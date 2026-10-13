@@ -22,21 +22,36 @@
 //! cannot make — a value it cannot read, a slot source it may not read, a
 //! term it cannot spell — halts naming what stopped it, and nothing is
 //! sent: the shell never sends a frame it could not sign.
+//!
+//! THE BOARD's BUDGETS, KEPT AS THE BOARD KEEPS THEM. Every read the
+//! composer makes is one a page's frame names, and every value it holds is
+//! one a board answered, so each of its costs is held to the budget the
+//! board's own parse, store or composer holds the same frame to — an array's
+//! length ([`MAX_WIRE_LIST`]), an address's components
+//! ([`MAX_ADDRESS_COMPONENTS`]), an insert's values ([`MAX_INSERT_VALUES`]),
+//! a slot's resolved spans ([`MAX_SLOT_SPANS`]), a shot's re-inserted values
+//! ([`MAX_REINSERTED_VALUES`]) and its body ([`MAX_FRAME_BYTES`]) — each
+//! counted BEFORE the work it bounds, a shot's whole arithmetic before its
+//! first read. A frame past one is a frame the board refuses whatever it
+//! carries, so the composer halts on it as on any frame it cannot make; no
+//! budget here is one the board does not keep, so no frame the board takes
+//! is refused for one.
 
 use std::borrow::Cow;
 use std::collections::HashMap;
 use std::num::NonZeroU64;
 
 use serde_json::{json, Value};
-use skep_address::{Address, Nat, Span, Tumbler};
-use skep_client::address::{document_of, parse_address};
+use skep_address::{Address, Level, Nat, Span, Tumbler};
+use skep_client::address::{document_of, is_address_text, parse_address};
 use skep_client::board::{frames, Answer, Board, Rejection, Token, T_SUPERSEDES};
+use skep_client::dial::MAX_ANSWER_BYTES;
 use skep_client::halt::Halt;
 use skep_client::sign::{sig_hex, Signer};
 use skep_identity::{
     entry_body_assert_sup, entry_body_edit_link, entry_body_emit, entry_body_empty, entry_body_insert, entry_body_make_link,
-    entry_body_make_link_replacing, entry_body_nullify, entry_body_publish, entry_frame, unit_span, BoardTerm, ContentFreeOp,
-    DocTerm, EntryBody, EntrySlot, LinkSlots, ShotBase, ShotSegmentPiece,
+    entry_body_make_link_replacing, entry_body_nullify, entry_frame, unit_span, BoardTerm, ContentFreeOp, DocTerm, EntryBody,
+    EntrySlot, LinkSlots, PublishBody, PublishRefusal, ShotBase, SIG_ALGS,
 };
 
 /// THE RETRACTION CLASS's reserved ghost tumbler — `[R]`, the fifth of the
@@ -47,6 +62,58 @@ pub const T_RETRACTION: &str = "1.1.0.1.0.1.0.1.5";
 
 /// The ten kinds, as the wire spells them.
 pub const CHECKED_SET: [&str; 10] = ["create_new_document", "fork", "version", "insert", "publish", "make_link", "emit", "nullify", "assert_sup", "edit_link"];
+
+/// THE BOARD's FRAME CAP — the most bytes one `/op` body may carry: skepd's
+/// `body_cap("POST", "/op")`, its `MAX_REQUEST_BODY`, refused `413` on the
+/// declared length before a byte is read. Two budgets are this number: a
+/// burst whose frame the board takes at no send never enters the hold
+/// (`hold`'s `Burst::admit`), and a shot's body is built under it — the
+/// parity the daemon's own composer holds a shot's body to (`auth/entry.rs`'s
+/// `MAX_SHOT_BODY_BYTES`), answering a longer one
+/// `attestation_invalid:frame_too_large`. Pinned equal to the board's by the
+/// suite.
+pub const MAX_FRAME_BYTES: usize = 8 * 1024 * 1024;
+
+/// The most elements one wire ARRAY may carry — skepd's codec's
+/// `MAX_WIRE_LIST`, refused at the board's parse (`malformed`, the frame
+/// unparsed: `op: unparseable`) whatever the array holds: a slot's
+/// addresses, V-specs or spans, `emit`'s `to`, a shot's `runs`. The codec's
+/// constant is private, so the suite pins this one by the board's
+/// behaviour: a list at it parsed, one past it refused.
+pub const MAX_WIRE_LIST: usize = 4096;
+
+/// The most spans one link slot may resolve to — M7's `MAX_SLOT_SPANS`, the
+/// per-slot budget the store charges a slot in whichever form, one span per
+/// run a V-spec resolves to, refused `slot_too_large`: a number the frame
+/// does not show, so the composer stops at the first span past it. Pinned
+/// equal to M7's by the suite.
+pub const MAX_SLOT_SPANS: usize = 4096;
+
+/// The most values one `insert` may mint — skepd's codec's
+/// `MAX_INSERT_VALUES`, refused at the board's parse, `malformed`; counted
+/// by [`values_of`] ahead of each element it is about to mint, a hex by its
+/// encoded length, as the codec counts it. Pinned by the board's behaviour,
+/// as [`MAX_WIRE_LIST`] is.
+pub const MAX_INSERT_VALUES: usize = 1 << 18;
+
+/// The most components one address may carry — skepd's codec's
+/// `MAX_TUMBLER_COMPONENTS`, refused at the board's parse, `malformed`;
+/// counted here before a component is converted or collected. Pinned by the
+/// board's behaviour, as [`MAX_WIRE_LIST`] is.
+pub const MAX_ADDRESS_COMPONENTS: usize = 256;
+
+/// The most values a shot may RE-INSERT — M5's `MAX_REINSERTED_VALUES`: the
+/// staging draft's runs' widths, summed, refused by the store as
+/// `too_many_values` by its request's arithmetic before a value is read
+/// (wire.md §The publish shot). Pinned equal to M5's by the suite.
+pub const MAX_REINSERTED_VALUES: u64 = 1 << 17;
+
+/// The most positions a shot may COPY IN by value — the body budget's own
+/// consequence and no number of its own: every value costs a shot's body at
+/// least its four-byte length prefix (`PublishBody::push`), so a body within
+/// [`MAX_FRAME_BYTES`] carries at most a quarter as many copied positions as
+/// it has bytes, whatever they hold.
+const MAX_SHOT_POSITIONS: u64 = (MAX_FRAME_BYTES / 4) as u64;
 
 /// Whether `op` is one of the ten kinds that have an entry frame.
 pub fn in_checked_set(op: &str) -> bool {
@@ -59,6 +126,17 @@ pub fn in_checked_set(op: &str) -> bool {
 /// it composed.
 pub fn wants_attest(frame: &Value) -> bool {
     frame["op"].as_str().is_some_and(in_checked_set) && frame.get("attest").is_none()
+}
+
+/// The most bytes the attest this composer attaches adds to a frame: the
+/// member `,"attest":{"alg":"…","sig":"…"}` at the longest algorithm token
+/// and the longest signature, in hex, of the rows a key signs under
+/// (`SIG_ALGS`) — the room a burst's frame keeps for the attest every send of
+/// it under a signed session carries.
+pub fn attest_room() -> usize {
+    let token = SIG_ALGS.iter().map(|row| row.token.len()).max().unwrap_or(0);
+    let sig = SIG_ALGS.iter().map(|row| row.sig_len()).max().unwrap_or(0);
+    r#","attest":{"alg":"","sig":""}"#.len() + token + 2 * sig
 }
 
 /// The composer: the board the reads are made at under `token`, the key
@@ -77,27 +155,85 @@ enum Doc {
     Pair { d_s: Address, d_a: Address },
 }
 
-/// One origin document's content read back: the I-address of each position
-/// and the value at it, keyed by the address's spelling.
-struct ReadBack {
-    values: HashMap<String, Vec<u8>>,
+/// One run of a shot as its body takes it, in the shot's V-order: a COPIED
+/// run by the I-addresses whose values it brings in — its origin, and the
+/// prefix, first last component and width of its I-addresses — or a WINDOW
+/// onto another document's I-space.
+enum ShotPart<'f> {
+    Copied { origin: &'f str, prefix: &'f str, first: u64, width: u64 },
+    Window { start: Address, width: NonZeroU64 },
 }
 
-/// One run of a shot as its body takes it, in the shot's V-order: the
-/// values a COPIED run brings in, or a WINDOW onto another document's
-/// I-space.
-enum ShotPart {
-    Copied(Vec<Vec<u8>>),
-    Window { start: Address, width: NonZeroU64 },
+/// The positions a shot copies in from ONE origin document, and their
+/// values once read back. `ranges` holds the wanted I-ranges of each
+/// I-address prefix, merged and sorted, each with the SLOT its first
+/// position takes — a dense numbering of the wanted positions; `seen` marks
+/// each slot read, and `kept` holds each read slot's value as a span of
+/// `bytes`, sorted by slot once the read is done. Built from the shot's runs
+/// before any read, so a read holds the values the shot names: never one per
+/// position the origin holds beside them, and never a slot per position a
+/// run's width claims, only one bit.
+#[derive(Debug)]
+struct Wanted<'f> {
+    origin: &'f str,
+    ranges: HashMap<&'f str, Vec<WantedRange>>,
+    seen: Vec<u64>,
+    kept: Vec<Kept>,
+    bytes: Vec<u8>,
+}
+
+/// One merged wanted I-range: its first and its end last components, and
+/// the slot its first position takes.
+#[derive(Debug, Clone, Copy)]
+struct WantedRange {
+    first: u64,
+    end: u64,
+    slot: u64,
+}
+
+/// One value read back: its slot, and its span of [`Wanted`]'s `bytes` —
+/// each under 2^32, the shot's positions and its kept bytes both being held
+/// under [`MAX_FRAME_BYTES`].
+#[derive(Debug, Clone, Copy)]
+struct Kept {
+    slot: u32,
+    at: u32,
+    len: u32,
 }
 
 fn fault(state: impl Into<String>, cause: impl Into<String>) -> Halt {
     Halt::face(state, cause, "this is the shell's frame and never your act; nothing was sent")
 }
 
+/// Whether `text` splits into at most [`MAX_ADDRESS_COMPONENTS`]
+/// components — counted without converting or collecting one.
+fn within_components(text: &str) -> bool {
+    text.split('.').nth(MAX_ADDRESS_COMPONENTS).is_none()
+}
+
+/// `text` as an address — within [`MAX_ADDRESS_COMPONENTS`], counted before
+/// a component is converted, each a decimal natural, and T4-valid — or
+/// `None`.
+fn address(text: &str) -> Option<Address> {
+    within_components(text).then(|| parse_address(text)).flatten()
+}
+
+/// `text` as a DOCUMENT address in its ONE spelling — dotted decimal
+/// naturals, no sign and no leading zero (`is_address_text`) — within
+/// [`MAX_ADDRESS_COMPONENTS`], T4-valid and of the document level, or
+/// `None`. The one spelling, because the hold keys a document's lines by
+/// its text and reads its rows `under` that text, and a trunk is split by
+/// text ([`trunk_text`]): two spellings of one document would be two
+/// documents to the hold, and a `00` is no `0` to a split.
+pub fn document_address(text: &str) -> Option<Address> {
+    is_address_text(text).then(|| address(text)).flatten().filter(|a| a.level() == Level::Document)
+}
+
 /// `text` as an address, or the halt a frame naming no address is.
 fn addr(text: &str, what: &str) -> Result<Address, Halt> {
-    parse_address(text).ok_or_else(|| fault(format!("the frame's `{what}` is not an address: `{text}`"), "the attest's frame names every address in its dotted spelling"))
+    address(text).ok_or_else(|| {
+        fault(format!("the frame's `{what}` is not an address: `{text}`"), format!("the attest's frame names every address in its dotted spelling, at most {MAX_ADDRESS_COMPONENTS} components long"))
+    })
 }
 
 /// The frame's member `name` as a string.
@@ -105,12 +241,45 @@ fn member<'f>(frame: &'f Value, name: &str) -> Result<&'f str, Halt> {
     frame[name].as_str().ok_or_else(|| fault(format!("the frame carries no `{name}`"), "the attest's grammar for this op names the member"))
 }
 
+/// The halt for a wire array past [`MAX_WIRE_LIST`] elements, which the
+/// board's parse refuses `malformed` — asked before the first element is
+/// read or resolved.
+fn listed(list: &[Value], what: &str) -> Result<(), Halt> {
+    if list.len() > MAX_WIRE_LIST {
+        return Err(fault(format!("the frame's `{what}` lists {} elements, past the wire's {MAX_WIRE_LIST}", list.len()), "the board refuses a frame holding a longer array `malformed`, unparsed"));
+    }
+    Ok(())
+}
+
+/// `span` pushed onto a slot's spans, or the halt for a slot past
+/// [`MAX_SLOT_SPANS`] — the store's `slot_too_large` — met at the first span
+/// past it, as M7's own resolution meets it.
+fn push_span(spans: &mut Vec<Span>, span: Span, what: &str) -> Result<(), Halt> {
+    if spans.len() == MAX_SLOT_SPANS {
+        return Err(fault(format!("the frame's `{what}` slot resolves to more than {MAX_SLOT_SPANS} spans"), "the board refuses such a slot `slot_too_large`, the store's per-slot budget"));
+    }
+    spans.push(span);
+    Ok(())
+}
+
+/// The halt for what a shot's [`PublishBody`] refused.
+fn past_body(refusal: PublishRefusal) -> Halt {
+    match refusal {
+        PublishRefusal::PastBudget => fault(format!("the shot's body passes the board's {MAX_FRAME_BYTES}-byte budget"), "the board refuses such a shot `attestation_invalid:frame_too_large`"),
+        PublishRefusal::Unspellable => fault("the shot places more than 2^64 − 1 positions", "a shot's count is eight bytes; the board refuses a longer one"),
+    }
+}
+
 /// THE TRUNK of a document-level address text: the address with its version
 /// components dropped — the document field after the second `0` separator
 /// kept to its first component (`1.0.1.0.1.2` → `1.0.1.0.1`); an element
 /// address is taken to its document first. The projection
-/// `skep-arrangement`'s `trunk_of` makes, reproduced over the spelling.
+/// `skep-arrangement`'s `trunk_of` makes, reproduced over the spelling, of a
+/// text within [`MAX_ADDRESS_COMPONENTS`] — counted before it is split.
 pub fn trunk_text(text: &str) -> Option<String> {
+    if !within_components(text) {
+        return None;
+    }
     let doc = document_of(text).unwrap_or_else(|| text.to_string());
     let comps: Vec<&str> = doc.split('.').collect();
     let mut zeros = comps.iter().enumerate().filter(|(_, c)| **c == "0").map(|(i, _)| i);
@@ -121,8 +290,12 @@ pub fn trunk_text(text: &str) -> Option<String> {
     Some(comps[..=second + 1].join("."))
 }
 
-/// A tumbler from its dotted decimal.
+/// A tumbler from its dotted decimal, within [`MAX_ADDRESS_COMPONENTS`] —
+/// counted before a component is converted.
 fn tumbler(text: &str) -> Option<Tumbler> {
+    if !within_components(text) {
+        return None;
+    }
     let comps: Option<Vec<Nat>> = text.split('.').map(|c| c.parse::<u64>().ok().map(Nat::from)).collect();
     Tumbler::new(comps?).ok()
 }
@@ -137,30 +310,47 @@ fn extent_span(i_start: &str, width: u64) -> Option<Span> {
     Span::new(start, Tumbler::new(comps).ok()?).ok()
 }
 
-/// The I-address `k` positions past `i_start`, by its last component.
-fn i_addr_at(i_start: &str, k: u64) -> Option<String> {
-    let (prefix, last) = i_start.rsplit_once('.')?;
-    let first: u64 = last.parse().ok()?;
-    Some(format!("{prefix}.{}", first.checked_add(k)?))
+/// An I-address split at its last component: the prefix, and the last
+/// component as a number — the coordinate a run's positions advance along.
+fn split_i(i_addr: &str) -> Option<(&str, u64)> {
+    let (prefix, last) = i_addr.rsplit_once('.')?;
+    Some((prefix, last.parse().ok()?))
 }
 
 /// The wire's `values` as the entry body's value sequence — the value at each
 /// position the frame fills: a string and a `{"hex"}` mint one value per
 /// byte, an `{"atom"}` and an `{"atom_hex"}` one composite value (wire.md
 /// §Value encodings). A text's and an atom's values are borrowed from the
-/// frame; a hex's are decoded, and so owned.
+/// frame; a hex's are decoded, and so owned. At most [`MAX_INSERT_VALUES`],
+/// asked of each element before it mints — a hex by its encoded length — so
+/// a frame past the budget mints nothing past it.
 pub fn values_of(values: &Value) -> Result<Vec<Cow<'_, [u8]>>, Halt> {
     let bad = || fault("the frame's `values` are not the wire's forms", "a value is a string, `{\"hex\"}`, `{\"atom\"}` or `{\"atom_hex\"}`");
+    let room = |minted: usize, adding: usize| {
+        if minted.saturating_add(adding) > MAX_INSERT_VALUES {
+            return Err(fault(
+                format!("the frame's `values` mint more than {MAX_INSERT_VALUES} values"),
+                "the board refuses an insert past its value budget `malformed`, unparsed, whatever its values hold",
+            ));
+        }
+        Ok(())
+    };
     let mut out = Vec::new();
     for v in values.as_array().ok_or_else(bad)? {
         match v {
-            Value::String(s) => out.extend(s.as_bytes().chunks(1).map(Cow::Borrowed)),
+            Value::String(s) => {
+                room(out.len(), s.len())?;
+                out.extend(s.as_bytes().chunks(1).map(Cow::Borrowed));
+            }
             Value::Object(m) => {
                 if let Some(h) = m.get("hex").and_then(Value::as_str) {
+                    room(out.len(), h.len() / 2)?;
                     out.extend(decode_hex(h).ok_or_else(bad)?.into_iter().map(|b| Cow::Owned(vec![b])));
                 } else if let Some(a) = m.get("atom").and_then(Value::as_str) {
+                    room(out.len(), 1)?;
                     out.push(Cow::Borrowed(a.as_bytes()));
                 } else if let Some(h) = m.get("atom_hex").and_then(Value::as_str) {
+                    room(out.len(), 1)?;
                     out.push(Cow::Owned(decode_hex(h).ok_or_else(bad)?));
                 } else {
                     return Err(bad());
@@ -172,30 +362,47 @@ pub fn values_of(values: &Value) -> Result<Vec<Cow<'_, [u8]>>, Halt> {
     Ok(out)
 }
 
-/// A delivery's items as the value at each position they deliver, the
-/// inverse of [`values_of`]: a `content` text and a `hex` item one value per
-/// byte (adjacent text arrives as one item), an `atom` and an `atom_hex` one
-/// composite value — borrowed from the delivery where it spells them, owned
-/// where a hex is decoded. An item no value spells — a withheld run, a
+/// A delivery's items as the value at each position they deliver, in order —
+/// the inverse of [`values_of`]: a `content` text and a `hex` item one value
+/// per byte (adjacent text arrives as one item), an `atom` and an `atom_hex`
+/// one composite value — borrowed from the delivery where it spells them,
+/// owned where a hex is decoded. An item no value spells — a withheld run, a
 /// reference, a `hex` that does not decode, one this shell does not know —
-/// is the error.
-pub fn delivered_values(delivery: &Value) -> Result<Vec<Cow<'_, [u8]>>, Value> {
-    let mut positions = Vec::new();
-    for item in delivery["items"].as_array().into_iter().flatten() {
-        let unread = || item.clone();
-        if let Some(text) = item["content"].as_str() {
-            positions.extend(text.as_bytes().chunks(1).map(Cow::Borrowed));
-        } else if let Some(h) = item["hex"].as_str() {
-            positions.extend(decode_hex(h).ok_or_else(unread)?.into_iter().map(|b| Cow::Owned(vec![b])));
-        } else if let Some(a) = item["atom"].as_str() {
-            positions.push(Cow::Borrowed(a.as_bytes()));
-        } else if let Some(h) = item["atom_hex"].as_str() {
-            positions.push(Cow::Owned(decode_hex(h).ok_or_else(unread)?));
-        } else {
-            return Err(unread());
+/// is answered in its place as the item itself, and nothing after it. LAZY:
+/// a reader walks a board's delivery position by position and holds what it
+/// keeps, never a value for every position the board chose to deliver.
+pub fn delivered_values(delivery: &Value) -> impl Iterator<Item = Result<Cow<'_, [u8]>, Value>> + '_ {
+    let items = delivery["items"].as_array().map(Vec::as_slice).unwrap_or_default();
+    let mut stopped = false;
+    items.iter().flat_map(item_values).map_while(move |position| {
+        if stopped {
+            return None;
         }
+        stopped = position.is_err();
+        Some(position)
+    })
+}
+
+/// One delivered item's positions, as [`delivered_values`] reads them.
+fn item_values(item: &Value) -> Box<dyn Iterator<Item = Result<Cow<'_, [u8]>, Value>> + '_> {
+    let unread = || -> Box<dyn Iterator<Item = Result<Cow<'_, [u8]>, Value>> + '_> { Box::new(std::iter::once(Err(item.clone()))) };
+    if let Some(text) = item["content"].as_str() {
+        Box::new(text.as_bytes().chunks(1).map(|b| Ok(Cow::Borrowed(b))))
+    } else if let Some(h) = item["hex"].as_str() {
+        match decode_hex(h) {
+            Some(bytes) => Box::new(bytes.into_iter().map(|b| Ok(Cow::Owned(vec![b])))),
+            None => unread(),
+        }
+    } else if let Some(a) = item["atom"].as_str() {
+        Box::new(std::iter::once(Ok(Cow::Borrowed(a.as_bytes()))))
+    } else if let Some(h) = item["atom_hex"].as_str() {
+        match decode_hex(h) {
+            Some(bytes) => Box::new(std::iter::once(Ok(Cow::Owned(bytes)))),
+            None => unread(),
+        }
+    } else {
+        unread()
     }
-    Ok(positions)
 }
 
 /// Lowercase or uppercase hex decoded, `None` where it is none: an odd
@@ -210,6 +417,108 @@ fn decode_hex(h: &str) -> Option<Vec<u8>> {
     }
     // Two hex digits make a value below 256, so the cast keeps every bit.
     pairs.iter().map(|&[hi, lo]| Some(((digit(hi)? << 4) | digit(lo)?) as u8)).collect()
+}
+
+/// THE `insert` ARM's TERMS, read off the frame alone — no read made: the
+/// document's trunk, and the body over the declared deposit and the values,
+/// each recognized as the board's parse recognizes it, within its budgets.
+/// The composer's `insert` arm, and the hold's door for a burst a signed
+/// session attests at every send (`hold`'s `Burst::admit`), which asks it
+/// before the burst can be held: an insert the composer cannot attest is
+/// one no resend of it could ever send.
+pub fn insert_terms(frame: &Value) -> Result<(Address, EntryBody), Halt> {
+    let doc = member(frame, "doc")?;
+    let trunk = trunk_text(doc).ok_or_else(|| fault(format!("the frame's `doc` has no trunk: `{doc}`"), "an insert's doc term is the document's trunk"))?;
+    let declared = frame["deposit"].as_str().map(|t| addr(t, "deposit")).transpose()?;
+    let values = values_of(&frame["values"])?;
+    Ok((addr(&trunk, "doc")?, entry_body_insert(declared.as_ref(), values.iter().map(AsRef::as_ref))))
+}
+
+/// One run of an `image` answer: its I-address's prefix and first last
+/// component, and its width — the run's positions, `first` to `first +
+/// width`, all spellable.
+fn image_run<'v>(run: &'v Value, origin: &str) -> Result<(&'v str, u64, u64), Halt> {
+    let bad = || fault(format!("a run `image` answered over {origin} is no I-extent"), run.to_string());
+    let (prefix, first) = run["i_start"].as_str().and_then(split_i).ok_or_else(bad)?;
+    let width: u64 = run["width"].as_str().and_then(|w| w.parse().ok()).ok_or_else(bad)?;
+    first.checked_add(width).ok_or_else(bad)?;
+    Ok((prefix, first, width))
+}
+
+impl<'f> Wanted<'f> {
+    fn new(origin: &'f str) -> Wanted<'f> {
+        Wanted { origin, ranges: HashMap::new(), seen: Vec::new(), kept: Vec::new(), bytes: Vec::new() }
+    }
+
+    /// The run of `width` positions from `prefix.first` wanted. PRECONDITION:
+    /// `first + width` is spellable, as [`Composer::publish_body`] has asked.
+    fn want(&mut self, prefix: &'f str, first: u64, width: u64) {
+        self.ranges.entry(prefix).or_default().push(WantedRange { first, end: first + width, slot: 0 });
+    }
+
+    /// The wanted ranges of each prefix merged and sorted, and every wanted
+    /// position given a slot — under [`MAX_SHOT_POSITIONS`] in all, the
+    /// widths summed having been held to it — and a bit to mark it read.
+    fn seal(&mut self) {
+        let mut slots = 0u64;
+        for ranges in self.ranges.values_mut() {
+            ranges.sort_unstable_by_key(|r| r.first);
+            let mut merged: Vec<WantedRange> = Vec::with_capacity(ranges.len());
+            for r in ranges.drain(..) {
+                match merged.last_mut() {
+                    Some(last) if r.first <= last.end => last.end = last.end.max(r.end),
+                    _ => merged.push(r),
+                }
+            }
+            for r in &mut merged {
+                r.slot = slots;
+                slots += r.end - r.first;
+            }
+            *ranges = merged;
+        }
+        self.seen = vec![0; slots.div_ceil(64) as usize];
+    }
+
+    /// The slot of the wanted position `prefix.n`, where one is wanted.
+    fn slot(&self, prefix: &str, n: u64) -> Option<u64> {
+        let ranges = self.ranges.get(prefix)?;
+        let r = ranges[ranges.partition_point(|r| r.end <= n)..].first()?;
+        (r.first <= n).then(|| r.slot + (n - r.first))
+    }
+
+    /// The value read at `prefix.n`, kept where the shot wants it and the
+    /// first time it is read — and counted against `spent`, the body budget
+    /// every origin's kept values share: a distinct value the shot copies in
+    /// is one its body carries at least once, at its length and its
+    /// four-byte prefix, so the kept values never pass [`MAX_FRAME_BYTES`].
+    fn keep(&mut self, prefix: &str, n: u64, value: &[u8], spent: &mut usize) -> Result<(), Halt> {
+        let Some(slot) = self.slot(prefix, n) else { return Ok(()) };
+        let (word, bit) = ((slot / 64) as usize, 1u64 << (slot % 64));
+        if self.seen[word] & bit != 0 {
+            return Ok(());
+        }
+        self.seen[word] |= bit;
+        *spent = spent.checked_add(4).and_then(|s| s.checked_add(value.len())).filter(|s| *s <= MAX_FRAME_BYTES).ok_or_else(|| past_body(PublishRefusal::PastBudget))?;
+        let narrow = |n: u64| u32::try_from(n).map_err(|_| past_body(PublishRefusal::PastBudget));
+        let kept = Kept { slot: narrow(slot)?, at: narrow(self.bytes.len() as u64)?, len: narrow(value.len() as u64)? };
+        self.bytes.extend_from_slice(value);
+        self.kept.push(kept);
+        Ok(())
+    }
+
+    /// The read done: the kept values sorted by slot, for [`Wanted::value`].
+    fn finish(&mut self) {
+        self.kept.sort_unstable_by_key(|k| k.slot);
+    }
+
+    /// The value read back at `prefix.n`, where the shot wants it and the
+    /// origin holds it.
+    fn value(&self, prefix: &str, n: u64) -> Option<&[u8]> {
+        let slot = u32::try_from(self.slot(prefix, n)?).ok()?;
+        let kept = self.kept[self.kept.binary_search_by_key(&slot, |k| k.slot).ok()?];
+        let at = kept.at as usize;
+        self.bytes.get(at..at + kept.len as usize)
+    }
 }
 
 impl Composer<'_> {
@@ -229,14 +538,18 @@ impl Composer<'_> {
     /// list's I-extents resolved through `image` — bare, as `make_link`'s
     /// slots spell it, or as `edit_link`'s successor `ty` spells it,
     /// `{"resolve": […]}` (wire.md §Links (writes)); or a span list verbatim
-    /// (`emit`'s `ty`).
+    /// (`emit`'s `ty`). The list within [`MAX_WIRE_LIST`] before its first
+    /// element is read, and its spans within [`MAX_SLOT_SPANS`] as they
+    /// resolve.
     fn slot(&self, slot: &Value, what: &str) -> Result<Vec<Span>, Halt> {
         if let Some(addrs) = slot["addrs"].as_array() {
+            listed(addrs, what)?;
             return addrs.iter().map(|a| Ok(unit_span(&addr(a.as_str().unwrap_or(""), what)?))).collect();
         }
         let Some(list) = slot["resolve"].as_array().or_else(|| slot.as_array()) else {
             return Err(fault(format!("the frame's `{what}` slot is neither the address form nor a list"), "a slot is `{\"addrs\": […]}`, `{\"resolve\": [V-specs]}`, a V-spec list, or a span list"));
         };
+        listed(list, what)?;
         let mut spans = Vec::new();
         for item in list {
             if let Some(source) = item["source"].as_str() {
@@ -246,11 +559,12 @@ impl Composer<'_> {
                 for r in runs {
                     let i_start = r["i_start"].as_str().unwrap_or("");
                     let w: u64 = r["width"].as_str().and_then(|w| w.parse().ok()).unwrap_or(0);
-                    spans.push(extent_span(i_start, w).ok_or_else(|| fault("a run `image` answered is no content extent", r.to_string()))?);
+                    let span = extent_span(i_start, w).ok_or_else(|| fault("a run `image` answered is no content extent", r.to_string()))?;
+                    push_span(&mut spans, span, what)?;
                 }
             } else if let (Some(start), Some(width)) = (item["start"].as_str(), item["width"].as_str()) {
                 let span = tumbler(start).zip(tumbler(width)).and_then(|(s, w)| Span::new(s, w).ok());
-                spans.push(span.ok_or_else(|| fault(format!("the frame's `{what}` span does not parse"), item.to_string()))?);
+                push_span(&mut spans, span.ok_or_else(|| fault(format!("the frame's `{what}` span does not parse"), item.to_string()))?, what)?;
             } else {
                 return Err(fault(format!("the frame's `{what}` slot holds an element of no known form"), item.to_string()));
             }
@@ -258,76 +572,121 @@ impl Composer<'_> {
         Ok(spans)
     }
 
-    /// An origin document's content READ BACK: its extent, its V→I map
-    /// through `image`, and the value at every position through
-    /// `retrieve_v`, each position's value keyed by its I-address.
-    fn read_back(&self, origin: &str) -> Result<ReadBack, Halt> {
+    /// The values `wanted` names in its origin, READ BACK through the
+    /// origin's own arrangement under the session's token: the extent,
+    /// refused past what one delivery can carry (every position costs a
+    /// delivery at least a byte); the V→I map through `image`, its widths
+    /// summed to that extent before the values are asked for; and the
+    /// values through `retrieve_v`, walked beside the map position by
+    /// position, each position the shot copies in kept once against `spent`.
+    fn read_back(&self, wanted: &mut Wanted<'_>, spent: &mut usize) -> Result<(), Halt> {
+        let origin = wanted.origin;
+        wanted.seal();
         let set = self.read(&frames::span_set(origin))?;
         let extent = set["set"]
             .as_array()
             .and_then(|s| s.iter().find(|x| x["start"].as_str() == Some("1.1")))
             .and_then(|s| s["width"].as_str()?.rsplit('.').next()?.parse::<u64>().ok())
             .unwrap_or(0);
-        let mut values = HashMap::new();
-        if extent == 0 {
-            return Ok(ReadBack { values });
+        if extent > MAX_ANSWER_BYTES as u64 {
+            return Err(fault(
+                format!("{origin} holds {extent} positions, more than one delivery can carry"),
+                format!("a delivery answers at most {MAX_ANSWER_BYTES} bytes, and every position costs it one at least"),
+            ));
         }
-        let image = self.read(&frames::image(origin, 1, extent))?;
-        let mut addrs: Vec<String> = Vec::new();
-        for run in image["runs"].as_array().into_iter().flatten() {
-            let i_start = run["i_start"].as_str().unwrap_or("");
-            let width: u64 = run["width"].as_str().and_then(|w| w.parse().ok()).unwrap_or(0);
-            for k in 0..width {
-                addrs.push(i_addr_at(i_start, k).ok_or_else(|| fault("a run `image` answered has no I-start", run.to_string()))?);
+        if extent > 0 {
+            let image = self.read(&frames::image(origin, 1, extent))?;
+            let runs = image["runs"].as_array().map(Vec::as_slice).unwrap_or_default();
+            let mut mapped = 0u64;
+            for run in runs {
+                let (_, _, width) = image_run(run, origin)?;
+                mapped = mapped.checked_add(width).filter(|m| *m <= extent).ok_or_else(|| disagree(origin, "maps more positions than its extent"))?;
+            }
+            if mapped != extent {
+                return Err(disagree(origin, "maps fewer positions than its extent"));
+            }
+            let delivery = self.read(&frames::retrieve_v(origin, 1, extent))?;
+            let mut positions = delivered_values(&delivery);
+            for run in runs {
+                let (prefix, first, width) = image_run(run, origin)?;
+                for n in first..first + width {
+                    match positions.next() {
+                        Some(Ok(value)) => wanted.keep(prefix, n, &value, spent)?,
+                        Some(Err(item)) => {
+                            return Err(fault(
+                                format!("a position of {origin} cannot be read back for the shot's body"),
+                                format!("the delivery holds an item the composer cannot spell as values — a withheld run, a reference, a hex that does not decode, or one it does not know: {item}"),
+                            ))
+                        }
+                        None => return Err(disagree(origin, "is delivered short of its extent")),
+                    }
+                }
+            }
+            if positions.next().is_some() {
+                return Err(disagree(origin, "is delivered past its extent"));
             }
         }
-        let delivery = self.read(&frames::retrieve_v(origin, 1, extent))?;
-        let positions = delivered_values(&delivery).map_err(|item| {
-            fault(
-                format!("a position of {origin} cannot be read back for the shot's body"),
-                format!("the delivery holds an item the composer cannot spell as values — a withheld run, a reference, a hex that does not decode, or one it does not know: {item}"),
-            )
-        })?;
-        if positions.len() != addrs.len() {
-            return Err(fault(format!("{origin}'s delivery and its image disagree on its extent"), format!("{} positions delivered against {} addresses imaged", positions.len(), addrs.len())));
-        }
-        for (a, v) in addrs.into_iter().zip(positions) {
-            values.insert(a, v.into_owned());
-        }
-        Ok(ReadBack { values })
+        wanted.finish();
+        Ok(())
     }
 
-    /// The `publish` body: each run the shot names in V-order, a run onto
-    /// the shot document's own trunk or the staging draft COPIED by its
-    /// values, any other a WINDOW; then the base group.
+    /// The `publish` body, under the board's frame budget ([`MAX_FRAME_BYTES`],
+    /// the parity the daemon holds a shot's body to): each run the shot names
+    /// in V-order, a run onto the shot document's own trunk or the staging
+    /// draft COPIED by its values, any other a WINDOW; then the base group.
+    /// THE REQUEST's ARITHMETIC first, every run classed and counted before a
+    /// value is read: the runs within [`MAX_WIRE_LIST`], the positions placed
+    /// within the body's eight-byte count, the staging draft's within the
+    /// store's re-insert budget, and the copied ones within what a body
+    /// under the budget can carry. Then each origin's values read back,
+    /// keeping the positions the shot copies in, and the body built.
     fn publish_body(&self, frame: &Value, trunk: &str) -> Result<EntryBody, Halt> {
         let draft = frame["draft"].as_str();
+        let draft_trunk = draft.and_then(trunk_text);
         let runs = frame["runs"].as_array().ok_or_else(|| fault("the shot names no `runs`", "a `publish` frame carries its runs in V-order"))?;
-        let mut read_backs: HashMap<String, ReadBack> = HashMap::new();
-        let mut parts: Vec<ShotPart> = Vec::with_capacity(runs.len());
+        listed(runs, "runs")?;
+        let (mut placed, mut reinserted, mut copied) = (0u64, 0u64, 0u64);
+        let mut parts: Vec<ShotPart<'_>> = Vec::with_capacity(runs.len());
+        let mut origins: HashMap<&str, usize> = HashMap::new();
+        let mut wanted: Vec<Wanted<'_>> = Vec::new();
         for run in runs {
             let origin = member(run, "origin")?;
             let i_start = member(run, "i_start")?;
-            let width: u64 = run["width"].as_str().and_then(|w| w.parse().ok()).ok_or_else(|| fault("a run's `width` is not a count", run.to_string()))?;
+            let width = run["width"].as_str().and_then(|w| w.parse().ok()).and_then(NonZeroU64::new).ok_or_else(|| fault("a run's `width` is not a count of one or more", run.to_string()))?;
+            placed = placed.checked_add(width.get()).ok_or_else(|| past_body(PublishRefusal::Unspellable))?;
             let origin_trunk = trunk_text(origin);
-            let is_copied = origin_trunk.as_deref() == Some(trunk) || draft.is_some_and(|d| d == origin || trunk_text(d).as_deref() == origin_trunk.as_deref());
-            if is_copied {
-                if !read_backs.contains_key(origin) {
-                    read_backs.insert(origin.to_string(), self.read_back(origin)?);
+            let draft_native = draft.is_some_and(|d| d == origin || draft_trunk.as_deref() == origin_trunk.as_deref());
+            if origin_trunk.as_deref() == Some(trunk) || draft_native {
+                let (prefix, first) = split_i(i_start)
+                    .filter(|(_, first)| first.checked_add(width.get()).is_some())
+                    .ok_or_else(|| fault("a copied run's `i_start` is no I-address its width can follow", run.to_string()))?;
+                // Each a sum of some of the runs `placed` sums, so neither
+                // passes it.
+                copied += width.get();
+                if draft_native {
+                    reinserted += width.get();
                 }
-                let read = &read_backs[origin];
-                let mut values = Vec::new();
-                for k in 0..width {
-                    let a = i_addr_at(i_start, k).ok_or_else(|| fault("a run's `i_start` has no last component", run.to_string()))?;
-                    let v = read.values.get(&a).ok_or_else(|| fault(format!("the shot copies in {a}, which {origin}'s arrangement does not hold"), "a copied run's values are read back through its origin's own arrangement; a position outside it cannot be composed"))?;
-                    values.push(v.clone());
-                }
-                parts.push(ShotPart::Copied(values));
+                let at = *origins.entry(origin).or_insert_with(|| {
+                    wanted.push(Wanted::new(origin));
+                    wanted.len() - 1
+                });
+                wanted[at].want(prefix, first, width.get());
+                parts.push(ShotPart::Copied { origin, prefix, first, width: width.get() });
             } else {
-                let start = addr(i_start, "runs[].i_start")?;
-                let width = NonZeroU64::new(width).ok_or_else(|| fault("a window of width 0", run.to_string()))?;
-                parts.push(ShotPart::Window { start, width });
+                parts.push(ShotPart::Window { start: addr(i_start, "runs[].i_start")?, width });
             }
+        }
+        if reinserted > MAX_REINSERTED_VALUES {
+            return Err(fault(
+                format!("the shot re-inserts {reinserted} values from its draft, past the store's {MAX_REINSERTED_VALUES}"),
+                "the board refuses such a shot `too_many_values`, by its request's arithmetic",
+            ));
+        }
+        if copied > MAX_SHOT_POSITIONS {
+            return Err(fault(
+                format!("the shot copies in {copied} positions, more than a body of {MAX_FRAME_BYTES} bytes can carry"),
+                "every value a shot copies in costs its body four bytes at least; the board refuses a longer body",
+            ));
         }
         let base_member = frame["base"].as_str().map(|b| addr(b, "base")).transpose()?;
         let base_extent: Option<u64> = frame["base_extent"].as_str().and_then(|e| e.parse().ok());
@@ -336,14 +695,29 @@ impl Composer<'_> {
             (None, None) => None,
             _ => return Err(fault("the shot names `base` without `base_extent`, or the reverse", "either both or neither (wire.md §The publish shot)")),
         };
-        let mut pieces: Vec<ShotSegmentPiece<'_>> = Vec::new();
+        let mut spent = 0usize;
+        for origin in &mut wanted {
+            self.read_back(origin, &mut spent)?;
+        }
+        let mut body = PublishBody::within(MAX_FRAME_BYTES, base).map_err(past_body)?;
         for part in &parts {
             match part {
-                ShotPart::Copied(values) => pieces.extend(values.iter().map(|v| ShotSegmentPiece::Value(v))),
-                ShotPart::Window { start, width } => pieces.push(ShotSegmentPiece::Window { start, width: *width }),
+                ShotPart::Copied { origin, prefix, first, width } => {
+                    let read = &wanted[origins[origin]];
+                    for n in *first..*first + *width {
+                        let value = read.value(prefix, n).ok_or_else(|| {
+                            fault(
+                                format!("the shot copies in {prefix}.{n}, which {origin}'s arrangement does not hold"),
+                                "a copied run's values are read back through its origin's own arrangement; a position outside it cannot be composed",
+                            )
+                        })?;
+                        body = body.push(value).map_err(past_body)?;
+                    }
+                }
+                ShotPart::Window { start, width } => body = body.window(start, *width).map_err(past_body)?,
             }
         }
-        Ok(entry_body_publish(pieces, base))
+        Ok(body.finish())
     }
 
     /// The frame's `doc` term and body for `op`, or `None` outside the ten.
@@ -354,11 +728,8 @@ impl Composer<'_> {
             "fork" => (one(self.account, "account")?, entry_body_empty(ContentFreeOp::Fork)),
             "version" => (one(self.account, "account")?, entry_body_empty(ContentFreeOp::Version)),
             "insert" => {
-                let doc = member(frame, "doc")?;
-                let trunk = trunk_text(doc).ok_or_else(|| fault(format!("the frame's `doc` has no trunk: `{doc}`"), "an insert's doc term is the document's trunk"))?;
-                let declared = frame["deposit"].as_str().map(|t| addr(t, "deposit")).transpose()?;
-                let values = values_of(&frame["values"])?;
-                (one(&trunk, "doc")?, entry_body_insert(declared.as_ref(), values.iter().map(AsRef::as_ref)))
+                let (trunk, body) = insert_terms(frame)?;
+                (Doc::One(trunk), body)
             }
             "make_link" => {
                 let home = member(frame, "home")?;
@@ -373,7 +744,9 @@ impl Composer<'_> {
             "emit" => {
                 let home = member(frame, "home")?;
                 let from = [unit_span(&addr(member(frame, "from")?, "from")?)];
-                let to: Vec<Span> = frame["to"].as_array().into_iter().flatten().map(|a| Ok(unit_span(&addr(a.as_str().unwrap_or(""), "to")?))).collect::<Result<_, Halt>>()?;
+                let to_list = frame["to"].as_array().map(Vec::as_slice).unwrap_or_default();
+                listed(to_list, "to")?;
+                let to: Vec<Span> = to_list.iter().map(|a| Ok(unit_span(&addr(a.as_str().unwrap_or(""), "to")?))).collect::<Result<_, Halt>>()?;
                 let ty = self.slot(&frame["ty"], "ty")?;
                 (one(home, "home")?, entry_body_emit(LinkSlots { from: EntrySlot(&from), to: EntrySlot(&to), ty: EntrySlot(&ty) }))
             }
@@ -426,6 +799,11 @@ impl Composer<'_> {
     }
 }
 
+/// The halt for an origin whose map and delivery disagree with its extent.
+fn disagree(origin: &str, how: &str) -> Halt {
+    fault(format!("{origin}'s arrangement {how}"), "an origin's image and its delivery each cover its extent, position for position")
+}
+
 /// A V-spec's span as `(from, width)` over the content subspace: `start`
 /// `1.<ordinal>`, `width` `0.<count>`.
 fn v_spec(span: &Value) -> Option<(u64, u64)> {
@@ -435,66 +813,4 @@ fn v_spec(span: &Value) -> Option<(u64, u64)> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// The trunk projection over the spelling: a member drops its version
-    /// components, a bare document is itself, an element is taken to its
-    /// document, an account has none.
-    #[test]
-    fn the_trunk_is_the_document_field_cut_to_its_first_component() {
-        assert_eq!(trunk_text("1.0.1.0.1.2").as_deref(), Some("1.0.1.0.1"));
-        assert_eq!(trunk_text("1.0.1.0.1").as_deref(), Some("1.0.1.0.1"));
-        assert_eq!(trunk_text("1.0.1.0.7.3.1").as_deref(), Some("1.0.1.0.7"));
-        assert_eq!(trunk_text("1.0.1.0.1.0.1.7").as_deref(), Some("1.0.1.0.1"));
-        assert_eq!(trunk_text("1.0.1"), None);
-        assert_eq!(trunk_text("1"), None);
-    }
-
-    /// The wire's four value forms mint the body's values: per byte for a
-    /// string and a `hex`, one composite for an `atom` and an `atom_hex`,
-    /// the text's and the atom's borrowed from the frame; a hex of either
-    /// case decodes, and one with a sign or a multi-byte character is no
-    /// value (never a panic at a character boundary); a V-spec's span reads
-    /// as `(from, width)`; an I-address advances by its last component; the
-    /// ten kinds are the checked set.
-    #[test]
-    fn the_values_the_v_spec_and_the_i_address_read_as_the_wire_spells_them() {
-        let frame = json!(["ab", {"hex": "c328"}, {"atom": "one"}, {"atom_hex": "00ff"}]);
-        let values = values_of(&frame).unwrap();
-        assert_eq!(values, vec![b"a".to_vec(), b"b".to_vec(), vec![0xc3], vec![0x28], b"one".to_vec(), vec![0x00, 0xff]]);
-        assert!(matches!((&values[0], &values[4], &values[2]), (Cow::Borrowed(_), Cow::Borrowed(_), Cow::Owned(_))), "text and atoms borrowed, hex decoded: {values:?}");
-        assert!(values_of(&json!([7])).is_err());
-        assert_eq!(values_of(&json!([{"hex": "C3"}, {"atom_hex": "Ab"}])).unwrap(), vec![vec![0xc3], vec![0xab]]);
-        assert!(values_of(&json!([{"hex": "+a"}])).is_err(), "a sign is no hex digit");
-        assert!(values_of(&json!([{"atom_hex": "+a+b"}])).is_err());
-        assert!(values_of(&json!([{"hex": "aé0"}])).is_err(), "a multi-byte character is no hex digit, and cuts no boundary");
-        assert!(values_of(&json!([{"hex": "abc"}])).is_err(), "an odd length");
-        assert_eq!(v_spec(&json!({"start": "1.6", "width": "0.2"})), Some((6, 2)));
-        assert_eq!(v_spec(&json!({"start": "2.6", "width": "0.2"})), None);
-        assert_eq!(i_addr_at("1.0.1.0.1.0.1.4", 3).as_deref(), Some("1.0.1.0.1.0.1.7"));
-        assert!(in_checked_set("publish") && !in_checked_set("delete"));
-        assert_eq!(CHECKED_SET.len(), 10);
-        assert!(wants_attest(&json!({"op": "publish"})));
-        assert!(!wants_attest(&json!({"op": "publish", "attest": {"alg": "x", "sig": "00"}})), "a page-supplied attest stands as it is");
-        assert!(!wants_attest(&json!({"op": "delete"})) && !wants_attest(&json!({})));
-        let span = extent_span("1.0.1.0.1.0.1.4", 3).unwrap();
-        assert_eq!((span.start().to_string(), span.width().to_string()), ("1.0.1.0.1.0.1.4".to_string(), "0.0.0.0.0.0.0.3".to_string()));
-    }
-
-    /// A delivery reads back as the values a frame spells them in: adjacent
-    /// text arrives as ONE item and is one value per byte, as the frame's
-    /// string was; a withheld run, or a `hex` that does not decode, is no
-    /// value and is answered as the item that stopped the read.
-    #[test]
-    fn a_delivery_reads_back_as_the_values_its_frame_spelled() {
-        let frame = json!(["he", "llo", {"hex": "c328"}, {"atom": "one"}, {"atom_hex": "00ff"}]);
-        let delivery = json!({"resp": "delivery", "items": [{"content": "hello"}, {"hex": "c328"}, {"atom": "one"}, {"atom_hex": "00ff"}]});
-        assert_eq!(delivered_values(&delivery).unwrap(), values_of(&frame).unwrap());
-        let withheld = json!({"withheld": {"width": "3"}});
-        assert_eq!(delivered_values(&json!({"items": [{"content": "a"}, withheld]})), Err(withheld));
-        assert_eq!(delivered_values(&json!({"items": [{"hex": "zz"}]})), Err(json!({"hex": "zz"})));
-        assert_eq!(delivered_values(&json!({"items": [{"hex": "+a"}]})), Err(json!({"hex": "+a"})));
-        assert_eq!(delivered_values(&json!({"items": [{"atom_hex": "aé0"}]})), Err(json!({"atom_hex": "aé0"})));
-    }
-}
+mod tests;

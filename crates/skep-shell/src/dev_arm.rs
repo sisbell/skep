@@ -110,10 +110,14 @@ impl DevArm {
         self.say("the sheet is dismissed (nothing was displayed)".to_string());
     }
 
+    /// The seed and the fingerprint's first eight hex digits off the `n`-th
+    /// sheet shown — `None` where no sheet `n` was shown, or its fingerprint
+    /// is shorter than the prefix a typed answer carries.
     fn off_sheet(&self, n: usize) -> Option<(String, String)> {
         let sheets = self.sheets.lock().expect("the sheets' lock");
         let sheet = sheets.get(n)?;
-        Some((sheet.seed_grouped.split_whitespace().collect(), sheet.fingerprint_hex[..8].to_string()))
+        let prefix = sheet.fingerprint_hex.get(..8)?;
+        Some((sheet.seed_grouped.split_whitespace().collect(), prefix.to_string()))
     }
 
     /// THE RE-TYPE (SECRET): the auto arm declines it; a script types it off
@@ -130,7 +134,7 @@ impl DevArm {
                     Ok(Retyped::Typed { seed_hex, fingerprint_prefix })
                 }
                 None => {
-                    self.say(format!("the re-type names sheet {n}, which was never shown — the walk is abandoned"));
+                    self.say(format!("the re-type names sheet {n}, which no sheet shown can type — the walk is abandoned"));
                     Err(Abandoned)
                 }
             },
@@ -206,7 +210,7 @@ impl DevArm {
                     Ok(Imported::Typed { seed_hex, fingerprint_prefix })
                 }
                 None => {
-                    self.say(format!("the import names sheet {n}, which was never shown — the walk is abandoned"));
+                    self.say(format!("the import names sheet {n}, which no sheet shown can type — the walk is abandoned"));
                     Err(Abandoned)
                 }
             },
@@ -313,6 +317,30 @@ mod tests {
         let said = lines.lock().unwrap().join("\n");
         assert!(said.contains("another moment's kind") && said.contains("ImportTyped"), "{said}");
         assert!(!said.contains("5e5e"), "the seed never reaches TALK: {said}");
+    }
+
+    /// A sheet whose fingerprint is shorter than the prefix a typed answer
+    /// carries — `SheetFields` is another crate's, filled by its walks —
+    /// abandons a re-type or an import typed off it, never a panic at a slice.
+    #[test]
+    fn a_sheet_too_short_to_type_off_abandons_the_walk() {
+        for answer in [Answer::RetypeSheet(0), Answer::ImportSheet(0)] {
+            let (talk, _) = talk();
+            let arm = DevArm::script(vec![answer.clone()], talk);
+            arm.sheet(SheetFields {
+                anchor: true,
+                alg: "mldsa65-ed25519".into(),
+                label: None,
+                fingerprint_hex: "ab".into(),
+                fingerprint_grouped: "ab".into(),
+                seed_grouped: "5e5e".into(),
+                account: None,
+                principal: None,
+                origin: None,
+            });
+            let typed = if matches!(answer, Answer::RetypeSheet(_)) { arm.retype().map(drop) } else { arm.import().map(drop) };
+            assert_eq!(typed, Err(Abandoned), "{answer:?}");
+        }
     }
 
     /// Two sheets shown to `arm`: seeds `5e5e 5e5e` and `6f6f 6f6f`, under

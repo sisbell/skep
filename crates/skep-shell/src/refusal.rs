@@ -105,6 +105,13 @@ impl Name {
     /// `resolve(session, …)`: the line is `holding` or `sending`, not refused
     /// or moved — no act exists until the board answers (P10).
     pub const NOT_RESOLVABLE: Name = Name("not_resolvable");
+    /// A burst whose frame passes the board's frame cap, as sent or as a
+    /// resend's attest would carry it — one the board answers `413` unread at
+    /// every send — refused at the act and never held.
+    pub const FRAME_TOO_LARGE: Name = Name("frame_too_large");
+    /// A burst the principal's held queue has no room for: its standing
+    /// frames hold the queue's budget already — refused, and kept nowhere.
+    pub const HELD_FULL: Name = Name("held_full");
 
     // ── THE HALTS' ARMED NAMES: `Refusal::named`, `Refusal::of_named` ────
 

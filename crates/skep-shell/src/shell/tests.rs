@@ -42,7 +42,7 @@ use super::*;
 use crate::attest::Composer;
 use crate::events::Event;
 use crate::held::{HeldDir, Reason};
-use crate::hold::PROBE_CADENCE;
+use crate::hold::{Burst, PROBE_CADENCE};
 use crate::sessions::Kind;
 
 /// The daemon over `dir` at an ephemeral port.
@@ -694,8 +694,10 @@ fn boardless(dir: &TempDir) -> Shell {
 /// result, an armed refusal, a call of no name and `fetch` through the door
 /// each placed once, in order, its outcome the one it answered and its
 /// sizes the compact JSON of its arguments and of its answer — the refusal
-/// as the page renders it (the mutants that log results alone, swap the two
-/// outcomes, skip a call of no name, or measure a refusal by its text).
+/// as the page renders it — and the call of no name kept as `<unknown>` by
+/// its name's length (the mutants that log results alone, swap the two
+/// outcomes, skip a call of no name, keep its bytes, or measure a refusal by
+/// its text).
 #[test]
 fn every_call_is_one_log_entry_naming_its_outcome_and_sizes() {
     let dir = TempDir::new().unwrap();
@@ -714,13 +716,16 @@ fn every_call_is_one_log_entry_naming_its_outcome_and_sizes() {
             Ok(v) => ("result", v.to_string().len()),
             Err(r) => ("refused", r.to_value().to_string().len()),
         };
-        expected.push(json!({"kind": "call", "call": name, "outcome": outcome, "bytes_in": args.to_string().len(), "bytes_out": bytes_out}));
+        // A name the bridge does not spell is logged by its length alone.
+        let logged_as = if CALLS.contains(name) { *name } else { "<unknown>" };
+        expected.push(json!({"kind": "call", "call": logged_as, "outcome": outcome, "bytes_in": args.to_string().len(), "bytes_out": bytes_out}));
     }
     let outcomes: Vec<&str> = expected.iter().map(|e| e["outcome"].as_str().unwrap()).collect();
     assert_eq!(outcomes, ["result", "result", "refused", "refused", "refused", "refused"]);
     let logged: Vec<Value> =
         shell.log().entries().iter().map(|e| json!({"kind": e["kind"], "call": e["call"], "outcome": e["outcome"], "bytes_in": e["bytes_in"], "bytes_out": e["bytes_out"]})).collect();
     assert_eq!(logged, expected, "one entry per call, in order");
+    assert_eq!(shell.log().entries()[3]["name_bytes"], "verify".len(), "the unknown name's length, never its bytes");
 }
 
 /// A listener that accepts every connection, counts it and drops it: a
@@ -1104,7 +1109,7 @@ fn a_signed_sessions_landed_burst_is_kept_by_the_resend() {
     assert_eq!(rows[0]["key"].as_str(), Some(fp.to_hex().as_str()), "a draft's insert is outside the publish class: the attest dropped, the row unsigned under the key's fingerprint: {rows:?}");
     assert!(rows[0].get("attest").is_none(), "{rows:?}");
     // Held as a lost answer is: the line `sent: true`.
-    let held = signed.holds.hold(&board_entry.reference, &entry, &frame, Reason::of("unreachable", true)).unwrap();
+    let held = signed.holds.hold(&board_entry.reference, &entry, &Burst::admit(frame.clone(), &entry).unwrap(), Reason::of("unreachable", true)).unwrap();
     assert_eq!(held["resp"], "held", "{held}");
     assert_eq!(signed.call("held", &json!({"session": session})).unwrap()[0]["sent"], true);
     // The restart: the session re-opened under a fresh reference, the resend
@@ -1385,7 +1390,7 @@ fn the_probe_keeps_its_cadence_while_the_board_keeps_committing() {
             }
         });
         let frame = json!({"op": "insert", "doc": draft, "at": {"subspace": "1", "ordinal": "2"}, "values": ["b"]});
-        shell.holds.hold(&shell.boards[0].reference, &entry, &frame, Reason::of("unreachable", true)).unwrap();
+        shell.holds.hold(&shell.boards[0].reference, &entry, &Burst::admit(frame, &entry).unwrap(), Reason::of("unreachable", true)).unwrap();
         let deadline = Instant::now() + PROBE_CADENCE * 3;
         let kept = loop {
             if seen.lock().unwrap().iter().any(|e| e.name == EventName::Held && e.data["doc"] == draft && e.data["state"] == "kept") {
@@ -1402,6 +1407,84 @@ fn the_probe_keeps_its_cadence_while_the_board_keeps_committing() {
     assert!(kept, "the line was not kept within three probe cadences while the board kept committing");
     let read = shell.call("op", &json!({"session": session, "frame": skep_client::board::frames::retrieve_v(&draft, 1, 2)})).unwrap();
     assert_eq!(text_of(&read), "ab", "{read}");
+    shell.shutdown();
+    sd.shutdown();
+}
+
+// ── THE BOARD's BUDGETS, AND A BOARD DOWN AT THE OPEN ────────────────────────
+
+/// THE CODEC's PRIVATE BUDGETS are the composer's, judged by the board's own
+/// parse: an array at [`MAX_WIRE_LIST`] elements, an address at
+/// [`MAX_ADDRESS_COMPONENTS`] components and an insert of
+/// [`MAX_INSERT_VALUES`] values each parse — refused past the parse, if at
+/// all, for what they name — and one more of each is refused at the parse,
+/// `malformed` with the frame unparsed (`op: unparseable`) (a budget the
+/// shell keeps past the board's refuses what the board takes; one short of
+/// it composes what the board refuses).
+#[test]
+fn the_codecs_budgets_are_the_composers() {
+    use crate::attest::{MAX_ADDRESS_COMPONENTS, MAX_INSERT_VALUES, MAX_WIRE_LIST};
+    use skep_client::board::{Opened, Rejection, SessionBody};
+    let dir = TempDir::new().unwrap();
+    let sd = spawn(&dir.path().join("board"), true);
+    let board = Board::new(Origin::parse(&format!("http://127.0.0.1:{}", sd.port())).unwrap(), skep_client::PlainHttp::new());
+    let Opened::Token(token) = board.session_open(SessionBody::Bare { principal: 1 }).unwrap() else { panic!("a bare session on an unclaimed board") };
+    let unparsed = |frame: Value| -> bool {
+        let Answer::Document(v) = board.op(Some(&token), &frame).unwrap() else { panic!("the session stands") };
+        Rejection::of(&v).is_some() && v["code"] == "malformed" && v["op"] == "unparseable"
+    };
+    let spec = json!({"doc": "1.0.1.0.1", "span": {"start": "1.1", "width": "0.1"}});
+    let deep = |components: usize| format!("1.0.1.0.1{}", ".1".repeat(components - 5));
+    let insert = |values: usize| json!({"op": "insert", "doc": "1.0.1.0.9", "at": {"subspace": "1", "ordinal": "1"}, "values": ["a".repeat(values)]});
+    let cells = [
+        ("a list", json!({"op": "retrieve_v", "specs": vec![spec.clone(); MAX_WIRE_LIST]}), json!({"op": "retrieve_v", "specs": vec![spec; MAX_WIRE_LIST + 1]})),
+        ("an address", json!({"op": "doc_metadata", "doc": deep(MAX_ADDRESS_COMPONENTS)}), json!({"op": "doc_metadata", "doc": deep(MAX_ADDRESS_COMPONENTS + 1)})),
+        ("an insert's values", insert(MAX_INSERT_VALUES), insert(MAX_INSERT_VALUES + 1)),
+    ];
+    for (cell, at, past) in cells {
+        assert!(!unparsed(at), "{cell} at the budget parses");
+        assert!(unparsed(past), "{cell} past the budget is refused at the parse");
+    }
+    sd.shutdown();
+}
+
+/// A BOARD DOWN AT THE OPEN is fed from its FIRST ANSWER: a shell opened while
+/// its board's port refuses — the feed's own first read of it failing, which
+/// its `daemon` event says — the board started there after, never replays
+/// the history before the shell could read it — every `feed` row it emits
+/// lies past the position the board had reached before the open — while the
+/// draft a session mints after is fed, from the session's own open (the
+/// mutant that starts a board it could not read at 0 replays the board's
+/// whole feed to every subscriber).
+#[test]
+fn a_board_down_at_the_open_is_fed_from_its_first_answer() {
+    let dir = TempDir::new().unwrap();
+    let sd = spawn(&dir.path().join("board"), true);
+    let port = sd.port();
+    let origin = format!("http://127.0.0.1:{port}");
+    let store = dir.path().join("store");
+    claim_board(&origin, &store);
+    let probe = Board::new(Origin::parse(&origin).unwrap(), skep_client::PlainHttp::new());
+    let before = probe.health().unwrap().log_position();
+    sd.shutdown();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while probe.health().is_ok() {
+        assert!(Instant::now() < deadline, "the stopped board still answers");
+        thread::sleep(Duration::from_millis(20));
+    }
+    let (shell, _) = shell(&origin, &store, SessionMode::Bare { principal: 1 });
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let _answerer = answer_moments(shell.subscribe(), Arc::clone(&shell.pending), Arc::clone(&seen));
+    // The feed's worker reads `/health` once before it takes its first
+    // command, so its `unreachable` says that read has failed.
+    wait_for(&seen, |e| e.name == EventName::Daemon && e.data["state"] == "unreachable");
+    let sd = spawn_at(&dir.path().join("board"), true, port);
+    let board = shell.board_references().remove(0);
+    let session = shell.call("session", &json!({"board": board})).unwrap()["session"].as_str().unwrap().to_string();
+    let draft = shell.call("op", &json!({"session": session, "frame": {"op": "create_new_document", "account": "1.0.1"}})).unwrap()["addr"].as_str().unwrap().to_string();
+    wait_for(&seen, |e| e.name == EventName::Feed && e.data["update"]["docs"] == json!([draft]));
+    let replayed: Vec<Value> = seen.lock().unwrap().iter().filter(|e| e.name == EventName::Feed && e.data["update"]["at"].as_u64().is_none_or(|at| at <= before)).map(|e| e.data.clone()).collect();
+    assert!(replayed.is_empty(), "the feed replayed the board's history up to {before}: {replayed:?}");
     shell.shutdown();
     sd.shutdown();
 }

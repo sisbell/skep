@@ -19,18 +19,28 @@
 //!   token, valid in this process alone.
 //! * `log` — [`Log`], the call log and the dial log the page's gate reads
 //!   (the structure record §6.3's class 5): every call the page made and
-//!   every dial the shell made, sizes and timing, never a token or a body.
+//!   every dial the shell made, sizes and timing, never a token or a body,
+//!   the latest entries kept and a call of no name kept by its length.
 //! * [`events`] — THE EVENT STREAM: every §4b.2 event as a value, named by
 //!   an [`EventName`] of the seven, fanned out to every subscriber.
 //! * `refusal` — [`Refusal`], the one refusal shape the page renders: the
 //!   board's own verdict verbatim, a halt's face, the block, the
 //!   unreachable board, and the shell's own armed refusals, each named by
 //!   ONE token from one closed list.
+//! * `attest` — THE ATTEST a signed session composes for the checked set
+//!   (t5: "signs where signed ops requires"): the entry frame over the ten
+//!   kinds that have one, each axis composed by the shell from its own
+//!   reads and never from a preimage the page supplies — and THE BOARD's
+//!   BUDGETS the composer, the held store and the hold's door keep as the
+//!   board keeps them: its frame cap, its wire lists, an insert's values,
+//!   an address's components, a slot's spans, a shot's re-inserted values,
+//!   and the document address in its one spelling.
 //! * `held` — THE HELD-BURST STORE (`client.md` §3c): one append-only file
 //!   per (board, principal) beside the key store — a header and two line
-//!   forms, the directory lock, the read-whole with P38's faces, the synced
-//!   append (persist-first) and the compaction at every line done — and a
-//!   principal's queue, the memory the queue and the file its copy.
+//!   forms, the directory lock, the line-by-line read with P38's faces, the
+//!   synced append (persist-first) and the compaction at every line done —
+//!   and a principal's queue, the memory the queue and the file its copy,
+//!   its frames within the board's frame cap.
 //! * [`script`] — THE DEV ARM's SCRIPT: the grammar a script file's answers
 //!   are parsed by.
 //! * `dev_arm` — THE DEV ARM for the SECRET and CONSENT moments (§4b.3): a
@@ -40,10 +50,6 @@
 //!   moments become `moment(id, kind, data)` events and block on a channel
 //!   the page's `answer(id, …)` or `cancel(id)` fills, and whose SECRET and
 //!   CONSENT moments go to the dev arm.
-//! * `attest` — THE ATTEST a signed session composes for the checked set
-//!   (t5: "signs where signed ops requires"): the entry frame over the ten
-//!   kinds that have one, each axis composed by the shell from its own
-//!   reads and never from a preimage the page supplies.
 //! * `sessions` — THE SESSION TABLE: every token this shell holds under
 //!   the reference the page holds, the two openings (bare, signed), the
 //!   attest a session's key signs, and a session's END — one sequence,
@@ -51,14 +57,17 @@
 //!   carries, derived from public reads as §4b.2 says; a leaving session's
 //!   drafts supplement, one per principal, released to another standing
 //!   session of its principal.
-//! * `hold` — THE HOLD (`client.md` §3c.4, §3c.5): a burst's write path —
-//!   held without a dial where a hold stands, else dialed once and its
-//!   answer read through the classification table — the per-(board,
-//!   principal) queue over `held`'s file, and the resend walk the feed
-//!   worker's probe drains: one read per document, with §3c.5's three
-//!   outcomes.
+//! * `hold` — THE HOLD (`client.md` §3c.4, §3c.5): a burst's door and its
+//!   write path — admitted where some send of it the board can take, held
+//!   without a dial where a hold stands, else dialed once and its answer
+//!   read through the classification table — the per-(board, principal)
+//!   queue over `held`'s file, each board's under its own lock, and the
+//!   resend walk the feed worker's probe drains: one read per document,
+//!   with §3c.5's three outcomes.
 //! * `feed` — THE FEED CONSUMER's thread per board: `search::Consumer`
-//!   polled on each `/events` commit, the `/changes` pages re-read for the
+//!   polled on the `/events` commits, coalesced into one waiting read, the
+//!   published feed read from the head the board first answers with, the
+//!   `/changes` pages re-read for the
 //!   `feed` events, the `index`, `mode` and `daemon` events as the state
 //!   moves, and the bridge's `search` call answered off it; it also reads
 //!   `writes.halted` per tick and runs THE PROBE on a deadline of its own.
@@ -89,11 +98,11 @@ mod refs;
 mod log;
 pub mod events;
 mod refusal;
+mod attest;
 mod held;
 pub mod script;
 mod dev_arm;
 mod person;
-mod attest;
 mod sessions;
 mod hold;
 mod feed;

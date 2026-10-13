@@ -1,0 +1,390 @@
+//! THE COMPOSER's FENCE: the spelling it reads a frame in — the trunk, the
+//! wire's value forms both ways, a V-spec, an I-address's split — and THE
+//! BOARD's BUDGETS it keeps: each pinned to the board's own where the board
+//! exports it, and each held before the work it bounds, against a fake board
+//! that counts the reads the composer makes — a list past the wire's, a slot
+//! past its spans, a shot past its re-insert budget or its body, an origin
+//! past one delivery, an `image` that maps more than its extent — and, the
+//! positive control beside them, a shot's body composed from the values it
+//! copies in, run for run, as the signer's own builder spells it.
+
+use std::io::Read;
+use std::sync::{Arc, Mutex};
+
+use skep_client::dial::{DialError, Dialer, Headers, Request, RequestHead, Response, StreamedResponse};
+use skep_client::sign::{signer_from_seed, signer_from_seed_under};
+use skep_client::Origin;
+use skep_identity::{entry_body_publish, ShotSegmentPiece};
+
+use super::*;
+
+/// A delivery's values collected, or the item that stopped them.
+fn delivered(delivery: &Value) -> Result<Vec<Cow<'_, [u8]>>, Value> {
+    delivered_values(delivery).collect()
+}
+
+/// The trunk projection over the spelling: a member drops its version
+/// components, a bare document is itself, an element is taken to its
+/// document, an account has none, and a text past the component budget has
+/// none — counted before it is split.
+#[test]
+fn the_trunk_is_the_document_field_cut_to_its_first_component() {
+    assert_eq!(trunk_text("1.0.1.0.1.2").as_deref(), Some("1.0.1.0.1"));
+    assert_eq!(trunk_text("1.0.1.0.1").as_deref(), Some("1.0.1.0.1"));
+    assert_eq!(trunk_text("1.0.1.0.7.3.1").as_deref(), Some("1.0.1.0.7"));
+    assert_eq!(trunk_text("1.0.1.0.1.0.1.7").as_deref(), Some("1.0.1.0.1"));
+    assert_eq!(trunk_text("1.0.1"), None);
+    assert_eq!(trunk_text("1"), None);
+    let deep = format!("1.0.1.0.1{}", ".1".repeat(MAX_ADDRESS_COMPONENTS - 5));
+    assert_eq!(trunk_text(&deep).as_deref(), Some("1.0.1.0.1"), "a member at the budget");
+    assert_eq!(trunk_text(&format!("{deep}.1")), None, "one component past it");
+}
+
+/// The wire's four value forms mint the body's values: per byte for a
+/// string and a `hex`, one composite for an `atom` and an `atom_hex`,
+/// the text's and the atom's borrowed from the frame; a hex of either
+/// case decodes, and one with a sign or a multi-byte character is no
+/// value (never a panic at a character boundary); a V-spec's span reads
+/// as `(from, width)`; an I-address splits at its last component; the
+/// ten kinds are the checked set.
+#[test]
+fn the_values_the_v_spec_and_the_i_address_read_as_the_wire_spells_them() {
+    let frame = json!(["ab", {"hex": "c328"}, {"atom": "one"}, {"atom_hex": "00ff"}]);
+    let values = values_of(&frame).unwrap();
+    assert_eq!(values, vec![b"a".to_vec(), b"b".to_vec(), vec![0xc3], vec![0x28], b"one".to_vec(), vec![0x00, 0xff]]);
+    assert!(matches!((&values[0], &values[4], &values[2]), (Cow::Borrowed(_), Cow::Borrowed(_), Cow::Owned(_))), "text and atoms borrowed, hex decoded: {values:?}");
+    assert!(values_of(&json!([7])).is_err());
+    assert_eq!(values_of(&json!([{"hex": "C3"}, {"atom_hex": "Ab"}])).unwrap(), vec![vec![0xc3], vec![0xab]]);
+    assert!(values_of(&json!([{"hex": "+a"}])).is_err(), "a sign is no hex digit");
+    assert!(values_of(&json!([{"atom_hex": "+a+b"}])).is_err());
+    assert!(values_of(&json!([{"hex": "aé0"}])).is_err(), "a multi-byte character is no hex digit, and cuts no boundary");
+    assert!(values_of(&json!([{"hex": "abc"}])).is_err(), "an odd length");
+    assert_eq!(v_spec(&json!({"start": "1.6", "width": "0.2"})), Some((6, 2)));
+    assert_eq!(v_spec(&json!({"start": "2.6", "width": "0.2"})), None);
+    assert_eq!(split_i("1.0.1.0.1.0.1.4"), Some(("1.0.1.0.1.0.1", 4)));
+    assert_eq!(split_i("1.0.1.0.1.0.1.x"), None);
+    assert!(in_checked_set("publish") && !in_checked_set("delete"));
+    assert_eq!(CHECKED_SET.len(), 10);
+    assert!(wants_attest(&json!({"op": "publish"})));
+    assert!(!wants_attest(&json!({"op": "publish", "attest": {"alg": "x", "sig": "00"}})), "a page-supplied attest stands as it is");
+    assert!(!wants_attest(&json!({"op": "delete"})) && !wants_attest(&json!({})));
+    let span = extent_span("1.0.1.0.1.0.1.4", 3).unwrap();
+    assert_eq!((span.start().to_string(), span.width().to_string()), ("1.0.1.0.1.0.1.4".to_string(), "0.0.0.0.0.0.0.3".to_string()));
+}
+
+/// A delivery reads back as the values a frame spells them in: adjacent
+/// text arrives as ONE item and is one value per byte, as the frame's
+/// string was; a withheld run, or a `hex` that does not decode, is no
+/// value and is answered as the item that stopped the read.
+#[test]
+fn a_delivery_reads_back_as_the_values_its_frame_spelled() {
+    let frame = json!(["he", "llo", {"hex": "c328"}, {"atom": "one"}, {"atom_hex": "00ff"}]);
+    let delivery = json!({"resp": "delivery", "items": [{"content": "hello"}, {"hex": "c328"}, {"atom": "one"}, {"atom_hex": "00ff"}]});
+    assert_eq!(delivered(&delivery).unwrap(), values_of(&frame).unwrap());
+    let withheld = json!({"withheld": {"width": "3"}});
+    assert_eq!(delivered(&json!({"items": [{"content": "a"}, withheld]})), Err(withheld));
+    assert_eq!(delivered(&json!({"items": [{"hex": "zz"}]})), Err(json!({"hex": "zz"})));
+    assert_eq!(delivered(&json!({"items": [{"hex": "+a"}]})), Err(json!({"hex": "+a"})));
+    assert_eq!(delivered(&json!({"items": [{"atom_hex": "aé0"}]})), Err(json!({"atom_hex": "aé0"})));
+    let after = json!({"items": [{"content": "a"}, {"withheld": {}}, {"content": "b"}]});
+    let stopped: Vec<_> = delivered_values(&after).collect();
+    assert_eq!(stopped.len(), 2, "nothing is read past the item that stopped the read: {stopped:?}");
+}
+
+/// THE BOARD's BUDGETS the board exports are the composer's: the frame cap
+/// the daemon's transport refuses a longer `/op` body by, M7's per-slot span
+/// budget and M5's re-insert budget. The codec's own three — a wire list, an
+/// insert's values, an address's components — are private to the daemon,
+/// and pinned by its behaviour in the shell's suite.
+#[test]
+fn the_budgets_are_the_boards() {
+    assert_eq!(MAX_FRAME_BYTES, skepd::body_cap("POST", "/op"));
+    assert_eq!(MAX_SLOT_SPANS, skep_links::MAX_SLOT_SPANS);
+    assert_eq!(MAX_REINSERTED_VALUES, skep_arrangement::MAX_REINSERTED_VALUES as u64);
+    assert_eq!(MAX_SHOT_POSITIONS, (MAX_FRAME_BYTES / 4) as u64);
+}
+
+/// The room a burst keeps for its attest holds the attest of every row a
+/// key signs under, measured as the composer attaches it: the member's
+/// bytes in the frame, at the row's own token and signature.
+#[test]
+fn the_attest_room_holds_every_rows_attest() {
+    let frame = json!({"op": "insert", "doc": "1.0.1.0.1"});
+    let bare = frame.to_string().len();
+    for row in SIG_ALGS {
+        let signer = signer_from_seed_under(row.tag, &[7; 32]).expect("every row signs");
+        let mut attested = frame.clone();
+        attested["attest"] = json!({"alg": signer.public_key().alg(), "sig": sig_hex(&signer.sign(b"the entry frame"))});
+        let added = attested.to_string().len() - bare;
+        assert!(added <= attest_room(), "{}: the attest adds {added} bytes, past the room's {}", row.token, attest_room());
+    }
+}
+
+/// An insert's values are held to the codec's count AHEAD of each element:
+/// a string of exactly the budget mints, one byte more is refused, and a
+/// hex is counted by its encoded length, an atom as one value.
+#[test]
+fn the_values_are_held_to_the_insert_budget_before_they_mint() {
+    let at = "a".repeat(MAX_INSERT_VALUES);
+    assert_eq!(values_of(&json!([at])).unwrap().len(), MAX_INSERT_VALUES);
+    assert!(values_of(&json!([at, "b"])).is_err(), "one value past the budget");
+    assert!(values_of(&json!([at, {"atom": "b"}])).is_err(), "an atom is one value");
+    assert!(values_of(&json!([{"hex": "00".repeat(MAX_INSERT_VALUES + 1)}])).is_err(), "a hex counted by its encoded length");
+    assert_eq!(values_of(&json!([{"hex": "00".repeat(MAX_INSERT_VALUES)}])).unwrap().len(), MAX_INSERT_VALUES);
+}
+
+/// An address is recognized within its component budget — counted before a
+/// component is converted — and a burst's document in its ONE spelling: no
+/// sign, no leading zero, of the document level.
+#[test]
+fn an_address_is_recognized_within_its_budget_and_a_document_in_its_one_spelling() {
+    let at = format!("1{}", ".1".repeat(MAX_ADDRESS_COMPONENTS - 1));
+    assert!(address(&at).is_some(), "a node address at the budget");
+    assert!(address(&format!("{at}.1")).is_none(), "one component past it");
+    assert!(tumbler(&at).is_some() && tumbler(&format!("{at}.1")).is_none());
+    assert!(addr(&format!("{at}.1"), "home").is_err());
+    assert!(document_address("1.0.1.0.1").is_some());
+    assert!(document_address("1.0.1.0.1.2").is_some(), "a member is a document address");
+    for refused in ["01.0.1.0.1", "+1.0.1.0.1", "1.00.1.0.1", "1.0.1", "1.0.1.0.1.0.1.1", "1..0.1", "", "1.0.1.0.1 "] {
+        assert!(document_address(refused).is_none(), "`{refused}`");
+    }
+    let deep = format!("1.0.1.0.1{}", ".1".repeat(MAX_ADDRESS_COMPONENTS - 5));
+    assert!(document_address(&deep).is_some() && document_address(&format!("{deep}.1")).is_none());
+}
+
+// ── THE COMPOSER's READS, against a fake board ──────────────────────────────
+
+/// One origin document as the fake holds it: its positions' I-addresses, a
+/// prefix and a first last component, and the item delivered at each.
+struct Held {
+    prefix: &'static str,
+    first: u64,
+    items: Vec<Value>,
+}
+
+/// A board under test for the composer's reads: each origin's positions,
+/// answered by `retrieve_doc_v_span_set`, `image` and `retrieve_v` — or,
+/// where armed, an extent or an `image` answer of its own — and every op
+/// dialed, recorded by its name.
+#[derive(Default)]
+struct Fake {
+    origins: HashMap<&'static str, Held>,
+    extents: HashMap<&'static str, u64>,
+    images: HashMap<&'static str, Value>,
+    dialed: Mutex<Vec<String>>,
+}
+
+impl Fake {
+    /// The origin `doc` holding `text`, one item a byte, its I-addresses
+    /// from `prefix.first`.
+    fn text(mut self, doc: &'static str, prefix: &'static str, first: u64, text: &str) -> Fake {
+        let items = text.chars().map(|c| json!({"content": c.to_string()})).collect();
+        self.origins.insert(doc, Held { prefix, first, items });
+        self
+    }
+
+    /// The ops dialed, in order.
+    fn dialed(&self) -> Vec<String> {
+        self.dialed.lock().unwrap().clone()
+    }
+}
+
+/// `"0.<n>"` and `"1.<n>"` read back as `n`.
+fn ordinal_of(text: &str) -> usize {
+    text.rsplit('.').next().and_then(|n| n.parse().ok()).unwrap_or(0)
+}
+
+fn ok(v: Value) -> Response {
+    Response { status: 200, headers: Headers::default(), body: v.to_string().into_bytes() }
+}
+
+impl Dialer for Fake {
+    fn exchange(&self, _: &Origin, req: &Request) -> Result<Response, DialError> {
+        let frame: Value = serde_json::from_slice(&req.body).unwrap_or(Value::Null);
+        let op = frame["op"].as_str().unwrap_or("").to_string();
+        self.dialed.lock().unwrap().push(op.clone());
+        let unknown = || ok(json!({"resp": "rejected", "code": "doc_not_registered", "disposition": "reorder"}));
+        Ok(match op.as_str() {
+            "retrieve_doc_v_span_set" => {
+                let doc = frame["doc"].as_str().unwrap_or("");
+                let extent = self.extents.get(doc).copied().or_else(|| self.origins.get(doc).map(|h| h.items.len() as u64));
+                match extent {
+                    Some(n) => ok(json!({"resp": "span_set", "set": [{"start": "1.1", "width": format!("0.{n}")}]})),
+                    None => unknown(),
+                }
+            }
+            "image" => {
+                let doc = frame["d"].as_str().unwrap_or("");
+                let (from, width) = (ordinal_of(frame["region"][0]["start"].as_str().unwrap_or("")), ordinal_of(frame["region"][0]["width"].as_str().unwrap_or("")));
+                match (self.images.get(doc), self.origins.get(doc)) {
+                    (Some(runs), _) => ok(json!({"resp": "image", "runs": runs})),
+                    (None, Some(h)) => ok(json!({"resp": "image", "runs": [{"i_start": format!("{}.{}", h.prefix, h.first + from as u64 - 1), "width": width.to_string()}]})),
+                    _ => unknown(),
+                }
+            }
+            "retrieve_v" => {
+                let spec = &frame["specs"][0];
+                let doc = spec["doc"].as_str().unwrap_or("");
+                let (from, width) = (ordinal_of(spec["span"]["start"].as_str().unwrap_or("")), ordinal_of(spec["span"]["width"].as_str().unwrap_or("")));
+                match self.origins.get(doc) {
+                    Some(h) => ok(json!({"resp": "delivery", "items": h.items.iter().skip(from - 1).take(width).collect::<Vec<_>>()})),
+                    None => unknown(),
+                }
+            }
+            _ => ok(json!({"resp": "ack"})),
+        })
+    }
+
+    fn stream(&self, _: &Origin, _: &RequestHead, _: &mut dyn Read, _: &mut dyn FnMut(&Headers)) -> Result<StreamedResponse, DialError> {
+        Err(DialError::Connect("no stream here".into()))
+    }
+}
+
+/// The ground a composer reads from: the fake behind a board, a session's
+/// token and a key.
+struct Ground {
+    fake: Arc<Fake>,
+    board: Board,
+    token: Token,
+    signer: Box<dyn Signer>,
+}
+
+impl Ground {
+    fn over(fake: Fake) -> Ground {
+        let fake = Arc::new(fake);
+        let board = Board::new(Origin::parse("http://127.0.0.1:9").unwrap(), Arc::clone(&fake));
+        Ground { fake, board, token: Token::parse(&"9f".repeat(16)).unwrap(), signer: Box::new(signer_from_seed(&[7; 32])) }
+    }
+
+    fn composer(&self) -> Composer<'_> {
+        Composer { board: &self.board, token: &self.token, signer: &*self.signer, account: "1.0.1", term: BoardTerm { log_position: 1, chain: [0xab; 32] } }
+    }
+}
+
+/// `n` runs of an `image` answer, each one position wide.
+fn runs(n: usize) -> Value {
+    Value::Array((1..=n).map(|k| json!({"i_start": format!("1.0.1.0.1.0.1.{k}"), "width": "1"})).collect())
+}
+
+/// A V-spec over `source`'s first position.
+fn vspec(source: &str) -> Value {
+    json!({"source": source, "span": {"start": "1.1", "width": "0.1"}})
+}
+
+/// A SLOT is held to the wire's list before its first read — a V-spec list or
+/// an address list one past [`MAX_WIRE_LIST`] refused with no op dialed, one
+/// at it composed — and to [`MAX_SLOT_SPANS`] as it resolves: a source whose
+/// `image` answers one span past the budget refused at the first read, one
+/// at it composed (the mutants that drop either check compose a slot the
+/// store refuses, after reads the frame should never have cost).
+#[test]
+fn a_slot_is_held_to_the_wire_list_and_its_span_budget() {
+    let mut fake = Fake::default();
+    fake.images.insert("1.0.1.0.8", runs(MAX_SLOT_SPANS + 1));
+    fake.images.insert("1.0.1.0.9", runs(MAX_SLOT_SPANS));
+    let g = Ground::over(fake);
+    let c = g.composer();
+    let past = Value::Array(vec![vspec("1.0.1.0.9"); MAX_WIRE_LIST + 1]);
+    assert!(c.slot(&past, "from").is_err());
+    assert!(c.slot(&json!({"resolve": past}), "successor.ty").is_err());
+    assert!(c.slot(&json!({"addrs": vec!["1.0.1.0.1"; MAX_WIRE_LIST + 1]}), "to").is_err());
+    assert!(g.fake.dialed().is_empty(), "nothing is read for a list past the wire's: {:?}", g.fake.dialed());
+    assert_eq!(c.slot(&json!({"addrs": vec!["1.0.1.0.1"; MAX_WIRE_LIST]}), "to").unwrap().len(), MAX_WIRE_LIST);
+    let refused = c.slot(&json!([vspec("1.0.1.0.8"), vspec("1.0.1.0.9")]), "from").unwrap_err();
+    assert!(refused.to_string().contains("spans"), "{refused}");
+    assert_eq!(g.fake.dialed(), ["image"], "refused at the first read past the budget");
+    assert_eq!(c.slot(&json!([vspec("1.0.1.0.9")]), "from").unwrap().len(), MAX_SLOT_SPANS);
+}
+
+/// A run copied in from `origin` at `i_start`, `width` wide.
+fn run(origin: &str, i_start: &str, width: u64) -> Value {
+    json!({"origin": origin, "i_start": i_start, "width": width.to_string()})
+}
+
+/// A SHOT is held to its ARITHMETIC before any read: runs past the wire's
+/// list, the staging draft's widths past the store's re-insert budget, the
+/// copied positions past what a body under the budget can carry, and a
+/// count past `be64` (a window of width 2^64 − 1 and a run after it — a
+/// panic in the signer's own builder) are each refused with nothing read;
+/// a draft at the re-insert budget passes it, and is read.
+#[test]
+fn a_shot_is_held_to_its_arithmetic_before_any_read() {
+    let g = Ground::over(Fake::default());
+    let c = g.composer();
+    let shot = |runs: Vec<Value>| json!({"op": "publish", "doc": "1.0.1.0.1", "draft": "1.0.1.0.2", "runs": runs});
+    let draft_run = |width: u64| run("1.0.1.0.2", "1.0.1.0.2.0.1.1", width);
+    let cells = [
+        ("runs past the wire's list", shot(vec![draft_run(1); MAX_WIRE_LIST + 1]), "elements"),
+        ("the draft past the re-insert budget", shot(vec![draft_run(MAX_REINSERTED_VALUES), draft_run(1)]), "re-inserts"),
+        ("the copied positions past a body", shot(vec![run("1.0.1.0.1.1", "1.0.1.0.1.1.0.1.1", MAX_SHOT_POSITIONS + 1)]), "copies in"),
+        ("a count past be64", shot(vec![run("1.0.9.0.1", "1.0.9.0.1.0.1.1", u64::MAX), run("1.0.9.0.1", "1.0.9.0.1.0.1.1", 1)]), "2^64"),
+    ];
+    for (cell, frame, says) in cells {
+        let refused = c.publish_body(&frame, "1.0.1.0.1").unwrap_err();
+        assert!(refused.to_string().contains(says), "{cell}: {refused}");
+        assert!(g.fake.dialed().is_empty(), "{cell}: nothing is read: {:?}", g.fake.dialed());
+    }
+    let refused = c.publish_body(&shot(vec![draft_run(MAX_REINSERTED_VALUES)]), "1.0.1.0.1").unwrap_err();
+    assert!(!refused.to_string().contains("re-inserts"), "the draft at the budget passes it: {refused}");
+    assert_eq!(g.fake.dialed(), ["retrieve_doc_v_span_set"], "and is read");
+}
+
+/// THE READ-BACK is held to what one delivery can carry and to the map the
+/// origin's `image` answers: an extent past the answer cap refused before
+/// `image` is asked, an `image` mapping more positions than the extent (a
+/// width a board chose) refused before `retrieve_v` is asked, and the
+/// values kept held to the body budget the shot's copied-in values share
+/// (the mutants that walk an overshooting map, or keep past the budget,
+/// allocate for what no body could carry).
+#[test]
+fn a_read_back_is_held_to_its_extent_its_map_and_the_body_budget() {
+    let mut fake = Fake::default().text("1.0.1.0.2", "1.0.1.0.2.0.1", 1, "abc").text("1.0.1.0.3", "1.0.1.0.3.0.1", 1, "xyz");
+    fake.extents.insert("1.0.1.0.4", MAX_ANSWER_BYTES as u64 + 1);
+    fake.images.insert("1.0.1.0.3", json!([{"i_start": "1.0.1.0.3.0.1.1", "width": "1000000"}]));
+    let g = Ground::over(fake);
+    let c = g.composer();
+    let read = |origin: &'static str, spent: &mut usize| {
+        let mut wanted = Wanted::new(origin);
+        wanted.want(if origin == "1.0.1.0.3" { "1.0.1.0.3.0.1" } else { "1.0.1.0.2.0.1" }, 1, 3);
+        c.read_back(&mut wanted, spent).map(|()| wanted)
+    };
+    assert!(read("1.0.1.0.4", &mut 0).unwrap_err().to_string().contains("more than one delivery"));
+    assert_eq!(g.fake.dialed(), ["retrieve_doc_v_span_set"], "no image asked past the answer cap");
+    g.fake.dialed.lock().unwrap().clear();
+    assert!(read("1.0.1.0.3", &mut 0).unwrap_err().to_string().contains("maps more positions"));
+    assert_eq!(g.fake.dialed(), ["retrieve_doc_v_span_set", "image"], "no values asked past the map");
+    let mut spent = MAX_FRAME_BYTES - 2 * (4 + 1) - 1;
+    assert!(read("1.0.1.0.2", &mut spent).is_err(), "the third value passes the body budget");
+    let mut spent = 0;
+    let wanted = read("1.0.1.0.2", &mut spent).unwrap();
+    assert_eq!((wanted.value("1.0.1.0.2.0.1", 2), spent), (Some(&b"b"[..]), 3 * (4 + 1)));
+}
+
+/// THE SHOT's BODY, the positive control: runs copied in from the staging
+/// draft and from a member of the shot's own trunk — the draft's twice,
+/// overlapping — a window onto another document, and a base, composed from
+/// the values each origin's own arrangement holds, read once per origin,
+/// exactly as the signer's builder spells the same pieces.
+#[test]
+fn a_shots_body_is_composed_from_the_values_it_copies_in() {
+    let fake = Fake::default().text("1.0.1.0.2", "1.0.1.0.2.0.1", 1, "abcd").text("1.0.1.0.1.1", "1.0.1.0.1.1.0.1", 1, "xyz");
+    let g = Ground::over(fake);
+    let frame = json!({
+        "op": "publish", "doc": "1.0.1.0.1", "draft": "1.0.1.0.2", "base": "1.0.1.0.1.1", "base_extent": "3",
+        "runs": [
+            run("1.0.1.0.2", "1.0.1.0.2.0.1.3", 2),
+            run("1.0.9.0.1", "1.0.9.0.1.0.1.5", 3),
+            run("1.0.1.0.1.1", "1.0.1.0.1.1.0.1.1", 2),
+            run("1.0.1.0.2", "1.0.1.0.2.0.1.1", 3),
+        ],
+    });
+    let body = g.composer().publish_body(&frame, "1.0.1.0.1").unwrap();
+    let window: Address = parse_address("1.0.9.0.1.0.1.5").unwrap();
+    let member: Address = parse_address("1.0.1.0.1.1").unwrap();
+    let value = |v: &'static [u8]| ShotSegmentPiece::Value(v);
+    let pieces = [value(b"c"), value(b"d"), ShotSegmentPiece::Window { start: &window, width: NonZeroU64::new(3).unwrap() }, value(b"x"), value(b"y"), value(b"a"), value(b"b"), value(b"c")];
+    let spelled = entry_body_publish(pieces, Some(ShotBase { member: &member, extent: 3 }));
+    assert_eq!(body.as_bytes(), spelled.as_bytes());
+    let reads = g.fake.dialed();
+    assert_eq!(reads.iter().filter(|op| *op == "retrieve_v").count(), 2, "one read per origin: {reads:?}");
+}

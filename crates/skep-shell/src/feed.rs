@@ -22,7 +22,11 @@
 //! `session-died`, however far this thread trails the commits. The board's
 //! held bursts are watched here too: `writes.halted` read at each tick, and
 //! THE PROBE (`Holds::probe`) every `PROBE_CADENCE`, measured from the last
-//! probe whatever woke the thread between.
+//! probe whatever woke the thread between. The commits the stream yields
+//! are COALESCED ([`Ticks`]): one tick waits in the worker's queue at most,
+//! so a board committing faster than the worker reads costs one read to the
+//! head per turn, never a read per commit, and a call queued behind them
+//! waits one read at most.
 //!
 //! THE `feed` UPDATE's SHAPE — THIS CRATE's DEFINITION (S-24 (b), the
 //! shell's): the `/changes` row's members VERBATIM (`at`, `op`, `docs`,
@@ -32,12 +36,15 @@
 //! shell's shape need not know the wire's), and `class` — `published` for a
 //! row of the guest's feed, `drafts` for one of a session's supplement, the
 //! latter with `session`, the reference it was read under. The event
-//! carries `board`, the reference, beside `update`. The feed starts at the
-//! head the thread found at its start: a page re-reads what it shows on
-//! open and takes the updates from there.
+//! carries `board`, the reference, beside `update`. The published feed
+//! starts at the head the board FIRST ANSWERS with — at the thread's start,
+//! or at its first `/health` after it, never at 0 for a board not yet up —
+//! and a session's drafts at the position the session opened at: a page
+//! re-reads what it shows on open and takes the updates from there.
 
 use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{channel, Receiver, RecvTimeoutError, Sender};
 use std::sync::Arc;
 use std::thread;
@@ -80,8 +87,8 @@ pub enum Searcher {
 
 /// What the feed thread is asked.
 enum Cmd {
-    /// A commit position the stream yielded.
-    Tick(u64),
+    /// Commits the stream yielded, read off [`Ticks`].
+    Tick,
     /// The stream could not connect.
     Unreachable(String),
     /// A session registered: its supplement mounted.
@@ -170,6 +177,34 @@ impl Supplements for &Feed {
     }
 }
 
+/// THE COMMITS NOT YET READ: the latest position the `/events` stream
+/// yielded, and whether a [`Cmd::Tick`] waits in the worker's queue for
+/// them. The reader sends a tick only where none waits, and the worker
+/// clears the mark as it takes one — BEFORE it reads — so a board committing
+/// faster than the worker reads leaves one tick queued, never one per
+/// commit, and a commit landing mid-read queues exactly the one more read
+/// that sees it.
+#[derive(Debug, Default)]
+struct Ticks {
+    waiting: AtomicBool,
+    latest: AtomicU64,
+}
+
+impl Ticks {
+    /// A commit at `position` yielded: whether a tick is owed, none waiting.
+    fn note(&self, position: u64) -> bool {
+        self.latest.fetch_max(position, Ordering::SeqCst);
+        !self.waiting.swap(true, Ordering::SeqCst)
+    }
+
+    /// The waiting tick taken: the mark cleared, then the latest position
+    /// read — the one the read about to run reaches at least.
+    fn take(&self) -> u64 {
+        self.waiting.store(false, Ordering::SeqCst);
+        self.latest.load(Ordering::SeqCst)
+    }
+}
+
 /// One board's TWO THREADS, the shell's until its stop: the stream's
 /// reader, and the consumer-owner — JOINED at [`FeedThreads::stop`] so its
 /// `Arc`s, the held-burst holds among them, which hold the `held/<chain>/`
@@ -191,17 +226,20 @@ impl FeedThreads {
     /// The two threads for `entry`, the consumer over `data_dir/index/`.
     pub fn spawn(entry: Arc<BoardEntry>, shared: Shared) -> FeedThreads {
         let (tx, rx) = channel();
-        // The stream's reader: each commit a tick, a failed connect said.
-        // The stream borrows the board from the `Arc` the thread holds, so
-        // its stopper comes back over a channel before the first read.
+        let ticks = Arc::new(Ticks::default());
+        // The stream's reader: commits coalesced into a waiting tick, a
+        // failed connect said. The stream borrows the board from the `Arc`
+        // the thread holds, so its stopper comes back over a channel before
+        // the first read.
         let (stop_tx, stop_rx) = channel();
-        let (reader_entry, reader_tx) = (Arc::clone(&entry), tx.clone());
+        let (reader_entry, reader_tx, reader_ticks) = (Arc::clone(&entry), tx.clone(), Arc::clone(&ticks));
         thread::spawn(move || {
             let mut stream = events(&reader_entry.board);
             let _ = stop_tx.send(stream.stopper());
             while let Some(next) = stream.next() {
                 let cmd = match next {
-                    Ok(position) => Cmd::Tick(position),
+                    Ok(position) if reader_ticks.note(position) => Cmd::Tick,
+                    Ok(_) => continue,
                     Err(h) => Cmd::Unreachable(h.to_string()),
                 };
                 if reader_tx.send(cmd).is_err() {
@@ -210,7 +248,7 @@ impl FeedThreads {
             }
         });
         let stream_stop = stop_rx.recv().expect("the reader sends its stopper before it reads");
-        let worker = thread::spawn(move || Worker::run(entry, shared, rx));
+        let worker = thread::spawn(move || Worker::run(entry, shared, rx, &ticks));
         FeedThreads { feed: Feed { cmds: tx }, stream_stop, worker }
     }
 
@@ -246,7 +284,11 @@ struct Worker<'b> {
     /// The held-burst holds this worker drives.
     holds: Arc<Holds>,
     consumer: Option<Consumer<'b>>,
-    published_since: u64,
+    /// Where the published feed's next read starts: the head the board first
+    /// answered with, then each page's last — none until the board answers.
+    published_since: Option<u64>,
+    /// Where each mounted principal's drafts read starts: its session's open
+    /// position, then each page's last.
     drafts_since: HashMap<u64, u64>,
     last_mode: Option<Mode>,
     last_index: BTreeMap<Option<u64>, Value>,
@@ -261,10 +303,10 @@ struct Worker<'b> {
 }
 
 impl<'b> Worker<'b> {
-    fn run(entry: Arc<BoardEntry>, shared: Shared, rx: Receiver<Cmd>) {
+    fn run(entry: Arc<BoardEntry>, shared: Shared, rx: Receiver<Cmd>, ticks: &Ticks) {
         let entry_arc = entry;
         let entry: &BoardEntry = &entry_arc;
-        let head = entry.board.health().map(|h| h.log_position()).unwrap_or(0);
+        let head = entry.board.health().ok().map(|h| h.log_position());
         let Shared { bus, sessions, reopen_store, data_dir, talk, holds } = shared;
         let mut worker = Worker {
             entry,
@@ -295,7 +337,7 @@ impl<'b> Worker<'b> {
         let mut next_probe = Instant::now() + PROBE_CADENCE;
         loop {
             match rx.recv_timeout(next_probe.saturating_duration_since(Instant::now())) {
-                Ok(Cmd::Tick(position)) => worker.tick(position),
+                Ok(Cmd::Tick) => worker.tick(ticks.take()),
                 Ok(Cmd::Unreachable(text)) => worker.unreachable(&text),
                 Ok(Cmd::Widen(entry)) => worker.widen(&entry),
                 Ok(Cmd::Narrow(principal)) => worker.narrow(principal),
@@ -347,6 +389,9 @@ impl<'b> Worker<'b> {
             self.unreachable = false;
             self.bus.emit(EventName::Daemon, json!({"board": self.entry.reference, "state": "running"}));
         }
+        // The pair read first: where the board did not answer before, its
+        // head is where the published feed starts.
+        self.read_mode();
         self.mount();
         if let Some(c) = &self.consumer {
             match c.poll() {
@@ -359,7 +404,6 @@ impl<'b> Worker<'b> {
             }
         }
         self.read_feed();
-        self.read_mode();
         self.emit_index();
         // The `running` emit ends an unreachable hold at this board (§3c.4):
         // the resend runs where the board is back and a session stands.
@@ -413,32 +457,33 @@ impl<'b> Worker<'b> {
         sessions.end(session, &entry.board, store.as_deref(), self, &bus);
     }
 
-    /// THE `feed` EVENTS: the published feed's new rows as a guest, then
-    /// each open session's drafts supplement under its token.
+    /// THE `feed` EVENTS: the published feed's new rows as a guest, from
+    /// the head the board first answered with — none read before it answers
+    /// — then each open session's drafts supplement under its token.
     fn read_feed(&mut self) {
         let entry: &'b BoardEntry = self.entry;
         let board = &entry.board;
-        loop {
-            match board.changes(None, &ChangesQuery { since: self.published_since, ..ChangesQuery::default() }) {
+        while let Some(since) = self.published_since {
+            match board.changes(None, &ChangesQuery { since, ..ChangesQuery::default() }) {
                 Ok(ChangesAnswer::Page(page)) => {
                     for row in &page.changes {
                         self.emit_feed(row, "published", None);
                     }
-                    self.published_since = page.last;
+                    self.published_since = Some(page.last);
                     if !page.more {
                         break;
                     }
                 }
                 Ok(ChangesAnswer::HistoryReclaimed { floor }) => {
-                    self.published_since = floor.unwrap_or(self.published_since);
+                    self.published_since = Some(floor.unwrap_or(since));
                     break;
                 }
                 Ok(ChangesAnswer::TooLarge { fits }) => {
-                    if let Ok(ChangesAnswer::Page(page)) = board.changes(None, &ChangesQuery { since: self.published_since, limit: Some(fits), ..ChangesQuery::default() }) {
+                    if let Ok(ChangesAnswer::Page(page)) = board.changes(None, &ChangesQuery { since, limit: Some(fits), ..ChangesQuery::default() }) {
                         for row in &page.changes {
                             self.emit_feed(row, "published", None);
                         }
-                        self.published_since = page.last;
+                        self.published_since = Some(page.last);
                     }
                     break;
                 }
@@ -451,15 +496,16 @@ impl<'b> Worker<'b> {
     }
 
     /// `session`'s drafts supplement read to the board's head under its
-    /// token, from where its principal's last read stopped, each row a
-    /// `feed` event of the `drafts` class. The death signal ends the
-    /// session (`Sessions::end`, which answers a session the page already
-    /// closed with that arm and does nothing more).
+    /// token, from where its principal's last read stopped — at first, the
+    /// position the session opened at — each row a `feed` event of the
+    /// `drafts` class. The death signal ends the session (`Sessions::end`,
+    /// which answers a session the page already closed with that arm and
+    /// does nothing more).
     fn read_drafts(&mut self, session: &SessionEntry) {
         let entry: &'b BoardEntry = self.entry;
         let principal = session.facts.principal;
         loop {
-            let since = *self.drafts_since.entry(principal).or_insert(self.published_since);
+            let since = *self.drafts_since.entry(principal).or_insert(session.opened_at);
             match entry.board.changes(Some(&session.token), &ChangesQuery { since, drafts: true, ..ChangesQuery::default() }) {
                 Ok(ChangesAnswer::Page(page)) => {
                     for row in &page.changes {
@@ -490,9 +536,11 @@ impl<'b> Worker<'b> {
     }
 
     /// THE `mode` EVENT where the pair moved (the claim's landing, a
-    /// restart with the flag changed).
+    /// restart with the flag changed) — and, the first time the board
+    /// answers, its head as the published feed's start.
     fn read_mode(&mut self) {
         let Ok(health) = self.entry.board.health() else { return };
+        self.published_since.get_or_insert(health.log_position());
         // ONE member more read per tick (§3c.4): `writes.halted` tells the hold,
         // a hold `halted` beginning at the first `true`.
         self.holds.note_health(&self.entry.reference, health.body["writes"]["halted"].as_bool().unwrap_or(false));
@@ -568,7 +616,7 @@ impl Supplements for Worker<'_> {
         let Some(account) = entry.facts.account.as_deref() else { return };
         let principal = entry.facts.principal;
         self.references.insert(principal, entry.reference.clone());
-        self.drafts_since.entry(principal).or_insert(self.published_since);
+        self.drafts_since.entry(principal).or_insert(entry.opened_at);
         // The face is announced afresh under the reference it now stands
         // under — a re-opened session's as much as a new one's.
         self.last_index.remove(&Some(principal));
@@ -720,38 +768,4 @@ pub fn answer_without_index() -> Value {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// The ten arms spell their names and members as §4b.2 draws them.
-    #[test]
-    fn the_state_spells_its_ten_arms() {
-        assert_eq!(state_json(&State::None), json!({"arm": "none"}));
-        assert_eq!(state_json(&State::Busy)["arm"], "busy");
-        let v = state_json(&State::Complete { as_of: 9, floor: Some(2) });
-        assert_eq!((v["arm"].as_str(), v["as_of"].as_u64(), v["floor"].as_u64()), (Some("complete"), Some(9), Some(2)));
-        let v = state_json(&State::Widening { range: Range::Board });
-        assert_eq!((v["arm"].as_str(), v["range"].as_str()), (Some("widening"), Some("board")));
-        let v = state_json(&State::Building { position: 3, units: 4, lost: Some(Lost::Damaged { what: "crc".into() }), aside: true });
-        assert_eq!((v["arm"].as_str(), v["lost"]["kind"].as_str(), v["aside"].as_bool()), (Some("building"), Some("damaged"), Some(true)));
-        let v = state_json(&State::PastTheCeiling { held: 1, seen: 2, limit: 3 });
-        assert_eq!((v["arm"].as_str(), v["limit"].as_u64()), (Some("past_the_ceiling"), Some(3)));
-        assert_eq!(state_json(&State::AtTheFloor { floor: 5 })["floor"], 5);
-        assert_eq!(state_json(&State::NewerSkep { v: Newer::Version { v: 9 } })["v"]["version"], 9);
-        assert_eq!(standing_json(&Standing::Public), "public");
-    }
-
-    /// The search words are the bridge's own, never a Rust spelling: a held
-    /// standing names its grant's kind and rung in snake case, a gap mark
-    /// its width, a hit's and a place's kind the two words declared.
-    #[test]
-    fn the_search_words_are_the_bridges_own() {
-        let issuer = skep_client::address::parse_address("1.0.1").unwrap();
-        let held = standing_json(&Standing::Held { kind: GrantKind::AnyPrincipal, rung: Rung::Account, issuer });
-        assert_eq!(held, json!({"held": {"kind": "any_principal", "rung": "account", "issuer": "1.0.1"}}));
-        assert_eq!(standing_json(&Standing::YoursToRead), "yours_to_read");
-        assert_eq!(mark_json(&Mark { offset: 4, len: 0, kind: MarkKind::Gap { width: 3 } }), json!({"offset": 4, "len": 0, "kind": {"gap": {"width": 3}}}));
-        assert_eq!(mark_json(&Mark { offset: 0, len: 2, kind: MarkKind::Term { term: "ab".into() } })["kind"], json!({"term": "ab"}));
-        assert_eq!((kind_name(Kind::Edition), kind_name(Kind::Draft)), ("edition", "draft"));
-    }
-}
+mod tests;

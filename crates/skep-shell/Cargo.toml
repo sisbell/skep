@@ -44,4 +44,9 @@ skepd = { path = "../skepd", features = ["test-hooks"] }
 # the shell's suite can poison the kernel (`JournalBarrier` + `JournalRepair`)
 # and watch a burst held `poisoned`, resent after a restart (§3c.4).
 skep-kernel = { path = "../skep-kernel" }
+# The two store budgets the attest's composer keeps as the store keeps them —
+# M7's `MAX_SLOT_SPANS` and M5's `MAX_REINSERTED_VALUES` — pinned equal by the
+# composer's suite.
+skep-links = { path = "../skep-links" }
+skep-arrangement = { path = "../skep-arrangement" }
 tempfile.workspace = true

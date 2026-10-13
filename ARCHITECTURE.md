@@ -1111,11 +1111,14 @@ an item the root re-exports counted as the module it is brought from
   session reference minted from OS entropy per process, never a
   credential, never derived from an origin or a token (THE PIN).
 - `log.rs` the call log and the dial log the page's gate reads — each entry
-  numbered by its place under the one lock that places it, a call's
-  outcome a `CallOutcome` — and `LoggingDialer`, the one `PlainHttp` every
-  board dials through, the log's one maker of dial entries — so the bare
-  set is met by the shell and never by the page, and no dial escapes the
-  log; no token, header or body is kept.
+  numbered by its place in the whole sequence under the one lock that
+  places it, the latest `LOG_ENTRIES` kept, a call's outcome a
+  `CallOutcome`, a call of no name the bridge spells kept by the name's
+  length — and `LoggingDialer`, the one `PlainHttp` every board dials
+  through, the log's one maker of dial entries — so the bare set is met by
+  the shell and never by the page, and no dial escapes the log; no token,
+  header or body is kept. `json_len`, a value's compact bytes, which the
+  log counts a call by and the hold measures a frame by.
 - `events.rs` `EventBus`: the seven events as values, each named by an
   `EventName` — the closed list, parsed from and spelled as the contract's
   words — fanned out to every subscriber in order.
@@ -1124,13 +1127,25 @@ an item the root re-exports counted as the module it is brought from
   block, the unreachable board, the shell's own — each with ONE `name`, a
   `std::error::Error`, and a `Halt`'s member by `From`; `Name`, the closed
   list of every name the shell spells.
+- `attest.rs` `Composer`: the entry frame for the ten kinds, every axis
+  from the shell's own reads — a V-spec slot through `image`, a
+  `publish`'s copied runs read back through the origin's arrangement,
+  keeping only the positions the shot copies in, a window by address —
+  through `skep-identity`'s builders, as the daemon's verifier composes; and
+  THE BOARD's BUDGETS, the numbers the composer, the held store and the
+  hold's door keep as the board keeps them — the frame cap
+  (`MAX_FRAME_BYTES`), a wire list, an insert's values, an address's
+  components, a slot's spans, a shot's re-inserted values — and
+  `document_address`, the document address in its one spelling.
 - `held.rs` the HELD-BURST STORE (`client.md` §3c): one append-only file per
   (board, principal) beside the key store — a header and two line forms (a
   `held` line of a standing ordinal its re-mark), the `flock` on
-  `held/<chain>/lock`, the read-whole with P38's faces, each line synced
-  before `op` answers `held`, the file removed once every line is done;
-  `HeldQueue`, a principal's queue — its memory, the file its copy, a queue
-  in memory alone writing none.
+  `held/<chain>/lock`, the file read line by line with P38's faces, keeping
+  the standing lines alone, each line synced before `op` answers `held`,
+  the file removed once every line is done; `HeldQueue`, a principal's
+  queue — its memory, the file its copy, a queue in memory alone writing
+  none — its frames within `MAX_HELD_FRAME_BYTES`, each line within
+  `MAX_HELD_LINE_BYTES`, its ordinals within the page's.
 - `script.rs` the dev arm's SCRIPT: the grammar a script file's answers are
   parsed by, one per line in order; a typed import's seed printed by no
   `Debug` of an answer and no refusal of a line.
@@ -1141,11 +1156,6 @@ an item the root re-exports counted as the module it is brought from
 - `person.rs` `BridgePerson`: the PUBLIC moments as `moment` events
   blocking on the page's `answer`/`cancel` through `Pending`, routed to
   the walk that asked; the SECRET and CONSENT ones to the arm.
-- `attest.rs` `Composer`: the entry frame for the ten kinds, every axis
-  from the shell's own reads — a V-spec slot through `image`, a
-  `publish`'s copied runs read back through the origin's arrangement, a
-  window by address — through `skep-identity`'s builders, as the daemon's
-  verifier composes.
 - `sessions.rs` `Sessions`: the token under its reference, beside the
   board's position read before the open; the bare and the signed openings
   under the armed names, and the store's key and signer every row that
@@ -1157,12 +1167,15 @@ an item the root re-exports counted as the module it is brought from
   supplement handed to another standing session of its principal or
   narrowed; `Supplements`, the drafts supplements as the hand that
   registers or ends a session reaches them.
-- `hold.rs` the HELD-BURST HOLD (`client.md` §3c.4, §3c.5): a burst's WRITE
-  PATH, `Holds::send_burst` — held without a dial where a hold stands, else
+- `hold.rs` the HELD-BURST HOLD (`client.md` §3c.4, §3c.5): a burst's DOOR,
+  `Burst::admit`, and its WRITE PATH, `Holds::send_burst` — held without a
+  dial where a hold stands, refused `held_full` where the queue holds its
+  budget, else
   attested, dialed once and its answer read once through the classification
   table (a `poisoned` answer held as one that MAY have landed: its frames
   stay in the journal and land at the restart), the resend's lines through
-  the same reader; the per-(board, principal) queue over `held`'s file, the
+  the same reader; the per-(board, principal) queue over `held`'s file, each
+  board's hold under its own lock, the boards fixed at the open, the
   principal's file opened at a session's open (`Holds::open_session`) and
   kept in memory alone where another window holds the board's lock or the
   directory is out of reach; the `base` every acked write sets, the
@@ -1174,8 +1187,11 @@ an item the root re-exports counted as the module it is brought from
   deciding nothing — the feed worker's probe drains it; the own node's
   stopped state; the backing of `held` and `resolve`.
 - `feed.rs` `FeedThreads`: two threads per board — the `/events` stream's
-  reader and the consumer's owner, joined at the stop — and `Feed`, the
-  handle every call reaches the owner through, its channel cloned; the
+  reader, its commits coalesced into one waiting tick (`Ticks`), and the
+  consumer's owner, joined at the stop — and `Feed`, the handle every call
+  reaches the owner through, its channel cloned; the published feed read
+  from the head the board first answers with, a session's drafts from its
+  open; the
   `feed`, `index`, `mode` and `daemon`
   events (the `daemon` event for EVERY board the shell dials, each naming
   its board; silent for the own node's deliberate stop, which the shell
@@ -1242,7 +1258,29 @@ Rules that hold across its files:
 - **One board's wait holds no other.** A call reaches a board's feed thread
   through that board's own handle, a channel, and waits on its own reply:
   no lock is held across the wait, so a search queued behind a board that
-  is not answering holds back no call at another.
+  is not answering holds back no call at another. The holds keep each
+  board's hold under its own lock, so one board's synced appends and file
+  reads hold back no burst at another; and a board's commits coalesce into
+  one waiting read, so a board committing faster than its feed reads holds
+  a call queued behind them to one read at most.
+- **The board's budgets, kept as the board keeps them.** Every cost the
+  shell pays for a page's frame or a board's answer is held, before the
+  work it bounds, to the budget the board's own parse, store or composer
+  holds the same frame to (`attest.rs`'s constants, each pinned to the
+  board's — by its export where it exports one, by its behaviour where it
+  does not): a burst past the frame cap, a list past the wire's, an insert
+  past its values, an address past its components, a slot past its spans,
+  a shot past its re-insert budget or its body, an origin past one
+  delivery, and the held queue past one frame's worth. A frame past one is
+  a frame the board refuses whatever it carries; no budget here is one the
+  board does not keep.
+- **A burst the board takes at no send is never held.** `Burst::admit` is
+  the one door a burst enters the hold by: a frame past the board's frame
+  cap as sent or as a signed resend sends it, one naming no document in its
+  one spelling, an insert a signed session cannot attest — each refused at
+  the act, since its line could be sent and resolved never and would hold
+  every later burst of its principal behind it. The held store's writer
+  holds no line its reader would halt on.
 - **Dropping a shell stops it.** `Shell`'s `Drop` runs `shutdown`, which a
   second time finds nothing left to stop: no feed thread, open session or
   `held/<chain>/` lock outlives the shell, whether or not its owner stopped
@@ -1314,7 +1352,10 @@ write kind of the wire with no dial a counting listener sees, a shell's
 options printing no seed, a search held at one board holding back no
 session at another, the stop abandoning a walk that waits on the page,
 and a shell dropped unstopped closing its session at the board and
-freeing its board's held lock. The
+freeing its board's held lock; the codec's private budgets — a list, an
+address, an insert's values — each parsed at the composer's number and
+refused one past it, and a board down at the open fed from its first
+answer, never replaying the history before it. The
 HELD-BURST STORE is held there too: a burst held when the daemon is
 stopped and resent `kept` after a restart at the same port, the kernel
 poison holding a burst `poisoned` then `halted`, the poisoned burst of two
@@ -1330,8 +1371,17 @@ faces (the header, `v` first, the torn and damaged lines, the aside, the
 lock, compaction and the file recreated header first by the next line,
 persist-first, every line form read back as it was held, the store's
 modes its owner's alone, a refused copy's line standing in the queue, a
-re-mark read back as one line, a refused `done` settling its line) by
-`held.rs`'s suite, and the classification table, the own hand on a read
+re-mark read back as one line, a refused `done` settling its line, the
+queue's frames held to their budget, an unchanged re-mark writing nothing,
+the ordinals held to the page's, the writer holding no line its reader
+refuses and copying none past the line bound, and the reader halting on
+any line it cannot read whole while ignoring a torn last line cut
+mid-character) by `held.rs`'s suite, the composer's budgets — a slot held
+to the wire's list and its spans, a shot to its arithmetic before any
+read, a read-back to its extent, its map and the body budget, and a shot's
+body composed run for run as the signer's builder spells it — by
+`attest.rs`'s, a board's commits coalesced into a read per turn by
+`feed.rs`'s, and the classification table, the own hand on a read
 (a signed entry's row, a lost-testimony row), THE READ's table — every
 answer the resend's read can meet against every answer its site read can,
 cell by cell — a read the board refuses deciding nothing,
@@ -1342,14 +1392,18 @@ every kind of ack, the own node stopped, `writes.halted` and a third
 `durability` holding a burst over time, P38's halted file refusing every
 act and a line the store cannot copy standing in memory, the stored frame
 without its attest, a drop and a move each on its own document alone, one
-drain per board at a time and a drain that unwinds leaving its board free
-by `hold.rs`'s. The end's once-only gate and the supplement's release are
+drain per board at a time and a drain that unwinds leaving its board free,
+the door refusing a burst the board takes at no send, a signed burst's
+room for its attest, the queue's `held_full`, and a burst at one board
+answered while another board's hold is held by `hold.rs`'s. The end's once-only gate and the supplement's release are
 held by `sessions.rs`'s own suite — two hands at one death, one
 derivation, one event; a hand that panics mid-end leaving the end to the
 next; a leaving session's supplement handed to the standing one — the
-log's numbering under eight writers at once and its dialer's record of a
-dial no board answers by `log.rs`'s, every scripted answer met at every
-moment by `dev_arm.rs`'s, and the arrangement by `tests/it/tidy.rs`.
+log's numbering under eight writers at once, its latest entries kept past
+its bound, an unknown call kept by its length, and its dialer's record of
+a dial no board answers by `log.rs`'s, every scripted answer met at every
+moment and a sheet too short to type off abandoning the walk by
+`dev_arm.rs`'s, and the arrangement by `tests/it/tidy.rs`.
 
 ## The command, `skep-cli`
 

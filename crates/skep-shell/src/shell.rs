@@ -42,7 +42,7 @@
 //! §Recovery order of the media design is not run here).
 
 use std::fmt;
-use std::io::{self, Read};
+use std::io::Read;
 use std::path::PathBuf;
 use std::sync::mpsc::Receiver;
 use std::sync::{Arc, Mutex};
@@ -69,7 +69,7 @@ use crate::dev_arm::DevArm;
 use crate::events::{Event, EventBus, EventName};
 use crate::feed::{answer_without_index, BoardEntry, Feed, FeedThreads, Searcher, Shared};
 use crate::hold::{self, BurstAnswer, Holds};
-use crate::log::{CallOutcome, Log, LoggingDialer};
+use crate::log::{json_len, CallOutcome, Log, LoggingDialer};
 use crate::person::{BridgePerson, Pending};
 use crate::refs::board_reference;
 use crate::refusal::{Name, Refusal};
@@ -386,26 +386,6 @@ fn host_name() -> String {
         .unwrap_or_else(|| "dev-machine".to_string())
 }
 
-/// The length of `v`'s compact JSON text — the bytes a call carries, as
-/// the log counts them — counted as it is written and never kept.
-fn json_len(v: &Value) -> usize {
-    /// A writer that keeps nothing but the count.
-    struct Count(usize);
-    impl io::Write for Count {
-        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-            self.0 += buf.len();
-            Ok(buf.len())
-        }
-
-        fn flush(&mut self) -> io::Result<()> {
-            Ok(())
-        }
-    }
-    let mut count = Count(0);
-    serde_json::to_writer(&mut count, v).expect("a `Value` has string keys and finite numbers, and the count's writer never fails");
-    count.0
-}
-
 /// The three facts as the bridge spells them.
 fn facts_json(f: &skep_client::sheet::Facts) -> Value {
     json!({"principal": f.principal, "account": f.account, "origin": f.origin.as_str()})
@@ -463,10 +443,8 @@ impl Shell {
             boards.push(entry);
         }
         let reopen_store = matches!(opts.session_mode, SessionMode::Signed { .. }).then(|| Arc::clone(&store));
-        let holds = Holds::new(Arc::clone(&sessions), Arc::clone(&bus), Arc::clone(&store), opts.store_dir.clone(), Arc::clone(&opts.talk));
-        for entry in &boards {
-            holds.register_board(&entry.reference, Arc::clone(&entry.board));
-        }
+        let held_boards = boards.iter().map(|entry| (entry.reference.clone(), Arc::clone(&entry.board)));
+        let holds = Holds::new(Arc::clone(&sessions), Arc::clone(&bus), Arc::clone(&store), opts.store_dir.clone(), Arc::clone(&opts.talk), held_boards);
         let shared = Shared { bus: Arc::clone(&bus), sessions: Arc::clone(&sessions), reopen_store: reopen_store.clone(), data_dir: opts.store_dir.clone(), talk: Arc::clone(&opts.talk), holds: Arc::clone(&holds) };
         let threads: Vec<FeedThreads> = boards.iter().map(|entry| FeedThreads::spawn(Arc::clone(entry), shared.clone())).collect();
         let feeds = boards.iter().zip(&threads).map(|(entry, threads)| (entry.reference.clone(), threads.feed())).collect();
@@ -622,11 +600,13 @@ impl Shell {
     // ── THE CALLS ────────────────────────────────────────────────────────
 
     /// ONE CALL by name, the log kept: the row's method dispatched on the
-    /// bridge's spelling, one arm per call.
+    /// bridge's spelling, one arm per call; a name the bridge does not spell
+    /// is answered `unknown_call` and logged by its length alone.
     pub fn call(&self, name: &str, args: &Value) -> Result<Value, Refusal> {
         let started = Instant::now();
         let bytes_in = json_len(args);
-        let outcome = match Call::named(name) {
+        let call = Call::named(name);
+        let outcome = match call {
             Some(Call::Boards) => Ok(self.boards()),
             Some(Call::Session) => self.session_call(args),
             Some(Call::Close) => self.close(args),
@@ -655,7 +635,10 @@ impl Shell {
             Ok(v) => (json_len(v), CallOutcome::Result),
             Err(r) => (json_len(&r.to_value()), CallOutcome::Refused),
         };
-        self.log.call(name, bytes_in, bytes_out, started.elapsed(), answered);
+        match call {
+            Some(call) => self.log.call(call.as_str(), bytes_in, bytes_out, started.elapsed(), answered),
+            None => self.log.unknown_call(name.len(), bytes_in, bytes_out, started.elapsed()),
+        }
         outcome
     }
 

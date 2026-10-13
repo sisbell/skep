@@ -1562,9 +1562,11 @@ version = "0.1.0"
 dependencies = [
  "serde_json",
  "skep-address",
+ "skep-arrangement",
  "skep-client",
  "skep-identity",
  "skep-kernel",
+ "skep-links",
  "skep-search",
  "skepd",
  "tempfile",

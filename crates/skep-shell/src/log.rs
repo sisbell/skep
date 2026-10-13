@@ -9,9 +9,12 @@
 //! words and the answer's status, which is what a count needs and nothing a
 //! capture could use. [`LoggingDialer`] is the one `Dialer` every board of
 //! the shell dials through — `PlainHttp` behind the record — so no dial
-//! escapes the log.
+//! escapes the log. THE LOG IS BOUNDED: it keeps the latest
+//! [`LOG_ENTRIES`], and a call under a name the bridge does not spell is
+//! kept by its length, never its bytes.
 
-use std::io::Read;
+use std::collections::VecDeque;
+use std::io::{self, Read};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -46,10 +49,28 @@ impl CallOutcome {
     }
 }
 
-/// The log: the entries in arrival order, each numbered by its place.
+/// The most entries the log keeps: the latest 2^16, the oldest dropped as
+/// each new one comes. A scenario the page's gate runs before it reads the
+/// log is hundreds to a few thousand calls and dials, so the log keeps every
+/// entry of one many times over; an entry is a handful of short members,
+/// under a kilobyte held, so the log's bill stays under 64 MiB however long
+/// the shell runs. Every entry's `seq` counts on past the bound, so a reader
+/// sees where the kept entries start by the first `seq` it reads.
+pub const LOG_ENTRIES: usize = 1 << 16;
+
+/// The log: its latest entries in arrival order — 2^16 of them, the oldest
+/// dropped as each new one comes — each numbered by its place in the whole
+/// sequence.
 #[derive(Debug, Default)]
 pub struct Log {
-    entries: Mutex<Vec<Value>>,
+    entries: Mutex<Entries>,
+}
+
+/// The entries kept, and the number the next one takes.
+#[derive(Debug, Default)]
+struct Entries {
+    kept: VecDeque<Value>,
+    next_seq: u64,
 }
 
 impl Log {
@@ -59,13 +80,18 @@ impl Log {
     }
 
     /// One entry placed, numbered and stamped under the lock that places
-    /// it: its `seq` is its index, so the order the entries are read in is
-    /// the order they were numbered in.
+    /// it — its `seq` its place in the whole sequence, so the order the
+    /// entries are read in is the order they were numbered in — and the
+    /// oldest dropped where the log holds [`LOG_ENTRIES`] already.
     fn push(&self, mut entry: Value) {
         let mut entries = self.entries.lock().expect("the log's lock");
-        entry["seq"] = Value::from(entries.len() as u64);
+        entry["seq"] = Value::from(entries.next_seq);
+        entries.next_seq += 1;
         entry["at_ms"] = Value::from(SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0));
-        entries.push(entry);
+        if entries.kept.len() == LOG_ENTRIES {
+            entries.kept.pop_front();
+        }
+        entries.kept.push_back(entry);
     }
 
     /// One CALL the page made: `call` its name, `bytes_in` the request's
@@ -79,6 +105,22 @@ impl Log {
             "bytes_out": bytes_out,
             "ms": elapsed.as_millis() as u64,
             "outcome": outcome.as_str(),
+        }));
+    }
+
+    /// One CALL the page made under a name the bridge does not spell — its
+    /// refusal is `unknown_call` — kept as `<unknown>` with the name's
+    /// length in bytes and never the name: the page chooses those bytes, and
+    /// the log keeps what a count needs.
+    pub(crate) fn unknown_call(&self, name_bytes: usize, bytes_in: usize, bytes_out: usize, elapsed: Duration) {
+        self.push(json!({
+            "kind": "call",
+            "call": "<unknown>",
+            "name_bytes": name_bytes,
+            "bytes_in": bytes_in,
+            "bytes_out": bytes_out,
+            "ms": elapsed.as_millis() as u64,
+            "outcome": CallOutcome::Refused.as_str(),
         }));
     }
 
@@ -100,21 +142,21 @@ impl Log {
         }));
     }
 
-    /// Every entry, in order.
+    /// Every entry kept, in order.
     pub fn entries(&self) -> Vec<Value> {
-        self.entries.lock().expect("the log's lock").clone()
+        self.entries.lock().expect("the log's lock").kept.iter().cloned().collect()
     }
 
     /// How many dials the log holds.
     #[cfg(test)]
     pub fn dials(&self) -> usize {
-        self.entries.lock().expect("the log's lock").iter().filter(|e| e["kind"] == "dial").count()
+        self.entries.lock().expect("the log's lock").kept.iter().filter(|e| e["kind"] == "dial").count()
     }
 
     /// How many calls the log holds.
     #[cfg(test)]
     pub fn calls(&self) -> usize {
-        self.entries.lock().expect("the log's lock").iter().filter(|e| e["kind"] == "call").count()
+        self.entries.lock().expect("the log's lock").kept.iter().filter(|e| e["kind"] == "call").count()
     }
 }
 
@@ -160,6 +202,27 @@ impl Dialer for LoggingDialer {
         self.log.dial(head.method, &head.path, status, declared, 0, started.elapsed());
         answer
     }
+}
+
+/// The length of `v`'s compact JSON text — the bytes a value carries on the
+/// wire, as the log counts a call's and the shell measures a frame against
+/// the board's cap — counted as it is written and never kept.
+pub(crate) fn json_len(v: &Value) -> usize {
+    /// A writer that keeps nothing but the count.
+    struct Count(usize);
+    impl io::Write for Count {
+        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+            self.0 += buf.len();
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+    let mut count = Count(0);
+    serde_json::to_writer(&mut count, v).expect("a `Value` has string keys and finite numbers, and the count's writer never fails");
+    count.0
 }
 
 #[cfg(test)]
@@ -229,5 +292,33 @@ mod tests {
         assert_eq!((entry["bytes_in"].as_u64(), entry["bytes_out"].as_u64()), (Some(body.len() as u64), Some(0)), "{entry}");
         let kept = entry.to_string();
         assert!(!kept.contains(&token) && !kept.contains("Skepd-Session") && !kept.contains("insert"), "{kept}");
+    }
+
+    /// THE LOG IS BOUNDED: past [`LOG_ENTRIES`] the oldest go, the latest
+    /// [`LOG_ENTRIES`] kept in order, their `seq` counting on — so the first
+    /// kept says where the kept entries start (the mutant that keeps every
+    /// entry grows the log for the shell's life; the one that renumbers from
+    /// the kept entries hides the drop).
+    #[test]
+    fn the_log_keeps_its_latest_entries() {
+        let log = Log::new();
+        for _ in 0..LOG_ENTRIES + 10 {
+            log.call("probe", 2, 2, Duration::ZERO, CallOutcome::Result);
+        }
+        let entries = log.entries();
+        assert_eq!(entries.len(), LOG_ENTRIES);
+        assert_eq!((entries[0]["seq"].as_u64(), entries[LOG_ENTRIES - 1]["seq"].as_u64()), (Some(10), Some(LOG_ENTRIES as u64 + 9)));
+    }
+
+    /// A call under a name the bridge does not spell is kept by the name's
+    /// length and never its bytes, whatever the page sent.
+    #[test]
+    fn an_unknown_call_is_kept_by_its_length() {
+        let log = Log::new();
+        let name = "x".repeat(64 * 1024);
+        log.unknown_call(name.len(), 2, 40, Duration::ZERO);
+        let entry = &log.entries()[0];
+        assert_eq!((entry["call"].as_str(), entry["name_bytes"].as_u64(), entry["outcome"].as_str()), (Some("<unknown>"), Some(64 * 1024), Some("refused")), "{entry}");
+        assert!(entry.to_string().len() < 256, "the name is not kept: {} bytes", entry.to_string().len());
     }
 }

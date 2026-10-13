@@ -19,9 +19,10 @@
 //!
 //! THE RECORD HOLDS NO KEY THAT SIGNS: `parse_enroll` yields `PublicKey`s,
 //! and no field type in `skep-identity` can carry a private key (I1,
-//! AUTH-2.89). Its bytes are the person's identifier and are NEVER logged —
-//! not here, and not through [`Record`]'s `Debug`, which shows the length
-//! alone.
+//! AUTH-2.89). Its bytes are the person's identifier and are NEVER logged
+//! whole — not here, and not through [`Record`]'s `Debug`, which shows the
+//! length alone; the sidecar's talk, which the flow logs whole, names each
+//! entry by its fingerprint and its label.
 
 use std::fmt;
 

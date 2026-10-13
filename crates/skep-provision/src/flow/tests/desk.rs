@@ -1,17 +1,17 @@
-//! THE DESK, what the pages ask, over the two fakes: the flow's halves of
-//! T8 (two posts on one name; a fifth past the queue; a post for a name
-//! admitted while its reads ran, refused at its own admission; a name
-//! Docker cannot take as a name alone, refused with no docker call), T9 (a
-//! spent, an unknown and a held code refused; the invite first, so an
-//! uninvited post learns nothing about names; a code spent while a post's
-//! reads ran, refused at its admission; a live board's code held until its
-//! spend is written, kept held where the spend could not be written, and
-//! let go of after it; no code in the log) and T10 (a sign-up, its address
-//! in no log line; one past the file's cap, refused); a fifth post past the
-//! looks' cap, refused D-8 with no docker call, and the looks' permits given
-//! back; and THE BOOK keeping its own rules — what blocks a new post, first
-//! of three, and what admitting, taking, going live, letting a code go and
-//! failing do.
+//! THE DESK, what the pages ask, over the two fakes: the flow's halves of T8
+//! (two posts on one name; a fifth past the queue; a post for a name admitted
+//! while its reads ran, refused at its own admission; a name Docker cannot
+//! take as a name alone, refused with no docker call), T9 (a spent, an
+//! unknown and a held code refused; the invite first, so an uninvited post
+//! learns nothing about names; a code spent while a post's reads ran, refused
+//! at its admission; a live board's code held until its spend is written,
+//! kept held where the spend could not be written, and let go of after it; no
+//! code in the log) and T10 (a sign-up, its address in no log line; one past
+//! the file's cap, refused); a fifth post past the looks' cap, refused D-8
+//! with no docker call, and the looks' permits given back; and THE BOOK
+//! keeping its own rules — what blocks a new post, first of three, and what
+//! admitting, taking, going live, letting a code go and failing do, an
+//! admission whole or not made.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
@@ -164,6 +164,30 @@ fn the_book_keeps_its_own_rules() {
     assert_eq!(book.queue.len(), 2);
 }
 
+/// AN ADMISSION IS WHOLE OR NOT MADE: a job under a token the map holds
+/// panics at the map's gate before the book changes — its code not held,
+/// nothing queued, the post the token names untouched, its name not held.
+#[test]
+fn an_admission_on_a_token_admitted_before_changes_nothing() {
+    let name = |n: &str| Name::parse(n.as_bytes()).expect("a name");
+    let invite_code = |c: &str| InviteCode::parse(c).expect("a code");
+    let job = |n: &str, code: &str| Job {
+        token: "t0k3n".to_owned(),
+        name: name(n),
+        record: crate::record::admit(record(true).as_bytes()).expect("a record"),
+        code: invite_code(code),
+        address: "person@example.com".to_owned(),
+    };
+    let mut book = Book::new(StatusMap::default());
+    assert_eq!(book.admit(job("alice", "c1")), 1);
+    let again = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| book.admit(job("bob", "c2"))));
+    assert!(again.is_err(), "a second admission under one token");
+    assert!(!book.codes.contains(&invite_code("c2")), "the refused admission's code held");
+    assert_eq!(book.queue.len(), 1, "the refused admission queued");
+    assert_eq!(book.map.post("t0k3n").map(|p| (p.name.clone(), p.state)), Some((name("alice"), PostState::Queued)));
+    assert!(!book.map.holds(&name("bob")));
+}
+
 /// T9: A SPENT CODE, AN UNKNOWN CODE, A CODE OF ANOTHER FORM and A CODE A
 /// POST IN FLIGHT HOLDS are refused at the post, no docker call made; D-5
 /// and D-6 refuse a record before any — the log naming the fault's token,
@@ -254,8 +278,11 @@ fn a_live_boards_code_is_let_go_of_and_refused_as_spent() {
 /// invite file's lock held elsewhere — the owner's `invite` minting that
 /// moment — a worker whose board has gone live waits at its spend with the
 /// code still held, and a post naming the code meets the invite's refusal
-/// with no docker call; the lock let go of, the spend lands, and only then
-/// is the code let go of.
+/// with no docker call; the lock let go of, the spend lands, and only then is
+/// the code let go of. The wait is the moment a stop would leave behind
+/// (`main`'s THE STOP): the snippet standing, the board live, the file saying
+/// issued, and the log naming the board's snippet written with no spend after
+/// it.
 #[test]
 fn a_live_boards_code_is_held_until_its_spend_is_written() {
     let rig = rig(&(flow_of("alice", false) + &reloads(1)), None);
@@ -272,6 +299,8 @@ fn a_live_boards_code_is_held_until_its_spend_is_written() {
     assert_eq!(rig.post("bob", &record(true), code.as_str()), Err(Refusal::Invite));
     assert!(rig.logged("bob: a post refused: its invite is held by a post in flight"), "{:?}", rig.log());
     assert!(rig.issued(&code), "a spend written past the lock");
+    assert!(rig.snippet("alice").exists(), "the snippet stands while the file says issued: what a stop here leaves");
+    assert!(rig.logged("alice: snippet: written") && !rig.logged("alice: the invite is spent"), "the log names the board, its spend not yet written: {:?}", rig.log());
     drop(lock);
     until("the spend", || (!rig.issued(&code)).then_some(()));
     until("the code let go of", || (!rig.service.book().codes.contains(&code)).then_some(()));

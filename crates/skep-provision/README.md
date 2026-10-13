@@ -20,9 +20,15 @@ skep-provision --version
 
 - **`serve`** runs the service until the process ends: SIGTERM's default
   disposition stops it at once. Every file it keeps is replaced whole by a
-  rename, so no stop tears one; a board cut off mid-step leaves what was
-  made standing, and the next `serve` removes it before it listens (see
-  [The sweep at start](#the-sweep-at-start)).
+  rename, so no stop tears one; a board cut off before its snippet is
+  written leaves what was made standing, and the next `serve` removes it
+  before it listens (see [The sweep at start](#the-sweep-at-start)); a
+  board cut off after its snippet is written and before its invite is
+  spent stands, routed — or routed at the proxy's next reload — and the
+  next `serve` counts it live and leaves it, its invite still issued: a
+  post on that invite is admitted again unless the owner marks it spent.
+  The log names such a board, its `snippet: written` with no
+  `the invite is spent` after it.
 - **`invite`** mints one invite into the state directory's invite file
   and prints one line on stdout, the invite link: the claim form's URL
   carrying the code, `https://<suffix>/claim?invite=<code>`. The owner
@@ -34,7 +40,8 @@ A usage refusal (an unknown flag, a missing value, a required flag
 missing, `--mailer` without `--from` or the reverse) exits 2 with the usage
 text; a start refused (a loose state directory, an unreadable snippet
 directory, an address that cannot be bound, a thread the machine will not
-give) or an `invite` that printed no invite link exits 1.
+give) or an `invite` that printed no invite link exits 1, as does a
+`--version` or `--help` whose text cannot be written.
 
 ## `serve`'s flags
 
@@ -156,7 +163,8 @@ up its own mail, and no other.
 
 When a step fails, what the steps made is undone in reverse order: the
 snippet removed and the proxy reloaded where it may stand — a write's
-error can come after its rename — the run removed, the volume removed.
+error can come after its rename — the run removed where one may stand —
+a `docker run` that fails can leave its container — the volume removed.
 Then the service looks again at what stands under the name, as a post
 does, and the log says what it found: done, or INCOMPLETE naming what
 still stands — a removal that itself failed. The status turns to D-8, and
@@ -175,21 +183,21 @@ saying INCOMPLETE: a panic costs its post, never the worker.
 
 ## The sweep at start
 
-A stop in the middle of a board leaves its volume, and perhaps a run,
-standing under a name with no snippet — a name the service would read as
-taken for good. So before `serve` binds its address it lists the volumes
-that carry this service's label (`docker volume ls -q --filter
-label=skep.provision=1`) and, for each whose name is one label of the
-grammar and has no `<name>.caddy` in the snippet directory, runs the last
-two rows of the cleanup, `docker rm -f <name>` and `docker volume rm
-<name>`, each answer logged, and then looks at what stands: where
-something still stands, the log names it and the name stays taken, for
-the operator. A volume whose snippet stands is left alone — it is a live
-board, or a stopped one that Docker's `--restart` brings back — and so is
-a listed volume whose name is not one of the grammar, which the log
-names. If the listing itself fails, the log says so, the sweep is
-skipped, and the service still serves. The serving line carries the count
-of boards cleared, `swept <n>`.
+A stop in the middle of a board, before its snippet is written, leaves its
+volume, and perhaps a run, standing under a name with no snippet — a name
+the service would read as taken for good. So before `serve` binds its
+address it lists the volumes that carry this service's label
+(`docker volume ls -q --filter label=skep.provision=1`) and, for each
+whose name is one label of the grammar and has no `<name>.caddy` in the
+snippet directory, runs the last two rows of the cleanup,
+`docker rm -f <name>` and `docker volume rm <name>`, each answer logged,
+and then looks at what stands: where something still stands, the log names
+it and the name stays taken, for the operator. A volume whose snippet
+stands is left alone — it is a live board, or a stopped one that Docker's
+`--restart` brings back — and so is a listed volume whose name is not one
+of the grammar, which the log names. If the listing itself fails, the log
+says so, the sweep is skipped, and the service still serves. The serving
+line carries the count of boards cleared, `swept <n>`.
 
 The sweep asks one thing of the operator: **one `serve` per Docker host**.
 The label is the host's, the same on every `serve`'s volumes, and a volume
@@ -259,9 +267,11 @@ planted there.
 ## What it never logs
 
 The log is one line per step on stderr, each naming the board, the step
-and each call's exit code, with the sidecar's stderr kept whole. It never
-carries the record's bytes, a person's address, an invite code or a
-status token. The one line on stdout is the serving line.
+and each call's exit code, with the sidecar's stderr kept whole — which
+names each entry of the record by its fingerprint and its label, the
+person's own words, already on the board with the record. It never
+carries the record whole or a key of it, a person's address, an invite
+code or a status token. The one line on stdout is the serving line.
 
 ## What it holds, and how it ships
 

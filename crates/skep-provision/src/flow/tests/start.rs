@@ -39,7 +39,7 @@ fn a_docker_that_cannot_run_skips_the_sweep_and_refuses_a_post_d8() {
     let into = Arc::clone(&lines);
     let log: Log = Arc::new(move |line: &str| into.lock().unwrap().push(line.to_owned()));
     let config = Config { boards_dir: boards, suffix: "skep.host".into() };
-    let service = Service::new(config, state_dir.clone(), Box::new(NoDocker), None, log, Arc::new(|_| {})).expect("the service");
+    let mut service = Service::new(config, state_dir.clone(), Box::new(NoDocker), None, log, Arc::new(|_| {})).expect("the service");
     assert_eq!(service.sweep(), 0);
     let code = mint(&state_dir, &MailAddress::parse("person@example.com").expect("an address"), None).expect("minted");
     let record = record(true);
@@ -78,7 +78,7 @@ fn a_look_that_cannot_be_made_never_clears_a_name() {
     let into = Arc::clone(&lines);
     let log: Log = Arc::new(move |line: &str| into.lock().unwrap().push(line.to_owned()));
     let config = Config { boards_dir: boards, suffix: "skep.host".into() };
-    let service = Service::new(config, state_dir, Box::new(ListsThenGone), None, log, Arc::new(|_| {})).expect("the service");
+    let mut service = Service::new(config, state_dir, Box::new(ListsThenGone), None, log, Arc::new(|_| {})).expect("the service");
     assert_eq!(service.sweep(), 0, "a board counted cleared though no look was made");
     let log = lines.lock().unwrap().clone();
     for opens in ["bob: sweep: rm_force: docker could not run: ", "bob: sweep: volume_rm: docker could not run: ", "bob: sweep: INCOMPLETE — the look at what stands could not be made: "] {
@@ -100,9 +100,9 @@ fn a_look_that_cannot_be_made_never_clears_a_name() {
 #[test]
 fn the_sweep_removes_a_half_made_board_and_leaves_the_rest() {
     let script = line("labelled_volumes", None, 0, "alice\nbob\nCarol_X\n", "") + &line("rm_force", Some("bob"), 0, "", "") + &line("volume_rm", Some("bob"), 0, "", "") + &inspects("bob");
-    let rig = rig(&script, None);
+    let mut rig = rig(&script, None);
     fs::write(rig.snippet("alice"), b"").expect("alice's snippet");
-    assert_eq!(rig.service.sweep(), 1);
+    assert_eq!(rig.sweep(), 1);
     rig.fake.assert_done();
     assert_eq!(rig.fake.said(), said(&["labelled_volumes", "rm_force bob", "volume_rm bob", "volume_inspect bob", "container_inspect bob"]));
     for logged in [
@@ -119,8 +119,8 @@ fn the_sweep_removes_a_half_made_board_and_leaves_the_rest() {
 
     // The listing fails: the sweep skipped, and the service still takes a
     // post.
-    let unlisted = rig_with(&(line("labelled_volumes", None, 1, "", "Cannot connect to the Docker daemon\n") + &inspects("erin")), None, Arc::new(|_| {}));
-    assert_eq!(unlisted.service.sweep(), 0);
+    let mut unlisted = rig_with(&(line("labelled_volumes", None, 1, "", "Cannot connect to the Docker daemon\n") + &inspects("erin")), None, Arc::new(|_| {}));
+    assert_eq!(unlisted.sweep(), 0);
     assert!(unlisted.logged("sweep: volumes: exit 1; the sweep is skipped") && unlisted.logged("sweep: volumes: Cannot connect to the Docker daemon"), "{:?}", unlisted.log());
     unlisted.admitted("erin", &unlisted.invite());
     unlisted.fake.assert_done();
@@ -135,8 +135,8 @@ fn the_sweep_removes_a_half_made_board_and_leaves_the_rest() {
         + &line("rm_force", Some("carol"), 1, "", "Error: No such container: carol\n")
         + &line("volume_rm", Some("carol"), 0, "", "")
         + &inspects("carol");
-    let partly = rig_with(&script, None, Arc::new(|_| {}));
-    assert_eq!(partly.service.sweep(), 1);
+    let mut partly = rig_with(&script, None, Arc::new(|_| {}));
+    assert_eq!(partly.sweep(), 1);
     partly.fake.assert_done();
     for logged in [
         "bob: sweep: rm_force: exit 1",

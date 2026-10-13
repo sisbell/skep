@@ -228,13 +228,26 @@ invite link printed on stdout, the one line to mail by hand.
     )
 }
 
-/// THE PARSE: a leading `--version` or `--help`, or a verb and its flags.
+/// THE PARSE: a leading `--version` or `--help`, read before any other
+/// argument and what follows it unread; or a verb and its flags. Where
+/// several refusals hold, the first met speaks: an argument that is not UTF-8
+/// text, where no leading `--version` or `--help` came first; then a verb
+/// unknown or missing; then the verb's words read left to right — an unknown
+/// argument, a flag without its value, a value of the wrong form, `--version`
+/// out of its place, and a `--help` met first answers the usage text; then
+/// `--mailer` and `--from` unpaired; then a required flag missing,
+/// `--state-dir` before `--reply-to` for `serve` and `--address` before
+/// `--state-dir` for `invite`.
 pub fn parse(argv: impl IntoIterator<Item = OsString>) -> Result<Command, String> {
-    let argv: Vec<String> = argv.into_iter().map(|a| a.into_string().map_err(|_| "an argument is not UTF-8 text".to_owned())).collect::<Result<_, _>>()?;
+    let mut argv = argv.into_iter().peekable();
+    match argv.peek().and_then(|first| first.to_str()) {
+        Some("--version") => return Ok(Command::Version),
+        Some("--help" | "-h") => return Ok(Command::Help),
+        _ => {}
+    }
+    let argv: Vec<String> = argv.map(|a| a.into_string().map_err(|_| "an argument is not UTF-8 text".to_owned())).collect::<Result<_, _>>()?;
     let mut argv = argv.into_iter();
     match argv.next().as_deref() {
-        Some("--version") => Ok(Command::Version),
-        Some("--help" | "-h") => Ok(Command::Help),
         Some("serve") => parse_serve(argv),
         Some("invite") => parse_invite(argv),
         Some(other) => Err(format!("unknown verb '{other}': serve or invite")),

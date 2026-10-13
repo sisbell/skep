@@ -64,15 +64,20 @@ impl From<io::Error> for SignUpRefused {
 }
 
 /// THE SIGN-UP FILE, one writer at a time: its path held under the lock its
-/// writer takes, so the file is reached through the lock or not at all —
-/// the one writer `whole`'s replacement asks of every path it replaces.
+/// writer takes, so, under [`SignUps::new`]'s precondition, the file is
+/// reached through the lock or not at all — the one writer `whole`'s
+/// replacement asks of every path it replaces.
 #[derive(Debug)]
 pub struct SignUps {
     file: Mutex<PathBuf>,
 }
 
 impl SignUps {
-    /// The sign-up file in `state_dir`.
+    /// The sign-up file in `state_dir`. PRECONDITION, the caller's: no other
+    /// `SignUps`, and no other process, appends to that file at once — this
+    /// value's lock is its one writer only so far; `Service::new` makes the
+    /// service's one, and no verb but `serve` writes the file. Nothing here
+    /// checks it.
     pub fn new(state_dir: &StateDir) -> SignUps {
         SignUps { file: Mutex::new(state_dir.file(SIGNUPS)) }
     }

@@ -38,7 +38,9 @@ const SNIPPET_MODE: u32 = 0o644;
 
 /// THE SNIPPET's TEXT for `name` under `suffix`: the deployment notes' block
 /// for `alice` under `skep.host`, byte for byte, every occurrence of either
-/// replaced — the matcher, the host, the upstream.
+/// replaced — the matcher, the host, the upstream. `suffix` is a domain by
+/// `args`' door — no character the Caddyfile reads as its own — used as it
+/// stands.
 pub fn snippet(name: &Name, suffix: &str) -> String {
     format!(
         "@{name} host {host}\n\
@@ -71,18 +73,22 @@ pub fn stands(boards_dir: &Path, name: &Name) -> io::Result<bool> {
     path(boards_dir, name).try_exists()
 }
 
-/// THE WRITE, WHOLE-THEN-RENAME: the snippet in place at [`SNIPPET_MODE`],
-/// or an error — before the rename with the directory as it was and no temp
-/// file left, from the directory's sync after it with the snippet STANDING:
-/// the flow reads every error as a snippet that may stand. An error is a
-/// failed step for the flow.
+/// THE WRITE, WHOLE-THEN-RENAME: the snippet in place at [`SNIPPET_MODE`], or
+/// an error — before the rename with the directory as it was and no temp file
+/// left, from the directory's sync after it with the snippet STANDING: the
+/// flow reads every error as a snippet that may stand. An error is a failed
+/// step for the flow. PRECONDITION, the caller's: no other write or removal
+/// of `name`'s snippet runs at once — the route lock, under which the flow
+/// makes both, keeps it; nothing here checks it.
 pub fn write(boards_dir: &Path, name: &Name, suffix: &str) -> io::Result<()> {
     whole::replace(&path(boards_dir, name), snippet(name, suffix).as_bytes(), SNIPPET_MODE, &|| Ok(()))
 }
 
-/// THE REMOVAL: `name`'s snippet gone — `true` where one stood, `false`
-/// where none did — and the directory synced; an error from that sync
-/// arrives after the unlink, the snippet already gone.
+/// THE REMOVAL: `name`'s snippet gone — `true` where one stood, `false` where
+/// none did — and the directory synced; an error from that sync arrives after
+/// the unlink, the snippet already gone. PRECONDITION, the caller's: no other
+/// write or removal of `name`'s snippet runs at once — the route lock, under
+/// which the flow makes both, keeps it; nothing here checks it.
 pub fn remove(boards_dir: &Path, name: &Name) -> io::Result<bool> {
     whole::remove(&path(boards_dir, name))
 }

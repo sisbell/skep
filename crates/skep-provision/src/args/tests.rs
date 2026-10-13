@@ -4,14 +4,15 @@
 //! an address out of the rule, a code out of the alphabet and an empty word
 //! among them, which this door alone refuses — and a missing required flag
 //! are each a usage refusal (`main` answers it exit 2 — the binary's suite
-//! runs one); the suffix's grammar at every byte and at each label's ends;
-//! every flag lands in its setting, the address and the code as their own
-//! values; `--workers` defaults to its constant and refuses zero (T21), and
-//! `--connections` likewise; a `test-hooks` build takes `--docker-fake` and
-//! `--mailer-fake` — the shipped build's refusal of both is
-//! `scripts/gate-full.sh`'s to check, every build of this suite having the
-//! feature on; and the usage text names every flag and renders every default
-//! from its constant.
+//! runs one), where several hold the first met speaking, and what follows a
+//! leading `--version` or `--help` unread; the suffix's grammar at every byte
+//! and at each label's ends; every flag lands in its setting, the address and
+//! the code as their own values; `--workers` defaults to its constant and
+//! refuses zero (T21), and `--connections` likewise; a `test-hooks` build
+//! takes `--docker-fake` and `--mailer-fake` — the shipped build's refusal of
+//! both is `scripts/gate-full.sh`'s to check, every build of this suite
+//! having the feature on; and the usage text names every flag and renders
+//! every default from its constant.
 
 use std::ffi::OsString;
 
@@ -182,7 +183,9 @@ fn mailer_and_from_come_together_or_not_at_all() {
 }
 
 /// T1: AN UNKNOWN FLAG, a flag without its value, a value of the wrong
-/// form and a missing required flag are each a usage refusal.
+/// form and a missing required flag are each a usage refusal; where several
+/// hold, the first met speaks, and what follows a leading `--version` or
+/// `--help` is unread, UTF-8 text or not.
 #[test]
 fn each_bad_command_line_is_a_usage_refusal() {
     assert_eq!(serve(&["--bogus"]), Err("serve: unknown argument '--bogus'".to_owned()));
@@ -213,10 +216,20 @@ fn each_bad_command_line_is_a_usage_refusal() {
     #[cfg(unix)]
     {
         use std::os::unix::ffi::OsStringExt;
-        assert_eq!(parse(vec![OsString::from("serve"), OsString::from_vec(vec![0xff])]), Err("an argument is not UTF-8 text".to_owned()));
+        let not_text = || OsString::from_vec(vec![0xff]);
+        assert_eq!(parse(vec![OsString::from("serve"), not_text()]), Err("an argument is not UTF-8 text".to_owned()));
+        assert_eq!(parse(vec![OsString::from("provision"), not_text()]), Err("an argument is not UTF-8 text".to_owned()), "bytes that are not text before an unknown verb");
+        assert_eq!(parse(vec![OsString::from("--version"), not_text()]), Ok(Command::Version), "what follows --version is unread");
+        assert_eq!(parse(vec![OsString::from("--help"), not_text()]), Ok(Command::Help), "what follows --help is unread");
     }
     assert_eq!(parse(argv(&["--help"])), Ok(Command::Help));
     assert_eq!(serve(&["--help"]), Ok(Command::Help));
+    // Where several refusals hold, the first met speaks.
+    assert_eq!(serve(&["--mailer", "m", "--bogus"]), Err("serve: unknown argument '--bogus'".to_owned()), "a word read before the pairing");
+    assert_eq!(serve(&["--bogus", "--help"]), Err("serve: unknown argument '--bogus'".to_owned()), "a word read before a --help after it");
+    assert_eq!(parse(argv(&["serve", "--mailer", "m"])), Err("--mailer is given without --from: give both, or neither for no mail".to_owned()), "the pairing before a required flag");
+    assert_eq!(parse(argv(&["serve"])), Err("serve: --state-dir is required".to_owned()), "--state-dir before --reply-to");
+    assert_eq!(parse(argv(&["invite"])), Err("invite: --address is required".to_owned()), "--address before --state-dir");
 }
 
 /// THE SUFFIX's GRAMMAR, the daemon's own for the host every origin

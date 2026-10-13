@@ -104,6 +104,9 @@ impl Message {
 }
 
 /// THE SENDER: one message handed over, answered with the hand-over's exit.
+/// A SEND THAT UNWINDS: the sender's thread catches it and hands the next
+/// message to the same sender, so a sender keeps nothing a send can leave
+/// half-changed; the relay client keeps nothing at all.
 pub trait Sender: Send + Sync {
     /// One try at `message`.
     fn send(&self, message: &Message) -> io::Result<Exit>;
@@ -190,8 +193,9 @@ impl Outbox {
         thread::Builder::new().name("sender".into()).spawn(move || {
             for message in rx {
                 // AssertUnwindSafe, and sound: a sender keeps nothing a send
-                // can leave half-changed — the relay client nothing at all —
-                // so the next message meets it as the last did.
+                // can leave half-changed, `Sender`'s own obligation — the
+                // relay client nothing at all — so the next message meets it
+                // as the last did.
                 if catch_unwind(AssertUnwindSafe(|| deliver(sender.as_ref(), &message, MAIL_WAIT, sleep.as_ref(), log.as_ref()))).is_err() {
                     log(&format!("{}: mail: given up, a try having panicked; the board stands live and its status page with it", message.name));
                 }

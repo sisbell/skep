@@ -30,11 +30,13 @@
 //! state directory, owner-only, which it refuses to start on where other
 //! users can read it.
 //!
-//! WHAT IT NEVER LOGS (the provisioning record §4): the record's bytes, a
-//! requester's address, an invite code, a status token. Its log — stderr,
-//! one line per step — names the board, the step, each call's exit code and
-//! the sidecar's stderr whole; its one stdout line is the serving line, and
-//! `invite`'s is the invite link.
+//! WHAT IT NEVER LOGS (the provisioning record §4): the record whole or a key
+//! of it, a requester's address, an invite code, a status token. Its log —
+//! stderr, one line per step — names the board, the step, each call's exit
+//! code and the sidecar's stderr whole — its TALK, which names each entry of
+//! the record by its fingerprint and its label, the person's own words,
+//! already on the board with the record; its one stdout line is the serving
+//! line, and `invite`'s is the invite link.
 //!
 //! THE ANSWERS it writes carry statuses `skep-http`'s reason table holds,
 //! and no other — 200 for every page and every refusal shown on a page, 404
@@ -46,20 +48,29 @@
 //!
 //! THE STOP is SIGTERM's default disposition: the process ends at once.
 //! Crash-stop, as the daemon's: every file it keeps is replaced whole by a
-//! rename, so no stop tears one; a provisioning cut mid-step leaves what it
-//! made standing, which the truth about names reads as TAKEN until the next
-//! start's sweep removes it — a volume under the label with no snippet is
-//! half-made, and goes with whatever run stands under its name — or, where
-//! something still stands after the removals, which the log names, until the
-//! operator clears it (the provisioning record §5.2's named gap); the queue,
-//! the status tokens, an unsent mail and the codes posts in flight hold are
-//! memory and end with the process — among those codes a live board's whose
-//! spend could not be written, which the file still holds issued: the next
-//! start admits a post on it unless the operator has marked it spent. Its exit
-//! codes: 0, a verb done; 2, a usage refusal; 1, a start refused — a state
-//! directory other users can read, a snippet directory that cannot be read, an
-//! address that cannot be bound, a thread the OS will not give — or an
-//! `invite` that printed no invite link.
+//! rename, so no stop tears one. A provisioning cut mid-step leaves what it
+//! made standing. Cut before its snippet's write, that is at most a volume
+//! under the label with no snippet — half-made — and a run, which the truth
+//! about names reads as TAKEN until the next start's sweep removes them, or,
+//! where something still stands after the removals, which the log names,
+//! until the operator clears it (the provisioning record §5.2's named gap).
+//! Cut from its snippet's write until its spend is written, it is a board
+//! whose snippet stands — routed, or routed at the proxy's next reload —
+//! which the next start counts live and its sweep leaves, its invite still
+//! issued. The queue, the status tokens, an unsent mail and the codes posts
+//! in flight hold are memory and end with the process — among those codes two
+//! the file still holds issued under a live board: one whose spend could not
+//! be written, and one whose post the stop cut off between its snippet's
+//! write and its spend. The next start admits a post on either unless the
+//! operator has marked it spent; the log names the board —
+//! `the invite could not be marked spent`, or `snippet: written` with no
+//! `the invite is spent` after it — and never the code. Its exit codes: 0, an
+//! `invite` minted and its link printed, or the version line or the usage
+//! text printed; 2, a usage refusal; 1, a start refused — a state directory
+//! other users can read, a snippet directory that cannot be read, an address
+//! that cannot be bound, a thread the OS will not give — or an `invite` that
+//! printed no invite link, or a version line or usage text that could not be
+//! written.
 //!
 //! The modules are declared below in dependency order, each naming only
 //! those above it — `tests/it/tidy.rs` checks it — and `ARCHITECTURE.md`
@@ -216,15 +227,16 @@ fn serve(flags: args::ServeArgs) -> i32 {
     };
     let mailing = if outbox.is_some() { "mail on" } else { "mail OFF (no --mailer and --from): no follow-up mail is sent" };
     let config = Config { boards_dir: flags.boards_dir.clone(), suffix: flags.settings.suffix.clone() };
-    let service = match Service::new(config, state_dir, docker, outbox, Arc::clone(&log), sleep) {
+    let mut service = match Service::new(config, state_dir, docker, outbox, Arc::clone(&log), sleep) {
         Ok(service) => service,
         Err(e) => {
             say_err(&format!("skep-provision: the snippet directory {} could not be read: {e}", flags.boards_dir.display()));
             return 1;
         }
     };
-    // THE SWEEP, before the address is bound: no post is judged while a
-    // half-made board still stands under its name.
+    // THE SWEEP, before the address is bound and before any thread holds
+    // the service: no post is judged while a half-made board still stands
+    // under its name, and none is in flight while the sweep runs.
     let swept = service.sweep();
     let listener = match TcpListener::bind(flags.listen) {
         Ok(listener) => listener,

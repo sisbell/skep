@@ -161,11 +161,13 @@ pub const BAD_FORM: Words = Words { id: "DRAFT", text: "This form could not be r
 pub const TOO_LARGE: Words = Words { id: "DRAFT", text: "This form is too large to read. Go back and check what you pasted: a record is one line." };
 
 /// A ROW's WORDS with its slots filled. A slot the row names and the caller
-/// does not supply is the showing code's bug — the row shown where that
-/// slot is not known — caught in every debug build, so the test that
-/// renders the row goes red; a release build shows the slot as written
-/// rather than end the thread that renders the row — a connection thread or
-/// a worker, neither of which is ever made again.
+/// does not supply is the showing code's bug — the row shown where that slot
+/// is not known — caught in every debug build, so the test that renders the
+/// row goes red; a release build shows the slot as written rather than panic:
+/// on a page a panic costs the request its page, the connection closed
+/// unanswered, and in the mail — its reply and its subject, rendered on a
+/// worker past its steps' catch — it would end the worker, which is never
+/// made again.
 pub fn fill(words: Words, slots: &[(&str, &str)]) -> String {
     debug_assert!(words.slots().all(|named| slots.iter().any(|(slot, _)| *slot == named)), "{words:?} is shown where a slot it names is not filled");
     let mut text = words.text.to_owned();

@@ -212,7 +212,12 @@ impl StateDir {
 }
 
 /// THE STATE FILES' WRITER: `bytes` become the file at `path`, whole, by
-/// rename from its sibling `<file>.tmp`, at [`STATE_FILE_MODE`].
+/// rename from its sibling `<file>.tmp`, at [`STATE_FILE_MODE`] —
+/// [`whole::replace`]'s contract passed on whole: an error before the rename
+/// leaves the old file and no temp file, one from the directory's sync after
+/// it the new file in place, not known durable; and its PRECONDITION, the
+/// caller's: no other write of `path` runs at once, which the sign-up file's
+/// lock and the invite file's lock file keep — nothing here checks it.
 pub fn write_whole(path: &Path, bytes: &[u8]) -> io::Result<()> {
     write_whole_with(path, bytes, &|| Ok(()))
 }

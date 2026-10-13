@@ -161,7 +161,11 @@ impl fmt::Debug for Shown {
     }
 }
 
-/// WHAT THE PAGES ASK.
+/// WHAT THE PAGES ASK. AN ANSWER THAT UNWINDS is caught by [`connection`],
+/// and the thread that called it serves the next request with the same desk:
+/// so a desk keeps nothing an answer can leave half-changed — every lock it
+/// takes recovered from poison, no change of its state left half-made where
+/// an answer can unwind.
 pub trait Desk: Sync {
     /// A sign-up: the address field's bytes kept, or refused. `Ok`: the
     /// address kept. `NotAnAddress`: nothing kept. `Failed`: nothing kept —
@@ -171,8 +175,11 @@ pub trait Desk: Sync {
     /// A claim post judged: admitted — queued, and answered with its status
     /// token — or refused. `Ok(token)`: the post queued, and `token` one
     /// [`Desk::status`] answers for the rest of the process's life — D-7
-    /// until the post ends. A refusal leaves nothing: no token, nothing
-    /// queued, no file changed.
+    /// until the post ends — and one path segment a URL carries as it is, no
+    /// `/` in it and nothing a URL escapes: D-7's page sets it into its
+    /// status URL and its refresh unencoded, and the status page's path is
+    /// the token whole. A refusal leaves nothing: no token, nothing queued,
+    /// no file changed.
     fn admit(&self, post: &Post<'_>) -> Result<String, Refusal>;
     /// A status token's page; `None` for a token the desk does not hold. A
     /// query: it changes nothing.
@@ -184,7 +191,8 @@ pub trait Desk: Sync {
 /// page shows ([`Site::fill`]).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Site {
-    /// `--suffix`: `skep.host` in the alpha.
+    /// `--suffix`: `skep.host` in the alpha — a domain by `args`' door, used
+    /// as it stands.
     pub suffix: String,
     /// `--reply-to`: the owner's address, which D-8 names.
     pub owner_address: String,
@@ -207,7 +215,8 @@ impl Site {
 }
 
 /// A POST's STATUS URL (the provisioning record §5.2, THE STATUS URL):
-/// `https://<suffix>/status/<token>`.
+/// `https://<suffix>/status/<token>`, `token` as [`Desk::admit`] answers it:
+/// one path segment, carried as it is.
 pub fn status_url(suffix: &str, token: &str) -> String {
     format!("https://{suffix}/status/{token}")
 }
@@ -295,11 +304,13 @@ impl<S: Write> Write for Deadlined<S> {
 /// panic said on stderr by the hook — never the thread, which the pool made
 /// at start and never makes again.
 pub fn connection(stream: TcpStream, site: &Site, desk: &dyn Desk) {
-    // AssertUnwindSafe, and sound: the desk changes the book under its lock
-    // alone, and nothing between the book's three inserts can unwind; every
-    // mutex it takes is taken poison-recovering; the invite file's lock is
-    // let go of as its file closes; and a look's permit is given back by its
-    // `Drop` as the frame unwinds.
+    // AssertUnwindSafe, and sound: a desk keeps nothing an answer can leave
+    // half-changed, `Desk`'s own obligation. The service's keeps it so: its
+    // book changes under its lock alone, an admission's one check before the
+    // book's three inserts and none of those can unwind; every mutex is taken
+    // poison-recovering; the invite file's lock is let go of as its file
+    // closes; and a look's permit is given back by its `Drop` as the frame
+    // unwinds.
     let _ = catch_unwind(AssertUnwindSafe(|| connection_within(stream, site, desk, TRANSFER_DEADLINE)));
 }
 

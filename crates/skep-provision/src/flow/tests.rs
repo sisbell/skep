@@ -121,9 +121,15 @@ fn rig_with(script: &str, mail_script: Option<Vec<i32>>, sleep: Sleep) -> Rig {
     });
     let address = |text: &str| MailAddress::parse(text).expect("an address");
     let outbox = mail_script.map(|_| Outbox::inline(Box::new(Arc::clone(&probe)), address("noreply@skep.host"), address("owner@skep.host"), Arc::clone(&log), Arc::new(|_| {})));
+    let mailing = outbox.is_some();
     let config = Config { boards_dir: boards.clone(), suffix: "skep.host".into() };
     let service = Arc::new(Service::new(config, state_dir.clone(), Box::new(Arc::clone(&fake)), outbox, log, sleep).expect("the service"));
-    probe.service.set(Arc::downgrade(&service)).ok();
+    // The probe reads the service where it is the outbox's sender alone: a
+    // rig with no mail hands out no handle on its service, which the sweep
+    // then takes whole (`Rig::sweep`).
+    if mailing {
+        probe.service.set(Arc::downgrade(&service)).ok();
+    }
     Rig { dir, boards, state_dir, fake, probe, lines, tap, service }
 }
 
@@ -208,6 +214,13 @@ impl Rig {
 
     fn issued(&self, code: &InviteCode) -> bool {
         lookup(&self.state_dir, code).expect("read").expect("held").issued()
+    }
+
+    /// THE SWEEP as `serve` runs it: over the rig's one handle on the
+    /// service, before any thread holds it — `Service::sweep` takes the
+    /// service whole.
+    fn sweep(&mut self) -> usize {
+        Arc::get_mut(&mut self.service).expect("the rig's one handle on the service: no worker spawned, no mail's probe").sweep()
     }
 
     /// THE POOL as `serve` spawns it: `n` workers over this service, each on

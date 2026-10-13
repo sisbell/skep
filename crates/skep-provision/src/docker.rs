@@ -31,32 +31,34 @@
 //! * `fake` — the scripted fake, under `test-hooks` alone.
 //!
 //! WHAT THE CALLS ASSUME OF DOCKER, as this crate knows Docker and the
-//! provisioning record §8 item 1 lists it, each UNVERIFIED HERE: `docker
-//! volume inspect` and `docker container inspect` exit 0 for an object that
-//! stands and non-zero for one that does not (a non-zero for any other
-//! reason — the Engine unreachable — reads as "not standing", and the
-//! post's own `volume create` then fails, nothing made), where `<name>` is
-//! no container's ID prefix: a container command reads its argument as a
-//! whole ID, then a name, then the unique prefix of an ID, so a name of hex
-//! digits alone would name another container — which the name's grammar
-//! refuses; a container's name and a volume's are two bytes at least,
-//! which the grammar holds a name to as well; `docker volume create
-//! --label <key>=<value> <name>` makes the volume with that label on it,
-//! the option read before the name, and `docker volume ls -q --filter
-//! label=<key>=<value>` prints the name of every volume so labelled, one
-//! per line and nothing else ([`LABEL_KEY`], [`LABEL_VALUE`]: the mark by
-//! which the sweep at start tells this service's volumes from every volume
-//! of another making — one service per host, for every `serve` marks its
-//! volumes alike); `--network container:<name>` puts the sidecar in the
-//! claim run's namespace, where the daemon's loopback is reachable; `-i`
-//! keeps the sidecar's stdin open, so `skep claim --hosted -` reads the
-//! record from it; a user-defined bridge resolves a container's name, so
-//! `skep health --board http://<name>:8642` dials the serving run from a
-//! container on the same bridge — the same on the Linux VM and on a Mac,
-//! whose host does not reach the bridge — but a container's own
-//! `/etc/hosts`, read first, answers `localhost` and six `ip6-` names,
-//! which the name's grammar refuses; and `docker exec <caddy> caddy
-//! reload` reloads Caddy inside its container.
+//! provisioning record §8 item 1 lists it, each UNVERIFIED HERE:
+//! `docker volume inspect` and `docker container inspect` exit 0 for an
+//! object that stands and non-zero for one that does not (a non-zero for any
+//! other reason — the Engine unreachable — reads as "not standing", and the
+//! post's own `volume create` then fails while the Engine stays unreachable,
+//! nothing made), where `<name>` is no container's ID prefix: a container
+//! command reads its argument as a whole ID, then a name, then the unique
+//! prefix of an ID, so a name of hex digits alone would name another
+//! container — which the name's grammar refuses; a container's name and a
+//! volume's are two bytes at least, which the grammar holds a name to as
+//! well; `docker volume create --label <key>=<value> <name>` makes the volume
+//! with that label on it, the option read before the name, and on a name a
+//! volume already stands under answers 0 and makes nothing, as the
+//! provisioning record §5.2 knows Docker;
+//! `docker volume ls -q --filter label=<key>=<value>` prints the name of
+//! every volume so labelled, one per line and nothing else ([`LABEL_KEY`],
+//! [`LABEL_VALUE`]: the mark by which the sweep at start tells this service's
+//! volumes from every volume of another making — one service per host, for
+//! every `serve` marks its volumes alike); `--network container:<name>` puts
+//! the sidecar in the claim run's namespace, where the daemon's loopback is
+//! reachable; `-i` keeps the sidecar's stdin open, so `skep claim --hosted -`
+//! reads the record from it; a user-defined bridge resolves a container's
+//! name, so `skep health --board http://<name>:8642` dials the serving run
+//! from a container on the same bridge — the same on the Linux VM and on a
+//! Mac, whose host does not reach the bridge — but a container's own
+//! `/etc/hosts`, read first, answers `localhost` and six `ip6-` names, which
+//! the name's grammar refuses; and `docker exec <caddy> caddy reload` reloads
+//! Caddy inside its container.
 
 use std::io;
 use std::num::NonZeroU32;
@@ -132,9 +134,14 @@ pub struct Settings {
 }
 
 /// THE RUNNER: one method a runner writes, [`Docker::run`], and one named
-/// method per call the service makes, each provided over it — so the host
-/// and the fake share one mapping from each named method to its [`Call`],
-/// and every suite that drives the fake drives the mapping the host runs.
+/// method per call the service makes, each provided over it — so the host and
+/// the fake share one mapping from each named method to its [`Call`], and
+/// every suite that drives the fake drives the mapping the host runs. A CALL
+/// THAT UNWINDS: the flow catches a step's or a cleanup's panic, and
+/// `pages::connection` a post's look's, and the next calls run through the
+/// same runner — so a runner keeps nothing a call can leave half-changed; the
+/// host's keeps nothing at all, and the fake its script and its calls under
+/// locks it takes poison-recovering.
 pub trait Docker: Send + Sync {
     /// ONE CALL RUN — the one method a runner writes: what `call` answered,
     /// the input it carries, where it carries one, on the child's stdin.
@@ -146,12 +153,14 @@ pub trait Docker: Send + Sync {
         self.run(Call::VolumeCreate(name))
     }
 
-    /// `docker volume inspect <name>`: exit 0 iff the volume stands.
+    /// `docker volume inspect <name>`: exit 0 where the volume stands; any
+    /// other exit where it does not, or the Engine could not answer.
     fn volume_inspect(&self, name: &Name) -> io::Result<Exit> {
         self.run(Call::VolumeInspect(name))
     }
 
-    /// `docker container inspect <name>`: exit 0 iff a container stands.
+    /// `docker container inspect <name>`: exit 0 where a container stands;
+    /// any other exit where none does, or the Engine could not answer.
     fn container_inspect(&self, name: &Name) -> io::Result<Exit> {
         self.run(Call::ContainerInspect(name))
     }
@@ -197,8 +206,9 @@ pub trait Docker: Send + Sync {
     }
 
     /// `docker volume ls -q --filter label=skep.provision=1`: the labelled
-    /// volumes — every volume this service made, and no other — one name
-    /// per line on stdout: what the sweep at start reads.
+    /// volumes, one name per line on stdout — every volume a `serve` on this
+    /// host made, and no other, and so, one service per host, this service's
+    /// alone: what the sweep at start reads.
     fn labelled_volumes(&self) -> io::Result<Exit> {
         self.run(Call::LabelledVolumes)
     }

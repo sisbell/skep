@@ -1719,7 +1719,10 @@ Rules that hold across its files:
   listing that fails skips the sweep and never stops the service. Its
   precondition is the operator's, and nothing checks it: one `serve` per
   Docker host, for the label is the same on every `serve`'s volumes, and a
-  second service would take the first's boards for half-made.
+  second service would take the first's boards for half-made. Its second,
+  no post of this service's in flight, its type keeps: it takes the
+  service by `&mut`, so no worker or connection thread holds the service
+  while it runs.
 - **The argv is the documents'.** Every `docker` call's argv is a pure
   function the unit suite pins token by token, and reads back from
   `scripts/docker-smoke.sh` and `README.md` where those spell the line;
@@ -1754,11 +1757,13 @@ Rules that hold across its files:
   removals' answers, for a refused `rm -f` may be of a run that never
   stood — and the log says done, or INCOMPLETE naming what stands, which
   refuses re-posts until the operator clears it.
-- **The log never carries** the record's bytes, a person's address, an
-  invite code or a status token, and the `Debug` of every value that holds
-  one — a record, an invite, a message, an address, a code, a post, a
-  decoded form, the status map, a status page's reply, a page — shows none
-  of them.
+- **The log never carries** the record whole or a key of it, a person's
+  address, an invite code or a status token, and the `Debug` of every value
+  that holds one — a record, an invite, a message, an address, a code, a
+  post, a decoded form, the status map, a status page's reply, a page —
+  shows none of them. The sidecar's stderr, which the log keeps whole,
+  names each entry of the record by its fingerprint and its label, the
+  person's own words, already on the board with the record.
 - **Every person-facing sentence is in one table**, `strings.rs`, each
   row naming its id, and the live reply is one function, its inputs
   gathered in one place, so the page and the mail cannot say two things.

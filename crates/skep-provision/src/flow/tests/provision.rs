@@ -3,23 +3,23 @@
 //! the live status, its page the reply, the invite spent and ONE mail sent
 //! after the status turned live, and an anchorless record's page and mail
 //! carrying the anchorless sentence, an anchored one's none; (b) THE DECISION
-//! TABLE, one case per failing step as the provisioning record §5.2
-//! tabulates it — the dark claim's every refusal, a shape the read refuses
-//! among them — each removing what was made for the name and nothing for any
-//! other, then looking at what stands and saying done, the snippet absent,
-//! the reload called where the snippet was written, the status D-8, the
-//! invite still issued and no mail; (c) a cleanup's removal failing — a
-//! docker call's or the snippet's — logged, and the look after the removals
-//! naming what stands, the name left taken; a refused `rm -f` of a run that
-//! never stood, and a cleanup's reload failing, each logged as itself, the
-//! look finding nothing standing; a snippet whose write failed after its
-//! rename, removed by the cleanup; step 3's second look, a name taken since
-//! its post failing before anything is made; a step or a cleanup that
-//! panics, costing its post alone and never the worker; and the dark
-//! claim's retry, thirty tries two seconds apart, its last exit 4 past them
-//! the step's failure. Beside them, T12's flow half: no send before live,
-//! an outage with the status live throughout, and no mail where none is
-//! configured.
+//! TABLE, one case per failing step as the provisioning record §5.2 tabulates
+//! it, a failed claim run's row taking the container its `docker run` may
+//! leave — the dark claim's every refusal, a shape the read refuses among
+//! them — each removing what was made for the name and nothing for any other,
+//! then looking at what stands and saying done, the snippet absent, the
+//! reload called where the snippet was written, the status D-8, the invite
+//! still issued and no mail; (c) a cleanup's removal failing — a docker
+//! call's or the snippet's — logged, and the look after the removals naming
+//! what stands, the name left taken; a refused `rm -f` of a run that never
+//! stood, and a cleanup's reload failing, each logged as itself, the look
+//! finding nothing standing; a snippet whose write failed after its rename,
+//! removed by the cleanup; step 3's second look, a name taken since its post
+//! failing before anything is made; a step or a cleanup that panics, costing
+//! its post alone and never the worker; and the dark claim's retry, thirty
+//! tries two seconds apart, its last exit 4 past them the step's failure.
+//! Beside them, T12's flow half: no send before live, an outage with the
+//! status live throughout, and no mail where none is configured.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -163,10 +163,10 @@ fn cases() -> Vec<Case> {
         Case {
             what: "run_claim fails",
             script: line("volume_create", Some("alice"), 0, "", "")
-                + &line("run_claim", Some("alice"), 125, "", "Unable to find image\n")
-                + &line("volume_rm", Some("alice"), 0, "", "")
+                + &line("run_claim", Some("alice"), 125, "", "docker: Error response from daemon: failed to create task for container\n")
+                + &run_and_volume_removed()
                 + &inspects("alice"),
-            calls: [vec!["volume_create alice", "run_claim alice", "volume_rm alice"], looked()].concat(),
+            calls: [vec!["volume_create alice", "run_claim alice", "rm_force alice", "volume_rm alice"], looked()].concat(),
             reloads: false,
             before: nothing,
         },
@@ -246,11 +246,12 @@ fn cases() -> Vec<Case> {
 }
 
 /// T13 (b): THE DECISION TABLE — for each failing step, the removals the
-/// record tabulates for what was made, in the reverse of the order made,
-/// for the name alone, and then the look at what stands, finding nothing
-/// and saying done; the snippet absent; the reload called again where the
-/// snippet was written; the status D-8; the invite still issued; no mail
-/// tried.
+/// record tabulates for what was made, a failed claim run's taking the
+/// container its `docker run` may leave by the record's own rule, in the
+/// reverse of the order made, for the name alone, and then the look at what
+/// stands, finding nothing and saying done; the snippet absent; the reload
+/// called again where the snippet was written; the status D-8; the invite
+/// still issued; no mail tried.
 #[test]
 fn each_failed_step_removes_what_was_made_and_nothing_else() {
     for case in cases() {
@@ -558,11 +559,11 @@ fn a_name_taken_since_its_post_fails_before_anything_is_made() {
 
 /// T13 (c): A STEP OR A CLEANUP THAT PANICS costs its post alone, never the
 /// worker: a step that panics is a failed step — `run_claim` panicking once
-/// the volume is made, the volume removed by the cleanup and the look after
-/// it finding nothing — and a cleanup that panics too — its `volume rm`
-/// panicking — is logged INCOMPLETE; either way the worker's turn ends, the
-/// post is D-8, its invite still issued and its code let go of: the post
-/// made again on it is admitted.
+/// the volume is made, the run it may have left and the volume removed by the
+/// cleanup, and the look after them finding nothing — and a cleanup that
+/// panics too — its `volume rm` panicking — is logged INCOMPLETE; either way
+/// the worker's turn ends, the post is D-8, its invite still issued and its
+/// code let go of: the post made again on it is admitted.
 #[test]
 fn a_step_or_a_cleanup_that_panics_costs_its_post_alone() {
     /// A runner that panics at the claim run, and at the volume's removal
@@ -608,6 +609,7 @@ fn a_step_or_a_cleanup_that_panics_costs_its_post_alone() {
         for logged in ["alice: FAILED at a step that panicked", cleaned] {
             assert!(log.iter().any(|l| l == logged), "{logged}: {log:?}");
         }
+        assert!(log.iter().any(|l| l == "alice: cleanup: rm_force: exit 1"), "the claim run, recorded from its first act, not removed: {log:?}");
         assert!(service.admit(&post).is_ok(), "{volume_rm_panics}: the code, or the name, held past the post's end");
     }
 }

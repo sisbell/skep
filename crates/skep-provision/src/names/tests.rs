@@ -4,13 +4,14 @@
 //! the first that stands; the map rebuilt from a snippet directory holding
 //! two live names; a token the map does not hold answering nothing; a post
 //! gone live joining the live names; a post in flight holding its name; a
-//! move of a token never admitted, or of an ended post, the caller's bug,
-//! panicking; an unguessable value's form; what took a name, as the log
-//! says it; the map's `Debug` showing no token;
-//! and the labelled volumes sorted against the snippet directory — half-made,
-//! routed, or under no name of the grammar. (The two posts on one name and
-//! the fifth past the queue are the desk's — `flow/tests/desk.rs`; the sweep
-//! is the start's — `flow/tests/start.rs`.)
+//! move of a token never admitted, or of an ended post, and a token admitted
+//! twice, each the caller's bug, panicking — the last before the map changes;
+//! an unguessable value's form; what took a name, as the log says it; the
+//! map's `Debug` showing no token; and the labelled volumes sorted against
+//! the snippet directory — half-made, routed, or under no name of the
+//! grammar. (The two posts on one name and the fifth past the queue are the
+//! desk's — `flow/tests/desk.rs`; the sweep is the start's —
+//! `flow/tests/start.rs`.)
 
 use std::fs;
 
@@ -121,6 +122,29 @@ fn moving_an_ended_post_is_the_callers_bug() {
         let payload = moved.expect_err("an ended post moved again");
         let said = payload.downcast_ref::<String>().map(String::as_str).or_else(|| payload.downcast_ref::<&str>().copied()).unwrap_or_default();
         assert!(said.contains("an ended post's state is final"), "{ended:?}: {said}");
+    }
+}
+
+/// A TOKEN ADMITTED TWICE IS THE CALLER's BUG: `admit` panics naming the
+/// precondition before the map changes — a token is its post's identity, and
+/// an ended post's state is final, so neither a post in flight nor an ended
+/// one is admitted again under its token, nor its entry touched.
+#[test]
+fn admitting_a_token_twice_is_the_callers_bug() {
+    for ended in [false, true] {
+        let mut map = StatusMap::default();
+        map.admit("t0k3n".into(), name("alice"), true);
+        if ended {
+            map.set("t0k3n", PostState::Running);
+            map.set("t0k3n", PostState::Live);
+        }
+        let before = map.post("t0k3n").cloned();
+        let again = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| map.admit("t0k3n".into(), name("bob"), false)));
+        let payload = again.expect_err("a token admitted twice");
+        let said = payload.downcast_ref::<String>().map(String::as_str).or_else(|| payload.downcast_ref::<&str>().copied()).unwrap_or_default();
+        assert!(said.contains("`admit` takes a token this process never admitted"), "ended {ended}: {said}");
+        assert_eq!(map.post("t0k3n").cloned(), before, "ended {ended}: the map changed before its gate refused");
+        assert!(!map.holds(&name("bob")), "ended {ended}");
     }
 }
 

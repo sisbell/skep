@@ -74,9 +74,10 @@ impl fmt::Display for TakenBy {
 /// the volume and the container — `None` where none does. An inspect's
 /// non-zero exit is "not standing" whatever its reason, an Engine that
 /// cannot be reached among them: at a post the volume's own creation then
-/// fails, and nothing is made; after a cleanup's or the sweep's removals the
-/// verdict reads done, and what the Engine left the next start's sweep
-/// finds. A `docker` that cannot be run at all is the error.
+/// fails while the Engine stays unreachable, and nothing is made; after a
+/// cleanup's or the sweep's removals the verdict reads done, and what the
+/// Engine left the next start's sweep finds. A `docker` that cannot be run
+/// at all is the error.
 pub fn taken(docker: &dyn Docker, boards_dir: &Path, name: &Name) -> io::Result<Option<TakenBy>> {
     if caddy::stands(boards_dir, name)? {
         return Ok(Some(TakenBy::Snippet));
@@ -184,8 +185,13 @@ impl StatusMap {
         Ok(StatusMap { posts: HashMap::new(), live: caddy::routed(boards_dir)?.into_iter().collect() })
     }
 
-    /// A post admitted under `token`: queued.
+    /// A post admitted under `token`: queued. PRECONDITION, the caller's:
+    /// `token` is one this process never admitted — a token is its post's
+    /// identity, and an ended post's state is final — so a token admitted
+    /// twice is the caller's bug, and panics naming it before the map
+    /// changes.
     pub fn admit(&mut self, token: String, name: Name, anchorless: bool) {
+        assert!(!self.posts.contains_key(&token), "`admit` takes a token this process never admitted: a token is its post's identity");
         self.posts.insert(token, AdmittedPost { name, state: PostState::Queued, anchorless });
     }
 

@@ -1701,6 +1701,7 @@ on an ephemeral loopback port over the two fakes and a temp state
 directory; a browser's requests reach the live reply at the status
 URL, the snippet written and the one mail sent; every refusal answers
 as the strings say; a half-made board is swept before the serving line;
+a start refused, or an invite not minted, exits 1 with no DATA line;
 and SIGTERM ends the process. Beside it, `tests/it/tidy.rs` reads the
 arrangement off the source and the manifest: the module order, the
 declared files, every `pub` item's doc and the four dependencies.

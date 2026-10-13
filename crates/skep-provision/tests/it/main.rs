@@ -10,10 +10,12 @@
 //! answered as the pages say; and THE STOP: SIGTERM, the default
 //! disposition, ending the process. THE SWEEP (T22): started over a script
 //! whose `volumes` lists one half-made name, the binary removes it before
-//! its serving line, which carries the count. No Docker runs: every call is
-//! the script's, and the calls are read back after. Beside it, `tidy` reads
-//! the crate's own source and manifest for the arrangement `src/main.rs` and
-//! `ARCHITECTURE.md` §The provisioning service state.
+//! its serving line, which carries the count. A START REFUSED — a snippet
+//! directory that cannot be read, an address another listener holds — and
+//! an invite not minted each exit 1, with no DATA line. No Docker runs:
+//! every call is the script's, and the calls are read back after. Beside
+//! it, `tidy` reads the crate's own source and manifest for the arrangement
+//! `src/main.rs` and `ARCHITECTURE.md` §The provisioning service state.
 
 #![cfg(unix)]
 
@@ -365,7 +367,7 @@ fn the_built_service_sweeps_a_half_made_board_before_its_serving_line() {
 
 /// `--version`: the one line in `skepd`'s form, exit 0.
 #[test]
-fn the_version_line() {
+fn the_version_line_is_skepds_form_at_exit_0() {
     let out = Command::new(BIN).arg("--version").output().expect("ran");
     assert_eq!(out.status.code(), Some(0));
     let line = String::from_utf8(out.stdout).expect("text");
@@ -403,4 +405,47 @@ fn a_loose_state_directory_is_refused_at_start() {
     assert_eq!(out.status.code(), Some(1));
     assert!(String::from_utf8_lossy(&out.stderr).contains("is mode 755: other users of this machine can read the sign-up addresses and the invite codes; chmod 700"));
     assert_eq!(std::fs::read_dir(&state).expect("listed").count(), 0);
+}
+
+/// A START REFUSED, OR AN INVITE NOT MINTED, IS EXIT 1, the reason on
+/// stderr and no DATA line on stdout: a snippet directory that cannot be
+/// read — refused before any docker call; an address another listener
+/// holds — the sweep made, no serving line; a code the invite file already
+/// holds — no invite link.
+#[test]
+fn a_start_refused_or_an_invite_not_minted_is_exit_1() {
+    let dir = Scratch::new();
+    let script = dir.path().join("docker.script");
+    std::fs::write(&script, step("volumes", "-", 0, "")).expect("the script");
+    let calls = || std::fs::read_to_string(dir.path().join("docker.script.calls")).expect("the calls");
+    let serve = |boards: &Path, listen: &str| {
+        Command::new(BIN)
+            .args(["serve", "--listen", listen, "--reply-to", "owner@skep.host", "--state-dir"])
+            .arg(dir.path().join("state"))
+            .arg("--boards-dir")
+            .arg(boards)
+            .arg("--docker-fake")
+            .arg(&script)
+            .stdin(Stdio::null())
+            .output()
+            .expect("ran")
+    };
+    let absent = serve(&dir.path().join("absent"), "127.0.0.1:0");
+    assert_eq!(absent.status.code(), Some(1), "{absent:?}");
+    assert!(String::from_utf8_lossy(&absent.stderr).contains("could not be read"), "{absent:?}");
+    assert!(absent.stdout.is_empty(), "a serving line for a start refused");
+    assert_eq!(calls(), "", "a docker call before the snippets were read");
+    std::fs::create_dir(dir.path().join("boards")).expect("the boards directory");
+    let held = std::net::TcpListener::bind("127.0.0.1:0").expect("a port");
+    let bound = serve(&dir.path().join("boards"), &held.local_addr().expect("its address").to_string());
+    assert_eq!(bound.status.code(), Some(1), "{bound:?}");
+    assert!(String::from_utf8_lossy(&bound.stderr).contains("skep-provision: bind 127.0.0.1:"), "{bound:?}");
+    assert!(bound.stdout.is_empty(), "a serving line for an address never bound");
+    assert_eq!(calls(), "volumes\t-\t0\n", "the sweep made before the bind");
+    let mint = || Command::new(BIN).args(["invite", "--address", "person@example.com", "--code", "abc", "--state-dir"]).arg(dir.path().join("state")).stdin(Stdio::null()).output().expect("ran");
+    assert_eq!(mint().status.code(), Some(0));
+    let again = mint();
+    assert_eq!(again.status.code(), Some(1), "{again:?}");
+    assert!(String::from_utf8_lossy(&again.stderr).contains("the invite file already holds that code"), "{again:?}");
+    assert!(again.stdout.is_empty(), "an invite link for a code not minted");
 }

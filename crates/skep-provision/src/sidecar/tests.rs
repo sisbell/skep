@@ -1,8 +1,10 @@
 //! T5 — THE SIDECAR's ANSWER: the six DATA lines exactly as the `skep`
 //! command's own suite pins them parse to the claim, the dialed origin held;
-//! the one line `claimed by 1.0.1` is the claimed board's; every other shape
-//! is refused; each exit code maps to its failure; a value carrying
-//! `<U+000A>` stays one line.
+//! each value — the claimant, the account, the principal and the origin —
+//! the one a fresh alpha board names, one changed at a time refused naming
+//! its line; the one line `claimed by 1.0.1` is the claimed board's; every
+//! other shape is refused; each exit code maps to its failure; a value
+//! carrying `<U+000A>` stays one line.
 
 use super::*;
 
@@ -80,6 +82,24 @@ fn every_other_shape_is_refused() {
     assert!(shape(&answered(&other_origin)).contains("line 4"));
     assert!(shape(&answered(&[])).contains("lines"), "an empty stdout");
     assert!(shape(&Exit { code: Some(0), stdout: vec![0xff], stderr: Vec::new() }).contains("not text"));
+}
+
+/// T5: EACH VALUE IS THE ONE A FRESH ALPHA BOARD NAMES — the claimant, the
+/// account and the principal the reply states as facts, and the origin
+/// dialed: one line's value changed at a time, the read refuses it naming
+/// the line, never reading a claim whose facts the reply would misstate.
+#[test]
+fn each_value_is_the_one_a_fresh_alpha_board_names() {
+    for (at, changed, why) in [
+        (0, "claimant 1.0.2", "lines 1 and 2 name another account than 1.0.1"),
+        (1, "account 1.0.2", "lines 1 and 2 name another account than 1.0.1"),
+        (2, "principal 2", "line 3 names another principal than 1"),
+        (3, "origin http://127.0.0.1:8643", "line 4 names another origin than the one dialed, http://127.0.0.1:8642"),
+    ] {
+        let mut lines = SIX.to_vec();
+        lines[at] = changed;
+        assert_eq!(shape(&answered(&lines)), why, "{changed}");
+    }
 }
 
 /// T5: EACH EXIT CODE maps to its named failure — 2 usage, 3 halt, 1 the

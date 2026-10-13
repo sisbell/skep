@@ -1,7 +1,8 @@
 //! T2 — THE FORM's DECODE: the fields in order, `+` a space, `%XX` the
-//! byte, a bad escape refused — an error saying where — the first of a
-//! field given twice, a CRLF kept as given, a value kept as bytes, and none
-//! of them in the form's `Debug`.
+//! byte — every byte, in either case — and every other byte itself, a bad
+//! escape refused — an error saying where — the first of a field given
+//! twice, a CRLF kept as given, a value kept as bytes, and none of them in
+//! the form's `Debug`.
 
 use super::*;
 
@@ -16,6 +17,22 @@ fn pairs(form: &Form) -> Vec<(&[u8], &[u8])> {
 fn three_fields_decode_in_order_with_plus_a_space_and_the_escapes_restored() {
     let form = decode(b"a=1&b=x+y&c=%7B%22k%22%3A1%7D").expect("a form");
     assert_eq!(pairs(&form), vec![(&b"a"[..], &b"1"[..]), (&b"b"[..], &b"x y"[..]), (&b"c"[..], &br#"{"k":1}"#[..])]);
+}
+
+/// T2: `%XX` IS THE BYTE IT NAMES, FOR EVERY BYTE AND IN EITHER CASE — the
+/// digits and letters the other cases here never reach among them, which a
+/// label's UTF-8 does (`é` is `%C3%A9`) — and every byte but `%`, `+` and
+/// `&` passes through a value as itself.
+#[test]
+fn every_byte_decodes_from_its_escape_and_passes_through_as_itself() {
+    for b in 0..=255u8 {
+        for escaped in [format!("v=%{b:02X}"), format!("v=%{b:02x}")] {
+            assert_eq!(decode(escaped.as_bytes()).map(|form| form.get("v").map(<[u8]>::to_vec)), Ok(Some(vec![b])), "{escaped}");
+        }
+        if !b"%+&".contains(&b) {
+            assert_eq!(decode(&[b'v', b'=', b]).expect("a form").get("v"), Some(&[b][..]), "the byte {b:#04x}, raw");
+        }
+    }
 }
 
 /// T2: a `%` that two hex digits do not follow is REFUSED, at its offset in

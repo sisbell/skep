@@ -1,8 +1,9 @@
 //! T10 — THE STATE DIRECTORY beneath the sign-up file and the invite file:
 //! the address rule and its value; THE DOOR, made `0700` and refused loose
-//! in the daemon's words; THE WRITER, its files owner-only, whose failure
-//! between the write and the rename leaves the old file whole and no temp
-//! file; and the date a line carries.
+//! in the daemon's words — any group or other bit, each one alone; THE
+//! WRITER, its files owner-only, whose failure between the write and the
+//! rename leaves the old file whole and no temp file; and the date a line
+//! carries.
 
 use std::fs;
 
@@ -15,7 +16,7 @@ use crate::whole::temp_of;
 /// door, admits exactly the addresses the rule does, keeping each as given,
 /// its `Debug` showing none of it.
 #[test]
-fn the_address_rule() {
+fn an_address_is_one_at_with_a_side_each_way_no_space_and_no_control() {
     for ok in ["a@b", "person@example.com", "first.last+tag@sub.example.org"] {
         assert!(address_ok(ok), "{ok}");
         assert_eq!(MailAddress::parse(ok).as_ref().map(MailAddress::as_str), Some(ok));
@@ -59,6 +60,25 @@ fn the_state_directory_is_owner_only_or_refused() {
     assert!(matches!(StateDir::open(&file), Err(StateDirRefused::Io { .. })));
 }
 
+/// THE DOOR REFUSES ANY GROUP OR OTHER BIT, each one alone — a group that
+/// can write the directory, and so swap the invite file for its own, as
+/// surely as one that can read it — and names the mode it found.
+#[cfg(unix)]
+#[test]
+fn any_group_or_other_bit_alone_is_refused() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = Scratch::new();
+    for bit in [0o040, 0o020, 0o010, 0o004, 0o002, 0o001] {
+        let path = dir.path().join(format!("loose-{bit:o}"));
+        fs::create_dir(&path).expect("a directory");
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o700 | bit)).expect("loosened");
+        match StateDir::open(&path) {
+            Err(StateDirRefused::Loose { mode, .. }) => assert_eq!(mode, 0o700 | bit),
+            other => panic!("{:o}: {other:?}", 0o700 | bit),
+        }
+    }
+}
+
 /// THE WRITER: its file owner-only, `0600`; a failure between the write and
 /// the rename leaves the old file whole and no temp file behind; a write
 /// that completes replaces it.
@@ -83,7 +103,7 @@ fn a_failure_before_the_rename_leaves_the_old_file_whole() {
 
 /// The date: `yyyy-mm-dd` in UTC, from unix seconds.
 #[test]
-fn the_civil_date() {
+fn the_date_is_yyyy_mm_dd_in_utc() {
     assert_eq!(civil_date(0), "1970-01-01");
     assert_eq!(civil_date(86_399), "1970-01-01");
     assert_eq!(civil_date(86_400), "1970-01-02");

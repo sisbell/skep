@@ -2,11 +2,13 @@
 //! message goes on its stdin — pinned from the `Command`, and over a
 //! recording script in the mailer's place; the fake records the headers and
 //! the body; a refused send is retried up to its bound and then given up,
-//! logged with neither the address nor the body; the sender's thread
-//! delivers what the worker hands it, the message made with the outbox's
-//! own `From:`, `Reply-To:` and subject. (No send before the status is
-//! live, and the status live throughout an outage, are the flow's —
-//! `flow/tests.rs`.)
+//! logged with neither the address nor the body — a relay's refusal, its
+//! stderr naming the recipient, by its exit code alone — and a mailer that
+//! cannot run is retried the same; the sender's thread delivers what the
+//! worker hands it, the message made with the outbox's own `From:`,
+//! `Reply-To:` and subject, and a hand-over never waits on a send stuck in
+//! its try. (No send before the status is live, and the status live
+//! throughout an outage, are the flow's — `flow/tests.rs`.)
 
 use std::path::Path;
 use std::sync::Mutex;
@@ -112,6 +114,52 @@ fn a_send_accepted_after_refusals_is_sent() {
     assert_eq!(lines.lock().unwrap().last().map(String::as_str), Some("alice: mail: sent at try 3 of 7"));
 }
 
+/// A RELAY's REFUSAL NAMES THE RECIPIENT AND IS NEVER LOGGED: tries refused
+/// with the address on the mailer's stderr — as a relay's 550 carries it —
+/// are logged by their exit code alone, and no line carries the address.
+#[test]
+fn a_relays_refusal_is_logged_by_its_exit_code_alone() {
+    /// A relay that refuses every try, naming the recipient on its stderr.
+    struct Refuses;
+    impl Sender for Refuses {
+        fn send(&self, message: &Message) -> io::Result<Exit> {
+            Ok(Exit { code: Some(75), stdout: Vec::new(), stderr: format!("550 5.1.1 <{}>: Recipient address rejected\n", message.to).into_bytes() })
+        }
+    }
+    let (said, lines) = kept();
+    assert!(!deliver(&Refuses, &message(), 2, MAIL_INTERVAL, &|_| {}, said.as_ref()));
+    assert_eq!(
+        *lines.lock().unwrap(),
+        ["alice: mail: try 1 of 2 refused, exit 75", "alice: mail: try 2 of 2 refused, exit 75", "alice: mail: given up after 2 tries; the board stands live and its status page with it"]
+    );
+}
+
+/// A MAILER THAT CANNOT RUN IS RETRIED like a refusal — each try logged by
+/// the error's kind, the sleeps between — and the mail sent once it runs.
+#[test]
+fn a_mailer_that_cannot_run_is_retried() {
+    /// A mailer absent for two tries, there at the third.
+    struct Returns(Mutex<u32>);
+    impl Sender for Returns {
+        fn send(&self, _: &Message) -> io::Result<Exit> {
+            let mut tries = self.0.lock().unwrap();
+            *tries += 1;
+            if *tries < 3 {
+                return Err(io::Error::from(io::ErrorKind::NotFound));
+            }
+            Ok(Exit { code: Some(0), stdout: Vec::new(), stderr: Vec::new() })
+        }
+    }
+    let (said, lines) = kept();
+    let slept = Mutex::new(0);
+    assert!(deliver(&Returns(Mutex::new(0)), &message(), MAIL_TRIES, MAIL_INTERVAL, &|_| *slept.lock().unwrap() += 1, said.as_ref()));
+    let lines = lines.lock().unwrap().clone();
+    assert_eq!(lines.len(), 3, "{lines:?}");
+    assert!(lines[..2].iter().all(|l| l.contains("failed, the mailer could not run: ")), "{lines:?}");
+    assert_eq!(lines[2], "alice: mail: sent at try 3 of 7");
+    assert_eq!(*slept.lock().unwrap(), 2);
+}
+
 /// THE SENDER's THREAD delivers what is handed to it, on its own: the
 /// board, the recipient and the body the worker hands over, and the
 /// `From:`, `Reply-To:` and subject the outbox holds for every board.
@@ -130,6 +178,49 @@ fn the_senders_thread_delivers_what_it_is_handed() {
         std::thread::sleep(std::time::Duration::from_millis(10));
     }
     assert_eq!(messages(&log).expect("the log"), vec![handed.text()]);
+}
+
+/// THE HAND-OVER NEVER WAITS ON A SEND: the sender's thread stuck inside a
+/// try that does not end — a relay that hangs — three mails handed over
+/// each return at once, so the worker goes on to its next post; once the
+/// stuck try ends, every one is delivered, in the order handed over.
+#[test]
+fn a_hand_over_never_waits_on_a_send() {
+    /// A sender whose every try waits for the test's word.
+    struct Waits {
+        word: Mutex<Receiver<()>>,
+        sent: Arc<Mutex<Vec<String>>>,
+    }
+    impl Sender for Waits {
+        fn send(&self, message: &Message) -> io::Result<Exit> {
+            let _ = self.word.lock().unwrap().recv();
+            self.sent.lock().unwrap().push(message.to.clone());
+            Ok(Exit { code: Some(0), stdout: Vec::new(), stderr: Vec::new() })
+        }
+    }
+    let (word, heard) = mpsc::channel();
+    let sent = Arc::new(Mutex::new(Vec::new()));
+    let (said, _) = kept();
+    let address = |text: &str| MailAddress::parse(text).expect("an address");
+    let waits = Waits { word: Mutex::new(heard), sent: Arc::clone(&sent) };
+    let outbox = Outbox::spawn(Box::new(waits), address("noreply@skep.host"), address("owner@skep.host"), said, Arc::new(|_| {})).expect("the thread");
+    let (handed, all_handed) = mpsc::channel();
+    thread::spawn(move || {
+        for to in ["first@example.com", "second@example.com", "third@example.com"] {
+            outbox.hand_over(Name::parse(b"alice").expect("a name"), to.to_owned(), "Your board is live.\n".to_owned());
+        }
+        let _ = handed.send(());
+    });
+    all_handed.recv_timeout(Duration::from_secs(5)).expect("a hand-over waited on a send stuck in its try");
+    for _ in 0..3 {
+        word.send(()).expect("the sender waits for its word");
+    }
+    let deadline = std::time::Instant::now() + Duration::from_secs(30);
+    while sent.lock().unwrap().len() < 3 {
+        assert!(std::time::Instant::now() < deadline, "the stuck mails were never delivered");
+        thread::sleep(Duration::from_millis(10));
+    }
+    assert_eq!(*sent.lock().unwrap(), ["first@example.com", "second@example.com", "third@example.com"]);
 }
 
 /// A message's `Debug` names the board alone.

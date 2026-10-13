@@ -1,7 +1,7 @@
 //! T3 — THE NAME's GRAMMAR: the label rule after the lowercase, each
-//! refusal for its reason — an error saying it; a name read back as this
-//! service wrote it, never lowercased; and the host and the public origin a
-//! name stands at under a suffix.
+//! refusal for its reason — an error saying it — and the alphabet at every
+//! byte; a name read back as this service wrote it, never lowercased; and
+//! the host and the public origin a name stands at under a suffix.
 
 use super::*;
 
@@ -24,6 +24,23 @@ fn the_name_is_one_lowercase_label_of_letters_digits_and_hyphens() {
     assert_eq!(Name::parse(b"a b"), Err(NameRefused::NotALabel));
     assert_eq!(Name::parse("caf\u{e9}".as_bytes()), Err(NameRefused::NotALabel));
     assert_eq!(Name::parse(&[b'a', 0xff]), Err(NameRefused::NotALabel));
+}
+
+/// THE ALPHABET AT EVERY BYTE: `a`, one byte, `a` is a name iff the byte is
+/// a letter, a digit or a hyphen — a capital lowercased — and `NotALabel`
+/// for every other: a brace, a slash, a colon, an `@`, a quote, a control
+/// character and every byte past ASCII among them.
+#[test]
+fn every_byte_but_a_letter_a_digit_or_a_hyphen_is_refused() {
+    for b in 0..=255u8 {
+        let answered = Name::parse(&[b'a', b, b'a']);
+        if b.is_ascii_alphanumeric() || b == b'-' {
+            let lowered = format!("a{}a", char::from(b.to_ascii_lowercase()));
+            assert_eq!(answered.as_ref().map(Name::as_str), Ok(lowered.as_str()), "{b:#04x}");
+        } else {
+            assert_eq!(answered, Err(NameRefused::NotALabel), "{b:#04x}");
+        }
+    }
 }
 
 /// EACH REFUSAL IS AN ERROR saying its reason — and never the field, which

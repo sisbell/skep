@@ -1,10 +1,12 @@
 //! ONE CHILD RUN TO ITS END, over `/bin/sh` — no Docker and no mailer is
 //! run: the input arrives on the child's stdin and closes; with none, the
 //! child's stdin answers at once; stdout, stderr and the exit code come back
-//! apart; a child that exits before reading its input answers its own exit,
-//! the broken pipe no error of the call's; and an end by signal answers no
-//! code. (The command each caller builds is pinned in `docker`'s and
-//! `sender`'s suites.)
+//! apart; the input is fed on a thread of its own, so a child that writes
+//! more than a pipe holds before it reads cannot stall it; a child that
+//! exits before reading its input answers its own exit, the broken pipe no
+//! error of the call's; an end by signal answers no code; and a program
+//! that cannot be spawned is the call's error. (The command each caller
+//! builds is pinned in `docker`'s and `sender`'s suites.)
 
 #![cfg(unix)]
 
@@ -46,4 +48,29 @@ fn an_end_by_signal_answers_no_code() {
     let exit = run(sh("kill -9 $$"), None).expect("ran");
     assert_eq!(exit.code, None);
     assert_eq!(exit.said(), "signal");
+}
+
+/// THE INPUT IS FED ON A THREAD OF ITS OWN: a child that writes more than a
+/// pipe holds before it reads a byte of its input — the input more than a
+/// pipe holds too — still runs to its end. Fed inline, before the streams
+/// were read, both pipes would fill and the call would never answer.
+#[test]
+fn a_child_that_writes_before_it_reads_cannot_stall_its_input() {
+    let (answered, answer) = std::sync::mpsc::channel();
+    thread::spawn(move || {
+        let _ = answered.send(run(sh("head -c 1048576 /dev/zero; wc -c"), Some(&vec![b'x'; 1 << 20])));
+    });
+    let exit = answer.recv_timeout(std::time::Duration::from_secs(30)).expect("the call never answered: its input stalled against the child's output").expect("ran");
+    assert_eq!(exit.code, Some(0));
+    assert!(exit.stdout.len() > 1 << 20, "{}", exit.stdout.len());
+    assert_eq!(String::from_utf8_lossy(&exit.stdout[1 << 20..]).trim(), "1048576", "every byte of the input read");
+}
+
+/// A PROGRAM THAT CANNOT BE SPAWNED IS THE CALL's ERROR, never an exit —
+/// with an input to feed and without.
+#[test]
+fn a_program_that_cannot_be_spawned_is_the_calls_error() {
+    for stdin in [None, Some(&b"the record"[..])] {
+        assert!(run(Command::new("/nonexistent/skep-provision-test"), stdin).is_err(), "{stdin:?}");
+    }
 }

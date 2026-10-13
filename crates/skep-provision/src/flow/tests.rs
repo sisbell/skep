@@ -4,22 +4,29 @@
 //! case per failing step as the provisioning record §5.2 tabulates it, each
 //! removing what was made for the name and nothing for any other, the
 //! snippet absent, the reload called where the snippet was written, the
-//! status D-8, the invite still issued and no mail; (c) a cleanup call
-//! failing, logged, the name left taken; and THE BOOK keeping its own
-//! rules — what blocks a new post, first of three, and what admitting,
-//! taking, going live, letting a code go and failing do. Beside them, the
-//! flow's halves of
-//! T8 (two posts on one name; a fifth past the queue), T9 (a spent, an
-//! unknown and a held code refused; a live board's code let go of after its
-//! spend; no code in the log), T10 (a sign-up,
-//! its address in no log line) and T12 (no send before live; an outage
-//! with the status live throughout). THE POOL's FENCE: T15 (two workers
-//! make two names at once, and one worker does not), T16 (a post answers
-//! at once while a worker is paused inside a step), T17 (a second post for a
-//! name in flight meets D-4 under two workers, and one `volume_create` per
-//! name across a burst), T18 (the snippet's write and the reload serial
-//! across names); and THE SWEEP's, T20 (the half-made board removed, the
-//! routed and the unnamed left, a listing that fails skipped).
+//! status D-8, the invite still issued and no mail; (c) a cleanup's removal
+//! failing — a docker call's or the snippet's — logged, the name left
+//! taken; step 3's second look, a name taken since its post failing before
+//! anything is made; the dark claim's retry, thirty tries two seconds
+//! apart; and THE BOOK keeping its own rules — what blocks a new post, first
+//! of three, and what admitting, taking, going live, letting a code go and
+//! failing do. Beside them, the flow's halves of T8 (two posts on one name;
+//! a fifth past the queue; a post for a name admitted while its reads ran,
+//! refused at its own admission), T9 (a spent, an unknown and a held code
+//! refused; the invite first, so an uninvited post learns nothing about
+//! names; a code spent while a post's reads ran, refused at its admission; a
+//! live board's code held until its spend is written, kept held where the
+//! spend could not be written, and let go of after it; no code in the log),
+//! T10 (a sign-up, its address in no log line) and T12 (no send before live;
+//! an outage with the status live throughout); and a `docker` that cannot
+//! be run at all — the sweep skipped, a post refused D-8. THE POOL's FENCE:
+//! T15 (two workers make two names at once, and one worker does not), T16
+//! (a post answers at once while a worker is paused inside a step), T17 (a
+//! second post for a name in flight meets D-4 under two workers, and one
+//! `volume_create` per name across a burst), T18 (the snippet's write and
+//! the reload serial across names); and THE SWEEP's, T20 (the half-made
+//! board removed, the routed and the unnamed left, a listing that fails
+//! skipped).
 
 use std::fs;
 use std::path::PathBuf;
@@ -32,6 +39,7 @@ use skep_identity::{encode_enroll, Enrollment, PublicKey, ALG_FNDSA512_PREVIEW_E
 
 use super::*;
 use crate::docker::fake::{line, FakeDocker};
+use crate::docker::Call;
 use crate::invites::{lookup, mint, InviteState};
 use crate::scratch::Scratch;
 use crate::sender::fake::{messages, FakeSender};
@@ -497,6 +505,99 @@ fn a_failed_cleanup_call_leaves_the_name_taken_and_is_logged() {
     rig.fake.assert_done();
 }
 
+/// T13 (c): THE NAMED GAP AT THE SNIPPET — a snippet the cleanup cannot
+/// remove, its directory read-only by the time the reload fails, is logged,
+/// the reload still made, the run and the volume still removed, and the
+/// cleanup said INCOMPLETE: the snippet stands, and a re-post meets D-4 off
+/// it with no docker call.
+#[cfg(unix)]
+#[test]
+fn a_snippet_the_cleanup_cannot_remove_leaves_the_name_taken_and_is_logged() {
+    use std::os::unix::fs::PermissionsExt;
+    let script = [
+        inspects("alice"),
+        inspects("alice"),
+        to_the_serving_run(),
+        line("run_serving", Some("alice"), 0, "", ""),
+        line("health", Some("alice"), 0, PAIRED, ""),
+        line("caddy_reload", None, 1, "", "Error: loading new config\n"),
+        line("caddy_reload", None, 0, "", ""),
+        run_and_volume_removed(),
+    ]
+    .concat();
+    let rig = rig(&script, None);
+    let (boards, first) = (rig.boards.clone(), Arc::new(AtomicBool::new(false)));
+    rig.fake.pause(move |method, _| {
+        if method == "caddy_reload" && !first.swap(true, Ordering::SeqCst) {
+            fs::set_permissions(&boards, fs::Permissions::from_mode(0o555)).expect("read-only");
+        }
+    });
+    let token = rig.admitted("alice", &rig.invite());
+    assert!(rig.service.run_next());
+    assert_eq!(rig.service.status(&token), Some(Shown::Failed));
+    assert!(rig.snippet("alice").exists(), "the snippet the cleanup could not remove");
+    for logged in ["alice: cleanup: caddy_reload: exit 0", "alice: cleanup: rm_force: exit 0", "alice: cleanup: volume_rm: exit 0"] {
+        assert!(rig.logged(logged), "{logged}: {:?}", rig.log());
+    }
+    for opens in ["alice: cleanup: snippet: not removed: ", "alice: cleanup: INCOMPLETE — the name stands"] {
+        assert!(rig.log().iter().any(|l| l.starts_with(opens)), "{opens}: {:?}", rig.log());
+    }
+    assert_eq!(rig.post("alice", &record(true), rig.invite().as_str()), Err(Refusal::Name));
+    assert!(rig.logged("alice: a post refused: taken — its snippet stands"), "{:?}", rig.log());
+    rig.fake.assert_done();
+}
+
+/// THE DARK CLAIM's RETRY: exit 4 — the claim run's daemon not yet
+/// listening — is tried again after a sleep of the bound's interval, and
+/// the bound is the one the flow states, thirty tries two seconds apart.
+#[test]
+fn the_dark_claim_retries_exit_4_two_seconds_apart_thirty_times() {
+    assert_eq!(SIDECAR_WAIT, Wait { tries: 30, interval: Duration::from_secs(2) }, "thirty tries two seconds apart");
+    let slept = Arc::new(Mutex::new(Vec::new()));
+    let into = Arc::clone(&slept);
+    let rig = rig_with(&(flow_of("alice", true) + &reloads(1)), None, Arc::new(move |d: Duration| into.lock().unwrap().push(d)));
+    let token = rig.admitted("alice", &rig.invite());
+    assert!(rig.service.run_next());
+    assert!(rig.live(&token));
+    assert_eq!(*slept.lock().unwrap(), [SIDECAR_WAIT.interval], "one sleep, between the two tries");
+    rig.fake.assert_done();
+}
+
+/// STEP 3's SECOND LOOK: a name taken since its post — its snippet written,
+/// a volume or a container made under it meanwhile — fails the post at the
+/// look, D-8, before anything is made: no `volume_create`, and no cleanup,
+/// so nothing this post never made is removed — the snippet that took the
+/// name stands as written — and the invite still issued.
+#[test]
+fn a_name_taken_since_its_post_fails_before_anything_is_made() {
+    let volume = line("volume_inspect", Some("alice"), 0, "", "");
+    let container = line("volume_inspect", Some("alice"), 1, "", "") + &line("container_inspect", Some("alice"), 0, "", "");
+    for (by, written, worker, looked) in [
+        ("its snippet stands", true, String::new(), vec![]),
+        ("a volume stands under it", false, volume, vec!["volume_inspect alice"]),
+        ("a container stands under it", false, container, vec!["volume_inspect alice", "container_inspect alice"]),
+    ] {
+        let rig = rig(&(inspects("alice") + &worker), None);
+        let code = rig.invite();
+        let token = rig.admitted("alice", &code);
+        if written {
+            fs::write(rig.snippet("alice"), b"a snippet written by hand").expect("a snippet");
+        }
+        assert!(rig.service.run_next(), "{by}");
+        rig.fake.assert_done();
+        assert_eq!(rig.fake.said(), said(&[&["volume_inspect alice", "container_inspect alice"][..], &looked[..]].concat()), "{by}");
+        assert_eq!(rig.service.status(&token), Some(Shown::Failed), "{by}");
+        assert!(rig.issued(&code), "{by}: the invite was spent");
+        for logged in [format!("alice: taken since the post: {by}"), "alice: FAILED at the second look at the name".to_owned()] {
+            assert!(rig.logged(&logged), "{logged}: {:?}", rig.log());
+        }
+        assert!(!rig.log().iter().any(|l| l.contains("cleanup")), "{by}: a cleanup of what this post never made: {:?}", rig.log());
+        if written {
+            assert_eq!(fs::read(rig.snippet("alice")).expect("the snippet stands"), b"a snippet written by hand");
+        }
+    }
+}
+
 /// T8: TWO POSTS ON ONE NAME — the second meets D-4 at the post, held by
 /// the first in flight, with no docker call made for it.
 #[test]
@@ -612,6 +713,30 @@ fn the_posts_refusals_before_any_docker_call() {
     }
 }
 
+/// T9: THE INVITE, FIRST — an uninvited post learns nothing about names: a
+/// code the file does not hold answers the invite's refusal alike for a free
+/// name, a name a post in flight holds, a name its snippet takes, a name out
+/// of the grammar and a record that is none; no docker call, and no log line
+/// naming any of them.
+#[test]
+fn an_uninvited_post_learns_nothing_about_names() {
+    let rig = rig(&inspects("alice"), None);
+    rig.admitted("alice", &rig.invite());
+    fs::write(rig.snippet("carol"), b"").expect("carol's snippet");
+    for (what, name, field) in [
+        ("a free name", "bob", record(true)),
+        ("a name a post in flight holds", "alice", record(true)),
+        ("a name its snippet takes", "carol", record(true)),
+        ("a name out of the grammar", "b_b", record(true)),
+        ("a record that is none", "bob", "{}".to_owned()),
+    ] {
+        assert_eq!(rig.post(name, &field, "0123456789abcdef0123456789abcdef"), Err(Refusal::Invite), "{what}");
+    }
+    rig.fake.assert_done();
+    let after: Vec<String> = rig.log().into_iter().skip_while(|l| l != "alice: admitted; 1 waiting").skip(1).collect();
+    assert_eq!(after, vec!["a post refused: its invite code is not one the file holds issued"; 5]);
+}
+
 /// T9: A LIVE BOARD's CODE IS LET GO OF once its spend is written: the book
 /// holds it no more, and a post naming it again is refused as spent — the
 /// file's word — never as held by a post in flight.
@@ -634,6 +759,55 @@ fn a_live_boards_code_is_let_go_of_and_refused_as_spent() {
     assert_eq!(rig.post("bob", &record(true), code.as_str()), Err(Refusal::Invite));
     assert!(rig.logged("a post refused: its invite code is not one the file holds issued"), "{:?}", rig.log());
     rig.fake.assert_done();
+}
+
+/// T9: A LIVE BOARD's CODE IS HELD UNTIL ITS SPEND IS WRITTEN: with the
+/// invite file's lock held elsewhere — the owner's `invite` minting that
+/// moment — a worker whose board has gone live waits at its spend with the
+/// code still held, and a post naming the code meets the invite's refusal
+/// with no docker call; the lock let go of, the spend lands, and only then
+/// is the code let go of.
+#[test]
+fn a_live_boards_code_is_held_until_its_spend_is_written() {
+    let rig = rig(&(flow_of("alice", false) + &reloads(1)), None);
+    let code = rig.invite();
+    let alice = rig.admitted("alice", &code);
+    // The lock file beside the invite file, `invites.lock`, held as the
+    // `invite` verb holds it: an open of its own, locked exclusively.
+    let lock = fs::OpenOptions::new().write(true).open(rig.state.file("invites.lock")).expect("the invite file's lock");
+    lock.lock().expect("held");
+    rig.workers(1);
+    until("alice live", || rig.live(&alice).then_some(()));
+    thread::sleep(Duration::from_millis(300));
+    assert!(rig.service.book().codes.contains(&code), "the code let go of before its spend was written");
+    assert_eq!(rig.post("bob", &record(true), code.as_str()), Err(Refusal::Invite));
+    assert!(rig.logged("bob: a post refused: its invite is held by a post in flight"), "{:?}", rig.log());
+    assert!(rig.issued(&code), "a spend written past the lock");
+    drop(lock);
+    until("the spend", || (!rig.issued(&code)).then_some(()));
+    until("the code let go of", || (!rig.service.book().codes.contains(&code)).then_some(()));
+    rig.fake.assert_done();
+}
+
+/// T9: A SPEND THAT COULD NOT BE WRITTEN KEEPS ITS CODE HELD for the run's
+/// life: the file still says issued, so a post naming the code meets the
+/// invite's refusal — never a second board on one invite — while the board
+/// stands live and the log says the operator marks it.
+#[cfg(unix)]
+#[test]
+fn a_spend_that_could_not_be_written_keeps_its_code_held() {
+    use std::os::unix::fs::PermissionsExt;
+    let rig = rig(&(flow_of("alice", false) + &reloads(1)), None);
+    let code = rig.invite();
+    let alice = rig.admitted("alice", &code);
+    // The state directory read-only: the invite file's rewrite cannot be made.
+    fs::set_permissions(rig.dir.path().join("state"), fs::Permissions::from_mode(0o500)).expect("read-only");
+    assert!(rig.service.run_next());
+    assert!(rig.live(&alice) && rig.issued(&code), "live, the file still saying issued");
+    assert!(rig.service.book().codes.contains(&code), "the code let go of though its spend was never written");
+    assert_eq!(rig.post("bob", &record(true), code.as_str()), Err(Refusal::Invite));
+    rig.fake.assert_done();
+    assert!(rig.log().iter().any(|l| l.starts_with("alice: the invite could not be marked spent (") && l.ends_with("; this run refuses it, and the operator marks it")), "{:?}", rig.log());
 }
 
 /// T10: A SIGN-UP through the service is kept and logged — its address in
@@ -706,6 +880,41 @@ fn the_service_starts_with_the_snippets_live_names() {
     let config = Config { boards_dir: rig.boards.clone(), suffix: "skep.host".into() };
     let again = Service::new(config, rig.state.clone(), Box::new(Arc::clone(&rig.fake)), None, Arc::new(|_: &str| {}), Arc::new(|_| {})).expect("the service");
     assert_eq!(again.live(), 1);
+}
+
+/// A `docker` THAT CANNOT BE RUN AT ALL: the sweep's listing cannot be made,
+/// so the sweep is skipped and the service stands; and a post whose look at
+/// the name cannot be made meets D-8 — never D-4's "taken" — and leaves
+/// nothing: no post waiting, no code held, the invite still issued.
+#[test]
+fn a_docker_that_cannot_run_skips_the_sweep_and_refuses_a_post_d8() {
+    /// A runner whose `docker` cannot be run: every call the error.
+    struct NoDocker;
+    impl Docker for NoDocker {
+        fn run(&self, _: Call<'_>) -> io::Result<Exit> {
+            Err(io::Error::from(io::ErrorKind::NotFound))
+        }
+    }
+    let dir = Scratch::new();
+    let boards = dir.path().join("boards");
+    fs::create_dir(&boards).expect("the boards directory");
+    let state = StateDir::open(&dir.path().join("state")).expect("the state directory");
+    let lines = Arc::new(Mutex::new(Vec::new()));
+    let into = Arc::clone(&lines);
+    let log: Log = Arc::new(move |line: &str| into.lock().unwrap().push(line.to_owned()));
+    let config = Config { boards_dir: boards, suffix: "skep.host".into() };
+    let service = Service::new(config, state.clone(), Box::new(NoDocker), None, log, Arc::new(|_| {})).expect("the service");
+    assert_eq!(service.sweep(), 0);
+    let code = mint(&state, &MailAddress::parse("person@example.com").expect("an address"), None).expect("minted");
+    let alice = record(true);
+    assert_eq!(service.admit(&Post { name: b"alice", record: alice.as_bytes(), invite: code.as_str().as_bytes() }), Err(Refusal::Failed));
+    let book = service.book();
+    assert!(book.queue.is_empty() && book.codes.is_empty() && !book.map.holds(&Name::parse(b"alice").expect("a name")));
+    drop(book);
+    assert!(lookup(&state, &code).expect("read").expect("held").issued());
+    let log = lines.lock().unwrap().clone();
+    assert!(log.iter().any(|l| l.starts_with("sweep: volumes: docker could not run: ") && l.ends_with("; the sweep is skipped")), "{log:?}");
+    assert!(log.iter().any(|l| l.starts_with("alice: a post could not be judged: the look at the name: ")), "{log:?}");
 }
 
 /// T15: TWO NAMES IN FLIGHT AT ONCE — under two workers, `alice`'s worker
@@ -810,6 +1019,75 @@ fn two_workers_never_both_take_a_job_for_one_name() {
     }
     assert_eq!(said.iter().filter(|c| c.starts_with("volume_create ")).count(), 4, "{said:?}");
     assert_eq!(said.iter().filter(|c| *c == "caddy_reload").count(), 4, "{said:?}");
+}
+
+/// T8: THE ADMISSION LOOKS AGAIN AT THE NAME — a post paused inside its
+/// reads of what stands while a second post for its name is admitted meets
+/// D-4 at its own admission, the name held by the post admitted meanwhile,
+/// and leaves nothing: one post waits, one code is held, its own still
+/// issued.
+#[test]
+fn a_post_for_a_name_admitted_while_its_reads_ran_meets_d4() {
+    let gate = Gate::new();
+    let pause = Arc::clone(&gate);
+    let first = Arc::new(AtomicBool::new(false));
+    let rig = rig(&(inspects("alice") + &inspects("alice")), None);
+    rig.fake.pause(move |method, _| {
+        if method == "container_inspect" && !first.swap(true, Ordering::SeqCst) {
+            pause.pause();
+        }
+    });
+    let (paused, other) = (rig.invite(), rig.invite());
+    let (service, code) = (Arc::clone(&rig.service), paused.clone());
+    let (tx, rx) = mpsc::channel();
+    thread::spawn(move || {
+        let alice = record(true);
+        let _ = tx.send(service.admit(&Post { name: b"alice", record: alice.as_bytes(), invite: code.as_str().as_bytes() }));
+    });
+    gate.entered(1);
+    let admitted = rig.admitted("alice", &other);
+    gate.open();
+    assert_eq!(rx.recv_timeout(Duration::from_secs(30)).expect("the paused post answered"), Err(Refusal::Name), "two posts for one name in flight");
+    rig.fake.assert_done();
+    let book = rig.service.book();
+    assert_eq!(book.queue.len(), 1);
+    assert!(book.codes.contains(&other) && !book.codes.contains(&paused));
+    drop(book);
+    assert!(rig.issued(&paused));
+    assert_eq!(rig.service.status(&admitted), Some(Shown::BeingMade));
+    assert!(rig.logged("alice: a post refused: a post in flight holds the name"), "{:?}", rig.log());
+}
+
+/// T9: THE ADMISSION LOOKS AGAIN AT THE INVITE — a post paused inside its
+/// reads while the code it names goes live under another name, spent and
+/// let go of, meets the invite's refusal at its own admission: never a
+/// second board on one invite.
+#[test]
+fn a_post_whose_code_was_spent_while_its_reads_ran_is_refused() {
+    let gate = Gate::new();
+    let pause = Arc::clone(&gate);
+    let rig = rig(&(inspects("bob") + &flow_of("alice", false) + &reloads(1)), None);
+    rig.fake.pause(move |method, name| {
+        if method == "container_inspect" && name == Some("bob") {
+            pause.pause();
+        }
+    });
+    let code = rig.invite();
+    let (service, posted) = (Arc::clone(&rig.service), code.clone());
+    let (tx, rx) = mpsc::channel();
+    thread::spawn(move || {
+        let bob = record(true);
+        let _ = tx.send(service.admit(&Post { name: b"bob", record: bob.as_bytes(), invite: posted.as_str().as_bytes() }));
+    });
+    gate.entered(1);
+    let alice = rig.admitted("alice", &code);
+    assert!(rig.service.run_next());
+    assert!(rig.live(&alice) && !rig.issued(&code), "alice live on the code, the code spent");
+    gate.open();
+    assert_eq!(rx.recv_timeout(Duration::from_secs(30)).expect("the paused post answered"), Err(Refusal::Invite), "a second board on one invite");
+    rig.fake.assert_done();
+    assert!(rig.service.book().queue.is_empty());
+    assert!(rig.logged("bob: a post refused: its invite was spent while the post was judged"), "{:?}", rig.log());
 }
 
 /// T18: ROUTE CHANGES ARE SERIAL — two names going live at once produce two

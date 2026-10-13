@@ -1,13 +1,18 @@
 //! T6 — THE PAIR off `/health`'s body, and THE WAIT for it over the fake:
 //! a claimed, enforcing board answers it; a `null` claimant, a `true`
 //! local trust and a body that is not JSON do not; an eighth member changes
-//! nothing; the wait answers at the first pair and gives up after its
-//! bound, the fake called exactly the bound's times.
+//! nothing; the wait answers at the first pair — a failed run's stdout never
+//! one, whatever it carries — and gives up after its bound, the fake called
+//! exactly the bound's times; and a `docker` that cannot be run at all ends
+//! the wait at once, the error.
 
 use std::cell::Cell;
+use std::sync::atomic::{AtomicU32, Ordering};
 
 use super::*;
 use crate::docker::fake::{line, FakeDocker};
+use crate::docker::Call;
+use crate::process::Exit;
 
 /// THE BODY a claimed alpha board answers: the daemon's members, keys
 /// sorted (`get_health` and `auth_object` in `skepd`).
@@ -33,12 +38,13 @@ fn the_pair_is_a_claimant_and_local_trust_false() {
     assert!(!pair(br#"{"auth":{"claimant":1,"local_trust":false}}"#), "a claimant that is no address");
 }
 
-/// T6: THE WAIT ANSWERS AT THE FIRST PAIR: a failed run and an unclaimed
-/// body are "not yet", the third try pairs, two sleeps between.
+/// T6: THE WAIT ANSWERS AT THE FIRST PAIR: a failed run — its stdout the
+/// pair all the same — and an unclaimed body are "not yet", the third try
+/// pairs, two sleeps between.
 #[test]
 fn the_wait_answers_at_the_first_pair() {
     let unclaimed = PAIRED.replace(r#""claimant":"1.0.1""#, r#""claimant":null"#);
-    let script = [line("health", Some("alice"), 4, "", "the board did not answer\n"), line("health", Some("alice"), 0, &unclaimed, ""), line("health", Some("alice"), 0, PAIRED, "")].concat();
+    let script = [line("health", Some("alice"), 4, PAIRED, "the board did not answer\n"), line("health", Some("alice"), 0, &unclaimed, ""), line("health", Some("alice"), 0, PAIRED, "")].concat();
     let fake = FakeDocker::parse(&script).expect("a script");
     let sleeps = Cell::new(0);
     let waited = wait(&fake, &alice(), Wait { tries: 5, interval: Duration::from_secs(1) }, &|_| sleeps.set(sleeps.get() + 1)).expect("docker ran");
@@ -67,4 +73,22 @@ fn the_wait_gives_up_after_its_bound() {
         fake.assert_done();
     }
     assert_eq!(HEALTH_WAIT, Wait { tries: 60, interval: Duration::from_secs(1) }, "the smoke's sixty seconds");
+}
+
+/// T6: A `docker` THAT CANNOT BE RUN AT ALL ends the wait at once, the
+/// error: one call and no sleep — no try can answer.
+#[test]
+fn a_docker_that_cannot_run_ends_the_wait_at_once() {
+    /// A runner whose `docker` cannot be run: every call the error, counted.
+    struct NoDocker(AtomicU32);
+    impl Docker for NoDocker {
+        fn run(&self, _: Call<'_>) -> io::Result<Exit> {
+            self.0.fetch_add(1, Ordering::SeqCst);
+            Err(io::Error::from(io::ErrorKind::NotFound))
+        }
+    }
+    let docker = NoDocker(AtomicU32::new(0));
+    let sleeps = Cell::new(0);
+    assert!(wait(&docker, &alice(), HEALTH_WAIT, &|_| sleeps.set(sleeps.get() + 1)).is_err());
+    assert_eq!((docker.0.load(Ordering::SeqCst), sleeps.get()), (1, 0), "the calls and the sleeps");
 }

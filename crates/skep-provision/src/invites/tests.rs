@@ -1,14 +1,15 @@
 //! T9 — THE INVITE FILE: a mint writes one `issued` line and answers its
-//! code; `--code` is used verbatim; the code's alphabet, and its value
-//! admitting exactly the codes the alphabet does; a duplicate refused, and a
-//! file that cannot be reached refused as its own failure, each an error
-//! saying which; a lookup before and after the spend answers issued, then
-//! spent; a spent or an unknown code is not issued; the file is rewritten
-//! whole — a failure between the write and the rename leaves it as it was —
-//! and a line of another shape survives. (The invite link the code rides is
-//! the pages' suite's; a failed flow leaving the line issued, a post refused
-//! on a spent or unknown code, and the code in no log line are the flow's
-//! suite's and the binary's.)
+//! code; `--code` is used verbatim; the code's alphabet, at every byte, and
+//! its value admitting exactly the codes the alphabet does; a duplicate
+//! refused, and a file that cannot be reached refused as its own failure,
+//! each an error saying which; a lookup before and after the spend answers
+//! issued, then spent; a spent or an unknown code is not issued; the file is
+//! rewritten whole — a failure between the write and the rename leaves it as
+//! it was — and a line of another shape survives; and changes made at once,
+//! mints beside spends, lose none of each other under the lock file. (The
+//! invite link the code rides is the pages' suite's; a failed flow leaving
+//! the line issued, a post refused on a spent or unknown code, and the code
+//! in no log line are the flow's suite's and the binary's.)
 
 use std::fs;
 
@@ -37,11 +38,13 @@ fn invite_code(text: &str) -> InviteCode {
 fn a_mint_writes_one_issued_line() {
     let dir = Scratch::new();
     let state = state(&dir);
+    let before = today();
     let code = mint(&state, &address("person@example.com"), None).expect("minted");
+    let after = today();
     assert_eq!(code.as_str().len(), 32);
     assert!(code_ok(code.as_str()));
     let text = fs::read_to_string(state.file(INVITES)).expect("the file");
-    assert_eq!(text, format!("{} person@example.com issued {}\n", code.as_str(), today()));
+    assert!([&before, &after].into_iter().any(|day| text == format!("{} person@example.com issued {day}\n", code.as_str())), "{text:?}, not dated {before} or {after}");
     assert!(state.file(INVITES_LOCK).exists(), "the lock file stands beside it");
 }
 
@@ -64,7 +67,7 @@ fn a_given_code_is_used_verbatim() {
 /// [`InviteCode::parse`], the value's one door, admits exactly the codes the
 /// alphabet does, keeping each as given, its `Debug` showing none of it.
 #[test]
-fn the_codes_alphabet() {
+fn a_code_is_1_to_128_unreserved_characters_and_parse_admits_just_those() {
     let long = "x".repeat(MAX_CODE_BYTES + 1);
     for bad in ["has space", "a&b", "a/b", "", long.as_str()] {
         assert!(!code_ok(bad), "{bad:?}");
@@ -76,6 +79,22 @@ fn the_codes_alphabet() {
         assert_eq!(InviteCode::parse(good).as_ref().map(InviteCode::as_str), Some(good));
     }
     assert_eq!(format!("{:?}", invite_code("secretcode")), "InviteCode(…)");
+}
+
+/// THE CODE's ALPHABET AT EVERY BYTE: `a`, one character, `a` is a code iff
+/// the character is a letter, a digit, `-`, `.`, `_` or `~` — the URL's
+/// unreserved characters, each riding the invite link as it is — and
+/// refused for every other: `+`, which the link would carry as a space, `%`,
+/// which opens an escape, `#`, which ends the query, and `&`, `=`, a space,
+/// a control character and every character past ASCII.
+#[test]
+fn every_character_but_the_unreserved_is_out_of_the_alphabet() {
+    for b in 0..=255u8 {
+        let code = format!("a{}a", char::from(b));
+        let unreserved = b.is_ascii_alphanumeric() || b"-._~".contains(&b);
+        assert_eq!(code_ok(&code), unreserved, "{b:#04x}");
+        assert_eq!(InviteCode::parse(&code).is_some(), unreserved, "{b:#04x}");
+    }
 }
 
 /// The mint's refusal: a code the file already holds mints nothing, and the
@@ -114,16 +133,19 @@ fn a_code_answers_issued_then_spent() {
     let code = mint(&state, &address("person@example.com"), None).expect("minted");
     let other = mint(&state, &address("other@example.com"), None).expect("minted");
     assert!(lookup(&state, &code).expect("read").expect("held").issued());
+    let before = today();
     assert!(spend(&state, &code, &alice()).expect("spent"));
+    let after = today();
     let spent = lookup(&state, &code).expect("read").expect("held");
-    assert_eq!(spent.state, InviteState::Spent { name: "alice".into(), date: today() });
+    assert!(matches!(&spent.state, InviteState::Spent { name, date } if name == "alice" && (*date == before || *date == after)), "{:?}, not dated {before} or {after}", spent.state);
     assert!(!spent.issued());
     assert!(!spend(&state, &code, &alice()).expect("read"), "spent once");
     assert!(!spend(&state, &invite_code("unknown"), &alice()).expect("read"), "an unknown code");
     assert!(lookup(&state, &invite_code("unknown")).expect("read").is_none());
     assert!(lookup(&state, &other).expect("read").expect("held").issued(), "the other invite untouched");
     let text = fs::read_to_string(state.file(INVITES)).expect("the file");
-    assert_eq!(text.lines().next(), Some(format!("{} person@example.com spent alice {}", code.as_str(), today()).as_str()));
+    let first = text.lines().next().expect("a line");
+    assert!([&before, &after].into_iter().any(|day| first == format!("{} person@example.com spent alice {day}", code.as_str())), "{first:?}, not dated {before} or {after}");
 }
 
 /// T9: THE FILE IS REWRITTEN WHOLE — a failure between the write and the
@@ -154,6 +176,33 @@ fn a_hand_edited_line_survives_a_rewrite() {
     let text = fs::read_to_string(state.file(INVITES)).expect("the file");
     assert!(text.starts_with("# the owner's note\n"), "{text}");
     assert_eq!(read_all(&state).expect("read").len(), 1);
+}
+
+/// THE LOCK FILE KEEPS EVERY CHANGE: mints and spends made at once — the
+/// owner's `invite` beside the service's spend, here threads, each its own
+/// open of the lock file as each process makes one — every one lands and
+/// none is lost to another's rewrite: every code minted held issued, every
+/// spend written.
+#[test]
+fn changes_made_at_once_lose_none_of_each_other() {
+    let dir = Scratch::new();
+    let state = state(&dir);
+    let spent: Vec<InviteCode> = (0..4).map(|_| mint(&state, &address("person@example.com"), None).expect("minted")).collect();
+    let minted: Vec<InviteCode> = std::thread::scope(|s| {
+        let minters: Vec<_> = (0..4).map(|_| s.spawn(|| (0..4).map(|_| mint(&state, &address("other@example.com"), None).expect("minted")).collect::<Vec<_>>())).collect();
+        for code in &spent {
+            let state = &state;
+            s.spawn(move || assert!(spend(state, code, &alice()).expect("spent"), "a spend found its code no longer issued"));
+        }
+        minters.into_iter().flat_map(|minter| minter.join().expect("a minter")).collect()
+    });
+    assert_eq!(read_all(&state).expect("read").len(), 4 + 16, "an invite lost to another's rewrite");
+    for code in &minted {
+        assert!(lookup(&state, code).expect("read").expect("held").issued(), "a mint lost to another's rewrite");
+    }
+    for code in &spent {
+        assert!(!lookup(&state, code).expect("read").expect("held").issued(), "a spend lost to another's rewrite");
+    }
 }
 
 /// An invite's `Debug` carries neither its code nor its address.

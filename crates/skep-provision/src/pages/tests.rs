@@ -4,10 +4,12 @@
 //! D-7 with the status URL and its refresh, the live reply, D-8, 404 — a
 //! bad body 400, a body past the cap 413; the invite link opening the claim
 //! form with its code; plain HTML with no script and nothing fetched from
-//! elsewhere; a row's words escaped and its commands set as code, and a
-//! person's field — a refused record among them — shown back as it was
-//! sent; and the `Debug` of a post, a status page and an answer showing
-//! none of what they hold. (The strings table's rows are `strings`' suite.)
+//! elsewhere, every header that says so checked whole; a row's words
+//! escaped and its commands set as code, and a person's field — a refused
+//! record among them — shown back as it was sent, a quote in it never
+//! closing its attribute; and the `Debug` of a post, a status page and an
+//! answer showing none of what they hold. (The strings table's rows are
+//! `strings`' suite.)
 
 use std::io::{Read, Write};
 use std::net::{Shutdown, TcpListener, TcpStream};
@@ -57,7 +59,7 @@ fn request(method: &str, target: &str, body: &[u8]) -> Request {
 /// `GET /`: the sign-up page — the lead, the address field, what is kept,
 /// the button — at 200, plain HTML with no script and nothing fetched.
 #[test]
-fn the_sign_up_page() {
+fn the_sign_up_page_asks_for_an_address_with_no_script_and_nothing_fetched() {
     let answer = answer(&request("GET", "/", b""), &site(), &Scripted::default());
     assert_eq!(answer.status, 200);
     for words in [fill(SIGNUP_LEAD, &[("suffix", "skep.host")]), fill(ADDRESS_LABEL, &[]), fill(SIGNUP_KEPT, &[]), fill(SIGNUP_BUTTON, &[])] {
@@ -73,7 +75,7 @@ fn the_sign_up_page() {
 /// a refused address shows its DRAFT string on the page again, the field
 /// as sent; a failed write its own.
 #[test]
-fn the_sign_up_post() {
+fn a_sign_up_is_thanked_and_a_refused_address_shown_again_as_sent() {
     let desk = Scripted::default();
     let thanks = answer(&request("POST", "/signup", b"address=person%40example.com"), &site(), &desk);
     assert_eq!(thanks.status, 200);
@@ -158,7 +160,7 @@ fn an_admitted_post_answers_d7_with_its_status_url() {
 /// live, D-8 once failed, 404 for a token the desk does not hold — and for
 /// a path that is no token.
 #[test]
-fn the_status_page_by_state() {
+fn the_status_page_shows_d7_the_live_reply_d8_or_404() {
     let desk = Scripted::default();
     *desk.status.lock().unwrap() = Some(Shown::BeingMade);
     let being = answer(&request("GET", "/status/t0k3n", b""), &site(), &desk);
@@ -201,8 +203,9 @@ fn the_subsets_refusals_are_413_and_400() {
 }
 
 /// THE CONNECTION over a real socket: a page with the headers that say no
-/// script and no referrer; and a declared body past the cap answered 413
-/// before any of it is sent.
+/// script, nothing from elsewhere, no frame and no referrer, each whole to
+/// its line's end; and a declared body past the cap answered 413 before any
+/// of it is sent.
 #[test]
 fn a_connection_answers_with_its_headers_and_refuses_a_body_past_the_cap() {
     let listener = TcpListener::bind(("127.0.0.1", 0)).expect("a port");
@@ -224,12 +227,12 @@ fn a_connection_answers_with_its_headers_and_refuses_a_body_past_the_cap() {
     let page = talk("GET / HTTP/1.1\r\nHost: skep.host\r\n\r\n");
     assert!(page.starts_with("HTTP/1.1 200 OK\r\n"), "{page}");
     for header in [
-        "Content-Security-Policy: default-src 'none'; style-src 'unsafe-inline'; form-action 'self'",
+        "Content-Security-Policy: default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'",
         "Referrer-Policy: no-referrer",
         "X-Content-Type-Options: nosniff",
         "Content-Type: text/html; charset=utf-8",
     ] {
-        assert!(page.contains(header), "{header}");
+        assert!(page.contains(&format!("\r\n{header}\r\n")), "{header}: {page}");
     }
     let too_large = talk(&format!("POST /claim HTTP/1.1\r\nHost: skep.host\r\nContent-Length: {}\r\n\r\n", MAX_BODY + 1));
     assert!(too_large.starts_with("HTTP/1.1 413 Payload Too Large\r\n"), "{too_large}");
@@ -256,6 +259,23 @@ fn a_refused_record_comes_back_as_sent() {
     let answer = answer(&request("POST", "/claim", b"name=alice&record=%7B%22label%22%3A%22%60work%60%22%7D&invite=c0de"), &site(), &desk);
     assert!(answer.body.contains("{\"label\":\"`work`\"}</textarea>"), "{}", answer.body);
     assert!(!answer.body.contains("<code>work</code>"), "{}", answer.body);
+}
+
+/// A PERSON's FIELD NEVER CLOSES ITS ATTRIBUTE: the invite link's query, a
+/// refused post's name and invite, and a refused sign-up's address, each
+/// holding a quote, come back with every quote escaped — never an attribute
+/// of the sender's making on the page.
+#[test]
+fn a_persons_field_never_closes_its_attribute() {
+    let link = answer_of("GET", "/claim?invite=%22%20autofocus%20x%3D%27", b"");
+    assert!(link.body.contains("value=\"&quot; autofocus x=&#39;\""), "{}", link.body);
+    let desk = Scripted::default();
+    *desk.admit.lock().unwrap() = Some(Err(Refusal::Name));
+    let post = answer(&request("POST", "/claim", b"name=%22n&record=x&invite=%22i"), &site(), &desk);
+    assert!(post.body.contains("value=\"&quot;n\"") && post.body.contains("value=\"&quot;i\""), "{}", post.body);
+    *desk.sign_up.lock().unwrap() = Some(Err(SignUpRefusal::NotAnAddress));
+    let sign_up = answer(&request("POST", "/signup", b"address=%22a"), &site(), &desk);
+    assert!(sign_up.body.contains("value=\"&quot;a\""), "{}", sign_up.body);
 }
 
 /// WHAT THE PAGES HOLD, `Debug`ged, shows none of it: a post by its fields'

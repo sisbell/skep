@@ -1,9 +1,10 @@
 //! T10 — THE SIGN-UP FILE: a sign-up appends one line, the address and a
-//! date; a malformed address appends nothing; a file that cannot be written
-//! keeps nothing, each refusal an error saying which. (The address rule,
-//! the state directory's door and the writer beneath the file are
-//! `statedir`'s suite; the page's DRAFT refusal and the log's silence about
-//! the address are the pages' and the flow's suites'.)
+//! date; sign-ups made at once are every one kept, one writer at a time; a
+//! malformed address appends nothing; a file that cannot be written keeps
+//! nothing, each refusal an error saying which. (The address rule, the
+//! state directory's door and the writer beneath the file are `statedir`'s
+//! suite; the page's DRAFT refusal and the log's silence about the address
+//! are the pages' and the flow's suites'.)
 
 use std::fs;
 
@@ -17,11 +18,13 @@ fn a_sign_up_appends_one_line_with_the_address_and_a_date() {
     let dir = Scratch::new();
     let state = StateDir::open(&dir.path().join("state")).expect("the state directory");
     let signups = SignUps::new(&state);
+    let before = today();
     signups.append(b"person@example.com").expect("kept");
+    let after = today();
     let text = fs::read_to_string(state.file(SIGNUPS)).expect("the file");
     let (address, date) = text.trim_end().split_once(' ').expect("two fields");
     assert_eq!(address, "person@example.com");
-    assert_eq!(date, today());
+    assert!(date == before || date == after, "{date}, not {before} or {after}");
     assert_eq!(date.len(), 10);
     signups.append(b"other@example.org").expect("kept");
     signups.append(b"person@example.com").expect("kept again");
@@ -32,6 +35,32 @@ fn a_sign_up_appends_one_line_with_the_address_and_a_date() {
         use std::os::unix::fs::PermissionsExt;
         assert_eq!(fs::metadata(state.file(SIGNUPS)).expect("its mode").permissions().mode() & 0o777, 0o600);
     }
+}
+
+/// T10: ONE WRITER AT A TIME — sign-ups made at once, each on a thread of
+/// its own as the service serves every connection, are every one kept:
+/// none lost to another's rewrite of the file.
+#[test]
+fn sign_ups_made_at_once_are_every_one_kept() {
+    let dir = Scratch::new();
+    let state = StateDir::open(&dir.path().join("state")).expect("the state directory");
+    let signups = SignUps::new(&state);
+    std::thread::scope(|s| {
+        for t in 0..4 {
+            let signups = &signups;
+            s.spawn(move || {
+                for n in 0..8 {
+                    signups.append(format!("person{t}.{n}@example.com").as_bytes()).expect("kept");
+                }
+            });
+        }
+    });
+    let mut kept: Vec<String> = fs::read_to_string(state.file(SIGNUPS)).expect("the file").lines().map(|l| l.split(' ').next().unwrap_or("").to_owned()).collect();
+    let mut sent: Vec<String> = (0..4).flat_map(|t| (0..8).map(move |n| format!("person{t}.{n}@example.com"))).collect();
+    assert_eq!(kept.len(), sent.len(), "a sign-up lost to another's rewrite");
+    kept.sort();
+    sent.sort();
+    assert_eq!(kept, sent);
 }
 
 /// T10: A MALFORMED ADDRESS IS REFUSED and appends nothing — no file where

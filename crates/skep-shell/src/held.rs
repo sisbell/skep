@@ -12,11 +12,11 @@
 //! reader IGNORES a final line without `\n` (a torn last line is the burst a
 //! crash caught mid-append, R14's one).
 //!
-//! THE QUEUE IS THE MEMORY, THE FILE ITS COPY: a principal's [`HeldFile`] is
+//! THE QUEUE IS THE MEMORY, THE FILE ITS COPY: a principal's [`HeldQueue`] is
 //! its held lines in `k` order, and every line enters it under a fresh
 //! ordinal whatever the disk did. Where the file is on disk each line is
 //! copied to it as it enters; where the store keeps the queue in memory alone
-//! ([`HeldFile::in_memory`]: another window's lock, a directory out of reach,
+//! ([`HeldQueue::in_memory`]: another window's lock, a directory out of reach,
 //! §3c.3) no copy is made, and a close loses the lines. An append the device
 //! refuses is answered beside the line, which stands in the queue all the same.
 //!
@@ -102,10 +102,10 @@ pub struct HeldLine {
 
 /// What opening a principal's file yields.
 pub enum Opened {
-    /// The file (fresh, or read whole): its un-done `held` lines in `k` order;
-    /// `aside` the path a MISPLACED file was moved to, for the shell's own
-    /// window to say (never the page, P39).
-    Live { file: HeldFile, aside: Option<PathBuf> },
+    /// The queue read whole from the file, or a fresh one: its un-done `held`
+    /// lines in `k` order; `aside` the path a MISPLACED file was moved to, for
+    /// the shell's own window to say (never the page, P39).
+    Live { queue: HeldQueue, aside: Option<PathBuf> },
     /// P38's HALT: the file was written by a newer skep, carries an unknown
     /// header member, or a middle line does not parse — the path and the reason.
     Halted { path: PathBuf, why: HaltWhy },
@@ -141,9 +141,11 @@ pub struct HeldDir {
 }
 
 impl HeldDir {
-    /// `<store_dir>/held/<chain>/` (§3c.8: the same `<data>` the index takes).
-    pub fn new(store_dir: &Path, chain: Chain) -> HeldDir {
-        HeldDir { path: store_dir.join("held").join(chain.to_string()), chain }
+    /// `<data_dir>/held/<chain>/` — the data directory the index takes
+    /// (§3c.8), the held store BESIDE the key store and never under it
+    /// (§3c.1's `<app data>`).
+    pub fn new(data_dir: &Path, chain: Chain) -> HeldDir {
+        HeldDir { path: data_dir.join("held").join(chain.to_string()), chain }
     }
 
     /// The directory and `held/` above it, each `0700`, created once (§3c.1).
@@ -200,7 +202,7 @@ impl HeldDir {
     pub fn open_file(&self, principal: u64, account: &str) -> io::Result<Opened> {
         let path = self.path.join(Self::file_name(principal));
         let disk = Disk { path: path.clone(), chain: self.chain, principal, account: account.to_string(), created: false };
-        let fresh = |disk: Disk, aside: Option<PathBuf>| Opened::Live { file: HeldFile { disk: Some(disk), held: Vec::new(), next_k: 1 }, aside };
+        let fresh = |disk: Disk, aside: Option<PathBuf>| Opened::Live { queue: HeldQueue { disk: Some(disk), lines: Vec::new(), next_k: 1 }, aside };
         let bytes = match fs::read(&path) {
             Ok(b) => b,
             Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(fresh(disk, None)),
@@ -245,7 +247,7 @@ impl HeldDir {
         }
         // The lines: `held` and `done`, no third. A middle line that does not
         // parse is a damaged body — HALT (§3c.3).
-        let mut held: Vec<HeldLine> = Vec::new();
+        let mut lines: Vec<HeldLine> = Vec::new();
         let mut max_k = 0u64;
         for line in &complete[1..] {
             let v: Value = match serde_json::from_str(line) {
@@ -269,20 +271,20 @@ impl HeldDir {
                     time: v["time"].as_u64().unwrap_or(0),
                 };
                 // A `held` line of a standing ordinal is its RE-MARK
-                // ([`HeldFile::remark`]): it takes the earlier line's place.
-                match held.iter_mut().find(|l| l.k == k) {
+                // ([`HeldQueue::remark`]): it takes the earlier line's place.
+                match lines.iter_mut().find(|l| l.k == k) {
                     Some(slot) => *slot = line,
-                    None => held.push(line),
+                    None => lines.push(line),
                 }
             } else if let Some(k) = v.get("done").and_then(Value::as_u64) {
                 max_k = max_k.max(k);
-                held.retain(|l| l.k != k);
+                lines.retain(|l| l.k != k);
             } else {
                 return Ok(Opened::Halted { path, why: HaltWhy::Damaged });
             }
         }
         let disk = Disk { created: true, ..disk };
-        Ok(Opened::Live { file: HeldFile { disk: Some(disk), held, next_k: max_k + 1 }, aside: None })
+        Ok(Opened::Live { queue: HeldQueue { disk: Some(disk), lines, next_k: max_k + 1 }, aside: None })
     }
 
     /// THE ASIDE (`aside_name`'s form, the index's idiom): `name` renamed to
@@ -307,12 +309,12 @@ impl HeldDir {
     }
 }
 
-/// ONE PRINCIPAL's QUEUE: its un-done `held` lines in `k` order, the next
-/// ordinal, and the file the lines are copied to — `None` where the store
-/// keeps them in memory alone (§3c.3).
-pub struct HeldFile {
+/// ONE PRINCIPAL's QUEUE (J1: "THE SHELL holds the queue"): its un-done
+/// `held` lines in `k` order, the next ordinal, and the file the lines are
+/// copied to — `None` where the store keeps them in memory alone (§3c.3).
+pub struct HeldQueue {
     disk: Option<Disk>,
-    held: Vec<HeldLine>,
+    lines: Vec<HeldLine>,
     next_k: u64,
 }
 
@@ -336,6 +338,15 @@ pub struct Appended {
     pub unwritten: Option<io::Error>,
 }
 
+/// How a `done` line resolves its line (§3c.2's `as`): `kept` with the `at`
+/// of its ack, or of the row the read found — none where the arrangement
+/// alone decided — or `dropped` by the person's act, which names no position.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Done {
+    Kept { at: Option<u64> },
+    Dropped,
+}
+
 /// Why a `done` was refused or not copied.
 #[derive(Debug)]
 pub enum DoneError {
@@ -346,19 +357,19 @@ pub enum DoneError {
     Unwritten(io::Error),
 }
 
-impl HeldFile {
+impl HeldQueue {
     /// A queue kept in memory alone (§3c.3): its lines enter and leave as a
     /// file's do, and no copy is written — a close loses them.
-    pub fn in_memory() -> HeldFile {
-        HeldFile { disk: None, held: Vec::new(), next_k: 1 }
+    pub fn in_memory() -> HeldQueue {
+        HeldQueue { disk: None, lines: Vec::new(), next_k: 1 }
     }
 
     /// The un-done `held` lines, in `k` order.
     pub fn lines(&self) -> &[HeldLine] {
-        &self.held
+        &self.lines
     }
 
-    /// Whether the file is on disk (a header has been written).
+    /// Whether the queue's file is on disk (a header has been written).
     #[cfg(test)]
     pub fn on_disk(&self) -> bool {
         self.disk.as_ref().is_some_and(|d| d.path.exists())
@@ -374,7 +385,7 @@ impl HeldFile {
         self.next_k += 1;
         let unwritten = self.disk.as_mut().and_then(|d| d.write_line(&held_line_bytes(&line)).err());
         let k = line.k;
-        self.held.push(line);
+        self.lines.push(line);
         Appended { k, unwritten }
     }
 
@@ -384,7 +395,7 @@ impl HeldFile {
     /// the device's refusal is answered for the caller to say (a reopen then
     /// reads the earlier reason). A line not standing is left alone.
     pub fn remark(&mut self, k: u64, reason: Reason) -> io::Result<()> {
-        let Some(line) = self.held.iter_mut().find(|l| l.k == k) else { return Ok(()) };
+        let Some(line) = self.lines.iter_mut().find(|l| l.k == k) else { return Ok(()) };
         line.reason = reason;
         line.time = now_ms();
         let bytes = held_line_bytes(line);
@@ -394,23 +405,23 @@ impl HeldFile {
         }
     }
 
-    /// RESOLVE line `k` with a `done` line — `kept` with the `at` of its ack
-    /// (or of the row the read found), `dropped` by the person's act (§3c.2).
-    /// The line leaves the queue whatever the disk did: [`DoneError::Unwritten`]
-    /// says where its `done` did not reach the file. COMPACTION: once the queue
-    /// holds no line, its file is REMOVED (§3c.3) and the ordinals start again.
-    /// A `done` for an ordinal with no `held` line is REFUSED (T4).
-    pub fn done(&mut self, k: u64, kept: bool, at: Option<u64>) -> Result<(), DoneError> {
-        if !self.held.iter().any(|l| l.k == k) {
+    /// RESOLVE line `k` with a `done` line, [`Done::Kept`] or
+    /// [`Done::Dropped`] (§3c.2). The line leaves the queue whatever the disk
+    /// did: [`DoneError::Unwritten`] says where its `done` did not reach the
+    /// file. COMPACTION: once the queue holds no line, its file is REMOVED
+    /// (§3c.3) and the ordinals start again. A `done` for an ordinal with no
+    /// `held` line is REFUSED (T4).
+    pub fn done(&mut self, k: u64, done: Done) -> Result<(), DoneError> {
+        if !self.lines.iter().any(|l| l.k == k) {
             return Err(DoneError::NoSuchLine);
         }
-        self.held.retain(|l| l.k != k);
+        self.lines.retain(|l| l.k != k);
         // A file never created holds no line to resolve.
         let written = match self.disk.as_mut() {
-            Some(d) if d.created => d.append(&done_line_bytes(k, kept, at)),
+            Some(d) if d.created => d.append(&done_line_bytes(k, done)),
             _ => Ok(()),
         };
-        if self.held.is_empty() {
+        if self.lines.is_empty() {
             if let Some(d) = self.disk.as_mut() {
                 d.remove();
             }
@@ -503,9 +514,14 @@ fn held_line_bytes(l: &HeldLine) -> Vec<u8> {
     s.into_bytes()
 }
 
-/// A `done` line's exact bytes (§3c.2): `done, as, at?, time`, in that order.
-fn done_line_bytes(k: u64, kept: bool, at: Option<u64>) -> Vec<u8> {
-    let mut s = format!("{{\"done\":{k},\"as\":{}", if kept { "\"kept\"" } else { "\"dropped\"" });
+/// A `done` line's exact bytes (§3c.2): `done, as, at?, time`, in that order —
+/// `at` on a `kept` line alone.
+fn done_line_bytes(k: u64, done: Done) -> Vec<u8> {
+    let (resolved, at) = match done {
+        Done::Kept { at } => ("kept", at),
+        Done::Dropped => ("dropped", None),
+    };
+    let mut s = format!("{{\"done\":{k},\"as\":\"{resolved}\"");
     if let Some(at) = at {
         s.push_str(&format!(",\"at\":{at}"));
     }

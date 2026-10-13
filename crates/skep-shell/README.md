@@ -32,7 +32,7 @@ dispatch to `CALLS`, the list a transport admits a call by):
 | `script` | the dev arm's SCRIPT: the grammar a script file's answers are parsed by, one per line in order (`confirm yes`, `retype sheet 0`, `destination <path>`, `import neither`, `kept`, `abandon`, …) |
 | `dev_arm` | the DEV ARM for the SECRET and CONSENT moments (§4b.3): a script's answers in order, or the auto arm; every answer said on TALK, never sent to the page |
 | `person` | the person over the bridge: a `Person` whose PUBLIC moments become `moment(id, kind, data)` events and block until `answer(id, value)` or `cancel(id)`; its SECRET and CONSENT moments go to the dev arm |
-| `attest` | the publish-class attest a signed session composes for the ten kinds that have an entry frame — the frame's every axis from the shell's own reads, a `publish`'s copied runs read back through the origin's arrangement — attached as the frame's `attest` |
+| `attest` | the attest a signed session composes for every write of the checked set — the ten kinds that have an entry frame — the frame's every axis from the shell's own reads, a `publish`'s copied runs read back through the origin's arrangement — attached as the frame's `attest` |
 | `sessions` | the session table (the token under its reference, the board's position read before the open), the two openings — bare as the principal, signed content-scoped behind AUTH-5.65's pre-check, each refusal under its armed name — the store's key every row that signs looks up, and the attest a session's key signs on its writes, whichever hand sends them; a session's END: one sequence for both hands that meet a death signal, the shell's and the feed's, the entry's own lock the gate, so a session ends once and the restart arm's re-open is registered whichever hand met it; the arm a `session-died` carries: `closed`, `mode` (a bare session at the flip), `retired` (own or another hand, the hand and position named), `seeded`, `blocked`, `restart` (re-opened silently where a key stands, the new reference named), `unreachable`; and the RELEASE of a leaving session's drafts supplement — one per principal — to another session of its principal standing at the board, narrowed only where none stands |
 | `hold` | the held-burst hold (§3c.4, §3c.5): a burst's write path — held without a dial where a hold stands, else dialed once and its answer read once through the classification table (what a dial answers → hold / reissue / neither), first dial and resend alike — the per-(board, principal) queue over `held`'s file, its principal's file opened at a session's open, the `base` every acked write sets, and the resend walk — one `/changes` read per document before its first resend, with the three outcomes (send from the head, the in-flight burst kept, the moved document faced), a read the board refuses deciding nothing — driven by the feed worker's probe; the backing of `held(session)` and `resolve(session, {held, act})` |
 | `feed` | the feed consumer's thread per board: `search::Consumer` polled on each `/events` commit, the `/changes` pages re-read for the `feed` events — a closing session's drafts read once more under its token before its close answers, so its every row precedes its `session-died` — `mode`, `daemon` and `index` as the state moves, and the `search` call answered off the consumer; it also reads `writes.halted` per tick and drives the held-burst PROBE every cadence, measured from the last probe whatever wakes the thread between |
@@ -41,10 +41,10 @@ dispatch to `CALLS`, the list a transport admits a call by):
 
 ## The `feed` update's shape
 
-This crate's definition (S-24 (b)): the `/changes` entry's members VERBATIM
+This crate's definition (S-24 (b)): the `/changes` row's members VERBATIM
 (`at`, `op`, `docs`, `key`, `time`, `attest`, `new_prefix`, `new_id`,
 `link`, `placed`, `base_extent`, and any later member by the wire's forward
-rule), plus `position` (the entry's `at`, named once more) and `class` —
+rule), plus `position` (the row's `at`, named once more) and `class` —
 `published` for a row of the guest's feed, `drafts` for one of a session's
 supplement, the latter with `session`, the reference it was read under. The
 event carries `board`, the reference, beside `update`. The feed starts at

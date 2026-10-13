@@ -2,9 +2,9 @@
 //! row; §4b.2's `session-died`). The table holds every session this shell
 //! opened for the page — the token, which never leaves this process, under
 //! the opaque reference the page holds (`refs`) — and the FACTS a death's
-//! arm is derived from: the principal, the account, the kind (bare, or
-//! signed content-scoped), the key that opened it and the account whose
-//! set it authenticated against. The two openings are here too, so the
+//! arm is derived from: the principal, the account, and the kind — bare,
+//! or signed content-scoped with the key that opened it and the account
+//! whose set it authenticated against. The two openings are here too, so the
 //! shell's `session` call and the restart arm's silent re-open (AUTH-5.31)
 //! share one: the BARE bind as the claimant on the permissive board, and
 //! the SIGNED content-scoped handshake behind AUTH-5.65's pre-check, each
@@ -59,25 +59,16 @@ use skep_identity::Fingerprint;
 
 use crate::attest::{wants_attest, Composer};
 use crate::events::{EventBus, SESSION_DIED};
-use crate::refs::session_name;
+use crate::refs::session_reference;
 use crate::refusal::{Name, Refusal};
 
-/// A session's kind: the bare bind, or the signed content-scoped handshake.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// A session's kind: the bare bind, or the signed content-scoped handshake —
+/// the key that opened it, and the account whose set it authenticated
+/// against (the account itself, or the nearest above it that holds one).
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Kind {
     Bare,
-    Content,
-}
-
-impl Kind {
-    /// The kind as the bridge spells it.
-    #[cfg(test)]
-    pub fn name(self) -> &'static str {
-        match self {
-            Kind::Bare => "bare",
-            Kind::Content => "content",
-        }
-    }
+    Signed { fingerprint: Fingerprint, set_account: String },
 }
 
 /// The facts a session was opened with — what its death's arm reads.
@@ -87,18 +78,13 @@ pub struct Facts {
     /// `principal_prefix(principal)`, where the board answered one.
     pub account: Option<String>,
     pub kind: Kind,
-    /// The key that opened a signed session.
-    pub fingerprint: Option<Fingerprint>,
-    /// The account whose set the signed session authenticated against —
-    /// the account itself, or the nearest above it that holds a set.
-    pub set_account: Option<String>,
 }
 
 impl Facts {
-    /// Whether the session opened BY REFERENCE — against a set above its
-    /// own account.
+    /// Whether the session opened BY REFERENCE — a signed session whose set
+    /// stands above its own account.
     pub fn by_reference(&self) -> bool {
-        matches!((&self.account, &self.set_account), (Some(a), Some(s)) if a != s)
+        matches!((&self.account, &self.kind), (Some(account), Kind::Signed { set_account, .. }) if account != set_account)
     }
 }
 
@@ -107,8 +93,8 @@ impl Facts {
 pub struct SessionEntry {
     /// The reference the page holds.
     pub reference: String,
-    /// The board reference it stands at.
-    pub board: String,
+    /// The reference of the board it stands at.
+    pub board_reference: String,
     /// The token — this process's alone.
     pub token: Token,
     pub facts: Facts,
@@ -130,12 +116,12 @@ impl SessionEntry {
     /// could not sign — nothing is then to be sent — and the board's refusal,
     /// or `unreachable`, where a read it needed was refused or not answered.
     pub fn attest(&self, board: &Board, store: &FileStore, frame: &mut Value) -> Result<(), Refusal> {
-        let Some(key) = self.facts.fingerprint else { return Ok(()) };
+        let Kind::Signed { fingerprint: key, .. } = &self.facts.kind else { return Ok(()) };
         if !wants_attest(frame) {
             return Ok(());
         }
         let Some(term) = board.board_term().map_err(Refusal::of)? else { return Ok(()) };
-        let signer = signer(store, &store.key_path(&key))?;
+        let signer = signer(store, &store.key_path(key))?;
         let account = self.facts.account.as_deref().ok_or_else(|| Refusal::shell(Name::NO_ACCOUNT, json!({})))?;
         let composer = Composer { board, token: &self.token, signer: &*signer, account, term };
         composer.attach(frame).map_err(|h| Refusal::of_named(Name::ATTEST_NOT_COMPOSED, h))
@@ -170,9 +156,9 @@ impl Sessions {
         self.map.lock().expect("the sessions' lock").get(reference).cloned()
     }
 
-    /// Every session at `board`, in no order.
-    pub fn on_board(&self, board: &str) -> Vec<Arc<SessionEntry>> {
-        self.map.lock().expect("the sessions' lock").values().filter(|e| e.board == board).cloned().collect()
+    /// Every session at the board `board_reference` names, in no order.
+    pub fn on_board(&self, board_reference: &str) -> Vec<Arc<SessionEntry>> {
+        self.map.lock().expect("the sessions' lock").values().filter(|e| e.board_reference == board_reference).cloned().collect()
     }
 
     /// Every session, in no order.
@@ -185,11 +171,11 @@ impl Sessions {
         self.map.lock().expect("the sessions' lock").len()
     }
 
-    /// A session opened at `board`, REGISTERED: entered under a fresh
-    /// reference — never the token's — and its drafts supplement widened;
-    /// the entry.
-    pub fn register(&self, board: &str, open: Open, supplements: &mut dyn Supplements) -> Arc<SessionEntry> {
-        let entry = self.enter(board, open);
+    /// A session opened at the board `board_reference` names, REGISTERED:
+    /// entered under a fresh reference — never the token's — and its drafts
+    /// supplement widened; the entry.
+    pub fn register(&self, board_reference: &str, open: Open, supplements: &mut dyn Supplements) -> Arc<SessionEntry> {
+        let entry = self.enter(board_reference, open);
         supplements.widen(&entry);
         entry
     }
@@ -215,7 +201,7 @@ impl Sessions {
         self.remove(&entry.reference);
         let death = reason(board, store, entry);
         let mut arm = death.reason;
-        let reopened = death.reopened.map(|open| self.enter(&entry.board, open));
+        let reopened = death.reopened.map(|open| self.enter(&entry.board_reference, open));
         if let Some(r) = &reopened {
             arm["session"] = Value::from(r.reference.as_str());
         }
@@ -224,18 +210,18 @@ impl Sessions {
         bus.emit(SESSION_DIED, json!({"session": entry.reference, "reason": arm}));
         match &reopened {
             Some(r) => supplements.widen(r),
-            None => self.release(&entry.board, entry.facts.principal, supplements),
+            None => self.release(&entry.board_reference, entry.facts.principal, supplements),
         }
         arm
     }
 
-    /// A principal's supplement at `board`, given up by a session that has
-    /// left the table: the consumer holds ONE supplement per principal, so
-    /// it is handed to another session of the principal standing there —
-    /// that session's token widened in — and narrowed (`client.md` §4e.3's
-    /// NARROW) where none stands.
-    pub fn release(&self, board: &str, principal: u64, supplements: &mut dyn Supplements) {
-        match self.on_board(board).into_iter().find(|s| s.facts.principal == principal) {
+    /// A principal's supplement at the board `board_reference` names, given
+    /// up by a session that has left the table: the consumer holds ONE
+    /// supplement per principal, so it is handed to another session of the
+    /// principal standing there — that session's token widened in — and
+    /// narrowed (`client.md` §4e.3's NARROW) where none stands.
+    pub fn release(&self, board_reference: &str, principal: u64, supplements: &mut dyn Supplements) {
+        match self.on_board(board_reference).into_iter().find(|s| s.facts.principal == principal) {
             Some(standing) => supplements.widen(&standing),
             None => supplements.narrow(principal),
         }
@@ -258,8 +244,8 @@ impl Sessions {
         Some(entry)
     }
 
-    fn enter(&self, board: &str, open: Open) -> Arc<SessionEntry> {
-        let entry = Arc::new(SessionEntry { reference: session_name(), board: board.to_string(), token: open.token, facts: open.facts, opened_at: open.opened_at, end: Mutex::new(None) });
+    fn enter(&self, board_reference: &str, open: Open) -> Arc<SessionEntry> {
+        let entry = Arc::new(SessionEntry { reference: session_reference(), board_reference: board_reference.to_string(), token: open.token, facts: open.facts, opened_at: open.opened_at, end: Mutex::new(None) });
         self.map.lock().expect("the sessions' lock").insert(entry.reference.clone(), Arc::clone(&entry));
         entry
     }
@@ -291,7 +277,7 @@ pub fn open_bare(board: &Board, principal: u64) -> Result<Open, Refusal> {
         Opened::Blocked { record } => return Err(Refusal::Blocked(skep_client::Blocked { record, named_by: board.dialed().as_str().to_string(), ground: None })),
     };
     let account = board.principal_prefix(principal).map_err(Refusal::of)?;
-    Ok(Open { token, facts: Facts { principal, account, kind: Kind::Bare, fingerprint: None, set_account: None }, opened_at })
+    Ok(Open { token, facts: Facts { principal, account, kind: Kind::Bare }, opened_at })
 }
 
 /// THE STORE's KEY for (`origin`, `principal`) to sign with — §3.5's
@@ -340,9 +326,7 @@ pub fn open_signed(board: &Board, store: &FileStore, principal: u64) -> Result<O
     let facts = Facts {
         principal,
         account: Some(session.account().to_string()),
-        kind: Kind::Content,
-        fingerprint: Some(session.fingerprint()),
-        set_account: Some(pre.walk.set_account.clone()),
+        kind: Kind::Signed { fingerprint: session.fingerprint(), set_account: pre.walk.set_account.clone() },
     };
     Ok(Open { token: session.into_token(), facts, opened_at: health.log_position() })
 }
@@ -371,49 +355,47 @@ fn reason(board: &Board, store: Option<&FileStore>, entry: &SessionEntry) -> Dea
     };
     let mode = Mode::of(&health);
     let facts = &entry.facts;
-    if facts.kind == Kind::Bare {
+    let Kind::Signed { fingerprint: fp, set_account } = &facts.kind else {
         if mode == Mode::Enforcing {
             return none(json!({"arm": "mode", "mode": mode.name()}));
         }
         return none(json!({"arm": "restart", "reopened": false}));
-    }
+    };
     // A signed session: the retirement, read off the set it authenticated
     // against and the admitted record read.
-    if let (Some(fp), Some(set_account)) = (facts.fingerprint, facts.set_account.as_deref()) {
-        if let Ok(KeySetAnswer::Set(set)) = board.key_set(set_account) {
-            if set.retired(&fp).is_some() {
-                let own: Vec<(Fingerprint, skep_identity::PublicKey)> =
-                    store.and_then(|s| s.device_keys().ok()).into_iter().flatten().map(|k| (k.fingerprint, k.public)).collect();
-                let records = credential_records(board, set_account, &own).ok();
-                let retirement = records.as_ref().and_then(|r| r.retirement_of(&fp));
-                let (hand, position, label, own_hand) = match retirement.map(|rec| (&rec.hand, rec.position)) {
-                    Some((Hand::Key(hand), position)) => {
-                        let label = records.as_ref().and_then(|r| r.label_of(hand)).map(|l| render_inert(&l));
-                        let own_hand = own.iter().any(|(f, _)| f == hand);
-                        (Some(hand.to_string()), position, label, own_hand)
-                    }
-                    Some((Hand::Bare, position)) => (Some("bare".to_string()), position, None, false),
-                    _ => (None, None, None, false),
-                };
-                return none(json!({
-                    "arm": "retired",
-                    "fingerprint": fp.to_string(),
-                    "own": own_hand,
-                    "hand": hand,
-                    "position": position,
-                    "label": label,
-                }));
-            }
+    if let Ok(KeySetAnswer::Set(set)) = board.key_set(set_account) {
+        if set.retired(fp).is_some() {
+            let own: Vec<(Fingerprint, skep_identity::PublicKey)> =
+                store.and_then(|s| s.device_keys().ok()).into_iter().flatten().map(|k| (k.fingerprint, k.public)).collect();
+            let records = credential_records(board, set_account, &own).ok();
+            let retirement = records.as_ref().and_then(|r| r.retirement_of(fp));
+            let (hand, position, label, own_hand) = match retirement.map(|rec| (&rec.hand, rec.position)) {
+                Some((Hand::Key(hand), position)) => {
+                    let label = records.as_ref().and_then(|r| r.label_of(hand)).map(|l| render_inert(&l));
+                    let own_hand = own.iter().any(|(f, _)| f == hand);
+                    (Some(hand.to_string()), position, label, own_hand)
+                }
+                Some((Hand::Bare, position)) => (Some("bare".to_string()), position, None, false),
+                _ => (None, None, None, false),
+            };
+            return none(json!({
+                "arm": "retired",
+                "fingerprint": fp.to_string(),
+                "own": own_hand,
+                "hand": hand,
+                "position": position,
+                "label": label,
+            }));
         }
-        // The seeded arm: a session by reference whose acted-as account now
-        // holds a set of its own.
-        if facts.by_reference() {
-            if let Some(account) = facts.account.as_deref() {
-                if let Ok(KeySetAnswer::Set(set)) = board.key_set(account) {
-                    if !set.is_empty() {
-                        let writer = set.enrolled.first().map(|e| e.fingerprint.to_string());
-                        return none(json!({"arm": "seeded", "account": account, "as_of": set.as_of, "writer": writer}));
-                    }
+    }
+    // The seeded arm: a session by reference whose acted-as account now
+    // holds a set of its own.
+    if facts.by_reference() {
+        if let Some(account) = facts.account.as_deref() {
+            if let Ok(KeySetAnswer::Set(set)) = board.key_set(account) {
+                if !set.is_empty() {
+                    let writer = set.enrolled.first().map(|e| e.fingerprint.to_string());
+                    return none(json!({"arm": "seeded", "account": account, "as_of": set.as_of, "writer": writer}));
                 }
             }
         }
@@ -458,7 +440,8 @@ mod tests {
     }
 
     fn open(principal: u64, account: &str, set_account: &str) -> Open {
-        let facts = Facts { principal, account: Some(account.into()), kind: Kind::Content, fingerprint: None, set_account: Some(set_account.into()) };
+        let kind = Kind::Signed { fingerprint: Fingerprint::parse_hex(&"5a".repeat(32)).unwrap(), set_account: set_account.into() };
+        let facts = Facts { principal, account: Some(account.into()), kind };
         Open { token: Token::parse(&"9f".repeat(16)).unwrap(), facts, opened_at: 0 }
     }
 
@@ -492,7 +475,8 @@ mod tests {
 
     /// The table: a session registered under a fresh reference and its
     /// supplement widened, listed by board, found by reference; a session
-    /// by reference is one whose set is above its account.
+    /// by reference is a signed one whose set is above its account, and a
+    /// bare session, which authenticated against no set, never is.
     #[test]
     fn the_table_registers_sessions_under_fresh_references() {
         let sessions = Sessions::new();
@@ -505,7 +489,7 @@ mod tests {
         assert_eq!(sessions.on_board("b-1").len(), 1);
         assert!(one.facts.by_reference());
         assert!(!sessions.get(&two.reference).unwrap().facts.by_reference());
-        assert_eq!(Kind::Bare.name(), "bare");
+        assert!(!Facts { principal: 3, account: Some("1.0.1.1".into()), kind: Kind::Bare }.by_reference());
     }
 
     /// THE END, ONCE: the first `end` takes the session out of the table,

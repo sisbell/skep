@@ -5,7 +5,7 @@ edition.workspace = true
 rust-version.workspace = true
 repository.workspace = true
 license.workspace = true
-description = "The shell's core over skep-client, written once for the dev provider and the desktop shell: the bridge's calls and events of client.md §4b — the board and session references the page is handed in a credential's place, the person seam that forwards PUBLIC moments to the page and answers SECRET and CONSENT ones from a dev arm, the feed consumer, the publish-class attest — and the TypeScript declarations of every value that crosses the bridge"
+description = "The shell's core over skep-client, written once for the dev provider and the desktop shell: the bridge's calls and events of client.md §4b — the board and session references the page is handed in a credential's place, the person seam that forwards PUBLIC moments to the page and answers SECRET and CONSENT ones from a dev arm, the feed consumer, the attest a signed session composes for the checked set — and the TypeScript declarations of every value that crosses the bridge"
 readme = "README.md"
 
 # No feature: the daemon's doors are the dev verb's (`skep-cli`'s
@@ -19,9 +19,9 @@ readme = "README.md"
 # below consume. `acting` (default on) holds the store, the signer, the
 # person seam and the walks.
 skep-client = { path = "../skep-client", features = ["search"] }
-# The entry frame and its body builders, which the publish-class attest a
-# signed session composes is made through (one composer, never a second
-# `entry_frame`), and the enrollment record `keygen` and `fingerprint` print.
+# The entry frame and its body builders, which the attest a signed session
+# composes is made through (one composer, never a second `entry_frame`), and
+# the enrollment record `keygen` and `fingerprint` print.
 skep-identity = { path = "../skep-identity" }
 # The address vocabulary the attest's slot rows are spelled in: a span is
 # skep-address's value, reached through skep-client and skep-identity and

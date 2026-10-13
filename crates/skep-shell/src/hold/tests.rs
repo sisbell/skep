@@ -7,8 +7,9 @@
 //! (MOVED, nothing sent, never rebased) — a read the board refuses deciding
 //! nothing, `history_reclaimed` decided by the arrangement alone, a refusal
 //! the table holds nowhere leaving its line standing, a second window's
-//! burst resent from memory, the `base` a hold takes, and the refused run's
-//! `resolve(drop)` dropping it and every line held behind it.
+//! burst resent from memory, the `base` a hold takes, the refused run's
+//! `resolve(drop)` dropping it and every line held behind it, and a drop's
+//! `held` event saying the state of the line that stands first after it.
 
 use std::io::Read;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -205,15 +206,37 @@ struct Ground {
     store: TempDir,
 }
 
+/// A `held` event held to its declaration (`shapes`' `HeldEvent`): every
+/// required member present, none outside the table, and `session` a
+/// reference — never null, as the declared type says.
+fn declared(event: &Value) {
+    let shape = crate::shapes::shape("HeldEvent").expect("HeldEvent is declared");
+    let members = event.as_object().expect("an event's data is an object");
+    for field in shape.fields {
+        assert!(!field.required || members.contains_key(field.name), "{event}: `{}` is required", field.name);
+    }
+    assert!(members.keys().all(|k| shape.fields.iter().any(|f| f.name == k)), "{event}: a member the table does not declare");
+    let session = shape.fields.iter().find(|f| f.name == "session").expect("`session` is declared");
+    assert!(session.required && !session.ty.contains("null") && event["session"].is_string(), "{event}: the session is named, never null");
+}
+
 impl Ground {
-    /// The `held` event states seen since the last look.
+    /// The `held` event states seen since the last look, each event held to
+    /// its declaration.
     fn states(&self) -> Vec<String> {
-        self.rx.try_iter().filter(|e| e.name == "held").map(|e| e.data["state"].as_str().unwrap_or("?").to_string()).collect()
+        self.rx
+            .try_iter()
+            .filter(|e| e.name == "held")
+            .map(|e| {
+                declared(&e.data);
+                e.data["state"].as_str().unwrap_or("?").to_string()
+            })
+            .collect()
     }
 
-    /// `held(session)`'s rows.
-    fn rows(&self) -> Vec<Value> {
-        self.holds.rows("b-1", &self.session).unwrap().as_array().unwrap().clone()
+    /// `held(session)`'s lines.
+    fn lines(&self) -> Vec<Value> {
+        self.holds.lines("b-1", &self.session).unwrap().as_array().unwrap().clone()
     }
 
     /// A burst held for `cause`, `sent` as a lost answer's would be.
@@ -224,13 +247,14 @@ impl Ground {
 
 /// The facts of a bare session as principal 1.
 fn bare_facts() -> Facts {
-    Facts { principal: 1, account: Some("1.0.1".into()), kind: Kind::Bare, fingerprint: None, set_account: None }
+    Facts { principal: 1, account: Some("1.0.1".into()), kind: Kind::Bare }
 }
 
-/// The facts of a session that holds a key — the signed mode's.
+/// The facts of a session that holds a key — the signed mode's, its set the
+/// account's own.
 fn keyed_facts() -> Facts {
     let fingerprint = skep_identity::Fingerprint::parse_hex(&"5a".repeat(32)).unwrap();
-    Facts { principal: 1, account: Some("1.0.1".into()), kind: Kind::Content, fingerprint: Some(fingerprint), set_account: None }
+    Facts { principal: 1, account: Some("1.0.1".into()), kind: Kind::Signed { fingerprint, set_account: "1.0.1".into() } }
 }
 
 /// The ground under a bare session opened at position 0.
@@ -266,10 +290,10 @@ const DOC: &str = "1.0.1.0.1";
 fn outcome_i_no_row_sends_from_the_head() {
     let g = ground();
     g.hold(&insert(DOC, json!(["hello"])), "unreachable", false);
-    g.holds.service("b-1");
+    g.holds.probe("b-1");
     assert_eq!(g.fake.sent(), 1, "the head is sent once");
     assert_eq!(g.fake.sent.lock().unwrap()[0]["op"], "insert");
-    assert!(g.rows().is_empty(), "the line is kept and gone");
+    assert!(g.lines().is_empty(), "the line is kept and gone");
     assert!(g.states().contains(&"kept".to_string()));
 }
 
@@ -284,9 +308,9 @@ fn outcome_ii_a_landed_burst_is_kept_not_resent() {
     *g.fake.text.lock().unwrap() = "hello".into();
     *g.fake.rows.lock().unwrap() = vec![json!({"at": 77, "op": "insert", "key": "bare", "docs": [DOC]})];
     g.hold(&insert(DOC, json!(["hello"])), "unreachable", true);
-    g.holds.service("b-1");
+    g.holds.probe("b-1");
     assert_eq!(g.fake.sent(), 0, "the landed head is NOT re-sent: {:?}", g.fake.sent.lock().unwrap());
-    assert!(g.rows().is_empty(), "the line is done kept");
+    assert!(g.lines().is_empty(), "the line is done kept");
     let states = g.states();
     assert!(states.contains(&"kept".to_string()) && !states.contains(&"moved".to_string()), "{states:?}");
 }
@@ -299,10 +323,10 @@ fn outcome_iii_a_foreign_row_moves_the_document() {
     let g = ground();
     *g.fake.rows.lock().unwrap() = vec![json!({"at": 77, "op": "insert", "key": "ff".repeat(32), "docs": [DOC]})];
     g.hold(&insert(DOC, json!(["hello"])), "unreachable", true);
-    g.holds.service("b-1");
+    g.holds.probe("b-1");
     assert_eq!(g.fake.sent(), 0, "no line of a moved document is sent");
-    let rows = g.rows();
-    assert_eq!(rows[0]["cause"], "moved", "the line is faced moved: {rows:?}");
+    let lines = g.lines();
+    assert_eq!(lines[0]["cause"], "moved", "the line is faced moved: {lines:?}");
     let states = g.states();
     assert!(states.contains(&"moved".to_string()) && !states.contains(&"sending".to_string()), "a moved document is never said `sending`: {states:?}");
 }
@@ -322,13 +346,13 @@ fn a_signed_row_is_own_under_a_keyed_session_alone() {
         *g.fake.text.lock().unwrap() = "hello".into();
         *g.fake.rows.lock().unwrap() = vec![row];
         g.hold(&insert(DOC, json!(["hello"])), "unreachable", true);
-        g.holds.service("b-1");
+        g.holds.probe("b-1");
         (g.states(), g.fake.sent())
     };
     let (states, sent) = walk(keyed_facts(), signed_row.clone());
     assert!(states.contains(&"kept".to_string()) && !states.contains(&"moved".to_string()), "the signed row is the keyed session's own: {states:?}");
     assert_eq!(sent, 0, "the landed head is not re-sent");
-    let (states, _) = walk(Facts { fingerprint: None, kind: Kind::Bare, ..keyed_facts() }, signed_row);
+    let (states, _) = walk(Facts { kind: Kind::Bare, ..keyed_facts() }, signed_row);
     assert!(states.contains(&"moved".to_string()), "a signed row is foreign to a bare session: {states:?}");
     let (states, _) = walk(keyed_facts(), bare_row);
     assert!(states.contains(&"moved".to_string()), "a bare hand's row is foreign to a keyed session: {states:?}");
@@ -349,7 +373,7 @@ fn a_lost_testimony_row_is_judged_by_the_arrangement_alone() {
         *g.fake.text.lock().unwrap() = text.into();
         *g.fake.rows.lock().unwrap() = vec![lost.clone()];
         g.hold(&frame, "poisoned", sent);
-        g.holds.service("b-1");
+        g.holds.probe("b-1");
         (g.states(), g.fake.sent())
     };
     let (states, sent) = walk(insert(DOC, json!(["hello"])), "hello", true);
@@ -369,10 +393,10 @@ fn a_lost_testimony_row_is_judged_by_the_arrangement_alone() {
 fn a_halted_hold_before_any_dial_is_sent_false() {
     let g = ground();
     g.holds.note_health("b-1", true);
-    let Sent::Answered(Ok(answer)) = g.holds.send_burst("b-1", &g.session, insert(DOC, json!(["hello"]))) else { panic!("held before the dial") };
+    let BurstAnswer::Answered(Ok(answer)) = g.holds.send_burst("b-1", &g.session, insert(DOC, json!(["hello"]))) else { panic!("held before the dial") };
     assert_eq!(answer["cause"], "halted", "{answer}");
-    let rows = g.rows();
-    assert_eq!((rows[0]["cause"].as_str(), rows[0]["sent"].as_bool()), (Some("halted"), Some(false)), "{rows:?}");
+    let lines = g.lines();
+    assert_eq!((lines[0]["cause"].as_str(), lines[0]["sent"].as_bool()), (Some("halted"), Some(false)), "{lines:?}");
     assert_eq!(g.fake.sent(), 0, "no dial was made");
 }
 
@@ -387,15 +411,15 @@ fn a_read_the_board_refuses_decides_nothing() {
     let g = ground();
     *g.fake.changes_refused.lock().unwrap() = Some((503, json!({"error": "feed_rebuilding", "detail": "the feed is being re-covered"})));
     g.hold(&insert(DOC, json!(["hello"])), "unreachable", true);
-    g.holds.service("b-1");
+    g.holds.probe("b-1");
     assert_eq!(g.fake.sent(), 0, "nothing is sent on a read the board refused");
-    assert_eq!(g.rows()[0]["cause"], "unreachable", "the line stands as it was");
+    assert_eq!(g.lines()[0]["cause"], "unreachable", "the line stands as it was");
     let states = g.states();
     assert!(!states.contains(&"sending".to_string()), "an unread document is not said `sending`: {states:?}");
     *g.fake.changes_refused.lock().unwrap() = None;
-    g.holds.service("b-1");
+    g.holds.probe("b-1");
     assert_eq!(g.fake.sent(), 1, "the next wake reads the page and sends");
-    assert!(g.rows().is_empty());
+    assert!(g.lines().is_empty());
 }
 
 /// `history_reclaimed` on the read (§3c.5): the arrangement alone decides — a
@@ -410,25 +434,25 @@ fn history_reclaimed_decides_by_the_arrangement() {
     *g.fake.changes_refused.lock().unwrap() = reclaimed();
     *g.fake.text.lock().unwrap() = "hello".into();
     g.hold(&insert(DOC, json!(["hello"])), "unreachable", true);
-    g.holds.service("b-1");
+    g.holds.probe("b-1");
     assert_eq!(g.fake.sent(), 0, "the landed head is not re-sent");
-    assert!(g.rows().is_empty(), "the values at the site keep it");
+    assert!(g.lines().is_empty(), "the values at the site keep it");
     assert!(g.states().contains(&"kept".to_string()));
 
     let g = ground();
     *g.fake.changes_refused.lock().unwrap() = reclaimed();
     *g.fake.text.lock().unwrap() = "other".into();
     g.hold(&insert(DOC, json!(["hello"])), "unreachable", true);
-    g.holds.service("b-1");
-    assert_eq!((g.fake.sent(), g.rows()[0]["cause"].as_str()), (0, Some("moved")), "values that differ: moved");
+    g.holds.probe("b-1");
+    assert_eq!((g.fake.sent(), g.lines()[0]["cause"].as_str()), (0, Some("moved")), "values that differ: moved");
 
     let g = ground();
     *g.fake.changes_refused.lock().unwrap() = reclaimed();
     g.fake.site_unread.store(true, Ordering::SeqCst);
     g.hold(&insert(DOC, json!(["hello"])), "unreachable", true);
-    g.holds.service("b-1");
+    g.holds.probe("b-1");
     assert_eq!(g.fake.sent(), 0);
-    assert_eq!(g.rows()[0]["cause"], "unreachable", "an unread site decides nothing: the line stands");
+    assert_eq!(g.lines()[0]["cause"], "unreachable", "an unread site decides nothing: the line stands");
     assert!(!g.states().contains(&"kept".to_string()));
 }
 
@@ -442,14 +466,14 @@ fn a_refusal_the_table_holds_nowhere_leaves_the_line_standing() {
     let g = ground();
     *g.fake.reject.lock().unwrap() = Some(json!({"resp": "rejected", "code": "credential_refused", "detail": "index_rebuilding", "disposition": "retry", "op": "insert"}));
     g.hold(&insert(DOC, json!(["hello"])), "unreachable", false);
-    g.holds.service("b-1");
+    g.holds.probe("b-1");
     assert_eq!(g.fake.sent(), 1, "the line was sent");
-    assert_eq!(g.rows().len(), 1, "and stands: the board did not take it");
+    assert_eq!(g.lines().len(), 1, "and stands: the board did not take it");
     assert!(!g.states().contains(&"kept".to_string()));
     *g.fake.reject.lock().unwrap() = None;
-    g.holds.service("b-1");
+    g.holds.probe("b-1");
     assert_eq!(g.fake.sent(), 2, "the next wake sends it again");
-    assert!(g.rows().is_empty() && g.states().contains(&"kept".to_string()));
+    assert!(g.lines().is_empty() && g.states().contains(&"kept".to_string()));
 }
 
 /// A SECOND WINDOW (§3c.3): with the board's `held/<chain>/lock` held by
@@ -469,11 +493,11 @@ fn a_second_windows_burst_is_held_in_memory_and_resent() {
     let answer = g.hold(&insert(DOC, json!(["hello"])), "unreachable", false);
     assert_eq!((answer["resp"].as_str(), answer["cause"].as_str()), (Some("held"), Some("other_window")), "{answer}");
     assert!(!held_dir.join("principal-1.held").exists(), "a second window writes nothing");
-    assert_eq!(g.rows().len(), 1, "the line stands in memory");
-    g.holds.service("b-1");
+    assert_eq!(g.lines().len(), 1, "the line stands in memory");
+    g.holds.probe("b-1");
     assert_eq!(g.fake.sent(), 1, "the line is resent");
-    assert!(g.rows().is_empty() && g.states().contains(&"kept".to_string()));
-    let Sent::Answered(Ok(next)) = g.holds.send_burst("b-1", &g.session, insert(DOC, json!(["!"]))) else { panic!("the burst was answered") };
+    assert!(g.lines().is_empty() && g.states().contains(&"kept".to_string()));
+    let BurstAnswer::Answered(Ok(next)) = g.holds.send_burst("b-1", &g.session, insert(DOC, json!(["!"]))) else { panic!("the burst was answered") };
     assert_eq!(next["resp"], "ack", "no line stands, so the next burst is dialed: {next}");
 }
 
@@ -488,10 +512,10 @@ fn a_hold_takes_the_last_acked_write_or_the_sessions_open_as_its_base() {
     let g = ground_in(TempDir::new().unwrap(), bare_facts(), 60);
     *g.fake.rows.lock().unwrap() = vec![json!({"at": 50, "op": "create_new_document", "key": "bare", "docs": [DOC]})];
     g.hold(&insert(DOC, json!(["hello"])), "unreachable", false);
-    assert_eq!(g.rows()[0]["base"], 60, "no ack names the document: the session's open");
-    g.holds.service("b-1");
+    assert_eq!(g.lines()[0]["base"], 60, "no ack names the document: the session's open");
+    g.holds.probe("b-1");
     assert_eq!(g.fake.sent(), 1);
-    assert!(g.rows().is_empty() && g.states().contains(&"kept".to_string()), "the row before the open moves nothing");
+    assert!(g.lines().is_empty() && g.states().contains(&"kept".to_string()), "the row before the open moves nothing");
 
     let g = ground();
     let mint = json!({"op": "create_new_document", "account": "1.0.1"});
@@ -502,16 +526,16 @@ fn a_hold_takes_the_last_acked_write_or_the_sessions_open_as_its_base() {
     for (doc, base) in [("1.0.1.0.2", 70), ("1.0.1.0.3", 71), ("1.0.1.0.4", 0)] {
         let held = g.hold(&insert(doc, json!(["x"])), "unreachable", false);
         let k = held["held"].as_u64().unwrap();
-        let row = g.rows().into_iter().find(|r| r["held"] == k).unwrap();
-        assert_eq!(row["base"], base, "{doc}: {row}");
+        let line = g.lines().into_iter().find(|l| l["held"] == k).unwrap();
+        assert_eq!(line["base"], base, "{doc}: {line}");
     }
 
     // A burst dialed and acked notes its own `at`.
     let g = ground();
-    let Sent::Answered(Ok(ack)) = g.holds.send_burst("b-1", &g.session, insert(DOC, json!(["a"]))) else { panic!("acked") };
+    let BurstAnswer::Answered(Ok(ack)) = g.holds.send_burst("b-1", &g.session, insert(DOC, json!(["a"]))) else { panic!("acked") };
     let at = ack["at"].as_u64().unwrap();
     g.hold(&insert(DOC, json!(["b"])), "unreachable", false);
-    assert_eq!(g.rows()[0]["base"], at);
+    assert_eq!(g.lines()[0]["base"], at);
 }
 
 /// A REFUSED run and `resolve`: `drop` on the refused head drops it AND every
@@ -527,23 +551,51 @@ fn a_refused_run_drops_its_behind_lines() {
     let k1 = g.holds.hold("b-1", &g.session, &head, Reason::refused("out_of_bounds", verdict)).unwrap()["held"].as_u64().unwrap();
     // Two more bursts on the same document arrive while the run stands → behind.
     let behind = |values: Value| -> Value {
-        let Sent::Answered(Ok(answer)) = g.holds.send_burst("b-1", &g.session, insert(DOC, values)) else { panic!("held behind the run") };
+        let BurstAnswer::Answered(Ok(answer)) = g.holds.send_burst("b-1", &g.session, insert(DOC, values)) else { panic!("held behind the run") };
         answer
     };
     let k2 = behind(json!(["b"]))["held"].as_u64().unwrap();
     assert_eq!(behind(json!(["c"]))["cause"], "behind");
-    assert_eq!(g.rows().len(), 3, "the run and its two behind lines stand");
+    assert_eq!(g.lines().len(), 3, "the run and its two behind lines stand");
     // A holding line is not resolvable; an unknown ordinal is no_such_held.
     assert_eq!(g.holds.resolve("b-1", &g.session, k2, "drop").unwrap_err().name(), "not_resolvable");
     assert_eq!(g.holds.resolve("b-1", &g.session, 999, "drop").unwrap_err().name(), "no_such_held");
     // Drop the refused head: the whole run goes.
     let _ = g.rx.try_iter().count();
     g.holds.resolve("b-1", &g.session, k1, "drop").unwrap();
-    assert!(g.rows().is_empty(), "the run and its behind lines are dropped");
+    assert!(g.lines().is_empty(), "the run and its behind lines are dropped");
     assert_eq!(g.fake.sent(), 0, "nothing is dialed on a drop");
     let said: Vec<Event> = g.rx.try_iter().filter(|e| e.name == "held").collect();
     assert_eq!(said.len(), 1, "{said:?}");
-    assert_eq!((said[0].data["session"].as_str(), said[0].data["held"].as_u64()), (Some(g.session.reference.as_str()), Some(0)), "the drop is said under the session that acted");
+    let said = &said[0].data;
+    declared(said);
+    assert_eq!((said["session"].as_str(), said["held"].as_u64(), said["state"].as_str()), (Some(g.session.reference.as_str()), Some(0), Some("kept")), "the drop is said under the session that acted");
+}
+
+/// A DROP on a MOVED document (§4b.1's `resolve`, §4b.2's `held`): the
+/// person drops a later line of a document the read faced `moved`, and the
+/// line held before it stands moved still — the `held` event says `moved`
+/// with the one line left, never `kept` over text still held (the mutant
+/// that says `kept` at every drop lifts the page's marks); the drop of the
+/// last line says `kept` with none.
+#[test]
+fn a_drop_says_the_state_of_the_line_that_stands_first() {
+    let g = ground();
+    *g.fake.rows.lock().unwrap() = vec![json!({"at": 77, "op": "insert", "key": "ff".repeat(32), "docs": [DOC]})];
+    let ks: Vec<u64> = ["a", "b", "c"].iter().map(|v| g.hold(&insert(DOC, json!([v])), "unreachable", false)["held"].as_u64().unwrap()).collect();
+    g.holds.probe("b-1");
+    assert!(g.lines().iter().all(|l| l["cause"] == "moved"), "the read faces every line moved: {:?}", g.lines());
+    let _ = g.rx.try_iter().count();
+    g.holds.resolve("b-1", &g.session, ks[1], "drop").unwrap();
+    let said: Vec<Event> = g.rx.try_iter().filter(|e| e.name == "held").collect();
+    assert_eq!(said.len(), 1, "{said:?}");
+    declared(&said[0].data);
+    assert_eq!((said[0].data["state"].as_str(), said[0].data["held"].as_u64()), (Some("moved"), Some(1)), "{said:?}");
+    let left: Vec<u64> = g.lines().iter().map(|l| l["held"].as_u64().unwrap()).collect();
+    assert_eq!(left, [ks[0]], "the dropped line and the one after it are gone");
+    g.holds.resolve("b-1", &g.session, ks[0], "drop").unwrap();
+    let said: Vec<Event> = g.rx.try_iter().filter(|e| e.name == "held").collect();
+    assert_eq!((said[0].data["state"].as_str(), said[0].data["held"].as_u64()), (Some("kept"), Some(0)), "{said:?}");
 }
 
 /// No line is written outside the board's own directory: a burst held at a

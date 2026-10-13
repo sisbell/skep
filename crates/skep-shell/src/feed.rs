@@ -20,15 +20,15 @@
 //! under its still-standing token, before its close answers
 //! ([`Feed::closing`]): every `feed` row of a session precedes its
 //! `session-died`, however far this thread trails the commits. The board's
-//! held bursts are serviced here too: `writes.halted` read at each tick, and
-//! THE PROBE (`Holds::service`) every `PROBE_CADENCE`, measured from the
-//! last probe whatever woke the thread between.
+//! held bursts are watched here too: `writes.halted` read at each tick, and
+//! THE PROBE (`Holds::probe`) every `PROBE_CADENCE`, measured from the last
+//! probe whatever woke the thread between.
 //!
 //! THE `feed` UPDATE's SHAPE — THIS CRATE's DEFINITION (S-24 (b), the
-//! shell's): the `/changes` entry's members VERBATIM (`at`, `op`, `docs`,
+//! shell's): the `/changes` row's members VERBATIM (`at`, `op`, `docs`,
 //! `key`, `time`, `attest`, `new_prefix`, `new_id`, `link`, `placed`,
 //! `base_extent`, and any later member by the wire's forward rule), plus
-//! `position` (the entry's `at`, named once more so a consumer reading the
+//! `position` (the row's `at`, named once more so a consumer reading the
 //! shell's shape need not know the wire's), and `class` — `published` for a
 //! row of the guest's feed, `drafts` for one of a session's supplement, the
 //! latter with `session`, the reference it was read under. The event
@@ -246,8 +246,8 @@ impl<'b> Worker<'b> {
         worker.read_mode();
         worker.emit_index();
         // THE PROBE (§3c.4) has a deadline of its own: the loop wakes on each
-        // command and at the deadline, and services the held bursts once the
-        // deadline has passed, whatever woke it — a poisoned, halted, stopped
+        // command and at the deadline, and probes once the deadline has
+        // passed, whatever woke it — a poisoned, halted, stopped
         // or unreachable board commits nothing, so `Cmd::Tick` alone never
         // ends such a hold, and a board that keeps committing must not starve
         // the probe either.
@@ -261,7 +261,7 @@ impl<'b> Worker<'b> {
                 Ok(Cmd::Closing(entry, reply)) => {
                     worker.read_drafts(&entry);
                     let sessions = Arc::clone(&worker.sessions);
-                    sessions.release(&entry.board, entry.facts.principal, &mut worker);
+                    sessions.release(&entry.board_reference, entry.facts.principal, &mut worker);
                     let _ = reply.send(());
                 }
                 Ok(Cmd::Search { who, query, opts, reindex, reply }) => {
@@ -276,7 +276,7 @@ impl<'b> Worker<'b> {
                 Err(RecvTimeoutError::Disconnected) => break,
             }
             if Instant::now() >= next_probe {
-                worker.holds.service(&worker.entry.reference);
+                worker.holds.probe(&worker.entry.reference);
                 next_probe = Instant::now() + PROBE_CADENCE;
             }
         }
@@ -323,7 +323,7 @@ impl<'b> Worker<'b> {
         // The `running` emit ends an unreachable hold at this board (§3c.4):
         // the resend runs where the board is back and a session stands.
         if was_unreachable {
-            self.holds.service(&self.entry.reference);
+            self.holds.probe(&self.entry.reference);
         }
     }
 
@@ -380,8 +380,8 @@ impl<'b> Worker<'b> {
         loop {
             match board.changes(None, &ChangesQuery { since: self.published_since, ..ChangesQuery::default() }) {
                 Ok(ChangesAnswer::Page(page)) => {
-                    for entry in &page.changes {
-                        self.emit_feed(entry, "published", None);
+                    for row in &page.changes {
+                        self.emit_feed(row, "published", None);
                     }
                     self.published_since = page.last;
                     if !page.more {
@@ -394,8 +394,8 @@ impl<'b> Worker<'b> {
                 }
                 Ok(ChangesAnswer::TooLarge { fits }) => {
                     if let Ok(ChangesAnswer::Page(page)) = board.changes(None, &ChangesQuery { since: self.published_since, limit: Some(fits), ..ChangesQuery::default() }) {
-                        for entry in &page.changes {
-                            self.emit_feed(entry, "published", None);
+                        for row in &page.changes {
+                            self.emit_feed(row, "published", None);
                         }
                         self.published_since = page.last;
                     }
@@ -438,9 +438,9 @@ impl<'b> Worker<'b> {
         }
     }
 
-    fn emit_feed(&self, entry: &Value, class: &str, session: Option<&str>) {
-        let mut update = entry.clone();
-        update["position"] = entry["at"].clone();
+    fn emit_feed(&self, row: &Value, class: &str, session: Option<&str>) {
+        let mut update = row.clone();
+        update["position"] = row["at"].clone();
         update["class"] = Value::from(class);
         if let Some(s) = session {
             update["session"] = Value::from(s);

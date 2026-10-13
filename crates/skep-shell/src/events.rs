@@ -1,11 +1,11 @@
 //! THE EVENT STREAM (`client.md` §4b.2): every event the shell pushes —
-//! `mode`, `session-died`, `daemon`, `feed`, `index`, `moment` — as one
-//! value with the name the contract spells, fanned out to EVERY subscriber
-//! in the order it was emitted: a developer's second tab is a second
-//! subscriber (the dev provider record §3.3), and the conformance proof
-//! reads the same sequence off a subscriber of its own. A subscriber that
-//! went away is dropped at the next emission; nothing is kept for one that
-//! has not subscribed yet.
+//! `mode`, `session-died`, `daemon`, `feed`, `index`, `moment`, `held` — as
+//! one value with the name the contract spells, fanned out to EVERY
+//! subscriber in the order it was emitted: a developer's second tab is a
+//! second subscriber (the dev provider record §3.3), and the conformance
+//! proof reads the same sequence off a subscriber of its own. A subscriber
+//! that went away is dropped at the next emission; nothing is kept for one
+//! that has not subscribed yet.
 
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::Mutex;

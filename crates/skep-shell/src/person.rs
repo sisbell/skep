@@ -19,7 +19,7 @@ use serde_json::{json, Value};
 use skep_client::person::{Abandoned, Confirmation, Consent, Destination, HandedPath, Import, Imported, KeptOrPlaced, LabelBox, Person, Public, Question, Retype, Retyped, Secret, Sheet, Statement};
 
 use crate::events::{EventBus, MOMENT};
-use crate::refs::moment_name;
+use crate::refs::moment_id;
 use crate::dev_arm::{DevArm, Got};
 
 /// What the page sent for a pending moment.
@@ -86,7 +86,8 @@ impl Pending {
 
 /// The person a walk is handed: the bus its PUBLIC moments go out on, the
 /// pending table their answers come back through, the dev arm the SECRET
-/// and CONSENT moments go to, and the walk's name and board for the event.
+/// and CONSENT moments go to, and the walk's name and board reference for
+/// the event.
 pub struct BridgePerson {
     bus: Arc<EventBus>,
     pending: Arc<Pending>,
@@ -94,29 +95,29 @@ pub struct BridgePerson {
     walk: &'static str,
     /// The board reference the walk runs at; none for a walk that touches
     /// no board (`keygen`'s box).
-    board: Option<String>,
+    board_reference: Option<String>,
     /// A moment was cancelled by the page or left by the dev arm: the
     /// walk's halt is the abandonment's.
     pub abandoned: bool,
 }
 
 impl BridgePerson {
-    /// The person for `walk` at `board`.
-    pub fn new(bus: Arc<EventBus>, pending: Arc<Pending>, arm: Arc<DevArm>, walk: &'static str, board: Option<String>) -> BridgePerson {
-        BridgePerson { bus, pending, arm, walk, board, abandoned: false }
+    /// The person for `walk` at the board `board_reference` names.
+    pub fn new(bus: Arc<EventBus>, pending: Arc<Pending>, arm: Arc<DevArm>, walk: &'static str, board_reference: Option<String>) -> BridgePerson {
+        BridgePerson { bus, pending, arm, walk, board_reference, abandoned: false }
     }
 
     /// A PUBLIC moment forwarded: the event, then the wait for the page's
     /// answer where one is owed; a cancel abandons.
     fn moment(&mut self, kind: &str, data: Value, answerable: bool) -> Result<Value, Abandoned> {
-        let id = moment_name();
+        let id = moment_id();
         let rx = answerable.then(|| self.pending.register(&id));
         self.bus.emit(MOMENT, json!({
             "id": id,
             "kind": kind,
             "data": data,
             "walk": self.walk,
-            "board": self.board,
+            "board": self.board_reference,
             "answerable": answerable,
         }));
         let Some(rx) = rx else { return Ok(Value::Null) };

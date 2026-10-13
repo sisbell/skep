@@ -39,7 +39,7 @@
 //!   moments become `moment(id, kind, data)` events and block on a channel
 //!   the page's `answer(id, …)` or `cancel(id)` fills, and whose SECRET and
 //!   CONSENT moments go to the dev arm.
-//! * `attest` — THE PUBLISH-CLASS ATTEST a signed session composes
+//! * `attest` — THE ATTEST a signed session composes for the checked set
 //!   (t5: "signs where signed ops requires"): the entry frame over the ten
 //!   kinds that have one, each axis composed by the shell from its own
 //!   reads and never from a preimage the page supplies.

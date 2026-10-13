@@ -13,21 +13,21 @@
 //! hold-class answer or a REFUSED run held, anything else faced at the act.
 //! The resend sends each held line through the same reader.
 //!
-//! THE QUEUE is each principal's [`HeldFile`], in `k` order across the
+//! THE QUEUE is each principal's [`HeldQueue`], in `k` order across the
 //! board's documents: copied to `held/<chain>/principal-<n>.held` where this
 //! shell holds the board's directory (§3c.1), kept in memory alone where
 //! another window holds it or the directory is out of reach (§3c.3), and
 //! opened only under a session as its principal (P39) — at the session's
-//! open, or at the first touch after it. THE PROBE runs on the feed worker's
-//! thread every [`PROBE_CADENCE`] while a line stands, because `Cmd::Tick` is
-//! driven by COMMITTED writes and a poisoned, halted, stopped or unreachable
-//! board commits nothing. THE RESEND ([`Holds::service`]) is AUTOMATIC at the
-//! hold's end and at reopen (J2): one READ per document (`GET /changes`)
-//! before its first resend, with §3c.5's three outcomes — (i) nothing
-//! landed, send from the head; (ii) the in-flight burst landed, the head
-//! `done kept`; (iii) the site MOVED, no line sent and the lines faced
-//! `moved`, NEVER rebased (J3) — and a read the board did not answer decides
-//! nothing: the next wake reads again.
+//! open, or at the first touch after it. THE PROBE ([`Holds::probe`]) runs on
+//! the feed worker's thread every [`PROBE_CADENCE`] while a line stands,
+//! because `Cmd::Tick` is driven by COMMITTED writes and a poisoned, halted,
+//! stopped or unreachable board commits nothing. THE RESEND it lets run is
+//! AUTOMATIC at the hold's end and at reopen (J2): one READ per document
+//! (`GET /changes`) before its first resend, with §3c.5's three outcomes —
+//! (i) nothing landed, send from the head; (ii) the in-flight burst landed,
+//! the head `done kept`; (iii) the site MOVED, no line sent and the lines
+//! faced `moved`, NEVER rebased (J3) — and a read the board did not answer
+//! decides nothing: the next wake reads again.
 
 use std::collections::{HashMap, HashSet};
 use std::fs::File;
@@ -45,9 +45,9 @@ use skep_search::Chain;
 
 use crate::attest::{delivered_values, values_of};
 use crate::events::{EventBus, HELD};
-use crate::held::{DoneError, HaltWhy, HeldDir, HeldFile, HeldLine, Opened, Reason};
+use crate::held::{Done, DoneError, HaltWhy, HeldDir, HeldLine, HeldQueue, Opened, Reason};
 use crate::refusal::{Name, Refusal};
-use crate::sessions::{SessionEntry, Sessions};
+use crate::sessions::{Kind, SessionEntry, Sessions};
 use crate::Talk;
 
 /// THE INTERIM PROBE CADENCE (§3c.4): `GET /health` at this interval while a
@@ -152,7 +152,7 @@ pub fn classify(outcome: Outcome<'_>, durability_seen: u32) -> Decision {
 }
 
 /// What a burst's `op` answers the page (§3c.4).
-pub enum Sent {
+pub enum BurstAnswer {
     /// The board's ack, the shell's `held`, or the refusal faced at the act.
     Answered(Result<Value, Refusal>),
     /// The death signal on the session's token: the caller ends the session,
@@ -185,7 +185,8 @@ impl Dialed {
     }
 }
 
-/// A document's held state, as the `held` event names it (§4b.2).
+/// A held line's state, and a document's as the `held` event carries it
+/// (§4b.1's `not_resolvable`; §4b.2).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum HeldState {
     Holding,
@@ -207,10 +208,24 @@ impl HeldState {
     }
 }
 
+/// A held line's state, in the words §4b.1's `resolve` row and §4b.2's
+/// `held` event share: `refused` (a REFUSED run's), `moved` (a MOVED
+/// document's), else `holding`; `sending` is the resend's, never a line's
+/// at rest.
+fn line_state(reason: &Reason) -> HeldState {
+    if reason.refusal.is_some() {
+        HeldState::Refused
+    } else if reason.cause == cause::MOVED {
+        HeldState::Moved
+    } else {
+        HeldState::Holding
+    }
+}
+
 /// Whether a line waits for the person's act — a REFUSED run's, or a MOVED
 /// document's (§3c.4, §3c.5): no wake sends it, and `resolve` alone moves it.
 fn awaits_act(line: &HeldLine) -> bool {
-    line.reason.cause == cause::MOVED || line.reason.refusal.is_some()
+    matches!(line_state(&line.reason), HeldState::Refused | HeldState::Moved)
 }
 
 /// THE OUTCOME of the resend's one read per document (§3c.5).
@@ -247,7 +262,7 @@ enum Directory {
     /// lock refused. Tried again at a session's open and at the probe.
     Unknown(String),
     /// This shell's for its life: the directory, and the `flock` on its lock.
-    Held { dir: HeldDir, _lock: File },
+    ThisWindow { dir: HeldDir, _lock: File },
     /// Another window holds the lock: every line here is kept in this
     /// shell's memory alone (§3c.3).
     OtherWindow,
@@ -259,15 +274,15 @@ impl Directory {
     /// this shell's — why said — where the board has no `H.1` (an unclaimed
     /// board keeps no held text) or the read, the directory or the lock
     /// refused.
-    fn of(store_dir: &Path, term: Result<Option<BoardTerm>, Halt>) -> Directory {
+    fn of(data_dir: &Path, term: Result<Option<BoardTerm>, Halt>) -> Directory {
         let term = match term {
             Ok(Some(term)) => term,
             Ok(None) => return Directory::Unknown("the board has no H.1 yet, and an unclaimed board keeps no held text".to_string()),
             Err(h) => return Directory::Unknown(format!("the board's H.1 could not be read: {h}")),
         };
-        let dir = HeldDir::new(store_dir, Chain::from_bytes(term.chain));
+        let dir = HeldDir::new(data_dir, Chain::from_bytes(term.chain));
         match dir.ensure().and_then(|()| dir.try_lock()) {
-            Ok(Some(lock)) => Directory::Held { dir, _lock: lock },
+            Ok(Some(lock)) => Directory::ThisWindow { dir, _lock: lock },
             Ok(None) => Directory::OtherWindow,
             Err(e) => Directory::Unknown(format!("the held store could not be made or locked: {e}")),
         }
@@ -306,19 +321,19 @@ impl Custody {
 /// resend has met.
 struct PrincipalHold {
     custody: Custody,
-    file: HeldFile,
+    queue: HeldQueue,
     last_acked: HashMap<String, u64>,
     durability: HashMap<u64, u32>,
 }
 
 impl PrincipalHold {
     fn new() -> PrincipalHold {
-        PrincipalHold { custody: Custody::Unopened, file: HeldFile::in_memory(), last_acked: HashMap::new(), durability: HashMap::new() }
+        PrincipalHold { custody: Custody::Unopened, queue: HeldQueue::in_memory(), last_acked: HashMap::new(), durability: HashMap::new() }
     }
 
     /// How many lines stand on `doc`.
     fn count(&self, doc: &str) -> u64 {
-        self.file.lines().iter().filter(|l| l.doc == doc).count() as u64
+        self.queue.lines().iter().filter(|l| l.doc == doc).count() as u64
     }
 }
 
@@ -331,7 +346,7 @@ struct BoardHold {
     /// the probe — answered true: every burst holds `halted` without a dial
     /// until a read answers false, which only a restart makes it (§3c.4;
     /// wire.md §The other endpoints).
-    halted: bool,
+    writes_halted: bool,
     /// Whether the own node is STOPPED by the person's act: every burst holds
     /// `stopped` without a dial, and the probe dials nothing until
     /// `set_node_state(Running)` clears it (§3c.4).
@@ -346,20 +361,20 @@ pub struct Holds {
     sessions: Arc<Sessions>,
     bus: Arc<EventBus>,
     store: Arc<FileStore>,
-    store_dir: PathBuf,
+    data_dir: PathBuf,
     talk: Talk,
     boards: Mutex<HashMap<String, BoardHold>>,
-    /// The boards a resend is draining now. [`Holds::service`] is reached by
-    /// the feed's probe and its daemon-running tick, `set_node_state(Running)`
-    /// and `resolve(send)`; one drain per board at a time, so none
-    /// double-sends.
+    /// The boards a resend is draining now. [`Holds::probe`] is reached at
+    /// the feed's cadence and its daemon-running tick,
+    /// `set_node_state(Running)` and `resolve(send)`; one drain per board at
+    /// a time, so none double-sends.
     resending: Mutex<HashSet<String>>,
 }
 
 impl Holds {
     /// The holds for a shell: no board yet.
-    pub fn new(sessions: Arc<Sessions>, bus: Arc<EventBus>, store: Arc<FileStore>, store_dir: PathBuf, talk: Talk) -> Arc<Holds> {
-        Arc::new(Holds { sessions, bus, store, store_dir, talk, boards: Mutex::new(HashMap::new()), resending: Mutex::new(HashSet::new()) })
+    pub fn new(sessions: Arc<Sessions>, bus: Arc<EventBus>, store: Arc<FileStore>, data_dir: PathBuf, talk: Talk) -> Arc<Holds> {
+        Arc::new(Holds { sessions, bus, store, data_dir, talk, boards: Mutex::new(HashMap::new()), resending: Mutex::new(HashSet::new()) })
     }
 
     fn say(&self, line: impl AsRef<str>) {
@@ -370,18 +385,18 @@ impl Holds {
         self.boards.lock().expect("the holds' lock")
     }
 
-    /// The board `reference` names, to dial outside the lock.
-    fn board(&self, reference: &str) -> Option<Arc<Board>> {
-        self.lock().get(reference).map(|b| Arc::clone(&b.board))
+    /// The board `board_reference` names, to dial outside the lock.
+    fn board(&self, board_reference: &str) -> Option<Arc<Board>> {
+        self.lock().get(board_reference).map(|b| Arc::clone(&b.board))
     }
 
     /// One board registered at open: nothing is dialed and nothing on disk
     /// touched until a session opens at it.
-    pub fn register_board(&self, reference: &str, board: Arc<Board>) {
-        self.lock().entry(reference.to_string()).or_insert_with(|| BoardHold {
+    pub fn register_board(&self, board_reference: &str, board: Arc<Board>) {
+        self.lock().entry(board_reference.to_string()).or_insert_with(|| BoardHold {
             board,
             directory: Directory::Unknown("no session has opened at this board yet".to_string()),
-            halted: false,
+            writes_halted: false,
             node_stopped: false,
             principals: HashMap::new(),
         });
@@ -389,9 +404,9 @@ impl Holds {
 
     /// The own node's STOPPED state as its owner reports it (§3c.4): every
     /// burst holds `stopped`, and the probe waits for `Running` to resend.
-    pub fn set_node_stopped(&self, reference: &str, stopped: bool) {
-        if let Some(board) = self.lock().get_mut(reference) {
-            board.node_stopped = stopped;
+    pub fn set_node_stopped(&self, board_reference: &str, stopped: bool) {
+        if let Some(board_hold) = self.lock().get_mut(board_reference) {
+            board_hold.node_stopped = stopped;
         }
     }
 
@@ -401,8 +416,8 @@ impl Holds {
     /// stop is announced `stopped` once and never `unreachable` beside it. A
     /// board that is not the own node, or one the holds never registered,
     /// answers false.
-    pub fn node_stopped(&self, reference: &str) -> bool {
-        self.lock().get(reference).is_some_and(|b| b.node_stopped)
+    pub fn node_stopped(&self, board_reference: &str) -> bool {
+        self.lock().get(board_reference).is_some_and(|b| b.node_stopped)
     }
 
     /// A SESSION OPENED at the board (§3c.7 items 1 and 4): the board's
@@ -411,10 +426,10 @@ impl Holds {
     /// misplaced file set aside and said in the shell's own window — so
     /// `held(session)` lists its lines at once and the probe's next wake
     /// resends them. No other principal's file is opened (P39).
-    pub fn open_session(&self, reference: &str, session: &SessionEntry) {
-        let Some(board) = self.board(reference) else { return };
-        self.establish(reference, &board);
-        if let Some(b) = self.lock().get_mut(reference) {
+    pub fn open_session(&self, board_reference: &str, session: &SessionEntry) {
+        let Some(board) = self.board(board_reference) else { return };
+        self.establish(board_reference, &board);
+        if let Some(b) = self.lock().get_mut(board_reference) {
             self.principal(b, session);
         }
     }
@@ -423,39 +438,40 @@ impl Holds {
     /// OUTSIDE the lock (the board keeps the term once found), the directory
     /// then made and locked under it. A hold never comes here: it never
     /// dials to learn where to write.
-    fn establish(&self, reference: &str, board: &Board) {
-        let unknown = self.lock().get(reference).is_some_and(|b| matches!(b.directory, Directory::Unknown(_)));
+    fn establish(&self, board_reference: &str, board: &Board) {
+        let unknown = self.lock().get(board_reference).is_some_and(|b| matches!(b.directory, Directory::Unknown(_)));
         if !unknown {
             return;
         }
         let term = board.board_term();
-        if let Some(b) = self.lock().get_mut(reference) {
+        if let Some(b) = self.lock().get_mut(board_reference) {
             if matches!(b.directory, Directory::Unknown(_)) {
-                b.directory = Directory::of(&self.store_dir, term);
+                b.directory = Directory::of(&self.data_dir, term);
             }
         }
     }
 
-    /// THE PRINCIPAL's HOLD at `board` — the one door every entry that names
-    /// a principal takes: a session's open, a burst, a hold, `held` and
-    /// `resolve`. A principal whose custody is not settled, and whose queue
-    /// holds no line, is opened here under `session`'s account: its file where
-    /// the board's directory is this shell's, memory alone otherwise. Under
-    /// the session that stands, so the restart arm's re-open is covered too.
-    fn principal<'b>(&self, board: &'b mut BoardHold, session: &SessionEntry) -> &'b mut PrincipalHold {
-        let BoardHold { directory, principals, .. } = board;
+    /// THE PRINCIPAL's HOLD at `board_hold`'s board — the one door every
+    /// entry that names a principal takes: a session's open, a burst, a hold,
+    /// `held` and `resolve`. A principal whose custody is not settled, and
+    /// whose queue holds no line, is opened here under `session`'s account:
+    /// its file where the board's directory is this shell's, memory alone
+    /// otherwise. Under the session that stands, so the restart arm's re-open
+    /// is covered too.
+    fn principal<'b>(&self, board_hold: &'b mut BoardHold, session: &SessionEntry) -> &'b mut PrincipalHold {
+        let BoardHold { directory, principals, .. } = board_hold;
         let n = session.facts.principal;
         let ph = principals.entry(n).or_insert_with(PrincipalHold::new);
-        if ph.custody.settled() || !ph.file.lines().is_empty() {
+        if ph.custody.settled() || !ph.queue.lines().is_empty() {
             return ph;
         }
         match directory {
-            Directory::Held { dir, .. } => match dir.open_file(n, session.facts.account.as_deref().unwrap_or("")) {
-                Ok(Opened::Live { file, aside }) => {
+            Directory::ThisWindow { dir, .. } => match dir.open_file(n, session.facts.account.as_deref().unwrap_or("")) {
+                Ok(Opened::Live { queue, aside }) => {
                     if let Some(aside) = aside {
                         self.say(format!("held: principal {n}'s held file named another board or principal, and is set aside at {}", aside.display()));
                     }
-                    ph.file = file;
+                    ph.queue = queue;
                     ph.custody = Custody::File;
                 }
                 Ok(Opened::Halted { path, why }) => ph.custody = Custody::Halted { path, why },
@@ -474,48 +490,48 @@ impl Holds {
     /// dialed ONCE and its answer read through the table: an ack carried and
     /// its `at` noted, a hold-class answer or a REFUSED run held and answered
     /// `held`, anything else faced at the act.
-    pub fn send_burst(&self, reference: &str, session: &SessionEntry, frame: Value) -> Sent {
+    pub fn send_burst(&self, board_reference: &str, session: &SessionEntry, frame: Value) -> BurstAnswer {
         let board = {
             let mut boards = self.lock();
-            let at = boards.get_mut(reference).expect("a session stands at a board the holds registered");
-            let (stopped, halted, board) = (at.node_stopped, at.halted, Arc::clone(&at.board));
-            let ph = self.principal(at, session);
+            let board_hold = boards.get_mut(board_reference).expect("a session stands at a board the holds registered");
+            let (node_stopped, writes_halted, board) = (board_hold.node_stopped, board_hold.writes_halted, Arc::clone(&board_hold.board));
+            let ph = self.principal(board_hold, session);
             if let Custody::Halted { path, why } = &ph.custody {
-                return Sent::Answered(Err(store_halted(path, *why)));
+                return BurstAnswer::Answered(Err(store_halted(path, *why)));
             }
-            let standing = !ph.file.lines().is_empty();
-            let stands = if stopped {
+            let standing = !ph.queue.lines().is_empty();
+            let stands = if node_stopped {
                 Some(cause::STOPPED)
-            } else if halted {
+            } else if writes_halted {
                 Some(cause::HALTED)
             } else if standing {
                 Some(cause::BEHIND)
             } else {
                 None
             };
-            if let Some(why) = stands {
-                return Sent::Answered(self.hold_line(reference, at, session, &frame, Reason::of(why, false)));
+            if let Some(cause) = stands {
+                return BurstAnswer::Answered(self.hold_line(board_reference, board_hold, session, &frame, Reason::of(cause, false)));
             }
             board
         };
         match self.dial(&board, session, &frame, 0) {
             Dialed::Acked(ack) => {
-                self.note_ack(reference, session, &frame, &ack);
-                Sent::Answered(Ok(ack))
+                self.note_ack(board_reference, session, &frame, &ack);
+                BurstAnswer::Answered(Ok(ack))
             }
-            Dialed::Held(reason) => Sent::Answered(self.hold(reference, session, &frame, reason)),
-            Dialed::Faced(refusal) => Sent::Answered(Err(refusal)),
-            Dialed::Died => Sent::Died,
+            Dialed::Held(reason) => BurstAnswer::Answered(self.hold(board_reference, session, &frame, reason)),
+            Dialed::Faced(refusal) => BurstAnswer::Answered(Err(refusal)),
+            Dialed::Died => BurstAnswer::Died,
         }
     }
 
     /// HOLD a burst for `reason`, as a dial's answer held it: the `held`
     /// answer ([`Holds::hold_line`]), or `store_halted` where P38 halted the
     /// file.
-    pub fn hold(&self, reference: &str, session: &SessionEntry, frame: &Value, reason: Reason) -> Result<Value, Refusal> {
+    pub fn hold(&self, board_reference: &str, session: &SessionEntry, frame: &Value, reason: Reason) -> Result<Value, Refusal> {
         let mut boards = self.lock();
-        let board = boards.get_mut(reference).expect("a session stands at a board the holds registered");
-        self.hold_line(reference, board, session, frame, reason)
+        let board_hold = boards.get_mut(board_reference).expect("a session stands at a board the holds registered");
+        self.hold_line(board_reference, board_hold, session, frame, reason)
     }
 
     /// One line entered in the principal's queue — copied to its file where
@@ -525,16 +541,16 @@ impl Holds {
     /// `other_window` where another window's lock keeps the line in memory
     /// alone, and `unwritable` beside it — why — where the device refused its
     /// copy or the file is out of reach (§3c.3).
-    fn hold_line(&self, reference: &str, board: &mut BoardHold, session: &SessionEntry, frame: &Value, reason: Reason) -> Result<Value, Refusal> {
-        let ph = self.principal(board, session);
+    fn hold_line(&self, board_reference: &str, board_hold: &mut BoardHold, session: &SessionEntry, frame: &Value, reason: Reason) -> Result<Value, Refusal> {
+        let ph = self.principal(board_hold, session);
         if let Custody::Halted { path, why } = &ph.custody {
             return Err(store_halted(path, *why));
         }
         let doc = frame["doc"].as_str().unwrap_or_default();
         let base = ph.last_acked.get(doc).copied().unwrap_or(session.opened_at);
-        let state = if reason.refusal.is_some() { HeldState::Refused } else { HeldState::Holding };
+        let state = line_state(&reason);
         let mut said = reason.cause.clone();
-        let appended = ph.file.hold(doc, frame["id"].as_str(), base, strip_attest(frame), reason);
+        let appended = ph.queue.hold(doc, frame["id"].as_str(), base, strip_attest(frame), reason);
         let unwritable = match &ph.custody {
             Custody::OtherWindow => {
                 said = cause::OTHER_WINDOW.to_string();
@@ -549,7 +565,7 @@ impl Holds {
             answer["unwritable"] = Value::from(why);
         }
         // `fire` touches the bus alone, so it is safe under the holds' lock.
-        self.fire(reference, session, doc, ph.count(doc), state, Some(&said));
+        self.fire(board_reference, session, doc, ph.count(doc), state, Some(&said));
         Ok(answer)
     }
 
@@ -557,14 +573,14 @@ impl Holds {
     /// the next hold on every document its row names — whatever its kind,
     /// a burst's, a mint's or a link's, the shell's `op` and the resend's
     /// alike. A read, or a refusal, notes nothing.
-    pub fn note_ack(&self, reference: &str, session: &SessionEntry, frame: &Value, ack: &Value) {
+    pub fn note_ack(&self, board_reference: &str, session: &SessionEntry, frame: &Value, ack: &Value) {
         let Some(at) = acked_at(ack) else { return };
         let docs = written_docs(frame, ack);
         if docs.is_empty() {
             return;
         }
-        if let Some(board) = self.lock().get_mut(reference) {
-            let ph = board.principals.entry(session.facts.principal).or_insert_with(PrincipalHold::new);
+        if let Some(board_hold) = self.lock().get_mut(board_reference) {
+            let ph = board_hold.principals.entry(session.facts.principal).or_insert_with(PrincipalHold::new);
             for doc in docs {
                 ph.last_acked.insert(doc.to_string(), at);
             }
@@ -574,14 +590,14 @@ impl Holds {
     /// `held(session)` → the acting principal's held lines at the session's
     /// board in resend order (§4b.1), from this principal's file and no
     /// other (P39); `store_halted` where P38 halted the file.
-    pub fn rows(&self, reference: &str, session: &SessionEntry) -> Result<Value, Refusal> {
+    pub fn lines(&self, board_reference: &str, session: &SessionEntry) -> Result<Value, Refusal> {
         let mut boards = self.lock();
-        let Some(board) = boards.get_mut(reference) else { return Ok(Value::Array(Vec::new())) };
-        let ph = self.principal(board, session);
+        let Some(board_hold) = boards.get_mut(board_reference) else { return Ok(Value::Array(Vec::new())) };
+        let ph = self.principal(board_hold, session);
         if let Custody::Halted { path, why } = &ph.custody {
             return Err(store_halted(path, *why));
         }
-        Ok(Value::Array(ph.file.lines().iter().map(row_json).collect()))
+        Ok(Value::Array(ph.queue.lines().iter().map(line_json).collect()))
     }
 
     /// `resolve(session, {held, act})` (§3c.4): `"drop"` on a line that awaits
@@ -589,12 +605,12 @@ impl Holds {
     /// `behind` it on that document — `done … dropped`; `"send"` re-enters the
     /// automatic machine for that document. `no_such_held` / `not_resolvable`
     /// else.
-    pub fn resolve(&self, reference: &str, session: &SessionEntry, k: u64, act: &str) -> Result<Value, Refusal> {
+    pub fn resolve(&self, board_reference: &str, session: &SessionEntry, k: u64, act: &str) -> Result<Value, Refusal> {
         let doc = {
             let mut boards = self.lock();
-            let Some(board) = boards.get_mut(reference) else { return Err(Refusal::shell(Name::NO_SUCH_HELD, json!({"held": k}))) };
-            let ph = self.principal(board, session);
-            let Some(line) = ph.file.lines().iter().find(|l| l.k == k) else { return Err(Refusal::shell(Name::NO_SUCH_HELD, json!({"held": k}))) };
+            let Some(board_hold) = boards.get_mut(board_reference) else { return Err(Refusal::shell(Name::NO_SUCH_HELD, json!({"held": k}))) };
+            let ph = self.principal(board_hold, session);
+            let Some(line) = ph.queue.lines().iter().find(|l| l.k == k) else { return Err(Refusal::shell(Name::NO_SUCH_HELD, json!({"held": k}))) };
             // A line awaiting the person's act alone takes one (P10).
             if !awaits_act(line) {
                 return Err(Refusal::shell(Name::NOT_RESOLVABLE, json!({"held": k})));
@@ -603,7 +619,7 @@ impl Holds {
         };
         match act {
             "drop" => {
-                self.drop_run(reference, session, k, &doc);
+                self.drop_run(board_reference, session, k, &doc);
                 Ok(json!({}))
             }
             "send" => {
@@ -612,14 +628,14 @@ impl Holds {
                 // afresh, and the refusal faced again where it recurs.
                 {
                     let mut boards = self.lock();
-                    if let Some(ph) = principal_mut(&mut boards, reference, session.facts.principal) {
-                        let ks: Vec<u64> = ph.file.lines().iter().filter(|l| l.doc == doc && awaits_act(l)).map(|l| l.k).collect();
+                    if let Some(ph) = principal_mut(&mut boards, board_reference, session.facts.principal) {
+                        let ks: Vec<u64> = ph.queue.lines().iter().filter(|l| l.doc == doc && awaits_act(l)).map(|l| l.k).collect();
                         for k in ks {
                             self.remark_line(ph, k, Reason::of(cause::BEHIND, false));
                         }
                     }
                 }
-                self.service(reference);
+                self.probe(board_reference);
                 Ok(json!({}))
             }
             other => Err(Refusal::shell(Name::NOT_RESOLVABLE, json!({"held": k, "act": other}))),
@@ -629,80 +645,83 @@ impl Holds {
     /// `"drop"`: the line and every line after it on that document — a
     /// refused run's `behind` lines — marked `done … dropped`, the file
     /// compacting where the queue empties; the `held` event says it under
-    /// the session that acted.
-    fn drop_run(&self, reference: &str, session: &SessionEntry, k: u64, doc: &str) {
-        let count = {
+    /// the session that acted, in the state of the document's line that
+    /// stands first now — a MOVED line held before the dropped one keeps the
+    /// document `moved` — and `kept` only where no line stands.
+    fn drop_run(&self, board_reference: &str, session: &SessionEntry, k: u64, doc: &str) {
+        let (count, state) = {
             let mut boards = self.lock();
-            let Some(ph) = principal_mut(&mut boards, reference, session.facts.principal) else { return };
-            let ks: Vec<u64> = ph.file.lines().iter().filter(|l| l.doc == doc && l.k >= k).map(|l| l.k).collect();
+            let Some(ph) = principal_mut(&mut boards, board_reference, session.facts.principal) else { return };
+            let ks: Vec<u64> = ph.queue.lines().iter().filter(|l| l.doc == doc && l.k >= k).map(|l| l.k).collect();
             for d in ks {
-                self.done_line(ph, d, false, None);
+                self.done_line(ph, d, Done::Dropped);
             }
-            ph.count(doc)
+            let head = ph.queue.lines().iter().find(|l| l.doc == doc);
+            (ph.count(doc), head.map_or(HeldState::Kept, |l| line_state(&l.reason)))
         };
-        self.fire(reference, session, doc, count, HeldState::Kept, None);
+        self.fire(board_reference, session, doc, count, state, None);
     }
 
-    /// THE PROBE and THE RESEND (§3c.4's end, §3c.5): reached by the feed's
-    /// probe every [`PROBE_CADENCE`] and its daemon-running tick,
+    /// THE PROBE (§3c.4), and the RESEND it lets run (§3c.5): reached by the
+    /// feed every [`PROBE_CADENCE`] and at its daemon-running tick,
     /// `set_node_state(Running)` and `resolve(send)`. While a line stands at
     /// a board whose own node is not stopped, `/health` is read; where the
     /// board answers and takes writes, each standing session of a principal
     /// with lines resends them.
-    pub fn service(&self, reference: &str) {
+    pub fn probe(&self, board_reference: &str) {
         // Gathered under the lock and dialed outside it, so `op` never waits
         // on a dead board's connect timeout.
-        let due = self.lock().get(reference).is_some_and(|b| !b.node_stopped && b.principals.values().any(|ph| !ph.file.lines().is_empty()));
+        let due = self.lock().get(board_reference).is_some_and(|b| !b.node_stopped && b.principals.values().any(|ph| !ph.queue.lines().is_empty()));
         if !due {
             return;
         }
         // One drain per board at a time.
-        if !self.resending.lock().expect("the resend lock").insert(reference.to_string()) {
+        if !self.resending.lock().expect("the resend lock").insert(board_reference.to_string()) {
             return;
         }
-        self.drain(reference);
-        self.resending.lock().expect("the resend lock").remove(reference);
+        self.drain(board_reference);
+        self.resending.lock().expect("the resend lock").remove(board_reference);
     }
 
-    /// The probe's dial and the resend (the body of [`Holds::service`], run
+    /// The probe's dial and the resend (the body of [`Holds::probe`], run
     /// once per board at a time).
-    fn drain(&self, reference: &str) {
-        let Some(board) = self.board(reference) else { return };
+    fn drain(&self, board_reference: &str) {
+        let Some(board) = self.board(board_reference) else { return };
         // THE PROBE's one `/health` read (§3c.4): a board that does not answer
         // is read again at the next wake.
         let Ok(health) = board.health() else { return };
-        let halted = health.body["writes"]["halted"].as_bool().unwrap_or(false);
-        self.note_health(reference, halted);
-        if halted {
+        let writes_halted = health.body["writes"]["halted"].as_bool().unwrap_or(false);
+        self.note_health(board_reference, writes_halted);
+        if writes_halted {
             return;
         }
         // The board answers and takes writes: the hold ends. A directory no
         // session's open could establish is tried again, and each standing
         // session of a principal with lines resends them.
-        self.establish(reference, &board);
-        let principals: Vec<u64> = self.lock().get(reference).map(|b| b.principals.iter().filter(|(_, ph)| !ph.file.lines().is_empty()).map(|(p, _)| *p).collect()).unwrap_or_default();
+        self.establish(board_reference, &board);
+        let principals: Vec<u64> = self.lock().get(board_reference).map(|b| b.principals.iter().filter(|(_, ph)| !ph.queue.lines().is_empty()).map(|(p, _)| *p).collect()).unwrap_or_default();
         for principal in principals {
-            let Some(session) = self.sessions.on_board(reference).into_iter().find(|s| s.facts.principal == principal) else { continue };
-            self.resume(reference, &board, &session);
+            let Some(session) = self.sessions.on_board(board_reference).into_iter().find(|s| s.facts.principal == principal) else { continue };
+            self.resume(board_reference, &board, &session);
         }
     }
 
     /// `writes.halted` as the feed's tick or the probe read it (§3c.4): every
     /// burst holds `halted` from the first `true` to the next `false`.
-    pub fn note_health(&self, reference: &str, writes_halted: bool) {
-        if let Some(board) = self.lock().get_mut(reference) {
-            board.halted = writes_halted;
+    pub fn note_health(&self, board_reference: &str, writes_halted: bool) {
+        if let Some(board_hold) = self.lock().get_mut(board_reference) {
+            board_hold.writes_halted = writes_halted;
         }
     }
 
     /// THE RESEND for one session (§3c.5): each document with held lines read
     /// once, then its lines sent in `k` order from where the read left them.
-    fn resume(&self, reference: &str, board: &Board, session: &SessionEntry) {
+    fn resume(&self, board_reference: &str, board: &Board, session: &SessionEntry) {
         let docs: Vec<String> = {
             let mut boards = self.lock();
-            let Some(ph) = principal_mut(&mut boards, reference, session.facts.principal) else { return };
+            let Some(ph) = principal_mut(&mut boards, board_reference, session.facts.principal) else { return };
             let mut docs: Vec<String> = Vec::new();
-            for l in ph.file.lines() {
+            for l in ph.queue.lines() {
                 if !docs.contains(&l.doc) {
                     docs.push(l.doc.clone());
                 }
@@ -710,37 +729,37 @@ impl Holds {
             docs
         };
         for doc in docs {
-            self.resume_doc(reference, board, session, &doc);
+            self.resume_doc(board_reference, board, session, &doc);
         }
     }
 
     /// One document's resend: the read (§3c.5), then its outcome — a head
     /// awaiting the person's act read and sent never.
-    fn resume_doc(&self, reference: &str, board: &Board, session: &SessionEntry, doc: &str) {
+    fn resume_doc(&self, board_reference: &str, board: &Board, session: &SessionEntry, doc: &str) {
         let principal = session.facts.principal;
-        let Some(head) = self.head_of(reference, principal, doc) else { return };
+        let Some(head) = self.head_of(board_reference, principal, doc) else { return };
         if awaits_act(&head) {
             return;
         }
         match self.read_outcome(board, session, doc, &head) {
             ReadOutcome::Unread => {}
             ReadOutcome::Moved => {
-                self.mark_moved(reference, principal, doc);
-                self.fire(reference, session, doc, self.count(reference, principal, doc), HeldState::Moved, None);
+                self.mark_moved(board_reference, principal, doc);
+                self.fire(board_reference, session, doc, self.count(board_reference, principal, doc), HeldState::Moved, None);
             }
             ReadOutcome::Landed { at } => {
-                self.done(reference, principal, head.k, true, at);
-                match self.count(reference, principal, doc) {
-                    0 => self.fire(reference, session, doc, 0, HeldState::Kept, None),
+                self.done(board_reference, principal, head.k, Done::Kept { at });
+                match self.count(board_reference, principal, doc) {
+                    0 => self.fire(board_reference, session, doc, 0, HeldState::Kept, None),
                     rest => {
-                        self.fire(reference, session, doc, rest, HeldState::Sending, None);
-                        self.send_rest(reference, board, session, doc);
+                        self.fire(board_reference, session, doc, rest, HeldState::Sending, None);
+                        self.send_rest(board_reference, board, session, doc);
                     }
                 }
             }
             ReadOutcome::SendFromHead => {
-                self.fire(reference, session, doc, self.count(reference, principal, doc), HeldState::Sending, None);
-                self.send_rest(reference, board, session, doc);
+                self.fire(board_reference, session, doc, self.count(board_reference, principal, doc), HeldState::Sending, None);
+                self.send_rest(board_reference, board, session, doc);
             }
         }
     }
@@ -818,8 +837,8 @@ impl Holds {
         if head.frame["op"].as_str() != Some("insert") {
             return Site::Unconfirmable;
         }
-        let at = head.frame["at"]["ordinal"].as_str().and_then(|o| o.parse::<u64>().ok());
-        let (Ok(want), Some(from)) = (values_of(&head.frame["values"]), at) else { return Site::Unconfirmable };
+        let ordinal = head.frame["at"]["ordinal"].as_str().and_then(|o| o.parse::<u64>().ok());
+        let (Ok(want), Some(from)) = (values_of(&head.frame["values"]), ordinal) else { return Site::Unconfirmable };
         match board.op(Some(&session.token), &frames::retrieve_v(doc, from, want.len() as u64)) {
             Ok(Answer::Document(v)) if Rejection::of(&v).is_none() => {
                 if delivered_values(&v).is_ok_and(|got| got == want) {
@@ -836,9 +855,9 @@ impl Holds {
     /// Send the document's lines from its head in `k` order, each a normal
     /// `op` under the session; stop at a line that awaits the person's act or
     /// is not taken.
-    fn send_rest(&self, reference: &str, board: &Board, session: &SessionEntry, doc: &str) {
-        while let Some(line) = self.head_of(reference, session.facts.principal, doc) {
-            if awaits_act(&line) || !self.send_line(reference, board, session, &line) {
+    fn send_rest(&self, board_reference: &str, board: &Board, session: &SessionEntry, doc: &str) {
+        while let Some(line) = self.head_of(board_reference, session.facts.principal, doc) {
+            if awaits_act(&line) || !self.send_line(board_reference, board, session, &line) {
                 break;
             }
         }
@@ -851,30 +870,30 @@ impl Holds {
     /// for the next wake, never `done`; the death signal left to the hand
     /// that ends the session — the session that stands resends after its
     /// read. Whether sending may go on to the document's next line.
-    fn send_line(&self, reference: &str, board: &Board, session: &SessionEntry, line: &HeldLine) -> bool {
+    fn send_line(&self, board_reference: &str, board: &Board, session: &SessionEntry, line: &HeldLine) -> bool {
         let principal = session.facts.principal;
-        let seen = self.lock().get(reference).and_then(|b| b.principals.get(&principal)).and_then(|ph| ph.durability.get(&line.k).copied()).unwrap_or(0);
+        let seen = self.lock().get(board_reference).and_then(|b| b.principals.get(&principal)).and_then(|ph| ph.durability.get(&line.k).copied()).unwrap_or(0);
         match self.dial(board, session, &line.frame, seen) {
             Dialed::Acked(ack) => {
-                self.note_ack(reference, session, &line.frame, &ack);
-                self.done(reference, principal, line.k, true, acked_at(&ack));
-                let rest = self.count(reference, principal, &line.doc);
-                self.fire(reference, session, &line.doc, rest, if rest == 0 { HeldState::Kept } else { HeldState::Sending }, None);
+                self.note_ack(board_reference, session, &line.frame, &ack);
+                self.done(board_reference, principal, line.k, Done::Kept { at: acked_at(&ack) });
+                let rest = self.count(board_reference, principal, &line.doc);
+                self.fire(board_reference, session, &line.doc, rest, if rest == 0 { HeldState::Kept } else { HeldState::Sending }, None);
                 true
             }
             Dialed::Held(reason) => {
-                let state = if reason.refusal.is_some() { HeldState::Refused } else { HeldState::Holding };
+                let state = line_state(&reason);
                 let said = reason.cause.clone();
-                if let Some(ph) = principal_mut(&mut self.lock(), reference, principal) {
+                if let Some(ph) = principal_mut(&mut self.lock(), board_reference, principal) {
                     self.remark_line(ph, line.k, reason);
                 }
-                self.fire(reference, session, &line.doc, self.count(reference, principal, &line.doc), state, Some(&said));
+                self.fire(board_reference, session, &line.doc, self.count(board_reference, principal, &line.doc), state, Some(&said));
                 false
             }
             Dialed::Faced(refusal) => {
                 // The rider's count (§3c.4): the third `durability` holds.
                 if matches!(&refusal, Refusal::Board(r) if r.code == "durability") {
-                    if let Some(ph) = principal_mut(&mut self.lock(), reference, principal) {
+                    if let Some(ph) = principal_mut(&mut self.lock(), board_reference, principal) {
                         *ph.durability.entry(line.k).or_insert(0) += 1;
                     }
                 }
@@ -934,10 +953,10 @@ impl Holds {
     /// re-projects the held frames at a launch, the moved document's face — is
     /// the frontend lane's and in neither repository at this pin (UNVERIFIED
     /// HERE, the record §7 item 4; stated from assisted-frontend §7b).
-    fn mark_moved(&self, reference: &str, principal: u64, doc: &str) {
+    fn mark_moved(&self, board_reference: &str, principal: u64, doc: &str) {
         let mut boards = self.lock();
-        let Some(ph) = principal_mut(&mut boards, reference, principal) else { return };
-        let ks: Vec<u64> = ph.file.lines().iter().filter(|l| l.doc == doc).map(|l| l.k).collect();
+        let Some(ph) = principal_mut(&mut boards, board_reference, principal) else { return };
+        let ks: Vec<u64> = ph.queue.lines().iter().filter(|l| l.doc == doc).map(|l| l.k).collect();
         for k in ks {
             self.remark_line(ph, k, Reason::of(cause::MOVED, false));
         }
@@ -946,45 +965,45 @@ impl Holds {
     /// Re-mark one line in place — a hold that recurs, a refused run, a moved
     /// re-facing — its ordinal kept; a copy the device refused said on TALK.
     fn remark_line(&self, ph: &mut PrincipalHold, k: u64, reason: Reason) {
-        if let Err(e) = ph.file.remark(k, reason) {
+        if let Err(e) = ph.queue.remark(k, reason) {
             self.say(format!("held: line {k}'s new cause could not be written ({e}); a reopen reads its earlier one"));
         }
     }
 
-    /// Resolve one line `done` (kept or dropped), the file compacting where
-    /// the queue empties.
-    fn done(&self, reference: &str, principal: u64, k: u64, kept: bool, at: Option<u64>) {
+    /// Resolve one line `done` — [`Done::Kept`] or [`Done::Dropped`] — the
+    /// file compacting where the queue empties.
+    fn done(&self, board_reference: &str, principal: u64, k: u64, done: Done) {
         let mut boards = self.lock();
-        if let Some(ph) = principal_mut(&mut boards, reference, principal) {
-            self.done_line(ph, k, kept, at);
+        if let Some(ph) = principal_mut(&mut boards, board_reference, principal) {
+            self.done_line(ph, k, done);
         }
     }
 
     /// One line out of the queue, whatever the disk did; a `done` the device
     /// refused said on TALK.
-    fn done_line(&self, ph: &mut PrincipalHold, k: u64, kept: bool, at: Option<u64>) {
-        if let Err(DoneError::Unwritten(e)) = ph.file.done(k, kept, at) {
+    fn done_line(&self, ph: &mut PrincipalHold, k: u64, done: Done) {
+        if let Err(DoneError::Unwritten(e)) = ph.queue.done(k, done) {
             self.say(format!("held: line {k} is settled, and its `done` could not be written ({e}); a reopen reads it as held, and its read decides it"));
         }
         ph.durability.remove(&k);
     }
 
     /// The document's head: its first standing line in `k` order.
-    fn head_of(&self, reference: &str, principal: u64, doc: &str) -> Option<HeldLine> {
+    fn head_of(&self, board_reference: &str, principal: u64, doc: &str) -> Option<HeldLine> {
         let mut boards = self.lock();
-        principal_mut(&mut boards, reference, principal)?.file.lines().iter().find(|l| l.doc == doc).cloned()
+        principal_mut(&mut boards, board_reference, principal)?.queue.lines().iter().find(|l| l.doc == doc).cloned()
     }
 
     /// How many lines stand on the document.
-    fn count(&self, reference: &str, principal: u64, doc: &str) -> u64 {
+    fn count(&self, board_reference: &str, principal: u64, doc: &str) -> u64 {
         let mut boards = self.lock();
-        principal_mut(&mut boards, reference, principal).map_or(0, |ph| ph.count(doc))
+        principal_mut(&mut boards, board_reference, principal).map_or(0, |ph| ph.count(doc))
     }
 
     /// Fire the `held` event (§4b.2): `{board, session, doc, held, state,
     /// cause?}`, under the session the change was made for.
-    fn fire(&self, reference: &str, session: &SessionEntry, doc: &str, held: u64, state: HeldState, cause: Option<&str>) {
-        let mut data = json!({"board": reference, "session": session.reference, "doc": doc, "held": held, "state": state.as_str()});
+    fn fire(&self, board_reference: &str, session: &SessionEntry, doc: &str, held: u64, state: HeldState, cause: Option<&str>) {
+        let mut data = json!({"board": board_reference, "session": session.reference, "doc": doc, "held": held, "state": state.as_str()});
         if let Some(c) = cause {
             data["cause"] = Value::from(c);
         }
@@ -993,8 +1012,8 @@ impl Holds {
 }
 
 /// A principal's hold at a board, where one stands.
-fn principal_mut<'b>(boards: &'b mut HashMap<String, BoardHold>, reference: &str, principal: u64) -> Option<&'b mut PrincipalHold> {
-    boards.get_mut(reference)?.principals.get_mut(&principal)
+fn principal_mut<'b>(boards: &'b mut HashMap<String, BoardHold>, board_reference: &str, principal: u64) -> Option<&'b mut PrincipalHold> {
+    boards.get_mut(board_reference)?.principals.get_mut(&principal)
 }
 
 /// P38's halt face for `held(session)` and every act (§3c.3).
@@ -1002,14 +1021,14 @@ fn store_halted(path: &Path, why: HaltWhy) -> Refusal {
     Refusal::shell(Name::STORE_HALTED, json!({"path": path.display().to_string(), "why": why.token()}))
 }
 
-/// One `held(session)` row (§4b.1): the line's members, `refusal` beside a
-/// refused run's.
-fn row_json(l: &HeldLine) -> Value {
-    let mut row = json!({"held": l.k, "doc": l.doc, "base": l.base, "frame": l.frame, "cause": l.reason.cause, "sent": l.reason.sent, "time": l.time});
+/// One held line as `held(session)` lists it (§4b.1): the line's members,
+/// `refusal` beside a refused run's.
+fn line_json(l: &HeldLine) -> Value {
+    let mut line = json!({"held": l.k, "doc": l.doc, "base": l.base, "frame": l.frame, "cause": l.reason.cause, "sent": l.reason.sent, "time": l.time});
     if let Some(r) = &l.reason.refusal {
-        row["refusal"] = r.clone();
+        line["refusal"] = r.clone();
     }
-    row
+    line
 }
 
 /// The documents an acked write's `/changes` row names (wire.md §The change
@@ -1028,9 +1047,9 @@ fn written_docs<'a>(frame: &'a Value, ack: &'a Value) -> Vec<&'a str> {
 /// The session's own hand on the feed (§3c.5), as an UNSIGNED entry's `key`
 /// names it: its key's fingerprint, or `bare`.
 fn own_hand(session: &SessionEntry) -> String {
-    match session.facts.fingerprint {
-        Some(fp) => fp.to_hex(),
-        None => "bare".to_string(),
+    match &session.facts.kind {
+        Kind::Signed { fingerprint, .. } => fingerprint.to_hex(),
+        Kind::Bare => "bare".to_string(),
     }
 }
 
@@ -1050,7 +1069,7 @@ fn own_row(session: &SessionEntry, row: &Value) -> bool {
     if row["key"].as_str() == Some(own_hand(session).as_str()) {
         return true;
     }
-    session.facts.fingerprint.is_some() && row.get("key").is_none() && row.get("attest").is_some()
+    matches!(session.facts.kind, Kind::Signed { .. }) && row.get("key").is_none() && row.get("attest").is_some()
 }
 
 /// Whether a `/changes` row's testimony is LOST — `docs`, `key` and `op` the

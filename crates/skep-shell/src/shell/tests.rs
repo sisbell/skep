@@ -35,6 +35,7 @@ use crate::attest::Composer;
 use crate::events::Event;
 use crate::held::Reason;
 use crate::hold::PROBE_CADENCE;
+use crate::sessions::Kind;
 
 /// The daemon over `dir` at an ephemeral port.
 fn spawn(dir: &Path, local_trust: bool) -> Skepd {
@@ -62,9 +63,9 @@ fn talk() -> (Talk, Arc<Mutex<Vec<String>>>) {
     (Arc::new(move |l: &str| kept.lock().unwrap().push(l.to_string())), lines)
 }
 
-fn shell(origin: &str, store: &Path, mode: SessionMode) -> (Shell, Arc<Mutex<Vec<String>>>) {
+fn shell(origin: &str, store: &Path, session_mode: SessionMode) -> (Shell, Arc<Mutex<Vec<String>>>) {
     let (talk, lines) = talk();
-    let opts = ShellOptions { boards: vec![Origin::parse(origin).unwrap()], store_dir: store.to_path_buf(), mode, arm: ArmConfig::Auto, talk, own_node: None };
+    let opts = ShellOptions { boards: vec![Origin::parse(origin).unwrap()], store_dir: store.to_path_buf(), session_mode, arm: ArmConfig::Auto, talk, own_node: None };
     (Shell::open(opts), lines)
 }
 
@@ -371,7 +372,7 @@ fn the_own_nodes_state_is_announced_at_its_board() {
     let sd = spawn(&dir.path().join("board"), true);
     let origin = format!("http://127.0.0.1:{}", sd.port());
     let (talk, _) = talk();
-    let own = Shell::open(ShellOptions { boards: vec![Origin::parse(&origin).unwrap()], store_dir: dir.path().join("own-store"), mode: SessionMode::Bare { principal: 1 }, arm: ArmConfig::Auto, talk, own_node: Some(Origin::parse(&origin).unwrap()) });
+    let own = Shell::open(ShellOptions { boards: vec![Origin::parse(&origin).unwrap()], store_dir: dir.path().join("own-store"), session_mode: SessionMode::Bare { principal: 1 }, arm: ArmConfig::Auto, talk, own_node: Some(Origin::parse(&origin).unwrap()) });
     let rx = own.subscribe();
     let board = own.board_references().remove(0);
     let daemon = |rx: &Receiver<Event>| -> Vec<Value> { rx.try_iter().filter(|e| e.name == "daemon").map(|e| e.data).collect() };
@@ -413,7 +414,7 @@ fn a_deliberate_stop_of_the_own_node_is_said_once() {
     claim_board(&own_origin, &store);
     let (talk, lines) = talk();
     let boards = vec![Origin::parse(&own_origin).unwrap(), Origin::parse(&other_origin).unwrap()];
-    let shell = Shell::open(ShellOptions { boards, store_dir: store, mode: SessionMode::Bare { principal: 1 }, arm: ArmConfig::Auto, talk, own_node: Some(Origin::parse(&own_origin).unwrap()) });
+    let shell = Shell::open(ShellOptions { boards, store_dir: store, session_mode: SessionMode::Bare { principal: 1 }, arm: ArmConfig::Auto, talk, own_node: Some(Origin::parse(&own_origin).unwrap()) });
     let seen = Arc::new(Mutex::new(Vec::new()));
     let _answerer = answer_moments(shell.subscribe(), Arc::clone(&shell.pending), Arc::clone(&seen));
     let refs = shell.board_references();
@@ -669,7 +670,7 @@ fn a_signed_sessions_landed_burst_is_kept_by_the_resend() {
     // The in-flight burst: composed and signed as the shell composes it,
     // written under the session's token through the board itself.
     let entry = signed.sessions.get(&session).unwrap();
-    let fp = entry.facts.fingerprint.expect("a signed session holds a key");
+    let Kind::Signed { fingerprint: fp, .. } = entry.facts.kind.clone() else { panic!("a signed session holds a key") };
     let frame = json!({"op": "insert", "doc": draft, "at": {"subspace": "1", "ordinal": "2"}, "values": ["bc"]});
     let board_entry = Arc::clone(&signed.boards[0]);
     let term = board_entry.board.board_term().unwrap().expect("H.1 stands on a claimed board");

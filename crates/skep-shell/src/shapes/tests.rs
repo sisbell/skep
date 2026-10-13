@@ -97,7 +97,7 @@ fn every_declared_type_round_trips_its_sample_against_the_table() {
 }
 
 /// The file names every shape, every call of §4b.1 — its rows the
-/// dispatch's calls, in the dispatch's order — both answers and the six
+/// dispatch's calls, in the dispatch's order — both answers and the seven
 /// events; a field's optionality renders as `?`.
 #[test]
 fn the_file_names_every_shape_call_and_event() {

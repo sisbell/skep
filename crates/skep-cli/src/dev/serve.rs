@@ -124,7 +124,7 @@ pub fn serve(c: &DevLine) -> Result<(), Stop> {
     } else {
         (None, c.origin()?)
     };
-    let mode = match arm {
+    let session_mode = match arm {
         SessionArm::Bare => SessionMode::Bare { principal },
         SessionArm::Signed => SessionMode::Signed { principal },
     };
@@ -136,7 +136,7 @@ pub fn serve(c: &DevLine) -> Result<(), Stop> {
     let shell = Shell::open(ShellOptions {
         boards: vec![board_origin.clone()],
         store_dir: store_dir.clone(),
-        mode,
+        session_mode,
         arm: arm_config,
         talk: talk_sink,
         own_node: own.then(|| board_origin.clone()),
@@ -145,7 +145,7 @@ pub fn serve(c: &DevLine) -> Result<(), Stop> {
     let board = shell.board_references().into_iter().next().expect("one board");
     let health = shell.call("health", &json!({"board": board})).map_err(halt_of)?;
     talk(format!("board {board_origin}: mode {} (claimant {}, local_trust {})", health["mode"].as_str().unwrap_or("?"), health["health"]["auth"]["claimant"].as_str().unwrap_or("null"), health["health"]["auth"]["local_trust"]));
-    if let SessionMode::Signed { .. } = mode {
+    if let SessionMode::Signed { .. } = session_mode {
         let keys = shell.check_signed_key().map_err(halt_of)?;
         for k in keys {
             talk(format!("signed: the store {} holds the key {} for principal {principal}", store_dir.display(), k.fingerprint));

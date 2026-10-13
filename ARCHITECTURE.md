@@ -215,18 +215,18 @@ foundation and on the stores above it.
   `acting`) the `search` module. Its modules and rules: §The client.
 - `skep-shell` — the SHELL's CORE, written once for the dev provider and
   the desktop shell (the design's `client.md` §4b; the dev provider
-  record, ruled P-1 … P-12): the bridge's twenty calls and six events over
-  `skep-client`, the board and session references the page is handed in a
-  credential's place, the person seam that forwards PUBLIC moments to the
-  page and answers SECRET and CONSENT ones from a dev arm, the feed
-  consumer's thread per board, the publish-class attest a signed session
-  composes, and the TypeScript declarations of every value that crosses
-  the bridge. Of the skep crates it depends on `skep-client` with its
-  `search` feature, `skep-identity`, `skep-address` and `skep-search`
-  alone — never `skepd`, which it reaches over the wire (its suite spawns
-  the daemon as a dev-dependency). No feature, no transport: the loopback
-  server is `skep-cli`'s dev verb's, the native bridge the shell's. Its
-  modules and rules: §The shell's core.
+  record, ruled P-1 … P-12): the bridge's twenty-two calls and seven
+  events over `skep-client`, the board and session references the page is
+  handed in a credential's place, the person seam that forwards PUBLIC
+  moments to the page and answers SECRET and CONSENT ones from a dev arm,
+  the feed consumer's thread per board, the attest a signed session
+  composes for the checked set, and the TypeScript declarations of every
+  value that crosses the bridge. Of the skep crates it depends on
+  `skep-client` with its `search` feature, `skep-identity`, `skep-address`
+  and `skep-search` alone — never `skepd`, which it reaches over the wire
+  (its suite spawns the daemon as a dev-dependency). No feature, no
+  transport: the loopback server is `skep-cli`'s dev verb's, the native
+  bridge the shell's. Its modules and rules: §The shell's core.
 - `skep-cli` — the `skep` command over `skep-client`, thirteen commands:
   `keygen`, `claim`, `session`, `fingerprint`, `verify`, `health`, `bind`,
   `enroll`, `recover`, `retire`, `rotate`, `handoff`, `accept`; flag
@@ -1124,7 +1124,7 @@ an item the root re-exports counted as the module it is brought from
   `held` line of a standing ordinal its re-mark), the `flock` on
   `held/<chain>/lock`, the read-whole with P38's faces, each line synced
   before `op` answers `held`, the file removed once every line is done;
-  `HeldFile`, a principal's queue — its memory, the file its copy, a queue
+  `HeldQueue`, a principal's queue — its memory, the file its copy, a queue
   in memory alone writing none.
 - `script.rs` the dev arm's SCRIPT: the grammar a script file's answers are
   parsed by, one per line in order.

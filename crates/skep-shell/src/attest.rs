@@ -1,10 +1,10 @@
-//! THE PUBLISH-CLASS ATTEST a signed session composes (t5: "the shell
-//! checks it, signs where signed ops requires"; `client.md` §4b.3: the shell
-//! "signs only the ENTRY FRAME of an op it has checked, composing every axis
-//! of that frame itself — the `board` term from its own read of the board it
-//! dials, the account from the session — and never a preimage the page
-//! supplies"): for a frame of the TEN KINDS that have an entry frame
-//! (wire.md §Credential refusals) — `create_new_document`, `fork`,
+//! THE ATTEST a signed session composes for every write of the CHECKED SET
+//! (t5: "the shell checks it, signs where signed ops requires"; `client.md`
+//! §4b.3: the shell "signs only the ENTRY FRAME of an op it has checked,
+//! composing every axis of that frame itself — the `board` term from its own
+//! read of the board it dials, the account from the session — and never a
+//! preimage the page supplies"): for a frame of the TEN KINDS that have an
+//! entry frame (wire.md §Credential refusals) — `create_new_document`, `fork`,
 //! `version`, `insert`, `publish`, `make_link`, `emit`, `nullify`,
 //! `assert_sup`, `edit_link` — the entry frame under `H.1`'s pair, the
 //! session's account, the frame's `doc` term and the body the kind's
@@ -76,9 +76,9 @@ enum Doc {
     Pair { d_s: Address, d_a: Address },
 }
 
-/// One origin's content read back: the I-address of each position and the
-/// value at it, keyed by the address's spelling.
-struct Origin {
+/// One origin document's content read back: the I-address of each position
+/// and the value at it, keyed by the address's spelling.
+struct ReadBack {
     values: HashMap<String, Vec<u8>>,
 }
 
@@ -238,10 +238,10 @@ impl Composer<'_> {
         Ok(spans)
     }
 
-    /// An origin's content READ BACK: its extent, its V→I map through
-    /// `image`, and the value at every position through `retrieve_v`, each
-    /// position's value keyed by its I-address.
-    fn origin(&self, origin: &str) -> Result<Origin, Halt> {
+    /// An origin document's content READ BACK: its extent, its V→I map
+    /// through `image`, and the value at every position through
+    /// `retrieve_v`, each position's value keyed by its I-address.
+    fn read_back(&self, origin: &str) -> Result<ReadBack, Halt> {
         let set = self.read(&frames::span_set(origin))?;
         let extent = set["set"]
             .as_array()
@@ -250,7 +250,7 @@ impl Composer<'_> {
             .unwrap_or(0);
         let mut values = HashMap::new();
         if extent == 0 {
-            return Ok(Origin { values });
+            return Ok(ReadBack { values });
         }
         let image = self.read(&frames::image(origin, 1, extent))?;
         let mut addrs: Vec<String> = Vec::new();
@@ -274,7 +274,7 @@ impl Composer<'_> {
         for (a, v) in addrs.into_iter().zip(positions) {
             values.insert(a, v);
         }
-        Ok(Origin { values })
+        Ok(ReadBack { values })
     }
 
     /// The `publish` body: each run the shot names in V-order, a run onto
@@ -283,7 +283,7 @@ impl Composer<'_> {
     fn publish_body(&self, frame: &Value, trunk: &str) -> Result<EntryBody, Halt> {
         let draft = frame["draft"].as_str();
         let runs = frame["runs"].as_array().ok_or_else(|| fault("the shot names no `runs`", "a `publish` frame carries its runs in V-order"))?;
-        let mut origins: HashMap<String, Origin> = HashMap::new();
+        let mut read_backs: HashMap<String, ReadBack> = HashMap::new();
         let mut copied: Vec<(usize, Vec<Vec<u8>>)> = Vec::new();
         let mut windows: Vec<(usize, Address, NonZeroU64)> = Vec::new();
         for (i, run) in runs.iter().enumerate() {
@@ -293,10 +293,10 @@ impl Composer<'_> {
             let origin_trunk = trunk_text(origin);
             let is_copied = origin_trunk.as_deref() == Some(trunk) || draft.is_some_and(|d| d == origin || trunk_text(d).as_deref() == origin_trunk.as_deref());
             if is_copied {
-                if !origins.contains_key(origin) {
-                    origins.insert(origin.to_string(), self.origin(origin)?);
+                if !read_backs.contains_key(origin) {
+                    read_backs.insert(origin.to_string(), self.read_back(origin)?);
                 }
-                let read = &origins[origin];
+                let read = &read_backs[origin];
                 let mut values = Vec::new();
                 for k in 0..width {
                     let a = i_addr_at(i_start, k).ok_or_else(|| fault("a run's `i_start` has no last component", run.to_string()))?;

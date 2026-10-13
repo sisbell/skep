@@ -55,8 +55,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use serde_json::{Map, Value};
 use skep_search::{aside_name, Chain};
 
-use crate::attest::{document_address, MAX_FRAME_BYTES};
-use crate::log::json_len;
+use crate::wire::{document_address, json_len, MAX_FRAME_BYTES};
 
 /// The lock file's name, the key store's idiom (`search.md` §5.6).
 const LOCK_NAME: &str = "lock";
@@ -78,17 +77,17 @@ pub const MAX_HELD_FRAME_BYTES: usize = MAX_FRAME_BYTES;
 /// copies no longer line — the queue keeps it, unwritten, as it keeps a line
 /// the device refused — and the reader halts on one as damaged, reading no
 /// more of it than one byte past the bound.
-pub const MAX_HELD_LINE_BYTES: usize = 2 * MAX_HELD_FRAME_BYTES + 64 * 1024;
+const MAX_HELD_LINE_BYTES: usize = 2 * MAX_HELD_FRAME_BYTES + 64 * 1024;
 
 /// The largest ordinal a line may carry: `2^53 − 1`, the top of the range a
 /// JSON number carries EXACTLY (AUTH-6.36's clause) — the page names a line
 /// by its ordinal (`resolve`'s `held`), and a JavaScript-backed page reads
 /// every number as a double. A file naming a larger one is damaged, and a
 /// queue whose next ordinal would pass it holds no more lines.
-pub const MAX_ORDINAL: u64 = (1 << 53) - 1;
+const MAX_ORDINAL: u64 = (1 << 53) - 1;
 
 /// Unix milliseconds now — a line's `time`.
-pub fn now_ms() -> u64 {
+fn now_ms() -> u64 {
     SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0)
 }
 
@@ -307,7 +306,7 @@ impl HeldDir {
     }
 
     /// The file name for a principal (P39: the file, never a column).
-    pub fn file_name(principal: u64) -> String {
+    fn file_name(principal: u64) -> String {
         format!("principal-{principal}.held")
     }
 
@@ -395,7 +394,7 @@ impl HeldDir {
     /// overwrites — the name taken by a hard link, which fails where it exists,
     /// then the original unlinked. A second misplaced file lands beside the
     /// first at `.2`. Said once in the shell's own window, never to the page.
-    pub fn move_aside(&self, name: &str, own_chain: &Chain) -> io::Result<PathBuf> {
+    fn move_aside(&self, name: &str, own_chain: &Chain) -> io::Result<PathBuf> {
         let from = self.path.join(name);
         for m in 1u32.. {
             let to = self.path.join(aside_name(name, own_chain, m));
@@ -452,7 +451,7 @@ pub enum Unheld {
     /// next ordinal would pass [`MAX_ORDINAL`].
     Full { held_bytes: usize, frame_bytes: usize },
     /// The line's `doc` is no document address in its one spelling
-    /// (`attest::document_address`), or its `frame` no JSON object: a line
+    /// (`wire::document_address`), or its `frame` no JSON object: a line
     /// no reader of the file reads.
     Unreadable,
 }

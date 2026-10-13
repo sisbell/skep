@@ -14,7 +14,7 @@
 //! kept by its length, never its bytes.
 
 use std::collections::VecDeque;
-use std::io::{self, Read};
+use std::io::Read;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -56,7 +56,7 @@ impl CallOutcome {
 /// under a kilobyte held, so the log's bill stays under 64 MiB however long
 /// the shell runs. Every entry's `seq` counts on past the bound, so a reader
 /// sees where the kept entries start by the first `seq` it reads.
-pub const MAX_LOG_ENTRIES: usize = 1 << 16;
+const MAX_LOG_ENTRIES: usize = 1 << 16;
 
 /// The log: its latest entries in arrival order — 2^16 of them, the oldest
 /// dropped as each new one comes — each numbered by its place in the whole
@@ -205,27 +205,6 @@ impl Dialer for LoggingDialer {
         self.log.dial(head.method, &head.path, status, declared, 0, started.elapsed());
         answer
     }
-}
-
-/// The length of `v`'s compact JSON text — the bytes a value carries on the
-/// wire, as the log counts a call's and the shell measures a frame against
-/// the board's cap — counted as it is written and never kept.
-pub(crate) fn json_len(v: &Value) -> usize {
-    /// A writer that keeps nothing but the count.
-    struct Count(usize);
-    impl io::Write for Count {
-        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-            self.0 += buf.len();
-            Ok(buf.len())
-        }
-
-        fn flush(&mut self) -> io::Result<()> {
-            Ok(())
-        }
-    }
-    let mut count = Count(0);
-    serde_json::to_writer(&mut count, v).expect("a `Value` has string keys and finite numbers, and the count's writer never fails");
-    count.0
 }
 
 #[cfg(test)]

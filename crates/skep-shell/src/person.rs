@@ -31,7 +31,7 @@ use crate::refusal::{Name, Refusal};
 
 /// What the page sent for a pending moment.
 #[derive(Debug, Clone, PartialEq)]
-pub enum Reply {
+enum Reply {
     /// `answer(id, value)`.
     Answer(Value),
     /// `cancel(id)`.

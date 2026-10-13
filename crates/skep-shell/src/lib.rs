@@ -8,10 +8,11 @@
 //! the dev provider (`skep-dev serve`) and the desktop shell share them and
 //! rewrite the transport alone. A transport reaches the crate through this
 //! root — [`Shell`] and what opens it, [`Refusal`] and its [`Name`], [`Log`]
-//! and its [`CallOutcome`], [`Event`] and its [`EventName`], [`Talk`],
-//! [`CALLS`] — and three public modules, [`events`], [`script`] and
-//! [`shapes`]; the rest is private. The modules, in the order they are
-//! declared, each naming only those above it:
+//! and its [`CallOutcome`], [`Event`] and its [`EventName`] (an
+//! [`UnknownEventName`] where a spelling names none), [`Talk`], [`CALLS`] —
+//! and two public modules, [`script`] and [`shapes`]; the rest is private.
+//! The modules, in the order they are declared, each naming only those
+//! above it:
 //!
 //! * `refs` — THE REFERENCE REGISTRY's names (§4b.1, THE PIN): a board
 //!   reference and a session reference are opaque NAMES this process mints
@@ -21,20 +22,23 @@
 //!   (the structure record §6.3's class 5): every call the page made and
 //!   every dial the shell made, sizes and timing, never a token or a body,
 //!   the latest entries kept and a call of no name kept by its length.
-//! * [`events`] — THE EVENT STREAM: every §4b.2 event as a value, named by
+//! * `events` — THE EVENT STREAM: every §4b.2 event as a value, named by
 //!   an [`EventName`] of the seven, fanned out to every subscriber.
 //! * `refusal` — [`Refusal`], the one refusal shape the page renders: the
 //!   board's own verdict verbatim, a halt's face, the block, the
 //!   unreachable board, and the shell's own armed refusals, each named by
 //!   ONE token from one closed list.
+//! * `wire` — THE WIRE's SHARED FACTS the composer, the held store, the
+//!   hold's door and the call log read: the board's frame cap and a frame's
+//!   compact bytes, the tumbler component budget and an address read within
+//!   it, and the document address in its one spelling.
 //! * `attest` — THE ATTEST a signed session composes for the checked set
 //!   (t5: "signs where signed ops requires"): the entry frame over the ten
 //!   kinds that have one, each axis composed by the shell from its own
 //!   reads and never from a preimage the page supplies — and THE BOARD's
-//!   BUDGETS the composer, the held store and the hold's door keep as the
-//!   board keeps them: its frame cap, its wire lists, an insert's values,
-//!   a tumbler's components, a slot's spans, a shot's re-inserted values,
-//!   and the document address in its one spelling.
+//!   BUDGETS the composer keeps as the board keeps them: its wire lists, an
+//!   insert's values, a slot's spans, a shot's re-inserted values and its
+//!   body.
 //! * `held` — THE HELD-BURST STORE (`client.md` §3c): one append-only file
 //!   per (board, principal) beside the key store — a header and two line
 //!   forms, the directory lock, the line-by-line read with P38's faces, the
@@ -62,9 +66,10 @@
 //!   write path — admitted where some send of it the board can take, held
 //!   without a dial where a hold stands, else dialed and each answer read
 //!   through the classification table, the one owner of every reissue's
-//!   bound — the per-(board, principal) queue over `held`'s file, each
-//!   board's under its own lock, and the resend walk the feed worker's
-//!   probe drains: one read per document, with §3c.5's three outcomes.
+//!   bound — and the per-(board, principal) queue over `held`'s file, each
+//!   board's under its own lock; its child `resend` holds the walk the feed
+//!   worker's probe drains: one read per document, with §3c.5's three
+//!   outcomes.
 //! * `feed` — THE FEED CONSUMER's thread per board: `search::Consumer`
 //!   polled on the `/events` commits, coalesced into one waiting read, the
 //!   published feed read from the head the board first answers with, the
@@ -76,11 +81,12 @@
 //! * `shell` — [`Shell`]: the boards, the sessions, the session mode
 //!   (bare as the claimant, or signed with a dev key), and one private
 //!   method per §4b.1 row behind [`Shell::call`], whose dispatch the
-//!   compiler holds to one arm per call, each row taking and answering
-//!   values shaped exactly as the row's columns — an argument of another
-//!   form refused, never read as absent; [`Shell::fetch`] is public
-//!   beside it because it streams, and its transport logs it. Dropping a
-//!   shell stops it: no thread, session or lock of it outlives it.
+//!   compiler holds to one arm per call — the ten ceremonial rows in its
+//!   child `ceremony` — each row taking and answering values shaped
+//!   exactly as the row's columns — an argument of another form refused,
+//!   never read as absent; [`Shell::fetch`] is public beside it because it
+//!   streams, and its transport logs it. Dropping a shell stops it: no
+//!   thread, session or lock of it outlives it.
 //! * [`shapes`] — THE DECLARATIONS: [`shapes::declarations`], a TypeScript
 //!   declaration file for every value that crosses the bridge, pinned by a
 //!   test that round-trips each type's JSON against the declared fields.
@@ -91,7 +97,7 @@
 //! the native bridge the shell's. `ARCHITECTURE.md` §The shell's core draws
 //! how the modules fit and the rules that cross them, and `tests/it/tidy.rs`
 //! holds the declaration order — an item the root re-exports read as the
-//! module it is brought from — and the three public modules to it.
+//! module it is brought from — and the two public modules to it.
 
 #![forbid(unsafe_code)]
 
@@ -99,8 +105,9 @@ use std::sync::Arc;
 
 mod refs;
 mod log;
-pub mod events;
+mod events;
 mod refusal;
+mod wire;
 mod attest;
 mod held;
 pub mod script;
@@ -112,7 +119,7 @@ mod feed;
 mod shell;
 pub mod shapes;
 
-pub use events::{Event, EventBus, EventName};
+pub use events::{Event, EventBus, EventName, UnknownEventName};
 pub use log::{CallOutcome, Log};
 pub use refusal::{Name, Refusal};
 pub use shell::{ArmConfig, Fetched, NodeState, SessionMode, Shell, ShellOptions, CALLS};
@@ -139,5 +146,5 @@ const _: fn() = || {
     assert_send::<Fetched>();
     assert_error::<Refusal>();
     assert_error::<script::ScriptError>();
-    assert_error::<events::UnknownEventName>();
+    assert_error::<UnknownEventName>();
 };

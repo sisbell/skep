@@ -11,37 +11,44 @@
 //! (`crate::Talk`) names no module; a path to one the root RE-EXPORTS
 //! (`crate::Shell`, brought in by `pub use shell::…`) names the module it is
 //! brought from, so a re-export is no way around the order. Exempt:
-//! `lib.rs` itself (the tree, not an import);
-//! comments, doc links included; and tests — a `tests.rs` file, or
-//! everything from an inline `mod tests {` on, which may reach whatever
-//! they test. An inline test module is its file's last item, where
-//! `AGENTS.md` places it, and that is checked too: a line after one is a
-//! line this check never reads. A file under `src/` whose module no `mod`
-//! line in `src/lib.rs` declares fails as well — cargo, clippy and every
-//! test pass over such a file in silence.
+//! `lib.rs` itself (the tree, not an import); comments, doc links included;
+//! and tests — a module with a `tests` segment in its path (`hold::tests`,
+//! and its child suites such as `hold::tests::write`), or everything from
+//! an inline `mod tests {` on, which may reach whatever they test. An
+//! inline test module is its file's last item, where `AGENTS.md` places it,
+//! and that is checked too: a line after one is a line this check never
+//! reads. And every file under `src/`, a test's included, is declared by a
+//! `mod` line of its parent's file — `src/lib.rs` for a module of the root,
+//! `src/hold.rs` for `src/hold/resend.rs`, a suite's `tests.rs` for its
+//! child suites — or fails: cargo, clippy and every test pass over an
+//! undeclared file in silence.
 //!
-//! THE SURFACE. `src/lib.rs` declares exactly three public modules —
-//! `events`, `script` and `shapes`, what a transport reads of the crate
-//! beside the root's re-exports — and every other module private, so a
-//! module widened by a stray `pub` fails here rather than in the dependent
-//! that grew onto it.
+//! THE SURFACE. `src/lib.rs` declares exactly two public modules —
+//! `script` and `shapes`, what a transport reads of the crate beside the
+//! root's re-exports — and every other module private, so a module widened
+//! by a stray `pub` fails here rather than in the dependent that grew onto
+//! it, and an item a transport reads has one path, the root's.
 //!
 //! THE DOOR. `Shell` answers the page's calls through `call`, which logs
 //! each, and `fetch`, which streams and its transport logs: every row
-//! method is private, so no call is served past the log. Its public methods
-//! are listed in [`SHELL_PUBLIC`]: a row method made public fails, and a
-//! new public method is a decision that list records. That `call` answers
+//! method is `shell`'s alone — private there, `pub(super)` in the child
+//! module that holds the ceremonial rows — so no call is served past the
+//! log. Its public methods, read off every `impl Shell` block of
+//! `src/shell.rs` and of its non-test children under `src/shell/`, are
+//! listed in [`SHELL_PUBLIC`]: a row method made public fails, wherever it
+//! is written, and a new public method is a decision that list records.
+//! That `call` answers
 //! every name of `CALLS` is the compiler's to hold, not this file's: the
 //! dispatch matches `src/shell.rs`'s `Call` with one arm per variant, and
 //! `CALLS` is spelled from that enum's list.
 
 use std::path::{Path, PathBuf};
 
-/// The public modules: the event names, the script's grammar, the
-/// declarations.
-const PUBLIC: &[&str] = &["events", "script", "shapes"];
+/// The public modules: the script's grammar, the declarations.
+const PUBLIC: &[&str] = &["script", "shapes"];
 
-/// `Shell`'s public methods, in their order in `src/shell.rs`: the open,
+/// `Shell`'s public methods, in their order in `src/shell.rs`, the first of
+/// the files that hold an `impl Shell` block: the open,
 /// the stream and the log a transport serves, the run's facts, the one
 /// door and the stream beside it, the page's two answers, and the stop.
 const SHELL_PUBLIC: &[&str] = &[
@@ -72,7 +79,15 @@ fn every_module_names_only_modules_declared_above_it() {
     for file in &files {
         let path = file.strip_prefix(&src).unwrap().display().to_string();
         let module = module_of(&src, file);
-        if module == "lib" || file.file_name().is_some_and(|n| n == "tests.rs") {
+        if module == "lib" {
+            continue;
+        }
+        let (parent, name) = declaring_file(&src, &module);
+        if !std::fs::read_to_string(&parent).is_ok_and(|text| declares(&text, name)) {
+            faults.push(format!("src/{path}: no `mod {name};` line in src/{} declares it: declare it, or delete the file", parent.strip_prefix(&src).unwrap().display()));
+            continue;
+        }
+        if is_test_module(&module) {
             continue;
         }
         let own = module.split("::").next().unwrap_or(&module);
@@ -99,7 +114,7 @@ fn every_module_names_only_modules_declared_above_it() {
 }
 
 #[test]
-fn the_public_modules_are_events_script_and_shapes() {
+fn the_public_modules_are_script_and_shapes() {
     let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
     let public: Vec<String> = declared(&src).into_iter().filter(|(_, public)| *public).map(|(module, _)| module).collect();
     assert_eq!(
@@ -110,20 +125,64 @@ fn the_public_modules_are_events_script_and_shapes() {
 
 #[test]
 fn the_shell_answers_calls_through_one_door() {
-    let text = std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("src/shell.rs")).unwrap();
-    let body: Vec<&str> = text
-        .lines()
-        .skip_while(|line| *line != "impl Shell {")
-        .skip(1)
-        .take_while(|line| *line != "}")
-        .collect();
-    assert!(!body.is_empty(), "src/shell.rs holds no `impl Shell {{` block: the block this check reads has moved");
-    let public: Vec<&str> = body.iter().filter_map(|line| line.strip_prefix("    pub fn ")?.split(['(', '<']).next()).collect();
+    let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    let mut children = Vec::new();
+    rust_files(&src.join("shell"), &mut children);
+    children.retain(|file| !is_test_module(&module_of(&src, file)));
+    children.sort();
+    let texts: Vec<String> = std::iter::once(src.join("shell.rs")).chain(children).map(|file| std::fs::read_to_string(file).unwrap()).collect();
+    assert!(!impl_shell_lines(&texts[0]).is_empty(), "src/shell.rs holds no `impl Shell {{` block: the block this check reads has moved");
+    let public: Vec<&str> = texts.iter().flat_map(|text| impl_shell_lines(text)).filter_map(|line| line.strip_prefix("    pub fn ")?.split(['(', '<']).next()).collect();
     assert_eq!(
         public, SHELL_PUBLIC,
         "`Shell`'s public methods: a call's row reaches the page through `call`, which logs it — keep the row private, or record a new door here"
     );
     assert!(skep_shell::CALLS.contains(&"fetch") && skep_shell::CALLS.iter().filter(|c| SHELL_PUBLIC.contains(c)).eq([&"fetch"]), "of the calls, `fetch` alone is a public method");
+}
+
+/// The file whose `mod` line declares `module`, and the name it declares:
+/// `src/lib.rs` for a module of the root, else its parent's file —
+/// `hold::resend` → (`src/hold.rs`, `resend`).
+fn declaring_file<'m>(src: &Path, module: &'m str) -> (PathBuf, &'m str) {
+    match module.rsplit_once("::") {
+        None => (src.join("lib.rs"), module),
+        Some((parent, name)) => {
+            let parent = parent.replace("::", "/");
+            let file = src.join(format!("{parent}.rs"));
+            (if file.exists() { file } else { src.join(parent).join("mod.rs") }, name)
+        }
+    }
+}
+
+/// Whether `text` holds the line `mod <name>;`, under any visibility.
+fn declares(text: &str, name: &str) -> bool {
+    let declaration = format!("mod {name};");
+    text.lines().map(str::trim).any(|line| line == declaration || line.split_once(' ').is_some_and(|(visibility, rest)| visibility.starts_with("pub") && rest == declaration))
+}
+
+/// Whether `module` is a test module — `tests`, or a child suite of one —
+/// which may reach whatever it tests.
+fn is_test_module(module: &str) -> bool {
+    module.split("::").any(|segment| segment == "tests")
+}
+
+/// The lines of every `impl Shell {` block in `text`, each block from the
+/// line after its head to the `}` that closes it at column 0.
+fn impl_shell_lines(text: &str) -> Vec<&str> {
+    let mut inside = false;
+    let mut lines = Vec::new();
+    for line in text.lines() {
+        if inside {
+            if line == "}" {
+                inside = false;
+            } else {
+                lines.push(line);
+            }
+        } else {
+            inside = line == "impl Shell {";
+        }
+    }
+    lines
 }
 
 /// The modules `src/lib.rs` declares, in order, each with whether it is

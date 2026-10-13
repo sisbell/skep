@@ -15,12 +15,14 @@ use std::io::Read;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
+use skep_client::address::parse_address;
 use skep_client::dial::{DialError, Dialer, Headers, Request, RequestHead, Response, StreamedResponse};
 use skep_client::sign::{signer_from_seed, signer_from_seed_under};
 use skep_client::Origin;
 use skep_identity::{entry_body_publish, ShotSegmentPiece};
 
 use super::*;
+use crate::wire::document_address;
 
 /// A delivery's values collected, or the item that stopped them.
 fn delivered(delivery: &Value) -> Result<Vec<Cow<'_, [u8]>>, Value> {

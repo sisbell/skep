@@ -45,8 +45,8 @@ use std::fmt;
 use std::num::NonZeroU64;
 
 use serde_json::{json, Value};
-use skep_address::{Address, Level, Nat, Span, Tumbler};
-use skep_client::address::{document_of, is_address_text, parse_address};
+use skep_address::{Address, Nat, Span, Tumbler};
+use skep_client::address::document_of;
 use skep_client::board::{frames, Answer, Board, Rejection, Token, T_SUPERSEDES};
 use skep_client::dial::MAX_ANSWER_BYTES;
 use skep_client::halt::Halt;
@@ -58,26 +58,16 @@ use skep_identity::{
 };
 
 use crate::refusal::{Name, Refusal};
+use crate::wire::{bounded_address, within_components, MAX_FRAME_BYTES, MAX_TUMBLER_COMPONENTS};
 
 /// THE RETRACTION CLASS's reserved ghost tumbler — `[R]`, the fifth of the
 /// format's five (`1.1.0.1.0.1.0.1.x`, x = 1..=5: pred_def, pred_stable,
 /// retired, supersedes, retraction) — the type slot of the tuple a
 /// `nullify` deposits, fixed by kind (`skep-links`'s `retraction_tuple`).
-pub const T_RETRACTION: &str = "1.1.0.1.0.1.0.1.5";
+const T_RETRACTION: &str = "1.1.0.1.0.1.0.1.5";
 
 /// The ten kinds, as the wire spells them.
-pub const CHECKED_SET: [&str; 10] = ["create_new_document", "fork", "version", "insert", "publish", "make_link", "emit", "nullify", "assert_sup", "edit_link"];
-
-/// THE BOARD's FRAME CAP — the most bytes one `/op` body may carry: skepd's
-/// `body_cap("POST", "/op")`, its `MAX_REQUEST_BODY`, refused `413` on the
-/// declared length before a byte is read. Two budgets are this number: a
-/// burst whose frame the board takes at no send never enters the hold
-/// (`hold`'s `Burst::admit`), and a shot's body is built under it — the
-/// parity the daemon's own composer holds a shot's body to (`auth/entry.rs`'s
-/// `MAX_SHOT_BODY_BYTES`), answering a longer one
-/// `attestation_invalid:frame_too_large`. Pinned equal to the board's by the
-/// suite.
-pub const MAX_FRAME_BYTES: usize = 8 * 1024 * 1024;
+const CHECKED_SET: [&str; 10] = ["create_new_document", "fork", "version", "insert", "publish", "make_link", "emit", "nullify", "assert_sup", "edit_link"];
 
 /// The most elements one wire ARRAY may carry — skepd's codec's
 /// `MAX_WIRE_LIST`, refused at the board's parse (`malformed`, the frame
@@ -92,7 +82,7 @@ pub const MAX_WIRE_LIST: usize = 4096;
 /// run a V-spec resolves to, refused `slot_too_large`: a number the frame
 /// does not show, so the composer stops at the first span past it. Pinned
 /// equal to M7's by the suite.
-pub const MAX_SLOT_SPANS: usize = 4096;
+const MAX_SLOT_SPANS: usize = 4096;
 
 /// The most values one `insert` may mint — skepd's codec's
 /// `MAX_INSERT_VALUES`, refused at the board's parse, `malformed`; counted
@@ -101,17 +91,11 @@ pub const MAX_SLOT_SPANS: usize = 4096;
 /// as [`MAX_WIRE_LIST`] is.
 pub const MAX_INSERT_VALUES: usize = 1 << 18;
 
-/// The most components one tumbler may carry, an address or a width —
-/// skepd's codec's `MAX_TUMBLER_COMPONENTS`, refused at the board's parse,
-/// `malformed`; counted here before a component is converted or collected.
-/// Pinned by the board's behaviour, as [`MAX_WIRE_LIST`] is.
-pub const MAX_TUMBLER_COMPONENTS: usize = 256;
-
 /// The most values a shot may RE-INSERT — M5's `MAX_REINSERTED_VALUES`: the
 /// staging draft's runs' widths, summed, refused by the store as
 /// `too_many_values` by its request's arithmetic before a value is read
 /// (wire.md §The publish shot). Pinned equal to M5's by the suite.
-pub const MAX_REINSERTED_VALUES: u64 = 1 << 17;
+const MAX_REINSERTED_VALUES: u64 = 1 << 17;
 
 /// The most positions a shot may COPY IN by value — the body budget's own
 /// consequence and no number of its own: every value costs a shot's body at
@@ -252,30 +236,6 @@ fn fault(state: impl Into<String>, cause: impl Into<String>) -> Halt {
     Halt::face(state, cause, "this is the shell's frame and never your act; nothing was sent")
 }
 
-/// Whether `text` splits into at most [`MAX_TUMBLER_COMPONENTS`]
-/// components — counted without converting or collecting one.
-fn within_components(text: &str) -> bool {
-    text.split('.').nth(MAX_TUMBLER_COMPONENTS).is_none()
-}
-
-/// `text` as an address — within [`MAX_TUMBLER_COMPONENTS`], counted before
-/// a component is converted, each a decimal natural, and T4-valid — or
-/// `None`.
-fn bounded_address(text: &str) -> Option<Address> {
-    within_components(text).then(|| parse_address(text)).flatten()
-}
-
-/// `text` as a DOCUMENT address in its ONE spelling — dotted decimal
-/// naturals, no sign and no leading zero (`is_address_text`) — within
-/// [`MAX_TUMBLER_COMPONENTS`], T4-valid and of the document level, or
-/// `None`. The one spelling, because the hold keys a document's lines by
-/// its text and reads its rows `under` that text, and a trunk is split by
-/// text ([`trunk_text`]): two spellings of one document would be two
-/// documents to the hold, and a `00` is no `0` to a split.
-pub fn document_address(text: &str) -> Option<Address> {
-    is_address_text(text).then(|| bounded_address(text)).flatten().filter(|a| a.level() == Level::Document)
-}
-
 /// `text` as an address, or the halt a frame naming no address is.
 fn addr(text: &str, what: &str) -> Result<Address, Halt> {
     bounded_address(text).ok_or_else(|| {
@@ -323,7 +283,7 @@ fn body_refused(refusal: PublishRefusal) -> Halt {
 /// address is taken to its document first. The projection
 /// `skep-arrangement`'s `trunk_of` makes, reproduced over the spelling, of a
 /// text within [`MAX_TUMBLER_COMPONENTS`] — counted before it is split.
-pub fn trunk_text(text: &str) -> Option<String> {
+fn trunk_text(text: &str) -> Option<String> {
     if !within_components(text) {
         return None;
     }

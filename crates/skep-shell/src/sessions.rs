@@ -85,7 +85,7 @@ pub struct Facts {
 impl Facts {
     /// Whether the session opened BY REFERENCE — a signed session whose set
     /// stands above its own account.
-    pub fn by_reference(&self) -> bool {
+    fn by_reference(&self) -> bool {
         matches!((&self.account, &self.kind), (Some(account), Kind::Signed { set_account, .. }) if account != set_account)
     }
 }

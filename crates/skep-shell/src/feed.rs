@@ -138,12 +138,12 @@ pub struct Feed {
 
 impl Feed {
     /// A session registered at this board: its supplement mounted.
-    pub fn widen(&self, session: &Arc<SessionEntry>) {
+    fn widen(&self, session: &Arc<SessionEntry>) {
         let _ = self.cmds.send(Cmd::Widen(Arc::clone(session)));
     }
 
     /// A session ended: its supplement unmounted.
-    pub fn narrow(&self, principal: u64) {
+    fn narrow(&self, principal: u64) {
         let _ = self.cmds.send(Cmd::Narrow(principal));
     }
 
@@ -751,7 +751,7 @@ fn mark_json(m: &Mark) -> Value {
 }
 
 /// A hit as `search.md` §3.1 shapes it, the bridge's `search` row.
-pub fn hit_json(h: &Hit) -> Value {
+fn hit_json(h: &Hit) -> Value {
     let snippet = h.snippet.as_ref().map(|s| json!({"text": s.text, "start": s.start, "marks": s.marks.iter().map(mark_json).collect::<Vec<_>>()}));
     json!({
         "doc": h.doc.to_string(),
@@ -768,13 +768,13 @@ pub fn hit_json(h: &Hit) -> Value {
 }
 
 /// A place.
-pub fn place_json(p: &Place) -> Value {
+fn place_json(p: &Place) -> Value {
     json!({"doc": p.doc.to_string(), "kind": kind_name(p.kind), "label": p.label, "standing": standing_json(&p.standing)})
 }
 
 /// THE SEARCH ANSWER as the row shapes it: `{hits, places, state}` with the
 /// crate's five facts beside them.
-pub fn answer_json(a: &SearchAnswer) -> Value {
+fn answer_json(a: &SearchAnswer) -> Value {
     json!({
         "hits": a.hits.iter().map(hit_json).collect::<Vec<_>>(),
         "places": a.places.iter().map(place_json).collect::<Vec<_>>(),

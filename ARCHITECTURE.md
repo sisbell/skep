@@ -1598,8 +1598,9 @@ each naming only those above it:
 - `sender.rs` the `Sender` trait, `RelaySender` — the relay client
   `--mailer` names, shelled out to — the message, and the outbox: the
   sender's own thread with its retry, and the follow-up mail's `From:`,
-  `Reply-To:` and subject, held for every board; under `test-hooks`
-  `sender/fake.rs`.
+  `Reply-To:` and subject, held for every board; `Log` and `Sleep`, the
+  log and the sleep every thread of the service is handed, kept here as
+  the first module that takes them; under `test-hooks` `sender/fake.rs`.
 - `reply.rs` the live reply, one function for the page and the mail.
 - `flow.rs` the `Service` — the `Desk` the pages ask; the `Book` of
   what is in flight, keeping its own rules: the queue, the status map and

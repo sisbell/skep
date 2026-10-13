@@ -68,7 +68,7 @@ pub enum InviteState {
 #[derive(Clone, PartialEq, Eq)]
 pub struct Invite {
     /// The code, opaque.
-    pub code: String,
+    code: String,
     /// The address it went to.
     pub address: String,
     /// Where it stands.

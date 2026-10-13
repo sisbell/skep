@@ -8,7 +8,7 @@
 //! worker hands it, the message made with the outbox's own `From:`,
 //! `Reply-To:` and subject, and a hand-over never waits on a send stuck in
 //! its try. (No send before the status is live, and the status live
-//! throughout an outage, are the flow's — `flow/tests.rs`.)
+//! throughout an outage, are the flow's — `flow/tests/provision.rs`.)
 
 use std::path::Path;
 use std::sync::Mutex;

@@ -26,6 +26,11 @@
 //!   apart) while the status page stands live, then logged as given up. A
 //!   mail outage never loses a board: its page and its route stand
 //!   whatever the mail does.
+//! * [`Log`] and [`Sleep`] — the two hooks every thread of the service is
+//!   handed: the log it writes a line to, and the sleep a wait takes. They
+//!   live here, in the first module that takes them — the sender's thread
+//!   takes both, and no module declared above this one in `main.rs` takes
+//!   either — and `flow` and `main`, below it, take them from here.
 //! * `fake` — under `test-hooks` alone: the messages appended to a file.
 //!
 //! The log names the board, the try and the exit code, and NEVER the

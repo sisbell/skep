@@ -8,8 +8,9 @@
 //! panicking; an unguessable value's form; what took a name, as the log
 //! says it; the map's `Debug` showing no token;
 //! and the labelled volumes sorted against the snippet directory — half-made,
-//! routed, or under no name of the grammar. (The two posts on one name, the
-//! fifth past the queue and the sweep are the flow's — `flow/tests.rs`.)
+//! routed, or under no name of the grammar. (The two posts on one name and
+//! the fifth past the queue are the desk's — `flow/tests/desk.rs`; the sweep
+//! is the start's — `flow/tests/start.rs`.)
 
 use std::fs;
 

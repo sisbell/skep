@@ -58,7 +58,7 @@ impl Form {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct BadEscape {
     /// The `%`'s offset in the body, in bytes from 0.
-    pub at: usize,
+    at: usize,
 }
 
 impl fmt::Display for BadEscape {

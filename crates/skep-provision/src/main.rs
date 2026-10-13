@@ -111,8 +111,8 @@ mod strings;
 // The pages' HTML and the requests they answer over `skep-http`, the desk
 // they ask, and the two URLs the service hands out.
 mod pages;
-// The mail: the trait, the mailer, the sender's thread; the fake under
-// `test-hooks`.
+// The mail: the trait, the mailer, the sender's thread, and the log and the
+// sleep every thread is handed; the fake under `test-hooks`.
 mod sender;
 // The live reply, for the page and the mail alike.
 mod reply;

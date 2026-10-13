@@ -3,16 +3,17 @@
 //! not at all; an unknown flag, a missing value, a value of the wrong form —
 //! an address out of the rule, a code out of the alphabet, a suffix out of
 //! the grammar and an empty word among them, which this door alone refuses —
-//! and a missing required flag are each a usage refusal (`main` answers it
-//! exit 2 — the binary's suite runs one), where several hold the first met
-//! speaking, and what follows a leading `--version` or `--help` unread; every
-//! flag lands in its setting, the address, the code and the suffix as their
-//! own values; `--workers` defaults to its constant and refuses zero (T21),
-//! and `--connections` likewise; a `test-hooks` build takes `--docker-fake`
-//! and `--mailer-fake` — the shipped build's refusal of both is
-//! `scripts/gate-full.sh`'s to check, every build of this suite having the
-//! feature on; and the usage text names every flag and renders every default
-//! from its constant. (The suffix's grammar itself is `domain`'s suite.)
+//! and a missing required flag, an empty `--state-dir` counted as none, are
+//! each a usage refusal (`main` answers it exit 2 — the binary's suite runs
+//! one), where several hold the first met speaking, and what follows a leading
+//! `--version` or `--help` unread; every flag lands in its setting, the
+//! address, the code and the suffix as their own values; `--workers`
+//! defaults to its constant and refuses zero (T21), and `--connections`
+//! likewise; a `test-hooks` build takes `--docker-fake` and `--mailer-fake`
+//! — the shipped build's refusal of both is `scripts/gate-full.sh`'s to
+//! check, every build of this suite having the feature on; and the usage
+//! text names every flag and renders every default from its constant. (The
+//! suffix's grammar itself is `domain`'s suite.)
 
 use std::ffi::OsString;
 
@@ -212,6 +213,8 @@ fn each_bad_command_line_is_a_usage_refusal() {
     assert!(parse(argv(&["serve", "--state-dir", "/s"])).expect_err("no reply-to").contains("--reply-to is required"));
     assert!(parse(argv(&["invite", "--state-dir", "/s"])).expect_err("no address").contains("--address is required"));
     assert!(parse(argv(&["invite", "--address", "a@b"])).expect_err("no state dir").contains("--state-dir is required"));
+    assert_eq!(parse(argv(&["serve", "--state-dir", "", "--reply-to", "owner@skep.host"])), Err("serve: --state-dir is required".to_owned()), "an empty directory is none");
+    assert_eq!(parse(argv(&["invite", "--address", "a@b", "--state-dir", ""])), Err("invite: --state-dir is required".to_owned()), "an empty directory is none");
     assert!(parse(argv(&["invite", "--address", "a@b", "--state-dir", "/s", "--code", "a b"])).expect_err("a code out of the alphabet").contains("--code: 'a b' is not 1 to 128"));
     assert_eq!(
         parse(argv(&["invite", "--address", "not an address", "--state-dir", "/s"])),

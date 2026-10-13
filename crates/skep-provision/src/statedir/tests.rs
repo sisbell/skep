@@ -1,10 +1,10 @@
 //! T10 — THE STATE DIRECTORY beneath the sign-up file and the invite file:
 //! THE DOOR, made `0700` and refused loose in the daemon's words — any group
-//! or other bit, each one alone; THE WRITER, its files owner-only, whose
-//! failure between the write and the rename leaves the old file whole and no
-//! temp file; a lock file in it made owner-only and held there; and the date
-//! a line carries, over a whole Gregorian cycle. (The address rule its lines
-//! carry is `mail_address`'s suite.)
+//! or other bit, each one alone — and an empty path refused; THE WRITER, its
+//! files owner-only, whose failure between the write and the rename leaves
+//! the old file whole and no temp file; a lock file in it made owner-only
+//! and held there; and the date a line carries, over a whole Gregorian
+//! cycle. (The address rule its lines carry is `mail_address`'s suite.)
 
 use std::fs;
 
@@ -37,6 +37,16 @@ fn the_state_directory_is_owner_only_or_refused() {
     let file = dir.path().join("file");
     fs::write(&file, b"").expect("a file");
     assert!(matches!(StateDir::open(&file), Err(StateDirRefused::Io { .. })));
+}
+
+/// THE DOOR NAMES A DIRECTORY OR REFUSES: an empty path — no directory
+/// stands at it, and making one there makes none — is refused, never
+/// admitted as the process's working directory, whose mode the door would
+/// never have judged.
+#[test]
+fn an_empty_path_is_refused_at_the_door() {
+    let refused = StateDir::open(Path::new("")).expect_err("an empty path admitted as a state directory");
+    assert!(matches!(refused, StateDirRefused::Io { .. }), "{refused:?}");
 }
 
 /// THE DOOR REFUSES ANY GROUP OR OTHER BIT, each one alone — a group that

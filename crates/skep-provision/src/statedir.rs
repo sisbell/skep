@@ -72,9 +72,16 @@ impl std::error::Error for StateDirRefused {}
 impl StateDir {
     /// THE DOOR: `path` made `0700` where it does not stand; where it
     /// stands, refused if any group or other bit is set — refuse, never
-    /// repair.
+    /// repair; and an empty `path`, which names no directory, refused.
     pub fn open(path: &Path) -> Result<StateDir, StateDirRefused> {
         let io_refused = |error| StateDirRefused::Io { path: path.to_path_buf(), error };
+        // An empty path names no directory: none stands at it, and a
+        // recursive making answers Ok for it having made none — so the two
+        // files would land in the process's working directory, whose mode
+        // the door never judged.
+        if path.as_os_str().is_empty() {
+            return Err(io_refused(io::Error::other("it names no directory")));
+        }
         match fs::metadata(path) {
             Ok(meta) if !meta.is_dir() => return Err(io_refused(io::Error::other("it is not a directory"))),
             Ok(meta) => {

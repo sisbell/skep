@@ -10,16 +10,21 @@
 //! never minted, a body past the cap — each answered as the pages say; and
 //! THE STOP: SIGTERM, the default disposition, ending the process. THE
 //! CONNECTIONS' POOL: a connection past it waits in the listener's queue
-//! until a thread frees. THE SWEEP (T22): started over a script whose
-//! `labelled_volumes` lists one half-made name, the binary removes it before
-//! its serving line, which carries the count. A START REFUSED — a snippet
-//! directory that cannot be read, an address another listener holds — and an
-//! invite not minted each exit 1, with no DATA line. THE STATE FILES: the
-//! `invite` verb under a shell's `022` leaves every file in the state
-//! directory `0600`, its lock file among them. No Docker runs: every call is
-//! the script's, and the calls are read back after. Beside it, `tidy` reads
-//! the crate's own source and manifest for the arrangement `src/main.rs` and
-//! `ARCHITECTURE.md` §The provisioning service state.
+//! until a thread frees — and one within it is answered beside a held one.
+//! THE WORKERS' POOL: the boards `--workers 2` names made at once, and no
+//! more. THE SWEEP (T22): started over a script whose `labelled_volumes`
+//! lists one half-made name, the binary removes it before its serving line,
+//! which carries the count. THE SERVING LINE: the RUNBOOK's, field for
+//! field, with mail and without. A CALL's STDIN: the sweep's listing, run by
+//! the host's runner through a `docker` on `PATH`, reads nothing of the
+//! service's own. A START REFUSED — a snippet directory that cannot be read,
+//! an address another listener holds — and an invite not minted each exit 1,
+//! with no DATA line. THE STATE FILES: the `invite` verb under a shell's
+//! `022` leaves every file in the state directory `0600`, its lock file
+//! among them. No Docker runs: every call is a script's, and the calls are
+//! read back after. Beside it, `tidy` reads the crate's own source and
+//! manifest for the arrangement `src/main.rs` and `ARCHITECTURE.md` §The
+//! provisioning service state.
 
 #![cfg(unix)]
 
@@ -40,7 +45,7 @@ use skep_identity::{encode_enroll, Enrollment, PublicKey, ALG_FNDSA512_PREVIEW_E
 const BIN: &str = env!("CARGO_BIN_EXE_skep-provision");
 
 /// The umask the service's unit runs it under: `UMask=0077`
-/// (`deploy/skep-provision.service`). `Service::start` runs every service
+/// (`deploy/skep-provision.service`). `Service::start` starts a service
 /// under it, as the unit runs the service on the VM.
 const UNIT_UMASK: &str = "077";
 
@@ -121,8 +126,9 @@ fn minted(state_dir: &Path) -> String {
     line.strip_prefix("https://skep.host/claim?invite=").unwrap_or_else(|| panic!("the invite link: {line}")).to_owned()
 }
 
-/// THE SERVICE RUNNING, under its unit's umask: the child, its port off the
-/// serving line, the line itself, its log.
+/// THE SERVICE RUNNING: the child, its port off the serving line, the line
+/// itself, its log — under its unit's umask, over the two fakes and with its
+/// mail on, where `Service::start` starts it.
 struct Service {
     child: Child,
     port: u16,
@@ -132,7 +138,7 @@ struct Service {
 
 impl Service {
     fn start(dir: &Path, script: &Path, mail_log: &Path, extra: &[&str]) -> Service {
-        let mut child = under_umask(UNIT_UMASK)
+        let child = under_umask(UNIT_UMASK)
             .args(["serve", "--listen", "127.0.0.1:0", "--state-dir"])
             .arg(dir.join("state"))
             .arg("--boards-dir")
@@ -147,6 +153,15 @@ impl Service {
             .stderr(Stdio::piped())
             .spawn()
             .expect("serve started");
+        let service = Service::running(child);
+        assert!(service.serving.contains("mail on"), "{}", service.serving);
+        service
+    }
+
+    /// THE SERVICE RUNNING as `child`, spawned with its stdout and its
+    /// stderr piped: its stderr kept as its log, its serving line read and
+    /// its port off it — the child killed when this is dropped.
+    fn running(mut child: Child) -> Service {
         let log = Arc::new(Mutex::new(String::new()));
         let into = Arc::clone(&log);
         let stderr = child.stderr.take().expect("its stderr");
@@ -162,7 +177,6 @@ impl Service {
         BufReader::new(child.stdout.take().expect("its stdout")).read_line(&mut serving).expect("the serving line");
         let at = serving.strip_prefix("skep-provision: serving http://127.0.0.1:").unwrap_or_else(|| panic!("the serving line: {serving:?}; the log: {}", log.lock().unwrap()));
         let port = at[..at.find('/').expect("the address's end")].parse().expect("a port");
-        assert!(serving.contains("mail on"), "{serving}");
         Service { child, port, serving, log }
     }
 
@@ -432,6 +446,161 @@ fn a_connection_past_the_pool_waits_until_a_thread_frees() {
     second.set_read_timeout(Some(Duration::from_secs(30))).expect("a deadline");
     assert_eq!(read_answer(second).0, 200);
     service.terminate();
+}
+
+/// THE CONNECTIONS ARE THE FLAG's, NO FEWER: under `--connections 2` a
+/// connection that sends nothing holds one thread, and a request beside it
+/// is answered at once by the other — the test above shows `serve` makes no
+/// more connection threads than the flag names, this one no fewer.
+#[test]
+fn a_request_beside_a_held_connection_is_answered_within_the_pool() {
+    let dir = Scratch::new();
+    std::fs::create_dir(dir.path().join("boards")).expect("the snippet directory");
+    let script = dir.path().join("docker.script");
+    std::fs::write(&script, script_line("labelled_volumes", "-", 0, "")).expect("the script");
+    let service = Service::start(dir.path(), &script, &dir.path().join("mail.log"), &["--connections", "2"]);
+    let held = TcpStream::connect(("127.0.0.1", service.port)).expect("connected");
+    let mut beside = TcpStream::connect(("127.0.0.1", service.port)).expect("connected");
+    beside.write_all(b"GET / HTTP/1.1\r\nHost: skep.host\r\n\r\n").expect("the request");
+    beside.set_read_timeout(Some(Duration::from_secs(10))).expect("ten seconds, far inside the held connection's thirty");
+    let mut raw = Vec::new();
+    let read = beside.read_to_end(&mut raw);
+    assert!(read.is_ok() && raw.starts_with(b"HTTP/1.1 200 OK\r\n"), "no second thread answered beside the held connection: {read:?} {}", String::from_utf8_lossy(&raw));
+    drop(held);
+    service.terminate();
+}
+
+/// THE WORKERS ARE THE FLAG's, NO FEWER AND NO MORE: under `--workers 2`,
+/// alice's and bob's dark claims each answering exit 4 once — the dark
+/// claim's own two-second pause, its daemon not yet listening — and carol
+/// posted behind them, bob's claim run comes before alice's serving run,
+/// made by the second worker while she waits, and carol's only after a
+/// serving run, once a worker frees: `serve` makes the pool the flag names,
+/// which no unit suite, spawning workers of its own, can see.
+#[test]
+fn serve_makes_the_workers_the_flag_names() {
+    let dir = Scratch::new();
+    std::fs::create_dir(dir.path().join("boards")).expect("the snippet directory");
+    let state_dir = dir.path().join("state");
+    let names = ["alice", "bob", "carol"];
+    let codes: Vec<String> = names.iter().map(|_| minted(&state_dir)).collect();
+    let flow = |name: &str| {
+        let mut lines = vec![
+            script_line("volume_inspect", name, 1, ""),
+            script_line("container_inspect", name, 1, ""),
+            script_line("volume_inspect", name, 1, ""),
+            script_line("container_inspect", name, 1, ""),
+            script_line("volume_create", name, 0, ""),
+            script_line("run_claim", name, 0, ""),
+        ];
+        if name != "carol" {
+            lines.push(script_line("sidecar_claim", name, 4, ""));
+        }
+        lines.extend([script_line("sidecar_claim", name, 0, SIX), script_line("rm_force", name, 0, ""), script_line("run_serving", name, 0, ""), script_line("health", name, 0, PAIRED)]);
+        lines.concat()
+    };
+    let script = dir.path().join("docker.script");
+    std::fs::write(&script, script_line("labelled_volumes", "-", 0, "") + &names.map(flow).concat() + &script_line("caddy_reload", "-", 0, "").repeat(names.len())).expect("the script");
+    let service = Service::start(dir.path(), &script, &dir.path().join("mail.log"), &["--workers", "2"]);
+    assert!(service.serving.contains(" workers 2 "), "{}", service.serving);
+    let record = record(ALG_MLDSA65_ED25519, MLDSA65_ED25519_KEY_LEN);
+    let tokens: Vec<String> = names
+        .iter()
+        .zip(&codes)
+        .map(|(name, code)| {
+            let (status, made) = service.request("POST", "/claim", &format!("name={name}&record={}&invite={code}", form_encode(record.as_bytes())));
+            assert_eq!(status, 200, "{name}: {made}");
+            let at = made.find("https://skep.host/status/").unwrap_or_else(|| panic!("{name} admitted: {made}")) + "https://skep.host/status/".len();
+            made[at..].chars().take_while(char::is_ascii_hexdigit).collect()
+        })
+        .collect();
+    for token in &tokens {
+        until("all three live", || {
+            let (_, page) = service.request("GET", &format!("/status/{token}"), "");
+            assert!(!page.contains("could not be made"), "D-8: {}", service.log());
+            page.contains("Your board is live.").then_some(())
+        });
+    }
+    let calls = std::fs::read_to_string(dir.path().join("docker.script.calls")).expect("the calls");
+    let at = |call: &str| calls.lines().position(|l| l.starts_with(call)).unwrap_or_else(|| panic!("{call}: {calls}"));
+    assert!(at("run_claim\tbob\t") < at("run_serving\talice\t"), "two workers, yet bob waited for alice: {calls}");
+    assert!(at("run_claim\tcarol\t") > at("run_serving\talice\t").min(at("run_serving\tbob\t")), "two workers, yet carol ran beside alice and bob: {calls}");
+    assert!(!calls.contains("unexpected"), "{calls}");
+    service.terminate();
+}
+
+/// A CALL's STDIN IS NEVER THE SERVICE's OWN: the built binary over the
+/// host's runner — no `--docker-fake` — its `docker` a script first on
+/// `PATH` that keeps whatever reaches its stdin, and its own stdin a pipe
+/// holding a line and then closed: the sweep's listing, a call with no
+/// input, runs that `docker`, which reads nothing — a null stdin — where
+/// one handed the service's own would read the line. Its own stdin is the
+/// test's to set here, as no unit suite's is: the runner gives every test
+/// process a null one, which a child inheriting it cannot tell from null.
+#[test]
+fn a_call_with_no_input_never_reads_the_services_own_stdin() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = Scratch::new();
+    std::fs::create_dir(dir.path().join("boards")).expect("the snippet directory");
+    let bin = dir.path().join("bin");
+    std::fs::create_dir(&bin).expect("a directory for the program");
+    std::fs::write(bin.join("docker"), format!("#!/bin/sh\nprintf '%s\\n' \"$*\" >> '{0}/argv'\ncat >> '{0}/stdin'\n", dir.path().display())).expect("the script");
+    std::fs::set_permissions(bin.join("docker"), std::fs::Permissions::from_mode(0o700)).expect("executable");
+    let path = format!("{}:{}", bin.display(), std::env::var("PATH").unwrap_or_default());
+    let mut child = Command::new(BIN)
+        .args(["serve", "--listen", "127.0.0.1:0", "--reply-to", "owner@skep.host", "--state-dir"])
+        .arg(dir.path().join("state"))
+        .arg("--boards-dir")
+        .arg(dir.path().join("boards"))
+        .env("PATH", path)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("serve started");
+    let mut own = child.stdin.take().expect("its own stdin");
+    own.write_all(b"the service's own stdin\n").expect("a line on it");
+    drop(own);
+    let service = Service::running(child);
+    assert_eq!(std::fs::read_to_string(dir.path().join("argv")).expect("docker ran"), "volume ls -q --filter label=skep.provision=1\n", "the sweep's listing, by the host's runner");
+    assert_eq!(std::fs::read_to_string(dir.path().join("stdin")).expect("its stdin kept"), "", "docker read the service's own stdin");
+    service.terminate();
+}
+
+/// THE SERVING LINE IS THE RUNBOOK's: the line RUNBOOK §10 step 6 quotes,
+/// read back at test time, field for field — its address and its two
+/// directories this run's — with `--mailer` and `--from` given; and without
+/// them it ends as that step says: `mail OFF (no --mailer and --from): no
+/// follow-up mail is sent`.
+#[test]
+fn the_serving_line_is_the_runbooks_with_mail_and_without() {
+    let runbook = std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../RUNBOOK.md")).expect("the RUNBOOK");
+    let quoted = runbook.lines().map(str::trim).find(|l| l.starts_with("skep-provision: serving http://")).expect("the RUNBOOK's serving line").to_owned();
+    for mailing in [true, false] {
+        let dir = Scratch::new();
+        std::fs::create_dir(dir.path().join("boards")).expect("the snippet directory");
+        let script = dir.path().join("docker.script");
+        std::fs::write(&script, script_line("labelled_volumes", "-", 0, "")).expect("the script");
+        let mut command = Command::new(BIN);
+        command
+            .args(["serve", "--listen", "127.0.0.1:0", "--reply-to", "owner@skep.host", "--state-dir"])
+            .arg(dir.path().join("state"))
+            .arg("--boards-dir")
+            .arg(dir.path().join("boards"))
+            .arg("--docker-fake")
+            .arg(&script);
+        if mailing {
+            command.args(["--from", "noreply@skep.host", "--mailer-fake"]).arg(dir.path().join("mail.log"));
+        }
+        let service = Service::running(command.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().expect("serve started"));
+        let ours = quoted
+            .replace("0.0.0.0:8842", &format!("127.0.0.1:{}", service.port))
+            .replace("/var/lib/skep-provision", &dir.path().join("state").display().to_string())
+            .replace("/etc/caddy/boards", &dir.path().join("boards").display().to_string());
+        let want = if mailing { ours } else { ours.replace(" mail on", " mail OFF (no --mailer and --from): no follow-up mail is sent") };
+        assert_eq!(service.serving.trim_end(), want, "mailing {mailing}");
+        service.terminate();
+    }
 }
 
 /// `--version`: the one line in `skepd`'s form, exit 0.

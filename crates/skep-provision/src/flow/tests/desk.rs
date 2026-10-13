@@ -8,8 +8,9 @@
 //! kept held where the spend could not be written, and let go of after it; no
 //! code in the log) and T10 (a sign-up, its address in no log line; one past
 //! the file's cap, refused); a fifth post past the looks' cap, refused D-8
-//! with no docker call, and the looks' permits given back; and THE BOOK
-//! keeping its own rules — what blocks a new post, first of three, and what
+//! with no docker call, and the looks' permits given back; where two of a
+//! post's faults hold, the first in its order speaking; and THE BOOK keeping
+//! its own rules — what blocks a new post, first of three, and what
 //! admitting, taking, going live, letting a code go and failing do, an
 //! admission whole or not made.
 
@@ -245,6 +246,26 @@ fn an_uninvited_post_learns_nothing_about_names() {
     rig.fake.assert_done();
     let after: Vec<String> = rig.log().into_iter().skip_while(|l| l != "alice: admitted; 1 waiting").skip(1).collect();
     assert_eq!(after, vec!["a post refused: its invite code is not one the file holds issued"; 5]);
+}
+
+/// WHERE TWO OF A POST's FAULTS HOLD, THE FIRST IN ITS ORDER SPEAKS — the
+/// invite, the name's grammar, the record, then what is in flight — each
+/// with no docker call: a name out of the grammar beside a record that is
+/// none answers D-4, and a record that is none beside a full queue D-5, the
+/// queue full all the while — the same post with its record whole meets
+/// it, D-8.
+#[test]
+fn where_two_of_a_posts_faults_hold_the_first_in_its_order_speaks() {
+    let names = ["alice", "bob", "carol", "dave"];
+    let rig = rig(&names.iter().map(|n| inspects(n)).collect::<String>(), None);
+    for name in names {
+        rig.admitted(name, &rig.invite());
+    }
+    let code = rig.invite();
+    assert_eq!(rig.post("b_b", "{}", code.as_str()), Err(Refusal::Name), "the name's grammar before the record");
+    assert_eq!(rig.post("erin", "{}", code.as_str()), Err(Refusal::Record), "the record before what is in flight");
+    assert_eq!(rig.post("erin", &record(true), code.as_str()), Err(Refusal::Busy), "the queue full, the record whole");
+    rig.fake.assert_done();
 }
 
 /// T9: A LIVE BOARD's CODE IS LET GO OF once its spend is written: the book

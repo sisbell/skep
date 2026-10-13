@@ -6,10 +6,11 @@
 //! TABLE, one case per failing step as the provisioning record §5.2 tabulates
 //! it, a failed claim run's row taking the container its `docker run` may
 //! leave — the dark claim's every refusal, a shape the read refuses among
-//! them — each removing what was made for the name and nothing for any other,
-//! then looking at what stands and saying done, the snippet absent, the
-//! reload called where the snippet was written, the status D-8, the invite
-//! still issued and no mail; (c) a cleanup's removal failing — a docker
+//! them, and the claim run's own removal refused after a claim — each
+//! removing what was made for the name and nothing for any other, then
+//! looking at what stands and saying done, the snippet absent, the reload
+//! called where the snippet was written, the status D-8, the invite still
+//! issued and no mail; (c) a cleanup's removal failing — a docker
 //! call's or the snippet's — logged, and the look after the removals naming
 //! what stands, the name left taken; a refused `rm -f` of a run that never
 //! stood, and a cleanup's reload failing, each logged as itself, the look
@@ -198,6 +199,17 @@ fn cases() -> Vec<Case> {
         what: "sidecar_claim answers six lines naming another account",
         script: to_the_claim() + &line("sidecar_claim", Some("alice"), 0, &SIX.replace("account 1.0.1", "account 1.0.2"), "") + &run_and_volume_removed() + &inspects("alice"),
         calls: [vec!["volume_create alice", "run_claim alice", "sidecar_claim alice", "rm_force alice", "volume_rm alice"], looked()].concat(),
+        reloads: false,
+        before: nothing,
+    });
+    cases.push(Case {
+        what: "the claim run's removal fails",
+        script: to_the_claim()
+            + &line("sidecar_claim", Some("alice"), 0, SIX, "")
+            + &line("rm_force", Some("alice"), 1, "", "Error response from daemon: cannot remove container: could not kill\n")
+            + &run_and_volume_removed()
+            + &inspects("alice"),
+        calls: [vec!["volume_create alice", "run_claim alice", "sidecar_claim alice", "rm_force alice", "rm_force alice", "volume_rm alice"], looked()].concat(),
         reloads: false,
         before: nothing,
     });

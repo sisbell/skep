@@ -1807,10 +1807,15 @@ directory; a browser's requests reach the live reply at the status
 URL, the snippet written and the one mail sent; every refusal answers
 as the strings say; a half-made board is swept before the serving line;
 a connection past the pool waits in the listener's queue until a thread
-frees; a start refused, or an invite not minted, exits 1 with no DATA
-line; and SIGTERM ends the process. Beside it, `tests/it/tidy.rs` reads the
-arrangement off the source and the manifest: the module order, the
-declared files, every `pub` item's doc and the four dependencies.
+frees, and one within it is answered beside a held one; the boards
+`--workers 2` names are made at once, and no more; the serving line is
+the RUNBOOK's, field for field, with mail and without; the sweep's
+listing, run by the host's runner through a `docker` on `PATH`, reads
+nothing of the service's own stdin; a start refused, or an invite not
+minted, exits 1 with no DATA line; and SIGTERM ends the process. Beside
+it, `tests/it/tidy.rs` reads the arrangement off the source and the
+manifest: the module order, the declared files, every `pub` item's doc
+and the four dependencies.
 
 ## The name space, `skep-namespace`
 

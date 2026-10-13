@@ -7,10 +7,10 @@
 //! the image's port and its volume read back from the `Dockerfile`; the
 //! real `Command` built from that argv and nothing else; the real runner,
 //! over a recording script in `docker`'s place — no Docker is run —
-//! passing the argv, the record on stdin, a null stdin otherwise, and the
-//! two streams apart; each named method running its own call through the
-//! one method a runner writes; and the fake refusing a call it was not
-//! scripted, its order strict per name and free across names.
+//! passing the argv, the record on stdin and nothing on any other call's,
+//! and the two streams apart; each named method running its own call
+//! through the one method a runner writes; and the fake refusing a call it
+//! was not scripted, its order strict per name and free across names.
 
 use std::path::Path;
 
@@ -279,11 +279,13 @@ fn the_real_command_is_built_from_the_argv_and_nothing_else() {
 
 /// T4: THE REAL RUNNER over a recording script in `docker`'s place: the
 /// argv arrives as built, the record arrives on the sidecar's stdin and
-/// nothing on any other call's — a null stdin, never the service's own —
-/// and stdout, stderr and the exit code come back apart.
+/// nothing on any other call's, whose stdin ends at once — that it is never
+/// the service's own is the built binary's suite's to show, where the test
+/// holds the service's stdin — and stdout, stderr and the exit code come
+/// back apart.
 #[cfg(unix)]
 #[test]
-fn the_real_runner_passes_the_argv_the_record_and_a_null_stdin() {
+fn the_real_runner_passes_the_argv_the_record_alone_and_its_streams_apart() {
     use std::os::unix::fs::PermissionsExt;
     let dir = Scratch::new();
     let script = dir.path().join("docker");
@@ -299,7 +301,7 @@ fn the_real_runner_passes_the_argv_the_record_and_a_null_stdin() {
     assert_eq!(std::fs::read(dir.path().join("stdin")).expect("the stdin"), record.bytes());
     let exit = host.volume_inspect(&alice()).expect("the script ran");
     assert_eq!(exit.stdout, b"out:volume");
-    assert_eq!(std::fs::read(dir.path().join("stdin")).expect("the stdin"), b"", "a call with no input reads a null stdin");
+    assert_eq!(std::fs::read(dir.path().join("stdin")).expect("the stdin"), b"", "a call with no input reads nothing");
 }
 
 /// THE ONE MAPPING: each named method hands [`Docker::run`] the call its

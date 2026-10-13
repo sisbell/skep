@@ -1,8 +1,8 @@
 //! THE STRINGS TABLE: every row names an id of the four kinds, every slot it
 //! names is one of the six the program fills, every `{` opening one, and its
-//! D-rows are the deployment notes' words; and a row shown where a slot it
-//! names is not filled is the showing code's bug, caught in every test
-//! build.
+//! D-rows are the deployment notes' words; a row shown where a slot it names
+//! is not filled is the showing code's bug, caught in every test build; and
+//! the suite's list holds every row the source declares.
 
 use super::*;
 
@@ -79,6 +79,15 @@ fn the_strings_table_names_each_rows_id_and_carries_the_notes_words() {
     d_rows.sort();
     notes.sort();
     assert_eq!(d_rows, notes);
+}
+
+/// THE LIST ABOVE IS EVERY ROW: `strings.rs` declares as many rows as
+/// `TABLE` lists, read back from the source — so a row added there and not
+/// here fails this test, never escaping the table's law.
+#[test]
+fn every_row_of_the_table_is_in_the_suites_list() {
+    let source = std::fs::read_to_string(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/strings.rs")).expect("the strings table's source");
+    assert_eq!(source.matches(": Words =").count(), TABLE.len(), "a row of strings.rs missing from this suite's TABLE");
 }
 
 /// A ROW SHOWN WITHOUT A SLOT IT NAMES IS THE SHOWING CODE's BUG: D-8

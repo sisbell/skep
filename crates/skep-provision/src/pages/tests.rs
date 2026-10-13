@@ -4,21 +4,23 @@
 //! D-7 with the status URL and its refresh every five seconds, the live
 //! reply, D-8, 404 — a bad body 400, a fourth field among them, a body past
 //! the cap 413; the connection's budgets the figures the operator is told —
-//! a 16 KiB head, a minute each way — its two socket timeouts set before it
-//! reads, thirty seconds each, so a silent peer is let go, a request
-//! trickled past its deadline answered 400 in the answer's own, and a
-//! trickle cut at its deadline both ways; a panic answering one request
-//! costing that connection alone, never the thread; the invite link opening
-//! the claim form with its code; plain HTML with no script and nothing
-//! fetched from elsewhere, every header that says so checked whole; every
-//! row a page shows filled with the site's two slots, the suffix and the
-//! owner's address, whichever page shows it; a row's words escaped and its
-//! commands set as code; the one escaper keeping the quotes within an
-//! element's content and escaping them within an attribute's value; a
-//! person's field — a refused record among them — shown back as it was
-//! sent, a quote in it never closing its attribute; and the `Debug` of a
-//! post, a status page and an answer showing none of what they hold. (The
-//! strings table's rows are `strings`' suite.)
+//! a 16 KiB head, a minute each way — a head and a body at their caps read
+//! whole and a head past its cap refused 400 at once, its two socket
+//! timeouts set before it reads, thirty seconds each, so a silent peer is
+//! let go, a request trickled past its deadline answered 400 in the
+//! answer's own, and a trickle cut at its deadline both ways; a panic
+//! answering one request costing that connection alone, never the thread;
+//! the invite link opening the claim form with its code; plain HTML with no
+//! script and nothing fetched from elsewhere, every header that says so
+//! checked whole; every row a page shows filled with the site's two slots,
+//! the suffix and the owner's address, whichever page shows it; a row's
+//! words escaped and its commands set as code; the one escaper keeping the
+//! quotes within an element's content and escaping them within an
+//! attribute's value; a person's field — a refused record among them —
+//! shown back as it was sent, a quote in it never closing its attribute and
+//! a refused record never leaving its textarea; and the `Debug` of a post, a
+//! status page and an answer showing none of what they hold. (The strings
+//! table's rows are `strings`' suite.)
 
 use std::io::{Read, Write};
 use std::net::{Shutdown, TcpListener, TcpStream};
@@ -236,6 +238,59 @@ fn the_subsets_refusals_are_413_and_400() {
 fn the_connections_budgets_are_the_documents_figures() {
     assert_eq!(MAX_HEAD, 16 * 1024, "a head past 16 KiB is 400");
     assert_eq!(TRANSFER_DEADLINE, Duration::from_secs(60), "a minute in and a minute out");
+}
+
+/// A REQUEST AT BOTH CAPS IS READ WHOLE: a head of 16 KiB to its last byte
+/// and a body of `MAX_BODY` — the largest form a record at its cap, every
+/// byte percent-encoded, makes — reach the desk and are answered, so the
+/// connection reads under the figures `MAX_HEAD` and `MAX_BODY` name and no
+/// smaller ones: any record `parse_enroll` could admit fits the form.
+#[test]
+fn a_request_at_both_caps_is_read_whole() {
+    let listener = TcpListener::bind(("127.0.0.1", 0)).expect("a port");
+    let port = listener.local_addr().expect("its address").port();
+    let desk = Scripted::default();
+    let opening = format!("POST /claim HTTP/1.1\r\nHost: skep.host\r\nContent-Length: {MAX_BODY}\r\nX-Pad: ");
+    let head = format!("{opening}{}\r\n\r\n", "a".repeat(MAX_HEAD - opening.len() - 4));
+    assert_eq!(head.len(), MAX_HEAD);
+    let body = format!("record={}", "a".repeat(MAX_BODY - "record=".len()));
+    let raw = std::thread::scope(|s| {
+        s.spawn(|| {
+            let (stream, _) = listener.accept().expect("a connection");
+            connection(stream, &site(), &desk);
+        });
+        let mut stream = TcpStream::connect(("127.0.0.1", port)).expect("connected");
+        stream.write_all(head.as_bytes()).expect("the head");
+        stream.write_all(body.as_bytes()).expect("the body, refused before it was read: a cap below `MAX_HEAD` or `MAX_BODY`");
+        let mut raw = String::new();
+        stream.read_to_string(&mut raw).expect("the answer, reset with the request unread: a cap below `MAX_HEAD` or `MAX_BODY`");
+        raw
+    });
+    assert!(raw.starts_with("HTTP/1.1 200 OK\r\n") && raw.contains("url=/status/t0k3n"), "{}", raw.chars().take(300).collect::<String>());
+    assert_eq!(desk.asked.lock().unwrap().as_slice(), [format!("admit  {} ", MAX_BODY - "record=".len())], "the record whole, past a 16 KiB head");
+}
+
+/// A HEAD PAST 16 KiB IS REFUSED AT ONCE: one byte past `MAX_HEAD` with no
+/// terminator, its sender then silent and the connection held open, is
+/// answered 400 before any more of it is waited for — not at the socket's
+/// thirty seconds of silence, nor at the request's minute — so the
+/// connection judges the head against its cap as it reads.
+#[test]
+fn a_head_past_its_cap_is_refused_400_at_once() {
+    let listener = TcpListener::bind(("127.0.0.1", 0)).expect("a port");
+    let port = listener.local_addr().expect("its address").port();
+    let serve = std::thread::spawn(move || {
+        let (stream, _) = listener.accept().expect("a connection");
+        connection(stream, &site(), &Scripted::default());
+    });
+    let opening = "GET / HTTP/1.1\r\nHost: skep.host\r\nX-Pad: ";
+    let mut stream = TcpStream::connect(("127.0.0.1", port)).expect("connected");
+    stream.write_all(format!("{opening}{}", "a".repeat(MAX_HEAD + 1 - opening.len())).as_bytes()).expect("the head, unended");
+    stream.set_read_timeout(Some(Duration::from_secs(5))).expect("five seconds, far inside the socket's thirty");
+    let mut raw = String::new();
+    stream.read_to_string(&mut raw).expect("an answer within five seconds: the head was not judged against its cap");
+    assert!(raw.starts_with("HTTP/1.1 400 Bad Request\r\n"), "{raw}");
+    serve.join().expect("served");
 }
 
 /// THE CONNECTION over a real socket: a page with the headers that say no
@@ -476,6 +531,24 @@ fn a_refused_record_comes_back_as_sent() {
     let answer = answer(&request("POST", "/claim", b"name=alice&record=%7B%22label%22%3A%22%60work%60%22%7D&invite=c0de"), &site(), &desk);
     assert!(answer.body.contains("{\"label\":\"`work`\"}</textarea>"), "{}", answer.body);
     assert!(!answer.body.contains("<code>work</code>"), "{}", answer.body);
+}
+
+/// A REFUSED RECORD NEVER LEAVES ITS TEXTAREA: a record holding
+/// `</textarea>`, a tag after it and an `&` comes back escaped within the
+/// textarea's content — the page holds the one `</textarea>` it writes
+/// itself, and nothing the person sent is markup on it: no `<meta>` refresh
+/// of the sender's making, which the page's policy, written against
+/// scripts, does not stop.
+#[test]
+fn a_refused_record_never_leaves_its_textarea() {
+    let desk = Scripted::default();
+    *desk.admit.lock().unwrap() = Some(Err(Refusal::Record));
+    let body = b"name=alice&record=</textarea><meta+http-equiv=\"refresh\"+content=\"0;+url=https://elsewhere.example\">%26&invite=c0de";
+    let answer = answer(&request("POST", "/claim", body), &site(), &desk);
+    assert_eq!(answer.status, 200);
+    assert!(answer.body.contains("&lt;/textarea&gt;&lt;meta http-equiv=\"refresh\" content=\"0; url=https://elsewhere.example\"&gt;&amp;</textarea>"), "{}", answer.body);
+    assert_eq!(answer.body.matches("</textarea>").count(), 1, "{}", answer.body);
+    assert!(!answer.body.contains("<meta http-equiv=\"refresh\""), "{}", answer.body);
 }
 
 /// A PERSON's FIELD NEVER CLOSES ITS ATTRIBUTE: the invite link's query, a

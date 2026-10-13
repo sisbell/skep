@@ -34,7 +34,7 @@ pub fn moment_id() -> String {
 
 /// Lowercase hex of `bytes` — the one spelling every reference and moment id
 /// takes.
-pub fn hex(bytes: &[u8]) -> String {
+fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 

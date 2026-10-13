@@ -23,7 +23,10 @@
 //! term it cannot spell — halts naming what stopped it, and nothing is
 //! sent: the shell never sends a frame it could not sign. A death signal
 //! met at one of those reads is no halt of the composer's but the
-//! session's end ([`Unattested::Closed`]), which its caller runs.
+//! session's end ([`Unattested::Closed`]), which its caller runs. The
+//! wire's value forms, both ways, are `wire`'s: the composer spells a
+//! frame's `values` and reads a delivery back through them, and faces what
+//! they refuse as its own halt.
 //!
 //! THE BOARD's BUDGETS, KEPT AS THE BOARD KEEPS THEM. Every read the
 //! composer makes is one a page's frame names, and every value it holds is
@@ -39,7 +42,6 @@
 //! budget here is one the board does not keep, so no frame the board takes
 //! is refused for one.
 
-use std::borrow::Cow;
 use std::collections::HashMap;
 use std::fmt;
 use std::num::NonZeroU64;
@@ -58,7 +60,7 @@ use skep_identity::{
 };
 
 use crate::refusal::{Name, Refusal};
-use crate::wire::{bounded_address, within_components, MAX_FRAME_BYTES, MAX_TUMBLER_COMPONENTS};
+use crate::wire::{bounded_address, delivered_values, values_of, within_components, ValuesFault, MAX_FRAME_BYTES, MAX_INSERT_VALUES, MAX_TUMBLER_COMPONENTS};
 
 /// THE RETRACTION CLASS's reserved ghost tumbler — `[R]`, the fifth of the
 /// format's five (`1.1.0.1.0.1.0.1.x`, x = 1..=5: pred_def, pred_stable,
@@ -83,13 +85,6 @@ pub const MAX_WIRE_LIST: usize = 4096;
 /// does not show, so the composer stops at the first span past it. Pinned
 /// equal to M7's by the suite.
 const MAX_SLOT_SPANS: usize = 4096;
-
-/// The most values one `insert` may mint — skepd's codec's
-/// `MAX_INSERT_VALUES`, refused at the board's parse, `malformed`; counted
-/// by [`values_of`] ahead of each element it is about to mint, a hex by its
-/// encoded length, as the codec counts it. Pinned by the board's behaviour,
-/// as [`MAX_WIRE_LIST`] is.
-pub const MAX_INSERT_VALUES: usize = 1 << 18;
 
 /// The most values a shot may RE-INSERT — M5's `MAX_REINSERTED_VALUES`: the
 /// staging draft's runs' widths, summed, refused by the store as
@@ -277,6 +272,18 @@ fn body_refused(refusal: PublishRefusal) -> Halt {
     }
 }
 
+/// The halt for what [`values_of`] refused: a frame's `values` the
+/// composer cannot spell as the entry body's value sequence.
+fn values_refused(why: ValuesFault) -> Halt {
+    match why {
+        ValuesFault::NotAWireForm => fault("the frame's `values` are not the wire's forms", "a value is a string, `{\"hex\"}`, `{\"atom\"}` or `{\"atom_hex\"}`"),
+        ValuesFault::PastBudget => fault(
+            format!("the frame's `values` mint more than {MAX_INSERT_VALUES} values"),
+            "the board refuses an insert past its value budget `malformed`, unparsed, whatever its values hold",
+        ),
+    }
+}
+
 /// THE TRUNK of a document-level address text: the address with its version
 /// components dropped — the document field after the second `0` separator
 /// kept to its first component (`1.0.1.0.1.2` → `1.0.1.0.1`); an element
@@ -324,108 +331,6 @@ fn split_i(i_addr: &str) -> Option<(&str, u64)> {
     Some((prefix, last.parse().ok()?))
 }
 
-/// The wire's `values` as the entry body's value sequence — the value at each
-/// position the frame fills: a string and a `{"hex"}` mint one value per
-/// byte, an `{"atom"}` and an `{"atom_hex"}` one composite value (wire.md
-/// §Value encodings). A text's and an atom's values are borrowed from the
-/// frame; a hex's are decoded, and so owned. At most [`MAX_INSERT_VALUES`],
-/// asked of each element before it mints — a hex by its encoded length — so
-/// a frame past the budget mints nothing past it.
-pub fn values_of(values: &Value) -> Result<Vec<Cow<'_, [u8]>>, Halt> {
-    let bad = || fault("the frame's `values` are not the wire's forms", "a value is a string, `{\"hex\"}`, `{\"atom\"}` or `{\"atom_hex\"}`");
-    let room = |minted: usize, adding: usize| {
-        if minted.saturating_add(adding) > MAX_INSERT_VALUES {
-            return Err(fault(
-                format!("the frame's `values` mint more than {MAX_INSERT_VALUES} values"),
-                "the board refuses an insert past its value budget `malformed`, unparsed, whatever its values hold",
-            ));
-        }
-        Ok(())
-    };
-    let mut out = Vec::new();
-    for v in values.as_array().ok_or_else(bad)? {
-        match v {
-            Value::String(s) => {
-                room(out.len(), s.len())?;
-                out.extend(s.as_bytes().chunks(1).map(Cow::Borrowed));
-            }
-            Value::Object(m) => {
-                if let Some(h) = m.get("hex").and_then(Value::as_str) {
-                    room(out.len(), h.len() / 2)?;
-                    out.extend(decode_hex(h).ok_or_else(bad)?.into_iter().map(|b| Cow::Owned(vec![b])));
-                } else if let Some(a) = m.get("atom").and_then(Value::as_str) {
-                    room(out.len(), 1)?;
-                    out.push(Cow::Borrowed(a.as_bytes()));
-                } else if let Some(h) = m.get("atom_hex").and_then(Value::as_str) {
-                    room(out.len(), 1)?;
-                    out.push(Cow::Owned(decode_hex(h).ok_or_else(bad)?));
-                } else {
-                    return Err(bad());
-                }
-            }
-            _ => return Err(bad()),
-        }
-    }
-    Ok(out)
-}
-
-/// A delivery's items as the value at each position they deliver, in order —
-/// the inverse of [`values_of`]: a `content` text and a `hex` item one value
-/// per byte (adjacent text arrives as one item), an `atom` and an `atom_hex`
-/// one composite value — borrowed from the delivery where it spells them,
-/// owned where a hex is decoded. An item no value spells — a withheld run, a
-/// reference, a `hex` that does not decode, one this shell does not know —
-/// is answered in its place as the item itself, and nothing after it. LAZY:
-/// a reader walks a board's delivery position by position and holds what it
-/// keeps, never a value for every position the board chose to deliver.
-pub fn delivered_values(delivery: &Value) -> impl Iterator<Item = Result<Cow<'_, [u8]>, Value>> + '_ {
-    let items = delivery["items"].as_array().map(Vec::as_slice).unwrap_or_default();
-    let mut stopped = false;
-    items.iter().flat_map(item_values).map_while(move |position| {
-        if stopped {
-            return None;
-        }
-        stopped = position.is_err();
-        Some(position)
-    })
-}
-
-/// One delivered item's positions, as [`delivered_values`] reads them.
-fn item_values(item: &Value) -> Box<dyn Iterator<Item = Result<Cow<'_, [u8]>, Value>> + '_> {
-    let unread = || -> Box<dyn Iterator<Item = Result<Cow<'_, [u8]>, Value>> + '_> { Box::new(std::iter::once(Err(item.clone()))) };
-    if let Some(text) = item["content"].as_str() {
-        Box::new(text.as_bytes().chunks(1).map(|b| Ok(Cow::Borrowed(b))))
-    } else if let Some(h) = item["hex"].as_str() {
-        match decode_hex(h) {
-            Some(bytes) => Box::new(bytes.into_iter().map(|b| Ok(Cow::Owned(vec![b])))),
-            None => unread(),
-        }
-    } else if let Some(a) = item["atom"].as_str() {
-        Box::new(std::iter::once(Ok(Cow::Borrowed(a.as_bytes()))))
-    } else if let Some(h) = item["atom_hex"].as_str() {
-        match decode_hex(h) {
-            Some(bytes) => Box::new(std::iter::once(Ok(Cow::Owned(bytes)))),
-            None => unread(),
-        }
-    } else {
-        unread()
-    }
-}
-
-/// Lowercase or uppercase hex decoded, `None` where it is none: an odd
-/// length, or any byte that is no ASCII hex digit — a sign, or a byte of a
-/// multi-byte character. The text is read byte by byte, so no character
-/// boundary can be cut.
-fn decode_hex(h: &str) -> Option<Vec<u8>> {
-    let digit = |b: u8| char::from(b).to_digit(16);
-    let (pairs, odd) = h.as_bytes().as_chunks::<2>();
-    if !odd.is_empty() {
-        return None;
-    }
-    // Two hex digits make a value below 256, so the cast keeps every bit.
-    pairs.iter().map(|&[hi, lo]| Some(((digit(hi)? << 4) | digit(lo)?) as u8)).collect()
-}
-
 /// THE `insert` ARM's TERMS, read off the frame alone — no read made: the
 /// document's trunk, and the body over the declared deposit and the values,
 /// each recognized as the board's parse recognizes it, within its budgets.
@@ -437,7 +342,7 @@ pub fn insert_terms(frame: &Value) -> Result<(Address, EntryBody), Halt> {
     let doc = member(frame, "doc")?;
     let trunk = trunk_text(doc).ok_or_else(|| fault(format!("the frame's `doc` has no trunk: `{doc}`"), "an insert's doc term is the document's trunk"))?;
     let declared = frame["deposit"].as_str().map(|t| addr(t, "deposit")).transpose()?;
-    let values = values_of(&frame["values"])?;
+    let values = values_of(&frame["values"]).map_err(values_refused)?;
     Ok((addr(&trunk, "doc")?, entry_body_insert(declared.as_ref(), values.iter().map(AsRef::as_ref))))
 }
 

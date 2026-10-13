@@ -327,10 +327,6 @@ pub struct Shell {
     arm: Arc<DevArm>,
     log: Arc<Log>,
     store: Arc<FileStore>,
-    /// The store the restart arm re-opens a session under: the signed
-    /// mode's, none under the bare mode (a bare session is never re-opened
-    /// silently).
-    reopen_store: Option<Arc<FileStore>>,
     /// THE HELD-BURST HOLDS (§3c): a burst's write path, the queue `held`
     /// and `resolve` read and act on, the own node's stopped state, and the
     /// resend the feed workers drive.
@@ -447,8 +443,12 @@ impl Shell {
         assert!(opts.own_node.as_ref().is_none_or(|own| opts.boards.contains(own)), "ShellOptions' precondition: own_node, where set, is one of the boards");
         let log = Arc::new(Log::new());
         let bus = Arc::new(EventBus::new());
-        let sessions = Arc::new(Sessions::new());
         let store = Arc::new(FileStore::open(&opts.store_dir));
+        // The store the restart arm re-opens a session under: the signed
+        // mode's, none under the bare mode (a bare session is never
+        // re-opened silently).
+        let reopen_store = matches!(opts.session_mode, SessionMode::Signed { .. }).then(|| Arc::clone(&store));
+        let sessions = Arc::new(Sessions::new(reopen_store));
         // The anchors BESIDE the store, never under it (§3.4 refuses a
         // destination under the store): `<store>-anchors/`.
         let anchors = {
@@ -470,10 +470,9 @@ impl Shell {
             }
             boards.push(entry);
         }
-        let reopen_store = matches!(opts.session_mode, SessionMode::Signed { .. }).then(|| Arc::clone(&store));
         let boards_by_reference = boards.iter().map(|entry| (entry.reference.clone(), Arc::clone(&entry.board)));
         let holds = Holds::new(Arc::clone(&sessions), Arc::clone(&bus), Arc::clone(&store), opts.store_dir.clone(), Arc::clone(&opts.talk), boards_by_reference);
-        let shared = Shared { bus: Arc::clone(&bus), sessions: Arc::clone(&sessions), reopen_store: reopen_store.clone(), data_dir: opts.store_dir.clone(), talk: Arc::clone(&opts.talk), holds: Arc::clone(&holds) };
+        let shared = Shared { bus: Arc::clone(&bus), sessions: Arc::clone(&sessions), data_dir: opts.store_dir.clone(), talk: Arc::clone(&opts.talk), holds: Arc::clone(&holds) };
         let threads: Vec<FeedThreads> = boards.iter().map(|entry| FeedThreads::spawn(Arc::clone(entry), shared.clone())).collect();
         let feeds = boards.iter().zip(&threads).map(|(entry, board_threads)| (entry.reference.clone(), board_threads.feed())).collect();
         let secs = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
@@ -487,7 +486,6 @@ impl Shell {
             arm,
             log,
             store,
-            reopen_store,
             holds,
             anchors,
             session_mode: opts.session_mode,
@@ -529,7 +527,9 @@ impl Shell {
     /// shell that runs no node has none to report. A DELIBERATE STOP is
     /// said here ONCE: while it stands the board's feed announces no
     /// `unreachable` of its own, and `Running` here is the one `running`
-    /// (`feed.rs`'s `unreachable`).
+    /// (`feed.rs`'s `unreachable`). `Running` ends the hold at the node's
+    /// board and hands the board's worker its probe, as `resolve(send)`
+    /// hands it: the caller waits on no dial.
     pub fn set_node_state(&self, state: NodeState) {
         let Some(board_reference) = &self.own_node_reference else { return };
         let running = matches!(state, NodeState::Running);
@@ -540,10 +540,11 @@ impl Shell {
         self.bus.emit(EventName::Daemon, json!({"board": board_reference, "state": state}));
         // The own node's STOPPED state is the hold's (§3c.4): every burst at
         // its board holds `stopped` without a dial, `probe` answers it, and
-        // `Running` ends the hold and runs the resend where a session stands.
+        // `Running` ends the hold, the resend run on the board's worker where
+        // a session stands.
         self.holds.set_node_stopped(board_reference, !running);
         if running {
-            self.holds.probe(board_reference);
+            self.feed(board_reference).probe();
         }
     }
 
@@ -583,17 +584,11 @@ impl Shell {
         self.sessions.get(session_reference).ok_or_else(|| Refusal::shell(Name::SESSION_ENDED, json!({"session": session_reference})))
     }
 
-    /// The entry of the board a session stands at.
-    fn board_entry_of(&self, session: &SessionEntry) -> Arc<BoardEntry> {
-        self.boards.iter().find(|entry| entry.reference == session.board_reference).cloned().expect("a session stands at a board of this shell")
-    }
-
     /// A death signal met on `session`'s token under the shell's hands: the
     /// session ended by the one sequence the board's feed thread runs too,
     /// whichever hand came first; the call's refusal, carrying the arm.
     fn died(&self, session: &SessionEntry) -> Refusal {
-        let entry = self.board_entry_of(session);
-        let reason = self.sessions.end(session, &entry.board, self.reopen_store.as_deref(), &mut self.feed(&session.board_reference), &self.bus);
+        let reason = self.sessions.end(session, &mut self.feed(&session.board_reference), &self.bus);
         Refusal::shell(Name::SESSION_DIED, json!({"session": session.reference, "reason": reason}))
     }
 
@@ -659,13 +654,13 @@ impl Shell {
             SessionMode::Bare { .. } => sessions::open_bare(&entry.board, principal)?,
             SessionMode::Signed { .. } => sessions::open_signed(&entry.board, &self.store, principal)?,
         };
-        let session = self.sessions.register(&entry.reference, open, &mut self.feed(&entry.reference));
+        let session = self.sessions.register(&entry.reference, Arc::clone(&entry.board), open, &mut self.feed(&entry.reference));
         // The principal's held file read whole at its session's open (§3c.7),
         // so `held(session)` lists its lines at once. The resend is NOT run
         // here: the page reads `held(session)` right after opening, and a
         // synchronous resend would clear the lines before it; the feed's probe
         // and its daemon-running tick drive it once a session stands (§3c.5).
-        self.holds.open_session(&entry.reference, &session);
+        self.holds.open_session(&session);
         Ok(json!({"session": session.reference, "principal": principal, "account": session.facts.account}))
     }
 
@@ -683,8 +678,7 @@ impl Shell {
         let Some(session_reference) = args["session"].as_str() else { return Err(Refusal::malformed("session")) };
         let session = self.sessions.close(session_reference).ok_or_else(|| Refusal::shell(Name::SESSION_ENDED, json!({"session": session_reference})))?;
         self.feed(&session.board_reference).closing(&session);
-        let entry = self.board_entry_of(&session);
-        if let Err(h) = entry.board.session_close(&session.token) {
+        if let Err(h) = session.board.session_close(&session.token) {
             self.say(format!("close: the board did not close {}'s token ({h}); it dies at the board's restart", session.reference));
         }
         self.bus.emit(EventName::SessionDied, json!({"session": session.reference, "reason": sessions::closed()}));
@@ -770,10 +764,10 @@ impl Shell {
     }
 
     /// `op(session, frame)` and the guest forms: ONE frame to the board the
-    /// session was opened at under its token — the attest composed where
-    /// the session holds a key and the kind has an entry frame, a burst
-    /// sent by the hold's write path, a reissue-class answer reissued within
-    /// the call ([`Shell::op_reissuing`]), and an ack noted for the hold's
+    /// session stands at under its token — the attest composed where the
+    /// session holds a key and the kind has an entry frame, a burst sent by
+    /// the hold's write path, a reissue-class answer reissued within the
+    /// call ([`Shell::op_reissuing`]), and an ack noted for the hold's
     /// `base` — or token-free at guest class, the board or origin named read
     /// first (`unknown_board`, `not_canonical`, `malformed_args`), then a
     /// write refused without a dial (`write_in_guest_form`). An `/op-at`
@@ -796,35 +790,34 @@ impl Shell {
             };
         }
         let session = self.session(&args["session"])?;
-        let entry = self.board_entry_of(&session);
         // A BURST (§3c.4) — an `/op` under a session of one of the five kinds,
         // never the guest form, never `/op-at` — takes the hold's write path.
         if at.is_none() && hold::is_burst(&frame) {
-            return match self.holds.send_burst(&entry.reference, &session, frame) {
+            return match self.holds.send_burst(&session, frame) {
                 BurstAnswer::Answered(answer) => answer,
                 BurstAnswer::Died => Err(self.died(&session)),
             };
         }
         if at.is_none() {
-            match session.attest(&entry.board, &self.store, &mut frame) {
+            match session.attest(&self.store, &mut frame) {
                 Ok(()) => {}
                 Err(Unattested::Closed) => return Err(self.died(&session)),
                 Err(Unattested::Refused(refusal)) => return Err(refusal),
             }
         }
         let answer = match at {
-            Some(at) => match entry.board.op_at(Some(&session.token), at, &frame)? {
+            Some(at) => match session.board.op_at(Some(&session.token), at, &frame)? {
                 AtAnswer::Document(v) => Answer::Document(v),
                 AtAnswer::Closed => Answer::Closed,
                 other => return Err(at_refusal(other)),
             },
-            None => self.op_reissuing(&entry.board, &session, &frame)?,
+            None => self.op_reissuing(&session, &frame)?,
         };
         match answer {
             Answer::Document(v) => {
                 let v = Self::document(v)?;
                 if at.is_none() {
-                    self.holds.note_ack(&entry.reference, &session, &frame, &v);
+                    self.holds.note_ack(&session, &frame, &v);
                 }
                 Ok(v)
             }
@@ -832,15 +825,16 @@ impl Shell {
         }
     }
 
-    /// ONE `/op` under `session`, a reissue-class answer reissued within the
-    /// call as §3c.4 reissues it (`hold::reissue_of`, the table's one
-    /// owner): a `write_busy` once after a short wait, a first and second
-    /// `durability` as-is — the page meeting the ack or the next refusal
-    /// (§4b.1's `op` row), never a held line: the hold keeps bursts alone.
-    fn op_reissuing(&self, board: &Board, session: &SessionEntry, frame: &Value) -> Result<Answer, Halt> {
+    /// ONE `/op` under `session` at the board it stands at, a reissue-class
+    /// answer reissued within the call as §3c.4 reissues it
+    /// (`hold::reissue_of`, the table's one owner): a `write_busy` once after
+    /// a short wait, a first and second `durability` as-is — the page meeting
+    /// the ack or the next refusal (§4b.1's `op` row), never a held line: the
+    /// hold keeps bursts alone.
+    fn op_reissuing(&self, session: &SessionEntry, frame: &Value) -> Result<Answer, Halt> {
         let mut given = Reissues::default();
         loop {
-            let answer = board.op(Some(&session.token), frame);
+            let answer = session.board.op(Some(&session.token), frame);
             let Some(kind) = hold::reissue_of(&answer, given) else { return answer };
             given.note(kind);
             thread::sleep(kind.wait());
@@ -878,11 +872,10 @@ impl Shell {
             return Err(Refusal::malformed("i"));
         }
         let (board, token, session) = if guest_form(args)? {
-            (self.guest_board(args)?, None, None)
+            (Arc::new(self.guest_board(args)?), None, None)
         } else {
             let session = self.session(&args["session"])?;
-            let entry = self.board_entry_of(&session);
-            (Board::new(entry.origin.clone(), LoggingDialer::new(Arc::clone(&self.log))), Some(session.token.clone()), Some(session))
+            (Arc::clone(&session.board), Some(session.token.clone()), Some(session))
         };
         let mut headers = Vec::new();
         if let Some(t) = &token {
@@ -937,7 +930,7 @@ impl Shell {
     /// (P39); `store_halted` where a newer `v` or a damaged body halted it.
     fn held(&self, args: &Value) -> Result<Value, Refusal> {
         let session = self.session(&args["session"])?;
-        self.holds.lines(&session.board_reference, &session)
+        self.holds.lines(&session)
     }
 
     /// `resolve(session, {held, act})` → `{}` (§4b.1): `"drop"` on a `refused`
@@ -951,7 +944,7 @@ impl Shell {
         let session = self.session(&args["session"])?;
         let k = args["held"].as_u64().ok_or_else(|| Refusal::malformed("held"))?;
         let act = args["act"].as_str().ok_or_else(|| Refusal::malformed("act"))?;
-        match self.holds.resolve(&session.board_reference, &session, k, act)? {
+        match self.holds.resolve(&session, k, act)? {
             Resolved::Dropped => {}
             Resolved::Rearmed => self.feed(&session.board_reference).probe(),
         }
@@ -991,8 +984,7 @@ impl Shell {
         self.pending.cancel_all();
         for session in self.sessions.all() {
             if self.sessions.close(&session.reference).is_some() {
-                let entry = self.board_entry_of(&session);
-                let _ = entry.board.session_close(&session.token);
+                let _ = session.board.session_close(&session.token);
             }
         }
         let threads = std::mem::take(&mut *self.threads.lock().expect("the feed threads' lock"));

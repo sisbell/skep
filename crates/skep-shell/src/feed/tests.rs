@@ -1,9 +1,10 @@
 //! THE FEED's FENCE: the index state's ten arms and the search words as
-//! the bridge spells them; and THE COMMIT STREAM COALESCED — the waiting
-//! tick's mark, and a board committing far faster than the worker reads
-//! costing it a read per turn, never a read per commit, with a search queued
-//! behind them answered after one read at most. And A DRAFTS CURSOR THE
-//! RETENTION FLOOR PASSED resumed at the floor, its rows still fed.
+//! the bridge spells them; THE WORKER's START, one `/health` read; and THE
+//! COMMIT STREAM COALESCED — the waiting tick's mark, and a board committing
+//! far faster than the worker reads costing it a read per turn, never a read
+//! per commit, with a search queued behind them answered after one read at
+//! most. And A DRAFTS CURSOR THE RETENTION FLOOR PASSED resumed at the
+//! floor, its rows still fed.
 
 use std::io::{self, Read};
 use std::sync::atomic::AtomicUsize;
@@ -11,12 +12,16 @@ use std::sync::Mutex;
 use std::time::Duration;
 
 use skep_client::dial::{DialError, Dialer, Headers, Method, Request, RequestHead, Response, StreamedResponse};
+use skep_client::store::FileStore;
 use skep_client::Origin;
+use skep_search::{Chain, ChainAt};
 use tempfile::TempDir;
 
 use super::*;
 
-/// The ten arms spell their names and members as §4b.2 draws them.
+/// The ten arms spell their names and members as §4b.2 draws them; a saved
+/// pair names its chain in the chain's own spelling, sixty-four lowercase
+/// hex.
 #[test]
 fn the_state_spells_its_ten_arms() {
     assert_eq!(state_json(&State::None), json!({"arm": "none"}));
@@ -31,6 +36,8 @@ fn the_state_spells_its_ten_arms() {
     assert_eq!((v["arm"].as_str(), v["limit"].as_u64()), (Some("past_the_ceiling"), Some(3)));
     assert_eq!(state_json(&State::AtTheFloor { floor: 5 })["floor"], 5);
     assert_eq!(state_json(&State::NewerSkep { v: Newer::Version { v: 9 } })["v"]["version"], 9);
+    let v = state_json(&State::ResumedFromTheFloor { floor: 5, held: ChainAt { position: 3, chain: Chain::from_bytes([0xab; 32]) } });
+    assert_eq!((v["arm"].as_str(), v["held"].clone()), (Some("resumed_from_the_floor"), json!({"position": 3, "chain": "ab".repeat(32)})));
     assert_eq!(standing_json(&Standing::Public), "public");
 }
 
@@ -60,15 +67,34 @@ fn the_ticks_owe_one_read_while_one_waits() {
     assert!(ticks.note(6), "a commit after the take owes one more");
 }
 
-/// A board's `/events` stream yielding `commits` commits, served once: the
-/// `/changes` reads it is asked counted, each made `delay` long, as a board
-/// across a network makes them; `/health` and `/op` answered as a board with
-/// no `H.1` answers them.
+/// A board's `/events` stream yielding `commits` commits, served once — none
+/// at all where it holds no body: the `/changes` reads it is asked counted,
+/// each made `delay` long, as a board across a network makes them, and the
+/// `/health` reads counted; `/health` and `/op` answered as a board with no
+/// `H.1` answers them.
 struct Committing {
     events: Mutex<Option<Vec<u8>>>,
     drained: Arc<AtomicBool>,
     changes_reads: AtomicUsize,
+    health_reads: AtomicUsize,
     delay: Duration,
+}
+
+impl Committing {
+    /// A board whose stream serves `events` once, each `/changes` read
+    /// `delay` long.
+    fn new(events: Option<Vec<u8>>, drained: &Arc<AtomicBool>, delay: Duration) -> Arc<Committing> {
+        Arc::new(Committing { events: Mutex::new(events), drained: Arc::clone(drained), changes_reads: AtomicUsize::new(0), health_reads: AtomicUsize::new(0), delay })
+    }
+}
+
+/// The shared context of one board's feed thread over `board`, every
+/// session in `sessions`, the index under `store`.
+fn shared_over(board: &Arc<Board>, sessions: &Arc<Sessions>, bus: &Arc<EventBus>, store: &TempDir) -> Shared {
+    let talk: Talk = Arc::new(|_: &str| {});
+    let keys = Arc::new(FileStore::open(store.path().join("store")));
+    let holds = Holds::new(Arc::clone(sessions), Arc::clone(bus), keys, store.path().to_path_buf(), Arc::clone(&talk), [("b-1".to_string(), Arc::clone(board))]);
+    Shared { bus: Arc::clone(bus), sessions: Arc::clone(sessions), data_dir: store.path().to_path_buf(), talk, holds }
 }
 
 /// A stream's body that marks itself read to its end.
@@ -94,6 +120,7 @@ fn answer(v: Value) -> Response {
 impl Dialer for Committing {
     fn exchange(&self, _: &Origin, req: &Request) -> Result<Response, DialError> {
         if req.method == Method::Get && req.path.starts_with("/health") {
+            self.health_reads.fetch_add(1, Ordering::SeqCst);
             return Ok(answer(json!({"ok": true, "log_position": 10, "auth": {"claimant": null, "local_trust": true, "origins": [], "signed_origins": []}, "writes": {"halted": false}})));
         }
         if req.method == Method::Get && req.path.starts_with("/changes") {
@@ -122,14 +149,11 @@ fn a_board_committing_faster_than_the_worker_reads_costs_a_read_per_turn() {
     let commits = 2000;
     let events: String = (1..=commits).map(|n| format!("event: commit\ndata: {{\"log_position\": {n}}}\n\n")).collect();
     let drained = Arc::new(AtomicBool::new(false));
-    let fake = Arc::new(Committing { events: Mutex::new(Some(events.into_bytes())), drained: Arc::clone(&drained), changes_reads: AtomicUsize::new(0), delay: Duration::from_millis(2) });
+    let fake = Committing::new(Some(events.into_bytes()), &drained, Duration::from_millis(2));
     let origin = Origin::parse("http://127.0.0.1:9").unwrap();
     let board = Arc::new(Board::new(origin.clone(), Arc::clone(&fake)));
     let store = TempDir::new().unwrap();
-    let (sessions, bus, talk): (Arc<Sessions>, Arc<EventBus>, Talk) = (Arc::new(Sessions::new()), Arc::new(EventBus::new()), Arc::new(|_: &str| {}));
-    let keys = Arc::new(FileStore::open(store.path().join("store")));
-    let holds = Holds::new(Arc::clone(&sessions), Arc::clone(&bus), keys, store.path().to_path_buf(), Arc::clone(&talk), [("b-1".to_string(), Arc::clone(&board))]);
-    let shared = Shared { bus, sessions, reopen_store: None, data_dir: store.path().to_path_buf(), talk, holds };
+    let shared = shared_over(&board, &Arc::new(Sessions::new(None)), &Arc::new(EventBus::new()), &store);
     let threads = FeedThreads::spawn(Arc::new(BoardEntry { reference: "b-1".into(), origin, board }), shared);
     let deadline = Instant::now() + Duration::from_secs(10);
     while !drained.load(Ordering::SeqCst) && Instant::now() < deadline {
@@ -143,6 +167,34 @@ fn a_board_committing_faster_than_the_worker_reads_costs_a_read_per_turn() {
     threads.stop();
     assert!(reads < commits / 20, "{reads} reads for {commits} commits");
     assert!(waited < Duration::from_secs(1), "the search waited {waited:?} behind the reads queued");
+}
+
+/// THE WORKER's START reads `/health` ONCE: the published feed's start, the
+/// mode and `writes.halted` all from the one read, made before the worker
+/// takes its first command — a stream that never connects is announced
+/// `unreachable` after it, and no second read was made (the mutant that
+/// reads the head apart from the start's `/health` read reads it twice).
+#[test]
+fn the_worker_reads_health_once_at_its_start() {
+    let fake = Committing::new(None, &Arc::new(AtomicBool::new(false)), Duration::ZERO);
+    let origin = Origin::parse("http://127.0.0.1:9").unwrap();
+    let board = Arc::new(Board::new(origin.clone(), Arc::clone(&fake)));
+    let store = TempDir::new().unwrap();
+    let bus = Arc::new(EventBus::new());
+    let rx = bus.subscribe();
+    let threads = FeedThreads::spawn(Arc::new(BoardEntry { reference: "b-1".into(), origin, board: Arc::clone(&board) }), shared_over(&board, &Arc::new(Sessions::new(None)), &bus, &store));
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let announced = loop {
+        match rx.recv_timeout(deadline.saturating_duration_since(Instant::now())) {
+            Ok(event) if event.name == EventName::Daemon && event.data["state"] == "unreachable" => break true,
+            Ok(_) => {}
+            Err(_) => break false,
+        }
+    };
+    let reads = fake.health_reads.load(Ordering::SeqCst);
+    threads.stop();
+    assert!(announced, "the stream that never connects is announced");
+    assert_eq!(reads, 1, "the worker's start reads `/health` once");
 }
 
 /// A board whose history below `FLOOR` is reclaimed: a drafts read from
@@ -209,13 +261,11 @@ fn a_drafts_cursor_the_floor_passed_reads_on_from_the_floor() {
     let origin = Origin::parse("http://127.0.0.1:9").unwrap();
     let board = Arc::new(Board::new(origin.clone(), Arc::clone(&fake)));
     let store = TempDir::new().unwrap();
-    let (sessions, bus, talk): (Arc<Sessions>, Arc<EventBus>, Talk) = (Arc::new(Sessions::new()), Arc::new(EventBus::new()), Arc::new(|_: &str| {}));
+    let (sessions, bus) = (Arc::new(Sessions::new(None)), Arc::new(EventBus::new()));
     let rx = bus.subscribe();
     let facts = crate::sessions::Facts { principal: 1, account: Some("1.0.1".into()), kind: crate::sessions::Kind::Bare };
-    let session = sessions.register("b-1", crate::sessions::Open { token: Token::parse(&"9f".repeat(16)).unwrap(), facts, opened_at: 0 }, &mut NoSupplements);
-    let keys = Arc::new(FileStore::open(store.path().join("store")));
-    let holds = Holds::new(Arc::clone(&sessions), Arc::clone(&bus), keys, store.path().to_path_buf(), Arc::clone(&talk), [("b-1".to_string(), Arc::clone(&board))]);
-    let shared = Shared { bus, sessions, reopen_store: None, data_dir: store.path().to_path_buf(), talk, holds };
+    let session = sessions.register("b-1", Arc::clone(&board), crate::sessions::Open { token: Token::parse(&"9f".repeat(16)).unwrap(), facts, opened_at: 0 }, &mut NoSupplements);
+    let shared = shared_over(&board, &sessions, &bus, &store);
     let threads = FeedThreads::spawn(Arc::new(BoardEntry { reference: "b-1".into(), origin, board }), shared);
     let deadline = Instant::now() + Duration::from_secs(10);
     let fed = loop {

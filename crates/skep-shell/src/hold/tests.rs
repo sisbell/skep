@@ -356,7 +356,7 @@ impl Ground {
 
     /// `held(session)`'s lines.
     fn lines(&self) -> Vec<Value> {
-        self.holds.lines("b-1", &self.session).unwrap().as_array().unwrap().clone()
+        self.holds.lines(&self.session).unwrap().as_array().unwrap().clone()
     }
 
     /// `frame` admitted at the ground's session — a test's own frame, which
@@ -367,7 +367,7 @@ impl Ground {
 
     /// A burst held for `cause`, `sent` as a lost answer's would be.
     fn hold(&self, frame: &Value, cause: &str, sent: bool) -> Value {
-        self.holds.hold("b-1", &self.session, &self.burst(frame), Reason::of(cause, sent)).unwrap()
+        self.holds.hold(&self.session, &self.burst(frame), Reason::of(cause, sent)).unwrap()
     }
 }
 
@@ -398,14 +398,14 @@ fn ground_in(store: TempDir, facts: Facts, opened_at: u64) -> Ground {
 /// `opened_at`.
 fn ground_over(fake: Arc<Fake>, store: TempDir, facts: Facts, opened_at: u64) -> Ground {
     let board = Arc::new(Board::new(Origin::parse("http://127.0.0.1:1").unwrap(), Arc::clone(&fake)));
-    let sessions = Arc::new(Sessions::new());
+    let sessions = Arc::new(Sessions::new(None));
     let bus = Arc::new(EventBus::new());
     let rx = bus.subscribe();
     let keys = Arc::new(FileStore::open(store.path().join("store")));
-    let holds = Holds::new(Arc::clone(&sessions), bus, keys, store.path().to_path_buf(), Arc::new(|_: &str| {}), [("b-1".to_string(), board)]);
+    let holds = Holds::new(Arc::clone(&sessions), bus, keys, store.path().to_path_buf(), Arc::new(|_: &str| {}), [("b-1".to_string(), Arc::clone(&board))]);
     let open = Open { token: Token::parse(&"9f".repeat(16)).unwrap(), facts, opened_at };
-    let session = sessions.register("b-1", open, &mut NoSupplements);
-    holds.open_session("b-1", &session);
+    let session = sessions.register("b-1", board, open, &mut NoSupplements);
+    holds.open_session(&session);
     Ground { holds, fake, session, rx, store }
 }
 

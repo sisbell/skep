@@ -568,8 +568,8 @@ fn a_close_the_board_does_not_answer_still_closes() {
 /// it composes what the board refuses).
 #[test]
 fn the_codecs_budgets_are_the_composers() {
-    use crate::attest::{MAX_INSERT_VALUES, MAX_WIRE_LIST};
-    use crate::wire::MAX_TUMBLER_COMPONENTS;
+    use crate::attest::MAX_WIRE_LIST;
+    use crate::wire::{MAX_INSERT_VALUES, MAX_TUMBLER_COMPONENTS};
     use skep_client::board::{Opened, Rejection, SessionBody};
     let dir = TempDir::new().unwrap();
     let sd = spawn(&dir.path().join("board"), true);

@@ -1120,8 +1120,9 @@ an item the root re-exports counted as the module it is brought from
 - `refusal.rs` `Refusal`, the one shape the page renders, each refusal
   with ONE name from `Name`, the closed list of every name the shell spells.
 - `wire.rs` the wire's shared facts: the frame cap (`MAX_FRAME_BYTES`) and a
-  frame's compact bytes (`json_len`), the tumbler component budget, and
-  `document_address`, a document address in its one spelling.
+  frame's compact bytes (`json_len`), the tumbler component budget,
+  `document_address`, a document address in its one spelling, and the
+  value forms both ways (`values_of`, `delivered_values`).
 - `attest.rs` `Composer`: the entry frame for the ten kinds, every axis
   from the shell's own reads, through `skep-identity`'s builders; the
   board's other budgets, each held before the work it bounds.
@@ -1136,9 +1137,10 @@ an item the root re-exports counted as the module it is brought from
   page.
 - `person.rs` `BridgePerson`: the PUBLIC moments as `moment` events
   answered through `Pending`, the SECRET and CONSENT ones sent to the arm.
-- `sessions.rs` `Sessions`: the token under its reference, the two
-  openings, `SessionEntry::attest`, a session's END (`Sessions::end`) and
-  the release of its drafts supplement (`Sessions::release`).
+- `sessions.rs` `Sessions`: the token beside the board it stands at, under
+  its reference, the two openings, `SessionEntry::attest`, a session's END
+  (`Sessions::end`, under the key store the table holds) and the release of
+  its drafts supplement (`Sessions::release`).
 - `hold.rs` `Holds`: a burst's DOOR (`Burst::admit`) and WRITE PATH
   (`Holds::send_burst`), its answers read through `classify`, the one owner
   of every reissue's bound, and the per-(board, principal) queue over
@@ -1148,7 +1150,8 @@ an item the root re-exports counted as the module it is brought from
   outcomes, each line sent through the hold's one reader.
 - `feed.rs` `FeedThreads` and `Feed`: per board, the `/events` reader and
   the consumer's owner — the `feed`, `index`, `mode` and `daemon` events,
-  the `search` call, the held-burst probe on its cadence; `BoardEntry`.
+  the `search` call, the held-burst probe on its cadence and at every
+  hand-over; `BoardEntry`.
 - `shell.rs` `Shell`: the boards, the sessions, `SessionMode`, the private
   row methods behind `call`, which logs each; `fetch`, `answer`, `cancel`,
   `shutdown`; `ShellOptions` and `set_node_state`.
@@ -1208,7 +1211,9 @@ Rules that hold across its files:
   board's hold under its own lock, so one board's synced appends and file
   reads hold back no burst at another; and a board's commits coalesce into
   one waiting read, so a board committing faster than its feed reads holds
-  a call queued behind them to one read at most.
+  a call queued behind them to one read at most. A board's probe, and the
+  resend it lets run, go on that board's worker alone — `resolve(send)` and
+  `set_node_state(Running)` hand it over — so no caller waits on a resend.
 - **The board's budgets, kept as the board keeps them.** Every cost the
   shell pays for a page's frame or a board's answer is held, before the
   work it bounds, to the budget the board's own parse, store or composer

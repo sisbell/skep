@@ -1,12 +1,13 @@
 //! EACH BOARD's OWN: the own node's state announced at its board — a
 //! deliberate stop said once, its feed adding no `unreachable` while it
-//! stands, while another board's stream failure is still announced; a
-//! search held at one board holding back no call at another; a shell
-//! dropped unstopped closing its sessions and freeing its board's held
-//! lock; and a board down at the open fed from its first answer, never
-//! replaying the history before it.
+//! stands, while another board's stream failure is still announced, and its
+//! `Running` handing the probe to the board's worker; a search held at one
+//! board holding back no call at another; a shell dropped unstopped closing
+//! its sessions and freeing its board's held lock; and a board down at the
+//! open fed from its first answer, never replaying the history before it.
 
 use super::*;
+use crate::sessions::{Facts, Open};
 
 /// THE OWN NODE's STATE: a shell that runs the node announces each state
 /// its owner reports on the `daemon` event at the node's board, and `probe`
@@ -136,6 +137,34 @@ fn a_search_waiting_on_one_board_holds_back_no_call_at_another() {
     });
     shell.shutdown();
     sd.shutdown();
+}
+
+/// THE NODE's `Running` HANDS ITS PROBE OVER (§3c.4): with a line held at the
+/// own node's board, and the board a tarpit holding each dial two seconds,
+/// `set_node_state(Running)` answers at once — the hold ended and the probe
+/// handed to the board's worker, as `resolve(send)` hands it, never run on
+/// the caller's thread (the mutant that probes inline waits the tarpit's
+/// `/health` read out before the verb that owns the node is answered).
+#[test]
+fn the_nodes_running_hands_its_probe_to_the_boards_worker() {
+    let dir = TempDir::new().unwrap();
+    let slow = tarpit(Duration::from_secs(2));
+    let (talk, _) = talk();
+    let mut opts = ShellOptions::new(vec![Origin::parse(&slow).unwrap()], dir.path().join("store"), SessionMode::Bare { principal: 1 }, talk);
+    opts.own_node = Some(Origin::parse(&slow).unwrap());
+    let shell = Shell::open(opts);
+    let board = shell.board_references().remove(0);
+    shell.set_node_state(NodeState::Stopped);
+    let facts = Facts { principal: 1, account: Some("1.0.1".into()), kind: Kind::Bare };
+    let session = shell.sessions.register(&board, Arc::clone(&shell.boards[0].board), Open { token: Token::parse(&"9f".repeat(16)).unwrap(), facts, opened_at: 0 }, &mut shell.feed(&board));
+    let frame = json!({"op": "insert", "doc": "1.0.1.0.1", "at": {"subspace": "1", "ordinal": "1"}, "values": ["a"]});
+    let held = shell.holds.hold(&session, &Burst::admit(frame, &session).unwrap(), Reason::of("stopped", false)).unwrap();
+    assert_eq!(held["resp"], "held", "{held}");
+    let started = Instant::now();
+    shell.set_node_state(NodeState::Running);
+    let took = started.elapsed();
+    assert!(took < Duration::from_millis(500), "`set_node_state(Running)` waited {took:?} on the board's probe");
+    drop(shell);
 }
 
 /// THE DROP is the stop: a shell dropped with a session open and never

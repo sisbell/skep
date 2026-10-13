@@ -1,5 +1,6 @@
-//! THE COMPOSER's FENCE: the spelling it reads a frame in — the trunk, the
-//! wire's value forms both ways, a V-spec, an I-address's split — and THE
+//! THE COMPOSER's FENCE: the spelling it reads a frame in — the trunk, a
+//! V-spec, an I-address's split, a tumbler and an address within their
+//! component budget, the wire's value faults faced as its own halt — and THE
 //! BOARD's BUDGETS it keeps: each pinned to the board's own where the board
 //! exports it, and each held before the work it bounds, against a fake board
 //! that counts the reads the composer makes — a list past the wire's, a slot
@@ -22,12 +23,6 @@ use skep_client::Origin;
 use skep_identity::{entry_body_publish, ShotSegmentPiece};
 
 use super::*;
-use crate::wire::document_address;
-
-/// A delivery's values collected, or the item that stopped them.
-fn delivered(delivery: &Value) -> Result<Vec<Cow<'_, [u8]>>, Value> {
-    delivered_values(delivery).collect()
-}
 
 /// The trunk projection over the spelling: a member drops its version
 /// components, a bare document is itself, an element is taken to its
@@ -46,25 +41,15 @@ fn the_trunk_is_the_document_field_cut_to_its_first_component() {
     assert_eq!(trunk_text(&format!("{deep}.1")), None, "one component past it");
 }
 
-/// The wire's four value forms mint the body's values: per byte for a
-/// string and a `hex`, one composite for an `atom` and an `atom_hex`,
-/// the text's and the atom's borrowed from the frame; a hex of either
-/// case decodes, and one with a sign or a multi-byte character is no
-/// value (never a panic at a character boundary); a V-spec's span reads
-/// as `(from, width)`; an I-address splits at its last component; the
-/// ten kinds are the checked set.
+/// A V-spec's span reads as `(from, width)`; an I-address splits at its
+/// last component; the ten kinds are the checked set; and an insert's
+/// `values` the wire's forms refuse are the composer's halt, each fault
+/// faced in its own words.
 #[test]
-fn the_values_the_v_spec_and_the_i_address_read_as_the_wire_spells_them() {
-    let frame = json!(["ab", {"hex": "c328"}, {"atom": "one"}, {"atom_hex": "00ff"}]);
-    let values = values_of(&frame).unwrap();
-    assert_eq!(values, vec![b"a".to_vec(), b"b".to_vec(), vec![0xc3], vec![0x28], b"one".to_vec(), vec![0x00, 0xff]]);
-    assert!(matches!((&values[0], &values[4], &values[2]), (Cow::Borrowed(_), Cow::Borrowed(_), Cow::Owned(_))), "text and atoms borrowed, hex decoded: {values:?}");
-    assert!(values_of(&json!([7])).is_err());
-    assert_eq!(values_of(&json!([{"hex": "C3"}, {"atom_hex": "Ab"}])).unwrap(), vec![vec![0xc3], vec![0xab]]);
-    assert!(values_of(&json!([{"hex": "+a"}])).is_err(), "a sign is no hex digit");
-    assert!(values_of(&json!([{"atom_hex": "+a+b"}])).is_err());
-    assert!(values_of(&json!([{"hex": "aé0"}])).is_err(), "a multi-byte character is no hex digit, and cuts no boundary");
-    assert!(values_of(&json!([{"hex": "abc"}])).is_err(), "an odd length");
+fn the_v_spec_and_the_i_address_read_as_the_wire_spells_them() {
+    let insert = |values: Value| insert_terms(&json!({"op": "insert", "doc": "1.0.1.0.1", "values": values})).map(drop).unwrap_err().to_string();
+    assert!(insert(json!([7])).contains("not the wire's forms"), "{}", insert(json!([7])));
+    assert!(insert(json!(["a".repeat(MAX_INSERT_VALUES + 1)])).contains(&format!("more than {MAX_INSERT_VALUES} values")));
     assert_eq!(v_spec(&json!({"start": "1.6", "width": "0.2"})), Some((6, 2)));
     assert_eq!(v_spec(&json!({"start": "2.6", "width": "0.2"})), None);
     assert_eq!(split_i("1.0.1.0.1.0.1.4"), Some(("1.0.1.0.1.0.1", 4)));
@@ -76,25 +61,6 @@ fn the_values_the_v_spec_and_the_i_address_read_as_the_wire_spells_them() {
     assert!(!wants_attest(&json!({"op": "delete"})) && !wants_attest(&json!({})));
     let span = extent_span("1.0.1.0.1.0.1.4", 3).unwrap();
     assert_eq!((span.start().to_string(), span.width().to_string()), ("1.0.1.0.1.0.1.4".to_string(), "0.0.0.0.0.0.0.3".to_string()));
-}
-
-/// A delivery reads back as the values a frame spells them in: adjacent
-/// text arrives as ONE item and is one value per byte, as the frame's
-/// string was; a withheld run, or a `hex` that does not decode, is no
-/// value and is answered as the item that stopped the read.
-#[test]
-fn a_delivery_reads_back_as_the_values_its_frame_spelled() {
-    let frame = json!(["he", "llo", {"hex": "c328"}, {"atom": "one"}, {"atom_hex": "00ff"}]);
-    let delivery = json!({"resp": "delivery", "items": [{"content": "hello"}, {"hex": "c328"}, {"atom": "one"}, {"atom_hex": "00ff"}]});
-    assert_eq!(delivered(&delivery).unwrap(), values_of(&frame).unwrap());
-    let withheld = json!({"withheld": {"width": "3"}});
-    assert_eq!(delivered(&json!({"items": [{"content": "a"}, withheld]})), Err(withheld));
-    assert_eq!(delivered(&json!({"items": [{"hex": "zz"}]})), Err(json!({"hex": "zz"})));
-    assert_eq!(delivered(&json!({"items": [{"hex": "+a"}]})), Err(json!({"hex": "+a"})));
-    assert_eq!(delivered(&json!({"items": [{"atom_hex": "aé0"}]})), Err(json!({"atom_hex": "aé0"})));
-    let after = json!({"items": [{"content": "a"}, {"withheld": {}}, {"content": "b"}]});
-    let stopped: Vec<_> = delivered_values(&after).collect();
-    assert_eq!(stopped.len(), 2, "nothing is read past the item that stopped the read: {stopped:?}");
 }
 
 /// THE BOARD's BUDGETS the board exports are the composer's: the frame cap
@@ -126,36 +92,15 @@ fn the_attest_room_holds_every_rows_attest() {
     }
 }
 
-/// An insert's values are held to the codec's count AHEAD of each element:
-/// a string of exactly the budget mints, one byte more is refused, and a
-/// hex is counted by its encoded length, an atom as one value.
+/// A tumbler and an address the composer reads are held to their component
+/// budget — counted before a component is converted: one at the budget
+/// read, one past it refused, an address past it the composer's halt.
 #[test]
-fn the_values_are_held_to_the_insert_budget_before_they_mint() {
-    let at = "a".repeat(MAX_INSERT_VALUES);
-    assert_eq!(values_of(&json!([at])).unwrap().len(), MAX_INSERT_VALUES);
-    assert!(values_of(&json!([at, "b"])).is_err(), "one value past the budget");
-    assert!(values_of(&json!([at, {"atom": "b"}])).is_err(), "an atom is one value");
-    assert!(values_of(&json!([{"hex": "00".repeat(MAX_INSERT_VALUES + 1)}])).is_err(), "a hex counted by its encoded length");
-    assert_eq!(values_of(&json!([{"hex": "00".repeat(MAX_INSERT_VALUES)}])).unwrap().len(), MAX_INSERT_VALUES);
-}
-
-/// An address is recognized within its component budget — counted before a
-/// component is converted — and a burst's document in its ONE spelling: no
-/// sign, no leading zero, of the document level.
-#[test]
-fn an_address_is_recognized_within_its_budget_and_a_document_in_its_one_spelling() {
+fn a_tumbler_and_an_address_are_read_within_the_component_budget() {
     let at = format!("1{}", ".1".repeat(MAX_TUMBLER_COMPONENTS - 1));
-    assert!(bounded_address(&at).is_some(), "a node address at the budget");
-    assert!(bounded_address(&format!("{at}.1")).is_none(), "one component past it");
     assert!(tumbler(&at).is_some() && tumbler(&format!("{at}.1")).is_none());
+    assert!(addr(&at, "home").is_ok(), "an address at the budget");
     assert!(addr(&format!("{at}.1"), "home").is_err());
-    assert!(document_address("1.0.1.0.1").is_some());
-    assert!(document_address("1.0.1.0.1.2").is_some(), "a member is a document address");
-    for refused in ["01.0.1.0.1", "+1.0.1.0.1", "1.00.1.0.1", "1.0.1", "1.0.1.0.1.0.1.1", "1..0.1", "", "1.0.1.0.1 "] {
-        assert!(document_address(refused).is_none(), "`{refused}`");
-    }
-    let deep = format!("1.0.1.0.1{}", ".1".repeat(MAX_TUMBLER_COMPONENTS - 5));
-    assert!(document_address(&deep).is_some() && document_address(&format!("{deep}.1")).is_none());
 }
 
 // ── THE COMPOSER's READS, against a fake board ──────────────────────────────

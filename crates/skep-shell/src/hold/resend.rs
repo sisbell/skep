@@ -2,9 +2,9 @@
 //! that drains a board's queue once the board returns. THE PROBE
 //! ([`Holds::probe`]) runs on the feed worker's thread every
 //! [`PROBE_CADENCE`](super::PROBE_CADENCE) while a line stands, and there
-//! too at `resolve(send)`'s hand-over, because `Cmd::Tick` is driven by
-//! COMMITTED writes and a poisoned, halted, stopped or unreachable board
-//! commits nothing. THE RESEND it lets run is AUTOMATIC at the hold's end
+//! too at the hand-overs of `resolve(send)` and `set_node_state(Running)`,
+//! because `Cmd::Tick` is driven by COMMITTED writes and a poisoned,
+//! halted, stopped or unreachable board commits nothing. THE RESEND it lets run is AUTOMATIC at the hold's end
 //! and at reopen (J2): one READ per document (`GET /changes`) before its
 //! first resend, with §3c.5's three outcomes — (i) nothing landed, send from
 //! the head; (ii) the in-flight burst landed, the head `done kept`; (iii)
@@ -18,10 +18,10 @@ use std::collections::HashSet;
 use std::sync::{Mutex, PoisonError};
 
 use serde_json::Value;
-use skep_client::board::{acked_at, frames, Answer, Board, ChangesAnswer, ChangesQuery, Rejection};
+use skep_client::board::{acked_at, frames, Answer, ChangesAnswer, ChangesQuery, Rejection};
 
 use super::{awaits_act, cause, line_state, BoardSlot, Dialed, HeldState, Holds};
-use crate::attest::{delivered_values, values_of};
+use crate::wire::{delivered_values, values_of};
 use crate::held::{Done, HeldLine, Reason};
 use crate::sessions::{Kind, SessionEntry};
 
@@ -82,13 +82,13 @@ impl Drop for Draining<'_> {
 }
 
 impl Holds {
-    /// THE PROBE (§3c.4), and the RESEND it lets run (§3c.5): reached on the
-    /// board's feed worker every [`PROBE_CADENCE`](super::PROBE_CADENCE), at
-    /// its daemon-running tick and at `resolve(send)`'s hand-over, and by
-    /// `set_node_state(Running)`. While a line stands at a board whose own
-    /// node is not stopped, `/health` is read; where the board answers and
-    /// takes writes, each standing session of a principal with lines resends
-    /// them.
+    /// THE PROBE (§3c.4), and the RESEND it lets run (§3c.5): run on the
+    /// board's feed worker alone — every
+    /// [`PROBE_CADENCE`](super::PROBE_CADENCE), at its daemon-running tick,
+    /// and at the hand-overs of `resolve(send)` and `set_node_state(Running)`.
+    /// While a line stands at a board whose own node is not stopped,
+    /// `/health` is read; where the board answers and takes writes, each
+    /// standing session of a principal with lines resends them.
     pub fn probe(&self, board_reference: &str) {
         // Gathered under the lock and dialed outside it, so `op` never waits
         // on a dead board's connect timeout.
@@ -124,14 +124,15 @@ impl Holds {
         let principals: Vec<u64> = slot.lock().principals.iter().filter(|(_, ph)| !ph.queue.lines().is_empty()).map(|(p, _)| *p).collect();
         for principal in principals {
             let Some(session) = self.sessions.on_board(board_reference).into_iter().find(|s| s.facts.principal == principal) else { continue };
-            self.resume(board_reference, board, &session);
+            self.resume(&session);
         }
     }
 
-    /// THE RESEND for one session (§3c.5): each document with held lines read
-    /// once, then its lines sent in `k` order from where the read left them.
-    fn resume(&self, board_reference: &str, board: &Board, session: &SessionEntry) {
-        let Some(docs) = self.with_principal(board_reference, session.facts.principal, |ph| {
+    /// THE RESEND for one session (§3c.5), at the board it stands at: each
+    /// document with held lines read once, then its lines sent in `k` order
+    /// from where the read left them.
+    fn resume(&self, session: &SessionEntry) {
+        let Some(docs) = self.with_principal(&session.board_reference, session.facts.principal, |ph| {
             let mut docs: Vec<String> = Vec::new();
             for l in ph.queue.lines() {
                 if !docs.contains(&l.doc) {
@@ -143,37 +144,37 @@ impl Holds {
             return;
         };
         for doc in docs {
-            self.resume_doc(board_reference, board, session, &doc);
+            self.resume_doc(session, &doc);
         }
     }
 
     /// One document's resend: the read (§3c.5), then its outcome — a head
     /// awaiting the person's act read and sent never.
-    fn resume_doc(&self, board_reference: &str, board: &Board, session: &SessionEntry, doc: &str) {
-        let principal = session.facts.principal;
+    fn resume_doc(&self, session: &SessionEntry, doc: &str) {
+        let (board_reference, principal) = (session.board_reference.as_str(), session.facts.principal);
         let Some(head) = self.head_of(board_reference, principal, doc) else { return };
         if awaits_act(&head) {
             return;
         }
-        match self.read_outcome(board, session, doc, &head) {
+        match self.read_outcome(session, doc, &head) {
             ReadOutcome::Unread => {}
             ReadOutcome::Moved => {
                 self.mark_moved(board_reference, principal, doc);
-                self.emit_held(board_reference, session, doc, self.count(board_reference, principal, doc), HeldState::Moved, None);
+                self.emit_held(session, doc, self.count(board_reference, principal, doc), HeldState::Moved, None);
             }
             ReadOutcome::Landed { at } => {
                 self.done(board_reference, principal, head.k, Done::Kept { at });
                 match self.count(board_reference, principal, doc) {
-                    0 => self.emit_held(board_reference, session, doc, 0, HeldState::Kept, None),
+                    0 => self.emit_held(session, doc, 0, HeldState::Kept, None),
                     rest => {
-                        self.emit_held(board_reference, session, doc, rest, HeldState::Sending, None);
-                        self.send_rest(board_reference, board, session, doc);
+                        self.emit_held(session, doc, rest, HeldState::Sending, None);
+                        self.send_rest(session, doc);
                     }
                 }
             }
             ReadOutcome::SendFromHead => {
-                self.emit_held(board_reference, session, doc, self.count(board_reference, principal, doc), HeldState::Sending, None);
-                self.send_rest(board_reference, board, session, doc);
+                self.emit_held(session, doc, self.count(board_reference, principal, doc), HeldState::Sending, None);
+                self.send_rest(session, doc);
             }
         }
     }
@@ -186,12 +187,12 @@ impl Holds {
     /// its `op` the head's and its site not contradicting it, or where the
     /// board LOST its testimony ([`testimony_lost`], the `poisoned` burst a
     /// restart replays) and the site confirms it; any other row is (iii).
-    fn read_outcome(&self, board: &Board, session: &SessionEntry, doc: &str, head: &HeldLine) -> ReadOutcome {
+    fn read_outcome(&self, session: &SessionEntry, doc: &str, head: &HeldLine) -> ReadOutcome {
         let query = ChangesQuery { since: head.base, under: Some(doc), drafts: true, limit: Some(2) };
-        let page = match board.changes(Some(&session.token), &query) {
+        let page = match session.board.changes(Some(&session.token), &query) {
             Ok(ChangesAnswer::Page(page)) => page,
             // `base` aged below the floor: the arrangement alone decides.
-            Ok(ChangesAnswer::HistoryReclaimed { .. }) => return self.reclaimed_outcome(board, session, doc, head),
+            Ok(ChangesAnswer::HistoryReclaimed { .. }) => return self.reclaimed_outcome(session, doc, head),
             // A page of two rows too large to serve holds two rows or more.
             Ok(ChangesAnswer::TooLarge { .. }) => return ReadOutcome::Moved,
             Ok(_) | Err(_) => return ReadOutcome::Unread,
@@ -205,7 +206,7 @@ impl Holds {
         let landed = ReadOutcome::Landed { at: row["at"].as_u64() };
         if own_row(session, row) && row["op"].as_str() == head.frame["op"].as_str() {
             // A kind the site read cannot confirm trusts the op-and-hand match.
-            return match self.site(board, session, doc, head) {
+            return match self.site(session, doc, head) {
                 Site::Equal | Site::Unconfirmable => landed,
                 Site::Differs => ReadOutcome::Moved,
                 Site::Unread => ReadOutcome::Unread,
@@ -220,7 +221,7 @@ impl Holds {
         // decisively: an `insert` whose values read back equal is (ii); a
         // kind the site read cannot confirm faces the person (iii).
         if testimony_lost(row) {
-            return match self.site(board, session, doc, head) {
+            return match self.site(session, doc, head) {
                 Site::Equal => landed,
                 Site::Differs | Site::Unconfirmable => ReadOutcome::Moved,
                 Site::Unread => ReadOutcome::Unread,
@@ -233,11 +234,11 @@ impl Holds {
     /// decides — a `sent` head's values read back equal at its site is (ii);
     /// any difference, a kind no read confirms, or a head never sent is
     /// (iii).
-    fn reclaimed_outcome(&self, board: &Board, session: &SessionEntry, doc: &str, head: &HeldLine) -> ReadOutcome {
+    fn reclaimed_outcome(&self, session: &SessionEntry, doc: &str, head: &HeldLine) -> ReadOutcome {
         if !head.reason.sent {
             return ReadOutcome::Moved;
         }
-        match self.site(board, session, doc, head) {
+        match self.site(session, doc, head) {
             Site::Equal => ReadOutcome::Landed { at: None },
             Site::Differs | Site::Unconfirmable => ReadOutcome::Moved,
             Site::Unread => ReadOutcome::Unread,
@@ -247,13 +248,13 @@ impl Holds {
     /// THE CONTENT CONFIRM (§3c.5): ONE `retrieve_v` at an `insert`'s site,
     /// as wide as the values its frame spells, the delivery read back as
     /// values and held to them.
-    fn site(&self, board: &Board, session: &SessionEntry, doc: &str, head: &HeldLine) -> Site {
+    fn site(&self, session: &SessionEntry, doc: &str, head: &HeldLine) -> Site {
         if head.frame["op"].as_str() != Some("insert") {
             return Site::Unconfirmable;
         }
         let ordinal = head.frame["at"]["ordinal"].as_str().and_then(|o| o.parse::<u64>().ok());
         let (Ok(want), Some(from)) = (values_of(&head.frame["values"]), ordinal) else { return Site::Unconfirmable };
-        match board.op(Some(&session.token), &frames::retrieve_v(doc, from, want.len() as u64)) {
+        match session.board.op(Some(&session.token), &frames::retrieve_v(doc, from, want.len() as u64)) {
             Ok(Answer::Document(v)) if Rejection::of(&v).is_none() => {
                 if delivers(&v, &want) {
                     Site::Equal
@@ -269,9 +270,9 @@ impl Holds {
     /// Send the document's lines from its head in `k` order, each a normal
     /// `op` under the session; stop at a line that awaits the person's act or
     /// is not taken.
-    fn send_rest(&self, board_reference: &str, board: &Board, session: &SessionEntry, doc: &str) {
-        while let Some(line) = self.head_of(board_reference, session.facts.principal, doc) {
-            if awaits_act(&line) || !self.send_line(board_reference, board, session, &line) {
+    fn send_rest(&self, session: &SessionEntry, doc: &str) {
+        while let Some(line) = self.head_of(&session.board_reference, session.facts.principal, doc) {
+            if awaits_act(&line) || !self.send_line(session, &line) {
                 break;
             }
         }
@@ -286,22 +287,22 @@ impl Holds {
     /// never `done`; the death signal left to the hand that ends the
     /// session — the session that stands resends after its read. Whether
     /// sending may go on to the document's next line.
-    fn send_line(&self, board_reference: &str, board: &Board, session: &SessionEntry, line: &HeldLine) -> bool {
-        let principal = session.facts.principal;
+    fn send_line(&self, session: &SessionEntry, line: &HeldLine) -> bool {
+        let (board_reference, principal) = (session.board_reference.as_str(), session.facts.principal);
         let given = self.with_principal(board_reference, principal, |ph| ph.reissues.get(&line.k).copied()).flatten().unwrap_or_default();
-        match self.dial(board, session, &line.frame, given) {
+        match self.dial(session, &line.frame, given) {
             Dialed::Acked(ack) => {
-                self.note_ack(board_reference, session, &line.frame, &ack);
+                self.note_ack(session, &line.frame, &ack);
                 self.done(board_reference, principal, line.k, Done::Kept { at: acked_at(&ack) });
                 let rest = self.count(board_reference, principal, &line.doc);
-                self.emit_held(board_reference, session, &line.doc, rest, if rest == 0 { HeldState::Kept } else { HeldState::Sending }, None);
+                self.emit_held(session, &line.doc, rest, if rest == 0 { HeldState::Kept } else { HeldState::Sending }, None);
                 true
             }
             Dialed::Held(reason) => {
                 let state = line_state(&reason);
                 let said = reason.cause.clone();
                 self.with_principal(board_reference, principal, |ph| self.remark_line(ph, line.k, reason));
-                self.emit_held(board_reference, session, &line.doc, self.count(board_reference, principal, &line.doc), state, Some(&said));
+                self.emit_held(session, &line.doc, self.count(board_reference, principal, &line.doc), state, Some(&said));
                 false
             }
             Dialed::Reissue { kind, refusal } => {

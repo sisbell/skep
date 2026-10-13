@@ -215,7 +215,7 @@ fn a_signed_sessions_landed_burst_is_kept_by_the_resend() {
     assert_eq!(rows[0]["key"].as_str(), Some(fp.to_hex().as_str()), "a draft's insert is outside the publish class: the attest dropped, the row unsigned under the key's fingerprint: {rows:?}");
     assert!(rows[0].get("attest").is_none(), "{rows:?}");
     // Held as a lost answer is: the line `sent: true`.
-    let held = signed.holds.hold(&board_entry.reference, &entry, &Burst::admit(frame.clone(), &entry).unwrap(), Reason::of("unreachable", true)).unwrap();
+    let held = signed.holds.hold(&entry, &Burst::admit(frame.clone(), &entry).unwrap(), Reason::of("unreachable", true)).unwrap();
     assert_eq!(held["resp"], "held", "{held}");
     assert_eq!(signed.call("held", &json!({"session": session})).unwrap()[0]["sent"], true);
     // The restart: the session re-opened under a fresh reference, the resend
@@ -496,7 +496,7 @@ fn the_probe_keeps_its_cadence_while_the_board_keeps_committing() {
             }
         });
         let frame = json!({"op": "insert", "doc": draft, "at": {"subspace": "1", "ordinal": "2"}, "values": ["b"]});
-        shell.holds.hold(&shell.boards[0].reference, &entry, &Burst::admit(frame, &entry).unwrap(), Reason::of("unreachable", true)).unwrap();
+        shell.holds.hold(&entry, &Burst::admit(frame, &entry).unwrap(), Reason::of("unreachable", true)).unwrap();
         let deadline = Instant::now() + PROBE_CADENCE * 3;
         let kept = loop {
             if seen.lock().unwrap().iter().any(|e| e.name == EventName::Held && e.data["doc"] == draft && e.data["state"] == "kept") {

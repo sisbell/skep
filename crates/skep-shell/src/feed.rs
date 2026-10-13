@@ -21,9 +21,10 @@
 //! ([`Feed::closing`]): every `feed` row of a session precedes its
 //! `session-died`, however far this thread trails the commits. The board's
 //! held bursts are watched here too: `writes.halted` read at each tick, and
-//! THE PROBE (`Holds::probe`) every `PROBE_CADENCE`, measured from the last
-//! probe whatever woke the thread between, and at a hand-over
-//! ([`Feed::probe`], `resolve(send)`'s). Both feeds are read to the board's
+//! THE PROBE (`Holds::probe`) on this thread alone — every `PROBE_CADENCE`,
+//! measured from the last probe whatever woke the thread between, and at a
+//! hand-over ([`Feed::probe`], `resolve(send)`'s and
+//! `set_node_state(Running)`'s). Both feeds are read to the board's
 //! head by ONE reader ([`read_to_head`]), the published feed and every
 //! drafts supplement alike: a page past the retention floor resumed at the
 //! floor, a page past the page budget re-asked at the limit that fits. The
@@ -59,7 +60,6 @@ use serde_json::{json, Value};
 use skep_client::board::{ChangesAnswer, ChangesQuery, Token};
 use skep_client::derive::Mode;
 use skep_client::search::{events, Consumer, Lost, Newer, Place, Range, SearchAnswer, SearchDir, SearchOpts, SessionRef, State, Stop, Who};
-use skep_client::store::FileStore;
 use skep_client::{Board, Origin};
 use skep_search::{GrantKind, Hit, Kind, Mark, MarkKind, Rung, Standing};
 
@@ -112,16 +112,13 @@ enum Cmd {
 }
 
 /// What every board's feed thread shares with the shell: the bus its events
-/// go out on, the session table, the store the restart arm re-opens a
-/// session under (the signed mode's, none under the bare mode), the data
-/// directory the index sits under, the TALK sink, and the held-burst holds
-/// the worker drives — the `writes.halted` read at each tick and THE PROBE
-/// every `PROBE_CADENCE`.
+/// go out on, the session table, the data directory the index sits under,
+/// the TALK sink, and the held-burst holds the worker drives — the
+/// `writes.halted` read at each tick and THE PROBE every `PROBE_CADENCE`.
 #[derive(Clone)]
 pub struct Shared {
     pub bus: Arc<EventBus>,
     pub sessions: Arc<Sessions>,
-    pub reopen_store: Option<Arc<FileStore>>,
     pub data_dir: PathBuf,
     pub talk: Talk,
     pub holds: Arc<Holds>,
@@ -163,8 +160,9 @@ impl Feed {
     /// THE PROBE handed to the board's worker (`Holds::probe`), run on its
     /// thread at its next turn and the probe's cadence counted from it — the
     /// caller does not wait: `resolve(send)`'s hand-over, so the call answers
-    /// once the lines are handed back, never after a resend's ack (§4b.1). A
-    /// thread that has stopped takes nothing.
+    /// once the lines are handed back, never after a resend's ack (§4b.1),
+    /// and `set_node_state(Running)`'s, so the verb that owns the node is
+    /// held by no resend. A thread that has stopped takes nothing.
     pub fn probe(&self) {
         let _ = self.cmds.send(Cmd::Probe);
     }
@@ -292,9 +290,6 @@ struct Worker<'b> {
     entry: &'b BoardEntry,
     bus: Arc<EventBus>,
     sessions: Arc<Sessions>,
-    /// The store the restart arm re-opens a session under: the signed
-    /// mode's, none under the bare mode.
-    reopen_store: Option<Arc<FileStore>>,
     data_dir: PathBuf,
     talk: Talk,
     /// The held-burst holds this worker drives.
@@ -322,18 +317,16 @@ impl<'b> Worker<'b> {
     fn run(entry: Arc<BoardEntry>, shared: Shared, rx: Receiver<Cmd>, ticks: &Ticks) {
         let entry_arc = entry;
         let entry: &BoardEntry = &entry_arc;
-        let head = entry.board.health().ok().map(|h| h.log_position());
-        let Shared { bus, sessions, reopen_store, data_dir, talk, holds } = shared;
+        let Shared { bus, sessions, data_dir, talk, holds } = shared;
         let mut worker = Worker {
             entry,
             bus,
             sessions,
-            reopen_store,
             data_dir,
             talk,
             holds,
             consumer: None,
-            published_since: head,
+            published_since: None,
             drafts_since: HashMap::new(),
             last_mode: None,
             last_index: BTreeMap::new(),
@@ -341,8 +334,10 @@ impl<'b> Worker<'b> {
             announced_unreachable: false,
             down: false,
         };
-        worker.mount();
+        // ONE `/health` read at the thread's start: the published feed's
+        // start where the board answers, the mode, and `writes.halted`.
         worker.read_health();
+        worker.mount();
         worker.emit_index();
         // THE PROBE (§3c.4) has a deadline of its own: the loop wakes on each
         // command and at the deadline, and probes once the deadline has
@@ -472,9 +467,8 @@ impl<'b> Worker<'b> {
     /// A death signal met at this board on `session`'s token: the session
     /// ended by the one sequence the shell runs too.
     fn end(&mut self, session: &SessionEntry) {
-        let (sessions, bus, store) = (Arc::clone(&self.sessions), Arc::clone(&self.bus), self.reopen_store.clone());
-        let entry: &'b BoardEntry = self.entry;
-        sessions.end(session, &entry.board, store.as_deref(), self, &bus);
+        let (sessions, bus) = (Arc::clone(&self.sessions), Arc::clone(&self.bus));
+        sessions.end(session, self, &bus);
     }
 
     /// THE `feed` EVENTS: the published feed's new rows as a guest, from
@@ -492,19 +486,18 @@ impl<'b> Worker<'b> {
         }
     }
 
-    /// `session`'s drafts supplement read to the board's head under its
-    /// token ([`read_to_head`]), from where its principal's last read
-    /// stopped — at first, the position the session opened at — each row a
-    /// `feed` event of the `drafts` class; a cursor the board's retention
+    /// `session`'s drafts supplement read to the head of the board it stands
+    /// at under its token ([`read_to_head`]), from where its principal's last
+    /// read stopped — at first, the position the session opened at — each row
+    /// a `feed` event of the `drafts` class; a cursor the board's retention
     /// floor passed, as a long-open session's with no drafts row of its own
     /// is, resumed at the floor. The death signal ends the session
     /// (`Sessions::end`, which answers a session the page already closed
     /// with that arm and does nothing more).
     fn read_drafts(&mut self, session: &SessionEntry) {
-        let entry: &'b BoardEntry = self.entry;
         let principal = session.facts.principal;
         let since = *self.drafts_since.entry(principal).or_insert(session.opened_at);
-        match read_to_head(&entry.board, Some(&session.token), since, true, |row| self.emit_feed(row, "drafts", Some(&session.reference))) {
+        match read_to_head(&session.board, Some(&session.token), since, true, |row| self.emit_feed(row, "drafts", Some(&session.reference))) {
             ReadTo::At(at) => {
                 self.drafts_since.insert(principal, at);
             }
@@ -522,10 +515,11 @@ impl<'b> Worker<'b> {
         self.bus.emit(EventName::Feed, json!({"board": self.entry.reference, "update": update}));
     }
 
-    /// THE `/health` READ of a tick: the `mode` event where the pair moved
-    /// (the claim's landing, a restart with the flag changed), `writes.halted`
-    /// told the hold, and — the first time the board answers — its head as
-    /// the published feed's start.
+    /// THE `/health` READ of the thread's start and of each tick: the `mode`
+    /// event where the pair moved (the claim's landing, a restart with the
+    /// flag changed), `writes.halted` told the hold, and — the first time the
+    /// board answers — its head as the published feed's start, which no
+    /// other read sets.
     fn read_health(&mut self) {
         let Ok(health) = self.entry.board.health() else { return };
         self.published_since.get_or_insert(health.log_position());
@@ -677,9 +671,9 @@ fn range_json(range: &Range) -> Value {
     }
 }
 
-/// A saved pair.
+/// A saved pair: its position, and its chain in the chain's own spelling.
 fn chain_at_json(held: &skep_search::ChainAt) -> Value {
-    json!({"position": held.position, "chain": crate::refs::hex(held.chain.as_bytes())})
+    json!({"position": held.position, "chain": held.chain.to_string()})
 }
 
 /// THE STATE's ten arms as the bridge spells them (`client.md` §4b.2's

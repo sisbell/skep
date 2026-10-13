@@ -9,10 +9,12 @@
 //! elsewhere, every header that says so checked whole; every row a page shows
 //! filled with the site's two slots, the suffix and the owner's address,
 //! whichever page shows it; a row's words escaped and its commands set as
-//! code, and a person's field — a refused record among them — shown back as it
-//! was sent, a quote in it never closing its attribute; and the `Debug` of a
-//! post, a status page and an answer showing none of what they hold. (The
-//! strings table's rows are `strings`' suite.)
+//! code; the one escaper keeping the quotes within an element's content and
+//! escaping them within an attribute's value; a person's field — a refused
+//! record among them — shown back as it was sent, a quote in it never closing
+//! its attribute; and the `Debug` of a post, a status page and an answer
+//! showing none of what they hold. (The strings table's rows are `strings`'
+//! suite.)
 
 use std::io::{Read, Write};
 use std::net::{Shutdown, TcpListener, TcpStream};
@@ -347,6 +349,18 @@ fn a_row_is_escaped_and_its_commands_set_as_code() {
     assert_eq!(row("one ` alone"), "one ` alone");
     assert_eq!(attr("\"><script>'"), "&quot;&gt;&lt;script&gt;&#39;");
     assert_eq!(paragraphs("a\nb\n\nc\n"), "<p>a<br>\nb</p>\n<p>c</p>\n");
+}
+
+/// THE ONE ESCAPER BY WHERE ITS TEXT IS SET: within an element's content
+/// the quotes stay as written — the textarea gives a record back as sent —
+/// and within an attribute's value both are escaped, so no quote a person
+/// sent ends the value it sits in; `&`, `<` and `>` are escaped within both.
+#[test]
+fn the_escaper_escapes_the_quotes_within_an_attribute_alone() {
+    let sent = "{\"label\":\"o'brien\"} <&>";
+    assert_eq!(escape(sent, Within::Content), "{\"label\":\"o'brien\"} &lt;&amp;&gt;");
+    assert_eq!(escape(sent, Within::Attribute), "{&quot;label&quot;:&quot;o&#39;brien&quot;} &lt;&amp;&gt;");
+    assert_eq!(attr(sent), escape(sent, Within::Attribute));
 }
 
 /// EVERY PAGE FILLS THE SITE's TWO SLOTS: a row naming the suffix and the

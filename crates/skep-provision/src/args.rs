@@ -14,6 +14,7 @@ use std::ffi::OsString;
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
 use std::num::{NonZeroU32, NonZeroUsize};
 use std::path::PathBuf;
+use std::str::FromStr;
 
 use crate::docker::Settings;
 use crate::invites::{InviteCode, MAX_CODE_BYTES};
@@ -259,18 +260,33 @@ fn word(flag: &str, v: String) -> Result<String, String> {
 /// A DOMAIN, as `--suffix` takes one: lowercase letters, digits, dots and
 /// hyphens, its labels non-empty and none beginning or ending with a
 /// hyphen — the daemon's origin grammar for the host it closes.
-fn domain(v: String) -> Result<String, String> {
+fn domain(flag: &str, v: String) -> Result<String, String> {
     let labels_ok = v.split('.').all(|l| !l.is_empty() && !l.starts_with('-') && !l.ends_with('-'));
     if v.is_empty() || !labels_ok || !v.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'.' || b == b'-') {
-        return Err(format!("--suffix: '{v}' is not a domain of lowercase letters, digits, dots and hyphens"));
+        return Err(format!("{flag}: '{v}' is not a domain of lowercase letters, digits, dots and hyphens"));
     }
     Ok(v)
 }
 
 /// A MAIL ADDRESS by the rule: the value `MailAddress::parse` admits, a
 /// refusal naming the rule in `statedir`'s own words.
-fn mail_address(flag: &str, v: String) -> Result<MailAddress, String> {
-    MailAddress::parse(&v).ok_or_else(|| format!("{flag}: '{v}' is not an address: {}", statedir::address_rule()))
+fn mail_address(flag: &str, v: &str) -> Result<MailAddress, String> {
+    MailAddress::parse(v).ok_or_else(|| format!("{flag}: '{v}' is not an address: {}", statedir::address_rule()))
+}
+
+/// A COUNT OF ONE OR MORE, the type a count flag lands in: one whose
+/// `FromStr` refuses `0` — `NonZeroU32` and `NonZeroUsize`, and no other —
+/// so [`count`] cannot admit a zero its refusal says it refuses.
+trait OneOrMore: FromStr {}
+
+impl OneOrMore for NonZeroU32 {}
+
+impl OneOrMore for NonZeroUsize {}
+
+/// A COUNT — `--log-max-file`, `--workers`, `--connections` — as the
+/// setting's [`OneOrMore`] type parses it, or the refusal naming the flag.
+fn count<N: OneOrMore>(flag: &str, v: &str) -> Result<N, String> {
+    v.parse().map_err(|_| format!("{flag}: '{v}' is not a count of one or more"))
 }
 
 /// `serve`'s flags.
@@ -296,44 +312,35 @@ fn parse_serve(mut it: impl Iterator<Item = String>) -> Result<Command, String> 
     let mut docker_fake: Option<PathBuf> = None;
     while let Some(arg) = it.next() {
         match arg.as_str() {
-            "--listen" => {
-                let v = value(&mut it, "--listen")?;
-                listen = v.parse().map_err(|_| format!("--listen: '{v}' is not an address and a port"))?;
+            flag @ "--listen" => {
+                let v = value(&mut it, flag)?;
+                listen = v.parse().map_err(|_| format!("{flag}: '{v}' is not an address and a port"))?;
             }
-            "--state-dir" => state_dir = Some(PathBuf::from(value(&mut it, "--state-dir")?)).filter(|p| !p.as_os_str().is_empty()),
-            "--boards-dir" => boards_dir = PathBuf::from(value(&mut it, "--boards-dir")?),
-            "--image" => settings.image = word("--image", value(&mut it, "--image")?)?,
-            "--cli-image" => settings.cli_image = word("--cli-image", value(&mut it, "--cli-image")?)?,
-            "--network" => settings.network = word("--network", value(&mut it, "--network")?)?,
-            "--caddy" => settings.caddy = word("--caddy", value(&mut it, "--caddy")?)?,
-            "--suffix" => settings.suffix = domain(value(&mut it, "--suffix")?)?,
-            "--log-max-size" => {
-                let v = value(&mut it, "--log-max-size")?;
+            flag @ "--state-dir" => state_dir = Some(PathBuf::from(value(&mut it, flag)?)).filter(|p| !p.as_os_str().is_empty()),
+            flag @ "--boards-dir" => boards_dir = PathBuf::from(value(&mut it, flag)?),
+            flag @ "--image" => settings.image = word(flag, value(&mut it, flag)?)?,
+            flag @ "--cli-image" => settings.cli_image = word(flag, value(&mut it, flag)?)?,
+            flag @ "--network" => settings.network = word(flag, value(&mut it, flag)?)?,
+            flag @ "--caddy" => settings.caddy = word(flag, value(&mut it, flag)?)?,
+            flag @ "--suffix" => settings.suffix = domain(flag, value(&mut it, flag)?)?,
+            flag @ "--log-max-size" => {
+                let v = value(&mut it, flag)?;
                 let digits = v.strip_suffix(['k', 'm', 'g']).unwrap_or(&v);
                 if digits.is_empty() || !digits.bytes().all(|b| b.is_ascii_digit()) {
-                    return Err(format!("--log-max-size: '{v}' is not a size, <N>[k|m|g]"));
+                    return Err(format!("{flag}: '{v}' is not a size, <N>[k|m|g]"));
                 }
                 settings.log_max_size = v;
             }
-            "--log-max-file" => {
-                let v = value(&mut it, "--log-max-file")?;
-                settings.log_max_file = v.parse().map_err(|_| format!("--log-max-file: '{v}' is not a count of one or more"))?;
-            }
-            "--workers" => {
-                let v = value(&mut it, "--workers")?;
-                workers = v.parse().map_err(|_| format!("--workers: '{v}' is not a count of one or more"))?;
-            }
-            "--connections" => {
-                let v = value(&mut it, "--connections")?;
-                connections = v.parse().map_err(|_| format!("--connections: '{v}' is not a count of one or more"))?;
-            }
-            "--reply-to" => reply_to = Some(mail_address("--reply-to", value(&mut it, "--reply-to")?)?),
-            "--mailer" => mailer = Some(Mailer::Program(PathBuf::from(value(&mut it, "--mailer")?))),
-            "--from" => from = Some(mail_address("--from", value(&mut it, "--from")?)?),
+            flag @ "--log-max-file" => settings.log_max_file = count(flag, &value(&mut it, flag)?)?,
+            flag @ "--workers" => workers = count(flag, &value(&mut it, flag)?)?,
+            flag @ "--connections" => connections = count(flag, &value(&mut it, flag)?)?,
+            flag @ "--reply-to" => reply_to = Some(mail_address(flag, &value(&mut it, flag)?)?),
+            flag @ "--mailer" => mailer = Some(Mailer::Program(PathBuf::from(value(&mut it, flag)?))),
+            flag @ "--from" => from = Some(mail_address(flag, &value(&mut it, flag)?)?),
             #[cfg(feature = "test-hooks")]
-            "--docker-fake" => docker_fake = Some(PathBuf::from(value(&mut it, "--docker-fake")?)),
+            flag @ "--docker-fake" => docker_fake = Some(PathBuf::from(value(&mut it, flag)?)),
             #[cfg(feature = "test-hooks")]
-            "--mailer-fake" => mailer = Some(Mailer::Fake(PathBuf::from(value(&mut it, "--mailer-fake")?))),
+            flag @ "--mailer-fake" => mailer = Some(Mailer::Fake(PathBuf::from(value(&mut it, flag)?))),
             "--help" | "-h" => return Ok(Command::Help),
             "--version" => return Err("--version is read as the first argument: skep-provision --version".to_owned()),
             other => return Err(format!("serve: unknown argument '{other}'")),
@@ -367,13 +374,13 @@ fn parse_invite(mut it: impl Iterator<Item = String>) -> Result<Command, String>
     let mut suffix = DEFAULT_SUFFIX.to_owned();
     while let Some(arg) = it.next() {
         match arg.as_str() {
-            "--address" => address = Some(mail_address("--address", value(&mut it, "--address")?)?),
-            "--code" => {
-                let v = value(&mut it, "--code")?;
-                code = Some(InviteCode::parse(&v).ok_or_else(|| format!("--code: '{v}' is not 1 to {MAX_CODE_BYTES} letters, digits, '-', '.', '_' or '~'"))?);
+            flag @ "--address" => address = Some(mail_address(flag, &value(&mut it, flag)?)?),
+            flag @ "--code" => {
+                let v = value(&mut it, flag)?;
+                code = Some(InviteCode::parse(&v).ok_or_else(|| format!("{flag}: '{v}' is not 1 to {MAX_CODE_BYTES} letters, digits, '-', '.', '_' or '~'"))?);
             }
-            "--state-dir" => state_dir = Some(PathBuf::from(value(&mut it, "--state-dir")?)).filter(|p| !p.as_os_str().is_empty()),
-            "--suffix" => suffix = domain(value(&mut it, "--suffix")?)?,
+            flag @ "--state-dir" => state_dir = Some(PathBuf::from(value(&mut it, flag)?)).filter(|p| !p.as_os_str().is_empty()),
+            flag @ "--suffix" => suffix = domain(flag, value(&mut it, flag)?)?,
             "--help" | "-h" => return Ok(Command::Help),
             "--version" => return Err("--version is read as the first argument: skep-provision --version".to_owned()),
             other => return Err(format!("invite: unknown argument '{other}'")),

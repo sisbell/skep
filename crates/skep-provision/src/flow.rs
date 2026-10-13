@@ -454,13 +454,13 @@ impl Service {
     }
 
     /// ONE POST PROVISIONED on the worker that owns its name: the steps,
-    /// then live — the route lock let go of first — or cleaned up, the
-    /// route lock held on into the cleanup where the steps took it; the mail
-    /// after.
+    /// then live — the route lock let go of first — and the mail after it;
+    /// or cleaned up, the route lock held on into the cleanup where the steps
+    /// took it, and no mail.
     fn provision(&self, job: Job) {
         let name = &job.name;
         let mut made = Made::default();
-        let live = match self.steps(&job, &mut made) {
+        match self.steps(&job, &mut made) {
             Ok(()) => {
                 // The route change is done: its lock let go of before the
                 // spend and the mail, which change no route.
@@ -481,17 +481,14 @@ impl Service {
                 if spent.is_ok() {
                     self.book().release(&job.code);
                 }
-                true
+                // The mail, last: after the page, never ahead of it.
+                self.hand_over_mail(job);
             }
             Err(step) => {
                 self.log(&format!("{name}: FAILED at {step}"));
                 self.cleanup(name, made, CleanupOn::Failure);
                 self.book().mark_failed(&job);
-                false
             }
-        };
-        if live {
-            self.hand_over_mail(job);
         }
     }
 

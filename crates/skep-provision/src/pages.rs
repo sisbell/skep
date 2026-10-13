@@ -252,12 +252,15 @@ fn headers() -> Vec<(String, String)> {
 /// A STREAM UNDER ONE TRANSFER's DEADLINE: a read or a write begun once
 /// `until` has passed is `TimedOut`; one begun before runs to its socket
 /// timeout, so a transfer is bounded at its deadline and one timeout more.
-struct Deadlined<'a, S> {
-    stream: &'a mut S,
+/// It holds its stream as std's adapters hold theirs, by value — `&mut
+/// stream` lent where the caller keeps the stream, as the connection does
+/// across its two transfers.
+struct Deadlined<S> {
+    stream: S,
     until: Instant,
 }
 
-impl<S> Deadlined<'_, S> {
+impl<S> Deadlined<S> {
     /// `TimedOut` once the deadline has passed.
     fn check(&self) -> io::Result<()> {
         if Instant::now() >= self.until {
@@ -267,14 +270,14 @@ impl<S> Deadlined<'_, S> {
     }
 }
 
-impl<S: Read> Read for Deadlined<'_, S> {
+impl<S: Read> Read for Deadlined<S> {
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
         self.check()?;
         self.stream.read(buf)
     }
 }
 
-impl<S: Write> Write for Deadlined<'_, S> {
+impl<S: Write> Write for Deadlined<S> {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
         self.check()?;
         self.stream.write(buf)
@@ -327,8 +330,8 @@ fn answer(request: &Request, site: &Site, desk: &dyn Desk) -> Answer {
             }
         }
         ("GET", "/claim") => {
-            let invite = request.query.as_deref().and_then(|q| urlform::decode(q.as_bytes()).ok()).and_then(|f| f.get("invite").map(<[u8]>::to_vec)).unwrap_or_default();
-            ok(claim_page(site, None, &Post { name: b"", record: b"", invite: &invite }))
+            let form = request.query.as_deref().and_then(|q| urlform::decode(q.as_bytes()).ok()).unwrap_or_default();
+            ok(claim_page(site, None, &Post { name: b"", record: b"", invite: form.get("invite").unwrap_or_default() }))
         }
         ("POST", "/claim") => {
             let Ok(form) = urlform::decode(&request.body) else { return bad_form(site) };
@@ -385,7 +388,7 @@ button{margin-top:1.25rem;font:inherit}";
 /// THE FRAME every page shares: the suffix as its title and heading, the
 /// style, and — on a page showing D-7 — the refresh to the status URL.
 fn page(site: &Site, refresh: Option<&str>, body: &str) -> String {
-    let suffix = escape(&site.suffix, false);
+    let suffix = escape(&site.suffix, Within::Content);
     let refresh = refresh.map_or_else(String::new, |to| format!("<meta http-equiv=\"refresh\" content=\"{REFRESH_SECS}; url={}\">\n", attr(to)));
     format!(
         "<!doctype html>\n<html lang=\"en\">\n<head>\n<meta charset=\"utf-8\">\n<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n{refresh}<title>{suffix}</title>\n<style>{STYLE}</style>\n</head>\n<body>\n<h1>{suffix}</h1>\n{body}</body>\n</html>\n"
@@ -435,7 +438,7 @@ fn claim_page(site: &Site, refusal: Option<Words>, post: &Post<'_>) -> String {
         attr(&String::from_utf8_lossy(post.name)),
         row(&site.fill(RECORD_LABEL)),
         row(&site.fill(RECORD_HELP)),
-        escape(&String::from_utf8_lossy(post.record), false),
+        escape(&String::from_utf8_lossy(post.record), Within::Content),
         row(&site.fill(INVITE_LABEL)),
         attr(&String::from_utf8_lossy(post.invite)),
         row(&site.fill(CLAIM_BUTTON)),
@@ -476,19 +479,32 @@ fn paragraphs(reply: &str) -> String {
 fn row(words: &str) -> String {
     let spans: Vec<&str> = words.split('`').collect();
     if spans.len().is_multiple_of(2) {
-        return escape(words, false);
+        return escape(words, Within::Content);
     }
-    spans.iter().enumerate().map(|(i, span)| if i % 2 == 1 { format!("<code>{}</code>", escape(span, false)) } else { escape(span, false) }).collect()
+    spans.iter().enumerate().map(|(i, span)| if i % 2 == 1 { format!("<code>{}</code>", escape(span, Within::Content)) } else { escape(span, Within::Content) }).collect()
 }
 
-/// AN ATTRIBUTE's VALUE: escaped as [`escape`] escapes, the quotes too.
+/// WHERE ESCAPED TEXT IS SET: an element's content, or an attribute's
+/// value — the one place a quote could end what holds it, so the one place
+/// the quotes are escaped.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Within {
+    /// An element's content — the title, a paragraph, a `<code>`, the
+    /// textarea: `&`, `<` and `>` escaped, the quotes kept as written.
+    Content,
+    /// An attribute's value: the two quotes escaped too.
+    Attribute,
+}
+
+/// AN ATTRIBUTE's VALUE: [`escape`] within an attribute.
 fn attr(text: &str) -> String {
-    escape(text, true)
+    escape(text, Within::Attribute)
 }
 
-/// THE ONE ESCAPER: `&`, `<` and `>`, and with `quotes` the two quotes too;
-/// nothing else changes, so a person's field reads back as sent.
-fn escape(text: &str, quotes: bool) -> String {
+/// THE ONE ESCAPER: `&`, `<` and `>`, and within an attribute the two
+/// quotes too; nothing else changes, so a person's field reads back as sent.
+fn escape(text: &str, within: Within) -> String {
+    let quotes = within == Within::Attribute;
     let mut out = String::with_capacity(text.len());
     for c in text.chars() {
         match c {

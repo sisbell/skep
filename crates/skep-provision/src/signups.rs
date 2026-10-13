@@ -63,17 +63,18 @@ impl From<io::Error> for SignUpRefused {
     }
 }
 
-/// THE SIGN-UP FILE, one writer at a time.
+/// THE SIGN-UP FILE, one writer at a time: its path held under the lock its
+/// writer takes, so the file is reached through the lock or not at all —
+/// the one writer `whole`'s replacement asks of every path it replaces.
 #[derive(Debug)]
 pub struct SignUps {
-    path: PathBuf,
-    write_lock: Mutex<()>,
+    file: Mutex<PathBuf>,
 }
 
 impl SignUps {
     /// The sign-up file in `state_dir`.
     pub fn new(state_dir: &StateDir) -> SignUps {
-        SignUps { path: state_dir.file(SIGNUPS), write_lock: Mutex::new(()) }
+        SignUps { file: Mutex::new(state_dir.file(SIGNUPS)) }
     }
 
     /// ONE SIGN-UP KEPT: the field's bytes, an address by the rule, appended
@@ -86,8 +87,8 @@ impl SignUps {
     pub fn append(&self, field: &[u8]) -> Result<(), SignUpRefused> {
         let address = std::str::from_utf8(field).ok().and_then(MailAddress::parse).ok_or(SignUpRefused::NotAnAddress)?;
         let line = format!("{} {}\n", address.as_str(), today());
-        let _one_writer = self.write_lock.lock().unwrap_or_else(|e| e.into_inner());
-        let mut text = read_or_empty(&self.path)?;
+        let file = self.file.lock().unwrap_or_else(|e| e.into_inner());
+        let mut text = read_or_empty(&file)?;
         if !text.is_empty() && !text.ends_with('\n') {
             text.push('\n');
         }
@@ -95,7 +96,7 @@ impl SignUps {
             return Err(SignUpRefused::Full);
         }
         text.push_str(&line);
-        write_whole(&self.path, text.as_bytes())?;
+        write_whole(&file, text.as_bytes())?;
         Ok(())
     }
 }

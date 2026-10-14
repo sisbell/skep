@@ -106,8 +106,10 @@ impl Log {
     /// One CALL the page made: `call` its name — one of the bridge's
     /// spellings (`CALLS`), and `'static`, so the bytes of a page's request
     /// cannot reach the log; a name of no call is `Log::unknown_call`'s,
-    /// kept by its length alone — `bytes_in` the request's body, `bytes_out`
-    /// the answer's, `elapsed` its time, `outcome` how it was answered.
+    /// kept by its length alone — `bytes_in` the call's arguments and
+    /// `bytes_out` its answer, each counted as compact JSON — a stream's
+    /// `bytes_out` the bytes its body yielded — `elapsed` its time, `outcome`
+    /// how it was answered.
     pub fn call(&self, call: &'static str, bytes_in: usize, bytes_out: usize, elapsed: Duration, outcome: CallOutcome) {
         self.push(json!({
             "kind": "call",
@@ -174,12 +176,12 @@ impl Log {
 
 /// THE ONE DIALER of the shell: `PlainHttp` — which writes no `Origin`
 /// header, so the daemon's bare set is met by the shell and never by the
-/// page — behind the dial log and behind the shell's STOP: once `stopping`
-/// stands (`Shell::shutdown`), every dial is refused as one that made no
-/// connection, recorded nowhere since none was made, so every loop that
-/// dials — a feed read to a board's head, the library's drain beneath it —
-/// ends at its next exchange, whatever a board answers. Cloned into every
-/// board; one record, one stop.
+/// page — behind the dial log and behind the shell's STOP: once
+/// [`ShellDialer::stop`] is called (`Shell::shutdown`), every dial is
+/// refused as one that made no connection, recorded nowhere since none was
+/// made, so every loop that dials — a feed read to a board's head, the
+/// library's drain beneath it — ends at its next exchange, whatever a board
+/// answers. Cloned into every board; one record, one stop.
 #[derive(Debug, Clone)]
 pub struct ShellDialer {
     inner: PlainHttp,
@@ -188,9 +190,15 @@ pub struct ShellDialer {
 }
 
 impl ShellDialer {
-    /// The plain arm behind `log`, dialing until `stopping` stands.
-    pub fn new(log: Arc<Log>, stopping: Arc<AtomicBool>) -> ShellDialer {
-        ShellDialer { inner: PlainHttp::new(), log, stopping }
+    /// The plain arm behind `log`, dialing until [`ShellDialer::stop`].
+    pub fn new(log: Arc<Log>) -> ShellDialer {
+        ShellDialer { inner: PlainHttp::new(), log, stopping: Arc::new(AtomicBool::new(false)) }
+    }
+
+    /// THE STOP (`Shell::shutdown`): from now on this dialer and every clone
+    /// of it refuse every dial as one that made no connection.
+    pub fn stop(&self) {
+        self.stopping.store(true, Ordering::SeqCst);
     }
 
     /// The refusal of a dial once the stop stands: a connection never made,
@@ -303,7 +311,7 @@ mod tests {
         let token = "9f".repeat(16);
         let body = format!("{{\"op\":\"insert\",\"token\":\"{token}\"}}");
         let req = Request::post("/op?x=1", body.clone().into_bytes()).header("Skepd-Session", &token);
-        assert!(ShellDialer::new(Arc::clone(&log), Arc::default()).exchange(&origin, &req).is_err(), "no board answers at a released port");
+        assert!(ShellDialer::new(Arc::clone(&log)).exchange(&origin, &req).is_err(), "no board answers at a released port");
         let entries = log.entries();
         assert_eq!(entries.len(), 1, "the unanswered dial is recorded: {entries:?}");
         let entry = &entries[0];
@@ -327,7 +335,7 @@ mod tests {
         let origin = Origin::parse(&format!("http://127.0.0.1:{port}")).unwrap();
         let token = "9f".repeat(16);
         let head = RequestHead { method: Method::Get, path: "/blob?i=1.0.1.0.1.0.1.1".into(), headers: vec![("Skepd-Session".into(), token.clone())], content_length: Some(7) };
-        let streamed = ShellDialer::new(Arc::clone(&log), Arc::default()).stream(&origin, &head, &mut std::io::empty(), &mut |_| {});
+        let streamed = ShellDialer::new(Arc::clone(&log)).stream(&origin, &head, &mut std::io::empty(), &mut |_| {});
         assert!(streamed.is_err(), "no board answers at a released port");
         let entries = log.entries();
         assert_eq!(entries.len(), 1, "the unanswered stream is recorded: {entries:?}");
@@ -338,19 +346,22 @@ mod tests {
         assert!(!kept.contains(&token) && !kept.contains("Skepd-Session") && !kept.contains("1.0.1.0.1"), "{kept}");
     }
 
-    /// THE STOP DIALS NOTHING: once the shell's stop stands, an exchange and
-    /// a stream at a board listening — its backlog would take the connection
-    /// — are each refused as connections never made, at once, the log
-    /// recording none and the board never asked (the mutant that dials past
-    /// the stop connects through the backlog and waits out the read bound,
-    /// and a board that answers without end holds the shell's stop for good).
+    /// THE STOP DIALS NOTHING: once a clone of the shell's dialer is stopped,
+    /// an exchange and a stream through the dialer itself at a board
+    /// listening — its backlog would take the connection — are each refused
+    /// as connections never made, at once, the log recording none and the
+    /// board never asked (the mutant that dials past the stop connects
+    /// through the backlog and waits out the read bound, and a board that
+    /// answers without end holds the shell's stop for good; the one whose
+    /// clone stops alone leaves every other board of the shell dialing).
     #[test]
     fn a_stopped_dialer_makes_no_connection() {
         let log = Arc::new(Log::new());
         let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
         listener.set_nonblocking(true).unwrap();
         let origin = Origin::parse(&format!("http://127.0.0.1:{}", listener.local_addr().unwrap().port())).unwrap();
-        let dialer = ShellDialer::new(Arc::clone(&log), Arc::new(AtomicBool::new(true)));
+        let dialer = ShellDialer::new(Arc::clone(&log));
+        dialer.clone().stop();
         let started = Instant::now();
         assert!(matches!(dialer.exchange(&origin, &Request::get("/health")), Err(DialError::Connect(_))));
         let head = RequestHead { method: Method::Get, path: "/events".into(), headers: Vec::new(), content_length: None };

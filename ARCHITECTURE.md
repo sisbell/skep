@@ -1199,11 +1199,13 @@ Rules that hold across its files:
   which logs it; the row methods are `shell`'s alone — private, or
   `pub(super)` in `shell/ceremony.rs` — so a transport cannot serve a call
   the log never saw. `Shell::fetch` is the one public row, because it
-  streams: its transport logs it. `tests/it/tidy.rs` pins `Shell`'s public
-  methods across every `impl Shell` block of `shell.rs` and its non-test
-  children; the compiler holds `call`'s dispatch to one arm per call,
-  and `CALLS`, the list a transport admits a call by, is spelled from the
-  same enum, so no name is listed that the dispatch does not answer.
+  streams; it logs its own call, the stream's entry written as its body is
+  dropped, so a transport logs only the refusals its own seam answers.
+  `tests/it/tidy.rs` pins `Shell`'s public methods across every `impl
+  Shell` block of `shell.rs` and its non-test children; the compiler holds
+  `call`'s dispatch to one arm per call, and `CALLS`, the list a transport
+  admits a call by, is spelled from the same enum, so no name is listed
+  that the dispatch does not answer.
 - **A session ends once.** A death signal is met by two hands that end
   sessions — the shell on a call's thread, at its dial or at a read its
   attest composer made (`Unattested::Died`, no refusal of the composer's),
@@ -1293,8 +1295,10 @@ Rules that hold across its files:
 - **The declarations are pinned.** Every shape in the table has a sample
   the suite round-trips; a required field missing, or a built field
   undeclared on a shape the table does not mark `open`, is red, the
-  declared call rows are the dispatch's `CALLS`, and the declared event
-  names are rendered from `EventName`.
+  declared call rows are the dispatch's `CALLS`, every optional argument
+  member a row of one form declares is refused by name when sent in a form
+  its type refuses, and the declared event names are rendered from
+  `EventName`.
 - **Persist first.** A `held` answer is a promise the disk already keeps:
   the burst's line is written and synced before `op` answers `held`
   (§3c.3, J1), so a crash after the answer loses nothing of it, and

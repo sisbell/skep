@@ -30,7 +30,7 @@
 //! it, and an item a transport reads has one path, the root's.
 //!
 //! THE DOOR. `Shell` answers the page's calls through `call`, which logs
-//! each, and `fetch`, which streams and its transport logs: every row
+//! each, and `fetch`, which streams and logs itself: every row
 //! method is `shell`'s alone — private there, `pub(super)` in the child
 //! module that holds the ceremonial rows — so no call is served past the
 //! log. Its public methods, read off every `impl Shell` block of

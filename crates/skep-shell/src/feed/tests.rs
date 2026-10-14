@@ -2,12 +2,13 @@
 //! the bridge spells them — every arm, standing and mark a declared word,
 //! and the search answer built as its declarations say; THE FEED THREAD's
 //! START, one `/health` read, and a search where no index stands dialing
-//! nothing; and THE COMMIT STREAM COALESCED — the waiting tick's mark, and a
-//! board committing far faster than the feed thread reads costing it a read
-//! per turn, never a read per commit, with a search queued behind them
-//! answered after one read at most. ONE READ TO THE HEAD meeting every
-//! answer as its paging rule says, and A DRAFTS CURSOR THE RETENTION FLOOR
-//! PASSED resumed at the floor, its rows still fed.
+//! nothing; THE OUTAGE's THREE STATES, said once and announced where no
+//! deliberate stop stands; and THE COMMIT STREAM COALESCED — the waiting
+//! tick's mark, and a board committing far faster than the feed thread
+//! reads costing it a read per turn, never a read per commit, with a search
+//! queued behind them answered after one read at most. ONE READ TO THE
+//! HEAD meeting every answer as its paging rule says, and A DRAFTS CURSOR
+//! THE RETENTION FLOOR PASSED resumed at the floor, its rows still fed.
 
 use std::io::{self, Read};
 use std::sync::atomic::AtomicUsize;
@@ -314,6 +315,59 @@ fn the_feed_thread_reads_health_once_at_its_start() {
     threads.stop();
     assert!(announced, "the stream that never connects is announced");
     assert_eq!(reads, 1, "the feed thread's start reads `/health` once");
+}
+
+/// THE OUTAGE's THREE STATES, as one feeder says them: a stream that fails
+/// twice is said on TALK once and announced `unreachable` once, the next
+/// tick saying `running`; under the own node's deliberate stop a failure is
+/// said and announced never, and the next tick says no `running` of its
+/// own; and a stop lifted while the stream is still down lets the next
+/// failure be announced, said no second time (the mutants that announce
+/// under the stop, owe `running` for an outage never announced, or say an
+/// outage twice before the stream answers).
+#[test]
+fn an_outage_is_said_once_and_announced_where_no_stop_stands() {
+    let fake = Committing::new(None, &Arc::new(AtomicBool::new(false)), Duration::ZERO);
+    let entry = entry_over(Arc::clone(&fake));
+    let store = TempDir::new().unwrap();
+    let bus = Arc::new(EventBus::new());
+    let rx = bus.subscribe();
+    let Shared { bus, sessions, data_dir, holds, .. } = shared_over(&entry, &Arc::new(Sessions::new(None)), &bus, &store);
+    let lines = Arc::new(Mutex::new(Vec::new()));
+    let kept = Arc::clone(&lines);
+    let talk: Talk = Arc::new(move |l: &str| kept.lock().unwrap().push(l.to_string()));
+    let mut feeder = Feeder {
+        entry: &entry,
+        bus,
+        sessions,
+        data_dir,
+        talk,
+        holds: Arc::clone(&holds),
+        consumer: None,
+        published_since: None,
+        drafts_since: HashMap::new(),
+        last_mode: None,
+        last_index_state: BTreeMap::new(),
+        session_references: HashMap::new(),
+        outage: Outage::Up,
+    };
+    let daemon = || -> Vec<String> { rx.try_iter().filter(|e| e.name == EventName::Daemon).map(|e| e.data["state"].as_str().unwrap_or("?").to_string()).collect() };
+    let said = || lines.lock().unwrap().iter().filter(|l| l.contains("is not answering")).count();
+    feeder.unreachable("refused");
+    feeder.unreachable("refused");
+    assert_eq!((daemon(), said()), (vec!["unreachable".to_string()], 1), "announced once, said once");
+    feeder.tick(10);
+    assert_eq!(daemon(), ["running"], "the announced outage owes the next tick's `running`");
+    holds.set_node_stopped("b-1", true);
+    feeder.unreachable("refused");
+    feeder.unreachable("refused");
+    assert_eq!((daemon(), said()), (Vec::<String>::new(), 2), "under the stop, said once and announced never");
+    feeder.tick(10);
+    assert!(daemon().is_empty(), "an outage never announced owes no `running`");
+    feeder.unreachable("refused");
+    holds.set_node_stopped("b-1", false);
+    feeder.unreachable("refused");
+    assert_eq!((daemon(), said()), (vec!["unreachable".to_string()], 3), "the lifted stop's next failure is announced, the outage said once");
 }
 
 /// A board whose index cannot open: every `/op` dial — the consumer's read

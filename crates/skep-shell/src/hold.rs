@@ -42,6 +42,7 @@
 //! another's.
 
 use std::collections::HashMap;
+use std::fmt;
 use std::fs::File;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
@@ -57,12 +58,12 @@ use skep_client::DialError;
 use skep_identity::BoardTerm;
 use skep_search::Chain;
 
-use crate::attest::{attest_room, in_checked_set, insert_terms, Unattested};
+use crate::attest::{attest_room, insert_terms, Unattested};
 use crate::events::{EventBus, EventName};
 use crate::held::{Done, DoneError, HaltWhy, HeldDir, HeldLine, HeldQueue, Opened, Reason, Unheld, MAX_HELD_FRAME_BYTES, MAX_HELD_LINES};
 use crate::refs::BoardEntry;
 use crate::refusal::{Name, Refusal};
-use crate::sessions::{SessionEntry, SessionKind, Sessions};
+use crate::sessions::{SessionEntry, Sessions};
 use crate::wire::{document_address, json_len, MAX_FRAME_BYTES};
 use crate::Talk;
 
@@ -304,8 +305,9 @@ impl Burst {
     ///   (`wire::document_address`) — what the resend's read names `under`
     ///   and a held line is keyed by — else `malformed_args`;
     /// * its bytes as sent, and as every resend sends them — the attest
-    ///   stripped and, under a session whose key attests the kind, the most
-    ///   an attest adds ([`attest_room`]) — within the board's frame cap
+    ///   stripped and, under a session whose key attests the kind
+    ///   (`SessionEntry::attesting_key`), the most an attest adds
+    ///   ([`attest_room`]) — within the board's frame cap
     ///   ([`MAX_FRAME_BYTES`], which the board answers `413` past, unread),
     ///   else `frame_too_large`;
     /// * an insert such a session attests composable from the frame alone
@@ -316,7 +318,7 @@ impl Burst {
             return Err(Refusal::malformed("frame.op"));
         }
         let doc = frame["doc"].as_str().filter(|d| document_address(d).is_some()).ok_or_else(|| Refusal::malformed("frame.doc"))?.to_string();
-        let attested = matches!(session.facts.kind, SessionKind::Signed { .. }) && frame["op"].as_str().is_some_and(in_checked_set);
+        let attested = frame["op"].as_str().and_then(|op| session.attesting_key(op)).is_some();
         let sent_bytes = json_len(&frame);
         // The attest a page supplied is never stored, so a resend's frame is
         // the frame without its member — `,"attest":` and the value.
@@ -617,8 +619,9 @@ impl Holds {
         Arc::new(Holds { sessions, bus, key_store, data_dir, talk, boards })
     }
 
-    fn say(&self, line: impl AsRef<str>) {
-        (self.talk)(line.as_ref());
+    /// `line` said on TALK as the hold's: `held: ` and the line.
+    fn say(&self, line: impl fmt::Display) {
+        (self.talk)(&format!("held: {line}"));
     }
 
     /// The board `board_reference` names — the one place the type's
@@ -699,7 +702,7 @@ impl Holds {
                 Directory::ThisWindow { dir, .. } => match dir.open_file(principal, session.facts.account.as_deref().unwrap_or("")) {
                     Ok(Opened::Live { queue, aside }) => {
                         if let Some(aside) = aside {
-                            self.say(format!("held: principal {principal}'s held file named another board or principal, and is set aside at {}", aside.display()));
+                            self.say(format_args!("principal {principal}'s held file named another board or principal, and is set aside at {}", aside.display()));
                         }
                         ph.queue = queue;
                         ph.custody = Custody::File;
@@ -839,7 +842,7 @@ impl Holds {
         let unwritable = match &ph.custody {
             Custody::OtherWindow => {
                 said = cause::OTHER_WINDOW.to_string();
-                self.say(format!("held: another window holds this board's held text; {doc}'s burst is kept in memory alone"));
+                self.say(format_args!("another window holds this board's held text; {doc}'s burst is kept in memory alone"));
                 None
             }
             Custody::Unwritable(why) => Some(why.clone()),
@@ -995,7 +998,7 @@ impl Holds {
     /// the file's re-mark budget, said on TALK.
     fn remark_line(&self, ph: &mut PrincipalHold, k: u64, reason: Reason) {
         if let Err(e) = ph.queue.remark(k, reason) {
-            self.say(format!("held: line {k}'s new cause could not be written ({e}); a reopen reads its earlier one"));
+            self.say(format_args!("line {k}'s new cause could not be written ({e}); a reopen reads its earlier one"));
         }
     }
 
@@ -1003,7 +1006,7 @@ impl Holds {
     /// refused said on TALK.
     fn done_line(&self, ph: &mut PrincipalHold, k: u64, done: Done) {
         if let Err(DoneError::Unwritten(e)) = ph.queue.done(k, done) {
-            self.say(format!("held: line {k} is settled, and its `done` could not be written ({e}); a reopen reads it as held, and its read decides it"));
+            self.say(format_args!("line {k} is settled, and its `done` could not be written ({e}); a reopen reads it as held, and its read decides it"));
         }
         ph.reissues.remove(&k);
     }

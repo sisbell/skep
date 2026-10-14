@@ -96,19 +96,28 @@ fn every_declared_type_round_trips_its_sample_against_the_table() {
 }
 
 /// The file names every shape, every call of §4b.1 — its rows the
-/// dispatch's calls, in the dispatch's order — both answers and the seven
-/// events; a field's optionality renders as `?`.
+/// dispatch's calls, in the dispatch's order, each form of a row's argument
+/// object its members in their order, the forms joined as a union and a
+/// form of no member `{}` — both answers and the seven events; a field's
+/// optionality renders as `?`.
 #[test]
 fn the_file_names_every_shape_call_and_event() {
     let text = declarations();
     for shape in SHAPES {
         assert!(text.contains(&format!("export interface {} {{", shape.name)), "{}", shape.name);
     }
-    for (name, _, _) in CALL_ROWS {
-        assert!(text.contains(&format!("  {name}(args: ")), "{name}");
+    for row in CALL_ROWS {
+        assert!(text.contains(&format!("  {}(args: ", row.name)), "{}", row.name);
     }
     assert_eq!(CALL_ROWS.len(), 22, "the twenty-two calls");
-    assert_eq!(CALL_ROWS.iter().map(|c| c.0).collect::<Vec<_>>(), crate::CALLS, "the declared rows are the dispatch's calls, in its order");
+    assert_eq!(CALL_ROWS.iter().map(|row| row.name).collect::<Vec<_>>(), crate::CALLS, "the declared rows are the dispatch's calls, in its order");
+    for line in [
+        "  boards(args: {}): Promise<Outcome<BoardRow[]>>;\n",
+        "  session(args: { board: string; principal?: number }): Promise<Outcome<SessionOpened>>;\n",
+        "  op(args: { session: string; frame: unknown } | { guest: true; board?: string; origin?: string; frame: unknown }): Promise<Outcome<unknown>>;\n",
+    ] {
+        assert!(text.contains(line), "the row renders as declared: {line}");
+    }
     assert!(text.contains("  answer(args: Answer)") && text.contains("  cancel(args: Cancel)"));
     assert!(
         text.contains("export type EventName = 'mode' | 'session-died' | 'daemon' | 'feed' | 'index' | 'moment' | 'held';\n\n"),

@@ -63,7 +63,7 @@ use skep_client::store::{FileStore, KeyFacts, KeySelector, KeyStore, Purpose, St
 use skep_client::{Board, Origin};
 use skep_identity::Fingerprint;
 
-use crate::attest::{wants_attest, Composer, Unattested};
+use crate::attest::{in_checked_set, wants_attest, Composer, Unattested};
 use crate::events::{EventBus, EventName};
 use crate::refs::{session_reference, BoardEntry};
 use crate::refusal::{Name, Refusal};
@@ -117,21 +117,34 @@ pub struct SessionEntry {
 }
 
 impl SessionEntry {
+    /// The key a write of `op` under this session is attested with — the key
+    /// that opened it — where the session holds one and `op` is one of the
+    /// ten kinds that have an entry frame (`attest::in_checked_set`); none
+    /// otherwise. What [`SessionEntry::attest`] signs with, and what the
+    /// hold's door keeps an attest's room for (`Burst::admit`).
+    pub fn attesting_key(&self, op: &str) -> Option<&Fingerprint> {
+        match &self.facts.kind {
+            SessionKind::Signed { fingerprint, .. } if in_checked_set(op) => Some(fingerprint),
+            _ => None,
+        }
+    }
+
     /// THE ATTEST a write under this session carries (`attest`'s rule):
-    /// composed at the session's own board and signed by the key that opened
-    /// the session, where the session holds one and [`wants_attest`] admits
-    /// the frame — the one place the composer's precondition is discharged;
-    /// the frame as it stands otherwise, and where the board has no `H.1` to
-    /// sign over (the board judges that write). Refused — nothing is then to
-    /// be sent — `attest_not_composed` where the composer, or the read of
-    /// the board's `H.1` it signs over, halted; `store_unreadable` where the
-    /// session's key file cannot be read; `no_account` where the board
-    /// answered the session no account; and with the board's refusal, or
-    /// `unreachable`, where a read it needed was refused or not answered;
+    /// composed at the session's own board and signed by the key
+    /// [`SessionEntry::attesting_key`] names for the frame's op, where it
+    /// names one and [`wants_attest`] admits the frame — the one place the
+    /// composer's precondition is discharged; the frame as it stands
+    /// otherwise, and where the board has no `H.1` to sign over (the board
+    /// judges that write). Refused — nothing is then to be sent —
+    /// `attest_not_composed` where the composer, or the read of the board's
+    /// `H.1` it signs over, halted; `store_unreadable` where the session's
+    /// key file cannot be read; `no_account` where the board answered the
+    /// session no account; and with the board's refusal, or `unreachable`,
+    /// where a read it needed was refused or not answered;
     /// [`Unattested::Died`] where a read it made met the session's death
     /// signal, whose end is the caller's to run.
     pub fn attest(&self, store: &FileStore, frame: &mut Value) -> Result<(), Unattested> {
-        let SessionKind::Signed { fingerprint: fp, .. } = &self.facts.kind else { return Ok(()) };
+        let Some(fp) = frame["op"].as_str().and_then(|op| self.attesting_key(op)) else { return Ok(()) };
         if !wants_attest(frame) {
             return Ok(());
         }

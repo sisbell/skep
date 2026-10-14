@@ -128,20 +128,17 @@ fn route(provider: &Provider<'_>, req: &Request, stream: &mut TcpStream, cors: &
                 Ok(a) => a,
                 Err(detail) => return json(stream, 400, cors, &json!({"refused": {"kind": "shell", "name": "malformed_body", "detail": detail}})),
             };
-            let started = Instant::now();
+            // The shell logs the call: a refusal at once, the stream as its
+            // body is dropped, whether the copy ends or the page hangs up.
             match shell.fetch(&args) {
                 Ok(mut fetched) => {
                     let content_type = fetched.headers.get("Content-Type").unwrap_or("application/octet-stream").to_string();
                     let length = fetched.headers.get("Content-Length").and_then(|l| l.parse::<usize>().ok());
                     write_head(stream, 200, cors, Some(&content_type), length)?;
-                    let copied = io::copy(&mut fetched.body, stream)?;
-                    shell.log().call("fetch", req.body.len(), copied as usize, started.elapsed(), CallOutcome::Stream);
+                    io::copy(&mut fetched.body, stream)?;
                     stream.flush()
                 }
-                Err(r) => {
-                    shell.log().call("fetch", req.body.len(), 0, started.elapsed(), CallOutcome::Refused);
-                    json(stream, 200, cors, &json!({"refused": r.to_value()}))
-                }
+                Err(r) => json(stream, 200, cors, &json!({"refused": r.to_value()})),
             }
         }
         ("POST", path) if path.starts_with("/bridge/fault/") => {
@@ -170,7 +167,7 @@ fn route(provider: &Provider<'_>, req: &Request, stream: &mut TcpStream, cors: &
             };
             if let Some(canned) = provider.canned.lock().expect("the canned lock").remove(call) {
                 talk(format!("script: `{call}` answers the canned refusal {}", canned["name"]));
-                shell.log().call(call, req.body.len(), canned.to_string().len(), Duration::ZERO, CallOutcome::Canned);
+                shell.log().call(call, args.to_string().len(), canned.to_string().len(), Duration::ZERO, CallOutcome::Canned);
                 return json(stream, 200, cors, &json!({"refused": canned}));
             }
             match shell.call(call, &args) {

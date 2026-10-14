@@ -324,11 +324,11 @@ impl Holds {
                 // The rider's count (§3c.4), per line across its probes: the
                 // third `durability` holds it.
                 self.with_principal(board_reference, principal, |ph| ph.reissues.entry(line.k).or_default().note(kind));
-                self.say(format!("held: line {} on {} was not taken ({refusal}); it is sent again at the next probe", line.k, line.doc));
+                self.say(format_args!("line {} on {} was not taken ({refusal}); it is sent again at the next probe", line.k, line.doc));
                 ControlFlow::Break(())
             }
             Dialed::Faced(refusal) => {
-                self.say(format!("held: line {} on {} was not taken ({refusal}); it is sent again at the next probe", line.k, line.doc));
+                self.say(format_args!("line {} on {} was not taken ({refusal}); it is sent again at the next probe", line.k, line.doc));
                 ControlFlow::Break(())
             }
             Dialed::Died => ControlFlow::Break(()),

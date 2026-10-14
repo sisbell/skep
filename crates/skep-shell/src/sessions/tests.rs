@@ -2,8 +2,9 @@
 //! beside the board it stands at; its END run once whichever hand meets the
 //! death — a second hand answering the first's reason, two hands at once one
 //! derivation, a hand that panics mid-end leaving the end to the next — a
-//! principal's supplement following its standing sessions, and a key's
-//! standing named by the list it stands in.
+//! principal's supplement following its standing sessions, a key's standing
+//! named by the list it stands in, and a session's key attesting the ten
+//! kinds with an entry frame alone.
 
 use std::io::Read;
 use std::net::TcpListener;
@@ -232,4 +233,21 @@ fn a_keys_standing_is_named_by_the_list_it_stands_in() {
     assert_eq!((refused.name(), refused.to_value()["kind"].as_str()), ("retired", Some("halt")), "{refused}");
     let refused = key_standing(&board, &walk(skep_client::KeySet::default()), &key, Site::Tail).unwrap_err();
     assert_eq!((refused.name(), refused.to_value()["kind"].as_str()), ("not_enrolled", Some("halt")), "{refused}");
+}
+
+/// A SESSION's KEY ATTESTS the ten kinds that have an entry frame and no
+/// other: a signed session names the key that opened it for an `insert`
+/// and none for a `delete`, and a bare session names none for either —
+/// what `attest` signs with and the hold's door keeps an attest's room for
+/// (the mutants that attest a bare session's write, or every kind, leave
+/// the door keeping room no send takes, or none where a send does).
+#[test]
+fn a_sessions_key_attests_the_checked_kinds_alone() {
+    let sessions = Sessions::new(None);
+    let signed = sessions.register(&at("b-1", nowhere()), signed_open(1, "1.0.1", "1.0.1"), &mut Recorded::default());
+    let SessionKind::Signed { fingerprint, .. } = &signed.facts.kind else { panic!("a signed session holds a key") };
+    assert_eq!((signed.attesting_key("insert"), signed.attesting_key("delete")), (Some(fingerprint), None));
+    let facts = Facts { principal: 2, account: Some("1.0.2".into()), kind: SessionKind::Bare };
+    let bare = sessions.register(&at("b-1", nowhere()), Open { token: Token::parse(&"8e".repeat(16)).unwrap(), facts, opened_at: 0 }, &mut Recorded::default());
+    assert_eq!((bare.attesting_key("insert"), bare.attesting_key("delete")), (None, None));
 }

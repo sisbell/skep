@@ -10,8 +10,11 @@
 //! it, is round-tripped through `serde_json` and its field names held equal
 //! to the table's. No generator crate: the table is the one source, and a
 //! field renamed in the table alone, or in the code alone, fails the pin.
-//! The event names are rendered from `events::EventName` itself, the type
-//! every event carries.
+//! The calls' argument objects are data beside it (`CALL_ROWS`' members),
+//! and the shell's suite sends each optional member a row of one form
+//! declares, in a form its type refuses, to the row itself, which must
+//! refuse it by name. The event names are rendered from `events::EventName`
+//! itself, the type every event carries.
 
 use std::fmt::Write;
 
@@ -111,42 +114,87 @@ const SHAPES: &[Shape] = &[
     Shape { name: "Resolve", open: false, doc: "`resolve(session, {held, act})` — the person's act at a REFUSED run's face or a MOVED document's", fields: &[req("session", "string"), req("held", "number"), req("act", "'drop' | 'send'")] },
 ];
 
-/// The calls, as the bridge spells them: the name, the argument type and
-/// the result type — the `Bridge` interface's rows, one per name of
-/// [`crate::CALLS`], the dispatch's list, in its order (the suite holds the
-/// two lists equal).
-const CALL_ROWS: &[(&str, &str, &str)] = &[
-    ("boards", "{}", "BoardRow[]"),
-    ("session", "{ board: string; principal?: number }", "SessionOpened"),
-    ("close", "{ session: string }", "Empty"),
-    ("keygen", "{ label?: string }", "Keygen"),
-    ("fingerprint", "{ select?: string; payload?: boolean }", "FingerprintRow[]"),
-    ("claim", "{ board: string; principal?: number; name?: string; paper?: boolean }", "Claimed"),
-    ("enroll", "{ board: string; payload: string; principal?: number }", "Enrolled"),
-    ("bind", "{ board: string; principal: number; account: string; origin: string }", "Bound"),
-    ("recover", "{ board: string; principal?: number; lost?: string[]; stolen?: boolean; anchorLost?: boolean }", "Recovered"),
-    ("rotate", "{ board: string; principal?: number; label?: string; payload?: string }", "Rotated"),
-    ("retire", "{ board: string; principal?: number; fingerprint: string }", "Empty"),
-    ("handoff", "{ board: string; account: string; payload?: string; principal?: number }", "HandoffDelegated | Empty"),
-    ("accept", "{ board: string; address: string; label?: string; paper?: boolean; noAnchors?: boolean }", "Accepted"),
-    ("health", "{ board: string }", "Health"),
-    ("probe", "{}", "Probe"),
-    ("op", "{ session: string; frame: unknown } | { guest: true; board?: string; origin?: string; frame: unknown }", "unknown"),
-    ("upload", "{ session: string; target: string; path: string }", "never"),
-    ("fetch", "{ session: string; i: string } | { guest: true; board?: string; origin?: string; i: string }", "Uint8Array"),
-    ("restore", "{ session: string; i: string }", "never"),
-    ("search", "{ session: string; board?: string; query: string; opts?: SearchOpts } | { guest: true; board?: string; origin?: string; query: string; opts?: SearchOpts }", "SearchAnswer"),
-    ("held", "{ session: string }", "HeldRow[]"),
-    ("resolve", "{ session: string; held: number; act: 'drop' | 'send' }", "Empty"),
+/// One call of the bridge as the file declares it: its name, its argument
+/// object — the members of each form it takes, the session form first where
+/// it takes the guest form beside it — and its result's type.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct CallRow {
+    pub(crate) name: &'static str,
+    pub(crate) forms: &'static [&'static [Field]],
+    pub(crate) result: &'static str,
+}
+
+/// THE CALLS, as the bridge spells them — the `Bridge` interface's rows, one
+/// per name of [`crate::CALLS`], the dispatch's list, in its order. The
+/// suite holds the two lists equal, and every optional member a row of one
+/// form declares to the form its row reads it in.
+pub(crate) const CALL_ROWS: &[CallRow] = &[
+    CallRow { name: "boards", forms: &[&[]], result: "BoardRow[]" },
+    CallRow { name: "session", forms: &[&[req("board", "string"), opt("principal", "number")]], result: "SessionOpened" },
+    CallRow { name: "close", forms: &[&[req("session", "string")]], result: "Empty" },
+    CallRow { name: "keygen", forms: &[&[opt("label", "string")]], result: "Keygen" },
+    CallRow { name: "fingerprint", forms: &[&[opt("select", "string"), opt("payload", "boolean")]], result: "FingerprintRow[]" },
+    CallRow { name: "claim", forms: &[&[req("board", "string"), opt("principal", "number"), opt("name", "string"), opt("paper", "boolean")]], result: "Claimed" },
+    CallRow { name: "enroll", forms: &[&[req("board", "string"), req("payload", "string"), opt("principal", "number")]], result: "Enrolled" },
+    CallRow { name: "bind", forms: &[&[req("board", "string"), req("principal", "number"), req("account", "string"), req("origin", "string")]], result: "Bound" },
+    CallRow {
+        name: "recover",
+        forms: &[&[req("board", "string"), opt("principal", "number"), opt("lost", "string[]"), opt("stolen", "boolean"), opt("anchorLost", "boolean")]],
+        result: "Recovered",
+    },
+    CallRow { name: "rotate", forms: &[&[req("board", "string"), opt("principal", "number"), opt("label", "string"), opt("payload", "string")]], result: "Rotated" },
+    CallRow { name: "retire", forms: &[&[req("board", "string"), opt("principal", "number"), req("fingerprint", "string")]], result: "Empty" },
+    CallRow { name: "handoff", forms: &[&[req("board", "string"), req("account", "string"), opt("payload", "string"), opt("principal", "number")]], result: "HandoffDelegated | Empty" },
+    CallRow {
+        name: "accept",
+        forms: &[&[req("board", "string"), req("address", "string"), opt("label", "string"), opt("paper", "boolean"), opt("noAnchors", "boolean")]],
+        result: "Accepted",
+    },
+    CallRow { name: "health", forms: &[&[req("board", "string")]], result: "Health" },
+    CallRow { name: "probe", forms: &[&[]], result: "Probe" },
+    CallRow {
+        name: "op",
+        forms: &[&[req("session", "string"), req("frame", "unknown")], &[req("guest", "true"), opt("board", "string"), opt("origin", "string"), req("frame", "unknown")]],
+        result: "unknown",
+    },
+    CallRow { name: "upload", forms: &[&[req("session", "string"), req("target", "string"), req("path", "string")]], result: "never" },
+    CallRow {
+        name: "fetch",
+        forms: &[&[req("session", "string"), req("i", "string")], &[req("guest", "true"), opt("board", "string"), opt("origin", "string"), req("i", "string")]],
+        result: "Uint8Array",
+    },
+    CallRow { name: "restore", forms: &[&[req("session", "string"), req("i", "string")]], result: "never" },
+    CallRow {
+        name: "search",
+        forms: &[
+            &[req("session", "string"), opt("board", "string"), req("query", "string"), opt("opts", "SearchOpts")],
+            &[req("guest", "true"), opt("board", "string"), opt("origin", "string"), req("query", "string"), opt("opts", "SearchOpts")],
+        ],
+        result: "SearchAnswer",
+    },
+    CallRow { name: "held", forms: &[&[req("session", "string")]], result: "HeldRow[]" },
+    CallRow { name: "resolve", forms: &[&[req("session", "string"), req("held", "number"), req("act", "'drop' | 'send'")]], result: "Empty" },
 ];
+
+/// One form of a call's argument object as the file spells it: `{}` where
+/// it carries no member, else `{ m: T; n?: U }`.
+fn argument_object(form: &[Field]) -> String {
+    if form.is_empty() {
+        return "{}".to_string();
+    }
+    let members: Vec<String> = form.iter().map(|f| format!("{}{}: {}", f.name, if f.required { "" } else { "?" }, f.ty)).collect();
+    format!("{{ {} }}", members.join("; "))
+}
 
 /// THE FILE: the preamble, the aliases, every shape, the refusal union,
 /// the events, and the bridge's rows.
 pub fn declarations() -> String {
     let mut out = String::new();
     out.push_str("// skep-shell — the bridge's declarations (client.md §4b), generated from\n");
-    out.push_str("// the crate's table (`SHAPES` in `src/shapes.rs`); every field name here\n");
-    out.push_str("// is pinned by the crate's own suite against the values its code builds.\n\n");
+    out.push_str("// the crate's tables (`SHAPES` and `CALL_ROWS` in `src/shapes.rs`); every\n");
+    out.push_str("// field name of a value the shell answers or emits is pinned by the crate's\n");
+    out.push_str("// own suite against the values its code builds, and every optional argument\n");
+    out.push_str("// member against the row that reads it.\n\n");
     out.push_str("export type Mode = 'UNCLAIMED' | 'CLAIMED-PERMISSIVE' | 'ENFORCING';\n");
     out.push_str("export type Empty = Record<string, never>;\n");
     out.push_str("export type Standing = 'public' | 'yours_to_read' | { held: { kind: 'named' | 'any_principal'; rung: 'document' | 'account'; issuer: string } };\n");
@@ -168,8 +216,9 @@ pub fn declarations() -> String {
     }
     out.push_str("/** The calls (client.md §4b.1): `POST /bridge/<name>` with the argument object; `{result}` or `{refused}` back. */\n");
     out.push_str("export interface Bridge {\n");
-    for (name, args, result) in CALL_ROWS {
-        let _ = writeln!(out, "  {name}(args: {args}): Promise<Outcome<{result}>>;");
+    for row in CALL_ROWS {
+        let forms: Vec<String> = row.forms.iter().map(|form| argument_object(form)).collect();
+        let _ = writeln!(out, "  {}(args: {}): Promise<Outcome<{}>>;", row.name, forms.join(" | "), row.result);
     }
     out.push_str("  answer(args: Answer): Promise<Outcome<Empty>>;\n");
     out.push_str("  cancel(args: Cancel): Promise<Outcome<Empty>>;\n");

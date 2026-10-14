@@ -1,19 +1,25 @@
 //! THE SHELL's OWN FRAME, with no daemon behind it: an `/op-at` refusal
 //! rebuilt into the board's verdict under the wire's status; the dispatch
 //! naming every call by its own spelling — `fetch` answered `streamed_call`
-//! through it — and logging each as one entry of its outcome and sizes; a
-//! present argument of another form refused before any dial; the guest form
-//! refusing every write kind of the wire undialed and reading the board its
-//! reference or its origin names; a search's `opts` read as one value, and
-//! its query held to the shell's bound at every target; a `select` of two
-//! keys or none refused by its name, a label the box refuses `empty_label`
-//! naming its cause, and the signed mode's check naming a keyless store; the
-//! shell's options printing no seed and the open's preconditions stopped
-//! loudly; every day dated as the calendar counts it; and the stop
-//! abandoning a walk that waits on the page, a walk begun after it asking
-//! the page nothing, and a search after it answered `feed_stopped`.
+//! through it — and logging each as one entry of its outcome and sizes, and
+//! `fetch` logging its own call, a stream's as its body is dropped; a
+//! present argument of another form refused before any dial, and every
+//! optional argument a call row declares read in its declared form; the
+//! guest form refusing every write kind of the wire undialed and reading
+//! the board its reference or its origin names; a search's `opts` read as
+//! one value, and its query held to the shell's bound at every target; a
+//! `select` of two keys or none refused by its name, a label the box
+//! refuses `empty_label` naming its cause, and the signed mode's check
+//! naming a keyless store; the shell's options printing no seed and the
+//! open's preconditions stopped loudly; every day dated as the calendar
+//! counts it; and the stop abandoning a walk that waits on the page, a walk
+//! begun after it asking the page nothing, and a search after it answered
+//! `feed_stopped`.
+
+use std::io::{Read, Write};
 
 use super::*;
+use crate::shapes::{Field, CALL_ROWS};
 
 /// The `/op-at` refusals `skep-client` answers as values are the board's
 /// verdicts again, each under the status and error document the wire
@@ -133,6 +139,48 @@ fn a_present_argument_of_another_form_is_refused_never_read_as_absent() {
     assert_eq!(defaulted.name(), "unreachable", "a null is the row's default, and the call goes on to the board");
 }
 
+/// EVERY OPTIONAL ARGUMENT A CALL ROW DECLARES IS READ IN ITS FORM (the
+/// declarations' `CALL_ROWS`): for each row of one form, each optional
+/// member it names — sent in a form no reader of its declared type takes,
+/// beside the row's required members in theirs — is refused
+/// `malformed_args` naming it, before any dial and before any moment (the
+/// mutants that stop reading a declared member, or read it in another form
+/// than the declared one, answer otherwise; the rows of two forms keep their
+/// cells in `a_present_argument_of_another_form_is_refused_never_read_as_absent`).
+#[test]
+fn every_declared_optional_argument_is_read_in_its_form() {
+    let dir = TempDir::new().unwrap();
+    let (shell, _) = open_shell(&nowhere(), &dir.path().join("store"), SessionMode::Bare { principal: 1 });
+    let _answerer = answer_moments(shell.subscribe(), Arc::clone(&shell.pending), Arc::new(Mutex::new(Vec::new())));
+    let board = shell.board_references().remove(0);
+    let in_form = |field: &Field| match (field.name, field.ty) {
+        ("board", _) => json!(board),
+        (_, "number") => json!(1),
+        _ => json!("x"),
+    };
+    let in_no_form = |field: &Field| match field.ty {
+        "string" => json!(7),
+        "string[]" => json!([7]),
+        _ => json!("x"),
+    };
+    let mut asked = 0;
+    for row in CALL_ROWS {
+        let [form] = row.forms else { continue };
+        for member in form.iter().filter(|f| !f.required) {
+            let mut args: serde_json::Map<String, Value> = form.iter().filter(|f| f.required).map(|f| (f.name.to_string(), in_form(f))).collect();
+            args.insert(member.name.to_string(), in_no_form(member));
+            let args = Value::Object(args);
+            let refused = match shell.call(row.name, &args) {
+                Ok(v) => panic!("{} {args}: answered {v}", row.name),
+                Err(r) => r.to_value(),
+            };
+            assert_eq!((refused["name"].as_str(), refused["what"].as_str()), (Some("malformed_args"), Some(member.name)), "{} {args}: {refused}", row.name);
+            asked += 1;
+        }
+    }
+    assert_eq!(asked, 21, "the optional members of the ten rows of one form that declare any");
+}
+
 /// THE GUEST FORM's SEARCH reads the board its reference or its canonical
 /// origin names (§4b.1's `search` row): the shell's own board's origin is
 /// that board — the target its reference is — an origin the shell holds no
@@ -234,6 +282,56 @@ fn every_call_is_one_log_entry_naming_its_outcome_and_sizes() {
         shell.log().entries().iter().map(|e| json!({"kind": e["kind"], "call": e["call"], "outcome": e["outcome"], "bytes_in": e["bytes_in"], "bytes_out": e["bytes_out"]})).collect();
     assert_eq!(logged, expected, "one entry per call, in order");
     assert_eq!(shell.log().entries()[3]["name_bytes"], "verify".len(), "the unknown name's length, never its bytes");
+}
+
+/// A board answering one `/blob` read with `body`, its `200` declaring the
+/// body's length.
+fn one_blob(body: &'static [u8]) -> String {
+    let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
+    let origin = format!("http://127.0.0.1:{}", listener.local_addr().unwrap().port());
+    thread::spawn(move || {
+        let Ok((mut stream, _)) = listener.accept() else { return };
+        let mut head = Vec::new();
+        let mut byte = [0u8; 1];
+        while !head.ends_with(b"\r\n\r\n") {
+            match stream.read(&mut byte) {
+                Ok(1) => head.push(byte[0]),
+                _ => return,
+            }
+        }
+        let _ = write!(stream, "HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", body.len());
+        let _ = stream.write_all(body);
+    });
+    origin
+}
+
+/// A FETCH LOGS ITS OWN CALL, as `call` logs every row: a refusal at once,
+/// its sizes the compact JSON of its arguments and of the refusal; a stream
+/// as its body is dropped — never while the body is read — `bytes_out` the
+/// bytes its reader took (the mutants that leave the entry to the
+/// transport, which a page hanging up mid-stream skips, or write it as
+/// `fetch` returns, before a byte is read).
+#[test]
+fn a_fetch_logs_its_own_call() {
+    let dir = TempDir::new().unwrap();
+    let shell = boardless(&dir);
+    let fetches = || -> Vec<Value> { shell.log().entries().into_iter().filter(|e| e["kind"] == "call" && e["call"] == "fetch").collect() };
+    let gone = json!({"session": "s-gone", "i": "1.0.1.0.1.0.1.1"});
+    let refused = shell.fetch(&gone).unwrap_err();
+    let logged = fetches();
+    assert_eq!(logged.len(), 1, "{logged:?}");
+    let sizes = |e: &Value| (e["outcome"].as_str().map(str::to_string), e["bytes_in"].as_u64(), e["bytes_out"].as_u64());
+    assert_eq!(sizes(&logged[0]), (Some("refused".into()), Some(gone.to_string().len() as u64), Some(refused.to_value().to_string().len() as u64)), "{}", logged[0]);
+    let guest = json!({"guest": true, "origin": one_blob(b"hello"), "i": "1.0.1.0.1.0.1.1"});
+    let mut fetched = shell.fetch(&guest).unwrap();
+    let mut read = [0u8; 2];
+    fetched.body.read_exact(&mut read).unwrap();
+    assert_eq!(&read, b"he");
+    assert_eq!(fetches().len(), 1, "no entry while the body is read");
+    drop(fetched);
+    let logged = fetches();
+    assert_eq!(logged.len(), 2, "{logged:?}");
+    assert_eq!(sizes(&logged[1]), (Some("stream".into()), Some(guest.to_string().len() as u64), Some(2)), "{}", logged[1]);
 }
 
 /// A listener that accepts every connection, counts it and drops it: a

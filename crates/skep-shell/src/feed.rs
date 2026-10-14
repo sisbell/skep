@@ -37,18 +37,18 @@
 //! behind them waits one read at most.
 //!
 //! THE `feed` UPDATE's SHAPE — THIS CRATE's DEFINITION (S-24 (b), the
-//! shell's): the `/changes` row's members VERBATIM (`at`, `op`, `docs`,
-//! `key`, `time`, `attest`, `new_prefix`, `new_id`, `link`, `placed`,
-//! `base_extent`, and any later member by the wire's forward rule), plus
-//! `position` (the row's `at`, named once more so a consumer reading the
-//! shell's shape need not know the wire's), and `class` — `published` for a
-//! row of the guest's feed, `drafts` for one of a session's supplement, the
-//! latter with `session`, the reference it was read under. The event
-//! carries `board`, the reference, beside `update`. The published feed
-//! starts at the head the board FIRST ANSWERS with — at the thread's start,
-//! or at its first `/health` after it, never at 0 for a board not yet up —
-//! and a session's drafts at the position the session opened at: a page
-//! re-reads what it shows on open and takes the updates from there.
+//! shell's): the `/changes` row VERBATIM — every member the declared
+//! `FeedUpdate` (`shapes`) names beside the three below, and any later
+//! member by the wire's forward rule — plus `position` (the row's `at`,
+//! named once more so a consumer reading the shell's shape need not know
+//! the wire's), and `class` — `published` for a row of the guest's feed,
+//! `drafts` for one of a session's supplement, the latter with `session`,
+//! the reference it was read under. The event carries `board`, the
+//! reference, beside `update`. The published feed starts at the head the
+//! board FIRST ANSWERS with — at the thread's start, or at its first
+//! `/health` after it, never at 0 for a board not yet up — and a session's
+//! drafts at the position the session opened at: a page re-reads what it
+//! shows on open and takes the updates from there.
 
 use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
@@ -311,12 +311,22 @@ struct Feeder<'b> {
     last_index_state: BTreeMap<Option<u64>, Value>,
     /// The session reference per mounted principal, for the `index` event.
     session_references: HashMap<u64, String>,
-    /// Whether `unreachable` was announced on the `daemon` event for this
-    /// board, its `running` then owed at the next tick.
-    announced_unreachable: bool,
-    /// The stream is down — said on TALK once per outage, announced or not
-    /// ([`Feeder::unreachable`]); cleared by the next tick.
-    down: bool,
+    /// The `/events` stream's outage as this thread has said it
+    /// ([`Feeder::unreachable`]), ended by the next tick.
+    outage: Outage,
+}
+
+/// The `/events` stream's outage as a feed thread has said it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Outage {
+    /// The stream has not failed since the last tick.
+    Up,
+    /// Down and said on TALK once — under the own node's deliberate stop,
+    /// which the shell announces, so announced on no event of this thread's.
+    Said,
+    /// Down, said, and announced `unreachable` on the `daemon` event: the
+    /// next tick owes `running`.
+    Announced,
 }
 
 impl<'b> Feeder<'b> {
@@ -337,8 +347,7 @@ impl<'b> Feeder<'b> {
             last_mode: None,
             last_index_state: BTreeMap::new(),
             session_references: HashMap::new(),
-            announced_unreachable: false,
-            down: false,
+            outage: Outage::Up,
         };
         // ONE `/health` read at the thread's start: the published feed's
         // start where the board answers, the mode, and `writes.halted`.
@@ -404,10 +413,9 @@ impl<'b> Feeder<'b> {
     }
 
     fn tick(&mut self, position: u64) {
-        let announced = self.announced_unreachable;
-        self.down = false;
+        let announced = self.outage == Outage::Announced;
+        self.outage = Outage::Up;
         if announced {
-            self.announced_unreachable = false;
             self.bus.emit(EventName::Daemon, json!({"board": self.entry.reference, "state": "running"}));
         }
         // The `/health` read first: where the board did not answer before,
@@ -439,23 +447,24 @@ impl<'b> Feeder<'b> {
     /// naming its board — EXCEPT under the own node's DELIBERATE STOP
     /// (`Holds::node_stopped`, set by `Shell::set_node_state`): a stop the
     /// person made is announced `stopped` once by the shell, this thread adds
-    /// no `unreachable` while the stop stands, and `self.announced_unreachable`
-    /// stays false, so the next tick says no `running` of its own either —
+    /// no `unreachable` while the stop stands, and the outage stays `Said`,
+    /// so the next tick says no `running` of its own either —
     /// `set_node_state(Running)` is the one `running`. Where the stop is
     /// lifted while the stream is still down, the next failure here is
     /// announced as built.
     fn unreachable(&mut self, text: &str) {
-        if self.announced_unreachable {
-            return;
-        }
-        if !self.down {
-            self.down = true;
-            self.say(format_args!("the commit stream is not answering: {text}"));
+        match self.outage {
+            Outage::Announced => return,
+            Outage::Up => {
+                self.outage = Outage::Said;
+                self.say(format_args!("the commit stream is not answering: {text}"));
+            }
+            Outage::Said => {}
         }
         if self.holds.node_stopped(&self.entry.reference) {
             return;
         }
-        self.announced_unreachable = true;
+        self.outage = Outage::Announced;
         self.bus.emit(EventName::Daemon, json!({"board": self.entry.reference, "state": "unreachable"}));
         // Every session at this board is dead where the board restarted;
         // the arm is read when the board answers again.

@@ -11,52 +11,39 @@
 //! module's alone behind ONE DOOR, [`Shell::call`], which dispatches on the
 //! bridge's spelling — one arm per call, the compiler holding the match
 //! exhaustive — and logs every call, so no call reaches a row past the log;
-//! [`Shell::fetch`] alone is public beside it, because it streams and its
-//! transport logs it. The ten ceremonial rows — the key store's two and
-//! the eight walks over `skep_client::ceremony` — are the child module
-//! `ceremony`'s, `pub(super)` to the door; a transport runs each call on
-//! the connection's thread. The page's two answers, [`Shell::answer`] and
-//! [`Shell::cancel`], route to the walk that asked. A death signal a call
-//! meets ends the session by the one sequence the board's feed thread runs
-//! too (`Sessions::end`), and the call answers `session_died` with the
+//! [`Shell::fetch`] alone is public beside it, because it streams; it logs
+//! its own call as `call` does. The ten ceremonial rows — the key store's
+//! two and the eight walks over `skep_client::ceremony` — are the child
+//! module `ceremony`'s, `pub(super)` to the door; a transport runs each call
+//! on the connection's thread. The page's two answers, [`Shell::answer`]
+//! and [`Shell::cancel`], route to the walk that asked. A death signal a
+//! call meets ends the session by the one sequence the board's feed thread
+//! runs too (`Sessions::end`), and the call answers `session_died` with the
 //! reason that sequence derived.
 //!
 //! WHAT THE SHELL REFUSES WITHOUT ASKING (ps3-5): a WRITE frame in the
-//! guest form (the board would answer `unauthenticated`; no dial is made);
-//! a BURST the board would take at no send — past its frame cap
-//! (`frame_too_large`), naming no document in its one spelling
-//! (`malformed_args` on `frame.doc`), an insert a signed session cannot
-//! attest (`attest_not_composed`) — or one its principal's held queue
-//! cannot keep (`held_full`, `store_halted`), each at the act (the hold's
-//! door); and nothing else of a frame — `op` is a frame pipe, the frame's
-//! semantics the wire's; a credential act from the page is refused by the
-//! daemon's own `content_session` beneath the shell (ps3-7). A call's
-//! ARGUMENTS are its row's (`shapes`' declarations): a required member
-//! absent or of another form, and an optional member present in another
-//! form, are refused `malformed_args` naming it, before any dial — never
-//! read as absent; absent or `null`, an optional member is the row's
-//! default. What it SIGNS: under a session that holds a key — the signed
-//! mode's — every write of the ten kinds that have an entry frame, the
-//! attest composed by `attest` from the shell's own reads, never from a
-//! preimage the page supplies, and signed by the key that opened the
-//! session (`SessionEntry::attest`). Every `/op` under a session, `/op-at`'s
-//! aside, takes the hold's one path (`Holds::send`, §3c.4): a BURST — one of
-//! the burst machine's five kinds — answered `held` where the board cannot
-//! take it, every other write faced where a burst's would be held; each ack
-//! noted for the hold's `base` (§3c.2), and every reissue-class answer
-//! reissued within the call — a `write_busy` once after a short wait, a
-//! first and second `durability` as-is — so the page meets the ack or the
-//! next refusal (§4b.1's `op` row). Where the
-//! library does not reach a row at this pin — `upload` and `restore`, whose
-//! media walk is the shell's lane's and not in `skep-client` — the call
-//! answers `not_reached` naming where it stops, never a silent stub;
-//! `fetch` reaches the dialer's streamed form and no further (the
-//! §Recovery order of the media design is not run here).
+//! guest form ([`WRITE_KINDS`]; the board would answer `unauthenticated`, so
+//! no dial is made), and a call's ARGUMENTS not of its row's form (`shapes`'
+//! declarations): a required member absent or of another form, and an
+//! optional member present in another form, refused `malformed_args`
+//! naming it before any dial — never read as absent; absent or `null`, an
+//! optional member is the row's default. Nothing else of a frame: `op` is a
+//! frame pipe, the frame's semantics the wire's, and a credential act from
+//! the page is refused by the daemon's own `content_session` beneath the
+//! shell (ps3-7). Every `/op` under a session, `/op-at`'s aside, goes by the
+//! hold's one path (`Holds::send`): what a burst is refused at the act for
+//! (`Burst::admit`), what is held and what is reissued within the call are
+//! the hold's to say, and what a signed session's attest signs is
+//! `SessionEntry::attest`'s. Where the library does not reach a row at this
+//! pin — `upload` and `restore`, whose media walk is the shell's lane's and
+//! not in `skep-client` — the call answers `not_reached` naming where it
+//! stops, never a silent stub; `fetch` reaches the dialer's streamed form
+//! and no further (the §Recovery order of the media design is not run
+//! here).
 
 use std::fmt;
-use std::io::Read;
+use std::io::{self, Read};
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::Receiver;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
@@ -299,7 +286,8 @@ pub const CALLS: [&str; Call::ALL.len()] = {
 };
 
 /// A fetched blob: the head of the board's `200` — every other status is a
-/// refusal — and its body, read to close.
+/// refusal — and its body, read to close; its call is logged as the body is
+/// dropped.
 pub struct Fetched {
     pub headers: Headers,
     pub body: Box<dyn Read + Send>,
@@ -308,6 +296,33 @@ pub struct Fetched {
 impl fmt::Debug for Fetched {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "Fetched({} headers)", self.headers.0.len())
+    }
+}
+
+/// A fetched body as [`Shell::fetch`] hands it out: the board's stream, the
+/// bytes read through it counted, and the call logged ONCE, as it is dropped
+/// — `CallOutcome::Stream`, `bytes_out` the bytes its reader took — so the
+/// call is the log's whether its body is read to the end or dropped
+/// part-way, a page that hangs up mid-stream among them.
+struct LoggedBody {
+    body: Box<dyn Read + Send>,
+    log: Arc<Log>,
+    bytes_in: usize,
+    bytes_out: usize,
+    started: Instant,
+}
+
+impl Read for LoggedBody {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        let n = self.body.read(buf)?;
+        self.bytes_out += n;
+        Ok(n)
+    }
+}
+
+impl Drop for LoggedBody {
+    fn drop(&mut self) {
+        self.log.call(Call::Fetch.as_str(), self.bytes_in, self.bytes_out, self.started.elapsed(), CallOutcome::Stream);
     }
 }
 
@@ -327,10 +342,11 @@ pub struct Shell {
     pending: Arc<Pending>,
     arm: Arc<DevArm>,
     log: Arc<Log>,
-    /// THE STOP, set by [`Shell::shutdown`] and read by every board's dialer
-    /// (`ShellDialer`): once it stands no dial is made, so a feed thread a
-    /// board holds in a read without end is freed at its next exchange.
-    stopping: Arc<AtomicBool>,
+    /// The one dialer every board — the shell's own and a guest form's —
+    /// dials through, cloned: one record, one stop (`ShellDialer::stop`, at
+    /// [`Shell::shutdown`]), so a feed thread a board holds in a read without
+    /// end is freed at its next exchange.
+    dialer: ShellDialer,
     store: Arc<FileStore>,
     /// THE HELD-BURST HOLDS (§3c): the one path of every `/op` under a
     /// session, the queue `held` and `resolve` read and act on, the own
@@ -452,7 +468,7 @@ impl Shell {
         assert!(opts.boards.iter().enumerate().all(|(i, origin)| !opts.boards[..i].contains(origin)), "ShellOptions' precondition: the boards are distinct");
         assert!(opts.own_node.as_ref().is_none_or(|own| opts.boards.contains(own)), "ShellOptions' precondition: own_node, where set, is one of the boards");
         let log = Arc::new(Log::new());
-        let stopping = Arc::new(AtomicBool::new(false));
+        let dialer = ShellDialer::new(Arc::clone(&log));
         let bus = Arc::new(EventBus::new());
         let store = Arc::new(FileStore::open(&opts.store_dir));
         // The store the restart arm re-opens a session under: the signed
@@ -473,7 +489,7 @@ impl Shell {
         let mut boards = Vec::new();
         let mut own_node_reference = None;
         for origin in &opts.boards {
-            let entry = Arc::new(BoardEntry::new(Board::new(origin.clone(), ShellDialer::new(Arc::clone(&log), Arc::clone(&stopping)))));
+            let entry = Arc::new(BoardEntry::new(Board::new(origin.clone(), dialer.clone())));
             if opts.own_node.as_ref() == Some(origin) {
                 own_node_reference = Some(entry.reference.clone());
             }
@@ -492,7 +508,7 @@ impl Shell {
             pending: Arc::new(Pending::new()),
             arm,
             log,
-            stopping,
+            dialer,
             store,
             holds,
             session_mode: opts.session_mode,
@@ -746,7 +762,7 @@ impl Shell {
     fn guest_board(&self, args: &Value) -> Result<Arc<Board>, Refusal> {
         Ok(match self.guest_target(args)? {
             GuestTarget::Board(entry) => Arc::clone(&entry.board),
-            GuestTarget::Origin(origin) => Arc::new(Board::new(origin, ShellDialer::new(Arc::clone(&self.log), Arc::clone(&self.stopping)))),
+            GuestTarget::Origin(origin) => Arc::new(Board::new(origin, self.dialer.clone())),
         })
     }
 
@@ -834,12 +850,25 @@ impl Shell {
     /// checked them against the cell before its first byte — the client
     /// side of `media.md` §Recovery (the length held, the re-hash) is not
     /// run here. A non-200 is the board's refusal; the death signal on the
-    /// head ends the session. The caller's, since `fetch` streams past the
-    /// door: it logs the call — `Log::call("fetch", …)` with
-    /// `CallOutcome::Stream` once the body is copied, `CallOutcome::Refused`
-    /// for a refusal; `fetch` logs its dial alone — and reads the body to its
-    /// end or drops it.
+    /// head ends the session. Logged as `call` logs every row — a refusal at
+    /// once, a stream as its body is dropped, `bytes_out` the bytes read
+    /// from it — so a transport serves the bytes and logs nothing; it reads
+    /// the body to its end or drops it.
     pub fn fetch(&self, args: &Value) -> Result<Fetched, Refusal> {
+        let started = Instant::now();
+        let bytes_in = json_len(args);
+        match self.fetch_row(args) {
+            Ok(Fetched { headers, body }) => Ok(Fetched { headers, body: Box::new(LoggedBody { body, log: Arc::clone(&self.log), bytes_in, bytes_out: 0, started }) }),
+            Err(refusal) => {
+                self.log.call(Call::Fetch.as_str(), bytes_in, json_len(&refusal.to_value()), started.elapsed(), CallOutcome::Refused);
+                Err(refusal)
+            }
+        }
+    }
+
+    /// The `fetch` row's own work, unlogged: [`Shell::fetch`]'s answer
+    /// before its call is logged.
+    fn fetch_row(&self, args: &Value) -> Result<Fetched, Refusal> {
         let i = args["i"].as_str().ok_or_else(|| Refusal::malformed("i"))?;
         if !is_address_text(i) {
             return Err(Refusal::malformed("i"));
@@ -963,17 +992,17 @@ impl Shell {
     /// thread joined, so the `held/<chain>/` locks its holds kept are free
     /// once this returns. The dialer stops after the sessions' closes, which
     /// dial, and before the threads are asked to stop: from then on every
-    /// dial is refused as one that made no connection (`ShellDialer`), so a
-    /// feed thread a board holds in a read without end — pages whose `more`
-    /// never ends — is freed at its next exchange, and the stop waits on no
-    /// board past one exchange's bound. A second stop finds nothing left to
-    /// stop, and dropping the shell runs it. NOTHING of the held-burst store
-    /// is written here — every held line is already synced at its `op`
-    /// (persist-first, §3c.6's step 3). UNVERIFIED HERE (the record §7 item
-    /// 1): that the desktop framework's close hook runs this, and that the
-    /// page's last `op` reaches the shell before the webview is destroyed, is
-    /// the framework's to prove — no Tauri source is on this machine; a crash
-    /// loses at most the open or in-flight burst (R14).
+    /// dial is refused as one that made no connection (`ShellDialer::stop`),
+    /// so a feed thread a board holds in a read without end — pages whose
+    /// `more` never ends — is freed at its next exchange, and the stop waits
+    /// on no board past one exchange's bound. A second stop finds nothing
+    /// left to stop, and dropping the shell runs it. NOTHING of the
+    /// held-burst store is written here — every held line is already synced
+    /// at its `op` (persist-first, §3c.6's step 3). UNVERIFIED HERE (the
+    /// record §7 item 1): that the desktop framework's close hook runs this,
+    /// and that the page's last `op` reaches the shell before the webview is
+    /// destroyed, is the framework's to prove — no Tauri source is on this
+    /// machine; a crash loses at most the open or in-flight burst (R14).
     pub fn shutdown(&self) {
         self.pending.cancel_all();
         for session in self.sessions.all() {
@@ -983,7 +1012,7 @@ impl Shell {
                 }
             }
         }
-        self.stopping.store(true, Ordering::SeqCst);
+        self.dialer.stop();
         let threads = std::mem::take(&mut *self.threads.lock().expect("the feed threads' lock"));
         for board_threads in threads {
             board_threads.stop();

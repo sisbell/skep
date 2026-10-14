@@ -95,7 +95,7 @@
 //!   child `ceremony` — each row taking and answering values shaped
 //!   exactly as the row's columns — an argument of another form refused,
 //!   never read as absent; [`Shell::fetch`] is public beside it because it
-//!   streams, and its transport logs it. Dropping a shell stops it: no feed
+//!   streams, and logs its own call. Dropping a shell stops it: no feed
 //!   thread, open session or `held/<chain>/` lock of it outlives it, and
 //!   each board's `/events` reader, asked to stop, ends at its next read.
 //! * [`shapes`] — THE DECLARATIONS: [`shapes::declarations`], a TypeScript

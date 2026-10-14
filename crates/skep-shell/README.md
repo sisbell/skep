@@ -35,22 +35,22 @@ only those above it (held by `tests/it/tidy.rs`):
 | `sessions` | `Sessions`, the session table: each session's token beside the board it stands at, the two openings, the attest a session's key signs, a session's end run once whichever hand met the death signal, under the key store the table holds, and a leaving session's drafts supplement released to another of its principal |
 | `hold` | `Holds`: the one path of every `/op` under a session (`Holds::send`) — a burst's door (`Burst::admit`) and its hold among it — each answer read through the classification table (`classify`), and the per-(board, principal) queue over `held`'s file; `hold/resend.rs`, the probe and the resend walk, its lines sent in `k` order across the documents |
 | `feed` | `FeedThreads`, `Feed` and the `Feeder`: per board, the feed thread — the `feed`, `index`, `mode` and `daemon` events, the `search` call, the held-burst probe on its cadence |
-| `shell` | `Shell`: the boards, the sessions, and one private method per §4b.1 row behind `call`, which logs every call, `fetch` public beside it; `shell/ceremony.rs`, the ten ceremonial rows |
+| `shell` | `Shell`: the boards, the sessions, and one private method per §4b.1 row behind `call`, which logs every call — `fetch` public beside it, because it streams, and logging its own; `shell/ceremony.rs`, the ten ceremonial rows |
 | `shapes` | `declarations()`, the TypeScript declaration file for every value that crosses the bridge, pinned by a round-trip of each type's sample |
 
 ## The `feed` update's shape
 
-This crate's definition (S-24 (b)): the `/changes` row's members VERBATIM
-(`at`, `op`, `docs`, `key`, `time`, `attest`, `new_prefix`, `new_id`,
-`link`, `placed`, `base_extent`, and any later member by the wire's forward
-rule), plus `position` (the row's `at`, named once more) and `class` —
-`published` for a row of the guest's feed, `drafts` for one of a session's
-supplement, the latter with `session`, the reference it was read under. The
-event carries `board`, the reference, beside `update`. The published feed
-starts at the head the board first answers with — at the thread's start,
-or at its first `/health` after it, never at 0 for a board not yet up —
-and a session's drafts at the position the session opened at: a page
-re-reads what it shows on open and takes the updates from there.
+This crate's definition (S-24 (b)): the `/changes` row VERBATIM — every
+member the declared `FeedUpdate` (`shapes`) names beside the three below,
+and any later member by the wire's forward rule — plus `position` (the
+row's `at`, named once more) and `class` — `published` for a row of the
+guest's feed, `drafts` for one of a session's supplement, the latter with
+`session`, the reference it was read under. The event carries `board`, the
+reference, beside `update`. The published feed starts at the head the board
+first answers with — at the thread's start, or at its first `/health` after
+it, never at 0 for a board not yet up — and a session's drafts at the
+position the session opened at: a page re-reads what it shows on open and
+takes the updates from there.
 
 ## Where the library stops at this pin
 

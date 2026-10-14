@@ -190,10 +190,10 @@ fn the_status_page_shows_d7_the_live_reply_d8_or_404() {
     assert!(failed.body.contains(&row(&site().fill(FAILED))));
     *desk.status.lock().unwrap() = None;
     assert_eq!(answer(&request("GET", "/status/other", b""), &site(), &desk).status, 404);
-    let asked = desk.asked.lock().unwrap().len();
+    let asked_before = desk.asked.lock().unwrap().len();
     assert_eq!(answer(&request("GET", "/status/", b""), &site(), &desk).status, 404);
     assert_eq!(answer(&request("GET", "/status/a/b", b""), &site(), &desk).status, 404);
-    assert_eq!(desk.asked.lock().unwrap().len(), asked, "a path that is no token never reaches the desk");
+    assert_eq!(desk.asked.lock().unwrap().len(), asked_before, "a path that is no token never reaches the desk");
 }
 
 /// Every other request is 404; a body the decoder refuses is 400 — a bad

@@ -14,10 +14,11 @@ use std::fmt;
 
 /// THE GRAMMAR's ALPHABET IN WORDS, for a refusal to name: kept beside
 /// [`domain_ok`], which admits these four kinds of byte and no other.
-pub const DOMAIN_ALPHABET: &str = "lowercase letters, digits, dots and hyphens";
+pub const DOMAIN_ALPHABET_IN_WORDS: &str = "lowercase letters, digits, dots and hyphens";
 
-/// THE GRAMMAR: non-empty, [`DOMAIN_ALPHABET`] alone, its labels non-empty
-/// and none beginning or ending with a hyphen.
+/// THE GRAMMAR: non-empty, lowercase letters, digits, dots and hyphens
+/// alone — the alphabet [`DOMAIN_ALPHABET_IN_WORDS`] names — its labels
+/// non-empty and none beginning or ending with a hyphen.
 fn domain_ok(text: &str) -> bool {
     let labels_ok = text.split('.').all(|l| !l.is_empty() && !l.starts_with('-') && !l.ends_with('-'));
     !text.is_empty() && labels_ok && text.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'.' || b == b'-')

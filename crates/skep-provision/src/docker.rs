@@ -124,12 +124,12 @@ fn label() -> String {
 }
 
 /// A RUN OF THE HOSTED IMAGE under `name`: detached, with an init, and
-/// hardened as every run of the image is — a read-only root, no
-/// capabilities, no new privileges, 1,024 descriptors, the words the
-/// deployment notes open both runs with (§4 steps 3 and 5) — then `own`,
-/// the run's own words, and the image last. One spelling, so a run hardened
-/// further is every run hardened further.
-fn image_run(name: &Name, own: Vec<String>, settings: &Settings) -> Vec<String> {
+/// hardened as every run of the image is — a read-only root, no capabilities,
+/// no new privileges, 1,024 descriptors, the words the deployment notes open
+/// both runs with (§4 steps 3 and 5) — then the run's own words, `own_words`,
+/// and the image last. One spelling, so a run hardened further is every run
+/// hardened further.
+fn image_run(name: &Name, own_words: Vec<String>, settings: &Settings) -> Vec<String> {
     let mut argv: Vec<String> = vec![
         "run".into(),
         "-d".into(),
@@ -144,7 +144,7 @@ fn image_run(name: &Name, own: Vec<String>, settings: &Settings) -> Vec<String> 
         "--ulimit".into(),
         "nofile=1024:1024".into(),
     ];
-    argv.extend(own);
+    argv.extend(own_words);
     argv.push(settings.image.clone());
     argv
 }

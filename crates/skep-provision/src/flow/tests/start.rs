@@ -47,7 +47,7 @@ fn a_docker_that_cannot_run_skips_the_sweep_and_refuses_a_post_d8() {
     let record = record(true);
     assert_eq!(service.admit(&Post { name: b"alice", record: record.as_bytes(), invite: code.as_str().as_bytes() }), Err(Refusal::Failed));
     let book = service.book();
-    assert!(book.queue.is_empty() && book.codes.is_empty() && book.looking.is_empty() && !book.map.holds(&Name::parse(b"alice").expect("a name")));
+    assert!(book.queue.is_empty() && book.admitted.is_empty() && book.looking.is_empty() && !book.map.holds(&Name::parse(b"alice").expect("a name")));
     drop(book);
     assert!(lookup(&state_dir, &code).expect("read").expect("held").issued());
     let log = lines.lock().unwrap().clone();

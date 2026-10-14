@@ -83,15 +83,15 @@ fn the_write_leaves_one_file_and_no_temp_file() {
     let dir = Scratch::new();
     write(dir.path(), &name("alice"), &domain("skep.host")).expect("written");
     assert_eq!(listing(dir.path()), vec!["alice.caddy"]);
-    assert_eq!(fs::read_to_string(path(dir.path(), &name("alice"))).expect("the snippet"), ALICE);
+    assert_eq!(fs::read_to_string(snippet_path(dir.path(), &name("alice"))).expect("the snippet"), ALICE);
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        assert_eq!(fs::metadata(path(dir.path(), &name("alice"))).expect("its mode").permissions().mode() & 0o777, 0o644);
+        assert_eq!(fs::metadata(snippet_path(dir.path(), &name("alice"))).expect("its mode").permissions().mode() & 0o777, 0o644);
     }
     write(dir.path(), &name("alice"), &domain("example.org")).expect("written again");
     assert_eq!(listing(dir.path()), vec!["alice.caddy"]);
-    assert!(fs::read_to_string(path(dir.path(), &name("alice"))).expect("the snippet").contains("alice.example.org"));
+    assert!(fs::read_to_string(snippet_path(dir.path(), &name("alice"))).expect("the snippet").contains("alice.example.org"));
 }
 
 /// T7: A DIRECTORY THAT CANNOT BE WRITTEN is an error — the flow's failed

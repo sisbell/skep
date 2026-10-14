@@ -188,27 +188,30 @@ struct Job {
 }
 
 /// THE BOOK, which the pages and the workers share under its own short lock:
-/// WHAT IS IN FLIGHT — the posts waiting for a worker and the invite codes
-/// held, the codes whose posts look at what stands under their names among
-/// them — and every post this process admitted, by token, in flight or ended
-/// (the status map); and THE RULES THAT TIE THEM: a post looking at what
-/// stands holds its code until its admission or its refusal ([`CodeLook`]);
-/// a post admitted waits with its token in the map and its code held; a post
-/// taken is running; a post in flight, waiting or running, holds its name; a
-/// failed post lets its code go at once, and a live one keeps it held until
-/// the worker lets it go ([`Book::release`]), once the spend is written; and
-/// a new post is admitted only where none of a full queue, a held code and a
-/// held name blocks it — the first of them in that order, as
-/// [`Book::blocks`] answers, asked by the admitter under the lock it admits
-/// under ([`Book::admit`]'s precondition).
+/// WHAT IS IN FLIGHT — the posts waiting for a worker, and the invite codes
+/// held, each by a post admitted (`admitted`) or by a post looking at what
+/// stands under its name (`looking`) — and every post this process admitted,
+/// by token, in flight or ended (the status map); and THE RULES THAT TIE THEM:
+/// a post looking at what stands holds its code until its admission or its
+/// refusal ([`CodeLook`]); a post admitted waits with its token in the map and
+/// its code held; a post taken is running; a post in flight, waiting or
+/// running, holds its name; a failed post lets its code go at once, and a live
+/// one keeps it held until the worker lets it go ([`Book::release`]), once the
+/// spend is written; and a new post is admitted only where none of a full
+/// queue, a held code and a held name blocks it — the first of them in that
+/// order, as [`Book::blocks`] answers, asked by the admitter under the lock it
+/// admits under ([`Book::admit`]'s precondition).
 struct Book {
     queue: VecDeque<Job>,
     map: StatusMap,
-    codes: HashSet<InviteCode>,
+    /// The codes the posts admitted hold: each from its post's admission until
+    /// let go of — a failed post's at once, a live post's once its spend is
+    /// written ([`Book::release`]).
+    admitted: HashSet<InviteCode>,
     /// The codes whose posts are looking at what stands under their names:
-    /// held as surely as one in `codes`, from the post's in-flight check to
-    /// its admission or its refusal, so the posts on one code hold one of
-    /// the looks' permits at most.
+    /// held as surely as one in `admitted`, from the post's in-flight check to
+    /// its admission or its refusal, so the posts on one code hold one of the
+    /// looks' permits at most.
     looking: HashSet<InviteCode>,
 }
 
@@ -228,7 +231,7 @@ enum Blocked {
 impl Book {
     /// The book at start: nothing in flight, the status map as rebuilt.
     fn new(map: StatusMap) -> Book {
-        Book { queue: VecDeque::new(), map, codes: HashSet::new(), looking: HashSet::new() }
+        Book { queue: VecDeque::new(), map, admitted: HashSet::new(), looking: HashSet::new() }
     }
 
     /// What refuses a new post for `name` under `code`: the first of a full
@@ -236,7 +239,7 @@ impl Book {
     fn blocks(&self, name: &Name, code: &InviteCode) -> Option<Blocked> {
         if self.queue.len() >= QUEUE_DEPTH {
             Some(Blocked::QueueFull)
-        } else if self.codes.contains(code) || self.looking.contains(code) {
+        } else if self.admitted.contains(code) || self.looking.contains(code) {
             Some(Blocked::CodeHeld)
         } else if self.map.holds(name) {
             Some(Blocked::NameHeld)
@@ -255,7 +258,7 @@ impl Book {
     /// panics before the book changes: an admission is whole or not made.
     fn admit(&mut self, job: Job) -> usize {
         self.map.admit(job.token.clone(), job.name.clone(), job.record.anchorless());
-        self.codes.insert(job.code.clone());
+        self.admitted.insert(job.code.clone());
         self.queue.push_back(job);
         self.queue.len()
     }
@@ -276,7 +279,7 @@ impl Book {
     /// `code` let go of: a new post may name it — a live post's once the
     /// file says spent, a failed post's at once.
     fn release(&mut self, code: &InviteCode) {
-        self.codes.remove(code);
+        self.admitted.remove(code);
     }
 
     /// `job`'s post marked failed: its page D-8, and its code let go of at
@@ -567,8 +570,8 @@ impl Service {
                 drop(made);
                 self.book().mark_live(&job.token);
                 self.log(&format!("{name}: LIVE at {}", name.origin(&self.config.suffix)));
-                let spent = invites::spend(&self.state_dir, &job.code, name);
-                match &spent {
+                let spend = invites::spend(&self.state_dir, &job.code, name);
+                match &spend {
                     Ok(true) => self.log(&format!("{name}: the invite is spent")),
                     Ok(false) => self.log(&format!("{name}: the invite was not found issued at the spend; the board stands")),
                     Err(e) => self.log(&format!("{name}: the invite could not be marked spent ({e}); this process refuses it, and the operator marks it")),
@@ -578,7 +581,7 @@ impl Service {
                 // holding it spent. A spend that could not be written keeps
                 // its code held for the process's life: the file still says
                 // issued.
-                if spent.is_ok() {
+                if spend.is_ok() {
                     self.book().release(&job.code);
                 }
                 // The mail, last: after the page, never ahead of it.
@@ -747,7 +750,7 @@ impl Service {
             // is owed: none where no snippet stood; on an error, which may
             // follow the unlink, the snippet is read as standing and the
             // reload follows.
-            let reload = match caddy::remove(&self.config.boards_dir, name) {
+            let reload_owed = match caddy::remove(&self.config.boards_dir, name) {
                 Ok(true) => {
                     self.log(&format!("{name}: {on}: snippet: removed"));
                     true
@@ -761,7 +764,7 @@ impl Service {
                     true
                 }
             };
-            if reload {
+            if reload_owed {
                 self.undone(name, on, "caddy_reload", caddy::reload(docker));
             }
         }
@@ -907,7 +910,7 @@ impl Desk for Service {
         // service's — a post waits on no provisioning — under one of the
         // looks' permits, given back as the reads end.
         let taken = {
-            let Some(_looking) = Permit::take(&self.looks, MAX_LOOKS) else {
+            let Some(_permit) = Permit::take(&self.looks, MAX_LOOKS) else {
                 self.log(&format!("{name}: a post refused: {MAX_LOOKS} posts already look at what stands"));
                 return Err(Refusal::Busy);
             };

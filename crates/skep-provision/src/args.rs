@@ -17,7 +17,7 @@ use std::path::PathBuf;
 use std::str::FromStr;
 
 use crate::docker::Settings;
-use crate::domain::{Domain, DOMAIN_ALPHABET};
+use crate::domain::{Domain, DOMAIN_ALPHABET_IN_WORDS};
 use crate::invite_code::{InviteCode, MAX_CODE_BYTES};
 use crate::mail_address::{address_rule, MailAddress};
 
@@ -275,10 +275,10 @@ fn word(flag: &str, v: String) -> Result<String, String> {
 }
 
 /// A DOMAIN, as `--suffix` takes one: the value [`Domain::parse`] admits,
-/// or the refusal naming the flag and the grammar's alphabet
-/// ([`DOMAIN_ALPHABET`]).
+/// or the refusal naming the flag and the grammar's alphabet in its words
+/// ([`DOMAIN_ALPHABET_IN_WORDS`]).
 fn domain(flag: &str, v: &str) -> Result<Domain, String> {
-    Domain::parse(v).ok_or_else(|| format!("{flag}: '{v}' is not a domain of {DOMAIN_ALPHABET}"))
+    Domain::parse(v).ok_or_else(|| format!("{flag}: '{v}' is not a domain of {DOMAIN_ALPHABET_IN_WORDS}"))
 }
 
 /// THE SUFFIX's DEFAULT, taken in as a suffix is: [`DEFAULT_SUFFIX`] is in

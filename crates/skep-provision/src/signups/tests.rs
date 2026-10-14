@@ -125,8 +125,8 @@ fn a_sign_up_past_the_cap_is_refused_and_keeps_nothing() {
     let dir = Scratch::new();
     let state_dir = StateDir::open(&dir.path().join("state")).expect("the state directory");
     let signups = SignUps::new(&state_dir);
-    let line = format!("person@example.com {}\n", today()).len();
-    fs::write(state_dir.file(SIGNUPS), format!("{}\n", "#".repeat(MAX_SIGNUPS_BYTES - line - 1))).expect("a file one line short of its cap");
+    let line_bytes = format!("person@example.com {}\n", today()).len();
+    fs::write(state_dir.file(SIGNUPS), format!("{}\n", "#".repeat(MAX_SIGNUPS_BYTES - line_bytes - 1))).expect("a file one line short of its cap");
     signups.append(b"person@example.com").expect("kept, to the cap");
     let full = fs::read(state_dir.file(SIGNUPS)).expect("the file");
     assert_eq!(full.len(), MAX_SIGNUPS_BYTES);

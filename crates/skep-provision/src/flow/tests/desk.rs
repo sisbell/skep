@@ -54,8 +54,8 @@ fn a_fifth_post_past_the_queue_meets_d8_and_leaves_no_entry() {
     rig.fake.assert_done();
     let book = rig.service.book();
     assert_eq!(book.queue.len(), QUEUE_DEPTH);
-    assert_eq!(book.codes.len(), QUEUE_DEPTH);
-    assert!(!book.codes.contains(&fifth));
+    assert_eq!(book.admitted.len(), QUEUE_DEPTH);
+    assert!(!book.admitted.contains(&fifth));
     assert!(!book.map.holds(&Name::parse(b"erin").expect("a name")));
     drop(book);
     assert!(rig.log().join("\n").contains("erin: a post refused: 4 posts already wait"));
@@ -188,7 +188,7 @@ fn an_admission_on_a_token_admitted_before_changes_nothing() {
     assert_eq!(book.admit(job("alice", "c1")), 1);
     let again = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| book.admit(job("bob", "c2"))));
     assert!(again.is_err(), "a second admission under one token");
-    assert!(!book.codes.contains(&invite_code("c2")), "the refused admission's code held");
+    assert!(!book.admitted.contains(&invite_code("c2")), "the refused admission's code held");
     assert_eq!(book.queue.len(), 1, "the refused admission queued");
     assert_eq!(book.map.post("t0k3n").map(|p| (p.name.clone(), p.state)), Some((name("alice"), PostState::Queued)));
     assert!(!book.map.holds(&name("bob")));
@@ -223,8 +223,8 @@ fn the_posts_refusals_come_before_any_docker_call() {
     let seventeen = encode_enroll(&(0..17u8).map(|n| Enrollment::new(decodable_key(n), false, None).expect("no label")).collect::<Vec<_>>());
     assert_eq!(rig.post("bob", &seventeen, fresh.as_str()), Err(Refusal::Record), "past the genesis's cap");
     assert_eq!(rig.post("b_b", &record(true), fresh.as_str()), Err(Refusal::Name));
-    for never in ["x", "localhost", "ab"] {
-        assert_eq!(rig.post(never, &record(true), fresh.as_str()), Err(Refusal::Name), "{never}");
+    for name in ["x", "localhost", "ab"] {
+        assert_eq!(rig.post(name, &record(true), fresh.as_str()), Err(Refusal::Name), "{name}");
     }
     rig.fake.assert_done();
     assert!(rig.issued(&fresh));
@@ -302,7 +302,7 @@ fn a_live_boards_code_is_let_go_of_and_refused_as_spent() {
     let code = rig.invite();
     rig.admitted("alice", &code);
     assert!(rig.service.run_next());
-    assert!(!rig.service.book().codes.contains(&code), "the code held past its spend");
+    assert!(!rig.service.book().admitted.contains(&code), "the code held past its spend");
     assert_eq!(rig.post("bob", &record(true), code.as_str()), Err(Refusal::Invite));
     assert!(rig.logged("a post refused: its invite code is not one the file holds issued"), "{:?}", rig.log());
     rig.fake.assert_done();
@@ -329,7 +329,7 @@ fn a_live_boards_code_is_held_until_its_spend_is_written() {
     rig.spawn_workers(1);
     until("alice live", || rig.live(&alice).then_some(()));
     thread::sleep(Duration::from_millis(300));
-    assert!(rig.service.book().codes.contains(&code), "the code let go of before its spend was written");
+    assert!(rig.service.book().admitted.contains(&code), "the code let go of before its spend was written");
     assert_eq!(rig.post("bob", &record(true), code.as_str()), Err(Refusal::Invite));
     assert!(rig.logged("bob: a post refused: its invite is held by another post"), "{:?}", rig.log());
     assert!(rig.issued(&code), "a spend written past the lock");
@@ -337,7 +337,7 @@ fn a_live_boards_code_is_held_until_its_spend_is_written() {
     assert!(rig.logged("alice: snippet: written") && !rig.logged("alice: the invite is spent"), "the log names the board, its spend not yet written: {:?}", rig.log());
     drop(lock);
     until("the spend", || (!rig.issued(&code)).then_some(()));
-    until("the code let go of", || (!rig.service.book().codes.contains(&code)).then_some(()));
+    until("the code let go of", || (!rig.service.book().admitted.contains(&code)).then_some(()));
     rig.fake.assert_done();
 }
 
@@ -356,7 +356,7 @@ fn a_spend_that_could_not_be_written_keeps_its_code_held() {
     fs::set_permissions(rig.dir.path().join("state"), fs::Permissions::from_mode(0o500)).expect("read-only");
     assert!(rig.service.run_next());
     assert!(rig.live(&alice) && rig.issued(&code), "live, the file still saying issued");
-    assert!(rig.service.book().codes.contains(&code), "the code let go of though its spend was never written");
+    assert!(rig.service.book().admitted.contains(&code), "the code let go of though its spend was never written");
     assert_eq!(rig.post("bob", &record(true), code.as_str()), Err(Refusal::Invite));
     rig.fake.assert_done();
     assert!(rig.log().iter().any(|l| l.starts_with("alice: the invite could not be marked spent (") && l.ends_with("; this process refuses it, and the operator marks it")), "{:?}", rig.log());
@@ -413,16 +413,16 @@ fn a_post_for_a_name_admitted_while_its_reads_ran_meets_d4() {
         let _ = tx.send(service.admit(&Post { name: b"alice", record: record.as_bytes(), invite: code.as_str().as_bytes() }));
     });
     gate.entered(1);
-    let admitted = rig.admitted("alice", &other);
+    let token = rig.admitted("alice", &other);
     gate.open();
     assert_eq!(rx.recv_timeout(Duration::from_secs(30)).expect("the paused post answered"), Err(Refusal::Name), "two posts for one name in flight");
     rig.fake.assert_done();
     let book = rig.service.book();
     assert_eq!(book.queue.len(), 1);
-    assert!(book.codes.contains(&other) && !book.codes.contains(&paused));
+    assert!(book.admitted.contains(&other) && !book.admitted.contains(&paused));
     drop(book);
     assert!(rig.issued(&paused));
-    assert_eq!(rig.service.status(&admitted), Some(Shown::BeingMade));
+    assert_eq!(rig.service.status(&token), Some(Shown::BeingMade));
     assert!(rig.logged("alice: a post refused: a post in flight holds the name"), "{:?}", rig.log());
 }
 

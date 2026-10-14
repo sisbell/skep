@@ -185,9 +185,9 @@ fn the_genesis_refusals_copy_the_daemons_precheck_as_it_stands() {
     at(&format!("const MAX_ENROLLED_KEYS: usize = {MAX_GENESIS_KEYS};"));
     at("const MAX_GENESIS_KEYS: usize = MAX_ENROLLED_KEYS;");
     at("const MAX_DECODED_KEYS: usize = MAX_GENESIS_KEYS + 1;");
-    let decode = at("enrolling.iter().take(MAX_DECODED_KEYS).all(|e| skep_signature::key_decodes(&e.key))");
-    let count = at("keys.len() > MAX_GENESIS_KEYS");
-    assert!(decode < count, "skepd's precheck counts a genesis's keys before it decodes them");
+    let decode_at = at("enrolling.iter().take(MAX_DECODED_KEYS).all(|e| skep_signature::key_decodes(&e.key))");
+    let count_at = at("keys.len() > MAX_GENESIS_KEYS");
+    assert!(decode_at < count_at, "skepd's precheck counts a genesis's keys before it decodes them");
 }
 
 /// The record's `Debug` carries its length and its fact, and nothing of

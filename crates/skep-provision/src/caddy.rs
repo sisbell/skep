@@ -62,7 +62,7 @@ pub fn snippet(name: &Name, suffix: &Domain) -> String {
 }
 
 /// Where `name`'s snippet lives: `<boards-dir>/<name>.caddy`.
-fn path(boards_dir: &Path, name: &Name) -> PathBuf {
+fn snippet_path(boards_dir: &Path, name: &Name) -> PathBuf {
     boards_dir.join(format!("{name}.caddy"))
 }
 
@@ -70,7 +70,7 @@ fn path(boards_dir: &Path, name: &Name) -> PathBuf {
 /// three reads, made with no call, and the sweep's sort of the labelled
 /// volumes. The error is the directory's.
 pub fn stands(boards_dir: &Path, name: &Name) -> io::Result<bool> {
-    path(boards_dir, name).try_exists()
+    snippet_path(boards_dir, name).try_exists()
 }
 
 /// THE WRITE, WHOLE-THEN-RENAME: the snippet in place at [`SNIPPET_MODE`], or
@@ -81,7 +81,7 @@ pub fn stands(boards_dir: &Path, name: &Name) -> io::Result<bool> {
 /// of `name`'s snippet runs at once — the route lock, under which the flow
 /// makes both, keeps it; nothing here checks it.
 pub fn write(boards_dir: &Path, name: &Name, suffix: &Domain) -> io::Result<()> {
-    whole::replace(&path(boards_dir, name), snippet(name, suffix).as_bytes(), SNIPPET_MODE, &|| Ok(()))
+    whole::replace(&snippet_path(boards_dir, name), snippet(name, suffix).as_bytes(), SNIPPET_MODE, &|| Ok(()))
 }
 
 /// THE REMOVAL: `name`'s snippet gone — `true` where one stood, `false` where
@@ -90,7 +90,7 @@ pub fn write(boards_dir: &Path, name: &Name, suffix: &Domain) -> io::Result<()> 
 /// write or removal of `name`'s snippet runs at once — the route lock, under
 /// which the flow makes both, keeps it; nothing here checks it.
 pub fn remove(boards_dir: &Path, name: &Name) -> io::Result<bool> {
-    whole::remove(&path(boards_dir, name))
+    whole::remove(&snippet_path(boards_dir, name))
 }
 
 /// THE RELOAD: Caddy re-reads its configuration, the boards' snippets with

@@ -180,8 +180,8 @@ impl Service {
         });
         let mut serving = String::new();
         BufReader::new(child.stdout.take().expect("its stdout")).read_line(&mut serving).expect("the serving line");
-        let at = serving.strip_prefix("skep-provision: serving http://127.0.0.1:").unwrap_or_else(|| panic!("the serving line: {serving:?}; the log: {}", log.lock().unwrap()));
-        let port = at[..at.find('/').expect("the address's end")].parse().expect("a port");
+        let from_port = serving.strip_prefix("skep-provision: serving http://127.0.0.1:").unwrap_or_else(|| panic!("the serving line: {serving:?}; the log: {}", log.lock().unwrap()));
+        let port = from_port[..from_port.find('/').expect("the address's end")].parse().expect("a port");
         Service { child, port, serving, log }
     }
 
@@ -350,8 +350,8 @@ fn the_built_service_runs_a_post_from_the_form_to_the_live_page_over_the_fakes()
     // THE STOP: SIGTERM ends the process; the port then answers nothing.
     let port = service.port;
     let log = service.log();
-    let status = service.terminate();
-    assert_eq!(status.signal(), Some(15), "ended by SIGTERM: {status:?}");
+    let stopped = service.terminate();
+    assert_eq!(stopped.signal(), Some(15), "ended by SIGTERM: {stopped:?}");
     assert!(TcpStream::connect(("127.0.0.1", port)).is_err(), "the port still answers");
 
     // The calls were the script's, in order, none unexpected.
@@ -563,9 +563,9 @@ fn a_call_with_no_input_never_reads_the_services_own_stdin() {
         .stderr(Stdio::piped())
         .spawn()
         .expect("serve started");
-    let mut own = child.stdin.take().expect("its own stdin");
-    own.write_all(b"the service's own stdin\n").expect("a line on it");
-    drop(own);
+    let mut own_stdin = child.stdin.take().expect("its own stdin");
+    own_stdin.write_all(b"the service's own stdin\n").expect("a line on it");
+    drop(own_stdin);
     let service = Service::running(child);
     assert_eq!(std::fs::read_to_string(dir.path().join("argv")).expect("docker ran"), "volume ls -q --filter label=skep.provision=1\n", "the sweep's listing, by the host's runner");
     assert_eq!(std::fs::read_to_string(dir.path().join("stdin")).expect("its stdin kept"), "", "docker read the service's own stdin");

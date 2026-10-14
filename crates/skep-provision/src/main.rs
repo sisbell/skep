@@ -70,9 +70,10 @@
 //! file still holds issued under a live board: one whose spend could not be
 //! written, and one whose post the stop cut off between its snippet's write
 //! and its spend. The next start admits a post on either unless the
-//! operator has marked it spent; the log names the board —
+//! operator has marked it spent; the log names the board — before the stop,
 //! `the invite could not be marked spent`, or `snippet: written` with no
-//! `the invite is spent` after it — and never the code. Its exit codes: 0, an
+//! `the invite is spent` after it; at the next start, `routed at start with
+//! no invite line spent under it` — and never the code. Its exit codes: 0, an
 //! `invite` minted and its link printed, or the version line or the usage
 //! text printed; 2, a usage refusal; 1, a start refused — a state directory
 //! other users can read, one another user owns, or one that cannot be made
@@ -321,7 +322,7 @@ fn serve(flags: args::ServeArgs) -> i32 {
     // THE SNIPPET DIRECTORY's WRITE, tried: one the service's user cannot
     // write is a start refused, never every board's failure after its claim.
     if let Err(e) = caddy::probe(&flags.boards_dir) {
-        say_err(&format!("skep-provision: the snippet directory {} cannot be written: {e}; it is the service's user's to write (RUNBOOK §10 step 3)", flags.boards_dir.display()));
+        say_err(&format!("skep-provision: the snippet directory {} cannot be written: {e}; the service's user writes it, on a filesystem with room (RUNBOOK §10 step 3)", flags.boards_dir.display()));
         return 1;
     }
     // THE SETTINGS every board is made with, and the sign-up file's fill

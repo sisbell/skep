@@ -1664,7 +1664,8 @@ each naming only those above it:
 - `signups.rs` the sign-up file, capped at 256 KiB, the stretch at its
   cap counted under its own lock, and its fill for the start to say.
 - `invites.rs` the invite file — mint, look up, spend — under a lock file
-  across processes.
+  across processes, and the names its lines are spent under, which the
+  sweep holds the boards routed at start against.
 - `strings.rs` the strings table: every sentence a person reads, each row
   naming its id.
 - `pages.rs` the four pages' HTML and each request's dispatch, by method
@@ -1782,10 +1783,13 @@ Rules that hold across its files:
   a name of the grammar with no snippet — half-made — is removed by the
   cleanup table's last two rows, the truth asked what stands after; a name
   whose snippet stands is left, a snippet with no labelled volume behind
-  it is named and left, and a listing that fails skips the sweep, says
-  what the skip leaves taken, and never stops the service; a sweep that
-  listed ends on one line of what it listed, cleared and left INCOMPLETE,
-  and the time it took. The
+  it is named and left, a routed board with no invite line spent under it
+  is named and left, its invite maybe still issued until the operator
+  marks it, and a listing — named on a line of its own before it is made,
+  so an Engine that never answers leaves that line the start's last —
+  that fails skips the sweep, says what the skip leaves taken, and never
+  stops the service; a sweep that listed ends on one line of what it
+  listed, cleared and left INCOMPLETE, and the time it took. The
   snippet directory is the list the sweep spares: a start over an emptier
   one removes every labelled board it lacks. Its precondition is the
   operator's: one `serve` per Docker host, for the label is the same on
@@ -1838,7 +1842,10 @@ Rules that hold across its files:
   itself is asked what stands, as it is after each of the sweep's
   removals — never the removals' answers, for a refused `rm -f` may be of
   a run that never stood — and the log says done, or INCOMPLETE naming
-  what stands, which refuses re-posts until the operator clears it.
+  what stands, which refuses re-posts until the operator clears it — a
+  volume left with no snippet the next start's sweep's too — or naming the
+  look that could not be made by its source, `docker` or the snippet
+  directory.
 - **The log never carries** the record whole or a key of it, a person's
   address, an invite code or a status token, and the `Debug` of every value
   that holds one — a record, an invite, a message, an address, a code, a
@@ -1877,24 +1884,28 @@ Rules that hold across its files:
 Its integration suite is one binary, `tests/it/`, driving the built
 `skep-provision` under `test-hooks`: `invite` mints a code; `serve` runs
 on an ephemeral loopback port over the two fakes and a temp state
-directory; a browser's requests reach the live reply at the status
-URL, the snippet written and the one mail sent; every refusal answers
-as the strings say; a half-made board is swept before the serving line;
-a connection past the pool waits in the listener's queue until a thread
-frees, and one within it is answered beside a held one; the boards
+directory; a browser's requests reach the live reply at the status URL,
+the snippet written and the one mail sent; every refusal answers as the
+strings say; a start again after a stop counts the board live, its status
+URL a 404 that says a restart ended it, its spent invite still refused,
+and a start after a kill serves; a half-made board is swept before the
+serving line; a connection past the pool waits in the listener's queue
+until a thread frees, the pool standing full said, and one within it is
+answered beside a held one; an `accept` at the open-file limit is said
+once however many meet it, the service serving on; the boards
 `--workers 2` names are made at once, and no more; the serving line is
 the RUNBOOK's, field for field, with mail and without, and above it the
-version, first, the settings every board is made with and the sweep's
-summary, the RUNBOOK's too; the sweep's listing, run by the host's runner
-through a `docker` on
-`PATH`, reads nothing of the service's own stdin; a start refused — a
-second `serve` over one state directory, a `--mailer` that cannot be run,
-a snippet directory that cannot be read or written, a port held, each
+version, first, the settings every board is made with, the sweep's
+listing named before it is made and its summary, the RUNBOOK's too; the
+sweep's listing, run by the host's runner through a `docker` on `PATH`,
+reads nothing of the service's own stdin; a start refused — a second
+`serve` over one state directory, a `--mailer` that cannot be run, a
+snippet directory that cannot be read or written, a port held, each
 before the sweep — or an invite not minted, exits 1 with no DATA line;
-and SIGTERM ends the process. Beside
-it, `tests/it/tidy.rs` reads the arrangement off the source and the
-manifest: the module order, the declared files, every `pub` item's doc,
-the five dependencies, and the one environment variable read, `PATH`.
+and SIGTERM ends the process. Beside it, `tests/it/tidy.rs` reads the
+arrangement off the source and the manifest: the module order, the
+declared files, every `pub` item's doc, the five dependencies, and the
+one environment variable read, `PATH`.
 
 ## The name space, `skep-namespace`
 

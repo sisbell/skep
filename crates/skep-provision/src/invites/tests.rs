@@ -4,14 +4,15 @@
 //! entropy for refused as its own, each an error saying which;
 //! a lookup before and after the spend answers issued, then spent; a spent or
 //! an unknown code is not issued; the file's path, and its count of invites
-//! still issued, for a refusal to say; the file is rewritten whole — a failure
-//! between the write and the rename leaves it as it was — and a line of
-//! another shape survives; and changes made at once, mints beside spends,
-//! lose none of each other under the lock file. (The code's alphabet is
-//! `invite_code`'s suite; the invite link the code rides is the pages'
-//! suite's; a failed flow leaving the line issued, a post refused on a spent
-//! or unknown code, and the code in no log line are the flow's suite's and
-//! the binary's.)
+//! still issued, for a refusal to say; the names its lines are spent under,
+//! for the sweep to hold the boards routed at start against; the file is
+//! rewritten whole — a failure between the write and the rename leaves it as
+//! it was — and a line of another shape survives; and changes made at once,
+//! mints beside spends, lose none of each other under the lock file. (The
+//! code's alphabet is `invite_code`'s suite; the invite link the code rides
+//! is the pages' suite's; a failed flow leaving the line issued, a post
+//! refused on a spent or unknown code, and the code in no log line are the
+//! flow's suite's and the binary's.)
 
 use std::fs;
 
@@ -157,6 +158,25 @@ fn the_files_issued_count_is_its_invites_still_issued() {
     let text = fs::read_to_string(path(&state_dir)).expect("the file");
     fs::write(path(&state_dir), format!("{text}# the owner's note\n")).expect("a hand edit");
     assert_eq!(issued_count(&state_dir).expect("read"), 2, "a spend, and a line of another shape");
+}
+
+/// THE NAMES SPENT UNDER, for the sweep to hold the boards routed at start
+/// against: none where the file does not stand, and none for an invite still
+/// issued; each board a spend wrote, and one the operator's hand marked; and a
+/// line of another shape none of them.
+#[test]
+fn the_names_spent_under_are_each_spent_lines_board() {
+    let dir = Scratch::new();
+    let state_dir = state_dir(&dir);
+    assert!(spent_names(&state_dir).expect("read").is_empty(), "no file yet");
+    let codes: Vec<InviteCode> = (0..3).map(|_| mint(&state_dir, &address("person@example.com"), None).expect("minted")).collect();
+    assert!(spent_names(&state_dir).expect("read").is_empty(), "issued, none spent");
+    spend(&state_dir, &codes[0], &alice()).expect("spent");
+    let text = fs::read_to_string(path(&state_dir)).expect("the file");
+    let marked = text.replacen(&format!("{} person@example.com issued ", codes[2].as_str()), &format!("{} person@example.com spent carol-by-hand ", codes[2].as_str()), 1);
+    fs::write(path(&state_dir), format!("{marked}# the owner's note spent dave\n")).expect("a hand edit");
+    let spent: Vec<String> = spent_names(&state_dir).expect("read").into_iter().collect();
+    assert_eq!(spent, ["alice", "carol-by-hand"]);
 }
 
 /// A line of another shape — a hand edit's — is passed over by the lookup

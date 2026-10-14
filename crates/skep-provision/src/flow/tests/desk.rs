@@ -400,7 +400,7 @@ fn a_spend_that_could_not_be_written_keeps_its_code_held() {
     assert_eq!(rig.post("bob", &record(true), code.as_str()), Err(Refusal::Invite));
     rig.fake.assert_done();
     let act = format!(
-        "; this process refuses it until it ends — mark it spent by hand: the line issued {issued_on} in {} to the person who asked for alice (RUNBOOK §10 step 11)",
+        "; this process refuses it until it ends, and the next start admits a post on it until it is marked — mark it spent by hand, before any restart: the line issued {issued_on} in {} to the person who asked for alice (RUNBOOK §10 step 11)",
         crate::invites::path(&rig.state_dir).display()
     );
     assert!(rig.log().iter().any(|l| l.starts_with("alice: the invite could not be marked spent (") && l.ends_with(&act)), "{act}: {:?}", rig.log());
@@ -481,12 +481,9 @@ fn the_sign_up_file_unkept_is_said_as_it_starts_and_as_it_ends() {
         assert_eq!(rig.service.sign_up(b"someone@example.org"), Err(SignUpRefusal::Failed));
     }
     let opened = format!("a sign-up could not be kept: the sign-up file {}: ", file.display());
+    let refuses = "; every sign-up is refused until the file can be read and replaced again, by the service's user on a filesystem with room — said once, and again once one is kept";
     assert_eq!(rig.log().len(), 1, "said once for three: {:?}", rig.log());
-    assert!(
-        rig.log()[0].starts_with(&opened) && rig.log()[0].ends_with("; every sign-up is refused until the file reads and writes as the service's user — said once, and again once one is kept"),
-        "{:?}",
-        rig.log()
-    );
+    assert!(rig.log()[0].starts_with(&opened) && rig.log()[0].ends_with(refuses), "{:?}", rig.log());
     fs::set_permissions(&file, fs::Permissions::from_mode(0o600)).expect("readable again");
     rig.service.rated.advance(crate::rates::HOLD_DOWN);
     assert_eq!(rig.service.sign_up(b"someone@example.org"), Ok(()));

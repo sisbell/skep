@@ -172,8 +172,9 @@ fn an_admitted_post_answers_d7_with_its_status_url() {
 }
 
 /// `GET /status/<token>`: D-7 while queued or running, the live reply once
-/// live, D-8 once failed, 404 for a token the desk does not hold — and for
-/// a path that is no token.
+/// live, D-8 once failed, 404 for a token the desk does not hold — its page
+/// saying a restart most often ends one, and the person's next act — and
+/// 404 with no page's words for a path that is no token.
 #[test]
 fn the_status_page_shows_d7_the_live_reply_d8_or_404() {
     let desk = Scripted::default();
@@ -191,10 +192,16 @@ fn the_status_page_shows_d7_the_live_reply_d8_or_404() {
     assert_eq!(failed.status, 200);
     assert!(failed.body.contains(&row(&site().fill(FAILED))));
     *desk.status.lock().unwrap() = None;
-    assert_eq!(answer(&request("GET", "/status/other", b""), &site(), &desk).status, 404);
+    let gone = answer(&request("GET", "/status/other", b""), &site(), &desk);
+    assert_eq!(gone.status, 404);
+    assert!(gone.body.contains(&row(&site().fill(STATUS_GONE))), "{}", gone.body);
+    assert!(gone.body.contains("has restarted since") && gone.body.contains("write to owner@skep.host before you choose another name"), "{}", gone.body);
     let asked_before = desk.asked.lock().unwrap().len();
-    assert_eq!(answer(&request("GET", "/status/", b""), &site(), &desk).status, 404);
-    assert_eq!(answer(&request("GET", "/status/a/b", b""), &site(), &desk).status, 404);
+    for no_token in ["/status/", "/status/a/b"] {
+        let none = answer(&request("GET", no_token, b""), &site(), &desk);
+        assert_eq!(none.status, 404, "{no_token}");
+        assert!(none.body.contains(&row(&site().fill(NOT_FOUND))) && !none.body.contains("restarted"), "{no_token}: {}", none.body);
+    }
     assert_eq!(desk.asked.lock().unwrap().len(), asked_before, "a path that is no token never reaches the desk");
 }
 
@@ -628,7 +635,7 @@ fn a_persons_field_never_closes_its_attribute() {
 #[test]
 fn the_debug_of_what_the_pages_hold_shows_none_of_it() {
     assert_eq!(format!("{:?}", Post { name: b"alice", record: b"{}", invite: b"c0de" }), "Post { name: 5, record: 2, invite: 4 }");
-    let reply = format!("This reply stays at {}\n", status_url(&site().suffix, "t0k3n"));
+    let reply = format!("Keep a copy: until this service next restarts, this reply stays at {}\n", status_url(&site().suffix, "t0k3n"));
     assert_eq!(format!("{:?}", Shown::Live(reply.clone())), format!("Live({})", reply.len()));
     assert_eq!(format!("{:?}", Shown::BeingMade), "BeingMade");
     assert_eq!(format!("{:?}", Shown::Failed), "Failed");

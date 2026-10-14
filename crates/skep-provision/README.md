@@ -30,7 +30,8 @@ skep-provision --version
   next `serve` counts it live and leaves it, its invite still issued: a
   post on that invite is admitted again unless the operator marks it
   spent. The log names such a board, its `snippet: written` with no
-  `the invite is spent` after it.
+  `the invite is spent` after it, and the next `serve` names it again,
+  `<name>: routed at start with no invite line spent under it …`.
 - **`invite`** mints one invite into the state directory's invite file
   and prints one line on stdout, the invite link: the claim form's URL
   carrying the code, `https://<suffix>/claim?invite=<code>`. The owner
@@ -177,7 +178,11 @@ file and what it refuses, and once, with the count, as it ends.
 - `GET /status/<token>` shows D-7 while the post waits or runs, the live
   reply once the board is routed, and D-8 once it failed. A token the
   service does not hold is 404, and a token from before a restart is one
-  of those.
+  of those: its page says a restart most often ends one, where a board
+  that went live stands, and the person's next act — post again, or,
+  where their name now meets D-4's "taken", write to the owner, for the
+  board under it may be theirs. The reply ends on how long its status
+  URL stands: until the service next restarts.
 - Every other request is 404. A request the HTTP subset refuses — a head
   past 16 KiB or malformed, one cut off early, one that spent its minute —
   is 400, and so is a body the form decoder refuses (a `%` without two hex
@@ -263,14 +268,17 @@ the invite stays issued so the person can post again. Where something
 still stands, the name stays taken until the operator clears it: the
 snippet with `rm <boards-dir>/<name>.caddy` and a reload of the proxy
 (`docker exec <caddy> caddy reload --config /etc/caddy/Caddyfile`), the
-run with `docker rm -f <name>`, the volume with `docker volume rm <name>`.
-A refused `docker rm -f` of a run that was never made, and a reload that
-fails, leave nothing standing, and the log says done. The look reads an
-Engine that cannot be reached as nothing standing, as a post's look does;
-the removals' log lines above it then name the Engine, and the next
-start's sweep finds the volume it left. A step that panics is a failed
-step, and a cleanup that panics fails its post all the same, the log
-saying INCOMPLETE: a panic costs its post, never the worker.
+run with `docker rm -f <name>`, the volume with `docker volume rm <name>`
+— a volume left with no snippet the next start's sweep clears too. Where
+the look itself could not be made, its line names its source,
+`docker could not run` or the snippet directory by its path, and the act
+once one can be. A refused `docker rm -f` of a run that was never made,
+and a reload that fails, leave nothing standing, and the log says done.
+The look reads an Engine that cannot be reached as nothing standing, as a
+post's look does; the removals' log lines above it then name the Engine,
+and the next start's sweep finds the volume it left. A step that panics
+is a failed step, and a cleanup that panics fails its post all the same,
+the log saying INCOMPLETE: a panic costs its post, never the worker.
 
 ## The sweep at start
 
@@ -279,21 +287,30 @@ volume, and perhaps a run, standing under a name with no snippet — a name
 the service would read as taken for good. So once `serve` has bound its
 address and holds its state directory's `serve.lock`, and before it
 serves, it lists the volumes that carry this service's label
-(`docker volume ls -q --filter label=skep.provision=1`) and, for each
-whose name is one label of the grammar and has no `<name>.caddy` in the
-snippet directory, runs the last two rows of the cleanup,
-`docker rm -f <name>` and `docker volume rm <name>`, each answer logged,
-and then looks at what stands: where something still stands, the log names
-it and the name stays taken, for the operator. A volume whose snippet
-stands is left alone — it is a live board, or a stopped one that Docker's
-`--restart` brings back — and so is a listed volume whose name is not one
-of the grammar, which the log names; and a snippet that stands with no
-labelled volume — a route to no board, its name taken for good, or a
-board made by hand outside the label — is named and left. If the listing
-itself fails, the log says so, the sweep is skipped, and the service
-still serves; a half-made board then stays taken until a start whose
-listing answers. A sweep that listed ends on a line of its own: the
-volumes listed, the half-made among them, those cleared, the names left
+(`docker volume ls -q --filter label=skep.provision=1`) — saying so on a
+line of its own before it asks, so a start held by an Engine that does not
+answer names the call it waits on — and, for each whose name is one label
+of the grammar and has no `<name>.caddy` in the snippet directory, runs
+the last two rows of the cleanup, `docker rm -f <name>` and
+`docker volume rm <name>`, each answer logged, and then looks at what
+stands: where something still stands, the log names it and the name stays
+taken, for the operator — a volume left with no snippet the next start's
+sweep's too. A volume whose snippet stands is left alone — it is a live
+board, or one whose run stands stopped: `--restart on-failure` brings a
+run back from a failure of its own, and by Docker's documentation not from
+the Engine's restart or a reboot (RUNBOOK.md §10 step 12) — and so is a
+listed volume whose name is not one of the grammar, which the log names; a
+snippet that stands with no labelled volume — a route to no board, its
+name taken for good, or a board made by hand outside the label — is named
+and left; and a routed board with no line of the invite file spent under
+it — a stop between its snippet's write and its spend, a spend that could
+not be written, or its spent line removed by hand — is named and left, for
+its invite may still say issued and a post on it is admitted again until
+the operator marks it spent (RUNBOOK.md §10 step 11). If the listing
+itself fails, the log says so, the sweep is skipped, and the service still
+serves; a half-made board then stays taken until a start whose listing
+answers. A sweep that listed ends on a line of its own: the volumes
+listed, the half-made among them, those cleared, the names left
 INCOMPLETE, and the time it took. The serving line carries the count of
 boards cleared, `swept <n>`.
 

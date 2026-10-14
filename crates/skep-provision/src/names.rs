@@ -67,20 +67,32 @@ impl fmt::Display for TakenBy {
 /// cannot be reached among them: at a post the volume's own creation then
 /// fails while the Engine stays unreachable, and nothing is made; after a
 /// cleanup's or the sweep's removals the verdict reads done, and what the
-/// Engine left the next start's sweep finds. The error is a `docker` that
-/// cannot be run at all, or a snippet directory that cannot be searched
-/// ([`caddy::stands`]'s).
+/// Engine left the next start's sweep finds. The error is a snippet
+/// directory that cannot be searched ([`caddy::stands`]'s), its words
+/// opening `the snippet directory <path>: `, or a `docker` that cannot be
+/// run at all, its words opening `docker could not run: ` — each the OS's
+/// own error after them, its kind kept ([`sourced`]), so a line that says a
+/// look could not be made names which of the two failed.
 pub fn taken(docker: &dyn Docker, boards_dir: &Path, name: &Name) -> io::Result<Option<TakenBy>> {
-    if caddy::stands(boards_dir, name)? {
+    if caddy::stands(boards_dir, name).map_err(|e| sourced(e, format!("the snippet directory {}", boards_dir.display())))? {
         return Ok(Some(TakenBy::Snippet));
     }
-    if docker.volume_inspect(name)?.success() {
+    if docker.volume_inspect(name).map_err(|e| sourced(e, "docker could not run"))?.success() {
         return Ok(Some(TakenBy::Volume));
     }
-    if docker.container_inspect(name)?.success() {
+    if docker.container_inspect(name).map_err(|e| sourced(e, "docker could not run"))?.success() {
         return Ok(Some(TakenBy::Container));
     }
     Ok(None)
+}
+
+/// A READ's ERROR WITH ITS SOURCE, its kind kept — the snippet directory's
+/// search or `docker`'s run — so a line that says a look could not be made
+/// names which, where the OS's own words name neither: `No such file or
+/// directory` is as much a `docker` missing from `PATH` as a snippet
+/// directory gone.
+fn sourced(e: io::Error, source: impl fmt::Display) -> io::Error {
+    io::Error::new(e.kind(), format!("{source}: {e}"))
 }
 
 /// What the labelled volumes stand for, sorted at start.
@@ -89,10 +101,11 @@ pub struct Labelled {
     /// Under a name in the grammar with NO snippet: a stop mid-board left
     /// it, and the sweep removes it.
     pub half_made: Vec<Name>,
-    /// Under a name whose snippet stands: a board routed — live, or stopped
-    /// and Docker's `--restart` to bring back — and left; and what the sweep
-    /// holds the names routed at start against, a snippet with no volume
-    /// here a route to no board.
+    /// Under a name whose snippet stands: a board routed — live, or its run
+    /// stopped (RUNBOOK §10 step 12) — and left; and what the sweep holds the
+    /// names routed at start against, a snippet with no volume here a route
+    /// to no board, and the invite file's spent lines against, a board here
+    /// with none spent under it one whose invite may still say issued.
     pub routed: Vec<Name>,
     /// Under no name of the grammar — none [`Name::exact`] reads — as
     /// listed; logged and left.

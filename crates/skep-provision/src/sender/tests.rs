@@ -30,7 +30,7 @@ fn message() -> Message {
         from: "noreply@skep.host".into(),
         reply_to: "owner@skep.host".into(),
         subject: "Your board is live".into(),
-        body: "Your board is live.\n\nThis reply stays at https://skep.host/status/0123\n".into(),
+        body: "Your board is live.\n\nKeep a copy: until this service next restarts, this reply stays at https://skep.host/status/0123\n".into(),
     }
 }
 

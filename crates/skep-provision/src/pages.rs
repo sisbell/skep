@@ -15,7 +15,8 @@
 //! answered with D-7 and the post's status URL, no redirect;
 //! `GET /status/<token>`, D-7 while the post waits or runs, the live reply
 //! once the board's route stands, D-8 once it failed, 404 for a token the
-//! desk does not hold; every other request 404.
+//! desk does not hold — most often one from before the last restart, its
+//! page saying so and the person's next act; every other request 404.
 //! A request the HTTP subset refuses — a head past [`MAX_HEAD`] or
 //! malformed, one cut off early, one that spent its [`TRANSFER_DEADLINE`] —
 //! is 400, and so is a body the form decoder refuses; a body past
@@ -58,7 +59,7 @@ use crate::invite_code::InviteCode;
 use crate::rates::Edge;
 use crate::strings::{
     fill, Words, ADDRESS_LABEL, BAD_FORM, BEING_MADE, CLAIM_BUTTON, CLAIM_LEAD, FAILED, INVITE_LABEL, INVITE_REFUSED, NAME_HELP, NAME_LABEL, NAME_REFUSED, NOT_FOUND, PREVIEW_REFUSED, RECORD_HELP,
-    RECORD_LABEL, RECORD_REFUSED, SIGNUP_BUTTON, SIGNUP_FAILED, SIGNUP_KEPT, SIGNUP_LEAD, SIGNUP_REFUSED, STATUS_URL, THANKS, TOO_LARGE,
+    RECORD_LABEL, RECORD_REFUSED, SIGNUP_BUTTON, SIGNUP_FAILED, SIGNUP_KEPT, SIGNUP_LEAD, SIGNUP_REFUSED, STATUS_GONE, STATUS_URL, THANKS, TOO_LARGE,
 };
 use crate::urlform;
 
@@ -465,10 +466,16 @@ fn answer(request: &Request, site: &Site, desk: &dyn Desk) -> Answer {
                 Err(refusal) => ok(claim_page(site, Some(refusal_words(refusal)), &post)),
             }
         }
-        ("GET", path) => match path.strip_prefix("/status/").filter(|t| !t.is_empty() && !t.contains('/')).and_then(|token| desk.status(token).map(|shown| (token, shown))) {
-            Some((token, Shown::BeingMade)) => ok(being_made(site, token)),
-            Some((_, Shown::Live(text))) => ok(page(site, None, &paragraphs(&text))),
-            Some((_, Shown::Failed)) => ok(page(site, None, &refused_paragraph(&site.fill(FAILED)))),
+        ("GET", path) => match path.strip_prefix("/status/").filter(|t| !t.is_empty() && !t.contains('/')) {
+            Some(token) => match desk.status(token) {
+                Some(Shown::BeingMade) => ok(being_made(site, token)),
+                Some(Shown::Live(text)) => ok(page(site, None, &paragraphs(&text))),
+                Some(Shown::Failed) => ok(page(site, None, &refused_paragraph(&site.fill(FAILED)))),
+                // A token this process does not hold: most often one from
+                // before its last restart, whose page the stop ended — said
+                // so, with the person's next act.
+                None => Answer { status: 404, body: page(site, None, &paragraph(&site.fill(STATUS_GONE))) },
+            },
             None => not_found(site),
         },
         _ => not_found(site),

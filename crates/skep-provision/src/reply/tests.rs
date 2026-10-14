@@ -106,7 +106,7 @@ fn the_reply_keeps_its_order_with_the_status_url_last() {
             "account 1.0.1\nprincipal 1\norigin https://alice.skep.host",
             first.as_str(),
             second.as_str(),
-            "This reply stays at https://skep.host/status/0123456789abcdef0123456789abcdef",
+            "Keep a copy: until this service next restarts, this reply stays at https://skep.host/status/0123456789abcdef0123456789abcdef",
         ]
     );
     assert!(reply.ends_with(&format!("{STATUS}\n")));

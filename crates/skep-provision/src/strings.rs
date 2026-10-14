@@ -145,16 +145,25 @@ pub const SECOND_ACT: Words = Words {
     id: "RULED",
     text: "second act: in your first signed session the setup act runs — `skep claim --board {origin} --dir <store>` from that device performs it: creating your account also creates a space for your agents beneath it, and its home",
 };
-/// The status URL, last in the reply.
-pub const REPLY_STATUS_URL: Words = Words { id: "DRAFT", text: "This reply stays at {status_url}" };
+/// The status URL, last in the reply, with how long it stands: the status
+/// map is memory, and a restart ends every status page.
+pub const REPLY_STATUS_URL: Words = Words { id: "DRAFT", text: "Keep a copy: until this service next restarts, this reply stays at {status_url}" };
 /// The follow-up mail's subject.
 pub const MAIL_SUBJECT: Words = Words { id: "DRAFT", text: "Your board is live" };
 
 // The answers to a request no page takes.
 
-/// A request no page takes, or a status token this program does not hold
-/// (404).
+/// A request no page takes (404).
 pub const NOT_FOUND: Words = Words { id: "DRAFT", text: "There is no page here." };
+/// A status token this process does not hold (404) — most often one from
+/// before the service's last restart, which ended its post's page: what a
+/// board made under it may stand as, and the person's next act, for a stop
+/// cut between a board's snippet and its invite's spend leaves the board
+/// standing under the name and the invite issued.
+pub const STATUS_GONE: Words = Words {
+    id: "DRAFT",
+    text: "This page is not held here — most often because the service that showed it has restarted since. A board that went live stands at its name, https://⟨name⟩.{suffix}, and its reply came by mail where this service sends mail. A post that had not gone live leaves your invite to post again; but if the name you chose then meets \"That name is taken\", the board under it may be yours: write to {owner_address} before you choose another name.",
+};
 /// A body the form decoder refused, or a request outside the subset (400).
 pub const BAD_FORM: Words = Words { id: "DRAFT", text: "This form could not be read. Go back and send it again." };
 /// A body past the cap (413).

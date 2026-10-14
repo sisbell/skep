@@ -9,26 +9,30 @@
 //! name, a bad record, a preview record, an unknown code, a status token
 //! never minted, a body past the cap — each answered as the pages say; and
 //! THE STOP: SIGTERM, the default disposition, ending the process. THE
+//! START AGAIN: after the stop, over the same directories, the board counted
+//! live, the stopped process's status URL a 404 that says a restart ended
+//! it, its spent invite still refused; and after a kill, a start served. THE
 //! CONNECTIONS' POOL: a connection past it waits in the listener's queue
-//! until a thread frees — and one within it is answered beside a held one.
+//! until a thread frees — the pool standing full said — and one within it is
+//! answered beside a held one; THE DESCRIPTOR WALL, an `accept` at the
+//! open-file limit, said once however many meet it, the service serving on.
 //! THE WORKERS' POOL: the boards `--workers 2` names made at once, and no
 //! more. THE SWEEP (T22): started over a script whose `labelled_volumes`
 //! lists one half-made name, the binary removes it before its serving line,
 //! which carries the count. THE SERVING LINE: the RUNBOOK's, field for
 //! field, with mail and without; above it the version, first, the settings
-//! every board is made with and the sweep's summary, the RUNBOOK's too. A
-//! CALL's STDIN: the
-//! sweep's listing, run by the host's runner through a `docker` on `PATH`,
-//! reads nothing of the service's own. A START REFUSED — a snippet directory
-//! that cannot be read or written, a `--mailer` that cannot be run, an
-//! address another listener holds, a second `serve` over the state
-//! directory one holds, each before the sweep — and an invite not minted
-//! each exit 1, with no DATA line. THE STATE FILES: the `invite` verb under
-//! a shell's `022` leaves every file in the state directory `0600`, its lock
-//! file among them. No Docker runs: every call is a script's, and the calls
-//! are read back after. Beside it, `tidy` reads the crate's own source and
-//! manifest for the arrangement `src/main.rs` and `ARCHITECTURE.md` §The
-//! provisioning service state.
+//! every board is made with, the sweep's listing named before it is made and
+//! its summary, the RUNBOOK's too. A CALL's STDIN: the sweep's listing, run
+//! by the host's runner through a `docker` on `PATH`, reads nothing of the
+//! service's own. A START REFUSED — a snippet directory that cannot be read
+//! or written, a `--mailer` that cannot be run, an address another listener
+//! holds, a second `serve` over the state directory one holds, each before
+//! the sweep — and an invite not minted each exit 1, with no DATA line. THE
+//! STATE FILES: the `invite` verb under a shell's `022` leaves every file in
+//! the state directory `0600`, its lock file among them. No Docker runs:
+//! every call is a script's, and the calls are read back after. Beside it,
+//! `tidy` reads the crate's own source and manifest for the arrangement
+//! `src/main.rs` and `ARCHITECTURE.md` §The provisioning service state.
 
 #![cfg(unix)]
 
@@ -60,6 +64,14 @@ const UNIT_UMASK: &str = "077";
 fn under_umask(umask: &str) -> Command {
     let mut command = Command::new("/bin/sh");
     command.args(["-c", "umask \"$1\" && shift && exec \"$0\" \"$@\"", BIN, umask]);
+    command
+}
+
+/// The built binary as a shell runs it under an open-file limit of
+/// `nofile`, `exec`'d in the shell's place as [`under_umask`] runs it.
+fn under_nofile(nofile: &str) -> Command {
+    let mut command = Command::new("/bin/sh");
+    command.args(["-c", "ulimit -n \"$1\" && shift && exec \"$0\" \"$@\"", BIN, nofile]);
     command
 }
 
@@ -204,6 +216,13 @@ impl Service {
         self.log.lock().unwrap().clone()
     }
 
+    /// THE KILL: SIGKILL, as the OOM killer ends a process, and its end — no
+    /// chance given it to let go of anything but what the kernel lets go of.
+    fn kill(mut self) -> std::process::ExitStatus {
+        self.child.kill().expect("killed");
+        self.child.wait().expect("waited")
+    }
+
     /// THE STOP: SIGTERM, and the process's end by it.
     fn terminate(mut self) -> std::process::ExitStatus {
         let sent = Command::new("kill").args(["-TERM", &self.child.id().to_string()]).status().expect("kill ran");
@@ -268,7 +287,9 @@ fn refused(command: &mut Command) -> std::process::Output {
 /// T14: THE SERVICE, FROM THE FORM's POST TO THE LIVE PAGE, over the fakes
 /// and under its unit's umask — the snippet it writes `0644`, that umask
 /// notwithstanding — and every refusal a post can meet, a status token never
-/// minted, a body past the cap, and the stop.
+/// minted, a body past the cap, the stop, and the start again after it: the
+/// board counted live, its status URL a 404 that says a restart ended it,
+/// its spent invite still refused.
 #[test]
 fn the_built_service_runs_a_post_from_the_form_to_the_live_page_over_the_fakes() {
     use std::os::unix::fs::PermissionsExt;
@@ -404,6 +425,27 @@ fn the_built_service_runs_a_post_from_the_form_to_the_live_page_over_the_fakes()
     for never in [code.as_str(), second.as_str(), token.as_str(), "person@example.com", "someone@example.org", "9f9f9f9f", "skep-enroll"] {
         assert!(!log.contains(never), "the log carries {never:?}: {log}");
     }
+
+    // THE START AGAIN over the same state directory and snippet directory:
+    // the stopped process's serve lock let go, alice counted live and named
+    // nowhere — her invite spent under her — the status URL the stopped
+    // process minted answering 404 with the page that says a restart ended
+    // it, and the invite her board spent still refused, with no docker call.
+    let again_script = dir.path().join("docker.again.script");
+    std::fs::write(&again_script, script_line("labelled_volumes", "-", 0, "alice\\n")).expect("the second start's script");
+    let again = Service::start(dir.path(), &again_script, &mail_log, &[]);
+    assert!(again.serving.contains(" live 1 swept 0 "), "{}", again.serving);
+    let (status, gone) = again.request("GET", &format!("/status/{token}"), "");
+    assert_eq!(status, 404);
+    assert!(gone.contains("has restarted since"), "{gone}");
+    let (status, page) = again.request("POST", "/claim", &format!("name=bob&record={}&invite={code}", form_encode(record.as_bytes())));
+    assert_eq!(status, 200);
+    assert!(page.contains("That invite code is not one this service issued, or it has been used."), "{page}");
+    let again_log = until("the second start's sweep", || Some(again.log()).filter(|l| l.contains("sweep: 1 volume under the label")));
+    assert!(!again_log.contains("routed at start with no invite line spent under it"), "{again_log}");
+    again.terminate();
+    let again_calls = std::fs::read_to_string(dir.path().join("docker.again.script.calls")).expect("the second start's calls");
+    assert_eq!(again_calls, "labelled_volumes\t-\t0\n", "the refused post made a docker call");
 }
 
 /// A record of the preview kind.
@@ -413,18 +455,24 @@ fn record_preview() -> String {
 
 /// T22: THE SWEEP AT START — the built binary, over a script whose
 /// `labelled_volumes` lists `bob` (no snippet) and `alice` (its snippet
-/// standing), removes `bob` BEFORE its serving line: by the time the line
-/// is read the script's `rm_force bob`, `volume_rm bob` and the look at
-/// what stands under `bob` after them are consumed and recorded, nothing is
-/// called for `alice`, and the line carries `swept 1` beside `live 1`; then
-/// the service serves — the sign-up page answers — and the log names the
-/// name and the steps.
+/// standing, its invite spent under it, a live board as the service leaves
+/// one), removes `bob` BEFORE its serving line: by the time the line is read
+/// the script's `rm_force bob`, `volume_rm bob` and the look at what stands
+/// under `bob` after them are consumed and recorded, nothing is called for
+/// `alice` nor said of her, and the line carries `swept 1` beside `live 1`;
+/// then the service serves — the sign-up page answers — and the log names
+/// the name and the steps.
 #[test]
 fn the_built_service_sweeps_a_half_made_board_before_its_serving_line() {
     let dir = Scratch::new();
     let boards = dir.path().join("boards");
     std::fs::create_dir(&boards).expect("the snippet directory");
     std::fs::write(boards.join("alice.caddy"), b"").expect("alice's snippet");
+    let state_dir = dir.path().join("state");
+    let code = minted(&state_dir);
+    let invites = std::fs::read_to_string(state_dir.join("invites")).expect("the invite file");
+    let spent = invites.replace(&format!("{code} person@example.com issued "), &format!("{code} person@example.com spent alice "));
+    std::fs::write(state_dir.join("invites"), spent).expect("alice's invite spent under her");
     let script = dir.path().join("docker.script");
     let lines = [
         script_line("labelled_volumes", "-", 0, "alice\\nbob\\n"),
@@ -452,8 +500,9 @@ fn the_built_service_sweeps_a_half_made_board_before_its_serving_line() {
 /// THE CONNECTIONS' POOL: under `--connections 1` a connection that sends
 /// nothing holds the one connection thread, and a second request waits in
 /// the listener's queue, unanswered and with no thread made for it, until
-/// the first closes; then it is answered — and the serving line names the
-/// pool.
+/// the first closes; then it is answered — the serving line naming the
+/// pool, and the log the pool standing full, as `serve`'s connection
+/// threads say it.
 #[test]
 fn a_connection_past_the_pool_waits_until_a_thread_frees() {
     let dir = Scratch::new();
@@ -468,6 +517,8 @@ fn a_connection_past_the_pool_waits_until_a_thread_frees() {
     second.set_read_timeout(Some(Duration::from_secs(2))).expect("a deadline");
     let waited = second.read(&mut [0u8; 1]);
     assert!(matches!(&waited, Err(e) if matches!(e.kind(), std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut)), "answered beside a held connection: {waited:?}");
+    let full = "skep-provision: connections: all 1 threads serving; a connection past them waits in the listener's queue";
+    until("the pool's line", || service.log().contains(full).then_some(()));
     drop(held);
     second.set_read_timeout(Some(Duration::from_secs(30))).expect("a deadline");
     assert_eq!(read_answer(second).0, 200);
@@ -493,6 +544,74 @@ fn a_request_beside_a_held_connection_is_answered_within_the_pool() {
     let read = beside.read_to_end(&mut raw);
     assert!(read.is_ok() && raw.starts_with(b"HTTP/1.1 200 OK\r\n"), "no second thread answered beside the held connection: {read:?} {}", String::from_utf8_lossy(&raw));
     drop(held);
+    service.terminate();
+}
+
+/// THE RECOVERY IS A START, AFTER A KILL TOO: a service killed outright —
+/// SIGKILL, as the OOM killer ends it — starts again over its own state
+/// directory and snippet directory, its serve lock let go by the kernel
+/// with it and nothing it left refusing the start: a lock a stop could
+/// leave held would refuse every start after the first crash, the unit
+/// retrying it every five seconds for good.
+#[test]
+fn a_service_killed_outright_starts_again_over_its_own_directories() {
+    let dir = Scratch::new();
+    std::fs::create_dir(dir.path().join("boards")).expect("the snippet directory");
+    let script = dir.path().join("docker.script");
+    std::fs::write(&script, script_line("labelled_volumes", "-", 0, "")).expect("the script");
+    let first = Service::start(dir.path(), &script, &dir.path().join("mail.log"), &[]);
+    let killed = first.kill();
+    assert_eq!(killed.signal(), Some(9), "ended by SIGKILL: {killed:?}");
+    let again = dir.path().join("again.script");
+    std::fs::write(&again, script_line("labelled_volumes", "-", 0, "")).expect("the second start's script");
+    let second = Service::start(dir.path(), &again, &dir.path().join("mail.log"), &[]);
+    assert_eq!(second.request("GET", "/", "").0, 200, "the start after the kill serves");
+    second.terminate();
+}
+
+/// THE DESCRIPTOR WALL: the built binary under an open-file limit of
+/// twelve, its sixteen connection threads more than that limit leaves room
+/// for — on Linux a thread waiting in `accept` holds a descriptor, so the
+/// wall is met as the pool starts; on macOS a connection taken holds one, so
+/// the connections the test holds meet it — said once, however many
+/// `accept`s meet it, two more connections past it among them; and the
+/// service serves on through it, a request after the held connections are
+/// let go answered.
+#[test]
+fn an_accept_at_the_open_file_limit_is_said_once_and_the_service_serves_on() {
+    let dir = Scratch::new();
+    std::fs::create_dir(dir.path().join("boards")).expect("the snippet directory");
+    let script = dir.path().join("docker.script");
+    std::fs::write(&script, script_line("labelled_volumes", "-", 0, "")).expect("the script");
+    let child = under_nofile("12")
+        .args(["serve", "--listen", "127.0.0.1:0", "--reply-to", "owner@skep.host", "--state-dir"])
+        .arg(dir.path().join("state"))
+        .arg("--boards-dir")
+        .arg(dir.path().join("boards"))
+        .arg("--docker-fake")
+        .arg(&script)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("serve started");
+    let service = Service::running(child);
+    let wall = "skep-provision: connections: accept failed (";
+    let mut held = Vec::new();
+    until("an accept at the limit", || {
+        assert!(held.len() < 16, "sixteen held and no accept met the limit: {}", service.log());
+        held.push(TcpStream::connect(("127.0.0.1", service.port)).expect("connected"));
+        thread::sleep(Duration::from_millis(50));
+        service.log().contains(wall).then_some(())
+    });
+    for _ in 0..2 {
+        held.push(TcpStream::connect(("127.0.0.1", service.port)).expect("connected"));
+        thread::sleep(Duration::from_millis(50));
+    }
+    thread::sleep(Duration::from_millis(300));
+    assert_eq!(service.log().matches(wall).count(), 1, "said once: {}", service.log());
+    drop(held);
+    assert_eq!(service.request("GET", "/", "").0, 200, "the service serves on, its held connections let go");
     service.terminate();
 }
 
@@ -632,14 +751,16 @@ fn the_serving_line_is_the_runbooks_with_mail_and_without() {
 /// THE START SAYS WHAT IT RUNS: its version first, above anything else it
 /// says — a refusal among it — then, before the serving line, the settings
 /// every board is made with, the RUNBOOK's quoted line clause for clause up
-/// to its mail, the sign-up file's fill against its cap, and the sweep's
-/// summary after its listing, the RUNBOOK's quoted line with the time the
-/// sweep took in its place.
+/// to its mail, the sign-up file's fill against its cap, the sweep's
+/// listing named before it is made — the start's last line where the Engine
+/// never answers — and the sweep's summary after its answer, the RUNBOOK's
+/// quoted lines, the time the sweep took in its place.
 #[test]
 fn the_start_says_its_version_and_its_settings_above_the_serving_line() {
     let runbook = std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../RUNBOOK.md")).expect("the RUNBOOK");
     let quoted = runbook.lines().map(str::trim).find(|l| l.starts_with("skep-provision: boards made from image ")).expect("the RUNBOOK's settings line").to_owned();
     let (boards_made, _) = quoted.split_once("; mail through ").expect("the RUNBOOK's mail clause");
+    let listing = runbook.lines().map(str::trim).find(|l| l.starts_with("skep-provision: sweep: listing ")).expect("the RUNBOOK's listing line").to_owned();
     let quoted_sweep = runbook.lines().map(str::trim).find(|l| l.starts_with("skep-provision: sweep: 0 volumes under the label")).expect("the RUNBOOK's sweep summary").to_owned();
     let (sweep_opening, sweep_closing) = quoted_sweep.split_once("<d>").expect("the summary's time");
     let dir = Scratch::new();
@@ -654,6 +775,7 @@ fn the_start_says_its_version_and_its_settings_above_the_serving_line() {
     let settings = format!("{boards_made}; mail into the mail fake {} from noreply@skep.host; the failure page names owner@skep.host", mail_log.display());
     let at = |line: &str| log.lines().position(|l| l == line).unwrap_or_else(|| panic!("{line}: {log}"));
     assert!(at(&settings) < at("skep-provision: sweep: volumes: exit 0"), "the settings said after the sweep: {log}");
+    assert!(at(&settings) < at(&listing) && at(&listing) < at("skep-provision: sweep: volumes: exit 0"), "the listing named after the settings and before its answer: {log}");
     assert!(log.lines().any(|l| l == "skep-provision: the sign-up file holds 0 of its 262144 bytes"), "{log}");
     let summary = log.lines().find(|l| l.starts_with(sweep_opening)).expect("the sweep's summary");
     let took = summary.strip_prefix(sweep_opening).and_then(|rest| rest.strip_suffix(sweep_closing));
@@ -804,7 +926,11 @@ fn a_start_refused_or_an_invite_not_minted_is_exit_1() {
     let unwritable = serve(&boards, "127.0.0.1:0", &[]);
     std::fs::set_permissions(&boards, std::fs::Permissions::from_mode(0o755)).expect("writable again");
     assert_eq!(unwritable.status.code(), Some(1), "{unwritable:?}");
-    assert!(String::from_utf8_lossy(&unwritable.stderr).contains("cannot be written"), "{unwritable:?}");
+    let refusal = String::from_utf8_lossy(&unwritable.stderr);
+    assert!(
+        refusal.contains("cannot be written") && refusal.contains("; the service's user writes it, on a filesystem with room (RUNBOOK §10 step 3)"),
+        "the act named, room among it: {unwritable:?}"
+    );
     assert!(unwritable.stdout.is_empty() && calls().is_empty(), "a snippet directory that cannot be written served, or swept: {unwritable:?}");
     let held = std::net::TcpListener::bind("127.0.0.1:0").expect("a port");
     let bound = serve(&boards, &held.local_addr().expect("its address").to_string(), &[]);

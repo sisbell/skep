@@ -57,10 +57,11 @@
 //! sender's own thread, after the page and never ahead of it, so a mail
 //! outage holds up no next post. The snippet stands before the spend is
 //! written: a stop between the two leaves the board routed — or routed at the
-//! proxy's next reload — and its invite issued, which the next start admits a
-//! post on again (`main`'s THE STOP). A step that panics is a failed step,
-//! and a cleanup that panics fails its post all the same: a panic costs its
-//! post, never the worker.
+//! proxy's next reload — and its invite issued, which the next start names
+//! the board for and admits a post on again until the operator marks it
+//! (`main`'s THE STOP). A step that panics is a failed step, and a cleanup
+//! that panics fails its post all the same: a panic costs its post, never
+//! the worker.
 //!
 //! THE CLEANUP (the provisioning record §5.2's decision table, D-8 made
 //! literally true): on a failed step, what the flow made is undone in the
@@ -97,21 +98,24 @@
 //! bound and before it serves): a stop mid-board before its snippet's write
 //! leaves a volume, and perhaps a run, under a name with no snippet, which
 //! the truth would read as TAKEN for good — so every volume under this
-//! service's label is listed, and each under a name of the grammar with no
-//! snippet is handed to the cleanup itself as what a stop leaves, and so
-//! undone by the table's last two rows, the truth asked what stands after; a
-//! name whose snippet stands is left, a volume under no name of the grammar
-//! is logged and left, and a listing that fails is logged and the sweep
-//! skipped — the sign-up still serves. THE SNIPPET DIRECTORY IS THE LIST OF
-//! BOARDS IT SPARES: a start over a directory emptier than the Engine's
-//! labelled volumes — a VM restored with its volumes and not the directory,
-//! `--boards-dir` pointed elsewhere — removes every board it lacks. Its
-//! precondition is the operator's: ONE SERVICE PER DOCKER HOST, for the label
-//! and the names are the host's, and a second service would take the first's
-//! boards for half-made; `serve` refuses one over the same state directory
-//! or on the same port before its sweep. And it takes the service whole, by
-//! `&mut`, so no post of this service's is in flight while it runs — a post's
-//! volume stands with no snippet from its step 3 until its route change.
+//! service's label is listed, the listing named before it is made, and each
+//! under a name of the grammar with no snippet is handed to the cleanup
+//! itself as what a stop leaves, and so undone by the table's last two rows,
+//! the truth asked what stands after; a name whose snippet stands is left —
+//! and named where no line of the invite file is spent under it, for a stop
+//! from its snippet's write until its spend leaves its invite issued — a
+//! volume under no name of the grammar is logged and left, and a listing
+//! that fails is logged and the sweep skipped — the sign-up still serves.
+//! THE SNIPPET DIRECTORY IS THE LIST OF BOARDS IT SPARES: a start over a
+//! directory emptier than the Engine's labelled volumes — a VM restored with
+//! its volumes and not the directory, `--boards-dir` pointed elsewhere —
+//! removes every board it lacks. Its precondition is the operator's: ONE
+//! SERVICE PER DOCKER HOST, for the label and the names are the host's, and
+//! a second service would take the first's boards for half-made; `serve`
+//! refuses one over the same state directory or on the same port before its
+//! sweep. And it takes the service whole, by `&mut`, so no post of this
+//! service's is in flight while it runs — a post's volume stands with no
+//! snippet from its step 3 until its route change.
 //!
 //! THE DESK's OTHER TWO ANSWERS: a sign-up (`Desk::sign_up`), the address
 //! kept through `signups` and logged as kept or refused — never the
@@ -569,27 +573,36 @@ impl Service {
     }
 
     /// THE SWEEP AT START, run once before the service serves: every volume
-    /// under this service's label listed; each under a name of the grammar
-    /// with NO snippet is half-made — a stop mid-board left it — and is undone
-    /// by [`Service::cleanup`], handed what such a stop leaves: the volume,
-    /// and a run that may stand under the name. So the table's last two rows
-    /// undo it — whichever run stands (`rm_force`), then the volume
-    /// (`volume_rm`), each answer logged — and the truth is then asked what
-    /// stands ([`Service::cleared`]): done, or INCOMPLETE naming what stands,
-    /// the name then taken until the operator clears it. A name whose snippet
-    /// stands is left — live, or stopped and Docker's `--restart` to bring
-    /// back — and so is a listed volume under no name of the grammar, logged.
-    /// The listing's answer is logged as every call's is
-    /// ([`Service::judged`]); one that fails skips the sweep, said on a line
-    /// of its own with what the skip leaves taken: a listing failure must not
-    /// take the sign-up down. A name whose snippet stands with no volume
-    /// under the label — a route to no board, or a board made by hand — is
-    /// said and left; and the sweep ends on a line of its own — the volumes
-    /// listed, the half-made among them, the boards cleared, the names left
-    /// INCOMPLETE, the time it took — the start's figures in one place.
-    /// Answers the boards cleared, for the serving line. The snippet
-    /// directory is thus the list of boards it spares: a labelled volume
-    /// whose snippet is gone is half-made to it, however long it has stood.
+    /// under this service's label listed — the listing named on a line of its
+    /// own before it is made, so an Engine that never answers leaves that line
+    /// the start's last, naming the call that has not returned; each under a
+    /// name of the grammar with NO snippet is half-made — a stop mid-board
+    /// left it — and is undone by [`Service::cleanup`], handed what such a
+    /// stop leaves: the volume, and a run that may stand under the name. So
+    /// the table's last two rows undo it — whichever run stands (`rm_force`),
+    /// then the volume (`volume_rm`), each answer logged — and the truth is
+    /// then asked what stands ([`Service::cleared`]): done, or INCOMPLETE
+    /// naming what stands, the name then taken until the operator clears it.
+    /// A name whose snippet stands is left — live, or its run stopped:
+    /// `--restart on-failure` brings a run back from a failure of its own,
+    /// and by Docker's documentation not from the Engine's restart or a
+    /// reboot (RUNBOOK §10 step 12) — and so is a listed volume under no name
+    /// of the grammar, logged. The listing's answer is logged as every call's
+    /// is ([`Service::judged`]); one that fails skips the sweep, said on a
+    /// line of its own with what the skip leaves taken: a listing failure
+    /// must not take the sign-up down. A name whose snippet stands with no
+    /// volume under the label — a route to no board, or a board made by hand
+    /// — is said and left; so is a routed board under the label with no line
+    /// of the invite file spent under it — a stop from its snippet's write
+    /// until its spend, a spend that could not be written, or its spent line
+    /// removed by hand — whose invite may still say issued, a post naming it
+    /// admitted again until the operator marks it ([`invites::spent_names`]);
+    /// and the sweep ends on a line of its own — the volumes listed, the
+    /// half-made among them, the boards cleared, the names left INCOMPLETE,
+    /// the time it took — the start's figures in one place. Answers the
+    /// boards cleared, for the serving line. The snippet directory is thus
+    /// the list of boards it spares: a labelled volume whose snippet is gone
+    /// is half-made to it, however long it has stood.
     ///
     /// ITS PRECONDITION, the operator's: ONE SERVICE PER DOCKER HOST. The
     /// label marks every volume any `serve` on the host made, and a volume
@@ -610,6 +623,10 @@ impl Service {
     /// before it shares the service with either.
     pub fn sweep(&mut self) -> usize {
         let began = Instant::now();
+        // THE LISTING NAMED BEFORE IT IS MADE: an Engine that does not answer
+        // holds the start here, and this line, its last, names the call that
+        // has not returned.
+        self.log("sweep: listing the volumes under the label");
         let Some(listing) = self.judged("sweep: volumes", self.docker.labelled_volumes()) else {
             self.log(
                 "sweep: the volumes under the label could not be listed; the sweep is skipped — a board a stop left half-made stays taken until a start whose listing answers: restart once `docker volume ls` answers as the service's user",
@@ -636,6 +653,22 @@ impl Service {
         let unbacked: Vec<Name> = self.book().map.routed_at_start().iter().filter(|name| !labelled.routed.contains(name)).cloned().collect();
         for name in &unbacked {
             self.log(&format!("{name}: its snippet stands with no volume under the label — a route to no board, or a board made by hand: `docker volume inspect {name}` tells which"));
+        }
+        // A ROUTED BOARD WITH NO INVITE SPENT UNDER IT: one this service made
+        // — its volume under the label — whose spend a stop cut off after its
+        // snippet's write, or which could not be written, or whose spent line
+        // a hand removed, so the invite its post named may still say issued,
+        // and a post naming it would make a second board on one invite: said
+        // before the service serves, for the operator to mark.
+        match invites::spent_names(&self.state_dir) {
+            Ok(spent) => {
+                for name in labelled.routed.iter().filter(|name| !spent.contains(name.to_string().as_str())) {
+                    self.log(&format!(
+                        "{name}: routed at start with no invite line spent under it — a stop between its snippet's write and its spend, a spend that could not be written, or its spent line removed by hand: the invite its post named may still say issued, and a post naming it is admitted again until the operator marks it spent under {name} (RUNBOOK §10 step 11), its issue date on the `{name}: admitted` line the log holds from before this start"
+                    ));
+                }
+            }
+            Err(e) => self.log(&format!("sweep: the invite file {} could not be read: {e}; the boards routed at start are not held against its spent lines", invites::path(&self.state_dir).display())),
         }
         let (mut swept, mut incomplete) = (0, Vec::new());
         for name in &labelled.half_made {
@@ -747,7 +780,7 @@ impl Service {
                     Ok(true) => self.log(&format!("{name}: the invite is spent")),
                     Ok(false) => self.log(&format!("{name}: the invite was not found issued at the spend; the board stands")),
                     Err(e) => self.log(&format!(
-                        "{name}: the invite could not be marked spent ({e}); this process refuses it until it ends — mark it spent by hand: the line issued {} in {} to the person who asked for {name} (RUNBOOK §10 step 11)",
+                        "{name}: the invite could not be marked spent ({e}); this process refuses it until it ends, and the next start admits a post on it until it is marked — mark it spent by hand, before any restart: the line issued {} in {} to the person who asked for {name} (RUNBOOK §10 step 11)",
                         job.issued,
                         invites::path(&self.state_dir).display()
                     )),
@@ -1021,13 +1054,18 @@ impl Service {
     /// ([`names::taken`], the three reads a post makes) and never read off
     /// the removals' answers — a refused `rm -f` may be of a run that never
     /// stood, and a reload removes nothing the truth reads — then logged
-    /// under `on`'s word: done, or INCOMPLETE naming what stands, the
-    /// operator's to clear. `true` where nothing stands. The reads are the
-    /// post's own, an inspect's non-zero exit "not standing" whatever its
-    /// reason: an Engine that cannot be reached reads here as nothing
-    /// standing, as it does at a post, and the removals' lines logged above
-    /// the verdict then name the Engine; a volume so left with no snippet,
-    /// and any run under its name, is the next start's sweep's.
+    /// under `on`'s word: done; or INCOMPLETE naming what stands, the
+    /// operator's to clear — a volume, which the truth reads only where no
+    /// snippet stands, so half-made to the next start's sweep, which removes
+    /// it too; or INCOMPLETE naming the look that could not be made — its
+    /// source, `docker` or the snippet directory, in its words
+    /// ([`names::taken`]) — and the act once one can be. `true` where nothing
+    /// stands. The reads are the post's own, an inspect's non-zero exit "not
+    /// standing" whatever its reason: an Engine that cannot be reached reads
+    /// here as nothing standing, as it does at a post, and the removals'
+    /// lines logged above the verdict then name the Engine; a volume so left
+    /// with no snippet, and any run under its name, is the next start's
+    /// sweep's.
     fn cleared(&self, name: &Name, on: CleanupOn) -> bool {
         match names::taken(self.docker.as_ref(), &self.config.boards_dir, name) {
             Ok(None) => {
@@ -1035,11 +1073,14 @@ impl Service {
                 true
             }
             Ok(Some(by)) => {
-                self.log(&format!("{name}: {on}: INCOMPLETE — {by}, and the name refuses posts (D-4) until the operator clears it"));
+                let swept = if by == names::TakenBy::Volume { ", or the next start's sweep removes it" } else { "" };
+                self.log(&format!("{name}: {on}: INCOMPLETE — {by}, and the name refuses posts (D-4) until the operator clears it{swept}"));
                 false
             }
             Err(e) => {
-                self.log(&format!("{name}: {on}: INCOMPLETE — the look at what stands could not be made: {e}"));
+                self.log(&format!(
+                    "{name}: {on}: INCOMPLETE — the look at what stands could not be made: {e}; what stands under the name is the operator's to clear once a look can be made (RUNBOOK §10 step 9), a volume with no snippet the next start's sweep's"
+                ));
                 false
             }
         }
@@ -1170,7 +1211,7 @@ impl Desk for Service {
             Err(SignUpRefused::Io(e)) => {
                 if self.rated.signup_file.met(self.rated.now()) {
                     self.log(&format!(
-                        "a sign-up could not be kept: the sign-up file {}: {e}; every sign-up is refused until the file reads and writes as the service's user — said once, and again once one is kept",
+                        "a sign-up could not be kept: the sign-up file {}: {e}; every sign-up is refused until the file can be read and replaced again, by the service's user on a filesystem with room — said once, and again once one is kept",
                         path.display()
                     ));
                 }

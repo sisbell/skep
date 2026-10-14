@@ -1,13 +1,16 @@
 //! THE SERVICE's START: the status map rebuilt from the snippets standing;
-//! THE SWEEP, T20 (its listing's answer logged as every call's is, the
-//! half-made board removed — its run's last lines unread, a stop's leavings
-//! no failure's — the routed and the ungrammatical left, a listing that
-//! fails and a snippet directory it cannot search each skipped on a line of
-//! its own naming what the skip leaves taken and the act, a snippet with no
-//! volume under the label said and left, and a sweep that listed ending on
-//! its summary); a `docker` that cannot be run at all — the sweep skipped, a
-//! post refused D-8; and a `docker` that lists and then cannot run — the
-//! half-made board left INCOMPLETE, never cleared.
+//! THE SWEEP, T20 (its listing named before it is made and its answer logged
+//! as every call's is, the half-made board removed — its run's last lines
+//! unread, a stop's leavings no failure's — the routed and the ungrammatical
+//! left, a listing that fails and a snippet directory it cannot search each
+//! skipped on a line of its own naming what the skip leaves taken and the
+//! act, a volume the removals left said the next start's too, a snippet with
+//! no volume under the label said and left, a routed board with no invite
+//! line spent under it named and left, and a sweep that listed ending on its
+//! summary); a `docker` that cannot be run at all — the sweep skipped, a post
+//! refused D-8, the look's line naming `docker`; and a `docker` that lists
+//! and then cannot run — the half-made board left INCOMPLETE, never cleared,
+//! the look named as what could not be made, and the act once one can be.
 
 use super::*;
 use crate::docker::Call;
@@ -61,14 +64,15 @@ fn a_docker_that_cannot_run_skips_the_sweep_and_refuses_a_post_d8() {
     let log = lines.lock().unwrap().clone();
     assert!(log.iter().any(|l| l.starts_with("sweep: volumes: docker could not run: ")), "{log:?}");
     assert!(log.iter().any(|l| l == SKIPPED), "{log:?}");
-    assert!(log.iter().any(|l| l.starts_with("alice: a post could not be judged: the look at the name: ")), "{log:?}");
+    assert!(log.iter().any(|l| l.starts_with("alice: a post could not be judged: the look at the name: docker could not run: ")), "the look's line naming docker: {log:?}");
 }
 
 /// THE VERDICT WHERE NO LOOK CAN BE MADE: a `docker` that answers the
 /// sweep's listing and then cannot be run at all — the run's and the
 /// volume's removals each logged as one that could not run, the look after
 /// them unmade — leaves the half-made board INCOMPLETE, the look named as
-/// what could not be made: never said done, never counted cleared.
+/// what could not be made, `docker` its source, and the operator's act once
+/// one can be: never said done, never counted cleared.
 #[test]
 fn a_look_that_cannot_be_made_never_clears_a_name() {
     /// A runner that lists `bob` and can run nothing after it.
@@ -92,9 +96,14 @@ fn a_look_that_cannot_be_made_never_clears_a_name() {
     let mut service = Service::new(config, state_dir, Box::new(ListsThenGone), None, log, Arc::new(|_| {})).expect("the service");
     assert_eq!(service.sweep(), 0, "a board counted cleared though no look was made");
     let log = lines.lock().unwrap().clone();
-    for opens in ["bob: sweep: rm_force: docker could not run: ", "bob: sweep: volume_rm: docker could not run: ", "bob: sweep: INCOMPLETE — the look at what stands could not be made: "] {
+    for opens in ["bob: sweep: rm_force: docker could not run: ", "bob: sweep: volume_rm: docker could not run: "] {
         assert!(log.iter().any(|l| l.starts_with(opens)), "{opens}: {log:?}");
     }
+    let act = "; what stands under the name is the operator's to clear once a look can be made (RUNBOOK §10 step 9), a volume with no snippet the next start's sweep's";
+    assert!(
+        log.iter().any(|l| l.starts_with("bob: sweep: INCOMPLETE — the look at what stands could not be made: docker could not run: ") && l.ends_with(act)),
+        "the look named, docker its source, the act after it: {log:?}"
+    );
     assert!(!log.iter().any(|l| l.ends_with("done — nothing stands under the name")), "{log:?}");
 }
 
@@ -116,10 +125,16 @@ fn a_look_that_cannot_be_made_never_clears_a_name() {
 fn the_sweep_removes_a_half_made_board_and_leaves_the_rest() {
     let script = line("labelled_volumes", None, 0, "alice\nbob\nCarol_X\n", "") + &line("rm_force", Some("bob"), 0, "", "") + &line("volume_rm", Some("bob"), 0, "", "") + &inspects("bob");
     let mut rig = rig(&script, None);
+    // `alice` a live board as this service leaves one: its snippet standing,
+    // and its invite's line spent under it.
     fs::write(rig.snippet("alice"), b"").expect("alice's snippet");
+    let alices = rig.invite();
+    crate::invites::spend(&rig.state_dir, &alices, &Name::parse(b"alice").expect("a name")).expect("spent");
     assert_eq!(rig.sweep(), 1);
     rig.fake.assert_done();
     assert_eq!(rig.fake.said(), said(&["labelled_volumes", "rm_force bob", "volume_rm bob", "volume_inspect bob", "container_inspect bob"]));
+    let at = |wanted: &str| rig.log().iter().position(|l| l == wanted).unwrap_or_else(|| panic!("{wanted}: {:?}", rig.log()));
+    assert!(at("sweep: listing the volumes under the label") < at("sweep: volumes: exit 0"), "the listing named before it is made: {:?}", rig.log());
     for logged in [
         "sweep: volumes: exit 0",
         "bob: half-made at start (a volume, no snippet) — removing",
@@ -164,7 +179,7 @@ fn the_sweep_removes_a_half_made_board_and_leaves_the_rest() {
         "bob: sweep: rm_force: Error: No such container: bob",
         "bob: sweep: volume_rm: exit 1",
         "bob: sweep: volume_rm: Error: volume is in use",
-        "bob: sweep: INCOMPLETE — a volume stands under it, and the name refuses posts (D-4) until the operator clears it",
+        "bob: sweep: INCOMPLETE — a volume stands under it, and the name refuses posts (D-4) until the operator clears it, or the next start's sweep removes it",
         "carol: sweep: rm_force: exit 1",
         "carol: sweep: volume_rm: exit 0",
         "carol: sweep: done — nothing stands under the name",
@@ -188,6 +203,10 @@ fn a_snippet_with_no_volume_under_the_label_is_said_and_left() {
         fs::write(boards.join(format!("{name}.caddy")), b"").expect("a snippet");
     }
     let state_dir = StateDir::open(&dir.path().join("state")).expect("the state directory");
+    // `alice` a live board as this service leaves one: its invite's line
+    // spent under it.
+    let alices = mint(&state_dir, &MailAddress::parse("person@example.com").expect("an address"), None).expect("minted");
+    crate::invites::spend(&state_dir, &alices, &Name::parse(b"alice").expect("a name")).expect("spent");
     let lines = Arc::new(Mutex::new(Vec::new()));
     let into = Arc::clone(&lines);
     let log: Log = Arc::new(move |line: &str| into.lock().unwrap().push(line.to_owned()));
@@ -200,6 +219,30 @@ fn a_snippet_with_no_volume_under_the_label_is_said_and_left() {
     assert!(log.iter().any(|l| l == "dave: its snippet stands with no volume under the label — a route to no board, or a board made by hand: `docker volume inspect dave` tells which"), "{log:?}");
     assert!(!log.iter().any(|l| l.starts_with("alice")), "a snippet the listing holds a volume for, said: {log:?}");
     assert!(log.iter().any(|l| l.starts_with("sweep: 1 volume under the label, 0 of them half-made and 0 cleared; in ") && l.ends_with(" ms")), "{log:?}");
+}
+
+/// A ROUTED BOARD WITH NO INVITE SPENT UNDER IT is said at the sweep: a stop
+/// between its snippet's write and its spend, or a spend that could not be
+/// written, left its invite issued, which a post spends again on a second
+/// board — so the start names the board and the act, before it serves, and
+/// leaves it, no call made for it; a routed board whose invite is spent under
+/// it says nothing.
+#[test]
+fn a_routed_board_with_no_invite_spent_under_it_is_said_at_the_sweep() {
+    let mut rig = rig(&line("labelled_volumes", None, 0, "alice\nbob\n", ""), None);
+    for routed in ["alice", "bob"] {
+        fs::write(rig.snippet(routed), b"").expect("a snippet");
+    }
+    let alices = rig.invite();
+    crate::invites::spend(&rig.state_dir, &alices, &Name::parse(b"alice").expect("a name")).expect("spent");
+    let bobs = rig.invite();
+    assert_eq!(rig.sweep(), 0);
+    rig.fake.assert_done();
+    let act = "the invite its post named may still say issued, and a post naming it is admitted again until the operator marks it spent under bob (RUNBOOK §10 step 11), its issue date on the `bob: admitted` line the log holds from before this start";
+    assert!(rig.logged_around("bob: routed at start with no invite line spent under it — ", act), "{:?}", rig.log());
+    assert!(!rig.log().iter().any(|l| l.starts_with("alice: routed at start")), "a board spent under, said: {:?}", rig.log());
+    assert!(rig.issued(&bobs) && rig.snippet("bob").exists(), "the sweep marks no invite and removes no routed board");
+    assert!(rig.logged_around("sweep: 2 volumes under the label, 0 of them half-made and 0 cleared; in ", " ms"), "{:?}", rig.log());
 }
 
 /// A SNIPPET DIRECTORY THE SWEEP CANNOT SEARCH skips it on a line of its own

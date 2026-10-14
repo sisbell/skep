@@ -25,6 +25,7 @@
 //! `invite` may mint, and neither change may be lost to the other's write.
 //! A lookup reads the file as the last rename left it.
 
+use std::collections::BTreeSet;
 use std::fmt;
 use std::io;
 use std::path::PathBuf;
@@ -148,6 +149,22 @@ pub fn path(state_dir: &StateDir) -> PathBuf {
 /// that line is said.
 pub fn issued_count(state_dir: &StateDir) -> io::Result<usize> {
     Ok(read_invites(state_dir)?.iter().filter(|i| i.issued()).count())
+}
+
+/// THE NAMES SPENT UNDER, as the file stands: every board a line of the file
+/// is spent under — what the sweep at start holds the boards routed at start
+/// against, a routed board under the label with none spent under it one
+/// whose spend a stop cut off after its snippet's write, or which could not
+/// be written, or whose spent line a hand removed — its invite maybe still
+/// issued.
+pub fn spent_names(state_dir: &StateDir) -> io::Result<BTreeSet<String>> {
+    Ok(read_invites(state_dir)?
+        .into_iter()
+        .filter_map(|invite| match invite.state {
+            InviteState::Spent { name, .. } => Some(name),
+            InviteState::Issued { .. } => None,
+        })
+        .collect())
 }
 
 /// Why `invite` answers no invite link.

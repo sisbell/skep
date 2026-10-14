@@ -2,9 +2,10 @@
 //! and the container stands — every one of the eight combinations, the reads
 //! made in the order fixed here and no further than the first that stands,
 //! and a snippet directory that cannot be searched the error before any
-//! call; an unguessable value's form, and its one failure's words; what
-//! took a name, as the log says it; and the labelled volumes sorted against
-//! the snippet directory — half-made, routed, or under no name of the
+//! call, a `docker` that cannot be run the error after it, each named in the
+//! error's words; an unguessable value's form, and its one failure's words;
+//! what took a name, as the log says it; and the labelled volumes sorted
+//! against the snippet directory — half-made, routed, or under no name of the
 //! grammar. (The status map is the book's — `flow/status_map/tests.rs`; the
 //! two posts on one name and the fifth past the queue are the desk's —
 //! `flow/tests/desk.rs`; the sweep is the start's — `flow/tests/start.rs`.)
@@ -83,7 +84,8 @@ fn the_labelled_volumes_sort_into_half_made_routed_and_ungrammatical() {
 
 /// THE TRUTH's OTHER ERROR: a snippet directory that cannot be searched is
 /// the error, before any call is made — as a `docker` that cannot be run at
-/// all is.
+/// all is — its words naming the directory by its path, so a look that
+/// could not be made says which of the two failed.
 #[cfg(unix)]
 #[test]
 fn a_snippet_directory_that_cannot_be_searched_is_the_truths_error() {
@@ -93,8 +95,28 @@ fn a_snippet_directory_that_cannot_be_searched_is_the_truths_error() {
     fs::create_dir(&boards).expect("a directory");
     fs::set_permissions(&boards, fs::Permissions::from_mode(0o000)).expect("unsearchable");
     let fake = FakeDocker::parse("").expect("a script");
-    assert!(taken(&fake, &boards, &name("alice")).is_err(), "the snippet directory's error");
+    let refused = taken(&fake, &boards, &name("alice")).expect_err("the snippet directory's error");
+    assert_eq!(refused.kind(), io::ErrorKind::PermissionDenied, "the OS's kind kept");
+    assert!(refused.to_string().starts_with(&format!("the snippet directory {}: ", boards.display())), "{refused}");
     fake.assert_done();
+}
+
+/// A `docker` THAT CANNOT BE RUN AT ALL is the truth's error too, past the
+/// snippet's read: its words opening `docker could not run: `, the OS's own
+/// after them and its kind kept — never a snippet directory's.
+#[test]
+fn a_docker_that_cannot_run_is_the_truths_error_and_says_so() {
+    /// A runner whose `docker` cannot be run: every call the error.
+    struct NoDocker;
+    impl Docker for NoDocker {
+        fn run(&self, _: crate::docker::Call<'_>) -> io::Result<crate::process::Exit> {
+            Err(io::Error::from(io::ErrorKind::NotFound))
+        }
+    }
+    let dir = Scratch::new();
+    let refused = taken(&NoDocker, dir.path(), &name("alice")).expect_err("docker's error");
+    assert_eq!(refused.kind(), io::ErrorKind::NotFound, "the OS's kind kept");
+    assert!(refused.to_string().starts_with("docker could not run: "), "{refused}");
 }
 
 /// An unguessable value — a status token, a minted invite code: 128 bits as

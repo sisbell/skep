@@ -13,9 +13,12 @@
 //! the store writes in place — or a special file there failing the open,
 //! nothing it names touched and no open left waiting, every such entry
 //! counted in one refusal of bounded length — eight clauses named, the rest
-//! counted by kind — with the act for its kind; then the volume's hard-link
-//! probe, which leaves nothing, a probe a kill cut short cleared by the next
-//! open. THE OPEN's ACCOUNT
+//! counted by kind — with the act for its kind; then what frees room before
+//! what takes it, the asides and an expired partial gone before the lease
+//! log's twin and the probe are asked for; the volume's hard-link probe,
+//! which leaves nothing, a probe a kill cut short cleared by the next open;
+//! and the root's own entry made durable at every open, the board's own
+//! directory fsynced after the root. THE OPEN's ACCOUNT
 //! (`Store::opened`): each repair counted and the bytes they freed, a store
 //! or a log found absent answered made, a log's cut told from a crash's by
 //! the whole lines it took; an open refused at a log naming the log and its
@@ -933,4 +936,82 @@ fn a_half_written_compaction_twin_is_never_read_in_place_of_its_log() {
     for twin in ["uploads.compact", "leases.compact"] {
         assert!(!root.join(twin).exists(), "{twin}: written over and renamed onto its log");
     }
+}
+
+/// THE OPEN FREES ROOM BEFORE IT ASKS FOR ANY (`Store::open`, "WHAT FREES
+/// ROOM, BEFORE WHAT TAKES IT"): the asides swept and an expired upload's
+/// partial removed before the lease log's twin and the probe's directory are
+/// asked for — an obstacle at each in the full volume's place: a directory
+/// at the twin's name, then a name in the probe's directory no probe makes.
+/// Each open is refused there, named, the aside and the expired partial
+/// already gone, the room their removal made already the volume's; the
+/// obstacles gone, the board opens.
+#[test]
+fn the_open_frees_room_before_it_asks_for_any() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let root = dir.path().join("blobs");
+    let expiring = {
+        let store = open(&root, 0);
+        put_whole(&store, "k", b"leased twice", 1);
+        put_whole(&store, "k", b"leased twice", 2); // two lease lines over one lease: rewritten at open
+        standing(&store, "k", 100, b"expires", 3)
+    };
+    let designation_dir = root.join("blake3");
+    let partial = designation_dir.join(format!(".upload-{}", expiring.id.to_hex()));
+    let aside = |n: u64| designation_dir.join(format!(".retired-{}-{n}", hex_of(b"a replaced instance")));
+    let now = expiring.expires;
+    fs::write(aside(90), b"a replaced instance a crash left").unwrap();
+    fs::create_dir(root.join("leases.compact")).unwrap();
+    let refused = Store::open(&root, HORIZON, now).map(drop).expect_err("the twin cannot be made");
+    assert!(refused.to_string().starts_with("blobs/leases.compact: create: "), "{refused}");
+    assert!(!aside(90).exists(), "the aside swept before the twin was asked for");
+    assert!(!partial.exists(), "the expired partial removed before it");
+    fs::remove_dir(root.join("leases.compact")).unwrap();
+    fs::write(aside(91), b"another").unwrap();
+    fs::create_dir(root.join(".link-probe")).unwrap();
+    fs::write(root.join(".link-probe").join("c"), b"no probe's name").unwrap();
+    let refused = Store::open(&root, HORIZON, now).map(drop).expect_err("the probe cannot clear its directory");
+    assert!(refused.to_string().starts_with("blobs/.link-probe/: remove: "), "{refused}");
+    assert!(!aside(91).exists(), "the aside swept before the probe");
+    fs::remove_dir_all(root.join(".link-probe")).unwrap();
+    let store = open(&root, now);
+    assert_eq!(store.upload("k", &expiring.id, now), None, "the expired upload removed");
+}
+
+/// THE ROOT's OWN ENTRY IS MADE DURABLE AT EVERY OPEN (`Store::open`; the
+/// register M-I5 (a), a directory's entry durable only at its parent's
+/// fsync): the open fsyncs the board's own directory after the root, so a
+/// `blobs/` a first start made outlives a power loss with every deposit in
+/// it. Injected by the board's directory itself, written and searched but
+/// not read: the first open makes the root and meets the board's fsync
+/// refused, failing named, the kind kept; the next, the root standing, meets
+/// it again, as an open makes every act of its own again, rather than
+/// serving over an entry no fsync made durable; readable, the board opens.
+#[cfg(unix)]
+#[test]
+fn every_open_makes_the_roots_own_entry_durable() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().expect("tempdir");
+    let board = dir.path().join("board");
+    fs::create_dir(&board).unwrap();
+    let root = board.join("blobs");
+    let mode = fs::metadata(&board).unwrap().permissions();
+    fs::set_permissions(&board, fs::Permissions::from_mode(0o300)).unwrap();
+    // A privileged process opens any directory: nothing to inject.
+    let privileged = fs::File::open(&board).is_ok();
+    let opens = (!privileged).then(|| {
+        let first = Store::open(&root, HORIZON, 0).map(drop).map_err(|e| (e.kind(), e.to_string()));
+        let made = root.is_dir();
+        let again = Store::open(&root, HORIZON, 1).map(drop).map_err(|e| (e.kind(), e.to_string()));
+        (first, made, again)
+    });
+    fs::set_permissions(&board, mode).unwrap();
+    let Some((first, made, again)) = opens else { return };
+    for (opened, at) in [(first, "the first open"), (again, "the next, the root standing")] {
+        let (kind, message) = opened.expect_err(at);
+        assert_eq!(kind, std::io::ErrorKind::PermissionDenied, "{at}: the kind kept: {message}");
+        assert!(message.starts_with("board/: fsync: "), "{at}: the board's directory named by its place: {message}");
+    }
+    assert!(made, "the root made before the board's fsync was refused");
+    drop(open(&root, 2));
 }

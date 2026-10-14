@@ -1,8 +1,9 @@
 //! THE FILES (`media.md` §The media stores; M-I5 (c)): the size check's
 //! read, a size that cannot be read answered as a failure — the file and
 //! the act named — and never as an absence; the pull's install, which makes
-//! no board's directory and says on which side of its rename a failure
-//! fell; the name check at every entry point, and the designation a
+//! no board's directory, makes the root's own entry durable at every
+//! install, and says on which side of its rename a failure fell; the name
+//! check at every entry point, and the designation a
 //! creation's function files under; a well-formed name with nothing behind
 //! it — no directory yet, an aside another remover took, an entry that is
 //! no file — absent to every read and act; the directory listings, each
@@ -223,6 +224,47 @@ fn a_pull_that_fails_past_its_rename_says_the_file_stands() {
     );
     assert!(!err.to_string().contains("nothing installed"), "{err}");
     assert_eq!(fs::read(designation_dir.join(&hex)).unwrap(), bytes, "the file stands under its hash");
+}
+
+/// A PULL MAKES THE ROOT's OWN ENTRY DURABLE AT EVERY INSTALL
+/// (`Store::install_file`: the directory fsynced, then the root, then the
+/// board's own directory): the board's directory written and searched but
+/// not read, the pull makes the root, installs the file and meets the
+/// board's fsync refused past the rename — `installed at blobs/blake3/<hex>,
+/// but board/: fsync: …`, the kind kept, the file standing under its hash;
+/// run again, the root standing, it meets that fsync again rather than
+/// answering done over an entry no fsync made durable; readable, it
+/// completes.
+#[cfg(unix)]
+#[test]
+fn a_pull_makes_the_roots_own_entry_durable_at_every_install() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().expect("tempdir");
+    let board = dir.path().join("board");
+    fs::create_dir(&board).unwrap();
+    let root = board.join("blobs");
+    let bytes = b"the picture's bytes, durable to the board".to_vec();
+    let hex = hex_of(&bytes);
+    let source = dir.path().join("source");
+    fs::write(&source, &bytes).unwrap();
+    let pull = || skep_blobs::Store::install_file(&root, HashFunction::Blake3, &source, Some(&hex));
+    let mode = fs::metadata(&board).unwrap().permissions();
+    fs::set_permissions(&board, fs::Permissions::from_mode(0o300)).unwrap();
+    // A privileged process opens any directory: nothing to inject.
+    let privileged = fs::File::open(&board).is_ok();
+    let pulls = (!privileged).then(|| (pull(), pull()));
+    fs::set_permissions(&board, mode).unwrap();
+    let Some((first, again)) = pulls else { return };
+    for (pulled, at) in [(first, "the first pull, which made the root"), (again, "the pull run again")] {
+        let err = pulled.expect_err(at);
+        assert_eq!(err.kind(), std::io::ErrorKind::PermissionDenied, "{at}: the kind kept: {err}");
+        assert!(
+            err.to_string().starts_with(&format!("installed at blobs/blake3/{hex}, but board/: fsync: ")),
+            "{at}: {err}"
+        );
+    }
+    assert_eq!(fs::read(root.join("blake3").join(&hex)).unwrap(), bytes, "the file stands under its hash");
+    assert_eq!(pull().expect("readable, the pull completes").hex, hex);
 }
 
 /// The size check's read: present with its size, absent as `None`, and a

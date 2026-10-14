@@ -6,12 +6,16 @@
 //! after the open whatever made it; a finish short of its length stopped as
 //! its caller's bug; the finishes run one at a time, a hold parking its own
 //! finish alone, and a held finish keeping no other upload's acts waiting;
-//! and past a finish that failed after its rename, no handle left on the
-//! hash's file, and the record it leaves over no partial leaving by its
-//! end, its expiry and the next open past it.
+//! a stopped log — the lease log's, the records' — refusing a finish before
+//! its rename, the upload standing over its partial for the finish after
+//! the stop lifts; and past a finish that failed after its rename, no handle
+//! left on the hash's file, the resume naming the act that ends the upload,
+//! and the record it leaves over no partial leaving by its end, its expiry
+//! and the next open past it.
 
 use std::fs;
 use std::panic::{catch_unwind, AssertUnwindSafe};
+use std::path::Path;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{mpsc, Arc, Barrier};
 use std::thread;
@@ -359,7 +363,12 @@ fn the_finishes_run_one_at_a_time() {
 /// to the record's offset and stream the next request's bytes into them.
 /// The finish consumes its stream, handle and all; the bytes here were
 /// never settled — the record's offset stands at 0 — and the resume after
-/// the failure finds no partial, answering I/O, the hash's bytes untouched.
+/// the failure finds no partial, answering I/O, the hash's bytes untouched:
+/// `NotFound`, the partial named by its directory and never its
+/// identifier, and the act that ends the upload said in the error a client
+/// reads in `blob_io`'s detail — its end and a PUT of its bytes again, no
+/// resume continuing it however much room returns — which `RUNBOOK.md`
+/// keys the operator's act to.
 #[test]
 fn a_finish_that_failed_past_its_rename_leaves_no_handle_on_the_hashs_file() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -375,8 +384,135 @@ fn a_finish_that_failed_past_its_rename_leaves_no_handle_on_the_hashs_file() {
     let at_hash = store.blob_path("blake3", &hex).unwrap();
     assert_eq!(fs::read(&at_hash).unwrap(), bytes, "the rename named the bytes");
     store.fail_at(None);
-    assert!(matches!(store.resume("k", &rec.id, 0, 2), Err(BlobError::Io(_))), "the partial was renamed away");
+    let gone = match store.resume("k", &rec.id, 0, 2) {
+        Err(BlobError::Io(e)) => e,
+        other => panic!("the partial was renamed away, so the resume answers I/O: {other:?}"),
+    };
+    assert_eq!(gone.kind(), std::io::ErrorKind::NotFound, "{gone}");
+    let text = gone.to_string();
+    assert!(text.starts_with("a partial in blobs/blake3/: open: "), "named by its directory and its act: {text}");
+    assert!(
+        text.ends_with(
+            "; no partial stands for this upload, so no resume continues it: end the upload and PUT its bytes again"
+        ),
+        "the act that ends it, said where a client reads it: {text}"
+    );
+    assert!(!text.contains(&rec.id.to_hex()), "never by its identifier: {text}");
+    let runbook = fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../RUNBOOK.md")).unwrap();
+    assert!(runbook.contains("no partial stands for this upload"), "RUNBOOK.md keys the operator's act to it");
     assert_eq!(fs::read(&at_hash).unwrap(), bytes, "the hash's file untouched");
+}
+
+/// A STOPPED LEASE LOG REFUSES THE FINISH BEFORE ITS RENAME, AND THE UPLOAD
+/// FINISHES ONCE THE STOP LIFTS (`Stream::finish`, what an `Io` leaves: "a
+/// log that has stopped refuses the finish before its first act"): the lease
+/// log stopped by a compaction that failed past its rename — `blobs/`
+/// written and searched but not read, so each twin is renamed over its log
+/// and the root's fsync refused — a finish meets the stop's own refusal
+/// before its first act, where its lease's append would meet it past its
+/// rename, and the stop counts it; the upload stands over its partial at its
+/// offset, no file named and no lease taken; and once the next compaction
+/// lifts the stop, a resume at the length finishes it whole.
+#[cfg(unix)]
+#[test]
+fn a_stopped_lease_log_refuses_a_finish_before_its_rename() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().expect("tempdir");
+    let root = dir.path().join("blobs");
+    let store = open(&root, 0);
+    for n in 1..=10 {
+        put_whole(&store, "k", b"one file, re-PUT", n); // ten lease lines over one lease
+    }
+    let bytes = b"the upload a stop must not strand".to_vec();
+    let rec = standing(&store, "k", bytes.len() as u64, &bytes, 11);
+    let mode = fs::metadata(&root).unwrap().permissions();
+    fs::set_permissions(&root, fs::Permissions::from_mode(0o300)).unwrap();
+    // A privileged process opens any directory: nothing to inject.
+    let privileged = fs::File::open(&root).is_ok();
+    let compacted = (!privileged).then(|| store.compact_logs_if_past(4, 8, 11));
+    fs::set_permissions(&root, mode).unwrap();
+    let Some(compacted) = compacted else { return };
+    assert!(compacted.is_err(), "the rewrites fail past their renames");
+    let stop = store.stopped_logs().1.expect("the lease log stopped");
+    let refused = match store.resume("k", &rec.id, rec.offset, 12).unwrap().finish(INTERVAL, 12) {
+        Err(BlobError::Io(e)) => e,
+        other => panic!("a stopped lease log refuses the finish: {other:?}"),
+    };
+    assert_eq!(
+        refused.to_string(),
+        format!("blobs/leases.log takes no append until a compaction completes: {}", stop.cause),
+        "the stop's own refusal"
+    );
+    assert_eq!(store.stopped_logs().1.map(|s| s.refused), Some(stop.refused + 1), "counted with the stop's");
+    let partial = root.join("blake3").join(format!(".upload-{}", rec.id.to_hex()));
+    assert!(partial.is_file(), "met before the first act: the upload stands over its partial");
+    assert_eq!(store.upload("k", &rec.id, 12).map(|r| r.offset), Some(rec.offset), "at its offset");
+    assert_eq!(store.blob_size("blake3", &hex_of(&bytes)).unwrap(), None, "no file named");
+    assert_eq!(store.lease_state("k", "blake3", &hex_of(&bytes), 12), LeaseState::None, "no lease taken");
+    store.compact_logs_if_past(4, 8, 13).expect("the compactions complete, the root readable");
+    assert_eq!(store.stopped_logs(), (None, None), "the stops lifted");
+    let fin = store.resume("k", &rec.id, rec.offset, 14).unwrap().finish(INTERVAL, 14).expect("finished once lifted");
+    assert_eq!(fin.hex, hex_of(&bytes));
+    assert_eq!(
+        store.lease_state("k", "blake3", &fin.hex, 14),
+        LeaseState::Live { size: bytes.len() as u64, expires: 14 + INTERVAL_MS },
+        "leased whole"
+    );
+}
+
+/// A STOPPED RECORDS' LOG REFUSES THE FINISH BEFORE ITS RENAME TOO
+/// (`Stream::finish`): the records' log stopped alone, past its rename, the
+/// lease log taking appends — a finish meets the records' stop before its
+/// first act, where the retirement's append would meet it past its lease,
+/// the finish then answering `blob_io` over a deposit made; refused before
+/// it, no lease is taken, the upload stands over its partial, and once the
+/// stop lifts the finish completes.
+#[cfg(unix)]
+#[test]
+fn a_stopped_records_log_refuses_a_finish_before_its_rename() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().expect("tempdir");
+    let root = dir.path().join("blobs");
+    let store = open(&root, 0);
+    for _ in 0..8 {
+        let rec = store.create_upload("k", HashFunction::Blake3, 10, INTERVAL, 0).unwrap();
+        store.end_upload("k", &rec.id, 0).unwrap(); // sixteen record lines over no record
+    }
+    let bytes = b"the upload a stop must not strand".to_vec();
+    let rec = standing(&store, "k", bytes.len() as u64, &bytes, 1);
+    let mode = fs::metadata(&root).unwrap().permissions();
+    fs::set_permissions(&root, fs::Permissions::from_mode(0o300)).unwrap();
+    // A privileged process opens any directory: nothing to inject.
+    let privileged = fs::File::open(&root).is_ok();
+    let compacted = (!privileged).then(|| store.compact_logs_if_past(4, 8, 1));
+    fs::set_permissions(&root, mode).unwrap();
+    let Some(compacted) = compacted else { return };
+    assert!(compacted.is_err(), "the records' rewrite fails past its rename");
+    let (stop, leases) = store.stopped_logs();
+    let stop = stop.expect("the records' log stopped");
+    assert_eq!(leases, None, "the lease log takes appends");
+    let refused = match store.resume("k", &rec.id, rec.offset, 2).unwrap().finish(INTERVAL, 2) {
+        Err(BlobError::Io(e)) => e,
+        other => panic!("a stopped records' log refuses the finish: {other:?}"),
+    };
+    assert_eq!(
+        refused.to_string(),
+        format!("blobs/uploads.log takes no append until a compaction completes: {}", stop.cause),
+        "the stop's own refusal"
+    );
+    assert_eq!(store.stopped_logs().0.map(|s| s.refused), Some(stop.refused + 1), "counted with the stop's");
+    assert_eq!(
+        store.lease_state("k", "blake3", &hex_of(&bytes), 2),
+        LeaseState::None,
+        "no lease taken: no deposit answered over with blob_io"
+    );
+    let partial = root.join("blake3").join(format!(".upload-{}", rec.id.to_hex()));
+    assert!(partial.is_file(), "the upload stands over its partial");
+    assert_eq!(store.upload("k", &rec.id, 2).map(|r| r.offset), Some(rec.offset), "at its offset");
+    store.compact_logs_if_past(4, 8, 3).expect("the compaction completes, the root readable");
+    assert_eq!(store.stopped_logs(), (None, None), "the stop lifted");
+    let fin = store.resume("k", &rec.id, rec.offset, 4).unwrap().finish(INTERVAL, 4).expect("finished once lifted");
+    assert_eq!(fin.hex, hex_of(&bytes));
 }
 
 /// A RECORD OVER THE PARTIAL A FAILED FINISH TOOK LEAVES BY EVERY EXIT ITS

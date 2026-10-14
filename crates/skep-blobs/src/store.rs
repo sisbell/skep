@@ -12,13 +12,14 @@
 //! is atomic in the namespace and is lost with its directory entry at a
 //! power loss, so a file is durable only at its directory's fsync, and a
 //! new directory's entry only at ITS parent's — which is why the finish
-//! syncs the designation directory after the rename, and the root at the
-//! first finish into a designation directory no root fsync since the open
-//! has made durable, whatever made it. The partial lives in its target's
-//! own designation directory, so the rename never crosses a filesystem.
-//! REPLACE is `rename(2)`'s own disposition over an existing name: the file
-//! holding the wrong bytes under the right name is the one case a repair
-//! exists for, and a no-op would defeat it.
+//! syncs the designation directory after the rename, the root at the first
+//! finish into a designation directory no root fsync since the open has
+//! made durable, whatever made it, and every open the board's own directory
+//! after the root, `blobs/`'s own entry being the board's. The partial
+//! lives in its target's own designation directory, so the rename never
+//! crosses a filesystem. REPLACE is `rename(2)`'s own disposition over an
+//! existing name: the file holding the wrong bytes under the right name is
+//! the one case a repair exists for, and a no-op would defeat it.
 //!
 //! THE REPLACED INSTANCE's ASIDE IS UNLINKED AFTER THE ANSWER (`media.md`
 //! Op inventory 1, "NO ANSWER OF THE UPLOAD SAYS WHETHER THE FILE WAS
@@ -248,16 +249,16 @@ pub struct Opened {
 /// its caller's runtime compaction ([`Store::compact_logs_if_past`] — the
 /// pruner's pass, which rewrites a stopped log whatever its count); between
 /// the two every act that writes a stopped log answers `Io`: on the records'
-/// log a creation, a byte received and a retirement — an end's, an expiry's,
-/// a finish's last step; on the leases' every finish, at its lease's sync,
-/// past its rename (what that leaves: [`Stream::finish`]). The stop keeps
-/// its cause in the operator's words — the act that failed and the OS's
-/// cause, a full volume told apart from a read-only mount or a failing
-/// device — which every refused append names; and it counts the appends it
-/// refuses, which [`Store::stopped_logs`] answers beside the cause and the
-/// stop's age, the uploads it cost the operator's figure and no caller's.
-/// The next open reads the log afresh, its tail check cutting the torn line
-/// the failed cut left ([`Store::open`]).
+/// log a creation, a byte received, and an end's or an expiry's retirement;
+/// and a finish, where either log has stopped, before its first act — so a
+/// stop strands no upload over a partial its rename took ([`Stream::finish`]).
+/// The stop keeps its cause in the operator's words — the act that failed
+/// and the OS's cause, a full volume told apart from a read-only mount or a
+/// failing device — which every refused append names; and it counts the
+/// appends it refuses, which [`Store::stopped_logs`] answers beside the
+/// cause and the stop's age, the uploads it cost the operator's figure and
+/// no caller's. The next open reads the log afresh, its tail check cutting
+/// the torn line the failed cut left ([`Store::open`]).
 ///
 /// EVERY FAILURE NAMES ITS FILE AND ITS ACT — `{file}: {act}: {cause}`, the
 /// kind kept, the file named within the data directory and a partial by its
@@ -321,31 +322,44 @@ impl std::fmt::Debug for Store {
 }
 
 impl Store {
-    /// Open the store at `root` (created where absent) at `now_ms`: the
-    /// lease log opened and compacted under `horizon` — a lease lapsed by
-    /// more than it answers as none, and is dropped — the upload records
-    /// opened, the partials reconciled with them both ways, every aside
-    /// removed — a crash's or a failed finish's, nothing naming either — the
-    /// records compacted, the root fsynced. Everything here completes before
-    /// the store answers anything. An open that fails partway serves nothing
-    /// and leaves on disk what its acts completed, each one the next open
-    /// makes again: the open is where the store reconciles what it finds —
-    /// its compactions made again while it serves by its caller's runtime
-    /// compaction ([`Store::compact_logs_if_past`]) — and a log a failure
-    /// stopped while an earlier store served is read here afresh, its torn
-    /// tail cut (see [`Store`]). A partial that cannot be read fails the
-    /// open, retiring nothing (`partials.rs`): an I/O failure is no absence.
-    /// And before any of it, every name the store acts on is held to what
-    /// the store makes: a symbolic link, a special file, or a second link to
-    /// a file the store writes in place fails the open as `InvalidData`, one
-    /// refusal of bounded length counting every one it found, naming them in
-    /// at most eight clauses and the act that clears each kind, and nothing
-    /// is followed or written through it (`blobs.rs`,
-    /// `refuse_links_and_special_files`); then the volume is held to the one
-    /// capability the store needs that no other act of the open exercises,
-    /// a second name for a file, which a re-PUT of a file the board holds
-    /// takes: a volume that makes none fails the open, naming its lack and
-    /// the act that clears it (`blobs.rs`, `probe_hard_link`). Every other
+    /// Open the store at `root` (created where absent) at `now_ms`. Before
+    /// any other act, every name the store acts on is held to what the store
+    /// makes: a symbolic link, a special file, or a second link to a file
+    /// the store writes in place fails the open as `InvalidData`, one refusal
+    /// of bounded length counting every one it found, naming them in at most
+    /// eight clauses and the act that clears each kind, and nothing is
+    /// followed or written through it (`blobs.rs`,
+    /// `refuse_links_and_special_files`).
+    ///
+    /// THEN WHAT FREES ROOM, BEFORE WHAT TAKES IT: every aside removed — a
+    /// crash's or a failed finish's, nothing naming either — the upload
+    /// records opened, a torn tail cut, and the partials reconciled with them
+    /// both ways, expired and orphan partials removed and longer ones cut
+    /// back; and only then the acts that ask the volume for room — the lease
+    /// log opened and compacted under `horizon` (a lease lapsed by more than
+    /// it answers as none, and is dropped); the volume held to the one
+    /// capability the store needs that no other act of the open exercises, a
+    /// second name for a file, which a re-PUT of a file the board holds takes
+    /// (a volume that makes none fails the open, naming its lack and the act
+    /// that clears it: `blobs.rs`, `probe_hard_link`), its probe a directory
+    /// and a file of its own; and the records compacted. So an open on a full
+    /// volume has made the room its own repairs make before it asks for any,
+    /// and fails, where it fails, with that room made. Last, the root fsynced
+    /// and then the board's own directory, the root's parent, whose fsync
+    /// alone makes the root's own entry durable (the register M-I5 (a)) — at
+    /// every open, so a `blobs/` a first start made outlives a power loss with
+    /// every deposit in it, and an open that failed at that fsync has it made
+    /// again by the next.
+    ///
+    /// Everything here completes before the store answers anything. An open
+    /// that fails partway serves nothing and leaves on disk what its acts
+    /// completed, each one the next open makes again: the open is where the
+    /// store reconciles what it finds — its compactions made again while it
+    /// serves by its caller's runtime compaction
+    /// ([`Store::compact_logs_if_past`]) — and a log a failure stopped while
+    /// an earlier store served is read here afresh, its torn tail cut (see
+    /// [`Store`]). A partial that cannot be read fails the open, retiring
+    /// nothing (`partials.rs`): an I/O failure is no absence. Every other
     /// failure names its file and its act. What the open did, it answers
     /// ([`Store::opened`]), the bytes its repairs freed among it: the store
     /// says nothing itself, and its embedder says it.
@@ -373,16 +387,20 @@ impl Store {
         // as found.
         blobs::dir_builder().recursive(true).create(root).map_err(at_root("create"))?;
         blobs::refuse_links_and_special_files(root)?;
-        blobs::probe_hard_link(root)?;
-        let (leases, leases_log, leases_past_horizon) = LeaseLog::open(root, horizon, now_ms)?;
+        // What frees room, before what takes it: on a full volume the open
+        // has made the room its own repairs make before it asks for any.
+        let (asides, asides_freed) = blobs::sweep_asides(root)?;
         let (mut uploads, uploads_log) = UploadRecords::open(root)?;
         let reconciled = partials::reconcile(root, &mut uploads, now_ms)?;
-        let (asides, asides_freed) = blobs::sweep_asides(root)?;
+        let (leases, leases_log, leases_past_horizon) = LeaseLog::open(root, horizon, now_ms)?;
+        blobs::probe_hard_link(root)?;
         uploads.compact()?;
         // Listed before the root's fsync, so every directory in the set is
         // one that fsync makes durable.
         let root_synced = blobs::dirs_under(root)?.into_iter().collect();
         fsync_dir(root).map_err(at_root("fsync"))?;
+        let board = board_of(root);
+        fsync_dir(board).map_err(|e| named(e, dir_label(board, 1), "fsync"))?;
         let opened = Opened {
             root_made,
             uploads_log,
@@ -535,7 +553,10 @@ impl Store {
         size_of(&path)
     }
 
-    /// The volume's free space at the root, in bytes — the floor's read.
+    /// The volume's free space at the root, in bytes — the floor's read, of
+    /// bytes alone: the volume's inodes are not read, and on a volume of
+    /// many small deposits, each one file however few its bytes, they run
+    /// out first (`RUNBOOK.md` §1).
     pub fn free_space(&self) -> io::Result<u64> {
         blobs::free_space(&self.root)
     }
@@ -639,13 +660,15 @@ impl Store {
     /// into a temp file in the designation directory of `function` under
     /// `root`, hashed as they are copied, the temp file fsynced, renamed
     /// onto `<designation>/<hex>` — REPLACE where a file stands, which ends
-    /// any hole under the name — the directory fsynced, then the root. The
-    /// temp file is named as a partial is, `.upload-<a fresh identifier>`
-    /// no record names, so a daemon's open that meets it mid-pull removes
-    /// it as an orphan and the pull is run again. NO lease, NO record, NO
-    /// lock: a restore of bytes a committed cell already names — which is
-    /// the caller's to have read — never a deposit. Answers the file's
-    /// designation, hex and size.
+    /// any hole under the name — the directory fsynced, then the root, then
+    /// the board's own directory, the root's own entry made durable at every
+    /// install as at every open ([`Store::open`]), so a pull run again makes
+    /// every fsync again. The temp file is named as a partial is,
+    /// `.upload-<a fresh identifier>` no record names, so a daemon's open
+    /// that meets it mid-pull removes it as an orphan and the pull is run
+    /// again. NO lease, NO record, NO lock: a restore of bytes a committed
+    /// cell already names — which is the caller's to have read — never a
+    /// deposit. Answers the file's designation, hex and size.
     ///
     /// INTO A BOARD THAT STANDS: the root is made where absent, owner-only,
     /// but never its parent, the board's own directory — a pull handed a
@@ -658,11 +681,11 @@ impl Store {
     /// directory, the temp file removed — and where `expected` names a hex
     /// and the bytes hash to another, `nothing installed: the file's bytes
     /// hash to {hex}, not the {expected} the cell names`, as `InvalidData`.
-    /// A failure past the rename — the directory's fsync or the root's —
-    /// reads `installed at {file}, but {file}: fsync: {cause}`, its kind
-    /// kept: the file stands under its hash, ending the hole, and a power
-    /// loss before a sync that succeeds may still take it, so the pull is
-    /// run again once the volume answers.
+    /// A failure past the rename — the directory's fsync, the root's or the
+    /// board's — reads `installed at {file}, but {file}: fsync: {cause}`,
+    /// its kind kept: the file stands under its hash, ending the hole, and a
+    /// power loss before a sync that succeeds may still take it, so the pull
+    /// is run again once the volume answers.
     ///
     /// Beside a serving daemon: its finishes take the store's own locks and
     /// never this call's, so a finish of the same hash racing this rename is
@@ -679,7 +702,7 @@ impl Store {
         let designation = function.designation();
         let dir = root.join(designation);
         let refused = |e: io::Error| io::Error::new(e.kind(), format!("nothing installed: {e}"));
-        let board = root.parent().filter(|p| !p.as_os_str().is_empty()).unwrap_or(Path::new("."));
+        let board = board_of(root);
         if !board.is_dir() {
             return Err(io::Error::new(
                 io::ErrorKind::NotFound,
@@ -744,6 +767,7 @@ impl Store {
         fsync_dir(&dir)
             .map_err(|e| named(e, dir_label(&dir, 2), "fsync"))
             .and_then(|()| fsync_dir(root).map_err(|e| named(e, dir_label(root, 1), "fsync")))
+            .and_then(|()| fsync_dir(board).map_err(|e| named(e, dir_label(board, 1), "fsync")))
             .map_err(|e| {
                 io::Error::new(
                     e.kind(),
@@ -772,10 +796,13 @@ impl Store {
     /// FUNCTION"): no creation can name one this store does not compute,
     /// and every error here is the disk's. An `Io` — the OS refusing
     /// entropy, the partial's creation, the record's write — leaves no
-    /// upload: at most an empty partial, which the next open removes as an
-    /// orphan, and a designation directory made here, whose entry in the
-    /// root the next finish into it fsyncs as it would had the creation
-    /// succeeded.
+    /// upload, and no partial: one the failed creation made is removed with
+    /// the failure, and only where that removal fails too does the next open
+    /// remove it, as the orphan it is — so a refused creation, one per
+    /// client's retry while a stopped log refuses them all, never piles up
+    /// empty partials, each an inode the floor never reads. A designation
+    /// directory made here stands, its entry in the root fsynced by the next
+    /// finish into it as it would be had the creation succeeded.
     pub fn create_upload(
         &self,
         principal: &str,
@@ -786,8 +813,14 @@ impl Store {
     ) -> io::Result<UploadRecord> {
         let designation = function.designation();
         let id = UploadId::mint()?;
-        partials::create(&self.root, designation, &id)?;
-        self.uploads.lock().create(id, principal, designation, length, interval, now_ms)
+        let created = partials::create(&self.root, designation, &id)
+            .and_then(|()| self.uploads.lock().create(id, principal, designation, length, interval, now_ms));
+        if created.is_err() {
+            // No record names the partial: removed now, the records' lock
+            // released, rather than left an orphan until the next open.
+            let _ = partials::remove(&self.root, designation, &id);
+        }
+        created
     }
 
     /// THE PRINCIPAL's OWN RECORD by identifier — `None` for an identifier
@@ -815,11 +848,13 @@ impl Store {
     /// another principal (M-I2 (e)); then `Offset`, carrying the record's
     /// offset, where `offset` is any other. Neither refusal touches the
     /// partial. An `Io` opens no stream: the partial unreadable; gone, a
-    /// finish's rename having taken it; or shorter than the record's offset
-    /// — no state this store leaves: a disk changed under it, or two streams
-    /// of one upload (see [`Store`]) — refused and never extended. An `Io`
-    /// past the cut-back has cut only bytes past the durable point, none
-    /// received.
+    /// finish's rename having taken it — no resume continues that upload, so
+    /// the refusal names the act that ends it, the upload's end and a PUT of
+    /// its bytes again, its kind `NotFound` (`partials/handle.rs`); or
+    /// shorter than the record's offset — no state this store leaves: a disk
+    /// changed under it, or two streams of one upload (see [`Store`]) —
+    /// refused and never extended. An `Io` past the cut-back has cut only
+    /// bytes past the durable point, none received.
     pub fn resume(&self, principal: &str, id: &UploadId, offset: u64, now_ms: u64) -> Result<Stream<'_>, BlobError> {
         let record = self.upload(principal, id, now_ms).ok_or(BlobError::NoUpload)?;
         if offset != record.offset {
@@ -1090,6 +1125,13 @@ fn size_of(path: &Path) -> io::Result<Option<u64>> {
     Ok(meta.filter(fs::Metadata::is_file).map(|m| m.len()))
 }
 
+/// THE BOARD's OWN DIRECTORY, the root's parent — the directory whose
+/// fsync alone makes the root's own entry durable ([`Store::open`],
+/// [`Store::install_file`]); `.` where the root is named alone.
+fn board_of(root: &Path) -> &Path {
+    root.parent().filter(|p| !p.as_os_str().is_empty()).unwrap_or(Path::new("."))
+}
+
 /// MAKE `dir` where absent — owner-only (`blobs::dir_builder`) — and its
 /// parent never: the pull's one way to make a directory
 /// ([`Store::install_file`]), so a board's own directory that does not stand
@@ -1242,16 +1284,25 @@ impl Stream<'_> {
     /// have. `NoUpload` — the upload expired or retired under the stream — is
     /// judged first.
     ///
-    /// WHAT AN `Io` LEAVES, by where it falls: before the rename, the upload
-    /// stands over its partial at its record's offset, to be resumed there
-    /// and finished; past the rename and before the lease's sync, the file
-    /// stands with no lease, unreferenced and prunable, and the record stands
-    /// in this process over a partial the rename took — a resume answers
-    /// `Io` — until the upload is ended, expires, or the next open retires
-    /// it; past the lease's sync, the deposit is made though the finish
-    /// answered an error, and what of the record's retirement did not
-    /// complete, the next open completes — its reconciliation retires a
-    /// record whose partial is gone.
+    /// WHAT AN `Io` LEAVES, by where it falls. A log that has stopped
+    /// refuses the finish before its first act — `{log} takes no append
+    /// until a compaction completes: {cause}`, the refusal the lease's
+    /// append or the retirement's would meet past the rename, judged ahead
+    /// and counted with the stop's refused appends — so a stop strands no
+    /// upload: it stands over its partial at its record's offset, and the
+    /// finish after a compaction lifts the stop completes it. Before the
+    /// rename, likewise, the upload stands over its partial at its record's
+    /// offset, to be resumed there and finished; past the rename and before
+    /// the lease's sync, the file stands with no lease, unreferenced and
+    /// prunable, and the record stands in this process over a partial the
+    /// rename took — a resume answers `Io`, naming the act that ends it, the
+    /// upload's end and a PUT of its bytes again — until the upload is
+    /// ended, expires, or the next open retires it; past the lease's sync,
+    /// the deposit is made though the finish answered an error, and what of
+    /// the record's retirement did not complete, the next open completes —
+    /// its reconciliation retires a record whose partial is gone. A log that
+    /// stops after the finish's judgment of it, while the finish runs, is
+    /// met where its append falls, as any other failure there is.
     ///
     /// The stream is consumed whatever the finish answers: past the rename
     /// its file is the hash's, and it closes with the stream. The store's
@@ -1283,6 +1334,13 @@ impl Stream<'_> {
             self.handle.written(),
             self.length,
         );
+        // A STOPPED LOG, JUDGED BEFORE THE FIRST ACT: its refusal of the
+        // lease's append, or of the retirement's, is certain, and met past
+        // the rename it would leave the upload over no partial, or answer
+        // `blob_io` over a deposit made. Met here, the upload stands over its
+        // partial at its record's offset for the finish after the stop lifts.
+        store.leases.lock().refuse_if_stopped()?;
+        store.uploads.lock().refuse_if_stopped()?;
         let dir = store.root.join(&self.designation);
         // Each step's failure is named as the act's own would be — the
         // hazard seam's injected one among them — and the link and the

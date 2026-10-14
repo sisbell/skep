@@ -676,7 +676,10 @@ pub(crate) fn fsync_dir(dir: &Path) -> io::Result<()> {
 
 /// The volume's free space at the root `path`, in bytes — what the floor
 /// reads: the blocks available to an unprivileged writer times the fragment
-/// size.
+/// size. Bytes alone: the volume's inodes (`f_favail`) are not read, and on
+/// a volume of many small deposits — each one file and one inode, however
+/// few its bytes — they run out first, every write then refused as the
+/// volume full while this figure says there is room (`RUNBOOK.md` §1).
 pub(crate) fn free_space(path: &Path) -> io::Result<u64> {
     let v = rustix::fs::statvfs(path).map_err(|e| named(e.into(), dir_label(path, 1), "statvfs"))?;
     Ok(v.f_bavail.saturating_mul(v.f_frsize))

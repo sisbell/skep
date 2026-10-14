@@ -69,12 +69,16 @@
 //!   passed a size trigger, under the store's lock on that log's appends
 //!   alone, a lease past the horizon dropped there as at open), which
 //!   rewrites a stopped log whatever its count; between the two a stopped
-//!   log answers `Io` to every act that writes it ([`Store`]), naming the
-//!   stop's cause, which [`Store::stopped_logs`] answers with the stop's age
-//!   and the appends it has refused ([`LogStop`]) — a full volume told apart
-//!   from a read-only mount or a failing device. Each log's size, the room
-//!   its next rewrite needs, is answered too ([`Store::log_sizes`],
-//!   [`LogSize`]), and a compaction answers the size it rewrote a log from.
+//!   log answers `Io` to every act that writes it ([`Store`]) — a finish's
+//!   before its first act, so a stop strands no upload over a partial its
+//!   rename took ([`Stream::finish`]) — naming the stop's cause, which
+//!   [`Store::stopped_logs`] answers with the stop's age and the appends it
+//!   has refused ([`LogStop`]) — a full volume told apart from a read-only
+//!   mount or a failing device. Each log's size, the room its next rewrite
+//!   needs, is answered too ([`Store::log_sizes`], [`LogSize`]), and a
+//!   compaction answers the size it rewrote a log from, a compaction that
+//!   failed short of its rename taking its twin, and the room it took, with
+//!   it.
 //! * EVERY FAILURE NAMES ITS FILE AND ITS ACT: an I/O error the store
 //!   answers reads `{file}: {act}: {cause}`, its kind kept — the file as it
 //!   stands within the data directory, `blobs/leases.log`, never by an
@@ -106,19 +110,23 @@
 //!   followed or shared — a symbolic link, a special file, or a second link
 //!   to a file the store writes in place failing the open, every one it
 //!   found counted in one refusal of bounded length, up to eight clauses
-//!   naming them, with the act for each kind (`blobs.rs`); then the volume
-//!   probed for a second name for a file, which a re-PUT of a file the
-//!   board holds takes, a volume that makes none failing the open with the
-//!   act that clears it (`blobs.rs`); both logs tail-checked and rewritten to
-//!   their current records, a line naming a designation or hex the store's
-//!   name check refuses, or an offset past its length, read as no record
-//!   (see [`Store`]), so a log restored from elsewhere names no path out of
-//!   the root; the partials and the records held to each other both ways,
-//!   an orphan partial removed under the designations this build computes
-//!   alone — another build's designation directory left to it — and a
-//!   partial that cannot be read failing the open rather than reading as
-//!   absent (`partials.rs`); every aside removed, a crash's or a failed
-//!   finish's (`blobs.rs`); a lease past the horizon dropped.
+//!   naming them, with the act for each kind (`blobs.rs`). Then what frees
+//!   room before what takes it, so an open on a full volume has made the
+//!   room its own repairs make before it asks for any: every aside removed,
+//!   a crash's or a failed finish's (`blobs.rs`); the partials and the
+//!   records held to each other both ways, an orphan partial removed under
+//!   the designations this build computes alone — another build's
+//!   designation directory left to it — and a partial that cannot be read
+//!   failing the open rather than reading as absent (`partials.rs`); and only
+//!   then both logs rewritten to their current records, each tail-checked, a
+//!   line naming a designation or hex the store's name check refuses, or an
+//!   offset past its length, read as no record (see [`Store`]), so a log
+//!   restored from elsewhere names no path out of the root, and a lease past
+//!   the horizon dropped; and the volume probed for a second name for a
+//!   file, which a re-PUT of a file the board holds takes, a volume that
+//!   makes none failing the open with the act that clears it (`blobs.rs`).
+//!   Last, the root fsynced and the board's own directory after it, whose
+//!   fsync alone makes `blobs/`'s own entry durable — at every open.
 //! * A CALLER's BUG IS NO REFUSAL: a finish short of the declared length
 //!   PANICS, naming the obligation it breaks ([`Stream::finish`]), and so
 //!   does a defect of the store's own — a byte received marked past its

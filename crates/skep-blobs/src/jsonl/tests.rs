@@ -331,6 +331,41 @@ fn a_compaction_that_fails_before_its_rename_leaves_the_log_as_it_was() {
     assert_eq!(Log::open(path).unwrap().1, vec![json!({"n": 2}), json!({"n": 3})], "rewritten whole");
 }
 
+/// A COMPACTION THAT FAILS BEFORE ITS RENAME TAKES ITS TWIN WITH IT
+/// (`Log::compact`: "takes its twin with it, so a rewrite that met a volume
+/// with less room than it needs keeps none of that room"): the twin's write
+/// cut short — part of the rewrite on disk, then an error, as a volume with
+/// less room than the rewrite gives — and the twin is removed with the
+/// failure, named, its room the volume's again; the log stands as it was,
+/// not stopped, takes the next append, and the next compaction rewrites it
+/// whole.
+#[test]
+fn a_compaction_that_fails_before_its_rename_takes_its_twin_with_it() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("x.log");
+    let twin = path.with_extension("compact");
+    let (mut log, _, _) = Log::open(path.clone()).unwrap();
+    for n in 1..=3 {
+        log.append_synced(&json!({"n": n})).unwrap();
+    }
+    let failed = log.compact_by(vec![json!({"n": 3})].into_iter(), |file, line| {
+        file.write_all(&line[..4])?;
+        Err(io::Error::other("no space left on the device"))
+    });
+    assert_eq!(
+        failed.map_err(|e| e.to_string()),
+        Err(format!("{}: write: no space left on the device", label(&twin, 2))),
+        "the twin's write cut short, named"
+    );
+    assert!(!twin.exists(), "the twin removed, its room the volume's again");
+    assert_eq!(fs::read_to_string(&path).unwrap(), "{\"n\":1}\n{\"n\":2}\n{\"n\":3}\n", "the log as it was");
+    assert_eq!(log.stopped(), None, "and not stopped");
+    log.append_synced(&json!({"n": 4})).unwrap();
+    log.compact(vec![json!({"n": 3}), json!({"n": 4})].into_iter()).unwrap();
+    drop(log);
+    assert_eq!(Log::open(path).unwrap().1, vec![json!({"n": 3}), json!({"n": 4})], "rewritten whole");
+}
+
 /// THE COMPACTION reads the log's own count of its lines: a log holding
 /// exactly as many lines as its current records is left as it is (on
 /// unix, the same inode), the compaction answering none; one holding more

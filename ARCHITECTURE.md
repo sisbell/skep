@@ -413,7 +413,9 @@ Rules that hold across its files:
   which has stopped, why, how long it has stood and how many appends it
   has refused — `LogStop`). It answers the size it rewrote each log from,
   and `Store::log_sizes` each log's size, the room its next rewrite needs
-  (`LogSize`).
+  (`LogSize`). A compaction that fails short of its rename takes its twin
+  with it (`jsonl::Log::compact`), so a rewrite that met a volume with less
+  room than it needs keeps none of that room.
 - **The capacity is one read with the free space** (`Store::capacity`,
   `Store::free_space`): the same `statvfs`, the total blocks and the
   available ones — the capacity, what the daemon's default per-account
@@ -440,7 +442,12 @@ Rules that hold across its files:
   failed past its rename, takes no append until a compaction completes.
   The store compacts at its open and at the caller's runtime compaction,
   so a log stopped while the store serves stays stopped until the next
-  pass's compaction or the next open reads it afresh (`Store`). The stop
+  pass's compaction or the next open reads it afresh (`Store`). A finish
+  meets a stopped log before its first act (`Log::refuse_if_stopped`),
+  where its lease's or its retirement's append would meet it past its
+  rename, so a stop strands no upload over a partial its rename took: the
+  upload stands, to finish once the stop lifts; and a creation the stop
+  refuses takes its partial with it. The stop
   keeps its cause — the act that failed and the OS's cause — which every
   refused append names, and counts the appends it refuses, which
   `Store::stopped_logs` answers beside the cause and the stop's age.
@@ -461,6 +468,12 @@ Rules that hold across its files:
   `Store::open` runs each store's act at open — the logs' compactions,
   `partials::reconcile`, `blobs::sweep_asides` — and an I/O failure there,
   as at the size check (`Store::blob_size`), is never read as an absence.
+  What frees room runs before what takes it — the asides swept and the
+  partials reconciled before the lease log's rewrite, the hard-link probe
+  and the records' rewrite — so an open on a full volume has made the room
+  its own repairs make before it asks for any; and every open ends by
+  fsyncing the root and then the board's own directory, whose fsync alone
+  makes `blobs/`'s own entry durable, the pull's install doing the same.
   Its orphan removal keeps to the designations this build computes
   (`HashFunction`); another build's designation directory is left, as the
   pruner leaves it. The store writes no operator stream, so its open's
@@ -475,10 +488,11 @@ Rules that hold across its files:
   refusal of bounded length — eight clauses named, the partials of one
   directory one clause, the rest counted by kind — with the act for each
   kind (`blobs::refuse_links_and_special_files`): nothing is followed or
-  written through. Then the volume is probed for the one capability no
-  other act of the open exercises, a second name for a file, which a
-  re-PUT of a file the board holds takes: a volume that makes none fails
-  the open with the act that clears it (`blobs::probe_hard_link`), where
+  written through. Among the acts that take room, the volume is probed for
+  the one capability no other act of the open exercises, a second name for
+  a file, which a re-PUT of a file the board holds takes: a volume that
+  makes none fails the open with the act that clears it
+  (`blobs::probe_hard_link`), where
   it would otherwise serve every new upload and fail every re-PUT, the
   failure telling a file already here from a fresh one. `Store::inspect`
   holds the same names to the walk's rule — and probes nothing, since it
@@ -490,8 +504,9 @@ Rules that hold across its files:
 - **The pull's install is the PUT's order with no record** —
   `Store::install_file`: the bytes streamed into a temp file named as a
   partial is (so an open that meets it removes it as an orphan), hashed as
-  they are copied, fsynced, renamed onto the hash name, the directory and
-  the root fsynced; held to an expected hash where one is given; into a
+  they are copied, fsynced, renamed onto the hash name, the directory, the
+  root and the board's own directory fsynced; held to an expected hash
+  where one is given; into a
   board's own directory that stands, never one it makes; no lease, no
   record, no lock. A refusal says on which side of the rename it fell:
   `nothing installed: …` before it, `installed at …, but …` past it, the

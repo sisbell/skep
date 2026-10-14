@@ -141,9 +141,10 @@ pub struct LogSize {
 /// ([`Store::stopped_logs`](crate::Store::stopped_logs)): the cause in the
 /// operator's words, how long the stop has stood, and the appends the log
 /// has refused while it stood — on the records' log a creation, a byte
-/// received or a retirement each, on the leases' a finish's lease each: the
-/// uploads it cost, every one answered `Io`. The refusal a caller meets
-/// names the cause alone; the age and the count are the operator's.
+/// received, a retirement or a finish each, on the leases' a finish each:
+/// the uploads it cost, every one answered `Io`, a finish's before its first
+/// act. The refusal a caller meets names the cause alone; the age and the
+/// count are the operator's.
 ///
 /// `#[non_exhaustive]`: emitted, never constructed by a caller — field
 /// reads are unaffected, and a further field is an addition rather than a
@@ -287,13 +288,7 @@ impl Log {
     /// append, naming the cause, and counts it ([`Log::stop`]). The unit
     /// suite drives it with a write that fails partway.
     fn append_by(&mut self, v: &Value, write: impl FnOnce(&mut File, &[u8]) -> io::Result<()>) -> io::Result<()> {
-        if let Some(stop) = &mut self.stopped {
-            stop.refused += 1;
-            return Err(io::Error::other(format!(
-                "{} takes no append until a compaction completes: {}",
-                self.name, stop.cause
-            )));
-        }
+        self.refuse_if_stopped()?;
         let line = line_of(v);
         if let Err(e) = write(&mut self.file, &line) {
             return Err(match self.file.set_len(self.len).and_then(|()| self.file.sync_all()) {
@@ -318,6 +313,20 @@ impl Log {
         Ok(())
     }
 
+    /// THE STOP's REFUSAL, judged ahead of an act — the refusal an append
+    /// meets where the log has stopped, worded and counted as every refused
+    /// append is ([`Log::stop`]): what a caller asks before an act the append
+    /// would follow and no refusal of the append could undo, as a finish asks
+    /// it before its rename (`Stream::finish`). `Ok` where the log takes
+    /// appends.
+    pub fn refuse_if_stopped(&mut self) -> io::Result<()> {
+        let Some(stop) = &mut self.stopped else {
+            return Ok(());
+        };
+        stop.refused += 1;
+        Err(io::Error::other(format!("{} takes no append until a compaction completes: {}", self.name, stop.cause)))
+    }
+
     /// THE COMPACTION: rewrite the log to exactly `current`, in order, where
     /// the file holds anything else — every append adds a line, so a log
     /// that has not stopped and whose count equals its current records'
@@ -325,10 +334,12 @@ impl Log {
     /// `.compact` twin beside the log, fsynced, renamed over it, the
     /// directory fsynced — the same install order a blob takes; it writes
     /// the file whole, so once it completes it lifts a stop. One that fails
-    /// before its rename leaves the log as it was; one that fails past it
-    /// stops the log until a compaction completes, its size the rewrite's,
-    /// which stands at the name. Answers the size it rewrote the log from
-    /// ([`LogSize`]), `None` where it left the log as it was.
+    /// before its rename leaves the log as it was and takes its twin with it,
+    /// so a rewrite that met a volume with less room than it needs keeps none
+    /// of that room; one that fails past it stops the log until a compaction
+    /// completes, its size the rewrite's, which stands at the name. Answers
+    /// the size it rewrote the log from ([`LogSize`]), `None` where it left
+    /// the log as it was.
     ///
     /// PRECONDITION: `current` is what the log's store folds the log's lines
     /// to — each value one a line the log holds reads as, none twice — as
@@ -342,29 +353,38 @@ impl Log {
     /// state: an append that arrives during the rewrite waits on that lock
     /// and lands in the new file once the install order has completed.
     pub fn compact(&mut self, current: impl ExactSizeIterator<Item = Value>) -> io::Result<Option<LogSize>> {
+        self.compact_by(current, |file, line| file.write_all(line))
+    }
+
+    /// THE COMPACTION's ONE BODY, each line of the rewrite written to the
+    /// twin by `write` — the act the unit suite cuts short in its place
+    /// ([`Log::compact`]).
+    fn compact_by(
+        &mut self,
+        current: impl ExactSizeIterator<Item = Value>,
+        write: impl FnMut(&mut File, &[u8]) -> io::Result<()>,
+    ) -> io::Result<Option<LogSize>> {
         if self.stopped.is_none() && current.len() == self.lines {
             return Ok(None);
         }
         let from = self.size();
         let dir = self.path.parent().expect("a log sits in a directory");
         let twin = self.path.with_extension("compact");
-        let at_twin = |e: io::Error, act: &str| named(e, label(&twin, 2), act);
-        let mut len = 0;
-        let mut lines = 0;
-        {
-            // Born owner-only (`blobs::file_options`), the mode the rename
-            // carries onto the log.
-            let mut f =
-                file_options().write(true).create(true).truncate(true).open(&twin).map_err(|e| at_twin(e, "create"))?;
-            for v in current {
-                let line = line_of(&v);
-                f.write_all(&line).map_err(|e| at_twin(e, "write"))?;
-                len += line.len() as u64;
-                lines += 1;
+        let rewritten = write_twin(&twin, current, write).and_then(|counts| {
+            fs::rename(&twin, &self.path).map_err(|e| named(e, &self.name, "rename its rewrite over it"))?;
+            Ok(counts)
+        });
+        // Short of the rename the log stands as it was, and the twin goes
+        // with the failure: whatever room its bytes took is the volume's
+        // again. Best effort, as the pull's temp file is: a twin that cannot
+        // be removed is written over by the next compaction.
+        let (len, lines) = match rewritten {
+            Ok(counts) => counts,
+            Err(e) => {
+                let _ = fs::remove_file(&twin);
+                return Err(e);
             }
-            f.sync_all().map_err(|e| at_twin(e, "sync"))?;
-        }
-        fs::rename(&twin, &self.path).map_err(|e| named(e, &self.name, "rename its rewrite over it"))?;
+        };
         // Past the rename the rewrite stands at the path, its length and its
         // count the log's, while the open file is still the one it replaced:
         // stopped, the cause kept, until the install order completes and the
@@ -395,6 +415,28 @@ impl Log {
             None => self.stopped = Some(Stop { cause, since: Instant::now(), refused: 0 }),
         }
     }
+}
+
+/// THE TWIN's WRITE: `current` written to the `.compact` file at `twin`
+/// line by line through `write`, and fsynced — born owner-only
+/// (`blobs::file_options`), the mode the rename carries onto the log.
+/// Answers the rewrite's bytes and lines.
+fn write_twin(
+    twin: &Path,
+    current: impl Iterator<Item = Value>,
+    mut write: impl FnMut(&mut File, &[u8]) -> io::Result<()>,
+) -> io::Result<(u64, usize)> {
+    let at_twin = |e: io::Error, act: &str| named(e, label(twin, 2), act);
+    let mut f = file_options().write(true).create(true).truncate(true).open(twin).map_err(|e| at_twin(e, "create"))?;
+    let (mut len, mut lines) = (0, 0);
+    for v in current {
+        let line = line_of(&v);
+        write(&mut f, &line).map_err(|e| at_twin(e, "write"))?;
+        len += line.len() as u64;
+        lines += 1;
+    }
+    f.sync_all().map_err(|e| at_twin(e, "sync"))?;
+    Ok((len, lines))
 }
 
 /// The values of a log's whole lines in order, what the reading found and

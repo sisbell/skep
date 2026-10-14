@@ -11,7 +11,8 @@
 //! nothing, and a stream's append judged by its record and not its expiry;
 //! a settle judging its upload once, before it receives; the end; the
 //! listings in identifier order; and a stopped log answering its cause,
-//! every refusal naming it, until a compaction lifts it.
+//! every refusal naming it and a refused creation leaving no partial, until
+//! a compaction lifts it.
 
 use std::fs;
 use std::thread;
@@ -95,9 +96,10 @@ fn a_log_past_its_trigger_is_compacted_and_appends_during_the_rewrite_land_in_th
 /// renamed over the log and the root's fsync refused — the log STOPS, and
 /// the store answers why, the act that failed past the rename and the OS's
 /// cause; a creation then is refused naming the log and that cause alone,
-/// and the stop counts it, the operator's figure and no caller's; and the
-/// next compaction, the root readable, rewrites the log whatever its count
-/// and lifts the stop.
+/// the partial it made removed with the refusal — never an orphan left per
+/// refused creation until the next open — and the stop counts it, the
+/// operator's figure and no caller's; and the next compaction, the root
+/// readable, rewrites the log whatever its count and lifts the stop.
 #[cfg(unix)]
 #[test]
 fn a_stopped_log_answers_its_cause_and_every_refusal_names_it() {
@@ -128,6 +130,7 @@ fn a_stopped_log_answers_its_cause_and_every_refusal_names_it() {
         format!("blobs/uploads.log takes no append until a compaction completes: {}", stop.cause),
         "the refusal names the log and the stop's cause, and nothing of the operator's figures"
     );
+    assert_eq!(fs::read_dir(root.join("blake3")).unwrap().count(), 0, "the refused creation left no partial");
     let counted = store.stopped_logs().0.expect("still stopped");
     assert_eq!((counted.cause, counted.refused), (stop.cause, 1), "the refused creation counted");
     assert!(counted.age >= stop.age, "the stop's age only grows: {:?} then {:?}", stop.age, counted.age);

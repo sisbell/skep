@@ -81,12 +81,33 @@ pub(crate) struct Handle {
 /// the hasher built over its first `offset` bytes. The record's offset
 /// never passes the file's length past open's reconciliation; a shorter
 /// file here is no state this store leaves — a disk changed under it, or
-/// two streams of one upload — answered as I/O and never extended, and an
-/// absent one — a finish's rename took it — is I/O too.
+/// two streams of one upload — answered as I/O and never extended. An
+/// absent one is I/O too, its kind `NotFound`: a finish that failed past
+/// its rename took it, and no resume continues the upload, so the error
+/// names the act that ends it — the upload's end and a PUT of its bytes
+/// again — where a client reads it, `blob_io`'s detail, and where an
+/// operator quotes the client (`RUNBOOK.md` §1), and never leads either to
+/// read the board's own files as lost.
 pub(crate) fn open_at(root: &Path, designation: &str, id: &UploadId, offset: u64) -> io::Result<Handle> {
     let path = partial_path(root, designation, id);
     let name = partial_label(&root.join(designation));
-    let mut file = OpenOptions::new().read(true).write(true).open(&path).map_err(|e| named(e, &name, "open"))?;
+    let open = |e: io::Error| {
+        let absent = e.kind() == io::ErrorKind::NotFound;
+        let e = named(e, &name, "open");
+        if !absent {
+            return e;
+        }
+        // Neither room nor the pruner's pass brings the partial back, and a
+        // re-PUT leases the file the rename already named.
+        io::Error::new(
+            io::ErrorKind::NotFound,
+            format!(
+                "{e}; no partial stands for this upload, so no resume continues it: end the upload and PUT its \
+                 bytes again"
+            ),
+        )
+    };
+    let mut file = OpenOptions::new().read(true).write(true).open(&path).map_err(open)?;
     let len = file.metadata().map_err(|e| named(e, &name, "stat"))?.len();
     if len < offset {
         return Err(io::Error::new(

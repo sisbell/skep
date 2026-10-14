@@ -273,6 +273,12 @@ impl LeaseLog {
         self.log.stop()
     }
 
+    /// The refusal a lease's append would meet, where the log has stopped,
+    /// judged ahead of the act that append follows (`Log::refuse_if_stopped`).
+    pub fn refuse_if_stopped(&mut self) -> io::Result<()> {
+        self.log.refuse_if_stopped()
+    }
+
     /// The log's size (`Log::size`).
     pub fn log_size(&self) -> LogSize {
         self.log.size()

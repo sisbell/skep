@@ -7,10 +7,13 @@
 //! it, a failed claim run's row taking the container its `docker run` may
 //! leave — the dark claim's every refusal, a shape the read refuses among
 //! them, and the claim run's own removal refused after a claim — each
-//! removing what was made for the name and nothing for any other, then
-//! looking at what stands and saying done, the snippet absent, the reload
-//! called where the snippet was written, the status D-8, the invite still
-//! issued and no mail; (c) a cleanup's removal failing — a docker
+//! reading a run's last lines before removing it, removing what was made for
+//! the name and nothing for any other, then looking at what stands and
+//! saying done, the snippet absent, the reload called where the snippet was
+//! written, the status D-8, the invite still issued and no mail; a failed
+//! run's last lines logged above its removal, which takes them with it, and
+//! the last `/health` body's pair named where the wait gave up; (c) a
+//! cleanup's removal failing — a docker
 //! call's or the snippet's — logged, and the look after the removals naming
 //! what stands, the name left taken; a refused `rm -f` of a run that never
 //! stood, and a cleanup's reload failing, each logged as itself, the look
@@ -19,7 +22,8 @@
 //! failing before anything is made; a step or a cleanup that panics, costing
 //! its post alone and never the worker; the dark claim's retry, thirty tries
 //! two seconds apart, its last exit 4 past them the step's failure; and the
-//! `/health` wait given up, logged by its bound and its last try's exit.
+//! `/health` wait given up, logged by its bound, its last try's exit and its
+//! stderr.
 //! Beside them, T12's flow half: no send before live, an outage with the
 //! status live throughout, and no mail where none is configured.
 
@@ -91,6 +95,7 @@ fn the_whole_flow_runs_every_step_in_order() {
     let log = rig.log().join("\n");
     for logged in [
         "alice: admitted; 1 waiting",
+        "alice: taken by a worker",
         "alice: sidecar: payload entry: 9f86d081884c7d65 anchor=true label=(none)",
         "alice: sidecar: the genesis stands: committed",
         "alice: LIVE at https://alice.skep.host",
@@ -155,6 +160,9 @@ fn boards_read_only(rig: &Rig) {
 }
 
 fn cases() -> Vec<Case> {
+    // A failure's removals of a run and the volume: the run's last lines read
+    // first, then the run and the volume removed.
+    let removed = || vec!["run_logs alice", "rm_force alice", "volume_rm alice"];
     // The look after a cleanup's removals: the truth asked what stands, the
     // two inspects answering nothing.
     let looked = || vec!["volume_inspect alice", "container_inspect alice"];
@@ -166,7 +174,7 @@ fn cases() -> Vec<Case> {
                 + &line("run_claim", Some("alice"), 125, "", "docker: Error response from daemon: failed to create task for container\n")
                 + &run_and_volume_removed()
                 + &inspects("alice"),
-            calls: [vec!["volume_create alice", "run_claim alice", "rm_force alice", "volume_rm alice"], looked()].concat(),
+            calls: [vec!["volume_create alice", "run_claim alice"], removed(), looked()].concat(),
             reloads: false,
             before: nothing,
         },
@@ -176,7 +184,7 @@ fn cases() -> Vec<Case> {
                 + &(0..SIDECAR_WAIT.tries.get()).map(|_| line("sidecar_claim", Some("alice"), 4, "", "skep: the board could not be dialed\n")).collect::<String>()
                 + &run_and_volume_removed()
                 + &inspects("alice"),
-            calls: [vec!["volume_create alice", "run_claim alice"], vec!["sidecar_claim alice"; SIDECAR_WAIT.tries.get() as usize], vec!["rm_force alice", "volume_rm alice"], looked()].concat(),
+            calls: [vec!["volume_create alice", "run_claim alice"], vec!["sidecar_claim alice"; SIDECAR_WAIT.tries.get() as usize], removed(), looked()].concat(),
             reloads: false,
             before: nothing,
         },
@@ -190,7 +198,7 @@ fn cases() -> Vec<Case> {
                 _ => "sidecar_claim answers `claimed by` on the fresh volume",
             },
             script: to_the_claim() + &line("sidecar_claim", Some("alice"), exit_code, stdout, "skep: a halt\n") + &run_and_volume_removed() + &inspects("alice"),
-            calls: [vec!["volume_create alice", "run_claim alice", "sidecar_claim alice", "rm_force alice", "volume_rm alice"], looked()].concat(),
+            calls: [vec!["volume_create alice", "run_claim alice", "sidecar_claim alice"], removed(), looked()].concat(),
             reloads: false,
             before: nothing,
         });
@@ -198,7 +206,7 @@ fn cases() -> Vec<Case> {
     cases.push(Case {
         what: "sidecar_claim answers six lines naming another account",
         script: to_the_claim() + &line("sidecar_claim", Some("alice"), 0, &SIX.replace("account 1.0.1", "account 1.0.2"), "") + &run_and_volume_removed() + &inspects("alice"),
-        calls: [vec!["volume_create alice", "run_claim alice", "sidecar_claim alice", "rm_force alice", "volume_rm alice"], looked()].concat(),
+        calls: [vec!["volume_create alice", "run_claim alice", "sidecar_claim alice"], removed(), looked()].concat(),
         reloads: false,
         before: nothing,
     });
@@ -209,7 +217,7 @@ fn cases() -> Vec<Case> {
             + &line("rm_force", Some("alice"), 1, "", "Error response from daemon: cannot remove container: could not kill\n")
             + &run_and_volume_removed()
             + &inspects("alice"),
-        calls: [vec!["volume_create alice", "run_claim alice", "sidecar_claim alice", "rm_force alice", "rm_force alice", "volume_rm alice"], looked()].concat(),
+        calls: [vec!["volume_create alice", "run_claim alice", "sidecar_claim alice", "rm_force alice"], removed(), looked()].concat(),
         reloads: false,
         before: nothing,
     });
@@ -217,7 +225,7 @@ fn cases() -> Vec<Case> {
     cases.push(Case {
         what: "run_serving fails",
         script: to_the_serving_run() + &line("run_serving", Some("alice"), 125, "", "Conflict\n") + &run_and_volume_removed() + &inspects("alice"),
-        calls: [serving.clone(), vec!["rm_force alice", "volume_rm alice"], looked()].concat(),
+        calls: [serving.clone(), removed(), looked()].concat(),
         reloads: false,
         before: nothing,
     });
@@ -228,7 +236,7 @@ fn cases() -> Vec<Case> {
             + &(0..HEALTH_WAIT.tries.get()).map(|_| line("health", Some("alice"), 0, UNPAIRED, "")).collect::<String>()
             + &run_and_volume_removed()
             + &inspects("alice"),
-        calls: [serving.clone(), vec!["health alice"; HEALTH_WAIT.tries.get() as usize], vec!["rm_force alice", "volume_rm alice"], looked()].concat(),
+        calls: [serving.clone(), vec!["health alice"; HEALTH_WAIT.tries.get() as usize], removed(), looked()].concat(),
         reloads: false,
         before: nothing,
     });
@@ -236,7 +244,7 @@ fn cases() -> Vec<Case> {
     cases.push(Case {
         what: "the snippet's write fails",
         script: to_the_serving_run() + &line("run_serving", Some("alice"), 0, "", "") + &line("health", Some("alice"), 0, PAIRED, "") + &run_and_volume_removed() + &inspects("alice"),
-        calls: [serving.clone(), vec!["health alice", "rm_force alice", "volume_rm alice"], looked()].concat(),
+        calls: [serving.clone(), vec!["health alice"], removed(), looked()].concat(),
         reloads: false,
         before: boards_read_only,
     });
@@ -249,7 +257,7 @@ fn cases() -> Vec<Case> {
             + &line("caddy_reload", None, 0, "", "")
             + &run_and_volume_removed()
             + &inspects("alice"),
-        calls: [serving, vec!["health alice", "caddy_reload", "caddy_reload", "rm_force alice", "volume_rm alice"], looked()].concat(),
+        calls: [serving, vec!["health alice", "caddy_reload", "caddy_reload"], removed(), looked()].concat(),
         reloads: true,
         before: nothing,
     });
@@ -285,6 +293,8 @@ fn each_failed_step_removes_what_was_made_and_nothing_else() {
         assert!(!log.contains("INCOMPLETE"), "{}: {log}", case.what);
         let looked = case.calls.ends_with(&["volume_inspect alice", "container_inspect alice"]);
         assert_eq!(rig.logged("alice: cleanup: done — nothing stands under the name"), looked, "{}: the verdict, where the look was made: {log}", case.what);
+        let read = case.calls.contains(&"run_logs alice");
+        assert_eq!(rig.logged("alice: cleanup: the run said nothing"), read, "{}: a run's last lines, read where one may stand: {log}", case.what);
         assert!(!log.contains(code.as_str()) && !log.contains(&token), "{}", case.what);
     }
 }
@@ -300,6 +310,7 @@ fn a_failed_cleanup_call_leaves_the_name_taken_and_is_logged() {
         inspects("alice"),
         to_the_serving_run(),
         line("run_serving", Some("alice"), 125, "", ""),
+        line("run_logs", Some("alice"), 0, "", ""),
         line("rm_force", Some("alice"), 1, "", "Error: cannot remove container\n"),
         line("volume_rm", Some("alice"), 0, "", ""),
         line("volume_inspect", Some("alice"), 1, "", ""),
@@ -408,7 +419,8 @@ fn a_cleanup_whose_reload_fails_leaves_nothing_standing() {
 
 /// T13 (c): A REFUSED `rm -f` OF A RUN THAT NEVER STOOD — the serving
 /// run's `docker run` refused before it made one — leaves nothing
-/// standing: the refusal logged, the volume removed, the look after the
+/// standing: the read of its last lines refused and logged as a removal's
+/// answer is, the refusal logged, the volume removed, the look after the
 /// removals finding nothing, the cleanup said done, never INCOMPLETE; a
 /// re-post for the name is admitted.
 #[test]
@@ -418,6 +430,7 @@ fn a_refused_rm_of_a_run_that_never_stood_leaves_nothing_standing() {
         inspects("alice"),
         to_the_serving_run(),
         line("run_serving", Some("alice"), 125, "", "docker: Error response from daemon: network skep not found.\n"),
+        line("run_logs", Some("alice"), 1, "", "Error: No such container: alice\n"),
         line("rm_force", Some("alice"), 1, "", "Error: No such container: alice\n"),
         line("volume_rm", Some("alice"), 0, "", ""),
         inspects("alice"),
@@ -428,9 +441,14 @@ fn a_refused_rm_of_a_run_that_never_stood_leaves_nothing_standing() {
     let token = rig.admitted("alice", &rig.invite());
     assert!(rig.service.run_next());
     assert_eq!(rig.service.status(&token), Some(Shown::Failed));
-    for logged in
-        ["alice: cleanup: rm_force: exit 1", "alice: cleanup: rm_force: Error: No such container: alice", "alice: cleanup: volume_rm: exit 0", "alice: cleanup: done — nothing stands under the name"]
-    {
+    for logged in [
+        "alice: cleanup: run_logs: exit 1",
+        "alice: cleanup: run_logs: Error: No such container: alice",
+        "alice: cleanup: rm_force: exit 1",
+        "alice: cleanup: rm_force: Error: No such container: alice",
+        "alice: cleanup: volume_rm: exit 0",
+        "alice: cleanup: done — nothing stands under the name",
+    ] {
         assert!(rig.logged(logged), "{logged}: {:?}", rig.log());
     }
     assert!(!rig.log().iter().any(|l| l.contains("INCOMPLETE")), "{:?}", rig.log());
@@ -483,6 +501,7 @@ fn a_snippet_whose_write_failed_after_its_rename_is_removed_by_the_cleanup() {
         "run_serving alice",
         "health alice",
         "caddy_reload",
+        "run_logs alice",
         "rm_force alice",
         "volume_rm alice",
         "volume_inspect alice",
@@ -535,7 +554,8 @@ fn the_dark_claim_retries_exit_4_two_seconds_apart_thirty_times() {
 
 /// THE `/health` WAIT GIVEN UP: the bound's tries with no pair, the last a
 /// failed run, fail the step — logged once with the bound and the last
-/// try's exit, as the runner spells an exit.
+/// try's exit, as the runner spells an exit, and the last try's stderr
+/// whole; a failed run's stdout no body, so no pair is named.
 #[test]
 fn a_health_wait_given_up_is_logged_with_its_bound_and_its_last_exit() {
     let tries = HEALTH_WAIT.tries.get() as usize;
@@ -552,8 +572,41 @@ fn a_health_wait_given_up_is_logged_with_its_bound_and_its_last_exit() {
     assert!(rig.service.run_next());
     assert_eq!(rig.service.status(&token), Some(Shown::Failed));
     assert_eq!(rig.log().iter().filter(|l| *l == "alice: health: no pair after 60 tries (the last exit 4)").count(), 1, "{:?}", rig.log());
+    assert!(rig.logged("alice: health: the board did not answer"), "the last try's stderr: {:?}", rig.log());
+    assert!(!rig.log().iter().any(|l| l.starts_with("alice: health: the last body's pair")), "a pair read off a failed run: {:?}", rig.log());
     assert!(rig.logged("alice: FAILED at the /health wait"), "{:?}", rig.log());
     rig.fake.assert_done();
+}
+
+/// A FAILED RUN's LAST LINES ARE LOGGED BEFORE IT IS REMOVED: the serving run
+/// never pairing — every `/health` body naming no claimant — the cleanup
+/// reads the run's last lines first, its daemon's own account of the
+/// failure, and logs each above the run's removal, which takes them with
+/// it; and the wait's give-up names the last body's pair as the board
+/// answered it, a claim not on the volume read apart from local trust on.
+#[test]
+fn a_failed_runs_last_lines_are_logged_before_it_is_removed() {
+    let tries = HEALTH_WAIT.tries.get() as usize;
+    let refused = "skepd: the data directory /var/lib/skepd/board: Permission denied (os error 13)";
+    let script = inspects("alice")
+        + &inspects("alice")
+        + &to_the_serving_run()
+        + &line("run_serving", Some("alice"), 0, "", "")
+        + &line("health", Some("alice"), 0, UNPAIRED, "").repeat(tries)
+        + &line("run_logs", Some("alice"), 0, "", &format!("{refused}\n"))
+        + &line("rm_force", Some("alice"), 0, "", "")
+        + &line("volume_rm", Some("alice"), 0, "", "")
+        + &inspects("alice");
+    let rig = rig(&script, None);
+    let token = rig.admitted("alice", &rig.invite());
+    assert!(rig.service.run_next());
+    rig.fake.assert_done();
+    assert_eq!(rig.service.status(&token), Some(Shown::Failed));
+    let log = rig.log();
+    let at = |wanted: &str| log.iter().position(|l| l == wanted).unwrap_or_else(|| panic!("{wanted}: {log:?}"));
+    assert!(at(&format!("alice: cleanup: the run said: {refused}")) < at("alice: cleanup: rm_force: exit 0"), "the run's lines read after its removal: {log:?}");
+    assert!(rig.logged("alice: health: the last body's pair: claimant null, local_trust false"), "{log:?}");
+    assert!(!rig.logged("alice: cleanup: the run said nothing"), "{log:?}");
 }
 
 /// STEP 3's SECOND LOOK: a name taken since its post — its snippet written,

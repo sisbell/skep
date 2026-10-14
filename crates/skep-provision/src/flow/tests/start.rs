@@ -1,12 +1,19 @@
 //! THE SERVICE's START: the status map rebuilt from the snippets standing;
 //! THE SWEEP, T20 (its listing's answer logged as every call's is, the
-//! half-made board removed, the routed and the ungrammatical left, a listing
-//! that fails skipped on a line of its own); a `docker` that cannot be run at
-//! all — the sweep skipped, a post refused D-8; and a `docker` that lists and
-//! then cannot run — the half-made board left INCOMPLETE, never cleared.
+//! half-made board removed — its run's last lines unread, a stop's leavings
+//! no failure's — the routed and the ungrammatical left, a listing that
+//! fails and a snippet directory it cannot search each skipped on a line of
+//! its own naming what the skip leaves taken and the act); a `docker` that
+//! cannot be run at all — the sweep skipped, a post refused D-8; and a
+//! `docker` that lists and then cannot run — the half-made board left
+//! INCOMPLETE, never cleared.
 
 use super::*;
 use crate::docker::Call;
+
+/// The line a listing that fails is skipped on: what the skip leaves taken,
+/// and the operator's act.
+const SKIPPED: &str = "sweep: the volumes under the label could not be listed; the sweep is skipped — a board a stop left half-made stays taken until a start whose listing answers: restart once `docker volume ls` answers as the service's user";
 
 /// The rebuild at the service's start: the snippets standing are the names
 /// routed at start, which the serving line counts as `live`.
@@ -52,7 +59,7 @@ fn a_docker_that_cannot_run_skips_the_sweep_and_refuses_a_post_d8() {
     assert!(lookup(&state_dir, &code).expect("read").expect("held").issued());
     let log = lines.lock().unwrap().clone();
     assert!(log.iter().any(|l| l.starts_with("sweep: volumes: docker could not run: ")), "{log:?}");
-    assert!(log.iter().any(|l| l == "sweep: the volumes under the label could not be listed; the sweep is skipped"), "{log:?}");
+    assert!(log.iter().any(|l| l == SKIPPED), "{log:?}");
     assert!(log.iter().any(|l| l.starts_with("alice: a post could not be judged: the look at the name: ")), "{log:?}");
 }
 
@@ -127,7 +134,7 @@ fn the_sweep_removes_a_half_made_board_and_leaves_the_rest() {
     // post.
     let mut unlisted = rig_with(&(line("labelled_volumes", None, 1, "", "Cannot connect to the Docker daemon\n") + &inspects("erin")), None, Arc::new(|_| {}));
     assert_eq!(unlisted.sweep(), 0);
-    for logged in ["sweep: volumes: exit 1", "sweep: volumes: Cannot connect to the Docker daemon", "sweep: the volumes under the label could not be listed; the sweep is skipped"] {
+    for logged in ["sweep: volumes: exit 1", "sweep: volumes: Cannot connect to the Docker daemon", SKIPPED] {
         assert!(unlisted.logged(logged), "{logged}: {:?}", unlisted.log());
     }
     unlisted.admitted("erin", &unlisted.invite());
@@ -158,4 +165,21 @@ fn the_sweep_removes_a_half_made_board_and_leaves_the_rest() {
     ] {
         assert!(partly.logged(logged), "{logged}: {:?}", partly.log());
     }
+}
+
+/// A SNIPPET DIRECTORY THE SWEEP CANNOT SEARCH skips it on a line of its own
+/// naming what the skip leaves taken and the act — the listing made, nothing
+/// removed, the count 0.
+#[cfg(unix)]
+#[test]
+fn a_snippet_directory_the_sweep_cannot_search_skips_it_and_says_what_that_leaves() {
+    use std::os::unix::fs::PermissionsExt;
+    let mut rig = rig(&line("labelled_volumes", None, 0, "bob\n", ""), None);
+    fs::set_permissions(&rig.boards, fs::Permissions::from_mode(0o000)).expect("unsearchable");
+    let swept = rig.sweep();
+    fs::set_permissions(&rig.boards, fs::Permissions::from_mode(0o700)).expect("searchable again");
+    assert_eq!(swept, 0);
+    rig.fake.assert_done();
+    let skipped = "; the sweep is skipped — a board a stop left half-made stays taken until a start that reads it: restart once it reads as the service's user";
+    assert!(rig.log().iter().any(|l| l.starts_with("sweep: the snippet directory could not be read: ") && l.ends_with(skipped)), "{:?}", rig.log());
 }

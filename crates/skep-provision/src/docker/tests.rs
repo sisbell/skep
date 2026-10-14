@@ -3,7 +3,8 @@
 //! `scripts/docker-smoke.sh` itself, so the script's drift is a red test
 //! too), the deployment notes' serving run, the sidecar's run with `-i` and
 //! `--hosted -`, the `skep health` run, the reload, the two inspects, the
-//! two removals, the labelled volume and the listing by its label (T19);
+//! two removals, a failed run's last lines read before its removal, the
+//! labelled volume and the listing by its label (T19);
 //! the image's port and its volume read back from the `Dockerfile`; the
 //! real `Command` built from that argv and nothing else; the real runner,
 //! over a recording script in `docker`'s place — no Docker is run —
@@ -66,12 +67,13 @@ fn words(line: &str) -> Vec<String> {
 /// line, in its order, the README's rotation; the sidecar the smoke's run
 /// with the record on stdin; the health run the sidecar's `skep health` on
 /// the bridge; the reload the notes' §4a line; the volume's creation with
-/// this service's label before the name, and the listing by that label.
+/// this service's label before the name, and the listing by that label;
+/// and a failed run's last twenty lines, read before the run is removed.
 #[test]
 fn every_calls_argv_is_the_documents_run_line() {
     let s = settings();
     let (n, r) = (alice(), record());
-    let pinned: [(Call<'_>, &str); 11] = [
+    let pinned: [(Call<'_>, &str); 12] = [
         (Call::VolumeCreate(&n), "volume create --label skep.provision=1 alice"),
         (Call::VolumeInspect(&n), "volume inspect alice"),
         (Call::ContainerInspect(&n), "container inspect alice"),
@@ -81,6 +83,7 @@ fn every_calls_argv_is_the_documents_run_line() {
              -e SKEPD_BIND=127.0.0.1 -e SKEPD_ORIGIN=https://alice.skep.host -v alice:/var/lib/skepd skep-hosted",
         ),
         (Call::SidecarClaim(&n, &r), "run --rm -i --network container:alice skep-cli skep claim --board http://127.0.0.1:8642 --hosted -"),
+        (Call::RunLogs(&n), "logs --tail 20 alice"),
         (Call::RmForce(&n), "rm -f alice"),
         (
             Call::RunServing(&n),
@@ -325,6 +328,7 @@ fn each_named_method_runs_its_own_call() {
         kept.container_inspect(&n),
         kept.run_claim(&n),
         kept.sidecar_claim(&n, &r),
+        kept.run_logs(&n),
         kept.rm_force(&n),
         kept.run_serving(&n),
         kept.volume_rm(&n),
@@ -340,6 +344,7 @@ fn each_named_method_runs_its_own_call() {
         Call::ContainerInspect(&n),
         Call::RunClaim(&n),
         Call::SidecarClaim(&n, &r),
+        Call::RunLogs(&n),
         Call::RmForce(&n),
         Call::RunServing(&n),
         Call::VolumeRm(&n),

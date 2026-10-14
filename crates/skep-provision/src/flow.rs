@@ -67,10 +67,12 @@
 //! reverse of the order it was made — the snippet removed where its write
 //! began, and Caddy reloaded where one stood or may stand, the route change's
 //! undo under the route lock its write took and held since; `rm_force` where
-//! a run may stand; `volume_rm` where the volume stands — and then THE TRUTH
-//! ASKED what stands under the name: the three reads a post makes
-//! (`names::taken`), the ones D-8's "Nothing stands under your name" speaks
-//! of, never the removals' answers. The status FAILED (D-8) and the invite
+//! a run may stand, its last lines logged first — the board's own daemon's
+//! account of the failure, which the removal takes with the run; `volume_rm`
+//! where the volume stands — and then THE TRUTH ASKED what stands under the
+//! name: the three reads a post makes (`names::taken`), the ones D-8's
+//! "Nothing stands under your name" speaks of, never the removals' answers.
+//! The status FAILED (D-8) and the invite
 //! NOT spent, so the person may post again. By the table: `volume_create`
 //! failed — nothing; `run_claim` failed — whatever run its `docker run` left,
 //! and the volume (the record's row names the volume; its rule,
@@ -91,20 +93,25 @@
 //! and a reload that fails, leave nothing the truth reads, and the verdict is
 //! done.
 //!
-//! THE SWEEP AT START ([`Service::sweep`]; `serve` runs it once, before it
-//! listens): a stop mid-board before its snippet's write leaves a volume, and
-//! perhaps a run, under a name with no snippet, which the truth would read as
-//! TAKEN for good — so every volume under this service's label is listed, and
-//! each under a name of the grammar with no snippet is handed to the cleanup
-//! itself as what a stop leaves, and so undone by the table's last two rows,
-//! the truth asked what stands after; a name whose snippet stands is left, a
-//! volume under no name of the grammar is logged and left, and a listing that
-//! fails is logged and the sweep skipped — the sign-up still serves. Its
+//! THE SWEEP AT START ([`Service::sweep`]; `serve` runs it once, its address
+//! bound and before it serves): a stop mid-board before its snippet's write
+//! leaves a volume, and perhaps a run, under a name with no snippet, which
+//! the truth would read as TAKEN for good — so every volume under this
+//! service's label is listed, and each under a name of the grammar with no
+//! snippet is handed to the cleanup itself as what a stop leaves, and so
+//! undone by the table's last two rows, the truth asked what stands after; a
+//! name whose snippet stands is left, a volume under no name of the grammar
+//! is logged and left, and a listing that fails is logged and the sweep
+//! skipped — the sign-up still serves. THE SNIPPET DIRECTORY IS THE LIST OF
+//! BOARDS IT SPARES: a start over a directory emptier than the Engine's
+//! labelled volumes — a VM restored with its volumes and not the directory,
+//! `--boards-dir` pointed elsewhere — removes every board it lacks. Its
 //! precondition is the operator's: ONE SERVICE PER DOCKER HOST, for the label
 //! and the names are the host's, and a second service would take the first's
-//! boards for half-made. And it takes the service whole, by `&mut`, so no
-//! post of this service's is in flight while it runs — a post's volume stands
-//! with no snippet from its step 3 until its route change.
+//! boards for half-made; `serve` refuses one over the same state directory
+//! or on the same port before its sweep. And it takes the service whole, by
+//! `&mut`, so no post of this service's is in flight while it runs — a post's
+//! volume stands with no snippet from its step 3 until its route change.
 //!
 //! THE DESK's OTHER TWO ANSWERS: a sign-up (`Desk::sign_up`), the address
 //! kept through `signups` and logged as kept or refused — never the
@@ -133,7 +140,7 @@ use crate::docker::Docker;
 use crate::domain::Domain;
 use crate::health::{self, Waited, HEALTH_WAIT};
 use crate::invite_code::InviteCode;
-use crate::invites;
+use crate::invites::{self, Invite, InviteState};
 use crate::name::Name;
 use crate::names;
 use crate::pages::{self, Desk, Post, Refusal, Shown, SignUpRefusal};
@@ -186,6 +193,10 @@ struct Job {
     record: Record,
     code: InviteCode,
     address: String,
+    /// The day its invite was issued, as the invite file's line holds it:
+    /// the operator's locator for that line where the post's spend cannot be
+    /// written — never its code or its address, which no log line carries.
+    issued: String,
 }
 
 /// THE BOOK, which the pages and the workers share under its own short lock:
@@ -447,7 +458,7 @@ impl Service {
         self.book().map.routed_at_start().len()
     }
 
-    /// THE SWEEP AT START, run once before the service listens: every volume
+    /// THE SWEEP AT START, run once before the service serves: every volume
     /// under this service's label listed; each under a name of the grammar
     /// with NO snippet is half-made — a stop mid-board left it — and is undone
     /// by [`Service::cleanup`], handed what such a stop leaves: the volume,
@@ -460,8 +471,11 @@ impl Service {
     /// back — and so is a listed volume under no name of the grammar, logged.
     /// The listing's answer is logged as every call's is
     /// ([`Service::judged`]); one that fails skips the sweep, said on a line
-    /// of its own: a listing failure must not take the sign-up down. Answers
-    /// the boards cleared, for the serving line.
+    /// of its own with what the skip leaves taken: a listing failure must not
+    /// take the sign-up down. Answers the boards cleared, for the serving
+    /// line. The snippet directory is thus the list of boards it spares: a
+    /// labelled volume whose snippet is gone is half-made to it, however long
+    /// it has stood.
     ///
     /// ITS PRECONDITION, the operator's: ONE SERVICE PER DOCKER HOST. The
     /// label marks every volume any `serve` on the host made, and a volume
@@ -469,8 +483,10 @@ impl Service {
     /// service on the host would read the first's boards in flight, and
     /// under another `--boards-dir` its live boards too, as half-made, and
     /// remove them; the host's volume and container names are one namespace
-    /// besides. Nothing in a volume tells two services apart, so nothing
-    /// here checks it: it is the operator's to keep.
+    /// besides. Nothing in a volume tells two services apart; `serve` refuses
+    /// a second service over the same state directory or on the same port
+    /// before its sweep, and one under another of each is the operator's to
+    /// keep.
     ///
     /// ITS SECOND, which its type keeps: no post of this service's in flight.
     /// A post's volume stands with no snippet from its step 3 until its route
@@ -480,13 +496,17 @@ impl Service {
     /// before it shares the service with either.
     pub fn sweep(&mut self) -> usize {
         let Some(listing) = self.judged("sweep: volumes", self.docker.labelled_volumes()) else {
-            self.log("sweep: the volumes under the label could not be listed; the sweep is skipped");
+            self.log(
+                "sweep: the volumes under the label could not be listed; the sweep is skipped — a board a stop left half-made stays taken until a start whose listing answers: restart once `docker volume ls` answers as the service's user",
+            );
             return 0;
         };
         let labelled = match names::labelled(&listing.stdout, &self.config.boards_dir) {
             Ok(labelled) => labelled,
             Err(e) => {
-                self.log(&format!("sweep: the snippet directory could not be read: {e}; the sweep is skipped"));
+                self.log(&format!(
+                    "sweep: the snippet directory could not be read: {e}; the sweep is skipped — a board a stop left half-made stays taken until a start that reads it: restart once it reads as the service's user"
+                ));
                 return 0;
             }
         };
@@ -558,6 +578,10 @@ impl Service {
     /// way, its code let go of.
     fn provision(&self, job: Job) {
         let name = &job.name;
+        // The post's start, said: a board `taken by a worker` with no `LIVE`
+        // or `FAILED` after it is one being made — or one whose `docker` call
+        // has not returned — and never one still queued.
+        self.log(&format!("{name}: taken by a worker"));
         let mut made = Made::default();
         // `made` stands outside the catch, with the route lock it may hold,
         // so a panicking step's makings are undone under that lock as after
@@ -578,7 +602,10 @@ impl Service {
                 match &spend {
                     Ok(true) => self.log(&format!("{name}: the invite is spent")),
                     Ok(false) => self.log(&format!("{name}: the invite was not found issued at the spend; the board stands")),
-                    Err(e) => self.log(&format!("{name}: the invite could not be marked spent ({e}); this process refuses it, and the operator marks it")),
+                    Err(e) => self.log(&format!(
+                        "{name}: the invite could not be marked spent ({e}); this process refuses it until it ends — mark it spent by hand: the invite file's line issued {} to the person who asked for {name} (RUNBOOK §10 step 11)",
+                        job.issued
+                    )),
                 }
                 // The code is let go of AFTER the spend is answered — written,
                 // or the file found holding the code no longer issued — so a
@@ -643,6 +670,16 @@ impl Service {
             Ok(Waited::Paired { at }) => self.log(&format!("{name}: health: the pair answered at try {at} of {}", HEALTH_WAIT.tries)),
             Ok(Waited::GaveUp { last }) => {
                 self.log(&format!("{name}: health: no pair after {} tries (the last exit {})", HEALTH_WAIT.tries, last.said()));
+                // What the last try saw: the pair as the board answered it,
+                // where it answered, and the sidecar's stderr whole — a claim
+                // not on the volume reads apart from local trust on, and an
+                // unanswered dial names itself.
+                if last.success() {
+                    self.log(&format!("{name}: health: the last body's pair: {}", health::pair_said(&last.stdout)));
+                }
+                for line in String::from_utf8_lossy(&last.stderr).lines() {
+                    self.log(&format!("{name}: health: {line}"));
+                }
                 return Err("the /health wait");
             }
             Err(e) => {
@@ -738,13 +775,14 @@ impl Service {
 
     /// THE CLEANUP, on a failure or at start ([`CleanupOn`]): what was made,
     /// undone in reverse — the snippet under the route lock its write took,
-    /// let go of once its reload is made, then the run, then the volume, each
-    /// removal logged and the next still tried — and then the verdict,
-    /// [`Service::cleared`]: the truth about names asked what stands, never
-    /// the removals' answers. `true` where the name is cleared: the look
-    /// finds nothing standing, or no look is owed, nothing having been made.
-    /// `made` is taken apart whole, so a making added to [`Made`] is a
-    /// compile error here until it is undone.
+    /// let go of once its reload is made, then the run, its last lines
+    /// logged first where a step failed ([`Service::run_said`]), then the
+    /// volume, each removal logged and the next still tried — and then the
+    /// verdict, [`Service::cleared`]: the truth about names asked what
+    /// stands, never the removals' answers. `true` where the name is cleared:
+    /// the look finds nothing standing, or no look is owed, nothing having
+    /// been made. `made` is taken apart whole, so a making added to [`Made`]
+    /// is a compile error here until it is undone.
     fn cleanup(&self, name: &Name, made: Made<'_>, on: CleanupOn) -> bool {
         let docker = self.docker.as_ref();
         let Made { volume, run, snippet } = made;
@@ -773,6 +811,14 @@ impl Service {
                 self.undone(name, on, "caddy_reload", caddy::reload(docker));
             }
         }
+        // A FAILED RUN READ BEFORE IT IS REMOVED: the board's daemon says on
+        // its own stream why it never listened or never paired, and `rm -f`
+        // takes that stream with the run — so its last lines are logged
+        // first. On a failure alone: the sweep's runs are a stop's leavings,
+        // no failure's.
+        if run && on == CleanupOn::Failure {
+            self.run_said(name, docker.run_logs(name));
+        }
         if run {
             self.undone(name, on, "rm_force", docker.rm_force(name));
         }
@@ -787,6 +833,29 @@ impl Service {
     /// what stands after the removals is [`Service::cleared`]'s to ask.
     fn undone(&self, name: &Name, on: CleanupOn, step: &str, answered: io::Result<Exit>) {
         self.judged(&format!("{name}: {on}: {step}"), answered);
+    }
+
+    /// A FAILED RUN's LAST LINES, logged before the cleanup removes the run:
+    /// each `<name>: cleanup: the run said: <line>` — its stderr's, the
+    /// board's daemon's own stream, then its stdout's — or that it said
+    /// nothing; a read that fails logged as a removal's answer is. The
+    /// board's daemon never saw an invite code, a status token or a person's
+    /// address, so none is in what it said.
+    fn run_said(&self, name: &Name, answered: io::Result<Exit>) {
+        match answered {
+            Ok(exit) if exit.success() => {
+                let (stderr, stdout) = (String::from_utf8_lossy(&exit.stderr), String::from_utf8_lossy(&exit.stdout));
+                let mut said = false;
+                for line in stderr.lines().chain(stdout.lines()) {
+                    self.log(&format!("{name}: cleanup: the run said: {line}"));
+                    said = true;
+                }
+                if !said {
+                    self.log(&format!("{name}: cleanup: the run said nothing"));
+                }
+            }
+            other => self.undone(name, CleanupOn::Failure, "run_logs", other),
+        }
     }
 
     /// THE VERDICT AFTER THE REMOVALS, on a failure or at start: whether the
@@ -855,7 +924,10 @@ impl Service {
 impl Desk for Service {
     fn sign_up(&self, address: &[u8]) -> Result<(), SignUpRefusal> {
         match self.signups.append(address) {
-            Ok(()) => {
+            Ok(kept) => {
+                if kept.refused_at_cap > 0 {
+                    self.log(&format!("the sign-up file takes sign-ups again: {} refused while it stood at its cap", kept.refused_at_cap));
+                }
                 self.log("a sign-up kept");
                 Ok(())
             }
@@ -863,10 +935,14 @@ impl Desk for Service {
                 self.log("a sign-up refused: no address");
                 Err(SignUpRefusal::NotAnAddress)
             }
-            Err(refused @ SignUpRefused::Full) => {
-                self.log(&format!("a sign-up refused: {refused}; the owner trims the file"));
+            // THE CAP, said once for its stretch — at its first refusal — and
+            // its end once, at the next sign-up kept: a stranger's stream of
+            // sign-ups against a full file is two lines, never a line each.
+            Err(refused @ SignUpRefused::Full { refused_before: 0 }) => {
+                self.log(&format!("a sign-up refused: {refused}; every sign-up is refused until the owner trims it (RUNBOOK §10 step 11) — said once, and again when one is kept"));
                 Err(SignUpRefusal::Failed)
             }
+            Err(SignUpRefused::Full { .. }) => Err(SignUpRefusal::Failed),
             Err(SignUpRefused::Io(e)) => {
                 self.log(&format!("a sign-up could not be kept: {e}"));
                 Err(SignUpRefusal::Failed)
@@ -880,8 +956,8 @@ impl Desk for Service {
             self.log("a post refused: no invite code of the code's form");
             return Err(Refusal::Invite);
         };
-        let invite = match invites::lookup(&self.state_dir, &code) {
-            Ok(Some(invite)) if invite.issued() => invite,
+        let (address, issued) = match invites::lookup(&self.state_dir, &code) {
+            Ok(Some(Invite { address, state: InviteState::Issued { date }, .. })) => (address, date),
             Ok(_) => {
                 self.log("a post refused: its invite code is not one the file holds issued");
                 return Err(Refusal::Invite);
@@ -963,7 +1039,7 @@ impl Desk for Service {
                     return Err(Refusal::Failed);
                 }
             }
-            book.admit(Job { token: token.clone(), name: name.clone(), record, code, address: invite.address })
+            book.admit(Job { token: token.clone(), name: name.clone(), record, code, address, issued })
         };
         self.queued.notify_one();
         self.log(&format!("{name}: admitted; {waiting} waiting"));

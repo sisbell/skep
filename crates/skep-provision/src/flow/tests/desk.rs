@@ -7,8 +7,10 @@
 //! at its admission; a live board's code held until its spend is written,
 //! kept held where the spend could not be written, and let go of after it —
 //! or where the spend finds it no longer issued, the operator's hand having
-//! marked it; no code in the log) and T10 (a sign-up, its address in no log
-//! line; one past the file's cap, refused); a record the hosted genesis can
+//! marked it; no code in the log, the line to mark named by its issue date)
+//! and T10 (a sign-up, its address in no log line; one past the file's cap,
+//! refused, the cap said once for its stretch and its end once with the
+//! count); a record the hosted genesis can
 //! never take, refused D-5 with no docker call; a fifth post past the looks'
 //! cap, refused D-8 with no docker call, and the looks' permits given back;
 //! one code holding one look at a time, let go on every refusal and an
@@ -137,6 +139,7 @@ fn the_book_keeps_its_own_rules() {
         record: crate::record::admit(record(true).as_bytes()).expect("a record"),
         code: invite_code(code),
         address: "person@example.com".to_owned(),
+        issued: "2026-10-12".to_owned(),
     };
     let state = |book: &Book, n: &str| book.map.post(&format!("token-{n}")).map(|p| p.state);
     let mut book = Book::new(StatusMap::default());
@@ -184,6 +187,7 @@ fn an_admission_on_a_token_admitted_before_changes_nothing() {
         record: crate::record::admit(record(true).as_bytes()).expect("a record"),
         code: invite_code(code),
         address: "person@example.com".to_owned(),
+        issued: "2026-10-12".to_owned(),
     };
     let mut book = Book::new(StatusMap::default());
     assert_eq!(book.admit(job("alice", "c1")), 1);
@@ -345,13 +349,18 @@ fn a_live_boards_code_is_held_until_its_spend_is_written() {
 /// T9: A SPEND THAT COULD NOT BE WRITTEN KEEPS ITS CODE HELD for the
 /// process's life: the file still says issued, so a post naming the code
 /// meets the invite's refusal — never a second board on one invite — while
-/// the board stands live and the log says the operator marks it.
+/// the board stands live and the log names the operator's act and the line
+/// to mark by its issue date, never its code or its address.
 #[cfg(unix)]
 #[test]
 fn a_spend_that_could_not_be_written_keeps_its_code_held() {
     use std::os::unix::fs::PermissionsExt;
     let rig = rig(&(flow_of("alice", false) + &reloads(1)), None);
     let code = rig.invite();
+    let issued_on = match lookup(&rig.state_dir, &code).expect("read").expect("held").state {
+        crate::invites::InviteState::Issued { date } => date,
+        other => panic!("{other:?}"),
+    };
     let alice = rig.admitted("alice", &code);
     // The state directory read-only: the invite file's rewrite cannot be made.
     fs::set_permissions(rig.dir.path().join("state"), fs::Permissions::from_mode(0o500)).expect("read-only");
@@ -360,7 +369,9 @@ fn a_spend_that_could_not_be_written_keeps_its_code_held() {
     assert!(rig.service.book().admitted.contains(&code), "the code let go of though its spend was never written");
     assert_eq!(rig.post("bob", &record(true), code.as_str()), Err(Refusal::Invite));
     rig.fake.assert_done();
-    assert!(rig.log().iter().any(|l| l.starts_with("alice: the invite could not be marked spent (") && l.ends_with("; this process refuses it, and the operator marks it")), "{:?}", rig.log());
+    let act = format!("; this process refuses it until it ends — mark it spent by hand: the invite file's line issued {issued_on} to the person who asked for alice (RUNBOOK §10 step 11)");
+    assert!(rig.log().iter().any(|l| l.starts_with("alice: the invite could not be marked spent (") && l.ends_with(&act)), "{act}: {:?}", rig.log());
+    assert!(!rig.log().join("\n").contains(code.as_str()) && !rig.log().join("\n").contains("person@example.com"), "{:?}", rig.log());
 }
 
 /// T9: A SPEND THAT FINDS ITS CODE NO LONGER ISSUED — the operator's hand
@@ -409,16 +420,28 @@ fn a_sign_up_is_kept_and_its_address_is_in_no_log_line() {
 }
 
 /// T10: A SIGN-UP PAST THE FILE's CAP — the file at its 256 KiB — is
-/// refused as one that could not be kept, nothing written, and logged with
-/// the cap and the owner's act, never the address.
+/// refused as one that could not be kept, nothing written, and logged ONCE
+/// for the stretch the file stands at its cap, with the cap and the owner's
+/// act, never the address: a second refusal adds no line, and the first
+/// sign-up kept once the owner has trimmed the file says the stretch's end
+/// with its count, once.
 #[test]
-fn a_sign_up_past_the_files_cap_is_refused_and_logged() {
+fn a_sign_up_past_the_files_cap_is_refused_and_logged_once() {
     let rig = rig("", None);
     let full = format!("{}\n", "#".repeat(256 * 1024 - 1));
     fs::write(rig.state_dir.file(crate::signups::SIGNUPS), &full).expect("a file at its cap");
     assert_eq!(rig.service.sign_up(b"someone@example.org"), Err(SignUpRefusal::Failed));
     assert_eq!(fs::read_to_string(rig.state_dir.file(crate::signups::SIGNUPS)).expect("the file"), full);
-    assert_eq!(rig.log(), ["a sign-up refused: the sign-up file is at its 262144-byte cap; the owner trims the file"]);
+    let at_cap = "a sign-up refused: the sign-up file is at its 262144-byte cap; every sign-up is refused until the owner trims it (RUNBOOK §10 step 11) — said once, and again when one is kept";
+    assert_eq!(rig.log(), [at_cap]);
+    assert_eq!(rig.service.sign_up(b"other@example.org"), Err(SignUpRefusal::Failed));
+    assert_eq!(rig.log(), [at_cap], "a second refusal at the cap said again");
+    fs::write(rig.state_dir.file(crate::signups::SIGNUPS), "").expect("the owner's trim");
+    assert_eq!(rig.service.sign_up(b"someone@example.org"), Ok(()));
+    assert_eq!(rig.log(), [at_cap, "the sign-up file takes sign-ups again: 2 refused while it stood at its cap", "a sign-up kept"]);
+    assert_eq!(rig.service.sign_up(b"other@example.org"), Ok(()));
+    assert_eq!(rig.log().len(), 4, "the stretch's end said again: {:?}", rig.log());
+    assert!(!rig.log().join("\n").contains("example.org"), "{:?}", rig.log());
 }
 
 /// T8: THE ADMISSION LOOKS AGAIN AT THE NAME — a post paused inside its

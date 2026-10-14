@@ -2,8 +2,9 @@
 //! under `skep.host`, tabs included; its health pattern naming the account the
 //! dark claim founds; every occurrence substituted for another name and
 //! another suffix; written whole by rename, one file and no temp file left; an
-//! unwritable directory an error; and whether it stands, the removal, the
-//! reload and the rebuild's read of the directory.
+//! unwritable directory an error, and the start's probe of the write leaving
+//! nothing; and whether it stands, the removal, the reload and the rebuild's
+//! read of the directory.
 
 use super::*;
 use crate::docker::fake::{line, FakeDocker};
@@ -108,6 +109,31 @@ fn an_unwritable_directory_is_an_error() {
     fs::set_permissions(&boards, fs::Permissions::from_mode(0o700)).expect("writable again");
     assert!(listing(&boards).is_empty());
     assert!(write(dir.path().join("absent").as_path(), &name("alice"), &domain("skep.host")).is_err(), "a directory that does not stand");
+}
+
+/// THE PROBE AT START: a directory the service cannot write is the probe's
+/// error — the start's refusal, never a board's failed step — and one it can
+/// write takes the probe and is left as it was, no probe and no temp file;
+/// a probe a stop left behind is no board's, never routed, and the next
+/// probe replaces it.
+#[cfg(unix)]
+#[test]
+fn the_probe_tries_the_write_and_leaves_nothing() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = Scratch::new();
+    let boards = dir.path().join("boards");
+    fs::create_dir(&boards).expect("the snippet directory");
+    fs::set_permissions(&boards, fs::Permissions::from_mode(0o555)).expect("read-only");
+    assert!(probe(&boards).is_err(), "a directory the service cannot write");
+    fs::set_permissions(&boards, fs::Permissions::from_mode(0o700)).expect("writable again");
+    assert!(listing(&boards).is_empty());
+    probe(&boards).expect("a directory the service can write");
+    assert!(listing(&boards).is_empty(), "the probe left behind");
+    fs::write(boards.join(PROBE), b"a stop's leftover").expect("a leftover probe");
+    assert!(routed(&boards).expect("read").is_empty(), "a leftover probe routed");
+    probe(&boards).expect("over a leftover");
+    assert!(listing(&boards).is_empty(), "the leftover left behind");
+    assert!(probe(dir.path().join("absent").as_path()).is_err(), "a directory that does not stand");
 }
 
 /// A SNIPPET STANDS from its write until its removal: not before its

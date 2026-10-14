@@ -203,6 +203,7 @@ fn method(call: &Call<'_>) -> &'static str {
         Call::ContainerInspect(_) => "container_inspect",
         Call::RunClaim(_) => "run_claim",
         Call::SidecarClaim(..) => "sidecar_claim",
+        Call::RunLogs(_) => "run_logs",
         Call::RmForce(_) => "rm_force",
         Call::RunServing(_) => "run_serving",
         Call::VolumeRm(_) => "volume_rm",
@@ -220,6 +221,7 @@ fn name<'a>(call: &Call<'a>) -> Option<&'a Name> {
         | Call::ContainerInspect(n)
         | Call::RunClaim(n)
         | Call::SidecarClaim(n, _)
+        | Call::RunLogs(n)
         | Call::RmForce(n)
         | Call::RunServing(n)
         | Call::VolumeRm(n)

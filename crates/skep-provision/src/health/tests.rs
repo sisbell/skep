@@ -1,11 +1,12 @@
 //! T6 — THE PAIR off `/health`'s body, and THE WAIT for it over the fake:
 //! a claimed, enforcing board answers it; a `null` claimant, a `true`
 //! local trust and a body that is not JSON do not; an eighth member changes
-//! nothing; the wait answers at the first pair — a failed run's stdout never
-//! one, whatever it carries — and gives up after its bound of one or more
-//! tries, the fake called exactly the bound's times and the last try's
-//! answer kept; and a `docker` that cannot be run at all ends the wait at
-//! once, the error.
+//! nothing; the pair said as a body answered it, each case apart, for the
+//! log where the wait gave up; the wait answers at the first pair — a failed
+//! run's stdout never one, whatever it carries — and gives up after its
+//! bound of one or more tries, the fake called exactly the bound's times and
+//! the last try's answer kept; and a `docker` that cannot be run at all ends
+//! the wait at once, the error.
 
 use std::cell::Cell;
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -41,6 +42,21 @@ fn the_pair_is_a_claimant_and_local_trust_false() {
     assert!(!paired(br#"{"auth":{"claimant":"1.0.1"}}"#), "no local_trust");
     assert!(!paired(br#"{"auth":{"local_trust":false}}"#), "no claimant");
     assert!(!paired(br#"{"auth":{"claimant":1,"local_trust":false}}"#), "a claimant that is no string");
+}
+
+/// THE PAIR AS A BODY ANSWERED IT, for the log where the wait gave up: each
+/// member as its JSON — a claim not on the volume (`claimant null`) read
+/// apart from local trust on (`local_trust true`) — a member absent named so,
+/// apart from one that is `null`, and a body that is not JSON said as one.
+#[test]
+fn the_pair_is_said_as_the_body_answered_it() {
+    assert_eq!(pair_said(PAIRED.as_bytes()), "claimant \"1.0.1\", local_trust false");
+    assert_eq!(pair_said(PAIRED.replace(r#""claimant":"1.0.1""#, r#""claimant":null"#).as_bytes()), "claimant null, local_trust false", "a claim not on the volume");
+    assert_eq!(pair_said(PAIRED.replace(r#""local_trust":false"#, r#""local_trust":true"#).as_bytes()), "claimant \"1.0.1\", local_trust true", "local trust on");
+    assert_eq!(pair_said(br#"{"ok":true}"#), "claimant absent, local_trust absent", "no auth member");
+    assert_eq!(pair_said(br#"{"auth":{"claimant":"1.0.1"}}"#), "claimant \"1.0.1\", local_trust absent");
+    assert_eq!(pair_said(b"not json"), "a body that is not JSON");
+    assert_eq!(pair_said(br#"{"auth":{"claimant":"a\nb","local_trust":false}}"#), "claimant \"a\\nb\", local_trust false", "a line break in a value stays escaped: one log line");
 }
 
 /// T6: THE WAIT ANSWERS AT THE FIRST PAIR: a failed run — its stdout the

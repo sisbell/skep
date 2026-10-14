@@ -1,10 +1,12 @@
 //! T10 — THE STATE DIRECTORY beneath the sign-up file and the invite file:
 //! THE DOOR, made `0700` and refused loose in the daemon's words — any group
-//! or other bit, each one alone — and an empty path refused; THE WRITER, its
-//! files owner-only, whose failure between the write and the rename leaves
-//! the old file whole and no temp file; a lock file in it made owner-only
-//! and held there; and the date a line carries, over a whole Gregorian
-//! cycle. (The address rule its lines carry is `mail_address`'s suite.)
+//! or other bit, each one alone — refused where another user owns it, naming
+//! both owners, its probe of the owner leaving nothing behind, and an empty
+//! path refused; THE WRITER, its files owner-only, whose failure between the
+//! write and the rename leaves the old file whole and no temp file; a lock
+//! file in it made owner-only and held there; and the date a line carries,
+//! over a whole Gregorian cycle. (The address rule its lines carry is
+//! `mail_address`'s suite.)
 
 use std::fs;
 
@@ -47,6 +49,34 @@ fn the_state_directory_is_owner_only_or_refused() {
 fn an_empty_path_is_refused_at_the_door() {
     let refused = StateDir::open(Path::new("")).expect_err("an empty path admitted as a state directory");
     assert!(matches!(refused, StateDirRefused::Io { .. }), "{refused:?}");
+}
+
+/// THE DOOR REFUSES A DIRECTORY ANOTHER USER OWNS — root's `invite` over the
+/// service's directory — naming both owners and the act: the rule over two
+/// uids, for no unprivileged suite can make a directory another user's; and
+/// a directory this process owns admitted, the door's probe of its owner
+/// leaving nothing behind, a probe a stop left removed with it.
+#[cfg(unix)]
+#[test]
+fn a_directory_another_user_owns_is_refused_and_the_probe_leaves_nothing() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = Scratch::new();
+    let path = dir.path().join("state");
+    let refused = owner_rule(&path, 997, 0).expect_err("root over the service's directory");
+    assert!(matches!(refused, StateDirRefused::OwnedByAnother { owner: 997, process: 0, .. }), "{refused:?}");
+    assert_eq!(
+        refused.to_string(),
+        format!(
+            "the state directory {} is uid 997's, and this process runs as uid 0: a file it made there would be one the service cannot read or replace, so nothing in it is touched — run it as the directory's owner, `sudo -u <that user> skep-provision …` (RUNBOOK §10 step 7)",
+            path.display()
+        )
+    );
+    assert!(owner_rule(&path, 997, 997).is_ok(), "the owner itself");
+    fs::create_dir(&path).expect("a directory");
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o700)).expect("owner-only");
+    fs::write(path.join(OWNER_PROBE), b"a stop's leftover").expect("a leftover probe");
+    StateDir::open(&path).expect("this process's own directory admitted");
+    assert_eq!(fs::read_dir(&path).expect("listed").count(), 0, "the probe left behind");
 }
 
 /// THE DOOR REFUSES ANY GROUP OR OTHER BIT, each one alone — a group that

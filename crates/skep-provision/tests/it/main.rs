@@ -15,14 +15,17 @@
 //! more. THE SWEEP (T22): started over a script whose `labelled_volumes`
 //! lists one half-made name, the binary removes it before its serving line,
 //! which carries the count. THE SERVING LINE: the RUNBOOK's, field for
-//! field, with mail and without. A CALL's STDIN: the sweep's listing, run by
-//! the host's runner through a `docker` on `PATH`, reads nothing of the
-//! service's own. A START REFUSED — a snippet directory that cannot be read,
-//! an address another listener holds — and an invite not minted each exit 1,
-//! with no DATA line. THE STATE FILES: the `invite` verb under a shell's
-//! `022` leaves every file in the state directory `0600`, its lock file
-//! among them. No Docker runs: every call is a script's, and the calls are
-//! read back after. Beside it, `tidy` reads the crate's own source and
+//! field, with mail and without; above it the version, first, and the
+//! settings every board is made with, the RUNBOOK's too. A CALL's STDIN: the
+//! sweep's listing, run by the host's runner through a `docker` on `PATH`,
+//! reads nothing of the service's own. A START REFUSED — a snippet directory
+//! that cannot be read or written, a `--mailer` that cannot be run, an
+//! address another listener holds, a second `serve` over the state
+//! directory one holds, each before the sweep — and an invite not minted
+//! each exit 1, with no DATA line. THE STATE FILES: the `invite` verb under
+//! a shell's `022` leaves every file in the state directory `0600`, its lock
+//! file among them. No Docker runs: every call is a script's, and the calls
+//! are read back after. Beside it, `tidy` reads the crate's own source and
 //! manifest for the arrangement `src/main.rs` and `ARCHITECTURE.md` §The
 //! provisioning service state.
 
@@ -242,6 +245,23 @@ fn until<T>(what: &str, mut done: impl FnMut() -> Option<T>) -> T {
         assert!(Instant::now() < deadline, "{what} never came");
         thread::sleep(Duration::from_millis(20));
     }
+}
+
+/// A START THAT MUST BE REFUSED, run to its end: its exit and its two
+/// streams, thirty seconds at most — a start past them serves, and is killed
+/// and failed on, never left holding the suite.
+fn refused(command: &mut Command) -> std::process::Output {
+    let mut child = command.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().expect("ran");
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while child.try_wait().expect("waited").is_none() {
+        if Instant::now() >= deadline {
+            let _ = child.kill();
+            let out = child.wait_with_output().expect("killed");
+            panic!("a start that should be refused served: {}", String::from_utf8_lossy(&out.stderr));
+        }
+        thread::sleep(Duration::from_millis(20));
+    }
+    child.wait_with_output().expect("its streams")
 }
 
 /// T14: THE SERVICE, FROM THE FORM's POST TO THE LIVE PAGE, over the fakes
@@ -608,6 +628,63 @@ fn the_serving_line_is_the_runbooks_with_mail_and_without() {
     }
 }
 
+/// THE START SAYS WHAT IT RUNS: its version first, above anything else it
+/// says — a refusal among it — then, before the serving line, the settings
+/// every board is made with, the RUNBOOK's quoted line clause for clause up
+/// to its mail, and the sign-up file's fill against its cap.
+#[test]
+fn the_start_says_its_version_and_its_settings_above_the_serving_line() {
+    let runbook = std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../RUNBOOK.md")).expect("the RUNBOOK");
+    let quoted = runbook.lines().map(str::trim).find(|l| l.starts_with("skep-provision: boards made from image ")).expect("the RUNBOOK's settings line").to_owned();
+    let (boards_made, _) = quoted.split_once("; mail through ").expect("the RUNBOOK's mail clause");
+    let dir = Scratch::new();
+    std::fs::create_dir(dir.path().join("boards")).expect("the snippet directory");
+    let script = dir.path().join("docker.script");
+    std::fs::write(&script, script_line("labelled_volumes", "-", 0, "")).expect("the script");
+    let mail_log = dir.path().join("mail.log");
+    let service = Service::start(dir.path(), &script, &mail_log, &[]);
+    let log = until("the start's lines", || Some(service.log()).filter(|l| l.contains("sweep: volumes: exit 0")));
+    let first = log.lines().next().expect("a first line");
+    assert!(first.starts_with(&format!("skep-provision: version {} (", env!("CARGO_PKG_VERSION"))) && first.ends_with(')'), "the version first: {log}");
+    let settings = format!("{boards_made}; mail into the mail fake {} from noreply@skep.host; the failure page names owner@skep.host", mail_log.display());
+    let at = |line: &str| log.lines().position(|l| l == line).unwrap_or_else(|| panic!("{line}: {log}"));
+    assert!(at(&settings) < at("skep-provision: sweep: volumes: exit 0"), "the settings said after the sweep: {log}");
+    assert!(log.lines().any(|l| l == "skep-provision: the sign-up file holds 0 of its 262144 bytes"), "{log}");
+    service.terminate();
+}
+
+/// ONE SERVE PER STATE DIRECTORY: a second `serve` over the state directory
+/// a running one holds — the binary started by hand beside the unit — is
+/// refused at its start, exit 1, naming the lock and the rule, before its
+/// sweep: no docker call of its own, no serving line, and the first still
+/// serving.
+#[test]
+fn a_second_serve_over_one_state_directory_is_refused_before_its_sweep() {
+    let dir = Scratch::new();
+    std::fs::create_dir(dir.path().join("boards")).expect("the snippet directory");
+    let script = dir.path().join("docker.script");
+    std::fs::write(&script, script_line("labelled_volumes", "-", 0, "")).expect("the script");
+    let first = Service::start(dir.path(), &script, &dir.path().join("mail.log"), &[]);
+    let second_script = dir.path().join("second.script");
+    std::fs::write(&second_script, script_line("labelled_volumes", "-", 0, "")).expect("the second's script");
+    let second = refused(
+        Command::new(BIN)
+            .args(["serve", "--listen", "127.0.0.1:0", "--reply-to", "owner@skep.host", "--state-dir"])
+            .arg(dir.path().join("state"))
+            .arg("--boards-dir")
+            .arg(dir.path().join("boards"))
+            .arg("--docker-fake")
+            .arg(&second_script),
+    );
+    assert_eq!(second.status.code(), Some(1), "{second:?}");
+    let said = String::from_utf8_lossy(&second.stderr);
+    assert!(said.contains("skep-provision: another serve holds ") && said.contains("serve.lock: one service per Docker host"), "{said}");
+    assert!(second.stdout.is_empty(), "a serving line for a second serve");
+    assert_eq!(std::fs::read_to_string(dir.path().join("second.script.calls")).unwrap_or_default(), "", "the second's docker call before its refusal");
+    assert_eq!(first.request("GET", "/", "").0, 200, "the first serves on");
+    first.terminate();
+}
+
 /// `--version`: the one line in `skepd`'s form, exit 0.
 #[test]
 fn the_version_line_is_skepds_form_at_exit_0() {
@@ -677,39 +754,56 @@ fn the_invite_verb_makes_every_state_file_0600_under_a_shells_umask() {
 
 /// A START REFUSED, OR AN INVITE NOT MINTED, IS EXIT 1, the reason on
 /// stderr and no DATA line on stdout: a snippet directory that cannot be
-/// read — refused before any docker call; an address another listener
-/// holds — the sweep made, no serving line; a code the invite file already
-/// holds — no invite link.
+/// read, or cannot be written, a `--mailer` that cannot be run, and an
+/// address another listener holds — each refused before the sweep, no docker
+/// call made; a code the invite file already holds — no invite link.
 #[test]
 fn a_start_refused_or_an_invite_not_minted_is_exit_1() {
+    use std::os::unix::fs::PermissionsExt;
     let dir = Scratch::new();
     let script = dir.path().join("docker.script");
     std::fs::write(&script, script_line("labelled_volumes", "-", 0, "")).expect("the script");
-    let calls = || std::fs::read_to_string(dir.path().join("docker.script.calls")).expect("the calls");
-    let serve = |boards: &Path, listen: &str| {
-        Command::new(BIN)
-            .args(["serve", "--listen", listen, "--reply-to", "owner@skep.host", "--state-dir"])
-            .arg(dir.path().join("state"))
-            .arg("--boards-dir")
-            .arg(boards)
-            .arg("--docker-fake")
-            .arg(&script)
-            .stdin(Stdio::null())
-            .output()
-            .expect("ran")
+    let calls = || std::fs::read_to_string(dir.path().join("docker.script.calls")).unwrap_or_default();
+    let serve = |boards: &Path, listen: &str, extra: &[&str]| {
+        refused(
+            Command::new(BIN)
+                .args(["serve", "--listen", listen, "--reply-to", "owner@skep.host", "--state-dir"])
+                .arg(dir.path().join("state"))
+                .arg("--boards-dir")
+                .arg(boards)
+                .arg("--docker-fake")
+                .arg(&script)
+                .args(extra),
+        )
     };
-    let absent = serve(&dir.path().join("absent"), "127.0.0.1:0");
+    let absent = serve(&dir.path().join("absent"), "127.0.0.1:0", &[]);
     assert_eq!(absent.status.code(), Some(1), "{absent:?}");
     assert!(String::from_utf8_lossy(&absent.stderr).contains("could not be read"), "{absent:?}");
     assert!(absent.stdout.is_empty(), "a serving line for a start refused");
     assert_eq!(calls(), "", "a docker call before the snippets were read");
-    std::fs::create_dir(dir.path().join("boards")).expect("the snippet directory");
+    let boards = dir.path().join("boards");
+    std::fs::create_dir(&boards).expect("the snippet directory");
+    let no_mailer = serve(&boards, "127.0.0.1:0", &["--mailer", "/nonexistent/msmtp", "--from", "noreply@skep.host"]);
+    assert_eq!(no_mailer.status.code(), Some(1), "{no_mailer:?}");
+    assert!(
+        String::from_utf8_lossy(&no_mailer.stderr)
+            .contains("skep-provision: --mailer /nonexistent/msmtp: no file stands at it; install the relay client, or drop --mailer and --from to run without mail"),
+        "{no_mailer:?}"
+    );
+    assert!(no_mailer.stdout.is_empty() && calls().is_empty(), "a mailer that cannot run served, or swept: {no_mailer:?}");
+    std::fs::set_permissions(&boards, std::fs::Permissions::from_mode(0o555)).expect("read-only");
+    let unwritable = serve(&boards, "127.0.0.1:0", &[]);
+    std::fs::set_permissions(&boards, std::fs::Permissions::from_mode(0o755)).expect("writable again");
+    assert_eq!(unwritable.status.code(), Some(1), "{unwritable:?}");
+    assert!(String::from_utf8_lossy(&unwritable.stderr).contains("cannot be written"), "{unwritable:?}");
+    assert!(unwritable.stdout.is_empty() && calls().is_empty(), "a snippet directory that cannot be written served, or swept: {unwritable:?}");
     let held = std::net::TcpListener::bind("127.0.0.1:0").expect("a port");
-    let bound = serve(&dir.path().join("boards"), &held.local_addr().expect("its address").to_string());
+    let bound = serve(&boards, &held.local_addr().expect("its address").to_string(), &[]);
     assert_eq!(bound.status.code(), Some(1), "{bound:?}");
-    assert!(String::from_utf8_lossy(&bound.stderr).contains("skep-provision: bind 127.0.0.1:"), "{bound:?}");
+    let said = String::from_utf8_lossy(&bound.stderr);
+    assert!(said.contains("skep-provision: bind 127.0.0.1:") && said.contains("another process holds it: a second skep-provision? One service per Docker host"), "{bound:?}");
     assert!(bound.stdout.is_empty(), "a serving line for an address never bound");
-    assert_eq!(calls(), "labelled_volumes\t-\t0\n", "the sweep made before the bind");
+    assert_eq!(calls(), "", "the sweep made though the bind was refused");
     let mint = || Command::new(BIN).args(["invite", "--address", "person@example.com", "--code", "abc", "--state-dir"]).arg(dir.path().join("state")).stdin(Stdio::null()).output().expect("ran");
     assert_eq!(mint().status.code(), Some(0));
     let again = mint();

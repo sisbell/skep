@@ -150,12 +150,49 @@ pub struct InviteArgs {
     pub suffix: Domain,
 }
 
+/// THE BUILD: `<crate version> (<commit>)` — the version Cargo compiled in,
+/// and the commit the build named through `SKEP_GIT_SHA`, `unknown` where it
+/// named none — read at compile time, so the run consults no file and no
+/// variable. The one spelling both the version line and the start's first
+/// line carry.
+pub fn build() -> String {
+    format!("{} ({})", env!("CARGO_PKG_VERSION"), option_env!("SKEP_GIT_SHA").unwrap_or("unknown"))
+}
+
 /// THE VERSION LINE (`--version`): `skep-provision <crate version>
-/// (<commit>)` — the version Cargo compiled in, and the commit the build
-/// named through `SKEP_GIT_SHA`, `unknown` where it named none — `skepd`'s
-/// form, read at compile time, so the run consults no file and no variable.
+/// (<commit>)` — [`build`] after the program's name, `skepd`'s form.
 pub fn version_line() -> String {
-    format!("skep-provision {} ({})", env!("CARGO_PKG_VERSION"), option_env!("SKEP_GIT_SHA").unwrap_or("unknown"))
+    format!("skep-provision {}", build())
+}
+
+impl ServeArgs {
+    /// THE SETTINGS EVERY BOARD IS MADE WITH, as the start says them on its
+    /// stream — the flags the serving line leaves out: the images, the
+    /// bridge, the proxy's container, the serving run's log rotation, the
+    /// mail and the owner's mailbox the failure page names. So an operator
+    /// reading the log after a change reads what the service runs with, and
+    /// a wrong `--network` or `--caddy` is read there, before a board fails
+    /// on it. Its two addresses are the operator's settings, never a
+    /// person's.
+    pub fn settings_said(&self) -> String {
+        let s = &self.settings;
+        let mail = match &self.mail {
+            None => "no mail".to_owned(),
+            Some(MailArgs { mailer: Mailer::Program(program), from }) => format!("mail through {} -t from {}", program.display(), from.as_str()),
+            #[cfg(feature = "test-hooks")]
+            Some(MailArgs { mailer: Mailer::Fake(mail_log), from }) => format!("mail into the mail fake {} from {}", mail_log.display(), from.as_str()),
+        };
+        format!(
+            "boards made from image {} with the sidecar {}, on the bridge {} behind the proxy container {}, each serving run's log in files of {}, {} kept; {mail}; the failure page names {}",
+            s.image,
+            s.cli_image,
+            s.network,
+            s.caddy,
+            s.log_max_size,
+            s.log_max_file,
+            self.reply_to.as_str()
+        )
+    }
 }
 
 /// THE USAGE TEXT, every default read from its constant.
@@ -187,14 +224,17 @@ whose snippet --boards-dir lacks, so one serve per Docker host.
 
   --state-dir <DIR>       the sign-up file and the invite file (required):
                           made 0700 where absent; refused at start where
-                          other users of this machine can read it
+                          other users of this machine can read it, or
+                          where it is another user's, root's among them
   --reply-to <ADDRESS>    the owner's mailbox (required): the failure page
                           names it, and an answer to the follow-up mail
                           goes to it
   --listen <ADDR:PORT>    the address the pages are served on (default
                           {DEFAULT_LISTEN})
   --boards-dir <DIR>      the proxy's snippet directory, one <NAME>.caddy
-                          per board (default {DEFAULT_BOARDS_DIR})
+                          per board: the list of boards the sweep at start
+                          spares, every labelled volume it lacks removed
+                          (default {DEFAULT_BOARDS_DIR})
   --image <TAG>           the hosted image (default {DEFAULT_IMAGE})
   --cli-image <TAG>       the claim sidecar's image (default {DEFAULT_CLI_IMAGE})
   --network <BRIDGE>      the bridge the boards and the proxy share
@@ -208,12 +248,15 @@ whose snippet --boards-dir lacks, so one serve per Docker host.
   --workers <N>           the boards made at once: one worker thread each,
                           one or more (default {DEFAULT_WORKERS})
   --connections <N>       the requests served at once: one thread each,
-                          made at start, a further connection waiting in
-                          the listener's queue; one or more (default {DEFAULT_CONNECTIONS})
+                          made at start, and a descriptor while it serves,
+                          which the unit's LimitNOFILE= bounds; a further
+                          connection waits in the listener's queue; one or
+                          more (default {DEFAULT_CONNECTIONS})
   --mailer <PROGRAM>      the host's relay client — sendmail or msmtp —
-                          run as <PROGRAM> -t with the message on stdin;
-                          given with --from or not at all, and without
-                          both no mail is sent
+                          run as <PROGRAM> -t with the message on stdin,
+                          refused at start where it cannot be run; given
+                          with --from or not at all, and without both no
+                          mail is sent
   --from <ADDRESS>        the follow-up mail's sending address
 {fakes}
 invite: one invite minted into the state directory's invite file; its

@@ -2,14 +2,16 @@
 //! message goes on its stdin — pinned from the `Command`, and over a recording
 //! script in the mailer's place; the fake records the headers and the body; a
 //! refused send is retried up to its bound — seven tries ten minutes apart —
-//! and then given up, logged with neither the address nor the body — a relay's
-//! refusal, its stderr naming the recipient, by its exit code alone — and a
-//! mailer that cannot run is retried the same; the sender's thread delivers
-//! what the worker hands it, the message made with the outbox's own `From:`,
-//! `Reply-To:` and subject, a hand-over never waits on a send stuck in its
-//! try, and a send that panics costs its own mail alone, never the thread.
-//! (No send before the status is live, and the status live throughout an
-//! outage, are the flow's — `flow/tests/provision.rs`.)
+//! and then given up, logged with neither the address nor the body but with
+//! the operator's act — a relay's refusal, its stderr naming the recipient,
+//! by its exit code alone — and a mailer that cannot run is retried the
+//! same, and one that cannot be run at all said at start, saying why; the
+//! sender's thread delivers what the worker hands it, the message made with
+//! the outbox's own `From:`, `Reply-To:` and subject, a hand-over never
+//! waits on a send stuck in its try, and a send that panics costs its own
+//! mail alone, never the thread. (No send before the status is live, and
+//! the status live throughout an outage, are the flow's —
+//! `flow/tests/provision.rs`.)
 
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -103,6 +105,10 @@ fn a_refused_send_is_retried_to_its_bound_then_given_up() {
     assert_eq!(lines.len(), MAIL_WAIT.tries.get() as usize + 1);
     assert_eq!(lines[0], format!("alice: mail: try 1 of {} refused, exit 75", MAIL_WAIT.tries));
     assert!(lines.last().expect("a line").contains("given up after 7 tries; the board stands live"));
+    assert!(
+        lines.last().expect("a line").ends_with("write to the person by hand: their address is on the invite file's line spent under alice (RUNBOOK §10 step 11)"),
+        "the operator's act: {lines:?}"
+    );
     assert!(lines.iter().all(|l| !l.contains("person@") && !l.contains("status/0123")), "{lines:?}");
     assert!(messages(&mail_log).expect("the mail log").is_empty());
 }
@@ -135,7 +141,11 @@ fn a_relays_refusal_is_logged_by_its_exit_code_alone() {
     assert!(!deliver(&Refuses, &message(), twice, &|_| {}, log.as_ref()));
     assert_eq!(
         *lines.lock().unwrap(),
-        ["alice: mail: try 1 of 2 refused, exit 75", "alice: mail: try 2 of 2 refused, exit 75", "alice: mail: given up after 2 tries; the board stands live and its status page with it"]
+        [
+            "alice: mail: try 1 of 2 refused, exit 75",
+            "alice: mail: try 2 of 2 refused, exit 75",
+            "alice: mail: given up after 2 tries; the board stands live and its reply on its status page until the process ends — write to the person by hand: their address is on the invite file's line spent under alice (RUNBOOK §10 step 11)"
+        ]
     );
 }
 
@@ -262,7 +272,45 @@ fn a_send_that_panics_costs_its_own_mail_alone() {
         thread::sleep(Duration::from_millis(10));
     }
     assert_eq!(*sent.lock().unwrap(), ["second@example.com"]);
-    assert_eq!(*lines.lock().unwrap(), ["alice: mail: given up, a try having panicked; the board stands live and its status page with it", "bob: mail: sent at try 1 of 7"]);
+    assert_eq!(
+        *lines.lock().unwrap(),
+        [
+            "alice: mail: given up, a try having panicked; the board stands live and its reply on its status page until the process ends — write to the person by hand: their address is on the invite file's line spent under alice (RUNBOOK §10 step 11)",
+            "bob: mail: sent at try 1 of 7"
+        ]
+    );
+}
+
+/// A RELAY CLIENT THAT CANNOT BE RUN IS SAID AT START: a path at which no
+/// file stands, a directory, and a file with no execute bit are each
+/// refused saying which, as is a bare name no directory of the `PATH` given
+/// holds as a file with an execute bit; a script with one is runnable, by
+/// its path and by its bare name on a `PATH` that holds it.
+#[cfg(unix)]
+#[test]
+fn a_relay_client_that_cannot_be_run_is_said_at_start() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = Scratch::new();
+    let bin = dir.path().join("bin");
+    std::fs::create_dir(&bin).expect("a directory for the program");
+    let plain = bin.join("plain");
+    std::fs::write(&plain, b"#!/bin/sh\n").expect("a file");
+    std::fs::set_permissions(&plain, std::fs::Permissions::from_mode(0o600)).expect("no execute bit");
+    let msmtp = bin.join("msmtp");
+    std::fs::write(&msmtp, b"#!/bin/sh\n").expect("a script");
+    std::fs::set_permissions(&msmtp, std::fs::Permissions::from_mode(0o700)).expect("executable");
+    assert_eq!(runnable(&dir.path().join("absent")), Err("no file stands at it".to_owned()));
+    assert_eq!(runnable(&bin), Err("it is not a file".to_owned()));
+    assert_eq!(runnable(&plain), Err("it is a file with no execute bit".to_owned()));
+    assert_eq!(runnable(&msmtp), Ok(()));
+    let empty = dir.path().join("empty");
+    std::fs::create_dir(&empty).expect("a directory holding nothing");
+    let refused = Err("no directory of PATH holds it as a file with an execute bit".to_owned());
+    assert_eq!(runnable_on(Path::new("msmtp"), Some(empty.as_os_str())), refused);
+    assert_eq!(runnable_on(Path::new("msmtp"), None), refused, "no PATH at all");
+    assert_eq!(runnable_on(Path::new("plain"), Some(bin.as_os_str())), refused, "on the PATH with no execute bit");
+    let path = std::env::join_paths([empty.as_path(), bin.as_path()]).expect("a PATH");
+    assert_eq!(runnable_on(Path::new("msmtp"), Some(path.as_os_str())), Ok(()), "found on the PATH's second directory");
 }
 
 /// A message's `Debug` names the board alone.

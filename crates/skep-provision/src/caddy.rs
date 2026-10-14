@@ -20,7 +20,15 @@
 //! secret. THE REMOVAL ([`remove`]) is `whole`'s. WHETHER IT STANDS
 //! ([`stands`]) is the first of the truth about names' three reads, and the
 //! sweep's sort. THE RELOAD ([`reload`]) is the runner's `docker exec
-//! <caddy> caddy reload`, after the write and after a removal.
+//! <caddy> caddy reload`, after the write and after a removal. THE PROBE
+//! ([`probe`]) is a write and a removal tried at start, so a snippet
+//! directory the service's user cannot write is a start refused — never
+//! every board's failure at its snippet's write, after its claim.
+//!
+//! THE DIRECTORY IS THE LIST OF BOARDS: the status map is rebuilt from it at
+//! start ([`routed`]), and the sweep at start spares the labelled volumes
+//! whose snippet stands here and removes every other — so a start over a
+//! directory emptier than the Engine's volumes removes every board it lacks.
 
 use std::fs;
 use std::io;
@@ -36,6 +44,12 @@ use crate::whole;
 /// its own container's user (UNVERIFIED HERE) — and set exactly, whatever
 /// this process's umask; it holds no secret.
 const SNIPPET_MODE: u32 = 0o644;
+
+/// THE PROBE's NAME in the snippet directory: one no `<name>.caddy` glob
+/// matches — Caddy's import, [`routed`] — and no [`Name`] spells, so a
+/// probe a stop left behind is read as no board's, and the next probe
+/// replaces it.
+const PROBE: &str = ".skep-provision.probe";
 
 /// THE SNIPPET's TEXT for `name` under `suffix`: the deployment notes' block
 /// for `alice` under `skep.host`, byte for byte, every occurrence of either
@@ -102,6 +116,18 @@ pub fn remove(boards_dir: &Path, name: &Name) -> io::Result<bool> {
 /// it, through the runner.
 pub fn reload(docker: &dyn Docker) -> io::Result<Exit> {
     docker.caddy_reload()
+}
+
+/// THE SNIPPET DIRECTORY's WRITE, tried at start: [`PROBE`] written through
+/// `whole` at [`SNIPPET_MODE`], as a snippet is, and removed — so a directory
+/// the service's user cannot write is a start refused, said with its
+/// directory and its owner's act, never every board's failure at its
+/// snippet's write after its claim and its `/health` wait. The error is the
+/// write's or the removal's.
+pub fn probe(boards_dir: &Path) -> io::Result<()> {
+    let probe = boards_dir.join(PROBE);
+    whole::replace(&probe, b"", SNIPPET_MODE, &|| Ok(()))?;
+    whole::remove(&probe).map(|_| ())
 }
 
 /// THE ROUTED NAMES: each name whose snippet is a regular file — a

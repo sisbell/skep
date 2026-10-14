@@ -24,7 +24,9 @@
 //! THE WAIT ([`wait`]): the reads made over a [`Wait`] — [`HEALTH_WAIT`],
 //! the smoke's sixty seconds — a non-zero exit of the sidecar counted as
 //! "not yet"; it answers at the first pair, and gives up after the bound
-//! with what the last try answered.
+//! with what the last try answered — whose pair the log then names as the
+//! body answered it ([`pair_said`]), so a claim not on the volume reads
+//! apart from local trust on.
 
 use std::io;
 use std::num::NonZeroU32;
@@ -51,6 +53,22 @@ fn paired(body: &[u8]) -> bool {
     };
     let auth = &body["auth"];
     auth["claimant"].is_string() && auth["local_trust"].as_bool() == Some(false)
+}
+
+/// THE PAIR AS A BODY ANSWERED IT, for the log where the wait gave up:
+/// `claimant <c>, local_trust <t>`, each the member's JSON — a member
+/// absent from the body `absent`, apart from one that is `null` — or `a
+/// body that is not JSON`. So a board whose claim is not on its volume
+/// (`claimant null`) reads apart from an image built with local trust on
+/// (`local_trust true`). `/health` is token-blind, served to every browser:
+/// nothing here is withheld.
+pub fn pair_said(body: &[u8]) -> String {
+    let Ok(body) = serde_json::from_slice::<Value>(body) else {
+        return "a body that is not JSON".to_owned();
+    };
+    let auth = body.get("auth");
+    let member = |key: &str| auth.and_then(|auth| auth.get(key)).map_or_else(|| "absent".to_owned(), Value::to_string);
+    format!("claimant {}, local_trust {}", member("claimant"), member("local_trust"))
 }
 
 /// How a wait ended.

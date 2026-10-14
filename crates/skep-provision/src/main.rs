@@ -13,10 +13,14 @@
 //! namespace; step 5, the serving run, the `/health` pair, and ONE SNIPPET
 //! per board in the proxy's directory with the proxy reloaded, the snippet
 //! and the reload serial across every name; the live page at the post's
-//! status URL; and ONE MAIL once the board is live. At its start, before it
-//! listens, A SWEEP removes every board a stop left half-made — a labelled
-//! volume with no snippet. One `serve` per Docker host: the label and the
-//! names are the host's. `skep-provision serve` is the service;
+//! status URL; and ONE MAIL once the board is live. At its start, its address
+//! bound and before it serves, A SWEEP removes every board a stop left
+//! half-made — a labelled volume with no snippet; the snippet directory is
+//! so the list of boards it spares. One `serve` per Docker host: the label
+//! and the names are the host's, and a second `serve` over the same state
+//! directory or on the same port is refused before its sweep. Its start
+//! says the version it runs and the settings every board is made with,
+//! above the serving line. `skep-provision serve` is the service;
 //! `skep-provision invite` is the owner's hand, minting one invite and
 //! printing its invite link; `skep-provision --version` the version line.
 //!
@@ -67,10 +71,12 @@
 //! `the invite is spent` after it — and never the code. Its exit codes: 0, an
 //! `invite` minted and its link printed, or the version line or the usage
 //! text printed; 2, a usage refusal; 1, a start refused — a state directory
-//! other users can read, or one that cannot be made or is no directory, a
-//! snippet directory that cannot be read, an address that cannot be bound, a
-//! thread the OS will not give — or an `invite` that printed no invite link,
-//! or a version line or usage text that could not be written.
+//! other users can read, one another user owns, or one that cannot be made
+//! or is no directory, another `serve` holding it, a `--mailer` that cannot
+//! be run, a snippet directory that cannot be read or written, an address
+//! that cannot be bound, a thread the OS will not give — or an `invite` that
+//! printed no invite link, or a version line or usage text that could not be
+//! written.
 //!
 //! The modules are declared below in dependency order, each naming only
 //! those above it — `tests/it/tidy.rs` checks it — and `ARCHITECTURE.md`
@@ -135,7 +141,8 @@ mod invites;
 // Every sentence a person reads: one table, each row naming its id.
 mod strings;
 // The pages' HTML and the requests they answer over `skep-http`, the desk
-// they ask, and the two URLs the service hands out.
+// they ask, the two URLs the service hands out, and the accept pair the
+// connection threads share.
 mod pages;
 // The mail: the trait, the mailer, the sender's thread, and the log and the
 // sleep every thread is handed; the fake under `test-hooks`.
@@ -149,17 +156,18 @@ mod flow;
 // The verbs and the flags, every default a named constant.
 mod args;
 
+use std::fs::TryLockError;
 use std::io::{self, Write};
 use std::net::TcpListener;
 use std::process::exit;
 use std::sync::Arc;
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
-use args::{Command, Mailer};
+use args::{Command, MailArgs, Mailer};
 use docker::{Docker, HostDocker};
 use flow::{Config, Service};
-use pages::Site;
+use pages::{Accepts, Site};
 use sender::{Log, Outbox, Sender, Sleep};
 use statedir::StateDir;
 
@@ -169,6 +177,13 @@ use statedir::StateDir;
 /// at once would spin a core for as long; ten milliseconds costs nothing
 /// at the wall and holds a queued connection little once the wall clears.
 const ACCEPT_RETRY_PAUSE: Duration = Duration::from_millis(10);
+
+/// THE SERVE's LOCK FILE in the state directory: held by a running `serve`
+/// for its life, so a second `serve` over the same state directory — the
+/// binary started by hand beside the unit — is refused at its start, before
+/// its sweep could take this one's boards in flight for half-made. `invite`
+/// never takes it: a mint beside a running service is safe.
+const SERVE_LOCK: &str = "serve.lock";
 
 fn main() {
     let exit_code = match args::parse(std::env::args_os().skip(1)) {
@@ -204,12 +219,18 @@ fn log() -> Log {
     Arc::new(|line: &str| say_err(&format!("skep-provision: {line}")))
 }
 
-/// `serve`: the state directory's door, the snippets read, the runner and
-/// the mail chosen, the sender started, THE SWEEP of what a stop left
-/// half-made, then the address bound, the serving line, and the two pools —
-/// the workers and the connection threads — until the process ends.
+/// `serve`: the version said, the state directory's door and its serve lock,
+/// the runner and the mail chosen, the sender started, the snippets read and
+/// the snippet directory's write tried, the settings said, the address
+/// bound, THE SWEEP of what a stop left half-made, the serving line, and the
+/// two pools — the workers and the connection threads — until the process
+/// ends. Every start refused is one line on stderr naming its cause, exit 1.
 fn serve(flags: args::ServeArgs) -> i32 {
     let log = log();
+    // THE VERSION, first: a start refused has above its refusal the line
+    // that names which binary refused it, and a restart after an upgrade
+    // names which binary now runs.
+    log(&format!("version {}", args::build()));
     let state_dir = match StateDir::open(&flags.state_dir) {
         Ok(state_dir) => state_dir,
         Err(refused) => {
@@ -217,6 +238,27 @@ fn serve(flags: args::ServeArgs) -> i32 {
             return 1;
         }
     };
+    // THE SERVE LOCK, held for the process's life: a second `serve` over this
+    // state directory is refused here, before its sweep could take this
+    // one's boards in flight for half-made.
+    let serve_lock = match state_dir.open_lock_file(SERVE_LOCK) {
+        Ok(file) => file,
+        Err(e) => {
+            say_err(&format!("skep-provision: {}: {e}", state_dir.file(SERVE_LOCK).display()));
+            return 1;
+        }
+    };
+    match serve_lock.try_lock() {
+        Ok(()) => {}
+        Err(TryLockError::WouldBlock) => {
+            say_err(&format!("skep-provision: another serve holds {}: one service per Docker host (RUNBOOK §10 step 5)", state_dir.file(SERVE_LOCK).display()));
+            return 1;
+        }
+        Err(TryLockError::Error(e)) => {
+            say_err(&format!("skep-provision: {}: {e}", state_dir.file(SERVE_LOCK).display()));
+            return 1;
+        }
+    }
     let docker: Box<dyn Docker> = match runner_of(&flags) {
         Ok(docker) => docker,
         Err(e) => {
@@ -224,6 +266,14 @@ fn serve(flags: args::ServeArgs) -> i32 {
             return 1;
         }
     };
+    // THE MAILER, asked at start whether it can run: one not installed is a
+    // start refused, never every board's mail given up an hour after it.
+    if let Some(MailArgs { mailer: Mailer::Program(program), .. }) = &flags.mail {
+        if let Err(why) = sender::runnable(program) {
+            say_err(&format!("skep-provision: --mailer {}: {why}; install the relay client, or drop --mailer and --from to run without mail", program.display()));
+            return 1;
+        }
+    }
     let sleep: Sleep = Arc::new(thread::sleep);
     let outbox = match &flags.mail {
         None => None,
@@ -237,24 +287,43 @@ fn serve(flags: args::ServeArgs) -> i32 {
     };
     let mailing = if outbox.is_some() { "mail on" } else { "mail OFF (no --mailer and --from): no follow-up mail is sent" };
     let config = Config { boards_dir: flags.boards_dir.clone(), suffix: flags.settings.suffix.clone() };
-    let mut service = match Service::new(config, state_dir, docker, outbox, Arc::clone(&log), sleep) {
+    let mut service = match Service::new(config, state_dir.clone(), docker, outbox, Arc::clone(&log), sleep) {
         Ok(service) => service,
         Err(e) => {
             say_err(&format!("skep-provision: the snippet directory {} could not be read: {e}", flags.boards_dir.display()));
             return 1;
         }
     };
-    // THE SWEEP, before the address is bound and before any thread holds
-    // the service: no post is judged while a half-made board still stands
-    // under its name, and none is in flight while the sweep runs.
-    let swept = service.sweep();
+    // THE SNIPPET DIRECTORY's WRITE, tried: one the service's user cannot
+    // write is a start refused, never every board's failure after its claim.
+    if let Err(e) = caddy::probe(&flags.boards_dir) {
+        say_err(&format!("skep-provision: the snippet directory {} cannot be written: {e}; it is the service's user's to write (RUNBOOK §10 step 3)", flags.boards_dir.display()));
+        return 1;
+    }
+    // THE SETTINGS every board is made with, and the sign-up file's fill
+    // against its cap: what the serving line leaves out, said once.
+    log(&flags.settings_said());
+    match signups::held_bytes(&state_dir) {
+        Ok(bytes) => log(&format!("the sign-up file holds {bytes} of its {} bytes", signups::MAX_SIGNUPS_BYTES)),
+        Err(e) => log(&format!("the sign-up file could not be read: {e}; a sign-up is refused until it can be")),
+    }
+    // THE BIND, BEFORE THE SWEEP, as skepd binds first: a port another
+    // process holds — a second service by the same flags — is refused here,
+    // before the sweep could take that service's boards in flight for
+    // half-made; the port is held through the sweep, a connect meanwhile
+    // waiting in the listener's queue.
     let listener = match TcpListener::bind(flags.listen) {
         Ok(listener) => listener,
         Err(e) => {
-            say_err(&format!("skep-provision: bind {}: {e}", flags.listen));
+            let held = if e.kind() == io::ErrorKind::AddrInUse { " — another process holds it: a second skep-provision? One service per Docker host (RUNBOOK §10 step 5)" } else { "" };
+            say_err(&format!("skep-provision: bind {}: {e}{held}", flags.listen));
             return 1;
         }
     };
+    // THE SWEEP, before any thread holds the service: no post is judged
+    // while a half-made board still stands under its name, and none is in
+    // flight while the sweep runs.
+    let swept = service.sweep();
     // THE BOUND ADDRESS, read back off the listener: the port under
     // `--listen <addr>:0`, never what was asked for.
     let bound = listener.local_addr().map_or_else(|_| flags.listen.to_string(), |a| a.to_string());
@@ -270,40 +339,57 @@ fn serve(flags: args::ServeArgs) -> i32 {
         flags.connections
     ));
     let site = Site { suffix: flags.settings.suffix.clone(), owner_address: flags.reply_to.as_str().to_owned() };
+    let accepts = Accepts::default();
     // THE SERVE: the pool of workers and the pool of connection threads,
     // each of the latter taking the next connection off the listener — one
     // past them waits in the listener's queue — both pools made here, and
     // no thread made per connection. The scope never closes: SIGTERM ends
-    // the process.
+    // the process, and the serve lock with it.
     thread::scope(|s| {
         for _ in 0..flags.workers.get() {
             made_or_exit(thread::Builder::new().name("worker".into()).spawn_scoped(s, || service.work()), "worker");
         }
         for _ in 0..flags.connections.get() {
-            made_or_exit(thread::Builder::new().name("connection".into()).spawn_scoped(s, || serve_connections(&listener, &site, &service)), "connection");
+            made_or_exit(thread::Builder::new().name("connection".into()).spawn_scoped(s, || serve_connections(&listener, &site, &service, &accepts, log.as_ref())), "connection");
         }
     });
+    drop(serve_lock);
     0
 }
 
 /// A THREAD OF THE SERVE's POOLS, made at start: one the OS will not give
 /// ends the start, exit 1 for systemd to restart — never a panic in the
 /// scope, which would wait out the workers already made, and they never end.
+/// Its line names what is lost and the act: nothing serves, the port is
+/// released with the process, and the machine's thread limit is the
+/// operator's to raise.
 fn made_or_exit<T>(spawned: io::Result<T>, which: &str) {
     if let Err(e) = spawned {
-        say_err(&format!("skep-provision: a {which} thread could not start: {e}"));
+        say_err(&format!("skep-provision: the OS refused a {which} thread at start: {e}; nothing serves, the port released — retry under a higher thread limit"));
         exit(1);
     }
 }
 
 /// ONE CONNECTION THREAD, for the process's life: the next connection off the
 /// listener served, then the next; an `accept` that fails waits
-/// [`ACCEPT_RETRY_PAUSE`] before it asks again, never a spin.
-fn serve_connections(listener: &TcpListener, site: &Site, service: &Service) -> ! {
+/// [`ACCEPT_RETRY_PAUSE`] before it asks again, never a spin, and is said
+/// through the accept pair the threads share ([`Accepts`]) — once as its
+/// episode opens, once as the episode closes, never a line per try.
+fn serve_connections(listener: &TcpListener, site: &Site, service: &Service, accepts: &Accepts, log: &(dyn Fn(&str) + Send + Sync)) -> ! {
     loop {
         match listener.accept() {
-            Ok((stream, _)) => pages::connection(stream, site, service),
-            Err(_) => thread::sleep(ACCEPT_RETRY_PAUSE),
+            Ok((stream, _)) => {
+                if let Some(line) = accepts.accepted(Instant::now()) {
+                    log(&line);
+                }
+                pages::connection(stream, site, service);
+            }
+            Err(e) => {
+                if let Some(line) = accepts.failed(&e, Instant::now()) {
+                    log(&line);
+                }
+                thread::sleep(ACCEPT_RETRY_PAUSE);
+            }
         }
     }
 }

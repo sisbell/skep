@@ -5,10 +5,13 @@
 //! * THE STATE DIRECTORY ([`StateDir`]) — `--state-dir`, owner-only: made
 //!   `0700` where it does not stand, and REFUSED at start where it stands
 //!   with any group or other bit set, as the daemon refuses its data
-//!   directory (`skepd`'s `LooseDataDir`): the path, the mode found and the
-//!   one act that fixes it, nothing repaired. Every file in it is born
-//!   `0600`: the two files through the one writer below, and a lock file
-//!   beside them through [`StateDir::open_lock_file`], held at that mode.
+//!   directory (`skepd`'s `LooseDataDir`), or where it stands another user's
+//!   — root's, an `invite` run without `sudo -u` — whose service could not
+//!   read a file this process made there: the path, what was found and the
+//!   one act that fixes it, nothing repaired, and the directory left as it
+//!   stood. Every file in it is born `0600`: the two files through the one
+//!   writer below, and a lock file beside them through
+//!   [`StateDir::open_lock_file`], held at that mode.
 //! * THE STATE FILES' ONE WRITER ([`write_whole`]) — `whole`'s replacement
 //!   at [`STATE_FILE_MODE`], so every file in the directory is replaced
 //!   whole by rename and born owner-only; the sign-up file and the invite
@@ -28,7 +31,16 @@ use crate::whole;
 /// process's umask.
 const STATE_FILE_MODE: u32 = 0o600;
 
-/// THE STATE DIRECTORY, opened: owner-only, standing.
+/// THE OWNER's PROBE: a file the door makes in a state directory that
+/// stands, reads its owner off and removes at once — std holding no other
+/// way to this process's own uid without `unsafe` — so the door knows,
+/// before any state file is written there, whether this process is the
+/// directory's owner. A name no state file takes; a stop's leftover is
+/// removed first, as `whole` removes its temp file's.
+#[cfg(unix)]
+const OWNER_PROBE: &str = "owner.probe";
+
+/// THE STATE DIRECTORY, opened: owner-only, standing, and this process's.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StateDir {
     path: PathBuf,
@@ -43,6 +55,17 @@ pub enum StateDirRefused {
         path: PathBuf,
         /// The mode found.
         mode: u32,
+    },
+    /// It stands another user's — this process, root among them, is not its
+    /// owner — so a file this process made there would be one the owner's
+    /// service could not read or replace.
+    OwnedByAnother {
+        /// The directory as the operator named it.
+        path: PathBuf,
+        /// The directory's owner's uid.
+        owner: u32,
+        /// This process's uid, as the door's probe read it.
+        process: u32,
     },
     /// It could not be made or read, or its path names no directory —
     /// empty, or something other than a directory standing at it.
@@ -63,6 +86,11 @@ impl fmt::Display for StateDirRefused {
                 path.display(),
                 path.display()
             ),
+            StateDirRefused::OwnedByAnother { path, owner, process } => write!(
+                f,
+                "the state directory {} is uid {owner}'s, and this process runs as uid {process}: a file it made there would be one the service cannot read or replace, so nothing in it is touched — run it as the directory's owner, `sudo -u <that user> skep-provision …` (RUNBOOK §10 step 7)",
+                path.display()
+            ),
             StateDirRefused::Io { path, error } => write!(f, "the state directory {}: {error}", path.display()),
         }
     }
@@ -72,7 +100,8 @@ impl std::error::Error for StateDirRefused {}
 
 impl StateDir {
     /// THE DOOR: `path` made `0700` where nothing stands; where a directory
-    /// stands, refused if any group or other bit is set — refuse, never
+    /// stands, refused if any group or other bit is set, or where this
+    /// process is not its owner ([`OWNER_PROBE`] telling) — refuse, never
     /// repair; and refused where `path` is empty or something other than a
     /// directory stands at it.
     pub fn open(path: &Path) -> Result<StateDir, StateDirRefused> {
@@ -89,11 +118,17 @@ impl StateDir {
             Ok(meta) => {
                 #[cfg(unix)]
                 {
-                    use std::os::unix::fs::PermissionsExt;
+                    use std::os::unix::fs::{MetadataExt, PermissionsExt};
                     let mode = meta.permissions().mode() & 0o7777;
                     if mode & 0o077 != 0 {
                         return Err(StateDirRefused::Loose { path: path.to_path_buf(), mode });
                     }
+                    // A directory this process does not own — `invite` run
+                    // as root over the service's — is refused here, before
+                    // any state file is written in it: a file made there
+                    // would be root's, `0600`, and the service could read it
+                    // no more.
+                    owner_rule(path, meta.uid(), probed_uid(path).map_err(io_refused)?)?;
                 }
                 #[cfg(not(unix))]
                 let _ = meta;
@@ -139,6 +174,34 @@ impl StateDir {
         }
         Ok(file)
     }
+}
+
+/// THE OWNER's RULE: a state directory is opened by its owner alone. Each
+/// file in it is `0600`, its maker's, so a file another user makes there —
+/// root among them — is one the owner's service cannot read or replace, and
+/// every post and sign-up after it fails.
+#[cfg(unix)]
+fn owner_rule(path: &Path, owner: u32, process: u32) -> Result<(), StateDirRefused> {
+    if owner == process {
+        return Ok(());
+    }
+    Err(StateDirRefused::OwnedByAnother { path: path.to_path_buf(), owner, process })
+}
+
+/// THIS PROCESS's UID, read off [`OWNER_PROBE`] made in `dir` and removed
+/// at once: the error is the directory's — one this process cannot write is
+/// refused at the door, never at its first sign-up.
+#[cfg(unix)]
+fn probed_uid(dir: &Path) -> io::Result<u32> {
+    use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
+    let probe = dir.join(OWNER_PROBE);
+    match fs::remove_file(&probe) {
+        Err(e) if e.kind() != io::ErrorKind::NotFound => return Err(e),
+        _ => {}
+    }
+    let uid = fs::OpenOptions::new().write(true).create_new(true).mode(STATE_FILE_MODE).open(&probe)?.metadata().map(|meta| meta.uid());
+    fs::remove_file(&probe)?;
+    uid
 }
 
 /// THE STATE FILES' WRITER: `bytes` become the file at `path`, whole, by

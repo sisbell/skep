@@ -9,9 +9,10 @@
 //!   WRITES, and ONE NAMED METHOD PER CALL provided over it, nothing a test
 //!   cannot script — the two inspects of the truth about names, the volume's
 //!   creation and removal, the claim run, the sidecar's dark claim with the
-//!   record on its stdin, the forced removal of a run, the serving run, the
-//!   sidecar's `skep health`, the proxy's reload, and the listing of the
-//!   volumes this service made. Each answers what the call answered
+//!   record on its stdin, a failed run's last lines, the forced removal of a
+//!   run, the serving run, the sidecar's `skep health`, the proxy's reload,
+//!   and the listing of the volumes this service made. Each answers what the
+//!   call answered
 //!   ([`Exit`], `process`'s: its exit code, its stdout and its stderr,
 //!   apart), or the `io::Error` of a `docker` that could not be run.
 //! * [`Call`] — ONE CALL AS DATA, whole: the board it names and, for the
@@ -60,7 +61,11 @@
 //! from a container on the same bridge — the same on the Linux VM and on a
 //! Mac, whose host does not reach the bridge — but a container's own
 //! `/etc/hosts`, read first, answers `localhost` and six `ip6-` names, which
-//! the name's grammar refuses; and `docker exec <caddy> caddy reload` reloads
+//! the name's grammar refuses; `docker logs --tail <n> <name>` prints a
+//! container's last `n` lines, its stdout's on stdout and its stderr's on
+//! stderr, where its log driver can be read back — the `json-file` the
+//! serving run's `--log-opt`s assume — and exits non-zero where no container
+//! stands under the name; and `docker exec <caddy> caddy reload` reloads
 //! Caddy inside its container.
 
 use std::io;
@@ -122,6 +127,11 @@ const LABEL_VALUE: &str = "1";
 fn label() -> String {
     format!("{LABEL_KEY}={LABEL_VALUE}")
 }
+
+/// A FAILED RUN's LAST LINES, read by the cleanup before it removes the run
+/// and them with it: twenty — a daemon's open report and the line that
+/// refused it, where it never listened or never paired.
+const RUN_LOG_TAIL: usize = 20;
 
 /// A RUN OF THE HOSTED IMAGE under `name`: detached, with an init, and
 /// hardened as every run of the image is — a read-only root, no capabilities,
@@ -219,6 +229,14 @@ pub trait Docker: Send + Sync {
         self.run(Call::SidecarClaim(name, record))
     }
 
+    /// `docker logs --tail 20 <name>`: the last lines the run under the name
+    /// wrote — its daemon's stream on the call's stderr, what it wrote on its
+    /// stdout on the call's stdout — read before a failure's cleanup removes
+    /// the run, and its log with it.
+    fn run_logs(&self, name: &Name) -> io::Result<Exit> {
+        self.run(Call::RunLogs(name))
+    }
+
     /// `docker rm -f <name>`: whichever run stands under the name, removed.
     fn rm_force(&self, name: &Name) -> io::Result<Exit> {
         self.run(Call::RmForce(name))
@@ -272,6 +290,8 @@ pub enum Call<'a> {
     RunClaim(&'a Name),
     /// [`Docker::sidecar_claim`]: the board, and the record for its stdin.
     SidecarClaim(&'a Name, &'a Record),
+    /// [`Docker::run_logs`].
+    RunLogs(&'a Name),
     /// [`Docker::rm_force`].
     RmForce(&'a Name),
     /// [`Docker::run_serving`].
@@ -336,6 +356,10 @@ impl Call<'_> {
                 "--hosted".into(),
                 "-".into(),
             ],
+            // A FAILED RUN's LAST LINES — the board's own daemon's account of
+            // why it never listened or never paired, which the run's removal
+            // takes with it.
+            Call::RunLogs(name) => vec!["logs".into(), "--tail".into(), RUN_LOG_TAIL.to_string(), name.to_string()],
             Call::RmForce(name) => vec!["rm".into(), "-f".into(), name.to_string()],
             // THE SERVING RUN — the deployment notes' step 5 line in its
             // order, with the README's restart and rotation flags: the

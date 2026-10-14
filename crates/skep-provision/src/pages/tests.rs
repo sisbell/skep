@@ -8,7 +8,8 @@
 //! whole and a head past its cap refused 400 at once, its two socket
 //! timeouts set before it reads, thirty seconds each, so a silent peer is
 //! let go, a request trickled past its deadline answered 400 in the
-//! answer's own, and a trickle cut at its deadline both ways; a panic
+//! answer's own, and a trickle cut at its deadline both ways; an `accept`
+//! that fails said once per episode and its recovery once; a panic
 //! answering one request costing that connection alone, never the thread;
 //! the invite link opening the claim form with its code; plain HTML with no
 //! script and nothing fetched from elsewhere, every header that says so
@@ -328,6 +329,29 @@ fn a_connection_answers_with_its_headers_and_refuses_a_body_past_the_cap() {
     let too_large = exchange(&format!("POST /claim HTTP/1.1\r\nHost: skep.host\r\nContent-Length: {}\r\n\r\n", MAX_BODY + 1));
     assert!(too_large.starts_with("HTTP/1.1 413 Payload Too Large\r\n"), "{too_large}");
     serve.join().expect("served");
+}
+
+/// THE ACCEPT PAIR, ONCE PER EPISODE (skepd's m12 pair, its fifteen-second
+/// hold-down): an `accept` that succeeds with no episode standing says
+/// nothing; the first that fails opens one, said once with the OS's words
+/// and what waits; a second failure, and a success inside the hold-down, say
+/// nothing; the first success a hold-down past the last failure closes it,
+/// said once with every failure counted; and a failure after it opens the
+/// next, said again.
+#[test]
+fn the_accept_pair_is_said_once_per_episode() {
+    assert_eq!(ACCEPT_HOLD_DOWN, Duration::from_secs(15), "skepd's EDGE_HOLD_DOWN");
+    let accepts = Accepts::default();
+    let wall = std::io::Error::other("Too many open files (os error 24)");
+    let t0 = Instant::now();
+    let ms = Duration::from_millis;
+    assert_eq!(accepts.accepted(t0), None, "no episode: nothing said");
+    assert_eq!(accepts.failed(&wall, t0).as_deref(), Some("connections: accept failed (Too many open files (os error 24)); new connections wait in the listener's queue"));
+    assert_eq!(accepts.failed(&wall, t0 + ms(10)), None, "a second failure counted, said never");
+    assert_eq!(accepts.accepted(t0 + ms(20)), None, "inside the hold-down");
+    assert_eq!(accepts.accepted(t0 + ms(10) + ACCEPT_HOLD_DOWN).as_deref(), Some("connections: accept recovered after 2 failures"));
+    assert_eq!(accepts.accepted(t0 + ms(20) + ACCEPT_HOLD_DOWN), None, "closed: said once");
+    assert!(accepts.failed(&wall, t0 + ms(30) + ACCEPT_HOLD_DOWN).is_some(), "the next episode opens, said again");
 }
 
 /// A PANIC COSTS ITS CONNECTION ALONE: a desk that panics answering one

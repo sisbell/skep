@@ -19,10 +19,12 @@ skep-provision --version
 ```
 
 - **`serve`** runs the service until the process ends: SIGTERM's default
-  disposition stops it at once. Every file it keeps is replaced whole by a
-  rename, so no stop tears one; a board cut off before its snippet is
-  written leaves what was made standing, and the next `serve` removes it
-  before it listens (see [The sweep at start](#the-sweep-at-start)); a
+  disposition stops it at once. Its start says the version it runs and the
+  settings every board is made with, above the serving line. Every file it
+  keeps is replaced whole by a rename, so no stop tears one; a board cut
+  off before its snippet is written leaves what was made standing, and the
+  next `serve` removes it before it serves (see
+  [The sweep at start](#the-sweep-at-start)); a
   board cut off after its snippet is written and before its invite is
   spent stands, routed — or routed at the proxy's next reload — and the
   next `serve` counts it live and leaves it, its invite still issued: a
@@ -38,11 +40,13 @@ skep-provision --version
 
 A usage refusal (an unknown flag, a missing value, a required flag
 missing, `--mailer` without `--from` or the reverse) exits 2 with the usage
-text; a start refused (a state directory that is loose, cannot be made or
-is not a directory; an unreadable snippet directory; an address that
-cannot be bound; a thread the machine will not give) or an `invite` that
-printed no invite link exits 1, as does a `--version` or `--help` whose
-text cannot be written.
+text; a start refused (a state directory that is loose, another user's,
+cannot be made or is not a directory; another `serve` holding it; a
+`--mailer` that cannot be run; a snippet directory that cannot be read or
+written; an address that cannot be bound; a thread the machine will not
+give — all but the last before the sweep), or an `invite` that printed no
+invite link exits 1, as does a `--version` or `--help` whose text cannot
+be written.
 
 ## `serve`'s flags
 
@@ -51,10 +55,10 @@ renders it from there.
 
 | flag | default | what it sets |
 |---|---|---|
-| `--state-dir <DIR>` | required | the sign-up file and the invite file; made `0700` where absent, refused at start where any group or other bit is set |
+| `--state-dir <DIR>` | required | the sign-up file and the invite file; made `0700` where absent, refused at start where any group or other bit is set or where it is another user's, root's among them |
 | `--reply-to <ADDRESS>` | required | the owner's mailbox: the failure page names it, and an answer to the mail goes to it |
 | `--listen <ADDR:PORT>` | `127.0.0.1:8842` (`DEFAULT_LISTEN`) | where the pages are served; how the proxy reaches it is the VM's configuration |
-| `--boards-dir <DIR>` | `/etc/caddy/boards` (`DEFAULT_BOARDS_DIR`) | the proxy's snippet directory |
+| `--boards-dir <DIR>` | `/etc/caddy/boards` (`DEFAULT_BOARDS_DIR`) | the proxy's snippet directory, and the list of boards the sweep at start spares: every labelled volume it lacks is removed |
 | `--image <TAG>` | `skep-hosted` (`DEFAULT_IMAGE`) | the hosted image |
 | `--cli-image <TAG>` | `skep-cli` (`DEFAULT_CLI_IMAGE`) | the claim sidecar's image |
 | `--network <BRIDGE>` | `skep` (`DEFAULT_NETWORK`) | the bridge the boards and the proxy share |
@@ -63,8 +67,8 @@ renders it from there.
 | `--log-max-size <SIZE>` | `10m` (`DEFAULT_LOG_MAX_SIZE`) | a serving run's log file size |
 | `--log-max-file <N>` | `5` (`DEFAULT_LOG_MAX_FILE`) | a serving run's log files kept |
 | `--workers <N>` | `3` (`DEFAULT_WORKERS`) | the boards made at once: one worker thread each; `0` is a usage refusal |
-| `--connections <N>` | `16` (`DEFAULT_CONNECTIONS`) | the requests served at once: one thread each, made at start, a further connection waiting in the listener's queue; `0` is a usage refusal |
-| `--mailer <PROGRAM>` | none | the host's relay client, run as `<PROGRAM> -t` with the message on stdin; given with `--from` or not at all, and with neither no mail is sent and the serving line says so |
+| `--connections <N>` | `16` (`DEFAULT_CONNECTIONS`) | the requests served at once: one thread each, made at start, and a descriptor while it serves, which the unit's `LimitNOFILE=` bounds; a further connection waits in the listener's queue; `0` is a usage refusal |
+| `--mailer <PROGRAM>` | none | the host's relay client, run as `<PROGRAM> -t` with the message on stdin, refused at start where it cannot be run; given with `--from` or not at all, and with neither no mail is sent and the serving line says so |
 | `--from <ADDRESS>` | none | the mail's sending address |
 
 A build with the `test-hooks` feature also takes `--docker-fake
@@ -82,8 +86,10 @@ start, serves them, a connection past the pool waiting in the listener's
 queue; the request in and the answer out have a minute each, so a client
 that trickles its bytes is cut off rather than holding a thread. A panic
 answering one request costs that connection alone, closed unanswered,
-never its thread. Every page is plain HTML with no script and nothing
-fetched from elsewhere.
+never its thread. An `accept` that fails — the descriptor limit met — is
+said once, `connections: accept failed (…)`, and its recovery once, with
+the count. Every page is plain HTML with no script and nothing fetched
+from elsewhere.
 
 - `GET /` is the sign-up page: one field, an email address.
 - `POST /signup` keeps the address and answers a thanks page. An address
@@ -135,7 +141,9 @@ per invite, and up to four wait in the queue; a fifth past either is
 answered D-8, "try again later", the first with no `docker` call.
 
 A worker runs the deployment notes' §4 steps 3 to 5 for each post, in
-order:
+order, saying `<name>: taken by a worker` as it takes it — so a board
+taken with no `LIVE` or `FAILED` after it is one being made, and never one
+still queued:
 
 - **Step 3, the claim run.** Look again: no snippet, volume or container
   stands under the name. Then the volume,
@@ -162,12 +170,19 @@ order:
 Then the status turns live, the invite is spent, and the mail goes to the
 sender's own thread. That thread retries a refused send (seven tries, ten
 minutes apart) and never holds up the next post; a send that panics gives
-up its own mail, and no other.
+up its own mail, and no other. A mail given up says the operator's act:
+the person written to by hand, at the address the invite file's line spent
+under the board holds (RUNBOOK.md §10 step 11).
 
 When a step fails, what the steps made is undone in reverse order: the
 snippet removed and the proxy reloaded where it may stand — a write's
 error can come after its rename — the run removed where one may stand —
-a `docker run` that fails can leave its container — the volume removed.
+a `docker run` that fails can leave its container — its last lines read
+and logged first, `<name>: cleanup: the run said: …`, the board's own
+account of the failure, which the removal takes with it — the volume
+removed. Where the `/health` wait gave up, the log names the last body's
+pair as the board answered it (`claimant null`, a claim not on the
+volume, reads apart from `local_trust true`).
 Then the service looks again at what stands under the name, as a post
 does, and the log says what it found: done, or INCOMPLETE naming what
 still stands — a removal that itself failed. The status turns to D-8, and
@@ -188,8 +203,9 @@ saying INCOMPLETE: a panic costs its post, never the worker.
 
 A stop in the middle of a board, before its snippet is written, leaves its
 volume, and perhaps a run, standing under a name with no snippet — a name
-the service would read as taken for good. So before `serve` binds its
-address it lists the volumes that carry this service's label
+the service would read as taken for good. So once `serve` has bound its
+address and holds its state directory's `serve.lock`, and before it
+serves, it lists the volumes that carry this service's label
 (`docker volume ls -q --filter label=skep.provision=1`) and, for each
 whose name is one label of the grammar and has no `<name>.caddy` in the
 snippet directory, runs the last two rows of the cleanup,
@@ -199,16 +215,28 @@ it and the name stays taken, for the operator. A volume whose snippet
 stands is left alone — it is a live board, or a stopped one that Docker's
 `--restart` brings back — and so is a listed volume whose name is not one
 of the grammar, which the log names. If the listing itself fails, the log
-says so, the sweep is skipped, and the service still serves. The serving
+says so, the sweep is skipped, and the service still serves; a half-made
+board then stays taken until a start whose listing answers. The serving
 line carries the count of boards cleared, `swept <n>`.
+
+**The snippet directory is the list of boards the sweep spares.** A
+labelled volume whose snippet is gone is half-made to it, however long it
+has stood: a start over a directory emptier than the Engine's volumes — a
+VM restored with its volumes and not the directory, `--boards-dir`
+pointed elsewhere, a route taken down by removing its snippet — removes
+every board it lacks, its run and its volume. Restore the directory with
+the volumes, and take a route down by stopping its run, its snippet left
+(RUNBOOK.md §10 step 3).
 
 The sweep asks one thing of the operator: **one `serve` per Docker host**.
 The label is the host's, the same on every `serve`'s volumes, and a volume
 is half-made by this service's snippet directory alone — so a second
-service on the host, a staging one or a binary started by hand beside the
-unit, would read the first's boards in flight, and under another
-`--boards-dir` its live boards too, as half-made, and remove them. Nothing
-in a volume tells two services apart, so the service cannot check it.
+service on the host would read the first's boards in flight, and under
+another `--boards-dir` its live boards too, as half-made, and remove them.
+A second `serve` over the same state directory — a binary started by hand
+beside the unit — is refused at its start before its sweep, as is one on
+the same port; a staging one under another of each, nothing in a volume
+tells apart, and the operator keeps it.
 
 ## The strings
 
@@ -254,6 +282,8 @@ because a board with local trust on fails the `/health` step.
   so the service's spend and the owner's `invite` never lose each other's
   change. It is made `0600` and held there, as every file in the state
   directory is.
+- `<state-dir>/serve.lock` is held by a running `serve` for its life, so a
+  second `serve` over the same state directory is refused at its start.
 - `<boards-dir>/<name>.caddy` is one board's proxy snippet, mode `0644`.
   The status map is rebuilt from these files at start: each snippet is a
   live name.
@@ -265,7 +295,15 @@ because a board with local trust on fails the `/health` step.
 The two state files are written whole to a temp file and renamed into
 place, born `0600`, and each snippet the same way: the temp file is made
 fresh where nothing stands at its name, so a write follows no link
-planted there.
+planted there. Every file is its maker's, so a run as anyone but the state
+directory's owner — `invite` run as root over the service's — is refused
+at the directory's door, naming both owners, before any state file is
+written: a file root made there would be one the service could not read.
+The door tells the owner by a probe file it makes and removes at once.
+
+The start says the sign-up file's fill against its cap, and the cap, once
+met, is said once — every sign-up refused until the owner trims the file
+— and its end once, with the count refused.
 
 ## What it never logs
 
@@ -274,7 +312,10 @@ and each call's exit code, with the sidecar's stderr kept whole — which
 names each entry of the record by its fingerprint and its label, the
 person's own words, already on the board with the record. It never
 carries the record whole or a key of it, a person's address, an invite
-code or a status token. The one line on stdout is the serving line.
+code or a status token: where the operator must find an invite's line by
+hand, it names the line's issue date, and where a mail is given up, the
+board whose spent line holds the address. The one line on stdout is the
+serving line.
 
 ## What it holds, and how it ships
 

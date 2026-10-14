@@ -7,13 +7,15 @@
 //! each a usage refusal (`main` answers it exit 2 — the binary's suite runs
 //! one), where several hold the first met speaking, and what follows a leading
 //! `--version`, `--help` or `-h` unread; every flag lands in its setting, the
-//! address, the code and the suffix as their own values; `--workers`
+//! address, the code and the suffix as their own values, and the settings
+//! every board is made with said at start as the flags gave them; `--workers`
 //! defaults to its constant and refuses zero (T21), and `--connections`
 //! likewise; a `test-hooks` build takes `--docker-fake` and `--mailer-fake`
 //! — the shipped build's refusal of both is `scripts/gate-full.sh`'s to
-//! check, every build of this suite having the feature on; and the usage
-//! text names every flag and renders every default from its constant. (The
-//! suffix's grammar itself is `domain`'s suite.)
+//! check, every build of this suite having the feature on; the usage text
+//! names every flag and renders every default from its constant; and the
+//! unit's command line, read back, refuses its placeholder and parses once
+//! it is replaced. (The suffix's grammar itself is `domain`'s suite.)
 
 use std::ffi::OsString;
 
@@ -47,6 +49,7 @@ fn served(rest: &[&str]) -> ServeArgs {
 #[test]
 fn version_renders_the_daemons_form() {
     assert_eq!(version_line(), format!("skep-provision {} ({})", env!("CARGO_PKG_VERSION"), option_env!("SKEP_GIT_SHA").unwrap_or("unknown")));
+    assert_eq!(version_line(), format!("skep-provision {}", build()), "the start's version line names the build the version line does");
     assert_eq!(parse(argv(&["--version"])), Ok(Command::Version));
     assert_eq!(parse(argv(&["--version", "--bogus"])), Ok(Command::Version), "what follows is unread");
     assert_eq!(serve(&["--version"]), Err("--version is read as the first argument: skep-provision --version".to_owned()));
@@ -184,11 +187,77 @@ fn every_flag_lands_in_its_setting() {
     }
 }
 
+/// THE SETTINGS EVERY BOARD IS MADE WITH, as the start says them: the
+/// images, the bridge, the proxy's container, the rotation, the mail and the
+/// owner's mailbox — each from its own flag, the defaults where none is
+/// given, and `no mail` where neither `--mailer` nor `--from` is.
+#[test]
+fn the_settings_said_at_start_are_the_flags_and_their_defaults() {
+    assert_eq!(
+        served(&[]).settings_said(),
+        "boards made from image skep-hosted with the sidecar skep-cli, on the bridge skep behind the proxy container caddy, each serving run's log in files of 10m, 5 kept; no mail; the failure page names owner@skep.host"
+    );
+    let given = served(&[
+        "--image",
+        "img:2",
+        "--cli-image",
+        "cli:2",
+        "--network",
+        "net2",
+        "--caddy",
+        "proxy2",
+        "--log-max-size",
+        "50m",
+        "--log-max-file",
+        "3",
+        "--mailer",
+        "/usr/bin/msmtp",
+        "--from",
+        "noreply@example.org",
+    ]);
+    assert_eq!(
+        given.settings_said(),
+        "boards made from image img:2 with the sidecar cli:2, on the bridge net2 behind the proxy container proxy2, each serving run's log in files of 50m, 3 kept; mail through /usr/bin/msmtp -t from noreply@example.org; the failure page names owner@skep.host"
+    );
+}
+
 /// T1: `--mailer` WITHOUT `--from`, AND THE REVERSE, IS A USAGE REFUSAL.
 #[test]
 fn mailer_and_from_come_together_or_not_at_all() {
     assert_eq!(serve(&["--mailer", "/usr/sbin/sendmail"]), Err("--mailer is given without --from: give both, or neither for no mail".to_owned()));
     assert_eq!(serve(&["--from", "noreply@skep.host"]), Err("--from is given without --mailer: give both, or neither for no mail".to_owned()));
+}
+
+/// THE UNIT's COMMAND LINE, read back from `deploy/skep-provision.service`
+/// at test time: as shipped, its `<OWNER-MAILBOX>` placeholder is refused by
+/// the address rule, naming `--reply-to` — so a unit installed with it
+/// unreplaced refuses to start, exit 2, which the unit never restarts — and
+/// with the placeholder replaced every other word of it parses: a flag the
+/// unit names that this parser no longer takes is a red test here, never a
+/// unit that fails on the VM.
+#[test]
+fn the_units_command_line_refuses_its_placeholder_and_parses_once_replaced() {
+    let unit = std::fs::read_to_string(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../deploy/skep-provision.service")).expect("the unit");
+    let mut command = String::new();
+    for line in unit.lines().skip_while(|l| !l.starts_with("ExecStart=")) {
+        let line = line.strip_prefix("ExecStart=").unwrap_or(line).trim();
+        match line.strip_suffix('\\') {
+            Some(continued) => {
+                command.push_str(continued);
+                command.push(' ');
+            }
+            None => {
+                command.push_str(line);
+                break;
+            }
+        }
+    }
+    let words: Vec<&str> = command.split_whitespace().skip(1).collect();
+    assert_eq!(words.first(), Some(&"serve"), "the unit's command line: {command}");
+    assert_eq!(parse(argv(&words)), Err(format!("--reply-to: '<OWNER-MAILBOX>' is not an address: {}", address_rule())), "the placeholder, refused");
+    let replaced: Vec<&str> = words.iter().map(|&word| if word == "<OWNER-MAILBOX>" { "owner@skep.host" } else { word }).collect();
+    assert!(matches!(parse(argv(&replaced)), Ok(Command::Serve(_))), "the unit's command line, its placeholder replaced: {replaced:?}");
+    assert!(unit.lines().any(|l| l.trim() == "RestartPreventExitStatus=2"), "a usage refusal, exit 2, is never restarted");
 }
 
 /// T1: AN UNKNOWN FLAG, a flag without its value, a value of the wrong

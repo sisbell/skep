@@ -32,11 +32,18 @@
 //! open: a post's status URL ([`status_url`]), and the invite link an
 //! invitation carries ([`invite_link`]), which opens the claim form with the
 //! code it carries pre-filled.
+//!
+//! THE ACCEPT PAIR ([`Accepts`]) is the connection threads' one say on the
+//! listener they share: an `accept` that fails opens an episode, said once,
+//! and the first that succeeds a hold-down after its last closes it, said
+//! once with the count.
 
 use std::fmt;
 use std::io::{self, Read, Write};
 use std::net::TcpStream;
 use std::panic::{catch_unwind, AssertUnwindSafe};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use skep_http::{read_request, write_response, Limits, Refused, Request};
@@ -329,6 +336,69 @@ fn connection_within(mut stream: TcpStream, site: &Site, desk: &dyn Desk, deadli
         Err(refused) => refused_answer(&refused, site),
     };
     let _ = write_response(&mut Deadlined { stream: &mut stream, until: Instant::now() + deadline }, answer.status, &headers(), Some("text/html; charset=utf-8"), answer.body.as_bytes());
+}
+
+/// THE ACCEPT PAIR's HOLD-DOWN: fifteen seconds, `skepd`'s `EDGE_HOLD_DOWN`
+/// — a descriptor wall that a connection's close lifts and the next accept
+/// meets again is one episode and two lines.
+const ACCEPT_HOLD_DOWN: Duration = Duration::from_secs(15);
+
+/// THE ACCEPT PAIR, `skepd`'s (its `operations.md` §1.1 m12), for the
+/// connection threads that take connections off one listener: one EPISODE
+/// across them — the first `accept` that fails, on any thread, opens it and
+/// is said once; every thread's failures count into it; the first that
+/// succeeds a hold-down past its last failure closes it, said once with the
+/// count. Between, nothing: a descriptor wall met every ten milliseconds is
+/// two lines, never a line per try, and an `accept` that fails is never
+/// silent — the cause is the OS's own words, the unit's `LimitNOFILE=` the
+/// act.
+#[derive(Debug, Default)]
+pub struct Accepts {
+    /// Whether an episode stands: the threads' one load per connection
+    /// accepted where none does.
+    failing: AtomicBool,
+    /// The episode standing, where one does.
+    episode: Mutex<Option<Episode>>,
+}
+
+/// One episode of failed `accept`s: how many, and when the last was met.
+#[derive(Debug)]
+struct Episode {
+    failures: u64,
+    last: Instant,
+}
+
+impl Accepts {
+    /// An `accept` that failed with `e` at `now`: the line opening the
+    /// episode where none stands — `connections: accept failed (<e>); new
+    /// connections wait in the listener's queue` — and `None` where one does,
+    /// the failure counted into it.
+    pub fn failed(&self, e: &io::Error, now: Instant) -> Option<String> {
+        let mut episode = self.episode.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        if let Some(standing) = episode.as_mut() {
+            standing.failures += 1;
+            standing.last = now;
+            return None;
+        }
+        *episode = Some(Episode { failures: 1, last: now });
+        self.failing.store(true, Ordering::Release);
+        Some(format!("connections: accept failed ({e}); new connections wait in the listener's queue"))
+    }
+
+    /// An `accept` that succeeded at `now`: the line closing the episode
+    /// where one stands and its last failure is a hold-down past —
+    /// `connections: accept recovered after <n> failures` — and `None`
+    /// otherwise.
+    pub fn accepted(&self, now: Instant) -> Option<String> {
+        if !self.failing.load(Ordering::Acquire) {
+            return None;
+        }
+        let mut episode = self.episode.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let failures = episode.as_ref().filter(|standing| now.saturating_duration_since(standing.last) >= ACCEPT_HOLD_DOWN)?.failures;
+        *episode = None;
+        self.failing.store(false, Ordering::Release);
+        Some(format!("connections: accept recovered after {failures} failures"))
+    }
 }
 
 /// A request the subset refused: 413 past the cap, 400 otherwise.

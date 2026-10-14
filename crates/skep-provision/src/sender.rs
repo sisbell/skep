@@ -17,16 +17,18 @@
 //!   knows them (UNVERIFIED HERE): `-t` reads the recipients off the `To:`
 //!   header. The relay's credentials are the relay client's configuration
 //!   on the VM, never this program's; no mail or TLS library is linked.
+//!   Whether the client can be run at all is asked at start ([`runnable`]),
+//!   so one not installed refuses the start rather than every board's mail.
 //! * [`Outbox`] — the SENDER THREAD of its own, and the follow-up mail's
 //!   `From:`, `Reply-To:` and subject: the worker hands it a board, the
 //!   invite's address and the live reply after the status turned live and
 //!   goes on to the next post; the outbox makes the message and the thread
 //!   sends it, and a refusal — a non-zero exit, a mailer that cannot
 //!   run — is logged and RETRIED ([`MAIL_WAIT`]: seven tries, ten minutes
-//!   apart) while the status page stands live, then logged as given up; a
-//!   send that panics gives up its own mail, and no other. A mail outage
-//!   never loses a board: its page and its route stand whatever the mail
-//!   does.
+//!   apart) while the status page stands live, then logged as given up,
+//!   naming the operator's act — the person written to by hand; a send that
+//!   panics gives up its own mail, and no other. A mail outage never loses a
+//!   board: its page and its route stand whatever the mail does.
 //! * [`Log`] and [`Sleep`] — the two hooks every thread of the service is
 //!   handed: the log it writes a line to, and the sleep a wait takes. They
 //!   live here, in the first module that takes them — the sender's thread
@@ -37,7 +39,9 @@
 //! The log names the board, the try and the exit code, and NEVER the
 //! address or the body, which carries the status token.
 
+use std::ffi::OsStr;
 use std::fmt;
+use std::fs;
 use std::io;
 use std::num::NonZeroU32;
 use std::panic::{catch_unwind, AssertUnwindSafe};
@@ -150,6 +154,61 @@ impl Sender for RelaySender {
     }
 }
 
+/// WHETHER `program` CAN BE RUN as the relay client, asked at start — so a
+/// relay client not installed is a start refused, and never every board's
+/// mail given up an hour after the board went live: where `program` names a
+/// path, the file there with an execute bit; a bare name, such a file in a
+/// directory of `PATH`, as `Command` finds one. The error says which.
+pub fn runnable(program: &Path) -> Result<(), String> {
+    runnable_on(program, std::env::var_os("PATH").as_deref())
+}
+
+/// [`runnable`] over `path`, the `PATH` a bare name is looked for on: the
+/// seam a suite hands a `PATH` of its own, the process's own left as it is.
+fn runnable_on(program: &Path, path: Option<&OsStr>) -> Result<(), String> {
+    if program.to_string_lossy().contains('/') {
+        return match fs::metadata(program) {
+            Err(e) if e.kind() == io::ErrorKind::NotFound => Err("no file stands at it".to_owned()),
+            Err(e) => Err(format!("it cannot be read: {e}")),
+            Ok(meta) if !meta.is_file() => Err("it is not a file".to_owned()),
+            Ok(meta) if !executable(&meta) => Err("it is a file with no execute bit".to_owned()),
+            Ok(_) => Ok(()),
+        };
+    }
+    let on_path = path.into_iter().flat_map(std::env::split_paths).any(|dir| fs::metadata(dir.join(program)).is_ok_and(|meta| meta.is_file() && executable(&meta)));
+    if on_path {
+        Ok(())
+    } else {
+        Err("no directory of PATH holds it as a file with an execute bit".to_owned())
+    }
+}
+
+/// Whether a file's mode lets it be run: an execute bit, on unix; any file
+/// elsewhere.
+fn executable(meta: &fs::Metadata) -> bool {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        meta.permissions().mode() & 0o111 != 0
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = meta;
+        true
+    }
+}
+
+/// A MAIL GIVEN UP, as the log says it — `cause` its words after `given up`
+/// — with what still stands, the board live and its reply on its status
+/// page until the process ends, and the operator's act: the person written
+/// to by hand, at the address the invite file's line spent under the board
+/// holds, which no log line carries.
+fn given_up(name: &Name, cause: &str) -> String {
+    format!(
+        "{name}: mail: given up{cause}; the board stands live and its reply on its status page until the process ends — write to the person by hand: their address is on the invite file's line spent under {name} (RUNBOOK §10 step 11)"
+    )
+}
+
 /// ONE MESSAGE DELIVERED, or given up: tried over `wait`, paced by `sleep`
 /// ([`Wait::paced`]), each refusal logged with its exit code; `true` once a
 /// try exits 0. The mailer's stderr is not logged: a relay's refusal names
@@ -166,7 +225,7 @@ fn deliver(sender: &dyn Sender, message: &Message, wait: Wait, sleep: &dyn Fn(Du
             Err(e) => log(&format!("{name}: mail: try {at} of {tries} failed, the mailer could not run: {}", e.kind())),
         }
     }
-    log(&format!("{name}: mail: given up after {tries} tries; the board stands live and its status page with it"));
+    log(&given_up(name, &format!(" after {tries} tries")));
     false
 }
 
@@ -207,7 +266,7 @@ impl Outbox {
                 // relay client nothing at all — so the next message meets it
                 // as the last did.
                 if catch_unwind(AssertUnwindSafe(|| deliver(sender.as_ref(), &message, MAIL_WAIT, sleep.as_ref(), log.as_ref()))).is_err() {
-                    log(&format!("{}: mail: given up, a try having panicked; the board stands live and its status page with it", message.name));
+                    log(&given_up(&message.name, ", a try having panicked"));
                 }
             }
         })?;

@@ -301,7 +301,9 @@ fn to_the_serving_run() -> String {
     to_the_claim() + &line("sidecar_claim", Some("alice"), 0, SIX, "") + &line("rm_force", Some("alice"), 0, "", "")
 }
 
-/// The cleanup of a claim run or a serving run and the volume.
+/// A failure's cleanup of a claim run or a serving run and the volume: the
+/// run's last lines read — answering nothing — then the run and the volume
+/// removed.
 fn run_and_volume_removed() -> String {
-    line("rm_force", Some("alice"), 0, "", "") + &line("volume_rm", Some("alice"), 0, "", "")
+    line("run_logs", Some("alice"), 0, "", "") + &line("rm_force", Some("alice"), 0, "", "") + &line("volume_rm", Some("alice"), 0, "", "")
 }
